@@ -1,5 +1,7 @@
 # Interface: navigation, playing aids & story picker
 
+> For players, the short version is in [the guide](../guide/playing.md).
+
 [← back to README](../../README.md)
 
 The map draws itself, but you still have to drive it. lanthorn gives you a
@@ -750,7 +752,7 @@ know which side you're on).
   everything. `/export-transcript [file]` writes the visible transcript to
   `transcript.txt` in the story's per-game directory by default (overwriting); a
   bare name lands beside it, a path-bearing value is honored verbatim — see
-  [Storage layout](../persistence.md#storage-layout-sq-0284). Every transcript
+  [Storage layout](persistence.md#storage-layout-sq-0284). Every transcript
   line is tagged by category — **story**, your **input** echo, **meta**
   (app/slash), and VM **warnings** — each independently themeable; meta and
   warning lines get their own configurable gutter markers (`▏` / `!`).

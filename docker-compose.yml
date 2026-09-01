@@ -7,7 +7,7 @@
 # /stories library and the /data home (saves, config, map archives), so a
 # game saved in one session can be restored in the next.
 #
-# See docs/features/docker.md for details and docker/entrypoint.sh for the
+# See docs/internals/docker.md for details and docker/entrypoint.sh for the
 # full list of serve-mode environment knobs.
 services:
   lanthorn:

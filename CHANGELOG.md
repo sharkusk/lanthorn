@@ -13,7 +13,7 @@ identifies itself without reading its git hash.
 **A section here becomes the GitHub release body**, so keep it to what a reader
 downloading a build wants: what each feature is, briefly. The reasoning, the
 measurements and the history belong in the commit that made the change and in
-the quest that tracked it. And use no RELATIVE links — `[x](docs/features/…)`
+the quest that tracked it. And use no RELATIVE links — `[x](docs/internals/…)`
 resolves against the release page rather than the repository and 404s there.
 Absolute URLs or no link.
 
@@ -21,9 +21,11 @@ Absolute URLs or no link.
 
 ## Unreleased
 
-*This section is drained when a version is cut. README prose for the same work
-is staged in [`docs/readme-next.md`](docs/readme-next.md), because the README
-describes the RELEASED build and must not describe this one until it ships.*
+*This section is drained when a version is cut. README.md describes the
+RELEASED build; prose for a feature that is in `main` but not yet released goes
+into the README in place, at its normal destination, marked with the visible
+tag `*Next release:*`. `release.yml` refuses to cut a release while any such
+tag, or this Unreleased section, still exists.*
 
 ### Performance
 
@@ -77,7 +79,7 @@ ALSA in the container writes what a process plays to a per-session FIFO, a
 new `lanthorn-audio-relay` binary streams that FIFO over a WebSocket on port
 7682, and ttyd's page carries a script that opens it and plays the PCM with
 WebAudio. lanthorn itself is unchanged. Publish both ports; `LANTHORN_WEB_AUDIO=off`
-turns it off. See `docs/features/docker.md`.
+turns it off. See `docs/internals/docker.md`.
 
 ### GIF cover art is accepted
 
@@ -452,6 +454,21 @@ carrying `enable_sound = false` could only be overridden by editing the file.
   video, the same spelling the status bar uses, themeable via the new
   `glk.grid.background` selector. A Z-machine or Scott upper window is
   unaffected: those games paint their own reversal.
+
+### Documentation
+
+- **Three doc tiers, and generated reference.** `docs/` now separates a
+  player-facing **guide** (`docs/guide/`) from the deep-dive **internals**
+  (`docs/features/` and the loose top-level pages moved to `docs/internals/`)
+  and a new, code-generated **reference** (`docs/reference/commands.md`,
+  `keys.md`, `config.md`, `style.md` — rendered straight from
+  `slash::COMMANDS`, the default keymap, `config_template::GROUPS`, and the
+  style/theme registry, so they cannot drift from what lanthorn actually does;
+  regenerate with `LANTHORN_REGEN_DOCS=1 cargo nextest run -p app
+  docs_reference`). `docs/README.md` is the map across all three tiers. And
+  `docs/readme-next.md` is gone: unreleased-feature prose now lands directly
+  in `README.md`, tagged `*Next release:*`, and `release.yml` refuses to cut a
+  release while any such tag survives.
 
 ## v0.3.0 — 2026-08-26
 

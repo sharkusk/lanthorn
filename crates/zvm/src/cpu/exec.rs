@@ -3649,7 +3649,7 @@ impl Machine {
             // has already scrolled by exactly the text it printed — so obeying
             // the pixel scroll would double it. Warning about it would fire on
             // essentially every illustrated room description; the `@scroll_window`
-            // trace line above is the diagnostic channel. (See docs/standards.md,
+            // trace line above is the diagnostic channel. (See docs/reference/standards.md,
             // "Where we knowingly differ".)
             //
             // Grid windows 1–7 DO shift their pixel-positioned text runs and cell

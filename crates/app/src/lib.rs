@@ -326,6 +326,7 @@ pub mod colors;
 pub mod complete;
 pub mod config;
 pub mod config_template;
+pub mod docs_reference;
 pub mod corpus;
 pub mod cover;
 pub mod debug_panel;

@@ -589,7 +589,7 @@ expect_art_cells = 900
 # (76 of Uni-VGA's 94 printable glyphs ink out to column 6, so a 7-wide cell
 # drops the one column holding the letters apart, which is why the fallback is
 # X11 misc-fixed 7x14) is stated in full in `native_font.rs`'s module header and
-# in `docs/features/v6-graphics.md`, the second with the 1649-touching-pairs
+# in `docs/internals/v6-graphics.md`, the second with the 1649-touching-pairs
 # measurement the caption never had.
 #
 # WHICH FACE THIS ACTUALLY DRAWS, MEASURED RATHER THAN ASSUMED. `Shogun.toast`

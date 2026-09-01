@@ -1,6 +1,6 @@
 # Save-format policy (beta)
 
-[← back to README](../../README.md) · see also [The persistence model](../persistence.md)
+[← back to README](../../README.md) · see also [The persistence model](../internals/persistence.md)
 
 Until the first public beta, lanthorn's rule was *"pre-release: formats may break
 freely, no back-compat"*. The beta flips that for the formats that live on a

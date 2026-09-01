@@ -32,7 +32,7 @@ you can check our behaviour against the source of truth. Section references (e.g
   line/char and timer/mouse/hyperlink input events, file streams). lanthorn projects the Glk
   window tree onto its terminal UI. Only `gvm` uses Glk; the Z-machine and Scott Adams engines
   render through their own native display models and converge with Glulx only at lanthorn's
-  neutral `ScreenModel` (see [architecture](architecture.md)). Referenced in-code at e.g. §3.3
+  neutral `ScreenModel` (see [architecture](../internals/architecture.md)). Referenced in-code at e.g. §3.3
   (window sizing), §4.2/§4.4 (event model), §11.2 (file streams).
   <https://eblong.com/zarf/glk/Glk-Spec-076.html> · [home](https://eblong.com/zarf/glk/)
 

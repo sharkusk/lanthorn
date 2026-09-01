@@ -44,6 +44,14 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: No unreleased-feature tags may ship in a release
+        shell: bash
+        run: |
+          if grep -n -i 'next release' README.md; then
+            echo '::error::README.md still carries "Next release" tags; drain them before tagging'; exit 1; fi
+          if grep -n '^## Unreleased' CHANGELOG.md; then
+            echo '::error::CHANGELOG.md still has an Unreleased section; name the version before tagging'; exit 1; fi
+
       # Linux audio (ALSA) is a build- and run-time dependency of the default
       # feature set. Release binaries link libasound and require libasound2 at
       # runtime (documented in the release notes).

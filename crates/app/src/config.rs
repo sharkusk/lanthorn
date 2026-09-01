@@ -828,7 +828,7 @@ impl CommandBandConfig {
 fn default_command_prefix() -> char { '/' }
 fn default_undo_levels() -> usize { 16 }
 /// Rewind/replay history cap (SQ-1185): generous enough that the feature still
-/// reaches "further back than the game's own UNDO" (`docs/features/saves.md`),
+/// reaches "further back than the game's own UNDO" (`docs/internals/saves.md`),
 /// while bounding the per-turn VM snapshots the archive keeps in memory across
 /// an arbitrarily long session.
 fn default_history_turns() -> usize { 500 }
@@ -1759,7 +1759,7 @@ pub struct Config {
     ///
     /// Turning this on says "I know what I am asking for": with `--interpreter 4`
     /// it gets you the Amiga's page on a bare file, which is what
-    /// `docs/features/interpreter.md` used to promise unconditionally.
+    /// `docs/internals/interpreter.md` used to promise unconditionally.
     ///
     /// It cannot conjure a machine out of nothing — see
     /// [`ProfileSource::Fallback`](crate::interpreter::ProfileSource::Fallback).

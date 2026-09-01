@@ -70,7 +70,7 @@
 //!
 //! ## Fixtures
 //!
-//! All five are freely-redistributable per `docs/ci-fixture-coverage.md`, kept
+//! All five are freely-redistributable per `docs/internals/ci-fixture-coverage.md`, kept
 //! locally in the gitignored `stories/`. Any fixture absent on this checkout is
 //! skipped with a clear `SKIP:` line — never fabricated.
 

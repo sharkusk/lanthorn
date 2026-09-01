@@ -1,5 +1,7 @@
 # Remote sound
 
+> For players, the short version is in [the guide](../guide/sound.md).
+
 lanthorn plays audio through the `audio` crate, which uses
 [rodio](https://github.com/RustAudio/rodio) to open the operating system's
 default audio output device **on the machine lanthorn is running on**. That

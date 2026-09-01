@@ -1,12 +1,14 @@
 # Platform notes
 
+> For players, the short version is in [the guide](../guide/getting-started.md).
+
 lanthorn runs on macOS, Linux and Windows, and the same story plays the same way
 on all three. What differs is what the *terminal* can be asked and what the *OS*
 lets a process do on the way out — and those two axes fail independently, which
 is why a better terminal fixes some of the entries below and none of the others.
 
 Everything here is a limitation a user can observe. Internals live in
-[architecture.md](../architecture.md).
+[architecture.md](architecture.md).
 
 ## Windows
 

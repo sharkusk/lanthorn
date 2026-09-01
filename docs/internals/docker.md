@@ -1,5 +1,7 @@
 # Docker: lanthorn as a server
 
+> For players, the short version is in [the guide](../guide/play-in-a-browser.md).
+
 lanthorn is a terminal app, which means it containerizes and serves cleanly:
 everything it draws — the TUI, the live map, even Kitty-protocol graphics — is
 bytes over a pty. One image supports two ways of running it.
