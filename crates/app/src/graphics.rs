@@ -3,7 +3,7 @@
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
-use image::{DynamicImage, GenericImageView, Rgba, RgbaImage};
+use image::{DynamicImage, Rgba, RgbaImage};
 
 
 /// Unpack a Glk 24-bit `0xRRGGBB` color into an opaque RGBA pixel.
@@ -382,6 +382,22 @@ impl PictSource {
         self.palette_gen
     }
 
+    /// How many decoded pixel buffers the unbounded [`Self::cache`](field)
+    /// currently pins, for a test to assert a size-query path never grew it
+    /// (SQ-1194).
+    #[cfg(test)]
+    pub(crate) fn decode_cache_len(&self) -> usize {
+        self.cache.len()
+    }
+
+    /// The `(resnum, palette_gen)` keys currently pinned in the adaptive
+    /// decode cache, for a test to assert a stale generation was evicted
+    /// (SQ-1193).
+    #[cfg(test)]
+    pub(crate) fn adaptive_cache_keys(&self) -> Vec<(u32, u64)> {
+        self.adaptive_cache.keys().copied().collect()
+    }
+
     /// Keep this source's dither UNFUSED, or fuse it (SQ-0816).
     ///
     /// `fuse` is the player's `fuse_art_dither` preference, and it can only ever
@@ -543,7 +559,20 @@ impl PictSource {
         if self.current_plte != plte {
             self.current_plte = plte;
             self.palette_gen += 1;
+            self.evict_stale_adaptive_cache();
         }
+    }
+
+    /// Drop every adaptive decode cached against a palette generation OTHER
+    /// than the current one. Call immediately after `palette_gen` bumps
+    /// (SQ-1193): `adaptive_cache` is keyed `(resnum, palette_gen)` and the
+    /// generation only ever climbs, so on a `screen_palette` machine — where
+    /// every drawn picture routes through the adaptive path (SQ-0887) — a
+    /// long session otherwise accumulates a full RGBA per (pic, scene
+    /// palette) it will never be asked to decode through again.
+    fn evict_stale_adaptive_cache(&mut self) {
+        let gen = self.palette_gen;
+        self.adaptive_cache.retain(|&(_, g), _| g == gen);
     }
 
     /// Decode `resnum` for a replay WITHOUT establishing a new Current Palette —
@@ -804,9 +833,15 @@ impl PictSource {
         self.cache.get(&resnum).and_then(|o| o.as_ref())
     }
 
-    /// `(width, height)` of a Pict, or `None`.
+    /// `(width, height)` of a Pict, or `None`. Answers from the header sniffer
+    /// ([`Self::dims`]) rather than a full decode: `image_info` (Glk selector
+    /// 8) is the sole caller, and a game can sweep it over its whole picture
+    /// catalog at boot, which used to decode and pin every one of those images
+    /// in the unbounded `cache` forever — pixels no caller here ever asked for
+    /// (SQ-1194). A caller that genuinely needs the DECODED pixels' dimensions
+    /// should call [`Self::image`] and measure the result directly, not this.
     pub fn info(&mut self, resnum: u32) -> Option<(u32, u32)> {
-        self.get(resnum).map(|i| i.dimensions())
+        self.dims(resnum)
     }
 
     /// The decoded image for a Pict about to be DRAWN, or `None`. Returns a
@@ -868,6 +903,7 @@ impl PictSource {
         if self.current_plte.as_deref() != Some(plte.as_slice()) {
             self.current_plte = Some(plte);
             self.palette_gen += 1;
+            self.evict_stale_adaptive_cache();
         }
     }
 
@@ -1965,6 +2001,7 @@ pub(crate) fn test_blorb_with_pict(resnum: u32, data: &[u8]) -> blorb::Blorb {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use image::GenericImageView;
 
     /// The property that chose the tent over a two-tap box on fixed column pairs
     /// (SQ-0797): a period-2 dither collapses to its exact mean at BOTH phases, so
@@ -2159,6 +2196,25 @@ mod tests {
         let b = src.image(1).expect("resolves");
         assert!(Arc::ptr_eq(&a, &b), "both calls must share one cached decode");
         assert_eq!(a.dimensions(), (2, 2));
+    }
+
+    #[test]
+    fn info_answers_from_header_sniff_without_pinning_the_decode_cache() {
+        // SQ-1194: `image_info` (Glk selector 8) is answered by `info()`,
+        // which used to route through `get()` — a full decode pinned in the
+        // unbounded `cache` forever — even though only the dimensions were
+        // ever asked for. An image-heavy game sweeping `glk_image_get_info`
+        // over its whole catalog must not decode and pin every picture it
+        // merely measures.
+        let blorb = test_blorb_with_pict(5, &png_bytes());
+        let mut src = PictSource::new(Some(blorb));
+        assert_eq!(src.decode_cache_len(), 0, "nothing decoded yet");
+        assert_eq!(src.info(5), Some((2, 2)));
+        assert_eq!(src.decode_cache_len(), 0, "info() must not populate the decode cache");
+        // The decode path still works and still caches, when a caller
+        // actually wants the pixels.
+        assert!(src.image(5).is_some());
+        assert_eq!(src.decode_cache_len(), 1, "image() still decodes and caches normally");
     }
 
     // ── Adaptive palettes (Blorb spec §11.3, SQ-0485) ───────────────────────
@@ -2361,6 +2417,38 @@ mod tests {
         //     picture re-decodes (cache keyed by palette generation).
         src.image(3).unwrap();
         assert_eq!(top_left(&src.image(2).unwrap()), [200, 0, 0, 255], "palette change re-decodes adaptive");
+    }
+
+    #[test]
+    fn palette_change_evicts_the_stale_generations_adaptive_cache() {
+        // SQ-1193: adaptive_cache is keyed (resnum, palette_gen) and
+        // palette_gen only ever climbs, so nothing evicted an old
+        // generation's decodes. On a screen_palette machine (SQ-0887) every
+        // drawn picture routes through here, so a long session accumulated a
+        // full RGBA per (pic, scene palette) it would never be asked to
+        // decode through again. A palette bump must retain only the entries
+        // decoded under the CURRENT generation.
+        let base_green = indexed_png(2, 1, &[0, 0, 0, 0, 170, 0], None, &[&[1, 1]]);
+        let base_red = indexed_png(2, 1, &[0, 0, 0, 200, 0, 0], None, &[&[1, 1]]);
+        let adaptive = indexed_png(2, 1, &[0, 0, 0, 170, 0, 170], None, &[&[1, 1]]);
+        let blorb = blorb_apal(&[(1, &base_green), (2, &adaptive), (3, &base_red)], &[2]);
+        let mut src = PictSource::new(Some(blorb));
+
+        src.image(1).unwrap(); // establishes the green palette, generation 1
+        src.image(2).unwrap(); // decodes and caches the adaptive under it
+        let gen1 = src.palette_gen();
+        assert_eq!(src.adaptive_cache_keys(), vec![(2, gen1)], "one entry, the current generation");
+
+        src.image(3).unwrap(); // re-establishes the palette (red) → gen bumps
+        let gen2 = src.palette_gen();
+        assert!(gen2 > gen1, "a different base bumps the generation");
+        assert!(
+            src.adaptive_cache_keys().is_empty(),
+            "the old generation's entry is evicted on the bump, before anything redraws it"
+        );
+
+        src.image(2).unwrap(); // re-decodes under the new generation
+        assert_eq!(src.adaptive_cache_keys(), vec![(2, gen2)], "only the current generation survives");
     }
 
     #[test]
