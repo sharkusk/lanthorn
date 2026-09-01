@@ -55,9 +55,10 @@ git tag vX.Y.Z && git push origin vX.Y.Z
 
 A hyphenated tag (`v0.4.0-rc.1`) publishes as a pre-release and gets no
 `latest` image tag — both workflows key off the hyphen the same way.
-`release.yml`'s guard step refuses to build while a `next release` tag or an
-`Unreleased` section survives, so a release commit that skipped step 3 fails
-here instead of shipping half-drained docs.
+On a tag push — and only there, so that dry runs on main still reach the
+builds — `release.yml`'s guard step refuses to build while a `next release`
+tag or an `Unreleased` section survives, so a release commit that skipped
+step 3 fails here instead of shipping half-drained docs.
 
 ## 5. After the tag push
 
