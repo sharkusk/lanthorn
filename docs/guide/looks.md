@@ -21,9 +21,9 @@ glyph — only if you want to.
 **Edit it live.** On first run lanthorn seeds `~/.lanthorn/style.toml` fully
 commented out, every selector already spelling its own default, grouped by
 section — a working reference, not a blank page. Uncomment what you want to
-change, save, and run `reload-style` to see it live; a bad edit keeps the old
+change, save, and run `/reload-style` to see it live; a bad edit keeps the old
 look and tells you why instead of crashing. Flip `watch_style = true` (or run
-`toggle-watch`) and every save reloads on its own. `config.toml` documents
+`/toggle-watch`) and every save reloads on its own. `config.toml` documents
 itself the same way, and keeps documenting itself over time — a setting added
 in a later release is appended to your file, commented, rather than needing a
 fresh one.
@@ -37,7 +37,7 @@ you toggle one of those for that story. Leave a key out and the story
 inherits your global setting, so there's no need to copy the whole file —
 only the differences.
 
-**The status line, your words.** The `[statusbar]` section builds the line
+**The status bar, your words.** The `[statusbar]` section builds the line
 from segments you assign to a left, center, or right cluster, each with its
 own style. Templates take live placeholders — `{location}`, `{score}`,
 `{moves}`, `{time}`, `{turns}`, `{title}` — so `Score: {score}  Moves:
@@ -58,15 +58,19 @@ individual overrides; `/run-font-check` asks again whenever you change fonts,
 and boxes or blank squares where glyphs should be just mean that block isn't
 in your font. A patched [Nerd Font](https://www.nerdfonts.com) unlocks the
 fancier `nerdfont` presets, but nothing requires one — the default look needs
-no patched font at all. The portal markers on the map default to plain
-ASCII — up, down, in, out as `↑ ↓ ◉ ◎` — with Nerd Font presets, including a
-dedicated stairway set, if you'd rather.
+no patched font at all. The portal markers default to shapes an ordinary
+monospace face already carries — up, down, in, out as `↑ ↓ ◉ ◎` — and they
+draw wherever a portal does: on the map, and in the command band's one-click
+cluster beside the compass rose. Nerd Font presets, including a dedicated
+stairway set, are there if you'd rather.
 
 The full selector list, and every config key, lives in the reference tables
 rather than repeated here: see [the style reference](../reference/style.md)
 and [the config reference](../reference/config.md).
 
-Going deeper: [customization & configuration](../internals/customization.md) ·
-[missing or corrupted glyphs](../internals/glyphs.md) ·
-[style reference](../reference/style.md) ·
-[config reference](../reference/config.md)
+## Going deeper
+
+- [Customization](../internals/customization.md) — how a setting is resolved, and every override surface
+- [Missing or corrupted glyphs](../internals/glyphs.md) — the Unicode blocks the map's line art needs
+- [Style reference](../reference/style.md) — every `style.toml` selector
+- [Config reference](../reference/config.md) — every `config.toml` setting

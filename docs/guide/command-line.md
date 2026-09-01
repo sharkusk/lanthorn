@@ -37,8 +37,8 @@ two mid-game with `/pin`.
 
 ## Saving from the command line
 
-`zvm-cli` and `gvm-cli` prompt for a save name at `@save`/`@restore`, and show
-you what you already have:
+`zvm-cli` and `gvm-cli` prompt for a save name when the game's own
+`save`/`restore` runs, and show you what you already have:
 
 ```
 saves: 1 cellar   2 troll
@@ -49,8 +49,9 @@ A number at the restore prompt picks from that list; at the save prompt a
 number isn't a shortcut, because there it would mean "overwrite this one" —
 worth typing out in full. Saving over an existing name asks first.
 
-`scott-cli` has no in-game save opcode to answer, so `/save` and `/restore`
-(alias `/load`) are its own commands instead — same list, same rules.
+Scott Adams games have no save of their own to answer, so `scott-cli` puts
+`/save` and `/restore` (alias `/load`) on its own prompt instead — same list,
+same rules.
 
 ## Maintaining a library without the TUI
 
@@ -71,8 +72,8 @@ but Docker itself:
 docker run -it --rm -v ~/if-games:/stories -v lanthorn-data:/data lanthorn
 ```
 
-Your terminal's size and capabilities pass straight through the container's
-pty, so everything that works locally works here too. See
+Your terminal's size and capabilities pass straight through to the container,
+so everything that works locally works here too. See
 [play in a browser](play-in-a-browser.md) for the other mode the same image
 offers — serving lanthorn to a browser instead of your terminal.
 

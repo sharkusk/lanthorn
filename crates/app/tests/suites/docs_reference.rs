@@ -14,7 +14,7 @@
 //!
 //! A fifth case, [`every_relative_markdown_link_resolves`], walks every
 //! Markdown file this branch ships and checks every relative link target
-//! exists on disk — see its doc comment for the `docs/guide/` exemption.
+//! exists on disk.
 
 use std::path::{Path, PathBuf};
 
@@ -168,15 +168,6 @@ fn is_external(target: &str) -> bool {
 #[test]
 fn every_relative_markdown_link_resolves() {
     let root = workspace_root();
-    // The guide lanes' ten pages (`docs/guide/*.md`) land on separate branches and
-    // are not present here. A link to `docs/guide/…` is exempted ONLY while
-    // `docs/guide/` does not exist on this branch at all — the moment it lands
-    // (at integration, once every lane is merged), this exemption stops firing
-    // on its own and the links get checked for real. The integrator may then
-    // delete this paragraph and the `guide_missing` check below; it will have
-    // become dead code that harms nothing.
-    let guide_missing = !root.join("docs").join("guide").is_dir();
-
     let mut broken: Vec<String> = Vec::new();
     for path in markdown_files() {
         let Ok(src) = std::fs::read_to_string(&path) else { continue };
@@ -197,9 +188,6 @@ fn every_relative_markdown_link_resolves() {
             if resolved.exists() {
                 continue;
             }
-            if guide_missing && is_under(&resolved, &root.join("docs").join("guide")) {
-                continue;
-            }
             broken.push(format!(
                 "{}:{line} -> {target}",
                 path.strip_prefix(&root).unwrap_or(&path).display()
@@ -207,10 +195,6 @@ fn every_relative_markdown_link_resolves() {
         }
     }
     assert!(broken.is_empty(), "broken relative markdown link(s):\n{}", broken.join("\n"));
-}
-
-fn is_under(path: &Path, ancestor: &Path) -> bool {
-    path.starts_with(ancestor)
 }
 
 /// Lexically collapse `.`/`..` components without touching the filesystem —

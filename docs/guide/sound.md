@@ -5,10 +5,9 @@ what to do when you're playing over SSH and hear nothing at all.
 
 ## Z-machine bleeps and samples
 
-The Z-machine's `sound_effect` opcode has two built-in tones — a high bleep
-and a low one — which lanthorn synthesizes for real, no sample needed. Above
-those, a Blorb's `Snd ` resources play as sampled audio (AIFF, Ogg, or
-ProTracker MOD). Sound resources come from the story file itself if it's a
+The Z-machine has two sounds built into it — a high bleep and a low one —
+which lanthorn synthesizes for real, no sample needed. Above those, a Blorb's
+`Snd ` resources play as sampled audio (AIFF, Ogg, or ProTracker MOD). Sound resources come from the story file itself if it's a
 Blorb, or from a sibling `.blb`/`.blorb` sitting beside it. On every bleep the
 story pane's border also flashes in a themeable colour — a nice touch when
 sound is on, and the only cue you get when it's off.
@@ -34,11 +33,11 @@ them.
 ## Turning it on and off
 
 Sound is on by default. `enable_sound` and `volume` (0–100) live in
-`config.toml`; toggle sound mid-game with `/toggle-sound` or the `F2`
-settings row, and adjust volume with `/volume <0-100>`. `--sound off` mutes a
-single run without touching your saved setting. `/play-sound <resource-id>`
-fires a specific Blorb resource on demand, which is handy for checking that
-the audio path actually works.
+`config.toml`; toggle sound mid-game with `/toggle-sound` or from the
+settings screen (`/open-settings`), and adjust volume with `/volume <0-100>`.
+`--sound off` mutes a single run without touching your saved setting.
+`/play-sound [n]` lists the Blorb sound resources, or fires one on demand,
+which is handy for checking that you can hear anything at all.
 
 ## Over SSH
 
