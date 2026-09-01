@@ -343,6 +343,16 @@ carrying `enable_sound = false` could only be overridden by editing the file.
   - **Display only.** Every word taken out is still a word the story knows:
     typing it parses exactly as it always did, and Lanthorn's Guiding Light still
     offers it when you reach for something close to it.
+- **The quick block draws `up`/`down`/`in`/`out` as glyphs, not words.** They now
+  sit in a small cluster beside the compass rose — up centred above, down
+  centred below, in and out side by side between — drawn with the same
+  `↑`/`◉`/`◎`/`↓` icons the automap already uses for a vertical exit, so a
+  click on one reads as the same glyph the map would show. Every cell is
+  still its own one-click target, and a `[symbols]` `portal_icons` preset in
+  `style.toml` restyles both the cluster and the map at once. The word flow
+  below the rose is four words shorter for it, and the quick row's own text
+  is no longer dimmed — it's a primary set of click targets, not secondary
+  chrome.
 
 ### Original media
 
