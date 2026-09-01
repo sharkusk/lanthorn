@@ -58,6 +58,12 @@ beside the directory and the disk image:
 > | **Shift+U** | Downloads a story straight into your library from a web
 > address you paste. |
 
+
+**Add** to the same table, after the **Shift+U** line:
+
+> | **Ctrl+F** | Filters your library as you type: title, author, filename or folder. |
+> | **Enter** on a folder | A library sorted into folders is listed folder by folder; Enter opens one and **Backspace** returns up. |
+
 ---
 
 ## What it does

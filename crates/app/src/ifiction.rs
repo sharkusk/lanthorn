@@ -157,7 +157,11 @@ fn child_text<'a>(parent: roxmltree::Node<'a, 'a>, name: &str) -> Option<String>
         .and_then(|n| n.text())
         .map(str::trim)
         .filter(|s| !s.is_empty())
-        .map(str::to_string)
+        // IFDB serves titles and authors with HTML entities inside the XML
+        // text ("&quot;Do Not Meddle&quot;", "Grit &amp; Glory"), which the
+        // XML parser has already unescaped once and the picker then printed
+        // as they came. The same decoding the description gets.
+        .map(decode_entities)
 }
 
 /// Finds a direct child element named `name`, ignoring namespace. Used inside
@@ -169,7 +173,7 @@ fn child_text_any_ns<'a>(parent: roxmltree::Node<'a, 'a>, name: &str) -> Option<
         .and_then(|n| n.text())
         .map(str::trim)
         .filter(|s| !s.is_empty())
-        .map(str::to_string)
+        .map(decode_entities)
 }
 
 pub fn parse(xml: &[u8]) -> Result<IFiction, IFictionError> {
@@ -246,6 +250,18 @@ mod tests {
     /// The live IFDB response. Guards the many-<title> trap: the fixture has 26
     /// <title> elements, all but one inside <downloads><link>, and only
     /// <bibliographic><title> is the game's.
+    /// IFDB double-encodes: the XML text of a title arrives as
+    /// `&amp;quot;Do Not Meddle&amp;quot;`, so after the XML parser one layer of
+    /// entities is still there. Ten titles in a 2,500-game library printed
+    /// with literal `&quot;` and `&amp;` until this decoded them.
+    #[test]
+    fn titles_and_authors_are_entity_decoded_like_descriptions() {
+        let xml = br#"<?xml version="1.0"?><ifindex xmlns="http://babel.ifarchive.org/protocol/iFiction/"><story><bibliographic><title>&amp;quot;Do Not Meddle&amp;quot;</title><author>Grit &amp;amp; Glory</author></bibliographic></story></ifindex>"#;
+        let f = parse(xml).expect("parses");
+        assert_eq!(f.title.as_deref(), Some("\"Do Not Meddle\""));
+        assert_eq!(f.author.as_deref(), Some("Grit & Glory"));
+    }
+
     #[test]
     fn parses_the_live_ifdb_response() {
         let f = parse(ZORK).expect("fixture parses");

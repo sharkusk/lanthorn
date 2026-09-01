@@ -70,3 +70,6 @@
 # fetch manifest CI runs, not committed blobs. Absent, every suite that names one
 # falls back to `stories/` and skips vacuously, exactly as it did before.
 /crates/app/tests/fixtures/stories/
+
+# A local compose override (library path, ports) is not part of the repo.
+docker-compose.override.yml

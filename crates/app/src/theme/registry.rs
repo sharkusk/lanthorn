@@ -492,6 +492,8 @@ pub static REGISTRY: std::sync::LazyLock<Vec<RegRow>> = std::sync::LazyLock::new
     row("story_no_metadata", Section::Elements, Kind::Style, Some("muted"), Delta::EMPTY),
     row("story_tile", Section::Elements, Kind::Style, Some("text"), Delta::EMPTY),
     row("story_tile_selected", Section::Elements, Kind::Style, Some("accent"), mods(true, false, false, true)),
+    // A folder row in the story picker (a sub-directory of the library, or `..`).
+    row("story_folder", Section::Elements, Kind::Style, Some("accent"), Delta::EMPTY),
     row("notification", Section::Elements, Kind::Style, Some("accent"), mods(false, false, false, true)),
     row("hotkey_key", Section::Elements, Kind::Style, Some("accent"), Delta::EMPTY),
     // Sound-beep pulse colours are bespoke (warm amber / cool blue) — no role
@@ -765,6 +767,7 @@ mod tests {
         "story_no_metadata",
         "story_tile",
         "story_tile_selected",
+        "story_folder",
         "notification",
         "hotkey_key",
         "sound_beep_high",

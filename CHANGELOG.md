@@ -58,6 +58,61 @@ changes what lanthorn does — all of it changes when and where.
   terminal write path is buffered — thousands of tiny locked writes per dense
   frame became a handful.
 
+### Pictures in the browser, for the served container
+
+ttyd's xterm.js renders sixel once the image addon is on; the entrypoint
+turns it on and starts each session with `--image-protocol sixel`, so cover
+art and graphical v6 stories show in the browser as pictures instead of
+half-block cells. `LANTHORN_WEB_IMAGES=halfblocks` restores the fallback.
+
+### Sound in the browser, for the served container
+
+Mode 2 of the Docker image (ttyd in a browser) now plays the game's sound.
+ALSA in the container writes what a process plays to a per-session FIFO, a
+new `lanthorn-audio-relay` binary streams that FIFO over a WebSocket on port
+7682, and ttyd's page carries a script that opens it and plays the PCM with
+WebAudio. lanthorn itself is unchanged. Publish both ports; `LANTHORN_WEB_AUDIO=off`
+turns it off. See `docs/features/docker.md`.
+
+### GIF cover art is accepted
+
+IFDB and the IFComp archive serve some cover art as GIF; a fetch used to
+discard it as undecodable. The GIF decoder is now enabled.
+
+### `--import-metadata`: curated identifications and covers
+
+For stories IFDB cannot identify by IFID, or has no cover for, a tab-separated
+file of rows (`path`, then an `ifdb_tuid` to fetch by, or a title, author,
+year, genre, language and description to record, and a `cover_url` to
+download) is applied with `lanthorn <library> --import-metadata rows.tsv`.
+The picker reads the result like any fetched record.
+
+### `--fetch`: the picker's IFDB pass, run headless
+
+`lanthorn <library> --fetch missing` walks a library (sub-folders included)
+and fetches the metadata and cover art the picker's `r` would, printing one
+line per story and exiting, so a server's library gets its sidecars built
+without anyone at the picker. `--fetch all` refetches the cached ones.
+
+### The story picker follows your folders, and finds a story in any of them
+
+A library sorted into sub-folders used to show the picker one level of itself.
+Folders are now rows at the top of the list: `Enter` (or a double-click) opens
+one, `Backspace` or the `..` row comes back up, and the selection lands on the
+folder you left. Sorting keeps folders on top under every column, downloads
+land in the folder on screen, and a folder row has its own `story_folder`
+colour in `style.toml`.
+
+The cover grid (`g`) lists all the games below the current folder instead of
+that one folder, so a library sorted into folders still has a gallery.
+
+`Ctrl+F` opens a type-to-filter field over an in-memory index of the **whole**
+library, built in the background as the picker opens, so the folder view is up
+instantly and the index catches up behind it. Every word typed must occur in a
+story's title, author, filename or folder; matches show their folder after the
+title, `↑`/`↓` move through them while typing, `Enter` opens one, `Esc` returns
+to the folder. Both keys are rebindable (`find-story`, `parent-folder`).
+
 ### Breaking — the command-line flags
 
 Every `--no-x` flag is replaced by a positive one that takes a value, across
@@ -367,16 +422,6 @@ carrying `enable_sound = false` could only be overridden by editing the file.
   on it yet.
 
 ## v0.3.0 — 2026-08-26
-
-### Performance
-
-- Kitty uploads keep one image id across redraws, so a changed picture costs the
-  picture and not the whole frame — up to two orders of magnitude fewer bytes.
-- Uploads go out deflated where the terminal has said it can inflate them.
-- The transcript wrap is incremental instead of rebuilt every frame: a
-  twenty-thousand-turn session draws, and answers a keystroke, at the cost of its
-  first (a keystroke was 25 ms).
-- A live font-size change re-measures the cell in place; no restart.
 
 ### Version 6 typefaces
 

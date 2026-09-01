@@ -140,7 +140,7 @@ pub fn resolve(entries: &[StoryEntry], want: &str, subject: &str) -> Result<usiz
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::picker::{Engine, Features, StoryMeta};
+    use crate::picker::{Engine, Features, RowKind, StoryMeta};
 
     fn entry(path: &str, title: &str, disk_entry: Option<&str>, release: u16) -> StoryEntry {
         let filename =
@@ -174,6 +174,7 @@ mod tests {
                 fetch_not_found: false,
             },
             hint_sidecar: None,
+            kind: RowKind::Story,
         }
     }
 

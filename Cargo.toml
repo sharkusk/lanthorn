@@ -1,5 +1,5 @@
 [workspace]
-members = ["crates/grammar-model", "crates/zvm", "crates/zvm-cli", "crates/mapper", "crates/app", "crates/blorb", "crates/gvm", "crates/gvm-cli", "crates/audio", "crates/scott", "crates/scott-cli", "crates/buildinfo", "crates/cli-host", "crates/verb-synonyms", "crates/verb-synonyms-gen"]
+members = ["crates/grammar-model", "crates/zvm", "crates/zvm-cli", "crates/mapper", "crates/app", "crates/blorb", "crates/gvm", "crates/gvm-cli", "crates/audio", "crates/scott", "crates/scott-cli", "crates/buildinfo", "crates/cli-host", "crates/verb-synonyms", "crates/verb-synonyms-gen", "crates/audio-relay"]
 # Standalone UCD table generator — run by hand only when the pinned Unicode
 # version bumps; its output is committed so gvm stays zero-dep.
 exclude = ["crates/gvm/tables-gen"]

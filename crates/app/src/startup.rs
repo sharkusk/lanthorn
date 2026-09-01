@@ -186,6 +186,9 @@ pub(crate) fn resolve_launch() -> LaunchCtx {
     // First time a directory is passed on the command line with no default set,
     // offer to remember it as the default story directory (persisted to config).
     if cfg.default_story_dir.is_none()
+        // A headless --fetch has no one to answer a question.
+        && cli.fetch.is_none()
+        && cli.import_metadata.is_none()
         && cli.story.as_deref().map(|p| p.is_dir()).unwrap_or(false)
         && prompt_yes_no(&format!(
             "Set {} as your default story directory?",

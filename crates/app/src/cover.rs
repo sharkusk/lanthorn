@@ -19,7 +19,7 @@ use ratatui_image::protocol::Protocol;
 
 use crate::render::graphics::KittyDeleteQueue;
 
-/// Decode PNG/JPEG bytes into a `DynamicImage`. `None` on any decode failure.
+/// Decode PNG/JPEG/GIF bytes into a `DynamicImage`. `None` on any decode failure.
 pub fn decode(bytes: &[u8]) -> Option<image::DynamicImage> {
     image::load_from_memory(bytes).ok()
 }
@@ -382,6 +382,19 @@ pub fn should_request_cover(
 
 #[cfg(test)]
 mod tests {
+    /// A GIF cover decodes: IFDB and the IFComp archive serve some covers as
+    /// GIF, and every one of them was dropped before the decoder was enabled.
+    #[test]
+    fn gif_covers_decode() {
+        let img = image::RgbaImage::from_pixel(3, 2, image::Rgba([10, 200, 30, 255]));
+        let mut out = std::io::Cursor::new(Vec::new());
+        image::DynamicImage::ImageRgba8(img).write_to(&mut out, image::ImageFormat::Gif).unwrap();
+        let bytes = out.into_inner();
+        assert_eq!(&bytes[..6], b"GIF89a");
+        let decoded = super::decode(&bytes).expect("a GIF decodes");
+        assert_eq!((decoded.width(), decoded.height()), (3, 2));
+    }
+
     use super::*;
     use std::path::{Path, PathBuf};
     use std::time::Duration;

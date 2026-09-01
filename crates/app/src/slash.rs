@@ -711,6 +711,12 @@ pub static COMMANDS: &[CommandSpec] = &[
     CommandSpec { name: "reverse-sort", category: Category::Library, context: Context::Browser,
         usage: "reverse-sort", description: "reverse the browser's sort direction, keeping the column",
         dispatch: |_| SlashOutcome::Browser(crate::browser::BrowserAction::ReverseSort) },
+    CommandSpec { name: "find-story", category: Category::Library, context: Context::Browser,
+        usage: "find-story", description: "type to filter the whole library by title, author, filename or folder",
+        dispatch: |_| SlashOutcome::Browser(crate::browser::BrowserAction::FindStory) },
+    CommandSpec { name: "parent-folder", category: Category::Library, context: Context::Browser,
+        usage: "parent-folder", description: "leave the current library folder for the one above it",
+        dispatch: |_| SlashOutcome::Browser(crate::browser::BrowserAction::ParentFolder) },
     CommandSpec { name: "quit-browser", category: Category::Library, context: Context::Browser,
         usage: "quit-browser", description: "leave the story browser",
         dispatch: |_| SlashOutcome::Browser(crate::browser::BrowserAction::QuitBrowser) },
@@ -1110,7 +1116,9 @@ mod tests {
         // SQ-1107 added `reveal-words`, the momentary word reveal — the seventh
         // border control and the first that is a TRIGGER rather than a switch:
         // nothing to read off it, nothing persisted, it just happens.
-        assert_eq!(COMMANDS.len(), 84, "registry must match the spec's Full command table");
+        // `find-story` and `parent-folder` arrived with the picker's folder
+        // navigation and its in-memory library find: two more Library commands.
+        assert_eq!(COMMANDS.len(), 86, "registry must match the spec's Full command table");
     }
 
     /// SQ-0796: `Category::ORDER` must list every category, or a whole group of

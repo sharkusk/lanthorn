@@ -16,7 +16,8 @@ services:
     # image: ghcr.io/sharkusk/lanthorn:latest
     command: serve
     ports:
-      - "7681:7681"
+      - "7681:7681"   # the terminal
+      - "7682:7682"   # the game's sound, streamed to the browser
     volumes:
       - ./stories:/stories
       - lanthorn-data:/data

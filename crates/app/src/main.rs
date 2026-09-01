@@ -1585,6 +1585,97 @@ fn dispatch_due_game_clocks(
     (redraw, false)
 }
 
+/// `--fetch`: run the IFDB metadata pass over `source` without a terminal,
+/// printing one line per story, and return the process exit code (0 unless a
+/// fetch failed). The worker, the delay between requests and the sidecar
+/// writes are the picker's own; only the reporting differs.
+fn run_headless_fetch(
+    source: &app::picker::StorySource,
+    mode: app::config::FetchMode,
+    data_base: &std::path::Path,
+) -> i32 {
+    use app::fetch_worker::{FetchOrder, Fetcher, Outcome};
+    let targets = app::picker::fetch_targets(source, data_base);
+    let total = targets.len();
+    if total == 0 {
+        eprintln!("lanthorn: no stories under {}", source.dir().display());
+        return 1;
+    }
+    eprintln!("lanthorn: fetching IFDB metadata for {total} stories under {}", source.dir().display());
+    let fetcher = Fetcher::new(
+        Box::new(app::ifdb::IfdbClient::new()),
+        data_base.to_path_buf(),
+        std::time::Duration::from_millis(500),
+    );
+    fetcher.request(FetchOrder { stories: targets, forced: mode.forced(), id_override: None });
+
+    #[derive(Default)]
+    struct Tally {
+        done: usize,
+        fetched: usize,
+        skipped: usize,
+        not_found: usize,
+        failed: usize,
+    }
+    impl Tally {
+        fn note(&mut self, p: app::fetch_worker::FetchProgress, total: usize) {
+            self.done += 1;
+            let word = match &p.outcome {
+                Outcome::Fetched => {
+                    self.fetched += 1;
+                    "fetched".to_string()
+                }
+                Outcome::Skipped => {
+                    self.skipped += 1;
+                    "skipped (current)".to_string()
+                }
+                Outcome::NotFound => {
+                    self.not_found += 1;
+                    "not on IFDB".to_string()
+                }
+                Outcome::Failed(e) => {
+                    self.failed += 1;
+                    format!("failed: {e}")
+                }
+            };
+            let place = match &p.disk_entry {
+                Some(e) => format!("{} [{e}]", p.path.display()),
+                None => p.path.display().to_string(),
+            };
+            println!("[{}/{total}] {}  ({place})  {word}", self.done, p.title);
+        }
+    }
+    let mut tally = Tally::default();
+    loop {
+        let batch = fetcher.drain();
+        let quiet = batch.is_empty();
+        for p in batch {
+            tally.note(p, total);
+        }
+        if tally.done >= total {
+            break;
+        }
+        if quiet {
+            // The worker clears `busy` after its last send, so a drain after
+            // seeing it clear collects the tail; an empty tail is the end.
+            if !fetcher.busy() {
+                let tail = fetcher.drain();
+                if tail.is_empty() {
+                    break;
+                }
+                for p in tail {
+                    tally.note(p, total);
+                }
+            } else {
+                std::thread::sleep(std::time::Duration::from_millis(50));
+            }
+        }
+    }
+    let Tally { fetched, skipped, not_found, failed, .. } = tally;
+    println!("lanthorn: {fetched} fetched, {skipped} skipped, {not_found} not on IFDB, {failed} failed");
+    if failed > 0 { 1 } else { 0 }
+}
+
 fn main() {
     // ── ONE-TIME setup ────────────────────────────────────────────────────────
     // Register termination-signal handlers before any raw-mode entry (the picker
@@ -1618,6 +1709,23 @@ fn main() {
     // compilation disc instead of only whichever one the mount prefers. A miss
     // prints the list and exits 2 — the same code `resolve_launch` uses for "no
     // story given", and never a fallback to booting an arbitrary game.
+    // `--fetch`: the browser's IFDB pass with no browser, then exit. Placed
+    // after `source` so it takes the same library or disk set the picker
+    // would, and before anything touches the terminal.
+    // `--import-metadata`: curated rows for what `--fetch` could not settle.
+    if let Some(tsv) = ctx.cli.import_metadata.as_deref() {
+        let source = app::ifdb::IfdbClient::new();
+        std::process::exit(app::metadata_import::run(tsv, &ctx.data_base, &source, std::time::Duration::from_millis(500)));
+    }
+
+    if let Some(mode) = ctx.cli.fetch {
+        let Some(source) = source.as_ref() else {
+            eprintln!("lanthorn: --fetch needs a library directory or a story file");
+            std::process::exit(2);
+        };
+        std::process::exit(run_headless_fetch(source, mode, &ctx.data_base));
+    }
+
     let direct = ctx.cli.story_pick.as_deref().map(|want| {
         let single = ctx.single_file.clone().unwrap_or_default();
         match app::story_pick::pick(source.as_ref(), &single, &ctx.data_base, want) {

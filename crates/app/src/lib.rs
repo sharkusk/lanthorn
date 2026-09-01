@@ -350,6 +350,7 @@ pub mod inventory;
 pub mod export_dot;
 pub mod export_svg;
 pub mod fetch_worker;
+pub mod metadata_import;
 pub mod cover_gallery;
 pub mod ifdb;
 pub mod ifdb_search;

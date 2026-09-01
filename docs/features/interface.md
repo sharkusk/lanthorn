@@ -758,7 +758,9 @@ know which side you're on).
 
 ## Story picker
 Point lanthorn at a directory instead of a story file
-(`lanthorn path/to/stories/`) and it opens a picker of your whole library. Each
+(`lanthorn path/to/stories/`) and it opens a picker of your whole library, one
+folder at a time: sub-folders are rows at the top of the list, `Enter` on one
+descends, and `Backspace` (or the `..` row) comes back up. Each
 row shows the title (or filename), and a right-hand **TYPE** column names the
 engine and version at a glance — `Z5`, `Z5 (blorb)`, `Z6 (ADF)`, `G3.1.2`,
 `Scott`, or `Scott (blorb)` — so all three engines are told apart on sight. Two
@@ -1014,6 +1016,66 @@ what "detected" means and how to name an archive the detector can't see.
 
 `↑`/`↓`/`j`/`k`/PgUp/PgDn/Home/End navigate, `Enter` or a click opens the story,
 `q`/`Esc` quits back to the shell.
+
+### Folders, and finding a story anywhere in them
+
+A library of two thousand files gets sorted into folders, and the picker follows
+them. It lists **one folder at a time**: the sub-folders first (in the
+`story_folder` colour, `folder` in the TYPE column, and a `..` row above them
+when you are below the root), then that folder's stories. `Enter` or a
+double-click on a folder row opens it, `Backspace` goes up one, and the
+selection lands back on the folder you just left. Downloads (`U`, `/`) land in
+the folder on screen. Everything else is unchanged: sorting keeps the folders
+on top under every column, and a fetch sweep (`r`) covers the folder's stories
+and skips its folders.
+
+**The cover grid (`g`) lists the folder and all of the games below it.** A
+grid of covers is most useful when it covers a lot, and a folder that contains
+only folders would otherwise be an empty grid, so in the gallery the tiles are
+all the games under the current folder, taken from the same in-memory index as
+the find (the header notes this, plus `indexing, N so far` until the index is
+complete). `Backspace` still moves up a folder, and the grid re-scopes;
+switching back to the list returns to the folder view.
+
+**`Ctrl+F` finds a story anywhere under the root.** It opens a type-to-filter
+field in the footer over an **in-memory index of the whole library** that the
+picker starts building the moment it opens, one folder at a time on its own
+thread, so the folder view is up in one directory's time and the index catches
+up behind it (the header says `indexing, N so far` until it has, and a query
+typed early widens as folders arrive). Every word you type has to occur,
+case-insensitively, in a story's title, author, filename or folder, so
+`german z5` and `nelson curses` both do what they look like. An empty query
+lists the whole library flat. Matches carry their folder after the title,
+muted; `↑`/`↓` move through them while you type, `Enter` opens the selected
+one, and `Esc` puts the folder view back where it was. Both keys are bindable
+(`find-story`, `parent-folder`) like every other browser command.
+
+One caveat: a story's saves and fetched metadata live under a directory named
+from its **filename**, so two *different* games that share a filename in two
+folders share that directory too. Keep filenames unique across the library, as
+the IF Archive's own layout does.
+
+**The same fetch, with nobody at the picker.** `lanthorn ~/if-games --fetch
+missing` runs the `r` pass over the library, sub-folders included, without
+opening a terminal UI: one printed line per story, the sidecars and covers
+written where the picker writes them, exit code 0 unless a fetch failed.
+`--fetch all` is `f` for the lot. On a server this is how the sidecars get
+built in the first place; the picker then opens with titles, authors, ratings
+and covers already there.
+
+**For what IFDB could not settle, a curated file.** `lanthorn ~/if-games
+--import-metadata rows.tsv` applies a tab-separated file, one row per story,
+made by a person or by an agent working from the IF Archive's descriptions,
+IFDB's search, IFWiki or a competition's archive. The header names the
+columns, in any order: `path` (and `entry`, the member name, for a story inside
+a zip or disk image holding several), then `ifdb_tuid` (the story is fetched from
+IFDB by that id, the same call the picker's `u` makes, and IFDB's record wins),
+or `title` / `author` / `year` / `genre` / `language` / `description` (written
+as a curated record: the list shows the title, the info panel the rest, and
+nothing is invented for an empty column), and `cover_url` (downloaded, checked
+to decode, saved as the cover; a story with its own frontispiece is left
+alone). Extra columns such as `confidence` and `evidence` are ignored, so the
+file can carry the reasoning that produced it.
 
 **Shift-Enter** opens the story's **launch options** instead of launching it —
 the boot-time choices lanthorn can only honour *before* a game starts: which

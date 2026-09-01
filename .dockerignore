@@ -16,3 +16,4 @@ node_modules/
 *.swp
 *.swo
 .DS_Store
+docker-compose.override.yml

@@ -404,6 +404,11 @@ impl Default for KeyMap {
         bind!(g(Char('H'), false, true), "download-hints", Context::Browser);
         bind!(plain(Char('s')), "sort-library", Context::Browser);
         bind!(plain(Char('d')), "reverse-sort", Context::Browser);
+        // Ctrl+F filters the library's in-memory index; Backspace climbs out of
+        // a sub-folder. Both are inert with nothing to act on (a flat library,
+        // the root), and neither collides with a letter the picker already uses.
+        bind!(g(Char('f'), true, false), "find-story", Context::Browser);
+        bind!(plain(Backspace), "parent-folder", Context::Browser);
         bind!(plain(Char('q')), "quit-browser", Context::Browser);
         bind!(plain(Esc), "cancel-browser", Context::Browser);
 

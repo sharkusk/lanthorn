@@ -482,11 +482,249 @@ fn ensure_aux(
 ) {
     if let Some(slot) = cache.get_mut(idx) {
         if slot.is_none() {
-            if let Some(entry) = stories.get(idx) {
+            // A folder has no aux to resolve (and nothing to open).
+            if let Some(entry) = stories.get(idx).filter(|e| !e.is_folder()) {
                 *slot = Some(app::picker::resolve_aux(entry, data_base, hint_index));
             }
         }
     }
+}
+
+/// The rows the picker lists for `dir`: a library shows the folder at `dir`
+/// (its sub-folders, then its stories, `..` below the root); a multi-disk set
+/// is one release and has no folders to show.
+fn rows_for(
+    source: &app::picker::StorySource,
+    dir: &std::path::Path,
+    root: &std::path::Path,
+    data_base: &std::path::Path,
+) -> Vec<app::picker::StoryEntry> {
+    match source {
+        app::picker::StorySource::Library(_) => app::picker::library_rows(dir, root, data_base),
+        other @ app::picker::StorySource::DiskSet { .. } => other.scan(data_base),
+    }
+}
+
+/// The first row that is a story, for the paths that must pick one without a
+/// terminal to ask on. `None` when the folder holds only folders.
+fn first_story(stories: &[app::picker::StoryEntry]) -> Option<&app::picker::StoryEntry> {
+    stories.iter().find(|e| !e.is_folder())
+}
+
+/// Add to the in-memory index whatever stories in `rows` it does not hold yet
+/// (a download landed in the folder on screen after the walk passed it).
+fn merge_index(index: &mut Vec<app::picker::StoryEntry>, rows: &[app::picker::StoryEntry]) {
+    for r in rows.iter().filter(|e| !e.is_folder()) {
+        if !index.iter().any(|e| e.same_story(r)) {
+            index.push(r.clone());
+        }
+    }
+}
+
+/// Replace the list with `dir := target`'s rows and realign the two per-index
+/// caches, the same three moves the download drain makes. Going up lands the
+/// selection on the folder just left; going down lands on the first row.
+#[allow(clippy::too_many_arguments)]
+fn enter_folder(
+    source: &app::picker::StorySource,
+    dir: &mut std::path::PathBuf,
+    root: &std::path::Path,
+    target: &std::path::Path,
+    stories: &mut Vec<app::picker::StoryEntry>,
+    row_badges: &mut Vec<app::picker::RowBadges>,
+    aux_cache: &mut Vec<Option<app::picker::StoryAux>>,
+    list: &mut app::list_scroll::ListScroll,
+    data_base: &std::path::Path,
+    hint_index: &app::hints::HintIndex,
+    viewport: usize,
+    anim: &app::config::AnimationConfig,
+) {
+    let came_from = std::mem::replace(dir, target.to_path_buf());
+    *stories = rows_for(source, dir, root, data_base);
+    *row_badges = stories
+        .iter()
+        .map(|e| app::picker::compute_row_badges(e, data_base, hint_index))
+        .collect();
+    *aux_cache = (0..stories.len()).map(|_| None).collect();
+    list.len(stories.len());
+    let idx = stories.iter().position(|e| e.is_folder() && e.path == came_from).unwrap_or(0);
+    list.select(idx, viewport, anim);
+}
+
+/// Replace the list with the index's matches for `query` and realign the
+/// caches. The selection goes back to the top: the rows under it are new.
+#[allow(clippy::too_many_arguments)]
+fn apply_find(
+    index: &[app::picker::StoryEntry],
+    root: &std::path::Path,
+    query: &str,
+    stories: &mut Vec<app::picker::StoryEntry>,
+    row_badges: &mut Vec<app::picker::RowBadges>,
+    aux_cache: &mut Vec<Option<app::picker::StoryAux>>,
+    list: &mut app::list_scroll::ListScroll,
+    data_base: &std::path::Path,
+    hint_index: &app::hints::HintIndex,
+) {
+    *stories = app::picker::search_library(index, root, query);
+    *row_badges = stories
+        .iter()
+        .map(|e| app::picker::compute_row_badges(e, data_base, hint_index))
+        .collect();
+    *aux_cache = (0..stories.len()).map(|_| None).collect();
+    list.len(stories.len());
+    list.selected = 0;
+}
+
+/// Whether the list on screen is the gallery's recursive view: the cover grid,
+/// no find field open, and a library index to draw from (a disk set has none,
+/// and shows its rows as tiles as it always did).
+fn gallery_all_folders(view: PickerView, finding: bool, has_index: bool) -> bool {
+    matches!(view, PickerView::Gallery) && !finding && has_index
+}
+
+/// Replace the list with every story under `dir` (the gallery's view of a
+/// folder), keeping the selection on the same story where it survives.
+#[allow(clippy::too_many_arguments)]
+fn show_gallery_scope(
+    index: &[app::picker::StoryEntry],
+    root: &std::path::Path,
+    dir: &std::path::Path,
+    stories: &mut Vec<app::picker::StoryEntry>,
+    row_badges: &mut Vec<app::picker::RowBadges>,
+    aux_cache: &mut Vec<Option<app::picker::StoryAux>>,
+    list: &mut app::list_scroll::ListScroll,
+    data_base: &std::path::Path,
+    hint_index: &app::hints::HintIndex,
+) {
+    let keep = stories.get(list.selected).filter(|e| !e.is_folder()).map(|e| (e.path.clone(), e.meta.disk_entry.clone()));
+    *stories = app::picker::search_library_under(index, root, dir, "");
+    *row_badges = stories
+        .iter()
+        .map(|e| app::picker::compute_row_badges(e, data_base, hint_index))
+        .collect();
+    *aux_cache = (0..stories.len()).map(|_| None).collect();
+    list.len(stories.len());
+    list.selected = keep
+        .and_then(|(p, d)| stories.iter().position(|e| e.is(&p, d.as_deref())))
+        .unwrap_or(0);
+}
+
+/// What the picker's title line says, and which folder the row painter
+/// measures a match's folder label against.
+pub(crate) struct PickerHeading<'a> {
+    /// The folder being listed: the root until the user descends.
+    pub dir: &'a std::path::Path,
+    /// The library root; a find match's folder label is relative to it.
+    pub root: &'a std::path::Path,
+    /// `Some` while find-story's field is open.
+    pub find: Option<FindStatus<'a>>,
+    /// The cover gallery, showing every story under `dir` rather than the
+    /// folder's own rows (`None` in the list, and with no index to draw on).
+    pub all_folders: Option<IndexStatus>,
+}
+
+/// How far the library index has got, for a header that draws on it.
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct IndexStatus {
+    pub indexed: usize,
+    pub done: bool,
+}
+
+/// The find field's state, as the header reports it.
+pub(crate) struct FindStatus<'a> {
+    pub query: &'a str,
+    /// Stories indexed so far, shown while the walk is still running.
+    pub indexed: usize,
+    pub done: bool,
+}
+
+impl<'a> PickerHeading<'a> {
+    /// A folder view of `dir`, which is also the root.
+    #[cfg(test)]
+    fn browse(dir: &'a std::path::Path) -> Self {
+        PickerHeading { dir, root: dir, find: None, all_folders: None }
+    }
+
+    /// The folder a row's label is relative to: the root while finding (a match
+    /// can be anywhere under it), the listed folder otherwise (so no row in a
+    /// folder view wears one).
+    fn label_base(&self) -> &std::path::Path {
+        if self.find.is_some() { self.root } else { self.dir }
+    }
+
+    /// The title line. `toggle` is the view-flip hint (`g: covers` / `g: list`).
+    fn line(&self, stories: &[app::picker::StoryEntry], toggle: &str) -> String {
+        match &self.find {
+            Some(f) => {
+                let n = stories.len();
+                let es = if n == 1 { "" } else { "es" };
+                let progress = if f.done { String::new() } else { format!(" · indexing, {} so far", f.indexed) };
+                format!(
+                    " lanthorn — find a story  ({n} match{es} for “{}” in {}{progress})   [i: info · {toggle}]",
+                    f.query,
+                    self.root.display()
+                )
+            }
+            None if self.all_folders.is_some() => {
+                let status = self.all_folders.expect("checked");
+                let progress = if status.done { String::new() } else { format!(" · indexing, {} so far", status.indexed) };
+                format!(
+                    " lanthorn — choose a story  ({} in {} and its folders{progress})   [i: info · {toggle}]",
+                    stories.len(),
+                    self.dir.display()
+                )
+            }
+            None => {
+                let folders = stories.iter().filter(|e| e.is_folder() && e.title != app::picker::PARENT_LABEL).count();
+                let n = stories.iter().filter(|e| !e.is_folder()).count();
+                let f = match folders {
+                    0 => String::new(),
+                    1 => ", 1 folder".to_string(),
+                    k => format!(", {k} folders"),
+                };
+                format!(" lanthorn — choose a story  ({n} found{f} in {})   [i: info · {toggle}]", self.dir.display())
+            }
+        }
+    }
+}
+
+/// The info panel for a folder row: where it leads, and how. Returns the
+/// panel's scroll extent, which is nothing.
+fn draw_folder_panel(
+    entry: &app::picker::StoryEntry,
+    root: &std::path::Path,
+    area: Rect,
+    cs: &app::colors::ColorScheme,
+    buf: &mut ratatui::buffer::Buffer,
+) -> usize {
+    if area.width < 2 || area.height < 2 {
+        return 0;
+    }
+    let story_info = cs.theme.get("story_info").style;
+    let story_info_title = cs.theme.get("story_info_title").style;
+    let story_info_value = cs.theme.get("story_info_value").style;
+    let story_info_label = cs.theme.get("story_info_label").style;
+    for y in area.top()..area.bottom() {
+        for x in area.left()..area.right() {
+            if let Some(c) = buf.cell_mut((x, y)) {
+                c.set_symbol(" ").set_style(story_info);
+            }
+        }
+    }
+    let x = area.x + 1;
+    let inner = Rect::new(x, area.y, area.width.saturating_sub(2), area.height);
+    let is_parent = entry.title == app::picker::PARENT_LABEL;
+    let title = if is_parent { "Up one folder".to_string() } else { entry.title.clone() };
+    draw_str_clipped(buf, x, area.y + 1, &title, story_info_title, inner);
+    let rel = entry.path.strip_prefix(root).ok().filter(|r| !r.as_os_str().is_empty());
+    let where_ = match rel {
+        Some(r) => format!("{}/", r.display()),
+        None => "the library root".to_string(),
+    };
+    draw_str_clipped(buf, x, area.y + 3, "Leads to", story_info_label, inner);
+    draw_str_clipped(buf, x, area.y + 4, &where_, story_info_value, inner);
+    draw_str_clipped(buf, x, area.y + 6, "Enter opens it; Backspace goes up.", story_info_value, inner);
+    0
 }
 
 /// Reorder `stories` by `sort`, keeping the selection on the same story (by
@@ -734,9 +972,12 @@ pub(crate) fn run_story_picker(
     cfg: &app::config::Config,
     data_base: &std::path::Path,
 ) -> Option<PickedStory> {
-    let dir = source.dir().to_path_buf();
-    let dir = dir.as_path();
-    let mut stories = source.scan(data_base);
+    // The library root, and the folder currently listed. They part company the
+    // moment the user descends into a sub-folder (Enter on a folder row) and
+    // meet again on Backspace; downloads land in `dir`, the folder on screen.
+    let root = source.dir().to_path_buf();
+    let mut dir = root.clone();
+    let mut stories = rows_for(&source, &dir, &root, data_base);
     if stories.is_empty() {
         eprintln!("lanthorn: no Z-machine story files found in '{}'", dir.display());
         std::process::exit(1);
@@ -760,11 +1001,11 @@ pub(crate) fn run_story_picker(
     // Terminal setup mirrors the game loop. If any step fails we can't be
     // interactive — fall back to the first story rather than abort.
     if enable_raw_mode().is_err() {
-        return Some(PickedStory::row(&stories[0]));
+        return first_story(&stories).map(PickedStory::row);
     }
     if execute!(stdout(), EnterAlternateScreen).is_err() {
         let _ = disable_raw_mode();
-        return Some(PickedStory::row(&stories[0]));
+        return first_story(&stories).map(PickedStory::row);
     }
     // Mouse capture is opt-in (config `mouse = true`): its any-motion reporting
     // floods this loop with redraws on every mouse move. Off by default keeps the
@@ -776,7 +1017,7 @@ pub(crate) fn run_story_picker(
         Ok(t) => t,
         Err(_) => {
             restore_terminal();
-            return Some(PickedStory::row(&stories[0]));
+            return first_story(&stories).map(PickedStory::row);
         }
     };
 
@@ -842,6 +1083,24 @@ pub(crate) fn run_story_picker(
     // library in hand, is where that question gets asked.)
     let mut url_prompt: Option<app::text_field::TextField> = None;
     let mut url_dl = app::story_url::UrlDownloader::new();
+
+    // Type-to-find over the WHOLE library (find-story). The field is `Some`
+    // while the list shows matches instead of a folder; Esc puts the folder
+    // back. What it matches against is an in-memory index of every story under
+    // `root`, built once per picker on its own thread, one folder per batch,
+    // because a scan opens every file it lists and a whole library is
+    // gigabytes: the folder view is up in one directory's time, and the index
+    // catches up behind it (the header says so until it has).
+    let mut find_field: Option<app::text_field::TextField> = None;
+    let index_rx = match &source {
+        app::picker::StorySource::Library(_) => {
+            Some(app::picker::spawn_library_index(root.clone(), data_base.to_path_buf()))
+        }
+        // A multi-disk set is one release, not a tree; there is nothing to walk.
+        app::picker::StorySource::DiskSet { .. } => None,
+    };
+    let mut index: Vec<app::picker::StoryEntry> = Vec::new();
+    let mut index_done = index_rx.is_none();
 
     // IFDB story search (SQ-0413): `/` opens a modal to search IFDB, browse
     // results, and download a chosen story file into `dir`. Network runs on its
@@ -964,10 +1223,17 @@ pub(crate) fn run_story_picker(
             last_area = area;
             let buf = f.buffer_mut();
             let (list_area, panel_area) = split_picker_area(area, slide.fraction());
+            let heading = PickerHeading {
+                dir: &dir,
+                root: &root,
+                find: find_field.as_ref().map(|f| FindStatus { query: f.as_str(), indexed: index.len(), done: index_done }),
+                all_folders: gallery_all_folders(view, find_field.is_some(), index_rx.is_some())
+                    .then_some(IndexStatus { indexed: index.len(), done: index_done }),
+            };
             match view {
                 PickerView::List => {
                     let (rects, vp, hrects) = draw_story_picker(
-                        &stories, &list, &row_badges, &badge_glyphs, dir, &cs, &keymap,
+                        &stories, &list, &row_badges, &badge_glyphs, &heading, &cs, &keymap,
                         sort, list_area, buf,
                     );
                     row_rects = rects;
@@ -981,7 +1247,7 @@ pub(crate) fn run_story_picker(
                     // and corrupting its border where covers meet the edges (SQ-0389).
                     if preview.is_none() {
                         let (rects, cols, vis) = draw_story_gallery(
-                            &stories, list.selected, &mut gallery_first_row, dir, &cs, &keymap,
+                            &stories, list.selected, &mut gallery_first_row, &heading, &cs, &keymap,
                             cover_picker.as_ref(), &mut cover, data_base, list_area, buf,
                         );
                         gallery_cols = cols.max(1);
@@ -998,7 +1264,13 @@ pub(crate) fn run_story_picker(
             // The manual IFDB-entry prompt (SQ-0371) takes the footer row while
             // active; otherwise a fetch's status line, otherwise the hints.
             let story_header_active = cs.theme.get("story_header_active").style;
-            if let Some(field) = &manual_ifdb {
+            if let Some(field) = &find_field {
+                let prompt = format!(
+                    "Find (type to filter, ↑/↓ choose, Enter opens, Esc back to the folder): {}\u{258f}",
+                    field.as_str()
+                );
+                draw_progress_line(buf, list_area, &prompt, story_header_active);
+            } else if let Some(field) = &manual_ifdb {
                 let prompt = format!("IFDB URL or id (Enter to fetch, Esc to cancel): {}▏", field.as_str());
                 draw_progress_line(buf, list_area, &prompt, story_header_active);
             } else if let Some(field) = &url_prompt {
@@ -1011,7 +1283,12 @@ pub(crate) fn run_story_picker(
                 draw_progress_line(buf, list_area, msg, story_header_active);
             }
             if preview.is_none() && panel_area.width > 0 {
-                if let Some(entry) = stories.get(list.selected) {
+                if let Some(entry) = stories.get(list.selected).filter(|e| e.is_folder()) {
+                    last_panel_area = panel_area;
+                    panel_link_rects.clear();
+                    panel_resource_rects.clear();
+                    panel_max = draw_folder_panel(entry, &root, panel_area, &cs, buf);
+                } else if let Some(entry) = stories.get(list.selected) {
                     last_panel_area = panel_area;
                     panel_max = draw_info_panel(
                         &entry.title,
@@ -1097,6 +1374,7 @@ pub(crate) fn run_story_picker(
             .then(|| {
                 stories
                     .get(list.selected)
+                    .filter(|e| !e.is_folder())
                     .map(|e| (e.cover_key(data_base), e.game_dir(data_base)))
             })
             .flatten()
@@ -1123,7 +1401,7 @@ pub(crate) fn run_story_picker(
         // wants them all, and the worker decodes them one at a time as it can.
         if view == PickerView::Gallery {
             for &idx in &gallery_visible {
-                if let Some(entry) = stories.get(idx) {
+                if let Some(entry) = stories.get(idx).filter(|e| !e.is_folder()) {
                     let p = entry.cover_key(data_base);
                     if !cover.has(&p) && !requested.contains(&p) {
                         decoder.request(p.clone(), entry.game_dir(data_base));
@@ -1139,6 +1417,36 @@ pub(crate) fn run_story_picker(
         // order of length one — then re-sort through the one shared helper so
         // the cursor stays on whatever story the user is actually looking at,
         // not wherever its index happened to land.
+        // The library index arrives one folder at a time; a disconnected
+        // channel is the walk finishing. While the find field is open, each
+        // arrival widens the match list in place, so a query typed two seconds
+        // after launch still ends up seeing the whole library.
+        let mut index_grew = false;
+        if !index_done {
+            if let Some(rx) = index_rx.as_ref() {
+                loop {
+                    match rx.try_recv() {
+                        Ok(batch) => {
+                            index.extend(batch.entries);
+                            index_grew = true;
+                        }
+                        Err(std::sync::mpsc::TryRecvError::Empty) => break,
+                        Err(std::sync::mpsc::TryRecvError::Disconnected) => {
+                            index_done = true;
+                            break;
+                        }
+                    }
+                }
+            }
+        }
+        if index_grew {
+            if let Some(field) = &find_field {
+                apply_find(&index, &root, field.as_str(), &mut stories, &mut row_badges, &mut aux_cache, &mut list, data_base, &hint_index);
+            } else if gallery_all_folders(view, false, index_rx.is_some()) {
+                show_gallery_scope(&index, &root, &dir, &mut stories, &mut row_badges, &mut aux_cache, &mut list, data_base, &hint_index);
+            }
+        }
+
         let mut fetch_arrived = false;
         for p in fetcher.drain() {
             fetch_arrived = true;
@@ -1200,6 +1508,13 @@ pub(crate) fn run_story_picker(
             });
         }
         if fetch_arrived {
+            // A fetch just rewrote titles and authors in `stories`; the index
+            // holds its own copies, and find matches on those.
+            for e in stories.iter().filter(|e| !e.is_folder()) {
+                if let Some(slot) = index.iter_mut().find(|i| i.same_story(e)) {
+                    *slot = e.clone();
+                }
+            }
             list.select(
                 resort_list(&mut stories, list.selected, sort, &mut row_badges, &mut aux_cache, data_base, &hint_index),
                 viewport,
@@ -1254,7 +1569,11 @@ pub(crate) fn run_story_picker(
                             members.push(new_path.clone());
                         }
                     }
-                    stories = source.scan(data_base);
+                    stories = rows_for(&source, &dir, &root, data_base);
+                    merge_index(&mut index, &stories);
+                    if gallery_all_folders(view, find_field.is_some(), index_rx.is_some()) {
+                        show_gallery_scope(&index, &root, &dir, &mut stories, &mut row_badges, &mut aux_cache, &mut list, data_base, &hint_index);
+                    }
                     app::picker::resort_preserving_selection(&mut stories, 0, sort);
                     row_badges = stories
                         .iter()
@@ -1305,7 +1624,11 @@ pub(crate) fn run_story_picker(
                         members.push(new_path.clone());
                     }
                 }
-                stories = source.scan(data_base);
+                stories = rows_for(&source, &dir, &root, data_base);
+                    merge_index(&mut index, &stories);
+                    if gallery_all_folders(view, find_field.is_some(), index_rx.is_some()) {
+                        show_gallery_scope(&index, &root, &dir, &mut stories, &mut row_badges, &mut aux_cache, &mut list, data_base, &hint_index);
+                    }
                 app::picker::resort_preserving_selection(&mut stories, 0, sort);
                 row_badges = stories
                     .iter()
@@ -1328,7 +1651,7 @@ pub(crate) fn run_story_picker(
             }
             if search_modal.is_some() {
                 let action = search_modal.as_mut().unwrap().on_event(&ev);
-                dispatch_search_action(action, &search_worker, dir, &mut search_modal);
+                dispatch_search_action(action, &search_worker, &dir, &mut search_modal);
             }
         }
 
@@ -1336,7 +1659,10 @@ pub(crate) fn run_story_picker(
         // draw is at the top of the loop, and once the result is cached
         // `cover_busy` goes false — without this the loop would block on `read()`
         // and the new cover wouldn't appear until the next input event.
-        if cover_arrived || fetch_arrived || hint_arrived || search_arrived || url_arrived {
+        // `index_grew` too (SQ-none): a find's matches and the gallery's scope
+        // widen as folders are indexed, and a header that counts them must
+        // repaint without waiting for a key.
+        if cover_arrived || fetch_arrived || hint_arrived || search_arrived || url_arrived || index_grew {
             list.finalize_if_done();
             continue;
         }
@@ -1438,7 +1764,7 @@ pub(crate) fn run_story_picker(
                 // level, Enter activates, ↑/↓/j/k navigate).
                 } else if search_modal.is_some() {
                     let action = search_modal.as_mut().unwrap().on_key(k.code, anim);
-                    dispatch_search_action(action, &search_worker, dir, &mut search_modal);
+                    dispatch_search_action(action, &search_worker, &dir, &mut search_modal);
                 // The resource-preview modal (SQ-0347) captures all keys while
                 // open: `+`/`=`/`-`/`0` step the zoom (SQ-0486, intercepted
                 // ahead of dismissal); any of Esc/Enter/q/Space dismisses it
@@ -1466,6 +1792,55 @@ pub(crate) fn run_story_picker(
                             }
                         }
                         _ => {}
+                    }
+                } else if let Some(field) = find_field.as_mut() {
+                    // Type-to-find: letters edit the query and the list is the
+                    // whole library's matches. The vertical keys still move the
+                    // selection, so a match is picked without leaving the field;
+                    // Enter opens it; Esc puts the folder view back.
+                    let mut refilter = false;
+                    match k.code {
+                        Esc => {
+                            find_field = None;
+                            panel_scroll = 0;
+                            if gallery_all_folders(view, false, index_rx.is_some()) {
+                                show_gallery_scope(&index, &root, &dir, &mut stories, &mut row_badges, &mut aux_cache, &mut list, data_base, &hint_index);
+                            } else {
+                                let here = dir.clone();
+                                enter_folder(&source, &mut dir, &root, &here, &mut stories, &mut row_badges, &mut aux_cache, &mut list, data_base, &hint_index, viewport, anim);
+                            }
+                        }
+                        Enter => {
+                            if let Some(entry) = stories.get(list.selected) {
+                                break Some(PickedStory::row(entry));
+                            }
+                        }
+                        Up | Down | PageUp | PageDown | Home | End => {
+                            panel_scroll = 0;
+                            app::list_scroll::nav_key(&mut list, k.code, stories.len(), viewport, anim);
+                        }
+                        Backspace => {
+                            field.backspace();
+                            refilter = true;
+                        }
+                        Delete => {
+                            field.delete();
+                            refilter = true;
+                        }
+                        Left => field.left(),
+                        Right => field.right(),
+                        // A control chord (Ctrl+F itself, most likely) is not a
+                        // character for the query.
+                        Char(c) if !k.modifiers.contains(crossterm::event::KeyModifiers::CONTROL) => {
+                            field.insert(c);
+                            refilter = true;
+                        }
+                        _ => {}
+                    }
+                    if refilter {
+                        panel_scroll = 0;
+                        let query = find_field.as_ref().map(|f| f.as_str().to_string()).unwrap_or_default();
+                        apply_find(&index, &root, &query, &mut stories, &mut row_badges, &mut aux_cache, &mut list, data_base, &hint_index);
                     }
                 } else if let Some(field) = manual_ifdb.as_mut() {
                     match k.code {
@@ -1535,7 +1910,7 @@ pub(crate) fn run_story_picker(
                                 progress_line = Some("A download is already running".to_string());
                             } else {
                                 progress_line = Some(format!("Downloading {typed}…"));
-                                url_dl.start(typed, dir.to_path_buf());
+                                url_dl.start(typed, dir.clone());
                             }
                         }
                         Backspace => field.backspace(),
@@ -1622,18 +1997,48 @@ pub(crate) fn run_story_picker(
                         // `.get`, not indexing (SQ-0659): playing an empty list
                         // (all stories vanished externally) is a no-op, not a
                         // panic.
-                        Some(app::browser::BrowserAction::PlayStory) => {
-                            if let Some(entry) = stories.get(list.selected) {
-                                break Some(PickedStory::row(entry));
+                        Some(app::browser::BrowserAction::PlayStory) => match stories.get(list.selected) {
+                            // A folder is entered, not played.
+                            Some(entry) if entry.is_folder() => {
+                                let target = entry.path.clone();
+                                panel_scroll = 0;
+                                enter_folder(&source, &mut dir, &root, &target, &mut stories, &mut row_badges, &mut aux_cache, &mut list, data_base, &hint_index, viewport, anim);
                             }
-                        }
+                            Some(entry) => break Some(PickedStory::row(entry)),
+                            None => {}
+                        },
                         // Shift-Enter, `o` and the double right-click are one
                         // command reaching one constructor (SQ-0789): the dialog
                         // has a single seeding site, and now a single binding
                         // target as well.
                         Some(app::browser::BrowserAction::OpenLaunchOptions) => {
-                            if let Some(entry) = stories.get(list.selected) {
+                            if let Some(entry) = stories.get(list.selected).filter(|e| !e.is_folder()) {
                                 launch_opts = Some(open_launch_options(entry, cfg, data_base));
+                            }
+                        }
+                        // Open the find field over the in-memory index. An empty
+                        // query lists the whole library, which is itself the
+                        // answer to "where did that game go" in a tree.
+                        Some(app::browser::BrowserAction::FindStory) => {
+                            if index_rx.is_some() && find_field.is_none() {
+                                find_field = Some(app::text_field::TextField::new(""));
+                                progress_line = None;
+                                panel_scroll = 0;
+                                apply_find(&index, &root, "", &mut stories, &mut row_badges, &mut aux_cache, &mut list, data_base, &hint_index);
+                            }
+                        }
+                        // Up one folder; inert at the root.
+                        Some(app::browser::BrowserAction::ParentFolder) => {
+                            if dir != root {
+                                if let Some(parent) = dir.parent().map(|p| p.to_path_buf()) {
+                                    panel_scroll = 0;
+                                    if gallery_all_folders(view, find_field.is_some(), index_rx.is_some()) {
+                                        dir = parent;
+                                        show_gallery_scope(&index, &root, &dir, &mut stories, &mut row_badges, &mut aux_cache, &mut list, data_base, &hint_index);
+                                    } else {
+                                        enter_folder(&source, &mut dir, &root, &parent, &mut stories, &mut row_badges, &mut aux_cache, &mut list, data_base, &hint_index, viewport, anim);
+                                    }
+                                }
                             }
                         }
                         Some(app::browser::BrowserAction::QuitBrowser) => break None,
@@ -1667,12 +2072,29 @@ pub(crate) fn run_story_picker(
                                 PickerView::Gallery => PickerView::List,
                             };
                             gallery_first_row = 0;
+                            // The grid shows the folder and everything under
+                            // it; the list shows the folder's own rows. Swap
+                            // the list to match, unless a find is showing
+                            // matches in both.
+                            if find_field.is_none() && index_rx.is_some() {
+                                panel_scroll = 0;
+                                if matches!(view, PickerView::Gallery) {
+                                    show_gallery_scope(&index, &root, &dir, &mut stories, &mut row_badges, &mut aux_cache, &mut list, data_base, &hint_index);
+                                } else {
+                                    let keep = stories.get(list.selected).map(|e| e.path.clone());
+                                    let here = dir.clone();
+                                    enter_folder(&source, &mut dir, &root, &here, &mut stories, &mut row_badges, &mut aux_cache, &mut list, data_base, &hint_index, viewport, anim);
+                                    if let Some(idx) = keep.and_then(|p| stories.iter().position(|e| e.path == p)) {
+                                        list.select(idx, viewport, anim);
+                                    }
+                                }
+                            }
                         }
                         // Refetch only the selected story, ignoring its cache.
                         // Ignored while a sweep is already running, so a second
                         // press can't garble the in-flight progress line.
                         Some(app::browser::BrowserAction::FetchStory) => {
-                            if let Some(entry) = stories.get(list.selected).filter(|_| !fetcher.busy()) {
+                            if let Some(entry) = stories.get(list.selected).filter(|e| !e.is_folder() && !fetcher.busy()) {
                                 fetch_is_single = true;
                                 sweep_fetched = 0;
                                 sweep_skipped = 0;
@@ -1696,9 +2118,13 @@ pub(crate) fn run_story_picker(
                             // makes a new `BrowserAction` a compile error rather
                             // than a gesture that quietly does nothing.
                             if !fetcher.busy() {
-                                let total = stories.len();
-                                let order: Vec<app::fetch_worker::FetchTarget> =
-                                    stories.iter().map(app::fetch_worker::FetchTarget::row).collect();
+                                // Folder rows are not stories; the sweep skips them.
+                                let order: Vec<app::fetch_worker::FetchTarget> = stories
+                                    .iter()
+                                    .filter(|e| !e.is_folder())
+                                    .map(app::fetch_worker::FetchTarget::row)
+                                    .collect();
+                                let total = order.len();
                                 fetch_is_single = false;
                                 sweep_fetched = 0;
                                 sweep_skipped = 0;
@@ -1712,7 +2138,7 @@ pub(crate) fn run_story_picker(
                         // story whose IFID IFDB doesn't index). Opens the
                         // manual-entry field; ignored mid-sweep (SQ-0371).
                         Some(app::browser::BrowserAction::SetIfdbUrl) => {
-                            if !fetcher.busy() {
+                            if !fetcher.busy() && stories.get(list.selected).is_some_and(|e| !e.is_folder()) {
                                 manual_ifdb = Some(app::text_field::TextField::new(""));
                                 progress_line = None;
                             }
@@ -1737,10 +2163,10 @@ pub(crate) fn run_story_picker(
                             // So the chooser can mark files this directory
                             // already holds (SQ-0597) — the same `dir` every
                             // download lands in, below.
-                            sm.set_download_dir(dir);
+                            sm.set_download_dir(&dir);
                             let seed_action = sm.open();
                             search_modal = Some(sm);
-                            dispatch_search_action(seed_action, &search_worker, dir, &mut search_modal);
+                            dispatch_search_action(seed_action, &search_worker, &dir, &mut search_modal);
                             progress_line = None;
                         }
                         // Download a matching InvisiClues hint file for the
@@ -1748,7 +2174,7 @@ pub(crate) fn run_story_picker(
                         // (IF Archive) preferred, else the Internet Archive izm set.
                         // Saved beside the story; ignored while one is downloading.
                         Some(app::browser::BrowserAction::DownloadHints) => {
-                            if let Some(entry) = stories.get(list.selected).filter(|_| !hint_dl.busy()) {
+                            if let Some(entry) = stories.get(list.selected).filter(|e| !e.is_folder() && !hint_dl.busy()) {
                                 if entry.hint_sidecar.is_some() {
                                     progress_line = Some(format!("{} already has a hint file", entry.title));
                                 } else {
@@ -1935,15 +2361,22 @@ pub(crate) fn run_story_picker(
                         // window → launch; otherwise just select it (SQ-0366).
                         let double = last_click
                             .is_some_and(|(li, lt)| li == idx && now.duration_since(lt) < DOUBLE_CLICK);
-                        if double {
+                        if double && stories[idx].is_folder() {
+                            // A double-click on a folder enters it, like Enter.
+                            let target = stories[idx].path.clone();
+                            panel_scroll = 0;
+                            enter_folder(&source, &mut dir, &root, &target, &mut stories, &mut row_badges, &mut aux_cache, &mut list, data_base, &hint_index, viewport, anim);
+                            last_click = None;
+                        } else if double {
                             break Some(PickedStory::row(&stories[idx]));
+                        } else {
+                            panel_scroll = 0;
+                            list.select(idx, viewport, anim);
+                            if slide.open {
+                                ensure_aux(&mut aux_cache, &stories, list.selected, data_base, &hint_index);
+                            }
+                            last_click = Some((idx, now));
                         }
-                        panel_scroll = 0;
-                        list.select(idx, viewport, anim);
-                        if slide.open {
-                            ensure_aux(&mut aux_cache, &stories, list.selected, data_base, &hint_index);
-                        }
-                        last_click = Some((idx, now));
                     } else if let Some((key, _)) = header_rects.iter().find(|(_, r)| r.contains(pt)) {
                         // Click the active header → reverse; click another → sort
                         // by it, ascending.
@@ -2039,7 +2472,7 @@ fn draw_story_picker(
     list: &app::list_scroll::ListScroll,
     badges: &[app::picker::RowBadges],
     glyphs: &app::picker::BadgeGlyphs,
-    dir: &std::path::Path,
+    heading: &PickerHeading,
     cs: &app::colors::ColorScheme,
     km: &app::keymap::KeyMap,
     sort: app::picker::Sort,
@@ -2062,6 +2495,7 @@ fn draw_story_picker(
     let story_year = cs.theme.get("story_year").style;
     let story_rating = cs.theme.get("story_rating").style;
     let story_badge = cs.theme.get("story_badge").style;
+    let story_folder = cs.theme.get("story_folder").style;
     let scrollbar = app::render::scroll::ScrollbarLook::from_theme(&cs.theme);
 
     // Background fill.
@@ -2074,11 +2508,7 @@ fn draw_story_picker(
     }
 
     // Header.
-    let header = format!(
-        " lanthorn — choose a story  ({} found in {})   [i: info · g: covers]",
-        stories.len(),
-        dir.display()
-    );
+    let header = heading.line(stories, "g: covers");
     draw_str_clipped(buf, area.x, area.y, &header, dialog_title, area);
 
     // List region (title bar + column-header row at top, footer at bottom).
@@ -2177,10 +2607,26 @@ fn draw_story_picker(
         let marker = if sel { "▸ " } else { "  " };
         draw_str_clipped(buf, area.x, y, marker, style, row_rect);
 
+        // A folder row is its name in the folder colour and nothing else: no
+        // "(no metadata yet)", no year, no rating, `folder` for a type.
+        let is_folder = entry.is_folder();
+        let title_style = if sel || !is_folder { style } else { story_folder };
         let title_txt = truncate_to_width(&entry.title, cols.title_w as usize);
-        draw_str_clipped(buf, title_x, y, &title_txt, style, row_rect);
+        draw_str_clipped(buf, title_x, y, &title_txt, title_style, row_rect);
+        // While finding, a match can come from anywhere under the root, so its
+        // folder rides after the title, muted; in a folder view every row's
+        // folder is the one in the header and the label is `None`.
+        if let Some(rel) = app::picker::folder_label(entry, heading.label_base()).filter(|_| !is_folder) {
+            let used = UnicodeWidthStr::width(title_txt.as_str());
+            let room = (cols.title_w as usize).saturating_sub(used + 2);
+            if room >= 4 {
+                let suffix = truncate_to_width(&format!("{rel}/"), room);
+                let suffix_style = if sel { style } else { story_no_metadata };
+                draw_str_clipped(buf, title_x + used as u16 + 2, y, &suffix, suffix_style, row_rect);
+            }
+        }
 
-        if cols.author_w > 0 {
+        if cols.author_w > 0 && !is_folder {
             let (author_txt, author_style) = match entry.meta.author.as_deref() {
                 Some(a) if !a.is_empty() => {
                     (truncate_to_width(a, cols.author_w as usize), story_author)
@@ -2232,8 +2678,11 @@ fn draw_story_picker(
             // the badge's reverse-block treatment); selection wins like the
             // other text columns.
             let interp_x = bx - COL_GAP - INTERP_COL_W;
-            let interp_txt =
-                truncate_to_width(&interp_label(&entry.meta, b.blorb), INTERP_COL_W as usize);
+            let interp_txt = if entry.is_folder() {
+                "folder".to_string()
+            } else {
+                truncate_to_width(&interp_label(&entry.meta, b.blorb), INTERP_COL_W as usize)
+            };
             let interp_style = if sel { style } else { story_badge };
             draw_str_clipped(buf, interp_x, y, &interp_txt, interp_style, row_rect);
             // Flags render as regular text like the other columns; the selection
@@ -2279,7 +2728,7 @@ fn draw_story_gallery(
     stories: &[app::picker::StoryEntry],
     selected: usize,
     first_row: &mut usize,
-    dir: &std::path::Path,
+    heading: &PickerHeading,
     cs: &app::colors::ColorScheme,
     km: &app::keymap::KeyMap,
     picker: Option<&ratatui_image::picker::Picker>,
@@ -2311,11 +2760,7 @@ fn draw_story_gallery(
     }
 
     // Header (matches the list view's, with the toggle hint flipped).
-    let header = format!(
-        " lanthorn — choose a story  ({} found in {})   [i: info · g: list]",
-        stories.len(),
-        dir.display()
-    );
+    let header = heading.line(stories, "g: list");
     draw_str_clipped(buf, area.x, area.y, &header, dialog_title, area);
 
     // Grid region: below the header, above the footer row.
@@ -2361,7 +2806,7 @@ fn draw_story_gallery(
                 }
             }
             let mut drew_cover = false;
-            if let Some(picker) = picker {
+            if let Some(picker) = picker.filter(|_| !entry.is_folder()) {
                 let key = entry.cover_key(data_base);
                 if cover.has(&key) {
                     // Centre the cover in the tile via a self-computed fitted rect
@@ -3688,6 +4133,7 @@ mod tests {
                 author: None, year: None, genre: None, language: None, description: None, ifdb_link: None, ifdb_rating: None, ifdb_rating_count: None, fetch_not_found: false,
             },
             hint_sidecar: None,
+            kind: app::picker::RowKind::Story,
         };
         vec![mk("Zork", Engine::ZCode), mk("Anchorhead", Engine::Glulx)]
     }
@@ -3708,7 +4154,102 @@ mod tests {
                 genre: None, language: None, description: None, ifdb_link: None, ifdb_rating: None, ifdb_rating_count: None, fetch_not_found: false,
             },
             hint_sidecar: None,
+            kind: app::picker::RowKind::Story,
         }
+    }
+
+    /// A folder row is its label and `folder`, nothing else: no
+    /// "(no metadata yet)" in the author column, and it sits above the stories
+    /// whatever the sort says. The header counts folders apart from stories.
+    #[test]
+    fn folder_rows_paint_their_label_and_nothing_else() {
+        use ratatui::{buffer::Buffer, layout::Rect};
+        let mut stories = make_two_test_stories();
+        stories.push(app::picker::StoryEntry::folder(std::path::PathBuf::from("/tmp/zcode"), "zcode/"));
+        stories.push(app::picker::StoryEntry::folder(std::path::PathBuf::from("/"), app::picker::PARENT_LABEL));
+        app::picker::sort_stories(&mut stories, app::picker::Sort::default());
+        let list = app::list_scroll::ListScroll::new();
+        let badges = vec![app::picker::RowBadges::default(); stories.len()];
+        let sym = app::style::finalize_symbols(&app::style::load_style(None, std::path::Path::new("/nonexistent")).0.symbols);
+        let glyphs = app::picker::BadgeGlyphs::from_symbols(&sym);
+        let cs = app::colors::ColorScheme::terminal_default();
+        let area = Rect::new(0, 0, 120, 10);
+        let mut buf = Buffer::empty(area);
+        super::draw_story_picker(
+            &stories, &list, &badges, &glyphs, &super::PickerHeading::browse(std::path::Path::new("/tmp")),
+            &cs, &km(), app::picker::Sort::default(), area, &mut buf,
+        );
+        let header = row_text(&buf, 0, area);
+        assert!(header.contains("2 found, 1 folder in /tmp"), "header counts stories and folders apart: {header:?}");
+        let r2 = row_text(&buf, 2, area);
+        let r3 = row_text(&buf, 3, area);
+        assert!(r2.contains(".."), "the way up is the first row: {r2:?}");
+        assert!(r3.contains("zcode/") && r3.contains("folder"), "then the folder, typed `folder`: {r3:?}");
+        assert!(!r2.contains("no metadata") && !r3.contains("no metadata"), "a folder has no metadata to be missing");
+        assert!(row_text(&buf, 4, area).contains("Anchorhead"), "stories follow the folders");
+    }
+
+    /// The gallery's header says it is showing the folder and everything
+    /// under it, and how far the index has got while it is still building.
+    #[test]
+    fn the_gallery_heading_names_the_recursive_scope() {
+        let root = std::path::Path::new("/tmp/lib");
+        let stories = make_two_test_stories();
+        let sub = root.join("zcode");
+        let building = super::PickerHeading {
+            dir: &sub,
+            root,
+            find: None,
+            all_folders: Some(super::IndexStatus { indexed: 2, done: false }),
+        };
+        let line = building.line(&stories, "g: list");
+        // Built from `display()`, since the separator is the platform's.
+        let expected = format!("2 in {} and its folders · indexing, 2 so far", sub.display());
+        assert!(line.contains(&expected), "{line:?}");
+        let done = super::PickerHeading { all_folders: Some(super::IndexStatus { indexed: 2, done: true }), ..building };
+        let line = done.line(&stories, "g: list");
+        assert!(line.contains("and its folders)") && !line.contains("indexing"), "{line:?}");
+    }
+
+    /// While finding, a match shows the folder it came from after its title;
+    /// in a plain folder view, where every row is in the header's folder, it
+    /// shows nothing of the kind.
+    #[test]
+    fn find_matches_carry_their_folder_and_folder_views_do_not() {
+        use ratatui::{buffer::Buffer, layout::Rect};
+        let mut stories = make_two_test_stories();
+        stories[0].path = std::path::PathBuf::from("/tmp/zcode/german/Zork.z5");
+        let list = app::list_scroll::ListScroll::new();
+        let badges = vec![app::picker::RowBadges::default(); stories.len()];
+        let sym = app::style::finalize_symbols(&app::style::load_style(None, std::path::Path::new("/nonexistent")).0.symbols);
+        let glyphs = app::picker::BadgeGlyphs::from_symbols(&sym);
+        let cs = app::colors::ColorScheme::terminal_default();
+        let area = Rect::new(0, 0, 120, 8);
+        let root = std::path::Path::new("/tmp");
+
+        let mut buf = Buffer::empty(area);
+        let finding = super::PickerHeading {
+            dir: root,
+            root,
+            find: Some(super::FindStatus { query: "zor", indexed: 2, done: false }),
+            all_folders: None,
+        };
+        super::draw_story_picker(&stories, &list, &badges, &glyphs, &finding, &cs, &km(), app::picker::Sort::default(), area, &mut buf);
+        let header = row_text(&buf, 0, area);
+        assert!(header.contains("2 matches for “zor” in /tmp") && header.contains("indexing, 2 so far"), "{header:?}");
+        let rows = (2..4).map(|y| row_text(&buf, y, area)).collect::<Vec<_>>().join("\n");
+        assert!(rows.contains("Zork  zcode/german/"), "the nested match names its folder: {rows:?}");
+        let anchorhead = rows.lines().find(|l| l.contains("Anchorhead")).unwrap_or_default();
+        assert!(!anchorhead.contains('/'), "a match at the root wears no label: {anchorhead:?}");
+
+        // A folder view lists the folder's own stories, so relative to it there
+        // is nothing to say (and a row from outside the folder says nothing
+        // either).
+        let mut buf = Buffer::empty(area);
+        let german = root.join("zcode/german");
+        super::draw_story_picker(&stories, &list, &badges, &glyphs, &super::PickerHeading::browse(&german), &cs, &km(), app::picker::Sort::default(), area, &mut buf);
+        let rows = (2..4).map(|y| row_text(&buf, y, area)).collect::<Vec<_>>().join("\n");
+        assert!(rows.contains("Zork") && !rows.contains('/'), "a folder view labels nothing: {rows:?}");
     }
 
     #[test]
@@ -3731,7 +4272,7 @@ mod tests {
         let mut buf = Buffer::empty(area);
         let dir = std::path::Path::new("/tmp");
         super::draw_story_picker(
-            &stories, &list, &badges, &glyphs, dir, &cs, &km(), app::picker::Sort::default(), area, &mut buf,
+            &stories, &list, &badges, &glyphs, &super::PickerHeading::browse(dir), &cs, &km(), app::picker::Sort::default(), area, &mut buf,
         );
 
         let row0 = row_text(&buf, 2, area); // list starts at area.y + 2
@@ -3772,7 +4313,7 @@ mod tests {
         list.len(stories.len());
         let area = Rect::new(0, 0, 60, 10);
         let mut buf = Buffer::empty(area);
-        super::draw_story_picker(&stories, &list, &badges, &glyphs, std::path::Path::new("/tmp"),
+        super::draw_story_picker(&stories, &list, &badges, &glyphs, &super::PickerHeading::browse(std::path::Path::new("/tmp")),
                           &cs, &km(), app::picker::Sort::default(), area, &mut buf);
         let row0 = row_text(&buf, 2, area);
         assert!(row0.contains('h'), "available hint shows lowercase glyph: {row0:?}");
@@ -3796,7 +4337,7 @@ mod tests {
         list.len(stories.len());
         let area = Rect::new(0, 0, 60, 10);
         let mut buf = Buffer::empty(area);
-        super::draw_story_picker(&stories, &list, &badges, &glyphs, std::path::Path::new("/tmp"),
+        super::draw_story_picker(&stories, &list, &badges, &glyphs, &super::PickerHeading::browse(std::path::Path::new("/tmp")),
                           &cs, &km(), app::picker::Sort::default(), area, &mut buf);
         let row0 = row_text(&buf, 2, area);
         // The configured save glyph is used for the artifact badge. Type and
@@ -3827,7 +4368,7 @@ mod tests {
         // Default sort (Title, ascending): only TITLE carries an arrow.
         let mut buf = Buffer::empty(area);
         super::draw_story_picker(
-            &stories, &list, &badges, &glyphs, std::path::Path::new("/tmp"),
+            &stories, &list, &badges, &glyphs, &super::PickerHeading::browse(std::path::Path::new("/tmp")),
             &cs, &km(), app::picker::Sort::default(), area, &mut buf,
         );
         let header = row_text(&buf, 1, area); // header row is area.y + 1
@@ -3841,7 +4382,7 @@ mod tests {
         let mut buf2 = Buffer::empty(area);
         let sort2 = app::picker::Sort { key: app::picker::SortKey::Year, desc: true };
         super::draw_story_picker(
-            &stories, &list, &badges, &glyphs, std::path::Path::new("/tmp"),
+            &stories, &list, &badges, &glyphs, &super::PickerHeading::browse(std::path::Path::new("/tmp")),
             &cs, &km(), sort2, area, &mut buf2,
         );
         let header2 = row_text(&buf2, 1, area);
@@ -3865,7 +4406,7 @@ mod tests {
         let area = Rect::new(0, 0, 60, 10);
         let mut buf = Buffer::empty(area);
         super::draw_story_picker(
-            &stories, &list, &badges, &glyphs, std::path::Path::new("/tmp"),
+            &stories, &list, &badges, &glyphs, &super::PickerHeading::browse(std::path::Path::new("/tmp")),
             &cs, &km(), app::picker::Sort::default(), area, &mut buf,
         );
         let row0 = row_text(&buf, 2, area);
@@ -3904,7 +4445,7 @@ mod tests {
         let area = Rect::new(0, 0, 60, 10);
         let mut buf = Buffer::empty(area);
         super::draw_story_picker(
-            &stories, &list, &badges, &glyphs, std::path::Path::new("/tmp"),
+            &stories, &list, &badges, &glyphs, &super::PickerHeading::browse(std::path::Path::new("/tmp")),
             &cs, &km(), app::picker::Sort::default(), area, &mut buf,
         );
         let row1 = row_text(&buf, 3, area);
@@ -3948,7 +4489,7 @@ mod tests {
             let area = Rect::new(0, 0, width, 10);
             let mut buf = Buffer::empty(area);
             super::draw_story_picker(
-                &stories, &list, &badges, &glyphs, std::path::Path::new("/tmp"),
+                &stories, &list, &badges, &glyphs, &super::PickerHeading::browse(std::path::Path::new("/tmp")),
                 &cs, &km(), app::picker::Sort::default(), area, &mut buf,
             );
             let row = row_text(&buf, 2, area);
@@ -3979,7 +4520,7 @@ mod tests {
         let area = Rect::new(0, 0, 60, 10);
         let mut buf = Buffer::empty(area);
         super::draw_story_picker(
-            &stories, &list, &badges, &glyphs, std::path::Path::new("/tmp"),
+            &stories, &list, &badges, &glyphs, &super::PickerHeading::browse(std::path::Path::new("/tmp")),
             &cs, &km(), app::picker::Sort::default(), area, &mut buf,
         );
         let row0 = row_text(&buf, 2, area);
@@ -4011,7 +4552,7 @@ mod tests {
         let area = Rect::new(0, 0, 100, 10);
         let mut buf = Buffer::empty(area);
         super::draw_story_picker(
-            &stories, &list, &badges, &glyphs, std::path::Path::new("/tmp"),
+            &stories, &list, &badges, &glyphs, &super::PickerHeading::browse(std::path::Path::new("/tmp")),
             &cs, &km(), app::picker::Sort::default(), area, &mut buf,
         );
         let row = row_text(&buf, 2, area);
@@ -4032,7 +4573,7 @@ mod tests {
         let area = Rect::new(0, 0, 60, 10);
         let mut buf = Buffer::empty(area);
         let (_, _, header_rects) = super::draw_story_picker(
-            &stories, &list, &badges, &glyphs, std::path::Path::new("/tmp"),
+            &stories, &list, &badges, &glyphs, &super::PickerHeading::browse(std::path::Path::new("/tmp")),
             &cs, &km(), app::picker::Sort::default(), area, &mut buf,
         );
         // 60 cells is too narrow for the RATING column, so four headers show.
@@ -4079,7 +4620,7 @@ mod tests {
         let area = Rect::new(0, 0, 100, 10);
         let mut buf = Buffer::empty(area);
         let (_, _, header_rects) = super::draw_story_picker(
-            &stories, &list, &badges, &glyphs, std::path::Path::new("/tmp"),
+            &stories, &list, &badges, &glyphs, &super::PickerHeading::browse(std::path::Path::new("/tmp")),
             &cs, &km(), app::picker::Sort::default(), area, &mut buf,
         );
         let rect = header_rects
@@ -4123,7 +4664,7 @@ mod tests {
         let mut buf = Buffer::empty(area);
         let sort = app::picker::Sort { key: app::picker::SortKey::Rating, desc: true };
         super::draw_story_picker(
-            &stories, &list, &badges, &glyphs, std::path::Path::new("/tmp"), &cs, &km(), sort, area, &mut buf,
+            &stories, &list, &badges, &glyphs, &super::PickerHeading::browse(std::path::Path::new("/tmp")), &cs, &km(), sort, area, &mut buf,
         );
         let header = row_text(&buf, 1, area);
         assert!(header.contains("RATING ▼"), "active RATING column shows the arrow: {header:?}");
@@ -4167,7 +4708,7 @@ mod tests {
         // ordering property, same assertions — but a hint can no longer name a
         // key nothing is bound to.
         let min_width = |seg: &str| -> u16 {
-            (10u16..=280).find(|&w| super::build_footer(&km, w).contains(seg)).unwrap_or(u16::MAX)
+            (10u16..=320).find(|&w| super::build_footer(&km, w).contains(seg)).unwrap_or(u16::MAX)
         };
         let optional = super::footer_optional(&km);
         let widths: Vec<u16> = optional.iter().map(|s| min_width(s)).collect();
@@ -4180,8 +4721,9 @@ mod tests {
         // 240 since SQ-0796: Home/End joined the set, having been unadvertised
         // while the hints were hand-written. The drop-right-to-left behaviour
         // below that width is what the rest of this test pins, and it is
-        // unchanged.
-        let wide = super::build_footer(&km, 280);
+        // unchanged. 320 since the folder navigation and the library find added
+        // `Ctrl+F: find` and `Backspace: up` to the set.
+        let wide = super::build_footer(&km, 320);
         for seg in &optional {
             assert!(wide.contains(seg), "wide footer shows {seg:?}: {wide:?}");
         }
@@ -5777,7 +6319,7 @@ mod tests {
         let mut first_row = 0usize;
         // No picker → no cover art → each tile shows its title centred in the band.
         let (rects, cols, vis) = super::draw_story_gallery(
-            &stories, 1, &mut first_row, std::path::Path::new("/tmp"), &cs, &km(), None, &mut cover, std::path::Path::new("/tmp"), area, &mut buf,
+            &stories, 1, &mut first_row, &super::PickerHeading::browse(std::path::Path::new("/tmp")), &cs, &km(), None, &mut cover, std::path::Path::new("/tmp"), area, &mut buf,
         );
 
         assert!(cols >= 1 && vis >= 1);
@@ -6023,7 +6565,7 @@ mod tests {
         let mut cover = app::cover::CoverState::default();
         let mut first_row = 0usize;
         let (rects, _cols, _vis) = super::draw_story_gallery(
-            &stories, 39, &mut first_row, std::path::Path::new("/tmp"), &cs, &km(), None, &mut cover, std::path::Path::new("/tmp"), area, &mut buf,
+            &stories, 39, &mut first_row, &super::PickerHeading::browse(std::path::Path::new("/tmp")), &cs, &km(), None, &mut cover, std::path::Path::new("/tmp"), area, &mut buf,
         );
         assert!(first_row > 0, "grid scrolled down to keep the last cover visible");
         assert!(rects.iter().any(|(i, _)| *i == 39), "the selected tile is on screen");

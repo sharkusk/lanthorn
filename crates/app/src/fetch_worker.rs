@@ -162,15 +162,22 @@ impl Fetcher {
 /// computed IFID never resolves on IFDB, so the fetch looks the game up by this
 /// id instead. Scott databases are small ASCII text, so the read is capped — a
 /// large binary story (Glulx/Z-code) fails the sniff without being slurped whole.
-fn scott_ifdb_id(path: &Path) -> Option<String> {
+fn scott_ifdb_id(path: &Path, disk_entry: Option<&str>) -> Option<String> {
     // Recognise a Scott story the same way the picker does, so a `.blb` blorb
     // (whose SAAI exec chunk holds the `.dat`) is detected as well as a raw
     // `.dat` — sniffing the raw file text alone misses the binary blorb. The
     // TUID is keyed by filename stem, since a Scott database has no embedded IFID.
-    if !matches!(crate::hints::load_story(path), Ok(crate::hints::LoadedStory::Scott(_))) {
+    //
+    // For a story inside a zip the stem is the ENTRY's (`adv01` in
+    // `AdamsGames.zip`), which is the name the table knows; the archive's own
+    // stem names nothing, and the eighteen games in that zip fetched as
+    // "not on IFDB" until this looked at the right name.
+    let (loaded, _) = crate::hints::load_mounted_story_from(path, disk_entry).ok()?;
+    if !matches!(loaded, crate::hints::LoadedStory::Scott(_)) {
         return None;
     }
-    let stem = path.file_stem().and_then(|s| s.to_str())?;
+    let named: &Path = disk_entry.map(Path::new).unwrap_or(path);
+    let stem = named.file_stem().and_then(|s| s.to_str())?;
     crate::picker::scott_tuid(stem).map(str::to_string)
 }
 
@@ -207,7 +214,7 @@ fn fetch_one(
         // A known Scott Adams adventure is fetched by its mapped IFDB id (its own
         // computed IFID never resolves on IFDB). A manual id_override (SQ-0371)
         // still wins.
-        let scott_id = if id_override.is_none() { scott_ifdb_id(&path) } else { None };
+        let scott_id = if id_override.is_none() { scott_ifdb_id(&path, disk_entry.as_deref()) } else { None };
         let fetched = match id_override.or(scott_id.as_deref()) {
             Some(id) => source.fetch_by_id(id),
             None => source.fetch(&ifid),
@@ -336,7 +343,7 @@ fn stem_title(path: &Path) -> String {
     path.file_stem().and_then(|s| s.to_str()).unwrap_or("").to_string()
 }
 
-fn now_rfc3339() -> String {
+pub(crate) fn now_rfc3339() -> String {
     jiff::Timestamp::now().to_string()
 }
 
@@ -398,18 +405,18 @@ mod tests {
         let dir = tmp();
         let dat = dir.join("adv01.dat");
         std::fs::write(&dat, MINI).unwrap();
-        assert_eq!(super::scott_ifdb_id(&dat).as_deref(), Some("dy4ok8sdlut6ddj7"));
+        assert_eq!(super::scott_ifdb_id(&dat, None).as_deref(), Some("dy4ok8sdlut6ddj7"));
 
         // The same Scott `.dat` wrapped in a `.blb` blorb (SAAI exec chunk) is
         // detected too, keyed by its filename stem (`circus`).
         let blb = dir.join("circus.blb");
         std::fs::write(&blb, blb_wrapping_saai(MINI.as_bytes())).unwrap();
-        assert_eq!(super::scott_ifdb_id(&blb).as_deref(), Some("bdnprzz9zomlge4b"));
+        assert_eq!(super::scott_ifdb_id(&blb, None).as_deref(), Some("bdnprzz9zomlge4b"));
 
         // A binary (non-Scott) story yields no Scott id.
         let z = dir.join("story.z5");
         std::fs::write(&z, [3u8, 0, 0, 0, 0, 0]).unwrap();
-        assert_eq!(super::scott_ifdb_id(&z), None);
+        assert_eq!(super::scott_ifdb_id(&z, None), None);
     }
 
     #[derive(Clone)]
@@ -513,6 +520,30 @@ mod tests {
             cover: None,
             not_found: false,
         }
+    }
+
+    /// A Scott game inside a zip is keyed by the entry's stem, not the zip's.
+    #[test]
+    fn scott_ifdb_id_inside_a_zip_uses_the_entry_name() {
+        const MINI: &str = "\n32767 1 0 1 2 6 1 0 3 125 0 1\n150 1 0 0 0 0 0 0\n\
+\"AUTO 0\"\n\"\"\n\"\"\n\"\"\n\"\"\n\"\"\n\"\"\n\"\"\n\"\"\n\"\"\n\"\"\n\"\"\n\"\"\n\"\"\n\"\"\n\"\"\n\"\"\n\
+0 0 0 0 0 0 0\n\"*you are in a room\"\n\"\"\n\"*\"\n\"\"\n0\n0\n0\n\"\"\n\"\"\n\"\"\n\"\"\n\"\"\n\"\"\n0 0\n0 0\n0 0\n0 0\n0 0\n0 0\n0 0\n0 0\n0 0\n0 0\n\
+0\n0\n0\n0\n1\n0\n0\n";
+        let dir = crate::scratch_dir("scott-zip-tuid");
+        let zip_path = dir.join("AdamsGames.zip");
+        {
+            let file = std::fs::File::create(&zip_path).unwrap();
+            let mut zw = zip::ZipWriter::new(file);
+            let opts = zip::write::SimpleFileOptions::default();
+            for name in ["adv01.dat", "notes.txt"] {
+                zw.start_file(name, opts).unwrap();
+                std::io::Write::write_all(&mut zw, if name.ends_with(".dat") { MINI.as_bytes() } else { b"readme" }).unwrap();
+            }
+            zw.finish().unwrap();
+        }
+        assert_eq!(scott_ifdb_id(&zip_path, Some("adv01.dat")).as_deref(), Some("dy4ok8sdlut6ddj7"), "Adventureland, by its entry");
+        assert_eq!(scott_ifdb_id(&zip_path, None), None, "the archive's own stem names nothing");
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

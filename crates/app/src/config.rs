@@ -428,6 +428,30 @@ pub struct Cli {
     #[arg(long = "story", value_name = "N|NAME", requires = "story")]
     pub story_pick: Option<String>,
 
+    /// Fetch IFDB metadata and cover art for the library, then exit.
+    ///
+    /// The browser's `r` (missing) or `f` (all) pass, run without a terminal:
+    /// the stories under the directory, sub-folders included, get their
+    /// sidecar and cover written where the browser writes them, with one
+    /// printed line per story as it completes. A library on a server gets
+    /// its sidecars built this way, with no one at the picker.
+    ///
+    /// `missing` skips a story whose sidecar is current; `all` refetches them
+    /// all. Exits 0 when nothing failed to fetch.
+    #[arg(long, value_enum, value_name = "MISSING|ALL")]
+    pub fetch: Option<FetchMode>,
+
+    /// Import curated metadata for stories from a TSV file, then exit.
+    ///
+    /// For stories the IFDB pass could not identify by IFID, or that IFDB has
+    /// no cover for. A header row names the columns (any order): `path`, and
+    /// then `ifdb_tuid` (the story is fetched from IFDB by that id), or
+    /// `title`, `author`, `year`, `genre`, `language`, `description` (written
+    /// as a curated record), and `cover_url` (downloaded as the cover). One
+    /// printed line per row; exits 0 unless a row failed.
+    #[arg(long = "import-metadata", value_name = "TSV")]
+    pub import_metadata: Option<PathBuf>,
+
     /// How the Version 6 graphical pane is drawn, for this launch only. The two
     /// modes are listed below, out of the same doc comments the settings screen
     /// reads, so there is no second description here to fall out of step.
@@ -494,6 +518,23 @@ pub enum OnOff {
 impl From<OnOff> for bool {
     fn from(v: OnOff) -> bool {
         matches!(v, OnOff::On)
+    }
+}
+
+/// Which stories a headless `--fetch` visits.
+#[derive(Copy, Clone, Debug, PartialEq, Eq, clap::ValueEnum)]
+#[clap(rename_all = "lowercase")]
+pub enum FetchMode {
+    /// Stories with no current sidecar: what the browser's `r` does.
+    Missing,
+    /// All of them, ignoring the cache: the browser's `f`, for the lot.
+    All,
+}
+
+impl FetchMode {
+    /// Whether the fetch ignores a current sidecar.
+    pub fn forced(self) -> bool {
+        matches!(self, FetchMode::All)
     }
 }
 
@@ -3036,6 +3077,8 @@ mod tests {
             interpreter_version: None,
             pictures: None,
             story_pick: None,
+            fetch: None,
+            import_metadata: None,
             v6_render: None,
             v6_pixel_lock: None,
             machines: false,
@@ -3123,6 +3166,8 @@ mod tests {
             interpreter_version: None,
             pictures: None,
             story_pick: None,
+            fetch: None,
+            import_metadata: None,
             v6_render: None,
             v6_pixel_lock: None,
             machines: false,
@@ -3154,6 +3199,8 @@ mod tests {
             interpreter_version: None,
             pictures: None,
             story_pick: None,
+            fetch: None,
+            import_metadata: None,
             v6_render: None,
             v6_pixel_lock: None,
             machines: false,
@@ -3185,6 +3232,8 @@ mod tests {
             interpreter_version: None,
             pictures: None,
             story_pick: None,
+            fetch: None,
+            import_metadata: None,
             v6_render: None,
             v6_pixel_lock: None,
             machines: false,
@@ -3848,6 +3897,8 @@ use_defaults = false
             interpreter_version: None,
             pictures: None,
             story_pick: None,
+            fetch: None,
+            import_metadata: None,
             v6_render: None,
             v6_pixel_lock: None,
             machines: false,
@@ -3877,6 +3928,8 @@ use_defaults = false
             interpreter_version: None,
             pictures: None,
             story_pick: None,
+            fetch: None,
+            import_metadata: None,
             v6_render: None,
             v6_pixel_lock: None,
             machines: false,
@@ -3923,6 +3976,8 @@ use_defaults = false
             interpreter_version: None,
             pictures: None,
             story_pick: None,
+            fetch: None,
+            import_metadata: None,
             v6_render: None,
             v6_pixel_lock: None,
             machines: false,
@@ -4019,6 +4074,8 @@ use_defaults = false
             interpreter_version: None,
             pictures: None,
             story_pick: None,
+            fetch: None,
+            import_metadata: None,
             v6_render: None,
             v6_pixel_lock: None,
             machines: false,
@@ -4050,6 +4107,8 @@ use_defaults = false
             interpreter_version: None,
             pictures: None,
             story_pick: None,
+            fetch: None,
+            import_metadata: None,
             v6_render: None,
             v6_pixel_lock: None,
             machines: false,
@@ -4082,6 +4141,8 @@ use_defaults = false
             interpreter_version: None,
             pictures: None,
             story_pick: None,
+            fetch: None,
+            import_metadata: None,
             v6_render: None,
             v6_pixel_lock: None,
             machines: false,
@@ -4149,6 +4210,8 @@ use_defaults = false
             interpreter_version: None,
             pictures: None,
             story_pick: None,
+            fetch: None,
+            import_metadata: None,
             v6_render: None,
             v6_pixel_lock: None,
             machines: false,
@@ -4209,6 +4272,8 @@ use_defaults = false
             interpreter_version: None,
             pictures: None,
             story_pick: None,
+            fetch: None,
+            import_metadata: None,
             v6_render: None,
             v6_pixel_lock: None,
             machines: false,
@@ -4257,6 +4322,8 @@ use_defaults = false
             interpreter_version: None,
             pictures: None,
             story_pick: None,
+            fetch: None,
+            import_metadata: None,
             v6_render: None,
             v6_pixel_lock: None,
             machines: false,
@@ -4450,6 +4517,8 @@ use_defaults = false
             interpreter_version: None,
             pictures: None,
             story_pick: None,
+            fetch: None,
+            import_metadata: None,
             v6_render: None,
             v6_pixel_lock: None,
             machines: false,
@@ -4509,6 +4578,8 @@ use_defaults = false
             interpreter_version: None,
             pictures: None,
             story_pick: None,
+            fetch: None,
+            import_metadata: None,
             v6_render: None,
             v6_pixel_lock: None,
             machines: false,
@@ -4566,6 +4637,8 @@ use_defaults = false
             interpreter_version: None,
             pictures: None,
             story_pick: None,
+            fetch: None,
+            import_metadata: None,
             v6_render: None,
             v6_pixel_lock: None,
             machines: false,
@@ -4636,6 +4709,9 @@ use_defaults = false
             ("--images", "on"),
             ("--game-colours", "off"),
             ("--colour", "machine"),
+            ("--fetch", "missing"),
+            ("--fetch", "all"),
+            ("--import-metadata", "/tmp/rows.tsv"),
         ] {
             let cli = Cli::try_parse_from(["lanthorn", flag, value, "g.z5"])
                 .unwrap_or_else(|e| panic!("{flag} {value} should parse: {e}"));

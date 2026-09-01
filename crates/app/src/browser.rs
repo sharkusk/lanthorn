@@ -74,6 +74,10 @@ pub enum BrowserAction {
     SortLibrary,
     /// Reverse the sort direction, keeping the column.
     ReverseSort,
+    /// Open the type-to-filter field over the whole library's in-memory index.
+    FindStory,
+    /// Leave the current sub-folder for the one above it.
+    ParentFolder,
     /// Leave the browser.
     QuitBrowser,
     /// Cancel a running fetch, or leave the browser when nothing is in flight.
@@ -173,6 +177,8 @@ pub const HINTS_OPTIONAL: &[Hint] = &[
         label: "options",
         ranks: 0,
     },
+    Hint { commands: &["find-story"], extras: &[], label: "find", ranks: 0 },
+    Hint { commands: &["parent-folder"], extras: &[], label: "up", ranks: 0 },
     Hint { commands: &["search-ifdb"], extras: &[], label: "IFDB search", ranks: 0 },
     Hint { commands: &["open-url"], extras: &[], label: "open URL", ranks: 0 },
     Hint { commands: &["toggle-gallery"], extras: &[], label: "covers", ranks: 0 },
@@ -347,6 +353,8 @@ mod tests {
         let km = km();
         let key = |c: KeyCode, m: KeyModifiers| action_for_key(&km, KeyEvent::new(c, m));
         assert_eq!(key(KeyCode::Enter, KeyModifiers::NONE), Some(BrowserAction::PlayStory));
+        assert_eq!(key(KeyCode::Char('f'), KeyModifiers::CONTROL), Some(BrowserAction::FindStory));
+        assert_eq!(key(KeyCode::Backspace, KeyModifiers::NONE), Some(BrowserAction::ParentFolder));
         assert_eq!(
             key(KeyCode::Enter, KeyModifiers::SHIFT),
             Some(BrowserAction::OpenLaunchOptions),

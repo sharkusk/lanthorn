@@ -9,8 +9,9 @@
 #   1. In YOUR terminal (full fidelity — kitty graphics pass straight through):
 #        docker run -it --rm -v ~/if-games:/stories -v lanthorn-data:/data lanthorn
 #
-#   2. As a WEB SERVER (ttyd wraps lanthorn; point a browser at port 7681):
-#        docker run -d -p 7681:7681 -v ~/if-games:/stories -v lanthorn-data:/data lanthorn serve
+#   2. As a WEB SERVER (ttyd wraps lanthorn; point a browser at port 7681;
+#      7682 carries the game's sound to the browser):
+#        docker run -d -p 7681:7681 -p 7682:7682 -v ~/if-games:/stories -v lanthorn-data:/data lanthorn serve
 #
 # `/stories` is the game library (the story picker opens on it by default) and
 # `/data` is $HOME — saves, config, and map archives live in /data/.lanthorn.
@@ -44,10 +45,11 @@ RUN --mount=type=cache,target=/usr/local/cargo/registry \
     --mount=type=cache,target=/usr/local/rustup \
     --mount=type=cache,target=/src/target \
     CARGO_BUILD_JOBS="$(nproc)" \
-    cargo build --release --locked -p app -p zvm-cli -p gvm-cli -p scott-cli \
+    cargo build --release --locked -p app -p zvm-cli -p gvm-cli -p scott-cli -p audio-relay \
     && mkdir -p /out \
     && cp target/release/lanthorn target/release/zvm-cli \
-          target/release/gvm-cli target/release/scott-cli /out/
+          target/release/gvm-cli target/release/scott-cli \
+          target/release/lanthorn-audio-relay /out/
 
 # ttyd (the web-terminal server behind `serve` mode) is not packaged by
 # Debian; its releases ship static per-arch binaries, so fetch a pinned one.
@@ -66,6 +68,11 @@ RUN arch="$(dpkg --print-architecture)" \
     && curl -fsSL -o /ttyd \
          "https://github.com/tsl0922/ttyd/releases/download/${TTYD_VERSION}/ttyd.${t}" \
     && chmod +x /ttyd
+# ttyd's page is compiled into its binary. Serve it once here and save the
+# result: the entrypoint injects the browser-audio script into this copy and
+# hands it back to ttyd with --index.
+RUN sh -c '/ttyd -p 7999 true & pid=$!; sleep 1; curl -fsS -o /ttyd-index.html http://127.0.0.1:7999/; kill $pid' \
+    && grep -q "</head>" /ttyd-index.html
 
 # trixie-slim to match the builder's glibc (rust:1-slim-trixie above).
 FROM debian:trixie-slim
@@ -77,29 +84,34 @@ RUN apt-get update \
     && apt-get install -y --no-install-recommends libasound2t64 ca-certificates \
     && rm -rf /var/lib/apt/lists/*
 
-# A container has no sound card. Point ALSA's default device at the null
-# plugin so audio opens cleanly (and plays silently) instead of libasound
-# dumping a screenful of probe errors to the terminal when lanthorn exits.
-RUN printf 'pcm.!default {\n  type null\n}\nctl.!default {\n  type null\n}\n' > /etc/asound.conf
+# A container has no sound card. ALSA's default device is the `file` plugin
+# writing to the path in LANTHORN_AUDIO_OUT, or /dev/null when unset: silent
+# and clean in a terminal, and in serve mode the session wrapper points it at
+# a FIFO that lanthorn-audio-relay streams to the browser. See the file.
+COPY docker/asound.conf /etc/asound.conf
 
 COPY --from=builder /out/ /usr/local/bin/
 COPY --from=ttyd-fetch /ttyd /usr/local/bin/ttyd
+COPY --from=ttyd-fetch /ttyd-index.html /usr/local/share/lanthorn/ttyd-index.html
+COPY docker/web-audio.js /usr/local/share/lanthorn/web-audio.js
 COPY docker/entrypoint.sh /usr/local/bin/lanthorn-entrypoint
+COPY docker/serve-session.sh /usr/local/bin/lanthorn-serve-session
 
 # /data is $HOME (saves, config, archives under /data/.lanthorn); /stories is
 # the library the picker opens on. Both are meant to be volume-mounted.
 RUN useradd --uid 1000 --create-home --home-dir /data lanthorn \
     && mkdir -p /stories \
     && chown lanthorn:lanthorn /stories \
-    && chmod +x /usr/local/bin/lanthorn-entrypoint
+    && chmod +x /usr/local/bin/lanthorn-entrypoint /usr/local/bin/lanthorn-serve-session
 
 USER lanthorn
 ENV HOME=/data \
     TERM=xterm-256color \
-    LANTHORN_WEB_PORT=7681
+    LANTHORN_WEB_PORT=7681 \
+    LANTHORN_WEB_AUDIO_PORT=7682
 
 VOLUME ["/data", "/stories"]
-EXPOSE 7681
+EXPOSE 7681 7682
 
 ENTRYPOINT ["/usr/local/bin/lanthorn-entrypoint"]
 # Default: open the story picker on the library mount. Replace with `serve`

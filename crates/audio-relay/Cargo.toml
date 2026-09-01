@@ -1,0 +1,19 @@
+[package]
+name = "audio-relay"
+version.workspace = true
+edition = "2021"
+license.workspace = true
+description = "Serves a lanthorn session's ALSA-captured PCM to a browser over a WebSocket"
+
+[[bin]]
+name = "lanthorn-audio-relay"
+path = "src/main.rs"
+
+[lib]
+doctest = false
+
+[dependencies]
+tungstenite = "0.26"
+
+[target."cfg(unix)".dependencies]
+libc = "0.2.189"

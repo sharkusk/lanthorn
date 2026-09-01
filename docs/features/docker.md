@@ -61,6 +61,9 @@ Serve-mode knobs, as environment variables:
 |---|---|---|
 | `LANTHORN_WEB_PORT` | port ttyd listens on | `7681` |
 | `LANTHORN_WEB_CREDENTIAL` | HTTP basic auth, `user:pass` | unset (no auth) |
+| `LANTHORN_WEB_AUDIO` | `on` or `off`: the game's sound, played in the browser | `on` |
+| `LANTHORN_WEB_AUDIO_PORT` | the port that sound is served on | `7682` |
+| `LANTHORN_WEB_IMAGES` | `sixel` or `halfblocks`: how pictures are sent to the browser | `sixel` |
 
 **Do not expose an unauthenticated port beyond localhost** — a lanthorn
 session includes a story picker that can browse and download into `/stories`,
@@ -72,18 +75,69 @@ speaks plain HTTP/WebSocket here.
 `docker-compose.yml` at the repo root is a ready-made example of this mode:
 `mkdir -p stories && docker compose up -d`.
 
+### Fetching the library's metadata on the server
+
+The picker's `r` fetches titles, blurbs, ratings and cover art from IFDB into
+`/data`. On a server you want that done once, up front, for the whole library,
+which is what `--fetch` is for. With the compose file above:
+
+```sh
+docker compose run --rm lanthorn /stories --fetch missing
+```
+
+It walks `/stories` (sub-folders included), prints one line per story, and
+writes the sidecars into the shared `/data` volume, so the next browser session
+opens the picker with the metadata already there. `--fetch all` refetches
+what is cached; run `missing` again after adding games.
+
+For stories IFDB does not know by IFID, or has no cover for, a curated TSV
+(see `--import-metadata` in the interface docs) is applied the same way, with
+the file bind-mounted in:
+
+```sh
+docker compose run --rm -v "$PWD/curated.tsv:/curated.tsv:ro" lanthorn /stories --import-metadata /curated.tsv
+```
+
 ### What the browser mode can and cannot show
 
-xterm.js does not implement the Kitty graphics protocol, and lanthorn's
-capability probe discovers that honestly — graphical v6 stories and Blorb
-cover art fall back to half-block cell rendering, exactly as they do in any
-terminal without image support. Text games, the automap, mouse support, and
-the full TUI are unaffected. When graphics fidelity matters, use mode 1 (or
-SSH to the host and run mode 1 there: Kitty graphics survive SSH).
+xterm.js does not implement the Kitty graphics protocol, but ttyd's build of
+it includes the image addon, which renders **sixel**. The entrypoint turns
+that addon on (`-t enableSixel=true`) and starts each session with
+`--image-protocol sixel`, so cover art in the picker and graphical v6 stories
+show in the browser as real pictures instead of half-block cells. Sixel is a
+256-colour format per image, so a cover is close to the original but not
+photographic; `LANTHORN_WEB_IMAGES=halfblocks` restores the cell fallback.
+Text games, the automap, mouse support and the full TUI are the same either
+way. For Kitty fidelity, use mode 1 (or SSH to the host and run mode 1 there;
+Kitty graphics work over SSH).
 
-Audio does not play in either mode: the container has no sound device, and the
-binaries degrade to silence exactly as they do on a Linux host without one
-(`libasound2` is present in the image, so nothing fails to load).
+### Sound in the browser
+
+The container has no sound device, and in mode 1 the game is silent, as on any
+Linux host without one. Mode 2 plays it in the browser, through a second
+channel beside the terminal, because a pty carries no audio:
+
+- ALSA's `default` device in the image is the `file` plugin (`docker/asound.conf`),
+  which writes what a process plays, as 16-bit 44.1 kHz stereo, to the path in
+  `LANTHORN_AUDIO_OUT`, or to `/dev/null` when that is unset. lanthorn itself is
+  unchanged: it opens the default device as always.
+- `lanthorn-audio-relay` (a fourth binary in the image, `crates/audio-relay`)
+  listens on port **7682**. A browser connecting to `ws://host:7682/audio/<id>`
+  gets a FIFO created for that id, a JSON frame naming the format, then the
+  raw PCM as it is played.
+- ttyd serves its own page with a small script added (`docker/web-audio.js`).
+  The script mints a session id, opens the audio socket, and passes the id to
+  the terminal through ttyd's `?arg=`; a per-connection wrapper
+  (`docker/serve-session.sh`) strips that argument and points ALSA at the
+  session's FIFO before starting lanthorn. Playback starts on the first key or
+  click, which is the gesture browsers require before they will play anything.
+
+So publish **both** ports (`-p 7681:7681 -p 7682:7682`; the compose file does).
+Behind a reverse proxy, the page connects to the same hostname on port 7682
+with `ws` or `wss` to match the page, so terminate TLS for that port too.
+`LANTHORN_WEB_AUDIO=off` restores the silent, single-port setup. To check a
+deployment from a shell, `lanthorn-audio-relay client ws://host:7682/audio/abcdefgh12345678 10`
+connects as the page would and reports what arrives.
 
 ## The two volumes
 

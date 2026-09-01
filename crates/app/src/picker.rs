@@ -99,6 +99,35 @@ pub struct StoryMeta {
 }
 
 impl StoryMeta {
+    /// The metadata a row that is not a story carries: every field at its
+    /// "unknown" value. Only [`StoryEntry::folder`] builds one.
+    fn placeholder() -> StoryMeta {
+        StoryMeta {
+            size_bytes: 0,
+            story_bytes: 0,
+            modified: None,
+            engine: Engine::ZCode,
+            format: String::new(),
+            version: None,
+            serial: None,
+            release: None,
+            ifid: String::new(),
+            features: Features::default(),
+            self_blorb: None,
+            disk_image: None,
+            disk_entry: None,
+            author: None,
+            year: None,
+            genre: None,
+            language: None,
+            description: None,
+            ifdb_link: None,
+            ifdb_rating: None,
+            ifdb_rating_count: None,
+            fetch_not_found: false,
+        }
+    }
+
     /// The build that names this story's save directory when it was mounted out
     /// of a disk image, and `None` for a loose story file — the scan already
     /// read the header, so a row can be keyed without touching the disk again
@@ -116,6 +145,25 @@ impl StoryMeta {
     }
 }
 
+/// What a picker row stands for: a story, or a place stories live.
+///
+/// A library is a tree the moment someone sorts two thousand files into
+/// folders, and the picker used to see one level of it. A folder is a row in
+/// the same list rather than a second list, so every mechanism the list has
+/// (selection, scrolling, mouse hit-testing, the sort that keeps caches
+/// index-aligned) applies to it unchanged; what changes is what `Enter` does.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum RowKind {
+    #[default]
+    Story,
+    /// A sub-folder of the library, or the `..` that leads back out of one.
+    /// `path` is the directory itself; `Enter` descends into it.
+    Folder,
+}
+
+/// The label a folder row wears when it leads to the parent directory.
+pub const PARENT_LABEL: &str = "..";
+
 /// One selectable story in the picker.
 #[derive(Debug, Clone, PartialEq)]
 pub struct StoryEntry {
@@ -129,9 +177,31 @@ pub struct StoryEntry {
     /// it during the scan (SQ-0443). The sidecar entry is hidden from the list;
     /// its presence lights the hint badge and names the file in the info panel.
     pub hint_sidecar: Option<std::path::PathBuf>,
+    /// Story or folder. Every reader that opens, fetches, badges or launches a
+    /// row asks this first; a folder has none of those.
+    pub kind: RowKind,
 }
 
 impl StoryEntry {
+    /// True for a folder row (a sub-directory or `..`), which is navigated
+    /// rather than played.
+    pub fn is_folder(&self) -> bool {
+        self.kind == RowKind::Folder
+    }
+
+    /// A folder row: `path` is the directory, `label` what the list prints
+    /// (`name/`, or [`PARENT_LABEL`]).
+    pub fn folder(path: PathBuf, label: &str) -> StoryEntry {
+        StoryEntry {
+            path,
+            title: label.to_string(),
+            filename: label.to_string(),
+            meta: StoryMeta::placeholder(),
+            hint_sidecar: None,
+            kind: RowKind::Folder,
+        }
+    }
+
     /// **What identifies a row.** The container's path, plus which story on it
     /// when the container is a disk image holding several (SQ-0859).
     ///
@@ -990,6 +1060,170 @@ pub fn scan_stories(dir: &Path, data_base: &Path) -> Vec<StoryEntry> {
     out
 }
 
+/// The sub-folders of `dir` as rows: dot-directories skipped, sorted by name
+/// case-insensitively. Symlinks are followed (a library on a NAS is often one),
+/// which is why [`library_dirs`] keeps a visited set.
+pub fn scan_folders(dir: &Path) -> Vec<StoryEntry> {
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return Vec::new();
+    };
+    let mut dirs: Vec<(String, PathBuf)> = entries
+        .flatten()
+        .filter_map(|e| {
+            let path = e.path();
+            if !path.is_dir() {
+                return None;
+            }
+            let name = path.file_name()?.to_str()?.to_string();
+            if name.starts_with('.') {
+                return None;
+            }
+            Some((name, path))
+        })
+        .collect();
+    dirs.sort_by(|(a, _), (b, _)| a.to_lowercase().cmp(&b.to_lowercase()).then_with(|| a.cmp(b)));
+    dirs.into_iter().map(|(name, path)| StoryEntry::folder(path, &format!("{name}/"))).collect()
+}
+
+/// Everything the picker lists for `dir` inside a library rooted at `root`:
+/// `..` when `dir` is below the root, then its sub-folders, then its stories,
+/// in the default sort (which keeps the folders on top; see [`sort_stories`]).
+///
+/// One directory at a time, on purpose. The scan opens every candidate file it
+/// lists, and a whole library is gigabytes; walking it is the indexer's job
+/// ([`spawn_library_index`]), off the thread that draws.
+pub fn library_rows(dir: &Path, root: &Path, data_base: &Path) -> Vec<StoryEntry> {
+    let mut out: Vec<StoryEntry> = Vec::new();
+    if dir != root {
+        if let Some(parent) = dir.parent() {
+            out.push(StoryEntry::folder(parent.to_path_buf(), PARENT_LABEL));
+        }
+    }
+    out.extend(scan_folders(dir));
+    out.extend(scan_stories(dir, data_base));
+    sort_stories(&mut out, Sort::default());
+    out
+}
+
+/// Every directory under `root`, root first, breadth-first, dot-directories
+/// skipped and each real directory visited once however many symlinks lead to
+/// it.
+pub fn library_dirs(root: &Path) -> Vec<PathBuf> {
+    let mut seen: std::collections::HashSet<PathBuf> = std::collections::HashSet::new();
+    let mut out: Vec<PathBuf> = Vec::new();
+    let mut queue: std::collections::VecDeque<PathBuf> = std::collections::VecDeque::new();
+    queue.push_back(root.to_path_buf());
+    while let Some(dir) = queue.pop_front() {
+        let real = std::fs::canonicalize(&dir).unwrap_or_else(|_| dir.clone());
+        if !seen.insert(real) {
+            continue;
+        }
+        for sub in scan_folders(&dir) {
+            queue.push_back(sub.path);
+        }
+        out.push(dir);
+    }
+    out
+}
+
+/// One folder's worth of the library index, as the indexing thread delivers it.
+pub struct IndexBatch {
+    pub dir: PathBuf,
+    pub entries: Vec<StoryEntry>,
+}
+
+/// Scan every folder under `root` and hand each one's stories to `deliver` as
+/// it finishes. Per-folder rather than one flat scan, so the rules that only
+/// make sense within a directory (multi-disk grouping, hint-sidecar
+/// association) keep applying within one.
+pub fn index_library(root: &Path, data_base: &Path, mut deliver: impl FnMut(IndexBatch)) {
+    for dir in library_dirs(root) {
+        let entries = scan_stories(&dir, data_base);
+        deliver(IndexBatch { dir, entries });
+    }
+}
+
+/// [`index_library`] on its own thread. The receiver yields one batch per
+/// folder and disconnects when the walk is done, so a reader can tell "still
+/// indexing" from "indexed" without a flag.
+pub fn spawn_library_index(root: PathBuf, data_base: PathBuf) -> std::sync::mpsc::Receiver<IndexBatch> {
+    let (tx, rx) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        index_library(&root, &data_base, |batch| {
+            // A dropped receiver means the picker has gone; nothing to do but
+            // stop walking, which the next iteration's send failure also does.
+            let _ = tx.send(batch);
+        });
+    });
+    rx
+}
+
+/// The fetch targets a headless `--fetch` works through: one per story in
+/// `source`, and for a library that means the stories in all of its folders,
+/// in the order [`index_library`] visits them.
+pub fn fetch_targets(source: &StorySource, data_base: &Path) -> Vec<crate::fetch_worker::FetchTarget> {
+    let mut out: Vec<crate::fetch_worker::FetchTarget> = Vec::new();
+    match source {
+        StorySource::Library(root) => index_library(root, data_base, |batch| {
+            out.extend(batch.entries.iter().map(crate::fetch_worker::FetchTarget::row));
+        }),
+        other @ StorySource::DiskSet { .. } => {
+            out.extend(other.scan(data_base).iter().map(crate::fetch_worker::FetchTarget::row));
+        }
+    }
+    out
+}
+
+/// Where `entry` lives relative to `dir`: `None` when it sits directly in
+/// `dir` (or outside it altogether), `Some("sub/deeper")` otherwise, always
+/// with forward slashes since it is a label, not a path.
+pub fn folder_label(entry: &StoryEntry, dir: &Path) -> Option<String> {
+    let rel = entry.path.parent()?.strip_prefix(dir).ok()?;
+    if rel.as_os_str().is_empty() {
+        return None;
+    }
+    let parts: Vec<String> = rel.components().map(|c| c.as_os_str().to_string_lossy().into_owned()).collect();
+    Some(parts.join("/"))
+}
+
+/// The stories in `index` matching `query`: every whitespace-separated term
+/// must occur, case-insensitively, in the title, the author, the filename or
+/// the folder (relative to `root`). An empty query matches everything. Folder
+/// rows never match; the result is stories only, in the default sort.
+pub fn search_library(index: &[StoryEntry], root: &Path, query: &str) -> Vec<StoryEntry> {
+    search_library_under(index, root, root, query)
+}
+
+/// [`search_library`] restricted to the stories under `scope` (a folder at or
+/// below `root`): what the cover gallery shows for a folder, since a grid of
+/// covers is worth more the more of the library it covers, and a folder that
+/// holds only folders would otherwise show an empty one.
+pub fn search_library_under(index: &[StoryEntry], root: &Path, scope: &Path, query: &str) -> Vec<StoryEntry> {
+    let terms: Vec<String> = query.split_whitespace().map(|t| t.to_lowercase()).collect();
+    let mut out: Vec<StoryEntry> = index
+        .iter()
+        .filter(|e| !e.is_folder())
+        .filter(|e| e.path.starts_with(scope))
+        .filter(|e| {
+            if terms.is_empty() {
+                return true;
+            }
+            let hay = format!(
+                "{}\n{}\n{}\n{}",
+                e.title,
+                e.meta.author.as_deref().unwrap_or(""),
+                e.filename,
+                folder_label(e, root).unwrap_or_default()
+            )
+            .to_lowercase();
+            terms.iter().all(|t| hay.contains(t.as_str()))
+        })
+        .cloned()
+        .collect();
+    sort_stories(&mut out, Sort::default());
+    out
+}
+
 /// **One disc, not two layouts** (SQ-0878): drop a row whose build is already
 /// offered by an earlier story on the *same volume*, for the *same machine*.
 ///
@@ -1567,7 +1801,7 @@ fn entry_from_loaded(
         ifdb_rating_count: resolved.ifdb_rating_count,
         fetch_not_found: resolved.fetch_not_found,
     };
-    Some(StoryEntry { path: path.to_path_buf(), title, filename, meta, hint_sidecar: None })
+    Some(StoryEntry { path: path.to_path_buf(), title, filename, meta, hint_sidecar: None, kind: RowKind::Story })
 }
 
 /// Column a story list can be sorted by.
@@ -1780,9 +2014,29 @@ pub fn sort_stories(stories: &mut [StoryEntry], sort: Sort) {
 
     // Sorting a permutation rather than the rows, so the comparator can reach
     // each row's pre-measured key by its ORIGINAL index.
+    /// Which shelf a row sits on: `..` above the folders, folders above the
+    /// stories, under every sort key and in both directions. A folder has no
+    /// author, year or rating, and letting it sink to the bottom as a blank
+    /// would hide the way up under two thousand stories.
+    fn shelf(e: &StoryEntry) -> u8 {
+        match e.kind {
+            RowKind::Folder if e.title == PARENT_LABEL => 0,
+            RowKind::Folder => 1,
+            RowKind::Story => 2,
+        }
+    }
+
     let mut order: Vec<usize> = (0..stories.len()).collect();
     order.sort_by(|&i, &j| {
         let (a, b) = (&stories[i], &stories[j]);
+        let (sa, sb) = (shelf(a), shelf(b));
+        if sa != sb {
+            return sa.cmp(&sb);
+        }
+        if sa < 2 {
+            // Folders sort by name alone, whatever column the stories are on.
+            return a.title.to_lowercase().cmp(&b.title.to_lowercase()).then_with(|| a.title.cmp(&b.title));
+        }
         let ord = match sort.key {
             SortKey::Title => {
                 let (a_blank, a_val) = title_key(a);
@@ -1868,6 +2122,9 @@ pub fn compute_row_badges(
     data_base: &Path,
     hint_index: &hints::HintIndex,
 ) -> RowBadges {
+    if entry.is_folder() {
+        return RowBadges::default();
+    }
     let ifid = &entry.meta.ifid;
     let game_dir = entry.game_dir(data_base);
     let hint = if hint_index.get(ifid).is_some() || entry.hint_sidecar.is_some() {
@@ -2095,6 +2352,7 @@ mod tests {
                 ifdb_rating_count: None, fetch_not_found: false,
             },
             hint_sidecar: None,
+            kind: RowKind::Story,
         }
     }
 
@@ -2935,6 +3193,7 @@ mod tests {
                 fetch_not_found: false,
             },
             hint_sidecar: None,
+            kind: RowKind::Story,
         }
     }
 
@@ -3339,6 +3598,166 @@ mod tests {
             .count();
         assert_eq!(lines, table.len(), "no duplicate filename stems in scott_titles.tsv");
     }
+
+    // ── Folders and the in-memory find ────────────────────────────────────────
+
+    /// Builds `root/{a,b}/…` with one story in each level plus a dot-directory
+    /// and a non-story file, so every scan below has something to skip.
+    fn nested_library(tag: &str) -> PathBuf {
+        let root = temp_dir(tag);
+        std::fs::create_dir_all(root.join("zcode/german")).unwrap();
+        std::fs::create_dir_all(root.join("Glulx")).unwrap();
+        std::fs::create_dir_all(root.join(".hidden")).unwrap();
+        std::fs::write(root.join("top.z5"), minimal_v3_story()).unwrap();
+        std::fs::write(root.join("zcode/curses.z5"), minimal_v3_story()).unwrap();
+        std::fs::write(root.join("zcode/german/burg.z5"), minimal_v3_story()).unwrap();
+        std::fs::write(root.join("Glulx/notes.txt"), b"not a story").unwrap();
+        std::fs::write(root.join(".hidden/secret.z5"), minimal_v3_story()).unwrap();
+        root
+    }
+
+    #[test]
+    fn folders_list_before_stories_and_dot_directories_are_skipped() {
+        let root = nested_library("folders");
+        let rows = library_rows(&root, &root, &root);
+        let _ = std::fs::remove_dir_all(&root);
+
+        let labels: Vec<&str> = rows.iter().map(|e| e.title.as_str()).collect();
+        assert_eq!(labels, vec!["Glulx/", "zcode/", "top"], "folders first, by name, case-insensitively; no `..` at the root; no dot-dir");
+        assert!(rows[0].is_folder() && rows[1].is_folder() && !rows[2].is_folder());
+        assert_eq!(rows[1].path, root.join("zcode"), "a folder row's path is the directory itself");
+    }
+
+    #[test]
+    fn library_rows_offer_the_parent_only_below_the_root() {
+        let root = nested_library("parent");
+        let rows = library_rows(&root.join("zcode"), &root, &root);
+        let _ = std::fs::remove_dir_all(&root);
+
+        let labels: Vec<&str> = rows.iter().map(|e| e.title.as_str()).collect();
+        assert_eq!(labels, vec![PARENT_LABEL, "german/", "curses"]);
+        assert_eq!(rows[0].path, root, "`..` leads to the directory above");
+    }
+
+    /// Whatever column the stories are sorted on, and in either direction, the
+    /// way out stays at the top: `..`, then folders by name, then the stories.
+    #[test]
+    fn sort_stories_keeps_folders_on_top_under_every_key_and_direction() {
+        let mut rows = vec![
+            story("Zork", "zork.z5", Some("Infocom"), Some("1980")),
+            StoryEntry::folder(PathBuf::from("/lib/b"), "b/"),
+            story("Advent", "advent.z5", None, None),
+            StoryEntry::folder(PathBuf::from("/lib"), PARENT_LABEL),
+            StoryEntry::folder(PathBuf::from("/lib/A"), "A/"),
+        ];
+        for key in [SortKey::Title, SortKey::Author, SortKey::Year, SortKey::Rating, SortKey::Type] {
+            for desc in [false, true] {
+                sort_stories(&mut rows, Sort { key, desc });
+                let labels: Vec<&str> = rows.iter().take(3).map(|e| e.title.as_str()).collect();
+                assert_eq!(labels, vec![PARENT_LABEL, "A/", "b/"], "{key:?} desc={desc}");
+                assert!(rows[3..].iter().all(|e| !e.is_folder()));
+            }
+        }
+    }
+
+    #[test]
+    fn index_library_reaches_every_nested_folder_once_and_skips_dot_directories() {
+        let root = nested_library("index");
+        let mut dirs: Vec<PathBuf> = Vec::new();
+        let mut all: Vec<StoryEntry> = Vec::new();
+        index_library(&root, &root, |b| {
+            dirs.push(b.dir.clone());
+            all.extend(b.entries);
+        });
+        let _ = std::fs::remove_dir_all(&root);
+
+        assert_eq!(dirs[0], root, "the root comes first");
+        assert_eq!(dirs.len(), 4, "root, Glulx, zcode, zcode/german: {dirs:?}");
+        let mut names: Vec<&str> = all.iter().map(|e| e.filename.as_str()).collect();
+        names.sort();
+        assert_eq!(names, vec!["burg.z5", "curses.z5", "top.z5"], "every story once, none from `.hidden`");
+        assert!(all.iter().all(|e| !e.is_folder()), "the index carries stories, not folder rows");
+    }
+
+    #[test]
+    fn search_library_matches_title_author_filename_and_folder_case_insensitively() {
+        let root = PathBuf::from("/lib");
+        let mut curses = story("Curses", "curses.z5", Some("Graham Nelson"), Some("1993"));
+        curses.path = root.join("zcode/curses.z5");
+        let mut burg = story("Die Burg", "burg.z5", None, None);
+        burg.path = root.join("zcode/german/burg.z5");
+        let mut top = story("Top", "top.z5", Some("Nobody"), None);
+        top.path = root.join("top.z5");
+        let index = vec![StoryEntry::folder(root.join("zcode"), "zcode/"), curses, burg, top];
+
+        let titles = |q: &str| -> Vec<String> { search_library(&index, &root, q).iter().map(|e| e.title.clone()).collect() };
+        assert_eq!(titles(""), vec!["Curses", "Die Burg", "Top"], "empty query lists every story, sorted by title, never a folder");
+        assert_eq!(titles("CURSES"), vec!["Curses"], "title, case-insensitively");
+        assert_eq!(titles("nelson"), vec!["Curses"], "author");
+        assert_eq!(titles("burg.z5"), vec!["Die Burg"], "filename");
+        assert_eq!(titles("german"), vec!["Die Burg"], "folder, relative to the root");
+        assert_eq!(titles("zcode"), vec!["Curses", "Die Burg"], "a parent folder matches everything under it");
+        assert_eq!(titles("zcode nel"), vec!["Curses"], "several terms all have to hit");
+        assert!(titles("nothing-here").is_empty());
+    }
+
+    #[test]
+    fn fetch_targets_reach_the_stories_in_all_folders_and_no_folder_rows() {
+        let root = nested_library("fetch-targets");
+        let targets = fetch_targets(&StorySource::Library(root.clone()), &root);
+        let _ = std::fs::remove_dir_all(&root);
+        let mut names: Vec<String> = targets
+            .iter()
+            .map(|t| t.path.file_name().unwrap().to_string_lossy().into_owned())
+            .collect();
+        names.sort();
+        assert_eq!(names, vec!["burg.z5", "curses.z5", "top.z5"]);
+        assert!(targets.iter().all(|t| !t.ifid.is_empty()), "a target carries the IFID the fetch is keyed on");
+    }
+
+    #[test]
+    fn search_library_under_keeps_to_the_scope_and_its_folders() {
+        let root = PathBuf::from("/lib");
+        let mut a = story("Alpha", "a.z5", None, None);
+        a.path = root.join("zcode/a.z5");
+        let mut b = story("Beta", "b.z5", None, None);
+        b.path = root.join("zcode/german/b.z5");
+        let mut c = story("Gamma", "c.z5", None, None);
+        c.path = root.join("glulx/c.z5");
+        let index = vec![a, b, c];
+        let names = |scope: &Path| -> Vec<String> {
+            search_library_under(&index, &root, scope, "").iter().map(|e| e.title.clone()).collect()
+        };
+        assert_eq!(names(&root), vec!["Alpha", "Beta", "Gamma"], "the root is the whole library");
+        assert_eq!(names(&root.join("zcode")), vec!["Alpha", "Beta"], "a folder and the folders under it");
+        assert_eq!(names(&root.join("zcode/german")), vec!["Beta"]);
+        assert!(names(&root.join("nothing")).is_empty());
+        assert_eq!(
+            search_library_under(&index, &root, &root.join("zcode"), "beta").len(),
+            1,
+            "the query still applies within the scope"
+        );
+    }
+
+    #[test]
+    fn folder_label_names_the_folder_below_the_root_and_nothing_at_it() {
+        let root = PathBuf::from("/lib");
+        let mut e = story("x", "x.z5", None, None);
+        e.path = root.join("x.z5");
+        assert_eq!(folder_label(&e, &root), None);
+        e.path = root.join("zcode/german/x.z5");
+        assert_eq!(folder_label(&e, &root).as_deref(), Some("zcode/german"));
+        assert_eq!(folder_label(&e, &root.join("zcode")).as_deref(), Some("german"));
+        e.path = PathBuf::from("/elsewhere/x.z5");
+        assert_eq!(folder_label(&e, &root), None, "outside the tree is not a folder of it");
+    }
+
+    #[test]
+    fn a_folder_row_carries_no_badges() {
+        let dir = temp_dir("folder-badges");
+        let row = StoryEntry::folder(dir.clone(), "dir/");
+        let badges = compute_row_badges(&row, &dir, &hints::load_hint_index(&dir));
+        let _ = std::fs::remove_dir_all(&dir);
+        assert_eq!(badges, RowBadges::default());
+    }
 }
-
-

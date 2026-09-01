@@ -136,7 +136,7 @@ impl InfocomBoot {
     /// than a precedence" survives a second format wearing the same spelling,
     /// the same size and the same sector order.
     pub fn looks_like_boot_disk(raw: &[u8]) -> bool {
-        if crate::prodos::ProDos::looks_like_prodos(raw) {
+        if crate::prodos::ProDos::looks_like_prodos(raw) || story_as_it_lies(raw) {
             return false;
         }
         story_on(raw).is_some()
@@ -148,7 +148,7 @@ impl InfocomBoot {
     /// question here, so [`Self::looks_like_boot_disk`] cannot claim bytes this
     /// would refuse.
     pub fn mount(raw: Vec<u8>) -> Result<InfocomBoot, InfocomBootError> {
-        if crate::prodos::ProDos::looks_like_prodos(&raw) {
+        if crate::prodos::ProDos::looks_like_prodos(&raw) || story_as_it_lies(&raw) {
             return Err(InfocomBootError::NotABootDisk);
         }
         let (at, story) = story_on(&raw).ok_or(InfocomBootError::NotABootDisk)?;
@@ -213,6 +213,18 @@ impl InfocomBoot {
 /// The whole reader, in one function: de-interleave into DOS 3.3 logical order,
 /// then take the first sector boundary that starts a story whose own header
 /// checksum agrees with its own declared length.
+/// **A story file is not a disk, however long it is.** A self-booting disk's
+/// first sector is the boot ROM's loader (the module header quotes it), never a
+/// story header; bytes that are already a whole verified story in physical
+/// order from offset 0 are a story file that happens to be one floppy long.
+/// Without this, such a file de-interleaves into a sector-anagram of itself,
+/// its header still sits at track 0 sector 0, and the byte-sum checksum, blind
+/// to order, passes it: `SpAdventure.z5` off the IF Archive is exactly 143,360
+/// bytes and was being listed, and would have been opened, as a boot disk.
+fn story_as_it_lies(raw: &[u8]) -> bool {
+    looks_like_story(raw) && crate::infocom_packed::verified(raw.to_vec()).is_some()
+}
+
 fn story_on(raw: &[u8]) -> Option<((usize, usize), Vec<u8>)> {
     let image = crate::dos_order::logical_order(raw)?;
     for at in (0..image.len()).step_by(SECTOR) {
@@ -291,6 +303,46 @@ pub(crate) mod tests {
         wrong[0x1d] = wrong[0x1d].wrapping_add(1);
         assert!(looks_like_story(&wrong), "the premise: still structurally a story");
         assert!(!InfocomBoot::looks_like_boot_disk(&sample_disk(&wrong)), "and not a boot disk");
+    }
+
+    /// **A story file exactly one floppy long is a story, not a disk.** The IF
+    /// Archive's `SpAdventure.z5` is 143,360 bytes, which is also the length of
+    /// every Apple II 5.25-inch dump, and the sniff used to de-interleave it,
+    /// find its header at track 0 sector 0, and pass the checksum, because a
+    /// byte sum cannot tell a story from a sector-anagram of one (the module
+    /// header says as much). The picker then listed a plain `.z5` as mounted
+    /// off a boot disk, and opening it would have handed the machine the
+    /// anagram.
+    ///
+    /// A self-booting disk's first sector is the boot ROM's loader, never a
+    /// story header, so bytes that are a whole verified story in physical
+    /// order from offset 0 cannot be one.
+    ///
+    /// FALSIFICATION: drop the `story_as_it_lies` guard and the second
+    /// assertion fails with the reported symptom, a boot disk at `T0/S0`.
+    #[test]
+    fn a_story_file_exactly_one_floppy_long_is_a_story_not_a_disk() {
+        let len = crate::dos_order::DOS_ORDER_LEN;
+        let mut story = vec![0u8; len];
+        story[0] = 5; // Version 5: 143,360 / 4 fits the length word, as SpAdventure's does
+        let mut word = |o: usize, v: u16| story[o..o + 2].copy_from_slice(&v.to_be_bytes());
+        word(0x04, 0x0400);
+        word(0x08, 0x0300);
+        word(0x0a, 0x0100);
+        word(0x0c, 0x0200);
+        word(0x0e, 0x0280);
+        word(0x1a, (len / 4) as u16);
+        story[0x12..0x18].copy_from_slice(b"971030");
+        let sum = story[64..].iter().fold(0u16, |a, &b| a.wrapping_add(u16::from(b)));
+        story[0x1c..0x1e].copy_from_slice(&sum.to_be_bytes());
+
+        assert!(
+            crate::infocom_packed::verified(story.clone()).is_some(),
+            "the premise: a whole verified story as it lies"
+        );
+        assert!(!InfocomBoot::looks_like_boot_disk(&story), "one floppy long, but a story file");
+        assert!(InfocomBoot::mount(story.clone()).is_err(), "and it does not mount as one");
+        assert_eq!(crate::medium::DiskImage::detect(&story), None, "no format claims it");
     }
 
     fn stories_dir() -> std::path::PathBuf {

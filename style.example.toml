@@ -81,6 +81,7 @@ version = 1   # style schema version — do not remove; lets lanthorn flag an ou
 # story_no_metadata = { parent = "muted" }
 # story_tile = { parent = "text" }
 # story_tile_selected = { parent = "accent", bold = true, reversed = true }
+# story_folder = { parent = "accent" }
 # notification = { parent = "accent", reversed = true }
 # hotkey_key = { parent = "accent" }
 # sound_beep_high = { fg = "#ffb428" }

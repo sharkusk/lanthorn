@@ -353,7 +353,8 @@ switches that make lanthorn feel like yours without opening the whole registry.
   `select-edge first|last`, `play-story`, `open-launch-options`,
   `toggle-info-panel`, `toggle-gallery`, `fetch-story`, `refresh-library`,
   `set-ifdb-url`, `search-ifdb`, `download-hints`, `sort-library`,
-  `reverse-sort`, `quit-browser` and `cancel-browser`. They are a world of their
+  `reverse-sort`, `find-story`, `parent-folder`, `quit-browser` and
+  `cancel-browser`. They are a world of their
   own: a game command in `[keymap.browser]` is refused with a warning (there is
   no game yet for it to act on), and these do not appear in `/help` or the
   command palette, because the picker has no command line to type them into.
