@@ -2612,6 +2612,15 @@ pub struct AppState {
     /// the bar has never been shown. New game text deliberately does NOT set
     /// this: the bar would flash on every turn.
     pub scrollbar_shown_at: Option<Instant>,
+    /// When the transcript viewport last moved — wheel, `PageUp`/`PageDown`, or a
+    /// selection auto-scroll at an edge, all funneled through
+    /// [`AppState::scroll_transcript_to`] exactly like `scrollbar_shown_at` above.
+    /// Used only to gate the sixel-backend scroll-settle debounce (SQ-1198): while
+    /// [`AppState::transcript_scroll_in_motion`] reads true, an inline sixel image
+    /// renders as a background-filled footprint instead of re-emitting its full
+    /// payload, so a scroll past it does not re-send hundreds of KB per step.
+    /// `None` = never scrolled this session.
+    pub sixel_scroll_motion_at: Option<Instant>,
     /// Monotonically increasing generation counter. Bumped each time the real graph is mutated
     /// by an applied turn. Used to detect stale tidy results (job's gen vs current gen).
     pub graph_gen: u64,
@@ -3396,6 +3405,7 @@ impl Default for AppState {
             pending_watch_style: None,
             scroll_anim: None,
             scrollbar_shown_at: None,
+            sixel_scroll_motion_at: None,
             graph_gen: 0,
             viewed_layer: None,
             room_dock_view: RoomDockView::Info,
@@ -3509,6 +3519,7 @@ impl AppState {
             || self.sound_pulse.is_some()
             || self.scroll_anim.is_some()
             || self.transcript_scrollbar_animating()
+            || self.transcript_scroll_in_motion()
             || self.overlays.saves.as_ref().is_some_and(|s| s.scroll.has_active_animation())
             || self.overlays.file_browser.as_ref().is_some_and(|fb| fb.scroll.has_active_animation())
             || self.overlays.config_screen.as_ref().is_some_and(|cs| cs.scroll.has_active_animation())
@@ -3791,6 +3802,45 @@ impl AppState {
         // nothing else does, which is exactly the auto-hide trigger set the bar
         // wants (SQ-0782). New game text sets `transcript_scroll` directly.
         self.scrollbar_shown_at = Some(Instant::now());
+        // Same funnel, for the sixel scroll-settle debounce (SQ-1198): every real
+        // scroll motion — wheel, page, drag-autoscroll — restarts the window.
+        self.sixel_scroll_motion_at = Some(Instant::now());
+    }
+
+    /// How long the transcript viewport is considered "in motion" after the last
+    /// scroll (SQ-1198), for [`AppState::transcript_scroll_in_motion`].
+    ///
+    /// `default_scroll_ms()` (120ms, `config.animation.scroll_ms`) is the length
+    /// of ONE smooth-scroll tween — so a lone wheel notch is still tweening for
+    /// the whole of it — plus one `TIDY_POLL_MS` tick (33ms, the fast-poll cadence
+    /// `has_active_animation()` already earns) as margin, so the tween's own
+    /// settle frame is never mistaken for the debounce's. A flurry of scroll
+    /// steps each restarts the window before it closes, so it stays open for the
+    /// whole flurry and only opens the settle frame once the wheel actually stops.
+    const SIXEL_SCROLL_SETTLE_MS: u64 = 150;
+
+    /// True while the transcript viewport is still "in motion" from a recent
+    /// scroll (SQ-1198) — see [`Self::SIXEL_SCROLL_SETTLE_MS`]. Read by the sixel
+    /// backend only: kitty re-places by id and half-blocks are ordinary cells, so
+    /// neither needs this.
+    pub fn transcript_scroll_in_motion(&self) -> bool {
+        self.sixel_scroll_motion_at
+            .is_some_and(|t| t.elapsed().as_millis() < Self::SIXEL_SCROLL_SETTLE_MS as u128)
+    }
+
+    /// Drop a fully-elapsed scroll-motion window (called from the run loop,
+    /// mirroring [`Self::finalize_scrollbar_if_done`]). Returns `true` iff this
+    /// call just closed the window, so the loop forces the one redraw where a
+    /// sixel image goes from its footprint back to its full payload at the
+    /// now-settled position — the frame `transcript_scroll_in_motion` flipping
+    /// false is itself the content change, so it needs its own settle frame
+    /// exactly as the scrollbar fade does.
+    pub fn finalize_sixel_scroll_motion_if_done(&mut self) -> bool {
+        if self.sixel_scroll_motion_at.is_some() && !self.transcript_scroll_in_motion() {
+            self.sixel_scroll_motion_at = None;
+            return true;
+        }
+        false
     }
 
     /// How opaque the story pane's scrollbar is this frame, in `[0,1]`
@@ -6319,6 +6369,43 @@ mod tests {
         s.config.animation.scrollbar_hide_ms = 0;
         s.scrollbar_shown_at = Some(Instant::now() - Duration::from_secs(60));
         assert!(!s.finalize_scrollbar_if_done());
+    }
+
+    /// SQ-1198: `transcript_scroll_in_motion` is what the sixel backend reads to
+    /// decide footprint-vs-payload. It must be true immediately after a scroll
+    /// (so the render suppresses), keep the run loop fast-polling while it is
+    /// (`has_active_animation`), and read false once the settle window elapses.
+    #[test]
+    fn transcript_scroll_in_motion_follows_the_settle_window() {
+        let mut s = AppState::default();
+        assert!(!s.transcript_scroll_in_motion(), "never scrolled = not in motion");
+        assert!(!s.has_active_animation());
+
+        s.scroll_transcript_to(5);
+        assert!(s.transcript_scroll_in_motion(), "a fresh scroll is in motion");
+        assert!(s.has_active_animation(), "in-motion state keeps the run loop polling without input");
+
+        // Past the settle window (mirrors how the scrollbar tests fake elapsed
+        // time above, since neither test can literally sleep for it).
+        s.sixel_scroll_motion_at = Some(Instant::now() - Duration::from_millis(200));
+        assert!(!s.transcript_scroll_in_motion(), "past the settle window");
+    }
+
+    /// The window closing is itself the content change (a suppressed sixel band
+    /// goes back to its full payload at the same offset), so it needs the same
+    /// one-settle-frame treatment as the scrollbar fade above.
+    #[test]
+    fn finalize_sixel_scroll_motion_forces_exactly_one_settle_frame() {
+        let mut s = AppState::default();
+        assert!(!s.finalize_sixel_scroll_motion_if_done(), "nothing to settle when never scrolled");
+
+        s.scroll_transcript_to(5);
+        assert!(!s.finalize_sixel_scroll_motion_if_done(), "still in motion: not done yet");
+
+        s.sixel_scroll_motion_at = Some(Instant::now() - Duration::from_millis(200));
+        assert!(s.finalize_sixel_scroll_motion_if_done(), "an elapsed window asks for the settle frame");
+        assert!(s.sixel_scroll_motion_at.is_none(), "the window is cleared, mirroring finalize_scrollbar_if_done");
+        assert!(!s.finalize_sixel_scroll_motion_if_done(), "and only ever asks once");
     }
 
     #[test]

@@ -111,6 +111,14 @@ Text games, the automap, mouse support and the full TUI are the same either
 way. For Kitty fidelity, use mode 1 (or SSH to the host and run mode 1 there;
 Kitty graphics work over SSH).
 
+Sixel has no image ids, so an inline transcript picture cannot be re-placed by
+reference the way Kitty does — scrolling it past its anchor cell would mean
+re-sending the whole payload every scroll step over the browser's WebSocket.
+lanthorn instead draws such an image as a plain background-filled footprint
+while the transcript is still moving, and re-sends the full picture once the
+scroll settles, so a scroll session costs one payload per image rather than
+one per step (SQ-1198).
+
 ### Sound in the browser
 
 The container has no sound device, and in mode 1 the game is silent, as on any

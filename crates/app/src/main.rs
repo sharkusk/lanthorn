@@ -2186,6 +2186,10 @@ fn run_event_loop(boot: startup::BootResult, launched_from_library: bool) -> Run
             // dregs of its opacity), so without this it never actually leaves
             // the screen. (SQ-0782)
             needs_redraw |= state.finalize_scrollbar_if_done();
+            // The sixel scroll-settle debounce needs the same settle frame: the
+            // window closing is itself the content change (footprint → full
+            // payload), so without this it never actually re-emits. (SQ-1198)
+            needs_redraw |= state.finalize_sixel_scroll_motion_if_done();
             continue;
         }
 

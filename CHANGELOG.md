@@ -64,6 +64,11 @@ ttyd's xterm.js renders sixel once the image addon is on; the entrypoint
 turns it on and starts each session with `--image-protocol sixel`, so cover
 art and graphical v6 stories show in the browser as pictures instead of
 half-block cells. `LANTHORN_WEB_IMAGES=halfblocks` restores the fallback.
+Sixel has no image ids, so scrolling an inline picture past its anchor cell
+used to re-send the whole payload on every scroll step; an inline image now
+draws as a plain footprint while the transcript is still moving and sends the
+full picture once the scroll settles, so a scroll session costs one payload
+per image rather than one per step.
 
 ### Sound in the browser, for the served container
 
