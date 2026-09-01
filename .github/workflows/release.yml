@@ -209,21 +209,14 @@ jobs:
             printf '(or one of the no-map CLI players `zvm-cli` / `gvm-cli` / `scott-cli`).\n\n'
             # The pre-release caveat belongs only on a pre-release. The tag decides
             # it here exactly as it decides the `prerelease:` flag below — a name
-            # with a hyphen (v0.2.0-rc.1) is a pre-release, a bare vX.Y.Z is not.
-            # A full release had been announcing itself as a beta in its own body.
+            # with a hyphen (v0.2.0-rc.1) is a pre-release, a bare vX.Y.Z is not
+            # and carries no format note at all: the save-format policy is a
+            # developer document, not release-body content.
             case "$GITHUB_REF_NAME" in
               *-*)
-                printf '> **Pre-release** — on-disk save formats are version-pinned and any\n'
-                printf '> change is a deliberate, release-noted bump (see\n'
-                printf '> `docs/release/save-format-policy.md`); across 0.x versions the\n'
-                printf '> frozen-tier formats may still break, never silently. The\n'
-                printf '> `config.toml` / `style.toml` schemas remain tolerant.\n\n'
-                ;;
-              *)
-                printf '> On-disk save formats are version-pinned and any change is a\n'
-                printf '> deliberate, release-noted bump (see\n'
-                printf '> `docs/release/save-format-policy.md`). The `config.toml` /\n'
-                printf '> `style.toml` schemas remain tolerant and may gain fields.\n\n'
+                printf '> **Pre-release** — across 0.x versions the on-disk save formats\n'
+                printf '> may still break, never silently (see\n'
+                printf '> `docs/release/save-format-policy.md`).\n\n'
                 ;;
             esac
             if [ -s changelog-section.md ]; then
