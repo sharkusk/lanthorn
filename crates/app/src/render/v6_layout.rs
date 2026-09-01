@@ -2860,6 +2860,7 @@ mod tests {
             x: 0, y: 0, w: 74, h: 2, x_px: ART_END as u16, y_px: 0, w_px: 592, h_px: 32,
             left_margin: 0, right_margin: 0,
             node: WinNode::Grid(GridWindow {
+                win: 0,
                 fill: None,
                 cols: 74, rows: 2, cells: vec![], active_rows: 2, cursor: (0, 0),
                 cursor_active: false, border: BorderPref::Unspecified,
@@ -2914,6 +2915,7 @@ mod tests {
             x: 0, y: 0, w: 12, h: 2, x_px: 0, y_px: 0, w_px: 640, h_px: 32,
             left_margin: 0, right_margin: 0,
             node: WinNode::Grid(GridWindow {
+                win: 0,
                 fill: None,
                 cols: 12, rows: 2, active_rows: 2, cursor: (0, 0),
                 cursor_active: false, border: BorderPref::Unspecified,
@@ -2984,6 +2986,7 @@ mod tests {
             x: 0, y: 0, w: 80, h: 1, x_px: 0, y_px: 0, w_px: 640, h_px: 16,
             left_margin: 0, right_margin: 0,
             node: WinNode::Grid(GridWindow {
+                win: 0,
                 fill: None,
                 cols: 80, rows: 1, cells: vec![], active_rows: 1, cursor: (0, 0),
                 cursor_active: false, border: BorderPref::Unspecified,
@@ -3325,6 +3328,7 @@ mod tests {
         PositionedWindow {
             x: 0, y: 0, w: 1, h: 1, x_px, y_px: 0, w_px: 8, h_px: 8, left_margin: 0, right_margin: 0,
             node: WinNode::Grid(GridWindow {
+                win: 0,
                 fill: None,
                 cols: 1, rows: 1, cells: vec![], active_rows: 1, cursor: (0, 0), cursor_active: false,
                 border: BorderPref::Unspecified, bg: None, fg: None, reverse: false,
@@ -3611,6 +3615,7 @@ mod tests {
             x: 0, y: 0, w: 1, h: 1, x_px: x, y_px: y, w_px: w, h_px: h,
             left_margin: 0, right_margin: 0,
             node: WinNode::Grid(GridWindow {
+                win: 0,
                 fill: None, cols: 1, rows: 1, cells: vec![], active_rows: 1,
                 cursor: (0, 0), cursor_active: false, border: BorderPref::Unspecified,
                 bg: None, fg: None, reverse: false, px_texts,
@@ -4021,6 +4026,7 @@ mod tests {
         let win = PositionedWindow {
             x: 0, y: 0, w: 3, h: 2, x_px: 10, y_px: 4, w_px: 24, h_px: 32, left_margin: 0, right_margin: 0,
             node: WinNode::Grid(GridWindow {
+                win: 0,
                 fill: None,
                 cols: 3, rows: 2, cells, active_rows: 2, cursor: (0, 0), cursor_active: false,
                 border: BorderPref::Unspecified, bg: None, fg: None, reverse: false,
@@ -4052,6 +4058,7 @@ mod tests {
         PositionedWindow {
             x: 0, y: 0, w: 1, h: 1, x_px: 0, y_px: 0, w_px: 8, h_px: 8, left_margin: 0, right_margin: 0,
             node: WinNode::Grid(GridWindow {
+                win: 0,
                 fill: None,
                 cols: 1, rows: 1, cells: vec![], active_rows: 1, cursor: (0, 0), cursor_active: false,
                 border: BorderPref::Unspecified, bg: None, fg: None, reverse: false,
@@ -4120,6 +4127,7 @@ mod tests {
             let win = PositionedWindow {
                 x: 0, y: 0, w: 1, h: 1, x_px: 0, y_px: 0, w_px: 8, h_px: 16, left_margin: 0, right_margin: 0,
                 node: WinNode::Grid(GridWindow {
+                    win: 0,
                     fill: None,
                     cols: 1, rows: 1, cells: cells(style), active_rows: 1, cursor: (0, 0), cursor_active: false,
                     border: BorderPref::Unspecified, bg: None, fg: None, reverse: false,
@@ -4316,6 +4324,7 @@ mod tests {
         PositionedWindow {
             x: 0, y: 0, w: (w_px / 8).max(1), h: 1, x_px: 0, y_px: 0, w_px, h_px: 16, left_margin: 0, right_margin: 0,
             node: WinNode::Grid(GridWindow {
+                win: 0,
                 fill: None,
                 cols: (w_px / 8).max(1), rows: 1, cells: vec![], active_rows: 1, cursor: (0, 0), cursor_active: false,
                 border: BorderPref::Unspecified, bg: None, fg: None, reverse: false, px_texts: runs,
@@ -4371,6 +4380,7 @@ mod tests {
             x: 0, y: 0, w: 80, h: 25, x_px: 0, y_px: 0, w_px: 640, h_px: 400,
             left_margin: 0, right_margin: 0,
             node: WinNode::Grid(GridWindow {
+                win: 0,
                 fill: None,
                 cols: 80, rows: 25, cells: vec![], active_rows: 25, cursor: (0, 0), cursor_active: false,
                 border: BorderPref::Unspecified, bg: None, fg: None, reverse: false,
@@ -4424,6 +4434,7 @@ mod tests {
             x: 0, y: 0, w: (w / 8).max(1), h: (h / 16).max(1), x_px: 0, y_px: 0, w_px: w, h_px: h,
             left_margin: 0, right_margin: 0,
             node: WinNode::Grid(GridWindow {
+                win: 0,
                 fill: None,
                 cols: (w / 8).max(1), rows: (h / 16).max(1), cells: vec![], active_rows: 1,
                 cursor: (0, 0), cursor_active: false, border: BorderPref::Unspecified,

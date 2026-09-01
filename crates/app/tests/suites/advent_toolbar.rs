@@ -94,7 +94,7 @@ fn advent_toolbar_verb_buttons_prefill_the_input_line() {
         let _ = sess.take_transcript();
         let _ = sess.take_line_seed();
         let windows = sess.mouse_windows();
-        let (win, _, _) = *windows.first().expect("the toolbar watches for clicks");
+        let win = *windows.first().expect("the toolbar watches for clicks");
         sess.deliver_mouse(win, px, 8);
         let mut got = None;
         for _ in 0..8 {
@@ -146,7 +146,7 @@ fn toolbar_verbs_follow_the_edited_input_line_not_a_stale_buffer() {
 
     fn click(sess: &mut GlulxSession, px: u32) {
         let windows = sess.mouse_windows();
-        let (win, _, _) = *windows.first().expect("the toolbar watches for clicks");
+        let win = *windows.first().expect("the toolbar watches for clicks");
         sess.deliver_mouse(win, px, 8);
     }
 
@@ -206,7 +206,7 @@ fn advent_toolbar_returns_to_a_pixel_identical_canvas_after_a_press() {
 
     let (resting, v_resting) = toolbar(&mut sess);
     let windows = sess.mouse_windows();
-    let (win, _, _) = *windows.first().expect("the toolbar watches for clicks");
+    let win = *windows.first().expect("the toolbar watches for clicks");
 
     // Press "North" (canvas pixel 28,6) — a different picture, same size.
     sess.deliver_mouse(win, 28, 6);
@@ -259,12 +259,21 @@ fn pixel_offsets_make_the_compass_w_e_buttons_clickable() {
             let _ = sess.take_transcript();
             let windows = sess.mouse_windows();
             let story = (0u16, 0u16, 138u16, 51u16);
+            // SQ-1203: the hit-test is against the rendered DRAWN rect, not gvm's
+            // own layout rect, so render a frame the same way the app does and
+            // hand glk_mouse_target the recorded win_rects.
+            let state = app::state::AppState::default();
+            let model = sess.screen();
+            let area = ratatui::layout::Rect::new(0, 0, 138, 51);
+            let mut buf = ratatui::buffer::Buffer::empty(area);
+            let m = app::render::screen::render_story_pane(&model, false, None, &state, area, &mut buf);
             let target = app::glulx_session::glk_mouse_target(
                 false,
                 cell_col,
                 cell_row,
                 story,
                 &windows,
+                &m.win_rects,
                 sess.char_pixels(),
                 sub_px,
             );

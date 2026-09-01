@@ -13,7 +13,7 @@ use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
 
 use crate::colors::ColorScheme;
-use crate::engine::{BorderPref, BufferWindow, Introspect, PositionedWindow, ScreenModel, StatusModel, WinNode};
+use crate::engine::{BorderPref, BufferWindow, Introspect, PositionedWindow, ScreenModel, StatusModel, WinKind, WinNode};
 use crate::render::TextInk;
 use crate::render::transcript::{draw_str_runs, render_transcript, visible_wrapped_lines_kinded};
 use crate::render::upper_window::{draw_grid, draw_grid_transparent, draw_upper_window};
@@ -52,6 +52,15 @@ pub struct StoryPaneMetrics {
     /// such frames: measuring "rows added" against a picture frame's zero total
     /// re-paged the ENTIRE backlog when the normal frame returned (SQ-0578).
     pub transcript_surface: bool,
+    /// Every Glk-identified leaf's ACTUAL drawn rect this frame, as `(win id,
+    /// kind, absolute screen rect)`. gvm's own layout rect reserves a 1-cell
+    /// border gutter per split whether or not the theme draws a rule there
+    /// (`upper_window_border` defaults to `None`, SQ-0821), so a mouse/hyperlink
+    /// hit-test against gvm's rect skews by every collapsed gutter between the
+    /// pane origin and the window. Recording what was actually painted — "ask
+    /// the drawing where it put the text" — is the fix (SQ-1203). Empty for the
+    /// Z-machine/Scott simple path (no Glk ids to record).
+    pub win_rects: Vec<(u32, WinKind, Rect)>,
 }
 
 /// Tally `(grids, buffers, others)` leaf windows in the tree. Used only by tests
@@ -335,6 +344,7 @@ fn render_story_pane_frame(
             total_rows: t.total_rows,
             links,
             transcript_surface: true,
+            win_rects: Vec::new(),
         };
     }
 
@@ -347,8 +357,9 @@ fn render_story_pane_frame(
     // width. Render into the box and keep the margin blank (SQ-0303).
     let inner = content_bounds(model, area);
     let mut grid_links: Vec<((u16, u16), u32)> = Vec::new();
+    let mut win_rects: Vec<(u32, WinKind, Rect)> = Vec::new();
     let gc = grid_scheme(state, model);
-    let metrics = render_node(&model.root, &model.status, char_mode, introspect, state, inner, buf, gi, &mut grid_links, &gc);
+    let metrics = render_node(&model.root, &model.status, char_mode, introspect, state, inner, buf, gi, &mut grid_links, &mut win_rects, &gc);
     // Keep gvm's snap-margin (the strips of `area` outside `inner`) clean, so no
     // stale cells from a prior frame or the map remain beside the window tree.
     fill_margin(area, inner, model, state, buf);
@@ -374,8 +385,10 @@ fn render_story_pane_frame(
         total_rows: 0,
         links: Vec::new(),
         transcript_surface: false,
+        win_rects: Vec::new(),
     });
     m.links.extend(grid_links);
+    m.win_rects.extend(win_rects);
     m
 }
 
@@ -598,6 +611,7 @@ fn render_node(
     buf: &mut Buffer,
     game_input: Option<ratatui::style::Style>,
     links: &mut Vec<((u16, u16), u32)>,
+    win_rects: &mut Vec<(u32, WinKind, Rect)>,
     grid_colors: &ColorScheme,
 ) -> Option<StoryPaneMetrics> {
     if area.width == 0 || area.height == 0 {
@@ -611,7 +625,7 @@ fn render_node(
             let sep_style = border.then(|| separator_style(*vertical, grid_colors)).flatten();
             let (a1, sep, a2) =
                 split_area_bordered(area, *vertical, split.fixed, u16::from(sep_style.is_some()));
-            let m1 = render_node(first, status, char_mode, introspect, state, a1, buf, game_input, links, grid_colors);
+            let m1 = render_node(first, status, char_mode, introspect, state, a1, buf, game_input, links, win_rects, grid_colors);
             // Only rule between two VISIBLE siblings. A border before a collapsed
             // (zero-extent) window — e.g. Counterfeit Monkey's image pane before it
             // shows a letter — would otherwise draw a stray rule with nothing beyond
@@ -632,7 +646,7 @@ fn render_node(
                     if state.config.honor_game_colours { (*key_fg, *key_bg) } else { (None, None) };
                 draw_window_separator(sep, *vertical, bs, kf, kb, grid_colors, buf);
             }
-            let m2 = render_node(second, status, char_mode, introspect, state, a2, buf, game_input, links, grid_colors);
+            let m2 = render_node(second, status, char_mode, introspect, state, a2, buf, game_input, links, win_rects, grid_colors);
             m1.or(m2)
         }
         WinNode::Grid(g) => {
@@ -647,11 +661,21 @@ fn render_node(
             let mut frameless = g.clone();
             frameless.border = BorderPref::NoBorder;
             draw_grid(&frameless, frameless.active_rows, frameless.cursor, show_cursor, grid_colors, area, buf, state.config.honor_game_colours, links);
+            // Record the rect this grid was ACTUALLY drawn at (SQ-1203): a
+            // Glk-identified grid's own click/hyperlink hit-test uses this, not
+            // gvm's layout rect, which reserves a border gutter the theme may
+            // draw thinner (or not at all, SQ-0821).
+            if g.win != 0 {
+                win_rects.push((g.win, WinKind::Grid, area));
+            }
             None
         }
         WinNode::Buffer(b) => {
             if b.primary {
                 let area = reserve_text_margin(area, state, state.colors.theme.get("transcript").style, buf);
+                if b.win != 0 {
+                    win_rects.push((b.win, WinKind::Buffer, area));
+                }
                 let t = render_transcript(status, introspect, state, area, buf, game_input);
                 Some(StoryPaneMetrics {
                     scrollbar: t.scrollbar,
@@ -661,9 +685,13 @@ fn render_node(
                     total_rows: t.total_rows,
                     links: t.links,
                     transcript_surface: true,
+                    win_rects: Vec::new(),
                 })
             } else {
                 render_inline_buffer(b, state, area, buf);
+                if b.win != 0 {
+                    win_rects.push((b.win, WinKind::Buffer, area));
+                }
                 None
             }
         }
@@ -684,6 +712,9 @@ fn render_node(
                 // No image protocol: approximate the detailed canvas as colour
                 // cells rather than blanking it (SQ-0520).
                 crate::render::graphics::render_graphics_as_cells(gw, area, buf, true);
+            }
+            if gw.win != 0 {
+                win_rects.push((gw.win, WinKind::Graphics, area));
             }
             None
         }
@@ -1208,7 +1239,7 @@ fn render_node(
                             // before: there is no transcript on this frame.
                             None
                         } else {
-                            render_node(&story.node, status, char_mode, introspect, state, viewport, buf, game_input, links, grid_colors)
+                            render_node(&story.node, status, char_mode, introspect, state, viewport, buf, game_input, links, win_rects, grid_colors)
                         };
                         // SQ-0584: a chrome window the game ERASED more recently than it
                         // printed prose is an opaque panel over the story — advent.z6's
@@ -1793,6 +1824,7 @@ fn render_node(
                         total_rows: rm.total_rows,
                         links: Vec::new(),
                         transcript_surface: true,
+                        win_rects: Vec::new(),
                     });
                 }
                 return None;
@@ -1986,7 +2018,7 @@ fn render_node(
                     for s in &sides {
                         let w = s.w.min(area.right().saturating_sub(s.x));
                         let rect = Rect::new(s.x, mid_y, w, mid_h);
-                        render_node(&s.win.node, status, char_mode, introspect, state, rect, buf, game_input, links, grid_colors);
+                        render_node(&s.win.node, status, char_mode, introspect, state, rect, buf, game_input, links, win_rects, grid_colors);
                     }
                     let story_area = Rect::new(story_x, mid_y, story_right.saturating_sub(story_x), mid_h);
                     {
@@ -2016,7 +2048,7 @@ fn render_node(
                             cells: (story_area.x, story_area.y, story_area.width, story_area.height),
                         });
                     }
-                    let m = render_node(&story.node, status, char_mode, introspect, state, story_area, buf, game_input, links, grid_colors);
+                    let m = render_node(&story.node, status, char_mode, introspect, state, story_area, buf, game_input, links, win_rects, grid_colors);
                     // SQ-0584: erase fields go down over the transcript first — this is
                     // where a painted MENU screen lands (SQ-0484 routes it here out of
                     // hybrid), so without them the menu's text floats over the story it
@@ -2100,7 +2132,7 @@ fn render_node(
                         // background window) shows through the empty text areas rather
                         // than being painted over by the buffer's opaque bg fill.
                         let mut scratch = Buffer::empty(sub);
-                        let m = render_node(&item.node, status, char_mode, introspect, state, sub, &mut scratch, game_input, links, grid_colors);
+                        let m = render_node(&item.node, status, char_mode, introspect, state, sub, &mut scratch, game_input, links, win_rects, grid_colors);
                         result = result.or(m);
                         for yy in sub.top()..sub.bottom() {
                             for xx in sub.left()..sub.right() {
@@ -2126,7 +2158,7 @@ fn render_node(
                         crate::render::graphics::render_graphics_as_cells(gw, sub, buf, true);
                     }
                     _ => {
-                        let m = render_node(&item.node, status, char_mode, introspect, state, sub, buf, game_input, links, grid_colors);
+                        let m = render_node(&item.node, status, char_mode, introspect, state, sub, buf, game_input, links, win_rects, grid_colors);
                         result = result.or(m);
                     }
                 }
@@ -10380,6 +10412,7 @@ mod tests {
 
     fn inline_buffer(line: &str) -> BufferWindow {
         BufferWindow {
+            win: 0,
             lines: vec![line.to_string()],
             runs: vec![Vec::new()],
             para: vec![crate::state::ParaFmt::default()],
@@ -10414,7 +10447,7 @@ mod tests {
             WinNode::Graphics(crate::engine::GraphicsWindow { win: 1, canvas: std::sync::Arc::new(img), version: 1, upscale: false })
         }
         fn buf(bg: u32, primary: bool) -> WinNode {
-            WinNode::Buffer(BufferWindow { lines: vec![], runs: vec![], para: vec![], images: vec![], scroll: 0, primary, bg: Some(bg), fg: None, panel: false, px_runs: Vec::new(), reads_input: false })
+            WinNode::Buffer(BufferWindow { win: 0, lines: vec![], runs: vec![], para: vec![], images: vec![], scroll: 0, primary, bg: Some(bg), fg: None, panel: false, px_runs: Vec::new(), reads_input: false })
         }
         fn grid(bg: u32) -> WinNode {
             let mut g = GridWindow::default();
@@ -10985,6 +11018,7 @@ mod tests {
             scaled: None, margin_px: None,
         };
         let b = BufferWindow {
+            win: 0,
             lines: vec!["a".to_string(), String::new(), "b".to_string()],
             runs: vec![Vec::new(), Vec::new(), Vec::new()],
             para: vec![crate::state::ParaFmt::default(); 3],
@@ -11912,6 +11946,7 @@ mod tests {
             x: 0, y: 6, w: 40, h: 1, x_px: 0, y_px: 96, w_px: 320, h_px: 16,
             left_margin: 0, right_margin: 0,
             node: WinNode::Grid(crate::engine::GridWindow {
+                win: 0,
                 fill: None,
                 cols: 40, rows: 1, cells: vec![], active_rows: 1, cursor: (1, 1),
                 cursor_active: false, border: crate::engine::BorderPref::Unspecified,
@@ -11934,8 +11969,9 @@ mod tests {
         let area = Rect::new(0, 0, 40, 25);
         let mut buf = Buffer::empty(area);
         let mut links = Vec::new();
+        let mut win_rects = Vec::new();
         let metrics = render_node(
-            &model.root, &model.status, false, None, &state, area, &mut buf, None, &mut links, &state.colors,
+            &model.root, &model.status, false, None, &state, area, &mut buf, None, &mut links, &mut win_rects, &state.colors,
         );
         assert!(metrics.is_some(), "ring path taken (it returns inset metrics)");
         let screen: String = (0..area.height)
@@ -11967,8 +12003,9 @@ mod tests {
         let area = Rect::new(0, 0, 40, 25);
         let mut buf = Buffer::empty(area);
         let mut links = Vec::new();
+        let mut win_rects = Vec::new();
         let m = render_node(
-            &model.root, &model.status, false, None, &state, area, &mut buf, None, &mut links, &state.colors,
+            &model.root, &model.status, false, None, &state, area, &mut buf, None, &mut links, &mut win_rects, &state.colors,
         );
         let m = m.expect("hybrid story viewport returns primary-buffer metrics");
         assert!(m.viewport_rows > 0, "story viewport has rows");
@@ -12018,6 +12055,7 @@ mod tests {
             x: 12, y: 8, w: 1, h: 3, x_px: 100, y_px: 129, w_px: 1, h_px: 48,
             left_margin: 0, right_margin: 0,
             node: WinNode::Grid(crate::engine::GridWindow {
+                win: 0,
                 fill: None,
                 cols: 1, rows: 3, cells: vec![], active_rows: 3, cursor: (1, 1),
                 cursor_active: false, border: crate::engine::BorderPref::Unspecified,
@@ -12035,8 +12073,9 @@ mod tests {
         let area = Rect::new(0, 0, 40, 25);
         let mut buf = Buffer::empty(area);
         let mut links = Vec::new();
+        let mut win_rects = Vec::new();
         let _ = render_node(
-            &model.root, &model.status, false, None, &state, area, &mut buf, None, &mut links, &state.colors,
+            &model.root, &model.status, false, None, &state, area, &mut buf, None, &mut links, &mut win_rects, &state.colors,
         );
         // A menu screen publishes a full terminal transcript geometry (the cell
         // path), NOT a raster/hybrid image — so the transcript renders as real cells.
@@ -12085,6 +12124,7 @@ mod tests {
             x: 12, y: 8, w: 1, h: 3, x_px: 100, y_px: 129, w_px: 1, h_px: 48,
             left_margin: 0, right_margin: 0,
             node: WinNode::Grid(crate::engine::GridWindow {
+                win: 0,
                 fill: None,
                 cols: 1, rows: 3, cells: vec![], active_rows: 3, cursor: (1, 1),
                 cursor_active: false, border: crate::engine::BorderPref::Unspecified,
@@ -12102,8 +12142,9 @@ mod tests {
         let area = Rect::new(0, 0, 40, 25);
         let mut buf = Buffer::empty(area);
         let mut links = Vec::new();
+        let mut win_rects = Vec::new();
         let _ = render_node(
-            &model.root, &model.status, false, None, &state, area, &mut buf, None, &mut links, &state.colors,
+            &model.root, &model.status, false, None, &state, area, &mut buf, None, &mut links, &mut win_rects, &state.colors,
         );
         let path = state.v6_path_log.borrow().last().map(|(l, _)| l.clone()).unwrap_or_default();
         assert_eq!(
@@ -12228,8 +12269,9 @@ mod tests {
         let area = Rect::new(0, 0, 40, 25);
         let mut buf = Buffer::empty(area);
         let mut links = Vec::new();
+        let mut win_rects = Vec::new();
         let metrics = render_node(
-            &model.root, &model.status, false, None, &state, area, &mut buf, None, &mut links, &state.colors,
+            &model.root, &model.status, false, None, &state, area, &mut buf, None, &mut links, &mut win_rects, &state.colors,
         );
 
         // Non-vacuity: this frame must actually reach the ring. If a future change to
@@ -12334,6 +12376,7 @@ mod tests {
             x: 0, y: 0, w: 1, h: 1, x_px: 0, y_px: 0, w_px, h_px: 16,
             left_margin: 0, right_margin: 0,
             node: WinNode::Grid(crate::engine::GridWindow {
+                win: 0,
                 fill: None,
                 cols: 1, rows: 1, cells: vec![], active_rows: 1, cursor: (1, 1),
                 cursor_active: false, border: crate::engine::BorderPref::Unspecified,
@@ -12437,8 +12480,9 @@ mod tests {
         let area = Rect::new(0, 0, 40, 25);
         let mut buf = Buffer::empty(area);
         let mut links = Vec::new();
+        let mut win_rects = Vec::new();
         let m = render_node(
-            &model.root, &model.status, false, None, &state, area, &mut buf, None, &mut links, &state.colors,
+            &model.root, &model.status, false, None, &state, area, &mut buf, None, &mut links, &mut win_rects, &state.colors,
         );
         let m = m.expect("raster path now reports story-box scroll metrics");
         assert_eq!(
@@ -12542,6 +12586,7 @@ mod tests {
             x: 0, y: 0, w: 40, h: 1, x_px: 0, y_px: 0, w_px: 320, h_px: 16,
             left_margin: 0, right_margin: 0,
             node: WinNode::Grid(crate::engine::GridWindow {
+                win: 0,
                 fill: None,
                 cols: 40, rows: 1, cells: vec![], active_rows: 1, cursor: (1, 1),
                 cursor_active: false, border: crate::engine::BorderPref::Unspecified,
@@ -12586,8 +12631,9 @@ mod tests {
         let area = Rect::new(0, 0, 40, 25);
         let mut buf = Buffer::empty(area);
         let mut links = Vec::new();
+        let mut win_rects = Vec::new();
         let m = render_node(
-            &model.root, &model.status, false, None, &state, area, &mut buf, None, &mut links, &state.colors,
+            &model.root, &model.status, false, None, &state, area, &mut buf, None, &mut links, &mut win_rects, &state.colors,
         );
         let m = m.expect("the cell path returns the primary-buffer transcript metrics");
 
@@ -12632,8 +12678,9 @@ mod tests {
         let area = Rect::new(0, 0, 40, 25);
         let mut buf = Buffer::empty(area);
         let mut links = Vec::new();
+        let mut win_rects = Vec::new();
         let _ = render_node(
-            &model.root, &model.status, false, None, &state, area, &mut buf, None, &mut links, &state.colors,
+            &model.root, &model.status, false, None, &state, area, &mut buf, None, &mut links, &mut win_rects, &state.colors,
         );
 
         let map = state

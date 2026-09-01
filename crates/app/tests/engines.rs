@@ -50,6 +50,8 @@ mod apple_iigs_profile;
 mod apple_release_artwork;
 #[path = "suites/glulx_maze_identity.rs"]
 mod glulx_maze_identity;
+#[path = "suites/glulx_mouse_hyperlink_drawn_rect.rs"]
+mod glulx_mouse_hyperlink_drawn_rect;
 #[path = "suites/glulx_pending_io_host_restore.rs"]
 mod glulx_pending_io_host_restore;
 #[path = "suites/glulx_resume_location.rs"]

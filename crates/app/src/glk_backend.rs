@@ -854,6 +854,7 @@ impl AppGlk {
             }
         }
         GridWindow {
+            win: id,
             fill: None, // v6-only erase fill (SQ-0584)
             cols,
             rows,
@@ -878,12 +879,12 @@ impl AppGlk {
         if self.primary == Some(id) {
             // The primary buffer is mirrored by the app transcript; carry no
             // inline content (the renderer draws it via the transcript path).
-            return BufferWindow { primary: true, ..Default::default() };
+            return BufferWindow { win: id, primary: true, ..Default::default() };
         }
         let buf = self.buffers.get(&id);
         let (lines, runs, para, images) = buf.map(|b| log_to_lines(&b.log)).unwrap_or_default();
         let scroll = buf.map(|b| b.scroll).unwrap_or(0);
-        BufferWindow { lines, runs, para, images, scroll, primary: false, bg: None, fg: None, panel: false, px_runs: Vec::new(), reads_input: false }
+        BufferWindow { win: id, lines, runs, para, images, scroll, primary: false, bg: None, fg: None, panel: false, px_runs: Vec::new(), reads_input: false }
     }
 }
 
