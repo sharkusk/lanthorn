@@ -70,6 +70,10 @@ step 3 fails here instead of shipping half-drained docs.
   Public, or `docker pull ghcr.io/sharkusk/lanthorn:latest` fails for anyone
   not logged in. One-time, but easy to forget — nothing in either workflow
   does it for you.
+- If **Docker** failed on the tag while **Release** succeeded, do not re-tag
+  (that re-runs the release build too). Run the Docker workflow by hand
+  naming the tag — `gh workflow run docker.yml --ref main -f tag=v0.4.0` —
+  and it builds that tag and pushes it, exactly as the tag push would have.
 
 ## 6. Afterwards
 

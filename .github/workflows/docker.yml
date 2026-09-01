@@ -3,7 +3,10 @@ name: Docker
 # Build the container image and push it to GitHub Container Registry on every
 # version tag (the same trigger as release.yml, so a release and its image
 # stay in step). Run manually (Actions -> Docker -> Run workflow) for a dry
-# run: it builds the image WITHOUT pushing.
+# run: it builds the image WITHOUT pushing. Name an existing tag in the `tag`
+# input and the manual run builds THAT tag and pushes it — the recovery path
+# when the tag-triggered run failed after the release itself was published
+# (v0.4.0's did, on the checkout; see below).
 #
 # The image itself, its two run modes, and the volumes it expects are
 # documented in docs/internals/docker.md.
@@ -12,7 +15,12 @@ on:
   push:
     tags:
       - 'v*'
-  workflow_dispatch: {}
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Existing release tag to build AND push (e.g. v0.4.0); empty builds this branch without pushing'
+        required: false
+        default: ''
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
@@ -25,17 +33,25 @@ jobs:
     permissions:
       contents: read
       packages: write
+    env:
+      # The tag being released: the pushed one, or the one named by hand.
+      # Empty means a dry run.
+      RELEASE_TAG: ${{ github.event_name == 'push' && github.ref_name || inputs.tag }}
     steps:
-      # fetch-tags so buildinfo's `git describe --exact-match` sees the tag
-      # inside the build and stamps a clean version instead of `x.y.z (hash)`.
+      # No `fetch-tags` here. On a tag push the checkout already lands the
+      # commit under refs/tags/<name>, which is all buildinfo's `git describe
+      # --exact-match` needs for a clean version — and `fetch-tags: true` on an
+      # ANNOTATED tag push fails outright ("Cannot fetch both <sha> and
+      # refs/tags/v0.4.0 to refs/tags/v0.4.0", actions/checkout#1467), which is
+      # how v0.4.0 shipped without its image.
       - uses: actions/checkout@v4
         with:
-          fetch-tags: true
+          ref: ${{ env.RELEASE_TAG }}
 
       - uses: docker/setup-buildx-action@v3
 
       - name: Log in to GHCR
-        if: github.event_name == 'push'
+        if: env.RELEASE_TAG != ''
         uses: docker/login-action@v3
         with:
           registry: ghcr.io
@@ -51,16 +67,16 @@ jobs:
         with:
           images: ghcr.io/${{ github.repository_owner }}/lanthorn
           tags: |
-            type=semver,pattern={{version}}
-            type=semver,pattern={{major}}.{{minor}}
-            type=raw,value=latest,enable=${{ startsWith(github.ref, 'refs/tags/') && !contains(github.ref_name, '-') }}
-            type=sha,enable=${{ github.event_name == 'workflow_dispatch' }}
+            type=semver,pattern={{version}},value=${{ env.RELEASE_TAG }},enable=${{ env.RELEASE_TAG != '' }}
+            type=semver,pattern={{major}}.{{minor}},value=${{ env.RELEASE_TAG }},enable=${{ env.RELEASE_TAG != '' }}
+            type=raw,value=latest,enable=${{ env.RELEASE_TAG != '' && !contains(env.RELEASE_TAG, '-') }}
+            type=sha,enable=${{ env.RELEASE_TAG == '' }}
 
       - name: Build (and push, on a tag)
         uses: docker/build-push-action@v6
         with:
           context: .
-          push: ${{ github.event_name == 'push' }}
+          push: ${{ env.RELEASE_TAG != '' }}
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
           cache-from: type=gha
