@@ -18,6 +18,8 @@ mod pty_stream;
 
 #[path = "suites/cast_manifest.rs"]
 mod cast_manifest;
+#[path = "suites/docs_reference.rs"]
+mod docs_reference;
 #[path = "suites/gallery_manifest.rs"]
 mod gallery_manifest;
 #[path = "suites/pty_emitted_stream.rs"]

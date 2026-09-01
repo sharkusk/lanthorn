@@ -1,5 +1,7 @@
 # Interpreter (Z-machine, Glulx & Scott Adams)
 
+> For players, the short version is in [the guide](../guide/graphics-and-terminals.md).
+
 [← back to README](../../README.md)
 
 Point lanthorn at a story and it works out the format from the file itself and
@@ -1552,7 +1554,7 @@ Amiga floppy or anywhere else.
 
 Sound always plays on the local device lanthorn runs on; to route audio from a
 remote/SSH session back to your own machine, see
-[`docs/remote-sound.md`](../remote-sound.md). Unimplemented-opcode warnings
+[`docs/internals/remote-sound.md`](remote-sound.md). Unimplemented-opcode warnings
 surface in the transcript as meta lines (hidden by `/filter story`) rather than
 spilling onto stderr.
 

@@ -70,11 +70,11 @@ pub enum Line {
 
 /// One documented setting: TOML key, the literal to show, whether that literal is
 /// the real default, and the comment lines above it (no leading `#`).
-struct Row {
-    key: &'static str,
-    value: &'static str,
-    line: Line,
-    doc: &'static [&'static str],
+pub(crate) struct Row {
+    pub(crate) key: &'static str,
+    pub(crate) value: &'static str,
+    pub(crate) line: Line,
+    pub(crate) doc: &'static [&'static str],
 }
 
 const fn d(key: &'static str, value: &'static str, doc: &'static [&'static str]) -> Row {
@@ -89,10 +89,10 @@ const fn live(key: &'static str, value: &'static str, doc: &'static [&'static st
 
 /// A group of settings under a banner comment. `table` names the TOML table the rows
 /// belong to (`Some("[search]")`), or `None` for top-level keys.
-struct Group {
-    banner: &'static str,
-    table: Option<&'static str>,
-    rows: &'static [Row],
+pub(crate) struct Group {
+    pub(crate) banner: &'static str,
+    pub(crate) table: Option<&'static str>,
+    pub(crate) rows: &'static [Row],
 }
 
 const STARTUP: &[Row] = &[
@@ -573,7 +573,7 @@ const KEYMAP: &[Row] = &[d(
     ],
 )];
 
-const GROUPS: &[Group] = &[
+pub(crate) const GROUPS: &[Group] = &[
     Group { banner: "Startup and files", table: None, rows: STARTUP },
     Group { banner: "Saving and undo", table: None, rows: SAVES },
     Group { banner: "Interface", table: None, rows: INTERFACE },

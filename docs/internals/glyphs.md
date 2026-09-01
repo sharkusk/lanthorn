@@ -1,5 +1,7 @@
 # Missing or corrupted characters and glyphs
 
+> For players, the short version is in [the guide](../guide/looks.md).
+
 If your map is peppered with tofu boxes or question marks, your font is missing
 some of the line art lanthorn draws with. Any mono-space Nerd Font carries the
 lot: https://www.nerdfonts.com
@@ -45,7 +47,7 @@ file is a legacy location lanthorn will tell you to move.
 Diagonal *arrowheads* are a different thing entirely — they live in the ancient
 Arrows block, so if those are missing, something else is wrong. Individual glyphs
 can also be swapped one at a time under `[symbols.overrides]`; see
-[customization & configuration](docs/features/customization.md).
+[customization & configuration](customization.md).
 
 Nerd Font glyphs themselves (Private Use Area) are strictly opt-in — you only
 touch them if you choose a `nerdfont` preset for `arrow_set` or `portal_icons`.

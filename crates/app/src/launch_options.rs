@@ -50,7 +50,7 @@
 //! reachable by naming it outright, through `--pictures` or the game's own
 //! `pictures` key, which is where an oddly-named file (`FMVPOKER.EG1` is Zork
 //! Zero's EGA art under a fan game's name) has always belonged. The dialog says
-//! so on screen; see `docs/features/v6-graphics.md`.
+//! so on screen; see `docs/internals/v6-graphics.md`.
 
 use std::path::{Path, PathBuf};
 
@@ -171,7 +171,7 @@ impl ArtCandidate {
     /// (flank horizontal speckle 62.9 raw, 12.7 fused, against the MCGA flank's
     /// 12.3 in its own 320-wide space). That is a property of two pictures on one
     /// plate, not of the rendition a person is picking, and the honest place for
-    /// it is `docs/features/v6-graphics.md` — where it is, with the measurements.
+    /// it is `docs/internals/v6-graphics.md` — where it is, with the measurements.
     /// Widening the kernel until the pillars fuse mushes the compass rose's
     /// lettering on the same frame, which is why it was not widened.
     pub fn caveat(&self) -> Option<&'static str> {

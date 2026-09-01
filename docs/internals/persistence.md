@@ -1,6 +1,8 @@
 # The persistence model
 
-[← back to README](../README.md) · see also [Saves & persistence (feature highlights)](features/saves.md)
+> For players, the short version is in [the guide](../guide/saves-and-rewind.md).
+
+[← back to README](../../README.md) · see also [Saves & persistence (feature highlights)](saves.md)
 
 lanthorn persists game progress at three distinct layers. They coexist and serve
 different purposes: the game's own save, the host emulator snapshot, and an

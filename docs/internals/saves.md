@@ -1,5 +1,7 @@
 # Saves & persistence
 
+> For players, the short version is in [the guide](../guide/saves-and-rewind.md).
+
 [← back to README](../../README.md)
 
 Quit mid-dungeon and come back to exactly where you stood — same room, same
@@ -69,7 +71,7 @@ let the game save itself, or never save at all.
   init cache, autosave, and undo slots) are written and read **silently**, with no
   prompt, and stay hidden from the player saves list; because they persist per
   story, a relaunch auto-restores them so the game skips its long init (SQ-0296).
-  → [persistence model](../persistence.md)
+  → [persistence model](persistence.md)
 - **Rewind, replay, resume.** Switch on `record_turn_history` and lanthorn keeps
   a per-turn history — each turn's game save plus a snapshot of the map and
   transcript — inside the `.lanthorn` archive. Open the replay modal (the leader

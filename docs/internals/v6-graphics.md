@@ -1,5 +1,7 @@
 # Graphical Z-machine v6
 
+> For players, the short version is in [the guide](../guide/graphics-and-terminals.md).
+
 [← back to README](../../README.md) · see also [Interpreter](interpreter.md) · [Customization](customization.md)
 
 Z-machine **v6** is Infocom's graphical story format — the one behind *Zork
@@ -3423,4 +3425,4 @@ it — rasterized the bar (SQ-1156).
   specific render state (window geometry, floats, pictures) across a restore
   so the chrome comes back pixel-identical isn't verified yet. Standard
   in-game `@save`/`@restore` follows the normal Z-machine path (see
-  [the persistence model](../persistence.md)).
+  [the persistence model](persistence.md)).

@@ -6,7 +6,7 @@ name: Docker
 # run: it builds the image WITHOUT pushing.
 #
 # The image itself, its two run modes, and the volumes it expects are
-# documented in docs/features/docker.md.
+# documented in docs/internals/docker.md.
 
 on:
   push:

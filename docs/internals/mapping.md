@@ -1,5 +1,7 @@
 # Live automapping
 
+> For players, the short version is in [the guide](../guide/the-map.md).
+
 [← back to README](../../README.md)
 
 Play the game; the map draws itself. Every room you enter and every exit you take

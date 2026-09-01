@@ -817,7 +817,7 @@ pub fn slash_names() -> Vec<String> {
 ///
 /// The story browser's commands are omitted: this list is what you can *type*,
 /// and the browser is a pre-game loop with no command line (SQ-0796). They are
-/// documented as key bindings instead — see `docs/features/customization.md`.
+/// documented as key bindings instead — see `docs/internals/customization.md`.
 pub fn help_text(prefix: char) -> Vec<String> {
     let mut lines = vec![
         format!("Slash commands (type {prefix}<command> [args]):"),

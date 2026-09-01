@@ -1,5 +1,7 @@
 # Customization & configuration
 
+> For players, the short version is in [the guide](../guide/looks.md).
+
 [← back to README](../../README.md)
 
 ## Customization
