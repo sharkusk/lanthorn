@@ -820,8 +820,8 @@ re-seed the new template, or hand-write the new shape from
 - **Which boot medium answers for a system typeface** — `system_font_disk`
   (default empty) picks between the boot media you keep in `~/.lanthorn/` when
   more than one carries the face a machine is asking for. Drop a Mac OS System
-  startup disk, an Amiga Workbench floppy or an Amiga **Kickstart ROM** (`*.rom`)
-  in there and a Version 6 game off that machine's own media is drawn with the
+  startup disk or an Amiga **Kickstart ROM** (`*.rom`) in there and a Version 6
+  game off that machine's own media is drawn with the
   typeface the machine really used — Geneva on a Macintosh, which lives in the
   System file and on no Infocom disk, and topaz 8 on an Amiga, which lives in
   Kickstart and on no floppy at all (a Workbench drawer carries topaz **11** and
@@ -829,14 +829,14 @@ re-seed the new template, or hand-write the new shape from
   nothing is copied; the media stay yours, the same arrangement `stories/` runs
   on, and with none there the built-in face answers exactly as before. This key
   is only a **tiebreak**: every medium of the right kind is read and the faces
-  pool together, so a case-insensitive piece of a filename (`"1.3"` finds the
-  Workbench 1.3 floppy in a drawer holding both, `"Kick"` promotes your ROM)
-  moves that one to the front without excluding any other — name a file that
+  pool together, so a case-insensitive piece of a filename (`"6.0.8"` finds the
+  System 6.0.8 startup disk in a folder holding System 6 and 7, `"Kick"`
+  promotes your ROM) moves that one to the front without excluding any other —
+  name a file that
   lacks the face and the rest still answer. Worth setting when two disks carry
   the same face from different releases of the operating system, since a System 7
-  Geneva is not the 1988 one; not worth setting otherwise, and on Workbench 1.2
-  versus 1.3 it changes nothing at all, because those two ship identical font
-  drawers. The picker's info panel lists every face found, grouped by the medium
+  Geneva is not the 1988 one; not worth setting otherwise. The picker's info
+  panel lists every face found, grouped by the medium
   it came off. See
   [Graphical v6](v6-graphics.md#your-own-boot-disk-your-machines-own-typeface).
 - **Story text margins** — `text_margin_x` / `text_margin_y` (default 0) reserve

@@ -3242,9 +3242,9 @@ screen: the status bar's `Banquet Hall` steps a metronome 7 pixels a character,
 and the prose two lines below advances 7, 7, 5 through `n`, `o`, `t`. Nothing on
 a game disk can draw that second line.
 
-So lanthorn asks you. Drop a **Mac OS System startup disk**, an **Amiga Workbench
-floppy** or an **Amiga Kickstart ROM** into `~/.lanthorn/` — an `.img`, an `.adf`,
-a `.rom`, any image the mounter already reads — and a Version 6 game off that
+So lanthorn asks you. Drop a **Mac OS System startup disk** or an **Amiga
+Kickstart ROM** into `~/.lanthorn/` — an `.img`, a `.rom`, any image the mounter
+already reads — and a Version 6 game off that
 machine's own media is drawn with the face the machine really used. Nothing is
 shipped, nothing is copied, nothing is licensed: the media stay yours, exactly the
 arrangement `stories/` has always run on, and a player with none there sees the

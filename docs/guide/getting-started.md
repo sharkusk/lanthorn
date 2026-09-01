@@ -53,7 +53,9 @@ fetch whatever's at the other end of it.
 A big library sorts itself into folders, and the picker follows: `Enter` on
 a folder descends into it, `Backspace` climbs back out. `Ctrl+F` searches
 the *whole* library at once, by title, author, filename or folder, no
-matter how deep a story is buried.
+matter how deep a story is buried. `Enter` plays the highlighted story; `o`
+opens its launch options first — which artwork a graphical game draws and
+which machine it plays as — see [graphics and terminals](graphics-and-terminals.md).
 
 **A multi-disk release shows up as one shelf, not a pile of disks.** Point
 lanthorn at any volume from a set — the seven Apple II floppies of *The Lost

@@ -80,10 +80,12 @@ named, off a release disk or a chosen `interpreter_number`.
 **Your own boot media, your machine's own typeface.** Neither the Macintosh
 nor the Amiga kept its body typeface on a game disk — the Macintosh drew with
 Geneva out of its System file, the Amiga with topaz out of Kickstart ROM.
-Drop a Mac OS System startup disk, an Amiga Workbench floppy, or a Kickstart
-ROM image into `~/.lanthorn/`, and a Version 6 game off that machine's own
-media is drawn with the face the machine actually used, rather than the
-built-in stand-in. Nothing is shipped or copied — the media stay yours.
+Drop a Mac OS System startup disk or an Amiga Kickstart ROM image into
+`~/.lanthorn/`, and a Version 6 game off that machine's own media is drawn
+with the face the machine actually used, rather than the built-in stand-in. (A
+Workbench floppy doesn't help: the topaz the interpreter drew with lives in
+the ROM, not on any disk Commodore shipped.) Nothing is shipped or copied —
+the media stay yours.
 
 ![Arthur's Amiga floppy drawn in its own proportional typeface](../native-font.png)
 
@@ -109,6 +111,18 @@ whole release, so the pairing between art and story is guaranteed), or a
 `pictures` line you set yourself in the story's `config.toml` sidecar, which
 always wins outright. Where a release shipped more than one rendition — MCGA,
 EGA, CGA, the Macintosh's monochrome plates — you can pick among them.
+
+**Choosing before you launch.** Select the story in the picker and press `o`
+(or `Shift+Enter`, or double-right-click the row) instead of `Enter`, and the
+launch-options dialog opens. It lists every rendition it found for *that*
+story — beside it in the folder or inside its disk image — with the picture
+count and where each one lives, and a second row picks which machine the game
+presents itself as. Pick a row and that is what the game draws; the dialog
+also shows the interpreter number your choice implies and where it came from,
+because prettier art can quietly mean a different machine. Tick the box at the
+bottom and the choice is written into the story's sidecar so it holds for
+every later launch; leave it clear and it lasts for this one only. Plain
+`Enter` never opens it — you only meet the dialog when you ask.
 
 ## Going deeper
 

@@ -145,14 +145,14 @@ itself.**
 
 - **Three engines, one player** — Z-machine v3–v8 (including graphical v6),
   Glulx, and Scott Adams, auto-detected from the file. Clean-room, pure Rust, no
-  C bindings. → [interpreter](docs/internals/interpreter.md)
+  C bindings. → [getting started](docs/guide/getting-started.md)
 - **A map that draws itself** — rooms placed, routed and de-overlapped as you
   explore, across switchable layers. Click a room and it shows you the way there.
   *Next release:* switch on the return probe and it will go and **find
   the way back** for you, in a silent throwaway copy of your game — closing the
   one-way gaps an automap is otherwise full of, and never once assuming that a
   passage runs both ways.
-  → [mapping](docs/internals/mapping.md)
+  → [the map](docs/guide/the-map.md)
 - **The original disks, as the original machines** — hand it an Amiga, Macintosh,
   Apple II, Atari ST, PC or Commodore floppy and it plays the build on that disk,
   with that machine's artwork, sound, palette and status line. Nine machines,
@@ -166,11 +166,11 @@ itself.**
   **extended** keeps raster's face while growing the story downward instead of
   letterboxing it — a tall terminal gets more rows to read, with the side art
   tiled out of its own artwork at the artist's spacing. `/set-v6-render` cycles
-  them. → [v6 graphics](docs/internals/v6-graphics.md)
+  them. → [graphics and terminals](docs/guide/graphics-and-terminals.md)
 - **Saves that remember the whole session** — map, screen and scrollback, not
   just the game's own state, whether you press Ctrl+S or the story does its own
   `SAVE`. Plus Quetzal import/export and per-turn rewind.
-  → [saves](docs/internals/saves.md)
+  → [saves and rewind](docs/guide/saves-and-rewind.md)
 - **A real terminal UI** — mouse, resizable panes, a story picker with IFDB
   search, command palette, in-game InvisiClues, transcript search, a debug
   disassembler, and a theme every part of which you can restyle.
@@ -178,7 +178,7 @@ itself.**
   word already on screen that this story's parser would accept **lights up** for
   a moment — the answer to a room description that names a dozen nouns and
   implements two.
-  → [interface](docs/internals/interface.md)
+  → [playing](docs/guide/playing.md)
 - **A light held up while you play** — *Next release:* Lanthorn's Guiding Light
   offers the words this story's parser knows, the noun you were reaching for,
   and a caution before a move that cannot be taken back. When it suggests a
@@ -187,13 +187,13 @@ itself.**
   the dictionary holds. It says so once, then marks every later line with one
   glyph in the margin — never in the story's own voice, and never a spoiler.
   `--guidance off`, `/set-guidance`, or the settings screen turns it off.
-  → [customization](docs/internals/customization.md)
+  → [playing](docs/guide/playing.md)
 - **It asks about your font once, and sets every icon from the answer** —
   *Next release:* lanthorn writes characters; the font is the terminal's, and
   nothing can ask it whether it has a glyph. So on a first launch it shows two
   rows and asks which one draws properly, then writes the answer into
   `style.toml` as preset names you can still edit. `/run-font-check` asks
-  again when you change fonts. → [customization](docs/internals/customization.md)
+  again when you change fonts. → [looks](docs/guide/looks.md)
 
 There is a great deal more than this — proportional fonts off a Kickstart ROM,
 Glk sound channels, a click-to-compose command band, screen-reader output. The
@@ -234,7 +234,7 @@ crystal is a real object with a real use; that block is where it turns up.
 Newest first, and it accumulates, so a noun named forty turns ago is still one
 click away.
 
-→ [interface](docs/internals/interface.md#playing-aids)
+→ [playing](docs/guide/playing.md)
 
 ## Play the original disks
 
@@ -300,7 +300,7 @@ release floppy the plain one — your colours, resolved through the standard
 table, exactly as the same story looks opened as a file. The artwork is the
 disk's either way.
 
-→ [interpreter](docs/internals/interpreter.md) · [v6 graphics](docs/internals/v6-graphics.md)
+→ [graphics and terminals](docs/guide/graphics-and-terminals.md)
 
 ---
 
@@ -322,7 +322,8 @@ always playable and the map always draws. Force a path with `--image-protocol`,
 or turn images off with `--images off` *(next release; today `--no-images`)*.
 
 Boxes or blank squares where glyphs should be? That is a font gap, not a bug —
-see [**missing or corrupted glyphs**](docs/internals/glyphs.md).
+see [**looks**](docs/guide/looks.md) for the font check, and
+[**troubleshooting**](docs/guide/troubleshooting.md) for the rest.
 
 ---
 
@@ -333,8 +334,8 @@ a file with `--config`); every setting has a default, so the file is optional.
 CLI flags beat the config file, which beats built-in defaults. Saves and sidecars
 live under `~/.lanthorn/saves/<story-filename>.save/` by default; `--data-dir
 <path>` relocates just those. See
-[customization & configuration](docs/internals/customization.md) and the
-[persistence model](docs/internals/persistence.md).
+[every setting](docs/reference/config.md) and
+[saves and rewind](docs/guide/saves-and-rewind.md).
 
 *Next release:* an **exported transcript** is not quite what is on screen:
 lanthorn's own guidance is marked in the margin while you play, and written out
@@ -350,7 +351,7 @@ no panes, your scrollback intact. Useful over a slow link, for a screen reader
 (`--screen-reader` emits zero escape sequences), or for debugging one engine
 without the TUI around it. They ship in every release archive.
 
-→ [**the CLI players**](docs/internals/interpreter.md)
+→ [**the command line**](docs/guide/command-line.md)
 
 ---
 
