@@ -44,7 +44,10 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      # Only on a real tag push: between releases README.md carries these tags by
+      # design, and a workflow_dispatch dry run exists to exercise the BUILDS.
       - name: No unreleased-feature tags may ship in a release
+        if: startsWith(github.ref, 'refs/tags/')
         shell: bash
         run: |
           if grep -n -i 'next release' README.md; then
