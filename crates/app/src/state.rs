@@ -1277,10 +1277,40 @@ pub enum TranscriptEdit {
     /// wrapped rows for `[..old_len]` are still exactly right, so the cache wraps
     /// the new lines and appends them.
     Appended,
-    /// An existing line was edited, inserted before, merged, removed, truncated
-    /// away, or the whole buffer was replaced. Everything wrapped so far is
-    /// suspect; the cache rebuilds.
+    /// An existing line was edited, merged, removed, truncated away, or the
+    /// whole buffer was replaced. Everything wrapped so far is suspect; the
+    /// cache rebuilds.
     Rewrote,
+    /// `count` lines were inserted starting at raw transcript index `at`,
+    /// pushing everything from `at` onward later without touching it —
+    /// `push_transcript_internal`/`_styled`'s insert-above-the-prompt
+    /// (SQ-0270), the only mutator that does this. Distinct from `Rewrote`
+    /// because the wrap cache can REPAIR through it (SQ-1179): re-wrap only
+    /// the disturbed tail rather than rebuild from line zero, since every line
+    /// before `at` provably did not move. See
+    /// [`crate::render::wrap_cache::WrapKey::plan`].
+    Inserted { at: usize, count: usize },
+}
+
+/// One unbroken run of [`TranscriptEdit::Inserted`] edits since the last
+/// opaque [`TranscriptEdit::Rewrote`] (SQ-1179).
+///
+/// `min_at` only ever needs to be the SMALLEST `at` seen: within an unbroken
+/// run the transcript only grows (an opaque rewrite — the only thing that can
+/// shrink or otherwise disturb it — resets the run), so every later insert's
+/// `at` is at or past the run's start. That means the earliest one is also the
+/// only one the wrap cache needs to compare against its own `content.len` —
+/// see `WrapKey::plan`, which resumes any repair from there regardless of how
+/// many inserts or plain appends followed it.
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct TailInsertRun {
+    /// `transcript_edits` value the run started from — i.e. right after the
+    /// last opaque rewrite. A repair is only offered when this matches the
+    /// wrap cache's OWN synced `content.edits`; otherwise some rewrite the run
+    /// doesn't account for happened after the cache was last built.
+    pub since_edits: u64,
+    /// Smallest raw transcript index any insert in this run targeted.
+    pub min_at: usize,
 }
 
 // ── Transcript filter ─────────────────────────────────────────────────────────
@@ -1295,6 +1325,22 @@ pub enum TranscriptFilter {
     Both,
     Story,
     Meta,
+}
+
+/// Does `kind` pass `filter`? The one predicate
+/// [`AppState::visible_transcript_indices_from`] filters the transcript with,
+/// pulled out so the wrap cache's SQ-1179 repair can ask the same question of
+/// a single line (whether the transcript's cached tail passed the filter at
+/// its last sync) without re-deriving the rule.
+pub(crate) fn transcript_filter_matches(filter: TranscriptFilter, kind: TranscriptKind) -> bool {
+    match filter {
+        TranscriptFilter::Both => true,
+        TranscriptFilter::Story => matches!(kind, TranscriptKind::Story | TranscriptKind::Input),
+        // Assist joins the META bucket, not the story one: `/filter story` is
+        // the player asking for 1982, and an assist is exactly what 1982 did
+        // not have (SQ-1045).
+        TranscriptFilter::Meta => matches!(kind, TranscriptKind::Meta | TranscriptKind::Warning | TranscriptKind::Assist),
+    }
 }
 
 // ── Tidy animation ────────────────────────────────────────────────────────────
@@ -2450,12 +2496,21 @@ pub struct AppState {
     /// transcript wrap cache. (SQ-0305)
     pub transcript_gen: u64,
     /// Monotonic count of transcript mutations that were NOT pure appends —
-    /// every [`TranscriptEdit::Rewrote`] (in-place edit, insert-above-prompt,
-    /// merge, truncate, wholesale replacement). `transcript_gen` moves on every
-    /// mutation and so can only say "something changed"; this says "something
-    /// that was already WRAPPED changed", which is the difference between the
-    /// wrap cache appending and rebuilding. (SQ-1034)
+    /// every [`TranscriptEdit::Rewrote`] or [`TranscriptEdit::Inserted`]
+    /// (in-place edit, insert-above-prompt, merge, truncate, wholesale
+    /// replacement). `transcript_gen` moves on every mutation and so can only
+    /// say "something changed"; this says "something that was already WRAPPED
+    /// changed", which is the difference between the wrap cache appending and
+    /// rebuilding. (SQ-1034)
     pub transcript_edits: u64,
+    /// The current unbroken run of [`TranscriptEdit::Inserted`] edits, if any
+    /// (SQ-1179) — what lets the wrap cache REPAIR through an
+    /// insert-above-the-prompt instead of rebuilding. A `Cell` because the
+    /// render path only holds `&AppState`: it clears this once a sync (of
+    /// whichever kind) has caught the wrap cache up to the current
+    /// `transcript_edits`, so the NEXT insert starts a fresh run correctly
+    /// anchored at that new baseline rather than extending a stale one.
+    pub(crate) transcript_tail_insert: std::cell::Cell<Option<TailInsertRun>>,
     /// Cache of the fully wrapped transcript rows, keyed by
     /// [`crate::render::wrap_cache::WrapKey`],
     /// so an unchanged transcript (idle redraw / scroll) is not re-wrapped and the
@@ -3372,6 +3427,7 @@ impl Default for AppState {
             clear_anchor: None,
             transcript_gen: 0,
             transcript_edits: 0,
+            transcript_tail_insert: std::cell::Cell::new(None),
             transcript_wrap: std::cell::RefCell::new(None),
             raster_wrap: std::cell::RefCell::new(None),
             map_render: std::cell::RefCell::new(None),
@@ -4605,16 +4661,7 @@ impl AppState {
         (from.min(self.transcript.len())..self.transcript.len())
             .filter(|&i| {
                 let kind = self.transcript_kinds.get(i).copied().unwrap_or(TranscriptKind::Story);
-                match self.transcript_filter {
-                    TranscriptFilter::Both => true,
-                    TranscriptFilter::Story => matches!(kind, TranscriptKind::Story | TranscriptKind::Input),
-                    // Assist joins the META bucket, not the story one: `/filter
-                    // story` is the player asking for 1982, and an assist is
-                    // exactly what 1982 did not have (SQ-1045).
-                    TranscriptFilter::Meta => {
-                        matches!(kind, TranscriptKind::Meta | TranscriptKind::Warning | TranscriptKind::Assist)
-                    }
-                }
+                transcript_filter_matches(self.transcript_filter, kind)
             })
             .collect()
     }
@@ -4679,8 +4726,25 @@ impl AppState {
     /// here touches that line.
     fn touch_transcript(&mut self, edit: TranscriptEdit) {
         self.transcript_gen = self.transcript_gen.wrapping_add(1);
-        if matches!(edit, TranscriptEdit::Rewrote) {
-            self.transcript_edits = self.transcript_edits.wrapping_add(1);
+        match edit {
+            TranscriptEdit::Appended => {}
+            TranscriptEdit::Rewrote => {
+                self.transcript_edits = self.transcript_edits.wrapping_add(1);
+                // An opaque rewrite is exactly what a repair cannot see through
+                // (SQ-1179): whatever run of inserts preceded it no longer
+                // accounts for everything that moved.
+                self.transcript_tail_insert.set(None);
+            }
+            TranscriptEdit::Inserted { at, count } => {
+                debug_assert!(count > 0, "an insert of zero lines is a no-op mischaracterized as Inserted");
+                self.transcript_edits = self.transcript_edits.wrapping_add(1);
+                let since_edits = self.transcript_edits - 1;
+                let run = match self.transcript_tail_insert.take() {
+                    Some(prev) => TailInsertRun { since_edits: prev.since_edits, min_at: prev.min_at.min(at) },
+                    None => TailInsertRun { since_edits, min_at: at },
+                };
+                self.transcript_tail_insert.set(Some(run));
+            }
         }
     }
 
@@ -4717,8 +4781,14 @@ impl AppState {
     pub fn push_transcript_internal(&mut self, text: &str, kind: TranscriptKind) {
         let base = self.insert_above_prompt_at();
         // Inline-prompt mode INSERTS above the trailing prompt, which moves a line
-        // the wrap cache has already wrapped; every other frame appends (SQ-1034).
-        self.touch_transcript(if base.is_some() { TranscriptEdit::Rewrote } else { TranscriptEdit::Appended });
+        // the wrap cache has already wrapped — but every line before that prompt
+        // provably did not move, so this is `Inserted`, not the opaque `Rewrote`,
+        // and the cache can repair through it instead of rebuilding (SQ-1179).
+        let count = text.split('\n').count();
+        self.touch_transcript(match base {
+            Some(b) => TranscriptEdit::Inserted { at: b, count },
+            None => TranscriptEdit::Appended,
+        });
         self.transcript_styles.resize(self.transcript.len(), None);
         self.transcript_runs.resize(self.transcript.len(), Vec::new());
         self.transcript_para.resize(self.transcript.len(), ParaFmt::default());
@@ -4988,8 +5058,13 @@ impl AppState {
     /// above a trailing game prompt in inline-prompt mode (SQ-0270).
     pub fn push_transcript_internal_styled(&mut self, text: &str, kind: TranscriptKind, style: ratatui::style::Style) {
         let base = self.insert_above_prompt_at();
-        // See `push_transcript_internal`: an insert above the prompt rewrites.
-        self.touch_transcript(if base.is_some() { TranscriptEdit::Rewrote } else { TranscriptEdit::Appended });
+        // See `push_transcript_internal`: an insert above the prompt is a
+        // repairable `Inserted`, not the opaque `Rewrote` (SQ-1179).
+        let count = text.split('\n').count();
+        self.touch_transcript(match base {
+            Some(b) => TranscriptEdit::Inserted { at: b, count },
+            None => TranscriptEdit::Appended,
+        });
         self.transcript_styles.resize(self.transcript.len(), None);
         self.transcript_runs.resize(self.transcript.len(), Vec::new());
         self.transcript_para.resize(self.transcript.len(), ParaFmt::default());

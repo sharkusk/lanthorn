@@ -95,6 +95,16 @@ pub(crate) struct WrapShape {
 }
 
 impl WrapShape {
+    /// Is `self` identical to `other` in every field EXCEPT `clear_anchor`?
+    ///
+    /// Split out because a moved anchor is not always a rebuild (SQ-1179): it
+    /// only ever changes top-anchoring/windowing, never where a line breaks,
+    /// so [`WrapKey::plan`] gives it its own — narrower — safety check instead
+    /// of folding it into a blanket shape comparison.
+    fn eq_ignoring_anchor(&self, other: &WrapShape) -> bool {
+        WrapShape { clear_anchor: other.clear_anchor, ..*self } == *other
+    }
+
     /// Gather every layout fact from `state`. `width` is the caller's because it
     /// is the one fact the two paths derive differently — terminal columns
     /// against the native prose box.
@@ -220,13 +230,46 @@ impl WrapKey {
     /// [`WrapInk::matches`] walks a theme map, and neither clones. The hot path is
     /// a frame where nothing moved at all.
     pub(crate) fn plan(&self, state: &AppState, width: u16) -> WrapPlan {
-        if self.shape != WrapShape::of(state, width) {
+        let cur_shape = WrapShape::of(state, width);
+        if !self.shape.eq_ignoring_anchor(&cur_shape) {
             return WrapPlan::Rebuild;
         }
-        if self.content != WrapContent::of(state, self.content.len) {
-            return WrapPlan::Rebuild;
+        // A moved screen-clear anchor is not, by itself, a rewrap (SQ-1179): it
+        // only ever moves top-anchoring/windowing, never where a line breaks.
+        // Safe whenever the new anchor sits at or after this cache's own
+        // synced length — exactly what `mark_screen_clear` always sets it to
+        // — because every already-cached filtered line then unconditionally
+        // precedes it, with no need to inspect which. An anchor moved to
+        // somewhere EARLIER (the truncation-adjacent case `WrapShape`'s own
+        // doc names) is not provably safe this way and rebuilds instead.
+        let anchor_moved = self.shape.clear_anchor != cur_shape.clear_anchor;
+        if anchor_moved {
+            let safe = match cur_shape.clear_anchor {
+                None => true,
+                Some(a) => a >= self.content.len,
+            };
+            if !safe {
+                return WrapPlan::Rebuild;
+            }
         }
         if !self.ink.matches(state) {
+            return WrapPlan::Rebuild;
+        }
+        // (A) SQ-1179: an unbroken run of tail-inserts since this cache was
+        // synced can be REPAIRED — re-wrap only the disturbed tail — instead
+        // of rebuilt from line zero. Checked before the generic content
+        // fingerprint below, which a genuine insert deliberately fails: the
+        // fingerprinted position (`content.len - 1`) now holds different
+        // text, because the line that used to be there moved.
+        if self.content.len > 0 {
+            if let Some(run) = state.transcript_tail_insert.get() {
+                let at = self.content.len - 1;
+                if run.since_edits == self.content.edits && run.min_at >= at && state.transcript.len() > self.content.len {
+                    return WrapPlan::Repair { at };
+                }
+            }
+        }
+        if self.content != WrapContent::of(state, self.content.len) {
             return WrapPlan::Rebuild;
         }
         match state.transcript.len().cmp(&self.content.len) {
@@ -235,8 +278,8 @@ impl WrapKey {
             // index past the end of the wrapped rows, so it is stated rather than
             // assumed.
             std::cmp::Ordering::Less => WrapPlan::Rebuild,
-            std::cmp::Ordering::Equal => WrapPlan::Reuse,
-            std::cmp::Ordering::Greater => WrapPlan::Append { from: self.content.len },
+            std::cmp::Ordering::Equal if !anchor_moved => WrapPlan::Reuse,
+            std::cmp::Ordering::Equal | std::cmp::Ordering::Greater => WrapPlan::Append { from: self.content.len },
         }
     }
 }
@@ -246,9 +289,15 @@ impl WrapKey {
 pub(crate) enum WrapPlan {
     /// Nothing moved: window the cached rows and draw.
     Reuse,
-    /// Content grew and nothing already wrapped moved: wrap source lines from
-    /// `from` onwards and extend the product.
+    /// Content grew (and/or the screen-clear anchor moved to a position that
+    /// cannot disturb what is already cached) and nothing already wrapped
+    /// moved: wrap source lines from `from` onwards and extend the product.
     Append { from: usize },
+    /// Exactly an unbroken run of tail-inserts since this cache was synced
+    /// (SQ-1179): every line before `at` provably did not move, so only the
+    /// tail from `at` — the old cached tail line's raw index — needs
+    /// re-wrapping, not the whole product.
+    Repair { at: usize },
     /// A layout fact moved (or something already wrapped changed): throw the
     /// product away and wrap from line zero.
     Rebuild,
@@ -282,9 +331,29 @@ pub(crate) struct CellWrapCache {
     /// The float still open after the last consumed line — the wrap's carry
     /// state, without which an appended line cannot know it should be narrowed.
     pub carry: Option<crate::render::transcript::FloatState>,
-    /// The screen-clear anchor mapped into FILTERED line coordinates. Stable
-    /// across appends (the anchor is in the key, and an appended line always sits
-    /// at or past it), so it is computed on rebuild and carried.
+    /// The float carry ENTERING the last consumed line — i.e. `carry` one line
+    /// earlier (SQ-1179). A repair that discards that last line (because an
+    /// insert landed before it) needs to resume wrapping from exactly the carry
+    /// state a fresh rebuild would have had there, which `carry` itself cannot
+    /// supply once it has already been advanced past that line. Maintained by
+    /// [`crate::render::transcript::wrap_lines_kinded_extend`]'s `pretail`
+    /// out-param on every extend, cheaply (a clone of a small `Option`, almost
+    /// always `None`) — so it is always current for whichever line is last.
+    pub tail_entry_carry: Option<crate::render::transcript::FloatState>,
+    /// Whether the raw source line at `key.content.len - 1` — the cache's own
+    /// last consumed line — passed the active filter at the moment this cache
+    /// was last synced (SQ-1179). A repair needs this to decide whether that
+    /// line contributed an entry to `starts`/`rows` that must be popped before
+    /// re-wrapping the tail: by the time a repair runs, the transcript has
+    /// already been mutated, so the CURRENT kind at that raw index describes
+    /// whatever moved there, not what the cache actually wrapped.
+    pub tail_visible: bool,
+    /// The screen-clear anchor mapped into FILTERED line coordinates. Recomputed
+    /// on every append or repair (cheaply, over only the newly-wrapped suffix —
+    /// see the render path), not merely carried: the anchor itself CAN move
+    /// without forcing a rebuild (SQ-1179), as long as it moves to a position at
+    /// or after this cache's synced length, in which case every already-cached
+    /// filtered line unconditionally precedes it.
     pub clear_anchor_filtered: Option<usize>,
     /// Wrapped-row count before the filtered screen-clear anchor; drives
     /// top-anchoring. Recomputed from `starts` on every append.
@@ -591,7 +660,13 @@ pub(crate) fn raster_wrap_refresh(state: &AppState, cols: u16) {
             raster_wrap_extend(cache, state, cols, from);
             cache.key = WrapKey::of(state, cols);
         }
-        WrapPlan::Rebuild => {
+        // SQ-1179's tail repair is a CellWrapCache mechanism (float `carry`
+        // entering a discarded line, `tail_visible` bookkeeping) that raster
+        // has no equivalent for — the same product-correctness answer as a
+        // full rebuild, only cheaper, and raster's rebuild is already cheap
+        // (its wrap width is the constant native prose box, so it takes this
+        // branch essentially never — see this module's own doc comment).
+        WrapPlan::Rebuild | WrapPlan::Repair { .. } => {
             let mut cache = RasterWrapCache {
                 key: WrapKey::of(state, cols),
                 rows: Vec::new(),
