@@ -2169,9 +2169,15 @@ fn render_middle(
     //
     // The key is built ONCE here and compared without cloning, so the hot path
     // never pays for the colour scheme or the room name.
-    let plan = match state.transcript_wrap.borrow().as_ref() {
-        Some(c) => c.key.plan(state, body_area.width),
-        None => WrapPlan::Rebuild,
+    // `old_anchor`/`old_anchor_filtered` are this cache's OWN synced anchor and
+    // its filtered position, from before this frame touched anything — the
+    // baseline `clear_anchor_filtered` below needs to tell "the anchor is
+    // exactly where it was last frame" (carry the old filtered position
+    // unchanged) apart from "the anchor moved into this frame's new tail"
+    // (recompute it), which `plan` alone does not carry (SQ-1223).
+    let (plan, old_anchor, old_anchor_filtered) = match state.transcript_wrap.borrow().as_ref() {
+        Some(c) => (c.key.plan(state, body_area.width), c.key.shape.clear_anchor, c.clear_anchor_filtered),
+        None => (WrapPlan::Rebuild, None, None),
     };
     if plan != WrapPlan::Reuse {
         // The source lines this frame has to wrap: all of them on a rebuild;
@@ -2440,15 +2446,26 @@ fn render_middle(
         cache.live_bands.extend(live_bands);
         // Map the screen-clear boundary (a full-transcript index) into the
         // filtered line list, so top-anchoring works under any transcript
-        // filter. Every filtered line at or before `starts_before` is one this
-        // frame did NOT touch and so unconditionally precedes an anchor
-        // `WrapKey::plan` has already proven sits at or after this cache's
-        // synced length (SQ-1179) — so only the newly-wrapped suffix
-        // (`visible_indices`) needs inspecting, not the whole history. On a
-        // Rebuild `starts_before` is 0 and `visible_indices` is the whole
-        // transcript, which degenerates to exactly the old computation.
-        cache.clear_anchor_filtered =
-            state.clear_anchor.map(|a| starts_before + visible_indices.iter().filter(|&&i| i < a).count());
+        // filter. Recomputing this every frame from `starts_before` is only
+        // sound when the anchor itself moved INTO this frame's new tail —
+        // that is the one case `WrapKey::plan` has proven sits at or after
+        // this cache's synced length, which is what makes every filtered line
+        // up to `starts_before` unconditionally precede it. An anchor that
+        // did NOT move this frame carries no such proof: `starts_before` is
+        // "how much is already wrapped", not "how much precedes the anchor",
+        // and on a long-lived anchor those are wildly different — recomputing
+        // anyway made `clear_anchor_filtered` chase the transcript's growing
+        // length every frame, which force-pinned every frame's display to
+        // just its own new tail and dropped a still-open margin float's
+        // earlier strips out of the rendered window (SQ-1223). So an
+        // unmoved anchor keeps the filtered position it already had; only a
+        // genuine move (or a Rebuild, where `starts_before` is 0 and
+        // `visible_indices` is the whole transcript) recomputes it.
+        cache.clear_anchor_filtered = if !matches!(plan, WrapPlan::Rebuild) && old_anchor == state.clear_anchor {
+            old_anchor_filtered
+        } else {
+            state.clear_anchor.map(|a| starts_before + visible_indices.iter().filter(|&&i| i < a).count())
+        };
         // The anchor is where that line STARTS in the wrap just built (SQ-0640) — a
         // separate wrap of the prefix would count a margin float's strips twice
         // over. Recomputed on every append and not merely on a rebuild: an anchor
