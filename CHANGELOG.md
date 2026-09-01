@@ -167,18 +167,23 @@ carrying `enable_sound = false` could only be overridden by editing the file.
   `--font-check on`; `--font-check off` never asks, and there is a `font_check`
   row on the settings screen.
 - **The word reveal** — **F4**, the `◈` on the story pane's bottom border, or
-  `/reveal-words` — lights every word already on screen that this story knows,
-  for a few seconds, over its own prose and without moving a line of it. It goes
-  out on your next keystroke, your next turn, or on its own. It answers the
-  oldest frustration in the genre: a room description names a dozen nouns and two
-  of them are implemented. *Mini-Zork* opens on a `field` the story has never
-  heard of, and that word stays dark.
-  - The claim is the dictionary's and the reveal says so every time — *words this
-    story knows — not necessarily things that are here*. A description that
-    mentions something in the next room lights it, which is the point rather than
-    a leak: every word it touches is one the story has already printed on your
-    screen.
+  `/reveal-words` — lights every noun, name or object already on screen that
+  this story knows, for a few seconds, over its own prose and without moving a
+  line of it. It goes out on your next keystroke, your next turn, or on its own.
+  It answers the oldest frustration in the genre: a room description names a
+  dozen nouns and two of them are implemented. *Mini-Zork* opens on a `field`
+  the story has never heard of, and that word stays dark.
+  - It lights only the things — asking every object in the story for its own
+    parse names, nouns and adjectives together, never a verb, article or
+    preposition. The reveal says so every time — *words this story knows — not
+    necessarily things that are here*. A description that mentions something in
+    the next room lights it, which is the point rather than a leak: every word
+    it touches is one the story has already printed on your screen.
   - Verbs never light. The verb panel already answers "what can I do".
+  - Glulx and Scott have no object table to ask yet, so on those two the reveal
+    falls back to the story's own dictionary flags, a weaker guarantee — an
+    Inform dictionary marks a word "usable in noun position" rather than "names
+    a thing", so an article can still slip through there.
 
 ### Toggle controls in the pane border
 

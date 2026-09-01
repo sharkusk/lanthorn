@@ -1,5 +1,5 @@
-//! The momentary reveal: light the words on screen the parser really knows
-//! (SQ-1107).
+//! The momentary reveal: light the nouns and named things on screen the story
+//! really knows (SQ-1107, SQ-1207).
 //!
 //! ```text
 //! You are in a dimly lit room. Cobwebs hang from the beams, and a
@@ -23,25 +23,47 @@
 //! truncation all apply exactly as the game applies them. There is no word
 //! splitter in this file, and the last one in the codebase was deleted for cause.
 //!
-//! **Which words light is the story's answer too**, and the question put to it
-//! is *"do you know this word?"* — the DICTIONARY's answer, with no scope walk
-//! anywhere in it (SQ-1135). It used to ask the object tree what was actually
-//! here wherever an engine had one, and fall back to the dictionary where it did
-//! not. That inverted the point: the engine that could say the most lit the
-//! least, and a description naming a sword in the next room lit nothing at all.
-//! Every word here is a word the story has ALREADY PRINTED on the player's own
-//! screen, so lighting it reveals nothing that has not been told, and there is
-//! no spoiler for a narrower test to defend against. [`CAVEAT`] states the claim
-//! rather than leaving the player to infer a stronger one.
+//! **Which words light is the story's OBJECTS' answer**, and the question put
+//! to them is *"is this one of your parse names?"* — nouns and adjectives, with
+//! no scope walk anywhere in it (SQ-1135) and no verb, article or preposition
+//! anywhere in the answer (SQ-1207). It used to ask the object tree what was
+//! actually HERE wherever an engine had one, and fall back to the dictionary
+//! where it did not — that inverted the point, because the engine that could say
+//! the most lit the least, and a description naming a sword in the next room lit
+//! nothing at all (SQ-1135). It then asked every object GLOBALLY (no scope walk,
+//! same as today) but still measured "do you know this word?" by the
+//! dictionary's own flag byte, and that is not the same question: on an
+//! Inform-family story the "noun" bit means "usable in noun position", not
+//! "names a thing", so it lit `a`, `an` and `the` right alongside a real noun
+//! (SQ-1207). `ObjectWords::refers_to` / `grammar_model::ObjectWordSet` is the
+//! fix — built from every object's own parse names, nouns and adjectives folded
+//! together because the parser does not distinguish them either — and it is what
+//! every engine with a readable object table answers with today: every retail
+//! Z-machine title measured so far, Infocom and Inform-on-Z-code alike (see
+//! `zvm::objects::ParseNames::detect`), `word_reveal.rs`'s Zork I specimen
+//! among them.
 //!
-//! # Nouns, not verbs
+//! **The dictionary is still asked, but only where the objects cannot be** —
+//! Glulx and Scott today, which have no object table this crate can read at
+//! all. Falling back to the dictionary's flag byte there is a decision and not
+//! an oversight: an imperfect reveal beats a dark one, and [`arm`]'s `None` arm
+//! says why in code. Every word here, either tier, is a word the story has
+//! ALREADY PRINTED on the player's own screen, so lighting it reveals nothing
+//! that has not been told, and there is no spoiler for a narrower test to
+//! defend against. [`CAVEAT`] states the claim rather than leaving the player to
+//! infer a stronger one.
 //!
-//! A verb never lights. The verb panel already answers "what can I do"; this
-//! answers "what does this game know about", and they are different questions
-//! that would blur into a ransom note if merged — "You are in an open field west
-//! of a white house" lights `open` and `west` on an unfiltered dictionary test,
-//! and the prose then says nothing at all. Widening this to verbs is a decision,
-//! not a tidy-up.
+//! # Nouns, not verbs — and not articles either
+//!
+//! A verb never lights, on any engine: the verb panel already answers "what can
+//! I do"; this answers "what does this game know about", and they are different
+//! questions that would blur into a ransom note if merged. Where the objects can
+//! answer, an article or preposition never lights either, because it is never
+//! one of their parse names — "You are in an open field west of a white house"
+//! lights `white` (an adjective of Zork I's house) and never `open` or `west`.
+//! That guarantee only weakens on the dictionary fallback below, and only on an
+//! Inform-family title: its dictionary marks a word "usable in noun position",
+//! not "is a noun", so `a`, `an` and `the` can still slip through there.
 //!
 //! # The viewport
 //!
@@ -252,21 +274,37 @@ pub fn arm(state: &mut AppState, engine: &dyn Engine) -> Armed {
             .cloned()
             .collect::<BTreeSet<String>>(),
         None => {
+            // Reached only by an engine this crate cannot ask about its own
+            // objects at all — Glulx and Scott today (`GameSession` answers
+            // `Some` for every Z-machine title with a readable object table,
+            // which is the whole Infocom and Inform-on-Z-code catalogue this
+            // corpus has). Going dark here — lighting nothing, ever, on two
+            // whole engines — was the other option, and was rejected: an
+            // imperfect reveal a Glulx or Scott player can still lean on beats a
+            // silently absent one (SQ-1207 decision, stated here since there is
+            // nowhere else for a reader of THIS branch to find it).
+            //
             // The dictionary, filtered to the words that NAME things — nouns and
             // adjectives, minus the buzzword bit ($04), which is `the`, `a`,
-            // `please` and their kin.
+            // `please` and their kin ON AN INFOCOM TITLE.
             //
             // A word carrying both the noun and the VERB bit — `light` in most of
             // Infocom's catalogue — does light, because the claim being made
             // about it here is the noun one.
             //
-            // **And it inherits whatever the dictionary thinks a word is.**
-            // Mini-Zork files `west` with the DESC bit, exactly as it files
-            // `white` and `boarded`, so no part-of-speech filter can tell the
-            // compass from a colour; `north` and `south` carry neither bit and do
-            // not light at all. There is no rescuing that from here — the flags
-            // are the story's answer — so [`CAVEAT`] says what the reveal is
-            // rather than pretending otherwise.
+            // **And it inherits whatever the dictionary thinks a word is, which
+            // is a WEAKER claim on an Inform title than an Infocom one.** Neither
+            // Inform back-end has a buzzword bit or a distinct adjective bit at
+            // all (see `WordRoles`), and Inform's "noun" bit really means "usable
+            // in noun position" rather than "names a thing" — so on a real Glulx
+            // game (`Dr Ludwig and the Devil.gblorb`, measured by hand) `a`, `an`
+            // and `the` all decode with the noun bit set and light right
+            // alongside a real noun. There is no rescuing that from here without
+            // consulting English, which this file does not do (see the module
+            // doc) — the flags are the story's answer — so [`CAVEAT`] says what
+            // the reveal is rather than pretending otherwise. The real fix is an
+            // `object_word_set` for Glulx (`gvm` keeps no such index today), not
+            // a stoplist grafted on here.
             let Some(v) = state.vocab.get(engine) else {
                 state.reveal = None;
                 return Armed::NoVocabulary;

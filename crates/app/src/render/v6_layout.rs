@@ -2732,8 +2732,8 @@ pub fn draw_story_text(canvas: &mut RgbaImage, main: &MainText, ox: u32, oy: u32
         // that was never wrapped still cannot run past its box — without discarding
         // glyphs the wrap correctly fitted.
 
-        // While a reveal is lit, where on THIS row the story printed each of the
-        // words the parser would accept (SQ-1138). Char ranges into `line`, which
+        // While a reveal is lit, where on THIS row the story printed each of its
+        // own things (SQ-1138, SQ-1207). Char ranges into `line`, which
         // is exactly what `line.chars().enumerate()` below counts in — the same
         // `lit_spans` the cell path calls on the same wrapped row, so the two
         // surfaces cannot disagree about which words light.

@@ -1,4 +1,5 @@
-//! SQ-1107: the momentary reveal — the words on screen the parser really knows.
+//! SQ-1107 / SQ-1207: the momentary reveal — the nouns and named things on
+//! screen the story really knows, and nothing else.
 //!
 //! # The parser is the oracle
 //!
@@ -46,8 +47,12 @@
 //! |---|---|---|---|
 //! | `crates/zvm/tests/fixtures/minizork.z3` | r34/s871124 | 0 | the whole path, in CI |
 //! | `crates/zvm/tests/fixtures/minizork.z3` | r34/s871124 | 1 (`north`) | scope moving under old text |
+//! | `stories/zork1-invclues-r52-s871125.z5` | r52/s871125 | 0 | the noun-AND-adjective contract (SQ-1207); Mini-Zork's Version 3 dictionary cannot report adjectives |
 //!
-//! Mini-Zork is tracked, so every case here runs on CI; nothing skips.
+//! Mini-Zork is tracked, so every case built on it runs on CI; nothing there
+//! skips. The Version 5 specimen is gitignored (CLAUDE.md's `stories/`) and
+//! skips vacuously without it — chosen over Mini-Zork specifically because a
+//! Version 1-3 story keeps no readable adjective property at all.
 
 use app::engine::Engine;
 use app::reveal::Armed;
@@ -138,8 +143,9 @@ fn words(state: &AppState) -> Vec<String> {
 
 // ── The reveal ──────────────────────────────────────────────────────────────
 
-/// The opening screen, lit. The reveal's question is *"does this story know the
-/// word?"* — the dictionary's answer, with no scope walk in it (SQ-1135).
+/// The opening screen, lit. The reveal's question is *"is this one of your
+/// objects' parse names?"*, asked of Mini-Zork's own objects with no scope walk
+/// in it (SQ-1135, SQ-1207).
 #[test]
 fn the_opening_screen_lights_the_words_the_story_knows() {
     let mut session = minizork();
@@ -182,7 +188,7 @@ fn the_opening_screen_lights_the_words_the_story_knows() {
 ///
 /// The compass words are NOT part of this claim, and never were a filter's to
 /// make: Mini-Zork files `west` with the DESC bit, exactly as it files `white`
-/// — see `the_reveal_inherits_the_dictionary_and_says_so`.
+/// — see `the_reveal_asks_the_objects_not_the_flag_byte`.
 #[test]
 fn verbs_do_not_light() {
     let mut session = minizork();
@@ -206,9 +212,10 @@ fn verbs_do_not_light() {
 /// After `north`, `There is a small mailbox here.` is still on screen — the
 /// player can read it — and the parser now answers `You can't see any mailbox
 /// here!`. The word still lights, because the claim the highlight makes is about
-/// the DICTIONARY: this story knows `mailbox`. Lighting a word the story has
-/// already printed on the player's own screen tells them nothing they were not
-/// told.
+/// the STORY's OBJECTS globally: `mailbox` is a real object's parse name,
+/// full stop, with no scope walk asking whether that object is HERE. Lighting a
+/// word the story has already printed on the player's own screen tells them
+/// nothing they were not told.
 ///
 /// This case used to assert the opposite, back when the reveal walked the object
 /// tree wherever it could. That is the inversion SQ-1135 removes, and the reason
@@ -331,48 +338,56 @@ fn only_what_is_on_screen_is_considered() {
 
 // ── The claim, and the label on it ──────────────────────────────────────────
 
-/// **The reveal inherits the dictionary's own idea of what a word is**, and
-/// there is no filter that could rescue it — which is why it says what it is
-/// rather than pretending to a stronger claim.
+/// **The reveal asks Mini-Zork's OBJECTS, not its dictionary's flag byte**
+/// (SQ-1207) — and it has to be an object question, because the flag byte
+/// cannot settle this one.
 ///
-/// `west` on the opening screen is not a slip on our part; it is what
-/// Mini-Zork's own dictionary says. Its flag byte is `0x33`, which sets the DESC
-/// bit — the same bit `white` and `boarded` carry — so nothing in the story
-/// distinguishes the compass from an adjective, and `north` and `south` (`0x13`)
-/// are not filed as either and do not light at all.
-///
-/// What the filter DOES drop is the buzzword bit (`$04`): `the`, `a`, `please`
-/// and their kin, which every story files as words and no player wants lit.
+/// `west`'s flag byte is `0x33`, which sets the same DESC bit `white` and
+/// `boarded` carry: nothing in Mini-Zork's *dictionary* distinguishes the
+/// compass word from an adjective. A filter built on that bit would have to
+/// light both or neither — which is exactly what the old, dictionary-only
+/// tier this engine no longer uses did (see `arm`'s `None` arm, still taken by
+/// Glulx and Scott today). Asked of the OBJECTS instead, the question has a
+/// real answer: `west` is nobody's parse name at all, so it never lights,
+/// regardless of what the flag byte says about `white`.
 #[test]
-fn the_reveal_inherits_the_dictionary_and_says_so() {
+fn the_reveal_asks_the_objects_not_the_flag_byte() {
     let mut session = minizork();
     let vocab = <GameSession as Engine>::story_vocabulary(&session).expect("a readable dictionary");
     for w in ["west", "north", "white", "boarded", "mailbox", "the"] {
         println!("{w}: {:?}", vocab.roles(w));
     }
-    // The compass word and the colour are indistinguishable in this dictionary.
+    // The compass word and the colour are indistinguishable in the dictionary —
+    // the fact that makes this a meaningful test and not a coincidence.
     let west = vocab.roles("west").expect("in the dictionary");
     let white = vocab.roles("white").expect("in the dictionary");
     assert_eq!(
         (west.noun, west.adjective, west.special),
         (white.noun, white.adjective, white.special),
-        "Mini-Zork files `west` exactly as it files `white`, so no part-of-speech \
-         filter can tell them apart — which is what the caveat is for",
+        "Mini-Zork files `west` exactly as it files `white`, so a flag-byte \
+         filter could not tell them apart even if `arm` still used one",
     );
+
+    // Mini-Zork answers for its own objects, so `arm` never falls back to that
+    // ambiguous flag byte in the first place — this IS the assertion, not
+    // scaffolding for one.
+    let set = session.introspect().and_then(|i| i.object_word_set());
+    assert!(set.is_some(), "Mini-Zork has a readable object table; the fallback below is untested here");
 
     let mut state = screen(&mut session);
     app::reveal::arm(&mut state, &session);
     let lit = words(&state);
-    // Both, or neither: the dictionary cannot separate them, so neither can this.
-    assert_eq!(
-        lit.contains(&"west".to_string()),
-        lit.contains(&"white".to_string()),
-        "the two words this dictionary files identically must fare identically: {lit:?}",
-    );
-    // The buzzword bit is what the filter really removes, and Mini-Zork's
-    // opening prose is full of `the` and `a`.
+    // Neither is one of Mini-Zork's objects' parse names — `west` because a
+    // compass direction is not an object, `white` because Version 1-3 stores no
+    // readable adjective property at all (`ParseNames::detect`'s own doc). Both
+    // stay dark, and for a reason that has nothing to do with the flag byte
+    // they happen to share.
+    for word in ["west", "white"] {
+        assert!(!lit.contains(&word.to_string()), "{word:?} is not a Mini-Zork object: {lit:?}");
+    }
+    // Articles never carry an object's parse name on any engine.
     for buzz in ["the", "a"] {
-        assert!(!lit.contains(&buzz.to_string()), "{buzz:?} carries the buzzword bit: {lit:?}");
+        assert!(!lit.contains(&buzz.to_string()), "{buzz:?} names no object: {lit:?}");
     }
 }
 
@@ -388,3 +403,63 @@ fn the_reveal_admits_what_it_cannot_tell_apart() {
         app::reveal::CAVEAT,
     );
 }
+
+// ── The contract, on a real story with real adjectives (SQ-1207) ───────────
+
+/// Retail Zork I, release 52 (Version 5) — not Mini-Zork, because a Version
+/// 1-3 story keeps no readable adjective property at all
+/// (`zvm::objects::ParseNames::detect`'s own doc: adjectives are answerable
+/// "only from V4"), so Mini-Zork cannot prove the noun-AND-adjective half of
+/// this contract no matter how the reveal classifies.
+///
+/// Gitignored (CLAUDE.md's `stories/`), so this skips vacuously without it —
+/// see [`a_noun_and_its_adjective_light_while_articles_and_verbs_do_not`].
+fn zork1_invclues() -> Option<GameSession> {
+    let path = fixture_path("zork1-invclues-r52-s871125.z5");
+    let bytes = std::fs::read(&path).ok()?;
+    Some(
+        GameSession::new_with_trace(bytes, true, false, None, false, Vec::new(), None, None, Some((25, 80)))
+            .expect("a Version 5 story should load and boot"),
+    )
+}
+
+/// **The contract SQ-1207 exists for.** West of House's opening line names a
+/// house and a door with real adjectives (`white`, `boarded`) sitting beside
+/// articles, prepositions and a verb that are printed just as plainly — the
+/// reveal has to tell a thing from the words around it.
+///
+/// Falsified by reverting `arm`'s `Some(set)` arm to a bare dictionary-acceptance
+/// test (SQ-1207's before-state): `the`, `a`, `of`, `an`, `open`, `standing`,
+/// `with`, `in` and `here` are all real Zork I dictionary entries and would
+/// light right alongside `house`, exactly the bug this quest was filed against.
+/// (`standing` and `here` are just as printed; the point is that none of these
+/// nine is any object's parse name.)
+#[test]
+fn a_noun_and_its_adjective_light_while_articles_and_verbs_do_not() {
+    let Some(mut session) = zork1_invclues() else {
+        eprintln!("SKIP: stories/zork1-invclues-r52-s871125.z5 not present");
+        return;
+    };
+    let mut state = screen(&mut session);
+    let armed = app::reveal::arm(&mut state, &session);
+    assert_eq!(armed, Armed::Lit { words: words(&state).len() });
+    let lit = words(&state);
+    println!("lit: {lit:?}");
+    assert!(
+        state.transcript.iter().any(|l| l.contains("white house")),
+        "the specimen text must actually be on screen, or this proves nothing: {:?}",
+        state.transcript,
+    );
+
+    // Nouns, and the adjectives that describe them — all real Zork I object
+    // parse names.
+    for thing in ["house", "white", "door", "boarded", "mailbox", "small", "front"] {
+        assert!(lit.contains(&thing.to_string()), "{thing:?} names or describes a real object: {lit:?}");
+    }
+    // Articles, a preposition, a verb — on the same two lines, none of them a
+    // parse name of anything.
+    for not_a_thing in ["the", "a", "of", "an", "open", "standing", "with", "in", "here"] {
+        assert!(!lit.contains(&not_a_thing.to_string()), "{not_a_thing:?} names nothing: {lit:?}");
+    }
+}
+

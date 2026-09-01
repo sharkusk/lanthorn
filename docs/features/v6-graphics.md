@@ -1789,8 +1789,8 @@ screenshot, a bug report and a headless capture all want:
   text stays readable on a light-background terminal instead of forcing a
   fixed light-grey-on-black.
   - **The word reveal lights here too.** Pressing it (`◈`, or
-    `/reveal-words`) underlines the words on screen the story's own parser would
-    accept, and it was dark on every graphical v6 title for as long as it read
+    `/reveal-words`) underlines the nouns and named things on screen this story
+    knows, and it was dark on every graphical v6 title for as long as it read
     the *cell* wrap cache — which raster never fills, because raster's text is
     bitmap glyphs on a canvas rather than terminal cells. It now reads the
     canvas's own wrap and applies the light as each glyph is blitted: the same

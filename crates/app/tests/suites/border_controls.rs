@@ -605,7 +605,7 @@ fn the_reveal_is_a_trigger_and_says_so() {
     let reveal = views.iter().find(|v| v.id == BorderControl::Reveal).expect("drawn");
     let text = reveal.hint.join(" / ");
     println!("reveal hint: {text}");
-    assert!(text.contains("light the words on screen"), "it says what it does: {text:?}");
+    assert!(text.contains("light the nouns and named things on screen"), "it says what it does: {text:?}");
     assert!(text.contains("/reveal-words"), "…and how to do it from the keyboard: {text:?}");
     // Guidance is out in `story()`, and a press would then do nothing at all —
     // which the hint has to say, or the player concludes the button is broken.

@@ -124,8 +124,8 @@ pub enum SlashOutcome {
     /// global one. Handled in `slash_dispatch` (mutates `state.config.guidance`).
     SetGuidance(GuidanceArg),
     SetReturnProbe(ReturnProbeArg),
-    /// Light the words on screen this story's parser would accept, for a moment
-    /// (SQ-1107).
+    /// Light the nouns and named things on screen this story knows, for a moment
+    /// (SQ-1107, SQ-1207).
     ///
     /// **The one outcome in this family that is not a setting.** Everything
     /// beside it — the guidance switch, the probe, the render mode — reports a
@@ -566,7 +566,7 @@ pub static COMMANDS: &[CommandSpec] = &[
     // take. It is the first of its kind among the border controls; see
     // `SlashOutcome::RevealWords` and `crate::reveal`.
     CommandSpec { name: "reveal-words", category: Category::Style, context: Context::Global,
-        usage: "reveal-words", description: "light the words on screen this story's parser would accept, for a few seconds — under the Guiding Light's switch",
+        usage: "reveal-words", description: "light the nouns and named things on screen this story knows, for a few seconds — under the Guiding Light's switch",
         dispatch: |_| SlashOutcome::RevealWords },
     CommandSpec { name: "run-font-check", category: Category::Style, context: Context::Global,
         usage: "run-font-check", description: "ask which of two glyph rows your terminal's font draws properly, and set the map's arrow, portal and Guiding Light icons from the answer (writes style.toml)",

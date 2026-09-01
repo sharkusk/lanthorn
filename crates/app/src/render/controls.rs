@@ -509,7 +509,7 @@ pub fn controls_for(state: &AppState) -> Vec<ControlView> {
         glyph: g.reveal,
         style: style_for(state, BorderControl::Reveal, lit),
         hint: vec![
-            "Reveal: light the words on screen the parser knows".to_string(),
+            "Reveal: light the nouns and named things on screen the story knows".to_string(),
             if state.config.guidance {
                 "click for a moment — it goes out on your next key"
             } else {

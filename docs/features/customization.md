@@ -570,30 +570,33 @@ re-seed the new template, or hand-write the new shape from
   something you can open" — reads as a success and survives.
   The **word reveal** is the same light pointed the other way. The offer can only
   help once the parser has already said no; click the `◈` on the story pane's
-  bottom border (or run `/reveal-words`) and every word *already on screen*
-  that the parser would accept lights up for a few seconds, over the story's own
-  prose, without moving a line of it. It goes out on your next keystroke, on your
-  next turn, or on its own — one press, one look, and you are back in the game.
-  It answers the oldest frustration in the genre: a room description names a
-  dozen nouns and two of them are implemented, and until now the only way to find
-  out which was to type at all twelve. Mini-Zork's opening screen names five —
-  `field`, `house`, `door`, `mailbox`, `window` — and the story has never heard
-  the word `field` at all, so that one stays dark while the rest light.
-  The question it asks is **does this story know the word**, answered by the
-  dictionary, and it says so in the corner every time: *words this story knows —
-  not necessarily things that are here*. A description that mentions a sword
-  sitting in the next room lights it, and that is the point rather than a leak —
-  every word it touches is one the story has already printed on your own screen,
-  so it can reveal nothing you have not been told. It used to walk the object
-  tree wherever it could and light only what was within reach, which sounds
-  stricter and read as broken: the engines that know the most lit the least, and
-  Arthur's "imbedded in one of the knobs is a sliver of crystal" — a real object
-  with a real use — lit nothing at all.
-  It inherits whatever the story's dictionary thinks a word is, which is the
-  other half of why it is labelled: Mini-Zork files `west` with the same bit it
-  gives `white`, so the compass lights beside the colour and nothing can tell it
-  not to. Verbs never light: the verb panel already answers "what can I do", and
-  this answers "what does this game know about".
+  bottom border (or run `/reveal-words`) and every noun, name or object *already
+  on screen* that this story knows lights up for a few seconds, over the story's
+  own prose, without moving a line of it. It goes out on your next keystroke, on
+  your next turn, or on its own — one press, one look, and you are back in the
+  game. It answers the oldest frustration in the genre: a room description names
+  a dozen nouns and two of them are implemented, and until now the only way to
+  find out which was to type at all twelve. Mini-Zork's opening screen names
+  five — `field`, `house`, `door`, `mailbox`, `window` — and the story has never
+  heard the word `field` at all, so that one stays dark while the rest light.
+  The question it asks is **does one of your OBJECTS answer to this word**,
+  asked of the story's own things first, and it says so in the corner every
+  time: *words this story knows — not necessarily things that are here*. A
+  description that mentions a sword sitting in the next room lights it, and that
+  is the point rather than a leak — every word it touches is one the story has
+  already printed on your own screen, so it can reveal nothing you have not been
+  told. It used to walk the object tree wherever it could and light only what
+  was within reach, which sounds stricter and read as broken: the engines that
+  know the most lit the least, and Arthur's "imbedded in one of the knobs is a
+  sliver of crystal" — a real object with a real use — lit nothing at all.
+  It only lights a story's own nouns and adjectives — a real Zork I house
+  fetches `white` right along with it — and never a verb, an article or a
+  preposition: the verb panel already answers "what can I do", and this answers
+  "what does this game know about". Glulx and Scott have no object table this
+  crate can read yet, so on those two the reveal falls back to the dictionary's
+  own idea of a noun, a weaker guarantee — an Inform dictionary marks a word
+  "usable in noun position" rather than "names a thing", so an article there can
+  still slip through.
   One honest limit, and it is the parser's own: a Version 3 dictionary keeps six
   characters of a word, so `candle` and `candlesticks` are the same entry, and a
   room holding a candle lights both. That is not a mistake on lanthorn's part —
