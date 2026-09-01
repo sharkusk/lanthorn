@@ -1,0 +1,86 @@
+# The map
+
+For anyone who wants to explore without drawing their own graph paper — this
+page covers what the automap does on its own, and how to drive it once it's
+drawn.
+
+![lanthorn walking Zork I while the automap assembles itself room by room](../automapping.gif)
+
+lanthorn watches where you are and where you've been, and it builds the map.
+Walk north out of a room and a new room slides into place north of you; double
+back and the connection closes into a loop. Nothing to type, nothing to
+annotate — the moment you enter a room lanthorn has already boxed it,
+connected it, and nudged the layout to stay clean.
+
+The same automapper draws every game. It never touches a Z-machine opcode or a
+Glk call — it just watches locations and movements — so whether you're
+threading the Great Underground Empire in *Zork*, Counterfeit Monkey in
+Glulx, or a classic Scott Adams adventure, one map builder handles all three.
+Working out *where you are* is the part that differs by engine — a v3 game
+states it outright, later Z-machine games hide it in the status line,
+graphical v6 games paint no status line at all so lanthorn reads the band
+above the story window, and Glulx games get it from the bold room heading
+Inform prints as you enter — but you never configure any of it.
+
+**Getting around.** `zoom-map in|out|reset` scales between a detailed view and
+a compact overview; `pan-map <dx> <dy>` slides the viewport and `center-map`
+snaps back to wherever you're standing. Multi-level areas split into named
+layers shown as tabs across the top of the map pane — `cycle-layer next|prev`
+moves between them. Click a room, or use `select-room`, to select it and open
+its room card, which lists every direction out of that room, where each one
+leads, and which you've never tried.
+
+**Connections that stay readable.** A "one arrow per exit" map turns to
+spaghetti fast, so lanthorn routes connections through lanes that eliminate
+crossings and overlaps. Two rooms linked several ways — a compass direction
+and a diagonal, a staircase shadowing a corridor — collapse to a single line,
+and the passages that lost the collapse stamp their own small glyph beside it,
+so nothing is hidden, only unstacked. Up and down moves get dotted connectors
+with stairway glyphs rather than arrows. And every arrow is honest: it marks
+that room's *own* exit, so a one-way passage wears an arrowhead only at its
+origin — nothing known brings you back, and the map says so rather than
+guessing.
+
+**Keeping it tidy.** The whole layout re-optimizes as you explore.
+`background_tidy` controls how eagerly — after every new room (the default),
+only when rooms start to overlap, debounced every few rooms, or off entirely —
+and you can force a pass any time with `tidy-map`. Room positions belong to
+the layout engine, not to you: there's no dragging a box into place by hand,
+only asking `tidy-map` to try again. lanthorn also notices, at most a couple
+of times in a game, when a cluster of rooms wants to be its own layer — a
+cellar reachable only through one portal, or a room the game itself names a
+"Maze" — and offers to split it off. It never acts on its own: separate it,
+put it off for now, or tell it never to ask about that passage again.
+
+**Mazes get a table, not a lie.** A compass-drawn maze is a lie told
+carefully — real "all alike" rooms have passages that don't come back the way
+you went, arrive from a direction you never expected, or lead nowhere at all.
+`mark-maze-layer` (leader `z`) flags the active layer as a maze and switches
+it to the matrix view instead: one row per room, one column for each of the
+twelve directions, showing exactly what you've learned — a destination and
+its way back, a one-way passage, a tried dead end, or a direction still
+untried on the frontier. Selecting a room bolds every cell elsewhere that
+leads back into it, the one thing a maze's own row can't answer about itself,
+and clicking a room draws you the shortest known route there, step by step.
+
+![The matrix map view: the map as a direction table — one row per room, every passage's true destination in its cell](../maze-grid.png)
+
+**Finding the way back.** Half of what you've walked through hangs off a
+single arrow — you know how you got in, not how you'd get out. Assuming a
+passage runs both ways would be worse than leaving the gap, since these games
+are full of one-way drops and doors that open from only one side. So the
+**return probe** checks instead: after a move that leaves a gap, lanthorn
+forks your game into a silent, throwaway copy, stands it where you're
+standing, and walks the direction that would bring you back. Land in the room
+you just left and that passage joins the map for real; land anywhere else and
+nothing at all is recorded — not the edge, not even that the room exists. It's
+on by default, and its footprint icon on the story pane's bottom border shows
+whether it's currently running; toggle it per story with `/set-return-probe`.
+
+**Making it yours.** Every glyph the map draws — room outlines, arrowheads,
+path style, portal icons — is a themeable preset. See [Looks](looks.md) for
+picking a look you like.
+
+Going deeper: [mapping internals](../internals/mapping.md) ·
+[interface](../internals/interface.md) for mouse-driven navigation ·
+[style reference](../reference/style.md)
