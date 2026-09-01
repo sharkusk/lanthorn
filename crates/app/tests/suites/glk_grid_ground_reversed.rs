@@ -89,6 +89,9 @@ fn dump(buf: &Buffer, w: u16, h: u16) -> String {
 /// on `upper_window`) reproduces the invisible-ground symptom — no ground cell
 /// in the grid's rect carries REVERSED — and this test fails on assertion (a).
 fn help_menu_ground_is_reversed(honor_game_colours: bool) {
+    // The assertions below name colours, so the palette they resolve through is
+    // stated rather than inherited from the last suite in this binary (SQ-0958).
+    let _g = app::v6_palette(zvm::screen::Palette::Standard);
     let Some(sess) = boot_cos_help_menu() else {
         eprintln!("SKIP: no CoS.blb");
         return;
@@ -180,6 +183,9 @@ fn effective_bg(cell: &ratatui::buffer::Cell) -> Option<Color> {
 /// effective background becomes the theme's `hyperlink` accent colour (a teal
 /// patch) instead of the ground's, and this test fails.
 fn help_menu_hyperlink_blends_with_ground(honor_game_colours: bool) {
+    // The assertions below name colours, so the palette they resolve through is
+    // stated rather than inherited from the last suite in this binary (SQ-0958).
+    let _g = app::v6_palette(zvm::screen::Palette::Standard);
     let Some(sess) = boot_cos_help_menu() else {
         eprintln!("SKIP: no CoS.blb");
         return;
@@ -255,6 +261,9 @@ fn make_glk_grid_colors() -> ColorScheme {
 /// themed slot bg (the same shape a `garglk.ini` import can produce) would
 /// otherwise paint its own patch exactly like the hyperlink accent did.
 fn glk_grid_theme_slot_bg_does_not_paint(honor_game_colours: bool) {
+    // The assertions below name colours, so the palette they resolve through is
+    // stated rather than inherited from the last suite in this binary (SQ-0958).
+    let _g = app::v6_palette(zvm::screen::Palette::Standard);
     let mut upper = GridWindow { win: 5, ..GridWindow::default() };
     upper.resize(1, 3);
     upper.put(1, 1, 'X', 0);
@@ -292,6 +301,9 @@ fn glk_grid_theme_slot_bg_does_not_paint_honor_off() {
 /// foreground by the ground's REVERSED modifier. Bold (a modifier, not a
 /// colour channel) must survive untouched alongside it.
 fn glk_grid_explicit_game_bg_is_bg_not_swapped(honor_game_colours: bool) {
+    // The assertions below name colours, so the palette they resolve through is
+    // stated rather than inherited from the last suite in this binary (SQ-0958).
+    let _g = app::v6_palette(zvm::screen::Palette::Standard);
     let mut upper = GridWindow { win: 5, ..GridWindow::default() };
     upper.resize(1, 3);
     upper.put(1, 1, 'X', 0x02); // bold
