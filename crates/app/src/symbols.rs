@@ -173,9 +173,9 @@ pub struct ControlGlyphs {
     pub map_show: char,
     /// Map shown — click and it leaves to the right (▶).
     pub map_hide: char,
-    /// Verb panel closed — click and it rises from the bottom (▲).
+    /// Command band closed — click and it rises from the bottom (▲).
     pub band_show: char,
-    /// Verb panel open — click and it drops back down (▼).
+    /// Command band open — click and it drops back down (▼).
     pub band_hide: char,
     /// Lanthorn's Guiding Light is on (●; the lamp itself in a patched font).
     pub guidance_on: char,
@@ -770,7 +770,7 @@ impl ControlGlyphs {
     /// that_were_read_from_the_font` pins them.
     ///
     /// **Each control's two states come from ONE icon family** — `fa-` for the
-    /// map, `cod-` for the verb panel, `md-` for the Guiding Light, the render
+    /// map, `cod-` for the command band, `md-` for the Guiding Light, the render
     /// mode and the pixel lock. Codicons, Font Awesome and Material Design carry
     /// different stroke weights and cap heights, so a control whose states came
     /// from different families appeared to JUMP on toggle, independently of the

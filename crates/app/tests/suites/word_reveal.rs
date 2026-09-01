@@ -192,7 +192,7 @@ fn the_opening_screen_lights_the_words_the_story_knows() {
     assert!(!all.contains("field"), "`field` must not be underlined:{}", frame(&buf));
 }
 
-/// **A verb never lights.** The verb panel answers "what can I do"; this answers
+/// **A verb never lights.** The command band answers "what can I do"; this answers
 /// "what does the story know about". `open` and `take` are all over Mini-Zork's
 /// grammar and its opening prose says `open field` — lighting the verb would
 /// leave the prose saying nothing at all.

@@ -246,7 +246,7 @@ know which side you're on).
   own frame, each one showing what state it is in and switching it when
   clicked. There are two clusters — the story pane's, described first, and the
   **map pane's own five** further down — and one mechanism behind both.
-  Guidance, the verb panel and the two v6 switches used to be reachable only by
+  Guidance, the command band and the two v6 switches used to be reachable only by
   slash command, key or the settings screen, with nothing on screen saying they
   existed, let alone whether they were on.
 

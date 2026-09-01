@@ -240,7 +240,7 @@ carrying `enable_sound = false` could only be overridden by editing the file.
     no legend riding the status line. A description that mentions something in
     the next room lights it, which is the point rather than a leak: every word
     it touches is one the story has already printed on your screen.
-  - Verbs never light. The verb panel already answers "what can I do".
+  - Verbs never light. The command band already answers "what can I do".
   - Glulx games answer with their own objects too: the reveal reads the Inform
     object list straight out of Glulx memory, so *Dr Ludwig and the Devil* now
     lights its devil and its summoning circle instead of `the` and `an`. Scott
