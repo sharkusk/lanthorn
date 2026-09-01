@@ -88,6 +88,42 @@ pub(crate) enum Dest {
     Local(u32),
 }
 
+/// The widest operand shape any Glulx opcode decodes: the search family
+/// (`linearsearch`/`binarysearch` at 7 loads + 1 store) tops the ISA, and every
+/// `read_operands` call site names its counts statically — so 8 is a bound, not
+/// a guess. Decoding runs once per instruction; giving it a fixed ceiling is
+/// what lets [`Operands`] live on the stack instead of the heap (SQ-1208).
+const MAX_OPERANDS: usize = 8;
+
+/// A decoded operand list with a fixed capacity of [`MAX_OPERANDS`] — the
+/// zero-allocation replacement for the per-instruction `Vec`s that put the
+/// allocator at half of VM time (SQ-1208). Derefs to a slice, so call sites
+/// index and subslice it exactly as they did the `Vec`.
+pub(crate) struct Operands<T: Copy> {
+    buf: [T; MAX_OPERANDS],
+    len: usize,
+}
+
+impl<T: Copy> Operands<T> {
+    fn new(fill: T) -> Self {
+        Self { buf: [fill; MAX_OPERANDS], len: 0 }
+    }
+
+    /// Append one operand. Indexing panics past [`MAX_OPERANDS`] — that is a
+    /// new opcode outgrowing the bound above, which must be raised with it.
+    fn push(&mut self, v: T) {
+        self.buf[self.len] = v;
+        self.len += 1;
+    }
+}
+
+impl<T: Copy> std::ops::Deref for Operands<T> {
+    type Target = [T];
+    fn deref(&self) -> &[T] {
+        &self.buf[..self.len]
+    }
+}
+
 /// Which case fold a `glk_buffer_to_*_case_uni` selector performs.
 #[derive(Clone, Copy)]
 enum CaseOp {
@@ -333,6 +369,11 @@ pub struct Machine {
     cur_localspos: u32,
     /// `(offset_within_locals, size_bytes)` for each local of the current frame.
     cur_locals: Vec<(u32, u8)>,
+    /// Reused argument buffer for `call`/`tailcall`'s popped args (argc is
+    /// dynamic, so this can't be a fixed array like [`Operands`]). Taken with
+    /// `mem::take` for the duration of one call setup and put back after, so a
+    /// re-entrant user would merely allocate afresh, never alias (SQ-1208).
+    call_args_scratch: Vec<u32>,
 
     /// When true, `step_once` records each instruction's start PC into
     /// `executed_pcs`/`ever_executed` (the debug inspector's execution coverage).
@@ -805,6 +846,7 @@ impl Machine {
             cur_frame_len: 0,
             cur_localspos: 0,
             cur_locals: Vec::new(),
+            call_args_scratch: Vec::new(),
             trace_exec: false,
             executed_pcs: std::collections::HashSet::new(),
             ever_executed: std::collections::HashSet::new(),
@@ -860,22 +902,28 @@ impl Machine {
     }
 
     /// Decode `n_load` load values then `n_store` store destinations from the
-    /// packed mode nibbles + operand data following `pc`.
-    pub(crate) fn read_operands(&mut self, n_load: usize, n_store: usize) -> R<(Vec<u32>, Vec<Dest>)> {
+    /// packed mode nibbles + operand data following `pc`. Everything decoded
+    /// lives on the stack — this runs once per instruction, and heap-allocating
+    /// here made the allocator the single largest line in a VM profile
+    /// (SQ-1208).
+    pub(crate) fn read_operands(&mut self, n_load: usize, n_store: usize) -> R<(Operands<u32>, Operands<Dest>)> {
         let total = n_load + n_store;
+        debug_assert!(total <= MAX_OPERANDS, "operand count {total} outgrew MAX_OPERANDS");
         let mode_bytes = total.div_ceil(2);
         // Slurp the mode nibbles first; operand data follows them, in order.
-        let mut modes = Vec::with_capacity(total);
+        // (+1: an odd total still unpacks its final byte's padding high nibble,
+        // which `take(total)` below then ignores, exactly as the spec allows.)
+        let mut modes = [0u8; MAX_OPERANDS + 1];
         let start = self.pc;
         for i in 0..mode_bytes {
             let byte = self.m8(start + i as u32)?;
-            modes.push((byte & 0x0F) as u8);
-            modes.push((byte >> 4) as u8);
+            modes[2 * i] = (byte & 0x0F) as u8;
+            modes[2 * i + 1] = (byte >> 4) as u8;
         }
         self.pc += mode_bytes as u32;
 
-        let mut loads = Vec::with_capacity(n_load);
-        let mut stores = Vec::with_capacity(n_store);
+        let mut loads = Operands::new(0u32);
+        let mut stores = Operands::new(Dest::Discard);
         for (i, &mode) in modes.iter().enumerate().take(total) {
             if i < n_load {
                 loads.push(self.resolve_load(mode)?);
@@ -1730,7 +1778,12 @@ impl Machine {
         }
         // Parse the locals-format pairs that begin at fp+8; a valid frame's
         // terminator sits before LocalsPos (LocalsPos = align4(8 + format)).
-        let mut locals = Vec::new();
+        // Reuse `cur_locals`' allocation — this runs on every function return,
+        // and a fresh Vec per return fed the allocator hot spot (SQ-1208). An
+        // error path leaves it empty, which is fine: every caller's error
+        // channel halts the machine.
+        let mut locals = std::mem::take(&mut self.cur_locals);
+        locals.clear();
         let mut p = fp + 8;
         let fmt_end = fp + localspos;
         let mut off = 0u32;
@@ -1771,10 +1824,17 @@ impl Machine {
             return Err(format!("not a function: type byte {func_type:#x} @{func_addr:#x}"));
         }
 
-        // Parse the locals format; compute the format byte length and the
-        // per-local (offset, size) layout.
-        let mut pairs: Vec<(u8, u8)> = Vec::new();
+        // Parse the locals format in one pass: count the (type, count) pairs
+        // and lay out the locals (each at its natural alignment). The layout
+        // builds directly into `cur_locals`' reused allocation — this runs on
+        // every call, and a fresh Vec (plus a scratch pairs Vec) per call fed
+        // the allocator hot spot (SQ-1208). An error path leaves it empty,
+        // which is fine: every caller's error channel halts the machine.
+        let mut locals_layout = std::mem::take(&mut self.cur_locals);
+        locals_layout.clear();
         let mut addr = func_addr + 1;
+        let mut n_pairs = 0usize;
+        let mut off = 0u32;
         loop {
             let t = self.m8(addr)? as u8;
             let c = self.m8(addr + 1)? as u8;
@@ -1785,21 +1845,15 @@ impl Machine {
             if t != 1 && t != 2 && t != 4 {
                 return Err(format!("bad local type {t} @{func_addr:#x}"));
             }
-            pairs.push((t, c));
-        }
-        let format_len = (pairs.len() + 1) * 2; // includes the (0,0) terminator
-        let localspos = align_up(8 + format_len as u32, 4);
-
-        // Lay out the locals (each at its natural alignment).
-        let mut locals_layout: Vec<(u32, u8)> = Vec::new();
-        let mut off = 0u32;
-        for &(t, c) in &pairs {
+            n_pairs += 1;
             for _ in 0..c {
                 off = align_up(off, t as u32);
                 locals_layout.push((off, t));
                 off += t as u32;
             }
         }
+        let format_len = (n_pairs + 1) * 2; // includes the (0,0) terminator
+        let localspos = align_up(8 + format_len as u32, 4);
         let locals_size = off;
         let frame_len = align_up(localspos + locals_size, 4);
 
@@ -1814,9 +1868,12 @@ impl Machine {
         }
         self.st_w32(frameptr, frame_len);
         self.st_w32(frameptr + 4, localspos);
-        for (i, &(t, c)) in pairs.iter().enumerate() {
-            self.stack[frameptr + 8 + 2 * i] = t;
-            self.stack[frameptr + 8 + 2 * i + 1] = c;
+        // Copy the format pairs into the frame, re-reading the bytes the parse
+        // above already validated (cannot fault: same addresses, same memory).
+        for i in 0..n_pairs {
+            let a = func_addr + 1 + 2 * i as u32;
+            self.stack[frameptr + 8 + 2 * i] = self.m8(a)? as u8;
+            self.stack[frameptr + 8 + 2 * i + 1] = self.m8(a + 1)? as u8;
         }
         // (terminator pair already zero from the wipe above)
 
@@ -1830,12 +1887,11 @@ impl Machine {
         // Pass the arguments.
         if func_type == 0xC1 {
             // Copy args into locals in order, truncated to each local's size.
-            let layout = self.cur_locals.clone();
-            for (i, &(loff, _sz)) in layout.iter().enumerate() {
-                if i >= args.len() {
-                    break;
-                }
-                self.local_store(loff, args[i])?;
+            // (Looked up per index so `local_store` can borrow `self` — no
+            // layout clone.)
+            for (i, &arg) in args.iter().enumerate() {
+                let Some(&(loff, _sz)) = self.cur_locals.get(i) else { break };
+                self.local_store(loff, arg)?;
             }
         } else {
             // C0: push args (last first → first on top), then the count.
@@ -3232,33 +3288,57 @@ impl Machine {
 
     // ── call variants ─────────────────────────────────────────────────────────
 
+    /// Pop `argc` call arguments (first arg topmost) into the reused
+    /// `call_args_scratch` buffer, returning it for the caller to hand back
+    /// via [`Machine::return_args_scratch`] once the call setup is done.
+    fn pop_args_scratch(&mut self, argc: u32) -> R<Vec<u32>> {
+        let mut args = std::mem::take(&mut self.call_args_scratch);
+        args.clear();
+        for _ in 0..argc {
+            match self.pop32() {
+                Ok(v) => args.push(v),
+                Err(e) => {
+                    self.call_args_scratch = args;
+                    return Err(e);
+                }
+            }
+        }
+        Ok(args)
+    }
+
+    /// Put the buffer from [`Machine::pop_args_scratch`] back for reuse.
+    fn return_args_scratch(&mut self, args: Vec<u32>) {
+        self.call_args_scratch = args;
+    }
+
     fn op_call(&mut self) -> R<()> {
         let (l, s) = self.read_operands(2, 1)?;
         let (func, argc) = (l[0], l[1]);
-        let mut args = Vec::with_capacity(cap_hint(argc));
-        for _ in 0..argc {
-            args.push(self.pop32()?); // first arg is topmost
-        }
-        self.call_function(func, &args, s[0])
+        let args = self.pop_args_scratch(argc)?;
+        let res = self.call_function(func, &args, s[0]);
+        self.return_args_scratch(args);
+        res
     }
 
     fn op_callf(&mut self, nargs: usize) -> R<()> {
         let (l, s) = self.read_operands(1 + nargs, 1)?;
-        let args = l[1..].to_vec();
-        self.call_function(l[0], &args, s[0])
+        self.call_function(l[0], &l[1..], s[0])
     }
 
     fn op_tailcall(&mut self) -> R<()> {
         let (l, _) = self.read_operands(2, 0)?;
         let (func, argc) = (l[0], l[1]);
-        let mut args = Vec::with_capacity(cap_hint(argc));
-        for _ in 0..argc {
-            args.push(self.pop32()?);
-        }
+        let args = self.pop_args_scratch(argc)?;
+        let res = self.tailcall_with(func, &args);
+        self.return_args_scratch(args);
+        res
+    }
+
+    fn tailcall_with(&mut self, func: u32, args: &[u32]) -> R<()> {
         if self.acceleration {
             if let Some(num) = self.accel_func_for(func) {
                 if crate::accel::accel_impl_supported(num) {
-                    let result = self.accel_dispatch(num, &args)?;
+                    let result = self.accel_dispatch(num, args)?;
                     return self.return_value(result);
                 }
             }
@@ -3266,7 +3346,7 @@ impl Machine {
         // Destroy the current frame but keep the call stub beneath it, so the new
         // function returns to the current function's caller.
         self.sp = self.fp;
-        self.build_frame_and_enter(func, &args)
+        self.build_frame_and_enter(func, args)
     }
 
     // ── stream output (GLULX_NOTES §7) ────────────────────────────────────────
@@ -5803,6 +5883,37 @@ mod tests {
     use super::*;
     use crate::asm;
     use crate::glk::TestBackend;
+
+    /// Nibble-order + padding edges of `read_operands` (Glulx spec §1.4 /
+    /// GLULX_NOTES §3): modes pack two per byte with the LOW nibble naming the
+    /// EARLIER operand, and an odd operand count leaves a final high nibble
+    /// whose value decode must ignore. Hand-laid bytes, so a decoder that reads
+    /// the nibbles high-first (or honours the padding) fails here rather than
+    /// three opcodes into a story (SQ-1208's zero-allocation rewrite).
+    #[test]
+    fn read_operands_nibble_order_and_odd_padding() {
+        // Body: raw operand block for a (2 load, 1 store) shape — never
+        // executed, only decoded. 3 operands → 2 mode bytes.
+        //   byte 0 = 0x21: op0 mode 0x1 (low nibble), op1 mode 0x2 (high)
+        //   byte 1 = 0x78: op2 mode 0x8 (low), padding nibble 0x7 (ignored —
+        //            0x7 would otherwise decode as a 4-byte memory operand)
+        // Data: op0 = 0xFF (sign-extends), op1 = 0x1234; mode 0x8 has none.
+        let body = [0x21, 0x78, 0xFF, 0x12, 0x34];
+        let start = asm::func(0xC0, &[], &body);
+        let built = asm::assemble(&[start], 0, 0x100);
+        let mut m = Machine::with_glk(Memory::new(built.image).unwrap(), Box::new(TestBackend::new()));
+        let pc0 = m.pc; // frame entry left pc at the body's first byte
+
+        let (l, s) = m.read_operands(2, 1).expect("decodes");
+        assert_eq!(&l[..], &[0xFFFF_FFFF, 0x1234], "low nibble is the earlier operand");
+        assert_eq!(&s[..], &[Dest::Push]);
+        assert_eq!(m.pc, pc0 + 5, "2 mode bytes + 1 + 2 data bytes consumed");
+
+        // Zero operands: no mode bytes, nothing consumed.
+        let (l, s) = m.read_operands(0, 0).expect("decodes");
+        assert!(l.is_empty() && s.is_empty());
+        assert_eq!(m.pc, pc0 + 5);
+    }
 
     /// Release-mode hot-loop micro-benchmark (SQ-0465 perf guard). Executes a
     /// tight decrement/branch loop of ~20M instructions and prints throughput.
