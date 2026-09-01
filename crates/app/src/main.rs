@@ -579,6 +579,12 @@ struct PaneRects {
     /// linked. Story-pane cells share the Glk screen frame, so these coords are
     /// directly click-comparable.
     pub transcript_links: Vec<((u16, u16), u32)>,
+    /// Every Glk-identified leaf's ACTUAL drawn rect this frame, as `(win id,
+    /// kind, absolute screen rect)` — see `StoryPaneMetrics::win_rects`. The Glk
+    /// mouse/hyperlink hit-test (`glk_mouse_target`/`glk_hyperlink_window`) uses
+    /// this instead of gvm's own layout rect, which reserves a border gutter the
+    /// theme may draw thinner or not at all (SQ-1203).
+    pub win_rects: Vec<(u32, app::engine::WinKind, Rect)>,
     /// Largest meaningful `transcript_scroll` this frame (total wrapped rows −
     /// viewport). The loop clamps `state.transcript_scroll` to this so the view
     /// can't over-scroll past the top.
@@ -680,6 +686,7 @@ fn draw_frame(
     let mut transcript_total_rows: u16 = 0;
     let mut transcript_surface = false;
     let mut transcript_links_out: Vec<((u16, u16), u32)> = Vec::new();
+    let mut win_rects_out: Vec<(u32, app::engine::WinKind, Rect)> = Vec::new();
     let mut pane_layout_out = app::layout::PaneLayout::default();
 
     terminal.draw(|f| {
@@ -812,6 +819,7 @@ fn draw_frame(
             transcript_total_rows = m.total_rows;
             transcript_surface = m.transcript_surface;
             transcript_links_out = m.links;
+            win_rects_out = m.win_rects;
             story_area = story_fp.content;
 
             debug_tabs_out = app::render::debug_panel::draw_debug_panel(state, pane_layout.map, buf);
@@ -847,6 +855,7 @@ fn draw_frame(
                     transcript_total_rows = m.total_rows;
                     transcript_surface = m.transcript_surface;
                     transcript_links_out = m.links;
+                    win_rects_out = m.win_rects;
                     story_area = story_fp.content;
                     map_area = Rect::default();
                 }
@@ -882,6 +891,7 @@ fn draw_frame(
                     transcript_total_rows = m.total_rows;
                     transcript_surface = m.transcript_surface;
                     transcript_links_out = m.links;
+                    win_rects_out = m.win_rects;
                     story_area = story_fp.content;
 
                     // The tab strip names every layer, so it reads the LIVE graph — never an
@@ -1197,7 +1207,7 @@ fn draw_frame(
 
     // The draw closure runs exactly once, so the overlay ladder always ran.
     let overlay_rects = overlay_rects.expect("draw_frame closure runs exactly once");
-    Ok(PaneRects { map: map_area, story: story_area, boundaries: pane_layout_out.boundary_zones(), pane_layout: pane_layout_out, room_rects: room_rects_out, room_dock: pane_layout_out.room_dock, room_dock_tabs: room_dock_tabs_out, layer_tabs: layer_tabs_out, border_controls: border_controls_out, debug_tabs: debug_tabs_out, dialog: overlay_rects.dialog, aux_dialog: overlay_rects.aux_dialog, history_prompt: overlay_rects.history_prompt, font_check: overlay_rects.font_check, fetch_keep: overlay_rects.fetch_keep, reset_dialog: overlay_rects.reset_dialog, region_prompt: overlay_rects.region_prompt, game_over: overlay_rects.game_over, save_name_dialog: overlay_rects.save_name_dialog, text_entry: overlay_rects.text_entry, confirm_delete: overlay_rects.confirm_delete, confirm_overwrite: overlay_rects.confirm_overwrite, quit_dialog: overlay_rects.quit_dialog, launch_dialog: overlay_rects.launch_dialog, hints_panel: overlay_rects.hints_panel, command_band: band_hits, palette: palette_hits, transcript_links: transcript_links_out, transcript_max_scroll, transcript_viewport_rows, transcript_prompt_rows, transcript_total_rows, transcript_surface, modal_list_viewport })
+    Ok(PaneRects { map: map_area, story: story_area, boundaries: pane_layout_out.boundary_zones(), pane_layout: pane_layout_out, room_rects: room_rects_out, room_dock: pane_layout_out.room_dock, room_dock_tabs: room_dock_tabs_out, layer_tabs: layer_tabs_out, border_controls: border_controls_out, debug_tabs: debug_tabs_out, dialog: overlay_rects.dialog, aux_dialog: overlay_rects.aux_dialog, history_prompt: overlay_rects.history_prompt, font_check: overlay_rects.font_check, fetch_keep: overlay_rects.fetch_keep, reset_dialog: overlay_rects.reset_dialog, region_prompt: overlay_rects.region_prompt, game_over: overlay_rects.game_over, save_name_dialog: overlay_rects.save_name_dialog, text_entry: overlay_rects.text_entry, confirm_delete: overlay_rects.confirm_delete, confirm_overwrite: overlay_rects.confirm_overwrite, quit_dialog: overlay_rects.quit_dialog, launch_dialog: overlay_rects.launch_dialog, hints_panel: overlay_rects.hints_panel, command_band: band_hits, palette: palette_hits, transcript_links: transcript_links_out, win_rects: win_rects_out, transcript_max_scroll, transcript_viewport_rows, transcript_prompt_rows, transcript_total_rows, transcript_surface, modal_list_viewport })
 }
 
 // ── Command-band mouse routing ───────────────────────────────────────────────
@@ -3272,6 +3282,7 @@ fn run_event_loop(boot: startup::BootResult, launched_from_library: bool) -> Run
                                         m.column, m.row,
                                         (s.x, s.y, s.width, s.height),
                                         &windows,
+                                        &last_panes.win_rects,
                                     ) {
                                         let result = gs.deliver_hyperlink(win, link);
                                         if turn::apply_game_driven_result(
@@ -3296,6 +3307,7 @@ fn run_event_loop(boot: startup::BootResult, launched_from_library: bool) -> Run
                                 m.column, m.row,
                                 (s.x, s.y, s.width, s.height),
                                 &windows,
+                                &last_panes.win_rects,
                                 gs.char_pixels(),
                                 mouse_sub_px,
                             );

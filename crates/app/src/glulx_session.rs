@@ -21,7 +21,7 @@ use std::any::Any;
 use std::collections::BTreeMap;
 use std::time::{Duration, Instant};
 
-use gvm::glk::{GlkBackend, Rect as GlkRect, WinType};
+use gvm::glk::GlkBackend;
 use gvm::{GError, Machine, Memory, StepResult};
 
 use crate::engine::{Engine, EngineError, EngineSave, KeyInput, LocationInfo, ScreenModel, StatusModel, WinNode};
@@ -1034,28 +1034,30 @@ impl GlulxSession {
         self.finish_turn()
     }
 
-    /// The layout rects (in story-pane cells) of every window with an active Glk
-    /// mouse request — the windows a terminal click may be diverted into. Empty
-    /// when no window is watching for clicks.
-    pub fn mouse_windows(&mut self) -> Vec<(u32, WinType, GlkRect)> {
-        let layout = self.appglk().layout().to_vec();
-        layout
-            .into_iter()
-            .filter(|&(id, _, _, _)| self.machine.mouse_requested(id))
-            .map(|(id, ty, rect, _)| (id, ty, rect))
-            .collect()
+    /// The ids of every window with an active Glk mouse request — the windows a
+    /// terminal click may be diverted into. Empty when no window is watching for
+    /// clicks.
+    ///
+    /// Ids only, not rects (SQ-1203): gvm's own layout rect reserves a 1-cell
+    /// border gutter per bordered split whether or not the theme actually draws a
+    /// rule there (`upper_window_border` defaults to `BorderStyle::None`,
+    /// SQ-0821), so it disagrees with what the renderer painted by every
+    /// collapsed gutter between the pane origin and the window. The hit-test
+    /// (`glk_mouse_target`) uses the render's own recorded rects
+    /// (`StoryPaneMetrics::win_rects`) instead — "ask the drawing where it put
+    /// the text", not gvm's layout.
+    pub fn mouse_windows(&mut self) -> Vec<u32> {
+        let ids: Vec<u32> = self.appglk().layout().iter().map(|&(id, ..)| id).collect();
+        ids.into_iter().filter(|&id| self.machine.mouse_requested(id)).collect()
     }
 
-    /// The layout rects (in story-pane cells) of every window with an active Glk
-    /// hyperlink request — the windows a click on a linked transcript cell may be
-    /// diverted into. Empty when no window is watching for hyperlink clicks.
-    pub fn hyperlink_windows(&mut self) -> Vec<(u32, WinType, GlkRect)> {
-        let layout = self.appglk().layout().to_vec();
-        layout
-            .into_iter()
-            .filter(|&(id, _, _, _)| self.machine.hyperlink_requested(id))
-            .map(|(id, ty, rect, _)| (id, ty, rect))
-            .collect()
+    /// The ids of every window with an active Glk hyperlink request — the
+    /// windows a click on a linked transcript cell may be diverted into. Empty
+    /// when no window is watching for hyperlink clicks. Ids only, for the same
+    /// reason as [`Self::mouse_windows`] (SQ-1203).
+    pub fn hyperlink_windows(&mut self) -> Vec<u32> {
+        let ids: Vec<u32> = self.appglk().layout().iter().map(|&(id, ..)| id).collect();
+        ids.into_iter().filter(|&id| self.machine.hyperlink_requested(id)).collect()
     }
 
     /// The `(width, height)` of one text-grid cell in pixels — used to convert a
@@ -1120,12 +1122,22 @@ impl GlulxSession {
 /// Decide whether a terminal click at absolute `(col, row)` should be diverted
 /// to the game as a Glk mouse-input event, and if so compute its coordinates.
 ///
-/// Returns `(win, val1, val2)` only when no overlay is open and the click lands
-/// inside one of the mouse-watching `windows` (as reported by
-/// [`GlulxSession::mouse_windows`]). `story = (x, y, w, h)` is the story-pane
-/// rect: the Glk screen is sized to exactly the story pane, so a click cell maps
-/// to a Glk screen cell by subtracting the pane origin. `val1`/`val2` are then
-/// window-relative col/row for a grid window, or pixels for a graphics window.
+/// Returns `(win, val1, val2)` only when no overlay is open, `win` is currently
+/// mouse-watching (`requested`, as reported by [`GlulxSession::mouse_windows`]),
+/// and the click lands inside that window's rect as the renderer actually DREW
+/// it (`win_rects`, from `StoryPaneMetrics::win_rects` — absolute screen
+/// coordinates, one entry per Glk-identified leaf this frame). `val1`/`val2` are
+/// then window-relative col/row for a grid window, or pixels for a graphics
+/// window.
+///
+/// The hit-test is against the DRAWN rect, not gvm's own layout rect, and that
+/// is the whole of SQ-1203: gvm reserves a 1-cell border gutter per bordered
+/// split whether or not the theme draws a rule there (`upper_window_border`
+/// defaults to `BorderStyle::None`, SQ-0821), so the two rects skew by every
+/// collapsed gutter between the pane origin and the window. A click on a menu's
+/// drawn top row landed one row above every gvm rect and was silently dropped.
+/// `story = (x, y, w, h)` (the story-pane rect) is kept only as a fast
+/// overlay-adjacent bounds check — every drawn rect already lies inside it.
 ///
 /// `sub_px` is the click's offset WITHIN its cell, which a terminal only knows
 /// under pixel mouse reporting (SQ-0563). With it, a graphics window hears the
@@ -1138,7 +1150,8 @@ pub fn glk_mouse_target(
     col: u16,
     row: u16,
     story: (u16, u16, u16, u16),
-    windows: &[(u32, WinType, GlkRect)],
+    requested: &[u32],
+    win_rects: &[(u32, crate::engine::WinKind, ratatui::layout::Rect)],
     char_px: (u32, u32),
     sub_px: Option<(u16, u16)>,
 ) -> Option<(u32, u32, u32)> {
@@ -1149,14 +1162,13 @@ pub fn glk_mouse_target(
     if col < sx0 || col >= sx0 + sw || row < sy0 || row >= sy0 + sh {
         return None;
     }
-    let sx = (col - sx0) as u32;
-    let sy = (row - sy0) as u32;
-    let (win, wintype, rect) = windows
+    let pt = ratatui::layout::Position { x: col, y: row };
+    let &(win, kind, rect) = win_rects
         .iter()
-        .copied()
-        .find(|&(_, _, r)| sx >= r.left && sx < r.left + r.width && sy >= r.top && sy < r.top + r.height)?;
-    let (rel_x, rel_y) = (sx - rect.left, sy - rect.top);
-    let (vx, vy) = if wintype == WinType::Graphics {
+        .find(|&&(id, _, r)| requested.contains(&id) && r.contains(pt))?;
+    let rel_x = (col - rect.x) as u32;
+    let rel_y = (row - rect.y) as u32;
+    let (vx, vy) = if kind == crate::engine::WinKind::Graphics {
         // The kitty render scales the canvas to exactly the window's cell rect
         // (`render_kitty_virtual`), so cells and canvas pixels stay in proportion
         // and a cell offset converts straight to a canvas pixel. Clamped inside
@@ -1179,17 +1191,20 @@ pub fn glk_mouse_target(
 /// Decide which hyperlink-watching window owns a click on a linked transcript
 /// cell at absolute `(col, row)`, if any.
 ///
-/// Returns the window id only when no overlay is open and the click lands inside
-/// one of the hyperlink-watching `windows` (as reported by
-/// [`GlulxSession::hyperlink_windows`]). Same overlay/bounds/origin logic as
-/// [`glk_mouse_target`], but a hyperlink event carries the link value from the
-/// cell→link map rather than coordinates, so only the window id is returned.
+/// Returns the window id only when no overlay is open, the window is currently
+/// hyperlink-watching (`requested`, as reported by
+/// [`GlulxSession::hyperlink_windows`]), and the click lands inside that
+/// window's DRAWN rect (`win_rects`, same source and reasoning as
+/// [`glk_mouse_target`] — SQ-1203). A hyperlink event carries the link value
+/// from the cell→link map rather than coordinates, so only the window id is
+/// returned.
 pub fn glk_hyperlink_window(
     overlay_open: bool,
     col: u16,
     row: u16,
     story: (u16, u16, u16, u16),
-    windows: &[(u32, WinType, GlkRect)],
+    requested: &[u32],
+    win_rects: &[(u32, crate::engine::WinKind, ratatui::layout::Rect)],
 ) -> Option<u32> {
     if overlay_open {
         return None;
@@ -1198,12 +1213,11 @@ pub fn glk_hyperlink_window(
     if col < sx0 || col >= sx0 + sw || row < sy0 || row >= sy0 + sh {
         return None;
     }
-    let sx = (col - sx0) as u32;
-    let sy = (row - sy0) as u32;
-    windows
+    let pt = ratatui::layout::Position { x: col, y: row };
+    win_rects
         .iter()
-        .find(|&&(_, _, r)| sx >= r.left && sx < r.left + r.width && sy >= r.top && sy < r.top + r.height)
-        .map(|&(win, _, _)| win)
+        .find(|&&(id, _, r)| requested.contains(&id) && r.contains(pt))
+        .map(|&(id, _, _)| id)
 }
 
 /// Build a name-based room snapshot from an Inform room heading. Glulx has no
@@ -2773,12 +2787,11 @@ mod tests {
             GlulxSession::new(grid_mouse_watch_image(), 80, 24, true, false, false, (9, 19), None, &[]).expect("new");
         assert_eq!(sess.pending_input(), InputKind::Char, "suspends on the grid char request");
 
-        // Only the grid (window 2) watches; the buffer (window 1) does not.
+        // Only the grid (window 2) watches; the buffer (window 1) does not. Ids
+        // only (SQ-1203) — the DRAWN rect for hit-testing comes from the
+        // render's own `win_rects`, not from gvm's layout.
         let windows = sess.mouse_windows();
-        assert_eq!(windows.len(), 1, "only the requesting window is listed");
-        assert_eq!(windows[0].0, 2, "grid window id");
-        assert_eq!(windows[0].1, WinType::TextGrid);
-        assert_eq!(windows[0].2, GlkRect { left: 0, top: 0, width: 80, height: 1 }, "grid spans the top row");
+        assert_eq!(windows, vec![2], "only the requesting window's id is listed");
 
         assert_eq!(sess.char_pixels(), (9, 19), "cell pixel size exposed for graphics scaling");
     }
@@ -2796,24 +2809,37 @@ mod tests {
     }
 
     // ── glk_mouse_target coordinate mapping ───────────────────────────────────
+    //
+    // `win_rects` carries the DRAWN rect in ABSOLUTE screen coordinates (SQ-1203
+    // — what `render_node` actually painted, not gvm's own layout rect, which
+    // reserves a border gutter the theme may draw thinner or not at all). Every
+    // case below therefore states the window's rect in screen coordinates, not
+    // pane-relative ones; `requested` is the separate id list `mouse_windows`
+    // reports.
+
+    use crate::engine::WinKind;
 
     #[test]
     fn glk_mouse_target_grid_is_identity_minus_origin() {
-        // Story pane at (3, 2); a grid window filling the top row at rect(0,0,80,1).
-        let windows = [(2u32, WinType::TextGrid, GlkRect { left: 0, top: 0, width: 80, height: 1 })];
-        // Click at absolute (10, 2) → story cell (7, 0) → grid-relative (7, 0).
-        let got = super::glk_mouse_target(false, 10, 2, (3, 2, 80, 24), &windows, (9, 19), None);
-        assert_eq!(got, Some((2, 7, 0)), "grid reports window-relative col/row");
+        // Story pane at (3, 2); a grid window drawn filling the top row, so its
+        // absolute rect is (3, 2, 80, 1).
+        let requested = [2u32];
+        let win_rects = [(2u32, WinKind::Grid, ratatui::layout::Rect::new(3, 2, 80, 1))];
+        // Click at absolute (10, 2) → grid-relative (10-3, 2-2) = (7, 0).
+        let got = super::glk_mouse_target(false, 10, 2, (3, 2, 80, 24), &requested, &win_rects, (9, 19), None);
+        assert_eq!(got, Some((2, 7, 0)), "grid reports window-relative col/row, from the DRAWN origin");
     }
 
     #[test]
     fn glk_mouse_target_graphics_scales_by_char_pixels() {
-        // A graphics window offset within the pane at rect(4, 1, 20, 10).
-        let windows = [(5u32, WinType::Graphics, GlkRect { left: 4, top: 1, width: 20, height: 10 })];
-        // Story pane at origin (0,0); click at (6, 3) → story cell (6,3) →
-        // window-relative (2, 2) → CELL-CENTRE pixels (2×9+4, 2×19+9) = (22, 47)
-        // (SQ-0520: centre, not top-left, so packed toolbar buttons hit true).
-        let got = super::glk_mouse_target(false, 6, 3, (0, 0, 80, 24), &windows, (9, 19), None);
+        // A graphics window drawn at absolute rect (4, 1, 20, 10); story pane at
+        // origin (0, 0), so pane-relative and absolute coincide here.
+        let requested = [5u32];
+        let win_rects = [(5u32, WinKind::Graphics, ratatui::layout::Rect::new(4, 1, 20, 10))];
+        // Click at (6, 3) → window-relative (2, 2) → CELL-CENTRE pixels
+        // (2×9+4, 2×19+9) = (22, 47) (SQ-0520: centre, not top-left, so packed
+        // toolbar buttons hit true).
+        let got = super::glk_mouse_target(false, 6, 3, (0, 0, 80, 24), &requested, &win_rects, (9, 19), None);
         assert_eq!(got, Some((5, 22, 47)), "graphics reports cell-centre pixels");
     }
 
@@ -2822,14 +2848,15 @@ mod tests {
     /// band that lies between two cell centres.
     #[test]
     fn glk_mouse_target_graphics_uses_the_sub_cell_offset_when_known() {
-        let windows = [(5u32, WinType::Graphics, GlkRect { left: 0, top: 0, width: 20, height: 2 })];
+        let requested = [5u32];
+        let win_rects = [(5u32, WinKind::Graphics, ratatui::layout::Rect::new(0, 0, 20, 2))];
         // advent.blb's toolbar geometry: 8×18 cells. Cell row 0, 14px down — the
         // W/E compass band, which cell-centre reporting (y=9 or 27) cannot reach.
-        let got = super::glk_mouse_target(false, 2, 0, (0, 0, 80, 24), &windows, (8, 18), Some((3, 14)));
+        let got = super::glk_mouse_target(false, 2, 0, (0, 0, 80, 24), &requested, &win_rects, (8, 18), Some((3, 14)));
         assert_eq!(got, Some((5, 2 * 8 + 3, 14)), "the exact pixel clicked");
 
         // Second cell row: the offset is relative to the cell, so it adds on top.
-        let got = super::glk_mouse_target(false, 2, 1, (0, 0, 80, 24), &windows, (8, 18), Some((0, 4)));
+        let got = super::glk_mouse_target(false, 2, 1, (0, 0, 80, 24), &requested, &win_rects, (8, 18), Some((0, 4)));
         assert_eq!(got, Some((5, 16, 18 + 4)), "row offset plus in-cell offset");
     }
 
@@ -2837,32 +2864,67 @@ mod tests {
     /// size disagrees with the one the game was told.
     #[test]
     fn glk_mouse_target_clamps_a_sub_cell_offset_inside_the_cell() {
-        let windows = [(5u32, WinType::Graphics, GlkRect { left: 0, top: 0, width: 20, height: 2 })];
-        let got = super::glk_mouse_target(false, 1, 0, (0, 0, 80, 24), &windows, (8, 18), Some((99, 99)));
+        let requested = [5u32];
+        let win_rects = [(5u32, WinKind::Graphics, ratatui::layout::Rect::new(0, 0, 20, 2))];
+        let got = super::glk_mouse_target(false, 1, 0, (0, 0, 80, 24), &requested, &win_rects, (8, 18), Some((99, 99)));
         assert_eq!(got, Some((5, 8 + 7, 17)), "clamped to the cell's last pixel");
     }
 
     #[test]
     fn glk_mouse_target_declines_outside_and_under_an_overlay() {
-        let windows = [(2u32, WinType::TextGrid, GlkRect { left: 0, top: 0, width: 80, height: 1 })];
+        let requested = [2u32];
+        let win_rects = [(2u32, WinKind::Grid, ratatui::layout::Rect::new(0, 0, 80, 1))];
         // Click below the grid (row 5) but inside the pane → misses every window.
         assert_eq!(
-            super::glk_mouse_target(false, 10, 5, (0, 0, 80, 24), &windows, (1, 1), None),
+            super::glk_mouse_target(false, 10, 5, (0, 0, 80, 24), &requested, &win_rects, (1, 1), None),
             None,
             "a click outside every watching window falls through",
         );
         // Click outside the story pane entirely.
         assert_eq!(
-            super::glk_mouse_target(false, 90, 0, (0, 0, 80, 24), &windows, (1, 1), None),
+            super::glk_mouse_target(false, 90, 0, (0, 0, 80, 24), &requested, &win_rects, (1, 1), None),
             None,
             "a click outside the story pane falls through",
         );
         // Same in-window click, but an overlay is open → declined.
         assert_eq!(
-            super::glk_mouse_target(true, 10, 0, (0, 0, 80, 24), &windows, (1, 1), None),
+            super::glk_mouse_target(true, 10, 0, (0, 0, 80, 24), &requested, &win_rects, (1, 1), None),
             None,
             "an open overlay keeps the click",
         );
+    }
+
+    /// A window drawn on screen but NOT in the requested set (not currently
+    /// mouse-watching) declines the click, even though its rect contains it
+    /// (SQ-1203: the id set and the drawn rects are independent lists).
+    #[test]
+    fn glk_mouse_target_declines_a_drawn_but_unrequested_window() {
+        let requested: [u32; 0] = [];
+        let win_rects = [(2u32, WinKind::Grid, ratatui::layout::Rect::new(0, 0, 80, 1))];
+        assert_eq!(
+            super::glk_mouse_target(false, 10, 0, (0, 0, 80, 24), &requested, &win_rects, (1, 1), None),
+            None,
+            "drawn but not watching → declined",
+        );
+    }
+
+    /// This is SQ-1203 itself, reproduced without a real game: gvm's layout rect
+    /// reserves a border gutter the theme never draws (SQ-0821's no-rule
+    /// default), so a window whose DRAWN origin is one cell EARLIER than gvm's
+    /// reported origin must be hit-tested against the drawn one — a click on the
+    /// drawn top-left corner, which the old gvm-rect hit-test missed entirely.
+    #[test]
+    fn glk_mouse_target_uses_the_drawn_rect_not_a_gutter_inflated_one() {
+        let requested = [5u32];
+        // gvm's own layout would have reported this window one cell down/right
+        // (a reserved but undrawn border gutter); the DRAWN rect is what actually
+        // reached the screen.
+        let win_rects = [(5u32, WinKind::Grid, ratatui::layout::Rect::new(9, 24, 70, 5))];
+        // A click on the drawn top-left corner (9, 24) must hit window-relative
+        // (0, 0) — under the old gvm-rect math (origin (10, 25)) this cell fell
+        // outside every window and the click was dropped.
+        let got = super::glk_mouse_target(false, 9, 24, (0, 0, 80, 30), &requested, &win_rects, (1, 1), None);
+        assert_eq!(got, Some((5, 0, 0)), "hit-tested against the DRAWN origin, not a gutter-inflated one");
     }
 
     // ── Hyperlink input (glk_request_hyperlink_event) ─────────────────────────
@@ -2894,12 +2956,10 @@ mod tests {
             GlulxSession::new(grid_hyperlink_watch_image(), 80, 24, true, false, false, (9, 19), None, &[]).expect("new");
         assert_eq!(sess.pending_input(), InputKind::Char, "suspends on the grid char request");
 
-        // Only the grid (window 2) watches; the buffer (window 1) does not.
+        // Only the grid (window 2) watches; the buffer (window 1) does not. Ids
+        // only (SQ-1203) — see `mouse_windows_lists_only_watching_windows_and_char_pixels_exposed`.
         let windows = sess.hyperlink_windows();
-        assert_eq!(windows.len(), 1, "only the requesting window is listed");
-        assert_eq!(windows[0].0, 2, "grid window id");
-        assert_eq!(windows[0].1, WinType::TextGrid);
-        assert_eq!(windows[0].2, GlkRect { left: 0, top: 0, width: 80, height: 1 }, "grid spans the top row");
+        assert_eq!(windows, vec![2], "only the requesting window's id is listed");
     }
 
     #[test]
@@ -2915,42 +2975,59 @@ mod tests {
     }
 
     // ── glk_hyperlink_window hit test ─────────────────────────────────────────
+    // Same DRAWN-rect / absolute-coordinate contract as `glk_mouse_target` above.
 
     #[test]
     fn glk_hyperlink_window_returns_the_owning_window_id() {
-        // Story pane at (3, 2); a grid window filling the top row at rect(0,0,80,1).
-        let windows = [(2u32, WinType::TextGrid, GlkRect { left: 0, top: 0, width: 80, height: 1 })];
-        // Click at absolute (10, 2) → story cell (7, 0) → inside the grid.
-        let got = super::glk_hyperlink_window(false, 10, 2, (3, 2, 80, 24), &windows);
-        assert_eq!(got, Some(2), "returns the window whose rect contains the cell");
+        // Story pane at (3, 2); a grid window drawn filling the top row, so its
+        // absolute rect is (3, 2, 80, 1).
+        let requested = [2u32];
+        let win_rects = [(2u32, WinKind::Grid, ratatui::layout::Rect::new(3, 2, 80, 1))];
+        // Click at absolute (10, 2) → inside the grid.
+        let got = super::glk_hyperlink_window(false, 10, 2, (3, 2, 80, 24), &requested, &win_rects);
+        assert_eq!(got, Some(2), "returns the window whose DRAWN rect contains the cell");
     }
 
     #[test]
     fn glk_hyperlink_window_declines_outside_overlay_and_empty() {
-        let windows = [(2u32, WinType::TextGrid, GlkRect { left: 0, top: 0, width: 80, height: 1 })];
+        let requested = [2u32];
+        let win_rects = [(2u32, WinKind::Grid, ratatui::layout::Rect::new(0, 0, 80, 1))];
         // Click below the grid (row 5) but inside the pane → misses every window.
         assert_eq!(
-            super::glk_hyperlink_window(false, 10, 5, (0, 0, 80, 24), &windows),
+            super::glk_hyperlink_window(false, 10, 5, (0, 0, 80, 24), &requested, &win_rects),
             None,
             "a click outside every watching window falls through",
         );
         // Click outside the story pane entirely.
         assert_eq!(
-            super::glk_hyperlink_window(false, 90, 0, (0, 0, 80, 24), &windows),
+            super::glk_hyperlink_window(false, 90, 0, (0, 0, 80, 24), &requested, &win_rects),
             None,
             "a click outside the story pane falls through",
         );
         // Same in-window click, but an overlay is open → declined.
         assert_eq!(
-            super::glk_hyperlink_window(true, 10, 0, (0, 0, 80, 24), &windows),
+            super::glk_hyperlink_window(true, 10, 0, (0, 0, 80, 24), &requested, &win_rects),
             None,
             "an open overlay keeps the click",
         );
         // No hyperlink-watching windows at all.
         assert_eq!(
-            super::glk_hyperlink_window(false, 10, 0, (0, 0, 80, 24), &[]),
+            super::glk_hyperlink_window(false, 10, 0, (0, 0, 80, 24), &[], &[]),
             None,
             "no watching windows → nothing to divert to",
+        );
+    }
+
+    /// A window drawn on screen but NOT in the requested set declines the click
+    /// (SQ-1203: same independence as the mouse path).
+    #[test]
+    fn glk_hyperlink_window_declines_a_drawn_but_unrequested_window() {
+        let requested: [u32; 0] = [];
+        let win_rects = [(2u32, WinKind::Grid, ratatui::layout::Rect::new(0, 0, 80, 1))];
+        assert_eq!(
+            super::glk_hyperlink_window(false, 10, 0, (0, 0, 80, 24), &requested, &win_rects),
+            None,
+            "drawn but not watching → declined",
         );
     }
 }

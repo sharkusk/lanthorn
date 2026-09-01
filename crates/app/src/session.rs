@@ -3340,6 +3340,7 @@ impl GameSession {
                     left_margin: win.left_margin,
                     right_margin: win.right_margin,
                     node: WinNode::Grid(GridWindow {
+                        win: 0,
                         cols: 0,
                         rows: 0,
                         cells: Vec::new(),
@@ -3406,6 +3407,7 @@ impl GameSession {
                 // text buffers. Live screen state: no scrollback, and the lines go
                 // when the game erases the window.
                 WinNode::Buffer(BufferWindow {
+                    win: 0,
                     primary: false,
                     lines: win.prose.clone(),
                     runs: vec![Vec::new(); win.prose.len()],
@@ -3423,6 +3425,7 @@ impl GameSession {
                 })
             } else {
                 WinNode::Grid(GridWindow {
+                    win: 0,
                     cols,
                     rows,
                     cells: win
@@ -4699,6 +4702,7 @@ pub fn screen_model_from_machine(machine: &Machine) -> ScreenModel {
     let screen = &machine.screen;
     let src = &screen.upper;
     let grid = GridWindow {
+        win: 0,
         fill: None, // v6-only erase fill (SQ-0584)
         cols: src.cols,
         rows: src.rows,

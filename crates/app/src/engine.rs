@@ -134,6 +134,11 @@ pub struct ErasedFill {
 
 #[derive(Debug, Clone, Default)]
 pub struct GridWindow {
+    /// This window's Glk id (0 for a Z-machine/Scott grid, which has no Glk
+    /// identity). Lets the renderer record which drawn rect belongs to which
+    /// window for mouse/hyperlink hit-testing (SQ-1203) without re-deriving it
+    /// from gvm's own (possibly gutter-skewed) layout.
+    pub win: u32,
     /// Logical grid width in columns.
     pub cols: u16,
     /// Logical grid height in rows (allocation height).
@@ -260,6 +265,11 @@ impl GridWindow {
 /// set `primary = false` and carry their inline content in `lines`/`runs`/`scroll`.
 #[derive(Debug, Clone, Default)]
 pub struct BufferWindow {
+    /// This window's Glk id (0 for a Z-machine/Scott buffer, which has no Glk
+    /// identity). Lets the renderer record which drawn rect belongs to which
+    /// window for mouse/hyperlink hit-testing (SQ-1203) without re-deriving it
+    /// from gvm's own (possibly gutter-skewed) layout.
+    pub win: u32,
     /// Accumulated logical lines (split on `\n`) for an inline (non-primary)
     /// buffer window. Empty for the primary window.
     pub lines: Vec<String>,
@@ -304,6 +314,18 @@ pub struct BufferWindow {
     /// the read: it belongs after that window's own prompt, not in a story window
     /// the player is not typing into. Always false for other engines.
     pub reads_input: bool,
+}
+
+/// Which leaf kind a recorded drawn rect ([`crate::render::screen::StoryPaneMetrics::win_rects`])
+/// belongs to. Engine-neutral (unlike gvm's own `WinType`, which stays inside
+/// the Glulx adapter per the architecture rule that Glk never leaks into
+/// shared app types) — it exists only to pick the right coordinate space
+/// (cells vs. pixels) when hit-testing a click against the DRAWN rect (SQ-1203).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum WinKind {
+    Grid,
+    Buffer,
+    Graphics,
 }
 
 /// How a [`WinNode::Pair`] divides its space.
