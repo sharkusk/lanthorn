@@ -23,130 +23,28 @@ Absolute URLs or no link.
 
 ### Highlights
 
-- **Breaking: the command-line flags changed.** Every `--no-x` flag across all
-  four front-ends (`lanthorn`, `zvm-cli`, `gvm-cli`, `scott-cli`) is now a
-  positive `--x on|off` flag — `--no-sound` is `--sound off`, `--no-images` is
-  `--images off`, and so on. There are no aliases for the old spellings; they
-  are rejected outright. See the flag table below.
-- **Lanthorn's Guiding Light** offers the words a story's parser knows, tries
-  its suggestions first in a silent throwaway copy of your game, and marks
-  every line that's its own — never the story's voice, never a spoiler.
-- **Toggle controls right on the story pane's border** — clickable icons for
-  the command band, the map and its return probe, the Guiding Light, and (on
-  a graphical v6 story) render mode and pixel lock, each showing its own state
-  at a glance.
-- **The command band knows more of what the story has said**, not just what
-  it contains, and keeps the strong language out of the VERB column by
-  default (`hide_adult_words`, fully configurable).
-- **The story picker follows your folders** — a library sorted into
-  sub-folders is browsed folder by folder, with `Ctrl+F` to filter as you
-  type and `--fetch`/`--import-metadata` for curating a library headlessly.
-- **Play in a browser, pictures and sound included** — the Docker image now
-  renders in-game graphics as sixel and streams the game's own audio to the
-  page.
-- **Graphical v6 gets a third render mode, `extended`**, which grows a tall
-  terminal downward instead of letterboxing it — and a pre-release
-  performance sweep made guidance, the word reveal and the command band all
-  noticeably cheaper per turn and per frame.
-
-### Performance
-
-A pre-release sweep of everything that runs per turn and per frame. None of it
-changes what lanthorn does — all of it changes when and where.
-
-- **The guidance features now cost a turn almost nothing.** The shadow probe
-  refuses a question *before* paying for the snapshot when its worker is busy;
-  the Glulx snapshot diffs RAM by the slice instead of byte-at-a-time; and one
-  host snapshot per turn is shared by the turn history, the auto-save and the
-  return probe, where each used to take its own (~100 ms apiece on a large
-  Glulx game, in a debug build).
-- **"Does any object answer to this word?" is one set lookup.** The reveal and
-  the seen-words scrape used to walk every object's every parse word with
-  fresh allocations per comparison — now a truncated word set is built once a
-  turn and asked in O(1).
-- **The command band stopped re-reading the world twenty times a second.** With
-  the band open, the object columns re-read the engine only when the VM has
-  actually run.
-- **The hybrid v6 frame is gated the way raster always was.** An unchanged
-  frame replays a cached composition instead of rebuilding megabytes of canvas
-  and re-rasterizing every chrome glyph; changed picture bands compress and
-  encode on a worker thread while the old image holds the screen, so a turn's
-  art no longer hitches the UI on its way in.
-- **Evicted kitty uploads are now deleted from the terminal.** Before, they
-  leaked until the terminal's own quota evicted something — possibly a picture
-  still on screen.
-- **Auto-save builds and writes the archive on a background thread**, and the
-  opt-in turn history is bounded by the new `history_turns` key (default 500
-  turns) instead of growing for the life of the session.
-- **The map pane's derived tables are cached per layout generation**, and the
-  terminal write path is buffered — thousands of tiny locked writes per dense
-  frame became a handful.
-
-### Pictures in the browser, for the served container
-
-ttyd's xterm.js renders sixel once the image addon is on; the entrypoint
-turns it on and starts each session with `--image-protocol sixel`, so cover
-art and graphical v6 stories show in the browser as pictures instead of
-half-block cells. `LANTHORN_WEB_IMAGES=halfblocks` restores the fallback.
-Sixel has no image ids, so scrolling an inline picture past its anchor cell
-used to re-send the whole payload on every scroll step; an inline image now
-draws as a plain footprint while the transcript is still moving and sends the
-full picture once the scroll settles, so a scroll session costs one payload
-per image rather than one per step.
-
-### Sound in the browser, for the served container
-
-Mode 2 of the Docker image (ttyd in a browser) now plays the game's sound.
-ALSA in the container writes what a process plays to a per-session FIFO, a
-new `lanthorn-audio-relay` binary streams that FIFO over a WebSocket on port
-7682, and ttyd's page carries a script that opens it and plays the PCM with
-WebAudio. lanthorn itself is unchanged. Publish both ports; `LANTHORN_WEB_AUDIO=off`
-turns it off. See `docs/internals/docker.md`.
-
-### GIF cover art is accepted
-
-IFDB and the IFComp archive serve some cover art as GIF; a fetch used to
-discard it as undecodable. The GIF decoder is now enabled.
-
-### `--import-metadata`: curated identifications and covers
-
-For stories IFDB cannot identify by IFID, or has no cover for, a tab-separated
-file of rows (`path`, then an `ifdb_tuid` to fetch by, or a title, author,
-year, genre, language and description to record, and a `cover_url` to
-download) is applied with `lanthorn <library> --import-metadata rows.tsv`.
-The picker reads the result like any fetched record.
-
-### `--fetch`: the picker's IFDB pass, run headless
-
-`lanthorn <library> --fetch missing` walks a library (sub-folders included)
-and fetches the metadata and cover art the picker's `r` would, printing one
-line per story and exiting, so a server's library gets its sidecars built
-without anyone at the picker. `--fetch all` refetches the cached ones.
-
-### The story picker follows your folders, and finds a story in any of them
-
-A library sorted into sub-folders used to show the picker one level of itself.
-Folders are now rows at the top of the list: `Enter` (or a double-click) opens
-one, `Backspace` or the `..` row comes back up, and the selection lands on the
-folder you left. Sorting keeps folders on top under every column, downloads
-land in the folder on screen, and a folder row has its own `story_folder`
-colour in `style.toml`.
-
-The cover grid (`g`) lists all the games below the current folder instead of
-that one folder, so a library sorted into folders still has a gallery.
-
-`Ctrl+F` opens a type-to-filter field over an in-memory index of the **whole**
-library, built in the background as the picker opens, so the folder view is up
-instantly and the index catches up behind it. Every word typed must occur in a
-story's title, author, filename or folder; matches show their folder after the
-title, `↑`/`↓` move through them while typing, `Enter` opens one, `Esc` returns
-to the folder. Both keys are rebindable (`find-story`, `parent-folder`).
+- **Breaking: the command-line flags changed.** Every `--no-x` flag in all four
+  front-ends is now `--x on|off` — `--no-sound` is `--sound off`. The old
+  spellings are rejected; see the table below.
+- **Lanthorn's Guiding Light** — when the parser rejects a word, lanthorn offers
+  the story's own (`try instead — lantern`), having first tried each suggestion
+  in a silent throwaway copy of your game. Its lines carry a `●` in the margin:
+  lanthorn's voice, never the story's.
+- **The word reveal** (`F4`) lights every noun on screen that the story actually
+  knows, so you can tell the implemented `lamp` from the scenery `field`.
+- **Toggle controls on the story pane's border** — click to open the command
+  band or map, switch the Guiding Light, or change a v6 story's render mode.
+- **The story picker follows your folders**, with `Ctrl+F` to filter the whole
+  library as you type.
+- **Play in a browser, pictures and sound included** — the Docker image now shows
+  in-game graphics and plays the game's audio in the page.
+- **A third v6 render mode, `extended`**, which fills a tall terminal with more
+  story instead of a letterbox.
 
 ### Breaking — the command-line flags
 
-Every `--no-x` flag is replaced by a positive one that takes a value, across
-**all four front-ends** (`lanthorn`, `zvm-cli`, `gvm-cli`, `scott-cli`). There
-are no aliases for the old spellings; they are rejected.
+Across `lanthorn`, `zvm-cli`, `gvm-cli` and `scott-cli`. No aliases; the old
+spellings are rejected.
 
 | was | is |
 |---|---|
@@ -158,338 +56,129 @@ are no aliases for the old spellings; they are rejected.
 | `--no-timed-input` | `--timed-input on\|off` |
 | `--no-more` / `--no-page` | `--pager on\|off` |
 | `--system-colours` | `--colour machine` |
-| `--no-status` | removed (use `--story-only`, which it was already an alias for) |
+| `--no-status` | removed (use `--story-only`) |
 
-The point is not the spelling. A negative-only flag is **one-way**: `--no-sound`
-could force sound off for a run, but nothing could force it *on*, so a config
-carrying `enable_sound = false` could only be overridden by editing the file.
-`--game-colours on` could not be asked for at all.
-
-- **New: `--colour terminal|theme|machine`** pins which of the three sources the
-  story's default page and ink resolve from — a precedence the code already had
-  and nothing could choose between. It is a different axis from
-  `--game-colours on|off`, which decides whether the interpreter honours what the
-  *story* asks for; both are kept.
-- `--help` now wraps to one width — 80 columns — in every front-end. Some entries
-  wrapped themselves at ~83 columns while a generated list ran to 117 and was
-  wrapped by the terminal, so one help screen showed two authorities.
+New: `--colour terminal|theme|machine` chooses where a story's default page and
+ink colours come from.
 
 ### Lanthorn's Guiding Light
 
-- **lanthorn can now help you play**, and says so once: a single line above its
-  first offer of the session — *"Lanthorn's Guiding Light: ● is mine, not the
-  story's."* It arrives when there is a mark on screen to explain rather than as
-  a banner at launch, which is why it describes that mark instead of promising
-  one. It does not say where the switch is, because the ●/○ control in the pane
-  border is right there. After that the
-  help comes unannounced, carried by the glyph alone and never in the story's own
-  voice.
-- **The mark is the whole of the attribution on screen.** No prefix rides the
-  text, so a forty-column pane spends one column on saying whose a line is. Both
-  tones — the ordinary light, and the caution before a move that cannot be
-  undone — are drawn in your terminal's **yellow**, the caution bold, which reads
-  on a light page as well as a dark one. `transcript_assist`,
-  `transcript_assist_caution` and the glyph itself (`"gutter.assist"`) are all
-  yours in `style.toml`; point it at a patched font's own lamp (U+F1A60) if you
-  have one installed.
-- **An exported transcript carries the words instead.** A file has no margin and
-  no colour, so `export-transcript` writes `Lanthorn: ` onto the front of every
-  line that is ours — the surface where the distinction has to survive a
-  copy-paste.
-- **When the parser rejects a word, lanthorn offers the story's own.** Mistype
-  the lantern and the light says `try instead — lantern`; type `smel` and it
-  answers `smell · sniff`, because that is how *this* story groups the word. It
-  never rewrites what you typed and never sends anything on your behalf — a wrong
-  guess costs a keystroke rather than a turn.
-  - It works out that a word was rejected from the **story's own dictionary**,
-    not from the game's wording, so it fires the same on a story that words the
-    refusal its own way ("Why, I don't even know what that verb means!") as it
-    does on Infocom's `I don't know the word "…".`
-  - Three sources, all of them the story's: a word one keystroke away, a word you
-    typed a different ending on (`opening` → `open`), and the story's own
-    synonyms for a verb once it is identified.
-  - It only ever names words this story's parser will accept — including spelling
-    out the truncated keys an older dictionary stores, so a Version 3 game says
-    `leaflet` rather than the `leafle` on disk.
-  - And it stays quiet far more often than it speaks: one wrong word in the
-    command and no more, a single-keystroke miss and nothing weaker, once per
-    word per session, and nothing at all when it has nothing good.
-- **And the suggestion is tried before you see it.** lanthorn forks your game
-  into a silent throwaway copy, types each candidate into it from exactly where
-  you are standing, keeps only the ones that did something, and throws every copy
-  away. `illuminate lamp` at Zork's front door now says nothing at all — `light
-  lamp` would not have worked there either — and the same command in the living
-  room says `try instead — light`. That is why the line recommends rather than
-  lists: the words changed with the evidence behind them.
-  - How the game says *no* is **learned from the game**, not from a table of
-    English phrases: the copy is handed deliberate nonsense alongside the real
-    question and the reply is compared with what came back. It is read in the
-    room the question was asked in, because scope is where you are standing.
-  - Nothing the copy does escapes it. Sound and graphics are off, its file store
-    is empty, and a story reaching for `@save` inside one is told the write
-    failed. Your own session is never stepped, saved or restored.
-  - It is evidence, not a promise: a game that draws on randomness can answer the
-    copy and your game differently, and a refusal the controls never provoke gets
-    through. `guidance_probe = false` (or the settings row) turns it off, and the
-    offer falls back to naming what the dictionary holds — which is also what
-    happens on a story too slow to ask inside the probe's budget.
-- **One switch for the whole set**: `--guidance on|off` for a launch,
-  `/set-guidance` (bare toggles) — or the light's own `●`/`○` control in the
-  story pane's bottom border — remembered **for that story**, and a `guidance`
-  row on the settings screen that sets the global default new games inherit.
-  `/set-guidance auto` hands a story back to that default. `guidance_probe` sits
-  beside it, for the speculative half alone.
-- **A first-run font check sets every icon at once.** lanthorn cannot read your
-  terminal's font — it writes characters, and the font belongs to the terminal —
-  so on a first launch it shows two rows of glyphs and asks which one your
-  terminal draws properly. Answer row 1 and the map takes the Nerd Font arrows,
-  the four-way stairs-and-doors portal icons and the Guiding Light's own lamp;
-  answer row 2 (or press Esc) and the plain glyphs stand. The answer is written
-  to `style.toml` as preset **names**, one line each, so it stays yours to edit
-  and a later improvement to a preset still reaches you. `/run-font-check` asks
-  again — which is what you want after changing fonts — as does
-  `--font-check on`; `--font-check off` never asks, and there is a `font_check`
-  row on the settings screen.
-- **The word reveal** — **F4**, the `◈` on the story pane's bottom border, or
-  `/reveal-words` — lights every noun, name or object already on screen that
-  this story knows, for a few seconds, over its own prose and without moving a
-  line of it. It goes out on your next keystroke, your next turn, or on its own.
-  It answers the oldest frustration in the genre: a room description names a
-  dozen nouns and two of them are implemented. *Mini-Zork* opens on a `field`
-  the story has never heard of, and that word stays dark.
-  - It lights only the things — asking every object in the story for its own
-    parse names, nouns and adjectives together, never a verb, article or
-    preposition. What it lights are *words this story knows — not necessarily
-    things that are here*; the lighting itself is the whole of the reply, with
-    no legend riding the status line. A description that mentions something in
-    the next room lights it, which is the point rather than a leak: every word
-    it touches is one the story has already printed on your screen.
-  - Verbs never light. The command band already answers "what can I do".
-  - Glulx games answer with their own objects too: the reveal reads the Inform
-    object list straight out of Glulx memory, so *Dr Ludwig and the Devil* now
-    lights its devil and its summoning circle instead of `the` and `an`. Scott
-    Adams games — and any Glulx image whose object list can't be verified —
-    still fall back to the story's own dictionary flags, a weaker guarantee: an
-    Inform dictionary marks a word "usable in noun position" rather than "names
-    a thing", so an article can slip through there.
-
-- **The map finds its own way back** — after a move that opens a one-way gap,
-  a silent throwaway copy of the game probes for the return passage and the
-  map records it only when the copy actually comes out in the room you left:
-  a probe that lands anywhere else records nothing, so the map never asserts
-  an edge nobody observed. On by default — the probing shares the turn's own
-  snapshot and costs the turn almost nothing — with a footprint control on
-  the story pane's bottom border and `/set-return-probe` to persist a choice
-  per-game.
+- Mistype a word and the light offers what the story would accept — a near
+  spelling, a different ending (`opening` → `open`), or the story's own synonyms
+  — and only words this story's parser will take. It never changes what you
+  typed or sends anything for you.
+- Each suggestion is tried first in a silent copy of your game from where you are
+  standing, so `illuminate lamp` at Zork's front door says nothing, and in the
+  living room says `try instead — light`. `guidance_probe = false` turns the
+  trying-out off.
+- `--guidance on|off`, `/set-guidance`, or the `●`/`○` control on the pane
+  border — remembered per story. A `guidance` row on the settings screen sets
+  the default.
+- **The word reveal** — `F4`, the `◈` border control, or `/reveal-words` —
+  lights every noun and adjective already on screen that this story knows, for a
+  few seconds. Works for Z-machine and Glulx stories.
+- **A first-run font check** shows two rows of glyphs and asks which your
+  terminal draws properly; the answer sets the map arrows, portal icons and the
+  light's lamp glyph at once. `/run-font-check` asks again after a font change.
+- **The map finds its own way back**: after a one-way move, a silent copy probes
+  for the return passage and the map records it only if the copy comes out where
+  you left. `/set-return-probe` and a border control switch it.
 
 ### Toggle controls in the pane border
 
-- **Clickable icons on the story pane's own frame**, each showing what state it
-  is in. A control sits where the thing it governs is: the command band opens
-  below the pane, so its toggle rides the bottom border; the map lives to the
-  right, so its toggle takes that border's right-hand end; the Guiding Light
-  joins the band; and the two v6 switches — render mode and pixel lock — govern
-  how the pane itself is drawn, so they keep its top border, and appear only on
-  a graphical v6 story.
-
-  ```text
-  ┌─ ZORK I ──────────────────────┤ ◧ □ ├─┐
-  │                                       │
-  └──────────────┤ ▲ ○ ├─────────┤ ◀ ├────┘
-  ```
-
-- **The state is carried twice — by the glyph and by the colour.** The panel
-  toggles are arrows pointing the way the panel would move (`▶` = click and the
-  map leaves that way); the Guiding Light is filled when lit and hollow when
-  out; the render mode draws one glyph per mode and the lock one per state. On
-  top of that every control that is on is lit yellow, so a player who cannot
-  tell the two colours apart still has the shape. Hovering floats a hint into
-  the pane saying what a click does and which command does the same. Themeable
-  through `panel.control` (off), `panel.control:lit` (on) and
-  `panel.control:hover`.
-- **`control_icons = "nerdfont"`** gives all eleven states a named icon — a map
-  with a "you are here" dot when the map is shown, an off/on panel pair for the
-  band, a lamp for the light, a monitor per render mode, a padlock for the lock.
-  Every codepoint was read from the font's own `post` table rather than inferred
-  from a name, and each control's two states come from one icon family, so a
-  toggle changes shape without also changing stroke weight.
-- **A click is the command**, so what you switch here is remembered **for that
-  story** — in its own `config.toml` sidecar, never your global config. The
-  settings screen still sets the global default new games inherit; a command's
-  `auto` argument hands one story back to it.
-- **`/set-v6-render` and `/set-guidance` were session-only and now persist
-  per-game.** For the render mode this is a deliberate reversal rather than a
-  correction: raster began as a *fallback* — the mode you escaped to when hybrid
-  could not cope — and an escape hatch rightly did not outlive its session. It is
-  a destination now, with `extended` beside it, and a player may genuinely prefer
-  raster for one game and hybrid for another. Guidance follows by a different
-  route: wanting help is a standing preference about the story in front of you,
-  not a temporary toggle.
+- Clickable icons on the story pane's frame: command band and Guiding Light on
+  the bottom border, the map on the right, and — on a graphical v6 story —
+  render mode and pixel lock on the top. Lit controls are yellow; hovering shows
+  what a click does and the equivalent command.
+- `control_icons = "nerdfont"` swaps the plain glyphs for Nerd Font icons.
+  Themeable via `panel.control`, `panel.control:lit`, `panel.control:hover`.
+- What you switch here is remembered **for that story**; the settings screen sets
+  the default new games inherit. `/set-v6-render` and `/set-guidance` now
+  persist per game instead of lasting one session.
 
 ### The command band
 
-- **Under what is here, what the story has said.** The WHAT column now carries a
-  second block, dimmed: every word the story has printed this session that names
-  a thing. *Arthur* says of the torque that "imbedded in one of the knobs is a
-  sliver of crystal" — the crystal is a real object with a real use, and until
-  now no column had a row for it, because the object tree stops at the torque's
-  lid. Newest first, since the word you want is usually the one just printed, and
-  it accumulates: a noun named forty turns ago is still one click away. `WITH…`
-  gets the same block, being the other noun slot.
-  - **It looks like the weaker claim it is.** Dimmed through a
-    `band.item:seen` selector of your own, because the story knowing a word is
-    not a promise that the thing is within reach.
-  - **The header only says what is true of the whole column** — `WHAT — here`
-    when every row is the object tree's, `WHAT — seen` when every row is a
-    printed word, and a plain `WHAT` when it is both.
-  - **Nothing new goes into a save.** The block is read back off the transcript,
-    so restoring to before the crystal was mentioned takes `crystal` away again.
-  - The engine that knows the most used to offer the least: this block existed
-    only for Glulx and Scott Adams, which have no object tree, so *Zork I* and
-    *Arthur* got scope and nothing else.
-- **The strong language stays out of the VERB column, and the list is yours.**
-  The column is the running story's own grammar now, and Infocom's dictionaries
-  are saltier than their prose — *Zork I*'s verb table really does hold `fuck`,
-  `shit`, `rape` and `molest` — so opening the band put the lot in front of
-  whoever pressed the key. `hide_adult_words` (default on) keeps the words in
-  `adult_words` out of any panel that enumerates a story's vocabulary unprompted.
-  - **The list ships written out and uncommented in your `config.toml`**, because
-    a filter nobody can inspect is censorship and one written in your own config
-    file is a default. Shorten it, extend it, or set it to `[]`.
-  - It is the strong end only — four words out of Zork I's two hundred and
-    fifty-odd. `damn` and `barf` are Infocom being Infocom and stay; so do
-    `hell`, `crap`, `screw`, `suck` and `piss`. `rape` and `molest` are not
-    swearing at all and are on the list anyway.
-  - **Two ways off, and neither destroys anything.** `hide_adult_words = false`
-    restores the full column and keeps the words, so turning it back on needs no
-    retyping; `adult_words = []` does the same from the other end. There is a
-    settings-screen row for the switch.
-  - **Display only.** Every word taken out is still a word the story knows:
-    typing it parses exactly as it always did, and Lanthorn's Guiding Light still
-    offers it when you reach for something close to it.
-- **The quick block draws `up`/`down`/`in`/`out` as glyphs, not words.** They now
-  sit in a small cluster beside the compass rose — up centred above, down
-  centred below, in and out side by side between — drawn with the same
-  `↑`/`◉`/`◎`/`↓` icons the automap already uses for a vertical exit, so a
-  click on one reads as the same glyph the map would show. Every cell is
-  still its own one-click target, and a `[symbols]` `portal_icons` preset in
-  `style.toml` restyles both the cluster and the map at once. The word flow
-  below the rose is four words shorter for it, and the quick row's own text
-  is no longer dimmed — it's a primary set of click targets, not secondary
-  chrome.
+- The WHAT and WITH columns now also list, dimmed, every thing the story has
+  mentioned this session — newest first — not only what the object tree says is
+  here. Style it with `band.item:seen`.
+- Infocom's verb tables include some strong language; `hide_adult_words`
+  (default on) keeps the words in `adult_words` out of the VERB column. The list
+  is written into your `config.toml` so you can shorten, extend or empty it. The
+  words still parse when typed.
+- `up`/`down`/`in`/`out` are drawn as glyphs in a cluster beside the compass
+  rose, using the same icons as the map.
+
+### Story picker and library
+
+- A library sorted into sub-folders is browsed folder by folder: `Enter` opens,
+  `Backspace` goes up. The cover grid (`g`) shows everything below the current
+  folder. `Ctrl+F` filters the whole library by title, author, filename or folder.
+- A URL works anywhere a path does; lanthorn downloads it, runs it, and offers to
+  keep it. A downloaded zip of release disk images is unpacked into your library.
+- `lanthorn <library> --fetch missing|all` fetches IFDB metadata and cover art
+  for a whole library headlessly; `--import-metadata rows.tsv` applies your own
+  identifications and cover URLs for stories IFDB can't place.
+- GIF cover art is accepted. The download cap is 32 MiB.
 
 ### Original media
 
-- **`.g64` GCR bitstream disks.** A `.g64` holds the raw bitstream a 1541's head
-  reads rather than decoded sectors; lanthorn decodes it and plays it. Verified
-  byte-identical against an independent dump of the same release.
-- A **zip is opened like a volume**: entries are classified by content, not by
-  name, so a zip carries anything lanthorn runs — v3–v8 including graphical v6,
-  Glulx, Scott Adams, Blorb containers — and a Blorb or hints file packed beside
-  the story is found. It previously named three extensions and discarded the
-  resource handle, so the one format whose point is that it ships artwork was the
-  one a zip could not carry.
-- A `.d64` and a `.g64` now report the same type in the story list. They are one
-  floppy dumped two ways, and showing them as two kinds of thing was a
-  distinction a player could not act on.
+- `.g64` disk images play. A zip is opened like a volume and can carry any
+  format lanthorn runs, including a Blorb beside the story.
 
-### Library
+### Docker image
 
-- **A URL works wherever a path does.** lanthorn fetches it and hands the file to
-  the ordinary loader, so every format works without a second code path, then
-  offers to keep it in your library.
-- **A downloaded zip of release disk images** is recognised and offered: keep it
-  and the whole release is unpacked into your library and launched; decline and
-  it says why rather than failing obscurely. Only disk images are extracted —
-  never a readme, cover or anything else in the archive.
-- The download cap is 32 MiB, not 16. Modern Glulx games carry their artwork and
-  sound inside the blorb and run well past the "few MiB" a story file used to be;
-  the old ceiling refused real games silently.
+- The browser mode shows cover art and v6 graphics as pictures (sixel) and plays
+  the game's sound. Publish port 7682 alongside 7681; `LANTHORN_WEB_IMAGES=halfblocks`
+  and `LANTHORN_WEB_AUDIO=off` turn each off.
 
 ### Configuration
 
-- **Your `config.toml` gains the settings that arrived after it did.** The file
-  documents itself, but it was only ever *written* once — so a config seeded a
-  release ago never learned about anything invented since, and a setting you
-  cannot see in your own file is a setting you cannot discover. Lanthorn now
-  appends what is missing, commented, at the end of the section it belongs to.
-  - **Nothing you wrote is touched.** Your values, your comments and your spacing
-    come through byte for byte, sections are not reordered, and a key the file
-    already mentions — commented or not — is never offered twice. A commented
-    line changes nothing until you edit it, and a second launch adds nothing.
-  - **`adult_words` arrives uncommented**, like the fresh seed writes it. That
-    list is a default rather than a filter nobody can inspect only because it is
-    written out where you can read and edit it, and that was true of new installs
-    only.
-  - **Three files are left exactly as they are**: one you emptied on purpose
-    (an empty config is a valid one, and there is nothing there to complete), one
-    that does not parse (lanthorn already says so at startup and refuses to write
-    over it), and one carrying a line that reads `# lanthorn: no-top-up`.
+- An existing `config.toml` gains the settings added since it was written,
+  appended commented in the section they belong to. Nothing you wrote is touched.
+  `# lanthorn: no-top-up` in the file opts out.
+- `history_turns` (default 500) bounds the opt-in turn history.
+- `v6_arrow_keys` now defaults to false: arrows scroll and pan the map in a v6
+  game as everywhere else; the game's own arrow bindings are opt-in.
 
 ### Version 6 rendering
 
-- **A third v6 render mode, `extended`.** `raster` draws the whole pane as one
-  pixel image and spends every spare pixel on magnification, which on a tall
-  terminal means a fractional scale and a thick letterbox. `extended` draws the
-  same picture but pins the magnification to a whole number and grows the frame
-  DOWNWARD instead: the game's own screen keeps its layout at the top, the side
-  border tiles on down out of its own artwork, and the height that opens up
-  carries more of the story — in the release's own bitmap typeface, at 1:1 or 2x
-  where it is sharpest. Zork Zero shows 50 rows of prose where `raster` showed
-  19 at the same 100x50 terminal, and pages at `[MORE]` correspondingly less
-  often. `v6_render = "extended"`, `--v6-render extended`, or
-  `/set-v6-render extended` (bare `/set-v6-render` now cycles all three). The
-  game is never told a taller screen, so no title lays itself out differently;
-  one whose own chrome sits below its story window — Journey's command menu —
-  keeps today's letterbox.
-- A **modal over a v6 game centres in the pane**. Dropping to text-only for a
-  dialog is what frees the space, but the dialog was still being centred in the
-  rect the pixel frame had left — so it landed low and right, and at some sizes
-  its buttons ran off the pane entirely.
-- **A fractionally-scaled raster frame is no longer resampled by the terminal.**
-  The composite is padded to the whole cells it is placed over, so it blits 1:1
-  instead of being stretched into a box up to a cell taller than itself.
+- `extended` render mode: `v6_render = "extended"`, `--v6-render extended`, or
+  `/set-v6-render extended` (bare `/set-v6-render` cycles all three). Zork Zero
+  shows 50 rows of prose on a 100x50 terminal where `raster` showed 19.
+- Dialogs over a v6 game centre in the pane.
+- A fractionally scaled raster frame is no longer stretched by the terminal.
+
+### Performance
+
+Everything that runs per turn and per frame got cheaper: guidance and the return
+probe share one snapshot per turn, the word reveal and command band no longer
+re-scan the story every frame, hybrid v6 frames are cached between changes and
+encoded off the main thread, auto-save writes in the background, and evicted
+kitty images are deleted from the terminal instead of leaking.
 
 ### Fixed
 
-- Arthur's CGA flank no longer reprints a fragment of the top banner's ornament
-  partway down the side rule when the pane is taller than the artwork.
-- A menu a game prints *below* its own split — Anchorhead's help, LostPig's —
-  stays on screen. It was being retired as though it were an Inform quote box,
-  losing the bottom entries and the `BACKSPACE to return` line on every keypress.
-- `v6_arrow_keys` defaults to **false**: arrows keep driving lanthorn's
-  scrollback and map panning in a v6 game, as they do everywhere else. A game's
-  own arrow bindings are now opt-in. v6 menus and "press any key" screens are
-  unaffected either way.
-- The banner and opening room description no longer vanish one command into
-  play. A game that clears the screen during its own startup — the v5 Solid Gold
-  re-releases with built-in hints do, *Zork I* r52 and *The Hitchhiker's Guide*
-  r31 among them — had that clear held over and applied at the end of the
-  player's FIRST turn, wiping everything they had read so far. The boot now
-  drains the clear it issued, and ignores it as `zvm-cli` always has: the screen
-  the game erased is the one before its own banner, and nothing had been drawn
-  on it yet.
-- A Glk text-grid window's unwritten ground is now visible. City of Secrets'
-  mouse-driven `help` menu — and any Glulx grid window like it — used to ground
-  on the same theme colour as the terminal page it sat on, so a grid with no
-  border (the default) had no visible extent at all. It now grounds on reverse
-  video, the same spelling the status bar uses, themeable via the new
-  `glk.grid.background` selector. A Z-machine or Scott upper window is
-  unaffected: those games paint their own reversal.
+- The banner and opening room description no longer vanish after the first
+  command in games that clear the screen during startup (the Solid Gold
+  re-releases, *Zork I* r52, *Hitchhiker's* r31).
+- A menu printed below a game's own split — Anchorhead's help, LostPig's — stays
+  on screen.
+- A Glk text-grid window with no border now has a visible ground (City of
+  Secrets' `help` menu); themeable via `glk.grid.background`.
+- Arthur's CGA side rule no longer repeats a fragment of the top banner.
+- `--help` wraps at 80 columns in every front-end.
 
 ### Documentation
 
-- **Three doc tiers.** `docs/` now separates a player-facing
-  [**guide**](https://github.com/sharkusk/lanthorn/blob/main/docs/guide/) from
-  the deep-dive
-  [**internals**](https://github.com/sharkusk/lanthorn/blob/main/docs/internals/)
-  and a code-generated
-  [**reference**](https://github.com/sharkusk/lanthorn/blob/main/docs/reference/)
-  (every command, key binding, config setting and style selector), rendered
-  straight from lanthorn's own source so the tables can't drift from what it
-  actually does.
-  [`docs/README.md`](https://github.com/sharkusk/lanthorn/blob/main/docs/README.md)
-  is the map across all three.
+`docs/` now has three tiers: a player
+[**guide**](https://github.com/sharkusk/lanthorn/blob/main/docs/guide/), the
+[**internals**](https://github.com/sharkusk/lanthorn/blob/main/docs/internals/),
+and a generated
+[**reference**](https://github.com/sharkusk/lanthorn/blob/main/docs/reference/)
+of every command, key, setting and style selector.
+[`docs/README.md`](https://github.com/sharkusk/lanthorn/blob/main/docs/README.md)
+maps all three.
+
 
 ## v0.3.0 — 2026-08-26
 
