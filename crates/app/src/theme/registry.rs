@@ -329,6 +329,12 @@ pub static REGISTRY: std::sync::LazyLock<Vec<RegRow>> = std::sync::LazyLock::new
     row("glk.grid.input", Section::GlkGrid, Kind::Style, Some("accent"), Delta::EMPTY),
     row("glk.grid.user1", Section::GlkGrid, Kind::Style, Some("chrome"), Delta::EMPTY),
     row("glk.grid.user2", Section::GlkGrid, Kind::Style, Some("chrome"), Delta::EMPTY),
+    // A Glk grid's GROUND (the cells the game never wrote) — reversed chrome,
+    // the same spelling `status_bar`/`help_bar` already use, so a grid window
+    // reads as a distinct chrome band rather than page-on-page (SQ-1212). This
+    // is deliberately NOT one of the 11 `GLK_STYLE_NAMES` slots above: it is the
+    // fill behind unwritten cells, not a per-style colour a game selects into.
+    row("glk.grid.background", Section::GlkGrid, Kind::Style, Some("chrome"), mods(false, false, false, true)),
     // ── §4 map.* colours (hybrid (c): own tokens; current/selected → accent) ──
     // map.background: own token, defaults to terminal background (resolver-supplied).
     row("map.background", Section::Map, Kind::Style, None, Delta::EMPTY),
@@ -694,6 +700,7 @@ mod tests {
         "glk.grid.input",
         "glk.grid.user1",
         "glk.grid.user2",
+        "glk.grid.background",
         // §4 map.*
         "map.background",
         "map.room",
@@ -993,7 +1000,11 @@ mod tests {
     /// - the **`glk.*`** families are the app's one CONSTRUCTED selector family
     ///   (`format!("glk.{win}.{name}")` in `render::glk_theme_modifiers`), so a
     ///   row is read when its leaf is one of `GLK_STYLE_NAMES` — which means a
-    ///   `glk.buffer.user3` row with no matching Glk style still fails here.
+    ///   `glk.buffer.user3` row with no matching Glk style still fails here —
+    ///   OR the row's full name is quoted literally, which is how a `glk.grid.*`
+    ///   row outside the 11-style family (`glk.grid.background`, SQ-1212's grid
+    ///   ground, looked up by its exact selector name rather than constructed)
+    ///   is read.
     ///
     /// One limit worth knowing: a literal inside a `#[cfg(test)]` block counts,
     /// so a row only a test names passes. Both rows this case was written for
@@ -1045,7 +1056,7 @@ mod tests {
             } else if let Some(leaf) =
                 name.strip_prefix("glk.buffer.").or_else(|| name.strip_prefix("glk.grid."))
             {
-                crate::render::GLK_STYLE_NAMES.contains(&leaf)
+                crate::render::GLK_STYLE_NAMES.contains(&leaf) || quoted.contains(name)
             } else {
                 quoted.contains(name)
             };

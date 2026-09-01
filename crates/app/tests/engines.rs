@@ -52,6 +52,8 @@ mod apple_release_artwork;
 mod glulx_maze_identity;
 #[path = "suites/glulx_mouse_hyperlink_drawn_rect.rs"]
 mod glulx_mouse_hyperlink_drawn_rect;
+#[path = "suites/glk_grid_ground_reversed.rs"]
+mod glk_grid_ground_reversed;
 #[path = "suites/glulx_pending_io_host_restore.rs"]
 mod glulx_pending_io_host_restore;
 #[path = "suites/glulx_resume_location.rs"]
