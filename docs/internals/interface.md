@@ -411,7 +411,7 @@ know which side you're on).
   prompt, wait for a key, and then print the page *after* that prompt, on that
   row — so it is part of the new page, and the pause shows it rather than
   scrolling its heading away (SQ-0823).
-- **The command band** (the `≡` control on the pane border, `v` from the
+- **The command band** (the `▲` control on the story pane's bottom border, `v` from the
   leader panel, or `/open-command-band`) — a Journey-style
   bottom dock that builds a command by pointing, and suggests one as you type
   (it never takes the keyboard from the prompt — see "typing always wins"
