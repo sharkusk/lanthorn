@@ -156,6 +156,9 @@ pub const REVEAL_HOLD: Duration = Duration::from_millis(4_000);
 /// description naming a sword in the next room lit nothing at all. Lighting a
 /// word the story has ALREADY PRINTED reveals nothing that has not been told, so
 /// there was never a spoiler for the stronger test to defend against.
+/// Stated in the control's description rather than on every press since
+/// SQ-1214 — a lit reveal itself says nothing, so this is the one wording of
+/// the claim, kept here so the description and the docs cannot drift apart.
 pub const CAVEAT: &str = "words this story knows — not necessarily things that are here";
 
 /// A reveal that is currently lit.

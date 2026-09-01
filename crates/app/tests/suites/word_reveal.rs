@@ -402,16 +402,31 @@ fn the_reveal_asks_the_objects_not_the_flag_byte() {
     }
 }
 
-/// The reveal states its claim out loud (SQ-1135). It cannot tell "implemented
-/// HERE" from "implemented SOMEWHERE" — by design now, not by limitation — and
-/// the legend says so rather than leaving a player to infer the stronger reading.
+/// The reveal cannot tell "implemented HERE" from "implemented SOMEWHERE" — by
+/// design (SQ-1135) — and its claim must say so SOMEWHERE the player meets it.
+/// Since SQ-1214 a lit reveal itself says nothing (the lighting is the answer),
+/// so the claim lives in the control's description: the canonical wording stays
+/// pinned here, and the description must make the weaker claim — the words the
+/// story KNOWS — never the stronger one, that the things are here.
 #[test]
 fn the_reveal_admits_what_it_cannot_tell_apart() {
-    println!("the reveal says: {}", app::reveal::CAVEAT);
     assert!(
         app::reveal::CAVEAT.contains("not necessarily"),
-        "it has to say what it cannot promise: {:?}",
+        "the canonical wording has to say what it cannot promise: {:?}",
         app::reveal::CAVEAT,
+    );
+    let desc = app::slash::COMMANDS
+        .iter()
+        .find(|c| c.name == "reveal-words")
+        .expect("the reveal command exists")
+        .description;
+    assert!(
+        desc.contains("knows"),
+        "the description carries the weak claim now that no status line does: {desc:?}"
+    );
+    assert!(
+        !desc.contains("things that are here"),
+        "and must not promise presence: {desc:?}"
     );
 }
 

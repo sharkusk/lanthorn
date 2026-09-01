@@ -706,14 +706,15 @@ pub(crate) fn dispatch_slash_outcome(
             // touching it.
             use app::reveal::Armed;
             match app::reveal::arm(state, &*session) {
-                Armed::Lit { .. } => {
-                    // Every reveal is a vocabulary reveal now (SQ-1135), so the
-                    // legend is unconditional: these are words the story KNOWS,
-                    // which is a weaker thing than a promise that they are here,
-                    // and the player should be told which of the two they are
-                    // looking at.
-                    state.set_status(format!("[{}]", app::reveal::CAVEAT));
-                }
+                // A lit reveal says nothing at all (user decision, SQ-1214): the
+                // words lighting up IS the answer, and the caveat legend that used
+                // to ride the status line on every press was one more thing to
+                // read over the thing being read. The claim it stated — words the
+                // story KNOWS, not necessarily things that are here — lives in
+                // the control's own description now, said once where the feature
+                // is discovered instead of on every use. The arms below still
+                // speak, because each names the reason nothing lit.
+                Armed::Lit { .. } => {}
                 Armed::Nothing => {
                     state.set_status("[nothing on screen is a word this story takes]")
                 }
