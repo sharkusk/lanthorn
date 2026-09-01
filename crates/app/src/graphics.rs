@@ -390,6 +390,14 @@ impl PictSource {
         self.cache.len()
     }
 
+    /// The `(resnum, palette_gen)` keys currently pinned in the adaptive
+    /// decode cache, for a test to assert a stale generation was evicted
+    /// (SQ-1193).
+    #[cfg(test)]
+    pub(crate) fn adaptive_cache_keys(&self) -> Vec<(u32, u64)> {
+        self.adaptive_cache.keys().copied().collect()
+    }
+
     /// Keep this source's dither UNFUSED, or fuse it (SQ-0816).
     ///
     /// `fuse` is the player's `fuse_art_dither` preference, and it can only ever
@@ -551,7 +559,20 @@ impl PictSource {
         if self.current_plte != plte {
             self.current_plte = plte;
             self.palette_gen += 1;
+            self.evict_stale_adaptive_cache();
         }
+    }
+
+    /// Drop every adaptive decode cached against a palette generation OTHER
+    /// than the current one. Call immediately after `palette_gen` bumps
+    /// (SQ-1193): `adaptive_cache` is keyed `(resnum, palette_gen)` and the
+    /// generation only ever climbs, so on a `screen_palette` machine — where
+    /// every drawn picture routes through the adaptive path (SQ-0887) — a
+    /// long session otherwise accumulates a full RGBA per (pic, scene
+    /// palette) it will never be asked to decode through again.
+    fn evict_stale_adaptive_cache(&mut self) {
+        let gen = self.palette_gen;
+        self.adaptive_cache.retain(|&(_, g), _| g == gen);
     }
 
     /// Decode `resnum` for a replay WITHOUT establishing a new Current Palette —
@@ -882,6 +903,7 @@ impl PictSource {
         if self.current_plte.as_deref() != Some(plte.as_slice()) {
             self.current_plte = Some(plte);
             self.palette_gen += 1;
+            self.evict_stale_adaptive_cache();
         }
     }
 
@@ -2395,6 +2417,38 @@ mod tests {
         //     picture re-decodes (cache keyed by palette generation).
         src.image(3).unwrap();
         assert_eq!(top_left(&src.image(2).unwrap()), [200, 0, 0, 255], "palette change re-decodes adaptive");
+    }
+
+    #[test]
+    fn palette_change_evicts_the_stale_generations_adaptive_cache() {
+        // SQ-1193: adaptive_cache is keyed (resnum, palette_gen) and
+        // palette_gen only ever climbs, so nothing evicted an old
+        // generation's decodes. On a screen_palette machine (SQ-0887) every
+        // drawn picture routes through here, so a long session accumulated a
+        // full RGBA per (pic, scene palette) it would never be asked to
+        // decode through again. A palette bump must retain only the entries
+        // decoded under the CURRENT generation.
+        let base_green = indexed_png(2, 1, &[0, 0, 0, 0, 170, 0], None, &[&[1, 1]]);
+        let base_red = indexed_png(2, 1, &[0, 0, 0, 200, 0, 0], None, &[&[1, 1]]);
+        let adaptive = indexed_png(2, 1, &[0, 0, 0, 170, 0, 170], None, &[&[1, 1]]);
+        let blorb = blorb_apal(&[(1, &base_green), (2, &adaptive), (3, &base_red)], &[2]);
+        let mut src = PictSource::new(Some(blorb));
+
+        src.image(1).unwrap(); // establishes the green palette, generation 1
+        src.image(2).unwrap(); // decodes and caches the adaptive under it
+        let gen1 = src.palette_gen();
+        assert_eq!(src.adaptive_cache_keys(), vec![(2, gen1)], "one entry, the current generation");
+
+        src.image(3).unwrap(); // re-establishes the palette (red) → gen bumps
+        let gen2 = src.palette_gen();
+        assert!(gen2 > gen1, "a different base bumps the generation");
+        assert!(
+            src.adaptive_cache_keys().is_empty(),
+            "the old generation's entry is evicted on the bump, before anything redraws it"
+        );
+
+        src.image(2).unwrap(); // re-decodes under the new generation
+        assert_eq!(src.adaptive_cache_keys(), vec![(2, gen2)], "only the current generation survives");
     }
 
     #[test]
