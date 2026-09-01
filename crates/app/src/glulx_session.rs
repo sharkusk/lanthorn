@@ -1092,11 +1092,38 @@ impl GlulxSession {
     /// its next input request. A no-op turn once the game has quit. `x`/`y` are
     /// char col/row for a grid window, pixels for a graphics window.
     pub fn deliver_mouse(&mut self, win: u32, x: u32, y: u32) -> TurnResult {
+        let (x, y) = self.clamp_into_window(win, x, y);
         if !self.quit {
             self.machine.deliver_mouse(win, x, y);
             self.settle_after_event();
         }
         self.finish_turn()
+    }
+
+    /// Pull a window-relative click back inside the window the GAME thinks it
+    /// has. The DRAWN rect a click is hit-tested against is wider than gvm's own
+    /// by every gap the renderer hands to the trailing child: the separator the
+    /// theme declined to draw (SQ-1203) and, since SQ-1220, the padding cell a
+    /// proportional split could not divide — two cells for City of Secrets' help
+    /// menu, whose grid is on the far side of a 15 % split. Both gaps are ours,
+    /// the game was told a smaller window, and Glk §8.6 promises a mouse event's
+    /// coordinates lie inside it — so a click on a cell it has never heard of
+    /// arrives at the nearest one it has rather than off the end of its menu.
+    ///
+    /// Text windows only. A graphics window's coordinates are PIXELS against a
+    /// canvas the render scales to the drawn rect, so they are in range by
+    /// construction and there is nothing here to clamp them against.
+    fn clamp_into_window(&mut self, win: u32, x: u32, y: u32) -> (u32, u32) {
+        let reported = self
+            .appglk()
+            .layout()
+            .iter()
+            .find(|&&(id, ty, ..)| id == win && ty != gvm::glk::WinType::Graphics)
+            .map(|&(_, _, r, _)| (r.width, r.height));
+        match reported {
+            Some((w, h)) => (x.min(w.saturating_sub(1)), y.min(h.saturating_sub(1))),
+            None => (x, y),
+        }
     }
 
     /// A click landed on a linked transcript cell inside a hyperlink-watching
@@ -2808,6 +2835,31 @@ mod tests {
         let r = sess.deliver_mouse(2, 5, 0);
         assert!(r.quit, "the game consumed the click and ran to quit");
         assert!(sess.mouse_windows().is_empty(), "mouse request consumed (one-shot)");
+    }
+
+    /// SQ-1220: the renderer draws a text window out over every gap it hands the
+    /// trailing child — the separator the theme never draws (SQ-1203) and the
+    /// padding cell a proportional split keeps — so a click hit-tested against
+    /// that DRAWN rect can carry a coordinate past the window the game was told
+    /// it has. Glk §8.6 says a mouse event's coordinates are inside the window.
+    #[test]
+    fn mouse_coordinates_are_clamped_into_the_window_the_game_was_told() {
+        let mut sess =
+            GlulxSession::new(grid_mouse_watch_image(), 80, 24, true, false, false, (1, 1), None, &[]).expect("new");
+        // Window 2 is the grid: one row, the pane's full 80 columns.
+        assert_eq!(sess.clamp_into_window(2, 5, 0), (5, 0), "a click inside the window is untouched");
+        assert_eq!(
+            sess.clamp_into_window(2, 79, 0),
+            (79, 0),
+            "the window's own last column is not moved"
+        );
+        assert_eq!(
+            sess.clamp_into_window(2, 81, 3),
+            (79, 0),
+            "a click on a gutter cell past the edge lands on the last cell the game knows"
+        );
+        // An unknown window is passed through — nothing to clamp against.
+        assert_eq!(sess.clamp_into_window(999, 95, 7), (95, 7), "no layout entry, no clamp");
     }
 
     // ── glk_mouse_target coordinate mapping ───────────────────────────────────
