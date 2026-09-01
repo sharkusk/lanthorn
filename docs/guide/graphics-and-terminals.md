@@ -21,29 +21,32 @@ kitty the terminal only runs on Linux and macOS; on Windows you reach the
 kitty protocol through WezTerm instead. sixel on Windows needs Windows
 Terminal **1.22 or newer**, which in practice means Windows 11.
 
-Nothing here blocks you from playing. Half-blocks needs nothing from the
-terminal beyond colour, and every terminal that lacks a graphics protocol
+Nothing here blocks you from playing. The half-block fallback needs nothing
+from the terminal beyond colour, and every terminal that lacks a graphics protocol
 falls back to it automatically — a story is always playable and the map
 always draws. Force a particular protocol with `--image-protocol`, or turn
 pictures off entirely with `--images off`.
 
 ![In-game graphics rendered with the kitty graphics protocol](../kitty-graphics.png)
 
-## Hybrid or raster
+## Hybrid, raster or extended
 
 Graphical v6 games — *Zork Zero*, *Arthur*, *Journey*, *Shogun*, *Beyond
 Zork* — draw an illustrated frame around the story text, and lanthorn can
-render that frame two ways. `v6_render` in the config, or `/set-v6-render`
+render that frame three ways. `v6_render` in the config, or `/set-v6-render`
 mid-game, picks between them, and the choice sticks to that story rather than
 your whole setup.
 
 **hybrid** (the default) puts story text in real terminal cells — crisp,
 selectable, scrollable — and the decorative frame around it in real pixels.
 **raster** paints the whole pane as one image instead, in the game's own
-typeface. Both are first-class; hybrid reads better on most terminals and
-most games, but raster is worth trying on a story with a distinctive
-proportional font, like *Arthur*'s Amiga release. `/set-v6-render` cycles
-between them on the spot.
+typeface. **extended** keeps raster's typeface and grows the frame *downward*
+rather than letterboxing it, so a tall terminal buys you extra rows of story
+instead of empty margin — the game is told nothing, and keeps the screen it
+always had at the top of a taller one. All three are first-class; hybrid reads
+better on most terminals and most games, but raster and extended are worth
+trying on a story with a distinctive proportional font, like *Arthur*'s Amiga
+release. `/set-v6-render` cycles through all three on the spot.
 
 ![Zork Zero drawn in hybrid rendering mode](../zork-zero.png)
 
@@ -56,8 +59,9 @@ settings screen, `v6_pixel_lock = true` in `config.toml`, or
 `/set-v6-pixel-lock` mid-game) fixes the magnification to a whole number of
 device pixels per art pixel instead of whatever fraction happens to fill your
 pane. Art comes out crisp and tiled borders repeat on exact boundaries, at
-the cost of a wider margin around the picture — it can only grow in
-half-picture steps, so it rarely fills the pane exactly.
+the cost of a wider margin around the picture — the steps come from the
+artwork itself, and it can only grow a whole step at a time, so it rarely
+fills the pane exactly.
 
 ## The authentic screen, in period dress
 

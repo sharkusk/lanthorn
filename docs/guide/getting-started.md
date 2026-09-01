@@ -28,9 +28,8 @@ lanthorn zork1.z3           # straight into one game
 lanthorn ~/if-games/        # a directory — opens the story picker
 ```
 
-The second form is the one to get used to: keep your library in one place
-and lanthorn remembers it, so a bare `lanthorn` next time goes straight
-there. It also opens a URL — `lanthorn https://ifarchive.org/…/curses.z5`
+The second form is the one to get used to: hand lanthorn a folder and it
+offers to remember it, so a bare `lanthorn` next time goes straight there. It also opens a URL — `lanthorn https://ifarchive.org/…/curses.z5`
 fetches the file, opens it like anything else, and then offers to keep a
 copy in your library so the next launch doesn't fetch it again.
 

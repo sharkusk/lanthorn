@@ -43,9 +43,9 @@ fidelity, SSH to the host and run lanthorn there directly instead — see
 
 ## Sound in the browser
 
-Sound plays too, over a second connection alongside the terminal — a pty
-carries no audio, so the container relays what lanthorn plays to a small
-audio server, and a script in the served page opens that connection and
+Sound plays too, over a second connection alongside the terminal — a terminal
+session carries no audio of its own, so the container relays what lanthorn
+plays to a small audio server, and the served page opens that connection and
 starts playback on your first key press or click, which is the gesture
 browsers require before they'll play anything. That's why the compose file
 publishes two ports: 7681 for the terminal, 7682 for sound.

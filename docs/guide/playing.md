@@ -22,18 +22,18 @@ shell-style. See [keys](../reference/keys.md) and
 
 ## The command band
 
-Press the `≡` control on the story pane's border (or `/open-command-band`)
-and a dock opens along the bottom that builds a command by pointing instead
-of typing. It reads the running story's own grammar — every verb it
+Press the `▲` control on the story pane's bottom border (or
+`/open-command-band`) and a dock opens along the bottom that builds a command
+by pointing instead of typing. It reads the running story's own grammar — every verb it
 actually accepts, alphabetically — and fills in object columns for what
 you can see and what you're carrying, live, as you play. Click a verb, then
 an object, and the words land on your prompt; **Enter** still sends
 whatever's actually written there, so nothing fires on its own except the
 one-click quick actions.
 
-Those quick actions draw as a compass rose when the band is wide enough — 
-`↑` `◉` `◎` `↓` for up, in, out and down alongside the eight compass
-points — and each is a single click that submits at once, no `Enter`
+Those quick actions draw as a compass rose when the band is wide enough, with
+the map's own portal glyphs — `↑` `◉` `◎` `↓` for up, in, out and down —
+clustered beside it. Each is a single click that submits at once, no `Enter`
 needed. Typing always wins over the band: letters and Backspace go straight
 to the prompt whether the band is open or not, and the band only claims
 column navigation (`Tab`/`Shift-Tab` to move between columns, `↑`/`↓` to
@@ -87,6 +87,6 @@ The full key bindings and command list are in
 [keys](../reference/keys.md) and [commands](../reference/commands.md).
 Everything on the pane borders — what each glyph means, how the toggles
 remember your choices per game — is in
-[the interface notes](../internals/interface.md), and the guiding-light
-suggestions and font-icon setup are in
+[the interface notes](../internals/interface.md), and the Guiding Light's
+suggestions and the font-icon setup are in
 [customization](../internals/customization.md).
