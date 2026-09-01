@@ -44,7 +44,15 @@
 //! among them — and, since SQ-1210, every Inform-compiled Glulx image too
 //! (`gvm::objects::ParseNames`, reached through [`Engine::object_word_set`]),
 //! which is what put out the `the`/`an` lights this module's fallback lit on
-//! `Dr Ludwig and the Devil`.
+//! `Dr Ludwig and the Devil`. SQ-1216 found `ObjectWordSet` itself still lit
+//! `of`/`on`/`in` there — Inform 7 compiles a multi-word name word by word
+//! ("back of the tavern" → `back`, `of`, `the`, `tavern`), and unlike an
+//! article a lone `of` genuinely reaches a `name` array, so the SQ-1210 fix
+//! did not catch it. Glulx's own dictionary flag cannot: `PREP_DFLAG` marks
+//! every literal word in every grammar line, ordinary nouns (`top`, `bed`,
+//! `guard`) included, not prepositions specifically — measured directly in
+//! `Inform6/src/verbs.c`. `grammar_model::GLUE` is a short, curated, English
+//! word list instead — see its doc for the evidence and the trade.
 //!
 //! **The dictionary is still asked, but only where the objects cannot be** —
 //! Scott today, which has no object table at all, and any Glulx image whose
@@ -68,6 +76,16 @@
 //! That guarantee only weakens on the dictionary fallback below, and only on an
 //! Inform-family title: its dictionary marks a word "usable in noun position",
 //! not "is a noun", so `a`, `an` and `the` can still slip through there.
+//!
+//! The preposition half of that guarantee is curated English
+//! (`grammar_model::GLUE`, SQ-1216), not read from the story the way the
+//! article half is: no Inform dictionary bit separates a preposition from an
+//! ordinary noun that happens to appear literally in some grammar line
+//! elsewhere in the game. On a non-English story `GLUE`'s words are just
+//! English spellings with nothing to match, so this guarantee narrows to
+//! "never an article" there — and, in the other direction, a story with an
+//! object genuinely and *only* named one of `GLUE`'s eleven words (English's
+//! own "inn") loses that one light rather than gaining eleven wrong ones.
 //!
 //! # The viewport
 //!
@@ -274,9 +292,13 @@ pub fn arm(state: &mut AppState, engine: &dyn Engine) -> Armed {
     // re-truncated the story's whole vocabulary per token (SQ-1176). Same
     // answers — the set is `any(refers_to)` by construction, minus the articles
     // Inform 7 folds into multi-word names, which the story's own parser never
-    // lets stand as a typed word (`grammar_model::ARTICLES`, SQ-1210) — and
-    // `None` still means the question could not be asked, never a story with no
-    // names.
+    // lets stand as a typed word (`grammar_model::ARTICLES`, SQ-1210), and minus
+    // the curated glue words (`grammar_model::GLUE`, SQ-1216) — `of`, `in`,
+    // `on` and their kin, which the parser DOES accept alone but which are not
+    // nouns, and which Inform's own dictionary flag byte cannot tell apart from
+    // an ordinary noun used as a fixed grammar-line disambiguator (see `GLUE`'s
+    // doc for the measurement that ruled the flag out) — and `None` still means
+    // the question could not be asked, never a story with no names.
     let words = match engine.object_word_set() {
         Some(set) => tokens
             .iter()

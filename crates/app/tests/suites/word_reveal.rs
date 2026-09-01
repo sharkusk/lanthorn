@@ -48,7 +48,7 @@
 //! | `crates/zvm/tests/fixtures/minizork.z3` | r34/s871124 | 0 | the whole path, in CI |
 //! | `crates/zvm/tests/fixtures/minizork.z3` | r34/s871124 | 1 (`north`) | scope moving under old text |
 //! | `stories/zork1-invclues-r52-s871125.z5` | r52/s871125 | 0 | the noun-AND-adjective contract (SQ-1207); Mini-Zork's Version 3 dictionary cannot report adjectives |
-//! | `stories/Dr Ludwig and the Devil.gblorb` | r2/s250306 | 3 intro keys, 0 commands | the same contract on Glulx (SQ-1210) |
+//! | `stories/Dr Ludwig and the Devil.gblorb` | r2/s250306 | 3 intro keys, 0 commands | the same contract on Glulx (SQ-1210); `of`/`in` glue words stay dark too (SQ-1216) |
 //! | `stories/King_of_Shreds_and_Patches.gblorb` | — | boot | Glulx fail-safe: answer truly or refuse honestly (SQ-1210) |
 //!
 //! Mini-Zork is tracked, so every case built on it runs on CI; nothing there
@@ -594,6 +594,42 @@ fn glulx_nouns_and_adjectives_light_while_articles_and_verbs_do_not() {
     // none of them any object's parse name.
     for not_a_thing in ["the", "a", "an", "type", "ask"] {
         assert!(!lit.contains(&not_a_thing.to_string()), "{not_a_thing:?} names nothing: {lit:?}");
+    }
+    // `of` and `in` ride this exact screen too (Dr Ludwig's own object list
+    // compiles multi-word names like "back of the tavern" and files a compass
+    // "direction" object as `["inside", "direction", "in"]`) and lit right
+    // alongside the nouns until SQ-1216 — the CHANGELOG's "never a
+    // preposition" was false on Glulx. `grammar_model::GLUE` is the fix.
+    for glue in ["of", "in"] {
+        assert!(
+            text.split_whitespace().any(|w| w.trim_matches(|c: char| !c.is_alphanumeric()) == glue),
+            "sanity: {glue:?} must actually be printed on screen, or this proves nothing: {text}"
+        );
+        assert!(!lit.contains(&glue.to_string()), "{glue:?} is curated glue (SQ-1216) and must not light: {lit:?}");
+    }
+}
+
+/// **SQ-1216's contract.** `of`/`on`/`in`/`at` never light on Dr Ludwig,
+/// whether or not the specific screen prints them — asked of the SET
+/// directly, not the rendered viewport, so it also covers the glue words this
+/// story's own name arrays carry that the intro screen never prints (`on`,
+/// `at`). `tavern` and `devil` — real nouns from the very name arrays the
+/// glue rides in on (`["back","of","the","tavern","rooms"]`,
+/// `["devil", …]`) — stay lit, proving the filter drops the glue word and
+/// nothing else from the same array.
+///
+/// Falsified by removing `grammar_model::GLUE` from `ObjectWordSet::build`'s
+/// filter (the pre-quest state): `of` reproduces the SQ-1216 symptom and this
+/// case fails on it.
+#[test]
+fn glulx_glue_words_stay_out_of_the_object_word_set() {
+    let Some(session) = glulx_session("Dr Ludwig and the Devil.gblorb") else { return };
+    let set = session.object_word_set().expect("Dr Ludwig answers");
+    for glue in grammar_model::GLUE {
+        assert!(!set.contains(glue), "{glue:?} is curated glue (SQ-1216) and must not stand as a typed name");
+    }
+    for thing in ["tavern", "devil"] {
+        assert!(set.contains(thing), "{thing:?} is a real object name in the very array the glue rides in on");
     }
 }
 
