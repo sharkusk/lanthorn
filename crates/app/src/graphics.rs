@@ -3,7 +3,7 @@
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
-use image::{DynamicImage, GenericImageView, Rgba, RgbaImage};
+use image::{DynamicImage, Rgba, RgbaImage};
 
 
 /// Unpack a Glk 24-bit `0xRRGGBB` color into an opaque RGBA pixel.
@@ -380,6 +380,14 @@ impl PictSource {
     /// with the old palette is now showing the wrong colours and must be replotted.
     pub fn palette_gen(&self) -> u64 {
         self.palette_gen
+    }
+
+    /// How many decoded pixel buffers the unbounded [`Self::cache`](field)
+    /// currently pins, for a test to assert a size-query path never grew it
+    /// (SQ-1194).
+    #[cfg(test)]
+    pub(crate) fn decode_cache_len(&self) -> usize {
+        self.cache.len()
     }
 
     /// Keep this source's dither UNFUSED, or fuse it (SQ-0816).
@@ -804,9 +812,15 @@ impl PictSource {
         self.cache.get(&resnum).and_then(|o| o.as_ref())
     }
 
-    /// `(width, height)` of a Pict, or `None`.
+    /// `(width, height)` of a Pict, or `None`. Answers from the header sniffer
+    /// ([`Self::dims`]) rather than a full decode: `image_info` (Glk selector
+    /// 8) is the sole caller, and a game can sweep it over its whole picture
+    /// catalog at boot, which used to decode and pin every one of those images
+    /// in the unbounded `cache` forever — pixels no caller here ever asked for
+    /// (SQ-1194). A caller that genuinely needs the DECODED pixels' dimensions
+    /// should call [`Self::image`] and measure the result directly, not this.
     pub fn info(&mut self, resnum: u32) -> Option<(u32, u32)> {
-        self.get(resnum).map(|i| i.dimensions())
+        self.dims(resnum)
     }
 
     /// The decoded image for a Pict about to be DRAWN, or `None`. Returns a
@@ -1965,6 +1979,7 @@ pub(crate) fn test_blorb_with_pict(resnum: u32, data: &[u8]) -> blorb::Blorb {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use image::GenericImageView;
 
     /// The property that chose the tent over a two-tap box on fixed column pairs
     /// (SQ-0797): a period-2 dither collapses to its exact mean at BOTH phases, so
@@ -2159,6 +2174,25 @@ mod tests {
         let b = src.image(1).expect("resolves");
         assert!(Arc::ptr_eq(&a, &b), "both calls must share one cached decode");
         assert_eq!(a.dimensions(), (2, 2));
+    }
+
+    #[test]
+    fn info_answers_from_header_sniff_without_pinning_the_decode_cache() {
+        // SQ-1194: `image_info` (Glk selector 8) is answered by `info()`,
+        // which used to route through `get()` — a full decode pinned in the
+        // unbounded `cache` forever — even though only the dimensions were
+        // ever asked for. An image-heavy game sweeping `glk_image_get_info`
+        // over its whole catalog must not decode and pin every picture it
+        // merely measures.
+        let blorb = test_blorb_with_pict(5, &png_bytes());
+        let mut src = PictSource::new(Some(blorb));
+        assert_eq!(src.decode_cache_len(), 0, "nothing decoded yet");
+        assert_eq!(src.info(5), Some((2, 2)));
+        assert_eq!(src.decode_cache_len(), 0, "info() must not populate the decode cache");
+        // The decode path still works and still caches, when a caller
+        // actually wants the pixels.
+        assert!(src.image(5).is_some());
+        assert_eq!(src.decode_cache_len(), 1, "image() still decodes and caches normally");
     }
 
     // ── Adaptive palettes (Blorb spec §11.3, SQ-0485) ───────────────────────
