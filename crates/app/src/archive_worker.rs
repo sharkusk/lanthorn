@@ -125,16 +125,21 @@ fn worker_loop(mailbox: Arc<Mutex<Mailbox>>, cv: Arc<Condvar>, failures: Arc<Mut
         };
         let path = job.path.clone();
         let result = build_and_write(job, &mut png_cache);
+        // Record the failure BEFORE signalling completion: `flush()` returns
+        // the moment `completed_gen` reaches its target, and the exit path
+        // drains failures right after flushing — a failure pushed after the
+        // wake could slip past that drain and be lost at quit. CI's Linux
+        // runner hit exactly that window (SQ-1184).
+        if let Err(e) = result {
+            failures.lock().expect("archive failures lock poisoned")
+                .push(format!("could not save to {}: {}", path.display(), e));
+        }
         {
             let mut mb = mailbox.lock().expect("archive mailbox lock poisoned");
             mb.completed_gen = gen;
         }
         // Wake both `flush()` waiters and (harmlessly) anyone re-checking shutdown.
         cv.notify_all();
-        if let Err(e) = result {
-            failures.lock().expect("archive failures lock poisoned")
-                .push(format!("could not save to {}: {}", path.display(), e));
-        }
     }
 }
 
