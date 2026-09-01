@@ -686,7 +686,7 @@ fn paint_cell_plan(plan: &CellPlan, area: Rect, buf: &mut Buffer) -> bool {
                         if let Some(bg) = c.style().bg {
                             s = s.bg(bg);
                         }
-                        c.set_symbol(*g).set_style(s);
+                        c.set_symbol(g).set_style(s);
                     }
                     None => {
                         c.set_symbol(" ").set_style(Style::default().bg(fg));
