@@ -92,11 +92,10 @@ lanthorn zork1.z3           # or straight into one game
 lanthorn offers to remember the first directory you open, so a bare **`lanthorn`**
 goes there next time. It opens disk images too — see
 [**Play the original disks**](#play-the-original-disks). `lanthorn --help` has the
-flags; the ones people reach for are `--sound off` *(next release; today
-`--no-sound`)*, `--images off` *(next release; today `--no-images`)* and
+flags; the ones people reach for are `--sound off`, `--images off` and
 `--image-protocol`.
 
-*Next release:* a URL is a launching shape too, alongside a directory and a disk
+A URL is a launching shape too, alongside a directory and a disk
 image:
 
 ```bash
@@ -120,9 +119,9 @@ A few things worth doing in your first ten minutes. Everything else can wait.
 | **r** | Fetches titles, blurbs, ratings and cover art from IFDB for everything missing them. Do this first — until you do, there is not much for the grid to show. |
 | **g** | Flips the list view into a grid of covers. |
 | **/** | Searches IFDB by title or author and downloads straight into your library. |
-| **Shift+U** | *Next release:* downloads a story straight into your library from a web address you paste. |
-| **Ctrl+F** | *Next release:* filters your library as you type: title, author, filename or folder. |
-| **Enter** on a folder | *Next release:* a library sorted into folders is listed folder by folder; Enter opens one and **Backspace** returns up. |
+| **Shift+U** | Downloads a story straight into your library from a web address you paste. |
+| **Ctrl+F** | Filters your library as you type: title, author, filename or folder. |
+| **Enter** on a folder | A library sorted into folders is listed folder by folder; Enter opens one and **Backspace** returns up. |
 | **Tab** | Shows the info panel for the highlighted story. |
 | **o** | Launch options for this story — which artwork it draws and which machine it plays as. |
 
@@ -148,7 +147,7 @@ itself.**
   C bindings. → [getting started](docs/guide/getting-started.md)
 - **A map that draws itself** — rooms placed, routed and de-overlapped as you
   explore, across switchable layers. Click a room and it shows you the way there.
-  *Next release:* switch on the return probe and it will go and **find
+  Switch on the return probe and it will go and **find
   the way back** for you, in a silent throwaway copy of your game — closing the
   one-way gaps an automap is otherwise full of, and never once assuming that a
   passage runs both ways.
@@ -160,7 +159,7 @@ itself.**
   → [Play the original disks](#play-the-original-disks)
 - **Graphical v6, drawn properly** — *Zork Zero*'s illustrated frame at an
   authentic 640×400, set in the typeface the original interpreter used, read off
-  the media rather than bundled. *Next release:* three ways to draw it:
+  the media rather than bundled. Three ways to draw it:
   **hybrid** puts text in real terminal cells and art in real pixels,
   **raster** paints the whole pane as one image in the game's own face, and
   **extended** keeps raster's face while growing the story downward instead of
@@ -174,12 +173,12 @@ itself.**
 - **A real terminal UI** — mouse, resizable panes, a story picker with IFDB
   search, command palette, in-game InvisiClues, transcript search, a debug
   disassembler, and a theme every part of which you can restyle.
-  *Next release:* click the `◈` on the story pane's border and every
+  Click the `◈` on the story pane's border and every
   word already on screen that this story's parser would accept **lights up** for
   a moment — the answer to a room description that names a dozen nouns and
   implements two.
   → [playing](docs/guide/playing.md)
-- **A light held up while you play** — *Next release:* Lanthorn's Guiding Light
+- **A light held up while you play** — Lanthorn's Guiding Light
   offers the words this story's parser knows, the noun you were reaching for,
   and a caution before a move that cannot be taken back. When it suggests a
   word it has already tried it, silently, in a throwaway copy of your own game
@@ -189,7 +188,7 @@ itself.**
   `--guidance off`, `/set-guidance`, or the settings screen turns it off.
   → [playing](docs/guide/playing.md)
 - **It asks about your font once, and sets every icon from the answer** —
-  *Next release:* lanthorn writes characters; the font is the terminal's, and
+  lanthorn writes characters; the font is the terminal's, and
   nothing can ask it whether it has a glyph. So on a first launch it shows two
   rows and asks which one draws properly, then writes the answer into
   `style.toml` as preset names you can still edit. `/run-font-check` asks
@@ -202,7 +201,7 @@ and the internals below — is [**`docs/README.md`**](docs/README.md).
 
 ## Playing aids
 
-*Next release:* the story pane's frame carries a few clickable switches, each
+The story pane's frame carries a few clickable switches, each
 showing what state it is in — the command band and the Guiding Light along the
 bottom, the map and its return probe at the right, and on a graphical v6 story
 the render mode and the pixel lock up on the top border. Each is drawn twice
@@ -218,7 +217,7 @@ What you switch there is remembered for **that story**, not for every story: a
 map you hid, a light you put out, a render mode you preferred. The settings
 screen still sets the default new games inherit.
 
-*Next release:* press **F4** and every word already on screen that the story
+Press **F4** and every word already on screen that the story
 knows lights up for a few seconds, over its own prose, without moving a line of
 it. It answers the oldest frustration in the genre: a room description names a
 dozen nouns and two of them are implemented. *Mini-Zork* opens on a `field` the
@@ -259,7 +258,7 @@ lanthorn "LostTreasures1.iso" --story 3       # a compilation CD
 | Commodore 1541 | `.d64` | Commodore 128 (7) |
 | PC floppy | `.ima` `.img` | — |
 | CD-ROM, incl. hybrid Mac/PC discs | `.iso` `.bin` | Macintosh (3) or PC/DOS, per file |
-| *Next release:* Commodore 1541, GCR bitstream | `.g64` | Commodore 128 (7) |
+| Commodore 1541, GCR bitstream | `.g64` | Commodore 128 (7) |
 
 **The artwork comes off the disk in the disk's own format**, not from a converted
 Blorb — and where a release shipped more than one rendition (MCGA, EGA, CGA, the
@@ -277,7 +276,7 @@ it. Drop your own `Kick12.rom` or a Mac OS System file into `~/.lanthorn` and th
 system faces come too: topaz 8, and Geneva, which lives on no Infocom disk at
 all.
 
-*Next release:* **a zip is opened like a volume.** What is inside is identified
+**A zip is opened like a volume.** What is inside is identified
 by its *contents*, not its name, so a zip carries anything lanthorn runs — every
 Z-machine version including graphical v6, Glulx, Scott Adams, Blorb
 containers — and a Blorb or a hints file packed beside the story is found and
@@ -292,7 +291,7 @@ launched; say no and lanthorn tells you why rather than failing obscurely.
 Only the disk images come out of the archive — never a readme, a cover or
 anything else that happened to be in it.
 
-*Next release:* `--colour terminal|theme|machine` picks which of the three
+`--colour terminal|theme|machine` picks which of the three
 sources the story's default page and ink come from. It selects a *regime*, not
 merely a first preference: `--colour machine` gets a bare story file the
 machine's own screen, and `--colour terminal` or `--colour theme` gets a
@@ -319,7 +318,7 @@ which, so you rarely set anything. Full pixel graphics reach **all three OSes**:
 
 Anything without a protocol degrades to half-blocks automatically, so a story is
 always playable and the map always draws. Force a path with `--image-protocol`,
-or turn images off with `--images off` *(next release; today `--no-images`)*.
+or turn images off with `--images off`.
 
 Boxes or blank squares where glyphs should be? That is a font gap, not a bug —
 see [**looks**](docs/guide/looks.md) for the font check, and
@@ -337,7 +336,7 @@ live under `~/.lanthorn/saves/<story-filename>.save/` by default; `--data-dir
 [every setting](docs/reference/config.md) and
 [saves and rewind](docs/guide/saves-and-rewind.md).
 
-*Next release:* an **exported transcript** is not quite what is on screen:
+An **exported transcript** is not quite what is on screen:
 lanthorn's own guidance is marked in the margin while you play, and written out
 with the word `Lanthorn:` in front of it, because a file has no margin and no
 colour.

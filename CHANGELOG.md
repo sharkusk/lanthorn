@@ -6,7 +6,7 @@ All notable changes to lanthorn are recorded here.
 [`.github/workflows/release.yml`](.github/workflows/release.yml)). A tag whose
 name contains a hyphen — `v0.1.0-beta.1`, `v0.2.0-rc.1` — is published as a
 **pre-release**; a bare `vMAJOR.MINOR.PATCH` is a full release. The workspace
-version in `Cargo.toml` (currently `0.3.0`) versions every crate and every
+version in `Cargo.toml` (currently `0.4.0`) versions every crate and every
 binary's `--version` at once, and carries any pre-release suffix so a build
 identifies itself without reading its git hash.
 
@@ -19,13 +19,35 @@ Absolute URLs or no link.
 
 ---
 
-## Unreleased
+## v0.4.0 — 2026-09-01
 
-*This section is drained when a version is cut. README.md describes the
-RELEASED build; prose for a feature that is in `main` but not yet released goes
-into the README in place, at its normal destination, marked with the visible
-tag `*Next release:*`. `release.yml` refuses to cut a release while any such
-tag, or this Unreleased section, still exists.*
+### Highlights
+
+- **Breaking: the command-line flags changed.** Every `--no-x` flag across all
+  four front-ends (`lanthorn`, `zvm-cli`, `gvm-cli`, `scott-cli`) is now a
+  positive `--x on|off` flag — `--no-sound` is `--sound off`, `--no-images` is
+  `--images off`, and so on. There are no aliases for the old spellings; they
+  are rejected outright. See the flag table below.
+- **Lanthorn's Guiding Light** offers the words a story's parser knows, tries
+  its suggestions first in a silent throwaway copy of your game, and marks
+  every line that's its own — never the story's voice, never a spoiler.
+- **Toggle controls right on the story pane's border** — clickable icons for
+  the command band, the map and its return probe, the Guiding Light, and (on
+  a graphical v6 story) render mode and pixel lock, each showing its own state
+  at a glance.
+- **The command band knows more of what the story has said**, not just what
+  it contains, and keeps the strong language out of the VERB column by
+  default (`hide_adult_words`, fully configurable).
+- **The story picker follows your folders** — a library sorted into
+  sub-folders is browsed folder by folder, with `Ctrl+F` to filter as you
+  type and `--fetch`/`--import-metadata` for curating a library headlessly.
+- **Play in a browser, pictures and sound included** — the Docker image now
+  renders in-game graphics as sixel and streams the game's own audio to the
+  page.
+- **Graphical v6 gets a third render mode, `extended`**, which grows a tall
+  terminal downward instead of letterboxing it — and a pre-release
+  performance sweep made guidance, the word reveal and the command band all
+  noticeably cheaper per turn and per frame.
 
 ### Performance
 
@@ -457,18 +479,17 @@ carrying `enable_sound = false` could only be overridden by editing the file.
 
 ### Documentation
 
-- **Three doc tiers, and generated reference.** `docs/` now separates a
-  player-facing **guide** (`docs/guide/`) from the deep-dive **internals**
-  (`docs/features/` and the loose top-level pages moved to `docs/internals/`)
-  and a new, code-generated **reference** (`docs/reference/commands.md`,
-  `keys.md`, `config.md`, `style.md` — rendered straight from
-  `slash::COMMANDS`, the default keymap, `config_template::GROUPS`, and the
-  style/theme registry, so they cannot drift from what lanthorn actually does;
-  regenerate with `LANTHORN_REGEN_DOCS=1 cargo nextest run -p app
-  docs_reference`). `docs/README.md` is the map across all three tiers. And
-  `docs/readme-next.md` is gone: unreleased-feature prose now lands directly
-  in `README.md`, tagged `*Next release:*`, and `release.yml` refuses to cut a
-  release while any such tag survives.
+- **Three doc tiers.** `docs/` now separates a player-facing
+  [**guide**](https://github.com/sharkusk/lanthorn/blob/main/docs/guide/) from
+  the deep-dive
+  [**internals**](https://github.com/sharkusk/lanthorn/blob/main/docs/internals/)
+  and a code-generated
+  [**reference**](https://github.com/sharkusk/lanthorn/blob/main/docs/reference/)
+  (every command, key binding, config setting and style selector), rendered
+  straight from lanthorn's own source so the tables can't drift from what it
+  actually does.
+  [`docs/README.md`](https://github.com/sharkusk/lanthorn/blob/main/docs/README.md)
+  is the map across all three.
 
 ## v0.3.0 — 2026-08-26
 
