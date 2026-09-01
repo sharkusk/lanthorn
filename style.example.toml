@@ -145,6 +145,7 @@ version = 1   # style schema version — do not remove; lets lanthorn flag an ou
 # input = { parent = "accent" }
 # user1 = { parent = "chrome" }
 # user2 = { parent = "chrome" }
+# background = { parent = "chrome", reversed = true }
 
 # ── Map colours + glyph-set presets.
 [map]

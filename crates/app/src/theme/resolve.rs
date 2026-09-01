@@ -1319,7 +1319,7 @@ mod tests {
 
         // …and every chrome-derived selector inherits the probed page.
         let theme = resolve_theme(&gs, &ParsedStyle::default());
-        for sel in ["upper_window", "status_bar", "story_info", "dialog.background", "glk.grid.normal"] {
+        for sel in ["upper_window", "status_bar", "story_info", "dialog.background", "glk.grid.normal", "glk.grid.background"] {
             assert_eq!(
                 theme.get(sel).style.bg,
                 Some(Color::Rgb(0xfd, 0xf6, 0xe3)),
@@ -1358,6 +1358,8 @@ mod tests {
 
         assert!(theme.get("status_bar").style.add_modifier.contains(Modifier::REVERSED));
         assert!(theme.get("help_bar").style.add_modifier.contains(Modifier::REVERSED));
+        // SQ-1212: a Glk grid's ground is reversed chrome, the same spelling.
+        assert!(theme.get("glk.grid.background").style.add_modifier.contains(Modifier::REVERSED));
         assert_eq!(theme.get("suggestion").style.fg, Some(Color::DarkGray));
         assert!(theme.get("glk.buffer.header").style.add_modifier.contains(Modifier::BOLD));
     }

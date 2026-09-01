@@ -435,6 +435,13 @@ carrying `enable_sound = false` could only be overridden by editing the file.
   drains the clear it issued, and ignores it as `zvm-cli` always has: the screen
   the game erased is the one before its own banner, and nothing had been drawn
   on it yet.
+- A Glk text-grid window's unwritten ground is now visible. City of Secrets'
+  mouse-driven `help` menu — and any Glulx grid window like it — used to ground
+  on the same theme colour as the terminal page it sat on, so a grid with no
+  border (the default) had no visible extent at all. It now grounds on reverse
+  video, the same spelling the status bar uses, themeable via the new
+  `glk.grid.background` selector. A Z-machine or Scott upper window is
+  unaffected: those games paint their own reversal.
 
 ## v0.3.0 — 2026-08-26
 

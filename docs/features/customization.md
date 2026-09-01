@@ -96,9 +96,20 @@ still reach in and override any single selector by name.
   `[glk.grid]` (text-grid/status windows), each carrying fg/bg plus
   bold/italic/underline/reversed. Each style defaults to a role-derived look (a
   game that sets no styles renders identically to a role-only theme) but can be
-  overridden per slot for full Glk fidelity. A window's background is, by
-  definition, its `glk.<type>.normal.bg` (defaults to `text.bg` for buffer
-  windows, `chrome.bg` for grid windows) — there's no separate background knob.
+  overridden per slot for full Glk fidelity. A text-buffer window's background
+  is its `glk.buffer.normal.bg` (defaults to `text.bg`) — there's no separate
+  background knob there. A **Glk text-grid window's ground is different**:
+  `glk.grid.background` (default: reversed `chrome` — the same spelling
+  `status_bar`/`help_bar` use) is the GROUND, the cells the game never wrote,
+  kept apart from `glk.grid.normal` — the per-style colour a game paints INTO a
+  cell it did write. That split exists because a grid window carries no border
+  by default (the point above), so an unstyled one used to be visually
+  indistinguishable from the terminal page it sat on — a mouse-driven menu with
+  no visible extent at all. Reversing the ground instead of colouring it works
+  on any terminal palette, the same reason the status bar is reverse video
+  rather than a named colour. This ground is Glk-only: a Z-machine or Scott
+  upper window still grounds on `upper_window`, unreversed, because those games
+  paint their own reversal and a default one would double it up.
 - **`[map]`** owns every map-domain selector: colors (`room`, `room_current`,
   `room_selected`, `connector`, `connector_distorted`, `connector_portal`,
   `shared_path`, `layer_cycle`, …) and the glyph-set presets that used to live
