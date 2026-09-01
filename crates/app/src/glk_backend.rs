@@ -765,9 +765,11 @@ impl AppGlk {
         let (root, content_size) = match &self.layout_tree {
             None => (WinNode::Blank, (0u16, 0u16)),
             Some(tree) => {
-                // Root rect = gvm's snapped screen (incl. any border gutters); the
-                // composite clamps to it so no leaf absorbs the blank margin gvm
-                // leaves when it snaps proportional splits to whole cells (SQ-0303).
+                // Root rect = gvm's laid-out screen (incl. any border gutters).
+                // Since SQ-1220 that is the whole pane — a proportional split
+                // keeps its own undividable cell rather than the screen shrinking
+                // to avoid one — so the composite clamp below (SQ-0303) no longer
+                // has a margin to withhold, and is kept as the bound it always was.
                 let r = tree.rect();
                 let size = (r.width.min(u16::MAX as u32) as u16, r.height.min(u16::MAX as u32) as u16);
                 (self.convert_tree(tree), size)
