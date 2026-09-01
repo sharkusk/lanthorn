@@ -53,6 +53,7 @@ these track the code).
 | [`internals/saves.md`](internals/saves.md) | The save/restore feature surface: Save State, `@save`, Quetzal import/export, rewind |
 | [`internals/platforms.md`](internals/platforms.md) | What differs across macOS, Linux and Windows, and why |
 | [`internals/docker.md`](internals/docker.md) | The container image, its two run modes, and the volumes it expects |
+| [`internals/releasing.md`](internals/releasing.md) | The hand-run release procedure: preconditions, dry runs, the release commit, tagging, and the one-time GHCR visibility step |
 | [`internals/v6-graphics.md`](internals/v6-graphics.md) | Graphical Z-machine v6: the hybrid/raster render pipeline, art density vs. text density, per-machine typefaces |
 | [`internals/persistence.md`](internals/persistence.md) | The three persistence layers in detail: what each captures, when it triggers, what survives |
 | [`internals/remote-sound.md`](internals/remote-sound.md) | Why audio plays on the local device, and how to route it back over SSH |
