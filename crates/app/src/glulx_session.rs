@@ -201,8 +201,10 @@ impl GameStore {
 /// long it is assumed to be in a runaway loop (e.g. layout code that cannot
 /// converge on a given screen geometry) and the turn is aborted as a recoverable
 /// fault so the app survives instead of hard-hanging. Generous, because this is a
-/// last-resort backstop — the tree-driven size snapping in `gvm` already prevents
-/// the known cause. Set via env `LANTHORN_TURN_BUDGET_MS` for testing.
+/// last-resort backstop — `gvm` divides every proportional split in virtual
+/// pixels and floors each child independently (SQ-1220), so the rounding a
+/// layout loop feeds on (unequal halves of an odd split) does not arise.
+/// Set via env `LANTHORN_TURN_BUDGET_MS` for testing.
 fn turn_budget() -> Duration {
     std::env::var("LANTHORN_TURN_BUDGET_MS")
         .ok()

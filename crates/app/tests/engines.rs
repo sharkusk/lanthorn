@@ -54,6 +54,8 @@ mod glulx_maze_identity;
 mod glulx_mouse_hyperlink_drawn_rect;
 #[path = "suites/glk_grid_ground_reversed.rs"]
 mod glk_grid_ground_reversed;
+#[path = "suites/glk_proportional_split_fills_pane.rs"]
+mod glk_proportional_split_fills_pane;
 #[path = "suites/glulx_pending_io_host_restore.rs"]
 mod glulx_pending_io_host_restore;
 #[path = "suites/glulx_resume_location.rs"]

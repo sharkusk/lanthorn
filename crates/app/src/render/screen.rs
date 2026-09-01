@@ -351,10 +351,12 @@ fn render_story_pane_frame(
     // Generic multi-window path. Grid windows push their hyperlink cells into
     // `grid_links`; the primary buffer's own links ride on its metrics. (SQ-0258)
     //
-    // Clamp the composite to gvm's content bounding box: gvm snaps proportional
-    // splits to whole cells and leaves a blank margin, so walking the tree into the
-    // FULL pane would let the last right-spine leaf balloon to absorb the surplus
-    // width. Render into the box and keep the margin blank (SQ-0303).
+    // Clamp the composite to gvm's content bounding box (SQ-0303). Since SQ-1220
+    // a Glulx tree covers the whole pane, so this is a no-op there; what a
+    // proportional split cannot divide is now an interior gutter cell, and
+    // `split_area_bordered` hands it to the trailing child exactly as it already
+    // hands over a separator the theme declined to draw (SQ-0821/SQ-1203) — so a
+    // gutter is filled with the ground of the window beside it.
     let inner = content_bounds(model, area);
     let mut grid_links: Vec<((u16, u16), u32)> = Vec::new();
     let mut win_rects: Vec<(u32, WinKind, Rect)> = Vec::new();
@@ -394,10 +396,10 @@ fn render_story_pane_frame(
 
 /// The sub-rect of the story pane that gvm's window tree actually covers: the
 /// top-left corner of `area` sized to `model.content_size`, clamped to `area`.
-/// gvm snaps proportional splits to whole cells and leaves a blank margin
-/// (SQ-0303); clamping the composite (and the graphics-rect walk, so
-/// `dialog_bounds` agrees with what's drawn) to this keeps the margin blank
-/// instead of ballooning the last right-spine window. Falls back to the full
+/// It bounds the composite (and the graphics-rect walk, so `dialog_bounds`
+/// agrees with what's drawn) to what gvm actually laid out (SQ-0303). Since
+/// SQ-1220 a Glulx tree covers the whole pane, so for Glulx this is the pane;
+/// the clamp still holds any future tree that does not. Falls back to the full
 /// `area` when `content_size` is `(0, 0)` (the simple/Z-machine paths — no margin).
 pub fn content_bounds(model: &ScreenModel, area: Rect) -> Rect {
     // A v6 Layered root is PIXEL content: the raster/hybrid paths scale the
