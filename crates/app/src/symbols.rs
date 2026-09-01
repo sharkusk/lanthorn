@@ -160,9 +160,10 @@ pub struct PortalGlyphs {
 /// Every slot is a STATE, not a control: a toggle draws one of two glyphs
 /// depending on which way it would move things, so the icon says what is on
 /// before the colour does. The panel toggles are arrows pointing the way the
-/// panel would go — the map lives to the right of the story pane and the verb
-/// panel below it, so `map_hide` points right (click and the map leaves that
-/// way) and `band_show` points up (click and the band rises into view).
+/// panel would go — the map lives to the right of the story pane and the
+/// command band below it, so `map_hide` points right (click and the map
+/// leaves that way) and `band_show` points up (click and the band rises into
+/// view).
 ///
 /// Defaults come from Geometric Shapes (U+25xx) for the same reason
 /// [`PortalGlyphs`]' do: it is the block an ordinary monospace face already has
