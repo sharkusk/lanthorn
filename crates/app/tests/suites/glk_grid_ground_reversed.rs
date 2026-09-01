@@ -124,10 +124,8 @@ fn help_menu_ground_is_reversed(honor_game_colours: bool) {
     for y in grid_rect.y..grid_rect.y + grid_rect.height {
         for x in grid_rect.x..grid_rect.x + grid_rect.width {
             let Some(cell) = buf.cell((x, y)) else { continue };
-            if cell.symbol() == " " {
-                if cell.modifier.contains(Modifier::REVERSED) {
-                    found_reversed_ground = true;
-                }
+            if cell.symbol() == " " && cell.modifier.contains(Modifier::REVERSED) {
+                found_reversed_ground = true;
             }
         }
     }
