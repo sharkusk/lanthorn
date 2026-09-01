@@ -30,8 +30,9 @@ Absolute URLs or no link.
   the story's own (`try instead — lantern`), having first tried each suggestion
   in a silent throwaway copy of your game. Its lines carry a `●` in the margin:
   lanthorn's voice, never the story's.
-- **The word reveal** (`F4`) lights every noun on screen that the story actually
-  knows, so you can tell the implemented `lamp` from the scenery `field`.
+- **The word reveal** (the `◈` border control) lights every noun on screen that
+  the story actually knows, so you can tell the implemented `lamp` from the
+  scenery `field`.
 - **Toggle controls on the story pane's border** — click to open the command
   band or map, switch the Guiding Light, or change a v6 story's render mode.
 - **The story picker follows your folders**, with `Ctrl+F` to filter the whole
@@ -74,9 +75,9 @@ ink colours come from.
 - `--guidance on|off`, `/set-guidance`, or the `●`/`○` control on the pane
   border — remembered per story. A `guidance` row on the settings screen sets
   the default.
-- **The word reveal** — `F4`, the `◈` border control, or `/reveal-words` —
-  lights every noun and adjective already on screen that this story knows, for a
-  few seconds. Works for Z-machine and Glulx stories.
+- **The word reveal** — the `◈` border control, or `/reveal-words` — lights
+  every noun and adjective already on screen that this story knows, for a few
+  seconds. Works for Z-machine and Glulx stories.
 - **A first-run font check** shows two rows of glyphs and asks which your
   terminal draws properly; the answer sets the map arrows, portal icons and the
   light's lamp glyph at once. `/run-font-check` asks again after a font change.

@@ -217,9 +217,9 @@ What you switch there is remembered for **that story**, not for every story: a
 map you hid, a light you put out, a render mode you preferred. The settings
 screen still sets the default new games inherit.
 
-Press **F4** and every word already on screen that the story
-knows lights up for a few seconds, over its own prose, without moving a line of
-it. It answers the oldest frustration in the genre: a room description names a
+Press the **`◈`** control on the pane border (or `/reveal-words`) and every
+word already on screen that the story knows lights up for a few seconds, over
+its own prose, without moving a line of it. It answers the oldest frustration in the genre: a room description names a
 dozen nouns and two of them are implemented. *Mini-Zork* opens on a `field` the
 story has never heard of, and that word stays dark. The claim it makes is the
 dictionary's and it says so each time — these are words this story knows, which
