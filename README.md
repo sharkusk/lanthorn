@@ -124,7 +124,7 @@ A few things worth doing in your first ten minutes. Everything else can wait.
 | **Ctrl+F** | *Next release:* filters your library as you type: title, author, filename or folder. |
 | **Enter** on a folder | *Next release:* a library sorted into folders is listed folder by folder; Enter opens one and **Backspace** returns up. |
 | **Tab** | Shows the info panel for the highlighted story. |
-| **o** | Launch options for this story — renderer, machine, artwork. |
+| **o** | Launch options for this story — which artwork it draws and which machine it plays as. |
 
 **In the story**
 
