@@ -235,8 +235,9 @@ carrying `enable_sound = false` could only be overridden by editing the file.
   the story has never heard of, and that word stays dark.
   - It lights only the things — asking every object in the story for its own
     parse names, nouns and adjectives together, never a verb, article or
-    preposition. The reveal says so every time — *words this story knows — not
-    necessarily things that are here*. A description that mentions something in
+    preposition. What it lights are *words this story knows — not necessarily
+    things that are here*; the lighting itself is the whole of the reply, with
+    no legend riding the status line. A description that mentions something in
     the next room lights it, which is the point rather than a leak: every word
     it touches is one the story has already printed on your screen.
   - Verbs never light. The verb panel already answers "what can I do".
@@ -247,6 +248,15 @@ carrying `enable_sound = false` could only be overridden by editing the file.
     still fall back to the story's own dictionary flags, a weaker guarantee: an
     Inform dictionary marks a word "usable in noun position" rather than "names
     a thing", so an article can slip through there.
+
+- **The map finds its own way back** — after a move that opens a one-way gap,
+  a silent throwaway copy of the game probes for the return passage and the
+  map records it only when the copy actually comes out in the room you left:
+  a probe that lands anywhere else records nothing, so the map never asserts
+  an edge nobody observed. On by default — the probing shares the turn's own
+  snapshot and costs the turn almost nothing — with a footprint control on
+  the story pane's bottom border and `/set-return-probe` to persist a choice
+  per-game.
 
 ### Toggle controls in the pane border
 

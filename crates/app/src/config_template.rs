@@ -206,7 +206,7 @@ const INTERFACE: &[Row] = &[
     ),
     d(
         "return_probe",
-        "false",
+        "true",
         &[
             "After a move, look for the way BACK in a silent throwaway copy of the",
             "game, and put it on the map when it is found. Automaps otherwise learn",
@@ -216,11 +216,11 @@ const INTERFACE: &[Row] = &[
             "comes out in the room you left: a probe that lands somewhere else",
             "records nothing at all, and neither does one that finds no way back.",
             "",
-            "OFF by default: it runs your game a few extra turns in private after",
-            "every move that opens a gap. The footprint on the STORY pane's bottom",
-            "border switches it — beside the map toggle, since the search keeps",
-            "running with the map hidden — and \"/set-return-probe\" persists it",
-            "per-game.",
+            "On by default: it runs your game a few extra turns in private after",
+            "every move that opens a gap, and never touches your screen or saves.",
+            "The footprint on the STORY pane's bottom border switches it — beside",
+            "the map toggle, since the search keeps running with the map hidden —",
+            "and \"/set-return-probe\" persists it per-game.",
         ],
     ),
     d(

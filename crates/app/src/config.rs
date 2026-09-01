@@ -1439,12 +1439,11 @@ pub struct Config {
     /// After a move, discover the way BACK in a silent copy of the game, so the
     /// automap closes one-way gaps without inventing reciprocity (SQ-0785).
     ///
-    /// **Off by default** — the first switch here that is. It runs the player's
-    /// game a few extra turns in private after every move that opens a gap, and
-    /// that is a thing to opt into rather than to discover having happened. The
-    /// map-pane control is drawn whether it is on or off (muted when off) for
-    /// exactly that reason: a feature nobody has seen lit is a feature nobody
-    /// turns on.
+    /// **On by default** since the probe seam got cheap (SQ-1177/SQ-1178: the
+    /// snapshot is shared with the turn's own bookkeeping, refused before it is
+    /// paid for when the worker is busy, and cloned by Arc per direction) — a
+    /// map that closes its own gaps is the automap working as advertised, and a
+    /// probe that lands anywhere but the room it left records nothing at all.
     ///
     /// Not part of [`guidance`](Self::guidance), and not part of
     /// [`guidance_probe`](Self::guidance_probe) either: neither of those speaks to
@@ -1453,7 +1452,7 @@ pub struct Config {
     /// `/set-return-probe` says it mid-game and persists it per-game, which is
     /// where a preference about how much work a particular story is worth
     /// belongs.
-    #[serde(default)]
+    #[serde(default = "default_true")]
     pub return_probe: bool,
     /// Keep [`adult_words`](Self::adult_words) out of any panel that ENUMERATES
     /// a story's vocabulary unprompted (SQ-1122). Default true.
@@ -2101,7 +2100,7 @@ impl Default for Config {
             hint_skip_screen_warning: true,
             guidance: true,
             guidance_probe: true,
-            return_probe: false,
+            return_probe: true,
             hide_adult_words: true,
             adult_words: default_adult_words(),
             background_tidy: BackgroundTidy::EveryRoom,
@@ -3513,7 +3512,7 @@ use_defaults = false
             hint_skip_screen_warning: true,
             guidance: true,
             guidance_probe: true,
-            return_probe: false,
+            return_probe: true,
             hide_adult_words: true,
             adult_words: default_adult_words(),
             background_tidy: BackgroundTidy::OnOverlap,

@@ -467,7 +467,7 @@ doors that open from one side, and mazes whose entire design is that the way bac
 is not the way you came. A guessed arrow is the map asserting something false,
 and nothing on screen tells you which arrows were walked and which were assumed.
 
-So the **return probe** finds out instead. Switch it on, and after a move that
+So the **return probe** finds out instead. After a move that
 leaves a gap lanthorn forks the story into a silent throwaway copy — the same
 shadow the Guiding Light vets its word suggestions in — stands it exactly where
 you are standing, and walks one direction. If it comes out in the room you just
@@ -503,10 +503,10 @@ catches up a beat later. Every direction it tries is remembered *permanently*, s
 a room is searched once in the life of a map rather than once per visit, and a
 search you interrupt by walking on resumes where it stopped.
 
-It is **off by default** — it does run your game a few extra turns in private —
-and the footprint on the **story** pane's bottom border, immediately inboard of
-the map toggle, is how you turn it on: muted when off, lit when on, and never
-hidden, because a switch you have never seen lit is a switch you never find. It
+It is **on by default** — the probing shares the snapshot the turn already
+takes for its own bookkeeping, so it costs the move almost nothing — and the
+footprint on the **story** pane's bottom border, immediately inboard of the map
+toggle, is its switch: muted when off, lit when on, and never hidden. It
 lives there rather than on the map's own border for a reason worth stating: the
 search keeps running while the map is hidden — hiding a view must not degrade the
 data behind it — so its only switch cannot sit on a pane that disappears. `/set-return-probe` does the same from the keyboard,

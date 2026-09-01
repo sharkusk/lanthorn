@@ -139,6 +139,7 @@ fn story(zversion: Option<u8>) -> AppState {
     st.story_zversion = zversion;
     st.layout = Layout::TranscriptFull;
     st.config.guidance = false;
+    st.config.return_probe = false; // on by default since SQ-1215; this fixture is the all-off row
     st.config.v6_render = app::config::V6RenderMode::Hybrid;
     st.config.v6_pixel_lock = false;
     st
