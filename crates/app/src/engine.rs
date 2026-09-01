@@ -509,11 +509,14 @@ pub trait Introspect {
     /// need no flag layout.
     ///
     /// `None` means the question could not be ASKED — an engine with no such
-    /// list, which is Glulx and Scott Adams today (`gvm::objects::ParseNames`
-    /// could answer it; reaching it wants Glulx introspection). An empty `Some`
-    /// is a story that was asked and holds no parse names anywhere, which is
-    /// what Journey and `advent.z8` really are. A caller that flattens the two
-    /// reports "this story names no things" about one it never managed to read.
+    /// list, which is Scott Adams today. Glulx answers the folded-set form
+    /// through [`Engine::object_word_set`] instead (`gvm::objects::ParseNames`,
+    /// SQ-1210) without implementing this trait, whose tree questions it cannot
+    /// answer — see that method for why the two capabilities are separate
+    /// seams. An empty `Some` is a story that was asked and holds no parse
+    /// names anywhere, which is what Journey and `advent.z8` really are. A
+    /// caller that flattens the two reports "this story names no things" about
+    /// one it never managed to read.
     fn all_object_words(&self) -> Option<Vec<ObjectWords>> {
         None
     }
@@ -1133,6 +1136,32 @@ pub trait Engine {
     /// Introspection capability, when the engine has one.
     fn introspect(&self) -> Option<&dyn Introspect> {
         None
+    }
+    /// **Does ANY object answer to this word** — the folded set of every
+    /// object's parse names ([`Introspect::object_word_set`]), reachable
+    /// without the rest of introspection (SQ-1210).
+    ///
+    /// It sits on `Engine` and not only on [`Introspect`] because the two are
+    /// different capabilities that happened to travel together until Glulx
+    /// could answer one and not the other. [`Introspect`]'s tree questions —
+    /// contents, room objects, children — need object handles the app can
+    /// correlate with rooms, which Glulx has none of (its objects are heap
+    /// addresses, its rooms synthetic heading ids). Answering those with empty
+    /// lists to smuggle the word set through `introspect()` would turn every
+    /// "could not ask" into a false "asked, nothing there": `probe::WorldPrint`
+    /// would fingerprint an empty world as a real one, the command band would
+    /// label a column `here` off a tree that was never walked, and
+    /// `vocab::scope_split` would stop saying `None`. So the word set gets its
+    /// own seam and the tree questions keep refusing honestly.
+    ///
+    /// The default forwards through [`Self::introspect`], so an engine with
+    /// full introspection (the Z-machine) answers here for free, with its own
+    /// caching. The Glulx adapter overrides it (`gvm::objects::ParseNames`);
+    /// Scott Adams keeps the `None`, which callers treat exactly as
+    /// [`Introspect::object_word_set`] documents — the question could not be
+    /// asked, distinct from an empty set.
+    fn object_word_set(&self) -> Option<std::sync::Arc<ObjectWordSet>> {
+        self.introspect().and_then(|i| i.object_word_set())
     }
     /// Debug-inspection capability, when the engine has one.
     fn debugger(&self) -> Option<&dyn Debugger> {

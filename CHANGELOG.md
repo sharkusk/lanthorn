@@ -180,10 +180,13 @@ carrying `enable_sound = false` could only be overridden by editing the file.
     the next room lights it, which is the point rather than a leak: every word
     it touches is one the story has already printed on your screen.
   - Verbs never light. The verb panel already answers "what can I do".
-  - Glulx and Scott have no object table to ask yet, so on those two the reveal
-    falls back to the story's own dictionary flags, a weaker guarantee — an
+  - Glulx games answer with their own objects too: the reveal reads the Inform
+    object list straight out of Glulx memory, so *Dr Ludwig and the Devil* now
+    lights its devil and its summoning circle instead of `the` and `an`. Scott
+    Adams games — and any Glulx image whose object list can't be verified —
+    still fall back to the story's own dictionary flags, a weaker guarantee: an
     Inform dictionary marks a word "usable in noun position" rather than "names
-    a thing", so an article can still slip through there.
+    a thing", so an article can slip through there.
 
 ### Toggle controls in the pane border
 

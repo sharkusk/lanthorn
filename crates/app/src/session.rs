@@ -7331,26 +7331,32 @@ mod tests {
     /// `zvm/tests/parse_names.rs` against the game's own parser.
     #[test]
     fn the_object_word_set_is_cached_for_a_turn_and_dropped_when_the_vm_runs() {
-        use crate::engine::Introspect as _;
+        use crate::engine::Introspect;
         use std::sync::Arc;
 
         let story = zvm::fixtures::load("minizork.z3").expect("committed fixture");
         let mut sess = GameSession::new(story, true, false, None).expect("minizork boots");
 
-        let first = sess.object_word_set().expect("minizork has parse names");
+        let first = Introspect::object_word_set(&sess).expect("minizork has parse names");
         assert!(
             first.contains("lantern") && first.contains("mailbox") && !first.contains("verbose"),
             "the set answers as any(refers_to) answers on the real story"
         );
-        let again = sess.object_word_set().expect("still answerable");
+        let again = Introspect::object_word_set(&sess).expect("still answerable");
         assert!(Arc::ptr_eq(&first, &again), "within a turn, one build serves every caller");
 
         // The game rewrites its world under the cache: point the lantern's
         // first parse word (the slot holding `lamp`) at the dictionary entry
-        // for a word no object answers to today.
+        // for a word no object answers to today. Not an article — the set
+        // deliberately never holds one (`grammar_model::ARTICLES`, SQ-1210),
+        // so `a` could never come back however fresh the rebuild.
         let chosen = zvm::grammar::dictionary_words(&sess.machine.mem)
             .into_iter()
-            .find(|w| w.text.chars().all(char::is_alphabetic) && !first.contains(&w.text))
+            .find(|w| {
+                w.text.chars().all(char::is_alphabetic)
+                    && !first.contains(&w.text)
+                    && !grammar_model::ARTICLES.contains(&w.text.as_str())
+            })
             .expect("minizork has verbs no object answers to");
         let prop = zvm::objects::get_prop_addr(&sess.machine.mem, 102, 17);
         assert_ne!(prop, 0, "the lantern keeps its words in property 17");
@@ -7358,7 +7364,7 @@ mod tests {
 
         // Within the same turn the cache is deliberately stale — the screen the
         // player is reading has not changed either.
-        let stale = sess.object_word_set().expect("still answerable");
+        let stale = Introspect::object_word_set(&sess).expect("still answerable");
         assert!(
             Arc::ptr_eq(&first, &stale) && !stale.contains(&chosen.text),
             "within a turn the cached build stands"
@@ -7366,7 +7372,7 @@ mod tests {
 
         // A turn runs; the next build must read the rewritten memory.
         sess.submit("look");
-        let fresh = sess.object_word_set().expect("still answerable");
+        let fresh = Introspect::object_word_set(&sess).expect("still answerable");
         assert!(
             fresh.contains(&chosen.text),
             "after a turn the set sees the rewritten parse word {:?}",

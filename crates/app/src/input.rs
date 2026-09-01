@@ -3237,7 +3237,7 @@ pub fn refresh_seen_words(state: &mut AppState, engine: &dyn crate::engine::Engi
     // As the folded any-object SET, not the `Vec<ObjectWords>`: `is_thing`
     // below never asks WHICH object answers, and walking the vec re-truncated
     // the story's whole vocabulary for every fresh word (SQ-1176).
-    let objects = engine.introspect().and_then(|i| i.object_word_set());
+    let objects = engine.object_word_set();
     // Newest first: walk the batch backwards and keep the first sighting of each
     // word, which is its LAST printing.
     let (fresh, fresh_nouns): (Vec<String>, Vec<String>) = {
@@ -3247,10 +3247,12 @@ pub fn refresh_seen_words(state: &mut AppState, engine: &dyn crate::engine::Engi
         // Is this word a THING rather than an action or a joining word?
         //
         // The story's own objects where they can be read, which is exact and
-        // needs no flag layout. Otherwise the dictionary's role bits, which is
-        // what Glulx and Scott have and is unchanged for them: a word the story
-        // marks a NOUN and does not write literally into a grammar line
-        // (SQ-1042). Measured on `stories/advent.blb` at the opening room that
+        // needs no flag layout — the Z-machine's, and since SQ-1210 Glulx's
+        // too (`Engine::object_word_set`). Otherwise the dictionary's role
+        // bits, which is what Scott and an unreadable Glulx image have: a word
+        // the story marks a NOUN and does not write literally into a grammar
+        // line (SQ-1042). Measured on `stories/advent.blb` at the opening room
+        // — back when that title still took this branch — that
         // cuts 20 scraped words to 12 — `at`, `in`, `of`, `to`, `down` and `out`
         // are prepositions the grammar writes down, `don` and `release` are
         // verbs. What it does NOT reach is Inform's `a`, `and` and `the`, which

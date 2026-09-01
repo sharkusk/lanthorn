@@ -41,12 +41,16 @@
 //! every engine with a readable object table answers with today: every retail
 //! Z-machine title measured so far, Infocom and Inform-on-Z-code alike (see
 //! `zvm::objects::ParseNames::detect`), `word_reveal.rs`'s Zork I specimen
-//! among them.
+//! among them — and, since SQ-1210, every Inform-compiled Glulx image too
+//! (`gvm::objects::ParseNames`, reached through [`Engine::object_word_set`]),
+//! which is what put out the `the`/`an` lights this module's fallback lit on
+//! `Dr Ludwig and the Devil`.
 //!
 //! **The dictionary is still asked, but only where the objects cannot be** —
-//! Glulx and Scott today, which have no object table this crate can read at
-//! all. Falling back to the dictionary's flag byte there is a decision and not
-//! an oversight: an imperfect reveal beats a dark one, and [`arm`]'s `None` arm
+//! Scott today, which has no object table at all, and any Glulx image whose
+//! object list fails `gvm`'s validation and honestly answers `None`. Falling
+//! back to the dictionary's flag byte there is a decision and not an
+//! oversight: an imperfect reveal beats a dark one, and [`arm`]'s `None` arm
 //! says why in code. Every word here, either tier, is a word the story has
 //! ALREADY PRINTED on the player's own screen, so lighting it reveals nothing
 //! that has not been told, and there is no spoiler for a narrower test to
@@ -265,9 +269,12 @@ pub fn arm(state: &mut AppState, engine: &dyn Engine) -> Armed {
     // `object_word_set`, not `all_object_words` + a `refers_to` walk: this asks
     // only "does ANY object answer", for every token on screen, and the walk
     // re-truncated the story's whole vocabulary per token (SQ-1176). Same
-    // answers — the set is `any(refers_to)` by construction — and `None` still
-    // means the question could not be asked, never a story with no names.
-    let words = match engine.introspect().and_then(|i| i.object_word_set()) {
+    // answers — the set is `any(refers_to)` by construction, minus the articles
+    // Inform 7 folds into multi-word names, which the story's own parser never
+    // lets stand as a typed word (`grammar_model::ARTICLES`, SQ-1210) — and
+    // `None` still means the question could not be asked, never a story with no
+    // names.
+    let words = match engine.object_word_set() {
         Some(set) => tokens
             .iter()
             .filter(|t| set.contains(t))
@@ -275,14 +282,16 @@ pub fn arm(state: &mut AppState, engine: &dyn Engine) -> Armed {
             .collect::<BTreeSet<String>>(),
         None => {
             // Reached only by an engine this crate cannot ask about its own
-            // objects at all — Glulx and Scott today (`GameSession` answers
-            // `Some` for every Z-machine title with a readable object table,
-            // which is the whole Infocom and Inform-on-Z-code catalogue this
-            // corpus has). Going dark here — lighting nothing, ever, on two
-            // whole engines — was the other option, and was rejected: an
-            // imperfect reveal a Glulx or Scott player can still lean on beats a
-            // silently absent one (SQ-1207 decision, stated here since there is
-            // nowhere else for a reader of THIS branch to find it).
+            // objects at all — Scott today, plus any Glulx image whose object
+            // list fails `gvm::objects::ParseNames`' validation (`GameSession`
+            // answers `Some` for every Z-machine title with a readable object
+            // table, and the Glulx adapter for every Inform-compiled image,
+            // which between them is essentially the whole corpus — SQ-1210).
+            // Going dark here — lighting nothing, ever, on the remainder — was
+            // the other option, and was rejected: an imperfect reveal a Scott
+            // player can still lean on beats a silently absent one (SQ-1207
+            // decision, stated here since there is nowhere else for a reader of
+            // THIS branch to find it).
             //
             // The dictionary, filtered to the words that NAME things — nouns and
             // adjectives, minus the buzzword bit ($04), which is `the`, `a`,
@@ -296,15 +305,17 @@ pub fn arm(state: &mut AppState, engine: &dyn Engine) -> Armed {
             // is a WEAKER claim on an Inform title than an Infocom one.** Neither
             // Inform back-end has a buzzword bit or a distinct adjective bit at
             // all (see `WordRoles`), and Inform's "noun" bit really means "usable
-            // in noun position" rather than "names a thing" — so on a real Glulx
-            // game (`Dr Ludwig and the Devil.gblorb`, measured by hand) `a`, `an`
-            // and `the` all decode with the noun bit set and light right
-            // alongside a real noun. There is no rescuing that from here without
-            // consulting English, which this file does not do (see the module
-            // doc) — the flags are the story's answer — so [`CAVEAT`] says what
-            // the reveal is rather than pretending otherwise. The real fix is an
-            // `object_word_set` for Glulx (`gvm` keeps no such index today), not
-            // a stoplist grafted on here.
+            // in noun position" rather than "names a thing" — measured on a real
+            // Glulx game (`Dr Ludwig and the Devil.gblorb`) back when this arm
+            // was Glulx's only tier, `a`, `an` and `the` all decoded with the
+            // noun bit set and lit right alongside a real noun. That was the
+            // whole of SQ-1210, and the fix was the one this comment used to
+            // call for: `Engine::object_word_set` now answers on Glulx from the
+            // story's own objects, so an Inform-family image lands here only
+            // when its object list fails validation. There is still no rescuing
+            // the flag bits from inside this arm without consulting English,
+            // which this file does not do (see the module doc) — so [`CAVEAT`]
+            // says what the reveal is rather than pretending otherwise.
             let Some(v) = state.vocab.get(engine) else {
                 state.reveal = None;
                 return Armed::NoVocabulary;

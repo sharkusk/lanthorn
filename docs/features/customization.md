@@ -592,11 +592,13 @@ re-seed the new template, or hand-write the new shape from
   It only lights a story's own nouns and adjectives — a real Zork I house
   fetches `white` right along with it — and never a verb, an article or a
   preposition: the verb panel already answers "what can I do", and this answers
-  "what does this game know about". Glulx and Scott have no object table this
-  crate can read yet, so on those two the reveal falls back to the dictionary's
-  own idea of a noun, a weaker guarantee — an Inform dictionary marks a word
-  "usable in noun position" rather than "names a thing", so an article there can
-  still slip through.
+  "what does this game know about". Glulx answers with its own objects too —
+  the Inform object list is read straight out of Glulx memory, so *Dr Ludwig
+  and the Devil* lights its devil and its summoning circle rather than `the`
+  and `an`. Only Scott — and any Glulx image whose object list cannot be
+  verified — falls back to the dictionary's own idea of a noun, a weaker
+  guarantee: an Inform dictionary marks a word "usable in noun position" rather
+  than "names a thing", so an article there can still slip through.
   One honest limit, and it is the parser's own: a Version 3 dictionary keeps six
   characters of a word, so `candle` and `candlesticks` are the same entry, and a
   room holding a candle lights both. That is not a mistake on lanthorn's part —

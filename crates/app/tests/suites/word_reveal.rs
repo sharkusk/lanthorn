@@ -48,11 +48,14 @@
 //! | `crates/zvm/tests/fixtures/minizork.z3` | r34/s871124 | 0 | the whole path, in CI |
 //! | `crates/zvm/tests/fixtures/minizork.z3` | r34/s871124 | 1 (`north`) | scope moving under old text |
 //! | `stories/zork1-invclues-r52-s871125.z5` | r52/s871125 | 0 | the noun-AND-adjective contract (SQ-1207); Mini-Zork's Version 3 dictionary cannot report adjectives |
+//! | `stories/Dr Ludwig and the Devil.gblorb` | r2/s250306 | 3 intro keys, 0 commands | the same contract on Glulx (SQ-1210) |
+//! | `stories/King_of_Shreds_and_Patches.gblorb` | — | boot | Glulx fail-safe: answer truly or refuse honestly (SQ-1210) |
 //!
 //! Mini-Zork is tracked, so every case built on it runs on CI; nothing there
 //! skips. The Version 5 specimen is gitignored (CLAUDE.md's `stories/`) and
 //! skips vacuously without it — chosen over Mini-Zork specifically because a
-//! Version 1-3 story keeps no readable adjective property at all.
+//! Version 1-3 story keeps no readable adjective property at all. The two
+//! Glulx specimens are gitignored likewise and skip the same way.
 
 use app::engine::Engine;
 use app::reveal::Armed;
@@ -81,11 +84,19 @@ const AREA: Rect = Rect { x: 0, y: 0, width: 72, height: 20 };
 /// The state a player is looking at: the story's own output in the transcript,
 /// the Guiding Light on (this lives under its switch), and one frame drawn —
 /// which is what fills the wrap cache and the viewport geometry the reveal reads.
-fn screen(session: &mut GameSession) -> AppState {
+/// `&mut dyn Engine`, not `GameSession`: the Glulx cases below (SQ-1210) build
+/// the same screen from the same seam.
+fn screen(session: &mut dyn Engine) -> AppState {
+    screen_of(&session.take_transcript())
+}
+
+/// [`screen`] for a caller that accumulated the text itself — the Glulx boot
+/// taps through intro pauses and gathers several turns' transcript first.
+fn screen_of(text: &str) -> AppState {
     let mut state = AppState::default();
     state.colors = app::colors::ColorScheme::terminal_default();
     state.config.guidance = true;
-    for line in session.take_transcript().split('\n') {
+    for line in text.split('\n') {
         state.push_transcript_kind(line, TranscriptKind::Story);
     }
     draw(&state);
@@ -460,6 +471,169 @@ fn a_noun_and_its_adjective_light_while_articles_and_verbs_do_not() {
     // parse name of anything.
     for not_a_thing in ["the", "a", "of", "an", "open", "standing", "with", "in", "here"] {
         assert!(!lit.contains(&not_a_thing.to_string()), "{not_a_thing:?} names nothing: {lit:?}");
+    }
+}
+
+// ── The same contract on Glulx (SQ-1210) ────────────────────────────────────
+//
+// The bug this section pins: with no object-word answer on Glulx, `arm` fell
+// back to the dictionary's flag bits, and an Inform dictionary files `a`, `an`
+// and `the` in noun position — so the reveal lit the articles of every Glulx
+// game. `Engine::object_word_set` now answers from the story's own objects
+// (`gvm::objects::ParseNames`), and these cases hold it to the Zork I
+// specimen's exact contract.
+//
+// Specimens (both gitignored, skip vacuously; oracle: the game's own parser
+// under `gvm-cli`, 2026-09-01):
+//
+// | fixture | release | turns in | what it shows |
+// |---|---|---|---|
+// | `stories/Dr Ludwig and the Devil.gblorb` | r2/s250306, I7 6M62 | 3 intro keys, 0 commands | the SQ-1210 symptom carrier |
+// | `stories/King_of_Shreds_and_Patches.gblorb` | whatever it answers | boot | fail-safe: answer truly or refuse honestly |
+
+/// Boot a Glulx story from `stories/` (bare image or Blorb), or skip.
+fn glulx_session(name: &str) -> Option<app::glulx_session::GlulxSession> {
+    let path = fixture_path(name);
+    let Ok(bytes) = std::fs::read(&path) else {
+        eprintln!("SKIP: gitignored story missing at {}", path.display());
+        return None;
+    };
+    let image = if blorb::Blorb::is_blorb(&bytes) {
+        let b = blorb::Blorb::parse(bytes).expect("story parses as a Blorb");
+        match b.executable() {
+            Ok((blorb::ExecKind::Glulx, data)) => data.to_vec(),
+            _ => return None,
+        }
+    } else {
+        bytes
+    };
+    Some(
+        app::glulx_session::GlulxSession::new(image, 80, 24, true, false, false, (1, 1), None, &[])
+            .expect("the story boots"),
+    )
+}
+
+/// Dr Ludwig's opening screen: tap through the intro's keypress pauses to the
+/// first line prompt (three of them; the bound is just a hang guard) and hand
+/// back everything printed on the way. 0 commands typed.
+fn dr_ludwig_opening() -> Option<(app::glulx_session::GlulxSession, String)> {
+    let mut session = glulx_session("Dr Ludwig and the Devil.gblorb")?;
+    let mut text = session.take_transcript();
+    for _ in 0..8 {
+        if session.pending_input() != app::session::InputKind::Char {
+            break;
+        }
+        if let Some(turn) = session.submit_key(app::engine::KeyInput::Enter) {
+            text.push('\n');
+            text.push_str(&turn.transcript);
+        }
+    }
+    assert_eq!(
+        session.pending_input(),
+        app::session::InputKind::Line,
+        "the intro ends at the game's own command prompt, or the frame is not the one measured"
+    );
+    Some((session, text))
+}
+
+/// **SQ-1210's contract, on the story it was filed against.** The Laboratory
+/// description names a desk, an operating table, a grandfather clock, a
+/// staircase, a summoning circle drawn in chalk, and the Devil — every one
+/// confirmed against the game's own parser (`x desk` → the Grand Grimoire,
+/// `x grandfather` → "a few minutes past six", `x summoning` → the circle,
+/// `x the` / `x an` → "There was no such thing in sight!"). The articles and
+/// the hint bar's verbs (`type`, `ask`) sit in the same screenful and must
+/// stay dark — under the pre-SQ-1210 dictionary fallback they lit.
+///
+/// Falsified by forcing `GlulxSession::object_word_set` to `None` (the
+/// pre-quest state): `the`, `a` and `an` light and this case fails on them.
+#[test]
+fn glulx_nouns_and_adjectives_light_while_articles_and_verbs_do_not() {
+    let Some((session, text)) = dr_ludwig_opening() else { return };
+    // The seam must ANSWER here, or everything below would be exercising the
+    // dictionary fallback — the exact bug this quest closed.
+    assert!(
+        session.object_word_set().is_some(),
+        "Dr Ludwig is Inform-compiled Glulx; ParseNames must read its object list"
+    );
+
+    let mut state = screen_of(&text);
+    let armed = app::reveal::arm(&mut state, &session);
+    assert_eq!(armed, Armed::Lit { words: words(&state).len() });
+    let lit = words(&state);
+    println!("lit: {lit:?}");
+    assert!(
+        state.transcript.iter().any(|l| l.contains("summoning circle")),
+        "the specimen text must actually be on screen, or this proves nothing: {:?}",
+        state.transcript,
+    );
+
+    // Things, and the adjectives that describe them — all parser-confirmed
+    // parse names of Dr Ludwig's objects.
+    for thing in
+        ["devil", "circle", "chalk", "summoning", "desk", "table", "clock", "grandfather", "staircase"]
+    {
+        assert!(lit.contains(&thing.to_string()), "{thing:?} names or describes a real object: {lit:?}");
+    }
+    // Articles and two of the hint bar's verbs, printed in the same screenful,
+    // none of them any object's parse name.
+    for not_a_thing in ["the", "a", "an", "type", "ask"] {
+        assert!(!lit.contains(&not_a_thing.to_string()), "{not_a_thing:?} names nothing: {lit:?}");
+    }
+}
+
+/// The Glulx set is cached for a turn and rebuilt after the VM runs — the same
+/// SQ-1176 discipline `GameSession` proves in `session.rs`'s unit test, held
+/// here at the adapter's seam because the invalidation lives in its drive
+/// paths.
+#[test]
+fn the_glulx_object_word_set_is_cached_for_a_turn_and_dropped_when_the_vm_runs() {
+    use std::sync::Arc;
+    let Some((mut session, _)) = dr_ludwig_opening() else { return };
+
+    let first = session.object_word_set().expect("Dr Ludwig answers");
+    assert!(
+        first.contains("devil") && !first.contains("the"),
+        "the set answers as the story's own objects answer"
+    );
+    let again = session.object_word_set().expect("still answerable");
+    assert!(Arc::ptr_eq(&first, &again), "within a turn, one build serves every caller");
+
+    session.submit("look");
+    let fresh = session.object_word_set().expect("still answerable");
+    assert!(
+        !Arc::ptr_eq(&first, &fresh),
+        "after a turn the set is rebuilt from live RAM, not served stale"
+    );
+}
+
+/// Fail-safe on a second, unrelated Glulx story: either the object list reads
+/// and the set carries no article, or detection refuses and the reveal keeps
+/// its documented dictionary fallback. Refusal is a PASS — a wrong set would
+/// silently unlight real nouns, which is worse than the bug (SQ-1210's prime
+/// rule). What this case forbids is the middle ground: a set that "answers"
+/// with words no object owns.
+#[test]
+fn a_second_glulx_story_answers_truly_or_refuses_honestly() {
+    let Some(mut session) = glulx_session("King_of_Shreds_and_Patches.gblorb") else { return };
+    match session.object_word_set() {
+        Some(set) => {
+            for article in ["the", "a", "an"] {
+                assert!(!set.contains(article), "{article:?} can be no object's parse name");
+            }
+            println!("King of Shreds: object list read");
+        }
+        None => {
+            // The documented fallback must still arm the reveal off the
+            // dictionary tier rather than going dark or panicking.
+            let mut state = screen(&mut session);
+            let armed = app::reveal::arm(&mut state, &session);
+            println!("King of Shreds: ParseNames refused; fallback armed as {armed:?}");
+            assert!(
+                matches!(armed, Armed::Lit { .. } | Armed::Nothing),
+                "with no object answer the dictionary tier still runs: {armed:?}"
+            );
+        }
     }
 }
 

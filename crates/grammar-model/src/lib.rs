@@ -787,6 +787,35 @@ impl ObjectWords {
     }
 }
 
+/// The words no single typed token can refer to a thing THROUGH, however many
+/// `name` arrays hold them: English's articles, as the Inform parser itself
+/// spells them.
+///
+/// They get into `name` arrays because Inform 7 compiles a multi-word name
+/// word by word — *Dr Ludwig and the Devil*'s "back of the tavern" holds
+/// `back`, `of`, `the`, `tavern` — so the parser can match the whole phrase.
+/// But a phrase and a lone token are different questions. The parser consumes
+/// descriptors BEFORE it matches names: `parserm` stage (C) — "First, we
+/// parse any descriptive words (like ~the~, ~five~ or ~every~): l =
+/// Descriptors(...)" — runs ahead of stage (D) "Parse an object name", and
+/// the English language definition's `LanguageDescriptors` table files `the`
+/// as `DEFART_PK` and `a//`/`an`/`some` as `INDEFART_PK` (Inform 6 library,
+/// `parser.h` §C/§D and `english.h`; Inform 7's `Parser.i6t` is the same
+/// parser). So a typed `the` is spent as an article and never reaches the
+/// name arrays — "x the" cannot match the tavern's back, and the game's own
+/// reply is "no such thing" (measured, Dr Ludwig r2/s250306).
+///
+/// [`ObjectWordSet`] therefore leaves these four out (SQ-1210): its callers
+/// ask "would typing this one word name a thing", and for an article the
+/// story's own parser answers no. Only the ARTICLE rows are excluded — the
+/// other descriptors (`my`, `lit`, …) genuinely select objects, and `of`
+/// really does reach a name array (`x of` disambiguates among the of-named
+/// things), odd as it looks lit. Per-object [`ObjectWords::refers_to`] keeps
+/// answering `true` for an article in a name, because there it means "part of
+/// a phrase that names this thing", which is true and is what display and
+/// phrase matching want.
+pub const ARTICLES: [&str; 4] = ["the", "a", "an", "some"];
+
 /// "Does ANY object answer to this word?" — [`ObjectWords::refers_to`] asked of
 /// a whole story at once, as one membership set.
 ///
@@ -799,7 +828,11 @@ impl ObjectWords {
 /// practice), not one per object.
 ///
 /// It answers only the ANY question. A caller that needs to know *which*
-/// object a word names still walks the objects with `refers_to`.
+/// object a word names still walks the objects with `refers_to` — and with
+/// one deliberate divergence from `any(refers_to)`: the articles
+/// ([`ARTICLES`]) are left out of the set, because the question the set
+/// serves is about a single TYPED word and no Inform parser lets an article
+/// stand as one. See [`ARTICLES`] for the sources.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct ObjectWordSet {
     /// One entry per distinct truncation rule among the objects it was built
@@ -814,7 +847,9 @@ pub struct ObjectWordSet {
 impl ObjectWordSet {
     /// Fold a story's objects into the set. Nouns and adjectives both count,
     /// exactly as [`ObjectWords::refers_to`] counts them: each stored word is
-    /// kept truncated by its own object's rule, verbatim otherwise.
+    /// kept truncated by its own object's rule, verbatim otherwise — except
+    /// the [`ARTICLES`], which are dropped (see there for why and for the
+    /// sources).
     pub fn build<'a>(objects: impl IntoIterator<Item = &'a ObjectWords>) -> ObjectWordSet {
         let mut keys: Vec<(Option<usize>, HashSet<String>)> = Vec::new();
         for o in objects {
@@ -826,6 +861,9 @@ impl ObjectWordSet {
                 }
             };
             for w in o.words.iter().chain(o.adjectives.words()) {
+                if ARTICLES.iter().any(|a| a.eq_ignore_ascii_case(w)) {
+                    continue;
+                }
                 set.insert(o.truncate(w));
             }
         }
@@ -1025,8 +1063,9 @@ mod tests {
         assert_eq!(o.describe(), "brass lantern [lamp, lanter, light]");
     }
 
-    /// The set is `any(refers_to)` and nothing more — same truncation, same
-    /// lowercasing, adjectives counted, and mixed rules kept apart.
+    /// The set is `any(refers_to)` with one stated exception (the articles,
+    /// tested separately below) — same truncation, same lowercasing,
+    /// adjectives counted, and mixed rules kept apart.
     #[test]
     fn the_word_set_answers_exactly_as_any_object_refers_to_answers() {
         let zork = ObjectWords {
@@ -1061,6 +1100,32 @@ mod tests {
 
         assert!(!ObjectWordSet::default().contains("anything"));
         assert!(!ObjectWordSet::build([].into_iter()).contains("lamp"));
+    }
+
+    /// The one deliberate divergence from `any(refers_to)`: an article in a
+    /// `name` array (Inform 7's word-by-word "back of the tavern") stays out
+    /// of the SET, because no lone typed article reaches name matching — the
+    /// parser spends it as a descriptor first (see [`ARTICLES`] for the
+    /// sources). The object itself keeps answering `refers_to`, because there
+    /// the word is part of a phrase that names the thing (SQ-1210).
+    #[test]
+    fn articles_in_a_name_array_stay_out_of_the_set_but_not_out_of_the_phrase() {
+        let back = ObjectWords::new(
+            0x10d529,
+            String::new(),
+            vec!["back".into(), "of".into(), "the".into(), "tavern".into()],
+            Some(1),
+            Some(9),
+        );
+        let objects = [back];
+        let set = ObjectWordSet::build(&objects);
+        for article in ARTICLES {
+            assert!(!set.contains(article), "{article:?} cannot stand as a typed name");
+            assert!(!objects[0].refers_to(article) || article == "the", "sanity: only `the` is in this name");
+        }
+        assert!(objects[0].refers_to("the"), "in the phrase, `the` still counts");
+        // `of` is not an article and genuinely reaches the name array.
+        assert!(set.contains("of") && set.contains("tavern") && set.contains("back"));
     }
 
     #[test]

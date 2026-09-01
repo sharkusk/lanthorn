@@ -522,11 +522,13 @@ know which side you're on).
   been measured against all three games' own parsers — `$01` verb, `$02` noun,
   `$04` adjective, in the last byte of the dictionary entry — so both routes now
   agree; the objects stay the answer, because they are the only thing that can
-  follow Arthur's password as it rewrites its own parse names mid-puzzle. Where
-  an engine keeps no object list — Glulx and Scott — the
-  dictionary's noun bit is still the filter, which keeps its verbs and its
-  `at`/`in`/`of`/`to` out of a column of things; Inform's `a`, `and` and `the`
-  carry the noun bit and nothing else, so they still slip through there.
+  follow Arthur's password as it rewrites its own parse names mid-puzzle. Glulx
+  asks its objects too, straight out of the Inform object list in Glulx memory.
+  Where an engine keeps no object list — Scott, and any Glulx image whose list
+  cannot be verified — the dictionary's noun bit is still the filter, which
+  keeps its verbs and its `at`/`in`/`of`/`to` out of a column of things;
+  Inform's `a`, `and` and `the` carry the noun bit and nothing else, so they
+  still slip through there.
 
   **And each row is a word the parser has agreed to accept**, not the name the
   game prints. The two are different sets: Zork I *prints* `bird's nest` and

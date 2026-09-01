@@ -6,9 +6,12 @@
 //! `gvm-cli`'s `drive`) until the next `glk_select` request or Quit, draining the
 //! [`AppGlk`] backend's output into the [`TurnResult`].
 //!
-//! Automapping/play-aids for Glulx are a later phase (SP4): [`introspect`] and
-//! [`current_location`] return `None`, so the map pane and the play-aids stay
-//! quiet. Glulx saves are tagged `"glulx"`; the 3b-i foreign-engine restore guard
+//! Full introspection for Glulx is a later phase (SP4): [`introspect`] returns
+//! `None`, so the tree-walking play-aids (inventory strip, here-column scope)
+//! stay quiet. What IS answered: rooms via the heading heuristics below, and —
+//! since SQ-1210 — the object-word set (`Engine::object_word_set`, backed by
+//! `gvm::objects::ParseNames`), so the word reveal and the seen-words scrape
+//! ask the story's own objects instead of its dictionary's flag bits. Glulx saves are tagged `"glulx"`; the 3b-i foreign-engine restore guard
 //! prevents cross-loading a Z-machine save (and vice-versa).
 //!
 //! [`introspect`]: Engine::introspect
@@ -98,6 +101,29 @@ pub struct GlulxSession {
     /// discovery over a multi-MB I7 image is not free, so it never runs unless the
     /// inspector is actually opened. See [`crate::glulx_debug`].
     pub(crate) disasm_cache: std::cell::RefCell<Option<gvm::disasm::DisasmCache>>,
+    /// Where this story keeps the words its parser accepts for an object —
+    /// [`gvm::objects::ParseNames`], derived on first ask (SQ-1210). `None`
+    /// inside the cell is a real answer, not a failure to look: a story whose
+    /// RAM holds no Inform object list this reader can verify (glulxercise, a
+    /// non-Inform compiler) refuses at detection, and every consumer falls back
+    /// exactly as before the seam existed. A `OnceCell` because the answer
+    /// describes the compiler's layout — the `$70` list's linkage is emitted by
+    /// `Inform6/src/tables.c` and never rewritten at play — and because the
+    /// detection is a scan of all of RAM, which must not run per turn. The
+    /// same story survives `restore_state`/`restore_game_save` (a foreign
+    /// engine's save is refused before the swap), so the layout does too.
+    parse_names: std::cell::OnceCell<Option<gvm::objects::ParseNames>>,
+    /// The [`parse_names`](Self::parse_names) walk folded into the one set the
+    /// bulk callers query — "does ANY object answer to this word" (SQ-1176,
+    /// SQ-1210). Same shape and soundness argument as
+    /// `GameSession::object_word_set`: a cache of LIVE data, because the
+    /// `name` arrays sit in RAM and a game can rewrite them, dropped wherever
+    /// the VM runs — every drive on this session funnels through
+    /// [`drive_turn`](Self::drive_turn), [`resize`](Self::resize),
+    /// [`apply_deferred_resize`](Self::apply_deferred_resize),
+    /// [`settle_after_event`](Self::settle_after_event) or the two restore
+    /// paths, and each of those takes this cell.
+    object_word_set: std::cell::RefCell<Option<std::sync::Arc<grammar_model::ObjectWordSet>>>,
     /// Auxiliary persistent data (Glulx aux persistence is a later phase).
     aux: BTreeMap<String, Vec<u8>>,
     aux_dirty: bool,
@@ -508,6 +534,8 @@ impl GlulxSession {
             screen_cache: blank_screen(),
             window_dump_cache: Vec::new(),
             disasm_cache: std::cell::RefCell::new(None),
+            parse_names: std::cell::OnceCell::new(),
+            object_word_set: std::cell::RefCell::new(None),
             aux: BTreeMap::new(),
             aux_dirty: false,
             last_room: None,
@@ -587,6 +615,7 @@ impl GlulxSession {
         }
         self.set_screen_size(cols, rows);
         self.machine.rearrange();
+        self.object_word_set.take(); // the drive runs game code (SQ-1176 duty)
         let (pending, quit) = drive_settled(&mut self.machine, &self.store);
         self.pending = pending;
         self.quit = quit;
@@ -620,6 +649,7 @@ impl GlulxSession {
         self.deferred_resize = None;
         self.set_screen_size(cols, rows);
         self.machine.rearrange();
+        self.object_word_set.take(); // the drive runs game code (SQ-1176 duty)
         let (pending, quit) = drive_settled(&mut self.machine, &self.store);
         self.pending = pending;
         self.quit = quit;
@@ -636,6 +666,7 @@ impl GlulxSession {
         if self.game_io_pending() {
             return;
         }
+        self.object_word_set.take(); // the drive runs game code (SQ-1176 duty)
         let (pending, quit) = drive_settled(&mut self.machine, &self.store);
         self.pending = pending;
         self.quit = quit;
@@ -664,6 +695,14 @@ impl GlulxSession {
     /// `pending`/`quit` left unchanged, since the game is mid-turn); the run loop
     /// performs the file I/O and calls `resume_save`/`resume_restore`.
     fn drive_turn(&mut self) {
+        // The VM is about to run, so RAM may change under the cached
+        // object-word set — a game CAN rewrite an object's `name` array
+        // mid-play, and a stale set would keep answering for the old words.
+        // Same per-turn invalidation the Z-machine's `drain_turn` performs
+        // (SQ-1176); the other drive paths on this session (`resize`,
+        // `apply_deferred_resize`, `settle_after_event`, the two restores) each
+        // take the cell too.
+        self.object_word_set.take();
         match drive_auto(&mut self.machine, &self.store) {
             DriveStop::Input(k) => {
                 self.pending = k;
@@ -691,6 +730,16 @@ impl GlulxSession {
                 self.pending_filename = Some(FilenameReq { usage, fmode })
             }
         }
+    }
+
+    /// The reader for the words this story's parser accepts for an object,
+    /// derived on first use — see [`parse_names`](Self::parse_names) the field.
+    /// `None` is the documented refusal: no verified Inform object list in this
+    /// image, and every consumer keeps its pre-SQ-1210 fallback.
+    pub fn parse_names(&self) -> Option<&gvm::objects::ParseNames> {
+        self.parse_names
+            .get_or_init(|| gvm::objects::ParseNames::detect(self.machine.mem()).ok())
+            .as_ref()
     }
 
     fn appglk(&mut self) -> &mut AppGlk {
@@ -1349,6 +1398,11 @@ impl Engine for GlulxSession {
         self.machine
             .restore_state(&save.bytes)
             .map_err(|e| EngineError::BadSave(format!("{e:?}")))?;
+        // The restore swapped RAM wholesale, and this path does not drive a
+        // turn first — drop the cached object-word set as `drive_turn` does, or
+        // it keeps answering for the session we just left (SQ-1176). The
+        // `parse_names` layout survives: same story, same compiler tables.
+        self.object_word_set.take();
         // Nothing the previous run was waiting on survives the swap.
         // `Machine::restore_state` drops the VM-side suspensions (SQ-0656); these
         // are the host-side halves of the same records, and leaving them set would
@@ -1399,6 +1453,9 @@ impl Engine for GlulxSession {
         // instead of resuming at the restored PC. The game re-requests its own
         // line event on the way back to the prompt.
         self.machine.abandon_pending_input();
+        // RAM was reverted to the save point without a turn being driven — same
+        // duty as in `restore_state` above (SQ-1176).
+        self.object_word_set.take();
         // Run the save-verb tail out to the next prompt, so the session is
         // re-armed at a clean input request rather than parked mid-verb
         // (mirrors the Z-machine's `restore_game_save`).
@@ -1508,7 +1565,36 @@ impl Engine for GlulxSession {
         Some(self)
     }
 
-    // introspect() uses the trait default (None).
+    // introspect() uses the trait default (None): the tree questions — contents,
+    // room objects, children, the player — need handles this adapter cannot
+    // correlate with its synthetic heading-keyed rooms, and answering them with
+    // empty lists would turn "could not ask" into a false "asked, nothing there"
+    // for every consumer that tells those apart (see `Engine::object_word_set`'s
+    // doc). The one object question Glulx CAN answer gets its own seam below.
+
+    /// "Does ANY object answer to this word", from the story's own Inform
+    /// object list — `gvm::objects::ParseNames`, the same walk the Z-machine
+    /// side does through `zvm::objects` (SQ-1210). Fail-safe by construction:
+    /// detection refuses (`None`) unless a verified `$70` list with readable
+    /// `name` arrays exists, and every consumer then keeps its documented
+    /// dictionary fallback.
+    fn object_word_set(&self) -> Option<std::sync::Arc<grammar_model::ObjectWordSet>> {
+        // Whether the story keeps a readable object list is a compile-time
+        // layout fact (`parse_names` is a `OnceCell`), so a `None` needs no
+        // cache.
+        let names = self.parse_names()?;
+        if let Some(set) = self.object_word_set.borrow().as_ref() {
+            return Some(std::sync::Arc::clone(set));
+        }
+        // One walk of the object list per TURN, not per token: every drive path
+        // drops the entry (see the field's doc), because the `name` arrays live
+        // in RAM and a game can rewrite them.
+        let set = std::sync::Arc::new(grammar_model::ObjectWordSet::build(
+            &names.all(self.machine.mem()),
+        ));
+        *self.object_word_set.borrow_mut() = Some(std::sync::Arc::clone(&set));
+        Some(set)
+    }
 }
 
 // ── Tests ──────────────────────────────────────────────────────────────────────
