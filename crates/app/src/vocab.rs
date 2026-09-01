@@ -1565,24 +1565,32 @@ pub fn deliver_answer(state: &mut AppState, answer: crate::probe::Answer) -> boo
 
 // The wrap cache, and why the late insert does not defer to a keystroke gap.
 //
-// An insert above the prompt moves a line the cache has already wrapped, so it
-// is a `TranscriptEdit::Rewrote` and the next frame rebuilds the whole wrap.
-// Measured at 40 columns in a debug build
-// (`render::transcript::tests::a_late_insert_above_the_prompt_rebuilds_the_wrap_within_a_keystroke`):
-// 1.3 ms at 200 transcript lines, 4.0 ms at 1,000, 18.4 ms at 5,000 and 71.8 ms
-// at 20,000, against a flat 0.43 ms for a cached frame. Linear in scrollback,
-// and not free.
+// An insert above the prompt moves the one line the cache has already
+// wrapped — the trailing prompt itself — so before SQ-1179 it was a
+// `TranscriptEdit::Rewrote` and the next frame rebuilt the whole wrap. Measured
+// at 40 columns in a debug build
+// (`render::transcript::tests::a_late_insert_above_the_prompt_repairs_the_wrap_exactly_once`,
+// before the fix): 1.3 ms at 200 transcript lines, 4.0 ms at 1,000, 18.4 ms at
+// 5,000 and 71.8 ms at 20,000, against a flat 0.43 ms for a cached frame —
+// linear in scrollback, and not free.
 //
-// It is nevertheless paid where it always was. Every `push_transcript_internal`
-// in inline-prompt mode is the same edit — every `/help`, every save banner,
-// every other assist — so this is the register's standing cost rather than a new
-// one, and the SYNCHRONOUS offer paid it too. What changes is only that the
-// frame it lands on may be one the player is typing into; and the event loop
-// already coalesces an input burst (`skip_draw` defers the draw and leaves
-// `needs_redraw` set), so the rebuild is paid ONCE, on the frame that shows the
-// typed characters, rather than per keystroke. A deferral of our own would be new
-// machinery with its own staleness question, for a saving the burst coalescing
-// has already made.
+// SQ-1179 gave the edit its own `TranscriptEdit::Inserted { at, count }`, which
+// the wrap cache can REPAIR through instead: every line before `at` provably
+// did not move, so only the (typically one-line) tail is re-wrapped. What was
+// a rebuild is now flat again, like the cached-frame number above rather than
+// the scrollback-linear ones beside it.
+//
+// The cost this comment used to describe is nevertheless still paid where it
+// always was for anything that ISN'T an insert-above-the-prompt — a resize, a
+// filter, a theme, or any other `Rewrote`. Every `push_transcript_internal` in
+// inline-prompt mode used to be the same edit — every `/help`, every save
+// banner, every other assist — so before the fix this was the register's
+// standing cost rather than a new one, and the SYNCHRONOUS offer paid it too.
+// What changed with SQ-1124 alone (the deferred offer, prior to this fix) was
+// only that the frame it landed on might be one the player is typing into; and
+// the event loop already coalesces an input burst (`skip_draw` defers the draw
+// and leaves `needs_redraw` set), so even the pre-SQ-1179 rebuild was paid ONCE
+// per burst rather than per keystroke.
 
 /// [`poll_vocabulary_offer`], but waits for the answer instead of collecting one
 /// that has already arrived.

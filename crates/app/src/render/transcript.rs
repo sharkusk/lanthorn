@@ -14,7 +14,7 @@ use ratatui::style::{Modifier, Style};
 use ratatui::style::Color;
 
 use crate::engine::{Introspect, StatusField, StatusModel};
-use crate::state::{AppState, Focus, ParaFmt, StyleRun, TranscriptFilter, TranscriptKind};
+use crate::state::{transcript_filter_matches, AppState, Focus, ParaFmt, StyleRun, TranscriptFilter, TranscriptKind};
 use crate::render::wrap_cache::{CellWrapCache, WrapKey, WrapPlan};
 use crate::render::paneframe::{draw_framed, BorderStyle};
 use super::draw_str_clipped;
@@ -688,9 +688,12 @@ pub(crate) fn wrap_lines_kinded_indexed(
     // non-prose line flushes it first (so the whole picture always renders, even
     // when the text beside it is shorter than the image — or absent). (SQ-0454)
     let mut float: Option<FloatState> = None;
+    // Test/measurement callers don't need the pretail carry (SQ-1179's tail
+    // repair); a throwaway sink keeps the extend function's one signature.
+    let mut pretail: Option<FloatState> = None;
     wrap_lines_kinded_extend(
         &mut out, &mut starts, &mut float, transcript, kinds, styles, runs, para, images, char_px, images_enabled,
-        left_float, width,
+        left_float, width, &mut pretail,
     );
     // Finish any float whose picture outran (or had no) text beside it.
     flush_float(&mut out, &mut float);
@@ -714,6 +717,12 @@ pub(crate) fn wrap_lines_kinded_indexed(
 ///
 /// `starts` indices are absolute rows in `out` and stay valid across an append,
 /// because every one of them precedes the flush.
+///
+/// `pretail` is written on every line processed to the `float` carry ENTERING
+/// that line (SQ-1179) — so once the loop finishes it holds the carry entering
+/// whichever line was LAST in `transcript`, which is exactly the carry a tail
+/// repair needs to resume wrapping from that same point. Left untouched when
+/// `transcript` is empty (nothing changed, so nothing to report).
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn wrap_lines_kinded_extend(
     out: &mut Vec<WrappedRow>,
@@ -729,8 +738,10 @@ pub(crate) fn wrap_lines_kinded_extend(
     images_enabled: bool,
     left_float: bool,
     width: u16,
+    pretail: &mut Option<FloatState>,
 ) {
     for (i, line) in transcript.iter().enumerate() {
+        *pretail = float.clone();
         starts.push(out.len());
         // An image unit either starts a left-margin float or expands into an
         // N-row band (or zero rows when images are disabled). `images.get(i)`
@@ -2152,8 +2163,9 @@ fn render_middle(
     // dominant per-frame cost. What this frame owes is
     // `wrap_cache::WrapKey::plan`'s to say — the ONE owner of that decision, and
     // the same one the raster path asks. An idle redraw or a scroll reuses the
-    // rows; a turn that only printed extends them; a resize, a filter, a theme or
-    // a moved screen-clear anchor rebuilds them.
+    // rows; a turn that only printed extends them; an insert-above-the-prompt or
+    // a moved screen-clear anchor REPAIRS the disturbed tail instead of
+    // rebuilding whole (SQ-1179); a resize, a filter or a theme still rebuilds.
     //
     // The key is built ONCE here and compared without cloning, so the hot path
     // never pays for the colour scheme or the room name.
@@ -2162,10 +2174,12 @@ fn render_middle(
         None => WrapPlan::Rebuild,
     };
     if plan != WrapPlan::Reuse {
-        // The source lines this frame has to wrap: all of them on a rebuild, only
-        // the ones that just arrived on an append.
+        // The source lines this frame has to wrap: all of them on a rebuild;
+        // only the ones that just arrived on an append; from the old cached
+        // tail's own raw index on a repair, which re-collects it too — SQ-1179
+        // needs it wrapped fresh, since new content now precedes it there.
         let wrap_from = match plan {
-            WrapPlan::Append { from } => from,
+            WrapPlan::Append { from } | WrapPlan::Repair { at: from } => from,
             _ => 0,
         };
         let visible_indices = state.visible_transcript_indices_from(wrap_from);
@@ -2360,15 +2374,15 @@ fn render_middle(
                 starts: Vec::new(),
                 stable_rows: 0,
                 carry: None,
-                // Map the screen-clear boundary (a full-transcript index) to a
-                // position in the filtered line list, so top-anchoring works under
-                // any transcript filter. Only a rebuild can compute this: an
-                // append sees only the suffix. It does not need to — the anchor is
-                // in the key, and every appended line sits at or past it, so the
-                // count cannot change without a rebuild.
-                clear_anchor_filtered: state
-                    .clear_anchor
-                    .map(|a| visible_indices.iter().filter(|&&i| i < a).count()),
+                tail_entry_carry: None,
+                // Set below, uniformly for every plan (SQ-1179) — computed
+                // fresh from `state` after the sync either way, so the
+                // placeholder here is never read.
+                tail_visible: false,
+                // Set below, uniformly for every plan (SQ-1179) — a fresh
+                // cache's `starts` is empty, so the shared formula degenerates
+                // to exactly the old rebuild-only computation.
+                clear_anchor_filtered: None,
                 anchor_row: None,
                 live_bands: std::collections::HashSet::new(),
             });
@@ -2378,6 +2392,31 @@ fn render_middle(
         // final, and the prose that just arrived claims them (SQ-1034).
         cache.rows.truncate(cache.stable_rows);
         let mut carry = cache.carry.clone();
+        // A repair discards the cache's OWN last consumed line before
+        // re-wrapping the tail fresh (SQ-1179): whatever now sits at its raw
+        // index has moved (an insert landed before it), so the cached entry
+        // for it no longer describes anything real. `tail_visible` — captured
+        // at the PREVIOUS sync, before this frame's edits — is what makes that
+        // decision correctly: reading the CURRENT kind at that raw index would
+        // describe whatever moved there instead of what the cache wrapped.
+        if let WrapPlan::Repair { .. } = plan {
+            if cache.tail_visible {
+                let popped = cache.starts.pop().expect(
+                    "repair: tail_visible said the cache's last entry is the old tail line, so one must exist",
+                );
+                cache.rows.truncate(popped);
+                carry = cache.tail_entry_carry.clone();
+            }
+            // else: the old tail line never made it into the filtered product
+            // (it didn't pass the filter), so there is nothing to undo and
+            // `carry` is already correct as the state after the last VISIBLE
+            // line, unaffected by an invisible one.
+        }
+        // Filtered lines with raw index < `wrap_from` are untouched by this
+        // frame (SQ-1179) — every one of `cache.starts`'s entries up to here
+        // describes them, so this is the base the anchor formula below adds
+        // the newly-wrapped suffix's own count onto.
+        let starts_before = cache.starts.len();
         wrap_lines_kinded_extend(
             &mut cache.rows,
             &mut cache.starts,
@@ -2392,12 +2431,24 @@ fn render_middle(
             images_enabled,
             true, // main transcript: left-margin images float, text wraps beside (SQ-0454)
             body_area.width,
+            &mut cache.tail_entry_carry,
         );
         cache.stable_rows = cache.rows.len();
         cache.carry = carry.clone();
         // Finish any float whose picture outran (or had no) text beside it.
         flush_float(&mut cache.rows, &mut carry);
         cache.live_bands.extend(live_bands);
+        // Map the screen-clear boundary (a full-transcript index) into the
+        // filtered line list, so top-anchoring works under any transcript
+        // filter. Every filtered line at or before `starts_before` is one this
+        // frame did NOT touch and so unconditionally precedes an anchor
+        // `WrapKey::plan` has already proven sits at or after this cache's
+        // synced length (SQ-1179) — so only the newly-wrapped suffix
+        // (`visible_indices`) needs inspecting, not the whole history. On a
+        // Rebuild `starts_before` is 0 and `visible_indices` is the whole
+        // transcript, which degenerates to exactly the old computation.
+        cache.clear_anchor_filtered =
+            state.clear_anchor.map(|a| starts_before + visible_indices.iter().filter(|&&i| i < a).count());
         // The anchor is where that line STARTS in the wrap just built (SQ-0640) — a
         // separate wrap of the prefix would count a margin float's strips twice
         // over. Recomputed on every append and not merely on a rebuild: an anchor
@@ -2405,6 +2456,15 @@ fn render_middle(
         // line printed is what gives it a real row.
         cache.anchor_row = anchor_row_at(&cache.starts, cache.rows.len(), cache.clear_anchor_filtered);
         cache.key = WrapKey::of(state, body_area.width);
+        // This cache is now synced to `cache.key`'s edits value, so any run of
+        // tail-inserts it reflects is spent — the NEXT insert starts a fresh
+        // run anchored at that new baseline (SQ-1179's `WrapKey::plan`).
+        cache.tail_visible = cache.key.content.len > 0
+            && state
+                .transcript_kinds
+                .get(cache.key.content.len - 1)
+                .is_some_and(|&k| transcript_filter_matches(state.transcript_filter, k));
+        state.transcript_tail_insert.set(None);
     }
     let cache = state.transcript_wrap.borrow();
     let entry = cache.as_ref().expect("wrap cache populated above");
@@ -2803,46 +2863,42 @@ mod tests {
             .collect()
     }
 
-    /// **What a late insert-above-prompt costs the wrap cache** (SQ-1124).
+    /// **What a late insert-above-prompt costs the wrap cache** (SQ-1124,
+    /// SQ-1179).
     ///
-    /// `touch_transcript(TranscriptEdit::Rewrote)` is the difference between the
-    /// cache extending its rows and throwing them away (SQ-1034), and an
-    /// insert-above-prompt is not an append: it moves a line the cache has
-    /// already wrapped, so the next frame rebuilds from line zero.
+    /// An insert-above-prompt is not an append: it moves a line the cache has
+    /// already wrapped (the trailing prompt itself). Before SQ-1179 that meant
+    /// `TranscriptEdit::Rewrote` and a full rebuild from line zero, on EVERY
+    /// `push_transcript_internal` call in inline-prompt mode — every `/help`,
+    /// every save banner, every assist. SQ-1179 gave the edit its own
+    /// `TranscriptEdit::Inserted { at, count }`, which the cache can REPAIR
+    /// through instead: everything before `at` provably did not move, so only
+    /// the (here, one-line) tail is re-wrapped.
     ///
-    /// That cost has always been paid — every `push_transcript_internal` in
-    /// inline-prompt mode does it, which is every `/help`, every save banner and
-    /// every assist. What SQ-1124 changed is WHEN: a vocabulary offer that used
-    /// to land inside the turn the player was waiting on can now land a beat
-    /// later, while they are typing.
+    /// # The measurement this replaced, and why it is a comment and not an
+    /// assertion
     ///
-    /// # The measurement, and why it is a comment and not an assertion
-    ///
-    /// Taken at 40 columns — a narrow pane, where wrapping is worst — on a
-    /// 12-core machine in a **debug** build: 200 lines rebuilt in 0.8 ms, 1,000
-    /// in 3.7 ms, 5,000 in 18.1 ms and 20,000 in 71.8 ms. Linear in scrollback,
-    /// and it does not need deferring: the event loop coalesces an input burst,
-    /// so the rebuild is paid once per FRAME rather than once per keystroke, and
-    /// the shipped release binary is several times quicker than any of those.
-    ///
-    /// That conclusion is worth keeping. The ceiling that used to enforce it was
-    /// not: a wall-clock bound in a debug build is a flake by construction, and
-    /// it failed on all three CI platforms — 3-4 shared cores against the twelve
-    /// it was measured on — while passing locally every time. Raising the number
-    /// only moves the flake further away. So the case keeps its subject and
-    /// asserts what is true on any hardware instead.
+    /// Before this fix, at 40 columns — a narrow pane, where wrapping is
+    /// worst — on a 12-core machine in a **debug** build: 200 lines rebuilt in
+    /// 0.8 ms, 1,000 in 3.7 ms, 5,000 in 18.1 ms and 20,000 in 71.8 ms — linear
+    /// in scrollback. A wall-clock ceiling on that number is a flake by
+    /// construction (it failed on all three CI platforms' 3-4 shared cores
+    /// while passing locally every time), which is why this case asserts the
+    /// SHAPE of the work — which `WrapPlan` this frame owes — rather than its
+    /// duration.
     ///
     /// # What is asserted
     ///
-    /// The shape of the work rather than its duration: the insert lands ABOVE the
-    /// prompt (which is what makes it a rewrite), the frame after it owes exactly
-    /// ONE rebuild, the frame after THAT owes nothing at all, and the wrap it
-    /// produced is correct — the assist is in the rows, the prompt is still last,
-    /// and no source line was disturbed. A regression that rebuilt per line, or
-    /// per frame forever, fails on the plan; a regression that wrapped the wrong
-    /// thing fails on the rows.
+    /// The insert lands ABOVE the prompt (which is what makes it a tail edit
+    /// rather than a plain append), the frame after it owes exactly one
+    /// REPAIR (not a `Rebuild` — that is the regression this case exists to
+    /// catch), the frame after THAT owes nothing at all, and the wrap it
+    /// produced is correct — the assist is in the rows, the prompt is still
+    /// last, and no earlier source line was disturbed. A regression that
+    /// rebuilt per line, or per frame forever, fails on the plan; a
+    /// regression that wrapped the wrong thing fails on the rows.
     #[test]
-    fn a_late_insert_above_the_prompt_rebuilds_the_wrap_exactly_once() {
+    fn a_late_insert_above_the_prompt_repairs_the_wrap_exactly_once() {
         use crate::render::wrap_cache::WrapPlan;
 
         let cols = 40u16;
@@ -2881,7 +2937,7 @@ mod tests {
         assert_eq!(plan(&state), WrapPlan::Reuse, "a warm cache on an unchanged transcript");
 
         // The late arrival: exactly what `push_assist` does in inline-prompt mode
-        // — an insert ABOVE the trailing story prompt, hence a Rewrote.
+        // — an insert ABOVE the trailing story prompt, hence `Inserted`.
         let style = state.colors.theme.get("assist_help").style;
         state.push_transcript_internal_styled("try instead — light", TranscriptKind::Assist, style);
         assert_eq!(
@@ -2890,12 +2946,16 @@ mod tests {
             "the assist went above the prompt, not after it — otherwise this is an append \
              and the case is measuring nothing",
         );
-        assert_eq!(plan(&state), WrapPlan::Rebuild, "a line already wrapped moved");
+        assert_eq!(
+            plan(&state),
+            WrapPlan::Repair { at: 199 },
+            "a line already wrapped moved, but only the tail — a REPAIR, not a whole rebuild",
+        );
 
         render_middle(&state, &mut buf, area, normal, None);
-        assert_eq!(plan(&state), WrapPlan::Reuse, "the rebuild is paid ONCE, not every frame");
+        assert_eq!(plan(&state), WrapPlan::Reuse, "the repair is paid ONCE, not every frame");
 
-        // …and the wrap it rebuilt is the right one.
+        // …and the wrap it repaired is the right one.
         let cache = state.transcript_wrap.borrow();
         let rows = &cache.as_ref().expect("cache").rows;
         assert!(
@@ -6596,6 +6656,300 @@ mod tests {
         assert!(
             wrap_bookkeeping(&incremental).0.is_some_and(|a| a < wrap_product(&incremental).len()),
             "non-vacuity: printing into the cleared screen must give the anchor a real row"
+        );
+    }
+
+    #[test]
+    fn a_pure_screen_clear_does_not_rewrap_anything_already_wrapped() {
+        // SQ-1179 (B): before this fix, `clear_anchor` moving in `WrapShape`
+        // meant a screen clear ALONE — nothing printed, nothing else moved —
+        // still forced a whole rebuild. It no longer does, because
+        // `mark_screen_clear` always sets the new anchor to the CURRENT
+        // transcript length, and every already-cached filtered line then
+        // unconditionally precedes it (`WrapKey::plan`'s anchor-safety guard).
+        // Proven the way SQ-1034's own tests prove an append doesn't rewrap:
+        // poison the cached rows with a sentinel a re-wrap can never produce,
+        // then check it survives.
+        let area = Rect::new(0, 0, 34, 12);
+        let mut state = script_state();
+        drive_script(&mut state, area, true);
+        wrap_render(&state, area);
+        poison_wrap_cache(&state);
+
+        state.mark_screen_clear();
+        wrap_render(&state, area);
+        assert_eq!(
+            cached_first_text(&state),
+            "SENTINEL",
+            "a screen clear alone must not re-wrap what was already wrapped"
+        );
+        // …and the anchor bookkeeping it exists to move is nevertheless correct:
+        // an anchor with nothing printed since it anchors past the last row.
+        assert_eq!(
+            wrap_bookkeeping(&state).0,
+            Some(cached_row_texts(&state).len()),
+            "non-vacuity: the anchor row must still track the (poisoned) product's own length"
+        );
+
+        // Printing after the clear is an ordinary append on top — the sentinel
+        // must survive THAT too, extended rather than rebuilt away.
+        state.push_transcript_kind("after the clear", TranscriptKind::Story);
+        wrap_render(&state, area);
+        assert_eq!(
+            cached_row_texts(&state).first().map(String::as_str),
+            Some("SENTINEL"),
+            "printing after the clear must EXTEND the poisoned rows, not rebuild them"
+        );
+        assert_eq!(
+            cached_row_texts(&state).last().map(String::as_str),
+            Some("after the clear"),
+            "the new line must actually be there"
+        );
+    }
+
+    /// **The equivalence matrix (SQ-1179): a repaired cache must be
+    /// indistinguishable from a rebuilt one.**
+    ///
+    /// `wrap_lines_kinded_extend`'s wrap is a left-to-right scan that carries
+    /// exactly one thing ACROSS lines — the open margin float (`FloatState`,
+    /// this file's own doc comment on it) — and reads only its own line's
+    /// text/kind/style/runs/paragraph-format/image plus that carried float
+    /// otherwise (verified by reading the function body above: every other
+    /// input it touches — `styles`, `runs`, `para`, `images` — is indexed by
+    /// the CURRENT line alone). So a line's wrap can only ever depend on
+    /// itself and what came before it, never on what comes after — which is
+    /// the property a tail repair rests on: everything before the disturbed
+    /// tail is provably unreachable from the edit and can be left exactly as
+    /// cached.
+    ///
+    /// The matrix, for every combination of:
+    ///   * width 40 and 80 (the repair's own wrap width, and whether the
+    ///     baseline's float/hanging-indent/style-run content wraps
+    ///     differently at each);
+    ///   * transcript filter `Both`/`Story`/`Meta` — `Meta` hides the
+    ///     trailing prompt the insert lands above, so the cache never held an
+    ///     entry for it (`tail_visible == false`) — the OTHER branch of the
+    ///     repair's pop-or-not decision from the other two filters;
+    ///   * the screen cleared in the SAME edit batch as the insert or not —
+    ///     (A) and (B) firing together, the realistic "erase_window then
+    ///     print" shape;
+    ///   * a single-line vs a multi-line insert (one `push_transcript_internal`
+    ///     call whose text carries an embedded `\n`, one `Inserted { count: 2 }`);
+    ///   * one insert vs an unbroken RUN of two — what `push_assist`'s
+    ///     per-line loop actually does (a preamble line then an offer line,
+    ///     each its own `Inserted`, chaining `TailInsertRun::min_at`).
+    ///
+    /// performs the SAME final edit two ways — INCREMENTAL (synced to a warm
+    /// pre-insert cache, so the insert is a REPAIR) and REBUILT (the identical
+    /// final content, rendered for the first time, so it is a Rebuild from
+    /// line zero) — and asserts the two caches' entire comparable surface
+    /// (every wrapped row, and the anchor/starts/live-band bookkeeping the
+    /// draw path reads) is IDENTICAL. `insert-at-end`/`several-lines-up`
+    /// are not in the matrix: every real caller (`push_transcript_internal`,
+    /// `_styled`) inserts EXACTLY one place — immediately above the current
+    /// last line — so that is the only shape a repair ever has to prove
+    /// itself against; `wrap_key_plan_falls_back_to_rebuild_when_the_insert_is_not_at_the_cached_tail`
+    /// below covers the "several lines up" guard directly instead.
+    ///
+    /// This is the falsification too. Shifting the popped-row/offset
+    /// arithmetic in the render path's repair branch by one — truncating to
+    /// `popped + 1` instead of `popped`, or seeding `carry` from `cache.carry`
+    /// instead of `cache.tail_entry_carry` — was tried by hand while writing
+    /// this case: both broke `wrap_product` equality on every filter/width
+    /// combination that actually exercises the pop (i.e. every `filter` other
+    /// than `Meta`), confirming the case can see the offset it exists to
+    /// guard. Restored before committing.
+    #[test]
+    fn a_tail_insert_repair_lands_on_exactly_what_a_rebuild_would_have_produced() {
+        use crate::render::wrap_cache::WrapPlan;
+
+        // The baseline every variant starts from is SQ-1034's own equivalence
+        // script (style runs, a hanging-indent Meta line, a left-margin image
+        // float outrunning its text) plus a trailing Story prompt line, so the
+        // repair's carried float/style state and its pop-the-old-tail branch
+        // are both exercised for real rather than vacuously.
+        let build_baseline = |state: &mut AppState, filter: TranscriptFilter, area: Rect| {
+            state.transcript_filter = filter;
+            drive_script(state, area, false);
+            state.push_transcript_kind(">", TranscriptKind::Story);
+        };
+
+        for &width in &[40u16, 80u16] {
+            for &filter in &[TranscriptFilter::Both, TranscriptFilter::Story, TranscriptFilter::Meta] {
+                for &clear in &[false, true] {
+                    for &multi in &[false, true] {
+                        for &two in &[false, true] {
+                            let area = Rect::new(0, 0, width, 16);
+                            let insert_text = if multi { "one\ntwo" } else { "single" };
+                            let label = format!(
+                                "width={width} filter={filter:?} clear={clear} multi={multi} two={two}"
+                            );
+
+                            // INCREMENTAL: sync the cache to the pre-insert baseline
+                            // first, so the insert below lands on a WARM cache and
+                            // is a repair rather than this frame's first ever wrap.
+                            let mut incremental = script_state();
+                            build_baseline(&mut incremental, filter, area);
+                            wrap_render(&incremental, area);
+                            if clear {
+                                incremental.mark_screen_clear();
+                            }
+                            incremental.push_transcript_internal(insert_text, TranscriptKind::Assist);
+                            if two {
+                                incremental.push_transcript_internal("second", TranscriptKind::Assist);
+                            }
+                            // Non-vacuity: this frame must actually take the
+                            // REPAIR branch, or the comparison below proves
+                            // nothing about it.
+                            let plan = {
+                                let cache = incremental.transcript_wrap.borrow();
+                                let key = &cache.as_ref().expect("cache populated by the sync render").key;
+                                key.plan(&incremental, key.shape.width)
+                            };
+                            assert!(
+                                matches!(plan, WrapPlan::Repair { .. }),
+                                "{label}: expected a Repair, got {plan:?}"
+                            );
+                            wrap_render(&incremental, area);
+
+                            // REBUILT: push the IDENTICAL final content with no
+                            // intermediate render at all, so the only render sees
+                            // an empty cache and rebuilds from line zero.
+                            let mut rebuilt = script_state();
+                            build_baseline(&mut rebuilt, filter, area);
+                            if clear {
+                                rebuilt.mark_screen_clear();
+                            }
+                            rebuilt.push_transcript_internal(insert_text, TranscriptKind::Assist);
+                            if two {
+                                rebuilt.push_transcript_internal("second", TranscriptKind::Assist);
+                            }
+                            wrap_render(&rebuilt, area);
+
+                            assert_eq!(
+                                wrap_product(&incremental),
+                                wrap_product(&rebuilt),
+                                "{label}: rows diverged between repair and rebuild"
+                            );
+                            assert_eq!(
+                                wrap_bookkeeping(&incremental),
+                                wrap_bookkeeping(&rebuilt),
+                                "{label}: bookkeeping diverged between repair and rebuild"
+                            );
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    /// A gap the matrix above cannot see: `drive_script`'s picture always
+    /// fully closes two lines before the trailing prompt, so `cache.carry`
+    /// (the float state AFTER the cache's last consumed line) and
+    /// `cache.tail_entry_carry` (the float state BEFORE it, what a repair
+    /// must actually seed the re-wrap with) are always both `None` there —
+    /// indistinguishable, so a repair that read the wrong one would still
+    /// pass every case in that matrix. This one leaves the float OPEN across
+    /// the prompt line itself (one strip claimed, three left), so the two
+    /// carries hold different `next_strip` values and a wrong read is a
+    /// picture-strip mismatch, not silence. Reading `cache.carry` instead of
+    /// `cache.tail_entry_carry` in the repair branch was tried by hand while
+    /// writing this case (this test was what finally caught it — the main
+    /// matrix above did not); restored before committing.
+    #[test]
+    fn a_tail_insert_repair_with_an_open_float_entering_the_prompt_lands_on_exactly_what_a_rebuild_would_have_produced() {
+        use crate::render::wrap_cache::WrapPlan;
+
+        let area = Rect::new(0, 0, 40, 16);
+
+        let build = |state: &mut AppState| {
+            state.game_picker = Some(ratatui_image::picker::Picker::halfblocks());
+            state.push_transcript_kind("west of house", TranscriptKind::Story);
+            state.push_transcript_image(script_image()); // 4 strips tall
+            state.push_transcript_kind("beside one", TranscriptKind::Story); // claims 1 strip
+            // No more prose before the prompt: the float still has strips left
+            // when the trailing line is wrapped.
+            state.push_transcript_kind(">", TranscriptKind::Story);
+        };
+
+        let mut incremental = script_state();
+        build(&mut incremental);
+        wrap_render(&incremental, area);
+        // Non-vacuity: the prompt itself must actually be riding the float —
+        // and the carry entering it must actually differ from the carry after
+        // it — or this proves nothing about which one a repair reads.
+        {
+            let cache = incremental.transcript_wrap.borrow();
+            let entry = cache.as_ref().expect("cache populated by the sync render");
+            assert!(
+                entry.tail_entry_carry.is_some() && entry.carry.is_some(),
+                "the float must still be open both entering AND after the prompt line"
+            );
+            let last = entry.rows.last().expect("rows");
+            assert!(last.float.is_some(), "the prompt must be riding the float's strip, not a plain row");
+        }
+
+        incremental.push_transcript_internal("an assist", TranscriptKind::Assist);
+        let plan = {
+            let cache = incremental.transcript_wrap.borrow();
+            let key = &cache.as_ref().expect("cache").key;
+            key.plan(&incremental, key.shape.width)
+        };
+        assert!(matches!(plan, WrapPlan::Repair { .. }), "expected a Repair, got {plan:?}");
+        wrap_render(&incremental, area);
+
+        let mut rebuilt = script_state();
+        build(&mut rebuilt);
+        rebuilt.push_transcript_internal("an assist", TranscriptKind::Assist);
+        wrap_render(&rebuilt, area);
+
+        assert_eq!(
+            wrap_product(&incremental),
+            wrap_product(&rebuilt),
+            "rows diverged between repair and rebuild with an open float entering the prompt"
+        );
+        assert_eq!(wrap_bookkeeping(&incremental), wrap_bookkeeping(&rebuilt));
+    }
+
+    /// The guard `a_tail_insert_repair_lands_on_exactly_what_a_rebuild_would_have_produced`
+    /// leaves untested because no real caller can reach it: an `Inserted` run
+    /// whose earliest `at` sits BEFORE this cache's own synced tail — the
+    /// "several lines up" case CLAUDE.md's own review named — must never be
+    /// offered a `Repair`, because the cache cannot prove content before its
+    /// own tail is untouched. Built the way
+    /// `an_in_place_edit_of_the_last_line_is_caught_even_when_it_is_misclassified`
+    /// (`render::wrap_cache`'s own test) builds its misclassification: reach
+    /// past the mutator and set the state directly, since no mutator in this
+    /// codebase produces the shape being guarded against.
+    ///
+    /// Asserted as "not a `Repair`" rather than "a `Rebuild`": with
+    /// `transcript_edits` left untouched (as it genuinely would be by a plain
+    /// append), the honest answer once a repair is correctly declined is
+    /// `Append` — nothing else claims the cache's own prefix moved. What this
+    /// case exists to catch is the min-at guard silently offering a `Repair`
+    /// it cannot back up, not which of the other two safe answers follows.
+    #[test]
+    fn wrap_key_plan_never_offers_a_repair_when_the_insert_predates_the_cached_tail() {
+        use crate::render::wrap_cache::{WrapKey, WrapPlan};
+
+        let mut state = AppState::default();
+        state.colors = crate::colors::ColorScheme::terminal_default();
+        state.push_transcript_kind("first\nsecond\nthird", TranscriptKind::Story);
+        let key = WrapKey::of(&state, 40);
+        assert_eq!(key.plan(&state, 40), WrapPlan::Reuse, "nothing moved yet");
+
+        // A plain append (so `transcript_edits`/the tail fingerprint stay
+        // exactly what a legitimate append leaves them), plus a FABRICATED
+        // run claiming an insert at raw index 0 — well before
+        // `key.content.len - 1 == 2` — which `push_transcript_internal` can
+        // never produce (it always targets exactly the cache's own tail).
+        state.push_transcript_kind("fourth", TranscriptKind::Story);
+        state.transcript_tail_insert.set(Some(crate::state::TailInsertRun { since_edits: state.transcript_edits, min_at: 0 }));
+
+        assert!(
+            !matches!(key.plan(&state, 40), WrapPlan::Repair { .. }),
+            "an insert claiming a position before the cached tail must never be repaired through: {:?}",
+            key.plan(&state, 40),
         );
     }
 
