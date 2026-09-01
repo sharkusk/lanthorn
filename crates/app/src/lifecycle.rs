@@ -230,6 +230,19 @@ mod tests {
         }
     }
 
+    /// One lock for every test that runs `exit_auto_save` (or asserts on the
+    /// process-global exit-save flag): the flag is one static for the whole
+    /// process, so under `cargo test`'s shared-process model two of these
+    /// tests on parallel threads see each other's saves — the watchdog test's
+    /// "nothing running before" raced exactly that on CI's Linux runner while
+    /// nextest's per-test processes structurally could not show it (the
+    /// SQ-0904 class, SQ-1184's flush test being the new second writer).
+    /// Poison-proof: a panicking holder must not fail its neighbours twice.
+    static EXIT_SAVE_FLAG: std::sync::Mutex<()> = std::sync::Mutex::new(());
+    fn exit_save_lock() -> std::sync::MutexGuard<'static, ()> {
+        EXIT_SAVE_FLAG.lock().unwrap_or_else(|p| p.into_inner())
+    }
+
     #[test]
     fn quit_dialog_save_reports_a_failed_write() {
         // SQ-0651: "Save State & quit" is a save the user explicitly asked for.
@@ -276,6 +289,7 @@ mod tests {
     /// asserting "not running" would race each other under the parallel harness.
     #[test]
     fn exit_auto_save_publishes_its_progress_to_the_termination_watchdog() {
+        let _flag = exit_save_lock();
         assert!(!crate::exit_save_in_progress(), "nothing running before");
         {
             let _g = crate::ExitSaveGuard::new();
@@ -302,6 +316,7 @@ mod tests {
 
     #[test]
     fn exit_auto_save_skips_snapshot_while_a_save_is_pending() {
+        let _flag = exit_save_lock();
         // SQ-0283 carry-forward fix: a host save_state() snapshot captured while
         // a Glulx in-game @save is suspended would embed the un-popped @save call
         // stub; restore_state never pops it, corrupting the stack on a later Save
@@ -358,6 +373,7 @@ mod tests {
     /// stale job landing last) instead of `0` (the exit write).
     #[test]
     fn exit_auto_save_flushes_a_pending_background_write_before_its_own_write() {
+        let _flag = exit_save_lock();
         let dir = app::scratch_dir("lifecycle-exit-flush");
         let arc_file = dir.join("default.lanthorn");
 
