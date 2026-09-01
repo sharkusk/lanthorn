@@ -4,7 +4,7 @@
 /// the engine's `ScreenModel` and delegates to the testable `draw_grid` helper.
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
-use ratatui::style::Style;
+use ratatui::style::{Modifier, Style};
 
 use crate::colors::ColorScheme;
 use crate::engine::{BorderPref, GridCell, GridWindow};
@@ -31,10 +31,6 @@ fn cell_style(cell: zvm::screen::Cell, glk_style: u8, scheme: &ColorScheme, hono
     if let Some(rgb) = bg_override {
         base = base.bg(crate::render::resolve_zcolour(ZColour::True24(rgb), scheme));
     }
-    // apply_text_style adds REVERSED for bit 0x01, BOLD for 0x02, ITALIC for 0x04.
-    // The terminal performs exactly one swap for the REVERSED modifier — no manual
-    // fg/bg swap here (which would be a no-op for Default/Reset channels, C1 bug).
-    let mut s = crate::render::apply_text_style(base, cell.style);
     // Per-channel colour resolution (SQ-0331): game-set cell colour (gated by
     // honor_game_colours), then the theme's per-Glk-style slot (grid = row 1),
     // then the element base. Mirrors draw_str_runs in transcript.rs exactly.
@@ -42,10 +38,35 @@ fn cell_style(cell: zvm::screen::Cell, glk_style: u8, scheme: &ColorScheme, hono
     let game = |c: ZColour| -> Option<ratatui::style::Color> {
         (!matches!(c, ZColour::Default)).then(|| crate::render::resolve_zcolour(c, scheme))
     };
-    if let Some(c) = crate::render::resolve_glk_channel(game(cell.fg), glk.fg, base.fg, honor_game_colours) {
+    let game_fg = honor_game_colours.then(|| game(cell.fg)).flatten();
+    let game_bg = honor_game_colours.then(|| game(cell.bg)).flatten();
+    // SQ-1219: a Glk grid's ground is realised via `Modifier::REVERSED` (SQ-1212),
+    // so an explicit `.fg()`/`.bg()` laid on top of `base` as-is would be swapped
+    // by the terminal along with the rest — a colour meant as a foreground lands
+    // as a background patch instead. Only when the GAME actually set a colour for
+    // this cell does the ground need resolving to concrete, un-reversed fg/bg
+    // first, so the explicit channel means what it says. A cell with no game
+    // colour is untouched: the ground's own REVERSED stays, which the cursor XOR
+    // toggle (in `draw_grid`/`draw_grid_transparent`) depends on for "exactly one
+    // terminal swap".
+    if is_glk_grid && (game_fg.is_some() || game_bg.is_some()) {
+        base = concretize_reversed(base);
+    }
+    // apply_text_style adds REVERSED for bit 0x01, BOLD for 0x02, ITALIC for 0x04.
+    // The terminal performs exactly one swap for the REVERSED modifier — no manual
+    // fg/bg swap here (which would be a no-op for Default/Reset channels, C1 bug).
+    let mut s = crate::render::apply_text_style(base, cell.style);
+    if let Some(c) = crate::render::resolve_glk_channel(game_fg, glk.fg, base.fg, honor_game_colours) {
         s = s.fg(c);
     }
-    if let Some(c) = crate::render::resolve_glk_channel(game(cell.bg), glk.bg, base.bg, honor_game_colours) {
+    // The theme's per-Glk-style slot never paints a Glk grid cell's BACKGROUND
+    // (SQ-1219): only the ground (`base.bg`, above) or a colour the GAME itself
+    // set may replace it, so an unstyled cell always blends into the reversed
+    // band — a themed slot bg would paint its own patch the same way the
+    // hyperlink accent used to. The slot's fg is unaffected (styling text colour
+    // doesn't break the blend the ground exists for).
+    let glk_bg = if is_glk_grid { None } else { glk.bg };
+    if let Some(c) = crate::render::resolve_glk_channel(game_bg, glk_bg, base.bg, honor_game_colours) {
         s = s.bg(c);
     }
     let glk_mods =
@@ -54,6 +75,24 @@ fn cell_style(cell: zvm::screen::Cell, glk_style: u8, scheme: &ColorScheme, hono
         s = s.add_modifier(glk_mods);
     }
     s
+}
+
+/// Resolve a `Modifier::REVERSED` style to concrete, already-swapped fg/bg with
+/// the modifier dropped — so a channel written on top afterwards (`.fg()`,
+/// `.bg()`, `.patch()`) means what it says instead of being swapped a second
+/// time by the terminal. A style with no REVERSED bit is returned unchanged.
+///
+/// SQ-1219: a Glk grid's ground (`glk.grid.background`, SQ-1212) is realised via
+/// this modifier. City of Secrets' `help` menu hyperlinks patch the themed
+/// `hyperlink` accent colour (an explicit fg, no bg) onto that ground; without
+/// this, the terminal's single swap put the accent colour on the WRONG side of
+/// the character — a teal background patch behind black text — instead of teal
+/// link text on the ground's own background.
+fn concretize_reversed(style: Style) -> Style {
+    if !style.add_modifier.contains(Modifier::REVERSED) {
+        return style;
+    }
+    Style { fg: style.bg, bg: style.fg, ..style }.remove_modifier(Modifier::REVERSED)
 }
 
 /// Convert a neutral [`GridCell`] (packed colour) into a `zvm::screen::Cell`
@@ -281,6 +320,14 @@ pub fn draw_grid(
                 // Mirrors the transcript path in `draw_str_runs`. (SQ-0258)
                 if cell.link != 0 {
                     if honor_game_colours {
+                        // SQ-1219: on a Glk grid, `style` may still carry the
+                        // ground's REVERSED (cell_style only drops it for a
+                        // GAME-set colour, and a hyperlink has none) — resolve to
+                        // concrete fg/bg first so patching the accent fg on top
+                        // means text colour, not a swapped background patch.
+                        if is_glk_grid {
+                            style = concretize_reversed(style);
+                        }
                         style = style.patch(colors.theme.get("hyperlink").style);
                     }
                     style = style.add_modifier(ratatui::style::Modifier::UNDERLINED);
@@ -370,9 +417,14 @@ pub fn draw_grid_transparent(
             let bx = area.x + dx;
             let by = area.y + dy;
             if let Some(buf_cell) = buf.cell_mut((bx, by)) {
-                let mut style = cell_style(grid_cell_to_zvm(cell), cell.glk_style, colors, honor_game_colours, grid.bg, grid.win != 0);
+                let is_glk_grid = grid.win != 0;
+                let mut style = cell_style(grid_cell_to_zvm(cell), cell.glk_style, colors, honor_game_colours, grid.bg, is_glk_grid);
                 if cell.link != 0 {
                     if honor_game_colours {
+                        // SQ-1219: see the identical comment in `draw_grid`.
+                        if is_glk_grid {
+                            style = concretize_reversed(style);
+                        }
                         style = style.patch(colors.theme.get("hyperlink").style);
                     }
                     style = style.add_modifier(ratatui::style::Modifier::UNDERLINED);
