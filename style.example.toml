@@ -108,7 +108,7 @@ version = 1   # style schema version — do not remove; lets lanthorn flag an ou
 # saves_host_only = { parent = "muted" }
 # "band.column_header" = { parent = "muted" }
 # "band.column_header:active" = { parent = "accent", bold = true }
-# "band.quick" = { parent = "muted" }
+# "band.quick" = { parent = "text" }
 # "band.quick:hover" = { parent = "band.quick", reversed = true }
 # "band.group_label" = { parent = "heading" }
 # "band.item:seen" = { parent = "muted" }

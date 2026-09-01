@@ -160,9 +160,10 @@ pub struct PortalGlyphs {
 /// Every slot is a STATE, not a control: a toggle draws one of two glyphs
 /// depending on which way it would move things, so the icon says what is on
 /// before the colour does. The panel toggles are arrows pointing the way the
-/// panel would go — the map lives to the right of the story pane and the verb
-/// panel below it, so `map_hide` points right (click and the map leaves that
-/// way) and `band_show` points up (click and the band rises into view).
+/// panel would go — the map lives to the right of the story pane and the
+/// command band below it, so `map_hide` points right (click and the map
+/// leaves that way) and `band_show` points up (click and the band rises into
+/// view).
 ///
 /// Defaults come from Geometric Shapes (U+25xx) for the same reason
 /// [`PortalGlyphs`]' do: it is the block an ordinary monospace face already has
@@ -173,9 +174,9 @@ pub struct ControlGlyphs {
     pub map_show: char,
     /// Map shown — click and it leaves to the right (▶).
     pub map_hide: char,
-    /// Verb panel closed — click and it rises from the bottom (▲).
+    /// Command band closed — click and it rises from the bottom (▲).
     pub band_show: char,
-    /// Verb panel open — click and it drops back down (▼).
+    /// Command band open — click and it drops back down (▼).
     pub band_hide: char,
     /// Lanthorn's Guiding Light is on (●; the lamp itself in a patched font).
     pub guidance_on: char,
@@ -770,7 +771,7 @@ impl ControlGlyphs {
     /// that_were_read_from_the_font` pins them.
     ///
     /// **Each control's two states come from ONE icon family** — `fa-` for the
-    /// map, `cod-` for the verb panel, `md-` for the Guiding Light, the render
+    /// map, `cod-` for the command band, `md-` for the Guiding Light, the render
     /// mode and the pixel lock. Codicons, Font Awesome and Material Design carry
     /// different stroke weights and cap heights, so a control whose states came
     /// from different families appeared to JUMP on toggle, independently of the

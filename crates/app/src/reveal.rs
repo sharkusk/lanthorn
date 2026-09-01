@@ -67,7 +67,7 @@
 //!
 //! # Nouns, not verbs — and not articles either
 //!
-//! A verb never lights, on any engine: the verb panel already answers "what can
+//! A verb never lights, on any engine: the command band already answers "what can
 //! I do"; this answers "what does this game know about", and they are different
 //! questions that would blur into a ransom note if merged. Where the objects can
 //! answer, an article or preposition never lights either, because it is never

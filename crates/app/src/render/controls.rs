@@ -1,6 +1,6 @@
 //! The pane border's clickable toggle controls (SQ-1123).
 //!
-//! Guidance, the verb panel and the two v6 render switches were reachable only
+//! Guidance, the command band and the two v6 render switches were reachable only
 //! by slash command, key or the settings screen — nothing on screen said they
 //! existed, let alone whether they were on. A player who turned guidance on and
 //! saw nothing had every reason to conclude it was broken. These are the answer:
@@ -39,7 +39,7 @@
 //!
 //! **The state is carried TWICE: by the glyph and by the colour.** The panel
 //! toggles are arrows pointing the way the panel would move (the map lives right
-//! of the story pane, the verb panel below it), the Guiding Light is filled when
+//! of the story pane, the command band below it), the Guiding Light is filled when
 //! lit and hollow when not, and the two v6 controls draw a distinct glyph per
 //! mode — and on top of that, **every control that is ON is lit yellow**,
 //! through `panel.control:lit`, which is the `alert` role and so the same slot
@@ -99,7 +99,7 @@ pub enum BorderControl {
     Map,
     /// Lanthorn's Guiding Light.
     Guidance,
-    /// The verb panel (the command band).
+    /// The command band.
     VerbPanel,
     /// The v6 render mode — a three-way cycle, not a toggle. v6 only.
     V6Render,
@@ -205,7 +205,7 @@ impl BorderControl {
     pub fn placement(self) -> ControlPlacement {
         match self {
             BorderControl::Map => ControlPlacement::BottomRight,
-            // Guidance, the verb panel and the reveal have no direction of their
+            // Guidance, the command band and the reveal have no direction of their
             // own — the reveal acts on the story pane's own prose, right there —
             // so they ride the bottom border together, centred.
             BorderControl::VerbPanel | BorderControl::Guidance | BorderControl::Reveal => {
@@ -339,12 +339,12 @@ impl ControlView {
 ///
 /// **Read from the live keymap and leader panel, never written out by hand**
 /// (SQ-1142). Two hints here used to name an F-key as a literal — `"F2"` for the
-/// verb panel and `"F4 · /reveal-words"` for the reveal — and when SQ-1142
+/// command band and `"F4 · /reveal-words"` for the reveal — and when SQ-1142
 /// unbound those defaults the hints went on advertising keys that did nothing.
 /// A hint that ASKS cannot say that; it also follows a player who rebound the
 /// key rather than reciting a default at them, and it picks up the leader route
-/// for a command that has one and no direct key, which is exactly what the verb
-/// panel became. `no_hint_advertises_a_key_that_is_not_bound` in the
+/// for a command that has one and no direct key, which is exactly what the
+/// command band became. `no_hint_advertises_a_key_that_is_not_bound` in the
 /// `border_controls` suite fails the hand-written form, because a substring
 /// check on the command half is satisfied by a lie about the key half.
 fn key_route(state: &AppState, cmd: ControlCommand) -> String {
@@ -476,7 +476,7 @@ pub fn controls_for(state: &AppState) -> Vec<ControlView> {
         ],
     });
 
-    // ── Verb panel ───────────────────────────────────────────────────────────
+    // ── Command band ─────────────────────────────────────────────────────────
     let band_on = state.command_band_visible();
     out.push(ControlView {
         id: BorderControl::VerbPanel,
@@ -484,9 +484,9 @@ pub fn controls_for(state: &AppState) -> Vec<ControlView> {
         style: style_for(state, BorderControl::VerbPanel, band_on),
         hint: vec![
             if band_on {
-                "Verb panel: open — click to close"
+                "Command band: open — click to close"
             } else {
-                "Verb panel: closed — click to open"
+                "Command band: closed — click to open"
             }
             .to_string(),
             key_route(state, BorderControl::VerbPanel.command()),

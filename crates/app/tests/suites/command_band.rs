@@ -1117,7 +1117,7 @@ fn the_v6_noun_bit_and_the_objects_name_the_same_things() {
 
 /// SQ-1151: the column offers no word a player cannot type.
 ///
-/// **The reported defect**, seen in Arthur's verb panel: it listed both `be` and
+/// **The reported defect**, seen in Arthur's command band: it listed both `be` and
 /// `be?`. The `?` is genuinely in the dictionary entry rather than a ZSCII
 /// fallback — `be` and `be?` differ in their second word (`0x14a5` against
 /// `0x54a5`, Z-char 21 being a literal `?` in alphabet A2) and hold different

@@ -603,7 +603,7 @@ re-seed the new template, or hand-write the new shape from
   sliver of crystal" — a real object with a real use — lit nothing at all.
   It only lights a story's own nouns and adjectives — a real Zork I house
   fetches `white` right along with it — and never a verb, an article or a
-  preposition: the verb panel already answers "what can I do", and this answers
+  preposition: the command band already answers "what can I do", and this answers
   "what does this game know about". Glulx answers with its own objects too —
   the Inform object list is read straight out of Glulx memory, so *Dr Ludwig
   and the Devil* lights its devil and its summoning circle rather than `the`

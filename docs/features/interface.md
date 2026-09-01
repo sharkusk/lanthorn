@@ -246,7 +246,7 @@ know which side you're on).
   own frame, each one showing what state it is in and switching it when
   clicked. There are two clusters — the story pane's, described first, and the
   **map pane's own five** further down — and one mechanism behind both.
-  Guidance, the verb panel and the two v6 switches used to be reachable only by
+  Guidance, the command band and the two v6 switches used to be reachable only by
   slash command, key or the settings screen, with nothing on screen saying they
   existed, let alone whether they were on.
 
@@ -589,16 +589,20 @@ know which side you're on).
   the one exception: a click submits AT ONCE, no Enter, and never disturbs a
   phrase you're mid-composing. When the band is wide enough they draw as a
   block on its left edge — the compass rose (eight points around an inert
-  centre dot) on top, with everything else in the quick list flowing in as
-  many rows as it needs BELOW the rose, only as wide as its widest row; a
-  narrower band falls back to the older single-line row along the bottom
-  instead. Either way every point and word is its own click target, and the
-  quick block is **mouse-only** — hovering one (with either layout) reverses
-  it, distinct from a picked column row's own highlight, but no keyboard
-  gesture reaches it; command history (**Ctrl+↑**/**Ctrl+↓**, or plain
-  **↑**/**↓** with the band closed) is always available instead. Single-cell
-  `│` dividers separate the quick block from the columns and every column from
-  its neighbour.
+  centre dot) on top, with `up`/`down`/`in`/`out` drawn beside it as glyphs
+  instead of words — the same `↑`/`◉`/`◎`/`↓` icons the map draws for a
+  vertical exit (up centred over the pair, in and out side by side, down
+  centred under), so a click there reads as the same icon the automap would
+  show. Everything else in the quick list flows in as many rows as it needs
+  BELOW both, only as wide as its widest row; a narrower band falls back to
+  the older single-line row along the bottom instead, spelling every action
+  out as a word. Either way every point, glyph and word is its own click
+  target, and the quick block is **mouse-only** — hovering one (with either
+  layout) reverses it, distinct from a picked column row's own highlight, but
+  no keyboard gesture reaches it; command history (**Ctrl+↑**/**Ctrl+↓**, or
+  plain **↑**/**↓** with the band closed) is always available instead.
+  Single-cell `│` dividers separate the quick block from the columns and
+  every column from its neighbour.
 
   It is a dock, not a modal: the story prompt stays live underneath, paste keeps
   working, and graphical v6 keeps its artwork. Everything visible is clickable,

@@ -593,8 +593,10 @@ pub static REGISTRY: std::sync::LazyLock<Vec<RegRow>> = std::sync::LazyLock::new
     // the cursor.
     row("band.column_header", Section::Elements, Kind::Style, Some("muted"), Delta::EMPTY),
     row("band.column_header:active", Section::Elements, Kind::Style, Some("accent"), mods(true, false, false, false)),
-    // The one-click quick-action row along the bottom of the band.
-    row("band.quick", Section::Elements, Kind::Style, Some("muted"), Delta::EMPTY),
+    // The one-click quick-action row along the bottom of the band. Normal
+    // text, not muted (SQ-1218) — the rose/cluster/word block is a primary
+    // set of click targets, not secondary chrome.
+    row("band.quick", Section::Elements, Kind::Style, Some("text"), Delta::EMPTY),
     // The quick block's hover highlight (SQ-0677): reversed video, since the
     // quick block lost its arrow-armed keyboard state (armed columns reuse
     // `dialog.list_selected` instead, a fg/bg swap, not REVERSED) and hover is
