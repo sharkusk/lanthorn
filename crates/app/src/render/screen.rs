@@ -676,14 +676,14 @@ fn render_node(
             // bars, backgrounds) render directly as cell backgrounds — exact,
             // grid-aligned, and legible even without an image protocol. A detailed
             // canvas falls through to the image protocol (or a plain fill). (SQ-0332)
-            if crate::render::graphics::render_graphics_as_cells(gw, area, buf, false) {
+            if state.graphics_render.borrow_mut().render_as_cells(gw, area, buf, false) {
                 // painted as cells
             } else if let Some(picker) = state.game_picker.as_ref() {
                 state.graphics_render.borrow_mut().render(picker, gw, area, state.colors.theme.get("graphics").style, buf);
             } else {
                 // No image protocol: approximate the detailed canvas as colour
                 // cells rather than blanking it (SQ-0520).
-                crate::render::graphics::render_graphics_as_cells(gw, area, buf, true);
+                state.graphics_render.borrow_mut().render_as_cells(gw, area, buf, true);
             }
             None
         }
@@ -2123,7 +2123,7 @@ fn render_node(
                         // transparency (no grey letterbox, empty canvas paints
                         // nothing) so overlapping v6 windows and the text beneath
                         // stay visible.
-                        crate::render::graphics::render_graphics_as_cells(gw, sub, buf, true);
+                        state.graphics_render.borrow_mut().render_as_cells(gw, sub, buf, true);
                     }
                     _ => {
                         let m = render_node(&item.node, status, char_mode, introspect, state, sub, buf, game_input, links, grid_colors);

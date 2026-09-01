@@ -547,12 +547,32 @@ fn hash_canvas_rows(
 /// solid grey letterbox over each mostly-empty canvas and clobber the layers
 /// beneath. Non-v6 (Glulx) callers pass `false` to keep the detailed-image path.
 pub fn render_graphics_as_cells(gw: &GraphicsWindow, area: Rect, buf: &mut Buffer, force: bool) -> bool {
+    paint_cell_plan(&classify_graphics_as_cells(gw, area, force), area, buf)
+}
+
+/// The outcome of classifying a graphics window for [`render_graphics_as_cells`]:
+/// either it stays an image (the caller falls through to the protocol path), or
+/// it is drawn as cells — an optional rule glyph, plus each cell's colour
+/// (`None` = no opaque pixels there, so the underlying cell is left untouched).
+///
+/// Split out from the classify/paint walk below so [`GraphicsRender::render_as_cells`]
+/// can memoize this outcome (SQ-1200) instead of recomputing it on every redraw.
+enum CellPlan {
+    Unhandled,
+    Handled { line_glyph: Option<&'static str>, colors: Vec<Option<image::Rgba<u8>>> },
+}
+
+/// The blank/uniform/rule_like scans and the per-cell region-averaging that used
+/// to run inline in [`render_graphics_as_cells`] on every call. Pulled out on its
+/// own (SQ-1200) so [`GraphicsRender::render_as_cells`] can memoize the result on
+/// `(gw.version, area, force)` and skip re-walking an unchanged canvas.
+fn classify_graphics_as_cells(gw: &GraphicsWindow, area: Rect, force: bool) -> CellPlan {
     if area.width == 0 || area.height == 0 {
-        return false;
+        return CellPlan::Unhandled;
     }
     let (cw, ch) = (gw.canvas.width(), gw.canvas.height());
     if cw == 0 || ch == 0 {
-        return false;
+        return CellPlan::Unhandled;
     }
     // A window with no opaque pixel anywhere is blank — the game opened it but
     // never painted it (narco frames its story with graphics windows it leaves
@@ -561,7 +581,8 @@ pub fn render_graphics_as_cells(gw: &GraphicsWindow, area: Rect, buf: &mut Buffe
     // chars/lines over the neighbouring windows. The scan short-circuits on the
     // first opaque pixel, so a real image pays almost nothing. (SQ-0338)
     if !gw.canvas.pixels().any(|p| p[3] >= 128) {
-        return true;
+        let colors = vec![None; area.width as usize * area.height as usize];
+        return CellPlan::Handled { line_glyph: None, colors };
     }
     // A cell's colour is the AVERAGE of the OPAQUE pixels in its canvas region, or
     // `None` if the region has none. Scanning the whole region (not just the centre
@@ -617,7 +638,7 @@ pub fn render_graphics_as_cells(gw: &GraphicsWindow, area: Rect, buf: &mut Buffe
         })
     };
     if !(force || rule_like || uniform) {
-        return false;
+        return CellPlan::Unhandled;
     }
     // A window ≤2 cells in one dimension IS a rule/divider (Kerkerkruip's panel
     // borders). Draw it as a thin line GLYPH (fg = the rule colour, background
@@ -631,9 +652,29 @@ pub fn render_graphics_as_cells(gw: &GraphicsWindow, area: Rect, buf: &mut Buffe
     } else {
         None
     };
+    let mut colors = Vec::with_capacity(area.width as usize * area.height as usize);
     for cy in 0..area.height {
         for cx in 0..area.width {
-            let Some(p) = cell_color(cx, cy) else {
+            colors.push(cell_color(cx, cy));
+        }
+    }
+    CellPlan::Handled { line_glyph, colors }
+}
+
+/// Apply a [`CellPlan`] to `buf` — the write half of what
+/// [`render_graphics_as_cells`] used to do inline. Returns whether the window
+/// was drawn as cells (`Handled`) or left for the caller's image-protocol
+/// fallback (`Unhandled`). Never approximates: the plan already carries the
+/// exact per-cell colours [`classify_graphics_as_cells`] computed, so a memoized
+/// replay (SQ-1200) paints byte-identically to a fresh classify+paint.
+fn paint_cell_plan(plan: &CellPlan, area: Rect, buf: &mut Buffer) -> bool {
+    let CellPlan::Handled { line_glyph, colors } = plan else {
+        return false;
+    };
+    for cy in 0..area.height {
+        for cx in 0..area.width {
+            let idx = cy as usize * area.width as usize + cx as usize;
+            let Some(p) = colors[idx] else {
                 continue; // no opaque pixels here → leave the underlying cell
             };
             if let Some(c) = buf.cell_mut((area.x + cx, area.y + cy)) {
@@ -645,7 +686,7 @@ pub fn render_graphics_as_cells(gw: &GraphicsWindow, area: Rect, buf: &mut Buffe
                         if let Some(bg) = c.style().bg {
                             s = s.bg(bg);
                         }
-                        c.set_symbol(g).set_style(s);
+                        c.set_symbol(*g).set_style(s);
                     }
                     None => {
                         c.set_symbol(" ").set_style(Style::default().bg(fg));
@@ -1208,6 +1249,25 @@ fn band_encode_offthread(picker: &Picker) -> bool {
 #[derive(Default)]
 pub struct GraphicsRender {
     cache: std::collections::HashMap<u32, (u64, u16, u16, Protocol)>,
+    /// Per-window memo of [`classify_graphics_as_cells`] (SQ-1200): the
+    /// blank/uniform/rule_like scans and their region-averaging `cell_color`
+    /// walk the whole canvas, so a redraw of an unchanged window — the common
+    /// uniform backdrop, `force` included — otherwise pays roughly two full
+    /// passes over it for nothing. Keyed and invalidated exactly like `cache`
+    /// above — see [`Self::retain_live`] and [`Self::invalidate_cell_geometry`]
+    /// — with `force` added to the freshness tuple because the classification
+    /// depends on it exactly as directly as it depends on the canvas: the
+    /// image-protocol call site asks the SAME window/version/area once with
+    /// `force = false` (falls through to the image protocol on a detailed
+    /// canvas) and, on its no-picker fallback, once with `force = true`
+    /// (always painted as cells) — two different outcomes that must not share
+    /// one cached answer.
+    cell_memo: std::collections::HashMap<u32, (u64, Rect, bool, CellPlan)>,
+    /// Count of [`classify_graphics_as_cells`] calls (`cell_memo` misses), for
+    /// a test to assert an unchanged redraw reuses the memo instead of
+    /// rescanning (SQ-1200).
+    #[cfg(test)]
+    classify_calls: u64,
     /// Letterbox geometry recorded by the most recent v6 draw, for inverting a
     /// terminal click back to a game pixel (Lane M mouse input). `None` until a
     /// v6 frame has been drawn.
@@ -1503,6 +1563,25 @@ impl std::fmt::Debug for GraphicsRender {
 }
 
 impl GraphicsRender {
+    /// Memoized [`render_graphics_as_cells`] (SQ-1200): reuses the last
+    /// classification for this window when `(gw.version, area, force)` are
+    /// unchanged, instead of rescanning `gw.canvas`. See [`Self::cell_memo`]'s
+    /// docs for the keying and invalidation this mirrors.
+    pub fn render_as_cells(&mut self, gw: &GraphicsWindow, area: Rect, buf: &mut Buffer, force: bool) -> bool {
+        let fresh = matches!(self.cell_memo.get(&gw.win),
+            Some((v, a, f, _)) if *v == gw.version && *a == area && *f == force);
+        if !fresh {
+            let plan = classify_graphics_as_cells(gw, area, force);
+            self.cell_memo.insert(gw.win, (gw.version, area, force, plan));
+            #[cfg(test)]
+            {
+                self.classify_calls += 1;
+            }
+        }
+        let (.., plan) = self.cell_memo.get(&gw.win).expect("just inserted above, or already fresh");
+        paint_cell_plan(plan, area, buf)
+    }
+
     pub fn render(&mut self, picker: &Picker, gw: &GraphicsWindow, area: Rect, letterbox: Style, buf: &mut Buffer) {
         if area.width == 0 || area.height == 0 {
             return;
@@ -1560,12 +1639,21 @@ impl GraphicsRender {
     /// forgotten (SQ-0637) — see [`GraphicsRender::queue_kitty_deletes`].
     pub fn retain_live(&mut self, live: &std::collections::HashSet<u32>) {
         self.cache.retain(|win, _| live.contains(win));
+        self.cell_memo.retain(|win, _| live.contains(win));
         let dead: Vec<u32> = self.kitty_wins.keys().copied().filter(|w| !live.contains(w)).collect();
         for win in dead {
             if let Some(entry) = self.kitty_wins.remove(&win) {
                 self.queue_kitty_deletes(&entry, win);
             }
         }
+    }
+
+    /// How many times [`Self::render_as_cells`] has recomputed a classification
+    /// (a `cell_memo` miss), for a test to assert an unchanged redraw hits the
+    /// memo instead (SQ-1200).
+    #[cfg(test)]
+    pub(crate) fn classify_calls(&self) -> u64 {
+        self.classify_calls
     }
 
     /// Queue an `a=d,d=I` delete for the id an abandoned [`KittyWindowImage`] still
@@ -1985,9 +2073,9 @@ impl GraphicsRender {
     ///   showing a picture resampled to the old pixel size. STALE, and the most
     ///   visible of the two.
     ///
-    /// And three that are already safe — checked, not assumed, because two of
-    /// them share the suspect key shape and only one of the three is safe for
-    /// the same reason:
+    /// And four that are already safe — checked, not assumed, because most of
+    /// them share the suspect key shape and only some of them are safe for the
+    /// same reason:
     ///
     /// * `chrome_bands` — the key IS in cells, but the freshness HASH mixes in
     ///   `(bw, bh)` in device pixels, so a font change makes every band miss and
@@ -2001,11 +2089,17 @@ impl GraphicsRender {
     ///   `picker.font_size()` at all, so there is nothing in that cache fitted
     ///   to a cell, and re-uploading would spend a full canvas to arrive at the
     ///   same pixels.
+    /// * `cell_memo` (SQ-1200) — keyed `(version, area, force)` in cells, and
+    ///   immune for the same reason as `kitty_wins`: [`classify_graphics_as_cells`]
+    ///   reads only `gw.canvas`'s NATIVE pixel dimensions and `area`'s cell
+    ///   count, never a device-pixel size or `picker.font_size()`, so its answer
+    ///   for an unchanged `(version, area, force)` is unchanged by a font-size
+    ///   change too.
     ///
     /// The two device-pixel caches are dropped anyway even though they would
     /// re-encode by themselves: they are cheap to rebuild, and a ring whose
     /// bands survived a font change while the composite behind them did not is a
-    /// seam waiting to happen. `kitty_wins` is deliberately KEPT.
+    /// seam waiting to happen. `kitty_wins` and `cell_memo` are deliberately KEPT.
     ///
     /// Every drop frees its upload in the terminal rather than merely forgetting
     /// it (SQ-0753), which is why this delegates instead of clearing the maps.
@@ -5457,6 +5551,41 @@ mod tests {
         let mut buf = Buffer::empty(area);
         assert!(render_graphics_as_cells(&gw, area, &mut buf, false), "uniform → cells");
         assert_eq!(buf.cell((5, 5)).unwrap().style().bg, Some(Color::Rgb(10, 20, 30)));
+    }
+
+    #[test]
+    fn render_as_cells_memoizes_the_classification_on_version_and_area() {
+        // SQ-1200: a redraw with the SAME (version, area, force) must reuse the
+        // last classification instead of re-running the blank/uniform/rule_like
+        // scans and the region-averaging cell_color over the whole canvas —
+        // roughly two full passes for a window that has not repainted.
+        let mut gr = GraphicsRender::default();
+        let gw = solid(1, 90, 190, [10, 20, 30, 255]);
+        let area = Rect::new(0, 0, 10, 10);
+
+        let mut buf = Buffer::empty(area);
+        assert!(gr.render_as_cells(&gw, area, &mut buf, false), "uniform → cells");
+        assert_eq!(gr.classify_calls(), 1, "first draw classifies");
+        assert_eq!(buf.cell((5, 5)).unwrap().style().bg, Some(Color::Rgb(10, 20, 30)));
+
+        // Same window, same version, same area: must hit the memo.
+        let mut buf2 = Buffer::empty(area);
+        assert!(gr.render_as_cells(&gw, area, &mut buf2, false));
+        assert_eq!(gr.classify_calls(), 1, "an unchanged redraw reuses the memo");
+        assert_eq!(
+            buf2.cell((5, 5)).unwrap().style().bg,
+            Some(Color::Rgb(10, 20, 30)),
+            "a memo replay paints the same colour a fresh classify+paint would"
+        );
+
+        // A version bump (a repaint) must recompute, and reflect the new pixels.
+        let mut gw2 = gw.clone();
+        gw2.version = 2;
+        gw2.canvas = std::sync::Arc::new(image::RgbaImage::from_pixel(90, 190, image::Rgba([200, 0, 0, 255])));
+        let mut buf3 = Buffer::empty(area);
+        assert!(gr.render_as_cells(&gw2, area, &mut buf3, false));
+        assert_eq!(gr.classify_calls(), 2, "a version bump recomputes");
+        assert_eq!(buf3.cell((5, 5)).unwrap().style().bg, Some(Color::Rgb(200, 0, 0)), "the new colour is painted");
     }
 
     #[test]
