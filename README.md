@@ -264,6 +264,21 @@ sound. The crate layout, the engine/host seam and the render pipeline are in
 [**docs/architecture.md**](docs/architecture.md); testing conventions are in
 [**CLAUDE.md**](CLAUDE.md).
 
+## Contributors
+
+lanthorn is better for the people who send it work. Thank you:
+
+- [**@krickert**](https://github.com/krickert) — the Docker build that put
+  lanthorn in a browser tab (#2), then folders, a library-wide find and a
+  recursive cover grid for the story picker, headless `--fetch` and
+  `--import-metadata` for curating a big library, and real game audio in the
+  browser (#4).
+
+Pull requests are welcome — the architecture notes in
+[**docs/architecture.md**](docs/architecture.md) are the map, and
+[**CLAUDE.md**](CLAUDE.md) holds the testing conventions a change is expected
+to follow.
+
 ## License
 
 lanthorn is released under the **BSD 3-Clause License** — see [`LICENSE`](LICENSE).
