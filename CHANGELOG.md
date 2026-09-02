@@ -105,6 +105,9 @@ any such tag, or this Unreleased section, still exists.*
   even when that row's built-in default pins an `fg`/`bg` of its own (the menu
   highlight and the transcript search highlight used to ignore the re-root
   entirely; a few others only half-moved).
+- A long notification toast now wraps onto extra rows instead of getting cut
+  off at the right edge; only a message past five rows loses its tail, marked
+  with a trailing `…`.
 
 ## v0.4.0 — 2026-09-01
 
