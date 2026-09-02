@@ -88,6 +88,28 @@ impl Play {
         Some(Play { state, session: Box::new(s) })
     }
 
+    /// SQ-1206's own fixture for the `hasten north` false positive, and one of
+    /// the two the research noted vets normally (SQ-1232).
+    fn savoir_faire() -> Option<Play> {
+        let bytes = story("Savoir-Faire.zblorb")?;
+        let app::hints::LoadedStory::ZCode(story_bytes) =
+            app::hints::extract_story(bytes.clone()).expect("Savoir-Faire.zblorb is readable")
+        else {
+            panic!("Savoir-Faire.zblorb is a Z-code story");
+        };
+        let mut s = app::session::GameSession::new_with_trace(
+            story_bytes, true, false, None, false, Vec::new(), None, None, Some((25, 80)),
+        )
+        .expect("Savoir-Faire.zblorb boots without a ZError");
+        s.set_strip_prompt(false);
+        let mut state = AppState::default();
+        state.assist_preamble_shown = true;
+        // `recipe` re-extracts from the ORIGINAL container bytes, exactly as
+        // `ShadowRecipe::story_bytes` requires (see its own docs).
+        state.probe.arm(recipe(&bytes));
+        Some(Play { state, session: Box::new(s) })
+    }
+
     fn turn(&mut self, cmd: &str) {
         let r = self.session.submit(cmd);
         self.state.push_transcript_kind(&format!("> {cmd}"), TranscriptKind::Input);
@@ -176,6 +198,33 @@ fn a_dropped_offer_does_not_spend_the_words_one_answer() {
     p.turn("illuminate lamp");
     eprintln!("--- Zork I r88, both halves ---\n{}\n", p.screen());
     assert_eq!(p.assists(), vec!["try instead — light"]);
+}
+
+// ── A direction object defeats the noun control (SQ-1232) ──────────────────
+
+/// **The false positive SQ-1206's research found in 17 of 30 stories.**
+/// `hasten` is one keystroke from `fasten`, which Savoir-Faire's grammar
+/// spells `fasten`/`attach`/`fix` — one verb, three ways in. Every one of
+/// them answers `fasten north`, `attach north` and `fix north` alike with
+/// "You would achieve nothing by this.", but the noun-based control alone
+/// never learns that shape: `fasten <absent noun>` gets "You can't see any
+/// such thing.", a different sentence, so the candidate reads as a success
+/// and the light offered `fasten` for a plain compass direction.
+///
+/// Falsify by reverting the direction control added to `vetting_plan`
+/// (`vocab.rs`'s `dir_words`/`dir_pair`): this assertion then fails with
+/// `fasten` present in the offer, which was the reported symptom.
+#[test]
+fn a_direction_object_no_longer_earns_a_false_positive() {
+    let Some(mut p) = Play::savoir_faire() else { return };
+    p.turn("look");
+    p.turn("hasten north");
+    eprintln!("--- Savoir-Faire, Kitchen Garden, `hasten north` ---\n{}\n", p.screen());
+    assert!(
+        !p.assists().iter().any(|l| l.contains("fasten")),
+        "`fasten` must never be offered for a direction object: {:?}",
+        p.assists()
+    );
 }
 
 // ── The claim matches what was actually done ────────────────────────────────
