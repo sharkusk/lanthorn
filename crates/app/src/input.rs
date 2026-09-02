@@ -539,7 +539,14 @@ pub fn key_to_command(state: &AppState, key: KeyEvent) -> KeyResolve {
     if state.resize_mode {
         return KeyResolve::Action(resize_mode_key_to_action(key));
     }
-    if state.overlays.command_band.is_some() {
+    // SQ-1236: a modal dialog opened OVER the band (config_screen, hotkey_dialog
+    // — the two modal checks below this one) takes all input; the band underneath
+    // must intercept nothing until the dialog closes, so it stays gated on
+    // `!any_modal_overlay_open()` rather than only on being open itself. The band
+    // itself is excluded from `any_modal_overlay_open` (it's a dock, not dialog
+    // chrome — see that method's doc comment), so this reads as "band, unless
+    // something ACTUALLY modal is stacked on top of it."
+    if state.overlays.command_band.is_some() && !state.any_modal_overlay_open() {
         if let Some(a) = command_band_intercept(key, state) {
             return KeyResolve::Action(a);
         }
@@ -11362,6 +11369,112 @@ mod tests {
             key_to_action(&s, key(KeyCode::Down)),
             Action::BandRowNav(1),
             "↓ drives the band's row highlight when not resizing"
+        );
+    }
+
+    // ── SQ-1236: a modal dialog over the band owns all input ───────────────────
+
+    /// Open Settings with a known `ConfigScreenState`, mirroring
+    /// `config_esc_maps_to_config_cancel`'s setup.
+    fn open_config_screen(s: &mut AppState) {
+        let working = crate::input::clone_config(&s.config);
+        s.overlays.config_screen =
+            Some(crate::state::ConfigScreenState { working, scroll: Default::default() });
+    }
+
+    #[test]
+    fn config_screen_over_band_preempts_the_band_intercept() {
+        // Falsified by reverting the `!any_modal_overlay_open()` guard on the
+        // band's intercept in `key_to_command`: before the fix, Up/Down/Esc
+        // resolved to `BandRowNav`/`BandEscape` here instead — the band, not
+        // the dialog on top of it, ate the keys.
+        let mut s = AppState::default();
+        open_band(&mut s);
+        open_config_screen(&mut s);
+
+        assert_eq!(
+            key_to_action(&s, key(KeyCode::Down)),
+            Action::ConfigNav(1),
+            "↓ must drive the dialog, not BandRowNav"
+        );
+        assert_eq!(
+            key_to_action(&s, key(KeyCode::Up)),
+            Action::ConfigNav(-1),
+            "↑ must drive the dialog, not BandRowNav"
+        );
+        assert_eq!(
+            key_to_action(&s, key(KeyCode::Esc)),
+            Action::ConfigCancel,
+            "Esc must close the dialog, not BandEscape"
+        );
+
+        // The band's own selection state is untouched by any of the above —
+        // none of those keys ever reached `command_band_intercept`.
+        assert_eq!(band(&s).row_sel, None, "band selection must be unchanged");
+    }
+
+    #[test]
+    fn config_screen_esc_closes_dialog_and_leaves_band_open() {
+        let mut s = AppState::default();
+        let mut mapper = Mapper::default();
+        open_band(&mut s);
+        open_config_screen(&mut s);
+
+        let a = key_to_action(&s, key(KeyCode::Esc));
+        apply_action(a, &mut s, &mut mapper);
+
+        assert!(s.overlays.config_screen.is_none(), "Esc must close the dialog");
+        assert!(s.overlays.command_band.is_some(), "…and must NOT close the band underneath");
+    }
+
+    #[test]
+    fn band_mouse_click_is_inert_while_config_screen_is_open() {
+        // `band_mouse_action` lives in main.rs and isn't reachable from here,
+        // but the guard it now shares with the keyboard path
+        // (`state.any_modal_overlay_open()`) is: assert the shared predicate
+        // is true exactly when it must gate the band's mouse routing too.
+        let mut s = AppState::default();
+        open_band(&mut s);
+        assert!(!s.any_modal_overlay_open(), "band alone is not modal (SQ-0664)");
+        open_config_screen(&mut s);
+        assert!(
+            s.any_modal_overlay_open(),
+            "a dialog stacked over the band must read as modal, so band_mouse_action's \
+             any_modal_overlay_open guard fires and the click falls through to the dialog's \
+             own hit-testing instead of picking a band row"
+        );
+    }
+
+    #[test]
+    fn band_tab_does_not_fire_while_config_screen_is_open() {
+        // Tab's dialog-focus cycling happens upstream in main.rs regardless of
+        // the band (unconditional, keyed only on `config_screen.is_some()`), so
+        // it is not exercised here. What IS this layer's job: Tab must resolve
+        // to the dialog's own (non-)handling of it, not to the band's
+        // `BandColumnStep`/`BandTabPick` — before the fix it produced both.
+        let mut s = AppState::default();
+        open_band(&mut s);
+        open_config_screen(&mut s);
+        assert_eq!(
+            key_to_action(&s, key(KeyCode::Tab)),
+            Action::None,
+            "Tab must not resolve to a band action while the dialog is open"
+        );
+    }
+
+    #[test]
+    fn band_arrows_resume_after_config_screen_closes() {
+        let mut s = AppState::default();
+        let mut mapper = Mapper::default();
+        open_band(&mut s);
+        open_config_screen(&mut s);
+        apply_action(Action::ConfigCancel, &mut s, &mut mapper);
+        assert!(s.overlays.config_screen.is_none());
+
+        assert_eq!(
+            key_to_action(&s, key(KeyCode::Down)),
+            Action::BandRowNav(1),
+            "with the dialog gone, ↓ drives the band's row highlight again"
         );
     }
 
