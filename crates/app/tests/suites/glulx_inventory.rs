@@ -208,3 +208,234 @@ fn counterfeit_monkey_refuses_an_avatar_it_cannot_identify() {
          header heuristic does not match: {reply:?}"
     );
 }
+
+// ── The panels, driven the way the app drives them (SQ-1241, reopened) ───────
+//
+// The three cases above ask the SESSION. They passed while the app still drew
+// two empty panels, because the session they booted is not the one the app
+// boots and, more to the point, they never asked at the moment the player
+// first sees the screen — they asked after a `look`, and `look` is what
+// repaired the defect.
+//
+// What the app actually does at the first prompt is this: one keypress past
+// "PRESS ANY KEY TO BEGIN", then every loop tick calls
+// `render::transcript::inventory_items` (the inventory panel, `main.rs`),
+// `render::inventory_dock::refresh_inventory_click_words` (its click words) and
+// `render::command_band::refresh_objects` (the command panel's *carried*
+// column). All three read `Introspect::player_object()`, and on City of
+// Secrets that answered `None` for the first four turns of play.
+//
+// The cause was not in the object walk at all: City of Secrets is a GWindows
+// game, and it prints its whole prologue — title, the `Subheader` heading
+// "City Train Station", the room description and the read prompt — into a
+// SECOND buffer window it opens mid-turn, while `AppGlk::primary` is still the
+// splash window opened first. The room-heading detector was fed only for the
+// window that was primary AT WRITE TIME, so the opening heading was never seen,
+// `current_location()` stayed `None`, and `find_player`'s room-decides rule had
+// no room to decide with — City of Secrets ships two situated avatar
+// candidates, `(self object)` in City Train Station and a decoy `yourself` in
+// `(ConceptObjs)`, and without the room neither outranks the other, so the
+// avatar was refused. King of Shreds and Patches has ONE situated candidate and
+// never needs the room, which is exactly why it worked throughout.
+
+use app::render::command_band::{default_quick, default_verbs, refresh_objects, COL_CARRIED};
+use app::render::inventory_dock::{
+    draw_inventory_dock, inventory_dock_target_height, refresh_inventory_click_words,
+    InventoryDockHits,
+};
+use app::render::transcript::inventory_click_words;
+use app::state::{AppState, CommandBandState};
+use ratatui::buffer::Buffer;
+use ratatui::layout::Rect;
+
+/// Boot a Glulx story the way `startup.rs` does: a writable per-game store,
+/// graphics and sound on, a real char cell, a fixed PRNG seed. `None` when the
+/// gitignored fixture is absent.
+fn boot_like_the_app(name: &str) -> Option<GlulxSession> {
+    let image = glulx_image(name)?;
+    GlulxSession::new_in(
+        app::scratch_dir("sq1241-panels"),
+        image,
+        80,
+        24,
+        true,
+        true,
+        true,
+        false,
+        (8, 16),
+        None,
+        &[],
+        [[(None, None); 11]; 2],
+        false,
+        Some(1),
+    )
+    .ok()
+}
+
+/// Past the "press any key" splash to the story's FIRST command prompt, and no
+/// further — no `look`, no move. This is the frame the player is looking at
+/// when they first see the panels, and the frame the defect was reported on.
+fn to_first_prompt(s: &mut GlulxSession) {
+    for _ in 0..6 {
+        if s.pending_input() != app::session::InputKind::Char {
+            break;
+        }
+        s.submit_key(KeyInput::Enter);
+    }
+}
+
+/// What the two panels draw, read through the very calls the loop tick makes.
+///
+/// Returns `(inventory panel rows, the text actually painted into the dock,
+/// the command panel's *carried* column)`.
+fn panels(s: &GlulxSession) -> (Vec<String>, String, Vec<String>) {
+    let mut state = AppState::default();
+    // Both panels open at once, which the app never does (they are mutually
+    // exclusive) — but each reads its own source, and one case asserting both
+    // cannot let the two drift apart.
+    app::input::open_inventory_panel(&mut state, true);
+    state.overlays.command_band = Some(CommandBandState::new(default_verbs(), default_quick()));
+
+    // `main.rs`'s own line, argument for argument.
+    let rows = inventory_items(state.player_obj, &state.inventory_fallback, s.introspect());
+    refresh_inventory_click_words(&mut state, s);
+    refresh_objects(&mut state, s);
+
+    // …and the rows really reach the screen, not just the list.
+    let area = Rect::new(0, 0, 40, inventory_dock_target_height(rows.len(), 40, 100));
+    let mut buf = Buffer::empty(area);
+    draw_inventory_dock(
+        &rows,
+        area,
+        &state.colors,
+        false,
+        &mut buf,
+        &mut InventoryDockHits::default(),
+    );
+    let painted: String = buf.content().iter().map(|c| c.symbol().to_owned()).collect();
+
+    let carried = state.overlays.command_band.as_ref().unwrap().items(COL_CARRIED);
+    // SQ-1244's click words track the rows one-for-one; a panel that draws rows
+    // it cannot compose a word for is half-broken.
+    assert_eq!(
+        state.inventory_click_words.len(),
+        rows.len(),
+        "one clickable word per drawn row: {:?} vs {rows:?}",
+        state.inventory_click_words
+    );
+    assert_eq!(
+        state.inventory_click_words,
+        inventory_click_words(state.player_obj, &state.inventory_fallback, s.introspect(), None),
+        "the dock's stored words are the ones the panel would derive now"
+    );
+    (rows, painted, carried)
+}
+
+/// **The reported defect, at the layer that was broken.**
+///
+/// One keypress past the splash — the very first command prompt — and both
+/// panels must already name what you are carrying. Falsify by restoring
+/// `put_text_attr`'s `if Some(win) == self.primary` guard around the heading
+/// scan: `current_location()` goes back to `None` here, `player_object()` with
+/// it, and both panels draw empty until the player thinks to type `look`.
+#[test]
+fn city_of_secrets_panels_are_filled_at_the_first_prompt() {
+    let Some(mut s) = boot_like_the_app("CoS.blb") else { return };
+    to_first_prompt(&mut s);
+
+    // Non-vacuity: the story really did reach its first command prompt, in the
+    // room it opens in. A capture taken before this point is of a screen the
+    // player never plays from.
+    assert_eq!(
+        s.pending_input(),
+        app::session::InputKind::Line,
+        "one keypress past PRESS ANY KEY TO BEGIN leaves the parser reading a command"
+    );
+
+    // The reported symptom first, so a regression fails saying what the player
+    // saw…
+    let (rows, painted, carried) = panels(&s);
+    let l = lower(&rows);
+    assert!(
+        l.contains("travel papers") && l.contains("watch") && l.contains("suitcase"),
+        "the inventory panel names what you stepped off the train with: {rows:?}"
+    );
+    // …and the cause immediately after, so it also says why.
+    assert_eq!(
+        s.current_location().map(|l| l.name).as_deref(),
+        Some("City Train Station"),
+        "the prologue's own room heading — printed into the second buffer window \
+         GWindows opens mid-turn, which is the whole of this defect"
+    );
+    for word in ["papers", "watch", "suitcase"] {
+        assert!(painted.contains(word), "the dock paints {word:?}: {painted:?}");
+    }
+    let c = lower(&carried);
+    assert!(
+        c.contains("watch") && c.contains("suitcase"),
+        "the command panel's carried column too: {carried:?}"
+    );
+}
+
+/// The engine's live answer and the turn loop's LOCKED one are the same object,
+/// so the two panels cannot disagree about who the player is.
+///
+/// `turn.rs` locks `AppState::player_obj` on the first turn that reports a
+/// location and every panel prefers the lock; this pins that the lock taken at
+/// the first prompt is the avatar and not the `(ConceptObjs)` decoy.
+#[test]
+fn city_of_secrets_locked_avatar_matches_the_live_one() {
+    let Some(mut s) = boot_like_the_app("CoS.blb") else { return };
+    to_first_prompt(&mut s);
+    let locked = s
+        .introspect()
+        .expect("City of Secrets has a readable Inform object list")
+        .player_object()
+        .expect("its avatar is identifiable at the first prompt");
+    assert_eq!(
+        inventory_items(Some(locked), &[], s.introspect()),
+        inventory_items(None, &[], s.introspect()),
+        "the locked avatar and the live lookup are the same object"
+    );
+}
+
+/// The engine that always worked, held to the same standard: King of Shreds and
+/// Patches is found by avatar words alone, so its panels were filled before
+/// this change and must still be.
+#[test]
+fn king_of_shreds_panels_are_filled_at_the_first_prompt() {
+    let Some(mut s) = boot_like_the_app("King_of_Shreds_and_Patches.gblorb") else { return };
+    to_first_prompt(&mut s);
+    let (rows, painted, carried) = panels(&s);
+    let l = lower(&rows);
+    assert!(
+        l.contains("letter") && l.contains("key"),
+        "John Croft's letter and the printworks key: {rows:?}"
+    );
+    assert!(painted.contains("letter"), "the dock paints it: {painted:?}");
+    assert!(!carried.is_empty(), "and the carried column is filled: {carried:?}");
+}
+
+/// The refusal, at the panel layer: Counterfeit Monkey's avatar is not
+/// identifiable from the image, so the panels stay EMPTY rather than showing a
+/// conversation quip's contents. A change that made `find_player` guess would
+/// pass every case above and fail this one.
+#[test]
+fn counterfeit_monkey_panels_stay_empty_rather_than_wrong() {
+    let Some(mut s) = boot_like_the_app("CounterfeitMonkey-11.gblorb") else { return };
+    for cmd in ["yes", "yes", "yes"] {
+        s.submit(cmd);
+    }
+    s.submit_key(KeyInput::Enter);
+    s.submit("look");
+    let _ = s.take_transcript();
+    // Non-vacuity: it is at a command prompt with a readable object list — the
+    // emptiness below is a refusal, not a story that never booted.
+    assert_eq!(s.pending_input(), app::session::InputKind::Line);
+    assert!(s.introspect().is_some(), "CM's object list reads perfectly");
+
+    let (rows, painted, carried) = panels(&s);
+    assert!(rows.is_empty(), "no avatar, no rows: {rows:?}");
+    assert!(painted.contains("(empty)"), "the dock says so plainly: {painted:?}");
+    assert!(carried.is_empty(), "and the carried column is empty: {carried:?}");
+}

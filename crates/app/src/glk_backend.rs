@@ -230,35 +230,23 @@ pub struct AppGlk {
     /// by `finish_turn` into `TurnResult.erase_lower` so the app pins the reprint
     /// to a fresh screen instead of appending a fresh copy each time. (SQ-0403)
     primary_cleared: bool,
-    /// Accumulator for the current run of `Subheader` text in the primary
-    /// window (the Inform 7 room heading, captured char-by-char).
-    heading_acc: String,
-    /// The last completed `Subheader` line seen since the previous drain — the
-    /// current room heading (`None` if this turn printed none).
-    last_heading: Option<String>,
-    /// Whether the primary window's output stream is at the start of a line.
-    /// A room heading is a `Subheader` run that BEGINS here; `Subheader` runs
-    /// beginning mid-line are inline hyperlinks (e.g. Superluminal's command
-    /// hints), not rooms.
-    at_line_start: bool,
-    /// Whether `heading_acc` is an active heading run (a `Subheader` run that
-    /// began at line start and has not yet been terminated).
-    in_heading: bool,
-    /// A finished heading line still awaiting the verdict of what follows it —
-    /// see [`HeadingTail`]. Promoted to `last_heading` once it is confirmed.
-    heading_pending: Option<String>,
-    /// Where the output stream sits relative to `heading_pending`.
-    heading_tail: HeadingTail,
-    /// Output seen since the blank line that detached `heading_pending` from the
-    /// rest of the turn, capped at [`HEADING_TAIL_CAP`] chars.
-    heading_tail_text: String,
-    /// Set once `heading_tail_text` hit the cap: whatever follows the blank line
-    /// is far too long to be a bare read prompt, so it is prose.
-    heading_tail_prose: bool,
-    /// The last [`PROMPT_TAIL_CAP`] chars written to the primary buffer window,
-    /// kept only to answer "does the stream end at the game's read prompt?" —
-    /// the test for a parser command prompt rather than a bare line read.
-    prompt_tail: String,
+    /// The room-heading / read-prompt scan, **one per buffer window** (SQ-1241).
+    ///
+    /// It has to be per-window rather than per-`primary`, because which buffer
+    /// is primary can change *after* the text that answers the question has
+    /// already been written. City of Secrets (GWindows) prints its whole
+    /// prologue — title, `Subheader` "City Train Station", room description and
+    /// read prompt — into a second buffer it opens mid-turn, while `primary` is
+    /// still the splash window it opened first; `set_input_window` only re-points
+    /// primary at the end of that turn, from `finish_turn`. Scanning only the
+    /// window that was primary AT WRITE TIME therefore missed the opening room
+    /// heading outright, and judged the banner test against the splash window's
+    /// read prompt (which there was none of) — so the story ran for four turns
+    /// with no location at all. Every buffer is scanned as it is written and
+    /// [`take_room_heading`](Self::take_room_heading) reads whichever scan
+    /// belongs to the primary of the moment, so a window that becomes the story
+    /// window brings its own history with it.
+    scans: BTreeMap<u32, StoryScan>,
     /// Graphics-window pixel canvases, keyed by window id.
     graphics: std::collections::BTreeMap<u32, crate::graphics::Canvas>,
     /// The `(width, height)` of one text-grid cell in pixels, for pixel↔cell
@@ -292,13 +280,13 @@ impl Default for AppGlk {
 /// Only enough to recognise a bare read prompt; anything longer is prose.
 const HEADING_TAIL_CAP: usize = 32;
 
-/// How much of the primary window's trailing output is kept in
-/// `AppGlk::prompt_tail`. Only enough to see a read prompt and the newline that
+/// How much of a window's trailing output is kept in
+/// `StoryScan::prompt_tail`. Only enough to see a read prompt and the newline that
 /// puts it at line start.
 const PROMPT_TAIL_CAP: usize = 32;
 
-/// Where the primary window's output stream sits relative to the heading
-/// candidate held in `AppGlk::heading_pending` — the states of the "is this
+/// Where a window's output stream sits relative to the heading
+/// candidate held in `StoryScan::heading_pending` — the states of the "is this
 /// heading joined to a room description, or set off as a banner?" test.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 enum HeadingTail {
@@ -313,6 +301,60 @@ enum HeadingTail {
     /// A blank line followed the candidate, so it stands apart from whatever
     /// comes next. `heading_tail_text` collects that "whatever".
     Detached,
+}
+
+/// One buffer window's room-heading and read-prompt scan (SQ-1241).
+///
+/// Every field here used to sit on [`AppGlk`] and be fed only for the window
+/// that was `primary` at write time; see the doc on `AppGlk::scans` for why that
+/// lost City of Secrets' opening room. The state machine itself is unchanged —
+/// it simply now belongs to the window whose stream it describes.
+struct StoryScan {
+    /// Accumulator for the current run of `Subheader` text (the Inform room
+    /// heading, captured char-by-char).
+    heading_acc: String,
+    /// The last completed `Subheader` line seen since the previous drain — the
+    /// current room heading (`None` if this turn printed none).
+    last_heading: Option<String>,
+    /// Whether this window's output stream is at the start of a line.
+    /// A room heading is a `Subheader` run that BEGINS here; `Subheader` runs
+    /// beginning mid-line are inline hyperlinks (e.g. Superluminal's command
+    /// hints), not rooms.
+    at_line_start: bool,
+    /// Whether `heading_acc` is an active heading run (a `Subheader` run that
+    /// began at line start and has not yet been terminated).
+    in_heading: bool,
+    /// A finished heading line still awaiting the verdict of what follows it —
+    /// see [`HeadingTail`]. Promoted to `last_heading` once it is confirmed.
+    heading_pending: Option<String>,
+    /// Where the output stream sits relative to `heading_pending`.
+    heading_tail: HeadingTail,
+    /// Output seen since the blank line that detached `heading_pending` from the
+    /// rest of the turn, capped at [`HEADING_TAIL_CAP`] chars.
+    heading_tail_text: String,
+    /// Set once `heading_tail_text` hit the cap: whatever follows the blank line
+    /// is far too long to be a bare read prompt, so it is prose.
+    heading_tail_prose: bool,
+    /// The last [`PROMPT_TAIL_CAP`] chars written to this window, kept only to
+    /// answer "does the stream end at the game's read prompt?" — the test for a
+    /// parser command prompt rather than a bare line read.
+    prompt_tail: String,
+}
+
+impl Default for StoryScan {
+    fn default() -> Self {
+        StoryScan {
+            heading_acc: String::new(),
+            last_heading: None,
+            at_line_start: true,
+            in_heading: false,
+            heading_pending: None,
+            heading_tail: HeadingTail::Idle,
+            heading_tail_text: String::new(),
+            heading_tail_prose: false,
+            prompt_tail: String::new(),
+        }
+    }
 }
 
 /// One styled text chunk drained by `take_transcript`: `(char_count, style-bits,
@@ -345,15 +387,7 @@ impl AppGlk {
             buffers: BTreeMap::new(),
             primary: None,
             primary_cleared: false,
-            heading_acc: String::new(),
-            last_heading: None,
-            at_line_start: true,
-            in_heading: false,
-            heading_pending: None,
-            heading_tail: HeadingTail::Idle,
-            heading_tail_text: String::new(),
-            heading_tail_prose: false,
-            prompt_tail: String::new(),
+            scans: BTreeMap::new(),
             graphics: BTreeMap::new(),
             char_px,
             picts,
@@ -582,7 +616,36 @@ impl AppGlk {
         }
     }
 
-    /// Feed one primary-window output run into the room-heading detector.
+    /// The scan belonging to one buffer window, created on first write.
+    fn scan(&mut self, win: u32) -> &mut StoryScan {
+        self.scans.entry(win).or_default()
+    }
+
+    /// The scan of the window that is primary *right now* — the story window as
+    /// of this moment, which is not necessarily the one the text was written to
+    /// (see `Self::scans`).
+    fn primary_scan(&mut self) -> Option<&mut StoryScan> {
+        let pid = self.primary?;
+        Some(self.scans.entry(pid).or_default())
+    }
+
+    /// Whether the story window's output currently ends at the game's read
+    /// prompt — the last thing an Inform parser prints before reading a command.
+    fn ends_at_read_prompt(&mut self) -> bool {
+        self.primary_scan().is_some_and(|s| s.ends_at_read_prompt())
+    }
+
+    /// Return and clear the last `Subheader` room heading the STORY window
+    /// captured since the previous call, applying the banner test below to it.
+    /// Drained once per turn, alongside `take_transcript`.
+    pub fn take_room_heading(&mut self, awaiting_line_input: bool) -> Option<String> {
+        let at_command_prompt = awaiting_line_input && self.ends_at_read_prompt();
+        self.primary_scan()?.take_room_heading(at_command_prompt)
+    }
+}
+
+impl StoryScan {
+    /// Feed one output run from this window into the room-heading detector.
     ///
     /// The Inform 7 room heading is a `Subheader` run printed on its OWN line, so
     /// a heading is a `Subheader` run that begins at line start (tracked by
@@ -668,7 +731,7 @@ impl AppGlk {
         }
     }
 
-    /// Keep the last [`PROMPT_TAIL_CAP`] chars of the primary window's output.
+    /// Keep the last [`PROMPT_TAIL_CAP`] chars of this window's output.
     fn note_prompt_tail(&mut self, s: &str) {
         self.prompt_tail.push_str(s);
         let n = self.prompt_tail.chars().count();
@@ -735,7 +798,7 @@ impl AppGlk {
     /// Adventure in `superbrief` prints "Inside Building", a blank line and then
     /// only its object list, while a room heading can perfectly well be followed
     /// by a cutscene that ends on a keypress.
-    pub fn take_room_heading(&mut self, awaiting_line_input: bool) -> Option<String> {
+    fn take_room_heading(&mut self, at_command_prompt: bool) -> Option<String> {
         if self.in_heading {
             self.finalize_heading(); // flush a heading with no trailing separator yet
             self.in_heading = false;
@@ -745,7 +808,6 @@ impl AppGlk {
         let detached = self.heading_tail == HeadingTail::Detached
             && (self.heading_tail_prose
                 || !crate::session::strip_read_prompt(&self.heading_tail_text).trim().is_empty());
-        let at_command_prompt = awaiting_line_input && self.ends_at_read_prompt();
         if detached && !at_command_prompt {
             self.heading_pending = None;
             self.heading_tail = HeadingTail::Idle;
@@ -757,6 +819,21 @@ impl AppGlk {
         self.last_heading.take()
     }
 
+    /// Reset what a `glk_window_clear` on this window invalidates: the cursor is
+    /// back at line start, any partial heading run was wiped with the text, and
+    /// the read prompt that stood there is gone. A heading already CONFIRMED
+    /// stands — the wiped window carried away the blank line that would have
+    /// judged a pending candidate, so settle it now.
+    fn on_clear(&mut self) {
+        self.at_line_start = true;
+        self.in_heading = false;
+        self.heading_acc.clear();
+        self.prompt_tail.clear();
+        self.confirm_heading();
+    }
+}
+
+impl AppGlk {
     /// Project the recorded Glk state onto the neutral [`ScreenModel`] by walking
     /// gvm's live window tree (`layout_tree`). Content is looked up by window id
     /// (unchanged); the tree's position-ordered children and border hints carry
@@ -998,6 +1075,7 @@ impl GlkBackend for AppGlk {
     fn window_close(&mut self, id: u32) {
         self.grids.remove(&id);
         self.buffers.remove(&id);
+        self.scans.remove(&id);
         self.graphics.remove(&id);
         self.layout.retain(|&(wid, _, _, _)| wid != id);
         if self.primary == Some(id) {
@@ -1033,10 +1111,12 @@ impl GlkBackend for AppGlk {
     }
 
     fn put_text_attr(&mut self, win: u32, style: GlkStyle, colour: StyleColour, attrs: StyleAttrs, link: u32, s: &str) {
-        if Some(win) == self.primary {
-            self.capture_heading(style, s);
-            self.note_prompt_tail(s);
-        }
+        // Every buffer is scanned, not just today's primary: the window a game
+        // prints its story into can become the primary only at the END of the
+        // turn it opened in (SQ-1241 — see `AppGlk::scans`).
+        let scan = self.scan(win);
+        scan.capture_heading(style, s);
+        scan.note_prompt_tail(s);
         let (bits, fg, bg) = resolve_glk_colour(style, colour, attrs);
         let para = resolve_glk_para(attrs);
         let buf = self.buffers.entry(win).or_default();
@@ -1071,21 +1151,14 @@ impl GlkBackend for AppGlk {
             let (w, h) = (c.img.width(), c.img.height());
             c.erase_rect(0, 0, w, h);
         }
-        // A cleared primary window puts the cursor back at line start, so a
-        // heading printed at the top of the fresh window is a valid line-start
-        // heading. Reset the detector; discard any partial heading run whose
-        // text was just wiped.
+        // A cleared window puts the cursor back at line start, so a heading
+        // printed at the top of the fresh window is a valid line-start heading.
+        // Reset that window's own scan (SQ-1241) — a window that is not primary
+        // today may be the story window tomorrow.
+        if let Some(scan) = self.scans.get_mut(&win) {
+            scan.on_clear();
+        }
         if Some(win) == self.primary {
-            self.at_line_start = true;
-            self.in_heading = false;
-            self.heading_acc.clear();
-            // The wiped window took its read prompt with it: the stream no longer
-            // ends at one, whatever stood there before the clear.
-            self.prompt_tail.clear();
-            // The wiped window carries away the blank line that would have judged
-            // a pending candidate, so settle it now: a heading already printed
-            // stands, exactly as it did before the candidate slot existed.
-            self.confirm_heading();
             // Signal the app to pin the upcoming reprint to a fresh screen
             // instead of appending a fresh copy (menu redraws). (SQ-0403)
             self.primary_cleared = true;

@@ -99,6 +99,13 @@ still there long after the turn that discovered it.
   pages ask you to *type* yes or no, and read the answer themselves without ever
   printing a `>`, so they stay off the map while Cragne's Railway Platform — the
   first page that does end at a prompt — goes on it.
+  The shape is read in **every** buffer window, not just the one the game happens
+  to be printing in when the turn starts: a GWindows title like *City of Secrets*
+  opens a second buffer mid-prologue and prints its opening room into that,
+  becoming the story window only once the turn ends. Scanning just the window that
+  was the story window at the time would lose the room you actually start in —
+  and with it the object-tree read that tells the inventory panel what you're
+  carrying (SQ-1241).
 - **Scott Adams** adventures feed their locations straight through the same
   engine-agnostic pipeline — nothing special to configure.
 
