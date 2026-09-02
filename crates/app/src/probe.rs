@@ -1350,7 +1350,7 @@ mod tests {
         Job {
             token,
             save: std::sync::Arc::new(crate::engine::EngineSave::new("mock", 1, Vec::new())),
-            baseline: WorldPrint(None),
+            baseline: WorldPrint::default(),
             commands: commands.iter().map(|c| c.to_string()).collect(),
         }
     }
