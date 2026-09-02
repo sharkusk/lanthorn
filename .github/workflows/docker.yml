@@ -87,3 +87,9 @@ jobs:
           labels: ${{ steps.meta.outputs.labels }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
+          # The action attaches provenance and SBOM attestations to the image
+          # index by default, and GHCR lists each of those manifests as a
+          # platform of its own — the "unknown/unknown" beside linux/amd64 on
+          # the package page. They are not something a `docker pull` uses.
+          provenance: false
+          sbom: false
