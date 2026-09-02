@@ -57,6 +57,12 @@ pub enum BrowserAction {
     PlayStory,
     /// Open the launch-options dialog for the selected story.
     OpenLaunchOptions,
+    /// Open the per-story menu beside the highlighted row or tile (SQ-1227).
+    OpenStoryMenu,
+    /// Show the browser's own key reference (SQ-1227). Its own dialog rather
+    /// than the game's hotkey panel, which lists in-game commands and is fed
+    /// from an `AppState` the browser does not have.
+    ShowBrowserKeys,
     /// Open or close the story info panel.
     ToggleInfoPanel,
     /// Switch between the list and the cover gallery.
@@ -133,160 +139,101 @@ pub fn list_nav_code(a: BrowserAction) -> Option<KeyCode> {
 
 // ── Footer hints ──────────────────────────────────────────────────────────────
 
-/// One footer hint: the commands whose keys it advertises, plus a short label.
+/// One footer hint: a command and the short label shown after its key.
 ///
-/// The *keys* are looked up in the live keymap, so a rebinding relabels the hint
-/// and an unbound command drops out of the footer entirely. Only the label and
-/// the ordering are authored — the drift this replaces was a hand-written string
-/// naming a key the code no longer used.
+/// **One key per hint** (SQ-1227). The key is the FIRST one bound to `command`
+/// in the browser context, looked up in the live keymap — so a rebinding
+/// relabels the hint and an unbound command drops out of the footer entirely —
+/// and the alternates (`i`, `Esc`, `Shift+Enter`, `k`/`j`, …) stay bound but
+/// unadvertised. The footer is a legend of the LIBRARY-level keys, not an
+/// inventory of every route to every gesture: mouse gestures are never in it,
+/// navigation is never in it, and everything that acts on ONE story lives in the
+/// story menu instead (`crate::story_menu`).
+#[derive(Clone, Copy, Debug)]
 pub struct Hint {
-    /// Full command-strings, in display order.
-    pub commands: &'static [&'static str],
-    /// Gestures with no key binding at all (the mouse ones), appended last.
-    pub extras: &'static [&'static str],
+    /// The full command-string whose key this hint names.
+    pub command: &'static str,
     /// The short label shown after the colon.
     pub label: &'static str,
-    /// How many binding *ranks* to show — a command's first key is rank 0, its
-    /// second key rank 1, and so on. `0` shows every rank. The gallery footer
-    /// shows only the arrows (rank 0) because it has no room for hjkl too.
-    pub ranks: usize,
+    /// Drop priority when the footer will not fit: the LOWEST rank is dropped
+    /// first, and `None` is never dropped at all.
+    pub drop_rank: Option<u8>,
 }
 
-/// Always-shown left segment of the list footer.
-pub const HINT_MOVE: Hint = Hint {
-    commands: &["move-selection 0 -1", "move-selection 0 1"],
-    extras: &[],
-    label: "move",
-    ranks: 0,
-};
-
-/// Always-shown right segments of the list footer, in order.
-pub const HINTS_CORE_RIGHT: &[Hint] = &[
-    Hint { commands: &["play-story"], extras: &["2×click"], label: "open", ranks: 0 },
-    Hint { commands: &["toggle-info-panel"], extras: &[], label: "info", ranks: 0 },
-    Hint { commands: &["quit-browser", "cancel-browser"], extras: &[], label: "quit", ranks: 0 },
-];
-
-/// The optional list-footer segments, most-important (least-guessable) first.
+/// The footer, in fixed left-to-right display order (SQ-1227):
 ///
-/// Included left-to-right while they still fit next to the core hints; the rest
-/// are dropped — the two navigation conventions go last since nobody needs told,
-/// and the launch-options gestures go first because a gesture nobody knows about
-/// is a feature nobody uses: nothing on screen would otherwise hint that a story
-/// can be started any way but the default one (SQ-0789).
-pub const HINTS_OPTIONAL: &[Hint] = &[
-    Hint {
-        commands: &["open-launch-options"],
-        extras: &["2×right-click"],
-        label: "options",
-        ranks: 0,
-    },
-    Hint { commands: &["find-story"], extras: &[], label: "find", ranks: 0 },
-    Hint { commands: &["parent-folder"], extras: &[], label: "up", ranks: 0 },
-    Hint { commands: &["search-ifdb"], extras: &[], label: "IFDB search", ranks: 0 },
-    Hint { commands: &["open-url"], extras: &[], label: "open URL", ranks: 0 },
-    Hint { commands: &["toggle-gallery"], extras: &[], label: "covers", ranks: 0 },
-    Hint { commands: &["fetch-story"], extras: &[], label: "fetch", ranks: 0 },
-    Hint { commands: &["refresh-library"], extras: &[], label: "refresh", ranks: 0 },
-    Hint { commands: &["set-ifdb-url"], extras: &[], label: "IFDB url", ranks: 0 },
-    Hint { commands: &["download-hints"], extras: &[], label: "get hints", ranks: 0 },
-    Hint { commands: &["sort-library"], extras: &[], label: "sort", ranks: 0 },
-    Hint { commands: &["reverse-sort"], extras: &[], label: "reverse", ranks: 0 },
-    Hint { commands: &["page-selection -1", "page-selection 1"], extras: &[], label: "page", ranks: 0 },
-    Hint {
-        commands: &["half-page-selection -1", "half-page-selection 1"],
-        extras: &[],
-        label: "half page",
-        ranks: 0,
-    },
-    Hint { commands: &["select-edge first", "select-edge last"], extras: &[], label: "ends", ranks: 0 },
+/// ```text
+/// Enter: open  Space: menu  Tab: info  /: IFDB  g: covers  s: sort  r: refresh  Ctrl+F: find  ?: keys  q: quit
+/// ```
+///
+/// `drop_rank` is the order they go as the terminal narrows — `find` first,
+/// then `refresh`, `sort`, `covers`, `IFDB`, `info`, and `keys` last. Open, menu
+/// and quit carry no rank and are always shown: without the first two there is
+/// no way to learn anything else, and without the third no way out.
+///
+/// What is NOT here is the point of the table. Navigation is gone (nobody needs
+/// told that ↑ moves), the mouse is gone, and every gesture that acts on one
+/// STORY — launch options, fetch, hints, the IFDB URL — moved to the story menu
+/// behind `Space`, which is one key to advertise instead of five.
+pub const HINTS: &[Hint] = &[
+    Hint { command: "play-story", label: "open", drop_rank: None },
+    Hint { command: "open-story-menu", label: "menu", drop_rank: None },
+    Hint { command: "toggle-info-panel", label: "info", drop_rank: Some(5) },
+    Hint { command: "search-ifdb", label: "IFDB", drop_rank: Some(4) },
+    Hint { command: "toggle-gallery", label: "covers", drop_rank: Some(3) },
+    Hint { command: "sort-library", label: "sort", drop_rank: Some(2) },
+    Hint { command: "refresh-library", label: "refresh", drop_rank: Some(1) },
+    Hint { command: "find-story", label: "find", drop_rank: Some(0) },
+    Hint { command: "show-browser-keys", label: "keys", drop_rank: Some(6) },
+    Hint { command: "quit-browser", label: "quit", drop_rank: None },
 ];
 
-/// The cover-gallery footer, which is a fixed line rather than a dropping one.
-/// `ranks: 1` on the move hint keeps it to the four arrows.
-pub const HINTS_GALLERY: &[Hint] = &[
-    Hint {
-        commands: &[
-            "move-selection -1 0",
-            "move-selection 1 0",
-            "move-selection 0 -1",
-            "move-selection 0 1",
-        ],
-        extras: &[],
-        label: "move",
-        ranks: 1,
-    },
-    Hint { commands: &["play-story"], extras: &["2×click"], label: "open", ranks: 0 },
-    Hint { commands: &["toggle-info-panel"], extras: &[], label: "info", ranks: 0 },
-    Hint { commands: &["toggle-gallery"], extras: &[], label: "list", ranks: 0 },
-    Hint { commands: &["quit-browser", "cancel-browser"], extras: &[], label: "quit", ranks: 0 },
-];
-
-/// Every hint the browser can show — the set the coverage guard checks against
-/// the registry.
-pub fn all_hints() -> Vec<&'static Hint> {
-    std::iter::once(&HINT_MOVE)
-        .chain(HINTS_CORE_RIGHT)
-        .chain(HINTS_OPTIONAL)
+/// The footer for one view. Identical in both, except that in the cover gallery
+/// the `toggle-gallery` hint names where the key GOES (back to the `list`)
+/// rather than where it is.
+pub fn footer_hints(gallery: bool) -> Vec<Hint> {
+    HINTS
+        .iter()
+        .map(|h| {
+            if gallery && h.command == "toggle-gallery" {
+                Hint { label: "list", ..*h }
+            } else {
+                *h
+            }
+        })
         .collect()
 }
 
-/// The footer's label for one key.
+/// The label for one key, in the footer and in the story menu's key column.
 ///
-/// A bare character shows as itself (`g`, `H`, `/`) rather than through
-/// [`KeySpec::label`]'s uppercasing, which is right for a hotkey table and wrong
-/// for a footer that has always spelled these keys the way you type them.
-/// Everything else — arrows, `Enter`, `Shift+Enter`, `PgUp` — uses `label()`.
-fn key_label(s: &KeySpec) -> String {
+/// A bare unshifted character shows as itself (`g`, `/`, `?`) rather than
+/// through [`KeySpec::label`]'s uppercasing, which is right for a hotkey table
+/// and wrong for a footer that has always spelled these keys the way you type
+/// them. Everything else — `Space`, arrows, `Enter`, `Shift+H`, `Ctrl+F` — uses
+/// `label()`, so a chord is always spelled as a chord.
+pub fn key_label(s: &KeySpec) -> String {
     match s.code {
-        KeyCode::Char(c) if !s.ctrl && !s.alt => c.to_string(),
+        // `Char(' ')` is a key you press, not a character you type.
+        KeyCode::Char(' ') => s.label(),
+        KeyCode::Char(c) if !s.ctrl && !s.alt && !s.shift => c.to_string(),
         _ => s.label(),
     }
 }
 
-/// The keys bound to exactly `command` in the browser context, in binding order.
-fn keys_for(km: &KeyMap, command: &str) -> Vec<KeySpec> {
-    km.for_context(Context::Browser)
-        .filter(|(_, cmd)| *cmd == command)
-        .map(|(s, _)| *s)
-        .collect()
+/// The FIRST key bound to exactly `command` in the browser context.
+///
+/// "First" is binding order, authored in `keymap.rs` precisely so that the key a
+/// hint or a menu row names is the one worth telling somebody about — and a
+/// `[keymap.browser]` line that reuses a default's key displaces it there, so a
+/// genuine rebinding moves the label with it.
+pub fn first_key(km: &KeyMap, command: &str) -> Option<KeySpec> {
+    km.for_context(Context::Browser).find(|(_, cmd)| *cmd == command).map(|(s, _)| *s)
 }
 
-/// Render one hint, or `None` when nothing it names is reachable.
-///
-/// Keys of the same rank join with `/` (`↑/↓`, `PgUp/PgDn`). Successive ranks
-/// normally join with `/` too (`i/Tab`), but with ` or ` once a rank holds more
-/// than one key, where a bare slash would run two whole alternatives together
-/// (`↑/↓ or k/j`, not `↑/↓/k/j`). Mouse-only gestures follow after ` / `.
+/// Render one hint, or `None` when nothing is bound to its command.
 pub fn render_hint(km: &KeyMap, h: &Hint) -> Option<String> {
-    let per_command: Vec<Vec<KeySpec>> =
-        h.commands.iter().map(|c| keys_for(km, c)).collect();
-    let depth = per_command.iter().map(Vec::len).max().unwrap_or(0);
-    let depth = if h.ranks == 0 { depth } else { depth.min(h.ranks) };
-
-    let mut groups: Vec<String> = Vec::new();
-    let mut any_rank_is_plural = false;
-    for rank in 0..depth {
-        let keys: Vec<String> = per_command
-            .iter()
-            .filter_map(|ks| ks.get(rank))
-            .map(key_label)
-            .collect();
-        if !keys.is_empty() {
-            any_rank_is_plural |= keys.len() > 1;
-            groups.push(keys.join("/"));
-        }
-    }
-
-    let mut parts: Vec<String> = Vec::new();
-    if !groups.is_empty() {
-        parts.push(groups.join(if any_rank_is_plural { " or " } else { "/" }));
-    }
-    parts.extend(h.extras.iter().map(|s| s.to_string()));
-    if parts.is_empty() {
-        return None; // nothing bound and no mouse gesture — say nothing
-    }
-    Some(format!("{}: {}", parts.join(" / "), h.label))
+    let key = first_key(km, h.command)?;
+    Some(format!("{}: {}", key_label(&key), h.label))
 }
 
 // ── Tests ─────────────────────────────────────────────────────────────────────
@@ -402,6 +349,17 @@ mod tests {
             Some(BrowserAction::HalfPageSelection(1))
         );
         assert_eq!(key(KeyCode::Tab, KeyModifiers::NONE), Some(BrowserAction::ToggleInfoPanel));
+        // SQ-1227: the per-story menu and the key reference.
+        assert_eq!(key(KeyCode::Char(' '), KeyModifiers::NONE), Some(BrowserAction::OpenStoryMenu));
+        assert_eq!(
+            key(KeyCode::Char('?'), KeyModifiers::NONE),
+            Some(BrowserAction::ShowBrowserKeys)
+        );
+        assert_eq!(
+            key(KeyCode::Char('?'), KeyModifiers::SHIFT),
+            Some(BrowserAction::ShowBrowserKeys),
+            "a terminal that reports `?` with the shift flag still matches"
+        );
         assert_eq!(key(KeyCode::Esc, KeyModifiers::NONE), Some(BrowserAction::CancelBrowser));
         assert_eq!(key(KeyCode::Char('q'), KeyModifiers::NONE), Some(BrowserAction::QuitBrowser));
         // Nothing is bound to `z`, and an unbound key is silence, not a default.
@@ -412,88 +370,124 @@ mod tests {
     #[test]
     fn a_rebound_key_moves_the_action_and_the_hint() {
         let mut cfg = crate::config::KeymapConfig::default();
-        cfg.browser.insert("ctrl+o".into(), "open-launch-options".into());
+        // `x` takes the command and `s` is given away, so the DEFAULT binding is
+        // displaced rather than merely joined — which is what "rebound" means.
+        cfg.browser.insert("s".into(), "reverse-sort".into());
+        cfg.browser.insert("x".into(), "sort-library".into());
         let (km, warns) = KeyMap::resolve(&cfg);
         assert!(warns.is_empty(), "{warns:?}");
         assert_eq!(
-            action_for_key(&km, KeyEvent::new(KeyCode::Char('o'), KeyModifiers::CONTROL)),
-            Some(BrowserAction::OpenLaunchOptions)
+            action_for_key(&km, KeyEvent::new(KeyCode::Char('x'), KeyModifiers::NONE)),
+            Some(BrowserAction::SortLibrary)
         );
         // …and the footer says so, without anyone editing a string.
-        let hint = HINTS_OPTIONAL
-            .iter()
-            .find(|h| h.commands == ["open-launch-options"])
-            .expect("the options hint");
-        let rendered = render_hint(&km, hint).expect("bound");
-        assert_eq!(rendered, "Shift+Enter/o/Ctrl+O / 2×right-click: options", "the hint names the new key: {rendered:?}");
+        let hint = HINTS.iter().find(|h| h.command == "sort-library").expect("the sort hint");
+        assert_eq!(render_hint(&km, hint).as_deref(), Some("x: sort"));
     }
 
-    /// **The anti-drift guard for the footer.** Every browser command appears in
-    /// exactly one hint, so a gesture added to the registry cannot ship without
-    /// one — the divergence between a hardcoded arm and a hand-written hint is
-    /// what SQ-0796 exists to end.
+    /// **The anti-drift guard for the footer and the menu.** Both are tables of
+    /// command NAMES, and a name that no longer resolves is a hint or a row that
+    /// silently does nothing — the divergence between a hardcoded arm and a
+    /// hand-written label is what SQ-0796 exists to end.
+    ///
+    /// The menu carries the stronger half: its rows show a key column read from
+    /// the keymap, so an item whose command ships with no default binding would
+    /// draw a blank one.
     #[test]
-    fn every_browser_command_has_exactly_one_footer_hint() {
-        let hinted: Vec<&str> = all_hints()
-            .iter()
-            .flat_map(|h| h.commands.iter().copied())
-            .collect();
-        for c in browser_commands() {
-            let n = hinted
-                .iter()
-                .filter(|cmd| cmd.split_whitespace().next() == Some(c.name))
-                .count();
-            assert!(n > 0, "browser command '{}' has no footer hint", c.name);
-        }
-        // …and every hint names a real command, so a renamed one is caught from
-        // the other side too.
-        for cmd in &hinted {
-            let name = cmd.split_whitespace().next().unwrap_or("");
-            let spec = crate::slash::find_command(name)
-                .unwrap_or_else(|| panic!("footer hint names unknown command '{cmd}'"));
-            assert_eq!(spec.context, Context::Browser, "'{cmd}' is not a browser command");
+    fn every_footer_hint_and_menu_item_names_a_real_command() {
+        let km = km();
+        for h in HINTS {
+            let spec = crate::slash::find_command(h.command)
+                .unwrap_or_else(|| panic!("footer hint names unknown command '{}'", h.command));
+            assert_eq!(spec.context, Context::Browser, "'{}' is not a browser command", h.command);
             assert!(
-                action_for_command(cmd).is_some(),
-                "footer hint '{cmd}' does not resolve to an action"
+                action_for_command(h.command).is_some(),
+                "footer hint '{}' does not resolve to an action",
+                h.command
+            );
+        }
+        for it in crate::story_menu::STORY_MENU {
+            let spec = crate::slash::find_command(it.command)
+                .unwrap_or_else(|| panic!("story menu names unknown command '{}'", it.command));
+            assert_eq!(spec.context, Context::Browser, "'{}' is not a browser command", it.command);
+            assert!(
+                action_for_command(it.command).is_some(),
+                "story menu item '{}' does not resolve to an action",
+                it.command
+            );
+            assert!(
+                first_key(&km, it.command).is_some(),
+                "story menu item '{}' has no default browser binding, so its key \
+                 column would be blank",
+                it.command
             );
         }
     }
 
-    /// The gallery footer's hints are held to the same standard.
+    /// The footer says exactly what SQ-1227 specified, in that order, one key
+    /// each — and the gallery says the same with `g` naming where it goes.
     #[test]
-    fn the_gallery_hints_name_real_browser_commands() {
-        for h in HINTS_GALLERY {
-            for cmd in h.commands {
-                assert!(
-                    action_for_command(cmd).is_some(),
-                    "gallery hint '{cmd}' does not resolve to an action"
-                );
-            }
-        }
+    fn the_footer_is_one_key_per_hint() {
+        let km = km();
+        let line: Vec<String> =
+            footer_hints(false).iter().filter_map(|h| render_hint(&km, h)).collect();
+        assert_eq!(
+            line,
+            vec![
+                "Enter: open",
+                "Space: menu",
+                "Tab: info",
+                "/: IFDB",
+                "g: covers",
+                "s: sort",
+                "r: refresh",
+                "Ctrl+F: find",
+                "?: keys",
+                "q: quit",
+            ]
+        );
+        let gallery: Vec<String> =
+            footer_hints(true).iter().filter_map(|h| render_hint(&km, h)).collect();
+        assert!(gallery.contains(&"g: list".to_string()), "{gallery:?}");
+        assert_eq!(gallery.len(), line.len(), "the two footers carry the same hints");
     }
 
-    /// Rendering: ranks, mouse extras, and an unbound command dropping out.
+    /// One key per hint even where several are bound: `i` and `Esc` stay live,
+    /// and stay out of the footer.
     #[test]
-    fn render_hint_groups_ranks_and_appends_mouse_gestures() {
+    fn a_hint_names_one_key_however_many_are_bound() {
         let km = km();
+        let info = HINTS.iter().find(|h| h.command == "toggle-info-panel").expect("info");
+        assert_eq!(render_hint(&km, info).as_deref(), Some("Tab: info"), "not `i/Tab`");
         assert_eq!(
-            render_hint(&km, &HINT_MOVE).as_deref(),
-            Some("↑/↓ or k/j: move"),
-            "rank 0 is the arrows, rank 1 the letters"
+            action_for_key(&km, KeyEvent::new(KeyCode::Char('i'), KeyModifiers::NONE)),
+            Some(BrowserAction::ToggleInfoPanel),
+            "…and `i` is still bound, just unadvertised"
         );
-        let open = &HINTS_CORE_RIGHT[0];
-        assert_eq!(render_hint(&km, open).as_deref(), Some("Enter / 2×click: open"));
-        let gallery_move = &HINTS_GALLERY[0];
+        let quit = HINTS.iter().find(|h| h.command == "quit-browser").expect("quit");
+        assert_eq!(render_hint(&km, quit).as_deref(), Some("q: quit"), "not `q/Esc`");
         assert_eq!(
-            render_hint(&km, gallery_move).as_deref(),
-            Some("←/→/↑/↓: move"),
-            "ranks: 1 keeps hjkl out of the gallery line"
+            action_for_key(&km, KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE)),
+            Some(BrowserAction::CancelBrowser)
         );
-        // An empty keymap leaves only the mouse gesture — the hint never claims a
-        // key that is not bound.
+
+        // A user's EXTRA binding does not lengthen the hint either.
+        let mut cfg = crate::config::KeymapConfig::default();
+        cfg.browser.insert("ctrl+g".into(), "toggle-gallery".into());
+        let (km2, warns) = KeyMap::resolve(&cfg);
+        assert!(warns.is_empty(), "{warns:?}");
+        let covers = HINTS.iter().find(|h| h.command == "toggle-gallery").expect("covers");
+        assert_eq!(render_hint(&km2, covers).as_deref(), Some("g: covers"));
+    }
+
+    /// A hint whose command nobody has bound is not shown — the footer has no
+    /// way to claim a key that does not exist.
+    #[test]
+    fn an_unbound_command_has_no_hint() {
         let empty = KeyMap { bindings: Vec::new() };
-        assert_eq!(render_hint(&empty, open).as_deref(), Some("2×click: open"));
-        assert_eq!(render_hint(&empty, &HINT_MOVE), None, "no keys, no gesture, no hint");
+        for h in HINTS {
+            assert_eq!(render_hint(&empty, h), None, "{}", h.command);
+        }
     }
 
     /// Context gating both ways: a browser command is refused in the game, and an

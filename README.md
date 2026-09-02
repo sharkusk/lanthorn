@@ -123,7 +123,9 @@ A few things worth doing in your first ten minutes. Everything else can wait.
 | **Ctrl+F** | Filters your library as you type: title, author, filename or folder. |
 | **Enter** on a folder | A library sorted into folders is listed folder by folder; Enter opens one and **Backspace** returns up. |
 | **Tab** | Shows the info panel for the highlighted story. |
-| **o** | Launch options for this story — which artwork it draws and which machine it plays as. |
+| **Space** or right-click | *Next release:* Everything you can do to *this* story, in one little menu beside it — open it, launch options, fetch its metadata, get its hints, point it at an IFDB page. |
+| **o** | Launch options for this story — which artwork it draws and which machine it plays as. *Next release:* also the second item down the **Space** menu, if you would rather see the choice than remember the key. |
+| **?** | *Next release:* Every key the picker knows, on one screen. |
 
 **In the story**
 

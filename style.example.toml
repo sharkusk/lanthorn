@@ -241,6 +241,10 @@ version = 1   # style schema version — do not remove; lets lanthorn flag an ou
 # "region_prompt.option" = { parent = "dialog.background" }
 # "region_prompt.option:chosen" = { parent = "dialog.list_selected" }
 # "font_check.sample" = { parent = "dialog.background" }
+# "story_menu.border" = { parent = "dialog.border" }
+# "story_menu.item" = { parent = "dialog.background" }
+# "story_menu.item:selected" = { parent = "dialog.list_selected" }
+# "story_menu.key" = { parent = "dialog.list_footer" }
 
 # ── Tooltip: hover pop-ups — background and an optional border.
 [tooltip]

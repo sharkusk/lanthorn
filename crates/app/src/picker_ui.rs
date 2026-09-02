@@ -413,42 +413,64 @@ fn header_label(name: &str, key: app::picker::SortKey, sort: app::picker::Sort) 
     }
 }
 
-/// Render the hint segments of `hints` that are reachable in `km`.
+/// The gap between two footer hints.
+const FOOTER_GAP: &str = "  ";
+
+/// The droppable footer segments in KEEP order — the last to go as the terminal
+/// narrows comes first, which is also the order they come back as it widens.
 ///
-/// A hint whose commands nobody has bound simply is not shown — the footer has
-/// no way to claim a key that does not exist, which is the drift SQ-0796 set out
-/// to end.
-fn hint_segments(km: &app::keymap::KeyMap, hints: &[app::browser::Hint]) -> Vec<String> {
+/// A hint whose command nobody has bound simply is not shown; the footer has no
+/// way to claim a key that does not exist, which is the drift SQ-0796 set out to
+/// end.
+#[cfg(test)]
+fn footer_optional(km: &app::keymap::KeyMap, gallery: bool) -> Vec<String> {
+    let mut hints: Vec<app::browser::Hint> = app::browser::footer_hints(gallery)
+        .into_iter()
+        .filter(|h| h.drop_rank.is_some())
+        .collect();
+    hints.sort_by_key(|h| std::cmp::Reverse(h.drop_rank.unwrap_or(0)));
     hints.iter().filter_map(|h| app::browser::render_hint(km, h)).collect()
 }
 
-/// The optional footer segments, most-important (least-guessable) first, in the
-/// order they are added as the terminal widens.
-fn footer_optional(km: &app::keymap::KeyMap) -> Vec<String> {
-    hint_segments(km, app::browser::HINTS_OPTIONAL)
-}
-
-/// Build the list footer for `width`.
+/// Build the footer for `width` (SQ-1227).
 ///
-/// The core hints (move / open / info / quit) are always shown; the optional
-/// ones are added left-to-right while they still fit. Every segment's KEYS come
+/// `Enter: open`, `Space: menu` and `q: quit` are always shown — the first two
+/// are how anything else is discovered and the third is the way out. The rest
+/// are added in `drop_rank` order (highest first) while they still fit, and
+/// DRAWN in the table's fixed left-to-right order however many of them survived,
+/// so the line never rearranges itself as the window is dragged. Every key comes
 /// from the live keymap, so rebinding one relabels its hint (SQ-0796).
-fn build_footer(km: &app::keymap::KeyMap, width: u16) -> String {
-    let core_left = app::browser::render_hint(km, &app::browser::HINT_MOVE).unwrap_or_default();
-    let core_right = hint_segments(km, app::browser::HINTS_CORE_RIGHT).join("   ");
-    let mut footer = format!(" {core_left}");
-    for seg in footer_optional(km) {
-        let candidate = format!("{footer}   {seg}   {core_right}");
-        if UnicodeWidthStr::width(candidate.as_str()) as u16 <= width {
-            footer.push_str("   ");
-            footer.push_str(&seg);
-        } else {
+fn build_footer(km: &app::keymap::KeyMap, width: u16, gallery: bool) -> String {
+    let hints = app::browser::footer_hints(gallery);
+    let rendered: Vec<Option<String>> =
+        hints.iter().map(|h| app::browser::render_hint(km, h)).collect();
+    let mut shown: Vec<bool> = hints.iter().map(|h| h.drop_rank.is_none()).collect();
+
+    let line = |shown: &[bool]| -> String {
+        let segs: Vec<&str> = rendered
+            .iter()
+            .enumerate()
+            .filter(|(i, _)| shown[*i])
+            .filter_map(|(_, r)| r.as_deref())
+            .collect();
+        format!(" {}", segs.join(FOOTER_GAP))
+    };
+
+    let mut order: Vec<usize> = (0..hints.len()).filter(|&i| hints[i].drop_rank.is_some()).collect();
+    order.sort_by_key(|&i| std::cmp::Reverse(hints[i].drop_rank.unwrap_or(0)));
+    for i in order {
+        if rendered[i].is_none() {
+            continue;
+        }
+        shown[i] = true;
+        if UnicodeWidthStr::width(line(&shown).as_str()) as u16 > width {
+            // One that does not fit takes everything below it with it: the drop
+            // order is an order, not a packing problem.
+            shown[i] = false;
             break;
         }
     }
-    footer.push_str("   ");
-    footer.push_str(&core_right);
-    footer
+    line(&shown)
 }
 
 /// True if the terminal is wide enough to show list + panel.
@@ -927,7 +949,9 @@ enum WheelTarget {
     /// options is shorter than its own dialog, so under SQ-0831's rule there
     /// is nothing there to scroll — but the notch must still stop here rather
     /// than reaching the story list underneath, which would otherwise slide
-    /// around behind an open modal (SQ-0832).
+    /// around behind an open modal (SQ-0832). The key reference and the
+    /// per-story menu are the same case (SQ-1227): both are short, neither
+    /// scrolls, and the list must not move behind either.
     Swallowed,
     /// The IFDB search modal's own results/files list.
     Search,
@@ -945,11 +969,13 @@ enum WheelTarget {
 /// a single answer that can be pinned by a test.
 fn wheel_target(
     launch_open: bool,
+    keys_open: bool,
+    menu_open: bool,
     search_open: bool,
     preview_open: bool,
     over_info_panel: bool,
 ) -> WheelTarget {
-    if launch_open {
+    if launch_open || keys_open || menu_open {
         WheelTarget::Swallowed
     } else if search_open {
         WheelTarget::Search
@@ -959,6 +985,22 @@ fn wheel_target(
         WheelTarget::InfoPanel
     } else {
         WheelTarget::StoryList
+    }
+}
+
+/// What a right-click on the story list does (SQ-1227), given the row it landed
+/// on and whether that row is a folder: `(row to select, menu to open)`.
+///
+/// A total function of ONE click, deliberately. The gesture it replaced was a
+/// double right-click with a 400ms recogniser and a tracker of its own
+/// (SQ-0789), which nothing on screen mentioned and nobody found; a single click
+/// needs no state, so there is none to get wrong. A folder is selected like any
+/// row and has no menu — none of the items apply to it.
+fn right_click_action(hit: Option<(usize, bool)>) -> (Option<usize>, Option<usize>) {
+    match hit {
+        Some((idx, false)) => (Some(idx), Some(idx)),
+        Some((idx, true)) => (Some(idx), None),
+        None => (None, None),
     }
 }
 
@@ -1169,13 +1211,22 @@ pub(crate) fn run_story_picker(
     // Story-list clicks: first click selects, a second on the same row within
     // this window launches it (SQ-0366).
     let mut last_click: Option<(usize, Instant)> = None;
-    // The same recogniser for the RIGHT button (SQ-0789): first click selects, a
-    // second on the same row opens the launch-options dialog. Deliberately a
-    // parallel tracker rather than a new gesture engine — double-click already
-    // exists here for the left button and right-click already exists in the map
-    // (`input.rs`), so this is a composition of two precedents, not a third idiom.
-    let mut last_right_click: Option<(usize, Instant)> = None;
     const DOUBLE_CLICK: Duration = Duration::from_millis(400);
+
+    // The per-story menu (SQ-1227): `Some` while it is open over the list or the
+    // gallery. Opened by `Space` or a SINGLE right-click on a row — which is
+    // what replaced SQ-0789's double-right-click shortcut to the launch-options
+    // dialog: the same dialog is one item down this menu, where it can be SEEN
+    // rather than guessed at.
+    let mut story_menu: Option<app::story_menu::StoryMenu> = None;
+    let mut menu_rects: Vec<(usize, Rect)> = Vec::new();
+    let mut menu_area = Rect::new(0, 0, 0, 0);
+    // The browser's key reference (`?`, SQ-1227) — its own dialog, since the
+    // game's hotkey panel is fed from an `AppState` this loop does not have.
+    let mut keys_dialog = false;
+    let mut keys_close_rect: Option<Rect> = None;
+    let mut keys_button_rects: Vec<(app::render::dialog::ButtonId, Rect)> = Vec::new();
+    let mut keys_area = Rect::new(0, 0, 0, 0);
 
     // Launch-options dialog (SQ-0789): `Some` while open, over the browser.
     // Opened only on an explicit gesture, so a plain launch never meets it.
@@ -1289,6 +1340,29 @@ pub(crate) fn run_story_picker(
             } else if let Some(msg) = &progress_line {
                 draw_progress_line(buf, list_area, msg, story_header_active);
             }
+
+            // The per-story menu (SQ-1227), over the list and never over the
+            // footer row — the footer is what says the menu key exists, so the
+            // menu covering it would hide its own instructions. Anchored on the
+            // highlighted row when that row is on screen; centred on the pane
+            // when it is not (a fetch can resort the list under an open menu).
+            if let Some(menu) = &story_menu {
+                let pane = Rect::new(
+                    list_area.x,
+                    list_area.y,
+                    list_area.width,
+                    list_area.height.saturating_sub(1),
+                );
+                let anchor = row_rects
+                    .iter()
+                    .find(|(i, _)| *i == menu.story)
+                    .map(|(_, r)| *r)
+                    .unwrap_or_else(|| Rect::new(pane.x, pane.y, pane.width, 1));
+                let rects =
+                    app::story_menu::draw_story_menu(menu, anchor, pane, &keymap, &cs, buf);
+                menu_area = rects.area;
+                menu_rects = rects.items;
+            }
             if preview.is_none() && panel_area.width > 0 {
                 if let Some(entry) = stories.get(list.selected).filter(|e| e.is_folder()) {
                     last_panel_area = panel_area;
@@ -1354,6 +1428,18 @@ pub(crate) fn run_story_picker(
                     launch_close_rect = rects.close;
                     launch_button_rects = rects.buttons;
                     launch_row_rects = rects.rows;
+                }
+            }
+
+            // The key reference (SQ-1227): topmost of all, since it is the one
+            // surface a lost user reaches for.
+            if keys_dialog {
+                if let Some(rects) =
+                    app::render::browser_keys::draw_browser_keys(&keymap, area, &cs, buf)
+                {
+                    keys_area = rects.area;
+                    keys_close_rect = rects.close;
+                    keys_button_rects = rects.buttons;
                 }
             }
 
@@ -1726,6 +1812,14 @@ pub(crate) fn run_story_picker(
         // it by now, so catch it here before the blocking read. (SQ-0502)
         exit_if_terminated();
 
+        // This iteration's browser gesture, applied AFTER the event match so
+        // that a key and a story-menu item reach one dispatch (SQ-1227). A key
+        // is carried rather than resolved here because resolving it is the
+        // dispatch's own first act, and the guard test below requires that act
+        // to sit inside the marked region with the rest of it.
+        let mut pending_key = None;
+        let mut pending_command: Option<&'static str> = None;
+
         match read() {
             Ok(Event::Key(k)) if k.kind == KeyEventKind::Press => {
                 use crossterm::event::KeyCode::*;
@@ -1770,6 +1864,27 @@ pub(crate) fn run_story_picker(
                         }
                         app::launch_options::LaunchOptionsAction::Cancel => launch_opts = None,
                         app::launch_options::LaunchOptionsAction::None => {}
+                    }
+                // The key reference (SQ-1227) captures all keys while open: Esc,
+                // `?` again, `q` or Enter close it, everything else is swallowed
+                // rather than acting on the list behind it.
+                } else if keys_dialog {
+                    if matches!(k.code, Esc | Enter | Char('q') | Char('?')) {
+                        keys_dialog = false;
+                    }
+                // The per-story menu (SQ-1227) captures all keys while open. It
+                // owns the model — ↑/↓ wrap, Enter activates, Esc closes, and an
+                // item's own hotkey activates it directly — and hands back the
+                // command-string to run, which goes through the ONE dispatch
+                // below exactly as if the key had been pressed on the list.
+                } else if let Some(menu) = story_menu.as_mut() {
+                    match menu.on_key(k, &keymap) {
+                        app::story_menu::MenuOutcome::Activate(cmd) => {
+                            story_menu = None;
+                            pending_command = Some(cmd);
+                        }
+                        app::story_menu::MenuOutcome::Close => story_menu = None,
+                        app::story_menu::MenuOutcome::None => {}
                     }
                 // The IFDB search modal (SQ-0413) captures all keys while open;
                 // its state machine decides what each does (Esc backs out a
@@ -1954,311 +2069,10 @@ pub(crate) fn run_story_picker(
                     if !fetcher.busy() {
                         progress_line = None;
                     }
-                    // Gallery navigation moves a 2D cursor over the same shared
-                    // selection; the list moves it linearly. `gm` computes the
-                    // clamped grid target for a (dx, dy) step.
-                    let gm = |sel: usize, dx: isize, dy: isize| {
-                        app::cover_gallery::move_index(sel, gallery_cols, stories.len(), dx, dy)
-                    };
-                    let gallery = matches!(view, PickerView::Gallery);
-                    // ── BROWSER KEY DISPATCH (registry-driven, SQ-0796) ─────────
-                    // Everything below is keyed on a `BrowserAction`, and the only
-                    // thing that produces one is a `slash::COMMANDS` entry in
-                    // `Context::Browser` that some key is bound to. Nothing in
-                    // this region may look at the keystroke again — that is what
-                    // makes a new gesture impossible to add without a registry
-                    // entry, and it is pinned by
-                    // `browser_dispatch_never_reads_the_key_event` below.
-                    let action = app::browser::action_for_key(&keymap, k);
-                    match action {
-                        // Movement. In the grid this is a 2D cursor; in the list
-                        // it is the shared `list_scroll::nav_key` (SQ-0682) — the
-                        // same mechanism the IFDB search modal's lists and the
-                        // command band's columns navigate with — and a horizontal
-                        // step has no meaning there, so it does nothing at all.
-                        Some(app::browser::BrowserAction::MoveSelection { dx, dy }) => {
-                            if gallery {
-                                panel_scroll = 0;
-                                list.select(gm(list.selected, dx, dy), viewport, anim);
-                                gallery_scroll_motion_at = Some(Instant::now());
-                            } else if let Some(nav) = action.and_then(app::browser::list_nav_code) {
-                                panel_scroll = 0;
-                                app::list_scroll::nav_key(&mut list, nav, stories.len(), viewport, anim);
-                            }
-                        }
-                        Some(app::browser::BrowserAction::PageSelection(n)) => {
-                            panel_scroll = 0;
-                            if gallery {
-                                list.select(gm(list.selected, 0, n * gallery_vis as isize), viewport, anim);
-                                gallery_scroll_motion_at = Some(Instant::now());
-                            } else if let Some(nav) = action.and_then(app::browser::list_nav_code) {
-                                app::list_scroll::nav_key(&mut list, nav, stories.len(), viewport, anim);
-                            }
-                        }
-                        // List view only (SQ-1228): the cover gallery has no
-                        // half-row concept, so Ctrl-U/Ctrl-D do nothing there.
-                        Some(app::browser::BrowserAction::HalfPageSelection(n)) => {
-                            panel_scroll = 0;
-                            if !gallery {
-                                let dir = if n < 0 { -1 } else { 1 };
-                                list.half_page(dir, viewport, anim);
-                            }
-                        }
-                        Some(app::browser::BrowserAction::SelectEdge(edge)) => {
-                            panel_scroll = 0;
-                            if gallery {
-                                match edge {
-                                    app::browser::Edge::First => list.select(0, viewport, anim),
-                                    app::browser::Edge::Last => {
-                                        list.select(stories.len().saturating_sub(1), viewport, anim)
-                                    }
-                                }
-                                gallery_scroll_motion_at = Some(Instant::now());
-                            } else if let Some(nav) = action.and_then(app::browser::list_nav_code) {
-                                app::list_scroll::nav_key(&mut list, nav, stories.len(), viewport, anim);
-                            }
-                        }
-                        // `.get`, not indexing (SQ-0659): playing an empty list
-                        // (all stories vanished externally) is a no-op, not a
-                        // panic.
-                        Some(app::browser::BrowserAction::PlayStory) => match stories.get(list.selected) {
-                            // A folder is entered, not played.
-                            Some(entry) if entry.is_folder() => {
-                                let target = entry.path.clone();
-                                panel_scroll = 0;
-                                enter_folder(&source, &mut dir, &root, &target, &mut stories, &mut row_badges, &mut aux_cache, &mut list, data_base, &hint_index, viewport, anim);
-                            }
-                            Some(entry) => break Some(PickedStory::row(entry)),
-                            None => {}
-                        },
-                        // Shift-Enter, `o` and the double right-click are one
-                        // command reaching one constructor (SQ-0789): the dialog
-                        // has a single seeding site, and now a single binding
-                        // target as well.
-                        Some(app::browser::BrowserAction::OpenLaunchOptions) => {
-                            if let Some(entry) = stories.get(list.selected).filter(|e| !e.is_folder()) {
-                                launch_opts = Some(open_launch_options(entry, cfg, data_base));
-                            }
-                        }
-                        // Open the find field over the in-memory index. An empty
-                        // query lists the whole library, which is itself the
-                        // answer to "where did that game go" in a tree.
-                        Some(app::browser::BrowserAction::FindStory) => {
-                            if index_rx.is_some() && find_field.is_none() {
-                                find_field = Some(app::text_field::TextField::new(""));
-                                progress_line = None;
-                                panel_scroll = 0;
-                                apply_find(&index, &root, "", &mut stories, &mut row_badges, &mut aux_cache, &mut list, data_base, &hint_index);
-                            }
-                        }
-                        // Up one folder; inert at the root.
-                        Some(app::browser::BrowserAction::ParentFolder) => {
-                            if dir != root {
-                                if let Some(parent) = dir.parent().map(|p| p.to_path_buf()) {
-                                    panel_scroll = 0;
-                                    if gallery_all_folders(view, find_field.is_some(), index_rx.is_some()) {
-                                        dir = parent;
-                                        show_gallery_scope(&index, &root, &dir, &mut stories, &mut row_badges, &mut aux_cache, &mut list, data_base, &hint_index);
-                                    } else {
-                                        enter_folder(&source, &mut dir, &root, &parent, &mut stories, &mut row_badges, &mut aux_cache, &mut list, data_base, &hint_index, viewport, anim);
-                                    }
-                                }
-                            }
-                        }
-                        Some(app::browser::BrowserAction::QuitBrowser) => break None,
-                        // Cancels a running sweep first; only quits when nothing
-                        // is in flight.
-                        Some(app::browser::BrowserAction::CancelBrowser) => {
-                            if fetcher.busy() {
-                                fetcher.cancel();
-                            } else {
-                                break None;
-                            }
-                        }
-                        Some(app::browser::BrowserAction::ToggleInfoPanel) => {
-                            let target = !slide.open;
-                            if !target || can_open_panel(last_area.width) {
-                                let instant = !cfg.animation.enabled || cfg.animation.scroll_ms == 0;
-                                slide.toggle_to(target, instant);
-                                slide.arm(&cfg.animation);
-                                if target {
-                                    panel_scroll = 0;
-                                    ensure_aux(&mut aux_cache, &stories, list.selected, data_base, &hint_index);
-                                }
-                            }
-                        }
-                        // Toggle the cover-gallery grid (SQ-0374). Selection
-                        // carries over; reset the grid scroll so the selected
-                        // cover is framed on entry (the next draw scrolls to it).
-                        Some(app::browser::BrowserAction::ToggleGallery) => {
-                            view = match view {
-                                PickerView::List => PickerView::Gallery,
-                                PickerView::Gallery => PickerView::List,
-                            };
-                            gallery_first_row = 0;
-                            // The grid shows the folder and everything under
-                            // it; the list shows the folder's own rows. Swap
-                            // the list to match, unless a find is showing
-                            // matches in both.
-                            if find_field.is_none() && index_rx.is_some() {
-                                panel_scroll = 0;
-                                if matches!(view, PickerView::Gallery) {
-                                    show_gallery_scope(&index, &root, &dir, &mut stories, &mut row_badges, &mut aux_cache, &mut list, data_base, &hint_index);
-                                } else {
-                                    let keep = stories.get(list.selected).map(|e| e.path.clone());
-                                    let here = dir.clone();
-                                    enter_folder(&source, &mut dir, &root, &here, &mut stories, &mut row_badges, &mut aux_cache, &mut list, data_base, &hint_index, viewport, anim);
-                                    if let Some(idx) = keep.and_then(|p| stories.iter().position(|e| e.path == p)) {
-                                        list.select(idx, viewport, anim);
-                                    }
-                                }
-                            }
-                        }
-                        // Refetch only the selected story, ignoring its cache.
-                        // Ignored while a sweep is already running, so a second
-                        // press can't garble the in-flight progress line.
-                        Some(app::browser::BrowserAction::FetchStory) => {
-                            if let Some(entry) = stories.get(list.selected).filter(|e| !e.is_folder() && !fetcher.busy()) {
-                                fetch_is_single = true;
-                                sweep_fetched = 0;
-                                sweep_skipped = 0;
-                                sweep_not_found = 0;
-                                sweep_failed = 0;
-                                progress_line = Some(format!("Fetching {}…", entry.title));
-                                fetcher.request(app::fetch_worker::FetchOrder {
-                                    stories: vec![app::fetch_worker::FetchTarget::row(entry)],
-                                    forced: true,
-                                    id_override: None,
-                                });
-                            }
-                        }
-                        // Sweep the whole library; the worker itself skips any
-                        // story already at the current FETCH_VERSION. Ignored
-                        // while a sweep is already running (see fetch-story).
-                        Some(app::browser::BrowserAction::RefreshLibrary) => {
-                            // A busy-worker check is an `if` inside the arm, never
-                            // a match guard: a guarded arm does not count towards
-                            // exhaustiveness, and it is exhaustiveness here that
-                            // makes a new `BrowserAction` a compile error rather
-                            // than a gesture that quietly does nothing.
-                            if !fetcher.busy() {
-                                // Folder rows are not stories; the sweep skips them.
-                                let order: Vec<app::fetch_worker::FetchTarget> = stories
-                                    .iter()
-                                    .filter(|e| !e.is_folder())
-                                    .map(app::fetch_worker::FetchTarget::row)
-                                    .collect();
-                                let total = order.len();
-                                fetch_is_single = false;
-                                sweep_fetched = 0;
-                                sweep_skipped = 0;
-                                sweep_not_found = 0;
-                                sweep_failed = 0;
-                                progress_line = Some(format!("Fetching 0/{total}"));
-                                fetcher.request(app::fetch_worker::FetchOrder { stories: order, forced: false, id_override: None });
-                            }
-                        }
-                        // Point the selected story at an IFDB page by hand (for a
-                        // story whose IFID IFDB doesn't index). Opens the
-                        // manual-entry field; ignored mid-sweep (SQ-0371).
-                        Some(app::browser::BrowserAction::SetIfdbUrl) => {
-                            if !fetcher.busy() && stories.get(list.selected).is_some_and(|e| !e.is_folder()) {
-                                manual_ifdb = Some(app::text_field::TextField::new(""));
-                                progress_line = None;
-                            }
-                        }
-                        // Open the IFDB search modal (SQ-0413) — search by
-                        // title/author, browse results, and download a story file
-                        // into this directory. Opens on a "Popular on IFDB" seed
-                        // list (SQ-0473), fetched non-blocking through the same
-                        // worker.
-                        // Open a story straight from a URL (SQ-1086). It lands
-                        // in `dir`, which IS the library, so the download is kept
-                        // by construction — the command line's keep-it prompt has
-                        // no counterpart here.
-                        Some(app::browser::BrowserAction::OpenUrl) => {
-                            if !url_dl.busy() {
-                                url_prompt = Some(app::text_field::TextField::new(""));
-                                progress_line = None;
-                            }
-                        }
-                        Some(app::browser::BrowserAction::SearchIfdb) => {
-                            let mut sm = app::ifdb_search_modal::SearchModal::new();
-                            // So the chooser can mark files this directory
-                            // already holds (SQ-0597) — the same `dir` every
-                            // download lands in, below.
-                            sm.set_download_dir(&dir);
-                            let seed_action = sm.open();
-                            search_modal = Some(sm);
-                            dispatch_search_action(seed_action, &search_worker, &dir, &mut search_modal);
-                            progress_line = None;
-                        }
-                        // Download a matching InvisiClues hint file for the
-                        // selected story (SQ-0445) when it has none locally — SLAG
-                        // (IF Archive) preferred, else the Internet Archive izm set.
-                        // Saved beside the story; ignored while one is downloading.
-                        Some(app::browser::BrowserAction::DownloadHints) => {
-                            if let Some(entry) = stories.get(list.selected).filter(|e| !e.is_folder() && !hint_dl.busy()) {
-                                if entry.hint_sidecar.is_some() {
-                                    progress_line = Some(format!("{} already has a hint file", entry.title));
-                                } else {
-                                    let stem =
-                                        entry.path.file_stem().and_then(|s| s.to_str()).unwrap_or("");
-                                    match app::hints::hint_download_for(
-                                        &entry.meta.ifid,
-                                        stem,
-                                        &entry.title,
-                                    ) {
-                                        Some(dl) => {
-                                            let dest = entry.path.with_file_name(&dl.filename);
-                                            progress_line =
-                                                Some(format!("Downloading hints for {}…", entry.title));
-                                            hint_dl.start(
-                                                dl.url,
-                                                dest,
-                                                entry.path.clone(),
-                                                entry.meta.disk_entry.clone(),
-                                                entry.title.clone(),
-                                            );
-                                        }
-                                        None => {
-                                            progress_line =
-                                                Some(format!("No InvisiClues found for {}", entry.title));
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                        // Cycle the sort column, keeping direction; or toggle the
-                        // direction, keeping the column. Both preserve the
-                        // selection by path, never by index.
-                        Some(app::browser::BrowserAction::SortLibrary) => {
-                            sort.key = match sort.key {
-                                app::picker::SortKey::Title => app::picker::SortKey::Author,
-                                app::picker::SortKey::Author => app::picker::SortKey::Year,
-                                app::picker::SortKey::Year => app::picker::SortKey::Rating,
-                                app::picker::SortKey::Rating => app::picker::SortKey::Type,
-                                app::picker::SortKey::Type => app::picker::SortKey::Title,
-                            };
-                            list.select(
-                                resort_list(&mut stories, list.selected, sort, &mut row_badges, &mut aux_cache, data_base, &hint_index),
-                                viewport,
-                                anim,
-                            );
-                        }
-                        Some(app::browser::BrowserAction::ReverseSort) => {
-                            sort.desc = !sort.desc;
-                            list.select(
-                                resort_list(&mut stories, list.selected, sort, &mut row_badges, &mut aux_cache, data_base, &hint_index),
-                                viewport,
-                                anim,
-                            );
-                        }
-                        // An unbound key. The ONLY catch-all in this match, so the
-                        // compiler still requires an arm per action above.
-                        None => {}
-                    }
-                    // ── END BROWSER KEY DISPATCH ────────────────────────────────
+                    // Nothing above claimed the key, so it is the browser's:
+                    // carried to the one dispatch below, which is the only place
+                    // a key becomes an action (SQ-1227).
+                    pending_key = Some(k);
                 }
             }
             Ok(Event::Mouse(m)) => {
@@ -2269,34 +2083,60 @@ pub(crate) fn run_story_picker(
                 // use for sub-cell precision, so take the cells and drop the rest.
                 let (m, _) = app::pixel_mouse::normalise(m);
                 if let MouseEventKind::Down(MouseButton::Right) = m.kind {
-                    // SQ-0789: the mouse half of the same gesture. Mirrors the
-                    // left button exactly — first click selects the row, a second
-                    // within the double-click window acts — so the two buttons
-                    // differ only in what the second click does: launch, or ask
-                    // how to launch. Both reach `open_launch_options`, the one
-                    // seam, so keyboard and mouse cannot drift apart.
+                    // SQ-1227: a SINGLE right-click on a row opens that story's
+                    // menu — selecting the row first if it was not the
+                    // highlighted one, so the menu and the selection can never
+                    // disagree about which story is being talked about.
+                    //
+                    // This replaces SQ-0789's double-right-click shortcut to the
+                    // launch-options dialog. The intent survives — a story can
+                    // still be started some way other than the default one, and
+                    // still from the mouse — but it is now an item you can SEE
+                    // rather than a gesture nothing on screen mentioned.
                     let pt = ratatui::layout::Position { x: m.column, y: m.row };
-                    if launch_opts.is_none() && search_modal.is_none() && preview.is_none() {
-                        if let Some((idx, _)) = row_rects.iter().find(|(_, r)| r.contains(pt)) {
-                            let idx = *idx;
-                            let now = Instant::now();
-                            let double = last_right_click
-                                .is_some_and(|(li, lt)| li == idx && now.duration_since(lt) < DOUBLE_CLICK);
-                            if double {
-                                if let Some(entry) = stories.get(idx) {
-                                    launch_opts = Some(open_launch_options(entry, cfg, data_base));
-                                }
-                                last_right_click = None;
-                            } else {
-                                panel_scroll = 0;
-                                list.select(idx, viewport, anim);
-                                last_right_click = Some((idx, now));
-                            }
+                    if launch_opts.is_none()
+                        && search_modal.is_none()
+                        && preview.is_none()
+                        && !keys_dialog
+                    {
+                        let hit = row_rects
+                            .iter()
+                            .find(|(_, r)| r.contains(pt))
+                            .map(|(i, _)| (*i, stories.get(*i).is_some_and(|e| e.is_folder())));
+                        let (select, open) = right_click_action(hit);
+                        if let Some(idx) = select.filter(|i| *i != list.selected) {
+                            panel_scroll = 0;
+                            list.select(idx, viewport, anim);
                         }
+                        story_menu = open.map(app::story_menu::StoryMenu::new);
                     }
                 } else if let MouseEventKind::Down(MouseButton::Left) = m.kind {
                     let pt = ratatui::layout::Position { x: m.column, y: m.row };
-                    if let Some(lo) = launch_opts.as_mut() {
+                    if keys_dialog {
+                        // The key reference (SQ-1227): ✕, Done, or a click
+                        // outside closes it; a click inside is swallowed.
+                        let on_close = keys_close_rect.is_some_and(|r| r.contains(pt));
+                        let on_button = keys_button_rects.iter().any(|(_, r)| r.contains(pt));
+                        if on_close || on_button || !keys_area.contains(pt) {
+                            keys_dialog = false;
+                        }
+                    } else if story_menu.is_some() {
+                        // The per-story menu (SQ-1227): a click on an item runs
+                        // it, anywhere else dismisses. The click never falls
+                        // through to the row underneath — a menu you dismiss by
+                        // clicking past it must not also move the selection.
+                        match menu_rects.iter().find(|(_, r)| r.contains(pt)) {
+                            Some((i, _)) => {
+                                story_menu = None;
+                                pending_command =
+                                    app::story_menu::STORY_MENU.get(*i).map(|it| it.command);
+                            }
+                            // Its own border is not "outside": a click that
+                            // lands on the frame is a miss, not a dismissal.
+                            None if menu_area.contains(pt) => {}
+                            None => story_menu = None,
+                        }
+                    } else if let Some(lo) = launch_opts.as_mut() {
                         // Topmost modal: ✕ / Cancel / outside dismiss, a row moves
                         // the cursor and acts on it (one click = point and choose),
                         // Play launches with whatever is selected.
@@ -2420,6 +2260,8 @@ pub(crate) fn run_story_picker(
                     let pt = ratatui::layout::Position { x: m.column, y: m.row };
                     match wheel_target(
                         launch_opts.is_some(),
+                        keys_dialog,
+                        story_menu.is_some(),
                         search_modal.is_some(),
                         preview.is_some(),
                         slide.open && last_panel_area.contains(pt),
@@ -2468,6 +2310,328 @@ pub(crate) fn run_story_picker(
             Ok(_) => {}
             Err(_) => break None,
         }
+
+        // ── BROWSER KEY DISPATCH (registry-driven, SQ-0796) ─────────────────
+        // Everything below is keyed on a `BrowserAction`, and the only thing
+        // that produces one is a `slash::COMMANDS` entry in `Context::Browser`
+        // — reached either by a key bound to it or by the story menu's item for
+        // it (SQ-1227), which is why this sits outside the event match: one
+        // dispatch, whichever gesture asked. Nothing in this region may look at
+        // the keystroke again — that is what makes a new gesture impossible to
+        // add without a registry entry, and it is pinned by
+        // `browser_dispatch_never_reads_the_key_event` below.
+        let action = pending_command
+            .and_then(app::browser::action_for_command)
+            .or_else(|| pending_key.and_then(|ev| app::browser::action_for_key(&keymap, ev)));
+        // Gallery navigation moves a 2D cursor over the same shared selection;
+        // the list moves it linearly. `gm` computes the clamped grid target for
+        // a (dx, dy) step.
+        let gm = |sel: usize, dx: isize, dy: isize| {
+            app::cover_gallery::move_index(sel, gallery_cols, stories.len(), dx, dy)
+        };
+        let gallery = matches!(view, PickerView::Gallery);
+        match action {
+            // Movement. In the grid this is a 2D cursor; in the list
+            // it is the shared `list_scroll::nav_key` (SQ-0682) — the
+            // same mechanism the IFDB search modal's lists and the
+            // command band's columns navigate with — and a horizontal
+            // step has no meaning there, so it does nothing at all.
+            Some(app::browser::BrowserAction::MoveSelection { dx, dy }) => {
+                if gallery {
+                    panel_scroll = 0;
+                    list.select(gm(list.selected, dx, dy), viewport, anim);
+                    gallery_scroll_motion_at = Some(Instant::now());
+                } else if let Some(nav) = action.and_then(app::browser::list_nav_code) {
+                    panel_scroll = 0;
+                    app::list_scroll::nav_key(&mut list, nav, stories.len(), viewport, anim);
+                }
+            }
+            Some(app::browser::BrowserAction::PageSelection(n)) => {
+                panel_scroll = 0;
+                if gallery {
+                    list.select(gm(list.selected, 0, n * gallery_vis as isize), viewport, anim);
+                    gallery_scroll_motion_at = Some(Instant::now());
+                } else if let Some(nav) = action.and_then(app::browser::list_nav_code) {
+                    app::list_scroll::nav_key(&mut list, nav, stories.len(), viewport, anim);
+                }
+            }
+            // List view only (SQ-1228): the cover gallery has no
+            // half-row concept, so Ctrl-U/Ctrl-D do nothing there.
+            Some(app::browser::BrowserAction::HalfPageSelection(n)) => {
+                panel_scroll = 0;
+                if !gallery {
+                    let dir = if n < 0 { -1 } else { 1 };
+                    list.half_page(dir, viewport, anim);
+                }
+            }
+            Some(app::browser::BrowserAction::SelectEdge(edge)) => {
+                panel_scroll = 0;
+                if gallery {
+                    match edge {
+                        app::browser::Edge::First => list.select(0, viewport, anim),
+                        app::browser::Edge::Last => {
+                            list.select(stories.len().saturating_sub(1), viewport, anim)
+                        }
+                    }
+                    gallery_scroll_motion_at = Some(Instant::now());
+                } else if let Some(nav) = action.and_then(app::browser::list_nav_code) {
+                    app::list_scroll::nav_key(&mut list, nav, stories.len(), viewport, anim);
+                }
+            }
+            // `.get`, not indexing (SQ-0659): playing an empty list
+            // (all stories vanished externally) is a no-op, not a
+            // panic.
+            Some(app::browser::BrowserAction::PlayStory) => match stories.get(list.selected) {
+                // A folder is entered, not played.
+                Some(entry) if entry.is_folder() => {
+                    let target = entry.path.clone();
+                    panel_scroll = 0;
+                    enter_folder(&source, &mut dir, &root, &target, &mut stories, &mut row_badges, &mut aux_cache, &mut list, data_base, &hint_index, viewport, anim);
+                }
+                Some(entry) => break Some(PickedStory::row(entry)),
+                None => {}
+            },
+            // `o`, Shift-Enter and the story menu's own row are one
+            // command reaching one constructor (SQ-0789): the dialog
+            // has a single seeding site, and a single binding target
+            // as well.
+            Some(app::browser::BrowserAction::OpenLaunchOptions) => {
+                if let Some(entry) = stories.get(list.selected).filter(|e| !e.is_folder()) {
+                    launch_opts = Some(open_launch_options(entry, cfg, data_base));
+                }
+            }
+            // The per-story menu (SQ-1227). A folder has none of these
+            // actions — it is entered, not played — so the gesture is
+            // inert on one, exactly as launch options already are.
+            Some(app::browser::BrowserAction::OpenStoryMenu) => {
+                if stories.get(list.selected).is_some_and(|e| !e.is_folder()) {
+                    story_menu = Some(app::story_menu::StoryMenu::new(list.selected));
+                }
+            }
+            Some(app::browser::BrowserAction::ShowBrowserKeys) => {
+                keys_dialog = true;
+                progress_line = None;
+            }
+            // Open the find field over the in-memory index. An empty
+            // query lists the whole library, which is itself the
+            // answer to "where did that game go" in a tree.
+            Some(app::browser::BrowserAction::FindStory) => {
+                if index_rx.is_some() && find_field.is_none() {
+                    find_field = Some(app::text_field::TextField::new(""));
+                    progress_line = None;
+                    panel_scroll = 0;
+                    apply_find(&index, &root, "", &mut stories, &mut row_badges, &mut aux_cache, &mut list, data_base, &hint_index);
+                }
+            }
+            // Up one folder; inert at the root.
+            Some(app::browser::BrowserAction::ParentFolder) => {
+                if dir != root {
+                    if let Some(parent) = dir.parent().map(|p| p.to_path_buf()) {
+                        panel_scroll = 0;
+                        if gallery_all_folders(view, find_field.is_some(), index_rx.is_some()) {
+                            dir = parent;
+                            show_gallery_scope(&index, &root, &dir, &mut stories, &mut row_badges, &mut aux_cache, &mut list, data_base, &hint_index);
+                        } else {
+                            enter_folder(&source, &mut dir, &root, &parent, &mut stories, &mut row_badges, &mut aux_cache, &mut list, data_base, &hint_index, viewport, anim);
+                        }
+                    }
+                }
+            }
+            Some(app::browser::BrowserAction::QuitBrowser) => break None,
+            // Cancels a running sweep first; only quits when nothing
+            // is in flight.
+            Some(app::browser::BrowserAction::CancelBrowser) => {
+                if fetcher.busy() {
+                    fetcher.cancel();
+                } else {
+                    break None;
+                }
+            }
+            Some(app::browser::BrowserAction::ToggleInfoPanel) => {
+                let target = !slide.open;
+                if !target || can_open_panel(last_area.width) {
+                    let instant = !cfg.animation.enabled || cfg.animation.scroll_ms == 0;
+                    slide.toggle_to(target, instant);
+                    slide.arm(&cfg.animation);
+                    if target {
+                        panel_scroll = 0;
+                        ensure_aux(&mut aux_cache, &stories, list.selected, data_base, &hint_index);
+                    }
+                }
+            }
+            // Toggle the cover-gallery grid (SQ-0374). Selection
+            // carries over; reset the grid scroll so the selected
+            // cover is framed on entry (the next draw scrolls to it).
+            Some(app::browser::BrowserAction::ToggleGallery) => {
+                view = match view {
+                    PickerView::List => PickerView::Gallery,
+                    PickerView::Gallery => PickerView::List,
+                };
+                gallery_first_row = 0;
+                // The grid shows the folder and everything under
+                // it; the list shows the folder's own rows. Swap
+                // the list to match, unless a find is showing
+                // matches in both.
+                if find_field.is_none() && index_rx.is_some() {
+                    panel_scroll = 0;
+                    if matches!(view, PickerView::Gallery) {
+                        show_gallery_scope(&index, &root, &dir, &mut stories, &mut row_badges, &mut aux_cache, &mut list, data_base, &hint_index);
+                    } else {
+                        let keep = stories.get(list.selected).map(|e| e.path.clone());
+                        let here = dir.clone();
+                        enter_folder(&source, &mut dir, &root, &here, &mut stories, &mut row_badges, &mut aux_cache, &mut list, data_base, &hint_index, viewport, anim);
+                        if let Some(idx) = keep.and_then(|p| stories.iter().position(|e| e.path == p)) {
+                            list.select(idx, viewport, anim);
+                        }
+                    }
+                }
+            }
+            // Refetch only the selected story, ignoring its cache.
+            // Ignored while a sweep is already running, so a second
+            // press can't garble the in-flight progress line.
+            Some(app::browser::BrowserAction::FetchStory) => {
+                if let Some(entry) = stories.get(list.selected).filter(|e| !e.is_folder() && !fetcher.busy()) {
+                    fetch_is_single = true;
+                    sweep_fetched = 0;
+                    sweep_skipped = 0;
+                    sweep_not_found = 0;
+                    sweep_failed = 0;
+                    progress_line = Some(format!("Fetching {}…", entry.title));
+                    fetcher.request(app::fetch_worker::FetchOrder {
+                        stories: vec![app::fetch_worker::FetchTarget::row(entry)],
+                        forced: true,
+                        id_override: None,
+                    });
+                }
+            }
+            // Sweep the whole library; the worker itself skips any
+            // story already at the current FETCH_VERSION. Ignored
+            // while a sweep is already running (see fetch-story).
+            Some(app::browser::BrowserAction::RefreshLibrary) => {
+                // A busy-worker check is an `if` inside the arm, never
+                // a match guard: a guarded arm does not count towards
+                // exhaustiveness, and it is exhaustiveness here that
+                // makes a new `BrowserAction` a compile error rather
+                // than a gesture that quietly does nothing.
+                if !fetcher.busy() {
+                    // Folder rows are not stories; the sweep skips them.
+                    let order: Vec<app::fetch_worker::FetchTarget> = stories
+                        .iter()
+                        .filter(|e| !e.is_folder())
+                        .map(app::fetch_worker::FetchTarget::row)
+                        .collect();
+                    let total = order.len();
+                    fetch_is_single = false;
+                    sweep_fetched = 0;
+                    sweep_skipped = 0;
+                    sweep_not_found = 0;
+                    sweep_failed = 0;
+                    progress_line = Some(format!("Fetching 0/{total}"));
+                    fetcher.request(app::fetch_worker::FetchOrder { stories: order, forced: false, id_override: None });
+                }
+            }
+            // Point the selected story at an IFDB page by hand (for a
+            // story whose IFID IFDB doesn't index). Opens the
+            // manual-entry field; ignored mid-sweep (SQ-0371).
+            Some(app::browser::BrowserAction::SetIfdbUrl) => {
+                if !fetcher.busy() && stories.get(list.selected).is_some_and(|e| !e.is_folder()) {
+                    manual_ifdb = Some(app::text_field::TextField::new(""));
+                    progress_line = None;
+                }
+            }
+            // Open the IFDB search modal (SQ-0413) — search by
+            // title/author, browse results, and download a story file
+            // into this directory. Opens on a "Popular on IFDB" seed
+            // list (SQ-0473), fetched non-blocking through the same
+            // worker.
+            // Open a story straight from a URL (SQ-1086). It lands
+            // in `dir`, which IS the library, so the download is kept
+            // by construction — the command line's keep-it prompt has
+            // no counterpart here.
+            Some(app::browser::BrowserAction::OpenUrl) => {
+                if !url_dl.busy() {
+                    url_prompt = Some(app::text_field::TextField::new(""));
+                    progress_line = None;
+                }
+            }
+            Some(app::browser::BrowserAction::SearchIfdb) => {
+                let mut sm = app::ifdb_search_modal::SearchModal::new();
+                // So the chooser can mark files this directory
+                // already holds (SQ-0597) — the same `dir` every
+                // download lands in, below.
+                sm.set_download_dir(&dir);
+                let seed_action = sm.open();
+                search_modal = Some(sm);
+                dispatch_search_action(seed_action, &search_worker, &dir, &mut search_modal);
+                progress_line = None;
+            }
+            // Download a matching InvisiClues hint file for the
+            // selected story (SQ-0445) when it has none locally — SLAG
+            // (IF Archive) preferred, else the Internet Archive izm set.
+            // Saved beside the story; ignored while one is downloading.
+            Some(app::browser::BrowserAction::DownloadHints) => {
+                if let Some(entry) = stories.get(list.selected).filter(|e| !e.is_folder() && !hint_dl.busy()) {
+                    if entry.hint_sidecar.is_some() {
+                        progress_line = Some(format!("{} already has a hint file", entry.title));
+                    } else {
+                        let stem =
+                            entry.path.file_stem().and_then(|s| s.to_str()).unwrap_or("");
+                        match app::hints::hint_download_for(
+                            &entry.meta.ifid,
+                            stem,
+                            &entry.title,
+                        ) {
+                            Some(dl) => {
+                                let dest = entry.path.with_file_name(&dl.filename);
+                                progress_line =
+                                    Some(format!("Downloading hints for {}…", entry.title));
+                                hint_dl.start(
+                                    dl.url,
+                                    dest,
+                                    entry.path.clone(),
+                                    entry.meta.disk_entry.clone(),
+                                    entry.title.clone(),
+                                );
+                            }
+                            None => {
+                                progress_line =
+                                    Some(format!("No InvisiClues found for {}", entry.title));
+                            }
+                        }
+                    }
+                }
+            }
+            // Cycle the sort column, keeping direction; or toggle the
+            // direction, keeping the column. Both preserve the
+            // selection by path, never by index.
+            Some(app::browser::BrowserAction::SortLibrary) => {
+                sort.key = match sort.key {
+                    app::picker::SortKey::Title => app::picker::SortKey::Author,
+                    app::picker::SortKey::Author => app::picker::SortKey::Year,
+                    app::picker::SortKey::Year => app::picker::SortKey::Rating,
+                    app::picker::SortKey::Rating => app::picker::SortKey::Type,
+                    app::picker::SortKey::Type => app::picker::SortKey::Title,
+                };
+                list.select(
+                    resort_list(&mut stories, list.selected, sort, &mut row_badges, &mut aux_cache, data_base, &hint_index),
+                    viewport,
+                    anim,
+                );
+            }
+            Some(app::browser::BrowserAction::ReverseSort) => {
+                sort.desc = !sort.desc;
+                list.select(
+                    resort_list(&mut stories, list.selected, sort, &mut row_badges, &mut aux_cache, data_base, &hint_index),
+                    viewport,
+                    anim,
+                );
+            }
+            // An unbound key. The ONLY catch-all in this match, so the
+            // compiler still requires an arm per action above.
+            None => {}
+        }
+        // ── END BROWSER KEY DISPATCH ────────────────────────────────
+
         panel_scroll = panel_scroll.min(panel_max);
         list.finalize_if_done();
     };
@@ -2732,7 +2896,7 @@ fn draw_story_picker(
     }
 
     // Footer hint.
-    let footer = build_footer(km, area.width);
+    let footer = build_footer(km, area.width, false);
     let fstyle = Style::new().fg(Color::DarkGray).patch(dialog);
     draw_str_clipped(buf, area.x, list_bottom, &footer, fstyle, area);
 
@@ -2957,8 +3121,9 @@ fn draw_story_gallery(
     }
 
     // Footer hint, from the same registry-driven hints the list footer uses
-    // (SQ-0796) — the gallery's is a fixed line rather than a dropping one.
-    let footer = format!(" {}", hint_segments(km, app::browser::HINTS_GALLERY).join("   "));
+    // (SQ-0796) — the same line and the same drop order (SQ-1227), with `g`
+    // naming where it goes (`list`) rather than where it is.
+    let footer = build_footer(km, area.width, true);
     let fstyle = ratatui::style::Style::new()
         .fg(ratatui::style::Color::DarkGray)
         .patch(dialog);
@@ -3910,18 +4075,23 @@ mod tests {
         use super::{wheel_target, WheelTarget};
 
         // Nothing open: the notch is the story list's.
-        assert_eq!(wheel_target(false, false, false, false), WheelTarget::StoryList);
-        assert_eq!(wheel_target(false, false, false, true), WheelTarget::InfoPanel);
+        assert_eq!(wheel_target(false, false, false, false, false, false), WheelTarget::StoryList);
+        assert_eq!(wheel_target(false, false, false, false, false, true), WheelTarget::InfoPanel);
 
         // The launch dialog is topmost — over the info panel, and over every
         // other modal it can be opened on top of.
-        assert_eq!(wheel_target(true, false, false, false), WheelTarget::Swallowed);
-        assert_eq!(wheel_target(true, false, false, true), WheelTarget::Swallowed);
-        assert_eq!(wheel_target(true, true, true, true), WheelTarget::Swallowed);
+        assert_eq!(wheel_target(true, false, false, false, false, false), WheelTarget::Swallowed);
+        assert_eq!(wheel_target(true, false, false, false, false, true), WheelTarget::Swallowed);
+        assert_eq!(wheel_target(true, false, false, true, true, true), WheelTarget::Swallowed);
+
+        // SQ-1227: the key reference and the per-story menu swallow it too —
+        // neither scrolls, and neither may let the list slide behind it.
+        assert_eq!(wheel_target(false, true, false, false, false, true), WheelTarget::Swallowed);
+        assert_eq!(wheel_target(false, false, true, false, false, true), WheelTarget::Swallowed);
 
         // The rest of the ladder is unchanged (SQ-0831/SQ-0486).
-        assert_eq!(wheel_target(false, true, false, true), WheelTarget::Search);
-        assert_eq!(wheel_target(false, false, true, true), WheelTarget::PreviewZoom);
+        assert_eq!(wheel_target(false, false, false, true, false, true), WheelTarget::Search);
+        assert_eq!(wheel_target(false, false, false, false, true, true), WheelTarget::PreviewZoom);
     }
 
 
@@ -4743,44 +4913,177 @@ mod tests {
         assert!(narrow.author_w > 0, "author outlives both");
     }
 
-    #[test]
-    fn footer_hints_drop_right_to_left_keeping_f_and_r_longest() {
-        // Narrow: none of the new hints fit, but the existing core (move/open/
-        // info/quit) is always present.
-        let km = km();
-        let narrow = super::build_footer(&km, 60);
-        assert!(narrow.contains("move") && narrow.contains("open") && narrow.contains("info") && narrow.contains("quit"));
-        assert!(!narrow.contains("f: fetch") && !narrow.contains("PgUp/PgDn"), "{narrow:?}");
+    /// SQ-1227's footer, at a width that holds all of it. This is the spec.
+    const FOOTER: &str = "Enter: open  Space: menu  Tab: info  /: IFDB  \
+                          g: covers  s: sort  r: refresh  Ctrl+F: find  ?: keys  q: quit";
 
-        // Segments appear in declared order as width grows (least-guessable
-        // first): each one's minimum fitting width is >= the previous one's, and
-        // the core is always present. Robust to segment-set changes.
-        //
-        // SQ-0796: the segments are now GENERATED from the registry and the
-        // keymap rather than being a table of literal strings, so the list comes
-        // from `footer_optional` instead of a `FOOTER_OPTIONAL` constant. Same
-        // ordering property, same assertions — but a hint can no longer name a
-        // key nothing is bound to.
+    #[test]
+    fn the_wide_footer_is_the_library_level_keys_one_key_each() {
+        let km = km();
+        assert_eq!(super::build_footer(&km, 200, false).trim(), FOOTER);
+        // The gallery is the same line with `g` naming where it goes.
+        let gallery = super::build_footer(&km, 200, true);
+        assert_eq!(gallery.trim(), FOOTER.replace("g: covers", "g: list"));
+        // …and neither carries navigation, a mouse gesture, or a per-story
+        // action: those are the story menu's now.
+        for gone in ["move", "page", "ends", "2×click", "2×right-click", "fetch", "get hints"] {
+            assert!(!gallery.contains(gone), "{gone:?} is no longer a footer hint: {gallery:?}");
+        }
+    }
+
+    /// The footer drops right-to-left by `drop_rank` — find first, keys last —
+    /// and never drops open, menu or quit. (Was
+    /// `footer_hints_drop_right_to_left_keeping_f_and_r_longest`; the premise
+    /// changed with SQ-1227, the property did not.)
+    #[test]
+    fn footer_hints_drop_in_priority_order_keeping_open_menu_and_quit() {
+        let km = km();
+        // Narrow: none of the droppable hints fit, and the three that can never
+        // be dropped are all still there.
+        let narrow = super::build_footer(&km, 34, false);
+        assert_eq!(narrow.trim(), "Enter: open  Space: menu  q: quit", "{narrow:?}");
+
+        // Each optional segment's minimum fitting width is >= the previous
+        // one's, walking them in KEEP order — which is the drop order reversed.
+        // Robust to the segment set changing; what it pins is that there IS an
+        // order and the footer honours it.
         let min_width = |seg: &str| -> u16 {
-            (10u16..=320).find(|&w| super::build_footer(&km, w).contains(seg)).unwrap_or(u16::MAX)
+            (10u16..=200)
+                .find(|&w| super::build_footer(&km, w, false).contains(seg))
+                .unwrap_or(u16::MAX)
         };
-        let optional = super::footer_optional(&km);
+        let optional = super::footer_optional(&km, false);
+        assert_eq!(optional.first().map(String::as_str), Some("?: keys"), "last to go");
+        assert_eq!(optional.last().map(String::as_str), Some("Ctrl+F: find"), "first to go");
         let widths: Vec<u16> = optional.iter().map(|s| min_width(s)).collect();
         for pair in widths.windows(2) {
-            assert!(pair[0] <= pair[1], "segments appear in declared order: {widths:?}");
+            assert!(pair[0] <= pair[1], "segments appear in keep order: {widths:?}");
         }
-        // The first (least guessable) appears well before the last.
         assert!(widths[0] < *widths.last().unwrap(), "{widths:?}");
-        // At a wide-enough terminal, every optional hint shows. 280 rather than
-        // 240 since SQ-0796: Home/End joined the set, having been unadvertised
-        // while the hints were hand-written. The drop-right-to-left behaviour
-        // below that width is what the rest of this test pins, and it is
-        // unchanged. 320 since the folder navigation and the library find added
-        // `Ctrl+F: find` and `Backspace: up` to the set. 360 since SQ-1228 added
-        // `Ctrl+U/Ctrl+D: half page`.
-        let wide = super::build_footer(&km, 360);
-        for seg in &optional {
-            assert!(wide.contains(seg), "wide footer shows {seg:?}: {wide:?}");
+
+        // And at every width in between, the three anchors survive and the
+        // display order never rearranges itself.
+        for w in 20u16..=200 {
+            let f = super::build_footer(&km, w, false);
+            assert!(f.contains("Enter: open"), "w={w}: {f:?}");
+            assert!(f.contains("Space: menu"), "w={w}: {f:?}");
+            assert!(f.contains("q: quit"), "w={w}: {f:?}");
+            let shown: Vec<&str> = f.trim().split("  ").collect();
+            let mut expected: Vec<&str> = FOOTER.split("  ").filter(|s| shown.contains(s)).collect();
+            expected.dedup();
+            assert_eq!(shown, expected, "display order is fixed at w={w}");
+        }
+    }
+
+    // ── The per-story menu (SQ-1227) ────────────────────────────────────────
+
+    /// `Space` on the highlighted row opens that story's menu, and nothing else.
+    #[test]
+    fn space_opens_the_story_menu_for_the_highlighted_row() {
+        use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+        let km = km();
+        assert_eq!(
+            app::browser::action_for_key(&km, KeyEvent::new(KeyCode::Char(' '), KeyModifiers::NONE)),
+            Some(app::browser::BrowserAction::OpenStoryMenu)
+        );
+        // The picker opens it on whatever row is selected, and the menu carries
+        // that row so a later redraw anchors on the same story.
+        let menu = app::story_menu::StoryMenu::new(7);
+        assert_eq!(menu.story, 7);
+        assert_eq!(menu.cursor, 0, "the menu opens on `Open`");
+    }
+
+    /// A SINGLE right-click on another row selects it AND opens its menu —
+    /// there is no second-click state to get wrong, and a folder gets the
+    /// selection without a menu it has no items for.
+    #[test]
+    fn a_single_right_click_selects_the_row_and_opens_its_menu() {
+        assert_eq!(super::right_click_action(Some((4, false))), (Some(4), Some(4)));
+        assert_eq!(super::right_click_action(Some((0, true))), (Some(0), None), "a folder");
+        assert_eq!(super::right_click_action(None), (None, None), "past the rows: dismiss");
+    }
+
+    /// **SQ-0789's double right-click is gone** (SQ-1227): the launch-options
+    /// dialog is a MENU ITEM now, so the right button's handler carries no
+    /// double-click recogniser at all. Read off the source, because the property
+    /// is the absence of code — no runtime assertion can see a gesture that was
+    /// removed.
+    #[test]
+    fn the_right_button_no_longer_recognises_a_double_click() {
+        let src = include_str!("picker_ui.rs");
+        let start = src
+            .find("if let MouseEventKind::Down(MouseButton::Right) = m.kind {")
+            .expect("the right-button handler");
+        let end = start
+            + src[start..]
+                .find("} else if let MouseEventKind::Down(MouseButton::Left)")
+                .expect("the left-button handler after it");
+        let region = &src[start..end];
+        assert!(region.len() > 300, "the markers must bracket the real handler");
+        for banned in ["DOUBLE_CLICK", "last_right_click", "open_launch_options"] {
+            assert!(
+                !region.contains(banned),
+                "the right button must be a single click that opens the story menu; \
+                 `{banned}` means SQ-0789's double-click gesture came back (SQ-1227)"
+            );
+        }
+        assert!(region.contains("right_click_action"), "…through the one total function");
+    }
+
+    /// The menu's rows reach the very commands the picker's one dispatch runs —
+    /// `Enter` on the highlighted row, and an item's own hotkey from anywhere.
+    #[test]
+    fn a_menu_item_dispatches_its_registry_command() {
+        use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+        use app::browser::BrowserAction;
+        use app::story_menu::{MenuOutcome, StoryMenu};
+        let km = km();
+        let plain = |c| KeyEvent::new(c, KeyModifiers::NONE);
+
+        // Enter on "Launch options…".
+        let mut menu = StoryMenu::new(0);
+        menu.cursor = 1;
+        let MenuOutcome::Activate(cmd) = menu.on_key(plain(KeyCode::Enter), &km) else {
+            panic!("Enter activates the highlighted item");
+        };
+        assert_eq!(cmd, "open-launch-options");
+        assert_eq!(app::browser::action_for_command(cmd), Some(BrowserAction::OpenLaunchOptions));
+
+        // `f` from the top of the menu goes straight to the fetch.
+        let mut menu = StoryMenu::new(0);
+        let MenuOutcome::Activate(cmd) = menu.on_key(plain(KeyCode::Char('f')), &km) else {
+            panic!("an item's own hotkey activates it");
+        };
+        assert_eq!(cmd, "fetch-story");
+        assert_eq!(app::browser::action_for_command(cmd), Some(BrowserAction::FetchStory));
+
+        // Esc closes without running anything.
+        let mut menu = StoryMenu::new(0);
+        assert_eq!(menu.on_key(plain(KeyCode::Esc), &km), MenuOutcome::Close);
+    }
+
+    /// The menu never spills off the pane, including on the bottom row — where
+    /// it flips above the story instead of being clipped away.
+    #[test]
+    fn the_story_menu_is_clamped_inside_the_pane() {
+        let km = km();
+        let cs = app::colors::ColorScheme::terminal_default();
+        let pane = ratatui::layout::Rect::new(0, 0, 60, 18);
+        let mut buf = ratatui::buffer::Buffer::empty(pane);
+        // A row on the last usable line of the pane.
+        let anchor = ratatui::layout::Rect::new(1, 16, 50, 1);
+        let menu = app::story_menu::StoryMenu::new(0);
+        let rects = app::story_menu::draw_story_menu(&menu, anchor, pane, &km, &cs, &mut buf);
+        assert!(rects.area.bottom() <= pane.bottom(), "{:?}", rects.area);
+        assert!(rects.area.right() <= pane.right(), "{:?}", rects.area);
+        assert!(rects.area.y < anchor.y, "flipped above the row: {:?}", rects.area);
+        for (_, r) in &rects.items {
+            assert!(pane.contains(ratatui::layout::Position { x: r.x, y: r.y }), "{r:?}");
+        }
+        // Every item is on screen and readable.
+        let text = buffer_to_string(&buf, rects.area);
+        for it in app::story_menu::STORY_MENU {
+            assert!(text.contains(it.label), "{:?} missing: {text}", it.label);
         }
     }
 
@@ -4789,13 +5092,15 @@ mod tests {
     #[test]
     fn footer_hints_follow_a_rebinding() {
         let mut cfg = app::config::KeymapConfig::default();
-        cfg.browser.insert("ctrl+g".into(), "toggle-gallery".into());
+        // `x` takes sort-library, and `s` is given away so the default binding
+        // is displaced rather than joined.
+        cfg.browser.insert("s".into(), "reverse-sort".into());
+        cfg.browser.insert("x".into(), "sort-library".into());
         let (km, warns) = app::keymap::KeyMap::resolve(&cfg);
         assert!(warns.is_empty(), "{warns:?}");
-        let wide = super::build_footer(&km, 280);
-        // Both keys are advertised — the override adds a binding, it does not
-        // remove `g` — and neither string was authored by hand.
-        assert!(wide.contains("g/Ctrl+G: covers"), "the new key is advertised: {wide:?}");
+        let wide = super::build_footer(&km, 200, false);
+        assert!(wide.contains("x: sort"), "the user's key is advertised: {wide:?}");
+        assert!(!wide.contains("s: sort"), "…and the displaced one is not: {wide:?}");
     }
 
     // ── Story-picker info panel ─────────────────────────────────────────────────

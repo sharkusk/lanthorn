@@ -39,10 +39,12 @@ The built-in key bindings, one row per binding — several keys may reach the sa
 | Browser | `Home` | `select-edge first` | jump the browser's selection to the first or last story |
 | Browser | `End` | `select-edge last` | jump the browser's selection to the first or last story |
 | Browser | `Enter` | `play-story` | launch the selected story |
-| Browser | `Shift+Enter` | `open-launch-options` | open the launch-options dialog for the selected story |
 | Browser | `O` | `open-launch-options` | open the launch-options dialog for the selected story |
-| Browser | `I` | `toggle-info-panel` | open or close the browser's story info panel |
+| Browser | `Shift+Enter` | `open-launch-options` | open the launch-options dialog for the selected story |
+| Browser | `Space` | `open-story-menu` | open the per-story menu beside the selected story |
+| Browser | `?` | `show-browser-keys` | show the story browser's key reference |
 | Browser | `Tab` | `toggle-info-panel` | open or close the browser's story info panel |
+| Browser | `I` | `toggle-info-panel` | open or close the browser's story info panel |
 | Browser | `G` | `toggle-gallery` | switch the browser between the story list and the cover gallery |
 | Browser | `F` | `fetch-story` | re-fetch the selected story's IFDB metadata, ignoring the cache |
 | Browser | `R` | `refresh-library` | fetch IFDB metadata for every story that is missing or stale |

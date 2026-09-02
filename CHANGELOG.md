@@ -27,6 +27,24 @@ goes into the README in place, at its normal destination, marked with the
 visible tag `*Next release:*`. `release.yml` refuses to cut a release while
 any such tag, or this Unreleased section, still exists.*
 
+### Added
+
+- **A menu for the highlighted story in the picker.** `Space`, or a single
+  right-click on a row or cover, opens a small menu beside it: open the story,
+  launch options, fetch its metadata, get its hints, point it at an IFDB page —
+  each with its own key shown alongside. (Right-clicking twice no longer opens
+  launch options; the menu item does.)
+- **`?` in the picker** shows every key the story browser knows, on one screen.
+
+### Changed
+
+- **The picker's hint bar is shorter and says more.** It now lists the
+  library-level keys only — `Enter: open  Space: menu  Tab: info  /: IFDB
+  g: covers  s: sort  r: refresh  Ctrl+F: find  ?: keys  q: quit` — one key
+  each, with the per-story actions moved into the `Space` menu and the
+  navigation keys dropped. Every alternate key still works; they are simply no
+  longer spelled out.
+
 ### Fixed
 
 - A Glulx status window with its own background colour — Kerkerkruip's grey

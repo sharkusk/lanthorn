@@ -1,4 +1,5 @@
 pub mod aux_dialog;
+pub mod browser_keys;
 pub mod fetch_keep_dialog;
 pub mod font_check_dialog;
 pub mod history_prompt;

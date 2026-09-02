@@ -78,6 +78,8 @@ Every slash command, grouped the way `/help` groups them. Type any of these afte
 | Library | `select-edge first|last` | jump the browser's selection to the first or last story |
 | Library | `play-story` | launch the selected story |
 | Library | `open-launch-options` | open the launch-options dialog for the selected story |
+| Library | `open-story-menu` | open the per-story menu beside the selected story |
+| Library | `show-browser-keys` | show the story browser's key reference |
 | Library | `toggle-info-panel` | open or close the browser's story info panel |
 | Library | `toggle-gallery` | switch the browser between the story list and the cover gallery |
 | Library | `fetch-story` | re-fetch the selected story's IFDB metadata, ignoring the cache |
