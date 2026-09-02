@@ -229,10 +229,10 @@ pub(crate) fn resolve_launch() -> LaunchCtx {
     let ask_font = should_ask_font_check(cli.font_check, first_run, cfg.font_check_pending);
     if ask_font {
         match ask_font_check(&cfg) {
-            FontCheckOutcome::Answered(nerdfont) => {
+            FontCheckOutcome::Answered { nerdfont, diagonal } => {
                 match app::style::style_write_path(cfg.style.as_deref(), &cfg.user_dir) {
                     Some(path) => {
-                        if let Err(e) = app::style::write_font_check_answer(&path, nerdfont) {
+                        if let Err(e) = app::style::write_font_check_answer(&path, nerdfont, diagonal) {
                             eprintln!("lanthorn: could not save the font choice: {e}");
                         }
                     }
@@ -562,30 +562,45 @@ fn set_font_check_pending(cfg: &mut Config, want: bool) {
 /// the second the player saw it and dismissed it, and asking again next launch is
 /// nagging.
 enum FontCheckOutcome {
-    /// The player chose: `true` = the patched-font row, `false` = the plain row
-    /// (which Esc and the close box also mean).
-    Answered(bool),
-    /// Ctrl-C. Seen and dismissed — nothing written, nothing owed.
+    /// Stage one was reached and answered: `nerdfont` = the patched-font row
+    /// (which Esc and the close box also mean at that stage). `diagonal` is
+    /// stage two's answer (SQ-1245) — `Some` for either row, `None` for a stage-
+    /// two Esc/close/failure, which leaves `diagonal_corners` untouched rather
+    /// than forcing a choice for a question the player never reached an opinion
+    /// on.
+    Answered { nerdfont: bool, diagonal: Option<bool> },
+    /// Ctrl-C, at either stage. Seen and dismissed — nothing written at all,
+    /// nothing owed, even if stage one had already been answered: Ctrl-C is the
+    /// "get me out of this entirely" signal, not a per-stage cancel.
     Refused,
-    /// No interactive terminal, a pane too small to hold the comparison, or a
-    /// read that failed. Nobody was asked, so the question survives the launch.
+    /// No interactive terminal, a pane too small to hold stage one's
+    /// comparison, or a read that failed, before stage one could be answered.
+    /// Nobody was asked, so the question survives the launch.
     CouldNotAsk,
 }
 
-/// Run the font check on its own, before any game exists (SQ-1104).
+/// Run the font check on its own, before any game exists (SQ-1104, SQ-1245).
 ///
 /// The dialog, its focus ring, its buttons and its keyboard ladder are all
 /// `render::font_check_dialog`'s — this is only the small terminal loop that
 /// stands in for the game's, since there is no game yet. Exactly the shape
-/// [`ask_fetch_keep`] has, for the same reason: two drivers, one dialog.
+/// [`ask_fetch_keep`] has, for the same reason: two drivers, one dialog module.
 /// Tab/Shift-Tab move focus, Enter activates, Esc cancels; Space is left alone
 /// (widget-reserved), as the shared chrome does everywhere else.
 ///
+/// Two stages, one loop shape run twice: stage one (icon glyphs) then stage two
+/// (diagonal corner stubs), sharing one `AppState`/`Terminal` and torn down
+/// exactly ONCE at the end regardless of which stage or path it exits through
+/// (SQ-0998) — an early `restore_terminal()` per exit point is a copy of the
+/// canonical teardown's steps, which is what that quest fixed.
+///
 /// Nothing is written by any path but [`FontCheckOutcome::Answered`]; the plain
-/// glyphs stand meanwhile, which is the answer that works in every font.
+/// glyphs and the orthogonal fallback stand meanwhile, which are the answers
+/// that work in every font.
 fn ask_font_check(cfg: &Config) -> FontCheckOutcome {
     use app::render::font_check_dialog::{
-        draw_font_check_always, font_check_key_focused, FontCheckAction,
+        diagonal_check_key_focused, draw_diagonal_check_always, draw_font_check_always,
+        font_check_key_focused, DiagonalCheckAction, FontCheckAction,
     };
     use crossterm::event::{Event, KeyCode, KeyEventKind, MouseButton, MouseEventKind};
 
@@ -621,70 +636,146 @@ fn ask_font_check(cfg: &Config) -> FontCheckOutcome {
     };
 
     const BUTTONS: usize = 2;
-    let answer = loop {
-        let mut rects = None;
-        if terminal
-            .draw(|f| {
-                rects = draw_font_check_always(&state, f.area(), f.buffer_mut());
-            })
-            .is_err()
-        {
-            break FontCheckOutcome::CouldNotAsk;
-        }
-        // A pane too small to hold the comparison cannot ask the question, and a
-        // question nobody can read must not block the launch.
-        if rects.is_none() {
-            break FontCheckOutcome::CouldNotAsk;
-        }
-        let ev = match crossterm::event::read() {
-            Ok(ev) => ev,
-            Err(_) => break FontCheckOutcome::CouldNotAsk,
-        };
-        if let Event::Mouse(m) = &ev {
-            if !matches!(m.kind, MouseEventKind::Down(MouseButton::Left)) {
+    // A labeled BLOCK, not a loop: each stage below runs exactly once, and the
+    // label exists only so an early Ctrl-C/CouldNotAsk from either stage can
+    // jump straight to the end without a second copy of the teardown.
+    let outcome = 'stages: {
+        // ── Stage one: the icon glyphs ────────────────────────────────────
+        let nerdfont = loop {
+            let mut rects = None;
+            if terminal
+                .draw(|f| {
+                    rects = draw_font_check_always(&state, f.area(), f.buffer_mut());
+                })
+                .is_err()
+            {
+                break 'stages FontCheckOutcome::CouldNotAsk;
+            }
+            // A pane too small to hold the comparison cannot ask the question,
+            // and a question nobody can read must not block the launch.
+            if rects.is_none() {
+                break 'stages FontCheckOutcome::CouldNotAsk;
+            }
+            let ev = match crossterm::event::read() {
+                Ok(ev) => ev,
+                Err(_) => break 'stages FontCheckOutcome::CouldNotAsk,
+            };
+            if let Event::Mouse(m) = &ev {
+                if !matches!(m.kind, MouseEventKind::Down(MouseButton::Left)) {
+                    continue;
+                }
+                let Some(r) = &rects else { continue };
+                let pt = (m.column, m.row);
+                if r.nerd.is_some_and(|b| b.contains(pt.into())) {
+                    break true;
+                }
+                if r.plain.is_some_and(|b| b.contains(pt.into()))
+                    || r.close.is_some_and(|b| b.contains(pt.into()))
+                {
+                    break false;
+                }
                 continue;
             }
-            let Some(r) = &rects else { continue };
-            let pt = (m.column, m.row);
-            if r.nerd.is_some_and(|b| b.contains(pt.into())) {
-                break FontCheckOutcome::Answered(true);
+            let Event::Key(key) = ev else { continue };
+            if key.kind == KeyEventKind::Release {
+                continue;
             }
-            if r.plain.is_some_and(|b| b.contains(pt.into()))
-                || r.close.is_some_and(|b| b.contains(pt.into()))
+            // Ctrl-C is not an answer; it is a refusal, and a refusal writes
+            // nothing — at either stage.
+            if key.modifiers.contains(crossterm::event::KeyModifiers::CONTROL)
+                && matches!(key.code, KeyCode::Char('c'))
             {
-                break FontCheckOutcome::Answered(false);
+                break 'stages FontCheckOutcome::Refused;
             }
-            continue;
-        }
-        let Event::Key(key) = ev else { continue };
-        if key.kind == KeyEventKind::Release {
-            continue;
-        }
-        // Ctrl-C is not an answer; it is a refusal, and a refusal writes nothing.
-        if key.modifiers.contains(crossterm::event::KeyModifiers::CONTROL)
-            && matches!(key.code, KeyCode::Char('c'))
-        {
-            break FontCheckOutcome::Refused;
-        }
-        match key.code {
-            KeyCode::Tab | KeyCode::Right | KeyCode::Down => {
-                state.overlays.dialog_focus = (state.overlays.dialog_focus + 1) % BUTTONS;
+            match key.code {
+                KeyCode::Tab | KeyCode::Right | KeyCode::Down => {
+                    state.overlays.dialog_focus = (state.overlays.dialog_focus + 1) % BUTTONS;
+                }
+                KeyCode::BackTab | KeyCode::Left | KeyCode::Up => {
+                    state.overlays.dialog_focus =
+                        (state.overlays.dialog_focus + BUTTONS - 1) % BUTTONS;
+                }
+                code => match font_check_key_focused(code, state.overlays.dialog_focus) {
+                    FontCheckAction::None => {}
+                    FontCheckAction::Nerd => break true,
+                    FontCheckAction::Plain => break false,
+                },
             }
-            KeyCode::BackTab | KeyCode::Left | KeyCode::Up => {
-                state.overlays.dialog_focus =
-                    (state.overlays.dialog_focus + BUTTONS - 1) % BUTTONS;
+        };
+
+        // ── Stage two: the diagonal corner stubs (SQ-1245) ────────────────
+        // Its own default focus, matching the dialog's declared default —
+        // stage one may have left focus on row 1.
+        state.overlays.dialog_focus = 1;
+        let diagonal = loop {
+            let mut rects = None;
+            // A draw failure or too-small pane here does not cost stage one's
+            // answer — it just leaves `diagonal_corners` untouched, the same as
+            // an explicit skip.
+            if terminal
+                .draw(|f| {
+                    rects = draw_diagonal_check_always(&state, f.area(), f.buffer_mut());
+                })
+                .is_err()
+            {
+                break None;
             }
-            code => match font_check_key_focused(code, state.overlays.dialog_focus) {
-                FontCheckAction::None => {}
-                FontCheckAction::Nerd => break FontCheckOutcome::Answered(true),
-                FontCheckAction::Plain => break FontCheckOutcome::Answered(false),
-            },
-        }
+            if rects.is_none() {
+                break None;
+            }
+            let ev = match crossterm::event::read() {
+                Ok(ev) => ev,
+                Err(_) => break None,
+            };
+            if let Event::Mouse(m) = &ev {
+                if !matches!(m.kind, MouseEventKind::Down(MouseButton::Left)) {
+                    continue;
+                }
+                let Some(r) = &rects else { continue };
+                let pt = (m.column, m.row);
+                if r.nerd.is_some_and(|b| b.contains(pt.into())) {
+                    break Some(true);
+                }
+                if r.plain.is_some_and(|b| b.contains(pt.into())) {
+                    break Some(false);
+                }
+                if r.close.is_some_and(|b| b.contains(pt.into())) {
+                    break None;
+                }
+                continue;
+            }
+            let Event::Key(key) = ev else { continue };
+            if key.kind == KeyEventKind::Release {
+                continue;
+            }
+            if key.modifiers.contains(crossterm::event::KeyModifiers::CONTROL)
+                && matches!(key.code, KeyCode::Char('c'))
+            {
+                break 'stages FontCheckOutcome::Refused;
+            }
+            match key.code {
+                KeyCode::Tab | KeyCode::Right | KeyCode::Down => {
+                    state.overlays.dialog_focus = (state.overlays.dialog_focus + 1) % BUTTONS;
+                }
+                KeyCode::BackTab | KeyCode::Left | KeyCode::Up => {
+                    state.overlays.dialog_focus =
+                        (state.overlays.dialog_focus + BUTTONS - 1) % BUTTONS;
+                }
+                code => match diagonal_check_key_focused(code, state.overlays.dialog_focus) {
+                    DiagonalCheckAction::None => {}
+                    DiagonalCheckAction::Diagonal => break Some(true),
+                    DiagonalCheckAction::Orthogonal => break Some(false),
+                    DiagonalCheckAction::Skip => break None,
+                },
+            }
+        };
+
+        FontCheckOutcome::Answered { nerdfont, diagonal }
     };
 
     // THE canonical teardown, not a copy of its steps (SQ-0998).
     crate::restore_terminal();
-    answer
+    outcome
 }
 
 /// The real story-pane `(rows, cols)` a v1–8 Z-machine session should be BOOTED

@@ -189,12 +189,14 @@ itself.**
   glyph in the margin — never in the story's own voice, and never a spoiler.
   `--guidance off`, `/set-guidance`, or the settings screen turns it off.
   → [playing](docs/guide/playing.md)
-- **It asks about your font once, and sets every icon from the answer** —
+- **It asks about your font, and sets every icon from the answer** —
   lanthorn writes characters; the font is the terminal's, and
   nothing can ask it whether it has a glyph. So on a first launch it shows two
   rows and asks which one draws properly, then writes the answer into
   `style.toml` as preset names you can still edit. `/run-font-check` asks
-  again when you change fonts. → [looks](docs/guide/looks.md)
+  again when you change fonts. *Next release:* a second question follows,
+  about the map's diagonal corner glyphs alone — a separate typeface question
+  from the icons, answered independently. → [looks](docs/guide/looks.md)
 
 There is a great deal more than this — proportional fonts off a Kickstart ROM,
 Glk sound channels, a click-to-compose command panel, screen-reader output. The

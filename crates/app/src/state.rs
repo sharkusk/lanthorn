@@ -2371,6 +2371,12 @@ pub struct OverlayState {
     /// `startup::ask_font_check`, and both drive the same
     /// `render::font_check_dialog`.
     pub font_check: bool,
+    /// `None` while the font check is showing stage one (the icon glyphs, or
+    /// not open at all); `Some(nerdfont)` once stage one is answered and the
+    /// check has moved on to stage two, the diagonal corner stubs (SQ-1245) —
+    /// carrying stage one's answer until stage two closes and both are written
+    /// together. Reset to `None` whenever `font_check` closes.
+    pub font_check_icon_answer: Option<bool>,
     /// When true, the first-use aux-storage prompt is open.
     pub aux_prompt: bool,
     /// When true, the "Save state before quitting?" confirmation dialog is open.

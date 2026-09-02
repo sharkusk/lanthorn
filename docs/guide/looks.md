@@ -51,18 +51,25 @@ args"`; set `use_defaults = false` to clear the built-ins and start over.
 
 **Fonts and glyphs.** The map draws with box-drawing and arrow characters any
 font carries, plus one modern block — diagonal corner stubs — that not every
-font covers yet. On first launch lanthorn shows two rows of glyphs and asks
-which one your terminal draws cleanly, then writes the answer as presets
-(`arrow_set`, `portal_icons`, `control_icons`) rather than dozens of
-individual overrides; `/run-font-check` asks again whenever you change fonts,
-and boxes or blank squares where glyphs should be just mean that block isn't
-in your font. A patched [Nerd Font](https://www.nerdfonts.com) unlocks the
-fancier `nerdfont` presets, but nothing requires one — the default look needs
-no patched font at all. The portal markers default to shapes an ordinary
-monospace face already carries — up, down, in, out as `↑ ↓ ◉ ◎` — and they
-draw wherever a portal does: on the map, and in the command panel's one-click
-cluster beside the compass rose. Nerd Font presets, including a dedicated
-stairway set, are there if you'd rather.
+font covers yet, and the two are independent typeface questions: a font can
+carry one and not the other. So on first launch lanthorn asks TWO questions,
+back to back, both a pair of rows to compare. The first is about the icon
+glyphs (arrows, portal/stairs markers, the map's own control cluster); whichever
+row draws cleanly gets written as presets (`arrow_set`, `portal_icons`,
+`control_icons`) rather than dozens of individual overrides. The second is
+about the diagonal corner stubs alone, shown against the plain right-angle
+corner the map falls back to without them, and sets `map.diagonal_corners`
+independently of the first answer in either direction — a font can pass one
+comparison and fail the other. `/run-font-check` asks both again whenever you
+change fonts, and boxes or blank squares where glyphs should be just mean that
+block isn't in your font. A patched [Nerd Font](https://www.nerdfonts.com)
+unlocks the fancier `nerdfont` presets, but nothing requires one — the default
+look needs no patched font at all, and the diagonal stubs are Unicode 13
+Legacy Computing rather than anything a Nerd Font patch supplies. The portal
+markers default to shapes an ordinary monospace face already carries — up,
+down, in, out as `↑ ↓ ◉ ◎` — and they draw wherever a portal does: on the map,
+and in the command panel's one-click cluster beside the compass rose. Nerd
+Font presets, including a dedicated stairway set, are there if you'd rather.
 
 The full selector list, and every config key, lives in the reference tables
 rather than repeated here: see [the style reference](../reference/style.md)
