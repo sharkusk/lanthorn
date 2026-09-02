@@ -83,9 +83,9 @@ pub fn draw_launch_options(
     buf: &mut Buffer,
 ) -> Option<LaunchOptionsRects> {
     // Rows: art choices (+ "inherit"), a blank, the interpreter line, its
-    // provenance line, a blank, the checkbox, the escape-hatch note and the key
-    // hints, plus a caveat line for each thing the current choice warrants one
-    // for. Plus dialog chrome + button row.
+    // provenance line, a blank, the checkbox and the escape-hatch note, plus a
+    // caveat line for each thing the current choice warrants one for. Plus
+    // dialog chrome + button row.
     //
     // Counting the caveats HERE is what keeps a short list from scrolling: the
     // list is filtered to this story's own archives now — four for Zork Zero,
@@ -93,7 +93,7 @@ pub fn draw_launch_options(
     // because a warning line took its last row would be paging for nothing.
     let caveat_lines = u16::from(st.clears_inherited_art())
         + u16::from(st.chosen_art().is_some_and(|c| c.caveat().is_some()));
-    let body_rows = st.row_count() as u16 + 5 + caveat_lines;
+    let body_rows = st.row_count() as u16 + 4 + caveat_lines;
     let w = MAX_W.min(area.width.saturating_sub(4));
     let h = (body_rows + 3).min(MAX_H).min(area.height.saturating_sub(2));
     if w < MIN_W || h < MIN_H {
@@ -158,8 +158,8 @@ pub fn draw_launch_options(
     // The list is short now that it is filtered to this story's own archives —
     // five at the very most in the real library — but a folder can hold anything,
     // so it still scrolls; nothing else does.
-    // blank, interpreter, provenance, checkbox, escape hatch, key hints
-    const TAIL: u16 = 6;
+    // blank, interpreter, provenance, checkbox, escape hatch
+    const TAIL: u16 = 5;
     // The "N more above/below" markers cost rows too, and only exist when the
     // list actually scrolls — so budget for them only then, in two passes.
     let fixed = 1 + TAIL + caveat_lines; // + the "Artwork" heading
@@ -279,7 +279,6 @@ pub fn draw_launch_options(
     // one must not be left thinking it is unreachable. Naming a path outright
     // has always been the durable form and still wins over everything.
     line(buf, "  another name? pictures = \"…\" in the game's config, or --pictures", dim, &mut y);
-    line(buf, "  ↑/↓ choose   Space select/toggle   Tab buttons   Esc cancel", dim, &mut y);
 
     Some(LaunchOptionsRects {
         area: rects.area,
