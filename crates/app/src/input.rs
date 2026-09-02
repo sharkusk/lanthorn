@@ -409,12 +409,13 @@ pub enum Action {
     /// older lines, `-1` toward newer. Resolved by the run loop, which knows the
     /// last-rendered transcript viewport height and max scroll (see `page_scroll`).
     TranscriptScrollPage(i8),
-    /// Half-page the transcript (Ctrl-D, vim convention; SQ-1228). `+1` scrolls
-    /// toward older lines, `-1` toward newer — same sign convention as
+    /// Half-page the transcript (Ctrl-D/Ctrl-U, vim convention; SQ-1228). `+1`
+    /// scrolls toward older lines, `-1` toward newer — same sign convention as
     /// `TranscriptScrollPage`, resolved the same way (see `half_page_scroll`).
-    /// Ctrl-U (half page up) is NOT bound here: it already means "delete to
-    /// start of line" at the story prompt (`Action::DeleteToStart`), and that
-    /// readline convention wins.
+    /// Ctrl-D always means half-page down. Ctrl-U means half-page up only when
+    /// the story prompt's input line is empty; with text on the line, Ctrl-U
+    /// keeps its readline meaning of "delete to start of line"
+    /// (`Action::DeleteToStart`), which wins.
     TranscriptScrollHalfPage(i8),
     /// Advance the `[more]` pager one screen toward the bottom; catching up exits
     /// the pager (SQ-0404).
@@ -466,9 +467,14 @@ pub enum KeyResolve {
 ///    config-screen/hotkey-dialog/room-panel) → their handlers (hardwired Actions).
 ///    6.7. Ctrl+A/E/U/K/W in Game focus with the line prompt live (not char_mode/
 ///    event_wait) → readline caret/delete ops on the input line.
-///    6.8. Ctrl+D in Game focus → TranscriptScrollHalfPage (SQ-1228; Ctrl+U is
-///    reserved by 6.7's DeleteToStart, so only the half-page-down direction is
-///    bound this way).
+///    6.8. Ctrl+D in Game focus → TranscriptScrollHalfPage(-1) (SQ-1228, half
+///    page down). Ctrl+U in Game focus → TranscriptScrollHalfPage(1) (half
+///    page up) when the input line is EMPTY, else falls through to 6.7's
+///    DeleteToStart, which wins whenever there's something to delete. Both are
+///    DEFAULTS, not hardwires: either only fires when step 9's Global keymap
+///    lookup would find no binding for the key — a user's own Ctrl+D/Ctrl+U
+///    binding always wins, so this block falls through to step 9 when one
+///    exists.
 /// 7. Key == hotkeys.prefix → OpenHotkeyDialog.
 /// 8. Tab (no modifiers) → autocomplete-or-ToggleFocus.
 /// 9. Ctrl modifier → Global KeyMap lookup, filtered by hotkeys.is_direct_name.
@@ -594,6 +600,10 @@ pub fn key_to_command(state: &AppState, key: KeyEvent) -> KeyResolve {
         };
     }
 
+    // Computed here (ahead of step 7's own use) because step 6.8 below also
+    // needs it, to check whether a user keymap binding shadows its default.
+    let spec = KeySpec::from_key_event(key);
+
     // 6.7. Readline-style line-edit shortcuts at the story prompt (SQ-0447):
     // Ctrl+A/E/U/K/W act on the input line instead of falling through to the
     // generic Ctrl handling in step 9. Gated to Game focus with the line prompt
@@ -601,13 +611,20 @@ pub fn key_to_command(state: &AppState, key: KeyEvent) -> KeyResolve {
     // and (per main.rs's char-input gate) route Ctrl combos to app dispatch
     // instead. Placed ahead of step 7 too: Ctrl+K used to be the hotkey-dialog
     // prefix, but that moved to Ctrl+P, freeing Ctrl+K for delete-to-end here.
+    //
+    // Ctrl+U is DeleteToStart only while there's text to delete (SQ-1228): an
+    // empty input line falls through — unhandled here — to step 6.8's vim
+    // half-page-up, which is the meaning readline's kill-line has nothing to
+    // contest on an empty line.
     if key.modifiers == KeyModifiers::CONTROL
         && state.focus == Focus::Game && !state.char_mode && !state.event_wait
     {
         match key.code {
             KeyCode::Char('a') => return KeyResolve::Action(Action::CursorHome),
             KeyCode::Char('e') => return KeyResolve::Action(Action::CursorEnd),
-            KeyCode::Char('u') => return KeyResolve::Action(Action::DeleteToStart),
+            KeyCode::Char('u') if !state.input.is_empty() => {
+                return KeyResolve::Action(Action::DeleteToStart);
+            }
             KeyCode::Char('k') => return KeyResolve::Action(Action::DeleteToEnd),
             KeyCode::Char('w') => return KeyResolve::Action(Action::DeleteWordBack),
             // Ctrl+↑/↓ recall command history (SQ-0677): plain ↑/↓ moved to
@@ -623,28 +640,31 @@ pub fn key_to_command(state: &AppState, key: KeyEvent) -> KeyResolve {
     }
 
     // 6.8. Ctrl+D in Game focus: half-page the transcript toward newer lines
-    // (SQ-1228, the vim convention). Hardwired here — like plain PageUp/
-    // PageDown in `game_key_to_action` below — rather than a keymap-driven
-    // command, matching that sibling gesture's style; ahead of step 9's
-    // blanket Ctrl→Global lookup for the same reason. Not gated to
+    // (SQ-1228, the vim convention). Ctrl+U does the same toward older lines,
+    // but only when the input line is EMPTY — with text on the line, step 6.7
+    // above already returned `Action::DeleteToStart` for it, which wins.
+    //
+    // This is a DEFAULT, not a hardwire: unlike step 6.7's readline block, a
+    // user's own keymap binding for the key always wins. `window_dump_bound_key`
+    // (SQ-0759) binds Ctrl+D to `dump-windows` and requires it dispatch that
+    // command, not this built-in scroll — so this block only fires the
+    // default when `state.keymap` has NO Global binding for the key at all;
+    // otherwise it falls through to step 9 below, which resolves (or rejects)
+    // that binding the same way every other Ctrl combo does. Not gated to
     // `!char_mode && !event_wait` the way the readline block above is: a Ctrl
     // combo is never forwarded to the VM as game input (see the char-mode gate
     // in main.rs), so there is no game meaning for this key to preempt, and
     // scrolling the transcript is exactly as useful mid-menu as at the prompt.
-    //
-    // Ctrl+U (half page up) is deliberately NOT bound: it already means
-    // "delete to start of line" at the story prompt (step 6.7 above,
-    // `Action::DeleteToStart`), which is the readline kill-line convention and
-    // wins over the vim one.
-    if key.modifiers == KeyModifiers::CONTROL
-        && state.focus == Focus::Game
-        && key.code == KeyCode::Char('d')
-    {
-        return KeyResolve::Action(Action::TranscriptScrollHalfPage(-1));
+    if key.modifiers == KeyModifiers::CONTROL && state.focus == Focus::Game {
+        let half_page_down = key.code == KeyCode::Char('d');
+        let half_page_up = key.code == KeyCode::Char('u') && state.input.is_empty();
+        if (half_page_down || half_page_up) && state.keymap.lookup(&spec, Context::Global).is_none() {
+            let dir = if half_page_down { -1 } else { 1 };
+            return KeyResolve::Action(Action::TranscriptScrollHalfPage(dir));
+        }
     }
 
     // 7. Prefix key → open the hotkey dialog.
-    let spec = KeySpec::from_key_event(key);
     if spec == state.hotkeys.prefix {
         return KeyResolve::Action(Action::OpenHotkeyDialog);
     }
@@ -7125,15 +7145,77 @@ mod tests {
     }
 
     /// SQ-1228: Ctrl-U is the vim half-page-up convention, but at the story
-    /// prompt Ctrl-U already means "delete to start of line" (SQ-0447's
-    /// readline shortcut, step 6.7). That readline convention wins — Ctrl-U
-    /// must keep meaning DeleteToStart in Game focus, not gain a second,
-    /// conflicting meaning.
+    /// prompt Ctrl-U also means "delete to start of line" (SQ-0447's readline
+    /// shortcut, step 6.7). The two are disambiguated by whether the input
+    /// line has anything to delete: empty → half-page up.
     #[test]
-    fn ctrl_u_keeps_its_readline_meaning_not_half_page_up() {
-        let s = AppState::default(); // focus = Game, not char_mode/event_wait
+    fn ctrl_u_half_pages_up_when_the_input_line_is_empty() {
+        let s = AppState::default(); // focus = Game, input line empty
+        assert!(s.input.is_empty());
+        let up = key_to_action(&s, ctrl(KeyCode::Char('u')));
+        assert!(matches!(up, Action::TranscriptScrollHalfPage(1)));
+    }
+
+    /// SQ-1228: with text on the input line, Ctrl-U keeps its readline
+    /// meaning of DeleteToStart — that convention wins whenever there's
+    /// something to delete.
+    #[test]
+    fn ctrl_u_keeps_its_readline_meaning_when_input_has_text() {
+        let mut s = AppState::default(); // focus = Game, not char_mode/event_wait
+        s.input = crate::text_field::TextField::new("look");
         let up = key_to_action(&s, ctrl(KeyCode::Char('u')));
         assert!(matches!(up, Action::DeleteToStart));
+    }
+
+    /// SQ-1228: outside Game focus, Ctrl-U isn't bound to either meaning here
+    /// — it falls through to whatever the focus's own handling does with it.
+    #[test]
+    fn ctrl_u_outside_game_focus_is_not_half_paged() {
+        let mut s = AppState::default();
+        s.focus = Focus::Map;
+        let up = key_to_action(&s, ctrl(KeyCode::Char('u')));
+        assert!(!matches!(up, Action::TranscriptScrollHalfPage(_)));
+        assert!(!matches!(up, Action::DeleteToStart));
+    }
+
+    /// A state whose keymap is exactly what the user typed into `config.toml`
+    /// (mirrors `window_dump_bound_key.rs`'s `state_bound` helper).
+    fn state_with_ctrl_binding(key: &str, cmd: &str) -> AppState {
+        let mut cfg = crate::config::KeymapConfig::default();
+        cfg.global.insert(key.to_string(), cmd.to_string());
+        let (keymap, warnings) = crate::keymap::KeyMap::resolve(&cfg);
+        assert!(warnings.is_empty(), "{warnings:?}");
+        let mut s = AppState::default(); // focus = Game
+        s.keymap = keymap;
+        s
+    }
+
+    /// SQ-1228 (CI fix): the transcript half-page keys are DEFAULTS, not
+    /// hardwires — a user's own Ctrl+D binding must win. `window_dump_bound_key`
+    /// (SQ-0759) already relies on this for `dump-windows`; this pins the same
+    /// contract at the unit level. FALSIFY: reverting the keymap check in step
+    /// 6.8 makes this resolve to TranscriptScrollHalfPage(-1) instead.
+    #[test]
+    fn ctrl_d_bound_in_the_keymap_dispatches_the_command_not_half_page() {
+        let s = state_with_ctrl_binding("ctrl+d", "dump-windows");
+        assert!(s.hotkeys.is_direct_name("dump-windows"));
+        match key_to_command(&s, ctrl(KeyCode::Char('d'))) {
+            KeyResolve::Command(cmd, _) => assert_eq!(cmd, "dump-windows"),
+            other => panic!("a bound Ctrl+D must dispatch the command, got {other:?}"),
+        }
+    }
+
+    /// Same contract for the empty-prompt half-page-up default: a user's own
+    /// Ctrl+U binding wins over TranscriptScrollHalfPage(1) too. FALSIFY:
+    /// reverting the keymap check makes this resolve to the half-page action.
+    #[test]
+    fn ctrl_u_bound_in_the_keymap_dispatches_the_command_when_prompt_is_empty() {
+        let s = state_with_ctrl_binding("ctrl+u", "dump-windows");
+        assert!(s.input.is_empty());
+        match key_to_command(&s, ctrl(KeyCode::Char('u'))) {
+            KeyResolve::Command(cmd, _) => assert_eq!(cmd, "dump-windows"),
+            other => panic!("a bound Ctrl+U must dispatch the command, got {other:?}"),
+        }
     }
 
     /// SQ-0692: an empty-space click used to close the popup. It now UNPINS — the
