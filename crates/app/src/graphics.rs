@@ -179,6 +179,29 @@ impl Canvas {
     pub fn arc(&self) -> Arc<RgbaImage> { Arc::clone(&self.img) }
 }
 
+/// Scale a decoded picture into unit space, nearest-neighbour (the DOS-authentic
+/// crisp pixel double) — the resample [`PictSource::scaled_cached`] runs once
+/// per distinct decode and caches, formerly `session::v6_scaled_art`, which ran
+/// it fresh on every draw and every replay op (SQ-1196).
+///
+/// `scale == (1, 1)` is the identity: no resize, and — the other half of
+/// SQ-1196 — no copy either. The old function `.clone()`d a full `DynamicImage`
+/// here even though the pixels are untouched; this hands back the SOURCE `Arc`
+/// itself.
+fn scale_art(img: &Arc<DynamicImage>, scale: (u32, u32)) -> Arc<DynamicImage> {
+    use image::GenericImageView;
+    if scale == (1, 1) {
+        return Arc::clone(img);
+    }
+    let (w, h) = img.dimensions();
+    Arc::new(DynamicImage::ImageRgba8(image::imageops::resize(
+        img.as_ref(),
+        w * scale.0,
+        h * scale.1,
+        image::imageops::FilterType::Nearest,
+    )))
+}
+
 /// Resolves + caches decoded images by Blorb `Pict` resource number.
 ///
 /// Adaptive palettes (Blorb spec §11.3): pictures listed in the container's
@@ -225,6 +248,17 @@ pub struct PictSource {
     palette_gen: u64,
     /// Adaptive decodes keyed by `(resnum, palette_gen)`.
     adaptive_cache: HashMap<(u32, u64), Option<Arc<DynamicImage>>>,
+    /// [`Self::scaled_image`]/[`Self::scaled_image_under_current_palette`]
+    /// results for non-palette-dependent pictures, keyed like `cache` (SQ-1196):
+    /// `session::v6_scaled_art` used to re-run the resize on every draw and every
+    /// replay op, even though a source picture's scaled pixels never change once
+    /// decoded. Cleared everywhere `cache` is (today, just [`Self::set_fuse_dither`]).
+    scaled_cache: HashMap<u32, Arc<DynamicImage>>,
+    /// The same cache for palette-dependent pictures, keyed like `adaptive_cache`
+    /// — evicted the same generation-boundary way, by
+    /// [`Self::evict_stale_adaptive_cache`], so a stale palette's scaled pixels
+    /// never outlive the decode they were resampled from.
+    adaptive_scaled_cache: HashMap<(u32, u64), Arc<DynamicImage>>,
     /// The colour table this source's video hardware fixed, when it had one
     /// (SQ-0794) — `blorb::infocom_pics::InfocomPics::hardware_palette`. `None`
     /// for a Blorb, an Amiga/Mac `Pic.data` and an MCGA `.MG1` alike, all of
@@ -267,6 +301,8 @@ impl PictSource {
             current_plte: None,
             palette_gen: 0,
             adaptive_cache: HashMap::new(),
+            scaled_cache: HashMap::new(),
+            adaptive_scaled_cache: HashMap::new(),
             hw_palette: None,
             blend_columns: false,
             screen_palette: false,
@@ -420,6 +456,9 @@ impl PictSource {
         self.blend_columns = want;
         self.cache.clear();
         self.adaptive_cache.clear();
+        // Every scaled pixel was resampled from a decode this just invalidated.
+        self.scaled_cache.clear();
+        self.adaptive_scaled_cache.clear();
     }
 
     /// Is this source fusing a 640-wide rendition's dither on the way out?
@@ -573,6 +612,7 @@ impl PictSource {
     fn evict_stale_adaptive_cache(&mut self) {
         let gen = self.palette_gen;
         self.adaptive_cache.retain(|&(_, g), _| g == gen);
+        self.adaptive_scaled_cache.retain(|&(_, g), _| g == gen);
     }
 
     /// Decode `resnum` for a replay WITHOUT establishing a new Current Palette —
@@ -876,6 +916,79 @@ impl PictSource {
             self.set_current_palette_from(resnum);
         }
         arc
+    }
+
+    /// Is `resnum`'s decode ANSWERED BY the Current Palette — the same test
+    /// [`Self::image`] and [`Self::image_under_current_palette`] each make before
+    /// deciding whether to route through [`Self::adaptive_image`] — an adaptive
+    /// Blorb picture, or (SQ-0887) any picture at all on a one-screen-palette
+    /// machine. Shared here so the scaled-image cache below keys itself the same
+    /// way its source does.
+    fn is_palette_dependent(&self, resnum: u32) -> bool {
+        self.screen_palette || self.adaptive.contains(&resnum)
+    }
+
+    /// [`Self::image`] scaled into unit space (`session::v6_scaled_art`'s job),
+    /// cached so the resize runs once per distinct decode rather than on every
+    /// draw (SQ-1196): every v6 window refresh and every timer tick re-requests
+    /// the same picture at the same `scale`, and a Nearest resize into a fresh
+    /// ~1&nbsp;MB buffer is not free to redo each time.
+    ///
+    /// `scale == (1, 1)` is the identity — no resample, no copy, the *source*
+    /// `Arc` is the answer — which is also the common case for a Blorb-less
+    /// story (`art_scale` degenerates to (1, 1) exactly when a source has no
+    /// scaling opinion; see [`Self::art_scale`]).
+    ///
+    /// Keyed and invalidated exactly like the source cache it wraps: a
+    /// palette-dependent picture by `(resnum, palette_gen)`, evicted the moment
+    /// the generation moves on ([`Self::evict_stale_adaptive_cache`]); anything
+    /// else by `resnum` alone, cleared wherever [`Self::cache`] is
+    /// ([`Self::set_fuse_dither`]). `art_scale` itself never changes for a
+    /// source's lifetime (it is the archive's own density — see
+    /// `session::GameSession::art_scale`), so it is not part of either key: a
+    /// caller that changed it mid-session would need its own cache flush, and
+    /// none does.
+    pub fn scaled_image(&mut self, resnum: u32, scale: (u32, u32)) -> Option<Arc<DynamicImage>> {
+        self.scaled_cached(resnum, scale, |s| s.image(resnum))
+    }
+
+    /// [`Self::image_under_current_palette`] scaled into unit space and cached
+    /// the same way [`Self::scaled_image`] is — a replay op resolves the same
+    /// `(resnum, palette_gen)` pixels a live draw would, so it shares that
+    /// cache rather than resampling a second time.
+    pub fn scaled_image_under_current_palette(
+        &mut self,
+        resnum: u32,
+        scale: (u32, u32),
+    ) -> Option<Arc<DynamicImage>> {
+        self.scaled_cached(resnum, scale, |s| s.image_under_current_palette(resnum))
+    }
+
+    /// Shared cache lookup/populate for [`Self::scaled_image`] and
+    /// [`Self::scaled_image_under_current_palette`]: `decode` is whichever of
+    /// the two source methods the caller wants on a miss, so both share one
+    /// cache and one eviction story instead of duplicating it.
+    fn scaled_cached(
+        &mut self,
+        resnum: u32,
+        scale: (u32, u32),
+        decode: impl FnOnce(&mut Self) -> Option<Arc<DynamicImage>>,
+    ) -> Option<Arc<DynamicImage>> {
+        if self.is_palette_dependent(resnum) {
+            let key = (resnum, self.palette_gen);
+            if let Some(img) = self.adaptive_scaled_cache.get(&key) {
+                return Some(Arc::clone(img));
+            }
+            let scaled = scale_art(&decode(self)?, scale);
+            self.adaptive_scaled_cache.insert(key, Arc::clone(&scaled));
+            return Some(scaled);
+        }
+        if let Some(img) = self.scaled_cache.get(&resnum) {
+            return Some(Arc::clone(img));
+        }
+        let scaled = scale_art(&decode(self)?, scale);
+        self.scaled_cache.insert(resnum, Arc::clone(&scaled));
+        Some(scaled)
     }
 
     /// Remember Pict `resnum`'s PLTE as the Current Palette (§11.3). No-op for a
@@ -2449,6 +2562,68 @@ mod tests {
 
         src.image(2).unwrap(); // re-decodes under the new generation
         assert_eq!(src.adaptive_cache_keys(), vec![(2, gen2)], "only the current generation survives");
+    }
+
+    #[test]
+    fn scaled_image_resamples_once_and_shares_the_arc_on_repeat_draws() {
+        // SQ-1196: `session::v6_scaled_art` used to re-run a full Nearest resize
+        // on EVERY draw and EVERY replay op, even for a picture whose scaled
+        // pixels never change. Falsify: before the cache existed, two calls at a
+        // non-unit scale each allocated their own `DynamicImage` and this
+        // `Arc::ptr_eq` would fail.
+        let base = indexed_png(2, 1, &[0, 0, 0, 0, 170, 0], None, &[&[1, 1]]);
+        let blorb = blorb_apal(&[(1, &base)], &[]);
+        let mut src = PictSource::new(Some(blorb));
+
+        let first = src.scaled_image(1, (3, 3)).unwrap();
+        assert_eq!((first.width(), first.height()), (6, 3), "resampled by the requested scale");
+        let second = src.scaled_image(1, (3, 3)).unwrap();
+        assert!(Arc::ptr_eq(&first, &second), "second draw hits the cache: the resample ran once");
+    }
+
+    #[test]
+    fn scaled_image_at_unit_scale_is_the_source_arc_with_no_copy() {
+        // The other half of SQ-1196: `v6_scaled_art` `.clone()`d a full
+        // `DynamicImage` at (1, 1) even though the pixels are untouched.
+        // `scaled_image` must hand back the SOURCE's own `Arc` instead.
+        let base = indexed_png(2, 1, &[0, 0, 0, 0, 170, 0], None, &[&[1, 1]]);
+        let blorb = blorb_apal(&[(1, &base)], &[]);
+        let mut src = PictSource::new(Some(blorb));
+
+        let source = src.image(1).unwrap();
+        let scaled = src.scaled_image(1, (1, 1)).unwrap();
+        assert!(Arc::ptr_eq(&source, &scaled), "(1,1) is the identity: no resample, no copy");
+    }
+
+    #[test]
+    fn palette_change_invalidates_the_scaled_adaptive_cache() {
+        // The scaled cache for a palette-dependent picture must not outlive the
+        // generation it was resampled under — mirrors
+        // `palette_change_evicts_the_stale_generations_adaptive_cache` above,
+        // which is the existing invalidation point this hangs off of
+        // (`evict_stale_adaptive_cache`, called from the same palette-gen bump).
+        let base_green = indexed_png(2, 1, &[0, 0, 0, 0, 170, 0], None, &[&[1, 1]]);
+        let base_red = indexed_png(2, 1, &[0, 0, 0, 200, 0, 0], None, &[&[1, 1]]);
+        let adaptive = indexed_png(2, 1, &[0, 0, 0, 170, 0, 170], None, &[&[1, 1]]);
+        let blorb = blorb_apal(&[(1, &base_green), (2, &adaptive), (3, &base_red)], &[2]);
+        let mut src = PictSource::new(Some(blorb));
+
+        src.image(1).unwrap(); // establishes the green palette, generation 1
+        let scaled_gen1_a = src.scaled_image(2, (3, 3)).unwrap();
+        let scaled_gen1_b = src.scaled_image(2, (3, 3)).unwrap();
+        assert!(
+            Arc::ptr_eq(&scaled_gen1_a, &scaled_gen1_b),
+            "same generation, repeat draw: the resample ran once"
+        );
+
+        src.image(3).unwrap(); // re-establishes the palette (red) → gen bumps,
+                                // evicting the stale generation's scaled entry
+        let scaled_gen2 = src.scaled_image(2, (3, 3)).unwrap();
+        assert!(
+            !Arc::ptr_eq(&scaled_gen1_a, &scaled_gen2),
+            "the palette changed the source pixels: the next draw resamples again"
+        );
+        assert_eq!(top_left(&scaled_gen2), [200, 0, 0, 255], "recoloured under the new (red) palette");
     }
 
     #[test]
