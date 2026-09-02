@@ -2371,6 +2371,12 @@ pub struct OverlayState {
     /// `startup::ask_font_check`, and both drive the same
     /// `render::font_check_dialog`.
     pub font_check: bool,
+    /// `None` while the font check is showing stage one (the icon glyphs, or
+    /// not open at all); `Some(nerdfont)` once stage one is answered and the
+    /// check has moved on to stage two, the diagonal corner stubs (SQ-1245) —
+    /// carrying stage one's answer until stage two closes and both are written
+    /// together. Reset to `None` whenever `font_check` closes.
+    pub font_check_icon_answer: Option<bool>,
     /// When true, the first-use aux-storage prompt is open.
     pub aux_prompt: bool,
     /// When true, the "Save state before quitting?" confirmation dialog is open.
@@ -3102,6 +3108,16 @@ pub struct AppState {
     /// from `Moved` events and never claims one, because typing always wins.
     pub control_hover: Option<crate::render::controls::BorderControl>,
 
+    /// The matrix-view room the pointer is on, if any (SQ-1246), paired with
+    /// the exact rect it was found under — a row label or a destination cell.
+    /// Set from `Moved` events, only while the active layer is drawn as a
+    /// matrix; the drawn map view has no equivalent and must not populate
+    /// this. Carrying the rect alongside the room (rather than re-resolving
+    /// it against a fresh hit-list at draw time, as `control_hover` does)
+    /// sidesteps the ambiguity a `BorderControl` never has: one room can be
+    /// the destination of several cells, so an id alone would not say which
+    /// occurrence the pointer was actually over.
+    pub matrix_hover: Option<(RoomId, ratatui::layout::Rect)>,
 
 
 
@@ -3269,6 +3285,12 @@ pub struct AppState {
     /// Last parsed output from an inventory command (parse fallback when player_obj
     /// is not yet locked).
     pub inventory_fallback: Vec<String>,
+    /// The word a click on each inventory dock row composes into the prompt,
+    /// in the SAME order as the dock's own display list
+    /// (`render::transcript::inventory_items`) — refreshed once per loop tick
+    /// by `render::inventory_dock::refresh_inventory_click_words` (SQ-1244).
+    /// Empty whenever the panel is neither shown nor sliding.
+    pub inventory_click_words: Vec<String>,
     /// The player's previous room (global 0 value from the previous turn).
     pub prev_location: Option<u16>,
     /// Objects whose parent was prev_location at the end of the previous turn.
@@ -3558,6 +3580,7 @@ impl Default for AppState {
             pane_drag: None,
             pane_hover: None,
             control_hover: None,
+            matrix_hover: None,
             turns: 0,
             unsaved_progress: false,
             exit_target: ExitTarget::Exit,
@@ -3584,6 +3607,7 @@ impl Default for AppState {
             show_inventory: false,
             player_obj: None,
             inventory_fallback: Vec::new(),
+            inventory_click_words: Vec::new(),
             prev_location: None,
             prev_objects_here: std::collections::BTreeSet::new(),
             pending_resume: None,

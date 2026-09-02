@@ -736,7 +736,7 @@ fn exactly_one_file_in_the_workspace_implements_the_rule() {
         for e in entries.flatten() {
             let p = e.path();
             if p.is_dir() {
-                if p.file_name().is_some_and(|n| n == "target") {
+                if p.file_name().is_some_and(|n| n.to_string_lossy().starts_with("target")) {
                     continue;
                 }
                 stack.push(p);

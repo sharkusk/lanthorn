@@ -26,6 +26,14 @@
 //! is there to catch is a candidate the vetting drops in one room and keeps in
 //! the next, which is the whole point of the probe.
 //!
+//! Every row also carries what the vetting COST (SQ-1249): the commands typed
+//! into the shadow, the worker seconds they took split into boot / restore /
+//! submit / world, the worst single turn, and the caller-thread time — the host
+//! snapshot, and the only part of the seam a player waits for. Each offer line
+//! carries its own turn's shadow time. **Run it `--release` before quoting any
+//! of it**: the debug figures are ~12x larger and have been mistaken for a
+//! defect once already (see `app::probe`'s module docs for the table).
+//!
 //! Nothing is written and nothing is committed — the output is the artefact.
 //! When the corpus grows, this is the second of the three steps in
 //! `crates/verb-synonyms-gen/README.md`: the harvest diff says which verbs the
@@ -37,7 +45,7 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use app::engine::{Engine, KeyInput};
-use app::probe::ShadowRecipe;
+use app::probe::{ProbePhases, ShadowRecipe};
 use app::session::InputKind;
 use app::state::{AppState, TranscriptKind};
 
@@ -138,10 +146,27 @@ struct Row {
     verbs: Option<usize>,
     /// Where the battery was typed, when the engine could say.
     rooms: Vec<String>,
-    /// `(command, offer, vetted)`, in the order the light spoke.
-    offers: Vec<(String, String, bool)>,
+    /// `(command, offer, vetted, probe ms for the turn that spoke it)`, in the
+    /// order the light spoke.
+    offers: Vec<(String, String, bool, u128)>,
     /// What stood between boot and the first prompt, if anything.
     note: String,
+    /// Commands typed into the shadow across the whole scan of this story.
+    probes: u32,
+    /// Wall time the shadow worker spent on them.
+    spent: Duration,
+    /// Where that time went (SQ-1249).
+    phases: ProbePhases,
+    /// The worst single turn's shadow time — the number a player would feel,
+    /// where `spent` is the whole session's bill.
+    worst_turn: Duration,
+    /// Every turn that actually asked the shadow something, in order.
+    turn_times: Vec<Duration>,
+    /// Time spent on the PLAYER'S thread arming those questions — the host
+    /// snapshot `ShadowProbe::ask` takes before it hands the job over. The
+    /// worker timings above cannot see it, and it is the only part of the seam
+    /// a player actually waits for (SQ-1249).
+    caller: Duration,
 }
 
 fn scan(path: &Path, name: &str) -> Option<Row> {
@@ -188,7 +213,16 @@ fn scan(path: &Path, name: &str) -> Option<Row> {
         note.push_str("never reached a prompt (menu?); ");
     }
 
-    let mut play = Play { state, engine, last: String::new(), turns: 0, deadline };
+    let mut play =
+        Play {
+            state,
+            engine,
+            last: String::new(),
+            turns: 0,
+            deadline,
+            turn_times: Vec::new(),
+            caller: Duration::ZERO,
+        };
     play.turn("look");
     let mut rooms = Vec::new();
     let mut offers = Vec::new();
@@ -225,17 +259,34 @@ fn scan(path: &Path, name: &str) -> Option<Row> {
             } else {
                 format!("{verb} {noun}")
             };
-            for line in play.turn(&cmd) {
+            let lines = play.turn(&cmd);
+            let ms = play.turn_times.last().copied().unwrap_or_default().as_millis();
+            for line in lines {
                 let vetted = line.starts_with(app::vocab::LEAD_VETTED);
                 let body = line
                     .trim_start_matches(app::vocab::LEAD_VETTED)
                     .trim_start_matches(app::vocab::LEAD_DICTIONARY)
                     .to_string();
-                offers.push((cmd.clone(), body, vetted));
+                offers.push((cmd.clone(), body, vetted, ms));
             }
         }
     }
-    Some(Row { file: name.to_string(), format, family, verbs, rooms, offers, note })
+    let worst_turn = play.turn_times.iter().copied().max().unwrap_or_default();
+    Some(Row {
+        file: name.to_string(),
+        format,
+        family,
+        verbs,
+        rooms,
+        offers,
+        note,
+        probes: play.state.probe.probes,
+        spent: play.state.probe.spent,
+        phases: play.state.probe.phases,
+        worst_turn,
+        turn_times: play.turn_times,
+        caller: play.caller,
+    })
 }
 
 fn boot(loaded: app::hints::LoadedStory) -> Option<Box<dyn Engine>> {
@@ -331,6 +382,10 @@ struct Play {
     last: String,
     turns: usize,
     deadline: Instant,
+    /// Shadow wall time for each turn that asked it something (SQ-1249).
+    turn_times: Vec<Duration>,
+    /// Caller-thread time inside `offer_vocabulary` — the snapshot.
+    caller: Duration,
 }
 
 impl Play {
@@ -347,13 +402,20 @@ impl Play {
         }
         self.turns += 1;
         let before = assists(&self.state).len();
+        let spent_before = self.state.probe.spent;
         let r = self.engine.submit(cmd);
         self.last = r.transcript.clone();
         self.state.push_transcript_kind(&format!("> {cmd}"), TranscriptKind::Input);
         self.state.push_transcript_kind(r.transcript.trim_end_matches('\n'), TranscriptKind::Story);
         let printed = !r.transcript.trim().is_empty();
+        let asking = Instant::now();
         app::vocab::offer_vocabulary(&mut self.state, &*self.engine, cmd, printed);
+        self.caller += asking.elapsed();
         app::vocab::settle_vocabulary_offer(&mut self.state);
+        let asked = self.state.probe.spent - spent_before;
+        if !asked.is_zero() {
+            self.turn_times.push(asked);
+        }
         assists(&self.state).into_iter().skip(before).collect()
     }
 }
@@ -374,7 +436,7 @@ fn print_table(rows: &[Row]) {
         "story", "format", "family", "verbs", "vet/off"
     );
     for r in rows {
-        let ok = r.offers.iter().filter(|(_, _, v)| *v).count();
+        let ok = r.offers.iter().filter(|(_, _, v, _)| *v).count();
         println!(
             "{:<42} {:<13} {:<6} {:>5} {:>3}/{:<3}  {}{}",
             trunc(&r.file, 42),
@@ -386,12 +448,31 @@ fn print_table(rows: &[Row]) {
             r.note,
             if r.rooms.is_empty() { String::new() } else { format!("rooms: {}", r.rooms.join(" → ")) }
         );
-        for (cmd, offer, v) in &r.offers {
-            println!("      {:<24} {} {}", cmd, if *v { "vetted  " } else { "unvetted" }, offer);
+        println!(
+            "      probe: {} cmds, {:.2}s worker, {:.2}s CALLER, worst turn {:.2}s  \
+             [boot {:.2}s  restore {:.2}s  submit {:.2}s  world {:.2}s]",
+            r.probes,
+            r.spent.as_secs_f64(),
+            r.caller.as_secs_f64(),
+            r.worst_turn.as_secs_f64(),
+            r.phases.boot.as_secs_f64(),
+            r.phases.restore.as_secs_f64(),
+            r.phases.submit.as_secs_f64(),
+            r.phases.world.as_secs_f64(),
+        );
+        for (cmd, offer, v, ms) in &r.offers {
+            println!(
+                "      {:<24} {} {:>6}ms {}",
+                cmd,
+                if *v { "vetted  " } else { "unvetted" },
+                ms,
+                offer
+            );
         }
     }
     let total: usize = rows.iter().map(|r| r.offers.len()).sum();
-    let vetted: usize = rows.iter().map(|r| r.offers.iter().filter(|(_, _, v)| *v).count()).sum();
+    let vetted: usize =
+        rows.iter().map(|r| r.offers.iter().filter(|(_, _, v, _)| *v).count()).sum();
     println!("\n{} stories, {total} offers, {vetted} of them vetted", rows.len());
 }
 
@@ -411,13 +492,29 @@ fn print_json(rows: &[Row]) {
             r.rooms.iter().map(|s| format!("\"{}\"", esc(s))).collect::<Vec<_>>().join(", ")
         );
         println!("    \"note\": \"{}\",", esc(r.note.trim_end_matches([';', ' '])));
+        println!("    \"probes\": {},", r.probes);
+        println!("    \"probe_ms\": {},", r.spent.as_millis());
+        println!("    \"probe_caller_ms\": {},", r.caller.as_millis());
+        println!("    \"probe_worst_turn_ms\": {},", r.worst_turn.as_millis());
+        println!(
+            "    \"probe_phases_ms\": {{ \"boot\": {}, \"restore\": {}, \"submit\": {}, \"world\": {} }},",
+            r.phases.boot.as_millis(),
+            r.phases.restore.as_millis(),
+            r.phases.submit.as_millis(),
+            r.phases.world.as_millis()
+        );
+        println!(
+            "    \"probe_turn_ms\": [{}],",
+            r.turn_times.iter().map(|d| d.as_millis().to_string()).collect::<Vec<_>>().join(", ")
+        );
         println!("    \"offers\": [");
-        for (j, (cmd, offer, v)) in r.offers.iter().enumerate() {
+        for (j, (cmd, offer, v, ms)) in r.offers.iter().enumerate() {
             println!(
-                "      {{ \"command\": \"{}\", \"offer\": \"{}\", \"vetted\": {} }}{}",
+                "      {{ \"command\": \"{}\", \"offer\": \"{}\", \"vetted\": {}, \"probe_ms\": {} }}{}",
                 esc(cmd),
                 esc(offer),
                 v,
+                ms,
                 if j + 1 == r.offers.len() { "" } else { "," }
             );
         }

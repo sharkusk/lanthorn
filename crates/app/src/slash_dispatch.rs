@@ -602,11 +602,14 @@ pub(crate) fn dispatch_slash_outcome(
             }
         }
         SlashOutcome::RunFontCheck => {
-            // SQ-1104: open the same modal the first run raises. Focus starts on
-            // the second button — the answer that changes nothing — matching the
-            // dialog's declared default, so Enter without reading is not a
-            // decision to install glyphs the font may not have.
+            // SQ-1104/SQ-1245: open the same modal the first run raises, on
+            // stage one. Focus starts on the second button — the answer that
+            // changes nothing — matching the dialog's declared default, so
+            // Enter without reading is not a decision to install glyphs the
+            // font may not have. `font_check_icon_answer` is reset defensively
+            // in case a previous run somehow left it set.
             state.overlays.dialog_focus = 1;
+            state.overlays.font_check_icon_answer = None;
             state.overlays.font_check = true;
         }
         SlashOutcome::SetGuidance(arg) => {

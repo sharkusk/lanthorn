@@ -81,7 +81,8 @@ declare, or if `t-all` drops a group.
   push — **not** the full gate. CI is the backstop (see below), and a merged-tree
   `cargo check` is what catches the one thing CI would catch too late and nothing
   else local can see: a SEMANTIC merge conflict between parallel lanes, textually
-  clean and non-compiling. It costs under a minute where the gate costs many.
+  clean and non-compiling. It costs minutes (see Disk hygiene for the measured
+  numbers) where the gate costs many more.
   **Since SQ-1242, this catches PRODUCTION code only** — with no `t-*` feature on,
   none of `app`'s in-crate tests compile, so a merge conflict confined to test code
   is invisible to it. CI's `cargo check`-equivalent is the `--all-features` test
@@ -130,8 +131,19 @@ floor, not the ceiling:
 | `crates/app/src/render/transcript.rs` | `zork_classic`, `zmachine_screen`, `-p app --lib` |
 | `crates/app/src/native_font.rs`, `crates/blorb/**` | `-p blorb`, `engines`, `v6_zork0` |
 | `crates/mapper/**` | `-p mapper`, `mapper_ui` |
+| `crates/verb-synonyms/**`, `crates/app/src/vocab.rs` | `-p app --lib vocab`, `adult_words`, `vocabulary_offer`, `vocabulary_vetting`, `assist_voice`, `word_reveal`, `command_band`, `scope_completion`, `story_word_scrape` |
 | anything touching the PALETTE | the gate **and** `cargo test --workspace --all-features` |
 | a test that WRITES TO DISK | the gate **and** `cargo test --workspace --all-features`, twice |
+
+**The guidance suites are where a `stories/`-only case hides** (SQ-1251). Seven of
+the nine above boot a real commercial story and skip vacuously without it, so CI —
+which has no `stories/` — cannot fail on any of them, and the local gate is the ONLY
+thing that can. Regenerating `synonym_groups.tsv` or changing which members count as
+known moves what the Guiding Light says on Zork I, Curses and the rest, and the
+pinned offer lines are the only record of it. SQ-1234's table regeneration and
+SQ-1238's phrasal members each broke one pinned line and neither lane ran the suite
+that held it; the failure sat on green main for a day. **Symlink `stories/` into the
+worktree and run these by name — a vacuous skip reads exactly like a pass.**
 
 **Two things have justified the full gate**: a SEMANTIC merge conflict between two
 parallel lanes that was textually clean (one lane calling a signature the other had
@@ -277,7 +289,15 @@ named-archive link). Convert the awkward remainder by hand.
 
 Cargo has no garbage collection for `target/`: every hash change writes a new artifact beside the old one and orphans it forever (`-Zgc` is nightly and reclaims the *registry* cache, not build output). Two things dominate, and neither needs a tool:
 
-- **`target/debug/incremental`** is a pure cache — delete it freely; the only cost is a slower next build.
+- **The build directory is `target.noindex/`, not `target/`** (`.cargo/config.toml`
+  sets `target-dir`), because Spotlight indexes everything on this volume except a
+  directory whose name ends in `.noindex`, and it was indexing every build:
+  `corespotlightd` at 200% CPU behind a `cargo check --all-targets` that took
+  15–28 minutes during a wave of merges (2026-09-02). CI and the Dockerfile set
+  `CARGO_TARGET_DIR=target` so their `target/...` paths still hold. Anything that
+  walks the repo tree must skip every directory whose name STARTS with `target`.
+- **`target.noindex/debug/incremental`** is a pure cache — delete it freely; the only cost is a slower next build. It reached 48 GB (2,020 sessions) after one day of eleven lanes; deleting it changed nothing about check time, which is the point below.
+- **A merged-tree `cargo check --all-targets` is not "under a minute" for this crate any more.** Measured on a quiet machine with a fresh cache (2026-09-02): `-p app --lib` 33s, `-p app --lib --tests` 5m19s, `--all-targets` after touching `app` 11m. The cost is `app`'s library test module — ~3,000 unit tests compiled as one unit with the lib — plus the fourteen group binaries. Only a crate split moves it.
 - **Merged worktrees** — see the hard rule above.
 
 For the orphaned artifacts themselves there is `cargo sweep`, but **do not run it routinely here** — build speed beats disk, and an occasional manual `cargo clean` is the preferred trade. Measured on this workspace: `cargo sweep --dry-run --time 7` would have removed 28 GiB from a 22 GB `target/`, i.e. effectively everything. That is not orphan sediment; almost all of it is third-party dependency rlibs compiled weeks ago and still very much in use, because the workspace's own artifacts are always freshly rebuilt. Age is a poor proxy for obsolete when your own crates churn daily and your dependencies never do.

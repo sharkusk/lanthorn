@@ -804,12 +804,25 @@ impl StoryVocabulary {
     /// dictionary spelling of one verb, so a story that groups `take` with `get`
     /// and `hold` teaches the player its own vocabulary at no cost — and after
     /// every other source, whichever one found the verb, because it is an aside.
+    ///
+    /// **A PHRASE is never expanded this way** (SQ-1251). Since SQ-1238 a
+    /// multi-word synonym member can be a candidate in its own right, and
+    /// [`Self::verb_named`] resolves one through its FIRST word alone — so
+    /// `put on` reaches Zork I's `put` entry, whose other spellings are
+    /// `hide`, `insert`, `place` and `stuff`. Those are aliases of `put`, not
+    /// of `put on`, and they mean a different action: typing `don sword` was
+    /// answered `wear · put on · hide`, and hiding a sword is not wearing it.
+    /// The preposition is what carries the meaning, and the verb entry knows
+    /// nothing about it.
     fn by_story_synonym(&self, position: Position, out: &mut Vec<Candidate>) {
         if position != Position::Opening {
             return;
         }
         let found: Vec<String> = out.iter().map(|c| c.word.clone()).collect();
         for w in &found {
+            if w.split_whitespace().count() > 1 {
+                continue;
+            }
             let Some(verb) = self.verb_named(w) else { continue };
             for (order, other) in verb.words.iter().enumerate() {
                 // A one-letter abbreviation (`q`, `x`, `g`) is real vocabulary
@@ -2177,6 +2190,51 @@ mod tests {
         );
     }
 
+    /// **SQ-1251, the bill for SQ-1238.** Once a PHRASE could be a candidate,
+    /// `by_story_synonym` started expanding one — and it resolves a candidate
+    /// to a verb through [`StoryVocabulary::verb_named`], which reads the FIRST
+    /// WORD alone. So `put on` reached the `put` entry and the offer picked up
+    /// that entry's other spellings, which are aliases of `put` and mean a
+    /// different action than `put on`.
+    ///
+    /// This is the pocket form of what Zork I r88 did on `don sword`: the
+    /// answer was `wear · put on · hide`, and hiding a sword is not wearing it.
+    ///
+    /// Falsify by dropping the phrase skip from `by_story_synonym`: `hide`
+    /// comes back in third place, exactly as it did on the real story.
+    #[test]
+    fn a_phrasal_candidate_never_drags_in_its_first_words_other_spellings() {
+        let verbs = vec![
+            Verb::new(100, 0, vec!["wear".into()], vec![SyntaxLine::new(0, false, vec![noun()])]),
+            Verb::new(
+                101,
+                0,
+                // Dictionary order, as a real story's entry arrives — which is
+                // why `hide` is the spelling that leaked out of Zork I's `put`.
+                vec!["hide".into(), "put".into(), "stow".into()],
+                vec![SyntaxLine::new(1, false, vec![noun(), word("on"), noun()])],
+            ),
+        ];
+        let mut words = BTreeMap::new();
+        for w in ["wear", "put", "hide", "stow"] {
+            words.insert(w.to_string(), roles(true, false));
+        }
+        words.insert("on".to_string(), WordRoles::default());
+        let preps: BTreeSet<String> = ["on"].iter().map(|s| s.to_string()).collect();
+        let v = StoryVocabulary::new(verbs, words, preps, 0);
+
+        // The setup: `don` is a word this story never heard, and the phrase the
+        // meaning table reaches for it IS one the grammar pairs (SQ-1240).
+        assert!(!v.knows("don"), "the word typed is not this story's");
+        assert!(v.knows("put on"), "`put` takes `on` here, so the phrase counts");
+
+        assert_eq!(
+            v.offer("don", Position::Opening, &["cloak"], &[]),
+            vec!["wear", "put on"],
+            "what the story calls `put` is not what it calls `put on`"
+        );
+    }
+
     /// Meaning proposes VERBS, and the opening word is the only place a verb
     /// stands. A synonym of an action offered inside a noun phrase names nothing.
     #[test]
@@ -2292,5 +2350,57 @@ mod tests {
             ["light", "the", "lanturn", "please"]
         );
         assert!(words_of("   ").is_empty());
+    }
+
+    /// **SQ-1248, at the judge.** The run that reached `judge` on `curses.z5`
+    /// and `suvehnux.z5`, transcribed: ten commands, every reply exactly what
+    /// those stories printed — and every step carrying a world print the shadow
+    /// took without a status line, against a baseline the LIVE engine took with
+    /// one.
+    ///
+    /// The judge answered `None` (the offer fell back to `this story knows`)
+    /// because `refusal_from(0)` was empty: the print called the nonsense
+    /// control a move, so its words could not be read as a refusal. Falsify by
+    /// folding `WorldPrint`'s three facts back into one hash — the vetting then
+    /// returns `None` here again, which is the reported symptom.
+    #[test]
+    fn a_shadow_with_no_status_line_can_still_be_judged() {
+        let step = |command: &str, reply: &str| crate::probe::ProbeStep {
+            command: command.to_string(),
+            reply: reply.to_string(),
+            location: None,
+            world: crate::probe::WorldPrint::from_parts(Some(7), None, None),
+            quit: false,
+            escaped: false,
+        };
+        let run = crate::probe::ProbeRun {
+            baseline: crate::probe::WorldPrint::from_parts(Some(7), Some(35), Some(99)),
+            steps: vec![
+                step("zqxwvj", "That's not a verb I recognise."),
+                step("examine ace", "You can't see any such thing."),
+                step("examine adamant", "You can't see any such thing."),
+                step("examine hinged", "You see nothing special about the hinged trapdoor."),
+                step("describe ace", "You can't see any such thing."),
+                step("describe adamant", "You can't see any such thing."),
+                step("describe hinged", "You see nothing special about the hinged trapdoor."),
+                step("watch ace", "You can't see any such thing."),
+                step("watch adamant", "You can't see any such thing."),
+                step("watch hinged", "You can't see any such thing."),
+            ],
+        };
+        let offer = PendingOffer {
+            token: 1,
+            epoch: 0,
+            word: "inspect".to_string(),
+            picks: vec!["examine".into(), "describe".into(), "watch".into()],
+            plan: vec![(3, Some((1, 2)), None), (6, Some((4, 5)), None), (9, Some((7, 8)), None)],
+            commands: 10,
+        };
+        assert_eq!(
+            judge(&run, &offer),
+            Some(vec!["examine".to_string(), "describe".to_string()]),
+            "the two that described the trapdoor are kept; `watch`, which the story \
+             refused in the same words as the controls, is dropped"
+        );
     }
 }

@@ -29,6 +29,10 @@ any such tag, or this Unreleased section, still exists.*
 
 ### Added
 
+- **Inventory panel items are clickable.** A click on an item in the
+  inventory panel composes its word onto the prompt exactly like a click on
+  the command panel's WHAT column — same one-space rule, same partial-word
+  replacement — even though the two panels never show at once.
 - **Older Glulx games now get the acceleration newer ones ask for.** Inform 7
   builds from 2010 on tell the interpreter where their veneer routines live, and
   lanthorn runs those natively; every Inform 6 game and every older Inform 7 game
@@ -43,6 +47,24 @@ any such tag, or this Unreleased section, still exists.*
   each with its own key shown alongside. (Right-clicking twice no longer opens
   launch options; the menu item does.)
 - **`?` in the picker** shows every key the story browser knows, on one screen.
+- **The font check now asks about the diagonal map corners separately.** The
+  four half-diagonal corner-stub glyphs are plain Unicode, not part of any Nerd
+  Font patch, so a font could pass the icon comparison and still draw the map's
+  diagonals as boxes (or vice versa) — one answer used to cover both. It is now
+  a second question, right after the first: which row draws the diagonal stubs
+  cleanly, against the orthogonal corner the map falls back to without them.
+  Answered independently either way, and it sets `map.diagonal_corners` in
+  `style.toml`; skipping it (Esc or the close box) leaves that setting exactly
+  as it was.
+- **The matrix map view now shows a room's full name on hover.** A row's
+  abbreviated label or a destination cell's two-letter tag — either one, under
+  the pointer — pops a tooltip spelling out the name in full, the same box the
+  border controls already use for their hints.
+- **The matrix map view's name column now grows to fit.** It used to sit at a
+  fixed width regardless of how much room the pane had to spare; now it takes
+  whatever the direction columns leave behind, up to the longest room name —
+  so a wide pane shows names in full, and the abbreviate-and-footnote
+  treatment kicks in only for a name that still doesn't fit.
 - **The story pane's border control now cycles three states.** Command panel →
   inventory panel → none → command panel, one click at a time (`cycle-panel`,
   bound to the same control that used to only toggle the command panel). The
@@ -70,6 +92,12 @@ any such tag, or this Unreleased section, still exists.*
 
 ### Fixed
 
+- **Glulx games show their inventory in the panels.** The inventory panel and the
+  command panel's *carried* and *here* columns now read a Glulx story's own
+  object tree instead of scraping the reply to an `i` command — which any game
+  answering in its own prose defeated, leaving both panels empty for the whole
+  game (City of Secrets). Games whose avatar cannot be identified with certainty
+  keep the old scrape rather than showing a wrong list.
 - A Glulx status window with its own background colour — Kerkerkruip's grey
   strip, with the panels off — is filled in that colour edge to edge instead of
   going black between the words.
@@ -77,6 +105,9 @@ any such tag, or this Unreleased section, still exists.*
   even when that row's built-in default pins an `fg`/`bg` of its own (the menu
   highlight and the transcript search highlight used to ignore the re-root
   entirely; a few others only half-moved).
+- A long notification toast now wraps onto extra rows instead of getting cut
+  off at the right edge; only a message past five rows loses its tail, marked
+  with a trailing `…`.
 
 ## v0.4.0 — 2026-09-01
 

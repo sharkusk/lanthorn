@@ -206,10 +206,13 @@ pub(crate) fn draw_all(
 pub(crate) enum OverlayAct {
     /// Switch `record_turn_history` on and persist it (SQ-1091).
     EnableTurnHistory,
-    /// The font check was answered (SQ-1104): `true` = this terminal draws the
-    /// Nerd Font icons, so install those presets. Applying it writes `style.toml`
-    /// and reloads the live theme, which needs the run loop's context.
-    FontCheck(bool),
+    /// Both font-check stages were answered (SQ-1104, SQ-1245): `.0` = this
+    /// terminal draws the Nerd Font icons, so install those presets; `.1` =
+    /// the diagonal corner stubs answer, `None` when stage two was skipped
+    /// (Esc or the close box) and `diagonal_corners` should be left untouched.
+    /// Applying it writes `style.toml` and reloads the live theme, which needs
+    /// the run loop's context.
+    FontCheck(bool, Option<bool>),
     /// The keep-this-download prompt was answered (SQ-1086): `Some(mode)` copies
     /// the fetched story into the library, `None` plays it where it landed and
     /// forgets it. Applying it needs the run loop's paths, so it surfaces here.
@@ -382,57 +385,106 @@ impl Overlay for HistoryPromptOverlay {
     }
 }
 
-// ── "Which of these two rows does your font draw?" (SQ-1104) ───────────────
+// ── "Which of these two rows does your font draw?" (SQ-1104, SQ-1245) ──────
 //
-// Two buttons and a close, so the whole of it is the shared ladder, the same way
-// the history prompt is. The pre-game half of this — the FIRST-run ask, before
-// any `AppState` exists — is `startup::ask_font_check`, and both drive the one
+// Two questions, same chrome: stage one asks about the Nerd Font icon glyphs,
+// stage two about the diagonal corner stubs, independently of one another in
+// both directions. `state.overlays.font_check_icon_answer` carries stage one's
+// answer while stage two is up (`None` = still on stage one); both buttons and
+// a close, so the whole of each stage is the shared ladder, the same way the
+// history prompt is. The pre-game half of this — the FIRST-run ask, before any
+// `AppState` exists — is `startup::ask_font_check`, and both drive the same
 // `render::font_check_dialog`.
 struct FontCheckOverlay;
 impl Overlay for FontCheckOverlay {
     fn kind(&self) -> OverlayKind { OverlayKind::FontCheck }
     fn is_open(&self, ov: &OverlayState) -> bool { ov.font_check }
     fn draw(&self, state: &AppState, area: Rect, buf: &mut Buffer, out: &mut OverlayRects) {
-        out.font_check = app::render::font_check_dialog::draw_font_check(state, area, buf);
+        out.font_check = if state.overlays.font_check_icon_answer.is_some() {
+            app::render::font_check_dialog::draw_diagonal_check(state, area, buf)
+        } else {
+            app::render::font_check_dialog::draw_font_check(state, area, buf)
+        };
     }
     fn key(&self, state: &mut AppState, key: &KeyEvent) -> OverlayOutcome {
-        use app::render::font_check_dialog::{font_check_key_focused, FontCheckAction};
         match key.code {
             KeyCode::Tab | KeyCode::Right | KeyCode::Down => {
                 state.overlays.dialog_focus = cycle_focus(state.overlays.dialog_focus, 2, 1);
-                OverlayOutcome::Consumed
+                return OverlayOutcome::Consumed;
             }
             KeyCode::BackTab | KeyCode::Left | KeyCode::Up => {
                 state.overlays.dialog_focus = cycle_focus(state.overlays.dialog_focus, 2, -1);
-                OverlayOutcome::Consumed
+                return OverlayOutcome::Consumed;
             }
-            code => match font_check_key_focused(code, state.overlays.dialog_focus) {
-                FontCheckAction::None => OverlayOutcome::Consumed,
-                FontCheckAction::Nerd => {
-                    state.overlays.font_check = false;
-                    OverlayOutcome::Act(OverlayAct::FontCheck(true))
+            _ => {}
+        }
+        match state.overlays.font_check_icon_answer {
+            None => {
+                use app::render::font_check_dialog::{font_check_key_focused, FontCheckAction};
+                match font_check_key_focused(key.code, state.overlays.dialog_focus) {
+                    FontCheckAction::None => OverlayOutcome::Consumed,
+                    FontCheckAction::Nerd => self.advance_to_stage_two(state, true),
+                    FontCheckAction::Plain => self.advance_to_stage_two(state, false),
                 }
-                FontCheckAction::Plain => {
-                    state.overlays.font_check = false;
-                    OverlayOutcome::Act(OverlayAct::FontCheck(false))
+            }
+            Some(nerdfont) => {
+                use app::render::font_check_dialog::{diagonal_check_key_focused, DiagonalCheckAction};
+                match diagonal_check_key_focused(key.code, state.overlays.dialog_focus) {
+                    DiagonalCheckAction::None => OverlayOutcome::Consumed,
+                    DiagonalCheckAction::Diagonal => self.finish(state, nerdfont, Some(true)),
+                    DiagonalCheckAction::Orthogonal => self.finish(state, nerdfont, Some(false)),
+                    DiagonalCheckAction::Skip => self.finish(state, nerdfont, None),
                 }
-            },
+            }
         }
     }
     fn mouse(&self, state: &mut AppState, m: &MouseEvent, panes: &PaneRects) -> OverlayOutcome {
         let Some(pt) = left_down(m) else { return OverlayOutcome::Consumed };
         let Some(fc) = &panes.font_check else { return OverlayOutcome::Consumed };
-        if fc.nerd.is_some_and(|r| r.contains(pt)) {
-            state.overlays.font_check = false;
-            return OverlayOutcome::Act(OverlayAct::FontCheck(true));
-        }
-        // The close box means row 2, for the same reason Esc does: a font check
-        // dismissed is a font check answered, or it comes back every launch.
-        if fc.plain.is_some_and(|r| r.contains(pt)) || fc.close.is_some_and(|r| r.contains(pt)) {
-            state.overlays.font_check = false;
-            return OverlayOutcome::Act(OverlayAct::FontCheck(false));
+        match state.overlays.font_check_icon_answer {
+            None => {
+                if fc.nerd.is_some_and(|r| r.contains(pt)) {
+                    return self.advance_to_stage_two(state, true);
+                }
+                // The close box means row 2, for the same reason Esc does: a
+                // stage-one dismissal is a stage-one answer, or it comes back
+                // every launch.
+                if fc.plain.is_some_and(|r| r.contains(pt)) || fc.close.is_some_and(|r| r.contains(pt)) {
+                    return self.advance_to_stage_two(state, false);
+                }
+            }
+            Some(nerdfont) => {
+                if fc.nerd.is_some_and(|r| r.contains(pt)) {
+                    return self.finish(state, nerdfont, Some(true));
+                }
+                if fc.plain.is_some_and(|r| r.contains(pt)) {
+                    return self.finish(state, nerdfont, Some(false));
+                }
+                // The close box SKIPS stage two rather than answering "no" for
+                // the player — see `DiagonalCheckAction::Skip`.
+                if fc.close.is_some_and(|r| r.contains(pt)) {
+                    return self.finish(state, nerdfont, None);
+                }
+            }
         }
         OverlayOutcome::Consumed
+    }
+}
+
+impl FontCheckOverlay {
+    /// Stage one answered: park it and move the dialog to stage two, focused on
+    /// its own default (row 2 — the fallback every font can draw).
+    fn advance_to_stage_two(&self, state: &mut AppState, nerdfont: bool) -> OverlayOutcome {
+        state.overlays.font_check_icon_answer = Some(nerdfont);
+        state.overlays.dialog_focus = 1;
+        OverlayOutcome::Consumed
+    }
+    /// Stage two answered or skipped: close the whole check and hand both
+    /// answers to the run loop to write together.
+    fn finish(&self, state: &mut AppState, nerdfont: bool, diagonal: Option<bool>) -> OverlayOutcome {
+        state.overlays.font_check = false;
+        state.overlays.font_check_icon_answer = None;
+        OverlayOutcome::Act(OverlayAct::FontCheck(nerdfont, diagonal))
     }
 }
 
@@ -1273,6 +1325,68 @@ mod tests {
             topmost_common_dialog(&o).unwrap().kind(),
             OverlayKind::ConfirmOverwrite,
             "confirm-overwrite must be topmost while the save-name dialog waits behind it"
+        );
+    }
+
+    /// SQ-1245: answering stage one does not close the font check — it moves it
+    /// on to stage two, carrying stage one's answer in
+    /// `font_check_icon_answer`, and only stage two's answer (or a skip)
+    /// finally closes it and hands the run loop both.
+    #[test]
+    fn the_font_check_reaches_stage_two_before_it_closes() {
+        let key = |c: KeyCode| KeyEvent::new(c, KeyModifiers::NONE);
+
+        let mut s = AppState::default();
+        s.overlays.font_check = true;
+        s.overlays.dialog_focus = 0; // row 1 — the Nerd Font answer
+        let out = FontCheckOverlay.key(&mut s, &key(KeyCode::Enter));
+        assert!(matches!(out, OverlayOutcome::Consumed), "stage one does not close on its own");
+        assert!(s.overlays.font_check, "the check is still open");
+        assert_eq!(s.overlays.font_check_icon_answer, Some(true), "stage one's answer is parked");
+        assert_eq!(s.overlays.dialog_focus, 1, "stage two opens on its own default focus");
+
+        // Stage two, row 1 (diagonals): closes and hands both answers over.
+        let out = FontCheckOverlay.key(&mut s, &key(KeyCode::Tab));
+        assert!(matches!(out, OverlayOutcome::Consumed), "Tab still just moves focus on stage two");
+        let out = FontCheckOverlay.key(&mut s, &key(KeyCode::Enter));
+        assert!(
+            matches!(out, OverlayOutcome::Act(OverlayAct::FontCheck(true, Some(true)))),
+            "row 1 on both stages: nerdfont=true, diagonal=Some(true)"
+        );
+        assert!(!s.overlays.font_check, "closed behind itself");
+        assert!(s.overlays.font_check_icon_answer.is_none(), "and the parked answer is cleared");
+    }
+
+    /// The full answer matrix, at the overlay level: icons and diagonals answer
+    /// independently in both directions, and stage two's Esc skips (leaves
+    /// `None`) rather than answering "no" the way stage one's Esc answers
+    /// "plain".
+    #[test]
+    fn the_font_check_answer_matrix_and_stage_two_esc_is_a_skip() {
+        let key = |c: KeyCode| KeyEvent::new(c, KeyModifiers::NONE);
+
+        // icons no (Esc), diagonals yes.
+        let mut s = AppState::default();
+        s.overlays.font_check = true;
+        FontCheckOverlay.key(&mut s, &key(KeyCode::Esc));
+        assert_eq!(s.overlays.font_check_icon_answer, Some(false), "stage one Esc means plain");
+        s.overlays.dialog_focus = 0; // row 1 — diagonals
+        let out = FontCheckOverlay.key(&mut s, &key(KeyCode::Enter));
+        assert!(
+            matches!(out, OverlayOutcome::Act(OverlayAct::FontCheck(false, Some(true)))),
+            "icons no, diagonals yes"
+        );
+
+        // icons yes, diagonals skipped via Esc.
+        let mut s = AppState::default();
+        s.overlays.font_check = true;
+        s.overlays.dialog_focus = 0;
+        FontCheckOverlay.key(&mut s, &key(KeyCode::Enter));
+        assert_eq!(s.overlays.font_check_icon_answer, Some(true));
+        let out = FontCheckOverlay.key(&mut s, &key(KeyCode::Esc));
+        assert!(
+            matches!(out, OverlayOutcome::Act(OverlayAct::FontCheck(true, None))),
+            "stage two Esc is a skip (None), not an answer of its own"
         );
     }
 }

@@ -73,7 +73,7 @@ fn id_of(g: &MapGraph, layer: LayerId, label: &str) -> RoomId {
 /// Recomputed from the layout rather than guessed, so a change to column widths moves the probe
 /// with the table instead of silently sampling the wrong cell.
 fn cell_rect(g: &MapGraph, layer: LayerId, area: Rect, room: RoomId, dir: Direction) -> Rect {
-    use app::render::matrix::{layout, LABEL_W};
+    use app::render::matrix::layout;
     let ml = layout(g, layer, area.width);
     let row = ml.matrix.index_of(room).unwrap_or_else(|| panic!("room {room} has no row here"));
     let col = mapper::matrix::MATRIX_DIRS
@@ -81,7 +81,10 @@ fn cell_rect(g: &MapGraph, layer: LayerId, area: Rect, room: RoomId, dir: Direct
         .position(|&d| d == dir)
         .unwrap_or_else(|| panic!("{dir:?} has no column"));
     let y = area.y + 2 + row as u16;
-    let x = area.x + LABEL_W + ml.cell_w * col as u16;
+    // `ml.label_w`, not the `LABEL_W` floor (SQ-1247): the label column's ACTUAL drawn width can
+    // grow past the floor when the pane has room to spare, and this probe has to land on the same
+    // cell `render_matrix` drew.
+    let x = area.x + ml.label_w + ml.cell_w * col as u16;
     Rect::new(x, y, ml.cell_w, 1)
 }
 

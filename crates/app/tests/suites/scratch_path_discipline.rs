@@ -70,7 +70,7 @@ fn rust_sources() -> Vec<(String, String)> {
             let path = entry.path();
             let name = entry.file_name().to_string_lossy().to_string();
             if path.is_dir() {
-                if name != "target" {
+                if !name.starts_with("target") {
                     stack.push(path);
                 }
             } else if path.extension().and_then(|x| x.to_str()) == Some("rs") {

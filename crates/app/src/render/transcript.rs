@@ -1639,6 +1639,39 @@ pub fn inventory_items(
     }
 }
 
+/// The word a click on each [`inventory_items`] row composes into the
+/// prompt, in the SAME order and over the SAME filter (SQ-1244) — so the two
+/// lists always line up index-for-index and a click can never grab the wrong
+/// row's word.
+///
+/// This is the command band's WHAT column's own derivation
+/// ([`crate::vocab::typeable_name`]), not the display name `inventory_items`
+/// shows: the dock may read "brass lantern" while Zork I's parser answers
+/// only to `lamp`, `lanter` and `light` (see `typeable_name`'s doc). Falls
+/// back to the display name itself when `typeable_name` cannot derive
+/// anything, and to the raw fallback text when the engine has no object tree
+/// — both exactly mirroring `inventory_items`'s own fallbacks, so a row is
+/// never drawn without a word to click.
+pub fn inventory_click_words(
+    player_obj: Option<u16>,
+    inventory_fallback: &[String],
+    introspect: Option<&dyn Introspect>,
+    vocab: Option<&crate::vocab::StoryVocabulary>,
+) -> Vec<String> {
+    let player = player_obj.or_else(|| introspect.and_then(|i| i.player_object()));
+    match (player, introspect) {
+        (Some(obj), Some(intro)) => intro
+            .contents(obj)
+            .iter()
+            .filter_map(|o| {
+                let display = o.display_name()?;
+                Some(crate::vocab::typeable_name(o, vocab).unwrap_or(display))
+            })
+            .collect(),
+        _ => inventory_fallback.to_vec(),
+    }
+}
+
 // ── Main render function ───────────────────────────────────────────────────────
 
 /// What a rendered transcript pass reports back to the story pane.
@@ -1809,6 +1842,31 @@ pub fn notification_anchor_rect(transcript: Option<Rect>, story_area: Rect, full
     }
 }
 
+/// Cap on the text rows a single notification box will grow to before its
+/// last visible row is ellipsised (SQ-1253) — otherwise the box grows freely
+/// with the message.
+const NOTIFY_TEXT_ROW_CAP: usize = 5;
+
+/// Word-wrap `text` to `width` columns for a notification box, capped at
+/// [`NOTIFY_TEXT_ROW_CAP`] rows.
+///
+/// A message that wraps within the cap is returned in full — nothing is
+/// lost. A message with text left over past the cap has its last visible row
+/// rebuilt from where that row starts in the original text and re-truncated
+/// at a word boundary with a trailing `…` (never a middle row, so every row
+/// before the cut stays untouched).
+fn wrap_notification_text(text: &str, width: u16) -> Vec<String> {
+    let ranges = wrap_line_ranges(text, width);
+    if ranges.len() <= NOTIFY_TEXT_ROW_CAP {
+        return ranges.into_iter().map(|(s, _, _)| s).collect();
+    }
+    let last_start = ranges[NOTIFY_TEXT_ROW_CAP - 1].1;
+    let remainder: String = text.chars().skip(last_start).collect();
+    let mut rows: Vec<String> = ranges.into_iter().take(NOTIFY_TEXT_ROW_CAP).map(|(s, _, _)| s).collect();
+    rows[NOTIFY_TEXT_ROW_CAP - 1] = truncate_status_text(&remainder, width as usize);
+    rows
+}
+
 /// Draw the top-right notification toasts over `area` — normally the story
 /// pane's content rect, or the full frame as a fallback (see
 /// [`notification_anchor_rect`]).
@@ -1819,6 +1877,11 @@ pub fn notification_anchor_rect(transcript: Option<Rect>, story_area: Rect, full
 /// pane's own content (and anything else drawn under `area`). When animations
 /// are disabled the toast simply appears and disappears on the same clock,
 /// without sliding. (SQ-0176, SQ-0415)
+///
+/// A message too wide for one row wraps at word boundaries instead of being
+/// cut off: the box grows downward to fit, up to [`NOTIFY_TEXT_ROW_CAP`] rows,
+/// past which the last row ends in `…` (SQ-1253). A message that fits in one
+/// row draws exactly as it did before wrapping existed.
 pub fn render_notifications(buf: &mut Buffer, area: Rect, state: &AppState) {
     let notes = state.notifications.active();
     if notes.is_empty() || area.width < 6 || area.height == 0 {
@@ -1827,48 +1890,58 @@ pub fn render_notifications(buf: &mut Buffer, area: Rect, state: &AppState) {
     let style = state.colors.theme.get("notification").style;
     let animate = state.config.animation.enabled;
     let easing = state.config.animation.easing;
-    // A single-bordered box by default (SQ-0176); collapses to a 1-row strip only
-    // if the border is themed off or there's no vertical room for a frame.
+    // A single-bordered box by default (SQ-0176); collapses to a border-less
+    // strip only if the border is themed off or there's no vertical room for a
+    // frame.
     let boxed = (state.colors.notification_style != BorderStyle::None
         || state.colors.notification_sides.any_on())
         && area.height >= 3;
-    let box_h: u16 = if boxed { 3 } else { 1 };
+    let border_rows: u16 = if boxed { 2 } else { 0 };
     // Cap the inner text width (leave room for a space of padding each side).
     let max_inner = (area.width as usize).min(48).saturating_sub(if boxed { 2 } else { 0 });
+    let text_w = max_inner.saturating_sub(2) as u16;
     let right = area.right();
 
-    // `active()` is oldest-first; draw the newest (last) in the top box.
-    for (i, note) in notes.iter().rev().enumerate() {
-        let top = area.y + i as u16 * box_h;
+    // `active()` is oldest-first; draw the newest (last) in the top box, then
+    // stack older ones below it — each box's own (now possibly multi-row)
+    // height decides where the next one starts.
+    let mut top = area.y;
+    for note in notes.iter().rev() {
+        let rows = wrap_notification_text(&note.text, text_w);
+        let box_h = border_rows + rows.len() as u16;
         if top + box_h > area.bottom() {
             break;
         }
         let reveal = note.reveal(animate, easing);
-        let text = truncate_line(&note.text, max_inner.saturating_sub(2));
-        let inner = format!(" {text} ");
-        let inner_w = inner.chars().count() as u16;
-        let box_w = inner_w + if boxed { 2 } else { 0 };
+        let content_w = rows.iter().map(|r| r.chars().count()).max().unwrap_or(0) as u16;
+        let box_w = content_w + 2 + if boxed { 2 } else { 0 };
         // Slide in from the right: the box translates leftward from off the right
         // edge; columns past `right` clip naturally against the buffer bounds.
         let shown = (reveal * box_w as f64).round().clamp(0.0, box_w as f64) as u16;
-        if shown == 0 {
-            continue;
+        if shown != 0 {
+            let box_left = right - shown;
+            let box_region = Rect::new(box_left, top, box_w, box_h);
+            if boxed {
+                let frame = draw_framed(
+                    buf,
+                    box_region,
+                    state.colors.notification_sides,
+                    &state.colors.notification_glyphs,
+                    style,
+                    false,
+                );
+                for (r, line) in rows.iter().enumerate() {
+                    let inner = format!(" {line:<content_w$} ", content_w = content_w as usize);
+                    draw_str_clipped(buf, frame.content.x, frame.content.y + r as u16, &inner, style, frame.content);
+                }
+            } else {
+                for (r, line) in rows.iter().enumerate() {
+                    let inner = format!(" {line:<content_w$} ", content_w = content_w as usize);
+                    draw_str_clipped(buf, box_left, top + r as u16, &inner, style, box_region);
+                }
+            }
         }
-        let box_left = right - shown;
-        let box_region = Rect::new(box_left, top, box_w, box_h);
-        if boxed {
-            let frame = draw_framed(
-                buf,
-                box_region,
-                state.colors.notification_sides,
-                &state.colors.notification_glyphs,
-                style,
-                false,
-            );
-            draw_str_clipped(buf, frame.content.x, frame.content.y, &inner, style, frame.content);
-        } else {
-            draw_str_clipped(buf, box_left, top, &inner, style, box_region);
-        }
+        top += box_h;
     }
 }
 
@@ -3064,6 +3137,140 @@ mod tests {
         // Nothing spills past the pane into the map columns on either box.
         let map_cols = (0..6).map(|r| read_row(&buf, r, 40, 60)).collect::<String>();
         assert_eq!(map_cols.trim(), "", "toasts stay within the story pane's width");
+    }
+
+    /// SQ-1253: a message that fits in one row draws exactly as it did before
+    /// wrapping existed — same box height (3), same content row, same width.
+    /// This pins the pre-change cells (captured from the code as it stood
+    /// before this fix, which drew a single `" {text} "` row with no wrap
+    /// path at all) so a future change to the wrap/cap logic can't creep into
+    /// the common, non-wrapping case.
+    #[test]
+    fn notification_short_message_renders_identically_to_before_wrapping() {
+        let mut state = AppState::default();
+        state.config.animation.enabled = false;
+        state.notifications.push("[Saved as: foo]");
+
+        let full = Rect::new(0, 0, 60, 10);
+        let story_area = Rect::new(0, 0, 40, 10);
+        let mut buf = Buffer::empty(full);
+        render_notifications(&mut buf, story_area, &state);
+
+        // Still exactly a 3-row box (border, content, border) — no extra rows
+        // were added for a message that never needed to wrap.
+        let content = read_row(&buf, 1, 24, 39);
+        assert_eq!(content, " Saved as: foo ", "content row unchanged: {content:?}");
+        assert!(!read_row(&buf, 0, 23, 40).trim().is_empty(), "top border drawn");
+        assert!(!read_row(&buf, 2, 23, 40).trim().is_empty(), "bottom border drawn");
+        // Row 3 (what would be a 4th row if the box had grown) stays blank.
+        assert_eq!(read_row(&buf, 3, 0, 40).trim(), "", "no extra row for a one-row message");
+    }
+
+    /// SQ-1253: a message wider than the box wraps at word boundaries onto
+    /// extra rows instead of being cut off, and no word is lost.
+    #[test]
+    fn notification_long_message_wraps_at_word_boundaries_without_losing_words() {
+        let words: Vec<String> = (0..12).map(|i| format!("word{i}")).collect();
+        let text = words.join(" ");
+
+        let mut state = AppState::default();
+        state.config.animation.enabled = false;
+        state.notifications.push(text.clone());
+
+        let full = Rect::new(0, 0, 60, 20);
+        let story_area = Rect::new(0, 0, 40, 20);
+        let mut buf = Buffer::empty(full);
+        render_notifications(&mut buf, story_area, &state);
+
+        // Same wrap width the renderer computed for this pane: boxed, 40-wide
+        // pane → max_inner 38, text budget 36.
+        let text_w: u16 = 36;
+        let rows = wrap_notification_text(&text, text_w);
+        assert!(rows.len() > 1, "text longer than the width must wrap onto more than one row");
+
+        // Box grew past the old fixed 3 rows: border + N content rows + border.
+        let box_h = 2 + rows.len() as u16;
+        assert!(box_h > 3, "box grew past the old 3-row height");
+        assert!(!read_row(&buf, box_h - 1, 0, 40).trim().is_empty(), "bottom border sits past the old row 2");
+
+        // Falsify: the pre-fix behaviour (`truncate_line` at this width) really
+        // did drop text rather than wrap it — confirms this fixture would have
+        // caught the SQ-1253 symptom.
+        assert!(
+            truncate_line(&text, text_w as usize).chars().count() < text.chars().count(),
+            "sanity: the old one-row truncation would have lost text at this width"
+        );
+
+        // The box's interior columns (inside the border, excluding the ` … `
+        // padding), same geometry the renderer used: right-anchored, snug to
+        // the widest wrapped row.
+        let content_w = rows.iter().map(|r| r.chars().count() as u16).max().unwrap();
+        let box_w = content_w + 2 + 2; // padding + border
+        let box_left = story_area.right() - box_w;
+        let (cx0, cx1) = (box_left + 2, box_left + box_w - 2); // inside border + the 1-space pad
+
+        // Reassemble every rendered content row (trimmed of the row's own
+        // right-padding) and confirm every word survives, in order.
+        let rendered_words: Vec<String> = (0..rows.len() as u16)
+            .flat_map(|i| {
+                read_row(&buf, 1 + i, cx0, cx1)
+                    .trim()
+                    .split_whitespace()
+                    .map(str::to_string)
+                    .collect::<Vec<_>>()
+            })
+            .collect();
+        assert_eq!(rendered_words, words, "every word survives the wrap, in order");
+    }
+
+    /// SQ-1253: a message that would need more than the row cap wraps up to
+    /// the cap and ends with a single trailing `…` on the last row — nothing
+    /// drawn after it, and no row above it is touched.
+    #[test]
+    fn notification_message_beyond_row_cap_ellipsises_last_row_only() {
+        let words: Vec<String> = (0..60).map(|i| format!("word{i}")).collect();
+        let text = words.join(" ");
+
+        let mut state = AppState::default();
+        state.config.animation.enabled = false;
+        state.notifications.push(text.clone());
+
+        let full = Rect::new(0, 0, 60, 20);
+        let story_area = Rect::new(0, 0, 40, 20);
+        let mut buf = Buffer::empty(full);
+        render_notifications(&mut buf, story_area, &state);
+
+        // The same wrap the renderer used for this pane, capped at
+        // NOTIFY_TEXT_ROW_CAP rows.
+        let text_w: u16 = 36;
+        let rows = wrap_notification_text(&text, text_w);
+        assert_eq!(rows.len(), NOTIFY_TEXT_ROW_CAP, "wrap itself is capped at the row limit");
+        let content_w = rows.iter().map(|r| r.chars().count() as u16).max().unwrap();
+        let box_w = content_w + 2 + 2;
+        let box_left = story_area.right() - box_w;
+        let (cx0, cx1) = (box_left + 2, box_left + box_w - 2);
+
+        // Boxed height is border(1) + NOTIFY_TEXT_ROW_CAP + border(1); content
+        // rows are 1..=NOTIFY_TEXT_ROW_CAP, and the row right after them is
+        // the bottom border, not a 6th text row.
+        let content_rows: Vec<String> = (1..=NOTIFY_TEXT_ROW_CAP as u16)
+            .map(|r| read_row(&buf, r, cx0, cx1).trim().to_string())
+            .collect();
+        for (i, row) in content_rows.iter().enumerate() {
+            assert!(!row.is_empty(), "content row {i} should hold text");
+        }
+        let bottom_border_row = read_row(&buf, NOTIFY_TEXT_ROW_CAP as u16 + 1, 0, 40);
+        assert!(!bottom_border_row.trim().is_empty(), "bottom border sits right after the capped rows");
+        let past_box_row = read_row(&buf, NOTIFY_TEXT_ROW_CAP as u16 + 2, 0, 40);
+        assert_eq!(past_box_row.trim(), "", "nothing drawn past the box — not a 6th text row");
+
+        let last = content_rows.last().unwrap();
+        assert!(last.ends_with('…'), "last visible row ends with an ellipsis: {last:?}");
+        assert_eq!(last.matches('…').count(), 1, "exactly one ellipsis, nothing drawn after it");
+        // No row before the last one is ellipsised — only the tail is cut.
+        for row in &content_rows[..content_rows.len() - 1] {
+            assert!(!row.contains('…'), "only the last row may be ellipsised: {row:?}");
+        }
     }
 
     #[test]
@@ -5990,6 +6197,21 @@ mod tests {
         assert_eq!(inventory_items(None, &items, None), items);
         assert_eq!(inventory_items(Some(7), &items, None), items);
         assert!(inventory_items(None, &[], None).is_empty());
+    }
+
+    /// SQ-1244: with no introspection, `inventory_click_words` falls back to
+    /// the same fallback text as `inventory_items` — the two must always be
+    /// the same length so a click index resolves against the right row. The
+    /// object-tree path (where the two diverge, e.g. "brass lantern" shown
+    /// but `lamp` clicked) is covered against a real story in
+    /// `tests/suites/zork1_inventory.rs`, which has no fake `Introspect` here
+    /// to drive it with.
+    #[test]
+    fn inventory_click_words_matches_inventory_items_length_with_no_introspection() {
+        let items = vec!["brass lamp".to_string(), "sword".to_string()];
+        assert_eq!(inventory_click_words(None, &items, None, None), items);
+        assert_eq!(inventory_click_words(Some(7), &items, None, None), items);
+        assert!(inventory_click_words(None, &[], None, None).is_empty());
     }
 
     // ── Task 8: status-header + input-line boxing + opt-out ───────────────────

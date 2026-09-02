@@ -4,6 +4,7 @@
 /package.json
 /test_output.txt
 /target/
+/target.noindex/
 
 # Local-only project files
 /stories/

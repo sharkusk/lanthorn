@@ -326,6 +326,16 @@ pub enum Action {
     /// in-progress phrase untouched — a quick pick is an interjection, not a
     /// composition step, and composes nothing onto the input line either.
     BandQuickPick(usize),
+    /// Pick the inventory dock's item at this row index (mouse click, SQ-1244):
+    /// composes `AppState::inventory_click_words[idx]` onto the prompt exactly
+    /// as a click on the command band's WHAT column composes an item's word —
+    /// same one-space rule, same partial-word replacement — via
+    /// `compose_word_onto_prompt`, the same low-level composer
+    /// (`sync_band_phrase_to_input`) `band_pick_row` itself calls. The command
+    /// band is closed whenever the inventory panel shows (the two are
+    /// mutually exclusive, `SidePanel`), so there is no `CommandBandState` to
+    /// pick FROM — a typed verb stays and the item is simply appended.
+    InventoryClickRow(usize),
     /// Esc, one level per press: disarm the quick highlight → close the band
     /// (SQ-0676 — the filter rung retired with type-to-filter, and the phrase
     /// rung with it: the phrase is the prompt's text now, and Esc must never
@@ -1537,6 +1547,28 @@ fn band_pick_row(state: &mut AppState, col: usize, idx: usize) {
             sync_band_phrase_to_input(&mut state.input, &old, &new);
         }
     }
+}
+
+/// Compose `word` onto the prompt exactly as a command-band WHAT-noun pick
+/// does — the inventory dock's counterpart of [`band_pick_row`] (SQ-1244),
+/// used when there is nothing to pick FROM: the inventory panel shows
+/// exactly when the command band is closed (the two are mutually exclusive,
+/// [`crate::state::SidePanel`]), so there is no `CommandBandState` whose
+/// `items`/`pick` this could index into.
+///
+/// Routes through the SAME low-level composer `band_pick_row` itself calls
+/// ([`sync_band_phrase_to_input`]), not a copy of its logic: `old_text` is
+/// the word still under construction at the prompt
+/// ([`AppState::current_partial`]), which the composer strips before
+/// appending `word` with its one separating space. That is exactly SQ-1230's
+/// "a partial word being typed is replaced" rule, read here off the raw
+/// prompt text rather than off band picks — a typed verb before the partial
+/// word is untouched (`sync_band_phrase_to_input` strips only the tail it is
+/// told to), so `examine ` stays and the item lands after it, while a bare
+/// unrecognized fragment (`exa`) is replaced outright.
+fn compose_word_onto_prompt(state: &mut AppState, word: &str) {
+    let partial = state.current_partial().to_string();
+    sync_band_phrase_to_input(&mut state.input, &partial, word);
 }
 
 /// The command a quick-row pick fires (SQ-0667 amendment, 2026-08-05):
@@ -2912,6 +2944,12 @@ fn apply_action_inner(action: Action, state: &mut AppState, mapper: &mut Mapper)
             // amendment is that a quick pick does NOT touch the band's
             // in-progress phrase (it's an interjection, not a pick), so there
             // is nothing for this arm to do even in principle.
+        }
+
+        Action::InventoryClickRow(idx) => {
+            if let Some(word) = state.inventory_click_words.get(idx).cloned() {
+                compose_word_onto_prompt(state, &word);
+            }
         }
 
         Action::BandEscape => {
@@ -11696,6 +11734,108 @@ mod tests {
             key_to_action(&s, key(KeyCode::Down)),
             Action::BandRowNav(1),
             "with the dialog gone, ↓ drives the band's row highlight again"
+        );
+    }
+
+    // ── SQ-1244: the inventory panel's items click into the prompt ─────────────
+    //
+    // The command panel and the inventory panel are mutually exclusive
+    // (`SidePanel`), so the inventory dock's click always lands with
+    // `state.overlays.command_band` closed — there is no `CommandBandState`
+    // to pick FROM. `Action::InventoryClickRow` resolves the word from
+    // `AppState::inventory_click_words` (what a real loop tick refreshes
+    // from the engine; these tests seed it directly, mirroring `open_band`'s
+    // synthetic object model) and composes it via `compose_word_onto_prompt`
+    // — the SAME composer (`sync_band_phrase_to_input`) `band_pick_row` uses.
+
+    /// Seed the inventory panel open with a known, synthetic click-word list
+    /// — the panel's counterpart of `open_band`'s synthetic object model.
+    fn open_inventory_panel_for_test(state: &mut AppState, words: &[&str]) {
+        state.show_inventory = true;
+        state.inv_dock.toggle_to(true, true);
+        state.inventory_click_words = words.iter().map(|w| w.to_string()).collect();
+    }
+
+    /// Falsified by removing the `compose_word_onto_prompt` call from
+    /// `Action::InventoryClickRow`'s `apply_action` arm: before the fix the
+    /// click did nothing and the prompt stayed exactly `"examine "`.
+    #[test]
+    fn inventory_click_with_a_typed_verb_and_trailing_space_appends_the_item() {
+        let mut s = AppState::default();
+        let mut mapper = Mapper::default();
+        open_inventory_panel_for_test(&mut s, &["lamp", "leaflet"]);
+        s.input.set("examine ".to_string(), true);
+
+        apply_action(Action::InventoryClickRow(1), &mut s, &mut mapper);
+
+        assert_eq!(s.input.value, "examine leaflet");
+    }
+
+    /// Command panel closed, inventory panel open, EMPTY prompt: the WHAT-noun
+    /// path's own rule with no verb typed — `compose_word_onto_prompt` strips
+    /// nothing (there is no partial word) and composes the bare item.
+    #[test]
+    fn inventory_click_on_an_empty_prompt_composes_the_bare_item() {
+        let mut s = AppState::default();
+        let mut mapper = Mapper::default();
+        open_inventory_panel_for_test(&mut s, &["leaflet"]);
+        assert_eq!(s.input.value, "");
+
+        apply_action(Action::InventoryClickRow(0), &mut s, &mut mapper);
+
+        assert_eq!(s.input.value, "leaflet");
+    }
+
+    /// An unrecognized partial word (`exa`, not yet a complete verb) at the
+    /// prompt is REPLACED outright, not appended after — SQ-1230's rule
+    /// ("a partial word being typed is replaced"), pinned here for the
+    /// no-`CommandBandState` composer exactly as `band_pick_row` already
+    /// pins it for a table pick in `arity_drives_column_reachability` and
+    /// friends.
+    #[test]
+    fn inventory_click_replaces_an_unrecognized_partial_word() {
+        let mut s = AppState::default();
+        let mut mapper = Mapper::default();
+        open_inventory_panel_for_test(&mut s, &["leaflet"]);
+        s.input.set("exa".to_string(), true);
+
+        apply_action(Action::InventoryClickRow(0), &mut s, &mut mapper);
+
+        assert_eq!(s.input.value, "leaflet", "the partial word is replaced, not appended after");
+    }
+
+    /// A stale/out-of-range index (the click landed after the panel's
+    /// contents changed underneath it) composes nothing rather than
+    /// panicking or picking the wrong item.
+    #[test]
+    fn inventory_click_with_a_stale_index_is_a_no_op() {
+        let mut s = AppState::default();
+        let mut mapper = Mapper::default();
+        open_inventory_panel_for_test(&mut s, &["leaflet"]);
+        s.input.set("examine ".to_string(), true);
+
+        apply_action(Action::InventoryClickRow(5), &mut s, &mut mapper);
+
+        assert_eq!(s.input.value, "examine ", "an out-of-range index composes nothing");
+    }
+
+    /// SQ-1236's rule extended to the inventory dock: a modal dialog stacked
+    /// on top takes all mouse input. `inventory_mouse_action` lives in
+    /// main.rs and isn't reachable from here, but the guard it shares with
+    /// the band's own mouse routing (`state.any_modal_overlay_open()`) is:
+    /// assert the shared predicate is true exactly when it must gate the
+    /// inventory dock's mouse routing too.
+    #[test]
+    fn inventory_panel_alone_is_not_modal_but_a_dialog_over_it_is() {
+        let mut s = AppState::default();
+        open_inventory_panel_for_test(&mut s, &["leaflet"]);
+        assert!(!s.any_modal_overlay_open(), "the inventory panel alone is not modal (SQ-1244)");
+        open_config_screen(&mut s);
+        assert!(
+            s.any_modal_overlay_open(),
+            "a dialog stacked over the inventory panel must read as modal, so \
+             inventory_mouse_action's any_modal_overlay_open guard fires and the click falls \
+             through to the dialog's own hit-testing instead of composing an item"
         );
     }
 

@@ -29,6 +29,19 @@
 //! [`Overlay`](crate::render) impl in the run loop (`/run-font-check` and the
 //! settings row) and the standalone pre-game loop in `startup::ask_font_check`,
 //! exactly as the keep-this-download prompt is driven from both places.
+//!
+//! **Two questions, not one (SQ-1245).** The icon glyphs (arrows, portal/stairs
+//! icons, the Guiding Light's mark, the map cluster) come from a patched Nerd
+//! Font; the four half-diagonal corner stubs are Unicode 13 Legacy Computing —
+//! base typeface coverage a Nerd Font patch supplies none of. A font can carry
+//! one family and not the other, so one "yes" used to cover both and a player
+//! answering honestly about the icons could get a map full of tofu diagonals, or
+//! decline the icons over a diagonal failure and lose every icon along with
+//! them. Stage one (this module's original dialog, minus the diagonals) asks
+//! about the icons; stage two asks about the diagonals alone, against the
+//! orthogonal fallback the map draws without them. Both drivers show both
+//! stages, and the two answers are written independently — see
+//! [`crate::style::write_font_check_answer`].
 
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
@@ -110,12 +123,18 @@ fn map_control_slots(set: &crate::symbols::MapControlGlyphs) -> [char; 7] {
     ]
 }
 
+/// Shared by both stages (SQ-1245): stage one's "Row 1"/"Row 2" are the
+/// patched-font/plain answers; stage two's are the diagonal/orthogonal ones.
+/// One shape either way — two buttons and a close — so one struct serves both.
 pub struct FontCheckRects {
     pub area: Rect,
     pub close: Option<Rect>,
-    /// "Row 1" — the patched-font answer.
+    /// "Row 1" — the patched-font answer (stage one) or the diagonal stubs
+    /// (stage two).
     pub nerd: Option<Rect>,
-    /// "Row 2" — the plain answer, and what Esc and the close box mean.
+    /// "Row 2" — the plain answer (stage one) or the orthogonal fallback
+    /// (stage two), and what Esc means on stage one (stage two's Esc is a
+    /// skip — see [`DiagonalCheckAction::Skip`]).
     pub plain: Option<Rect>,
 }
 
@@ -133,24 +152,21 @@ pub enum FontCheckAction {
 /// The glyphs one answer would put on the map, in a fixed slot order:
 /// the four cardinal arrows, then the portal marker, up, down, in, out and
 /// unknown, then the Guiding Light's mark, then the map pane's seven control
-/// marks, then the diagonal corner stubs.
+/// marks.
 ///
 /// Built from the [`SymbolSet`] each answer actually installs, so a later
 /// improvement to a preset changes what the prompt shows rather than leaving it
 /// advertising glyphs the map no longer draws.
 ///
-/// **The last four slots are the same in both rows, and that is deliberate**
-/// (SQ-1140). The diagonal corner stubs are `PathGlyphs`' `diag_*` — Unicode 13
-/// Legacy Computing (U+1FBA0–1FBA3), which every preset spells identically
-/// because they are not a patched-font question: they are BASE typeface
-/// coverage, so a Nerd Font patch supplies none of them and answering this
-/// prompt either way cannot help. Measured on one machine's 43 installed faces,
-/// six carried them — all six Iosevka, and not Symbols Nerd Font Mono.
-///
-/// So they are here to be SEEN, not to be chosen between. The prompt asks which
-/// row draws properly; these four sit in both rows and answer a different
-/// question the player can now at least ask — and `map.diagonal_corners = false`
-/// in `style.toml` is the one-line answer if they are tofu.
+/// **The diagonal corner stubs are NOT here** (SQ-1245). They used to sit in
+/// both rows identically (SQ-1140) — `PathGlyphs`' `diag_*`, Unicode 13 Legacy
+/// Computing (U+1FBA0–1FBA3), spelled the same by every preset because they are
+/// not a patched-font question: they are BASE typeface coverage a Nerd Font
+/// patch supplies none of (measured on one machine's 43 installed faces, six
+/// carried them — all six Iosevka, and not Symbols Nerd Font Mono). Showing them
+/// in a row this prompt CHOOSES BETWEEN falsely implied a "yes" or "no" here
+/// settled them; it never did. [`diagonal_sample_row`] asks about them on their
+/// own, against the fallback the map actually draws without them.
 fn sample_glyphs(nerdfont: bool) -> Vec<char> {
     // **`from_preset_names` does NOT carry `control_icons`** — it takes the box,
     // arrow, portal and path presets and leaves every other category at its
@@ -179,26 +195,63 @@ fn sample_glyphs(nerdfont: bool) -> Vec<char> {
     ]
     .into_iter()
     .chain(map_control_slots(&map_controls))
-    .chain([set.path.diag_ul, set.path.diag_ur, set.path.diag_ll, set.path.diag_lr])
     .collect()
 }
 
-/// One sample row as it is drawn: the slots space-separated, in five groups
-/// (arrows · portals · the Guiding Light's mark · the map cluster · the diagonal
-/// stubs) so a fallback glyph's wrong advance shows up as a group that does not
-/// line up with the row above it. Two spaces between groups rather than three,
-/// which is what keeps twenty-two slots inside `DIALOG_W`.
+/// One sample row as it is drawn: the slots space-separated, in four groups
+/// (arrows · portals · the Guiding Light's mark · the map cluster) so a
+/// fallback glyph's wrong advance shows up as a group that does not line up
+/// with the row above it. Two spaces between groups rather than three, which is
+/// what keeps eighteen slots inside `DIALOG_W`.
 pub fn sample_row(nerdfont: bool) -> String {
     let g = sample_glyphs(nerdfont);
     let join = |r: &[char]| r.iter().map(|c| c.to_string()).collect::<Vec<_>>().join(" ");
     format!(
-        "{}  {}  {}  {}  {}",
+        "{}  {}  {}  {}",
         join(&g[0..4]),
         join(&g[4..10]),
         join(&g[10..11]),
         join(&g[11..18]),
-        join(&g[18..22]),
     )
+}
+
+// ── Stage two: the diagonal corner stubs (SQ-1245) ──────────────────────────
+
+/// The four half-diagonal corner-stub glyphs, in the fixed slot order
+/// upper-left, upper-right, lower-left, lower-right — the same order
+/// `render::map::glyph_for` resolves for the N∣W, N∣E, S∣W, S∣E direction-bit
+/// pairs.
+fn diagonal_glyphs(set: &SymbolSet) -> [char; 4] {
+    [set.path.diag_ul, set.path.diag_ur, set.path.diag_ll, set.path.diag_lr]
+}
+
+/// What the map draws in those same four corner slots when `diagonal_corners`
+/// is off: the plain box-drawing turn glyph `render::map::glyph_for` resolves
+/// for the SAME direction-bit pair (N∣W → `nw`, N∣E → `ne`, S∣W → `sw`,
+/// S∣E → `se`) — the identical corner, walked orthogonally instead of on a
+/// diagonal stub. `render::map::plot_connector`'s `diag: None` arm is what
+/// actually draws this at runtime; this is the same four fields, read for the
+/// sample rather than for a route.
+fn orthogonal_fallback_glyphs(set: &SymbolSet) -> [char; 4] {
+    [set.path.nw, set.path.ne, set.path.sw, set.path.se]
+}
+
+/// Stage two's row: the diagonal stubs (`diag = true`) or the plain fallback
+/// the map draws in their place (`diag = false`), each built from the
+/// [`SymbolSet`] rather than written out here — the same rule [`sample_glyphs`]
+/// follows, so a glyph added to either family lands in the row automatically.
+///
+/// Both rows come off [`SymbolSet::default`] rather than the nerdfont/plain
+/// choice `sample_row` takes: `PathGlyphs::preset` spells all four `diag_*`
+/// slots identically in "light"/"heavy"/"dotted" (they have no heavy or dotted
+/// variant — Legacy Computing has only the light weight), and the fallback's
+/// `nw`/`ne`/`sw`/`se` are plain box-drawing, present in `default()` regardless
+/// of preset. The diagonal answer is orthogonal to the path-style preset, the
+/// same way it is orthogonal to the icon answer.
+pub fn diagonal_sample_row(diag: bool) -> String {
+    let set = SymbolSet::default();
+    let g = if diag { diagonal_glyphs(&set) } else { orthogonal_fallback_glyphs(&set) };
+    g.iter().map(|c| c.to_string()).collect::<Vec<_>>().join(" ")
 }
 
 /// Draw the font check centred over `area`, or `None` when it is closed or the
@@ -303,6 +356,119 @@ pub fn font_check_key_focused(code: crossterm::event::KeyCode, focus: usize) -> 
             }
         }
         _ => FontCheckAction::None,
+    }
+}
+
+/// What a key press or click on stage two means.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DiagonalCheckAction {
+    /// Row 1 drew properly: turn `map.diagonal_corners` on.
+    Diagonal,
+    /// Row 2 drew properly: turn it off.
+    Orthogonal,
+    /// Esc or the close box: this question, unlike stage one's, has a real "I
+    /// don't know" — `diagonal_corners` is left exactly as it was, rather than
+    /// forced to the fallback the way stage one's Esc forces "plain" (SQ-1245).
+    /// Stage one already has an answer by the time stage two can be reached, so
+    /// declining this one loses nothing already decided.
+    Skip,
+    /// Nothing — the caller has already handled focus movement.
+    None,
+}
+
+/// Draw stage two centred over `area`, or `None` when it is closed or the pane
+/// is too small to hold it.
+pub fn draw_diagonal_check(state: &AppState, area: Rect, buf: &mut Buffer) -> Option<FontCheckRects> {
+    if !state.overlays.font_check {
+        return None;
+    }
+    draw_diagonal_check_always(state, area, buf)
+}
+
+/// [`draw_diagonal_check`] without the open/closed test — [`draw_font_check_always`]'s
+/// counterpart for `startup`'s standalone pre-game loop.
+pub fn draw_diagonal_check_always(state: &AppState, area: Rect, buf: &mut Buffer) -> Option<FontCheckRects> {
+    let modal_w = DIALOG_W.min(area.width.saturating_sub(4));
+    let modal_h = DIALOG_H.min(area.height.saturating_sub(2));
+    if modal_w < MIN_W || modal_h < MIN_H {
+        return None;
+    }
+
+    let st = DialogStyle::from_colors(&state.colors);
+    let buttons = &[
+        DialogButton { id: ButtonId::Ok, label: "Row 1 looks right" },
+        DialogButton { id: ButtonId::Cancel, label: "Row 2 looks right" },
+    ];
+    let spec = DialogSpec {
+        title: "Diagonal map corners",
+        placement: Placement::Centered { w: modal_w, h: modal_h },
+        buttons,
+        show_close: true,
+        // Row 2 — the orthogonal fallback every font can draw — is the default,
+        // for the same reason stage one's is: Enter without reading must not be
+        // a decision to install glyphs the font may not have.
+        default: Some(ButtonId::Cancel),
+        focus: Some(state.overlays.dialog_focus),
+        field: None,
+    };
+    let rects = draw_dialog(buf, area, &spec, &st);
+    let content = rects.content;
+
+    let body = state.colors.theme.get("dialog.background").style;
+    let sample = body.patch(state.colors.theme.get("dialog.font_check.sample").style);
+
+    let intro = [
+        "A room can leave its box on a single diagonal stub instead",
+        "of a right-angle turn. Which row draws those four properly?",
+        "",
+    ];
+    let outro = [
+        "",
+        "Row 1 needs the diagonal marks themselves; pick it only if",
+        "all four are drawn. An empty box means row 2 — the",
+        "orthogonal corner every font can draw.",
+        "Esc or the close box leaves this setting exactly as it was.",
+    ];
+
+    let mut y = content.y;
+    let mut put = |line: &str, style: ratatui::style::Style, y: &mut u16| {
+        if *y < content.bottom() {
+            crate::render::draw_str_clipped(buf, content.x, *y, line, style, content);
+        }
+        *y += 1;
+    };
+    for line in intro {
+        put(line, body, &mut y);
+    }
+    put(&format!("  1.  {}", diagonal_sample_row(true)), sample, &mut y);
+    put(&format!("  2.  {}", diagonal_sample_row(false)), sample, &mut y);
+    for line in outro {
+        put(line, body, &mut y);
+    }
+
+    Some(FontCheckRects {
+        area: rects.area,
+        close: rects.close,
+        nerd: rects.buttons.iter().find(|(id, _)| *id == ButtonId::Ok).map(|(_, r)| *r),
+        plain: rects.buttons.iter().find(|(id, _)| *id == ButtonId::Cancel).map(|(_, r)| *r),
+    })
+}
+
+/// Map a key to a [`DiagonalCheckAction`] given the focused button index
+/// (`0 = row 1`, `1 = row 2`). Tab/Shift-Tab belong to the caller, and Space is
+/// left alone (widget-reserved), exactly as [`font_check_key_focused`].
+pub fn diagonal_check_key_focused(code: crossterm::event::KeyCode, focus: usize) -> DiagonalCheckAction {
+    use crossterm::event::KeyCode;
+    match code {
+        KeyCode::Esc => DiagonalCheckAction::Skip,
+        KeyCode::Enter => {
+            if focus == 0 {
+                DiagonalCheckAction::Diagonal
+            } else {
+                DiagonalCheckAction::Orthogonal
+            }
+        }
+        _ => DiagonalCheckAction::None,
     }
 }
 
@@ -415,7 +581,7 @@ mod tests {
         assert_eq!(g.iter().filter(|&&c| c == 'M').count(), 2, "both view slots");
     }
 
-    /// Both rows still fit the dialog. Twenty-two slots at two spaces between
+    /// Both rows still fit the dialog. Eighteen slots at two spaces between
     /// groups is the reason the separator narrowed from three; if a later slot
     /// pushes past this, narrow the groups again or drop a slot — do not widen
     /// the dialog past what a 80x24 terminal can centre.
@@ -425,33 +591,64 @@ mod tests {
             let w = sample_row(nerd).chars().count() + "  1.  ".chars().count();
             assert!(w <= DIALOG_W as usize - 4, "row (nerd={nerd}) is {w} wide, dialog is {DIALOG_W}");
         }
+        for diag in [true, false] {
+            let w = diagonal_sample_row(diag).chars().count() + "  1.  ".chars().count();
+            assert!(w <= DIALOG_W as usize - 4, "diagonal row ({diag}) is {w} wide, dialog is {DIALOG_W}");
+        }
     }
 
-    /// SQ-1140: the diagonal corner stubs appear, and appear in BOTH rows.
-    ///
-    /// Not a preset choice and never was — `PathGlyphs` spells U+1FBA0–1FBA3 the
-    /// same in every preset, so no answer to this prompt changes them. Showing
-    /// them is the only thing the dialog can usefully do, and showing them in one
-    /// row only would falsely imply the other row avoids them.
+    /// SQ-1245: the diagonals moved to their own question, so stage one's row —
+    /// asked about the icon glyphs — must carry none of them, while still
+    /// carrying every icon glyph a "yes" installs. Showing the diagonals in a
+    /// row this prompt chooses between (the old SQ-1140 shape) implied a "yes"
+    /// or "no" here settled them; it never did, and the split is exactly this.
     #[test]
-    fn both_rows_show_the_diagonal_stubs_because_no_answer_changes_them() {
-        let (nerd, plain) = (sample_glyphs(true), sample_glyphs(false));
+    fn stage_one_carries_every_icon_the_answer_installs_and_none_of_the_diagonals() {
         let stubs = ['\u{1FBA0}', '\u{1FBA1}', '\u{1FBA2}', '\u{1FBA3}'];
-        for s in stubs {
-            assert!(nerd.contains(&s), "U+{:04X} missing from the patched row", s as u32);
-            assert!(plain.contains(&s), "U+{:04X} missing from the plain row", s as u32);
+        for nerdfont in [true, false] {
+            let g = sample_glyphs(nerdfont);
+            for s in stubs {
+                assert!(
+                    !g.contains(&s),
+                    "stage one (nerdfont={nerdfont}) still carries a diagonal stub U+{:04X}",
+                    s as u32
+                );
+            }
         }
-        // The last FOUR slots, named from the end so a cluster added ahead of
-        // them cannot silently slide this window off the stubs.
-        assert_eq!(
-            nerd[nerd.len() - 4..],
-            plain[plain.len() - 4..],
-            "the stub slots are identical in both rows — they are not the question being asked"
-        );
-        // And they are NOT private-use, which is the whole point: a patched font
-        // supplies none of them, so the assertion above about the plain row being
-        // free of the PUA must keep passing with these in it.
-        assert!(stubs.iter().all(|c| !('\u{F0000}'..='\u{FFFFD}').contains(c)));
+        // The rest of the row is untouched by the split.
+        let g = sample_glyphs(true);
+        assert!(g.contains(&ASSIST_LAMP), "the Guiding Light's mark survives the split");
+        assert!(g.contains(&'\u{F02C1}'), "the map cluster survives the split (md-grid)");
+    }
+
+    /// SQ-1245: stage two's row is EXACTLY the four half-diagonal stubs, in the
+    /// slot order `render::map::glyph_for` resolves them in (N∣W, N∣E, S∣W,
+    /// S∣E), against the orthogonal turn the map draws for the SAME
+    /// direction-bit pairs when `diagonal_corners` is off.
+    #[test]
+    fn stage_two_carries_exactly_the_four_diagonal_stubs_against_their_fallback() {
+        let stubs = ['\u{1FBA0}', '\u{1FBA1}', '\u{1FBA2}', '\u{1FBA3}'];
+        let set = SymbolSet::default();
+        assert_eq!(diagonal_glyphs(&set), stubs, "diag_ul, diag_ur, diag_ll, diag_lr, in that order");
+
+        // Not private-use, which is the whole point: a patched Nerd Font
+        // supplies none of them, so stage one's answer cannot predict stage
+        // two's.
+        let in_pua = |c: &char| {
+            ('\u{E000}'..='\u{F8FF}').contains(c) || ('\u{F0000}'..='\u{FFFFD}').contains(c)
+        };
+        assert!(stubs.iter().all(|c| !in_pua(c)));
+
+        // The fallback is the identical corner walked orthogonally
+        // (`render::map::glyph_for`'s N|W → nw, N|E → ne, S|W → sw, S|E → se),
+        // and it too needs no patched font.
+        let fallback = orthogonal_fallback_glyphs(&set);
+        assert_eq!(fallback, [set.path.nw, set.path.ne, set.path.sw, set.path.se]);
+        assert!(fallback.iter().all(|c| !in_pua(c)));
+
+        let join = |g: &[char]| g.iter().map(|c| c.to_string()).collect::<Vec<_>>().join(" ");
+        assert_eq!(diagonal_sample_row(true), join(&stubs));
+        assert_eq!(diagonal_sample_row(false), join(&fallback));
     }
 
     /// Esc is an answer, not a deferral (see `font_check_key_focused`).
@@ -463,6 +660,20 @@ mod tests {
         assert_eq!(font_check_key_focused(KeyCode::Enter, 1), FontCheckAction::Plain);
         // Space is widget-reserved and must not answer for the player.
         assert_eq!(font_check_key_focused(KeyCode::Char(' '), 0), FontCheckAction::None);
+    }
+
+    /// SQ-1245: stage two's Esc is a genuine skip, unlike stage one's — the
+    /// falsifying case for the answer matrix: without this, Esc here would have
+    /// to mean SOME answer, and the natural (wrong) choice is "orthogonal",
+    /// which would silently write `diagonal_corners = false` for a player who
+    /// never expressed an opinion.
+    #[test]
+    fn esc_and_the_close_box_skip_the_diagonal_question() {
+        assert_eq!(diagonal_check_key_focused(KeyCode::Esc, 0), DiagonalCheckAction::Skip);
+        assert_eq!(diagonal_check_key_focused(KeyCode::Esc, 1), DiagonalCheckAction::Skip);
+        assert_eq!(diagonal_check_key_focused(KeyCode::Enter, 0), DiagonalCheckAction::Diagonal);
+        assert_eq!(diagonal_check_key_focused(KeyCode::Enter, 1), DiagonalCheckAction::Orthogonal);
+        assert_eq!(diagonal_check_key_focused(KeyCode::Char(' '), 0), DiagonalCheckAction::None);
     }
 
     #[test]
@@ -490,5 +701,37 @@ mod tests {
         let mut rects = None;
         term.draw(|f| rects = draw_font_check(&state, f.area(), f.buffer_mut())).unwrap();
         assert!(rects.is_none());
+    }
+
+    /// Stage two, drawn: same chrome, its own two rows on screen.
+    #[test]
+    fn stage_two_draws_both_rows_and_hands_back_two_button_rects() {
+        let mut state = AppState::default();
+        state.overlays.font_check = true;
+        let mut term = Terminal::new(TestBackend::new(80, 30)).unwrap();
+        let mut rects = None;
+        term.draw(|f| rects = draw_diagonal_check(&state, f.area(), f.buffer_mut())).unwrap();
+        let r = rects.expect("the prompt draws at 80x30");
+        assert!(r.nerd.is_some() && r.plain.is_some(), "both answers are clickable");
+
+        let text: String = term.backend().buffer().content().iter().map(|c| c.symbol()).collect();
+        assert!(text.contains(&diagonal_sample_row(true)), "row 1 (the diagonals) is on screen");
+        assert!(text.contains(&diagonal_sample_row(false)), "row 2 (the fallback) is on screen");
+    }
+
+    /// `draw_diagonal_check_always` skips the closed-flag test the way
+    /// `draw_font_check_always` does — `startup`'s standalone loop has no
+    /// `AppState.overlays.font_check` to check.
+    #[test]
+    fn stage_two_always_draws_regardless_of_the_open_flag() {
+        let state = AppState::default(); // font_check defaults to false
+        let mut term = Terminal::new(TestBackend::new(80, 30)).unwrap();
+        let mut rects = None;
+        term.draw(|f| rects = draw_diagonal_check_always(&state, f.area(), f.buffer_mut())).unwrap();
+        assert!(rects.is_some(), "the _always form draws with the flag off");
+
+        let mut rects = None;
+        term.draw(|f| rects = draw_diagonal_check(&state, f.area(), f.buffer_mut())).unwrap();
+        assert!(rects.is_none(), "the gated form respects the flag");
     }
 }

@@ -21,6 +21,12 @@ concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
+# `.cargo/config.toml` builds into `target.noindex` (a Spotlight exclusion that
+# only matters on a developer's Mac); the environment variable wins over it, so
+# every `target/...` path below keeps working.
+env:
+  CARGO_TARGET_DIR: target
+
 jobs:
   build:
     name: build (${{ matrix.name }})
