@@ -1232,6 +1232,13 @@ fn band_mouse_action(
     use crossterm::event::{MouseButton, MouseEventKind};
 
     state.overlays.command_band.as_ref()?;
+    // SQ-1236: a modal dialog stacked on top (config_screen, hotkey_dialog, …)
+    // takes all mouse input; the band underneath must claim nothing while one is
+    // open, so a click falls through to `mouse_to_action`'s dialog hit-testing
+    // instead of being swallowed here first.
+    if state.any_modal_overlay_open() {
+        return None;
+    }
     let hits = &panes.command_band;
     let inside = |r: &Rect| {
         r.width > 0 && r.height > 0 && m.column >= r.x && m.column < r.right() && m.row >= r.y
