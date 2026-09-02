@@ -13,7 +13,7 @@ Every slash command, grouped the way `/help` groups them. Type any of these afte
 | Game | `open-hints` | open the hints panel |
 | Game | `open-history` | open the rewind/replay history |
 | Game | `toggle-command-panel` | open or close the command panel; remembered per story |
-| Game | `cycle-panel` | cycle command panel → inventory panel → none |
+| Game | `cycle-panel` | cycle command panel → inventory panel → none; persisted per-game |
 | Game | `toggle-timed-input` | toggle honoring the game's timed-input timers |
 | Game | `toggle-sound` | toggle audio playback (bleeps + sampled sounds) |
 | Game | `volume <0-100>` | set the master audio volume (0-100) |

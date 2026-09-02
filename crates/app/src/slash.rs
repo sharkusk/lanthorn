@@ -321,7 +321,7 @@ pub static COMMANDS: &[CommandSpec] = &[
         usage: "toggle-command-panel", description: "open or close the command panel; remembered per story",
         dispatch: |_| SlashOutcome::Action(crate::input::Action::OpenCommandBand) },
     CommandSpec { name: "cycle-panel", category: Category::Game, context: Context::Global,
-        usage: "cycle-panel", description: "cycle command panel → inventory panel → none",
+        usage: "cycle-panel", description: "cycle command panel → inventory panel → none; persisted per-game",
         dispatch: |_| SlashOutcome::Action(crate::input::Action::CyclePanel) },
     CommandSpec { name: "toggle-timed-input", category: Category::Game, context: Context::Global,
         usage: "toggle-timed-input", description: "toggle honoring the game's timed-input timers",
