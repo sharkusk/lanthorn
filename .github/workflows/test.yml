@@ -85,14 +85,19 @@ jobs:
       # absent — which it always is in CI. Small fixtures actually needed by
       # the suite (czech.z5, minizork.z3, tiny_cave.dat, glulxercise.ulx, etc.)
       # are committed under each crate's `tests/fixtures/` and are present.
+      # SQ-1242: `app`'s in-crate unit tests sit behind `t-*` Cargo features
+      # (crates/app/Cargo.toml) so a plain `cargo test` no longer compiles or
+      # runs them — `--all-features` is what turns every `t-*` group (via
+      # `t-all`) back on, for `app` and harmlessly for every other crate.
       - name: cargo test
-        run: cargo test --workspace --locked
+        run: cargo test --workspace --locked --all-features
 
       # One job, Linux only — clippy's result doesn't vary meaningfully by OS
       # for this codebase, so running it 3x would just burn minutes.
+      # `--all-features` for the same SQ-1242 reason as the test step above.
       - name: cargo clippy
         if: runner.os == 'Linux'
-        run: cargo clippy --workspace --all-targets -- -D warnings
+        run: cargo clippy --workspace --all-targets --all-features -- -D warnings
 
       # NOTE: no `cargo fmt --check` step. The existing codebase isn't
       # rustfmt-clean (verified locally: `cargo fmt --check` reports diffs

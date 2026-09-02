@@ -6,3 +6,16 @@
 # half that actually saturates the machine.
 [profile.default]
 test-threads = 6
+
+# SQ-1242: `app`'s in-crate unit tests sit behind `t-*` Cargo features (see
+# crates/app/Cargo.toml's [features] table), and nextest's config has no way to set
+# a package's default features — that lives only on the `cargo nextest run`
+# command line (or in a workspace-level default-features setting Cargo itself
+# doesn't offer per-package either). So there is nothing to configure here; spell
+# the feature on the invocation instead:
+#   cargo nextest run -p app --lib --features t-input input   # one group
+#   cargo nextest run -p app --lib --all-features              # everything (what CI's
+#                                                                 cargo test --all-features runs)
+# Omitting --features compiles NONE of app's in-crate tests (by design — that's the
+# whole point of SQ-1242) and this profile's `test-threads` still applies to whichever
+# ARE compiled.

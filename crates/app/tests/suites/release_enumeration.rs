@@ -284,7 +284,13 @@ fn without_test_modules(src: &str) -> String {
     let mut out = String::new();
     let mut lines = src.lines().peekable();
     while let Some(line) = lines.next() {
-        if line.trim() != "#[cfg(test)]" {
+        // SQ-1242 put `app`'s in-crate `mod tests` blocks behind `t-*` Cargo
+        // features, spelled `#[cfg(all(test, feature = "t-<group>"))]` (or
+        // `any(feature = …)` for the couple shared across two groups) — both
+        // prefixes are checked, or this scan stops recognising the boundary in
+        // every file SQ-1242 rewrote and starts reading test code as production.
+        let t = line.trim();
+        if t != "#[cfg(test)]" && !t.starts_with("#[cfg(all(test,") {
             out.push_str(line);
             out.push('\n');
             continue;

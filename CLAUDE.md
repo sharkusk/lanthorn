@@ -54,14 +54,39 @@ CI is exempt — both workflows export `CARGO_BUILD_JOBS` from the runner's own 
 count before installing Rust, because a 3-4 core runner running six or eight rustc
 processes is slower AND puts a crate the size of `app` near the memory ceiling.
 
+**`app`'s ~3,271 in-crate `#[test]`s (SQ-1242) sit behind `t-*` Cargo features, not
+bare `cfg(test)`.** `crates/app/Cargo.toml`'s `[features]` table names nine groups
+following the module tree (`t-input`, `t-render`, `t-picker`, `t-session`,
+`t-guidance`, `t-persist`, `t-theme`, `t-state`, `t-misc`, plus `t-all` listing all
+nine) so a developer can guess a file's group on sight, and every `#[cfg(test)] mod`
+under `crates/app/src/` was rewritten to `#[cfg(all(test, feature = "t-<group>"))]`.
+Measured on a quiet machine, warm: `cargo check -p app --lib --tests` with no
+features is **~2.3s** (was 33s even bare-`--lib`, because now it type-checks NO
+in-crate test code at all); `--features t-input` (input.rs's 334 cases plus its
+group siblings) is **~2.1s**; `--features t-all` (everything, matching CI's
+`--all-features`) is **~2.7s** — all three down from the unguarded **5m19s**. Run one
+group under nextest: `cargo nextest run -p app --lib --features t-input input`
+(334 tests, 0.7s warm). Nextest's own config has no per-package default-features
+knob (see `.config/nextest.toml`), so the feature has to be spelled on every
+invocation — omitting it compiles zero of the in-crate tests, which is the point.
+`test_feature_gating` (`crates/app/tests/suites/`) fails the build if a `mod` is
+left ungated, if a `feature = "t-…"` cfg names something `Cargo.toml` doesn't
+declare, or if `t-all` drops a group.
+
 - **While iterating**, run the suites that cover what you touched — by NAME under
   nextest (`cargo nextest run -p app v6_arthur_status`), never by `--test`, since the
-  module path still carries the old filename.
+  module path still carries the old filename. For `app`'s in-crate unit tests, name
+  the `t-*` group too: `cargo nextest run -p app --lib --features t-render render`.
 - **Before you PUSH**, run `cargo check --all-targets` on the tree you are about to
   push — **not** the full gate. CI is the backstop (see below), and a merged-tree
   `cargo check` is what catches the one thing CI would catch too late and nothing
   else local can see: a SEMANTIC merge conflict between parallel lanes, textually
   clean and non-compiling. It costs under a minute where the gate costs many.
+  **Since SQ-1242, this catches PRODUCTION code only** — with no `t-*` feature on,
+  none of `app`'s in-crate tests compile, so a merge conflict confined to test code
+  is invisible to it. CI's `cargo check`-equivalent is the `--all-features` test
+  build (see below), which is where that half is caught; add `--all-features` here
+  too if you want the in-crate tests covered locally before pushing.
 - **Never put the full gate in a parallel lane's brief.** A three-lane wave that
   gates each lane AND the combination pays four full builds — plus four clippy
   builds, which share no fingerprints with them — for one merge. Lanes run
@@ -105,8 +130,8 @@ floor, not the ceiling:
 | `crates/app/src/render/transcript.rs` | `zork_classic`, `zmachine_screen`, `-p app --lib` |
 | `crates/app/src/native_font.rs`, `crates/blorb/**` | `-p blorb`, `engines`, `v6_zork0` |
 | `crates/mapper/**` | `-p mapper`, `mapper_ui` |
-| anything touching the PALETTE | the gate **and** `cargo test --workspace` |
-| a test that WRITES TO DISK | the gate **and** `cargo test --workspace`, twice |
+| anything touching the PALETTE | the gate **and** `cargo test --workspace --all-features` |
+| a test that WRITES TO DISK | the gate **and** `cargo test --workspace --all-features`, twice |
 
 **Two things have justified the full gate**: a SEMANTIC merge conflict between two
 parallel lanes that was textually clean (one lane calling a signature the other had
@@ -129,10 +154,15 @@ report a failure promptly rather than waiting to be asked.
 **Full test gate** (CI runs this; run it locally only when you mean to):
 
 ```sh
-cargo nextest run --workspace 2>&1 | grep -acE "^error(\[|:)| [1-9][0-9]* failed"
+cargo nextest run --workspace --all-features 2>&1 | grep -acE "^error(\[|:)| [1-9][0-9]* failed"
 ```
 
 This must **print 0**. Note: grep exits 1 when it finds zero matches — that exit code IS the pass, so never chain this with `&&` or treat a nonzero exit as failure. (`-a` because a panicking test can emit a NUL byte, after which grep treats the stream as binary and reports nothing.)
+
+`--all-features` is load-bearing since SQ-1242: without it, none of `app`'s ~3,271
+in-crate `#[test]`s (gated behind `t-*` Cargo features, see above) compile or run,
+and the gate would silently stop covering them — the same failure mode `--workspace`
+already guards against for whole crates, now possible within one.
 
 `--workspace`, not a list of `-p` flags. The gate named five crates for months — `blorb`, `zvm`, `gvm`, `scott`, `app` — and every crate outside that list was invisible to it: `mapper`, `audio` and the CLI crates were hundreds of tests the gate could not fail on. A mapper regression could not fail it at all. SQ-0826 found this by removing eleven tests and watching the count drop by one. Naming crates means the gate silently stops covering each new one; `--workspace` cannot go stale, and costs ~30s more. (Deliberately no totals here — a count of what the workspace holds today is an inventory that rots into misinformation, where the line below is a check that recomputes itself every run.)
 
@@ -142,9 +172,9 @@ Cross-check completeness against nextest's own summary rather than by counting l
 
 Three consequences of nextest's model worth knowing: it runs **each test in its own process**, so a test that depends on state left behind by another test in the same binary will fail under it (that is a defect, not an incompatibility); and it does not run doctests, which costs us nothing because every crate sets `doctest = false` — if you ever add a real doctest, remove that setting and run `cargo test --doc` alongside.
 
-**And the gate cannot see a shared-process race, because CI runs `cargo test` and the gate does not.** Per-test processes mean no test can observe another's global state, so a race on one is *structurally invisible* to `cargo nextest run` — while `cargo test` gives a binary's tests one process and many threads and hits it. This turned main red four times running (SQ-0904): `zvm::screen::set_palette` is process-global, and twenty-three integration suites each declared their **own** `static PALETTE` mutex, every one documented as "no two cases here may boot at once". True within a suite; meaningless across them, since `tests/suites/*.rs` are modules sharing a group binary's process. Under nextest twenty-three locks are indistinguishable from one, under `cargo test` from zero. They now all take one shared lock, and a source-level case — `palette_lock_discipline` — fails if a suite under `tests/suites/` sets the palette without it, because the *next* such suite is written by someone with no reason to know any of this and the gate cannot catch them (SQ-0905). **When you touch process-global state — the palette is the one we have — verify with `cargo test --workspace` as well as the gate; it is the only command that can answer the question.**
+**And the gate cannot see a shared-process race, because CI runs `cargo test` and the gate does not.** Per-test processes mean no test can observe another's global state, so a race on one is *structurally invisible* to `cargo nextest run` — while `cargo test` gives a binary's tests one process and many threads and hits it. This turned main red four times running (SQ-0904): `zvm::screen::set_palette` is process-global, and twenty-three integration suites each declared their **own** `static PALETTE` mutex, every one documented as "no two cases here may boot at once". True within a suite; meaningless across them, since `tests/suites/*.rs` are modules sharing a group binary's process. Under nextest twenty-three locks are indistinguishable from one, under `cargo test` from zero. They now all take one shared lock, and a source-level case — `palette_lock_discipline` — fails if a suite under `tests/suites/` sets the palette without it, because the *next* such suite is written by someone with no reason to know any of this and the gate cannot catch them (SQ-0905). **When you touch process-global state — the palette is the one we have — verify with `cargo test --workspace --all-features` as well as the gate; it is the only command that can answer the question.** (`--all-features` since SQ-1242, so `app`'s in-crate `t-*`-gated tests are actually in the run this checks.)
 
-**The palette is not the only process-global thing: so is the filesystem** (SQ-1131). A scratch directory named from `std::process::id()` alone is unique per PROCESS, which under nextest is the same as unique per test and under `cargo test` is unique per *binary* — so every caller of a pid-keyed helper gets the same directory, `fs::write` truncates, and a case's closing `remove_dir_all` deletes what a neighbour is halfway through reading. That is a correct fixture failing its own assertion, somewhere else, intermittently, and it cost eight consecutive red CI runs against a local gate that printed 0 every time (`verb-synonyms-gen`'s `scratch()`, one directory shared by every caller of `wordnet_fixture()`). Inside `app`, take `app::scratch_dir("a-tag")`, which is unique per CALL by construction; in `zvm`/`gvm`/`scott`, which take no dependencies, spell an `AtomicUsize` beside the pid. `scratch_path_discipline` scans every `.rs` file under `crates/` — `src/` `#[cfg(test)]` modules included, which is where most of these live — and asks a helper for the COUNTER, not for a distinguishing name: a scratch path built outside a `#[test]` must have an `AtomicUsize` in the same function (SQ-1163). **A `tag` parameter is not a fix.** It looks like one, because every caller passes a different string, but that is an invariant maintained by hand across call sites in different files, and the moment two spell one the same way it is the bare form again; fifty-one helpers were relying on it, two of them literally `bm-{tag}-{pid}`. The guard still cannot see two `#[test]` bodies that build the same name by different routes — **so a change that adds a test writing to disk wants `cargo test --workspace` too, and wants it twice, because a race that has been fixed passes once by luck as well.**
+**The palette is not the only process-global thing: so is the filesystem** (SQ-1131). A scratch directory named from `std::process::id()` alone is unique per PROCESS, which under nextest is the same as unique per test and under `cargo test` is unique per *binary* — so every caller of a pid-keyed helper gets the same directory, `fs::write` truncates, and a case's closing `remove_dir_all` deletes what a neighbour is halfway through reading. That is a correct fixture failing its own assertion, somewhere else, intermittently, and it cost eight consecutive red CI runs against a local gate that printed 0 every time (`verb-synonyms-gen`'s `scratch()`, one directory shared by every caller of `wordnet_fixture()`). Inside `app`, take `app::scratch_dir("a-tag")`, which is unique per CALL by construction; in `zvm`/`gvm`/`scott`, which take no dependencies, spell an `AtomicUsize` beside the pid. `scratch_path_discipline` scans every `.rs` file under `crates/` — `src/` `#[cfg(test)]` modules included, which is where most of these live — and asks a helper for the COUNTER, not for a distinguishing name: a scratch path built outside a `#[test]` must have an `AtomicUsize` in the same function (SQ-1163). **A `tag` parameter is not a fix.** It looks like one, because every caller passes a different string, but that is an invariant maintained by hand across call sites in different files, and the moment two spell one the same way it is the bare form again; fifty-one helpers were relying on it, two of them literally `bm-{tag}-{pid}`. The guard still cannot see two `#[test]` bodies that build the same name by different routes — **so a change that adds a test writing to disk wants `cargo test --workspace --all-features` too, and wants it twice, because a race that has been fixed passes once by luck as well.** (`--all-features`: most of the scratch sites this file scans for live inside `app`'s in-crate `t-*`-gated tests, invisible to `cargo test` without it.)
 
 **And a third process-global class, the nastiest of the three: THREAD-AFFINE OS HANDLES** (SQ-1162). An audio device is not a value you can hold twice — cpal keeps a process-global `static ENUMERATOR` on Windows while initialising COM in a `thread_local` whose `Drop` calls `CoUninitialize()`, so a finished libtest thread can unload MMDevAPI out from under that global pointer. The symptom is not an assertion: the whole binary dies with `0xc0000005 STATUS_ACCESS_VIOLATION` and NO test reports failure, so the printed tail is scheduling rather than causation and naming the culprit needs `--test-threads=1`. On macOS the same shape merely crawls — four cases went from 0.76s serial to **491.54s** in parallel, real CoreAudio streams torn down on threads that never opened them.
 

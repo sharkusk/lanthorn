@@ -273,6 +273,15 @@ fn in_test_code(file: &str, line: usize, cfg_test_spans: &[(usize, usize)]) -> b
 }
 
 /// Line spans of every `#[cfg(test)]` module, by brace depth from its opening brace.
+///
+/// Matches the bare `#[cfg(test)]` spelling and, since SQ-1242 put `app`'s in-crate
+/// `mod tests` blocks behind `t-*` Cargo features, `#[cfg(all(test, …))]` too — every
+/// module SQ-1242 rewrote opens with exactly that prefix
+/// (`#[cfg(all(test, feature = "t-<group>"))]`, or `any(feature = …)` for the couple
+/// shared across two groups), and a scan that only recognised the bare form would
+/// silently stop seeing the ~150 modules that are the bulk of what this file scans in
+/// `src/` — which is exactly the failure `the_scan_reaches_unit_tests_in_src` below
+/// exists to catch.
 fn cfg_test_spans(c: &[char]) -> Vec<(usize, usize)> {
     let mut spans = Vec::new();
     let mut i = 0usize;
@@ -281,7 +290,7 @@ fn cfg_test_spans(c: &[char]) -> Vec<(usize, usize)> {
         if c[i] == '\n' {
             line += 1;
         }
-        if at(c, i, "#[cfg(test)]") {
+        if at(c, i, "#[cfg(test)]") || at(c, i, "#[cfg(all(test,") {
             let start_line = line;
             // Walk to the module's opening brace, then to its match.
             let mut j = i;
