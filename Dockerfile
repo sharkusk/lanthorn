@@ -41,6 +41,9 @@ COPY . .
 # The cache mounts keep the registry, the toolchain download, and incremental
 # build artifacts across image rebuilds; the binaries are copied out because
 # a cache mount's contents are not part of the image.
+# The repo builds into `target.noindex` on a developer Mac; the image wants the
+# conventional path so the `cp target/release/...` below holds.
+ENV CARGO_TARGET_DIR=target
 RUN --mount=type=cache,target=/usr/local/cargo/registry \
     --mount=type=cache,target=/usr/local/rustup \
     --mount=type=cache,target=/src/target \

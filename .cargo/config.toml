@@ -15,5 +15,14 @@
 # CI is exempt: the workflow sets CARGO_BUILD_JOBS, and the environment variable
 # wins over this file. A 4-core runner running 8 concurrent rustc processes is
 # slower AND risks the memory ceiling on a crate the size of `app`.
+# The build directory is `target.noindex`, not `target`, because Spotlight skips
+# any directory whose name ends in `.noindex` and indexes everything else — and a
+# day of merges writes tens of thousands of files here. Measured 2026-09-02:
+# `corespotlightd` at 200% CPU with `mds`/`mds_stores` behind it, and a
+# `cargo check --all-targets` after touching `app` at 15–28 minutes against 11
+# on a quiet machine (the rest is `app`'s own test module, see CLAUDE.md).
+# CI and the Docker build set `CARGO_TARGET_DIR=target`, which wins over this
+# file, so every path in the workflows and the Dockerfile stays `target/...`.
 [build]
 jobs = 6
+target-dir = "target.noindex"

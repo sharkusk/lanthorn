@@ -823,7 +823,7 @@ fn the_cards_pair_is_settled_before_the_story_loads() {
         for e in entries.flatten() {
             let path = e.path();
             if path.is_dir() {
-                if path.file_name().is_some_and(|n| n == "target") {
+                if path.file_name().is_some_and(|n| n.to_string_lossy().starts_with("target")) {
                     continue;
                 }
                 stack.push(path);
