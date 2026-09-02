@@ -21,19 +21,34 @@
 # `if_verbs.tsv` carries are NOT grouped, because a story that calls `turn` and
 # `rotate` one verb has said nothing about `rotate on`.
 #
-# 119 stories read; 1844 distinct sets, 4909 declarations.
+# 149 stories read; 2223 distinct sets, 6307 declarations.
 1	aaieee	scream	shout	shriek	yell
 1	abando	debark	disemb	evacua	exit	leave
+1	abandon	chuck	deposit	discard	ditch	drop	fling	hurl	jettison	junk	scrap	toss
 1	abandon	drop	dump
+1	abide	bide	linger	tarry	wait
 2	about	author	clue	clues	credit	credits	help	hint	hints	info	menu	walkthrou	walkthru
 1	about	author	credit	credits	help	hint	hints	menu
+1	about	clue	clues	help	hint	hints
+1	about	credit	info
+1	about	credits	help	hint	hints	instructi	license	menu
+1	about	credits	help	menu
+1	about	help	info
+1	about	info
 1	abracadab	foobar	frotz	hocus	open-ses	sesame	shazam
+1	abracadab	foobar	frotz	hocus	open-sesa	sesame	shazam
+1	accept	consent
 1	accompany	chase	follow	pursue
+1	accost	affront	aggrieve	anger	annoy	badger	bug	gall	infuriate	insult	irritate	mock	offend	pester	taunt
 1	accuse	arrest	captur
+1	acknowled	credit	credits
 2	acqu	get	grab	obta	pick	seiz	take
 2	acqu	get	take
+1	acquire	borrow	grab	snatch	steal
+1	acquire	bring	carry	fetch	grab	hold	snatch	steal	take
 1	acquire	bring	carry	filch	grab	heist	hold	liberate	nick	pinch	pluck	poke	rob	snatch	steal	swipe	take	unhook
 1	acquire	carry	grab	hold	snatch	steal	take
+1	act	behave
 1	act	feign	pretend
 1	act	pla	sta
 1	act	play
@@ -43,13 +58,20 @@
 1	activate	begin	start
 2	activate	enable
 1	activate	light	start
-4	activate	start
+5	activate	start
+1	activetop	eudoxia
+1	add	join	mend	repair
 1	adju	chan	move	rese	set
+1	adjust	change	set
 1	adjust	fix	repair
 1	adjust	focus	tune
-28	adjust	set
+1	adjust	reset	set
+50	adjust	set
+1	adjust	set	tilt	tip
 1	adjust	tune
-2	admire	compli
+1	administe	afford	bestow	commit	confer	contribut	deliver	dispense	disperse	distribut	donate	feed	furnish	give	grant	hand	lend	offer	provide
+1	admire	believe	desire	despise	disbeliev	distrust	doubt	fear	hate	like	loathe	love	need	trust
+3	admire	compli
 1	admire	complimen
 1	advanc	crawl	go	hike	hop	procee	run	skip	step	tramp	trudge	walk
 1	advanc	crawl	hike	hop	procee	run	skip	step	tramp	trudge	walk
@@ -70,10 +92,14 @@
 1	affirmati	aye	ok	okay	sure	yea	yeah	yep	yes	yup
 1	affirmati	yes
 1	affix	attach	fasten	fix	tie
+1	affix	connect	join	link	plug
 2	aftern	bye	farewe	goodby	greet	greeti	hello	hi	salute
 1	afternoon	bye	farewell	goodbye	greet	greetings	hello	hi	salute
+1	agitate	disturb	jiggle	joggle	rattle	shake
 1	agitate	jar	jiggle	joggle	jostle	rattle	rock	shake
+1	agree	indeed	nod	rather	yes
 1	ahchoo	choo	sneeze
+1	aid	assist
 1	aid	assist	preserve	rescue
 1	aid	attend	defend	help	protect	rescue
 4	aid	help
@@ -88,29 +114,40 @@
 3	aim	point	shine
 1	aim	point	shine	signal
 1	air	clean	soak	wash	wipe
+1	alohomora	alohomorr	frotz	lumos	rezrov
 1	alter	change	decrease	increase	set
+1	ambulate	crawl	creep	go	head	hike	jog	leg	lumber	meander	pace	perambula	plod	proceed	promenade	race	ramble	run	saunter	slog	sneak	step	stride	stroll	stump	traipse	tramp	travel	tread	troop	trudge	walk	wander
 1	ambulate	crawl	explore	go	head	proceed	run	walk	wander
 1	anagram	decipher	decode
 2	analys	analyz	check	dust	test
 1	analys	analyz	check	test
 1	analys	analyz	check	test	troubl
+1	analyse	inspect	study
 1	analyz	check	dust	test
 1	analyz	descri	examin
 1	angle	theta
+1	angrily	be	carefully	eagerly	furiously	happily	hastily	loudly	quickly	quietly	rapidly	slowly	wildly
 1	annihilat	break	crack	damage	decimate	demolish	destro	devastate	smash	wreck
 1	annoy	distract	disturb
+1	anoint	drench	lather	slather
+1	anoint	oil
+1	anoppe	eppona
 1	answer	bellow	greet	holler	howl	say	scream	screech	shout	shriek	speak	squeal	talk	wail	yell	yelp	yowl
 2	answer	guess	reply
 1	answer	guess	reply	say	utter
+1	answer	hiss	holler	roar	say	scream	shout	speak	whisper	yell	yodel
 19	answer	reply
-7	answer	reply	respon
+8	answer	reply	respon
 2	answer	reply	respond
+1	answer	reply	say	speak
 1	answer	say
-1	answer	say	shout
-20	answer	say	shout	speak
+3	answer	say	shout
+36	answer	say	shout	speak
+3	answer	say	speak
 2	answer	shout	speak
 1	apolog	sorry
 2	apologise	apologize
+1	apologise	apologize	grovel	repent	sorry
 1	apologiz	sorry
 1	appl	clap
 2	appl	exer	use	with
@@ -118,16 +155,23 @@
 1	applau	cheer	clap
 3	applau	clap
 1	applaud	cheer	clap
+1	applaud	cheer	clap	ovate	stamp	stomp	whoop
 2	applaud	clap
+1	apply	attach	fasten	stick	tie
+1	apply	don	wear
 1	approach	find	seek
+1	argh	arr	bah	bother	curses	darn	drat	eagh	eeagh	eeeagh	eeeeagh	foo	grr	meh	pah	rar	sheesh	wah	yow
 1	argue	protes
 1	argue	protest
+1	arise	rise	stand	straighte
 3	arouse	frighten	scare	startle	surprise
 2	arr	arrr	arrrr	growl	grr	grrr	grrrr	rar	rarr	rarrr	roar	rrr	rrrr	scream	yell
 1	arrest	captur
+1	arse	ass	asshole	bastard	bugger	cunt	damn	fuckhead	hell	motherfuc	prick	sod	tarnation
 1	asc	cli	go	run	walk
 6	asce	clim
 2	asce	clim	scal
+2	ascend	climb	descend	scale
 1	ascend	climb	mount	scale
 1	ascend	rise
 1	ask	buy	say	scre	yell
@@ -137,14 +181,16 @@
 1	ask	consult	inquire	query	question	quiz
 1	ask	consult	query
 4	ask	inquir	questi
+1	ask	inquire	query
 2	ask	interr	query	questi	quiz
 1	ask	interr	query	quiz
 1	ask	interroga	query	question
 2	ask	interroga	query	question	quiz
+1	ask	interroga	question
 1	ask	kic	say	scr	tal	tic	yel
 1	ask	query	quiz
 1	ask	query	what	whats
-2	ask	quiz
+3	ask	quiz
 2	ask	rema	say	talk
 1	ask	say	scre	spea	talk	tell	whis	yell
 2	ask	say	shou	talk	yell
@@ -162,14 +208,17 @@
 1	assaul	attack	fight	hurt	injure
 2	assaul	attack	fight	molest	rape	repel
 2	assaul	molest	rape
+1	assault	attack	bend	bop	break	crumple	crunch	crush	destroy	fold	harm	hurt	injure	mutilate	punch	ruin	scratch	slap	smack	smash	spindle	strike	thump	torture	vandalize	wreck
 1	assault	attack	fight	hit	kill	murder	punch	slap	strike
 3	assault	attack	fight	hurt	injure
 1	assault	attack	fight	hurt	injure	kill	murder	slay	stab	vanquish	wound
 1	assault	kill	murder	stab
+1	asshole	bastard	bitch	damn	damnit	fucker	hell	shit	shithead
 1	at	on
 1	at	to	towa
 1	at	towa
 1	at	towar
+2	atc	correctio	mistype	spellchec	typing	typos
 1	att	fig	hit	kil	pun
 3	att	kil
 2	att	kil	sla
@@ -183,29 +232,42 @@
 1	attach	buckle	fasten	hook	secure	tie
 1	attach	combine	fasten	fix	tie
 1	attach	connec
-1	attach	connec	fasten	hook	loop	tie	wrap
+2	attach	connec	fasten	hook	loop	tie	wrap
 1	attach	connec	fasten	secure	tie
 2	attach	connect
 1	attach	connect	fasten	hook	knot	lash	loop	strap	tie	wrap
+1	attach	connect	fasten	join	reattach	reconnect
 1	attach	connect	fasten	secure	tie
 1	attach	connect	join
-2	attach	fasten	fix	tie
+1	attach	fasten	fix
+1	attach	fasten	fix	mend	repair	tie
+12	attach	fasten	fix	tie
 1	attach	fasten	hitch	hook	secure	strap	tie
 1	attach	fasten	hitch	secure	tie
 1	attach	fasten	hook	secure	tie
 1	attach	fasten	moor	secure	tie	weave
 2	attach	fasten	secure	strap	tie
 16	attach	fasten	secure	tie
-28	attach	fasten	tie
+40	attach	fasten	tie
+1	attach	stick
+1	attack	bang	bash	break	crack	destroy	fight	hit	kill	murder	punch	shatter	smash	tap	thump	torture	wreck
+1	attack	bang	crack	crush	destroy	fight	hit	kill	murder	punch	rip	shatter	tear	thump	torture	wreck
 1	attack	bash	belt	break	crack	crush	damage	destroy	fight	hit	hurt	injure	kill	murder	pound	pummel	punch	shatter	shoot	slap	slug	smack	smash	snap	sock	thump	thwack	torture	trash	vandalise	wallop	whack	wreck
 1	attack	bash	fight	hit	kill	murder	punch	slap	strike	whack
+1	attack	break	choke	crush	destroy	erase	fight	hit	kill	murder	punch	rape	rip	shoot	slap	smack	smash	stab	strangle	tear	thump	torture	uproot	wreck
+1	attack	break	crack	cut	destroy	fight	hit	kill	murder	punch	slice	smash	stab	thump	torture	wreck
+1	attack	break	crack	decimate	destroy	fight	hit	kill	murder	punch	rip	shred	smash	snap	stab	strangle	tear	thump	wreck
 1	attack	break	crack	destroy	erase	fight	harm	hit	hurt	injure	kick	kill	murder	punch	smack	smash	stab	strike	thump	torture	wreck
+1	attack	break	crack	destroy	fight	hammer	hit	kick	kill	murder	punch	slap	smack	smash	snap	tap	thump	torture	whack	wreck
 1	attack	break	crack	destroy	fight	hammer	hit	kill	murder	punch	smash	thump	torture	wreck
+1	attack	break	crack	destroy	fight	hit	injure	kill	murder	play	punch	ring	shake	smack	smash	strike	thump	torture	wreck
 1	attack	break	crack	destroy	fight	hit	kick	kill	murder	punch	scratch	smash	strike	swat	thump	wreck
+1	attack	break	crack	destroy	fight	hit	kick	kill	murder	punch	slap	smash	spank	thump	torture	wreck
 1	attack	break	crack	destroy	fight	hit	kill	murder	prune	punch	slice	smash	thump	torture	wreck
-20	attack	break	crack	destroy	fight	hit	kill	murder	punch	smash	thump	torture	wreck
+37	attack	break	crack	destroy	fight	hit	kill	murder	punch	smash	thump	torture	wreck
 1	attack	break	crack	destroy	fight	hit	kill	murder	punch	smash	thump	wreck
 2	attack	break	crack	destroy	fight	hit	murder	punch	smash	thump	wreck
+1	attack	break	crack	destroy	fight	hit	punch	smash	thump	torture	wreck
 1	attack	break	crack	fight	hit	kill	murder	punch	smash	thump	torture	wreck
 1	attack	break	destroy	hit	kill	murder	smash	thump	torture	wreck
 1	attack	break	destroy	hit	punch	smash
@@ -218,30 +280,40 @@
 2	attack	fight	hit	kill	murder	slap	slay	stab	strike
 1	attack	fight	hit	kill	murder	slap	stab	strike
 1	attack	fight	hit	kill	slap	slay	stab	strike
-1	attack	fight	hit	strike
+2	attack	fight	hit	strike
 1	attack	fight	hurt
 2	attack	fight	hurt	injure
 1	attack	fight	hurt	kill	slay	stab	stun
 1	attack	hit	punch	slap	strike
+1	attempt	sample	try
+1	attend	describe	examine	heed	inspect	note	notice	observe	scrutiniz	see	spot	tend	view	watch
 1	aulderfoo	eldablitz	fublitske	fzorty	hildebud	lizowurt	mordex	sizul	xzilch	zastic
+1	auto	automatic
+1	aveh	suveh
+1	avoid	eschew	gag	ignore	shun	snub
 2	awak	rous	wake
 1	awak	wake
-1	awake	awaken	resuscita	revive	wake
+2	awake	awaken	resuscita	revive	wake
 1	awake	awaken	revive	rouse	wake
 2	awake	awaken	rouse	startl	surpri	wake
 1	awake	awaken	rouse	startle	surprise	wake
 4	awake	awaken	rouse	wake
-29	awake	awaken	wake
+55	awake	awaken	wake
 1	awake	resusc	revive	wake
 2	awake	revive	rouse	wake
 2	awake	rouse	startl	surpri	wake
 9	awake	rouse	wake
 13	awake	startl	surpri	wake
 2	awake	startle	surprise	wake
-1	awake	wake
+2	awake	wake
 1	awake	wake	waken
+1	awesome	beautiful	cool	excellent	funny	great	ha	heh	lovely	nice	thanks	wow
 1	aye	indeed	ok	okay	sure	yeah	yep	yes	yup
+1	ayup	okay	sure	yea	yeah	yep	yes	yup
+1	back	backtrack	retire	retreat	return
+1	back	prev	previous
 2	bah	grumble	sigh
+1	bake	burn	cremate	ignite	incinerat	kindle	light	melt	parch	toast
 1	bake	burn	fire	ignite	incinerat	kindle	light	melt	toast
 1	bake	burn	ignite	incinerat	kindle	light	melt	toast
 2	ball	bast	bog	bugg	cunt	fuck	piss	shit
@@ -251,12 +323,16 @@
 1	bang	fornic	fuck	hump	lay	screw	seduce
 1	bang	fornicate	fuck	hump	lay	screw	seduce
 1	bang	hit	pres	push
+1	bang	knock	pound	rap	tap	thwack	whack
 3	bang	knock	rap
+1	bang	knock	rap	tap
 4	banish	begone	cast	drive	exorci
 1	banish	begone	cast	drive	exorcise
 1	banish	begone	drive	exorci
 1	banish	drive	exorci
 1	bar	bolt	latch	lock
+1	bar	sidebar
+1	barf	belch	burp	choke	convulse	cough	fart	hiccup	puke	ralph	sneeze	tremble	vomit	yawn
 6	barf	chomp	lose
 1	barf	puke	regurg	vomit
 1	barf	puke	regurgita	vomit
@@ -264,7 +340,9 @@
 1	bargai	haggle
 1	bargain	barter	exchange	swap	trade
 1	bargain	deal	dicker	haggle	negotiate
+1	bark	holler	howl	scream	screech	shout	ululate	yell	yelp
 1	barter	exchange	trade
+1	bash	break	crash	smash
 2	bast	boll	bugg	cunt	fuck	piss	shit
 2	bast	boll	cunt	fuck	piss	shit
 2	bast	boll	fuck	piss	shit	wank
@@ -281,15 +359,21 @@
 2	beat	kick	poke	prod	slap	spank
 1	beat	rough
 2	beckon	brandi	motion	wave
+1	beckon	direct	gesture	point
 2	beckon	grin	laugh	motion	nod	smile	sneer
 1	beckon	grin	nod	smile	sneer
-3	beckon	wave
+4	beckon	wave
 1	beco	chan	tran
+1	beep	bepe	bleep	bloop	boop	meep	mepe
 1	beep	blast	blow	honk	ring	toot
+1	beep	bleep	chirp
+1	beg	entreat	plead
 1	beg	petition	plead
 1	beg	plead
+1	begin	start	undertake
 2	behe	chop	cut	deca	hack	seve	slic
 1	behold	check	describe	examine	inspect	investiga	observe	see	view	watch
+1	belch	burp	cough	hiccough	hiccup	sneeze
 1	belt	figh	hit	kick	punc	slug
 1	bend	brea	twis
 3	bend	spread
@@ -301,9 +385,11 @@
 1	bestow	deliver	donate	give	hand	present
 1	bestow	donate	feed	give	hand	offer	presen
 1	bestow	donate	give	hand	offer	sell
+1	bet	gamble	wager
 1	bet	wager
 1	bind	fetter	hobble	manacl	shackl
 1	bit	bite	chew	eat	swal
+1	bitch	complain	retort
 1	bite	cannibali
 1	bite	chew	consum	eat
 1	bite	chew	consum	eat	munch	nibble
@@ -316,6 +402,7 @@
 1	bite	hit	hurt	injure	kick	punch	slap
 1	bite	kick
 4	bite	kick	taunt
+1	blackmail	frighten	scare	threaten	warn
 1	blarn	bok	jukes	lightning	macuga	prosser	smee	squirp	stella	watkin	yabba	youth	yquem
 2	blas	fire	shoo
 2	blas	shoo
@@ -323,9 +410,11 @@
 1	blast	discharge	fire	shoot
 4	blast	fire	shoot
 1	blast	fire	shoot	zap
+1	blazon	brandish	disclose	discover	display	divulge	exhibit	expose	flash	flaunt	flourish	manifest	parade	present	proffer	reveal	show	sport	submit	unveil	vaunt
 1	bleem	frippi	gashee	lyshus	misera	morpho	thou	venchi	wimbgu
 1	bleem	fripping	gashee	lyshus	miserable	morphousi	thou	venchit	wimbgunts
 16	blind	jab	poke
+1	blink	frown	gesticula	gesture	glare	grimace	grin	pout	smile	smirk	snarl	sneer	wink
 1	blo	sho
 1	bloc	cove
 5	block	break	damage	destro	smash
@@ -338,25 +427,30 @@
 1	blow	breathe
 1	blow	clap	danc	feel	laug	list	smel	smil	touc	wait	wigg
 1	blow	drain	empty
+1	blow	exhale
 1	blow	make
 1	blow	throw	toss
 1	blow	toot
 2	boar	ente	go
+1	board	catch
 2	board	climb
+2	board	cross	enter
 1	board	drive	mount	peddle	ride
-5	board	embark
+6	board	embark
 2	board	embark	ride
 5	board	mount
 3	board	mount	ride
-2	board	ride
+3	board	ride
 1	boo	groan	hiss	moan
+1	boo	hiss
 2	boo	scat	scram	shoo
 1	boost	erect	hoist	lift	raise	unfurl	weigh
 7	boost	lift	raise
-10	bother	curses	darn	drat
+23	bother	curses	darn	drat
 2	boun	jump
 1	bounce	dive	fall	jump	leap
 1	bounce	dribble
+1	bounce	jar	jiggle	oscillate	palpitate	quake	rattle	shake	vibrate
 1	bounce	rock	rock-	shake
 1	bounce	rock	rock-a-	shake
 3	bounce	shake
@@ -368,10 +462,11 @@
 2	bow	grovel	kneel
 2	bow	kneel
 1	brace	suppor
-1	brake	stop
+2	brake	stop
 1	brandi	signal	wave
 7	brandi	wave
 2	brandish	wave
+1	brandish	wield
 1	bre	cut	fil	tri
 1	bre	cut	sma	unb
 1	bre	des
@@ -397,7 +492,7 @@
 1	break	crack	damage	demolish	destroy	erase	smash	trash	wreck
 2	break	crack	damage	demolish	destroy	smash	wreck
 1	break	crack	damage	destro	hatch	smash
-1	break	crack	destro	scrape	scratc	smash	wreck
+2	break	crack	destro	scrape	scratc	smash	wreck
 1	break	crack	destro	scratc	smash	wreck
 1	break	crack	destroy	scrape	scratch	smash	wreck
 2	break	crush	damage	demoli	destro	smash	trampl	wreck
@@ -413,12 +508,17 @@
 1	break	damage	destroy	smash	wreck
 1	break	lift	move	raise	smash	unrav
 1	breath	inhale	suck
+1	breathe	smell	sniff
 3	bribe	entice	pay
 2	bribe	entice	pay	renumerat
-5	brief	normal
+1	brief	long	normal	short	superbrie	verbose
+13	brief	normal
 1	brief	super	superbrie	verbose
+1	brief	superbrie	verbose
+1	bring	carry	catch	grab	hold	stop	take	untie
 1	bring	fetch
 1	broadcast	send	transmit
+1	brother	brothers
 4	browse	leaf	read	skim
 7	browse	read	skim
 3	brush	clean
@@ -430,7 +530,9 @@
 1	brush	clean	tidy	wash	wipe
 1	brush	clean	wash	wipe
 3	brush	clean	wipe
+1	brush	sweep
 1	buckle	fasten	secure	tie
+1	budge	clear	depress	jostle	move	nudge	poke	press	push	shift	shove
 3	bui	mak
 1	buil	cons	crea	make
 2	buil	fix	make	repa
@@ -445,12 +547,14 @@
 1	burn	heat	light
 7	burn	igni	ligh
 2	burn	igni	ligh	on
-6	burn	ignite
+7	burn	ignite
 7	burn	ignite	incine
 1	burn	ignite	incinerat
+1	burn	ignite	incinerat	kindle	light	melt
 1	burn	ignite	kindle
 1	burn	ignite	light
-25	burn	light
+1	burn	ignite	light	melt
+47	burn	light
 1	burn	melt
 2	burp	fart
 2	burst	pop
@@ -458,15 +562,17 @@
 1	bus	jam	sma
 1	buy	order	procure	purchase
 4	buy	order	purcha
-6	buy	order	purchase
+7	buy	order	purchase
 1	buy	purc
-2	buy	purcha
-32	buy	purchase
+3	buy	purcha
+56	buy	purchase
 1	buy	withdraw
+1	bye	byebye	cheerio	ciao	farewell	goodbye
 2	bye	farewell	good-bye	goodbye
 5	bye	farewell	goodbye
 1	bye	good-	goodby
 1	bye	goodby
+1	bye	goodbye	hello	hi
 2	cackle	laugh
 2	cal	say	spe
 1	call	contac	phone	signal	summon
@@ -476,20 +582,24 @@
 1	call	hail
 1	call	maybe	proclaim	say	speak	talk	utter
 3	call	phone
+1	call	phone	ring
+1	call	phone	ring	summon
 1	call	phone	telephone
 1	call	procla	say	talk	utter
 2	call	say	speak	talk	utter
 1	call	say	spel
-4	call	say	talk
+5	call	say	talk
 2	call	summon
 1	calm	rela	slee
 1	calm	soothe
 1	cancel	negati	no
 1	caper	cavort	dance
 1	captur	catch
-1	capture	catch
+2	capture	catch
 1	capture	catch	collect	grab
+1	capture	catch	recapture
 2	care	fond	kiss	stro
+1	caress	embrace	fondle	fuck	grope	kiss
 1	caress	feel	fondle	pat	pet	rub	stroke	tickle	touch
 1	carr	catc	get	grab	hold	stan	take
 1	carr	get	grab
@@ -499,8 +609,9 @@
 1	carry	catch	confiscat	get	grab	hold	seize	snatch	steal	take
 1	carry	catch	confiscat	grab	keep	prince	seize	snatch	steal	take
 1	carry	catch	confiscat	grab	keep	seize	snatch	steal	take
+1	carry	catch	elevate	have	lift	raise	take
 3	carry	catch	get	grab	hold	remove	take
-2	carry	catch	get	grab	hold	snatch	take
+3	carry	catch	get	grab	hold	snatch	take
 2	carry	catch	get	grab	hold	take
 1	carry	catch	get	grab	lunge	select	snatch	tackle	take
 1	carry	catch	get	grab	obtain	seize	take
@@ -508,8 +619,10 @@
 1	carry	catch	grab	hold	hook	snag
 1	carry	catch	grab	keep	retrieve	seize	snatch	take
 1	carry	catch	grab	keep	seize	snatch	steal	take
+1	carry	collect	hold	take
 1	carry	extract	get	grab	hold	take
 1	carry	get	grab	hold	lead	steal	take
+1	carry	get	grab	hold	pluck	take
 4	carry	get	grab	hold	remove	take
 6	carry	get	grab	hold	take
 1	carry	get	grab	lead	remove	seize	steal	take
@@ -517,11 +630,16 @@
 1	carry	get	hold	lead	remove	steal	take
 1	carry	get	hold	lead	remove	take
 1	carry	get	hold	pick	picku	remov	take	untie
-3	carry	get	hold	take
+4	carry	get	hold	take
+1	carry	grab	hold	lift	snatch	swipe	take
+2	carry	grab	hold	take
 1	carry	grab	lift	pry	raise	seize	steal	take
+1	carry	grab	take
 1	carry	hold
-24	carry	hold	take
+41	carry	hold	take
+1	carve	chop	clip	crop	cut	excise	lacerate	pare	prune	shear	shred	skive	slice	snip	trim	whittle
 1	carve	chop	cut	fracture	graze	lacerate	lance	pierce	prune	puncture	rip	ruin	saw	scratch	sever	slash	slice	slit	stab	tear	wound
+1	carve	chop	cut	prune	slice
 1	carve	inscri	scratc	write
 1	carve	inscribe	scratch	write
 1	carve	scrape	scratch
@@ -546,38 +664,54 @@
 5	catch	trap
 1	caution	warn
 5	cavort	fiddle	play	toy
+1	cavort	frolic	gambol	hop	jump	leap	prance	skip	somersaul
 3	cavort	gambol	hop	skip
+1	cease	desist	discontin	halt	stop	terminate
 1	center	straighte
 1	cha	fol
+1	change	flip
+1	chant	croon	hum	intone	sing	yodel
 5	chant	incant
 1	chant	sing
+1	chapters	contents	full	fullscore	outline	plot	precis	score	story	summary
 1	char	rech
+1	character	dramatis	people	personae
+1	charge	rev	wind
+1	charlesto	dance	foxtrot	macarena	polka	tango	waltz
 7	chase	come	follow	pursue
-2	chase	follow
-24	chase	follow	pursue
+4	chase	follow
+25	chase	follow	pursue
 1	chase	follow	pursue	stalk
 3	chase	follow	pursue	trace
+1	chat	chatter	converse	gab	gossip	murmur	mutter	talk	whisper
 1	chat	gab	say	speak	state	talk	whispe
 1	chat	say	speak	talk
+1	chat	speak	talk
 1	chec	desc	exam	look
 1	chec	test
+1	check	count	describe	examine	watch
 2	check	descri	examin	inspec	observ	see	study	survey	watch
 1	check	descri	examin	inspec	observ	study	survey	watch
 1	check	descri	examin	inspec	observ	watch
-1	check	descri	examin	watch
+2	check	descri	examin	watch
 1	check	describe	examine
+1	check	describe	examine	find	watch
 2	check	describe	examine	inspect	observe	see	study	survey	watch
 1	check	describe	examine	inspect	observe	view	watch
+1	check	describe	examine	inspect	observe	watch
 2	check	describe	examine	inspect	see	study	survey	trace
-27	check	describe	examine	watch
+49	check	describe	examine	watch
 1	check	examine	inspect	watch
 1	cheer	comfor	entert
 2	cheer	comfort	entertain
+1	cheers	thank	thank-yo	thanks	thankyou
+1	chew	chomp	eat	ingest	masticate	munch	swallow
 1	chew	eat
 2	chew	lick
 1	chico	echo	groucho	gummo	harpo	hum	marx	punt	sing	whistle	zeppo
+1	chill	relax	wait
 2	cho	cut
-1	choose	click	select
+2	choose	click	select
 1	choose	select
 1	chop	cleave	cut	gash	lacerate	saw	sever	slash	slice	split
 1	chop	cleave	cut	gash	lacerate	sever	slash	slice	split
@@ -587,14 +721,16 @@
 2	chop	cut	hack	slic
 1	chop	cut	hit	slic
 1	chop	cut	prune	rip	slice	tear
-1	chop	cut	prune	slash	slice
-2	chop	cut	prune	slash	slice	split
-24	chop	cut	prune	slice
+2	chop	cut	prune	slash	slice
+3	chop	cut	prune	slash	slice	split
+43	chop	cut	prune	slice
 1	chop	cut	slash
 1	chop	cut	slash	slice
 4	chop	cut	slic
-4	chop	cut	slice
-1	chop	prune	slice
+5	chop	cut	slice
+1	chop	prune
+3	chop	prune	slice
+1	chortle	chuckle	giggle	guffaw	hoot	laugh	snicker	snort	titter
 4	chuc	hurl	slin	thro
 4	chuc	hurl	slin	thro	toss
 2	chuc	slin	thro
@@ -611,23 +747,34 @@
 1	cle	mop
 1	cle	was
 2	clea	rins	wash
+1	clean	cleanse	dust	polish	rub	scrub	shine	sweep	wash	wipe
 1	clean	clear	shine	soak	sweep	wash	wipe
+1	clean	dry	dust	polish	rub	scrub	shine	sweep	wash	wipe
+1	clean	dust	polish	rub	scrape	scrub	shade	shine	sweep	wipe
 1	clean	dust	polish	rub	scrub	shine	smear	sweep	wipe
 1	clean	dust	polish	rub	scrub	shine	suck	sweep	vacuum	wash	wipe
-24	clean	dust	polish	rub	scrub	shine	sweep	wipe
+42	clean	dust	polish	rub	scrub	shine	sweep	wipe
+1	clean	dust	polish	rub	scrub	shine	wipe
+1	clean	dust	polish	scrub	shine	wipe
 1	clean	freshe	scrape	scratc	wash	wipe
 1	clean	launder	wash
+1	clean	polish	rub	shine	tidy
 2	clean	polish	scrub
 1	clean	polish	sweep	wipe
 3	clean	tidy	wash
 4	clean	wash	wipe
+1	cleanse	rinse	soak	wash
+1	clear	click	dial	move	press	push	shift
+1	clear	detach	free	unlink
 4	clear	empty
+1	clear	lower	move	press	push
 1	clear	move	nudge	press	push	shift	shove
 1	clear	move	press	push
 1	clear	move	press	push	rock	roll	shift	shove	slide
-24	clear	move	press	push	shift
-1	clear	move	press	push	shift	tilt
-1	clear	move	shift
+1	clear	move	press	push	rock	shift
+43	clear	move	press	push	shift
+2	clear	move	press	push	shift	tilt
+2	clear	move	shift
 1	cleave	cut	gash	lacera	sever	slash	slice	split
 1	cleave	cut	gash	sever	slash	slice
 1	cli	ent	fol	go	pac	run	wal
@@ -648,7 +795,8 @@
 2	climb	hatch
 1	climb	hatch	sit
 2	climb	lay	lie	reclin	sit
-43	climb	scale
+66	climb	scale
+1	climb	scale	scramble
 1	climb	scale	sit
 4	climb	sit
 1	clip	cut	slash
@@ -660,11 +808,11 @@
 1	clos	shut	slam
 1	close	collap	fold	shorte
 1	close	collapse	fold	shorten
-30	close	cover	shut
+53	close	cover	shut
 1	close	open	unloc
 1	close	replac	reset
 2	close	seal	shut
-12	close	shut
+17	close	shut
 1	close	shut	shutter
 6	close	shut	slam
 1	close	shut	unset
@@ -675,6 +823,7 @@
 1	clue	clues	hint	hints	invisiclu
 2	clue	help	hint
 2	clue	hint	hints
+1	cogitate	meditate	ruminate	speculate	th	theorize	think	wonder
 1	coll	get	grab	lift	pick	take
 1	color	colors
 1	combin	combo
@@ -682,25 +831,38 @@
 1	comfor	consol	flirt	hug	kiss
 1	comfort	console
 1	comm	fly
+1	command	commands	verb	verbs
+1	command	order
+1	commands	verbs
 1	commit	perform
 5	compar	match
 1	compile	hack	invoke
+1	complimen	flatter
+1	comprehen	forget	learn	understan
+1	compress	smush	squash	squeeze	wring
 2	conc	cove	hide	wrap
 2	conc	hide
 1	concea	enscon	hide	secret	stash
-6	concea	hide
+7	concea	hide
 2	conceal	hide
+1	conceal	obscure
 1	conceal	place	put	stick	stuff
+1	confess	repent
+1	config	configure	graphics
 1	config	custom	setup
 1	confro	show
 1	conn	hook
 1	conn	repa	spli
 2	consider	contempla
+1	consider	contempla	define	know	ponder	remember
 1	consider	contempla	ponder	recall	recollect	remember
+1	consider	contempla	recall	recollect	remember
+1	console	embrace	hug
+1	consult	read
 1	consum	devour	eat	gobble	ingest	nibble	taste
 2	consum	devour	eat	gobble	nibble	swallo
 3	consum	eat
-1	consum	eat	gobble
+2	consum	eat	gobble
 1	consum	eat	gobble	taste
 1	consum	eat	sample	taste
 2	consum	eat	taste
@@ -709,15 +871,20 @@
 1	consume	devour	eat	gobble	nibble	swallow
 1	consume	eat	gobble	ingest	wolf
 1	contin	restor	resume
+1	continue	keep
+1	conversat	issues	terms	topics	words
 1	converse	speak	talk
+1	convince	deceive	persuade
 1	coo	hea
-2	cook	heat	warm
+3	cook	heat	warm
 1	copyright	help
 1	cork	stopper
+1	count	enumerate	quantify
 1	count	tabulate	tally
 8	count	tally
 1	count	total
 3	cover	plug
+1	cower	crouch	hide	shelter
 1	cra	dig	pick
 1	crac	open
 1	crack	fight	kick
@@ -725,9 +892,11 @@
 1	cran	star
 2	cran	turn
 1	crank	revolve	roll	rotate	screw	spin	turn	twist	unscrew	winch	wind
+1	crank	wind
 1	crap	defeca	poo-p	shit
 1	crap	defecate	poo-poo	shit
 2	crap	pee	piss	poop	wee	wizz
+1	crap	shit
 1	craw	ente	go
 1	craw	roll
 1	crawl	fly	go	head	proceed	run	swim	walk
@@ -737,12 +906,15 @@
 1	crea	make	mix	prep
 1	crease	fold	unfold
 1	create	make
-2	credit	credits
-26	cross	enter
+3	credit	credits
+1	creep	depart	go	leave	proceed	run	rush	sneak	stride	stroll	strut	walk	wander
+46	cross	enter
+1	cross	enter	play	use
 13	cross	ford
 2	cross	ford	traver
 2	cross	traver
 5	cross	traverse
+1	cross-exa	crossexam	interroga	question
 1	crouch	duck	hide
 4	crouch	hide
 5	crouch	settle	sit	squat
@@ -754,15 +926,24 @@
 1	crush	squash	squeeze
 2	cry	frown	grimace	scowl	sniffle	sob
 1	cry	gasp	sob	weep
+1	cry	groan	moan	mourn	sigh	sniffle	snivel	sob	wail	weep	whimper	whine
 2	cry	howl	scream	shout	yell
+1	cry	moan	scream
 1	cry	say	scr	sum	yel
 1	cry	scream	shout	shriek	yell
+1	cry	scream	shriek	wail	yell
 1	cry	sob	weep
+1	cry	weep
+1	cuddle	embrace	hug
+1	cuddle	embrace	hug	snuggle
 1	cuddle	pat	pet
 2	cuff	handcu
-1	curdle	scare	startl	surpri
+1	cul	damn	fuck	merde	putain	shit	sod
+2	curdle	scare	startl	surpri
 1	curdle	scare	startle	surprise
+1	cure	heal
 1	curse	cuss	damn	fuck	hell	shit	swear
+1	curse	cuss	swear
 1	curse	dam	damn
 5	curse	damn
 1	curse	damn	fuck	hell	piss	shit
@@ -787,12 +968,17 @@
 1	cut	slice	snip
 1	cut	slice	stab
 1	cut	sta
-1	daemons	timers
-8	damn	fuck	shit
-4	damn	fuck	shit	sod
+2	daemons	timers
+1	damn	fuck	screw	shit	sod
+11	damn	fuck	shit
+11	damn	fuck	shit	sod
+1	damn	shit	sod
+1	dampen	dip	douse	moisten	soak	wet
 1	danc	list	shak	sing	smel
 1	dance	feel	liste	sing	touch	wash	wave
+1	dance	jig	minuette	waltz
 1	dance	piroue	twirl
+1	dance	tango	waltz
 1	dangle	hang
 1	dangle	hang	suspend
 1	deacti	douse	exting
@@ -800,7 +986,7 @@
 1	deacti	exting	stop
 2	deactivat	disable
 3	deactivat	extinguis
-1	deactivat	stop
+2	deactivat	stop
 1	deal	deliver	donate	extend	give	hand	offer	sell
 1	debark	depart	disembark	dismount	exit	withdraw
 6	debark	disemb
@@ -810,28 +996,37 @@
 1	deciph	decode
 2	decipher	decode
 2	declaim	deliver
+1	decowl	undress	unmask
+1	dedicatio	inscripti
 1	defend	feint	parry
 4	defile	hump	molest	rape	ravish
 1	defile	molest	rape
 1	defile	molest	rape	ravish
 1	deflat	pop
 2	deflate	pop
+1	degomb	disgomb	out	outside
+1	del	delete	erase
 2	dela	stal	wait
-2	deliver	feed	give	hand	offer	pay
+1	delete	erase
+3	deliver	feed	give	hand	offer	pay
 1	deliver	give	grant	hand	lend	loan	offer
 1	deliver	give	hand	lend	loan	offer
+1	delve	dig	excavate	quarry
+1	demand	order	request
 1	denied	deny
 1	deny	no	nope	refuse
+1	deny	refuse	reject
 1	dep	ins
 1	depart	dismount	exit	scram	withdraw
 1	depart	escape	exit	flee	leave	off	out
 1	depart	escape	exit	leave	out
+1	depart	escape	explore	flee	scram	vamoose
 1	depart	exit
 1	depart	exit	retire	scram	withdraw
 1	depart	exit	scram
 2	depart	exit	scram	withdr
 3	depart	exit	scram	withdraw
-8	depart	exit	withdr
+9	depart	exit	withdr
 4	depart	exit	withdraw
 2	depo	drop	dump	leav
 2	depo	drop	leav	put	thro
@@ -857,20 +1052,23 @@
 3	describe	examine	inspect	observe	study	watch
 1	describe	examine	inspect	scour	see	study
 1	describe	examine	inspect	see	study	survey	trace
-1	describe	examine	watch
+2	describe	examine	watch
 2	describe	examine	what	whats
+1	despair	surrender
 1	dest	kill
-1	detach	discon	free	unatta	unfast	unhook	untie	unwrap
+2	detach	discon	free	unatta	unfast	unhook	untie	unwrap
 1	detach	discon	free	unfast	unhook	untie
 1	detach	discon	unplug
 2	detach	disconnec	disengage	unattach	unplug
 1	detach	disconnec	disengage	unattach	unplug	unscrew
 1	detach	disconnec	free	unattach	unfasten	unhook	unlash	untie	unwrap
+1	detach	disconnec	free	unlink	unplug
 1	detach	free	releas	undo	unfast	unhook	untie
 1	detach	free	release	unfasten	unhook	untie
 1	detach	free	unatta	unbuck	unfast	unhook	untie
 1	detach	free	unatta	undo	unfast	unhook	untie
 1	detach	free	unattach	unfasten	unknot	untie
+1	detach	unattach	unplug
 1	detect	discov	find	locate
 1	detect	find	locate
 1	detect	scan
@@ -893,9 +1091,10 @@
 2	dial	rota	spin	turn	twis
 1	dial	tune
 3	did	how	when	why
-5	die	quit
+1	die	end	quit
+13	die	quit
 4	dig	excava
-3	dig	excavate
+4	dig	excavate
 1	dig	scoop
 5	dig	search
 5	dig	shov
@@ -904,7 +1103,9 @@
 1	dip	force	insert	lay	load	place	put	stash	stuff	thread	wedge
 1	dip	hang	insert	lay	place	put	sprink	stick
 1	dip	insert
+1	dip	put	stick
 1	dip	submerge
+2	direction	dirs
 1	dis	drop	lea	put	thr
 1	dis	una
 3	disassemb	open	unseal
@@ -912,16 +1113,25 @@
 4	disc	drop	leav	put
 1	disc	drop	leav	put	thro
 1	disc	unco
-7	discard	drop
+11	discard	drop
+1	discard	drop	dump
+1	discard	drop	fling	hurl	throw	toss
 1	discard	drop	pour	spill
+1	discard	drop	release	sprinkle	throw
 1	discard	drop	release	throw
-19	discard	drop	throw
+37	discard	drop	throw
+1	discard	drop	throw	toss
 1	discha	fire	shoot
 1	disclo	reveal
 1	discon	erase	rub
 1	discon	unplug
 1	disconnec	unplug
 4	discover	find	seek
+1	discuss	mention	subject	topic
+1	discuss	subject
+1	disenchan	dispel	dispell
+1	disengage	unlock
+1	dislello	skobe
 1	disloc	displa	move	shift
 1	dislocate	move	pull
 3	dislocate	move	roll	shift
@@ -935,20 +1145,25 @@
 1	dispatch	kill	murder	slay
 1	dispel	frotz	unmake
 1	displa	show
-30	display	present	show
+1	display	flash	present	show
+1	display	present
+53	display	present	show
 6	display	show
 1	disrob	strip	undres
-30	disrobe	doff	shed
-5	disrobe	strip	undress
+1	disrobe	doff
+55	disrobe	doff	shed
+6	disrobe	strip	undress
 1	disrobe	undress
 1	dissol	liquif	melt	thaw
 2	distur	feel	pat	pet	rub	touch
 1	disturb	feel	pat	pet	rub	touch
 1	disturb	rub	touch
 1	disturb	scratch	touch
-14	dive	jump	leap
+1	dive	hop	jump	skip
+15	dive	jump	leap
 6	dive	jump	leap	vault
-7	dive	swim
+18	dive	swim
+1	divide	share
 1	dock	interc	land	rendez
 2	dock	land	moor
 1	dodg	duck	jump	leap
@@ -958,7 +1173,7 @@
 6	doff	remove	shed
 1	don	instal	wear
 1	don	puto	wear
-67	don	wear
+93	don	wear
 2	dona	give	offe
 9	donate	feed	give	hand	offer
 1	donate	feed	give	hand	offer	pay
@@ -966,6 +1181,7 @@
 3	donate	give	hand	offer
 5	donate	give	hand	offer	sell
 1	donate	give	hand	offer	sell	send
+1	doors	entrances	exits
 4	dous	exti	unli
 4	dous	unli
 9	douse	exting
@@ -975,28 +1191,37 @@
 1	douse	extinguis	quench
 5	douse	extinguis	quench	snuff
 2	douse	extinguis	smother
-1	douse	pour
+2	douse	pour
 1	down	lowe
+1	doze	nap	rest	sleep
 2	doze	nap	rest	sleep	snooze
 2	doze	nap	sleep
 5	doze	nap	sleep	snooze
 1	doze	nap	slumber	snooze
 2	doze	nap	snooze
+1	drag	draw	pull	rattle	shake	tug	yank
 1	drag	flick	flip	haul	heave	pull	tract	tug
+1	drag	free	pull
 1	drag	haul	pull	yank
-29	drag	pull
+1	drag	lift	pull	raise
+51	drag	pull
 4	drag	pull	shove	tug	yank
-6	drag	pull	tug
+8	drag	pull	tug
 5	drag	pull	tug	yank
+1	drag	pull	yank
+1	drain	empty	pour	spread
 1	drain	empty	unpack
 3	drape	wrap
+1	draw	handwrite	inscribe	scribble	sign	sketch	type	write
 1	draw	have
 1	draw	inscribe	trace	write
 1	draw	make
 3	draw	open	part
 1	draw	open	part	pry
+1	draw	scrawl	scribble	sketch	write
 1	draw	sketch
 2	dream	hope	wish	yearn
+1	dream	nap	rest	sleep	snooze
 5	dri	eat
 5	drin	eat
 2	drin	eat	nibb	tast
@@ -1004,6 +1229,7 @@
 1	drink	eat	swallo
 1	drink	eat	swallow
 1	drink	gulp	imbibe	sip	swallow
+1	drink	gulp	sip
 3	drink	guzzle	imbibe	quaff	sip	swallo	swill
 2	drink	guzzle	imbibe	quaff	sip	swallow	swill
 5	drink	guzzle	imbibe	quaff	sip	swill
@@ -1014,16 +1240,17 @@
 8	drink	imbibe	swallo
 1	drink	imbibe	swallow
 1	drink	quaff	sip	swallo
-5	drink	sip
-5	drink	sip	swallo
-28	drink	sip	swallow
+6	drink	sip
+6	drink	sip	swallo
+52	drink	sip	swallow
 1	drink	sip	swallow	swig
 1	drink	taste
 1	drip	pour	spill	sprink
 1	driv	sail
 2	driv	stee
+1	drive	fly
 1	drive	go	head	procee	run	steer	walk
-1	drive	go	procee	run	steer	step	walk
+2	drive	go	procee	run	steer	step	walk
 2	dro	giv	lea	pou	rel	spi
 1	dro	giv	lea	rel	thr
 1	dro	lea
@@ -1033,7 +1260,7 @@
 1	dro	lea	put	thr
 1	drool	gurgle	saliva	slaver
 2	drool	spit
-12	drop	dump
+13	drop	dump
 4	drop	dump	leav
 3	drop	dump	releas
 1	drop	dump	release
@@ -1056,14 +1283,17 @@
 2	drug	pois
 1	dry	squeez	wring
 1	duck	go	wade
+1	duck	hide
 2	dummy	idiot	stupid
-1	dump	pour
+2	dump	empty
+2	dump	pour
 1	dump	pour	spill
 1	dunno	maybe
 1	dunno	maybe	possib
 1	dunno	maybe	possibly
 2	dunno	shrug
 2	dust	polish	rub	scrub	shine	sweep	wipe
+1	easy	novice	simple
 1	eat	lick	taste
 2	eat	nibb	tast
 1	eat	slee
@@ -1072,16 +1302,20 @@
 1	eat	tast
 2	eat	taste
 1	eavesdro	listen
+1	ecksyuzzy	ksizigh	zeezee	zighzigh	zizigh
 3	editio	releas	revisi	versio
+1	eighth	fifth	first	fourth	last	ninth	second	seventh	sixth	tenth	third
 1	electrocu	fry	shock	zap
 3	elevat	hoist	lift	raise
 1	elevat	phi
 6	elevate	hoist	lift	raise
+1	email	fax	mail	phone	post	send	telephone
 1	embrac	hug
 2	embrace	hug
-27	embrace	hug	kiss
-1	embrace	hug	kiss	smooch
-1	embrace	kiss
+46	embrace	hug	kiss
+2	embrace	hug	kiss	smooch
+3	embrace	kiss
+1	embroider	sew	stitch
 2	emp	pou	spi
 1	emp	spi
 1	empath	sympat
@@ -1090,17 +1324,20 @@
 1	employ	exploit	operate	pedal	use
 3	employ	exploit	operate	use
 1	employ	exploit	use
+1	employ	use	utilise	utilize
 1	employ	use	wield
 4	empt	pour
 2	empt	pour	spri
 2	empt	spil
-3	empty	pour
-3	empty	pour	spill
+4	empty	pour
+4	empty	pour	spill
 1	empty	rummag	search	sift	sort
 1	empty	shake
 1	empty	tip
 1	end	qui
 2	end	quit
+1	engage	lock
+1	enjoy	pet	stroke
 1	ent	go	run	use	wal
 1	ent	go	run	wal
 1	ente	foll	go	run	walk
@@ -1110,8 +1347,11 @@
 5	ente	go	run	walk
 2	equip	use
 2	equip	wield
-1	erect	lift	raise
+2	erect	lift	raise
+1	escape	exit	leave	out	outside
 7	escape	flee
+1	etch	inscribe	scribe	write
+1	eudoxia	frotz	gnusto	lagach	plover	plugh	xyzzy	zork
 4	exa	loo
 1	exa	loo	rea
 1	exa	loo	wat
@@ -1135,15 +1375,22 @@
 1	excite	stimul
 1	excite	stimulate
 1	excuse	forgiv	pardon
+1	execute	kill	murder	slaughter	slay	strangle
+1	exhibit	reveal
 1	exi	out
-1	exit	leave
-20	exit	leave	out
+2	exit	leave
+32	exit	leave	out
 1	exit	leave	vacate
-2	exit	out
-5	exit	out	outside
+2	exit	off	out	outside
+4	exit	out
+14	exit	out	outside
+1	expectora	spit
 1	explai	say	speak	state	talk
 1	explai	say	talk
 1	explai	tell
+1	explain	reveal
+1	explode	knife	shoot	stab
+2	explore	go	run	walk
 1	ext	unl
 1	extend	length	open	unfold
 1	extend	lengthen	open	unfold
@@ -1151,7 +1398,7 @@
 1	extend	unflatten	unfold	unroll
 2	exti	off	unli
 5	exti	unli
-1	extinguis	snuff
+3	extinguis	snuff
 1	face	flip	head	pilot	set	steer	turn	twist
 1	face	flip	rotate	set	spin	turn	twist	whirl
 1	faint	sleep	snooze
@@ -1163,14 +1410,20 @@
 1	fast	wear
 1	faste	repla	secu	tight
 3	fasten	secure	tie
+1	fasten	tie
 2	fee	fuc	hit	kic	kis	pok	tic	tou	wav
 1	fee	gro	tou
 1	fee	tou
 2	feed	give	hand	offer
-1	feed	give	hand	offer	pay
-1	feed	give	offer
-24	feed	give	offer	pay
-5	feel	fondle	grope	touch
+2	feed	give	hand	offer	pay
+3	feed	give	offer
+45	feed	give	offer	pay
+1	feel	finger	fondle	grope	stroke	touch
+1	feel	fondle	grope	pat	pet	stroke	tap	tickle	touch
+1	feel	fondle	grope	poke	touch
+1	feel	fondle	grope	rub	touch
+1	feel	fondle	grope	stroke	touch
+11	feel	fondle	grope	touch
 1	feel	fondle	pat	pet	poke	scratc	stroke	touch
 2	feel	fondle	pat	pet	poke	scratch	stroke	touch
 1	feel	grip	rub	smooth	touch
@@ -1179,21 +1432,22 @@
 1	feel	pat	pet	poke	rub	tap	tickle	touch
 1	feel	pat	pet	poke	scratc	stroke	touch
 3	feel	pat	pet	rub	shade	touch
-1	feel	pat	pet	rub	squeez	touch
+2	feel	pat	pet	rub	squeez	touch
 1	feel	pat	pet	rub	squeeze	touch
 14	feel	pat	pet	rub	touch
 1	feel	pat	pet	touch
 1	feel	pet	rub	touc
 1	feel	pet	stroke	touch
 1	feel	pet	touc
+1	feel	pet	touch
 1	feel	poke	touch
 1	feel	prob	touc
 1	feel	rub	shade	touch
 1	feel	rub	touch
 4	feel	touc
-25	feel	touch
+39	feel	touch
 1	fiddle	joggle	wiggle
-1	fiddle	play	toy
+2	fiddle	play	toy
 1	fiddle	riddle
 2	fill	flood
 1	fill	fuel	refu
@@ -1207,11 +1461,14 @@
 2	find	loca
 1	find	loca	sear
 1	find	loca	seek
+1	find	locate
 2	find	locate	seek
 1	find	see	seek
 11	find	see	seek	where
-12	find	seek
+13	find	seek
 3	find	seen	there	where
+1	find	wheres
+1	fire	pulse	shoot
 7	fire	shoo
 6	fire	shoot
 1	fire	shoot	sling
@@ -1221,9 +1478,10 @@
 1	fit	insert	lay	place	put	stuff	wedge
 8	fix	glue	patch	plug	repair
 5	fix	mend	repa
-3	fix	patch	repair
+1	fix	mend	repair
+4	fix	patch	repair
 7	fix	repa
-6	fix	repair
+7	fix	repair
 1	fix	repair	sharpe	whet
 2	fix	repair	unjam
 1	fla	lig
@@ -1236,8 +1494,9 @@
 1	flick	flip	set	switch	toggle	turn
 3	flick	flip	switch	toggle	turn
 1	fling	heave	hurl	pitch	sling	throw	toss
+1	fling	hurl	throw	toss
 1	flip	lift	pres	pull	push
-1	flip	power	set	turn
+2	flip	power	set	turn
 1	flip	pres	push
 1	flip	rotate	toggle	turn
 1	flip	rotate	toggle	turn	twist
@@ -1248,27 +1507,35 @@
 5	flip	shut	turn
 1	flip	swing	switch	turn
 1	flip	switch
+1	flip	switch	toggle
+1	flip	switch	turn
+1	flip	toss
+1	float	fly
+1	float	sail
 1	flodoor	furgalnet	zipso
 1	fly	go	ir	run	walk
 1	fly	launch
 1	fold	roll	wrap
+1	fold	rotate	screw	turn	twist	unscrew
 3	fold	wrap
 1	fool	mess
+1	foot	hoof
 2	forc	leve
 2	forc	leve	pris
 1	forc	open	pull	remo	rip	unfo
 2	force	insert	lay	place	put	stash	stuff	wedge
-2	force	jemmy	lever	prise	prize	pry
+4	force	jemmy	lever	prise	prize	pry
 3	force	wedge
 1	forget	unlear
 2	forget	unlear	unmemo
+1	forward	onward
 1	fratto	kaluze	sorkin
 1	free	loosen	unatta	unknot	untie	unweav
 1	free	loosen	untie
 2	free	rele
 1	free	rele	unca
 2	free	rele	undo	unti
-4	free	release
+5	free	release
 1	free	release	unattach	unfasten	unhook	untie
 2	free	release	unjam
 1	free	resc	save
@@ -1282,6 +1549,9 @@
 2	free	unattach	unfasten	unknot	unstrap	untie
 1	free	unattach	unfasten	unknot	untie
 1	free	unattach	unfasten	untie
+1	free	untie
+1	french	kiss	osculate	smooch
+1	fret	worry
 1	fri	sea	sha
 2	fris	sear
 3	frisk	ransac	rummag	search
@@ -1290,22 +1560,24 @@
 2	frisk	rummag	search
 2	frisk	rummage	search
 1	frobozz	frotz	gnusto	ozmoo	plugh	quendor	xyzzy	yoho	zork
+1	frotz	gimble	gyre	outgribe	plugh	rezrov	zork
 2	frotz	plover	plugh	rezrov	wazzum	xyzzy	yoho	zarf	zork
 1	frown	grimace
 1	fuc	scr
 6	fuck	piss
 2	fuck	piss	shit
 1	fuck	screw
-5	full	fullscore
+14	full	fullscore
 1	furl	lower
+1	gawk	look	stare
 1	gaze	look	peek	peep	peer	see	stare
 7	gaze	look	peek	peer	stare
 1	gaze	look	peek	see	stare
 1	gaze	look	peer	stare
 1	gaze	look	squint	stare
-20	gaze	look	stare
+21	gaze	look	stare
 2	gest	wave
-5	gestur	point
+6	gestur	point
 1	gesture	motion	point
 1	gesture	point
 1	get	gra	tak
@@ -1324,6 +1596,7 @@
 3	get	take
 1	giddap	giddya
 1	giddap	giddyap
+1	giggle	laugh
 1	giggle	laugh	snicker
 1	give	hand	offer
 1	give	hand	offer	pass	send
@@ -1331,44 +1604,58 @@
 4	give	offe
 2	give	offe	pay
 2	give	offe	pres
+1	give	offer
 1	give	offer	pass
 3	give	offer	pay
+1	glake	zank
+1	go	goto	return	run	walk
 1	go	hike	proceed	run	step	stride	tramp	tread	troop	trudge	walk
 2	go	leav
-2	go	leave	run	walk
+4	go	leave	run	walk
 8	go	procee	run	step	walk
 1	go	procee	run	travel	walk
 5	go	procee	run	walk
 4	go	proceed	run	step	walk
 1	go	proceed	run	walk
-28	go	run	walk
+1	go	run
+1	go	run	step	walk
+43	go	run	walk
+3	go	walk
+1	gomb	regomb
+1	good	greetings	hello	hi	howdy	morning	welcome	wotcha
 1	goodbye	sayonara
 1	gra	pul
 2	grab	hold
 1	grab	take
 1	grant	granted
+1	graphic	graphics	image	images	picture	pictures
 2	gras	hold
 1	grasp	hold	hug
 1	graveyard	haunting
 2	grease	lubric
 4	grease	lubric	oil
-3	grease	lubricate	oil
+4	grease	lubricate	oil
 2	greet	greeti	hello	hi
+1	greet	greetings	hello	hey	hi	howdy	salutatio
 1	greet	greetings	hello	hi
 5	greet	greetings	hello	hi	salute
 3	greet	hello	hi
 1	greet	meet
-1	greeti	hello	hi
+2	greeti	hello	hi
 1	greeti	hello	hi	saluta
+1	greetings	hallo	hello	hi	hiya	hullo	wotcha
 1	greetings	hello	hi
 1	grin	laugh	motion	nod	smile	sneer
 3	grin	laugh	nod	smile	sneer	wave
+1	grin	laugh	smile	smirk
 5	grin	smile
 3	grin	smile	smirk
 2	grin	smile	wink
 1	grind	sharpen
-1	grip	squash	squeeze
+2	grip	squash	squeeze
+1	groan	moan	sigh	wail
 2	groan	ugh	uh	um
+1	groom	pet
 4	grope	reach
 1	grovel	kneel
 2	grunt	knio	oink	squeal
@@ -1377,28 +1664,36 @@
 2	hack	saw
 3	halt	stop
 1	hammer	hit	pound	punch	slap	smack	strike
+1	hammer	knock
 1	hang	hook
 1	hang	insert	lay	place	put	stuff
+1	hang	mount
 1	hang	place	put
+1	hard	normal	standard
 1	harken	listen
 1	harvest	pick
+1	he	it	she	they	you
 2	hea	lis
+1	headbut	headbutt	ram
 5	hear	list
-5	hear	listen
+17	hear	listen
 3	heat	warm
 1	hel	res
 24	hello	hi
 1	hello	hi	howdy
-8	help	hint
-7	help	hint	hints
+10	help	hint
+8	help	hint	hints
+1	help	hint	hints	menu
 1	help	hint	warn
+1	here	location	map
 2	hiccough	hiccup
 4	hide	insert	place	put	stuff
 1	hide	insert	place	put	stuff	wedge
 1	hide	place	put
+1	hide	shove	slip	stick
 1	highlight	load
 1	hike	proceed	step	trudge	walk
-6	hint	hints
+9	hint	hints
 1	hit	hurt	injure	punch	slap
 1	hit	kick	press	push
 1	hit	kick	punch	slap
@@ -1414,34 +1709,39 @@
 2	hol	scr	yel
 2	holl	say	scre	yell
 1	holl	scre	yell
-3	hone	sharpe
+4	hone	sharpe
 1	hone	sharpen
 3	hook	jiggle	loosen	wiggle	wobble
+1	hook	lever	lift	pry	raise
 2	hooray	hurrah	hurray	woo	woohoo	wooo	woot	yay
-1	hop	jump
-5	hop	jump	leap	skip
-22	hop	jump	skip
-24	hop	skip
+2	hop	jump
+7	hop	jump	leap	skip
+1	hop	jump	leap	skip	stamp
+42	hop	jump	skip
+25	hop	skip
 1	howl	scream	shout	wail	whoop	yell
 10	howl	scream	shout	yell
 2	huff	puff
-3	hurl	pitch	throw	toss
+1	hum	sing	whistle
+4	hurl	pitch	throw	toss
 8	hurl	throw	toss
 1	hurt	injure	punch	slap
 1	hush	quiet	shh	shhh	shhhh	shush	sshh	sshhh
 2	hypervent	inhale
 1	hypnot	mesmer
+1	hypnotise	hypnotize
 1	identi	name
 5	igni	ligh
 2	igni	ligh	stri
 1	ignite	kindle	light
 1	ignite	light
 1	in	inse	into	plug	stic	stuf
-6	in	inside
+19	in	inside
 1	in	to
+1	inform	instruct	teach
 1	inhale	smell	sniff
 2	inhale	smell	sniff	whiff
-1	input	type
+2	input	type
 2	ins	loa
 1	inscri	print	scribe	write
 1	inscribe	print	scribe	write
@@ -1451,7 +1751,7 @@
 1	insert	install	place	put	stick	stuff
 1	insert	keep	place	put	stick	stuff
 1	insert	lay	place	plug	put	replace	stick	stuff
-2	insert	lay	place	put
+3	insert	lay	place	put
 1	insert	lay	place	put	set
 3	insert	lay	place	put	stash	stuff
 6	insert	lay	place	put	stuff
@@ -1463,12 +1763,15 @@
 1	insult	offend
 1	interpret	translate
 2	interroga	query	question	quiz
-31	inv	inventory
+56	inv	inventory
+1	inv	inventory	passwords
 1	inve	inven
 1	invent	inventory
 1	inventory	status
+1	invite	require
 1	iron	press	push
 1	is	was
+1	jab	poke	prick	stab
 2	jab	pres	push
 2	jam	wedg
 1	jiggle	loosen	wiggle	wobble
@@ -1477,6 +1780,7 @@
 3	jostle	rattle
 4	jostle	rattle	shake
 2	jot	note	writ
+1	juggle	perform
 18	jump	leap
 2	jump	leap	spri
 1	jump	skip
@@ -1490,20 +1794,25 @@
 2	kick	stam
 3	kick	taunt
 2	kill	murd	slay
+1	kill	murder
 1	kill	murder	punch	slay	stab	wound
 1	kill	murder	punch	stab	wound
-3	kill	murder	slay	stab
+4	kill	murder	slay	stab
 1	kill	murder	stab	waste
 1	kill	slay
 1	kill	strang
+1	kindly	please
 1	kiss	rape
 10	kiss	smooch
+1	kneel	lie	sit
 7	knock	pound	rap
 2	knock	pound	rap	tap
-29	knock	rap
+30	knock	rap
 1	knock	tap
 1	know	learn	memori
+1	ksizee	zeezigh	zighzee	zizee
 2	la	lalala
+1	lagach	plover	plugh	xyzzy	yoho	zork
 3	latch	lock
 1	laugh	smile
 1	lay	lie	reclin	sit
@@ -1513,22 +1822,25 @@
 4	lead	move	pull
 1	leak	pee	pee-p	piddle	piss	tinkle	urinat	wee	wee-w
 1	leak	pee	pee-pee	piddle	piss	tinkle	urinate	wee	wee-wee
+1	lean	prop
+1	lean	prop	rest	support
 2	lean	prop	stand
 1	lean	rock	shak	tip
 1	learn	memori
 1	lease	rent
 1	leave	out
 2	leve	pris
-2	lever	pry
+3	lever	pry
 3	lick	nibble	taste
-8	lick	taste
+1	lick	suck
+11	lick	taste
 1	lie	nap	rest	sleep
 4	lie	reclin
 1	lie	reclin	repose
 5	lie	recline
 2	lie	recline	repose
 1	lie	rest	sleep
-6	lie	sit
+14	lie	sit
 1	lif	ope	rai
 1	lift	move	pres	pull	push
 1	lift	move	pry	pull
@@ -1546,32 +1858,46 @@
 6	liquif	melt
 1	liquify	melt
 1	list	print
+1	listen	nothing
+1	live	lose	succeed	survive	win
 1	load	reload
-1	load	restore
+1	load	reload	restore
+3	load	restore
+1	locations	places	rooms
 1	logoff	logout	quit
 1	loiter	pause	rest
 1	loiter	stay	wait
 5	loiter	wait
-5	long	verbose
+13	long	verbose
 1	loo	sea
-1	look	see
-1	look	stare
+1	look	peek	peer
+2	look	see
+1	look	see	view
+2	look	stare
 1	look	watch
+1	loose	loosen
 1	lubric	oil
 2	lubricate	oil
 1	mail	send
 1	mail	send	ship
 2	make	manu
 4	make	mix
+1	make	wish
+1	marry	seduce	wed
 3	marry	wed
+1	mash	mush	squash	squeeze
 3	maybe	no	yes
+1	maybe	perhaps	shrug	whatever
 2	maybe	proclaim	say	speak	talk	utter
 1	medita	pause	relax	rest	stay	wait
 1	medita	relax	rest	stay	wait
 1	medita	rest	sit
 1	medita	stay	stop	wait
-3	melt	thaw
-1	messages	routines
+4	melt	thaw
+1	mend	repair
+2	messages	routines
+1	micturate	pee	piss	poo	poop	urinate	wee	wee-wee	whiz	whizz
+1	milm	raskage
 1	mix	stir
 1	moan	sigh
 12	molest	rape
@@ -1579,7 +1905,8 @@
 1	move	pres	pull	push	turn
 2	move	pres	push	shif	shov
 1	move	pres	push	tap
-1	move	press	push	shift
+1	move	press	push	roll	shift
+2	move	press	push	shift
 4	move	pull
 2	move	push
 1	move	push	shak	shov
@@ -1587,15 +1914,17 @@
 3	move	roll	shift
 1	move	rota	slid
 8	move	shif
-2	move	shift
+3	move	shift
 1	move	slid
+1	muffle	shroud	silence
 8	mumble	sigh
+1	nah	nay	no	nope	not
 2	nah	never	nope
 5	nah	no	nope	uh-uh
 1	name	rename
 1	nap	rest	sleep
-6	nap	rest	sleep	snooze
-30	nap	sleep
+7	nap	rest	sleep	snooze
+53	nap	sleep
 2	nap	sleep	snooze
 1	navi	sail
 1	nay	negati	no	nope
@@ -1608,22 +1937,26 @@
 1	negati	no
 1	negati	no	nope	uh-uh
 1	negative	no
+1	new	restart
 2	nibble	taste
-3	no	nope
+4	no	nope
 1	no	nope	wrong
-1	no	yes
+2	no	yes
 1	nod	ok	okay	sure	yes	yup
 2	nod	ok	sure	yeah	yup
-17	noscript	unscript
-5	nouns	pronouns
+30	noscript	unscript
+1	notebook	notepad	notes
+18	nouns	pronouns
 1	nudge	press	push
 1	nudge	press	push	ring	thrust
 1	nudge	press	push	shove	stick
 3	nudge	press	push	shove	stick	thrust
 2	nudge	press	push	thrust
+1	nudge	push	shove
 2	nudge	straighte
 2	nurse	suckle
 1	oar	row
+1	objects	things
 4	observe	watch
 2	odysse	ulysse
 1	odysseus	ulysses
@@ -1633,20 +1966,24 @@
 2	ok	okay	sure	yes
 4	ok	okay	sure	yes	yup
 2	ok	okay	yes
-2	okay	yes
+1	ok	yeah	yes
+3	okay	yes
 1	on	to
 1	ope	sha
 1	ope	unl
 1	open	part
+1	open	pry	uncover	undo	unwrap
 1	open	pry	unseal
-4	open	uncover	undo	unwrap
-25	open	uncover	unwrap
+1	open	uncover	undo	unfold	unwrap
+13	open	uncover	undo	unwrap
+36	open	uncover	unwrap
 14	open	unlo
 1	open	unlo	unti
 4	open	unseal
 1	open	unshutter
 1	open	unzip
 1	order	send
+1	organize	sort	tidy
 1	padd	sail
 1	padd	stro	swi
 2	padd	swim
@@ -1656,35 +1993,47 @@
 1	parry	resist
 1	pass	pay
 1	pat	pet	rub
+1	pat	pet	stroke
 1	paus	wait
 2	pause	save	suspen
+1	pause	wait
 7	peal	ring
 2	peda	ride
 1	pee	piss	urinate
 1	pee	urinate
+1	peel	skin
 1	penetrate	pierce	poke	stick
 1	perch	rest	sit	squat
 3	peruse	read	skim
 2	pet	scratch
 1	pet	squeeze
+1	pet	stroke	tickle
 1	pick	pry
 1	pile	stack
+1	pin	skewer	spear	stab
+1	pinch	slap
 1	pinch	steal
 1	pitc	setu
-2	place	put
+1	pivot	rotate	swing
+4	place	put
+1	place	put	shove	stick	stuff
+1	place	put	stuff
 2	play	star
 1	play	strum
 2	plot	set
-1	plug	screw
+1	plover	plugh	xyzzy
+2	plug	screw
 1	plug	screw	tighten
 1	plug	xyzz
 6	plugh	xyzzy
 1	point	shine
 2	point	steer
 2	poke	prod	stab
+1	poke	shove
 1	pole-	poleva	vault
 6	poli	rub
 8	poli	rub	shin
+1	polish	rub	scrub	shine	sweep	wipe
 1	polish	shine	wax
 1	pour	spil
 20	pour	spill
@@ -1702,7 +2051,7 @@
 19	press	push
 1	press	push	ring
 1	press	push	ring	shove
-5	press	push	shove
+6	press	push	shove
 1	press	push	squeeze
 1	press	push	trip
 3	procee	run	sidle	step	walk
@@ -1712,7 +2061,7 @@
 1	proceed	run	walk
 1	proclaim	say	speak	talk	utter
 1	progre	rating	score
-2	prop	wedge
+3	prop	wedge
 4	puff	smok
 1	pul	rin
 18	pull	tug
@@ -1720,14 +2069,19 @@
 1	punch	slap
 1	pus	sha	sme	wav
 1	puto	wear
+1	quote	quotes
 1	rais	up
-1	ransack	search
+2	ransack	search
 2	rape	rava	sedu	undr
-4	rattle	shake
+6	rattle	shake
 1	re-sort	resort	sort
+2	reach	rummage
 22	read	skim
 1	reattach	reconnect
+1	recap	repeat
+1	recent	review
 1	reco	repl
+1	record	recording
 2	relax	rest
 1	releas	revisi	variat	versio
 1	release	relieve
@@ -1735,7 +2089,7 @@
 1	remember	think
 1	remo	unsc
 1	remo	unwe
-3	remove	shed
+4	remove	shed
 1	remove	shed	unwrap
 4	remove	unwrap
 1	rend	rip	shred	tear
@@ -1745,33 +2099,42 @@
 6	rescue	save
 1	rese	set
 1	reset	zero
-1	rest	sit
+2	rest	sit
 5	rest	sit	squat
 1	rest	sleep
 2	restor	resume
 1	restore	resume
 1	retch	spit	vomit
 1	retract	withdraw
+1	reverse	revolve
 1	rewind	unroll	unwind	wind
 2	rins	wash
 3	rip	shred	tear
-7	rip	tear
-22	rise	stand
+1	rip	strip	tear	yank
+9	rip	tear
+23	rise	stand
 2	rock	shake
+1	roll	shoot	toss
 1	roll	tip
 1	roll	wrap
 1	rop	tie
 5	rota	turn	twis
+1	rotate	screw	spin	turn	twist
 2	rotate	screw	spin	turn	twist	unscrew
-27	rotate	screw	turn	twist	unscrew
+1	rotate	screw	spin	turn	twist	unscrew	wind
+48	rotate	screw	turn	twist	unscrew
+1	rotate	spin	turn	twirl	twist	unscrew
 5	rotate	spin	whirl
+1	rotate	tilt	tip	turn	twist
 1	rotate	toggle	turn	twist
-5	rummag	search
+6	rummag	search
 2	rummag	search	sift	sort
 4	rummage	search
 1	rummage	search	sift	sort
-2	sample	taste
+1	saint	saints
+3	sample	taste
 2	save	stor
+1	savor	taste
 1	say	scr	tal	yel
 1	say	scre	sing	whis	yell
 1	say	scre	talk	yell
@@ -1779,7 +2142,7 @@
 2	say	shou	talk
 1	say	shout	speak
 2	say	spea
-2	say	speak
+3	say	speak
 2	say	speak	talk
 2	say	speak	talk	utter
 7	say	talk
@@ -1787,57 +2150,70 @@
 2	scare	threaten
 3	score	status
 2	scra	shav	trim
+1	scrape	scratch
 1	scre	yell
-22	scream	shout	yell
+24	scream	shout	yell
 1	screw	tighten
-6	script	transcrip
+16	script	transcrip
 1	script	unscript
 2	set	turn
 3	shak	wave
+1	shake	wave
 1	sharpen	whet
-5	short	superbrie
-1	shout	speak
+1	sheath	sheathe
+13	short	superbrie
+3	shout	speak
 1	show	showing
 1	shut	stop
 1	sig	wri
+1	sip	swallow
 3	sit	squat
+1	skate	skid	slide	slip
+1	slide	slip
 2	slide	swing
 1	sme	sni
 3	smel	snif
-52	smell	sniff
+79	smell	sniff
 12	smell	sniff	whiff
 3	sneeze	zork
 2	soak	wet
-11	speak	talk
+1	sp	spell	spelling
+13	speak	talk
 1	spend	waste
 2	spin	turn	twis
 6	spin	whirl
 1	spread	stretch	widen
-28	squash	squeeze
+51	squash	squeeze
 1	squee	squez	wring
 2	squidge	squish
 2	stal	wait
+1	stamp	stomp
 3	stamp	trample
 1	stamp	valida
+1	start	stop
 1	stat	stats	status
 5	stay	wait
 1	step	walk
+1	stiffen	tighten
 2	strip	undres
 1	strip	undres	unmask
-1	strip	undress
-22	super	superb
+2	strip	undress
+23	super	superb
 12	super	superbrie
-4	swim	wade
-12	swing	thrust
+5	swim	wade
+13	swing	thrust
 2	switch	toggle
 1	tell	warn
 2	temple	treasu
 1	temple	treasure
-29	thank	thanks
+1	thank	thank-yo	thanks
+31	thank	thanks
 3	thr	tos
 1	thro	toss
 2	throw	toss
 2	tie	wrap
+1	tighten	tweak	unwind	wind	wrench
+1	tim	tophth
 1	tip	topple	upset
 2	topic	topics
 1	tur	twi
@@ -1851,16 +2227,19 @@
 3	undo	unfasten	unhook	untie
 1	undo	unra
 2	unfasten	unhook	untie
+1	unfasten	untie
 1	unlock	unlox
-1	unplug	unscre
+2	unplug	unscre
 1	unplug	unscrew
 1	unro	unwr
 1	use	using	with
 12	use	with
+1	walkthrou	walkthru
+1	wh	who	whos
 11	what	whats
 3	what	whats	who
 5	what	whats	who	whos
-1	what	who
+4	what	who
 14	where	wheres
 1	where	wheres	whithe
 11	who	whos

@@ -212,6 +212,84 @@ fn the_gap_fill_only_rescues_a_synset_no_story_can_match() {
     );
 }
 
+/// A two-word child synset whose hypernym a story knows, modelled on the real
+/// shape SQ-1234 found: {`derive`, `gain`} under {`obtain`}.
+///
+/// `sprint` above is alone in its synset, so it cannot say what happens when
+/// ONE word of a child becomes an IF verb and the rest do not — which is what
+/// growing the corpus from 119 stories to 149 did to `derive`.
+fn gap_fill_pair_fixture() -> (WordNet, Frequency) {
+    let d = scratch("wn-gapfill-pair");
+    std::fs::write(
+        d.join("index.verb"),
+        "derive v 1 1 @ 1 0 00000011  \n\
+         gain v 1 1 @ 1 0 00000011  \n\
+         obtain v 1 0 1 0 00000012  \n",
+    )
+    .unwrap();
+    std::fs::write(
+        d.join("data.verb"),
+        "00000011 40 v 02 derive 0 gain 0 001 @ 00000012 v 0000 | obtain\n\
+         00000012 40 v 01 obtain 0 000 | come into possession of\n",
+    )
+    .unwrap();
+    std::fs::write(d.join("verb.exc"), "").unwrap();
+    std::fs::write(d.join("noun.exc"), "").unwrap();
+    let wn = WordNet::load(&d).expect("fixture loads");
+
+    let d2 = scratch("freq-gapfill-pair");
+    let p = d2.join("frq.txt");
+    std::fs::write(&p, "----- 1 -----\nderive\ngain\nobtain\n").unwrap();
+    let freq = Frequency::load(&p).expect("fixture loads");
+    (wn, freq)
+}
+
+/// One story implementing ONE word of a child synset costs the union that word,
+/// not the whole row (SQ-1234).
+///
+/// Falsified by restoring the per-SYNSET test — `if members.iter().any(|w|
+/// is_if_verb(w)) { continue; }` over the unfiltered child — which is what the
+/// 119-story corpus could not tell apart from the per-word one: the second half
+/// of this test then finds no `obtain`/`gain` group at all, exactly as
+/// `verb-synonyms`' `canonical_mappings_survive_regeneration` did on the first
+/// 149-story rebuild.
+#[test]
+fn one_story_knowing_a_child_word_costs_the_gap_fill_that_word_only() {
+    let (wn, freq) = gap_fill_pair_fixture();
+    let p = Params { band_cap: 16, ..Params::default() };
+
+    // Before the corpus grew: no story knows either child word, and the union
+    // carries both of them up to `obtain`.
+    let only_obtain =
+        vec![IfVerb { emit: "obtain".into(), lemma: "obtain".into(), stories: 40 }];
+    let mut r = Report::default();
+    let wide = build(&only_obtain, &[], &wn, &freq, &p, &mut r);
+    let g = wide
+        .iter()
+        .find(|g| g.contains(&"obtain".to_string()) && g.contains(&"gain".to_string()))
+        .expect("obtain reaches gain through the gap-fill");
+    assert!(g.contains(&"derive".to_string()), "and derive comes with it: {g:?}");
+
+    // After: one story of the thirty implements `derive`. It leaves the union —
+    // offering it to a player who typed the general word is the over-specific
+    // direction the gap-fill exists to refuse — and `gain`, which no story
+    // knows, stays.
+    let plus_derive = vec![
+        IfVerb { emit: "obtain".into(), lemma: "obtain".into(), stories: 40 },
+        IfVerb { emit: "derive".into(), lemma: "derive".into(), stories: 1 },
+    ];
+    let mut r2 = Report::default();
+    let narrow = build(&plus_derive, &[], &wn, &freq, &p, &mut r2);
+    let g2 = narrow
+        .iter()
+        .find(|g| g.contains(&"obtain".to_string()) && g.contains(&"gain".to_string()))
+        .expect("obtain STILL reaches gain — one author's dictionary costs one word");
+    assert!(
+        !g2.contains(&"derive".to_string()),
+        "`derive` is matchable now, so it must not ride up to `obtain`: {g2:?}"
+    );
+}
+
 #[test]
 fn a_corroborated_verb_entry_becomes_a_group_and_outranks_the_synset() {
     let wn = wordnet_fixture();

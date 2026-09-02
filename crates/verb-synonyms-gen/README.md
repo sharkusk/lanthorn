@@ -36,7 +36,7 @@ That source is better than WordNet at exactly the job here, because it answers
 the parser's question rather than English's. `inspect` is the case that made the
 point: WordNet's groups for it are `case`, `visit` and `audit`/`scrutinize` —
 the police sense — and not one of them holds `examine`, which is what every
-player who types `inspect` means. Fourteen stories in this corpus put the two on
+player who types `inspect` means. Sixteen stories in this corpus put the two on
 one verb. It is also free (the grammar is already loaded), and it carries no
 licence obligation, being read out of behaviour rather than out of a lexicon.
 
@@ -141,6 +141,29 @@ suggestion with its verdict. A wrong offer (`shove` → `pull · drag`) is a
 line-order or sense problem in this table; a silent story is usually a grammar
 this generator could not read at all, and the harvest's own skip report names it.
 
+**A growing corpus can REMOVE a mapping, and one guard here did** (SQ-1234).
+The gap-fill refuses a union whose CHILD synset a story can match, and it used
+to test that per SYNSET: one of the thirty stories added between 119 and 149
+implements `derive`, so {`derive`, `gain`} stopped being unioned onto its
+hypernym {`obtain`} — and `obtain` → `gain`, which
+`canonical_mappings_survive_regeneration` pins, disappeared with it. The test is
+now per WORD, so one author's dictionary costs the union that one word rather
+than the whole row, and the invariant is unchanged: nothing left in a gap-filled
+group is a specific word a story can match. Watch for the same shape in the
+other whole-row refusals when the corpus next grows.
+
+**Diff the two scans on member SETS, and read a lost offer twice** (SQ-1234).
+Going from 119 stories to 149 moved 2,831 rows' positions and rewrote 222 sets,
+and the whole visible effect on the 188-story scan was 346 offers becoming 345.
+Two of the three changes were traced to a single ADDED row — `rush hasten hurry
+look sharp` — and to `look sharp` in particular: a Scott Adams dictionary
+truncates at four characters, so an idiomatic multi-word member can collide with
+a real verb (`LOOK`) and be offered in its place. The offer machinery holds one
+shadow probe at a time, so an extra offer in one turn also displaces the next
+turn's. Neither is a fault in what the rebuild REMOVED, which is what a growing
+corpus makes you afraid of and which cost nothing here — so attribute a scan
+delta to a specific row before blaming a cap.
+
 ### The knobs
 
 `build` takes `--sense-cap`, `--band-cap`, `--group-cap`, `--hyponym-cap`,
@@ -154,23 +177,21 @@ entry before it is believed), on the 1,365-verb basis:
 
 | support | game groups kept | rows | table | coverage |
 |---|---|---|---|---|
-| — (WordNet only) | 0 | 2,759 | 74 KB | 88.8% |
-| 1 | 1,425 | 3,463 | 90 KB | 90.5% |
-| **2** | **546** | **3,068** | **81 KB** | **90.0%** |
-| 3 | 306 | 2,946 | 78 KB | 89.5% |
+| — (WordNet only) | 0 | 3,117 | 84 KB | 90.3% |
+| 1 | 1,653 | 4,129 | 107 KB | 92.1% |
+| **2** | **599** | **3,467** | **90 KB** | **91.1%** |
+| 3 | 337 | 3,307 | 87 KB | 90.7% |
 
 One story is one author's idiom: at support 1 the corpus contributes a
 33-member `attack` group carrying `vandalise` and `torture`, and a 21-member
 `cut`. Two is where those disappear and the survivors are IF conventions.
 
-This table predates the four SQ-1233 rules below and is left as measured —
-it is what argues for the KNOB, and none of the four rules moves it: at
-`--game-support 2` the row count they leave the table at is 3,099 (79 KB),
-546 game groups kept (unchanged — the rules reorder and prune MEMBERS, they
-do not change which verb entries clear the threshold), and coverage 89.7%,
-down three tenths of a point from dropping some bystander memberships that
-happened to be a common verb's only channel into the table. That is the
-measured cost of correctness here, not a regression to chase back up.
+Re-measured on the 149-story corpus with the SQ-1233 rules and the SQ-1234
+gap-fill fix in place, which is what the shipped table is built from. The
+knob's shape is what argues for it and the shape has not moved: every extra
+story raises every row, coverage climbs about half a point per support level
+down, and support 1 still buys its 1.0 point by believing 1,054 sets exactly
+one author ever wrote.
 
 ### Four more rules (SQ-1233)
 
@@ -198,7 +219,7 @@ of them is a list of words — every one reads its answer out of the harvest.
 2. **Drop WordNet senses no parser wants.** `illuminate` was pulling `clear`
    into its "clarify" sense (`clear up / elucidate / illuminate / …`) even
    though the corpus's OWN, heavily-corroborated sense of `clear` is
-   "push/move aside" (24 stories) and has nothing to do with clarifying. The
+   "push/move aside" (43 stories) and has nothing to do with clarifying. The
    rule: a member is a "bystander" in a synset if that synset was not the
    reason WordNet counts the word as an IF verb in the first place — its own
    sense rank for this offset falls outside `sense_cap` — which is true of
@@ -267,11 +288,11 @@ to two different lemmas, and one map would have to drop one of them.
 ## Why `if_verbs.tsv` and `if_groups.tsv` are committed
 
 One is a sorted list of ordinary English verb spellings with a count of how many
-stories accept each — `take 118`, `xyzzy 9`; the other is a sorted list of the
+stories accept each — `take 135`, `xyzzy 42`; the other is a sorted list of the
 verb entries those stories declare, with a count of how many declare each —
-`29 awake awaken wake`. Neither carries game text, game titles or any
+`55 awake awaken wake`. Neither carries game text, game titles or any
 attribution of a word to a story: the per-story detail exists only in the
 harvest's stderr report. `stories/` is gitignored because it holds commercial
-game files; a de-duplicated vocabulary list drawn across 119 of them is not one,
+game files; a de-duplicated vocabulary list drawn across 149 of them is not one,
 and committing both is what makes step 2 — and therefore the shipped table —
 reproducible by CI and by anyone without the corpus.

@@ -47,17 +47,19 @@
 #
 # Built with: sense-cap 6 band-cap 16 group-cap 12 hyponym-cap 25 gap-fill true
 #             game-support 2 game-group-cap 13
-# From 10023 harvested IF spellings, 2082 of which WordNet knows as verbs.
-# 3099 groups, 10785 memberships.
+# From 15454 harvested IF spellings, 2467 of which WordNet knows as verbs.
+# 3467 groups, 12298 memberships.
 accuse	impeach	incriminate
 admire	look up to
 agitate	foment	stir up
+anger	see red
 apologise	apologize
 ask	tell
 ask	question	inquire
+ask	quiz
 ask	question	inquire	consul
 ask	query	consul
-ask	query	question	quiz	interrogate
+ask	question	query	quiz	interrogate
 ask for	invite
 attend	go to
 attend to	take to heart
@@ -66,48 +68,47 @@ bake	broil
 banquet	feast
 barf	chomp	lose
 bargain	dicker
-bat	flutter
 batter	buffet	knock about
-baste	batter	clobber
+batter	baste	clobber
 battle	combat
+bay	quest
 beat	jack	jerk
 beat about	cast about	cast around
 behead	decapitate
 bellow	bawl
 belt	belt out
 bend	spread
-bet	wager
 betray	fail
 black	blacken
 board	embark
 board	mount
-board	mount	ride
+board	ride	mount
 body	personify
-bother	darn
+boil	churn	roil
 brace	nerve	poise	steel
-break	smash	attack	destroy	fight	hit	kill	murder	wreck	punch	crack	thump	torture
+break	smash	attack	destroy	fight	kill	hit	murder	wreck	punch	crack	thump	torture
 attack	fight	hit	hurt	injure
 attack	fight	hurt	injure	assault
 break	smash	destroy	damage	block
 break off	break short	cut short
 break out	break away
-breathe	take a breath
-bridge	bridge over
 brief	normal
+buckle	unbuckle
 buckle	clasp
-bug	tease	badger	beleaguer	pester
+bug	badger	pester	tease	beleaguer
 bur	burr
 burn	light
 burn	ignite
 burn up	blaze up	flame up	flare
 burn up	burn off
+burp	fart
 burrow	tunnel
 bury	plant
 bury	inter	lay to rest
 buy	purchase
 buy	purchase	order
-bye	farewell	goodbye
-call for	request	demand	quest
+bye	goodbye	farewell
+call at	out in
 carve	chip at
 carve	cut up
 cash	cash in
@@ -118,8 +119,10 @@ check in	sign in
 cheer	comfort	entertain
 chirp	peep
 chomp	champ
+choose	select	click
+chuckle	chortle
 clap	applaud
-clean	wipe	polish	sweep	scrub	shine	rub	dust
+clean	wipe	polish	sweep	shine	scrub	rub	dust
 clean	wipe	wash
 clean	sweep	brush
 clean	wipe	brush
@@ -128,22 +131,21 @@ clear off	clear away
 climb	scale
 cloak	mask
 cloud	overcast
-cloud	fog	haze over	mist	obscure
-cock	prance	ruffle	strut	swagger
+cloud	obscure	fog	haze over	mist
+cock	prance	strut	ruffle	swagger
 come around	come round
 come around	roll around
-comfort	console	soothe	solace
-comfort	ease
 command	general
 command	officer
-complain	plain	sound off
 consider	contemplate
 consult	confer with
+cool	chill	cool down	ice
 copy	imitate	model	pattern	simulate
 copy	replicate
 cork	uncork
 cork	cork up
 count	tally
+cower	huddle
 crack	snap	whip
 crack down	clamp down
 crank	zigzag
@@ -153,33 +155,36 @@ creep in	sneak in
 creep up	sneak up
 crow	gloat	triumph
 crunch	crackle
-cry	sob	frown	grimace	scowl	sniffle
-cuddle	nuzzle	draw close	nest	nestle	snuggle
+cry	sob	frown	grimace	sniffle	scowl
+cry for	cry out for
+cuddle	snuggle	nuzzle	draw close	nest	nestle
 cuff	handcuff
-curdle	clot
 cut	slice	chop	prune
 cut	slice	pierce
+cut	slice	chop	prune	slash	split
 cut	chop	hack
 dam	dam up
 dance	trip the light fantastic	trip the light fantastic toe
+darn	bother
 date	date stamp
 debark	disembark
 debark	disembark	dismount
 decode	decipher
 deep-six	give it the deep six
+derive	deduce	deduct	infer
+derive	gain
 desist	refrain	abstain
-detach	unplug	disengage	disconnect
+despise	disdain	scorn
 did	how	when	why
-diffuse	fan out	spread out
-dig	search
-dig	excavate
+diffuse	spread out	fan out
 dig in	entrench
 dig in	pitch in
 dip	dunk
 disk	harrow
 distance	outstrip
+divert	deviate
 doff	shed	disrobe
-douse	quench	snuff	extinguish
+douse	snuff	quench	extinguish
 deactivate	extinguish
 disable	deactivate
 disable	handicap	incapacitate	invalid
@@ -189,56 +194,54 @@ charge	bear down
 accuse	charge	blame	fault
 drag on	drag out
 drag up	dredge up
-dress	get dressed
+drench	swamp
 dribble	filter	trickle
-dribble	drip
 drill	bore
 drink	sip	swallow
 drink	swallow	imbibe
 drink	sip	imbibe	guzzle	quaff	swill
+drip	dribble
 drive	banish	exorcise	cast
-banish	cast out	ban	ostracize	shun
-drive	coach
-drive	tool
-drive	motor
 drive around	chauffeur
 drop	discard	throw
 drop	dump
 drop	release
-drop in	come by	drop by
-drop off	fall asleep	dope off	doze off	drift off	flake out	nod off
+drop in	drop by	come by
 drug	dose
 dry out	run dry
 dry	dry out
 dummy	idiot	stupid
 dummy	dummy up
-eat	devour	gobble	ingest
-eat	consume	devour	gobble	ingest	swallow	nibble
+eat	gobble	devour	ingest
+eat	consume	gobble	devour	ingest	swallow	nibble
 drink	sip	swallow	imbibe	guzzle	quaff	swill
 edit	edit out
 ejaculate	blunder	blunder out	blurt	blurt out
-enjoy	bask	relish	savor
+embrace	hug	kiss
 enter	cross
 cross	ford
 cross	traverse
-cross	ford	traverse
 entertain	host
 escape	flee
+eschew	shun
+banish	cast out	shun	ban	ostracize
 examine	describe	watch	check
-check	test	dust
+check	test	analyse	dust
 examine	describe	what
-excavate	unearth
 excuse	pardon
+execute	put to death
 exit	out	leave
-exit	depart	withdraw
-exit	out	outside
-exit	depart	withdraw	scram
 explode	detonate
 eye	eyeball
 face off	bully off
 faint	swoon	pass out
-fart	burp
+fall asleep	drop off	dope off	doze off	drift off	flake out	nod off
 fart	break wind
+fasten	tie	attach
+fasten	tie	attach	secure
+fax	facsimile
+fear	dread
+feed on	feed upon
 feel	touch
 feel	touch	pet	pat	rub
 feel	touch	fondle	grope
@@ -250,26 +253,16 @@ find	seek	see	where
 find	seek	discover
 find	where	seen	there
 fire	shoo
-fire	shoot
-fire	shoot	blast	burn	zap
-blast	blare
-burn	ignite	kindle	char	combust	cremate	scorch	incinerate
-burn	on
-char	coal
-fire	open fire
-fix	repair	patch	plug	glue
-fix	mend
 flatten	flatten out
 flood	deluge	inundate	swamp
-flush	crimson	blush	redden
+flush	blush	crimson	redden
 flush down	wash down
 fly	flap	wing
 fly by	whisk by	zip by
 focus on	center	revolve around	center on	concentrate on	revolve about
-focus	center	concentrate	pore	rivet
+focus	center	centre	concentrate	pore	rivet
 follow	chase	pursue
 follow	chase	pursue	come
-come	come up
 follow	chase	pursue	trace
 find	seek	follow
 find	seek	locate
@@ -277,31 +270,39 @@ follow	fall out
 follow	travel along
 follow	abide by	comply
 follow	come after
+foot	hoof	hoof it	leg it
+foot	foot up
 footnote	annotate
 force out	depose
 forward	send on
+fret	fuss
+fret	gall	chafe
+fret	eat into	grate
 fuck off	loaf	arse about	arse around	bum	bum about	bum around	loll	loll around	lounge about	lounge around
 gab	yak
 gag	choke	fret
+choke	scrag
 gag	muzzle
 gag	quip
+gall	irk
 garble	warp	distort	falsify
+gawk	gape	goggle
 gel	mousse
 get back	win back
 get back	get even
 get down	lower	take down	bring down	let down
 get into	tangle with
-enter	get in	get into	move into	come in	go in	go into
-enter	participate
 get to	progress to
+giggle	titter
 give	offer	feed	pay
 give	offer	feed	hand	donate
 drop	put	give
 give	offer	hand	donate	sell
-give out	emit	give off
+give off	give out	emit
 give up	throw overboard	forego	forfeit	forgo	waive
-glue	paste
+glare	glower
 gnaw	eat at	erode	gnaw at	wear away
+gossip	dish the dirt
 grieve	sorrow
 grieve	aggrieve
 grimace	make a face	pull a face
@@ -311,7 +312,6 @@ groove	furrow	rut
 grope for	scrabble
 gurgle	babble	bubble	ripple
 burp	belch	bubble
-gyrate	coil	spiral
 hack	saw
 ham	ham it up
 hammer	forge
@@ -319,18 +319,16 @@ hang	hang up
 hang	string up
 harken	hark
 harvest	reap	glean
+hate	detest
 haul off	cart away	cart off	haul away
-head off	avoid	avert	deflect	fend off	obviate	stave off	ward off
-hear	list
-heat	warm
 heat	warm	cook
 hello	hi
 greet	salute	hello	hi
 greet	salute	hello	hi	bye
 help	hint
-hiccough	hiccup
+herd	crowd
+hiccup	hiccough
 hide	conceal
-hie	race	belt along	bucket along	hasten	pelt along	rush	rush along	speed	step on it
 highlight	foreground	play up	spotlight
 hike up	hitch up
 hint	help	clue
@@ -343,45 +341,49 @@ hold over	carry over
 carry over	carry forward
 holler	holler out
 hone	sharpen
-hone	perfect
-honk	toot	beep	blare
-hug	embrace	kiss
+hop	skip	jump
 hum	buzz	seethe
+boil	seethe
 hurrah	woo	hooray
-ignore	disregard	snub
+hurrah	hooray
+ignore	snub	disregard
 in	inside
 inch	edge
 indulge	gratify	pander
+infuriate	exasperate	incense
 inhale	hyperventilate
 insult	affront
 interpret	construe
+introduce	acquaint
+introduce	innovate
 inventory	take stock
 invite	ask over	ask round
 iron	iron out
 jack	jack up
 jar	clash	collide
 jar	jolt
-jar	bump around	shake up
-jiggle	wiggle	loosen	wobble	hook
+jar	shake up	bump around
+jiggle	loosen	wiggle	wobble	hook
 jiggle	wiggle	joggle
 jog	ramble	ramble on
-jog	even up	square up
-keep off	avoid
-keep off	stay off
-keep up	prolong	sustain
+juggle	beguile
+jump	leap
 kick	taunt	bite
 kick around	kick about	knock about
 kick in	set in
+kick off	inaugurate
 kill	murder	slay	stab	dispatch
 dispatch	route	send off
 kill	ruin
-kindle	inflame
+kill off	exterminate
 kiss	smooch
 kiss	care	fond
-care	fuss	give care	mother
+kiss	embrace	hug	smooch
+kiss	osculate
 kneel	bow	grovel	genuflect
-bow	curtsy
+bow	curtsy	curtsey
 bow	bow down
+curtsy	curtsey
 knock	rap
 knock	rap	pound
 knock	rap	bang
@@ -392,56 +394,59 @@ knock out	knock cold
 land	dock	moor
 lap	swish
 lasso	rope
-laugh at	roast	guy	jest at	make fun	poke fun	rib	ridicule	roasted
+laugh at	make fun	roast	guy	jest at	poke fun	rib	ridicule	roasted
 launch	set up	establish	found
-lay into	pitch into	lace into	tear into
+lay into	pitch into	tear into	lace into
 lay over	stop over
 lead off	lead astray
 lead on	deceive	delude	fox	play a joke on	play a trick on	pull a fast one on	trick
+confuse	confound	fox
 leak	leak out
 lean on	rest on	lean against
 leash	rope
+lie about	lie around
 lift	raise
 lift	raise	boost
 hike	hike up	boost
 lift	raise	hoist	elevate
+lift	raise	erect
 light	light up	illuminate
 limber	limber up
 line	run along
 listen	hear
+hear	list
 listen in	eavesdrop
-load	laden	load up
+loathe	abhor
 lock	latch
+log out	log off
 look	stare	gaze
 look	stare	gaze	peek	peer
 look	sear	exam
 look back	look backward
-look into	experiment	investigate
-loop	intertwine
 lose	misplace
-love	enjoy
-enjoy	delight	revel
 low	moo
 lubricate	oil	grease
+lubricate	lube
 make	mix
-make happy	make merry	racket	revel	whoop it up
 make over	rework
 make over	redo	remake
 map	chart
 map	map out
 marinate	marinade
-mark	label	code	tag
+mark	label	tag
 mark	dimension
 marry	wed
 mask	disguise
 match	compare
 measure	measure out
-measure	meter	quantify
+measure	quantify	meter
 melt	liquify
 liquify	flux
 melt	thaw
 melt	melt down
+mind	take care
 moan	groan
+mock	guy	jest at	poke fun	rib	ridicule
 monitor	supervise
 munch	crunch
 neigh	nicker	whicker	whinny
@@ -450,15 +455,14 @@ nosh	snack
 note	jot	writ
 jot	jot down
 obtain	source
-obtain	derive	gain
+obtain	gain
 offend	pique
 oil	anoint
-oink	squeal	grunt
+oink	grunt	squeal
 oink	squeal
 okay	yes	sure	yup
 no	yes	maybe
 okay	negative	affirm	yes	no	sure	nope	yup	nay	aye
-negative	veto
 nope	nah	never
 open	unwrap	uncover
 open	unwrap	uncover	undo
@@ -466,35 +470,47 @@ open	unseal
 open	unseal	disassemble
 open	part	draw
 draw	reap
+oscillate	vibrate	hover
+out	exit	outside
+exit	depart	withdraw
+depart	exit	withdraw	scram
+out	exit	off	outside
 paint	stain
+palpitate	quake	quiver
+palpitate	flutter
+bat	flutter
 paper	wallpaper
-patch	patch up
+pare	pare down
+pare	whittle
 pay	bribe	entice
 buy	bribe	corrupt
 entice	lure	tempt
+give	offer	feed	pay	hand	deliver
 invite	tempt
+pay	finance
 peck	beak
 perch	roost
 petrify	petrified
 pick up	lift up	gather up
 piddle	trifle	wanton	wanton away
 pig	pig it
-pile	stack	heap
+pivot	swivel
 plague	blight
 plan	be after
 plan	schedule
 plan	chart
 play	fiddle	toy	cavort
 fiddle	shrink from
+fiddle	monkey	tamper
+mess around	monkey	monkey around	muck about	muck around	potter	putter	tinker
 play	star
-plug	fit
 plug in	plug into
 plunk	clump
 plonk	plunk	plank	plop	plump	plump down	plunk down
-point	aim
 point	gesture
+point	aim
 point	aim	shine
-clean	polish	scrub	shine	brush	mop	swab
+clean	polish	shine	scrub	brush	mop	swab
 clean	wipe	polish	sweep	brush	smear
 clean	make clean
 point	aim	gesture
@@ -507,52 +523,52 @@ pounce	swoop
 pour	spill
 pour	spill	sprinkle
 pray	beg	implore	insist
-prevent	forbid	foreclose	forestall	preclude
-counter	anticipate	foresee	forestall
+prick	prickle
 print	publish
+provide	furnish	render	supply
+pry	lever	force	prise	prize
 puff	huff
 pull	drag
 pull	tug
 pull	drag	tug
 pull	drag	tug	yank
-pull off	pluck	pick off	tweak
+pull off	pluck	tweak	pick off
 carry off	pull off	bring off	manage
 carry off	bear away	bear off	carry away	take away
 pluck	hustle
 pull off	draw away	draw off
+pulse	pulsate	throb
 punch in	clock in	clock on
 punch out	clock off	clock out
 punt	pole
-pursue	engage	prosecute
 push	press	move	shift	clear
-empty	clear
+clear	empty
 pour	spill	empty
+pour	douse
 push	press	shove
 pull	drag	tug	yank	shove
 drag	haul	cart
 move	pull	lead
 move	shift	roll	dislocate
-push aside	push away
+push around	boss around	bully
+push away	push aside
 brush off	dismiss	ignore	push aside	brush aside	discount	disregard	slight
 ignore	disregard	neglect
+push forward	barge	thrust ahead
 push on	press on
 push out	thrust out
 put	place	insert	stuff	lay
 drop	put	disc
 put over	get across
 put over	hold over	shelve	table	defer	postpone	put off	remit	set back
+quake	tremor
 question	call into question
 question	interrogate
 query	question
 question	interview
-queue	line up	queue up
 quit	die
 quit	end
 rage	ramp	storm
-blow	storm
-blow	drift	float	be adrift	stream
-pour	stream	swarm	teem
-pour	pour out
 rake in	shovel in
 rape	molest
 rape	molest	defile	ravish	hump
@@ -561,17 +577,17 @@ defile	cloud	corrupt	sully	taint
 defile	stain	sully	tarnish
 hump	hunch	hunch forward	hunch over
 infect	taint
-kill	attack	hit	fight	murder	slay	stab	strike	slap
-break	smash	destroy	damage	hit	chop	chip
-break	smash	destroy	wreck	crack	damage	demolish	trash	erase
-cut	slice	chop	prune	slash	split
+kill	attack	hit	fight	murder	slay	stab	slap	strike
+break	smash	destroy	hit	damage	chop	chip
+break	smash	destroy	wreck	crack	damage	demolish	erase	trash
+break	smash	destroy	wreck	crack	scratch	scrape
 chop	chop up
 chop	hack
 hit	fee	tic
-kick	poke	slap	prod	beat	spank
+junk	scrap	trash
+kick	slap	poke	prod	spank	beat
 kill	murder	hit	punch	slay	stab	slap	strike	whack	wound
 rat	scab
-rattle	shake	jostle
 raven	predate	prey
 reach	grope
 grope	fumble
@@ -581,11 +597,12 @@ read	skim	browse	leaf
 look	see	read	exam
 read	skim	peruse
 look	sear	read	stud	open	exam
-look	appear	seem
 open	unzip
-recharge	reload
+recapture	retake
 refill	fill again	replenish
-repair	service
+refuse	reject	turn down	pass up	decline
+reject	disapprove	object
+reload	recharge
 repent	atone
 repent	regret	rue
 replace	supersede	supplant
@@ -594,10 +611,21 @@ put back	knock back	set back
 replay	play back
 reset	readjust
 rest on	repose on	build on	build upon	owe
+restore	load
+load	laden	load up
 restore	resume
 restart	resume
+retire	withdraw	retreat	move back	pull back	draw back	pull away	recede
+retire	adjourn
 retract	recant
 retract	shrink back
+retract	pull back	draw back
+retract	draw in
+pull	pull in	draw in	attract
+draw in	curl	curl up
+close in	draw in
+retreat	retrograde
+retreat	back away	pull back	back out
 return	home
 review	reexamine
 review	critique
@@ -608,108 +636,124 @@ rip	tear
 rip	tear	shred
 rip	tear	cut	slash
 rip	rend
-rip up	tear up	shred
 roll down	avalanche
 roll off	rattle down	rattle off	reel off
 roll up	furl
 root	rout
+rot	decompose
 rough	rough in	rough out
 rub	shin
 feel	touch	pet	pat	rub	shade
 feel	touch	pet	pat	rub	disturb
-feel	touch	pet	pat	fondle	scratch	poke	stroke
-fondle	caress
+feel	touch	pet	pat	fondle	stroke	poke	scratch
 poke	prod	stab
+rub along	scrape along	scrape by	scratch along	squeak by	squeeze by
 rub off	rub down
 run	walk	go
 run	walk	proceed	step	go
+run	walk	leave	go
 boar	go
-run into	bump into	butt against	jar against	knock against
 run off	bolt	go off	make off
 run on	keep going
+keep going	bridge over	tide over
+bridge	bridge over
 run out	drain
 drain	debilitate
 run out	run off	bolt	beetle off	bolt out
 gobble	bolt
 run out	expire
 run through	go through	work through
-sabotage	counteract	subvert	undermine	weaken
+pass	go across	go through	muscle
+pass	cycle	go across	go through
+saint	enshrine
 save	rescue
 rescue	preserve
 save	pause	suspend
 pause	hesitate
+say	speak	answer	shout
+answer	reply
+reply	answer	respond
+answer	reply	guess
 scan	glass
 score	status
-scrag	choke
+scrap	dispute	quarrel
 scrape	grate
-screech	creak	squeak	whine
-screech	squawk
 scribble	scrabble
 scribble	scrawl
 scrub	scour
 scrub	scrub up
 sculpt	grave	sculpture
+inscribe	grave	engrave
+etch	engrave
 scuttle	scamper	scurry	skitter
-sear	scorch	singe
-char	scorch	sear	blacken
-sear	parch
 search	rummage
+dig	search
+dig	excavate
+excavate	unearth
 search	rummage	frisk	ransack	sift
+reach	rummage
 search	rummage	sift	sort
 seed	sow
 sell up	sell out
-serve	staff
 set	adjust
-set up	assemble	confuse	jumble	mix up	piece	put together	tack	tack together
 settle on	fixate
 shade	shadow	shade off
-fill in	shade
-shadow	dwarf	overshadow
+shade	fill in
+shake	rattle
+rattle	shake	jostle
 shake	bounce
 shake	rock
+shake up	reorganize
 share	pool
 share	partake	partake in
-sharpen	edge
-focus	sharpen
+sheathe	unsheathe
 shed	doff	remove
-shin	scramble	clamber	skin	sputter	struggle
-scramble	jumble	throw together
+shelter	house
+shelter	stable
 shine at	excel at
-shit	fuck	damn
+shit	fuck	damn	sod
 damn	curse
 fuck	piss
-shit	fuck	damn	sod
 shit	fuck	damn	curse
 curse	swear	cuss
 fuck	shit	piss	ball	bog	cunt
 bog	bog down
 fuck	shit	piss	wank
 piss	pee	wee	crap	poop
-pee	piss	urinate	wee	piddle	pee-pee	wee-wee	make water	pass water	puddle	relieve oneself	spend a penny	take a leak
+pee	piss	urinate	wee	piddle	wee-wee	micturate	pee-pee	make water	pass water	puddle	relieve oneself	spend a penny	take a leak
 shock	ball over	blow out of the water	floor	take aback
 shoo	scram	boo	scat
-boo	hiss
+hiss	boo
 scram	fuck off	bugger off	buzz off
 fuck off	jack off	jerk off	wank	masturbate
 shoo	shoo away	shoo off
+shoot	fire
+fire	shoot	blast	burn	zap
+blast	blare
+beep	honk	toot	blare
+burn	ignite	kindle	char	cremate	combust	scorch	incinerate
+burn	on
+char	coal
+fire	open fire
+kindle	inflame
+sear	scorch	singe
+char	scorch	sear	blacken
+sear	parch
 show	display	present
-give	offer	hand	donate	deliver	present	bestow
+give	offer	hand	donate	deliver	bestow	present
 deliver	declaim
 declaim	recite
-give	offer	feed	hand	pay	deliver
 offer	proffer
 offer	volunteer
-pay	finance
-recite	spell	spell out
 recite	retell
 shower	lavish
 shower	shower down
 shriek	pipe	pipe up	shrill
+shuffle	scuffle	shamble
 shut	close	cover
 close	shut	slam
+bang	slam
 cover	block	shield
-cover	plug
-cover	bloody	spread over
 sigh	mumble
 mumble	mutter
 mumble	gum
@@ -717,9 +761,7 @@ sigh	grumble	bah
 sign	subscribe
 sign	ratify
 sign	initial
-sign	contract	sign on	sign up
-sign	signal	flag
-sign	bless
+sign over	sign away
 sing	whistle
 sit	lie
 lie	recline
@@ -730,47 +772,43 @@ put	place	insert	stuff	lay	stash
 put	place	insert	stuff	stick
 settle	settle down
 settle down	root	steady down	take root
+sit by	sit back
 sit down	seat
 sit up	stay up
 sketch	chalk out
 sketch	outline
-skim	plane
-skim	skim over
-skip	hop
-skip	hop	jump
-jump	leap
-jump	leap	dive
-slam	bang
+outline	draft
+slap on	clap on	slam on
+slaughter	butcher
+slaughter	massacre	mow down
 sleep	nap
 sleep	nap	snooze	rest
 nap	sleep	snooze	doze
 sit	squat	rest
 sit	climb
+climb	scale	ascend	descend
 climb	board
-board	ride	embark
 climb	scale	crawl	creep
 climb	hatch
 crawl	kneel	peek
 creep	sneak	mouse
 crawl	creep	grovel	cower	cringe	fawn
+enter	cross	board
+board	ride	embark
+cross	ford	traverse
+enter	get in	get into	move into	come in	go in	go into
+enter	participate
 lie	sit	recline	climb	lay
 lie	recline	repose
 lie	top
 lie	cap	crest
-lie	sun	sunbathe
-expose	sun
-lie	lie in	consist	dwell
-be	dwell	inhabit	live	populate
+lie	front
 recline	lean back
-repose	reside
-recline	repose
 sit	sit down
 sit	sit around
 sleep	nap	snooze	rest	doze
 nap	catch a wink
 rest	relax
-rest	breathe	take a breather
-lie	rest
 sleep	slumber
 sleep in	sleep late
 sleep in	live in
@@ -778,60 +816,56 @@ slice	slit
 slice	slice up
 slice through	slice into
 sling	catapult
+slog	peg away	plug away
 smack	thwack
-smear	blur	smudge
-smear	blood
-smear	denigrate	slander	sully
 smell	sniff
 smell	sniff	whiff
 smell	sniff	whiff	inhale
-smell	smack	reek
 smile	grin
 smite	afflict
 smoke	fume
 smooch	spoon
-smooth	plane
-smooth	sand	sandpaper
 snap	snarl
 snap at	bite off
+sneak away	sneak out	slip away	sneak off	steal away
 sniff	whiff
 snooze	doze
 snort	huff
 snort	take a hit
 snuff	snuffle
-sniffle	blubber	snuffle
-blubber	blubber out
-sniff	sniffle
+soak	wet
+sound off	speak out	opine	speak up
+sound off	strike up
+complain	plain	sound off
 sow	sow in
+spear	spear up
+spell	spell out
 spill	slop	splatter
 spill	run out
 spin	whirl
 spirit	spirit up
 spit	drool
 drool	salivate
-drool	slaver	dribble
+drool	slaver	dribble	slobber
 spit	spew
 spew	spew out
-spit out	sputter
-spit	spit out
-cough out	spit out	cough up	spit up
 splash	drown
+spot	spy
+spread out	string out
 sprout	burgeon forth	germinate
 spur	goad
-needle	goad
 squeal	confess
+confess	concede	profess
 squeeze	squash
 stab	knife
+stack	pile	heap
 stamp	trample
 break	smash	destroy	wreck	damage	demolish	crush	trample
 demolish	pulverize
-squeeze	squash	crush	squish	crumple
-stamp	stomp	stump
-stamp	frank	postmark
-stamp	meter
-stamp	stereotype
+squeeze	squash	crush	crumple	squish
+feel	touch	pet	pat	rub	squeeze
+squeeze	squash	grip
 stand	rise
-stand	lean	prop
 stand back	stay away
 star	asterisk
 stare	gaze
@@ -845,10 +879,12 @@ step up	rev up
 rev	rev up
 stick around	stand by	stick about
 stick on	plaster	plaster over
-stick on	affix	post
+stick on	affix
 affix	append	add on	supplement
 stop	halt
 stop	block
+stop	brake
+stop	deactivate
 stretch	stretch along
 strike back	retaliate
 stroll	saunter
@@ -863,13 +899,15 @@ sweep	brush
 sweep	sail
 sweep	broom
 drag	sweep	drag in	sweep up	tangle	embroil
-drag	get behind	drop back	drop behind	hang back	trail
+drag	get behind	trail	drop back	drop behind	hang back
+chase	chase after	track	trail	dog	give chase	go after	tag	tail
 knot	tangle
 swim	wade	bathe
 bathe	bath
 swim	dive
+jump	leap	dive
+jump	hop	skip	leap
 jump	leap	dive	vault
-jump	skip	hop	leap
 jump	leap	vault	bound	hurdle
 jump	leap	dive	vault	bound	hurdle
 dive	plunk	plunge
@@ -878,113 +916,125 @@ launch	plunge
 launch	set in motion
 skip	hop	cavort	gambol
 swing	thrust
-push	press	shove	nudge	thrust	stick
+push	press	shove	nudge	stick	thrust
 nudge	prod	poke at
-prod	egg on	incite
+push	press	move	shift	clear	tilt
 push	jab
-poke	jab	prod	stab
 shove	jostle
 swing	slide
-swivel	pivot
 table	tabulate
-take	hold	carry
+take	carry	hold
 take	get	grab
-take	get	hold	carry	grab
-take	get	hold	carry	grab	remove
+take	hold	carry	get	grab
+take	hold	carry	get	grab	remove
 get	take	pick
 remove	unwrap
-take	get	hold	grab	carry	catch	remove
-take	get	hold	grab	pick
-take	get	hold	grab	carry	catch	steal	snatch	seize
+take	hold	carry	grab	get	catch	remove
+take	hold	carry	grab	get	catch	snatch
+catch	capture
+take	hold	get	grab	pick
+take	hold	carry	grab	get	catch	steal	snatch	seize
 get	cat	pic
-get	acquire
 grab	catch	steal	trap	swipe	pin
 hold	keep	maintain
-hold	take hold
-seize	clutch
 snatch	snatch up
 snatch	abduct	kidnap
-steal	slip
-take up	seize on	hook on	fasten on	latch on
+take hold	take charge	take control
+hold	take hold
+take up	seize on	fasten on	hook on	latch on
+talk	speak
+say	talk
+say	talk	call
+call	phone
+phone	call	dial
 talk about	discuss	discourse
-converse	discourse	interview
 talk about	talk of
 tangle	dishevel	tousle
-tangle	entangle	mat	snarl
+snarl	tangle	entangle	mat
+snarl	snarl up
 tape	videotape
 taste	lick
 taste	lick	nibble
-eat	consume	taste	bite
-eat	lunch
-eat	breakfast
 lick	chew
 taste	sample
-taste	savor
+eat	consume	taste	bite
 tear off	tear away
-tell	advise	inform
-advise	counsel
+tear up	rip up	shred
+tell	inform	advise
+term	terms
 thank	thanks
+throw out	ban	expel	kick out	ostracize
 throw overboard	deep-six
-tickle	thrill	vibrate
-shiver	shudder	thrill	throb
-tie	fasten	attach
-tie	fasten	attach	secure
-attach	connect
 tie	fasten	attach	fix
+fix	repair	patch	plug	glue
+fix	mend
 fix	make
+glue	paste
+patch	patch up
+plug	fit
+cover	plug
+cover	spread over	bloody
 fix	fit
 fit	suit	accommodate
-tie	fasten	attach	secure	strap
-secure	procure
-procure	pander	pimp
+repair	service
+suit	befit
 time	clock
 tinkle	chink	clink
 tip	fee
 tip	topple	tumble
 toe	toenail
 toss	throw	hurl	chuck
-toss	throw	hurl	chuck	pitch	fling
-fling	splurge
+toss	throw	hurl	chuck	fling	pitch
 toss	throw	hurl	cast
 cast	invoke
 trade	merchandise	traffic
 trade	market	merchandise
 shop	market
+shop	buy at	frequent	patronize	shop at	sponsor
+back up	support	buy at	frequent	patronize	shop at	sponsor
+back up	support	encourage	further	promote
+back up	back down	back off
+browse	shop
 trade	import	merchandise
 trade	export	merchandise
 trade	trade in
+trail	shack
 transfer	reassign
-transfer	import
-transfer	export
-transfer	transplant
 trap	pin down
-trap	snare
-trap	pin	immobilize
-trash	junk	scrap
 trash	tear apart	pan
-travel to	visit
 treasure	temple
 tune	tune up
 turn	rotate	twist	screw	unscrew
+screw	plug
 spin	rotate	whirl
 turn	flip	set	shut
 flip	turn	switch	flick	toggle
 shut	close	seal
 seal	seal off
 seal	varnish
-shut	keep out	exclude	shut out
-bar	exclude
+turn	rotate	flip	set	spin	switch	flick	dial	steer
+flick	flicker
+turn	flip	set	power
+rotate	turn	twist	screw	unscrew	spin
+set	plot
+plot	connive	intrigue	scheme
+plot	diagram
+turn	change state
 turn around	swing about	swing around
 turn back	backtrack	double back
 turn on	switch on
 turn on	depend on	depend upon	devolve on	hinge on	hinge upon
 turn to	address
+twist	wrestle	squirm	worm	wriggle	writhe
 twist around	pervert	sophisticate
+type	input
+type	typing
 unbalance	derange
-uncover	unplug	unpin	unblock
-uncover	reveal	bring out	unveil
+uncoil	coil
+gyrate	coil	spiral
 undress	strip	disrobe
-strip	undress	unmask
+undress	unmask
+undress	strip	unmask
 strip	deprive	divest
 unfold	extend
 unfold	blossom	blossom forth	blossom out
@@ -996,63 +1046,71 @@ untangle	disentangle	extricate
 untie	unfasten	free	unhook
 free	release
 drop	dump	release
+empty	dump
+pour	dump
 release	revisit
 untie	unfasten	unhook	undo
+untie	unfasten	free	unhook	detach	unwrap
+detach	unplug	disengage	disconnect
 free	undo
 undo	unmake
+unscrew	unplug
+uncover	unplug	unpin	unblock
+reveal	unveil	uncover	bring out
 untie	unfasten	free	unknot	unstrap
 unknot	untangle	unravel
 untie	unfasten	free	unhook	detach	unwrap	unlash	disconnect
 detach	come away	come off
 unplug	disconnect
 unwind	disentangle
-upset	disconcert	embarrass
-disturb	upset	trouble
 use	with
 use	employ	exploit	operate
 use	equip
-use	employ	apply	exercise	exert	utilize
-use	employ	apply	implement	utilize
-apply	go for
 vandalise	vandalize
+vibrate	resonate
+tickle	vibrate	thrill
+shiver	shudder	thrill	throb
 wait	loiter
-loiter	lurk	hang around	linger	loaf	lounge	mess about	mill about	mill around
+linger	tarry	loiter	lurk	hang around	loaf	lounge	mess about	mill about	mill around
 linger	hover
 lurk	waylay	ambush	lie in wait
 wait	stay
-rest	stay	remain
 wake	awake	awaken
 wake	awake	startle	surprise
-startle	surprise	scare	arouse	frighten
-scare	threaten
-threaten	endanger	imperil	jeopardize	menace	peril
+startle	surprise	scare	frighten	arouse
 wake	awake	rouse
 wake	awake	awaken	rouse
+wake	awake	awaken	revive	resuscitate
 wake	awake	awaken	startle	surprise	rouse
+startle	surprise	scare	curdle
+curdle	clot
+scare	threaten
 startle	galvanize
 jump	startle
 surprise	amaze	astonish	astound
-surprise	storm
+surprise	ball over	blow out of the water	floor	take aback
+threaten	endanger	imperil	jeopardize	menace	peril
 wake	awake	rouse	revive
 walk	run	proceed	step	sidle
+run	walk	proceed	step	drive	steer	go
+point	steer
 run	walk	ride	swim	go
-run	walk	leave	go
+run	walk	explore	go
 step	tread
 step	abuse	mistreat
 trample	tread
 tramp down	trample	tread down
 travel	move	go
 travel	journey	tour
-use	abuse	expend	misuse	pervert
 walk around	walk about
 walk away	walk off
 waltz	waltz around
 warble	quaver
-warble	yodel
 warm	warm up
 limber up	warm up	loosen up
 wash	rinse
 wash	launder
+wash out	rain out
 wash off	wash away	wash out
 wash up	exhaust
 watch	observe
@@ -1065,46 +1123,45 @@ watch	witness
 water	irrigate
 wave	brandish
 wave	beckon
-smile	grin	laugh	nod	sneer	wave
+smile	grin	laugh	sneer	nod	wave
 smile	grin	smirk
 wave	brandish	beckon	motion
-smile	grin	laugh	nod	sneer	beckon	motion
+smile	grin	laugh	sneer	nod	beckon	motion
+gesture	motion
 laugh	cackle
 laugh	haw	ha
 laugh	express joy	express mirth
-motion	gesture
 nod	sure	yup	yeah
 smile	grin	wink
 wave	show
 wear	don
 wear	have on
 weave	interweave
-weave	net	tissue	web
-weave	waver
 wedge	force
-put	place	insert	stuff	lay	wedge	force	stash
-pry	lever	force	prise	prize
-stash	lay away	cache	hive up	hoard	squirrel away
 wedge	prop
+lean	prop	stand
+put	place	insert	stuff	lay	wedge	force	stash
+stash	lay away	cache	hive up	hoard	squirrel away
 stick	wedge	deposit	lodge
 deposit	bank
-stick	stay	stick around	stay put
-stay	abide	bide
-wet	soak
-pluck	rob	hook	soak	fleece	plume	surcharge
-hook	crochet
-pluck	plunk
-soak	drench	sop
-soak	hock	pawn
 whack	wallop	wham	whop
 bash	sock	bop	whop
 what	who
 whet	quicken
 whiff	puff
 drag	puff
+whine	snivel
+screech	whine	creak	squeak
+screech	squawk
+sniffle	snivel	blubber	snuffle
+blubber	blubber out
+sniff	sniffle
+whine	grizzle
 whirl	twirl	swirl
 whisk	whisk off
 white	whiten
+whizz	whiz	purr	whir
+whizz	zoom	zoom along
 wield	equip
 will	bequeath
 wink at	connive at
@@ -1112,36 +1169,32 @@ wipe off	wipe away
 wipe up	mop	mop up
 wish	dream	hope	yearn
 dream	daydream
-long	yearn
 moon	daydream
 moon	moon around	moon on
-wish	care	like	please
-wish	wish well
-wish	bid
-seek	bid
-invite	bid
-pay for	invite
-invite	ask in
-withdraw	retire	retreat	move back	pull back	pull away	draw back	recede
-retire	adjourn
-retract	pull back	draw back
-retract	draw in
-pull	pull in	attract	draw in
-draw in	curl	curl up
-close in	draw in
-loop	coil	curl
-retreat	retrograde
-retreat	back away	pull back	back out
 withdraw	disengage
 wolf	wolf down
+work	busy	occupy
+work	volunteer
 work on	work at
 worship	idolize	revere
+fear	revere	reverence	venerate
 wrap	drape
 wrap	fold
+tie	fasten	attach	connect	wrap	hook	loop
+fasten	tie	attach	secure	strap
 hide	wrap	cove
 hide	hide out
 hide	shroud
-hide	blot out	obliterate	obscure	veil
+loop	intertwine
+loop	coil	curl
+pluck	rob	hook	soak	fleece	plume	surcharge
+hook	crochet
+pluck	plunk
+secure	procure
+procure	pander	pimp
+shear	fleece
+soak	drench	souse	sop
+soak	hock	pawn
 tie	wrap	fast
 wrap	wrap up
 wreck	bust up
@@ -1151,147 +1204,187 @@ yank	jerk
 jerk	twitch
 yawn	gape
 yell	scream	shout
-say	speak	shout	answer
-answer	reply
-reply	answer	respond
-answer	reply	guess
-talk	speak
-say	talk
-say	talk	call
-call	phone
-phone	call	dial
-turn	rotate	flip	set	spin	switch	flick	dial	steer
-flick	flicker
-point	steer
-rotate	turn	twist	screw	unscrew	spin
-set	plot
-plot	connive	intrigue	scheme
-plot	diagram
-turn	change state
-twist	wrestle	squirm	worm	wriggle	writhe
 yell	scream	shout	howl
-yell	scream	growl	roar
+yell	scream	roar	growl
 roar	thunder
 say	talk	ask	yell
 ask	inquire	enquire
-say	talk	speak	call	utter
+say	speak	talk	call	utter
 call	summon
-say	talk	speak	utter	proclaim	maybe
-yell	scream	shout	howl	cry
-howl	wail	roar
-bellow	roar
+say	speak	talk	utter	proclaim	maybe
+scream	yell	shout	howl	cry
+howl	wail	ululate	roar
 howl	yowl
-wail	mewl	whimper
-yelp	yap
+roar	bellow
+wail	whimper	mewl
+yelp	yip	yap
+yodel	warble
 zap	vaporize
 zap	microwave	nuke
 zero	zero in
 zip	zip up	zipper
-zip	hurry	speed
-zoom	zoom along
 abandon	desert	desolate	forsake
-absorb	engage	engross	involve	occupy
+abide	bide	stay
+accept	acknowledge	recognize
+know	realize	recognize
+know	get the hang	master
+see	perceive	realize	understand
+see	appreciate	realize	take account	understand
+accept	adopt	espouse
+accept	receive
+welcome	receive
+accept	consent	allow	countenance	go for	permit
+accept	abide by	honor	respect
 accompany	play along
 accompany	companion	company	keep company
-acquire	grow	develop	produce
-win	acquire	gain
-learn	acquire
+accost	solicit
+act	behave	do
 act	act as
 act	criticize
-act	pretend
+act	pretend	assume	sham	simulate
 add	modify	qualify
 change	alter	modify
 change	alter	narrow	narrow down	specialize	vary
 add	include
 add	string	string up
+add	compound
 add	button
-add	add together	foot	foot up
 add	append	supply
+address	accost	come up to	recognize
+greet	receive	recognize
 address	direct	instrument
 adjust	align	line up	true	true up
 adjust	adapt	conform	square
 advance	bring forward	nose
 call up	bring forward
+advise	counsel	exhort	urge	urge on
 advise	advocate	propose	recommend	suggest	urge
 hint	suggest
+affirm	support	confirm	corroborate	demonstrate	establish	prove	substantiate	sustain
+lay down	establish
+manifest	attest	certify	demonstrate	evidence
 affirm	support	confirm	corroborate	document	substantiate	sustain
 support	subscribe
-defend	support	fend for
-affirm	claim
 affirm	confirm	reassert
-okay	approve	confirm	sanction
+affirm	maintain
+agree	fit in	harmonize	accord	blend	blend in	consort	go
+fit	go	joint
+mix in	blend in
 aid	help	assist	alleviate	ease	facilitate
 help	aid	benefit	do good
 help	help oneself
 aim	propose	purport	purpose
-aim	calculate	direct
+aim	direct	calculate
 air	vent	air out	ventilate
 vent	give vent	ventilate
-air	bare	publicize
+air	bare	bring out	issue	publicize	publish
+air	bare	circulate	disseminate	distribute	pass around	propagate	publicize
+circle	circulate
+circle	encircle
 alter	neuter
 alter	falsify
 angle	slant	weight
+animate	encourage	enliven	exalt	inspire	invigorate
+annoy	irritate	bother	get to	chafe	devil	get at	gravel	nettle	rag	rile	vex
 answer	resolve
+answer for	account
 apologise	apologize	excuse	justify	rationalize
+defend	support	fend for	justify	rationalize
 excuse	beg off
 excuse	condone
+support	keep going	patronage	patronize
+apply	go for
 apply	lend oneself
-approach	come on	come near	draw close	draw near	go up	near
+approach	confront	go about	set about
+approach	come on	come near	crowd	draw close	draw near	go up	near
 approach	border on
-approach	go about	set about
 argue	reason
 argue	indicate
 indicate	suggest
-argue	fence	contend	debate	dispute	quarrel	scrap
+argue	fence	contend	debate	dispute	quarrel
 argue	fence	contend	debate	oppose
+arise	come up	bob up
 arm	build up	fortify
 arouse	brace	stimulate	energize	perk up
-arouse	invoke	stir	bring up	call down	call forth	conjure	conjure up	evoke	put forward
+arouse	invoke	bring up	stir	call down	call forth	conjure	conjure up	evoke	put forward
 invoke	appeal
-attract	appeal
+call for	request	appeal	quest
+arrange	stage	phase
+arrange	format
 arrest	turn back	hold back	contain
+defend	contain
 arrest	halt
 ascend	go up
-ascend	move up
-ask	expect	require
-command	require
+ask	require	expect
+command	require	burden
+demand	expect
 assemble	gather	get together
 pull	gather
 pull	commit	perpetrate
 commit	consecrate	dedicate	devote
-bless	consecrate	hallow	sanctify
-search	look for	seek	gather
-look for	look to	anticipate
+use	employ	utilise	utilize	apply	consecrate	dedicate	devote
+attach	adhere	bond	hold fast
 attach to	come with	accompany	go with	rule
-attack	assault	assail	lash out	round	snipe
-attack	assault	assail	set on	rush
+attack	assault	assail	lash out	abuse	round	snipe
+attack	assault	assail	set on
 attack	assail	pelt	pepper
 attack	assail	gas
-pour	pelt	sheet	stream
+attack	assail	storm
 attack	assail	invade	occupy
 attack	assail	beleaguer	besiege	circumvent	hem in	surround
 attack	assail	bomb	bombard
 fence	fence in	surround	wall
-attempt	set about	undertake
-attend	attend to	serve	wait on	assist
+attempt	undertake	set about
+attend	assist	attend to	serve	wait on
 service	serve
+attract	appeal	beguile	bewitch	captivate	charm	enamor	entrance	fascinate
+avoid	miss
+avoid	head off	avert	deflect	fend off	obviate	stave off	ward off
+keep off	avoid
+keep off	stay off
 avoid	annul	invalidate	nullify	quash	void
 back	back up
 back	support	endorse	guarantee	plump for	plunk for	warrant
-back	second	endorse
 back	punt	stake	bet on	game
-back up	clog	choke	choke off	clog up	congest	foul
+back	support	champion	endorse	plump for	plunk for
+back	second	endorse
+back up	choke	clog	choke off	clog up	congest	foul
 clog	clot
 clog	overload
 defile	foul
-back up	back down	back off
-back up	support	sponsor
+bandage	bind
+tie up	bind	tie down	truss
+tie up	moor	berth
+moor	berth	wharf
+tie up	bind off
+bang up	impregnate	knock up
 banish	bar	relegate
+bar	exclude
+bark	skin
+peel	skin	pare
+peel	peel off	flake	flake off
+trim	pare
+undress	strip	disrobe	peel	strip down
+strip	leach
+strip	bare
+strip	ransack	foray	loot	pillage	plunder	rifle
+ransack	comb
+comb	comb out	disentangle
+undress	strip	divest
 baste	tack
 hang on	append	tack	tack on	tag on
 hold on	hang on	hang in	persevere	persist
 hold on	hang on	hold the line
 be	exist	was
+be	live	was
+know	live	experience
+be	occupy
+be	consist	dwell	exist
+live	dwell	inhabit	neighbor	populate
+live	dwell	inhabit	lodge in	occupy	populate	reside
+live	camp	camp out	dwell	inhabit	populate	tent
+repose	reside
+recline	repose
 be	equal	was
 be	correspond	equal	represent	stand for
 be	belong	go
@@ -1299,12 +1392,19 @@ compare	go
 compare	equate	liken
 be	exist	flow
 be	distribute	exist
-bear	crop	turn out
-bear	fruit	turn out
 beat	beat up	work over
 beat up	drum up	rally
+beat	deck	floor
 beat	scramble	cream
 beat	drum
+become	occur
+become	form	take form	take shape
+become	develop	originate	spring up
+become	suit
+belch	erupt
+believe	infer	understand
+believe	rely
+believe	trust
 bend	turn away	deflect
 distract	deflect
 parry	deflect
@@ -1312,52 +1412,59 @@ bend	crook	curve	flex
 bend	arc	arch	curve	flex
 bend	double	double over	double up	flex
 bestow	confer	graduate
-bestow	bring	add	lend	contribute	factor	impart
+bestow	lend	bring	add	contribute	factor	impart
 kick in	chip in	contribute
-kick in	kick down
+kick down	kick in
+lend	loan
 bet	calculate	depend	reckon
+bet	wager	play	bet on	game
 betray	deceive	impersonate	lead astray	pose
-put	place	lay	set	pose	position
 betray	deceive	lead astray	lead by the nose	play false	snow
-bind	bandage
-tie up	bind	tie down	truss
-tie up	moor	berth
-moor	berth	wharf
-tie up	bind off
 bite	prick	sting
+prick	sting	twinge
+prick	cock up	prick up
+prick	goad
+needle	goad
+blackmail	blackjack	pressure
 blast	shell
 emerge	shell
+blazon	emblazon
 bleed	flow	hemorrhage	shed blood
 bleed	leech
+bless	consecrate	hallow	sanctify
 blind	dim
-block	forget	blank out	draw a blank	slip
 block	jam
 block	blockade	embarrass	hinder	obstruct	stymie
+prevent	blockade	embarrass	forbid	foreclose	forestall	hinder	obstruct	preclude	stymie
 blow	blow out	burn out
-blow	boast	bluster	brag	gas	shoot a line	tout
+blow	boast	vaunt	bluster	brag	gas	shoot a line	tout
 blow	shove off	shove along
+blow	float	drift	be adrift	stream
+pour	stream	swarm	teem
+pour	pour out
+pour	pelt	sheet	stream
 blow	suck	go down on
 blow	waste	squander
-blow	screw up	ball up	botch	botch up	bumble	bungle	fluff	foul up	fuck up	fumble	louse up	mess up	mishandle	muck up	spoil
+blow	screw up	fuck up	ball up	botch	botch up	bumble	bungle	fluff	foul up	fumble	louse up	mess up	mishandle	muck up	spoil
 indulge	baby	coddle	pamper	spoil
 mess	mess up
+blow	storm
+surprise	storm
 blow up	enlarge	magnify
 blow up	inflate	amplify	expand
-blow up	dramatize	embellish	embroider	lard	pad
-trudge	tramp	pad	plod	slog
+blow up	embroider	dramatize	embellish	lard	pad
+trudge	tramp	plod	slog	pad
 slug	swig	slog
 quaff	gulp	swig
 slug	idle	stagnate
 blow up	combust	blow a fuse	fly off the handle	go ballistic	have a fit	hit the ceiling	hit the roof	throw a fit
 board	room
 boast	feature	sport
-cavort	gambol	run around	frisk	frolic	lark	lark about	romp	sport
+cavort	gambol	frolic	run around	frisk	sport	lark	lark about	romp
 book	reserve
 book	fine	ticket
-boost	advance	encourage	further	promote
-boot	reboot	bring up
-bother	get to	annoy	chafe	devil	get at	gravel	irritate	nettle	rag	rile	vex
-put out	bother	inconvenience	trouble
+boost	advance	contribute	encourage	further	promote
+pay	contribute
 bother	inconvenience oneself	trouble	trouble oneself
 bounce	bound	spring	rebound	recoil	reverberate	ricochet	take a hop
 kick	kick back	recoil
@@ -1365,18 +1472,20 @@ bound	throttle	confine	gate	limit	restrain	restrict
 bound	throttle	confine	harness	limit	rein	restrain	restrict	rule
 strangle	throttle
 bound	border
-bow	accede	defer	give in	submit
+bow	give in	submit	accede	defer
 bow	crouch	bend	stoop
 brace	guy	stabilize	steady
 brand	post
 brand	trademark
+brandish	wave	flourish
 break	split up	come apart	fall apart	separate
 break	bust
 break	offend	breach	conflict	go against	infringe	violate
 bust	raid
+offend	shock	appall	outrage
 open	open up	breach	gap
 open up	pioneer
-shock	offend	appall	outrage
+open	open up	establish	found
 rape	ravish	assault	dishonor	outrage	violate
 tear	snap	bust	rupture
 bust	fall apart	wear out
@@ -1388,14 +1497,16 @@ snap	click
 click	tick
 click	chatter
 click	clack	cluck
-break	interrupt
-break	break down	die	give out	crash	fail	give way	go	go bad	go down
+break	freeze	interrupt
 break	smash	ruin	bankrupt
 break	split	part	split up	break up	disjoint	dissociate	divorce	separate
 split	burst	break open
-break down	take apart	dissect	analyze
+burst	erupt
+break out	erupt
+break down	die	give out	fail	give way	go bad
+break down	take apart	dissect	analyse	analyze
 break down	lose it
-break down	collapse	crumble	crumple	tumble
+break down	crumple	collapse	crumble	tumble
 crumble	fall apart
 crumple	buckle
 crumple	knit	pucker	rumple
@@ -1405,34 +1516,41 @@ cut off	amputate
 break off	chip	come off	break away	chip off
 break off	snap off
 chip	nick
-break out	erupt
 break through	come out	push through	erupt
-burst	erupt
 break up	dissolve	resolve
-collapse	break up	crack up	crock up
+collapse	crack up	break up	crock up
 melt	thaw	dissolve
 melt	mellow	mellow out
 melt	meld
 melt	fade
-break up	break apart	crash
+break up	crash	break apart
 cut off	break up	disrupt	interrupt
 chop off	cut off
 cut off	cut out
 cut out	scratch out
-break up	dispel	disperse	dissipate	scatter
-dust	sprinkle	disperse	dot	scatter
-fool	dissipate	fool away	fritter	fritter away
-sprinkle	splash	salt
+breathe	inspire	take a breath
+rest	breathe	take a breather
 breathe out	exhale	expire
 exhale	emanate	give forth
+bring	land
 bring	fetch	get	convey
 bring	work	make for	wreak
+work	crop	cultivate
 bring	fetch	bring in
+bring down	visit	impose	inflict
+charge	bill	impose	levy
+chat	chatter	gossip	visit	chew the fat	chitchat	jaw	shoot the breeze
+chatter	clack
+chew	masticate	jaw
+bring down	overthrow	overturn	subvert
+sabotage	counteract	subvert	undermine	weaken
 bring to	bring back	bring around	bring round
+bring up	boot	reboot
 browse	surf
-browse	graze	range	crop	pasture
-browse	shop
+browse	crop	graze	range	pasture
 build	build up	progress	work up
+build	build up	ramp up	work up
+build up	develop
 build	establish
 bullshit	bull	fake
 burn	combust
@@ -1443,58 +1561,59 @@ burn down	burn up	go up
 burst	explode
 burst	abound	bristle
 bury	forget
+forget	blank out	draw a blank
 bury	sink
 buy in	stock	stock up
 sprout	stock
-call	send for
-call	call in	visit
-inspect	visit
-inspect	scrutinize	audit
-visit	bring down	impose	inflict
-charge	bill	impose	levy
-chat	visit	chatter	chew the fat	chitchat	gossip	jaw	shoot the breeze
-chew	masticate	jaw
+call	send for	cite	summons
 call	name	refer
 call	name	entitle	title
-call	name	term
 style	title
+call	call in	visit
+inspect	visit
+inspect	audit	scrutinize
 call for	request	quest	reserve
-call for	invite
-call for	request	desire	quest
 call for	request	claim	lay claim	quest
+call for	invite
 call up	mobilize	rally
 calm	sedate
 calm	steady
 settle down	calm	calm down	chill out	cool it	cool off	simmer down
+cool	cool down	cool off
 cancel	invalidate
 cancel	strike down
 delete	cancel
-capture	enchant	trance	beguile	bewitch	captivate	charm	enamor	entrance	fascinate
-care	worry
-distract	disorder	disquiet	perturb	trouble	unhinge	vex	worry
-disarray	disorder
+care	worry	carefully
+worry	vex
+care	carefully	give care
+care	fuss	give care	mother
+wish	care	like	carefully
+like	prefer
+wish	wish well
+wish	bid
+greet	bid	recognize
+entreat	bid	conjure
+plead	bid	conjure
+seek	bid
+invite	bid
+pay for	invite
+invite	ask in
+request	bid
+search	look for	seek	gather
 carry	convey	express
 carry	shoulder	transport
-ravish	enchant	delight	enthrall	transport
 carry	transmit	channel	conduct	convey	impart
+carry	bear	behave	acquit	conduct	deport	pose	posture
+put	place	lay	set	pose	position
 carry on	proceed	continue	go on
 carry on	act up
 carry on	deal	conduct
-deal	share	portion out
-carry on	preserve	continue	bear on	uphold
-keep up	preserve	conserve	maintain
-keep up	keep abreast
+carry on	preserve	continue	bear on	prolong	sustain	uphold
 proceed	continue	go forward
-wield	exert	maintain
 carry out	put through	follow out	follow through	follow up	go through	implement
-carry out	accomplish	action	carry through	execute	fulfill
-cast	tramp	drift	range	swan	wander	ramble	roam	rove	stray
-drift	err	stray
-drift	freewheel
-range	straddle
+carry out	execute	accomplish	action	carry through	fulfill
 catch	get	capture
 catch	hitch
-get	catch	arrest
 hitch	hobble	limp
 catch	capture	bag
 stick out	bag	bulge	jut	jut out	project	protrude
@@ -1503,24 +1622,30 @@ jump	leap	jump off
 jump	skip	skip over	pass over
 leap out	burst forth	rush out
 explode	break loose	burst forth
+escape	get away	break loose
 move through	pass across	pass over	pass through	transit
 pocket	bag
-pack	bag
+skip	vamoose
 skip	bound off
+steal	bag
+pack	bag
+catch	capture	enchant	trance	beguile	bewitch	captivate	charm	enamor	entrance	fascinate
+enchant	bewitch	jinx	witch
 catch out	find out
 caution	admonish
+celebrate	fete	receive
 challenge	dare	defy
 challenge	appeal	take exception
 challenge	action	litigate	process	sue
 march	process
 change	exchange	convert	commute
+convert	convince	win over
 switch	exchange	switch over
 replace	exchange	interchange	substitute
 change	exchange	interchange
 stand in	fill in	sub	substitute
 step in	substitute
 trade	swap	switch
-change	transfer
 charge	saddle	burden	deluge	flood out	overwhelm
 drown	submerge	drowned	overwhelm
 submerge	deluge	inundate
@@ -1528,8 +1653,6 @@ charge	file	lodge
 file	file away
 charge	assess	bill
 tear	charge	buck	shoot down
-hitch	jerk	buck
-hitch	hitchhike	thumb
 tear	pluck
 pick	pluck	cull
 pick	blame	find fault
@@ -1538,16 +1661,10 @@ clean	clean house
 clean	cleanse
 charge	appoint	assign	delegate	designate
 chase	furrow
-chase	chase after	dog	give chase	go after	tag	tail	track	trail
-dock	bob	tail
-curtsy	bob
 cheat	chisel	job
-cheat	betray	wander	cheat on
-employ	engage	farm out	hire	job	subcontract
-engage	plight
 rip off	cheat	chisel
-wind	thread	weave	wander	meander
 check	see	control	ascertain	assure	ensure	insure	proof	proofread	see to it
+verify	ascertain	assure	ensure	insure	see to it
 check	see	control	ascertain	assure	card	ensure	insure	see to it
 check	look into	check out	check into	check over	check up on	go over
 fall over	go over
@@ -1558,16 +1675,9 @@ spill over	bubble over	overflow
 pour out	spill out	spill over
 check	check off	mark	mark off	tick	tick off
 check	fit	tally	match	agree	consist	correspond	gibe
-check	fit	tally	match	agree	correspond	gibe	parallel
+check	fit	tally	match	agree	correspond	gibe	parallel	twin
 check	fit	tally	match	agree	correspond	gibe	square
 check	fit	tally	match	agree	correspond	gibe	pattern
-fit	equip	fit out	outfit	stock
-fit	equip	fit out	instrument	outfit
-fit	equip	appoint	fit out	outfit
-fit	equip	fit out	outfit	wire
-fit in	harmonize	accord	agree	blend	blend in	consort	go
-fit	go	joint
-mix in	blend in
 paddle	feather	square
 paddle	dabble	splash around
 paddle	totter	waddle
@@ -1575,26 +1685,30 @@ paddle	spank
 row	feather	square
 scoff	flout	gibe	jeer
 score	tally	rack up
-suit	agree
-suit	befit
 cheer	cheers	exhort	inspire	pep up	root on	urge	urge on
 inhale	breathe in	inspire
-press	exhort	hurry	rush	urge	urge on
-press	advocate	exhort	preach	urge	urge on
-run	rush
 cheer	cheer up	cheers	jolly along	jolly up
 cheer	cheers	embolden	hearten	recreate
+choke	throttle
 choose	opt	prefer
 chuck	ditch
 dump	ditch
+ditch	trench
 dump	plunge
 pat	chuck
 pat	dab
-chuck out	eject	boot out	exclude	turf out	turn out
-circle	encircle
-circle	circulate
+chuck out	eject	turn out	boot out	exclude	turf out
 clap	applaud	acclaim	spat
 clean up	tidy	tidy up	square away	straighten	straighten out
+clear	pass	approve	authorize	sanction
+okay	approve	confirm	sanction
+clear	make	take in	pull in	earn	bring in	gain	profit	realize	turn a profit
+earn	garner	letter
+sell	realize
+harmonize	realize
+harmonize	proportion
+harmonize	reconcile
+harmonize	chord
 clear	pass	authorize	declare
 clear	pass	authorize	commission
 clear	light up	clear up	brighten
@@ -1603,36 +1717,45 @@ clear up	enlighten	sort out	crystallize	elucidate	illuminate	shed light on	strai
 clear up	clarify	dilate	elaborate	elucidate	enlarge	expand	expound	flesh out
 cleave	adhere	cling
 stand by	adhere	stick by
-stick	stick to	bind	adhere	bond	hold fast
-stick to	stick with
-click	get across	get through	penetrate	come home	dawn	fall into place	sink in
-penetrate	infiltrate
 climax	crown	culminate	top
 complete	finish	top	top off
-dispatch	complete	discharge
+complete	finish	follow out	follow through	follow up	go through	implement
+complete	finish	accomplish	action	carry through	fulfill
+complete	dispatch	discharge
 climb	rise	go up
-climb	mount	wax
+come	come up	come near	draw close	draw near	go up	near
+rise	arise	get up	stand up
+stand up	place upright
+stand	stand up
+stand	remain firm
+climb	mount	rise	wax	gain
 full	wax
+increase	gain	gather
+climb	sputter	struggle
+spit out	sputter
+spit	spit out
+spit out	cough out	cough up	spit up
 climb	mount	climb up	go up
 climb up	ascend
 climb down	alight
 clip	curtail	cut short
-clip	nip	snip	nip off	snip off
-jog	clip	trot
+clip	snip	nip	nip off	snip off
 close	fold	close up	shut down	close down
 fold	pen up
 close	conclude
 close up	jam	impede	obstruct
 shut up	close up	be quiet	belt up	button up	clam up	dummy up	keep mum
-shut up	put away	lock away	lock in	lock up	shut away
+shut up	put away	lock up	lock away	lock in	shut away
+coat	cake
+coat	surface
+turn up	come out	come on	surface	show up
+fold	turn up	fold up
 collapse	fall in	cave in	founder	give way
 trip	founder	stumble
 trip	trip up
-trip	travel	jaunt
+trip	travel	jaunt	journey
 set off	activate	trip	spark	spark off	touch off	trigger	trigger off
 travel	cruise	journey
-look	search	cruise
-search	research	explore
 trip up	slip up	stumble
 collect	pull together	club	garner	gather
 collect	pull together	garner	gather	nut
@@ -1650,123 +1773,165 @@ color	colour	blue	discolor
 color	colour	distort	tinge
 color	colour	emblazon
 color	colour	gloss
-comb	comb out	disentangle
 combine	compound	incorporate	integrate
 combine	aggregate
 mix	combine	blend	coalesce	conflate	flux	fuse	meld	merge
 mix	integrate
 mix	mix in
-mix	mingle	unify
+mix	compound	mingle	unify
 combine	unite
-come	total	add up	amount	average	average out	number
+come	number	total	add up	amount	average	average out
 come after	succeed
-come down	sicken
+come down	contract	sicken
 come down	reduce	boil down
 scale down	reduce
 come off	go off	go over
 come on	come up	go on
+come up	get hold	line up
+queue	line up	queue up
 come out	appear
-do	perform	appear	execute
+do	perform	execute	appear
 come out	emerge	come forth	go forth	issue
 come out	fall out
 come out	turn out
 come over	come across
 come through	get through
-come through	make it	pull round	pull through	survive
-come up	arise	bob up
-get up	stand up	rise	arise
-stand up	place upright
-stand	stand up
-stand	remain firm
+come through	make it	survive	pull round	pull through
+comfort	console	soothe	calm down	lull	solace	still
+comfort	console	soothe	allay	ease	solace	still
+command	control	guide	maneuver
+command	control	handle	manage
 command	control	corner
 tree	corner
 command	control	dominate	master
 command	control	charm
-command	dominate	overlook
 command	control	govern	rule
-commit	confide	entrust	trust
-lend	loan	trust
+command	dominate	overlook
+lie	dominate	overlook
+lie	sun	sunbathe
+expose	sun
+lie	lie in	consist	dwell
+lie	rest
+rest	stay	remain
+stick	stay	stick around	stay put
+stick	stick to	bind	adhere	bond	hold fast
+stick to	stick with
+comment	annotate	gloss
+commit	trust	confide	entrust
 commit	practice
+pursue	engage	practice	prosecute
 compile	compose
 complete	nail
+compress	compact	pack together
+confuse	obscure	blur
+smear	blur	smudge
+smear	blood
+smear	denigrate	slander	sully
+confuse	jumble	mix up
+stump	mix up
+stamp	stomp	stump
+stamp	frank	postmark
+stamp	meter
+stamp	stereotype
+confuse	disconcert	flurry	put off
+upset	disconcert	embarrass
 connect	link	tie in	associate	identify	link up	relate
-connect	link	tie in	associate	have in mind	link up	mean	relate	think of
-hatch	concoct	dream up	think of	think up
-hatch	brood	incubate
+connect	link	tie in	associate	have in mind	link up	mean	relate
+connect	tie	link	ground	link up
+tie	attach	bind	bond
 connect	join	link	link up	unite
 link	yoke
-construct	reconstruct	retrace
+construct	retrace	reconstruct
 rebuild	reconstruct
 restore	reconstruct
 construct	fabricate	manufacture
 consult	confer
 consume	waste	squander	ware
-waste	devastate	desolate	lay waste to	ravage	scourge
 continue	persist in
 stay	continue	stay on	remain
 control	handle	keep in line	manipulate
 verify	control
+verify	affirm	swear	swan	assert	avow	claim
+converse	contend	debate	discourse
 convert	change over
 cook	brown
 cook	cooked	fake	falsify	fudge	manipulate	misrepresent
-cool	cool down	cool off
-cool	cool down	chill	ice
-copulate	couple	mate	pair
+copulate	breed	couple	mate	pair
+match	couple	mate	pair	twin
+match	equal	rival
+correct	right	rectify
+correct	castigate	chastise
+correct	decline	slump
+descend	fall	come down	decline	go down	slump
+descend	derive
+descend	condescend
+fall	come down	precipitate	rain	rain down
+fall	come down	precipitate	snow
+stoop	condescend	lower oneself
+correct	right	compensate	redress
+correct	sort out	discipline
 costume	dress up
 count	enumerate	number
 keep down	number
 count	consider	weigh
 count	weigh	matter
-press	weigh
 count on	allow	calculate	estimate	figure	forecast	reckon	take into account
+counter	anticipate	foresee	forestall
 cover	deal	address	handle	plow	treat
-respond	react	treat
-respond	accept	consent	go for	react
 touch	handle	palm
-cover	grass	grass over	spread over
-graze	crop	grass	pasture
-cover	cake	coat	spread over
+cover	spread over	grass	grass over
+cover	spread over	cake
+cover	spread over	overwhelm
+crop	graze	grass	pasture
 cover	embrace	comprehend	encompass
-cross	traverse	cover	cut through	get over	get across	course	cut across	pass over	track
-cross	intersect
-cross	baffle	disappoint	foil	frustrate	let down	queer	scotch	spoil	thwart
-cross	traverse	sweep	span
-get over	bounce back	get well
 hug	embrace	bosom
-wipe	pass over
 cover	extend	continue	ridge
 crawl in	turn in	retire	bed	go to bed	go to sleep	hit the hay	hit the sack	sack out
 crease	furrow	wrinkle
 crease	scrunch	crinkle	crisp	scrunch up	wrinkle
 toast	crisp
-credit	believe
 credit	accredit
 credit	finance
+cross	baffle	disappoint	foil	frustrate	let down	queer	scotch	spoil	thwart
+prevent	baffle	foil	forbid	foreclose	forestall	frustrate	preclude	queer	scotch	spoil	thwart
+cross	intersect
+cross	traverse	cover	cut through	get over	get across	track	course	cut across	pass over
+cross	traverse	sweep	span
+get over	bounce back	get well
+wipe	pass over
 crumble	decay	weather
 crumple	crease	crinkle	rumple	wrinkle
 crunch	grind	mash
 crush	beat	vanquish	beat out	eliminate	shell
 crush	beat	vanquish	beat out	get the best	have the best	overcome	shell
+crush	beat	vanquish	beat out	master	overcome	shell	subdue	surmount
+scale	surmount
+tame	subdue
+crush	beat	vanquish	beat out	best	outdo	shell	trump
 crush	beat	vanquish	beat out	overpower	overwhelm	shell
+sweep over	overcome	overpower	overtake	overwhelm
+crush	beat	vanquish	beat out	cream	shell	thrash
 smash	demolish	crush
-smash	smash up	bang up
+smash	bang up	smash up
 tap out	beat out	thump out
 crush	jam
 crush	oppress	suppress
 crush out	press out	extinguish	stub out
 cry	weep
+curtsy	bob
 cut	reduce	shorten	abbreviate	concentrate	condense	contract	digest
 thin	reduce	dilute	thin out
 thin	reduce	lose weight	melt off	slim	slim down
-cut	cut down	trim	reduce	bring down	cut back	trim back	trim down
+cut	trim	cut down	bring down	reduce	cut back	trim back	trim down
 cut	curve	sheer	slew	swerve	trend	veer
 cut	hack
 hack	hack on
 slash	cut down
-strap	lash	slash	whip	flog	lather	welt
+lash	strap	slash	whip	lather	flog	welt
+lather	soap
 slash	gash
 whip	mop up	rack up	worst
-polish off	wrap up	mop up	clear up	get through	finish off	finish up
+polish off	wrap up	clear up	mop up	get through	finish off	finish up
 get through	while away
 whip	whisk
 whip	blister	scald
@@ -1774,119 +1939,146 @@ wind up	finish	end up	fetch up	finish up	land up
 cut	prune	rationalize
 cut down	cut out
 cut down	mow
-mop	mow	pout
-cut up	mangle	mutilate
+cut down	fell	strike down
+cut up	mutilate	mangle
+dampen	moisten
+moisten	drizzle
+dampen	stifle
+dampen	muffle	damp	dull	mute	tone down
 date	go out	go steady
-deal	administer	allot	deal out	dish out	dispense	distribute	dole out	lot	mete out	parcel out	shell out
-spread	distribute	export
+deal	share	portion out
+deal	care	carefully	handle	manage
 deal	care	handle	manage	process
-deal	care	direct	handle	manage
-deal	make out	contend	cope	get by	grapple	make do	manage
-fight	contend	struggle	war
-fight	box	contend	struggle
-grip	grapple
-grip	fascinate	spellbind	transfix
-hypnotise	hypnotize	entrance	mesmerize	spellbind
+deal	care	conduct	handle	manage
 debark	disembark	set down
-decimate	carry off	annihilate	eliminate	eradicate	extinguish	wipe out
+decimate	carry off	wipe out	annihilate	eliminate	eradicate	extinguish
 sweep away	wipe out
 erase	wipe out
-sweep off	sweep away
-uproot	eradicate	exterminate	root out
-wipe off	erase	rub out	score out
+erase	wipe off	rub out	score out
 erase	delete
 delete	edit
+sweep off	sweep away
+uproot	eradicate	exterminate	root out
+wipe out	obliterate
+hide	obscure	blot out	obliterate	veil
+wipe out	cancel out
 decrease	circumscribe	confine	lessen	limit
+decrease	abbreviate	contract	lessen
 defend	guard
-fight	defend	fight back	fight down	oppose
 defend	champion
 defend	represent
 define	delineate	determine	specify
+outline	delineate
 deliver	have	bear	birth	give birth	twin
-deliver	return	render
+deliver	have	bear	birth	expect	give birth	have a bun in the oven
+deliver	process	swear out
 deliver	turn in	hand over	fork out	fork over	fork up	render
 rescue	deliver
 deliver	deport	extradite
 depart	go	go away
 depart	deviate	diverge	vary
-get	become	go
 motley	variegate	vary
-turn	become
-suit	become
 depart	sidetrack	straggle
 deposit	posit	situate
-descend	fall	come down	correct	decline	go down	slump
-descend	fall	come down	crash	go down
-descend	derive
-descend	condescend
-fall	come down	precipitate	rain	rain down
-fall	come down	precipitate	snow
-stoop	condescend	lower oneself
 describe	name	key	distinguish	identify	key out
 list	name
 diagnose	name
 list	index
 describe	report	account
+trace	describe	draw	line	delineate
+trace	retrace
 describe	draw	depict	represent
-draw	thread	string	wire
 design	plan	engineer
 design	plan	concert	contrive	project
-invent	contrive	devise	forge	formulate
 plan	project	propose
-plan	scheme
 design	plan	blueprint	draft
+desire	want	miss
+desire	trust	hope
+escape	miss
+hope	go for
+desire	want	wanted
 destroy	do away with	eliminate	extinguish	get rid of
 destroy	ruin
 destroy	demolish
 devour	pig	raven
 devour	consume	down	go through
-down	shoot down
-kill	defeat	shoot down	vote down	vote out
-kill	stamp out
 diffuse	penetrate	riddle	imbue	permeate	pervade
 dig	grasp	apprehend	compass	comprehend	figure	get the picture	savvy
-dig	turn over	cut into	delve
+dig	delve	turn over	cut into
 turn over	flip over
 turn over	consider	debate	deliberate	moot
-discuss	debate	deliberate	hash out	talk over
-think	consider	believe	conceive
+discuss	debate	deliberate	hash out	moot	talk over
 dig	excavate	hollow
 dig	dig up	dig out
 dig	grind	fag	labor	toil	travail
 dig into	poke into	probe
 dig up	turn up	excavate
-dip	dunk	douse	plunge
+dip	dunk	douse	souse	plunge
 dip	dim
+souse	hit it up
+disagree	differ	dissent	take issue
+disagree	discord
+disarray	disorder
 discharge	acquit	exonerate
 discover	attain	chance on	chance upon	come across	come upon	fall upon	happen upon	light upon
+discuss	chair	hash out	moderate	talk over
+discuss	counsel	hash out	talk over
 dislocate	slip	splay
 dismiss	dissolve
 dismiss	usher out
-display	expose	exhibit	bring forth	produce
-display	expose	exhibit	bench
-display	expose	exhibit	model
+dispel	break up	disperse	dissipate	scatter
+dispense	deal	administer	distribute	allot	deal out	dish out	dole out	lot	mete out	parcel out	shell out
+sell	deal	trade	market
+disperse	spread	broadcast	diffuse	distribute	circulate	disseminate	pass around	propagate
+spread	circulate	go around
+rotate	revolve	go around	wheel	wheel around
+revolve	orb	orbit
+disperse	spread out	dissipate	scatter
+dust	sprinkle	disperse	dot	scatter
+fool	dissipate	fool away	fritter	fritter away
+spread	spread out	distribute	scatter
+spread out	expand
+rotate	turn out	spread out	splay
+sprinkle	splash	salt
+turn off	switch off	turn out
+turn off	put off
+display	exhibit	expose	bring forth	produce
+display	exhibit	expose	bench
+display	exhibit	expose	model	pose	posture
 show	present	exhibit	demo	demonstrate
 uncover	expose
+distract	disorder	disquiet	perturb	trouble	unhinge
+distrust	mistrust	suspect
 disturb	interrupt
+disturb	agitate	raise up	shake up	stir up	vex
+shake up	fluff up	plump up
+disturb	upset	disorder	disquiet	perturb	trouble	unhinge
+divert	route
+divert	amuse
+divert	hive off
 divide	partition	separate	zone
 divide	fraction	quarter
-do	act	behave
 do	perform	execute	practice	rehearse
+do	perform	execute	conduct
 perform	church
-perform	conduct
-use	apply	practice
 do	exercise	practice
+dock	bob	tail
 douse	duck
-douse	put out
+down	shoot down
+kill	defeat	shoot down	vote down	vote out
+kill	stamp out
+negative	defeat	shoot down	veto	vote down	vote out
 drape	cloak	clothe	robe
-draw	delineate	outline
+draw	thread	string	wire
 draw	rule
-trace	describe	draw	line	delineate
-trace	retrace
 draw	project
 draw up	compose	frame
+plan	compose	frame
+make	build	construct	frame	frame up
+plan	scheme
 pull up	draw up	haul up
 pull up	draw up	straighten up
+dress	do	arrange
 dress	plume	preen
 dress	dress out
 dress	trim	garnish
@@ -1895,7 +2087,9 @@ dress	groom	curry
 dress	apparel	clothe	fit out	garb	garment	jacket
 dress	apparel	clothe	fit out	garb	garment	shirt
 dress	apparel	clothe	fit out	garb	garment	habit
-dress	apparel	clothe	coat	fit out	garb	garment
+dress	get dressed	assume
+drift	err	stray
+drift	freewheel
 drill	exercise	practice
 drill in	hammer in	beat in	ram down
 drink	drink in
@@ -1906,89 +2100,85 @@ drink	salute	toast	pledge
 drive	push back	repel	beat back	force back	repulse
 drive	force	ram
 ram	crash
-pass	crash	go across	go through
-pass	go across	go through	muscle
-pass	cycle	go across	go through
+drive	motor
+drive	coach
+drive	tool
 drive away	drive out	run off	turn back	dispel	drive off	chase away
 run off	elope
 run off	waste
 knock off	waste	do in	liquidate	neutralize
-knock off	shave
-hook	knock off	glom	cop	snitch
+pay off	liquidate
+pay off	redeem
 run off	photocopy
-toss off	fling off	knock off	scratch off	dash off
-toss off	down	drink down	pour down	belt down	bolt down
-gobble up	shovel in	bolt down	garbage down
 drive out	clear out
-drop	spend	afford	expend
-give	yield	afford
-drop	cut down	fell	strike down	log	lumber
 drop	drop down	sink	droop	flag	sag
 drop	decline
-drop off	drop away	fall away	slip
-escape	get away	break loose	slip
+drop	spend	expend	invest
 drop off	fall back	fall behind	recede
 drug	base
 duck	dodge	parry	circumvent	elude	evade	fudge	hedge	put off	sidestep	skirt
-duplicate	repeat	replicate	double
 duplicate	parallel	twin
-match	couple	mate	pair	twin
-match	equal	rival
-earn	garner	letter
 eat	corrode	rust
-eat	consume	run through	deplete	eat up	exhaust	use up	wipe out
-take	occupy	use up
+eat	piece
+eat	lunch
+eat	breakfast
+patch	piece
 eat	feed
 eat	eat on
+eat	consume	run through	wipe out	deplete	eat up	exhaust	play out	sap	tire	use up
+take	occupy	use up
 echo	repeat
 ring	echo	resound	reverberate
+make noise	noise	resound
 phone	call	telephone	ring	call up
 ring	border	skirt	surround
-smother	surround
-smother	suffocate
-yell	scream	shout	cry	call	holler	shout out	squall
-holler	squawk	beef	bitch	crab	gripe	grouse
+yell	scream	shout	cry	holler	call	shout out	pipe	pipe up	shrill	squall
+holler	bitch	squawk	beef	crab	gripe	grouse
 shout	cry	call out	cry out	exclaim	ooh	outcry
 proclaim	declare	exclaim	promulgate
 proclaim	predicate
 proclaim	exalt	extol	glorify	laud
-shout	abuse
 embark	ship
 embark	venture
 embrace	sweep up	adopt	espouse
+employ	engage	contract	hire	sign up
+employ	engage	farm out	hire	job	subcontract
+engage	plight
 empty	evacuate	void
 empty	discharge
 empty	abandon	vacate
 enable	empower	endow	gift	invest
-fit	equip	adorn	clothe	fit out	invest	outfit
-fit	equip	commission	fit out	outfit
-fit	match	balance
-enchant	bewitch	jinx	spell	witch
-end	conclude	terminate
+end	terminate	interrupt
+end	terminate	adjudicate	decide	resolve
+engage	absorb	engross	involve	occupy
 engulf	soak up	absorb	engross	immerse	plunge	steep
-enter	put down	record	post
+enjoy	delight	revel
+make happy	make merry	racket	revel	whoop it up
+ravish	enchant	delight	enthrall	transport
+please	delight	enthrall	transport
+enjoy	bask	savor	savour	relish
+love	enjoy
+taste	savor	savour
 enter	put down	record	document
-enter	put down	record	log
-list	post
-stake	post
-put up	post
-stake	impale
-enter	inscribe	recruit	draft	enlist	enroll	muster in
 enter	put down	record	film
+enter	put down	record	photograph
+enter	put down	record	maintain
 enter	put down	record	register
 file	register
+record	tape
+enter	inscribe	recruit	draft	enlist	enroll	muster in
 enter	inscribe	recruit	enroll	register
 enter	figure
 inscribe	autograph
 inscribe	code	encrypt	write in code
-record	tape
 recruit	levy
-escape	miss
+enumerate	recite	itemize
 escape	elude
 run	run away	escape	scat	break away	bunk	fly the coop	turn tail
-examine	study	analyze	canvas	canvass
+examine	probe	investigate
+examine	study	analyse	investigate	analyze	canvas	canvass
+look into	experiment	investigate
 study	major
-examine	probe
 examine	see
 examine	test	try	essay	prove	try out
 test	screen
@@ -1998,40 +2188,12 @@ screen	block out
 mask	block out
 riddle	screen
 shield	screen
-sift	rice	sieve	strain
-tense	strain	tense up
-rub	puree	strain
-rub	worry
-rub	scratch	chafe	fray	fret
-scratch	scrape	scratch up
-rub	scratch	itch
-itch	spoil
-scrape	genuflect	kowtow
-scrub	scratch	cancel	call off
-scratch	excise
-scratch	scrape	come up	scrape up
-scrape	skin
-scratch	inscribe	grave	character	engrave
-skin	bark
-peel	skin	pare
-peel	peel off	flake	flake off
-trim	pare
-undress	strip	disrobe	peel	strip down
-strip	leach
-strip	bare
-strip	ransack	foray	loot	pillage	plunder	rifle
-ransack	comb
-rape	plunder	spoil	violate
-search	go	rifle
-strip	undress	divest
-excite	stimulate	shake	stir	animate	enliven	exalt	inspire	invigorate	shake up
-excuse	explain
-exhibit	march	parade
-troop	parade	promenade
-exit	die	pass	drop dead	buy the farm	choke	croak	decease	expire	kick the bucket	pass away	perish	pop off	snuff it
-throttle	choke
+excite	stimulate	shake	stir	shake up	enliven	exalt	inspire	invigorate
+exhibit	parade	march
+troop	promenade	parade
+exit	die	pass	choke	drop dead	buy the farm	croak	decease	expire	kick the bucket	pass away	perish	pop off	snuff it
+explain	excuse
 explode	detonate	set off	blow up
-set off	cancel	offset
 exploit	work
 exploit	overwork
 expose	compromise	endanger	peril	queer
@@ -2040,12 +2202,14 @@ extend	reach out	poke out
 unfold	extend	stretch	stretch out
 stretch	elongate
 extract	distill
+extract	press out	express
 extract	draw out	elicit	evoke
 suck out	draw out
 face	face up	confront
 face	breast	confront	front
-look	face	confront	front
+face	confront	oppose	pit	play off
 fall	decrease	diminish	ease off	ease up	flag	lessen	slacken off
+fall	decrease	boil down	concentrate	diminish	lessen
 fall	decrease	contract	diminish	lessen	shrink
 fall	decrease	decline	diminish	go down	lessen	wane
 fall	fall down
@@ -2060,96 +2224,95 @@ plug	secure	stop up
 plug	plug away
 punch	plug
 punch	perforate
-penetrate	perforate
+penetrate	perforate	storm
 secure	batten	batten down
 fate	designate	destine	doom
 plan	designate	destine	intend	specify
 feed	feed in
 feel	find
 feel	sense
-smell	sense	smell out
-feel	congratulate	experience	plume	pride
-feel	anger	experience	see red
-feel	experience	suffer
-feel	experience	joy	rejoice
-feign	pretend	affect	mouth	sham
-strike	impress	affect
-hit	strike	run into	bottom	collide with	impinge on
-impress	wow
-impress	ingrain	instill
-impress	imprint
-penetrate	bottom	fathom
-print	impress	letter
-print	impress	prove
-touch	mouth
-touch	stir
-feign	assume	sham	simulate
-fell	vanish
-fiddle	monkey	tamper
-mess around	monkey	monkey around	muck about	muck around	potter	putter	tinker
-fight off	repel	drive back	rebuff	repulse
-repel	rebuff	snub
-repel	gross out	disgust	revolt
-gross out	freak	freak out
-fill	fill up	make full	prime
-fill	meet	fulfill	satisfy
-fit	meet	conform to	fulfill	live up to	satisfy
-match	meet	cope with
-fill	crowd	occupy
-fill in	make out	fill out	complete
-fill out	round out
-fill out	eke out
-fill out	pad
-fill out	fat	fatten	fatten out	fatten up	flesh out	plump	plump out
-squeeze out	eke out
-fill out	flesh out	round
-find	find out	ascertain	determine	sequence
 find	see	seen	witness
 find	retrieve	access	recover	regain
+image	picture	see	envision	fancy	figure	project	visualize
 return	turn back	go back	recover	recuperate	regress	revert
 recycle	reclaim	recover	reprocess	reuse
 reform	reclaim	rectify	regenerate
 reform	see the light	straighten out
 restore	regenerate	rejuvenate
-see	image	envision	fancy	figure	picture	project	visualize
 see	view	consider	expect	reckon	regard
+see	view	consider	receive	reckon	regard
+see	view	consider	include	reckon	regard
+take to	fancy	go for
+think	consider	believe	conceive	reckon	regard
+feel	congratulate	experience	plume	pride
+feel	experience	suffer
+feel	experience	joy	rejoice
+feign	assume	sham	simulate
+fell	vanish
+fight	fight down	defend	fight back	oppose
+fight	contend	oppose	struggle
+fight	box	contend	struggle
+fight	contend	struggle	wage
+fight	labor	struggle
+try	attempt	seek	assay	essay	struggle
+shin	scramble	skin	clamber	sputter	struggle
+scramble	jumble	throw together
+fight off	repel	drive back	rebuff	repulse
+repel	snub	rebuff
+repel	gross out	disgust	revolt
+gross out	freak	freak out
+fill	fill up	make full	prime
+fill	crowd	occupy
+fill	meet	fulfill	satisfy
+fit	meet	conform to	fulfill	live up to	satisfy
+fill out	flesh out	round
+fill out	round out
+fill out	eke out
+fill out	pad
+fill out	fat	fatten	fatten out	fatten up	flesh out	plump	plump out
+squeeze out	eke out
+find	find out	ascertain	determine	sequence
 find	discover	detect	observe	notice
 find	bump	chance	encounter	happen
 finger	thumb
 fire	discharge	go off
-fire	kindle	raise	arouse	anger	elicit	evoke	provoke
 fire	kindle	raise	arouse	elicit	evoke	provoke	shame
+fire	kindle	raise	arouse	elicit	evoke	overcome	overpower	overtake	overwhelm	provoke
 fire	kindle	raise	arouse	elicit	evoke	interest	provoke
-molest	plague	beset	harass	harry	hassle	provoke
-fire	dismiss	force out	can	send away	displace	give notice	give the sack	sack	terminate
+fire	dismiss	force out	can	send away	terminate	displace	give notice	give the sack	sack
 move	displace
 notify	advise	give notice	send word
-proceed	move	go
+proceed	move	go	venture
+keep	continue	proceed	go along	go on
 move	be active
-proceed	keep	continue	go along	go on
 rouse	drive out	force out	rout out
 force out	crowd out
 force out	evict
 fish	angle
+fit	equip	fit out	outfit	stock
+fit	equip	fit out	instrument	outfit
+fit	equip	appoint	fit out	outfit
+fit	equip	fit out	outfit	wire
+fit	equip	adorn	clothe	fit out	invest	outfit
+fit	equip	commission	fit out	outfit
+fit	match	balance
+match	meet	cope with
+fix	repair	mend	restore	touch on	bushel	doctor	piece
 fix	repair	mend	restore	touch on	bushel	doctor	sole
 mend	heal
-heal	bring around	cure
-repair	compensate
+heal	cure	bring around
 restore	reestablish	reinstate
-fix	pay back	pay off
+fix	pay off	pay back
 fix up	arrange
 flash	flaunt	show off
 flick	jerk
 flick	ruffle
-mix	ruffle	shuffle
-flip	switch	throw
-flip	flick	leaf	riff	thumb
+mix	shuffle	ruffle
+fling	sky
+fling	splurge
 flip	twitch
 pinch	nip	tweet	twinge	twitch
 pinch	crimp
-pinch	swipe	filch	hook	abstract	purloin	sneak	cabbage
-sneak	slip
-throw	cast	contrive	project
 toss	pitch	flip	sky
 pitch	lurch
 pitch	peddle	hawk	vend
@@ -2157,37 +2320,40 @@ toss	chuck
 toss	slash	convulse	thrash	thrash about
 slam	slam dance	thrash
 lick	bat	clobber	cream	thrash
-lick	work	solve	figure out	puzzle out	work out
+lick	work	solve	figure out	puzzle out	resolve	work out
 lick	lap	lap up
 slam	flap down
-toss	fling	discard	throw away	toss away	throw out	toss out	cast away	cast out	put away	chuck out	cast aside	dispose
+toss	fling	discard	throw away	toss away	throw out	toss out	cast out	cast away	put away	chuck out	cast aside	dispose
 put away	imprison	incarcerate	jail	jug	lag	remand
 put away	put to sleep
 put away	tuck away	tuck in
 put away	put aside
 throw out	boot out	drum out	expel	kick out	oust
-flirt	butterfly	romance	chat up	mash
+flip	flick	leaf	riff	thumb
+flirt	butterfly	mash	romance	chat up
 flood	glut
+flourish	boom	expand	thrive
+grow	boom	expand	thrive
+flourish	fly high	prosper	thrive
+grow	branch
+grow	prove
 flush	scour	purge
 vomit	barf	puke	retch	chuck	throw up	cat	honk	spew	upchuck	be sick	purge	sick	vomit up
-flush	level	even	even out	grade
+flush	level	even	even out
 fly	wing	flight
 fly	pilot	jet
 fly	flee	take flight	defect	desert
-leave	desert	go away	go forth
-leave	leave alone	leave behind
-leave	exit	get out	go out
-fold	turn up	fold up
-follow	pursue
+focus	sharpen
+follow	pursue	dog	give chase	go after	tag	tail
 pursue	go after	quest after	quest for
 pursue	act on	follow up on
 follow	come
+fondle	caress	nose
 fool	fool around	arse around	horse around
 fool around	play around
 play around	dabble
 force	impel
-force out	eject	squeeze out	squirt
-format	arrange
+force out	squeeze out	eject	squirt
 free	release	unblock
 free	dislodge
 free	release	give up	resign	relinquish
@@ -2195,32 +2361,44 @@ give up	resign	vacate	renounce
 free	rid
 free	release	liberate	loose
 liberate	set free
-put out	release	bring out	issue	publish
-put under	put out	freeze
 free	discharge
 free	relieve	exempt	forgive
 fuck	screw	bang	hump	know	love	make out	sleep with	make love	have sex	be intimate	bed	do it	fucking	get it on	have a go at it	have intercourse	have it away	have it off	jazz	lie with	roll in the hay	sleep together
+make out	fill in	complete	fill out
 screw	drive in
 screw	cheat	jockey	shaft
-gag	strangle	choke	suffocate
+gamble	adventure	chance	hazard	risk	run a risk	take a chance
+try	attempt	seek	adventure	assay	chance	essay	hazard	risk	run a risk	take a chance
+try	attempt	seek	assay	essay	lay on the line	put on the line	risk
+get	have	experience	receive	suffer	sustain
+get	acquire	grow	develop	produce	stock
+get	catch	arrest
+win	acquire	gain
+learn	acquire
 get	let	have
 get	obtain	incur	receive
 get	come	arrive
 get in	make it	arrive	go far
+get in	move in	pull in	draw in
 obtain	prevail
+pull in	collect
+pick up	call for	collect	gather up
 rent	lease	let
-rent	lease	engage	charter	hire
+get	become	go
+turn	become	add up	amount
+turn	reverse	change by reversal
+turn	move around
+move around	travel
+turn back	reverse	invert
 get	make	have	stimulate	cause	decide	induce
 get	make	have	stimulate	cause	encourage	induce
 get	make	have	stimulate	cause	induce	inspire	instigate	prompt
-stimulate	hasten	induce	rush
-get down	cast down	chill	deject	demoralize	depress	dismay	dispirit
+get across	get through	penetrate	come home	dawn	fall into place	sink in
+penetrate	infiltrate
+get down	cast down	depress	deject	demoralize	dismay	dispirit
 scare	frighten	alarm	appall	dismay	fright	horrify
 warn	alarm	alert
 warn	admonish	discourage
-get in	move in	pull in	draw in
-pull in	collect
-pick up	call for	collect	gather up
 get off	get out	escape	get away	get by
 get off	send	send off
 send	commit	charge	institutionalize
@@ -2237,90 +2415,98 @@ swallow	get down
 swallow	bury	eat up	immerse	swallow up
 get on	advance	come on	come along	get along	progress	shape up
 get on	be on
-get on	climb on	jump on	mount	hop on	mount up
+get on	climb on	jump on	hop on	mount	mount up
 get on	board
 get on	get along	get along with	get on with
 get out	get around
 get out	bring out
 get over	master	overcome	subdue	surmount
-scale	surmount
-sweep over	overcome	overpower	overtake	overwhelm
-tame	subdue
-get up	arise	turn out
+get up	turn out	arise
 get up	attire	deck out	deck up	dress up	fancy up	fig out	fig up	rig out	trick out	trick up
 get up	work up
+get up	cram	bone	bone up	drum	grind away	mug up
 get up	organize	organise	devise	prepare
 ghost	haunt	haunting	obsess
+haunt	frequent	haunting
+haunt	stalk	haunting
+travel to	visit	frequent
 give	pay	devote
-give	quote
 give	feed	corn
 give	feed	lunch
 give	feed	breakfast
-give	cater	ply	provide	supply
-give	furnish	provide	render	supply
-put up	provide
-return	yield	generate	render
+give	contribute
+give	cater	ply	supply
+give	administer	distribute	allot	deal out	dish out	dole out	lot	mete out	parcel out	shell out
+give	render	supply
+provide	cater	ply	staff	supply
+provide	cater	ply	regale	supply	treat
+respond	react	treat
+respond	decline	react
+serve	staff
 give	hold	have
-hold	take for	deem	view as
 give	hand	pass	turn over	pass on
 turn over	knock over	tip over	upset	bowl over	overturn
+reverse	override	overrule	overthrow	overturn
 roll	turn over
+roll	bowl	wheel
+roll	undulate
+roll	roll out
+roll out	straighten
+wave	flap	undulate
+wave	curl
+give	award
+give	afford	yield	allow	allow for
+give in	yield	buckle under	knuckle under	succumb
 give out	pass out	distribute	hand out
 pass out	black out
 run out	give out	fail
 run down	run out	peter out	poop out
-run down	skim	scan	rake	glance over
-rake	crease	graze
-run down	exhaust	play out	sap	tire
-release	eject	discharge	exhaust	expel
-release	secrete
-skip	skim	skitter
 give up	abandon
 kick	give up
 give up	surrender	cede
 give up	part with	spare	dispense with
+gobble up	shovel in	bolt down	garbage down
 grab	seize
 grab	catch	net	take hold of
 grab	snap up
 grant	yield	concede	forgive
 grant	accord	allot
+grant	allow
+grant	award
 grant	yield	cede	concede
 yield	relent	soften
 move over	yield	ease up	give way
-grant	allow
-grant	award
-greet	receive	recognize	welcome
-see	view	consider	receive	reckon	regard
-see	view	consider	include	reckon	regard
-see	view	consider	like	reckon	regard
+grip	grapple
+grip	fascinate	spellbind	transfix
+hypnotise	hypnotize	entrance	mesmerize	spellbind
+groom	train	dispose	prepare	qualify
 grow	culture
 grow	mature
 grow	twin
-grow	boom	expand	flourish	thrive
-grow	branch
-grow	expand	spread out
-wave	brandish	flourish
 growl	grumble	rumble
-grumble	croak	gnarl	murmur	mutter
 guess	infer
 guess	approximate	assess	estimate	gauge	judge
+guess	pretend	anticipate	foretell	hazard	predict	promise	venture
 guess	pretend	hazard	surmise	suspect	venture
+look for	look to	anticipate
 pretend	make believe
 pretend	profess
+stake	adventure	hazard	jeopardize	venture
 hail	acclaim	herald
 halt	staunch	stem
-harmonize	chord
-harmonize	reconcile
-harmonize	proportion
-harmonize	realize
-haunt	frequent	haunting
-haunt	stalk	haunting
-have	experience	receive
+hatch	brood	incubate
+hatch	think of	concoct	cook up	dream up	fabricate	manufacture	think up
 have	possess	own
+have	feature	unite
 have	feature	imply	involve
+head	lead	chair	chairman
+head	lead	captain
 head	head up
 hear	try
 listen	hear	take heed
+listen	mind	heed
+mind	beware
+mind	bear in mind
 try	try on
 heat	heat up	hot up
 screw up	heat up	hot up
@@ -2330,183 +2516,207 @@ heave	buckle	warp	hove
 heave	heave up	heft	heft up	hove
 heave	billow	hove	surge
 inflate	balloon	billow
-puff	heave	gasp	hove	pant
+puff	heave	gasp	pant	hove
 puff	puff up
 soar	zoom	soar up	surge
 soar	hang glide
 help	serve
 serve	dish	dish out	dish up	serve up
+provide	cater	dish	dish out	dish up	ply	serve up	supply
+provide	cater	fulfill	ply	satisfy	supply
 hit	shoot	grass
 shoot	flight
-shoot	blast	gun
+shoot	blast
 shoot	film
 shoot	flash	dart	dash	scoot
+hit	strike	run into	bottom	collide with	impinge on
+penetrate	bottom	fathom
 hit	strike	run into	collide with	glance	impinge on
 hit	strike	come to
 murder	hit	slay	dispatch	off	polish off	bump off
-murder	mangle	mutilate
+murder	mutilate	mangle
+mutilate	mar
 run into	run across	meet	come across	encounter
+meet	get together
+join	fall in	get together	unify	unite
+join	bring together	couple	mate	pair	twin
+join	bring together	fair
+meet	breast	converge
 hit	make	reach	access	arrive at	attain	gain	get at
 hit	make	reach	arrive at	attain	gain	peak	top out
 hit	make	reach	arrive at	attain	breast	gain	summit
 hit	make	reach	arrive at	attain	gain	top
-pinch	tail	top
 hit	make	reach	arrive at	attain	gain	ground
 reach	reach out
 throw	ground
 throw	ridge
 win	advance	gain	gain ground	get ahead	make headway	pull ahead
-increase	gain	gather
-increase	compound	deepen	heighten	intensify
-set up	assemble	compound	piece	put together	tack	tack together
+win	succeed	come through	bring home the bacon	manage
+hitch	jerk	buck
+hitch	hitchhike	thumb
+hold	check	hold in	control	confine	contain	curb	limit	moderate	restrain	restrict
+hold	take for	deem	view as
 hold	bind	article	obligate	oblige
 tie	bind	band
 ring	band
+hold	agree	conclude	concur	resolve
+hold	have	maintain	sustain
 hold	hold up	support	pole	sustain
 hold	carry	bear	balance	poise
 hold	entertain	nurse	harbor
 shield	harbor
-hold	check	hold in	control	contain	curb	moderate	restrict
-tame	moderate	tone down
+hold	have	exert	maintain
+hold	have	stock	stockpile
+hold	carry	bear	acquit	conduct	deport
 hold	hold up	brave	brave out	defy	endure	weather	withstand
-lean	tip	angle	tilt	slant	weather
+refuse	resist	defy
+refuse	deny
+tip	tilt	lean	angle	slant	weather
 sail	weather
-sail	cruise	navigate	voyage
-pilot	navigate
 tip	tiptoe
 tap	tip
 tap	exploit	mine
 tap	bug	intercept	wiretap
 knock	rap	tap	pink
 knock	ping	pink
-knock	criticize	pick apart
 tap	beg	lobby	solicit
-wobble	tilt	careen
-wobble	shimmy
+tip	tip off
+traverse	deny
 woo	court	romance	solicit
 hold back	keep back	retain
 hold in	conceal	hold back
-keep back	reserve	withhold
-set aside	allow	appropriate	earmark	reserve
-leave	allow	allow for	provide
-set aside	suspend
+hold close	cling to	clutch	hold tight
+hold in	border	confine	enclose
 hold in	confine	enclose	frame
-put	couch	frame
 shut in	close in	case	encase	enclose
 shut in	close in	border	enclose	frame	frame in
 shut in	close in	enclose	glass	glass in
-hold on	keep	store
+hold on	keep	hive away	salt away	stack away	stash away	store
+hold on	keep	retain
 keep	prevent
-keep	keep on	continue	retain
+keep	continue	keep on	retain
+keep up	prolong	retain	sustain
+keep up	preserve	conserve	maintain
+keep up	keep abreast
 hold out	put out	extend	stretch out	stretch forth
-stretch out	crane
 hold out	resist	stand firm	withstand
-protest	resist	dissent
-resist	fend
+put out	douse
+put out	release	bring out	issue	publish
+release	eject	discharge	eliminate	exhaust	expel
+release	secrete
+stretch out	crane
 hold up	delay	detain
 hold up	stick up
 stand up	stick up
 stand up	hold up	hold water
-hold up	hold out	endure	last	live	live on	survive
-hope	go for
-take to	fancy	go for
-hope	desire	trust
-hurl	cast	crash	dash	hurtle
-scare	dash	daunt	frighten away	frighten off	pall	scare away	scare off
+hone	perfect	round	round off
+hook	knock off	glom	cop	snitch
+pinch	swipe	filch	hook	sneak	abstract	purloin	cabbage
+steal	cop	snitch
+steal	slip
+slide	slip	skid	slew	slid
+slide	slid	slither
+slip	drop off	drop away	fall away
+slip	err	mistake
+sneak	slip
+toss off	fling off	knock off	scratch off	dash off
+toss off	pour down	down	drink down	belt down	bolt down
+hover	brood	bulk large	dominate	eclipse	loom	overshadow
+pout	brood	sulk
+mop	pout	mow
+shadow	dwarf	overshadow
 hurl	cast	bowl	hurtle
 hurl	thrust	lunge	hurtle
-throw	hurl
 hurt	ail	pain	trouble
 hurt	anguish	pain
 hurt	injure	wound	offend	bruise	spite
+upset	anguish	disconcert	pain
 hurt	ache	suffer
-yearn	ache	languish	pine	yen
+long	yearn	ache	languish	pine	yen
 hurt	ache	smart
 ignite	combust	catch fire	erupt	take fire
 imbibe	assimilate
+impress	ingrain	instill
+impress	boss	emboss	imprint
+print	impress	letter
 increase	up
+increase	amplify	expand
+increase	accumulate	amass	conglomerate	gather
+increase	compound	deepen	heighten	intensify
 increase	appreciate
+indicate	register
+inform	evidence
 ingest	consume	take in	have
 inquire	enquire	wonder
 inquire	enquire	investigate
 question	wonder
-respond	marvel	react	wonder
-insert	stick in	slip in	sneak in
-put in	insert	stick in	enclose	glass	introduce
-put in	insert	stick in	cup	enclose	introduce
-put in	insert	stick in	enclose	introduce	slip
+wonder	marvel
+insert	stick in	sneak in	slip in
+put in	insert	stick in	introduce	enclose	glass
+put in	insert	stick in	introduce	cup	enclose
 insert	tuck
+introduce	bring in
 put in	lay in	hive away	salt away	stack away	stash away	store
-put in	break in	cut in	barge in	butt in	chime in	chisel in	disrupt	interrupt
-say	tell	state	introduce	precede	preface	premise
-say	tell	state	announce	declare
-name	announce	identify
-say	tell	state	explain
-say	allege
-say	suppose
-say	read
-read	scan
-see	view	consider	identify	reckon	regard
-slide	skid	slew	slid	slip
-slide	slid	slither
-state	posit	put forward	submit
-tell	announce	foretell	harbinger	herald
-think	guess	imagine	opine	reckon	suppose	suspect
-think	conclude	reason	reason out
-verify	affirm	swear	swan	assert	avow	declare
-swear	depose
-swear	bank	rely	trust
-instal	set up	install	establish
 instal	install	induct	invest	seat
 instal	install	invest	vest
-interpret	annotate	comment	gloss
 interpret	profile	represent
 interpret	mock up	model	represent
 interpret	chart	graph	represent
 play	act	represent
+play	toy	flirt
+invent	contrive	devise	forge	formulate
 invent	make up	cook up	fabricate	manufacture
-jam	ram	wad	cram
+make up	correct	compensate	counterbalance	even off	even out	even up
+jog	even up	square up
+jog	clip	trot
+repair	compensate
+itch	spoil
+rape	plunder	spoil	violate
+jam	ram	cram	wad
 jam	pack	pile	mob	throng
 pack	load down
-join	conjoin
-marry	wed	conjoin	espouse	get married	hook up with
-marry	wed	splice
-splice	piece
-nibble	piece
-patch	piece
-join	bring together	fair
-join	fall in	get together	unify	unite
+join	conjoin	couple	mate	pair
+join	conjoin	piece
+join	bring together	piece	put together	tack	tack together
+set up	assemble	compound	piece	put together	tack	tack together
 keep	preserve	salt
 keep	preserve	corn
-keep	hold back	keep back	restrain
-wait	hold off	hold back	delay
-stay	delay	detain
+keep	hold back	keep back	contain	curb	moderate	restrain
+tame	moderate	tone down
 keep apart	isolate	sequester	set apart
+keep back	freeze	immobilize	withhold
+keep back	reserve	withhold
+put under	put out	freeze
+set aside	allow	appropriate	earmark	reserve
+set aside	suspend
 keep down	reduce	quash	repress	subdue	subjugate
-smother	strangle	muffle	repress	stifle
-put out	smother
-stamp down	conquer	curb	inhibit	subdue	suppress
-seize	capture	appropriate	conquer
-strangle	cramp	halter	hamper
+subject	subjugate
+subject	submit
 knead	massage	rub down
+knock	blame	criticize	find fault	pick apart
+knock	criticize	pick apart	round	snipe
 knock down	pull down	push down	cut down	down
 knock down	dump	deck	floor
+knock off	shave
+shave	plane
+skim	plane
+skim	skim over
+run down	skim	scan	rake	glance over
+rake	crease	graze
+run down	exhaust	play out	sap	tire
+skip	skim	skitter
+smooth	plane
+smooth	sand	sandpaper
 know	acknowledge	recognize
-know	realize	recognize
-know	get the hang	master
-know	experience	live
-see	perceive	realize	understand
-see	appreciate	realize	take account	understand
 kowtow	fawn	suck up
 label	pronounce	convict	judge
+label	pronounce	judge	rule
 label	pronounce	judge	qualify
 try	adjudicate	judge
+sample	taste	try	try out
 settle	adjudicate	decide	judge	resolve
 settle	concert	determine	square off	square up
 settle	compromise	determine	square off	square up
-taste	sample	try	try out
-taste	smack
-land	bring
 land	set down	beach
 put down	place down	set down
 put down	lay	repose
@@ -2517,108 +2727,132 @@ put down	set down	drop off	discharge	unload
 put down	destroy
 put down	get down	set down	write down
 start	begin	get down	commence	set about	set out	start out
-lay out	range	array	set out
-start	begin	lead off	commence	inaugurate	introduce	usher in
+start	begin	lead off	commence
 take apart	break up	break apart	disassemble	dismantle
 sever	break up
+sever	lop
 take apart	dismember
-take off	set off	depart	start	part	set forth	set out	start out
+land	set ashore	shore
+prop	prop up	shore	shore up
+land	ground	strand
+lay out	set up
+set up	arrange
+set up	ensnare	frame
+lead on	deceive	delude	frame
+put	couch	frame
+trap	ensnare	snare
+pin	trap	immobilize
+lay out	range	array	set out
+take off	set off	start	depart	part	set forth	set out	start out
 part	divide	section	segment	separate
+part	divide	isolate	separate	sequester	set apart
 part	divide	joint	separate
 set off	bring out
 split	divide	split up	carve up	lot	separate
 sort	sort out	assort	class	classify	isolate	separate
 split	cleave
+start	initiate	originate
+lead up	initiate
+start	start up	embark on	commence
 take off	lift off
 take off	take time off
-land	set ashore	shore
-prop	prop up	shore	shore up
-land	ground	strand
-lay down	establish
-lay out	set up
-set up	arrange
-put in	instal	set up	install
-put in	submit
 lay over	develop	superimpose
-lead	head	chair	chairman
-lead	head	captain
 lead	result
 run	lead	extend	pass	go
 pass	fall out	come about	go on	hap	happen	occur	pass off	take place
 move on	advance	go on	march on	pass on	progress	string	string along
+move on	advance	edge	go on	march on	pass on	progress
 pass	spend	soldier
 pass	spend	weekend
 pass	spend	holiday	vacation
-put across	pass	acknowledge	communicate	pass along	pass on	receipt
-put across	pass	communicate	message	pass along	pass on
-pass	make it
-pass	sink	lapse
 run	feed	course	flow	gush	jet
 run	feed	course	flow	stream	well out
 throw out	advance
 throw out	dismiss
-transmit	communicate	convey
-lead up	initiate
 lean	list
 list	heel
 list	number
 learn	con	memorize
-learn	teach	instruct	reinforce	reward
-learn	teach	ground	instruct
-learn	teach	condition	instruct
-let	allow	countenance	permit	tolerate
+leave	leave alone	leave behind
+leave	exit	get out	go	go away	go out
+leave	desert	go away	go forth
+leave	desert	desolate	forsake
+waste	devastate	desolate	lay waste to	ravage	scourge
+waste	rot
+leave	provide	allow	allow for
+let	allow	brook	countenance	digest	endure	permit	stomach	suffer	tolerate
+let	admit	allow	countenance	include	permit
 let	allow	countenance	favor	permit	privilege
-let	allow	countenance	permit	trust
+let	admit	allow	allow in	countenance	permit
 let go	release	let go of	relinquish
 let in	admit	allow in
 let in	admit	include	involve
+let loose	loose	unleash
+loosen	loose
 let out	widen
 level	level off
 license	licence	accredit	certify	recognize
-lift	vacate	annul	overturn	repeal	rescind	reverse	revoke
+lift	reverse	vacate	annul	overturn	repeal	rescind	revoke
 lift	raise	elevate	get up	bring up	shoulder
-lift	rise	move up	come up	arise	go up
 thrust	shoulder
 lift	hoist	wind
 run up	hoist
+sew	stitch	run up	gather	pucker	sew together	tuck
+run up	chalk up
+sew	tailor
+tally	chalk up
+lift	raise	elevate	get up	bring up	prove
+print	impress	prove
+lift	raise	elevate	get up	bring up	rear
+rise	arise	lift	move up	come up	go up
 lift	rise	hulk	loom	predominate	rear	tower
-put up	erect	set up	rear
 rise	rise up	come up	surface	swell	well
-rise	grow	arise	develop	originate	spring up
+rise	arise	grow	develop	originate	spring up
 rise up	arise	rebel
 rise up	rear
-stand	stick out	put up	bear	support	abide	brook	digest	endure	stomach	suffer	tolerate
-put up	can	tin
-start	initiate	originate
-start	embark on	start up	commence
-surface	coat
-turn up	come out	come on	surface	show up
 light	light up	fire up
 light	perch	alight
 light	ignite
 light	fall
-listen	mind	heed
-mind	beware
-mind	bear in mind
+live	survive	exist	subsist
+survive	outlast	outlive
+live	survive	hold up	hold out	last	endure	live on
 locate	settle
-settle	make up	patch up	reconcile
-resign	reconcile	submit
-settle	sink	founder	go down	go under
-sink	subside
+make up	settle	patch up	reconcile
 locate	base	situate
-lock	operate	engage	mesh
+lock	engage	operate	mesh
 lock	interlock
+log	lumber
 look	wait	await	expect
 wait	waitress
-look	see	attend	minister	take care
-look	see	attend	take care	tend
-mind	take care	tend
+look	regard
+look	search	cruise
+sail	cruise	navigate	voyage
+pilot	navigate
+look	glance	glint
+look	appear	rear	seem
+look	search	horn in	intrude	nose
+look	face	confront	front
+see	look	attend	minister	take care
+work	minister
+work	do work	occupy
+work	do work	fag	labor	toil	travail
+work	do work	farm
+work	do work	job
+work	do work	man
+work	act
+run	work	operate	go	double	function
+operate	control	gate
+serve	function	officiate
+serve	represent
 look at	consider	deal
 look at	view
-look back	review	retrospect
-look on	esteem	look upon	regard as	repute	take to be	think of
+look on	think of	look upon	esteem	regard as	repute	take to be
+think of	advert	cite	have in mind	mean	refer
 look up	consult	refer
-loosen	loose
+research	refer
+search	explore	research
+search	go	rifle
 loosen	tease	tease apart
 untie	undo	loosen
 unwrap	undo
@@ -2627,101 +2861,117 @@ lower	frown	glower
 lower	turn down
 lower	depress
 press down	depress
-make	create	produce
+make	do	cause	determine	influence	mold	regulate
+make	do	cause	effect
 make	do	cause	occasion
 make	do	breed	cause	engender	spawn
-make	build	construct	frame	frame up
+make	do	cause	incite	motivate	prompt	propel
+make	create	produce
+prod	egg on	incite
+poke	jab	prod	stab
+shape	decide	determine	influence	mold	regulate
+shape	determine	index	influence	mold	regulate
+set	determine	identify
+set	determine	value
+set	assess	determine	tax
+set	determine	price
+task	tax
+make	build	construct	rear
 make	fix	cook	ready	cooked	prepare
-make	take in	clear	pull in	earn	bring in	gain	profit	realize	turn a profit
-sell	realize
-sell	deal	trade	market
 make out	issue	write out
 make out	do	fare	get along
-make out	discern	distinguish	pick out	recognize	resolve	spot	tell apart
+make out	deal	contend	cope	get by	grapple	make do	manage
+make out	spot	discern	distinguish	pick out	recognize	resolve	tell apart
 mark	differentiate	distinguish
 mark	commemorate
-mark	spot
-mark	flag
-mark	brand	denounce	stigmatize
 record	commemorate	immortalize	memorialize
-solve	resolve
+spot	blemish
+spot	blob	blot	fleck
 make up	catch up with
 make up	be	comprise	constitute	represent	was
+make up	be	comprise	constitute	form	represent
+spring	form	take form	take shape
+make up	be	comprise	constitute	pose	represent
 map	represent
 march	demonstrate
+protest	resist	demonstrate	dissent
+resist	fend
+mark	flag
+mark	brand	denounce	stigmatize
+mark	grade
+marry	wed	conjoin	espouse	get married	hook up with
+marry	wed	splice
+splice	piece
+nibble	piece
 measure	appraise	assess	evaluate	rate	value
 measure	appraise	assess	evaluate	praise	value
 survey	appraise
 survey	review	go over
 refresh	brush up	review
 refresh	freshen	freshen up
+review	look back	retrospect
 survey	canvas	canvass	poll
-prune	dress	trim	clip	snip	crop	cut back	poll
-think	evaluate	judge	pass judgment
-measure	endure	last
+prune	trim	clip	snip	crop	dress	lop	cut back	poll
+prune	trim	clip	snip	crop	dress	lop	cut back	top
+pinch	tail	top
+trim	shave
 meet	assemble	gather	group
 meet	assemble	crowd	crowd together	gather
 meet	assemble	club	gather
-meet	celebrate	fete	get together
-meet	breast	converge
 melt	disappear	evaporate
-move around	travel
-name	advert	bring up	cite	mention	quote	refer
+molest	plague	beset	crucify	dun	frustrate	harass	harry	hassle	provoke	rag
+move	strike	impress	affect	trouble
+put out	bother	inconvenience	trouble
+murmur	mutter	grumble	croak	gnarl
+name	announce	identify
+see	view	consider	identify	reckon	regard
+name	bring up	mention	advert	appeal	cite	refer
 observe	note	mention	remark
-note	mark	notice
+note	notice	mark
 observe	note	take note
 observe	bird
-observe	track
-point out	comment	notice	remark
-point out	call attention
-point out	represent
-present	lay out	represent
-present	stage	represent
-present	submit
-present	pose
-present	award
-present	deliver
-respond	acknowledge	notice	react
-reply	answer	respond	field
-stage	arrange	phase
 take down	note
-thank	acknowledge	recognize
 name	appoint	constitute	nominate
+need	require	want	wanted
+notice	acknowledge	cite
+respond	acknowledge	react
+reply	answer	respond	field
+thank	acknowledge	recognize
 nuzzle	nose
-observe	abide by	celebrate	honor	respect
+observe	abide by	honor	respect
 observe	keep	celebrate
 watch	observe	follow	watch over	guard
 protect	guard	ward
 protect	charm
-open	unfold	spread	grass	spread out
+protect	fence in	surround	wall
+open	unfold	spread	spread out	grass
 operate	maneuver
-operate	control	gate
 order	dictate	prescribe
 order	district	govern	regulate	zone
-place	order	range	grade	rank	rate	sequence
+place	order	grade	range	rank	rate	sequence
 place	locate	site
 order	commission
 organize	organise	coordinate	structure
 organize	organise	form
-organize	organise	direct	engineer	mastermind	orchestrate
+organize	direct	organise	engineer	mastermind	orchestrate
 organize	organise	unionize
-spring	form	take form	take shape
+plan	engineer	mastermind	orchestrate
 out	come out	come out of the closet
 pack	wad	bundle	compact
-press	compact	compress	constrict	contract
-tighten	constrict	narrow
-tighten	constrain	stiffen	tighten up
-tighten	reduce
 paint	ground	prime
-tie	connect	link	ground	link up
-tie	attach	bind	bond
-seize	attach	confiscate	impound	sequester
-pass	go by	go past	pass by	surpass	travel by
+pass	sink	lapse
+sink	settle	founder	go down	go under
+sink	subside
+pass	travel by	go by	go past	pass by	surpass
 pass	legislate
 pass	slide by	elapse	glide by	go along	go by	lapse	slip away	slip by
+pass	make it	ace	breeze through	nail	sweep through
+turn up	locate	nail	pinpoint
+turn up	turn out	ensue	prove	result
 pay	pay up
-pay	make up	compensate	pay off
-pay	bear	yield
+pay	make up	pay off	compensate
+pay off	buy off
+pay	bear	yield	net
 wear	bear
 wear	wear down	wear off	wear out	wear thin
 wear	hold out	endure
@@ -2730,77 +2980,113 @@ put on	turn in
 put on	apply	cream
 put on	take in	fool	dupe	gull	kid	pull the leg of	put one across	put one over	slang
 skim	cream	cream off	skim off
+web	net
+weave	net	tissue
+weave	waver
 pay	prefer
 peck	nag
 peck	peck at	pick at
 pedal	bicycle	bike	cycle	wheel
-repeat	cycle	recur
-resort	fall back	recur
-repair	resort
-repair	amend	rectify	remedy
-repair	revive	animate	quicken	recreate	renovate
-revive	resurrect
-turn	change by reversal	correct	rectify	reverse	right
-turn	move around
-turn back	invert	reverse
 peek	glance	glint
+persuade	assure
+persuade	charm	influence	tempt
+persuade	sway
 pet	gentle
+pet	neck
 pick up	turn around
 pick up	catch
 pick up	peck
-smack	peck
 pick up	hear	see	learn	discover	find out	get a line	get wind	get word
 pick up	arrest	apprehend	collar	cop	nab	nail
 pick up	lift up	elate	intoxicate	uplift
+seize	apprehend	clutch	collar	cop	nab	nail
 smash	blast	boom	nail
 smash	dash
+scare	dash	daunt	frighten away	frighten off	pall	scare away	scare off
 soak	intoxicate
-win	come through	bring home the bacon	nail	nail down	peg	succeed
+win	succeed	come through	bring home the bacon	nail	nail down	peg
 sail through	ace	breeze through	nail	sweep through
-turn up	locate	nail	pinpoint
-turn up	ensue	prove	result	turn out
+win	succeed	come through	accomplish	attain	bring home the bacon
+win	succeed	come through	arrive	bring home the bacon	go far
+provide	bring home the bacon
 pile up	accumulate	amass	conglomerate	gather
 pile up	stack up	heap up
-run up	gather	pucker	sew	sew together	stitch	tuck
-run up	chalk up
-tally	chalk up
 pitch	incline	slope
 place	come out	come in
-step up	come out	come forward	come to the fore	step forward	step to the fore
+step up	come out	step forward	come forward	come to the fore	step to the fore
 pop	come out	pop out	bug out	bulge	bulge out	protrude
 pop	crop up	pop up
-plant	implant	embed	pot
-plant	constitute	establish	found	institute
+plant	implant	embed
+plant	appoint	constitute	establish	found	institute	nominate
 show	demonstrate	establish	prove
-show	attest	bear witness	certify	demonstrate	evidence	manifest	prove	testify
-show	bear witness	cite	evidence	prove	testify
-play	fiddle	toy
-play	toy	flirt
+show	attest	bear witness	certify	demonstrate	evidence	prove	testify
+play	take on	meet	confront	encounter
 point	signal	indicate	bode	forecast	foreshadow	foretell	omen	predict
 point	indicate	designate
+point	aim	direct	target
 point	orient
 point	charge	level
-steer	head	point	channel	direct	guide	maneuver
-take	lead	conduct	direct	guide
-send	direct	route
-take	get hold of
-reach	get through	contact	get hold of
-reach	achieve	accomplish	attain	average
-reach	achieve	accomplish	attain	manage
-reach	extend to
-wield	handle	manage
-point	aim	direct	target
+point out	represent
+present	lay out	reason	represent
+present	stage	represent
+say	tell	state	represent
+say	tell	state	announce	declare
+say	tell	state	remark
+point out	comment	notice	criticize	pick apart	remark
+point out	call attention
+say	tell	state	supply
+say	allege
+say	suppose
+say	read
+read	scan
+state	submit	posit	put forward
+present	submit
+present	pose
+present	award
+present	deliver
+submit	pass on	relegate
+tell	announce	foretell	harbinger	herald
+think	guess	imagine	opine	reckon	suppose	suspect
+speculate	theorize	conjecture	develop	formulate	hypothesize	suppose
+speculate	hazard	venture
+think	cogitate	conclude	reason	reason out
+think	cogitate	evaluate	judge	pass judgment
+think	cogitate	associate	link up	relate
+think	cogitate	concentrate	pore	rivet
+think	cogitate	devote
+train	develop	educate	prepare
+transmit	communicate	convey	pass along	pass on
+put across	pass	acknowledge	communicate	pass along	pass on	receipt
+put across	pass	communicate	message	pass along	pass on
+transfer	communicate	convey
+transfer	import
+spell	import
+transfer	export
+spread	distribute	export
+transfer	transplant
+verify	affirm	swear	swan	assert	avow	declare
 poke	pry	horn in	intrude	nose
-polish	brush up	polish up	round	round off
-polish	down	fine-tune	refine
+polish	polish up	brush up	round	round off
+polish	down	civilize	cultivate	educate	fine-tune	refine	school
+swim	school
+swim	float
+swim	drown	drowned
+tame	cultivate	domesticate	naturalize
+tame	domesticate	reclaim
+tweak	fine-tune
 polish off	finish	eat up
-ponder	meditate	reflect	contemplate	chew over	mull	mull over	muse	speculate	think over
+ponder	meditate	ruminate	speculate	reflect	contemplate	chew over	mull	mull over	muse	think over
 reflect	reverberate
 shine	reflect
 shine	gleam	glint	glisten	glitter
 shine	beam	glow	radiate
 shine	polish	smooth
 smooth	smooth out
+speculate	job
+post	bill	placard
+post	stake
+put up	post
+stake	impale
 pound	pound up
 pound	pound off
 pound	ram	ram down
@@ -2810,46 +3096,85 @@ thump	thud
 scrunch	thud
 squat	crouch	scrunch	hunker	hunker down	scrunch up
 thump	pound	poke
-press out	extract	express
-prise	prize	esteem	fear	respect	revere	reverence	value	venerate
+press	exhort	hurry	urge	urge on
+press	advocate	exhort	preach	urge	urge on
+press	weigh
+press	compress	compact	constrict	contract
+pretend	feign	affect	mouth	sham
+touch	mouth
+touch	stir
+prise	prize	esteem	respect	value
 prize	treasure	appreciate	recognize	value
 pry	lever	prise	prize	jimmy
 treasure	care for	cherish	hold dear
-pull	get out	take out	pull out	draw
+provide	cater	nourish	nurture	ply	supply	sustain
+put up	provide
+pull	draw	get out	take out	pull out
 take out	pull up	pull out	extract	draw out
 pull out	back down	back off	bow out	chicken out
+take out	leave off	except	exclude	leave out	omit
+shut	keep out	exclude	shut out
 push	bear on
 push	advertise	bill	promote
-push	tug	labor
+push	tug	drive	labor	strain	strive
 push	crowd
-push	press	fight	agitate	campaign	crusade
 tug	lug	tote
 push	force	nose
 thrust	force
 thrust	pierce
+push	press	fight	agitate	campaign	crusade
+push	advertise	campaign	crusade	promote
 put	assign
 put	place	commit	fund	invest
-put	place	commit	invest	shelter
+put	place	commit	invest	job
 roll up	collect	compile	pile up	accumulate	amass	fund	hoard
 roll up	bundle	bundle up
 roll up	wrap up
 support	fund
-support	bring home the bacon	provide
-support	patronize	sponsor
-shop	buy at	frequent	patronize	shop at	sponsor
-put	place	commit	invest	job	speculate
+take in	collect	farm
+raise	grow	farm	produce
+raise	bring up	nurture	parent	rear
+raise	erect	put up	set up	rear
+stand	stick out	put up	support	abide	bear	brook	digest	endure	stomach	suffer	tolerate
+put up	can	tin
+turn out	bear	fruit
+use	employ	utilise	utilize	apply	assign
+use	employ	utilise	utilize	apply	strain
+sift	rice	sieve	strain
+tense	strain	tense up
+use	employ	utilise	utilize	apply	exercise	exert
+use	employ	utilise	utilize	apply	implement
+use	abuse	expend	misuse	pervert
+shout	abuse
+use	expend	occupy	use up
+use	apply	practice
+watch	see	view	take in
+take in	ingest	absorb	assimilate
+watch	look on
+watch	look out	watch out
+wield	exert	maintain
+put in	break in	cut in	barge in	butt in	chime in	chisel in	disrupt	interrupt
+put in	set up	instal	install
+put in	submit
+resign	submit	reconcile
+set up	instal	install	establish
 put in	throw in	come in	inject	interject
-quench	quell	squelch
+put out	smother
+quench	squelch	quell
 quench	allay	assuage
 quench	blow out	snuff out	extinguish
-relieve	alleviate	assuage
+relieve	alleviate	assuage	ease
+quiet	calm	calm down	lull	quietly	still
 quiet	calm	appease	assuage	calm down	gentle	lull	pacify	placate	still
 quiet	calm	assure	calm down	lull	reassure	still
 raise	elevate	advance	entitle	gentle	kick upstairs	promote	upgrade
 raise	elevate	advance	favor	kick upstairs	prefer	promote	upgrade
 see	view	consider	favor	reckon	regard
+see	view	consider	esteem	reckon	regard	respect	value
+see	view	consider	appreciate	reckon	regard	value
 shut up	silence	hush	hush up	still
-quiet	hush	pipe down	quiet down
+quiet	hush	pipe down	quiet down	quietly
+stamp down	conquer	curb	hush up	inhibit	still	subdue	suppress
 relieve	allay	ease	still
 save	relieve	salvage
 relieve	excuse	exempt	frank	let off
@@ -2858,128 +3183,136 @@ save	bring through	carry through	pull through
 save	lay aside	save up
 save	make unnecessary
 save	spare	favor
+seize	capture	appropriate	conquer
 study	consider	factor	factor in	factor out
-study	learn
-study	meditate	contemplate
 quit	throw in	give up	drop out	chuck up the sponge	drop by the wayside	fall by the wayside	throw in the towel
-quit	stop	give up	cease	cheese	discontinue	lay off
+stop	cease	quit	give up	discontinue	cheese	lay off
 quit	step down	resign	leave office
 quit	depart	take leave
 quit	relinquish	renounce
 step down	weaken
-stop	block	halt
+stop	halt	block
 stop	stop over
-stop	break off	discontinue
-raise	grow	farm	produce
-raise	bring up	nurture	parent	rear
-raise up	disturb	agitate	shake up	stir up	vex
-read	take
-take	bring	convey	tube
-select	choose	take	panel	pick out
-select	choose	take	field	pick out
-select	choose	take	go	pick out	plump
-select	choose	take	elect	pick out
-select	choose	take	assign	pick out	set apart	specify
-select	choose	take	nominate	pick out	propose
-select	choose	take	pick out	vote
-state	express	vote
-take	ask	call for	cost	demand	involve	necessitate	need	postulate	require
-summon	cite	demand	summons
-summon	page
-summon	come up	muster	muster up	rally
-summon	marshal	mobilize
-take	remove	take away
-remove	bench
-remove	get rid of
-remove	take out	move out
-take out	unpack
-take out	take away
-take out	ask out	invite out
-work	page
-work	busy	occupy
-work	volunteer
-work	minister
-work	do work	farm
-take in	collect	farm
-watch	see	view	take in
-take in	ingest	absorb	assimilate
-watch	look on
-watch	look out	watch out
-watch	check	see	learn	find out	ascertain	determine
-work	do work	job
-work	do work	man
-work	act
-run	operate	work	go	double	function
-run	lean	be given	incline	suffer	tend
-run	hunt	course	hunt down	track down
-serve	function	officiate
-serve	represent
-stop	end	finish	cease	go	run low	run short	terminate
-stop	end	finish	cease	disappear	go away	terminate	vanish
+stop	break	break off	discontinue	disrupt	interrupt
+stop	cease	terminate	end	finish	go	run low	run short
+stop	cease	terminate	end	finish	disappear	go away	vanish
+stop	cease	terminate	end	finish	conclude
 stop	block	block up	bar	barricade	block off	blockade
 seal off	blockade
 shut off	close off	block off
+quote	cite
+repeat	cite	reiterate	restate	retell
+repeat	duplicate	replicate	double
+show	bear witness	cite	evidence	prove	testify
+summon	cite	summons
+race	hie	rush	belt along	buck	bucket along	hasten	pelt along	rush along	shoot down	speed	step on it
+run	race	campaign
+run	lean	tend	be given	incline	suffer
+run	hunt	course	hunt down	track down
 trace	hunt	hound
+zip	hurry	speed
+rush	hasten	hurry	look sharp
+rush	stimulate	hasten	induce
+range	straddle
+reach	get through	contact	get hold of
+reach	achieve	accomplish	attain	average
+reach	achieve	accomplish	attain	manage
+reach	extend to
+wield	handle	manage
+read	take	study	learn	prepare
+read	take	study	learn	exercise	practice
+study	bone	bone up	drum	grind away	mug up
+study	meditate	contemplate
+take	ask	call for	demand	need	require	claim	exact	involve	necessitate	postulate
+teach	instruct	learn	develop	educate	prepare
+teach	instruct	learn	reinforce	reward
+teach	instruct	learn	ground
+train	civilize	cultivate	educate	school
+take	aim	direct	train	take aim	target
 recall	echo
 withdraw	recall	call in	call back
-remember	think	recall	recollect	call up	retrieve	call back	recognize
-remember	retain	think of
+remember	recall	recollect	think	call up	retrieve	call back	recognize
+remember	think of	retain
 return	recall	come back	hark back
 return	bring back	take back
 swallow	withdraw	take back
-withdraw	seclude	sequester
-recite	enumerate	itemize
-refuse	decline	regret
-turn down	refuse	pass up	decline	reject
-refuse	resist	defy
-refuse	deny
-traverse	deny
-refuse	resist	reject
-resist	balk
-turn down	refuse	turn away	reject
+refuse	reject	turn down	turn away
 turn away	avert
-turn down	disdain	freeze off	reject	scorn	spurn
+turn down	reject	disdain	freeze off	scorn	spurn
+refuse	reject	resist
+resist	balk
 relax	unwind	loosen up	slow down
 relax	loose
 remember	think back
 remember	commend
-remember	characterize	qualify	think of
-toy with	think about	entertain	flirt with	think of
+remember	think of	characterize	qualify
+think about	toy with	flirt with	entertain	think of
 remove	absent
 remove	transfer
-repeat	cite	quote	reiterate	restate	retell
+remove	get rid of
+remove	take out	move out
+take out	unpack
+remove	bench
+rent	lease	engage	charter	hire
+repair	revive	animate	quicken	recreate	renovate
+revive	resurrect
+repair	amend	rectify	remedy
+repair	resort
+repeat	cycle	recur
+resort	fall back	recur
 repeat	reprise
+request	declare oneself	pop the question	propose
 resume	sum up	summarize
 sum	sum up	summarize
 tally	add	sum	total	add together	add up	sum up	tot	tot up	tote up
 return	retort	come back	rejoin	repay
 return	give back	refund	repay
+return	deliver	render
+return	yield	generate	render
+reveal	disclose	discover	expose	divulge	unwrap	let out	bring out	give away	let on
 revive	come to	resuscitate
-revolve	orb	orbit
 ride	taunt	tease	bait	banter	jolly	kid	rag	rally	tantalize
 ride	tube
+ride	bicycle	bike	cycle	wheel
 ride	cycle	motorbike	motorcycle
 ride	boat
 ride	tool	tool around
 work	work on	process	tool
 work	work on	process	till
 work	exercise	work out
-roll	roll out
-roll out	straighten
 roll	wrap	wind	twine
 wind	nose	scent
+smell	nose	scent
+smell	smack	reek
+smell	sense	smell out
+taste	smack
+smack	peck
 wind	wind up
 wrap	enclose	envelop	tube
-roll	bowl	wheel
-roll	undulate
-wave	flap	undulate
-wave	curl
-rotate	splay	spread out	turn out
-turn off	switch off	turn out
-turn off	put off
-rotate	revolve	go around	wheel	wheel around
-say	tell	order	direct	enjoin
+rub	puree	strain
+rub	scratch	fret	chafe	fray
+scratch	scrape	scratch up
+rub	scratch	itch
+scrape	genuflect	kowtow
+scrub	scratch	cancel	call off
+scratch	excise
+scratch	scrape	come up	scrape up
+scrape	skin
+set off	cancel	offset
+summon	come up	muster	muster up	rally
+summon	marshal	mobilize
+run into	bump into	butt against	jar against	knock against
+say	tell	order	enjoin
 tell	assure
+verify	affirm	swear	swan	assert	assure	avow
+swear	depose
+swear	bank	trust	calculate	depend	reckon	rely
+tramp	wander	ramble	cast	drift	range	swan	roam	rove	stray
+wander	cheat	betray	cheat on
+shit	betray	rat	shop	denounce	give away	grass	snitch	stag	tell on
+shit	crap	defecate	stool	take a crap	take a shit
+wander	meander	wind	thread	weave
+say	pronounce	articulate	enunciate	sound out	voice
 say	pronounce	articulate	enunciate	round	sound out
 say	pronounce	accent	accentuate	articulate	enunciate	sound out	stress
 scold	bawl out	berate	call down	call on the carpet	chew out	chew up	chide	dress down	jaw	lecture	rag	rebuke	reprimand	take to task
@@ -2987,40 +3320,33 @@ scold	grumble
 scoop	best	outdo	trump
 score	mark
 score	seduce
-seek	try	attempt	adventure	assay	chance	essay	gamble	hazard	risk	run a risk	take a chance
-seek	try	attempt	assay	essay	lay on the line	put on the line	risk
-stake	adventure	hazard	jeopardize	venture
-seize	take over	assume	usurp
-send	mail	express	post
+seize	take over	appropriate	assume	conquer	usurp
+seize	attach	confiscate	impound	sequester
+withdraw	seclude	sequester
+select	choose	take	panel	pick out
+select	choose	take	field	pick out
+select	choose	take	go	pick out	plump
+select	choose	take	elect	pick out
+select	choose	take	assign	pick out	set apart	specify
+select	choose	take	determine	limit	pick out	specify
+select	choose	take	adopt	espouse	pick out
+select	choose	take	nominate	pick out	propose
+select	choose	take	pick out	vote
+state	express	vote
+send	mail	post	express
 send	mail	post	register
 send	ship	transport
-send	post	station
-transfer	transmit	channel	project	transport
-show	project
-show	depict	illustrate	picture	render
-show	connote	evince	express	imply
-show	evince	evoke	express	paint a picture	suggest
-show	articulate	evince	express	formulate	give voice	phrase	word
-show	accent	accentuate	emphasize	evince	express	punctuate	stress
-translate	interpret	render
-translate	transform
-translate	interpret	understand
-utter	express	give tongue to	voice
-utter	express	give tongue to	represent
-utter	let out	emit	let loose
-unleash	let loose	loose
-unwrap	discover	expose	let out	reveal	bring out	disclose	divulge	give away	let on
-shit	betray	rat	shop	denounce	give away	grass	snitch	stag	tell on
-shit	crap	defecate	stool	take a crap	take a shit
+send	post	place	site	station
 send	send out
+send	direct	contrive	project
+send	direct	route
 send	direct	refer
+take	aim	direct	train	sight	take aim
+take	carry	pack
+train	trail
 set	adjust	correct
-set	fix	ready	set up	gear up	prepare	provide
-set	fix	ready	set up	gear up	prepare	prime
+set	fix	set up	ready	gear up	prepare	prime
 set	plant	bed
-set	determine	value
-set	assess	determine	tax
-set	determine	price
 set	fix	define	determine	limit	specify
 set	mark
 shake	rock	sway
@@ -3029,32 +3355,58 @@ swing	swing over
 swing	swing out
 swing	dangle
 shake	agitate
-shape	decide	determine	influence	mold	regulate
-shape	determine	index	influence	mold	regulate
+sharpen	edge
 shed	slough
 shed	spill	pour forth
 shift	dislodge
 shift	transfer
-shift	stir	agitate	budge
+shift	budge	agitate	stir
+shift	tilt	wobble	careen
 switch	shift	change	transition
 switch	shift	change over
 transfer	assign
 transfer	distribute
-sidle up	shine up	cotton up	cozy up	play up	suck up
+transfer	change
+wobble	shimmy
+shine up	sidle up	cotton up	cozy up	play up	suck up
+shove	thrust	stuff	squeeze
+stuff	choke up	lug
+stuff	gorge	binge	glut	overeat	pig out	scarf out
+show	connote	evince	express	imply
+show	evince	evoke	express	paint a picture	suggest
+show	articulate	evince	express	formulate	give voice	phrase	word
+show	accent	accentuate	emphasize	evince	express	punctuate	stress
+utter	express	give tongue to	voice
+utter	express	give tongue to	represent
+utter	let out	let loose	emit
+show	picture	depict	illustrate	render
+translate	interpret	render
+translate	transform
+translate	interpret	understand
+show	project
+sign	bless
+sign	signal	flag
+sign	sign on	contract	sign up
 sink	fall off	slump
 slide down	sink	slump
 sit	ride
 sit	model	pose	posture
-slow	retard	slow down	slow up
-slow	slack	slacken	slow down	slow up
+slow	retard	slow down	slow up	slowly
+slow	delay	detain	retard	slow down	slow up
+slow	slack	slacken	slow down	slow up	slowly
+wait	hold off	hold back	delay
+stay	delay	detain
+smother	surround
+smother	suffocate
+strangle	smother	muffle	repress	stifle
+strangle	cramp	halter	hamper
+strangle	choke	gag	suffocate
 sort	sort out	assort	class	classify	refer	separate
 sort	sort out	assort	class	classify	separate	size
 sort	sort out	assort	class	classify	group	separate
-sort	sort out	assort	class	classify	grade	separate
-sort out	correct	discipline
 sound	vocalise	vocalize	voice
-vocalise	vocalize	articulate	enunciate
 sound	prepare
+vocalise	vocalize	articulate	enunciate
 speak	address
 spin	whirl	gyrate	spin around	reel
 spin	whirl	twirl
@@ -3064,64 +3416,82 @@ spit	skewer
 splash	spatter	splatter
 splash	slosh	slush
 sprinkle	spit	patter	spatter
-squish	splash	slop	slosh	squelch
+squish	splash	squelch	slop	slosh
 squeeze	squash	crush	mash	squelch
 swill	slop
 wedge	force	squeeze	impact
 squeeze	force	coerce	pressure
-spread	broadcast	diffuse	circulate	disperse	disseminate	distribute	pass around	propagate
-spread	circulate	go around
 squeeze	wring	extort	gouge	rack
-thrust	shove	squeeze	stuff
-stuff	choke up	lug
-stuff	gorge	binge	glut	overeat	pig out	scarf out
 torture	torment	rack
 torment	crucify	dun	frustrate	rag
 wring from	extort
+steer	point	head	direct	channel	guide	maneuver
+steer	point	head	direct	corner	guide	maneuver
+take	lead	direct	conduct	guide
+take	get hold of
+transfer	transmit	channel	project	transport
 suck	suck in
 suck in	draw in
 suckle	nurse	suck	breastfeed	give suck
-swim	float
-swim	drown	drowned
-swim	school
+switch	flip	throw
+throw	cast	contrive	project
+throw	hurl
 tackle	harness
+take	remove	take away
+take out	take away
+take out	ask out	invite out
 take	acquire	take on	adopt	assume
-take	aim	train	direct	sight	take aim
-take	carry	pack
-take in	take up	suck in	sop up
-take up	resume
-take in	take up	imbibe	suck	soak up	absorb	sop up	suck up
-take on	meet	encounter
-take on	accept	admit
+take	bring	convey	tube
+take	bring	channel	conduct	convey	impart
+take	have	accept	admit
+take	have	accept	honor
+take	have	accept	adopt
+take	ask	call for	demand	need	require	cost	involve	necessitate	postulate
 take on	take over	adopt	assume
 take on	tackle	undertake
-take over	relieve	spell
-take over	bear	accept	assume
+take on	accept	admit
+take over	relieve
+take over	accept	bear	assume
 take over	buy out	buy up
 take over	repeat
-take up	take over	adopt	borrow
+take up	take over	borrow	adopt
 take over	absorb
 take up	scoop	scoop up	lift out	scoop out
+take in	take up	imbibe	suck	soak up	absorb	sop up	suck up
+take in	take up	suck in	sop up
+take up	resume
+undertake	guarantee
 talk	lecture
+teach	instruct	learn	lecture
+teach	instruct	learn	coach
+teach	instruct	learn	condition
+train	condition	discipline
+undertake	condition	contract	qualify	specify	stipulate
+undertake	charter	contract	hire
+undertake	take in charge
+watch	check	see	learn	find out	ascertain	determine
 talk	sing	babble	babble out	let the cat out of the bag	peach
 talk	speak	utter	mouth
 talk	spill
 talk	speak	cheek
-tame	domesticate	reclaim
-tame	cultivate	domesticate	naturalize
 tell	recite	narrate	recount	relate
 throw	drop	cast	shed	throw off	throw away	cast off	shake off
 throw off	escape from	shake off
+tighten	reduce
+tighten	constrict	narrow
+tighten	compact	constrict	contract
+tighten	strain
+tighten	stiffen	constrain	tighten up
 touch	touch on	affect	bear on	bear upon	impact	process	treat
-touch	touch on	affect	bear on	bear upon	impact	subject
+touch	touch on	affect	bear on	bear upon	impact	inconvenience	trouble
+touch	touch on	act upon	affect	bear on	bear upon	impact	influence
 touch	disturb
 touch	touch on	come to	affect	bear on	concern	involve	pertain	refer	regard	relate
+touch	meet	abut	adjoin	border	butt	butt against	butt on	contact	edge
+touch	meet	adjoin	border	contact	skirt	surround
 touch	touch on	come to	bear on	concern	interest	matter to	pertain	refer	relate
-touch	meet	adjoin	contact
-train	groom	dispose	prepare	qualify
-train	develop	educate	prepare
-train	civilize	cultivate	educate	school
-train	condition	discipline
+worry	concern	interest	occupy
+turn	twist	wrench	sprain
 turn	twist	bend	deform	flex
 twist	distort	twine
 twist	wind	curve
@@ -3130,12 +3500,8 @@ wring	wrench
 wake	awake	awaken	waken	wake up	arouse	come alive
 wake	ignite	heat	fire up	inflame	stir up
 wake	awaken	rouse	waken	wake up	arouse
-want	need	require	wanted
-want	desire	wanted
-want	desire	miss
-want	desire	like
 wink	blink	blink away
-wink	flash	blink	twinkle
+wink	blink	flash	twinkle
 work	knead	proof
 work	shape	forge	form	layer	mold
 work	shape	forge	form	machine	mold
@@ -3144,7 +3510,9 @@ work	shape	forge	form	model	mold
 write	drop a line
 write	compose	instrument
 write	compose	pen	profile
+write	spell
 write	adopt	compose	dramatize	pen
-write	compose	draft	outline	pen
+write	compose	draft	pen
 write	cite	compose	pen	reference
+write	issue	write out
 write	publish
