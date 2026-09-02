@@ -3214,7 +3214,6 @@ mod tests {
         let rendered_words: Vec<String> = (0..rows.len() as u16)
             .flat_map(|i| {
                 read_row(&buf, 1 + i, cx0, cx1)
-                    .trim()
                     .split_whitespace()
                     .map(str::to_string)
                     .collect::<Vec<_>>()
