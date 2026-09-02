@@ -195,7 +195,7 @@ its name, and the process exits non-zero.
 
 ### Glulx introspection: what the panels can ask, and what they cannot
 
-`Engine::introspect` — the seam the inventory dock and the command panel's
+`Engine::introspect` — the seam the inventory panel and the command panel's
 *here*/*carried* columns read — was `None` on Glulx until SQ-1241, so both
 panels fell back to scraping the transcript of an `i` command, which any custom
 inventory prose defeats. City of Secrets' does, and the panels were empty for

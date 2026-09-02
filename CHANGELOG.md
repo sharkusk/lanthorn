@@ -70,7 +70,7 @@ any such tag, or this Unreleased section, still exists.*
 
 ### Fixed
 
-- **Glulx games show their inventory in the panels.** The inventory dock and the
+- **Glulx games show their inventory in the panels.** The inventory panel and the
   command panel's *carried* and *here* columns now read a Glulx story's own
   object tree instead of scraping the reply to an `i` command — which any game
   answering in its own prose defeated, leaving both panels empty for the whole
