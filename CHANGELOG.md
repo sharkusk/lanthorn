@@ -72,6 +72,14 @@ any such tag, or this Unreleased section, still exists.*
   one (if either) is open is remembered per story, the same way the command
   panel's own open state already was.
 
+### Docker
+
+- **The browser page ships its own Nerd Font.** IosevkaTerm Nerd Font Mono,
+  fetched and embedded at image-build time, so lanthorn's icons and the map's
+  Legacy Computing half-diagonals render correctly no matter what font a
+  visitor's browser would otherwise have fallen back to. `LANTHORN_WEB_FONT`
+  and `LANTHORN_WEB_FONT_SIZE` override the family and size.
+
 ### Changed
 
 - **Renamed for a consistent panel vocabulary**, everywhere a player can read

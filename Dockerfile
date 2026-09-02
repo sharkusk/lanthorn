@@ -77,6 +77,37 @@ RUN arch="$(dpkg --print-architecture)" \
 RUN sh -c '/ttyd -p 7999 true & pid=$!; sleep 1; curl -fsS -o /ttyd-index.html http://127.0.0.1:7999/; kill $pid' \
     && grep -q "</head>" /ttyd-index.html
 
+# The browser page ships its own font, so a visitor's default monospace stops
+# deciding whether lanthorn's Nerd Font icons and the map's Legacy Computing
+# half-diagonals (U+1FBA0-1FBA3) render at all. IosevkaTerm Nerd Font Mono is
+# the one Nerd Font that carries those diagonals. Iosevka itself is OFL-1.1;
+# the Nerd Fonts patch is MIT; both redistributable, and the licence text
+# ships in the image below. Fetched and pinned the same way as ttyd above —
+# a release asset, verified by SHA-256 before anything unpacks it.
+FROM debian:trixie-slim AS font-fetch
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends ca-certificates curl unzip woff2 \
+    && rm -rf /var/lib/apt/lists/*
+ARG NERD_FONTS_VERSION=3.5.1
+ARG NERD_FONTS_SHA256=b0dfd98968b7c7743080431257bfd082c5ef7dd4d1c674d3ce16bc5520c10cdc
+# Only the two static weights the page needs (Regular/Bold) are pulled out of
+# the release zip — it ships every weight and both upright and oblique/italic
+# variants, ~1.1 GB unpacked. Converted to woff2 here (the `woff2` Debian
+# package's woff2_compress) so the served page embeds a few MB, not ~14 MB
+# per face of raw TTF.
+RUN curl -fsSL -o /tmp/IosevkaTerm.zip \
+         "https://github.com/ryanoasis/nerd-fonts/releases/download/v${NERD_FONTS_VERSION}/IosevkaTerm.zip" \
+    && printf '%s  /tmp/IosevkaTerm.zip\n' "${NERD_FONTS_SHA256}" > /tmp/IosevkaTerm.zip.sha256 \
+    && sha256sum -c /tmp/IosevkaTerm.zip.sha256 \
+    && mkdir -p /fonts \
+    && unzip -o -j /tmp/IosevkaTerm.zip \
+         IosevkaTermNerdFontMono-Regular.ttf IosevkaTermNerdFontMono-Bold.ttf LICENSE.md \
+         -d /fonts \
+    && woff2_compress /fonts/IosevkaTermNerdFontMono-Regular.ttf \
+    && woff2_compress /fonts/IosevkaTermNerdFontMono-Bold.ttf \
+    && rm /fonts/IosevkaTermNerdFontMono-Regular.ttf /fonts/IosevkaTermNerdFontMono-Bold.ttf \
+          /tmp/IosevkaTerm.zip /tmp/IosevkaTerm.zip.sha256
+
 # trixie-slim to match the builder's glibc (rust:1-slim-trixie above).
 FROM debian:trixie-slim
 
@@ -96,6 +127,7 @@ COPY docker/asound.conf /etc/asound.conf
 COPY --from=builder /out/ /usr/local/bin/
 COPY --from=ttyd-fetch /ttyd /usr/local/bin/ttyd
 COPY --from=ttyd-fetch /ttyd-index.html /usr/local/share/lanthorn/ttyd-index.html
+COPY --from=font-fetch /fonts/ /usr/local/share/lanthorn/fonts/
 COPY docker/web-audio.js /usr/local/share/lanthorn/web-audio.js
 COPY docker/entrypoint.sh /usr/local/bin/lanthorn-entrypoint
 COPY docker/serve-session.sh /usr/local/bin/lanthorn-serve-session

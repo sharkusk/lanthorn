@@ -25,6 +25,10 @@ services:
     # exposing the port beyond localhost; add TLS via a reverse proxy):
     # environment:
     #   LANTHORN_WEB_CREDENTIAL: "player:change-me"
+    # Uncomment to prefer another font over the page's embedded IosevkaTerm
+    # Nerd Font Mono (which still loads as a fallback):
+    # environment:
+    #   LANTHORN_WEB_FONT: "JetBrainsMono Nerd Font Mono"
     restart: unless-stopped
 
 volumes:

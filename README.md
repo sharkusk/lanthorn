@@ -341,7 +341,8 @@ docker run -d -p 7681:7681 -p 7682:7682 -v ~/if-games:/stories -v lanthorn-data:
 
 Mount your game folder at `/stories`; saves live in the `lanthorn-data` volume.
 `docker compose up -d` with the repo's `docker-compose.yml` does the browser
-mode in one line.
+mode in one line. *Next release:* the browser page ships its own Nerd Font,
+so icons and map diagonals draw correctly on any machine.
 
 → [**play in a browser**](docs/guide/play-in-a-browser.md)
 

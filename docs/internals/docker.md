@@ -66,6 +66,8 @@ Serve-mode knobs, as environment variables:
 | `LANTHORN_WEB_AUDIO` | `on` or `off`: the game's sound, played in the browser | `on` |
 | `LANTHORN_WEB_AUDIO_PORT` | the port that sound is served on | `7682` |
 | `LANTHORN_WEB_IMAGES` | `sixel` or `halfblocks`: how pictures are sent to the browser | `sixel` |
+| `LANTHORN_WEB_FONT` | a CSS font-family name to prefer over the page's own embedded font (which still loads as a fallback) | unset |
+| `LANTHORN_WEB_FONT_SIZE` | the terminal's font size in the page | `16` |
 
 **Do not expose an unauthenticated port beyond localhost** — a lanthorn
 session includes a story picker that can browse and download into `/stories`,
@@ -120,6 +122,26 @@ lanthorn instead draws such an image as a plain background-filled footprint
 while the transcript is still moving, and re-sends the full picture once the
 scroll settles, so a scroll session costs one payload per image rather than
 one per step (SQ-1198).
+
+### The page's own font
+
+xterm.js otherwise renders in whatever monospace font the visitor's browser
+falls back to, which decides whether lanthorn's Nerd Font icons and the map's
+Legacy Computing half-diagonal corner glyphs (U+1FBA0–U+1FBA3) show up at all.
+So the image fetches and embeds one: **IosevkaTerm Nerd Font Mono**, the one
+Nerd Font that carries those diagonals. The Dockerfile's `font-fetch` stage
+downloads a pinned Nerd Fonts release asset (SHA-256 verified before
+anything unpacks it), keeps only the Regular and Bold static weights, and
+converts both to woff2 (the `woff2` Debian package's `woff2_compress`) —
+a few MB each rather than ~14 MB of raw TTF. `docker/entrypoint.sh`'s
+`build_index` inlines both faces as `data:font/woff2;base64,…` `@font-face`
+rules into the page it hands ttyd, and passes `-t fontFamily=` /
+`-t fontSize=` accordingly. `LANTHORN_WEB_FONT` names a family to prefer
+instead (the embedded face stays in the stack as a fallback), and
+`LANTHORN_WEB_FONT_SIZE` overrides the size (default 16). Iosevka itself is
+OFL-1.1 licensed and the Nerd Fonts patch is MIT; both are redistributable,
+and the licence text the release ships travels into the image alongside the
+fonts, at `/usr/local/share/lanthorn/fonts/LICENSE.md`.
 
 ### Sound in the browser
 

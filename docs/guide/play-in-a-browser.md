@@ -39,7 +39,8 @@ photographic. Text games, the automap, mouse support and the full TUI look
 and work the same as anywhere else. `LANTHORN_WEB_IMAGES=halfblocks` falls
 back to the cell renderer if you'd rather have that; for full kitty graphics
 fidelity, SSH to the host and run lanthorn there directly instead — see
-[command line](command-line.md).
+[command line](command-line.md). The page brings its own font, so icons and
+map diagonals draw correctly on any machine.
 
 ## Sound in the browser
 
