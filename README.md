@@ -201,37 +201,17 @@ and the internals below — is [**`docs/README.md`**](docs/README.md).
 
 ## Playing aids
 
-The story pane's frame carries a few clickable switches, each
-showing what state it is in — the command band and the Guiding Light along the
-bottom, the map and its return probe at the right, and on a graphical v6 story
-the render mode and the pixel lock up on the top border. Each is drawn twice
-over: a different glyph for each state, and lit when it is on, so you can read
-them at a glance without relying on colour. Hover one for a line saying what a
-click does and which command does the same, because a click *is* that command.
+The story pane's border carries a few clickable switches — the command band and
+the Guiding Light along the bottom, the map at the right, and on a graphical v6
+story the render mode and pixel lock along the top. Each shows its state at a
+glance, and hovering one names the command it stands for. What you switch there
+is remembered per story; the settings screen sets the defaults.
 
-If you told the font check you have a patched font, they are proper icons — a
-map, a docked panel, a lamp, a padlock. If you did not, they are plain shapes
-that say the same thing.
-
-What you switch there is remembered for **that story**, not for every story: a
-map you hid, a light you put out, a render mode you preferred. The settings
-screen still sets the default new games inherit.
-
-Press the **`◈`** control on the pane border (or `/reveal-words`) and every
-word already on screen that the story knows lights up for a few seconds, over
-its own prose, without moving a line of it. It answers the oldest frustration in the genre: a room description names a
-dozen nouns and two of them are implemented. *Mini-Zork* opens on a `field` the
-story has never heard of, and that word stays dark. The claim it makes is the
-dictionary's and it says so each time — these are words this story knows, which
-is not a promise that the thing is within reach.
-
-The command band's **WHAT** column carries the same idea as a list. Under what
-is actually here, dimmed, are the nouns the story has *printed* this session —
-the things a room describes rather than the ones it contains. *Arthur* says of
-the torque that "imbedded in one of the knobs is a sliver of crystal", and the
-crystal is a real object with a real use; that block is where it turns up.
-Newest first, and it accumulates, so a noun named forty turns ago is still one
-click away.
+Press **`◈`** (or `/reveal-words`) and every word on screen that the story
+knows lights up for a few seconds — a quick way to tell the two nouns a room
+actually implements from the dozen it merely mentions. The command band's
+**WHAT** column keeps a running list of the nouns the story has printed so far,
+newest first, so something named forty turns ago is still one click away.
 
 → [playing](docs/guide/playing.md)
 
@@ -276,28 +256,13 @@ it. Drop your own `Kick12.rom` or a Mac OS System file into `~/.lanthorn` and th
 system faces come too: topaz 8, and Geneva, which lives on no Infocom disk at
 all.
 
-**A zip is opened like a volume.** What is inside is identified
-by its *contents*, not its name, so a zip carries anything lanthorn runs — every
-Z-machine version including graphical v6, Glulx, Scott Adams, Blorb
-containers — and a Blorb or a hints file packed beside the story is found and
-used. **A zip holding two games lists both**, one row each, exactly as a
-compilation disc does: pick one in the browser or name it with
-`--story <name>`, and each keeps its own saves under its own name inside the
-archive. A zip holding one game still opens straight into it.
+**Zips work too.** Hand lanthorn a zip and it opens whatever is inside — a story
+file, a Blorb, a set of release floppies — and a zip holding several games lists
+them all, like a compilation disc. A downloaded zip of floppies is offered to
+your library, unpacked, and launched.
 
-**And a downloaded zip of release floppies** is offered to your library: say
-yes and the whole release is unpacked where the picker will find it and
-launched; say no and lanthorn tells you why rather than failing obscurely.
-Only the disk images come out of the archive — never a readme, a cover or
-anything else that happened to be in it.
-
-`--colour terminal|theme|machine` picks which of the three
-sources the story's default page and ink come from. It selects a *regime*, not
-merely a first preference: `--colour machine` gets a bare story file the
-machine's own screen, and `--colour terminal` or `--colour theme` gets a
-release floppy the plain one — your colours, resolved through the standard
-table, exactly as the same story looks opened as a file. The artwork is the
-disk's either way.
+`--colour terminal|theme|machine` chooses whose colours the page and ink start
+from: your terminal's, your theme's, or the original machine's.
 
 → [graphics and terminals](docs/guide/graphics-and-terminals.md)
 

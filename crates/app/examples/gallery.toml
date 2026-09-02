@@ -792,21 +792,21 @@ expect_art_cells = 2400
 id = "frontispieces"
 from = "stories"
 members = [
-  "And_Then_You_Come_to_a_House.gblorb.blorb",
-  "Brain_Guzzlers_from_Beyond!.gblorb.blorb",
+  "And_Then_You_Come_to_a_House.gblorb",
+  "Brain_Guzzlers_from_Beyond!.gblorb",
   "Coloratura.gblorb.blorb",
   "CounterfeitMonkey-11.gblorb",
   "cragne.gblorb",
   "Dr Ludwig and the Devil.gblorb",
   "Dual.zblorb.blorb",
   "Eat_Me.gblorb",
-  "FooFoo.gblorb.blorb",
+  "FooFoo.gblorb",
   "Game of Worlds Tournament.gblorb",
   "Kerkerkruip.gblorb",
   "LostPig.zblorb.blorb",
   "MidnightSwordfight.gblorb",
   "Never Gives Up Her Dead.gblorb",
-  "Sub_Rosa.gblorb.blorb",
+  "Sub_Rosa.gblorb",
   "Superluminal_Vagrant_Twin.gblorb.blorb",
   "TAKE.gblorb",
   "THE BAT.gblorb.blorb",
@@ -815,7 +815,7 @@ members = [
   "The_Song_of_the_Mockingbird.gblorb.blorb",
   "The_Wizard_Sniffer.gblorb.blorb",
   "Violet.zblorb.blorb",
-  "Zozzled.gblorb.blorb",
+  "Zozzled.gblorb",
   "the-impossible-bottle.zblorb.blorb",
 ]
 
