@@ -434,7 +434,7 @@ mod tests {
 
         open_band(&mut state);
         let during = compute_pane_layout(area80x24(), &state, 3);
-        assert_eq!(during.inv_dock.height, 0, "the band subsumes the inventory dock");
+        assert_eq!(during.inv_dock.height, 0, "the band subsumes the inventory panel");
         assert!(during.command_band.height > 0);
 
         // Closing the band brings it back.
@@ -580,7 +580,7 @@ mod tests {
         let z = zones
             .iter()
             .find(|z| z.boundary == Boundary::RoomDockTop)
-            .expect("room dock top zone");
+            .expect("room panel top zone");
         assert_eq!(z.rect.y, pl.room_dock.y - 1, "the map pane's bottom border row");
         assert_eq!(z.rect.height, 2, "plus the dock's own top border");
         assert_eq!(z.rect.x, pl.map.x, "the map's columns, not the frame's");

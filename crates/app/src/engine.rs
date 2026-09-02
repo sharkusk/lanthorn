@@ -291,8 +291,8 @@ pub struct BufferWindow {
     /// This window's own Normal-style foreground colour (packed RGB), or `None`.
     pub fg: Option<u32>,
     /// True for a chrome panel (e.g. the Scott room panel) drawn with the themed
-    /// `room_panel` colour instead of the transcript colour, so the top and bottom
-    /// of a split read as distinct regions. A game-set `bg` still wins.
+    /// `scott_room_panel` colour instead of the transcript colour, so the top and
+    /// bottom of a split read as distinct regions. A game-set `bg` still wins.
     pub panel: bool,
     /// Where the prose this window has streamed is currently SITTING on the v6
     /// screen (SQ-0729), as absolute pixel runs — zvm's `ZWindow::streamed`.

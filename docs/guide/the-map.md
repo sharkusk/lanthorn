@@ -89,7 +89,7 @@ you had typed it yourself.
 
 **Making it yours.** Every glyph the map draws — room outlines, arrowheads,
 path style, portal icons — is a themeable preset, and the portal glyphs travel
-beyond the map: the command band's one-click up/down/in/out cluster draws the
+beyond the map: the command panel's one-click up/down/in/out cluster draws the
 same four. See [Looks](looks.md) for picking a look you like.
 
 ## Going deeper

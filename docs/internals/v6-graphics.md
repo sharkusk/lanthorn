@@ -1835,7 +1835,7 @@ screenshot, a bug report and a headless capture all want:
   chrome/status text collapses to compact terminal bands.
   - A dialog *has* to land here, because image placements draw **above** terminal
     cells in the classic protocols — a menu rendered as cells over a v6 image
-    would simply be invisible underneath it. The command band is the deliberate
+    would simply be invisible underneath it. The command panel is the deliberate
     exception: it is a dock rather than dialog chrome, and counting it as an
     overlay used to hide the story prompt and drop the whole pixel path for as
     long as it was open.
@@ -1845,7 +1845,7 @@ screenshot, a bug report and a headless capture all want:
     **top** (Zork Zero and Shogun paint theirs on native row 0; Arthur paints his
     on row 12, under a twelve-row art panel this path doesn't draw — and it still
     lands on line one, not a quarter of the way down an empty pane). Chrome text
-    *below* the story becomes a command band pinned to the **bottom**, so
+    *below* the story becomes a command panel pinned to the **bottom**, so
     Journey's verb menu stays welded to the last row at any pane height instead
     of floating over the prose. Chrome text *inside* the story box — Shogun's
     boot menu, a hint screen — paints over the transcript where the game put it.
@@ -1878,7 +1878,7 @@ screenshot, a bug report and a headless capture all want:
 > unknown mode. The layout above is unchanged — it was always the cell path's,
 > and `frameless` was only one of four ways in.
 
-The status and command bands on the cell path are themed by
+The status and command panels on the cell path are themed by
 the `upper_window` style selector (the same one that colours a v4+ status line);
 a beside-the-story picture column letterboxes in the `graphics` selector's style.
 

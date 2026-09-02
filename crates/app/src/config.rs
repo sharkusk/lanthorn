@@ -618,9 +618,9 @@ pub struct HotkeysConfig {
     pub group: Vec<HotkeyGroupConfig>,
 }
 
-// ── [command_band] ────────────────────────────────────────────────────────────
+// ── [command_panel] ────────────────────────────────────────────────────────────
 
-/// One verb entry in `[command_band] verbs` / `extra_verbs`:
+/// One verb entry in `[command_panel] verbs` / `extra_verbs`:
 /// `{ word = "unlock", arity = "pair", prep = "with" }`.
 ///
 /// `arity` is one of `solo`, `object`, `object_opt` (`object?` is accepted too)
@@ -646,7 +646,7 @@ fn default_verb_arity() -> String {
     "object".to_string()
 }
 
-/// The `[command_band]` section: the bottom command band's size, whether it
+/// The `[command_panel]` section: the bottom command band's size, whether it
 /// opens with the story, and its grammar.
 ///
 /// Not to be confused with the top-level `command_bar` boolean, which is an
@@ -711,7 +711,7 @@ fn arity_lines(
     })
 }
 
-/// Lower one `[command_band]` verb entry, pushing a warning for an unrecognised
+/// Lower one `[command_panel]` verb entry, pushing a warning for an unrecognised
 /// `arity` rather than silently reinterpreting it.
 fn lower_verb(
     v: &VerbConfig,
@@ -1638,18 +1638,20 @@ pub struct Config {
     /// Story pane's share of the story/map Split, as a percentage (default 50).
     #[serde(default = "default_split_ratio")]
     pub split_ratio: u16,
-    /// The `[command_band]` section: the bottom command band's height, whether
+    /// The `[command_panel]` section: the command panel's height, whether
     /// it auto-opens, and its verb grammar / quick row. (SQ-0664 retired the
-    /// old `verb_dock_pct` key along with the left dock it sized.)
-    #[serde(default)]
+    /// old `verb_dock_pct` key along with the left dock it sized.) The Rust
+    /// field keeps its `command_band` name (an internal identifier); only the
+    /// TOML section it (de)serialises to is `command_panel` (SQ-1237).
+    #[serde(default, rename = "command_panel")]
     pub command_band: CommandBandConfig,
-    /// Inventory dock height cap as a percentage of screen height (default 33,
+    /// Inventory panel height cap as a percentage of screen height (default 33,
     /// ≈ the old fixed 1/3 cap).
     #[serde(default = "default_inv_dock_pct")]
     pub inv_dock_pct: u16,
-    /// Room dock height as a percentage of screen height (default 33). The dock
-    /// is carved out of the MAP pane's bottom, but its size is measured against
-    /// the frame so both docks share one unit (SQ-0692).
+    /// Room panel height as a percentage of screen height (default 33). The
+    /// panel is carved out of the MAP pane's bottom, but its size is measured
+    /// against the frame so both panels share one unit (SQ-0692).
     #[serde(default = "default_room_dock_pct")]
     pub room_dock_pct: u16,
     /// Inner margin reserved inside the text-buffer (transcript) window, in
@@ -1835,7 +1837,7 @@ impl Config {
         if self.hide_adult_words { &self.adult_words } else { &[] }
     }
 
-    /// The command band's VERB column as the band is BORN — `[command_band]`'s
+    /// The command band's VERB column as the band is BORN — `[command_panel]`'s
     /// own resolution with [`for_display`](Self::for_display) applied to
     /// whatever came out.
     ///
@@ -1854,7 +1856,7 @@ impl Config {
     }
 
     /// The same for the table the story's own grammar produces a tick later —
-    /// `[command_band] extra_verbs` layered on, then
+    /// `[command_panel] extra_verbs` layered on, then
     /// [`for_display`](Self::for_display).
     ///
     /// The filter runs AFTER `extra_verbs`, so it catches a word the player's own
@@ -2448,7 +2450,7 @@ impl ConfigDoc<'_> {
 }
 
 /// [`ConfigDoc::put`] for a key inside a table. No one-run source pins a table key
-/// (`[search]`, `[animation]`, `[command_band]` have no CLI flag, sidecar key or
+/// (`[search]`, `[animation]`, `[command_panel]` have no CLI flag, sidecar key or
 /// inferred value), so this stays the plain default-elision rule.
 fn put_in(tbl: &mut toml_edit::Item, key: &str, value: toml_edit::Value, is_default: bool) {
     let present = tbl.get(key).is_some();
@@ -2675,15 +2677,15 @@ pub fn write_config_at(config_path: &std::path::Path, cfg: &Config) -> std::io::
         put_in(tbl, "scrollbar_fade_ms", (cfg.animation.scrollbar_fade_ms as i64).into(), cfg.animation.scrollbar_fade_ms == def.animation.scrollbar_fade_ms);
     }
 
-    // [command_band] table — same rule as [search]. The verb/quick LISTS are
+    // [command_panel] table — same rule as [search]. The verb/quick LISTS are
     // hand-authored grammar, never written back by the app: resize mode edits
     // `height` and nothing else touches this section, so re-emitting a list here
     // could only ever damage what the user wrote.
-    if doc.contains_key("command_band")
+    if doc.contains_key("command_panel")
         || cfg.command_band.height != def.command_band.height
         || cfg.command_band.auto_open != def.command_band.auto_open
     {
-        let tbl = doc["command_band"].or_insert(toml_edit::table());
+        let tbl = doc["command_panel"].or_insert(toml_edit::table());
         put_in(tbl, "height", i64::from(cfg.command_band.height).into(), cfg.command_band.height == def.command_band.height);
         put_in(tbl, "auto_open", cfg.command_band.auto_open.into(), cfg.command_band.auto_open == def.command_band.auto_open);
     }
@@ -2855,7 +2857,7 @@ mod tests {
         );
     }
 
-    // ── [command_band] ────────────────────────────────────────────────────────
+    // ── [command_panel] ────────────────────────────────────────────────────────
 
     #[test]
     fn command_band_defaults_and_round_trips() {
@@ -2866,7 +2868,7 @@ mod tests {
         assert!(d.command_band.quick.is_empty());
 
         let cfg: Config = toml::from_str(
-            "[command_band]\nheight = 10\nauto_open = true\nquick = [\"n\", \"s\"]\n",
+            "[command_panel]\nheight = 10\nauto_open = true\nquick = [\"n\", \"s\"]\n",
         )
         .unwrap();
         assert_eq!(cfg.command_band.height, 10);
@@ -2883,7 +2885,7 @@ mod tests {
 
         // Replace: only what the file lists survives.
         let cfg: Config = toml::from_str(
-            "[command_band]\nverbs = [{ word = \"polish\", arity = \"object\" }]\n",
+            "[command_panel]\nverbs = [{ word = \"polish\", arity = \"object\" }]\n",
         )
         .unwrap();
         let (table, warn) = cfg.command_band.resolve_verbs();
@@ -2905,7 +2907,7 @@ mod tests {
 
         // Additive: the built-ins stay and the extra joins them.
         let cfg: Config = toml::from_str(
-            "[command_band]\nextra_verbs = [{ word = \"xyzzy\", arity = \"solo\" }]\n",
+            "[command_panel]\nextra_verbs = [{ word = \"xyzzy\", arity = \"solo\" }]\n",
         )
         .unwrap();
         let (table, warn) = cfg.command_band.resolve_verbs();
@@ -2924,7 +2926,7 @@ mod tests {
 
         // Additive over a word that already exists RE-SHAPES it.
         let cfg: Config = toml::from_str(
-            "[command_band]\nextra_verbs = [{ word = \"take\", arity = \"pair\", prep = \"from\" }]\n",
+            "[command_panel]\nextra_verbs = [{ word = \"take\", arity = \"pair\", prep = \"from\" }]\n",
         )
         .unwrap();
         let (table, _) = cfg.command_band.resolve_verbs();
@@ -2965,7 +2967,7 @@ mod tests {
         // names one: a player cannot re-add the test rig by config either.
         let cfg: Config = toml::from_str(
             "hide_adult_words = false\n\
-             [command_band]\nverbs = [{ word = \"$verify\", arity = \"solo\" }, \
+             [command_panel]\nverbs = [{ word = \"$verify\", arity = \"solo\" }, \
              { word = \"polish\", arity = \"object\" }]\n",
         )
         .unwrap();
@@ -2981,7 +2983,7 @@ mod tests {
     fn object_opt_lowers_to_the_two_lines_it_always_meant() {
         use crate::render::command_band::VerbLine;
         let cfg: Config = toml::from_str(
-            "[command_band]\nverbs = [{ word = \"search\", arity = \"object?\" }]\n",
+            "[command_panel]\nverbs = [{ word = \"search\", arity = \"object?\" }]\n",
         )
         .unwrap();
         let (table, warn) = cfg.command_band.resolve_verbs();
@@ -2995,7 +2997,7 @@ mod tests {
     #[test]
     fn command_band_bad_arity_warns_and_skips() {
         let cfg: Config = toml::from_str(
-            "[command_band]\nextra_verbs = [{ word = \"frob\", arity = \"triple\" }]\n",
+            "[command_panel]\nextra_verbs = [{ word = \"frob\", arity = \"triple\" }]\n",
         )
         .unwrap();
         let (table, warn) = cfg.command_band.resolve_verbs();
@@ -3022,7 +3024,7 @@ mod tests {
         // A hand-authored verb list is NOT rewritten by a settings save.
         std::fs::write(
             dir.join("config.toml"),
-            "[command_band]\nheight = 11\nverbs = [{ word = \"polish\", arity = \"object\" }]\n",
+            "[command_panel]\nheight = 11\nverbs = [{ word = \"polish\", arity = \"object\" }]\n",
         )
         .unwrap();
         let mut cfg2 = Config::default();
@@ -3574,7 +3576,7 @@ use_defaults = false
         assert_eq!(doc["background_tidy"].as_str(), Some("on_overlap"));
         assert_eq!(doc["split_ratio"].as_integer(), Some(70));
         assert_eq!(doc["inv_dock_pct"].as_integer(), Some(25));
-        assert_eq!(doc["room_dock_pct"].as_integer(), Some(25), "the room dock's height persists too");
+        assert_eq!(doc["room_dock_pct"].as_integer(), Some(25), "the room panel's height persists too");
         // SQ-0573: `mouse` is at its DEFAULT and the pre-existing file did not carry
         // it, so it is deliberately not written — a default belongs in the commented
         // template, not as a live key. `user_dir` here is the test's temp dir, so it

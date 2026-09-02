@@ -31,7 +31,7 @@ still reach in and override any single selector by name.
   *away* — so "like the thing above me, but not bold" is something you can
   actually say.
 - **Panels vs. windows.** *Panels* are the frames lanthorn itself draws — the
-  story pane, map, command band, debug inspector, and every dialog/overlay.
+  story pane, map, command panel, debug inspector, and every dialog/overlay.
   *Windows* are the surfaces the story/VM generates (Glk buffer/grid/graphics
   windows, the v4+ upper window). Panels are host chrome and never honor game
   colors; windows do, subject to the resolution chain below. Every panel shares
@@ -44,7 +44,7 @@ still reach in and override any single selector by name.
   the `alert` role) / `panel.control:hover` for the clickable toggle controls on
   the story pane's own frame — bracketed by the same terminator caps, and placed
   on the border nearest whatever each one switches (every framed pane — story, map, dialogs, the command
-  band and inventory dock, the debug inspector's window tabs, the story-list info
+  panel and inventory panel, the debug inspector's window tabs, the story-list info
   panel — renders through this one shared panel component and these same
   selectors). The story pane's strip text is the resolved adventure title,
   with the story's filename appended in parentheses when it differs from the
@@ -379,7 +379,7 @@ switches that make lanthorn feel like yours without opening the whole registry.
   command name), `palette_match` (the fuzzy-matched characters, accent + bold by
   default), `palette_desc` (the one-line help), and `palette_selected` (the
   highlighted row). Its frame reuses the shared `[dialog]` chrome.
-- **Command band** — the band's own parts theme via three `[elements]`
+- **Command panel** — the band's own parts theme via three `[elements]`
   selectors: `band.column_header` / `band.column_header:active`, `band.quick`
   (the one-click words, rose or flat row) and `band.group_label` (in-column
   labels and the `(nothing visible)` placeholder). Its rows — and the armed
@@ -437,7 +437,7 @@ its own `config.toml` — a separate, deliberately tiny sidecar carrying at most
 toggle one of those for a story (`/set-game-colours`, `/set-game-borders`,
 `/set-v6-pixel-lock`, `/set-guidance`, `/set-v6-render`, `/set-return-probe`,
 hiding the map, opening
-the command band — or clicking any of the toggle controls on the story pane's
+the command panel — or clicking any of the toggle controls on the story pane's
 border, which run exactly those commands), and it is a *sparse override layer*,
 not a copy of your global config:
 bare uncommented lines, only the keys that differ, and the file is deleted once
@@ -608,7 +608,7 @@ re-seed the new template, or hand-write the new shape from
   sliver of crystal" — a real object with a real use — lit nothing at all.
   It only lights a story's own nouns and adjectives — a real Zork I house
   fetches `white` right along with it — and never a verb, an article or a
-  preposition: the command band already answers "what can I do", and this answers
+  preposition: the command panel already answers "what can I do", and this answers
   "what does this game know about". Glulx answers with its own objects too —
   the Inform object list is read straight out of Glulx memory, so *Dr Ludwig
   and the Devil* lights its devil and its summoning circle rather than `the`
@@ -690,7 +690,7 @@ re-seed the new template, or hand-write the new shape from
   means the same game back, unpinned means a new one. A game that asks the
   interpreter for entropy *itself* — Glulx's `setrandom 0` — still gets it, seed
   or no seed; the spec says it must, and almost nothing does.
-- **Command band** — the `[command_band]` section configures the point-and-click
+- **Command panel** — the `[command_panel]` section configures the point-and-click
   phrase builder (see [Interface](interface.md#playing-aids); not to be confused
   with the unrelated top-level `command_bar` boolean, which moves the *typed*
   prompt into a persistent bar). `height` (default 5) is the band's rows — it
@@ -723,7 +723,7 @@ re-seed the new template, or hand-write the new shape from
   which is not read from the grammar — the compass is not in the verb table on
   the Infocom family at all.
 - **The adult list** — `hide_adult_words` (default `true`) and `adult_words`, both
-  **top level**, not part of `[command_band]`. Infocom's dictionaries are saltier
+  **top level**, not part of `[command_panel]`. Infocom's dictionaries are saltier
   than their prose — Zork I's verb table holds `fuck`, `shit`, `rape` and
   `molest` — and now that the VERB column is the story's real grammar, a panel
   lists the lot to anyone who opens it. `hide_adult_words` keeps the words in

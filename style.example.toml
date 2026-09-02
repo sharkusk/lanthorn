@@ -57,10 +57,10 @@ version = 1   # style schema version — do not remove; lets lanthorn flag an ou
 # more_prompt = { parent = "chrome", reversed = true }
 # tidy_progress = { parent = "accent" }
 # meta_marker = { parent = "muted" }
-# inventory_dock = { parent = "accent" }
-# room_dock = { parent = "text" }
-# "room_dock.header" = { parent = "heading" }
-# "room_dock.header:pinned" = { parent = "accent", reversed = true }
+# inventory_panel = { parent = "accent" }
+# room_panel = { parent = "text" }
+# "room_panel.header" = { parent = "heading" }
+# "room_panel.header:pinned" = { parent = "accent", reversed = true }
 # story_info_title = { parent = "heading" }
 # terminal_dump_heading = { parent = "heading", bold = true }
 # terminal_dump_assumed = { parent = "alert" }
@@ -92,7 +92,7 @@ version = 1   # style schema version — do not remove; lets lanthorn flag an ou
 # input_text = { parent = "text" }
 # input_prompt = { parent = "text" }
 # upper_window_border = { parent = "line" }   # frame round a game's status/upper window; none by default — style = "single" (or double | thick | rounded, or per-side style_top/bottom/left/right) boxes it
-# room_panel = { parent = "accent", reversed = true }
+# scott_room_panel = { parent = "accent", reversed = true }
 # palette_query = { parent = "text" }
 # palette_name = { parent = "text" }
 # palette_match = { parent = "accent", bold = true }
@@ -106,12 +106,12 @@ version = 1   # style schema version — do not remove; lets lanthorn flag an ou
 # ifdb_attribution = { parent = "muted", italic = true }
 # saves_portable = { parent = "accent", glyph = "↗" }
 # saves_host_only = { parent = "muted" }
-# "band.column_header" = { parent = "muted" }
-# "band.column_header:active" = { parent = "accent", bold = true }
-# "band.quick" = { parent = "text" }
-# "band.quick:hover" = { parent = "band.quick", reversed = true }
-# "band.group_label" = { parent = "heading" }
-# "band.item:seen" = { parent = "muted" }
+# "command_panel.column_header" = { parent = "muted" }
+# "command_panel.column_header:active" = { parent = "accent", bold = true }
+# "command_panel.quick" = { parent = "text" }
+# "command_panel.quick:hover" = { parent = "command_panel.quick", reversed = true }
+# "command_panel.group_label" = { parent = "heading" }
+# "command_panel.item:seen" = { parent = "muted" }
 # file_browser_cwd = { parent = "alert" }
 # file_browser_dir = { parent = "accent" }
 # inspector_edge_ok = { fg = "green" }
@@ -187,7 +187,7 @@ version = 1   # style schema version — do not remove; lets lanthorn flag an ou
 # "portal.up" = "↑"          # portal markers: portal.<up|down|in|out|marker|path|unknown>
 # "gutter.meta" = "▏"        # transcript gutter marks: gutter.<meta|warning|assist>
 # "gutter.assist" = "●"      # the mark of Lanthorn's Guiding Light (a patched font's lamp: U+F1A60)
-# "control.map_hide" = "▶"   # border toggles: control.<map_show|map_hide|band_show|band_hide>
+# "control.map_hide" = "▶"   # border toggles: control.<map_show|map_hide|band_show|band_hide|inventory_open>
 # "control.guidance_on" = "●" # …control.<guidance_on|guidance_off>
 # "control.lock_on" = "▣"    # …control.<render_hybrid|render_raster|render_extended|lock_on|lock_off>
 # "map_control.centre" = "¤" # map border cluster: map_control.<room_numbers_on|room_numbers_off|centre|zoom_out|zoom_in|view_matrix|view_drawn>

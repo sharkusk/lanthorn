@@ -1066,7 +1066,7 @@ fn draw_frame(
             // (arrowed or the typed nearest match) makes Tab pick it and
             // advance instead. Enter never picks — it always sends the
             // prompt. Quick (rose/words) is mouse-only; F2 re-closes.
-            "Command Band | type: goes to the prompt | \u{2191}\u{2193}: highlight | Tab: move col. (pick if highlighted) | Shift-Tab: move col. | Ctrl+\u{2191}\u{2193}: history | Enter: send | Esc: close | F2: close"
+            "Command Panel | type: goes to the prompt | \u{2191}\u{2193}: highlight | Tab: move col. (pick if highlighted) | Shift-Tab: move col. | Ctrl+\u{2191}\u{2193}: history | Enter: send | Esc: close | F2: close"
                 .to_string()
         } else if state.overlays.file_browser.as_ref().map(|fb| fb.mode == FbMode::PickFile).unwrap_or(false) {
             "Import Save | \u{2191}\u{2193}: move | Enter: open/import | Esc: cancel".to_string()
@@ -1090,8 +1090,8 @@ fn draw_frame(
             let t = match state.resize_target {
                 ResizeTarget::StoryMap => "story/map",
                 ResizeTarget::InvDock => "inventory",
-                ResizeTarget::CommandBand => "command band",
-                ResizeTarget::RoomDock => "room dock",
+                ResizeTarget::CommandBand => "command panel",
+                ResizeTarget::RoomDock => "room panel",
             };
             format!("Resize [{t}] | Tab: pane | arrows: adjust | 0: reset | Esc: done")
         } else {

@@ -272,13 +272,17 @@ pub enum Action {
     FilePickerPick,
     /// Close the VFS file-picker modal without picking.
     FilePickerClose,
-    /// Toggle the inventory strip at the bottom of the story pane.
+    /// Toggle the inventory panel.
     ToggleInventory,
     /// Open a confirmation prompt to reset the game to its opening state (keeps map).
     ResetGame,
     /// Open the bottom command band (its object columns fill from the engine's
     /// live object tree on the next tick).
     OpenCommandBand,
+    /// Cycle the story pane's border control: command panel → inventory panel →
+    /// none → command panel (SQ-1237). The two panels are mutually exclusive,
+    /// so opening one closes the other.
+    CyclePanel,
     /// `Tab` (`+1`) / `Shift-Tab` (`-1`) while the band is open and nothing is
     /// highlighted in the current column: step `focus` across the reachable
     /// columns (SQ-0677, 2026-08-05 — supersedes SQ-0676's arrow-drives-quick
@@ -1775,7 +1779,7 @@ pub fn cycle_focus(idx: usize, len: usize, delta: i32) -> usize {
 ///
 /// The band's open/closed state is a per-game preference now, written by
 /// [`Action::OpenCommandBand`]. `startup` opens the band at boot from
-/// `[command_band] auto_open` (or this game's own override), and that must NOT
+/// `[command_panel] auto_open` (or this game's own override), and that must NOT
 /// write a sidecar key — a global default that quietly pinned itself to the
 /// first game you opened would be a trap. So the state change lives here and the
 /// action adds the persistence on top of it.
@@ -1806,6 +1810,44 @@ pub fn open_command_band(state: &mut AppState, mapper: &mut Mapper, open: bool) 
     }
     state.band_dock.toggle_to(true, false);
     state.band_dock.arm(&state.config.animation);
+}
+
+/// Open or close the inventory panel, without persisting anything (SQ-1237) —
+/// the state-only half `open_command_band` above is, for the same reason: boot
+/// and `cycle_panel` both need to change the panel without writing a per-game
+/// override on their own behalf, leaving that to the action arm that persists.
+pub fn open_inventory_panel(state: &mut AppState, open: bool) {
+    state.show_inventory = open;
+    state.inv_dock.toggle_to(open, false);
+    state.inv_dock.arm(&state.config.animation);
+}
+
+/// Cycle the story pane's border control: command panel → inventory panel →
+/// none → command panel (SQ-1237). The two panels are mutually exclusive, so
+/// landing on one closes the other; landing on `None` closes both. Persists
+/// the new state per-game, exactly as a direct `/toggle-command-panel` or
+/// `/toggle-inventory-panel` does — a click on the border control runs this
+/// through the same `slash::COMMANDS` dispatch every other control uses, so
+/// what it remembers is this function's job, not a second one.
+pub fn cycle_panel(state: &mut AppState, mapper: &mut Mapper) {
+    let next = state.current_side_panel().next();
+    match next {
+        crate::state::SidePanel::Command => {
+            open_inventory_panel(state, false);
+            open_command_band(state, mapper, true);
+        }
+        crate::state::SidePanel::Inventory => {
+            open_command_band(state, mapper, false);
+            open_inventory_panel(state, true);
+        }
+        crate::state::SidePanel::None => {
+            open_command_band(state, mapper, false);
+            open_inventory_panel(state, false);
+        }
+    }
+    if !state.game_dir.as_os_str().is_empty() {
+        let _ = crate::styles::write_per_game_panel(&state.game_dir, Some(next));
+    }
 }
 
 pub fn apply_action(action: Action, state: &mut AppState, mapper: &mut Mapper) {
@@ -2719,29 +2761,58 @@ fn apply_action_inner(action: Action, state: &mut AppState, mapper: &mut Mapper)
         }
 
         Action::ToggleInventory => {
-            state.show_inventory = !state.show_inventory;
-            state.inv_dock.toggle_to(state.show_inventory, false);
-            state.inv_dock.arm(&state.config.animation);
+            let opening = !state.show_inventory;
+            // Mutually exclusive with the command panel (SQ-1237): opening the
+            // inventory panel closes the command panel, exactly as `cycle_panel`
+            // does when it lands on `Inventory`.
+            if opening {
+                open_command_band(state, mapper, false);
+            }
+            open_inventory_panel(state, opening);
+            // Persist per-game, the same rule `Action::OpenCommandBand` follows
+            // below — a preference chosen for one story stays with that story.
+            if !state.game_dir.as_os_str().is_empty() {
+                let next = if opening {
+                    crate::state::SidePanel::Inventory
+                } else {
+                    crate::state::SidePanel::None
+                };
+                let _ = crate::styles::write_per_game_panel(&state.game_dir, Some(next));
+            }
         }
 
         Action::OpenCommandBand => {
             state.overlays.hotkey_dialog = false;
-            // F2 / `/open-command-band` is a TOGGLE (bug fix, SQ-0677): with
+            // F2 / `/toggle-command-panel` is a TOGGLE (bug fix, SQ-0677): with
             // the band already open (its dock target is `open`, whether or
             // not the slide has settled), the SAME key/command closes it —
             // Esc's ladder must never be the only one-key way out.
             let open = !(state.overlays.command_band.is_some() && state.band_dock.open);
+            // Mutually exclusive with the inventory panel (SQ-1237).
+            if open {
+                open_inventory_panel(state, false);
+            }
             open_command_band(state, mapper, open);
-            // Persist the band's on/off state per-game so it is restored the next
+            // Persist the panel's state per-game so it is restored the next
             // time this story opens (SQ-1123) — the same rule `Action::ToggleMap`
             // has followed since SQ-0304, and the reason `startup` opens the band
             // through `open_command_band` directly instead of through this action:
-            // a global `[command_band] auto_open` must not silently become one
+            // a global `[command_panel] auto_open` must not silently become one
             // game's pinned override. No game_dir → no sidecar (and it keeps unit
             // tests off the filesystem).
             if !state.game_dir.as_os_str().is_empty() {
-                let _ = crate::styles::write_per_game_command_band(&state.game_dir, Some(open));
+                let next = if open {
+                    crate::state::SidePanel::Command
+                } else {
+                    crate::state::SidePanel::None
+                };
+                let _ = crate::styles::write_per_game_panel(&state.game_dir, Some(next));
             }
+        }
+
+        Action::CyclePanel => {
+            state.overlays.hotkey_dialog = false;
+            cycle_panel(state, mapper);
         }
 
         Action::BandColumnStep(delta) => {
@@ -5933,11 +6004,11 @@ mod tests {
 
     #[test]
     fn i_in_map_focus_yields_toggle_inventory() {
-        // SQ-0446: 'i' is the View-group leader letter for toggle-inventory now
+        // SQ-0446: 'i' is the View-group leader letter for toggle-inventory-panel now
         // (toggle-inspector moved to the '/' palette).
         let mut s = AppState::default();
         s.focus = Focus::Map;
-        // toggle-inventory is dialog-only: returns None when dialog is closed.
+        // toggle-inventory-panel is dialog-only: returns None when dialog is closed.
         assert!(matches!(key_to_action(&s, key(KeyCode::Char('i'))), Action::None));
         // Returns the action when dialog is open.
         s.overlays.hotkey_dialog = true;
@@ -5978,7 +6049,7 @@ mod tests {
         assert_eq!(s.room_dock_view, RoomDockView::Diagnostics);
     }
 
-    /// `toggle-room-dock` is the primary open/close command, and it opens on Info.
+    /// `toggle-room-panel` is the primary open/close command, and it opens on Info.
     #[test]
     fn toggle_room_dock_opens_on_info_and_closes() {
         use crate::state::RoomDockView;
@@ -6004,7 +6075,7 @@ mod tests {
         let mut m = Mapper::default();
         apply_action(Action::ToggleRoomDock, &mut s, &mut m);
         assert!(s.room_dock.open);
-        assert!(!s.any_overlay_open(), "an open room dock is not an overlay");
+        assert!(!s.any_overlay_open(), "an open room panel is not an overlay");
         assert!(!s.any_modal_overlay_open(), "…and certainly not a modal one");
 
         apply_action(Action::PinRoomDock(3, crate::state::RoomDockView::Diagnostics), &mut s, &mut m);
@@ -6416,7 +6487,7 @@ mod tests {
             key_to_action(&s, shift(KeyCode::Char('R'))),
             Action::None
         ));
-        // toggle-inventory ('i') is also dialog-only (SQ-0446).
+        // toggle-inventory-panel ('i') is also dialog-only (SQ-0446).
         assert!(matches!(
             key_to_action(&s, key(KeyCode::Char('i'))),
             Action::None
@@ -6497,7 +6568,7 @@ mod tests {
         s.focus = Focus::Map;
         s.overlays.hotkey_dialog = true;
         assert!(matches!(key_to_action(&s, key(KeyCode::Char('r'))), Action::RenameRoom));
-        // toggle-inventory fires too (SQ-0446 gave 'i' to inventory).
+        // toggle-inventory-panel fires too (SQ-0446 gave 'i' to inventory).
         assert!(matches!(key_to_action(&s, key(KeyCode::Char('i'))), Action::ToggleInventory));
     }
 
@@ -7416,7 +7487,7 @@ mod tests {
         // ActivatePane(Game) sets game focus and leaves the dock exactly as it was.
         apply_action(Action::ActivatePane(Focus::Game), &mut s, &mut m);
         assert_eq!(s.focus, Focus::Game, "ActivatePane(Game) must set focus to Game");
-        assert!(s.room_dock.open, "ActivatePane must NOT close the room dock");
+        assert!(s.room_dock.open, "ActivatePane must NOT close the room panel");
         assert_eq!(s.selected_room, Some(1), "…nor unpin it");
         assert_eq!(s.room_dock_view, crate::state::RoomDockView::Diagnostics, "…nor change its view");
 
@@ -7651,24 +7722,174 @@ mod tests {
 
         apply_action(Action::OpenCommandBand, &mut s, &mut m);
         assert!(s.command_band_visible(), "it opens");
-        assert_eq!(crate::styles::read_per_game_command_band(&game_dir), Some(true));
+        assert_eq!(
+            crate::styles::read_per_game_panel(&game_dir),
+            Some(crate::state::SidePanel::Command),
+        );
 
         apply_action(Action::OpenCommandBand, &mut s, &mut m);
         assert_eq!(
-            crate::styles::read_per_game_command_band(&game_dir), Some(false),
-            "closing is a choice too, and an explicit false is not an absence",
+            crate::styles::read_per_game_panel(&game_dir), Some(crate::state::SidePanel::None),
+            "closing is a choice too, and an explicit None is not an absence",
         );
 
-        // …and the boot path does NOT write: a global `[command_band] auto_open`
+        // …and the boot path does NOT write: a global `[command_panel] auto_open`
         // must not pin itself to whichever story you happened to launch, which is
         // the whole reason `open_command_band` exists beside the action.
-        crate::styles::write_per_game_command_band(&game_dir, None).unwrap();
+        crate::styles::write_per_game_panel(&game_dir, None).unwrap();
         open_command_band(&mut s, &mut m, true);
         assert_eq!(
-            crate::styles::read_per_game_command_band(&game_dir), None,
+            crate::styles::read_per_game_panel(&game_dir), None,
             "startup's own open leaves the sidecar alone",
         );
         let _ = std::fs::remove_dir_all(&game_dir);
+    }
+
+    // ── SQ-1237: the three-state panel cycle ─────────────────────────────────
+
+    fn cycle_panel_game_dir(tag: &str) -> std::path::PathBuf {
+        use std::sync::atomic::{AtomicU64, Ordering};
+        static SEQ: AtomicU64 = AtomicU64::new(0);
+        let n = SEQ.fetch_add(1, Ordering::Relaxed);
+        let dir = std::env::temp_dir()
+            .join(format!("bm-cyclepanel-{tag}-{}-{}.save", std::process::id(), n));
+        std::fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    /// Command → Inventory → None → Command, driven entirely by
+    /// `Action::CyclePanel` (what a click on the border control runs). Each
+    /// step is asserted, not just the round trip, so a cycle that skips a state
+    /// (e.g. Command → None directly) would fail here even though it returns to
+    /// Command eventually.
+    #[test]
+    fn cycle_panel_visits_command_then_inventory_then_none_then_command() {
+        use crate::state::{AppState, SidePanel};
+        let mut s = AppState::default();
+        let mut m = Mapper::default();
+        assert_eq!(s.current_side_panel(), SidePanel::None, "starts closed");
+
+        apply_action(Action::CyclePanel, &mut s, &mut m);
+        assert_eq!(s.current_side_panel(), SidePanel::Command);
+
+        apply_action(Action::CyclePanel, &mut s, &mut m);
+        assert_eq!(s.current_side_panel(), SidePanel::Inventory);
+
+        apply_action(Action::CyclePanel, &mut s, &mut m);
+        assert_eq!(s.current_side_panel(), SidePanel::None);
+
+        apply_action(Action::CyclePanel, &mut s, &mut m);
+        assert_eq!(s.current_side_panel(), SidePanel::Command, "the cycle wraps");
+    }
+
+    /// Falsifies the mutual-exclusion rule: reverting `cycle_panel` to a version
+    /// that does not close the panel it is leaving would show this test a
+    /// command band still open once the cycle reaches Inventory — which is
+    /// exactly what "the two are never open at once" means. Checked at every
+    /// step, not just the one transition, since a bug could plausibly appear on
+    /// either edge.
+    #[test]
+    fn the_two_panels_are_never_open_at_once() {
+        use crate::state::AppState;
+        let mut s = AppState::default();
+        let mut m = Mapper::default();
+        for _ in 0..6 {
+            apply_action(Action::CyclePanel, &mut s, &mut m);
+            // The band's TARGET (`band_dock.open`), not `command_band_visible()`
+            // — the latter stays true through a close's slide-out by design
+            // (the drawer's content persists so it can animate away, trimmed
+            // only once `settle_command_band` runs on a later tick), which is
+            // right for "should this still be drawn this frame" and wrong for
+            // "did the cycle actually leave the command panel". The two panels
+            // occupy different regions on screen anyway (the command panel
+            // below the story pane, the inventory panel carved from the map
+            // pane), so this is about state exclusivity, not a visual overlap.
+            assert!(
+                !(s.band_dock.open && s.show_inventory),
+                "both panels open at once after a cycle step",
+            );
+        }
+    }
+
+    /// `Action::ToggleInventory` and `Action::OpenCommandBand` also close the
+    /// OTHER panel when they open theirs — not only `cycle_panel` — since a
+    /// player can reach either panel directly (leader key, slash command) as
+    /// well as through the border control's cycle.
+    #[test]
+    fn opening_either_panel_directly_closes_the_other() {
+        use crate::state::AppState;
+        let mut s = AppState::default();
+        let mut m = Mapper::default();
+
+        apply_action(Action::OpenCommandBand, &mut s, &mut m);
+        assert!(s.band_dock.open);
+        apply_action(Action::ToggleInventory, &mut s, &mut m);
+        assert!(s.show_inventory, "inventory opened");
+        assert!(!s.band_dock.open, "…and closed the command panel");
+
+        apply_action(Action::OpenCommandBand, &mut s, &mut m);
+        assert!(s.band_dock.open, "command panel opened");
+        assert!(!s.show_inventory, "…and closed the inventory panel");
+    }
+
+    /// The three-state value round-trips through the SAME per-game sidecar
+    /// mechanism the command band's on/off state already used (SQ-1123) — no
+    /// second persistence path was added for the inventory panel.
+    #[test]
+    fn cycle_panel_persists_the_new_state_to_game_dir() {
+        use crate::state::{AppState, SidePanel};
+        let game_dir = cycle_panel_game_dir("persist");
+        let mut s = AppState::default();
+        s.game_dir = game_dir.clone();
+        let mut m = Mapper::default();
+
+        apply_action(Action::CyclePanel, &mut s, &mut m);
+        assert_eq!(crate::styles::read_per_game_panel(&game_dir), Some(SidePanel::Command));
+
+        apply_action(Action::CyclePanel, &mut s, &mut m);
+        assert_eq!(crate::styles::read_per_game_panel(&game_dir), Some(SidePanel::Inventory));
+
+        apply_action(Action::CyclePanel, &mut s, &mut m);
+        assert_eq!(crate::styles::read_per_game_panel(&game_dir), Some(SidePanel::None));
+
+        let _ = std::fs::remove_dir_all(&game_dir);
+    }
+
+    /// Each of the three states draws its own glyph and its own tooltip line —
+    /// falsified by reverting the border control to a plain two-way toggle,
+    /// which would make the Inventory-state glyph equal the Command-state glyph
+    /// (both would read `band_hide`) and the hint text would still say
+    /// Command Panel for a panel that is actually the inventory one.
+    #[test]
+    fn each_panel_state_draws_its_own_glyph_and_tooltip() {
+        use crate::render::controls::{controls_for, BorderControl};
+        use crate::state::AppState;
+
+        let find = |state: &AppState| {
+            controls_for(state)
+                .into_iter()
+                .find(|v| v.id == BorderControl::VerbPanel)
+                .expect("the panel-cycle control is always drawn")
+        };
+
+        let mut s = AppState::default();
+        let mut m = Mapper::default();
+        let none = find(&s);
+        assert!(none.hint[0].to_lowercase().contains("closed"), "{:?}", none.hint);
+
+        apply_action(Action::CyclePanel, &mut s, &mut m);
+        let command = find(&s);
+        assert!(command.hint[0].to_lowercase().contains("command panel"), "{:?}", command.hint);
+
+        apply_action(Action::CyclePanel, &mut s, &mut m);
+        let inventory = find(&s);
+        assert!(inventory.hint[0].to_lowercase().contains("inventory panel"), "{:?}", inventory.hint);
+
+        // Three states, three distinct glyphs — not merely three distinct hints
+        // over the same shape.
+        assert_ne!(none.glyph, command.glyph);
+        assert_ne!(command.glyph, inventory.glyph);
+        assert_ne!(none.glyph, inventory.glyph);
     }
 
     // ── Leaf 2: ResetGame opens the dialog ───────────────────────────────────
@@ -8221,7 +8442,7 @@ mod tests {
         assert!(!s.band_dock.open, "(c) armed: two Escs close");
     }
 
-    /// The other half of the same bug fix: `open-command-band`/F2 is a
+    /// The other half of the same bug fix: `toggle-command-panel`/F2 is a
     /// TOGGLE, so the band always has a one-key exit independent of Esc.
     /// Falsifies against `Action::OpenCommandBand` always (re-)opening
     /// regardless of the current state.
@@ -8774,7 +8995,7 @@ mod tests {
         assert!(s.overlays.command_band.is_none(), "cleared once the slide-out settles");
     }
 
-    /// `open-command-band`/F2 is now a TOGGLE (SQ-0677): re-invoking it while
+    /// `toggle-command-panel`/F2 is now a TOGGLE (SQ-0677): re-invoking it while
     /// still mid-close (the content hasn't settled to `None` yet) reopens the
     /// band with its phrase intact, rather than starting fresh — the same
     /// property `reopening_does_not_reset_the_phrase` pinned before the
@@ -9191,8 +9412,8 @@ mod tests {
 
     /// F2 was the direct default binding until SQ-1142 unbound every F-key: a
     /// v4+ story may claim them through its own $2E terminating-characters
-    /// table, and Arthur does. The band's ways in are the leader panel's `v`,
-    /// the `/open-command-band` command, and the `≡` control on the pane
+    /// table, and Arthur does. The panel's ways in are the leader panel's `v`,
+    /// the `/toggle-command-panel` command, and the `≡` control on the pane
     /// border — the palette row here is what this case pins.
     #[test]
     fn f2_no_longer_opens_the_command_band_by_default() {
@@ -9201,9 +9422,9 @@ mod tests {
         let spec = KeySpec { code: KeyCode::F(2), ctrl: false, shift: false, alt: false };
         assert_eq!(km.lookup(&spec, crate::keymap::Context::Global), None);
         assert_eq!(
-            km.primary_key("open-command-band"),
+            km.primary_key("toggle-command-panel"),
             None,
-            "open-command-band is leader-, command- and click-reachable: no default key",
+            "toggle-command-panel is leader-, command- and click-reachable: no default key",
         );
     }
 
@@ -9218,7 +9439,7 @@ mod tests {
             .iter()
             .find(|(title, _)| title == "Map \u{b7} View")
             .expect("Map \u{b7} View group should exist");
-        assert!(cmds.iter().any(|c| c.1 == "open-command-band"));
+        assert!(cmds.iter().any(|c| c.1 == "toggle-command-panel"));
     }
 
     // ── File-browser sub-mode key tests ───────────────────────────────────────
@@ -9695,7 +9916,7 @@ mod tests {
             open_band(&mut s);
             let a = key_to_action(&s, key(KeyCode::Char('q')));
             assert!(!matches!(a, Action::BandClose | Action::BandEscape),
-                "q must not close the command band");
+                "q must not close the command panel");
         }
 
         // Config screen: q → not ConfigCancel
@@ -9714,7 +9935,7 @@ mod tests {
             s.room_dock.toggle_to(true, true);
             let a = key_to_action(&s, key(KeyCode::Char('q')));
             assert!(!matches!(a, Action::CloseRoomDock | Action::UnpinRoomDock),
-                "q must not close or unpin the room dock");
+                "q must not close or unpin the room panel");
         }
     }
 
@@ -9771,7 +9992,7 @@ mod tests {
         let a = mouse_to_action(&state, mouse_left_click(0, 0), map_r, story_r, &live_room_rects, &dialog);
         assert!(
             matches!(a, Action::None),
-            "outside-config-screen click with the room dock also open must be swallowed (None), got {:?}", a
+            "outside-config-screen click with the room panel also open must be swallowed (None), got {:?}", a
         );
     }
 

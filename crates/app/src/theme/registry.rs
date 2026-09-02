@@ -456,14 +456,15 @@ pub static REGISTRY: std::sync::LazyLock<Vec<RegRow>> = std::sync::LazyLock::new
     row("more_prompt", Section::Elements, Kind::Style, Some("chrome"), mods(false, false, false, true)),
     row("tidy_progress", Section::Elements, Kind::Style, Some("accent"), Delta::EMPTY),
     row("meta_marker", Section::Elements, Kind::Style, Some("muted"), Delta::EMPTY),
-    row("inventory_dock", Section::Elements, Kind::Style, Some("accent"), Delta::EMPTY),
-    // ── The room dock (SQ-0692): the docked panel describing one room. `room_dock`
-    // is its body text; the header line naming the room, its layer and the
-    // follow/pin regime gets its own selector, reversed while PINNED so the one
-    // line that changes meaning is the one that changes look.
-    row("room_dock", Section::Elements, Kind::Style, Some("text"), Delta::EMPTY),
-    row("room_dock.header", Section::Elements, Kind::Style, Some("heading"), Delta::EMPTY),
-    row("room_dock.header:pinned", Section::Elements, Kind::Style, Some("accent"), mods(false, false, false, true)),
+    row("inventory_panel", Section::Elements, Kind::Style, Some("accent"), Delta::EMPTY),
+    // ── The Room Panel (SQ-0692): the panel describing one room, docked at the
+    // bottom of the map pane. `room_panel` is its body text; the header line
+    // naming the room, its layer and the follow/pin regime gets its own
+    // selector, reversed while PINNED so the one line that changes meaning is
+    // the one that changes look.
+    row("room_panel", Section::Elements, Kind::Style, Some("text"), Delta::EMPTY),
+    row("room_panel.header", Section::Elements, Kind::Style, Some("heading"), Delta::EMPTY),
+    row("room_panel.header:pinned", Section::Elements, Kind::Style, Some("accent"), mods(false, false, false, true)),
     row("story_info_title", Section::Elements, Kind::Style, Some("heading"), Delta::EMPTY),
     // ── `/dump-terminal` (SQ-0994). Its whole point is telling a MEASURED value
     // from an ASSUMED one, so the two get different looks: a heading to find the
@@ -512,7 +513,10 @@ pub static REGISTRY: std::sync::LazyLock<Vec<RegRow>> = std::sync::LazyLock::new
     row("input_text", Section::Elements, Kind::Style, Some("text"), Delta::EMPTY),
     row("input_prompt", Section::Elements, Kind::Style, Some("text"), Delta::EMPTY),
     row("upper_window_border", Section::Elements, Kind::Style, Some("line"), Delta::EMPTY),
-    row("room_panel", Section::Elements, Kind::Style, Some("accent"), mods(false, false, false, true)),
+    // A Scott Adams game's own chrome window describing the current room —
+    // unrelated to our map pane's Room Panel below, hence the `scott_` prefix
+    // rather than `room_panel` (SQ-1237 freed that name for the UI panel).
+    row("scott_room_panel", Section::Elements, Kind::Style, Some("accent"), mods(false, false, false, true)),
     // ── command palette (SQ-0419) — reuses the dialog chrome; these style its
     // rows. `palette_match` highlights the fuzzy-matched characters; `palette_selected`
     // is the highlighted row; `palette_query` is the input line. ──────────────
@@ -593,7 +597,7 @@ pub static REGISTRY: std::sync::LazyLock<Vec<RegRow>> = std::sync::LazyLock::new
     row("dialog.story_menu.item", Section::Dialog, Kind::Style, Some("dialog.background"), Delta::EMPTY),
     row("dialog.story_menu.item:selected", Section::Dialog, Kind::Style, Some("dialog.list_selected"), Delta::EMPTY),
     row("dialog.story_menu.key", Section::Dialog, Kind::Style, Some("dialog.list_footer"), Delta::EMPTY),
-    // ── SQ-0664: the command band (bottom dock). Its rows reuse
+    // ── SQ-0664: the command panel. Its `command_panel.*` rows reuse
     // `dialog.list_selected`. SQ-0667 (2026-08-05) retired the band's own
     // frame (it draws no `panel.border` anymore — see `render/command_band.rs`)
     // and its phrase line (`band.phrase` / `band.phrase:armed`, RETIRED along
@@ -602,25 +606,25 @@ pub static REGISTRY: std::sync::LazyLock<Vec<RegRow>> = std::sync::LazyLock::new
     // Column headers (WHAT — here / WHAT — carried / WITH…; VERB's header
     // carries no text anymore, also SQ-0667): muted until the column holds
     // the cursor.
-    row("band.column_header", Section::Elements, Kind::Style, Some("muted"), Delta::EMPTY),
-    row("band.column_header:active", Section::Elements, Kind::Style, Some("accent"), mods(true, false, false, false)),
+    row("command_panel.column_header", Section::Elements, Kind::Style, Some("muted"), Delta::EMPTY),
+    row("command_panel.column_header:active", Section::Elements, Kind::Style, Some("accent"), mods(true, false, false, false)),
     // The one-click quick-action row along the bottom of the band. Normal
     // text, not muted (SQ-1218) — the rose/cluster/word block is a primary
     // set of click targets, not secondary chrome.
-    row("band.quick", Section::Elements, Kind::Style, Some("text"), Delta::EMPTY),
+    row("command_panel.quick", Section::Elements, Kind::Style, Some("text"), Delta::EMPTY),
     // The quick block's hover highlight (SQ-0677): reversed video, since the
     // quick block lost its arrow-armed keyboard state (armed columns reuse
     // `dialog.list_selected` instead, a fg/bg swap, not REVERSED) and hover is
     // now its only transient highlight — the two must never look the same.
-    row("band.quick:hover", Section::Elements, Kind::Style, Some("band.quick"), mods(false, false, false, true)),
+    row("command_panel.quick:hover", Section::Elements, Kind::Style, Some("command_panel.quick"), mods(false, false, false, true)),
     // In-column group labels and the "(nothing visible)" placeholder.
-    row("band.group_label", Section::Elements, Kind::Style, Some("heading"), Delta::EMPTY),
+    row("command_panel.group_label", Section::Elements, Kind::Style, Some("heading"), Delta::EMPTY),
     // SQ-1135: a noun-column row that came from what the story PRINTED rather
     // than from its object tree. Same column, weaker claim — the story knows the
     // word, which is not a promise the thing is here — so it is dimmed. The
     // band's first per-ROW selector; every other row still takes the panel's
     // base style, and the selection (`dialog.list_selected`) still overrides.
-    row("band.item:seen", Section::Elements, Kind::Style, Some("muted"), Delta::EMPTY),
+    row("command_panel.item:seen", Section::Elements, Kind::Style, Some("muted"), Delta::EMPTY),
     // The file browser's current-directory row and unselected directory entries.
     row("file_browser_cwd", Section::Elements, Kind::Style, Some("alert"), Delta::EMPTY),
     row("file_browser_dir", Section::Elements, Kind::Style, Some("accent"), Delta::EMPTY),
@@ -761,10 +765,10 @@ mod tests {
         "more_prompt",
         "tidy_progress",
         "meta_marker",
-        "inventory_dock",
-        "room_dock",
-        "room_dock.header",
-        "room_dock.header:pinned",
+        "inventory_panel",
+        "room_panel",
+        "room_panel.header",
+        "room_panel.header:pinned",
         "story_info_title",
         "terminal_dump_heading",
         "terminal_dump_assumed",
@@ -798,7 +802,7 @@ mod tests {
         "input_text",
         "input_prompt",
         "upper_window_border",
-        "room_panel",
+        "scott_room_panel",
         "palette_query",
         "palette_name",
         "palette_match",
@@ -833,13 +837,13 @@ mod tests {
         "dialog.story_menu.item:selected",
         "dialog.story_menu.key",
         // SQ-0664: the command band
-        "band.column_header",
-        "band.column_header:active",
-        "band.quick",
-        "band.quick:hover",
-        "band.group_label",
+        "command_panel.column_header",
+        "command_panel.column_header:active",
+        "command_panel.quick",
+        "command_panel.quick:hover",
+        "command_panel.group_label",
         // SQ-1135: the printed-word rows in the noun columns
-        "band.item:seen",
+        "command_panel.item:seen",
         "file_browser_cwd",
         "file_browser_dir",
         "inspector_edge_ok",

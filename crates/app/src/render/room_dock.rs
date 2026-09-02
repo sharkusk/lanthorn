@@ -131,15 +131,15 @@ pub fn draw_room_dock(
     if area.width == 0 || area.height == 0 {
         return Vec::new();
     }
-    let style = colors.theme.get("room_dock").style;
+    let style = colors.theme.get("room_panel").style;
     let header_style = colors
         .theme
-        .get(if pinned { "room_dock.header:pinned" } else { "room_dock.header" })
+        .get(if pinned { "room_panel.header:pinned" } else { "room_panel.header" })
         .style;
     // Section headings inside the body always use the unpinned header selector:
     // the pinned variant marks ONE line — the header — and a body that changed
     // colour on pin would say nothing extra while shouting twice as loud.
-    let heading_style = colors.theme.get("room_dock.header").style;
+    let heading_style = colors.theme.get("room_panel.header").style;
     let border_selector = if highlighted { "panel.border:active" } else { "panel.border" };
     let border_color =
         if highlighted { colors.theme.get("panel.border:active").style } else { style };
@@ -529,8 +529,8 @@ mod tests {
             Rect::new(0, 0, 0, 0), &ColorScheme::default(), &SymbolSet::default(), false, &mut buf);
     }
 
-    /// Every new visual element is styleable: `room_dock` paints the body and
-    /// `room_dock.header` / `room_dock.header:pinned` the header line, and an
+    /// Every new visual element is styleable: `room_panel` paints the body and
+    /// `room_panel.header` / `room_panel.header:pinned` the header line, and an
     /// override must actually reach the buffer.
     ///
     /// (The `honor_game_colours` pairing for this dock lives in
@@ -542,9 +542,9 @@ mod tests {
         let g = graph_with_current();
         let area = Rect::new(0, 0, 50, 12);
         let parsed = crate::theme::toml_schema::parse(
-            "[elements]\nroom_dock = { fg = \"magenta\" }\n\
-             \"room_dock.header\" = { fg = \"blue\" }\n\
-             \"room_dock.header:pinned\" = { fg = \"green\" }\n",
+            "[elements]\nroom_panel = { fg = \"magenta\" }\n\
+             \"room_panel.header\" = { fg = \"blue\" }\n\
+             \"room_panel.header:pinned\" = { fg = \"green\" }\n",
         )
         .unwrap();
         let scheme = crate::colors::GhosttyScheme::default();
@@ -561,15 +561,15 @@ mod tests {
         let mut buf = Buffer::empty(area);
         draw_room_dock(&g, Some(1), false, RoomDockView::Info, &[], Some(1), area, &colors, &SymbolSet::default(), false, &mut buf);
         let fgs = fgs_of(&buf);
-        assert!(fgs.contains(&Some(Color::Blue)), "the following header uses room_dock.header");
-        assert!(fgs.contains(&Some(Color::Magenta)), "the body uses room_dock");
+        assert!(fgs.contains(&Some(Color::Blue)), "the following header uses room_panel.header");
+        assert!(fgs.contains(&Some(Color::Magenta)), "the body uses room_panel");
         assert!(!fgs.contains(&Some(Color::Green)), "…and not the pinned variant");
 
         let mut buf = Buffer::empty(area);
         draw_room_dock(&g, Some(1), true, RoomDockView::Info, &[], Some(1), area, &colors, &SymbolSet::default(), false, &mut buf);
         assert!(
             fgs_of(&buf).contains(&Some(Color::Green)),
-            "a pinned header uses room_dock.header:pinned"
+            "a pinned header uses room_panel.header:pinned"
         );
     }
 }

@@ -317,9 +317,12 @@ pub static COMMANDS: &[CommandSpec] = &[
     CommandSpec { name: "open-history", category: Category::Game, context: Context::Global,
         usage: "open-history", description: "open the rewind/replay history",
         dispatch: |_| SlashOutcome::Action(crate::input::Action::OpenHistory) },
-    CommandSpec { name: "open-command-band", category: Category::Game, context: Context::Global,
-        usage: "open-command-band", description: "open or close the command band; persisted per-game",
+    CommandSpec { name: "toggle-command-panel", category: Category::Game, context: Context::Global,
+        usage: "toggle-command-panel", description: "open or close the command panel; remembered per story",
         dispatch: |_| SlashOutcome::Action(crate::input::Action::OpenCommandBand) },
+    CommandSpec { name: "cycle-panel", category: Category::Game, context: Context::Global,
+        usage: "cycle-panel", description: "cycle command panel → inventory panel → none",
+        dispatch: |_| SlashOutcome::Action(crate::input::Action::CyclePanel) },
     CommandSpec { name: "toggle-timed-input", category: Category::Game, context: Context::Global,
         usage: "toggle-timed-input", description: "toggle honoring the game's timed-input timers",
         dispatch: |_| SlashOutcome::Action(crate::input::Action::ToggleTimedInput) },
@@ -429,11 +432,11 @@ pub static COMMANDS: &[CommandSpec] = &[
         // the EMPTY remainder — bare `move-region` auto-picks the seam and the destination when
         // each has only one possibility, which only the graph can answer (SQ-0439).
         dispatch: |a| SlashOutcome::Action(crate::input::Action::MoveRegion(a.join(" "))) },
-    CommandSpec { name: "toggle-room-dock", category: Category::Map, context: Context::Map,
-        usage: "toggle-room-dock", description: "open or close the room dock under the map",
+    CommandSpec { name: "toggle-room-panel", category: Category::Map, context: Context::Map,
+        usage: "toggle-room-panel", description: "open or close the room panel under the map",
         dispatch: |_| SlashOutcome::Action(crate::input::Action::ToggleRoomDock) },
     CommandSpec { name: "toggle-inspector", category: Category::Map, context: Context::Map,
-        usage: "toggle-inspector", description: "show the room dock's diagnostics view (flips back to info when open)",
+        usage: "toggle-inspector", description: "show the room panel's diagnostics view (flips back to info when open)",
         dispatch: |_| SlashOutcome::Action(crate::input::Action::ToggleRoomDiagnostics) },
     CommandSpec { name: "load-map", category: Category::Map, context: Context::Global,
         usage: "load-map <path>", description: "load a standalone map file into the current session",
@@ -472,8 +475,8 @@ pub static COMMANDS: &[CommandSpec] = &[
     CommandSpec { name: "toggle-focus", category: Category::View, context: Context::Global,
         usage: "toggle-focus", description: "switch focus between panes",
         dispatch: |_| SlashOutcome::Action(crate::input::Action::ToggleFocus) },
-    CommandSpec { name: "toggle-inventory", category: Category::View, context: Context::Global,
-        usage: "toggle-inventory", description: "toggle the inventory strip",
+    CommandSpec { name: "toggle-inventory-panel", category: Category::View, context: Context::Global,
+        usage: "toggle-inventory-panel", description: "open or close the inventory panel; remembered per story",
         dispatch: |_| SlashOutcome::Action(crate::input::Action::ToggleInventory) },
     CommandSpec { name: "toggle-status-bar", category: Category::View, context: Context::Global,
         usage: "toggle-status-bar", description: "toggle the status/score bar",
@@ -1107,8 +1110,9 @@ mod tests {
         // `nudge-room` was removed with Manual layout mode (SQ-0600).
         // `toggle-untried-exits` was retired with the overlay it drove (SQ-0666); `view-map`
         // and `mark-maze-layer` arrived with the matrix view.
-        // SQ-0692 added `toggle-room-dock`; `toggle-inspector` kept its name and
-        // now flips the SAME dock to its diagnostics body.
+        // SQ-0692 added `toggle-room-panel` (as `toggle-room-dock`, renamed by
+        // SQ-1237); `toggle-inspector` kept its name and now flips the SAME
+        // panel to its diagnostics body.
         // SQ-0761 added `dump-cells`, the cell-buffer half of `dump-windows`.
         // SQ-0994 added `dump-terminal`, the terminal-and-traffic half of the same
         // family: what was detected about the terminal, and which of those numbers
@@ -1135,7 +1139,130 @@ mod tests {
         // SQ-1227 added `open-story-menu` and `show-browser-keys` — the browser's
         // per-story menu and its own key reference, which between them are what
         // let the footer shrink to one key per hint.
-        assert_eq!(COMMANDS.len(), 89, "registry must match the spec's Full command table");
+        assert_eq!(COMMANDS.len(), 90, "registry must match the spec's Full command table");
+    }
+
+    /// SQ-1237 unified the panel vocabulary — `command band` became `command
+    /// panel`, `inventory strip`/`inventory dock` became `inventory panel`, and
+    /// `room dock` became `room panel` — and this is the guard that stops the
+    /// old spellings creeping back into anything a PLAYER can read.
+    ///
+    /// Two kinds of source, two ways of reading them: a `.rs` file's doc
+    /// comments are implementation narration nobody playing the game ever sees,
+    /// so only its STRING LITERALS are checked (the heuristic: an
+    /// odd number of literal `"` characters before the match on the same line
+    /// means it is inside one — good enough for the single-line literals every
+    /// hit here actually is, and it is why this comment spells the forbidden
+    /// phrases with backticks rather than quotes: a quote in a DOC COMMENT would
+    /// otherwise throw the very heuristic that reads past comments off by one).
+    /// A `.md` file's prose IS what a reader sees end to end, so the whole file
+    /// is checked — except `CHANGELOG.md`, which is checked only down to (not
+    /// including) the next `## ` heading after `## Unreleased`: everything below
+    /// that line is a historical record of what a released version was called
+    /// at the time, and rewriting history there would be the wording sweep
+    /// contradicting the log it is supposed to be adding a line to.
+    ///
+    /// The needles themselves are built by concatenation, not written as
+    /// contiguous literals — the exact failure `palette_lock_discipline` and
+    /// `scratch_path_discipline` both warn about in their own prose: a scan
+    /// that names its own forbidden spelling verbatim finds itself.
+    #[test]
+    fn no_stale_panel_wording_survives() {
+        let root = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
+        let needles = [
+            format!("{}{}", "command ", "band"),
+            format!("{}{}", "inventory ", "strip"),
+            format!("{}{}", "inventory ", "dock"),
+            format!("{}{}", "room ", "dock"),
+        ];
+        let needles: Vec<&str> = needles.iter().map(String::as_str).collect();
+
+        let mut hits: Vec<String> = Vec::new();
+
+        // ── crates/app/src/**/*.rs — string literals only ──────────────────────
+        let mut stack = vec![root.join("crates/app/src")];
+        while let Some(dir) = stack.pop() {
+            let Ok(entries) = std::fs::read_dir(&dir) else { continue };
+            for entry in entries.flatten() {
+                let path = entry.path();
+                if path.is_dir() {
+                    stack.push(path);
+                    continue;
+                }
+                if path.extension().and_then(|x| x.to_str()) != Some("rs") {
+                    continue;
+                }
+                let Ok(src) = std::fs::read_to_string(&path) else { continue };
+                for (lineno, line) in src.lines().enumerate() {
+                    let lower = line.to_lowercase();
+                    for &needle in &needles {
+                        let mut from = 0;
+                        while let Some(rel) = lower[from..].find(needle) {
+                            let idx = from + rel;
+                            let quotes_before = line[..idx].matches('"').count();
+                            if quotes_before % 2 == 1 {
+                                hits.push(format!(
+                                    "{}:{}: {:?} (string literal)",
+                                    path.strip_prefix(&root).unwrap_or(&path).display(),
+                                    lineno + 1,
+                                    needle,
+                                ));
+                            }
+                            from = idx + needle.len();
+                        }
+                    }
+                }
+            }
+        }
+
+        // ── docs/**/*.md and README.md — whole file, prose is the product ──────
+        let mut md_files = vec![root.join("README.md")];
+        let mut stack = vec![root.join("docs/guide"), root.join("docs/internals"), root.join("docs/reference")];
+        while let Some(dir) = stack.pop() {
+            let Ok(entries) = std::fs::read_dir(&dir) else { continue };
+            for entry in entries.flatten() {
+                let path = entry.path();
+                if path.is_dir() {
+                    stack.push(path);
+                } else if path.extension().and_then(|x| x.to_str()) == Some("md") {
+                    md_files.push(path);
+                }
+            }
+        }
+        for path in &md_files {
+            let Ok(text) = std::fs::read_to_string(path) else { continue };
+            let lower = text.to_lowercase();
+            for &needle in &needles {
+                if lower.contains(needle) {
+                    hits.push(format!(
+                        "{}: {:?}",
+                        path.strip_prefix(&root).unwrap_or(path).display(),
+                        needle,
+                    ));
+                }
+            }
+        }
+
+        // ── CHANGELOG.md — the `## Unreleased` section only ────────────────────
+        if let Ok(text) = std::fs::read_to_string(root.join("CHANGELOG.md")) {
+            let unreleased = text
+                .find("## Unreleased")
+                .map(|start| &text[start..])
+                .map(|rest| {
+                    let after_heading = &rest[rest.find('\n').unwrap_or(rest.len())..];
+                    let end = after_heading.find("\n## ").unwrap_or(after_heading.len());
+                    &after_heading[..end]
+                })
+                .unwrap_or("");
+            let lower = unreleased.to_lowercase();
+            for &needle in &needles {
+                if lower.contains(needle) {
+                    hits.push(format!("CHANGELOG.md (## Unreleased): {:?}", needle));
+                }
+            }
+        }
+
+        assert!(hits.is_empty(), "stale panel wording survives:\n{}", hits.join("\n"));
     }
 
     /// SQ-0796: `Category::ORDER` must list every category, or a whole group of

@@ -174,10 +174,22 @@ pub struct ControlGlyphs {
     pub map_show: char,
     /// Map shown — click and it leaves to the right (▶).
     pub map_hide: char,
-    /// Command band closed — click and it rises from the bottom (▲).
+    /// The panel cycle (SQ-1237) is closed — click and the command panel rises
+    /// from the bottom (▲).
     pub band_show: char,
-    /// Command band open — click and it drops back down (▼).
+    /// The panel cycle's command-panel state — click and it moves to the
+    /// inventory panel (▼).
     pub band_hide: char,
+    /// The panel cycle's inventory-panel state — click and it closes (◆).
+    ///
+    /// **No verified nerd-font codepoint exists for this yet.** Every other
+    /// glyph in this set was read from the patched font's own `post` table
+    /// (SQ-0989 is what guessing one costs: a wrong codepoint draws crisply and
+    /// confidently, and nothing on our side can tell). Rather than guess a
+    /// bag/inventory icon from memory, the `nerdfont` preset below deliberately
+    /// falls back to the same plain shape until someone reads a real one off
+    /// the font.
+    pub inventory_open: char,
     /// Lanthorn's Guiding Light is on (●; the lamp itself in a patched font).
     pub guidance_on: char,
     /// The Guiding Light is off (○).
@@ -435,6 +447,10 @@ impl Default for SymbolSet {
                 map_hide: '▶',
                 band_show: '▲',
                 band_hide: '▼',
+                // ◆ (U+25C6), from the same Geometric Shapes block as the rest
+                // of this preset — a third, direction-less mark for the third
+                // state, next to the arrow pair.
+                inventory_open: '◆',
                 guidance_on: '●',
                 guidance_off: '○',
                 render_hybrid: '◧',
@@ -789,6 +805,10 @@ impl ControlGlyphs {
                 // off/on pair rather than two icons pressed into service.
                 band_show: '\u{0EC01}',
                 band_hide: '\u{0EBF2}',
+                // No verified codepoint for a third (inventory) icon in this
+                // family — see the field's own doc comment. Inherits the plain
+                // shape rather than guessing one (SQ-0989).
+                inventory_open: plain.inventory_open,
                 // md-post_lamp — the Guiding Light's own mark, the same glyph
                 // `font_check_dialog::ASSIST_LAMP` draws in the gutter — and
                 // md-help for the light that is out.
@@ -1143,6 +1163,7 @@ fn apply_override(s: &mut SymbolSet, key: &str, ch: char) {
         "control.map_hide"       => s.controls.map_hide = ch,
         "control.band_show"      => s.controls.band_show = ch,
         "control.band_hide"      => s.controls.band_hide = ch,
+        "control.inventory_open" => s.controls.inventory_open = ch,
         "control.guidance_on"    => s.controls.guidance_on = ch,
         "control.guidance_off"   => s.controls.guidance_off = ch,
         "control.render_hybrid"  => s.controls.render_hybrid = ch,
@@ -1551,7 +1572,7 @@ mod tests {
             ("render_hybrid", c.render_hybrid), ("render_raster", c.render_raster),
             ("render_extended", c.render_extended),
             ("lock_on", c.lock_on), ("lock_off", c.lock_off),
-            ("return_probe", c.return_probe),
+            ("return_probe", c.return_probe), ("inventory_open", c.inventory_open),
         ] {
             assert!(!is_wide_estimate(ch), "control.{slot} = {ch:?} estimates as double-width");
         }
@@ -1559,6 +1580,10 @@ mod tests {
         // it is exempt from the two-states rule above because it HAS one state:
         // its off-reading is the muted colour, not a second glyph (SQ-0785).
         assert!(c.return_probe as u32 >= 0xF_0000, "md-shoe_print is Material Design");
+        // `inventory_open` has no verified nerd-font codepoint (see its doc
+        // comment) and deliberately inherits the plain shape rather than
+        // guessing one — pinned here so a future guess has to change this line.
+        assert_eq!(c.inventory_open, ControlGlyphs::preset("plain").unwrap().inventory_open);
     }
 
     /// The PLAIN defaults must be drawable by an ordinary monospace face, so
@@ -1578,7 +1603,7 @@ mod tests {
             ("render_hybrid", c.render_hybrid), ("render_raster", c.render_raster),
             ("render_extended", c.render_extended),
             ("lock_on", c.lock_on), ("lock_off", c.lock_off),
-            ("return_probe", c.return_probe),
+            ("return_probe", c.return_probe), ("inventory_open", c.inventory_open),
         ] {
             assert!(shapes.contains(&(ch as u32)), "control.{slot} = {ch:?} is outside Geometric Shapes");
             assert!(!is_wide_estimate(ch), "control.{slot} = {ch:?} estimates as double-width");
@@ -1587,6 +1612,9 @@ mod tests {
         assert_ne!(c.band_show, c.band_hide);
         assert_ne!(c.guidance_on, c.guidance_off);
         assert_ne!(c.lock_on, c.lock_off);
+        // The panel cycle's three states (SQ-1237) are three distinct glyphs.
+        assert_ne!(c.band_show, c.inventory_open);
+        assert_ne!(c.band_hide, c.inventory_open);
         // Three render modes, three distinct glyphs.
         let modes = [c.render_hybrid, c.render_raster, c.render_extended];
         assert_eq!(modes.iter().collect::<std::collections::HashSet<_>>().len(), 3);
@@ -1688,6 +1716,7 @@ mod tests {
         let baseline = SymbolSet::resolve(&crate::config::SymbolConfig::default());
         for key in [
             "control.map_show", "control.map_hide", "control.band_show", "control.band_hide",
+            "control.inventory_open",
             "control.guidance_on", "control.guidance_off", "control.render_hybrid",
             "control.render_raster", "control.render_extended", "control.lock_on",
             "control.lock_off",
