@@ -204,6 +204,20 @@ fn fetch_one(
         &crate::storage::story_key_at_from(&path, disk_entry.as_deref()),
     );
     let existing = story_info::load(&game_dir, &ifid);
+    // The IFDB page id a previous answer recorded — from a hand-set IFDB URL
+    // (SQ-0371), from an IFDB-search download, or from an ordinary by-IFID
+    // fetch. Reused, because the *reason* a story has one is usually that IFDB
+    // does not index the IFID we compute for it: asking by IFID again answers
+    // an authoritative NotFound, and `write_fetched` then replaces a perfectly
+    // good record with that not-found block. `f` on *City of Secrets* — Inform 6
+    // Glulx, whose Treaty IFID is its file's MD5 and not our `GLULX-…` hash —
+    // emptied the row it was pressed on (SQ-1226). The sidecar's identity check
+    // is what makes this safe: swap a different game in under the same filename
+    // and `existing` is `None`, so nothing is remembered on its behalf.
+    let remembered = existing
+        .as_ref()
+        .and_then(|i| i.fetched.as_ref())
+        .and_then(|f| f.ifdb_tuid.clone());
 
     // A manual IFDB-id fetch (SQ-0371) always runs and always fetches by that
     // id; only an IFID-keyed fetch consults the skip cache.
@@ -213,9 +227,14 @@ fn fetch_one(
     } else {
         // A known Scott Adams adventure is fetched by its mapped IFDB id (its own
         // computed IFID never resolves on IFDB). A manual id_override (SQ-0371)
-        // still wins.
-        let scott_id = if id_override.is_none() { scott_ifdb_id(&path, disk_entry.as_deref()) } else { None };
-        let fetched = match id_override.or(scott_id.as_deref()) {
+        // still wins, and so does a remembered page id — both name THIS story's
+        // page, where the bundled table only knows a filename stem.
+        let scott_id = if id_override.is_none() && remembered.is_none() {
+            scott_ifdb_id(&path, disk_entry.as_deref())
+        } else {
+            None
+        };
+        let fetched = match id_override.or(remembered.as_deref()).or(scott_id.as_deref()) {
             Some(id) => source.fetch_by_id(id),
             None => source.fetch(&ifid),
         };
@@ -689,6 +708,73 @@ mod tests {
         let game_dir = crate::storage::game_dir(&data_base, &crate::storage::story_key_at(&progress[0].path));
         let reloaded = story_info::load(&game_dir, &ifid).expect("sidecar keyed to the story IFID");
         assert_eq!(reloaded.fetched.unwrap().title.as_deref(), Some("Found By Hand"));
+        let _ = std::fs::remove_dir_all(&data_base);
+    }
+
+    /// SQ-1226: a story only HAS a remembered tuid because something found it
+    /// on IFDB by page id — an `f` that went back to the IFID would get the
+    /// authoritative NotFound that made the page id necessary in the first
+    /// place, and `write_fetched` would replace the record with it. *City of
+    /// Secrets* is the reported case: an Inform 6 Glulx game whose Treaty IFID
+    /// (its file's MD5) is not the `GLULX-…` hash we compute, so IFDB indexes
+    /// nothing we can ask it for.
+    #[test]
+    fn a_remembered_ifdb_tuid_is_reused_so_a_forced_refetch_cannot_lose_the_metadata() {
+        let data_base = tmp();
+        let path = data_base.join("CoS.gblorb");
+        let ifid = "GLULX-0123456789ABCDEF".to_string();
+        let tuid = "0dbnusxunq7fw5ro".to_string();
+        let game_dir = crate::storage::game_dir(&data_base, &crate::storage::story_key_at(&path));
+
+        // The sidecar an IFDB-search download leaves behind: found, current,
+        // and carrying the page id it was found under.
+        let mut meta = up_to_date_meta();
+        meta.title = Some("City of Secrets".into());
+        meta.ifdb_tuid = Some(tuid.clone());
+        story_info::save(&game_dir, &stub_info(&ifid, Some(meta))).unwrap();
+
+        let mut responses = HashMap::new();
+        responses.insert(
+            tuid.clone(),
+            FakeResp::Found(Box::new(IFiction {
+                title: Some("City of Secrets".into()),
+                ifdb: Some(crate::ifiction::IfdbExt {
+                    tuid: tuid.clone(),
+                    link: None,
+                    cover_url: None,
+                    average_rating: None,
+                    rating_count: None,
+                }),
+                ..Default::default()
+            })),
+        );
+        responses.insert(ifid.clone(), FakeResp::NotFound); // IFDB indexes no such IFID
+        let fake = Fake::new(responses);
+        let calls = Arc::clone(&fake.calls);
+        let fetcher = Fetcher::new(Box::new(fake), data_base.clone(), Duration::ZERO);
+        fetcher.request(FetchOrder {
+            stories: vec![FetchTarget { path, disk_entry: None, ifid: ifid.clone() }],
+            forced: true,
+            id_override: None,
+        });
+
+        let progress = wait_for(&fetcher, 1);
+        assert_eq!(
+            progress[0].outcome,
+            Outcome::Fetched,
+            "not the NotFound a by-IFID lookup answers with"
+        );
+        assert_eq!(
+            calls.lock().unwrap().as_slice(),
+            &[format!("id:{tuid}")],
+            "asked by the remembered page id, never by the IFID"
+        );
+
+        let reloaded = story_info::load(&game_dir, &ifid).and_then(|i| i.fetched).expect("sidecar");
+        assert!(!reloaded.not_found, "the found record survives a forced refetch");
+        assert_eq!(reloaded.title.as_deref(), Some("City of Secrets"));
+        assert_eq!(reloaded.ifdb_tuid.as_deref(), Some(tuid.as_str()), "and so does the page id");
+
         let _ = std::fs::remove_dir_all(&data_base);
     }
 

@@ -891,20 +891,31 @@ fn persist_metadata_and_cover(
     record: Option<&IFiction>,
 ) {
     let Some(iff) = record else { return };
-    let Ok(bytes) = std::fs::read(story_path) else { return };
-    // The record's own <ifid> list is only trustworthy when it names exactly
-    // one edition — IFDB commonly groups several under one game page (see
-    // the module header's "(2)" note), and none of them is guaranteed to be
-    // THIS particular downloaded file's exact release/serial. Ambiguous or
-    // absent falls back to the same IFID the picker itself computes from the
-    // bytes, so the sidecar is keyed under what `resolve_entry` will look up.
-    let ifid = match iff.ifids.as_slice() {
-        [only] => only.clone(),
-        _ => crate::ifid::compute_ifid(&bytes),
-    };
-    let game_dir = crate::storage::game_dir(data_base, &crate::storage::story_key_at(story_path));
+    // **Both halves of the key come from the row the browser is about to build
+    // for this file, and from nothing else** (SQ-1226). A sidecar is only ever
+    // read back at `StoryEntry::game_dir` / `meta.ifid`, and `story_info::load`
+    // discards one whose recorded IFID is not the one it was asked for — so a
+    // key derived any other way writes a file nobody can open, and the row shows
+    // no title, author, blurb or cover at all.
+    //
+    // Two other derivations looked right and were not. The record's own `<ifid>`
+    // is IFDB's Treaty of Babel string, which for a story with no embedded
+    // marker is the file's MD5 — `crate::ifid::compute_ifid` answers a
+    // `GLULX-…`/`ZCODE-…` of its own and never that, so trusting it (however
+    // unambiguous IFDB's list) keys the sidecar under a string the picker cannot
+    // ask for. And computing over the DOWNLOADED FILE's bytes is the container's
+    // IFID, not the story's: a Blorb begins `FORM`, so a `.gblorb` whose Glulx
+    // image carries no `UUID://` marker falls through to the Z-machine
+    // derivation reading an IFF header as a story header. *City of Secrets* —
+    // Inform 6, Glulx, served as a `.gblorb` — is both at once.
+    let Some(entry) = crate::picker::resolve_entry(story_path, data_base) else { return };
+    let game_dir = entry.game_dir(data_base);
     let cover = crate::fetch_worker::maybe_fetch_cover(covers, &game_dir, story_path, iff);
-    crate::fetch_worker::write_fetched(&game_dir, &ifid, crate::fetch_worker::found_meta(iff, cover));
+    crate::fetch_worker::write_fetched(
+        &game_dir,
+        &entry.meta.ifid,
+        crate::fetch_worker::found_meta(iff, cover),
+    );
 }
 
 #[cfg(test)]
@@ -1225,9 +1236,13 @@ mod tests {
             Ok(ResolvedGame { options: self.options.clone(), record: self.record.clone().map(Box::new) })
         }
         fn download(&self, _url: &str, dest: &Path) -> Result<PathBuf, SearchError> {
-            let p = dest.join("downloaded.z5");
+            let p = dest.join("downloaded.ulx");
             std::fs::create_dir_all(dest).map_err(|e| SearchError::Io(e.to_string()))?;
-            std::fs::write(&p, b"story").map_err(|e| SearchError::Io(e.to_string()))?;
+            // A real, launchable image rather than five bytes of prose: the
+            // sidecar is written under the IFID and directory the PICKER
+            // resolves for the landed file, so a file no loader accepts gets
+            // no row and no sidecar at all (SQ-1226).
+            std::fs::write(&p, glulx_image()).map_err(|e| SearchError::Io(e.to_string()))?;
             Ok(p)
         }
     }
@@ -1367,6 +1382,136 @@ mod tests {
         }
     }
 
+    // ── SQ-1226: the sidecar must be keyed the way the PICKER keys it ───────
+
+    /// A minimal launchable Glulx image carrying **no** Inform `UUID://`
+    /// marker — the shape of an Inform 6 Glulx game (`crate::ifid`'s module
+    /// docs name *Narcolepsy*; *City of Secrets* is another), which is what
+    /// makes its IFID a computed `GLULX-…` hash rather than anything IFDB
+    /// indexes.
+    fn glulx_image() -> Vec<u8> {
+        let mut v = vec![0u8; 256];
+        v[0..4].copy_from_slice(b"Glul");
+        v[4..8].copy_from_slice(&0x0003_0102u32.to_be_bytes()); // version 3.1.2
+        v[8..12].copy_from_slice(&256u32.to_be_bytes()); // RAMSTART
+        v[12..16].copy_from_slice(&256u32.to_be_bytes()); // EXTSTART
+        v[16..20].copy_from_slice(&256u32.to_be_bytes()); // ENDMEM
+        v[20..24].copy_from_slice(&256u32.to_be_bytes()); // stack size
+        v
+    }
+
+    /// `exec` wrapped in a one-resource Blorb — the `.gblorb` an IFDB download
+    /// link actually serves, rather than the bare image.
+    fn glulx_blorb(exec: &[u8]) -> Vec<u8> {
+        let mut chunk = Vec::new();
+        chunk.extend_from_slice(b"GLUL");
+        chunk.extend_from_slice(&(exec.len() as u32).to_be_bytes());
+        chunk.extend_from_slice(exec);
+        if exec.len() % 2 == 1 {
+            chunk.push(0);
+        }
+        // The one resource starts past the FORM header (12), the RIdx chunk
+        // header (8) and the RIdx data (4 + 12) — 36 bytes in.
+        let mut body = Vec::new();
+        body.extend_from_slice(b"RIdx");
+        body.extend_from_slice(&16u32.to_be_bytes());
+        body.extend_from_slice(&1u32.to_be_bytes());
+        body.extend_from_slice(b"Exec");
+        body.extend_from_slice(&0u32.to_be_bytes());
+        body.extend_from_slice(&36u32.to_be_bytes());
+        body.extend_from_slice(&chunk);
+        let mut out = Vec::new();
+        out.extend_from_slice(b"FORM");
+        out.extend_from_slice(&((body.len() + 4) as u32).to_be_bytes());
+        out.extend_from_slice(b"IFRS");
+        out.extend_from_slice(&body);
+        out
+    }
+
+    /// A source whose `download` writes **real, launchable** story bytes under
+    /// a real name. [`Fake`] writes five bytes called `downloaded.z5`, which no
+    /// loader accepts and no picker row is ever built from — so nothing that
+    /// depends on the downloaded file actually resolving can be asked of it.
+    struct FakeStoryDownload {
+        name: String,
+        bytes: Vec<u8>,
+    }
+
+    impl SearchSource for FakeStoryDownload {
+        fn search(&self, _q: &str) -> Result<Vec<SearchHit>, SearchError> {
+            Ok(Vec::new())
+        }
+        fn hot(&self) -> Result<Vec<SearchHit>, SearchError> {
+            Ok(Vec::new())
+        }
+        fn download_options(&self, _tuid: &str) -> Result<ResolvedGame, SearchError> {
+            Ok(ResolvedGame { options: Vec::new(), record: None })
+        }
+        fn download(&self, _url: &str, dest: &Path) -> Result<PathBuf, SearchError> {
+            std::fs::create_dir_all(dest).map_err(|e| SearchError::Io(e.to_string()))?;
+            let p = dest.join(&self.name);
+            std::fs::write(&p, &self.bytes).map_err(|e| SearchError::Io(e.to_string()))?;
+            Ok(p)
+        }
+    }
+
+    /// SQ-1226 — *City of Secrets*: an Inform 6 Glulx game served as a
+    /// `.gblorb`, whose IFDB record names one `<ifid>` that is not the string
+    /// [`crate::ifid::compute_ifid`] produces.
+    ///
+    /// The sidecar is only ever READ back at the row's `meta.ifid` — the IFID
+    /// the picker computes over the story it EXTRACTED from the container — so
+    /// that is the only key a write may use. Keying it on the container's own
+    /// bytes (a Blorb starts `FORM`, so the Z-machine fallback reads an IFF
+    /// header as a story header) or on IFDB's declared IFID both produce a
+    /// sidecar `story_info::load`'s identity check discards: the download
+    /// succeeds, the file lands, and the row shows no metadata at all.
+    #[test]
+    fn a_downloaded_blorb_is_keyed_by_the_ifid_the_picker_will_look_it_up_under() {
+        let data_base =
+            std::env::temp_dir().join(format!("bm_ifdb_blorb_key_{}", std::process::id()));
+        let dest = data_base.join("stories");
+        let source =
+            FakeStoryDownload { name: "CoS.gblorb".into(), bytes: glulx_blorb(&glulx_image()) };
+        let w = SearchWorker::new(Box::new(source), Box::new(FakeCovers::new()), data_base.clone());
+
+        let record = IFiction {
+            title: Some("City of Secrets".into()),
+            author: Some("Emily Short".into()),
+            // IFDB carries the Treaty of Babel IFID for a game with no embedded
+            // marker (the file's MD5), which `crate::ifid` never produces.
+            ifids: vec!["3C5A9A2E9E0F4B0E9E7F1D2C3B4A5968".into()],
+            ..Default::default()
+        };
+        w.request(SearchJob::Download {
+            url: "https://x/CoS.gblorb".into(),
+            dest: dest.clone(),
+            record: Some(Box::new(record)),
+        });
+        let path = match drain_one(&w) {
+            SearchEvent::Downloaded(p) => p,
+            _ => panic!("expected Downloaded"),
+        };
+
+        // The row the browser builds for the file that just landed.
+        let entry = crate::picker::resolve_entry(&path, &data_base)
+            .expect("the downloaded blorb scans as a playable story");
+        assert!(
+            entry.meta.ifid.starts_with("GLULX-"),
+            "non-vacuity: the row's IFID is the computed Glulx one, neither the \
+             container's nor IFDB's — got {}",
+            entry.meta.ifid
+        );
+
+        let fetched = crate::story_info::load(&entry.game_dir(&data_base), &entry.meta.ifid)
+            .and_then(|i| i.fetched)
+            .expect("the row's own IFID finds the sidecar the download wrote");
+        assert_eq!(fetched.title.as_deref(), Some("City of Secrets"));
+        assert_eq!(fetched.author.as_deref(), Some("Emily Short"));
+
+        let _ = std::fs::remove_dir_all(&data_base);
+    }
+
     // ── SQ-0474: auto-populate the sidecar + cover after a download ─────────
 
     /// A record carrying both metadata and a `<coverart>` URL: the sidecar
@@ -1497,10 +1642,15 @@ mod tests {
         let _ = std::fs::remove_dir_all(&data_base);
     }
 
-    /// A record naming exactly one edition IS trusted directly — no need to
-    /// fall back when there is nothing ambiguous about it.
+    /// A record naming exactly ONE edition is not trusted either (SQ-1226).
+    /// The number of `<ifid>`s IFDB lists was never the question: the sidecar
+    /// is read back at the IFID the picker computes, so a key IFDB declared
+    /// and we do not compute is unreachable however unambiguous it is. That is
+    /// every game whose Treaty of Babel IFID is not the string
+    /// [`crate::ifid::compute_ifid`] produces — an Inform 6 Glulx game's is its
+    /// file's MD5, ours a `GLULX-…` hash, and they never coincide.
     #[test]
-    fn a_download_with_exactly_one_record_ifid_uses_it_directly() {
+    fn a_download_with_exactly_one_record_ifid_still_keys_on_the_computed_one() {
         let data_base = std::env::temp_dir().join(format!("bm_ifdb_ifid_single_{}", std::process::id()));
         let dest = data_base.join("stories");
         let source = Fake { hits: vec![], options: vec![], record: None, fail: false };
@@ -1521,10 +1671,15 @@ mod tests {
             _ => panic!("expected Downloaded"),
         };
 
+        let computed = crate::ifid::compute_ifid(&std::fs::read(&path).unwrap());
         let game_dir = crate::storage::game_dir(&data_base, &crate::storage::story_key_at(&path));
         assert!(
-            crate::story_info::load(&game_dir, "ZCODE-9-999999-ABCD").and_then(|i| i.fetched).is_some(),
-            "the sole record IFID is used directly"
+            crate::story_info::load(&game_dir, &computed).and_then(|i| i.fetched).is_some(),
+            "keyed by the IFID the picker computes, which is the only one it reads back"
+        );
+        assert!(
+            crate::story_info::load(&game_dir, "ZCODE-9-999999-ABCD").is_none(),
+            "the record's declared IFID is not the key"
         );
 
         let _ = std::fs::remove_dir_all(&data_base);
