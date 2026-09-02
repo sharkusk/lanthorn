@@ -62,9 +62,10 @@
 //!   all (a word this story's dictionary does not hold). Every sentence of the
 //!   reply is a refusal.
 //! * [`ProbeRun::refusal_from_pair`] — the same command twice with two different
-//!   nouns in it. Believed **only when the two replies are the same sentence**
-//!   once their own nouns are struck out, which is what tells a generic refusal
-//!   from two coincidentally similar successes.
+//!   nouns in it. Believed **only as far as the two replies agree**, sentence by
+//!   sentence, once their own nouns are struck out — which is what tells a
+//!   generic refusal from two coincidentally similar successes, while still
+//!   learning something when a daemon fires on one of the two and not the other.
 //!
 //! Both additionally require the control to have left the world unchanged
 //! ([`WorldPrint`]): a control that moved an object *did* something, so whatever
@@ -170,41 +171,96 @@ pub struct ShadowRecipe {
 /// A fingerprint of as much of the game world as an engine will show us:
 /// where the player is, what is in the room, and what they are carrying.
 ///
-/// Deliberately a hash and not a description — nothing reads it except to ask
-/// whether it is the same as another one. `None` for an engine with no
-/// introspection, which is an honest "cannot tell", not "nothing changed".
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct WorldPrint(Option<u64>);
+/// Deliberately hashes and not descriptions — nothing reads them except to ask
+/// whether they are the same as another print's. Every field is `None` for an
+/// engine with no introspection, which is an honest "cannot tell", not "nothing
+/// changed".
+///
+/// # Three facts, not one hash, because only two of them survive a save
+/// (SQ-1248)
+///
+/// This was one `Option<u64>` over all of it, and that is not comparable
+/// between two engines. [`Engine::current_location`] on a v4+ Z-machine story is
+/// read off the **status line** — screen state, which no save carries and which
+/// `GameSession::restore_state` deliberately blanks (SQ-0785, so a half-repainted
+/// bar cannot name a plausible wrong room). A shadow therefore starts every
+/// question with no status line at all, and whether it gets one back depends
+/// entirely on whether the story repaints the whole bar during the probe turn:
+///
+/// | story | the shadow's bar after one probe turn | `current_location` |
+/// |---|---|---|
+/// | `vespers.z8` | repainted in full, `" Your Bedroom … Vespers "` | `Some` |
+/// | `curses.z5` | only the fields that CHANGED, so the room row stays blank | **`None`** |
+/// | `suvehnux.z5` | never split or drawn again after `Initialise` | **`None`** |
+///
+/// Folded into one hash, a location the live engine can read and the shadow
+/// cannot made **every** step differ from the baseline. [`ProbeRun::inert`] then
+/// called every control "did something", no refusal signature could be learned,
+/// and every offer on those two stories came out unvetted though the probe ran
+/// — while [`ProbeRun::did_something`] said yes to every candidate for the same
+/// reason, which is the same defect pointing the other way.
+///
+/// So each fact is stored and compared on its own, and a fact only one side can
+/// answer is not evidence of a change. That is [`Self::differs_from`]'s existing
+/// rule ("two unreadable prints are not the same; they are not an answer")
+/// applied per fact instead of to the bundle.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct WorldPrint {
+    /// The player and what they are carrying — the object tree alone, so it is
+    /// exactly what a restored save brings back and is always comparable.
+    carried: Option<u64>,
+    /// Where the player is, when the engine can say. Screen-derived above v3;
+    /// see the type docs.
+    here: Option<u16>,
+    /// What is in that room besides the player. `None` whenever `here` is,
+    /// because then the question was never asked.
+    room: Option<u64>,
+}
 
 impl WorldPrint {
     /// Read the world as `engine` currently has it.
     pub fn of(engine: &dyn Engine) -> WorldPrint {
-        let Some(intro) = engine.introspect() else { return WorldPrint(None) };
-        let mut h = std::collections::hash_map::DefaultHasher::new();
-        let here = engine.current_location().map(|l| l.number);
-        here.hash(&mut h);
+        let Some(intro) = engine.introspect() else { return WorldPrint::default() };
         let player = intro.player_object();
+        let mut h = std::collections::hash_map::DefaultHasher::new();
         player.hash(&mut h);
-        if let Some(room) = here {
-            let mut v = intro.room_objects_excluding(room, player);
-            v.sort();
-            v.hash(&mut h);
-        }
         if let Some(p) = player {
             let mut v = intro.contents(p);
             v.sort();
             v.hash(&mut h);
         }
-        WorldPrint(Some(h.finish()))
+        let here = engine.current_location().map(|l| l.number);
+        let room = here.map(|room| {
+            let mut h = std::collections::hash_map::DefaultHasher::new();
+            let mut v = intro.room_objects_excluding(room, player);
+            v.sort();
+            v.hash(&mut h);
+            h.finish()
+        });
+        WorldPrint { carried: Some(h.finish()), here, room }
     }
 
-    /// True when both prints are readable and they differ — a changed world.
-    /// Two unreadable prints are not "the same"; they are not an answer.
+    /// True when some fact **both** prints can answer differs — a changed world.
+    /// A fact only one of them holds is not an answer either way; see the type
+    /// docs for the story that made that distinction load-bearing.
     pub fn differs_from(self, other: WorldPrint) -> bool {
-        match (self.0, other.0) {
-            (Some(a), Some(b)) => a != b,
-            _ => false,
+        fn changed<T: PartialEq>(a: Option<T>, b: Option<T>) -> bool {
+            matches!((a, b), (Some(a), Some(b)) if a != b)
         }
+        changed(self.carried, other.carried)
+            || changed(self.here, other.here)
+            || changed(self.room, other.room)
+    }
+
+    /// A print with each fact stated outright, so a case can build the
+    /// live-and-shadow pair SQ-1248 is about without two engines.
+    #[cfg(test)]
+    pub(crate) fn from_parts(
+        carried: Option<u64>,
+        here: Option<u16>,
+        room: Option<u64>,
+    ) -> WorldPrint {
+        WorldPrint { carried, here, room }
     }
 }
 
@@ -294,9 +350,19 @@ impl ProbeRun {
     }
 
     /// Steps `a` and `b` are the same command carrying two different nouns.
-    /// Their reply is a refusal **only if it is the same sentence** once each
-    /// one's own noun is struck out — otherwise the two are describing two
+    /// Their reply is a refusal **only if it opens with the same sentence** once
+    /// each one's own noun is struck out — otherwise the two are describing two
     /// different things that happened, and neither is a refusal.
+    ///
+    /// **Only the sentences the two replies agree on, in order, are learned**
+    /// (SQ-1248, the same rule [`WorldPrint::differs_from`] follows). A turn
+    /// carries more than its refusal: a daemon fires on one control and not the
+    /// other, and demanding that the WHOLE reply match then teaches nothing at
+    /// all — `suvehnux.z5` answered two of its direction controls identically
+    /// but appended `Something brushes past your foot.` to one of them, the pair
+    /// taught nothing, and `fasten north` read as a success. The common prefix
+    /// keeps every sentence both replies vouched for and drops the first
+    /// divergence and everything after it, which is where a daemon lives.
     pub fn refusal_from_pair(&self, a: usize, b: usize) -> Refusals {
         let (Some(x), Some(y)) = (self.steps.get(a), self.steps.get(b)) else {
             return Refusals::default();
@@ -305,10 +371,10 @@ impl ProbeRun {
             return Refusals::default();
         }
         let sx = signature(&x.reply, &x.command);
-        if sx.is_empty() || sx != signature(&y.reply, &y.command) {
-            return Refusals::default();
-        }
-        Refusals { sigs: sx.into_iter().collect() }
+        let sy = signature(&y.reply, &y.command);
+        let agreed: Vec<String> =
+            sx.into_iter().zip(sy).take_while(|(a, b)| a == b).map(|(a, _)| a).collect();
+        Refusals { sigs: agreed.into_iter().collect() }
     }
 
     /// Did the step at `i` do anything, as far as this run can tell?
@@ -897,11 +963,122 @@ mod tests {
 
     #[test]
     fn an_unreadable_world_is_not_an_unchanged_one() {
-        let blind = WorldPrint(None);
+        let blind = WorldPrint::default();
+        let one = WorldPrint::from_parts(Some(1), None, None);
         assert!(!blind.differs_from(blind));
-        assert!(!blind.differs_from(WorldPrint(Some(1))));
-        assert!(WorldPrint(Some(1)).differs_from(WorldPrint(Some(2))));
-        assert!(!WorldPrint(Some(1)).differs_from(WorldPrint(Some(1))));
+        assert!(!blind.differs_from(one));
+        assert!(one.differs_from(WorldPrint::from_parts(Some(2), None, None)));
+        assert!(!one.differs_from(one));
+    }
+
+    /// **SQ-1248.** A shadow restored from a save has no status line, so on a
+    /// story that does not repaint the whole bar every turn its
+    /// `current_location` is `None` while the LIVE engine's is `Some` — and the
+    /// room contents hang off that same answer. Neither is evidence that
+    /// anything moved, and folded into one hash both of them said it had.
+    ///
+    /// Falsify by folding the three fields back into one hash: every assertion
+    /// below flips.
+    #[test]
+    fn a_fact_only_one_side_can_answer_is_not_a_changed_world() {
+        let live = WorldPrint::from_parts(Some(7), Some(35), Some(99));
+        let shadow = WorldPrint::from_parts(Some(7), None, None);
+        assert!(
+            !shadow.differs_from(live),
+            "the shadow could not read a status line; that is not a move"
+        );
+        assert!(!live.differs_from(shadow), "and the comparison is symmetric");
+        // What the two CAN both answer still decides.
+        assert!(
+            WorldPrint::from_parts(Some(8), None, None).differs_from(live),
+            "the inventory changed, and both sides can see it"
+        );
+        assert!(
+            WorldPrint::from_parts(Some(7), Some(36), None).differs_from(live),
+            "both sides named a room and they are different rooms"
+        );
+        assert!(
+            WorldPrint::from_parts(Some(7), Some(35), Some(100)).differs_from(live),
+            "same room, different contents"
+        );
+    }
+
+    /// **SQ-1248's second half.** A turn carries more than its refusal. Suvehnux
+    /// answers two direction controls identically and then appends `Something
+    /// brushes past your foot.` to whichever one the daemon fires on; demanding
+    /// the WHOLE reply match made that pair teach nothing, and the candidate
+    /// read as a success. The sentences the two agree on are still evidence.
+    ///
+    /// Falsify by restoring the whole-reply equality: the first assertion fails.
+    #[test]
+    fn a_daemon_on_one_control_still_leaves_the_pair_something_to_teach() {
+        let step = |command: &str, reply: &str| ProbeStep {
+            command: command.to_string(),
+            reply: reply.to_string(),
+            location: None,
+            world: WorldPrint::from_parts(Some(7), None, None),
+            quit: false,
+            escaped: false,
+        };
+        let run = ProbeRun {
+            baseline: WorldPrint::from_parts(Some(7), None, None),
+            steps: vec![
+                step(
+                    "fasten east",
+                    "There is no obvious way to do that.\n\nSomething brushes past your foot.",
+                ),
+                step("fasten south", "There is no obvious way to do that."),
+                step("fasten hither", "The wind takes it clean out of your hands."),
+            ],
+        };
+        let agreed = run.refusal_from_pair(0, 1);
+        assert!(
+            agreed.says_no("There is no obvious way to do that.", "fasten north"),
+            "the sentence BOTH controls printed taught nothing: {:?}",
+            agreed.sentences().collect::<Vec<_>>()
+        );
+        assert!(
+            !agreed.says_no("Something brushes past your foot.", "fasten north"),
+            "the daemon line was learned as a refusal, though only one control showed it"
+        );
+        assert!(
+            run.refusal_from_pair(0, 2).is_empty(),
+            "two replies that disagree from their first sentence still teach nothing"
+        );
+    }
+
+    /// The same defect where it actually bit: a control whose reply is this
+    /// story's refusal teaches nothing at all if the print calls it a move.
+    #[test]
+    fn a_control_the_shadow_cannot_place_still_teaches_its_refusal() {
+        let step = |command: &str, reply: &str| ProbeStep {
+            command: command.to_string(),
+            reply: reply.to_string(),
+            location: None,
+            // The shadow's own print: it knows the tree, not the screen.
+            world: WorldPrint::from_parts(Some(7), None, None),
+            quit: false,
+            escaped: false,
+        };
+        let run = ProbeRun {
+            // The LIVE engine's, taken with a status line on screen.
+            baseline: WorldPrint::from_parts(Some(7), Some(35), Some(99)),
+            steps: vec![
+                step("zqxwvj", "That's not a verb I recognise."),
+                step("examine ace", "You can't see any such thing."),
+                step("examine adamant", "You can't see any such thing."),
+                step("examine hinged", "You see nothing special about the hinged trapdoor."),
+            ],
+        };
+        let mut refusals = run.refusal_from(0);
+        assert!(!refusals.is_empty(), "the unknown-word control taught nothing");
+        refusals.merge(run.refusal_from_pair(1, 2));
+        assert!(
+            refusals.says_no("You can't see any such thing.", "examine lamp"),
+            "the absent-noun pair taught nothing"
+        );
+        assert!(run.did_something(3, &refusals), "a real description read as a refusal");
+        assert!(!run.did_something(1, &refusals), "a refusal read as something happening");
     }
 
     /// A stand-in whose only job is to count what a refusal costs. Everything

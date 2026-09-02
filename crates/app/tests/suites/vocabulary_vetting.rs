@@ -110,6 +110,30 @@ impl Play {
         Some(Play { state, session: Box::new(s) })
     }
 
+    /// A bare `.z5` that opens on a keypress gate, booted the way
+    /// `guidance_scan` boots one (SQ-1248's two fixtures).
+    ///
+    /// The gate matters: both stories print a banner and wait for a key, and a
+    /// harness that types a LINE into a char prompt never reaches the game at
+    /// all — every case built on it then passes vacuously on an empty screen.
+    fn gated_z5(name: &str) -> Option<Play> {
+        let bytes = story(name)?;
+        let mut s = app::session::GameSession::new_with_trace(
+            bytes.clone(), true, false, None, false, Vec::new(), None, None, Some((25, 80)),
+        )
+        .unwrap_or_else(|e| panic!("{name} boots without a ZError: {e:?}"));
+        s.set_strip_prompt(false);
+        let mut keys = 0;
+        while s.pending_input() == app::session::InputKind::Char && keys < 12 {
+            let _ = s.submit_key(app::engine::KeyInput::Char(' '));
+            keys += 1;
+        }
+        let mut state = AppState::default();
+        state.assist_preamble_shown = true;
+        state.probe.arm(recipe(&bytes));
+        Some(Play { state, session: Box::new(s) })
+    }
+
     fn turn(&mut self, cmd: &str) {
         let r = self.session.submit(cmd);
         self.state.push_transcript_kind(&format!("> {cmd}"), TranscriptKind::Input);
@@ -224,6 +248,95 @@ fn a_direction_object_no_longer_earns_a_false_positive() {
         !p.assists().iter().any(|l| l.contains("fasten")),
         "`fasten` must never be offered for a direction object: {:?}",
         p.assists()
+    );
+}
+
+// ── A shadow has no status line (SQ-1248) ──────────────────────────────────
+
+/// **Every offer on these two stories came out unvetted although the probe
+/// ran** — 58 commands into `curses.z5` and 42 into `suvehnux.z5`, all of them
+/// answered, and `judge` returned `None` every time.
+///
+/// The shadow restores a save, and a save carries no screen; `restore_state`
+/// blanks the upper window on purpose (SQ-0785). Above v3 `current_location` is
+/// read off that status line, and neither of these stories repaints the whole
+/// bar during a probe turn — Curses rewrites only the fields that changed, so
+/// its room row stays blank, and Suvehnux never splits the window again after
+/// `Initialise`. The location the LIVE engine could read and the shadow could
+/// not sat inside one `WorldPrint` hash, so every step "moved", every control
+/// was disqualified, and no refusal signature could be learned.
+///
+/// Falsify by folding `WorldPrint`'s three facts back into one hash: this
+/// assertion then reads `this story knows — …`, which is the reported symptom.
+#[test]
+fn a_story_that_does_not_repaint_its_status_bar_is_still_vetted() {
+    for (name, cmd, want) in [
+        ("curses.z5", "inspect hinged", "try instead — examine · describe · watch"),
+        ("suvehnux.z5", "inspect vault", "try instead — examine · describe · watch"),
+    ] {
+        let Some(mut p) = Play::gated_z5(name) else { continue };
+        p.turn("look");
+        assert!(
+            p.session.current_location().is_some(),
+            "{name}: the fixture never reached a room — the gate was not cleared"
+        );
+        p.turn(cmd);
+        eprintln!("--- {name}, `{cmd}` ---\n{}\n", p.screen());
+        assert_eq!(p.assists(), vec![want.to_string()], "{name}");
+    }
+}
+
+/// The other half of the same claim: the vetting now REJECTS on these stories
+/// too. `hasten north` is SQ-1232's direction case — both stories answer
+/// `fasten north` with what they answer two other directions with, so every
+/// candidate is dropped and the light says nothing.
+///
+/// Before SQ-1248 both offers appeared, unvetted, naming every candidate.
+#[test]
+fn a_candidate_that_does_nothing_is_dropped_there_too() {
+    for name in ["curses.z5", "suvehnux.z5"] {
+        let Some(mut p) = Play::gated_z5(name) else { continue };
+        p.turn("look");
+        p.turn("hasten north");
+        eprintln!("--- {name}, `hasten north` ---\n{}\n", p.screen());
+        assert_eq!(
+            p.assists(),
+            Vec::<String>::new(),
+            "{name}: a direction candidate that does nothing was offered anyway"
+        );
+    }
+}
+
+/// **A daemon rides one control and not the other** (SQ-1248's second half, on
+/// the fixture that found it). Suvehnux answers `fasten east` and `fasten south`
+/// identically and then appends `Something brushes past your foot.` to whichever
+/// turn its daemon happens to fire on. Demanding that the WHOLE reply match made
+/// that pair teach nothing on exactly those turns, and `fasten north` read as a
+/// success — which is why the corpus scan showed the offer in the Vault at turn
+/// ten and not at turn two. The pair now learns the sentences the two replies
+/// agree on, so the daemon's tail costs nothing.
+///
+/// The wait turns are the fixture: one room, many attempts, so the daemon's
+/// schedule is crossed rather than guessed at.
+///
+/// Falsify by restoring `refusal_from_pair`'s whole-reply equality: `fasten`
+/// is offered on one of these turns.
+#[test]
+fn a_daemon_on_one_control_does_not_silence_the_pair() {
+    let Some(mut p) = Play::gated_z5("suvehnux.z5") else { return };
+    p.turn("look");
+    for _ in 0..12 {
+        p.turn("wait");
+        p.turn("hasten north");
+        assert!(
+            !p.assists().iter().any(|l| l.contains("fasten")),
+            "`fasten` was offered for a direction the story refuses:\n{}",
+            p.screen()
+        );
+    }
+    assert!(
+        p.state.probe.probes > 100,
+        "the case is vacuous unless the shadow actually ran every attempt"
     );
 }
 
