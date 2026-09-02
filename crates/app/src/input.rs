@@ -11833,7 +11833,7 @@ mod tests {
         open_config_screen(&mut s);
         assert!(
             s.any_modal_overlay_open(),
-            "a dialog stacked over the inventory dock must read as modal, so \
+            "a dialog stacked over the inventory panel must read as modal, so \
              inventory_mouse_action's any_modal_overlay_open guard fires and the click falls \
              through to the dialog's own hit-testing instead of composing an item"
         );
