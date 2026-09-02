@@ -79,9 +79,17 @@ fn main() {
     if tables_only {
         match gvm::grammar::locate(&mem) {
             Ok(t) => println!(
-                "grammar={:#x} verbs={} actions={:#x} n={} dict={:#x} words={} stride={}",
-                t.grammar, t.verb_count, t.actions, t.action_count, t.dictionary, t.word_count,
-                t.dict_stride
+                "grammar={:#x} verbs={} actions={:#x} n={} dict={:#x} words={} stride={} \
+                 word_size={} char_size={}",
+                t.grammar,
+                t.verb_count,
+                t.actions,
+                t.action_count,
+                t.dictionary,
+                t.word_count,
+                t.dict_stride,
+                t.dict_word_size,
+                t.dict_char_size
             ),
             Err(e) => {
                 eprintln!("{path}: {e:?}");
