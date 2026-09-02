@@ -571,6 +571,17 @@ pub fn dump_lines(s: &TerminalSnapshot) -> Vec<DumpLine> {
              `S` when one is declared. The uncompressed figure is base64'd too, since `o=z` never \
              removed the 4/3 expansion and crediting it with that would flatter the ratio.)",
         ));
+        // SQ-1201: whether an eviction/replacement actually freed the upload it
+        // replaced, or just forgot it (SQ-1190's bug class). `stranded_uploads` is
+        // this struct's own traffic still resident by id — kept live as typed
+        // state (`GraphicsRender::outstanding`), not re-scanned off the wire.
+        out.push(value(format!(
+            "  wire hygiene: {} delete(s) · {} pixel bytes freed · {} upload(s) stranded ({} pixel bytes)",
+            thousands(u.deletes),
+            thousands(u.freed_pixels),
+            thousands(u.stranded_uploads),
+            thousands(u.stranded_pixels),
+        )));
     }
     out
 }
@@ -603,6 +614,10 @@ mod tests {
                 wire: 200_000,
                 pixels: 12_000_000,
                 uploads: 9,
+                deletes: 6,
+                freed_pixels: 8_000_000,
+                stranded_uploads: 2,
+                stranded_pixels: 4_000_000,
             },
             ops: OpCounts { uploads: 3, reuses: 12, places: 15, drops: 2, placed_cells: 65_952 },
         }
@@ -743,6 +758,20 @@ mod tests {
         assert!(t.contains("200,000 bytes, against 16,000,000 uncompressed"), "both sides: {t}");
         assert!(t.contains("80.0x smaller"), "the ratio: {t}");
         assert!(t.contains("15,800,000 bytes saved (98%)"), "the saving: {t}");
+    }
+
+    /// SQ-1201: the freed-vs-stranded line beside the upload counter — the one
+    /// SQ-1190's whole class of bug (an eviction that replaced or dropped a
+    /// `Protocol` without ever emitting its `a=d`) would have been caught by, had
+    /// it existed then.
+    #[test]
+    fn the_wire_hygiene_line_reports_deletes_freed_and_stranded() {
+        let t = text(&snap());
+        assert!(
+            t.contains("wire hygiene: 6 delete(s) · 8,000,000 pixel bytes freed · 2 upload(s) stranded \
+                        (4,000,000 pixel bytes)"),
+            "{t}"
+        );
     }
 
     /// With no terminal there are no byte counts, and saying so is the honest

@@ -244,4 +244,116 @@ mod unix {
             path.display()
         );
     }
+
+    /// SQ-1201: the wire-hygiene counter (`app::render::graphics::measure_traffic`)
+    /// this quest built to catch the whole class SQ-1190 fixed by hand — a cache
+    /// that replaces or evicts a `Protocol` without ever emitting the `a=d` for its
+    /// upload. Same story, terminal size and key walk as
+    /// `every_abandoned_upload_is_deleted_and_no_live_one_is` above (which already
+    /// drives Journey through a raster-composite abandon AND a band re-encode, the
+    /// two ways this app orphans a `ratatui-image` upload) — reused rather than
+    /// invented, so this measures the same real traffic that test's own BTreeSet
+    /// arithmetic already vouches for, just through the counter a future eviction
+    /// site would actually be caught by.
+    ///
+    /// THE BOUND: at capture end, `stranded_uploads` (ids this capture transmitted
+    /// that no later `a=d` in it named) can be no more than the count of DISTINCT
+    /// image ids still placed on the final screen. Every one of those is legitimately
+    /// stranded — it is still visible, so freeing it would blank the screen, exactly
+    /// `queue_protocol_delete_after_place`'s reason to exist. Anything stranded
+    /// BEYOND that bound is transmitted, no longer on screen, and never freed —
+    /// which is precisely the leak SQ-1190 fixed four instances of and the reason
+    /// this counter exists at all.
+    ///
+    /// Falsified by reverting `GraphicsRender::invalidate_v6`'s
+    /// `self.queue_protocol_delete(old.placed_id)` (crates/app/src/render/graphics.rs)
+    /// — the wholesale-abandon delete for the raster composite Journey drops two
+    /// frames into its boot, when the hybrid ring takes over. NOT literally one of
+    /// SQ-1190's four `cover.rs`/`picker_ui.rs` call sites: those guard the
+    /// pre-game PICKER (a byte-budgeted cover cache and a 128-tile gallery LRU,
+    /// both needing far more images/navigation than a short pty walk can drive
+    /// reliably), while this walk never leaves a single game. It is the SAME
+    /// underlying seam, though — `queue_external_deletes` (SQ-1190's fix) funnels
+    /// into this struct's `queue_protocol_delete`, the exact function reverted
+    /// here — so a regression in that shared machinery is exactly what this
+    /// falsification exercises. With the call commented out: `deletes` dropped
+    /// from 1 to 0, `freed_pixels` from 2,119,680 to 0, and `stranded_uploads`
+    /// grew from 1 (449,280 pixel bytes — the one band legitimately still on
+    /// screen) to 2 (2,568,960 pixel bytes = that same band PLUS the abandoned
+    /// composite, never freed) — tripping the bound of 1 distinct id on screen.
+    /// See the quest report for the full numbers.
+    #[test]
+    fn stranded_uploads_never_exceeds_what_is_still_on_screen() {
+        let story = driver::stories_dir().join(STORY);
+        if !story.is_file() {
+            eprintln!("SKIP: gitignored story missing at {}", story.display());
+            return;
+        }
+        let user_dir = out_dir().join("user-dir-wire-hygiene");
+        let _ = std::fs::remove_dir_all(&user_dir);
+
+        let mut spec = driver::Spec::new(env!("CARGO_BIN_EXE_lanthorn"), &story, &user_dir);
+        spec.cols = COLS;
+        spec.rows = ROWS;
+        spec.keys = vec![
+            driver::Key::Wait(Duration::from_millis(1500)),
+            driver::Key::Bytes(b"\r".to_vec()),
+            driver::Key::Wait(Duration::from_millis(800)),
+            driver::Key::Bytes(b"\r".to_vec()),
+            driver::Key::Wait(Duration::from_millis(800)),
+            driver::Key::Bytes(b"\r".to_vec()),
+            driver::Key::Wait(Duration::from_millis(800)),
+            driver::Key::Bytes(b"\r".to_vec()),
+            driver::Key::Wait(Duration::from_millis(1200)),
+        ];
+
+        let cap = driver::run(spec).expect("the pty harness should boot lanthorn");
+        let term = pty_stream::decode_capture(&cap);
+        let report = pty_stream::report(&cap, &term);
+        let path = out_dir().join("journey-r30-wire-hygiene.txt");
+        let _ = std::fs::write(&path, &report);
+
+        let neg = cap.negotiated();
+        assert!(
+            neg.is_kitty(),
+            "half-blocks uploads nothing, so this measures nothing: {}\n(report at {})",
+            neg.explain(),
+            path.display()
+        );
+
+        let text = String::from_utf8_lossy(&cap.bytes);
+        let m = app::render::graphics::measure_traffic(&text);
+        assert!(m.uploads > 0, "no image was uploaded at all (report at {})", path.display());
+
+        // The placeholder foreground only ever carries the low 24 bits of an id
+        // (the decoder does not fold the diacritic high byte back in), which is
+        // the same truncation `measure_traffic`'s `i=` ids are compared against —
+        // see `every_abandoned_upload_is_deleted_and_no_live_one_is` above.
+        let on_screen: std::collections::BTreeSet<u32> =
+            term.placements().iter().map(|p| p.image_id).collect();
+
+        eprintln!(
+            "wire hygiene: {} upload(s) ({} pixel bytes) · {} delete(s) · {} pixel bytes freed · \
+             {} stranded ({} pixel bytes) · {} distinct id(s) on the final screen — report at {}",
+            m.uploads,
+            m.pixels,
+            m.deletes,
+            m.freed_pixels,
+            m.stranded_uploads,
+            m.stranded_pixels,
+            on_screen.len(),
+            path.display()
+        );
+
+        assert!(
+            m.stranded_uploads <= on_screen.len() as u64,
+            "{} upload(s) are stranded (transmitted, never freed by a later a=d in this capture) \
+             but only {} distinct image id(s) are still on the final screen — the difference is \
+             transmitted, off-screen, and never freed: exactly the class SQ-1190 fixed \
+             (report at {})",
+            m.stranded_uploads,
+            on_screen.len(),
+            path.display()
+        );
+    }
 }

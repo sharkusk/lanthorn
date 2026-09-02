@@ -1333,7 +1333,30 @@ pub struct GraphicsRender {
     /// What every kitty upload since launch has cost the wire, and what the same
     /// pixels would have cost raw (SQ-1005). Measured off the transmits themselves,
     /// so it covers `ratatui-image`'s encoder as well as ours.
+    ///
+    /// Its `deletes`/`freed_pixels`/`stranded_uploads`/`stranded_pixels` (SQ-1201)
+    /// are kept in sync with [`Self::outstanding`] below rather than measured off
+    /// text: every id this struct ever transmits or deletes is already known as a
+    /// typed value at the call site (`entry.id`, the id [`reseat_kitty_placement`]
+    /// hands back, the id a `queue_*` method takes), so pairing it against
+    /// `outstanding` is a `HashMap` lookup, cheaper and more exact than re-parsing
+    /// the escape a second time. [`crate::render::graphics::measure_traffic`] is
+    /// the byte-scanning sibling, for a caller (the pty-stream harness) that only
+    /// has the wire and no such call sites to hook.
     pub uploads: UploadBytes,
+    /// Kitty ids transmitted by THIS struct that no later delete (`queue_kitty_deletes`,
+    /// `queue_protocol_delete`, `queue_protocol_delete_after_place`) has named yet —
+    /// `id → pixel bytes` of the upload currently resident under it (SQ-1201). A
+    /// re-transmit to an id already here OVERWRITES the entry rather than adding to
+    /// it, matching the kitty spec's own rule that re-transmitting to an id replaces
+    /// what it held; [`Self::note_upload_id`]/[`Self::note_delete_id`] are the only
+    /// writers, and [`Self::sync_stranded`] mirrors its live size/sum into
+    /// `uploads.stranded_uploads`/`stranded_pixels` after each change.
+    ///
+    /// Scoped to this struct's own traffic — the picker's `KittyDeleteQueue` caches
+    /// (`cover.rs`/`picker_ui.rs`) run before any `GraphicsRender` exists and keep
+    /// no ledger of their own; see [`measure_traffic`] for the whole-wire answer.
+    outstanding: std::collections::HashMap<u32, u64>,
     /// The whole native chrome canvas scaled to device pixels, shared across all
     /// bands of a frame so the expensive Nearest resize runs at most ONCE per
     /// changed frame instead of once per band (SQ-0514). Keyed on the canvas
@@ -1656,6 +1679,42 @@ impl GraphicsRender {
         self.classify_calls
     }
 
+    /// Record a transmit of `pixels` bytes under `id` in [`Self::outstanding`]
+    /// (SQ-1201) and mirror the map's live size/sum into `uploads.stranded_*`.
+    /// A no-op for `pixels == 0` — a re-place of already-uploaded content, which
+    /// leaves whatever the id already holds (or does not) exactly as it was.
+    fn note_upload_id(&mut self, id: Option<u32>, pixels: u64) {
+        if let Some(id) = id {
+            if pixels > 0 {
+                self.outstanding.insert(id, pixels);
+            }
+        }
+        self.sync_stranded();
+    }
+
+    /// Record an `a=d` delete for `id` in [`Self::outstanding`] (SQ-1201):
+    /// `uploads.deletes` counts the command regardless, and `uploads.freed_pixels`
+    /// is credited only when `id` was still outstanding — a delete for an id this
+    /// struct never transmitted, or already freed, is counted but not credited.
+    fn note_delete_id(&mut self, id: Option<u32>) {
+        if let Some(id) = id {
+            self.uploads.deletes += 1;
+            if let Some(px) = self.outstanding.remove(&id) {
+                self.uploads.freed_pixels += px;
+            }
+        }
+        self.sync_stranded();
+    }
+
+    /// Mirror [`Self::outstanding`]'s current size/sum into `uploads`. A snapshot,
+    /// not a running total — called after every [`Self::note_upload_id`]/
+    /// [`Self::note_delete_id`] so `stranded_uploads`/`stranded_pixels` always read
+    /// "as of now" rather than something `UploadBytes::add` accumulated.
+    fn sync_stranded(&mut self) {
+        self.uploads.stranded_uploads = self.outstanding.len() as u64;
+        self.uploads.stranded_pixels = self.outstanding.values().sum();
+    }
+
     /// Queue an `a=d,d=I` delete for the id an abandoned [`KittyWindowImage`] still
     /// holds in the terminal, and record a [`GraphicsOp::Drop`] for it (SQ-0637).
     /// `d=I` frees the image data AND its placements, so nothing deleted here can be
@@ -1672,6 +1731,7 @@ impl GraphicsRender {
         }
         let id = entry.id;
         write!(self.pending_deletes, "\x1b_Gq=2,a=d,d=I,i={id}\x1b\\").expect("write to String");
+        self.note_delete_id(Some(id));
         self.note_op(GraphicsOp::Drop { target: GraphicsTarget::Window(win) });
     }
 
@@ -1696,6 +1756,7 @@ impl GraphicsRender {
         if let Some(id) = id {
             write!(self.pending_deletes, "\x1b_Gq=2,a=d,d=I,i={id}\x1b\\").expect("write to String");
         }
+        self.note_delete_id(id);
     }
 
     /// Queue `a=d,d=I` deletes for uploads a SIBLING cache owns (SQ-1190): the
@@ -1726,6 +1787,7 @@ impl GraphicsRender {
             write!(self.deletes_after_place, "\x1b_Gq=2,a=d,d=I,i={id}\x1b\\")
                 .expect("write to String");
         }
+        self.note_delete_id(id);
     }
 
     /// Flush any queued kitty deletes into `buf` when no graphics window will place
@@ -1845,7 +1907,9 @@ impl GraphicsRender {
             } else {
                 let transmit =
                     kitty_transmit_virtual(&gw.canvas, entry.id, area.height, area.width, compress);
-                self.uploads.add(measure_transmit(&transmit));
+                let measured = measure_transmit(&transmit);
+                self.note_upload_id(Some(entry.id), measured.pixels);
+                self.uploads.add(measured);
                 entry.pending_transmit = Some(transmit);
                 entry.uploaded = Some(hash);
                 self.note_op(GraphicsOp::Upload {
@@ -2182,6 +2246,7 @@ impl GraphicsRender {
         let after = std::mem::take(&mut self.deletes_after_place);
         let (placed_id, placed_bytes) = place_protocol_with(proto, dest, buf, &pending, &after);
         self.uploads.add(placed_bytes);
+        self.note_upload_id(placed_id, placed_bytes.pixels);
         if placed_id.is_none() {
             self.pending_deletes = pending;
             // Nothing was placed, so nothing on screen depends on these either:
@@ -2605,8 +2670,9 @@ impl GraphicsRender {
             // deletes either — hand them to the ordinary queue rather than strand them.
             self.pending_deletes.push_str(&after);
         }
-        if let Some((_, _, (_, bytes))) = placed {
+        if let Some((_, _, (id, bytes))) = placed {
             self.uploads.add(bytes);
+            self.note_upload_id(id, bytes.pixels);
         }
         match placed {
             Some((dest, sz, (id, _))) => {
@@ -2959,8 +3025,9 @@ impl GraphicsRender {
             // deletes either — hand them to the ordinary queue rather than strand them.
             self.pending_deletes.push_str(&after);
         }
-        if let Some((_, _, (_, bytes))) = placed {
+        if let Some((_, _, (id, bytes))) = placed {
             self.uploads.add(bytes);
+            self.note_upload_id(id, bytes.pixels);
         }
         match placed {
             Some((dest, sz, (id, _))) => {
@@ -3106,8 +3173,9 @@ impl GraphicsRender {
             // deletes either — hand them to the ordinary queue rather than strand them.
             self.pending_deletes.push_str(&after);
         }
-        if let Some((_, _, (_, bytes))) = placed {
+        if let Some((_, _, (id, bytes))) = placed {
             self.uploads.add(bytes);
+            self.note_upload_id(id, bytes.pixels);
         }
         match placed {
             Some((placed_at, sz, (id, _))) => {
@@ -3433,13 +3501,43 @@ pub struct UploadBytes {
     pub pixels: u64,
     /// Transmits counted — a first chunk each, so this is images and not chunks.
     pub uploads: u64,
+    /// `a=d` delete commands seen, whether or not they named an id this
+    /// particular measurement can account for (SQ-1201). Always incremented on
+    /// sight — pairing is what decides [`Self::freed_pixels`], not this.
+    pub deletes: u64,
+    /// Pixel bytes a delete freed: credited only when the delete's `i=` named an
+    /// id this measurement had already seen transmitted (and no LATER delete in
+    /// between had already freed it). A delete for an unknown or already-freed id
+    /// still counts toward [`Self::deletes`] above, just not here — SQ-1190's bug
+    /// was exactly a delete that never got SENT, which this cannot see either;
+    /// what it catches is the transmit whose delete never arrives at all.
+    pub freed_pixels: u64,
+    /// Uploads measured here whose id no LATER delete in the same measurement
+    /// named — still resident in the terminal (or, for [`GraphicsRender::uploads`],
+    /// resident as of the last id this struct's own traffic touched) when the
+    /// measurement ended. Zero for [`measure_transmit`] on a single small
+    /// fragment, where a transmit and the delete that eventually frees it are
+    /// almost always in two DIFFERENT fragments — see [`measure_traffic`] for the
+    /// function built to pair them, and [`GraphicsRender::note_upload_id`] for the
+    /// live equivalent kept as typed state instead of re-scanned text.
+    pub stranded_uploads: u64,
+    /// Pixel bytes those stranded uploads account for.
+    pub stranded_pixels: u64,
 }
 
 impl UploadBytes {
+    /// Sums every genuinely cumulative field. `stranded_uploads`/`stranded_pixels`
+    /// are deliberately NOT summed: they are a snapshot of "what is outstanding
+    /// right now", and adding two snapshots together does not mean anything — a
+    /// caller that wants them kept current across many `add` calls (as
+    /// [`GraphicsRender`] does) assigns them separately, from state that persists
+    /// across the calls this discards.
     fn add(&mut self, other: UploadBytes) {
         self.wire += other.wire;
         self.pixels += other.pixels;
         self.uploads += other.uploads;
+        self.deletes += other.deletes;
+        self.freed_pixels += other.freed_pixels;
     }
 
     /// What [`Self::pixels`] would have occupied on the wire uncompressed: base64
@@ -3454,6 +3552,57 @@ impl UploadBytes {
     }
 }
 
+/// One kitty APC chunk's control block (everything up to its first `;`, or its
+/// whole body if it has none) and the chunk's total wire length (control block +
+/// base64 + the `ESC \` terminator). Shared by [`measure_transmit`] and
+/// [`measure_traffic`] so the two ways of reading this file's own emitted bytes
+/// agree on where one chunk ends and the next begins.
+fn kitty_chunks(text: &str) -> Vec<(&str, u64)> {
+    let b = text.as_bytes();
+    let mut i = 0usize;
+    let mut out = Vec::new();
+    while let Some(rel) = b[i..].windows(3).position(|w| w == b"\x1b_G") {
+        let start = i + rel;
+        // The chunk runs to its `ESC \`; a truncated one is measured to the end.
+        let term = b[start..].windows(2).position(|w| w == b"\x1b\\");
+        let end = term.map_or(b.len(), |p| start + p + 2);
+        // `content_end` excludes the terminator itself, so a chunk with no `;` —
+        // every delete escape, which has no payload to introduce one — does not
+        // read its own `ESC \` as part of the last param's value (SQ-1201: that
+        // silently broke `i=<id>` parsing on a delete, which has no other
+        // separator after it).
+        let content_end = term.map_or(b.len(), |p| start + p);
+        let head_end = b[start..content_end].iter().position(|&c| c == b';').map_or(content_end, |p| start + p);
+        out.push((&text[start + 3..head_end], (end - start) as u64));
+        i = end;
+        if i >= b.len() {
+            break;
+        }
+    }
+    out
+}
+
+fn kitty_param(params: &str, key: &str) -> Option<u64> {
+    params.split(',').find_map(|kv| kv.strip_prefix(key)?.strip_prefix('=')?.parse().ok())
+}
+
+/// Whether a chunk's own params (never its neighbours') are a transmit's — `a=T`
+/// (transmit and display) or `a=t` (transmit only), the two spellings
+/// `kitty_transmit_virtual` and `ratatui-image`'s encoder emit.
+///
+/// The gate `measure_traffic` needed and `measure_transmit` never did: lanthorn's
+/// own kitty capability PROBE (`a=q`, sent once at startup to ask whether the
+/// terminal answers at all) transmits a throwaway 1x1 `s=1,v=1` image too — s/v
+/// alone is not "this is an upload", it is "this chunk names pixel geometry",
+/// and a query names it for the same reason a transmit does. `measure_transmit`
+/// was never fed that probe (only its own already-known-good transmit text), so
+/// this never manifested there; `measure_traffic` reads the WHOLE wire, probe
+/// included, and without this gate counted it as two extra uploads and two
+/// falsely-stranded ids (SQ-1201).
+fn kitty_is_upload_action(params: &str) -> bool {
+    params.split(',').any(|kv| kv == "a=T" || kv == "a=t")
+}
+
 /// Measure one transmit's cost off its own bytes. See [`UploadBytes`].
 ///
 /// Cheap on purpose: it reads each chunk's control block — the few dozen bytes
@@ -3463,38 +3612,100 @@ impl UploadBytes {
 ///
 /// A chunk with no `s`/`v` is a continuation (`m=1` carries no geometry) and adds
 /// wire without adding pixels, so a chunked upload is counted once.
+///
+/// `deletes` is counted here too (an `a=d` chunk, by `,a=d,` appearing in the
+/// params — cheap, no allocation) but `freed_pixels`/`stranded_*` are always zero:
+/// pairing a delete against the transmit it frees needs to have seen BOTH within
+/// one measurement, and every call site that feeds this function a small
+/// per-frame fragment (SQ-1005) never has both in the same fragment — the delete
+/// for THIS id rides on a placement several frames later. [`measure_traffic`] is
+/// the whole-capture sibling that does the pairing.
 pub fn measure_transmit(transmit: &str) -> UploadBytes {
     let mut out = UploadBytes::default();
-    let b = transmit.as_bytes();
-    let mut i = 0usize;
-    while let Some(rel) = b[i..].windows(3).position(|w| w == b"\x1b_G") {
-        let start = i + rel;
-        // The chunk runs to its `ESC \`; a truncated one is measured to the end.
-        let end = b[start..]
-            .windows(2)
-            .position(|w| w == b"\x1b\\")
-            .map_or(b.len(), |p| start + p + 2);
-        out.wire += (end - start) as u64;
-        let head_end = b[start..end].iter().position(|&c| c == b';').map_or(end, |p| start + p);
-        let params = &transmit[start + 3..head_end];
-        let get = |key: &str| -> Option<u64> {
-            params.split(',').find_map(|kv| kv.strip_prefix(key)?.strip_prefix('=')?.parse().ok())
-        };
+    for (params, wire) in kitty_chunks(transmit) {
+        out.wire += wire;
+        if params.split(',').any(|kv| kv == "a=d") {
+            out.deletes += 1;
+            continue;
+        }
+        if !kitty_is_upload_action(params) {
+            continue;
+        }
         // `S` is the kitty spec's own "size of the uncompressed data" and only ever
         // accompanies a compressed PNG; for the `f=32` RGBA we and the crate emit,
         // the declared geometry is the same fact and is always present.
-        if let Some(size) = get("S") {
+        if let Some(size) = kitty_param(params, "S") {
             out.pixels += size;
             out.uploads += 1;
-        } else if let (Some(w), Some(h)) = (get("s"), get("v")) {
+        } else if let (Some(w), Some(h)) = (kitty_param(params, "s"), kitty_param(params, "v")) {
             out.pixels += w * h * 4;
             out.uploads += 1;
         }
-        i = end;
-        if i >= b.len() {
-            break;
+    }
+    out
+}
+
+/// Measure a WHOLE capture's kitty traffic — every transmit and every delete in
+/// `text`, paired by `i=<id>` (SQ-1201).
+///
+/// This is [`measure_transmit`] with the one thing a single small fragment can
+/// never show it: a delete's OWN id, matched against a transmit the same text
+/// also contains. A transmit sets/overwrites a local `id → pixels` ledger — a
+/// re-transmit to an id already held REPLACES it in the terminal, per the kitty
+/// spec's own re-transmit rule, so the ledger does too, rather than accumulating
+/// both sizes — and a delete removes its id from the ledger, crediting
+/// `freed_pixels`. Whatever the ledger still holds when `text` runs out is
+/// `stranded_uploads`/`stranded_pixels`: transmitted in this capture, never freed
+/// in it.
+///
+/// A delete naming an id nothing in `text` transmitted (freed by an EARLIER
+/// capture not included here, or already freed once and named again) still counts
+/// toward `deletes`, just not `freed_pixels` — there is nothing in this text to
+/// credit it against.
+///
+/// A transmit with no `i=` is invisible to the ledger — neither freed nor
+/// stranded — rather than assumed safe: `kitty_transmit_virtual` and
+/// `ratatui-image`'s own kitty encoder both always state one (every id lanthorn
+/// emits is meant to be freed later), so this is unreached on lanthorn's own
+/// traffic today, and an id-less transmit still counts toward `pixels`/`uploads`
+/// above, just not toward stranding.
+///
+/// Whole-capture, not per-frame: meant for a caller holding the ENTIRE emitted
+/// stream at once (the pty-stream harness), where the cost of one `HashMap` is
+/// nothing beside the megabytes of image data already in hand. [`measure_transmit`]
+/// stays the frame-path measurer, unchanged, for exactly that reason.
+pub fn measure_traffic(text: &str) -> UploadBytes {
+    let mut out = UploadBytes::default();
+    let mut outstanding: std::collections::HashMap<u32, u64> = std::collections::HashMap::new();
+    for (params, wire) in kitty_chunks(text) {
+        out.wire += wire;
+        let id = kitty_param(params, "i").map(|v| v as u32);
+        if params.split(',').any(|kv| kv == "a=d") {
+            out.deletes += 1;
+            if let Some(id) = id {
+                if let Some(px) = outstanding.remove(&id) {
+                    out.freed_pixels += px;
+                }
+            }
+            continue;
+        }
+        if !kitty_is_upload_action(params) {
+            continue;
+        }
+        let size = kitty_param(params, "S").or_else(|| {
+            let (w, h) = (kitty_param(params, "s")?, kitty_param(params, "v")?);
+            Some(w * h * 4)
+        });
+        if let Some(size) = size {
+            out.pixels += size;
+            out.uploads += 1;
+            if let Some(id) = id {
+                outstanding.insert(id, size);
+            }
         }
     }
+    out.stranded_uploads = outstanding.len() as u64;
+    out.stranded_pixels = outstanding.values().sum();
     out
 }
 
@@ -6889,6 +7100,110 @@ mod tests {
             assert_eq!(both.uploads, 2);
             assert_eq!(both.pixels, 64 * 32 * 4 + 16 * 16 * 4);
             assert_eq!(both.wire, (a.len() + b.len()) as u64);
+        }
+
+        // ── measure_traffic: pairing a whole capture's deletes against its
+        // transmits (SQ-1201) ──────────────────────────────────────────────────
+
+        /// A transmit followed by the `a=d` that frees it: `freed_pixels` credits
+        /// the id, and it no longer counts as stranded.
+        ///
+        /// Falsified by hand: commenting out the `outstanding.remove(&id)` credit
+        /// in `measure_traffic` (crediting nothing and leaving the id stranded)
+        /// turns this into `freed_pixels: 0, stranded_uploads: 1` and fails both
+        /// assertions below — the pairing is load-bearing, not a tautology of
+        /// `deletes == 1`.
+        #[test]
+        fn a_transmit_and_its_later_delete_pair_into_freed_pixels() {
+            let pixels = 64u64 * 32 * 4;
+            let transmit = kitty_transmit_virtual(&canvas(64, 32), 0x00B0_0001, 2, 8, false);
+            let text = format!("{transmit}{}", kitty_delete_escape(0x00B0_0001));
+            let m = measure_traffic(&text);
+            assert_eq!(m.uploads, 1);
+            assert_eq!(m.pixels, pixels);
+            assert_eq!(m.deletes, 1);
+            assert_eq!(m.freed_pixels, pixels, "the delete named the transmit's own id");
+            assert_eq!(m.stranded_uploads, 0, "freed, not stranded");
+            assert_eq!(m.stranded_pixels, 0);
+        }
+
+        /// A transmit with no delete anywhere in the capture is stranded: still
+        /// resident in the terminal as far as this measurement can tell.
+        #[test]
+        fn a_transmit_with_no_delete_is_stranded() {
+            let pixels = 64u64 * 32 * 4;
+            let transmit = kitty_transmit_virtual(&canvas(64, 32), 0x00B0_0002, 2, 8, false);
+            let m = measure_traffic(&transmit);
+            assert_eq!(m.deletes, 0);
+            assert_eq!(m.freed_pixels, 0);
+            assert_eq!(m.stranded_uploads, 1);
+            assert_eq!(m.stranded_pixels, pixels);
+        }
+
+        /// A delete naming an id nothing in this capture transmitted still counts
+        /// as a delete COMMAND, but frees nothing — there is no pixel size in this
+        /// text to credit it against (the transmit that set it happened earlier,
+        /// outside this capture, or it was already freed once).
+        #[test]
+        fn a_delete_for_an_unknown_id_is_counted_but_not_credited() {
+            let m = measure_traffic(&kitty_delete_escape(0x00B0_00FF));
+            assert_eq!(m.deletes, 1);
+            assert_eq!(m.freed_pixels, 0);
+            assert_eq!(m.stranded_uploads, 0, "nothing was transmitted here to strand");
+        }
+
+        /// The measurer keys on `a=d` alone; the `d=` value (`I` frees the image
+        /// data and every placement, `i` frees one placement) never enters the
+        /// classification, so a hand-built `d=i` pairs exactly like `d=I` does.
+        /// lanthorn itself only ever emits `d=I` (`kitty_delete_escape`) — this
+        /// documents that the OTHER spelling the kitty spec allows is not silently
+        /// mis-measured if it is ever emitted, without inventing a form nobody
+        /// sends today.
+        #[test]
+        fn d_lowercase_i_deletes_pair_exactly_like_d_uppercase_i() {
+            let pixels = 16u64 * 16 * 4;
+            let transmit = kitty_transmit_virtual(&canvas(16, 16), 0x00B0_0003, 1, 2, false);
+            let lowercase_delete = "\x1b_Gq=2,a=d,d=i,i=11534339\x1b\\"; // 0x00B0_0003
+            let m = measure_traffic(&format!("{transmit}{lowercase_delete}"));
+            assert_eq!(m.deletes, 1);
+            assert_eq!(m.freed_pixels, pixels, "d=i pairs by id exactly like d=I");
+            assert_eq!(m.stranded_uploads, 0);
+        }
+
+        /// A re-transmit to an id already held REPLACES it (the kitty spec's own
+        /// rule for re-transmitting to an existing id) — the ledger holds the
+        /// LATEST size under that id, not the sum of every transmit to it, so a
+        /// window re-transmitting three times and never being deleted is one
+        /// stranded upload at its last size, not three.
+        #[test]
+        fn a_retransmit_to_the_same_id_replaces_the_ledger_entry_not_adds_to_it() {
+            let id = 0x00B0_0004;
+            let first = kitty_transmit_virtual(&canvas(8, 8), id, 1, 1, false);
+            let second = kitty_transmit_virtual(&canvas(64, 64), id, 2, 2, false);
+            let m = measure_traffic(&format!("{first}{second}"));
+            assert_eq!(m.uploads, 2, "both transmits still cost the wire");
+            assert_eq!(m.stranded_uploads, 1, "one id, held once");
+            assert_eq!(m.stranded_pixels, 64 * 64 * 4, "the LATEST size, not 8x8 + 64x64");
+        }
+
+        /// SQ-1201: the kitty capability PROBE lanthorn sends at startup (`a=q`) also
+        /// declares `s=1,v=1` — a tiny throwaway image, never placed and never meant
+        /// to be freed — and a whole-capture measurement sees it right beside the
+        /// real transmits. `s`/`v` alone cannot be "this is an upload"; the action
+        /// has to be `a=T`/`a=t`, or a capability probe on a real capture inflates
+        /// `uploads` and manufactures a phantom stranded id for every query sent.
+        #[test]
+        fn a_capability_query_is_not_counted_as_an_upload() {
+            let query = "\x1b_Gi=31,s=1,v=1,a=q,t=d,f=24;AAAA\x1b\\";
+            let m = measure_traffic(query);
+            assert_eq!(m.uploads, 0, "a query is not an upload");
+            assert_eq!(m.stranded_uploads, 0, "and nothing here to strand");
+
+            // A real transmit alongside it is still counted normally.
+            let transmit = kitty_transmit_virtual(&canvas(16, 16), 0x00B0_0005, 1, 2, false);
+            let m = measure_traffic(&format!("{query}{transmit}"));
+            assert_eq!(m.uploads, 1, "the query still does not count");
+            assert_eq!(m.stranded_uploads, 1, "only the real transmit is stranded");
         }
 
         #[test]
