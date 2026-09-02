@@ -38,7 +38,7 @@ fn badges(dir: &std::path::Path) -> app::config::SymbolConfig {
 fn a_yes_installs_every_family_the_prompt_sampled() {
     let dir = seeded_home("yes");
     let path = style_write_path(None, &dir).expect("no pointer means the personal file");
-    write_font_check_answer(&path, true).expect("writing the answer");
+    write_font_check_answer(&path, true, None).expect("writing the answer");
 
     let set = glyphs(&dir);
     let want_arrows = app::symbols::Arrows::preset(NERD_ARROWS).unwrap();
@@ -89,8 +89,8 @@ fn a_yes_installs_every_family_the_prompt_sampled() {
 fn a_later_no_undoes_an_earlier_yes() {
     let dir = seeded_home("no-after-yes");
     let path = style_write_path(None, &dir).unwrap();
-    write_font_check_answer(&path, true).unwrap();
-    write_font_check_answer(&path, false).unwrap();
+    write_font_check_answer(&path, true, None).unwrap();
+    write_font_check_answer(&path, false, None).unwrap();
 
     let set = glyphs(&dir);
     let plain = SymbolSet::default();
@@ -109,14 +109,14 @@ fn a_later_no_undoes_an_earlier_yes() {
 fn a_no_leaves_a_gutter_mark_the_user_chose() {
     let dir = seeded_home("keeps-user-mark");
     let path = style_write_path(None, &dir).unwrap();
-    write_font_check_answer(&path, true).unwrap();
+    write_font_check_answer(&path, true, None).unwrap();
 
     // The user then picks their own mark, by hand, the way the file invites.
     let text = std::fs::read_to_string(&path).unwrap();
     let text = text.replace(&ASSIST_LAMP.to_string(), "☼");
     std::fs::write(&path, text).unwrap();
 
-    write_font_check_answer(&path, false).unwrap();
+    write_font_check_answer(&path, false, None).unwrap();
     assert_eq!(glyphs(&dir).assist_gutter, '☼', "their mark survives an answer about fonts");
 }
 
@@ -127,9 +127,9 @@ fn a_no_leaves_a_gutter_mark_the_user_chose() {
 fn answering_twice_rewrites_rather_than_appends() {
     let dir = seeded_home("idempotent");
     let path = style_write_path(None, &dir).unwrap();
-    write_font_check_answer(&path, true).unwrap();
+    write_font_check_answer(&path, true, None).unwrap();
     let once = std::fs::read_to_string(&path).unwrap();
-    write_font_check_answer(&path, true).unwrap();
+    write_font_check_answer(&path, true, None).unwrap();
     let twice = std::fs::read_to_string(&path).unwrap();
     assert_eq!(once, twice, "the second identical answer is a no-op on the text");
     let live = twice
@@ -147,7 +147,7 @@ fn the_seeded_commentary_survives_the_write() {
     let dir = seeded_home("comments");
     let path = style_write_path(None, &dir).unwrap();
     let before = std::fs::read_to_string(&path).unwrap();
-    write_font_check_answer(&path, true).unwrap();
+    write_font_check_answer(&path, true, None).unwrap();
     let after = std::fs::read_to_string(&path).unwrap();
 
     let comments = |t: &str| t.lines().filter(|l| l.trim_start().starts_with('#')).count();
@@ -176,7 +176,7 @@ fn a_yes_reaches_the_map_controls_too() {
 
     let dir = seeded_home("map-controls");
     let path = style_write_path(None, &dir).unwrap();
-    write_font_check_answer(&path, true).unwrap();
+    write_font_check_answer(&path, true, None).unwrap();
 
     let want = app::symbols::MapControlGlyphs::preset(NERD_MAP_CONTROLS)
         .expect("the preset the answer names");
@@ -202,7 +202,7 @@ fn a_yes_reaches_the_map_controls_too() {
     // one-way door.
     let dir = seeded_home("map-controls-plain");
     let path = style_write_path(None, &dir).unwrap();
-    write_font_check_answer(&path, false).unwrap();
+    write_font_check_answer(&path, false, None).unwrap();
     assert_eq!(
         glyphs(&dir).map_controls,
         app::symbols::SymbolSet::default().map_controls,
@@ -224,7 +224,7 @@ fn a_yes_reaches_the_picker_badges_too() {
 
     let dir = seeded_home("badges");
     let path = style_write_path(None, &dir).unwrap();
-    write_font_check_answer(&path, true).unwrap();
+    write_font_check_answer(&path, true, None).unwrap();
 
     let want = app::symbols::StoryBadges::preset(NERD_BADGES).expect("the preset the answer names");
     let cfg = badges(&dir);
@@ -251,7 +251,7 @@ fn a_yes_reaches_the_picker_badges_too() {
 
     // …and a later "no" takes them back to the letters, like every other key the
     // answer writes.
-    write_font_check_answer(&path, false).unwrap();
+    write_font_check_answer(&path, false, None).unwrap();
     let plain = app::symbols::StoryBadges::PLAIN;
     assert_eq!(badges(&dir).badge_save, plain.save.to_string(), "back to the letters");
     assert_eq!(badges(&dir).badge_hint_available, plain.hint_available.to_string());
@@ -268,9 +268,9 @@ fn a_badge_the_user_chose_survives_both_answers() {
     let text = text.replace("# badge_save = \"S\"", "badge_save = \"★\"");
     std::fs::write(&path, &text).unwrap();
 
-    write_font_check_answer(&path, true).unwrap();
+    write_font_check_answer(&path, true, None).unwrap();
     assert_eq!(badges(&dir).badge_save, "★", "their badge survives a yes");
-    write_font_check_answer(&path, false).unwrap();
+    write_font_check_answer(&path, false, None).unwrap();
     assert_eq!(badges(&dir).badge_save, "★", "and a no");
 }
 
@@ -281,7 +281,7 @@ fn a_broken_style_file_is_refused_not_overwritten() {
     let dir = seeded_home("broken");
     let path = style_write_path(None, &dir).unwrap();
     std::fs::write(&path, "[map\narrow_set = oops\n").unwrap();
-    let err = write_font_check_answer(&path, true).expect_err("a broken file must be refused");
+    let err = write_font_check_answer(&path, true, None).expect_err("a broken file must be refused");
     assert_eq!(err.kind(), std::io::ErrorKind::InvalidData);
     assert_eq!(
         std::fs::read_to_string(&path).unwrap(),
@@ -313,21 +313,21 @@ fn the_rows_the_prompt_shows_are_the_glyphs_the_answers_install() {
     let dir = seeded_home("rows-match");
     let path = style_write_path(None, &dir).unwrap();
 
-    // What the map draws after an answer. The last four are the diagonal corner
-    // stubs, and they are here because SQ-1140 put them in both rows: they are
-    // Unicode 13 Legacy Computing, spelled identically by every `PathGlyphs`
-    // preset, so no answer to this prompt installs or changes them. The invariant
-    // this case defends is still exactly the one it always did — every glyph the
-    // prompt SHOWS is a glyph the map DRAWS — and the stubs satisfy it whichever
-    // row you pick, which is the whole reason they can be shown in both.
+    // What the map draws after an answer. The diagonal corner stubs are NOT
+    // here (SQ-1245) — they moved to their own question with their own writer
+    // parameter, so `write_font_check_answer`'s `nerdfont` argument does not
+    // install or change them and stage one's row no longer shows them; see
+    // `stage_two_rows_match_what_each_answer_writes` for the diagonal
+    // question's own version of this invariant.
     //
-    // The map pane's own control cluster joins them at SQ-1148, and is read off
-    // the RESOLVED set like everything else here — which is what makes this the
-    // exact inverse of `font_check_dialog`'s
+    // The map pane's own control cluster joins the rest at SQ-1148, and is
+    // read off the RESOLVED set like everything else here — which is what
+    // makes this the exact inverse of `font_check_dialog`'s
     // `every_map_glyph_a_yes_installs_appears_in_the_row_the_player_judges`.
-    // That one says every glyph the answer INSTALLS is shown; this one says every
-    // glyph SHOWN is installed. Neither implies the other, and the pair is what
-    // holds the rule that the prompt asks about exactly what it applies.
+    // That one says every glyph the answer INSTALLS is shown; this one says
+    // every glyph SHOWN is installed. Neither implies the other, and the pair
+    // is what holds the rule that the prompt asks about exactly what it
+    // applies.
     let on_the_map = |set: &app::symbols::SymbolSet| {
         let m = &set.map_controls;
         [
@@ -337,11 +337,10 @@ fn the_rows_the_prompt_shows_are_the_glyphs_the_answers_install() {
             set.assist_gutter,
             m.room_numbers_on, m.room_numbers_off, m.centre,
             m.zoom_out, m.zoom_in, m.view_matrix, m.view_drawn,
-            set.path.diag_ul, set.path.diag_ur, set.path.diag_ll, set.path.diag_lr,
         ]
     };
 
-    write_font_check_answer(&path, true).unwrap();
+    write_font_check_answer(&path, true, None).unwrap();
     let set = glyphs(&dir);
     for ch in sample_row(true).chars().filter(|c| !c.is_whitespace()) {
         assert!(
@@ -350,13 +349,109 @@ fn the_rows_the_prompt_shows_are_the_glyphs_the_answers_install() {
         );
     }
 
-    write_font_check_answer(&path, false).unwrap();
+    write_font_check_answer(&path, false, None).unwrap();
     let set = glyphs(&dir);
     for ch in sample_row(false).chars().filter(|c| !c.is_whitespace()) {
         assert!(
             on_the_map(&set).contains(&ch),
             "row 2 showed {ch:?}, which the no answer does not put on the map"
         );
+    }
+}
+
+// ── SQ-1245: the diagonal answer is a second, independent question ─────────
+
+/// **The answer matrix.** Icons and diagonals are answered independently, so
+/// BOTH crossed combinations must round-trip — not just "yes" agreeing with
+/// "yes". This is the falsifying case for the whole feature: before the
+/// write-side of SQ-1245 existed, `diagonal_corners` had no writer at all, so
+/// `set.diagonal_corners` could only ever read back the compiled-in default
+/// (`true`) — the "diagonals no" half below fails on that code every time,
+/// which is what proves this case is actually exercising the new path rather
+/// than passing by construction.
+#[test]
+fn the_diagonal_answer_is_independent_of_the_icon_answer() {
+    // icons yes, diagonals no.
+    let dir = seeded_home("icons-yes-diag-no");
+    let path = style_write_path(None, &dir).unwrap();
+    write_font_check_answer(&path, true, Some(false)).unwrap();
+    let set = glyphs(&dir);
+    let want_arrows = app::symbols::Arrows::preset(NERD_ARROWS).unwrap();
+    assert_eq!(set.arrows, want_arrows, "the icon presets still installed on a yes");
+    assert!(!set.diagonal_corners, "diagonal_corners is off despite the icon yes");
+
+    // icons no, diagonals yes.
+    let dir = seeded_home("icons-no-diag-yes");
+    let path = style_write_path(None, &dir).unwrap();
+    write_font_check_answer(&path, false, Some(true)).unwrap();
+    let set = glyphs(&dir);
+    let plain = SymbolSet::default();
+    assert_eq!(set.arrows, plain.arrows, "no icon presets installed on a no");
+    assert!(set.diagonal_corners, "diagonal_corners is on despite the icon no");
+}
+
+/// A skipped stage two (Esc or the close box, `diagonal = None`) leaves
+/// `map.diagonal_corners` exactly as it was — not reset to the compiled-in
+/// default, and not touched at all — while the icon answer beside it still
+/// applies normally.
+#[test]
+fn skipping_stage_two_leaves_diagonal_corners_untouched() {
+    let dir = seeded_home("diag-skip-after-off");
+    let path = style_write_path(None, &dir).unwrap();
+    write_font_check_answer(&path, true, Some(false)).unwrap();
+    assert!(!glyphs(&dir).diagonal_corners, "set up: off");
+
+    write_font_check_answer(&path, false, None).unwrap();
+    assert!(!glyphs(&dir).diagonal_corners, "a skipped stage two must not flip it back on");
+    assert_eq!(
+        glyphs(&dir).arrows,
+        SymbolSet::default().arrows,
+        "the icon answer beside the skip still applies"
+    );
+}
+
+/// The very first answer, with stage two skipped: no `diagonal_corners` key is
+/// written at all — an absent key, not a written `true` — so the file states
+/// only what was actually decided, matching how every other font-check key
+/// behaves when its question goes unanswered.
+#[test]
+fn a_first_answer_that_skips_stage_two_writes_no_diagonal_key() {
+    let dir = seeded_home("diag-never-answered");
+    let path = style_write_path(None, &dir).unwrap();
+    write_font_check_answer(&path, true, None).unwrap();
+
+    let text = std::fs::read_to_string(&path).unwrap();
+    let live: Vec<&str> = text.lines().filter(|l| !l.trim_start().starts_with('#')).collect();
+    assert!(
+        !live.iter().any(|l| l.trim_start().starts_with("diagonal_corners")),
+        "no key written when stage two is skipped:\n{live:#?}"
+    );
+    assert!(glyphs(&dir).diagonal_corners, "and the compiled-in default (on) still applies");
+}
+
+/// Stage two's own version of `the_rows_the_prompt_shows_are_the_glyphs_the_answers_install`:
+/// whatever `diagonal_sample_row` showed is what the diagonal answer installs.
+#[test]
+fn stage_two_rows_match_what_each_answer_writes() {
+    use app::render::font_check_dialog::diagonal_sample_row;
+
+    let dir = seeded_home("diag-rows-match");
+    let path = style_write_path(None, &dir).unwrap();
+
+    write_font_check_answer(&path, true, Some(true)).unwrap();
+    let set = glyphs(&dir);
+    assert!(set.diagonal_corners);
+    let installed = [set.path.diag_ul, set.path.diag_ur, set.path.diag_ll, set.path.diag_lr];
+    for ch in diagonal_sample_row(true).chars().filter(|c| !c.is_whitespace()) {
+        assert!(installed.contains(&ch), "row 1 showed {ch:?}, which a diagonal yes does not install");
+    }
+
+    write_font_check_answer(&path, true, Some(false)).unwrap();
+    let set = glyphs(&dir);
+    assert!(!set.diagonal_corners);
+    let fallback = [set.path.nw, set.path.ne, set.path.sw, set.path.se];
+    for ch in diagonal_sample_row(false).chars().filter(|c| !c.is_whitespace()) {
+        assert!(fallback.contains(&ch), "row 2 showed {ch:?}, which a diagonal no does not fall back to");
     }
 }
 

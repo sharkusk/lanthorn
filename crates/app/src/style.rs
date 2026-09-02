@@ -889,8 +889,8 @@ pub fn style_write_path(
     }
 }
 
-/// Record the font check's answer in `path`'s `[map]` and `[elements]` sections
-/// as PRESET NAMES, format-preserving (SQ-1104, SQ-1159).
+/// Record the font check's answer(s) in `path`'s `[map]` and `[elements]`
+/// sections as PRESET NAMES, format-preserving (SQ-1104, SQ-1159, SQ-1245).
 ///
 /// Names, not expanded per-slot overrides. `arrow_set = "nerdfont"` is one line
 /// a person can read and re-decide; the forty `[map.overrides]` entries it would
@@ -902,10 +902,20 @@ pub fn style_write_path(
 /// is. A "plain" answer clears that override ONLY when it still holds the lamp
 /// this function wrote; a mark the user chose themselves is not ours to remove.
 ///
+/// `diagonal` is the SECOND question's answer (SQ-1245), independent of
+/// `nerdfont` in both directions: `Some(true)`/`Some(false)` write
+/// `map.diagonal_corners`, and `None` — the player skipped stage two — writes
+/// nothing and leaves whatever the key already held untouched, exactly like an
+/// absent key means "default" everywhere else in this file.
+///
 /// Refuses to touch a file that does not parse, for the same reason
 /// [`crate::config::write_config_at`] does: a broken file is the text the user
 /// needs to READ to fix it, and rewriting it destroys that.
-pub fn write_font_check_answer(path: &std::path::Path, nerdfont: bool) -> std::io::Result<()> {
+pub fn write_font_check_answer(
+    path: &std::path::Path,
+    nerdfont: bool,
+    diagonal: Option<bool>,
+) -> std::io::Result<()> {
     use toml_edit::{DocumentMut, Item, value};
 
     if let Some(parent) = path.parent() {
@@ -983,6 +993,22 @@ pub fn write_font_check_answer(path: &std::path::Path, nerdfont: bool) -> std::i
             .is_some_and(|s| s.chars().eq(std::iter::once(lamp)));
         if ours {
             ov.remove("gutter.assist");
+        }
+    }
+
+    // The diagonal answer (SQ-1245), independent of everything above it: a
+    // bare bool, not a preset name, because `diagonal_corners` already is one —
+    // see `crate::config::SymbolConfig`. `None` (stage two skipped) writes
+    // nothing, leaving the key exactly as it was.
+    if let Some(diag) = diagonal {
+        let diag_note = if diag {
+            "  # set by the font check (diagonal corner stubs)"
+        } else {
+            "  # set by the font check"
+        };
+        doc["map"]["diagonal_corners"] = value(diag);
+        if let Some(v) = doc["map"]["diagonal_corners"].as_value_mut() {
+            v.decor_mut().set_suffix(diag_note);
         }
     }
 

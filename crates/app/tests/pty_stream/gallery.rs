@@ -1141,8 +1141,11 @@ pub fn write_run_settings(user_dir: &Path, shot: &Shot, media: &Path) -> Result<
     // the picker's badges is a decision about the APP's presets, not about this
     // harness, and freezing six literals here is precisely what the paragraph above
     // says not to do.
+    // `diagonal_corners` is left untouched (`None`, SQ-1245's second question) —
+    // it already defaults to `true`, which is what every gallery shot wants, and
+    // this harness is about the icon presets, not a stand-in for that answer.
     let style_path = app::style::personal_style_path(user_dir);
-    app::style::write_font_check_answer(&style_path, true)
+    app::style::write_font_check_answer(&style_path, true, None)
         .map_err(|e| format!("writing the font-check answer: {e}"))?;
     Ok(())
 }

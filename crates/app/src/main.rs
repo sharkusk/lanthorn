@@ -2386,31 +2386,30 @@ fn run_event_loop(boot: startup::BootResult, launched_from_library: bool) -> Run
                             "[Recording turn history. Rewind will have something to show after your next move.]",
                         );
                     }
-                    OverlayAct::FontCheck(nerdfont) => {
-                        // SQ-1104: the answer is a GLYPH decision, so it is
-                        // recorded in `style.toml` as preset names, not in
-                        // `config.toml`. Written, then reloaded, so the map
-                        // changes under the player's eyes rather than at the
-                        // next launch — which is also the only way they can see
-                        // whether they answered correctly.
+                    OverlayAct::FontCheck(nerdfont, diagonal) => {
+                        // SQ-1104/SQ-1245: both answers are GLYPH decisions, so
+                        // they are recorded in `style.toml` as preset names /
+                        // a bool, not in `config.toml`. Written, then reloaded,
+                        // so the map changes under the player's eyes rather
+                        // than at the next launch — which is also the only way
+                        // they can see whether they answered correctly.
                         let msg = match app::style::style_write_path(
                             state.config.style.as_deref(),
                             &state.config.user_dir,
                         ) {
-                            Some(path) => match app::style::write_font_check_answer(&path, nerdfont) {
+                            Some(path) => match app::style::write_font_check_answer(&path, nerdfont, diagonal) {
                                 Ok(()) => {
                                     let _ = app::reload::reload_style(&mut state);
-                                    if nerdfont {
-                                        format!(
-                                            "[Nerd Font icons on. Saved to {}; run-font-check asks again.]",
-                                            path.display()
-                                        )
-                                    } else {
-                                        format!(
-                                            "[Plain glyphs. Saved to {}; run-font-check asks again.]",
-                                            path.display()
-                                        )
-                                    }
+                                    let icons = if nerdfont { "Nerd Font icons on" } else { "Plain glyphs" };
+                                    let diag = match diagonal {
+                                        Some(true) => "; diagonal corners on",
+                                        Some(false) => "; diagonal corners off",
+                                        None => "",
+                                    };
+                                    format!(
+                                        "[{icons}{diag}. Saved to {}; run-font-check asks again.]",
+                                        path.display()
+                                    )
                                 }
                                 Err(e) => format!("[Could not save the font choice: {e}]"),
                             },

@@ -43,6 +43,15 @@ any such tag, or this Unreleased section, still exists.*
   each with its own key shown alongside. (Right-clicking twice no longer opens
   launch options; the menu item does.)
 - **`?` in the picker** shows every key the story browser knows, on one screen.
+- **The font check now asks about the diagonal map corners separately.** The
+  four half-diagonal corner-stub glyphs are plain Unicode, not part of any Nerd
+  Font patch, so a font could pass the icon comparison and still draw the map's
+  diagonals as boxes (or vice versa) — one answer used to cover both. It is now
+  a second question, right after the first: which row draws the diagonal stubs
+  cleanly, against the orthogonal corner the map falls back to without them.
+  Answered independently either way, and it sets `map.diagonal_corners` in
+  `style.toml`; skipping it (Esc or the close box) leaves that setting exactly
+  as it was.
 - **The story pane's border control now cycles three states.** Command panel →
   inventory panel → none → command panel, one click at a time (`cycle-panel`,
   bound to the same control that used to only toggle the command panel). The
