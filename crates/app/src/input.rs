@@ -1409,22 +1409,58 @@ fn sync_band_phrase_to_input(input: &mut crate::text_field::TextField, old_text:
 /// Remove `old_text` from the end of `input`'s value, if it is still there —
 /// leaving whatever text (if any) preceded it untouched. No-op (rather than a
 /// wrong, partial delete) when the tail has diverged.
+///
+/// Matches against the value with any TRAILING whitespace ignored first
+/// (`parse_phrase` reads `old_text` off `split_whitespace`, so a space typed
+/// after the phrase — e.g. `examine ` — never shows up in it), and the
+/// trailing whitespace is discarded along with `old_text` rather than kept:
+/// [`sync_band_phrase_to_input`] re-adds exactly one separating space itself.
+/// Without this, `old_text` no longer matches the tail at all, and the pick
+/// falls through to being APPENDED after the untouched `old_text` instead of
+/// replacing it (`examine ` + click `rope` → `examine examine rope`).
 fn strip_band_tail(input: &mut crate::text_field::TextField, old_text: &str) {
-    if !old_text.is_empty() && input.value.ends_with(old_text) {
+    if old_text.is_empty() {
+        return;
+    }
+    let trimmed_len = input.value.trim_end().len();
+    if input.value[..trimmed_len].ends_with(old_text) {
         let mut v = input.value.clone();
-        v.truncate(v.len() - old_text.len());
+        v.truncate(trimmed_len - old_text.len());
         input.set(v, true);
     }
 }
 
 /// Pick row `idx` of `col` and compose it onto the prompt — the shared core
 /// of a mouse click (`Action::BandClickRow`) and a Tab-with-highlight pick
-/// (`Action::BandTabPick`, which truncates the partial word first and then
-/// calls this exactly the same way). `col` becomes the current column; `pick`
-/// then advances it again to the NEXT reachable one (SQ-0677: a pick — click
-/// or Tab — always moves the current column forward, symmetric with typing
-/// a verb/prep advancing it).
+/// (`Action::BandTabPick`). `col` becomes the current column; `pick` then
+/// advances it again to the NEXT reachable one (SQ-0677: a pick — click or
+/// Tab — always moves the current column forward, symmetric with typing a
+/// verb/prep advancing it).
+///
+/// Strips the word under construction FIRST, but ONLY when NOTHING has been
+/// picked yet (`phrase_text()` empty) — e.g. completing the very first word,
+/// `exa` → `examine`, where the partial verb isn't a recognized token yet so
+/// `parse_phrase` doesn't count it toward `phrase_text()` at all, leaving the
+/// tail-diff below (`old_text = ""`) nothing to strip on its own (mirrors
+/// `apply_completion`'s truncate-then-insert for that case). Once at least
+/// one slot IS picked, the partial word for whatever comes next (an object, a
+/// second object) already counts toward `phrase_text()` — see
+/// `CommandBandState::parse_phrase`'s doc, "the word still under construction
+/// counts as a token" — so the tail-diff below replaces it correctly on its
+/// own; pre-stripping here TOO would double-strip and leave a stray
+/// duplicate (`take take door`, the falsified symptom — see
+/// `typing_at_the_prompt_completes_from_the_live_object_columns` in
+/// `tests/command_band.rs`). Shared by click and Tab alike (SQ-1230: a click
+/// on a partial verb, e.g. `exa` + click `examine`, must replace it exactly
+/// like Tab does, not append after it).
 fn band_pick_row(state: &mut AppState, col: usize, idx: usize) {
+    let old_is_empty =
+        state.overlays.command_band.as_ref().is_some_and(|b| b.phrase_text().is_empty());
+    if old_is_empty {
+        let keep = state.input.char_len() - state.current_partial().chars().count();
+        state.input.truncate_chars(keep);
+    }
+
     let vp = state.modal_list_viewport;
     let anim = state.config.animation.clone();
     if let Some(b) = &mut state.overlays.command_band {
@@ -2694,34 +2730,10 @@ fn apply_action_inner(action: Action, state: &mut AppState, mapper: &mut Mapper)
 
         Action::BandClickRow(col, idx) => band_pick_row(state, col, idx),
 
-        Action::BandTabPick(col, idx) => {
-            // Strip the word under construction FIRST, but ONLY when NOTHING
-            // has been picked yet (`phrase_text()` empty) — e.g. completing
-            // the very first word, `unl` → `unlock`, where the partial verb
-            // isn't a recognized token yet so `parse_phrase` doesn't count it
-            // toward `phrase_text()` at all, leaving `band_pick_row`'s own
-            // tail-diff (`old_text = ""`) nothing to strip on its own
-            // (mirrors `apply_completion`'s truncate-then-insert for that
-            // case). Once at least one slot IS picked, the partial word for
-            // whatever comes next (an object, a second object) already
-            // counts toward `phrase_text()` — see `CommandBandState::
-            // parse_phrase`'s doc, "the word still under construction counts
-            // as a token" — so `band_pick_row`'s existing diff replaces it
-            // correctly on its own; pre-stripping here TOO would double-strip
-            // and leave a stray duplicate (`take take door`, the falsified
-            // symptom — see `typing_at_the_prompt_completes_from_the_live_
-            // object_columns` in tests/command_band.rs).
-            let old_is_empty = state
-                .overlays
-                .command_band
-                .as_ref()
-                .is_some_and(|b| b.phrase_text().is_empty());
-            if old_is_empty {
-                let keep = state.input.char_len() - state.current_partial().chars().count();
-                state.input.truncate_chars(keep);
-            }
-            band_pick_row(state, col, idx);
-        }
+        // The partial-word pre-strip (Tab completing `unl` -> `unlock`
+        // rather than appending) lives in `band_pick_row` itself now,
+        // shared with `Action::BandClickRow` -- see its doc.
+        Action::BandTabPick(col, idx) => band_pick_row(state, col, idx),
 
         Action::BandFocusCol(col) => {
             if let Some(b) = &mut state.overlays.command_band {
@@ -8084,6 +8096,46 @@ mod tests {
 
         apply_action(Action::BandClose, &mut s, &mut mapper);
         assert_eq!(s.input.value, "well, take mailbox", "closing the band does not clear it");
+    }
+
+    /// SQ-1230, repro 1: autocompleting `examine` and pressing SPACE leaves
+    /// `examine ` on the prompt — a trailing space `parse_phrase` never sees
+    /// (it reads `split_whitespace`), so `phrase_text()` is still bare
+    /// `examine` while the real input line has an extra character
+    /// `strip_band_tail`'s old exact `ends_with` match could not see past.
+    /// Clicking a WHAT noun must still REPLACE `examine`, appending the noun
+    /// with exactly one separating space, not duplicate the verb.
+    #[test]
+    fn clicking_what_after_a_trailing_space_does_not_duplicate_the_verb() {
+        use crate::render::command_band::{COL_HERE, COL_VERB};
+        let mut s = AppState::default();
+        let mut mapper = Mapper::default();
+        open_band(&mut s);
+        pick_text(&mut s, &mut mapper, COL_VERB, "examine");
+        assert_eq!(s.input.value, "examine");
+        type_text(&mut s, &mut mapper, " ");
+        assert_eq!(s.input.value, "examine ", "sanity: the trailing space landed");
+
+        pick_text(&mut s, &mut mapper, COL_HERE, "mailbox");
+        assert_eq!(s.input.value, "examine mailbox", "not `examine examine mailbox`");
+    }
+
+    /// SQ-1230, repro 2: a partial word typed at the VERB column (`exa`,
+    /// short of any exact match `parse_phrase` recognizes) must be REPLACED
+    /// by a clicked verb, exactly like `Action::BandTabPick` already replaces
+    /// it rather than appending after it — a mouse click and a Tab pick are
+    /// the same gesture and must leave the same prompt.
+    #[test]
+    fn clicking_a_verb_replaces_the_partial_word_being_typed() {
+        use crate::render::command_band::COL_VERB;
+        let mut s = AppState::default();
+        let mut mapper = Mapper::default();
+        open_band(&mut s);
+        type_text(&mut s, &mut mapper, "exa");
+        assert_eq!(s.input.value, "exa");
+
+        pick_text(&mut s, &mut mapper, COL_VERB, "examine");
+        assert_eq!(s.input.value, "examine", "the partial word was REPLACED, not appended to");
     }
 
     /// Tab with NOTHING highlighted is pure column movement (SQ-0677):
