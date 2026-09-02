@@ -538,6 +538,19 @@ struct Candidate {
     /// answered with `carry · catch · get`, because the one word that was right
     /// looked like a fragment and was dropped in favour of its own asides.
     whole: bool,
+    /// True when this is a [`by_meaning`](StoryVocabulary::by_meaning) candidate
+    /// reached from the TYPED word itself, rather than from one of its stems
+    /// (SQ-1232).
+    ///
+    /// `hasten` is not a typo — it is an English verb the shipped table already
+    /// groups with `rush` and `hie` — and a story that implements one of those
+    /// has answered the question `by_near_miss` can only guess at. So this one
+    /// candidate outranks a spelling neighbour on the strength of that group
+    /// membership: `fasten` at distance one used to win over `rush` every time,
+    /// because tier alone put every near miss ahead of every meaning guess. A
+    /// meaning reached by STEMMING first (`hastening` → `hasten`) is still a
+    /// guess about what the player meant to type and is not marked here.
+    exact_meaning: bool,
 }
 
 /// One word an offer line will name, and how it was arrived at.
@@ -606,17 +619,23 @@ impl StoryVocabulary {
         self.by_near_miss(typed, position, &mut out);
         self.by_ending(typed, position, &mut out);
         self.by_meaning(typed, position, &mut out);
-        // Meaning speaks only where FORM reached nothing. A near miss or a
-        // changed ending is evidence about the word the player really typed; a
-        // synonym is a guess at what they meant, and with the first in hand the
-        // second is wallpaper — `opening mailbox` wants `open`, and two games in
-        // the corpus put `look` and `read` on that same verb, so the offer read
-        // `open · read · look` until this line. It sits here rather than in the
-        // ranking below because the aside source builds on whatever it finds: a
-        // proposal that is not going to be shown must not leave its asides
-        // behind, spelled by a verb nothing else reached.
+        // Meaning speaks only where FORM reached nothing — UNLESS the typed
+        // word is itself a known word with a meaning of its own (SQ-1232). A
+        // near miss or a changed ending is evidence about the word the player
+        // really typed; a synonym reached by STEMMING is a guess at what they
+        // meant, and with the first in hand the second is wallpaper —
+        // `opening mailbox` wants `open`, and two games in the corpus put
+        // `look` and `read` on that same verb, so the offer read `open · read
+        // · look` until this line. But `hasten` is not a guess: the shipped
+        // table already groups it with `rush`, so a story that implements
+        // `rush` has answered the question, and `fasten` sitting one keystroke
+        // away must not crowd that answer out — `exact_meaning` is what keeps
+        // it. It sits here rather than in the ranking below because the aside
+        // source builds on whatever it finds: a proposal that is not going to
+        // be shown must not leave its asides behind, spelled by a verb nothing
+        // else reached.
         if out.iter().any(|c| c.tier == 0) {
-            out.retain(|c| c.tier != 1);
+            out.retain(|c| c.tier != 1 || c.exact_meaning);
         }
         self.by_story_synonym(position, &mut out);
         out
@@ -650,7 +669,14 @@ impl StoryVocabulary {
                 continue;
             }
             if osa(&key, &self.truncated(word)) == 1 {
-                out.push(Candidate { word: word.clone(), tier: 0, distance: 1, order, whole: false });
+                out.push(Candidate {
+                    word: word.clone(),
+                    tier: 0,
+                    distance: 1,
+                    order,
+                    whole: false,
+                    exact_meaning: false,
+                });
             }
         }
     }
@@ -668,7 +694,14 @@ impl StoryVocabulary {
             let word = word.clone();
             let order = self.words.keys().position(|k| *k == word).unwrap_or(0);
             if !out.iter().any(|c| c.word == word) {
-                out.push(Candidate { word, tier: 0, distance: 0, order, whole: false });
+                out.push(Candidate {
+                    word,
+                    tier: 0,
+                    distance: 0,
+                    order,
+                    whole: false,
+                    exact_meaning: false,
+                });
             }
         }
     }
@@ -704,6 +737,10 @@ impl StoryVocabulary {
             return;
         }
         for lemma in std::iter::once(typed.to_string()).chain(stems(typed)) {
+            // The typed word itself, unstemmed, is the strong case (SQ-1232):
+            // `hasten` is a group member in its own right, not a guess reached
+            // by stripping a suffix off something else.
+            let exact_meaning = lemma == typed;
             let known = |w: &str| self.stored(w).is_some_and(|(s, r)| self.fills(s, r, position));
             for (order, word) in
                 verb_synonyms::suggest(&lemma, known, MAX_OFFERED).into_iter().enumerate()
@@ -715,6 +752,7 @@ impl StoryVocabulary {
                         distance: 0,
                         order,
                         whole: true,
+                        exact_meaning,
                     });
                 }
             }
@@ -746,6 +784,7 @@ impl StoryVocabulary {
                         distance: 0,
                         order,
                         whole: false,
+                        exact_meaning: false,
                     });
                 }
             }
@@ -826,7 +865,13 @@ impl StoryVocabulary {
             None => true,
         };
 
-        found.sort_by_key(|c| (c.tier, c.distance, misfits(c), c.order, c.word.clone()));
+        // `!exact_meaning` sorts first (SQ-1232): a candidate reached because
+        // the TYPED word is itself a known word with a group of its own
+        // outranks every tier before it settles ties by tier as always — the
+        // one case a spelling neighbour must not win against.
+        found.sort_by_key(|c| {
+            (!c.exact_meaning, c.tier, c.distance, misfits(c), c.order, c.word.clone())
+        });
         let mut seen = BTreeSet::new();
         let mut picks = Vec::new();
         for c in found {
@@ -1269,9 +1314,11 @@ const PROSE_LOOKBACK: usize = 40;
 /// printed in that long is offered as stored, which the parser accepts anyway.
 const SPELLING_LOOKBACK: usize = 200;
 
-/// Which command in a `run` answered a candidate, and which pair of controls (if
-/// any) judges it. Indices into the run's steps, in the order they were typed.
-type Slot = (usize, Option<(usize, usize)>);
+/// Which command in a `run` answered a candidate, which pair of NOUN controls
+/// (if any) judges it, and which pair of DIRECTION controls (if any, SQ-1232 —
+/// see [`vetting_plan`]) judges it too. Indices into the run's steps, in the
+/// order they were typed.
+type Slot = (usize, Option<(usize, usize)>, Option<(usize, usize)>);
 
 /// A vocabulary offer that has been asked of the shadow and is waiting for its
 /// answer (SQ-1124).
@@ -1311,6 +1358,14 @@ pub struct PendingOffer {
 /// Every control is laid out in the SAME run as the question it judges, from the
 /// same snapshot and therefore the same room. See [`crate::probe`]'s module docs
 /// for why a signature learned once a session is a signature of the wrong room.
+///
+/// When the object being tested is a DIRECTION, a second pair of controls
+/// stands in beside the noun pair — two other directions, rather than two
+/// absent nouns (SQ-1232). A direction is a real word the parser always
+/// recognises, so the noun pair's "you can't see any such thing" never
+/// matches what a direction object actually gets back; the direction pair
+/// teaches that shape instead of replacing the noun pair, which still covers
+/// every other kind of object exactly as before.
 fn vetting_plan(
     engine: &dyn Engine,
     v: &StoryVocabulary,
@@ -1329,6 +1384,26 @@ fn vetting_plan(
     // VERB, so the control keeps the sentence's shape and only loses its object.
     let noun_slot = if at > 0 { Some(at) } else { words.len().checked_sub(1).filter(|&i| i > 0) };
 
+    // A DIRECTION object defeats the noun-based control (SQ-1232): `fasten
+    // north` reads to many games as a different sentence from `fasten
+    // <absent noun>` — "You would achieve nothing by that" against "You can't
+    // see any such thing" — because a direction is a real, in-scope word and a
+    // conjured-absent noun is not. So when the word actually sitting in that
+    // slot is a direction, two OTHER directions stand in for the absent-noun
+    // pair and teach the refusal shape a direction object actually gets.
+    // `mapper::direction::parse_direction` is the one place the app knows a
+    // direction word from any other; nothing here keeps a second list of them.
+    let dir_words: Option<(String, String)> = noun_slot
+        .and_then(|slot| mapper::direction::parse_direction(&words[slot]))
+        .and_then(|typed_dir| {
+            let mut alts = mapper::direction::PROBE_DIRS
+                .into_iter()
+                .filter(|&d| d != typed_dir)
+                .map(mapper::direction::long_label)
+                .filter(|w| knows(w));
+            Some((alts.next()?.to_string(), alts.next()?.to_string()))
+        });
+
     let mut cmds: Vec<String> = vec![nonsense];
     let mut plan: Vec<Slot> = Vec::new();
     let mut controls: BTreeMap<String, usize> = BTreeMap::new();
@@ -1336,11 +1411,11 @@ fn vetting_plan(
         let mut w = words.to_vec();
         w[at] = pick.clone();
         let candidate = w.join(" ");
-        let pair = noun_slot.map(|slot| {
+        let mut swap_pair = |base: &[String], a: &str, b: &str, slot: usize| {
             let mut idx = [0usize; 2];
-            for (k, noun) in [absent_a, absent_b].into_iter().enumerate() {
-                let mut c = w.clone();
-                c[slot] = noun.clone();
+            for (k, sub) in [a, b].into_iter().enumerate() {
+                let mut c = base.to_vec();
+                c[slot] = sub.to_string();
                 let text = c.join(" ");
                 idx[k] = *controls.entry(text.clone()).or_insert_with(|| {
                     cmds.push(text);
@@ -1348,9 +1423,11 @@ fn vetting_plan(
                 });
             }
             (idx[0], idx[1])
-        });
+        };
+        let pair = noun_slot.map(|slot| swap_pair(&w, absent_a, absent_b, slot));
+        let dir_pair = noun_slot.zip(dir_words.as_ref()).map(|(slot, (d1, d2))| swap_pair(&w, d1, d2, slot));
         cmds.push(candidate);
-        plan.push((cmds.len() - 1, pair));
+        plan.push((cmds.len() - 1, pair, dir_pair));
     }
     (cmds.len() <= crate::probe::MAX_PROBES).then_some((cmds, plan))
 }
@@ -1380,9 +1457,12 @@ fn judge(run: &crate::probe::ProbeRun, offer: &PendingOffer) -> Option<Vec<Strin
             .picks
             .iter()
             .zip(&offer.plan)
-            .filter(|(_, (cand, pair))| {
+            .filter(|(_, (cand, pair, dir_pair))| {
                 let mut refusals = base.clone();
                 if let Some((a, b)) = *pair {
+                    refusals.merge(run.refusal_from_pair(a, b));
+                }
+                if let Some((a, b)) = *dir_pair {
                     refusals.merge(run.refusal_from_pair(a, b));
                 }
                 run.did_something(*cand, &refusals)
@@ -1883,6 +1963,51 @@ mod tests {
         let v = a_plainly_spelled_story();
         assert_eq!(v.offer("illuminating", Position::Opening, &["lamp"], &[]), vec!["light"]);
         assert_eq!(v.offer("purchased", Position::Opening, &["lamp"], &[]), vec!["buy"]);
+    }
+
+    /// A pocket story that implements `rush` and `fasten` as two separate
+    /// opening verbs, one spelling each — for SQ-1232's ranking rule.
+    fn a_hasten_or_fasten_story() -> StoryVocabulary {
+        let mut verbs = Vec::new();
+        let mut words = BTreeMap::new();
+        for (i, w) in ["rush", "fasten"].iter().enumerate() {
+            verbs.push(Verb::new(
+                300 + i as u32,
+                0,
+                vec![(*w).to_string()],
+                vec![SyntaxLine::new(i as u16, false, vec![noun()])],
+            ));
+            words.insert((*w).to_string(), roles(true, false));
+        }
+        StoryVocabulary::new(verbs, words, BTreeSet::new(), 0)
+    }
+
+    /// **SQ-1232.** `hasten` is one keystroke from `fasten` and NOT a typo of
+    /// it — the shipped table already groups `hasten` with `rush`, and a
+    /// story that implements `rush` has answered the question a spelling
+    /// neighbour can only guess at. A player typing `hasten north` wants to
+    /// know about `rush`, not `fasten`, so the group member has to outrank
+    /// the near miss rather than being suppressed by it.
+    ///
+    /// Falsify by dropping `exact_meaning` from the sort key (or from the
+    /// `candidates` retain that keeps it past the tier-1 filter): `fasten`
+    /// answers first, which was the reported symptom.
+    #[test]
+    fn a_known_words_own_meaning_outranks_a_spelling_neighbour() {
+        let v = a_hasten_or_fasten_story();
+        assert_eq!(
+            v.offer("hasten", Position::Opening, &[], &[]),
+            vec!["rush", "fasten"],
+            "the group member `hasten` itself means leads; the near miss trails as an aside"
+        );
+        // And the ordinary case is untouched: `fastn` has no group of its own
+        // — it is not an English word at all — so the near miss is still the
+        // only thing there is to offer.
+        assert_eq!(
+            v.offer("fastn", Position::Opening, &[], &[]),
+            vec!["fasten"],
+            "a genuine typo still finds its spelling neighbour"
+        );
     }
 
     /// Meaning proposes VERBS, and the opening word is the only place a verb
