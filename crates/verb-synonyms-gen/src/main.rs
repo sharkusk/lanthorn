@@ -673,6 +673,16 @@ fn print_report(r: &Report, groups: &[Vec<String>], p: &Params, harvested: usize
     eprintln!("duplicate groups discarded    {}", r.duplicates);
     eprintln!("  …a synset a game already said {}", r.game_agrees);
     eprintln!("groups subsumed by another    {}", r.subsumed);
+    eprintln!(
+        "bystander members dropped     {} (a WordNet sense the corpus disagrees with)",
+        r.bystanders_dropped.len()
+    );
+    for (w, kept) in r.bystanders_dropped.iter().take(20) {
+        eprintln!("  {w} — corpus says that's a different action from {kept}");
+    }
+    eprintln!("`un-` spellings considered    {}", r.reversal_candidates);
+    eprintln!("  …resolved from the corpus's own declaration  {}", r.reversals_from_corpus);
+    eprintln!("  …paired with their bare base verb            {}", r.reversals_paired_with_base);
     eprintln!("sense-order constraints broken {}", r.order_conflicts);
     eprintln!("groups written                {}", groups.len());
     let members: usize = groups.iter().map(Vec::len).sum();
