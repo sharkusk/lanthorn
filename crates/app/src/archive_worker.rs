@@ -28,7 +28,7 @@ use std::path::PathBuf;
 use std::sync::{Arc, Condvar, Mutex, OnceLock};
 use std::thread::JoinHandle;
 
-use crate::archive::{build_archive_bytes, DisplayListDto, Meta, OwnedSessionRecord, PngBlobCache};
+use crate::archive::{build_archive_bytes, DisplayListDto, HistoryReuseStats, Meta, OwnedSessionRecord, PngBlobCache};
 use crate::engine::EngineSave;
 
 /// Everything one archive write needs, owned rather than borrowed — built on
@@ -79,6 +79,12 @@ struct WorkerHandle {
     mailbox: Arc<Mutex<Mailbox>>,
     cv: Arc<Condvar>,
     failures: Arc<Mutex<Vec<String>>>,
+    /// Raw-copied/encoded turn counts from the MOST RECENT completed write
+    /// (SQ-1202) — overwritten each cycle, not accumulated, since it answers
+    /// "how did the last write go" rather than a running total. `failures` is
+    /// drained because each entry is a one-shot player notice; this is a
+    /// snapshot a caller can re-read any time.
+    history_stats: Arc<Mutex<HistoryReuseStats>>,
     _thread: JoinHandle<()>,
 }
 
@@ -92,12 +98,14 @@ impl WorkerHandle {
         }));
         let cv = Arc::new(Condvar::new());
         let failures = Arc::new(Mutex::new(Vec::new()));
-        let (mb, cvh, fh) = (Arc::clone(&mailbox), Arc::clone(&cv), Arc::clone(&failures));
+        let history_stats = Arc::new(Mutex::new(HistoryReuseStats::default()));
+        let (mb, cvh, fh, hs) =
+            (Arc::clone(&mailbox), Arc::clone(&cv), Arc::clone(&failures), Arc::clone(&history_stats));
         let thread = std::thread::Builder::new()
             .name("archive-writer".into())
-            .spawn(move || worker_loop(mb, cvh, fh))
+            .spawn(move || worker_loop(mb, cvh, fh, hs))
             .expect("spawn archive writer thread");
-        WorkerHandle { mailbox, cv, failures, _thread: thread }
+        WorkerHandle { mailbox, cv, failures, history_stats, _thread: thread }
     }
 }
 
@@ -105,7 +113,12 @@ impl WorkerHandle {
 /// the mailbox and blocking when there isn't one, exiting only once shutdown
 /// is requested AND nothing is left pending — so a final in-flight turn is
 /// never dropped), build it, write it, publish completion, repeat.
-fn worker_loop(mailbox: Arc<Mutex<Mailbox>>, cv: Arc<Condvar>, failures: Arc<Mutex<Vec<String>>>) {
+fn worker_loop(
+    mailbox: Arc<Mutex<Mailbox>>,
+    cv: Arc<Condvar>,
+    failures: Arc<Mutex<Vec<String>>>,
+    history_stats: Arc<Mutex<HistoryReuseStats>>,
+) {
     // Lives across turns for the life of the thread — an image's PNG bytes
     // never change while its `Arc<RgbaImage>` lives, so this is what makes a
     // stable inline image reuse its prior encode (SQ-1184).
@@ -130,9 +143,23 @@ fn worker_loop(mailbox: Arc<Mutex<Mailbox>>, cv: Arc<Condvar>, failures: Arc<Mut
         // drains failures right after flushing — a failure pushed after the
         // wake could slip past that drain and be lost at quit. CI's Linux
         // runner hit exactly that window (SQ-1184).
-        if let Err(e) = result {
-            failures.lock().expect("archive failures lock poisoned")
-                .push(format!("could not save to {}: {}", path.display(), e));
+        match result {
+            Ok(stats) => {
+                // Only the last write's shape matters to a reader (see the
+                // field doc on `WorkerHandle::history_stats`), and only worth
+                // a line when there was actually history to report on.
+                if stats.raw_copied > 0 || stats.encoded > 0 {
+                    eprintln!(
+                        "lanthorn: archive history at {}: {} turn(s) raw-copied, {} encoded",
+                        path.display(), stats.raw_copied, stats.encoded
+                    );
+                }
+                *history_stats.lock().expect("archive history-stats lock poisoned") = stats;
+            }
+            Err(e) => {
+                failures.lock().expect("archive failures lock poisoned")
+                    .push(format!("could not save to {}: {}", path.display(), e));
+            }
         }
         {
             let mut mb = mailbox.lock().expect("archive mailbox lock poisoned");
@@ -143,12 +170,13 @@ fn worker_loop(mailbox: Arc<Mutex<Mailbox>>, cv: Arc<Condvar>, failures: Arc<Mut
     }
 }
 
-fn build_and_write(job: ArchiveJob, png_cache: &mut PngBlobCache) -> std::io::Result<()> {
+fn build_and_write(job: ArchiveJob, png_cache: &mut PngBlobCache) -> std::io::Result<HistoryReuseStats> {
     // `to_json` only reads `mapper.graph`; a fresh `Mapper` wrapping the
     // cloned graph carries everything it needs (see the `ArchiveJob` doc).
     let mut mapper = mapper::mapper::Mapper::default();
     mapper.graph = job.mapper_graph;
     let session = job.session.as_borrowed();
+    let mut stats = HistoryReuseStats::default();
     let bytes = build_archive_bytes(
         &mapper,
         &job.save,
@@ -160,6 +188,10 @@ fn build_and_write(job: ArchiveJob, png_cache: &mut PngBlobCache) -> std::io::Re
         job.display.as_ref(),
         job.ground.as_deref(),
         Some(png_cache),
+        // The auto-save's own target IS the "previous archive" to reuse from
+        // (SQ-1202): this write is about to overwrite exactly that file.
+        Some(&job.path),
+        Some(&mut stats),
     )?;
     // Evict PNG-cache entries for images no longer present in this (the
     // latest) session snapshot, so a picture that scrolls out of the
@@ -171,7 +203,8 @@ fn build_and_write(job: ArchiveJob, png_cache: &mut PngBlobCache) -> std::io::Re
         .map(|img| Arc::as_ptr(&img.pixels) as usize)
         .collect();
     png_cache.retain_live(&live);
-    crate::storage::atomic_write(&job.path, &bytes)
+    crate::storage::atomic_write(&job.path, &bytes)?;
+    Ok(stats)
 }
 
 /// One archive-writing background thread, coalescing: a newer enqueued job
@@ -244,6 +277,17 @@ impl ArchiveWorker {
         match self.handle.get() {
             Some(h) => std::mem::take(&mut *h.failures.lock().expect("archive failures lock poisoned")),
             None => Vec::new(),
+        }
+    }
+
+    /// Raw-copied/encoded turn counts from the most recently COMPLETED write
+    /// (SQ-1202), for a caller (currently: tests) measuring the effect of
+    /// reusing unchanged history turns across archive writes. `Default` (all
+    /// zero) when the worker has never completed a write.
+    pub fn last_history_reuse_stats(&self) -> HistoryReuseStats {
+        match self.handle.get() {
+            Some(h) => *h.history_stats.lock().expect("archive history-stats lock poisoned"),
+            None => HistoryReuseStats::default(),
         }
     }
 }

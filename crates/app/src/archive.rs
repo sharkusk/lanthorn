@@ -926,7 +926,7 @@ pub fn save_archive_meta_pics(
     display: Option<&DisplayListDto>,
     ground: Option<&[u8]>,
 ) -> io::Result<()> {
-    let bytes = build_archive_bytes(mapper, save, screen, aux, &meta, session, pictures, display, ground, None)?;
+    let bytes = build_archive_bytes(mapper, save, screen, aux, &meta, session, pictures, display, ground, None, Some(path), None)?;
     crate::storage::atomic_write(path, &bytes)
 }
 
@@ -937,6 +937,13 @@ pub fn save_archive_meta_pics(
 /// `crate::archive_worker`), which calls this off the main thread with
 /// `Some` cache so a stable inline image reuses its prior PNG encode instead
 /// of re-compressing every turn — see [`PngBlobCache`].
+///
+/// `reuse_from`, when given, is the path of the archive this write is about
+/// to overwrite (SQ-1202): a retained history turn whose content matches an
+/// entry already there is copied straight out of it — compressed bytes, CRC
+/// and all — instead of Deflating `r.save`/`map_snapshot`/`transcript` again.
+/// See [`raw_copy_turn`] for the identity rule. `history_stats`, when given,
+/// receives the raw-copied/encoded counts for the turns this call wrote.
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn build_archive_bytes(
     mapper: &Mapper,
@@ -949,6 +956,8 @@ pub(crate) fn build_archive_bytes(
     display: Option<&DisplayListDto>,
     ground: Option<&[u8]>,
     mut png_cache: Option<&mut PngBlobCache>,
+    reuse_from: Option<&Path>,
+    mut history_stats: Option<&mut HistoryReuseStats>,
 ) -> io::Result<Vec<u8>> {
     let SessionRecord {
         transcript,
@@ -1106,7 +1115,31 @@ pub(crate) fn build_archive_bytes(
         zip.write_all(index_json.as_bytes())?;
 
         let ext = save_ext(&save.engine);
+
+        // Reuse each retained turn's already-Deflated bytes from the archive
+        // at `reuse_from` when its content hasn't changed (SQ-1202): a turn's
+        // save/map/transcript never change once recorded, so re-compressing
+        // one on every write is pure waste once it has been written once.
+        // `open_previous_archive` degrades to `None` for anything that isn't
+        // a readable zip at that path (absent on the first write, truncated,
+        // or simply a different file) — every turn then falls through to the
+        // fresh-encode path below, unchanged from before this change.
+        let mut prev_zip = reuse_from.and_then(open_previous_archive);
+
         for r in history {
+            let reused = match prev_zip.as_mut() {
+                Some(prev) => raw_copy_turn(prev, &mut zip, r, ext)?,
+                None => false,
+            };
+            if reused {
+                if let Some(stats) = history_stats.as_deref_mut() {
+                    stats.raw_copied += 1;
+                }
+                continue;
+            }
+            if let Some(stats) = history_stats.as_deref_mut() {
+                stats.encoded += 1;
+            }
             zip.start_file(format!("history/turn-{:04}.{}", r.turn, ext), options)?;
             zip.write_all(&r.save)?;
             if let Some(map) = &r.map_snapshot {
@@ -1139,6 +1172,138 @@ pub(crate) fn build_archive_bytes(
     }
 
     Ok(zip.finish()?.into_inner())
+}
+
+/// How many retained history turns one [`build_archive_bytes`] call satisfied
+/// by copying compressed bytes out of the previous archive versus
+/// re-encoding from scratch (SQ-1202). `Default` is "nothing measured" —
+/// every synchronous caller passes `None` for the out-param this fills, so a
+/// caller that never asks never pays for tracking it.
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+pub struct HistoryReuseStats {
+    /// Turns whose `history/turn-NNNN.*` entries were copied verbatim
+    /// (compressed bytes, CRC and all) from the previous archive.
+    pub raw_copied: usize,
+    /// Turns re-encoded from scratch: a fresh write, a turn absent from the
+    /// previous archive, or one whose content didn't match it.
+    pub encoded: usize,
+}
+
+/// Open the archive already at `path` for raw-copy reuse (SQ-1202), or `None`
+/// for anything that isn't a readable zip there — absent (the first write to
+/// this path), truncated, or simply not a zip. Every history turn then falls
+/// through to the ordinary fresh-encode path in [`build_archive_bytes`], so a
+/// missing or corrupt previous archive costs nothing beyond the failed open —
+/// no error reaches the caller.
+fn open_previous_archive(path: &Path) -> Option<zip::ZipArchive<std::fs::File>> {
+    let file = std::fs::File::open(path).ok()?;
+    zip::ZipArchive::new(file).ok()
+}
+
+/// Try to satisfy one retained turn's `history/turn-NNNN.*` entries by
+/// copying their compressed bytes straight out of `prev` — via
+/// `ZipWriter::raw_copy_file`, which never inflates — instead of re-Deflating
+/// `r`'s own bytes (SQ-1202).
+///
+/// **Identity rule**: reuse is a fact about CONTENT, never about the filename
+/// alone. A turn is reused only when EVERY entry it would write this call —
+/// `history/turn-NNNN.<ext>` always, `history/turn-NNNN.map.json` exactly
+/// when `r.map_snapshot` is `Some`, `history/turn-NNNN.txt` always — is
+/// present in `prev` under that SAME name with the SAME uncompressed length
+/// AND the SAME CRC-32 ([`entry_matches`]), checked against a CRC-32 this
+/// module computes over `r`'s own current bytes without inflating anything
+/// from `prev`. `prev` may hold an archive from an unrelated game, an old
+/// session, or a different turn count entirely; requiring the save entry
+/// (the largest and most specific of the three, a full VM snapshot) to match
+/// on top of the turn number already embedded in the name, and the map/
+/// transcript siblings to independently match too, is what keeps a
+/// coincidentally same-named entry from a different game from ever being
+/// reused — the residual risk is exactly a CRC-32 collision on top of an
+/// identical length, at identical turn numbers, on every sibling entry at
+/// once.
+///
+/// Checks every sibling's identity BEFORE copying any of them, so a mismatch
+/// on the last entry never leaves the first two written into `out` — the
+/// caller's fresh-encode fallback always writes a turn's entries from a clean
+/// slate, never split between a raw copy of one sibling and a fresh encode of
+/// another. Once copying starts, an `Err` (an I/O failure reading `prev` or
+/// writing `out`) propagates rather than falling back, matching how every
+/// other write in [`build_archive_bytes`] already handles an I/O error —
+/// letting the fallback proceed after a partial copy would risk a duplicate
+/// entry name in `out`.
+fn raw_copy_turn(
+    prev: &mut zip::ZipArchive<std::fs::File>,
+    out: &mut zip::ZipWriter<std::io::Cursor<Vec<u8>>>,
+    r: &crate::history::TurnRecord,
+    ext: &str,
+) -> io::Result<bool> {
+    let save_name = format!("history/turn-{:04}.{}", r.turn, ext);
+    let map_name = format!("history/turn-{:04}.map.json", r.turn);
+    let txt_name = format!("history/turn-{:04}.txt", r.turn);
+
+    if !entry_matches(prev, &save_name, &r.save) {
+        return Ok(false);
+    }
+    if let Some(map) = &r.map_snapshot {
+        if !entry_matches(prev, &map_name, map.as_bytes()) {
+            return Ok(false);
+        }
+    }
+    if !entry_matches(prev, &txt_name, r.transcript.as_bytes()) {
+        return Ok(false);
+    }
+
+    // Every applicable sibling matched — safe to copy all of them verbatim.
+    let to_io = |e: zip::result::ZipError| io::Error::other(e);
+    let f = prev.by_name(&save_name).map_err(to_io)?;
+    out.raw_copy_file(f).map_err(to_io)?;
+    if r.map_snapshot.is_some() {
+        let f = prev.by_name(&map_name).map_err(to_io)?;
+        out.raw_copy_file(f).map_err(to_io)?;
+    }
+    let f = prev.by_name(&txt_name).map_err(to_io)?;
+    out.raw_copy_file(f).map_err(to_io)?;
+    Ok(true)
+}
+
+/// Whether `prev`'s entry `name` has the same uncompressed length and the
+/// same CRC-32 as `content` — the per-entry half of [`raw_copy_turn`]'s
+/// identity rule. Reads only the zip's stored metadata (from the central
+/// directory the read already parsed); never inflates.
+fn entry_matches(prev: &mut zip::ZipArchive<std::fs::File>, name: &str, content: &[u8]) -> bool {
+    match prev.by_name(name) {
+        Ok(f) => f.size() == content.len() as u64 && f.crc32() == crc32(content),
+        Err(_) => false,
+    }
+}
+
+/// CRC-32 (IEEE 802.3 / `zlib`'s, the same polynomial the zip format stores
+/// per entry), hand-rolled rather than adding a dependency: `zip` computes
+/// its own internally (via `crc32fast`, not part of its public API) but
+/// exposes no way to hash arbitrary bytes with it, and this is the only place
+/// `app` needs to (SQ-1202) — comparing a turn's CURRENT bytes against a
+/// PREVIOUS archive's already-stored checksum, without inflating that entry.
+fn crc32(bytes: &[u8]) -> u32 {
+    fn table() -> &'static [u32; 256] {
+        static TABLE: std::sync::OnceLock<[u32; 256]> = std::sync::OnceLock::new();
+        TABLE.get_or_init(|| {
+            let mut table = [0u32; 256];
+            for (n, entry) in table.iter_mut().enumerate() {
+                let mut c = n as u32;
+                for _ in 0..8 {
+                    c = if c & 1 != 0 { 0xEDB8_8320 ^ (c >> 1) } else { c >> 1 };
+                }
+                *entry = c;
+            }
+            table
+        })
+    }
+    let table = table();
+    let mut crc = 0xFFFF_FFFFu32;
+    for &b in bytes {
+        crc = table[((crc ^ b as u32) & 0xFF) as usize] ^ (crc >> 8);
+    }
+    !crc
 }
 
 /// PNG-encode `pixels`, with no cache — the plain path every synchronous
@@ -1873,6 +2038,267 @@ mod tests {
         let _ = std::fs::remove_file(&path);
         let _ = std::fs::remove_file(&stripped);
         assert!(ac.command_history.is_empty(), "missing entry → empty command history");
+    }
+
+    // -------------------------------------------------------------------------
+    // history turn reuse across archive writes (SQ-1202)
+    // -------------------------------------------------------------------------
+
+    fn empty_meta() -> Meta {
+        Meta {
+            format_version: CURRENT_FORMAT_VERSION, ifid: None, name: None, turns: 0,
+            saved_at: String::new(), location: None, score: None, trigger: SaveTrigger::HostState,
+        }
+    }
+
+    /// A second write of the SAME unchanged turns raw-copies every one of
+    /// them, and only a genuinely new turn is encoded fresh. Falsifies
+    /// before the fix: without `reuse_from`/`raw_copy_turn`, every turn is
+    /// re-Deflated every write and `raw_copied` never leaves 0.
+    #[test]
+    fn history_turns_are_raw_copied_on_a_second_write() {
+        use crate::history::TurnRecord;
+
+        let mapper = small_mapper();
+        let machine = dummy_machine();
+        let es = zvm_es(&machine);
+        let meta = empty_meta();
+        let history1: Vec<std::sync::Arc<TurnRecord>> = vec![
+            std::sync::Arc::new(TurnRecord {
+                turn: 1, command: "look".into(), save: vec![1, 2, 3],
+                map_snapshot: None, transcript: "West of House".into(),
+            }),
+            std::sync::Arc::new(TurnRecord {
+                turn: 2, command: "wait".into(), save: vec![4, 5, 6, 7],
+                map_snapshot: None, transcript: "Time passes.".into(),
+            }),
+        ];
+        let path = temp_archive_path("reuse-basic");
+
+        // First write: nothing at `path` yet, so nothing to reuse from.
+        let session1 = SessionRecord { history: &history1, ..SessionRecord::empty() };
+        let mut stats1 = HistoryReuseStats::default();
+        let bytes1 = build_archive_bytes(
+            &mapper, &es, Some(&machine.screen), &machine.aux_data, &meta, &session1,
+            &[], None, None, None, Some(&path), Some(&mut stats1),
+        ).expect("first build");
+        crate::storage::atomic_write(&path, &bytes1).expect("first write");
+        assert_eq!(
+            stats1, HistoryReuseStats { raw_copied: 0, encoded: 2 },
+            "nothing to reuse on the very first write"
+        );
+
+        // Second write: the same two turns, unchanged, plus one genuinely new turn.
+        let history2: Vec<std::sync::Arc<TurnRecord>> = vec![
+            history1[0].clone(),
+            history1[1].clone(),
+            std::sync::Arc::new(TurnRecord {
+                turn: 3, command: "north".into(), save: vec![8, 9],
+                map_snapshot: None, transcript: "Forest".into(),
+            }),
+        ];
+        let session2 = SessionRecord { history: &history2, ..SessionRecord::empty() };
+        let mut stats2 = HistoryReuseStats::default();
+        let bytes2 = build_archive_bytes(
+            &mapper, &es, Some(&machine.screen), &machine.aux_data, &meta, &session2,
+            &[], None, None, None, Some(&path), Some(&mut stats2),
+        ).expect("second build");
+        assert_eq!(
+            stats2, HistoryReuseStats { raw_copied: 2, encoded: 1 },
+            "the two unchanged turns are raw-copied; only turn 3 is encoded"
+        );
+        crate::storage::atomic_write(&path, &bytes2).expect("second write");
+
+        // The archive built via reuse loads with the SAME content a from-scratch
+        // encode would produce — the raw copy changed HOW the bytes got there,
+        // not WHAT they say.
+        let ac = load_archive(&path).expect("load");
+        let _ = std::fs::remove_file(&path);
+        assert_eq!(ac.history.len(), 3);
+        assert_eq!(ac.history[0].save, vec![1, 2, 3]);
+        assert_eq!(ac.history[0].transcript, "West of House");
+        assert_eq!(ac.history[1].save, vec![4, 5, 6, 7]);
+        assert_eq!(ac.history[1].transcript, "Time passes.");
+        assert_eq!(ac.history[2].save, vec![8, 9], "the freshly-encoded turn also round-trips");
+        assert_eq!(ac.history[2].transcript, "Forest");
+
+        // And it matches a from-scratch encode of the SAME session bit-for-bit
+        // in content: build again with no `reuse_from` and compare inflated
+        // history entries.
+        let mut fresh_stats = HistoryReuseStats::default();
+        let fresh_bytes = build_archive_bytes(
+            &mapper, &es, Some(&machine.screen), &machine.aux_data, &meta, &session2,
+            &[], None, None, None, None, Some(&mut fresh_stats),
+        ).expect("fresh build");
+        assert_eq!(fresh_stats, HistoryReuseStats { raw_copied: 0, encoded: 3 });
+        let fresh_path = temp_archive_path("reuse-basic-fresh");
+        crate::storage::atomic_write(&fresh_path, &fresh_bytes).expect("write fresh");
+        let fresh_ac = load_archive(&fresh_path).expect("load fresh");
+        let _ = std::fs::remove_file(&fresh_path);
+        for i in 0..3 {
+            assert_eq!(ac.history[i].save, fresh_ac.history[i].save, "turn {i} save bytes match a from-scratch encode");
+            assert_eq!(ac.history[i].transcript, fresh_ac.history[i].transcript, "turn {i} transcript matches a from-scratch encode");
+            assert_eq!(ac.history[i].command, fresh_ac.history[i].command, "turn {i} command matches a from-scratch encode");
+        }
+    }
+
+    /// A previous archive that is absent, corrupt, or belongs to an unrelated
+    /// session/game degrades to a full re-encode with no error — the identity
+    /// rule (turn name + uncompressed length + CRC-32, all three sibling
+    /// entries) refuses a same-named entry whose content doesn't match.
+    #[test]
+    fn history_reuse_degrades_gracefully_when_previous_archive_is_unusable() {
+        use crate::history::TurnRecord;
+
+        let mapper = small_mapper();
+        let machine = dummy_machine();
+        let es = zvm_es(&machine);
+        let meta = empty_meta();
+        let history: Vec<std::sync::Arc<TurnRecord>> = vec![std::sync::Arc::new(TurnRecord {
+            turn: 1, command: "look".into(), save: vec![9, 9, 9],
+            map_snapshot: None, transcript: "A room.".into(),
+        })];
+        let session = SessionRecord { history: &history, ..SessionRecord::empty() };
+
+        // Case 1: absent — nothing was ever written to this path.
+        let absent_path = temp_archive_path("reuse-absent");
+        let mut stats_absent = HistoryReuseStats::default();
+        let bytes_absent = build_archive_bytes(
+            &mapper, &es, None, &machine.aux_data, &meta, &session,
+            &[], None, None, None, Some(&absent_path), Some(&mut stats_absent),
+        ).expect("build with an absent previous archive must not error");
+        assert_eq!(stats_absent, HistoryReuseStats { raw_copied: 0, encoded: 1 });
+
+        // Case 2: truncated / not a zip at all.
+        let truncated_path = temp_archive_path("reuse-truncated");
+        std::fs::create_dir_all(truncated_path.parent().unwrap()).unwrap();
+        std::fs::write(&truncated_path, b"not a zip file").unwrap();
+        let mut stats_truncated = HistoryReuseStats::default();
+        let bytes_truncated = build_archive_bytes(
+            &mapper, &es, None, &machine.aux_data, &meta, &session,
+            &[], None, None, None, Some(&truncated_path), Some(&mut stats_truncated),
+        ).expect("build with a corrupt previous archive must not error");
+        assert_eq!(stats_truncated, HistoryReuseStats { raw_copied: 0, encoded: 1 });
+
+        // Case 3: a readable archive at the same path, same turn number, but
+        // DIFFERENT content — a different game/session, not a stale copy of
+        // this one. Must never be mistaken for a match.
+        let other_path = temp_archive_path("reuse-different-session");
+        let other_history: Vec<std::sync::Arc<TurnRecord>> = vec![std::sync::Arc::new(TurnRecord {
+            turn: 1, command: "xyzzy".into(), save: vec![1, 1, 1, 1, 1],
+            map_snapshot: None, transcript: "Somewhere else entirely, a long way from here.".into(),
+        })];
+        let other_session = SessionRecord { history: &other_history, ..SessionRecord::empty() };
+        let other_bytes = build_archive_bytes(
+            &mapper, &es, None, &machine.aux_data, &meta, &other_session,
+            &[], None, None, None, None, None,
+        ).expect("build unrelated archive");
+        crate::storage::atomic_write(&other_path, &other_bytes).expect("write unrelated archive");
+        let mut stats_other = HistoryReuseStats::default();
+        let bytes_other = build_archive_bytes(
+            &mapper, &es, None, &machine.aux_data, &meta, &session,
+            &[], None, None, None, Some(&other_path), Some(&mut stats_other),
+        ).expect("build against an unrelated archive at the same path must not error");
+        assert_eq!(
+            stats_other, HistoryReuseStats { raw_copied: 0, encoded: 1 },
+            "same turn number, different content — never reused"
+        );
+
+        // All three fall back to a correct output: writing and loading each
+        // reproduces this session's own turn 1, not the unrelated one.
+        for (path, bytes) in [
+            (&absent_path, &bytes_absent),
+            (&truncated_path, &bytes_truncated),
+            (&other_path, &bytes_other),
+        ] {
+            crate::storage::atomic_write(path, bytes).expect("write");
+            let ac = load_archive(path).expect("load");
+            assert_eq!(ac.history.len(), 1);
+            assert_eq!(ac.history[0].save, vec![9, 9, 9], "this session's own turn 1, not the unrelated one");
+            assert_eq!(ac.history[0].transcript, "A room.");
+            let _ = std::fs::remove_file(path);
+        }
+    }
+
+    /// A restore off a RAW-COPIED archive must actually work, not merely
+    /// load: rewind to the first of two raw-copied turns, then replay forward
+    /// to the second, restoring each turn's Quetzal snapshot into a real
+    /// `Machine` (CLAUDE.md: "restore tests must perturb before asserting" —
+    /// a raw copy that quietly corrupted CRC or byte range wouldn't show up
+    /// in `ac.history[i].save == expected` alone if a bad copy happened to
+    /// come back the same length, but WOULD show up as a Quetzal restore
+    /// failure here).
+    #[test]
+    fn raw_copied_archive_round_trips_through_rewind_and_replay() {
+        use crate::history::TurnRecord;
+
+        let fixture = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../zvm/tests/fixtures/czech.z5");
+        let story = std::fs::read(&fixture).expect("czech.z5 fixture");
+
+        let mut m1 = dummy_machine();
+        for _ in 0..3 { let _ = m1.step(); }
+        let save1 = m1.save_quetzal();
+
+        let mut m2 = dummy_machine();
+        for _ in 0..7 { let _ = m2.step(); }
+        let save2 = m2.save_quetzal();
+
+        let mapper = small_mapper();
+        let machine = dummy_machine();
+        let es = zvm_es(&machine);
+        let meta = empty_meta();
+        let history: Vec<std::sync::Arc<TurnRecord>> = vec![
+            std::sync::Arc::new(TurnRecord {
+                turn: 1, command: "one".into(), save: save1.clone(),
+                map_snapshot: None, transcript: "First turn text.".into(),
+            }),
+            std::sync::Arc::new(TurnRecord {
+                turn: 2, command: "two".into(), save: save2.clone(),
+                map_snapshot: None, transcript: "Second turn text.".into(),
+            }),
+        ];
+        let path = temp_archive_path("reuse-rewind-replay");
+        let session = SessionRecord { history: &history, ..SessionRecord::empty() };
+
+        // First write establishes the previous archive; second write reuses
+        // both turns (asserted, so this test also falsifies as intended).
+        let bytes1 = build_archive_bytes(
+            &mapper, &es, Some(&machine.screen), &machine.aux_data, &meta, &session,
+            &[], None, None, None, Some(&path), None,
+        ).expect("first build");
+        crate::storage::atomic_write(&path, &bytes1).expect("first write");
+
+        let mut stats2 = HistoryReuseStats::default();
+        let bytes2 = build_archive_bytes(
+            &mapper, &es, Some(&machine.screen), &machine.aux_data, &meta, &session,
+            &[], None, None, None, Some(&path), Some(&mut stats2),
+        ).expect("second build");
+        assert_eq!(stats2, HistoryReuseStats { raw_copied: 2, encoded: 0 }, "both turns raw-copied on the second write");
+        crate::storage::atomic_write(&path, &bytes2).expect("second write");
+
+        let ac = load_archive(&path).expect("load raw-copied archive");
+        let _ = std::fs::remove_file(&path);
+        assert_eq!(ac.history.len(), 2);
+        assert_eq!(ac.history[0].save, save1, "raw-copied turn 1 is byte-identical to the original snapshot");
+        assert_eq!(ac.history[1].save, save2, "raw-copied turn 2 is byte-identical to the original snapshot");
+
+        // Rewind: restore turn 1's raw-copied save into a fresh Machine.
+        let plan1 = crate::history::resume_plan(&ac.history, 0);
+        assert_eq!(plan1.turn, 1);
+        let mem1 = zvm::memory::Memory::new(story.clone()).unwrap();
+        let mut rewound = zvm::cpu::exec::Machine::new(mem1);
+        rewound.init_caps();
+        rewound.restore_quetzal(&plan1.save).expect("rewound turn's raw-copied Quetzal restores");
+
+        // Replay: restore turn 2's raw-copied save (the post-turn snapshot
+        // "replaying" the second turn lands on).
+        let plan2 = crate::history::resume_plan(&ac.history, 1);
+        assert_eq!(plan2.turn, 2);
+        let mem2 = zvm::memory::Memory::new(story).unwrap();
+        let mut replayed = zvm::cpu::exec::Machine::new(mem2);
+        replayed.init_caps();
+        replayed.restore_quetzal(&plan2.save).expect("replayed turn's raw-copied Quetzal restores");
     }
 
     // -------------------------------------------------------------------------
