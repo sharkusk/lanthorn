@@ -3269,6 +3269,12 @@ pub struct AppState {
     /// Last parsed output from an inventory command (parse fallback when player_obj
     /// is not yet locked).
     pub inventory_fallback: Vec<String>,
+    /// The word a click on each inventory dock row composes into the prompt,
+    /// in the SAME order as the dock's own display list
+    /// (`render::transcript::inventory_items`) — refreshed once per loop tick
+    /// by `render::inventory_dock::refresh_inventory_click_words` (SQ-1244).
+    /// Empty whenever the panel is neither shown nor sliding.
+    pub inventory_click_words: Vec<String>,
     /// The player's previous room (global 0 value from the previous turn).
     pub prev_location: Option<u16>,
     /// Objects whose parent was prev_location at the end of the previous turn.
@@ -3584,6 +3590,7 @@ impl Default for AppState {
             show_inventory: false,
             player_obj: None,
             inventory_fallback: Vec::new(),
+            inventory_click_words: Vec::new(),
             prev_location: None,
             prev_objects_here: std::collections::BTreeSet::new(),
             pending_resume: None,

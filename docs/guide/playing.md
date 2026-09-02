@@ -39,6 +39,10 @@ to the prompt whether the band is open or not, and the band only claims
 column navigation (`Tab`/`Shift-Tab` to move between columns, `↑`/`↓` to
 highlight a row).
 
+The same bottom border cycles through to an inventory panel — a plain strip
+of what you're carrying — and an item there clicks onto the prompt exactly
+the way a command panel object does.
+
 ## The word reveal
 
 Press the `◈` control (or `/reveal-words`) and every word already on screen

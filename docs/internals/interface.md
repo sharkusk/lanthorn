@@ -693,7 +693,10 @@ know which side you're on).
   `Ctrl+←`/`Ctrl+→` jump a whole stage at a time. `Ctrl+Q` (or `Ctrl+C`) quits
   from anywhere, even mid-prompt.
 - **Inventory panel** — a toggleable strip of your carried items along the
-  bottom of the story pane.
+  bottom of the story pane. Click an item and its word lands on the prompt
+  exactly like a click on the command panel's WHAT column — same one-space
+  rule, same partial-word replacement — even though the two panels are
+  mutually exclusive and never share an open `CommandBandState` to pick from.
 - **Notification toasts** — status messages slide in at the top-right and fade
   after a few seconds, so a "map exported" or "style reloaded" note never
   interrupts the transcript. `/dump-notifications` replays the recent ones into
