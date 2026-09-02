@@ -2293,4 +2293,56 @@ mod tests {
         );
         assert!(words_of("   ").is_empty());
     }
+
+    /// **SQ-1248, at the judge.** The run that reached `judge` on `curses.z5`
+    /// and `suvehnux.z5`, transcribed: ten commands, every reply exactly what
+    /// those stories printed — and every step carrying a world print the shadow
+    /// took without a status line, against a baseline the LIVE engine took with
+    /// one.
+    ///
+    /// The judge answered `None` (the offer fell back to `this story knows`)
+    /// because `refusal_from(0)` was empty: the print called the nonsense
+    /// control a move, so its words could not be read as a refusal. Falsify by
+    /// folding `WorldPrint`'s three facts back into one hash — the vetting then
+    /// returns `None` here again, which is the reported symptom.
+    #[test]
+    fn a_shadow_with_no_status_line_can_still_be_judged() {
+        let step = |command: &str, reply: &str| crate::probe::ProbeStep {
+            command: command.to_string(),
+            reply: reply.to_string(),
+            location: None,
+            world: crate::probe::WorldPrint::from_parts(Some(7), None, None),
+            quit: false,
+            escaped: false,
+        };
+        let run = crate::probe::ProbeRun {
+            baseline: crate::probe::WorldPrint::from_parts(Some(7), Some(35), Some(99)),
+            steps: vec![
+                step("zqxwvj", "That's not a verb I recognise."),
+                step("examine ace", "You can't see any such thing."),
+                step("examine adamant", "You can't see any such thing."),
+                step("examine hinged", "You see nothing special about the hinged trapdoor."),
+                step("describe ace", "You can't see any such thing."),
+                step("describe adamant", "You can't see any such thing."),
+                step("describe hinged", "You see nothing special about the hinged trapdoor."),
+                step("watch ace", "You can't see any such thing."),
+                step("watch adamant", "You can't see any such thing."),
+                step("watch hinged", "You can't see any such thing."),
+            ],
+        };
+        let offer = PendingOffer {
+            token: 1,
+            epoch: 0,
+            word: "inspect".to_string(),
+            picks: vec!["examine".into(), "describe".into(), "watch".into()],
+            plan: vec![(3, Some((1, 2)), None), (6, Some((4, 5)), None), (9, Some((7, 8)), None)],
+            commands: 10,
+        };
+        assert_eq!(
+            judge(&run, &offer),
+            Some(vec!["examine".to_string(), "describe".to_string()]),
+            "the two that described the trapdoor are kept; `watch`, which the story \
+             refused in the same words as the controls, is dropped"
+        );
+    }
 }
