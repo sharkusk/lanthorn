@@ -3108,6 +3108,16 @@ pub struct AppState {
     /// from `Moved` events and never claims one, because typing always wins.
     pub control_hover: Option<crate::render::controls::BorderControl>,
 
+    /// The matrix-view room the pointer is on, if any (SQ-1246), paired with
+    /// the exact rect it was found under — a row label or a destination cell.
+    /// Set from `Moved` events, only while the active layer is drawn as a
+    /// matrix; the drawn map view has no equivalent and must not populate
+    /// this. Carrying the rect alongside the room (rather than re-resolving
+    /// it against a fresh hit-list at draw time, as `control_hover` does)
+    /// sidesteps the ambiguity a `BorderControl` never has: one room can be
+    /// the destination of several cells, so an id alone would not say which
+    /// occurrence the pointer was actually over.
+    pub matrix_hover: Option<(RoomId, ratatui::layout::Rect)>,
 
 
 
@@ -3564,6 +3574,7 @@ impl Default for AppState {
             pane_drag: None,
             pane_hover: None,
             control_hover: None,
+            matrix_hover: None,
             turns: 0,
             unsaved_progress: false,
             exit_target: ExitTarget::Exit,
