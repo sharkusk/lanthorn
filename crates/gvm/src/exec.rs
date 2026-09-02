@@ -12726,6 +12726,38 @@ mod tests {
     }
 
     #[test]
+    fn restore_state_keeps_the_accelerated_functions_installed() {
+        // SQ-1249: a host Save State restored into a Machine must NOT cost it
+        // its acceleration. The shadow the Guiding Light vets in is booted once
+        // and then answers every later question by restoring the live snapshot
+        // over itself — so if `restore_state` dropped the table the way
+        // `restart` deliberately does, every vetted turn after the first would
+        // run the Inform 7 veneer interpreted, and the seam would be an order of
+        // magnitude slower for no visible reason.
+        //
+        // The `@accelfunc` calls that built this table ran during the story's
+        // startup, which a restore does not re-run: nothing would reinstall it.
+        let mut m = machine_with_glk(&[]);
+        m.accel_funcs.insert(0x1234, 7);
+        m.accel_params.insert(1, 0x2000);
+        m.declared_accel = true;
+        let blob = m.save_state();
+        m.restore_state(&blob).unwrap();
+        assert_eq!(m.accel_func_for(0x1234), Some(7), "the story's own @accelfunc survives");
+        assert_eq!(m.accel_param(1), Some(0x2000), "and so does its @accelparam");
+        assert!(m.declares_own_accel(), "and the fact that it declared them at all");
+
+        // And the fingerprinted table `with_glk` installs for a story that never
+        // calls `@accelfunc` (SQ-1209) survives on the same route.
+        let mut n = machine_with_glk(&[]);
+        n.accel_funcs.insert(0x99, 2);
+        let veneer = n.accel_funcs.clone();
+        let blob = n.save_state();
+        n.restore_state(&blob).unwrap();
+        assert_eq!(*n.accel_funcs(), veneer, "the whole table, not just the declared half");
+    }
+
+    #[test]
     fn restore_state_abandons_a_suspended_game_restore() {
         // SQ-0656: a HOST Save State restore performed while the game's OWN
         // @restore was suspended left `pending_saveload` set. The state it
