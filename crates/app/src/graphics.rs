@@ -259,6 +259,35 @@ pub struct PictSource {
     /// [`Self::evict_stale_adaptive_cache`], so a stale palette's scaled pixels
     /// never outlive the decode they were resampled from.
     adaptive_scaled_cache: HashMap<(u32, u64), Arc<DynamicImage>>,
+    /// Decoded palette-INDEX planes of a NATIVE archive, keyed by resnum
+    /// (SQ-1197) — the expensive half of a native draw, and the half a palette
+    /// change does not touch.
+    ///
+    /// `blorb::infocom_pics::Picture` is already exactly this: `width`,
+    /// `height`, one index per pixel, the picture's own table and its
+    /// transparent index. Producing one costs a Huffman/LZW/Apple decompress
+    /// plus the run-length and per-line XOR stages
+    /// ([`InfocomPics::decode`](blorb::infocom_pics::InfocomPics::decode));
+    /// turning one into RGBA costs a table lookup per pixel
+    /// ([`Picture::rgba_with`](blorb::infocom_pics::Picture::rgba_with)).
+    /// A palette bump only changes the second, so retaining the first makes a
+    /// palette swap — and the display-list replay
+    /// `session::replay_under_current_palette` runs on one, up to
+    /// `session::V6_OPS_CAP` (512) ops per window — a RE-MAP rather than a
+    /// re-decode.
+    ///
+    /// Unbounded, like [`Self::cache`], and for a smaller price: a plane is one
+    /// byte per pixel where a decode is four, so this pins at most a quarter of
+    /// what the RGBA cache beside it already pins for the same pictures — and
+    /// only for pictures a draw actually asked for, since `dims`/`info` answer
+    /// from the directory header and never reach here (SQ-1194). The ceiling is
+    /// the archive: the widest native picture space is the Macintosh's 480x300
+    /// (144 KB) and a v6 session draws a few dozen distinct pictures.
+    ///
+    /// `None` for a resnum the archive cannot decode, so a failure is
+    /// remembered rather than retried on every draw — the same shape `cache`
+    /// uses.
+    index_planes: HashMap<u32, Option<Arc<blorb::infocom_pics::Picture>>>,
     /// The colour table this source's video hardware fixed, when it had one
     /// (SQ-0794) — `blorb::infocom_pics::InfocomPics::hardware_palette`. `None`
     /// for a Blorb, an Amiga/Mac `Pic.data` and an MCGA `.MG1` alike, all of
@@ -303,6 +332,7 @@ impl PictSource {
             adaptive_cache: HashMap::new(),
             scaled_cache: HashMap::new(),
             adaptive_scaled_cache: HashMap::new(),
+            index_planes: HashMap::new(),
             hw_palette: None,
             blend_columns: false,
             screen_palette: false,
@@ -434,6 +464,19 @@ impl PictSource {
         self.adaptive_cache.keys().copied().collect()
     }
 
+    /// The index plane currently pinned for `resnum`, WITHOUT decoding one —
+    /// for a test to assert, by `Arc::ptr_eq`, that a palette bump re-mapped an
+    /// existing plane rather than decoding a fresh one (SQ-1197). `None` both
+    /// for "not decoded yet" and for "decoded and failed"; a test that cares
+    /// distinguishes them by ordering.
+    #[cfg(test)]
+    pub(crate) fn cached_index_plane(
+        &self,
+        resnum: u32,
+    ) -> Option<Arc<blorb::infocom_pics::Picture>> {
+        self.index_planes.get(&resnum).and_then(|o| o.clone())
+    }
+
     /// Keep this source's dither UNFUSED, or fuse it (SQ-0816).
     ///
     /// `fuse` is the player's `fuse_art_dither` preference, and it can only ever
@@ -459,6 +502,13 @@ impl PictSource {
         // Every scaled pixel was resampled from a decode this just invalidated.
         self.scaled_cache.clear();
         self.adaptive_scaled_cache.clear();
+        // The INDICES do not depend on the fuse — `blend_half_width_columns`
+        // runs on the RGBA, after colourisation — so this clear buys nothing
+        // today. It is here so that every decode cache on this source has ONE
+        // invalidation story ("cleared wherever `cache` is"), rather than one
+        // cache with a footnote; a fuse toggle is a settings edit, and paying a
+        // re-decode for it once is not a cost worth reasoning about. SQ-1197.
+        self.index_planes.clear();
     }
 
     /// Is this source fusing a 640-wide rendition's dither on the way out?
@@ -857,16 +907,34 @@ impl PictSource {
         Some(((unit_w / space_w).max(1), (unit_h / space_h).max(1)))
     }
 
+    /// `resnum`'s decoded PALETTE-INDEX plane from the native archive, decoding
+    /// it once and retaining it (SQ-1197). `None` for a Blorb source (whose
+    /// pictures are PNGs — see [`Self::index_planes`](field)), an unknown id, a
+    /// size-only placeholder, or a compression variant `blorb` does not decode.
+    ///
+    /// This is the only caller of `InfocomPics::decode` under `crates/app/src`
+    /// (test suites call it directly as an oracle), so a plane cached here is a
+    /// decompress that never runs again for the life of the source.
+    fn index_plane(&mut self, resnum: u32) -> Option<Arc<blorb::infocom_pics::Picture>> {
+        if !self.index_planes.contains_key(&resnum) {
+            let decoded = self.native.as_ref().and_then(|pics| {
+                let id = u16::try_from(resnum).ok()?;
+                pics.decode(id).ok()
+            });
+            self.index_planes.insert(resnum, decoded.map(Arc::new));
+        }
+        self.index_planes.get(&resnum).and_then(|o| o.clone())
+    }
+
     fn get(&mut self, resnum: u32) -> Option<&Arc<DynamicImage>> {
         if !self.cache.contains_key(&resnum) {
-            let decoded = match (&self.blorb, &self.native) {
-                (Some(b), _) => b
+            let decoded = match &self.blorb {
+                Some(b) => b
                     .resource(b"Pict", resnum)
                     .and_then(|(_ty, bytes)| crate::cover::decode(bytes)),
-                (None, Some(pics)) => {
-                    native_image(pics, resnum, self.hw_palette.as_ref(), self.blend_columns)
-                }
-                (None, None) => None,
+                None => self
+                    .index_plane(resnum)
+                    .and_then(|pic| native_image(&pic, self.hw_palette.as_ref(), self.blend_columns)),
             };
             self.cache.insert(resnum, decoded.map(Arc::new));
         }
@@ -1026,7 +1094,13 @@ impl PictSource {
     fn adaptive_image(&mut self, resnum: u32) -> Option<Arc<DynamicImage>> {
         let key = (resnum, self.palette_gen);
         if !self.adaptive_cache.contains_key(&key) {
-            let decoded = match (&self.blorb, &self.native) {
+            // SQ-1197: a native picture's INDICES are the same under every
+            // palette, so this miss costs a re-MAP off the retained index plane
+            // (a table lookup per pixel) rather than a fresh decompress — which
+            // is what a palette bump asks for, once per display-list op, when
+            // `session::replay_under_current_palette` replots every window.
+            let plane = self.blorb.is_none().then(|| self.index_plane(resnum)).flatten();
+            let decoded = match (&self.blorb, &plane) {
                 // Clone the raw PNG bytes so the immutable blorb borrow ends
                 // before we mutate the cache.
                 (Some(b), _) => b
@@ -1050,11 +1124,11 @@ impl PictSource {
                 // reaches here with one — `from_native` leaves such a source with
                 // an empty adaptive set — but a restored Current Palette must not
                 // be able to reach in through the replay path either.
-                (None, Some(pics)) => {
+                (None, Some(pic)) => {
                     let pal = self
                         .hw_palette
                         .or_else(|| self.current_plte.as_deref().map(colour_table));
-                    native_image(pics, resnum, pal.as_ref(), self.blend_columns)
+                    native_image(pic, pal.as_ref(), self.blend_columns)
                 }
                 (None, None) => None,
             };
@@ -1853,23 +1927,28 @@ pub fn absorb_continuations(
     None
 }
 
-/// Decode one picture out of a native Infocom archive into the same
-/// `DynamicImage` the Blorb path yields (SQ-0719).
+/// Colourise one already-decoded native picture into the same `DynamicImage`
+/// the Blorb path yields (SQ-0719).
 ///
 /// `Picture::rgba` already expands the palette indices and gives the
 /// transparent index alpha 0, which is exactly what `Canvas`'s alpha-honoring
-/// overlay wants. `None` covers every "no image here" case alike: an unknown
-/// id, a size-only placeholder, or a compression variant we do not decode.
+/// overlay wants. `None` is the one case left after the decode: an index plane
+/// whose length disagrees with its own `width * height`.
 ///
 /// `palette`, when given, overrides the picture's own — the Current Palette an
 /// adaptive picture is drawn through (SQ-0743).
+///
+/// This used to take the ARCHIVE and a resnum and decompress the picture itself,
+/// which made a palette change an O(decode) event. It takes the decoded index
+/// plane instead (SQ-1197), so a palette change is O(pixels): the plane comes
+/// from [`PictSource::index_plane`], which decodes each picture once, and
+/// everything below this line — the table lookup, the transparency, the dither
+/// fuse — is what actually varies with the palette.
 fn native_image(
-    pics: &blorb::infocom_pics::InfocomPics,
-    resnum: u32,
+    pic: &blorb::infocom_pics::Picture,
     palette: Option<&[blorb::infocom_pics::Rgb; 16]>,
     blend_columns: bool,
 ) -> Option<DynamicImage> {
-    let pic = pics.decode(u16::try_from(resnum).ok()?).ok()?;
     let rgba = match palette {
         Some(pal) => pic.rgba_with(pal),
         None => pic.rgba(),
@@ -2624,6 +2703,132 @@ mod tests {
             "the palette changed the source pixels: the next draw resamples again"
         );
         assert_eq!(top_left(&scaled_gen2), [200, 0, 0, 255], "recoloured under the new (red) palette");
+    }
+
+    /// A `PictSource` over one of `stories/`'s native Infocom archives, or
+    /// `None` (with a printed SKIP) when the gitignored fixture is absent —
+    /// the CI-safe pattern every real-game case here uses.
+    fn native_fixture(archive: &str) -> Option<(PictSource, blorb::infocom_pics::InfocomPics)> {
+        let path =
+            std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../stories").join(archive);
+        let Ok(raw) = std::fs::read(&path) else {
+            eprintln!("SKIP: gitignored native archive missing at {}", path.display());
+            return None;
+        };
+        let parse = |bytes: Vec<u8>| {
+            blorb::infocom_pics::InfocomPics::parse(bytes).expect("a release archive parses")
+        };
+        // Two independent parses: one for the source under test, one for the
+        // oracle below, so the oracle shares no decode state with it.
+        Some((PictSource::from_native(parse(raw.clone())), parse(raw)))
+    }
+
+    /// SQ-1197, the correctness bar: a palette change must produce the SAME
+    /// pixels a from-scratch decode under that palette produces.
+    ///
+    /// `base_a`/`base_b` are two pixel-bearing pictures carrying palettes of
+    /// their own — drawing one establishes the Current Palette (§11.3) — and
+    /// `target` is a picture with no palette of its own, which the archive's
+    /// directory marks adaptive by a zero palette offset. Ids are read off the
+    /// named release, not guessed.
+    fn palette_swap_remaps_rather_than_re_decodes(
+        archive: &str,
+        base_a: u32,
+        base_b: u32,
+        target: u32,
+    ) {
+        let Some((mut src, pics)) = native_fixture(archive) else { return };
+        assert!(src.is_adaptive(target), "{archive}: picture {target} has no palette of its own");
+        assert!(
+            !src.fuses_dither(),
+            "{archive}: this case's oracle colourises without the dither fuse"
+        );
+
+        // Generation A: the base establishes the palette, the adaptive target
+        // decodes through it — and retains its index plane.
+        src.image(base_a).expect("base picture A decodes");
+        let gen_a = src.palette_gen();
+        let under_a = src.image_under_current_palette(target).expect("adaptive picture decodes");
+        let plane_a = src.cached_index_plane(target).expect("the decode retained an index plane");
+
+        // Generation B.
+        src.image(base_b).expect("base picture B decodes");
+        assert_ne!(gen_a, src.palette_gen(), "{archive}: the two bases carry different palettes");
+        let under_b = src.image_under_current_palette(target).expect("adaptive picture re-maps");
+
+        // ZERO decodes: the plane the re-map read is the very object the first
+        // draw decoded. Falsify by removing `index_planes` and letting
+        // `adaptive_image` call `InfocomPics::decode` again — the second plane is
+        // then a fresh allocation and this fails.
+        let plane_b = src.cached_index_plane(target).expect("the plane is still retained");
+        assert!(
+            Arc::ptr_eq(&plane_a, &plane_b),
+            "{archive}: a palette swap must re-map the retained index plane, not re-decode"
+        );
+
+        // The oracle: decompress the picture afresh out of the second parse and
+        // expand it through the Current Palette by hand — the arithmetic the old
+        // `native_image` did on every palette change, written out here so it
+        // shares no cache, no `Arc` and no code path with the source above.
+        let plte = src.current_palette().expect("a base draw established the Current Palette");
+        let fresh = pics
+            .decode(u16::try_from(target).expect("a Pict number fits u16"))
+            .expect("the archive decodes the target picture")
+            .rgba_with(&colour_table(plte));
+        assert_eq!(
+            under_b.as_bytes(),
+            fresh.as_slice(),
+            "{archive}: the re-mapped pixels must be byte-identical to a fresh decode"
+        );
+
+        // Non-vacuity: the swap has to have actually recoloured something, or
+        // "identical to a fresh decode" is a statement about two identical
+        // images and proves nothing.
+        assert_ne!(
+            under_a.as_bytes(),
+            under_b.as_bytes(),
+            "{archive}: pictures {base_a} and {base_b} must recolour {target} differently"
+        );
+    }
+
+    #[test]
+    fn dos_mcga_palette_swap_remaps_the_index_plane() {
+        // Zork Zero r393/s890714, DOS `.MG1` (MCGA). Its directory marks 172
+        // pixel-bearing pictures adaptive — id for id, the numbers `Zork0.blb`
+        // lists in `APal` — the lowest of which is 9; pictures 2 and 4 carry
+        // palettes of their own and those two palettes differ.
+        palette_swap_remaps_rather_than_re_decodes("zork0.mg1", 2, 4, 9);
+    }
+
+    #[test]
+    fn amiga_palette_swap_remaps_the_index_plane() {
+        // The same release's Amiga `.pic`, whose pictures run the Huffman +
+        // run-length + per-line XOR path instead of the PC's LZW — the decode
+        // this quest is about, and a different one from the case above.
+        palette_swap_remaps_rather_than_re_decodes("zork0.pic", 2, 4, 9);
+    }
+
+    #[test]
+    fn set_fuse_dither_drops_the_retained_index_planes() {
+        // The index planes are cleared wherever `cache` is (SQ-1197). The fuse
+        // is the only such point today; Zork Zero's `.EG1` is the eligible
+        // shape for it — a 640-wide SIXTEEN-colour rendition — so
+        // `from_native` turns the fuse ON and this can turn it back off.
+        let Some((mut src, _)) = native_fixture("zork0.eg1") else { return };
+        assert!(src.fuses_dither(), "a 640-wide EGA rendition is dither-eligible");
+
+        src.image(1).expect("EGA picture 1 decodes");
+        let before = src.cached_index_plane(1).expect("the draw retained an index plane");
+
+        src.set_fuse_dither(false);
+        assert!(
+            src.cached_index_plane(1).is_none(),
+            "the fuse change dropped every decode this source held, planes included"
+        );
+
+        src.image(1).expect("EGA picture 1 decodes again");
+        let after = src.cached_index_plane(1).expect("the redraw decoded a fresh plane");
+        assert!(!Arc::ptr_eq(&before, &after), "the next draw decodes rather than serving a stale plane");
     }
 
     #[test]
