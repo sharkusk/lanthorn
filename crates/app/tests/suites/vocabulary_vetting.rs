@@ -919,3 +919,37 @@ fn the_scope_test_asks_the_story_instead_of_reading_its_prose() {
          cannot show the difference — pick another"
     );
 }
+
+/// **SQ-1252.** `vespers.z8`'s Entrance Hall silently disambiguates `fix south`
+/// (there are two doors) and prints a parenthesised echo — `(the outside
+/// door)` — before its refusal, while `fix north` (no ambiguity) prints the
+/// refusal straight away. `refusal_from_pair` compares the two replies from
+/// their FIRST sentence, so with the echo still in it the pair disagrees
+/// immediately, learns nothing, and `hasten south` — corrected to `fasten` /
+/// `attach` / `fix` — reads as a candidate that "did something" and survives
+/// vetting unearned.
+///
+/// The walk: the story gates on a keypress, then `west` from the starting
+/// Bedroom reaches the Entrance Hall in one move.
+///
+/// Falsify by reverting [`app::probe`]'s echo strip: `p.assists()` then
+/// contains a `try instead` line naming `fasten`/`attach`/`fix`.
+#[test]
+fn a_disambiguation_echo_does_not_survive_vetting_in_the_entrance_hall() {
+    let Some(mut p) = Play::gated_z5("vespers.z8") else { return };
+    p.turn("west");
+    assert_eq!(
+        p.session.current_location().map(|l| l.name),
+        Some("Entrance Hall".to_string()),
+        "the fixture never reached the room the bug was found in:\n{}",
+        p.screen()
+    );
+    p.turn("hasten south");
+    eprintln!("--- vespers.z8, Entrance Hall, `hasten south` ---\n{}\n", p.screen());
+    for line in p.assists() {
+        assert!(
+            !["fasten", "attach", "fix"].iter().any(|w| line.contains(w)),
+            "an offer the direction control pair should have vetted survived: {line:?}"
+        );
+    }
+}
