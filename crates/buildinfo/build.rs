@@ -26,7 +26,14 @@ fn main() {
     } else if let Some(hash) = git(&["rev-parse", "--short", "HEAD"]) {
         // `git status --porcelain` prints nothing on a clean tree, so a non-empty
         // result (git() returns Some) means there are uncommitted changes.
-        let suffix = if git(&["status", "--porcelain"]).is_some() { "-dirty" } else { "" };
+        // Untracked files are not changes — the tree routinely carries scratch
+        // files and gitignored fixtures, and `git describe --dirty` ignores them
+        // too — so only tracked modifications earn the suffix.
+        let suffix = if git(&["status", "--porcelain", "--untracked-files=no"]).is_some() {
+            "-dirty"
+        } else {
+            ""
+        };
         format!("{base} ({hash}{suffix})")
     } else {
         base.clone()
