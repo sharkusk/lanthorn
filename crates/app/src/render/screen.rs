@@ -1740,7 +1740,7 @@ fn render_node(
                     // arm asks the same question the ring does, of the same picker.
                     let lock_applies = crate::render::graphics::v6_pixel_lock_applies(picker);
                     state.v6_scale_lock_inapplicable.set(state.config.v6_pixel_lock && !lock_applies);
-                    // SQ-1032: the Extended mode asks for a taller canvas at a whole
+                    // SQ-1032: the Extended mode asks for a taller canvas at a
                     // magnification; every other mode asks for the game's own screen,
                     // which is what `RasterFrame::native` is and what every line below
                     // then does exactly as before.
@@ -1751,6 +1751,12 @@ fn render_node(
                     // hardcoded 10x20 that the encoder then throws away, so a canvas
                     // height measured in those pixels is a number nobody chose.
                     // Half-blocks keeps today's raster composite.
+                    //
+                    // `state.config.v6_pixel_lock` is threaded through as `extended`'s
+                    // own `lock` (SQ-1239): the magnification it pins to is whole only
+                    // when the player asked for the lock, exactly as `Raster`/`Hybrid`
+                    // do via `FrameGeometry::fitted_scale` — Extended used to floor to
+                    // a whole rung unconditionally, so the toggle did nothing here.
                     let want = if state.config.v6_render == crate::config::V6RenderMode::Extended
                         && lock_applies
                     {
@@ -1759,6 +1765,7 @@ fn render_node(
                             pane_dev,
                             state.v6_text.cell(),
                             crate::render::graphics::v6_upscale_cap(picker),
+                            state.config.v6_pixel_lock,
                         )
                     } else {
                         v6::RasterFrame::native(native)
@@ -1767,11 +1774,13 @@ fn render_node(
                     // Cache the fresh metrics for skipped frames, then hand the
                     // built canvas to the off-thread resize+encode worker.
                     state.v6_raster_metrics.set(raster_metrics);
-                    // An extended frame carries its own whole magnification — one
-                    // device pixel per native pixel, times a whole number — which is
-                    // strictly finer than any `v6_pixel_lock` rung, so it satisfies the
-                    // lock as well. A frame that DECLINED the extension carries none,
-                    // and falls back to exactly what `Raster` pins.
+                    // An extended frame carries its own magnification — one device
+                    // pixel per native pixel, times a whole number when
+                    // `v6_pixel_lock` is on (strictly finer than any lock rung, so it
+                    // satisfies the lock too) or the same fractional scale
+                    // `Raster`/`Hybrid` draw at when the lock is off. A frame that
+                    // DECLINED the extension carries none, and falls back to exactly
+                    // what `Raster` pins.
                     let lock = built.lock.or_else(|| {
                         (state.config.v6_pixel_lock && lock_applies)
                             .then(|| v6::FrameGeometry::new(native, state.v6_art_scale, state.v6_text.cell()).locked_scale(pane_dev))
