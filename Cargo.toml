@@ -8,7 +8,7 @@ resolver = "2"
 # Shared package metadata inherited by each crate via `<field>.workspace = true`.
 # Bump `version` here to version every crate (and the binaries' --version) at once.
 [workspace.package]
-version = "0.4.0"
+version = "0.4.1"
 license = "BSD-3-Clause"
 
 # SQ-0764: the emitted-stream oracle's dependency, with its own debug assertions

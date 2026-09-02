@@ -114,7 +114,7 @@ checksum = "2a4385e2e34eb35d6b3efe798b9eb88096925d87726c0798709bf56d9ed84af3"
 
 [[package]]
 name = "app"
-version = "0.4.0"
+version = "0.4.1"
 dependencies = [
  "audio",
  "blorb",
@@ -187,7 +187,7 @@ dependencies = [
 
 [[package]]
 name = "audio"
-version = "0.4.0"
+version = "0.4.1"
 dependencies = [
  "rodio",
  "self_cell",
@@ -197,7 +197,7 @@ dependencies = [
 
 [[package]]
 name = "audio-relay"
-version = "0.4.0"
+version = "0.4.1"
 dependencies = [
  "libc",
  "tungstenite",
@@ -293,11 +293,11 @@ dependencies = [
 
 [[package]]
 name = "blorb"
-version = "0.4.0"
+version = "0.4.1"
 
 [[package]]
 name = "buildinfo"
-version = "0.4.0"
+version = "0.4.1"
 
 [[package]]
 name = "bumpalo"
@@ -486,7 +486,7 @@ checksum = "4bfbf56724aa9eca8afa4fcfadeb479e722935bb2a0900c2d37e0cc477af0688"
 
 [[package]]
 name = "cli-host"
-version = "0.4.0"
+version = "0.4.1"
 dependencies = [
  "blorb",
  "crossterm",
@@ -1132,11 +1132,11 @@ checksum = "0cc23270f6e1808e30a928bdc84dea0b9b4136a8bc82338574f23baf47bbd280"
 
 [[package]]
 name = "grammar-model"
-version = "0.4.0"
+version = "0.4.1"
 
 [[package]]
 name = "gvm"
-version = "0.4.0"
+version = "0.4.1"
 dependencies = [
  "blorb",
  "grammar-model",
@@ -1144,7 +1144,7 @@ dependencies = [
 
 [[package]]
 name = "gvm-cli"
-version = "0.4.0"
+version = "0.4.1"
 dependencies = [
  "blorb",
  "buildinfo",
@@ -1640,7 +1640,7 @@ dependencies = [
 
 [[package]]
 name = "mapper"
-version = "0.4.0"
+version = "0.4.1"
 dependencies = [
  "serde",
  "serde_json",
@@ -2623,14 +2623,14 @@ checksum = "94143f37725109f92c262ed2cf5e59bce7498c01bcc1502d7b9afe439a4e9f49"
 
 [[package]]
 name = "scott"
-version = "0.4.0"
+version = "0.4.1"
 dependencies = [
  "grammar-model",
 ]
 
 [[package]]
 name = "scott-cli"
-version = "0.4.0"
+version = "0.4.1"
 dependencies = [
  "buildinfo",
  "cli-host",
@@ -3303,11 +3303,11 @@ dependencies = [
 
 [[package]]
 name = "verb-synonyms"
-version = "0.4.0"
+version = "0.4.1"
 
 [[package]]
 name = "verb-synonyms-gen"
-version = "0.4.0"
+version = "0.4.1"
 dependencies = [
  "blorb",
  "grammar-model",
@@ -4061,14 +4061,14 @@ dependencies = [
 
 [[package]]
 name = "zvm"
-version = "0.4.0"
+version = "0.4.1"
 dependencies = [
  "grammar-model",
 ]
 
 [[package]]
 name = "zvm-cli"
-version = "0.4.0"
+version = "0.4.1"
 dependencies = [
  "audio",
  "blorb",

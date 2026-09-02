@@ -19,103 +19,84 @@ Absolute URLs or no link.
 
 ---
 
-## Unreleased
+## v0.4.1 — 2026-09-02
 
-*This section is drained when a version is cut. README.md describes the
-RELEASED build; prose for a feature that is in `main` but not yet released
-goes into the README in place, at its normal destination, marked with the
-visible tag `*Next release:*`. `release.yml` refuses to cut a release while
-any such tag, or this Unreleased section, still exists.*
+### Highlights
+
+- **Older Glulx games are much faster.** Inform 6 games and Inform 7 games
+  from before 2010 never asked for the acceleration newer ones get; lanthorn
+  now recognises their core routines and runs them natively. *King of Shreds
+  and Patches*: starting the game, `inventory` and `look` took 3.1 seconds in
+  0.4.0 and take 0.34 seconds now; the `inventory` turn alone went from 1.5
+  seconds to 0.14. `--accel off` turns it off.
+- **Glulx games show their inventory.** The inventory panel and the command
+  panel's carried column read the story's own object tree, so games that
+  answer `i` in their own words (City of Secrets) no longer leave them empty.
+- **A menu for the story under the cursor in the picker** — `Space` or a
+  right-click — and a shorter hint bar that lists only the library keys.
+- **The browser page (Docker) ships its own Nerd Font**, so icons and the
+  map's diagonals draw correctly on any machine.
 
 ### Added
 
-- **Inventory panel items are clickable.** A click on an item in the
-  inventory panel composes its word onto the prompt exactly like a click on
-  the command panel's WHAT column — same one-space rule, same partial-word
-  replacement — even though the two panels never show at once.
-- **Older Glulx games now get the acceleration newer ones ask for.** Inform 7
-  builds from 2010 on tell the interpreter where their veneer routines live, and
-  lanthorn runs those natively; every Inform 6 game and every older Inform 7 game
-  simply never says, and used to grind through them opcode by opcode. lanthorn
-  now recognises those routines from their bytecode instead of waiting to be
-  told — King of Shreds and Patches' `inventory` turn is over ten times faster —
-  and refuses to guess when the match is anything less than exact. `--accel off`
-  still turns the whole thing off.
-- **A menu for the highlighted story in the picker.** `Space`, or a single
-  right-click on a row or cover, opens a small menu beside it: open the story,
-  launch options, fetch its metadata, get its hints, point it at an IFDB page —
-  each with its own key shown alongside. (Right-clicking twice no longer opens
-  launch options; the menu item does.)
-- **`?` in the picker** shows every key the story browser knows, on one screen.
-- **The font check now asks about the diagonal map corners separately.** The
-  four half-diagonal corner-stub glyphs are plain Unicode, not part of any Nerd
-  Font patch, so a font could pass the icon comparison and still draw the map's
-  diagonals as boxes (or vice versa) — one answer used to cover both. It is now
-  a second question, right after the first: which row draws the diagonal stubs
-  cleanly, against the orthogonal corner the map falls back to without them.
-  Answered independently either way, and it sets `map.diagonal_corners` in
-  `style.toml`; skipping it (Esc or the close box) leaves that setting exactly
-  as it was.
-- **The matrix map view now shows a room's full name on hover.** A row's
-  abbreviated label or a destination cell's two-letter tag — either one, under
-  the pointer — pops a tooltip spelling out the name in full, the same box the
-  border controls already use for their hints.
-- **The matrix map view's name column now grows to fit.** It used to sit at a
-  fixed width regardless of how much room the pane had to spare; now it takes
-  whatever the direction columns leave behind, up to the longest room name —
-  so a wide pane shows names in full, and the abbreviate-and-footnote
-  treatment kicks in only for a name that still doesn't fit.
-- **The story pane's border control now cycles three states.** Command panel →
-  inventory panel → none → command panel, one click at a time (`cycle-panel`,
-  bound to the same control that used to only toggle the command panel). The
-  two panels are mutually exclusive — opening one closes the other — and which
-  one (if either) is open is remembered per story, the same way the command
-  panel's own open state already was.
+- **Story menu in the picker.** `Space`, or a single right-click on a row or
+  cover, opens a menu beside the story: open it, launch options, fetch its
+  metadata, get its hints, point it at an IFDB page — each with its key shown.
+  (A double right-click no longer opens launch options; the menu item does.)
+- **`?` in the picker** shows every key the story browser knows.
+- **Inventory panel items are clickable**, composing the item onto the prompt
+  exactly as a click in the command panel does.
+- **The story pane's border control cycles** command panel → inventory panel →
+  none, remembered per story.
+- **The font check asks about the map's diagonal corners separately**, since
+  many fonts that carry the icons lack those four glyphs; each answer stands
+  on its own, and skipping the second question changes nothing.
+- **Matrix map view:** hovering a room shows its full name, and the name
+  column now uses the room the pane has, footnoting only names that still
+  don't fit.
+- **Ctrl-U / Ctrl-D** scroll half a page in the story list and, when the
+  prompt is empty, in the story itself.
 
 ### Docker
 
-- **The browser page ships its own Nerd Font.** IosevkaTerm Nerd Font Mono,
-  fetched and embedded at image-build time, so lanthorn's icons and the map's
-  Legacy Computing half-diagonals render correctly no matter what font a
-  visitor's browser would otherwise have fallen back to. `LANTHORN_WEB_FONT`
-  and `LANTHORN_WEB_FONT_SIZE` override the family and size.
+- The browser page embeds IosevkaTerm Nerd Font Mono; `LANTHORN_WEB_FONT` and
+  `LANTHORN_WEB_FONT_SIZE` override the family and size.
+- The image no longer carries an `unknown/unknown` platform row on GitHub.
 
 ### Changed
 
-- **Renamed for a consistent panel vocabulary**, everywhere a player can read
-  it — commands (`open-command-band` → `toggle-command-panel`,
-  `toggle-inventory` → `toggle-inventory-panel`, `toggle-room-dock` →
-  `toggle-room-panel`), the config section `[command_band]` (now
-  `[command_panel]`), and style selectors (`inventory_dock` →
-  `inventory_panel`, `room_dock`/`room_dock.header` → `room_panel`/
-  `room_panel.header`, `band.*` → `command_panel.*`). No back-compat aliases —
-  pre-release, a rename is just a rename.
-
-- **The picker's hint bar is shorter and says more.** It now lists the
-  library-level keys only — `Enter: open  Space: menu  Tab: info  /: IFDB
-  g: covers  s: sort  r: refresh  Ctrl+F: find  ?: keys  q: quit` — one key
-  each, with the per-story actions moved into the `Space` menu and the
-  navigation keys dropped. Every alternate key still works; they are simply no
-  longer spelled out.
+- **Panels are called panels everywhere**: commands `toggle-command-panel`,
+  `toggle-inventory-panel`, `toggle-room-panel`, `cycle-panel`; config section
+  `[command_panel]`; style selectors `command_panel.*`, `inventory_panel`,
+  `room_panel.*`. The old names are gone.
+- **The picker's hint bar** shows one key per action and only the library-level
+  ones: `Enter: open  Space: menu  Tab: info  /: IFDB  g: covers  s: sort
+  r: refresh  Ctrl+F: find  ?: keys  q: quit`. Every other key still works.
 
 ### Fixed
 
-- **Glulx games show their inventory in the panels.** The inventory panel and the
-  command panel's *carried* and *here* columns now read a Glulx story's own
-  object tree instead of scraping the reply to an `i` command — which any game
-  answering in its own prose defeated, leaving both panels empty for the whole
-  game (City of Secrets). Games whose avatar cannot be identified with certainty
-  keep the old scrape rather than showing a wrong list.
-- A Glulx status window with its own background colour — Kerkerkruip's grey
-  strip, with the panels off — is filled in that colour edge to edge instead of
-  going black between the words.
-- A `parent = "…"` re-root in `style.toml` now actually moves a row's colours
-  even when that row's built-in default pins an `fg`/`bg` of its own (the menu
-  highlight and the transcript search highlight used to ignore the re-root
-  entirely; a few others only half-moved).
-- A long notification toast now wraps onto extra rows instead of getting cut
-  off at the right edge; only a message past five rows loses its tail, marked
-  with a trailing `…`.
+- City of Secrets' dictionary, and any Inform 6 Glulx game whose first
+  dictionary word is empty, is read again — the Guiding Light and the command
+  panel were dark on those games.
+- Downloading a story from IFDB whose title isn't searchable (City of Secrets
+  under "CoS") now keeps its metadata, and a forced refetch can no longer wipe
+  it.
+- Clicking a command-panel noun after a trailing space, or a verb while a
+  partial word is typed, no longer doubles the word (`examine examine rope`).
+- A dialog opened over the command panel takes all keys and mouse input.
+- The Guiding Light no longer offers `fasten` for `hasten north`, no longer
+  credits a phrase like `look sharp` to a game that only knows `look`, and
+  vets its suggestions on Curses, suvehnux and other games that don't repaint
+  their status line.
+- Kerkerkruip's grey status strip (panels off) is filled edge to edge.
+- A `parent = "…"` re-root in `style.toml` moves a row's colours even where
+  the built-in default pinned them.
+- A long notification wraps instead of losing its tail.
+- The pixel lock is a real switch in the extended v6 render mode.
+- Save State reuses the unchanged history turns of the previous archive
+  instead of recompressing them; a palette change in a v6 game re-maps the
+  pictures already decoded instead of decoding them again; the cover gallery
+  scrolls without re-encoding every visible tile.
 
 ## v0.4.0 — 2026-09-01
 

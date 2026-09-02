@@ -123,9 +123,9 @@ A few things worth doing in your first ten minutes. Everything else can wait.
 | **Ctrl+F** | Filters your library as you type: title, author, filename or folder. |
 | **Enter** on a folder | A library sorted into folders is listed folder by folder; Enter opens one and **Backspace** returns up. |
 | **Tab** | Shows the info panel for the highlighted story. |
-| **Space** or right-click | *Next release:* Everything you can do to *this* story, in one little menu beside it — open it, launch options, fetch its metadata, get its hints, point it at an IFDB page. |
-| **o** | Launch options for this story — which artwork it draws and which machine it plays as. *Next release:* also the second item down the **Space** menu, if you would rather see the choice than remember the key. |
-| **?** | *Next release:* Every key the picker knows, on one screen. |
+| **Space** or right-click | Everything you can do to *this* story, in one little menu beside it — open it, launch options, fetch its metadata, get its hints, point it at an IFDB page. |
+| **o** | Launch options for this story — which artwork it draws and which machine it plays as (also in the **Space** menu). |
+| **?** | Every key the picker knows, on one screen. |
 
 **In the story**
 
@@ -194,9 +194,8 @@ itself.**
   nothing can ask it whether it has a glyph. So on a first launch it shows two
   rows and asks which one draws properly, then writes the answer into
   `style.toml` as preset names you can still edit. `/run-font-check` asks
-  again when you change fonts. *Next release:* a second question follows,
-  about the map's diagonal corner glyphs alone — a separate typeface question
-  from the icons, answered independently. → [looks](docs/guide/looks.md)
+  again when you change fonts. A second question follows, about the map's
+  diagonal corner glyphs alone, answered independently. → [looks](docs/guide/looks.md)
 
 There is a great deal more than this — proportional fonts off a Kickstart ROM,
 Glk sound channels, a click-to-compose command panel, screen-reader output. The
@@ -341,8 +340,8 @@ docker run -d -p 7681:7681 -p 7682:7682 -v ~/if-games:/stories -v lanthorn-data:
 
 Mount your game folder at `/stories`; saves live in the `lanthorn-data` volume.
 `docker compose up -d` with the repo's `docker-compose.yml` does the browser
-mode in one line. *Next release:* the browser page ships its own Nerd Font,
-so icons and map diagonals draw correctly on any machine.
+mode in one line. The browser page ships its own Nerd Font, so icons and map
+diagonals draw correctly on any machine.
 
 → [**play in a browser**](docs/guide/play-in-a-browser.md)
 
