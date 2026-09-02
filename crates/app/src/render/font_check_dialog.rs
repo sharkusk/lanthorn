@@ -419,15 +419,14 @@ pub fn draw_diagonal_check_always(state: &AppState, area: Rect, buf: &mut Buffer
 
     let intro = [
         "A room can leave its box on a single diagonal stub instead",
-        "of a right-angle turn — but those four marks are a separate",
-        "typeface question from the icons, so lanthorn asks it apart.",
+        "of a right-angle turn. Which row draws those four properly?",
         "",
     ];
     let outro = [
         "",
-        "Row 1 needs the diagonal marks themselves. Pick it only if",
-        "all four are drawn AND meet the corner cleanly; an empty box",
-        "means row 2 — the orthogonal corner every font can draw.",
+        "Row 1 needs the diagonal marks themselves; pick it only if",
+        "all four are drawn. An empty box means row 2 — the",
+        "orthogonal corner every font can draw.",
         "Esc or the close box leaves this setting exactly as it was.",
     ];
 
