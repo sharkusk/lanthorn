@@ -57,6 +57,14 @@ matter how deep a story is buried. `Enter` plays the highlighted story; `o`
 opens its launch options first — which artwork a graphical game draws and
 which machine it plays as — see [graphics and terminals](graphics-and-terminals.md).
 
+Everything you can do to *one* story lives in one place: press `Space`, or
+right-click a row or a cover, and a little menu opens beside it — open the
+story, launch options, fetch its metadata, get its hints, point it at an
+IFDB page — each with its own key shown alongside, so you learn the key by
+using the menu and then stop needing it. The line along the bottom of the
+screen names only the keys that act on the *library*, and `?` shows the
+full list whenever you want it.
+
 **A multi-disk release shows up as one shelf, not a pile of disks.** Point
 lanthorn at any volume from a set — the seven Apple II floppies of *The Lost
 Treasures of Infocom*, `floppy1.ima` through `floppy5.ima` — and it opens a

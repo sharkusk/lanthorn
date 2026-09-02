@@ -387,6 +387,7 @@ pub mod session;
 pub mod state;
 pub mod stderr_redirect;
 pub mod storage;
+pub mod story_menu;
 pub mod story_pick;
 pub mod story_url;
 pub mod style;

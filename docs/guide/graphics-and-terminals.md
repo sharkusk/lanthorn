@@ -113,7 +113,8 @@ always wins outright. Where a release shipped more than one rendition — MCGA,
 EGA, CGA, the Macintosh's monochrome plates — you can pick among them.
 
 **Choosing before you launch.** Select the story in the picker and press `o`
-(or `Shift+Enter`, or double-right-click the row) instead of `Enter`, and the
+(or `Shift+Enter`, or pick **Launch options…** from the story menu that `Space`
+and a right-click open) instead of `Enter`, and the
 launch-options dialog opens. It lists every rendition it found for *that*
 story — beside it in the folder or inside its disk image — with the picture
 count and where each one lives, and a second row picks which machine the game

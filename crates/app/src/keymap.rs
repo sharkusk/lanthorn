@@ -391,13 +391,24 @@ impl Default for KeyMap {
         // Enter plays; Shift modifies the default action rather than introducing
         // a mode (SQ-0789), and `o` is the same command on a key every terminal
         // can deliver — Shift-Enter needs the kitty keyboard protocol to be
-        // distinguishable from Enter at all.
+        // distinguishable from Enter at all. `o` LEADS since SQ-1227: it is the
+        // key the story menu's own row advertises, and a menu that names a
+        // gesture half its readers' terminals cannot produce is worse than one
+        // that names the plain letter.
         bind!(plain(Enter), "play-story", Context::Browser);
-        bind!(g(Enter, false, true), "open-launch-options", Context::Browser);
         bind!(plain(Char('o')), "open-launch-options", Context::Browser);
+        bind!(g(Enter, false, true), "open-launch-options", Context::Browser);
+        // Space opens the per-story menu — everything that acts on ONE story,
+        // in one place, instead of five separate footer hints (SQ-1227).
+        bind!(plain(Char(' ')), "open-story-menu", Context::Browser);
+        // `?` shows the browser's own key reference, which is what lets the
+        // footer stop advertising the keys it no longer has room for.
+        bind!(plain(Char('?')), "show-browser-keys", Context::Browser);
 
-        bind!(plain(Char('i')), "toggle-info-panel", Context::Browser);
+        // Tab LEADS (SQ-1227): the footer names one key per hint, and `Tab` is
+        // the one every other pane in lanthorn already uses to swap a panel in.
         bind!(plain(Tab), "toggle-info-panel", Context::Browser);
+        bind!(plain(Char('i')), "toggle-info-panel", Context::Browser);
         bind!(plain(Char('g')), "toggle-gallery", Context::Browser);
         bind!(plain(Char('f')), "fetch-story", Context::Browser);
         bind!(plain(Char('r')), "refresh-library", Context::Browser);

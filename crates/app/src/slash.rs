@@ -687,6 +687,12 @@ pub static COMMANDS: &[CommandSpec] = &[
     CommandSpec { name: "open-launch-options", category: Category::Library, context: Context::Browser,
         usage: "open-launch-options", description: "open the launch-options dialog for the selected story",
         dispatch: |_| SlashOutcome::Browser(crate::browser::BrowserAction::OpenLaunchOptions) },
+    CommandSpec { name: "open-story-menu", category: Category::Library, context: Context::Browser,
+        usage: "open-story-menu", description: "open the per-story menu beside the selected story",
+        dispatch: |_| SlashOutcome::Browser(crate::browser::BrowserAction::OpenStoryMenu) },
+    CommandSpec { name: "show-browser-keys", category: Category::Library, context: Context::Browser,
+        usage: "show-browser-keys", description: "show the story browser's key reference",
+        dispatch: |_| SlashOutcome::Browser(crate::browser::BrowserAction::ShowBrowserKeys) },
     CommandSpec { name: "toggle-info-panel", category: Category::Library, context: Context::Browser,
         usage: "toggle-info-panel", description: "open or close the browser's story info panel",
         dispatch: |_| SlashOutcome::Browser(crate::browser::BrowserAction::ToggleInfoPanel) },
@@ -1126,7 +1132,10 @@ mod tests {
         // navigation and its in-memory library find: two more Library commands.
         // SQ-1228 added `half-page-selection`, the vim Ctrl-U/Ctrl-D convention
         // for the browser's list view.
-        assert_eq!(COMMANDS.len(), 87, "registry must match the spec's Full command table");
+        // SQ-1227 added `open-story-menu` and `show-browser-keys` — the browser's
+        // per-story menu and its own key reference, which between them are what
+        // let the footer shrink to one key per hint.
+        assert_eq!(COMMANDS.len(), 89, "registry must match the spec's Full command table");
     }
 
     /// SQ-0796: `Category::ORDER` must list every category, or a whole group of

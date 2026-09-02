@@ -176,6 +176,10 @@ Every themeable `style.toml` selector: which role or selector it derives from, a
 | `dialog.region_prompt.option` | Dialog | Style | `dialog.background` |  | |
 | `dialog.region_prompt.option:chosen` | Dialog | Style | `dialog.list_selected` |  | |
 | `dialog.font_check.sample` | Dialog | Style | `dialog.background` |  | |
+| `dialog.story_menu.border` | Dialog | BorderGlyphs | `dialog.border` |  | |
+| `dialog.story_menu.item` | Dialog | Style | `dialog.background` |  | |
+| `dialog.story_menu.item:selected` | Dialog | Style | `dialog.list_selected` |  | |
+| `dialog.story_menu.key` | Dialog | Style | `dialog.list_footer` |  | |
 | `band.column_header` | Elements | Style | `muted` |  | |
 | `band.column_header:active` | Elements | Style | `accent` | `bold` | |
 | `band.quick` | Elements | Style | `text` |  | |

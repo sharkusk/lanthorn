@@ -582,6 +582,17 @@ pub static REGISTRY: std::sync::LazyLock<Vec<RegRow>> = std::sync::LazyLock::new
     // dialog body must still be able to leave the glyphs at full strength, since
     // the whole ask is "can you see these clearly".
     row("dialog.font_check.sample", Section::Dialog, Kind::Style, Some("dialog.background"), Delta::EMPTY),
+    // ── SQ-1227: the story browser's per-story menu — the little context menu
+    // that Space (or a right-click) opens beside the highlighted row. It is a
+    // modal surface like any other, so all four rows INHERIT rather than mint a
+    // colour: the border is the dialog frame, an item is the dialog body, the
+    // highlighted item is the same Black-on-Cyan every modal list uses, and the
+    // right-hand key column is the dim footer text, because a hotkey shown for
+    // REFERENCE must not compete with the action it belongs to.
+    row("dialog.story_menu.border", Section::Dialog, Kind::BorderGlyphs, Some("dialog.border"), Delta::EMPTY),
+    row("dialog.story_menu.item", Section::Dialog, Kind::Style, Some("dialog.background"), Delta::EMPTY),
+    row("dialog.story_menu.item:selected", Section::Dialog, Kind::Style, Some("dialog.list_selected"), Delta::EMPTY),
+    row("dialog.story_menu.key", Section::Dialog, Kind::Style, Some("dialog.list_footer"), Delta::EMPTY),
     // ── SQ-0664: the command band (bottom dock). Its rows reuse
     // `dialog.list_selected`. SQ-0667 (2026-08-05) retired the band's own
     // frame (it draws no `panel.border` anymore — see `render/command_band.rs`)
@@ -816,6 +827,11 @@ mod tests {
         "dialog.region_prompt.option:chosen",
         // SQ-1104: the font check's sample rows
         "dialog.font_check.sample",
+        // SQ-1227: the story browser's per-story menu
+        "dialog.story_menu.border",
+        "dialog.story_menu.item",
+        "dialog.story_menu.item:selected",
+        "dialog.story_menu.key",
         // SQ-0664: the command band
         "band.column_header",
         "band.column_header:active",

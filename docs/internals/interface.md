@@ -969,6 +969,49 @@ rest) — and `[keymap.browser]` in `config.toml` moves any of them; see
 from those bindings rather than written out by hand, so it names the key you
 actually have bound and quietly stops advertising anything you unbind.
 
+**The hint bar names LIBRARY keys, one key each** (SQ-1227):
+
+```
+Enter: open  Space: menu  Tab: info  /: IFDB  g: covers  s: sort  r: refresh  Ctrl+F: find  ?: keys  q: quit
+```
+
+Every hint is one command's *first* binding, so a rebinding relabels it and an
+unbound command drops out. What is missing is the point of it. Navigation is
+gone (nobody needs told that `↑` moves); mouse gestures are gone; and the five
+gestures that act on ONE story — launch options, fetch, hints, the manual IFDB
+URL — moved into a menu behind `Space`, because each of them used to cost a
+footer segment and each was the first thing dropped on any terminal narrower
+than a page. The alternates stay bound and unadvertised: `i`, `Esc`,
+`Shift+Enter`, `k`/`j` all still work. As the pane narrows the hints go in a
+fixed order — `Ctrl+F: find` first, then `refresh`, `sort`, `covers`, `IFDB`,
+`info`, and `keys` last — while `open`, `menu` and `quit` are never dropped
+(without the first two nothing else is discoverable, and without the third
+there is no way out). The order they are *drawn* in never changes.
+
+**`Space`, or a single right-click, opens that story's menu** — a small bordered
+popup beside the highlighted row or cover, listing Open, Launch options…, Fetch
+metadata, Get hints and Set IFDB URL… with each item's own hotkey right-aligned
+beside it. `↑`/`↓` wrap, `Enter` activates, `Esc` closes, and pressing an item's
+own key activates it directly, so the menu teaches the key and then stops being
+needed. It clamps inside the pane, flipping above the row when there is no room
+below, and never covers the hint bar that advertises it. Every item dispatches an
+existing registry command through the picker's ONE dispatch — the same code a
+key press reaches — so the mouse and the keyboard cannot drift apart. It is
+themeable through `dialog.story_menu.border` / `.item` / `.item:selected` /
+`.key`, all four inheriting from the shared dialog roles.
+
+This replaced SQ-0789's double-right-click shortcut to the launch-options
+dialog, whose intent — a story can be started some way other than the default —
+survives as a menu item you can see rather than a gesture with a 400ms
+recogniser that nothing on screen mentioned.
+
+**`?` shows the browser's own key reference**, built from the keymap and the
+registry: one row per browser command, every key that reaches it, and the
+registry's description. Deliberately *not* the game's hotkey panel, which
+renders `AppState::hotkeys` — a hand-authored layout of in-game commands — and
+so could neither be fed from here (the picker has no `AppState`) nor say
+anything true about the browser's bindings.
+
 Once a story's metadata has been fetched, a **RATING** column carries IFDB's
 community average with the number of votes behind it — `3.8 (226)`, the plain
 number to one decimal, no star glyphs to squint at. The vote count is there
@@ -1087,7 +1130,8 @@ file can carry the reasoning that produced it.
 the boot-time choices lanthorn can only honour *before* a game starts: which
 picture archive to draw its art from, and which machine to present itself as.
 (`o` does the same, for terminals that can't tell Shift-Enter from plain Enter,
-and so does double-right-clicking a row.) Plain Enter is untouched, so you only
+and so does **Launch options…** in the story menu — `Space`, or a right-click on
+the row.) Plain Enter is untouched, so you only
 meet the dialog when you ask for it. It offers the archives detected for *that*
 story — the same list the info panel shows — plus a line reminding you that an
 archive under some other name is still reachable by naming it outright.
