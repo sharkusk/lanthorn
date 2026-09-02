@@ -319,6 +319,26 @@ without the TUI around it. They ship in every release archive.
 
 ---
 
+## Docker
+
+The image runs the full TUI in any terminal with Docker on it, nothing else
+installed — or serves lanthorn to a browser on your network:
+
+```bash
+docker run -it --rm -v ~/if-games:/stories -v lanthorn-data:/data \
+  ghcr.io/sharkusk/lanthorn                  # play in this terminal
+docker run -d -p 7681:7681 -p 7682:7682 -v ~/if-games:/stories -v lanthorn-data:/data \
+  ghcr.io/sharkusk/lanthorn serve            # then open http://localhost:7681
+```
+
+Mount your game folder at `/stories`; saves live in the `lanthorn-data` volume.
+`docker compose up -d` with the repo's `docker-compose.yml` does the browser
+mode in one line.
+
+→ [**play in a browser**](docs/guide/play-in-a-browser.md)
+
+---
+
 ## Building from source
 
 ```sh
