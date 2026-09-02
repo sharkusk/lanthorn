@@ -152,91 +152,19 @@ fn minizork_carried_items_still_track_the_object_tree() {
     );
 }
 
-// ── SQ-1237 Part 3 audit: does the inventory panel feed the same way the
-// command panel does across engines? ────────────────────────────────────────
+// ── Where the Glulx half of this question lives now ─────────────────────────
 //
-// `inventory_items` reads the live OBJECT TREE (`Introspect::contents`), never
-// the story's dictionary (`Engine::story_vocabulary`, the thing SQ-1231 fixed
-// for Glulx's Unicode/I6 dictionary shapes) — so a Glulx dictionary shape is
-// not the question here. The real finding, discovered driving this case: on
-// Glulx, `Engine::introspect` is the trait's own DEFAULT, always `None` —
-// `GlulxSession` never overrides it (`glulx_session.rs`'s own
-// `introspect_is_none` unit test says so outright: "Glulx introspection is
-// SP4", i.e. planned, not built). That is engine-wide, not inventory-specific:
-// the command panel's *carried*/*here* columns read the exact same
-// `Introspect` trait through the exact same absence, so the inventory panel is
-// fed EXACTLY as well (or as poorly) as the command panel is on this engine —
-// there is no parity GAP between the two panels here, only a gap between
-// engines, and it is not a "small, mechanical fix" (implementing Glulx object
-// introspection is its own feature, already tracked as SP4).
+// SQ-1237's audit found `Engine::introspect` answering the trait's own DEFAULT
+// on Glulx — always `None`, so both panels fell back to a transcript scrape of
+// an `i` reply — and pinned that here with an `#[ignore]`d Counterfeit Monkey
+// case. SQ-1241 built the missing half: Glulx now reads its story's own Inform
+// object tree, and the successor cases (City of Secrets 6.21, King of Shreds
+// and Patches 6.31, and Counterfeit Monkey, which is still REFUSED and why)
+// live in `suites/glulx_inventory.rs` — un-ignored, since one CM boot in one
+// group binary is cheap enough to run always.
 //
-// Both panels fall back to `state.inventory_fallback` on Glulx: a transcript
-// scrape of the reply to a literal `i`/`inv`/`inventory` command
-// (`turn.rs`'s `parse_inventory_output`), which is why it stays empty here
-// until the player types one — and, on THIS game, stays empty even then: CM
-// answers `i` with its own narrative prose rather than the standard Inform
-// library reply the parser looks for, which this case also pins.
-#[test]
-#[ignore = "slow (~2.7s): runs Counterfeit Monkey's intro through the Glulx VM; run with --include-ignored"]
-fn counterfeit_monkey_has_no_live_introspection_and_falls_back_to_the_transcript_scrape() {
-    use app::glulx_session::GlulxSession;
-    use blorb::Blorb;
+// The finding that outlived the fix is kept there too: CM answers `i` in its
+// own narrative prose rather than the Inform library's "You are carrying:", so
+// `parse_inventory_output` reads nothing from it — which is exactly why a panel
+// fed only by the scrape was empty for the whole game.
 
-    let path = fixture_path("CounterfeitMonkey-11.gblorb");
-    let Ok(bytes) = std::fs::read(&path) else {
-        eprintln!("SKIP: gitignored story missing at {}", path.display());
-        return;
-    };
-    let blorb = Blorb::parse(bytes).expect("parse gblorb");
-    let image = blorb.executable().expect("exec chunk").1.to_vec();
-    let mut session =
-        GlulxSession::new(image, 80, 24, true, false, false, (1, 1), None, &[]).expect("boot CM");
-    // CM's opening asks "Can you hear me?" three times before the game itself
-    // starts, then reads a bare keypress (`glk_select` on a char event, which
-    // `submit_key` answers and `submit` cannot) and finally its own printed
-    // instructions: "type LOOK and press return."
-    for cmd in ["yes", "yes", "yes"] {
-        session.submit(cmd);
-    }
-    session.submit_key(app::engine::KeyInput::Enter);
-    session.submit("look");
-    let _ = session.take_transcript();
-
-    // The real finding: a real, validated Inform 7/Glulx object table still
-    // answers no introspection at all.
-    assert!(
-        session.introspect().is_none(),
-        "Glulx introspection is SP4 (not built) — this pins that fact so the day it \
-         changes, this whole file's Glulx story updates with it rather than silently \
-         going stale",
-    );
-
-    // Both panels' fallback path: nothing carried is known without asking.
-    assert!(
-        inventory_items(None, &[], session.introspect()).is_empty(),
-        "no fallback list has been populated yet — the player has typed nothing",
-    );
-
-    // Ask, the same way `turn.rs` recognises an inventory command: `i`. A
-    // SECOND finding, not the one this case set out to check: CM answers with
-    // its own narrative prose ("We are equipped with your R-remover...")
-    // rather than the standard "You are carrying:" Inform library reply, and
-    // `parse_inventory_output` looks for exactly that header — so the
-    // fallback stays empty on THIS game even after asking. Asserted here
-    // rather than silently accepted, so a future change to either side
-    // (the parser, or CM's own reply) is caught instead of drifting unnoticed.
-    let reply = session.submit("i").transcript;
-    let fallback = app::inventory::parse_inventory_output(&reply);
-    let items = inventory_items(None, &fallback, session.introspect());
-    assert!(
-        items.is_empty(),
-        "CM's custom \"i\" reply does not match parse_inventory_output's \"carrying\" \
-         header heuristic — if this now finds items, the heuristic (or CM's reply) \
-         changed and the SQ-1237 audit's finding needs re-checking: {reply:?}",
-    );
-
-    // No click composition exists to verify here: `draw_inventory_dock`
-    // publishes no hit-rects (unlike `draw_command_band`'s `CommandBandHits`),
-    // and no mouse handler in `input.rs` resolves against `pane_layout.inv_dock`
-    // — the inventory panel is read-only today. See the SQ-1237 audit report.
-}
