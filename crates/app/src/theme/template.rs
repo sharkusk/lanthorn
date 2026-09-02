@@ -631,26 +631,6 @@ mod tests {
         names
     }
 
-    /// Rows whose `parent` re-root the sweep cannot prove, and why.
-    ///
-    /// Both entries are **SQ-1169**: the row's registry `Delta` pins BOTH `fg`
-    /// and `bg`, and `resolve_row` applies that Delta on top of the resolved
-    /// parent before any user layer — so a re-root resolves, warns about
-    /// nothing, and moves no colour at all. That is the exact shape of the
-    /// tooltip defect a user reported (`a9898db9`).
-    ///
-    /// SQ-1169 lists seven live rows, and only these two are TOTAL no-ops. The
-    /// other five — `status_header`, the three `debug.disasm_*` tiers and
-    /// `dialog.shadow` — pin one channel and inherit the other, so a re-root
-    /// still moves that other one and clears the bar below. They are masked, not
-    /// inert; the quest's own list is the record of that, not this one.
-    ///
-    /// The cure is a design question with three answers written up on SQ-1169
-    /// (suppress the Delta's colours on a re-root / stop pinning them in the
-    /// registry / warn), and the choice is the user's, not this test's. Named
-    /// here so the exemption is reviewable rather than a silent gap.
-    const PARENT_REROOT_UNPROVABLE: &[&str] = &["dialog.list_selected", "transcript_search_highlight"];
-
     #[test]
     fn every_key_the_template_documents_takes_effect_when_uncommented() {
         use ratatui::style::Modifier;
@@ -771,14 +751,13 @@ mod tests {
             // whole family at once, and the one the tooltip defect hid in.
             //
             // The bar is that re-rooting must move at least one COLOUR — not
-            // that it must move every colour, which would be picking SQ-1169's
-            // option (a) on the user's behalf, and not merely that it changes
-            // the style, which a bold `heading` parent satisfies while the
-            // colours stay pinned (that weaker bar passed the tooltip defect
-            // itself, so it is no bar at all).
-            if PARENT_REROOT_UNPROVABLE.contains(&name) {
-                continue;
-            }
+            // that it must move every colour, and not merely that it changes the
+            // style, which a bold `heading` parent would satisfy while the
+            // colours stayed pinned (that weaker bar passed the tooltip defect
+            // itself, so it is no bar at all). SQ-1169 made this bar clearable
+            // for every row: `resolve_row` now skips the registry default
+            // delta's `fg`/`bg` on any row a user layer re-roots, so a pinned
+            // colour no longer survives on top of the new parent.
             let landed = super::super::registry::ROLE_NAMES.iter().any(|p| {
                 let got = theme_of(&probe(&format!("{{ parent = \"{p}\" }}"))).get(name);
                 got.style.fg != base.style.fg || got.style.bg != base.style.bg
@@ -786,8 +765,7 @@ mod tests {
             assert!(
                 landed,
                 "the template documents `parent` on row {name:?}, but re-rooting it onto any of \
-                 the seven roles changes nothing — see SQ-1169's pinned-Delta mechanism, and add \
-                 it to PARENT_REROOT_UNPROVABLE only if that is why"
+                 the seven roles changes nothing — see SQ-1169's re-root rule in resolve_row"
             );
         }
     }

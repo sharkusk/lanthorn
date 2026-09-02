@@ -32,6 +32,10 @@ any such tag, or this Unreleased section, still exists.*
 - A Glulx status window with its own background colour — Kerkerkruip's grey
   strip, with the panels off — is filled in that colour edge to edge instead of
   going black between the words.
+- A `parent = "…"` re-root in `style.toml` now actually moves a row's colours
+  even when that row's built-in default pins an `fg`/`bg` of its own (the menu
+  highlight and the transcript search highlight used to ignore the re-root
+  entirely; a few others only half-moved).
 
 ## v0.4.0 — 2026-09-01
 

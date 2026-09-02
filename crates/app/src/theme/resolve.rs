@@ -359,12 +359,25 @@ pub fn describe_theme_warnings(warnings: &[ThemeWarning]) -> Vec<String> {
 /// Layer a [`Delta`] onto a base [`Style`]: override fg/bg only where the delta
 /// sets them; add (never clear) the delta's modifier bits.
 fn apply_style(base: Style, d: &Delta) -> Style {
+    apply_style_channels(base, d, true)
+}
+
+/// [`apply_style`], but with the colour channels skippable (SQ-1169): when
+/// `apply_color` is `false`, `d.fg`/`d.bg` are ignored entirely and the base's
+/// own colours pass through untouched — modifiers still layer as normal. The
+/// registry-default step in [`resolve_row`] uses this to let a user `parent`
+/// re-root actually move a row's colours: a pinned `fg`/`bg` in the registry
+/// [`Delta`] applied on top of the NEW parent would otherwise silently restore
+/// the old pin, exactly as it did before this selector could be re-rooted at all.
+fn apply_style_channels(base: Style, d: &Delta, apply_color: bool) -> Style {
     let mut s = base;
-    if let Some(fg) = d.fg {
-        s = s.fg(fg);
-    }
-    if let Some(bg) = d.bg {
-        s = s.bg(bg);
+    if apply_color {
+        if let Some(fg) = d.fg {
+            s = s.fg(fg);
+        }
+        if let Some(bg) = d.bg {
+            s = s.bg(bg);
+        }
     }
     // Modifiers are tri-state (SQ-1171): `None` inherits, `Some(true)` adds,
     // `Some(false)` REMOVES. Add and remove are accumulated separately and the
@@ -422,10 +435,19 @@ fn apply_border(
 /// `layers` override in build order (lowest→highest). Each layer that carries a
 /// [`Delta`] for this selector overrides the running value AND advances the
 /// [`Provenance`] stamp, so the stamp reflects the highest layer that wrote it.
-fn resolve_row(row: &RegRow, parent: &Resolved, layers: &[(&Decls, Provenance)]) -> Resolved {
+///
+/// `rerooted` (SQ-1169) is whether some USER layer set a `parent` override for
+/// this row (see [`user_rerooted`]) — `parent` here is already that new parent's
+/// `Resolved`. When `true`, the registry default delta's `fg`/`bg` are skipped so
+/// the new parent's colours reach the row; a row whose default delta pins a
+/// colour would otherwise silently restore the old parent's pin on top of the
+/// re-root, making `parent = "…"` a no-op (or a half-op, for a delta pinning only
+/// one channel). The delta's non-colour channels (modifiers, glyph, border, …)
+/// are unaffected — a re-root moves ink, not weight or shape.
+fn resolve_row(row: &RegRow, parent: &Resolved, layers: &[(&Decls, Provenance)], rerooted: bool) -> Resolved {
     // 1. registry default delta on the parent.
     let d = &row.default_delta;
-    let mut style = apply_style(parent.style, d);
+    let mut style = apply_style_channels(parent.style, d, !rerooted);
     let mut glyph = apply_glyph(parent.glyph.clone(), d);
     let mut border = apply_border(parent.border, d);
     // Structural channels (SQ-0641): same set-wins-else-inherit rule as border.
@@ -479,6 +501,18 @@ fn effective_parent(row: &RegRow, layers: &[(&Decls, Provenance)]) -> Option<Str
     parent
 }
 
+/// Whether any user layer's decl for `row` sets `parent` at all (SQ-1169) —
+/// intent, not value: a re-root counts even when it names the row's own
+/// registry-default parent, because the point is that the USER chose it. Kept
+/// separate from [`effective_parent`], which resolves to a name rather than a
+/// yes/no, so [`resolve_row`] can tell "re-rooted onto the same name" apart
+/// from "no layer touched `parent` at all" — the two must not collapse, or a
+/// row's pinned colours would survive a re-root that happens to restate the
+/// default parent.
+fn user_rerooted(row: &RegRow, layers: &[(&Decls, Provenance)]) -> bool {
+    layers.iter().any(|(decls, _)| decls.get(row.name).is_some_and(|d| d.parent.is_some()))
+}
+
 /// Compute the flat theme map from the registry via single-level parent fallback.
 ///
 /// Roles resolve first (from `roles`); then each row resolves against its parent —
@@ -503,7 +537,9 @@ pub fn resolve(roles: &Roles, global: &Decls, garglk: &Decls, per_game: &Decls) 
         // A role row may still carry an explicit override.
         let row = REGISTRY.iter().find(|r| r.name == name);
         let resolved = match row {
-            Some(r) => resolve_row(r, &Resolved::bare(style), &layers),
+            // Roles are roots: they never consult `parent` (there is nothing to
+            // re-root onto), so `rerooted` is always `false` here.
+            Some(r) => resolve_row(r, &Resolved::bare(style), &layers, false),
             None => Resolved::bare(style),
         };
         map.insert(name.to_string(), resolved);
@@ -525,7 +561,8 @@ pub fn resolve(roles: &Roles, global: &Decls, garglk: &Decls, per_game: &Decls) 
                     None => return true, // parent not resolved yet; keep pending.
                 },
             };
-            let resolved = resolve_row(row, &parent, &layers);
+            let rerooted = user_rerooted(row, &layers);
+            let resolved = resolve_row(row, &parent, &layers, rerooted);
             map.insert(row.name.to_string(), resolved);
             false
         });
@@ -559,7 +596,10 @@ pub fn resolve(roles: &Roles, global: &Decls, garglk: &Decls, per_game: &Decls) 
                 let parent = registry_parent
                     .and_then(|p| map.get(&p).cloned())
                     .unwrap_or_else(|| Resolved::bare(Style::default()));
-                let resolved = resolve_row(row, &parent, &layers);
+                // The bad re-root is being IGNORED here (falling back to the
+                // REGISTRY parent, not the user's), so this is not a re-root as
+                // far as the registry default delta is concerned.
+                let resolved = resolve_row(row, &parent, &layers, false);
                 map.insert(row.name.to_string(), resolved);
             }
             break;
@@ -1115,6 +1155,113 @@ mod tests {
             tip.bg,
             Some(Color::Rgb(62, 54, 46)),
             "the retired warm-dark pin must not survive a re-root",
+        );
+    }
+
+    // ── SQ-1169: a `parent` re-root must beat a row's pinned registry colours ─
+    //
+    // `resolve_row`'s step 1 used to apply the registry default `Delta` on top
+    // of the resolved parent unconditionally — so a row whose own `Delta` pins
+    // `fg`/`bg` restored that pin over whatever the user's `parent` override
+    // supplied, silently. `dialog.list_selected` and `transcript_search_highlight`
+    // pin BOTH channels (a total no-op); `status_header`, `dialog.shadow` and the
+    // three `debug.disasm_*` tiers pin ONE (a half-op: the other channel moves,
+    // which reads as fixed and is easy to mistake for it).
+
+    /// Every registry row whose default `Delta` pins `fg` and/or `bg`, gathered
+    /// from the registry itself rather than hand-listed, so a row added
+    /// tomorrow with a pinned colour is covered the moment it lands.
+    fn rows_pinning_a_colour() -> Vec<&'static RegRow> {
+        REGISTRY
+            .iter()
+            .filter(|r| r.default_delta.fg.is_some() || r.default_delta.bg.is_some())
+            .collect()
+    }
+
+    /// A re-root moves BOTH colour channels, for every row the registry pins
+    /// one or both on (SQ-1169) — not just the seven the quest named by hand.
+    /// `chrome` is the re-root target (`Roles::terminal_default().chrome` =
+    /// White on Black): distinct from every pinned colour in the registry, so
+    /// whichever channel stayed behind is caught.
+    ///
+    /// Falsifies against pre-fix `resolve_row`: every one of these rows keeps
+    /// at least the channel its own `Delta` pins — e.g. `debug.disasm_executed`
+    /// keeps `fg = Some(Color::Blue)` instead of following chrome's white, and
+    /// `dialog.list_selected` keeps the whole `Black`/`Cyan` pair.
+    #[test]
+    fn a_reroot_moves_both_colour_channels_for_every_row_that_pins_one() {
+        let roles = Roles::terminal_default();
+        let chrome = roles.chrome;
+        let rows = rows_pinning_a_colour();
+        assert!(!rows.is_empty(), "sanity: the registry must still have pinned-colour rows to test");
+
+        for row in rows {
+            let decls = one(row.name, Delta { parent: Some("chrome".to_string()), ..Delta::EMPTY });
+            let theme = resolve(&roles, &decls, &Decls::new(), &Decls::new());
+            let got = theme.get(row.name).style;
+            assert_eq!(
+                got.fg, chrome.fg,
+                "{:?}: re-rooting onto chrome must move fg to chrome's — a registry pin survived",
+                row.name
+            );
+            assert_eq!(
+                got.bg, chrome.bg,
+                "{:?}: re-rooting onto chrome must move bg to chrome's — a registry pin survived",
+                row.name
+            );
+        }
+    }
+
+    /// The seven rows SQ-1169 names explicitly, each with the exact pre-fix
+    /// failure it reproduces — the generic sweep above proves the same thing
+    /// mechanically; this spells out the specific report.
+    #[test]
+    fn seven_named_rows_move_both_channels_on_reroot() {
+        let roles = Roles::terminal_default();
+        let chrome = roles.chrome;
+        let cases: &[(&str, &str)] = &[
+            ("dialog.list_selected", "TOTAL no-op pre-fix: pinned Black+Cyan, both survived a re-root"),
+            ("transcript_search_highlight", "TOTAL no-op pre-fix: pinned Black+Yellow, both survived"),
+            ("status_header", "HALF pre-fix: bg pinned Black, stayed Black instead of following chrome"),
+            ("dialog.shadow", "HALF pre-fix: bg pinned DarkGray, stayed DarkGray instead of following chrome"),
+            ("debug.disasm_executed", "HALF pre-fix: fg pinned Blue, stayed Blue instead of following chrome"),
+            ("debug.disasm_rd", "HALF pre-fix: fg pinned Yellow, stayed Yellow instead of following chrome"),
+            ("debug.disasm_soft", "HALF pre-fix: fg pinned Red, stayed Red instead of following chrome"),
+        ];
+        for (name, why) in cases {
+            let decls = one(name, Delta { parent: Some("chrome".to_string()), ..Delta::EMPTY });
+            let theme = resolve(&roles, &decls, &Decls::new(), &Decls::new());
+            let got = theme.get(name).style;
+            assert_eq!(got.fg, chrome.fg, "{name}: {why}");
+            assert_eq!(got.bg, chrome.bg, "{name}: {why}");
+        }
+    }
+
+    /// No `parent` in the decl at all: the pinned/inherited pair is untouched.
+    /// A user who only flips `bold` off must still see the registry's exact
+    /// Black-on-Cyan — the re-root rule must not leak into the no-reroot case.
+    #[test]
+    fn no_reroot_still_pins_dialog_list_selected_colours() {
+        let roles = Roles::terminal_default();
+        let decls = one("dialog.list_selected", Delta { bold: Some(false), ..Delta::EMPTY });
+        let theme = resolve(&roles, &decls, &Decls::new(), &Decls::new());
+        let got = theme.get("dialog.list_selected").style;
+        assert_eq!(got.fg, Some(Color::Black), "no parent override: the registry pin still applies");
+        assert_eq!(got.bg, Some(Color::Cyan), "no parent override: the registry pin still applies");
+        assert!(!got.add_modifier.contains(Modifier::BOLD), "bold = false must still switch the weight off");
+    }
+
+    /// A re-root moves colours, not the registry delta's own modifiers:
+    /// `dialog.list_selected` is bold by default, and re-rooting it must keep
+    /// that bold even though its pinned fg/bg get skipped.
+    #[test]
+    fn reroot_of_dialog_list_selected_keeps_bold() {
+        let roles = Roles::terminal_default();
+        let decls = one("dialog.list_selected", Delta { parent: Some("chrome".to_string()), ..Delta::EMPTY });
+        let theme = resolve(&roles, &decls, &Decls::new(), &Decls::new());
+        assert!(
+            theme.get("dialog.list_selected").style.add_modifier.contains(Modifier::BOLD),
+            "a re-root must not strip the registry delta's own bold"
         );
     }
 
