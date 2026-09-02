@@ -404,6 +404,31 @@ fn zork1_answers_the_misses_it_can_and_stays_quiet_otherwise() {
 /// answer that has thrown away its own reason for existing.
 ///
 /// Falsify by removing `by_meaning` from `candidates`: all four fall silent.
+///
+/// **SQ-1238 briefly changed the first and third lines** to `light · light
+/// up` and `hold in · hold back · hide` — `light up` and `hold in`/`hold
+/// back` are genuine WordNet members of `illuminate`'s and `conceal`'s
+/// groups, and every one of their WORDS is a genuine Zork dictionary entry,
+/// so the dictionary-only check that quest shipped credited them.
+///
+/// **SQ-1240 closes `light up`**, because `light`'s only grammar line
+/// (`light OBJ with OBJ`) never pairs it with `up` — verified against
+/// `infodump`-shaped output (`cargo run -p zvm --example grammar_dump --
+/// stories/zork1-r88-s840726.z3`): `191. 2 entries, verb = "light" / light
+/// OBJ with OBJ / light OBJ`.
+///
+/// **It does NOT close `hold in`**, and this is not a hole SQ-1240 leaves —
+/// it is what "this story knows" honestly means. `hold` reaches `carry`
+/// (`238. 8 entries, verb = "carry", synonyms = catch, get, grab, hold,
+/// remove, take`), and Zork's own grammar for it includes a bare `carry in
+/// OBJ` line beside `carry OBJ in OBJ` — so `carry in the trophy` truly
+/// parses on this release, exactly the shape `hold in <noun>` would need.
+/// The grammar genuinely pairs `carry` with `in`; it simply pairs it for an
+/// unrelated sense of "carry" than the one `hold in` (conceal) means, which
+/// is precisely the gap "this story knows" (a fact about the dictionary and
+/// grammar) leaves for `try instead` (a fact about behaviour, from the
+/// shadow probe) to close. `hold back`, by contrast, stays gone: `back` is
+/// nowhere in `carry`'s literal list.
 #[test]
 fn zork1_answers_a_word_it_never_heard_with_what_that_word_means() {
     let Some(mut s) = zork1() else { return };
@@ -416,7 +441,7 @@ fn zork1_answers_a_word_it_never_heard_with_what_that_word_means() {
         vec![
             "this story knows — light",
             "this story knows — examine · describe · see",
-            "this story knows — hide · place · put",
+            "this story knows — hold in · hide · carry",
             "this story knows — remove · carry · catch",
         ]
     );
@@ -569,11 +594,26 @@ fn zork1_stays_quiet_where_meaning_reaches_nothing_the_story_implements() {
 /// Its unit-test twin — `the_canonical_meanings_reach_the_word_the_story_holds`
 /// in `vocab.rs` — pinned the same refusal on a synthetic story and is inverted
 /// with it.
+///
+/// **SQ-1238 briefly added `get into` and `put on` to the line** — both are
+/// members of `don`'s group, and Zork's dictionary genuinely holds every one
+/// of `get`, `into`, `put` and `on`, which is all SQ-1238's per-word
+/// dictionary check asked. **SQ-1240 closes `get into`**: `get` reaches
+/// `carry`, and `carry`'s grammar (`carry OBJ from OBJ` / `off` / `out` /
+/// `up` / `on` / `in`, and bare `carry up|on|out|in OBJ`) never pairs it with
+/// `into` at all. **It does not close `put on`**, for the same honest reason
+/// as `hold in` on `zork1_answers_a_word_it_never_heard_with_what_that_word_
+/// means`: `put` reaches `hide`, and `hide`'s own grammar has a bare `hide on
+/// OBJ` line beside `hide OBJ on OBJ`, so `hide on the rug` truly parses —
+/// Zork's grammar genuinely pairs `hide` with `on`, just not for the sense
+/// `put on` (wear) means. That is the dictionary-and-grammar fact "this
+/// story knows" states; whether typing `put on` actually dresses the player
+/// is exactly what the vetted `try instead` line is for.
 #[test]
 fn zork1_answers_a_three_letter_synonym_the_story_holds() {
     let Some(mut s) = zork1() else { return };
     let (_state, lines) = play(&mut s, &["don sword"]);
-    assert_eq!(lines, vec!["this story knows — wear"]);
+    assert_eq!(lines, vec!["this story knows — wear · put on · hide"]);
 
     let v = <app::session::GameSession as Engine>::story_vocabulary(&s).expect("zork1 has one");
     assert!(v.knows("wear"), "the word the table reaches, and Zork's own");
@@ -630,6 +670,70 @@ fn a_scott_story_answers_a_mistyped_verb() {
         lines,
         vec!["this story knows — quit", "this story knows — look"],
         "a fragment (`exam`, `desc`) is fit to be the answer and not fit to be an aside"
+    );
+}
+
+/// **SQ-1238.** The shipped synonym table groups `hasten` with `rush`,
+/// `hurry` and the phrasal `look sharp`. `ten_indians.blb`'s Scott Adams
+/// dictionary keeps four characters and implements `look` but none of `rush`,
+/// `hurry` or `sharp` — and before the fix, truncating the whole PHRASE
+/// `"look sharp"` to four characters landed on the very same key `"look"`
+/// truncates to, so the offer named `look sharp` (and `look`'s own aliases,
+/// riding along through `by_story_synonym`) though no release of this game
+/// implements any of them.
+///
+/// `adv03.dat` is the fixture the quest was filed on, but it is not the
+/// specimen here: its dictionary truncates at THREE characters, where it
+/// happens to hold an unrelated verb (`SHA`) that `sharp` also truncates to —
+/// a second, independent truncation collision genuinely present in that
+/// story's own dictionary (`stored("sharp")` truly resolves there), which was
+/// not the mechanism SQ-1238 fixed and was not closed by it. SQ-1240 closes
+/// it anyway, from an entirely different direction: see
+/// [`adv03_credits_no_phrasal_member_because_scott_adams_has_no_prepositions`]
+/// just below.
+///
+/// Falsify by reverting the `stored` fix: `hasten north` on `ten_indians.blb`
+/// starts naming `look sharp` again.
+#[test]
+fn a_scott_story_does_not_credit_a_phrasal_synonym_through_truncation() {
+    let Some(bytes) = story("ten_indians.blb") else { return };
+    let loaded = app::hints::extract_story(bytes).expect("ten_indians.blb extracts a Scott exec");
+    let app::hints::LoadedStory::Scott(data) = loaded else {
+        panic!("ten_indians.blb is a Scott Adams blorb")
+    };
+    let mut s = app::scott_session::ScottSession::new(data, None).expect("ten_indians.blb loads");
+    let (_state, lines) = play(&mut s, &["hasten north"]);
+    assert!(
+        lines.is_empty(),
+        "no release of this game implements `rush`, `hurry` or `look sharp`: {lines:?}"
+    );
+}
+
+/// **SQ-1240, on the fixture the quest was actually filed on.** `adv03.dat`
+/// truncates at THREE characters, and `sharp` truncates to `sha` — a real but
+/// unrelated verb in this story's own dictionary, so SQ-1238's per-word
+/// dictionary check alone could not tell `look sharp` apart from a story that
+/// genuinely implements it: every word of the phrase "resolves". What closes
+/// it is that a Scott Adams database has NO prepositions at all — its
+/// `SyntaxLine`s are always `VERB` or `VERB noun`, never `VERB word noun`
+/// (see `scott_session::story_vocabulary`) — so `Verb::prepositions()` is
+/// empty for every verb this format can produce, and no multi-word synonym
+/// member can ever pair with one. `look` on its own is still offered nowhere
+/// near this: `hasten` never matches `look` directly, only through the
+/// `rush`/`hurry`/`look sharp` group, and every member of that group is
+/// closed to this story.
+///
+/// Falsify by reverting the SQ-1240 grammar-pairing check: `hasten north`
+/// starts naming `look sharp` again, exactly as it did on `ten_indians.blb`
+/// before SQ-1238.
+#[test]
+fn adv03_credits_no_phrasal_member_because_scott_adams_has_no_prepositions() {
+    let Some(bytes) = story("adv03.dat") else { return };
+    let mut s = app::scott_session::ScottSession::new(bytes, None).expect("adv03.dat loads");
+    let (_state, lines) = play(&mut s, &["hasten north"]);
+    assert!(
+        lines.is_empty(),
+        "no Scott Adams game can implement a multi-word synonym member: {lines:?}"
     );
 }
 
