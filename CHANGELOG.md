@@ -29,6 +29,14 @@ any such tag, or this Unreleased section, still exists.*
 
 ### Added
 
+- **Older Glulx games now get the acceleration newer ones ask for.** Inform 7
+  builds from 2010 on tell the interpreter where their veneer routines live, and
+  lanthorn runs those natively; every Inform 6 game and every older Inform 7 game
+  simply never says, and used to grind through them opcode by opcode. lanthorn
+  now recognises those routines from their bytecode instead of waiting to be
+  told — King of Shreds and Patches' `inventory` turn is over ten times faster —
+  and refuses to guess when the match is anything less than exact. `--accel off`
+  still turns the whole thing off.
 - **A menu for the highlighted story in the picker.** `Space`, or a single
   right-click on a row or cover, opens a small menu beside it: open the story,
   launch options, fetch its metadata, get its hints, point it at an IFDB page —

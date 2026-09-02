@@ -1493,6 +1493,80 @@ Amiga floppy or anywhere else.
   `accelfunc` are recognized and run natively instead of grinding through full VM
   dispatch, so a heavyweight like Counterfeit Monkey stops making you wait through
   its startup. On by default; disable with `--accel off` (`gvm-cli` and the app).
+- **Fingerprinted acceleration for games that never ask** — a game only gets the
+  interception above if it *registers* its veneer, which Inform 7 has done since
+  build 6E59 (2010) and nothing older ever does. Every plain Inform 6 game, and
+  every Inform 7 game before that, interprets those routines one opcode at a
+  time. `crates/gvm/src/veneer.rs` finds them anyway, by matching the story's own
+  ROM against a committed template of the seven routines before the first opcode
+  runs. King of Shreds and Patches' `inventory` turn goes from 43.0M dispatched
+  opcodes to 3.5M — **12.5x**, and 10.5x in wall time.
+
+  What is matched, and what is checked:
+
+  - **The bytecode, byte for byte**, outside a mask that covers exactly the
+    operands whose bytes are image-specific — memory references and RAM-relative
+    operands (addressing modes `5/6/7` and `D/E/F`), call targets, run-time-error
+    message addresses, and the operands carrying the nine `accelparam` constants.
+    Opcode numbers, addressing-mode nibbles, branch offsets, local offsets and
+    every genuine constant must be identical. Nothing fuzzy; no partial matches.
+  - **Uniqueness** — a routine that matches at two addresses in ROM is an
+    ambiguity, and acceleration is refused rather than guessed at.
+  - **Call-graph closure** — the seven must call *each other*: the `RA__Pr` we
+    matched has to call the `CP__Tab` and `OC__Cl` we matched, `RV__Pr` has to
+    call that `RA__Pr`, and all three `RT__Err` call sites have to name one
+    function. This is what makes the match a statement about the game's veneer
+    rather than about a body that merely looks like one.
+  - **The nine parameters**, read out of the matched operands, must agree wherever
+    the same one appears twice (`class_metaclass` is read in four routines), and
+    the `indiv_prop_start + 5/6/7/8` constants must be exactly that.
+  - **Cross-checks against the object table** — facts the bytecode cannot supply:
+    `classes_table`'s first four entries must be the four metaclasses in order;
+    those must be objects by `Z__Region`'s own test and evenly spaced; the stride
+    must leave room for the class-chain field at `13 + num_attr_bytes`; and
+    `classes_table[4]`, the first genuine class, must carry `class_metaclass` in
+    exactly that field. That last one is what validates `num_attr_bytes` against
+    the object record rather than against the `aload` index it was read from.
+
+  If anything fails, **nothing** is installed and the routines are interpreted
+  exactly as before. `--accel off` disables the whole thing, fingerprinted or
+  declared.
+
+  **Reading the result.** `Machine::veneer_accel()` returns a `VeneerReport`;
+  `report.summary()` is one line naming the template, each routine and its
+  address, and every derived parameter — for example
+
+  ```
+  veneer acceleration: Inform 6.31-6.41 (BlueLacuna.gblorb, serial 100717)
+  [Z__Region@0xed746 CP__Tab@0xed840 RA__Pr@0xeceeb RL__Pr@0xecf6f OC__Cl@0xed05c
+   RV__Pr@0xecc6b OP__Pr@0xecff9] params classes_table=0x2420c3 indiv_prop_start=256
+   class/object/routine/string_metaclass=0x1e8880/0x1e88a0/0x1e88c0/0x1e88e0
+   self=0x1c9910 num_attr_bytes=7 cpv__start=0x241fdf
+  ```
+
+  — and when nothing was installed it says why (`not applied (no template match
+  for Z__Region, …)`, `cross-check failed: …`). It is deliberately *not* pushed
+  to `Machine::diagnostics`, which the app turns into Warning lines in the
+  player's transcript. The fingerprinted assignments also flow into
+  `accel_funcs()`, so the disassembler badges those routines as accelerated
+  exactly as it does a game's own.
+
+  **Provenance and coverage.** The template is the veneer of `BlueLacuna.gblorb`
+  (Inform 6.31, serial 100717), which registers its own and so states the ground
+  truth. Across the 35 stories in `stories/` that register — Inform 6.31 through
+  6.41 — the seven routines are identical instruction for instruction, and
+  `fingerprint_agrees_with_every_story_that_declares_its_own` re-derives every
+  address and every parameter from bytecode alone and checks the answer against
+  what each game goes on to announce.
+
+  **Inform 6.21 is not covered, on purpose.** City of Secrets, `advent.blb`,
+  `narco.blorb`, `photo201.blb` and `sensory.blorb` all use a different codegen —
+  no `jgeu` or `callfi`, and `Z__Region` calls an `Unsigned__Compare` helper —
+  and, decisively, their `CP__Tab` omits the `Z__Region` guard that Glulxe's
+  `accel.c` performs, so the native routine is *not* a drop-in for the
+  interpreted one on a non-object argument. There is also no 6.21 story in the
+  corpus that registers, so there would be no ground truth to check a template
+  against. Matching refuses them, which is the correct outcome.
 - **Floating-point math** — the complete float opcode set is implemented, in both
   single **and** double precision: conversions, arithmetic, `sqrt`/`exp`/`log`/
   `pow`, trigonometry, and the fuzzy comparisons `jfeq`…`jisinf`. Games that
