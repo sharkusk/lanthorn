@@ -232,25 +232,40 @@ fn a_direction_object_no_longer_earns_a_false_positive() {
 /// With the probe switched off the offer still appears — and says the modest
 /// thing it can still support. `try instead` is a recommendation and is earned
 /// by the vetting; naming the dictionary is a fact and is not.
+///
+/// **SQ-1238 added `light up` to the line.** `light up` is a member of
+/// `illuminate`'s synonym group, and Zork's dictionary genuinely holds `light`
+/// and `up` — every word of the phrase, which is what the fixed `stored` now
+/// asks of a multi-word member (the bug was a naive whole-PHRASE truncation
+/// crediting a story with a member it never implemented; the brief's own fix
+/// is explicit that the app has no seam to also verify the phrase parses as
+/// the SAME action). This is exactly the unvetted claim's documented, weaker
+/// promise: "this story's dictionary holds them, and nothing more is
+/// claimed." The two `try instead` cases just above this one pin that the
+/// STRONGER claim is unaffected — the probe still discards `light up` there,
+/// because typing it does nothing this game recognises as lighting the lamp.
 #[test]
 fn without_the_probe_the_line_makes_the_weaker_claim() {
     let Some(mut p) = Play::zork1() else { return };
     p.state.config.guidance_probe = false;
     p.walk(TO_THE_LAMP);
     p.turn("illuminate lamp");
-    assert_eq!(p.assists(), vec!["this story knows — light"]);
+    assert_eq!(p.assists(), vec!["this story knows — light · light up"]);
 }
 
 /// And an unarmed seam — every `AppState::default()`, and any session whose
 /// story bytes were never kept — is the same case: no vetting happened, so no
 /// vetted claim is made. This is what keeps `vocabulary_offer.rs` honest.
+///
+/// See the note on `without_the_probe_the_line_makes_the_weaker_claim` for why
+/// SQ-1238 added `light up` to this line too.
 #[test]
 fn an_unarmed_seam_makes_the_weaker_claim_too() {
     let Some(mut p) = Play::zork1() else { return };
     p.state.probe = app::probe::ShadowProbe::default();
     p.walk(TO_THE_LAMP);
     p.turn("illuminate lamp");
-    assert_eq!(p.assists(), vec!["this story knows — light"]);
+    assert_eq!(p.assists(), vec!["this story knows — light · light up"]);
 }
 
 // ── The story's own signature of failure, discovered ────────────────────────

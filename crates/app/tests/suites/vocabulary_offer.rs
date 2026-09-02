@@ -404,6 +404,21 @@ fn zork1_answers_the_misses_it_can_and_stays_quiet_otherwise() {
 /// answer that has thrown away its own reason for existing.
 ///
 /// Falsify by removing `by_meaning` from `candidates`: all four fall silent.
+///
+/// **SQ-1238 changed the first and third lines.** `light up` and `hold
+/// in`/`hold back` are genuine WordNet members of `illuminate`'s and
+/// `conceal`'s groups, and Zork's dictionary genuinely holds every one of
+/// their words (`light`, `up`, `hold`, `in`, `back`) — so the fixed `stored`,
+/// asked whether the STORY holds each word of the phrase on its own, correctly
+/// says yes. What it cannot ask is whether `light up` and `hide`'s action are
+/// the SAME one Zork's grammar recognises (they are not: this release has no
+/// multi-word verb spelling at all, so `light up` and `hold in` would not
+/// parse as the actions their members name) — the brief's own "conservative
+/// rule" is explicit that the app has no seam for that question, so this is
+/// the accepted shape of its remaining imprecision, not a fix regression.
+/// `guidance_probe` (on by default in real play, off in this synchronous
+/// harness) is what catches it downstream: a candidate that does nothing in
+/// the shadow game is dropped before the vetted line ever reaches a player.
 #[test]
 fn zork1_answers_a_word_it_never_heard_with_what_that_word_means() {
     let Some(mut s) = zork1() else { return };
@@ -414,9 +429,9 @@ fn zork1_answers_a_word_it_never_heard_with_what_that_word_means() {
     assert_eq!(
         lines,
         vec![
-            "this story knows — light",
+            "this story knows — light · light up",
             "this story knows — examine · describe · see",
-            "this story knows — hide · place · put",
+            "this story knows — hold in · hold back · hide",
             "this story knows — remove · carry · catch",
         ]
     );
@@ -569,11 +584,19 @@ fn zork1_stays_quiet_where_meaning_reaches_nothing_the_story_implements() {
 /// Its unit-test twin — `the_canonical_meanings_reach_the_word_the_story_holds`
 /// in `vocab.rs` — pinned the same refusal on a synthetic story and is inverted
 /// with it.
+///
+/// **SQ-1238 added `get into` and `put on` to the line.** Both are members of
+/// `don`'s group, and Zork's dictionary genuinely holds `get`, `into`, `put`
+/// and `on` — every word of each phrase, which is what the fixed `stored` now
+/// asks. See the longer note on `zork1_answers_a_word_it_never_heard_with_
+/// what_that_word_means` for why this is the accepted shape of the rule's
+/// remaining imprecision (no seam to ask whether the phrase parses as the
+/// SAME action) rather than a regression this quest introduced.
 #[test]
 fn zork1_answers_a_three_letter_synonym_the_story_holds() {
     let Some(mut s) = zork1() else { return };
     let (_state, lines) = play(&mut s, &["don sword"]);
-    assert_eq!(lines, vec!["this story knows — wear"]);
+    assert_eq!(lines, vec!["this story knows — wear · get into · put on"]);
 
     let v = <app::session::GameSession as Engine>::story_vocabulary(&s).expect("zork1 has one");
     assert!(v.knows("wear"), "the word the table reaches, and Zork's own");
@@ -630,6 +653,39 @@ fn a_scott_story_answers_a_mistyped_verb() {
         lines,
         vec!["this story knows — quit", "this story knows — look"],
         "a fragment (`exam`, `desc`) is fit to be the answer and not fit to be an aside"
+    );
+}
+
+/// **SQ-1238.** The shipped synonym table groups `hasten` with `rush`,
+/// `hurry` and the phrasal `look sharp`. `ten_indians.blb`'s Scott Adams
+/// dictionary keeps four characters and implements `look` but none of `rush`,
+/// `hurry` or `sharp` — and before the fix, truncating the whole PHRASE
+/// `"look sharp"` to four characters landed on the very same key `"look"`
+/// truncates to, so the offer named `look sharp` (and `look`'s own aliases,
+/// riding along through `by_story_synonym`) though no release of this game
+/// implements any of them.
+///
+/// `adv03.dat` is the fixture the quest was filed on, but it is not the
+/// specimen here: its dictionary truncates at THREE characters, where it
+/// happens to hold an unrelated verb (`SHA`) that `sharp` also truncates to —
+/// a second, independent truncation collision genuinely present in that
+/// story's own dictionary (`stored("sharp")` truly resolves there), which is
+/// not the mechanism this quest fixes and is not closed by it.
+///
+/// Falsify by reverting the `stored` fix: `hasten north` on `ten_indians.blb`
+/// starts naming `look sharp` again.
+#[test]
+fn a_scott_story_does_not_credit_a_phrasal_synonym_through_truncation() {
+    let Some(bytes) = story("ten_indians.blb") else { return };
+    let loaded = app::hints::extract_story(bytes).expect("ten_indians.blb extracts a Scott exec");
+    let app::hints::LoadedStory::Scott(data) = loaded else {
+        panic!("ten_indians.blb is a Scott Adams blorb")
+    };
+    let mut s = app::scott_session::ScottSession::new(data, None).expect("ten_indians.blb loads");
+    let (_state, lines) = play(&mut s, &["hasten north"]);
+    assert!(
+        lines.is_empty(),
+        "no release of this game implements `rush`, `hurry` or `look sharp`: {lines:?}"
     );
 }
 

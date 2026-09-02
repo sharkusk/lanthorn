@@ -321,9 +321,29 @@ impl StoryVocabulary {
 
     /// The dictionary entry a spelling reaches, truncation included: `examine`
     /// finds the `examin` a Version 3 dictionary actually stores.
+    ///
+    /// `word` may be a whole phrase — a synonym table member such as `look
+    /// sharp` — and that is exactly the case a naive truncation gets wrong
+    /// (SQ-1238). [`Self::truncated`] cuts to `key_len` CHARACTERS, so
+    /// truncating the phrase as one string lands on a real dictionary key by
+    /// accident: a Scott Adams database keeping four characters stores `look`
+    /// for `look`, and `"look sharp".chars().take(4)` is ALSO `look` — so the
+    /// phrase reads as known whether or not the story has ever heard of
+    /// `sharp`, and no story implements `look sharp` at all. The truncation
+    /// map is keyed per WORD; a phrase has to be split and every word checked
+    /// on its own, or the first word's spelling is doing work it never
+    /// promised. So every later word must be a dictionary entry in its own
+    /// right — truncated by ITS OWN characters, not the phrase's — before the
+    /// first word's entry is even looked up; a phrase missing a later word is
+    /// not "known via its first word", it is not known at all.
     fn stored(&self, word: &str) -> Option<(&String, WordRoles)> {
         let w = word.to_lowercase();
-        let key = self.by_trunc.get(&self.truncated(&w))?;
+        let mut parts = w.split_whitespace();
+        let first = parts.next()?;
+        for rest in parts {
+            self.by_trunc.get(&self.truncated(rest))?;
+        }
+        let key = self.by_trunc.get(&self.truncated(first))?;
         self.words.get_key_value(key).map(|(k, r)| (k, *r))
     }
 
@@ -2007,6 +2027,73 @@ mod tests {
             v.offer("fastn", Position::Opening, &[], &[]),
             vec!["fasten"],
             "a genuine typo still finds its spelling neighbour"
+        );
+    }
+
+    /// A story with only `look` in its four-character dictionary — no `sharp`,
+    /// no `at`, no `rush`, no `hurry`. The pocket case for SQ-1238: what
+    /// `stored` (and everything routed through it — `knows`, `verb_named`,
+    /// `roles`, and the `known` closure `by_meaning` hands to
+    /// `verb_synonyms::suggest`) does with a MULTI-WORD query.
+    fn a_look_only_story() -> StoryVocabulary {
+        let verbs = vec![Verb::new(
+            100,
+            0,
+            vec!["look".into()],
+            vec![SyntaxLine::new(0, false, vec![noun()])],
+        )];
+        let mut words = BTreeMap::new();
+        words.insert("look".to_string(), roles(true, false));
+        StoryVocabulary::new(verbs, words, BTreeSet::new(), 4)
+    }
+
+    /// **SQ-1238.** `look sharp` is a phrasal member of the same synonym group
+    /// as `hasten`, `rush` and `hurry`. Truncating the whole PHRASE to this
+    /// story's four-character key length lands on `look` by accident —
+    /// `"look sharp".chars().take(4)` is `look`, exactly like `"look".chars().
+    /// take(4)` — so a naive `stored` credits this story with a phrase it has
+    /// never implemented. `look` alone must still count, and a phrasal member
+    /// whose every word is a real dictionary word must still count too.
+    ///
+    /// Falsify by reverting the `stored` fix (truncate the whole phrase as one
+    /// string instead of checking each word on its own): the first assertion
+    /// fails, because `look sharp` truncates onto the same key as `look`.
+    #[test]
+    fn a_multiword_synonym_member_needs_every_word_in_the_dictionary() {
+        let v = a_look_only_story();
+        assert!(v.knows("look"), "the single word alone still counts");
+        assert!(
+            !v.knows("look sharp"),
+            "this story never heard of `sharp`; truncating the whole phrase must \
+             not land on `look` by accident"
+        );
+
+        // Add `at` and the same phrase (now every word present) counts.
+        let mut verbs = v.verbs.clone();
+        verbs.push(Verb::new(101, 0, vec!["at".into()], vec![SyntaxLine::new(1, false, vec![])]));
+        let mut words = v.words.clone();
+        words.insert("at".to_string(), WordRoles::default());
+        let with_at = StoryVocabulary::new(verbs, words, BTreeSet::new(), 4);
+        assert!(
+            with_at.knows("look at"),
+            "a multi-word member counts once every one of its words is a \
+             dictionary word on its own"
+        );
+    }
+
+    /// The end-to-end shape of SQ-1238: a story that implements `look` but
+    /// none of `rush`, `hurry` or `sharp` must not answer `hasten` at all —
+    /// not with `look sharp`, and not with `look` riding along as `look
+    /// sharp`'s own alias through `by_story_synonym`.
+    ///
+    /// Falsify the same way: revert the `stored` fix and this starts offering
+    /// `look sharp` (tier 1, `exact_meaning`) and often `look` beside it.
+    #[test]
+    fn a_phrasal_synonym_member_does_not_match_through_truncation_of_its_first_word() {
+        let v = a_look_only_story();
+        assert!(
+            v.offer("hasten", Position::Opening, &[], &[]).is_empty(),
+            "this story implements `look`, not `rush`, `hurry`, or `look sharp`"
         );
     }
 
