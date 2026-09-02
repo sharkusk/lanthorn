@@ -174,7 +174,7 @@ pub struct Params {
     /// Thirteen, and the number is measured rather than chosen. The widest set
     /// the corpus corroborates strongly is `attack break crack destroy fight
     /// hit kill murder punch smash thump torture wreck` — thirteen spellings,
-    /// declared verbatim by TWENTY of the 119 stories, which is the Inform
+    /// declared verbatim by THIRTY-SEVEN of the 149 stories, which is the Inform
     /// library's own grammar and the single most authoritative group in the
     /// whole corpus. A cap of twelve refuses exactly that one. Above thirteen
     /// the next candidates are single-game sprees: a fourteen-member `walk`
@@ -642,19 +642,35 @@ pub fn build(
     // slide, …), which is the over-inclusion this whole design exists to avoid.
     if p.gap_fill {
         for (&offset, syn) in &wn.synsets {
-            let members = assemble(&syn.words, &by_lemma, &member_ok, false);
-            // ONLY a synset no story can match, and this is the load-bearing
-            // condition, not a coverage heuristic. A group is symmetric while
-            // hypernymy is not: `sprint` is a kind of `run`, but `run` is not a
-            // kind of `sprint`, and a group holding both would suggest `sprint`
-            // to a player who typed `run`. Requiring that the CHILD synset
-            // contains no IF verb makes that impossible by construction — none
-            // of the specific words is in any story's dictionary, so the
-            // intersection at lookup can never surface one. Relaxing this to
-            // "any synset" was measured: it reached 92.0% instead of 88.8% and
-            // put `fish`, `hook` and `net` in a group with `grab`, every one of
-            // them a wrong suggestion waiting for a game that implements it.
-            if members.iter().any(|w| is_if_verb(w)) {
+            // ONLY the words of the child synset no story can match, and this
+            // is the load-bearing condition, not a coverage heuristic. A group
+            // is symmetric while hypernymy is not: `sprint` is a kind of `run`,
+            // but `run` is not a kind of `sprint`, and a group holding both
+            // would suggest `sprint` to a player who typed `run`. Keeping every
+            // CHILD word some story's dictionary holds OUT of the union makes
+            // that impossible by construction — no specific word is in the
+            // group, so the intersection at lookup can never surface one.
+            // Relaxing this to "any synset" was measured: it reached 92.0%
+            // instead of 88.8% and put `fish`, `hook` and `net` in a group with
+            // `grab`, every one of them a wrong suggestion waiting for a game
+            // that implements it.
+            //
+            // The test is per WORD rather than per SYNSET because a per-synset
+            // one does not scale with the corpus (SQ-1234). {`derive`, `gain`}
+            // was gap-filled onto its hypernym {`obtain`} across 119 stories
+            // and refused outright across 149, because exactly ONE of the
+            // thirty new stories implements `derive` — and `obtain` → `gain`,
+            // a mapping `canonical_mappings_survive_regeneration` pins, went
+            // with it. One author's dictionary should cost the union that one
+            // word, not the whole row, and dropping the word keeps the
+            // invariant EXACTLY: nothing left in the union is a specific word a
+            // story can match. Refusing the row was never the invariant, only
+            // the cheapest way to state it while every child word was
+            // unmatchable at once.
+            let rescued: Vec<String> =
+                syn.words.iter().filter(|w| !is_if_verb(w)).cloned().collect();
+            let members = assemble(&rescued, &by_lemma, &member_ok, false);
+            if members.is_empty() {
                 continue;
             }
             // And only rescue a synset a PLAYER might reach for. Gap-filling
@@ -676,7 +692,7 @@ pub fn build(
                 if up.pointers.iter().filter(|(s, _)| s == "~").count() > p.hyponym_cap {
                     continue;
                 }
-                let mut union: Vec<String> = syn.words.clone();
+                let mut union: Vec<String> = rescued.clone();
                 union.extend(up.words.iter().cloned());
                 let union = assemble(&union, &by_lemma, &member_ok, false);
                 if union.len() < 2
