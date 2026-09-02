@@ -97,8 +97,18 @@ fn describe(s: &GlulxSession) -> String {
 /// shape with the same two names on the Z-machine), so only the ROOM can say —
 /// and on turn one the room-lock has not resolved yet, so the room comes from
 /// matching the printed heading against object short names. Picking the decoy
-/// gives an empty list, which is why asserting the three real items is the
+/// gives an empty list, which is why asserting all six real items is the
 /// check: it cannot pass on the wrong object.
+///
+/// **And three of the six only reach the list at all since SQ-1241's second
+/// fix.** Peter's letter, the express ticket and the wad of local money are
+/// each a `parse_name`-routine object — printable (a hardware short name) but
+/// not enumerable (no static `name` array), because Emily Short compiled their
+/// multi-word matching into machine code rather than a word list. `contents()`
+/// used to require a readable `name` array to answer at all, which dropped
+/// exactly these three and left the panel showing `travel papers, watch,
+/// suitcase` — three of six, not the "shows nothing" the quest opened with,
+/// which is why the fix landed in two passes.
 #[test]
 fn city_of_secrets_reads_its_carried_items_from_the_object_tree() {
     let Some(mut s) = boot("CoS.blb") else { return };
@@ -120,9 +130,14 @@ fn city_of_secrets_reads_its_carried_items_from_the_object_tree() {
     let items = carried(&s);
     let l = lower(&items);
     assert!(
-        l.contains("travel papers") && l.contains("watch") && l.contains("suitcase"),
-        "you arrive at the City Train Station carrying your travel papers, your watch and \
-         your suitcase: {}",
+        l.contains("peter's letter")
+            && l.contains("express ticket")
+            && l.contains("travel papers")
+            && l.contains("wad of local money")
+            && l.contains("watch")
+            && l.contains("suitcase"),
+        "you are carrying Peter's letter, an express ticket, some travel papers, a wad of \
+         local money and a suitcase, and wearing a watch — the game's own `i` reply: {}",
         describe(&s)
     );
     // The same answer through the LOCKED path the turn loop uses, so the dock
@@ -357,8 +372,14 @@ fn city_of_secrets_panels_are_filled_at_the_first_prompt() {
     let (rows, painted, carried) = panels(&s);
     let l = lower(&rows);
     assert!(
-        l.contains("travel papers") && l.contains("watch") && l.contains("suitcase"),
-        "the inventory panel names what you stepped off the train with: {rows:?}"
+        l.contains("peter's letter")
+            && l.contains("express ticket")
+            && l.contains("travel papers")
+            && l.contains("wad of local money")
+            && l.contains("watch")
+            && l.contains("suitcase"),
+        "the inventory panel names everything you stepped off the train with, letter and \
+         ticket and money included, not only the three the parser can name unaided: {rows:?}"
     );
     // …and the cause immediately after, so it also says why.
     assert_eq!(
@@ -367,12 +388,17 @@ fn city_of_secrets_panels_are_filled_at_the_first_prompt() {
         "the prologue's own room heading — printed into the second buffer window \
          GWindows opens mid-turn, which is the whole of this defect"
     );
-    for word in ["papers", "watch", "suitcase"] {
+    for word in ["letter", "ticket", "papers", "money", "watch", "suitcase"] {
         assert!(painted.contains(word), "the dock paints {word:?}: {painted:?}");
     }
     let c = lower(&carried);
     assert!(
-        c.contains("watch") && c.contains("suitcase"),
+        c.contains("letter")
+            && c.contains("ticket")
+            && c.contains("papers")
+            && c.contains("money")
+            && c.contains("watch")
+            && c.contains("suitcase"),
         "the command panel's carried column too: {carried:?}"
     );
 }

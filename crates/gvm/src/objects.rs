@@ -389,11 +389,28 @@ impl ParseNames {
 
     /// Everything directly inside `addr`, as answered objects.
     ///
-    /// An object with no readable `name` array is skipped, exactly as
-    /// [`all`](ParseNames::all) skips it: the caller wants things it can NAME,
-    /// and this reader refuses to name an object it cannot read words for.
+    /// **Unlike [`all`](ParseNames::all) and [`of`](ParseNames::of), a child
+    /// with no readable `name` array is still included here** (SQ-1241),
+    /// falling back to its printed short name with an empty word list. `all`
+    /// and `of` answer "what can the parser be told to fetch this by", which a
+    /// `parse_name`-routine object genuinely has no static answer to; this
+    /// answers "what is the player carrying", and an object does not stop
+    /// being carried because Inform compiled its name into machine code
+    /// instead of a static array. City of Secrets holds three such objects at
+    /// the first prompt — Peter's letter, an express ticket and a wad of local
+    /// money — each printable (its hardware short name) but not enumerable
+    /// (its words come from a `parse_name` routine, not the `name` property),
+    /// and dropping them from an inventory dock is not a naming refusal, it is
+    /// half the player's own hands going unlisted.
     pub fn contents(&self, mem: &Memory, addr: u32) -> Vec<ObjectWords> {
-        self.children(mem, addr).into_iter().filter_map(|c| self.of(mem, c)).collect()
+        self.children(mem, addr)
+            .into_iter()
+            .map(|c| {
+                self.of(mem, c).unwrap_or_else(|| {
+                    ObjectWords::new(c, self.printed_name(mem, c), Vec::new(), None, None)
+                })
+            })
+            .collect()
     }
 
     /// True when `ancestor` strictly contains `start`, at any depth.
@@ -652,14 +669,18 @@ mod tests {
     // [`ParseNames::detect`] end to end rather than around it.
 
     const RAM: u32 = 0x100;
-    const EXT: u32 = 0x600;
+    const EXT: u32 = 0x700;
     /// Inform's `NUM_ATTR_BYTES` default, and the corpus's.
     const NAB: u32 = 7;
     /// `1 + NUM_ATTR_BYTES + 6 longs` (§2).
     const STRIDE: u32 = 1 + NAB + 24;
     const OBJ: u32 = 0x300;
-    const PROPS: u32 = 0x400;
-    const NAMEDATA: u32 = 0x480;
+    // PROPS, NAMEDATA and STRINGS each sit right after the region before
+    // them, sized for `N_OBJ` objects, so the ninth object ([`LETTER`]) has
+    // room without hand-picking gaps.
+    const PROPS: u32 = OBJ + N_OBJ as u32 * STRIDE;
+    const NAMEDATA: u32 = PROPS + N_OBJ as u32 * 16;
+    const STRINGS: u32 = NAMEDATA + N_OBJ as u32 * 16;
     const DICT: u32 = 0x118;
     /// `DICT_ENTRY_BYTE_LENGTH` for a byte-valued dictionary of nine
     /// characters: `7 + DICT_WORD_SIZE` (`Inform6/inform.c`).
@@ -684,7 +705,12 @@ mod tests {
     const SACK: usize = 5;
     const APPLE: usize = 6;
     const TABLE: usize = 7;
-    const N_OBJ: usize = 8;
+    /// A child with an empty `name` array — a `parse_name`-routine object,
+    /// exactly the shape City of Secrets' letter, ticket and money are
+    /// (SQ-1241). Parked on the table so the pinned `PLAYER` child chain
+    /// below is untouched.
+    const LETTER: usize = 8;
+    const N_OBJ: usize = 9;
 
     struct Story {
         buf: Vec<u8>,
@@ -774,7 +800,8 @@ mod tests {
                 ("brass lamp", &["lamp", "brass"], Some(PLAYER), Some(SACK), None),
                 ("sack", &["sack"], Some(PLAYER), None, Some(APPLE)),
                 ("apple", &["apple"], Some(SACK), None, None),
-                ("table", &["table"], Some(ROOM), None, None),
+                ("table", &["table"], Some(ROOM), None, Some(LETTER)),
+                ("Peter's letter", &[], Some(TABLE), None, None),
             ];
             for (i, (printed, words, parent, sibling, child)) in plan.iter().enumerate() {
                 let at = self.obj(i);
@@ -784,7 +811,7 @@ mod tests {
                 let next = if i + 1 < N_OBJ { self.obj(i + 1) } else { 0 };
                 self.w32(base, next);
                 // long 1: hardware name string.
-                let sname = self.string(0x40 + i as u32 * 24, printed);
+                let sname = self.string(STRINGS + i as u32 * 24, printed);
                 self.w32(base + 4, sname);
                 // long 2: property table address.
                 let table = PROPS + i as u32 * 16;
@@ -796,15 +823,20 @@ mod tests {
                 self.w32(base + 20, addr_of(child));
                 // §3's property table: a long count, then ten-byte entries of
                 // {short id, short length in words, long data, short flags}.
+                // A `words.is_empty()` object gets no property-1 entry at all
+                // — the shape a `parse_name`-routine object compiles to,
+                // which has no static `name` array to read (SQ-1241).
                 let data = NAMEDATA + i as u32 * 16;
-                self.w32(table, 1);
-                self.w16(table + 4, NAME_PROPERTY as u16);
-                self.w16(table + 6, words.len() as u16);
-                self.w32(table + 8, data);
-                self.w16(table + 12, 0);
-                for (j, w) in words.iter().enumerate() {
-                    let a = self.word_addr(w);
-                    self.w32(data + j as u32 * 4, a);
+                self.w32(table, if words.is_empty() { 0 } else { 1 });
+                if !words.is_empty() {
+                    self.w16(table + 4, NAME_PROPERTY as u16);
+                    self.w16(table + 6, words.len() as u16);
+                    self.w32(table + 8, data);
+                    self.w16(table + 12, 0);
+                    for (j, w) in words.iter().enumerate() {
+                        let a = self.word_addr(w);
+                        self.w32(data + j as u32 * 4, a);
+                    }
                 }
             }
         }
@@ -839,7 +871,10 @@ mod tests {
         assert_eq!(lamp.property, Some(NAME_PROPERTY));
         assert!(lamp.refers_to("brass"), "Inform keeps adjectives in the same array");
         assert_eq!(pn.find(&mem, "apple").map(|o| o.id), Some(s.obj(APPLE)));
-        assert_eq!(pn.all(&mem).len(), N_OBJ, "every object here holds a readable name array");
+        // Every object but LETTER — it alone has no readable `name` array, on
+        // purpose (SQ-1241's `contents_includes_a_child_with_no_readable_name_array`
+        // below covers that it is still reachable through `contents`).
+        assert_eq!(pn.all(&mem).len(), N_OBJ - 1, "all() still needs a readable name array");
     }
 
     /// The three containment longs, read one at a time. A transposed pair would
@@ -866,6 +901,28 @@ mod tests {
         assert_eq!(carried, ["brass lamp", "sack"]);
         // One level, always: the apple is inside the sack, not in your hands.
         assert!(!carried.iter().any(|n| n == "apple"));
+    }
+
+    /// The regression itself (SQ-1241): a child with no readable `name` array
+    /// — a `parse_name`-routine object, exactly what City of Secrets' Peter's
+    /// letter, express ticket and wad of money compile to — must still be
+    /// LISTED, not silently dropped, because it is genuinely something the
+    /// table contains. Falsifies before the fix: `contents` used to be
+    /// `children(...).filter_map(|c| self.of(mem, c))`, which drops LETTER
+    /// exactly as `all()` and `of()` correctly do.
+    #[test]
+    fn contents_includes_a_child_with_no_readable_name_array() {
+        let (s, mem, pn) = detected();
+        assert!(
+            pn.of(&mem, s.obj(LETTER)).is_none(),
+            "no property-1 array to answer `of` with — the parse_name-routine shape"
+        );
+        assert_eq!(pn.children(&mem, s.obj(TABLE)), vec![s.obj(LETTER)]);
+        let held = pn.contents(&mem, s.obj(TABLE));
+        assert_eq!(held.len(), 1, "a wordless child must still be listed, not dropped");
+        assert_eq!(held[0].printed_name, "Peter's letter");
+        assert!(held[0].words.is_empty(), "no parser words are known for it, and none are invented");
+        assert_eq!(held[0].display_name().as_deref(), Some("Peter's letter"));
     }
 
     #[test]
