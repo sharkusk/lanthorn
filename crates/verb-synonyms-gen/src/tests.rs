@@ -418,3 +418,350 @@ fn the_committed_verb_entries_are_well_formed() {
         "only {corroborating_inspect_examine} stories put `inspect` and `examine` on one verb"
     );
 }
+
+fn wide_frequency_fixture() -> Frequency {
+    let d = scratch("freq-wide");
+    let p = d.join("frq.txt");
+    std::fs::write(
+        &p,
+        "----- 1 -----\n\
+         check\ndescribe\nexamine\ninspect\nobserve\nsee\nstudy\nsurvey\nwatch\ntrace\nlight\n",
+    )
+    .unwrap();
+    Frequency::load(&p).expect("fixture loads")
+}
+
+/// Rule 1a (SQ-1233): a game-derived group is only swallowed by a WIDER
+/// game-derived superset if that superset is at least as well corroborated.
+/// `describe/examine/inspect/observe/study/watch` (3 stories) is a strict
+/// subset of `check/describe/examine/inspect/observe/see/study/survey/watch`
+/// (2 stories) — the unmodified subsumption step drops the narrower, MORE
+/// corroborated set purely for being smaller. Falsified by reverting the
+/// `groups[j].support >= groups[i].support` gate in the subsumption step: the
+/// 6-member group then disappears and this test fails.
+#[test]
+fn a_narrower_game_group_survives_a_wider_but_weaker_superset() {
+    let wn = wordnet_fixture();
+    let freq = wide_frequency_fixture();
+    let verbs = vec![IfVerb { emit: "light".into(), lemma: "light".into(), stories: 100 }];
+    let games = vec![
+        GameGroup {
+            words: ["check", "describe", "examine", "inspect", "observe", "see", "study", "survey", "watch"]
+                .iter()
+                .map(|s| s.to_string())
+                .collect(),
+            stories: 2,
+        },
+        GameGroup {
+            words: ["describe", "examine", "inspect", "observe", "study", "watch"]
+                .iter()
+                .map(|s| s.to_string())
+                .collect(),
+            stories: 3,
+        },
+    ];
+    let p = Params { band_cap: 16, ..Params::default() };
+    let mut r = Report::default();
+    let groups = build(&verbs, &games, &wn, &freq, &p, &mut r);
+    assert!(
+        groups.iter().any(|g| g.len() == 6 && g.contains(&"observe".to_string())),
+        "the 3-story, 6-member set must survive as its own row: {groups:?}"
+    );
+    assert_eq!(r.subsumed, 0, "neither set should swallow the other here");
+}
+
+/// The companion half of the same bug: two DIFFERENT raw `if_groups.tsv`
+/// entries can reduce to the identical final member set after filtering (a
+/// truncated spelling untruncating the same way, say), and `keep` used to
+/// remember whichever one processed first — not the more corroborated one.
+/// Falsified by reverting `keep`'s `seen` map to a bare `game: bool` (losing
+/// the index/support update): the kept group's support then reads 1, and this
+/// test fails.
+#[test]
+fn keep_remembers_the_stronger_of_two_identical_declarations() {
+    let wn = wordnet_fixture();
+    let freq = wide_frequency_fixture();
+    let verbs = vec![IfVerb { emit: "light".into(), lemma: "light".into(), stories: 100 }];
+    let games = vec![
+        GameGroup { words: ["check", "watch"].iter().map(|s| s.to_string()).collect(), stories: 2 },
+        GameGroup { words: ["check", "watch"].iter().map(|s| s.to_string()).collect(), stories: 9 },
+    ];
+    let p = Params { band_cap: 16, ..Params::default() };
+    let mut r = Report::default();
+    build(&verbs, &games, &wn, &freq, &p, &mut r);
+    assert_eq!(r.duplicates, 1, "the second declaration is a duplicate set");
+    // Corroborate it against a wider, weaker set that only the STRONGER
+    // support number should be able to resist being swallowed by.
+    let games2 = vec![
+        GameGroup { words: ["check", "watch"].iter().map(|s| s.to_string()).collect(), stories: 2 },
+        GameGroup { words: ["check", "watch"].iter().map(|s| s.to_string()).collect(), stories: 9 },
+        GameGroup {
+            words: ["check", "describe", "watch"].iter().map(|s| s.to_string()).collect(),
+            stories: 2,
+        },
+    ];
+    let mut r2 = Report::default();
+    let groups = build(&verbs, &games2, &wn, &freq, &p, &mut r2);
+    assert!(
+        groups.iter().any(|g| g.len() == 2 && g.contains(&"check".to_string())),
+        "the 9-story pair must have survived the weaker 2-story triple: {groups:?}"
+    );
+}
+
+/// Rule 2 (SQ-1233): a WordNet group's member is dropped when (a) the
+/// synset was not that word's OWN reason for being selected — its sense rank
+/// for this offset falls outside `sense_cap` — and (b) the corpus
+/// corroborates a completely different, disjoint action for it.
+///
+/// `clear`'s synonym-of-`enlighten` sense mirrors `illuminate`'s real
+/// "clarify" collision: `clear`'s dominant corpus sense (grouped here with
+/// `push`) shares nothing with `enlighten`/`elucidate`, so `clear` must be
+/// dropped from that group while it survives with its other members intact.
+/// `light`, by contrast, sits in ITS OWN group at its OWN top sense and must
+/// never be touched, mirroring `illuminate`'s "light/light up" group.
+///
+/// Falsified by skipping the bystander filter entirely (comment it out in
+/// `build`): `clear` then stays in the clarify group and this test fails.
+fn bystander_fixture() -> (WordNet, Frequency) {
+    let d = scratch("wn-bystander");
+    std::fs::write(
+        d.join("index.verb"),
+        "light v 1 0 1 0 00000001  \n\
+         enlighten v 1 0 1 0 00000002  \n\
+         elucidate v 1 0 1 0 00000002  \n\
+         clear v 2 0 2 0 00000003 00000002  \n",
+    )
+    .unwrap();
+    std::fs::write(
+        d.join("data.verb"),
+        "00000001 30 v 02 light 0 illuminate 0 000 | make lighter\n\
+         00000002 30 v 03 clear 0 enlighten 0 elucidate 0 000 | make clear\n",
+    )
+    .unwrap();
+    std::fs::write(d.join("verb.exc"), "").unwrap();
+    std::fs::write(d.join("noun.exc"), "").unwrap();
+    let wn = WordNet::load(&d).expect("fixture loads");
+
+    let d2 = scratch("freq-bystander");
+    let p = d2.join("frq.txt");
+    std::fs::write(
+        &p,
+        "----- 1 -----\nlight\nilluminate\nclear\nenlighten\nelucidate\npush\n",
+    )
+    .unwrap();
+    let freq = Frequency::load(&p).expect("fixture loads");
+    (wn, freq)
+}
+
+#[test]
+fn a_bystander_member_is_dropped_when_the_corpus_disagrees() {
+    let (wn, freq) = bystander_fixture();
+    let verbs = vec![
+        IfVerb { emit: "light".into(), lemma: "light".into(), stories: 100 },
+        IfVerb { emit: "clear".into(), lemma: "clear".into(), stories: 50 },
+        IfVerb { emit: "enlighten".into(), lemma: "enlighten".into(), stories: 3 },
+        IfVerb { emit: "elucidate".into(), lemma: "elucidate".into(), stories: 3 },
+    ];
+    // `clear`'s attested corpus action: pushing something aside — nothing to
+    // do with clarifying, and disjoint from the clarify synset's members.
+    let games = vec![GameGroup {
+        words: ["clear", "push"].iter().map(|s| s.to_string()).collect(),
+        stories: 2,
+    }];
+    let p = Params { band_cap: 16, sense_cap: 1, ..Params::default() };
+    let mut r = Report::default();
+    let groups = build(&verbs, &games, &wn, &freq, &p, &mut r);
+
+    let clarify = groups
+        .iter()
+        .find(|g| g.contains(&"enlighten".to_string()))
+        .expect("the clarify group survives with its other members");
+    assert!(
+        !clarify.contains(&"clear".to_string()),
+        "`clear` must be dropped as a bystander: {clarify:?}"
+    );
+    assert!(clarify.contains(&"elucidate".to_string()));
+    assert_eq!(r.bystanders_dropped.len(), 1);
+    assert_eq!(r.bystanders_dropped[0].0, "clear");
+
+    let light = groups
+        .iter()
+        .find(|g| g.contains(&"illuminate".to_string()))
+        .expect("light's own group is untouched");
+    assert!(
+        light.contains(&"light".to_string()),
+        "light is its OWN top sense here and must never be treated as a bystander: {light:?}"
+    );
+}
+
+/// Rule 3 (SQ-1233): within a group, members are ordered by how much of the
+/// corpus's OWN evidence for this cluster backs each spelling — not by each
+/// spelling's overall popularity across every sense it happens to have.
+/// `watch` has more raw IF-verb story support than `examine` here (an
+/// unrelated, un-corroborating declaration inflates it), but `examine` is
+/// named alongside this group's OTHER members more often, and must lead.
+///
+/// Falsified by reverting the sort to plain `stories(w)`: `watch` (60) then
+/// outranks `examine` (50) and this test fails.
+#[test]
+fn member_order_prefers_the_spelling_the_corpus_clusters_around() {
+    let wn = wordnet_fixture();
+    let d = scratch("freq-cluster");
+    let p = d.join("frq.txt");
+    std::fs::write(&p, "----- 1 -----\nexamine\nwatch\ndescribe\n").unwrap();
+    let freq = Frequency::load(&p).expect("fixture loads");
+    let verbs = vec![
+        IfVerb { emit: "examine".into(), lemma: "examine".into(), stories: 50 },
+        IfVerb { emit: "watch".into(), lemma: "watch".into(), stories: 60 },
+        IfVerb { emit: "describe".into(), lemma: "describe".into(), stories: 10 },
+    ];
+    let games = vec![
+        GameGroup {
+            words: ["examine", "watch", "describe"].iter().map(|s| s.to_string()).collect(),
+            stories: 3,
+        },
+        // Below `game_support`, so it never becomes a row of its own, but its
+        // raw declaration still counts as corpus evidence for member order.
+        GameGroup {
+            words: ["examine", "describe"].iter().map(|s| s.to_string()).collect(),
+            stories: 1,
+        },
+    ];
+    let p = Params { band_cap: 16, ..Params::default() };
+    let mut r = Report::default();
+    let groups = build(&verbs, &games, &wn, &freq, &p, &mut r);
+    let g = groups
+        .iter()
+        .find(|g| g.len() == 3 && g.contains(&"watch".to_string()))
+        .expect("the three-member group");
+    assert_eq!(g[0], "examine", "the corpus-clustered spelling must lead: {g:?}");
+}
+
+/// Rule 4 (SQ-1233): an `un`-prefixed spelling that reaches no group through
+/// any earlier pass gets one — from the corpus's own (possibly single-story)
+/// declaration for it when there is one, or paired with its bare base verb
+/// otherwise. Neither channel exists for these words before this pass runs.
+///
+/// Falsified by deleting the call to `derive_reversals` in `build`: both
+/// assertions below fail because neither spelling reaches any group.
+#[test]
+fn un_prefixed_spellings_reach_a_group() {
+    let wn = wordnet_fixture();
+    let d = scratch("freq-reversal");
+    let p = d.join("frq.txt");
+    std::fs::write(&p, "----- 1 -----\nmask\npin\nstrip\nunmask\nunpin\n").unwrap();
+    let freq = Frequency::load(&p).expect("fixture loads");
+    let verbs = vec![
+        IfVerb { emit: "mask".into(), lemma: "mask".into(), stories: 20 },
+        IfVerb { emit: "pin".into(), lemma: "pin".into(), stories: 5 },
+        IfVerb { emit: "strip".into(), lemma: "strip".into(), stories: 8 },
+        IfVerb { emit: "unmask".into(), lemma: "unmask".into(), stories: 2 },
+        IfVerb { emit: "unpin".into(), lemma: "unpin".into(), stories: 2 },
+    ];
+    // The corpus declares `unmask` itself, at one story — below
+    // `game_support` on its own, which is exactly the case this pass exists
+    // for. It declares nothing at all for `unpin`.
+    let games = vec![GameGroup {
+        words: ["strip", "unmask"].iter().map(|s| s.to_string()).collect(),
+        stories: 1,
+    }];
+    let p = Params { band_cap: 16, ..Params::default() };
+    let mut r = Report::default();
+    let groups = build(&verbs, &games, &wn, &freq, &p, &mut r);
+
+    let unmask = groups
+        .iter()
+        .find(|g| g.contains(&"unmask".to_string()))
+        .expect("unmask reaches the corpus's own declaration");
+    assert!(unmask.contains(&"strip".to_string()));
+    assert_eq!(unmask.len(), 2, "exactly the corpus's own declared pair: {unmask:?}");
+
+    let unpin = groups
+        .iter()
+        .find(|g| g.contains(&"unpin".to_string()))
+        .expect("unpin falls back to pairing with its base verb");
+    assert!(unpin.contains(&"pin".to_string()));
+    assert_eq!(unpin.len(), 2, "the fallback pairing is minimal: {unpin:?}");
+
+    assert_eq!(r.reversal_candidates, 2);
+    assert_eq!(r.reversals_from_corpus, 1);
+    assert_eq!(r.reversals_paired_with_base, 1);
+}
+
+/// A well-corroborated `un`-cluster that Pass 0 already built normally is
+/// left exactly as it is — this pass only reaches spellings that are
+/// otherwise unreachable, never a word that already has a home.
+#[test]
+fn un_prefixed_derivation_does_not_touch_an_already_reachable_spelling() {
+    let wn = wordnet_fixture();
+    let d = scratch("freq-reversal-noop");
+    let p = d.join("frq.txt");
+    std::fs::write(&p, "----- 1 -----\nhook\nfree\nuntie\nunhook\n").unwrap();
+    let freq = Frequency::load(&p).expect("fixture loads");
+    let verbs = vec![
+        IfVerb { emit: "hook".into(), lemma: "hook".into(), stories: 10 },
+        IfVerb { emit: "free".into(), lemma: "free".into(), stories: 30 },
+        IfVerb { emit: "untie".into(), lemma: "untie".into(), stories: 40 },
+        IfVerb { emit: "unhook".into(), lemma: "unhook".into(), stories: 25 },
+    ];
+    let games = vec![GameGroup {
+        words: ["free", "untie", "unhook"].iter().map(|s| s.to_string()).collect(),
+        stories: 7,
+    }];
+    let p = Params { band_cap: 16, ..Params::default() };
+    let mut r = Report::default();
+    let groups = build(&verbs, &games, &wn, &freq, &p, &mut r);
+    assert_eq!(r.reversal_candidates, 0, "unhook already reaches a group through Pass 0");
+    assert_eq!(
+        groups.iter().filter(|g| g.contains(&"unhook".to_string())).count(),
+        1,
+        "no duplicate group should appear: {groups:?}"
+    );
+}
+
+/// Rule 1b (SQ-1233): among DISJOINT game-derived groups sharing a word (not
+/// a subset/superset pair — that is the subsumption test above), the one
+/// with MORE support must be offered first. `push/press/shove` (5 stories)
+/// must precede `pull/drag/tug/yank/shove` (4 stories) for `shove`, which is
+/// the exact SQ-1206 finding.
+///
+/// Falsified by reverting `order_by_sense`'s `tie` to always 0: the two
+/// groups then keep whatever order the alphabetical/offset tie-break gives
+/// them, independent of support, and this test fails (the pull group's first
+/// member sorts alphabetically before the push group's).
+#[test]
+fn game_groups_sharing_a_word_are_ordered_by_support() {
+    let wn = wordnet_fixture();
+    let d = scratch("freq-shove");
+    let p = d.join("frq.txt");
+    std::fs::write(&p, "----- 1 -----\npush\npress\nshove\npull\ndrag\ntug\nyank\n").unwrap();
+    let freq = Frequency::load(&p).expect("fixture loads");
+    let verbs = vec![
+        IfVerb { emit: "push".into(), lemma: "push".into(), stories: 10 },
+        IfVerb { emit: "press".into(), lemma: "press".into(), stories: 10 },
+        IfVerb { emit: "shove".into(), lemma: "shove".into(), stories: 10 },
+        IfVerb { emit: "pull".into(), lemma: "pull".into(), stories: 10 },
+        IfVerb { emit: "drag".into(), lemma: "drag".into(), stories: 10 },
+        IfVerb { emit: "tug".into(), lemma: "tug".into(), stories: 10 },
+        IfVerb { emit: "yank".into(), lemma: "yank".into(), stories: 10 },
+    ];
+    let games = vec![
+        GameGroup {
+            words: ["pull", "drag", "tug", "yank", "shove"].iter().map(|s| s.to_string()).collect(),
+            stories: 4,
+        },
+        GameGroup {
+            words: ["push", "press", "shove"].iter().map(|s| s.to_string()).collect(),
+            stories: 5,
+        },
+    ];
+    let p = Params { band_cap: 16, ..Params::default() };
+    let mut r = Report::default();
+    let groups = build(&verbs, &games, &wn, &freq, &p, &mut r);
+    let push_group = groups.iter().position(|g| g.contains(&"push".to_string())).expect("push group");
+    let pull_group = groups.iter().position(|g| g.contains(&"pull".to_string())).expect("pull group");
+    assert!(
+        push_group < pull_group,
+        "the 5-story push group must precede the 4-story pull group: {groups:?}"
+    );
+}

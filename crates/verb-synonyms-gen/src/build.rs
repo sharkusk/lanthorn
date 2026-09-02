@@ -235,7 +235,23 @@ struct Group {
     /// nothing else — because the consumer has no use for it; the evidence
     /// stays greppable in `if_groups.tsv`, one line per declared set.
     game: bool,
+    /// How many stories declare this EXACT verb entry — the `GameGroup`'s own
+    /// `stories`, carried onto the `Group` so [`order_by_sense`] and the
+    /// subsumption step can weigh one game-derived group against another.
+    /// Unused (0) for a WordNet-origin group, whose precedence comes from
+    /// WordNet's own sense order instead.
+    support: usize,
 }
+
+/// The shortest base a `un`-prefixed spelling may derive from — see
+/// [`derive_reversals`].
+///
+/// Below this, the base is a light verb general enough that "reversing" it
+/// means nothing: `un` + `do`/`go`/`be` is not a parser action. Three is the
+/// shortest English verb that still names something a game DOES to an object
+/// (`tie`, `dye`, `arm`), so the guard costs nothing above three-letter verbs
+/// and refuses only the placeholders below it.
+const MIN_REVERSAL_BASE: usize = 3;
 
 /// Everything the run learned, for the report and the tests.
 #[derive(Default)]
@@ -285,6 +301,21 @@ pub struct Report {
     /// groups is highly polysemous, and the cheapest evidence there is that the
     /// filters are too loose.
     pub widest: Vec<(String, usize)>,
+    /// Members dropped from a plain-synonymy WordNet group because the group
+    /// was not the reason that word counts as an IF verb (its own sense rank
+    /// for this synset falls outside `sense_cap`) AND the corpus corroborates
+    /// a completely different, disjoint action for it — `clear` beside
+    /// `illuminate`'s "clarify" sense being the motivating case. `(dropped
+    /// word, a member that stayed)` per removal, for the report and the tests.
+    pub bystanders_dropped: Vec<(String, String)>,
+    /// `un`-prefixed IF verbs [`derive_reversals`] looked at.
+    pub reversal_candidates: usize,
+    /// …resolved using the corpus's own (possibly single-story) declaration
+    /// for the `un`-spelling itself.
+    pub reversals_from_corpus: usize,
+    /// …that had no declaration of their own and were paired with their bare
+    /// base verb instead, so the spelling is at least resolvable.
+    pub reversals_paired_with_base: usize,
 }
 
 /// Build the groups.
@@ -327,7 +358,7 @@ pub fn build(
     let common: BTreeSet<String> = common_verbs(wn, freq, p).into_iter().collect();
 
     let mut groups: Vec<Group> = Vec::new();
-    let mut seen_sets: BTreeMap<Vec<String>, bool> = BTreeMap::new();
+    let mut seen_sets: BTreeMap<Vec<String>, usize> = BTreeMap::new();
     let mut in_group: BTreeMap<String, usize> = BTreeMap::new();
     let mut by_synonymy: BTreeSet<String> = BTreeSet::new();
     let mut by_gap: BTreeSet<String> = BTreeSet::new();
@@ -428,6 +459,39 @@ pub fn build(
         None
     };
 
+    // Every RAW verb entry the corpus declares, CANONICALISED the same way
+    // Pass 0 canonicalises a kept group's members (`recognised`/`untruncate`)
+    // and indexed by the spellings it contains — used only as a
+    // member-ORDERING signal (see the "Order the members" step below), never
+    // to admit a group: no threshold applied here, because a single-story
+    // declaration is still real evidence of which spelling a game's author
+    // reached for first when several games agree on the action but not on the
+    // ranking.
+    //
+    // Canonicalising here (not just indexing the raw spellings) matters:
+    // `examine` truncates to `examin` in several Z-machine dictionaries, and
+    // without this step every one of those entries indexed under the
+    // truncated spelling instead — undercounting `examine`'s true corpus
+    // support relative to `watch`, which is short enough never to truncate,
+    // and flipping the very ranking this signal exists to fix.
+    let games_canonical: Vec<(Vec<String>, usize)> = games
+        .iter()
+        .map(|g| {
+            let words: Vec<String> = g
+                .words
+                .iter()
+                .filter_map(|w| if recognised(w) { Some(w.clone()) } else { untruncate(w) })
+                .collect();
+            (words, g.stories)
+        })
+        .collect();
+    let mut games_by_word: BTreeMap<&str, Vec<usize>> = BTreeMap::new();
+    for (i, (words, _)) in games_canonical.iter().enumerate() {
+        for w in words {
+            games_by_word.entry(w.as_str()).or_default().push(i);
+        }
+    }
+
     report.game_sets = games.len();
     for g in games {
         if g.stories < p.game_support {
@@ -464,6 +528,7 @@ pub fn build(
                 origin: 0,
                 via: None,
                 game: true,
+                support: g.stories,
             },
             &mut groups,
             &mut seen_sets,
@@ -482,12 +547,64 @@ pub fn build(
         .game_oversize
         .sort_by(|a, b| b.1.len().cmp(&a.1.len()).then(b.0.cmp(&a.0)));
 
+    // Every spelling a KEPT (corroborated) game group carries, mapped to the
+    // OTHER members of every such group it sits in. Built once, right after
+    // Pass 0, and consulted by Pass 1's bystander filter below: it is the
+    // corpus's own answer to "does this word already mean something else".
+    let mut game_sense_index: BTreeMap<String, Vec<BTreeSet<String>>> = BTreeMap::new();
+    for g in groups.iter().filter(|g| g.game) {
+        let set: BTreeSet<String> = g.members.iter().cloned().collect();
+        for w in &g.members {
+            let rest: BTreeSet<String> = set.iter().filter(|x| *x != w).cloned().collect();
+            game_sense_index.entry(w.clone()).or_default().push(rest);
+        }
+    }
+
     // ── Pass 1: one group per synset ─────────────────────────────────────────
     for (&offset, syn) in &wn.synsets {
         if !wanted.contains(&offset) {
             continue;
         }
-        let members = assemble(&syn.words, &by_lemma, &member_ok, true);
+        let mut members = assemble(&syn.words, &by_lemma, &member_ok, true);
+        if members.len() < 2 {
+            continue;
+        }
+        // Drop a BYSTANDER member: a word whose own WordNet sense rank did not
+        // select this synset (some OTHER member's sense list did) and for
+        // which the corpus corroborates a completely different action, none
+        // of whose declared entries so much as touch this synset's other
+        // members. `clear`'s dominant IF sense is "move/push aside" (24
+        // stories), never "make plain" — it rides into the illuminate-adjacent
+        // "clarify" synset only because `clear up`'s OWN sense list reaches it,
+        // and every one of the corpus's `clear` entries is disjoint from that
+        // synset's other members. `light` is never touched by this: its own
+        // sense list puts the illuminate synset FIRST, so it is never a
+        // bystander there regardless of what else the corpus also says about
+        // `light` (burning a candle is a related, corroborated, OVERLAPPING
+        // reading, not a disjoint one). See `Report::bystanders_dropped`.
+        let snapshot = members.clone();
+        let mut bystanders: BTreeSet<String> = BTreeSet::new();
+        for w in &snapshot {
+            let rank = wn.senses.get(w.as_str()).and_then(|s| s.iter().position(|o| *o == offset));
+            if rank.is_some_and(|r| r < p.sense_cap) {
+                continue; // this synset IS w's own (primary) sense — never a bystander.
+            }
+            let Some(entries) = game_sense_index.get(w.as_str()) else {
+                continue; // no corpus opinion about w at all — nothing to disagree with.
+            };
+            let rest: BTreeSet<&str> =
+                snapshot.iter().filter(|x| *x != w).map(String::as_str).collect();
+            let all_disjoint = !entries.is_empty()
+                && entries.iter().all(|e| e.iter().all(|m| !rest.contains(m.as_str())));
+            if all_disjoint {
+                report.bystanders_dropped.push((
+                    w.clone(),
+                    snapshot.iter().find(|x| *x != w).cloned().unwrap_or_default(),
+                ));
+                bystanders.insert(w.clone());
+            }
+        }
+        members.retain(|w| !bystanders.contains(w));
         if members.len() < 2 {
             continue;
         }
@@ -505,6 +622,7 @@ pub fn build(
                 origin: offset,
                 via: None,
                 game: false,
+                support: 0,
             },
             &mut groups,
             &mut seen_sets,
@@ -577,6 +695,7 @@ pub fn build(
                         origin: offset,
                         via: Some(*target),
                         game: false,
+                        support: 0,
                     },
                     &mut groups,
                     &mut seen_sets,
@@ -600,6 +719,16 @@ pub fn build(
     // lose its position in its other members' sense order, which no larger
     // group can restore. Each source's own redundancy is collapsed on its own
     // terms; the overlap between the two is left standing and counted.
+    //
+    // For two GAME groups the size test alone is not enough: a wider set is
+    // only a strict improvement on a narrower one if it is at least as
+    // BELIEVED. `press/push/shove` (5 stories) is a strict subset of
+    // `nudge/press/push/shove/stick/thrust` (3 stories) and the size test alone
+    // would let the six-member, weaker-evidence set eat the three-member,
+    // stronger-evidence one — discarding the very corroboration [`Params::game_support`]
+    // exists to weigh. So a game group is swallowed only by a game superset
+    // whose OWN support is at least as high; ties still prefer the wider set.
+    // WordNet subsumption (`support` unused there, always 0) is unchanged.
     {
         let sets: Vec<BTreeSet<&str>> = groups
             .iter()
@@ -621,6 +750,7 @@ pub fn build(
                     && !drop[j]
                     && groups[i].game == groups[j].game
                     && (sets[j].len() > s.len() || (sets[j].len() == s.len() && j < i))
+                    && (!groups[i].game || groups[j].support >= groups[i].support)
                     && s.is_subset(&sets[j])
                 {
                     drop[i] = true;
@@ -636,15 +766,43 @@ pub fn build(
         });
     }
 
+    derive_reversals(verbs, games, wn, &is_if_verb, &recognised, &untruncate, p, &mut groups, &mut seen_sets, &mut in_group, report);
+
     // ── Order the members ────────────────────────────────────────────────────
     //
     // Verbs the corpus actually uses first, commonest first, so the leading
     // members of a line are the likeliest suggestions and the file diffs
     // stably.
+    //
+    // "Commonest" is not one number. `cluster_support` sums the RAW (any
+    // support level) if_groups.tsv declarations that name this spelling
+    // ALONGSIDE another member of the SAME group — how much of the corpus's
+    // evidence for this particular action backs this particular spelling —
+    // and is tried first. It is what ranks `examine` (named in every one of
+    // the corpus's own "look closely" entries) ahead of `watch` (named in
+    // fewer of them, despite being IF's more common verb overall, across
+    // senses this group is not one of). It is 0 for a WordNet-only group,
+    // where no if_groups entry ever names members like `light up` or
+    // `illuminate` at all — so it falls straight through to the old
+    // overall-popularity tiebreak, unchanged for every group this fix does
+    // not touch.
     for g in &mut groups {
+        let snapshot: Vec<String> = g.members.clone();
+        let cluster_support = |w: &str| -> usize {
+            let Some(idxs) = games_by_word.get(w) else {
+                return 0;
+            };
+            let rest: BTreeSet<&str> =
+                snapshot.iter().filter(|x| x.as_str() != w).map(String::as_str).collect();
+            idxs.iter()
+                .filter(|&&i| games_canonical[i].0.iter().any(|m| rest.contains(m.as_str())))
+                .map(|&i| games_canonical[i].1)
+                .sum()
+        };
         g.members.sort_by(|a, b| {
             is_if_verb(b)
                 .cmp(&is_if_verb(a))
+                .then(cluster_support(b).cmp(&cluster_support(a)))
                 .then(stories(b).cmp(&stories(a)))
                 .then(a.cmp(b))
         });
@@ -702,26 +860,142 @@ fn assemble(
 /// The game-derived pass runs first, so an identical synset arriving later is
 /// the one discarded — which is both sources agreeing word for word, counted
 /// separately as [`Report::game_agrees`] rather than as noise.
+///
+/// `seen` maps a member set to its INDEX in `groups`, not merely to whether it
+/// was a game group, so that two game-derived entries which happen to reduce
+/// to the identical final member set (after `member_ok`/untruncation) do not
+/// silently keep whichever one `if_groups.tsv`'s alphabetical order happened
+/// to reach first. `describe examine inspect observe study watch` is declared
+/// verbatim by 3 stories AND — after a different truncation collapses to the
+/// same set — by 2 more elsewhere in the file; without this, `keep` recorded
+/// whichever line sorted first and both [`order_by_sense`] and the
+/// subsumption step above reasoned from the WRONG (lower) support number for
+/// a set the corpus actually corroborates more strongly (SQ-1233). Nothing is
+/// unioned: both declarations name the SAME members, so recording the higher
+/// support is choosing the stronger of two identical statements, not merging
+/// two different ones.
 fn keep(
     g: Group,
     groups: &mut Vec<Group>,
-    seen: &mut BTreeMap<Vec<String>, bool>,
+    seen: &mut BTreeMap<Vec<String>, usize>,
     in_group: &mut BTreeMap<String, usize>,
     report: &mut Report,
 ) -> bool {
-    if let Some(&was_game) = seen.get(&g.members) {
+    if let Some(&idx) = seen.get(&g.members) {
         report.duplicates += 1;
+        let was_game = groups[idx].game;
         if was_game && !g.game {
             report.game_agrees += 1;
         }
+        if g.game && was_game && g.support > groups[idx].support {
+            groups[idx].support = g.support;
+        }
         return false;
     }
-    seen.insert(g.members.clone(), g.game);
+    let idx = groups.len();
+    seen.insert(g.members.clone(), idx);
     for w in &g.members {
         *in_group.entry(w.clone()).or_default() += 1;
     }
     groups.push(g);
     true
+}
+
+/// Pass 3 — `un`-prefixed spellings reach at least one group.
+///
+/// Neither earlier pass has a channel for this. WordNet has no synset relating
+/// an English verb to its `un`-form — that is a productive morphological rule,
+/// not a lexical fact, so no amount of sense-cap tuning will ever surface one —
+/// and a rare spelling like `unmask` or `unzip` is exactly the kind of word one
+/// or two stories declare, which [`Params::game_support`] exists to distrust.
+/// But the `un`-morphology is itself independent evidence: nobody accidentally
+/// spells a game's own dictionary word `unpin`, so a single declaration is
+/// enough HERE where it would not be enough for an unrelated pair of spellings.
+///
+/// Only spellings that reach NO group at all after every earlier pass are
+/// considered (`in_group` is checked, not reasoned about) — a well-corroborated
+/// `unhook`/`untie`/`unfasten` cluster that Pass 0 already built normally is
+/// left exactly as it is; this pass exists only for the words that pipeline
+/// never reaches, and it is not run against anything else.
+///
+/// Two tiers, tried in order, per `unX`:
+///
+///   1. The corpus's OWN raw declaration for `unX` (`if_groups.tsv`, ANY
+///      support level, not gated by `game_support`) — `unpin` reaches
+///      `unblock`/`uncover`/`unplug` this way, the reversal cluster a game
+///      author actually wrote, at one story.
+///   2. No declaration at all: pair `unX` with its bare base verb (`unmask`
+///      with `mask`) so the spelling is at least resolvable, per the module
+///      docs' "at lookup" rule — a suggestion nobody can act on is worthless,
+///      and a two-member group naming the base action is not nobody.
+fn derive_reversals(
+    verbs: &[IfVerb],
+    games: &[GameGroup],
+    wn: &WordNet,
+    is_if_verb: &impl Fn(&str) -> bool,
+    recognised: &impl Fn(&str) -> bool,
+    untruncate: &impl Fn(&str) -> Option<String>,
+    p: &Params,
+    groups: &mut Vec<Group>,
+    seen: &mut BTreeMap<Vec<String>, usize>,
+    in_group: &mut BTreeMap<String, usize>,
+    report: &mut Report,
+) {
+    let mut candidates: Vec<&str> =
+        verbs.iter().map(|v| v.emit.as_str()).filter(|w| !w.contains(' ')).collect();
+    candidates.sort_unstable();
+    candidates.dedup();
+    for w in candidates {
+        let Some(base) = w.strip_prefix("un") else { continue };
+        if base.chars().count() < MIN_REVERSAL_BASE {
+            continue;
+        }
+        if !(is_if_verb(base) || wn.senses.contains_key(base)) {
+            continue;
+        }
+        if in_group.contains_key(w) {
+            continue; // already reachable through an earlier pass.
+        }
+        report.reversal_candidates += 1;
+
+        let mut resolved = false;
+        for g in games.iter().filter(|g| g.words.iter().any(|m| m == w)) {
+            let mut members: Vec<String> = g
+                .words
+                .iter()
+                .filter_map(|m| if recognised(m) { Some(m.clone()) } else { untruncate(m) })
+                .collect();
+            members.sort();
+            members.dedup();
+            if members.len() < 2 || members.len() > p.game_group_cap {
+                continue;
+            }
+            if keep(
+                Group { members, origin: 0, via: None, game: true, support: g.stories },
+                groups,
+                seen,
+                in_group,
+                report,
+            ) {
+                report.reversals_from_corpus += 1;
+                resolved = true;
+            }
+        }
+        if !resolved && !in_group.contains_key(w) {
+            let stories = verbs.iter().find(|v| v.emit == w).map_or(1, |v| v.stories);
+            let mut members = vec![base.to_string(), w.to_string()];
+            members.sort();
+            if keep(
+                Group { members, origin: 0, via: None, game: true, support: stories },
+                groups,
+                seen,
+                in_group,
+                report,
+            ) {
+                report.reversals_paired_with_base += 1;
+            }
+        }
+    }
 }
 
 /// Put the groups in an order that, for every word, presents that word's groups
@@ -744,7 +1018,15 @@ fn order_by_sense(groups: Vec<Group>, wn: &WordNet, report: &mut Report) -> Vec<
     // word means IN A PARSER, which is the only question this table asks.
     // WordNet's answer is not deleted — it sits below, and reaches a story
     // that implements a word no game in the corpus grouped.
-    let mut by_word: BTreeMap<&str, Vec<(usize, usize)>> = BTreeMap::new();
+    // The tuple is `(rank, tie, group index)`. `rank` alone gives every game
+    // group 0 and every synset >=1 — the precedence rule above — but that
+    // leaves every game group for a word tied with every other, which is
+    // resolved arbitrarily (see SQ-1233: `press/push/shove`, the 5-story
+    // set, was landing BEHIND `nudge/press/push/shove/stick/thrust`, the
+    // 3-story one). `tie` breaks that tie by support, descending, and is 0
+    // for a synset (whose own `rank` already orders it, and whose `support`
+    // is always 0 regardless), so nothing about WordNet ordering changes.
+    let mut by_word: BTreeMap<&str, Vec<(usize, usize, usize)>> = BTreeMap::new();
     for (i, g) in groups.iter().enumerate() {
         for w in &g.members {
             let senses = wn.senses.get(w.as_str()).map_or(&[][..], Vec::as_slice);
@@ -757,7 +1039,8 @@ fn order_by_sense(groups: Vec<Group>, wn: &WordNet, report: &mut Report) -> Vec<
                     .or_else(|| g.via.and_then(|v| senses.iter().position(|o| *o == v)))
                     .map_or(usize::MAX, |r| r + 1)
             };
-            by_word.entry(w.as_str()).or_default().push((rank, i));
+            let tie = if g.game { usize::MAX - g.support } else { 0 };
+            by_word.entry(w.as_str()).or_default().push((rank, tie, i));
         }
     }
 
@@ -766,8 +1049,8 @@ fn order_by_sense(groups: Vec<Group>, wn: &WordNet, report: &mut Report) -> Vec<
     for chain in by_word.values_mut() {
         chain.sort();
         for pair in chain.windows(2) {
-            if pair[0].1 != pair[1].1 {
-                edges.insert((pair[0].1, pair[1].1));
+            if pair[0].2 != pair[1].2 {
+                edges.insert((pair[0].2, pair[1].2));
             }
         }
     }
