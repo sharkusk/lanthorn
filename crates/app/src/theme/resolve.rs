@@ -749,7 +749,7 @@ fn lower_decls(
     decls
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "t-theme"))]
 mod tests {
     use super::*;
 

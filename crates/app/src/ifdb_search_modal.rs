@@ -864,7 +864,7 @@ fn put_str(buf: &mut Buffer, x: u16, y: u16, width: u16, s: &str, style: Style) 
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "t-picker"))]
 mod tests {
     use super::*;
     use crate::ifdb_search::{DownloadOption, ResolvedGame, SearchEvent, SearchHit};

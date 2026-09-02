@@ -439,7 +439,7 @@ impl Engine for ScottSession {
 
 // ── Tests ────────────────────────────────────────────────────────────────────
 
-#[cfg(test)]
+#[cfg(all(test, feature = "t-session"))]
 mod tests {
     use super::*;
     use crate::debug_panel::{DebugPanelState, Section};

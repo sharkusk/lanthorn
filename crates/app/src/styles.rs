@@ -330,7 +330,7 @@ pub fn write_per_game_panel(
     edit(game_dir, |c| c.panel = value)
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "t-persist"))]
 mod tests {
     use super::*;
 

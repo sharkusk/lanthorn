@@ -180,7 +180,7 @@ pub fn text_entry_dialog_key(
 
 // ── Tests ─────────────────────────────────────────────────────────────────────
 
-#[cfg(test)]
+#[cfg(all(test, feature = "t-render"))]
 mod tests {
     use super::*;
     use crate::state::{TextEntryDialog, TextEntryKind};

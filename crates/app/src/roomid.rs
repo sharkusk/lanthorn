@@ -47,7 +47,7 @@ pub fn glulx_room_id(addr: u32) -> u16 {
     SYNTHETIC_ROOM_FLAG | (h as u16 & 0x7FFF)
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "t-state"))]
 mod tests {
     use super::*;
 

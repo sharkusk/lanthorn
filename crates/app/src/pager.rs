@@ -282,7 +282,7 @@ pub fn apply_frame(
     state.last_transcript_total_rows = total_rows;
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "t-render"))]
 mod tests {
     use super::*;
 

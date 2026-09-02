@@ -110,7 +110,7 @@ pub fn normalise(m: MouseEvent) -> (MouseEvent, Option<(u16, u16)>) {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "t-input"))]
 mod tests {
     use super::*;
     use crossterm::event::{KeyModifiers, MouseButton, MouseEventKind};

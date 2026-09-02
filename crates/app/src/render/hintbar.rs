@@ -183,7 +183,7 @@ pub fn hint_bar(
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "t-render"))]
 mod tests {
     use super::{debug_hints, hint_bar, literal_hint_bar, ANIM_HINTS, GAME_HINTS};
     use crate::debug_panel::Section;

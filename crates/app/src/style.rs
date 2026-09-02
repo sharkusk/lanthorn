@@ -1047,7 +1047,7 @@ pub(crate) fn color_to_str(c: ratatui::style::Color) -> String {
 
 // ── Tests ─────────────────────────────────────────────────────────────────────
 
-#[cfg(test)]
+#[cfg(all(test, feature = "t-theme"))]
 mod tests {
     use super::*;
 

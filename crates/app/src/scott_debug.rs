@@ -296,7 +296,7 @@ impl Debugger for Vm {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "t-session"))]
 mod tests {
     use super::*;
     use scott::{Action, Condition, Database, Item, Room};

@@ -120,7 +120,7 @@ pub fn rebuild_transcript(
     (lines, kinds)
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "t-persist"))]
 mod tests {
     use super::*;
     use mapper::direction::Direction;

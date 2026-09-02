@@ -338,7 +338,7 @@ pub(crate) fn engine_supports_save(engine: &dyn Engine) -> bool {
     engine.as_any().downcast_ref::<GameSession>().is_some()
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "t-session"))]
 mod tests {
     // ── SQ-0227 Task 3: restore dispatch on file extension ──────────────────────
     //
@@ -349,7 +349,7 @@ mod tests {
     // a host restore of an in-game `@save` (`.qzl`) landed the VM on the
     // descriptor instead of past it.
 
-    use crate::tests::read_char_then_save_v4_story;
+    use crate::read_char_then_save_v4_story;
 
     /// SQ-0681. A bare Quetzal carries game memory but no screen, so the width
     /// its status layout was baked at is unknowable — `note_bare_quetzal_width`

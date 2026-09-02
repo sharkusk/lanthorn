@@ -369,7 +369,7 @@ pub fn scan_for(dir: &Path, machine: crate::interpreter::InterpreterProfile) -> 
     out
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "t-render"))]
 mod tests {
     use super::*;
 

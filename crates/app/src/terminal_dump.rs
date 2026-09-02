@@ -591,7 +591,7 @@ pub fn dump_text(s: &TerminalSnapshot) -> Vec<String> {
     dump_lines(s).into_iter().map(|l| l.text).collect()
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "t-misc"))]
 mod tests {
     use super::*;
 

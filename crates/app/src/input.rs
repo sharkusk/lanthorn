@@ -4757,7 +4757,7 @@ fn config_cycle(working: &mut crate::config::Config, row: usize, delta: i32) {
 
 // ── Tests ─────────────────────────────────────────────────────────────────────
 
-#[cfg(test)]
+#[cfg(all(test, feature = "t-input"))]
 mod tests {
     use crossterm::event::{KeyCode, KeyEvent, KeyEventKind, KeyEventState, KeyModifiers};
     use mapper::mapper::Mapper;

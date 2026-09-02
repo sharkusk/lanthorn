@@ -197,12 +197,12 @@ pub fn render_to_text(dump: &str, area: Rect, lines_per_win: usize) -> (Vec<Vec<
 }
 
 /// A row's cells `[from, to)` as a `String`, for readable asserts/prints.
-#[cfg(test)]
+#[cfg(all(test, feature = "t-render"))]
 fn span(row: &[char], from: usize, to: usize) -> String {
     row.iter().skip(from).take(to.saturating_sub(from)).collect()
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "t-render"))]
 mod tests {
     use super::*;
 

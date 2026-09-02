@@ -352,7 +352,7 @@ fn read_available(_chunk: &mut [u8; 256]) -> Option<usize> {
     None
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "t-misc"))]
 mod tests {
     use super::*;
 

@@ -2276,7 +2276,7 @@ fn prompt_yes_no(question: &str) -> bool {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "t-session"))]
 mod tests {
     use super::should_ask_font_check;
     use app::config::OnOff;

@@ -307,7 +307,7 @@ pub fn compute_pane_layout(area: Rect, state: &AppState, inv_item_count: usize) 
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "t-render"))]
 mod tests {
     use super::*;
     use crate::render::command_band::{default_quick, default_verbs};

@@ -124,7 +124,7 @@ impl<'a> TextInk<'a> {
     /// Ink stated outright, for a case with no `AppState` to read it from. Every
     /// production caller has one, which is the point — [`TextInk::of`] is the only
     /// place these facts are decided.
-    #[cfg(test)]
+    #[cfg(all(test, feature = "t-render"))]
     pub(crate) fn new(honor: bool, colors: &'a ColorScheme) -> TextInk<'a> {
         TextInk { honor, colors }
     }
@@ -310,7 +310,7 @@ pub fn put_str(buf: &mut Buffer, x: i32, y: i32, s: &str, style: Style, area: Re
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "t-render"))]
 mod text_style_tests {
     use super::*;
     use ratatui::style::{Color, Modifier, Style};

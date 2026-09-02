@@ -187,7 +187,7 @@ pub fn draw_diagnostics_body(
 
 // ── Tests ─────────────────────────────────────────────────────────────────────
 
-#[cfg(test)]
+#[cfg(all(test, feature = "t-render"))]
 mod tests {
     use super::*;
     use mapper::graph::MapGraph;

@@ -125,7 +125,7 @@ pub fn draw_history(
     Some(rects)
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "t-render"))]
 mod tests {
     use super::*;
     use ratatui::backend::TestBackend;

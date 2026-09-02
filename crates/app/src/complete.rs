@@ -226,7 +226,7 @@ pub fn palette_candidates(query: &str) -> Vec<PaletteCandidate> {
     out
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "t-input"))]
 mod tests {
     use super::*;
 

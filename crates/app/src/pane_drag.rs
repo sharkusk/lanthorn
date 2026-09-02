@@ -233,7 +233,7 @@ fn commit(state: &mut AppState) {
     state.pending_config_write = true;
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "t-input"))]
 mod tests {
     use super::*;
     use crate::layout::{

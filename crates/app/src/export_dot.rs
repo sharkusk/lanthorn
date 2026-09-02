@@ -112,7 +112,7 @@ pub fn export_dot(path: &Path, graph: &MapGraph) -> std::io::Result<()> {
 
 // ── Tests ─────────────────────────────────────────────────────────────────────
 
-#[cfg(test)]
+#[cfg(all(test, feature = "t-state"))]
 mod tests {
     use super::*;
     use mapper::direction::Direction;

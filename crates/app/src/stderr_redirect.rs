@@ -110,7 +110,7 @@ pub fn log_path() -> Option<&'static Path> {
     LOG_PATH.get().map(PathBuf::as_path)
 }
 
-#[cfg(all(test, unix))]
+#[cfg(all(test, unix, feature = "t-misc"))]
 mod tests {
     use super::*;
 

@@ -500,7 +500,7 @@ pub fn draw_upper_window(
 
 // ── Tests ─────────────────────────────────────────────────────────────────────
 
-#[cfg(test)]
+#[cfg(all(test, feature = "t-render"))]
 mod tests {
     use super::*;
     use ratatui::style::{Color, Modifier};

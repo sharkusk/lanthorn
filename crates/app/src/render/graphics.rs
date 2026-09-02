@@ -1266,7 +1266,7 @@ pub struct GraphicsRender {
     /// Count of [`classify_graphics_as_cells`] calls (`cell_memo` misses), for
     /// a test to assert an unchanged redraw reuses the memo instead of
     /// rescanning (SQ-1200).
-    #[cfg(test)]
+    #[cfg(all(test, feature = "t-render"))]
     classify_calls: u64,
     /// Letterbox geometry recorded by the most recent v6 draw, for inverting a
     /// terminal click back to a game pixel (Lane M mouse input). `None` until a
@@ -1596,7 +1596,7 @@ impl GraphicsRender {
         if !fresh {
             let plan = classify_graphics_as_cells(gw, area, force);
             self.cell_memo.insert(gw.win, (gw.version, area, force, plan));
-            #[cfg(test)]
+            #[cfg(all(test, feature = "t-render"))]
             {
                 self.classify_calls += 1;
             }
@@ -1674,7 +1674,7 @@ impl GraphicsRender {
     /// How many times [`Self::render_as_cells`] has recomputed a classification
     /// (a `cell_memo` miss), for a test to assert an unchanged redraw hits the
     /// memo instead (SQ-1200).
-    #[cfg(test)]
+    #[cfg(all(test, feature = "t-render"))]
     pub(crate) fn classify_calls(&self) -> u64 {
         self.classify_calls
     }
@@ -1938,13 +1938,13 @@ impl GraphicsRender {
     /// transmit, 1 thereafter) and the id they live under (observability hook,
     /// SQ-0564/SQ-0995). The count is the thing worth asserting: an id that is
     /// replaced in place can never grow it.
-    #[cfg(test)]
+    #[cfg(all(test, feature = "t-render"))]
     fn kitty_uploads(&self, win: u32) -> Option<(usize, u32)> {
         self.kitty_wins.get(&win).map(|e| (usize::from(e.uploaded.is_some()), e.id))
     }
 
     /// The kitty delete escapes waiting to be written to the terminal (SQ-0637).
-    #[cfg(test)]
+    #[cfg(all(test, feature = "t-render"))]
     fn queued_deletes(&self) -> &str {
         &self.pending_deletes
     }
@@ -1952,7 +1952,7 @@ impl GraphicsRender {
     /// The deletes waiting to ride out BEHIND the placement that supersedes them
     /// (SQ-0817). Separate from [`Self::queued_deletes`] because "nothing was
     /// freed" is only true when both are empty (SQ-0996).
-    #[cfg(test)]
+    #[cfg(all(test, feature = "t-render"))]
     fn queued_deletes_after_place(&self) -> &str {
         &self.deletes_after_place
     }
@@ -1961,7 +1961,7 @@ impl GraphicsRender {
     /// `(non-kitty window protocols, chrome bands, kitty window uploads,
     /// a raster composite?)`. One accessor rather than four because the whole
     /// question is which of them survive an invalidation and which must not.
-    #[cfg(test)]
+    #[cfg(all(test, feature = "t-render"))]
     fn cell_keyed_cache_sizes(&self) -> (usize, usize, usize, bool) {
         (self.cache.len(), self.chrome_bands.len(), self.kitty_wins.len(), self.v6.is_some())
     }
@@ -2475,7 +2475,7 @@ impl GraphicsRender {
 
     /// The kitty image id a cached chrome band is currently placed as, if any
     /// (observability hook, SQ-0753).
-    #[cfg(test)]
+    #[cfg(all(test, feature = "t-render"))]
     fn chrome_band_id(&self, key: BandKey) -> Option<u32> {
         self.chrome_bands.get(&key).and_then(|(_, _, id)| *id)
     }
@@ -3987,7 +3987,7 @@ fn parse_placement_row(symbol: &str) -> Option<PlacementRow<'_>> {
 ///
 /// FALSIFY by restoring `image::imageops::resize(src, tw, th, FilterType::Nearest)` as
 /// the body of `resize_directional`: every minifying case fails on its RMS bound.
-#[cfg(test)]
+#[cfg(all(test, feature = "t-render"))]
 mod resample_tests {
     // SQ-0973's cases below drive the shipped half-blocks composite end to end, so this
     // module now needs the render types (`Picker`, `Protocol`, `Buffer`, …) alongside
@@ -5401,7 +5401,7 @@ mod resample_tests {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "t-render"))]
 mod tests {
     use super::*;
 

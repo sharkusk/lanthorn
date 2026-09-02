@@ -221,7 +221,7 @@ impl From<String> for TextField {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "t-input"))]
 mod tests {
     use super::*;
 

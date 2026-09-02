@@ -422,7 +422,7 @@ const FOOTER_GAP: &str = "  ";
 /// A hint whose command nobody has bound simply is not shown; the footer has no
 /// way to claim a key that does not exist, which is the drift SQ-0796 set out to
 /// end.
-#[cfg(test)]
+#[cfg(all(test, feature = "t-picker"))]
 fn footer_optional(km: &app::keymap::KeyMap, gallery: bool) -> Vec<String> {
     let mut hints: Vec<app::browser::Hint> = app::browser::footer_hints(gallery)
         .into_iter()
@@ -662,7 +662,7 @@ pub(crate) struct FindStatus<'a> {
 
 impl<'a> PickerHeading<'a> {
     /// A folder view of `dir`, which is also the root.
-    #[cfg(test)]
+    #[cfg(all(test, feature = "t-picker"))]
     fn browse(dir: &'a std::path::Path) -> Self {
         PickerHeading { dir, root: dir, find: None, all_folders: None }
     }
@@ -4106,7 +4106,7 @@ fn ifdb_download_landing(
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "t-picker"))]
 mod tests {
     /// The shipped browser keymap, which is what the footer hints are drawn
     /// from (SQ-0796). Every draw test uses it, since none of them is about a

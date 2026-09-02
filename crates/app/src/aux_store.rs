@@ -118,7 +118,7 @@ pub fn write_global_aux(game_dir: &Path, table: &BTreeMap<String, Vec<u8>>) -> s
     crate::storage::atomic_write(&aux_path(game_dir), &encode_aux(table))
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "t-persist"))]
 mod tests {
     use super::*;
 

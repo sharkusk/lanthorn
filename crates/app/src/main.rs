@@ -4636,7 +4636,36 @@ fn scroll_for_match(match_visible_pos: usize, total_visible: usize, pane_rows: u
 
 // ── Tests ─────────────────────────────────────────────────────────────────────
 
-#[cfg(test)]
+/// Minimal v4 story: `read_char` (store->G0) at 0x40, then `@save` (store
+/// form, ->G0) at 0x44, then `quit` at 0x46. Mirrors session.rs's
+/// (crate-private) `read_char_then_save_v4` fixture, duplicated here
+/// since this test lives in the separate `app` *binary* crate. Shared by
+/// `engine_helpers`'s restore-dispatch test and `turn`'s resume tests — both
+/// t-session, which is why this lives outside `mod tests` below (that mod is
+/// t-misc) with its own gate matching its actual (and only) consumers.
+#[cfg(all(test, feature = "t-session"))]
+pub(crate) fn read_char_then_save_v4_story() -> Vec<u8> {
+    let mut buf = vec![0u8; 0x0800];
+    buf[0x00] = 4; // version 4 (0OP save/restore store form lives here)
+    buf[0x04] = 0x04; buf[0x05] = 0x00; // high_mem_base = 0x0400
+    buf[0x06] = 0x00; buf[0x07] = 0x40; // initial_pc = 0x0040
+    buf[0x08] = 0x00; buf[0x09] = 0x80; // dictionary = 0x0080 (empty)
+    buf[0x0080] = 0; buf[0x0081] = 4; buf[0x0082] = 0; buf[0x0083] = 0;
+    buf[0x0A] = 0x01; buf[0x0B] = 0x00; // object_table = 0x0100
+    buf[0x0C] = 0x03; buf[0x0D] = 0x00; // global_vars = 0x0300
+    buf[0x0E] = 0x04; buf[0x0F] = 0x00; // static_mem_base = 0x0400
+    buf[0x18] = 0x00; buf[0x19] = 0x60; // abbrev_table = 0x0060
+    buf[0x0040] = 0xF6; // VAR read_char
+    buf[0x0041] = 0x7F; // type: small(01), omit(11), omit(11), omit(11)
+    buf[0x0042] = 1;    // operand: device=1
+    buf[0x0043] = 0x10; // store -> G0
+    buf[0x0044] = 0xB5; // 0OP:0x05 save (store form)
+    buf[0x0045] = 0x10; // store -> G0
+    buf[0x0046] = 0xBA; // quit
+    buf
+}
+
+#[cfg(all(test, feature = "t-misc"))]
 mod tests {
     use ratatui::buffer::Buffer;
     use ratatui::layout::Rect;
@@ -5021,32 +5050,6 @@ mod tests {
         let order: Vec<&str> = v.iter().map(|s| s.name.as_str()).collect();
         assert_eq!(order, vec!["new", "mid", "old", "legacy"],
             "newest first; untimestamped/legacy saves sort to the bottom");
-    }
-
-    /// Minimal v4 story: `read_char` (store->G0) at 0x40, then `@save` (store
-    /// form, ->G0) at 0x44, then `quit` at 0x46. Mirrors session.rs's
-    /// (crate-private) `read_char_then_save_v4` fixture, duplicated here
-    /// since this test lives in the separate `app` *binary* crate. Shared by
-    /// `engine_helpers`'s restore-dispatch test and `turn`'s resume tests.
-    pub(crate) fn read_char_then_save_v4_story() -> Vec<u8> {
-        let mut buf = vec![0u8; 0x0800];
-        buf[0x00] = 4; // version 4 (0OP save/restore store form lives here)
-        buf[0x04] = 0x04; buf[0x05] = 0x00; // high_mem_base = 0x0400
-        buf[0x06] = 0x00; buf[0x07] = 0x40; // initial_pc = 0x0040
-        buf[0x08] = 0x00; buf[0x09] = 0x80; // dictionary = 0x0080 (empty)
-        buf[0x0080] = 0; buf[0x0081] = 4; buf[0x0082] = 0; buf[0x0083] = 0;
-        buf[0x0A] = 0x01; buf[0x0B] = 0x00; // object_table = 0x0100
-        buf[0x0C] = 0x03; buf[0x0D] = 0x00; // global_vars = 0x0300
-        buf[0x0E] = 0x04; buf[0x0F] = 0x00; // static_mem_base = 0x0400
-        buf[0x18] = 0x00; buf[0x19] = 0x60; // abbrev_table = 0x0060
-        buf[0x0040] = 0xF6; // VAR read_char
-        buf[0x0041] = 0x7F; // type: small(01), omit(11), omit(11), omit(11)
-        buf[0x0042] = 1;    // operand: device=1
-        buf[0x0043] = 0x10; // store -> G0
-        buf[0x0044] = 0xB5; // 0OP:0x05 save (store form)
-        buf[0x0045] = 0x10; // store -> G0
-        buf[0x0046] = 0xBA; // quit
-        buf
     }
 
     #[test]

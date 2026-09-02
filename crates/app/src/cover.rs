@@ -692,7 +692,7 @@ pub fn should_request_cover(
     !cached && !requested && since_change >= debounce
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "t-picker"))]
 mod tests {
     /// A GIF cover decodes: IFDB and the IFComp archive serve some covers as
     /// GIF, and every one of them was dropped before the decoder was enabled.

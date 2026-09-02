@@ -193,7 +193,7 @@ pub fn clip_to_cols_ellipsis(s: &str, max: usize) -> String {
     out
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "t-render"))]
 mod tests {
     use super::*;
 

@@ -118,7 +118,7 @@ pub fn game_over_dialog_key_focused(code: crossterm::event::KeyCode, focus: usiz
 
 // ── Tests ─────────────────────────────────────────────────────────────────────
 
-#[cfg(test)]
+#[cfg(all(test, feature = "t-render"))]
 mod tests {
     use super::*;
 

@@ -147,7 +147,7 @@ pub(crate) fn flush_pending_config_write(state: &mut AppState) {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "t-misc"))]
 mod tests {
     /// Engine stand-in whose in-game @save/@restore never resolves (mirrors a
     /// mid-suspension Glulx session). `save_state`/`aux_data` are left

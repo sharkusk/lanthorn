@@ -451,7 +451,7 @@ impl PictSource {
     /// How many decoded pixel buffers the unbounded [`Self::cache`](field)
     /// currently pins, for a test to assert a size-query path never grew it
     /// (SQ-1194).
-    #[cfg(test)]
+    #[cfg(all(test, feature = "t-render"))]
     pub(crate) fn decode_cache_len(&self) -> usize {
         self.cache.len()
     }
@@ -459,7 +459,7 @@ impl PictSource {
     /// The `(resnum, palette_gen)` keys currently pinned in the adaptive
     /// decode cache, for a test to assert a stale generation was evicted
     /// (SQ-1193).
-    #[cfg(test)]
+    #[cfg(all(test, feature = "t-render"))]
     pub(crate) fn adaptive_cache_keys(&self) -> Vec<(u32, u64)> {
         self.adaptive_cache.keys().copied().collect()
     }
@@ -469,7 +469,7 @@ impl PictSource {
     /// existing plane rather than decoding a fresh one (SQ-1197). `None` both
     /// for "not decoded yet" and for "decoded and failed"; a test that cares
     /// distinguishes them by ordering.
-    #[cfg(test)]
+    #[cfg(all(test, feature = "t-render"))]
     pub(crate) fn cached_index_plane(
         &self,
         resnum: u32,
@@ -2158,7 +2158,7 @@ fn png_crc(ty: &[u8], data: &[u8]) -> u32 {
 /// Test-only: build a minimal Blorb containing one `Pict` resource whose raw
 /// bytes are `data`, at resource number `resnum` — for tests that need a
 /// resolvable image without a full story file.
-#[cfg(test)]
+#[cfg(all(test, any(feature = "t-render", feature = "t-session")))]
 pub(crate) fn test_blorb_with_pict(resnum: u32, data: &[u8]) -> blorb::Blorb {
     fn chunk(ty: &[u8; 4], data: &[u8]) -> Vec<u8> {
         let mut v = Vec::new();
@@ -2190,7 +2190,7 @@ pub(crate) fn test_blorb_with_pict(resnum: u32, data: &[u8]) -> blorb::Blorb {
     blorb::Blorb::parse(file).expect("valid test blorb")
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "t-render"))]
 mod tests {
     use super::*;
     use image::GenericImageView;
@@ -2919,7 +2919,13 @@ mod tests {
             for (n, line) in lines.iter().enumerate() {
                 // `#[cfg(test)]` on a `mod` ends the production half of the
                 // file; on any other item it says nothing about what follows.
-                if line.trim_start().starts_with("#[cfg(test)]") {
+                // SQ-1242 put `app`'s in-crate `mod tests` blocks behind t-star
+                // Cargo features, gated with an `all(test, …)` predicate — both
+                // the old and new spelling are checked, or this scan would stop
+                // reading at line 1 of every file it rewrote and pass vacuously
+                // on the rest.
+                let trimmed = line.trim_start();
+                if trimmed.starts_with("#[cfg(test)]") || trimmed.starts_with("#[cfg(all(test,") {
                     let next = lines[n + 1..].iter().find(|l| !l.trim().is_empty());
                     if next.is_some_and(|l| l.trim_start().starts_with("mod ")
                         || l.trim_start().starts_with("pub mod ")

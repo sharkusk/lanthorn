@@ -1353,7 +1353,7 @@ pub fn debug_point_clamped(region: Rect, win: usize, col: u16, row: u16) -> crat
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "t-state"))]
 mod tests {
     use super::*;
     use crossterm::event::KeyCode;

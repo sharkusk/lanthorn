@@ -319,7 +319,7 @@ fn parse_channel(s: &str) -> Option<u8> {
     Some(((v * 255 + max / 2) / max) as u8)
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "t-theme"))]
 mod tests {
     use super::*;
 

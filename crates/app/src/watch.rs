@@ -39,7 +39,7 @@ pub fn due(dirty_since: Option<Instant>, now: Instant, window: Duration) -> bool
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "t-misc"))]
 mod tests {
     use super::*;
     use std::time::{Duration, Instant};

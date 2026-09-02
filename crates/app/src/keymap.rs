@@ -815,7 +815,7 @@ impl HotkeyLayout {
 
 // ── Tests ─────────────────────────────────────────────────────────────────────
 
-#[cfg(test)]
+#[cfg(all(test, feature = "t-input"))]
 mod tests {
     use super::*;
     use crate::input::Action;

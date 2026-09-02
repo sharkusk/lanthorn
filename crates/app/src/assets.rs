@@ -371,7 +371,7 @@ fn mount_across(path: &Path, members: Option<&[(u64, PathBuf)]>) -> Option<Mount
     Some(MountedVolume { path: path.to_path_buf(), disk, disk_number: None })
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "t-misc"))]
 mod tests {
     use super::*;
 

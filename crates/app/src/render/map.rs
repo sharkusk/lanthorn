@@ -515,7 +515,7 @@ pub(crate) struct MapDerived {
 impl MapDerived {
     /// How many rooms the placement table covers — the freshness probe the
     /// `state.rs` cache-invalidation test reads (SQ-1182).
-    #[cfg(test)]
+    #[cfg(all(test, feature = "t-state"))]
     pub(crate) fn rooms_placed(&self) -> usize {
         self.placed.len()
     }
@@ -2874,7 +2874,7 @@ pub(crate) fn compact_empty_lines_observed(
 
 // ── Tests ─────────────────────────────────────────────────────────────────────
 
-#[cfg(test)]
+#[cfg(all(test, feature = "t-render"))]
 mod tests {
     use super::*;
     use mapper::direction::Direction;

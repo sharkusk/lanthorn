@@ -248,7 +248,7 @@ pub fn draw_story_menu(
 
 // ── Tests ─────────────────────────────────────────────────────────────────────
 
-#[cfg(test)]
+#[cfg(all(test, feature = "t-picker"))]
 mod tests {
     use super::*;
     use crossterm::event::KeyModifiers;

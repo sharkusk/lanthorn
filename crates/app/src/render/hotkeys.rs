@@ -162,7 +162,7 @@ fn build_rows(state: &AppState) -> Vec<String> {
 
 // ── Tests ─────────────────────────────────────────────────────────────────────
 
-#[cfg(test)]
+#[cfg(all(test, feature = "t-render"))]
 mod tests {
     use ratatui::buffer::Buffer;
     use ratatui::layout::Rect;

@@ -293,7 +293,7 @@ pub(crate) fn resolve_filename_request(
 
 // ── Tests ────────────────────────────────────────────────────────────────────
 
-#[cfg(test)]
+#[cfg(all(test, feature = "t-persist"))]
 mod tests {
     use app::archive::SaveTrigger;
     use app::engine::Engine;

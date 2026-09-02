@@ -94,7 +94,7 @@ pub enum LaunchDialogAction {
 
 /// Map a key code to a LaunchDialogAction.
 /// 'r' or Enter → Resume; 'n' or Esc → New game.
-#[cfg_attr(not(test), allow(dead_code))]
+#[cfg_attr(not(all(test, feature = "t-render")), allow(dead_code))]
 fn launch_dialog_key(code: crossterm::event::KeyCode) -> LaunchDialogAction {
     use crossterm::event::KeyCode;
     match code {
@@ -123,7 +123,7 @@ pub fn launch_dialog_key_focused(code: crossterm::event::KeyCode, focus: usize) 
 
 // ── Tests ─────────────────────────────────────────────────────────────────────
 
-#[cfg(test)]
+#[cfg(all(test, feature = "t-render"))]
 mod tests {
     use super::*;
 

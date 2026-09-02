@@ -366,7 +366,7 @@ pub(crate) fn now_rfc3339() -> String {
     jiff::Timestamp::now().to_string()
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "t-picker"))]
 mod tests {
     use super::*;
     use crate::story_info::ProbeMeta;

@@ -334,7 +334,7 @@ impl GlulxSession {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "t-session"))]
 mod tests {
     use crate::debug_panel::{DebugPanelState, Section};
     use crate::engine::Engine;

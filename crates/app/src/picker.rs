@@ -2180,7 +2180,7 @@ impl<'a> BadgeGlyphs<'a> {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "t-picker"))]
 mod tests {
     use super::*;
 

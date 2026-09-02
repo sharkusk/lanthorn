@@ -351,7 +351,7 @@ const STATIC_EXAMPLES: &str = r#"# ── Story-line styling rules: recolour who
 # align = "right"
 "#;
 
-#[cfg(test)]
+#[cfg(all(test, feature = "t-theme"))]
 mod tests {
     use super::*;
     use crate::colors::GhosttyScheme;

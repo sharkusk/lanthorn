@@ -918,7 +918,7 @@ fn persist_metadata_and_cover(
     );
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "t-picker"))]
 mod tests {
     use super::*;
 

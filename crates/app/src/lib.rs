@@ -255,7 +255,7 @@ impl Drop for V6PaletteGuard {
 /// `#[should_panic]` case asserts before it sets anything, so it leaves the table
 /// exactly as it found it. Any third case that installs a palette has to be folded
 /// into the first rather than added beside it.
-#[cfg(test)]
+#[cfg(all(test, feature = "t-misc"))]
 mod v6_palette_guard {
     use zvm::screen::{palette, set_palette, Palette};
 

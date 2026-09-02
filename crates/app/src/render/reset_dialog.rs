@@ -141,7 +141,7 @@ pub enum ResetDialogAction {
 
 /// Map a key code to a ResetDialogAction (focus-agnostic accelerators only).
 /// Esc and 'c' cancel; Enter and 'r' confirm; Space toggles the clear-map box.
-#[cfg_attr(not(test), allow(dead_code))]
+#[cfg_attr(not(all(test, feature = "t-render")), allow(dead_code))]
 fn reset_dialog_key(code: crossterm::event::KeyCode) -> ResetDialogAction {
     use crossterm::event::KeyCode;
     match code {
@@ -177,7 +177,7 @@ pub fn reset_dialog_key_focused(code: crossterm::event::KeyCode, focus: usize) -
 
 // ── Tests ─────────────────────────────────────────────────────────────────────
 
-#[cfg(test)]
+#[cfg(all(test, feature = "t-render"))]
 mod tests {
     use super::*;
 

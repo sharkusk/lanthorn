@@ -474,7 +474,7 @@ pub fn diagonal_check_key_focused(code: crossterm::event::KeyCode, focus: usize)
 
 // ── Tests ────────────────────────────────────────────────────────────────────
 
-#[cfg(test)]
+#[cfg(all(test, feature = "t-render"))]
 mod tests {
     use super::*;
     use crossterm::event::KeyCode;

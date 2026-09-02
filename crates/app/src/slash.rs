@@ -865,7 +865,7 @@ pub fn help_for_command(prefix: char, name: &str) -> Vec<String> {
 
 // ── Tests ─────────────────────────────────────────────────────────────────────
 
-#[cfg(test)]
+#[cfg(all(test, feature = "t-input"))]
 mod tests {
     use super::*;
 

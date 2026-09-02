@@ -93,7 +93,7 @@ pub fn needs_fetch(info: Option<&StoryInfo>, forced: bool) -> bool {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "t-picker"))]
 mod tests {
     use super::*;
     use std::sync::atomic::{AtomicU32, Ordering};

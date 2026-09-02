@@ -1265,7 +1265,7 @@ pub fn flank_source(
     Some(snapshot(&strip, crop_top, rows))
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "t-render"))]
 mod tests {
     use super::*;
 

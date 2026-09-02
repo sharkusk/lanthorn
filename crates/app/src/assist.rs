@@ -253,7 +253,7 @@ impl Assist {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "t-guidance"))]
 mod tests {
     use super::*;
 

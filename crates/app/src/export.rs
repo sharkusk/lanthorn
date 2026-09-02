@@ -129,7 +129,7 @@ pub fn append_cell_dump(user_dir: &Path, lines: &[String]) -> io::Result<PathBuf
     Ok(target)
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "t-state"))]
 mod tests {
     use super::*;
     use std::path::{Path, PathBuf};

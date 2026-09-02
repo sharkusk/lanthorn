@@ -203,7 +203,7 @@ fn percent_encode(s: &str) -> String {
     out
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "t-picker"))]
 mod tests {
     use super::*;
 
