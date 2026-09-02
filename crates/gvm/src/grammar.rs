@@ -41,12 +41,54 @@
 //                   long   address of the action's routine  × that many
 //
 //   dictionary      long   number of words
-//                   per word:
-//                     byte     $60 (type tag for a dictionary word)
-//                     byte[W]  lower-case text, zero-padded (W = DICT_WORD_SIZE)
-//                     short    flags
-//                     short    verb number
-//                     short    unused
+//                   per word, one of two record shapes — see below
+//
+// ── The dictionary has two record shapes, and `DICT_CHAR_SIZE` picks ─────────
+//
+// A Glulx dictionary stores its characters as bytes or as four-byte Unicode
+// values, chosen at compile time by `$DICT_CHAR_SIZE` (1 or 4; Inform 7's
+// `Use dictionary with Unicode` sets 4). Both shapes are in the Glulx Inform
+// Technical Reference §4, verbatim:
+//
+//     ...each word: {                  ...each word: {
+//         byte: 60                         byte: 60
+//                                          bytes[3]: unused (zero)
+//         bytes[]: lower-case text,        words[]: Unicode text,
+//             zero-padded (nine               zero-padded (nine words
+//             bytes by default)               by default)
+//         short: flags                     short: flags
+//         short: verb number               short: verb number
+//         short: unused (zero)             shorts[2]: unused (zero)
+//     }                                }
+//
+// and the arithmetic is `Inform6/inform.c`, which is where the compiler turns
+// `DICT_CHAR_SIZE` into the two numbers this module needs:
+//
+//     DICT_WORD_BYTES = DICT_WORD_SIZE*DICT_CHAR_SIZE;
+//     if (DICT_CHAR_SIZE == 1) {
+//         DICT_ENTRY_BYTE_LENGTH = (7+DICT_WORD_BYTES);
+//         DICT_ENTRY_FLAG_POS = (1+DICT_WORD_BYTES);
+//     }
+//     else {
+//         DICT_ENTRY_BYTE_LENGTH = (12+DICT_WORD_BYTES);
+//         DICT_ENTRY_FLAG_POS = (4+DICT_WORD_BYTES);
+//     }
+//
+// So with W = `DICT_WORD_SIZE`, a record is:
+//
+//   | field            | `DICT_CHAR_SIZE=1` | `DICT_CHAR_SIZE=4`         |
+//   |------------------|--------------------|----------------------------|
+//   | `$60` type tag   | byte at +0         | byte at +0, then 3 zeroes  |
+//   | text             | W bytes at +1      | W big-endian longs at +4   |
+//   | flags            | short at 1+W       | short at 4+4W              |
+//   | verb number      | short at 3+W       | short at 6+4W              |
+//   | adjective number | short at 5+W       | short at 8+4W              |
+//   | record length    | 7+W                | 12+4W                      |
+//
+// The reference adds that "in this form, the dictionary entry size is a
+// multiple of four. The compiler also takes care that a Unicode dictionary will
+// start at a word-aligned address" — which is what [`dict_char_size`] leans on,
+// alongside the three zero bytes after the tag.
 //
 // ── The verb number is inverted, and from *which* base is a version fact ─────
 //
@@ -161,8 +203,9 @@ const ENDIT: u8 = 15;
 /// Smallest dictionary this module will accept as a positive identification.
 /// Real games run to hundreds of words; a shorter run is noise.
 const MIN_DICT_WORDS: u32 = 16;
-/// `1 + DICT_WORD_SIZE + 6` for a byte-valued dictionary. Inform's default word
-/// size is 9 (stride 16); the corpus also contains 10 and 12 (17 and 19).
+/// `DICT_ENTRY_BYTE_LENGTH`: `7 + DICT_WORD_SIZE` for a byte-valued dictionary,
+/// `12 + 4*DICT_WORD_SIZE` for a Unicode one. Inform's default word size is 9
+/// (stride 16, or 48 Unicode); the corpus also contains 10 and 12 (17 and 19).
 const DICT_STRIDE_RANGE: std::ops::RangeInclusive<u32> = 8..=80;
 /// Sanity ceilings. The largest table seen in the corpus is Cragne Manor's 368
 /// verbs and 375 actions; these are far above that and far below noise.
@@ -200,10 +243,9 @@ pub enum GrammarError {
     /// A grammar line held a value the format forbids — an unknown token type,
     /// an elementary token above 9, or a line that never reached its ENDIT.
     BadSyntaxLine,
-    /// The dictionary is Unicode-valued (`$DICT_CHAR_SIZE=4`), whose record
-    /// shape this module does not read. No story in the corpus uses one;
-    /// refusing beats guessing at a layout never seen in practice.
-    UnicodeDictionary,
+    // There was a `UnicodeDictionary` refusal here, for `$DICT_CHAR_SIZE=4`.
+    // Both record shapes are read now (SQ-1231), so nothing can produce it and
+    // it is gone rather than left unreachable.
 }
 
 // ── The one value type that is this reader's own ─────────────────────────────
@@ -228,10 +270,15 @@ pub struct Tables {
     pub dictionary: u32,
     /// Number of dictionary words.
     pub word_count: u32,
-    /// Bytes per dictionary record.
+    /// Bytes per dictionary record (`DICT_ENTRY_BYTE_LENGTH`).
     pub dict_stride: u32,
-    /// `DICT_WORD_SIZE` — characters of text per record.
+    /// `DICT_WORD_SIZE` — CHARACTERS of text per record, which is not the
+    /// record's text in bytes unless [`Tables::dict_char_size`] is 1.
     pub dict_word_size: u32,
+    /// `DICT_CHAR_SIZE` — 1 for a byte-valued dictionary, 4 for a Unicode one.
+    /// See the module header for the two record shapes it selects between, and
+    /// [`dict_char_size`] for how this module decides which is in front of it.
+    pub dict_char_size: u32,
 }
 
 /// A Glulx story's grammar: which words are verbs, and what each verb accepts.
@@ -369,6 +416,10 @@ pub fn locate(mem: &Memory) -> Result<Tables, GrammarError> {
     let lim = mem.extstart();
     let (dictionary, word_count, dict_stride) = find_dictionary(mem, ram, lim)?;
 
+    let char_size = dict_char_size(mem, dictionary, word_count, dict_stride);
+    // `DICT_ENTRY_BYTE_LENGTH` inverted (`Inform6/inform.c`, module header).
+    let dict_word_size = if char_size == 4 { (dict_stride - 12) / 4 } else { dict_stride - 7 };
+
     for (actions, action_count) in action_candidates(mem, dictionary, ram) {
         if let Some((grammar, verb_count)) = find_grammar(mem, ram, lim, actions) {
             return Ok(Tables {
@@ -379,11 +430,49 @@ pub fn locate(mem: &Memory) -> Result<Tables, GrammarError> {
                 dictionary,
                 word_count,
                 dict_stride,
-                dict_word_size: dict_stride - 7,
+                dict_word_size,
+                dict_char_size: char_size,
             });
         }
     }
     Err(GrammarError::TablesNotFound)
+}
+
+/// Whether this dictionary stores its characters as bytes or as four-byte
+/// Unicode values — `DICT_CHAR_SIZE`, which the image records nowhere.
+///
+/// Decidable rather than guessed, the same way [`verb_number_base`] is. A
+/// Unicode record opens `60 00 00 00` — the tag padded out to a long, "bytes[3]:
+/// unused (zero)" — and then holds every character as a big-endian long, so in
+/// a Unicode dictionary **the byte after the tag is zero in every record**. In a
+/// byte-valued dictionary that byte is the word's first character, and it is
+/// zero only for the EMPTY word, of which a dictionary sorted by Latin-1 holds
+/// at most one. So the test is over the whole table rather than a sample of it,
+/// and no byte dictionary with two distinct words can satisfy it.
+///
+/// **That distinction is the whole of SQ-1231.** This test used to look at the
+/// first eight records and refuse the story if ANY of them had a zero there —
+/// and `stories/CoS.blb` (City of Secrets, Inform 6.21, serial 030624) opens
+/// with the empty word, flagged `VERB|META|TRUNC`, which its menu system
+/// defines. An entirely ordinary 3,551-word byte dictionary, stride 16, was
+/// read as Unicode and the story refused outright: no verb column, no word
+/// reveal, no guidance offer, for the whole game. It is the only story in the
+/// 41-Glulx corpus with an empty dictionary word, and the only one that failed.
+///
+/// The alignment guards come from the reference's own promise about the shape:
+/// "the dictionary entry size is a multiple of four. The compiler also takes
+/// care that a Unicode dictionary will start at a word-aligned address."
+fn dict_char_size(mem: &Memory, dictionary: u32, word_count: u32, stride: u32) -> u32 {
+    // `12 + 4*DICT_WORD_SIZE`, so a Unicode record is a multiple of four bytes
+    // and holds at least one character.
+    if stride < 16 || !stride.is_multiple_of(4) || !dictionary.is_multiple_of(4) {
+        return 1;
+    }
+    let padded_tag = (0..word_count).all(|i| {
+        let e = dictionary + 4 + i * stride;
+        byte(mem, e + 1) == 0 && byte(mem, e + 2) == 0 && byte(mem, e + 3) == 0
+    });
+    if padded_tag { 4 } else { 1 }
 }
 
 /// The longest run of `$60`-tagged records at a constant stride whose length
@@ -556,24 +645,33 @@ fn verb_number_base(words: &[DictWord], verb_count: u32) -> u32 {
 
 fn read_dictionary(mem: &Memory, t: &Tables) -> Result<Vec<DictWord>, GrammarError> {
     let w = t.dict_word_size;
+    // `DICT_ENTRY_FLAG_POS` (`Inform6/inform.c`): the text runs from just past
+    // the tag — one byte, or four once it is padded out to a long — and the
+    // three shorts follow it.
+    let text_at = if t.dict_char_size == 4 { 4 } else { 1 };
+    let flag_pos = text_at + w * t.dict_char_size;
     let mut out = Vec::with_capacity(t.word_count as usize);
     for i in 0..t.word_count {
         let entry = t.dictionary + 4 + i * t.dict_stride;
-        // A Unicode dictionary pads the tag out to four bytes before the text,
-        // so the byte after the tag is zero for every record. A byte-valued
-        // one always has a character there.
-        if i < 8 && byte(mem, entry + 1) == 0 {
-            return Err(GrammarError::UnicodeDictionary);
-        }
         let mut text = String::new();
         for j in 0..w {
-            let c = byte(mem, entry + 1 + j);
+            // Records are lower-cased by Inform, and a byte-valued one is
+            // Latin-1 — which `char::from_u32` agrees with over 0..=$FF, so the
+            // two shapes decode through one line rather than two.
+            let c = if t.dict_char_size == 4 {
+                read32(mem, entry + text_at + j * 4)?
+            } else {
+                u32::from(byte(mem, entry + text_at + j))
+            };
             if c == 0 {
                 break;
             }
-            text.push(c as char); // records are Latin-1, lower-cased by Inform
+            // A four-byte record can hold a value that is not a Unicode scalar
+            // (a surrogate, or above $10FFFF). Nothing a player can type, so it
+            // becomes the replacement character rather than failing the story.
+            text.push(char::from_u32(c).unwrap_or(char::REPLACEMENT_CHARACTER));
         }
-        let flags = read16(mem, entry + 1 + w)?;
+        let flags = read16(mem, entry + flag_pos)?;
         // `WordRoles` is shared with `zvm` and `#[non_exhaustive]`, so it is
         // built from the flag field and then filled in. The two bits left false
         // are the Infocom family's — `adjective` and `special` — which no
@@ -590,7 +688,7 @@ fn read_dictionary(mem: &Memory, t: &Tables) -> Result<Vec<DictWord>, GrammarErr
         // subtraction happens in `load`, once the whole dictionary is in hand
         // and `verb_number_base` can decide which base this file was built
         // with.
-        let verb_field = read16(mem, entry + 3 + w)? as u32;
+        let verb_field = read16(mem, entry + flag_pos + 2)? as u32;
         out.push(DictWord {
             address: entry,
             text,
@@ -709,7 +807,9 @@ mod tests {
     use super::*;
 
     const RAM: u32 = 0x0100;
-    const EXT: u32 = 0x0400;
+    // Room for the Unicode story below, whose twenty records are 48 bytes each
+    // where the byte-valued ones are 16.
+    const EXT: u32 = 0x0800;
 
     /// A hand-built Glulx image with the three Inform tables laid out the way
     /// `Inform6/src/tables.c::construct_storyfile_g` lays them out: grammar,
@@ -746,20 +846,35 @@ mod tests {
             self.buf[at as usize..at as usize + 2].copy_from_slice(&v.to_be_bytes());
         }
 
-        /// Write a byte-valued dictionary of `(word, flags, verb_index)` at
-        /// `at`, with nine characters per record (Inform's default). Verb
-        /// numbers are inverted against `verb_base`, the way the compiler
-        /// inverts them.
-        fn dictionary(&mut self, at: u32, entries: &[(&str, u16, u32)], verb_base: u32) {
+        /// Write a dictionary of `(word, flags, verb_index)` at `at`, with nine
+        /// characters per record (Inform's default) in whichever record shape
+        /// `char_size` names — the two the module header tabulates, laid out
+        /// from `DICT_ENTRY_BYTE_LENGTH` and `DICT_ENTRY_FLAG_POS` rather than
+        /// from this reader's arithmetic. Verb numbers are inverted against
+        /// `verb_base`, the way the compiler inverts them.
+        fn dictionary(
+            &mut self,
+            at: u32,
+            entries: &[(&str, u16, u32)],
+            verb_base: u32,
+            char_size: u32,
+        ) {
+            let stride = dict_stride(char_size);
+            let text_at = if char_size == 4 { 4 } else { 1 };
+            let flag_pos = text_at + WORD_SIZE * char_size;
             self.w32(at, entries.len() as u32);
             for (i, (word, flags, verb)) in entries.iter().enumerate() {
-                let e = at + 4 + i as u32 * 16;
+                let e = at + 4 + i as u32 * stride;
                 self.b(e, DICT_TAG);
-                for (j, c) in word.bytes().take(9).enumerate() {
-                    self.b(e + 1 + j as u32, c);
+                for (j, c) in word.chars().take(WORD_SIZE as usize).enumerate() {
+                    let j = j as u32;
+                    match char_size {
+                        4 => self.w32(e + text_at + j * 4, c as u32),
+                        _ => self.b(e + text_at + j, c as u32 as u8),
+                    }
                 }
-                self.w16(e + 10, *flags);
-                self.w16(e + 12, (verb_base - *verb) as u16);
+                self.w16(e + flag_pos, *flags);
+                self.w16(e + flag_pos + 2, (verb_base - *verb) as u16);
             }
         }
 
@@ -776,13 +891,26 @@ mod tests {
         }
     }
 
+    /// `DICT_WORD_SIZE` for every synthetic story here — Inform's own default.
+    const WORD_SIZE: u32 = 9;
+
+    /// `DICT_ENTRY_BYTE_LENGTH` (`Inform6/inform.c`): 16 bytes per record for a
+    /// byte-valued dictionary, 48 for a Unicode one.
+    fn dict_stride(char_size: u32) -> u32 {
+        if char_size == 4 {
+            12 + 4 * WORD_SIZE
+        } else {
+            7 + WORD_SIZE
+        }
+    }
+
     /// Two verbs. "take" has `take noun` and `take noun in / into noun`
     /// (reversed); "look" has a bare line and one with an attribute token.
     ///
     /// Layout is computed rather than hard-coded, because the locator's whole
     /// contract is that the three tables abut exactly.
     fn story() -> Story {
-        story_numbered(VERB_BASE_WIDE)
+        story_shaped(VERB_BASE_WIDE, 1)
     }
 
     /// The same story, with its dictionary's verb numbers counted down from
@@ -790,6 +918,20 @@ mod tests {
     /// dictionary, $FF the way every release before it did. See the module
     /// header; the two are otherwise byte-identical files.
     fn story_numbered(verb_base: u32) -> Story {
+        story_shaped(verb_base, 1)
+    }
+
+    /// The same story again, its dictionary written in the `$DICT_CHAR_SIZE=4`
+    /// record shape: the tag padded out to a long, every character a big-endian
+    /// long, the three shorts moved to `4 + 4*DICT_WORD_SIZE`, and the table
+    /// word-aligned behind two bytes of padding the compiler inserts for
+    /// exactly this reason. Three of the filler nouns carry what only this
+    /// shape can hold — see [`reads_a_unicode_dictionary`].
+    fn story_unicode() -> Story {
+        story_shaped(VERB_BASE_WIDE, 4)
+    }
+
+    fn story_shaped(verb_base: u32, char_size: u32) -> Story {
         let mut s = Story::new();
         let g = RAM; // grammar table
         let verbs = 2u32;
@@ -805,7 +947,14 @@ mod tests {
         let v1_len = 1 + (3 + 1) + 3 * (3 + 5 + 1);
         let actions = v1 + v1_len;
         let action_count = 12u32;
-        let dict = actions + 4 + 4 * action_count;
+        // "The compiler also takes care that a Unicode dictionary will start at
+        // a word-aligned address" (Glulx Inform Tech. Ref. §4), so this table
+        // sits behind two bytes of padding — which is the alignment slack
+        // `action_candidates` searches, exercised here rather than assumed.
+        let dict = match char_size {
+            4 => (actions + 4 + 4 * action_count).next_multiple_of(4),
+            _ => actions + 4 + 4 * action_count,
+        };
 
         // At least `MIN_DICT_WORDS` records, because a shorter run is not a
         // positive identification and the locator declines it. Real dictionaries
@@ -818,14 +967,23 @@ mod tests {
             ("look", VERB_DFLAG, 1),
             ("take", VERB_DFLAG, 0),
         ];
-        for filler in [
-            "aa", "bb", "cc", "dd", "ee", "ff", "gg", "hh", "ii", "jj", "kk", "ll", "mm", "nn",
-        ] {
+        // The first three fillers are the ones a Unicode dictionary can hold
+        // and a byte-valued one cannot: a Latin-1 letter, a word entirely above
+        // $FF, and a word longer than `DICT_WORD_SIZE`.
+        let fillers = match char_size {
+            4 => ["café", "日本語", "abcdefghijkl"],
+            _ => ["aa", "bb", "cc"],
+        };
+        for filler in fillers
+            .into_iter()
+            .chain(["dd", "ee", "ff", "gg", "hh", "ii", "jj", "kk", "ll", "mm", "nn"])
+        {
             words.push((filler, NOUN_DFLAG, 0));
         }
-        s.dictionary(dict, &words, verb_base);
-        let in_addr = dict + 4 + 16;
-        let into_addr = dict + 4 + 2 * 16;
+        s.dictionary(dict, &words, verb_base, char_size);
+        let stride = dict_stride(char_size);
+        let in_addr = dict + 4 + stride;
+        let into_addr = dict + 4 + 2 * stride;
 
         s.w32(g, verbs);
         s.w32(g + 4, v0);
@@ -924,6 +1082,7 @@ mod tests {
         assert_eq!(t.word_count, 20);
         assert_eq!(t.dict_stride, 16);
         assert_eq!(t.dict_word_size, 9);
+        assert_eq!(t.dict_char_size, 1);
         // The tables abut: that is the property the locator proves, and the
         // only reason its answer can be trusted at all.
         assert!(t.grammar < t.actions && t.actions < t.dictionary);
@@ -1080,15 +1239,78 @@ mod tests {
         assert_eq!(s.error(), Some(GrammarError::Absent));
     }
 
+    // ── The two dictionary record shapes ─────────────────────────────────────
+
     #[test]
-    fn refuses_a_unicode_dictionary_rather_than_misreading_it() {
+    fn reads_a_unicode_dictionary() {
+        // `$DICT_CHAR_SIZE=4`: the tag padded out to a long, characters as
+        // big-endian longs, the flags and verb shorts at `4 + 4*DICT_WORD_SIZE`
+        // instead of `1 + DICT_WORD_SIZE`, and a 48-byte record instead of a
+        // 16-byte one. Before SQ-1231 this whole shape was a refusal
+        // (`GrammarError::UnicodeDictionary`), which is what this case fails
+        // with if the reader is reverted.
+        let g = story_unicode().grammar().expect("a Unicode dictionary reads");
+        let t = g.tables();
+        assert_eq!(t.dict_char_size, 4);
+        assert_eq!(t.dict_stride, 48);
+        assert_eq!(t.dict_word_size, 9);
+        assert_eq!(t.word_count, 20);
+        // The table is word-aligned behind the compiler's padding, so it does
+        // NOT abut the actions table the way a byte-valued one does.
+        assert_eq!(t.dictionary, 388);
+        assert_eq!(t.actions + 4 + 4 * t.action_count, 386);
+
+        // A character that is Latin-1, and one that is not: read at one byte
+        // per character these are `caf`+garbage and nothing at all, and read at
+        // the wrong offset they are empty.
+        assert!(g.roles("café").is_some_and(|r| r.noun));
+        assert!(g.roles("日本語").is_some_and(|r| r.noun));
+        // Truncated at `DICT_WORD_SIZE` CHARACTERS, not bytes.
+        assert!(g.roles("abcdefghi").is_some_and(|r| r.noun));
+        assert!(g.roles("abcdefghijkl").is_none());
+        assert_eq!(g.words().count(), 20);
+
+        // The flags and verb shorts landed where `DICT_ENTRY_FLAG_POS` puts
+        // them: everything the byte-valued story asserts, off the wide records.
+        assert_eq!(g.verb_number_base(), VERB_BASE_WIDE);
+        let take = g.verb_for_word("take").expect("knows 'take'");
+        assert_eq!(take.number, 0);
+        assert_eq!(take.words, vec!["hold".to_string(), "take".to_string()]);
+        assert_eq!(take.lines[1].describe("take"), "take noun in / into noun REVERSE");
+        // And the grammar's own word tokens still resolve, which they can only
+        // do if the records were walked at the wide stride.
+        assert!(g.is_preposition("in") && g.is_preposition("into"));
+        assert!(g.roles("lamp").is_some_and(|r| r.noun && !r.verb));
+        assert_eq!(g.verb_words().count(), 3);
+    }
+
+    #[test]
+    fn an_empty_word_does_not_make_a_byte_dictionary_look_unicode() {
+        // SQ-1231, and the whole of it. `stories/CoS.blb` (City of Secrets,
+        // Inform 6.21, serial 030624) opens its 3,551-word BYTE dictionary with
+        // the empty word — a meta-verb its menu system defines, flagged
+        // `VERB|META|TRUNC`. The Unicode test used to be "any of the first
+        // eight records has a zero after the tag", so that one record read an
+        // entirely ordinary stride-16 dictionary as Unicode and refused the
+        // story: no verb column, no word reveal, no guidance offer, all game.
+        //
+        // Blank record 0's text — "hold", a verb, exactly as CoS's empty word
+        // is one — and the file is still plainly byte-valued, because every
+        // OTHER record has a character where a Unicode record has padding.
         let mut s = story();
         let t = locate(&s.mem()).unwrap();
-        // A Unicode record pads the tag to four bytes, so the byte after the
-        // tag is zero. Blank the first characters to look like one.
-        for i in 0..8u32 {
-            s.b(t.dictionary + 4 + i * t.dict_stride + 1, 0);
+        for j in 0..t.dict_word_size {
+            s.b(t.dictionary + 4 + 1 + j, 0); // past the `$60` tag
         }
-        assert_eq!(s.error(), Some(GrammarError::UnicodeDictionary));
+        let g = s.grammar().expect("a byte dictionary with an empty word still reads");
+        assert_eq!(g.tables().dict_char_size, 1);
+        assert_eq!(g.tables().dict_word_size, 9);
+        // Nothing else moved: the empty spelling is simply what the record
+        // holds, and every other reading is as it was.
+        let take = g.verb_for_word("take").expect("knows 'take'");
+        assert_eq!(take.words, vec![String::new(), "take".to_string()]);
+        assert_eq!(take.lines[1].describe("take"), "take noun in / into noun REVERSE");
+        assert!(g.is_preposition("in") && g.roles("lamp").is_some_and(|r| r.noun));
+        assert_eq!(g.verb_for_word("look").map(|v| v.number), Some(1));
     }
 }

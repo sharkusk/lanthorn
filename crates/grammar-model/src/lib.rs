@@ -42,9 +42,9 @@
 //     header and has nothing to report either.
 //   * `GrammarError` — both engines name one, and the refusals differ down to
 //     the last variant (`BadTableSize` is a Z-machine grammar-version check;
-//     `TablesNotFound` and `UnicodeDictionary` belong to a locator that has to
-//     close a chain). Sharing the enum would mean each engine carrying variants
-//     it can never return.
+//     `TablesNotFound` belongs to a locator that has to close a chain).
+//     Sharing the enum would mean each engine carrying variants it can never
+//     return.
 //
 // A few things below are likewise produced by exactly one engine —
 // [`Token::InfocomObject`], [`RoutineRef::Index`], [`WordRoles::special`] — and

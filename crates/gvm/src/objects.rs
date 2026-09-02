@@ -296,12 +296,21 @@ impl ParseNames {
         if mem.read8(addr) != Some(0x60) {
             return None;
         }
+        // Both record shapes, exactly as `grammar::read_dictionary` reads them:
+        // the text starts past the tag — one byte, or four once padded out to a
+        // long — and a Unicode record's characters are big-endian longs.
+        let text_at = if self.tables.dict_char_size == 4 { 4 } else { 1 };
         let mut text = String::new();
         for i in 0..self.tables.dict_word_size {
-            match mem.read8(addr + 1 + i) {
-                Some(0) | None => break,
+            let c = if self.tables.dict_char_size == 4 {
+                mem.read32(addr + text_at + i * 4)
+            } else {
                 // Records are Latin-1 and Inform lower-cases them.
-                Some(c) => text.push(c as u8 as char),
+                mem.read8(addr + text_at + i)
+            };
+            match c {
+                Some(0) | None => break,
+                Some(c) => text.push(char::from_u32(c).unwrap_or(char::REPLACEMENT_CHARACTER)),
             }
         }
         (!text.is_empty()).then_some(text)

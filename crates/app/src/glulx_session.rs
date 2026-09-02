@@ -1579,9 +1579,9 @@ impl Engine for GlulxSession {
 
     /// The story's grammar and dictionary, as the engine-neutral snapshot.
     ///
-    /// `None` when the Glulx grammar tables cannot be located, or when the
-    /// dictionary is Unicode-valued — `gvm::grammar` refuses both, and there is
-    /// nothing to offer from a table we could not read.
+    /// `None` when the Glulx grammar tables cannot be located — there is
+    /// nothing to offer from a table we could not read. Both dictionary record
+    /// shapes read, byte-valued and Unicode (SQ-1231).
     fn story_vocabulary(&self) -> Option<crate::vocab::StoryVocabulary> {
         let mem = self.machine.mem();
         let grammar = gvm::grammar::Grammar::load(mem).ok()?;
