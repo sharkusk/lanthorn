@@ -323,25 +323,46 @@ impl StoryVocabulary {
     /// finds the `examin` a Version 3 dictionary actually stores.
     ///
     /// `word` may be a whole phrase — a synonym table member such as `look
-    /// sharp` — and that is exactly the case a naive truncation gets wrong
-    /// (SQ-1238). [`Self::truncated`] cuts to `key_len` CHARACTERS, so
-    /// truncating the phrase as one string lands on a real dictionary key by
-    /// accident: a Scott Adams database keeping four characters stores `look`
-    /// for `look`, and `"look sharp".chars().take(4)` is ALSO `look` — so the
-    /// phrase reads as known whether or not the story has ever heard of
-    /// `sharp`, and no story implements `look sharp` at all. The truncation
-    /// map is keyed per WORD; a phrase has to be split and every word checked
-    /// on its own, or the first word's spelling is doing work it never
-    /// promised. So every later word must be a dictionary entry in its own
-    /// right — truncated by ITS OWN characters, not the phrase's — before the
-    /// first word's entry is even looked up; a phrase missing a later word is
-    /// not "known via its first word", it is not known at all.
+    /// sharp` or `put on` — and that is exactly the case a naive truncation
+    /// gets wrong (SQ-1238), and dictionary membership alone still gets wrong
+    /// (SQ-1240).
+    ///
+    /// **SQ-1238: every word, not the phrase truncated as one string.**
+    /// [`Self::truncated`] cuts to `key_len` CHARACTERS, so truncating the
+    /// phrase as one string lands on a real dictionary key by accident: a
+    /// Scott Adams database keeping four characters stores `look` for `look`,
+    /// and `"look sharp".chars().take(4)` is ALSO `look` — so the phrase reads
+    /// as known whether or not the story has ever heard of `sharp`. The
+    /// truncation map is keyed per WORD, so every later word has to resolve
+    /// as a dictionary entry on its own — truncated by ITS OWN characters,
+    /// not the phrase's.
+    ///
+    /// **SQ-1240: every word resolving is still not enough.** `light` and
+    /// `up` can each be a genuine dictionary word of a story that has no
+    /// `light up` action at all — Zork I's dictionary holds both, and its
+    /// grammar never pairs them. What settles a MULTI-word member is the
+    /// story's own GRAMMAR, not its dictionary: the first word must resolve
+    /// to a verb this story implements, and every later word must be one of
+    /// the literal words that verb's own syntax lines actually pair it with
+    /// — its real prepositions, [`Verb::prepositions`]. A Scott Adams game
+    /// has no prepositions at all (verb + noun only, never verb + literal),
+    /// so no multi-word member can ever match one; that alone is what closes
+    /// `adv03.dat`'s `look` / `sha` collision, which SQ-1238's per-word
+    /// dictionary check could not (`sharp` truncates to `sha`, a real but
+    /// unrelated verb there, so every word of `look sharp` "resolves").
+    ///
+    /// A single-word query never reaches either check: `rest` is empty and
+    /// the phrase reduces to the ordinary lookup SQ-1238 left in place.
     fn stored(&self, word: &str) -> Option<(&String, WordRoles)> {
         let w = word.to_lowercase();
         let mut parts = w.split_whitespace();
         let first = parts.next()?;
-        for rest in parts {
-            self.by_trunc.get(&self.truncated(rest))?;
+        let rest: Vec<&str> = parts.collect();
+        if !rest.is_empty() {
+            let preps = self.verb_named(first)?.prepositions();
+            if !rest.iter().all(|r| preps.iter().any(|p| p.eq_ignore_ascii_case(r))) {
+                return None;
+            }
         }
         let key = self.by_trunc.get(&self.truncated(first))?;
         self.words.get_key_value(key).map(|(k, r)| (k, *r))
@@ -2047,13 +2068,16 @@ mod tests {
         StoryVocabulary::new(verbs, words, BTreeSet::new(), 4)
     }
 
-    /// **SQ-1238.** `look sharp` is a phrasal member of the same synonym group
-    /// as `hasten`, `rush` and `hurry`. Truncating the whole PHRASE to this
-    /// story's four-character key length lands on `look` by accident —
-    /// `"look sharp".chars().take(4)` is `look`, exactly like `"look".chars().
-    /// take(4)` — so a naive `stored` credits this story with a phrase it has
-    /// never implemented. `look` alone must still count, and a phrasal member
-    /// whose every word is a real dictionary word must still count too.
+    /// **SQ-1238, tightened by SQ-1240.** `look sharp` is a phrasal member of
+    /// the same synonym group as `hasten`, `rush` and `hurry`. Truncating the
+    /// whole PHRASE to this story's four-character key length lands on `look`
+    /// by accident — `"look sharp".chars().take(4)` is `look`, exactly like
+    /// `"look".chars().take(4)` — so a naive `stored` credits this story with
+    /// a phrase it has never implemented. `look` alone must still count, and
+    /// a phrasal member whose later word the story's own GRAMMAR pairs with
+    /// the verb as a preposition must still count too (SQ-1240: dictionary
+    /// membership of the later word is no longer enough on its own — see
+    /// [`a_grammar_pairing_is_what_a_multiword_member_actually_needs`]).
     ///
     /// Falsify by reverting the `stored` fix (truncate the whole phrase as one
     /// string instead of checking each word on its own): the first assertion
@@ -2068,16 +2092,24 @@ mod tests {
              not land on `look` by accident"
         );
 
-        // Add `at` and the same phrase (now every word present) counts.
+        // Give `look` a real grammar line pairing it with the preposition
+        // `at` (SQ-1240: a later word must be one the GRAMMAR pairs the verb
+        // with, not merely a dictionary word of its own) and the same phrase
+        // counts.
         let mut verbs = v.verbs.clone();
-        verbs.push(Verb::new(101, 0, vec!["at".into()], vec![SyntaxLine::new(1, false, vec![])]));
+        verbs[0] = Verb::new(
+            100,
+            0,
+            vec!["look".into()],
+            vec![SyntaxLine::new(0, false, vec![noun()]), SyntaxLine::new(1, false, vec![word("at"), noun()])],
+        );
         let mut words = v.words.clone();
         words.insert("at".to_string(), WordRoles::default());
         let with_at = StoryVocabulary::new(verbs, words, BTreeSet::new(), 4);
         assert!(
             with_at.knows("look at"),
             "a multi-word member counts once every one of its words is a \
-             dictionary word on its own"
+             dictionary word the story's own grammar pairs with the verb"
         );
     }
 
@@ -2094,6 +2126,54 @@ mod tests {
         assert!(
             v.offer("hasten", Position::Opening, &[], &[]).is_empty(),
             "this story implements `look`, not `rush`, `hurry`, or `look sharp`"
+        );
+    }
+
+    /// **SQ-1240.** Every word of a phrase resolving in the dictionary is not
+    /// enough (SQ-1238 already established that alone was too weak, but not
+    /// weak enough): `up` and `under` are both genuine dictionary words here,
+    /// yet neither is a preposition this story's GRAMMAR ever pairs with the
+    /// verb that reaches it. `put` pairs with `on` and `in` — real Zork-shaped
+    /// lines, `put OBJ on OBJ` and `put OBJ in OBJ` — but never `under`, and
+    /// `light` takes no preposition at all.
+    ///
+    /// Falsify by dropping the preposition-pairing check from `stored` back to
+    /// SQ-1238's bare per-word dictionary lookup: `put under` and `light up`
+    /// both start reading as known, because `under` and `up` are each a real
+    /// dictionary word of this story on their own.
+    #[test]
+    fn a_grammar_pairing_is_what_a_multiword_member_actually_needs() {
+        let verbs = vec![
+            Verb::new(
+                100,
+                0,
+                vec!["put".into()],
+                vec![
+                    SyntaxLine::new(0, false, vec![noun(), word("on"), noun()]),
+                    SyntaxLine::new(1, false, vec![noun(), word("in"), noun()]),
+                ],
+            ),
+            Verb::new(101, 0, vec!["light".into()], vec![SyntaxLine::new(2, false, vec![noun()])]),
+        ];
+        let mut words = BTreeMap::new();
+        for w in ["put", "light"] {
+            words.insert(w.to_string(), roles(true, false));
+        }
+        for w in ["on", "in", "under", "up"] {
+            words.insert(w.to_string(), WordRoles::default());
+        }
+        let preps: BTreeSet<String> = ["on", "in"].iter().map(|s| s.to_string()).collect();
+        let v = StoryVocabulary::new(verbs, words, preps, 0);
+
+        assert!(v.knows("put on"), "`put` takes `on` in this story's own grammar");
+        assert!(v.knows("put in"), "and `in` besides");
+        assert!(
+            !v.knows("put under"),
+            "`under` is a real word of this story, but `put` never takes it"
+        );
+        assert!(
+            !v.knows("light up"),
+            "`up` is a real word of this story, but `light` takes no preposition at all"
         );
     }
 
