@@ -84,6 +84,39 @@
 //! the same snapshot, and reads the signature off that run. Nothing is cached
 //! between turns.
 //!
+//! # What one question actually costs, and in which build (SQ-1249)
+//!
+//! The seam was reported at 4–10 s per vetted turn on heavy Inform 7 games.
+//! [`ProbePhases`] exists because that had to be split before it could be
+//! believed, and splitting it produced two answers rather than one.
+//!
+//! **The phase that dominates is `submit`** — the story running the commands we
+//! asked about — at ~80% of the bill on every Glulx story measured. `boot` is
+//! paid once a session and is a rounding error after it (SQ-1124 already moved
+//! the shadow to one boot plus a restore per question, so there is no re-boot
+//! and no replay of the turn history to remove); `restore` is ~10%; reading the
+//! world after each command is ~5%. Nothing is left to optimise there that is
+//! not "ask the story fewer questions", which is a change to what vetting MEANS.
+//!
+//! **And the 4–10 s was a DEBUG build.** `cargo run -p app --example
+//! guidance_scan` prints the breakdown per story; the same scan, same fixtures,
+//! same machine, one release flag apart (2026-09-02):
+//!
+//! | story | debug | release | worst single turn, release |
+//! |---|---|---|---|
+//! | weight-of-soul-public.gblorb | 11.64 s | **0.95 s** | 0.30 s |
+//! | Sub_Rosa.gblorb | 11.89 s | **1.15 s** | 0.32 s |
+//! | Alias 'The Magpie'.gblorb | 7.42 s | **0.56 s** | 0.09 s |
+//! | Junior Arithmancer.gblorb | 3.92 s | **0.33 s** | 0.10 s |
+//! | curses.z5 | 0.22 s | **0.06 s** | 0.01 s |
+//!
+//! Those are WORKER seconds across a whole scan, not a stall: the player's own
+//! thread pays only the host snapshot in [`ShadowProbe::ask`], measured at 0.05 s
+//! across the whole of weight-of-soul's scan. So the answer to "is this
+//! affordable" is a build question, and a number taken under `cargo test` or
+//! `cargo run` without `--release` is off by an order of magnitude. Quote the
+//! release figure, and say which build any new one came from.
+//!
 //! # What it still cannot tell you
 //!
 //! A refusal that no control provokes reads as a success. And a game that
@@ -365,6 +398,39 @@ fn signature(reply: &str, command: &str) -> Vec<String> {
     out
 }
 
+/// Where a probe's wall time actually went (SQ-1249).
+///
+/// A phase breakdown rather than one total, because the three phases have three
+/// different fixes: a slow BOOT is the story's own startup and is paid once a
+/// session, a slow RESTORE is the host snapshot being re-applied once per
+/// command, and slow SUBMIT time is the story running the turns we asked for.
+/// Guessing which one dominates is exactly the mistake this exists to stop —
+/// the answer differed by an order of magnitude between engines.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct ProbePhases {
+    /// Building the shadow engine: the story's own startup. Paid once per
+    /// session (or again after a shadow the probe had to throw away), and zero
+    /// on every other question — which is the fact a caller usually wants.
+    pub boot: Duration,
+    /// [`Engine::restore_state`], once before each command and once more to
+    /// leave the shadow on the snapshot.
+    pub restore: Duration,
+    /// [`Engine::submit`]: the story running the command we asked about.
+    pub submit: Duration,
+    /// [`WorldPrint::of`]: reading the object tree after each command.
+    pub world: Duration,
+}
+
+impl ProbePhases {
+    /// Fold another breakdown in, phase by phase.
+    pub fn add(&mut self, other: ProbePhases) {
+        self.boot += other.boot;
+        self.restore += other.restore;
+        self.submit += other.submit;
+        self.world += other.world;
+    }
+}
+
 // ── The seam ────────────────────────────────────────────────────────────────
 
 /// One question, on its way to the worker.
@@ -398,6 +464,8 @@ pub struct Answer {
     probes: u32,
     /// Wall time the worker spent on it, the boot included.
     spent: Duration,
+    /// Where that time went. See [`ProbePhases`].
+    pub phases: ProbePhases,
 }
 
 /// One moment in the live game, ready to be asked questions about.
@@ -470,6 +538,8 @@ pub struct ShadowProbe {
     /// Total time spent inside the worker, boot included. Wall time on the
     /// WORKER, which is no longer time the player waited.
     pub spent: Duration,
+    /// The same total, split by phase (SQ-1249).
+    pub phases: ProbePhases,
 }
 
 impl std::fmt::Debug for ShadowProbe {
@@ -632,6 +702,7 @@ impl ShadowProbe {
     fn settled(&mut self, answer: &Answer) {
         self.probes += answer.probes;
         self.spent += answer.spent;
+        self.phases.add(answer.phases);
         if answer.broken {
             self.broken = true;
         }
@@ -661,13 +732,15 @@ fn shadow_worker(recipe: ShadowRecipe, jobs: mpsc::Receiver<Job>, answers: mpsc:
     while let Ok(job) = jobs.recv() {
         let started = Instant::now();
         let mut probes = 0u32;
-        let answer = match serve(&recipe, &mut shadow, &job, &mut probes) {
+        let mut phases = ProbePhases::default();
+        let answer = match serve(&recipe, &mut shadow, &job, &mut probes, &mut phases) {
             Ok(run) => Answer {
                 token: job.token,
                 run,
                 broken: false,
                 probes,
                 spent: started.elapsed(),
+                phases,
             },
             Err(()) => {
                 shadow = None;
@@ -677,6 +750,7 @@ fn shadow_worker(recipe: ShadowRecipe, jobs: mpsc::Receiver<Job>, answers: mpsc:
                     broken: true,
                     probes,
                     spent: started.elapsed(),
+                    phases,
                 }
             }
         };
@@ -696,21 +770,30 @@ fn serve(
     shadow: &mut Option<Box<dyn Engine>>,
     job: &Job,
     probes: &mut u32,
+    phases: &mut ProbePhases,
 ) -> Result<Option<ProbeRun>, ()> {
     if shadow.is_none() {
-        *shadow = Some(boot_shadow(recipe).map_err(|_| ())?);
+        let t = Instant::now();
+        let booted = boot_shadow(recipe).map_err(|_| ())?;
+        phases.boot += t.elapsed();
+        *shadow = Some(booted);
     }
     let engine = shadow.as_mut().ok_or(())?;
 
     let mut steps = Vec::with_capacity(job.commands.len());
     for command in &job.commands {
-        if engine.restore_state(&job.save).is_err() {
+        let t = Instant::now();
+        let restored = engine.restore_state(&job.save);
+        phases.restore += t.elapsed();
+        if restored.is_err() {
             // A shadow that will not take the live state is no shadow.
             return Err(());
         }
         let _ = engine.take_transcript();
         let _ = engine.take_transcript_elems();
+        let t = Instant::now();
         let result = engine.submit(command);
+        phases.submit += t.elapsed();
         *probes += 1;
         // ISOLATION. Nothing typed in here may reach a file. A game that
         // suspends for its own `@save`/`@restore`, or asks Glk for a
@@ -720,11 +803,14 @@ fn serve(
         if escaped {
             unwind_io(engine.as_mut(), result.pending_io);
         }
+        let t = Instant::now();
+        let world = WorldPrint::of(&**engine);
+        phases.world += t.elapsed();
         steps.push(ProbeStep {
             command: command.clone(),
             reply: result.transcript.clone(),
             location: result.location.as_ref().map(|l| l.number),
-            world: WorldPrint::of(&**engine),
+            world,
             quit: result.quit,
             escaped,
         });
@@ -742,7 +828,9 @@ fn serve(
         // Otherwise leave the shadow on the snapshot rather than on the last
         // probe's aftermath, so a shadow that is never asked again is
         // holding a state the live game actually reached.
+        let t = Instant::now();
         let _ = engine.restore_state(&job.save);
+        phases.restore += t.elapsed();
         let _ = engine.take_transcript();
     }
 
@@ -1002,6 +1090,150 @@ mod tests {
         });
         assert!(snap.is_none(), "unarmed refuses");
         assert!(!took.get(), "and never asked for the save it would not use");
+    }
+
+    /// A shadow that only ever answers a question by RESTORING the live
+    /// snapshot over itself — never by re-booting the story, never by replaying
+    /// the turns that reached this moment.
+    ///
+    /// Counts what a question actually costs it, because SQ-1249 went looking
+    /// for a boot or a replay hiding inside the per-turn bill and had to be able
+    /// to prove there was neither. `save_state` is `unreachable!`: the shadow is
+    /// never asked for its own state, only handed the live game's.
+    #[derive(Default)]
+    struct ShadowStub {
+        restores: u32,
+        typed: Vec<String>,
+    }
+
+    impl Engine for ShadowStub {
+        fn submit(&mut self, command: &str) -> crate::session::TurnResult {
+            self.typed.push(command.to_string());
+            crate::session::TurnResult::default()
+        }
+        fn submit_key(&mut self, _key: crate::engine::KeyInput) -> Option<crate::session::TurnResult> {
+            unreachable!("a probe types commands, not keys")
+        }
+        fn take_transcript(&mut self) -> String {
+            String::new()
+        }
+        fn drain_screen_clear(&mut self) -> bool {
+            false
+        }
+        fn pending_input(&self) -> crate::session::InputKind {
+            crate::session::InputKind::Line
+        }
+        fn resume_save(&mut self, _wrote_ok: bool) -> crate::session::TurnResult {
+            unreachable!("nothing here suspends")
+        }
+        fn resume_restore(&mut self, _data: Option<&[u8]>) -> crate::session::TurnResult {
+            unreachable!("nothing here suspends")
+        }
+        fn has_quit(&self) -> bool {
+            false
+        }
+        fn screen(&self) -> crate::engine::ScreenModel {
+            unreachable!("a shadow is never drawn")
+        }
+        fn save_state(&self) -> crate::engine::EngineSave {
+            unreachable!("the shadow's own state is never wanted")
+        }
+        fn restore_state(
+            &mut self,
+            _save: &crate::engine::EngineSave,
+        ) -> Result<(), crate::engine::EngineError> {
+            self.restores += 1;
+            Ok(())
+        }
+        fn restore_game_save(&mut self, _bytes: &[u8]) -> Result<(), crate::engine::EngineError> {
+            unreachable!("not exercised by this test")
+        }
+        fn aux_data(&self) -> &std::collections::BTreeMap<String, Vec<u8>> {
+            unreachable!("not exercised by this test")
+        }
+        fn set_aux_data(&mut self, _data: std::collections::BTreeMap<String, Vec<u8>>) {
+            unreachable!("not exercised by this test")
+        }
+        fn aux_dirty(&self) -> bool {
+            false
+        }
+        fn clear_aux_dirty(&mut self) {}
+        fn current_location(&self) -> Option<crate::engine::LocationInfo> {
+            None
+        }
+        fn as_any(&self) -> &dyn std::any::Any {
+            self
+        }
+        fn as_any_mut(&mut self) -> &mut dyn std::any::Any {
+            self
+        }
+    }
+
+    fn stub_job(token: u64, commands: &[&str]) -> Job {
+        Job {
+            token,
+            save: std::sync::Arc::new(crate::engine::EngineSave::new("mock", 1, Vec::new())),
+            baseline: WorldPrint(None),
+            commands: commands.iter().map(|c| c.to_string()).collect(),
+        }
+    }
+
+    /// SQ-1249: the per-turn bill is the story running the commands we asked
+    /// about, and nothing else. A question costs NO boot — the shadow is built
+    /// once and every question after that restores the live host snapshot over
+    /// it — and NO replay: the only things typed into the shadow are the
+    /// commands the caller named.
+    ///
+    /// The falsification is built in. `ShadowRecipe::default()` carries no story
+    /// bytes, so the boot path cannot succeed: the third arm below forces the
+    /// shadow away and shows that a seam which re-booted per question would fail
+    /// outright here rather than quietly charging for it.
+    #[test]
+    fn a_question_restores_the_live_snapshot_and_neither_boots_nor_replays() {
+        let recipe = ShadowRecipe::default();
+        let mut shadow: Option<Box<dyn Engine>> = Some(Box::new(ShadowStub::default()));
+        let mut phases = ProbePhases::default();
+        let mut probes = 0u32;
+
+        let first = serve(&recipe, &mut shadow, &stub_job(1, &["light lamp", "light zzqx"]), &mut probes, &mut phases)
+            .expect("an already-built shadow answers")
+            .expect("two commands is two steps");
+        assert_eq!(first.steps.len(), 2);
+        assert!(phases.boot.is_zero(), "an existing shadow is not re-booted");
+
+        // A second question a turn later, on the same worker and the same shadow.
+        let second = serve(&recipe, &mut shadow, &stub_job(2, &["open door"]), &mut probes, &mut phases)
+            .expect("and answers again")
+            .expect("one command is one step");
+        assert_eq!(second.steps.len(), 1);
+        assert_eq!(probes, 3, "three commands typed across the two questions");
+        assert!(phases.boot.is_zero(), "and still no boot on the second question");
+
+        let stub = shadow
+            .as_ref()
+            .expect("the shadow survives an answered question")
+            .as_any()
+            .downcast_ref::<ShadowStub>()
+            .expect("the same stub throughout");
+        assert_eq!(
+            stub.typed,
+            vec!["light lamp", "light zzqx", "open door"],
+            "only the commands asked about — no turn history is replayed into the shadow"
+        );
+        assert_eq!(
+            stub.restores, 5,
+            "one restore per command, plus one per question to leave the shadow on the snapshot"
+        );
+
+        // Falsification: force the pre-SQ-1124 shape, where a question with no
+        // standing shadow has to boot one. With no story bytes that is a hard
+        // failure, which is exactly how we know the arms above never took it.
+        let mut none: Option<Box<dyn Engine>> = None;
+        assert!(
+            serve(&recipe, &mut none, &stub_job(3, &["look"]), &mut 0, &mut ProbePhases::default())
+                .is_err(),
+            "a question that has to boot goes down the boot path"
+        );
     }
 
     #[test]
