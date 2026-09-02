@@ -384,6 +384,50 @@ pub fn render_matrix(
     hits
 }
 
+/// Draw the hover tooltip for whichever matrix room the pointer is on, if any (SQ-1246).
+///
+/// `state.matrix_hover` is what `main.rs`'s `matrix_update_hover` last resolved from a `Moved`
+/// event — a row label or a destination cell, paired with the exact rect the pointer was found
+/// under. Either way it names a room: a row label is truncated on screen whenever the name did
+/// not fit the label column, and a destination cell never carries a name at all, only a two- or
+/// three-letter tag. The full name is read from the same [`MatrixLabels`](matrix::MatrixLabels)
+/// the table itself printed from, so a tooltip and the table's own footnote (when a name was too
+/// long to fit) can never disagree.
+///
+/// Reuses the shared floating-box renderer the border controls already draw their hints with
+/// (`tooltip::draw_tip`) rather than a second tooltip mechanism, so styling (`tooltip.*`) and
+/// placement (beside/below the anchor, clamped to `area`) are identical to theirs.
+///
+/// Returns `None` — and paints nothing — while a modal overlay owns the pointer, or when nothing
+/// is hovered, or when the hovered room has no name to show.
+pub fn draw_hover_tip(
+    graph: &MapGraph,
+    layer: LayerId,
+    state: &AppState,
+    area: Rect,
+    buf: &mut Buffer,
+) -> Option<Rect> {
+    if state.any_modal_overlay_open() {
+        return None;
+    }
+    let (room, rect) = state.matrix_hover?;
+    let m = matrix::build(graph, layer);
+    let name = m.labels.row_of(room);
+    if name.is_empty() {
+        return None;
+    }
+    let anchor_col = rect.x + rect.width / 2;
+    super::tooltip::draw_tip(
+        buf,
+        area,
+        anchor_col,
+        rect.y,
+        &[name.to_string()],
+        &state.colors.theme,
+        &state.symbols,
+    )
+}
+
 /// Move the selection `delta` rows through the matrix, scrolling to keep it visible.
 ///
 /// Returns the newly selected room, or `None` when the layer has no rows. Selection lands on the
@@ -581,5 +625,147 @@ mod tests {
         assert_eq!(step_selection(&g, MAIN_LAYER, Some(1), -1), Some(1), "nor the first");
         assert_eq!(step_selection(&g, MAIN_LAYER, Some(3), -2), Some(1));
         assert_eq!(step_selection(&MapGraph::new(), MAIN_LAYER, None, 1), None, "an empty layer");
+    }
+
+    /// SQ-1246: every drawn row label publishes a hit-rect (a tooltip needs an anchor to hover
+    /// on), and every non-empty destination cell does too. A cell with nothing to name — untried
+    /// or probed, the two "empty" glyphs (`·` and `×`) — must not.
+    #[test]
+    fn every_row_label_and_non_empty_cell_publishes_a_hit_rect() {
+        let g = tiny();
+        let m = matrix::build(&g, MAIN_LAYER);
+        let st = AppState::default();
+        let area = Rect { x: 0, y: 0, width: 100, height: 24 };
+        let mut buf = Buffer::empty(area);
+        let hits = render_matrix(&g, MAIN_LAYER, &st, area, &mut buf);
+
+        // One row-label rect per row, at the pane's left edge (cell rects start past `LABEL_W`).
+        let label_hits: Vec<_> = hits.iter().filter(|(_, r)| r.x == area.x).collect();
+        assert_eq!(label_hits.len(), m.rows.len(), "every row label gets a rect: {hits:?}");
+        for row in &m.rows {
+            assert!(
+                label_hits.iter().any(|(room, _)| *room == row.room),
+                "room {} has no row-label rect: {hits:?}",
+                row.room
+            );
+        }
+
+        // Every cell whose classification actually names a room IN this layer gets a rect;
+        // untried/probed cells (no destination at all) contribute none.
+        let expected_cell_hits = m
+            .rows
+            .iter()
+            .flat_map(|row| row.cells.iter())
+            .filter(|cell| cell.dest().is_some_and(|d| m.index_of(d).is_some()))
+            .count();
+        assert_eq!(hits.len() - label_hits.len(), expected_cell_hits, "hits: {hits:?}");
+    }
+
+    /// Hovering the truncated row label shows the FULL name — falsified by reverting
+    /// `draw_hover_tip` to always return `None`, which turns this into "the room's name never
+    /// appears anywhere on screen but the footnote", the originally requested behaviour.
+    #[test]
+    fn hovering_a_truncated_row_label_shows_the_full_room_name() {
+        let g = tiny();
+        let st_default = AppState::default();
+        let area = Rect { x: 0, y: 0, width: 100, height: 24 };
+        let mut buf = Buffer::empty(area);
+        let hits = render_matrix(&g, MAIN_LAYER, &st_default, area, &mut buf);
+
+        // Room 3's name ("Dead End, near Vending Machine") does not fit `LABEL_W` and is
+        // truncated on screen — exactly the case a tooltip exists for.
+        let (_, label_rect) =
+            *hits.iter().find(|(room, r)| *room == 3 && r.x == area.x).expect("room 3's row label");
+
+        let mut st = AppState::default();
+        st.matrix_hover = Some((3, label_rect));
+        let mut buf2 = Buffer::empty(area);
+        render_matrix(&g, MAIN_LAYER, &st, area, &mut buf2);
+        let painted =
+            draw_hover_tip(&g, MAIN_LAYER, &st, area, &mut buf2).expect("a tip was painted");
+        assert!(
+            buf_contains(&buf2, painted, "Dead End, near Vending Machine"),
+            "the full name must appear in the tip box"
+        );
+    }
+
+    /// Hovering a destination cell shows the DESTINATION's full name, not the row it sits in's.
+    #[test]
+    fn hovering_a_destination_cell_shows_the_destinations_full_name() {
+        let g = tiny();
+        let area = Rect { x: 0, y: 0, width: 100, height: 24 };
+        let st_default = AppState::default();
+        let mut probe = Buffer::empty(area);
+        let hits = render_matrix(&g, MAIN_LAYER, &st_default, area, &mut probe);
+
+        // A cell rect sits past the label column and names room 3 as its destination — the
+        // `→3⇠n`/`⇄DE`-shaped cell on room 2's row.
+        let (room, cell_rect) = *hits
+            .iter()
+            .find(|(room, r)| *room == 3 && r.x > area.x)
+            .expect("a destination cell pointing at room 3");
+        assert_eq!(room, 3);
+
+        let mut st = AppState::default();
+        st.matrix_hover = Some((room, cell_rect));
+        let mut buf = Buffer::empty(area);
+        render_matrix(&g, MAIN_LAYER, &st, area, &mut buf);
+        let painted = draw_hover_tip(&g, MAIN_LAYER, &st, area, &mut buf).expect("a tip was painted");
+        assert!(
+            buf_contains(&buf, painted, "Dead End, near Vending Machine"),
+            "the destination's full name must appear in the tip box"
+        );
+    }
+
+    /// No hovered room, or one that names nothing in this layer's table, paints nothing.
+    #[test]
+    fn no_hover_or_an_unresolvable_room_paints_no_tooltip() {
+        let g = tiny();
+        let area = Rect { x: 0, y: 0, width: 100, height: 24 };
+        let mut st = AppState::default();
+        let mut buf = Buffer::empty(area);
+        render_matrix(&g, MAIN_LAYER, &st, area, &mut buf);
+        assert_eq!(draw_hover_tip(&g, MAIN_LAYER, &st, area, &mut buf), None, "nothing hovered");
+
+        st.matrix_hover = Some((999, Rect::new(0, 2, LABEL_W, 1)));
+        assert_eq!(
+            draw_hover_tip(&g, MAIN_LAYER, &st, area, &mut buf),
+            None,
+            "a room with no name in this layer's table gets no tip"
+        );
+    }
+
+    /// A modal dialog owns the pointer — same rule the border-control hint follows — so no tip
+    /// draws underneath it even with a perfectly valid hover still recorded.
+    #[test]
+    fn a_modal_overlay_suppresses_the_tooltip() {
+        let g = tiny();
+        let area = Rect { x: 0, y: 0, width: 100, height: 24 };
+        let st_default = AppState::default();
+        let mut probe = Buffer::empty(area);
+        let hits = render_matrix(&g, MAIN_LAYER, &st_default, area, &mut probe);
+        let (room, rect) = *hits.iter().find(|(room, r)| *room == 3 && r.x == area.x).unwrap();
+
+        let mut st = AppState::default();
+        st.matrix_hover = Some((room, rect));
+        st.overlays.hotkey_dialog = true;
+        let mut buf = Buffer::empty(area);
+        assert_eq!(
+            draw_hover_tip(&g, MAIN_LAYER, &st, area, &mut buf),
+            None,
+            "a modal overlay must suppress the tip"
+        );
+    }
+
+    /// Cell contents as plain strings within `rect`, concatenated — enough to search for text a
+    /// tooltip box painted.
+    fn buf_contains(buf: &Buffer, rect: Rect, needle: &str) -> bool {
+        let mut joined = String::new();
+        for y in rect.y..rect.bottom() {
+            for x in rect.x..rect.right() {
+                joined.push_str(buf.cell((x, y)).map(|c| c.symbol()).unwrap_or(" "));
+            }
+        }
+        joined.contains(needle)
     }
 }

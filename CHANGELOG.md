@@ -43,6 +43,10 @@ any such tag, or this Unreleased section, still exists.*
   each with its own key shown alongside. (Right-clicking twice no longer opens
   launch options; the menu item does.)
 - **`?` in the picker** shows every key the story browser knows, on one screen.
+- **The matrix map view now shows a room's full name on hover.** A row's
+  abbreviated label or a destination cell's two-letter tag — either one, under
+  the pointer — pops a tooltip spelling out the name in full, the same box the
+  border controls already use for their hints.
 - **The story pane's border control now cycles three states.** Command panel →
   inventory panel → none → command panel, one click at a time (`cycle-panel`,
   bound to the same control that used to only toggle the command panel). The

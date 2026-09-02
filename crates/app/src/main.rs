@@ -521,6 +521,11 @@ struct PaneRects {
     /// The draggable pane boundaries of this frame, with their grab zones.
     boundaries: Vec<app::layout::BoundaryZone>,
     room_rects: Vec<(RoomId, Rect)>,
+    /// Which view drew `room_rects` this frame (SQ-1246): the matrix view's row
+    /// labels and destination cells both resolve to a room and want a hover
+    /// tooltip, the drawn view's boxes do not — this is what tells the mouse
+    /// handler which behaviour `room_rects` is standing in for.
+    map_view: mapper::layer::MapView,
     /// The room dock's rect this frame (SQ-0692), zero-area when it is closed.
     /// Mouse routing needs it as its own rect: the dock is carved OUT of the map
     /// pane, so a click inside it is neither a map click nor a story click, and
@@ -1168,6 +1173,15 @@ fn draw_frame(
             app::render::controls::draw_control_hint(buf, full, state, &views, &border_controls_out);
         }
 
+        // ── Matrix room-name tooltip (SQ-1246) ──────────────────────────────────
+        // Drawn after the overlay ladder, exactly where the border-control hint
+        // above is, so it floats on top and is never set while a modal owns the
+        // pointer (see `matrix_update_hover`, which never sets it there either).
+        {
+            let graph = if let Some(g) = &replay_graph { g } else { &mapper.graph };
+            app::render::matrix::draw_hover_tip(graph, layer, state, full, buf);
+        }
+
         // Story-pane text-selection highlight + copy extraction now happen inside
         // render_middle (render/transcript.rs), which has the full wrapped-row set
         // and can select text beyond the visible viewport. (SQ-0197)
@@ -1207,7 +1221,7 @@ fn draw_frame(
 
     // The draw closure runs exactly once, so the overlay ladder always ran.
     let overlay_rects = overlay_rects.expect("draw_frame closure runs exactly once");
-    Ok(PaneRects { map: map_area, story: story_area, boundaries: pane_layout_out.boundary_zones(), pane_layout: pane_layout_out, room_rects: room_rects_out, room_dock: pane_layout_out.room_dock, room_dock_tabs: room_dock_tabs_out, layer_tabs: layer_tabs_out, border_controls: border_controls_out, debug_tabs: debug_tabs_out, dialog: overlay_rects.dialog, aux_dialog: overlay_rects.aux_dialog, history_prompt: overlay_rects.history_prompt, font_check: overlay_rects.font_check, fetch_keep: overlay_rects.fetch_keep, reset_dialog: overlay_rects.reset_dialog, region_prompt: overlay_rects.region_prompt, game_over: overlay_rects.game_over, save_name_dialog: overlay_rects.save_name_dialog, text_entry: overlay_rects.text_entry, confirm_delete: overlay_rects.confirm_delete, confirm_overwrite: overlay_rects.confirm_overwrite, quit_dialog: overlay_rects.quit_dialog, launch_dialog: overlay_rects.launch_dialog, hints_panel: overlay_rects.hints_panel, command_band: band_hits, palette: palette_hits, transcript_links: transcript_links_out, win_rects: win_rects_out, transcript_max_scroll, transcript_viewport_rows, transcript_prompt_rows, transcript_total_rows, transcript_surface, modal_list_viewport })
+    Ok(PaneRects { map: map_area, story: story_area, boundaries: pane_layout_out.boundary_zones(), pane_layout: pane_layout_out, room_rects: room_rects_out, map_view: map_control_view, room_dock: pane_layout_out.room_dock, room_dock_tabs: room_dock_tabs_out, layer_tabs: layer_tabs_out, border_controls: border_controls_out, debug_tabs: debug_tabs_out, dialog: overlay_rects.dialog, aux_dialog: overlay_rects.aux_dialog, history_prompt: overlay_rects.history_prompt, font_check: overlay_rects.font_check, fetch_keep: overlay_rects.fetch_keep, reset_dialog: overlay_rects.reset_dialog, region_prompt: overlay_rects.region_prompt, game_over: overlay_rects.game_over, save_name_dialog: overlay_rects.save_name_dialog, text_entry: overlay_rects.text_entry, confirm_delete: overlay_rects.confirm_delete, confirm_overwrite: overlay_rects.confirm_overwrite, quit_dialog: overlay_rects.quit_dialog, launch_dialog: overlay_rects.launch_dialog, hints_panel: overlay_rects.hints_panel, command_band: band_hits, palette: palette_hits, transcript_links: transcript_links_out, win_rects: win_rects_out, transcript_max_scroll, transcript_viewport_rows, transcript_prompt_rows, transcript_total_rows, transcript_surface, modal_list_viewport })
 }
 
 // ── Command-band mouse routing ───────────────────────────────────────────────
@@ -1320,6 +1334,39 @@ fn band_update_quick_hover(state: &mut AppState, panes: &PaneRects, event: &Even
             band.quick_hover = hover;
         }
     }
+}
+
+/// Track which matrix-view room the pointer is on (SQ-1246): a row label or a
+/// destination cell, both of which name a room the table may have had to
+/// abbreviate.
+///
+/// Same shape as [`band_update_quick_hover`] just above: pointer motion with
+/// no button held resolves against LAST FRAME's `room_rects` — the same ones
+/// a click on a row or a destination cell already resolves against — and only
+/// while that frame actually drew the matrix view, since `room_rects` carries
+/// the drawn map's room boxes too and those are out of scope for this hint.
+/// Never claims the event, and clears — rather than leaving a stale room lit
+/// — the moment the pointer moves off, the view changes, or a modal opens.
+fn matrix_update_hover(state: &mut AppState, panes: &PaneRects, event: &Event) {
+    use crossterm::event::MouseEventKind;
+    let Event::Mouse(m) = event else { return };
+    if m.kind != MouseEventKind::Moved {
+        return;
+    }
+    state.matrix_hover = if state.any_modal_overlay_open()
+        || panes.map_view != mapper::layer::MapView::Matrix
+    {
+        None
+    } else {
+        panes.room_rects.iter().copied().find(|(_, r)| {
+            r.width > 0
+                && r.height > 0
+                && m.column >= r.x
+                && m.column < r.right()
+                && m.row >= r.y
+                && m.row < r.bottom()
+        })
+    };
 }
 
 // ── File-browser entry action helper ─────────────────────────────────────────
@@ -2356,6 +2403,9 @@ fn run_event_loop(boot: startup::BootResult, launched_from_library: bool) -> Run
                 state.control_hover = hover;
             }
         }
+
+        // ── Matrix-view room hover (SQ-1246) ────────────────────────────────────
+        matrix_update_hover(&mut state, &last_panes, &event);
 
         // ── Common-dialog overlay intercept ladder (SQ-0307) ──────────────────
         // The aux / reset / save-name / text-entry / confirm-delete / quit /
@@ -4528,9 +4578,14 @@ mod tests {
     use ratatui::buffer::Buffer;
     use ratatui::layout::Rect;
     use ratatui::style::Modifier;
+    use crossterm::event::Event;
 
-    use super::{dim_area, is_slash, scroll_for_match, should_prompt_save_on_quit};
+    use super::{
+        dim_area, is_slash, matrix_update_hover, scroll_for_match, should_prompt_save_on_quit,
+        PaneRects, RoomId,
+    };
     use app::render::paneframe::{draw_pane_frame, draw_top_inset, InsetCaps, InsetSegment, PaneGlyphs};
+    use app::state::AppState;
 
     // ── SQ-0649: the panic hook must not tear down a live session ──────────────
 
@@ -4557,6 +4612,96 @@ mod tests {
         );
         // Id never captured (hook somehow ran before install): fail safe.
         assert!(super::panic_is_fatal(worker_id, None));
+    }
+
+    // ── SQ-1246: matrix-view room hover ─────────────────────────────────────────
+
+    fn moved_at(col: u16, row: u16) -> Event {
+        Event::Mouse(crossterm::event::MouseEvent {
+            kind: crossterm::event::MouseEventKind::Moved,
+            column: col,
+            row,
+            modifiers: crossterm::event::KeyModifiers::NONE,
+        })
+    }
+
+    fn matrix_panes(room: RoomId, rect: Rect) -> PaneRects {
+        PaneRects {
+            room_rects: vec![(room, rect)],
+            map_view: mapper::layer::MapView::Matrix,
+            ..Default::default()
+        }
+    }
+
+    /// The headline case: pointer motion over a published rect in the matrix view resolves the
+    /// room it names; motion elsewhere clears it.
+    #[test]
+    fn matrix_hover_resolves_over_a_published_rect_and_clears_off_it() {
+        let rect = Rect::new(0, 2, app::render::matrix::LABEL_W, 1);
+        let panes = matrix_panes(3, rect);
+        let mut st = AppState::default();
+
+        matrix_update_hover(&mut st, &panes, &moved_at(2, 2));
+        assert_eq!(st.matrix_hover, Some((3, rect)), "the pointer sits inside the rect");
+
+        matrix_update_hover(&mut st, &panes, &moved_at(50, 2));
+        assert_eq!(st.matrix_hover, None, "moved off the rect: cleared");
+    }
+
+    /// A rect this frame's room_rects never published (an empty cell, `·`/`×`) resolves to no
+    /// hover no matter where the pointer lands.
+    #[test]
+    fn matrix_hover_is_none_over_a_point_with_no_published_rect() {
+        let rect = Rect::new(0, 2, app::render::matrix::LABEL_W, 1);
+        let panes = matrix_panes(3, rect);
+        let mut st = AppState::default();
+        matrix_update_hover(&mut st, &panes, &moved_at(80, 20));
+        assert_eq!(st.matrix_hover, None, "no rect at that point: no tooltip");
+    }
+
+    /// The drawn (non-matrix) map view publishes `room_rects` too — its room boxes — and those
+    /// must never populate `matrix_hover`; that view's hover behaviour is out of scope for this
+    /// feature and untouched.
+    #[test]
+    fn matrix_hover_stays_none_in_the_drawn_map_view() {
+        let rect = Rect::new(0, 2, app::render::matrix::LABEL_W, 1);
+        let mut panes = matrix_panes(3, rect);
+        panes.map_view = mapper::layer::MapView::Drawn;
+        let mut st = AppState::default();
+        matrix_update_hover(&mut st, &panes, &moved_at(2, 2));
+        assert_eq!(st.matrix_hover, None, "the drawn view's room boxes are not a matrix hover");
+    }
+
+    /// A modal dialog owns the pointer; hover resolution must not populate `matrix_hover`
+    /// underneath it, even over an otherwise-valid rect.
+    #[test]
+    fn matrix_hover_is_suppressed_while_a_modal_overlay_is_open() {
+        let rect = Rect::new(0, 2, app::render::matrix::LABEL_W, 1);
+        let panes = matrix_panes(3, rect);
+        let mut st = AppState::default();
+        st.overlays.hotkey_dialog = true;
+        matrix_update_hover(&mut st, &panes, &moved_at(2, 2));
+        assert_eq!(st.matrix_hover, None, "a modal overlay must suppress the hover");
+    }
+
+    /// A non-`Moved` mouse event (a click, say) must not disturb whatever hover a prior `Moved`
+    /// left in place — this handler only ever reacts to motion.
+    #[test]
+    fn matrix_hover_ignores_non_moved_events() {
+        let rect = Rect::new(0, 2, app::render::matrix::LABEL_W, 1);
+        let panes = matrix_panes(3, rect);
+        let mut st = AppState::default();
+        matrix_update_hover(&mut st, &panes, &moved_at(2, 2));
+        assert_eq!(st.matrix_hover, Some((3, rect)));
+
+        let click = Event::Mouse(crossterm::event::MouseEvent {
+            kind: crossterm::event::MouseEventKind::Down(crossterm::event::MouseButton::Left),
+            column: 2,
+            row: 2,
+            modifiers: crossterm::event::KeyModifiers::NONE,
+        });
+        matrix_update_hover(&mut st, &panes, &click);
+        assert_eq!(st.matrix_hover, Some((3, rect)), "a click leaves the hover exactly as it was");
     }
 
     // ── SQ-0651 / SQ-0644: the watchdog must not kill an exit save in flight ───

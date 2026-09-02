@@ -303,6 +303,39 @@ fn rows_and_destination_cells_are_both_click_targets() {
     assert!(!hits.iter().any(|(id, _)| *id == out_dest), "no jump to a room with no row");
 }
 
+/// Hovering a truncated row label shows the full room name (SQ-1246). "Dead End, near Vending
+/// Machine" is `LABEL_W` cannot hold whatever the pane width, so its row is truncated and
+/// footnoted on screen exactly as `matrix.rs`'s own unit test fixture is — this is the same fact
+/// against a real recorded map instead of a hand-built one.
+#[test]
+fn hovering_a_truncated_row_label_shows_the_full_room_name() {
+    let (m, mut st) = maze_state(true);
+    let (mut buf, hits) = draw(&m.graph, &st, WIDE);
+
+    let dead_end = id_of(&m.graph, "Dead End, near Vending Machine");
+    let label_rect = *hits
+        .iter()
+        .find(|(id, r)| *id == dead_end && r.x == WIDE.x)
+        .map(|(_, r)| r)
+        .expect("Dead End's row label is a hit target");
+
+    st.matrix_hover = Some((dead_end, label_rect));
+    let painted = app::render::matrix::draw_hover_tip(&m.graph, MAZE, &st, WIDE, &mut buf)
+        .expect("a tip was painted");
+    let joined = (painted.y..painted.bottom())
+        .map(|y| {
+            (painted.x..painted.right())
+                .map(|x| buf.cell((x, y)).map(|c| c.symbol()).unwrap_or(" ").to_string())
+                .collect::<String>()
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert!(
+        joined.contains("Dead End, near Vending Machine"),
+        "the tip must spell out the full name: {joined:?}"
+    );
+}
+
 /// Self-loops: recordable, and rendered as `↩` where they belong.
 #[test]
 fn an_observed_self_loop_shows_as_a_return_arrow() {
