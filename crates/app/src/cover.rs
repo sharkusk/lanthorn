@@ -6,11 +6,14 @@
 //! and lazily builds
 //! (and caches) a `ratatui-image` protocol scaled to the panel's cover region
 //! for the currently-selected story. `CoverDecoder` owns a background worker
-//! thread that runs `load_cover` off the main loop so scrolling never stalls.
+//! thread that runs `load_cover` off the main loop so scrolling never stalls,
+//! and `TileEncoder` (SQ-1199) owns a second one that does the same for the
+//! gallery grid's per-tile resize + protocol encode.
 //! Every failure resolves to `None` — the picker simply shows no cover.
 
-use std::collections::{HashMap, VecDeque};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
 use ratatui::buffer::Buffer;
 use ratatui::layout::{Rect, Size};
@@ -84,7 +87,12 @@ const TILE_CAP: usize = 128;
 /// on screen at once).
 #[derive(Default)]
 pub struct CoverState {
-    decoded: HashMap<PathBuf, Option<image::DynamicImage>>,
+    /// The decoded image is behind an `Arc` (SQ-1199) so a gallery tile's
+    /// resize + encode can be handed to [`TileEncoder`]'s worker without
+    /// copying a jacket that runs to megabytes — the cache keeps its own
+    /// reference and the worker borrows a second one for the length of one
+    /// encode. Nothing mutates a decoded cover in place, so sharing it is free.
+    decoded: HashMap<PathBuf, Option<Arc<image::DynamicImage>>>,
     order: VecDeque<PathBuf>,
     /// Running total of `decoded`'s pixel-buffer bytes (`None` entries count as
     /// 0) — kept alongside `decoded` rather than recomputed, since summing every
@@ -100,11 +108,241 @@ pub struct CoverState {
     ///
     /// [`place_protocol`]: crate::render::graphics::place_protocol
     proto: Option<(PathBuf, u16, u16, Protocol, Option<u32>)>,
-    tiles: VecDeque<(PathBuf, u16, u16, Protocol, Option<u32>)>,
+    tiles: VecDeque<TileEntry>,
     /// Uploads an eviction/replacement here abandoned, queued for the terminal
     /// to free (SQ-1190) — this loop runs before any `AppState`/`GraphicsRender`
     /// exists, so it keeps its own queue rather than sharing that one.
     deletes: KittyDeleteQueue,
+}
+
+/// Everything that decides what a gallery tile's raster IS (SQ-1199): whose
+/// cover, the aspect-fitted box it is built for, and the terminal cell that box
+/// was measured in. It is both the tile cache's key and the encode request's,
+/// so a response can be matched back to the layout that asked for it.
+///
+/// The cell is in the key because it is the tile grid's whole geometry
+/// generation: a tile's cover band is `TILE_W x TILE_COVER_H` **constants**
+/// (`cover_gallery`), so the only thing that can move the fitted box for a
+/// given jacket is the cell changing shape — which is exactly what
+/// [`CoverState::invalidate_cell_geometry`] already drops the built rasters
+/// for (SQ-0988). Carrying it means a reply that was already in flight when
+/// the font size moved can be recognised as stale and dropped, instead of
+/// landing in the cache fitted to a cell that no longer exists.
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub struct TileKey {
+    pub path: PathBuf,
+    pub cols: u16,
+    pub rows: u16,
+    pub cell: (u16, u16),
+}
+
+impl TileKey {
+    /// The key for `path`'s cover fitted into `area`, as measured against
+    /// `picker`'s cell.
+    pub fn new(path: &Path, area: Rect, picker: &Picker) -> Self {
+        let fs = picker.font_size();
+        Self {
+            path: path.to_path_buf(),
+            cols: area.width,
+            rows: area.height,
+            cell: (fs.width, fs.height),
+        }
+    }
+}
+
+/// One built gallery tile: the geometry it was built for, the raster, and the
+/// kitty image id it was last placed under (`None` off-kitty, or before the
+/// first placement) so an eviction can free the upload (SQ-1190).
+struct TileEntry {
+    key: TileKey,
+    proto: Protocol,
+    placed_id: Option<u32>,
+}
+
+/// A gallery-tile encode request: the geometry, the shared decoded jacket, and
+/// a copy of the `Picker` to encode with (SQ-1199).
+///
+/// `Picker` is `Clone` and holds nothing but plain data — a font size, a
+/// protocol type, a background colour, a tmux flag and a capability list — so
+/// it is `Send` and a copy per request is a handful of bytes. That is why the
+/// worker gets a copy rather than the facts to rebuild one from: no
+/// reconstruction can go out of step with what the UI thread is actually
+/// drawing with. (Kitty image ids come from `rand::random()` inside the crate,
+/// not from any counter the `Picker` owns, so two threads encoding at once
+/// cannot collide over one.)
+pub struct TileRequest {
+    pub key: TileKey,
+    pub img: Arc<image::DynamicImage>,
+    pub picker: Picker,
+}
+
+/// A finished gallery-tile encode: the key it was asked for under, and the
+/// raster (`None` when the encode failed).
+pub type TileResponse = (TileKey, Option<Protocol>);
+
+/// Background gallery-tile encoder (SQ-1199), the same shape as [`CoverDecoder`]
+/// one stage further along the pipeline: one long-lived worker thread, a request
+/// channel, and a non-blocking drain of finished work.
+///
+/// Before this, `CoverState::tile_protocol` resized the decoded jacket to the
+/// tile box and encoded the terminal protocol (kitty/sixel/iTerm2/half-blocks)
+/// **synchronously, inside the draw**, once per newly visible tile — so one
+/// scroll notch exposing a row of tiles stalled the picker's event loop for the
+/// whole row's worth of resamples and encodes. Now the draw enqueues and paints
+/// the letterbox footprint it was already painting for an undecoded cover, and
+/// the tile appears when its raster lands.
+///
+/// In-flight keys are tracked here, so a redraw while a tile is still encoding
+/// re-requests nothing — the picker redraws every 16ms while any tile is
+/// pending, which without the dedupe would queue the same encode dozens of
+/// times over.
+pub struct TileEncoder {
+    req_tx: std::sync::mpsc::Sender<TileRequest>,
+    /// Kept only in the worker-less [`Self::detached`] form, where the harness
+    /// drains it instead of a thread. `None` once a worker owns it.
+    req_rx: Option<std::sync::mpsc::Receiver<TileRequest>>,
+    res_tx: std::sync::mpsc::Sender<TileResponse>,
+    res_rx: std::sync::mpsc::Receiver<TileResponse>,
+    in_flight: HashSet<TileKey>,
+    /// Keys whose encode came back empty. They are never retried: the encode is
+    /// a pure function of the jacket, the box and the picker, so a second
+    /// attempt would fail identically — and since the draw asks again on every
+    /// frame, retrying would pin the picker's tick loop at 16ms re-encoding a
+    /// tile that cannot be built. The synchronous build had the same property
+    /// for free, by falling straight through to the titled placeholder.
+    failed: HashSet<TileKey>,
+    _worker: Option<std::thread::JoinHandle<()>>,
+}
+
+impl TileEncoder {
+    /// Spawn the encode worker. It exits cleanly when the `TileEncoder` is
+    /// dropped (dropping `req_tx` makes the worker's `recv()` err).
+    pub fn new() -> Self {
+        let (req_tx, req_rx) = std::sync::mpsc::channel::<TileRequest>();
+        let (res_tx, res_rx) = std::sync::mpsc::channel::<TileResponse>();
+        let tx = res_tx.clone();
+        let worker = std::thread::spawn(move || {
+            while let Ok(r) = req_rx.recv() {
+                let built = crate::render::graphics::fitted_protocol(
+                    &r.picker,
+                    &r.img,
+                    Size::new(r.key.cols, r.key.rows),
+                    false,
+                );
+                if tx.send((r.key, built)).is_err() {
+                    break;
+                }
+            }
+        });
+        Self {
+            req_tx,
+            req_rx: None,
+            res_tx,
+            res_rx,
+            in_flight: HashSet::new(),
+            failed: HashSet::new(),
+            _worker: Some(worker),
+        }
+    }
+
+    /// A `TileEncoder` with NO worker thread: requests pile up on the request
+    /// channel for the caller to read with [`Self::take_requests`], and results
+    /// are whatever the caller feeds back with [`Self::deliver`].
+    ///
+    /// This is the harness seam (mirroring `GraphicsRender::drive_v6_encode`,
+    /// SQ-0469): it makes "the draw enqueued and did not encode" and "this
+    /// reply is stale" assertable without racing a thread or waiting on a
+    /// clock. The picker itself always uses [`Self::new`].
+    pub fn detached() -> Self {
+        let (req_tx, req_rx) = std::sync::mpsc::channel::<TileRequest>();
+        let (res_tx, res_rx) = std::sync::mpsc::channel::<TileResponse>();
+        Self {
+            req_tx,
+            req_rx: Some(req_rx),
+            res_tx,
+            res_rx,
+            in_flight: HashSet::new(),
+            failed: HashSet::new(),
+            _worker: None,
+        }
+    }
+
+    /// Queue `key`'s encode, unless the same key is already in flight. Returns
+    /// whether it was queued. Silently dropped if the worker has already exited.
+    pub fn request(&mut self, key: TileKey, img: Arc<image::DynamicImage>, picker: &Picker) -> bool {
+        if self.failed.contains(&key) || !self.in_flight.insert(key.clone()) {
+            return false;
+        }
+        // A copy of the picker, not the facts to rebuild one — see [`TileRequest`].
+        let _ = self.req_tx.send(TileRequest { key, img, picker: picker.clone() });
+        true
+    }
+
+    /// True once `key`'s encode has come back empty, and so will never be
+    /// retried (see the `failed` field). The caller draws its no-cover
+    /// placeholder rather than waiting for a raster that is not coming.
+    pub fn failed(&self, key: &TileKey) -> bool {
+        self.failed.contains(key)
+    }
+
+    /// True while ANY tile encode is outstanding — the picker's "keep ticking"
+    /// condition, so the redraw that paints a landed tile fires without a
+    /// keypress (the same role `!requested.is_empty()` plays for decodes).
+    pub fn pending(&self) -> bool {
+        !self.in_flight.is_empty()
+    }
+
+    /// Non-blocking drain of every finished encode. A key leaves the in-flight
+    /// set whether or not its raster survives the caller's staleness check, so
+    /// a reply for a geometry nobody wants any more cannot pin the tick loop on.
+    pub fn drain(&mut self) -> Vec<TileResponse> {
+        let done: Vec<TileResponse> = self.res_rx.try_iter().collect();
+        for (key, proto) in &done {
+            self.in_flight.remove(key);
+            if proto.is_none() {
+                self.failed.insert(key.clone());
+            }
+        }
+        done
+    }
+
+    /// Block until every in-flight encode has come back, then drain (test
+    /// helper — the deterministic counterpart to sleeping, mirroring SQ-0469's
+    /// `drive_v6_encode`). Gives up if the worker has gone away.
+    pub fn drain_blocking(&mut self) -> Vec<TileResponse> {
+        let mut done = Vec::new();
+        while !self.in_flight.is_empty() {
+            match self.res_rx.recv() {
+                Ok(r) => {
+                    self.in_flight.remove(&r.0);
+                    if r.1.is_none() {
+                        self.failed.insert(r.0.clone());
+                    }
+                    done.push(r);
+                }
+                Err(_) => break,
+            }
+        }
+        done.extend(self.drain());
+        done
+    }
+
+    /// Every request queued so far, taken off the channel (harness seam; only
+    /// meaningful on a [`Self::detached`] encoder, where nothing else reads it).
+    pub fn take_requests(&self) -> Vec<TileRequest> {
+        self.req_rx.as_ref().map(|rx| rx.try_iter().collect()).unwrap_or_default()
+    }
+
+    /// Feed a result back as though the worker had produced it (harness seam).
+    pub fn deliver(&self, key: TileKey, proto: Option<Protocol>) {
+        let _ = self.res_tx.send((key, proto));
+    }
+}
+
+impl Default for TileEncoder {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl CoverState {
@@ -125,7 +363,7 @@ impl CoverState {
             self.deletes.queue(old.4);
         }
         for t in self.tiles.drain(..) {
-            self.deletes.queue(t.4);
+            self.deletes.queue(t.placed_id);
         }
     }
 
@@ -155,12 +393,12 @@ impl CoverState {
         }
     }
 
-    /// Record the kitty image id [`Self::tile_protocol`]'s caller placed it
-    /// under — always the most-recently-used tile, since a cache hit promotes
-    /// to the back and a miss pushes there (SQ-1190).
+    /// Record the kitty image id [`Self::tile`]'s caller placed it under —
+    /// always the most-recently-used tile, since a cache hit promotes to the
+    /// back and a worker result is installed there (SQ-1190).
     pub fn note_tile_placed(&mut self, id: Option<u32>) {
         if let Some(entry) = self.tiles.back_mut() {
-            entry.4 = id;
+            entry.placed_id = id;
         }
     }
 
@@ -172,7 +410,7 @@ impl CoverState {
 
     /// A cover's contribution to [`Self::decoded_bytes`]: its decoded
     /// pixel-buffer size, or 0 for a coverless (`None`) entry.
-    fn image_bytes(img: &Option<image::DynamicImage>) -> usize {
+    fn image_bytes(img: &Option<Arc<image::DynamicImage>>) -> usize {
         img.as_ref().map_or(0, |i| i.as_bytes().len())
     }
 
@@ -201,6 +439,7 @@ impl CoverState {
     /// eviction of a live key). A replaced image also drops any stale built
     /// protocol for that path so `protocol()` rebuilds from the new image.
     pub fn insert(&mut self, path: PathBuf, img: Option<image::DynamicImage>) {
+        let img = img.map(Arc::new);
         let new_bytes = Self::image_bytes(&img);
         if let Some(prev) = self.decoded.insert(path.clone(), img) {
             self.decoded_bytes = self.decoded_bytes + new_bytes - Self::image_bytes(&prev);
@@ -212,9 +451,13 @@ impl CoverState {
                 let old = self.proto.take();
                 self.deletes.queue(old.and_then(|t| t.4));
             }
-            let stale_tiles: Vec<Option<u32>> =
-                self.tiles.iter().filter(|(p, ..)| *p == path).map(|(.., id)| *id).collect();
-            self.tiles.retain(|(p, ..)| *p != path);
+            let stale_tiles: Vec<Option<u32>> = self
+                .tiles
+                .iter()
+                .filter(|t| t.key.path == path)
+                .map(|t| t.placed_id)
+                .collect();
+            self.tiles.retain(|t| t.key.path != path);
             for id in stale_tiles {
                 self.deletes.queue(id);
             }
@@ -248,8 +491,8 @@ impl CoverState {
             self.deletes.queue(old.and_then(|t| t.4));
         }
         let stale_tiles: Vec<Option<u32>> =
-            self.tiles.iter().filter(|(p, ..)| p == path).map(|(.., id)| *id).collect();
-        self.tiles.retain(|(p, ..)| p != path);
+            self.tiles.iter().filter(|t| t.key.path == path).map(|t| t.placed_id).collect();
+        self.tiles.retain(|t| t.key.path != path);
         for id in stale_tiles {
             self.deletes.queue(id);
         }
@@ -302,54 +545,69 @@ impl CoverState {
         self.proto.as_ref().map(|(_, _, _, p, _)| p)
     }
 
-    /// Build-or-reuse a gallery-tile protocol for `path`'s cover, fitted into
-    /// `area`. Unlike [`protocol`], many of these coexist (one per visible tile),
-    /// so they live in a bounded LRU keyed by `(path, cols, rows)` rather than a
-    /// single slot. `None` when `path` has no decoded cover or the build fails.
+    /// The already-built gallery-tile protocol for `key`, or `None` when it has
+    /// not been encoded yet. Unlike [`protocol`], many of these coexist (one per
+    /// visible tile), so they live in a bounded LRU keyed by [`TileKey`] rather
+    /// than a single slot.
+    ///
+    /// **This never builds anything** (SQ-1199). The resize + encode is the
+    /// heaviest synchronous site in the app — a gallery tile is a smaller box
+    /// than the info panel's, so a jacket is reduced further and by a
+    /// direction-aware filter (SQ-0829), once per newly visible tile, a whole
+    /// row of them per scroll notch — and it now runs on [`TileEncoder`]'s
+    /// worker. A miss means "ask the worker and draw the letterbox"; the tile
+    /// arrives via [`Self::insert_tile`] and paints on the next frame.
     ///
     /// [`protocol`]: Self::protocol
-    pub fn tile_protocol(
-        &mut self,
-        picker: &Picker,
-        path: &Path,
-        area: Rect,
-    ) -> Option<&Protocol> {
-        // A tile on screen means its underlying decoded image is in active
-        // use, whether this is a tile-cache hit or a fresh build below.
-        self.touch(path);
-        if let Some(pos) = self
-            .tiles
-            .iter()
-            .position(|(p, w, h, _, _)| p == path && *w == area.width && *h == area.height)
-        {
-            // Cache hit: promote to most-recently-used and hand it back. Same
-            // `Protocol`, so the id `note_tile_placed` already recorded is still
-            // right — nothing to free here.
-            let entry = self.tiles.remove(pos).unwrap();
-            self.tiles.push_back(entry);
-            return self.tiles.back().map(|(_, _, _, p, _)| p);
+    pub fn tile(&mut self, key: &TileKey) -> Option<&Protocol> {
+        // A tile on screen means its underlying decoded image is in active use,
+        // whether or not its raster is built yet — so the LRU is touched on the
+        // miss too, exactly as the synchronous build used to.
+        self.touch(&key.path);
+        let pos = self.tiles.iter().position(|t| t.key == *key)?;
+        // Cache hit: promote to most-recently-used and hand it back. Same
+        // `Protocol`, so the id `note_tile_placed` already recorded is still
+        // right — nothing to free here.
+        let entry = self.tiles.remove(pos).unwrap();
+        self.tiles.push_back(entry);
+        self.tiles.back().map(|t| &t.proto)
+    }
+
+    /// The decoded jacket for `path`, shared with [`TileEncoder`]'s worker
+    /// (SQ-1199). `None` for an undecoded or coverless story.
+    pub fn image(&self, path: &Path) -> Option<Arc<image::DynamicImage>> {
+        self.decoded.get(path).and_then(|o| o.clone())
+    }
+
+    /// Install a worker-built tile raster, unless it is stale.
+    ///
+    /// Stale means the terminal's cell no longer has the shape the encode was
+    /// fitted against — the reply was already in flight when the font size
+    /// moved and [`Self::invalidate_cell_geometry`] threw the rest away. Such a
+    /// raster is DISCARDED rather than cached: the current layout will never
+    /// ask for its key again, so keeping it would only burn a slot of
+    /// [`TILE_CAP`] until the LRU walked it out. Returns whether it was kept.
+    pub fn insert_tile(&mut self, key: TileKey, proto: Protocol, cell: (u16, u16)) -> bool {
+        if key.cell != cell {
+            return false;
         }
-        let img = self.decoded.get(path).and_then(|o| o.as_ref())?;
-        // Same reduction as [`protocol`], only harder: a gallery tile is smaller
-        // still, so Nearest was discarding a larger share of every jacket (SQ-0829)
-        // — and this is the heaviest site in the app for it, one build per visible
-        // tile and a row of them on every scroll notch, which is why half-blocks
-        // stopped building a device-pixel intermediate per tile (SQ-0979).
-        let built = crate::render::graphics::fitted_protocol(
-            picker,
-            img,
-            Size::new(area.width, area.height),
-            false,
-        )?;
-        self.tiles.push_back((path.to_path_buf(), area.width, area.height, built, None));
+        // A second reply for a key already held (a request re-issued across an
+        // eviction, say) replaces it — and frees the upload the old one left in
+        // the terminal (SQ-1190).
+        if let Some(pos) = self.tiles.iter().position(|t| t.key == key) {
+            if let Some(old) = self.tiles.remove(pos) {
+                self.deletes.queue(old.placed_id);
+            }
+        }
+        self.tiles.push_back(TileEntry { key, proto, placed_id: None });
         // LRU eviction beyond capacity frees each dropped tile's upload, not
         // merely the struct that named it (SQ-1190).
         while self.tiles.len() > TILE_CAP {
             if let Some(evicted) = self.tiles.pop_front() {
-                self.deletes.queue(evicted.4);
+                self.deletes.queue(evicted.placed_id);
             }
         }
-        self.tiles.back().map(|(_, _, _, p, _)| p)
+        true
     }
 
     /// The aspect-fitted, centred sub-rect of `area` for `path`'s cover, computed
@@ -678,6 +936,23 @@ mod tests {
         assert!(!st.has(&b), "b, the genuine least-recently-used, is evicted");
     }
 
+    /// Build `path`'s tile the way [`TileEncoder`]'s worker and the picker
+    /// loop's drain do between them — synchronously, since a unit test has no
+    /// loop to tick. `None` for a coverless/undecoded path, exactly as the old
+    /// synchronous `tile_protocol` returned for one.
+    fn build_tile(st: &mut CoverState, picker: &Picker, path: &Path, area: Rect) -> Option<TileKey> {
+        let key = TileKey::new(path, area, picker);
+        let img = st.image(path)?;
+        let proto = crate::render::graphics::fitted_protocol(
+            picker,
+            &img,
+            Size::new(key.cols, key.rows),
+            false,
+        )?;
+        let cell = key.cell;
+        st.insert_tile(key.clone(), proto, cell).then_some(key)
+    }
+
     #[test]
     fn tile_protocol_caches_multiple_covers_at_once() {
         // The gallery needs several covers rastered simultaneously — unlike the
@@ -690,12 +965,12 @@ mod tests {
         st.insert(a.to_path_buf(), decode(&png_bytes()));
         st.insert(b.to_path_buf(), decode(&png_bytes()));
 
-        assert!(st.tile_protocol(&picker, a, area).is_some());
-        assert!(st.tile_protocol(&picker, b, area).is_some());
+        assert!(build_tile(&mut st, &picker, a, area).is_some());
+        assert!(build_tile(&mut st, &picker, b, area).is_some());
         // Both remain cached (2 distinct tiles held at once).
         assert_eq!(st.tiles.len(), 2);
         // A coverless / undecoded path yields nothing.
-        assert!(st.tile_protocol(&picker, Path::new("missing.gblorb"), area).is_none());
+        assert!(build_tile(&mut st, &picker, Path::new("missing.gblorb"), area).is_none());
     }
 
     #[test]
@@ -706,7 +981,7 @@ mod tests {
         let p = Path::new("game.gblorb");
 
         st.insert(p.to_path_buf(), decode(&png_bytes()));
-        assert!(st.tile_protocol(&picker, p, area).is_some());
+        assert!(build_tile(&mut st, &picker, p, area).is_some());
         assert_eq!(st.tiles.len(), 1);
 
         // Re-decoding the same path (e.g. after a fetch writes a new cover)
@@ -714,7 +989,7 @@ mod tests {
         st.insert(p.to_path_buf(), decode(&png_bytes()));
         assert_eq!(st.tiles.len(), 0, "replacing the image drops its tile raster");
 
-        st.tile_protocol(&picker, p, area);
+        build_tile(&mut st, &picker, p, area);
         assert_eq!(st.tiles.len(), 1);
         st.forget(p);
         assert_eq!(st.tiles.len(), 0, "forget drops the tile raster too");
@@ -728,9 +1003,14 @@ mod tests {
     }
 
     /// Build (or reuse) `path`'s tile and record the id `place_protocol`
-    /// returns for it, exactly as `picker_ui.rs`'s gallery draw does.
+    /// returns for it, exactly as `picker_ui.rs`'s gallery draw does — with the
+    /// encode inlined (see `build_tile`) where the draw would wait for the worker.
     fn place_tile(st: &mut CoverState, picker: &Picker, path: &Path, area: Rect, buf: &mut Buffer) -> Option<u32> {
-        let proto = st.tile_protocol(picker, path, area)?;
+        let key = TileKey::new(path, area, picker);
+        if st.tile(&key).is_none() {
+            build_tile(st, picker, path, area)?;
+        }
+        let proto = st.tile(&key)?;
         let id = crate::render::graphics::place_protocol(proto, area, buf);
         st.note_tile_placed(id);
         id
@@ -782,8 +1062,8 @@ mod tests {
     /// (`GraphicsRender`'s SQ-0753 comment), so an unbounded pile of orphaned
     /// gallery-tile uploads can blank a tile still on screen.
     ///
-    /// Falsified by reverting the `self.deletes.queue(evicted.4)` call in
-    /// `tile_protocol`'s eviction loop: the flush below then writes nothing.
+    /// Falsified by reverting the `self.deletes.queue(evicted.placed_id)` call
+    /// in `insert_tile`'s eviction loop: the flush below then writes nothing.
     #[test]
     fn tile_lru_eviction_queues_a_delete_for_the_evicted_upload() {
         let mut st = CoverState::default();
@@ -803,7 +1083,7 @@ mod tests {
             place_tile(&mut st, &picker, &path, area, &mut buf);
         }
         assert_eq!(st.tiles.len(), TILE_CAP, "capacity is enforced");
-        assert!(st.tiles.iter().all(|(p, ..)| p != &first), "the oldest tile was evicted");
+        assert!(st.tiles.iter().all(|t| t.key.path != first), "the oldest tile was evicted");
 
         let mut flush_buf = Buffer::empty(Rect::new(0, 0, 4, 1));
         st.flush_kitty_deletes(Rect::new(0, 0, 4, 1), &mut flush_buf);
@@ -1079,7 +1359,7 @@ mod tests {
         let picker = Picker::from_fontsize(ratatui_image::FontSize::new(8, 18));
         let area = Rect::new(0, 0, 6, 4);
         assert!(state.protocol(&picker, path, area, false).is_some(), "the fixture must build a raster");
-        assert!(state.tile_protocol(&picker, path, area).is_some(), "…and a gallery tile");
+        assert!(build_tile(&mut state, &picker, path, area).is_some(), "…and a gallery tile");
 
         state.invalidate_cell_geometry();
         assert!(state.has(path), "the decode survives — only the geometry was wrong");

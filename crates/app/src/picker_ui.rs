@@ -1204,6 +1204,11 @@ pub(crate) fn run_story_picker(
     use std::path::PathBuf;
     use std::time::Instant;
     let decoder = app::cover::CoverDecoder::new();
+    // Async gallery-tile ENCODE (SQ-1199), the second half of the same pipeline:
+    // once a cover is decoded, fitting it to a tile box and encoding the
+    // terminal protocol is heavier still, and used to run inside the draw. It
+    // now runs on this worker; the draw enqueues and paints the letterbox.
+    let mut tile_encoder = app::cover::TileEncoder::new();
     let mut requested: HashSet<PathBuf> = HashSet::new();
     let mut last_sel = usize::MAX;
     let mut sel_changed_at = Instant::now();
@@ -1306,7 +1311,7 @@ pub(crate) fn run_story_picker(
                         let (rects, cols, vis) = draw_story_gallery(
                             &stories, list.selected, &mut gallery_first_row, &heading, &cs, &keymap,
                             cover_picker.as_ref(), gallery_scroll_in_motion(gallery_scroll_motion_at),
-                            &mut cover, data_base, list_area, buf,
+                            &mut cover, &mut tile_encoder, data_base, list_area, buf,
                         );
                         gallery_cols = cols.max(1);
                         gallery_vis = vis.max(1);
@@ -1457,6 +1462,21 @@ pub(crate) fn run_story_picker(
             cover.insert(path.clone(), img);
             requested.remove(&path);
             cover_arrived = true;
+        }
+        // Drain finished tile encodes into the tile cache (SQ-1199). A raster
+        // fitted against a cell the terminal no longer has is dropped rather
+        // than cached (`insert_tile`) — the request was in flight when the font
+        // size moved and `invalidate_cell_geometry` threw the rest away.
+        {
+            let cell = cover_picker
+                .as_ref()
+                .map_or((0, 0), |p| (p.font_size().width, p.font_size().height));
+            for (key, proto) in tile_encoder.drain() {
+                if let Some(p) = proto {
+                    cover.insert_tile(key, p, cell);
+                }
+                cover_arrived = true;
+            }
         }
         // `.get`, not indexing (SQ-0659): `stories` can be empty — e.g. a
         // post-download rescan of a directory whose files all vanished.
@@ -1767,9 +1787,11 @@ pub(crate) fn run_story_picker(
         let sel_now = stories.get(list.selected).map(|e| &e.path);
         let panel_busy = slide.open
             && sel_now.is_some_and(|p| !requested.is_empty() || !cover.has(p));
-        // Gallery keeps ticking while any tile cover is still decoding so the
-        // grid fills in without needing a keypress.
-        let gallery_busy = matches!(view, PickerView::Gallery) && !requested.is_empty();
+        // Gallery keeps ticking while any tile cover is still decoding — or,
+        // since SQ-1199, still ENCODING on the tile worker — so the grid fills
+        // in without needing a keypress.
+        let gallery_busy = matches!(view, PickerView::Gallery)
+            && (!requested.is_empty() || tile_encoder.pending());
         let cover_busy = panel_busy || gallery_busy;
         let search_busy = search_modal.as_ref().is_some_and(|m| m.busy()) || search_worker.busy();
         // The modal's own lists ease exactly as `list` does (SQ-0598), so they
@@ -2932,9 +2954,11 @@ fn gallery_sixel_scroll_suppress(picker: &ratatui_image::picker::Picker, in_moti
 /// to keep `selected` on screen). Returns each visible tile's `(index, rect)`
 /// for click selection (the whole tile is the hit target), plus the resolved
 /// column and visible-row counts the caller feeds back into navigation. Covers
-/// paint only for tiles already decoded into `cover`; undecoded/coverless tiles
-/// show a plain letterbox until the async decoder fills them in. `scroll_in_motion`
-/// gates the SQ-1213 sixel scroll-settle debounce (see [`gallery_sixel_scroll_suppress`]).
+/// paint only for tiles already decoded into `cover` AND already encoded into a
+/// tile raster; anything else shows a plain letterbox until the async decoder
+/// and `tiles`, the async ENCODER (SQ-1199), fill it in — this draw builds no
+/// protocol of its own. `scroll_in_motion` gates the SQ-1213 sixel
+/// scroll-settle debounce (see [`gallery_sixel_scroll_suppress`]).
 #[allow(clippy::too_many_arguments)]
 fn draw_story_gallery(
     stories: &[app::picker::StoryEntry],
@@ -2946,6 +2970,9 @@ fn draw_story_gallery(
     picker: Option<&ratatui_image::picker::Picker>,
     scroll_in_motion: bool,
     cover: &mut app::cover::CoverState,
+    // The background tile encoder (SQ-1199): a visible tile whose raster isn't
+    // built yet is REQUESTED here, never encoded on this thread.
+    tiles: &mut app::cover::TileEncoder,
     // Where per-game directories live: a tile's cover is cached under the ROW's
     // key, which for one of several stories off a disk image is that story's own
     // directory (SQ-0859).
@@ -3030,11 +3057,35 @@ fn draw_story_gallery(
                         // SQ-1213: mid-scroll under sixel, leave the tile as the
                         // letterbox footprint already filled above rather than
                         // rebuilding/re-placing its whole payload this frame.
+                        // Nothing is requested either (SQ-1199): a frame that has
+                        // decided not to show a payload has no use for one, and a
+                        // fling would otherwise queue a row of encodes per notch
+                        // for rasters no suppressed frame will place.
                         drew_cover = true;
-                    } else if let Some(proto) = cover.tile_protocol(picker, &key, fit) {
-                        let id = app::render::graphics::place_protocol(proto, fit, buf);
-                        cover.note_tile_placed(id);
-                        drew_cover = true;
+                    } else {
+                        let tkey = app::cover::TileKey::new(&key, fit, picker);
+                        if let Some(proto) = cover.tile(&tkey) {
+                            let id = app::render::graphics::place_protocol(proto, fit, buf);
+                            cover.note_tile_placed(id);
+                            drew_cover = true;
+                        } else if let Some(img) =
+                            cover.image(&key).filter(|_| !tiles.failed(&tkey))
+                        {
+                            // SQ-1199: the resize + protocol encode goes to the
+                            // background encoder and the tile keeps the letterbox
+                            // footprint already filled above until it lands — the
+                            // draw never blocks on one. `request` dedupes, so the
+                            // 16ms tick that keeps redrawing while tiles are
+                            // pending queues each tile exactly once.
+                            //
+                            // The footprint, not the titled placeholder: this
+                            // story HAS a cover, and flashing the no-cover box for
+                            // the frame or two before its raster lands would read
+                            // as a glitch. A cover whose encode actually FAILED is
+                            // `failed()` above and does fall through to it.
+                            tiles.request(tkey, img, picker);
+                            drew_cover = true;
+                        }
                     }
                 }
             }
@@ -6676,10 +6727,11 @@ mod tests {
         let area = Rect::new(0, 0, 80, 40);
         let mut buf = Buffer::empty(area);
         let mut cover = app::cover::CoverState::default();
+        let mut tiles = app::cover::TileEncoder::detached();
         let mut first_row = 0usize;
         // No picker → no cover art → each tile shows its title centred in the band.
         let (rects, cols, vis) = super::draw_story_gallery(
-            &stories, 1, &mut first_row, &super::PickerHeading::browse(std::path::Path::new("/tmp")), &cs, &km(), None, false, &mut cover, std::path::Path::new("/tmp"), area, &mut buf,
+            &stories, 1, &mut first_row, &super::PickerHeading::browse(std::path::Path::new("/tmp")), &cs, &km(), None, false, &mut cover, &mut tiles, std::path::Path::new("/tmp"), area, &mut buf,
         );
 
         assert!(cols >= 1 && vis >= 1);
@@ -6923,9 +6975,10 @@ mod tests {
         let area = Rect::new(0, 0, 40, 22);
         let mut buf = Buffer::empty(area);
         let mut cover = app::cover::CoverState::default();
+        let mut tiles = app::cover::TileEncoder::detached();
         let mut first_row = 0usize;
         let (rects, _cols, _vis) = super::draw_story_gallery(
-            &stories, 39, &mut first_row, &super::PickerHeading::browse(std::path::Path::new("/tmp")), &cs, &km(), None, false, &mut cover, std::path::Path::new("/tmp"), area, &mut buf,
+            &stories, 39, &mut first_row, &super::PickerHeading::browse(std::path::Path::new("/tmp")), &cs, &km(), None, false, &mut cover, &mut tiles, std::path::Path::new("/tmp"), area, &mut buf,
         );
         assert!(first_row > 0, "grid scrolled down to keep the last cover visible");
         assert!(rects.iter().any(|(i, _)| *i == 39), "the selected tile is on screen");
@@ -6977,6 +7030,13 @@ mod tests {
     /// renders (simulating a burst of scroll steps, all still inside the
     /// window) place nothing at all; only the first settled render after the
     /// burst places the real payload.
+    ///
+    /// SQ-1199 added the second half of the claim: a suppressed frame does not
+    /// even ASK for the raster. Encoding moved to a worker, so a fling that
+    /// requested every tile it flew past would queue a row of encodes per notch
+    /// for payloads no suppressed frame is going to place. The settled render
+    /// requests, the worker answers, and the frame after that places — which is
+    /// why this case now drives the encode to completion between the two.
     #[test]
     fn suppressed_gallery_render_shows_footprint_only_settled_places_once() {
         use ratatui::{buffer::Buffer, layout::Rect};
@@ -6985,12 +7045,16 @@ mod tests {
         let stories = vec![story.clone()];
         let area = Rect::new(0, 0, 40, 22);
         let mut cover = app::cover::CoverState::default();
+        // A real encoder: `drain_blocking` waits on the worker's own reply
+        // rather than on a clock, so this stays deterministic.
+        let mut tiles = app::cover::TileEncoder::new();
         // A real decoded cover, so there is something to place.
         let img = image::DynamicImage::ImageRgb8(image::RgbImage::from_pixel(4, 4, image::Rgb([200, 0, 0])));
         cover.insert(story.path.clone(), Some(img));
 
         let mut picker = app::render::graphics::kitty_picker(8, 16);
         picker.set_protocol_type(ratatui_image::picker::ProtocolType::Sixel);
+        let cell = (picker.font_size().width, picker.font_size().height);
 
         // A cell carrying the real sixel payload is far longer than any glyph
         // or plain space this view otherwise paints.
@@ -7003,22 +7067,185 @@ mod tests {
 
         let mut first_row = 0usize;
         // Three suppressed renders in a row (a burst of scroll steps, all still
-        // inside the debounce window): none may place the real payload.
+        // inside the debounce window): none may place the real payload, and
+        // none may queue an encode for one.
         for _ in 0..3 {
             let mut buf = Buffer::empty(area);
             super::draw_story_gallery(
                 &stories, 0, &mut first_row, &super::PickerHeading::browse(std::path::Path::new("/tmp")),
-                &cs, &km(), Some(&picker), true, &mut cover, std::path::Path::new("/tmp"), area, &mut buf,
+                &cs, &km(), Some(&picker), true, &mut cover, &mut tiles, std::path::Path::new("/tmp"), area, &mut buf,
             );
             assert!(!has_payload(&buf), "mid-scroll must not carry a sixel payload");
+            assert!(!tiles.pending(), "mid-scroll must not queue an encode either");
         }
 
-        // Settled: the very next render places the real protocol exactly once.
+        // Settled: the render asks for the raster (and still places nothing).
         let mut buf = Buffer::empty(area);
         super::draw_story_gallery(
             &stories, 0, &mut first_row, &super::PickerHeading::browse(std::path::Path::new("/tmp")),
-            &cs, &km(), Some(&picker), false, &mut cover, std::path::Path::new("/tmp"), area, &mut buf,
+            &cs, &km(), Some(&picker), false, &mut cover, &mut tiles, std::path::Path::new("/tmp"), area, &mut buf,
+        );
+        assert!(tiles.pending(), "the settled render queues the tile's encode");
+
+        // The worker answers; the next render places the real protocol.
+        for (key, proto) in tiles.drain_blocking() {
+            cover.insert_tile(key, proto.expect("the tile encodes"), cell);
+        }
+        let mut buf = Buffer::empty(area);
+        super::draw_story_gallery(
+            &stories, 0, &mut first_row, &super::PickerHeading::browse(std::path::Path::new("/tmp")),
+            &cs, &km(), Some(&picker), false, &mut cover, &mut tiles, std::path::Path::new("/tmp"), area, &mut buf,
         );
         assert!(has_payload(&buf), "settled render must place the real sixel payload");
+    }
+
+    // ── SQ-1199: gallery tile protocols are encoded off the UI thread ───────
+    //
+    // The draw's job is now to ENQUEUE, not to encode. These cases drive
+    // `draw_story_gallery` against a `TileEncoder::detached()` — a worker-less
+    // encoder whose request channel the harness reads and whose replies the
+    // harness writes — so "the draw did not encode", "it deduped", and "that
+    // reply is stale" are all assertable without a thread or a clock.
+
+    /// N visible tiles with decoded-but-unencoded covers: the draw places NO
+    /// protocol and enqueues exactly N requests; an immediate redraw (the 16ms
+    /// tick fires while they are in flight) enqueues none of them again; and
+    /// once the replies are delivered the next draw places them.
+    ///
+    /// Falsification (dedupe half): drop the `in_flight` guard in
+    /// `TileEncoder::request` and the second draw queues all N a second time —
+    /// which, at a 16ms tick, is how a still-encoding grid queues the same work
+    /// dozens of times over.
+    #[test]
+    fn gallery_draw_enqueues_tile_encodes_without_building_them() {
+        use ratatui::{buffer::Buffer, layout::Rect};
+        let cs = app::colors::ColorScheme::terminal_default();
+        let stories: Vec<_> =
+            (0..4).map(|i| story_with_meta(&format!("S{i}"), None, None)).collect();
+        let area = Rect::new(0, 0, 80, 40);
+        let mut cover = app::cover::CoverState::default();
+        let mut tiles = app::cover::TileEncoder::detached();
+        for s in &stories {
+            let img =
+                image::DynamicImage::ImageRgb8(image::RgbImage::from_pixel(4, 4, image::Rgb([9, 200, 9])));
+            cover.insert(s.path.clone(), Some(img));
+        }
+        let picker = app::render::graphics::kitty_picker(8, 16);
+        let cell = (picker.font_size().width, picker.font_size().height);
+        let has_payload = |buf: &Buffer| {
+            (area.left()..area.right()).any(|x| {
+                (area.top()..area.bottom())
+                    .any(|y| buf.cell((x, y)).is_some_and(|c| c.symbol().len() > 16))
+            })
+        };
+
+        let mut first_row = 0usize;
+        let mut buf = Buffer::empty(area);
+        let (rects, _, _) = super::draw_story_gallery(
+            &stories, 0, &mut first_row, &super::PickerHeading::browse(std::path::Path::new("/tmp")),
+            &cs, &km(), Some(&picker), false, &mut cover, &mut tiles, std::path::Path::new("/tmp"), area, &mut buf,
+        );
+        assert_eq!(rects.len(), stories.len(), "sanity: every tile is on screen");
+        assert!(!has_payload(&buf), "the draw must not build a protocol on this thread");
+        let queued = tiles.take_requests();
+        assert_eq!(queued.len(), stories.len(), "one encode request per visible tile");
+
+        // A redraw while they are all still in flight queues nothing new.
+        let mut buf = Buffer::empty(area);
+        super::draw_story_gallery(
+            &stories, 0, &mut first_row, &super::PickerHeading::browse(std::path::Path::new("/tmp")),
+            &cs, &km(), Some(&picker), false, &mut cover, &mut tiles, std::path::Path::new("/tmp"), area, &mut buf,
+        );
+        assert!(tiles.take_requests().is_empty(), "in-flight tiles are not re-requested");
+
+        // Deliver every reply, the way the picker loop's drain does.
+        for r in queued {
+            let proto = app::render::graphics::fitted_protocol(
+                &r.picker,
+                &r.img,
+                ratatui::layout::Size::new(r.key.cols, r.key.rows),
+                false,
+            );
+            tiles.deliver(r.key, proto);
+        }
+        for (key, proto) in tiles.drain() {
+            cover.insert_tile(key, proto.expect("the tile encodes"), cell);
+        }
+        assert!(!tiles.pending(), "every request was answered");
+
+        let mut buf = Buffer::empty(area);
+        super::draw_story_gallery(
+            &stories, 0, &mut first_row, &super::PickerHeading::browse(std::path::Path::new("/tmp")),
+            &cs, &km(), Some(&picker), false, &mut cover, &mut tiles, std::path::Path::new("/tmp"), area, &mut buf,
+        );
+        assert!(has_payload(&buf), "delivered tiles paint on the next draw");
+    }
+
+    /// The cell changed shape between the request and the reply (SQ-0988's
+    /// font-size resize, which throws every built raster away): the reply is
+    /// fitted to a cell the terminal no longer has, so it is DISCARDED rather
+    /// than cached — and the redraw at the new cell asks for a fresh one under
+    /// a key of its own.
+    ///
+    /// Falsification: drop the `key.cell != cell` guard in
+    /// `CoverState::insert_tile` and the stale raster is kept — `insert_tile`
+    /// returns true, and it sits in the LRU under a geometry nothing will ever
+    /// look up again.
+    #[test]
+    fn a_tile_reply_for_a_stale_cell_is_discarded() {
+        use ratatui::{buffer::Buffer, layout::Rect};
+        let cs = app::colors::ColorScheme::terminal_default();
+        let story = story_with_meta("Zork", None, None);
+        let stories = vec![story.clone()];
+        let area = Rect::new(0, 0, 40, 22);
+        let mut cover = app::cover::CoverState::default();
+        let mut tiles = app::cover::TileEncoder::detached();
+        let img =
+            image::DynamicImage::ImageRgb8(image::RgbImage::from_pixel(4, 4, image::Rgb([200, 0, 0])));
+        cover.insert(story.path.clone(), Some(img));
+
+        // Requested at an 8x16 cell.
+        let picker = app::render::graphics::kitty_picker(8, 16);
+        let mut first_row = 0usize;
+        let mut buf = Buffer::empty(area);
+        super::draw_story_gallery(
+            &stories, 0, &mut first_row, &super::PickerHeading::browse(std::path::Path::new("/tmp")),
+            &cs, &km(), Some(&picker), false, &mut cover, &mut tiles, std::path::Path::new("/tmp"), area, &mut buf,
+        );
+        let queued = tiles.take_requests();
+        assert_eq!(queued.len(), 1, "one tile, one request");
+        let req = queued.into_iter().next().unwrap();
+        assert_eq!(req.key.cell, (8, 16), "the request carries the cell it was fitted for");
+        let proto = app::render::graphics::fitted_protocol(
+            &req.picker,
+            &req.img,
+            ratatui::layout::Size::new(req.key.cols, req.key.rows),
+            false,
+        )
+        .expect("the tile encodes");
+
+        // Meanwhile the font size moved: the picker (and `invalidate_cell_geometry`)
+        // is now on a 10x20 cell, and the reply above is fitted to a cell that
+        // no longer exists.
+        cover.invalidate_cell_geometry();
+        let wide = app::render::graphics::kitty_picker(10, 20);
+        let cell = (wide.font_size().width, wide.font_size().height);
+        assert_ne!(req.key.cell, cell, "sanity: the cell really did change");
+        assert!(
+            !cover.insert_tile(req.key.clone(), proto, cell),
+            "a reply fitted to the old cell must be discarded, not cached"
+        );
+        assert!(cover.tile(&req.key).is_none(), "and it is not in the cache under its own key");
+
+        // The redraw at the new cell asks again, under a key of its own.
+        tiles.drain();
+        let mut buf = Buffer::empty(area);
+        super::draw_story_gallery(
+            &stories, 0, &mut first_row, &super::PickerHeading::browse(std::path::Path::new("/tmp")),
+            &cs, &km(), Some(&wide), false, &mut cover, &mut tiles, std::path::Path::new("/tmp"), area, &mut buf,
+        );
+        let again = tiles.take_requests();
+        assert_eq!(again.len(), 1, "the new cell's tile is requested afresh");
+        assert_eq!(again[0].key.cell, cell, "under the CURRENT cell's key");
     }
 }
