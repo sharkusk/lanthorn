@@ -221,7 +221,7 @@ fn draw_pointer(
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "t-render"))]
 mod tests {
     use super::*;
     use crate::state::AppState;

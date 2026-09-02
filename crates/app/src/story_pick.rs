@@ -137,7 +137,7 @@ pub fn resolve(entries: &[StoryEntry], want: &str, subject: &str) -> Result<usiz
     cli_host::story_pick::find(&rows, want, subject)
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "t-picker"))]
 mod tests {
     use super::*;
     use crate::picker::{Engine, Features, RowKind, StoryMeta};

@@ -2720,7 +2720,7 @@ pub fn write_config_at(config_path: &std::path::Path, cfg: &Config) -> std::io::
     }
 
 
-#[cfg(test)]
+#[cfg(all(test, feature = "t-persist"))]
 mod tests {
     use super::*;
 

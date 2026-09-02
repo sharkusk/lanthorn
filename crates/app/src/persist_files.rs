@@ -429,7 +429,7 @@ pub fn restore_game(path: &Path, machine: &mut zvm::cpu::exec::Machine) -> Resul
     })
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "t-persist"))]
 mod tests {
     use super::*;
     use mapper::mapper::Mapper;

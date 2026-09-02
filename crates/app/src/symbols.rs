@@ -1200,7 +1200,7 @@ fn apply_override(s: &mut SymbolSet, key: &str, ch: char) {
 
 // ── Tests ─────────────────────────────────────────────────────────────────────
 
-#[cfg(test)]
+#[cfg(all(test, feature = "t-state"))]
 mod tests {
     use super::*;
 

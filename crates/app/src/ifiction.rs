@@ -241,7 +241,7 @@ pub fn parse(xml: &[u8]) -> Result<IFiction, IFictionError> {
     Ok(result)
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "t-picker"))]
 mod tests {
     use super::*;
 

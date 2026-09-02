@@ -385,7 +385,7 @@ pub fn draw_debug_panel(state: &AppState, area: Rect, buf: &mut Buffer) -> Vec<(
     tab_rects
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "t-render"))]
 mod tests {
     use super::*;
     use ratatui::buffer::Buffer;

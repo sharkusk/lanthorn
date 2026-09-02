@@ -637,7 +637,7 @@ pub static REGISTRY: std::sync::LazyLock<Vec<RegRow>> = std::sync::LazyLock::new
         Delta { fg: Some(Color::Black), bg: Some(Color::Yellow), ..Delta::EMPTY }),
 ]);
 
-#[cfg(test)]
+#[cfg(all(test, feature = "t-theme"))]
 mod tests {
     use super::*;
     use std::collections::HashSet;

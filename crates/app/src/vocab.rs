@@ -1753,7 +1753,7 @@ fn deliver(state: &mut AppState, answer: crate::probe::Answer) -> bool {
 }
 
 
-#[cfg(test)]
+#[cfg(all(test, feature = "t-guidance"))]
 mod tests {
     use super::*;
     use grammar_model::{NounKind, Slot, SyntaxLine, Token};

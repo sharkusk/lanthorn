@@ -144,7 +144,7 @@ fn draw_bar(
     );
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "t-render"))]
 mod tests {
     use super::*;
     use ratatui::{buffer::Buffer, layout::Rect};

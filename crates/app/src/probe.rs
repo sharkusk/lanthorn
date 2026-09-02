@@ -832,7 +832,7 @@ fn boot_shadow(recipe: &ShadowRecipe) -> Result<Box<dyn Engine>, String> {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "t-session"))]
 mod tests {
     use super::*;
 

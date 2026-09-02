@@ -994,7 +994,7 @@ pub(crate) fn next_input_deadline(
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "t-session"))]
 mod tests {
     use super::silent_terminator_turn;
     use app::session::{TranscriptElem, TurnResult};
@@ -1351,7 +1351,7 @@ mod tests {
         use app::session::GameSession;
 
         // A Save State (.lanthorn) written with a non-zero turn count.
-        let sess = GameSession::new(crate::tests::read_char_then_save_v4_story(), true, false, None).expect("new");
+        let sess = GameSession::new(crate::read_char_then_save_v4_story(), true, false, None).expect("new");
         let save = sess.save_state();
         let arc = std::env::temp_dir().join(format!("bm-sq260-{}.lanthorn", std::process::id()));
         let meta = app::archive::Meta {
@@ -1370,7 +1370,7 @@ mod tests {
         ).expect("write .lanthorn with turns=42");
 
         // Fresh session + default state (turns start at 0), then launch-resume.
-        let mut fresh = GameSession::new(crate::tests::read_char_then_save_v4_story(), true, false, None).expect("new");
+        let mut fresh = GameSession::new(crate::read_char_then_save_v4_story(), true, false, None).expect("new");
         let mut state = app::state::AppState::default();
         let mut mapper = mapper::mapper::Mapper::default();
         let panes = crate::PaneRects::default();
@@ -1761,7 +1761,7 @@ mod tests {
         let arc_file = dir.join("default.lanthorn");
 
         // Pre-seed the slot as if from an earlier session.
-        let seed_sess = GameSession::new(crate::tests::read_char_then_save_v4_story(), true, false, None).expect("new");
+        let seed_sess = GameSession::new(crate::read_char_then_save_v4_story(), true, false, None).expect("new");
         let seed_meta = app::archive::Meta {
             format_version: app::archive::CURRENT_FORMAT_VERSION,
             ifid: None, name: None, turns: 1, saved_at: String::new(), location: None, score: None,
@@ -1773,7 +1773,7 @@ mod tests {
         ).expect("seed default.lanthorn");
         let before = std::fs::read(&arc_file).unwrap();
 
-        let mut sess = GameSession::new(crate::tests::read_char_then_save_v4_story(), true, false, None).expect("new");
+        let mut sess = GameSession::new(crate::read_char_then_save_v4_story(), true, false, None).expect("new");
         let mut state = app::state::AppState::default();
         state.config.auto_save = true;
         let mapper = mapper::mapper::Mapper::default();

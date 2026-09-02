@@ -236,7 +236,7 @@ pub fn render_dump(graph: &MapGraph, symbols: &SymbolSet) -> String {
 
 // ── Tests ─────────────────────────────────────────────────────────────────────
 
-#[cfg(test)]
+#[cfg(all(test, feature = "t-state"))]
 mod tests {
     use super::*;
     use mapper::direction::Direction;

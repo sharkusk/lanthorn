@@ -201,7 +201,7 @@ pub fn export_svg(path: &Path, rm: &RenderMap) -> std::io::Result<()> {
 
 // ── Tests ─────────────────────────────────────────────────────────────────────
 
-#[cfg(test)]
+#[cfg(all(test, feature = "t-state"))]
 mod tests {
     use super::*;
     use mapper::direction::Direction;

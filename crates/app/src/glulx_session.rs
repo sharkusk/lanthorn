@@ -1642,7 +1642,7 @@ impl Engine for GlulxSession {
 
 // ── Tests ──────────────────────────────────────────────────────────────────────
 
-#[cfg(test)]
+#[cfg(all(test, feature = "t-session"))]
 mod tests {
     use super::*;
     use crate::engine::WinNode;

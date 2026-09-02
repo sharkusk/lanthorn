@@ -182,7 +182,7 @@ impl PanelSlide {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "t-misc"))]
 mod tests {
     use super::*;
 

@@ -65,7 +65,7 @@ pub struct StoryPaneMetrics {
 
 /// Tally `(grids, buffers, others)` leaf windows in the tree. Used only by tests
 /// now that [`is_simple`] classifies structurally (SQ-0325).
-#[cfg(test)]
+#[cfg(all(test, feature = "t-render"))]
 fn count_leaves(node: &WinNode) -> (u32, u32, u32) {
     match node {
         WinNode::Grid(_) => (1, 0, 0),
@@ -8914,7 +8914,7 @@ fn place_anchored_row(
 
 // ── Tests ──────────────────────────────────────────────────────────────────────
 
-#[cfg(test)]
+#[cfg(all(test, feature = "t-render"))]
 mod tests {
     /// **The over-art question is the GLYPH's on the CELL path too** (SQ-1060).
     ///

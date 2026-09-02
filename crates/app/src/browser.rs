@@ -238,7 +238,7 @@ pub fn render_hint(km: &KeyMap, h: &Hint) -> Option<String> {
 
 // ── Tests ─────────────────────────────────────────────────────────────────────
 
-#[cfg(test)]
+#[cfg(all(test, feature = "t-input"))]
 mod tests {
     use super::*;
     use crate::slash::{Category, CommandSpec, COMMANDS};

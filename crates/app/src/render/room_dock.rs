@@ -250,7 +250,7 @@ pub fn draw_room_dock(
 
 // ── Tests ─────────────────────────────────────────────────────────────────────
 
-#[cfg(test)]
+#[cfg(all(test, feature = "t-render"))]
 mod tests {
     use super::*;
     use mapper::direction::Direction;

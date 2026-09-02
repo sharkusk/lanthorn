@@ -680,7 +680,7 @@ pub(crate) fn raster_wrap_refresh(state: &AppState, cols: u16) {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "t-render"))]
 mod tests {
     use super::*;
     use crate::render::screen::build_main_text;

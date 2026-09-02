@@ -99,7 +99,7 @@ pub enum QuitDialogAction {
 
 /// Map a key code to a QuitDialogAction.
 /// 's' or Enter → Save State & quit; 'q' → Quit without saving; Esc or 'c' → Cancel.
-#[cfg_attr(not(test), allow(dead_code))]
+#[cfg_attr(not(all(test, feature = "t-render")), allow(dead_code))]
 fn quit_dialog_key(code: crossterm::event::KeyCode) -> QuitDialogAction {
     use crossterm::event::KeyCode;
     match code {
@@ -130,7 +130,7 @@ pub fn quit_dialog_key_focused(code: crossterm::event::KeyCode, focus: usize) ->
 
 // ── Tests ─────────────────────────────────────────────────────────────────────
 
-#[cfg(test)]
+#[cfg(all(test, feature = "t-render"))]
 mod tests {
     use super::*;
 

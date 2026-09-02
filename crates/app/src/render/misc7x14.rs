@@ -256,7 +256,7 @@ pub fn glyph(ch: char) -> Option<[u8; 14]> {
     GLYPHS.binary_search_by_key(&key, |&(c, _)| c).ok().map(|i| GLYPHS[i].1)
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "t-render"))]
 mod tests {
     use super::*;
 

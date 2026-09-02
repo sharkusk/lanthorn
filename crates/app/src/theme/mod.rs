@@ -56,7 +56,7 @@ pub fn describe_theme(theme: &resolve::Theme) -> Vec<(String, Option<ratatui::st
     out
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "t-theme"))]
 mod tests {
     use super::*;
 

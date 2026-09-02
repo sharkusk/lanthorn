@@ -45,7 +45,7 @@
 //! installed. [`top_up`] closes that — it appends the documented settings a file has
 //! never held, touching nothing that is already there (SQ-1129).
 
-#[cfg(test)]
+#[cfg(all(test, feature = "t-persist"))]
 use crate::config::Config;
 use crate::config::CONFIG_SCHEMA_VERSION;
 
@@ -961,18 +961,18 @@ fn insert_point(headers: &[(String, usize)], table: Option<&str>, eof: usize) ->
 /// key deliberately reads as 0 ("written before versioning", see the field's docs)
 /// while `Config::default()` carries the current stamp, so the stamp is the one
 /// difference a commented template is EXPECTED to have.
-#[cfg(test)]
+#[cfg(all(test, feature = "t-persist"))]
 fn shape(cfg: &Config) -> String {
     format!("{cfg:?}").replacen(&format!("version: {}", cfg.version), "version: <stamp>", 1)
 }
 
 /// Every documented row, for the tests below and for anyone auditing coverage.
-#[cfg(test)]
+#[cfg(all(test, feature = "t-persist"))]
 fn all_rows() -> Vec<(&'static str, &'static str, Line)> {
     GROUPS.iter().flat_map(|g| g.rows.iter().map(|r| (r.key, r.value, r.line))).collect()
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "t-persist"))]
 mod tests {
     use super::*;
 

@@ -177,7 +177,7 @@ fn strip_article(s: &str) -> &str {
 
 // ── Tests ─────────────────────────────────────────────────────────────────────
 
-#[cfg(test)]
+#[cfg(all(test, feature = "t-session"))]
 mod tests {
     use super::*;
 
@@ -374,7 +374,7 @@ mod tests {
 
 /// A private shim that provides the sample_story_v3 helper used only in tests.
 /// This mirrors what zvm's own tests do internally.
-#[cfg(test)]
+#[cfg(all(test, feature = "t-session"))]
 mod zvm_test_support {
     pub fn sample_story_v3() -> Vec<u8> {
         // Build a minimal valid v3 story buffer matching the header layout in

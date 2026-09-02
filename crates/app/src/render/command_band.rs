@@ -1627,7 +1627,7 @@ fn draw_column(
 
 // ── Tests ────────────────────────────────────────────────────────────────────
 
-#[cfg(test)]
+#[cfg(all(test, feature = "t-render"))]
 mod tests {
     use super::*;
     use crate::state::{AppState, CommandBandState};

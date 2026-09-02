@@ -585,7 +585,7 @@ pub fn raster_reveal(state: &AppState, fallback: image::Rgba<u8>) -> Option<Rast
     Some(RasterReveal { words: &reveal.words, ink, rule })
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "t-guidance"))]
 mod tests {
     use super::*;
 

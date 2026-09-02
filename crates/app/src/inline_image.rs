@@ -74,7 +74,7 @@ impl InlineImage {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "t-render"))]
 mod tests {
     use super::*;
     use std::sync::Arc;

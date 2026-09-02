@@ -282,7 +282,7 @@ pub fn run(tsv: &Path, data_base: &Path, source: &dyn MetadataSource, delay: std
     if failed > 0 { 1 } else { 0 }
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "t-picker"))]
 mod tests {
     use super::*;
     use crate::ifiction::{IFiction, IfdbExt};

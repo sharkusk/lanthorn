@@ -229,7 +229,7 @@ fn delta_from_table(t: &toml::value::Table) -> RawDelta {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "t-theme"))]
 mod tests {
     use super::*;
 

@@ -131,7 +131,7 @@ where
 /// while `File::create`/`fs::write` on an existing, still-writable file happily
 /// truncates it. Returns false when the platform (or running as root) can't
 /// enforce it, so the caller skips vacuously.
-#[cfg(all(test, unix))]
+#[cfg(all(test, unix, feature = "t-persist"))]
 pub(crate) fn deny_new_files_in(dir: &Path) -> bool {
     use std::os::unix::fs::PermissionsExt;
     let Ok(md) = std::fs::metadata(dir) else { return false };
@@ -150,13 +150,13 @@ pub(crate) fn deny_new_files_in(dir: &Path) -> bool {
     true
 }
 
-#[cfg(all(test, not(unix)))]
+#[cfg(all(test, not(unix), feature = "t-persist"))]
 pub(crate) fn deny_new_files_in(_dir: &Path) -> bool {
     false
 }
 
 /// Undo [`deny_new_files_in`] so the test can clean up after itself.
-#[cfg(all(test, unix))]
+#[cfg(all(test, unix, feature = "t-persist"))]
 pub(crate) fn allow_new_files_in(dir: &Path) {
     use std::os::unix::fs::PermissionsExt;
     if let Ok(md) = std::fs::metadata(dir) {
@@ -166,11 +166,11 @@ pub(crate) fn allow_new_files_in(dir: &Path) {
     }
 }
 
-#[cfg(all(test, not(unix)))]
+#[cfg(all(test, not(unix), feature = "t-persist"))]
 pub(crate) fn allow_new_files_in(_dir: &Path) {}
 
 /// Test support: the temp files [`atomic_write`] would have left behind.
-#[cfg(test)]
+#[cfg(all(test, feature = "t-persist"))]
 pub(crate) fn leftover_temps(dir: &Path) -> Vec<String> {
     let Ok(rd) = std::fs::read_dir(dir) else { return Vec::new() };
     rd.flatten()
@@ -179,7 +179,7 @@ pub(crate) fn leftover_temps(dir: &Path) -> Vec<String> {
         .collect()
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "t-persist"))]
 mod tests {
     use super::*;
     use std::path::{Path, PathBuf};

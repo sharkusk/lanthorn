@@ -354,7 +354,7 @@ pub(crate) fn reset_game(
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "t-session"))]
 mod tests {
     /// SQ-0546: restarting a v6 story must rebuild it the way LAUNCH does.
     ///

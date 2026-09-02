@@ -458,7 +458,7 @@ fn parse_hex(s: &str) -> Option<Color> {
     Some(Color::Rgb(r, g, b))
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "t-persist"))]
 mod tests {
     use super::*;
 

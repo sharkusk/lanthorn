@@ -113,7 +113,7 @@ pub fn hostio(user_dir: &Path, on: bool, line: String) {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "t-misc"))]
 mod tests {
     use super::*;
 

@@ -52,7 +52,7 @@ fn fnv1a64(bytes: &[u8]) -> u64 {
     h
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "t-picker"))]
 mod tests {
     use super::*;
 

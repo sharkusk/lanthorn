@@ -10,7 +10,7 @@ use ratatui::style::{Modifier, Style};
 // Only test code refers to `Color` bare; production code always spells the
 // fully-qualified `ratatui::style::Color` (SQ-0643 removed the last bare
 // production usage — the hardcoded search-highlight style).
-#[cfg(test)]
+#[cfg(all(test, feature = "t-render"))]
 use ratatui::style::Color;
 
 use crate::engine::{Introspect, StatusField, StatusModel};
@@ -270,7 +270,7 @@ pub(crate) fn pack_status_clusters(
 ///
 /// Note: the renderer now uses `visible_wrapped_lines` which handles word-wrap.
 /// This function is retained for unit testing the slice logic in isolation.
-#[cfg(test)]
+#[cfg(all(test, feature = "t-render"))]
 pub(crate) fn visible_lines(
     transcript: &[String],
     rows: usize,
@@ -642,7 +642,7 @@ pub(crate) fn text_origin_col(kind: TranscriptKind) -> u16 {
 ///
 /// Test-facing convenience over [`wrap_lines_kinded_indexed`]; the render paths
 /// take the indexed form, whose line index the clear anchor rides on (SQ-0640).
-#[cfg(test)]
+#[cfg(all(test, feature = "t-render"))]
 pub(crate) fn wrap_lines_kinded(
     transcript: &[String],
     kinds: &[TranscriptKind],
@@ -1054,7 +1054,7 @@ fn wrap_line_ranges_var(line: &str, nowrap_from: Option<usize>, width_for: impl 
 ///
 /// The render paths wrap once and call [`anchor_row_at`] on that wrap's line index
 /// instead of paying for a second wrap here.
-#[cfg(test)]
+#[cfg(all(test, feature = "t-render"))]
 pub(crate) fn anchor_wrapped_rows(
     transcript: &[String],
     kinds: &[TranscriptKind],
@@ -1194,7 +1194,7 @@ pub(crate) fn visible_wrapped_lines_kinded(
 /// Retained as the reference renderer for the search-highlight path: production
 /// drawing now goes through `draw_str_runs` (which `highlight_mask` keeps
 /// consistent with this function), and the tests assert the two stay identical.
-#[cfg(test)]
+#[cfg(all(test, feature = "t-render"))]
 fn draw_str_highlighted(
     buf: &mut ratatui::buffer::Buffer,
     x: u16,
@@ -2866,7 +2866,7 @@ fn render_middle(
 
 // ── Tests ─────────────────────────────────────────────────────────────────────
 
-#[cfg(test)]
+#[cfg(all(test, feature = "t-render"))]
 mod tests {
     use super::*;
     use zvm::cpu::exec::Machine;

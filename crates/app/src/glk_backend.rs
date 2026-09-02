@@ -573,7 +573,7 @@ impl AppGlk {
     /// as a game's `glk_image_draw` into the buffer window would (a resolvable
     /// Pict needs a Blorb the unit harness lacks). Lets a `GlulxSession` test
     /// exercise the banner/startup image path without a Blorb.
-    #[cfg(test)]
+    #[cfg(all(test, feature = "t-session"))]
     pub(crate) fn test_push_primary_image(&mut self, img: crate::inline_image::InlineImage) {
         if let Some(pid) = self.primary {
             if let Some(buf) = self.buffers.get_mut(&pid) {
@@ -1257,7 +1257,7 @@ impl GlkBackend for AppGlk {
 
 // ── Tests ──────────────────────────────────────────────────────────────────────
 
-#[cfg(test)]
+#[cfg(all(test, feature = "t-session"))]
 mod tests {
     use super::*;
 
@@ -2129,7 +2129,7 @@ mod tests {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "t-session"))]
 mod heading_tests {
     use super::*;
     use gvm::glk::{GlkBackend, GlkStyle, Rect as GlkRect, WinType};

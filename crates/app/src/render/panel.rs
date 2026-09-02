@@ -252,7 +252,7 @@ pub fn draw_panel_with_controls(
     (PanelFrame { content: framed.content, header: framed.header, tab_rects }, control_rects)
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "t-render"))]
 mod tests {
     use super::*;
     use crate::theme::resolve::resolve_theme;

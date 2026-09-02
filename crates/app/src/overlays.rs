@@ -968,7 +968,7 @@ impl Overlay for RegionPromptOverlay {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "t-state"))]
 mod tests {
     use super::*;
 
@@ -1186,7 +1186,7 @@ mod tests {
     }
 
     /// A region prompt for the ladder / focus tests: two destinations to choose between.
-    #[cfg(test)]
+    #[cfg(all(test, feature = "t-state"))]
     fn a_region_prompt() -> app::state::RegionPrompt {
         use app::state::{RegionOption, RegionPrompt, RegionPromptKind};
         use mapper::layer::{MoveTarget, Region, MAIN_LAYER};

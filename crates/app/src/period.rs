@@ -345,7 +345,7 @@ pub fn apply_to_theme(theme: &mut Theme, look: &PeriodLook, zversion: Option<u8>
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "t-theme"))]
 mod tests {
     use super::*;
 

@@ -919,7 +919,7 @@ pub fn parse_named_color(s: &str) -> Option<Color> {
 
 // ── Tests ─────────────────────────────────────────────────────────────────────
 
-#[cfg(test)]
+#[cfg(all(test, feature = "t-theme"))]
 mod tests {
     use super::*;
 

@@ -227,7 +227,7 @@ pub fn reload_style(state: &mut AppState) -> ReloadOutcome {
     ReloadOutcome::Reloaded { warnings }
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "t-session"))]
 mod tests {
     use super::*;
     use crate::state::AppState;

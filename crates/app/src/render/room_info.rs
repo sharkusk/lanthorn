@@ -392,7 +392,7 @@ pub(crate) fn list_room_objects_excluding(
 
 // ── Tests ─────────────────────────────────────────────────────────────────────
 
-#[cfg(test)]
+#[cfg(all(test, feature = "t-render"))]
 mod tests {
     use super::*;
     use mapper::graph::MapGraph;

@@ -1020,7 +1020,7 @@ pub use zvm::interpreter::{
 /// same split every other member of this bundle already had.
 pub use zvm::interpreter::{AMIGA_STD_WINDOW, MACINTOSH_STD_WINDOW};
 
-#[cfg(test)]
+#[cfg(all(test, feature = "t-session"))]
 mod tests {
     use super::*;
 

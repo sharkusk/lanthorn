@@ -109,7 +109,7 @@ pub fn tile_rect(grid: Rect, col: usize, vis_row: usize) -> Rect {
     Rect::new(x, y, TILE_W, TILE_H)
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "t-picker"))]
 mod tests {
     use super::*;
 

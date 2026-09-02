@@ -26,7 +26,7 @@ pub fn write_vfs(game_dir: &Path, bytes: &[u8]) -> std::io::Result<()> {
     crate::storage::atomic_write(&vfs_path(game_dir), bytes)
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "t-persist"))]
 mod tests {
     use super::*;
 

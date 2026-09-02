@@ -426,7 +426,7 @@ pub fn scroll_to_show(graph: &MapGraph, layer: LayerId, room: RoomId, area: Rect
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "t-render"))]
 mod tests {
     use super::*;
     use mapper::direction::Direction;

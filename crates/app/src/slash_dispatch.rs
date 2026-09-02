@@ -1108,7 +1108,7 @@ fn toggle_debug(state: &mut AppState, session: &mut dyn Engine) {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "t-input"))]
 mod debug_dispatch_tests {
     use super::*;
     use app::engine::{Debugger, EngineError, EngineSave, KeyInput, LocationInfo, ScreenModel};

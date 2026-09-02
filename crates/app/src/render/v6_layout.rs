@@ -184,9 +184,9 @@ pub(crate) fn blit_clipped_src(dst: &mut RgbaImage, src: &RgbaImage, dx: u32, dy
 /// would disagree the moment a profile declares its own. The cases keep them
 /// because a test that builds a `10 * FONT_W` canvas is describing its own
 /// fixture, not asserting the machine's cell.
-#[cfg(test)]
+#[cfg(all(test, feature = "t-render"))]
 pub(crate) const FONT_W: u32 = 8;
-#[cfg(test)]
+#[cfg(all(test, feature = "t-render"))]
 pub(crate) const FONT_H: u32 = 16;
 
 /// A window-0 inline picture floated beside the story text: anchored to a
@@ -2806,7 +2806,7 @@ pub fn draw_story_text(canvas: &mut RgbaImage, main: &MainText, ox: u32, oy: u32
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "t-render"))]
 mod tests {
 
     // ── the text layer the ring claims (SQ-0902 → SQ-0903) ───────────────────

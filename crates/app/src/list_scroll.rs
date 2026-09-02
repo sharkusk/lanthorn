@@ -225,7 +225,7 @@ pub fn nav_key(scroll: &mut ListScroll, code: KeyCode, total: usize, viewport: u
     true
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "t-render"))]
 mod tests {
     use super::*;
     use crate::anim::Easing;

@@ -129,7 +129,7 @@ pub fn confirm_overwrite_key_focused(code: crossterm::event::KeyCode, focus: usi
 
 // ── Tests ─────────────────────────────────────────────────────────────────────
 
-#[cfg(test)]
+#[cfg(all(test, feature = "t-render"))]
 mod tests {
     use super::*;
     use crate::state::{ConfirmOverwriteSave, PendingOverwrite};

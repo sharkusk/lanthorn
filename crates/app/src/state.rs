@@ -5614,7 +5614,7 @@ pub(crate) fn write_map_trace(user_dir: &std::path::Path, steps: &[String], on: 
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "t-state"))]
 mod tests {
     use super::*;
 
@@ -7694,7 +7694,7 @@ mod tests {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "t-state"))]
 mod play_sound_tests {
     use super::*;
 

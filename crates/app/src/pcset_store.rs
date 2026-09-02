@@ -79,7 +79,7 @@ pub fn write_pcs(game_dir: &Path, set: &HashSet<u32>) -> std::io::Result<()> {
     crate::storage::atomic_write(&pcs_path(game_dir), &encode(set))
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "t-persist"))]
 mod tests {
     use super::*;
 

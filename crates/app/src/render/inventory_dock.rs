@@ -100,7 +100,7 @@ pub fn draw_inventory_dock(items: &[String], area: Rect, colors: &ColorScheme, h
 
 // ── Tests ─────────────────────────────────────────────────────────────────────
 
-#[cfg(test)]
+#[cfg(all(test, feature = "t-render"))]
 mod tests {
     use super::*;
     use ratatui::style::Color;

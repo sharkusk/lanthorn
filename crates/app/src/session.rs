@@ -1530,7 +1530,7 @@ impl GameSession {
         self.pending
     }
 
-    #[cfg(test)]
+    #[cfg(all(test, feature = "t-session"))]
     fn interpreter_number_for_test(&self) -> u8 {
         self.machine.mem.read_byte(0x1E)
     }
@@ -5758,7 +5758,7 @@ fn build_object_tree(
 
 // ── Tests ─────────────────────────────────────────────────────────────────────
 
-#[cfg(test)]
+#[cfg(all(test, feature = "t-session"))]
 mod tests {
     use super::*;
     use mapper::direction::Direction;
@@ -8610,7 +8610,7 @@ mod tests {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "t-session"))]
 mod debugger_impl_tests {
     use super::*;
     use crate::engine::Engine;
@@ -9087,7 +9087,7 @@ mod debugger_impl_tests {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "t-session"))]
 mod untried_turn_tests {
     use super::*;
     use mapper::direction::Direction;

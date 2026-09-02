@@ -769,7 +769,7 @@ fn shift_row_right(row: &[u8], n: u32) -> Vec<u8> {
     out
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "t-render"))]
 mod tests {
     use super::*;
 

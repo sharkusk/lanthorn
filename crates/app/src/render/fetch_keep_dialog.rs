@@ -250,7 +250,7 @@ pub fn fetch_keep_key_focused(
 
 // ── Tests ────────────────────────────────────────────────────────────────────
 
-#[cfg(test)]
+#[cfg(all(test, feature = "t-render"))]
 mod tests {
     use super::*;
     use crate::state::FetchKeepPrompt;

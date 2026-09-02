@@ -15,6 +15,30 @@ doctest = false
 name = "lanthorn"
 path = "src/main.rs"
 
+# SQ-1242: `app`'s ~3,271 in-crate `#[test]`s (all under `#[cfg(test)] mod tests`
+# blocks, one per source file) are gated behind these marker features instead of
+# bare `cfg(test)`, so `cargo check -p app --lib --tests` with no features on
+# compiles none of them — 33s for `--lib` alone vs 5m19s for `--tests` unguarded
+# was the whole reason. Each `t-*` feature names a slice of the module tree; a
+# developer can guess the group from the file. Plain markers, no deps. `t-all`
+# must list every `t-*` feature — `t_all_lists_every_group` in
+# `crates/app/tests/suites/test_feature_gating.rs` fails the build if a group is
+# missing from it or if any `#[cfg(test)] mod` in `src/` is left ungated on one
+# of these features. Run one group: `cargo nextest run -p app --lib --features
+# t-input input`. Run everything (CI does): `--features t-all` or
+# `--all-features`.
+[features]
+t-input = []    # input.rs, keymap, slash(_dispatch), browser, complete, pixel/pane mouse
+t-render = []   # render/*, plus the model layer it draws (graphics, layout, fonts, list_scroll, pager, clipboard, cell_dump)
+t-picker = []   # picker*, ifdb*, ifiction, ifid, fetch_worker, cover*, story_info/menu/pick/url, launch_options*, metadata_import
+t-session = []  # session/glulx_session/scott_session, engine*, probe*, turn, glk_backend, glulx_debug/roomlock, interpreter, inventory, machine_boot, reload, reset, startup
+t-guidance = [] # vocab, reveal (word reveal), assist, hints, hint_download
+t-persist = []  # archive*, history, storage, config*, styles, aux/vfs/persist stores, garglk_ini, ingame_io, pcset_store
+t-theme = []    # theme/*, colors, style, term_colors, period
+t-state = []    # state.rs, overlays, debug_panel, mapper glue (map_dump, roomid, export*, tidy, symbols)
+t-misc = []     # everything with no closer home: anim, assets, docs_reference, lifecycle, loop_tick, main, native_sound, notify, query_sweep, stderr_redirect, terminal_dump, trace, watch, corpus, lib.rs's own palette-guard self-test
+t-all = ["t-input", "t-render", "t-picker", "t-session", "t-guidance", "t-persist", "t-theme", "t-state", "t-misc"]
+
 [dependencies]
 buildinfo = { path = "../buildinfo" }
 # SQ-0850: the per-game save-directory key and the canonical-title table the

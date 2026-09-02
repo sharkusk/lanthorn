@@ -1687,7 +1687,7 @@ pub fn read_quetzal_from_file(path: &Path) -> io::Result<Vec<u8>> {
     Ok(bytes)
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "t-persist"))]
 mod tests {
     use super::*;
     use mapper::direction::Direction;

@@ -292,7 +292,7 @@ impl ArchiveWorker {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "t-persist"))]
 mod tests {
     use super::*;
     use crate::archive::{Meta, SaveTrigger, SessionRecord, CURRENT_FORMAT_VERSION};

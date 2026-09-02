@@ -401,7 +401,7 @@ pub fn settle_return_search(state: &mut AppState, mapper: &mut Mapper) -> Option
     None
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "t-session"))]
 mod tests {
     use super::*;
 
