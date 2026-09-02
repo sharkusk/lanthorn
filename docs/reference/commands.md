@@ -74,6 +74,7 @@ Every slash command, grouped the way `/help` groups them. Type any of these afte
 | Help | `help [command]` | list all commands by category; with a name, show one command's detail |
 | Library | `move-selection <dx> <dy>` | move the browser's selection by dx columns and dy rows (columns exist only in the cover gallery) |
 | Library | `page-selection <n>` | move the browser's selection by n pages |
+| Library | `half-page-selection <n>` | move the browser's selection by half a page (vim Ctrl-U/Ctrl-D) |
 | Library | `select-edge first|last` | jump the browser's selection to the first or last story |
 | Library | `play-story` | launch the selected story |
 | Library | `open-launch-options` | open the launch-options dialog for the selected story |

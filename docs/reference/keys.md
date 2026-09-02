@@ -34,6 +34,8 @@ The built-in key bindings, one row per binding — several keys may reach the sa
 | Browser | `L` | `move-selection 1 0` | move the browser's selection by dx columns and dy rows (columns exist only in the cover gallery) |
 | Browser | `PgUp` | `page-selection -1` | move the browser's selection by n pages |
 | Browser | `PgDn` | `page-selection 1` | move the browser's selection by n pages |
+| Browser | `Ctrl+U` | `half-page-selection -1` | move the browser's selection by half a page (vim Ctrl-U/Ctrl-D) |
+| Browser | `Ctrl+D` | `half-page-selection 1` | move the browser's selection by half a page (vim Ctrl-U/Ctrl-D) |
 | Browser | `Home` | `select-edge first` | jump the browser's selection to the first or last story |
 | Browser | `End` | `select-edge last` | jump the browser's selection to the first or last story |
 | Browser | `Enter` | `play-story` | launch the selected story |
