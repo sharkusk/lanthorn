@@ -29,7 +29,7 @@ fn cell_style(cell: zvm::screen::Cell, glk_style: u8, scheme: &ColorScheme, hono
     // theme bg here so a Default-bg game cell shows the window's own colour.
     let mut base = scheme.theme.get(if is_glk_grid { "glk.grid.background" } else { "upper_window" }).style;
     if let Some(rgb) = bg_override {
-        base = base.bg(crate::render::resolve_zcolour(ZColour::True24(rgb), scheme));
+        base = window_ground(base, rgb, scheme);
     }
     // Per-channel colour resolution (SQ-0331): game-set cell colour (gated by
     // honor_game_colours), then the theme's per-Glk-style slot (grid = row 1),
@@ -93,6 +93,17 @@ fn concretize_reversed(style: Style) -> Style {
         return style;
     }
     Style { fg: style.bg, bg: style.fg, ..style }.remove_modifier(Modifier::REVERSED)
+}
+
+/// The ground of a grid whose game gave it a window background of its own
+/// (SQ-0328): the theme's ground with `rgb` behind it. A Glk grid's ground is
+/// reversed chrome (SQ-1212), and `.bg()` laid on a REVERSED style is what the
+/// terminal swaps into the FOREGROUND — the window's colour became the ink and
+/// the chrome's ink the visible background, so every unwritten cell of
+/// Kerkerkruip's light-grey status window was black. Resolve the reversal
+/// first, so the colour lands where the game put it.
+fn window_ground(ground: Style, rgb: u32, scheme: &ColorScheme) -> Style {
+    concretize_reversed(ground).bg(crate::render::resolve_zcolour(zvm::screen::ZColour::True24(rgb), scheme))
 }
 
 /// Convert a neutral [`GridCell`] (packed colour) into a `zvm::screen::Cell`
@@ -208,7 +219,7 @@ pub fn draw_grid(
     // default) leaves the behaviour byte-identical.
     let uw = colors.theme.get(ground_selector).style;
     let mut content_style = match upper.bg {
-        Some(rgb) => uw.bg(crate::render::resolve_zcolour(zvm::screen::ZColour::True24(rgb), colors)),
+        Some(rgb) => window_ground(uw, rgb, colors),
         None => uw,
     };
     // If the game reversed the grid's Normal style with no explicit colours
@@ -952,6 +963,48 @@ mod tests {
             !z_buf.cell((0, 0)).unwrap().modifier.contains(Modifier::REVERSED),
             "a Z-machine upper window must NOT default-reverse — the game paints its own reversal"
         );
+    }
+
+    /// A Glk grid carrying its own window `bg` (SQ-0328) must show that colour
+    /// behind its UNWRITTEN cells too — not only behind the cells the game wrote.
+    /// The ground is reversed chrome (SQ-1212), so laying `.bg(rgb)` on it as-is
+    /// puts the window's colour on the side the terminal swaps INTO the
+    /// foreground, and the chrome's ink becomes the visible background: black
+    /// gaps between light-grey status fields, which is what Kerkerkruip's status
+    /// window looked like with its panels off (every field a run of written
+    /// cells, every gap an unwritten one).
+    #[test]
+    fn glk_grid_window_bg_grounds_the_unwritten_cells_in_the_windows_own_colour() {
+        use zvm::screen::ZColour;
+        let grey = 0x00C0_C0C0;
+        let mut grid = GridWindow { win: 5, ..GridWindow::default() };
+        grid.resize(1, 3);
+        grid.bg = Some(grey);
+        // One written cell, coloured the way the game's Normal hints colour it.
+        grid.put(0, 0, 'H', 0);
+        grid.cells[0].fg = crate::state::pack_zcolour(ZColour::True24(0x00_0000));
+        grid.cells[0].bg = crate::state::pack_zcolour(ZColour::True24(grey));
+
+        let mut colors = make_colors();
+        colors.virtual_window_border = BorderStyle::None;
+        colors.upper_window_border_sides = crate::render::paneframe::PaneSides::all(BorderStyle::None);
+        assert!(
+            colors.theme.get("glk.grid.background").style.add_modifier.contains(Modifier::REVERSED),
+            "premise: the Glk grid ground is reversed chrome, or this case tests nothing"
+        );
+
+        let area = Rect::new(0, 0, 3, 1);
+        let mut buf = Buffer::empty(area);
+        draw_grid(&grid, 1, (1, 1), false, &colors, area, &mut buf, true, &mut Vec::new());
+
+        // What the terminal will actually paint behind a cell, after its one swap.
+        let shown_bg = |x: u16| {
+            let st = buf.cell((x, 0)).unwrap().style();
+            if st.add_modifier.contains(Modifier::REVERSED) { st.fg } else { st.bg }
+        };
+        let want = Some(Color::Rgb(0xC0, 0xC0, 0xC0));
+        assert_eq!(shown_bg(0), want, "the written cell shows the window's own background");
+        assert_eq!(shown_bg(1), want, "so must the unwritten cell beside it");
     }
 
     /// SQ-1212 precedence: a Glk grid's new reversed ground is the FILL only —
