@@ -434,9 +434,17 @@ mod tests {
         calls: Arc<Mutex<Vec<String>>>,
         cover_calls: Arc<Mutex<Vec<String>>>,
         cover_bytes: Vec<u8>,
-        /// Artificial per-call delay, used only by the cancel test to open a
-        /// deterministic window between "fetch started" and "fetch returned".
-        fetch_sleep: Duration,
+        /// Set only by the cancel test: every fetch announces itself on
+        /// `started` and then parks until the test sends on `release`, so
+        /// "cancel arrived mid-fetch" is a fact the test arranges rather than
+        /// a race it hopes to win. A 20ms-sleep-then-cancel against a 150ms
+        /// fetch lost that race on a loaded macOS runner and fetched story 2.
+        fetch_gate: Option<FetchGate>,
+    }
+
+    struct FetchGate {
+        started: mpsc::Sender<()>,
+        release: Mutex<mpsc::Receiver<()>>,
     }
 
     impl Fake {
@@ -448,7 +456,7 @@ mod tests {
                 // A real decodable PNG: `maybe_fetch_cover` validates the
                 // bytes decode before writing (SQ-0660).
                 cover_bytes: real_png_bytes(),
-                fetch_sleep: Duration::ZERO,
+                fetch_gate: None,
             }
         }
     }
@@ -456,8 +464,9 @@ mod tests {
     impl MetadataSource for Fake {
         fn fetch(&self, ifid: &str) -> Result<FetchOutcome, FetchError> {
             self.calls.lock().unwrap().push(ifid.to_string());
-            if !self.fetch_sleep.is_zero() {
-                thread::sleep(self.fetch_sleep);
+            if let Some(gate) = &self.fetch_gate {
+                let _ = gate.started.send(());
+                let _ = gate.release.lock().unwrap().recv();
             }
             match self.responses.get(ifid) {
                 Some(FakeResp::Found(f)) => Ok(FetchOutcome::Found(f.clone())),
@@ -703,9 +712,11 @@ mod tests {
             );
         }
         let mut fake = Fake::new(responses);
-        // Generous window: the worker blocks here on story 1 long enough for
-        // the test thread to call cancel() before story 2 is ever attempted.
-        fake.fetch_sleep = Duration::from_millis(150);
+        // The worker parks inside story 1's fetch until we say so, so cancel()
+        // is guaranteed to land before story 1 returns and story 2 is weighed.
+        let (started_tx, started_rx) = mpsc::channel();
+        let (release_tx, release_rx) = mpsc::channel();
+        fake.fetch_gate = Some(FetchGate { started: started_tx, release: Mutex::new(release_rx) });
         let calls = Arc::clone(&fake.calls);
 
         let fetcher = Fetcher::new(Box::new(fake), data_base.clone(), Duration::ZERO);
@@ -719,8 +730,9 @@ mod tests {
             id_override: None,
         });
 
-        thread::sleep(Duration::from_millis(20)); // comfortably inside story 1's fetch
+        started_rx.recv_timeout(Duration::from_secs(5)).expect("story 1's fetch never started");
         fetcher.cancel();
+        release_tx.send(()).unwrap();
 
         // Bounded wait for the worker to settle (story 1 finishes, sees
         // cancel, and stops).
