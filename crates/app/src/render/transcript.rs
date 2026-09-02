@@ -2485,11 +2485,30 @@ fn render_middle(
     }
     let cache = state.transcript_wrap.borrow();
     let entry = cache.as_ref().expect("wrap cache populated above");
-    // Per-frame eviction: bound the inline-image protocol cache to present images.
+    // Per-frame eviction: bound the inline-image protocol cache to present images,
+    // AND to the current cell size / page — a still-live image's variant from
+    // BEFORE the last theme flip, font-size change, or page change is otherwise
+    // never looked up again but stays cached for as long as the image is on
+    // screen (SQ-1195). `current_cell` matches what `render_row` will key any
+    // fresh entry with below; a missing picker (nothing can be drawn this frame)
+    // falls back to `(0, 0)`, which no real cell size ever is, so a live image's
+    // stale entries are dropped rather than kept on a guess.
+    let current_cell = state
+        .game_picker
+        .as_ref()
+        .map(|p| {
+            let fs = p.font_size();
+            (fs.width.max(1), fs.height.max(1))
+        })
+        .unwrap_or((0, 0));
     // Every evicted band's kitty upload must be freed in the terminal, not
     // merely forgotten (SQ-1190) — `InlineImageRender` has no `GraphicsRender`
     // of its own, so route the ids it hands back into the sibling field's queue.
-    let evicted_bands = state.inline_image_render.borrow_mut().retain_live(&entry.live_bands);
+    let evicted_bands = state.inline_image_render.borrow_mut().retain_live(
+        &entry.live_bands,
+        current_cell,
+        crate::render::inline_image::float_page(state),
+    );
     state.graphics_render.borrow_mut().queue_external_deletes(evicted_bands);
     // Window the cached rows to the visible viewport (cheap; no re-wrap). The
     // top-anchor only applies at the bottom, handled inside `window_wrapped_rows`.

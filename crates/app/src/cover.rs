@@ -52,27 +52,46 @@ pub fn load_cover(path: &Path, game_dir: Option<&Path>) -> Option<image::Dynamic
     decode(&bytes)
 }
 
-/// Cache capacity: how many decoded covers `CoverState` retains before the
-/// least-recently-inserted one is evicted. Sized to hold a whole screenful of
-/// gallery tiles (SQ-0374) — even a very wide terminal shows well under this —
-/// so scrolling/paging the cover grid never evicts a still-visible cover and
-/// forces a re-decode. The list/info-panel path only ever needs one at a time.
-const CAP: usize = 128;
+/// Byte budget for `CoverState::decoded`: the sum of every cached decoded
+/// cover's pixel-buffer size (`DynamicImage::as_bytes().len()`), evicting the
+/// least-recently-used entry until the total is back within budget after each
+/// insert (SQ-1195). Replaces a count-based cap (128 entries) that bounded
+/// nothing about actual memory: a decoded jacket's size depends on the source
+/// image, and 128 of the largest real ones would run to hundreds of MB.
+///
+/// Sized from measurement, not guesswork — a scan of every cover in
+/// `stories/` (`cover::scratch_measure`, since removed) found decoded sizes
+/// from a few hundred KB up to 4 MiB (`Toby's Nose.gblorb`, 1024×1024 RGBA),
+/// and the gallery shows at most `TILE_CAP` (128) tiles on one screen
+/// (SQ-0374). 96 MiB holds a full gallery screen of typical (~1 MiB) covers
+/// with headroom for several of the largest ones seen, while capping
+/// worst-case memory to under a third of the old count cap's.
+const COVER_BYTE_BUDGET: usize = 96 * 1024 * 1024;
 
 /// How many built tile protocols `CoverState` keeps for the gallery view
 /// (SQ-0374). Keyed by `(path, cols, rows)`; least-recently-used evicted first.
-/// Matches `CAP` so a screenful of rasters survives alongside their images.
+/// A tile raster is fitted to its small on-screen cell box, not the source
+/// image, so its footprint doesn't scale with jacket resolution the way a
+/// decoded cover's does — a count cap is the right bound for this cache, sized
+/// to a screenful of gallery tiles so scrolling never evicts a still-visible
+/// one.
 const TILE_CAP: usize = 128;
 
-/// Selection-scoped cover state: a bounded LRU map of decoded images (one entry
-/// per visited story; `None` records a coverless story so it isn't re-decoded),
-/// a single protocol cached by `(path, cols, rows)` for the info panel, and a
-/// bounded LRU of tile protocols for the cover-gallery grid (many on screen at
-/// once).
+/// Selection-scoped cover state: a byte-budgeted LRU map of decoded images (one
+/// entry per visited story; `None` records a coverless story so it isn't
+/// re-decoded), a single protocol cached by `(path, cols, rows)` for the info
+/// panel, and a bounded LRU of tile protocols for the cover-gallery grid (many
+/// on screen at once).
 #[derive(Default)]
 pub struct CoverState {
     decoded: HashMap<PathBuf, Option<image::DynamicImage>>,
     order: VecDeque<PathBuf>,
+    /// Running total of `decoded`'s pixel-buffer bytes (`None` entries count as
+    /// 0) — kept alongside `decoded` rather than recomputed, since summing every
+    /// entry's `as_bytes().len()` on every insert would be the same O(n) cost
+    /// the LRU eviction already pays, just for a number `insert` needs to check
+    /// against [`COVER_BYTE_BUDGET`] before it can decide whether to evict.
+    decoded_bytes: usize,
     /// The trailing `Option<u32>` is the kitty image id [`place_protocol`]
     /// returned the last time this entry was placed (`None` off-kitty, or
     /// before the first placement) — [`Self::note_proto_placed`] fills it in.
@@ -151,15 +170,40 @@ impl CoverState {
         self.decoded.contains_key(path)
     }
 
+    /// A cover's contribution to [`Self::decoded_bytes`]: its decoded
+    /// pixel-buffer size, or 0 for a coverless (`None`) entry.
+    fn image_bytes(img: &Option<image::DynamicImage>) -> usize {
+        img.as_ref().map_or(0, |i| i.as_bytes().len())
+    }
+
+    /// Move `path` to most-recently-used in the decoded-image LRU, if it's
+    /// cached at all. Called on every access (a "hit"), not just on insert, so
+    /// a cover the picker is actively showing — built from `decoded` on every
+    /// draw via [`Self::protocol`]/[`Self::tile_protocol`] — is never the
+    /// least-recently-used entry `insert`'s eviction picks next, however long
+    /// ago it was first decoded (SQ-1195).
+    fn touch(&mut self, path: &Path) {
+        if self.decoded.contains_key(path) {
+            self.order.retain(|p| p != path);
+            self.order.push_back(path.to_path_buf());
+        }
+    }
+
     /// Record the decode result for `path` (`Some(img)` or a coverless `None`)
-    /// in the LRU cache, evicting the oldest entry once capacity is exceeded.
+    /// in the LRU cache, evicting the least-recently-used entries until the
+    /// total decoded bytes are back within [`COVER_BYTE_BUDGET`] (SQ-1195). A
+    /// single cover larger than the whole budget is still inserted and kept —
+    /// it is the one just requested — only OTHER entries are evicted to make
+    /// room for it.
     ///
     /// Re-inserting an existing path refreshes its recency without duplicating it
     /// in `order` (so `order` stays 1:1 with `decoded` — no leak, no premature
     /// eviction of a live key). A replaced image also drops any stale built
     /// protocol for that path so `protocol()` rebuilds from the new image.
     pub fn insert(&mut self, path: PathBuf, img: Option<image::DynamicImage>) {
-        if self.decoded.insert(path.clone(), img).is_some() {
+        let new_bytes = Self::image_bytes(&img);
+        if let Some(prev) = self.decoded.insert(path.clone(), img) {
+            self.decoded_bytes = self.decoded_bytes + new_bytes - Self::image_bytes(&prev);
             // Existing key: move it to most-recent, and invalidate a stale raster
             // (both the info-panel proto and any gallery tiles for this path),
             // freeing each dropped upload in the terminal (SQ-1190).
@@ -174,12 +218,17 @@ impl CoverState {
             for id in stale_tiles {
                 self.deletes.queue(id);
             }
+        } else {
+            self.decoded_bytes += new_bytes;
         }
         self.order.push_back(path);
-        while self.decoded.len() > CAP {
-            match self.order.pop_front() {
-                Some(oldest) => { self.decoded.remove(&oldest); }
-                None => break,
+        // Evict oldest-first, but never the entry just pushed to the back —
+        // `order.len() > 1` guarantees at least that one survives regardless
+        // of its own size.
+        while self.decoded_bytes > COVER_BYTE_BUDGET && self.order.len() > 1 {
+            let Some(oldest) = self.order.pop_front() else { break };
+            if let Some(removed) = self.decoded.remove(&oldest) {
+                self.decoded_bytes -= Self::image_bytes(&removed);
             }
         }
     }
@@ -190,7 +239,8 @@ impl CoverState {
     /// without this the stale `None` would hide the freshly fetched cover
     /// until the picker is reopened (SQ-0348).
     pub fn forget(&mut self, path: &Path) {
-        if self.decoded.remove(path).is_some() {
+        if let Some(removed) = self.decoded.remove(path) {
+            self.decoded_bytes -= Self::image_bytes(&removed);
             self.order.retain(|p| p != path);
         }
         if matches!(&self.proto, Some((p, _, _, _, _)) if p == path) {
@@ -220,6 +270,7 @@ impl CoverState {
         area: Rect,
         animating: bool,
     ) -> Option<&Protocol> {
+        self.touch(path);
         let img = self.decoded.get(path).and_then(|o| o.as_ref())?;
         let cached_for_path = matches!(&self.proto, Some((p, _, _, _, _)) if p == path);
         if animating && cached_for_path {
@@ -263,6 +314,9 @@ impl CoverState {
         path: &Path,
         area: Rect,
     ) -> Option<&Protocol> {
+        // A tile on screen means its underlying decoded image is in active
+        // use, whether this is a tile-cache hit or a fresh build below.
+        self.touch(path);
         if let Some(pos) = self
             .tiles
             .iter()
@@ -511,49 +565,117 @@ mod tests {
         assert!(st.protocol(&picker, other, area, false).is_none());
     }
 
+    /// A blank RGBA image whose decoded buffer is exactly `bytes` long
+    /// (`w * h * 4`, one row). `insert` takes a `DynamicImage` directly and
+    /// never re-encodes it, so this gives byte-exact control over what
+    /// `CoverState::image_bytes` reads — no PNG round-trip, and no dependence
+    /// on the `image` crate's choice of pixel format for a given encoding.
+    fn image_of_bytes(bytes: usize) -> image::DynamicImage {
+        assert_eq!(bytes % 4, 0, "RGBA is 4 bytes/pixel");
+        image::DynamicImage::ImageRgba8(image::RgbaImage::new((bytes / 4) as u32, 1))
+    }
+
+    /// SQ-1195 (Part B): three covers a little over a third of the budget each
+    /// — two fit comfortably, the third pushes the running total past
+    /// `COVER_BYTE_BUDGET`, so the least-recently-used (the first inserted)
+    /// must be evicted to bring the total back within budget.
+    ///
+    /// Falsified by the old count-based `CAP`: three entries is nowhere near
+    /// 128, so nothing would be evicted and `decoded_bytes` would sit over
+    /// budget.
     #[test]
-    fn insert_evicts_oldest_beyond_cap() {
+    fn insert_evicts_least_recently_used_once_the_byte_budget_is_exceeded() {
         let mut st = CoverState::default();
-        // Insert CAP + 3 distinct paths; the 3 oldest must be evicted.
-        let paths: Vec<PathBuf> =
-            (0..CAP + 3).map(|i| PathBuf::from(format!("game{i}.gblorb"))).collect();
+        let third = COVER_BYTE_BUDGET / 3 + 8;
+        let (a, b, c) = (PathBuf::from("a.gblorb"), PathBuf::from("b.gblorb"), PathBuf::from("c.gblorb"));
+        st.insert(a.clone(), Some(image_of_bytes(third)));
+        st.insert(b.clone(), Some(image_of_bytes(third)));
+        assert!(st.has(&a) && st.has(&b), "two thirds of the budget is still under it");
+
+        st.insert(c.clone(), Some(image_of_bytes(third)));
+        assert!(!st.has(&a), "the least-recently-used entry is evicted to make room");
+        assert!(st.has(&b) && st.has(&c), "the two most recent survive");
+        assert!(
+            st.decoded_bytes <= COVER_BYTE_BUDGET,
+            "total decoded bytes must be back within budget after insert: {}",
+            st.decoded_bytes
+        );
+    }
+
+    /// SQ-1195 (Part B): a "hit" — the picker actually drawing an already-cached
+    /// cover via `protocol()` — must move it to most-recently-used, or a cover
+    /// still on screen could be the next thing evicted purely because it was
+    /// decoded first.
+    #[test]
+    fn touching_an_entry_makes_it_recent_and_it_survives_the_next_eviction() {
+        let mut st = CoverState::default();
+        let third = COVER_BYTE_BUDGET / 3 + 8;
+        let (a, b, c) = (PathBuf::from("a.gblorb"), PathBuf::from("b.gblorb"), PathBuf::from("c.gblorb"));
+        st.insert(a.clone(), Some(image_of_bytes(third)));
+        st.insert(b.clone(), Some(image_of_bytes(third)));
+
+        // Touch `a` (a picker draw), making it MORE recent than `b`.
+        let picker = ratatui_image::picker::Picker::halfblocks();
+        assert!(st.protocol(&picker, &a, Rect::new(0, 0, 4, 4), false).is_some());
+
+        st.insert(c.clone(), Some(image_of_bytes(third)));
+        assert!(st.has(&a), "a was touched by the hit, so it is not the least-recently-used");
+        assert!(!st.has(&b), "b, never touched since its insert, is evicted instead");
+        assert!(st.has(&c));
+    }
+
+    /// SQ-1195 (Part B): a cover larger than the WHOLE budget is still the one
+    /// just requested — it must be cached, not silently dropped.
+    #[test]
+    fn a_single_cover_larger_than_the_whole_budget_is_still_cached() {
+        let mut st = CoverState::default();
+        let huge = COVER_BYTE_BUDGET + 4 * 1024 * 1024;
+        let p = PathBuf::from("huge.gblorb");
+        st.insert(p.clone(), Some(image_of_bytes(huge)));
+        assert!(st.has(&p), "the cover just requested is kept even though it alone exceeds the budget");
+        assert_eq!(st.decoded_bytes, huge);
+    }
+
+    /// SQ-1195 (Part B): the old 128-entry count cap is gone — many TINY
+    /// covers, nowhere near the byte budget, all stay regardless of count.
+    #[test]
+    fn the_old_count_cap_of_128_is_no_longer_a_bound() {
+        let mut st = CoverState::default();
+        let paths: Vec<PathBuf> = (0..129).map(|i| PathBuf::from(format!("game{i}.gblorb"))).collect();
         for p in &paths {
-            st.insert(p.clone(), decode(&png_bytes()));
+            st.insert(p.clone(), Some(image_of_bytes(64)));
         }
-        assert_eq!(st.decoded.len(), CAP, "cache is bounded to CAP");
-        // Oldest 3 evicted.
-        for p in &paths[..3] {
-            assert!(!st.has(p), "oldest entries should be evicted");
-        }
-        // Newest present (the just-inserted current is never evicted).
-        for p in &paths[3..] {
-            assert!(st.has(p), "recent entries should remain cached");
+        assert_eq!(st.decoded.len(), 129, "no count bound remains: all 129 tiny covers stay");
+        for p in &paths {
+            assert!(st.has(p));
         }
     }
 
     #[test]
-    fn reinsert_refreshes_recency_without_corrupting_lru() {
+    fn reinsert_refreshes_recency_and_byte_accounting_without_corrupting_lru() {
         let mut st = CoverState::default();
-        // Fill exactly to CAP.
-        let paths: Vec<PathBuf> =
-            (0..CAP).map(|i| PathBuf::from(format!("game{i}.gblorb"))).collect();
-        for p in &paths {
-            st.insert(p.clone(), decode(&png_bytes()));
-        }
-        // Re-insert the OLDEST (game0) — it must move to most-recent, and `order`
-        // must not gain a duplicate (else a later eviction would drop a live key
-        // and `order`/`decoded` would diverge).
-        st.insert(paths[0].clone(), decode(&png_bytes()));
-        assert_eq!(st.decoded.len(), CAP, "re-insert must not change the count");
-        assert_eq!(st.order.len(), CAP, "order must stay 1:1 with decoded (no dup)");
+        let third = COVER_BYTE_BUDGET / 3 + 8;
+        let (a, b) = (PathBuf::from("a.gblorb"), PathBuf::from("b.gblorb"));
+        st.insert(a.clone(), Some(image_of_bytes(third)));
+        st.insert(b.clone(), Some(image_of_bytes(third)));
+        assert_eq!(st.order.len(), 2, "two distinct entries so far");
 
-        // Now insert one NEW path: the oldest survivor (game1, since game0 was
-        // refreshed) is evicted — NOT the just-refreshed game0.
-        st.insert(PathBuf::from("new.gblorb"), decode(&png_bytes()));
-        assert_eq!(st.decoded.len(), CAP);
-        assert!(st.has(&paths[0]), "refreshed key must survive eviction");
-        assert!(!st.has(&paths[1]), "the genuine oldest must be evicted");
-        assert!(st.has(Path::new("new.gblorb")));
+        // Re-insert `a` with a DIFFERENT decoded size — `order` must not gain a
+        // duplicate (else a later eviction would drop a live key and
+        // `order`/`decoded` would diverge), and `decoded_bytes` must reflect
+        // `a`'s NEW size, not the sum of old and new.
+        let a_new_bytes = third / 2;
+        st.insert(a.clone(), Some(image_of_bytes(a_new_bytes)));
+        assert_eq!(st.order.len(), 2, "order must stay 1:1 with decoded — no duplicate");
+        assert_eq!(st.decoded_bytes, a_new_bytes + third, "b's size plus a's NEW size, not a's stale one too");
+
+        // `a` was just refreshed (now most-recent); `b` was not touched since
+        // its own insert. Pushing the total over budget must evict `b`, not
+        // the refreshed `a`.
+        st.insert(PathBuf::from("c.gblorb"), Some(image_of_bytes(third)));
+        st.insert(PathBuf::from("d.gblorb"), Some(image_of_bytes(third)));
+        assert!(st.has(&a), "the refreshed entry must survive eviction");
+        assert!(!st.has(&b), "b, the genuine least-recently-used, is evicted");
     }
 
     #[test]
