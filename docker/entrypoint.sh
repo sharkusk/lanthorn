@@ -54,6 +54,8 @@ build_index() {
     fonts_dir="$LANTHORN_SHARE_DIR/fonts"
     family="IosevkaTerm Nerd Font Mono"
 
+    # `base64 | tr -d` rather than GNU's `-w0`, so the same script runs under
+    # macOS's BSD coreutils for `docker/test-entrypoint.sh`.
     # Each embedded face runs to a few MB of base64 — too large to trust to
     # awk's own field/line handling, and (passed as a -v argument) too large
     # for some platforms' command-line length limit — so the <style> block is
@@ -63,10 +65,10 @@ build_index() {
     {
         printf '<style>\n'
         printf "@font-face{font-family:'%s';font-weight:400;font-style:normal;font-display:swap;src:url(data:font/woff2;base64," "$family"
-        base64 -w0 "$fonts_dir/IosevkaTermNerdFontMono-Regular.woff2"
+        base64 < "$fonts_dir/IosevkaTermNerdFontMono-Regular.woff2" | tr -d '\n'
         printf ") format('woff2');}\n"
         printf "@font-face{font-family:'%s';font-weight:700;font-style:normal;font-display:swap;src:url(data:font/woff2;base64," "$family"
-        base64 -w0 "$fonts_dir/IosevkaTermNerdFontMono-Bold.woff2"
+        base64 < "$fonts_dir/IosevkaTermNerdFontMono-Bold.woff2" | tr -d '\n'
         printf ") format('woff2');}\n"
         printf '</style>\n'
     } > "$css_tmp"

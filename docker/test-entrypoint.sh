@@ -11,9 +11,8 @@
 # needs no Docker build. Run it with:
 #   sh docker/test-entrypoint.sh
 #
-# Assumes GNU coreutils (base64 -w0, head -n 0, tail -n +N), matching the
-# debian:trixie-slim runtime image. On macOS, install coreutils and put its
-# "gnubin" first on PATH before running this.
+# Runs under GNU coreutils (the debian:trixie-slim runtime image) and under
+# macOS's BSD tools alike — entrypoint.sh avoids GNU-only flags for that.
 set -u
 
 here="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)"
