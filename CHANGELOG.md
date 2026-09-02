@@ -35,8 +35,23 @@ any such tag, or this Unreleased section, still exists.*
   each with its own key shown alongside. (Right-clicking twice no longer opens
   launch options; the menu item does.)
 - **`?` in the picker** shows every key the story browser knows, on one screen.
+- **The story pane's border control now cycles three states.** Command panel →
+  inventory panel → none → command panel, one click at a time (`cycle-panel`,
+  bound to the same control that used to only toggle the command panel). The
+  two panels are mutually exclusive — opening one closes the other — and which
+  one (if either) is open is remembered per story, the same way the command
+  panel's own open state already was.
 
 ### Changed
+
+- **Renamed for a consistent panel vocabulary**, everywhere a player can read
+  it — commands (`open-command-band` → `toggle-command-panel`,
+  `toggle-inventory` → `toggle-inventory-panel`, `toggle-room-dock` →
+  `toggle-room-panel`), the config section `[command_band]` (now
+  `[command_panel]`), and style selectors (`inventory_dock` →
+  `inventory_panel`, `room_dock`/`room_dock.header` → `room_panel`/
+  `room_panel.header`, `band.*` → `command_panel.*`). No back-compat aliases —
+  pre-release, a rename is just a rename.
 
 - **The picker's hint bar is shorter and says more.** It now lists the
   library-level keys only — `Enter: open  Space: menu  Tab: info  /: IFDB

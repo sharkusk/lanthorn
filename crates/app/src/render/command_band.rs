@@ -190,7 +190,7 @@ pub struct VerbEntry {
     /// [`verbs_from_grammar`] fills this from the RAW
     /// [`grammar_model::SyntaxLine`]s; [`VerbEntry::new`] derives it from the
     /// lines it is handed, which is the right answer for a table (the
-    /// built-ins, `[command_band] verbs`) whose shapes ARE its whole grammar.
+    /// built-ins, `[command_panel] verbs`) whose shapes ARE its whole grammar.
     pub takes_object: bool,
 }
 
@@ -266,7 +266,7 @@ pub enum VerbSource {
     /// `VERB — generic`.
     #[default]
     Builtin,
-    /// The player's own `[command_band] verbs` list. Labelled `VERB — yours`:
+    /// The player's own `[command_panel] verbs` list. Labelled `VERB — yours`:
     /// it is not the story's grammar either, but it is not our guess.
     Configured,
 }
@@ -529,7 +529,7 @@ pub fn verbs_from_grammar(verbs: &[grammar_model::Verb]) -> Vec<VerbEntry> {
 /// config but no engine, so the band is born on the fallback and swaps to the
 /// story's own words on the tick before its first frame. Read ONCE per open —
 /// the grammar table is static, so no later turn can change the answer — and
-/// never over a `[command_band] verbs` list, which is the player's own.
+/// never over a `[command_panel] verbs` list, which is the player's own.
 ///
 /// Returns `true` when the column actually changed (→ repaint).
 pub fn refresh_verbs(state: &mut AppState, session: &dyn crate::engine::Engine) -> bool {
@@ -1326,7 +1326,7 @@ fn draw_quick_block(
     theme: &crate::theme::resolve::Theme,
     hits: &mut Vec<(usize, Rect)>,
 ) {
-    let style = base.patch(theme.get("band.quick").style);
+    let style = base.patch(theme.get("command_panel.quick").style);
     // The centre is always inert decoration — never a pick target — styled
     // like the map matrix's own frontier dot rather than a new selector.
     let dim = base.patch(theme.get("map.matrix.cell:frontier").style);
@@ -1337,7 +1337,7 @@ fn draw_quick_block(
     // design doc amendment for why reversed was safe to pick).
     let cell_style = |qi: usize| {
         if band.quick_hover == Some(qi) {
-            style.patch(theme.get("band.quick:hover").style)
+            style.patch(theme.get("command_panel.quick:hover").style)
         } else {
             style
         }
@@ -1433,8 +1433,8 @@ fn draw_quick_row(
     theme: &crate::theme::resolve::Theme,
     hits: &mut Vec<(usize, Rect)>,
 ) {
-    let style = base.patch(theme.get("band.quick").style);
-    let hover_style = theme.get("band.quick:hover").style;
+    let style = base.patch(theme.get("command_panel.quick").style);
+    let hover_style = theme.get("command_panel.quick:hover").style;
     for x in area.x..area.right() {
         if let Some(cell) = buf.cell_mut((x, area.y)) {
             cell.set_symbol(" ").set_style(style);
@@ -1506,7 +1506,7 @@ fn draw_column(
     //
     // SQ-1111 gives the row back for the ONE thing worth saying there: when the
     // column is NOT the story's own grammar — the generic fallback, or the
-    // player's own `[command_band] verbs` list — it says so
+    // player's own `[command_panel] verbs` list — it says so
     // (`VerbSource::column_label`), the same way `here_is_seen` relabels the
     // object column rather than passing a scrape off as the room's contents. A
     // story whose grammar we CAN read pays nothing: no label, no header, one
@@ -1515,7 +1515,7 @@ fn draw_column(
         if col == COL_VERB && band.verb_source.column_label().is_none() { 0 } else { 1 };
     if header_h > 0 {
         let header_style = base.patch(
-            theme.get(if is_current { "band.column_header:active" } else { "band.column_header" }).style,
+            theme.get(if is_current { "command_panel.column_header:active" } else { "command_panel.column_header" }).style,
         );
         let header_area = Rect { x: area.x, y: area.y, width: area.width, height: 1 };
         for x in header_area.x..header_area.right() {
@@ -1551,7 +1551,7 @@ fn draw_column(
     }
 
     let items = band.rows(col);
-    let label_style = base.patch(theme.get("band.group_label").style);
+    let label_style = base.patch(theme.get("command_panel.group_label").style);
     if items.is_empty() {
         // Column-specific wording (SQ-0667, following the SQ-0668 data fix
         // that made an empty carried/here column a real possibility rather
@@ -1596,7 +1596,7 @@ fn draw_column(
         let style = if is_selected {
             theme.get("dialog.list_selected").style
         } else if items[idx].seen {
-            base.patch(theme.get("band.item:seen").style)
+            base.patch(theme.get("command_panel.item:seen").style)
         } else {
             base
         };
@@ -2251,7 +2251,7 @@ mod tests {
         assert_ne!(scope, seen, "the weaker claim must look weaker");
         assert_eq!(
             seen.fg,
-            s.colors.theme.get("band.item:seen").style.fg,
+            s.colors.theme.get("command_panel.item:seen").style.fg,
             "and it must take its colour from the selector, not a literal",
         );
     }

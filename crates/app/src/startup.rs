@@ -700,11 +700,11 @@ fn ask_font_check(cfg: &Config) -> FontCheckOutcome {
 /// frame `story_screen_dims` insets), the resolved config (margins, the
 /// `virtual_screen_cols`/`rows` pin — pinned wins here exactly as it wins in
 /// the live pane measurement, since this reuses the very same call), the
-/// garglk.ini margin overlay, and the pane-split sizes. Command band / inventory
-/// dock are left at their true boot-time state — closed; both open only after
-/// this session already exists (`band_auto_open`, further down) — and neither
-/// affects the WIDTH this seeds anyway, only rows, which the SQ-0679 floor
-/// never gates.
+/// garglk.ini margin overlay, and the pane-split sizes. Command panel /
+/// inventory panel are left at their true boot-time state — closed; both open
+/// only after this session already exists (`initial_panel`, further down) —
+/// and neither affects the WIDTH this seeds anyway, only rows, which the
+/// SQ-0679 floor never gates.
 ///
 /// `None` when the terminal size can't be queried (piped/non-terminal stdout,
 /// e.g. some test harnesses) or the query reports a zero-area frame; the
@@ -1646,13 +1646,21 @@ pub(crate) fn boot_story(
         inv_dock_pct: cfg.inv_dock_pct,
         room_dock_pct: cfg.room_dock_pct,
     };
-    // `[command_band] auto_open` — open the band with the story, for players who
-    // want it as their default input surface rather than a thing to summon.
-    // SQ-1123: whether the band opens with this story is the band toggle's own
-    // state, so a per-game answer wins over the global `[command_band] auto_open`
-    // — absent key = inherit, as every sidecar key does.
-    let band_auto_open =
-        app::styles::read_per_game_command_band(&game_dir).unwrap_or(cfg.command_band.auto_open);
+    // `[command_panel] auto_open` — open the command panel with the story, for
+    // players who want it as their default input surface rather than a thing to
+    // summon. SQ-1123: whether a panel opens with this story is the border
+    // control's own state, so a per-game answer wins over the global
+    // `[command_panel] auto_open` — absent key = inherit, as every sidecar key
+    // does. SQ-1237 widened the per-game key to a three-state cycle (the
+    // inventory panel has no global auto-open of its own, so the fallback for
+    // an absent key is still just command-or-none).
+    let initial_panel = app::styles::read_per_game_panel(&game_dir).unwrap_or(
+        if cfg.command_band.auto_open {
+            app::state::SidePanel::Command
+        } else {
+            app::state::SidePanel::None
+        },
+    );
     // SQ-0318: remember the global honor base so reload_style can recompute the
     // per-game > garglk > global precedence (and `auto` can fall back here).
     state.honor_game_colours_base = honor_game_colours_base;
@@ -1750,16 +1758,26 @@ pub(crate) fn boot_story(
     // Seed autocomplete with the story's parser vocabulary (room nouns are added live).
     state.dict_words = session.introspect().map(|i| i.vocabulary()).unwrap_or_default();
 
-    // `[command_band] auto_open`: open the band with the story. Instant (no
-    // slide) so the first frame is already the settled layout.
-    if band_auto_open {
-        let mut mapper_noop = mapper::mapper::Mapper::default();
-        // Not through `Action::OpenCommandBand`: that action PERSISTS the band's
-        // state per-game (SQ-1123), and a global `auto_open` must not pin itself
-        // to whichever story you happened to launch. The state change without the
-        // persistence is exactly what this helper is.
-        app::input::open_command_band(&mut state, &mut mapper_noop, true);
-        state.band_dock.toggle_to(true, true);
+    // Open whichever panel this story starts with (SQ-1123, widened to a
+    // three-state cycle by SQ-1237): the per-game override, or the global
+    // `[command_panel] auto_open` fallback resolved into `initial_panel` above.
+    // Instant (no slide) so the first frame is already the settled layout.
+    match initial_panel {
+        app::state::SidePanel::Command => {
+            let mut mapper_noop = mapper::mapper::Mapper::default();
+            // Not through `Action::OpenCommandBand`: that action PERSISTS the
+            // panel state per-game (SQ-1123), and a global `auto_open` must not
+            // pin itself to whichever story you happened to launch. The state
+            // change without the persistence is exactly what this helper is.
+            app::input::open_command_band(&mut state, &mut mapper_noop, true);
+            state.band_dock.toggle_to(true, true);
+        }
+        app::state::SidePanel::Inventory => {
+            // Same non-persisting rule as the command panel above.
+            app::input::open_inventory_panel(&mut state, true);
+            state.inv_dock.toggle_to(true, true);
+        }
+        app::state::SidePanel::None => {}
     }
 
     // Push the game's opening banner and capture the title from it. Glulx returns

@@ -43,7 +43,7 @@ pub fn draw_inventory_dock(items: &[String], area: Rect, colors: &ColorScheme, h
     if area.width == 0 || area.height == 0 {
         return;
     }
-    let style = colors.theme.get("inventory_dock").style;
+    let style = colors.theme.get("inventory_panel").style;
     // Focus drives the border STYLE selector; the resize accent (or the dock's
     // own style) is preserved as the border COLOUR via `border_color`.
     let border_selector = if highlighted { "panel.border:active" } else { "panel.border" };
@@ -203,7 +203,7 @@ mod tests {
         let area = Rect::new(0, 0, 20, 5);
         let mut buf = Buffer::empty(area);
         let mut colors = ColorScheme::default();
-        colors.theme = theme_with_overrides(&[("inventory_dock", Color::Rgb(1, 2, 3))]);
+        colors.theme = theme_with_overrides(&[("inventory_panel", Color::Rgb(1, 2, 3))]);
         draw_inventory_dock(&["lamp".to_string()], area, &colors, false, &mut buf);
         assert_eq!(buf.cell((0, 0)).unwrap().style().fg, Some(Color::Rgb(1, 2, 3)));
     }

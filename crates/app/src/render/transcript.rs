@@ -5382,7 +5382,7 @@ mod tests {
             state.input.set("hi", true);
             state.room_dock.toggle_to(true, true);
             state.room_dock_view = mode;
-            assert!(!state.any_overlay_open(), "the room dock is not an overlay at all…");
+            assert!(!state.any_overlay_open(), "the room panel is not an overlay at all…");
             assert!(!state.any_modal_overlay_open(), "…and certainly not a MODAL one");
 
             let area = Rect::new(0, 0, 40, 5);

@@ -197,13 +197,13 @@ itself.**
   again when you change fonts. → [looks](docs/guide/looks.md)
 
 There is a great deal more than this — proportional fonts off a Kickstart ROM,
-Glk sound channels, a click-to-compose command band, screen-reader output. The
+Glk sound channels, a click-to-compose command panel, screen-reader output. The
 full documentation map — player guide, generated command/key/config reference,
 and the internals below — is [**`docs/README.md`**](docs/README.md).
 
 ## Playing aids
 
-The story pane's border carries a few clickable switches — the command band and
+The story pane's border carries a few clickable switches — the command panel and
 the Guiding Light along the bottom, the map at the right, and on a graphical v6
 story the render mode and pixel lock along the top. Each shows its state at a
 glance, and hovering one names the command it stands for. What you switch there
@@ -211,7 +211,7 @@ is remembered per story; the settings screen sets the defaults.
 
 Press **`◈`** (or `/reveal-words`) and every word on screen that the story
 knows lights up for a few seconds — a quick way to tell the two nouns a room
-actually implements from the dozen it merely mentions. The command band's
+actually implements from the dozen it merely mentions. The command panel's
 **WHAT** column keeps a running list of the nouns the story has printed so far,
 newest first, so something named forty turns ago is still one click away.
 

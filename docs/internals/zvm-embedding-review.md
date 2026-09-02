@@ -436,7 +436,7 @@ So `zvm::grammar` now answers **`Absent`** for a Dialog story rather than
 check. That is not only a truer refusal, it forecloses the one failure this
 module exists to prevent: these two files happen to fail the shape checks, and
 the next Dialog story's wordmaps need not. A Dialog story now takes the same
-already-pinned road as Journey — the command band keeps its generic column and
+already-pinned road as Journey — the command panel keeps its generic column and
 labels it, the vocabulary offer stays silent — pinned in
 `crates/zvm/tests/dialog_grammar.rs` and
 `crates/app/tests/suites/dialog_story_degradation.rs`. The corpus-wide census in

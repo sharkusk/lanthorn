@@ -157,6 +157,56 @@ impl RoomDockView {
     }
 }
 
+// ── Side panel cycle (SQ-1237) ──────────────────────────────────────────────
+
+/// Which of the two mutually-exclusive panels the story pane's border control
+/// summons is open: the command panel, the inventory panel, or neither.
+///
+/// The two panels never show at once — opening one closes the other — so one
+/// value, not two independent booleans, describes the pair. `/cycle-panel`
+/// (and a click on the border control) walks [`SidePanel::next`]; the value is
+/// what the per-game sidecar persists (`styles::PerGameConfig::panel`), the
+/// same single mechanism the command band's on/off state already used before
+/// the inventory panel joined the cycle.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SidePanel {
+    Command,
+    Inventory,
+    None,
+}
+
+impl SidePanel {
+    /// The next state in the cycle: Command → Inventory → None → Command.
+    pub fn next(self) -> SidePanel {
+        match self {
+            SidePanel::Command => SidePanel::Inventory,
+            SidePanel::Inventory => SidePanel::None,
+            SidePanel::None => SidePanel::Command,
+        }
+    }
+
+    /// The sidecar's own spelling, read by [`SidePanel::from_key`].
+    pub fn key(self) -> &'static str {
+        match self {
+            SidePanel::Command => "command",
+            SidePanel::Inventory => "inventory",
+            SidePanel::None => "none",
+        }
+    }
+
+    /// Parse the sidecar's spelling. An unrecognised token is `None` — the same
+    /// "a corrupt sidecar inherits the default" rule every other per-game key
+    /// follows (`styles::PerGameConfig::read`).
+    pub fn from_key(s: &str) -> Option<SidePanel> {
+        match s {
+            "command" => Some(SidePanel::Command),
+            "inventory" => Some(SidePanel::Inventory),
+            "none" => Some(SidePanel::None),
+            _ => Option::None,
+        }
+    }
+}
+
 // ── Drag-pan state ────────────────────────────────────────────────────────────
 
 /// Middle-button drag-pan accumulator state.
@@ -3604,6 +3654,30 @@ impl AppState {
         self.overlays.command_band.is_some() || self.band_dock.active()
     }
 
+    /// Which of the two mutually-exclusive panels is open right now (SQ-1237).
+    ///
+    /// Reads `band_dock.open` rather than `command_band_visible()` DELIBERATELY:
+    /// the dock's `open` flag is the TARGET the last click/command set, set
+    /// synchronously; `command_band_visible()` also answers true while a closed
+    /// band's content is still sliding out (`settle_command_band` has not yet
+    /// trimmed it), which is right for deciding whether to draw the band at all
+    /// but wrong for deciding what the player's next click on the cycle control
+    /// should do — a click mid-slide-out must not re-open the band it just
+    /// asked to close. `show_inventory` has no such lag (it is set directly, no
+    /// drawer-content field to trim), so both halves read the same kind of
+    /// fact: intent, not on-screen visibility. `Command` wins over `Inventory`
+    /// on the (should-not-happen) case both are somehow set, since the command
+    /// panel is the cycle's first stop.
+    pub fn current_side_panel(&self) -> SidePanel {
+        if self.band_dock.open {
+            SidePanel::Command
+        } else if self.show_inventory {
+            SidePanel::Inventory
+        } else {
+            SidePanel::None
+        }
+    }
+
     /// True while the room dock is on screen — open, or still sliding out
     /// (SQ-0692). The layout reserves rows for it in both cases, so a close
     /// animates instead of snapping.
@@ -6619,7 +6693,7 @@ mod tests {
         // The command band is deliberately absent from this list: it is a dock,
         // not a modal, and must NOT register as an overlay at all (SQ-0664).
         s.overlays.command_band = Some(CommandBandState::default());
-        assert!(!s.any_overlay_open(), "the command band is not an overlay");
+        assert!(!s.any_overlay_open(), "the command panel is not an overlay");
         assert!(!s.any_modal_overlay_open(), "…and certainly not a modal one");
         s.overlays.command_band = None;
 
@@ -6634,7 +6708,7 @@ mod tests {
         // both.
         s.room_dock.toggle_to(true, true);
         s.selected_room = Some(1);
-        assert!(!s.any_overlay_open(), "the room dock is not an overlay, pinned or not");
+        assert!(!s.any_overlay_open(), "the room panel is not an overlay, pinned or not");
         s.selected_room = None;
         assert!(!s.any_overlay_open());
         s.room_dock.toggle_to(false, true);

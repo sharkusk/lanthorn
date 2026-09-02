@@ -9,7 +9,7 @@ mouse-driven, copy-anything, keyboard-fast terminal cockpit for reading the map,
 inspecting the machine, and firing commands — without ever leaving the story.
 
 ## Map navigation & inspection
-- **Mouse support** — left-click a room to point the [room dock](#the-room-dock)
+- **Mouse support** — left-click a room to point the [room panel](#the-room-panel)
   at it; right-click a room for its layout diagnostics; middle-drag anywhere to
   pan the whole map around. The dock never interrupts the game: it reserves rows
   at the bottom of the map pane rather than covering anything, so the keyboard
@@ -21,7 +21,7 @@ inspecting the machine, and firing commands — without ever leaving the story.
 - **Mouse wheel** pans the map (hold Shift for horizontal, Ctrl to zoom) and
   scrolls every other scrollable surface too — the transcript and the lists
   inside modals (saves, file browser, gallery, config, command palette, the
-  IFDB search results, the command band's columns, …). On a list the wheel
+  IFDB search results, the command panel's columns, …). On a list the wheel
   scrolls *the list*, not the
   cursor: the highlight stays on the row you left it on and the rows slide
   under it, and only when the window would carry it off the screen does it
@@ -49,8 +49,8 @@ inspecting the machine, and firing commands — without ever leaving the story.
   over SSH, with no clipboard library in the loop. Each row is clamped to the
   story pane's columns, so a drag never scoops up the map beside the text.
 - **Drag a pane boundary to resize it** — grab the divider between the story and
-  map panes, or the top edge of the inventory dock, the command band or the room
-  dock, and drag.
+  map panes, or the top edge of the inventory panel, the command panel or the room
+  panel, and drag.
   The boundary lights up as the pointer crosses it, the panes follow the pointer
   live, and the new size is written to `config.toml` when you let go. What you
   press the button on decides what the drag means: a drag that starts on a
@@ -58,8 +58,8 @@ inspecting the machine, and firing commands — without ever leaving the story.
   selecting even when it crosses one. For the keyboard, `/resize-panes` enters
   resize mode — **Tab** cycles which boundary is live, the arrows move it, `0`
   resets, **Esc** leaves.
-- **The room dock** — one panel at the bottom of the map pane describing one
-  room, opened with `k` from the leader panel or `/toggle-room-dock`. It has two
+- **The room panel** — one panel at the bottom of the map pane describing one
+  room, opened with `k` from the leader panel or `/toggle-room-panel`. It has two
   bodies:
   - **Room** — the room's notes, its [exit card](mapping.md#room-card) in the
     matrix vocabulary, and the objects the engine can see there. The card spends
@@ -248,7 +248,7 @@ know which side you're on).
   own frame, each one showing what state it is in and switching it when
   clicked. There are two clusters — the story pane's, described first, and the
   **map pane's own five** further down — and one mechanism behind both.
-  Guidance, the command band and the two v6 switches used to be reachable only by
+  Guidance, the command panel and the two v6 switches used to be reachable only by
   slash command, key or the settings screen, with nothing on screen saying they
   existed, let alone whether they were on.
 
@@ -259,7 +259,7 @@ know which side you're on).
   ```
 
   - **A control sits where the thing it governs is, or where it would appear.**
-    The command band opens *below* the story pane, so its toggle rides the
+    The command panel opens *below* the story pane, so its toggle rides the
     bottom border; the map lives to the *right*, so its toggle takes the bottom
     border's right-hand end, nearest the pane it summons. The Guiding Light has
     no direction of its own and joins the band as the other thing you switch,
@@ -298,7 +298,7 @@ know which side you're on).
     to stay inside. It takes no focus and no keys: typing always wins, here as
     everywhere.
   - **A click is the command.** Each control runs its own `slash::COMMANDS`
-    entry, bare — `/toggle-map`, `/set-guidance`, `/open-command-band`,
+    entry, bare — `/toggle-map`, `/set-guidance`, `/toggle-command-panel`,
     `/reveal-words`, `/set-v6-render`, `/set-v6-pixel-lock` — so clicking does
     exactly what typing does.
   - **And what you switch here is remembered for *this game*.** Every *switch*
@@ -314,7 +314,7 @@ know which side you're on).
     exception and needs none: a light that was on for four seconds has nothing
     to remember.
   - **Sharing a row with a drag handle.** The bottom border is also where the
-    command band's and the inventory dock's top edge is grabbed for a resize. A
+    command panel's and the inventory panel's top edge is grabbed for a resize. A
     control owns its own cell, so a click on a toggle toggles; the edge stays
     grabbable everywhere else along the row. Nothing is ever drawn on the pane's
     right border column, which is where the story/map splitter is dragged.
@@ -411,8 +411,8 @@ know which side you're on).
   prompt, wait for a key, and then print the page *after* that prompt, on that
   row — so it is part of the new page, and the pause shows it rather than
   scrolling its heading away (SQ-0823).
-- **The command band** (the `▲` control on the story pane's bottom border, `v` from the
-  leader panel, or `/open-command-band`) — a Journey-style
+- **The command panel** (the `▲` control on the story pane's bottom border, `v` from the
+  leader panel, or `/toggle-command-panel`) — a Journey-style
   bottom dock that builds a command by pointing, and suggests one as you type
   (it never takes the keyboard from the prompt — see "typing always wins"
   below). It is a
@@ -449,7 +449,7 @@ know which side you're on).
   verb list rather than an empty column, and the column **says so**: it spends
   its reclaimed row on a **VERB — generic** header, the same way the object
   column relabels itself *WHAT — seen* when it is scraping
-  rather than reading. A `[command_band] verbs` list of your own reads
+  rather than reading. A `[command_panel] verbs` list of your own reads
   **VERB — yours** for the same reason. Only the story's own grammar goes
   unlabelled, because only then is there nothing to admit.
 
@@ -583,7 +583,7 @@ know which side you're on).
   moves, even with something highlighted. **←**/**→** are the ordinary caret
   keys on the prompt; the band doesn't claim them. **Esc** clears an armed
   **↑**/**↓** highlight first, then closes the band — and
-  `open-command-band` is a toggle, so it always closes the band too, Esc ladder
+  `toggle-command-panel` is a toggle, so it always closes the band too, Esc ladder
   or not.
 
   The one-click quick actions (`n`/`s`/`e`/`w`/`ne`/`nw`/`se`/`sw`,
@@ -612,7 +612,7 @@ know which side you're on).
   are looking at, not the one the band is pointing at, and its rows slide under
   their highlight by the [same rule every other list follows](#map-navigation--inspection).
   Neither the band's attention nor the other three columns move with it. While it is open
-  it subsumes the inventory dock — the *carried* column IS your inventory —
+  it subsumes the inventory panel — the *carried* column IS your inventory —
   which returns when you close it.
 
   A quick action fires the bare word, so the VERB column drops a word the quick
@@ -641,7 +641,7 @@ know which side you're on).
   besides.
 
   Its height, its verb list and its quick row are all configurable under
-  `[command_band]` in `config.toml`; resize mode targets its height. The
+  `[command_panel]` in `config.toml`; resize mode targets its height. The
   compass-rose/flat-row choice is not configurable — it is computed from the
   band's actual width every frame. A band shorter than the quick block's full
   height (rose plus every word row) still draws the whole rose and simply
@@ -663,7 +663,7 @@ know which side you're on).
   open it. Shown the way your shell shows it: the rest of the word
   appears in dim ghost text right under the caret as you type. **Tab** cycles
   forward through the candidates, **Shift-Tab** back, and **→** at the end of the
-  line takes the one on offer. (With the command band open, Tab completes from
+  line takes the one on offer. (With the command panel open, Tab completes from
   the *band's* highlight instead — one completion source at a time.) Because the
   hint lives on the prompt row itself,
   nothing shifts when a completion appears or vanishes — the prompt stays put
@@ -677,7 +677,7 @@ know which side you're on).
   boxed popup.
 - **Command history** — press **↑**/**↓** at the prompt to recall and re-run
   earlier commands, shell-style (**Ctrl+↑**/**Ctrl+↓** work too, and are the
-  only way to reach it while the command band is open, since plain **↑**/**↓**
+  only way to reach it while the command panel is open, since plain **↑**/**↓**
   belong to the band's own row navigation there). History persists across
   sessions inside the `.lanthorn` archive; turn recording off with
   `record_history = false`.
@@ -692,7 +692,7 @@ know which side you're on).
   and centring (`0`) are on the `Ctrl+P` leader panel's **Map** group. During that animation
   `Ctrl+←`/`Ctrl+→` jump a whole stage at a time. `Ctrl+Q` (or `Ctrl+C`) quits
   from anywhere, even mid-prompt.
-- **Inventory strip** — a toggleable strip of your carried items along the
+- **Inventory panel** — a toggleable strip of your carried items along the
   bottom of the story pane.
 - **Notification toasts** — status messages slide in at the top-right and fade
   after a few seconds, so a "map exported" or "style reloaded" note never

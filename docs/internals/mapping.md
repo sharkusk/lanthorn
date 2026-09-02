@@ -25,7 +25,7 @@ Adams adventure. One map builder, three engines, zero special cases.
 Before the mapper can place a room it has to be told which room you're in, and
 each engine surfaces that differently. lanthorn handles all of it, and records
 *how* it worked out each room the first time it finds it — right-click a room to see
-"Found by:" in the room dock's Diagnostics body. It is kept with the room, so the answer is
+"Found by:" in the room panel's Diagnostics body. It is kept with the room, so the answer is
 still there long after the turn that discovered it.
 
 - **Classic Z-machine (v3)** reports the room in the status-line variable —
@@ -217,7 +217,7 @@ The map is a place you can move through, not just a picture.
   map and the **matrix** — the direction table described below. Bare, it cycles; `view-map
   drawn` / `view-map matrix` sets it outright. The choice is per-layer and saved with the map,
   so a maze can stay a table while everything around it stays a map.
-- **Room card** — the [room dock](interface.md#the-room-dock)'s Room body (`toggle-room-dock`,
+- **Room card** — the [room panel](interface.md#the-room-panel)'s Room body (`toggle-room-panel`,
   leader `k`, or left-click a room) lists **every** travel direction, not just the ones that go
   somewhere: where each leads, how it comes back, which you tried and found walled up (`×`), and
   which you have never tried at all (`·`). That is the map's answer to "where haven't I been?",
@@ -267,7 +267,7 @@ and it understands the awkward cases:
   that lost stamps its **own glyph beside the shared line's anchor** — a staircase that
   lost to a compass edge shows its `↑` on the border of the room it climbs from, so a
   known way back never disappears into the collapse. Lines carrying more than one
-  passage are also tinted with the `shared_path` selector — and the room dock's Diagnostics
+  passage are also tinted with the `shared_path` selector — and the room panel's Diagnostics
   body lists every exit with its direction and destination, so nothing is lost, only
   unstacked.
 
@@ -412,7 +412,7 @@ ask.
 
 `Esc` backs out one step at a time: the first press clears the route and leaves the
 room selected with its entrances still bold, the next unpins the room, the next
-closes the room dock.
+closes the room panel.
 
 **Narrow panes** degrade before they scroll. First the `⇠x` return suffixes drop
 (cells shrink to `→5`, and the return is still readable on the destination's own row

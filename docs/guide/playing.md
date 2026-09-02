@@ -20,7 +20,7 @@ memorizing anything. `↑`/`↓` at the prompt recall earlier commands,
 shell-style. See [keys](../reference/keys.md) and
 [commands](../reference/commands.md) for the full lists.
 
-## The command band
+## The command panel
 
 Press the `▲` control on the story pane's bottom border (or
 `/open-command-band`) and a dock opens along the bottom that builds a command
@@ -48,7 +48,7 @@ frustration in the genre — a room description names a dozen things and the
 game only implements two — and it's telling you what the *dictionary*
 knows, not a promise that any of it is within reach.
 
-The command band carries the same idea as a running list: under what's
+The command panel carries the same idea as a running list: under what's
 actually here, dimmed, sit the nouns the story has *printed* this session —
 things a room describes rather than things it hands you directly. Newest
 first, and it keeps accumulating, so something named forty turns ago is

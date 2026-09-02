@@ -781,7 +781,7 @@ fn the_grammar_is_read_once_per_open() {
     assert!(!refresh_verbs(&mut state, &session), "…and an idle tick forces no repaint");
 }
 
-/// `[command_band] verbs` still replaces the column wholesale — the story's own
+/// `[command_panel] verbs` still replaces the column wholesale — the story's own
 /// grammar included — and says whose list it is. Existing configs keep working.
 #[test]
 fn a_configured_verb_list_outranks_the_story_s_grammar() {

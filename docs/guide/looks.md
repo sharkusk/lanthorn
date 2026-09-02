@@ -60,7 +60,7 @@ in your font. A patched [Nerd Font](https://www.nerdfonts.com) unlocks the
 fancier `nerdfont` presets, but nothing requires one — the default look needs
 no patched font at all. The portal markers default to shapes an ordinary
 monospace face already carries — up, down, in, out as `↑ ↓ ◉ ◎` — and they
-draw wherever a portal does: on the map, and in the command band's one-click
+draw wherever a portal does: on the map, and in the command panel's one-click
 cluster beside the compass rose. Nerd Font presets, including a dedicated
 stairway set, are there if you'd rather.
 

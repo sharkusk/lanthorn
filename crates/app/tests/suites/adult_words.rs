@@ -15,7 +15,7 @@
 //!
 //! > unprompted enumeration gets a default; what the player reached for does not.
 //!
-//! Which is why the keys are TOP-LEVEL rather than `[command_band]`'s: SQ-1107's
+//! Which is why the keys are TOP-LEVEL rather than `[command_panel]`'s: SQ-1107's
 //! momentary reveal is another unprompted enumeration, and one setting they all
 //! read beats each surface growing its own and drifting.
 //!
@@ -329,7 +329,7 @@ fn matching_is_whole_word_never_a_prefix() {
 
 // ── The configuration surface ────────────────────────────────────────────────
 
-/// Both keys are top-level, not `[command_band]`'s — the principle is about
+/// Both keys are top-level, not `[command_panel]`'s — the principle is about
 /// unprompted enumeration, not about the band (SQ-1117's argument).
 #[test]
 fn the_keys_are_top_level_and_round_trip() {
@@ -340,9 +340,9 @@ fn the_keys_are_top_level_and_round_trip() {
     assert!(!cfg.hide_adult_words);
     assert_eq!(cfg.adult_words, vec!["xyzzy".to_string()]);
 
-    // …and under `[command_band]` they are nothing, which is the point of the
+    // …and under `[command_panel]` they are nothing, which is the point of the
     // placement: one setting every enumerating surface reads.
-    let band: Config = toml::from_str("[command_band]\nhide_adult_words = false\n")
+    let band: Config = toml::from_str("[command_panel]\nhide_adult_words = false\n")
         .expect("an unknown key in a section is ignored, as every other one is");
     assert!(band.hide_adult_words, "the band section has no say in it");
 }

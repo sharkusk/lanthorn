@@ -37,19 +37,21 @@
 //! including whatever the command persists. There is no second implementation of
 //! any toggle beside the one the registry already owns.
 //!
-//! **The state is carried TWICE: by the glyph and by the colour.** The panel
-//! toggles are arrows pointing the way the panel would move (the map lives right
-//! of the story pane, the command band below it), the Guiding Light is filled when
-//! lit and hollow when not, and the two v6 controls draw a distinct glyph per
-//! mode — and on top of that, **every control that is ON is lit yellow**,
-//! through `panel.control:lit`, which is the `alert` role and so the same slot
+//! **The state is carried TWICE: by the glyph and by the colour.** The map
+//! toggle is an arrow pointing the way the panel would move (the map lives
+//! right of the story pane), the Guiding Light is filled when lit and hollow
+//! when not, and the two v6 controls draw a distinct glyph per mode — and on
+//! top of that, **every control that is ON is lit yellow**, through
+//! `panel.control:lit`, which is the `alert` role and so the same slot
 //! `transcript_assist` lights up in. The doubling is deliberate: a player who
 //! cannot tell the two colours apart still has the shape, and the shape change
 //! is legible at a glance without reading the colour.
 //!
 //! The render mode is a three-way cycle rather than a switch, so "on" needs a
 //! reading: **`hybrid` is how the game arrives and is NOT lit; `raster` and
-//! `extended` both are**, because either is a choice the player made.
+//! `extended` both are**, because either is a choice the player made. The panel
+//! cycle (SQ-1237) reads the same way: `none` is idle and not lit, and either
+//! panel being open is a choice, so both `command` and `inventory` are.
 //!
 //! **The v6 pair does not exist off v6.** They are absent from the cluster
 //! entirely rather than drawn disabled, so the border of a Zork I never shows a
@@ -271,7 +273,11 @@ impl BorderControl {
         match self {
             BorderControl::Map => bare("toggle-map"),
             BorderControl::Guidance => bare("set-guidance"),
-            BorderControl::VerbPanel => bare("open-command-band"),
+            // SQ-1237: this control now cycles command panel → inventory panel →
+            // none rather than merely toggling the command panel — `cycle-panel`
+            // is the registry entry that does both, so a click is still exactly
+            // what typing it does.
+            BorderControl::VerbPanel => bare("cycle-panel"),
             BorderControl::V6Render => bare("set-v6-render"),
             BorderControl::V6PixelLock => bare("set-v6-pixel-lock"),
             BorderControl::ReturnProbe => bare("set-return-probe"),
@@ -476,21 +482,29 @@ pub fn controls_for(state: &AppState) -> Vec<ControlView> {
         ],
     });
 
-    // ── Command band ─────────────────────────────────────────────────────────
-    let band_on = state.command_band_visible();
+    // ── The panel cycle: command panel → inventory panel → none (SQ-1237) ────
+    // Three states, one control, so the glyph and the hint both name the state
+    // it is IN (not the state a click reaches, as the two-way toggles above do)
+    // and the hint's second line says what a click does next. `None` is the
+    // only unlit reading — the other two are a panel actually open, which is
+    // exactly what "lit" means everywhere else in this cluster.
+    let panel = state.current_side_panel();
+    let (panel_glyph, panel_hint) = match panel {
+        crate::state::SidePanel::Command => {
+            (g.band_hide, "Command panel: open — click for the inventory panel")
+        }
+        crate::state::SidePanel::Inventory => {
+            (g.inventory_open, "Inventory panel: open — click to close")
+        }
+        crate::state::SidePanel::None => {
+            (g.band_show, "Closed — click for the command panel")
+        }
+    };
     out.push(ControlView {
         id: BorderControl::VerbPanel,
-        glyph: if band_on { g.band_hide } else { g.band_show },
-        style: style_for(state, BorderControl::VerbPanel, band_on),
-        hint: vec![
-            if band_on {
-                "Command band: open — click to close"
-            } else {
-                "Command band: closed — click to open"
-            }
-            .to_string(),
-            key_route(state, BorderControl::VerbPanel.command()),
-        ],
+        glyph: panel_glyph,
+        style: style_for(state, BorderControl::VerbPanel, panel != crate::state::SidePanel::None),
+        hint: vec![panel_hint.to_string(), key_route(state, BorderControl::VerbPanel.command())],
     });
 
     // ── The reveal (a trigger, not a switch) ─────────────────────────────────

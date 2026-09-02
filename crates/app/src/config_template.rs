@@ -175,7 +175,7 @@ const INTERFACE: &[Row] = &[
         "false",
         &[
             "Type into a persistent command bar instead of the inline story prompt.",
-            "(Unrelated to the [command_band] section further down, which is the",
+            "(Unrelated to the [command_panel] section further down, which is the",
             "point-and-click phrase builder.)",
         ],
     ),
@@ -228,7 +228,7 @@ const INTERFACE: &[Row] = &[
         "true",
         &[
             "Keep the words below out of any panel that ENUMERATES a story's",
-            "vocabulary unprompted — the command band's VERB column and its like.",
+            "vocabulary unprompted — the command panel's VERB column and its like.",
             "Infocom's dictionaries are saltier than their prose, and a panel puts",
             "the whole lot in front of anyone who opens it.",
             "",
@@ -255,14 +255,14 @@ const INTERFACE: &[Row] = &[
     d("show_status_bar", "true", &["Show the status/score bar across the top of the story pane."]),
     d("show_room_numbers", "false", &["Show room numbers (#id) inside Boxes-zoom room boxes."]),
     d("split_ratio", "50", &["The story pane's share of the story/map split, as a percentage."]),
-    d("inv_dock_pct", "33", &["Inventory dock height cap, as a percentage of screen height."]),
+    d("inv_dock_pct", "33", &["Inventory panel height cap, as a percentage of screen height."]),
     d(
         "room_dock_pct",
         "33",
         &[
-            "Room dock height, as a percentage of screen height. The dock docks at",
-            "the bottom of the map pane and describes the room you are in (or the",
-            "one you clicked).",
+            "Room panel height, as a percentage of screen height. The panel docks",
+            "at the bottom of the map pane and describes the room you are in (or",
+            "the one you clicked).",
         ],
     ),
     d(
@@ -518,7 +518,7 @@ const COMMAND_BAND: &[Row] = &[
             "key.",
         ],
     ),
-    d("auto_open", "false", &["Open the command band as soon as the story starts."]),
+    d("auto_open", "false", &["Open the command panel as soon as the story starts."]),
     ex(
         "verbs",
         "[ { word = \"unlock\", arity = \"pair\", prep = \"with\" }, { word = \"polish\", arity = \"object\" } ]",
@@ -581,7 +581,7 @@ pub(crate) const GROUPS: &[Group] = &[
     Group { banner: "Sound", table: None, rows: SOUND },
     Group { banner: "Transcript search", table: Some("search"), rows: SEARCH },
     Group { banner: "Animation", table: Some("animation"), rows: ANIMATION },
-    Group { banner: "Command band", table: Some("command_band"), rows: COMMAND_BAND },
+    Group { banner: "Command panel", table: Some("command_panel"), rows: COMMAND_BAND },
     Group { banner: "Key bindings", table: Some("keymap"), rows: KEYMAP },
 ];
 
@@ -992,10 +992,10 @@ mod tests {
             // `adult_words` is the one SETTING written live (SQ-1122): the list is
             // only a default if the player can read it, and it is the default, so
             // the template is still a no-op as written.
-            ["adult_words", "animation", "command_band", "keymap", "search", "version"],
+            ["adult_words", "animation", "command_panel", "keymap", "search", "version"],
             "live keys: {parsed:?}"
         );
-        for t in ["animation", "command_band", "keymap", "search"] {
+        for t in ["animation", "command_panel", "keymap", "search"] {
             assert!(
                 parsed[t].as_table().is_some_and(|x| x.is_empty()),
                 "section [{t}] is a bare header with every setting commented: {:?}",
@@ -1111,7 +1111,14 @@ mod tests {
         // is whatever lanthorn last wrote, and a reader who set it by hand would be
         // asking to be prompted once and then never again — which is what
         // `--font-check on` and `/run-font-check` already do, on purpose (SQ-1112).
-        let exempt = ["version", "font_check_pending"];
+        // `command_band` is exempt for a narrower reason than the other two: the
+        // Rust FIELD keeps that name (an internal identifier, SQ-1237 left it
+        // alone), but the TOML section it (de)serialises to is renamed to
+        // `command_panel` via `#[serde(rename = "command_panel")]` — so the
+        // generic `GROUPS.table == field name` check below can't find it under
+        // its own name. `Group { table: Some("command_panel"), .. }` is exactly
+        // where it is documented.
+        let exempt = ["version", "font_check_pending", "command_band"];
         let missing: Vec<&str> = persisted
             .iter()
             .copied()
@@ -1162,10 +1169,10 @@ mod tests {
         live.sort_unstable();
         assert_eq!(
             live,
-            ["adult_words", "animation", "command_band", "default_story_dir", "keymap", "search", "version"],
+            ["adult_words", "animation", "command_panel", "default_story_dir", "keymap", "search", "version"],
             "only the changed setting joins the stamp, the seeded adult list and the section headers: {after}"
         );
-        for t in ["animation", "command_band", "keymap", "search"] {
+        for t in ["animation", "command_panel", "keymap", "search"] {
             assert!(parsed[t].as_table().is_some_and(|x| x.is_empty()), "[{t}] stays a bare header");
         }
 

@@ -2479,9 +2479,9 @@ fn render_inline_buffer(b: &BufferWindow, state: &AppState, area: Rect, buf: &mu
     let base = match (b.panel, b.bg) {
         // A game-set window colour always wins.
         (_, Some(rgb)) => state.colors.theme.get("transcript").style.bg(crate::render::resolve_zcolour(zvm::screen::ZColour::True24(rgb), &state.colors)),
-        // A chrome panel (Scott room panel) uses the themed `room_panel` colour so
-        // the split's top and bottom read as distinct regions.
-        (true, None) => state.colors.theme.get("room_panel").style,
+        // A chrome panel (Scott room panel) uses the themed `scott_room_panel`
+        // colour so the split's top and bottom read as distinct regions.
+        (true, None) => state.colors.theme.get("scott_room_panel").style,
         (false, None) => state.colors.theme.get("transcript").style,
     };
     fill_style(area, buf, base);
@@ -10568,7 +10568,7 @@ mod tests {
         let mut colors = crate::colors::ColorScheme::terminal_default();
         colors.theme = theme_with_bg_overrides(&[
             ("transcript", Color::Rgb(9, 9, 9)),
-            ("room_panel", Color::Rgb(0, 0, 128)),
+            ("scott_room_panel", Color::Rgb(0, 0, 128)),
         ]);
         let mut state = AppState::default();
         state.colors = colors;

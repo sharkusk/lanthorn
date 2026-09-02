@@ -296,19 +296,19 @@ impl Default for KeyMap {
 
         // NO F-KEY HAS A DEFAULT BINDING, and that is the whole rule (SQ-1142).
         //
-        // F2 opened the command band (SQ-0664), F3 entered pane-resize mode
+        // F2 opened the command panel (SQ-0664), F3 entered pane-resize mode
         // (SQ-0669) and F4 lit the word reveal (SQ-1107). All three are gone as
         // DEFAULTS because they were never ours to claim: a v4+ story may
         // declare a terminating-characters table at header $2E, and Infocom's
         // V6 titles use it — Arthur lists F1-F6, so pressing F2 for its map is
         // a read the STORY handles. A host that intercepts the key eats input
-        // the game explicitly asked for, and the player sees a command band
+        // the game explicitly asked for, and the player sees a command panel
         // instead of the map they asked their game for.
         //
         // What this does NOT do: `KeySpec` still parses "f1".."f12", so a player
         // who wants one of these keys may bind it in their own config and
         // accept the trade knowingly. The three commands are untouched in
-        // `slash::COMMANDS` — `open-command-band`, `resize-panes` and
+        // `slash::COMMANDS` — `toggle-command-panel`, `resize-panes` and
         // `reveal-words` are all still reachable by name, by the Ctrl+P leader
         // panel where one has a letter, and by the pane-border controls that
         // click them (SQ-1123). Only the default keymap gave them up.
@@ -653,7 +653,7 @@ const DEFAULT_GROUPS: &[DefaultGroup] = &[
     ("Map", &[('+', "zoom-map in", "zoom in"), ('-', "zoom-map out", "zoom out"), ('0', "center-map", "centre on selection")]),
     ("Map · Layers", &[('p', "move-region new", "region into a new layer"), ('m', "move-region parent", "region into the parent layer"), ('c', "cycle-layer next", "next map layer"), ('z', "mark-maze-layer", "flag layer as a maze")]),
     ("Map · Edit", &[('r', "rename-room", "rename room"), ('n', "edit-notes", "edit room notes"), ('d', "delete-connection", "delete connection"), ('e', "relabel-edge", "relabel edge")]),
-    ("Map · View", &[('i', "toggle-inventory", "inventory strip"), ('l', "toggle-portal-labels", "portal labels"), ('v', "open-command-band", "command band"), ('u', "view-map", "drawn / matrix view"), ('k', "toggle-room-dock", "room dock")]),
+    ("Map · View", &[('i', "toggle-inventory-panel", "inventory panel"), ('l', "toggle-portal-labels", "portal labels"), ('v', "toggle-command-panel", "command panel"), ('u', "view-map", "drawn / matrix view"), ('k', "toggle-room-panel", "room panel")]),
 ];
 
 /// One leader-panel entry: `(leader letter, command-string, optional label)`.
@@ -1183,10 +1183,10 @@ mod tests {
         let view_group = layout.groups.iter().find(|(title, _)| title == "Map \u{b7} View");
         assert!(view_group.is_some(), "View group should exist");
         let (_, cmds) = view_group.unwrap();
-        assert!(cmds.iter().any(|c| c.1 == "toggle-inventory"), "toggle-inventory should be in View group");
-        // SQ-0692: the room dock is a View-group toggle too — the popups it replaced
+        assert!(cmds.iter().any(|c| c.1 == "toggle-inventory-panel"), "toggle-inventory-panel should be in View group");
+        // SQ-0692: the room panel is a View-group toggle too — the popups it replaced
         // were mouse-only, which is why nobody found the diagnostics view.
-        assert!(cmds.iter().any(|c| c.1 == "toggle-room-dock"), "toggle-room-dock should be in View group");
+        assert!(cmds.iter().any(|c| c.1 == "toggle-room-panel"), "toggle-room-panel should be in View group");
     }
 
     #[test]
@@ -1381,9 +1381,9 @@ mod tests {
         assert_eq!(layout.leader_command('c'), Some("cycle-layer next"));
         // SQ-0446 Proposal B mnemonics:
         assert_eq!(layout.leader_command('n'), Some("edit-notes"));
-        assert_eq!(layout.leader_command('i'), Some("toggle-inventory"));
+        assert_eq!(layout.leader_command('i'), Some("toggle-inventory-panel"));
         assert_eq!(layout.leader_command('l'), Some("toggle-portal-labels"));
-        assert_eq!(layout.leader_command('v'), Some("open-command-band"));
+        assert_eq!(layout.leader_command('v'), Some("toggle-command-panel"));
         assert_eq!(layout.leader_command('s'), Some("open-settings"));
         assert_eq!(layout.leader_command('g'), Some("reset-game"));
         // 'q' is deliberately unassigned (bare q closes the dialog):
@@ -1391,8 +1391,8 @@ mod tests {
         // moved to the '/' palette — no longer leader letters:
         // ('z' was resize-panes' letter; SQ-0666 reclaimed the free slot for maZe.)
         assert_eq!(layout.leader_command('z'), Some("mark-maze-layer"));
-        // 'k' was free after reset-pane-size left; SQ-0692 gave it the room dock.
-        assert_eq!(layout.leader_command('k'), Some("toggle-room-dock"));
+        // 'k' was free after reset-pane-size left; SQ-0692 gave it the room panel.
+        assert_eq!(layout.leader_command('k'), Some("toggle-room-panel"));
         assert_eq!(layout.leader_command('x'), None); // reset-game moved to 'g'
         assert_eq!(layout.leader_command('1'), None);
     }
@@ -1402,7 +1402,7 @@ mod tests {
     /// A v4+ story may declare a terminating-characters table at header $2E and
     /// Infocom's V6 titles do — Arthur lists F1-F6 — so a default binding on an
     /// F-key eats a read the story explicitly asked for. F2/F3/F4 carried
-    /// `open-command-band`/`resize-panes`/`reveal-words` until this; they are
+    /// `toggle-command-panel`/`resize-panes`/`reveal-words` until this; they are
     /// leader-, palette- and border-control-reachable now, and only the default
     /// keymap gave them up.
     ///

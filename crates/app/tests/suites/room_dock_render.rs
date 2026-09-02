@@ -165,9 +165,9 @@ fn flipping_the_view_redraws_the_same_room_with_the_other_body() {
 #[test]
 fn the_dock_selectors_apply_in_both_colour_modes() {
     let parsed = app::theme::toml_schema::parse(
-        "[elements]\nroom_dock = { fg = \"magenta\" }\n\
-         \"room_dock.header\" = { fg = \"blue\" }\n\
-         \"room_dock.header:pinned\" = { fg = \"green\" }\n",
+        "[elements]\nroom_panel = { fg = \"magenta\" }\n\
+         \"room_panel.header\" = { fg = \"blue\" }\n\
+         \"room_panel.header:pinned\" = { fg = \"green\" }\n",
     )
     .expect("the override parses");
 
@@ -191,15 +191,15 @@ fn the_dock_selectors_apply_in_both_colour_modes() {
 
         let (buf, r) = draw(&m.graph, &st);
         let following = fgs(&buf, r);
-        assert!(following.contains(&Some(Color::Blue)), "honor={honor}: room_dock.header applies");
-        assert!(following.contains(&Some(Color::Magenta)), "honor={honor}: room_dock applies to the body");
+        assert!(following.contains(&Some(Color::Blue)), "honor={honor}: room_panel.header applies");
+        assert!(following.contains(&Some(Color::Magenta)), "honor={honor}: room_panel applies to the body");
         assert!(!following.contains(&Some(Color::Green)), "honor={honor}: not the pinned variant");
 
         st.selected_room = Some(here);
         let (buf, r) = draw(&m.graph, &st);
         assert!(
             fgs(&buf, r).contains(&Some(Color::Green)),
-            "honor={honor}: room_dock.header:pinned applies once pinned"
+            "honor={honor}: room_panel.header:pinned applies once pinned"
         );
     }
 }

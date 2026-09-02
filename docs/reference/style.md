@@ -116,10 +116,10 @@ Every themeable `style.toml` selector: which role or selector it derives from, a
 | `more_prompt` | Elements | Style | `chrome` | `reversed` | |
 | `tidy_progress` | Elements | Style | `accent` |  | |
 | `meta_marker` | Elements | Style | `muted` |  | |
-| `inventory_dock` | Elements | Style | `accent` |  | |
-| `room_dock` | Elements | Style | `text` |  | |
-| `room_dock.header` | Elements | Style | `heading` |  | |
-| `room_dock.header:pinned` | Elements | Style | `accent` | `reversed` | |
+| `inventory_panel` | Elements | Style | `accent` |  | |
+| `room_panel` | Elements | Style | `text` |  | |
+| `room_panel.header` | Elements | Style | `heading` |  | |
+| `room_panel.header:pinned` | Elements | Style | `accent` | `reversed` | |
 | `story_info_title` | Elements | Style | `heading` |  | |
 | `terminal_dump_heading` | Elements | Style | `heading` | `bold` | |
 | `terminal_dump_assumed` | Elements | Style | `alert` |  | |
@@ -151,7 +151,7 @@ Every themeable `style.toml` selector: which role or selector it derives from, a
 | `input_text` | Elements | Style | `text` |  | |
 | `input_prompt` | Elements | Style | `text` |  | |
 | `upper_window_border` | Elements | Style | `line` |  | |
-| `room_panel` | Elements | Style | `accent` | `reversed` | |
+| `scott_room_panel` | Elements | Style | `accent` | `reversed` | |
 | `palette_query` | Elements | Style | `text` |  | |
 | `palette_name` | Elements | Style | `text` |  | |
 | `palette_match` | Elements | Style | `accent` | `bold` | |
@@ -180,12 +180,12 @@ Every themeable `style.toml` selector: which role or selector it derives from, a
 | `dialog.story_menu.item` | Dialog | Style | `dialog.background` |  | |
 | `dialog.story_menu.item:selected` | Dialog | Style | `dialog.list_selected` |  | |
 | `dialog.story_menu.key` | Dialog | Style | `dialog.list_footer` |  | |
-| `band.column_header` | Elements | Style | `muted` |  | |
-| `band.column_header:active` | Elements | Style | `accent` | `bold` | |
-| `band.quick` | Elements | Style | `text` |  | |
-| `band.quick:hover` | Elements | Style | `band.quick` | `reversed` | |
-| `band.group_label` | Elements | Style | `heading` |  | |
-| `band.item:seen` | Elements | Style | `muted` |  | |
+| `command_panel.column_header` | Elements | Style | `muted` |  | |
+| `command_panel.column_header:active` | Elements | Style | `accent` | `bold` | |
+| `command_panel.quick` | Elements | Style | `text` |  | |
+| `command_panel.quick:hover` | Elements | Style | `command_panel.quick` | `reversed` | |
+| `command_panel.group_label` | Elements | Style | `heading` |  | |
+| `command_panel.item:seen` | Elements | Style | `muted` |  | |
 | `file_browser_cwd` | Elements | Style | `alert` |  | |
 | `file_browser_dir` | Elements | Style | `accent` |  | |
 | `inspector_edge_ok` | Elements | Style |  | `fg=Green` | |
