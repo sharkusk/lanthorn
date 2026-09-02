@@ -1048,6 +1048,11 @@ pub(crate) fn run_story_picker(
     let mut gallery_cols: usize = 1;
     let mut gallery_vis: usize = 1;
     let mut gallery_visible: Vec<usize> = Vec::new();
+    // When the grid's scroll last moved — wheel or a nav key, mirroring
+    // `AppState::sixel_scroll_motion_at` (SQ-1198) — this loop has no `AppState`
+    // to ride, so it tracks the same debounce window locally. `None` = never
+    // scrolled this session. See `gallery_scroll_in_motion` below.
+    let mut gallery_scroll_motion_at: Option<std::time::Instant> = None;
 
     // IFDB fetch worker (SQ-0348): `f` (this story, forced) and `r` (whole
     // library, skip current-version) share one background worker. Live only
@@ -1208,6 +1213,7 @@ pub(crate) fn run_story_picker(
                     );
                     gallery_first_row = fr;
                     list.select(ni, viewport, anim);
+                    gallery_scroll_motion_at = Some(Instant::now());
                 } else {
                     list.scroll_by(d, viewport, anim);
                 }
@@ -1248,7 +1254,8 @@ pub(crate) fn run_story_picker(
                     if preview.is_none() {
                         let (rects, cols, vis) = draw_story_gallery(
                             &stories, list.selected, &mut gallery_first_row, &heading, &cs, &keymap,
-                            cover_picker.as_ref(), &mut cover, data_base, list_area, buf,
+                            cover_picker.as_ref(), gallery_scroll_in_motion(gallery_scroll_motion_at),
+                            &mut cover, data_base, list_area, buf,
                         );
                         gallery_cols = cols.max(1);
                         gallery_vis = vis.max(1);
@@ -1684,7 +1691,12 @@ pub(crate) fn run_story_picker(
         // the next keypress.
         let search_scrolling =
             search_modal.as_ref().is_some_and(|m| m.has_active_animation());
-        if (list.has_active_animation() || slide.active() || cover_busy || fetcher.busy() || hint_dl.busy() || url_dl.busy() || search_busy || search_scrolling)
+        // SQ-1213: while the gallery's scroll-settle window is open, keep
+        // ticking so the redraw that turns a suppressed sixel tile back into
+        // its real payload fires on its own, without waiting for another key —
+        // mirroring `has_active_animation()` pulling in `transcript_scroll_in_motion`
+        // for the transcript's own debounce (SQ-1198).
+        if (list.has_active_animation() || slide.active() || cover_busy || fetcher.busy() || hint_dl.busy() || url_dl.busy() || search_busy || search_scrolling || gallery_scroll_in_motion(gallery_scroll_motion_at))
             && !crossterm::event::poll(Duration::from_millis(16)).unwrap_or(false)
         {
             list.finalize_if_done();
@@ -1968,6 +1980,7 @@ pub(crate) fn run_story_picker(
                             if gallery {
                                 panel_scroll = 0;
                                 list.select(gm(list.selected, dx, dy), viewport, anim);
+                                gallery_scroll_motion_at = Some(Instant::now());
                             } else if let Some(nav) = action.and_then(app::browser::list_nav_code) {
                                 panel_scroll = 0;
                                 app::list_scroll::nav_key(&mut list, nav, stories.len(), viewport, anim);
@@ -1977,6 +1990,7 @@ pub(crate) fn run_story_picker(
                             panel_scroll = 0;
                             if gallery {
                                 list.select(gm(list.selected, 0, n * gallery_vis as isize), viewport, anim);
+                                gallery_scroll_motion_at = Some(Instant::now());
                             } else if let Some(nav) = action.and_then(app::browser::list_nav_code) {
                                 app::list_scroll::nav_key(&mut list, nav, stories.len(), viewport, anim);
                             }
@@ -1990,6 +2004,7 @@ pub(crate) fn run_story_picker(
                                         list.select(stories.len().saturating_sub(1), viewport, anim)
                                     }
                                 }
+                                gallery_scroll_motion_at = Some(Instant::now());
                             } else if let Some(nav) = action.and_then(app::browser::list_nav_code) {
                                 app::list_scroll::nav_key(&mut list, nav, stories.len(), viewport, anim);
                             }
@@ -2715,6 +2730,29 @@ fn draw_story_picker(
     (row_rects, rows, header_rects)
 }
 
+/// How long the gallery grid's scroll is considered "in motion" after the last
+/// wheel notch or nav key (SQ-1213), mirroring `AppState::SIXEL_SCROLL_SETTLE_MS`
+/// from the transcript's own debounce (SQ-1198, `crates/app/src/state.rs`): this
+/// loop has no `AppState` to ride, so it tracks the identical 150ms window
+/// locally instead — one default scroll-tween (120ms) plus a tick's margin.
+const GALLERY_SCROLL_SETTLE_MS: u64 = 150;
+
+/// True while the gallery grid's scroll is still "in motion" from a recent
+/// wheel notch or nav key (SQ-1213) — see [`GALLERY_SCROLL_SETTLE_MS`].
+fn gallery_scroll_in_motion(motion_at: Option<std::time::Instant>) -> bool {
+    motion_at.is_some_and(|t| t.elapsed().as_millis() < GALLERY_SCROLL_SETTLE_MS as u128)
+}
+
+/// True while a gallery cover tile should render as its already-painted
+/// letterbox footprint instead of building/placing a protocol (SQ-1213,
+/// mirroring `sixel_scroll_suppress` in `render/inline_image.rs` for the
+/// transcript's own debounce): sixel has no image ids, so re-placing a tile
+/// mid-scroll re-sends its whole payload every frame, where kitty re-places an
+/// existing upload by id for free. Kitty and half-blocks are untouched.
+fn gallery_sixel_scroll_suppress(picker: &ratatui_image::picker::Picker, in_motion: bool) -> bool {
+    picker.protocol_type() == ratatui_image::picker::ProtocolType::Sixel && in_motion
+}
+
 /// Draw the cover-gallery view (SQ-0374): a grid of story cover thumbnails, each
 /// a fitted frontispiece over a one-row title caption, with the selected tile's
 /// caption highlighted. `first_row` is the grid's scroll row (in/out — updated
@@ -2722,7 +2760,8 @@ fn draw_story_picker(
 /// for click selection (the whole tile is the hit target), plus the resolved
 /// column and visible-row counts the caller feeds back into navigation. Covers
 /// paint only for tiles already decoded into `cover`; undecoded/coverless tiles
-/// show a plain letterbox until the async decoder fills them in.
+/// show a plain letterbox until the async decoder fills them in. `scroll_in_motion`
+/// gates the SQ-1213 sixel scroll-settle debounce (see [`gallery_sixel_scroll_suppress`]).
 #[allow(clippy::too_many_arguments)]
 fn draw_story_gallery(
     stories: &[app::picker::StoryEntry],
@@ -2732,6 +2771,7 @@ fn draw_story_gallery(
     cs: &app::colors::ColorScheme,
     km: &app::keymap::KeyMap,
     picker: Option<&ratatui_image::picker::Picker>,
+    scroll_in_motion: bool,
     cover: &mut app::cover::CoverState,
     // Where per-game directories live: a tile's cover is cached under the ROW's
     // key, which for one of several stories off a disk image is that story's own
@@ -2813,7 +2853,12 @@ fn draw_story_gallery(
                     // (image aspect + cell size), so it centres on both axes no
                     // matter how the render protocol reports its own size.
                     let fit = cover.fitted_tile_rect(picker, &key, cover_rect);
-                    if let Some(proto) = cover.tile_protocol(picker, &key, fit) {
+                    if gallery_sixel_scroll_suppress(picker, scroll_in_motion) {
+                        // SQ-1213: mid-scroll under sixel, leave the tile as the
+                        // letterbox footprint already filled above rather than
+                        // rebuilding/re-placing its whole payload this frame.
+                        drew_cover = true;
+                    } else if let Some(proto) = cover.tile_protocol(picker, &key, fit) {
                         let id = app::render::graphics::place_protocol(proto, fit, buf);
                         cover.note_tile_placed(id);
                         drew_cover = true;
@@ -6319,7 +6364,7 @@ mod tests {
         let mut first_row = 0usize;
         // No picker → no cover art → each tile shows its title centred in the band.
         let (rects, cols, vis) = super::draw_story_gallery(
-            &stories, 1, &mut first_row, &super::PickerHeading::browse(std::path::Path::new("/tmp")), &cs, &km(), None, &mut cover, std::path::Path::new("/tmp"), area, &mut buf,
+            &stories, 1, &mut first_row, &super::PickerHeading::browse(std::path::Path::new("/tmp")), &cs, &km(), None, false, &mut cover, std::path::Path::new("/tmp"), area, &mut buf,
         );
 
         assert!(cols >= 1 && vis >= 1);
@@ -6565,9 +6610,100 @@ mod tests {
         let mut cover = app::cover::CoverState::default();
         let mut first_row = 0usize;
         let (rects, _cols, _vis) = super::draw_story_gallery(
-            &stories, 39, &mut first_row, &super::PickerHeading::browse(std::path::Path::new("/tmp")), &cs, &km(), None, &mut cover, std::path::Path::new("/tmp"), area, &mut buf,
+            &stories, 39, &mut first_row, &super::PickerHeading::browse(std::path::Path::new("/tmp")), &cs, &km(), None, false, &mut cover, std::path::Path::new("/tmp"), area, &mut buf,
         );
         assert!(first_row > 0, "grid scrolled down to keep the last cover visible");
         assert!(rects.iter().any(|(i, _)| *i == 39), "the selected tile is on screen");
+    }
+
+    // ── SQ-1213: gallery scroll-settle debounce ─────────────────────────────
+    //
+    // Same pattern as SQ-1198's `sixel_scroll_suppress` tests in
+    // `render/inline_image.rs`: a pure gate test on the suppression DECISION,
+    // plus a render OUTCOME test asserted on the buffer cells `draw_story_gallery`
+    // writes. The picker runs its own standalone event loop with no `AppState`
+    // to ride, so `gallery_scroll_in_motion`/`gallery_sixel_scroll_suppress`
+    // track the identical 150ms window locally instead.
+
+    /// `gallery_sixel_scroll_suppress` gates on BOTH the backend and the motion
+    /// window: only sixel, and only while `gallery_scroll_in_motion` reads true.
+    /// Kitty re-places an existing upload by id for free and half-blocks are
+    /// ordinary cells, so neither pays the cost this debounce exists to avoid.
+    #[test]
+    fn gallery_scroll_suppress_gates_on_protocol_and_motion() {
+        let mut sixel = app::render::graphics::kitty_picker(8, 16);
+        sixel.set_protocol_type(ratatui_image::picker::ProtocolType::Sixel);
+        let kitty = app::render::graphics::kitty_picker(8, 16);
+        let halfblocks = ratatui_image::picker::Picker::halfblocks();
+
+        // Never scrolled this session: never suppressed, whatever the backend.
+        assert!(!super::gallery_scroll_in_motion(None), "never scrolled = not in motion");
+        assert!(!super::gallery_sixel_scroll_suppress(&sixel, false), "no motion yet");
+        assert!(!super::gallery_sixel_scroll_suppress(&kitty, false));
+        assert!(!super::gallery_sixel_scroll_suppress(&halfblocks, false));
+
+        // Freshly scrolled: in motion, and sixel alone is suppressed.
+        let fresh = Some(std::time::Instant::now());
+        assert!(super::gallery_scroll_in_motion(fresh), "a fresh scroll is in motion");
+        assert!(super::gallery_sixel_scroll_suppress(&sixel, true), "sixel mid-scroll must suppress");
+        assert!(!super::gallery_sixel_scroll_suppress(&kitty, true), "kitty is untouched by the debounce");
+        assert!(!super::gallery_sixel_scroll_suppress(&halfblocks, true), "half-blocks is untouched");
+
+        // Past the settle window (backdating the Instant, since the test can't
+        // literally sleep for it — mirrors the SQ-1198 state.rs tests).
+        let stale = Some(std::time::Instant::now() - std::time::Duration::from_millis(200));
+        assert!(!super::gallery_scroll_in_motion(stale), "past the settle window");
+    }
+
+    /// Falsification target: while suppressed, a sixel tile with a decoded
+    /// cover renders as its letterbox footprint only — no protocol is built or
+    /// placed, so no cell carries a sixel payload — where a settled render of
+    /// the exact same tile places the real protocol. Repeated suppressed
+    /// renders (simulating a burst of scroll steps, all still inside the
+    /// window) place nothing at all; only the first settled render after the
+    /// burst places the real payload.
+    #[test]
+    fn suppressed_gallery_render_shows_footprint_only_settled_places_once() {
+        use ratatui::{buffer::Buffer, layout::Rect};
+        let cs = app::colors::ColorScheme::terminal_default();
+        let story = story_with_meta("Zork", None, None);
+        let stories = vec![story.clone()];
+        let area = Rect::new(0, 0, 40, 22);
+        let mut cover = app::cover::CoverState::default();
+        // A real decoded cover, so there is something to place.
+        let img = image::DynamicImage::ImageRgb8(image::RgbImage::from_pixel(4, 4, image::Rgb([200, 0, 0])));
+        cover.insert(story.path.clone(), Some(img));
+
+        let mut picker = app::render::graphics::kitty_picker(8, 16);
+        picker.set_protocol_type(ratatui_image::picker::ProtocolType::Sixel);
+
+        // A cell carrying the real sixel payload is far longer than any glyph
+        // or plain space this view otherwise paints.
+        let has_payload = |buf: &Buffer| {
+            (area.left()..area.right()).any(|x| {
+                (area.top()..area.bottom())
+                    .any(|y| buf.cell((x, y)).is_some_and(|c| c.symbol().len() > 16))
+            })
+        };
+
+        let mut first_row = 0usize;
+        // Three suppressed renders in a row (a burst of scroll steps, all still
+        // inside the debounce window): none may place the real payload.
+        for _ in 0..3 {
+            let mut buf = Buffer::empty(area);
+            super::draw_story_gallery(
+                &stories, 0, &mut first_row, &super::PickerHeading::browse(std::path::Path::new("/tmp")),
+                &cs, &km(), Some(&picker), true, &mut cover, std::path::Path::new("/tmp"), area, &mut buf,
+            );
+            assert!(!has_payload(&buf), "mid-scroll must not carry a sixel payload");
+        }
+
+        // Settled: the very next render places the real protocol exactly once.
+        let mut buf = Buffer::empty(area);
+        super::draw_story_gallery(
+            &stories, 0, &mut first_row, &super::PickerHeading::browse(std::path::Path::new("/tmp")),
+            &cs, &km(), Some(&picker), false, &mut cover, std::path::Path::new("/tmp"), area, &mut buf,
+        );
+        assert!(has_payload(&buf), "settled render must place the real sixel payload");
     }
 }
