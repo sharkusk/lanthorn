@@ -287,7 +287,7 @@ impl WorldPrint {
 
     /// A print with each fact stated outright, so a case can build the
     /// live-and-shadow pair SQ-1248 is about without two engines.
-    #[cfg(test)]
+    #[cfg(all(test, any(feature = "t-session", feature = "t-guidance")))]
     pub(crate) fn from_parts(
         carried: Option<u64>,
         here: Option<u16>,

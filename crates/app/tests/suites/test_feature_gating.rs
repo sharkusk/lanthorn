@@ -65,10 +65,25 @@ fn relative(root: &Path, path: &Path) -> String {
     path.strip_prefix(root).unwrap_or(path).to_string_lossy().replace('\\', "/")
 }
 
-/// A line that is, after trimming, exactly `#[cfg(test)]` — the bare form. The correctly
-/// migrated form is `#[cfg(all(test, feature = "t-..."))]`, which does not match this.
+/// A line that opens a test-conditioned cfg attribute with no `t-*` feature in it —
+/// the bare `#[cfg(test)]` form, or `#[cfg(all(test, <other predicates>))]` (a
+/// platform guard, say `unix`, ALONGSIDE `test`) that never picked up a `feature =
+/// "t-..."` clause. Both compile whenever `--tests` does, features or not, which is
+/// exactly the bug: `stderr_redirect.rs`'s `mod tests` was `#[cfg(all(test, unix))]`
+/// from before SQ-1242 even started, so the FIRST rewrite pass — which only matched
+/// the exact bare literal — walked straight past it, and it stayed reachable on every
+/// single-group check until this broader match caught it during the SQ-1242/main
+/// merge. The correctly migrated forms this does NOT match: `#[cfg(all(test, feature
+/// = "t-..."))]` and `#[cfg(all(test, unix, feature = "t-..."))]`.
 fn is_bare_cfg_test_line(line: &str) -> bool {
-    line.trim() == "#[cfg(test)]"
+    let t = line.trim();
+    if t == "#[cfg(test)]" {
+        return true;
+    }
+    if let Some(rest) = t.strip_prefix("#[cfg(all(test,") {
+        return !rest.contains("feature = \"t-");
+    }
+    false
 }
 
 /// True when `line`, once trimmed, opens a `mod` item: `mod foo {`, `pub mod foo {`,
