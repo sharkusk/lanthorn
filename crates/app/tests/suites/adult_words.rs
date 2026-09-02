@@ -461,9 +461,9 @@ fn offered(session: &mut GameSession, cfg: Config, commands: &[&str]) -> Vec<Str
 ///
 /// | typed | proposed, in full | offered |
 /// |---|---|---|
-/// | `sod` | `fuck · shit · damn` | `damn` |
+/// | `sod` | `shit · fuck · damn` | `damn` |
 /// | `bed` | `fuck · set · curse` | `set · curse` |
-/// | `don` | `wear` | `wear` |
+/// | `don` | `wear · put on` | `wear · put on` |
 ///
 /// The first two rows are the quest, and they are better than silence: the group
 /// `sod` belongs to holds Infocom's own `damn` beside the two words on the list,
@@ -472,6 +472,23 @@ fn offered(session: &mut GameSession, cfg: Config, commands: &[&str]) -> Vec<Str
 /// list — and a filter that silenced the meaning TABLE rather than four WORDS
 /// would pass the first two and fail it.
 ///
+/// **The `don` row gained `put on` at `bad3ac28` (SQ-1238), and that is the
+/// change working** (SQ-1251). Before it, a multi-word member of the meaning
+/// table was truncated as one string and could never resolve, so `put on` was
+/// invisible however plainly the story implemented it; `wear don put on get
+/// into assume hat` is one group, and Zork I's own grammar really does pair
+/// `put` with `on`, which is the test `025bdab6` (SQ-1240) then narrowed it to.
+/// `get into` fails that narrower test and is correctly absent. What the row
+/// must NOT gain is a third word: `hide` rode in with `put on` until SQ-1251,
+/// because the story-synonym aside resolved the phrase through its first word
+/// and offered `put`'s other spellings — and hiding a sword is not wearing it.
+///
+/// **And the `sod` row reads `shit · fuck` since `d28ce9d2` (SQ-1233)**, whose
+/// support-count ordering put the more widely implemented word first in the
+/// group `shit fuck damn sod`. The offer says a group in the table's own order,
+/// so this line is the TABLE's, not the offer's — and the row that carries the
+/// quest's claim is the filtered one beside it, `damn`, which never moved.
+///
 /// Three turns, one session, one command each — the offer speaks once per word
 /// per session, so a repeat would be swallowed by that rule rather than by
 /// anything here.
@@ -479,10 +496,10 @@ fn offered(session: &mut GameSession, cfg: Config, commands: &[&str]) -> Vec<Str
 fn zork_i_stops_proposing_a_hidden_word_and_keeps_every_other_proposal() {
     let Some(mut session) = boot_zork1() else { return };
     let vocab = session.story_vocabulary().expect("Zork I's grammar reads");
-    for held in ["fuck", "set", "curse", "wear"] {
+    for held in ["fuck", "set", "curse", "wear", "put on"] {
         assert!(vocab.knows(held), "Zork I holds `{held}` — the offer only names its own");
     }
-    for typed in ["sod", "bed", "don"] {
+    for typed in ["sod", "bed", "don", "get into"] {
         assert!(!vocab.knows(typed), "`{typed}` is a word Zork I never heard, which is the setup");
     }
 
@@ -492,7 +509,7 @@ fn zork_i_stops_proposing_a_hidden_word_and_keeps_every_other_proposal() {
         vec![
             "this story knows — damn",
             "this story knows — set · curse",
-            "this story knows — wear",
+            "this story knows — wear · put on",
         ]
     );
 
@@ -507,9 +524,9 @@ fn zork_i_stops_proposing_a_hidden_word_and_keeps_every_other_proposal() {
     assert_eq!(
         shown,
         vec![
-            "this story knows — fuck · shit · damn",
+            "this story knows — shit · fuck · damn",
             "this story knows — fuck · set · curse",
-            "this story knows — wear",
+            "this story knows — wear · put on",
         ],
         "the unfiltered lines the SQ-1144 lane measured, which the switch restores whole"
     );

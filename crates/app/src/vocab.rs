@@ -804,12 +804,25 @@ impl StoryVocabulary {
     /// dictionary spelling of one verb, so a story that groups `take` with `get`
     /// and `hold` teaches the player its own vocabulary at no cost — and after
     /// every other source, whichever one found the verb, because it is an aside.
+    ///
+    /// **A PHRASE is never expanded this way** (SQ-1251). Since SQ-1238 a
+    /// multi-word synonym member can be a candidate in its own right, and
+    /// [`Self::verb_named`] resolves one through its FIRST word alone — so
+    /// `put on` reaches Zork I's `put` entry, whose other spellings are
+    /// `hide`, `insert`, `place` and `stuff`. Those are aliases of `put`, not
+    /// of `put on`, and they mean a different action: typing `don sword` was
+    /// answered `wear · put on · hide`, and hiding a sword is not wearing it.
+    /// The preposition is what carries the meaning, and the verb entry knows
+    /// nothing about it.
     fn by_story_synonym(&self, position: Position, out: &mut Vec<Candidate>) {
         if position != Position::Opening {
             return;
         }
         let found: Vec<String> = out.iter().map(|c| c.word.clone()).collect();
         for w in &found {
+            if w.split_whitespace().count() > 1 {
+                continue;
+            }
             let Some(verb) = self.verb_named(w) else { continue };
             for (order, other) in verb.words.iter().enumerate() {
                 // A one-letter abbreviation (`q`, `x`, `g`) is real vocabulary
@@ -2174,6 +2187,51 @@ mod tests {
         assert!(
             !v.knows("light up"),
             "`up` is a real word of this story, but `light` takes no preposition at all"
+        );
+    }
+
+    /// **SQ-1251, the bill for SQ-1238.** Once a PHRASE could be a candidate,
+    /// `by_story_synonym` started expanding one — and it resolves a candidate
+    /// to a verb through [`StoryVocabulary::verb_named`], which reads the FIRST
+    /// WORD alone. So `put on` reached the `put` entry and the offer picked up
+    /// that entry's other spellings, which are aliases of `put` and mean a
+    /// different action than `put on`.
+    ///
+    /// This is the pocket form of what Zork I r88 did on `don sword`: the
+    /// answer was `wear · put on · hide`, and hiding a sword is not wearing it.
+    ///
+    /// Falsify by dropping the phrase skip from `by_story_synonym`: `hide`
+    /// comes back in third place, exactly as it did on the real story.
+    #[test]
+    fn a_phrasal_candidate_never_drags_in_its_first_words_other_spellings() {
+        let verbs = vec![
+            Verb::new(100, 0, vec!["wear".into()], vec![SyntaxLine::new(0, false, vec![noun()])]),
+            Verb::new(
+                101,
+                0,
+                // Dictionary order, as a real story's entry arrives — which is
+                // why `hide` is the spelling that leaked out of Zork I's `put`.
+                vec!["hide".into(), "put".into(), "stow".into()],
+                vec![SyntaxLine::new(1, false, vec![noun(), word("on"), noun()])],
+            ),
+        ];
+        let mut words = BTreeMap::new();
+        for w in ["wear", "put", "hide", "stow"] {
+            words.insert(w.to_string(), roles(true, false));
+        }
+        words.insert("on".to_string(), WordRoles::default());
+        let preps: BTreeSet<String> = ["on"].iter().map(|s| s.to_string()).collect();
+        let v = StoryVocabulary::new(verbs, words, preps, 0);
+
+        // The setup: `don` is a word this story never heard, and the phrase the
+        // meaning table reaches for it IS one the grammar pairs (SQ-1240).
+        assert!(!v.knows("don"), "the word typed is not this story's");
+        assert!(v.knows("put on"), "`put` takes `on` here, so the phrase counts");
+
+        assert_eq!(
+            v.offer("don", Position::Opening, &["cloak"], &[]),
+            vec!["wear", "put on"],
+            "what the story calls `put` is not what it calls `put on`"
         );
     }
 

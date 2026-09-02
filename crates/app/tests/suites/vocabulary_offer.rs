@@ -429,6 +429,18 @@ fn zork1_answers_the_misses_it_can_and_stays_quiet_otherwise() {
 /// grammar) leaves for `try instead` (a fact about behaviour, from the
 /// shadow probe) to close. `hold back`, by contrast, stays gone: `back` is
 /// nowhere in `carry`'s literal list.
+///
+/// **SQ-1251 turns the third line's tail from `carry` into `place`.** `hold
+/// in` staying is one thing; the story-synonym ASIDE expanding it was
+/// another, and that is what put `carry` there. `StoryVocabulary::verb_named`
+/// resolves a candidate through its FIRST WORD, so `hold in` reached Zork's
+/// `carry` entry and the aside offered that entry's other spellings —
+/// spellings of `carry`, an unrelated sense, with the preposition that
+/// carried the whole meaning thrown away. The aside now skips a phrase, and
+/// the slot falls to `place`, which the same aside reaches the ordinary way:
+/// `hide` is a single word, Zork's own grammar files it with `put`, `place`,
+/// `insert` and `stuff` as one verb, and teaching the player that is exactly
+/// what the aside is for.
 #[test]
 fn zork1_answers_a_word_it_never_heard_with_what_that_word_means() {
     let Some(mut s) = zork1() else { return };
@@ -441,7 +453,7 @@ fn zork1_answers_a_word_it_never_heard_with_what_that_word_means() {
         vec![
             "this story knows — light",
             "this story knows — examine · describe · see",
-            "this story knows — hold in · hide · carry",
+            "this story knows — hold in · hide · place",
             "this story knows — remove · carry · catch",
         ]
     );
@@ -609,11 +621,22 @@ fn zork1_stays_quiet_where_meaning_reaches_nothing_the_story_implements() {
 /// `put on` (wear) means. That is the dictionary-and-grammar fact "this
 /// story knows" states; whether typing `put on` actually dresses the player
 /// is exactly what the vetted `try instead` line is for.
+///
+/// **SQ-1251 drops the trailing `hide`, and the line is `wear · put on`.**
+/// That word was never a meaning of `don` at all — it arrived through the
+/// story-synonym aside, which resolved the phrase `put on` to a verb through
+/// its FIRST WORD and then offered that verb's other spellings. Zork files
+/// `hide`, `insert`, `place`, `put` and `stuff` as one verb, so those are
+/// spellings of `put`; `put on` means what it does BECAUSE of the
+/// preposition, and dropping it drops the meaning. Hiding a sword is not
+/// wearing it. The aside now refuses a phrase — `by_story_synonym`, and its
+/// pocket case `a_phrasal_candidate_never_drags_in_its_first_words_other_
+/// spellings` in `vocab.rs`.
 #[test]
 fn zork1_answers_a_three_letter_synonym_the_story_holds() {
     let Some(mut s) = zork1() else { return };
     let (_state, lines) = play(&mut s, &["don sword"]);
-    assert_eq!(lines, vec!["this story knows — wear · put on · hide"]);
+    assert_eq!(lines, vec!["this story knows — wear · put on"]);
 
     let v = <app::session::GameSession as Engine>::story_vocabulary(&s).expect("zork1 has one");
     assert!(v.knows("wear"), "the word the table reaches, and Zork's own");
