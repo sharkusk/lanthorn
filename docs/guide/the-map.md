@@ -64,7 +64,9 @@ untried on the frontier. Selecting a room bolds every cell elsewhere that
 leads back into it, the one thing a maze's own row can't answer about itself,
 and clicking a room draws you the shortest known route there, step by step.
 Hover a row's name or a cell's destination tag and a tooltip spells out the
-full room name, for the ones the label column had to abbreviate.
+full room name, for the ones the label column had to abbreviate. The label
+column itself grows to fit the room, wide pane permitting — abbreviation and
+its footnote only kick in once a name genuinely runs out of room.
 
 ![The matrix map view: the map as a direction table — one row per room, every passage's true destination in its cell](../maze-grid.png)
 

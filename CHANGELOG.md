@@ -47,6 +47,11 @@ any such tag, or this Unreleased section, still exists.*
   abbreviated label or a destination cell's two-letter tag — either one, under
   the pointer — pops a tooltip spelling out the name in full, the same box the
   border controls already use for their hints.
+- **The matrix map view's name column now grows to fit.** It used to sit at a
+  fixed width regardless of how much room the pane had to spare; now it takes
+  whatever the direction columns leave behind, up to the longest room name —
+  so a wide pane shows names in full, and the abbreviate-and-footnote
+  treatment kicks in only for a name that still doesn't fit.
 - **The story pane's border control now cycles three states.** Command panel →
   inventory panel → none → command panel, one click at a time (`cycle-panel`,
   bound to the same control that used to only toggle the command panel). The

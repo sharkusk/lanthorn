@@ -23,11 +23,17 @@ use ratatui::style::Style;
 use crate::render::draw_str_clipped;
 use crate::state::AppState;
 
-/// Width of the pinned label column, including the one-cell `▸`/`⇲` marker gutter.
+/// The MINIMUM label-column reservation, including the one-cell `▸`/`⇲` marker gutter — the floor
+/// the direction-column ladder is sized against (SQ-1247).
 ///
-/// Ten columns of name is enough for `"Maze 11"` and for most short room names; anything longer is
-/// abbreviated and footnoted rather than allowed to push the table sideways, because the table's
-/// value is that all twelve directions stay on screen together.
+/// How many of the twelve columns fit, and at what cell width, is decided as if the label column
+/// were exactly this wide (see [`density`]), so a label column that later grows past it (see
+/// [`MatrixLayout::label_w`]) can never steal width from the direction table — "never shrink the
+/// direction columns" is enforced by never letting them see the grown number at all. The actual
+/// drawn label width is `MatrixLayout::label_w`, which grows to whatever the shown direction
+/// columns leave behind, capped at the longest room name, and can be wider OR narrower than this
+/// constant depending on what the data actually needs. Ten columns of name is enough for
+/// `"Maze 11"` and for most short room names; this is only ever the floor.
 pub const LABEL_W: u16 = 11;
 
 /// Minimum width of a direction column: two for the widest header (`NE`) plus a separating space.
@@ -150,6 +156,14 @@ pub struct MatrixLayout {
     pub matrix: Matrix,
     pub density: Density,
     pub cell_w: u16,
+    /// How many of the twelve direction columns are actually drawn — all of them, unless
+    /// [`Density::Scroll`] has to drop some off the left. Computed against [`LABEL_W`], the
+    /// minimum reservation, so it never shrinks because [`Self::label_w`] later grew (SQ-1247).
+    pub shown_cols: usize,
+    /// The label column's ACTUAL drawn width this frame (SQ-1247): whatever `shown_cols` columns
+    /// of direction table leave behind, capped at the longest room name (plus its one-cell marker
+    /// gutter) so it never claims width no name needs. Can be wider OR narrower than [`LABEL_W`].
+    pub label_w: u16,
     pub footnotes: Vec<Footnote>,
     /// Per-row label text and the footnote marker it carries (empty when it needs none).
     pub labels: Vec<(String, String)>,
@@ -162,10 +176,25 @@ pub fn layout(graph: &MapGraph, layer: LayerId, width: u16) -> MatrixLayout {
     let m = matrix::build(graph, layer);
     let (density, cell_w) = density(&m, width);
 
+    // How many direction columns are shown, exactly as before (SQ-0666): the floor-based ladder
+    // against `LABEL_W`, never the grown `label_w` below — that is what keeps a wide label column
+    // from ever costing the direction table a column (SQ-1247).
+    let shown_cols = ((width.saturating_sub(LABEL_W)) / cell_w).min(12) as usize;
+
+    // SQ-1247: the label column grows to whatever the shown direction columns leave behind,
+    // capped at the longest room name plus its one-cell marker gutter — so it never claims width
+    // no name actually needs. When every name's length is within that cap, `label_cell` below
+    // finds nothing left to truncate, and the whole per-row footnote-and-superscript machinery
+    // stays silent for every row.
+    let longest_name = m.rows.iter().map(|r| r.label.chars().count() as u16).max().unwrap_or(0);
+    let cap = longest_name.saturating_add(1); // one column for the ▸/⇲ marker
+    let avail = width.saturating_sub(cell_w * shown_cols as u16);
+    let label_w = avail.min(cap).max(1);
+
     let mut footnotes: Vec<Footnote> = Vec::new();
     let mut labels = Vec::with_capacity(m.rows.len());
     for row in &m.rows {
-        let (text, long) = label_cell(&row.label, LABEL_W as usize - 1);
+        let (text, long) = label_cell(&row.label, label_w.saturating_sub(1) as usize);
         let mark = match long {
             Some(full) => {
                 let mk = marker(footnotes.len());
@@ -211,7 +240,7 @@ pub fn layout(graph: &MapGraph, layer: LayerId, width: u16) -> MatrixLayout {
         footnotes.push(Footnote { marker: String::new(), text });
     }
 
-    MatrixLayout { matrix: m, density, cell_w, footnotes, labels, entry_rooms }
+    MatrixLayout { matrix: m, density, cell_w, shown_cols, label_w, footnotes, labels, entry_rooms }
 }
 
 /// Rows of chrome the table spends before and after its data: header, rule, rule.
@@ -254,11 +283,12 @@ pub fn render_matrix(
     let footnote_style = state.colors.theme.get("map.matrix.footnote").style;
     let trail_style = state.colors.theme.get("map.trail").style;
 
-    // The columns actually shown. Horizontal scroll drops whole columns off the LEFT while the
-    // label column stays put — a half-column would be unreadable and a floating label column
-    // would lose the reader entirely.
-    let per_row = ((area.width - LABEL_W) / ml.cell_w) as usize;
-    let shown = per_row.min(12);
+    // The columns actually shown — `ml.shown_cols`, resolved in `layout()` against the MINIMUM
+    // label reservation so the grown `ml.label_w` below can never cost the direction table a
+    // column (SQ-1247). Horizontal scroll drops whole columns off the LEFT while the label column
+    // stays put — a half-column would be unreadable and a floating label column would lose the
+    // reader entirely.
+    let shown = ml.shown_cols;
     let first_col = if ml.density == Density::Scroll {
         (state.matrix_scroll.0 as usize).min(12usize.saturating_sub(shown))
     } else {
@@ -266,10 +296,11 @@ pub fn render_matrix(
     };
 
     // ── Header + rule ────────────────────────────────────────────────────────
-    let table_w = LABEL_W + ml.cell_w * shown as u16;
+    let table_w = ml.label_w + ml.cell_w * shown as u16;
     for (slot, i) in (first_col..first_col + shown).enumerate() {
         let text = short_label(MATRIX_DIRS[i]).to_uppercase();
-        let x = area.x + LABEL_W + ml.cell_w * slot as u16 + ml.cell_w - text.chars().count() as u16;
+        let x =
+            area.x + ml.label_w + ml.cell_w * slot as u16 + ml.cell_w - text.chars().count() as u16;
         draw_str_clipped(buf, x, area.y, &text, header_style, area);
     }
     let rule: String = "─".repeat(table_w.min(area.width) as usize);
@@ -333,13 +364,13 @@ pub fn render_matrix(
             let rest = format!("{text}{mark}");
             draw_str_clipped(buf, area.x + 1, y, &rest, row_style, area);
         }
-        hits.push((row.room, Rect::new(area.x, y, LABEL_W.min(area.width), 1)));
+        hits.push((row.room, Rect::new(area.x, y, ml.label_w.min(area.width), 1)));
 
         for (col_slot, i) in (first_col..first_col + shown).enumerate() {
             let cell = row.cells[i];
             let text = cell_text(m, &cell, ml.density == Density::Full);
             let w = text.chars().count() as u16;
-            let x = area.x + LABEL_W + ml.cell_w * col_slot as u16 + ml.cell_w - w;
+            let x = area.x + ml.label_w + ml.cell_w * col_slot as u16 + ml.cell_w - w;
             // An entrance to the selected room is bolded wherever it appears — style, not a
             // glyph, so the cell keeps saying exactly one thing. A step of the route wins over
             // that: the LAST step is necessarily an entrance too, and the answer the player just
@@ -531,6 +562,107 @@ mod tests {
             density(&m, LABEL_W + compact * 12 - 1).0,
             Density::Scroll,
             "scrolling is the last resort, not the first"
+        );
+    }
+
+    /// SQ-1247: with no slack left after the direction columns — the exact width at which
+    /// [`density_degrades_before_it_scrolls`] above finds `Density::Compact`, one row short of
+    /// `Full` — the label column has nothing to grow into and must stay at today's fixed
+    /// [`LABEL_W`], byte for byte: same text, same footnote-marker presence, for every row.
+    #[test]
+    fn a_narrow_pane_keeps_todays_fixed_label_width_byte_for_byte() {
+        let g = tiny();
+        let m = matrix::build(&g, MAIN_LAYER);
+        let compact = cell_width(&m, false);
+        let width = LABEL_W + compact * 12; // Density::Compact, no width left over for the label
+        let ml = layout(&g, MAIN_LAYER, width);
+        assert_eq!(ml.label_w, LABEL_W, "no slack: the column must stay at today's fixed width");
+
+        for row in &m.rows {
+            let (want_text, want_long) = label_cell(&row.label, LABEL_W as usize - 1);
+            let idx = ml.matrix.index_of(row.room).expect("every row indexes itself");
+            let (text, mark) = &ml.labels[idx];
+            assert_eq!(*text, want_text, "room {}: today's label text must be unchanged", row.room);
+            assert_eq!(
+                !mark.is_empty(),
+                want_long.is_some(),
+                "room {}: today's footnote-marker presence must be unchanged",
+                row.room
+            );
+        }
+    }
+
+    /// SQ-1247's headline: given room to spare, the label column grows past `LABEL_W` — but only
+    /// as far as the longest name actually needs, never further. A name that would have been
+    /// truncated under yesterday's fixed 11 now fits in full, and with every name fitting, nothing
+    /// gets a superscript and no truncation footnote is added.
+    ///
+    /// Falsified by reverting `layout`'s `label_w` to the constant `LABEL_W`: with that revert,
+    /// "Medium Length Room" (18 chars, fits comfortably once the column is allowed to grow) is cut
+    /// down to 10 and footnoted instead — the very shrinkage this feature removes.
+    #[test]
+    fn a_wide_pane_with_short_names_grows_the_column_and_drops_the_footnotes() {
+        let mut g = MapGraph::new();
+        g.upsert_room(1, "AAA".into());
+        g.upsert_room(2, "Medium Length Room".into()); // 18 chars: > old LABEL_W-1 (10), fits new
+        g.set_current(1);
+
+        let width = 80;
+        let ml = layout(&g, MAIN_LAYER, width);
+        // Capped at the longest name (18) plus its one-column marker gutter — not ballooned out
+        // to whatever the direction columns left behind (which is far more than 19 at width 80).
+        assert_eq!(ml.label_w, 19, "the column grows only as far as the longest name needs");
+
+        for (text, mark) in &ml.labels {
+            assert!(mark.is_empty(), "no room needs a footnote marker here: {text:?} got {mark:?}");
+        }
+        assert!(ml.footnotes.is_empty(), "every name fits: no footnote list at all: {:?}", ml.footnotes);
+
+        let area = Rect { x: 0, y: 0, width, height: 24 };
+        let text = render_lines(&g, MAIN_LAYER, area).join("\n");
+        assert!(text.contains("Medium Length Room"), "the full name is on screen: {text:?}");
+        for d in SUPERSCRIPTS {
+            assert!(!text.contains(d), "no superscript marker anywhere on screen: {text:?}");
+        }
+    }
+
+    /// The mixed case: one name too long for even the grown column, alongside names short enough
+    /// to fit it — only the long one gets a superscript and a footnote entry, exactly as today's
+    /// per-row truncation already does, just against a wider column.
+    #[test]
+    fn only_the_name_that_still_does_not_fit_is_footnoted() {
+        let mut g = MapGraph::new();
+        let long_name = "This Name Is Deliberately Long For The Direction Table Test";
+        g.upsert_room(1, "AAA".into());
+        g.upsert_room(2, "Medium Length Room".into()); // 18 chars
+        g.upsert_room(3, long_name.into()); // far longer than the other two
+        g.set_current(1);
+
+        let width = 60;
+        let ml = layout(&g, MAIN_LAYER, width);
+        assert!(ml.label_w > LABEL_W, "there was room to grow: got {}", ml.label_w);
+        assert!(
+            (ml.label_w as usize) < long_name.chars().count(),
+            "the column must NOT have grown enough to swallow the long name whole: {}",
+            ml.label_w
+        );
+
+        let idx = |id| ml.matrix.index_of(id).expect("every room has a row");
+        let (aaa_text, aaa_mark) = &ml.labels[idx(1)];
+        let (medium_text, medium_mark) = &ml.labels[idx(2)];
+        let (long_text, long_mark) = &ml.labels[idx(3)];
+        assert_eq!(aaa_text, "AAA", "short name: untouched");
+        assert!(aaa_mark.is_empty());
+        assert_eq!(medium_text, "Medium Length Room", "medium name: fits the grown column whole");
+        assert!(medium_mark.is_empty(), "…so it needs no footnote marker");
+        assert_ne!(long_text, long_name, "the long name is still cut down");
+        assert!(!long_mark.is_empty(), "…and still carries a footnote marker");
+
+        assert_eq!(
+            ml.footnotes.iter().filter(|f| !f.marker.is_empty()).count(),
+            1,
+            "exactly one row-truncation footnote — the long name's, and no other: {:?}",
+            ml.footnotes
         );
     }
 
