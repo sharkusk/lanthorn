@@ -347,7 +347,15 @@ impl Refusals {
     /// falls silent on a whole engine. A refusal is what the story says FIRST;
     /// what follows it is a prompt, a daemon, or the lamp getting dimmer.
     pub fn says_no(&self, reply: &str, command: &str) -> bool {
+        // Two readings, either sufficient (SQ-1252): the reply as the story
+        // actually sent it, and with a leading disambiguation echo stripped —
+        // see [`strip_disambiguation_echo`]. Trying the raw reading FIRST
+        // costs nothing (it is a no-op whenever there is no echo to strip) and
+        // keeps every match a story's own un-echoed wording already earned.
         signature(reply, command).first().is_some_and(|s| self.sigs.contains(s))
+            || signature(strip_disambiguation_echo(reply), command)
+                .first()
+                .is_some_and(|s| self.sigs.contains(s))
     }
 
     /// Fold another reading of the same run in.
@@ -379,7 +387,9 @@ impl ProbeRun {
         let Some(step) = self.steps.get(i).filter(|s| self.inert(s)) else {
             return Refusals::default();
         };
-        Refusals { sigs: signature(&step.reply, &step.command).into_iter().collect() }
+        let mut sigs: BTreeSet<String> = signature(&step.reply, &step.command).into_iter().collect();
+        sigs.extend(signature(strip_disambiguation_echo(&step.reply), &step.command));
+        Refusals { sigs }
     }
 
     /// Steps `a` and `b` are the same command carrying two different nouns.
@@ -403,11 +413,29 @@ impl ProbeRun {
         if !self.inert(x) || !self.inert(y) {
             return Refusals::default();
         }
-        let sx = signature(&x.reply, &x.command);
-        let sy = signature(&y.reply, &y.command);
-        let agreed: Vec<String> =
-            sx.into_iter().zip(sy).take_while(|(a, b)| a == b).map(|(a, _)| a).collect();
-        Refusals { sigs: agreed.into_iter().collect() }
+        // Two readings of each reply, either sufficient (SQ-1252): raw, and
+        // with a leading disambiguation echo stripped (see
+        // [`strip_disambiguation_echo`]) — a story that prints one only on the
+        // side that had something to disambiguate (`(the outside door)`) makes
+        // the raw first sentence disagree though the refusal underneath it
+        // agrees. Both readings are learned rather than the stripped one
+        // replacing the raw one, because a story that agrees on the RAW
+        // reading already (`suvehnux.z5`'s `(the east wall)` / `(the south
+        // wall)` echoes, struck to the same words by their own directions)
+        // must keep teaching that: the echo is not always noise; sometimes an
+        // un-echoed wording is the only shape two controls actually share.
+        let agreed = |sa: Vec<String>, sb: Vec<String>| -> Vec<String> {
+            sa.into_iter().zip(sb).take_while(|(a, b)| a == b).map(|(a, _)| a).collect()
+        };
+        let mut sigs: BTreeSet<String> =
+            agreed(signature(&x.reply, &x.command), signature(&y.reply, &y.command))
+                .into_iter()
+                .collect();
+        sigs.extend(agreed(
+            signature(strip_disambiguation_echo(&x.reply), &x.command),
+            signature(strip_disambiguation_echo(&y.reply), &y.command),
+        ));
+        Refusals { sigs }
     }
 
     /// Did the step at `i` do anything, as far as this run can tell?
@@ -438,11 +466,44 @@ impl ProbeRun {
     }
 }
 
+/// Strip a leading parenthesised disambiguation echo: one or more lines at the
+/// very start of the reply, each entirely of the form `(…)`.
+///
+/// Inform's parser prints a line like this — `(the outside door)`, `(first
+/// taking the lamp)`, `(putting the sword on the floor)` — whenever it silently
+/// resolved which object a command meant, and it is never part of the story's
+/// answer. Left in, it becomes the reply's first sentence, so `fix south`
+/// (which the parser must disambiguate) and `fix north` (which it need not)
+/// print the same refusal after two different opening lines, the control pair
+/// disagrees from its first sentence, and [`ProbeRun::refusal_from_pair`]
+/// learns nothing at all (SQ-1252).
+///
+/// Only LEADING lines are stripped — a parenthesised clause anywhere else in
+/// the reply is prose (a room description, an aside) and stays untouched.
+fn strip_disambiguation_echo(reply: &str) -> &str {
+    let mut rest = reply;
+    loop {
+        let line_len = rest.find('\n').map_or(rest.len(), |i| i + 1);
+        let line = rest[..line_len].trim();
+        if line.len() >= 2 && line.starts_with('(') && line.ends_with(')') {
+            rest = &rest[line_len..];
+        } else {
+            break;
+        }
+    }
+    rest
+}
+
 /// One reply, reduced to the sentences that carry its *shape*: lowercased,
 /// punctuation and digits dropped, and every word of the command that produced
 /// it struck out — which is what makes `You can't see any lamp here!` and `You
 /// can't see any sword here!` the same sentence, and what removes the quoted
 /// word from `[I don't know the word "lanturn".]`.
+///
+/// Does **not** strip a leading disambiguation echo itself — every caller that
+/// needs that reading calls [`strip_disambiguation_echo`] first and tries both
+/// (SQ-1252; see [`ProbeRun::refusal_from_pair`] for why both readings are
+/// learned rather than one replacing the other).
 fn signature(reply: &str, command: &str) -> Vec<String> {
     let typed: BTreeSet<String> = command
         .split(|c: char| !c.is_alphanumeric())
@@ -1009,6 +1070,91 @@ mod tests {
             signature("[I don't know the word \"lanturn\".]", "take lanturn"),
             vec!["i don t know the word"]
         );
+    }
+
+    /// **SQ-1252.** Inform prints a parenthesised echo whenever it silently
+    /// resolved which object a command meant — `(the outside door)`, two lines
+    /// of them for `(first taking the lamp)` followed by another clause — and
+    /// none of it is the story's answer. Only LEADING lines qualify: a
+    /// parenthesised clause in the middle of a reply is prose and stays.
+    #[test]
+    fn a_leading_disambiguation_echo_is_stripped_and_nothing_else_is() {
+        assert_eq!(
+            strip_disambiguation_echo("(the outside door)\nThere is no obvious way to do that."),
+            "There is no obvious way to do that."
+        );
+        assert_eq!(
+            strip_disambiguation_echo(
+                "(first taking the lamp)\n(putting the sword on the floor)\nDone."
+            ),
+            "Done.",
+            "two echo lines, both stripped"
+        );
+        assert_eq!(
+            strip_disambiguation_echo("You can't do that (it's too heavy) right now."),
+            "You can't do that (it's too heavy) right now.",
+            "a parenthesised clause in the MIDDLE of a reply is prose, not an echo"
+        );
+        assert_eq!(
+            strip_disambiguation_echo("(the outside door)"),
+            "",
+            "a reply that is only an echo strips down to nothing"
+        );
+        assert!(
+            signature(strip_disambiguation_echo("(the outside door)"), "fix south").is_empty(),
+            "an echo-only reply strips down to nothing, so its STRIPPED reading carries no sentence to learn"
+        );
+    }
+
+    /// An echo-only step must read as "no signature", never as a signature that
+    /// matches everything — [`Refusals::says_no`] on an empty set is always
+    /// false, which is the behaviour [`Refusals::is_empty`] documents callers
+    /// must check for rather than treating silence as success.
+    #[test]
+    fn an_echo_only_signature_is_empty_not_a_match_all() {
+        let r = Refusals {
+            sigs: signature(strip_disambiguation_echo("(the outside door)"), "fix south")
+                .into_iter()
+                .collect(),
+        };
+        assert!(r.is_empty());
+        assert!(!r.says_no("Anything at all.", "fix south"));
+    }
+
+    /// The bug as it actually bit, on `vespers.z8`'s Entrance Hall: `fix south`
+    /// needs the parser to pick between two doors and prints `(the outside
+    /// door)` before its refusal; `fix north` needs no disambiguation and
+    /// prints the refusal straight away. Demanding the two replies agree from
+    /// their very first sentence — with the echo still in it — made the pair
+    /// disagree immediately and taught nothing, so the offer that pair was
+    /// meant to vet survived unvetted.
+    ///
+    /// Falsify by reverting [`strip_disambiguation_echo`] to a no-op: this test
+    /// fails because the first sentences ("(the outside door)" vs "there is no
+    /// obvious way to do that") no longer agree.
+    #[test]
+    fn a_disambiguation_echo_does_not_defeat_the_direction_control_pair() {
+        let step = |command: &str, reply: &str| ProbeStep {
+            command: command.to_string(),
+            reply: reply.to_string(),
+            location: None,
+            world: WorldPrint::from_parts(Some(7), None, None),
+            quit: false,
+            escaped: false,
+        };
+        let run = ProbeRun {
+            baseline: WorldPrint::from_parts(Some(7), None, None),
+            steps: vec![
+                step("fix north", "There is no obvious way to do that."),
+                step(
+                    "fix south",
+                    "(the outside door)\nThere is no obvious way to do that.",
+                ),
+            ],
+        };
+        let agreed = run.refusal_from_pair(0, 1);
+        assert!(!agreed.is_empty(), "the pair agreed once the echo is out of the way");
+        assert!(agreed.says_no("There is no obvious way to do that.", "fasten north"));
     }
 
     #[test]
