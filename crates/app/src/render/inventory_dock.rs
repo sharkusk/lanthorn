@@ -13,6 +13,55 @@ use super::draw_str_clipped;
 use super::paneframe::{InsetSegment, PaneGlyphs};
 use crate::colors::ColorScheme;
 use crate::render::panel::{draw_panel, PanelSpec, PanelStrip};
+use crate::state::AppState;
+
+/// Click targets emitted while drawing the inventory dock, for the event
+/// loop to hit-test — the panel's own counterpart of
+/// [`crate::render::command_band::CommandBandHits`] (SQ-1244): a left-click
+/// on an item composes its word into the prompt the same way a click on the
+/// command band's WHAT column does.
+#[derive(Default, Clone)]
+pub struct InventoryDockHits {
+    /// The dock's whole rect — clicks inside it belong to the panel and must
+    /// not reach the story pane behind it. Zero-area whenever the dock isn't
+    /// drawn this frame.
+    pub area: Rect,
+    /// Item rows, as `(index into the drawn item list, rect)`. Published for
+    /// every row actually drawn this frame — never for a row scrolled/clipped
+    /// past `content.bottom()`, and never outside the panel.
+    pub rows: Vec<(usize, Rect)>,
+}
+
+/// Refill the inventory dock's clickable words from the engine, once per loop
+/// tick (SQ-1244) — the command band's `refresh_objects` sibling for the
+/// panel that shows exactly when the band is closed (`SidePanel`), so it
+/// cannot piggyback on the band's own `carried` list.
+///
+/// Reuses the WHAT column's own noun derivation
+/// (`render::transcript::inventory_click_words`, which wraps
+/// `crate::vocab::typeable_name`) over the same one-level contents list
+/// `inventory_items` draws, so a click composes the word the story's parser
+/// actually accepts. Gated on the panel actually being visible or sliding —
+/// same test `main.rs` uses to decide whether to compute `inv_items` at all
+/// — so a closed dock costs nothing.
+///
+/// Pure bookkeeping for the click path: unlike `refresh_objects`, this never
+/// changes what is drawn (the dock re-derives its own display list fresh
+/// every frame in `main.rs`, same as it always has), so it reports nothing
+/// for `needs_redraw` to OR in.
+pub fn refresh_inventory_click_words(state: &mut AppState, engine: &dyn crate::engine::Engine) {
+    if !(state.show_inventory || state.inv_dock.active()) {
+        state.inventory_click_words.clear();
+        return;
+    }
+    let vocab = state.vocab.get(engine);
+    state.inventory_click_words = super::transcript::inventory_click_words(
+        state.player_obj,
+        &state.inventory_fallback,
+        engine.introspect(),
+        vocab,
+    );
+}
 
 /// Compute the dock's fully-open target height in rows: one row per item
 /// (minimum 1, for the "(empty)" line) plus 2 border rows, capped at
@@ -39,10 +88,22 @@ pub fn inventory_dock_height(target_h: u16, fraction: f64) -> u16 {
 ///
 /// `highlighted` is true when interactive resize mode has this dock as its
 /// target (draws the border with the `focused_border` accent instead).
-pub fn draw_inventory_dock(items: &[String], area: Rect, colors: &ColorScheme, highlighted: bool, buf: &mut Buffer) {
+///
+/// Publishes `hits` (SQ-1244): the dock's own rect, and one row rect per item
+/// actually drawn, in the exact `items` index the caller must resolve a click
+/// against (`AppState::inventory_click_words`, the SAME order).
+pub fn draw_inventory_dock(
+    items: &[String],
+    area: Rect,
+    colors: &ColorScheme,
+    highlighted: bool,
+    buf: &mut Buffer,
+    hits: &mut InventoryDockHits,
+) {
     if area.width == 0 || area.height == 0 {
         return;
     }
+    hits.area = area;
     let style = colors.theme.get("inventory_panel").style;
     // Focus drives the border STYLE selector; the resize accent (or the dock's
     // own style) is preserved as the border COLOUR via `border_color`.
@@ -94,6 +155,8 @@ pub fn draw_inventory_dock(items: &[String], area: Rect, colors: &ColorScheme, h
         if y >= content.bottom() {
             break;
         }
+        let row_area = Rect::new(content.x, y, content.width, 1);
+        hits.rows.push((i, row_area));
         draw_str_clipped(buf, content.x, y, item, style, content);
     }
 }
@@ -133,7 +196,7 @@ mod tests {
         let mut buf = Buffer::empty(area);
         let colors = ColorScheme::default();
         let items = vec!["lamp".to_string(), "sword".to_string()];
-        draw_inventory_dock(&items, area, &colors, false, &mut buf);
+        draw_inventory_dock(&items, area, &colors, false, &mut buf, &mut InventoryDockHits::default());
 
         assert!(buf_contains(&buf, "┌"), "top-left border corner");
         assert!(buf_contains(&buf, "┐"), "top-right border corner");
@@ -153,7 +216,7 @@ mod tests {
         let area = Rect::new(0, 0, 24, 5);
         let mut buf = Buffer::empty(area);
         let colors = ColorScheme::default();
-        draw_inventory_dock(&["lamp".to_string()], area, &colors, false, &mut buf);
+        draw_inventory_dock(&["lamp".to_string()], area, &colors, false, &mut buf, &mut InventoryDockHits::default());
         let top: String = (0..area.width).map(|x| buf.cell((x, 0)).unwrap().symbol().to_owned()).collect();
         assert!(top.contains("┤ Inventory ├"), "single-cap title strip, got {top:?}");
     }
@@ -172,7 +235,7 @@ mod tests {
 
         let area = Rect::new(0, 0, 24, 5);
         let mut buf = Buffer::empty(area);
-        draw_inventory_dock(&["lamp".to_string()], area, &colors, false, &mut buf);
+        draw_inventory_dock(&["lamp".to_string()], area, &colors, false, &mut buf, &mut InventoryDockHits::default());
 
         assert_eq!(buf.cell((0, 0)).unwrap().symbol(), "╔", "double top-left corner");
         let top: String = (0..area.width).map(|x| buf.cell((x, 0)).unwrap().symbol().to_owned()).collect();
@@ -184,7 +247,7 @@ mod tests {
         let area = Rect::new(0, 0, 20, 5);
         let mut buf = Buffer::empty(area);
         let colors = ColorScheme::default();
-        draw_inventory_dock(&[], area, &colors, false, &mut buf);
+        draw_inventory_dock(&[], area, &colors, false, &mut buf, &mut InventoryDockHits::default());
 
         assert!(buf_contains(&buf, "(empty)"), "empty placeholder text");
     }
@@ -194,7 +257,7 @@ mod tests {
         let area = Rect::new(0, 0, 0, 0);
         let mut buf = Buffer::empty(Rect::new(0, 0, 1, 1));
         let colors = ColorScheme::default();
-        draw_inventory_dock(&["lamp".to_string()], area, &colors, false, &mut buf);
+        draw_inventory_dock(&["lamp".to_string()], area, &colors, false, &mut buf, &mut InventoryDockHits::default());
         // No assertion beyond "did not panic".
     }
 
@@ -204,8 +267,70 @@ mod tests {
         let mut buf = Buffer::empty(area);
         let mut colors = ColorScheme::default();
         colors.theme = theme_with_overrides(&[("inventory_panel", Color::Rgb(1, 2, 3))]);
-        draw_inventory_dock(&["lamp".to_string()], area, &colors, false, &mut buf);
+        draw_inventory_dock(&["lamp".to_string()], area, &colors, false, &mut buf, &mut InventoryDockHits::default());
         assert_eq!(buf.cell((0, 0)).unwrap().style().fg, Some(Color::Rgb(1, 2, 3)));
+    }
+
+    #[test]
+    fn draw_inventory_dock_publishes_a_hit_rect_per_drawn_row() {
+        // SQ-1244: the panel's own rect plus one row rect per item actually
+        // drawn, indexed exactly like `items` — nothing published for a row
+        // clipped past the content area.
+        let area = Rect::new(0, 0, 20, 5);
+        let mut buf = Buffer::empty(area);
+        let colors = ColorScheme::default();
+        let items = vec!["lamp".to_string(), "sword".to_string()];
+        let mut hits = InventoryDockHits::default();
+        draw_inventory_dock(&items, area, &colors, false, &mut buf, &mut hits);
+
+        assert_eq!(hits.area, area, "the panel's own rect");
+        assert_eq!(hits.rows.len(), 2, "one rect per drawn item");
+        assert_eq!(hits.rows[0].0, 0, "first row is index 0");
+        assert_eq!(hits.rows[1].0, 1, "second row is index 1");
+        // Every row rect sits strictly inside the panel's own bordered area.
+        for (_, r) in &hits.rows {
+            assert!(r.x > area.x && r.right() <= area.right(), "row {r:?} outside {area:?}");
+            assert!(r.y > area.y && r.bottom() < area.bottom(), "row {r:?} outside {area:?}");
+        }
+    }
+
+    #[test]
+    fn draw_inventory_dock_clips_rows_past_content_height_and_publishes_none_for_them() {
+        // Content height is 1 (area height 3 minus 2 border rows); 3 items
+        // offered, only the first can be drawn, so only one row rect.
+        let area = Rect::new(0, 0, 20, 3);
+        let mut buf = Buffer::empty(area);
+        let colors = ColorScheme::default();
+        let items = vec!["lamp".to_string(), "sword".to_string(), "rope".to_string()];
+        let mut hits = InventoryDockHits::default();
+        draw_inventory_dock(&items, area, &colors, false, &mut buf, &mut hits);
+
+        assert_eq!(hits.rows.len(), 1, "only the row that actually fit is published");
+        assert_eq!(hits.rows[0].0, 0);
+    }
+
+    #[test]
+    fn draw_inventory_dock_empty_publishes_area_but_no_rows() {
+        let area = Rect::new(0, 0, 20, 5);
+        let mut buf = Buffer::empty(area);
+        let colors = ColorScheme::default();
+        let mut hits = InventoryDockHits::default();
+        draw_inventory_dock(&[], area, &colors, false, &mut buf, &mut hits);
+
+        assert_eq!(hits.area, area);
+        assert!(hits.rows.is_empty(), "the placeholder \"(empty)\" line is not a clickable row");
+    }
+
+    #[test]
+    fn draw_inventory_dock_zero_area_publishes_nothing() {
+        let area = Rect::new(0, 0, 0, 0);
+        let mut buf = Buffer::empty(Rect::new(0, 0, 1, 1));
+        let colors = ColorScheme::default();
+        let mut hits = InventoryDockHits::default();
+        draw_inventory_dock(&["lamp".to_string()], area, &colors, false, &mut buf, &mut hits);
+
+        assert_eq!(hits.area, Rect::default());
+        assert!(hits.rows.is_empty());
     }
 
     #[test]

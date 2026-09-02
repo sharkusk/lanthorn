@@ -152,6 +152,48 @@ fn minizork_carried_items_still_track_the_object_tree() {
     );
 }
 
+// ── SQ-1244: the inventory panel's items click into the prompt ─────────────
+
+/// Zork 1 r52: take the leaflet, derive the inventory dock's click word for it
+/// the same way `render::inventory_dock::refresh_inventory_click_words` does
+/// (`inventory_click_words`, the WHAT column's own `typeable_name`
+/// derivation), then drive the real `Action::InventoryClickRow` composition
+/// path against a real story rather than a synthetic object model.
+#[test]
+fn zork1_inventory_click_composes_the_parser_word_onto_the_prompt() {
+    use app::input::{apply_action, Action};
+    use app::render::transcript::inventory_click_words;
+    use app::state::AppState;
+    use mapper::mapper::Mapper;
+
+    let Some(mut session) = boot("zork1-invclues-r52-s871125.z5") else { return };
+    session.submit("open mailbox");
+    session.submit("take leaflet");
+
+    // The dock shows the printed name…
+    let display = inventory_items(None, &[], session.introspect());
+    assert!(lower(&display).contains("leaflet"), "the dock shows the leaflet: {display:?}");
+
+    // …but a click composes the PARSER's word, derived the same way the
+    // command panel's WHAT column derives it.
+    let words = inventory_click_words(None, &[], session.introspect(), None);
+    assert_eq!(words.len(), display.len(), "one click word per drawn row");
+    let idx = words
+        .iter()
+        .position(|w| w.eq_ignore_ascii_case("leaflet"))
+        .unwrap_or_else(|| panic!("leaflet not among the click words: {words:?}"));
+
+    let mut state = AppState::default();
+    state.inventory_click_words = words;
+    state.input.set("examine ".to_string(), true);
+    let mut mapper = Mapper::default();
+    apply_action(Action::InventoryClickRow(idx), &mut state, &mut mapper);
+
+    assert_eq!(state.input.value, "examine leaflet");
+}
+
+// ── SQ-1237 Part 3 audit: does the inventory panel feed the same way the
+// command panel does across engines? ────────────────────────────────────────
 // ── Where the Glulx half of this question lives now ─────────────────────────
 //
 // SQ-1237's audit found `Engine::introspect` answering the trait's own DEFAULT

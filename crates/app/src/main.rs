@@ -575,6 +575,10 @@ struct PaneRects {
     /// Hit-rects for the command band (when open): its own rect, the column
     /// headers, the item rows and the quick words (rose block or flat row).
     pub command_band: app::render::command_band::CommandBandHits,
+    /// Hit-rects for the inventory dock (when open): its own rect and one row
+    /// rect per item (SQ-1244) — a click composes the row's word into the
+    /// prompt the same way a command-band WHAT-column click does.
+    pub inventory_dock: app::render::inventory_dock::InventoryDockHits,
     /// Hit-rects for the command palette's candidate rows, as `(cmd_index, rect)`;
     /// the mouse handler hit-tests these to execute a command on click. (SQ-0419)
     pub palette: Vec<(usize, Rect)>,
@@ -683,6 +687,7 @@ fn draw_frame(
     let mut dialog_rects_out: Option<DialogRects> = None;
     let mut overlay_rects: Option<overlays::OverlayRects> = None;
     let mut band_hits = app::render::command_band::CommandBandHits::default();
+    let mut inv_hits = app::render::inventory_dock::InventoryDockHits::default();
     let mut palette_hits: Vec<(usize, Rect)> = Vec::new();
     let mut modal_list_viewport: usize = 0;
     let mut transcript_max_scroll: u16 = 0;
@@ -1053,7 +1058,7 @@ fn draw_frame(
         if pane_layout.inv_dock.height > 0 {
             let inv_resize_hl = (state.resize_mode && state.resize_target == app::state::ResizeTarget::InvDock)
                 || state.boundary_active(app::layout::Boundary::InvDockTop);
-            app::render::inventory_dock::draw_inventory_dock(&inv_items, pane_layout.inv_dock, &state.colors, inv_resize_hl, buf);
+            app::render::inventory_dock::draw_inventory_dock(&inv_items, pane_layout.inv_dock, &state.colors, inv_resize_hl, buf, &mut inv_hits);
         }
 
         // ── Command band ───────────────────────────────────────────────────────
@@ -1221,7 +1226,7 @@ fn draw_frame(
 
     // The draw closure runs exactly once, so the overlay ladder always ran.
     let overlay_rects = overlay_rects.expect("draw_frame closure runs exactly once");
-    Ok(PaneRects { map: map_area, story: story_area, boundaries: pane_layout_out.boundary_zones(), pane_layout: pane_layout_out, room_rects: room_rects_out, map_view: map_control_view, room_dock: pane_layout_out.room_dock, room_dock_tabs: room_dock_tabs_out, layer_tabs: layer_tabs_out, border_controls: border_controls_out, debug_tabs: debug_tabs_out, dialog: overlay_rects.dialog, aux_dialog: overlay_rects.aux_dialog, history_prompt: overlay_rects.history_prompt, font_check: overlay_rects.font_check, fetch_keep: overlay_rects.fetch_keep, reset_dialog: overlay_rects.reset_dialog, region_prompt: overlay_rects.region_prompt, game_over: overlay_rects.game_over, save_name_dialog: overlay_rects.save_name_dialog, text_entry: overlay_rects.text_entry, confirm_delete: overlay_rects.confirm_delete, confirm_overwrite: overlay_rects.confirm_overwrite, quit_dialog: overlay_rects.quit_dialog, launch_dialog: overlay_rects.launch_dialog, hints_panel: overlay_rects.hints_panel, command_band: band_hits, palette: palette_hits, transcript_links: transcript_links_out, win_rects: win_rects_out, transcript_max_scroll, transcript_viewport_rows, transcript_prompt_rows, transcript_total_rows, transcript_surface, modal_list_viewport })
+    Ok(PaneRects { map: map_area, story: story_area, boundaries: pane_layout_out.boundary_zones(), pane_layout: pane_layout_out, room_rects: room_rects_out, map_view: map_control_view, room_dock: pane_layout_out.room_dock, room_dock_tabs: room_dock_tabs_out, layer_tabs: layer_tabs_out, border_controls: border_controls_out, debug_tabs: debug_tabs_out, dialog: overlay_rects.dialog, aux_dialog: overlay_rects.aux_dialog, history_prompt: overlay_rects.history_prompt, font_check: overlay_rects.font_check, fetch_keep: overlay_rects.fetch_keep, reset_dialog: overlay_rects.reset_dialog, region_prompt: overlay_rects.region_prompt, game_over: overlay_rects.game_over, save_name_dialog: overlay_rects.save_name_dialog, text_entry: overlay_rects.text_entry, confirm_delete: overlay_rects.confirm_delete, confirm_overwrite: overlay_rects.confirm_overwrite, quit_dialog: overlay_rects.quit_dialog, launch_dialog: overlay_rects.launch_dialog, hints_panel: overlay_rects.hints_panel, command_band: band_hits, inventory_dock: inv_hits, palette: palette_hits, transcript_links: transcript_links_out, win_rects: win_rects_out, transcript_max_scroll, transcript_viewport_rows, transcript_prompt_rows, transcript_total_rows, transcript_surface, modal_list_viewport })
 }
 
 // ── Command-band mouse routing ───────────────────────────────────────────────
@@ -1291,6 +1296,48 @@ fn band_mouse_action(
             Some(Action::None)
         }
         // Drag/Up inside the band must not start a story-pane text selection.
+        _ => Some(Action::None),
+    }
+}
+
+/// Resolve a mouse event against the inventory dock's hit rects (SQ-1244) —
+/// the panel's own counterpart of `band_mouse_action`. The two panels are
+/// mutually exclusive (`SidePanel`), so this never competes with the band for
+/// the same click; it claims exactly the dock's own rect, the same way the
+/// band claims its own, so a click never falls through to the story pane.
+fn inventory_mouse_action(
+    state: &AppState,
+    panes: &PaneRects,
+    m: crossterm::event::MouseEvent,
+) -> Option<Action> {
+    use crossterm::event::{MouseButton, MouseEventKind};
+
+    // SQ-1236's rule, same as the band: a modal dialog stacked on top takes
+    // all mouse input, so the dock underneath claims nothing while one is
+    // open and the click falls through to `mouse_to_action`'s dialog
+    // hit-testing instead.
+    if state.any_modal_overlay_open() {
+        return None;
+    }
+    let hits = &panes.inventory_dock;
+    let inside = |r: &Rect| {
+        r.width > 0 && r.height > 0 && m.column >= r.x && m.column < r.right() && m.row >= r.y
+            && m.row < r.bottom()
+    };
+    if !inside(&hits.area) {
+        return None;
+    }
+
+    match m.kind {
+        MouseEventKind::Down(MouseButton::Left) => {
+            if let Some((idx, _)) = hits.rows.iter().find(|(_, r)| inside(r)).copied() {
+                return Some(Action::InventoryClickRow(idx));
+            }
+            // Anywhere else inside the dock: claimed but does nothing, same
+            // as a click on empty band real estate.
+            Some(Action::None)
+        }
+        // Drag/Up inside the dock must not start a story-pane text selection.
         _ => Some(Action::None),
     }
 }
@@ -2038,6 +2085,10 @@ fn run_event_loop(boot: startup::BootResult, launched_from_library: bool) -> Run
         // every tick, so a take/drop moves an object between *here* and
         // *carried* on the very next frame (SQ-0664).
         needs_redraw |= loop_tick::refresh_command_band(&mut state, &*session);
+        // The inventory dock's clickable words are LIVE too, and independent of
+        // the command band (SQ-1244): the two panels are mutually exclusive, so
+        // the dock cannot piggyback on the band's own object refresh.
+        app::render::inventory_dock::refresh_inventory_click_words(&mut state, &*session);
         needs_redraw |= loop_tick::expire_sound_and_settle_dock(&mut state);
         // One collector for the shared shadow, routing each answer to whoever
         // asked for it (SQ-1124, SQ-0785): a vocabulary offer lands above the
@@ -3306,6 +3357,19 @@ fn run_event_loop(boot: startup::BootResult, launched_from_library: bool) -> Run
                             continue 'event_loop;
                         }
                     }
+                    Some(other) => {
+                        apply_action(other, &mut state, &mut mapper);
+                        continue 'event_loop;
+                    }
+                    None => unreachable!("guarded by the match arm"),
+                }
+            }
+            // ── Inventory dock (SQ-1244) ──────────────────────────────────────
+            // Same precedence as the command band above: claims exactly its own
+            // rect, matched before the general mouse handling, so a click on the
+            // inventory panel can never also reach the story pane behind it.
+            Event::Mouse(m) if inventory_mouse_action(&state, &last_panes, m).is_some() => {
+                match inventory_mouse_action(&state, &last_panes, m) {
                     Some(other) => {
                         apply_action(other, &mut state, &mut mapper);
                         continue 'event_loop;

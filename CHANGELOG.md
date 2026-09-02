@@ -29,6 +29,10 @@ any such tag, or this Unreleased section, still exists.*
 
 ### Added
 
+- **Inventory panel items are clickable.** A click on an item in the
+  inventory panel composes its word onto the prompt exactly like a click on
+  the command panel's WHAT column — same one-space rule, same partial-word
+  replacement — even though the two panels never show at once.
 - **Older Glulx games now get the acceleration newer ones ask for.** Inform 7
   builds from 2010 on tell the interpreter where their veneer routines live, and
   lanthorn runs those natively; every Inform 6 game and every older Inform 7 game

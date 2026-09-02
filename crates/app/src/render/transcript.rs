@@ -1639,6 +1639,39 @@ pub fn inventory_items(
     }
 }
 
+/// The word a click on each [`inventory_items`] row composes into the
+/// prompt, in the SAME order and over the SAME filter (SQ-1244) — so the two
+/// lists always line up index-for-index and a click can never grab the wrong
+/// row's word.
+///
+/// This is the command band's WHAT column's own derivation
+/// ([`crate::vocab::typeable_name`]), not the display name `inventory_items`
+/// shows: the dock may read "brass lantern" while Zork I's parser answers
+/// only to `lamp`, `lanter` and `light` (see `typeable_name`'s doc). Falls
+/// back to the display name itself when `typeable_name` cannot derive
+/// anything, and to the raw fallback text when the engine has no object tree
+/// — both exactly mirroring `inventory_items`'s own fallbacks, so a row is
+/// never drawn without a word to click.
+pub fn inventory_click_words(
+    player_obj: Option<u16>,
+    inventory_fallback: &[String],
+    introspect: Option<&dyn Introspect>,
+    vocab: Option<&crate::vocab::StoryVocabulary>,
+) -> Vec<String> {
+    let player = player_obj.or_else(|| introspect.and_then(|i| i.player_object()));
+    match (player, introspect) {
+        (Some(obj), Some(intro)) => intro
+            .contents(obj)
+            .iter()
+            .filter_map(|o| {
+                let display = o.display_name()?;
+                Some(crate::vocab::typeable_name(o, vocab).unwrap_or(display))
+            })
+            .collect(),
+        _ => inventory_fallback.to_vec(),
+    }
+}
+
 // ── Main render function ───────────────────────────────────────────────────────
 
 /// What a rendered transcript pass reports back to the story pane.
@@ -5990,6 +6023,21 @@ mod tests {
         assert_eq!(inventory_items(None, &items, None), items);
         assert_eq!(inventory_items(Some(7), &items, None), items);
         assert!(inventory_items(None, &[], None).is_empty());
+    }
+
+    /// SQ-1244: with no introspection, `inventory_click_words` falls back to
+    /// the same fallback text as `inventory_items` — the two must always be
+    /// the same length so a click index resolves against the right row. The
+    /// object-tree path (where the two diverge, e.g. "brass lantern" shown
+    /// but `lamp` clicked) is covered against a real story in
+    /// `tests/suites/zork1_inventory.rs`, which has no fake `Introspect` here
+    /// to drive it with.
+    #[test]
+    fn inventory_click_words_matches_inventory_items_length_with_no_introspection() {
+        let items = vec!["brass lamp".to_string(), "sword".to_string()];
+        assert_eq!(inventory_click_words(None, &items, None, None), items);
+        assert_eq!(inventory_click_words(Some(7), &items, None, None), items);
+        assert!(inventory_click_words(None, &[], None, None).is_empty());
     }
 
     // ── Task 8: status-header + input-line boxing + opt-out ───────────────────
