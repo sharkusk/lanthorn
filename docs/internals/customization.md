@@ -557,6 +557,9 @@ re-seed the new template, or hand-write the new shape from
   than from the game's reply, so it behaves the same on a story that words its
   refusal however it likes — and it says nothing at all unless it is confident,
   which is most turns.
+  The table behind the third of those sources is generated, and
+  `crates/verb-synonyms-gen/README.md` has the procedure for rebuilding it — and
+  for checking the offers against a corpus — when new stories arrive.
   One of those sources answers to the adult list below and the rest
   never do: correcting your own word is your business, but proposing a *different*
   word from what yours means is lanthorn's own voice, and that half is filtered

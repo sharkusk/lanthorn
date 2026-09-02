@@ -118,6 +118,29 @@ lemmatised and reduced to those WordNet knows as verbs) reach a surviving group.
 That is the quality metric for the whole exercise — far more meaningful than the
 row count — and it is what tells you whether a change to the filters helped.
 
+### When the corpus grows
+
+Three things, in order. Re-run the **harvest** above into scratch files and diff
+them against the committed `if_verbs.tsv` / `if_groups.tsv`: the new lines are
+the verbs and verb entries the tables have never seen, and a group whose count
+has climbed past `--game-support` is one the shipped table would now believe.
+Re-run the **build** into a scratch file and diff that against
+`crates/verb-synonyms/src/synonym_groups.tsv` — the number to read is the
+coverage audit on stderr, not the row count. Then look at what the new stories
+actually get offered:
+
+```sh
+cargo run -p app --example guidance_scan          # stories/ + unit_tests/
+cargo run -p app --example guidance_scan -- --only curses.z5,vespers.z8 --json
+```
+
+The harvest diff answers "which verbs are missing"; `guidance_scan` answers
+"are the offers we already make any good" — it drives the real vocabulary offer
+and its shadow-probe vetting over every story it can read and prints each
+suggestion with its verdict. A wrong offer (`shove` → `pull · drag`) is a
+line-order or sense problem in this table; a silent story is usually a grammar
+this generator could not read at all, and the harvest's own skip report names it.
+
 ### The knobs
 
 `build` takes `--sense-cap`, `--band-cap`, `--group-cap`, `--hyponym-cap`,
