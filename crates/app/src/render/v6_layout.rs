@@ -2246,17 +2246,23 @@ impl RasterFrame {
         RasterFrame { native, canvas_h: u32::from(native.1), lock: None }
     }
 
-    /// The extension this pane can afford: the largest WHOLE magnification that
-    /// fits the game's screen in `pane_dev` device pixels, and as many whole text
-    /// rows of surplus height as that scale leaves under it.
+    /// The extension this pane can afford: the largest magnification that fits
+    /// the game's screen in `pane_dev` device pixels — whole, or fractional to
+    /// match what `Raster`/`Hybrid` draw at the same pane, per `lock` — and as
+    /// many whole text rows of surplus height as that scale leaves under it.
     ///
-    /// **Whole device pixels per NATIVE pixel**, which is stricter than
-    /// `v6_pixel_lock`'s whole-device-per-ART rung wherever `art_scale` is 2 — and
-    /// stricter is what this mode needs, because its text is the thing being sized:
-    /// raster text is drawn on the machine's cell in native pixels, so a
-    /// half-native rung gives a 7-wide Macintosh glyph 10.5 device pixels and its
-    /// strokes alternate one and two (SQ-1012, SQ-1024). A whole native rung cannot
-    /// produce that on any cell.
+    /// `lock` is `v6_pixel_lock`, threaded through rather than defaulted: SQ-1239
+    /// found Extended always taking the whole-magnification branch below,
+    /// ignoring the toggle raster and hybrid both obey (`FrameGeometry::fitted_scale`).
+    /// **Whole device pixels per NATIVE pixel** when `lock` is set, which is
+    /// stricter than `v6_pixel_lock`'s whole-device-per-ART rung wherever
+    /// `art_scale` is 2 — and stricter is what a locked extension needs, because
+    /// its text is the thing being sized: raster text is drawn on the machine's
+    /// cell in native pixels, so a half-native rung gives a 7-wide Macintosh glyph
+    /// 10.5 device pixels and its strokes alternate one and two (SQ-1012, SQ-1024).
+    /// A whole native rung cannot produce that on any cell. With `lock` clear the
+    /// player has accepted that risk already in raster/hybrid, so Extended takes
+    /// the same fractional scale rather than pretending the lock is always on.
     ///
     /// The surplus is measured in whole `cell.h` rows so the extension is a whole
     /// number of text rows of the game's own face — the raster prose box already
@@ -2271,6 +2277,7 @@ impl RasterFrame {
         pane_dev: (u32, u32),
         cell: zvm::screen::V6Cell,
         cap: Option<f64>,
+        lock: bool,
     ) -> RasterFrame {
         let plain = RasterFrame::native(native);
         if native.0 == 0 || native.1 == 0 || cell.h() == 0 {
@@ -2278,7 +2285,8 @@ impl RasterFrame {
         }
         let fit = (f64::from(pane_dev.0) / f64::from(native.0))
             .min(f64::from(pane_dev.1) / f64::from(native.1));
-        let s = cap.map_or(fit, |c| fit.min(c)).floor();
+        let capped = cap.map_or(fit, |c| fit.min(c));
+        let s = if lock { capped.floor() } else { capped };
         // NaN is impossible above (both divisors are guarded non-zero) but is stated
         // rather than assumed, because "not at least 1" and "less than 1" differ on it
         // and only one of them is safe to build a canvas from.

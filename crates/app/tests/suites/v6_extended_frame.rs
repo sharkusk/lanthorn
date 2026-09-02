@@ -255,6 +255,13 @@ fn state_for(mode: app::config::V6RenderMode, transcript: &str, b: &Booted) -> a
     state.game_picker = Some(picker);
     state.config.v6_render = mode;
     state.config.honor_game_colours = b.honoured;
+    // This suite's default assumption throughout is the whole-magnification
+    // extended frame the file's own header describes — `AppState::default()`
+    // otherwise leaves `v6_pixel_lock` at its `false` default, which pre-SQ-1239
+    // made no difference here (extended always floored regardless). Now that the
+    // flag is actually consulted, a case that wants the lock OFF overrides it
+    // explicitly rather than relying on this default.
+    state.config.v6_pixel_lock = true;
     state.v6_art_scale = b.art_scale;
     // The machine's own cell and the release's own face (SQ-0917, SQ-1009).
     // Leaving this at `AppState::default()`'s 8x16 is how a Macintosh press gets
@@ -289,7 +296,7 @@ fn pair(b: &mut Booted, pane: (u16, u16)) -> Pair {
     let native = v6::native_extent(items, &plain.v6_text);
     let layout = v6::classify_windows(items, plain.v6_text.cell());
     let cell = plain.v6_text.cell();
-    let want = v6::RasterFrame::extended(native, pane_dev(pane), cell, Some(2.0));
+    let want = v6::RasterFrame::extended(native, pane_dev(pane), cell, Some(2.0), ext.config.v6_pixel_lock);
     (
         app::render::screen::build_v6_raster_frame(&layout, v6::RasterFrame::native(native), &plain),
         app::render::screen::build_v6_raster_frame(&layout, want, &ext),
@@ -307,7 +314,7 @@ fn pair(b: &mut Booted, pane: (u16, u16)) -> Pair {
 #[test]
 fn the_extension_is_a_whole_magnification_and_whole_text_rows() {
     for cell in [zvm::screen::V6Cell::new(8, 16), zvm::screen::V6Cell::new(7, 15)] {
-        let f = v6::RasterFrame::extended((640, 400), (800, 900), cell, Some(2.0));
+        let f = v6::RasterFrame::extended((640, 400), (800, 900), cell, Some(2.0), true);
         let s = f.lock.expect("a pane that holds the screen at 1:1 pins a magnification");
         assert_eq!(s, s.floor(), "cell {cell:?}: the magnification is a whole number");
         assert!(s >= 1.0, "cell {cell:?}: and never a minification");
@@ -322,7 +329,7 @@ fn the_extension_is_a_whole_magnification_and_whole_text_rows() {
 
         // …and the rung above it. 1280x1080 doubles the screen, so the pane is 540
         // native rows and 140 of them lie below it.
-        let two = v6::RasterFrame::extended((640, 400), pane_dev(WIDE), cell, Some(2.0));
+        let two = v6::RasterFrame::extended((640, 400), pane_dev(WIDE), cell, Some(2.0), true);
         assert_eq!(two.lock, Some(2.0), "cell {cell:?}: a pane twice the screen pins 2");
         assert_eq!(two.extension(), 140 / u32::from(cell.h()) * u32::from(cell.h()));
     }
@@ -334,13 +341,76 @@ fn the_extension_is_a_whole_magnification_and_whole_text_rows() {
 #[test]
 fn a_pane_with_no_surplus_is_the_plain_letterboxed_frame() {
     let cell = zvm::screen::V6Cell::new(8, 16);
-    let snug = v6::RasterFrame::extended((640, 400), pane_dev(SNUG), cell, Some(2.0));
+    let snug = v6::RasterFrame::extended((640, 400), pane_dev(SNUG), cell, Some(2.0), true);
     assert_eq!(snug.extension(), 0, "640x414 leaves 14 native rows — under one text row");
     assert_eq!(snug.canvas_h, 400);
 
-    let small = v6::RasterFrame::extended((640, 400), (500, 300), cell, Some(2.0));
+    let small = v6::RasterFrame::extended((640, 400), (500, 300), cell, Some(2.0), true);
     assert_eq!(small, v6::RasterFrame::native((640, 400)), "below 1:1 there is no whole rung");
     assert_eq!(small.lock, None, "…so the composite keeps the fitted letterbox");
+}
+
+// ── 1b. The lock is a switch here too (SQ-1239) ────────────────────────────────
+
+/// The pane the next two cases fit Zork Zero's 640x400 screen against: 920x720
+/// device pixels at this suite's [`CELL`] (8x18), so the free letterbox factor is
+/// `min(920/640, 720/400) = min(1.4375, 1.8) = 1.4375` — fractional, with the width
+/// the binding edge. This file's upscale cap (`Some(2.0)`, matching
+/// `v6_upscale_cap`'s kitty answer) never binds here since 1.4375 < 2.0.
+const FRACTIONAL: (u16, u16) = (115, 40);
+
+/// `set-v6-pixel-lock` OFF must ask `extended` for the same free/fractional scale
+/// `Raster`/`Hybrid` draw at (`FrameGeometry::fitted_scale` with `lock: false` — the
+/// call `build_hybrid_frame` makes at `screen.rs:3434`), not the whole-rung
+/// magnification the toggle was supposed to turn off. ON keeps today's behaviour.
+///
+/// FALSIFY by reverting `RasterFrame::extended` to always `.floor()` (its shape
+/// before SQ-1239): the OFF assertions below fail, reporting `1.0` — the quantized
+/// rung — where the pane's free scale is `1.4375`.
+#[test]
+fn the_pixel_lock_is_a_switch_in_extended_mode_too() {
+    let _g = app::v6_palette_at_boot();
+    let Some(mut b) = boot(&CORPUS[0]) else { return };
+
+    let model = b.session.screen();
+    let WinNode::Layered(items) = &model.root else { panic!("a v6 frame has a Layered root") };
+    let cell = b.face.cell();
+    let native = v6::native_extent(items, &b.face);
+    assert_eq!(native, (640, 400), "zork0-r393: this case's pane math assumes the full v6 screen");
+
+    // The reference: the SAME free-scale call `Raster`/`Hybrid` make, at the SAME pane.
+    let free = v6::FrameGeometry::new(native, b.art_scale, cell).fitted_scale(pane_dev(FRACTIONAL), false).0.s;
+    assert_eq!(free, 1.4375, "the pane's free letterbox factor, unquantized");
+
+    let (_, _, off) = extended_with(&mut b, "", FRACTIONAL, false);
+    let s_off = off.lock.expect("a pane holding the screen at 1:1 pins a magnification");
+    assert_eq!(s_off, free, "lock OFF: extended reports the same unquantized scale hybrid/raster do");
+    assert_ne!(s_off, s_off.floor(), "…and it really is fractional, not accidentally whole");
+
+    let (_, _, on) = extended_with(&mut b, "", FRACTIONAL, true);
+    let s_on = on.lock.expect("a pane holding the screen at 1:1 pins a magnification");
+    assert_eq!(s_on, s_on.floor(), "lock ON: extended still pins a whole rung");
+    assert_eq!(s_on, free.floor(), "…here, the floor of the same free scale");
+}
+
+/// `v6_pixel_lock` is read live, not once at boot: the same pane, the same frame,
+/// flipping OFF → ON → OFF within one session must answer differently each time it
+/// changes and settle back exactly where it started (SQ-1239).
+#[test]
+fn the_pixel_lock_toggle_flips_extended_geometry_live() {
+    let _g = app::v6_palette_at_boot();
+    let Some(mut b) = boot(&CORPUS[0]) else { return };
+
+    let mut scales = Vec::new();
+    for lock in [false, true, false] {
+        let (_, _, f) = extended_with(&mut b, "", FRACTIONAL, lock);
+        let s = f.lock.expect("a pane holding the screen at 1:1 pins a magnification");
+        scales.push(s);
+    }
+    assert_eq!(scales[0], 1.4375, "OFF: the free/fractional scale");
+    assert_eq!(scales[1], 1.0, "ON: the whole rung below it");
+    assert_ne!(scales[0], scales[1], "the toggle must change the geometry, not just be accepted");
+    assert_eq!(scales[0], scales[2], "…and flipping back OFF returns to the same free scale");
 }
 
 // ── 2..4. The frame the corpus actually builds ────────────────────────────────
@@ -791,17 +861,21 @@ fn splash_cards_and_hint_screens_reach_the_verdict_their_row_pins() {
 /// `""` leaves the prose region blank, so every inked pixel below the status bar is
 /// the GAME's own chrome and two frames can be compared without the transcript — a
 /// thing that legitimately differs between them — drowning the comparison.
+/// `lock` overrides `state_for`'s default (`v6_pixel_lock = true`) so a caller can
+/// ask for the free/fractional scale explicitly (SQ-1239).
 fn extended_with(
     b: &mut Booted,
     transcript: &str,
     pane: (u16, u16),
+    lock: bool,
 ) -> (image::RgbaImage, Option<app::render::screen::RasterMetrics>, v6::RasterFrame) {
-    let st = state_for(app::config::V6RenderMode::Extended, transcript, b);
+    let mut st = state_for(app::config::V6RenderMode::Extended, transcript, b);
+    st.config.v6_pixel_lock = lock;
     let model = b.session.screen();
     let WinNode::Layered(items) = &model.root else { panic!("a v6 frame has a Layered root") };
     let native = v6::native_extent(items, &st.v6_text);
     let layout = v6::classify_windows(items, st.v6_text.cell());
-    let want = v6::RasterFrame::extended(native, pane_dev(pane), st.v6_text.cell(), Some(2.0));
+    let want = v6::RasterFrame::extended(native, pane_dev(pane), st.v6_text.cell(), Some(2.0), st.config.v6_pixel_lock);
     app::render::screen::build_v6_raster_frame(&layout, want, &st)
 }
 
@@ -869,7 +943,7 @@ fn a_parser_error_does_not_resize_arthurs_extended_frame() {
 
     // The clean turn: `look` parsed, window 3 is empty, and the frame extends.
     let clean_band = band_text(&mut b);
-    let (clean, cm, cf) = extended_with(&mut b, "", TALL);
+    let (clean, cm, cf) = extended_with(&mut b, "", TALL, true);
     assert!(cf.extension() > 0, "the clean frame is supposed to extend");
     assert!(
         clean_band.trim().is_empty(),
@@ -880,7 +954,7 @@ fn a_parser_error_does_not_resize_arthurs_extended_frame() {
     let r = b.session.submit("frobozzle the grue");
     assert!(r.fault.is_none(), "the rejected command faulted: {:?}", r.fault);
     let error_band = band_text(&mut b);
-    let (error, em, ef) = extended_with(&mut b, "", TALL);
+    let (error, em, ef) = extended_with(&mut b, "", TALL, true);
     eprintln!(
         "clean {}x{} ({} viewport rows) → rejected {}x{} ({} viewport rows), band {error_band:?}",
         clean.width(),
@@ -984,7 +1058,7 @@ fn shape(b: &mut Booted, mode: app::config::V6RenderMode, pane: (u16, u16)) -> F
     let layout = v6::classify_windows(items, st.v6_text.cell());
     let want = match mode {
         app::config::V6RenderMode::Extended => {
-            v6::RasterFrame::extended(native, pane_dev(pane), st.v6_text.cell(), Some(2.0))
+            v6::RasterFrame::extended(native, pane_dev(pane), st.v6_text.cell(), Some(2.0), st.config.v6_pixel_lock)
         }
         _ => v6::RasterFrame::native(native),
     };
