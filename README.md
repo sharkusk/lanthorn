@@ -244,6 +244,8 @@ lanthorn "LostTreasures1.iso" --story 3       # a compilation CD
 Blorb — and where a release shipped more than one rendition (MCGA, EGA, CGA, the
 Macintosh's monochrome plates), you can pick.
 
+![The launch-options panel over the story picker: Arthur's five picture archives — Blorb, CGA, EGA, MCGA, Amiga — and the interpreter the story will play as](docs/launch-options.png)
+
 **And the sound.** *The Lurking Horror* and *Sherlock* shipped sampled effects on
 their release disks years before Blorb existed, in a format nothing else reads.
 lanthorn plays them, pitch-bend and all — so *Sherlock*'s heartbeat really does
@@ -263,6 +265,8 @@ your library, unpacked, and launched.
 
 `--colour terminal|theme|machine` chooses whose colours the page and ink start
 from: your terminal's, your theme's, or the original machine's.
+
+![Deadline's opening screen under six of the machines Infocom shipped for — Apple IIe, Macintosh, Amiga, IBM PC, Commodore 128, Commodore 64 — each in that machine's own page, ink and status band](docs/machine-colours.png)
 
 → [graphics and terminals](docs/guide/graphics-and-terminals.md)
 
