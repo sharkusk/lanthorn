@@ -106,8 +106,19 @@ floor, not the ceiling:
 | `crates/app/src/render/transcript.rs` | `zork_classic`, `zmachine_screen`, `-p app --lib` |
 | `crates/app/src/native_font.rs`, `crates/blorb/**` | `-p blorb`, `engines`, `v6_zork0` |
 | `crates/mapper/**` | `-p mapper`, `mapper_ui` |
+| `crates/verb-synonyms/**`, `crates/app/src/vocab.rs` | `-p app --lib vocab`, `adult_words`, `vocabulary_offer`, `vocabulary_vetting`, `assist_voice`, `word_reveal`, `command_band`, `scope_completion`, `story_word_scrape` |
 | anything touching the PALETTE | the gate **and** `cargo test --workspace` |
 | a test that WRITES TO DISK | the gate **and** `cargo test --workspace`, twice |
+
+**The guidance suites are where a `stories/`-only case hides** (SQ-1251). Seven of
+the nine above boot a real commercial story and skip vacuously without it, so CI —
+which has no `stories/` — cannot fail on any of them, and the local gate is the ONLY
+thing that can. Regenerating `synonym_groups.tsv` or changing which members count as
+known moves what the Guiding Light says on Zork I, Curses and the rest, and the
+pinned offer lines are the only record of it. SQ-1234's table regeneration and
+SQ-1238's phrasal members each broke one pinned line and neither lane ran the suite
+that held it; the failure sat on green main for a day. **Symlink `stories/` into the
+worktree and run these by name — a vacuous skip reads exactly like a pass.**
 
 **Two things have justified the full gate**: a SEMANTIC merge conflict between two
 parallel lanes that was textually clean (one lane calling a signature the other had
