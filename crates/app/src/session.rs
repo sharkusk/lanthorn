@@ -193,30 +193,6 @@ pub(crate) fn clamp_runs(runs: Vec<CaptureRun>, char_len: usize) -> Vec<CaptureR
 /// ratios (below) stay valid because both numerator and denominator double.
 pub(crate) const V6_ART_SCALE: u32 = 2;
 
-/// Scale a native-resolution v6 picture into UNIT space (×`scale`,
-/// nearest-neighbour — the DOS-authentic crisp pixel double). Every picture that
-/// crosses from PictSource's art-native pixels into the 640×400 unit screen goes
-/// through here exactly once, so window canvases, inline floats and the
-/// `is_content_art` classification all see one consistent unit-space size.
-///
-/// `scale` is the session's [`GameSession::art_scale`], PER AXIS: `(2, 2)` for
-/// art with a standard window to be scaled against, `(1, 1)` for non-scalable
-/// art, and `(1, 2)` for an EGA/CGA rendition whose pixels are half as wide
-/// (SQ-0790).
-fn v6_scaled_art(img: &image::DynamicImage, scale: (u32, u32)) -> image::DynamicImage {
-    use image::GenericImageView;
-    if scale == (1, 1) {
-        return img.clone();
-    }
-    let (w, h) = img.dimensions();
-    image::DynamicImage::ImageRgba8(image::imageops::resize(
-        img,
-        w * scale.0,
-        h * scale.1,
-        image::imageops::FilterType::Nearest,
-    ))
-}
-
 /// Classify a picture as CONTENT art versus decorative FRAME art (borders,
 /// tiles). (SQ-0461 decision 3)
 ///
@@ -1430,14 +1406,14 @@ impl GameSession {
             match *op {
                 V6Op::Erase { dx, dy, w: ew, h: eh } => canvas.erase_rect(dx, dy, ew, eh),
                 V6Op::Draw { number, dx, dy } => {
+                    let scale = self.art_scale;
                     let Some(img) = self
                         .pict_source
                         .as_mut()
-                        .and_then(|s| s.image_under_current_palette(number as u32))
+                        .and_then(|s| s.scaled_image_under_current_palette(number as u32, scale))
                     else {
                         continue;
                     };
-                    let img = v6_scaled_art(&img, self.art_scale);
                     canvas.draw_image_clipped(&img, dx, dy, (w, h));
                 }
             }
@@ -2649,14 +2625,14 @@ impl GameSession {
                         }
                     }
                     V6Op::Draw { number, dx, dy } => {
+                        let scale = self.art_scale;
                         let Some(img) = self
                             .pict_source
                             .as_mut()
-                            .and_then(|s| s.image_under_current_palette(number as u32))
+                            .and_then(|s| s.scaled_image_under_current_palette(number as u32, scale))
                         else {
                             continue;
                         };
-                        let img = v6_scaled_art(&img, self.art_scale);
                         if let Some(c) = self.pictures_canvas.get_mut(&win) {
                             c.draw_image_clipped(&img, dx, dy, (cw, ch));
                         }
@@ -2780,7 +2756,8 @@ impl GameSession {
             if ev.erase {
                 return; // no canvas to erase; a win0 erase_picture is a no-op here
             }
-            if let Some(img) = self.pict_source.as_mut().and_then(|s| s.image(ev.number as u32)) {
+            let scale = self.art_scale;
+            if let Some(img) = self.pict_source.as_mut().and_then(|s| s.scaled_image(ev.number as u32, scale)) {
                 // A window-0 picture is normally a drop-cap / room icon floated at
                 // the left margin (text flows beside it). But Shogun draws its
                 // large opening SHIP illustration into window 0 too — a
@@ -2789,10 +2766,9 @@ impl GameSession {
                 // content-art image (Shogun's ship) aligns InlineUp (full-size,
                 // its own band); a genuine drop-cap (Zork Zero's initial letter,
                 // a small tile) keeps MarginLeft.
-                // Scale into unit space (SQ-0479) so the float renders at its
-                // authentic 2× size beside the 8×16 text and its reserved rows
-                // (height/16) stay consistent with the 16px grid.
-                let img = v6_scaled_art(&img, self.art_scale);
+                // Scaled into unit space (SQ-0479) already, so the float renders
+                // at its authentic 2× size beside the 8×16 text and its reserved
+                // rows (height/16) stay consistent with the 16px grid.
                 let (iw, ih) = (img.width(), img.height());
                 let (screen_w, screen_h) = self.v6_screen_px();
                 let align = win0_pic_align(
@@ -2859,11 +2835,13 @@ impl GameSession {
             self.record_op(ev.window, V6Op::Erase { dx, dy, w: ew, h: eh });
             // …and the same region of the shared screen (SQ-0568).
             screen_erase = Some((dx.max(0) as u32, dy.max(0) as u32, ew, eh));
-        } else if let Some(img) = self.pict_source.as_mut().and_then(|s| s.image(ev.number as u32)) {
+        } else if let Some(img) = {
+            let scale = self.art_scale;
+            self.pict_source.as_mut().and_then(|s| s.scaled_image(ev.number as u32, scale))
+        } {
             // Blit the art at 2× into the unit-space window canvas (SQ-0479): the
             // game placed it at unit coords (dx,dy) expecting the Amiga/DOS
             // doubled picture, so the scaled pixels fill the box the game reserved.
-            let img = v6_scaled_art(&img, self.art_scale);
             canvas.draw_image_clipped(&img, dx, dy, (pw, ph));
             canvas.z_seq = crate::graphics::next_draw_seq();
             // Remember where on the SCREEN these pixels landed, so a later
