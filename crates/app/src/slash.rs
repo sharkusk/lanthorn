@@ -665,6 +665,12 @@ pub static COMMANDS: &[CommandSpec] = &[
             Some(n) => SlashOutcome::Browser(crate::browser::BrowserAction::PageSelection(n)),
             None => err("page-selection requires an integer (e.g. page-selection -1)"),
         } },
+    CommandSpec { name: "half-page-selection", category: Category::Library, context: Context::Browser,
+        usage: "half-page-selection <n>", description: "move the browser's selection by half a page (vim Ctrl-U/Ctrl-D)",
+        dispatch: |a| match a.first().and_then(|s| s.parse::<isize>().ok()) {
+            Some(n) => SlashOutcome::Browser(crate::browser::BrowserAction::HalfPageSelection(n)),
+            None => err("half-page-selection requires an integer (e.g. half-page-selection -1)"),
+        } },
     CommandSpec { name: "select-edge", category: Category::Library, context: Context::Browser,
         usage: "select-edge first|last", description: "jump the browser's selection to the first or last story",
         dispatch: |a| {
@@ -1118,7 +1124,9 @@ mod tests {
         // nothing to read off it, nothing persisted, it just happens.
         // `find-story` and `parent-folder` arrived with the picker's folder
         // navigation and its in-memory library find: two more Library commands.
-        assert_eq!(COMMANDS.len(), 86, "registry must match the spec's Full command table");
+        // SQ-1228 added `half-page-selection`, the vim Ctrl-U/Ctrl-D convention
+        // for the browser's list view.
+        assert_eq!(COMMANDS.len(), 87, "registry must match the spec's Full command table");
     }
 
     /// SQ-0796: `Category::ORDER` must list every category, or a whole group of

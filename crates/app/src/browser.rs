@@ -47,6 +47,10 @@ pub enum BrowserAction {
     MoveSelection { dx: isize, dy: isize },
     /// Move the selection by `n` pages.
     PageSelection(isize),
+    /// Move the selection by half a page (`n < 0` up, `n > 0` down) — the vim
+    /// `Ctrl-U`/`Ctrl-D` convention (SQ-1228). List view only: the cover gallery
+    /// has no half-row concept.
+    HalfPageSelection(isize),
     /// Jump to the first or last story.
     SelectEdge(Edge),
     /// Launch the selected story with no launch-time overrides.
@@ -189,6 +193,12 @@ pub const HINTS_OPTIONAL: &[Hint] = &[
     Hint { commands: &["sort-library"], extras: &[], label: "sort", ranks: 0 },
     Hint { commands: &["reverse-sort"], extras: &[], label: "reverse", ranks: 0 },
     Hint { commands: &["page-selection -1", "page-selection 1"], extras: &[], label: "page", ranks: 0 },
+    Hint {
+        commands: &["half-page-selection -1", "half-page-selection 1"],
+        extras: &[],
+        label: "half page",
+        ranks: 0,
+    },
     Hint { commands: &["select-edge first", "select-edge last"], extras: &[], label: "ends", ranks: 0 },
 ];
 
@@ -381,6 +391,15 @@ mod tests {
         assert_eq!(
             key(KeyCode::Char('k'), KeyModifiers::NONE),
             Some(BrowserAction::MoveSelection { dx: 0, dy: -1 })
+        );
+        // SQ-1228: vim-style half-page paging.
+        assert_eq!(
+            key(KeyCode::Char('u'), KeyModifiers::CONTROL),
+            Some(BrowserAction::HalfPageSelection(-1))
+        );
+        assert_eq!(
+            key(KeyCode::Char('d'), KeyModifiers::CONTROL),
+            Some(BrowserAction::HalfPageSelection(1))
         );
         assert_eq!(key(KeyCode::Tab, KeyModifiers::NONE), Some(BrowserAction::ToggleInfoPanel));
         assert_eq!(key(KeyCode::Esc, KeyModifiers::NONE), Some(BrowserAction::CancelBrowser));

@@ -1995,6 +1995,15 @@ pub(crate) fn run_story_picker(
                                 app::list_scroll::nav_key(&mut list, nav, stories.len(), viewport, anim);
                             }
                         }
+                        // List view only (SQ-1228): the cover gallery has no
+                        // half-row concept, so Ctrl-U/Ctrl-D do nothing there.
+                        Some(app::browser::BrowserAction::HalfPageSelection(n)) => {
+                            panel_scroll = 0;
+                            if !gallery {
+                                let dir = if n < 0 { -1 } else { 1 };
+                                list.half_page(dir, viewport, anim);
+                            }
+                        }
                         Some(app::browser::BrowserAction::SelectEdge(edge)) => {
                             panel_scroll = 0;
                             if gallery {
@@ -4767,8 +4776,9 @@ mod tests {
         // while the hints were hand-written. The drop-right-to-left behaviour
         // below that width is what the rest of this test pins, and it is
         // unchanged. 320 since the folder navigation and the library find added
-        // `Ctrl+F: find` and `Backspace: up` to the set.
-        let wide = super::build_footer(&km, 320);
+        // `Ctrl+F: find` and `Backspace: up` to the set. 360 since SQ-1228 added
+        // `Ctrl+U/Ctrl+D: half page`.
+        let wide = super::build_footer(&km, 360);
         for seg in &optional {
             assert!(wide.contains(seg), "wide footer shows {seg:?}: {wide:?}");
         }

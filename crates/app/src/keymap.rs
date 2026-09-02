@@ -382,6 +382,9 @@ impl Default for KeyMap {
         bind!(plain(Char('l')), "move-selection 1 0", Context::Browser);
         bind!(plain(PageUp), "page-selection -1", Context::Browser);
         bind!(plain(PageDown), "page-selection 1", Context::Browser);
+        // Half-page paging, the vim Ctrl-U/Ctrl-D convention (SQ-1228).
+        bind!(ctrl(Char('u')), "half-page-selection -1", Context::Browser);
+        bind!(ctrl(Char('d')), "half-page-selection 1", Context::Browser);
         bind!(plain(Home), "select-edge first", Context::Browser);
         bind!(plain(End), "select-edge last", Context::Browser);
 
@@ -937,6 +940,30 @@ mod tests {
         // …and `g` opens the cover gallery only there.
         assert_eq!(km.lookup(&g(Char('g'), false, false), Context::Global), None);
         assert_eq!(km.lookup(&g(Char('g'), false, false), Context::Map), None);
+    }
+
+    /// SQ-1228: Ctrl-U/Ctrl-D are the vim half-page convention, bound by default
+    /// in the story picker's list view (Browser context) only — the picker has
+    /// no readline prompt to conflict with, unlike the story transcript's
+    /// Ctrl-D (hardwired in `input.rs`; see `ctrl_d_half_pages_the_transcript_in_game_focus`).
+    #[test]
+    fn ctrl_u_and_ctrl_d_half_page_the_browser_list() {
+        let km = KeyMap::default();
+        let g = |code, ctrl, shift| KeySpec { code, ctrl, shift, alt: false };
+        use KeyCode::*;
+        assert_eq!(
+            km.lookup(&g(Char('u'), true, false), Context::Browser),
+            Some("half-page-selection -1")
+        );
+        assert_eq!(
+            km.lookup(&g(Char('d'), true, false), Context::Browser),
+            Some("half-page-selection 1")
+        );
+        // Not bound in any other context.
+        assert_eq!(km.lookup(&g(Char('u'), true, false), Context::Global), None);
+        assert_eq!(km.lookup(&g(Char('d'), true, false), Context::Global), None);
+        assert_eq!(km.lookup(&g(Char('u'), true, false), Context::Map), None);
+        assert_eq!(km.lookup(&g(Char('d'), true, false), Context::Map), None);
     }
 
     /// SQ-0796: binding across the two worlds is refused with a warning rather

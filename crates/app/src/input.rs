@@ -409,6 +409,13 @@ pub enum Action {
     /// older lines, `-1` toward newer. Resolved by the run loop, which knows the
     /// last-rendered transcript viewport height and max scroll (see `page_scroll`).
     TranscriptScrollPage(i8),
+    /// Half-page the transcript (Ctrl-D, vim convention; SQ-1228). `+1` scrolls
+    /// toward older lines, `-1` toward newer — same sign convention as
+    /// `TranscriptScrollPage`, resolved the same way (see `half_page_scroll`).
+    /// Ctrl-U (half page up) is NOT bound here: it already means "delete to
+    /// start of line" at the story prompt (`Action::DeleteToStart`), and that
+    /// readline convention wins.
+    TranscriptScrollHalfPage(i8),
     /// Advance the `[more]` pager one screen toward the bottom; catching up exits
     /// the pager (SQ-0404).
     PagerAdvance,
@@ -459,6 +466,9 @@ pub enum KeyResolve {
 ///    config-screen/hotkey-dialog/room-panel) → their handlers (hardwired Actions).
 ///    6.7. Ctrl+A/E/U/K/W in Game focus with the line prompt live (not char_mode/
 ///    event_wait) → readline caret/delete ops on the input line.
+///    6.8. Ctrl+D in Game focus → TranscriptScrollHalfPage (SQ-1228; Ctrl+U is
+///    reserved by 6.7's DeleteToStart, so only the half-page-down direction is
+///    bound this way).
 /// 7. Key == hotkeys.prefix → OpenHotkeyDialog.
 /// 8. Tab (no modifiers) → autocomplete-or-ToggleFocus.
 /// 9. Ctrl modifier → Global KeyMap lookup, filtered by hotkeys.is_direct_name.
@@ -610,6 +620,27 @@ pub fn key_to_command(state: &AppState, key: KeyEvent) -> KeyResolve {
             KeyCode::Down => return KeyResolve::Action(Action::HistoryNext),
             _ => {}
         }
+    }
+
+    // 6.8. Ctrl+D in Game focus: half-page the transcript toward newer lines
+    // (SQ-1228, the vim convention). Hardwired here — like plain PageUp/
+    // PageDown in `game_key_to_action` below — rather than a keymap-driven
+    // command, matching that sibling gesture's style; ahead of step 9's
+    // blanket Ctrl→Global lookup for the same reason. Not gated to
+    // `!char_mode && !event_wait` the way the readline block above is: a Ctrl
+    // combo is never forwarded to the VM as game input (see the char-mode gate
+    // in main.rs), so there is no game meaning for this key to preempt, and
+    // scrolling the transcript is exactly as useful mid-menu as at the prompt.
+    //
+    // Ctrl+U (half page up) is deliberately NOT bound: it already means
+    // "delete to start of line" at the story prompt (step 6.7 above,
+    // `Action::DeleteToStart`), which is the readline kill-line convention and
+    // wins over the vim one.
+    if key.modifiers == KeyModifiers::CONTROL
+        && state.focus == Focus::Game
+        && key.code == KeyCode::Char('d')
+    {
+        return KeyResolve::Action(Action::TranscriptScrollHalfPage(-1));
     }
 
     // 7. Prefix key → open the hotkey dialog.
@@ -1671,6 +1702,15 @@ fn game_key_to_action(state: &AppState, key: KeyEvent) -> Action {
 /// clamped to `[0, max_scroll]` — the same bounds the mouse-wheel scroll uses.
 pub fn page_scroll(current: u16, dir: i8, viewport_rows: u16, max_scroll: u16) -> u16 {
     let next = crate::list_scroll::page_step(current as usize, dir as i32, viewport_rows as usize);
+    (next.min(u16::MAX as usize) as u16).min(max_scroll)
+}
+
+/// Compute the new transcript scroll offset for a half-page step (Ctrl-D, vim
+/// convention; SQ-1228). Same direction and clamp semantics as `page_scroll`,
+/// but the step is `floor(viewport_rows / 2)` (floored at 1) rather than a full
+/// page.
+pub fn half_page_scroll(current: u16, dir: i8, viewport_rows: u16, max_scroll: u16) -> u16 {
+    let next = crate::list_scroll::half_page_step(current as usize, dir as i32, viewport_rows as usize);
     (next.min(u16::MAX as usize) as u16).min(max_scroll)
 }
 
@@ -3068,6 +3108,7 @@ fn apply_action_inner(action: Action, state: &mut AppState, mapper: &mut Mapper)
         | Action::SavesImport
         | Action::FbEnter
         | Action::TranscriptScrollPage(_)
+        | Action::TranscriptScrollHalfPage(_)
         | Action::PagerAdvance
         | Action::PagerDismiss
         | Action::Quit => {}
@@ -4801,9 +4842,14 @@ mod tests {
         assert!(matches!(key_to_command(&s, ctrl(KeyCode::Char('s'))), KeyResolve::Command(c, _) if c == "save-state"));
         assert!(matches!(key_to_command(&s, ctrl(KeyCode::Char('r'))), KeyResolve::Command(c, _) if c == "restore-state"));
         // Non-direct commands return None when dialog is closed. (Ctrl+E is the
-        // readline move-to-end at the story prompt, so it is not one of them.)
+        // readline move-to-end at the story prompt, so it is not one of them.
+        // Ctrl+D is not one of them either since SQ-1228: it half-pages the
+        // transcript in Game focus, hardwired ahead of this dialog lookup.)
         assert!(matches!(key_to_action(&s, ctrl(KeyCode::Char('g'))), Action::None));
-        assert!(matches!(key_to_action(&s, ctrl(KeyCode::Char('d'))), Action::None));
+        assert!(matches!(
+            key_to_action(&s, ctrl(KeyCode::Char('d'))),
+            Action::TranscriptScrollHalfPage(-1)
+        ));
         assert!(matches!(key_to_action(&s, ctrl(KeyCode::Char('l'))), Action::None));
         // Ctrl-combos always close the dialog now (never fire); the underlying
         // commands fire via their authored leader letters instead (SQ-0446 layout).
@@ -5976,9 +6022,13 @@ mod tests {
         // Direct ctrl commands work without the dialog.
         assert!(matches!(key_to_command(&s, ctrl(KeyCode::Char('s'))), KeyResolve::Command(c, _) if c == "save-state"));
         assert!(matches!(key_to_command(&s, ctrl(KeyCode::Char('r'))), KeyResolve::Command(c, _) if c == "restore-state"));
-        // Non-direct ctrl commands return None when dialog is closed.
+        // Non-direct ctrl commands return None when dialog is closed. Ctrl+D is
+        // not one of them since SQ-1228 (transcript half-page-down).
         assert!(matches!(key_to_action(&s, ctrl(KeyCode::Char('g'))), Action::None));
-        assert!(matches!(key_to_action(&s, ctrl(KeyCode::Char('d'))), Action::None));
+        assert!(matches!(
+            key_to_action(&s, ctrl(KeyCode::Char('d'))),
+            Action::TranscriptScrollHalfPage(-1)
+        ));
         assert!(matches!(key_to_action(&s, ctrl(KeyCode::Char('l'))), Action::None));
         assert!(matches!(key_to_action(&s, ctrl(KeyCode::Char('t'))), Action::None));
         assert!(matches!(key_to_action(&s, ctrl(KeyCode::Char('y'))), Action::None));
@@ -7042,6 +7092,48 @@ mod tests {
         assert!(!matches!(dn, Action::ZoomIn | Action::ZoomOut));
         assert!(matches!(up, Action::TranscriptScrollPage(1)));
         assert!(matches!(dn, Action::TranscriptScrollPage(-1)));
+    }
+
+    // ── Ctrl-D/Ctrl-U half-page transcript scrolling (SQ-1228) ─────────────────
+
+    #[test]
+    fn half_page_scroll_steps_by_floor_half_viewport() {
+        // viewport 20 rows → half page = 10 (floor(20/2), no overlap).
+        assert_eq!(half_page_scroll(0, 1, 20, 100), 10);
+        assert_eq!(half_page_scroll(10, 1, 20, 100), 20);
+        // dir < 0 moves toward newer (smaller offset), saturating at 0.
+        assert_eq!(half_page_scroll(10, -1, 20, 100), 0);
+        // Clamped to max_scroll.
+        assert_eq!(half_page_scroll(95, 1, 20, 100), 100);
+    }
+
+    #[test]
+    fn half_page_scroll_odd_viewport_floors_and_minimum_is_one() {
+        // floor(9/2) = 4.
+        assert_eq!(half_page_scroll(0, 1, 9, 100), 4);
+        // viewport of 0 or 1 still steps by at least 1.
+        assert_eq!(half_page_scroll(0, 1, 1, 100), 1);
+        assert_eq!(half_page_scroll(0, 1, 0, 100), 1);
+    }
+
+    #[test]
+    fn ctrl_d_half_pages_the_transcript_in_game_focus() {
+        let s = AppState::default(); // focus = Game
+        let dn = key_to_action(&s, ctrl(KeyCode::Char('d')));
+        assert!(!matches!(dn, Action::ZoomIn | Action::ZoomOut));
+        assert!(matches!(dn, Action::TranscriptScrollHalfPage(-1)));
+    }
+
+    /// SQ-1228: Ctrl-U is the vim half-page-up convention, but at the story
+    /// prompt Ctrl-U already means "delete to start of line" (SQ-0447's
+    /// readline shortcut, step 6.7). That readline convention wins — Ctrl-U
+    /// must keep meaning DeleteToStart in Game focus, not gain a second,
+    /// conflicting meaning.
+    #[test]
+    fn ctrl_u_keeps_its_readline_meaning_not_half_page_up() {
+        let s = AppState::default(); // focus = Game, not char_mode/event_wait
+        let up = key_to_action(&s, ctrl(KeyCode::Char('u')));
+        assert!(matches!(up, Action::DeleteToStart));
     }
 
     /// SQ-0692: an empty-space click used to close the popup. It now UNPINS — the

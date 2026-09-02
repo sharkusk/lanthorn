@@ -4047,6 +4047,18 @@ fn run_event_loop(boot: startup::BootResult, launched_from_library: bool) -> Run
                 );
                 state.scroll_transcript_to(target);
             }
+            // Half-page the transcript (Ctrl-D, vim convention; SQ-1228). Same
+            // shape as the full-page arm above, resolved here for the same
+            // reason: it needs the last-rendered viewport height and max scroll.
+            Action::TranscriptScrollHalfPage(dir) => {
+                let target = app::input::half_page_scroll(
+                    state.transcript_scroll,
+                    dir,
+                    last_panes.transcript_viewport_rows,
+                    last_panes.transcript_max_scroll,
+                );
+                state.scroll_transcript_to(target);
+            }
             // [more] pager (SQ-0404): page one screen toward the bottom; reaching
             // the bottom (offset 0) catches up and exits the pager.
             Action::PagerAdvance => {

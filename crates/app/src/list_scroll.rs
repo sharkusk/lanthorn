@@ -23,6 +23,19 @@ pub(crate) fn page_step(current: usize, dir: i32, viewport: usize) -> usize {
     }
 }
 
+/// Half-page step, the vim `Ctrl-U`/`Ctrl-D` convention (SQ-1228): `floor(viewport
+/// / 2)`, floored at 1 so paging always advances. `dir > 0` steps forward (down),
+/// `dir < 0` backward (up). No overlap row — unlike `page_step`, a half page is
+/// exactly half the viewport.
+pub(crate) fn half_page_step(current: usize, dir: i32, viewport: usize) -> usize {
+    let page = (viewport / 2).max(1);
+    if dir > 0 {
+        current.saturating_add(page)
+    } else {
+        current.saturating_sub(page)
+    }
+}
+
 /// Minimal offset so `selected` is within `[offset, offset + viewport)`.
 fn ensure_visible(offset: usize, selected: usize, viewport: usize) -> usize {
     if viewport == 0 {
@@ -111,6 +124,14 @@ impl ListScroll {
     /// Page the selection by ~one `viewport` (1-row overlap). `dir > 0` = PageDown.
     pub fn page(&mut self, dir: i32, viewport: usize, anim: &AnimationConfig) {
         let stepped = page_step(self.selected, dir, viewport);
+        self.selected = stepped.min(self.total.saturating_sub(1));
+        self.ensure_visible_and_arm(viewport, anim);
+    }
+
+    /// Page the selection by half a `viewport` (vim `Ctrl-U`/`Ctrl-D`, SQ-1228).
+    /// `dir > 0` = half page down.
+    pub fn half_page(&mut self, dir: i32, viewport: usize, anim: &AnimationConfig) {
+        let stepped = half_page_step(self.selected, dir, viewport);
         self.selected = stepped.min(self.total.saturating_sub(1));
         self.ensure_visible_and_arm(viewport, anim);
     }
@@ -234,6 +255,27 @@ mod tests {
         let before = l.selected;
         l.page(-1, 10, &anim_off()); // PageUp
         assert!(l.selected < before);
+    }
+
+    #[test]
+    fn half_page_moves_by_half_a_viewport() {
+        let mut l = ListScroll::new();
+        l.len(100);
+        l.half_page(1, 10, &anim_off()); // Ctrl-D: half page down
+        assert_eq!(l.selected, 5); // floor(10 / 2)
+        l.half_page(-1, 10, &anim_off()); // Ctrl-U: half page up
+        assert_eq!(l.selected, 0);
+    }
+
+    #[test]
+    fn half_page_step_floors_and_minimum_is_one() {
+        assert_eq!(half_page_step(10, 1, 10), 15); // floor(10/2) = 5
+        assert_eq!(half_page_step(10, 1, 9), 14); // floor(9/2) = 4
+        assert_eq!(half_page_step(10, -1, 10), 5);
+        // A 1-row (or 0-row) viewport still steps by at least 1.
+        assert_eq!(half_page_step(10, 1, 1), 11);
+        assert_eq!(half_page_step(10, 1, 0), 11);
+        assert_eq!(half_page_step(0, -1, 10), 0); // saturates at 0
     }
 
     #[test]
