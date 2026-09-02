@@ -1699,7 +1699,15 @@ pub enum Face {
         /// by `round(line height)`. Equal to the shot's cell when the size was
         /// chosen well, and worth printing when it is not.
         natural: (u32, u32),
-        /// Every character neither this face nor the bitmap master could draw.
+        /// A second face, tried only for a glyph the primary face declined
+        /// (SQ-1229). `▸` (the matrix view's current-room marker) and `⇄` (a
+        /// reciprocal-exit marker) are outside Fira Code Nerd Font Mono's
+        /// range, and a real terminal supplies them from the OS's own font
+        /// fallback — which is why nobody notices this live. `None` when no
+        /// candidate in [`FALLBACK_FONT_CANDIDATES`] loads.
+        fallback: Option<(Box<fontdue::Font>, f32)>,
+        /// Every character neither this face, the fallback, nor the bitmap
+        /// master could draw.
         ///
         /// The reason this quest exists is that a missing glyph is SILENT: the
         /// map's arrowheads came out as `.notdef` boxes under Monaco and the run
@@ -1728,17 +1736,21 @@ impl Face {
             .map_err(|e| format!("font {}: {e}", path.display()))?;
         let name = path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_else(|| "font".into());
         let per_px = font.horizontal_line_metrics(1.0).map(|m| m.new_line_size).filter(|v| *v > 0.0);
-        let px = match per_px {
-            Some(line) => (f32::from(cell_h) / line).round().max(1.0),
-            None => f32::from(cell_h) * 0.78,
-        };
+        let px = size_for_cell(&font, cell_h);
         // The advance is the same for every glyph in a monospace face, so `M`
         // answers for all of them.
         let natural = (
             font.metrics('M', px).advance_width.round().max(1.0) as u32,
             per_px.map_or(u32::from(cell_h), |line| (line * px).round().max(1.0) as u32),
         );
-        Ok(Face::Outline { name, font: Box::new(font), px, natural, unresolved: Default::default() })
+        Ok(Face::Outline {
+            name,
+            font: Box::new(font),
+            px,
+            natural,
+            fallback: load_fallback_font(cell_h),
+            unresolved: Default::default(),
+        })
     }
 
     /// How the label should name this face — which is the whole reason a real
@@ -1782,7 +1794,7 @@ impl Face {
     pub fn draw(&self, canvas: &mut RgbaImage, ch: char, px: u32, py: u32, cw: u32, chh: u32, fg: Rgba<u8>) {
         match self {
             Face::Bitmap => app::render::bitfont::blit_glyph(canvas, ch, px, py, cw, chh, fg, None, None),
-            Face::Outline { font, px: size, unresolved, .. } => {
+            Face::Outline { font, px: size, fallback, unresolved, .. } => {
                 // The half-block and box-drawing glyphs are the picture's
                 // STRUCTURE — rules, borders, and every pixel of a half-block
                 // frame. A text face either lacks them or draws them with gaps
@@ -1796,19 +1808,34 @@ impl Face {
                 // that one set of glyphs for that one face; asking the face
                 // whether it HAS the glyph fixes it for every face anyone passes
                 // to `--font`, including the ones nobody has thought of.
-                if is_structural(ch) || !font.has_glyph(ch) {
+                //
+                // A glyph the PRIMARY face declines gets one more chance before
+                // the bitmap master (SQ-1229): the fallback face, tried only
+                // here, never as the primary. `▸`/`⇄` are outside Fira Code Nerd
+                // Font Mono's range but inside a face like DejaVu Sans Mono or
+                // Menlo's — exactly the OS fallback a real terminal supplies
+                // without anyone noticing.
+                let resolved = if is_structural(ch) {
+                    None
+                } else if font.has_glyph(ch) {
+                    Some((font.as_ref(), *size))
+                } else {
+                    fallback.as_ref().and_then(|(f, p)| f.has_glyph(ch).then(|| (f.as_ref(), *p)))
+                };
+                let Some((draw_font, draw_size)) = resolved else {
                     app::render::bitfont::blit_glyph(canvas, ch, px, py, cw, chh, fg, None, None);
                     // The master is a short hand-authored list, not a font: it
                     // covers font 3, the ZSCII table and the runes, and nothing
-                    // says it covers whatever the face just declined. Record what
-                    // fell through both, so the next silent gap is a printed line
-                    // rather than a blank cell somebody eventually notices.
+                    // says it covers whatever neither face just declined. Record
+                    // what fell through all three, so the next silent gap is a
+                    // printed line rather than a blank cell somebody eventually
+                    // notices.
                     if !is_structural(ch) && !ch.is_whitespace() && !app::render::bitfont::has_glyph(ch) {
                         unresolved.borrow_mut().insert(ch);
                     }
                     return;
-                }
-                let (m, bitmap) = font.rasterize(ch, *size);
+                };
+                let (m, bitmap) = draw_font.rasterize(ch, draw_size);
                 if m.width == 0 || m.height == 0 {
                     return;
                 }
@@ -1928,6 +1955,61 @@ pub fn pick_face(explicit: Option<&Path>, cell_h: u16) -> Result<Face, String> {
         }
     }
     Ok(Face::Bitmap)
+}
+
+/// The size, in px, at which a face's own line metrics fill `cell_h` — shared
+/// by [`Face::outline`] and [`load_fallback_font`] so a fallback face lands in
+/// the cell the same way the primary one does.
+fn size_for_cell(font: &fontdue::Font, cell_h: u16) -> f32 {
+    let per_px = font.horizontal_line_metrics(1.0).map(|m| m.new_line_size).filter(|v| *v > 0.0);
+    match per_px {
+        Some(line) => (f32::from(cell_h) / line).round().max(1.0),
+        None => f32::from(cell_h) * 0.78,
+    }
+}
+
+/// Faces tried only for a glyph [`FONT_CANDIDATES`]' pick declined — never as
+/// the primary face itself, which is a measurement (see that list's own docs),
+/// not a preference (SQ-1229).
+///
+/// The gap this closes: `▸` (the matrix view's current-room marker,
+/// `render/matrix.rs`) and `⇄` (a reciprocal-exit marker, `render/room_info.rs`)
+/// are outside Fira Code Nerd Font Mono's range, so the harness drew both
+/// BLANK — a `maze-grid` still and the automap losing its current-room marker
+/// went uncaught because a real terminal's OS font fallback supplies them
+/// live, and only this rasteriser has no such fallback of its own.
+///
+/// DejaVu Sans Mono is the traditional broad-coverage face on Linux, already
+/// installed at these paths on most distributions. Menlo is every Mac's own
+/// system monospace since 10.6 and needs no install; unlike [`FONT_CANDIDATES`]
+/// this list may name it as its `.ttc`, because `fontdue::FontSettings`'s
+/// `collection_index` defaults to `0` — the first face in the collection loads
+/// with no extra plumbing, whereas the primary-face list has no way to prefer
+/// a later face in one and so leaves collections alone entirely.
+pub const FALLBACK_FONT_CANDIDATES: &[&str] = &[
+    "/usr/share/fonts/truetype/dejavu/DejaVuSansMono.ttf",
+    "/usr/share/fonts/TTF/DejaVuSansMono.ttf",
+    "/usr/share/fonts/dejavu/DejaVuSansMono.ttf",
+    "/System/Library/Fonts/Menlo.ttc",
+];
+
+/// The first [`FALLBACK_FONT_CANDIDATES`] entry that loads, sized to `cell_h`
+/// the same way the primary face is — or `None`, which leaves [`Face::draw`]
+/// exactly as it behaved before this fallback existed.
+fn load_fallback_font(cell_h: u16) -> Option<(Box<fontdue::Font>, f32)> {
+    for cand in FALLBACK_FONT_CANDIDATES {
+        let Some(p) = candidate_path(cand) else { continue };
+        if !p.is_file() {
+            continue;
+        }
+        let Ok(bytes) = std::fs::read(&p) else { continue };
+        let Ok(font) = fontdue::Font::from_bytes(bytes.as_slice(), fontdue::FontSettings::default()) else {
+            continue;
+        };
+        let px = size_for_cell(&font, cell_h);
+        return Some((Box::new(font), px));
+    }
+    None
 }
 
 // ── The label ─────────────────────────────────────────────────────────────────
@@ -2247,4 +2329,55 @@ fn json_str(s: &str) -> String {
     }
     out.push('"');
     out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The two glyphs SQ-1229 found drawn blank: `▸` (the matrix view's
+    /// current-room marker, `render/matrix.rs`, and the picker's selection
+    /// marker) and `⇄` (a reciprocal-exit marker, `render/room_info.rs`).
+    /// Neither Fira Code Nerd Font Mono nor the bitmap master carries them —
+    /// `Face::draw` used to fall straight from the primary face to the master
+    /// and stop there, so both landed on a blank cell with no complaint beyond
+    /// the run's own `NO GLYPH ANYWHERE FOR:` line.
+    ///
+    /// Skips vacuously when this machine has none of
+    /// [`FALLBACK_FONT_CANDIDATES`] installed, the same fixture-absence
+    /// pattern every other case here that touches a real file uses — falsify
+    /// by temporarily making [`load_fallback_font`] always return `None`
+    /// (which is exactly this test's own regression state before SQ-1229):
+    /// this case then fails on the `unresolved` assertion below instead of
+    /// silently passing.
+    #[test]
+    fn the_fallback_face_carries_the_automap_markers_no_primary_face_has() {
+        let Some(primary) = FONT_CANDIDATES.iter().find_map(|c| {
+            let p = candidate_path(c)?;
+            p.is_file().then_some(p)
+        }) else {
+            return; // no primary face on this machine — nothing to rasterise with
+        };
+        let Some(_fallback) = FALLBACK_FONT_CANDIDATES.iter().find_map(|c| {
+            let p = candidate_path(c)?;
+            p.is_file().then_some(p)
+        }) else {
+            return; // no fallback face on this machine — nothing to test
+        };
+
+        let face = Face::outline(&primary, 32).expect("a candidate that `is_file()` must parse");
+        let mut canvas = RgbaImage::new(16, 32);
+        for ch in ['▸', '⇄'] {
+            face.draw(&mut canvas, ch, 0, 0, 16, 32, Rgba([255, 255, 255, 255]));
+        }
+
+        assert!(
+            face.unresolved().is_empty(),
+            "U+25B8/U+21C4 must resolve through the fallback face, not fall through to \
+             `unresolved` (which is a blank cell): {:?}",
+            face.unresolved()
+        );
+        let painted = canvas.pixels().filter(|p| p.0[3] > 0).count();
+        assert!(painted > 0, "drawing ▸ and ⇄ must paint at least one pixel — a blank canvas is the bug SQ-1229 reports");
+    }
 }
