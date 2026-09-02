@@ -24,9 +24,11 @@ pub mod trace;
 mod unicode_norm;
 #[rustfmt::skip]
 mod unicode_norm_tables;
+pub mod veneer;
 
 pub use error::GError;
 pub use exec::{Machine, SaveLoadRequest, StepResult};
 pub use glk::{GlkBackend, GlkStyle, Model as GlkModel, TestBackend, WinType};
 pub use memory::{Memory, WriteFault};
 pub use trace::{StackTrace, TraceFrame};
+pub use veneer::{CrossCheck, VeneerReport};

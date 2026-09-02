@@ -345,6 +345,13 @@ pub struct Machine {
     accel_params: std::collections::HashMap<u32, u32>,
     /// Whether accelerated-function interception is active (default true).
     pub(crate) acceleration: bool,
+    /// What bytecode fingerprinting concluded about this story's Inform 6
+    /// veneer (`crate::veneer`), for the hosts' diagnostics.
+    veneer: crate::veneer::VeneerReport,
+    /// Whether the story has run `@accelfunc`/`@accelparam` for itself. Games
+    /// built by Inform 7 6E59 and later do; older ones never do, which is what
+    /// fingerprinting is for.
+    declared_accel: bool,
     /// Whether Glk graphics windows are enabled (default false; hosts opt in).
     pub(crate) graphics_enabled: bool,
     /// Whether Glk sound channels are enabled (default false; hosts opt in).
@@ -836,6 +843,8 @@ impl Machine {
             accel_funcs: std::collections::HashMap::new(),
             accel_params: std::collections::HashMap::new(),
             acceleration: true,
+            veneer: crate::veneer::VeneerReport::default(),
+            declared_accel: false,
             graphics_enabled: false,
             sound_enabled: false,
             timer_interval_ms: None,
@@ -851,6 +860,11 @@ impl Machine {
             executed_pcs: std::collections::HashSet::new(),
             ever_executed: std::collections::HashSet::new(),
         };
+        // Fingerprint the Inform 6 veneer before the first opcode runs, so a
+        // story that never calls `@accelfunc` is accelerated from its very
+        // first turn (SQ-1209). A story that DOES call it overwrites these
+        // assignments with its own, which name the same routines.
+        m.install_fingerprinted_accel();
         // Enter the start function directly (no call stub beneath it; its fp is 0).
         if let Err(msg) = m.build_frame_and_enter(start, &[]) {
             m.diagnostics.push(msg);
@@ -1166,6 +1180,7 @@ impl Machine {
             0x180 => {
                 let (l, _) = self.read_operands(2, 0)?;
                 let (funcnum, addr) = (l[0], l[1]);
+                self.declared_accel = true;
                 if funcnum == 0 {
                     self.accel_funcs.remove(&addr);
                 } else {
@@ -1175,6 +1190,7 @@ impl Machine {
             }
             0x181 => {
                 let (l, _) = self.read_operands(2, 0)?;
+                self.declared_accel = true;
                 self.accel_params.insert(l[0], l[1]);
                 Ok(())
             }
@@ -2819,6 +2835,12 @@ impl Machine {
         self.undo_stack.clear();
         self.accel_funcs.clear();
         self.accel_params.clear();
+        self.declared_accel = false;
+        // ROM is immutable, so the fingerprint is the same one `with_glk` found;
+        // reinstall it so `@restart` does not silently drop back to
+        // interpretation (the story's own `@accelfunc` calls, if it makes any,
+        // re-run from its start function exactly as they did the first time).
+        self.install_fingerprinted_accel();
         // The PRNG is NOT reset. Snapping back to `DEFAULT_SEED` would throw away
         // the seed the host installed at launch and hand every `@restart` of a
         // randomised game the same opening it gave the last one — the SQ-0811
@@ -2850,6 +2872,40 @@ impl Machine {
     /// the disassembler so it can badge accelerated functions in their headers.
     pub fn accel_funcs(&self) -> &std::collections::HashMap<u32, u32> {
         &self.accel_funcs
+    }
+
+    /// What bytecode fingerprinting concluded about this story's Inform 6
+    /// veneer — which routines matched, the parameters derived from them, the
+    /// cross-checks they passed, and why nothing was installed when nothing
+    /// was. See [`crate::veneer`].
+    pub fn veneer_accel(&self) -> &crate::veneer::VeneerReport {
+        &self.veneer
+    }
+
+    /// Whether the story has announced its own accelerated functions with
+    /// `@accelfunc`/`@accelparam`. False for every Inform 6 build and every
+    /// Inform 7 build before 6E59 — the games [`Self::veneer_accel`] serves.
+    pub fn declares_own_accel(&self) -> bool {
+        self.declared_accel
+    }
+
+    /// Match the Inform 6 veneer against the committed templates and, if every
+    /// check passes, install the assignments and parameters the story never
+    /// declared. Games that declare their own overwrite these when they run.
+    fn install_fingerprinted_accel(&mut self) {
+        let (report, install) = crate::veneer::fingerprint(&self.mem);
+        if let Some((funcs, params)) = install {
+            for (addr, num) in funcs {
+                self.accel_funcs.insert(addr, num);
+            }
+            for (i, v) in params.iter().enumerate() {
+                self.accel_params.insert(i as u32, *v);
+            }
+        }
+        // Deliberately NOT pushed to `diagnostics`: the app turns every line
+        // there into a Warning in the player's transcript. This is a debug fact,
+        // reachable through `veneer_accel()`.
+        self.veneer = report;
     }
 
     /// Borrow the loaded image memory (for the debug disassembler / inspector).
