@@ -365,6 +365,10 @@ lanthorn is better for the people who send it work. Thank you:
   recursive cover grid for the story picker, headless `--fetch` and
   `--import-metadata` for curating a big library, and real game audio in the
   browser (#4).
+- [**@dfabulich**](https://github.com/dfabulich) — the return probe: the map
+  checks that a passage really leads back the way it came before it draws the
+  connection, an idea he sent as a pull request before the project was taking
+  them.
 
 Pull requests are welcome — the architecture notes in
 [**docs/internals/architecture.md**](docs/internals/architecture.md) are the map, and
