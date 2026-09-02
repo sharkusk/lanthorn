@@ -70,6 +70,12 @@ any such tag, or this Unreleased section, still exists.*
 
 ### Fixed
 
+- **Glulx games show their inventory in the panels.** The inventory dock and the
+  command panel's *carried* and *here* columns now read a Glulx story's own
+  object tree instead of scraping the reply to an `i` command — which any game
+  answering in its own prose defeated, leaving both panels empty for the whole
+  game (City of Secrets). Games whose avatar cannot be identified with certainty
+  keep the old scrape rather than showing a wrong list.
 - A Glulx status window with its own background colour — Kerkerkruip's grey
   strip, with the panels off — is filled in that colour edge to edge instead of
   going black between the words.

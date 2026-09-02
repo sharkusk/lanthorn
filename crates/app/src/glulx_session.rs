@@ -6,13 +6,18 @@
 //! `gvm-cli`'s `drive`) until the next `glk_select` request or Quit, draining the
 //! [`AppGlk`] backend's output into the [`TurnResult`].
 //!
-//! Full introspection for Glulx is a later phase (SP4): [`introspect`] returns
-//! `None`, so the tree-walking play-aids (inventory strip, here-column scope)
-//! stay quiet. What IS answered: rooms via the heading heuristics below, and —
-//! since SQ-1210 — the object-word set (`Engine::object_word_set`, backed by
-//! `gvm::objects::ParseNames`), so the word reveal and the seen-words scrape
-//! ask the story's own objects instead of its dictionary's flag bits. Glulx saves are tagged `"glulx"`; the 3b-i foreign-engine restore guard
-//! prevents cross-loading a Z-machine save (and vice-versa).
+//! [`introspect`] answers since SQ-1241, for any story whose Inform object list
+//! `gvm::objects::ParseNames` can verify: the tree-walking play-aids — the
+//! inventory dock, the command panel's *carried* and *here* columns — read that
+//! story's own objects instead of scraping the reply to an `i` command. Rooms
+//! still come from the heading heuristics below plus the `location` global the
+//! room-lock learns, and the object-word set (`Engine::object_word_set`,
+//! SQ-1210) is unchanged. See the `impl Introspect` block for what is answered
+//! narrowly and why — one containment level rather than scope, room questions
+//! only for the room the player is standing in, and a REFUSED avatar where two
+//! candidates cannot be told apart. Glulx saves are tagged `"glulx"`; the 3b-i
+//! foreign-engine restore guard prevents cross-loading a Z-machine save (and
+//! vice-versa).
 //!
 //! [`introspect`]: Engine::introspect
 //! [`current_location`]: Engine::current_location
@@ -24,7 +29,7 @@ use std::time::{Duration, Instant};
 use gvm::glk::GlkBackend;
 use gvm::{GError, Machine, Memory, StepResult};
 
-use crate::engine::{Engine, EngineError, EngineSave, KeyInput, LocationInfo, ScreenModel, StatusModel, WinNode};
+use crate::engine::{Engine, EngineError, EngineSave, Introspect, KeyInput, LocationInfo, ScreenModel, StatusModel, WinNode};
 use crate::glk_backend::AppGlk;
 use crate::session::{clamp_runs, strip_read_prompt, trim_elems_to_len, FilenameReq, InputKind, PendingIo, TranscriptElem, TurnResult};
 use zvm::location::LocationMethod;
@@ -124,6 +129,18 @@ pub struct GlulxSession {
     /// [`settle_after_event`](Self::settle_after_event) or the two restore
     /// paths, and each of those takes this cell.
     object_word_set: std::cell::RefCell<Option<std::sync::Arc<grammar_model::ObjectWordSet>>>,
+    /// The avatar's object address, derived on first ask each turn and dropped
+    /// beside [`object_word_set`](Self::object_word_set) — same lifetime, same
+    /// reason, and dropped by the same call so the next cache added here cannot
+    /// be forgotten at one of the six sites (SQ-1241).
+    ///
+    /// The inner `Option` is the answer and the outer one is the cache, so a
+    /// story whose avatar is REFUSED is refused once a turn rather than on every
+    /// frame: `render::transcript::inventory_items` asks whenever
+    /// `AppState::player_obj` is unset, which for such a story is forever, and
+    /// the walk decodes every object's name array — 2,494 of them on
+    /// Counterfeit Monkey.
+    player_addr: std::cell::RefCell<Option<Option<u32>>>,
     /// Auxiliary persistent data (Glulx aux persistence is a later phase).
     aux: BTreeMap<String, Vec<u8>>,
     aux_dirty: bool,
@@ -538,6 +555,7 @@ impl GlulxSession {
             disasm_cache: std::cell::RefCell::new(None),
             parse_names: std::cell::OnceCell::new(),
             object_word_set: std::cell::RefCell::new(None),
+            player_addr: std::cell::RefCell::new(None),
             aux: BTreeMap::new(),
             aux_dirty: false,
             last_room: None,
@@ -617,7 +635,7 @@ impl GlulxSession {
         }
         self.set_screen_size(cols, rows);
         self.machine.rearrange();
-        self.object_word_set.take(); // the drive runs game code (SQ-1176 duty)
+        self.drop_world_caches(); // the drive runs game code (SQ-1176 duty)
         let (pending, quit) = drive_settled(&mut self.machine, &self.store);
         self.pending = pending;
         self.quit = quit;
@@ -651,7 +669,7 @@ impl GlulxSession {
         self.deferred_resize = None;
         self.set_screen_size(cols, rows);
         self.machine.rearrange();
-        self.object_word_set.take(); // the drive runs game code (SQ-1176 duty)
+        self.drop_world_caches(); // the drive runs game code (SQ-1176 duty)
         let (pending, quit) = drive_settled(&mut self.machine, &self.store);
         self.pending = pending;
         self.quit = quit;
@@ -668,7 +686,7 @@ impl GlulxSession {
         if self.game_io_pending() {
             return;
         }
-        self.object_word_set.take(); // the drive runs game code (SQ-1176 duty)
+        self.drop_world_caches(); // the drive runs game code (SQ-1176 duty)
         let (pending, quit) = drive_settled(&mut self.machine, &self.store);
         self.pending = pending;
         self.quit = quit;
@@ -704,7 +722,7 @@ impl GlulxSession {
         // (SQ-1176); the other drive paths on this session (`resize`,
         // `apply_deferred_resize`, `settle_after_event`, the two restores) each
         // take the cell too.
-        self.object_word_set.take();
+        self.drop_world_caches();
         match drive_auto(&mut self.machine, &self.store) {
             DriveStop::Input(k) => {
                 self.pending = k;
@@ -742,6 +760,149 @@ impl GlulxSession {
         self.parse_names
             .get_or_init(|| gvm::objects::ParseNames::detect(self.machine.mem()).ok())
             .as_ref()
+    }
+
+    /// The address the game's `location` global currently holds — the room the
+    /// player is in, as the STORY sees it (SQ-1241).
+    ///
+    /// `None` until [`crate::glulx_roomlock`] has resolved which RAM word that
+    /// global is, which takes a handful of confidently-observed moves on a
+    /// story's first run and no moves at all on later ones (the address is
+    /// remembered in the per-game sidecar). Read straight from the locked
+    /// address rather than through a `scan_ram` snapshot: this is asked on
+    /// render passes, and the snapshot is sixteen thousand reads.
+    fn location_addr(&self) -> Option<u32> {
+        let global = self.room_lock.locked()?;
+        self.machine.mem().read32(global).filter(|&v| v != 0)
+    }
+
+    /// The player's avatar as an object address, or `None` when this story
+    /// holds no readable object list or none of its objects can be identified
+    /// as an avatar. Validated against
+    /// [`location_addr`](Self::location_addr) where that is known — see
+    /// [`gvm::objects::ParseNames::find_player`].
+    ///
+    /// Cached for the turn, refusal included: see the
+    /// [`player_addr`](Self::player_addr) field.
+    fn player_addr(&self) -> Option<u32> {
+        if let Some(cached) = *self.player_addr.borrow() {
+            return cached;
+        }
+        let found = self
+            .parse_names()
+            .and_then(|n| n.find_player(self.machine.mem(), self.player_room_hint()));
+        *self.player_addr.borrow_mut() = Some(found);
+        found
+    }
+
+    /// The room to judge avatar candidates by — the *only* thing it is used
+    /// for, which is why it is not [`location_addr`](Self::location_addr).
+    ///
+    /// The learned global is exact and is preferred, but it takes a few
+    /// confidently-observed moves to resolve on a story's first run, and City
+    /// of Secrets needs the discrimination on turn ONE: it ships two situated
+    /// objects answering to avatar names, and the one the player is — Inform
+    /// 6's own `selfobj` — is the one standing in the room, while the decoy
+    /// named `yourself` is parked in a `(ConceptObjs)` bag. Anchorhead is the
+    /// same shape on the Z-machine, decoy and avatar the same way round
+    /// (`zvm::location`'s `PLAYER_NAMES` doc), so neither name outranks the
+    /// other and only the room can say.
+    ///
+    /// Room identity for the MAP is untouched by this: `room_for` still mints
+    /// its id from the learned global or the heading hash, exactly as SQ-0526
+    /// left it. This is a second, weaker question asked for one purpose.
+    fn player_room_hint(&self) -> Option<u32> {
+        self.location_addr().or_else(|| self.room_by_printed_heading())
+    }
+
+    /// The object whose short name is the heading the story last printed.
+    ///
+    /// How the Z-machine side has always found the room — match the name on
+    /// screen against object short names — with two conditions that make it a
+    /// derivation rather than a guess: the object must be at the TOP of the
+    /// containment tree, because Inform keeps rooms there and anything
+    /// contained by something is *in* a room rather than being one; and the
+    /// match must be UNIQUE. Two rooms printing one name is a maze, which is
+    /// exactly the case the learned global exists for (SQ-0526) and exactly the
+    /// case a name cannot settle.
+    fn room_by_printed_heading(&self) -> Option<u32> {
+        let heading = &self.last_room.as_ref()?.name;
+        let names = self.parse_names()?;
+        let mem = self.machine.mem();
+        let mut found = None;
+        for addr in names.objects() {
+            if names.parent(mem, addr).is_some() {
+                continue;
+            }
+            match names.short_name(mem, addr) {
+                Some(short)
+                    if !short.is_empty() && zvm::location::status_name_matches(heading, &short) => {
+                    if found.is_some() {
+                        return None; // two rooms of that name; the name cannot say which
+                    }
+                    found = Some(addr);
+                }
+                _ => {}
+            }
+        }
+        found
+    }
+
+    /// Drop everything derived from the LIVE object tree. Called wherever the
+    /// VM runs, because the tree and the `name` arrays are in RAM and the game
+    /// rewrites both. One call rather than a take per cache, so the next thing
+    /// derived from the tree is dropped at all six sites by construction.
+    fn drop_world_caches(&mut self) {
+        self.object_word_set.take();
+        self.player_addr.take();
+    }
+}
+
+// ── Introspection handles ───────────────────────────────────────────────────
+//
+// [`Introspect`] addresses objects with a `u16`, which is the Z-machine's own
+// object number and is not what a Glulx object HAS: there objects are records
+// in RAM and their identity is a 32-bit address. So the adapter hands out an
+// index into `ParseNames`' list, one-based so that `0` keeps meaning "no
+// object" the way every caller already assumes.
+//
+// The two handle spaces a caller can pass in are disjoint by construction and
+// this is the whole reason the scheme works:
+//
+//   * an OBJECT handle is `1..=len()`, and no Inform story has 32767 objects;
+//   * a ROOM handle is a [`crate::roomid`] id with the high bit set, minted by
+//     `room_for` from either the locked `location` value or the room name.
+//
+// So [`resolve_handle`] can tell them apart with `is_synthetic_room` and never
+// has to guess. A room handle resolves only when it names the room the player
+// is in RIGHT NOW: the id is a HASH of the address, so nothing can invert it,
+// and re-hashing the current address is the one comparison that is sound. That
+// is also the only room any caller asks about — `main.rs`'s room dock guards on
+// `Some(id) == current_room`, and the command band and `probe` pass
+// `current_location()` straight through.
+
+impl GlulxSession {
+    /// The object address an [`Introspect`] handle names, or `None` when the
+    /// handle names nothing this session can resolve (see the note above).
+    fn resolve_handle(&self, handle: u16) -> Option<u32> {
+        let names = self.parse_names()?;
+        if crate::roomid::is_synthetic_room(handle) {
+            let addr = self.location_addr()?;
+            return (crate::roomid::glulx_room_id(addr) == handle).then_some(addr);
+        }
+        names.addr_of((handle as usize).checked_sub(1)?)
+    }
+
+    /// The handle for an object address: its one-based position in the list.
+    ///
+    /// `None` for an address that is not an object of this story's list, and
+    /// for the story large enough that a one-based index would collide with the
+    /// synthetic-room space — no such story exists, and refusing beats
+    /// answering with a handle that means two things.
+    fn handle_for(&self, addr: u32) -> Option<u16> {
+        let index = self.parse_names()?.index_of(addr)?;
+        let handle = u16::try_from(index + 1).ok()?;
+        (!crate::roomid::is_synthetic_room(handle)).then_some(handle)
     }
 
     fn appglk(&mut self) -> &mut AppGlk {
@@ -1445,7 +1606,7 @@ impl Engine for GlulxSession {
         // turn first — drop the cached object-word set as `drive_turn` does, or
         // it keeps answering for the session we just left (SQ-1176). The
         // `parse_names` layout survives: same story, same compiler tables.
-        self.object_word_set.take();
+        self.drop_world_caches();
         // Nothing the previous run was waiting on survives the swap.
         // `Machine::restore_state` drops the VM-side suspensions (SQ-0656); these
         // are the host-side halves of the same records, and leaving them set would
@@ -1498,7 +1659,7 @@ impl Engine for GlulxSession {
         self.machine.abandon_pending_input();
         // RAM was reverted to the save point without a turn being driven — same
         // duty as in `restore_state` above (SQ-1176).
-        self.object_word_set.take();
+        self.drop_world_caches();
         // Run the save-verb tail out to the next prompt, so the session is
         // re-armed at a clean input request rather than parked mid-verb
         // (mirrors the Z-machine's `restore_game_save`).
@@ -1608,12 +1769,19 @@ impl Engine for GlulxSession {
         Some(self)
     }
 
-    // introspect() uses the trait default (None): the tree questions — contents,
-    // room objects, children, the player — need handles this adapter cannot
-    // correlate with its synthetic heading-keyed rooms, and answering them with
-    // empty lists would turn "could not ask" into a false "asked, nothing there"
-    // for every consumer that tells those apart (see `Engine::object_word_set`'s
-    // doc). The one object question Glulx CAN answer gets its own seam below.
+    /// Introspection, for a story whose Inform object list this reader can
+    /// verify — which is what SQ-1241 turned on for Glulx.
+    ///
+    /// **`Some` is conditional on `parse_names`, deliberately.** The trait's
+    /// consumers tell "could not ask" (`None`) apart from "asked, nothing
+    /// there" (an empty `Some`), and a story with no readable object list —
+    /// glulxercise, anything not built by Inform — must answer the first.
+    /// Returning `Some(self)` unconditionally would make `probe::WorldPrint`
+    /// fingerprint an unreadable world as a real one and let the command band
+    /// label a column off a tree that was never walked.
+    fn introspect(&self) -> Option<&dyn crate::engine::Introspect> {
+        self.parse_names().map(|_| self as &dyn crate::engine::Introspect)
+    }
 
     /// "Does ANY object answer to this word", from the story's own Inform
     /// object list — `gvm::objects::ParseNames`, the same walk the Z-machine
@@ -1637,6 +1805,92 @@ impl Engine for GlulxSession {
         ));
         *self.object_word_set.borrow_mut() = Some(std::sync::Arc::clone(&set));
         Some(set)
+    }
+}
+
+/// Object-tree introspection over an Inform story's own `$70` object list
+/// (SQ-1241).
+///
+/// Every fact about the format lives in [`gvm::objects`] — the record layout,
+/// the containment fields, the avatar rule — and this impl only translates
+/// between that reader's addresses and the trait's `u16` handles (see the note
+/// above [`GlulxSession::resolve_handle`]).
+///
+/// Two questions are answered narrowly on purpose, and neither is a stub:
+///
+/// * **[`visible_contents`](Introspect::visible_contents) is the trait default,
+///   the DIRECT children.** Nesting into an open container needs the
+///   `container`/`open`/`transparent` attributes, and attribute NUMBERING is
+///   the Inform library's rather than the format's — it moves between library
+///   releases and again under Inform 7 — so there is nothing in the image to
+///   read them from. A list of what is actually in your hands is true; a
+///   guessed nesting would list the contents of a box the player has never
+///   opened, which is a spoiler as well as a lie.
+/// * **Room questions answer only for the room the player is in**, because a
+///   room handle is a hash of the room's address and only the current address
+///   can be re-hashed and compared. Every caller asks about exactly that room.
+impl Introspect for GlulxSession {
+    fn vocabulary(&self) -> Vec<String> {
+        match gvm::grammar::Grammar::load(self.machine.mem()) {
+            Ok(g) => g.words().map(str::to_string).collect(),
+            Err(_) => Vec::new(),
+        }
+    }
+
+    fn contents(&self, container: u16) -> Vec<crate::engine::ObjectWords> {
+        let (Some(names), Some(addr)) = (self.parse_names(), self.resolve_handle(container)) else {
+            return Vec::new();
+        };
+        names.contents(self.machine.mem(), addr)
+    }
+
+    fn room_objects(&self, room: u16) -> Vec<crate::engine::ObjectWords> {
+        self.room_objects_excluding(room, None)
+    }
+
+    fn room_objects_excluding(
+        &self,
+        room: u16,
+        exclude: Option<u16>,
+    ) -> Vec<crate::engine::ObjectWords> {
+        let (Some(names), Some(addr)) = (self.parse_names(), self.resolve_handle(room)) else {
+            return Vec::new();
+        };
+        // The avatar is structurally a child of the room it stands in, so
+        // without this it appears in every room of every game (SQ-0667). By
+        // handle, never by name: an Inform 7 object prints nothing at all.
+        let skip = exclude.and_then(|h| self.resolve_handle(h));
+        names
+            .children(self.machine.mem(), addr)
+            .into_iter()
+            .filter(|&c| Some(c) != skip)
+            .filter_map(|c| names.of(self.machine.mem(), c))
+            .collect()
+    }
+
+    fn all_object_words(&self) -> Option<Vec<crate::engine::ObjectWords>> {
+        Some(self.parse_names()?.all(self.machine.mem()))
+    }
+
+    fn object_word_set(&self) -> Option<std::sync::Arc<grammar_model::ObjectWordSet>> {
+        // The cached one the `Engine` seam already hands out (SQ-1210); the
+        // trait's default would rebuild the set on every ask.
+        Engine::object_word_set(self)
+    }
+
+    fn children_of(&self, parent: u16) -> std::collections::BTreeSet<u16> {
+        let (Some(names), Some(addr)) = (self.parse_names(), self.resolve_handle(parent)) else {
+            return std::collections::BTreeSet::new();
+        };
+        names
+            .children(self.machine.mem(), addr)
+            .into_iter()
+            .filter_map(|c| self.handle_for(c))
+            .collect()
+    }
+
+    fn player_object(&self) -> Option<u16> {
+        self.handle_for(self.player_addr()?)
     }
 }
 
@@ -2675,10 +2929,37 @@ mod tests {
         }
     }
 
+    /// A hand-built image with no Inform object list must still answer "could
+    /// not ask", not "asked, nothing there" (SQ-1241). `introspect()` is
+    /// conditional on `parse_names`, and this is the story that fails it: every
+    /// consumer — `probe::WorldPrint`, the command band's column header,
+    /// `vocab::scope_split` — distinguishes the two, and a bare `Some(self)`
+    /// would have quietly turned every refusal into a false empty world.
     #[test]
-    fn introspect_is_none() {
+    fn introspect_refuses_a_story_with_no_object_list() {
         let sess = GlulxSession::new(simple_line_image(), 80, 24, true, false, false, (1, 1), None, &[]).expect("new");
-        assert!(sess.introspect().is_none(), "Glulx introspection is SP4");
+        assert!(sess.parse_names().is_none(), "the hand-built image holds no Inform object list");
+        assert!(sess.introspect().is_none(), "so introspection refuses rather than answering empty");
+    }
+
+    /// The two [`Introspect`] handle spaces this adapter mixes must not
+    /// overlap, or `resolve_handle` would have to guess which one it was handed
+    /// (SQ-1241). Object handles are one-based list positions; room ids are
+    /// `roomid` hashes with the high bit set. The guard is `handle_for`'s
+    /// refusal above the ceiling, and this is the arithmetic behind it.
+    #[test]
+    fn object_handles_and_room_ids_occupy_disjoint_halves() {
+        use crate::roomid::{glulx_room_id, is_synthetic_room, synthetic_room_id};
+        // Every handle an object can get, from the first to the last one
+        // `handle_for` will hand out.
+        for h in [1u16, 2, 1000, 0x7FFE, 0x7FFF] {
+            assert!(!is_synthetic_room(h), "object handle {h} must not read as a room");
+        }
+        // …and every room id, however it was minted.
+        for addr in [0x1000u32, 0x21b0c, 0x53f973, u32::MAX] {
+            assert!(is_synthetic_room(glulx_room_id(addr)), "a located room is flagged");
+        }
+        assert!(is_synthetic_room(synthetic_room_id("Kitchen")), "and so is a named one");
     }
 
     #[test]
