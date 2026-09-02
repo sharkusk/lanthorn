@@ -163,6 +163,83 @@ One story is one author's idiom: at support 1 the corpus contributes a
 33-member `attack` group carrying `vandalise` and `torture`, and a 21-member
 `cut`. Two is where those disappear and the survivors are IF conventions.
 
+This table predates the four SQ-1233 rules below and is left as measured —
+it is what argues for the KNOB, and none of the four rules moves it: at
+`--game-support 2` the row count they leave the table at is 3,099 (79 KB),
+546 game groups kept (unchanged — the rules reorder and prune MEMBERS, they
+do not change which verb entries clear the threshold), and coverage 89.7%,
+down three tenths of a point from dropping some bystander memberships that
+happened to be a common verb's only channel into the table. That is the
+measured cost of correctness here, not a regression to chase back up.
+
+### Four more rules (SQ-1233)
+
+A 30-story guidance-scan audit found four systematic ways the table (and the
+mechanisms above) still misled a player. All four are in `build.rs`, and none
+of them is a list of words — every one reads its answer out of the harvest.
+
+1. **Order game-derived groups by support.** Two game-derived groups sharing a
+   member used to break their tie arbitrarily (alphabetically, in practice):
+   `shove` offered `pull · drag` (the `pull/drag/tug/yank/shove` group, 4
+   stories) before `push · nudge` (`push/press/stick/thrust/shove/nudge`, 3
+   stories) even though a THIRD, narrower group — `press/push/shove` — has 5.
+   That third group was also the deeper half of the bug: the subsumption step
+   (above) swallowed it into the 3-story six-member set purely for being
+   smaller, discarding the stronger evidence entirely. Both halves are fixed
+   together: subsumption between two GAME groups now requires the wider set to
+   be at least as well supported as the narrower one it would eat (`build.rs`,
+   the "Drop groups another group already contains" step), and
+   `order_by_sense`'s tie-break among a word's game-derived groups is support,
+   descending, ties kept in file order. A companion fix in `keep` matters here
+   too: two raw entries that reduce to the SAME final members after
+   filtering used to remember whichever processed first regardless of its
+   support; now the higher one wins, so `order_by_sense` reasons from the
+   corpus's true belief in a set rather than an accident of file order.
+2. **Drop WordNet senses no parser wants.** `illuminate` was pulling `clear`
+   into its "clarify" sense (`clear up / elucidate / illuminate / …`) even
+   though the corpus's OWN, heavily-corroborated sense of `clear` is
+   "push/move aside" (24 stories) and has nothing to do with clarifying. The
+   rule: a member is a "bystander" in a synset if that synset was not the
+   reason WordNet counts the word as an IF verb in the first place — its own
+   sense rank for this offset falls outside `sense_cap` — which is true of
+   `clear` here (its top sense is `push`; "clarify" is its 10th) and false of
+   `light` in the neighbouring "illuminate" group (that group IS `light`'s
+   #1 sense). A bystander is dropped only if the corpus ALSO corroborates a
+   different action for it that shares nothing with the rest of the synset —
+   so a word with no corpus opinion, or one whose corpus entries actually
+   overlap the synset, is left alone. See `Report::bystanders_dropped`.
+3. **Rank the canonical parser verb first.** `inspect` was offering
+   `watch · check · examine` — `examine` last, because member order used each
+   spelling's OVERALL if_verbs.tsv popularity, and `watch` is IF's more common
+   verb across every sense it has, most of them nothing to do with inspecting.
+   Members are now ordered first by how much of the corpus's OWN evidence for
+   THIS group backs each spelling — the sum of every if_groups.tsv
+   declaration (any support level; a single story is still real evidence of a
+   ranking, if not of a group's existence) that names the spelling alongside
+   one of the group's other members — falling back to the old overall-count
+   tiebreak only where that is zero (a WordNet-only group, where no
+   if_groups.tsv entry ever names a member like `light up`). This is also what
+   makes `find` disappear from `obtain`'s `get/find/incur/receive` group
+   without a special case: `find`'s own dominant corpus sense is "search"
+   (`find/seek`, a dozen-plus stories, sharing nothing with `get`/`obtain`), so
+   rule 2 removes it as a bystander before ordering ever sees it.
+4. **Derive `un-X`.** `unmask`, `unpin` and `unzip` reached no group at all —
+   too rare to pass `--game-support` on their own, and WordNet has no synset
+   relating an English verb to its `un`-form (that is a live morphological
+   rule, not a fact any lexicon states). A new pass, `derive_reversals`, gives
+   every `un`-prefixed spelling that reaches NOTHING through every earlier
+   pass one of two homes: the corpus's own raw declaration for the `un`-word
+   itself, at ANY support level (`unpin` reaches `unblock`/`uncover`/`unplug`
+   this way, one story, the reversal cluster a game author actually wrote);
+   or, failing that, a minimal pairing with its bare base verb (`unmask` with
+   `mask`), so the spelling is at least resolvable. The base must itself be a
+   known verb (an IF verb or a WordNet lemma) at least `MIN_REVERSAL_BASE`
+   (3) letters long — short enough to exclude only light verbs like `do`/`go`,
+   whose "reversal" means nothing, and specifically what keeps this pass from
+   ever touching `undo` (base `do`, 2 letters). A word that already reaches a
+   group through an earlier pass — `unhook`, corroborated normally — is left
+   untouched.
+
 ## The second table
 
 `irregular_forms.tsv` is the other half of English morphology, and it is a
