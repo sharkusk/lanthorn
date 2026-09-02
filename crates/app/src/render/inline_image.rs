@@ -121,6 +121,16 @@ type BandCacheKey = (usize, u16, u16, u16, u32, u16, u16);
 /// cell size for the same reason (SQ-1003).
 type FittedKey = (usize, u16, u16, u16, u16);
 
+/// Fold a resolved page into the `u32` both [`BandCacheKey`] and [`FittedKey`]
+/// carry it as: `0` for "no page" (never a valid encoded colour, since a real
+/// one always sets the leading tag byte), else `[1, r, g, b]` big-endian. Shared
+/// by [`InlineImageRender::render_row`] (building a key) and
+/// [`InlineImageRender::retain_live`] (matching against the CURRENT one), so
+/// the two can never encode the same page two different ways.
+fn page_cache_key(page: Option<image::Rgba<u8>>) -> u32 {
+    page.map_or(0, |p| u32::from_be_bytes([1, p[0], p[1], p[2]]))
+}
+
 /// Resize `src` to sit inside a `box_w × box_h` pixel box WITHOUT distorting it,
 /// centred, with the leftover margin left transparent (SQ-0704).
 ///
@@ -317,9 +327,7 @@ impl InlineImageRender {
         // The page joins the key: the same strip over a different page is a
         // different image, and serving the cached one would keep the old ground
         // after a theme switch or `/set-game-colours`.
-        let page_key = page.map_or(0, |p| {
-            u32::from_be_bytes([1, p[0], p[1], p[2]])
-        });
+        let page_key = page_cache_key(page);
         // Cell pixel size comes from the picker font, and joins both keys: it is
         // what the resample below is measured in, and it moves under a terminal
         // font-size change that leaves `cols`/`rows` alone (SQ-1003).
@@ -386,8 +394,22 @@ impl InlineImageRender {
     }
 
     /// Drop cache entries for bands no longer live, keyed by source Arc-ptr
-    /// (`live` holds the currently-visible bands' pointers). Bounds growth and,
-    /// with the pinned Arc in the value, releases addresses only once truly gone.
+    /// (`live` holds the currently-visible bands' pointers) — AND drop entries
+    /// for still-live bands whose cell size or page no longer matches
+    /// `current_cell` / `current_page`. Bounds growth and, with the pinned Arc
+    /// in the value, releases addresses only once truly gone.
+    ///
+    /// A live image keeps every variant it has EVER been rendered at unless this
+    /// also drops the stale ones: `BandCacheKey`/`FittedKey` fold the cell size
+    /// and (for `cache`) the page into the key precisely so a flip re-encodes
+    /// instead of reusing a strip resampled for the old cell (SQ-1003) or baked
+    /// over the old page (SQ-0704) — but a key a caller stops asking for is
+    /// never looked up again, so without this the old variant just sits there
+    /// for as long as the image stays live. A theme flip, `/set-game-colours`,
+    /// or a terminal font-size change is exactly when this matters most: the
+    /// old variant becomes unreachable in the same frame that mints the new
+    /// one, and previously nothing dropped it until the image itself scrolled
+    /// out of the transcript (SQ-1195).
     ///
     /// Returns the kitty image ids the evicted entries were placed under, so the
     /// caller can free them in the terminal (`GraphicsRender::queue_external_deletes`)
@@ -396,15 +418,29 @@ impl InlineImageRender {
     /// One id per evicted entry: each `BandCacheKey` names a distinct row of a
     /// distinct band at a distinct page/cell size, so eviction here can never
     /// free an id another surviving entry still places.
-    pub fn retain_live(&mut self, live: &std::collections::HashSet<usize>) -> Vec<u32> {
+    pub fn retain_live(
+        &mut self,
+        live: &std::collections::HashSet<usize>,
+        current_cell: (u16, u16),
+        current_page: Option<image::Rgba<u8>>,
+    ) -> Vec<u32> {
+        let (cw, ch) = current_cell;
+        let page_key = page_cache_key(current_page);
+        // `key.4`/`key.5`/`key.6` are `BandCacheKey`'s page/cw/ch; `.0` is the
+        // src-ptr shared with `FittedKey`. `cols`/`rows`/`row` (`.1`/`.2`/`.3`)
+        // are NOT filtered: they name which strip of the CURRENT geometry a row
+        // is, not a stale dimension — a font-size change already changes them,
+        // via the wrap that rebuilds every band's `cols`/`rows` before the next
+        // `render_row` call, so the value here is always the current one anyway.
+        let cache_current = |key: &BandCacheKey| key.4 == page_key && key.5 == cw && key.6 == ch;
         let dropped: Vec<u32> = self
             .cache
             .iter()
-            .filter(|(key, _)| !live.contains(&key.0))
+            .filter(|(key, _)| !live.contains(&key.0) || !cache_current(key))
             .filter_map(|(_, (_, _, id))| *id)
             .collect();
-        self.cache.retain(|key, _| live.contains(&key.0));
-        self.fitted.retain(|key, _| live.contains(&key.0));
+        self.cache.retain(|key, _| live.contains(&key.0) && cache_current(key));
+        self.fitted.retain(|key, _| live.contains(&key.0) && key.3 == cw && key.4 == ch);
         dropped
     }
 }
@@ -652,6 +688,82 @@ mod tests {
         assert_eq!(r.cache.len(), 2, "and the row's built protocol is rebuilt with it");
     }
 
+    /// SQ-1195 (Part A): a font-size flip mints a NEW variant at the new cell
+    /// size but leaves the old one in the cache — `retain_live` only checked
+    /// the source pointer, and a still-live image's ptr never changes across a
+    /// flip. So the stale 8x16 variant sat there for as long as the image
+    /// stayed on screen, unreachable (nothing will ever build that key again)
+    /// but never dropped.
+    ///
+    /// Falsified by calling `retain_live` with the OLD signature (ptr-only): it
+    /// would keep both variants — this asserts only the CURRENT one survives.
+    #[test]
+    fn retain_live_drops_the_stale_cell_size_variant_after_a_flip() {
+        let px = image::RgbaImage::new(32, 32);
+        let img = crate::inline_image::InlineImage {
+            pixels: std::sync::Arc::new(px),
+            align: crate::inline_image::ImageAlign::InlineUp,
+            scaled: None, margin_px: None,
+        };
+        let ptr = std::sync::Arc::as_ptr(&img.pixels) as usize;
+        let (cols, rows) = (4u16, 2u16);
+        let band = crate::render::transcript::ImageBand { image: img, cols, rows, row: 0, x_off: 0 };
+        let mut picker = Picker::halfblocks();
+        picker.set_font_size(ratatui_image::FontSize::new(8, 16));
+        let mut buf = Buffer::empty(Rect::new(0, 0, cols + 2, rows + 2));
+        let mut r = InlineImageRender::default();
+
+        // Render once at the small cell, then flip to a bigger one and render
+        // again — same live image, two variants now sitting in both caches.
+        r.render_row(&picker, &band, Rect::new(0, 0, cols, 1), None, false, &mut buf);
+        picker.set_font_size(ratatui_image::FontSize::new(16, 32));
+        r.render_row(&picker, &band, Rect::new(0, 0, cols, 1), None, false, &mut buf);
+        assert_eq!(r.cache.len(), 2, "both cell-size variants are cached going in");
+        assert_eq!(r.fitted.len(), 2, "and both fitted resamples");
+
+        // The image is still live — only the cell size changed. `retain_live`
+        // must drop the 8x16 variant and keep only the 16x32 one.
+        let live = std::collections::HashSet::from([ptr]);
+        r.retain_live(&live, (16, 32), None);
+        assert_eq!(r.cache.len(), 1, "the stale 8x16 variant is gone");
+        assert_eq!(r.fitted.len(), 1, "and its shared fit with it");
+        assert_eq!(r.cache.keys().next().unwrap().5, 16, "the surviving variant is the current 16x32 one");
+        assert_eq!(r.cache.keys().next().unwrap().6, 32);
+        assert_eq!(r.fitted.keys().next().unwrap().3, 16);
+        assert_eq!(r.fitted.keys().next().unwrap().4, 32);
+    }
+
+    /// SQ-1195 (Part A): the same drop applies to a PAGE change (a theme flip
+    /// or `/set-game-colours`) at a fixed cell size, since `cache`'s key folds
+    /// the page in too.
+    #[test]
+    fn retain_live_drops_the_stale_page_variant_after_a_colour_change() {
+        let px = image::RgbaImage::new(32, 32);
+        let img = crate::inline_image::InlineImage {
+            pixels: std::sync::Arc::new(px),
+            align: crate::inline_image::ImageAlign::InlineUp,
+            scaled: None, margin_px: None,
+        };
+        let ptr = std::sync::Arc::as_ptr(&img.pixels) as usize;
+        let band = crate::render::transcript::ImageBand { image: img, cols: 2, rows: 2, row: 0, x_off: 0 };
+        let picker = Picker::halfblocks();
+        let mut buf = Buffer::empty(Rect::new(0, 0, 10, 4));
+        let mut r = InlineImageRender::default();
+        let fs = picker.font_size();
+        let cell = (fs.width.max(1), fs.height.max(1));
+
+        let white = Some(image::Rgba([255, 255, 255, 255]));
+        let black = Some(image::Rgba([0, 0, 0, 255]));
+        r.render_row(&picker, &band, Rect::new(0, 0, 2, 1), white, false, &mut buf);
+        r.render_row(&picker, &band, Rect::new(0, 0, 2, 1), black, false, &mut buf);
+        assert_eq!(r.cache.len(), 2, "both page variants are cached going in");
+
+        let live = std::collections::HashSet::from([ptr]);
+        r.retain_live(&live, cell, black);
+        assert_eq!(r.cache.len(), 1, "the stale white-page variant is gone");
+        assert_eq!(r.cache.keys().next().unwrap().4, page_cache_key(black), "the surviving entry is the current page");
+    }
+
     #[test]
     fn fit_resize_is_shared_across_a_bands_rows() {
         // SQ-0513: the first scroll that reveals a tall image paints every band
@@ -676,7 +788,8 @@ mod tests {
         assert_eq!(r.fitted.len(), 1, "the whole image is fit-resized once per band, shared by every row");
         assert_eq!(r.cache.len(), rows as usize, "each row still gets its own cheap cropped protocol");
         // Eviction of the band releases BOTH the protocols and the shared fit.
-        r.retain_live(&std::collections::HashSet::new());
+        let fs = picker.font_size();
+        r.retain_live(&std::collections::HashSet::new(), (fs.width.max(1), fs.height.max(1)), None);
         assert_eq!(r.fitted.len(), 0, "retain_live evicts the fitted-image cache too");
         assert_eq!(r.cache.len(), 0);
     }
@@ -735,7 +848,11 @@ mod tests {
         assert_eq!(r.cache.len(), 2);
 
         // Only band 1 is still live: band 2's entry is evicted, band 1's kept.
-        r.retain_live(&std::collections::HashSet::from([ptr1]));
+        // The current cell/page match what both bands were rendered at, so
+        // band 1's entry survives on liveness alone (Part A cell/page
+        // matching is covered separately below).
+        let fs = picker.font_size();
+        r.retain_live(&std::collections::HashSet::from([ptr1]), (fs.width.max(1), fs.height.max(1)), None);
         assert_eq!(r.cache.len(), 1);
         assert!(r.cache.keys().any(|k| k.0 == ptr1));
         assert!(!r.cache.keys().any(|k| k.0 == ptr2));
@@ -775,11 +892,13 @@ mod tests {
             .and_then(|(_, _, id)| *id)
             .expect("a kitty placement must have named an id");
 
-        let evicted = r.retain_live(&std::collections::HashSet::new());
+        let fs = picker.font_size();
+        let cell = (fs.width.max(1), fs.height.max(1));
+        let evicted = r.retain_live(&std::collections::HashSet::new(), cell, None);
         assert_eq!(evicted, vec![id], "the evicted entry's id must be handed back for deletion");
 
         // A second eviction of the same (now-empty) cache frees nothing new.
-        assert!(r.retain_live(&std::collections::HashSet::new()).is_empty());
+        assert!(r.retain_live(&std::collections::HashSet::new(), cell, None).is_empty());
     }
 
     // ── SQ-1198: sixel scroll-settle debounce ─────────────────────────────────
