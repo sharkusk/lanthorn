@@ -6516,3 +6516,651 @@ mod tests {
 
 
 
+
+// ── SQ-1255 ───────────────────────────────────────────────────────────────────
+//
+// Reproduction of the Zork I (release 52) "Canyon View" report of 2026-09-02: the
+// automap threads connectors past/through room boxes around #23 Canyon View. The
+// fixture is the player's own `/dump-map`, quoted below as `DUMP_POS` / `DUMP_DISTORTED`.
+//
+// This module is diagnosis-only and changes no layout, router or cleanup code. Its
+// cases are `#[ignore]`d so they never redden CI while the fix is undecided; run with
+//   cargo nextest run -p lanthorn --lib --features t-render sq1255 --run-ignored all
+#[cfg(all(test, feature = "t-render"))]
+mod sq1255_canyon_view {
+    use super::*;
+    use mapper::direction::Direction::{self, Up, E, N, NW, S, W};
+    use mapper::graph::{MapGraph, RoomId};
+    use mapper::layer::MAIN_LAYER;
+    use mapper::mapper::Mapper;
+
+    /// The 29 edges in the graph's insertion order, exactly as the dump lists them.
+    const WALK: &[(RoomId, Direction, RoomId)] = &[
+        (68, S, 217),
+        (217, W, 68),
+        (217, E, 89),
+        (89, S, 217),
+        (89, W, 28),
+        (28, E, 89),
+        (28, W, 79),
+        (79, E, 28),
+        (89, N, 143),
+        (143, E, 89),
+        (143, W, 68),
+        (68, N, 143),
+        (68, W, 91),
+        (91, N, 167),
+        (167, W, 91),
+        (167, E, 33),
+        (33, S, 134),
+        (134, N, 33),
+        (134, E, 23),
+        (23, NW, 134),
+        (23, E, 22),
+        (22, Up, 23),
+        (23, W, 230),
+        (230, N, 134),
+        (230, W, 91),
+        (230, NW, 217),
+        (134, S, 230),
+        (134, W, 89),
+        (89, E, 134),
+    ];
+
+    /// `pos=` from the dump's ROOMS legend.
+    const DUMP_POS: &[(RoomId, (i32, i32))] = &[
+        (22, (0, 0)),
+        (23, (-1, -1)),
+        (28, (-4, -2)),
+        (33, (-2, -3)),
+        (68, (-6, -2)),
+        (79, (-5, -2)),
+        (89, (-3, -2)),
+        (91, (-7, -2)),
+        (134, (-2, -2)),
+        (143, (-4, -3)),
+        (167, (-3, -3)),
+        (217, (-4, -1)),
+        (230, (-2, 0)),
+    ];
+
+    /// The edges the dump marks `distorted`, as (origin, dest) pairs in WALK order.
+    const DUMP_DISTORTED: &[(RoomId, RoomId)] = &[
+        (68, 217),
+        (217, 68),
+        (217, 89),
+        (89, 217),
+        (89, 143),
+        (143, 89),
+        (143, 68),
+        (68, 143),
+        (68, 91),
+        (91, 167),
+        (167, 91),
+        (134, 23),
+        (23, 22),
+        (23, 230),
+        (230, 91),
+    ];
+
+    fn name(id: RoomId) -> &'static str {
+        match id {
+            22 => "Rocky Ledge",
+            23 => "Canyon View",
+            28 => "Kitchen",
+            33 => "Forest",
+            68 => "West of House",
+            79 => "Living Room",
+            89 => "Behind House",
+            91 => "Forest",
+            134 => "Clearing",
+            143 => "North of House",
+            167 => "Clearing",
+            217 => "South of House",
+            230 => "Forest",
+            _ => "?",
+        }
+    }
+
+    /// `turn.rs::schedule_map_maintenance` + `loop_tick.rs::poll_tidy_jobs`, collapsed
+    /// to one synchronous call. Same predicates, same order, same budgets; the only
+    /// difference from the shipped app is that the tidy lands on this turn rather than
+    /// a frame or two later, which the app's own in-crate tests already do
+    /// (`session.rs::auto_mode_background_cleanup_keeps_map_free_of_illegal_overlaps`).
+    fn maintain(m: &mut Mapper, new_room: bool, new_conn: bool, counter: &mut u32) -> &'static str {
+        let changed = new_room || new_conn;
+        if !crate::tidy::should_schedule_tidy(&m.graph, MAIN_LAYER, changed) {
+            return "-";
+        }
+        let cells = mapper::layout::occupied_cells_in_layer(&m.graph, MAIN_LAYER);
+        let total_rooms = m.graph.rooms_in_layer(MAIN_LAYER).len();
+        let has_overlap = cells.len() < total_rooms;
+        let has_distorted = m.graph.connections().iter().any(|c| {
+            c.distorted
+                && m.graph.layer_of(c.origin) == MAIN_LAYER
+                && m.graph.layer_of(c.dest) == MAIN_LAYER
+        });
+        let overlap = has_overlap || has_distorted;
+        let full = crate::tidy::should_bg_tidy(
+            crate::config::BackgroundTidy::EveryRoom,
+            new_room,
+            overlap,
+            changed,
+            counter,
+        );
+        if full {
+            crate::tidy::tidy_layer_silent(&mut m.graph, MAIN_LAYER);
+            "FULL"
+        } else {
+            crate::tidy::cleanup_overlaps_layer_silent(&mut m.graph, MAIN_LAYER);
+            "cleanup"
+        }
+    }
+
+    /// Replay the first `turns` edges of the walk with the session's per-turn maintenance.
+    ///
+    /// The player's real transcript walked back over known passages between some of these
+    /// crossings. Those turns are layout-INERT and can be skipped safely rather than
+    /// reconstructed: `MapGraph::add_edge` is keyed by `(origin, dir)` for a compass
+    /// passage, so re-walking one adds no connection; `place_incremental` returns early
+    /// for an already-placed destination; and with neither a new room nor a new connection
+    /// `should_schedule_tidy`'s `changed` is false, so no tidy is scheduled. Setting the
+    /// current room directly is therefore exactly what those turns would have left behind.
+    fn replay(turns: usize) -> Mapper {
+        let mut m = Mapper::default();
+        let mut counter = 0u32;
+        // The opening `look` in West of House: an observation with no direction.
+        m.observe(WALK[0].0, name(WALK[0].0), None);
+        maintain(&mut m, true, false, &mut counter);
+        for &(origin, dir, dest) in WALK.iter().take(turns) {
+            m.graph.set_current(origin);
+            let rooms_before = m.graph.rooms().count();
+            let conns_before = m.graph.connections().len();
+            m.observe_moved(dest, name(dest), Some(dir));
+            let new_room = m.graph.rooms().count() > rooms_before;
+            let new_conn = m.graph.connections().len() > conns_before;
+            maintain(&mut m, new_room, new_conn, &mut counter);
+        }
+        m
+    }
+
+    /// Every connector cell that lands inside a room's 11x5 box, in the router's virtual space.
+    ///
+    /// A cell on the border ring of the connector's OWN origin or destination box is the
+    /// legitimate arrival/departure anchor and is not reported. Everything else is a
+    /// connector drawn over a room.
+    /// (room whose box is entered, connector origin, exit direction, connector dest, cell).
+    type Intrusion = (RoomId, RoomId, Direction, RoomId, (i32, i32));
+    /// (room whose ring is occupied, connector origin, exit direction, connector dest, cells).
+    type Hug = (RoomId, RoomId, Direction, RoomId, usize);
+
+    fn box_intrusions(graph: &MapGraph) -> Vec<Intrusion> {
+        let rm = mapper::render::render_layer(graph, MAIN_LAYER);
+        let (cols, rows) = boxes_axes(&rm.plan, rm.bounds);
+        let boxes: Vec<(RoomId, (i32, i32))> = rm
+            .rooms
+            .iter()
+            .map(|r| (r.id, (cols.room_pixel(r.cell.0), rows.room_pixel(r.cell.1))))
+            .collect();
+        let mut out = Vec::new();
+        for conn in rm.plan.connectors.iter() {
+            let Some(plot) = plot_connector(conn, &cols, &rows, None) else { continue };
+            for (c, _mask) in &plot.cells {
+                for &(rid, (bx, by)) in &boxes {
+                    let inside = c.0 >= bx && c.0 < bx + BOX_W && c.1 >= by && c.1 < by + BOX_H;
+                    if !inside {
+                        continue;
+                    }
+                    let own = rid == conn.origin || rid == conn.dest;
+                    let on_border =
+                        c.0 == bx || c.0 == bx + BOX_W - 1 || c.1 == by || c.1 == by + BOX_H - 1;
+                    if own && on_border {
+                        continue;
+                    }
+                    out.push((rid, conn.origin, conn.exit_dir, conn.dest, *c));
+                }
+            }
+        }
+        out
+    }
+
+    fn pos_of(m: &Mapper, id: RoomId) -> Option<(i32, i32)> {
+        m.graph.room(id).and_then(|r| r.pos)
+    }
+
+    /// Print the whole replay: per-turn maintenance kind, positions and intrusions.
+    /// Diagnostic only — asserts nothing.
+    #[test]
+    #[ignore = "SQ-1255 diagnostic trace, not a pass/fail case"]
+    fn sq1255_trace() {
+        let mut m = Mapper::default();
+        let mut counter = 0u32;
+        m.observe(WALK[0].0, name(WALK[0].0), None);
+        let k = maintain(&mut m, true, false, &mut counter);
+        println!("turn  0  seed #{}   [{k}]", WALK[0].0);
+        for (i, &(origin, dir, dest)) in WALK.iter().enumerate() {
+            m.graph.set_current(origin);
+            let rooms_before = m.graph.rooms().count();
+            let conns_before = m.graph.connections().len();
+            m.observe_moved(dest, name(dest), Some(dir));
+            let new_room = m.graph.rooms().count() > rooms_before;
+            let new_conn = m.graph.connections().len() > conns_before;
+            let k = maintain(&mut m, new_room, new_conn, &mut counter);
+            let intr = box_intrusions(&m.graph);
+            let (illegal, cross) = render_overlap_stats(&m.graph);
+            let mut ps: Vec<String> = m
+                .graph
+                .rooms()
+                .filter_map(|r| r.pos.map(|p| (r.id, p)))
+                .map(|(id, p)| format!("{id}@{},{}", p.0, p.1))
+                .collect();
+            ps.sort();
+            println!(
+                "turn {:2}  {origin} {dir:?} {dest}{}  [{k}]  illegal={illegal} cross={cross} intrude={}  {}",
+                i + 1,
+                if new_room { " NEW" } else { "    " },
+                intr.len(),
+                ps.join(" ")
+            );
+            for (rid, o, d, de, c) in &intr {
+                println!("          intrusion: {o} {d:?} {de} at {c:?} inside box of #{rid}");
+            }
+        }
+        println!(
+            "\n--- final dump ---\n{}",
+            crate::map_dump::render_dump(&m.graph, &crate::symbols::SymbolSet::default())
+        );
+    }
+
+    /// Does the replay land on the same grid the player's dump recorded?
+    #[test]
+    #[ignore = "SQ-1255 fixture comparison; see the report"]
+    fn sq1255_replay_matches_dump_positions() {
+        let m = replay(WALK.len());
+        let mut bad = Vec::new();
+        for &(id, want) in DUMP_POS {
+            let got = pos_of(&m, id);
+            if got != Some(want) {
+                bad.push(format!("#{id} {}: dump {want:?} replay {got:?}", name(id)));
+            }
+        }
+        assert!(bad.is_empty(), "positions differ from the dump:\n  {}", bad.join("\n  "));
+    }
+
+    /// Does the replay mark the same edges distorted?
+    #[test]
+    #[ignore = "SQ-1255 fixture comparison; see the report"]
+    fn sq1255_replay_matches_dump_distortion() {
+        let m = replay(WALK.len());
+        let got: Vec<(RoomId, RoomId)> = m
+            .graph
+            .connections()
+            .iter()
+            .filter(|c| c.distorted)
+            .map(|c| (c.origin, c.dest))
+            .collect();
+        assert_eq!(got, DUMP_DISTORTED.to_vec(), "distorted set differs from the dump");
+    }
+
+    /// The defect itself: no connector may be drawn inside a room's box.
+    #[test]
+    #[ignore = "SQ-1255: the reported defect — a connector drawn through a room box"]
+    fn sq1255_no_connector_is_drawn_through_a_room_box() {
+        let m = replay(WALK.len());
+        let intr = box_intrusions(&m.graph);
+        let lines: Vec<String> = intr
+            .iter()
+            .map(|(rid, o, d, de, c)| {
+                format!(
+                    "connector {o} {d:?} {de} draws at {c:?} inside the box of #{rid} {}",
+                    name(*rid)
+                )
+            })
+            .collect();
+        assert!(intr.is_empty(), "connectors drawn through room boxes:\n  {}", lines.join("\n  "));
+    }
+
+    /// Foreign connector cells in the one-cell ring around a room box, for one graph.
+    fn hug_count(g: &MapGraph) -> Vec<Hug> {
+        let rm = mapper::render::render_layer(g, MAIN_LAYER);
+        let (cols, rows) = boxes_axes(&rm.plan, rm.bounds);
+        let mut out = Vec::new();
+        for room in rm.rooms.iter() {
+            let (bx, by) = (cols.room_pixel(room.cell.0), rows.room_pixel(room.cell.1));
+            for conn in rm.plan.connectors.iter() {
+                if conn.origin == room.id || conn.dest == room.id {
+                    continue;
+                }
+                let Some(plot) = plot_connector(conn, &cols, &rows, None) else { continue };
+                let n = plot
+                    .cells
+                    .iter()
+                    .filter(|(c, _)| {
+                        c.0 >= bx - 1 && c.0 <= bx + BOX_W && c.1 >= by - 1 && c.1 <= by + BOX_H
+                    })
+                    .count();
+                if n > 0 {
+                    out.push((room.id, conn.origin, conn.exit_dir, conn.dest, n));
+                }
+            }
+        }
+        out
+    }
+
+    /// The turn at which each symptom first appears, walked turn by turn.
+    #[test]
+    #[ignore = "SQ-1255 diagnostic: names the turn the defect appears"]
+    fn sq1255_first_bad_turn() {
+        let mut first_intrusion: Option<usize> = None;
+        let mut first_hug: Option<usize> = None;
+        for t in 1..=WALK.len() {
+            let m = replay(t);
+            if first_intrusion.is_none() && !box_intrusions(&m.graph).is_empty() {
+                first_intrusion = Some(t);
+            }
+            let hugs = hug_count(&m.graph);
+            if !hugs.is_empty() {
+                let (o, d, de) = WALK[t - 1];
+                println!("turn {t:2} ({o} {d:?} {de}): {hugs:?}");
+                if first_hug.is_none() {
+                    first_hug = Some(t);
+                }
+            }
+        }
+        println!("first connector drawn INSIDE a box: {first_intrusion:?} (None = never)");
+        println!("first foreign connector HUGGING a box: {first_hug:?}");
+    }
+
+    /// Room boxes, channel widths, per-connector cell extents, foreign connectors hugging
+    /// a box, and multiply-owned cells — the geometry behind the reported picture.
+    #[test]
+    #[ignore = "SQ-1255 diagnostic"]
+    fn sq1255_geometry_report() {
+        let m = replay(WALK.len());
+        let rm = mapper::render::render_layer(&m.graph, MAIN_LAYER);
+        let (cols, rows) = boxes_axes(&rm.plan, rm.bounds);
+        let boxes: Vec<(RoomId, (i32, i32))> = rm
+            .rooms
+            .iter()
+            .map(|r| (r.id, (cols.room_pixel(r.cell.0), rows.room_pixel(r.cell.1))))
+            .collect();
+        println!("== room boxes (virtual) ==");
+        for &(id, (bx, by)) in &boxes {
+            println!("  #{id:<4} x {bx}..{}  y {by}..{}", bx + BOX_W - 1, by + BOX_H - 1);
+        }
+
+        println!("\n== channel gaps ==");
+        let mut xs: Vec<i32> = boxes.iter().map(|b| b.1 .0).collect();
+        xs.sort_unstable();
+        xs.dedup();
+        for w in xs.windows(2) {
+            println!("  cols {}..{} -> {} cells", w[0] + BOX_W, w[1] - 1, w[1] - (w[0] + BOX_W));
+        }
+        let mut ys: Vec<i32> = boxes.iter().map(|b| b.1 .1).collect();
+        ys.sort_unstable();
+        ys.dedup();
+        for w in ys.windows(2) {
+            println!("  rows {}..{} -> {} cells", w[0] + BOX_H, w[1] - 1, w[1] - (w[0] + BOX_H));
+        }
+
+        println!("\n== connectors ==");
+        for conn in rm.plan.connectors.iter() {
+            let Some(plot) = plot_connector(conn, &cols, &rows, None) else {
+                println!("  {} {:?} {} -> NO PLOT", conn.origin, conn.exit_dir, conn.dest);
+                continue;
+            };
+            let cs: Vec<(i32, i32)> = plot.cells.iter().map(|(c, _)| *c).collect();
+            println!(
+                "  {} {:?} {}  dep{:?} arr{:?}  {} cells  x[{}..{}] y[{}..{}]",
+                conn.origin,
+                conn.exit_dir,
+                conn.dest,
+                plot.dep_anchor,
+                plot.arr_anchor,
+                cs.len(),
+                cs.iter().map(|c| c.0).min().unwrap_or(0),
+                cs.iter().map(|c| c.0).max().unwrap_or(0),
+                cs.iter().map(|c| c.1).min().unwrap_or(0),
+                cs.iter().map(|c| c.1).max().unwrap_or(0),
+            );
+        }
+
+        println!("\n== foreign connector cells in the 1-cell ring around a box ==");
+        for &(rid, (bx, by)) in &boxes {
+            let mut hits: Vec<String> = Vec::new();
+            for conn in rm.plan.connectors.iter() {
+                if conn.origin == rid || conn.dest == rid {
+                    continue;
+                }
+                let Some(plot) = plot_connector(conn, &cols, &rows, None) else { continue };
+                let n = plot
+                    .cells
+                    .iter()
+                    .filter(|(c, _)| {
+                        c.0 >= bx - 1 && c.0 <= bx + BOX_W && c.1 >= by - 1 && c.1 <= by + BOX_H
+                    })
+                    .count();
+                if n > 0 {
+                    hits.push(format!("{} {:?} {} ({n})", conn.origin, conn.exit_dir, conn.dest));
+                }
+            }
+            if !hits.is_empty() {
+                println!("  #{rid}: {}", hits.join(", "));
+            }
+        }
+
+        println!("\n== multiply-owned cells ==");
+        use std::collections::BTreeMap;
+        let mut owners: BTreeMap<(i32, i32), Vec<(usize, u8)>> = BTreeMap::new();
+        for (ci, conn) in rm.plan.connectors.iter().enumerate() {
+            if let Some(plot) = plot_connector(conn, &cols, &rows, None) {
+                for (c, mask) in &plot.cells {
+                    let e = owners.entry(*c).or_default();
+                    if let Some(slot) = e.iter_mut().find(|(i, _)| *i == ci) {
+                        slot.1 |= *mask;
+                    } else {
+                        e.push((ci, *mask));
+                    }
+                }
+            }
+        }
+        for (c, v) in owners.iter().filter(|(_, v)| v.len() > 1) {
+            let who: Vec<String> = v
+                .iter()
+                .map(|(ci, mask)| {
+                    let k = &rm.plan.connectors[*ci];
+                    format!("{} {:?} {} mask={mask:04b}", k.origin, k.exit_dir, k.dest)
+                })
+                .collect();
+            println!("  {c:?}: {}", who.join(" | "));
+        }
+    }
+
+    /// Report the 134↔230 connector's cell extent and how many of its cells hug #23.
+    fn hug_report(g: &MapGraph, tag: &str) {
+        let rm = mapper::render::render_layer(g, MAIN_LAYER);
+        let (cols, rows) = boxes_axes(&rm.plan, rm.bounds);
+        let b23 = rm
+            .rooms
+            .iter()
+            .find(|r| r.id == 23)
+            .map(|r| (cols.room_pixel(r.cell.0), rows.room_pixel(r.cell.1)));
+        for conn in rm.plan.connectors.iter() {
+            let pair = (conn.origin.min(conn.dest), conn.origin.max(conn.dest));
+            if pair != (134, 230) {
+                continue;
+            }
+            let Some(plot) = plot_connector(conn, &cols, &rows, None) else { continue };
+            let xs: Vec<i32> = plot.cells.iter().map(|(c, _)| c.0).collect();
+            let hug = match b23 {
+                Some((bx, by)) => plot
+                    .cells
+                    .iter()
+                    .filter(|(c, _)| {
+                        c.0 >= bx - 1 && c.0 <= bx + BOX_W && c.1 >= by - 1 && c.1 <= by + BOX_H
+                    })
+                    .count(),
+                None => 0,
+            };
+            let (illegal, _) = render_overlap_stats(g);
+            println!(
+                "{tag}: 134<->230 spans x[{}..{}] ({} cells), hugs #23 in {hug} cells; illegal={illegal}",
+                xs.iter().min().unwrap(),
+                xs.iter().max().unwrap(),
+                plot.cells.len(),
+            );
+        }
+        for conn in rm.plan.connectors.iter() {
+            if conn.origin != 230 && conn.dest != 230 {
+                continue;
+            }
+            let Some(plot) = plot_connector(conn, &cols, &rows, None) else { continue };
+            println!(
+                "      {} {:?} {}: exit {:?} slot {} / entry {:?} slot {} corner {:?}  dep{:?} arr{:?}",
+                conn.origin,
+                conn.exit_dir,
+                conn.dest,
+                conn.exit,
+                conn.exit_slot,
+                conn.entry,
+                conn.entry_slot,
+                conn.entry_corner,
+                plot.dep_anchor,
+                plot.arr_anchor,
+            );
+        }
+    }
+
+    /// Counterfactuals: is the detour caused by #23's presence, by the two-row gap
+    /// between #134 and #230, or by the `230 NW 217` constraint that opens the gap?
+    #[test]
+    #[ignore = "SQ-1255 diagnostic"]
+    fn sq1255_counterfactuals() {
+        // (0) As shipped.
+        let m = replay(WALK.len());
+        hug_report(&m.graph, "shipped        ");
+
+        // (1) Same layout, #23 moved far away: does the 134<->230 connector still detour?
+        let mut g1 = m.graph.clone();
+        g1.set_pos(23, (3, -1));
+        hug_report(&g1, "#23 moved away ");
+
+        // (2) Same graph, #230 pulled onto the cell directly north (the gap closed).
+        let mut g2 = m.graph.clone();
+        g2.set_pos(230, (-2, -1));
+        hug_report(&g2, "#230 at (-2,-1)");
+
+        // (3) The walk without `230 NW 217` — the edge that pins #230 a row south of
+        //     #217's row and so opens the two-row gap in the 33/134/230 column.
+        let mut m3 = Mapper::default();
+        let mut counter = 0u32;
+        m3.observe(WALK[0].0, name(WALK[0].0), None);
+        maintain(&mut m3, true, false, &mut counter);
+        for &(origin, dir, dest) in WALK.iter() {
+            if (origin, dest) == (230, 217) {
+                continue;
+            }
+            m3.graph.set_current(origin);
+            let rb = m3.graph.rooms().count();
+            let cb = m3.graph.connections().len();
+            m3.observe_moved(dest, name(dest), Some(dir));
+            let nr = m3.graph.rooms().count() > rb;
+            let nc = m3.graph.connections().len() > cb;
+            maintain(&mut m3, nr, nc, &mut counter);
+        }
+        hug_report(&m3.graph, "no 230 NW 217  ");
+
+        // (4) The same 29 edges, discovered in a different order: the two Canyon View
+        //     crossings walked LAST. If the layout is order-stable this changes nothing.
+        let mut order: Vec<(RoomId, Direction, RoomId)> = Vec::new();
+        let late: &[(RoomId, RoomId)] = &[(23, 230), (230, 217)];
+        for &e in WALK {
+            if !late.contains(&(e.0, e.2)) {
+                order.push(e);
+            }
+        }
+        for &e in WALK {
+            if late.contains(&(e.0, e.2)) {
+                order.push(e);
+            }
+        }
+        let mut m4 = Mapper::default();
+        let mut counter = 0u32;
+        m4.observe(order[0].0, name(order[0].0), None);
+        maintain(&mut m4, true, false, &mut counter);
+        for &(origin, dir, dest) in &order {
+            m4.graph.set_current(origin);
+            let rb = m4.graph.rooms().count();
+            let cb = m4.graph.connections().len();
+            m4.observe_moved(dest, name(dest), Some(dir));
+            let nr = m4.graph.rooms().count() > rb;
+            let nc = m4.graph.connections().len() > cb;
+            maintain(&mut m4, nr, nc, &mut counter);
+        }
+        hug_report(&m4.graph, "reordered walk ");
+
+        // (5) The MINIMAL order change: swap the two adjacent crossings 23 (23 W 230)
+        //     and 24 (230 N 134). Both are the first-listed edge of their room pair, so
+        //     the swap is exactly the `ci` tiebreak in `direct_route_losers` and in
+        //     `assign_side_slots`, and nothing else.
+        let mut order5: Vec<(RoomId, Direction, RoomId)> = WALK.to_vec();
+        order5.swap(22, 23);
+        let mut m5 = Mapper::default();
+        let mut counter = 0u32;
+        m5.observe(order5[0].0, name(order5[0].0), None);
+        maintain(&mut m5, true, false, &mut counter);
+        for &(origin, dir, dest) in &order5 {
+            m5.graph.set_current(origin);
+            let rb = m5.graph.rooms().count();
+            let cb = m5.graph.connections().len();
+            m5.observe_moved(dest, name(dest), Some(dir));
+            let nr = m5.graph.rooms().count() > rb;
+            let nc = m5.graph.connections().len() > cb;
+            maintain(&mut m5, nr, nc, &mut counter);
+        }
+        hug_report(&m5.graph, "swap 23<->24   ");
+    }
+
+    /// **The reported defect.** No connector belonging to some OTHER pair of rooms may run
+    /// flush along a room's box border — the one-cell ring around the box must stay clear.
+    ///
+    /// This is the case the shipped code fails. `overlap_stats` (and therefore
+    /// `cleanup_overlaps`, which minimises it) scores only cells owned by two or more
+    /// CONNECTORS; a connector running alongside a BOX is owned by one connector and
+    /// scores zero, so nothing in the pipeline has a reason to prefer the straight route.
+    #[test]
+    #[ignore = "SQ-1255: the reported defect — a connector run flush along a room box"]
+    fn sq1255_no_foreign_connector_hugs_a_room_box() {
+        let m = replay(WALK.len());
+        let rm = mapper::render::render_layer(&m.graph, MAIN_LAYER);
+        let (cols, rows) = boxes_axes(&rm.plan, rm.bounds);
+        let mut bad: Vec<String> = Vec::new();
+        for room in rm.rooms.iter() {
+            let (bx, by) = (cols.room_pixel(room.cell.0), rows.room_pixel(room.cell.1));
+            for conn in rm.plan.connectors.iter() {
+                if conn.origin == room.id || conn.dest == room.id {
+                    continue;
+                }
+                let Some(plot) = plot_connector(conn, &cols, &rows, None) else { continue };
+                let n = plot
+                    .cells
+                    .iter()
+                    .filter(|(c, _)| {
+                        c.0 >= bx - 1 && c.0 <= bx + BOX_W && c.1 >= by - 1 && c.1 <= by + BOX_H
+                    })
+                    .count();
+                if n > 0 {
+                    bad.push(format!(
+                        "{} {:?} {} lays {n} cells in the ring around #{} {}",
+                        conn.origin,
+                        conn.exit_dir,
+                        conn.dest,
+                        room.id,
+                        name(room.id)
+                    ));
+                }
+            }
+        }
+        assert!(bad.is_empty(), "connectors run flush along a room box:\n  {}", bad.join("\n  "));
+    }
+}
