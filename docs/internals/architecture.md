@@ -621,6 +621,106 @@ read `crate::graph::Room::aliases` directly — nothing recomputes the list, so
 the box, the panel and the dump can never disagree about what a room used to
 be called.
 
+### SQ-1261: a `?` exit remembers where it has actually sent you
+
+The `?` mark itself (`crate::graph::Room::random_exits`) only ever answered
+"is this direction random?" — it named no destinations, so the room card said
+"destination varies" and nothing more, however many times the player had
+actually walked it. `crate::graph::Room::random_destinations: Vec<(Direction,
+Vec<RoomId>)>` is the fact that closes that gap: every distinct room a marked
+direction has actually been seen to land in, first-seen order, no duplicates,
+one entry per marked direction. `MapGraph::note_random_destination` appends to
+it; `MapGraph::random_destinations` reads it back; `MapGraph::unmark_random_exit`
+clears a direction's list along with the mark itself, so a later re-mark (the
+Phase 2 upgrade can be undone by a subsequent disagreement) starts over rather
+than resuming a stale list from before the confirmation. Persisted exactly
+like `random_exits` (`#[serde(default)]`), so an older map file loads with
+every list empty rather than failing to parse.
+
+Two sources feed it, matching the two ways a direction gets marked at all:
+
+- **Every live walk of an already-marked direction that lands somewhere other
+  than the origin** — `session::apply_turn`'s `random_exit` branch (the one
+  `Mapper::record_random_exit` already lived in, for both the very first
+  mismatch and every re-walk of an already-marked direction) now also calls
+  `MapGraph::note_random_destination(origin, dir, snap.number)`, guarded by
+  `snap.number != origin`. That guard matters: a re-walk of an already-marked
+  direction that bounces the player right back to the room they started in
+  (`already_random` true, `moved_room` false — a refusal, not a landing) names
+  no destination worth recording, and a rename-loop never reaches this branch
+  at all (`moved_room` is false there too, for the same reason — the object
+  never actually changed).
+- **Phase 2's shadow attempts, on disagreement** — `random_exit_probe::deliver`
+  judges two shapes (see Phase 2 above), and both now call the new
+  `note_disagreeing_destinations` on a disagreement, before returning: it
+  notes the LIVE destination and every shadow attempt's own landing (skipping
+  a step that quit, escaped, or reported no location — the same "evidence,
+  not a vote" reading `judge` already uses). For a first-walk disagreement
+  this is the only place the live destination is ever recorded, since the
+  walk that earned the mark went through the ordinary `arrived` branch in
+  `apply_turn`, not the `random_exit` one, and recorded nothing on its own.
+  For an upgrade disagreement the live destination was likely already noted
+  by `apply_turn`'s own re-walk (`note_random_destination` dedupes, so this is
+  harmless either way) but the SHADOW attempts' own destinations are new
+  information regardless. **The upgrade-agreement path notes nothing at
+  all** — the mark is about to be cleared, and `unmark_random_exit` empties
+  the list in the same stroke, so there is nothing left to attach a note to.
+  A rename-loop, driven entirely through `Mapper::observe_inner` and never
+  through Phase 2 at all, notes nothing either — Lost Pig's own tunnel rooms
+  confirm it: `random_destinations` is asserted empty for every rename-loop
+  direction on the real game (`declared_exit.rs`'s Phase 3 case), the same
+  turns whose `random_exits` marks are non-empty.
+
+Three surfaces read `random_destinations`, and none of them recompute it:
+
+- **The room card** (`render::room_info::card_detail`) now takes the room id
+  and direction alongside the classified cell, and for `MatrixCell::Random`
+  names every recorded destination through the same `dest_name` helper every
+  other cell uses (a room a shadow saw but the map does not otherwise know —
+  possible, since a probe attempt can reach a room the player never visited —
+  falls back to `#id`, exactly like `LeavesLayer`'s cross-layer destination
+  does): `"destination varies: A, B, C"`, first-seen order, or bare
+  `"destination varies"` with nothing recorded yet.
+- **The matrix cell** — `mapper::matrix::MatrixCell::Random` gained a
+  `destinations: usize` field (a COUNT, not the list, so the enum stays
+  `Copy`; the list itself is a graph lookup the room card and the dump make
+  directly), set by `classify_with` from `graph.random_destinations(room,
+  dir).len()`. `render::matrix::cell_text` prints a bare `?` for zero, else
+  `?` followed by the shared superscript-count glyph (`?²`) — the same table
+  `render::map`'s alias marker uses, pulled out to
+  `render::superscript_count` so the three surfaces (alias count, random-exit
+  matrix count, random-exit box stub) can never draw a different digit for
+  the same count.
+- **The map box** — a NEW marker; before this, a `?` direction drew nothing
+  on the box at all. `mapper::render::RenderRoom::random_stubs:
+  Vec<(Direction, usize)>` carries every marked direction paired with its
+  recorded-destination count, built by `render_traced` from
+  `Room::random_exits` and filtered to exclude any direction that ALSO
+  carries a real edge (defensive — `mint_passage`/`unmark_random_exit` never
+  leave the two coexisting in ordinary play, but a hand-edited or
+  pre-upgrade map file could, and a real passage's own arrowhead must win the
+  slot). `render::map::draw_box_room` draws each stub LAST, after every
+  border line and corner glyph, so it overwrites whatever was painted there:
+  a cardinal direction takes the same border-centre cell a real exit's
+  arrowhead would (`random_stub_pos`, mirroring `box_edge_anchor`'s
+  Bottom/Top/Left/Right formulas at slot 0), a diagonal takes the box corner
+  a diagonal departure draws at (mirroring `corner_anchor`). One glyph only —
+  `random_stub_marker` — a bare `?` with nothing recorded, else the
+  superscript count alone (`╰────²────╯` on the south border for two
+  recorded destinations; never `?²` on the box, where there is room for
+  exactly one character). Nothing is routed beyond it: the whole point of the
+  mark is that there is nowhere stable to route to. A non-planar direction
+  (Up/Down/In/Out — theoretically markable, since `mark_random_exit` only
+  excludes `Direction::Unknown`) has no side or corner of its own and stays
+  visible on the matrix and the room card only. Styled through its own
+  selector, `map.room_random_stub` (default: the `alert` role, matching
+  `map.matrix.cell:random`'s own default — the same fact, one colour).
+- **`/export-map`'s dump** carries them on the `ROOM` line as
+  `random=[N→(#187 "Probably New Tunnel", #189 "Somewhere Else"), …]`, one
+  entry per marked direction, each destination by id and label — so an
+  exported map keeps the same evidence the room card and the matrix's
+  superscript count show.
+
 ## Reading back the bytes we actually emit
 
 Every other harness in the repo renders into a ratatui `Buffer` and asserts on

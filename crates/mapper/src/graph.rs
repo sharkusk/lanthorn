@@ -73,6 +73,22 @@ pub struct Room {
     /// files, hence `serde(default)`.
     #[serde(default)]
     pub random_exits: Vec<Direction>,
+    /// Every distinct room a marked direction (see [`Room::random_exits`]) has actually landed
+    /// in, first-seen order, no duplicates (SQ-1261). One entry per marked direction; a direction
+    /// not yet in [`Room::random_exits`] has no entry here either.
+    ///
+    /// A `?` mark records only that a direction is random — this is what lets the room card and
+    /// the map say WHERE it has sent the player, without pretending the list is exhaustive (the
+    /// story may still have destinations nobody has landed in yet) or that any one of them is the
+    /// "real" answer. Never touched by a rename-loop: a same-room arrival under a new name has no
+    /// destination to record, since the room the player is standing in is the origin itself.
+    ///
+    /// A `Vec<(Direction, Vec<RoomId>)>` rather than a map, for the same reason as `tried` and
+    /// `random_exits` — [`Direction`] is deliberately not `Ord` — and because the whole thing is
+    /// at most eight entries long. Absent from a map file written before this existed, hence
+    /// `serde(default)`.
+    #[serde(default)]
+    pub random_destinations: Vec<(Direction, Vec<RoomId>)>,
     /// Every distinct name the game has printed for this room, other than its CURRENT label
     /// (SQ-1257 Phase 3) — Lost Pig's gnome tunnels reroll a fresh name on every compass move,
     /// and this is where the others go so the map can keep saying "this is the same room" while
@@ -401,6 +417,7 @@ impl MapGraph {
                     tried: Vec::new(),
                     probed: Vec::new(),
                     random_exits: Vec::new(),
+                    random_destinations: Vec::new(),
                     aliases: Vec::new(),
                     seq,
                 });
@@ -642,7 +659,43 @@ impl MapGraph {
     pub fn unmark_random_exit(&mut self, id: RoomId, dir: Direction) {
         if let Some(r) = self.rooms.get_mut(&id) {
             r.random_exits.retain(|&d| d != dir);
+            // The destinations recorded against this direction were evidence for a fact that no
+            // longer holds — the direction is confirmed deterministic now, and re-marking it
+            // later (SQ-1257 Phase 2's upgrade can be undone by a subsequent disagreement) starts
+            // the list over rather than resuming a stale one from before the confirmation.
+            r.random_destinations.retain(|(d, _)| *d != dir);
         }
+    }
+
+    /// Record that `dir` out of `id` — already marked random — has been seen to land in `dest`
+    /// (SQ-1261). First-seen order, no duplicates; a no-op for [`Direction::Unknown`] or an
+    /// unknown room. Deliberately does NOT require `dir` to already be marked random: the note
+    /// and the mark are two different facts, and callers can order the mark first without this
+    /// silently depending on it.
+    pub fn note_random_destination(&mut self, id: RoomId, dir: Direction, dest: RoomId) {
+        if dir == Direction::Unknown {
+            return;
+        }
+        let Some(r) = self.rooms.get_mut(&id) else { return };
+        match r.random_destinations.iter_mut().find(|(d, _)| *d == dir) {
+            Some((_, dests)) => {
+                if !dests.contains(&dest) {
+                    dests.push(dest);
+                }
+            }
+            None => r.random_destinations.push((dir, vec![dest])),
+        }
+    }
+
+    /// Every distinct room `dir` out of `id` has been seen to land in, first-seen order — empty
+    /// when the direction is not marked random, or is but nothing has landed anywhere recorded
+    /// yet (SQ-1261). See [`Room::random_destinations`].
+    pub fn random_destinations(&self, id: RoomId, dir: Direction) -> &[RoomId] {
+        self.rooms
+            .get(&id)
+            .and_then(|r| r.random_destinations.iter().find(|(d, _)| *d == dir))
+            .map(|(_, dests)| dests.as_slice())
+            .unwrap_or(&[])
     }
 
     /// Which directions are worth probing out of `room`, best first (SQ-0785).
@@ -1091,6 +1144,63 @@ mod tests {
         );
     }
 
+    // ── SQ-1261: random-exit destinations ───────────────────────────────────
+
+    /// Landing in a new room notes it; landing there again does not duplicate it; a different
+    /// room joins the list after it, in the order each was first seen.
+    #[test]
+    fn note_random_destination_dedupes_and_keeps_first_seen_order() {
+        let mut g = MapGraph::new();
+        g.upsert_room(1, "Tunnel".into());
+        g.mark_random_exit(1, Direction::N);
+        assert!(g.random_destinations(1, Direction::N).is_empty(), "nothing recorded yet");
+
+        g.note_random_destination(1, Direction::N, 2);
+        assert_eq!(g.random_destinations(1, Direction::N), &[2]);
+
+        g.note_random_destination(1, Direction::N, 2); // same room again
+        assert_eq!(g.random_destinations(1, Direction::N), &[2], "no duplicate");
+
+        g.note_random_destination(1, Direction::N, 3);
+        assert_eq!(g.random_destinations(1, Direction::N), &[2, 3], "first-seen order");
+
+        // A different direction out of the same room keeps its own list.
+        assert!(g.random_destinations(1, Direction::S).is_empty());
+    }
+
+    /// [`Direction::Unknown`] and an unknown room are both no-ops, matching every other
+    /// random-exit mutator's guard.
+    #[test]
+    fn note_random_destination_is_a_no_op_for_unknown_direction_or_room() {
+        let mut g = MapGraph::new();
+        g.upsert_room(1, "Tunnel".into());
+        g.note_random_destination(1, Direction::Unknown, 2);
+        assert!(g.random_destinations(1, Direction::Unknown).is_empty());
+        g.note_random_destination(404, Direction::N, 2);
+        assert!(g.random_destinations(404, Direction::N).is_empty());
+    }
+
+    /// Undoing a random mark (SQ-1257 Phase 2's upgrade path) clears the destinations recorded
+    /// against it too — they were evidence for a fact that no longer holds, and a later re-mark
+    /// of the same direction must not resume a stale list from before the confirmation.
+    #[test]
+    fn unmark_random_exit_clears_its_recorded_destinations() {
+        let mut g = MapGraph::new();
+        g.upsert_room(1, "Tunnel".into());
+        g.mark_random_exit(1, Direction::N);
+        g.note_random_destination(1, Direction::N, 2);
+        g.note_random_destination(1, Direction::N, 3);
+        assert_eq!(g.random_destinations(1, Direction::N).len(), 2);
+
+        g.unmark_random_exit(1, Direction::N);
+        assert!(g.random_destinations(1, Direction::N).is_empty(), "cleared along with the mark");
+
+        // Re-marking starts the list over, not from where it left off.
+        g.mark_random_exit(1, Direction::N);
+        g.note_random_destination(1, Direction::N, 4);
+        assert_eq!(g.random_destinations(1, Direction::N), &[4]);
+    }
+
     /// SQ-0632: a room can hold several non-compass passages (xyzzy AND pray). Keying Unknown
     /// edges by (origin, dir) alone made the second silently overwrite the first's destination,
     /// losing a recorded passage. Unknown edges to DIFFERENT destinations must coexist; an exact
@@ -1214,6 +1324,7 @@ mod tests {
             tried: Vec::new(),
             probed: Vec::new(),
             random_exits: Vec::new(),
+            random_destinations: Vec::new(),
             aliases: Vec::new(),
             seq: ROOM_SEQ_MISSING,
         };
@@ -1245,6 +1356,7 @@ mod tests {
             tried: Vec::new(),
             probed: Vec::new(),
             random_exits: Vec::new(),
+            random_destinations: Vec::new(),
             aliases: Vec::new(),
             seq,
         };

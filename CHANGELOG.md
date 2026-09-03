@@ -48,6 +48,11 @@ Absolute URLs or no link.
   answered to; the room panel lists them under "Also seen as". The compass
   moves that trigger a rename now show `?` instead of the return-arrow badge
   a same-room move used to draw.
+- **A `?` exit now remembers where it has sent you.** The room panel names
+  every place the story has actually landed you (or "destination varies"
+  alone, if it hasn't sent you anywhere yet); the direction matrix and the
+  map box show how many distinct places that is, as a small superscript
+  count beside the `?`.
 
 ### Fixed
 

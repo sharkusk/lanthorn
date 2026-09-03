@@ -300,6 +300,24 @@ pub fn blank_control_chars(s: &str) -> std::borrow::Cow<'_, str> {
     }
 }
 
+/// Unicode superscript digit (¹²³⁴⁵⁶⁷⁸⁹, U+00B9/U+00B2/U+00B3/U+2074–2079) for a count of 1–9,
+/// and `"⁹⁺"` (superscript nine plus a superscript plus, U+207A) for ten or more — the callers
+/// this exists for (a room-box badge, a matrix cell) have room for one glyph, not two digits, and
+/// "at least this many" is still an honest thing to say with one. `""` for zero.
+///
+/// Shared by [`crate::render::map`]'s alias-count marker (SQ-1257 Phase 3) and its random-exit
+/// destination-count marker, and by [`crate::render::matrix`]'s `?` cell (SQ-1261) — one glyph
+/// table for "how many of these are there", so the three surfaces can never drift into showing
+/// different digits for the same count.
+pub(crate) fn superscript_count(count: usize) -> String {
+    const SUP_DIGITS: [char; 9] = ['¹', '²', '³', '⁴', '⁵', '⁶', '⁷', '⁸', '⁹'];
+    match count {
+        0 => String::new(),
+        1..=9 => SUP_DIGITS[count - 1].to_string(),
+        _ => "⁹⁺".to_string(),
+    }
+}
+
 /// Like `draw_str_clipped` but accepts a signed start coordinate (see `put_char`).
 pub fn put_str(buf: &mut Buffer, x: i32, y: i32, s: &str, style: Style, area: Rect) {
     if y < area.y as i32 || y >= area.bottom() as i32 {

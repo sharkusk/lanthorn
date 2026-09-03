@@ -114,7 +114,11 @@ pub fn cell_text(m: &Matrix, cell: &MatrixCell, with_return: bool) -> String {
         }
         MatrixCell::Probed => "×".to_string(),
         MatrixCell::Untried => "·".to_string(),
-        MatrixCell::Random => "?".to_string(),
+        // A bare `?` when nothing is recorded yet; a superscript count of recorded destinations
+        // once there are some (SQ-1261) — `?²` for two rooms this direction has actually landed
+        // in, agreeing with the room card's "destination varies: A, B" and the same glyph table
+        // the map box's stub uses.
+        MatrixCell::Random { destinations } => format!("?{}", super::superscript_count(*destinations)),
     }
 }
 
@@ -384,7 +388,7 @@ pub fn render_matrix(
                 entrance_style
             } else if cell.is_frontier() {
                 frontier_style
-            } else if matches!(cell, MatrixCell::Random) {
+            } else if matches!(cell, MatrixCell::Random { .. }) {
                 random_style
             } else {
                 row_style
@@ -538,6 +542,30 @@ mod tests {
         assert_eq!(t(3, Direction::E, true), "×", "tried, no path");
         assert_eq!(t(3, Direction::W, true), "·", "untried");
         assert_eq!(t(1, Direction::S, true), "·");
+    }
+
+    /// SQ-1261: a `?` cell is bare with no recorded destinations, and carries a superscript
+    /// count once some are recorded — the same glyph table the map box's stub and the alias
+    /// marker use.
+    #[test]
+    fn random_cell_carries_a_superscript_destination_count() {
+        let mut g = tiny();
+        g.mark_random_exit(1, Direction::E);
+        let m = matrix::build(&g, MAIN_LAYER);
+        assert_eq!(
+            cell_text(&m, &matrix::classify(&g, 1, Direction::E), true),
+            "?",
+            "no destinations recorded yet"
+        );
+
+        g.note_random_destination(1, Direction::E, 2);
+        g.note_random_destination(1, Direction::E, 3);
+        let m = matrix::build(&g, MAIN_LAYER);
+        assert_eq!(
+            cell_text(&m, &matrix::classify(&g, 1, Direction::E), true),
+            "?²",
+            "two distinct destinations recorded"
+        );
     }
 
     /// A long name is cut at its comma, marked, and spelled out below the table — never left as

@@ -38,6 +38,15 @@ pub struct RenderRoom {
     /// has room only for a superscript digit beside the label, and the full list belongs to the
     /// room panel, which reads the graph directly.
     pub alias_count: usize,
+    /// Every direction this room has a `?` random-exit mark on, paired with how many distinct
+    /// destinations it has been seen to land in (SQ-1261) — see [`crate::graph::Room::random_exits`]
+    /// / [`crate::graph::Room::random_destinations`]. Filtered to exclude a direction that ALSO
+    /// carries a real edge (defensive: `mint_passage`/`unmark_random_exit` never leave the two
+    /// coexisting, but a hand-edited or pre-upgrade map file could) — a real passage always wins
+    /// the border slot. Carried as counts, not the destination lists themselves, for the same
+    /// reason `alias_count` is: the box has room for one glyph per direction, and the full list
+    /// belongs to the room panel and the dump.
+    pub random_stubs: Vec<(crate::direction::Direction, usize)>,
 }
 
 /// The complete zoom-independent render description of the map.
@@ -89,6 +98,12 @@ pub fn render_traced(graph: &MapGraph, on_step: &mut dyn FnMut(&str)) -> RenderM
                 has_layer_portal: false,
                 self_loops: graph.self_loops(room.id),
                 alias_count: room.aliases.len(),
+                random_stubs: room
+                    .random_exits
+                    .iter()
+                    .filter(|&&d| !graph.connections().iter().any(|c| c.origin == room.id && c.dir == d))
+                    .map(|&d| (d, graph.random_destinations(room.id, d).len()))
+                    .collect(),
             })
         })
         .collect();
@@ -251,6 +266,46 @@ mod tests {
         assert_eq!(only.rooms.len(), all.rooms.len());
         assert_eq!(only.bounds, all.bounds);
         assert_eq!(only.edges.len(), all.edges.len());
+    }
+
+    /// SQ-1261: a marked direction with no recorded destinations carries a zero count; once
+    /// destinations are noted, the count follows.
+    #[test]
+    fn render_room_carries_random_stub_counts() {
+        let mut m = Mapper::default();
+        m.observe(1, "Windy Cave", None);
+        m.observe(2, "A", None);
+        assert!(m.record_random_exit(1, Direction::N));
+        let rm = render(&m.graph);
+        let r1 = rm.rooms.iter().find(|r| r.id == 1).unwrap();
+        assert_eq!(r1.random_stubs, vec![(Direction::N, 0)], "marked, nothing recorded yet");
+
+        m.graph.note_random_destination(1, Direction::N, 2);
+        let rm = render(&m.graph);
+        let r1 = rm.rooms.iter().find(|r| r.id == 1).unwrap();
+        assert_eq!(r1.random_stubs, vec![(Direction::N, 1)], "the count follows what is recorded");
+
+        let r2 = rm.rooms.iter().find(|r| r.id == 2).unwrap();
+        assert!(r2.random_stubs.is_empty(), "an unmarked room carries no stubs");
+    }
+
+    /// Defensive guard (SQ-1261): a direction marked random must never ALSO appear as a stub
+    /// once a real edge exists on the same key — `mint_passage`/`unmark_random_exit` never leave
+    /// the two coexisting in ordinary play, but a hand-edited or pre-upgrade map file could, and
+    /// the render layer must not draw a stub the connector pass is about to draw an arrowhead
+    /// over.
+    #[test]
+    fn render_room_never_stubs_a_direction_that_also_carries_a_real_edge() {
+        let mut g = crate::graph::MapGraph::new();
+        g.upsert_room(1, "A".into());
+        g.upsert_room(2, "B".into());
+        g.set_pos(1, (0, 0));
+        g.set_pos(2, (1, 0));
+        g.add_edge(1, Direction::E, 2);
+        g.mark_random_exit(1, Direction::E); // hand-edited/stale: both facts on one key
+        let rm = render(&g);
+        let r1 = rm.rooms.iter().find(|r| r.id == 1).unwrap();
+        assert!(r1.random_stubs.is_empty(), "a real edge on the key wins; no stub is drawn beside it");
     }
 
     #[test]

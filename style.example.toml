@@ -155,6 +155,7 @@ version = 1   # style schema version — do not remove; lets lanthorn flag an ou
 # room_current = { parent = "accent" }
 # room_selected = { parent = "accent", reversed = true }
 # room_alias_marker = { parent = "muted" }
+# room_random_stub = { parent = "alert" }
 # connector = { parent = "accent" }
 # connector_distorted = { fg = "magenta" }
 # connector_portal = { parent = "accent" }

@@ -67,25 +67,34 @@ pub enum MatrixCell {
     Untried,
     /// Tried; the story sent the player somewhere different each time (SQ-1257) —
     /// Lost Pig's gnome tunnels are the specimen. Explored, not a frontier, and
-    /// names no destination because none is stable enough to name: the room the
-    /// story picks varies, so no `dest` can be trusted from one crossing to the
-    /// next. A REAL edge in the same direction beats this, and this beats
-    /// [`MatrixCell::SelfLoop`] on the same key — see [`classify_with`].
-    Random,
+    /// names no SINGLE destination because none is stable enough to name: the
+    /// room the story picks varies, so no `dest` can be trusted from one
+    /// crossing to the next. A REAL edge in the same direction beats this, and
+    /// this beats [`MatrixCell::SelfLoop`] on the same key — see
+    /// [`classify_with`].
+    ///
+    /// `destinations` is a COUNT, not the list (SQ-1261): every distinct room this direction has
+    /// actually been seen to land in ([`crate::graph::Room::random_destinations`]), carried here
+    /// only so the render layer can draw its superscript without a second graph lookup per cell.
+    /// The list itself belongs to the room panel and the dump, which read the graph directly —
+    /// `MatrixCell` stays `Copy`, so it carries a size, not the rooms.
+    Random { destinations: usize },
 }
 
 impl MatrixCell {
-    /// The room this cell points at, when it points at one. `None` for the three cells that name
-    /// no destination (`SelfLoop` points at the row's own room, so it names nothing new).
+    /// The room this cell points at, when it points at one. `None` for the cells that name no
+    /// SINGLE destination (`SelfLoop` points at the row's own room, so it names nothing new;
+    /// `Random` may have several, which is exactly why it cannot answer with one).
     pub fn dest(&self) -> Option<RoomId> {
         match self {
             MatrixCell::Reciprocal { dest }
             | MatrixCell::ReturnBy { dest, .. }
             | MatrixCell::OneWay { dest }
             | MatrixCell::LeavesLayer { dest } => Some(*dest),
-            MatrixCell::SelfLoop | MatrixCell::Probed | MatrixCell::Untried | MatrixCell::Random => {
-                None
-            }
+            MatrixCell::SelfLoop
+            | MatrixCell::Probed
+            | MatrixCell::Untried
+            | MatrixCell::Random { .. } => None,
         }
     }
 
@@ -164,7 +173,7 @@ fn classify_with(graph: &MapGraph, idx: &ConnIndex<'_>, room: RoomId, dir: Direc
         // — but while the mark stands alone (no edge yet, or the edge disagreed and was
         // removed), this is what makes it visible.
         if graph.is_random_exit(room, dir) {
-            return MatrixCell::Random;
+            return MatrixCell::Random { destinations: graph.random_destinations(room, dir).len() };
         }
         if graph.self_loops(room).contains(&dir) {
             return MatrixCell::SelfLoop;
@@ -481,12 +490,20 @@ mod tests {
         assert_eq!(classify(&g, 1, Direction::S), MatrixCell::Untried, "never tried south");
 
         g.mark_random_exit(1, Direction::S);
-        assert_eq!(classify(&g, 1, Direction::S), MatrixCell::Random, "random beats untried");
+        assert_eq!(
+            classify(&g, 1, Direction::S),
+            MatrixCell::Random { destinations: 0 },
+            "random beats untried, no destinations recorded yet"
+        );
         assert!(!classify(&g, 1, Direction::S).is_frontier(), "random is explored, not a frontier");
         assert!(g.untried(1).iter().all(|&d| d != Direction::S), "and drops out of the untried list");
 
         g.mark_random_exit(4, Direction::E); // already Probed from `maze()`'s mark_tried
-        assert_eq!(classify(&g, 4, Direction::E), MatrixCell::Random, "random beats a bare probe too");
+        assert_eq!(
+            classify(&g, 4, Direction::E),
+            MatrixCell::Random { destinations: 0 },
+            "random beats a bare probe too"
+        );
 
         // SQ-1257 Phase 2: a random mark can be UPGRADED — a direction that later behaves
         // deterministically gets a real edge, via `random_exit_probe::deliver`, which clears the
@@ -502,6 +519,22 @@ mod tests {
             "a real edge in the same key wins over an un-cleared random mark"
         );
         assert!(g.is_random_exit(1, Direction::S), "the random record itself is untouched by classify");
+    }
+
+    /// SQ-1261: the `Random` cell's `destinations` count tracks
+    /// [`MapGraph::note_random_destination`], not just whether the direction is marked.
+    #[test]
+    fn a_random_exit_carries_its_recorded_destination_count() {
+        let (mut g, _l) = maze();
+        g.mark_random_exit(1, Direction::S);
+        assert_eq!(classify(&g, 1, Direction::S), MatrixCell::Random { destinations: 0 });
+
+        g.note_random_destination(1, Direction::S, 2);
+        assert_eq!(classify(&g, 1, Direction::S), MatrixCell::Random { destinations: 1 });
+
+        g.note_random_destination(1, Direction::S, 3);
+        g.note_random_destination(1, Direction::S, 2); // repeat — no change
+        assert_eq!(classify(&g, 1, Direction::S), MatrixCell::Random { destinations: 2 });
     }
 
     /// SQ-1257 Phase 3: a key that carries BOTH a self-loop and a random mark — which
@@ -520,7 +553,7 @@ mod tests {
         g.mark_random_exit(1, Direction::S);
         assert_eq!(
             classify(&g, 1, Direction::S),
-            MatrixCell::Random,
+            MatrixCell::Random { destinations: 0 },
             "random beats a self-loop recorded on the same key"
         );
         assert!(g.self_loops(1).contains(&Direction::S), "the self-loop record itself survives");

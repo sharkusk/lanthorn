@@ -2284,9 +2284,10 @@ fn draw_room(
         }
         Zoom::Boxes => {
             let alias_marker_style = state.colors.theme.get("map.room_alias_marker").style;
+            let random_stub_style = state.colors.theme.get("map.room_random_stub").style;
             draw_box_room(
-                room, sx, sy, base_style, alias_marker_style, &state.symbols, selected,
-                state.show_alignment, state.show_room_numbers, area, buf,
+                room, sx, sy, base_style, alias_marker_style, random_stub_style, &state.symbols,
+                selected, state.show_alignment, state.show_room_numbers, area, buf,
             );
         }
     }
@@ -2297,12 +2298,7 @@ fn draw_room(
 /// (superscript nine plus a superscript plus, U+207A) for ten or more — the box has no room for
 /// a two-digit count, and "at least this many" is still an honest thing to say with one.
 fn alias_marker(count: usize) -> String {
-    const SUP_DIGITS: [char; 9] = ['¹', '²', '³', '⁴', '⁵', '⁶', '⁷', '⁸', '⁹'];
-    match count {
-        0 => String::new(),
-        1..=9 => SUP_DIGITS[count - 1].to_string(),
-        _ => "⁹⁺".to_string(),
-    }
+    super::superscript_count(count)
 }
 
 /// Draw a compact (10×4 step) room: 8×3 box with label row.
@@ -2412,6 +2408,7 @@ fn draw_box_room(
     sy: i32,
     style: Style,
     alias_marker_style: Style,
+    random_stub_style: Style,
     sym: &SymbolSet,
     selected: bool,
     show_alignment: bool,
@@ -2522,6 +2519,46 @@ fn draw_box_room(
         put_char(buf, sx + dx, sy + h - 1, horiz, border_style, area);
     }
     put_char(buf, sx + w - 1, sy + h - 1, br, border_style, area);
+
+    // `?` random-exit stubs (SQ-1261): one cell on the border/corner per marked direction, drawn
+    // LAST so it overwrites whatever the border loops above already painted there — a straight
+    // run of `─`/`│`, or a corner glyph for a diagonal. Never a connector beyond it: the whole
+    // point of the mark is that there is nowhere stable to route to.
+    for &(dir, count) in &room.random_stubs {
+        if let Some((x, y)) = random_stub_pos(sx, sy, dir, w, h) {
+            put_str(buf, x, y, &random_stub_marker(count), random_stub_style, area);
+        }
+    }
+}
+
+/// The single glyph a `?` random-exit stub shows (SQ-1261): a bare `?` when nothing is recorded
+/// yet, else the superscript count of recorded destinations — never both, since the box border
+/// has room for exactly one character per direction (see [`random_stub_pos`]).
+fn random_stub_marker(count: usize) -> String {
+    if count == 0 { "?".to_string() } else { super::superscript_count(count) }
+}
+
+/// Where a `?` stub lands on a room box `w`×`h` cells with its top-left at `(sx, sy)`: a cardinal
+/// direction takes the same border-centre cell a real exit arrow would (see
+/// [`slot_offset`]/`arrow_for_departure`'s callers), a diagonal takes the corner a diagonal
+/// departure draws at (see [`corner_anchor`]) — so a stub never invents a position a real passage
+/// would not also use. `None` for a non-planar direction (Up/Down/In/Out/Unknown): those have no
+/// side or corner of their own to sit on, and stay visible on the matrix and the room card
+/// instead. [`mapper::render::RenderRoom::random_stubs`] never carries a direction a real edge
+/// also uses (`mapper::render::render_traced`'s own filter) — a real exit's own arrowhead is
+/// drawn in a separate later pass and would win the same cell anyway.
+fn random_stub_pos(sx: i32, sy: i32, dir: Direction, w: i32, h: i32) -> Option<(i32, i32)> {
+    match dir {
+        Direction::N => Some((sx + w / 2, sy)),
+        Direction::S => Some((sx + w / 2, sy + h - 1)),
+        Direction::E => Some((sx + w - 1, sy + h / 2)),
+        Direction::W => Some((sx, sy + h / 2)),
+        Direction::NE => Some((sx + w - 1, sy)),
+        Direction::NW => Some((sx, sy)),
+        Direction::SE => Some((sx + w - 1, sy + h - 1)),
+        Direction::SW => Some((sx, sy + h - 1)),
+        Direction::Up | Direction::Down | Direction::In | Direction::Out | Direction::Unknown => None,
+    }
 }
 
 // ── Clipped drawing helpers ───────────────────────────────────────────────────
@@ -3570,6 +3607,132 @@ mod tests {
             marker_selector_fg, room_selector_fg,
             "sanity: the two selectors resolve to different defaults, so this test can tell them apart"
         );
+    }
+
+    // ── SQ-1261: `?` random-exit stubs on the room box ──────────────────────────
+
+    /// A `?` mark with no recorded destinations draws a bare `?` on the border, at the same
+    /// centre-bottom cell a real south exit's arrowhead would take; nothing beyond it.
+    #[test]
+    fn room_box_draws_a_bare_random_stub_with_no_destinations() {
+        use mapper::graph::MapGraph;
+        let mut g = MapGraph::new();
+        g.upsert_room(1, "Windy Cave".into());
+        g.set_pos(1, (0, 0));
+        g.mark_random_exit(1, mapper::direction::Direction::S);
+        let rm = render(&g);
+        let state = AppState::default();
+        let area = Rect::new(0, 0, 60, 20);
+        let mut buf = Buffer::empty(area);
+        render_map(&rm, &state, area, &mut buf);
+
+        // Box is 11×5 at (0,0): south's border-centre cell is (5, 4).
+        let sym = buf.cell((5u16, 4u16)).map(|c| c.symbol().to_string()).unwrap_or_default();
+        assert_eq!(sym, "?", "bare `?`, no destinations recorded");
+        // Nothing beyond the box — no connector, no second glyph past the border.
+        assert!(
+            buf.cell((5u16, 5u16)).map(|c| c.symbol()).unwrap_or(" ").trim().is_empty(),
+            "no connector drawn beyond the stub"
+        );
+    }
+
+    /// A `?` mark with recorded destinations draws the superscript count in the same slot
+    /// instead of the bare `?` — `╰───²───╯` on the south border for two recorded destinations.
+    /// Falsify by reverting `random_stub_marker` to always return `"?"` and this fails.
+    #[test]
+    fn room_box_draws_the_superscript_destination_count_on_the_stub() {
+        use mapper::graph::MapGraph;
+        let mut g = MapGraph::new();
+        g.upsert_room(1, "Windy Cave".into());
+        g.upsert_room(2, "A".into());
+        g.upsert_room(3, "B".into());
+        g.set_pos(1, (0, 0));
+        g.mark_random_exit(1, mapper::direction::Direction::S);
+        g.note_random_destination(1, mapper::direction::Direction::S, 2);
+        g.note_random_destination(1, mapper::direction::Direction::S, 3);
+        let rm = render(&g);
+        let state = AppState::default();
+        let area = Rect::new(0, 0, 60, 20);
+        let mut buf = Buffer::empty(area);
+        render_map(&rm, &state, area, &mut buf);
+
+        let bottom_row: String =
+            (0u16..=10).map(|x| buf.cell((x, 4)).map(|c| c.symbol().to_string()).unwrap_or_default()).collect();
+        assert_eq!(bottom_row, "╰────²────╯", "the south border carries the superscript count, no bare `?`");
+    }
+
+    /// A diagonal `?` mark lands at the box CORNER — the same cell a diagonal departure's
+    /// arrowhead would take — overwriting the rounded corner glyph.
+    #[test]
+    fn room_box_draws_a_diagonal_random_stub_at_the_corner() {
+        use mapper::graph::MapGraph;
+        let mut g = MapGraph::new();
+        g.upsert_room(1, "Windy Cave".into());
+        g.set_pos(1, (0, 0));
+        g.mark_random_exit(1, mapper::direction::Direction::SE);
+        let rm = render(&g);
+        let state = AppState::default();
+        let area = Rect::new(0, 0, 60, 20);
+        let mut buf = Buffer::empty(area);
+        render_map(&rm, &state, area, &mut buf);
+
+        // Box is 11×5 at (0,0): the SE corner is (10, 4).
+        let sym = buf.cell((10u16, 4u16)).map(|c| c.symbol().to_string()).unwrap_or_default();
+        assert_eq!(sym, "?", "the diagonal stub overwrites the rounded corner glyph");
+    }
+
+    /// The stub is its own themeable element (`map.room_random_stub`), not a reuse of the room's
+    /// base colour.
+    #[test]
+    fn room_box_random_stub_uses_its_own_style_selector() {
+        use mapper::graph::MapGraph;
+        let mut g = MapGraph::new();
+        g.upsert_room(1, "Windy Cave".into());
+        g.set_pos(1, (0, 0));
+        g.mark_random_exit(1, mapper::direction::Direction::S);
+        let rm = render(&g);
+        let state = AppState::default();
+        let area = Rect::new(0, 0, 60, 20);
+        let mut buf = Buffer::empty(area);
+        render_map(&rm, &state, area, &mut buf);
+
+        let stub_fg = buf.cell((5u16, 4u16)).and_then(|c| (c.symbol() == "?").then_some(c.fg));
+        assert!(stub_fg.is_some(), "the stub glyph must be drawn");
+        let stub_selector_fg = state.colors.theme.get("map.room_random_stub").style.fg;
+        assert_eq!(
+            stub_fg,
+            stub_selector_fg,
+            "the drawn stub's colour must come from the map.room_random_stub selector"
+        );
+        let room_selector_fg = state.colors.theme.get("map.room").style.fg;
+        assert_ne!(
+            stub_selector_fg, room_selector_fg,
+            "sanity: the two selectors resolve to different defaults, so this test can tell them apart"
+        );
+    }
+
+    /// A direction that carries BOTH a real edge and a stale random mark (a hand-edited or
+    /// pre-upgrade map file — never produced by ordinary play) draws the real edge's line, never
+    /// the stub — [`mapper::render::RenderRoom::random_stubs`] already filters this out, and this
+    /// pins the drawn consequence.
+    #[test]
+    fn room_box_a_real_edge_wins_the_border_slot_over_a_stale_random_mark() {
+        use mapper::graph::MapGraph;
+        let mut g = MapGraph::new();
+        g.upsert_room(1, "A".into());
+        g.upsert_room(2, "B".into());
+        g.set_pos(1, (0, 0));
+        g.set_pos(2, (0, 1)); // south of room 1
+        g.add_edge(1, mapper::direction::Direction::S, 2);
+        g.mark_random_exit(1, mapper::direction::Direction::S); // stale/hand-edited
+        let rm = render(&g);
+        let state = AppState::default();
+        let area = Rect::new(0, 0, 60, 20);
+        let mut buf = Buffer::empty(area);
+        render_map(&rm, &state, area, &mut buf);
+
+        let sym = buf.cell((5u16, 4u16)).map(|c| c.symbol().to_string()).unwrap_or_default();
+        assert_ne!(sym, "?", "the real edge's arrowhead wins the slot, not the stub: got {sym:?}");
     }
 
     // connector_has_corner_glyph: removed — called build_connector_mask which is gone;
@@ -5677,6 +5840,7 @@ mod tests {
             has_notes: false,
             align_code: String::new(),
             alias_count: 0,
+            random_stubs: Vec::new(),
         };
 
         let mut state = AppState::default();
@@ -5712,6 +5876,7 @@ mod tests {
             has_notes: false,
             align_code: String::new(),
             alias_count: 0,
+            random_stubs: Vec::new(),
         };
 
         let mut state = AppState::default();
@@ -5737,6 +5902,7 @@ mod tests {
             has_notes: false,
             align_code: String::new(),
             alias_count: 0,
+            random_stubs: Vec::new(),
         };
 
         let mut state = AppState::default();

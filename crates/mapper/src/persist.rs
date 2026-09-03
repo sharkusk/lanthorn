@@ -141,7 +141,7 @@ mod tests {
         assert!(m2.graph.is_tried(1, Direction::N), "and it still counts as tried");
         assert_eq!(
             crate::matrix::classify(&m2.graph, 1, Direction::N),
-            crate::matrix::MatrixCell::Random,
+            crate::matrix::MatrixCell::Random { destinations: 0 },
             "so a reload reads the cell exactly as the live session did"
         );
     }
@@ -153,6 +153,38 @@ mod tests {
         let old = r#"{"version":1,"rooms":[{"id":1,"name":"Hall","label_override":null,"notes":"","pos":[0,0]}],"connections":[],"current":1}"#;
         let m = from_json(old).unwrap();
         assert!(m.graph.room(1).unwrap().random_exits.is_empty());
+    }
+
+    /// SQ-1261: the destinations a random exit has been seen to land in must survive the map
+    /// file too, or every restore would forget where Lost Pig's gnome tunnels have sent the
+    /// player and the room card would go back to saying only "destination varies".
+    #[test]
+    fn round_trips_random_exit_destinations() {
+        let mut m = Mapper::default();
+        m.observe(1, "Windy Cave", None);
+        assert!(m.record_random_exit(1, Direction::N));
+        m.graph.note_random_destination(1, Direction::N, 2);
+        m.graph.note_random_destination(1, Direction::N, 3);
+
+        let m2 = from_json(&to_json(&m)).unwrap();
+        assert_eq!(m2.graph.random_destinations(1, Direction::N), &[2, 3], "order and membership survive");
+        assert_eq!(
+            crate::matrix::classify(&m2.graph, 1, Direction::N),
+            crate::matrix::MatrixCell::Random { destinations: 2 },
+            "and the matrix cell's count agrees after reload"
+        );
+    }
+
+    /// A map file saved before SQ-1261 has no `random_destinations` field at all; it must load
+    /// as an empty list rather than fail to parse — the same back-compat shape `random_exits`
+    /// itself needed when it was new.
+    #[test]
+    fn a_pre_sq1261_map_file_has_no_random_destinations_field_and_loads_fine() {
+        let old = r#"{"version":1,"rooms":[{"id":1,"name":"Windy Cave","label_override":null,"notes":"","pos":[0,0],"random_exits":["N"]}],"connections":[],"current":1}"#;
+        let m = from_json(old).unwrap();
+        assert!(m.graph.room(1).unwrap().random_destinations.is_empty());
+        assert!(m.graph.random_destinations(1, Direction::N).is_empty());
+        assert!(m.graph.is_random_exit(1, Direction::N), "the older field still loads fine");
     }
 
     /// SQ-1257 Phase 3: a room's aliases must survive the map file, or every restore would

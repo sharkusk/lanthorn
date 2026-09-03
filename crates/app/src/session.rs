@@ -3960,6 +3960,17 @@ pub fn apply_turn(
             // nobody has explored.
             if let (Some(origin), Some(d)) = (mapper.graph.current(), parse_direction(command)) {
                 mapper.record_random_exit(origin, d);
+                // SQ-1261: every live walk of a marked direction that lands somewhere other than
+                // the origin is evidence of WHERE the story sends the player — covers both the
+                // very first mismatch (this walk is what just earned the mark) and every re-walk
+                // of an already-marked direction. `snap.number != origin` excludes the one shape
+                // where this branch runs without the player having actually left: an already-marked
+                // direction walked again that bounced them right back (`moved_room` false, caught
+                // only by `already_random` above) — that landing is the origin itself and names no
+                // destination worth recording.
+                if snap.number != origin {
+                    mapper.graph.note_random_destination(origin, d, snap.number);
+                }
             }
             mapper.observe_relocation(snap.number, &snap.name);
             // Ordinary play resuming, same reasoning as the `arrived` branch below:
@@ -6310,8 +6321,15 @@ mod tests {
         assert_eq!(m.graph.room(183).unwrap().aliases, vec!["Twisty Cave"], "the old name joins the aliases");
         assert_eq!(
             mapper::matrix::classify(&m.graph, 183, Direction::N),
-            mapper::matrix::MatrixCell::Random,
+            mapper::matrix::MatrixCell::Random { destinations: 0 },
             "the matrix reads it as `destination varies`, not `leads back here`"
+        );
+        // SQ-1261: a rename-loop's "destination" is the room the player is already standing in —
+        // there is nothing to name, so nothing is recorded, unlike an ordinary random-exit walk
+        // that lands somewhere else.
+        assert!(
+            m.graph.random_destinations(183, Direction::N).is_empty(),
+            "a rename-loop records no destination — the room never actually changed"
         );
     }
 

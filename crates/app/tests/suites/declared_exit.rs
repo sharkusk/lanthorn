@@ -160,8 +160,34 @@ fn synthetic_random_exit_records_no_edge_and_marks_the_cell_random() {
     assert_eq!(mapper.graph.current(), Some(2), "the player is still observed as having arrived in 2");
     assert_eq!(
         mapper::matrix::classify(&mapper.graph, 1, Direction::N),
-        mapper::matrix::MatrixCell::Random,
-        "the matrix must read this cell as `?`, not untried/probed"
+        mapper::matrix::MatrixCell::Random { destinations: 1 },
+        "the matrix must read this cell as `?¹`, not untried/probed"
+    );
+    // SQ-1261: the walk that EARNED the mark is itself evidence of where the story sends the
+    // player — it must not have to wait for a second walk to be recorded.
+    assert_eq!(
+        mapper.graph.random_destinations(1, Direction::N),
+        &[2],
+        "the live destination of the very first random walk is recorded"
+    );
+
+    // A second walk of the now-marked direction, landing somewhere ELSE, adds to the list rather
+    // than replacing it — the story has now shown two different destinations for one direction.
+    // Back to room 1 first (an unrelated relocation — `apply_turn` above left `current` on room
+    // 2, and "walk north out of room 1" needs the player standing there again).
+    mapper.graph.set_current(1);
+    let mut r2 = TurnResult::observation(snap(4, "Third Tunnel"));
+    r2.declared_exit = Some(DeclaredExit::Room(3)); // still not what the story actually did
+    apply_turn(&mut mapper, "north", &r2, &mut death);
+    assert_eq!(
+        mapper.graph.random_destinations(1, Direction::N),
+        &[2, 4],
+        "a second live destination joins the first, in first-seen order"
+    );
+    assert_eq!(
+        mapper::matrix::classify(&mapper.graph, 1, Direction::N),
+        mapper::matrix::MatrixCell::Random { destinations: 2 },
+        "and the matrix count follows"
     );
 }
 
@@ -443,11 +469,20 @@ fn lost_pig_tunnels_are_one_room_whose_name_rerolls_as_random_exits_and_phase_2_
 
     // Every rename-loop direction walked above reads as `?` ("destination varies"), not `↩`
     // ("leads back here") — and no self-loop connection was minted for #183 at all.
+    //
+    // SQ-1261: and every one of those marks carries an EMPTY destination set. A rename-loop's
+    // "destination" is the room the player is already standing in — there is nothing to name,
+    // unlike an ordinary random-exit walk that lands somewhere else — so `random_destinations`
+    // must never smuggle the tunnel room itself in as though it were a real destination.
     for dir in [Direction::E, Direction::W, Direction::N, Direction::S] {
         assert_eq!(
             mapper::matrix::classify(&p.mapper.graph, twisty, dir),
-            mapper::matrix::MatrixCell::Random,
+            mapper::matrix::MatrixCell::Random { destinations: 0 },
             "{dir:?}: a rename-loop reads as `destination varies`, not `leads back here`"
+        );
+        assert!(
+            p.mapper.graph.random_destinations(twisty, dir).is_empty(),
+            "{dir:?}: a rename-loop records no destination — the room never actually changed"
         );
     }
     assert!(
@@ -455,6 +490,19 @@ fn lost_pig_tunnels_are_one_room_whose_name_rerolls_as_random_exits_and_phase_2_
         "no self-loop connection exists for the tunnel room: {:?}",
         p.mapper.graph.connections()
     );
+
+    // And the drawn box agrees: every rename-loop direction is a bare `?` stub (no destinations
+    // recorded to count), never an exit arrow — same fact, read off the render layer this time.
+    let rm = mapper::render::render(&p.mapper.graph);
+    let twisty_room = rm.rooms.iter().find(|r| r.id == twisty).expect("the tunnel room is placed");
+    for dir in [Direction::E, Direction::W, Direction::N, Direction::S] {
+        assert_eq!(
+            twisty_room.random_stubs.iter().find(|(d, _)| *d == dir).map(|(_, count)| *count),
+            Some(0),
+            "{dir:?}: the box draws a bare `?` stub, not an exit arrow: {:?}",
+            twisty_room.random_stubs
+        );
+    }
 }
 
 /// The seam's own reseed derivation never repeats the input seed and never repeats itself between

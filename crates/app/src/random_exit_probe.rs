@@ -208,6 +208,30 @@ fn judge(run: &crate::probe::ProbeRun, live_dest: RoomId) -> (bool, bool) {
     (any_evidence, any_disagree)
 }
 
+/// Note every room a disagreeing shadow run actually landed in, plus the live destination itself
+/// (SQ-1261) — disagreement is exactly the moment this module proves the story's destination
+/// varies, and every room named in that proof (the live landing AND each shadow attempt that
+/// reached somewhere) is a real destination the room card and the map should be able to name,
+/// not just the fact that it varies. A step with no usable evidence (quit, escaped, or no
+/// location) says nothing and is skipped, same as [`judge`].
+fn note_disagreeing_destinations(
+    mapper: &mut Mapper,
+    origin: RoomId,
+    dir: Direction,
+    live_dest: RoomId,
+    run: &crate::probe::ProbeRun,
+) {
+    mapper.graph.note_random_destination(origin, dir, live_dest);
+    for step in &run.steps {
+        if step.quit || step.escaped {
+            continue;
+        }
+        if let Some(loc) = step.location {
+            mapper.graph.note_random_destination(origin, dir, loc);
+        }
+    }
+}
+
 /// A first walk of an `Absent`/`Code` direction: `apply_turn` already minted the edge being
 /// judged. Disagreement deletes it and marks the direction random; agreement (or no evidence)
 /// leaves it standing.
@@ -233,6 +257,10 @@ fn deliver_first_walk(mapper: &mut Mapper, search: &RandomExitSearch, run: &crat
     }
     mapper.graph.remove_connection(search.origin, search.dir);
     mapper.record_random_exit(search.origin, search.dir);
+    // SQ-1261: this is the FIRST evidence the direction is random at all, so nothing about it
+    // has been noted yet — not by `apply_turn` (which minted the now-deleted edge on the belief
+    // this was an ordinary passage) and not by an earlier disagreement (there isn't one).
+    note_disagreeing_destinations(mapper, search.origin, search.dir, search.live_dest, run);
     true
 }
 
@@ -246,8 +274,17 @@ fn deliver_upgrade(mapper: &mut Mapper, search: &RandomExitSearch, run: &crate::
         return false; // no longer marked; this answer is about a question nobody is asking
     }
     let (any_evidence, any_disagree) = judge(run, search.live_dest);
-    if !any_evidence || any_disagree {
-        return false; // no usable evidence, or at least one attempt still disagreed — stay marked
+    if !any_evidence {
+        return false; // nothing usable either way — stay marked
+    }
+    if any_disagree {
+        // SQ-1261: `apply_turn`'s own re-walk of an already-marked direction already noted
+        // `live_dest` (the walk that armed this very search), so this adds only what the SHADOW
+        // attempts saw that the live walk did not — still worth recording, even though the
+        // upgrade itself does not go through: disagreement here is fresh evidence the direction
+        // keeps varying, not proof of nothing.
+        note_disagreeing_destinations(mapper, search.origin, search.dir, search.live_dest, run);
+        return false; // at least one attempt disagreed — stay marked
     }
     let passage = ProbedPassage { from: search.origin, dir: search.dir, to: search.live_dest };
     if mapper.record_probed_passage(passage) {
@@ -327,6 +364,8 @@ mod tests {
         apply_turn(&mut mapper, "north", &TurnResult::observation(snap(2, "A")), &mut death);
         assert_eq!(mapper.graph.connections().iter().find(|c| c.origin == 1 && c.dir == Direction::N), None);
         assert!(mapper.graph.is_random_exit(1, Direction::N), "still marked — nothing decided yet");
+        // SQ-1261: the live re-walk itself is evidence of where the story sends the player.
+        assert_eq!(mapper.graph.random_destinations(1, Direction::N), &[2]);
 
         // ── 2: Phase 2 re-probe agrees on both attempts. Upgrade. ──
         let mut state = AppState::default();
@@ -340,6 +379,9 @@ mod tests {
             Some(2),
             "and the confirmed edge exists, to the right destination"
         );
+        // SQ-1261: the upgrade-agreement path notes nothing new (there is no "random" fact left
+        // to attach it to) and clears what was recorded before, along with the mark itself.
+        assert!(mapper.graph.random_destinations(1, Direction::N).is_empty(), "cleared with the mark");
 
         // Walk back to room 1 (an unrelated move — `observe_relocation` after step 1 left
         // `current` on room 2, and the player has to be standing in room 1 again before "walk
@@ -367,6 +409,13 @@ mod tests {
             "the wrong edge is gone"
         );
         assert!(mapper.graph.is_random_exit(1, Direction::N), "and the direction is random once more");
+        // SQ-1261: the first-walk disagreement names the live destination AND every shadow
+        // attempt that reached somewhere — the player's own eyes plus both reseeded witnesses.
+        assert_eq!(
+            mapper.graph.random_destinations(1, Direction::N),
+            &[3, 2, 4],
+            "live destination first, then each shadow attempt, first-seen order"
+        );
     }
 
     /// Falsify the upgrade half in isolation: with no usable evidence at all, `deliver` must
@@ -392,5 +441,32 @@ mod tests {
         assert!(!deliver(&mut state, &mut mapper, &test_answer(1, Some(run))), "nothing to report");
         assert!(mapper.graph.is_random_exit(1, Direction::N), "still marked");
         assert_eq!(mapper.graph.connections().iter().find(|c| c.origin == 1 && c.dir == Direction::N), None);
+        // SQ-1261: no usable evidence either way means no destination is worth recording either —
+        // an inconclusive answer must not silently smuggle a room into the list.
+        assert!(mapper.graph.random_destinations(1, Direction::N).is_empty());
+    }
+
+    /// SQ-1261: an UPGRADE search's disagreement is still fresh evidence — it does not clear the
+    /// mark (the upgrade did not happen), but it must still name every room the disagreement
+    /// actually surfaced, exactly as a first-walk disagreement does.
+    #[test]
+    fn an_upgrade_disagreement_still_notes_the_destinations_it_saw() {
+        let mut mapper = Mapper::default();
+        let mut death = DeathWatch::default();
+        apply_turn(&mut mapper, "", &TurnResult::observation(snap(1, "Tunnel")), &mut death);
+        mapper.record_random_exit(1, Direction::N);
+
+        let mut state = AppState::default();
+        state.random_exit_search =
+            Some(RandomExitSearch { origin: 1, dir: Direction::N, live_dest: 2, was_random: true, token: 3 });
+        // One attempt agrees (2), the other disagrees (5) — any disagreement keeps the mark.
+        let run = ProbeRun { baseline: WorldPrint::default(), steps: vec![step(Some(2)), step(Some(5))] };
+        assert!(!deliver(&mut state, &mut mapper, &test_answer(3, Some(run))), "no upgrade — still disagreement");
+        assert!(mapper.graph.is_random_exit(1, Direction::N), "the mark stands");
+        assert_eq!(
+            mapper.graph.random_destinations(1, Direction::N),
+            &[2, 5],
+            "the live destination and the disagreeing shadow attempt are both recorded"
+        );
     }
 }

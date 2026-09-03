@@ -78,6 +78,7 @@ Every themeable `style.toml` selector: which role or selector it derives from, a
 | `map.room_current` | Map | Style | `accent` |  | |
 | `map.room_selected` | Map | Style | `accent` | `reversed` | |
 | `map.room_alias_marker` | Map | Style | `muted` |  | |
+| `map.room_random_stub` | Map | Style | `alert` |  | |
 | `map.connector` | Map | Style | `accent` |  | |
 | `map.connector_distorted` | Map | Style |  | `fg=Magenta` | |
 | `map.connector_portal` | Map | Style | `accent` |  | |

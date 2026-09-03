@@ -151,6 +151,31 @@ pub fn render_dump(graph: &MapGraph, symbols: &SymbolSet) -> String {
             format!("  aka={:?}", r.aliases)
         };
 
+        // Every `?` random-exit direction (SQ-1261), with the distinct rooms it has actually
+        // been seen to land in, by id and name — the same evidence the room card and the
+        // matrix's superscript count draw from, so a dump can be cross-checked against either.
+        let random = if r.random_exits.is_empty() {
+            String::new()
+        } else {
+            let dirs: Vec<String> = r
+                .random_exits
+                .iter()
+                .map(|&d| {
+                    let dests: Vec<String> = graph
+                        .random_destinations(r.id, d)
+                        .iter()
+                        .map(|&id| {
+                            let name =
+                                graph.room(id).map(|rr| rr.label().to_string()).unwrap_or_default();
+                            format!("#{id} {name:?}")
+                        })
+                        .collect();
+                    format!("{}→({})", dir_str(d), dests.join(", "))
+                })
+                .collect();
+            format!("  random=[{}]", dirs.join(", "))
+        };
+
         // Build align= annotation.
         let mut align_parts: Vec<String> = Vec::new();
         if let Some(&cid) = chains.ew.get(&r.id) {
@@ -187,8 +212,8 @@ pub fn render_dump(graph: &MapGraph, symbols: &SymbolSet) -> String {
             String::new()
         };
         out.push_str(&format!(
-            "ROOM {} {:?} pos={}{}{} align={}{}{}\n",
-            r.id, r.label(), pos, notes, aka, align, dropped_str, layer_str
+            "ROOM {} {:?} pos={}{}{}{} align={}{}{}\n",
+            r.id, r.label(), pos, notes, aka, random, align, dropped_str, layer_str
         ));
     }
 
@@ -341,6 +366,33 @@ mod tests {
         let plain_room_line =
             dump.lines().find(|l| l.starts_with("ROOM 2 ")).expect("room 2's line");
         assert!(!plain_room_line.contains("aka="), "an unrenamed room carries no aka= at all: {plain_room_line}");
+    }
+
+    /// SQ-1261: a `?` random exit carries the rooms it has actually landed in on the ROOM line
+    /// as `random=[...]`, by id and name — so an exported map keeps the same evidence the room
+    /// card and the matrix's superscript count show. A room with no random exit carries no
+    /// `random=` segment at all.
+    #[test]
+    fn dump_room_line_carries_random_destinations_only_when_recorded() {
+        let mut m = Mapper::default();
+        m.observe(1, "Windy Cave", None);
+        m.observe(2, "Plain Room", None); // never marked
+        assert!(m.record_random_exit(1, Direction::N));
+        m.graph.note_random_destination(1, Direction::N, 2);
+        let dump = render_dump(&m.graph, &SymbolSet::default());
+
+        let random_room_line =
+            dump.lines().find(|l| l.starts_with("ROOM 1 ")).expect("room 1's line");
+        assert!(
+            random_room_line.contains(r#"random=[N→(#2 "Plain Room")]"#),
+            "the marked direction names its recorded destination by id and name: {random_room_line}"
+        );
+        let plain_room_line =
+            dump.lines().find(|l| l.starts_with("ROOM 2 ")).expect("room 2's line");
+        assert!(
+            !plain_room_line.contains("random="),
+            "a room with no random exit carries no random= at all: {plain_room_line}"
+        );
     }
 
     #[test]

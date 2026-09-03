@@ -49,6 +49,8 @@ fn card_detail(
     graph: &MapGraph,
     labels: &mapper::matrix::MatrixLabels,
     layer: mapper::layer::LayerId,
+    room_id: RoomId,
+    dir: Direction,
     cell: mapper::matrix::MatrixCell,
 ) -> (&'static str, String) {
     use mapper::matrix::MatrixCell as C;
@@ -68,7 +70,20 @@ fn card_detail(
         }
         C::Probed => ("×", "tried, no way through".to_string()),
         C::Untried => ("·", String::new()),
-        C::Random => ("?", "destination varies".to_string()),
+        C::Random { .. } => {
+            // Every distinct room this direction has actually been seen to land in (SQ-1261),
+            // named the same way every other cell here names a destination — falling back to
+            // `#id` for a room a shadow probe saw but the player never did, which has no row to
+            // number it with. Empty when nothing has been recorded yet, or when this move's
+            // record predates SQ-1261.
+            let dests = graph.random_destinations(room_id, dir);
+            if dests.is_empty() {
+                ("?", "destination varies".to_string())
+            } else {
+                let names: Vec<String> = dests.iter().map(|&id| name(id)).collect();
+                ("?", format!("destination varies: {}", names.join(", ")))
+            }
+        }
     }
 }
 
@@ -233,7 +248,7 @@ pub fn draw_room_info_body(
         .iter()
         .map(|&d| {
             let (glyph, detail) =
-                card_detail(graph, &labels, layer, mapper::matrix::classify(graph, room_id, d));
+                card_detail(graph, &labels, layer, room_id, d, mapper::matrix::classify(graph, room_id, d));
             (d, glyph, detail)
         })
         .collect();
@@ -609,6 +624,48 @@ mod tests {
         let (g, room1, _) = make_graph_with_rooms();
         let text = render_body(&g, &[], room1, None, 60, 20);
         assert!(!text.contains("Also seen as"), "no aliases, so no line:\n{text}");
+    }
+
+    /// SQ-1261: a random exit with no recorded destinations yet reads exactly as it always has
+    /// — "destination varies", naming nothing.
+    #[test]
+    fn room_info_random_exit_with_no_recorded_destinations_names_none() {
+        let (mut g, room1, _) = make_graph_with_rooms();
+        g.mark_random_exit(room1, mapper::direction::Direction::N);
+        let text = render_body(&g, &[], room1, None, 60, 20);
+        assert!(text.contains("destination varies"), "the card still says the destination varies:\n{text}");
+        assert!(!text.contains("destination varies:"), "…but names nothing when nothing is recorded:\n{text}");
+    }
+
+    /// The companion case: once destinations have been recorded, the card names them — by the
+    /// same room-name rules every other exit-card destination follows — in first-seen order.
+    #[test]
+    fn room_info_random_exit_names_its_recorded_destinations() {
+        let (mut g, room1, _) = make_graph_with_rooms();
+        g.upsert_room(3, "Windy Cave".into());
+        g.mark_random_exit(room1, mapper::direction::Direction::N);
+        g.note_random_destination(room1, mapper::direction::Direction::N, 2); // Forest Path
+        g.note_random_destination(room1, mapper::direction::Direction::N, 3); // Windy Cave
+        let text = render_body(&g, &[], room1, None, 60, 20);
+        assert!(
+            text.contains("destination varies: Forest Path, Windy Cave"),
+            "both recorded destinations appear, in first-seen order:\n{text}"
+        );
+    }
+
+    /// A destination a shadow probe saw but the player never has no room in the graph to name it
+    /// from — the card falls back to `#id`, the same fallback every other destination lookup here
+    /// uses, rather than panicking or silently dropping it.
+    #[test]
+    fn room_info_random_exit_falls_back_to_bare_id_for_an_unknown_destination() {
+        let (mut g, room1, _) = make_graph_with_rooms();
+        g.mark_random_exit(room1, mapper::direction::Direction::N);
+        g.note_random_destination(room1, mapper::direction::Direction::N, 404); // no such room
+        let text = render_body(&g, &[], room1, None, 60, 20);
+        assert!(
+            text.contains("destination varies: #404"),
+            "an unmapped destination falls back to its bare id:\n{text}"
+        );
     }
 
     #[test]

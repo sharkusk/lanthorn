@@ -349,6 +349,10 @@ pub static REGISTRY: std::sync::LazyLock<Vec<RegRow>> = std::sync::LazyLock::new
     // as `map.loc_indicator`: a small footnote, not something competing with the label for the
     // eye.
     row("map.room_alias_marker", Section::Map, Kind::Style, Some("muted"), Delta::EMPTY),
+    // The `?` random-exit stub on a room box's border/corner (SQ-1261) — the same fact
+    // `map.matrix.cell:random` marks in the table, so it shares that selector's `alert` role
+    // rather than inventing a second colour for one idea.
+    row("map.room_random_stub", Section::Map, Kind::Style, Some("alert"), Delta::EMPTY),
     row("map.connector", Section::Map, Kind::Style, Some("accent"), Delta::EMPTY),
     // `distorted` (magenta) has no matching role — kept explicit (a distinctive marker).
     row("map.connector_distorted", Section::Map, Kind::Style, None, fg(Color::Magenta)),
@@ -738,6 +742,7 @@ mod tests {
         "map.room_current",
         "map.room_selected",
         "map.room_alias_marker",
+        "map.room_random_stub",
         "map.connector",
         "map.connector_distorted",
         "map.connector_portal",

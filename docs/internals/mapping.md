@@ -483,6 +483,21 @@ card, the same "destination varies" mark a declared-exit mismatch draws, because
 direction whose destination will not even hold still on a NAME is not honestly a
 "leads back here" either.
 
+**A `?` direction remembers where it has actually sent you.** The mark itself only
+ever answered "does this direction vary?" — the room card said "destination
+varies" and nothing more, however many times you had walked it. Now every distinct
+room a `?` direction has actually landed you in gets named: the room card lists
+them ("destination varies: Windy Cave, Twisty Passage"), the matrix cell grows a
+small superscript count (`?²`), and the box draws a one-cell stub in that
+direction — on the border for a compass direction, at the corner for a diagonal —
+showing the same count, or a bare `?` when nothing has been recorded yet. Nothing
+is drawn beyond the stub: the whole point of the mark is that there is nowhere
+stable to draw a line to. The stub has its own style selector
+(`map.room_random_stub`, defaulting the same colour as the matrix's `?` cell), and
+`/export-map`'s dump lists the recorded destinations on the `ROOM` line
+(`random=[N→(#187 "Probably New Tunnel"), …]`) beside everything else it already
+records about a room.
+
 ## Finding the way back, without guessing it
 
 A map built from your moves learns a passage one direction at a time. Walk north
