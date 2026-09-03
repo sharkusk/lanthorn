@@ -45,7 +45,10 @@
 //   - v8 and v7 stories use the same heuristic as v4+ for location.
 
 use crate::cpu::exec::Machine;
-use crate::objects::{entries_base, entry_size, get_parent, object_snapshot, prop_table_ptr_offset, short_name, ObjectSnapshot};
+use crate::objects::{
+    entries_base, entry_size, get_parent, object_snapshot, prop_table_ptr_offset, short_name,
+    ObjectSnapshot, ParseNames,
+};
 use crate::screen::{UpperWindow, V6Cell};
 
 /// Normalize for matching/hashing: trim, collapse whitespace, lowercase.
@@ -486,10 +489,13 @@ pub fn v6_status_room_candidates(machine: &Machine) -> Vec<String> {
 ///    None rather than inventing a room.
 fn detect_location_v6(machine: &Machine) -> Option<Location> {
     let cands = v6_status_candidates(machine);
-    // 1. PlayerParent across all candidates. The avatar set does not depend on
-    //    the candidate, and `player_candidates` walks the whole object table
-    //    decoding every short name — hoist it out of the loop (SQ-1183).
-    let players = player_candidates(machine);
+    // The avatar set does not depend on the candidate, and `player_candidates`
+    // walks the whole object table decoding every short name (and, since
+    // SQ-1259, every parse-name property) — hoist both it and its `ParseNames`
+    // reader out of the loop (SQ-1183).
+    let parse_names = ParseNames::detect(&machine.mem);
+    // 1. PlayerParent across all candidates.
+    let players = player_candidates(machine, parse_names.as_ref());
     for cand in &cands {
         for &player in &players {
             if let Some(room) = nearest_matching_ancestor(machine, player, &cand.name) {
@@ -669,30 +675,40 @@ pub fn status_name_matches(candidate: &str, short: &str) -> bool {
 /// `detect_location` already performs to name the room in the first place — so
 /// reuse it rather than inventing a second, weaker rule.
 ///
-/// Falls back to the old situated-then-lowest order when the room is unknown
-/// (title screen, menu, undetectable status line) or no candidate reaches it
-/// (e.g. an avatar not parented to its room, Shogun-style).
+/// Mirrors `gvm::objects::ParseNames::find_player`'s rule exactly, because it
+/// is the same problem with the same trap (see that function's doc comment):
+/// among several candidates, prefer the SITUATED ones (non-zero parent —
+/// Inform parks its off-stage doubles at the top level, and a player stands
+/// somewhere); one survivor needs no further discrimination; otherwise the
+/// avatar is the candidate whose containment chain reaches the room
+/// `detect_location` itself confirms.
+///
+/// **And where that cannot settle it, the answer is `None` — there is no
+/// "first plausible candidate" fallback**, because a wrong avatar is worse
+/// than no avatar: its children become an inventory the player is told they
+/// are carrying. This never returns an unsituated candidate when a situated
+/// one exists, and never returns a candidate that fails the room test when
+/// the room is known.
 ///
 /// Not recursive: `detect_location` discriminates avatars with
 /// `player_candidates` + `nearest_matching_ancestor` directly and never calls
 /// back into this function. Keep it that way.
 pub fn find_player_object(machine: &Machine) -> Option<u16> {
-    let cands = player_candidates(machine);
+    let parse_names = ParseNames::detect(&machine.mem);
+    let cands = player_candidates(machine, parse_names.as_ref());
     // One candidate needs no discrimination — and skipping `detect_location`
     // keeps the common case (most Inform games, minizork) as cheap as it was.
     if cands.len() < 2 {
         return cands.first().copied();
     }
-    if let Some(room) = detect_location(machine).and_then(|l| l.object().map(|o| o.number)) {
-        if let Some(&obj) = cands.iter().find(|&&obj| has_ancestor(machine, obj, room)) {
-            return Some(obj);
-        }
+    let situated: Vec<u16> =
+        cands.iter().copied().filter(|&obj| get_parent(&machine.mem, obj) != 0).collect();
+    let pool: &[u16] = if situated.is_empty() { &cands } else { &situated };
+    if pool.len() < 2 {
+        return pool.first().copied();
     }
-    cands
-        .iter()
-        .copied()
-        .find(|&obj| get_parent(&machine.mem, obj) != 0)
-        .or_else(|| cands.first().copied())
+    let room = detect_location(machine).and_then(|l| l.object().map(|o| o.number));
+    pool.iter().copied().find(|&obj| room.is_some_and(|r| has_ancestor(machine, obj, r)))
 }
 
 /// True when `ancestor` is a strict ancestor of `start` in the object tree.
@@ -736,15 +752,79 @@ fn has_ancestor(machine: &Machine, start: u16, ancestor: u16) -> bool {
 const PLAYER_NAMES: [&str; 9] =
     ["yourself", "you", "me", "myself", "self", "cretin", "adventurer", "player", "(self object)"];
 
-/// All objects whose short name plausibly denotes the player avatar, in ascending
-/// object order. `detect_location` validates each against the status-line room.
-fn player_candidates(machine: &Machine) -> Vec<u16> {
+/// Parse-name WORDS (as opposed to PRINTED short names) that plausibly denote
+/// the player avatar, matched via [`ParseNames::of`]/`ObjectWords::refers_to`
+/// against every object's `name` array — mirroring
+/// `gvm::objects::ParseNames::find_player`'s `PLAYER_WORDS`, which solves the
+/// identical problem on Glulx.
+///
+/// This is what finds an avatar with no avatar-ish PRINTED name at all. Lost
+/// Pig's Grunk (#87) prints "Grunk", nothing in [`PLAYER_NAMES`] — the game
+/// never uses Inform's `selfobj`, so `(self object)` (#20, present but
+/// parentless) is a decoy — and the only signal that #87 is the avatar is
+/// that its parse words are `["grunk", "green", "orc", "me"]` (SQ-1259). Both
+/// standard libraries put one of these words on their avatar: Inform 6's
+/// `selfobj` carries `'me' 'myself' 'self'`, and Inform 7's Standard Rules
+/// `Understand "yourself" or "myself" or "self" as yourself`.
+///
+/// gvm's own list drops `me`/`you`/`player` as too noisy for parse-word
+/// matching alone (measured on `CounterfeitMonkey-11.gblorb`: they pull in
+/// conversation quips like "what he thinks of you"). This list keeps `me`
+/// anyway, because Lost Pig needs exactly that word and both consumers here
+/// — `detect_location` and `find_player_object` — validate every candidate
+/// against the room before trusting it (see [`PLAYER_NAMES`]'s doc comment):
+/// a quip's word array never validates, because a quip is never IN a room.
+const PLAYER_WORDS: [&str; 4] = ["me", "myself", "self", "yourself"];
+
+/// All objects whose short name plausibly denotes the player avatar (see
+/// [`PLAYER_NAMES`]), OR whose parse words include one of [`PLAYER_WORDS`], in
+/// ascending object order. `detect_location` validates each against the
+/// status-line room; `find_player_object` validates each against the room the
+/// object tree itself confirms.
+///
+/// `parse_names` is the caller's own [`ParseNames::detect`] reader — building
+/// one walks every object's property table, so every top-level caller builds
+/// it once and threads it through rather than paying for it again per
+/// candidate list.
+fn player_candidates(machine: &Machine, parse_names: Option<&ParseNames>) -> Vec<u16> {
     let n = max_object_number(&machine.mem);
     (1..=n)
         .filter(|&obj| {
             let nm = normalize_name(&short_name(&machine.mem, obj));
-            PLAYER_NAMES.contains(&nm.as_str())
+            if PLAYER_NAMES.contains(&nm.as_str()) {
+                return true;
+            }
+            parse_names
+                .and_then(|pn| pn.of(&machine.mem, obj))
+                .is_some_and(|words| PLAYER_WORDS.iter().any(|w| words.refers_to(w)))
         })
+        .collect()
+}
+
+/// The narrower, short-name-only half of [`player_candidates`] — [`PLAYER_NAMES`]
+/// alone, none of [`PLAYER_WORDS`]. The one caller that needs it is
+/// [`player_room_beside`], whose own heuristic carries no name check at all
+/// (it trusts "shares the shown room's PARENT", nothing about the candidate's
+/// own name or words) — so a candidate admitted only by a parse word is a much
+/// weaker bet there than everywhere else `player_candidates` is used, where a
+/// widened candidate still has to pass a real name match
+/// ([`nearest_matching_ancestor`]) or an exact ancestor-reaches-the-room test
+/// ([`find_player_object`]).
+///
+/// Nord and Bert — a game built entirely out of wordplay jokes — is why this
+/// matters concretely (SQ-1259). Widening turned up object #89: printed name
+/// EMPTY, admitted only because its parse words include "myself" (some `x
+/// myself` joke, unrelated to the avatar), parented under #92 "Jean Stock".
+/// Fed into `player_room_beside`'s loose test, #89's parent #92 shares its
+/// OWN parent with the real hub room "Beginning" (both sit in the `it`
+/// globals pseudo-container) — so the heuristic reported "Jean Stock" as the
+/// room the status line names "Beginning". Restricting this one caller back
+/// to the short-name-only pool is what keeps a joke object out of it, without
+/// giving up the widening everywhere the widening is actually safe.
+fn player_candidates_by_name(machine: &Machine) -> Vec<u16> {
+    let n = max_object_number(&machine.mem);
+    (1..=n)
+        .filter(|&obj| PLAYER_NAMES.contains(&normalize_name(&short_name(&machine.mem, obj)).as_str()))
         .collect()
 }
 
@@ -784,7 +864,7 @@ fn nearest_matching_ancestor(machine: &Machine, start: u16, name: &str) -> Optio
 /// container, while `cretin` does.
 fn player_room_beside(machine: &Machine, shown: &ObjectSnapshot) -> Option<ObjectSnapshot> {
     let mem = &machine.mem;
-    for player in player_candidates(machine) {
+    for player in player_candidates_by_name(machine) {
         let mut cur = get_parent(mem, player);
         for _ in 0..32 {
             // Depth-bounded like `nearest_matching_ancestor`, to tolerate cycles.
@@ -800,22 +880,56 @@ fn player_room_beside(machine: &Machine, shown: &ObjectSnapshot) -> Option<Objec
     None
 }
 
-/// The object whose short name matches `name` (longest match wins; ties -> lowest
-/// number), or None.
+/// The object the status line's `name` most likely refers to, or `None` if
+/// nothing matches.
+///
+/// A short name is not unique, and picking the wrong owner of it reports the
+/// WRONG room even though the right one is right there in the tree. Lost
+/// Pig's "Outside" is two objects at once: the room (#93, parent 0) and a
+/// compass direction (#18, a child of #6 "compass", whose own short name is
+/// also "outside") — the old rule (longest match, ties -> lowest number)
+/// picked #18, the direction, every time (SQ-1259).
+///
+/// Resolved in order, applied only where more than one object matches:
+/// 1. The game's own `location` global, read the same way
+///    [`current_location`] reads it — see that function's doc comment for why
+///    it is trusted only NAME-VALIDATED like this, never on its own. If it
+///    names one of the matches, that object is the room: it is the game's own
+///    answer to "where is the player", not a guess from a name.
+/// 2. A room is a top-level object (parent 0); a compass direction sits
+///    inside the DIRECTIONS/compass object and a conversation topic inside a
+///    topics bag. Prefer parent-0 matches over those.
+/// 3. Longest match wins; ties -> lowest object number (the original rule,
+///    unchanged, and the only rule most games ever need).
 fn resolve_room_object(machine: &Machine, name: &str) -> Option<ObjectSnapshot> {
     let mem = &machine.mem;
     let n = max_object_number(mem);
-    let mut best: Option<(usize, u16)> = None; // (normalized short-name length, object)
+    let mut matches: Vec<(usize, u16)> = Vec::new(); // (normalized short-name length, object)
     for obj in 1..=n {
         let sn = short_name(mem, obj);
         if status_name_matches(name, &sn) {
-            let len = normalize_name(&sn).len();
-            if best.is_none_or(|(blen, _)| len > blen) {
-                best = Some((len, obj));
-            }
+            matches.push((normalize_name(&sn).len(), obj));
         }
     }
-    best.map(|(_, obj)| object_snapshot(mem, obj))
+    if matches.len() > 1 {
+        // (1) The game's own `location` global.
+        if let Some(global_room) = current_location(machine) {
+            if matches.iter().any(|&(_, obj)| obj == global_room.number) {
+                return Some(global_room);
+            }
+        }
+        // (2) Prefer a top-level object — a room — over a direction or topic.
+        let top_level: Vec<(usize, u16)> =
+            matches.iter().copied().filter(|&(_, obj)| get_parent(mem, obj) == 0).collect();
+        if !top_level.is_empty() {
+            matches = top_level;
+        }
+    }
+    // (3) Longest match; ties -> lowest object number.
+    matches
+        .into_iter()
+        .max_by_key(|&(len, obj)| (len, std::cmp::Reverse(obj)))
+        .map(|(_, obj)| object_snapshot(mem, obj))
 }
 
 /// True when some object's short name is `name` with the spaces taken out.
@@ -895,13 +1009,16 @@ pub fn detect_location(machine: &Machine) -> Option<Location> {
     if machine.screen.v6.is_some() {
         return detect_location_v6(machine);
     }
+    // Built once and threaded through every candidate lookup below — see
+    // `player_candidates`'s doc comment for why (SQ-1183/SQ-1259).
+    let parse_names = ParseNames::detect(&machine.mem);
     if let Some(name) = status_line_room_name(&machine.screen.upper, machine.screen.upper_window_rows) {
         // Prefer the avatar whose ancestor chain validates against the status-line
         // room name. Trying every plausible player object (and using the first whose
         // parent chain reaches the shown room) distinguishes same-named rooms that a
         // name-only match would collapse — e.g. Zork's several "Forest" rooms — and
         // rejects decorative "you"/"self" objects whose parent never tracks the player.
-        for player in player_candidates(machine) {
+        for player in player_candidates(machine, parse_names.as_ref()) {
             if let Some(room) = nearest_matching_ancestor(machine, player, &name) {
                 return Some(Location::PlayerParent(room));
             }
@@ -946,7 +1063,7 @@ pub fn detect_location(machine: &Machine) -> Option<Location> {
     if let Some(name) =
         centered_status_line_room_name(&machine.screen.upper, machine.screen.upper_window_rows)
     {
-        for player in player_candidates(machine) {
+        for player in player_candidates(machine, parse_names.as_ref()) {
             if let Some(room) = nearest_matching_ancestor(machine, player, &name) {
                 return Some(Location::PlayerParent(room));
             }
@@ -958,7 +1075,15 @@ pub fn detect_location(machine: &Machine) -> Option<Location> {
 /// Returns the object representing the player's current location, or `None` if
 /// the heuristic cannot determine a plausible location.
 ///
-/// See module-level docs for the version-specific strategy.
+/// See module-level docs for the version-specific strategy. Also used by
+/// [`resolve_room_object`] on v4+ stories — global 0 keeps naming *something*
+/// on those (Inform's `location` variable most often, ZIL's less reliably),
+/// and that function reads it purely as a disambiguator: it decides between
+/// several SAME-NAME objects only when this snapshot's object number is
+/// already one of them, so a global that names something unrelated on a ZIL
+/// v4/v5 game (Trinity, AMFV, Bureaucracy) simply never matches and is
+/// ignored. Nothing here extends v4+'s PRIMARY location signal to global 0 —
+/// that stays PlayerParent/StatusName/NameOnly, exactly as before.
 pub fn current_location(machine: &Machine) -> Option<ObjectSnapshot> {
     let mem = &machine.mem;
     // Global variable 0 is at address `global_vars + 0` (var 0x10 maps to
@@ -1185,6 +1310,17 @@ mod tests {
     fn find_player_object_finds_player_in_minizork() {
         // Real-game check: minizork's player object is #30, short name "you".
         // This is what makes the inventory panel's name-based player lookup reliable.
+        //
+        // Boots to the first read prompt (like every other real-game test in
+        // this module) rather than asking on the raw, un-executed image.
+        // Minizork's compiled object table starts BOTH "you" (#30) and a
+        // second parse-word candidate, "brave adventurer" (#13, a rank-message
+        // object whose words include "me"/"myself"/"self" — SQ-1259 widened
+        // matching to parse words, which is what makes #13 a candidate at
+        // all), unsituated at parent 0; only the init routine places #30 into
+        // West of House. Asking before that ran would make #13 look like the
+        // sole situated candidate and win by default — a fixture artifact
+        // that would never happen once a game is actually playable.
         let fixture = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("tests/fixtures/minizork.z3");
         if !fixture.exists() {
@@ -1192,7 +1328,17 @@ mod tests {
             return;
         }
         let data = std::fs::read(&fixture).expect("read minizork.z3");
-        let machine = make_machine(data);
+        let mut machine = make_machine(data);
+        machine.init_caps();
+        for _ in 0..100_000u64 {
+            match machine.step() {
+                StepResult::NeedLine { .. } | StepResult::Quit | StepResult::Restart | StepResult::Fault => break,
+                StepResult::NeedChar => { machine.supply_char(b'\n'); }
+                StepResult::SaveRequest => { machine.complete_save(false); }
+                StepResult::RestoreRequest => { machine.complete_restore_failure(); }
+                StepResult::Continue => {}
+            }
+        }
         assert_eq!(find_player_object(&machine), Some(30), "minizork player object is #30 (\"you\")");
     }
 
@@ -1202,6 +1348,256 @@ mod tests {
         let r = resolve_room_object(&machine, "hall").expect("hall resolves");
         assert_eq!(r.number, 3);
         assert!(resolve_room_object(&machine, "nowhere").is_none());
+    }
+
+    /// Writes a v5 object's name-only property table at `ptbl`: length byte,
+    /// the fixed-width encoded name, then the end-of-properties terminator.
+    fn write_v5_name_only(buf: &mut [u8], ptbl: usize, text: &str) {
+        let nm = crate::text::encode::encode_word(text, 5);
+        buf[ptbl] = (nm.len() / 2) as u8;
+        buf[ptbl + 1..ptbl + 1 + nm.len()].copy_from_slice(&nm);
+        buf[ptbl + 1 + nm.len()] = 0x00;
+    }
+
+    // ── SQ-1259: resolve_room_object must not let a same-named compass
+    // direction (or any other non-room object) outrank the room ─────────────
+
+    #[test]
+    fn resolve_room_object_prefers_the_room_the_global_names() {
+        // Lost Pig shape: two objects share a short name ("outside") — here
+        // BOTH are nested under some other object (parent 5, which need not
+        // exist), so the parent-0 rule below could not disambiguate on its
+        // own — and only the game's own `location` global (rule 1) picks the
+        // right one. The global names the HIGHER-numbered object, so a pass
+        // here proves rule 1 actually fired rather than the old "lowest
+        // number wins" default coincidentally agreeing.
+        let mut buf = sample_story(5);
+        const TBL1: usize = 0x220;
+        const TBL2: usize = 0x240;
+        write_v5_name_only(&mut buf, TBL1, "outside");
+        write_v5_name_only(&mut buf, TBL2, "outside");
+        put_word(&mut buf, v5_entry(1) + 6, 5);
+        put_word(&mut buf, v5_entry(1) + 12, TBL1 as u16);
+        put_word(&mut buf, v5_entry(2) + 6, 5);
+        put_word(&mut buf, v5_entry(2) + 12, TBL2 as u16);
+        put_word(&mut buf, GLOBAL_VARS as usize, 2); // global 0 = object #2
+        let machine = make_machine(buf);
+        let r = resolve_room_object(&machine, "outside").expect("matches both objects");
+        assert_eq!(r.number, 2, "the global-named object wins over the lower-numbered one");
+    }
+
+    #[test]
+    fn resolve_room_object_prefers_a_top_level_room_when_no_global_names_it() {
+        // Same two "outside" objects, but now #1 is nested (standing in for
+        // Lost Pig's #18, a child of the compass) and #2 is top-level
+        // (standing in for #93, the room), and NO global corroborates
+        // either. Rule 2 (prefer parent 0) must pick #2 even though #1 is
+        // numbered lower and the old rule (longest match, ties -> lowest
+        // number) would have picked #1.
+        let mut buf = sample_story(5);
+        const TBL1: usize = 0x220;
+        const TBL2: usize = 0x240;
+        write_v5_name_only(&mut buf, TBL1, "outside");
+        write_v5_name_only(&mut buf, TBL2, "outside");
+        put_word(&mut buf, v5_entry(1) + 6, 5); // #1: nested (a direction)
+        put_word(&mut buf, v5_entry(1) + 12, TBL1 as u16);
+        put_word(&mut buf, v5_entry(2) + 6, 0); // #2: top-level (the room)
+        put_word(&mut buf, v5_entry(2) + 12, TBL2 as u16);
+        // global 0 left at 0 (untouched) — no corroboration.
+        let machine = make_machine(buf);
+        let r = resolve_room_object(&machine, "outside").expect("matches both objects");
+        assert_eq!(
+            r.number, 2,
+            "the top-level object wins over the nested one, even though it is numbered higher"
+        );
+    }
+
+    #[test]
+    fn player_candidates_widen_to_parse_words_and_situated_wins() {
+        // A Lost-Pig-shaped synthetic story: the avatar's printed name is
+        // NOT in PLAYER_NAMES at all ("grunk", standing in for the real
+        // Grunk) — only its PARSE WORDS include "me" — while an unrelated,
+        // UNSITUATED "you" is a decoy that DOES match PLAYER_NAMES by short
+        // name (SQ-1259). Exercises the exact path `find_player_object` runs
+        // in production — including its own internal `ParseNames::detect` —
+        // rather than handing it a pre-built reader, so the story must also
+        // satisfy `detect`'s own heuristics: an Inform-shaped serial number,
+        // and at least `MIN_AGREEING_OBJECTS` (4) objects whose property 1 is
+        // a readable word array. Three filler objects (#4-6, matching neither
+        // PLAYER_NAMES nor PLAYER_WORDS) supply the other three.
+        let mut buf = sample_story(5);
+        // An Inform-shaped serial number (`grammar::detect_format`): six
+        // digits, YYMMDD-plausible, first digit not '8'. Lost Pig's own is
+        // "080406"; reused here for the same reason.
+        buf[0x12..0x18].copy_from_slice(b"080406");
+
+        // ── Dictionary: "me" and a second word for the fillers, at the
+        //    header's default 0x0200. ─────────────────────────────────────
+        const DICT: usize = 0x200;
+        buf[DICT] = 0; // no separators
+        buf[DICT + 1] = 7; // entry_length: 6-byte key + 1 flag byte
+        put_word(&mut buf, DICT + 2, 2); // 2 entries
+        let me = crate::text::encode::encode_word("me", 5);
+        let filler_word = crate::text::encode::encode_word("filler", 5);
+        assert_eq!(me.len(), 6);
+        assert_eq!(filler_word.len(), 6);
+        buf[DICT + 4..DICT + 10].copy_from_slice(&me);
+        buf[DICT + 11..DICT + 17].copy_from_slice(&filler_word);
+        let me_addr = (DICT + 4) as u16;
+        let filler_addr = (DICT + 11) as u16;
+
+        // ── Object property tables ──────────────────────────────────────────
+        const GRUNK_TBL: usize = 0x220;
+        const YOU_TBL: usize = 0x240;
+        const ROOM_TBL: usize = 0x260;
+        const FILLER_TBL: [usize; 3] = [0x280, 0x2A0, 0x2C0];
+        write_v5_name_only(&mut buf, GRUNK_TBL, "grunk");
+        // Property 1 (Inform's `name` array): one word, the dictionary
+        // address of "me". Short form header: bit6 set (2 bytes), number 1.
+        let after_name = GRUNK_TBL + 1 + 6; // name occupies exactly 3 words (fixed width)
+        buf[after_name] = 0x41;
+        put_word(&mut buf, after_name + 1, me_addr);
+        buf[after_name + 3] = 0x00; // terminator
+        write_v5_name_only(&mut buf, YOU_TBL, "you");
+        write_v5_name_only(&mut buf, ROOM_TBL, "room");
+        for (i, &tbl) in FILLER_TBL.iter().enumerate() {
+            write_v5_name_only(&mut buf, tbl, &format!("filler{i}"));
+            let after = tbl + 1 + 6;
+            buf[after] = 0x41; // property 1, one word: "filler"
+            put_word(&mut buf, after + 1, filler_addr);
+            buf[after + 3] = 0x00;
+        }
+
+        // ── Object entries ───────────────────────────────────────────────────
+        put_word(&mut buf, v5_entry(1) + 6, 3); // #1 grunk: situated, in the room
+        put_word(&mut buf, v5_entry(1) + 12, GRUNK_TBL as u16);
+        put_word(&mut buf, v5_entry(2) + 6, 0); // #2 "you": parentless decoy
+        put_word(&mut buf, v5_entry(2) + 12, YOU_TBL as u16);
+        put_word(&mut buf, v5_entry(3) + 6, 0); // #3 room: top-level
+        put_word(&mut buf, v5_entry(3) + 10, 1); // child #1
+        put_word(&mut buf, v5_entry(3) + 12, ROOM_TBL as u16);
+        for (i, &tbl) in FILLER_TBL.iter().enumerate() {
+            let obj = 4 + i as u16;
+            put_word(&mut buf, v5_entry(obj) + 12, tbl as u16);
+        }
+
+        let machine = make_machine(buf);
+        assert_eq!(normalize_name(&short_name(&machine.mem, 1)), "grunk");
+        assert_eq!(normalize_name(&short_name(&machine.mem, 2)), "you");
+        assert_eq!(max_object_number(&machine.mem), 6, "grunk, you, room, and 3 fillers");
+
+        let parse_names =
+            ParseNames::detect(&machine.mem).expect("Inform-shaped, 4 objects agree on property 1");
+        assert_eq!(parse_names.property(), 1);
+        let cands = player_candidates(&machine, Some(&parse_names));
+        assert_eq!(
+            cands,
+            vec![1, 2],
+            "grunk matches via the parse word \"me\"; \"you\" matches via its short name; \
+             the fillers (property 1 = \"filler\") match neither"
+        );
+
+        assert_eq!(
+            find_player_object(&machine),
+            Some(1),
+            "the situated avatar — found only through its parse word — beats the parentless decoy"
+        );
+    }
+
+    #[test]
+    fn player_room_beside_ignores_a_parse_word_only_candidate_with_no_name() {
+        // Nord and Bert Couldn't Make Head or Tail of It (a game built entirely
+        // out of wordplay) is what this reproduces (SQ-1259). Its status line
+        // names a real hub room, "Beginning" (#1 here), but widening
+        // `player_candidates` to parse words turned up an unrelated object
+        // with an EMPTY short name (#4 here — some `x myself` joke, matched
+        // only by the parse word "myself"), parented under a SIBLING object
+        // (#3, "Jean Stock" there) that happens to share the room's own
+        // parent (#5, "it", the globals pseudo-container).
+        //
+        // `player_room_beside`'s heuristic has no name check at all — it
+        // trusts "shares the shown room's parent" — so fed the WIDENED pool
+        // it walks up from the joke object to #3 and reports THAT as the
+        // room, even though #3's own name ("stock") has nothing to do with
+        // "Beginning". Restricting `player_room_beside` to the short-name-only
+        // candidate pool (which excludes the joke object, since its short
+        // name is empty) is what keeps this from firing, and the room falls
+        // through correctly to StatusName(#1) "Beginning" instead.
+        let mut buf = sample_story(5);
+        buf[0x12..0x18].copy_from_slice(b"080406"); // Inform-shaped serial
+
+        const DICT: usize = 0x200;
+        buf[DICT] = 0;
+        buf[DICT + 1] = 7;
+        put_word(&mut buf, DICT + 2, 2);
+        let myself = crate::text::encode::encode_word("myself", 5);
+        let filler_word = crate::text::encode::encode_word("filler", 5);
+        buf[DICT + 4..DICT + 10].copy_from_slice(&myself);
+        buf[DICT + 11..DICT + 17].copy_from_slice(&filler_word);
+        let myself_addr = (DICT + 4) as u16;
+        let filler_addr = (DICT + 11) as u16;
+
+        const ROOM_TBL: usize = 0x220; // #1 "Beginning"
+        const YOURSELF_TBL: usize = 0x240; // #2 "yourself"
+        const SIBLING_TBL: usize = 0x260; // #3 "stock" (the wrong sibling)
+        const JOKE_TBL: usize = 0x280; // #4 "" + property 1 = "myself"
+        const HUB_TBL: usize = 0x2A0; // #5 "it"
+        const FILLER_TBL: [usize; 3] = [0x2C0, 0x2E0, 0x300];
+
+        write_v5_name_only(&mut buf, ROOM_TBL, "beginning");
+        write_v5_name_only(&mut buf, YOURSELF_TBL, "yourself");
+        write_v5_name_only(&mut buf, SIBLING_TBL, "stock");
+        write_v5_name_only(&mut buf, JOKE_TBL, "");
+        let after_joke_name = JOKE_TBL + 1 + 6;
+        buf[after_joke_name] = 0x41;
+        put_word(&mut buf, after_joke_name + 1, myself_addr);
+        buf[after_joke_name + 3] = 0x00;
+        write_v5_name_only(&mut buf, HUB_TBL, "it");
+        for (i, &tbl) in FILLER_TBL.iter().enumerate() {
+            write_v5_name_only(&mut buf, tbl, &format!("filler{i}"));
+            let after = tbl + 1 + 6;
+            buf[after] = 0x41;
+            put_word(&mut buf, after + 1, filler_addr);
+            buf[after + 3] = 0x00;
+        }
+
+        put_word(&mut buf, v5_entry(1) + 6, 5); // #1 room: child of the hub
+        put_word(&mut buf, v5_entry(1) + 12, ROOM_TBL as u16);
+        put_word(&mut buf, v5_entry(2) + 6, 0); // #2 "yourself": parentless
+        put_word(&mut buf, v5_entry(2) + 12, YOURSELF_TBL as u16);
+        put_word(&mut buf, v5_entry(3) + 6, 5); // #3 "stock": ALSO a child of the hub
+        put_word(&mut buf, v5_entry(3) + 12, SIBLING_TBL as u16);
+        put_word(&mut buf, v5_entry(4) + 6, 3); // #4 joke: child of #3
+        put_word(&mut buf, v5_entry(4) + 12, JOKE_TBL as u16);
+        put_word(&mut buf, v5_entry(5) + 6, 0); // #5 hub: top-level
+        put_word(&mut buf, v5_entry(5) + 12, HUB_TBL as u16);
+        for (i, &tbl) in FILLER_TBL.iter().enumerate() {
+            let obj = 6 + i as u16;
+            put_word(&mut buf, v5_entry(obj) + 12, tbl as u16);
+        }
+
+        let mut m = make_machine(buf);
+        m.screen.upper = upper_with(&[" Beginning                                        Score: 0    Moves: 0"]);
+        m.screen.upper_window_rows = 1;
+
+        assert_eq!(normalize_name(&short_name(&m.mem, 4)), "");
+        let parse_names = ParseNames::detect(&m.mem).expect("Inform-shaped, 4 objects agree on property 1");
+        let cands = player_candidates(&m, Some(&parse_names));
+        assert_eq!(cands, vec![2, 4], "\"yourself\" by name; the joke object by its parse word alone");
+        assert_eq!(
+            player_candidates_by_name(&m),
+            vec![2],
+            "the joke object (no printed name) never enters the narrow pool"
+        );
+
+        let loc = detect_location(&m).expect("the status line names a real room");
+        assert_eq!(loc.method(), LocationMethod::StatusName);
+        assert_eq!(
+            loc.object().unwrap().number,
+            1,
+            "must resolve to the room \"Beginning\" (#1), not the unrelated sibling \"stock\" (#3) \
+             that player_room_beside's un-narrowed heuristic would have picked"
+        );
     }
 
     #[test]
@@ -1460,14 +1856,23 @@ mod tests {
     }
 
     #[test]
-    fn find_player_object_falls_back_to_lowest_when_none_situated() {
-        // No candidate is situated (avatar #4 also parentless): fall back to the
-        // lowest-numbered candidate so games without a decorative object are
-        // unaffected (here that is #2 "you", the first player-named object).
+    fn find_player_object_refuses_to_guess_when_none_situated_and_room_unresolved() {
+        // No candidate is situated (avatar #4 also parentless) and neither
+        // reaches the room the status line resolves to (scenery "forest" #1,
+        // which nothing here is parented under either) — so, mirroring
+        // `gvm::objects::ParseNames::find_player`'s rule exactly (SQ-1259),
+        // there is no "first plausible candidate" fallback left to fall back
+        // to. A guessed avatar is worse than none: its children become an
+        // inventory the player is told they carry. This used to return the
+        // lowest-numbered candidate (#2 "you"); it must now return None.
         let m = machine_in_forest(0);
         assert_eq!(get_parent(&m.mem, 2), 0);
         assert_eq!(get_parent(&m.mem, 4), 0);
-        assert_eq!(find_player_object(&m), Some(2), "fallback picks the lowest-numbered candidate");
+        assert_eq!(
+            find_player_object(&m),
+            None,
+            "no situated candidate and no ancestor chain reaches the room: refuse rather than guess"
+        );
     }
 
     #[test]
