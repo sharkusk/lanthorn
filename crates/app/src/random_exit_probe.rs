@@ -149,7 +149,7 @@ pub fn arm_random_exit_search(
     }
     let Some(live_seed) = live.rng_seed() else { return };
     let seeds = derived_seeds(live_seed);
-    let from = crate::probe::ProbeSnapshot::from_save(pre_move_save);
+    let from = crate::probe::ProbeSnapshot::from_save(live, pre_move_save);
     let command = long_label(dir).to_string();
     let Some(token) = state.probe.ask_from_reseeded(&from, &command, &seeds) else {
         return; // busy, unarmed, or mid-save — this move's outcome (edge or mark) simply stands
@@ -213,7 +213,23 @@ fn judge(run: &crate::probe::ProbeRun, live_dest: RoomId) -> (bool, bool) {
 /// varies, and every room named in that proof (the live landing AND each shadow attempt that
 /// reached somewhere) is a real destination the room card and the map should be able to name,
 /// not just the fact that it varies. A step with no usable evidence (quit, escaped, or no
-/// location) says nothing and is skipped, same as [`judge`].
+/// location) says nothing and is skipped, same as [`judge`]. This deliberately admits a room the
+/// live map has never visited at all — a disagreeing shadow attempt finding one is the whole
+/// point (an upgrade search's own falsification test covers exactly that), so pool hygiene
+/// below must never require "already on the map".
+///
+/// # Pool hygiene (SQ-1267)
+///
+/// One specific, known-bad shape is excluded regardless: `live_dest`'s own printed name, hashed
+/// the way a Glulx room with no located `location` global falls back to
+/// (`crate::roomid::synthetic_room_id`, [`crate::glulx_session::GlulxSession::room_for`]'s `None`
+/// branch). [`Engine::room_identity_state`]/[`Engine::apply_room_identity_state`] is the actual
+/// fix — carrying the live session's room-keying state into every shadow restore, so the shadow
+/// never falls back to that hash for a room the live session keys by address — and after it a
+/// shadow simply never reports this value, making the check below cheap insurance rather than
+/// the primary guard. But it is computed directly from what the live game printed, not guessed
+/// at generically, which is what lets it reject exactly the phantom this bug produced without
+/// also rejecting a genuinely new room a disagreeing attempt is the only thing to have found.
 fn note_disagreeing_destinations(
     mapper: &mut Mapper,
     origin: RoomId,
@@ -222,13 +238,16 @@ fn note_disagreeing_destinations(
     run: &crate::probe::ProbeRun,
 ) {
     mapper.graph.note_random_destination(origin, dir, live_dest);
+    let known_phantom = mapper.graph.room(live_dest).map(|r| crate::roomid::synthetic_room_id(r.label()));
     for step in &run.steps {
         if step.quit || step.escaped {
             continue;
         }
-        if let Some(loc) = step.location {
-            mapper.graph.note_random_destination(origin, dir, loc);
+        let Some(loc) = step.location else { continue };
+        if Some(loc) == known_phantom && loc != live_dest {
+            continue; // SQ-1267: the exact unlocked name-hash phantom this bug reported
         }
+        mapper.graph.note_random_destination(origin, dir, loc);
     }
 }
 

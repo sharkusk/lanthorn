@@ -835,6 +835,41 @@ same id space from its first move, which is what makes Adventure's Glulx
 build the one that proves Phase 2's upgrade path for real
 (`crates/app/tests/suites/sq1264_forest_randomization.rs`).
 
+**Sharing the store directory is only half of it (SQ-1267).** `ShadowProbe`
+is one worker shared by every feature that asks the shadow anything —
+vocabulary vetting and the return probe as well as Phase 2 — and it boots its
+shadow lazily on the FIRST question of the whole session, then keeps it
+alive across every later one. `GlulxSession::restore_state` swaps VM memory
+only; the room-lock (`room_lock`, a plain struct field) is host-side and
+untouched by it, so a shadow that happened to boot before the LIVE session
+had located its own `location` global stayed unlocked for the rest of the
+session regardless of how long afterwards the live session went on to lock
+and write its `room-global` sidecar — an ordinary vetted suggestion on turn
+one is exactly early enough to trigger this in the field, well before the
+player is anywhere near a forest. The fix carries the live session's room
+identity into the shadow explicitly rather than leaving it to infer one:
+`Engine::room_identity_state`/`Engine::apply_room_identity_state` are a pair
+of engine-neutral, opaque-bytes methods — `GameSession` (Z-machine) answers
+`None`, since its room ids are `zvm`'s own object numbers and need no such
+state; `GlulxSession` answers the room-lock's learned address, or an empty
+vec while still learning (an UNLOCKED state is itself worth carrying, so a
+shadow that locked early on its own exploratory commands, or read a stale
+address off the shared sidecar, is forced back to unlocked too). `probe::
+serve` reads it once per job (`ProbeSnapshot`/`Job::room_identity`, captured
+from the LIVE engine at ask time, not from the sidecar) and applies it right
+after EVERY `restore_state`, not only at boot — a shadow answers many
+questions across its lifetime, and each one must be keyed the way the live
+session is keyed AT THAT MOMENT, which can change over the shadow's life
+even though `room_identity_state` cannot. `random_exit_probe::
+note_disagreeing_destinations` adds one narrow, deliberately non-primary
+guard on top: a shadow-reported destination equal to `live_dest`'s own
+printed name hashed the unlocked way (`roomid::synthetic_room_id`) is
+dropped from the pool rather than recorded, which is cheap insurance against
+exactly the phantom shape this bug produced without excluding a genuinely
+new room a disagreeing attempt is the only thing to have found (the reason
+it does not simply require "already on the map" — SQ-1261 depends on that
+staying possible).
+
 **A self-loop is drawn only as a badge, never a line.** Before this quest, a
 self-loop connection (`origin == dest`, `MapGraph::add_self_loop`) was never
 excluded from `crates/mapper/src/route/mod.rs`'s routing passes — `origin ==

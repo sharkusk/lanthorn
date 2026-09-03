@@ -579,6 +579,10 @@ struct Job {
     /// two different seeds can be told apart from asking a deterministic
     /// story the same question twice.
     reseeds: Vec<Option<u32>>,
+    /// The live session's [`Engine::room_identity_state`] at snapshot time
+    /// (SQ-1267), applied to the shadow right after every restore in this
+    /// job — see [`serve`]. `None` for an engine with no such state.
+    room_identity: Option<Vec<u8>>,
 }
 
 /// One answer, on its way back.
@@ -615,6 +619,10 @@ pub struct Answer {
 pub struct ProbeSnapshot {
     save: std::sync::Arc<crate::engine::EngineSave>,
     baseline: WorldPrint,
+    /// The live session's current [`Engine::room_identity_state`] (SQ-1267),
+    /// carried into the shadow rather than left for it to learn (or mislearn)
+    /// on its own. `None` for an engine with no such state (the Z-machine).
+    room_identity: Option<Vec<u8>>,
 }
 
 impl ProbeSnapshot {
@@ -625,8 +633,15 @@ impl ProbeSnapshot {
     /// moment is not the engine `arm_random_exit_search` is called with (this
     /// turn's, already moved), so there is no live engine here to read a
     /// baseline off in the first place.
-    pub fn from_save(save: std::sync::Arc<crate::engine::EngineSave>) -> ProbeSnapshot {
-        ProbeSnapshot { save, baseline: WorldPrint::default() }
+    ///
+    /// `live` IS available at the call site even though the save is not of
+    /// this exact moment (SQ-1267): [`Engine::room_identity_state`] describes
+    /// how the engine currently keys rooms, which — unlike a world print — is
+    /// not a fact about any one turn, so reading it off the CURRENT live
+    /// engine is exactly what a shadow restored to an earlier moment of the
+    /// same session should be made to match.
+    pub fn from_save(live: &dyn Engine, save: std::sync::Arc<crate::engine::EngineSave>) -> ProbeSnapshot {
+        ProbeSnapshot { save, baseline: WorldPrint::default(), room_identity: live.room_identity_state() }
     }
 }
 
@@ -806,7 +821,7 @@ impl ShadowProbe {
         if !self.is_armed() || live.is_saveload_pending() {
             return None;
         }
-        Some(ProbeSnapshot { save: save(), baseline: WorldPrint::of(live) })
+        Some(ProbeSnapshot { save: save(), baseline: WorldPrint::of(live), room_identity: live.room_identity_state() })
     }
 
     /// [`ask`](Self::ask), from a snapshot already taken. See
@@ -855,6 +870,7 @@ impl ShadowProbe {
             baseline: from.baseline,
             commands,
             reseeds,
+            room_identity: from.room_identity.clone(),
         };
         self.worker.as_ref()?.jobs.send(job).ok()?;
         self.next_token = token;
@@ -970,6 +986,17 @@ fn serve(
         if restored.is_err() {
             // A shadow that will not take the live state is no shadow.
             return Err(());
+        }
+        // SQ-1267: re-sync the shadow's room identity to the LIVE session's
+        // right after every restore, not only at boot — the shadow is reused
+        // across many jobs and a restore never touches this host-side state
+        // (see `Engine::room_identity_state`'s doc comment), so without this a
+        // long-lived shadow answers every question after its own boot from
+        // whatever it happened to learn (or not) on its own exploratory
+        // commands, which can diverge from the live session in either
+        // direction.
+        if let Some(state) = &job.room_identity {
+            engine.apply_room_identity_state(state);
         }
         // SQ-1257 Phase 2: force this attempt's own draw, AFTER the restore (a
         // restore touches only memory, never the RNG — see `zvm::quetzal`) and
@@ -1571,6 +1598,7 @@ mod tests {
             save: std::sync::Arc::new(crate::engine::EngineSave::new("mock", 1, Vec::new())),
             baseline: WorldPrint::default(),
             reseeds: vec![None; commands.len()],
+            room_identity: None,
             commands,
         }
     }

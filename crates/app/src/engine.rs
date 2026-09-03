@@ -1083,6 +1083,33 @@ pub trait Engine {
     /// worth forcing either.
     fn reseed_random(&mut self, _seed: u32) {}
 
+    /// Opaque, engine-defined bytes describing whatever HOST-SIDE state this
+    /// engine's room ids currently depend on — carried from the live session
+    /// into a [`crate::probe`] shadow so the shadow keys rooms exactly as the
+    /// live session does (SQ-1267).
+    ///
+    /// A Glulx `RoomId` is a hash of either the room object's ADDRESS (once
+    /// the story's `location` global has been located — see
+    /// `glulx_roomlock`) or, before that, of the room's printed NAME — and
+    /// which of the two is in force is host-side bookkeeping a [`EngineSave`]
+    /// snapshot never carries (a gvm snapshot is VM memory only). A shadow
+    /// left to learn this on its own, from its own exploratory commands, can
+    /// answer with a THIRD id that matches neither: the live session's own
+    /// address-derived hash if it has locked, or a stale/absent guess if it
+    /// has not. Default `None`: an engine whose room ids need no such
+    /// state — `GameSession`'s are `zvm`'s own object numbers, fixed by the
+    /// story compile and identical in the live session and any shadow of it.
+    fn room_identity_state(&self) -> Option<Vec<u8>> {
+        None
+    }
+
+    /// Apply a [`Self::room_identity_state`] captured from the live session.
+    /// Called by the probe worker immediately after every `restore_state`,
+    /// before the shadow runs a command, so a shadow reused across many
+    /// questions is re-synced to the live session's CURRENT identity state on
+    /// every one of them rather than only at boot. Default no-op.
+    fn apply_room_identity_state(&mut self, _state: &[u8]) {}
+
     // ── boot ──
     /// Drain the game's pending screen clear — the fact [`TurnResult::erase_lower`]
     /// carries, taken on its own.

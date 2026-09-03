@@ -1814,6 +1814,39 @@ impl Engine for GlulxSession {
         self.machine.set_rng_seed(seed);
     }
 
+    /// The room-lock's learned `location`-global address, or an empty vec
+    /// while still learning (SQ-1267). Always `Some`, never `None`: an
+    /// UNLOCKED state is itself a fact worth carrying — a shadow that reads a
+    /// stale locked address off the shared on-disk `room-global` sidecar (or
+    /// locks early on its own exploratory commands) before the live session
+    /// has locked would key rooms differently from a live session that has
+    /// not, which is exactly the same disagreement in the other direction.
+    fn room_identity_state(&self) -> Option<Vec<u8>> {
+        Some(match self.locked_room_global() {
+            Some(addr) => addr.to_be_bytes().to_vec(),
+            None => Vec::new(),
+        })
+    }
+
+    /// Force this session's room-lock to match a [`Self::room_identity_state`]
+    /// captured from the live session: relock to the carried address, or —
+    /// for an empty (still-learning) state — drop back to a fresh unlocked
+    /// learner, exactly as [`Self::relock_room_global`] does for a remembered
+    /// one. A malformed state (wrong length) is treated as "unlocked" rather
+    /// than trusted, the same conservative fallback `word_index` already
+    /// gives a corrupt sidecar value.
+    fn apply_room_identity_state(&mut self, state: &[u8]) {
+        match <[u8; 4]>::try_from(state) {
+            Ok(bytes) => self.relock_room_global(u32::from_be_bytes(bytes)),
+            Err(_) => {
+                self.room_lock = crate::glulx_roomlock::RoomLock::new(
+                    self.machine.mem().ramstart(),
+                    self.scan_words(),
+                );
+            }
+        }
+    }
+
     fn set_trace_screen(&mut self, on: bool) {
         self.machine.trace_screen = on;
     }

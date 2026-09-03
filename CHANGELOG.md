@@ -87,6 +87,12 @@ Absolute URLs or no link.
 
 ### Fixed
 
+- **A Glulx game's `?` random-exit count no longer includes a destination
+  that isn't really there.** A background check that verifies a random exit
+  could, on a Glulx story, occasionally credit it with a destination the map
+  had never actually seen — inflating "destination varies ³" to a count one
+  higher than the story really has. Colossal Cave Adventure's two forest
+  clearings now always show exactly two.
 - **Map connectors no longer take long detours hugging a neighbouring room's
   box when a straight line was free.** Which of two equally short routes wins
   no longer depends on the order the rooms were explored in.
