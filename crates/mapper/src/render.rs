@@ -54,6 +54,123 @@ pub struct RenderRoom {
     /// reason `alias_count` is: the box has room for one glyph per direction, and the full list
     /// belongs to the room panel and the dump.
     pub random_stubs: Vec<(crate::direction::Direction, usize)>,
+    /// Groups of this room's own outgoing directions that all lead to the SAME destination
+    /// (SQ-1276) — see [`collapse_stacked_exits`]. Only the group's primary direction is routed
+    /// and drawn; the render layer accent-styles its arrowhead and the rest surface on hover.
+    /// The GRAPH carries every direction regardless — this is a rendering fact only.
+    pub stacked_exits: Vec<StackedExit>,
+}
+
+/// One room's redundant fan-out to a single destination (SQ-1276): several of ITS OWN outgoing
+/// directions — compass, or compass plus Up/Down/In/Out — that all lead to `dest`. Only
+/// `primary` is routed; `secondary` lists the rest, in `MapGraph::connections()` order.
+///
+/// Built by [`collapse_stacked_exits`] and never by hand — the primary is a routing decision
+/// (bearing-matches-the-real-position first, see that function), and drifting the two apart
+/// would draw an arrowhead for a direction the graph doesn't actually route.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct StackedExit {
+    pub primary: crate::direction::Direction,
+    pub dest: RoomId,
+    pub secondary: Vec<crate::direction::Direction>,
+}
+
+/// True when `dir`'s own compass bearing agrees with `delta = dest.pos - origin.pos`: every
+/// axis `dir` fixes (its `grid_offset` component is nonzero) has the SAME SIGN as `delta`'s, and
+/// every axis it does NOT fix (zero) is exactly zero in `delta` too — so `W` matches any purely
+/// negative-x delta regardless of magnitude (a distant room still reads as "west"), but not one
+/// with any north/south component at all. Unlike `Connection::distorted` (which the layout
+/// engine computes only for a room it could not seat at its PREFERRED unit-offset slot, and
+/// leaves at its default `false` on a raw/unlaid-out graph — exactly the state test graphs and
+/// `MapGraph::add_edge` start in) this reads current positions directly, so it answers the same
+/// question `collapse_stacked_exits` actually needs regardless of whether layout has run.
+fn matches_bearing(dir: crate::direction::Direction, delta: (i32, i32)) -> bool {
+    let Some((sx, sy)) = crate::direction::grid_offset(dir) else { return false };
+    let sign_ok = |s: i32, d: i32| if s == 0 { d == 0 } else { d.signum() == s };
+    sign_ok(sx, delta.0) && sign_ok(sy, delta.1) && delta != (0, 0)
+}
+
+/// Fixed tie-break order for [`collapse_stacked_exits`] when two compass directions to the same
+/// destination bearing-match equally (both or neither): N, S, E, W, NE, NW, SE, SW, lower wins.
+/// This is NOT a geometric claim that one tied direction is more "correct" than the other — a
+/// tie only happens when [`matches_bearing`] could not tell them apart either (see that
+/// function) — it exists so the choice is deterministic rather than dependent on
+/// `MapGraph::connections()`'s order.
+fn compass_tie_priority(d: crate::direction::Direction) -> u8 {
+    use crate::direction::Direction::*;
+    match d {
+        N => 0, S => 1, E => 2, W => 3, NE => 4, NW => 5, SE => 6, SW => 7,
+        _ => 8,
+    }
+}
+
+/// Collapse each room's redundant same-destination fan-out to one PRIMARY direction (SQ-1276):
+/// several exits from one room that all lead to the same other room draw as a single arrowhead,
+/// not one line per direction.
+///
+/// A group is every OTHER connection sharing one connection's exact `(origin, dest)` (a
+/// self-loop or an `Unknown` edge never groups — neither carries a destination reading worth
+/// stacking). A group with no COMPASS member at all (every link to that destination is a portal
+/// — Up/Down/In/Out) is left alone entirely: there is nothing to prefer a portal direction
+/// over, so nothing changes.
+///
+/// Primary is the compass member whose direction [`matches_bearing`] where the destination
+/// ACTUALLY sits, which is unique whenever it exists (only one compass bearing can agree with
+/// one real delta). When no candidate matches — or, a degenerate map, more than one does — ties
+/// break by [`compass_tie_priority`]. Either room lacking a placed position falls straight to
+/// the tie-break (nothing to compare positions of).
+///
+/// Returns a graph clone with every non-primary member of a stacked group removed, fed to the
+/// routers so a suppressed direction is never routed OR drawn — the graph `render_traced` was
+/// given is never touched, only this routing-only copy is (matrix/room-card/dump/archive read
+/// the original graph directly and see every edge) — plus the per-room facts the renderer needs
+/// for the primary's accent style and the hover tooltip.
+fn collapse_stacked_exits(
+    graph: &MapGraph,
+) -> (MapGraph, std::collections::HashMap<RoomId, Vec<StackedExit>>) {
+    use std::collections::BTreeMap;
+    let mut by_pair: BTreeMap<(RoomId, RoomId), Vec<usize>> = BTreeMap::new();
+    for (i, c) in graph.connections().iter().enumerate() {
+        if c.origin == c.dest || c.dir == crate::direction::Direction::Unknown {
+            continue;
+        }
+        by_pair.entry((c.origin, c.dest)).or_default().push(i);
+    }
+    let mut filtered = graph.clone();
+    let mut stacked: std::collections::HashMap<RoomId, Vec<StackedExit>> =
+        std::collections::HashMap::new();
+    let conns = graph.connections();
+    for ((origin, dest), idxs) in by_pair {
+        if idxs.len() < 2 {
+            continue;
+        }
+        let compass: Vec<usize> = idxs
+            .iter()
+            .copied()
+            .filter(|&i| crate::direction::grid_offset(conns[i].dir).is_some())
+            .collect();
+        let delta = match (graph.room(origin).and_then(|r| r.pos), graph.room(dest).and_then(|r| r.pos)) {
+            (Some(a), Some(b)) => Some((b.0 - a.0, b.1 - a.1)),
+            _ => None, // an unplaced end: nothing to compare positions of, fall to the tie-break
+        };
+        let Some(&primary_idx) = compass.iter().min_by_key(|&&i| {
+            let matches = delta.is_some_and(|d| matches_bearing(conns[i].dir, d));
+            (!matches, compass_tie_priority(conns[i].dir))
+        }) else {
+            continue; // portal-only stack: nothing to prefer a portal direction over
+        };
+        let primary_dir = conns[primary_idx].dir;
+        let mut secondary = Vec::new();
+        for &i in &idxs {
+            if i == primary_idx {
+                continue;
+            }
+            secondary.push(conns[i].dir);
+            filtered.remove_connection(origin, conns[i].dir);
+        }
+        stacked.entry(origin).or_default().push(StackedExit { primary: primary_dir, dest, secondary });
+    }
+    (filtered, stacked)
 }
 
 /// The complete zoom-independent render description of the map.
@@ -81,6 +198,9 @@ pub fn render_traced(graph: &MapGraph, on_step: &mut dyn FnMut(&str)) -> RenderM
     on_step("detect chains");
     let current = graph.current();
     let chains = crate::layout::detect_chains(graph);
+
+    on_step("collapse stacked exits");
+    let (routing_graph, mut stacked) = collapse_stacked_exits(graph);
 
     on_step("place rooms");
     let rooms: Vec<RenderRoom> = graph
@@ -115,6 +235,7 @@ pub fn render_traced(graph: &MapGraph, on_step: &mut dyn FnMut(&str)) -> RenderM
                     .filter(|&&d| !graph.connections().iter().any(|c| c.origin == room.id && c.dir == d))
                     .map(|&d| (d, graph.random_destinations(room.id, d).len()))
                     .collect(),
+                stacked_exits: stacked.remove(&room.id).unwrap_or_default(),
             })
         })
         .collect();
@@ -130,9 +251,9 @@ pub fn render_traced(graph: &MapGraph, on_step: &mut dyn FnMut(&str)) -> RenderM
     };
 
     on_step("route edges");
-    let edges = route_all(graph);
+    let edges = route_all(&routing_graph);
     on_step("route lanes");
-    let plan = route_lanes(graph);
+    let plan = route_lanes(&routing_graph);
 
     RenderMap { rooms, edges, bounds, plan }
 }
@@ -317,6 +438,108 @@ mod tests {
         let rm = render(&g);
         let r1 = rm.rooms.iter().find(|r| r.id == 1).unwrap();
         assert!(r1.random_stubs.is_empty(), "a real edge on the key wins; no stub is drawn beside it");
+    }
+
+    // ── SQ-1276: stacked same-destination exits collapse to one primary ─────────
+
+    /// Two compass directions from one room to the same destination: only one connector is
+    /// routed, the other is recorded as a stacked secondary. Falsify by reverting
+    /// `collapse_stacked_exits` and this fails on the connector count.
+    #[test]
+    fn two_compass_edges_to_one_destination_collapse_to_one_routed_connector() {
+        let mut g = crate::graph::MapGraph::new();
+        g.upsert_room(1, "Hall".into());
+        g.upsert_room(2, "Cellar".into());
+        g.set_pos(1, (0, 0));
+        g.set_pos(2, (1, 0));
+        g.add_edge(1, Direction::N, 2);
+        g.add_edge(1, Direction::S, 2);
+        let rm = render(&g);
+        let r1 = rm.rooms.iter().find(|r| r.id == 1).unwrap();
+        assert_eq!(
+            r1.stacked_exits,
+            vec![StackedExit { primary: Direction::N, dest: 2, secondary: vec![Direction::S] }],
+            "N wins the fixed tie order over S when neither is distorted",
+        );
+        let routed: Vec<_> =
+            rm.plan.connectors.iter().filter(|c| c.origin == 1 && c.dest == 2).collect();
+        assert_eq!(routed.len(), 1, "only the primary is routed: {routed:?}");
+        assert_eq!(routed[0].exit_dir, Direction::N);
+    }
+
+    /// A compass direction plus a portal (Up/Down) to the same destination: the compass
+    /// direction always wins (portals never outrank a compass primary), and the portal is
+    /// suppressed from routing — so no portal badge has an edge left to draw from.
+    #[test]
+    fn compass_plus_portal_to_one_destination_suppresses_the_portal() {
+        let mut g = crate::graph::MapGraph::new();
+        g.upsert_room(1, "Hall".into());
+        g.upsert_room(2, "Cellar".into());
+        g.set_pos(1, (0, 0));
+        g.set_pos(2, (1, 0));
+        g.add_edge(1, Direction::E, 2);
+        g.add_edge(1, Direction::Down, 2);
+        let rm = render(&g);
+        let r1 = rm.rooms.iter().find(|r| r.id == 1).unwrap();
+        assert_eq!(
+            r1.stacked_exits,
+            vec![StackedExit { primary: Direction::E, dest: 2, secondary: vec![Direction::Down] }],
+        );
+        let routed: Vec<_> =
+            rm.plan.connectors.iter().filter(|c| c.origin == 1 && c.dest == 2).collect();
+        assert_eq!(routed.len(), 1, "the Down connector is not routed: {routed:?}");
+        assert_eq!(routed[0].exit_dir, Direction::E);
+        assert!(
+            !rm.edges.iter().any(|e| e.origin == 1 && e.dest == 2 && e.dir == Direction::Down),
+            "the suppressed Down edge has nothing left for a portal badge to draw",
+        );
+    }
+
+    /// A destination reached ONLY by portals (no compass direction at all): nothing to prefer a
+    /// portal over, so `collapse_stacked_exits` is a no-op — routing comes out identical to
+    /// routing the graph directly (the pre-existing SQ-0689 same-pair collapse, unrelated to
+    /// SQ-1276, still applies to Up+Down exactly as it always has).
+    #[test]
+    fn portal_only_stack_is_left_alone() {
+        let mut g = crate::graph::MapGraph::new();
+        g.upsert_room(1, "Hall".into());
+        g.upsert_room(2, "Cellar".into());
+        g.set_pos(1, (0, 0));
+        g.set_pos(2, (1, 0));
+        g.add_edge(1, Direction::Up, 2);
+        g.add_edge(1, Direction::Down, 2);
+        let rm = render(&g);
+        let r1 = rm.rooms.iter().find(|r| r.id == 1).unwrap();
+        assert!(r1.stacked_exits.is_empty(), "{:?}", r1.stacked_exits);
+        let direct = crate::route::route_lanes(&g);
+        let describe = |plan: &crate::route::RoutePlan| {
+            let mut v: Vec<_> = plan
+                .connectors
+                .iter()
+                .map(|c| (c.origin, c.dest, c.exit_dir, c.secondary_exit.clone()))
+                .collect();
+            v.sort_by_key(|t| (t.0, t.1));
+            v
+        };
+        assert_eq!(describe(&rm.plan), describe(&direct), "collapse must not change portal-only routing");
+    }
+
+    /// Rendering never mutates the graph it was given — the matrix, room card, dump and archive
+    /// all read the original graph and must still see every edge (SQ-1276 item 3).
+    #[test]
+    fn collapse_does_not_mutate_the_source_graph() {
+        let mut g = crate::graph::MapGraph::new();
+        g.upsert_room(1, "Hall".into());
+        g.upsert_room(2, "Cellar".into());
+        g.set_pos(1, (0, 0));
+        g.set_pos(2, (1, 0));
+        g.add_edge(1, Direction::N, 2);
+        g.add_edge(1, Direction::S, 2);
+        let before = g.connections().len();
+        let _rm = render(&g);
+        assert_eq!(g.connections().len(), before, "render must not remove any connection");
+        assert!(g.connections().iter().any(|c| c.dir == Direction::N && c.dest == 2));
+        assert!(g.connections().iter().any(|c| c.dir == Direction::S && c.dest == 2));
     }
 
     #[test]
