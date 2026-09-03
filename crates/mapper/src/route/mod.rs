@@ -921,6 +921,31 @@ fn direct_route_losers(
     losers
 }
 
+/// The gap-lattice cell a `?` random-exit mark's superscript count occupies, one per marked
+/// compass direction on a placed room (SQ-1275): the exit-side doorway (`exit_point`) for a
+/// cardinal mark, the box corner (`corner_point`) for a diagonal one — the SAME lattice point
+/// a real connector on that exact direction would leave from, since a marked direction never
+/// coexists with a real edge on the same key (mirrors the defensive filter `render_traced`
+/// applies to `RenderRoom::random_stubs`). The render layer resolves the identical fact in
+/// virtual-pixel space (`render::map::random_stub_cells`); this is what routing itself can see.
+fn reserved_doorways(graph: &MapGraph) -> BTreeSet<(i32, i32)> {
+    let mut out = BTreeSet::new();
+    for room in graph.rooms() {
+        let Some(cell) = room.pos else { continue };
+        for &dir in &room.random_exits {
+            if graph.connections().iter().any(|c| c.origin == room.id && c.dir == dir) {
+                continue; // stale/hand-edited: a real edge on the key wins, same as the render filter
+            }
+            if let Some(p) = corner_point(cell, dir) {
+                out.insert(p);
+            } else if let Some(side) = side_for(dir) {
+                out.insert(exit_point(cell, side));
+            }
+        }
+    }
+    out
+}
+
 /// Route every drawn (compass) edge. When `greedy` is false, each connector takes its
 /// canonical route (horizontal-first L, geometric entry side). When true, each connector is
 /// routed sequentially and picks — among its candidate routes (both L orientations, plus the
@@ -979,6 +1004,8 @@ fn route_topology_with(graph: &MapGraph, greedy: bool) -> Vec<RoutedConnector> {
     let dep_corners = departure_corners(graph);
     // Which one-way arrival keeps each contested corner (SQ-0314); see `arrival_corner_owners`.
     let arr_owners = arrival_corner_owners(&compass);
+    // Cells a `?` random-exit mark's superscript occupies (SQ-1275) — see `reserved_doorways`.
+    let reserved = reserved_doorways(graph);
     let mut out: Vec<RoutedConnector> = Vec::new();
     // The trunk polyline per (unordered room pair, channel), recorded when its connector is built; a
     // later edge on the SAME pair AND channel becomes a MERGE STUB that joins this trunk. The channel
@@ -1163,6 +1190,15 @@ fn route_topology_with(graph: &MapGraph, greedy: bool) -> Vec<RoutedConnector> {
         let chosen = candidates
             .into_iter()
             .map(|(rank, entry, pts)| {
+                // Disqualify a candidate that would draw THROUGH another room's `?` random-exit
+                // mark (SQ-1275): the FIRST key, so an available detour always wins over drawing
+                // over the mark — but this never makes routing itself fail; a candidate that
+                // must cross one is still chosen when every candidate does.
+                let reserved_hits: usize = pts
+                    .windows(2)
+                    .flat_map(|w| line_cells(w[0], w[1]))
+                    .filter(|p| reserved.contains(p))
+                    .count();
                 // Disqualify candidates that introduce a parallel line-on-line overlap the
                 // lane system can't resolve (renderer rejects these): make it the PRIMARY key
                 // so an overlap-free route always wins. Among overlap-free candidates, minimize
@@ -1170,13 +1206,14 @@ fn route_topology_with(graph: &MapGraph, greedy: bool) -> Vec<RoutedConnector> {
                 // break by preference rank (geometric entry, horizontal-first), then the points.
                 let overlaps = out.iter().filter(|o| has_parallel_overlap(&pts, &o.points)).count();
                 let crosses: usize = out.iter().map(|o| count_crossings(&pts, &o.points)).sum();
-                (overlaps, crosses, rank, entry, pts)
+                (reserved_hits, overlaps, crosses, rank, entry, pts)
             })
             .min_by(|x, y| {
                 x.0.cmp(&y.0)
                     .then(x.1.cmp(&y.1))
                     .then(x.2.cmp(&y.2))
-                    .then(x.4.cmp(&y.4))
+                    .then(x.3.cmp(&y.3))
+                    .then(x.5.cmp(&y.5))
             })
             .expect("at least one candidate route");
 
@@ -1185,8 +1222,8 @@ fn route_topology_with(graph: &MapGraph, greedy: bool) -> Vec<RoutedConnector> {
             dest: c.dest,
             distorted: c.distorted,
             exit,
-            entry: chosen.3,
-            points: chosen.4,
+            entry: chosen.4,
+            points: chosen.5,
             segs: Vec::new(),
             exit_slot: 0,
             entry_slot: 0,
@@ -2072,6 +2109,88 @@ mod tests {
         let chosen = route_topology(&g);
         assert_eq!(crossings(&chosen), 0, "route_topology must pick the crossing-free route set");
     }
+
+    #[test]
+    fn reserved_doorways_marks_the_exit_and_corner_points() {
+        let mut g = MapGraph::new();
+        g.upsert_room(1, "Cave".into());
+        g.set_pos(1, (0, 0));
+        g.mark_random_exit(1, Direction::E);
+        g.mark_random_exit(1, Direction::NE);
+        let reserved = reserved_doorways(&g);
+        assert_eq!(reserved.len(), 2, "{reserved:?}");
+        assert!(reserved.contains(&exit_point((0, 0), side_for(Direction::E).unwrap())));
+        assert!(reserved.contains(&corner_point((0, 0), Direction::NE).unwrap()));
+    }
+
+    #[test]
+    fn reserved_doorways_skips_a_direction_that_also_carries_a_real_edge() {
+        // Defensive: mirrors `render_traced`'s own filter on `RenderRoom::random_stubs` — a
+        // stale/hand-edited map file could carry both facts on one key, and a real edge always
+        // wins the doorway (there is nothing to detour around: the direction draws a real line).
+        let mut g = MapGraph::new();
+        g.upsert_room(1, "A".into());
+        g.upsert_room(2, "B".into());
+        g.set_pos(1, (0, 0));
+        g.set_pos(2, (1, 0));
+        g.add_edge(1, Direction::E, 2);
+        g.mark_random_exit(1, Direction::E);
+        assert!(reserved_doorways(&g).is_empty());
+    }
+
+    #[test]
+    fn greedy_routing_detours_around_a_random_exit_mark() {
+        // The exact shape `greedy_picks_non_crossing_route_end_to_end` uses (pair A: 1→E→2,
+        // blocked by room 5 at the midpoint, forcing a dip; pair B: 3→W→4, off-axis so its own
+        // dip can go through EITHER the y=-3 row or the y=3 row) — WITHOUT any reservation,
+        // greedy already prefers the y=3 row for B because it crosses A's line less.
+        //
+        // Room 6's marked SOUTH exit reserves doubled-lattice cell (4, 3), which sits on B's
+        // y=3 dip and nowhere on its y=-3 alternative. With the mark, greedy must give up the
+        // lower-crossing y=3 route and fall back to y=-3 instead — proof the reservation
+        // outranks crossing-avoidance, not merely something crossing-avoidance would have done
+        // anyway. Falsify by reverting the reservation (`unmark_random_exit` below): the SAME
+        // graph then routes B through the reserved cell exactly as the crossing-optimal choice
+        // always did.
+        let mut g = MapGraph::new();
+        for id in [1, 2, 5] { g.upsert_room(id, "r".into()); }
+        g.set_pos(1, (0, 0));
+        g.set_pos(2, (2, 0));
+        g.set_pos(5, (1, 0));
+        g.add_edge(1, Direction::E, 2);
+        g.upsert_room(3, "r".into());
+        g.upsert_room(4, "r".into());
+        g.set_pos(3, (4, -2));
+        g.set_pos(4, (0, 2));
+        g.add_edge(3, Direction::W, 4);
+        g.upsert_room(6, "marker".into());
+        g.set_pos(6, (2, 1));
+        g.mark_random_exit(6, Direction::S);
+
+        let b_points = |conns: &[RoutedConnector]| {
+            conns.iter().find(|c| c.origin == 3 && c.dest == 4).expect("B is routed").points.clone()
+        };
+        let reserved_cell = (4, 3);
+        let touches = |pts: &[(i32, i32)]| pts.windows(2).any(|w| line_cells(w[0], w[1]).contains(&reserved_cell));
+
+        // Falsify: without the mark, B's greedy route runs straight through what would be the
+        // reserved cell — the crossing-optimal choice, same as ever.
+        let mut unmarked = g.clone();
+        unmarked.unmark_random_exit(6, Direction::S);
+        let baseline = b_points(&route_topology_with(&unmarked, true));
+        assert!(touches(&baseline), "sanity, unmarked: {baseline:?}");
+
+        // With the mark: greedy detours to the higher-crossing alternative rather than draw
+        // through the mark.
+        let marked = b_points(&route_topology_with(&g, true));
+        assert!(!touches(&marked), "greedy must detour: {marked:?}");
+        assert_ne!(marked, baseline, "the detour actually changed the route, not just its metadata");
+
+        // The public best-of picker (`route_lanes`'s own entry point) agrees.
+        let chosen = b_points(&route_topology(&g));
+        assert!(!touches(&chosen), "route_topology: {chosen:?}");
+    }
+
 
     #[test]
     fn greedy_routing_is_deterministic() {
