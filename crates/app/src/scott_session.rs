@@ -154,6 +154,7 @@ impl ScottSession {
             pictures: Vec::new(),
             transcript_elems: Vec::new(),
             prose_retired: None,
+            declared_exit: None,
         }
     }
 

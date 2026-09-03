@@ -94,6 +94,24 @@ pub struct WorldModel {
     /// The bucket object those shared-scenery objects live in. Always `Some`
     /// exactly when `globals_prop` is.
     pub globals_holder: Option<u16>,
+    /// The twelve `*_to` exit-property numbers (SQ-1257), indexed by
+    /// [`Compass`] — `exit_props[Compass::N as usize]` is the property number
+    /// `n_to` was compiled to, and so on. `None` at every index when the
+    /// `door_dir` convention (see [`Self::declared_exit`]) could not be
+    /// identified, which is every non-Inform-library story.
+    pub exit_props: [Option<u8>; 12],
+    /// The `door_to` property number, when a "two-way door" object could be
+    /// found and cross-checked (see [`Self::declared_exit`]). `None` is the
+    /// ordinary case for a story with no doors, or one where the doors found
+    /// disagreed too much to trust a single property number.
+    pub door_to_prop: Option<u8>,
+    /// The `door_dir` property number itself (SQ-1257) — what tells
+    /// [`Self::declared_exit`] whether an exit's target object is a room or a
+    /// connector to follow through [`Self::door_to_prop`]. Named distinctly
+    /// from `exit_props` (which holds the *contents* `door_dir` gives back)
+    /// because this is the property number that stores that mapping, not one
+    /// derived from it.
+    door_dir_prop_hint: Option<u8>,
 }
 
 impl WorldModel {
@@ -151,8 +169,82 @@ impl WorldModel {
         let open_attr = container_attr.and_then(|c| infer_open_attr(&sets, c, real.len()));
         let (globals_prop, globals_holder) =
             infer_local_globals(mem, max_object, room_holder, &real);
+        let (exit_props, door_dir_prop_hint, door_to_prop) = infer_exits(mem, max_object);
 
-        Self { max_object, room_holder, container_attr, open_attr, globals_prop, globals_holder }
+        Self {
+            max_object,
+            room_holder,
+            container_attr,
+            open_attr,
+            globals_prop,
+            globals_holder,
+            exit_props,
+            door_to_prop,
+            door_dir_prop_hint,
+        }
+    }
+
+    /// What room `origin`'s own map data declares for `dir`, resolving through
+    /// a two-way "door" object when the property points at one (SQ-1257).
+    ///
+    /// This is a STATIC read of the story's compiled table — the same data
+    /// [`crate::objects::get_prop`] would return whether or not the direction
+    /// has ever been walked — so it can be asked about any room the caller
+    /// already knows the number of, not only the one the player is standing
+    /// in. See the module docs on [`Compass`] and [`DeclaredExit`] for what the
+    /// answer does and does not promise.
+    pub fn declared_exit(&self, mem: &Memory, origin: u16, dir: Compass) -> DeclaredExit {
+        let Some(prop) = self.exit_props[dir as usize] else { return DeclaredExit::Unknown };
+        if origin == 0 || origin > self.max_object {
+            return DeclaredExit::Unknown;
+        }
+        let raw = crate::objects::get_prop(mem, origin, prop);
+        // Distinguished from `Unknown` (SQ-1257 Phase 2): the compass WAS
+        // identified — `exit_props[dir]` answered — so a zero here is this
+        // ROOM declaring nothing for this direction, not a story with no
+        // `door_dir` convention at all. Lost Pig's gnome-tunnel rooms are
+        // exactly this: `door_dir`/`*_to` are real and derived (see
+        // `infer_exits`), and every one of their `*_to` properties is simply
+        // absent — a "before going" rule intercepts the move before the
+        // library's own exit-table code ever reads it.
+        if raw == 0 {
+            return DeclaredExit::Absent;
+        }
+        self.resolve(mem, origin, raw)
+    }
+
+    /// One step of exit resolution: classify a raw, NONZERO `*_to` (or
+    /// `door_to`) value already read off some object's property table. The
+    /// zero case is handled by the caller — see [`Self::declared_exit`] for why
+    /// it means something different at the top level (`Absent`) than partway
+    /// through a door hop (`Code`, below: a door with no static far side is
+    /// exactly as unresolvable as one whose `door_to` is a routine).
+    fn resolve(&self, mem: &Memory, holder: u16, raw: u16) -> DeclaredExit {
+        if raw > self.max_object {
+            // A packed routine or string address — GoSub's `metaclass() ==
+            // Routine`/`String` branches. zvm has no general way to tell those
+            // two apart without executing the story (see module docs), so both
+            // collapse to `Code`; `Message` is reserved for a future refinement.
+            return DeclaredExit::Code;
+        }
+        // `raw` is a plausible object number. If it does not itself carry the
+        // `door_dir` property, it is not a connector in this story's
+        // convention (see `infer_exits`) and IS the destination room.
+        let Some(dd) = self.door_dir_prop_hint else { return DeclaredExit::Room(raw) };
+        if crate::objects::get_prop_addr(mem, raw, dd) == 0 || raw == holder {
+            return DeclaredExit::Room(raw);
+        }
+        // `raw` is a door. Follow `door_to`, one hop only — GoSub itself never
+        // chases a second door from the far side of the first.
+        let Some(door_to) = self.door_to_prop else { return DeclaredExit::Code };
+        let k = crate::objects::get_prop(mem, raw, door_to);
+        if k == 0 {
+            return DeclaredExit::Code;
+        }
+        if k > self.max_object {
+            return DeclaredExit::Code;
+        }
+        DeclaredExit::Room(k)
     }
 
     /// True when `obj`'s contents are visible to the player right now.
@@ -252,6 +344,337 @@ impl WorldModel {
             child = get_sibling(mem, child);
         }
     }
+}
+
+// ── Declared exits (SQ-1257) ─────────────────────────────────────────────────
+//
+// A room object's exit in a given compass direction is DATA the story compiled
+// in, not something that can only be learned by walking it — the same `n_to`
+// (etc.) property `verblib.h`'s `GoSub` reads to decide where "go north"
+// leads. Reading it independently of any move lets the mapper tell a REAL
+// passage from one a routine improvised on the spot (Lost Pig's gnome tunnels,
+// which relocate the player somewhere the room's own exit table never named).
+//
+// The two library conventions this recovers, both from `inform6lib`
+// (https://github.com/DavidGriffith/inform6lib):
+//
+// * **`door_dir`** (`english.h`): each compass-direction object (the parser's
+//   "north", "south", …) carries a `door_dir` property whose VALUE is the
+//   property number of the matching `*_to` — `n_obj` declares `door_dir
+//   n_to`, `s_obj` declares `door_dir s_to`, and so on
+//   (english.h:47-70). `verblib.h`'s `GoSub` reads it exactly this way:
+//   `thedir = noun.door_dir; next_loc = i.thedir;` (verblib.h:2071,2090) — a
+//   property NUMBER held in a variable, dereferenced with `.thedir`, which is
+//   Inform 6's "property by number" form.
+// * **`door_to`** (`linklpa.h`): when the exit property's value is an object
+//   with `has door` set — a "tunnel to east"-style connector — `GoSub` takes
+//   one more hop through that object's `door_to` property:
+//   `k = RunRoutines(next_loc, door_to); ... next_loc = k;` (verblib.h:2093-2096).
+//
+// Property NUMBERS are never portable between compiles — Lost Pig's `door_dir`
+// is property 34 and its `*_to` set is 20–31, nothing like `linklpa.h`'s own
+// declaration order, because Inform 7 injects a great many properties of its
+// own ahead of the library's. Every number below is recovered from the STORY,
+// never assumed from the library source.
+
+/// The twelve directions a room's exit table may name (SQ-1257).
+///
+/// A `zvm`-local type rather than `mapper::direction::Direction` — `zvm` takes
+/// no dependency on the app's mapper crate — but ordered exactly as
+/// `inform6lib/english.h` declares its compass objects, so
+/// [`WorldModel::exit_props`] can be indexed by `dir as usize` directly. A
+/// caller holding a `mapper::Direction` maps it to this with a `match`; there
+/// is deliberately no `Unknown` member here, because "no direction" is not a
+/// question this type can be asked — the caller simply does not call
+/// [`WorldModel::declared_exit`] for one.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Compass {
+    N = 0,
+    S = 1,
+    E = 2,
+    W = 3,
+    Ne = 4,
+    Nw = 5,
+    Se = 6,
+    Sw = 7,
+    Up = 8,
+    Down = 9,
+    In = 10,
+    Out = 11,
+}
+
+impl Compass {
+    /// All twelve, in [`WorldModel::exit_props`] index order.
+    pub const ALL: [Compass; 12] = [
+        Compass::N,
+        Compass::S,
+        Compass::E,
+        Compass::W,
+        Compass::Ne,
+        Compass::Nw,
+        Compass::Se,
+        Compass::Sw,
+        Compass::Up,
+        Compass::Down,
+        Compass::In,
+        Compass::Out,
+    ];
+
+    /// The word the Inform 6 library's compass objects carry for this
+    /// direction (`english.h`'s `CompassDirection ->` entries) — what
+    /// [`crate::objects::ParseNames::find`] is asked for.
+    fn word(self) -> &'static str {
+        match self {
+            Compass::N => "north",
+            Compass::S => "south",
+            Compass::E => "east",
+            Compass::W => "west",
+            Compass::Ne => "northeast",
+            Compass::Nw => "northwest",
+            Compass::Se => "southeast",
+            Compass::Sw => "southwest",
+            Compass::Up => "up",
+            Compass::Down => "down",
+            Compass::In => "in",
+            Compass::Out => "out",
+        }
+    }
+}
+
+/// What a room's own exit table declares for one direction (SQ-1257) — read
+/// from the story's compiled data, independent of anything ever having been
+/// walked. See [`WorldModel::declared_exit`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DeclaredExit {
+    /// The exit is a fixed room: the property named it directly, or named a
+    /// two-way "door" object whose own `door_to` names it.
+    Room(u16),
+    /// The destination is computed at run time — the property (or a door's
+    /// `door_to`) holds a routine, so nothing here can say where it leads.
+    Code,
+    /// The property holds a printed string (a fixed refusal message: "the
+    /// window is stuck shut" and the like) rather than a destination at all.
+    ///
+    /// Currently unreachable from this derivation — `zvm` has no equivalent of
+    /// the Z-Machine's `metaclass` opcode to tell a packed STRING address from
+    /// a packed ROUTINE address without executing the story, so both read as
+    /// [`DeclaredExit::Code`] today. Kept as a distinct variant for callers
+    /// that want to special-case it once that distinction is implemented,
+    /// rather than changing the shape of this type twice.
+    Message,
+    /// The compass WAS identified for this story, and this room's `*_to`
+    /// property for this direction is simply absent (SQ-1257 Phase 2) — the
+    /// room declares NOTHING here, as opposed to declaring code the derivation
+    /// merely cannot resolve ([`Self::Code`]). Lost Pig's gnome-tunnel rooms
+    /// are exactly this: their exit properties are unset because a "before
+    /// going" rule intercepts the move before the library's own exit-table
+    /// code ever reads it. Distinct from [`Self::Unknown`] so a caller can
+    /// treat "this story has no data here" (worth a Phase 2 probe) differently
+    /// from "this story has no `door_dir` convention at all" (Zork I, Glulx,
+    /// Scott — never worth probing, since there is no reason to think ANY
+    /// property here means an exit).
+    Absent,
+    /// No exit is declared this way at all: the room number is out of range,
+    /// or this story's `door_dir` convention could not be identified (every
+    /// non-Inform-library story, e.g. Zork I).
+    Unknown,
+}
+
+/// Derive the `*_to` property numbers, the `door_dir` property number itself,
+/// and (best-effort) the `door_to` property number, all from the compiled
+/// object table. `None` in every slot for a story with no `door_dir`
+/// convention to find (`ParseNames::detect` failing, or none of the twelve
+/// compass words resolving to an object) — a Scott Adams or Glulx-shaped table
+/// has nothing here to recover, and neither does a story whose parser-name
+/// property isn't the one this searches through.
+fn infer_exits(mem: &Memory, max_object: u16) -> ([Option<u8>; 12], Option<u8>, Option<u8>) {
+    let none = ([None; 12], None, None);
+    if max_object == 0 {
+        return none;
+    }
+    let Some(pn) = crate::objects::ParseNames::detect(mem) else { return none };
+
+    // Only the eight cardinal/intercardinal words are trusted to IDENTIFY the
+    // compass objects (and so to derive `door_dir` from) — each is a
+    // multi-letter word essentially no other object's vocabulary collides
+    // with. "up", "down", "in" and "out" are common enough that
+    // [`crate::objects::ParseNames::find`] can and does return the wrong
+    // object for them: Curses' "in" resolves first to a "ship in a bottle"
+    // (whatever holds the word "in" among its own adjectives/nouns), not a
+    // direction. Those four are still read below, but only ACCEPTED once
+    // `door_dir` is known and their own candidate can be checked against it.
+    const PRIMARY: [Compass; 8] =
+        [Compass::N, Compass::S, Compass::E, Compass::W, Compass::Ne, Compass::Nw, Compass::Se, Compass::Sw];
+
+    let mut primary_ids: [Option<u16>; 12] = [None; 12];
+    for dir in PRIMARY {
+        if let Some(o) = pn.find(mem, dir.word()) {
+            primary_ids[dir as usize] = Some(o.id as u16);
+        }
+    }
+    let found: Vec<(Compass, u16)> = PRIMARY
+        .into_iter()
+        .filter_map(|d| primary_ids[d as usize].map(|id| (d, id)))
+        .collect();
+    // Need at least six of the eight to trust a shared property as `door_dir`
+    // — matches `ParseNames::detect`'s own confidence bar in spirit (refuse
+    // rather than guess from too small a sample).
+    if found.len() < 6 {
+        return none;
+    }
+
+    // `door_dir`: the property every found compass object carries whose
+    // values, across them, are distinct small numbers (each direction's own
+    // `*_to`). Scanning 1..=63 rather than assuming any particular number —
+    // Lost Pig's is 34, nothing like `linklpa.h`'s own declaration order (see
+    // module docs above).
+    let mut door_dir_prop = None;
+    'search: for prop in 1u8..=63 {
+        let mut vals: Vec<u16> = Vec::with_capacity(found.len());
+        for &(_, id) in &found {
+            if crate::objects::get_prop_addr(mem, id, prop) == 0 {
+                continue 'search;
+            }
+            vals.push(crate::objects::get_prop(mem, id, prop));
+        }
+        let mut sorted = vals.clone();
+        sorted.sort_unstable();
+        sorted.dedup();
+        if sorted.len() == vals.len() && vals.iter().all(|&v| v > 0 && v < 64) {
+            door_dir_prop = Some(prop);
+            break;
+        }
+    }
+    let Some(door_dir_prop) = door_dir_prop else { return none };
+
+    // `exit_props[dir]` is exactly the door_dir VALUE the matching compass
+    // object carries — `n_obj.door_dir == n_to`'s property number.
+    let mut exit_props = [None; 12];
+    let mut used_props: Vec<u8> = Vec::with_capacity(12);
+    for &(dir, id) in &found {
+        let p = crate::objects::get_prop(mem, id, door_dir_prop);
+        if p > 0 && p < 64 {
+            exit_props[dir as usize] = Some(p as u8);
+            used_props.push(p as u8);
+        }
+    }
+    // Up/Down/In/Out: accepted only when the object `ParseNames::find` turns up
+    // for the word ALSO carries `door_dir` with a value that is a plausible,
+    // still-unused `*_to` property number — the check a false hit like
+    // Curses' "ship in a bottle" fails, since nothing gave it one.
+    for dir in [Compass::Up, Compass::Down, Compass::In, Compass::Out] {
+        let Some(o) = pn.find(mem, dir.word()) else { continue };
+        let id = o.id as u16;
+        if crate::objects::get_prop_addr(mem, id, door_dir_prop) == 0 {
+            continue;
+        }
+        let p = crate::objects::get_prop(mem, id, door_dir_prop);
+        if p > 0 && p < 64 && !used_props.contains(&(p as u8)) {
+            primary_ids[dir as usize] = Some(id);
+            exit_props[dir as usize] = Some(p as u8);
+            used_props.push(p as u8);
+        }
+    }
+    let compass_ids = primary_ids;
+
+    // `door_to`: found by cross-checking real CONNECTOR objects — anything
+    // (other than a compass object) that also carries `door_dir`, which is
+    // exactly the "tunnel to east"-style object `GoSub` takes a `door_to` hop
+    // through. Capped, since a large Inform 7 table can hold tens of
+    // thousands of objects and only a handful of agreeing doors are needed.
+    const MAX_CONNECTORS: usize = 24;
+    let compass_id_set: Vec<u16> = compass_ids.iter().filter_map(|&o| o).collect();
+    let mut connectors: Vec<u16> = Vec::new();
+    for obj in 1..=max_object {
+        if compass_id_set.contains(&obj) {
+            continue;
+        }
+        if crate::objects::get_prop_addr(mem, obj, door_dir_prop) != 0 {
+            connectors.push(obj);
+            if connectors.len() >= MAX_CONNECTORS {
+                break;
+            }
+        }
+    }
+    let door_to_prop = infer_door_to(mem, &connectors, &compass_id_set, door_dir_prop, max_object);
+
+    (exit_props, Some(door_dir_prop), door_to_prop)
+}
+
+/// The `door_to` property number: the one present on most sampled CONNECTORS
+/// whose value, where it names a room at all, is a plausible and DISTINCT
+/// (not the same on every connector) TERMINAL — not another connector.
+///
+/// A one-way or code-computed door is real and common (Lost Pig's own "broken
+/// stair" and "windy tunnel" objects both hold a ROUTINE in this property,
+/// not a room — the north exit past the statue is exactly the code-decided
+/// case this whole feature exists to notice), so a candidate is NOT thrown out
+/// just because some connector's value is not a plain room number; only a
+/// value that looks wrong in a way `door_to` never should is disqualifying:
+///
+/// * **pointing at itself or at a compass object** — never a real destination;
+/// * **pointing at another connector** — `GoSub` takes `door_to` exactly one
+///   hop (`verblib.h`:2093-2096) and never chases a second door from there, so
+///   a `door_to` that resolves to something ITSELF carrying `door_dir` is not
+///   the property this derivation is looking for.
+///
+/// What must still vary is the survivors: Lost Pig's "tunnel to east" and
+/// "tunnel to west" both carry an unrelated property holding the same
+/// constant 31 on both (evidently some other shared convention, not a
+/// per-door destination) beside `door_to` itself holding 166 and 102
+/// respectively — the two different rooms they actually lead to. Requiring at
+/// least two DISTINCT room-like values among the survivors is what throws out
+/// the constant and keeps the one that behaves like a destination.
+///
+/// `door_dir` itself is excluded up front: every connector also carries it,
+/// and its own value there (the connector's own `*_to` property number, e.g.
+/// 22 for an east-facing door) is small, in-range and genuinely different
+/// between an east door and a west door — distinct for the wrong reason, and
+/// would otherwise be picked first since it is scanned in the same 1..=63
+/// sweep as every real candidate.
+fn infer_door_to(
+    mem: &Memory,
+    connectors: &[u16],
+    compass_ids: &[u16],
+    door_dir_prop: u8,
+    max_object: u16,
+) -> Option<u8> {
+    if connectors.len() < 2 {
+        return None;
+    }
+    let min_present = (connectors.len() / 2).max(2);
+    'search: for prop in 1u8..=63 {
+        if prop == door_dir_prop {
+            continue;
+        }
+        let mut present = 0usize;
+        let mut room_like: Vec<u16> = Vec::new();
+        for &c in connectors {
+            if crate::objects::get_prop_addr(mem, c, prop) == 0 {
+                continue; // absent on this one connector — does not disqualify the property
+            }
+            present += 1;
+            let v = crate::objects::get_prop(mem, c, prop);
+            if v == 0 || v > max_object {
+                continue; // no exit, or a routine/string-valued door — a real possibility, not a disqualifier
+            }
+            if v == c || compass_ids.contains(&v) || crate::objects::get_prop_addr(mem, v, door_dir_prop) != 0
+            {
+                continue 'search; // looks wrong in a way `door_to` never should
+            }
+            room_like.push(v);
+        }
+        if present < min_present {
+            continue;
+        }
+        let mut distinct = room_like.clone();
+        distinct.sort_unstable();
+        distinct.dedup();
+        if distinct.len() >= 2 {
+            return Some(prop);
+        }
+    }
+    None
 }
 
 // ── Attribute inference ──────────────────────────────────────────────────────
@@ -739,6 +1162,28 @@ mod tests {
 
     fn names(mem: &Memory, ids: &[u16]) -> Vec<String> {
         ids.iter().map(|&o| crate::objects::short_name(mem, o)).collect()
+    }
+
+    /// SQ-1257: Mini-Zork is ZIL, not Inform — there is no `door_dir` convention in its table for
+    /// [`infer_exits`] to find, so [`WorldModel::declared_exit`] must answer `Unknown` for every
+    /// direction rather than mistake some coincidentally-shaped property for it. `minizork.z3` is
+    /// a tracked fixture (`crates/zvm/tests/fixtures/`), so this never skips.
+    #[test]
+    fn a_zil_story_has_no_door_dir_convention_to_find() {
+        let Some(bytes) = crate::fixtures::load("minizork.z3") else { return };
+        let mem = Memory::new(bytes).unwrap();
+        let m = WorldModel::discover(&mem);
+        assert_eq!(m.door_to_prop, None, "no door_dir convention means no door_to to cross-check either");
+        assert!(m.exit_props.iter().all(Option::is_none), "no `*_to` property numbers to find either");
+        // `exit_props` being empty means `declared_exit` answers Unknown for ANY origin without
+        // even reading the object table, so object 1 stands in for "some real room" here.
+        for dir in Compass::ALL {
+            assert_eq!(
+                m.declared_exit(&mem, 1, dir),
+                DeclaredExit::Unknown,
+                "{dir:?} must read Unknown on a ZIL story"
+            );
+        }
     }
 
     #[test]

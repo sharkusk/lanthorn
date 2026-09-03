@@ -85,6 +85,7 @@ fn seed_of(snap: zvm::ObjectSnapshot) -> TurnResult {
         pictures: Vec::new(),
         transcript_elems: Vec::new(),
         prose_retired: None,
+        declared_exit: None,
     }
 }
 

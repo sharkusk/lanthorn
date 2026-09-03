@@ -28,6 +28,8 @@ mod command_band;
 mod border_controls;
 #[path = "suites/return_probe.rs"]
 mod return_probe;
+#[path = "suites/declared_exit.rs"]
+mod declared_exit;
 #[path = "suites/matrix_path_highlight.rs"]
 mod matrix_path_highlight;
 #[path = "suites/matrix_view.rs"]

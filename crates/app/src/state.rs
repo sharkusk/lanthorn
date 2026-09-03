@@ -2497,6 +2497,23 @@ pub struct AppState {
     /// a new move ends whatever was in flight, because the move may itself be the
     /// walk back. See [`crate::return_probe`].
     pub return_search: Option<crate::return_probe::ReturnSearch>,
+    /// A Phase-2 randomness search running right now, if any (SQ-1257): after a move Phase 1
+    /// could not classify statically (`DeclaredExit::Absent`/`Code`), a reseeded shadow walk
+    /// asked whether the story is deciding this direction at random. Session state, never
+    /// persisted — what it LEARNS is persisted, as [`mapper::graph::MapGraph::mark_random_exit`]
+    /// or nothing at all. At most one, like [`Self::return_search`].
+    pub random_exit_search: Option<crate::random_exit_probe::RandomExitSearch>,
+    /// The engine snapshot from the END of the previous turn, and the room it was taken in
+    /// (SQ-1257 Phase 2) — the moment just before whatever command produced THIS turn's move was
+    /// typed, which is the state a Phase-2 probe has to restart from to ask "what if the story
+    /// rolled different dice here". Kept only for an engine [`crate::engine::Engine::rng_seed`]
+    /// answers `Some` for (Z-machine today); `None` for every other engine and for a session that
+    /// has not finished a turn yet. The room is the correctness guard: a stale snapshot from
+    /// before a restore/reset is useless data about a room the player is not standing in any
+    /// more, and is discarded rather than trusted the moment it disagrees with the room this
+    /// turn's move was actually taken from.
+    pub random_exit_pre_move_save:
+        Option<(mapper::graph::RoomId, std::sync::Arc<crate::engine::EngineSave>)>,
     /// A vocabulary offer that has been asked of the shadow and not yet answered
     /// (SQ-1124). At most one: a second question while this is outstanding is not
     /// asked at all, and that offer falls back to what it can say unvetted.
@@ -3475,6 +3492,8 @@ impl Default for AppState {
             reveal: None,
             probe: crate::probe::ShadowProbe::default(),
             return_search: None,
+            random_exit_search: None,
+            random_exit_pre_move_save: None,
             vocab_pending: None,
             turn_epoch: 0,
             transcript_styles: Vec::new(),
@@ -7615,6 +7634,7 @@ mod tests {
             pictures: Vec::new(),
             transcript_elems: vec![],
             prose_retired: None,
+            declared_exit: None,
         }
     }
 

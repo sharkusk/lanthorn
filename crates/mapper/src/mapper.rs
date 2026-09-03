@@ -87,6 +87,24 @@ impl Mapper {
         self.graph.add_self_loop(here, dir)
     }
 
+    /// Record `dir` out of `origin` as a RANDOM exit (SQ-1257): the room's own declared exit
+    /// data named a fixed destination and the player was sent somewhere else — Lost Pig's gnome
+    /// tunnels, where a "before going" rule overrides the room's exit table entirely. Mints NO
+    /// edge; the caller still moves [`MapGraph::set_current`] to wherever the player actually
+    /// landed via [`Mapper::observe_relocation`], exactly as for any other involuntary move. This
+    /// call is the one that leaves a trace of the ATTEMPT — without it, a direction the story
+    /// randomised is indistinguishable from one nobody has ever tried.
+    ///
+    /// Returns false for an unknown room or [`Direction::Unknown`], matching
+    /// [`Self::record_probed_passage`] and [`Self::record_self_loop`].
+    pub fn record_random_exit(&mut self, origin: RoomId, dir: Direction) -> bool {
+        if dir == Direction::Unknown || self.graph.room(origin).is_none() {
+            return false;
+        }
+        self.graph.mark_random_exit(origin, dir);
+        true
+    }
+
     fn observe_inner(&mut self, location: RoomId, name: &str, via: Option<Direction>, moved: bool) {
         // Asked BEFORE the upsert, because after it every room is a room the map knows. Only this
         // moment can answer it, and the detector needs it: a region that grew by one room is worth

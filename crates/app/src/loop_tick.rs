@@ -587,6 +587,15 @@ pub(crate) fn poll_shadow_answers(
             state.graph_gen = state.graph_gen.wrapping_add(1);
             crate::turn::schedule_map_maintenance(state, mapper, false, true, bg_tidy_counter);
             changed = true;
+        } else if app::random_exit_probe::owns(state, answer.token)
+            && app::random_exit_probe::deliver(state, mapper, &answer)
+        {
+            // SQ-1257 Phase 2: an edge was just DELETED (a random exit confirmed), which is a
+            // geometry change exactly like a new one — the render memo and any in-flight tidy
+            // must not go on describing the edge that is now gone.
+            state.graph_gen = state.graph_gen.wrapping_add(1);
+            crate::turn::schedule_map_maintenance(state, mapper, false, true, bg_tidy_counter);
+            changed = true;
         }
         // An answer nobody owns is one whose asker has moved on — an aborted
         // search, or a vocabulary offer the player typed past. Dropping it is the

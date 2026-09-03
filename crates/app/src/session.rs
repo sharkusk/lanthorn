@@ -521,6 +521,16 @@ pub struct TurnResult {
     /// the SQ-0407 truncate, which would eat the session's history along with it.
     /// Always `None` for non-v6 Z-machine stories, Glulx and Scott.
     pub prose_retired: Option<usize>,
+    /// What the room the player was standing in BEFORE this turn declares for
+    /// the direction just typed (SQ-1257) — `None` when no direction was typed,
+    /// the pre-turn room was unknown, or the engine has no such table (see
+    /// [`crate::engine::Engine::declared_exit`]). Filled in by the turn driver
+    /// (`turn.rs`, which alone holds both the pre-move room and a live engine
+    /// handle), read by [`apply_turn`] to tell a real passage from one a
+    /// routine improvised on the spot. Every synthetic/seeded `TurnResult`
+    /// (tests, history replay, a host restore) leaves this `None`, which is
+    /// the correct "behave exactly as today" answer for all of them.
+    pub declared_exit: Option<crate::engine::DeclaredExit>,
 }
 
 impl TurnResult {
@@ -1909,6 +1919,7 @@ impl GameSession {
             pictures,
             transcript_elems,
             prose_retired,
+            declared_exit: None,
         }
     }
 
@@ -3891,6 +3902,32 @@ pub fn apply_turn(
             return;
         }
         let moved_room = mapper.graph.current() != Some(snap.number);
+        // SQ-1257: the ORIGIN room's own map data named a fixed destination for the
+        // direction just typed, and the player did not land there. The story's code
+        // overrode the move — Lost Pig's gnome tunnels are the case this exists for,
+        // a "before going" rule that sends the player to a random cave regardless of
+        // what the room's exit table says. `moved_room` guards it: a mismatch against
+        // a room the player never left (a refusal that nonetheless prints a fresh
+        // description) is not evidence of anything.
+        // SQ-1257 Phase 2: once a direction out of the origin is already marked random, this
+        // move mints no edge EITHER — same as the mismatch case above, and for the same reason:
+        // one lucky landing is not proof the story stopped randomising. What is different from
+        // before is that this is not the end of the story: `turn::finish_command_turn` (which
+        // sees this decision through `TurnResult`/the graph, not through a return value here)
+        // arms a Phase-2 re-probe for exactly this shape, and TWO reseeded attempts that both
+        // agree with THIS landing is what upgrades the mark to a real edge
+        // (`random_exit_probe::deliver`) — never a single move on its own, here or anywhere.
+        let already_random = mapper
+            .graph
+            .current()
+            .zip(parse_direction(command))
+            .is_some_and(|(here, d)| mapper.graph.is_random_exit(here, d));
+        let random_exit = already_random
+            || (moved_room
+                && matches!(
+                    result.declared_exit,
+                    Some(crate::engine::DeclaredExit::Room(r)) if r != snap.number
+                ));
         if fatal {
             // The game said the player died this turn and moved them somewhere that is NOT
             // reachable by the command they typed (e.g. a grue kills you in the dark and drops
@@ -3911,6 +3948,22 @@ pub fn apply_turn(
             // well house. Wherever a resurrection drops you is not a passage out of where you
             // died. (SQ-0673)
             mapper.observe_relocation(snap.number, &snap.name);
+            death.unresolved = false;
+        } else if random_exit {
+            // The destination is still observed as the current room — its own exits
+            // work and it appears on the map — but NO edge is minted from the origin,
+            // and the origin/direction is recorded as a stored fact of its own
+            // (`?` in the matrix, "destination varies" on the room card) so the map
+            // never draws a confident arrow for a passage the story never committed
+            // to. Not `observe_relocation` alone: that would leave no trace at all
+            // that this direction was ever tried, indistinguishable from a direction
+            // nobody has explored.
+            if let (Some(origin), Some(d)) = (mapper.graph.current(), parse_direction(command)) {
+                mapper.record_random_exit(origin, d);
+            }
+            mapper.observe_relocation(snap.number, &snap.name);
+            // Ordinary play resuming, same reasoning as the `arrived` branch below:
+            // whatever death was outstanding is settled without a resurrection.
             death.unresolved = false;
         } else if arrived {
             // The game printed this room's heading again, so the player MOVED — even if they
@@ -5092,6 +5145,41 @@ impl Engine for GameSession {
         detect_location_with(&self.machine, self.player_candidates()).as_ref().map(location_to_snapshot)
     }
 
+    fn declared_exit(
+        &self,
+        origin: mapper::graph::RoomId,
+        dir: mapper::direction::Direction,
+    ) -> crate::engine::DeclaredExit {
+        use mapper::direction::Direction as D;
+        use zvm::world::Compass;
+        let Some(compass) = (match dir {
+            D::N => Some(Compass::N),
+            D::S => Some(Compass::S),
+            D::E => Some(Compass::E),
+            D::W => Some(Compass::W),
+            D::NE => Some(Compass::Ne),
+            D::NW => Some(Compass::Nw),
+            D::SE => Some(Compass::Se),
+            D::SW => Some(Compass::Sw),
+            D::Up => Some(Compass::Up),
+            D::Down => Some(Compass::Down),
+            D::In => Some(Compass::In),
+            D::Out => Some(Compass::Out),
+            D::Unknown => None,
+        }) else {
+            return crate::engine::DeclaredExit::Unknown;
+        };
+        self.world_model().declared_exit(&self.machine.mem, origin, compass)
+    }
+
+    fn rng_seed(&self) -> Option<u32> {
+        Some(self.machine.rng_seed())
+    }
+
+    fn reseed_random(&mut self, seed: u32) {
+        self.machine.set_rng_seed(seed);
+    }
+
     fn set_trace_screen(&mut self, on: bool) {
         self.machine.trace_screen = on;
     }
@@ -6063,6 +6151,7 @@ mod tests {
             pictures: Vec::new(),
             transcript_elems: Vec::new(),
             prose_retired: None,
+            declared_exit: None,
         };
         apply_turn(&mut m, "look", &first, &mut Default::default());
         assert_eq!(m.graph.current(), Some(1));
@@ -6087,6 +6176,7 @@ mod tests {
             pictures: Vec::new(),
             transcript_elems: Vec::new(),
             prose_retired: None,
+            declared_exit: None,
         };
         apply_turn(&mut m, "north", &second, &mut Default::default());
         assert!(m.graph.room(2).is_some());
@@ -6140,6 +6230,7 @@ mod tests {
             pictures: Vec::new(),
             transcript_elems: Vec::new(),
             prose_retired: None,
+            declared_exit: None,
         };
         apply_turn(&mut m, "look", &result, &mut Default::default());
         assert_eq!(m.graph.current(), None);
@@ -6184,6 +6275,7 @@ mod tests {
             pictures: Vec::new(),
             transcript_elems: Vec::new(),
             prose_retired: None,
+            declared_exit: None,
         };
         let mut m = Mapper::default();
         apply_turn(&mut m, "", &mk(1, "Living Room", "Living Room\n"), &mut Default::default());
@@ -6235,6 +6327,7 @@ mod tests {
             pictures: Vec::new(),
             transcript_elems: Vec::new(),
             prose_retired: None,
+            declared_exit: None,
         };
 
         let mut m = Mapper::default();
@@ -6293,6 +6386,7 @@ mod tests {
             pictures: Vec::new(),
             transcript_elems: Vec::new(),
             prose_retired: None,
+            declared_exit: None,
         };
         apply_turn(&mut m, "", &result, &mut Default::default());
         assert_eq!(m.graph.current(), Some(333));
@@ -6321,6 +6415,7 @@ mod tests {
             pictures: Vec::new(),
             transcript_elems: Vec::new(),
             prose_retired: None,
+            declared_exit: None,
         };
         assert!(r.info.is_none());
     }
@@ -6346,6 +6441,7 @@ mod tests {
             pictures: Vec::new(),
             transcript_elems: Vec::new(),
             prose_retired: None,
+            declared_exit: None,
         }
     }
 
@@ -9135,6 +9231,7 @@ mod untried_turn_tests {
             glulx_sound_ops: Vec::new(), diagnostics: vec![], fault: None,
             location_method: None, pending_io: None, timed_out: false,
             pictures: Vec::new(), transcript_elems: Vec::new(), prose_retired: None,
+            declared_exit: None,
         }
     }
 
