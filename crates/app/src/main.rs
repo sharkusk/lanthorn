@@ -534,6 +534,12 @@ struct PaneRects {
     /// Hit-rects for the dock's two view tabs. A click switches the body, the way
     /// a click on a layer tab switches layers.
     room_dock_tabs: Vec<(app::state::RoomDockView, Rect)>,
+    /// Hit-rect for the dock's close box (SQ-1265), when the frame drew one.
+    room_dock_close: Option<Rect>,
+    /// The room context menu's frame and per-item hit-rects (SQ-1265), zero-area
+    /// / empty when it is closed.
+    room_menu_area: Rect,
+    room_menu_items: Vec<(usize, Rect)>,
     /// Hit-rects for each layer tab, paired with the layer id; the mouse
     /// handler hit-tests these to switch the viewed layer on click.
     layer_tabs: Vec<(LayerId, Rect)>,
@@ -683,6 +689,9 @@ fn draw_frame(
     // does not.
     let mut map_control_view = mapper::layer::MapView::Drawn;
     let mut room_dock_tabs_out: Vec<(app::state::RoomDockView, Rect)> = Vec::new();
+    let mut room_dock_close_out: Option<Rect> = None;
+    let mut room_menu_area_out: Rect = Rect::default();
+    let mut room_menu_items_out: Vec<(usize, Rect)> = Vec::new();
     let mut debug_tabs_out: Vec<(usize, usize, Rect)> = Vec::new();
     let mut dialog_rects_out: Option<DialogRects> = None;
     let mut overlay_rects: Option<overlays::OverlayRects> = None;
@@ -1039,7 +1048,7 @@ fn draw_frame(
             let dock_resize_hl = (state.resize_mode
                 && state.resize_target == app::state::ResizeTarget::RoomDock)
                 || state.boundary_active(app::layout::Boundary::RoomDockTop);
-            room_dock_tabs_out = app::render::room_dock::draw_room_dock(
+            let dock_rects = app::render::room_dock::draw_room_dock(
                 graph,
                 room,
                 state.room_dock_pinned(),
@@ -1052,6 +1061,8 @@ fn draw_frame(
                 dock_resize_hl,
                 buf,
             );
+            room_dock_tabs_out = dock_rects.tabs;
+            room_dock_close_out = dock_rects.close;
         }
 
         // ── Inventory dock panel ──────────────────────────────────────────────
@@ -1166,6 +1177,17 @@ fn draw_frame(
             &mut palette_hits,
         ));
 
+        // ── Room context menu (SQ-1265) ───────────────────────────────────────
+        // Drawn LAST, above the overlay ladder, the room dock and the map — a
+        // popup anchored at the right-click that opened it, clamped to the map
+        // pane it was opened over.
+        if let Some(menu) = &state.overlays.room_menu {
+            let rects =
+                app::room_menu::draw_room_menu(menu, map_area, &state.keymap, &state.colors, buf);
+            room_menu_area_out = rects.area;
+            room_menu_items_out = rects.items;
+        }
+
         // ── Border-control hover hint (SQ-1123) ───────────────────────────────
         // After the overlay ladder, so the hint floats above the panes; the
         // hover is only ever SET while no modal overlay is open, so this can
@@ -1226,7 +1248,7 @@ fn draw_frame(
 
     // The draw closure runs exactly once, so the overlay ladder always ran.
     let overlay_rects = overlay_rects.expect("draw_frame closure runs exactly once");
-    Ok(PaneRects { map: map_area, story: story_area, boundaries: pane_layout_out.boundary_zones(), pane_layout: pane_layout_out, room_rects: room_rects_out, map_view: map_control_view, room_dock: pane_layout_out.room_dock, room_dock_tabs: room_dock_tabs_out, layer_tabs: layer_tabs_out, border_controls: border_controls_out, debug_tabs: debug_tabs_out, dialog: overlay_rects.dialog, aux_dialog: overlay_rects.aux_dialog, history_prompt: overlay_rects.history_prompt, font_check: overlay_rects.font_check, fetch_keep: overlay_rects.fetch_keep, reset_dialog: overlay_rects.reset_dialog, region_prompt: overlay_rects.region_prompt, game_over: overlay_rects.game_over, save_name_dialog: overlay_rects.save_name_dialog, text_entry: overlay_rects.text_entry, confirm_delete: overlay_rects.confirm_delete, confirm_overwrite: overlay_rects.confirm_overwrite, quit_dialog: overlay_rects.quit_dialog, launch_dialog: overlay_rects.launch_dialog, hints_panel: overlay_rects.hints_panel, command_band: band_hits, inventory_dock: inv_hits, palette: palette_hits, transcript_links: transcript_links_out, win_rects: win_rects_out, transcript_max_scroll, transcript_viewport_rows, transcript_prompt_rows, transcript_total_rows, transcript_surface, modal_list_viewport })
+    Ok(PaneRects { map: map_area, story: story_area, boundaries: pane_layout_out.boundary_zones(), pane_layout: pane_layout_out, room_rects: room_rects_out, map_view: map_control_view, room_dock: pane_layout_out.room_dock, room_dock_tabs: room_dock_tabs_out, room_dock_close: room_dock_close_out, room_menu_area: room_menu_area_out, room_menu_items: room_menu_items_out, layer_tabs: layer_tabs_out, border_controls: border_controls_out, debug_tabs: debug_tabs_out, dialog: overlay_rects.dialog, aux_dialog: overlay_rects.aux_dialog, history_prompt: overlay_rects.history_prompt, font_check: overlay_rects.font_check, fetch_keep: overlay_rects.fetch_keep, reset_dialog: overlay_rects.reset_dialog, region_prompt: overlay_rects.region_prompt, game_over: overlay_rects.game_over, save_name_dialog: overlay_rects.save_name_dialog, text_entry: overlay_rects.text_entry, confirm_delete: overlay_rects.confirm_delete, confirm_overwrite: overlay_rects.confirm_overwrite, quit_dialog: overlay_rects.quit_dialog, launch_dialog: overlay_rects.launch_dialog, hints_panel: overlay_rects.hints_panel, command_band: band_hits, inventory_dock: inv_hits, palette: palette_hits, transcript_links: transcript_links_out, win_rects: win_rects_out, transcript_max_scroll, transcript_viewport_rows, transcript_prompt_rows, transcript_total_rows, transcript_surface, modal_list_viewport })
 }
 
 // ── Command-band mouse routing ───────────────────────────────────────────────
@@ -2421,7 +2443,14 @@ fn run_event_loop(boot: startup::BootResult, launched_from_library: bool) -> Run
         // it, then goes on to be handled normally.
         if let Event::Mouse(m) = &event {
             use app::pane_drag::DragOutcome;
-            match app::pane_drag::on_mouse(&mut state, m, &last_panes.pane_layout, &last_panes.boundaries, &last_panes.border_controls) {
+            // The room dock's view tabs (SQ-1265) sit on `Boundary::RoomDockTop`'s
+            // own grab row (the dock's top border IS the pane's bottom border),
+            // so they must be excluded from the drag the same way a border
+            // control is — otherwise a Down on "Room"/"Diagnostics" starts a
+            // resize instead of ever reaching `room_dock_mouse_action`.
+            let dock_chrome: Vec<Rect> =
+                last_panes.room_dock_tabs.iter().map(|(_, r)| *r).collect();
+            match app::pane_drag::on_mouse(&mut state, m, &last_panes.pane_layout, &last_panes.boundaries, &last_panes.border_controls, &dock_chrome) {
                 DragOutcome::Ignored => {}
                 DragOutcome::Consumed => continue,
                 DragOutcome::Committed => {
@@ -3316,6 +3345,9 @@ fn run_event_loop(boot: startup::BootResult, launched_from_library: bool) -> Run
                         let close_leader = state.overlays.hotkey_dialog;
                         // A palette-resolved command closes the palette after it runs.
                         let close_palette = state.overlays.palette.is_some();
+                        // Same for the room context menu (SQ-1265): Enter or an
+                        // item's own hotkey activates and dismisses in one motion.
+                        let close_room_menu = state.overlays.room_menu.is_some();
                         let outcome = slash::parse_in_context(&s, state.config.command_prefix, ctx);
                         let should_break = dispatch_slash_outcome(
                             outcome, &mut state, &mut mapper, &mut *session, &mut style_watcher,
@@ -3327,6 +3359,9 @@ fn run_event_loop(boot: startup::BootResult, launched_from_library: bool) -> Run
                         }
                         if close_palette {
                             state.overlays.palette = None;
+                        }
+                        if close_room_menu {
+                            state.overlays.room_menu = None;
                         }
                         lifecycle::flush_pending_config_write(&mut state);
                         if should_break {
@@ -3509,6 +3544,42 @@ fn run_event_loop(boot: startup::BootResult, launched_from_library: bool) -> Run
                         _ => continue 'event_loop,
                     }
                 }
+                // Room context menu (SQ-1265): owns the mouse while open, the
+                // same shape the picker's per-story menu takes — a click on an
+                // item runs it, its own frame is a miss (not a dismissal), and
+                // anywhere else (map or elsewhere) dismisses it. Checked before
+                // the room dock below so the popup always wins a click that
+                // happens to land over it too.
+                if state.overlays.room_menu.is_some() {
+                    if let crossterm::event::MouseEventKind::Down(crossterm::event::MouseButton::Left) = m.kind {
+                        let pt = ratatui::layout::Position { x: m.column, y: m.row };
+                        match last_panes.room_menu_items.iter().find(|(_, r)| r.contains(pt)) {
+                            Some((i, _)) => {
+                                let cmd = app::room_menu::ROOM_MENU.get(*i).map(|it| it.command);
+                                state.overlays.room_menu = None;
+                                if let Some(cmd) = cmd {
+                                    let outcome = slash::parse_in_context(
+                                        cmd, state.config.command_prefix, Context::Map,
+                                    );
+                                    let should_break = dispatch_slash_outcome(
+                                        outcome, &mut state, &mut mapper, &mut *session, &mut style_watcher,
+                                        &game_dir, &ifid, &arc_file, &story_bytes, &story_path,
+                                        last_panes.map, last_panes.story, true,
+                                    );
+                                    lifecycle::flush_pending_config_write(&mut state);
+                                    if should_break {
+                                        break 'event_loop state.exit_target.into();
+                                    }
+                                }
+                            }
+                            // Its own border is not "outside": a click that lands
+                            // on the frame is a miss, not a dismissal.
+                            None if last_panes.room_menu_area.contains(pt) => {}
+                            None => state.overlays.room_menu = None,
+                        }
+                    }
+                    continue 'event_loop;
+                }
                 // Room dock (SQ-0692): the dock owns every mouse event inside its
                 // rect. A left-click on one of its two view tabs switches the body;
                 // anything else inside it is simply swallowed, because the dock is
@@ -3519,6 +3590,7 @@ fn run_event_loop(boot: startup::BootResult, launched_from_library: bool) -> Run
                     if let Some(action) = app::input::room_dock_mouse_action(
                         last_panes.room_dock,
                         &last_panes.room_dock_tabs,
+                        last_panes.room_dock_close,
                         &m,
                     ) {
                         // (`needs_redraw` was already set for this event above.)

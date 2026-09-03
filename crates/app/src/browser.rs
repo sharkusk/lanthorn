@@ -227,7 +227,7 @@ pub fn key_label(s: &KeySpec) -> String {
 /// `[keymap.browser]` line that reuses a default's key displaces it there, so a
 /// genuine rebinding moves the label with it.
 pub fn first_key(km: &KeyMap, command: &str) -> Option<KeySpec> {
-    km.for_context(Context::Browser).find(|(_, cmd)| *cmd == command).map(|(s, _)| *s)
+    km.first_key(Context::Browser, command)
 }
 
 /// Render one hint, or `None` when nothing is bound to its command.

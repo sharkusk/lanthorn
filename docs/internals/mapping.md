@@ -24,9 +24,10 @@ Adams adventure. One map builder, three engines, zero special cases.
 
 Before the mapper can place a room it has to be told which room you're in, and
 each engine surfaces that differently. lanthorn handles all of it, and records
-*how* it worked out each room the first time it finds it — right-click a room to see
-"Found by:" in the room panel's Diagnostics body. It is kept with the room, so the answer is
-still there long after the turn that discovered it.
+*how* it worked out each room the first time it finds it — click a room, then
+click the room panel's **Diagnostics** tab, to see "Found by:" there. It is kept
+with the room, so the answer is still there long after the turn that
+discovered it.
 
 - **Classic Z-machine (v3)** reports the room in the status-line variable —
   `via status variable`.

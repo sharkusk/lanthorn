@@ -2406,6 +2406,11 @@ pub struct OverlayState {
     /// Index of the currently focused button in an open modal dialog. Reset to
     /// a button index when a modal opens; cycled by Tab/Shift-Tab.
     pub dialog_focus: usize,
+    /// The room panel's right-click context menu (SQ-1265), or `None` when
+    /// closed. Opened by `Action::OpenRoomMenu`, which also pins the dock on
+    /// the same room — the menu and the panel underneath always agree on
+    /// which room is meant.
+    pub room_menu: Option<crate::room_menu::RoomMenu>,
 }
 
 /// Where the last v6 frame put one thing on the terminal, for `/dump-windows`
@@ -4147,6 +4152,7 @@ impl AppState {
             || self.overlays.hints.is_some()
             || self.overlays.replay.is_some()
             || self.overlays.region_prompt.is_some()
+            || self.overlays.room_menu.is_some()
             || self.resize_mode
     }
 
