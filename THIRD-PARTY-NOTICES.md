@@ -99,3 +99,32 @@ one above with "1.6 Copyright 1997" in place of "3.0 Copyright 2006".
 
 Beale asks for acknowledgment rather than requiring it; this file is that
 acknowledgment.
+
+---
+
+## IosevkaTerm Nerd Font Mono — Renzhi Li; Nerd Fonts (Ryan L McIntyre)
+
+The Docker image (`Dockerfile`, `font-fetch` stage) embeds two faces of
+**IosevkaTerm Nerd Font Mono** — Regular and Bold, converted to WOFF2 — in the
+browser page it serves, so lanthorn's Nerd Font icons and the automap's Legacy
+Computing half-diagonals render without depending on a visitor's installed
+fonts. Nothing in this repository or in the native binaries contains the font;
+it is fetched at image build time from the Nerd Fonts v3.5.1 release
+(`IosevkaTerm.zip`, SHA-256 pinned in the Dockerfile) and shipped only inside
+the image, under `/usr/local/share/lanthorn/fonts/`.
+
+- **Iosevka** (the typeface, version 34.8.0 in that release) is
+  Copyright (c) 2015-2023 Renzhi Li (aka Belleve Invis) and licensed under the
+  **SIL Open Font License, Version 1.1**. The OFL permits bundling and
+  embedding with software provided the licence accompanies the Font Software,
+  so the release's `LICENSE.md` (the full OFL text) is copied into the image
+  beside the font files.
+- **Nerd Fonts** patches Iosevka with icon glyphs; the patcher itself is MIT.
+  The icon sets it merges carry their own terms, recorded in the release's
+  `README.md`, which the image ships beside the licence for attribution:
+  Codicons and Font Awesome (CC BY 4.0), MaterialDesign (Apache 2.0), Weather
+  Icons and Pomicons (OFL 1.1), Devicons, Octicons, Seti, Powerline and the
+  Hack extra glyphs (MIT), Font Logos (unlicensed).
+
+Upstream: <https://github.com/be5invis/Iosevka> and
+<https://github.com/ryanoasis/nerd-fonts>.

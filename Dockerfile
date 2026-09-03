@@ -82,7 +82,8 @@ RUN sh -c '/ttyd -p 7999 true & pid=$!; sleep 1; curl -fsS -o /ttyd-index.html h
 # half-diagonals (U+1FBA0-1FBA3) render at all. IosevkaTerm Nerd Font Mono is
 # the one Nerd Font that carries those diagonals. Iosevka itself is OFL-1.1;
 # the Nerd Fonts patch is MIT; both redistributable, and the licence text
-# ships in the image below. Fetched and pinned the same way as ttyd above —
+# ships in the image below, with the release README that attributes the icon
+# sets (two are CC BY 4.0). See THIRD-PARTY-NOTICES.md. Fetched and pinned the same way as ttyd above —
 # a release asset, verified by SHA-256 before anything unpacks it.
 FROM debian:trixie-slim AS font-fetch
 RUN apt-get update \
@@ -101,7 +102,7 @@ RUN curl -fsSL -o /tmp/IosevkaTerm.zip \
     && sha256sum -c /tmp/IosevkaTerm.zip.sha256 \
     && mkdir -p /fonts \
     && unzip -o -j /tmp/IosevkaTerm.zip \
-         IosevkaTermNerdFontMono-Regular.ttf IosevkaTermNerdFontMono-Bold.ttf LICENSE.md \
+         IosevkaTermNerdFontMono-Regular.ttf IosevkaTermNerdFontMono-Bold.ttf LICENSE.md README.md \
          -d /fonts \
     && woff2_compress /fonts/IosevkaTermNerdFontMono-Regular.ttf \
     && woff2_compress /fonts/IosevkaTermNerdFontMono-Bold.ttf \
