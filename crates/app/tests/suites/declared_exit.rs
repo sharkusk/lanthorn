@@ -357,16 +357,24 @@ impl Play {
     }
 }
 
-/// SQ-1257 Phase 2, end to end, on the real game: Twisty Cave's exits carry no declared data at
-/// all (`Absent`), the story sends the player somewhere different depending on where its `random`
-/// draw lands, and a reseeded shadow walk of the SAME direction from the SAME pre-move moment
-/// disagrees with where the live player actually went — so the edge Phase 1 minted is deleted and
-/// the direction is marked `Random`, and a second walk the same way mints nothing at all (sticky).
+/// SQ-1257 Phase 2 on the real game, and what the real game turned out to be.
 ///
-/// Non-vacuity: `Twisty Cave` is asserted by name before anything about randomness is asked, so a
-/// harness that never reaches it fails on that line rather than passing on an untested room.
+/// Lost Pig's "random tunnels" are ONE room object (#183) whose `printed name` is
+/// re-rolled on every move — "Confusing Passage", "Strange Place", "Twisty
+/// Place", "Different Place", "Twisty Passage" — not several rooms with random
+/// passages between them. Before SQ-1259 the room-lock keyed rooms by status-line
+/// NAME, so every re-roll minted a fresh map room and the map ran wild; since
+/// SQ-1259 the lock holds #183 through the game's own `location` global, so a
+/// tunnel move is a move that led back to the room it left. That is exactly what
+/// `apply_turn` records for it — a self-loop — and Phase 2 never fires, because
+/// its trigger is a move that CHANGED rooms. The `?` machinery is proven on the
+/// synthetic engine in `random_exit_probe::tests`; this case pins the real
+/// game's shape so the next person does not go looking for random rooms that are
+/// not there.
+///
+/// Non-vacuity: `Twisty Cave` is asserted by name before anything else is asked.
 #[test]
-fn lost_pig_tunnels_are_confirmed_random_and_the_edge_is_deleted() {
+fn lost_pig_tunnels_are_one_room_whose_name_rerolls_and_phase_2_never_fires() {
     let Some(mut p) = Play::lost_pig() else {
         eprintln!("SKIP: gitignored stories/LostPig.z8 missing");
         return;
@@ -380,56 +388,49 @@ fn lost_pig_tunnels_are_confirmed_random_and_the_edge_is_deleted() {
     let windy_cave = p.mapper.graph.current().expect("standing in Windy Cave");
     assert_eq!(p.mapper.graph.room(windy_cave).map(|r| r.name.as_str()), Some("Windy Cave"));
 
-    // The gateway (Statue Room -> north -> Windy Cave) is `Code` but DETERMINISTIC: Phase 2 ran
-    // for it (asserted below via the probe's own counters) and found agreement, so its edge
-    // survives untouched — the seam does not delete an edge just because Phase 1 could not name
-    // it statically.
+    // The gateway (Statue Room -> north -> Windy Cave) is `Code` but DETERMINISTIC: Phase 2
+    // ran for it and found agreement, so its edge survives untouched.
     let statue_room: mapper::graph::RoomId = 128;
     assert_eq!(p.edge(statue_room, Direction::N), Some(windy_cave), "the deterministic gateway edge survives Phase 2");
     assert!(!p.mapper.graph.is_random_exit(statue_room, Direction::N), "and is not marked random");
     let probed_before_tunnels = p.state.probe.probes;
     assert!(probed_before_tunnels > 0, "the gateway's Code exit must have been Phase-2 probed at all");
 
-    // Now into the tunnel proper.
     p.turn("NORTH"); // Windy Cave -> Twisty Cave
     let twisty = p.mapper.graph.current().expect("standing in Twisty Cave");
     assert_eq!(
-        p.mapper.graph.room(twisty).map(|r| r.name.as_str()),
+        // The label is the status line's own text since SQ-1259 (the compiled short
+        // name is lowercase "twisty cave"); compare case-insensitively.
+        p.mapper.graph.room(twisty).map(|r| r.name.to_lowercase()).as_deref(),
         Some("twisty cave"),
         "non-vacuity guard: must actually be in Twisty Cave before asserting anything about it"
     );
-
-    let before_edges = p.mapper.graph.connections().len();
-    p.turn("EAST"); // Twisty Cave -> (random) -> some tunnel room
-    // Whatever the live walk landed in, Phase 2's answer must have already been judged and
-    // settled by the time `turn` returns (synchronous in this harness).
-    assert!(
-        p.mapper.graph.is_random_exit(twisty, Direction::E),
-        "Twisty Cave's east exit must be confirmed random"
-    );
     assert_eq!(
-        p.edge(twisty, Direction::E),
-        None,
-        "and NO edge may leave Twisty Cave east — Phase 2 deleted whatever Phase 1 minted"
+        p.session.declared_exit(twisty, Direction::E),
+        DeclaredExit::Absent,
+        "the tunnel room's exit table is empty — the compass was found, this room declares nothing"
     );
+
+    // Walk the tunnels. Every move lands in the SAME object, under a different name.
+    // (The NORTH into Twisty Cave was itself a `Code` exit that changed rooms, so it
+    // was probed — count from here, not from before it.)
+    let probed_before_tunnels = p.state.probe.probes;
+    let rooms_before = p.mapper.graph.rooms().count();
+    let mut names = std::collections::BTreeSet::new();
+    for cmd in ["EAST", "WEST", "NORTH", "SOUTH", "EAST"] {
+        p.turn(cmd);
+        assert_eq!(p.mapper.graph.current(), Some(twisty), "{cmd}: a tunnel move leads back to the tunnel room itself");
+        names.insert(p.session.current_location().map(|l| l.name).unwrap_or_default());
+    }
+    assert!(names.len() >= 2, "the room's printed name re-rolls between moves: {names:?}");
+    assert_eq!(p.mapper.graph.rooms().count(), rooms_before, "no new map room is minted for a re-rolled name");
+    assert_eq!(p.state.probe.probes, probed_before_tunnels, "Phase 2 never fires: no move changed rooms");
+    assert!(!p.mapper.graph.is_random_exit(twisty, Direction::E), "nothing is marked `?` — the destination never varied");
     assert_eq!(
         mapper::matrix::classify(&p.mapper.graph, twisty, Direction::E),
-        mapper::matrix::MatrixCell::Random,
-        "the matrix must read this cell `?`"
+        mapper::matrix::MatrixCell::SelfLoop,
+        "the matrix reads the tunnel's east exit as `leads back here`"
     );
-    // A room WAS still discovered and observed (the player really did go somewhere) — only the
-    // EDGE from Twisty Cave is missing.
-    assert!(p.mapper.graph.connections().len() <= before_edges + 1, "at most the (now-deleted) edge could have existed transiently");
-
-    // The upgrade path itself (a random-marked direction later behaving deterministically) is
-    // proven deterministically by
-    // `random_exit_probe::tests::a_random_mark_upgrades_on_agreement_and_reverts_on_the_next_disagreement`
-    // — this harness cannot force the REAL game's next `random` draw to agree with the first
-    // one, and re-visiting Twisty Cave to try would need control this test does not have over
-    // where the live session actually is after a random walk. The walkthrough's own route back
-    // OUT of the tunnels (`PLAY WHISTLE` then `FOLLOW GNOME`) does not exercise it either: those
-    // are named verbs, not repeated compass directions, so no direction the tunnels marked
-    // random is ever walked a second time by that route for Phase 2 to re-judge.
 }
 
 /// The seam's own reseed derivation never repeats the input seed and never repeats itself between
