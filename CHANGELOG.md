@@ -33,6 +33,11 @@ Absolute URLs or no link.
   shows there's more below.
 - **`gvm-cli --version` names itself `gvm-cli` again**, not the crates.io
   package name it briefly picked up in 0.4.1.
+- **A one-way passage no longer draws its arrowhead where a room's own exit or
+  `?` mark already sits.** Two rooms both leading into the same hub could land
+  one arrival right on top of the hub's own random-exit stub, reading as a
+  return path that didn't exist; arrivals now settle beside that cell instead,
+  unless the passage genuinely runs both ways.
 - **The map no longer draws an arrow for a move some games decide at random.**
   Lost Pig's gnome tunnels send you to a different room every time you walk
   the same direction; the room panel and the direction matrix now mark that

@@ -4161,6 +4161,13 @@ mod tests {
         g.set_pos(1, (0, 1));
         g.set_pos(2, (1, 0));
         g.add_edge(1, Direction::NE, 2);
+        // SQ-1274: a one-way diagonal never keeps the shared corner any more (an arrival there
+        // would misread as a return path that isn't real) — only a reciprocal, which IS the
+        // return path, still draws the clean corner-to-corner diagonal this fixture's callers
+        // test. Reciprocal here so `diagonal_corners_on_draws_an_unbroken_corner_to_corner_diagonal`
+        // still exercises that glyph chain; the departure-corner assertions the other two callers
+        // make are unaffected either way.
+        g.add_edge(2, Direction::SW, 1);
         g
     }
 
@@ -4947,6 +4954,15 @@ mod tests {
         let p = |g: &MapGraph, id: u16| g.room(id).unwrap().pos.unwrap();
         assert_eq!(p(&g,26).0, p(&g,27).0, "precondition: relayout column-aligns the 26↔27 up/down lane");
         cleanup_overlaps(&mut g, 3, 40);
+        // SQ-1274: `74 E 25` (one-way, no back edge, geometrically NE of 74 so its direct route
+        // lands on 25's BOTTOM door) shares that door with `26 Up 25`'s reciprocal Up/Down pair —
+        // and once the one-way is barred from centering there (see `assign_side_slots`), NO offset
+        // slot the arrival alone can take clears the resulting overlap: the reciprocal's own
+        // approach and the arrival's bent one cross somewhere in the shared gutter for every slot
+        // the arrival tries, on this dense 18-room fixture. `assign_side_slots` resolves it by
+        // nesting BOTH sides of that one pairing away from center instead of parking the reciprocal
+        // dead-center for the arrival's bent approach to sweep past (see its
+        // `nest_reciprocal_too` comment) — clean at zero illegal overlaps again.
         assert_eq!(render_overlap_stats(&g).0, 0,
             "cleanup clears all illegal overlaps (SQ-0222 clean routing) while protecting the up/down column");
         assert_eq!(p(&g,26).0, p(&g,27).0,
@@ -4990,6 +5006,9 @@ mod tests {
         let p = |g: &MapGraph, id: u16| g.room(id).unwrap().pos.unwrap();
         assert!(p(&g,78).0 < p(&g,180).0,
             "retidy must place 78 west of 180: 78={:?} 180={:?}", p(&g,78), p(&g,180));
+        // SQ-1274: this is the same A129 fixture as `cleanup_keeps_updown_protected_column_chain_
+        // aligned`, which carries the full diagnosis of the `74 E 25` vs `26 Up 25` shape
+        // `assign_side_slots` resolves by nesting both sides of that pairing away from center.
         assert_eq!(render_overlap_stats(&g).0, 0,
             "repair keeps all illegal overlaps cleared (SQ-0222 clean routing)");
         assert_eq!(p(&g,26).0, p(&g,27).0,
@@ -5154,8 +5173,11 @@ mod tests {
         // 74<->76 (74 S->76, 76 N->74) shares a column after relayout; WITHOUT the lock, cleanup's
         // greedy search shifts the (then-unprotected) 76 one column WEST to cut crossings, breaking
         // the reciprocal (verified: 76 moves from x=-1 to x=-2). WITH the lock, 76 can only move in
-        // Y, so it stays on 74's column. All illegal overlaps clear (SQ-0222 clean routing) with the
-        // reciprocal pair still column-locked — the lock constrains 76 without leaving any residual.
+        // Y, so it stays on 74's column.
+        //
+        // SQ-1274: same fixture as `cleanup_keeps_updown_protected_column_chain_aligned`, whose
+        // comment carries the full diagnosis of the `74 E 25` vs `26 Up 25` shape
+        // `assign_side_slots` resolves. The lock still constrains 76 correctly.
         use mapper::graph::MapGraph;
         use Direction::*;
         let mut g = MapGraph::new();
@@ -5179,7 +5201,8 @@ mod tests {
         assert_eq!(p(&g,74).0, p(&g,76).0,
             "76 must stay on 74's column after cleanup (reciprocal N/S locked): 74={:?} 76={:?}", p(&g,74), p(&g,76));
         assert!(p(&g,76).1 > p(&g,74).1, "76 stays south of 74 (only slid along the shared column, if at all)");
-        assert_eq!(render_overlap_stats(&g).0, 0, "all illegal overlaps clear (SQ-0222) with the reciprocal N/S pair still locked");
+        assert_eq!(render_overlap_stats(&g).0, 0,
+            "all illegal overlaps clear (SQ-0222) with the reciprocal N/S pair still locked");
     }
 
     #[test]
@@ -5277,6 +5300,9 @@ mod tests {
         assert!(p(&g,78).0 < p(&g,180).0, "78 stays west of 180 through compaction");
         assert_eq!(p(&g,26).0, p(&g,27).0, "26↔27 up/down column stays aligned through compaction");
         assert_eq!(p(&g,74).0, p(&g,76).0, "reciprocal N/S pair 74<->76 stays column-locked through compaction");
+        // SQ-1274: same A129 fixture as `cleanup_keeps_updown_protected_column_chain_aligned`,
+        // which carries the full diagnosis of the `74 E 25` vs `26 Up 25` shape
+        // `assign_side_slots` resolves.
         assert_eq!(render_overlap_stats(&g).0, 0,
             "compaction introduces no illegal overlap (SQ-0222 clean routing keeps the cluster clear)");
         // Compaction must leave only GUTTER lines — an empty interior column/row remains only when
@@ -7930,5 +7956,484 @@ mod sq1255_canyon_view {
             }
         }
         assert!(bad.is_empty(), "connectors run flush along a room box:\n  {}", bad.join("\n  "));
+    }
+}
+
+// ── SQ-1274 ───────────────────────────────────────────────────────────────────
+//
+// Investigation of the Adventure `advent.blb.save` report of 2026-09-02: two "In
+// Forest" rooms (#55642 at (-3,1), #42746 at (-2,1)) both connect into "In A Valley"
+// #49722 (the hub, at (-1,2)). One connector arrives on the hub's WEST side, the
+// other on its TOP; the farther room's (#55642) path threads past #42746's box on
+// its way to the top doorway and crosses the other connector. Fixture is the
+// player's own `/dump-map`, quoted in SQ-1274's brief.
+//
+// TWO findings, two different outcomes. `sq1274_counterfactuals` (run with
+// `--ignored`) walks the two workarounds the report suggested (swap the rooms'
+// positions; force which side each connector arrives on) plus five more isolating
+// what's actually going on, and neither suggested workaround reliably removes the
+// CROSSING — one makes it worse (case (b): cross 1->2), the other only relocates
+// which room gets hugged (case (a)). The actual cause traces one level deeper:
+// #42746's own DIRECT route to the hub's Top is geometrically clear, and is
+// rejected only because it collides with the unrelated `49722 N 63776` / `63776 S
+// 49722` connector (the hub's own passage to the road) — see `build`'s doc comment
+// and case (i), which fixes it by touching neither of the report's two proposals.
+// A safe local fix for the CROSSING would need to reach into how a rejected DIRECT
+// route falls back to channel routing generally, not just this room pair's
+// arrival-side choice — no such fix shipped; see `sq1274_pinned_crossing_as_reported`.
+//
+// The investigation surfaced a SECOND, narrower and genuinely local defect along the
+// way: the valley's own `?` random-exit marks (SQ-1261) sit on the same border cells
+// a one-way arrival's default (slot 0 / centered) entry would use, so #42746's West
+// arrival landed squarely on the valley's own `W` mark. That one DID get a router
+// fix (`assign_side_slots` / `resolve_entry_corner` in `crates/mapper/src/route/
+// mod.rs`, SQ-1274 scope addition): a one-way arrival now never claims a room's own
+// compass-anchor cell — the mid-side slot a real exit or a `?` mark in that
+// direction would use, or a diagonal's corner — reciprocal connectors are exempt
+// (they ARE the return path). See `sq1274_neither_forest_arrival_lands_on_the_
+// valleys_own_marked_slot` below. See the SQ-1274 side-quest note for the full
+// writeup of both.
+#[cfg(all(test, feature = "t-render"))]
+mod sq1274_forest_valley {
+    use super::*;
+    use mapper::direction::Direction::{self, Down, E, N, S, Up, W};
+    use mapper::graph::{MapGraph, RoomId};
+    use mapper::layer::MAIN_LAYER;
+    use mapper::router::Side;
+
+    const INSIDE_BUILDING: RoomId = 34441;
+    const FOREST_NEAR: RoomId = 42746; // "In Forest", pos (-2,1) — one step NW of the hub
+    const VALLEY: RoomId = 49722; // "In A Valley", the hub, pos (-1,2)
+    const FOREST_FAR: RoomId = 55642; // "In Forest", pos (-3,1) — two steps W of the hub
+    const HILL: RoomId = 61289;
+    const ROAD_END: RoomId = 63776;
+
+    fn name(id: RoomId) -> &'static str {
+        match id {
+            INSIDE_BUILDING => "Inside Building",
+            FOREST_NEAR | FOREST_FAR => "In Forest",
+            VALLEY => "In A Valley",
+            HILL => "At Hill In Road",
+            ROAD_END => "At End Of Road",
+            _ => "?",
+        }
+    }
+
+    /// Push one compass edge, returning its `connections()` index so the caller can mark it
+    /// distorted afterward (the dump marks all three forest<->valley edges `d`).
+    fn push(g: &mut MapGraph, o: RoomId, d: Direction, dest: RoomId) -> usize {
+        let idx = g.connections().len();
+        g.add_edge(o, d, dest);
+        idx
+    }
+
+    /// #42746's whole block: its self-loop badge (N, W, S) plus its `E` and `Down` edges to
+    /// the hub. Returns the `E` edge's index (the one to mark distorted).
+    fn emit_near_block(g: &mut MapGraph) -> usize {
+        g.add_self_loop(FOREST_NEAR, N);
+        let e_idx = push(g, FOREST_NEAR, E, VALLEY);
+        g.add_self_loop(FOREST_NEAR, W);
+        g.add_self_loop(FOREST_NEAR, S);
+        g.add_edge(FOREST_NEAR, Down, VALLEY);
+        e_idx
+    }
+
+    /// #55642's whole block: its `E` and `Down` and `W` edges to the hub. Returns the `E` and
+    /// `W` edges' indices (both marked distorted in the dump).
+    fn emit_far_block(g: &mut MapGraph) -> (usize, usize) {
+        let e_idx = push(g, FOREST_FAR, E, VALLEY);
+        g.add_edge(FOREST_FAR, Down, VALLEY);
+        let w_idx = push(g, FOREST_FAR, W, VALLEY);
+        (e_idx, w_idx)
+    }
+
+    /// Reconstruct the reported graph exactly (ids, positions, edges, self-loops, random
+    /// marks) from the player's dump, quoted in the brief.
+    ///
+    /// `forest_first` selects which forest room's edges to #49722 are inserted first — a
+    /// counterfactual knob for "what if the OTHER room got first pick" (SQ-1274 Part 1.1/1.2).
+    /// It looks like it should decide the outcome (`route_topology`'s compass loop processes
+    /// `graph.connections()` in order, and a one-way arrival that wins a room side keeps it
+    /// against a later contender), but measurement (`sq1274_counterfactuals` cases (0)/(b)/(h)
+    /// vs (i)) shows it ISN'T the deciding factor here: #42746's own `direct_route` to the hub's
+    /// Top is geometrically clear on its own, and is only rejected because it collides with the
+    /// UNRELATED `49722 N 63776` / `63776 S 49722` connector — the hub's own passage to the
+    /// road — which happens to run along the exact room-grid line #42746's direct L would use.
+    /// That stomp, not any contention between the two forest rooms, is what pushes #42746 into
+    /// channel routing where it claims the ruled West side; #55642 (already barred from a direct
+    /// route because #42746's own cell sits between it and the hub) is then the one left
+    /// contending for West, loses, and is pushed to Top — which is what "the farther room's path
+    /// runs under the nearer room's box" actually traces back to. Reordering the two forest
+    /// edges relative to each other (`forest_first`) does not touch that upstream stomp, which
+    /// is why it does not reliably fix — and in the full graph makes WORSE (case (b): cross 1->2)
+    /// — the very crossing it looks like it should resolve. See `sq1274_counterfactuals` case
+    /// (i), which drops only the hub<->road N/S link and reaches `cross=0` with NEITHER
+    /// `forest_first` NOR `swap_positions` touched.
+    ///
+    /// `swap_positions` swaps #42746's and #55642's `pos` — the user's proposed workaround.
+    fn build(forest_first: RoomId, swap_positions: bool) -> MapGraph {
+        let mut g = MapGraph::new();
+        for &id in &[INSIDE_BUILDING, FOREST_NEAR, VALLEY, FOREST_FAR, HILL, ROAD_END] {
+            g.upsert_room(id, name(id).to_string());
+        }
+        g.set_pos(INSIDE_BUILDING, (0, 0));
+        g.set_pos(HILL, (-2, 0));
+        g.set_pos(ROAD_END, (-1, 0));
+        g.set_pos(VALLEY, (-1, 2));
+        if swap_positions {
+            g.set_pos(FOREST_NEAR, (-3, 1));
+            g.set_pos(FOREST_FAR, (-2, 1));
+        } else {
+            g.set_pos(FOREST_NEAR, (-2, 1));
+            g.set_pos(FOREST_FAR, (-3, 1));
+        }
+
+        // Road loop around Inside Building / At Hill In Road / At End Of Road — irrelevant to
+        // the crossing, kept only for a faithful graph.
+        g.add_edge(ROAD_END, E, INSIDE_BUILDING);
+        g.add_edge(INSIDE_BUILDING, W, ROAD_END);
+        g.add_edge(ROAD_END, W, HILL);
+        g.add_edge(HILL, E, ROAD_END);
+
+        let mut distorted: Vec<usize> = Vec::new();
+        if forest_first == FOREST_NEAR {
+            distorted.push(emit_near_block(&mut g));
+            g.add_edge(VALLEY, N, ROAD_END);
+            g.add_edge(ROAD_END, S, VALLEY);
+            let (e, w) = emit_far_block(&mut g);
+            distorted.push(e);
+            distorted.push(w);
+        } else {
+            let (e, w) = emit_far_block(&mut g);
+            distorted.push(e);
+            distorted.push(w);
+            g.add_edge(VALLEY, N, ROAD_END);
+            g.add_edge(ROAD_END, S, VALLEY);
+            distorted.push(emit_near_block(&mut g));
+        }
+        for idx in distorted {
+            g.set_conn_distorted(idx, true);
+        }
+
+        // `49722 random=[W→(#42746,#55642), U→(#42746,#55642), E→(#55642,#42746)]`
+        g.mark_random_exit(VALLEY, W);
+        g.note_random_destination(VALLEY, W, FOREST_NEAR);
+        g.note_random_destination(VALLEY, W, FOREST_FAR);
+        g.mark_random_exit(VALLEY, Up);
+        g.note_random_destination(VALLEY, Up, FOREST_NEAR);
+        g.note_random_destination(VALLEY, Up, FOREST_FAR);
+        g.mark_random_exit(VALLEY, E);
+        g.note_random_destination(VALLEY, E, FOREST_FAR);
+        g.note_random_destination(VALLEY, E, FOREST_NEAR);
+        // `61289 random=[S→(#42746,#55642)]`
+        g.mark_random_exit(HILL, S);
+        g.note_random_destination(HILL, S, FOREST_NEAR);
+        g.note_random_destination(HILL, S, FOREST_FAR);
+
+        g
+    }
+
+    fn side_str(s: Side) -> &'static str {
+        match s {
+            Side::Top => "Top",
+            Side::Bottom => "Bottom",
+            Side::Left => "Left(west)",
+            Side::Right => "Right(east)",
+        }
+    }
+
+    /// The two forest->valley COMPASS connectors (excludes the Down portal lines, which route
+    /// separately). `(room, exit side, entry side, entry slot)`.
+    fn forest_arrivals(graph: &MapGraph) -> Vec<(RoomId, Side, Side, u16)> {
+        let plan = mapper::route::route_lanes(graph);
+        plan.connectors
+            .iter()
+            .filter(|c| {
+                (c.origin == FOREST_NEAR || c.origin == FOREST_FAR)
+                    && c.dest == VALLEY
+                    && mapper::direction::grid_offset(c.exit_dir).is_some()
+            })
+            .map(|c| (c.origin, c.exit, c.entry, c.entry_slot))
+            .collect()
+    }
+
+    /// (room whose box is entered, connector origin, exit direction, connector dest, cell).
+    type Intrusion = (RoomId, RoomId, Direction, RoomId, (i32, i32));
+    /// (room whose ring is occupied, connector origin, exit direction, connector dest, cells).
+    type Hug = (RoomId, RoomId, Direction, RoomId, usize);
+
+    /// Every connector cell that lands inside a room's 11x5 box, in the router's virtual
+    /// space — a connector belonging to some OTHER room pair drawn over a room. Mirrors
+    /// `sq1255_canyon_view::box_intrusions`.
+    fn box_intrusions(graph: &MapGraph) -> Vec<Intrusion> {
+        let rm = mapper::render::render_layer(graph, MAIN_LAYER);
+        let (cols, rows) = boxes_axes(&rm.plan, rm.bounds);
+        let boxes: Vec<(RoomId, (i32, i32))> = rm
+            .rooms
+            .iter()
+            .map(|r| (r.id, (cols.room_pixel(r.cell.0), rows.room_pixel(r.cell.1))))
+            .collect();
+        let mut out = Vec::new();
+        for conn in rm.plan.connectors.iter() {
+            let Some(plot) = plot_connector(conn, &cols, &rows, None) else { continue };
+            for (c, _mask) in &plot.cells {
+                for &(rid, (bx, by)) in &boxes {
+                    let inside = c.0 >= bx && c.0 < bx + BOX_W && c.1 >= by && c.1 < by + BOX_H;
+                    if !inside {
+                        continue;
+                    }
+                    let own = rid == conn.origin || rid == conn.dest;
+                    let on_border =
+                        c.0 == bx || c.0 == bx + BOX_W - 1 || c.1 == by || c.1 == by + BOX_H - 1;
+                    if own && on_border {
+                        continue;
+                    }
+                    out.push((rid, conn.origin, conn.exit_dir, conn.dest, *c));
+                }
+            }
+        }
+        out
+    }
+
+    /// Foreign connector cells in the one-cell ring around a room box. Mirrors
+    /// `sq1255_canyon_view::hug_count`.
+    fn hug_count(graph: &MapGraph) -> Vec<Hug> {
+        let rm = mapper::render::render_layer(graph, MAIN_LAYER);
+        let (cols, rows) = boxes_axes(&rm.plan, rm.bounds);
+        let mut out = Vec::new();
+        for room in rm.rooms.iter() {
+            let (bx, by) = (cols.room_pixel(room.cell.0), rows.room_pixel(room.cell.1));
+            for conn in rm.plan.connectors.iter() {
+                if conn.origin == room.id || conn.dest == room.id {
+                    continue;
+                }
+                let Some(plot) = plot_connector(conn, &cols, &rows, None) else { continue };
+                let n = plot
+                    .cells
+                    .iter()
+                    .filter(|(c, _)| {
+                        c.0 >= bx - 1 && c.0 <= bx + BOX_W && c.1 >= by - 1 && c.1 <= by + BOX_H
+                    })
+                    .count();
+                if n > 0 {
+                    out.push((room.id, conn.origin, conn.exit_dir, conn.dest, n));
+                }
+            }
+        }
+        out
+    }
+
+    /// Print the arrival sides, the box intrusions/hugs, and `render_overlap_stats`'
+    /// (illegal, crossings) for one built graph.
+    fn report(graph: &MapGraph, tag: &str) {
+        println!("\n== {tag} ==");
+        for (room, exit, entry, slot) in forest_arrivals(graph) {
+            println!(
+                "  #{room} {} exits {} arrives on hub's {} (slot {slot})",
+                name(room),
+                side_str(exit),
+                side_str(entry)
+            );
+        }
+        let rm = mapper::render::render_layer(graph, MAIN_LAYER);
+        let (cols, rows) = boxes_axes(&rm.plan, rm.bounds);
+        for conn in rm.plan.connectors.iter() {
+            if !((conn.origin == FOREST_NEAR || conn.origin == FOREST_FAR) && conn.dest == VALLEY)
+                || mapper::direction::grid_offset(conn.exit_dir).is_none()
+            {
+                continue;
+            }
+            if let Some(plot) = plot_connector(conn, &cols, &rows, None) {
+                let xs: Vec<i32> = plot.cells.iter().map(|(c, _)| c.0).collect();
+                let ys: Vec<i32> = plot.cells.iter().map(|(c, _)| c.1).collect();
+                println!(
+                    "    {} {:?} {}: dep{:?} arr{:?} x[{}..{}] y[{}..{}] {} cells",
+                    conn.origin,
+                    conn.exit_dir,
+                    conn.dest,
+                    plot.dep_anchor,
+                    plot.arr_anchor,
+                    xs.iter().min().unwrap(),
+                    xs.iter().max().unwrap(),
+                    ys.iter().min().unwrap(),
+                    ys.iter().max().unwrap(),
+                    plot.cells.len(),
+                );
+            }
+        }
+        let intr = box_intrusions(graph);
+        let hugs = hug_count(graph);
+        let (illegal, cross) = render_overlap_stats(graph);
+        println!("  intrusions={} hugs={:?} illegal={illegal} cross={cross}", intr.len(), hugs);
+        for (rid, o, d, de, c) in &intr {
+            println!("    intrusion: {o} {d:?} {de} at {c:?} inside box of #{rid} {}", name(*rid));
+        }
+    }
+
+    /// Diagnostic trace: the shipped graph plus every counterfactual named in the brief.
+    /// Prints only; the pinning assertions live in the cases below.
+    #[test]
+    #[ignore = "SQ-1274 diagnostic trace, not a pass/fail case"]
+    fn sq1274_counterfactuals() {
+        report(&build(FOREST_NEAR, false), "(0) shipped: near room (#42746) listed first");
+        report(&build(FOREST_FAR, false), "(b) positions unchanged, far room (#55642) listed first");
+        report(&build(FOREST_NEAR, true), "(a) positions swapped, near-room-id-first insertion order kept");
+        report(&build(FOREST_FAR, true), "(c) both: positions swapped AND far room listed first");
+
+        // (d) Is #42746's BOX the cause of the hug, independent of side/order? Move #55642 far
+        // away from the row entirely (sq1255's "#23 moved away" counterfactual) and see whether
+        // the hug follows it or stays put.
+        let mut g_away = build(FOREST_NEAR, false);
+        g_away.set_pos(FOREST_FAR, (-3, 5));
+        report(&g_away, "(d) #55642 moved far away from the row (order/entry unchanged)");
+
+        // (e) Move #55642 OFF the shared row but still near the hub, one row further from the
+        // hub than #42746 (so it no longer shares #42746's row, but is still close by) — tests
+        // whether it's specifically the SHARED ROW (channel) that causes the hug, not mere
+        // proximity.
+        let mut g_row = build(FOREST_NEAR, false);
+        g_row.set_pos(FOREST_FAR, (-3, 0));
+        report(&g_row, "(e) #55642 moved off #42746's row (still nearby, different row)");
+
+        // (f) Is the baseline's one `cross` actually BETWEEN the two forest connectors, or some
+        // unrelated pair (e.g. the 63776<->49722 N/S line)? A minimal 3-room graph with only
+        // the two forest->valley edges settles it: nothing else exists to cross with.
+        let mut g_min = MapGraph::new();
+        g_min.upsert_room(FOREST_NEAR, name(FOREST_NEAR).to_string());
+        g_min.upsert_room(FOREST_FAR, name(FOREST_FAR).to_string());
+        g_min.upsert_room(VALLEY, name(VALLEY).to_string());
+        g_min.set_pos(FOREST_NEAR, (-2, 1));
+        g_min.set_pos(FOREST_FAR, (-3, 1));
+        g_min.set_pos(VALLEY, (-1, 2));
+        g_min.add_edge(FOREST_NEAR, E, VALLEY);
+        g_min.add_edge(FOREST_FAR, E, VALLEY);
+        report(&g_min, "(f) minimal 3-room graph: just the two forest edges and the hub");
+
+        // (g) Do the `?`/superscript-count random-exit stubs on the hub's W/E/Up borders
+        // (SQ-1261) influence the router at all? `mapper::route`/`mapper::router` never
+        // reference `random_exits`/`random_stubs` (grep confirms), so this should be byte-
+        // identical to (0) — a structural check, not a hopeful one.
+        let mut g_no_stub = build(FOREST_NEAR, false);
+        g_no_stub.unmark_random_exit(VALLEY, W);
+        g_no_stub.unmark_random_exit(VALLEY, Up);
+        g_no_stub.unmark_random_exit(VALLEY, E);
+        g_no_stub.unmark_random_exit(HILL, S);
+        report(&g_no_stub, "(g) same as (0) with every random-exit mark removed");
+
+        // (h) Isolate whether the Down-portal edges (42746 D 49722 / 55642 D 49722), routed as
+        // their OWN connectors (SQ-0224) but still counted as "already placed" against the
+        // compass candidates, are why plain reordering (b) failed to reach cross=0 in the full
+        // graph even though it reached cross=0 in the minimal one (f). Same full graph as (b)
+        // (far room's E/W edges listed first) but with both Down edges dropped.
+        let mut g_nodown = MapGraph::new();
+        for &id in &[INSIDE_BUILDING, FOREST_NEAR, VALLEY, FOREST_FAR, HILL, ROAD_END] {
+            g_nodown.upsert_room(id, name(id).to_string());
+        }
+        g_nodown.set_pos(INSIDE_BUILDING, (0, 0));
+        g_nodown.set_pos(HILL, (-2, 0));
+        g_nodown.set_pos(ROAD_END, (-1, 0));
+        g_nodown.set_pos(VALLEY, (-1, 2));
+        g_nodown.set_pos(FOREST_NEAR, (-2, 1));
+        g_nodown.set_pos(FOREST_FAR, (-3, 1));
+        g_nodown.add_edge(ROAD_END, E, INSIDE_BUILDING);
+        g_nodown.add_edge(INSIDE_BUILDING, W, ROAD_END);
+        g_nodown.add_edge(ROAD_END, W, HILL);
+        g_nodown.add_edge(HILL, E, ROAD_END);
+        g_nodown.add_self_loop(FOREST_NEAR, N);
+        g_nodown.add_edge(FOREST_FAR, E, VALLEY);
+        g_nodown.add_edge(FOREST_FAR, W, VALLEY);
+        g_nodown.add_edge(VALLEY, N, ROAD_END);
+        g_nodown.add_edge(ROAD_END, S, VALLEY);
+        g_nodown.add_edge(FOREST_NEAR, E, VALLEY);
+        g_nodown.add_self_loop(FOREST_NEAR, W);
+        g_nodown.add_self_loop(FOREST_NEAR, S);
+        report(&g_nodown, "(h) same as (b) (far room's edges listed first) but no Down edges");
+
+        // (i) Isolate why #42746 doesn't take a DIRECT route to the hub's Top side (its own
+        // `direct_route` is geometrically unobstructed — see the doc comment on `report`'s
+        // caller). Same as (0) but with the hub<->road-end N/S edges (`49722 N 63776` /
+        // `63776 S 49722`) dropped — that vertical connector is drawn BEFORE the forest block
+        // in insertion order and runs along the exact room-grid line #42746's direct route
+        // would use, so it may be stomping the direct route rather than anything about the
+        // forest pair's own contention.
+        let mut g_noroad_link = MapGraph::new();
+        for &id in &[INSIDE_BUILDING, FOREST_NEAR, VALLEY, FOREST_FAR, HILL, ROAD_END] {
+            g_noroad_link.upsert_room(id, name(id).to_string());
+        }
+        g_noroad_link.set_pos(INSIDE_BUILDING, (0, 0));
+        g_noroad_link.set_pos(HILL, (-2, 0));
+        g_noroad_link.set_pos(ROAD_END, (-1, 0));
+        g_noroad_link.set_pos(VALLEY, (-1, 2));
+        g_noroad_link.set_pos(FOREST_NEAR, (-2, 1));
+        g_noroad_link.set_pos(FOREST_FAR, (-3, 1));
+        g_noroad_link.add_edge(ROAD_END, E, INSIDE_BUILDING);
+        g_noroad_link.add_edge(INSIDE_BUILDING, W, ROAD_END);
+        g_noroad_link.add_edge(ROAD_END, W, HILL);
+        g_noroad_link.add_edge(HILL, E, ROAD_END);
+        g_noroad_link.add_self_loop(FOREST_NEAR, N);
+        g_noroad_link.add_edge(FOREST_NEAR, E, VALLEY);
+        g_noroad_link.add_self_loop(FOREST_NEAR, W);
+        g_noroad_link.add_self_loop(FOREST_NEAR, S);
+        g_noroad_link.add_edge(FOREST_FAR, E, VALLEY);
+        g_noroad_link.add_edge(FOREST_FAR, W, VALLEY);
+        // (deliberately no `VALLEY N ROAD_END` / `ROAD_END S VALLEY`)
+        report(&g_noroad_link, "(i) same as (0) but the hub's own N/S link to the road is dropped");
+    }
+
+    /// **The reported CROSSING, pinned** (SQ-1274): with the graph exactly as the player's dump
+    /// has it, #42746 arrives on the hub's `West` and #55642 is pushed to `Top` — reaching `Top`
+    /// means threading past #42746's box, which hugs it and (per `sq1274_counterfactuals` case
+    /// (0) vs (i)) crosses the #42746->hub connector. NOT because #42746 is "listed first" (see
+    /// `build`'s doc comment: `forest_first` alone does not reproduce or remove this) — #42746's
+    /// own direct route to `Top` is rejected by a stomp against the unrelated hub<->road N/S
+    /// link, which is what pushes it into West in the first place. Diagnostic pin, not a
+    /// regression guard for a fix: the CROSSING itself shipped no router change (see the
+    /// side-quest report — a safe local fix would need to reach into direct-route-vs-channel-
+    /// routing fallback generally, not just this room pair), so this documents the CURRENT shape
+    /// for whoever looks at this next, and is `#[ignore]`d for the same reason the rest of this
+    /// module is. A DIFFERENT, narrower defect surfaced during this investigation — a one-way
+    /// arrival landing on the hub's own outgoing-exit/random-mark border cell — DID ship a fix;
+    /// see `sq1274_neither_forest_arrival_lands_on_the_valleys_own_marked_slot` below.
+    #[test]
+    #[ignore = "SQ-1274 diagnostic pin, not a fix regression guard — see the side-quest report"]
+    fn sq1274_pinned_crossing_as_reported() {
+        let g = build(FOREST_NEAR, false);
+        let arrivals = forest_arrivals(&g);
+        let near_entry = arrivals.iter().find(|a| a.0 == FOREST_NEAR).map(|a| a.2);
+        let far_entry = arrivals.iter().find(|a| a.0 == FOREST_FAR).map(|a| a.2);
+        assert_eq!(near_entry, Some(Side::Left), "the nearer room (#42746) arrives on West");
+        assert_eq!(far_entry, Some(Side::Top), "the farther room (#55642) is pushed to Top");
+        let hugs = hug_count(&g);
+        let hugs_42746: usize = hugs.iter().filter(|(rid, ..)| *rid == FOREST_NEAR).map(|h| h.4).sum();
+        assert!(hugs_42746 > 0, "the farther room's Top-bound connector should hug #42746's box");
+    }
+
+    /// **Fixed, and pinned** (SQ-1274 scope addition): the valley (`#49722`) carries `?`
+    /// random-exit marks on `W`, `Up` and `E`, and an outgoing compass exit `N`. Its `W` mark
+    /// sits on the exact border cell a lone one-way arrival's `West` entry would otherwise center
+    /// on (slot 0) — which is precisely where #42746's arrival landed before this fix (see
+    /// `sq1274_pinned_crossing_as_reported` above, from before `assign_side_slots` learned this
+    /// rule: entry_slot 0 there). Neither forest room's arrival may use slot 0 on whichever side
+    /// it lands, on any of the counterfactuals in `sq1274_counterfactuals` — that slot is the
+    /// valley's own compass anchor (its `N` exit, or the `?` marks that share the cardinal
+    /// positions with it), and a one-way arrival there would misread as a return path that does
+    /// not exist.
+    #[test]
+    fn sq1274_neither_forest_arrival_lands_on_the_valleys_own_marked_slot() {
+        for (forest_first, swap_positions, tag) in [
+            (FOREST_NEAR, false, "(0) shipped order"),
+            (FOREST_FAR, false, "(b) far listed first"),
+            (FOREST_NEAR, true, "(a) positions swapped"),
+            (FOREST_FAR, true, "(c) both"),
+        ] {
+            let g = build(forest_first, swap_positions);
+            for (room, _exit, entry, slot) in forest_arrivals(&g) {
+                assert_ne!(
+                    slot, 0,
+                    "{tag}: #{room}'s arrival on {entry:?} must not use the valley's own \
+                     compass-anchor slot (its N exit / its W, Up, E `?` marks)",
+                );
+            }
+        }
     }
 }
