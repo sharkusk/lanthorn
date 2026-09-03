@@ -563,6 +563,51 @@ impl ParseNames {
         None
     }
 
+    /// `(data address, length in WORDS)` of object `addr`'s property `prop`
+    /// (SQ-1264) — the general form of [`Self::name_array`] (property 1 only,
+    /// with the early stop that assumes id 1 sorts first). `door_dir`/`*_to`/
+    /// `door_to` (see `crate::world`) are ordinary user-numbered properties
+    /// that can sit anywhere in the table, so this walks past property 1
+    /// rather than stopping there — §3's sort-by-id guarantee still lets the
+    /// scan give up the moment it passes `prop`.
+    ///
+    /// `None` when `addr` is not one of ours, it carries no property table, or
+    /// simply does not have `prop` at all — same "absent" contract as
+    /// [`Self::name_array`].
+    pub fn property(&self, mem: &Memory, addr: u32, prop: u16) -> Option<(u32, u32)> {
+        if !self.is_object(mem, addr) {
+            return None;
+        }
+        let table = mem.read32(self.field(addr, Field::Props))?;
+        let entries = mem.read32(table)?;
+        if entries > 0x1000 {
+            return None;
+        }
+        for i in 0..entries {
+            let entry = table + 4 + i * PROP_ENTRY_BYTES;
+            let id = mem.read16(entry)? as u16;
+            if id == prop {
+                let length = mem.read16(entry + 2)?;
+                let data = mem.read32(entry + 4)?;
+                return (length > 0).then_some((data, length));
+            }
+            if id > prop {
+                return None;
+            }
+        }
+        None
+    }
+
+    /// The first WORD of `addr`'s property `prop` (SQ-1264) — what
+    /// `door_dir`/`*_to`/`door_to` actually store: a property NUMBER, an
+    /// object address, or a routine/string address, always one word wide on
+    /// Glulx (unlike the Z-machine, which packs several such values into one
+    /// property entry on occasion). `None` exactly when [`Self::property`] is.
+    pub fn property_word(&self, mem: &Memory, addr: u32, prop: u16) -> Option<u32> {
+        let (data, _) = self.property(mem, addr, prop)?;
+        mem.read32(data)
+    }
+
     /// The text of the dictionary record at `addr`, or `None` if `addr` is not
     /// one.
     ///

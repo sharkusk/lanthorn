@@ -195,6 +195,97 @@ fn snap(number: u16, name: &str) -> zvm::ObjectSnapshot {
     zvm::ObjectSnapshot { number, parent: 0, name: name.to_string() }
 }
 
+// ── SQ-1264: the live-walk contradiction rule ───────────────────────────────
+//
+// A backstop for the statistical hole in SQ-1257 Phase 2's upgrade path, and for
+// engines with no `declared_exit` seam at all (or one that, like Adventure's
+// forests, cannot see the randomness because it lives in a REDIRECT the
+// destination performs on arrival rather than in the origin's own exit table —
+// see `crates/gvm/src/world.rs`'s module docs for the full mechanism). No
+// `declared_exit` is populated in either case below (`TurnResult::observation`
+// leaves it `None`), so the rule is proven here on evidence alone: the graph's
+// own edges contradicting each other.
+
+/// E→A, then E→B: the second walk contradicts the edge the first one minted, so
+/// the rule removes it, marks the direction random, and records BOTH
+/// destinations — with no `declared_exit` involved at any point.
+#[test]
+fn a_contradicting_live_walk_marks_the_exit_random_with_no_declared_exit_seam() {
+    let mut mapper = Mapper::default();
+    let mut death = DeathWatch::default();
+    apply_turn(&mut mapper, "", &TurnResult::observation(snap(1, "Origin")), &mut death);
+
+    // E → A: an ordinary first walk, mints the edge exactly as always.
+    apply_turn(&mut mapper, "east", &TurnResult::observation(snap(2, "Room A")), &mut death);
+    assert_eq!(
+        mapper.graph.connections().iter().find(|c| c.origin == 1 && c.dir == Direction::E).map(|c| c.dest),
+        Some(2),
+        "an ordinary first walk mints its edge"
+    );
+    assert!(!mapper.graph.is_random_exit(1, Direction::E));
+
+    // Back to room 1, then E → B: a DIFFERENT destination for the same (origin, direction).
+    mapper.graph.set_current(1);
+    apply_turn(&mut mapper, "east", &TurnResult::observation(snap(3, "Room B")), &mut death);
+
+    assert!(
+        !mapper.graph.connections().iter().any(|c| c.origin == 1 && c.dir == Direction::E),
+        "the contradicting edge is removed rather than silently overwritten"
+    );
+    assert!(mapper.graph.is_random_exit(1, Direction::E), "the direction is marked random");
+    assert_eq!(
+        mapper.graph.random_destinations(1, Direction::E),
+        &[2, 3],
+        "both the edge's old destination (A) and the new live landing (B) are recorded"
+    );
+    assert_eq!(
+        mapper::matrix::classify(&mapper.graph, 1, Direction::E),
+        mapper::matrix::MatrixCell::Random { destinations: 2 },
+        "the matrix reads `?²`, not a confident arrow"
+    );
+
+    // E → A again: the direction is already marked, so no edge is minted and the destination set
+    // is unchanged — a THIRD sighting of a room already in the set adds nothing new.
+    mapper.graph.set_current(1);
+    apply_turn(&mut mapper, "east", &TurnResult::observation(snap(2, "Room A")), &mut death);
+    assert!(
+        !mapper.graph.connections().iter().any(|c| c.origin == 1 && c.dir == Direction::E),
+        "still no edge — the direction stays marked random"
+    );
+    assert_eq!(
+        mapper.graph.random_destinations(1, Direction::E),
+        &[2, 3],
+        "no duplicate: A was already in the set"
+    );
+}
+
+/// Falsify: disabling the rule (simulated by never taking the contradiction branch — i.e. the
+/// pre-SQ-1264 shape, reproduced by asserting what a bare `Mapper::observe`-only path would have
+/// done) would silently overwrite the first edge instead of catching the contradiction. This is
+/// the same falsification shape `declared_exit.rs`'s other `falsify_*` case uses: prove the OLD
+/// symptom is what the rule now prevents, by exercising `Mapper::observe` directly (bypassing
+/// `apply_turn`'s contradiction check entirely, exactly as every caller did before SQ-1264).
+#[test]
+fn falsify_without_the_contradiction_rule_a_second_destination_silently_overwrites_the_first() {
+    let mut mapper = Mapper::default();
+    mapper.observe(1, "Origin", None);
+    mapper.observe(2, "Room A", Some(Direction::E));
+    assert_eq!(
+        mapper.graph.connections().iter().find(|c| c.origin == 1 && c.dir == Direction::E).map(|c| c.dest),
+        Some(2)
+    );
+    mapper.graph.set_current(1);
+    mapper.observe(3, "Room B", Some(Direction::E));
+    assert_eq!(
+        mapper.graph.connections().iter().find(|c| c.origin == 1 && c.dir == Direction::E).map(|c| c.dest),
+        Some(3),
+        "the original symptom: a bare `observe` overwrites the edge with no memory of A, and \
+         nothing here is ever marked random — this is exactly what `apply_turn`'s contradiction \
+         rule now intercepts before `observe` is ever reached for this shape"
+    );
+    assert!(!mapper.graph.is_random_exit(1, Direction::E));
+}
+
 // ── Lost Pig: the gateway into the gnome's random tunnels ──────────────────
 //
 // Lost Pig's maze rooms carry NO declared exit data at all for any direction

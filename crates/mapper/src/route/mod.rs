@@ -77,6 +77,9 @@ fn select_shared_paths(
         if layout_offset(c.dir).is_none() {
             continue; // In/Out/Unknown: portal badges, never routed
         }
+        if c.origin == c.dest {
+            continue; // a self-loop is drawn only as the room's own `↩` badge — never a line (SQ-1264)
+        }
         let pair = (c.origin.min(c.dest), c.origin.max(c.dest));
         by_pair.entry(pair).or_default().push(i);
     }
@@ -583,7 +586,7 @@ fn departure_corners(graph: &MapGraph) -> std::collections::HashSet<(RoomId, Dir
     graph
         .connections()
         .iter()
-        .filter(|c| is_diagonal(c.dir))
+        .filter(|c| is_diagonal(c.dir) && c.origin != c.dest) // a self-loop departs no corner (SQ-1264)
         .map(|c| (c.origin, c.dir))
         .collect()
 }
@@ -942,7 +945,7 @@ fn route_topology_with(graph: &MapGraph, greedy: bool) -> Vec<RoutedConnector> {
     let compass_pairs: std::collections::BTreeSet<(RoomId, RoomId)> = graph
         .connections()
         .iter()
-        .filter(|c| grid_offset(c.dir).is_some())
+        .filter(|c| grid_offset(c.dir).is_some() && c.origin != c.dest)
         .map(|c| (c.origin.min(c.dest), c.origin.max(c.dest)))
         .collect();
     // Pre-pass (SQ-0225): collapse redundant same-pair compass edges into one shared
@@ -950,11 +953,16 @@ fn route_topology_with(graph: &MapGraph, greedy: bool) -> Vec<RoutedConnector> {
     let (secondary_idx, secondary_records) = select_shared_paths(graph);
     // Working set: every edge with a layout offset (compass + Up/Down), minus edges collapsed
     // into a secondary above. In/Out/Unknown carry no offset and are not routed here.
+    //
+    // A SELF-LOOP (`origin == dest`) is excluded too (SQ-1264): it is drawn only as the room's own
+    // `↩` badge (`render/map.rs`), never as a line — before this guard `select_shared_paths` paired
+    // a self-loop edge with itself (its `origin==dest` pair's forward and backward buckets are the
+    // SAME set of indices) and produced a bogus polyline that looped back around the room's own box.
     let compass: Vec<&crate::graph::Connection> = graph
         .connections()
         .iter()
         .enumerate()
-        .filter(|(i, c)| layout_offset(c.dir).is_some() && !secondary_idx.contains(i))
+        .filter(|(i, c)| layout_offset(c.dir).is_some() && c.origin != c.dest && !secondary_idx.contains(i))
         .map(|(_, c)| c)
         .collect();
     // Edge indices already drawn — either as their own connector or consumed as the
@@ -1452,6 +1460,47 @@ mod tests {
     use crate::direction::Direction;
     use crate::graph::MapGraph;
     use crate::router::side_for;
+
+    /// SQ-1264: a self-loop (`origin == dest`, `MapGraph::add_self_loop`) must never produce a
+    /// routed connector — it is drawn only as the room's own `↩` badge (`render/map.rs`), never a
+    /// line. Before the `c.origin != c.dest` guards in `select_shared_paths`/`route_topology_with`
+    /// / `departure_corners`, a self-loop's own (room, room) "pair" paired the edge with ITSELF —
+    /// its forward and backward buckets were the same index set — and produced a bogus polyline
+    /// that looped back around the room's own box, on the real Adventure map SQ-1264 was filed
+    /// against ("In Forest" #42746, whose W/N/S exits are all self-loops per `advent.inf`'s
+    /// `In_Forest_1` object).
+    ///
+    /// Reconstructs the SHAPE of that save (`~/.lanthorn/saves/advent.blb.save/default.lanthorn`,
+    /// read during the SQ-1264 investigation): a hill room leading south into a forest room whose
+    /// own W/N/S all loop back into itself, beside one real edge east to a valley.
+    #[test]
+    fn a_self_loop_is_never_routed_as_a_connector() {
+        let mut g = MapGraph::new();
+        const HILL: RoomId = 61289;
+        const FOREST: RoomId = 42746;
+        const VALLEY: RoomId = 49722;
+        g.upsert_room(HILL, "At Hill In Road".into());
+        g.upsert_room(FOREST, "In Forest".into());
+        g.upsert_room(VALLEY, "In A Valley".into());
+        g.set_pos(HILL, (0, 0));
+        g.set_pos(FOREST, (0, 1));
+        g.set_pos(VALLEY, (1, 1));
+        g.add_edge(HILL, Direction::S, FOREST);
+        g.add_edge(FOREST, Direction::E, VALLEY);
+        assert!(g.add_self_loop(FOREST, Direction::W));
+        assert!(g.add_self_loop(FOREST, Direction::N));
+        assert!(g.add_self_loop(FOREST, Direction::S));
+        assert_eq!(g.self_loops(FOREST), vec![Direction::W, Direction::N, Direction::S]);
+
+        let routed = route_topology(&g);
+        assert!(
+            routed.iter().all(|c| c.origin != c.dest),
+            "no routed connector may have origin == dest: {routed:?}"
+        );
+        // Falsify: the two REAL edges must still route normally — this is not a test that
+        // routing produced nothing at all.
+        assert_eq!(routed.len(), 2, "the hill→forest and forest→valley edges still route: {routed:?}");
+    }
 
     #[test]
     fn segments_sharing_a_lane_never_overlap() {

@@ -25,6 +25,7 @@ mod unicode_norm;
 #[rustfmt::skip]
 mod unicode_norm_tables;
 pub mod veneer;
+pub mod world;
 
 pub use error::GError;
 pub use exec::{Machine, SaveLoadRequest, StepResult};
