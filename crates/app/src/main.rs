@@ -2415,7 +2415,14 @@ fn run_event_loop(boot: startup::BootResult, launched_from_library: bool) -> Run
         // it, then goes on to be handled normally.
         if let Event::Mouse(m) = &event {
             use app::pane_drag::DragOutcome;
-            match app::pane_drag::on_mouse(&mut state, m, &last_panes.pane_layout, &last_panes.boundaries, &last_panes.border_controls) {
+            // The room dock's view tabs (SQ-1265) sit on `Boundary::RoomDockTop`'s
+            // own grab row (the dock's top border IS the pane's bottom border),
+            // so they must be excluded from the drag the same way a border
+            // control is — otherwise a Down on "Room"/"Diagnostics" starts a
+            // resize instead of ever reaching `room_dock_mouse_action`.
+            let dock_chrome: Vec<Rect> =
+                last_panes.room_dock_tabs.iter().map(|(_, r)| *r).collect();
+            match app::pane_drag::on_mouse(&mut state, m, &last_panes.pane_layout, &last_panes.boundaries, &last_panes.border_controls, &dock_chrome) {
                 DragOutcome::Ignored => {}
                 DragOutcome::Consumed => continue,
                 DragOutcome::Committed => {
