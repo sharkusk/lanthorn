@@ -1409,6 +1409,24 @@ Six things are deliberate:
   run's output, since a blank cell is quieter than a tofu box and this quest
   exists because a tofu box went unnoticed.
 
+  The structural range itself was still incomplete (SQ-1272): the automap's
+  `diagonal_corners` draws its half-diagonal corner stubs from four Legacy
+  Computing glyphs (U+1FBA0-1FBA3), which sat outside U+2500..=U+259F and so
+  went to an outline face like any text — landed there by CENTRING the
+  rasterised ink in the cell, discarding the glyph's own bearing
+  (`fontdue::Metrics::xmin`), which is a second, independent bug: a monospace
+  face places every glyph at a fixed offset from the cell's own origin, and
+  ink-centring silently overrides that for any asymmetric glyph. Two glyphs
+  from two rasterisers with two different placement rules step sideways at
+  the seam between them, which is what a committed gallery frame with a
+  diagonal connector showed. `is_structural` now also covers U+1FBA0-1FBA3
+  (routing them to the bitmap master, which has hand-authored bitmaps for
+  them tracing the Unicode chart's own edge-midpoint definitions), and the
+  outline branch places by bearing (`px + xmin`) rather than by ink-centring
+  whenever the face's own metrics match the cell it's drawn into, falling
+  back to centring only in the `cell_complaint` case where there's no
+  cell-relative origin to trust.
+
 - **A shot's `size` is a magnification.** A v6 press lays out on a fixed native
   screen (640x400 for most of the manifest) and lanthorn letterboxes it into the
   story pane at `min(box_w / native_w, box_h / native_h)`, unrounded; the

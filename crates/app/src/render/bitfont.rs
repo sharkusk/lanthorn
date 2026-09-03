@@ -70,6 +70,19 @@
 //! visually distinct from the others, but this is NOT a claim of scholarly
 //! Elder Futhark letterform accuracy — treat them as decorative placeholders,
 //! matching their in-game use as unreadable "atmosphere" text.
+//!
+//! `EXTRA_GLYPHS` also carries the four Legacy Computing "character cell
+//! diagonals" (U+1FBA0-1FBA3) `render::map` draws for `diagonal_corners`
+//! (`symbols::PathGlyphs::diag_ul/ur/ll/lr`, SQ-1272). Unlike the runes, these
+//! trace an authoritative source rather than an invented shape: the Unicode
+//! Standard's own code chart ("Symbols for Legacy Computing", U+1FB00-1FBFF)
+//! names each one precisely, and `symbols.rs`'s doc comment on `diag_ul`
+//! explains why every endpoint is an edge MIDPOINT rather than a corner. They
+//! belong here — not left to whatever outline face draws them — because the
+//! gallery tool's rasteriser (`tests/pty_stream/gallery.rs`'s `is_structural`)
+//! classifies a glyph as structural (this master, which tiles exactly) or not
+//! by codepoint, and every OTHER glyph the automap draws beside these four —
+//! `─`, `│`, `┌`, `┐`, and their kin — already is.
 
 use font8x8::UnicodeFonts;
 use image::{Rgba, RgbaImage};
@@ -115,6 +128,22 @@ static EXTRA_GLYPHS: &[(char, [u8; 8])] = &[
     ('\u{16C9}', [0x14, 0x04, 0x14, 0x04, 0x14, 0x04, 0x14, 0x04]),
     ('\u{16A5}', [0x04, 0x06, 0x04, 0x06, 0x04, 0x06, 0x04, 0x04]),
     ('\u{16DF}', [0x14, 0x0C, 0x04, 0x3C, 0x04, 0x04, 0x04, 0x04]),
+    // Legacy Computing "character cell diagonals" (SQ-1272) — Unicode Standard
+    // 17.0, "Symbols for Legacy Computing" (U+1FB00-1FBFF), page 1863: every
+    // endpoint is an edge MIDPOINT, never a corner. Anchored to this file's own
+    // centre conventions so they tile with `│` (col 3 of 8 — see BOX_LEGACY[2])
+    // and `─` (row 4 of 8 — see BOX_LEGACY[0]), not the geometric 3.5 midpoint:
+    // "upper/lower centre" sits at column 3, "middle left/right" at row 4.
+    // That asymmetry (row0-4 is 4 rows tall, row4-7 only 3) is why
+    // upper-centre-to-middle-right is a clean 1-column-per-row stair while
+    // upper-centre-to-middle-left is shallower, and lower-centre-to-middle-right
+    // needs one 2-column step. Hand-plotted by linear interpolation between the
+    // two named endpoints, rounded to the nearest column per row — the same
+    // "not pixel-perfect, hand-authored" standard as the runic entries above.
+    ('\u{1FBA0}', [0x08, 0x04, 0x04, 0x02, 0x01, 0x00, 0x00, 0x00]), // 🮠 upper centre ↔ middle left
+    ('\u{1FBA1}', [0x08, 0x10, 0x20, 0x40, 0x80, 0x00, 0x00, 0x00]), // 🮡 upper centre ↔ middle right
+    ('\u{1FBA2}', [0x00, 0x00, 0x00, 0x00, 0x01, 0x02, 0x04, 0x08]), // 🮢 middle left ↔ lower centre
+    ('\u{1FBA3}', [0x00, 0x00, 0x00, 0x00, 0x80, 0x40, 0x10, 0x08]), // 🮣 middle right ↔ lower centre
 ];
 
 /// Look up the 8×8 bitmap for `glyph`. Tries `font8x8`'s basic-Latin,
@@ -920,6 +949,18 @@ mod tests {
     fn glyph_coverage_font3_runic_placeholders() {
         // The 26 BeyondZork "atmosphere" runic codepoints (font-3 codes 97-122).
         for &(c, _) in EXTRA_GLYPHS {
+            assert_has_glyph(c);
+        }
+    }
+
+    #[test]
+    fn glyph_coverage_legacy_computing_diagonal_corners() {
+        // SQ-1272: the four half-diagonal corner-stub glyphs the automap draws
+        // for `diagonal_corners` (`symbols::PathGlyphs::diag_ul/ur/ll/lr`) must
+        // be in this master so `tests/pty_stream/gallery.rs`'s rasteriser can
+        // route them here via `is_structural` instead of to an outline face.
+        for c in ['\u{1FBA0}', '\u{1FBA1}', '\u{1FBA2}', '\u{1FBA3}'] {
+            assert!(has_glyph(c), "U+{:04X} must be in the bitmap master", c as u32);
             assert_has_glyph(c);
         }
     }
