@@ -27,13 +27,6 @@ Absolute URLs or no link.
 > visible tag `*Next release:*`. `release.yml` refuses to cut a release
 > while any such tag, or this Unreleased section, still exists.*
 
-- **lanthorn and its engine crates are on crates.io.** `lanthorn-zvm`,
-  `lanthorn-gvm`, `lanthorn-scott`, `lanthorn-blorb`, `lanthorn-mapper` and
-  `lanthorn-audio` are usable standalone by anything that wants to run
-  Z-machine, Glulx or Scott Adams story files; `cargo install lanthorn` builds
-  the player itself from source, and `lanthorn-zvm-cli`, `lanthorn-gvm-cli`
-  and `lanthorn-scott-cli` install the three no-map CLI players (the commands
-  they install are still `zvm-cli`, `gvm-cli` and `scott-cli`).
 - **`gvm-cli --version` names itself `gvm-cli` again**, not the crates.io
   package name it briefly picked up in 0.4.1.
 - **The map no longer draws an arrow for a move some games decide at random.**

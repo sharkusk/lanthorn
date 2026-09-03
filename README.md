@@ -95,12 +95,6 @@ goes there next time. It opens disk images too — see
 flags; the ones people reach for are `--sound off`, `--images off` and
 `--image-protocol`.
 
-*Next release:* lanthorn and its engines are also on
-[crates.io](https://crates.io/crates/lanthorn) — `cargo install lanthorn`
-builds it from source, or
-[`cargo binstall lanthorn`](https://github.com/cargo-bins/cargo-binstall)
-fetches the prebuilt release archive above instead of compiling.
-
 A URL is a launching shape too, alongside a directory and a disk
 image:
 
