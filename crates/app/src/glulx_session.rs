@@ -1025,6 +1025,7 @@ impl GlulxSession {
             pictures: Vec::new(),
             transcript_elems: elems,
             prose_retired: None,
+            declared_exit: None,
         }
     }
 

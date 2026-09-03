@@ -68,7 +68,7 @@ pub(crate) fn silent_terminator_turn(
 pub(crate) fn finish_command_turn(
     cmd: &str,
     ended_on_newline: bool,
-    result: TurnResult,
+    mut result: TurnResult,
     state: &mut AppState,
     mapper: &mut Mapper,
     session: &mut dyn Engine,
@@ -182,6 +182,14 @@ pub(crate) fn finish_command_turn(
     // …and the room they are LEAVING, which is only knowable here for the same reason and which
     // the return probe needs as the room a way back has to lead to (SQ-0785).
     let room_before = mapper.graph.current();
+
+    // SQ-1257: what the room being LEFT declares for the direction just typed, read before
+    // `apply_turn` decides what this move means. Needs a live engine handle and the pre-move
+    // room, which is why this lives here and not inside `apply_turn` itself (an engine-neutral
+    // pure function with neither).
+    if let (Some(origin), Some(dir)) = (room_before, mapper::direction::parse_direction(cmd)) {
+        result.declared_exit = Some(session.declared_exit(origin, dir));
+    }
 
     apply_turn(mapper, cmd, &result, &mut state.death_watch);
 
@@ -1485,6 +1493,7 @@ mod tests {
             pictures: Vec::new(),
             transcript_elems: Vec::new(),
             prose_retired: None,
+            declared_exit: None,
         }
     }
 
@@ -1506,6 +1515,7 @@ mod tests {
             pictures: Vec::new(),
             transcript_elems: Vec::new(),
             prose_retired: None,
+            declared_exit: None,
         }
     }
 

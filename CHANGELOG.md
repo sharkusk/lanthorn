@@ -36,6 +36,11 @@ Absolute URLs or no link.
   they install are still `zvm-cli`, `gvm-cli` and `scott-cli`).
 - **`gvm-cli --version` names itself `gvm-cli` again**, not the crates.io
   package name it briefly picked up in 0.4.1.
+- **The map no longer draws an arrow for a move some games decide at random.**
+  Lost Pig's gnome tunnels send you to a different room every time you walk
+  the same direction; the room panel and the direction matrix now mark that
+  exit `?` — "destination varies" — instead of pointing an arrow at whichever
+  room the story happened to pick.
 
 ---
 

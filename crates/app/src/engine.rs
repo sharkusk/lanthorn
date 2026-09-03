@@ -22,6 +22,12 @@ use crate::session::{FilenameReq, InputKind, TurnResult};
 /// an object's adjectives at all, which is a different claim from having none.
 pub use grammar_model::{Adjectives, ObjectWordSet, ObjectWords};
 
+/// What a room's own exit table declares for one direction (SQ-1257),
+/// re-exported so a caller of [`Engine::declared_exit`] names it without
+/// depending on `zvm` directly — the same reason [`ObjectWords`] travels
+/// through this module above.
+pub use zvm::world::DeclaredExit;
+
 // ── Neutral key input ───────────────────────────────────────────────────────
 
 /// A neutral, terminal-agnostic key press.
@@ -1036,6 +1042,29 @@ pub trait Engine {
     // ── mapping ──
     /// The player's current location, for the mapper.
     fn current_location(&self) -> Option<LocationInfo>;
+
+    /// What `origin`'s own map data declares for `dir` (SQ-1257) — read from
+    /// the story's compiled exit table, never from anything ever walked.
+    ///
+    /// This is what lets the mapper tell a REAL passage from one a routine
+    /// improvised on the spot: Lost Pig's gnome tunnels relocate the player
+    /// somewhere the room's own exit table never named, and a caller that
+    /// compares this against where the player actually landed is the whole of
+    /// what tells the two apart. `RoomId` is `mapper::graph::RoomId`, which for
+    /// every engine here is that engine's own object-number space.
+    ///
+    /// Default `DeclaredExit::Unknown`: an engine with no such table (Scott
+    /// Adams, or a Glulx story — Inform 7 for Glulx keeps its map in Glulx
+    /// memory in a shape this seam does not read yet) has nothing to answer
+    /// with, which is a real answer and not a failure to look. `GameSession`
+    /// (Z-machine) is the only override today.
+    fn declared_exit(
+        &self,
+        _origin: mapper::graph::RoomId,
+        _dir: mapper::direction::Direction,
+    ) -> DeclaredExit {
+        DeclaredExit::Unknown
+    }
 
     // ── boot ──
     /// Drain the game's pending screen clear — the fact [`TurnResult::erase_lower`]

@@ -412,6 +412,53 @@ stops at the first success — Zork I's North of House takes three commands
 (2.7 ms), Counterfeit Monkey's Back Alley one (407 ms). `cargo run -p app
 --example return_probe_cost` is the instrument.
 
+### Declared exits: a room's own data, read before a move is judged (SQ-1257)
+
+Some Inform games move the player somewhere their own exit table never named —
+Lost Pig's gnome tunnels relocate to a random cave through a rule that fires
+before the library's ordinary movement code ever runs. Recording that as an
+edge fills the map with contradictory arrows, and neither the return probe
+above nor a raw location diff can tell it apart from an ordinary passage: both
+only ever see *where the player ended up*, never what the room's data claimed.
+
+`zvm::world::WorldModel::declared_exit(mem, room, dir)` answers a different
+question — not "where did the player go" but "what does this room's *compiled
+exit table* say for this direction" — read independently of anything ever
+walked. Two Inform 6 library conventions make this possible, both recovered
+from the story at runtime rather than assumed (property numbers are never
+portable between compiles: Lost Pig's `door_dir` is property 34, nothing like
+`linklpa.h`'s own declaration order): `door_dir`, a property every compass
+object (`north`, `south`, …) carries whose VALUE is the property number of
+that direction's own `*_to` (`inform6lib/english.h`); and `door_to`, which a
+declared exit hops through one extra time when it names a "door" connector
+object rather than a room directly (`verblib.h`'s `GoSub`). Both are derived
+by the same shape of evidence-gathering `WorldModel`'s openness-attribute
+inference already uses elsewhere in this file: try every candidate property
+number, keep the one whose values behave the way the convention requires
+(distinct per direction for `door_dir`; present and — where resolvable at all
+— pointing at a genuine terminal room, never a chained connector, for
+`door_to`), refuse rather than guess when nothing agrees.
+
+The answer is one of `DeclaredExit::{Room(RoomId), Code, Message, Unknown}`.
+`app::turn::finish_command_turn` reads it — via `Engine::declared_exit`,
+overridden only by the Z-machine adapter; Glulx and Scott answer `Unknown` —
+for the room being LEFT and the direction just typed, before `apply_turn`
+decides what the move means, and stores it on that turn's `TurnResult`.
+`apply_turn` then compares: a `Room(x)` that matches where the player actually
+landed is an ordinary passage, recorded exactly as before; a `Room(x)` that
+does NOT match is the story overriding its own declared exit, and mints no
+edge — instead `Mapper::record_random_exit` marks the direction a fact of its
+own (`MatrixCell::Random`, drawn `?`), so the map can say "explored, but the
+destination varies" instead of drawing a confident arrow for a passage the
+story never committed to. `Code`, `Message` and `Unknown` all leave the turn
+exactly as it read before this seam existed — a routine-computed exit, a
+printed refusal, or no data at all (every non-Inform game, and Lost Pig's
+tunnel rooms themselves, whose exit properties are simply absent because a
+"before going" rule intercepts movement before the library's exit-table code
+runs) are none of them proof of anything, and Phase 2 — replaying the same
+move from a pre-move snapshot under a different RNG seed to catch exactly that
+last case — remains open (SQ-1257's report has the detail).
+
 ## Reading back the bytes we actually emit
 
 Every other harness in the repo renders into a ratatui `Buffer` and asserts on

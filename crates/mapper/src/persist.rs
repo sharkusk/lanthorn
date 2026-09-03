@@ -128,6 +128,33 @@ mod tests {
         assert_eq!(m2.graph.self_loops(1), vec![Direction::W], "the self-loop edge survives");
     }
 
+    /// SQ-1257: a random-exit mark must survive the map file, or every restore would forget which
+    /// directions the story randomises and start minting false edges for them again.
+    #[test]
+    fn round_trips_random_exit_marks() {
+        let mut m = Mapper::default();
+        m.observe(1, "Windy Cave", None);
+        assert!(m.record_random_exit(1, Direction::N));
+
+        let m2 = from_json(&to_json(&m)).unwrap();
+        assert!(m2.graph.is_random_exit(1, Direction::N), "the random mark survives");
+        assert!(m2.graph.is_tried(1, Direction::N), "and it still counts as tried");
+        assert_eq!(
+            crate::matrix::classify(&m2.graph, 1, Direction::N),
+            crate::matrix::MatrixCell::Random,
+            "so a reload reads the cell exactly as the live session did"
+        );
+    }
+
+    /// A map file saved before SQ-1257 has no `random_exits` field at all; it must load as an
+    /// empty list rather than fail to parse.
+    #[test]
+    fn a_pre_sq1257_map_file_has_no_random_exits_field_and_loads_fine() {
+        let old = r#"{"version":1,"rooms":[{"id":1,"name":"Hall","label_override":null,"notes":"","pos":[0,0]}],"connections":[],"current":1}"#;
+        let m = from_json(old).unwrap();
+        assert!(m.graph.room(1).unwrap().random_exits.is_empty());
+    }
+
     /// SQ-0672: the per-layer "last room visited" memory must survive a save/load round trip, or
     /// a layer switch after a restore would always fall back to the bounding-box centre instead
     /// of the room the player actually last stood on there.

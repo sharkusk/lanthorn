@@ -60,6 +60,19 @@ pub struct Room {
     /// most twelve long. Absent from older map files, hence `serde(default)`.
     #[serde(default)]
     pub probed: Vec<Direction>,
+    /// Compass directions this room's own map data declared a FIXED
+    /// destination for, that the player nonetheless left through and arrived
+    /// somewhere else (SQ-1257) — Lost Pig's gnome tunnels, where the story's
+    /// exit table names nothing and a "before going" rule sends the player to
+    /// a random cave. Recorded as a fact about the ROOM, not an edge: a
+    /// destination that varies is not a passage `Reciprocal`/`OneWay`/`SelfLoop`
+    /// could name truthfully, so the matrix reports a separate cell
+    /// ([`crate::matrix::MatrixCell::Random`]) instead of inventing one.
+    ///
+    /// A `Vec` for the same reason as `tried`/`probed`. Absent from older map
+    /// files, hence `serde(default)`.
+    #[serde(default)]
+    pub random_exits: Vec<Direction>,
     /// Monotonic discovery order, stamped once by [`MapGraph::upsert_room`] the first time this
     /// room is minted and never touched again (SQ-0685). This — not the room id, which for a
     /// Z-machine game is the story's own object number and has nothing to do with when the player
@@ -355,6 +368,7 @@ impl MapGraph {
                     loc_method: None,
                     tried: Vec::new(),
                     probed: Vec::new(),
+                    random_exits: Vec::new(),
                     seq,
                 });
             }
@@ -561,6 +575,29 @@ impl MapGraph {
     /// [`MapGraph::probe_candidates`] consults both, which is the only place they meet.
     pub fn is_probed(&self, id: RoomId, dir: Direction) -> bool {
         self.rooms.get(&id).is_some_and(|r| r.probed.contains(&dir))
+    }
+
+    /// Record that `dir` out of `id` is a RANDOM exit (SQ-1257): the room's own map data named a
+    /// fixed destination and the player was sent somewhere else. Also marks `dir` tried — the
+    /// player DID try it, just not to a destination the map can name — so it never shows as an
+    /// unexplored frontier. A no-op for an unknown room or [`Direction::Unknown`].
+    pub fn mark_random_exit(&mut self, id: RoomId, dir: Direction) {
+        if dir == Direction::Unknown {
+            return;
+        }
+        self.mark_tried(id, dir);
+        if let Some(r) = self.rooms.get_mut(&id) {
+            if !r.random_exits.contains(&dir) {
+                r.random_exits.push(dir);
+            }
+        }
+    }
+
+    /// True when `dir` out of `id` is recorded as a random exit (SQ-1257). Read by
+    /// [`crate::matrix::classify`] — beaten by a real edge in the same direction, since a later
+    /// direction that behaves deterministically is the stronger fact.
+    pub fn is_random_exit(&self, id: RoomId, dir: Direction) -> bool {
+        self.rooms.get(&id).is_some_and(|r| r.random_exits.contains(&dir))
     }
 
     /// Which directions are worth probing out of `room`, best first (SQ-0785).
@@ -1060,6 +1097,7 @@ mod tests {
             loc_method: None,
             tried: Vec::new(),
             probed: Vec::new(),
+            random_exits: Vec::new(),
             seq: ROOM_SEQ_MISSING,
         };
         let rooms = vec![mk(5), mk(2), mk(9)];
@@ -1089,6 +1127,7 @@ mod tests {
             loc_method: None,
             tried: Vec::new(),
             probed: Vec::new(),
+            random_exits: Vec::new(),
             seq,
         };
         // Array order (2, 1) deliberately disagrees with seq order (1, 0): if the backfill fired

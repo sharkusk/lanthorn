@@ -164,6 +164,7 @@ version = 1   # style schema version — do not remove; lets lanthorn flag an ou
 # "matrix.cell:entrance" = { parent = "text", bold = true }
 # "matrix.cell:path" = { parent = "accent", bold = true, underline = true }
 # "matrix.cell:frontier" = { parent = "muted" }
+# "matrix.cell:random" = { parent = "alert" }
 # "matrix.footnote" = { parent = "muted" }
 # "edge:oneway" = { parent = "map.connector" }
 # "edge:asym" = { parent = "map.connector" }

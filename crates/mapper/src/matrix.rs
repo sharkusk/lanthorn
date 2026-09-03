@@ -65,6 +65,12 @@ pub enum MatrixCell {
     Probed,
     /// Never tried — the exploration frontier.
     Untried,
+    /// Tried; the story sent the player somewhere different each time (SQ-1257) —
+    /// Lost Pig's gnome tunnels are the specimen. Explored, not a frontier, and
+    /// names no destination because none is stable enough to name: the room the
+    /// story picks varies, so no `dest` can be trusted from one crossing to the
+    /// next. A REAL edge in the same direction beats this — see [`classify_with`].
+    Random,
 }
 
 impl MatrixCell {
@@ -76,12 +82,15 @@ impl MatrixCell {
             | MatrixCell::ReturnBy { dest, .. }
             | MatrixCell::OneWay { dest }
             | MatrixCell::LeavesLayer { dest } => Some(*dest),
-            MatrixCell::SelfLoop | MatrixCell::Probed | MatrixCell::Untried => None,
+            MatrixCell::SelfLoop | MatrixCell::Probed | MatrixCell::Untried | MatrixCell::Random => {
+                None
+            }
         }
     }
 
     /// True for the two cells that mark unexplored ground (`×` and `·`) — what the frontier style
-    /// dims.
+    /// dims. [`MatrixCell::Random`] is deliberately excluded: it is explored (the player tried it
+    /// and learned the story decides), just not explorable any further.
     pub fn is_frontier(&self) -> bool {
         matches!(self, MatrixCell::Probed | MatrixCell::Untried)
     }
@@ -136,6 +145,12 @@ fn classify_with(graph: &MapGraph, idx: &ConnIndex<'_>, room: RoomId, dir: Direc
     let Some(dest) = dest else {
         if graph.self_loops(room).contains(&dir) {
             return MatrixCell::SelfLoop;
+        }
+        // A REAL edge (above) beats this, and did not exist — so a direction the story sends
+        // somewhere different each time is reported before falling back to the tried/untried
+        // read, which cannot tell "the story decided" apart from "never tried".
+        if graph.is_random_exit(room, dir) {
+            return MatrixCell::Random;
         }
         // No edge at all: the room's own record of what has been TYPED here is the only thing
         // that separates a wall from unexplored ground.
@@ -439,6 +454,31 @@ mod tests {
         g.add_edge(4, Direction::E, 1);
         assert_eq!(classify(&g, 4, Direction::E), MatrixCell::OneWay { dest: 1 });
         assert!(g.self_loops(4).contains(&Direction::E), "and the loop is not destroyed");
+    }
+
+    /// SQ-1257: a random exit reads as `?`, beats `Probed`/`Untried`, is beaten by a real edge,
+    /// and never counts as a frontier.
+    #[test]
+    fn a_random_exit_beats_probed_and_untried_but_a_real_edge_beats_it() {
+        let (mut g, _l) = maze();
+        assert_eq!(classify(&g, 1, Direction::S), MatrixCell::Untried, "never tried south");
+
+        g.mark_random_exit(1, Direction::S);
+        assert_eq!(classify(&g, 1, Direction::S), MatrixCell::Random, "random beats untried");
+        assert!(!classify(&g, 1, Direction::S).is_frontier(), "random is explored, not a frontier");
+        assert!(g.untried(1).iter().all(|&d| d != Direction::S), "and drops out of the untried list");
+
+        g.mark_random_exit(4, Direction::E); // already Probed from `maze()`'s mark_tried
+        assert_eq!(classify(&g, 4, Direction::E), MatrixCell::Random, "random beats a bare probe too");
+
+        // A real edge in the same direction is the stronger fact and wins outright.
+        g.add_edge(1, Direction::S, 4);
+        assert_eq!(
+            classify(&g, 1, Direction::S),
+            MatrixCell::OneWay { dest: 4 },
+            "a later real edge upgrades a random mark"
+        );
+        assert!(g.is_random_exit(1, Direction::S), "the random record itself is untouched");
     }
 
     /// SQ-1181: `build` classifies against a shared per-call [`ConnIndex`];

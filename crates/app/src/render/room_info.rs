@@ -68,6 +68,7 @@ fn card_detail(
         }
         C::Probed => ("×", "tried, no way through".to_string()),
         C::Untried => ("·", String::new()),
+        C::Random => ("?", "destination varies".to_string()),
     }
 }
 
@@ -293,6 +294,9 @@ pub fn draw_room_info_body(
     // Untried and dead-end directions are dimmed with the same selector the matrix dims its
     // frontier cells with, so the two surfaces read alike.
     let frontier_style = theme.get("map.matrix.cell:frontier").style;
+    // The `?` random-exit glyph (SQ-1257) gets the matrix's own `map.matrix.cell:random` selector
+    // — not `frontier`, since a random exit is explored, not unexplored ground.
+    let random_style = theme.get("map.matrix.cell:random").style;
     if row <= max_y {
         draw_str_clipped(buf, inner_x, row, "Exits:", section_style, clip);
         row += 1;
@@ -304,7 +308,13 @@ pub fn draw_room_info_body(
         .iter()
         .map(|(dir, glyph, detail)| {
             let line = format!("  {:<3} {} {}", dir_label(*dir), glyph, detail);
-            let style = if detail.is_empty() || *glyph == "×" { frontier_style } else { value_style };
+            let style = if *glyph == "?" {
+                random_style
+            } else if detail.is_empty() || *glyph == "×" {
+                frontier_style
+            } else {
+                value_style
+            };
             (line.trim_end().to_string(), style)
         })
         .chain(odd.iter().map(|dest| (format!("  ?   ⇢ {dest}"), value_style)))

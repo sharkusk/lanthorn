@@ -7615,6 +7615,7 @@ mod tests {
             pictures: Vec::new(),
             transcript_elems: vec![],
             prose_retired: None,
+            declared_exit: None,
         }
     }
 

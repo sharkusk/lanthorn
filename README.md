@@ -158,7 +158,9 @@ itself.**
   Switch on the return probe and it will go and **find
   the way back** for you, in a silent throwaway copy of your game — closing the
   one-way gaps an automap is otherwise full of, and never once assuming that a
-  passage runs both ways.
+  passage runs both ways. *Next release:* a move some games decide at random —
+  Lost Pig's gnome tunnels are the example — draws no arrow at all, just a `?`
+  marking that the destination varies.
   → [the map](docs/guide/the-map.md)
 - **The original disks, as the original machines** — hand it an Amiga, Macintosh,
   Apple II, Atari ST, PC or Commodore floppy and it plays the build on that disk,
