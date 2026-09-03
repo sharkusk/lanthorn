@@ -1797,7 +1797,7 @@ impl Face {
     pub fn draw(&self, canvas: &mut RgbaImage, ch: char, px: u32, py: u32, cw: u32, chh: u32, fg: Rgba<u8>) {
         match self {
             Face::Bitmap => app::render::bitfont::blit_glyph(canvas, ch, px, py, cw, chh, fg, None, None),
-            Face::Outline { font, px: size, fallback, unresolved, .. } => {
+            Face::Outline { font, px: size, natural, fallback, unresolved, .. } => {
                 // The half-block and box-drawing glyphs are the picture's
                 // STRUCTURE — rules, borders, and every pixel of a half-block
                 // frame. A text face either lacks them or draws them with gaps
@@ -1842,10 +1842,30 @@ impl Face {
                 if m.width == 0 || m.height == 0 {
                     return;
                 }
-                // Baseline at 80% of the cell, glyph centred horizontally: a
-                // terminal advances by the cell, not by the glyph's own width.
+                // Baseline at 80% of the cell. Horizontally, place the glyph by
+                // its own LEFT-SIDE BEARING (SQ-1272) — fontdue's
+                // `Metrics::xmin`, "whole pixel offset of the left-most edge of
+                // the bitmap [...] may be negative to reflect the glyph is
+                // positioned to the left of the origin" (fontdue 0.9.4,
+                // `font.rs`) — rather than centring by ink width. A monospace
+                // face places every glyph at a fixed offset from ITS OWN cell's
+                // origin (`px` is that origin: a terminal advances by the cell,
+                // not by the glyph's own width), so ink-centring silently
+                // overrode the typeface's own design for any glyph whose ink
+                // isn't itself centred in its advance — which is most of them,
+                // and includes a glyph drawn to touch its cell's own edge (the
+                // Legacy Computing diagonals above, before `is_structural`
+                // routed them here at all). Kept as a fallback only when this
+                // face's own metrics don't match the cell it's drawn into
+                // (`cell_complaint`'s case, checked here via `natural` rather
+                // than re-deriving it): there is no cell-relative origin to
+                // trust then, so ink-centred is the least-wrong guess.
                 let baseline = py as i64 + (i64::from(chh) * 4) / 5;
-                let x0 = px as i64 + (i64::from(cw) - m.width as i64) / 2;
+                let x0 = if *natural == (cw, chh) {
+                    px as i64 + i64::from(m.xmin)
+                } else {
+                    px as i64 + (i64::from(cw) - m.width as i64) / 2
+                };
                 let y0 = baseline - m.height as i64 - i64::from(m.ymin);
                 for gy in 0..m.height {
                     let y = y0 + gy as i64;
@@ -1875,11 +1895,17 @@ impl Face {
     }
 }
 
-/// Glyphs that are structure rather than type: half-blocks, shades, and the box
-/// drawing range. These must tile with no seam, which only the bitmap master
-/// does.
+/// Glyphs that are structure rather than type: half-blocks, shades, the box
+/// drawing range, and the four Legacy Computing half-diagonal corner stubs the
+/// automap draws for `diagonal_corners` (U+1FBA0-1FBA3,
+/// `symbols::PathGlyphs::diag_ul/ur/ll/lr`, SQ-1272). These must tile with no
+/// seam, which only the bitmap master does — the half-diagonals used to fall
+/// outside this range and go to an outline face instead, while every glyph
+/// they sit beside in a real diagonal run (another half-diagonal, `─`, `│`)
+/// stayed on the master, so the seam between a structural neighbour and a
+/// half-diagonal stepped sideways wherever an outline face was in play.
 fn is_structural(ch: char) -> bool {
-    matches!(ch, '\u{2500}'..='\u{259F}')
+    matches!(ch, '\u{2500}'..='\u{259F}' | '\u{1FBA0}'..='\u{1FBA3}')
 }
 
 /// Monospace faces worth trying when `--font` was not given, in order. `~/`
@@ -2382,5 +2408,196 @@ mod tests {
         );
         let painted = canvas.pixels().filter(|p| p.0[3] > 0).count();
         assert!(painted > 0, "drawing ▸ and ⇄ must paint at least one pixel — a blank canvas is the bug SQ-1229 reports");
+    }
+
+    /// SQ-1272: the automap's diagonal chain (`render::map::diagonal_chain`)
+    /// draws a multi-cell diagonal run as adjacent PAIRS of Legacy Computing
+    /// half-diagonals — e.g. `🮣` (diag_lr, U+1FBA3 BOX DRAWINGS LIGHT DIAGONAL
+    /// MIDDLE RIGHT TO LOWER CENTRE) immediately left of `🮠` (diag_ul,
+    /// U+1FBA0 BOX DRAWINGS LIGHT DIAGONAL UPPER CENTRE TO MIDDLE LEFT) in the
+    /// same row, per `Direction::NE => (.., g.diag_lr, g.diag_ul)`. That is
+    /// what a diagonal run actually looks like on screen — `map.rs`'s own
+    /// `diagonal_corners_on_draws_an_unbroken_corner_to_corner_diagonal` pins
+    /// the PLACEMENT (which glyph goes in which cell); this pins that the
+    /// PIXELS drawn there are actually contiguous, which that test cannot see
+    /// since it only asserts on `symbol()`, never on ink.
+    ///
+    /// `is_structural` used to cover only U+2500-259F, so whenever an outline
+    /// face was in play these two glyphs went to fontdue, centred by ink
+    /// width — while every OTHER glyph in the same run (`─`, `│`, the room's
+    /// own box corners) stayed on the bitmap master. Two rasterisers, two
+    /// placement rules, so the seam between a `🮣` and its `🮠` stepped
+    /// sideways exactly where the two glyphs' own Unicode names promise a
+    /// shared point ("middle right" / "middle left" — Unicode 17.0, "Symbols
+    /// for Legacy Computing", U+1FB00-1FBFF, page 1863).
+    ///
+    /// (A literal `╲`/`╱` never appears next to these in production — grepping
+    /// `crates/app/src` for them turns up nothing outside `bitfont.rs`'s own
+    /// font-3 coverage list — and could not tile with them if it did:
+    /// `symbols.rs`'s doc comment on `PathGlyphs::diag_ul` says these four run
+    /// edge-MIDPOINT to edge-midpoint specifically so a stub hands off to an
+    /// ORTHOGONAL path [`─`/`│`], never to a corner-to-corner full diagonal —
+    /// a `╲`'s corner-anchored ink (column 0 or 7 of 8) cannot land within a
+    /// device pixel of any of these four's edge-midpoint anchor (column 3 or
+    /// row 4 of 8) by construction. The seam this test pins is the one the bug
+    /// actually breaks: two adjacent half-diagonals, whose shared edge really
+    /// is the same point by both glyphs' own definitions.)
+    ///
+    /// Falsify by reverting `is_structural`'s widening (the outline half then
+    /// mis-centres `🮣`/`🮠` whenever an outline face is in play, breaking the
+    /// seam) or by reverting the hand-drawn bitmaps in
+    /// `render::bitfont::EXTRA_GLYPHS` (a bitmap that does not land its
+    /// "middle left"/"middle right" endpoint on the shared edge column breaks
+    /// it even on the bitmap master alone, with no font involved).
+    #[test]
+    fn diagonal_half_pair_seam_is_continuous() {
+        for c in ['\u{1FBA0}', '\u{1FBA1}', '\u{1FBA2}', '\u{1FBA3}'] {
+            assert!(
+                app::render::bitfont::has_glyph(c),
+                "U+{:04X} must be in the bitmap master (SQ-1272)",
+                c as u32
+            );
+        }
+
+        fn ink_rows_in_column(canvas: &RgbaImage, x: u32, h: u32) -> Vec<u32> {
+            (0..h).filter(|&y| canvas.get_pixel(x, y).0[3] > 0).collect()
+        }
+
+        // `near` in the left cell, `far` in the right cell, exactly as
+        // `diagonal_chain` places one step of a NE-sloped run.
+        fn assert_pair_seam(face: &Face, cw: u32, ch: u32, near: char, far: char, label: &str) {
+            let mut canvas = RgbaImage::new(cw * 2, ch);
+            face.draw(&mut canvas, near, 0, 0, cw, ch, Rgba([255, 255, 255, 255]));
+            face.draw(&mut canvas, far, cw, 0, cw, ch, Rgba([255, 255, 255, 255]));
+            let left_edge = ink_rows_in_column(&canvas, cw - 1, ch);
+            let right_edge = ink_rows_in_column(&canvas, cw, ch);
+            assert!(!left_edge.is_empty(), "{label}: {near:?}'s right-edge column must have ink");
+            assert!(!right_edge.is_empty(), "{label}: {far:?}'s left-edge column must have ink");
+            let min_gap = left_edge
+                .iter()
+                .flat_map(|&u| right_edge.iter().map(move |&l| (u as i64 - l as i64).abs()))
+                .min()
+                .unwrap();
+            assert!(
+                min_gap <= 1,
+                "{label}: {near:?}/{far:?} seam steps sideways by {min_gap} device row(s) — \
+                 left cell's right-edge ink at rows {left_edge:?}, right cell's left-edge ink at rows {right_edge:?}"
+            );
+        }
+
+        assert_pair_seam(&Face::Bitmap, 8, 8, '\u{1FBA3}', '\u{1FBA0}', "bitmap master");
+
+        // `FONT_CANDIDATES` leads with Fira Code Nerd Font Mono for its 1:2
+        // cell (SQ-0963), which as of this writing does not carry Legacy
+        // Computing's "character cell diagonals" — so it would pass this test
+        // whether or not `is_structural` covers them, having never reached
+        // fontdue for these four either way. IosevkaTerm Nerd Font Mono does
+        // carry them (it is what `machine-screenshots/` gallery conventions
+        // and the Docker image's embedded font both lead with) and is the face
+        // that actually exercises the outline branch this fix touches — tried
+        // here alongside `FONT_CANDIDATES` rather than added to it, since that
+        // list's ordering is a separate, deliberate measurement (SQ-0963) this
+        // quest has no reason to disturb.
+        let diagonal_font_candidates: &[&str] = &[
+            "~/Library/Fonts/IosevkaTermNerdFontMono-Regular.ttf",
+            "/Library/Fonts/IosevkaTermNerdFontMono-Regular.ttf",
+            "~/.local/share/fonts/IosevkaTermNerdFontMono-Regular.ttf",
+            "/usr/share/fonts/truetype/iosevka/IosevkaTermNerdFontMono-Regular.ttf",
+        ];
+        let outline = diagonal_font_candidates
+            .iter()
+            .chain(FONT_CANDIDATES)
+            .find_map(|c| {
+                let p = candidate_path(c)?;
+                if !p.is_file() {
+                    return None;
+                }
+                let face = Face::outline(&p, 16).ok()?;
+                let Face::Outline { font, .. } = &face else { return None };
+                (font.has_glyph('\u{1FBA0}')
+                    && font.has_glyph('\u{1FBA1}')
+                    && font.has_glyph('\u{1FBA2}')
+                    && font.has_glyph('\u{1FBA3}'))
+                .then_some(face)
+            });
+        if let Some(face) = outline {
+            let Face::Outline { natural, .. } = &face else { unreachable!() };
+            let (cw, ch) = *natural;
+            assert_pair_seam(&face, cw, ch, '\u{1FBA3}', '\u{1FBA0}', "outline face");
+        }
+        // No installed face carries all four glyphs — nothing left to check;
+        // the bitmap-master assertion above already ran unconditionally.
+    }
+
+    /// SQ-1272 (fix, part 2): `Face::draw`'s outline branch used to place a
+    /// glyph by CENTRING its rasterised ink inside the cell —
+    /// `px + (cw - m.width) / 2` — discarding the glyph's own left-side
+    /// bearing (`fontdue::Metrics::xmin`). A monospace face places every glyph
+    /// at a fixed offset from its own cell's origin; ink-centring silently
+    /// overrides that for any glyph whose ink isn't itself centred in its
+    /// advance width.
+    ///
+    /// Tries a short list of characters and uses the first whose bearing-based
+    /// and ink-centred placements actually differ on the installed face (most
+    /// monospace faces centre SOME glyphs, so not every character can tell the
+    /// two formulas apart) — skips vacuously if none of them do, or if no
+    /// [`FONT_CANDIDATES`] face is installed, the same fixture-absence pattern
+    /// as this file's other outline-face cases.
+    #[test]
+    fn outline_glyph_is_placed_by_bearing_not_ink_centring() {
+        let Some(primary) = FONT_CANDIDATES.iter().find_map(|c| {
+            let p = candidate_path(c)?;
+            p.is_file().then_some(p)
+        }) else {
+            return;
+        };
+        let face = Face::outline(&primary, 16).expect("a candidate that `is_file()` must parse");
+        let Face::Outline { font, px: size, natural, .. } = &face else { unreachable!() };
+        if face.cell_complaint(natural.0 as u16, natural.1 as u16).is_some() {
+            return; // this face's own metrics don't match its natural cell — the bearing branch isn't in play
+        }
+        let (cw, ch) = *natural;
+
+        // '⁄' (FRACTION SLASH, U+2044) leads: on Fira Code Nerd Font Mono its
+        // bearing and ink-centred placements differ by 4 device pixels, the
+        // widest gap this file found scanning Basic Latin, Latin-1
+        // Supplement, General Punctuation and a Nerd Font PUA range — most of
+        // which centre their ink exactly, telling the two formulas apart not
+        // at all. None of these are in `is_structural`'s range, so `face.draw`
+        // below actually reaches the bearing code rather than the bitmap
+        // master.
+        for ch_glyph in ['\u{2044}', 'B', 'D', 'E', 'F', 'K', 'L', 'P', 'R', ')', '\u{00B0}'] {
+            if !font.has_glyph(ch_glyph) {
+                continue;
+            }
+            let (m, _) = font.rasterize(ch_glyph, *size);
+            if m.width == 0 {
+                continue;
+            }
+            let bearing_x0 = m.xmin as i64;
+            let centred_x0 = (cw as i64 - m.width as i64) / 2;
+            if (bearing_x0 - centred_x0).abs() < 2 {
+                continue; // this glyph can't distinguish the two formulas on this face
+            }
+
+            // Drawn into the MIDDLE cell of three, so a negative bearing (ink
+            // starting left of the pen origin, like `⁄`'s -4) or a glyph wider
+            // than its advance doesn't clip off the canvas edge and produce a
+            // false reading.
+            let mut canvas = RgbaImage::new(cw * 3, ch);
+            face.draw(&mut canvas, ch_glyph, cw, 0, cw, ch, Rgba([255, 255, 255, 255]));
+            let Some(ink_left) = (0..cw * 3).find(|&x| (0..ch).any(|y| canvas.get_pixel(x, y).0[3] > 0)) else {
+                continue; // rasterised blank at this size
+            };
+            let ink_left = ink_left as i64 - cw as i64; // relative to the pen origin (`px = cw`)
+
+            assert!(
+                (ink_left - bearing_x0).abs() <= 1,
+                "{ch_glyph:?} should be placed at its bearing (x0={bearing_x0}), found ink starting at \
+                 x={ink_left} (ink-centring would have put it at x0={centred_x0})"
+            );
+            return; // found one that distinguishes and it passed — done
+        }
+        // no candidate glyph distinguished the two formulas on this face — nothing to assert
     }
 }
