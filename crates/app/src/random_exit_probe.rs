@@ -206,8 +206,8 @@ pub fn deliver(state: &mut AppState, mapper: &mut Mapper, answer: &crate::probe:
     }
 
     // `Suspicion` alone reads `answer.run` even when the shadow is `None` — a BROKEN shadow
-    // (restore refused, e.g. `advent.z6`'s own Quetzal header quirk, see `deliver_suspicion`'s
-    // "no evidence at all" doc) is exactly as inconclusive as one that ran and said nothing, and
+    // (the boot failed, or it would not take the live state; see `deliver_suspicion`'s "no
+    // evidence at all" doc) is exactly as inconclusive as one that ran and said nothing, and
     // both resolve the same way. `FirstWalk`/`Upgrade` always have somewhere safe to stand pat
     // instead, so a missing run leaves them alone entirely, same as ever.
     if let SearchKind::Suspicion { old_dest } = search.kind {
@@ -377,11 +377,13 @@ fn deliver_upgrade(mapper: &mut Mapper, search: &RandomExitSearch, run: &crate::
 /// A Suspicion has nowhere safe to stand — `apply_turn` deliberately minted and marked NOTHING —
 /// so standing pat here would leave the direction showing neither an edge nor a `?`, which
 /// `mark_tried` (already set for it, whichever way this resolves) turns into `×` ("tried, no path
-/// through") on the matrix: an outright lie about a move the player just completed. `advent.z6`'s
-/// own Quetzal quirk (documented on `sq1264_forest_randomization.rs`'s `ZPlay`) makes this the
-/// ORDINARY case there, not a rare corner: its shadow can never even restore, so every Suspicion
-/// search on it comes back with no evidence, every time — structurally indistinguishable, from
-/// here, from a probe that could never run in the first place.
+/// through") on the matrix: an outright lie about a move the player just completed.
+///
+/// This path is not decorative. It was written for a real, whole-story outage — every Version 6
+/// shadow refusing the live restore, SQ-1266 — and though that particular cause is fixed, a
+/// shadow can still fail to boot, quit inside a probe, or be handed a snapshot a future engine
+/// declines. Whatever the reason, a Suspicion search that learns nothing must land somewhere
+/// truthful, and that is here.
 fn deliver_suspicion(
     mapper: &mut Mapper,
     search: &RandomExitSearch,
@@ -762,8 +764,8 @@ mod tests {
         assert_eq!(mapper.graph.random_destinations(1, Direction::N), &[2]);
     }
 
-    /// A probe that DID arm but came back BROKEN (`Answer::run: None` — a shadow whose restore
-    /// the engine refused, `advent.z6`'s own Quetzal header quirk being the real-game specimen)
+    /// A probe that DID arm but came back BROKEN (`Answer::run: None` — a shadow that would not
+    /// boot, or whose restore the engine refused)
     /// resolves exactly like no probe running at all: marked random, same as (2e). Falsify by
     /// reverting `deliver` to require `answer.run` up front for every kind and this fails (the
     /// direction is left showing neither an edge nor a mark).
