@@ -354,6 +354,11 @@ pub static REGISTRY: std::sync::LazyLock<Vec<RegRow>> = std::sync::LazyLock::new
     // rather than inventing a second colour for one idea.
     row("map.room_random_stub", Section::Map, Kind::Style, Some("alert"), Delta::EMPTY),
     row("map.connector", Section::Map, Kind::Style, Some("accent"), Delta::EMPTY),
+    // The PRIMARY arrowhead of a stacked same-destination group (SQ-1276): several of a room's
+    // own exits collapse to one line, and this is the accent that tells it apart from an
+    // ordinary passage. Defaults to the exit arrow's own colour, reversed — the same "accented
+    // by inversion" idiom `map.room_selected` already uses on the room box itself.
+    row("map.room_stacked_exit", Section::Map, Kind::Style, Some("map.connector"), mods(false, false, false, true)),
     // `distorted` (magenta) has no matching role — kept explicit (a distinctive marker).
     row("map.connector_distorted", Section::Map, Kind::Style, None, fg(Color::Magenta)),
     row("map.connector_portal", Section::Map, Kind::Style, Some("accent"), Delta::EMPTY),
@@ -744,6 +749,7 @@ mod tests {
         "map.room_alias_marker",
         "map.room_random_stub",
         "map.connector",
+        "map.room_stacked_exit",
         "map.connector_distorted",
         "map.connector_portal",
         "map.shared_path",

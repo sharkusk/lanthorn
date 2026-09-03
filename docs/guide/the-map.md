@@ -69,9 +69,14 @@ column itself grows to fit the room, wide pane permitting — abbreviation and
 its footnote only kick in once a name genuinely runs out of room.
 
 The drawn view hovers too: a room whose name keeps changing carries a small
-number beside its label, and hovering it lists the room's other names; a `?`
-random exit carries one on its border, and hovering it lists every room that
-direction has actually landed you in so far.
+number beside its label, and hovering it lists the room's other names. A
+random exit shows its own arrowhead on the border, same as an ordinary
+passage, with a count — or a bare `?` before anything's been recorded — sitting
+just outside it where the path would start; hover either cell and it lists
+every room that direction has actually landed you in so far. And when several
+exits from a room all lead to the very same place, only one arrowhead is
+drawn, picked out with a highlighted accent — hover it to see every direction
+that gets you there.
 
 ![The matrix map view: the map as a direction table — one row per room, every passage's true destination in its cell](../maze-grid.png)
 

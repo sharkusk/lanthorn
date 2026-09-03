@@ -101,9 +101,24 @@ Absolute URLs or no link.
   icon, the same way a random compass exit already showed on the border.
 - **Hover the little number on a room to see which rooms a random exit has
   led to, or the room's other names.** The map's own alias-count marker and
-  `?` random-exit stub now pop a tooltip, the same way the direction matrix's
+  `?` random-exit mark now pop a tooltip, the same way the direction matrix's
   already did — no more switching to the room panel just to read what a
   superscript is counting.
+- **A random exit now shows its own arrowhead, with the count where the line
+  would start.** The `?` mark used to replace the room's border with a bare
+  `?` or a count, hiding that a real exit sits there. Now the border shows the
+  direction's arrowhead — a room's ordinary passage would look the same —
+  and the count (or a bare `?` before anything's been recorded) sits one cell
+  further out, right where a real line would begin. Hovering either cell
+  still pops the same tooltip.
+- **Several exits to one room now collapse to a single highlighted arrowhead
+  instead of competing for the same border cells.** When two directions, or a
+  staircase alongside a compass exit, both lead to the same neighbour, the map
+  now draws only one line — picked out with a reversed accent so it's clear
+  more than one way leads there — and hovering it lists every direction that
+  gets you to that room. Nothing about the direction matrix, the room panel,
+  or `/export-map`'s dump changes; every direction is still there, just drawn
+  once.
 
 - **The map's Nerd Font arrowheads are outline arrows now, not boxed ones.**
   The boxed set the font check used to install turns into a small square with a

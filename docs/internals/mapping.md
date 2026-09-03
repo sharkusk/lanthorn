@@ -489,24 +489,51 @@ ever answered "does this direction vary?" — the room card said "destination
 varies" and nothing more, however many times you had walked it. Now every distinct
 room a `?` direction has actually landed you in gets named: the room card lists
 them ("destination varies: Windy Cave, Twisty Passage"), the matrix cell grows a
-small superscript count (`?²`), and the box draws a one-cell stub in that
-direction — on the border for a compass direction, at the corner for a diagonal —
-showing the same count, or a bare `?` when nothing has been recorded yet. Nothing
-is drawn beyond the stub: the whole point of the mark is that there is nowhere
-stable to draw a line to. The stub has its own style selector
-(`map.room_random_stub`, defaulting the same colour as the matrix's `?` cell), and
-`/export-map`'s dump lists the recorded destinations on the `ROOM` line
-(`random=[N→(#187 "Probably New Tunnel"), …]`) beside everything else it already
-records about a room.
+small superscript count (`?²`), and the box shows it too — but as an ARROWHEAD, not
+a `?` sitting on the border (SQ-1275). The border cell carries the direction's own
+arrowhead, exactly the glyph a real exit that way would draw, styled through its
+own selector (`map.room_random_stub`, defaulting the same colour as the matrix's
+`?` cell) so it reads as a mark rather than an ordinary passage; the superscript
+count — or a bare `?` when nothing has been recorded yet — sits one cell beyond it,
+in the first cell a real connector leaving that side would step into. `diagonal_corners`
+plays no part: the router leaves a diagonal exit's corner in the same place either
+way (only the LINE ART between corners differs), so a diagonal `?` mark's two cells
+never move when you toggle it. Nothing is drawn beyond the count cell: the whole
+point of the mark is that there is nowhere stable to draw a line to, and the
+router reserves that exact cell (`mapper::route`'s `reserved_doorways`) so an
+unrelated connector elsewhere on the map can never be drawn through it either —
+it detours instead. `/export-map`'s dump lists the recorded destinations on the
+`ROOM` line (`random=[N→(#187 "Probably New Tunnel"), …]`) beside everything else
+it already records about a room.
 
-**Both superscripts answer a mouse hover, in the drawn view.** Hovering the
+**Several exits to one destination collapse to a single arrowhead** (SQ-1276).
+A room whose own name keeps rerolling isn't the only thing that can point at one
+place two ways — a staircase alongside a compass passage, or two compass
+directions that both happen to lead to the same neighbour, are both ordinary
+shapes a real game builds. Drawing every one of them as its own line competed for
+the same few border cells and said nothing a single line couldn't; now only the
+PRIMARY direction — whichever one's compass bearing actually matches where the
+neighbour sits, undistorted, with a fixed tie-break (north, south, east, west,
+then the diagonals) on a genuine tie — is routed and drawn, in a REVERSED accent
+(`map.room_stacked_exit`, defaulting to the ordinary connector colour with the
+video inverted) so it reads as standing in for more than itself. The rest are
+suppressed entirely: no line, no border badge, no portal icon. The GRAPH still
+carries every direction — the matrix, the room card, `/export-map`'s dump and the
+save archive show all of them exactly as before; only the drawing collapses. A
+destination reached ONLY by a portal (Up/Down/In/Out), with no compass direction
+alongside it, is left alone — there is nothing to prefer a portal over.
+
+**All three superscripts answer a mouse hover, in the drawn view.** Hovering the
 alias-count marker pops a tooltip listing the room's other names, in the order
 the graph first saw them — the same list the room card's "Also seen as" line
-gives. Hovering a `?` stub pops the direction's recorded destinations, the room
-itself printed as "back here" exactly as the room card's exit line does, or
-"destination varies — none recorded yet" for a bare `?`. Neither hover claims a
-click; the marker rects behind them (`render::map::MapHits::marker_rects`) exist
-only at Boxes zoom, since Compact and Overview draw no marker to hover.
+gives. Hovering EITHER cell of a `?` mark — the arrowhead or the count — pops the
+direction's recorded destinations, the room itself printed as "back here" exactly
+as the room card's exit line does, or "destination varies — none recorded yet"
+for a bare `?`. Hovering a stacked primary's arrowhead pops the destination's own
+name as a title, the primary direction, then "also via <direction>" for every
+direction the collapse suppressed. Neither hover claims a click; the marker rects
+behind them (`render::map::MapHits::marker_rects`) exist only at Boxes zoom, since
+Compact and Overview draw no marker to hover.
 
 ## Finding the way back, without guessing it
 

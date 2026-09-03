@@ -690,9 +690,18 @@ pub fn render_map(rm: &RenderMap, state: &AppState, area: Rect, buf: &mut Buffer
 
     // ── 3. Boxes zoom: draw line-art connectors along their assigned lanes, on top of
     //       the rooms drawn below them in step 2.
+    // SQ-1276: every `(room, primary direction)` that stands for a collapsed same-destination
+    // group — `render_lane_connectors` accent-styles that one arrowhead and nothing else changes,
+    // since the secondary directions were already excluded from `rm.plan` upstream (mapper's
+    // `collapse_stacked_exits`) and simply have no connector here to draw.
+    let stacked_primaries: std::collections::HashSet<(RoomId, Direction)> = rm
+        .rooms
+        .iter()
+        .flat_map(|r| r.stacked_exits.iter().map(move |s| (r.id, s.primary)))
+        .collect();
     let mut arrowheads: Vec<Arrowhead> = Vec::new();
     if let Some((cols, rows)) = axes {
-        arrowheads = render_lane_connectors(&rm.plan, cols, rows, (off_x, off_y), area, buf, &state.symbols.arrows, &state.symbols.path, &state.symbols.portal, &state.colors, state.symbols.diagonal_corners, &derived.kinds);
+        arrowheads = render_lane_connectors(&rm.plan, cols, rows, (off_x, off_y), area, buf, &state.symbols.arrows, &state.symbols.path, &state.symbols.portal, &state.colors, state.symbols.diagonal_corners, &derived.kinds, &stacked_primaries);
     }
 
     // ── 4. Draw rooms on top of the line-art (translate + clip) ───────────────
@@ -715,7 +724,7 @@ pub fn render_map(rm: &RenderMap, state: &AppState, area: Rect, buf: &mut Buffer
     // Portal view hides the cardinal connector arrowheads so only portal icons sit on borders.
     if !state.show_portal_labels {
         let current_room = rm.rooms.iter().find(|r| r.is_current).map(|r| r.id);
-        draw_connector_arrows(&arrowheads, (off_x, off_y), area, buf, &state.colors, state.selected_room, current_room);
+        draw_connector_arrows(&arrowheads, (off_x, off_y), area, buf, &state.colors, state.selected_room, current_room, &mut marker_rects);
     }
     marker_rects
 }
@@ -907,6 +916,10 @@ fn dir_title(dir: Direction) -> String {
 ///   destination (the room's own id printed as "back here", exactly as the room card's exit
 ///   card does) or, when nothing has been recorded yet, "destination varies — none recorded
 ///   yet".
+/// - `MarkerKind::Stacked(primary)`: the destination's own name as a title, then `primary`'s
+///   direction, then `also via <direction>` for every other direction that leads to the same
+///   destination (SQ-1276) — read fresh from `graph` each time, so it always matches whatever
+///   the graph currently says regardless of which direction happened to route.
 ///
 /// Returns `None` — and paints nothing — while a modal overlay owns the pointer, when nothing is
 /// hovered, or when the hovered room no longer exists in `graph` (a frame drawn after the room
@@ -942,6 +955,17 @@ pub fn draw_map_hover_tip(
                         crate::render::room_info::display_name(graph, id)
                     });
                 }
+            }
+            lines
+        }
+        MarkerKind::Stacked(primary) => {
+            let Some(dest) = graph.connections().iter().find(|c| c.origin == room_id && c.dir == primary).map(|c| c.dest) else {
+                return None; // a stale rect from a frame before the model changed
+            };
+            let mut lines = vec![crate::render::room_info::display_name(graph, dest)];
+            lines.push(dir_title(primary));
+            for c in graph.connections().iter().filter(|c| c.origin == room_id && c.dest == dest && c.dir != primary) {
+                lines.push(format!("also via {}", dir_title(c.dir)));
             }
             lines
         }
@@ -1156,6 +1180,11 @@ struct Arrowhead {
     room: RoomId,
     shared: bool,
     kind: EdgeKind,
+    /// `Some(primary_dir)` when this arrowhead is the PRIMARY of a stacked same-destination
+    /// group (SQ-1276) — several of `room`'s own exits collapsed to this one line. Styled with
+    /// `map.room_stacked_exit` instead of the ordinary connector selectors, and published as a
+    /// `MarkerKind::Stacked(primary_dir)` hover rect. `None` for an ordinary arrowhead.
+    stacked: Option<Direction>,
 }
 
 /// Classify each drawn edge from the render model's own reverse-edge lookup.
@@ -1537,6 +1566,7 @@ fn plot_connector(
 /// one RECIPROCAL connector (SQ-0216): the far-end block below draws the up/down glyph (derived
 /// from `entry_dir`) at the arrival end too, instead of an arrowhead, so both ends show their own
 /// glyph — styled `map.connector_portal` just like the departure end.
+#[allow(clippy::too_many_arguments)]
 fn render_lane_connectors(
     plan: &RoutePlan,
     cols: &PosTable,
@@ -1550,6 +1580,7 @@ fn render_lane_connectors(
     colors: &crate::colors::ColorScheme,
     diagonal_corners: bool,
     kinds: &std::collections::HashMap<(RoomId, RoomId, Direction), EdgeKind>,
+    stacked_primaries: &std::collections::HashSet<(RoomId, Direction)>,
 ) -> Vec<Arrowhead> {
     let (off_x, off_y) = offset;
     // SQ-0314: when on, a diagonal exit leaves its corner on a chain of half-diagonals; `None`
@@ -1713,6 +1744,10 @@ fn render_lane_connectors(
         } else {
             arrow_for_departure(conn.exit, arrows)
         };
+        // SQ-1276: this departure is the primary of a stacked same-destination group when
+        // `(origin, exit_dir)` names one — several of the origin room's own exits collapsed to
+        // this single line.
+        let dep_stacked = stacked_primaries.contains(&(conn.origin, conn.exit_dir)).then_some(conn.exit_dir);
         arrowheads.push(Arrowhead {
             at: plot.dep_anchor,
             glyph: dep_ch.to_string(),
@@ -1721,17 +1756,20 @@ fn render_lane_connectors(
             room: conn.origin,
             shared: has_secondary,
             kind,
+            stacked: dep_stacked,
         });
         // Far-end glyph for a true reciprocal connector (collapsed opposite pair). An up/down
         // reciprocal draws its own up/down glyph (from the back-edge's direction) at the far end
         // too, same as the departure end, rather than an arrow.
         if conn.reciprocal {
+            let arr_dir = conn.entry_dir.unwrap_or(mapper::direction::opposite(conn.exit_dir));
             let arr_ch = match conn.entry_dir {
                 Some(Direction::Up) if is_updown => portal.up,
                 Some(Direction::Down) if is_updown => portal.down,
                 Some(d) if mapper::direction::is_diagonal(d) => diagonal_arrow(d, arrows),
                 _ => arrow_for_departure(conn.entry, arrows),
             };
+            let arr_stacked = stacked_primaries.contains(&(conn.dest, arr_dir)).then_some(arr_dir);
             arrowheads.push(Arrowhead {
                 at: plot.arr_anchor,
                 glyph: arr_ch.to_string(),
@@ -1740,6 +1778,7 @@ fn render_lane_connectors(
                 room: conn.dest,
                 shared: has_secondary,
                 kind,
+                stacked: arr_stacked,
             });
         }
         // A ONE-WAY passage gets no glyph at its far end (SQ-0688, reversing the arrival arrow
@@ -1805,6 +1844,7 @@ fn render_lane_connectors(
             room: m.room,
             shared: true,
             kind: m.kind,
+            stacked: None, // SQ-0689's own secondary badge, unrelated to an SQ-1276 stack
         });
     }
     arrowheads
@@ -1840,6 +1880,7 @@ fn draw_connector_arrows(
     colors: &crate::colors::ColorScheme,
     selected_room: Option<RoomId>,
     current_room: Option<RoomId>,
+    marker_rects: &mut Vec<(RoomId, MarkerKind, Rect)>,
 ) {
     let (off_x, off_y) = offset;
     // Bound once: the loop below reads these per arrowhead, not per cell.
@@ -1847,16 +1888,19 @@ fn draw_connector_arrows(
     let connector = colors.theme.get("map.connector").style;
     let connector_portal = colors.theme.get("map.connector_portal").style;
     let shared_path = colors.theme.get("map.shared_path").style;
+    let stacked_exit = colors.theme.get("map.room_stacked_exit").style;
     let room_selected = colors.theme.get("map.room_selected").style;
     let room_current = colors.theme.get("map.room_current").style;
     let room_normal = colors.theme.get("map.room").style;
     let edge_oneway = colors.theme.get("map.edge:oneway").style;
     let edge_asym = colors.theme.get("map.edge:asym").style;
-    for Arrowhead { at, glyph, distorted, is_portal, room: room_id, shared, kind } in arrowheads {
+    for Arrowhead { at, glyph, distorted, is_portal, room: room_id, shared, kind, stacked } in arrowheads {
         let (vx, vy) = *at;
         let (sx, sy) = (vx + off_x, vy + off_y);
         if in_area(sx, sy, area) {
-            let connector_style = if *is_portal {
+            let connector_style = if stacked.is_some() {
+                stacked_exit
+            } else if *is_portal {
                 connector_portal
             } else if *shared {
                 shared_path
@@ -1887,7 +1931,9 @@ fn draw_connector_arrows(
             // visible background is the style's plain `bg`.
             let visible_bg = base.bg;
             // Start from reset so no prior highlight bleeds through, then set the matching bg
-            // and the connector fg.
+            // and the connector fg. `connector_style`'s own modifiers ride along too — every
+            // OTHER selector here defaults to none, so this was a no-op until `map.room_stacked_exit`
+            // (SQ-1276) needed its REVERSED bit to actually reach the drawn cell.
             let mut style = Style::reset();
             if let Some(bg) = visible_bg {
                 style = style.bg(bg);
@@ -1895,8 +1941,12 @@ fn draw_connector_arrows(
             if let Some(fg) = connector_fg {
                 style = style.fg(fg);
             }
+            style = style.add_modifier(connector_style.add_modifier);
             if let Some(cell) = buf.cell_mut((sx as u16, sy as u16)) {
                 cell.set_symbol(glyph).set_style(style);
+            }
+            if let Some(primary_dir) = stacked {
+                marker_rects.push((*room_id, MarkerKind::Stacked(*primary_dir), Rect::new(sx as u16, sy as u16, 1, 1)));
             }
         }
     }
@@ -2727,49 +2777,73 @@ fn draw_box_room(
     }
     put_char(buf, sx + w - 1, sy + h - 1, br, border_style, area);
 
-    // `?` random-exit stubs (SQ-1261): one cell on the border/corner per marked direction, drawn
-    // LAST so it overwrites whatever the border loops above already painted there — a straight
-    // run of `─`/`│`, or a corner glyph for a diagonal. Never a connector beyond it: the whole
-    // point of the mark is that there is nowhere stable to route to.
+    // `?` random-exit marks (SQ-1275): the border cell shows the direction's own arrowhead, and
+    // the superscript count (or bare `?`) sits one cell beyond it, in the first lane cell a real
+    // connector on that direction would step into — both drawn LAST so the arrowhead overwrites
+    // whatever the border loops above already painted there (a straight run of `─`/`│`, or a
+    // corner glyph for a diagonal). Never a connector beyond the count cell: the whole point of
+    // the mark is that there is nowhere stable to route to — and the router reserves that exact
+    // cell so a real connector elsewhere on the map can never draw through it either (see
+    // `mapper::route::reserved_doorways`).
     for &(dir, count) in &room.random_stubs {
-        if let Some((x, y)) = random_stub_pos(sx, sy, dir, w, h) {
+        if let Some((arrow_at, count_at)) = random_stub_cells(sx, sy, w, h, dir) {
+            let stub_style = accent_on(border_style, random_stub_style);
+            let arrow_ch = arrow_for_direction(dir, &sym.arrows, &sym.portal);
+            put_char(buf, arrow_at.0, arrow_at.1, arrow_ch, stub_style, area);
             let marker = random_stub_marker(count);
-            put_str(buf, x, y, &marker, accent_on(border_style, random_stub_style), area);
-            if let Some(r) = clipped_marker_rect(x, y, marker.chars().count() as i32, area) {
+            put_str(buf, count_at.0, count_at.1, &marker, stub_style, area);
+            if let Some(r) = clipped_marker_span(arrow_at, count_at, area) {
                 marker_rects.push((room.id, MarkerKind::Random(dir), r));
             }
         }
     }
 }
 
-/// The single glyph a `?` random-exit stub shows (SQ-1261): a bare `?` when nothing is recorded
-/// yet, else the superscript count of recorded destinations — never both, since the box border
-/// has room for exactly one character per direction (see [`random_stub_pos`]).
+/// The single glyph a `?` random-exit stub's superscript shows (SQ-1261): a bare `?` when
+/// nothing is recorded yet, else the superscript count of recorded destinations.
 fn random_stub_marker(count: usize) -> String {
     if count == 0 { "?".to_string() } else { super::superscript_count(count) }
 }
 
-/// Where a `?` stub lands on a room box `w`×`h` cells with its top-left at `(sx, sy)`: a cardinal
-/// direction takes the same border-centre cell a real exit arrow would (see
-/// [`slot_offset`]/`arrow_for_departure`'s callers), a diagonal takes the corner a diagonal
-/// departure draws at (see [`corner_anchor`]) — so a stub never invents a position a real passage
-/// would not also use. `None` for a non-planar direction (Up/Down/In/Out/Unknown): those have no
-/// side or corner of their own to sit on, and stay visible on the matrix and the room card
-/// instead. [`mapper::render::RenderRoom::random_stubs`] never carries a direction a real edge
-/// also uses (`mapper::render::render_traced`'s own filter) — a real exit's own arrowhead is
-/// drawn in a separate later pass and would win the same cell anyway.
-fn random_stub_pos(sx: i32, sy: i32, dir: Direction, w: i32, h: i32) -> Option<(i32, i32)> {
-    match dir {
-        Direction::N => Some((sx + w / 2, sy)),
-        Direction::S => Some((sx + w / 2, sy + h - 1)),
-        Direction::E => Some((sx + w - 1, sy + h / 2)),
-        Direction::W => Some((sx, sy + h / 2)),
-        Direction::NE => Some((sx + w - 1, sy)),
-        Direction::NW => Some((sx, sy)),
-        Direction::SE => Some((sx + w - 1, sy + h - 1)),
-        Direction::SW => Some((sx, sy + h - 1)),
-        Direction::Up | Direction::Down | Direction::In | Direction::Out | Direction::Unknown => None,
+/// Unit step, in virtual pixels, straight out of a room box on `side` — the SAME first move a
+/// real connector's perpendicular departure leg makes leaving its anchor (`attach_bridge`'s walk
+/// from `dep_anchor`, and `lane_pixel`'s own doc on why lane 0 sits `LANE_BASE` beyond this cell,
+/// never on it). Shared by [`random_stub_cells`] so a `?` mark's superscript lands exactly where
+/// that leg's first cell would be.
+fn side_step(side: Side) -> (i32, i32) {
+    match side {
+        Side::Right => (1, 0),
+        Side::Left => (-1, 0),
+        Side::Top => (0, -1),
+        Side::Bottom => (0, 1),
     }
+}
+
+/// The two cells a `?` random-exit mark draws into on a room box `w`×`h` cells with its
+/// top-left at `(bx, by)` (SQ-1275): the ARROWHEAD cell — [`box_edge_anchor_at`] at slot 0 for a
+/// cardinal direction, [`corner_anchor_at`] for a diagonal — is the exact cell a real exit's own
+/// arrowhead would take, and the COUNT cell one [`side_step`] beyond it is the exact cell that
+/// exit's connector would first step into leaving the box. Both literally reuse the primitives a
+/// real connector's `dep_anchor` is built from, so a mark can never draw somewhere a real exit
+/// would not — and both stay independent of `diagonal_corners`: that toggle only picks which
+/// GLYPHS a real connector's own intermediate line art uses (see `SymbolSet::diagonal_corners`'s
+/// own doc — "the router's doing, not this setting's"), and a mark draws no line art at all.
+///
+/// `mapper::router::side_for` resolves the direction to a [`Side`] — the SAME lookup a real
+/// diagonal connector's own perpendicular leg uses (`route::mod.rs`'s `route_side`) — so the
+/// step direction can never drift from what routing actually does. `None` for a non-planar
+/// direction (Up/Down/In/Out/Unknown): those have no side or corner of their own to sit on, and
+/// stay visible on the matrix, the room panel and the portal-badge overlay instead.
+/// [`mapper::render::RenderRoom::random_stubs`] never carries a direction a real edge also uses.
+fn random_stub_cells(bx: i32, by: i32, w: i32, h: i32, dir: Direction) -> Option<((i32, i32), (i32, i32))> {
+    let side = mapper::router::side_for(dir)?;
+    let arrow = if mapper::direction::is_diagonal(dir) {
+        corner_anchor_at(bx, by, w, h, dir)
+    } else {
+        box_edge_anchor_at(bx, by, w, h, side, 0)
+    };
+    let (dx, dy) = side_step(side);
+    Some((arrow, (arrow.0 + dx, arrow.1 + dy)))
 }
 
 // ── Clipped drawing helpers ───────────────────────────────────────────────────
@@ -3336,9 +3410,11 @@ mod tests {
         assert!(!text.contains('▲'), "the Up connector must NOT render a filled N arrow");
     }
 
-    /// A--North-->B AND A--Up-->B: only the N line is drawn (SQ-0522 priority). The `\u{2191}` used to be
-    /// re-stamped on the border so vertical access still read, but a glyph with no line attached
-    /// says a staircase exists while pointing nowhere — the room inspector answers that properly.
+    /// A--North-->B AND A--Up-->B: only the N line is drawn, now as a STACKED primary (SQ-1276
+    /// supersedes SQ-0689's old per-secondary `↑` badge for this exact shape): no `↑` glyph
+    /// anywhere on the box, the N arrowhead carries the `map.room_stacked_exit` accent, and a
+    /// `MarkerKind::Stacked` hover rect sits on it — hovering it is how "Up also leads there"
+    /// surfaces now, not a border badge competing with the arrowhead for a cell.
     #[test]
     fn a_pair_with_both_a_compass_edge_and_a_staircase_draws_only_the_compass_line() {
         use mapper::direction::Direction;
@@ -3356,14 +3432,25 @@ mod tests {
         let rm = mapper::render::render(&g);
         let area = Rect::new(0, 0, 60, 30);
         let mut buf = Buffer::empty(area);
-        render_map(&rm, &state, area, &mut buf);
+        let markers = render_map(&rm, &state, area, &mut buf);
 
         let up = state.symbols.portal.up;
         let text: String = buf.content.iter().flat_map(|c| c.symbol().chars()).collect();
-        // SQ-0689: the staircase loses the LINE to N on priority, but no longer vanishes — it
-        // stamps its ↑ beside the shared line's anchor. One line, both passages visible.
-        assert_eq!(text.matches(up).count(), 1, "the collapsed staircase stamps its glyph");
+        assert_eq!(text.matches(up).count(), 0, "SQ-1276: the suppressed Up direction stamps no glyph at all");
         assert!(text.contains(state.symbols.arrows.north), "the N passage keeps its own arrowhead");
+
+        let (mid, kind, rect) = markers
+            .iter()
+            .find(|(_, k, _)| matches!(k, MarkerKind::Stacked(_)))
+            .expect("the collapsed staircase publishes a Stacked hover rect");
+        assert_eq!(*mid, 1);
+        assert_eq!(*kind, MarkerKind::Stacked(Direction::N));
+        let arrow_cell = buf.cell((rect.x, rect.y)).unwrap();
+        assert_eq!(arrow_cell.symbol(), state.symbols.arrows.north.to_string());
+        assert!(
+            arrow_cell.modifier.contains(ratatui::style::Modifier::REVERSED),
+            "the stacked primary's own accent (map.room_stacked_exit) defaults to reversed",
+        );
     }
     #[test]
     fn reciprocal_updown_connector_draws_glyph_at_both_ends() {
@@ -3864,8 +3951,9 @@ mod tests {
 
     // ── SQ-1261: `?` random-exit stubs on the room box ──────────────────────────
 
-    /// A `?` mark with no recorded destinations draws a bare `?` on the border, at the same
-    /// centre-bottom cell a real south exit's arrowhead would take; nothing beyond it.
+    /// A `?` mark with no recorded destinations draws the SOUTH arrowhead on the border — the
+    /// same centre-bottom cell a real south exit's arrowhead would take — and a bare `?` one
+    /// cell beyond it; nothing beyond that (SQ-1275).
     #[test]
     fn room_box_draws_a_bare_random_stub_with_no_destinations() {
         use mapper::graph::MapGraph;
@@ -4931,6 +5019,11 @@ mod tests {
     /// same-pair edge reaches the merge-stub path at all and the collapse cannot recur.
     #[test]
     fn an_extra_same_pair_edge_never_becomes_a_collapsible_merge_stub() {
+        // S and E both leave room 1 for room 2 — an SQ-1276 stacked group in its own right, on
+        // top of the SQ-0522/SQ-0689 reciprocal-pairing question this test otherwise probes: S
+        // is now suppressed from routing at the SOURCE (mapper's `collapse_stacked_exits`, which
+        // runs before `select_shared_paths` ever sees the pair), not recorded as a router
+        // `secondary_exit` badge the way an unrelated collapse would be.
         use mapper::graph::MapGraph;
         let mut g = MapGraph::new();
         g.upsert_room(1, "A".into());
@@ -4946,7 +5039,16 @@ mod tests {
         assert_eq!(rm.plan.connectors.len(), 1, "one line for the pair");
         assert!(rm.plan.connectors.iter().all(|c| !c.merge), "and no merge stub to collapse");
         assert_eq!(rm.plan.connectors[0].exit_dir, Direction::S, "the reciprocal S/N pairing wins");
-        assert_eq!(rm.plan.connectors[0].secondary_exit, vec![Direction::E], "E recorded, not drawn");
+        assert!(
+            rm.plan.connectors[0].secondary_exit.is_empty(),
+            "E never reaches select_shared_paths at all now — collapse_stacked_exits already removed it",
+        );
+        let r1 = rm.rooms.iter().find(|r| r.id == 1).unwrap();
+        assert_eq!(
+            r1.stacked_exits,
+            vec![mapper::render::StackedExit { primary: Direction::S, dest: 2, secondary: vec![Direction::E] }],
+            "E is recorded as a stacked secondary instead",
+        );
     }
     #[test]
     fn reciprocal_pairing_outranks_the_edge_order() {
@@ -4968,9 +5070,16 @@ mod tests {
             (Direction::E, Some(Direction::W)),
             "W held the line despite being added last, so the passage runs straight"
         );
-        let mut secs = c.secondary_entry.clone();
+        // SQ-1276 supersedes the router's own `secondary_entry` recording for this shape: N and
+        // S are a stacked group with W (all three lead 239→77), collapsed at the SOURCE before
+        // `select_shared_paths` ever sees the pair.
+        assert!(c.secondary_entry.is_empty(), "N and S never reach select_shared_paths");
+        let r239 = rm.rooms.iter().find(|r| r.id == 239).unwrap();
+        assert_eq!(r239.stacked_exits.len(), 1);
+        assert_eq!(r239.stacked_exits[0].primary, Direction::W, "W bearing-matches the actual, adjacent position");
+        let mut secs = r239.stacked_exits[0].secondary.clone();
         secs.sort_by_key(|d| format!("{d:?}"));
-        assert_eq!(secs, vec![Direction::N, Direction::S], "the extras are recorded, not drawn");
+        assert_eq!(secs, vec![Direction::N, Direction::S], "the extras are recorded as stacked secondaries instead");
     }
     #[test]
     fn four_passages_between_two_rooms_draw_one_line() {
@@ -5846,7 +5955,15 @@ mod tests {
         let rm = render(&g);
         assert_eq!(rm.plan.connectors.len(), 1, "one line for the pair, whatever the directions");
         assert_eq!(rm.plan.connectors[0].exit_dir, Direction::N, "N outranks Up");
-        assert_eq!(rm.plan.connectors[0].secondary_exit, vec![Direction::Up], "Up is recorded, not drawn");
+        // SQ-1276 supersedes the second half of this pin: N+Up to the same destination is now a
+        // STACKED group, suppressed at the source (mapper's `collapse_stacked_exits`) before
+        // `select_shared_paths` ever sees the pair — so there is nothing left for it to record.
+        assert!(rm.plan.connectors[0].secondary_exit.is_empty(), "Up never reaches select_shared_paths");
+        let r1 = rm.rooms.iter().find(|r| r.id == 1).unwrap();
+        assert_eq!(
+            r1.stacked_exits,
+            vec![mapper::render::StackedExit { primary: Direction::N, dest: 2, secondary: vec![Direction::Up] }],
+        );
 
         let mut st = AppState::default();
         st.scroll = rm.bounds.0;
@@ -6402,9 +6519,9 @@ mod tests {
         assert_eq!(buf.cell((5, 5)).unwrap().bg, selection_bg);
 
         // Room 10's arrow; selected_room is None (no selection) — bg must be reset.
-        let arrowheads: Vec<Arrowhead> = vec![Arrowhead { at: (5, 5), glyph: ">".to_string(), distorted: false, is_portal: false, room: 10, shared: false, kind: EdgeKind::Reciprocal }];
+        let arrowheads: Vec<Arrowhead> = vec![Arrowhead { at: (5, 5), glyph: ">".to_string(), distorted: false, is_portal: false, room: 10, shared: false, kind: EdgeKind::Reciprocal, stacked: None }];
         let colors = ColorScheme::terminal_default();
-        draw_connector_arrows(&arrowheads, (0, 0), area, &mut buf, &colors, None, None);
+        draw_connector_arrows(&arrowheads, (0, 0), area, &mut buf, &colors, None, None, &mut Vec::new());
 
         let after_bg = buf.cell((5, 5)).unwrap().bg;
         assert_ne!(
@@ -6435,8 +6552,8 @@ mod tests {
         ]);
 
         // Arrow at (5, 5) belongs to room 7; room 7 is the selected room (not current).
-        let arrowheads: Vec<Arrowhead> = vec![Arrowhead { at: (5, 5), glyph: ">".to_string(), distorted: false, is_portal: false, room: 7, shared: false, kind: EdgeKind::Reciprocal }];
-        draw_connector_arrows(&arrowheads, (0, 0), area, &mut buf, &colors, Some(7), None);
+        let arrowheads: Vec<Arrowhead> = vec![Arrowhead { at: (5, 5), glyph: ">".to_string(), distorted: false, is_portal: false, room: 7, shared: false, kind: EdgeKind::Reciprocal, stacked: None }];
+        draw_connector_arrows(&arrowheads, (0, 0), area, &mut buf, &colors, Some(7), None, &mut Vec::new());
 
         let cell = buf.cell((5, 5)).unwrap();
         assert_eq!(
@@ -6471,8 +6588,8 @@ mod tests {
         ]);
 
         // Arrow at (5, 5) belongs to room 7; room 7 is BOTH selected AND current.
-        let arrowheads: Vec<Arrowhead> = vec![Arrowhead { at: (5, 5), glyph: ">".to_string(), distorted: false, is_portal: false, room: 7, shared: false, kind: EdgeKind::Reciprocal }];
-        draw_connector_arrows(&arrowheads, (0, 0), area, &mut buf, &colors, Some(7), Some(7));
+        let arrowheads: Vec<Arrowhead> = vec![Arrowhead { at: (5, 5), glyph: ">".to_string(), distorted: false, is_portal: false, room: 7, shared: false, kind: EdgeKind::Reciprocal, stacked: None }];
+        draw_connector_arrows(&arrowheads, (0, 0), area, &mut buf, &colors, Some(7), Some(7), &mut Vec::new());
 
         let cell = buf.cell((5, 5)).unwrap();
         assert_eq!(
@@ -6505,8 +6622,8 @@ mod tests {
         ]);
 
         // Arrow at (5, 5) belongs to room 7; room 7 is the current room, NOT selected.
-        let arrowheads: Vec<Arrowhead> = vec![Arrowhead { at: (5, 5), glyph: ">".to_string(), distorted: false, is_portal: false, room: 7, shared: false, kind: EdgeKind::Reciprocal }];
-        draw_connector_arrows(&arrowheads, (0, 0), area, &mut buf, &colors, None, Some(7));
+        let arrowheads: Vec<Arrowhead> = vec![Arrowhead { at: (5, 5), glyph: ">".to_string(), distorted: false, is_portal: false, room: 7, shared: false, kind: EdgeKind::Reciprocal, stacked: None }];
+        draw_connector_arrows(&arrowheads, (0, 0), area, &mut buf, &colors, None, Some(7), &mut Vec::new());
 
         let cell = buf.cell((5, 5)).unwrap();
         assert_eq!(
@@ -6536,8 +6653,8 @@ mod tests {
         ]);
 
         // Arrow belongs to room 5; selected room is 7 — different rooms.
-        let arrowheads: Vec<Arrowhead> = vec![Arrowhead { at: (5, 5), glyph: ">".to_string(), distorted: false, is_portal: false, room: 5, shared: false, kind: EdgeKind::Reciprocal }];
-        draw_connector_arrows(&arrowheads, (0, 0), area, &mut buf, &colors, Some(7), None);
+        let arrowheads: Vec<Arrowhead> = vec![Arrowhead { at: (5, 5), glyph: ">".to_string(), distorted: false, is_portal: false, room: 5, shared: false, kind: EdgeKind::Reciprocal, stacked: None }];
+        draw_connector_arrows(&arrowheads, (0, 0), area, &mut buf, &colors, Some(7), None, &mut Vec::new());
 
         let cell = buf.cell((5, 5)).unwrap();
         assert_ne!(
@@ -7165,8 +7282,14 @@ mod tests {
         assert!(row(PANEL_H).contains("Foyer"), "manifest should start at row PANEL_H");
     }
 
+    /// This graph's four edges (68 S+SE to 217, 217 W+NW to 68) used to reach the router's
+    /// `select_shared_paths` as an ordinary same-PAIR collapse, painted with `map.shared_path`.
+    /// SQ-1276 supersedes that path for it: S/SE is itself a stacked same-DESTINATION group from
+    /// 68 (so is W/NW from 217), so `collapse_stacked_exits` already removes S and W before
+    /// `select_shared_paths` ever runs — nothing is left for it to collapse, and the remaining
+    /// SE/NW pair is a plain reciprocal diagonal, styled with the STACKED accent instead.
     #[test]
-    fn shared_connector_line_uses_shared_path_color() {
+    fn stacked_same_destination_pair_uses_the_stacked_exit_color_not_shared_path() {
         use crate::state::AppState;
         use mapper::graph::MapGraph;
         use mapper::direction::Direction;
@@ -7184,14 +7307,17 @@ mod tests {
         let area = Rect::new(0, 0, 60, 30);
         let mut buf = Buffer::empty(area);
         render_map(&rm, &state, area, &mut buf);
-        // At least one cell painted with the shared_path fg color exists (the shared line/arrow).
         // Compared via `cell.fg` (not `cell.style() ==`, which can never match a partially-set
         // Style: ratatui's `Cell::set_style` patches rather than replaces, so `Cell::style()`
-        // always synthesizes concrete `bg`/`underline_color`, unlike `shared_path`'s bg: None).
-        let shared_fg = state.colors.theme.get("map.shared_path").style.fg.expect("shared_path has an fg color");
-        let found = (0..area.width).flat_map(|x| (0..area.height).map(move |y| (x, y)))
-            .any(|(x, y)| buf.cell((x, y)).map(|c| c.fg == shared_fg).unwrap_or(false));
-        assert!(found, "the collapsed pair's shared path must paint with shared_path color");
+        // always synthesizes concrete `bg`/`underline_color`, unlike these selectors' `bg: None`).
+        let stacked_fg = state.colors.theme.get("map.room_stacked_exit").style.fg.expect("has an fg color");
+        let shared_fg = state.colors.theme.get("map.shared_path").style.fg.expect("has an fg color");
+        let any_cell = |fg: ratatui::style::Color| {
+            (0..area.width).flat_map(|x| (0..area.height).map(move |y| (x, y)))
+                .any(|(x, y)| buf.cell((x, y)).map(|c| c.fg == fg).unwrap_or(false))
+        };
+        assert!(any_cell(stacked_fg), "SE/NW's arrowheads must paint with the stacked-exit accent");
+        assert!(!any_cell(shared_fg), "nothing is left for select_shared_paths to collapse");
     }
 
     #[test]
@@ -7333,6 +7459,124 @@ mod tests {
         let mut buf = Buffer::empty(area);
         let painted = draw_map_hover_tip(&g, &state, area, &mut buf).expect("a tip was painted");
         assert!(buf_contains(&buf, painted, "destination varies — none recorded yet"));
+    }
+
+    // ── SQ-1276: stacked same-destination exits ──────────────────────────────
+
+    /// Two compass directions (N and S) from one room to the same destination: only N's
+    /// arrowhead is drawn, styled with `map.room_stacked_exit`, and its hover tip titles the
+    /// destination's own name with N first and "also via South" beneath it.
+    #[test]
+    fn two_compass_stack_draws_one_reversed_arrowhead_with_a_tooltip_listing_both() {
+        use mapper::direction::Direction;
+        use mapper::graph::MapGraph;
+        let mut g = MapGraph::new();
+        g.upsert_room(1, "Hall".into());
+        g.upsert_room(2, "Cellar".into());
+        g.set_pos(1, (0, 0));
+        g.set_pos(2, (0, -1)); // due north of room 1 — N bearing-matches, S does not
+        g.add_edge(1, Direction::N, 2);
+        g.add_edge(1, Direction::S, 2);
+
+        let state = AppState::default();
+        let rm = mapper::render::render(&g);
+        let area = Rect::new(0, 0, 60, 30);
+        let mut buf = Buffer::empty(area);
+        let markers = render_map(&rm, &state, area, &mut buf);
+
+        let text: String = buf.content.iter().flat_map(|c| c.symbol().chars()).collect();
+        assert_eq!(text.matches(state.symbols.arrows.south).count(), 0, "S draws no glyph at all");
+        assert_eq!(text.matches(state.symbols.arrows.north).count(), 1, "only N's arrowhead is drawn");
+
+        let (mid, kind, rect) = markers
+            .iter()
+            .find(|(_, k, _)| matches!(k, MarkerKind::Stacked(_)))
+            .expect("a Stacked hover rect is published");
+        assert_eq!(*mid, 1);
+        assert_eq!(*kind, MarkerKind::Stacked(Direction::N));
+
+        let mut st = AppState::default();
+        st.map_hover = Some((1, *kind, *rect));
+        let mut buf2 = Buffer::empty(area);
+        let painted = draw_map_hover_tip(&g, &st, area, &mut buf2).expect("a tip was painted");
+        assert!(buf_contains(&buf2, painted, "Cellar"), "titled by the destination's own name");
+        assert!(buf_contains(&buf2, painted, "North"), "names the primary direction");
+        assert!(buf_contains(&buf2, painted, "also via South"), "and the secondary, prefixed");
+
+        // Model-side facts are untouched: the matrix and the graph itself still show both edges.
+        assert_eq!(
+            mapper::matrix::classify(&g, 1, Direction::N),
+            mapper::matrix::MatrixCell::OneWay { dest: 2 },
+        );
+        assert_eq!(
+            mapper::matrix::classify(&g, 1, Direction::S),
+            mapper::matrix::MatrixCell::OneWay { dest: 2 },
+            "the matrix still lists the suppressed direction as a real exit",
+        );
+    }
+
+    /// A compass direction plus Down to the same destination: no portal badge is drawn for
+    /// Down (nothing left in `rm.edges` for `draw_portal_icons` to read), and the tooltip lists
+    /// it as "also via Down".
+    #[test]
+    fn compass_plus_down_stack_draws_no_portal_badge_and_tooltip_names_it() {
+        use mapper::direction::Direction;
+        use mapper::graph::MapGraph;
+        let mut g = MapGraph::new();
+        g.upsert_room(1, "Hall".into());
+        g.upsert_room(2, "Cellar".into());
+        g.set_pos(1, (0, 0));
+        g.set_pos(2, (1, 0));
+        g.add_edge(1, Direction::E, 2);
+        g.add_edge(1, Direction::Down, 2);
+
+        let state = AppState::default();
+        let rm = mapper::render::render(&g);
+        let area = Rect::new(0, 0, 60, 30);
+        let mut buf = Buffer::empty(area);
+        let markers = render_map(&rm, &state, area, &mut buf);
+        assert!(
+            !rm.edges.iter().any(|e| e.origin == 1 && e.dir == Direction::Down),
+            "the suppressed Down edge never reaches route_all, so draw_portal_icons has nothing to badge",
+        );
+        let text: String = buf.content.iter().flat_map(|c| c.symbol().chars()).collect();
+        assert_eq!(text.matches(state.symbols.portal.down).count(), 0, "no portal badge for Down");
+
+        let (_, kind, rect) = markers
+            .iter()
+            .find(|(_, k, _)| matches!(k, MarkerKind::Stacked(_)))
+            .expect("a Stacked hover rect is published");
+        let mut st = AppState::default();
+        st.map_hover = Some((1, *kind, *rect));
+        let mut buf2 = Buffer::empty(area);
+        let painted = draw_map_hover_tip(&g, &st, area, &mut buf2).expect("a tip was painted");
+        assert!(buf_contains(&buf2, painted, "also via Down"));
+    }
+
+    /// A destination reached ONLY by a portal (Up here) is unaffected: no Stacked marker, and
+    /// the ordinary Up badge still draws exactly as it always has.
+    #[test]
+    fn portal_only_link_publishes_no_stacked_marker() {
+        use mapper::direction::Direction;
+        use mapper::graph::MapGraph;
+        let mut g = MapGraph::new();
+        g.upsert_room(1, "Hall".into());
+        g.upsert_room(2, "Cellar".into());
+        g.set_pos(1, (0, 0));
+        g.set_pos(2, (1, 0));
+        g.add_edge(1, Direction::Up, 2);
+
+        let state = AppState::default();
+        let rm = mapper::render::render(&g);
+        let area = Rect::new(0, 0, 60, 30);
+        let mut buf = Buffer::empty(area);
+        let markers = render_map(&rm, &state, area, &mut buf);
+        assert!(
+            !markers.iter().any(|(_, k, _)| matches!(k, MarkerKind::Stacked(_))),
+            "a single portal link is not a stack: {markers:?}"
+        );
+        let text: String = buf.content.iter().flat_map(|c| c.symbol().chars()).collect();
+        assert_eq!(text.matches(state.symbols.portal.up).count(), 1, "the ordinary Up badge still draws");
     }
 
     /// No hover, or a modal overlay open, paints no tip.
