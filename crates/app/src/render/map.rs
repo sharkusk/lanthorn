@@ -2297,6 +2297,19 @@ fn draw_room(
 /// Unicode superscript digit (¹²³⁴⁵⁶⁷⁸⁹, U+00B9/U+00B2/U+00B3/U+2074–2079) for 1–9, and `"⁹⁺"`
 /// (superscript nine plus a superscript plus, U+207A) for ten or more — the box has no room for
 /// a two-digit count, and "at least this many" is still an honest thing to say with one.
+/// A marker's own selector supplies its COLOUR; the ground it sits on supplies everything
+/// else. A selected room paints its box with `map.room_selected`'s background (and the
+/// current room reverses it), and a marker drawn with its selector's full style would punch a
+/// hole of default background through that — which is exactly what the alias superscript did
+/// on a selected Gnome Room. So take the base style the surrounding text or border was drawn
+/// with and swap in only the accent's foreground.
+fn accent_on(base: Style, accent: Style) -> Style {
+    match accent.fg {
+        Some(fg) => base.fg(fg),
+        None => base,
+    }
+}
+
 fn alias_marker(count: usize) -> String {
     super::superscript_count(count)
 }
@@ -2473,7 +2486,14 @@ fn draw_box_room(
                 let pad = iw.saturating_sub(full_len);
                 let left = (pad / 2) as i32;
                 put_str(buf, sx + 1 + left, y, line, style, area);
-                put_str(buf, sx + 1 + left + line.chars().count() as i32, y, &marker, alias_marker_style, area);
+                put_str(
+                    buf,
+                    sx + 1 + left + line.chars().count() as i32,
+                    y,
+                    &marker,
+                    accent_on(style, alias_marker_style),
+                    area,
+                );
             } else {
                 put_str(buf, sx + 1, y, &center(line, iw), style, area);
             }
@@ -2526,7 +2546,7 @@ fn draw_box_room(
     // point of the mark is that there is nowhere stable to route to.
     for &(dir, count) in &room.random_stubs {
         if let Some((x, y)) = random_stub_pos(sx, sy, dir, w, h) {
-            put_str(buf, x, y, &random_stub_marker(count), random_stub_style, area);
+            put_str(buf, x, y, &random_stub_marker(count), accent_on(border_style, random_stub_style), area);
         }
     }
 }
@@ -3607,6 +3627,47 @@ mod tests {
             marker_selector_fg, room_selector_fg,
             "sanity: the two selectors resolve to different defaults, so this test can tell them apart"
         );
+    }
+
+    /// A SELECTED room's box is painted with the selection background; the alias marker must sit
+    /// on that same ground rather than punching a default-background hole through it (reported
+    /// on Lost Pig's Gnome Room, 2026-09-03). Only the marker's colour is its own.
+    #[test]
+    fn room_box_alias_marker_keeps_the_selected_rooms_background() {
+        use mapper::graph::MapGraph;
+        let mut g = MapGraph::new();
+        g.upsert_room(1, "A".into());
+        g.upsert_room(1, "Cave".into()); // one alias: "A"
+        g.set_pos(1, (0, 0));
+        let rm = render(&g);
+        let mut state = AppState::default();
+        state.selected_room = Some(1);
+        // A selection background this test can see (the default theme's `map.room_selected`
+        // sets none), and a marker colour that differs from the selected text's.
+        state.colors.theme = theme_with_overrides(&[
+            ("map.room_selected", Style::new().fg(Color::Black).bg(Color::Yellow)),
+            // The marker selector carries a background of its own — as it does under any
+            // theme whose `muted` role sets one — which is exactly what used to punch
+            // through the selection.
+            ("map.room_alias_marker", Style::new().fg(Color::Red).bg(Color::Black)),
+        ]);
+        let area = Rect::new(0, 0, 60, 20);
+        let mut buf = Buffer::empty(area);
+        render_map(&rm, &state, area, &mut buf);
+
+        let (mx, my) = (1u16..=9)
+            .flat_map(|x| (1u16..=2).map(move |y| (x, y)))
+            .find(|&(x, y)| buf.cell((x, y)).is_some_and(|c| c.symbol() == "¹"))
+            .expect("the alias marker glyph '¹' must be drawn somewhere in the box");
+        let marker = buf.cell((mx, my)).unwrap();
+        // The cell just before the marker holds the last letter of the name, drawn in the room's
+        // (selected) style — the marker must share its background and modifiers.
+        let name = buf.cell((mx - 1, my)).unwrap();
+        assert_eq!(name.symbol(), "e", "sanity: the marker rides right after 'Cave'");
+        assert_eq!(marker.bg, name.bg, "the marker keeps the selected room's background");
+        assert_eq!(marker.modifier, name.modifier, "…and its modifiers");
+        assert_eq!(marker.bg, Color::Yellow, "…which is the selection background");
+        assert_eq!(marker.fg, Color::Red, "while its colour stays the marker selector's own");
     }
 
     // ── SQ-1261: `?` random-exit stubs on the room box ──────────────────────────
