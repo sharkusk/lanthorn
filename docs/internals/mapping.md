@@ -614,6 +614,21 @@ touching a line of code:
   square with a dot in it, where an outline head still reads as an arrow). All
   eight directions come from one icon family, diagonals included. `nf-chevron`
   keeps the older bare chevrons for anyone who preferred them.
+
+  **In Ghostty specifically, a Nerd Font arrowhead can draw two cells wide**
+  (SQ-1277). Ghostty's `constraintWidth()` (`src/renderer/cell.zig`) lets a
+  "symbol-like" glyph — anything in a PUA, or in `isSymbol()`'s own Arrows /
+  Dingbats / etc. blocks — spill into the FOLLOWING cell whenever that cell's
+  codepoint is `0` or `isSpace()` (which lists only U+0020 SPACE and U+2002 EN
+  SPACE) and the preceding cell isn't itself a non-graphics symbol. A room's own
+  WEST arrowhead is followed by the box interior's padding space whenever the
+  label is shorter than the interior width, so it spilled there; every other
+  arrowhead site (`render::map::guard_symbol_spill`) writes U+00A0 NO-BREAK
+  SPACE into a plain space immediately to an arrowhead's right, in that cell's
+  own style — Ghostty's `isSpace()` does not list U+00A0, so the glyph is
+  constrained back to one cell, and a NBSP reads identically to a space
+  everywhere else that matters (`char::is_whitespace()`, the gallery capture
+  harness, `map_dump`'s cell-copy).
 - `path_style` — the line-art that draws the cardinal (N/S/E/W) connectors:
   `light` (default), `heavy`, or `dotted`.
 - `portal_path_style` — the same three presets, applied on their own to the

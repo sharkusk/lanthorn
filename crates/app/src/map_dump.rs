@@ -428,6 +428,35 @@ mod tests {
         assert!(!dump.contains("▒ = unrouted"), "unrouted concept removed from legend");
     }
 
+    /// SQ-1277's own claim ("map_dump.rs renders from the graph, not the buffer") does NOT
+    /// hold — `ascii_map` renders through the real `render_map` into an off-screen buffer and
+    /// copies each cell's symbol verbatim (see this module's own doc comment) — so the NBSP
+    /// `guard_symbol_spill` writes beside a west arrowhead's short label DOES reach the dump
+    /// text. It is harmless here for the same reason it is on screen: a NBSP prints
+    /// indistinguishably from a plain space and `char::is_whitespace()` still calls it
+    /// whitespace, so nothing that reads this dump by eye or by `.contains()` can tell the
+    /// difference — only a byte-exact comparison against a space would. Pinned here so a
+    /// future exact-text fixture doesn't discover the difference by surprise.
+    #[test]
+    fn nbsp_guard_reaches_the_dump_but_reads_as_a_plain_space() {
+        use mapper::direction::Direction;
+        let mut g = MapGraph::new();
+        g.upsert_room(1, "Cave".into());
+        g.upsert_room(2, "R2".into());
+        g.set_pos(1, (1, 0));
+        g.set_pos(2, (0, 0));
+        g.add_edge(1, Direction::W, 2);
+        let dump = render_dump(&g, &SymbolSet::default());
+        assert!(dump.contains('\u{a0}'), "the guard's NBSP does reach the dump text:\n{dump}");
+        for line in dump.lines() {
+            for ch in line.chars() {
+                if ch == '\u{a0}' {
+                    assert!(ch.is_whitespace(), "NBSP must still read as whitespace to any consumer");
+                }
+            }
+        }
+    }
+
     #[test]
     fn dump_legend_shows_alignment_rules() {
         use mapper::direction::Direction;

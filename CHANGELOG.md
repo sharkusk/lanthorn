@@ -127,6 +127,10 @@ Absolute URLs or no link.
   more sets to choose from: `nf-thick` (the one Material family whose eight
   heads are all the same size), `nf-wind` (circled arrows from the Weather
   Icons) and `nf-thin` (bare arrows, the clearest at small sizes).
+- **Arrowheads on the left side of a room no longer sometimes draw larger than
+  the others in Ghostty.** A west-pointing arrowhead followed by a short name
+  used to spill into the next cell and look oversized next to every other
+  arrow on the map; it now stays the same size as the rest.
 
 ### Docker
 

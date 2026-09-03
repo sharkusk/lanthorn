@@ -348,6 +348,41 @@ fn in_area(sx: i32, sy: i32, area: Rect) -> bool {
     sx >= area.x as i32 && sx < area.right() as i32 && sy >= area.y as i32 && sy < area.bottom() as i32
 }
 
+/// After drawing a Nerd Font arrowhead glyph at `(x, y)`, guard against Ghostty drawing it TWO
+/// cells wide (SQ-1277). Ghostty's `constraintWidth()` (`src/renderer/cell.zig`) lets a
+/// "symbol-like" glyph — anything in a PUA, or in the Arrows/Dingbats/etc. blocks its own
+/// `isSymbol()` lists — spill into the FOLLOWING cell whenever that cell's codepoint is `0` or
+/// `isSpace()` (which lists ONLY U+0020 SPACE and U+2002 EN SPACE — never U+00A0) and the
+/// PRECEDING cell is not itself a non-graphics symbol. Every arrowhead this map draws is
+/// exactly such a glyph, and the cell to its right is very often a plain space: a room box's own
+/// interior padding after a WEST arrowhead whenever the label is shorter than the interior, or
+/// an empty lane cell after an EAST arrowhead — so in Ghostty specifically (never in a
+/// fixed-advance terminal, which has no such rule) the glyph draws visibly larger than its
+/// neighbours.
+///
+/// The fix: if `(x+1, y)` currently holds a plain U+0020, replace it with U+00A0 NO-BREAK SPACE
+/// in the SAME style that cell already carries. Ghostty's `isSpace()` does not list U+00A0, so
+/// the glyph is constrained back to one cell; a NBSP reads identically to a space everywhere
+/// else that matters here — Rust's `char::is_whitespace()` includes it (so the gallery capture
+/// harness's `Face::draw` still paints nothing and logs no `unresolved_glyphs` entry for it),
+/// and `map_dump`'s cell-copy carries it through unremarked, exactly as SQ-1277 verified. Does
+/// nothing to any OTHER glyph in that cell, and nothing at all past the edge of `area`.
+///
+/// Called from every site that stamps an arrowhead onto a room border — real exits and the
+/// SQ-1276 stacked accent (`draw_connector_arrows`), and the SQ-1275 `?` mark's own arrowhead
+/// (`draw_box_room`) — so the next arrowhead site added gets this for free by calling it too.
+fn guard_symbol_spill(buf: &mut Buffer, x: i32, y: i32, area: Rect) {
+    let (nx, ny) = (x + 1, y);
+    if !in_area(nx, ny, area) {
+        return;
+    }
+    if let Some(cell) = buf.cell_mut((nx as u16, ny as u16)) {
+        if cell.symbol() == " " {
+            cell.set_symbol("\u{00A0}");
+        }
+    }
+}
+
 /// Style for a room given the current selection/current state.
 ///
 /// When a room is BOTH current AND selected, combine both states: use the
@@ -1945,6 +1980,7 @@ fn draw_connector_arrows(
             if let Some(cell) = buf.cell_mut((sx as u16, sy as u16)) {
                 cell.set_symbol(glyph).set_style(style);
             }
+            guard_symbol_spill(buf, sx, sy, area);
             if let Some(primary_dir) = stacked {
                 marker_rects.push((*room_id, MarkerKind::Stacked(*primary_dir), Rect::new(sx as u16, sy as u16, 1, 1)));
             }
@@ -2790,6 +2826,7 @@ fn draw_box_room(
             let stub_style = accent_on(border_style, random_stub_style);
             let arrow_ch = arrow_for_direction(dir, &sym.arrows, &sym.portal);
             put_char(buf, arrow_at.0, arrow_at.1, arrow_ch, stub_style, area);
+            guard_symbol_spill(buf, arrow_at.0, arrow_at.1, area);
             let marker = random_stub_marker(count);
             put_str(buf, count_at.0, count_at.1, &marker, stub_style, area);
             if let Some(r) = clipped_marker_span(arrow_at, count_at, area) {
@@ -4747,6 +4784,123 @@ mod tests {
             is_line(&sym) || ARROW_GLYPHS.contains(&sym.as_str()),
             "departure cell (11,2) should be a connector glyph; got '{sym}'"
         );
+    }
+
+    // ── SQ-1277: guard a Ghostty Nerd Font arrowhead against 2-cell spill ────────
+
+    #[test]
+    fn guard_symbol_spill_replaces_a_plain_space_with_nbsp() {
+        let area = Rect::new(0, 0, 10, 5);
+        let mut buf = Buffer::empty(area);
+        buf.cell_mut((1u16, 0u16)).unwrap().set_symbol(" ");
+        guard_symbol_spill(&mut buf, 0, 0, area);
+        assert_eq!(buf.cell((1u16, 0u16)).unwrap().symbol(), "\u{a0}", "a plain space becomes NBSP");
+    }
+
+    #[test]
+    fn guard_symbol_spill_leaves_a_non_space_glyph_untouched() {
+        let area = Rect::new(0, 0, 10, 5);
+        let mut buf = Buffer::empty(area);
+        buf.cell_mut((1u16, 0u16)).unwrap().set_symbol("─");
+        guard_symbol_spill(&mut buf, 0, 0, area);
+        assert_eq!(buf.cell((1u16, 0u16)).unwrap().symbol(), "─", "a real connector glyph is left alone");
+    }
+
+    #[test]
+    fn guard_symbol_spill_does_nothing_past_the_edge_of_area() {
+        let area = Rect::new(0, 0, 1, 1);
+        let mut buf = Buffer::empty(area);
+        // (1, 0) is outside a 1-wide area — must not panic, must not touch anything in area.
+        guard_symbol_spill(&mut buf, 0, 0, area);
+        assert_eq!(buf.cell((0u16, 0u16)).unwrap().symbol(), " ");
+    }
+
+    /// A real WEST-departing connector, room label shorter than the box interior: the
+    /// second wrapped name line is centred, padding it with a plain space right after the
+    /// west border — the exact Ghostty spill case SQ-1277 fixes. Falsify by removing the
+    /// `guard_symbol_spill` call in `draw_connector_arrows`.
+    #[test]
+    fn west_arrowhead_with_a_short_label_gets_the_nbsp_guard() {
+        use mapper::graph::MapGraph;
+        let mut g = MapGraph::new();
+        g.upsert_room(1, "Cave".into());
+        g.upsert_room(2, "R2".into());
+        g.set_pos(1, (1, 0));
+        g.set_pos(2, (0, 0));
+        g.add_edge(1, Direction::W, 2);
+        let rm = mapper::render::render(&g);
+        let state = AppState::default();
+        let area = Rect::new(0, 0, 80, 30);
+        let mut buf = Buffer::empty(area);
+        render_map(&rm, &state, area, &mut buf);
+
+        let west = state.symbols.arrows.west.to_string();
+        let (ax, ay) = (0..area.width)
+            .flat_map(|x| (0..area.height).map(move |y| (x, y)))
+            .find(|&(x, y)| buf.cell((x, y)).is_some_and(|c| c.symbol() == west))
+            .expect("the west arrowhead is drawn somewhere");
+        assert_eq!(
+            buf.cell((ax + 1, ay)).unwrap().symbol(), "\u{a0}",
+            "the interior padding cell right of the arrowhead is NBSP"
+        );
+    }
+
+    /// The same shape, but the label fills the SECOND wrapped line exactly (no padding to its
+    /// left): the interior cell right of the arrowhead keeps its letter, untouched.
+    #[test]
+    fn west_arrowhead_with_a_label_filling_the_interior_keeps_its_letter() {
+        use mapper::graph::MapGraph;
+        let mut g = MapGraph::new();
+        // 9-char first word fills line 1 exactly; 9-char second word fills line 2 exactly
+        // (interior width is 9 on an 11-wide box) — centred with zero left padding.
+        g.upsert_room(1, "AAAAAAAAA BBBBBBBBB".into());
+        g.upsert_room(2, "R2".into());
+        g.set_pos(1, (1, 0));
+        g.set_pos(2, (0, 0));
+        g.add_edge(1, Direction::W, 2);
+        let rm = mapper::render::render(&g);
+        let state = AppState::default();
+        let area = Rect::new(0, 0, 80, 30);
+        let mut buf = Buffer::empty(area);
+        render_map(&rm, &state, area, &mut buf);
+
+        let west = state.symbols.arrows.west.to_string();
+        let (ax, ay) = (0..area.width)
+            .flat_map(|x| (0..area.height).map(move |y| (x, y)))
+            .find(|&(x, y)| buf.cell((x, y)).is_some_and(|c| c.symbol() == west))
+            .expect("the west arrowhead is drawn somewhere");
+        assert_eq!(
+            buf.cell((ax + 1, ay)).unwrap().symbol(), "B",
+            "the label's own letter is left alone"
+        );
+    }
+
+    /// A real EAST-departing connector's own line always occupies the doorway cell right of
+    /// its arrowhead (`attach_bridge`'s perpendicular leg), so `guard_symbol_spill` must never
+    /// touch it — the guard only ever fires on a cell that is genuinely blank.
+    #[test]
+    fn east_arrowhead_followed_by_a_real_connector_glyph_is_untouched() {
+        use mapper::graph::MapGraph;
+        let mut g = MapGraph::new();
+        g.upsert_room(1, "R1".into());
+        g.upsert_room(2, "R2".into());
+        g.set_pos(1, (0, 0));
+        g.set_pos(2, (1, 0));
+        g.add_edge(1, Direction::E, 2);
+        let rm = mapper::render::render(&g);
+        let state = AppState::default();
+        let area = Rect::new(0, 0, 80, 30);
+        let mut buf = Buffer::empty(area);
+        render_map(&rm, &state, area, &mut buf);
+
+        let east = state.symbols.arrows.east.to_string();
+        let (ax, ay) = (0..area.width)
+            .flat_map(|x| (0..area.height).map(move |y| (x, y)))
+            .find(|&(x, y)| buf.cell((x, y)).is_some_and(|c| c.symbol() == east))
+            .expect("the east arrowhead is drawn somewhere");
+        let next = buf.cell((ax + 1, ay)).unwrap().symbol().to_string();
+        assert_ne!(next, "\u{a0}", "a real connector's own line art must never be replaced: got {next:?}");
+        assert_ne!(next, " ", "sanity: the departure gutter is not blank either");
     }
 
     #[test]
