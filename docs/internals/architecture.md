@@ -477,6 +477,73 @@ none of them, on their own, proof the destination varies; most `Code` exits
 are perfectly deterministic doors whose destination just happens to be
 computed instead of stored.
 
+### Declared exits: the ZIL convention (SQ-1260)
+
+Every Infocom game up to and including the Zork trilogy is ZIL, not Inform, so
+`door_dir` never exists in its table and the section above answered `Unknown`
+for every direction on every such story — Zork II's Carousel Room sent the
+player at random with no protection at all, because there was no data for
+Phase 1 to compare against. `zvm::world::infer_zil_exits` (and its resolver,
+`WorldModel::resolve_zil`) is the second derivation feeding the same
+`DeclaredExit` seam, found only where the Inform one comes up empty.
+
+ZIL's own room-exit syntax has five shapes, documented by Infocom's internal
+training manual **"Learning ZIL"** (Steve Meretzky, 1989/1995;
+<https://eblong.com/infocom/other/Learning_ZIL_Meretzky_1995.pdf>), §2.2:
+**UEXIT** (`(DIR TO ROOM)`, unconditional), **NEXIT** (`(DIR "string")`, never
+a passage), **FEXIT** (`(DIR PER ROUTINE)`, decided at run time), **CEXIT**
+(`(DIR TO ROOM IF GLOBAL …)`, gated on a global) and **DEXIT** (`(DIR TO ROOM
+IF DOOR IS OPEN …)`, gated on a door object). Unlike Inform's `door_dir`
+indirection through a compass OBJECT, ZIL's compiler stamps the exit property
+number straight into the compass DICTIONARY WORD's own data byte — the `DIR`
+flag (`$10`) and the `DATA_FIRST` field that says which of a word's two data
+bytes holds it, both from ztools' `tx.h`
+(<https://github.com/ecliptik/ztools/blob/master/tx.h>) — so recovering it
+needs no object-table voting at all, only a dictionary scan.
+
+No explicit type tag is stored in the property itself: the five shapes were
+found, empirically, to compile to five DISTINCT property LENGTHS on every
+Version-3 room checked — 1 (UEXIT, the room number alone), 2 (NEXIT, a packed
+string), 3 (FEXIT, a packed routine address), 4 (CEXIT, `[room][global]
+[string]`) and 5 (DEXIT, `[room][door][string][pad]`) — verified against real
+West of House, Kitchen, Living Room and Attic properties in
+`stories/zork1-r88-s840726.z3`, cross-checked byte for byte against the
+retail game's own recovered source (`1dungeon.zil`,
+<https://github.com/historicalsource/zork1>), and against the tracked
+`minizork.z3` fixture. This is Version-3 specific and the derivation refuses
+outright on anything else: object references are one byte in V3 and two in
+V4+, which collides UEXIT's length with NEXIT's fixed 2-byte string — no V4+
+ZIL fixture was available to derive the (probably tag-byte) scheme Infocom's
+later compiler actually used, so a V4+ ZIL story (Deadline, Enchanter, …)
+still answers `Unknown` here, exactly as before this quest, rather than
+guessing. See `crates/zvm/src/world.rs`'s "Declared exits: ZIL" module docs
+for the full citations and the byte layouts.
+
+UEXIT and DEXIT both classify as `DeclaredExit::Room` — DEXIT's destination
+is a plain, static room number in every case checked, never a routine, so
+only whether the move actually SUCCEEDS this turn depends on the door; Phase
+1 only ever acts on a landing (`moved_room`), so a shut door mints no false
+edge. CEXIT and FEXIT both classify as `Code`. NEXIT classifies as
+`DeclaredExit::Message` (a printed refusal, never a passage in any state the
+game can be in) rather than `Code` — a stronger claim, and what keeps Phase 2
+from wasting a probe on a direction that can never lead anywhere.
+
+**The Carousel Room itself is the proving case, and it is deliberately NOT
+caught by this derivation alone.** Its own compiled table
+(`2dungeon.zil`, <https://github.com/historicalsource/zork2>) is eight
+perfectly ordinary UEXITs — `(NORTH TO MARBLE-HALL) (NE TO STREAM-PATH) …` —
+exactly the Lost Pig/Adventure-forest shape this whole seam exists to handle:
+the randomness lives entirely in the room's `ACTION` routine
+(`CAROUSEL-ROOM-FCN`, `2actions.zil`), an `M-BEG` "before going" hook that
+overrides `PRSO` before `V-WALK` ever reads the property above. West is the
+deterministic case (`<EQUAL? ,PRSO ,P?WEST>` alone satisfies the routine's
+`OR`, no probability roll needed — every OTHER direction is overridden only
+80% of the time): it is declared a confident `Room(_)` (Room-8) and never
+once actually leads there. `crates/app/tests/suites/
+sq1260_zil_carousel_randomization.rs` drives this end to end on
+`stories/zork2-r48-s840904.z3` and is what Phase 1/SQ-1264 catch it with, not
+this section's own derivation.
+
 ### Phase 2: proving it, in a reseeded shadow (`app::random_exit_probe`)
 
 `Absent` and `Code` are exactly the two answers Phase 1 cannot itself settle,

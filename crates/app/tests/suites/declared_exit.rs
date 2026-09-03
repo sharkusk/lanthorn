@@ -72,14 +72,21 @@ fn curses_declared_exit_matches_the_real_move() {
     assert!(matched_any, "expected at least one of Curses' opening room's exits to be a plain declared Room(_) that a real move confirms");
 }
 
-// ── Zork I (ZIL, not Inform): the seam must answer Unknown ─────────────────
+// ── Zork I (ZIL, not Inform): the seam now reads ZIL's OWN exit convention ──
 
-/// Zork I is not Inform-compiled, so `door_dir`/`*_to` do not exist in its
-/// table and the derivation must find nothing to read: every direction comes
-/// back `Unknown`, and `apply_turn` behaves exactly as it always has — a real
-/// move still mints its edge (West of House → north → North of House).
+/// Zork I is not Inform-compiled — `door_dir`/`*_to` do not exist in its
+/// table — but since SQ-1260 the derivation reads ZIL's OWN `<DIRECTIONS>`
+/// convention instead of answering `Unknown` everywhere. West of House's
+/// north/northeast are plain UEXITs to the same room, its east is a NEXIT
+/// ("the door is boarded and you can't remove the boards" — no passage in
+/// any state), matching `1dungeon.zil` exactly
+/// (<https://github.com/historicalsource/zork1>: `(NORTH TO
+/// NORTH-OF-HOUSE) (NE TO NORTH-OF-HOUSE) (EAST "The door is boarded…")`).
+/// `apply_turn` behaves exactly as it always has regardless — a real move
+/// still mints its edge (West of House → north → North of House), and now
+/// the declared UEXIT's own room number matches that real destination too.
 #[test]
-fn zork1_seam_is_unknown_and_the_move_still_mints_its_edge() {
+fn zork1_declared_exits_read_zils_own_convention_and_the_move_still_mints_its_edge() {
     let Some(bytes) = story("zork1-r88-s840726.z3") else {
         eprintln!("SKIP: gitignored stories/zork1-r88-s840726.z3 missing");
         return;
@@ -87,13 +94,19 @@ fn zork1_seam_is_unknown_and_the_move_still_mints_its_edge() {
     let s = boot(bytes);
     let start = s.current_location().expect("Zork I names West of House at boot");
 
-    for dir in [Direction::N, Direction::S, Direction::E, Direction::W] {
-        assert_eq!(
-            s.declared_exit(start.number, dir),
-            DeclaredExit::Unknown,
-            "Zork I is ZIL, not Inform — {dir:?} must have no door_dir data to read"
-        );
-    }
+    let DeclaredExit::Room(north_dest) = s.declared_exit(start.number, Direction::N) else {
+        panic!("north must be a plain declared UEXIT room");
+    };
+    assert_eq!(
+        s.declared_exit(start.number, Direction::NE),
+        DeclaredExit::Room(north_dest),
+        "NE is a separate UEXIT to the SAME declared room as north"
+    );
+    assert_eq!(
+        s.declared_exit(start.number, Direction::E),
+        DeclaredExit::Message,
+        "east is a NEXIT — a refusal string, never a passage"
+    );
 
     // And the ordinary path still mints the edge exactly as before this seam existed.
     let mut s = s;
@@ -107,10 +120,11 @@ fn zork1_seam_is_unknown_and_the_move_still_mints_its_edge() {
     apply_turn(&mut mapper, "north", &r, &mut death);
     let north = mapper.graph.current().expect("North of House");
     assert_ne!(north, west);
+    assert_eq!(north, north_dest, "the declared UEXIT's room number matches the real move's destination");
     assert_eq!(
         mapper.graph.connections().iter().find(|c| c.origin == west && c.dir == Direction::N).map(|c| c.dest),
         Some(north),
-        "an Unknown declared exit must not stop the ordinary edge from being minted"
+        "the declared exit must not stop the ordinary edge from being minted"
     );
 }
 
@@ -610,13 +624,16 @@ fn derived_seeds_differ_from_the_live_seed_and_from_each_other() {
     }
 }
 
-/// Zork I's `declared_exit` seam answers `Unknown` for every direction (ZIL, not Inform — see
-/// [`zork1_seam_is_unknown_and_the_move_still_mints_its_edge`]), which must never be worth a
-/// Phase-2 probe: `Unknown` is excluded from `worth_probing` by construction (only `Absent`/`Code`
-/// qualify), so a whole session of ordinary Zork I moves costs this seam nothing at all — no
-/// snapshot stashed with intent to probe, and no probe ever asked.
+/// Since SQ-1260, Zork I's `declared_exit` seam no longer answers `Unknown` everywhere — see
+/// [`zork1_declared_exits_read_zils_own_convention_and_the_move_still_mints_its_edge`] — but a
+/// plain declared UEXIT (north, out of West of House) that a real move CONFIRMS is still worth
+/// nothing to Phase 2: `worth_probing` only ever fires on `Absent`/`Code` (never a matching
+/// `Room(_)`), so an ordinary UEXIT move costs this seam nothing at all — no snapshot stashed with
+/// intent to probe, and no probe ever asked. (A Zork I move through a CEXIT/FEXIT-declared `Code`
+/// exit is a different story — see `docs/internals/architecture.md`'s "Declared exits: the ZIL
+/// convention" section for the cost that DOES now exist there, measured on Living Room's `down`.)
 #[test]
-fn zork1_never_arms_a_phase_2_probe() {
+fn zork1_uexit_move_never_arms_a_phase_2_probe() {
     let Some(mut p) = Play::for_story("zork1-r88-s840726.z3") else {
         eprintln!("SKIP: gitignored stories/zork1-r88-s840726.z3 missing");
         return;

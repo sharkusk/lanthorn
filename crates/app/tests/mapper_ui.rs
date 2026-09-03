@@ -52,3 +52,5 @@ mod room_dock_render;
 mod sq1264_forest_randomization;
 #[path = "suites/sq1267_shadow_room_identity.rs"]
 mod sq1267_shadow_room_identity;
+#[path = "suites/sq1260_zil_carousel_randomization.rs"]
+mod sq1260_zil_carousel_randomization;

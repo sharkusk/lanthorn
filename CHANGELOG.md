@@ -74,6 +74,12 @@ Absolute URLs or no link.
 - **A room whose exit leads back into itself no longer occasionally grows a
   stray loop of line drawn around its own box.** The `↩` badge on the room's
   border is the only mark such an exit gets now.
+- **The `?` treatment for random exits now works on the original Infocom
+  games too, not just Inform-compiled ones.** Zork II's spinning Carousel
+  Room sends you out in a random direction almost every time you walk one —
+  west leads somewhere different EVERY time — and the map now marks those
+  exits "destination varies" instead of drawing a confident arrow to whatever
+  room you happened to land in first.
 
 ### Docker
 

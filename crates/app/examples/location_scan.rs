@@ -15,7 +15,10 @@
 //! `pending_input()`), and prints one row:
 //!
 //! `file | version | room id | room name | LocationMethod | player obj |
-//! player short name | inventory count | inventory names (first 4)`
+//! player short name | inventory count | exit convention | inventory names
+//! (first 4)`, with a second line naming the opening room's own declared
+//! exits when the derivation (`zvm::world::WorldModel::declared_exit`,
+//! SQ-1257/SQ-1260) found anything to say about it.
 //!
 //! The room and player columns come straight off the booted machine via
 //! `zvm::location::detect_location` and `zvm::location::find_player_object`;
@@ -131,6 +134,16 @@ enum Outcome {
         player_id: Option<u16>,
         player_name: Option<String>,
         inventory: Vec<String>,
+        /// SQ-1260: which room-exit convention `zvm::world::WorldModel` found on
+        /// this story — `"inform"` (`door_dir`), `"zil"` (the `DIRECTIONS`
+        /// dictionary-flag convention), or `"none"`.
+        exit_convention: &'static str,
+        /// The opening room's own declared exits, one `DIR:answer` token per
+        /// direction the derivation says anything OTHER than `Unknown`/`Absent`
+        /// for (those two are the overwhelming majority on any story with no
+        /// convention, or on a room most of whose directions are simply
+        /// unset — printing them would drown the row in noise for no signal).
+        declared_exits: String,
     },
     Failed(String),
 }
@@ -196,7 +209,33 @@ fn run_story(bytes: Vec<u8>) -> Result<Outcome, String> {
         .map(|items| items.iter().filter_map(|o| o.display_name()).collect())
         .unwrap_or_default();
 
-    Ok(Outcome::Ok { room_id, room_name, method, player_id, player_name, inventory })
+    // SQ-1260: which room-exit convention this story exhibits, and what the
+    // opening room's own compiled exit table says — read the same way
+    // `crates/app/src/session.rs`'s `declared_exit` does, straight off the
+    // booted machine.
+    let model = zvm::world::WorldModel::discover_at_boot(&session.machine);
+    let exit_convention = if model.exit_props.iter().any(Option::is_some) {
+        "inform"
+    } else if model.zil_exit_props.iter().any(Option::is_some) {
+        "zil"
+    } else {
+        "none"
+    };
+    let declared_exits = room_id
+        .map(|room| {
+            zvm::world::Compass::ALL
+                .iter()
+                .filter_map(|&dir| {
+                    let d = model.declared_exit(&session.machine.mem, room, dir);
+                    (!matches!(d, zvm::world::DeclaredExit::Unknown | zvm::world::DeclaredExit::Absent))
+                        .then(|| format!("{dir:?}:{d:?}"))
+                })
+                .collect::<Vec<_>>()
+                .join(" ")
+        })
+        .unwrap_or_default();
+
+    Ok(Outcome::Ok { room_id, room_name, method, player_id, player_name, inventory, exit_convention, declared_exits })
 }
 
 /// Clear a `Char` prompt (an intro splash, or the game still asking a
@@ -221,14 +260,16 @@ fn panic_message(payload: &(dyn std::any::Any + Send)) -> String {
 
 fn print_table(rows: &[Row]) {
     println!(
-        "{:<38} {:>3} {:>6} {:<22} {:<14} {:>4} {:<16} {:>3}  inventory",
-        "story", "ver", "room", "room name", "method", "plyr", "player name", "inv"
+        "{:<38} {:>3} {:>6} {:<22} {:<14} {:>4} {:<16} {:>3} {:<6}  inventory / declared exits",
+        "story", "ver", "room", "room name", "method", "plyr", "player name", "inv", "exits"
     );
     for r in rows {
         match &r.outcome {
-            Outcome::Ok { room_id, room_name, method, player_id, player_name, inventory } => {
+            Outcome::Ok {
+                room_id, room_name, method, player_id, player_name, inventory, exit_convention, declared_exits,
+            } => {
                 println!(
-                    "{:<38} {:>3} {:>6} {:<22} {:<14} {:>4} {:<16} {:>3}  {}",
+                    "{:<38} {:>3} {:>6} {:<22} {:<14} {:>4} {:<16} {:>3} {:<6}  {}",
                     trunc(&r.file, 38),
                     r.version,
                     room_id.map(|n| n.to_string()).unwrap_or_else(|| "-".into()),
@@ -237,8 +278,12 @@ fn print_table(rows: &[Row]) {
                     player_id.map(|n| n.to_string()).unwrap_or_else(|| "-".into()),
                     trunc(player_name.as_deref().unwrap_or("-"), 16),
                     inventory.len(),
+                    exit_convention,
                     inventory.iter().take(4).cloned().collect::<Vec<_>>().join(" | "),
                 );
+                if !declared_exits.is_empty() {
+                    println!("{:<38}   declared exits: {declared_exits}", "");
+                }
             }
             Outcome::Failed(reason) => {
                 println!("{:<38} {:>3}  FAILED: {reason}", trunc(&r.file, 38), r.version);
@@ -254,8 +299,17 @@ fn print_table(rows: &[Row]) {
         .iter()
         .filter(|r| matches!(&r.outcome, Outcome::Ok { inventory, .. } if !inventory.is_empty()))
         .count();
+    let inform = rows
+        .iter()
+        .filter(|r| matches!(&r.outcome, Outcome::Ok { exit_convention, .. } if *exit_convention == "inform"))
+        .count();
+    let zil = rows
+        .iter()
+        .filter(|r| matches!(&r.outcome, Outcome::Ok { exit_convention, .. } if *exit_convention == "zil"))
+        .count();
     println!(
-        "\n{} stories, {ok} booted, {with_player} with a player object, {with_inventory} with a non-empty inventory",
+        "\n{} stories, {ok} booted, {with_player} with a player object, {with_inventory} with a non-empty \
+         inventory, {inform} Inform (door_dir), {zil} ZIL (DIRECTIONS)",
         rows.len()
     );
 }
@@ -267,16 +321,20 @@ fn print_json(rows: &[Row]) {
         println!("    \"file\": \"{}\",", esc(&r.file));
         println!("    \"version\": {},", r.version);
         match &r.outcome {
-            Outcome::Ok { room_id, room_name, method, player_id, player_name, inventory } => {
+            Outcome::Ok {
+                room_id, room_name, method, player_id, player_name, inventory, exit_convention, declared_exits,
+            } => {
                 println!("    \"room_id\": {},", opt_num(*room_id));
                 println!("    \"room_name\": {},", opt_str(room_name.as_deref()));
                 println!("    \"method\": {},", opt_str(method.as_deref()));
                 println!("    \"player_id\": {},", opt_num(*player_id));
                 println!("    \"player_name\": {},", opt_str(player_name.as_deref()));
                 println!(
-                    "    \"inventory\": [{}]",
+                    "    \"inventory\": [{}],",
                     inventory.iter().map(|s| format!("\"{}\"", esc(s))).collect::<Vec<_>>().join(", ")
                 );
+                println!("    \"exit_convention\": \"{}\",", esc(exit_convention));
+                println!("    \"declared_exits\": \"{}\"", esc(declared_exits));
             }
             Outcome::Failed(reason) => {
                 println!("    \"failed\": \"{}\"", esc(reason));

@@ -112,6 +112,15 @@ pub struct WorldModel {
     /// because this is the property number that stores that mapping, not one
     /// derived from it.
     door_dir_prop_hint: Option<u8>,
+    /// The ZIL exit-property numbers (SQ-1260), indexed by [`Compass`] exactly
+    /// like `exit_props` — but derived from Infocom's OWN compiler convention
+    /// (the `DIR`-flagged dictionary words, see the "Declared exits: ZIL"
+    /// section below) rather than Inform's `door_dir`. `None` at every index
+    /// for an Inform-compiled story (where `exit_props` is the one that's
+    /// populated instead — [`Self::discover`] tries Inform first and only
+    /// looks for this convention when that comes up empty) or for a story
+    /// whose dictionary carries no `DIR`-flagged words at all.
+    pub zil_exit_props: [Option<u8>; 12],
 }
 
 impl WorldModel {
@@ -170,6 +179,15 @@ impl WorldModel {
         let (globals_prop, globals_holder) =
             infer_local_globals(mem, max_object, room_holder, &real);
         let (exit_props, door_dir_prop_hint, door_to_prop) = infer_exits(mem, max_object);
+        // ZIL only where Inform found nothing — the two conventions have never
+        // been observed to both match one story, but there is no reason to let
+        // a ZIL-shaped table override a real Inform derivation if that ever
+        // changes (SQ-1260).
+        let zil_exit_props = if exit_props.iter().all(Option::is_none) {
+            infer_zil_exits(mem, max_object).unwrap_or([None; 12])
+        } else {
+            [None; 12]
+        };
 
         Self {
             max_object,
@@ -181,6 +199,7 @@ impl WorldModel {
             exit_props,
             door_to_prop,
             door_dir_prop_hint,
+            zil_exit_props,
         }
     }
 
@@ -194,23 +213,96 @@ impl WorldModel {
     /// in. See the module docs on [`Compass`] and [`DeclaredExit`] for what the
     /// answer does and does not promise.
     pub fn declared_exit(&self, mem: &Memory, origin: u16, dir: Compass) -> DeclaredExit {
-        let Some(prop) = self.exit_props[dir as usize] else { return DeclaredExit::Unknown };
+        if let Some(prop) = self.exit_props[dir as usize] {
+            if origin == 0 || origin > self.max_object {
+                return DeclaredExit::Unknown;
+            }
+            let raw = crate::objects::get_prop(mem, origin, prop);
+            // Distinguished from `Unknown` (SQ-1257 Phase 2): the compass WAS
+            // identified — `exit_props[dir]` answered — so a zero here is this
+            // ROOM declaring nothing for this direction, not a story with no
+            // `door_dir` convention at all. Lost Pig's gnome-tunnel rooms are
+            // exactly this: `door_dir`/`*_to` are real and derived (see
+            // `infer_exits`), and every one of their `*_to` properties is simply
+            // absent — a "before going" rule intercepts the move before the
+            // library's own exit-table code ever reads it.
+            if raw == 0 {
+                return DeclaredExit::Absent;
+            }
+            return self.resolve(mem, origin, raw);
+        }
+        // SQ-1260: the ZIL convention — see "Declared exits: ZIL" below. Same
+        // origin-range guard, same `Absent`-for-a-property-this-room-simply-
+        // doesn't-declare contract as the Inform branch above; the shape of
+        // the property's DATA is what differs, so the byte-length dispatch
+        // lives in `resolve_zil` rather than `resolve`.
+        let Some(prop) = self.zil_exit_props[dir as usize] else { return DeclaredExit::Unknown };
         if origin == 0 || origin > self.max_object {
             return DeclaredExit::Unknown;
         }
-        let raw = crate::objects::get_prop(mem, origin, prop);
-        // Distinguished from `Unknown` (SQ-1257 Phase 2): the compass WAS
-        // identified — `exit_props[dir]` answered — so a zero here is this
-        // ROOM declaring nothing for this direction, not a story with no
-        // `door_dir` convention at all. Lost Pig's gnome-tunnel rooms are
-        // exactly this: `door_dir`/`*_to` are real and derived (see
-        // `infer_exits`), and every one of their `*_to` properties is simply
-        // absent — a "before going" rule intercepts the move before the
-        // library's own exit-table code ever reads it.
-        if raw == 0 {
+        self.resolve_zil(mem, origin, prop)
+    }
+
+    /// One ZIL room's raw exit-property bytes for `prop`, already known
+    /// present on `origin` (SQ-1260) — the UEXIT/NEXIT/FEXIT/CEXIT/DEXIT
+    /// shapes [`infer_zil_exits`] found this story's `<DIRECTIONS>` compiled
+    /// to. See "Declared exits: ZIL" below for the citations and the exact
+    /// byte layouts this switches on.
+    fn resolve_zil(&self, mem: &Memory, origin: u16, prop: u8) -> DeclaredExit {
+        let addr = crate::objects::get_prop_addr(mem, origin, prop);
+        if addr == 0 {
+            // The compass word IS a real ZIL direction in this story — that's
+            // how `prop` was found at all — and this room simply declares
+            // nothing for it: the ZIL-side equivalent of the Inform branch's
+            // Lost Pig case above, and of SQ-1257 Phase 2's `Absent`.
             return DeclaredExit::Absent;
         }
-        self.resolve(mem, origin, raw)
+        let len = crate::objects::get_prop_len(mem, addr);
+        let byte0 = mem.read_byte(addr as u32);
+        // A destination room number that isn't a plausible object is not a
+        // room this derivation can vouch for — refuse rather than mint a
+        // `Room` that resolves to nothing, the same discipline `resolve`'s
+        // Inform branch applies to `raw > self.max_object`.
+        let room = |b: u8| {
+            let dest = b as u16;
+            if dest == 0 || dest > self.max_object {
+                DeclaredExit::Code
+            } else {
+                DeclaredExit::Room(dest)
+            }
+        };
+        match len {
+            // UEXIT: the property's one data byte IS the destination room
+            // number — nothing else is stored.
+            1 => room(byte0),
+            // NEXIT: a packed STRING address (the refusal message) and
+            // nothing else — there is no passage here in any state the game
+            // can be in, so this is `Message`, not `Code` (SQ-1260: distinct
+            // from a computed exit specifically so Phase 2 never wastes a
+            // probe on a direction that can never lead anywhere).
+            2 => DeclaredExit::Message,
+            // FEXIT: a packed ROUTINE address decides, at run time, whether
+            // and where the player moves.
+            3 => DeclaredExit::Code,
+            // CEXIT: [room][global variable number][packed string address] —
+            // gated on a global the story can flip on any later turn, exactly
+            // as dynamic as Inform's `door_dir` pointing at a routine.
+            4 => DeclaredExit::Code,
+            // DEXIT: [room][door object][packed string address][pad byte].
+            // Byte 0 is a STATIC destination room in every DEXIT this
+            // derivation has been checked against — the compiler never
+            // stores a routine there, only whether the move actually lands
+            // this turn depends on the door (bytes 1..4), and
+            // `declared_exit`'s only caller (`session::apply_turn`'s Phase 1)
+            // acts on this exclusively when the player's live move actually
+            // changed rooms (the `moved_room` guard) — a shut door means no
+            // move at all, so it never mints a false edge from a `Room` this
+            // turn's door happened to refuse.
+            5 => room(byte0),
+            // A length none of the five known shapes produce — refuse rather
+            // than guess at a sixth shape from one story's byte layout.
+            _ => DeclaredExit::Code,
+        }
     }
 
     /// One step of exit resolution: classify a raw, NONZERO `*_to` (or
@@ -675,6 +767,222 @@ fn infer_door_to(
         }
     }
     None
+}
+
+// ── Declared exits: ZIL (SQ-1260) ────────────────────────────────────────────
+//
+// `infer_exits` above finds Inform's `door_dir` convention and nothing else —
+// every ZIL (Infocom) story answers `Unknown` for every direction, which is
+// why the Carousel Room in Zork II sends the player out at random with no
+// warning at all (SQ-1257's Phase 1/Phase 2 protections never fire without a
+// convention to read). This section is the second derivation, sharing the
+// same [`DeclaredExit`] seam.
+//
+// ── The ZIL exit shapes, from the source ─────────────────────────────────────
+//
+// Infocom's own room-exit syntax — never called by these names in a `<ROOM
+// ...>` form (that's just `(NORTH TO KITCHEN)`, `(EAST "message")`, …) but
+// named this way by the compiler's own documentation for the five shapes it
+// accepts — comes from **"Learning ZIL"** (Steve Meretzky, Infocom 1989;
+// Microsoft Word conversion 1995), §2.2 "Exits":
+// <https://eblong.com/infocom/other/Learning_ZIL_Meretzky_1995.pdf>
+//
+//   * **UEXIT** ("unconditional exit"): `(DIR TO ROOM)` — always leads there.
+//   * **CEXIT** ("conditional exit"): `(DIR TO ROOM IF GLOBAL [ELSE "string"])`
+//     — leads there when the named global is true, else prints the string (or
+//     a compiler-supplied default when the string is omitted).
+//   * **FEXIT** ("function exit"): `(DIR PER ROUTINE)` — the routine decides,
+//     at run time, whether and where the player moves.
+//   * **NEXIT** ("non-exit"): `(DIR SORRY "string")` or bare `(DIR "string")`
+//     — never a passage, just a refusal nicer than the parser's own default.
+//   * **DEXIT** ("door exit"): `(DIR TO ROOM IF DOOR IS OPEN [ELSE "string"])`
+//     — a CEXIT whose condition is a door object's openness instead of a
+//     global.
+//
+// ── The dictionary side: how a direction WORD is found at all ───────────────
+//
+// Z-Machine Standards §13 specifies the dictionary's key/flags/data LAYOUT and
+// nothing about what any flag bit MEANS (exactly the gap `grammar.rs`'s module
+// docs describe for the rest of the dictionary). The bit that marks a
+// direction word, and the two-bit field that says which of a word's two data
+// bytes holds which datum when more than one part-of-speech applies, are
+// documented — and cited by `grammar.rs`'s own — in **ztools**' `tx.h` (Mark
+// Howell; the reference disassembler `txd`/`infodump` read exactly this table
+// to print a story's grammar): <https://github.com/ecliptik/ztools/blob/master/tx.h>
+//
+// ```text
+// #define DIR          0x10   /* infocom V1-5 only */
+// #define DATA_FIRST   0x03   /* infocom V1-5 only */
+// #define DIR_FIRST    0x03   /* infocom V1-5 only */
+// ```
+//
+// `grammar.rs` already reads this same dictionary entry shape (flags byte at
+// `entry + key_len`, two data bytes following) for verb/noun/adjective/
+// preposition detection, but keeps its OWN copy of the bit constants private
+// to that module — `F_INFOCOM_SPECIAL` there is `SPECIAL` ($04, "buzzword"),
+// a DIFFERENT bit from `DIR` ($10, "direction") despite `grammar.rs`'s module
+// comment grouping them as "special (buzzword/direction)"; the two never
+// coincide on one word in practice (measured on both `minizork.z3` and
+// `zork1-r88-s840726.z3`: the buzzword "no" carries flags `$04` — `SPECIAL`
+// with no other part-of-speech bit set; "north" carries `$13` — `DIR` plus
+// its own `DATA_FIRST` field, never `SPECIAL`) and this module reads `DIR`
+// directly, under its own name, for exactly that reason — see the constants
+// just below `infer_zil_exits`.
+//
+// When `DIR` is set alongside another part-of-speech bit (up/down/in/out are
+// also PREP-flagged — Zork's parser accepts "the trap door" but the bare word
+// "in" doubles as a preposition), `DATA_FIRST` says which of the word's two
+// data bytes is the direction's: `DIR_FIRST` ($03) means the FIRST data byte
+// is the direction datum, any other value means the SECOND is. Measured
+// against both fixtures: a lone-`DIR` word (north/south/east/…) always
+// carries `DATA_FIRST == DIR_FIRST` and its datum in the first data byte;
+// up/down/in/out carry a preposition datum first and their direction datum
+// second.
+//
+// ── What the datum IS: the exit property number, directly ───────────────────
+//
+// Unlike Inform's `door_dir` indirection (a property NUMBER stored in a
+// compass OBJECT's own property table, itself found by voting across the
+// object table), ZIL's compiler stamps the exit property number straight
+// into the DICTIONARY WORD'S data byte — one step, no object lookup. Verified
+// by cross-referencing three independent sources for the same rooms:
+//
+//   * `stories/zork1-r88-s840726.z3`'s West of House (object #180) carries
+//     properties 24/25/27/28/29/30/31 whose VALUES are the object numbers of
+//     Stone Barrow (#178), South of House (#80) and North of House (#81) —
+//     and property 31 (north's datum, read off the dictionary) is exactly the
+//     property West of House uses for its north exit. The real ZIL source,
+//     `1dungeon.zil` (<https://github.com/historicalsource/zork1>, the
+//     retail game's own disassembled/recovered sources), declares
+//     `(NORTH TO NORTH-OF-HOUSE) (SOUTH TO SOUTH-OF-HOUSE) (NE TO
+//     NORTH-OF-HOUSE) (SE TO SOUTH-OF-HOUSE) (WEST TO FOREST-1) (EAST
+//     "The door is boarded…") (SW TO STONE-BARROW IF WON-FLAG) (IN TO
+//     STONE-BARROW IF WON-FLAG)` for this exact room — matching every one of
+//     the seven properties' shapes below, direction for direction.
+//   * The tracked fixture `minizork.z3`'s Kitchen (object #18) and the real
+//     `zork1-r88-s840726.z3`'s Kitchen (object #203) both carry IDENTICAL
+//     raw bytes on their EAST and OUT properties — matching `1dungeon.zil`'s
+//     `(EAST TO EAST-OF-HOUSE IF KITCHEN-WINDOW IS OPEN) (OUT TO
+//     EAST-OF-HOUSE IF KITCHEN-WINDOW IS OPEN)`, two identically-worded
+//     DEXITs compiling to identical bytes.
+//   * Zork I's Living Room (object #193) west exit is a CEXIT matching
+//     `(WEST TO STRANGE-PASSAGE IF CYCLOPS-FLED ELSE "The wooden door is
+//     nailed shut.")`, and its down exit — `(DOWN PER TRAP-DOOR-EXIT)` — is
+//     the one FEXIT this derivation was checked against.
+//
+// ── The byte shapes themselves, and why LENGTH alone tells them apart ───────
+//
+// No explicit type tag is stored anywhere in the property — the FIVE shapes
+// were found, empirically, to compile to five DISTINCT property lengths on
+// every Version-3 room checked (`get_prop_len` on the exit property):
+//
+//   len 1  UEXIT   `[room:1]`                          — the room number, alone
+//   len 2  NEXIT   `[string:2]`                         — packed refusal message
+//   len 3  FEXIT   `[routine:2][pad:1]`                 — packed routine address
+//   len 4  CEXIT   `[room:1][global:1][string:2]`       — `string` is 0 when no ELSE
+//   len 5  DEXIT   `[room:1][door:1][string:2][pad:1]`  — `string` is 0 when no ELSE
+//
+// This is Version-3 SPECIFIC and `infer_zil_exits` refuses outright on any
+// other version: object references are ONE byte in V3 (ZMSD §12.3) and TWO in
+// V4+, and UEXIT's length (`room_width`) then COLLIDES with NEXIT's (always
+// 2, a fixed packed-address width) — the two would become indistinguishable
+// by length alone. No V4+ ZIL fixture was available to derive the actual
+// (probably tag-byte) scheme Infocom's compiler falls back to there, so this
+// stays refused rather than guessed, exactly like the rest of this module's
+// discipline: a V4+ ZIL story (Deadline, Enchanter, …) answers `Unknown` here,
+// same as before this quest, until someone can verify one.
+//
+// ── Classification into the shared seam ──────────────────────────────────────
+//
+// UEXIT and DEXIT both resolve to `DeclaredExit::Room` — DEXIT's destination
+// is a plain, static room number in every case checked, never a routine
+// (contrast Inform's `door_to`, where that same slot CAN hold one); whether a
+// door lets the move actually happen this turn is a separate question
+// `resolve_zil`'s doc comment addresses directly. CEXIT and FEXIT both
+// resolve to `Code`, matching the task's classification for "the game decides
+// at run time" exits. NEXIT resolves to `DeclaredExit::Message` — a real
+// passage never exists there in any state the game can be in, which is a
+// stronger claim than `Code` (unresolvable, but maybe real) and is exactly
+// what `Message`'s own doc comment describes; using it here is what keeps
+// SQ-1257 Phase 2 from wasting a probe on a direction that can never lead
+// anywhere.
+
+/// Infocom V1–5 dictionary flag: the word is a compass direction (ztools
+/// `tx.h`'s `DIR`, distinct from `SPECIAL`/"buzzword" — see the module docs
+/// above for why `grammar.rs`'s own, private, copy of these bits groups the
+/// two under one doc comment despite them being different bits).
+const F_ZIL_DIR: u8 = 0x10;
+/// Infocom V1–5: which of a word's two data bytes holds which class's datum,
+/// when more than one applies (ztools `tx.h`'s `DATA_FIRST`, a 2-bit field).
+const F_ZIL_DATA_FIRST_MASK: u8 = 0x03;
+/// `DATA_FIRST` value meaning the DIRECTION datum is the first data byte
+/// (ztools `tx.h`'s `DIR_FIRST`); any other value means it is the second.
+const F_ZIL_DIR_FIRST: u8 = 0x03;
+
+/// How many of the twelve compass words must carry the `DIR` flag before this
+/// derivation trusts the story as ZIL-shaped at all — the same confidence bar
+/// in spirit as `infer_exits`' `found.len() < 6` (refuse rather than guess
+/// from too small a sample), applied to all twelve directions rather than the
+/// eight primary ones since `DIR` is a dedicated bit with no Inform-style
+/// vocabulary-collision risk to work around.
+const MIN_ZIL_DIRECTION_WORDS: usize = 6;
+
+/// Derive the twelve ZIL exit-property numbers straight from the story's own
+/// dictionary (SQ-1260) — see the "Declared exits: ZIL" module docs above for
+/// the citations, the byte layouts, and why this refuses outright on anything
+/// but a Version-3 story. `None` for a story with too few `DIR`-flagged
+/// compass words to trust (Inform stories, Scott Adams, Glulx-shaped tables,
+/// and any V4+ ZIL story alike — none of them have twelve to find here).
+fn infer_zil_exits(mem: &Memory, max_object: u16) -> Option<[Option<u8>; 12]> {
+    if mem.version() != 3 || max_object == 0 {
+        return None;
+    }
+    let dict = crate::dictionary::load(mem);
+    if dict.count == 0 || dict.entry_length == 0 {
+        return None;
+    }
+    // The v1-3 dictionary key is 4 bytes (6 Z-characters, ZMSD §13.2) — the
+    // gate above makes this the only key length this derivation ever reads.
+    const KEY_LEN: u32 = 4;
+    let entry_len = dict.entry_length as u32;
+
+    let mut props: [Option<u8>; 12] = [None; 12];
+    let mut found = 0usize;
+    for dir in Compass::ALL {
+        // Dictionary keys are truncated to 6 Z-characters in v1-3, so a word
+        // longer than that ("northeast") is matched by its own truncation —
+        // exactly what the compiler itself truncated to when it built the
+        // table ("northe", matching Compass::ALL's own measured entries).
+        let key: String = dir.word().chars().take(6).collect();
+        for i in 0..dict.count as u32 {
+            let entry = dict.base + i * entry_len;
+            if (entry + entry_len) as usize > mem.len() {
+                break;
+            }
+            let (text, _) = crate::text::decode_string(mem, entry);
+            if text.trim().to_lowercase() != key {
+                continue;
+            }
+            let flags = mem.read_byte(entry + KEY_LEN);
+            if flags & F_ZIL_DIR != 0 {
+                let d0 = mem.read_byte(entry + KEY_LEN + 1);
+                let d1 = mem.read_byte(entry + KEY_LEN + 2);
+                let datum =
+                    if flags & F_ZIL_DATA_FIRST_MASK == F_ZIL_DIR_FIRST { d0 } else { d1 };
+                // Valid V3 property numbers are 1..=31 (ZMSD §12.4.1's 5-bit
+                // field) — anything else is not a property number to trust.
+                if datum > 0 && datum < 32 {
+                    props[dir as usize] = Some(datum);
+                    found += 1;
+                }
+            }
+            break;
+        }
+    }
+    if found < MIN_ZIL_DIRECTION_WORDS {
+        return None;
+    }
+    Some(props)
 }
 
 // ── Attribute inference ──────────────────────────────────────────────────────
@@ -1165,25 +1473,62 @@ mod tests {
     }
 
     /// SQ-1257: Mini-Zork is ZIL, not Inform — there is no `door_dir` convention in its table for
-    /// [`infer_exits`] to find, so [`WorldModel::declared_exit`] must answer `Unknown` for every
-    /// direction rather than mistake some coincidentally-shaped property for it. `minizork.z3` is
-    /// a tracked fixture (`crates/zvm/tests/fixtures/`), so this never skips.
+    /// [`infer_exits`] to find. Post-SQ-1260 that no longer means `declared_exit` answers
+    /// `Unknown` everywhere (the ZIL convention below is found instead); this test now pins the
+    /// negative Inform-side half only. The positive ZIL half is
+    /// [`a_zil_storys_own_exit_convention_matches_the_real_geography`] just below.
+    /// `minizork.z3` is a tracked fixture (`crates/zvm/tests/fixtures/`), so this never skips.
     #[test]
-    fn a_zil_story_has_no_door_dir_convention_to_find() {
+    fn a_zil_story_has_no_inform_door_dir_convention_to_find() {
         let Some(bytes) = crate::fixtures::load("minizork.z3") else { return };
         let mem = Memory::new(bytes).unwrap();
         let m = WorldModel::discover(&mem);
         assert_eq!(m.door_to_prop, None, "no door_dir convention means no door_to to cross-check either");
-        assert!(m.exit_props.iter().all(Option::is_none), "no `*_to` property numbers to find either");
-        // `exit_props` being empty means `declared_exit` answers Unknown for ANY origin without
-        // even reading the object table, so object 1 stands in for "some real room" here.
-        for dir in Compass::ALL {
-            assert_eq!(
-                m.declared_exit(&mem, 1, dir),
-                DeclaredExit::Unknown,
-                "{dir:?} must read Unknown on a ZIL story"
-            );
-        }
+        assert!(m.exit_props.iter().all(Option::is_none), "no Inform `*_to` property numbers to find either");
+    }
+
+    /// SQ-1260: Mini-Zork's `<DIRECTIONS>` words carry the ZIL exit-property numbers directly
+    /// (see the "Declared exits: ZIL" module docs above `infer_zil_exits`), so
+    /// [`WorldModel::declared_exit`] now reads real UEXIT/DEXIT/NEXIT data off the Kitchen (object
+    /// #18) instead of answering `Unknown`. Every destination below was independently checked
+    /// against the real geography by NAME (`short_name`), not just by number:
+    /// `crates/zvm/examples/check_zil_exits.rs` (a scratch tool used to derive this test, since
+    /// deleted) printed #53 "Living Room", #125 "Attic" and #28 "Behind House" for exactly these
+    /// object numbers. `minizork.z3` is a tracked fixture, so this never skips.
+    #[test]
+    fn a_zil_storys_own_exit_convention_matches_the_real_geography() {
+        let Some(bytes) = crate::fixtures::load("minizork.z3") else { return };
+        let mem = Memory::new(bytes).unwrap();
+        let m = WorldModel::discover(&mem);
+        assert!(
+            m.zil_exit_props.iter().filter(|p| p.is_some()).count() >= 6,
+            "at least six of the twelve compass words must carry the ZIL DIR flag"
+        );
+
+        const KITCHEN: u16 = 18;
+        assert_eq!(m.declared_exit(&mem, KITCHEN, Compass::W), DeclaredExit::Room(53), "west: a UEXIT to the Living Room");
+        assert_eq!(m.declared_exit(&mem, KITCHEN, Compass::Up), DeclaredExit::Room(125), "up: a UEXIT to the Attic");
+        assert_eq!(
+            m.declared_exit(&mem, KITCHEN, Compass::E),
+            DeclaredExit::Room(28),
+            "east: a DEXIT (the window) to Behind House"
+        );
+        assert_eq!(
+            m.declared_exit(&mem, KITCHEN, Compass::Out),
+            DeclaredExit::Room(28),
+            "out: the SAME DEXIT as east, same destination — identical ZIL source compiles to identical bytes"
+        );
+        assert_eq!(
+            m.declared_exit(&mem, KITCHEN, Compass::Down),
+            DeclaredExit::Message,
+            "down: a NEXIT — the cut-down demo drops Zork I's chimney puzzle to a plain refusal"
+        );
+        assert_eq!(
+            m.declared_exit(&mem, KITCHEN, Compass::N),
+            DeclaredExit::Absent,
+            "north: the compass word is real (that's how its property number was found at all), \
+             but this room declares nothing for it"
+        );
     }
 
     #[test]
