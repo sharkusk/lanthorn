@@ -3898,11 +3898,21 @@ pub fn apply_turn(
         // what the room's exit table says. `moved_room` guards it: a mismatch against
         // a room the player never left (a refusal that nonetheless prints a fresh
         // description) is not evidence of anything.
-        let random_exit = moved_room
-            && matches!(
-                result.declared_exit,
-                Some(crate::engine::DeclaredExit::Room(r)) if r != snap.number
-            );
+        // STICKY (SQ-1257 Phase 2): once a direction out of the origin is already marked
+        // random, treat this move the same way without re-deciding — no re-mint, no re-probe.
+        // A lucky agreement under a reseeded Phase-2 walk is a coin flip, not proof the story
+        // stopped randomising; only the player clears a random mark.
+        let sticky_random = mapper
+            .graph
+            .current()
+            .zip(parse_direction(command))
+            .is_some_and(|(here, d)| mapper.graph.is_random_exit(here, d));
+        let random_exit = sticky_random
+            || (moved_room
+                && matches!(
+                    result.declared_exit,
+                    Some(crate::engine::DeclaredExit::Room(r)) if r != snap.number
+                ));
         if fatal {
             // The game said the player died this turn and moved them somewhere that is NOT
             // reachable by the command they typed (e.g. a grue kills you in the dark and drops
@@ -5143,6 +5153,14 @@ impl Engine for GameSession {
             return crate::engine::DeclaredExit::Unknown;
         };
         self.world_model().declared_exit(&self.machine.mem, origin, compass)
+    }
+
+    fn rng_seed(&self) -> Option<u32> {
+        Some(self.machine.rng_seed())
+    }
+
+    fn reseed_random(&mut self, seed: u32) {
+        self.machine.set_rng_seed(seed);
     }
 
     fn set_trace_screen(&mut self, on: bool) {

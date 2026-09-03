@@ -570,6 +570,15 @@ struct Job {
     save: std::sync::Arc<crate::engine::EngineSave>,
     baseline: WorldPrint,
     commands: Vec<String>,
+    /// Per-command RNG reseed (SQ-1257 Phase 2), aligned by index with
+    /// `commands` — `None` at every index for every ordinary probe (a return
+    /// search, a vocabulary offer), which leaves the shadow's RNG running
+    /// wherever the last restore/boot left it, exactly as it always has.
+    /// `Some(seed)` forces [`Engine::reseed_random`] right after that
+    /// command's restore and before it runs, so a command asked twice under
+    /// two different seeds can be told apart from asking a deterministic
+    /// story the same question twice.
+    reseeds: Vec<Option<u32>>,
 }
 
 /// One answer, on its way back.
@@ -606,6 +615,19 @@ pub struct Answer {
 pub struct ProbeSnapshot {
     save: std::sync::Arc<crate::engine::EngineSave>,
     baseline: WorldPrint,
+}
+
+impl ProbeSnapshot {
+    /// Build a snapshot from a save already on hand, with no world-print
+    /// baseline (SQ-1257 Phase 2): the random-exit search only ever compares
+    /// room identity, never [`WorldPrint`], and the save it asks from is the
+    /// one kept from the END of the PREVIOUS turn — the live engine at that
+    /// moment is not the engine `arm_random_exit_search` is called with (this
+    /// turn's, already moved), so there is no live engine here to read a
+    /// baseline off in the first place.
+    pub fn from_save(save: std::sync::Arc<crate::engine::EngineSave>) -> ProbeSnapshot {
+        ProbeSnapshot { save, baseline: WorldPrint::default() }
+    }
 }
 
 /// The worker thread's end of the seam.
@@ -790,6 +812,38 @@ impl ShadowProbe {
     /// [`ask`](Self::ask), from a snapshot already taken. See
     /// [`snapshot`](Self::snapshot).
     pub fn ask_from(&mut self, from: &ProbeSnapshot, commands: &[String]) -> Option<u64> {
+        let reseeds = vec![None; commands.len()];
+        self.send_job(from, commands.to_vec(), reseeds)
+    }
+
+    /// [`ask_from`], but walking ONE command repeatedly, once per seed in
+    /// `seeds` — each attempt independently restored to `from` and reseeded
+    /// before it runs (SQ-1257 Phase 2). `ProbeStep::location` in the
+    /// resulting run, index-for-index with `seeds`, is where that seed's walk
+    /// landed.
+    ///
+    /// Same refusal shape as [`ask_from`](Self::ask_from) — `None` when
+    /// unarmed, busy, or the seed list is empty or longer than
+    /// [`MAX_PROBES`].
+    pub fn ask_from_reseeded(
+        &mut self,
+        from: &ProbeSnapshot,
+        command: &str,
+        seeds: &[u32],
+    ) -> Option<u64> {
+        let commands = vec![command.to_string(); seeds.len()];
+        let reseeds = seeds.iter().map(|&s| Some(s)).collect();
+        self.send_job(from, commands, reseeds)
+    }
+
+    /// Common tail of [`ask_from`](Self::ask_from) and
+    /// [`ask_from_reseeded`](Self::ask_from_reseeded).
+    fn send_job(
+        &mut self,
+        from: &ProbeSnapshot,
+        commands: Vec<String>,
+        reseeds: Vec<Option<u32>>,
+    ) -> Option<u64> {
         if !self.is_armed() || self.is_busy() || commands.is_empty() || commands.len() > MAX_PROBES
         {
             return None;
@@ -799,7 +853,8 @@ impl ShadowProbe {
             token,
             save: std::sync::Arc::clone(&from.save),
             baseline: from.baseline,
-            commands: commands.to_vec(),
+            commands,
+            reseeds,
         };
         self.worker.as_ref()?.jobs.send(job).ok()?;
         self.next_token = token;
@@ -908,13 +963,20 @@ fn serve(
     let engine = shadow.as_mut().ok_or(())?;
 
     let mut steps = Vec::with_capacity(job.commands.len());
-    for command in &job.commands {
+    for (i, command) in job.commands.iter().enumerate() {
         let t = Instant::now();
         let restored = engine.restore_state(&job.save);
         phases.restore += t.elapsed();
         if restored.is_err() {
             // A shadow that will not take the live state is no shadow.
             return Err(());
+        }
+        // SQ-1257 Phase 2: force this attempt's own draw, AFTER the restore (a
+        // restore touches only memory, never the RNG — see `zvm::quetzal`) and
+        // BEFORE the command runs, so two attempts from the same snapshot with
+        // two different seeds are actually asking two different questions.
+        if let Some(seed) = job.reseeds.get(i).copied().flatten() {
+            engine.reseed_random(seed);
         }
         let _ = engine.take_transcript();
         let _ = engine.take_transcript_elems();
@@ -1493,11 +1555,13 @@ mod tests {
     }
 
     fn stub_job(token: u64, commands: &[&str]) -> Job {
+        let commands: Vec<String> = commands.iter().map(|c| c.to_string()).collect();
         Job {
             token,
             save: std::sync::Arc::new(crate::engine::EngineSave::new("mock", 1, Vec::new())),
             baseline: WorldPrint::default(),
-            commands: commands.iter().map(|c| c.to_string()).collect(),
+            reseeds: vec![None; commands.len()],
+            commands,
         }
     }
 

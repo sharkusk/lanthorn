@@ -199,15 +199,27 @@ impl WorldModel {
             return DeclaredExit::Unknown;
         }
         let raw = crate::objects::get_prop(mem, origin, prop);
+        // Distinguished from `Unknown` (SQ-1257 Phase 2): the compass WAS
+        // identified — `exit_props[dir]` answered — so a zero here is this
+        // ROOM declaring nothing for this direction, not a story with no
+        // `door_dir` convention at all. Lost Pig's gnome-tunnel rooms are
+        // exactly this: `door_dir`/`*_to` are real and derived (see
+        // `infer_exits`), and every one of their `*_to` properties is simply
+        // absent — a "before going" rule intercepts the move before the
+        // library's own exit-table code ever reads it.
+        if raw == 0 {
+            return DeclaredExit::Absent;
+        }
         self.resolve(mem, origin, raw)
     }
 
-    /// One step of exit resolution: classify a raw `*_to` (or `door_to`) value
-    /// already read off some object's property table.
+    /// One step of exit resolution: classify a raw, NONZERO `*_to` (or
+    /// `door_to`) value already read off some object's property table. The
+    /// zero case is handled by the caller — see [`Self::declared_exit`] for why
+    /// it means something different at the top level (`Absent`) than partway
+    /// through a door hop (`Code`, below: a door with no static far side is
+    /// exactly as unresolvable as one whose `door_to` is a routine).
     fn resolve(&self, mem: &Memory, holder: u16, raw: u16) -> DeclaredExit {
-        if raw == 0 {
-            return DeclaredExit::Unknown;
-        }
         if raw > self.max_object {
             // A packed routine or string address — GoSub's `metaclass() ==
             // Routine`/`String` branches. zvm has no general way to tell those
@@ -450,9 +462,21 @@ pub enum DeclaredExit {
     /// that want to special-case it once that distinction is implemented,
     /// rather than changing the shape of this type twice.
     Message,
-    /// No exit is declared this way at all: the property is absent or zero,
-    /// the room number is out of range, or this story's `door_dir` convention
-    /// could not be identified (every non-Inform-library story, e.g. Zork I).
+    /// The compass WAS identified for this story, and this room's `*_to`
+    /// property for this direction is simply absent (SQ-1257 Phase 2) — the
+    /// room declares NOTHING here, as opposed to declaring code the derivation
+    /// merely cannot resolve ([`Self::Code`]). Lost Pig's gnome-tunnel rooms
+    /// are exactly this: their exit properties are unset because a "before
+    /// going" rule intercepts the move before the library's own exit-table
+    /// code ever reads it. Distinct from [`Self::Unknown`] so a caller can
+    /// treat "this story has no data here" (worth a Phase 2 probe) differently
+    /// from "this story has no `door_dir` convention at all" (Zork I, Glulx,
+    /// Scott — never worth probing, since there is no reason to think ANY
+    /// property here means an exit).
+    Absent,
+    /// No exit is declared this way at all: the room number is out of range,
+    /// or this story's `door_dir` convention could not be identified (every
+    /// non-Inform-library story, e.g. Zork I).
     Unknown,
 }
 

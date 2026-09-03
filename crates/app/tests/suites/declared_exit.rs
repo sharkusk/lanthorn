@@ -254,3 +254,221 @@ fn lost_pig_gateway_into_the_tunnels_reads_as_code_not_a_guessed_room() {
         "south, back to the Fountain Room, is an ordinary declared exit"
     );
 }
+
+// ── Phase 2: is a Code/Absent move actually random? ─────────────────────────
+//
+// Continues [`LOST_PIG_WALKTHROUGH`] into the tunnels themselves: get the
+// glowing ball from the gnome (a light source the tunnels require), then walk
+// north from the newly-opened door into Windy Cave, then further north into
+// Twisty Cave — the first room whose OWN exits are genuinely `Absent` (no
+// `*_to` property at all; verified in the SQ-1257 exploration this test
+// reconstructs).
+const LOST_PIG_INTO_THE_TUNNELS: &[&str] = &[
+    "NORTH", "X WINDY TUNNEL", "NORTH", "SOUTH", "TAKE TORCH", "GO TO GNOME", "ASK GNOME FOR BALL",
+    "GIVE TORCH TO GNOME", "THANK GNOME", "GO TO WINDY CAVE",
+];
+
+use std::path::PathBuf;
+use std::sync::Arc;
+
+use app::probe::ShadowRecipe;
+use app::state::AppState;
+
+fn recipe(bytes: &[u8]) -> ShadowRecipe {
+    ShadowRecipe {
+        story_bytes: Arc::new(bytes.to_vec()),
+        store: PathBuf::new(),
+        vfs_bytes: Arc::new(Vec::new()),
+        honor_game_colours: true,
+        interpreter_number: None,
+        random_seed: None,
+        acceleration: true,
+        screen: (80, 24),
+    }
+}
+
+/// Drives a real story through the SAME Phase-1 + Phase-2 sequence
+/// `turn::finish_command_turn` drives, minus everything about that function
+/// that is not the mapper/probe wiring (history, auto-save, the file paths) —
+/// return_probe.rs's own `Play` is the precedent for testing this seam
+/// without dragging in the rest of the turn driver.
+struct Play {
+    state: AppState,
+    mapper: Mapper,
+    session: GameSession,
+    death: DeathWatch,
+}
+
+impl Play {
+    fn lost_pig() -> Option<Play> {
+        Play::for_story("LostPig.z8")
+    }
+
+    fn for_story(name: &str) -> Option<Play> {
+        let bytes = story(name)?;
+        let mut s = boot(bytes.clone());
+        let _ = s.submit("");
+        let mut state = AppState::default();
+        state.probe.arm(recipe(&bytes));
+        Some(Play { state, mapper: Mapper::default(), session: s, death: DeathWatch::default() })
+    }
+
+    /// One command, through Phase 1 (`declared_exit` + `apply_turn`) and — when it earns one —
+    /// a synchronously-settled Phase 2 search, exactly as `turn.rs` arms one and the event loop
+    /// later settles it, collapsed into one call for a deterministic test.
+    fn turn(&mut self, cmd: &str) {
+        let room_before = self.mapper.graph.current();
+        let mut result = self.session.submit(cmd);
+        let dir = mapper::direction::parse_direction(cmd);
+        if let (Some(o), Some(d)) = (room_before, dir) {
+            result.declared_exit = Some(self.session.declared_exit(o, d));
+        }
+        apply_turn(&mut self.mapper, cmd, &result, &mut self.death);
+        let live_dest = self.mapper.graph.current();
+
+        if let (Some(origin), Some(d), Some(dest)) = (room_before, dir, live_dest) {
+            let worth_probing = dest != origin
+                && matches!(result.declared_exit, Some(DeclaredExit::Absent) | Some(DeclaredExit::Code))
+                && !self.mapper.graph.is_random_exit(origin, d);
+            if worth_probing {
+                if let Some((saved_room, save)) = &self.state.random_exit_pre_move_save {
+                    if *saved_room == origin {
+                        let save = Arc::clone(save);
+                        app::random_exit_probe::arm_random_exit_search(
+                            &mut self.state, &self.session, origin, d, dest, save,
+                        );
+                        app::random_exit_probe::settle_random_exit_search(
+                            &mut self.state, &mut self.mapper,
+                        );
+                    }
+                }
+            }
+        }
+
+        self.state.random_exit_pre_move_save = self
+            .session
+            .rng_seed()
+            .map(|_| (self.mapper.graph.current().unwrap_or(0), Arc::new(self.session.save_state())));
+    }
+
+    fn edge(&self, from: mapper::graph::RoomId, dir: Direction) -> Option<mapper::graph::RoomId> {
+        self.mapper.graph.connections().iter().find(|c| c.origin == from && c.dir == dir).map(|c| c.dest)
+    }
+}
+
+/// SQ-1257 Phase 2, end to end, on the real game: Twisty Cave's exits carry no declared data at
+/// all (`Absent`), the story sends the player somewhere different depending on where its `random`
+/// draw lands, and a reseeded shadow walk of the SAME direction from the SAME pre-move moment
+/// disagrees with where the live player actually went — so the edge Phase 1 minted is deleted and
+/// the direction is marked `Random`, and a second walk the same way mints nothing at all (sticky).
+///
+/// Non-vacuity: `Twisty Cave` is asserted by name before anything about randomness is asked, so a
+/// harness that never reaches it fails on that line rather than passing on an untested room.
+#[test]
+fn lost_pig_tunnels_are_confirmed_random_and_the_edge_is_deleted() {
+    let Some(mut p) = Play::lost_pig() else {
+        eprintln!("SKIP: gitignored stories/LostPig.z8 missing");
+        return;
+    };
+    for cmd in LOST_PIG_WALKTHROUGH {
+        p.turn(cmd);
+    }
+    for cmd in LOST_PIG_INTO_THE_TUNNELS {
+        p.turn(cmd);
+    }
+    let windy_cave = p.mapper.graph.current().expect("standing in Windy Cave");
+    assert_eq!(p.mapper.graph.room(windy_cave).map(|r| r.name.as_str()), Some("Windy Cave"));
+
+    // The gateway (Statue Room -> north -> Windy Cave) is `Code` but DETERMINISTIC: Phase 2 ran
+    // for it (asserted below via the probe's own counters) and found agreement, so its edge
+    // survives untouched — the seam does not delete an edge just because Phase 1 could not name
+    // it statically.
+    let statue_room: mapper::graph::RoomId = 128;
+    assert_eq!(p.edge(statue_room, Direction::N), Some(windy_cave), "the deterministic gateway edge survives Phase 2");
+    assert!(!p.mapper.graph.is_random_exit(statue_room, Direction::N), "and is not marked random");
+    let probed_before_tunnels = p.state.probe.probes;
+    assert!(probed_before_tunnels > 0, "the gateway's Code exit must have been Phase-2 probed at all");
+
+    // Now into the tunnel proper.
+    p.turn("NORTH"); // Windy Cave -> Twisty Cave
+    let twisty = p.mapper.graph.current().expect("standing in Twisty Cave");
+    assert_eq!(
+        p.mapper.graph.room(twisty).map(|r| r.name.as_str()),
+        Some("twisty cave"),
+        "non-vacuity guard: must actually be in Twisty Cave before asserting anything about it"
+    );
+
+    let before_edges = p.mapper.graph.connections().len();
+    p.turn("EAST"); // Twisty Cave -> (random) -> some tunnel room
+    // Whatever the live walk landed in, Phase 2's answer must have already been judged and
+    // settled by the time `turn` returns (synchronous in this harness).
+    assert!(
+        p.mapper.graph.is_random_exit(twisty, Direction::E),
+        "Twisty Cave's east exit must be confirmed random"
+    );
+    assert_eq!(
+        p.edge(twisty, Direction::E),
+        None,
+        "and NO edge may leave Twisty Cave east — Phase 2 deleted whatever Phase 1 minted"
+    );
+    assert_eq!(
+        mapper::matrix::classify(&p.mapper.graph, twisty, Direction::E),
+        mapper::matrix::MatrixCell::Random,
+        "the matrix must read this cell `?`"
+    );
+    // A room WAS still discovered and observed (the player really did go somewhere) — only the
+    // EDGE from Twisty Cave is missing.
+    assert!(p.mapper.graph.connections().len() <= before_edges + 1, "at most the (now-deleted) edge could have existed transiently");
+
+    // Sticky: walking east again from Twisty Cave mints nothing and re-probes nothing.
+    let probes_before_second_walk = p.state.probe.probes;
+    p.mapper.graph.set_current(twisty); // stand back in Twisty Cave for a second attempt
+    p.turn("EAST");
+    assert_eq!(
+        p.edge(twisty, Direction::E),
+        None,
+        "a second walk east from Twisty Cave still mints no edge"
+    );
+    assert_eq!(
+        p.state.probe.probes, probes_before_second_walk,
+        "and the sticky mark means Phase 2 was never re-asked"
+    );
+}
+
+/// The seam's own reseed derivation never repeats the input seed and never repeats itself between
+/// the two draws — a cheap, always-on guard for the fact the real-game case above depends on but
+/// cannot itself prove in isolation (a coincidental live-seed match is not something a real game
+/// run can be relied on to exercise).
+#[test]
+fn derived_seeds_differ_from_the_live_seed_and_from_each_other() {
+    for live in [0u32, 1, 0x1234_5678, 0x9E37_79B9, u32::MAX] {
+        let [a, b] = app::random_exit_probe::derived_seeds(live);
+        assert_ne!(a, live, "seed A must not be the live seed ({live:#x})");
+        assert_ne!(b, live, "seed B must not be the live seed ({live:#x})");
+        assert_ne!(a, b, "the two derived seeds must not collide with each other");
+    }
+}
+
+/// Zork I's `declared_exit` seam answers `Unknown` for every direction (ZIL, not Inform — see
+/// [`zork1_seam_is_unknown_and_the_move_still_mints_its_edge`]), which must never be worth a
+/// Phase-2 probe: `Unknown` is excluded from `worth_probing` by construction (only `Absent`/`Code`
+/// qualify), so a whole session of ordinary Zork I moves costs this seam nothing at all — no
+/// snapshot stashed with intent to probe, and no probe ever asked.
+#[test]
+fn zork1_never_arms_a_phase_2_probe() {
+    let Some(mut p) = Play::for_story("zork1-r88-s840726.z3") else {
+        eprintln!("SKIP: gitignored stories/zork1-r88-s840726.z3 missing");
+        return;
+    };
+    p.turn("look");
+    let west = p.mapper.graph.current().expect("West of House seeded");
+    let probes_before = p.state.probe.probes;
+
+    p.turn("north");
+    let north = p.mapper.graph.current().expect("North of House");
+    assert_ne!(north, west, "the move actually crossed something");
+    assert_eq!(p.edge(west, Direction::N), Some(north), "an ordinary edge, minted as always");
+
+    assert_eq!(p.state.probe.probes, probes_before, "no Phase-2 probe was ever asked");
+    assert!(p.state.random_exit_search.is_none(), "and no search was ever armed");
+}

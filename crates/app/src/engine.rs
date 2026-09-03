@@ -1066,6 +1066,23 @@ pub trait Engine {
         DeclaredExit::Unknown
     }
 
+    /// This engine's current random-number seed, when it exposes one (SQ-1257
+    /// Phase 2) — `zvm`'s `random` opcode xorshift32 state. `None` for an
+    /// engine with no seed to read (Glulx, Scott) or none of `declared_exit`'s
+    /// `Absent`/`Code` answers are ever worth a reseeded probe for anyway.
+    fn rng_seed(&self) -> Option<u32> {
+        None
+    }
+
+    /// Force this engine's random-number generator to `seed` (SQ-1257 Phase
+    /// 2): the shadow's own draw, made to differ from the live game's, so a
+    /// probe walking the same command twice under two different seeds can
+    /// tell "the story rolled dice" apart from "the story is deterministic
+    /// and my snapshot happened to agree with itself twice". Default no-op —
+    /// an engine that answers `None` from [`Self::rng_seed`] has nothing here
+    /// worth forcing either.
+    fn reseed_random(&mut self, _seed: u32) {}
+
     // ── boot ──
     /// Drain the game's pending screen clear — the fact [`TurnResult::erase_lower`]
     /// carries, taken on its own.

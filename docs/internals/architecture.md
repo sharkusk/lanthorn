@@ -439,25 +439,99 @@ number, keep the one whose values behave the way the convention requires
 — pointing at a genuine terminal room, never a chained connector, for
 `door_to`), refuse rather than guess when nothing agrees.
 
-The answer is one of `DeclaredExit::{Room(RoomId), Code, Message, Unknown}`.
-`app::turn::finish_command_turn` reads it — via `Engine::declared_exit`,
-overridden only by the Z-machine adapter; Glulx and Scott answer `Unknown` —
-for the room being LEFT and the direction just typed, before `apply_turn`
-decides what the move means, and stores it on that turn's `TurnResult`.
-`apply_turn` then compares: a `Room(x)` that matches where the player actually
-landed is an ordinary passage, recorded exactly as before; a `Room(x)` that
-does NOT match is the story overriding its own declared exit, and mints no
-edge — instead `Mapper::record_random_exit` marks the direction a fact of its
-own (`MatrixCell::Random`, drawn `?`), so the map can say "explored, but the
-destination varies" instead of drawing a confident arrow for a passage the
-story never committed to. `Code`, `Message` and `Unknown` all leave the turn
-exactly as it read before this seam existed — a routine-computed exit, a
-printed refusal, or no data at all (every non-Inform game, and Lost Pig's
-tunnel rooms themselves, whose exit properties are simply absent because a
-"before going" rule intercepts movement before the library's exit-table code
-runs) are none of them proof of anything, and Phase 2 — replaying the same
-move from a pre-move snapshot under a different RNG seed to catch exactly that
-last case — remains open (SQ-1257's report has the detail).
+The answer is one of `DeclaredExit::{Room(RoomId), Code, Message, Absent,
+Unknown}`. `Absent` and `Unknown` look alike from the outside — both mean "no
+exit here" — but say different things about the STORY: `Absent` is a room
+whose compass WAS identified (`exit_props[dir]` resolved to a real property
+number) and whose *own* `*_to` for `dir` is simply unset — Lost Pig's
+gnome-tunnel rooms read this way, because a "before going" rule intercepts
+the move before the library's exit-table code ever runs. `Unknown` is a story
+with no `door_dir` convention to find at all (Zork I, Glulx, Scott) — there is
+no reason to think ANY property here means an exit, so it is never worth
+asking further about.
+
+`app::turn::finish_command_turn` reads `declared_exit` — via
+`Engine::declared_exit`, overridden only by the Z-machine adapter; Glulx and
+Scott answer `Unknown` — for the room being LEFT and the direction just typed,
+before `apply_turn` decides what the move means, and stores it on that turn's
+`TurnResult`. `apply_turn` then compares: a `Room(x)` that matches where the
+player actually landed is an ordinary passage, recorded exactly as before; a
+`Room(x)` that does NOT match is the story overriding its own declared exit,
+and mints no edge — instead `Mapper::record_random_exit` marks the direction a
+fact of its own (`MatrixCell::Random`, drawn `?`), so the map can say
+"explored, but the destination varies" instead of drawing a confident arrow
+for a passage the story never committed to. `Code`, `Message`, `Absent` and
+`Unknown` all leave THIS PART of the turn exactly as it read before this seam
+existed — a routine-computed exit, a printed refusal, or no data at all are
+none of them, on their own, proof the destination varies; most `Code` exits
+are perfectly deterministic doors whose destination just happens to be
+computed instead of stored.
+
+### Phase 2: proving it, in a reseeded shadow (`app::random_exit_probe`)
+
+`Absent` and `Code` are exactly the two answers Phase 1 cannot itself settle,
+and are the only two `app::turn::finish_command_turn` ever arms a Phase-2
+search for (never `Unknown` — there is nothing there worth asking about, and
+Zork I/Glulx/Scott pay nothing). The proof: walk the SAME direction from the
+SAME pre-move moment TWICE, under two different random seeds, in a silent
+shadow (`app::probe::ShadowProbe`, the same worker the return probe above
+shares), and see whether either walk disagrees with where the live player
+actually went. Disagreement is direct evidence the story rolled dice for this
+move — `random_exit_probe::deliver` then deletes the edge Phase 1 already
+minted and calls `Mapper::record_random_exit`; agreement on all three (or no
+usable evidence from a shadow attempt that quit or escaped) leaves the edge
+standing.
+
+**The pre-move snapshot is the END of the PREVIOUS turn**, because by the
+time anything can classify a move, the move has already happened —
+`Engine::submit` runs before `finish_command_turn` is ever called, at three
+different call sites in `main.rs`'s event loop, which do not agree on when
+`cmd` itself becomes known (a mouse-click move is only known from the game's
+own echoed transcript, AFTER submit). Rather than touch three divergent call
+sites, `AppState::random_exit_pre_move_save` carries a `(RoomId,
+Arc<EngineSave>)` forward one turn at a time — refreshed at the tail of every
+`finish_command_turn` call for an engine `Engine::rng_seed` answers `Some`
+for, using whatever `TurnSave` already computed for history/auto-save this
+turn when available (free) — and is validated against `room_before` before
+use: a snapshot whose room does not match is stale (a restore since, or a
+turn that never refreshed it) and is simply not used, rather than trusted.
+
+**The reseed is not optional.** Quetzal saves no RNG state at all
+(`zvm::quetzal` never touches `Machine::rng_state` — see that field's docs),
+so a shadow restored from a snapshot runs its OWN draw, wherever the shadow's
+last boot or restore left it, not a copy of the live game's. Two attempts
+from the same snapshot could otherwise inherit the same shadow state and
+always agree with each other by accident, which would look exactly like a
+deterministic story. `Engine::reseed_random` (a new `Engine` trait method,
+`GameSession` calling `Machine::set_rng_seed`, default no-op elsewhere) forces
+each attempt's own draw explicitly, in `probe::serve`'s per-command loop,
+AFTER that attempt's restore and BEFORE it runs — to two seeds
+(`random_exit_probe::derived_seeds`) neither equal to the live game's own, so
+agreement is actual evidence rather than an artifact of both starting from
+the same place. `probe::Job` carries this as a `reseeds: Vec<Option<u32>>`
+parallel to `commands`, `None` at every index for every OTHER probe consumer
+(a return search, a vocabulary offer) — their shadow's RNG runs wherever it
+already did, exactly as before this existed.
+
+**Sticky, on purpose.** Once a direction is marked random,
+`session::apply_turn`'s own check stops minting an edge for it at all — so
+there is nothing left for a later walk to confirm or retract, and
+`finish_command_turn` never even arms a search for one
+(`MapGraph::is_random_exit` is checked beside `DeclaredExit`). A lucky
+agreement on a reseeded walk is a coin flip, not proof the story stopped
+randomising; `mapper::matrix::classify` reads a random mark before it ever
+looks for a real edge in the same key, so the mark wins even in the moment
+between an edge being minted and a Phase-2 answer being judged. Cleared only
+by the player.
+
+Measured on `LostPig.z8`, worker time, debug build: the deterministic gateway
+(Statue Room → north → Windy Cave, `Code`) costs one Phase-2 attempt pair
+alongside seven ordinary probe questions already in flight from the walk
+there, ~215 ms cumulative; one further Phase-2 move into the genuinely random
+Twisty Cave costs **two** shadow attempts (one restore + one reseed + one
+`submit` + one world-print each) at **~41 ms** total — all of it on the
+worker thread, never the player's, which pays only the one host snapshot
+`finish_command_turn` already keeps a `TurnSave` for.
 
 ## Reading back the bytes we actually emit
 

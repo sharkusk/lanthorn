@@ -222,6 +222,35 @@ pub(crate) fn finish_command_turn(
     // for a crossing the map has no return path for, and ends any search a move has outrun.
     app::return_probe::arm_return_search(state, mapper, &*session, cmd, room_before, &mut turn_save);
 
+    // SQ-1257 Phase 2: this move's own edge was minted (or not) already, by `apply_turn` above.
+    // If the room being LEFT had nothing static to check the move against — `DeclaredExit::Absent`
+    // (no map data at all: Lost Pig's gnome tunnels) or `Code` (a routine decides: the gateway
+    // into them) — and this direction is not ALREADY marked random (the sticky check in
+    // `apply_turn` means there is nothing left to confirm), ask a reseeded shadow whether the
+    // story is deciding this move at random. `room_before`/`live_dest` are only knowable here —
+    // before and after `apply_turn` respectively — which is why this lives here and not inside
+    // `random_exit_probe` itself.
+    if let (Some(origin), Some(dir), Some(live_dest)) =
+        (room_before, mapper::direction::parse_direction(cmd), mapper.graph.current())
+    {
+        let worth_probing = live_dest != origin
+            && matches!(
+                result.declared_exit,
+                Some(app::engine::DeclaredExit::Absent) | Some(app::engine::DeclaredExit::Code)
+            )
+            && !mapper.graph.is_random_exit(origin, dir);
+        if worth_probing {
+            if let Some((saved_room, save)) = &state.random_exit_pre_move_save {
+                if *saved_room == origin {
+                    let save = std::sync::Arc::clone(save);
+                    app::random_exit_probe::arm_random_exit_search(
+                        state, &*session, origin, dir, live_dest, save,
+                    );
+                }
+            }
+        }
+    }
+
     // Bump the graph generation ONLY when the turn actually changed the map's
     // routed geometry (a room or connection added/removed). This invalidates the
     // map render memo (forcing a re-route) and marks any in-flight tidy result
@@ -258,6 +287,17 @@ pub(crate) fn finish_command_turn(
     );
     persist_aux_after_turn(session, state, game_dir);
     persist_vfs_after_turn(session, state, game_dir);
+
+    // SQ-1257 Phase 2: keep the engine as it stands RIGHT NOW for next turn's possible probe —
+    // the moment just before whatever command produces the NEXT move is typed. Gated on
+    // `rng_seed` answering `Some` (Z-machine today): `save_state` is sub-millisecond there, but
+    // ~100 ms on Glulx (SQ-1177/SQ-1178), and `declared_exit` never overrides `Unknown` for any
+    // engine besides the Z-machine anyway, so a probe can never fire for one — paying for a
+    // snapshot it will never use would be exactly the cost this seam's own laziness elsewhere
+    // exists to avoid.
+    state.random_exit_pre_move_save = session
+        .rng_seed()
+        .map(|_| (mapper.graph.current().unwrap_or(0), turn_save.get(&*session)));
 
     // Background map maintenance: a geometry change (new room/connection) is the
     // ONLY thing that can require re-layout, so all of it runs on a worker thread —
