@@ -22,7 +22,8 @@
 //! The story is gitignored, so this skips vacuously when absent.
 
 use app::engine::Engine;
-use app::session::GameSession;
+use app::session::{apply_turn, DeathWatch, GameSession};
+use mapper::mapper::Mapper;
 
 use crate::fixture_paths::fixture_path;
 
@@ -118,4 +119,90 @@ fn lostpig_room_and_player_survive_a_move() {
         2,
         "the torch and pants are still carried after moving: {carried_after:?}"
     );
+}
+
+// ── SQ-1259 follow-up: the gnome's privately-named room ─────────────────────
+//
+// Lost Pig's gnome sleeps in a room whose COMPILED short name is
+// `(gnomeRoom)` — an Inform 7 "privately-named" object, printed only through
+// its `printed name` property, which even changes mid-game: the same room
+// (object #194) reads "Closet" on the status line before the player wakes
+// the gnome, and "Gnome Room" after. No short-name search can ever find
+// #194 by matching what the status line shows, because there is no short
+// name that matches either string — and worse, "Gnome Room" is a
+// word-boundary PREFIX match for an unrelated top-level object, #191
+// "gnome" (the NPC himself), so the old code confidently reported the WRONG
+// object as the room the instant the gnome woke.
+//
+// Reproduced from a fresh boot — no user save needed — with a prefix of the
+// IF-Archive `walkthru.txt` sequence (the same one `declared_exit.rs`'s
+// `LOST_PIG_WALKTHROUGH` on a sibling branch reconstructs; copied here
+// rather than depending on that branch) up through the "SHOUT" that wakes
+// the gnome.
+const LOST_PIG_TO_THE_GNOME: &[&str] = &[
+    "X ME", "INVENTORY", "X FARM", "X FOREST", "LOOK FOR PIG", "LISTEN", "NORTHEAST", "X STAIRS",
+    "X METAL THING", "TAKE TUBE AND TORCH", "LOOK INSIDE TUBE", "BLOW IN TUBE", "X CRACK", "EAST",
+    "X PIG", "FOLLOW PIG", "CATCH IT", "X FOUNTAIN", "X BOWL", "X COIN", "X CURTAIN", "X MAN",
+    "NORTH", "X WEST MURAL", "X EAST MURAL", "X STATUE", "X HAT", "TAKE IT", "WEAR IT", "SOUTH",
+    "SOUTHWEST", "X BOX", "PUT COIN IN SLOT", "PULL LEVER", "X BRICK", "TAKE IT", "SMELL IT",
+    "TASTE IT", "EAT IT", "X DENT", "HIT BOX", "TAKE COIN", "PUT COIN IN SLOT", "PULL LEVER",
+    "HIT BOX", "TAKE ALL FROM BASKET", "PUT COIN IN SLOT", "TAKE ALL FROM BASKET", "X CHAIR",
+    "TAKE IT", "EAST", "X SHADOW", "LISTEN",
+];
+
+#[test]
+fn lostpig_gnome_room_survives_its_own_mid_game_rename() {
+    let Some(mut session) = boot_lostpig() else { return };
+    let _ = session.submit("");
+
+    let mut map = Mapper::default();
+    let mut death = DeathWatch::default();
+    for cmd in LOST_PIG_TO_THE_GNOME {
+        let r = session.submit(cmd);
+        apply_turn(&mut map, cmd, &r, &mut death);
+    }
+
+    // Standing in the closet, before the gnome wakes: object #194, printed
+    // "Closet" — not a synthetic NameOnly room minted because nothing in
+    // the tree matched "Closet" by short name.
+    let closet = session.current_location().expect("standing in the closet");
+    assert_eq!(closet.number, 194, "the closet is object #194 — the gnome's (as yet unnamed) room");
+    assert_eq!(closet.name, "Closet");
+    let closet_room_id = map.graph.current().expect("the closet is on the map");
+    assert_eq!(
+        map.graph.room(closet_room_id).map(|r| r.name.as_str()),
+        Some("Closet"),
+        "the map's room for #194 reads \"Closet\" before the rename"
+    );
+
+    let player = session.introspect().and_then(|i| i.player_object()).expect("Grunk is identifiable");
+    let carried_before: Vec<String> =
+        session.introspect().unwrap().contents(player).iter().filter_map(|o| o.display_name()).collect();
+
+    // SHOUT wakes the gnome; the SAME room (#194) now prints as "Gnome Room".
+    let shout = session.submit("SHOUT");
+    apply_turn(&mut map, "SHOUT", &shout, &mut death);
+
+    let gnome_room = session.current_location().expect("still standing in the gnome's room");
+    assert_eq!(gnome_room.number, 194, "must resolve to the SAME room #194, not the NPC #191 \"gnome\"");
+    assert_eq!(gnome_room.name, "Gnome Room", "named from the status line, not the compiled short name");
+    assert_eq!(gnome_room.parent, 0, "a room is top-level; the NPC #191 the old prefix match picked is not this");
+
+    // The map's room for #194 must have been RELABELLED in place, not
+    // duplicated: same room id as the closet, edges intact.
+    let same_room_id = map.graph.current().expect("still on the map after the rename");
+    assert_eq!(same_room_id, closet_room_id, "the rename must relabel the existing room, not mint a new one");
+    assert_eq!(
+        map.graph.room(same_room_id).map(|r| r.name.as_str()),
+        Some("Gnome Room"),
+        "the map's label follows the rename"
+    );
+
+    // The player must still be identifiable, and carrying the same things —
+    // this is the "map cannot track the player" half of the user's report.
+    let player_after = session.introspect().and_then(|i| i.player_object());
+    assert_eq!(player_after, Some(player), "the avatar lock must survive the rename");
+    let carried_after: Vec<String> =
+        session.introspect().unwrap().contents(player).iter().filter_map(|o| o.display_name()).collect();
+    assert_eq!(carried_after, carried_before, "Grunk's inventory is unaffected by the room's rename");
 }
