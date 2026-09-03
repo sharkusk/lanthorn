@@ -16,5 +16,8 @@ pub mod screen;
 pub mod text;
 pub mod world;
 
-pub use location::{current_location, detect_location, find_player_object, object_tree_view, Location, LocationMethod};
+pub use location::{
+    current_location, detect_location, detect_location_with, find_player_object,
+    find_player_object_with, object_tree_view, Location, LocationMethod, PlayerCandidates,
+};
 pub use objects::ObjectSnapshot;

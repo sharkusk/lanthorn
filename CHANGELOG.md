@@ -42,6 +42,13 @@ Absolute URLs or no link.
 - **Map connectors no longer take long detours hugging a neighbouring room's
   box when a straight line was free.** Which of two equally short routes wins
   no longer depends on the order the rooms were explored in.
+- **Games whose hero has a name of their own now show the right things.**
+  Lost Pig's inventory panel now shows what Grunk actually carries (a torch
+  and his pants), instead of reading an unused stand-in that was never really
+  playing the game; its automap now tracks the room itself rather than a
+  same-named compass direction. Several other classic titles pick up the same
+  fix for free — Lurking Horror's and The Witness's inventory panels now
+  track "the hacker" and "the detective" instead of staying empty all game.
 
 ---
 

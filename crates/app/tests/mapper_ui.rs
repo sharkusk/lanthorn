@@ -36,6 +36,8 @@ mod matrix_view;
 mod maze_layer_commands;
 #[path = "suites/maze_layer_frozen.rs"]
 mod maze_layer_frozen;
+#[path = "suites/lostpig_room_and_inventory.rs"]
+mod lostpig_room_and_inventory;
 #[path = "suites/mysterious_room_detection.rs"]
 mod mysterious_room_detection;
 #[path = "suites/nameonly_room_corroboration.rs"]

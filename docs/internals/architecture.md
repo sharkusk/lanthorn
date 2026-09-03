@@ -231,11 +231,21 @@ knowing, because each of these is a refusal rather than a stub:
   when the room does, and remembers per game. Before it resolves, the room
   questions answer empty.
 - **Who the player is** is `ParseNames::find_player`, the same rule
-  `zvm::location::find_player_object` applies: avatar-ish names, *validated
-  against the room*, because a name alone picks the wrong object often enough to
-  matter. Where two situated candidates both look like avatars and the room
-  cannot settle it, it answers `None` and the scrape fallback stands — a wrong
-  inventory being worse than an empty one.
+  `zvm::location::find_player_object` applies: avatar-ish PRINTED names
+  (`PLAYER_NAMES`) OR parse WORDS (`PLAYER_WORDS`: `me`/`myself`/`self`/
+  `yourself`), *validated against the room*, because a name alone picks the
+  wrong object often enough to matter — Lost Pig's Grunk has no avatar-ish
+  short name at all and answers only to `me` (SQ-1259). Preferring a situated
+  candidate over an unsituated one, then one whose ancestor chain reaches the
+  room, is what the room-validation IS; where two situated candidates both
+  look like avatars and the room cannot settle it, it answers `None` and the
+  scrape fallback stands — a wrong inventory being worse than an empty one.
+  The room-name side has an analogous trap: a status line's short name is not
+  unique (a compass direction can share a room's own name), so
+  `zvm::location::resolve_room_object` prefers the object the game's own
+  `location` global names, then a top-level (parent-0) match, before falling
+  back to the old longest-match/lowest-number rule.
+- **A corpus sweep for these heuristics**: `cargo run -p lanthorn --example location_scan --release` boots every Z-machine story under `stories/` (or `--corpus DIR`, `--only a,b`, `--json`), plays `""` then `look`, and prints one row per story — the detected room (id/name/`LocationMethod`), the detected player (id/short name), and the carried items' display names, straight off `zvm::location::detect_location`/`find_player_object` and the session's own `Introspect::contents`. Any change to `zvm::location`'s heuristics should be run through it before and after, with the two JSON outputs diffed — a rule that looks right on the one story it was fixing for can silently rewire another's room or avatar (SQ-1259 found nine such stories on its own change: real fixes, and one real regression it did not ship with).
 - **One level, not scope.** `visible_contents` is the direct children. Nesting
   into an open container needs the `container`/`open`/`transparent` attributes,
   whose numbering is the Inform library's rather than the format's, so there is

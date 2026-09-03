@@ -16,7 +16,7 @@ use mapper::mapper::Mapper;
 use zvm::cpu::exec::{Machine, PictureEvent, SoundEvent, StepResult};
 use zvm::error::ZError;
 use zvm::io::{Output, TextAttrs};
-use zvm::location::{detect_location, Location, LocationMethod};
+use zvm::location::{detect_location_with, Location, LocationMethod, PlayerCandidates};
 use zvm::screen::ZColour;
 use zvm::ObjectSnapshot;
 
@@ -639,6 +639,16 @@ pub struct GameSession {
     /// tallies every property of every object once, and the answer describes the
     /// compiler's layout, which no turn can change.
     parse_names: std::cell::OnceCell<Option<zvm::objects::ParseNames>>,
+    /// The story's avatar-candidate pools (SQ-1259 perf follow-up) — cached
+    /// beside [`parse_names`](Self::parse_names) for the identical reason:
+    /// both depend only on what is compiled into the story (short names and
+    /// [`parse_names`](Self::parse_names)'s own answer), so both are static
+    /// for the life of one story and built once. `current_location` and
+    /// `Introspect::player_object` sit on render call paths that run every
+    /// FRAME (`command_band.rs`, `transcript.rs`), not once a turn — see
+    /// [`zvm::location::PlayerCandidates`]'s doc comment for the measured
+    /// cost this cache removes.
+    player_candidates: std::cell::OnceCell<PlayerCandidates>,
     /// The [`parse_names`](Self::parse_names) walk folded into the one set the
     /// bulk callers query — "does ANY object answer to this word" (SQ-1176).
     ///
@@ -1097,6 +1107,7 @@ impl GameSession {
             disasm_cache: std::cell::RefCell::new(None),
             world: std::cell::OnceCell::new(),
             parse_names: std::cell::OnceCell::new(),
+            player_candidates: std::cell::OnceCell::new(),
             object_word_set: std::cell::RefCell::new(None),
             v6_model_memo: std::cell::RefCell::new(None),
             last_confirmed_pc: std::cell::Cell::new(None),
@@ -1778,7 +1789,7 @@ impl GameSession {
         self.v6_win0_chars_seen = self.machine.v6_win0_out_chars;
         let transcript = if self.strip_prompt { strip_read_prompt(&raw).to_owned() } else { raw };
         let transcript_runs = clamp_runs(raw_runs, transcript.chars().count());
-        let detected = detect_location(&self.machine);
+        let detected = detect_location_with(&self.machine, self.player_candidates());
         let location = detected.as_ref().map(location_to_snapshot);
         let location_method = detected.as_ref().map(Location::method);
 
@@ -5076,7 +5087,9 @@ impl Engine for GameSession {
         // Version-aware detection (same as a turn), NOT the v3-only global-0 read:
         // v4+ games have no location global, so `zvm::current_location` returns
         // None at boot, leaving the starting room off the map until the first turn.
-        detect_location(&self.machine).as_ref().map(location_to_snapshot)
+        // `_with` + the cached candidate pool: this runs every rendered FRAME
+        // via `command_band.rs`, not once a turn (SQ-1259).
+        detect_location_with(&self.machine, self.player_candidates()).as_ref().map(location_to_snapshot)
     }
 
     fn set_trace_screen(&mut self, on: bool) {
@@ -5252,6 +5265,13 @@ impl GameSession {
             .get_or_init(|| zvm::objects::ParseNames::detect(&self.machine.mem))
             .as_ref()
     }
+
+    /// The story's avatar-candidate pools, derived on first use — see the
+    /// [`player_candidates`](Self::player_candidates) field's doc comment.
+    pub fn player_candidates(&self) -> &PlayerCandidates {
+        self.player_candidates
+            .get_or_init(|| PlayerCandidates::build(&self.machine.mem, self.parse_names()))
+    }
 }
 
 impl Introspect for GameSession {
@@ -5330,7 +5350,10 @@ impl Introspect for GameSession {
     }
 
     fn player_object(&self) -> Option<u16> {
-        zvm::find_player_object(&self.machine)
+        // Cached candidate pool (SQ-1259): reached whenever `state.player_obj`
+        // is `None`, which is every render frame until it locks, on the
+        // per-frame path in `command_band.rs`/`transcript.rs`.
+        zvm::find_player_object_with(&self.machine, self.player_candidates())
     }
 }
 
@@ -7397,6 +7420,7 @@ mod tests {
             disasm_cache: std::cell::RefCell::new(None),
             world: std::cell::OnceCell::new(),
             parse_names: std::cell::OnceCell::new(),
+            player_candidates: std::cell::OnceCell::new(),
             object_word_set: std::cell::RefCell::new(None),
             v6_model_memo: std::cell::RefCell::new(None),
             last_confirmed_pc: std::cell::Cell::new(None),
@@ -7470,6 +7494,7 @@ mod tests {
             disasm_cache: std::cell::RefCell::new(None),
             world: std::cell::OnceCell::new(),
             parse_names: std::cell::OnceCell::new(),
+            player_candidates: std::cell::OnceCell::new(),
             object_word_set: std::cell::RefCell::new(None),
             v6_model_memo: std::cell::RefCell::new(None),
             last_confirmed_pc: std::cell::Cell::new(None),
@@ -7538,6 +7563,7 @@ mod tests {
             disasm_cache: std::cell::RefCell::new(None),
             world: std::cell::OnceCell::new(),
             parse_names: std::cell::OnceCell::new(),
+            player_candidates: std::cell::OnceCell::new(),
             object_word_set: std::cell::RefCell::new(None),
             v6_model_memo: std::cell::RefCell::new(None),
             last_confirmed_pc: std::cell::Cell::new(None),
@@ -7599,6 +7625,7 @@ mod tests {
             disasm_cache: std::cell::RefCell::new(None),
             world: std::cell::OnceCell::new(),
             parse_names: std::cell::OnceCell::new(),
+            player_candidates: std::cell::OnceCell::new(),
             object_word_set: std::cell::RefCell::new(None),
             v6_model_memo: std::cell::RefCell::new(None),
             last_confirmed_pc: std::cell::Cell::new(None),
@@ -7689,6 +7716,7 @@ mod tests {
             disasm_cache: std::cell::RefCell::new(None),
             world: std::cell::OnceCell::new(),
             parse_names: std::cell::OnceCell::new(),
+            player_candidates: std::cell::OnceCell::new(),
             object_word_set: std::cell::RefCell::new(None),
             v6_model_memo: std::cell::RefCell::new(None),
             last_confirmed_pc: std::cell::Cell::new(None),
@@ -7753,6 +7781,7 @@ mod tests {
             disasm_cache: std::cell::RefCell::new(None),
             world: std::cell::OnceCell::new(),
             parse_names: std::cell::OnceCell::new(),
+            player_candidates: std::cell::OnceCell::new(),
             object_word_set: std::cell::RefCell::new(None),
             v6_model_memo: std::cell::RefCell::new(None),
             last_confirmed_pc: std::cell::Cell::new(None),
@@ -7796,6 +7825,7 @@ mod tests {
             disasm_cache: std::cell::RefCell::new(None),
             world: std::cell::OnceCell::new(),
             parse_names: std::cell::OnceCell::new(),
+            player_candidates: std::cell::OnceCell::new(),
             object_word_set: std::cell::RefCell::new(None),
             v6_model_memo: std::cell::RefCell::new(None),
             last_confirmed_pc: std::cell::Cell::new(None),
@@ -7852,6 +7882,7 @@ mod tests {
             disasm_cache: std::cell::RefCell::new(None),
             world: std::cell::OnceCell::new(),
             parse_names: std::cell::OnceCell::new(),
+            player_candidates: std::cell::OnceCell::new(),
             object_word_set: std::cell::RefCell::new(None),
             v6_model_memo: std::cell::RefCell::new(None),
             last_confirmed_pc: std::cell::Cell::new(None),
@@ -7947,6 +7978,7 @@ mod tests {
             disasm_cache: std::cell::RefCell::new(None),
             world: std::cell::OnceCell::new(),
             parse_names: std::cell::OnceCell::new(),
+            player_candidates: std::cell::OnceCell::new(),
             object_word_set: std::cell::RefCell::new(None),
             v6_model_memo: std::cell::RefCell::new(None),
             last_confirmed_pc: std::cell::Cell::new(None),
@@ -8000,6 +8032,7 @@ mod tests {
             disasm_cache: std::cell::RefCell::new(None),
             world: std::cell::OnceCell::new(),
             parse_names: std::cell::OnceCell::new(),
+            player_candidates: std::cell::OnceCell::new(),
             object_word_set: std::cell::RefCell::new(None),
             v6_model_memo: std::cell::RefCell::new(None),
             last_confirmed_pc: std::cell::Cell::new(None),
@@ -8506,6 +8539,7 @@ mod tests {
             disasm_cache: std::cell::RefCell::new(None),
             world: std::cell::OnceCell::new(),
             parse_names: std::cell::OnceCell::new(),
+            player_candidates: std::cell::OnceCell::new(),
             object_word_set: std::cell::RefCell::new(None),
             v6_model_memo: std::cell::RefCell::new(None),
             last_confirmed_pc: std::cell::Cell::new(None),
