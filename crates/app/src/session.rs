@@ -3922,7 +3922,37 @@ pub fn apply_turn(
             .current()
             .zip(parse_direction(command))
             .is_some_and(|(here, d)| mapper.graph.is_random_exit(here, d));
+        // SQ-1264: the live-walk CONTRADICTION rule. `declared_exit` alone (Z-machine) or its
+        // Glulx mirror only ever fires from a STATIC table read, and Adventure's forests are not
+        // caught by it at all — the room's own `e_to`/`w_to`/etc name a perfectly ordinary FIXED
+        // room; the randomness is a redirect the DESTINATION performs on arrival (its `initial`
+        // routine rerolling `PlayerTo` half the time), which nothing in the origin's own exit
+        // table can see. Phase 2's reseeded shadow probe is what actually proves such a direction
+        // random — but Phase 2 itself has a statistical hole: once a direction is marked random,
+        // an UPGRADE re-probe's two reseeded attempts each have (with two possible destinations) a
+        // 50% chance of independently agreeing with whatever the live walk just landed in, so they
+        // agree with EACH OTHER purely by luck one time in four, and a confident edge gets minted
+        // right back for a direction that is still random. This rule closes that hole with
+        // evidence Phase 2 does not need: if the graph ALREADY holds an edge for this exact
+        // (origin, direction) pointing at some OTHER room than where the player just landed, that
+        // contradiction is itself proof the exit is random — a fixed passage cannot lead to two
+        // different rooms. Fires regardless of `declared_exit`, so it protects an engine with no
+        // declared-exit seam at all, and re-marks a direction Phase 2 mistakenly upgraded, the next
+        // time the story proves it wrong again.
+        let existing_conflict: Option<mapper::graph::RoomId> = moved_room
+            .then(|| mapper.graph.current())
+            .flatten()
+            .zip(parse_direction(command))
+            .and_then(|(here, d)| {
+                mapper
+                    .graph
+                    .connections()
+                    .iter()
+                    .find(|c| c.origin == here && c.dir == d && c.dest != here && c.dest != snap.number)
+                    .map(|c| c.dest)
+            });
         let random_exit = already_random
+            || existing_conflict.is_some()
             || (moved_room
                 && matches!(
                     result.declared_exit,
@@ -3959,6 +3989,15 @@ pub fn apply_turn(
             // that this direction was ever tried, indistinguishable from a direction
             // nobody has explored.
             if let (Some(origin), Some(d)) = (mapper.graph.current(), parse_direction(command)) {
+                // SQ-1264: the contradiction rule fired — an edge already claimed this exact
+                // (origin, direction) led somewhere ELSE. Remove it (the same removal
+                // `random_exit_probe::deliver_first_walk` uses for the same reason) and note
+                // that room as a destination too, alongside wherever the player landed this
+                // time — both are real places the story has now been proven to send the player.
+                if let Some(other) = existing_conflict {
+                    mapper.graph.remove_connection(origin, d);
+                    mapper.graph.note_random_destination(origin, d, other);
+                }
                 mapper.record_random_exit(origin, d);
                 // SQ-1261: every live walk of a marked direction that lands somewhere other than
                 // the origin is evidence of WHERE the story sends the player — covers both the

@@ -721,6 +721,134 @@ Three surfaces read `random_destinations`, and none of them recompute it:
   exported map keeps the same evidence the room card and the matrix's
   superscript count show.
 
+### SQ-1264: the Glulx seam, and a live-walk contradiction rule that needs no shadow
+
+Two gaps SQ-1257/SQ-1261 left, found on Colossal Cave Adventure's two "In
+Forest" clearings (`advent.blb`, Glulx, and `advent.z6`, Z-machine — the same
+Inform source, `advent.inf`, compiled both ways): `Engine::declared_exit`
+answered `Unknown` for every Glulx story (`GlulxSession` never overrode the
+default), and even where Phase 1/Phase 2 both work, they have a statistical
+blind spot once a direction is marked random.
+
+**Why Adventure's forests are not what Phase 1 was built to catch.**
+`At_Hill_In_Road`'s `s_to` and `In_A_Valley`'s `e_to`/`w_to` all name a
+perfectly ordinary FIXED room, `In_Forest_1` — a plain `Room(_)`, never
+`Code`/`Absent`, so this is NOT Lost Pig's shape (a routine deciding the
+destination). The randomness lives on the DESTINATION side: `In_Forest_1`
+carries an `initial` routine that runs on every arrival and, half the time,
+silently redirects the player on to `In_Forest_2` instead
+(`if (random(2) == 1) PlayerTo(In_Forest_2, 1);`) — invisible to a reader of
+the ORIGIN's own exit table, which is all `declared_exit` ever reads. What
+still catches it: `apply_turn`'s existing `Room(x)` vs. actual-landing
+compare, unchanged — a walk that lands in `In_Forest_2` while the origin
+declared `Room(In_Forest_1)` is exactly the mismatch shape Phase 1 already
+watches for, so the FIRST divergence is caught with no new code at all.
+`In_Forest_1`'s own W/N/S (all self-referencing `*_to` values, i.e.
+declared self-loops) never trigger the redirect under any seed tried —
+Inform's move engine does not re-invoke a room's `initial` when
+`next_loc == location`, so a same-room "move" is a no-op as far as that hook
+is concerned; the randomness is arrival-only, matching the user report this
+quest was filed from exactly (`↩wns` on the forest, no random mark on the
+self-loop directions).
+
+**`gvm::world`** (`crates/gvm/src/world.rs`) is the Glulx mirror of
+`zvm::world`'s `door_dir`/`*_to`/`door_to` derivation, existing because `gvm`
+takes no dependency on `zvm` (each VM core stays independent — see the hard
+rules in `CLAUDE.md`): its own `Compass`/`DeclaredExit`, shaped identically,
+converted to the shared `zvm::world::DeclaredExit` only at the `GlulxSession`
+boundary (`crate::engine::DeclaredExit` is already that same re-export every
+other caller uses). Reading through `gvm::objects::ParseNames` — which needed
+two new general methods, `property`/`property_word`, since its existing
+`name_array` reader stops at the FIRST property (assumed to be property 1,
+correct only for the `name` array itself) rather than walking the whole
+table. The one real difference from the Z-machine reader: Glulx property ids
+are `u16` with no 63-property ceiling the way the Z-machine's `door_dir`
+scan has, so `gvm::world::MAX_PROP_SCAN` (1000) is a measured, generous
+headroom rather than a spec-derived bound — the highest property id anywhere
+in `advent.blb`'s whole object table is 276, and `door_dir` itself is a
+LIBRARY-assigned property (`english.h`, compiled early), so it lands low in
+every corpus story tried.
+
+**`GlulxSession::declared_exit`** has one problem `GameSession`'s never did:
+`origin` is a [`mapper::graph::RoomId`] — for Glulx, `crate::roomid::
+glulx_room_id`'s HASH of the room's object address (SQ-0526), not the address
+itself — and by the time `declared_exit` is asked about it
+(`turn::finish_command_turn`, after the move already ran), the live session
+has moved PAST that room, so the "re-hash the current address" trick
+`resolve_handle` uses for `Introspect` handles cannot answer for a room the
+player just LEFT. `GlulxSession::room_addrs: HashMap<RoomId, u32>` is the
+fix: every room the room-lock resolves to a real address is remembered as it
+is discovered (`room_for`, on every turn once locked), so `origin` — a room
+the player necessarily stood in on some EARLIER turn — is always already in
+the map by the time `declared_exit` asks. Grows for the session's life and
+never needs invalidating, since a Glulx object's address is fixed at compile
+time.
+
+**The live-walk CONTRADICTION RULE**, in `session::apply_turn`, closes Phase
+2's statistical hole rather than the Phase-1 gap: once a direction IS marked
+random, a re-walk arms a Phase-2 UPGRADE probe (see above), and with two
+possible destinations, its two reseeded shadow attempts each independently
+have a 50% chance of agreeing with whatever the live walk just landed in —
+so they agree with EACH OTHER, and with the live landing, purely by luck one
+time in four, upgrading the mark back to a confident (wrong) edge for a
+direction that is still random underneath. The rule needs no shadow and no
+`declared_exit` answer to close this: when a move from `origin` via `dir`
+lands in `dest != origin` and the graph ALREADY holds an edge
+`origin --dir--> other` with `other != dest`, that contradiction is itself
+proof the exit is random — a fixed passage cannot lead to two different
+rooms. `apply_turn` removes the stale edge (the same `MapGraph::
+remove_connection` call `random_exit_probe::deliver_first_walk` uses),
+marks the direction random (`Mapper::record_random_exit`), and records BOTH
+rooms as evidence (`MapGraph::note_random_destination` for `other`, then for
+the new `dest`) — the contradiction proves both are real destinations the
+story has sent the player to, not just the latest one. It is folded into the
+same `random_exit` boolean the declared-exit mismatch already sets, so an
+engine with a working `declared_exit` seam gets it as a second, independent
+line of evidence, and an engine with NONE at all (or one whose derivation
+fails to find the convention) is still protected — the rule reads only the
+graph the mapper already keeps.
+
+**Proof, on both engines, needed two real fixture quirks worked around, not
+fixed** — both are properties of the `.z6`/`.blb` files themselves, not of
+lanthorn, and are recorded here so the next person does not go looking for a
+bug in `random_exit_probe` that is not there. `advent.z6` is a "V6Lib private
+beta" test compile whose own init code writes a runtime-random value into
+the header's release-number field (the banner text visibly reads a
+different "Release NNN" on every fresh boot, though the file's own static
+header byte is fixed at release 10) — Quetzal's IFhd validation, reading
+that field from CURRENT memory, refuses to restore the live session's save
+into a separately-booted shadow every time (`BadSave("SaveMismatch")`), so
+Phase 2's reseeded-shadow upgrade path is untestable on this specific
+fixture; the real-game suite proves the declared-exit-mismatch path and the
+contradiction rule instead, and Phase 2 itself keeps its existing coverage
+on Lost Pig (which has no such quirk) and the hand-built
+`random_exit_probe.rs` unit tests. Glulx's own room-lock (SQ-0526) is
+host-side state that a Quetzal-style snapshot never carries, so a shadow
+booted with NO store learns its OWN lock from scratch and reports its very
+first move's room under a NAME hash — numerically nothing like the live
+session's ADDRESS hash — making every Phase-2 comparison read as a
+disagreement regardless of what the game did; pointing the shadow's
+`ShadowRecipe::store` at the SAME directory the live session persists its
+`room-global` sidecar to (`GlulxSession::remember_room_global`) lets the
+shadow read the learned address at its own boot and report rooms in the
+same id space from its first move, which is what makes Adventure's Glulx
+build the one that proves Phase 2's upgrade path for real
+(`crates/app/tests/suites/sq1264_forest_randomization.rs`).
+
+**A self-loop is drawn only as a badge, never a line.** Before this quest, a
+self-loop connection (`origin == dest`, `MapGraph::add_self_loop`) was never
+excluded from `crates/mapper/src/route/mod.rs`'s routing passes — `origin ==
+dest` forms a degenerate "pair" whose forward and backward buckets in
+`select_shared_paths` are the SAME set of indices, so the edge got paired
+with ITSELF and produced a real polyline looping back around the room's own
+box, on top of the `↩` badge `render/map.rs` already draws. `route_topology_
+with`'s `compass_pairs`/`compass` construction, `select_shared_paths`, and
+`departure_corners` all now exclude `c.origin == c.dest`, verified against
+the shape of the real save this quest was investigated from (`
+route::tests::a_self_loop_is_never_routed_as_a_connector`, falsified by
+reverting the three guards and confirming the pinned save's forest room
+grows exactly the bogus loop described above).
+
 ## Reading back the bytes we actually emit
 
 Every other harness in the repo renders into a ratatui `Buffer` and asserts on

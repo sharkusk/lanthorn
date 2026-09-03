@@ -53,6 +53,19 @@ Absolute URLs or no link.
   alone, if it hasn't sent you anywhere yet); the direction matrix and the
   map box show how many distinct places that is, as a small superscript
   count beside the `?`.
+- **Glulx games now get the same `?` treatment for random exits as Z-machine
+  games do.** Colossal Cave Adventure's two forest clearings — walking into
+  one sends you to either at random — now show "destination varies" on both
+  the Z-machine and the Glulx build of the story, where they used to draw a
+  confident arrow to whichever forest you happened to land in first. And on
+  either engine, a passage that LOOKS deterministic for a while and then
+  turns out to send you somewhere else is corrected on the spot: the map
+  drops the wrong arrow and marks the exit `?` the moment it catches the
+  story in the act, rather than waiting on a slower re-check that could
+  itself get unlucky.
+- **A room whose exit leads back into itself no longer occasionally grows a
+  stray loop of line drawn around its own box.** The `↩` badge on the room's
+  border is the only mark such an exit gets now.
 
 ### Docker
 

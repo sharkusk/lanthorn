@@ -341,19 +341,25 @@ mod tests {
     /// `turn::finish_command_turn` drives it — `apply_turn` first, `deliver` second — except the
     /// Phase-2 ANSWER is hand-built (`crate::probe::test_answer`) rather than fetched from a real
     /// worker, since only a real Z-machine story can be booted into one. SQ-1257's corrected
-    /// design in one pass:
+    /// design in one pass, updated for SQ-1264's live-walk contradiction rule:
     ///
     /// 1. A direction already marked random is walked again and lands somewhere — `apply_turn`
     ///    mints NO edge (same as before the correction).
     /// 2. The Phase-2 re-probe (`was_random: true`) AGREES on both attempts — `deliver` clears
-    ///    the mark and mints the edge (the new part: an upgrade).
-    /// 3. The SAME direction, no longer marked, is walked again and lands somewhere ELSE —
-    ///    `apply_turn` mints the (wrong) edge as an ordinary first walk would (Phase 1 cannot
-    ///    tell `Absent`/`Code` apart from a real passage on its own).
-    /// 4. The Phase-2 first-walk probe DISAGREES — `deliver` deletes that edge and marks the
-    ///    direction random again.
+    ///    the mark and mints the edge (an upgrade). This is exactly the "statistical hole"
+    ///    SQ-1264's report describes: with two possible destinations, two reseeded attempts agree
+    ///    with the live landing by pure luck one time in four, and a confident edge is minted for
+    ///    a direction that is still random underneath.
+    /// 3. The SAME direction, no longer marked, is walked again and lands somewhere ELSE. Before
+    ///    SQ-1264, `apply_turn` had no way to notice this and minted the (wrong) edge as an
+    ///    ordinary first walk would, leaving the map wrong until ANOTHER Phase-2 round trip
+    ///    happened to catch it. The live-walk CONTRADICTION RULE closes that hole without needing
+    ///    Phase 2 at all: `apply_turn` itself sees the edge it is about to silently overwrite,
+    ///    removes it, and marks the direction random again on the spot — with BOTH the edge's old
+    ///    destination and the new live landing recorded, since the contradiction is proof both are
+    ///    real places the story sends the player.
     #[test]
-    fn a_random_mark_upgrades_on_agreement_and_reverts_on_the_next_disagreement() {
+    fn a_random_mark_upgrades_on_agreement_and_the_contradiction_rule_reverts_it_on_the_next_disagreement() {
         let mut mapper = Mapper::default();
         let mut death = DeathWatch::default();
         apply_turn(&mut mapper, "", &TurnResult::observation(snap(1, "Tunnel")), &mut death);
@@ -389,32 +395,23 @@ mod tests {
         apply_turn(&mut mapper, "back", &TurnResult::observation(snap(1, "Tunnel")), &mut death);
 
         // ── 3: walk the SAME direction again — no longer marked — and land somewhere ELSE.
-        // `apply_turn` mints the edge as it would for any ordinary first walk of a direction it
-        // has no reason yet to distrust (Phase 1 alone cannot tell this apart from a real move).
+        // SQ-1264: the contradiction rule fires directly out of `apply_turn` — no Phase 2 round
+        // trip is needed to recover from the bad upgrade.
         apply_turn(&mut mapper, "north", &TurnResult::observation(snap(3, "B")), &mut death);
-        assert_eq!(
-            mapper.graph.connections().iter().find(|c| c.origin == 1 && c.dir == Direction::N).map(|c| c.dest),
-            Some(3),
-            "Phase 1 minted the new (wrong) edge, same as it always has"
-        );
-
-        // ── 4: Phase 2's first-walk probe disagrees. Deleted, marked random again. ──
-        state.random_exit_search =
-            Some(RandomExitSearch { origin: 1, dir: Direction::N, live_dest: 3, was_random: false, token: 8 });
-        let run = ProbeRun { baseline: WorldPrint::default(), steps: vec![step(Some(2)), step(Some(4))] };
-        assert!(deliver(&mut state, &mut mapper, &test_answer(8, Some(run))), "the map changed again");
         assert_eq!(
             mapper.graph.connections().iter().find(|c| c.origin == 1 && c.dir == Direction::N),
             None,
-            "the wrong edge is gone"
+            "SQ-1264: the contradiction rule removes the edge on the spot rather than minting a \
+             second wrong one over it"
         );
-        assert!(mapper.graph.is_random_exit(1, Direction::N), "and the direction is random once more");
-        // SQ-1261: the first-walk disagreement names the live destination AND every shadow
-        // attempt that reached somewhere — the player's own eyes plus both reseeded witnesses.
+        assert!(
+            mapper.graph.is_random_exit(1, Direction::N),
+            "and marks the direction random again immediately, with no Phase 2 involved"
+        );
         assert_eq!(
             mapper.graph.random_destinations(1, Direction::N),
-            &[3, 2, 4],
-            "live destination first, then each shadow attempt, first-seen order"
+            &[2, 3],
+            "the edge's old (now-proven-wrong) destination, then the new live landing"
         );
     }
 

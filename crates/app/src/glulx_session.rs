@@ -118,6 +118,35 @@ pub struct GlulxSession {
     /// same story survives `restore_state`/`restore_game_save` (a foreign
     /// engine's save is refused before the swap), so the layout does too.
     parse_names: std::cell::OnceCell<Option<gvm::objects::ParseNames>>,
+    /// The `door_dir`/`*_to`/`door_to` exit-table convention (SQ-1264),
+    /// derived once per story through [`Self::parse_names`] — see
+    /// `gvm::world` for what it recovers and why it never changes for the life
+    /// of a loaded story (same reasoning as [`parse_names`](Self::parse_names)
+    /// itself: the property TABLE STRUCTURE Inform compiled in is read-only
+    /// game data, even though the property *values* it points at can change).
+    /// `None` inside the cell is a real answer — a story with no `door_dir`
+    /// convention (or no readable object tree at all) — not a failure to look.
+    world_model: std::cell::OnceCell<Option<gvm::world::WorldModel>>,
+    /// Reverse map from a room's [`mapper::graph::RoomId`] (SQ-0526's
+    /// `crate::roomid::glulx_room_id` HASH of the object address) back to that
+    /// address (SQ-1264).
+    ///
+    /// `Engine::declared_exit` is asked about `origin` — the room the player
+    /// was standing in when the command that produced THIS turn was typed —
+    /// and by the time it is asked (`turn::finish_command_turn`, after
+    /// `session.submit` has already run the move) the live session has moved
+    /// on to the DESTINATION room. `resolve_handle`'s "re-hash the current
+    /// address" trick therefore cannot answer for `origin` any more, and the
+    /// hash itself cannot be inverted (that is the whole reason it is a hash —
+    /// see the `Introspection handles` note below). So every room the
+    /// room-lock resolves to a real address is remembered here as it is
+    /// discovered ([`Self::room_for`]), and `origin` — a room the player has
+    /// necessarily stood in on some EARLIER turn, or `declared_exit` would
+    /// have nothing to ask about — is always already in the map by the time
+    /// it is looked up. Grows for the life of the session; never needs
+    /// invalidating, because a Glulx object's address is fixed at compile
+    /// time and never moves.
+    room_addrs: std::cell::RefCell<std::collections::HashMap<u16, u32>>,
     /// The [`parse_names`](Self::parse_names) walk folded into the one set the
     /// bulk callers query — "does ANY object answer to this word" (SQ-1176,
     /// SQ-1210). Same shape and soundness argument as
@@ -554,6 +583,8 @@ impl GlulxSession {
             window_dump_cache: Vec::new(),
             disasm_cache: std::cell::RefCell::new(None),
             parse_names: std::cell::OnceCell::new(),
+            world_model: std::cell::OnceCell::new(),
+            room_addrs: std::cell::RefCell::new(std::collections::HashMap::new()),
             object_word_set: std::cell::RefCell::new(None),
             player_addr: std::cell::RefCell::new(None),
             aux: BTreeMap::new(),
@@ -759,6 +790,18 @@ impl GlulxSession {
     pub fn parse_names(&self) -> Option<&gvm::objects::ParseNames> {
         self.parse_names
             .get_or_init(|| gvm::objects::ParseNames::detect(self.machine.mem()).ok())
+            .as_ref()
+    }
+
+    /// This story's `door_dir`/`*_to`/`door_to` exit-table convention
+    /// (SQ-1264), derived on first use through [`Self::parse_names`]. `None`
+    /// when there is no object list to read at all, OR when one was read but
+    /// it names no `door_dir` convention — [`gvm::world::WorldModel::discover`]
+    /// does not distinguish the two (both leave every direction `Unknown`, the
+    /// same answer `zvm::world` gives a ZIL story), so neither does this.
+    fn world_model(&self) -> Option<&gvm::world::WorldModel> {
+        self.world_model
+            .get_or_init(|| self.parse_names().map(|n| gvm::world::WorldModel::discover(self.machine.mem(), n)))
             .as_ref()
     }
 
@@ -1059,11 +1102,14 @@ impl GlulxSession {
     /// the lock existed, and what a game that never locks keeps using.
     fn room_for(&self, name: &str, ram: &[u32]) -> LocationInfo {
         match self.room_lock.room_id(ram) {
-            Some(addr) => zvm::ObjectSnapshot {
-                number: crate::roomid::glulx_room_id(addr),
-                parent: 0,
-                name: name.to_string(),
-            },
+            Some(addr) => {
+                let id = crate::roomid::glulx_room_id(addr);
+                // SQ-1264: remember the address behind this hash — see
+                // `room_addrs`'s field docs for why `declared_exit` needs a
+                // cache rather than being able to invert the hash itself.
+                self.room_addrs.borrow_mut().insert(id, addr);
+                zvm::ObjectSnapshot { number: id, parent: 0, name: name.to_string() }
+            }
             None => heading_to_room(name),
         }
     }
@@ -1716,6 +1762,56 @@ impl Engine for GlulxSession {
 
     fn current_location(&self) -> Option<LocationInfo> {
         self.last_room.clone()
+    }
+
+    /// What `origin`'s own map data declares for `dir` (SQ-1264) — the Glulx
+    /// side of the same seam `GameSession::declared_exit` implements for the
+    /// Z-machine. See [`Self::room_addrs`] for why `origin` (a hashed
+    /// [`mapper::graph::RoomId`], not the object address itself) is looked up
+    /// in a cache rather than inverted: by the time this is asked the live
+    /// session has already moved past the room being asked about.
+    fn declared_exit(
+        &self,
+        origin: mapper::graph::RoomId,
+        dir: mapper::direction::Direction,
+    ) -> crate::engine::DeclaredExit {
+        use crate::engine::DeclaredExit as AppExit;
+        use mapper::direction::Direction as D;
+        let Some(compass) = (match dir {
+            D::N => Some(gvm::world::Compass::N),
+            D::S => Some(gvm::world::Compass::S),
+            D::E => Some(gvm::world::Compass::E),
+            D::W => Some(gvm::world::Compass::W),
+            D::NE => Some(gvm::world::Compass::Ne),
+            D::NW => Some(gvm::world::Compass::Nw),
+            D::SE => Some(gvm::world::Compass::Se),
+            D::SW => Some(gvm::world::Compass::Sw),
+            D::Up => Some(gvm::world::Compass::Up),
+            D::Down => Some(gvm::world::Compass::Down),
+            D::In => Some(gvm::world::Compass::In),
+            D::Out => Some(gvm::world::Compass::Out),
+            D::Unknown => None,
+        }) else {
+            return AppExit::Unknown;
+        };
+        let Some(model) = self.world_model() else { return AppExit::Unknown };
+        let Some(names) = self.parse_names() else { return AppExit::Unknown };
+        let Some(&addr) = self.room_addrs.borrow().get(&origin) else { return AppExit::Unknown };
+        match model.declared_exit(self.machine.mem(), names, addr, compass) {
+            gvm::world::DeclaredExit::Room(r) => AppExit::Room(crate::roomid::glulx_room_id(r)),
+            gvm::world::DeclaredExit::Code => AppExit::Code,
+            gvm::world::DeclaredExit::Message => AppExit::Message,
+            gvm::world::DeclaredExit::Absent => AppExit::Absent,
+            gvm::world::DeclaredExit::Unknown => AppExit::Unknown,
+        }
+    }
+
+    fn rng_seed(&self) -> Option<u32> {
+        Some(self.machine.rng_seed())
+    }
+
+    fn reseed_random(&mut self, seed: u32) {
+        self.machine.set_rng_seed(seed);
     }
 
     fn set_trace_screen(&mut self, on: bool) {

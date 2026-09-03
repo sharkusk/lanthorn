@@ -48,3 +48,5 @@ mod nameonly_room_corroboration;
 mod retired_exit_surfaces;
 #[path = "suites/room_dock_render.rs"]
 mod room_dock_render;
+#[path = "suites/sq1264_forest_randomization.rs"]
+mod sq1264_forest_randomization;
