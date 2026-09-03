@@ -54,6 +54,13 @@ Absolute URLs or no link.
   map box show how many distinct places that is, as a small superscript
   count beside the `?`.
 
+### Docker
+
+- **The browser page now scrolls with a finger, not just a mouse wheel.** A
+  drag on the transcript or map on an iPad or phone now scrolls it, the same
+  as spinning a mouse wheel already did — set `LANTHORN_WEB_TOUCH=off` to turn
+  it back off.
+
 ### Fixed
 
 - **Map connectors no longer take long detours hugging a neighbouring room's

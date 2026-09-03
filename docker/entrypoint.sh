@@ -12,6 +12,13 @@
 #   LANTHORN_WEB_AUDIO        on (default) or off: sound in the browser, via
 #                             lanthorn-audio-relay on its own port
 #   LANTHORN_WEB_AUDIO_PORT   that port (default 7682)
+#   LANTHORN_WEB_TOUCH        on (default) or off: convert a vertical touch
+#                             drag on the served page into wheel-scroll
+#                             reports lanthorn already understands, so the
+#                             transcript and map scroll on a tablet or phone
+#                             (xterm.js's own touch handling only scrolls its
+#                             own viewport, a no-op on lanthorn's alternate
+#                             screen)
 #   LANTHORN_WEB_IMAGES       sixel (default) or halfblocks: how pictures are
 #                             sent to the browser. ttyd's xterm.js can render
 #                             sixel, so covers and v6 art show as real images;
@@ -45,14 +52,19 @@ start_sink() {
 
 # ttyd's own page, with the served IosevkaTerm Nerd Font Mono faces always
 # inlined into <head> (so icons and the map's diagonals render regardless of
-# the visitor's own font) and docker/web-audio.js added only when a browser
-# audio port is live ($1 — empty means audio is off). Generated per start so
-# the audio port, and the font, stay in step with the current environment.
+# the visitor's own font), docker/web-audio.js added only when a browser
+# audio port is live ($1 — empty means audio is off), and docker/web-touch.js
+# added unless LANTHORN_WEB_TOUCH=off. Generated per start so the audio port,
+# the font, and the touch setting stay in step with the current environment.
 build_index() {
     audio_port="$1"
     src="$LANTHORN_SHARE_DIR/ttyd-index.html"
     fonts_dir="$LANTHORN_SHARE_DIR/fonts"
     family="IosevkaTerm Nerd Font Mono"
+    touch_on=""
+    if [ "${LANTHORN_WEB_TOUCH:-on}" != "off" ]; then
+        touch_on="1"
+    fi
 
     # `base64 | tr -d` rather than GNU's `-w0`, so the same script runs under
     # macOS's BSD coreutils for `docker/test-entrypoint.sh`.
@@ -74,17 +86,24 @@ build_index() {
     } > "$css_tmp"
 
     merged_tmp="$(mktemp)"
-    awk -v f="$LANTHORN_SHARE_DIR/web-audio.js" -v port="$audio_port" '
-        BEGIN { if (port != "") { while ((getline l < f) > 0) js = js l "\n" } }
+    awk -v f="$LANTHORN_SHARE_DIR/web-audio.js" -v port="$audio_port" \
+        -v tf="$LANTHORN_SHARE_DIR/web-touch.js" -v touch_on="$touch_on" '
+        BEGIN {
+            if (port != "") { while ((getline l < f) > 0) js = js l "\n" }
+            if (touch_on != "") { while ((getline l < tf) > 0) tjs = tjs l "\n" }
+        }
         {
             i = index($0, "</head>")
             if (i && !done) {
                 head_insert = ""
                 if (port != "") {
-                    head_insert = "\n<script>window.LANTHORN_WEB_AUDIO_PORT=" port ";\n" js "</script>"
+                    head_insert = head_insert "\n<script>window.LANTHORN_WEB_AUDIO_PORT=" port ";\n" js "</script>"
                 }
-                # The marker always lands on a line of its own — with no
-                # audio script, head_insert is empty and substr($0,1,i-1)
+                if (touch_on != "") {
+                    head_insert = head_insert "\n<script>\n" tjs "</script>"
+                }
+                # The marker always lands on a line of its own — with neither
+                # script, head_insert is empty and substr($0,1,i-1)
                 # would otherwise run straight into it on the same line,
                 # which the head/tail splice below would then drop whole.
                 print substr($0, 1, i - 1) head_insert "\n@@LANTHORN_FONT_CSS@@\n" substr($0, i)

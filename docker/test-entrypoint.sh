@@ -2,7 +2,8 @@
 # Regression test for docker/entrypoint.sh's build_index(): the served page
 # always carries both @font-face rules (IosevkaTerm Nerd Font Mono, Regular
 # and Bold — see the Dockerfile's font-fetch stage, SQ-1256), the audio
-# script is added only when a browser audio port is given, and — either way —
+# script is added only when a browser audio port is given, the touch-scroll
+# script (SQ-1262) is added unless LANTHORN_WEB_TOUCH=off, and — either way —
 # everything from ttyd's original page, both before and after </head>,
 # survives the splice unchanged.
 #
@@ -23,6 +24,7 @@ trap 'rm -rf "$fixture_dir"' EXIT
 
 mkdir -p "$fixture_dir/fonts"
 cp "$repo_root/docker/web-audio.js" "$fixture_dir/web-audio.js"
+cp "$repo_root/docker/web-touch.js" "$fixture_dir/web-touch.js"
 
 cat > "$fixture_dir/ttyd-index.html" <<'HTML'
 <!DOCTYPE html><html><head><meta charset="utf-8"><title>ttyd</title></head><body><div id="terminal"></div></body></html>
@@ -99,6 +101,9 @@ extract_b64 "$out1" 700 | base64 -d > "$fixture_dir/decoded_bold_1.bin"
 cmp -s "$fixture_dir/decoded_bold_1.bin" "$fixture_dir/fonts/IosevkaTermNerdFontMono-Bold.woff2"
 check "no-audio: Bold (700) data: URI decodes to exact original bytes" "$?"
 
+grep -q 'function onTouchMove' "$out1"
+check "no-audio: touch-scroll script is inlined even when audio is off" "$?"
+
 # --- audio on ---
 out2="$fixture_dir/out_audio.html"
 build_index "7682" > "$out2"
@@ -129,6 +134,27 @@ script_line="$(grep -n '<script>' "$out2" | head -1 | cut -d: -f1)"
 head_line="$(grep -n '</head>' "$out2" | head -1 | cut -d: -f1)"
 [ -n "$script_line" ] && [ -n "$head_line" ] && [ "$script_line" -lt "$head_line" ]
 check "audio: <script> lands before </head>" "$?"
+
+grep -q 'function onTouchMove' "$out2"
+check "audio: touch-scroll script is inlined alongside the audio script" "$?"
+
+# --- touch off ---
+out3="$fixture_dir/out_notouch.html"
+LANTHORN_WEB_TOUCH=off
+export LANTHORN_WEB_TOUCH
+build_index "" > "$out3"
+unset LANTHORN_WEB_TOUCH
+
+grep -q 'function onTouchMove' "$out3"
+[ "$?" != "0" ]
+check "LANTHORN_WEB_TOUCH=off: touch-scroll script is not injected" "$?"
+
+n="$(grep -c '@font-face' "$out3")"
+[ "$n" = "2" ]
+check "LANTHORN_WEB_TOUCH=off: still exactly two @font-face rules (got $n)" "$?"
+
+grep -q '<div id="terminal"></div>' "$out3"
+check "LANTHORN_WEB_TOUCH=off: body content after </head> survives" "$?"
 
 if [ "$fail" != "0" ]; then
     echo "docker/test-entrypoint.sh: FAILED" >&2
