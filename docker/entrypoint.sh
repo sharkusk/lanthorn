@@ -53,11 +53,18 @@ start_sink() {
 # ttyd's own page, with the served IosevkaTerm Nerd Font Mono faces always
 # inlined into <head> (so icons and the map's diagonals render regardless of
 # the visitor's own font), docker/web-audio.js added only when a browser
-# audio port is live ($1 — empty means audio is off), and docker/web-touch.js
-# added unless LANTHORN_WEB_TOUCH=off. Generated per start so the audio port,
-# the font, and the touch setting stay in step with the current environment.
+# audio port is live ($1 — empty means audio is off), docker/web-touch.js
+# added unless LANTHORN_WEB_TOUCH=off, and docker/web-font.js always added
+# ($2/$3 — the same fontFamily/fontSize string ttyd's own `-t` options get,
+# see the dispatch below). web-font.js re-measures xterm.js's character cell
+# once the embedded font is actually ready, so the page doesn't cold-open
+# measured against the fallback monospace and spaced out (SQ-1263). Generated
+# per start so the audio port, the font, and the touch setting stay in step
+# with the current environment.
 build_index() {
     audio_port="$1"
+    term_font_family="$2"
+    term_font_size="$3"
     src="$LANTHORN_SHARE_DIR/ttyd-index.html"
     fonts_dir="$LANTHORN_SHARE_DIR/fonts"
     family="IosevkaTerm Nerd Font Mono"
@@ -87,10 +94,12 @@ build_index() {
 
     merged_tmp="$(mktemp)"
     awk -v f="$LANTHORN_SHARE_DIR/web-audio.js" -v port="$audio_port" \
-        -v tf="$LANTHORN_SHARE_DIR/web-touch.js" -v touch_on="$touch_on" '
+        -v tf="$LANTHORN_SHARE_DIR/web-touch.js" -v touch_on="$touch_on" \
+        -v ff="$LANTHORN_SHARE_DIR/web-font.js" -v tfont="$term_font_family" -v tsize="$term_font_size" '
         BEGIN {
             if (port != "") { while ((getline l < f) > 0) js = js l "\n" }
             if (touch_on != "") { while ((getline l < tf) > 0) tjs = tjs l "\n" }
+            while ((getline l < ff) > 0) fjs = fjs l "\n"
         }
         {
             i = index($0, "</head>")
@@ -102,10 +111,10 @@ build_index() {
                 if (touch_on != "") {
                     head_insert = head_insert "\n<script>\n" tjs "</script>"
                 }
-                # The marker always lands on a line of its own — with neither
-                # script, head_insert is empty and substr($0,1,i-1)
-                # would otherwise run straight into it on the same line,
-                # which the head/tail splice below would then drop whole.
+                head_insert = head_insert "\n<script>window.LANTHORN_WEB_FONT=" "\047" tfont "\047" ";window.LANTHORN_WEB_FONT_SIZE=" tsize ";\n" fjs "</script>"
+                # The marker always lands on a line of its own — substr($0,1,i-1)
+                # would otherwise run straight into head_insert on the same
+                # line, which the head/tail splice below would then drop whole.
                 print substr($0, 1, i - 1) head_insert "\n@@LANTHORN_FONT_CSS@@\n" substr($0, i)
                 done = 1
             } else {
@@ -144,11 +153,24 @@ if [ "${1:-}" = "serve" ]; then
         audio_port="${LANTHORN_WEB_AUDIO_PORT:-7682}"
         LANTHORN_WEB_AUDIO_BIND="0.0.0.0:$audio_port" lanthorn-audio-relay &
     fi
+
+    # The embedded face stays second in the stack, so an override that lacks
+    # the map's diagonals or the Nerd Font icons still falls back to it
+    # instead of to the browser's own default monospace. Computed here,
+    # before build_index, so the page's window.LANTHORN_WEB_FONT (used to
+    # re-measure once that face is ready, see web-font.js) and ttyd's own
+    # `-t fontFamily=` below name the exact same string.
+    font_family="IosevkaTerm Nerd Font Mono"
+    if [ -n "${LANTHORN_WEB_FONT:-}" ]; then
+        font_family="${LANTHORN_WEB_FONT}, IosevkaTerm Nerd Font Mono"
+    fi
+    font_size="${LANTHORN_WEB_FONT_SIZE:-16}"
+
     # build_index always inlines the served font; it adds the audio script
     # only when audio_port is non-empty. --index serves the generated page
     # either way; --url-arg (letting the page pass its session id back) is
     # only needed when that page opens the audio socket.
-    build_index "$audio_port" > /tmp/lanthorn-index.html
+    build_index "$audio_port" "$font_family" "$font_size" > /tmp/lanthorn-index.html
     set -- --index /tmp/lanthorn-index.html "$@"
     if [ -n "$audio_port" ]; then
         set -- --url-arg "$@"
@@ -157,13 +179,6 @@ if [ "${1:-}" = "serve" ]; then
         set -- --credential "$LANTHORN_WEB_CREDENTIAL" "$@"
     fi
 
-    # The embedded face stays second in the stack, so an override that lacks
-    # the map's diagonals or the Nerd Font icons still falls back to it
-    # instead of to the browser's own default monospace.
-    font_family="IosevkaTerm Nerd Font Mono"
-    if [ -n "${LANTHORN_WEB_FONT:-}" ]; then
-        font_family="${LANTHORN_WEB_FONT}, IosevkaTerm Nerd Font Mono"
-    fi
     # --writable: ttyd >= 1.7 is read-only by default, which would make the
     # game unplayable. disableLeaveAlert spares players a confirm-on-close
     # dialog; titleFixed names the browser tab.
@@ -173,7 +188,7 @@ if [ "${1:-}" = "serve" ]; then
         -t disableLeaveAlert=true \
         -t enableSixel=true \
         -t "fontFamily=$font_family" \
-        -t "fontSize=${LANTHORN_WEB_FONT_SIZE:-16}" \
+        -t "fontSize=$font_size" \
         "$@"
 fi
 

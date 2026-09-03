@@ -131,6 +131,7 @@ COPY --from=ttyd-fetch /ttyd-index.html /usr/local/share/lanthorn/ttyd-index.htm
 COPY --from=font-fetch /fonts/ /usr/local/share/lanthorn/fonts/
 COPY docker/web-audio.js /usr/local/share/lanthorn/web-audio.js
 COPY docker/web-touch.js /usr/local/share/lanthorn/web-touch.js
+COPY docker/web-font.js /usr/local/share/lanthorn/web-font.js
 COPY docker/entrypoint.sh /usr/local/bin/lanthorn-entrypoint
 COPY docker/serve-session.sh /usr/local/bin/lanthorn-serve-session
 

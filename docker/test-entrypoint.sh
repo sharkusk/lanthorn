@@ -3,9 +3,11 @@
 # always carries both @font-face rules (IosevkaTerm Nerd Font Mono, Regular
 # and Bold — see the Dockerfile's font-fetch stage, SQ-1256), the audio
 # script is added only when a browser audio port is given, the touch-scroll
-# script (SQ-1262) is added unless LANTHORN_WEB_TOUCH=off, and — either way —
-# everything from ttyd's original page, both before and after </head>,
-# survives the splice unchanged.
+# script (SQ-1262) is added unless LANTHORN_WEB_TOUCH=off, the font-ready
+# script (SQ-1263) is always added and carries the same fontFamily/fontSize
+# ttyd's own `-t` options get, and — either way — everything from ttyd's
+# original page, both before and after </head>, survives the splice
+# unchanged.
 #
 # Self-contained: builds a fixture directory instead of touching the image's
 # real /usr/local/share/lanthorn (LANTHORN_SHARE_DIR overrides it), so this
@@ -25,6 +27,7 @@ trap 'rm -rf "$fixture_dir"' EXIT
 mkdir -p "$fixture_dir/fonts"
 cp "$repo_root/docker/web-audio.js" "$fixture_dir/web-audio.js"
 cp "$repo_root/docker/web-touch.js" "$fixture_dir/web-touch.js"
+cp "$repo_root/docker/web-font.js" "$fixture_dir/web-font.js"
 
 cat > "$fixture_dir/ttyd-index.html" <<'HTML'
 <!DOCTYPE html><html><head><meta charset="utf-8"><title>ttyd</title></head><body><div id="terminal"></div></body></html>
@@ -75,9 +78,12 @@ extract_b64() {
     ' "$1"
 }
 
+fixture_font_family="Fixture Font, IosevkaTerm Nerd Font Mono"
+fixture_font_size="16"
+
 # --- audio off ---
 out1="$fixture_dir/out_noaudio.html"
-build_index "" > "$out1"
+build_index "" "$fixture_font_family" "$fixture_font_size" > "$out1"
 
 n="$(grep -c '@font-face' "$out1")"
 [ "$n" = "2" ]
@@ -104,9 +110,15 @@ check "no-audio: Bold (700) data: URI decodes to exact original bytes" "$?"
 grep -q 'function onTouchMove' "$out1"
 check "no-audio: touch-scroll script is inlined even when audio is off" "$?"
 
+grep -q "window.LANTHORN_WEB_FONT='$fixture_font_family';window.LANTHORN_WEB_FONT_SIZE=$fixture_font_size;" "$out1"
+check "no-audio: injected window.LANTHORN_WEB_FONT/SIZE match what the page uses" "$?"
+
+grep -q 'function remeasure' "$out1"
+check "no-audio: font-ready script is inlined even when audio is off" "$?"
+
 # --- audio on ---
 out2="$fixture_dir/out_audio.html"
-build_index "7682" > "$out2"
+build_index "7682" "$fixture_font_family" "$fixture_font_size" > "$out2"
 
 grep -q 'window.LANTHORN_WEB_AUDIO_PORT=7682;' "$out2"
 check "audio: script carries the given port" "$?"
@@ -138,11 +150,17 @@ check "audio: <script> lands before </head>" "$?"
 grep -q 'function onTouchMove' "$out2"
 check "audio: touch-scroll script is inlined alongside the audio script" "$?"
 
+grep -q "window.LANTHORN_WEB_FONT='$fixture_font_family';window.LANTHORN_WEB_FONT_SIZE=$fixture_font_size;" "$out2"
+check "audio: injected window.LANTHORN_WEB_FONT/SIZE match what the page uses" "$?"
+
+grep -q 'function remeasure' "$out2"
+check "audio: font-ready script is inlined alongside the audio script" "$?"
+
 # --- touch off ---
 out3="$fixture_dir/out_notouch.html"
 LANTHORN_WEB_TOUCH=off
 export LANTHORN_WEB_TOUCH
-build_index "" > "$out3"
+build_index "" "$fixture_font_family" "$fixture_font_size" > "$out3"
 unset LANTHORN_WEB_TOUCH
 
 grep -q 'function onTouchMove' "$out3"
@@ -155,6 +173,12 @@ check "LANTHORN_WEB_TOUCH=off: still exactly two @font-face rules (got $n)" "$?"
 
 grep -q '<div id="terminal"></div>' "$out3"
 check "LANTHORN_WEB_TOUCH=off: body content after </head> survives" "$?"
+
+grep -q 'function remeasure' "$out3"
+check "LANTHORN_WEB_TOUCH=off: font-ready script is still injected" "$?"
+
+grep -q "window.LANTHORN_WEB_FONT='$fixture_font_family';window.LANTHORN_WEB_FONT_SIZE=$fixture_font_size;" "$out3"
+check "LANTHORN_WEB_TOUCH=off: injected window.LANTHORN_WEB_FONT/SIZE still match" "$?"
 
 if [ "$fail" != "0" ]; then
     echo "docker/test-entrypoint.sh: FAILED" >&2

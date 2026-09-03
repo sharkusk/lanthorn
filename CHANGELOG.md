@@ -60,6 +60,9 @@ Absolute URLs or no link.
   drag on the transcript or map on an iPad or phone now scrolls it, the same
   as spinning a mouse wheel already did — set `LANTHORN_WEB_TOUCH=off` to turn
   it back off.
+- **The browser page no longer opens with stretched-out letter spacing on its
+  first visit.** A refresh used to fix it; now the very first load looks
+  right too.
 
 ### Fixed
 
