@@ -373,13 +373,13 @@ Options:
 
 fn main() {
     let argv: Vec<String> = env::args().collect();
-    if cli_host::handled_common_flags(&argv, HELP, env!("CARGO_PKG_NAME"), buildinfo::LONG) {
+    if cli_host::handled_common_flags(&argv, HELP, env!("CARGO_BIN_NAME"), buildinfo::LONG) {
         return;
     }
     let args = match parse_args(&argv) {
         // Already the only CLI that rejected unknown flags; now it shows the
         // help alongside the message, like the other two (SQ-0614).
-        Err(e) => cli_host::usage_error(env!("CARGO_PKG_NAME"), &e, HELP),
+        Err(e) => cli_host::usage_error(env!("CARGO_BIN_NAME"), &e, HELP),
         Ok(a) => a,
     };
 

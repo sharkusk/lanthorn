@@ -1524,6 +1524,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "lanthorn-scott-cli"
+version = "0.4.1"
+dependencies = [
+ "crossterm",
+ "lanthorn-buildinfo",
+ "lanthorn-cli-host",
+ "lanthorn-scott",
+]
+
+[[package]]
 name = "lanthorn-verb-synonyms"
 version = "0.4.1"
 
@@ -1532,6 +1542,19 @@ name = "lanthorn-zvm"
 version = "0.4.1"
 dependencies = [
  "lanthorn-grammar-model",
+]
+
+[[package]]
+name = "lanthorn-zvm-cli"
+version = "0.4.1"
+dependencies = [
+ "crossterm",
+ "lanthorn-audio",
+ "lanthorn-blorb",
+ "lanthorn-buildinfo",
+ "lanthorn-cli-host",
+ "lanthorn-zvm",
+ "qwertty-term-vt",
 ]
 
 [[package]]
@@ -2638,16 +2661,6 @@ name = "scopeguard"
 version = "1.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "94143f37725109f92c262ed2cf5e59bce7498c01bcc1502d7b9afe439a4e9f49"
-
-[[package]]
-name = "scott-cli"
-version = "0.4.1"
-dependencies = [
- "crossterm",
- "lanthorn-buildinfo",
- "lanthorn-cli-host",
- "lanthorn-scott",
-]
 
 [[package]]
 name = "self_cell"
@@ -4064,17 +4077,4 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "27bc9d5b815bc103f142aa054f561d9187d191692ec7c2d1e2b4737f8dbd7296"
 dependencies = [
  "zune-core",
-]
-
-[[package]]
-name = "zvm-cli"
-version = "0.4.1"
-dependencies = [
- "crossterm",
- "lanthorn-audio",
- "lanthorn-blorb",
- "lanthorn-buildinfo",
- "lanthorn-cli-host",
- "lanthorn-zvm",
- "qwertty-term-vt",
 ]

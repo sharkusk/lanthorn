@@ -1,5 +1,5 @@
 [package]
-name = "zvm-cli"
+name = "lanthorn-zvm-cli"
 description = "A no-map, DOS-style command-line Z-machine player (interactive fiction), including original release disk images"
 version.workspace = true
 edition = "2021"
@@ -10,6 +10,13 @@ rust-version.workspace = true
 keywords = ["z-machine", "interactive-fiction", "cli", "infocom"]
 categories = ["command-line-utilities", "games"]
 include = ["src/**", "Cargo.toml"]
+
+[[bin]]
+# Package renamed for crates.io (SQ-1250 follow-up); the installed binary stays
+# "zvm-cli" (release.yml's archives and the CLI's own --help/--version name
+# it that way).
+name = "zvm-cli"
+path = "src/main.rs"
 
 [dependencies]
 buildinfo = { package = "lanthorn-buildinfo", path = "../buildinfo", version = "0.4.1" }
@@ -27,6 +34,6 @@ crossterm = "0.29"
 # `app` for the same reason (SQ-0764). Used from `screen.rs`'s own test module, so
 # the proof runs against `enter_region`/`leave_region` themselves rather than against
 # copies of their output. TESTS ONLY: the shipped binary must never gain it
-# (`cargo tree -p zvm-cli -e normal | grep -c qwertty` must print 0).
+# (`cargo tree -p lanthorn-zvm-cli -e normal | grep -c qwertty` must print 0).
 [dev-dependencies]
 qwertty-term-vt = "0.4.0"

@@ -94,9 +94,9 @@ jobs:
         shell: bash
         env:
           # The four shipped binaries: the mapping TUI + the three no-map CLIs.
-          # Package names (SQ-1250): "app" -> "lanthorn", "gvm-cli" ->
-          # "lanthorn-gvm-cli" (its binary is still named "gvm-cli", see below).
-          BINS: "-p lanthorn -p zvm-cli -p lanthorn-gvm-cli -p scott-cli"
+          # Package names (SQ-1250): "app" -> "lanthorn" and every CLI ->
+          # "lanthorn-<name>-cli" (the binaries keep their bare names, see below).
+          BINS: "-p lanthorn -p lanthorn-zvm-cli -p lanthorn-gvm-cli -p lanthorn-scott-cli"
         run: |
           set -euo pipefail
           if [ "${{ matrix.name }}" = "macos-universal2" ]; then

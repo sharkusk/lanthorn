@@ -758,14 +758,14 @@ const OPTS: &[cli_host::Opt] = &[
 
 fn main() {
     let argv: Vec<String> = env::args().collect();
-    if cli_host::handled_common_flags(&argv, HELP, env!("CARGO_PKG_NAME"), buildinfo::LONG) {
+    if cli_host::handled_common_flags(&argv, HELP, env!("CARGO_BIN_NAME"), buildinfo::LONG) {
         return;
     }
     // Resolve the terminal mode FIRST: `TerminalBackend::new` below reads the
     // installed mode to decide whether it may emit escapes, so `--plain` has to
     // be known before the backend exists (SQ-0606).
     let mode = HostMode::detect_with(cli_host::plain_requested(&argv)).install();
-    let name = env!("CARGO_PKG_NAME");
+    let name = env!("CARGO_BIN_NAME");
     let m = match cli_host::scan(&argv, OPTS) {
         Ok(m) => m,
         Err(e) => cli_host::usage_error(name, &e, HELP),

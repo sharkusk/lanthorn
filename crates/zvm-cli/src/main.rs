@@ -1422,7 +1422,7 @@ fn comma_run(items: impl Iterator<Item = String>) -> Vec<String> {
 
 fn main() {
     let argv: Vec<String> = env::args().collect();
-    if cli_host::handled_common_flags(&argv, &help(), env!("CARGO_PKG_NAME"), buildinfo::LONG) {
+    if cli_host::handled_common_flags(&argv, &help(), env!("CARGO_BIN_NAME"), buildinfo::LONG) {
         return;
     }
     // Answered beside `--help`, and for the same reason: it describes the
@@ -1434,10 +1434,10 @@ fn main() {
     }
     let args = match parse_args(&argv) {
         Ok(a) => a,
-        Err(e) => cli_host::usage_error(env!("CARGO_PKG_NAME"), &e, &help()),
+        Err(e) => cli_host::usage_error(env!("CARGO_BIN_NAME"), &e, &help()),
     };
     let Some(story_arg) = args.story.clone() else {
-        cli_host::usage_error(env!("CARGO_PKG_NAME"), "no story file given", &help());
+        cli_host::usage_error(env!("CARGO_BIN_NAME"), "no story file given", &help());
     };
     let story_path = std::path::PathBuf::from(&story_arg);
 

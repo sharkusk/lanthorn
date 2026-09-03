@@ -48,7 +48,7 @@ RUN --mount=type=cache,target=/usr/local/cargo/registry \
     --mount=type=cache,target=/usr/local/rustup \
     --mount=type=cache,target=/src/target \
     CARGO_BUILD_JOBS="$(nproc)" \
-    cargo build --release --locked -p lanthorn -p zvm-cli -p lanthorn-gvm-cli -p scott-cli -p audio-relay \
+    cargo build --release --locked -p lanthorn -p lanthorn-zvm-cli -p lanthorn-gvm-cli -p lanthorn-scott-cli -p audio-relay \
     && mkdir -p /out \
     && cp target/release/lanthorn target/release/zvm-cli \
           target/release/gvm-cli target/release/scott-cli \

@@ -101,9 +101,9 @@ cargo publish -p lanthorn-mapper
 cargo publish -p lanthorn-audio
 cargo publish -p lanthorn-buildinfo
 cargo publish -p lanthorn-cli-host
-cargo publish -p zvm-cli
+cargo publish -p lanthorn-zvm-cli
 cargo publish -p lanthorn-gvm-cli
-cargo publish -p scott-cli
+cargo publish -p lanthorn-scott-cli
 cargo publish -p lanthorn
 ```
 
