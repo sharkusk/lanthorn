@@ -1,11 +1,23 @@
 [package]
-name = "zvm"
+name = "lanthorn-zvm"
+description = "A from-scratch, zero-dependency Z-machine virtual machine (versions 3-8, including graphical Version 6) for interactive fiction"
 version.workspace = true
 edition = "2021"
 license.workspace = true
-
+repository.workspace = true
+homepage.workspace = true
+rust-version.workspace = true
+readme = "README.md"
+keywords = ["z-machine", "interactive-fiction", "infocom", "zcode", "emulator"]
+categories = ["emulators", "parser-implementations"]
+include = ["src/**", "Cargo.toml", "README.md"]
 
 [lib]
+# Package renamed for crates.io (SQ-1250); the crate name every `use zvm::…`
+# in the workspace resolves to stays "zvm", and every `-p zvm` in CI/docs
+# became `-p lanthorn-zvm` instead (cargo's `-p` matches package name, not
+# this field).
+name = "zvm"
 # No doctests here; skip the rustdoc doctest pass (seconds of harness
 # compilation for zero tests). Remove if real doctests are added.
 doctest = false
@@ -13,4 +25,4 @@ doctest = false
 # The grammar value types both VM crates return (SQ-1103) — an internal,
 # zero-dependency workspace crate, so this stays a zero-EXTERNAL-dependency
 # crate exactly as before.
-grammar-model = { path = "../grammar-model" }
+grammar-model = { package = "lanthorn-grammar-model", path = "../grammar-model", version = "0.4.1" }

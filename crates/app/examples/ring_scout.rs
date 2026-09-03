@@ -34,12 +34,12 @@
 //!   content-carved ring is read against — not the ring itself.
 //!
 //! ```sh
-//! cargo run -q -p app --example ring_scout -- --story stories/zork0-r393-s890714.z6
-//! cargo run -q -p app --example ring_scout -- --all --size 100x40
-//! cargo run -q -p app --example ring_scout -- --story "stories/James Clavell's Shogun.adf" --taps 1 --runs
-//! cargo run -q -p app --example ring_scout -- --story stories/arthur-r74-s890714.z6 \
+//! cargo run -q -p lanthorn --example ring_scout -- --story stories/zork0-r393-s890714.z6
+//! cargo run -q -p lanthorn --example ring_scout -- --all --size 100x40
+//! cargo run -q -p lanthorn --example ring_scout -- --story "stories/James Clavell's Shogun.adf" --taps 1 --runs
+//! cargo run -q -p lanthorn --example ring_scout -- --story stories/arthur-r74-s890714.z6 \
 //!     --keys n --taps 12 --bands --size 70x19
-//! cargo run -q -p app --example ring_scout -- --story stories/InfocomMasterpieces.img \
+//! cargo run -q -p lanthorn --example ring_scout -- --story stories/InfocomMasterpieces.img \
 //!     --entry arthur --keys n
 //! ```
 //!

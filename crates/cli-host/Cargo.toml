@@ -1,14 +1,28 @@
 [package]
-name = "cli-host"
+name = "lanthorn-cli-host"
+description = "Shared terminal/CLI plumbing (help/version flags, input/EOF handling, save-directory naming) for lanthorn's no-map command-line players"
 version.workspace = true
 edition = "2021"
 license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+rust-version.workspace = true
+readme = "README.md"
+keywords = ["cli", "terminal", "interactive-fiction"]
+categories = ["command-line-utilities"]
+include = ["src/**", "Cargo.toml", "README.md"]
+
+[lib]
+# Package renamed for crates.io (SQ-1250); the crate name every `use
+# cli_host::…` / `cli_host::…` reference in the workspace resolves to stays
+# "cli_host".
+name = "cli_host"
 
 [dependencies]
 # SQ-0850: the per-game save key of a story mounted out of a disk image is its
 # release and serial, which means mounting the image to read them. `blorb` takes
 # no external dependencies of its own, so this costs the CLIs nothing.
-blorb = { path = "../blorb" }
+blorb = { package = "lanthorn-blorb", path = "../blorb", version = "0.4.1" }
 crossterm = "0.29"
 
 # SQ-0909: `pin.rs` claims that a scroll region discards the lines that scroll out
@@ -17,4 +31,3 @@ crossterm = "0.29"
 # folklore. TESTS ONLY: no CLI binary may gain it.
 [dev-dependencies]
 qwertty-term-vt = "0.4.0"
-

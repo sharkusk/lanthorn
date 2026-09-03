@@ -1,8 +1,20 @@
 [package]
-name = "app"
+# Package renamed for crates.io (SQ-1250): "app" -> "lanthorn". Every
+# `-p app` invocation across CI/docs became `-p lanthorn` (cargo's `-p`
+# matches package name, not the `[lib] name` below, which is unchanged so
+# every `use app::…` in the integration tests keeps working).
+name = "lanthorn"
+description = "A terminal interactive-fiction interpreter (Z-machine, Glulx, Scott Adams) with live automapping"
 version.workspace = true
 edition = "2021"
 license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+rust-version.workspace = true
+readme = "../../README.md"
+keywords = ["interactive-fiction", "z-machine", "glulx", "terminal", "tui"]
+categories = ["games", "command-line-utilities"]
+include = ["src/**", "assets/**", "Cargo.toml"]
 
 [lib]
 name = "app"
@@ -14,6 +26,34 @@ doctest = false
 [[bin]]
 name = "lanthorn"
 path = "src/main.rs"
+
+# `cargo binstall lanthorn` (SQ-1250) fetches a prebuilt release archive
+# instead of compiling. `release.yml` names archives
+# "lanthorn-{version}-{name}.{tar.gz|zip}" where {name} is NOT a Rust target
+# triple — "linux-x86_64" / "macos-universal2" / "windows-x86_64" — with one
+# macOS archive already universal across both Apple triples, so there is no
+# single templated `pkg-url` that covers all three; each shipped triple is an
+# explicit override instead, and a triple release.yml does not build (e.g.
+# aarch64-unknown-linux-gnu) has none, so binstall falls back to a source
+# build for it rather than guessing a URL. Every archive holds the bin at its
+# top level (`dist/<name>/lanthorn`, alongside README.md and LICENSE), no
+# nested dir.
+[package.metadata.binstall.overrides.x86_64-unknown-linux-gnu]
+pkg-url = "{ repo }/releases/download/v{ version }/lanthorn-{ version }-linux-x86_64.tar.gz"
+bin-dir = "lanthorn-{ version }-linux-x86_64/{ bin }{ binary-ext }"
+
+[package.metadata.binstall.overrides.aarch64-apple-darwin]
+pkg-url = "{ repo }/releases/download/v{ version }/lanthorn-{ version }-macos-universal2.tar.gz"
+bin-dir = "lanthorn-{ version }-macos-universal2/{ bin }{ binary-ext }"
+
+[package.metadata.binstall.overrides.x86_64-apple-darwin]
+pkg-url = "{ repo }/releases/download/v{ version }/lanthorn-{ version }-macos-universal2.tar.gz"
+bin-dir = "lanthorn-{ version }-macos-universal2/{ bin }{ binary-ext }"
+
+[package.metadata.binstall.overrides.x86_64-pc-windows-msvc]
+pkg-url = "{ repo }/releases/download/v{ version }/lanthorn-{ version }-windows-x86_64.zip"
+pkg-fmt = "zip"
+bin-dir = "lanthorn-{ version }-windows-x86_64/{ bin }{ binary-ext }"
 
 # SQ-1242: `app`'s ~3,271 in-crate `#[test]`s (all under `#[cfg(test)] mod tests`
 # blocks, one per source file) are gated behind these marker features instead of
@@ -40,24 +80,24 @@ t-misc = []     # everything with no closer home: anim, assets, docs_reference, 
 t-all = ["t-input", "t-render", "t-picker", "t-session", "t-guidance", "t-persist", "t-theme", "t-state", "t-misc"]
 
 [dependencies]
-buildinfo = { path = "../buildinfo" }
+buildinfo = { package = "lanthorn-buildinfo", path = "../buildinfo", version = "0.4.1" }
 # SQ-0850: the per-game save-directory key and the canonical-title table the
 # readable half of it comes from. Shared with `zvm-cli` so the TUI and the CLI
 # cannot name one game's save directory two different ways.
-cli-host = { path = "../cli-host" }
-zvm = { path = "../zvm" }
-gvm = { path = "../gvm" }
-scott = { path = "../scott" }
+cli-host = { package = "lanthorn-cli-host", path = "../cli-host", version = "0.4.1" }
+zvm = { package = "lanthorn-zvm", path = "../zvm", version = "0.4.1" }
+gvm = { package = "lanthorn-gvm", path = "../gvm", version = "0.4.1" }
+scott = { package = "lanthorn-scott", path = "../scott", version = "0.4.1" }
 # SQ-1041: the shape of what a story's parser accepts, produced by both grammar
 # readers, so the vocabulary offer is one piece of code for every engine.
-grammar-model = { path = "../grammar-model" }
+grammar-model = { package = "lanthorn-grammar-model", path = "../grammar-model", version = "0.4.1" }
 # SQ-1119: the one thing a story file cannot answer — that `illuminate` means
 # `light`. A shipped table, parsed lazily behind a `OnceLock` on the first
 # rejected word, so a session that never has one never reads it.
-verb-synonyms = { path = "../verb-synonyms" }
-mapper = { path = "../mapper" }
-blorb = { path = "../blorb" }
-audio = { path = "../audio" }
+verb-synonyms = { package = "lanthorn-verb-synonyms", path = "../verb-synonyms", version = "0.4.1" }
+mapper = { package = "lanthorn-mapper", path = "../mapper", version = "0.4.1" }
+blorb = { package = "lanthorn-blorb", path = "../blorb", version = "0.4.1" }
+audio = { package = "lanthorn-audio", path = "../audio", version = "0.4.1" }
 ratatui = { version = "0.30", features = ["crossterm_0_29"] }
 crossterm = "0.29"
 ratatui-image = { version = "11.0.6", default-features = false }
@@ -97,7 +137,7 @@ flate2 = "1"
 # Ghostty's terminal core ported to Rust — a real emulator's resolution of the
 # same bytes, so "an image covers these cells" versus "a background colour was
 # painted into these cells" has an independent witness. TESTS ONLY: the shipped
-# binary must never gain it (`cargo tree -p app -e normal | grep -c qwertty`
+# binary must never gain it (`cargo tree -p lanthorn -e normal | grep -c qwertty`
 # must print 0).
 [dev-dependencies]
 # SQ-0942: a real typeface for the gallery tool (`--example gallery`), whose

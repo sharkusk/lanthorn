@@ -1,13 +1,27 @@
 [package]
-name = "gvm-cli"
+name = "lanthorn-gvm-cli"
+description = "A no-map, DOS-style command-line Glulx interactive-fiction player"
 version.workspace = true
 edition = "2021"
 license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+rust-version.workspace = true
+keywords = ["glulx", "interactive-fiction", "cli", "inform"]
+categories = ["command-line-utilities", "games"]
+include = ["src/**", "Cargo.toml"]
+
+[[bin]]
+# Package renamed for crates.io (SQ-1250); the installed binary stays
+# "gvm-cli" (release.yml's archives and the CLI's own --help/--version name
+# it that way).
+name = "gvm-cli"
+path = "src/main.rs"
 
 [dependencies]
-buildinfo = { path = "../buildinfo" }
-cli-host = { path = "../cli-host" }
-gvm = { path = "../gvm" }
-blorb = { path = "../blorb" }
+buildinfo = { package = "lanthorn-buildinfo", path = "../buildinfo", version = "0.4.1" }
+cli-host = { package = "lanthorn-cli-host", path = "../cli-host", version = "0.4.1" }
+gvm = { package = "lanthorn-gvm", path = "../gvm", version = "0.4.1" }
+blorb = { package = "lanthorn-blorb", path = "../blorb", version = "0.4.1" }
 crossterm = "0.29"
 jiff = "0.2"

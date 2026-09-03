@@ -3,7 +3,7 @@
 //! playing to the rooms that show them.
 //!
 //! ```sh
-//! cargo run -p app --example border_preview -- \
+//! cargo run -p lanthorn --example border_preview -- \
 //!     --archive "stories/Zork Zero Disk.image" --pictures Pic.data \
 //!     --rows 900 --out /tmp/borders/mac-mono
 //! ```

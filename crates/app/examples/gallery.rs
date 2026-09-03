@@ -2,10 +2,10 @@
 //! pane sizes, all of them from the REAL binary (SQ-0942).
 //!
 //! ```sh
-//! cargo build -p app                          # the harness runs the real binary
-//! cargo run -p app --example gallery           # the whole manifest
-//! cargo run -p app --example gallery -- --only journey-amiga,arthur-flank
-//! cargo run -p app --example gallery -- --font "/System/Library/Fonts/Monaco.ttf"
+//! cargo build -p lanthorn                          # the harness runs the real binary
+//! cargo run -p lanthorn --example gallery           # the whole manifest
+//! cargo run -p lanthorn --example gallery -- --only journey-amiga,arthur-flank
+//! cargo run -p lanthorn --example gallery -- --font "/System/Library/Fonts/Monaco.ttf"
 //! ```
 //!
 //! Output lands under `target/gallery/`: one PNG per shot, an `index.html` proof
@@ -129,7 +129,7 @@ fn main() -> std::process::ExitCode {
 
     let Some(bin) = bin.or_else(pty_stream::driver::sibling_lanthorn) else {
         eprintln!(
-            "gallery: cannot find the lanthorn binary. Run `cargo build -p app` first, \
+            "gallery: cannot find the lanthorn binary. Run `cargo build -p lanthorn` first, \
              or pass --bin <path> / set LANTHORN_BIN."
         );
         return std::process::ExitCode::from(2);

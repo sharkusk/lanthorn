@@ -1,11 +1,21 @@
 [package]
-name = "mapper"
+name = "lanthorn-mapper"
+description = "A VM-agnostic, serializable automap model for interactive fiction: room layout, overlap removal and edge routing"
 version.workspace = true
 edition = "2021"
 license.workspace = true
-
+repository.workspace = true
+homepage.workspace = true
+rust-version.workspace = true
+readme = "README.md"
+keywords = ["interactive-fiction", "automap", "map", "graph", "layout"]
+categories = ["game-development", "algorithms"]
+include = ["src/**", "Cargo.toml", "README.md"]
 
 [lib]
+# Package renamed for crates.io (SQ-1250); the crate name every `use
+# mapper::…` in the workspace resolves to stays "mapper".
+name = "mapper"
 # No doctests here; skip the rustdoc doctest pass (seconds of harness
 # compilation for zero tests). Remove if real doctests are added.
 doctest = false

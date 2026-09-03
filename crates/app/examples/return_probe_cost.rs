@@ -19,7 +19,7 @@
 //! reason — it is the one part of the cost that is not free.
 //!
 //! Usage:
-//!   cargo run -p app --example return_probe_cost -- [--story <path>] [--walk 'n;e;s']
+//!   cargo run -p lanthorn --example return_probe_cost -- [--story <path>] [--walk 'n;e;s']
 
 use std::path::{Path, PathBuf};
 use std::sync::Arc;

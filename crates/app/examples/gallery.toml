@@ -1,6 +1,6 @@
 # The lanthorn gallery (SQ-0942) — the RECIPE for the project page's stills.
 #
-# `cargo run -p app --example gallery` regenerates every frame below from the
+# `cargo run -p lanthorn --example gallery` regenerates every frame below from the
 # real binary, into `target/gallery/`. The pictures are output and are not
 # committed; this file is, because it is the thing that gets them back.
 #

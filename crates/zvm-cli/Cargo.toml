@@ -1,15 +1,22 @@
 [package]
 name = "zvm-cli"
+description = "A no-map, DOS-style command-line Z-machine player (interactive fiction), including original release disk images"
 version.workspace = true
 edition = "2021"
 license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+rust-version.workspace = true
+keywords = ["z-machine", "interactive-fiction", "cli", "infocom"]
+categories = ["command-line-utilities", "games"]
+include = ["src/**", "Cargo.toml"]
 
 [dependencies]
-buildinfo = { path = "../buildinfo" }
-cli-host = { path = "../cli-host" }
-zvm = { path = "../zvm" }
-blorb = { path = "../blorb" }
-audio = { path = "../audio" }
+buildinfo = { package = "lanthorn-buildinfo", path = "../buildinfo", version = "0.4.1" }
+cli-host = { package = "lanthorn-cli-host", path = "../cli-host", version = "0.4.1" }
+zvm = { package = "lanthorn-zvm", path = "../zvm", version = "0.4.1" }
+blorb = { package = "lanthorn-blorb", path = "../blorb", version = "0.4.1" }
+audio = { package = "lanthorn-audio", path = "../audio", version = "0.4.1" }
 crossterm = "0.29"
 
 # SQ-0909: the terminal itself is the scrollback, and a DECSTBM scroll region is
@@ -23,4 +30,3 @@ crossterm = "0.29"
 # (`cargo tree -p zvm-cli -e normal | grep -c qwertty` must print 0).
 [dev-dependencies]
 qwertty-term-vt = "0.4.0"
-

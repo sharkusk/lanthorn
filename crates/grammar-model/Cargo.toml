@@ -1,11 +1,21 @@
 [package]
-name = "grammar-model"
+name = "lanthorn-grammar-model"
+description = "Shared answer types for interactive-fiction grammar readers (verbs, syntax lines, object vocabulary), used by lanthorn's zvm and gvm crates"
 version.workspace = true
 edition = "2021"
 license.workspace = true
-
+repository.workspace = true
+homepage.workspace = true
+rust-version.workspace = true
+readme = "README.md"
+keywords = ["interactive-fiction", "z-machine", "glulx", "grammar", "parser"]
+categories = ["parser-implementations", "game-development"]
+include = ["src/**", "Cargo.toml", "README.md"]
 
 [lib]
+# Package renamed for crates.io (SQ-1250); the crate name every `use
+# grammar_model::…` in the workspace resolves to stays "grammar_model".
+name = "grammar_model"
 # No doctests here; skip the rustdoc doctest pass (seconds of harness
 # compilation for zero tests). Remove if real doctests are added.
 doctest = false

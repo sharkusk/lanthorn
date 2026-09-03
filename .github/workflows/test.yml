@@ -7,7 +7,7 @@ name: Test
 # Prose is not code: a push that touches only the README, the changelog or the
 # docs tree (its PNGs included) builds nothing and gets no run. The one thing
 # this forgoes is the link check in `docs_reference`, which is cheap to run
-# locally (`cargo nextest run -p app docs_reference`) when a doc change adds a
+# locally (`cargo nextest run -p lanthorn docs_reference`) when a doc change adds a
 # link. A push that mixes prose with Rust still runs in full.
 on:
   push:

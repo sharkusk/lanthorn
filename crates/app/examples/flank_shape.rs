@@ -19,11 +19,11 @@
 //!   flank should lengthen its shaft and add nothing.
 //!
 //! ```sh
-//! cargo run -q -p app --example flank_shape -- --story stories/Arthur.po --keys n
-//! cargo run -q -p app --example flank_shape -- --story stories/zork0-r393-s890714.z6 \
+//! cargo run -q -p lanthorn --example flank_shape -- --story stories/Arthur.po --keys n
+//! cargo run -q -p lanthorn --example flank_shape -- --story stories/zork0-r393-s890714.z6 \
 //!     --archive stories/zork0.cg1
-//! cargo run -q -p app --example flank_shape -- --all
-//! cargo run -q -p app --example flank_shape -- --story stories/InfocomMasterpieces.img \
+//! cargo run -q -p lanthorn --example flank_shape -- --all
+//! cargo run -q -p lanthorn --example flank_shape -- --story stories/InfocomMasterpieces.img \
 //!     --entry arthur --keys n
 //! ```
 //!

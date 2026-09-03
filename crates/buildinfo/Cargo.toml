@@ -1,7 +1,20 @@
 [package]
-name = "buildinfo"
+name = "lanthorn-buildinfo"
+description = "Build-time helper that stamps the current git commit hash into non-release lanthorn build versions"
 version.workspace = true
 edition = "2021"
 license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+rust-version.workspace = true
+readme = "README.md"
+keywords = ["build", "git", "version", "cli"]
+categories = ["development-tools::build-utils"]
+include = ["src/**", "build.rs", "Cargo.toml", "README.md"]
+
+[lib]
+# Package renamed for crates.io (SQ-1250); the crate name every
+# `buildinfo::…` reference in the workspace resolves to stays "buildinfo".
+name = "buildinfo"
 
 # No dependencies — build.rs uses std only, so this stays as light as the VM crates.

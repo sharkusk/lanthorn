@@ -113,46 +113,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "2a4385e2e34eb35d6b3efe798b9eb88096925d87726c0798709bf56d9ed84af3"
 
 [[package]]
-name = "app"
-version = "0.4.1"
-dependencies = [
- "audio",
- "blorb",
- "buildinfo",
- "clap",
- "cli-host",
- "crossterm",
- "flate2",
- "font8x8",
- "fontdue",
- "grammar-model",
- "gvm",
- "hyperrat",
- "image",
- "jiff",
- "libc",
- "mapper",
- "notify",
- "qwertty-term-vt",
- "ratatui",
- "ratatui-image",
- "regex",
- "roxmltree",
- "scott",
- "serde",
- "serde_json",
- "signal-hook",
- "toml",
- "toml_edit 0.22.27",
- "unicode-segmentation",
- "unicode-width 0.1.14",
- "ureq",
- "verb-synonyms",
- "zip",
- "zvm",
-]
-
-[[package]]
 name = "approx"
 version = "0.5.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -183,16 +143,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "a89cbf775b137e9b968e67227ef7f775587cde3fd31b0d8599dbd0f598a48340"
 dependencies = [
  "bytemuck",
-]
-
-[[package]]
-name = "audio"
-version = "0.4.1"
-dependencies = [
- "rodio",
- "self_cell",
- "xmrs",
- "xmrsplayer",
 ]
 
 [[package]]
@@ -290,14 +240,6 @@ checksum = "3078c7629b62d3f0439517fa394996acacc5cbc91c5a20d8c658e77abd503a71"
 dependencies = [
  "generic-array",
 ]
-
-[[package]]
-name = "blorb"
-version = "0.4.1"
-
-[[package]]
-name = "buildinfo"
-version = "0.4.1"
 
 [[package]]
 name = "bumpalo"
@@ -483,15 +425,6 @@ name = "claxon"
 version = "0.4.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "4bfbf56724aa9eca8afa4fcfadeb479e722935bb2a0900c2d37e0cc477af0688"
-
-[[package]]
-name = "cli-host"
-version = "0.4.1"
-dependencies = [
- "blorb",
- "crossterm",
- "qwertty-term-vt",
-]
 
 [[package]]
 name = "color_quant"
@@ -1131,30 +1064,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "0cc23270f6e1808e30a928bdc84dea0b9b4136a8bc82338574f23baf47bbd280"
 
 [[package]]
-name = "grammar-model"
-version = "0.4.1"
-
-[[package]]
-name = "gvm"
-version = "0.4.1"
-dependencies = [
- "blorb",
- "grammar-model",
-]
-
-[[package]]
-name = "gvm-cli"
-version = "0.4.1"
-dependencies = [
- "blorb",
- "buildinfo",
- "cli-host",
- "crossterm",
- "gvm",
- "jiff",
-]
-
-[[package]]
 name = "hashbrown"
 version = "0.15.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1509,6 +1418,123 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "bf36173d4167ed999940f804952e6b08197cae5ad5d572eb4db150ce8ad5d58f"
 
 [[package]]
+name = "lanthorn"
+version = "0.4.1"
+dependencies = [
+ "clap",
+ "crossterm",
+ "flate2",
+ "font8x8",
+ "fontdue",
+ "hyperrat",
+ "image",
+ "jiff",
+ "lanthorn-audio",
+ "lanthorn-blorb",
+ "lanthorn-buildinfo",
+ "lanthorn-cli-host",
+ "lanthorn-grammar-model",
+ "lanthorn-gvm",
+ "lanthorn-mapper",
+ "lanthorn-scott",
+ "lanthorn-verb-synonyms",
+ "lanthorn-zvm",
+ "libc",
+ "notify",
+ "qwertty-term-vt",
+ "ratatui",
+ "ratatui-image",
+ "regex",
+ "roxmltree",
+ "serde",
+ "serde_json",
+ "signal-hook",
+ "toml",
+ "toml_edit 0.22.27",
+ "unicode-segmentation",
+ "unicode-width 0.1.14",
+ "ureq",
+ "zip",
+]
+
+[[package]]
+name = "lanthorn-audio"
+version = "0.4.1"
+dependencies = [
+ "rodio",
+ "self_cell",
+ "xmrs",
+ "xmrsplayer",
+]
+
+[[package]]
+name = "lanthorn-blorb"
+version = "0.4.1"
+
+[[package]]
+name = "lanthorn-buildinfo"
+version = "0.4.1"
+
+[[package]]
+name = "lanthorn-cli-host"
+version = "0.4.1"
+dependencies = [
+ "crossterm",
+ "lanthorn-blorb",
+ "qwertty-term-vt",
+]
+
+[[package]]
+name = "lanthorn-grammar-model"
+version = "0.4.1"
+
+[[package]]
+name = "lanthorn-gvm"
+version = "0.4.1"
+dependencies = [
+ "lanthorn-blorb",
+ "lanthorn-grammar-model",
+]
+
+[[package]]
+name = "lanthorn-gvm-cli"
+version = "0.4.1"
+dependencies = [
+ "crossterm",
+ "jiff",
+ "lanthorn-blorb",
+ "lanthorn-buildinfo",
+ "lanthorn-cli-host",
+ "lanthorn-gvm",
+]
+
+[[package]]
+name = "lanthorn-mapper"
+version = "0.4.1"
+dependencies = [
+ "serde",
+ "serde_json",
+]
+
+[[package]]
+name = "lanthorn-scott"
+version = "0.4.1"
+dependencies = [
+ "lanthorn-grammar-model",
+]
+
+[[package]]
+name = "lanthorn-verb-synonyms"
+version = "0.4.1"
+
+[[package]]
+name = "lanthorn-zvm"
+version = "0.4.1"
+dependencies = [
+ "lanthorn-grammar-model",
+]
+
+[[package]]
 name = "lazy_static"
 version = "1.5.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1636,14 +1662,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d640282b302c0bb0a2a8e0233ead9035e3bed871f0b7e81fe4a1ec829765db44"
 dependencies = [
  "libc",
-]
-
-[[package]]
-name = "mapper"
-version = "0.4.1"
-dependencies = [
- "serde",
- "serde_json",
 ]
 
 [[package]]
@@ -2622,20 +2640,13 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "94143f37725109f92c262ed2cf5e59bce7498c01bcc1502d7b9afe439a4e9f49"
 
 [[package]]
-name = "scott"
-version = "0.4.1"
-dependencies = [
- "grammar-model",
-]
-
-[[package]]
 name = "scott-cli"
 version = "0.4.1"
 dependencies = [
- "buildinfo",
- "cli-host",
  "crossterm",
- "scott",
+ "lanthorn-buildinfo",
+ "lanthorn-cli-host",
+ "lanthorn-scott",
 ]
 
 [[package]]
@@ -3302,18 +3313,14 @@ dependencies = [
 ]
 
 [[package]]
-name = "verb-synonyms"
-version = "0.4.1"
-
-[[package]]
 name = "verb-synonyms-gen"
 version = "0.4.1"
 dependencies = [
- "blorb",
- "grammar-model",
- "gvm",
- "scott",
- "zvm",
+ "lanthorn-blorb",
+ "lanthorn-grammar-model",
+ "lanthorn-gvm",
+ "lanthorn-scott",
+ "lanthorn-zvm",
 ]
 
 [[package]]
@@ -4060,21 +4067,14 @@ dependencies = [
 ]
 
 [[package]]
-name = "zvm"
-version = "0.4.1"
-dependencies = [
- "grammar-model",
-]
-
-[[package]]
 name = "zvm-cli"
 version = "0.4.1"
 dependencies = [
- "audio",
- "blorb",
- "buildinfo",
- "cli-host",
  "crossterm",
+ "lanthorn-audio",
+ "lanthorn-blorb",
+ "lanthorn-buildinfo",
+ "lanthorn-cli-host",
+ "lanthorn-zvm",
  "qwertty-term-vt",
- "zvm",
 ]

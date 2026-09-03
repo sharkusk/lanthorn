@@ -1,11 +1,21 @@
 [package]
-name = "audio"
+name = "lanthorn-audio"
+description = "Sound playback for interactive fiction: synthesized bleeps plus sampled AIFF/Ogg audio and ProTracker MOD music"
 version.workspace = true
 edition = "2021"
 license.workspace = true
-
+repository.workspace = true
+homepage.workspace = true
+rust-version.workspace = true
+readme = "README.md"
+keywords = ["audio", "interactive-fiction", "sound", "mod", "aiff"]
+categories = ["multimedia::audio", "game-development"]
+include = ["src/**", "Cargo.toml", "README.md"]
 
 [lib]
+# Package renamed for crates.io (SQ-1250); the crate name every `use
+# audio::…` in the workspace resolves to stays "audio".
+name = "audio"
 # No doctests here; skip the rustdoc doctest pass (seconds of harness
 # compilation for zero tests). Remove if real doctests are added.
 doctest = false

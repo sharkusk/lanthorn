@@ -1,9 +1,9 @@
 //! Scan a corpus of stories through Lanthorn's Guiding Light (SQ-1206).
 //!
 //! ```sh
-//! cargo run -p app --example guidance_scan                      # stories/ + unit_tests/
-//! cargo run -p app --example guidance_scan -- --only curses.z5,vespers.z8
-//! cargo run -p app --example guidance_scan -- --corpus stories --json
+//! cargo run -p lanthorn --example guidance_scan                      # stories/ + unit_tests/
+//! cargo run -p lanthorn --example guidance_scan -- --only curses.z5,vespers.z8
+//! cargo run -p lanthorn --example guidance_scan -- --corpus stories --json
 //! ```
 //!
 //! For every story it can read it boots the real engine, clears whatever gate

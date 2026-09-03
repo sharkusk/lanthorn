@@ -9,7 +9,7 @@
 //! see any of these defects.
 //!
 //! Usage:
-//!   cargo run -p app --example hint_probe -- --story <path> [--entry N|NAME]
+//!   cargo run -p lanthorn --example hint_probe -- --story <path> [--entry N|NAME]
 //!       [--pane 132x60] [--route 'L:;L:hint;C:y;C:13;C:13']
 
 use app::engine::{Engine, WinNode};

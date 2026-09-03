@@ -10,17 +10,17 @@ lanthorn is a playable interactive-fiction interpreter for the terminal with liv
 
 ```sh
 cargo build --workspace                 # build everything
-cargo run -p app -- stories/foo.z5      # run the TUI (binary name: lanthorn)
-cargo nextest run -p app v6_arthur_status            # one integration-test suite
-cargo nextest run -p app v6_arthur_status::some_case # one test within it
-cargo test -p app --test v6_arthur_advent            # one whole group binary
+cargo run -p lanthorn -- stories/foo.z5      # run the TUI (binary name: lanthorn)
+cargo nextest run -p lanthorn v6_arthur_status            # one integration-test suite
+cargo nextest run -p lanthorn v6_arthur_status::some_case # one test within it
+cargo test -p lanthorn --test v6_arthur_advent            # one whole group binary
 ```
 
 The app's integration suites live in `crates/app/tests/suites/`, which cargo does
 **not** auto-build; each is pulled in as a module by one of the ~14 group binaries
 at `crates/app/tests/*.rs` (`#[path = "suites/v6_arthur_status.rs"] mod …`). One
 link per group instead of one per suite: a `touch crates/blorb/src/lib.rs`
-rebuild of `--tests -p app` went from 11.2s to 4.0s, and app's share of `target/`
+rebuild of `--tests -p lanthorn` went from 11.2s to 4.0s, and app's share of `target/`
 from 4.3 GiB to 2.8 GiB (SQ-0786). Adding a suite means adding the file under
 `suites/` **and** a `mod` line in the group that should carry it — a suite no
 group names is never built. Reaching one suite costs nothing extra, because the
@@ -30,7 +30,7 @@ above, rather than by `--test`.
 **Which tests to run when.** COMPILATION dominates turnaround here, not the tests.
 Measured at 12 cores: a warm targeted suite is **5.8s** and the full gate **170s**,
 but the REBUILD after touching `app` is **151s** and after `zvm` **277s** — and a
-filtered run pays that too, because `-p app` links all fourteen group binaries
+filtered run pays that too, because `-p lanthorn` links all fourteen group binaries
 whatever the filter selects. So selection roughly halves the loop (321s → 157s) and
 cannot do better than the build. The linker is already Apple's fast `ld-1267` and the
 volume is an SSD; neither is worth chasing.
@@ -60,12 +60,12 @@ following the module tree (`t-input`, `t-render`, `t-picker`, `t-session`,
 `t-guidance`, `t-persist`, `t-theme`, `t-state`, `t-misc`, plus `t-all` listing all
 nine) so a developer can guess a file's group on sight, and every `#[cfg(test)] mod`
 under `crates/app/src/` was rewritten to `#[cfg(all(test, feature = "t-<group>"))]`.
-Measured on a quiet machine, warm: `cargo check -p app --lib --tests` with no
+Measured on a quiet machine, warm: `cargo check -p lanthorn --lib --tests` with no
 features is **~2.3s** (was 33s even bare-`--lib`, because now it type-checks NO
 in-crate test code at all); `--features t-input` (input.rs's 334 cases plus its
 group siblings) is **~2.1s**; `--features t-all` (everything, matching CI's
 `--all-features`) is **~2.7s** — all three down from the unguarded **5m19s**. Run one
-group under nextest: `cargo nextest run -p app --lib --features t-input input`
+group under nextest: `cargo nextest run -p lanthorn --lib --features t-input input`
 (334 tests, 0.7s warm). Nextest's own config has no per-package default-features
 knob (see `.config/nextest.toml`), so the feature has to be spelled on every
 invocation — omitting it compiles zero of the in-crate tests, which is the point.
@@ -74,9 +74,9 @@ left ungated, if a `feature = "t-…"` cfg names something `Cargo.toml` doesn't
 declare, or if `t-all` drops a group.
 
 - **While iterating**, run the suites that cover what you touched — by NAME under
-  nextest (`cargo nextest run -p app v6_arthur_status`), never by `--test`, since the
+  nextest (`cargo nextest run -p lanthorn v6_arthur_status`), never by `--test`, since the
   module path still carries the old filename. For `app`'s in-crate unit tests, name
-  the `t-*` group too: `cargo nextest run -p app --lib --features t-render render`.
+  the `t-*` group too: `cargo nextest run -p lanthorn --lib --features t-render render`.
 - **Before you PUSH**, run `cargo check --all-targets` on the tree you are about to
   push — **not** the full gate. CI is the backstop (see below), and a merged-tree
   `cargo check` is what catches the one thing CI would catch too late and nothing
@@ -101,7 +101,7 @@ declare, or if `t-all` drops a group.
 - **A change that compiles nothing needs no gate.** README prose, a doc under
   `docs/`, a committed PNG, a `gallery.toml` key spec — none of it is Rust, and
   the only question worth asking is whether the one suite that READS it still
-  passes (`cargo nextest run -p app gallery_manifest` is 23 cases in 0.13s warm).
+  passes (`cargo nextest run -p lanthorn gallery_manifest` is 23 cases in 0.13s warm).
   The full gate exists for the two things that have ever justified it — a semantic
   merge conflict between parallel lanes, and the shared-process palette races —
   and a line of README prose cannot reach either. Running it anyway costs minutes
@@ -125,13 +125,13 @@ floor, not the ceiling:
 
 | changed | run at least |
 |---|---|
-| `crates/zvm/**` | `-p zvm`, plus the presses you touched (`v6_arthur_advent`, `v6_journey`, `v6_shogun`, `v6_zork0`) |
+| `crates/zvm/**` | `-p lanthorn-zvm`, plus the presses you touched (`v6_arthur_advent`, `v6_journey`, `v6_shogun`, `v6_zork0`) |
 | `crates/app/src/render/screen.rs` | `v6_render`, `v6_windows`, `zmachine_screen`, `zork_classic` |
 | `crates/app/src/render/v6_layout.rs` | `v6_render`, `v6_arthur_advent`, `v6_journey`, `v6_scopa` |
-| `crates/app/src/render/transcript.rs` | `zork_classic`, `zmachine_screen`, `-p app --lib` |
-| `crates/app/src/native_font.rs`, `crates/blorb/**` | `-p blorb`, `engines`, `v6_zork0` |
-| `crates/mapper/**` | `-p mapper`, `mapper_ui` |
-| `crates/verb-synonyms/**`, `crates/app/src/vocab.rs` | `-p app --lib vocab`, `adult_words`, `vocabulary_offer`, `vocabulary_vetting`, `assist_voice`, `word_reveal`, `command_band`, `scope_completion`, `story_word_scrape` |
+| `crates/app/src/render/transcript.rs` | `zork_classic`, `zmachine_screen`, `-p lanthorn --lib` |
+| `crates/app/src/native_font.rs`, `crates/blorb/**` | `-p lanthorn-blorb`, `engines`, `v6_zork0` |
+| `crates/mapper/**` | `-p lanthorn-mapper`, `mapper_ui` |
+| `crates/verb-synonyms/**`, `crates/app/src/vocab.rs` | `-p lanthorn --lib vocab`, `adult_words`, `vocabulary_offer`, `vocabulary_vetting`, `assist_voice`, `word_reveal`, `command_band`, `scope_completion`, `story_word_scrape` |
 | anything touching the PALETTE | the gate **and** `cargo test --workspace --all-features` |
 | a test that WRITES TO DISK | the gate **and** `cargo test --workspace --all-features`, twice |
 
@@ -214,10 +214,10 @@ Locally, narrow it to the crate you edited if you run it at all.
 | scope | what it covers | measured here |
 |---|---|---|
 | `--workspace --all-targets` | everything, incl. all fourteen of `app`'s test group binaries | ~150s+ |
-| `-p app --all-targets` | one package, still all its test binaries | most of that |
-| **`-p app --lib`** | one package, library target only | **62s** |
+| `-p lanthorn --all-targets` | one package, still all its test binaries | most of that |
+| **`-p lanthorn --lib`** | one package, library target only | **62s** |
 
-So for a change confined to `crates/app/src/`, `cargo clippy -p app --lib` is the local gate and CI is the sweep. Match the `-p` to the crate you edited; add `--all-targets` only when you actually changed something under `tests/`.
+So for a change confined to `crates/app/src/`, `cargo clippy -p lanthorn --lib` is the local gate and CI is the sweep. Match the `-p` to the crate you edited; add `--all-targets` only when you actually changed something under `tests/`.
 
 And note WHY even the narrow run costs a minute: at 62s wall it burned 2.75s of CPU at 33% utilisation. Almost none of that is lint work — it is rebuilding `app` under clippy's own fingerprints, which share nothing with the test build. Running the test gate and then clippy is two full builds of the same code, and no amount of scoping changes that; only doing it once, at the end, does.
 
@@ -297,7 +297,7 @@ Cargo has no garbage collection for `target/`: every hash change writes a new ar
   `CARGO_TARGET_DIR=target` so their `target/...` paths still hold. Anything that
   walks the repo tree must skip every directory whose name STARTS with `target`.
 - **`target.noindex/debug/incremental`** is a pure cache — delete it freely; the only cost is a slower next build. It reached 48 GB (2,020 sessions) after one day of eleven lanes; deleting it changed nothing about check time, which is the point below.
-- **A merged-tree `cargo check --all-targets` is not "under a minute" for this crate any more.** Measured on a quiet machine with a fresh cache (2026-09-02): `-p app --lib` 33s, `-p app --lib --tests` 5m19s, `--all-targets` after touching `app` 11m. The cost is `app`'s library test module — ~3,000 unit tests compiled as one unit with the lib — plus the fourteen group binaries. Only a crate split moves it.
+- **A merged-tree `cargo check --all-targets` is not "under a minute" for this crate any more.** Measured on a quiet machine with a fresh cache (2026-09-02): `-p lanthorn --lib` 33s, `-p lanthorn --lib --tests` 5m19s, `--all-targets` after touching `app` 11m. The cost is `app`'s library test module — ~3,000 unit tests compiled as one unit with the lib — plus the fourteen group binaries. Only a crate split moves it.
 - **Merged worktrees** — see the hard rule above.
 
 For the orphaned artifacts themselves there is `cargo sweep`, but **do not run it routinely here** — build speed beats disk, and an occasional manual `cargo clean` is the preferred trade. Measured on this workspace: `cargo sweep --dry-run --time 7` would have removed 28 GiB from a 22 GB `target/`, i.e. effectively everything. That is not orphan sediment; almost all of it is third-party dependency rlibs compiled weeks ago and still very much in use, because the workspace's own artifacts are always freshly rebuilt. Age is a poor proxy for obsolete when your own crates churn daily and your dependencies never do.
@@ -362,4 +362,4 @@ machine, a release and a moment in the game, exactly like a frame capture.
 - **Editor diagnostics that arrive while an agent is working are snapshots of an unfinished edit, not findings.** A half-written file genuinely has unbalanced parens, and a new call site genuinely outruns its `pub` export by a few seconds — both resolve themselves. `cargo check --all-targets` and the gate are the only authority; never act on a diagnostic without reproducing it there first. Multi-file lanes (render-path work especially) are quieter in a worktree, where the checkout the editor watches never sees the churn — symlink `stories/` into it or every real-game smoke skips vacuously into a false green.
 - **Boot a harness the way `startup.rs` boots, or you measure a screen the app never draws.** The full chain is the profile (`InterpreterProfile::resolve`, from the medium the *mount* returned — not re-derived from the path) supplying palette, interpreter number and default colours, and the screen size `picts.std_window() → named archive → picts.native_std_window() → profile.std_window()` with `art_scale` alongside. Skip any step and the **game** lays its own windows out differently, so every rect measured afterwards is of a screen the player never sees, and the numbers look entirely self-consistent. Measured: `ring_scout` and `v6_side_border_tiling`'s `boot()` both omitted `native_std_window`, so Journey r77 and Arthur r63 — **560x384** presses — were booted at 640x400. That produced a fabricated Arthur frame ("a single illustration clear of both edges") which a whole quest was fixed and tested against, and hid two real defects for two rounds (SQ-0901, SQ-0883, SQ-0899). Print the profile, release and screen size the harness booted, and check them against a `/dump-windows` capture before trusting a measurement on disk media.
 - **A frame is a fixture. Name the turn count and how you got there.** Real-game harnesses drive blank lines and single keys, which reaches an intro card and often nothing else — Arthur's ProDOS press renders identically at 6 and 40 keypresses because it never answers the restore question. SQ-0883 reproduces on the **menu** frame two turns in and was invisible in a case pinned to the gameplay frame four turns in. Put the turn count in the specimen table alongside the release, and give any case that depends on a frame's *shape* a non-vacuity guard asserting that shape — that guard is what caught the fabricated Arthur frame above.
-- **Three render-testing layers; escalate only when the cheaper one can't explain the symptom.** Cell-buffer harnesses (`crates/app/tests/suites/v6_*.rs`) assert on lanthorn's INTERNAL model — always the first stop, but blind to a defect that's correct in the model and wrong on the user's screen. The emitted-stream harness (`crates/app/tests/pty_stream/`, SQ-0762; ad hoc via `cargo run -p app --example pty_capture`) runs the real binary under a pty and keeps every byte it emits — the pty must answer the terminal queries convincingly as kitty, or the capture silently measures the half-block backend and every number in it is worthless. Reach for it when the model looks right and the screen doesn't; it's the only layer that tells an image PLACEMENT apart from a background PAINTED into cells, indistinguishable on screen, different bugs. The placement oracle (`pty_stream/oracle.rs`, SQ-0764; dev-dep `qwertty-term-vt`) resolves those same bytes the way a real terminal does instead of through our hand-rolled decoder — reach for it when the stream also looks right and the screen is still wrong (placement lifetime, z-order, overlap, stale placements, unicode-placeholder continuation). It is a faithful **port** of Ghostty's core, not Ghostty itself — see `docs/internals/architecture.md` for its caveats (an id-encoding mismatch between the two decoders, the SQ-0772 image-coverage gap, and the libghostty-vt ground-truth escalation that exists but isn't built).
+- **Three render-testing layers; escalate only when the cheaper one can't explain the symptom.** Cell-buffer harnesses (`crates/app/tests/suites/v6_*.rs`) assert on lanthorn's INTERNAL model — always the first stop, but blind to a defect that's correct in the model and wrong on the user's screen. The emitted-stream harness (`crates/app/tests/pty_stream/`, SQ-0762; ad hoc via `cargo run -p lanthorn --example pty_capture`) runs the real binary under a pty and keeps every byte it emits — the pty must answer the terminal queries convincingly as kitty, or the capture silently measures the half-block backend and every number in it is worthless. Reach for it when the model looks right and the screen doesn't; it's the only layer that tells an image PLACEMENT apart from a background PAINTED into cells, indistinguishable on screen, different bugs. The placement oracle (`pty_stream/oracle.rs`, SQ-0764; dev-dep `qwertty-term-vt`) resolves those same bytes the way a real terminal does instead of through our hand-rolled decoder — reach for it when the stream also looks right and the screen is still wrong (placement lifetime, z-order, overlap, stale placements, unicode-placeholder continuation). It is a faithful **port** of Ghostty's core, not Ghostty itself — see `docs/internals/architecture.md` for its caveats (an id-encoding mismatch between the two decoders, the SQ-0772 image-coverage gap, and the libghostty-vt ground-truth escalation that exists but isn't built).

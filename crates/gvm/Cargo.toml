@@ -1,11 +1,23 @@
 [package]
-name = "gvm"
+name = "lanthorn-gvm"
+description = "A zero-dependency Glulx virtual machine (with Glk I/O) for modern Inform 7 interactive fiction, with accelerated-function support"
 version.workspace = true
 edition = "2021"
 license.workspace = true
-
+repository.workspace = true
+homepage.workspace = true
+rust-version.workspace = true
+readme = "README.md"
+keywords = ["glulx", "interactive-fiction", "inform", "glk", "emulator"]
+categories = ["emulators", "parser-implementations"]
+include = ["src/**", "Cargo.toml", "README.md"]
 
 [lib]
+# Package renamed for crates.io (SQ-1250); the crate name every `use gvm::…`
+# in the workspace resolves to stays "gvm", and every `-p gvm` in CI/docs
+# became `-p lanthorn-gvm` instead (cargo's `-p` matches package name, not
+# this field).
+name = "gvm"
 # No doctests here; skip the rustdoc doctest pass (seconds of harness
 # compilation for zero tests). Remove if real doctests are added.
 doctest = false
@@ -13,7 +25,7 @@ doctest = false
 # The grammar value types both VM crates return (SQ-1103) — an internal,
 # zero-dependency workspace crate, so this stays a zero-EXTERNAL-dependency
 # crate exactly as before.
-grammar-model = { path = "../grammar-model" }
+grammar-model = { package = "lanthorn-grammar-model", path = "../grammar-model", version = "0.4.1" }
 
 [dev-dependencies]
-blorb = { path = "../blorb" }
+blorb = { package = "lanthorn-blorb", path = "../blorb", version = "0.4.1" }

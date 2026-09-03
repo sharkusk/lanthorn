@@ -21,8 +21,8 @@ doctest = false
 # Story readers, for the `harvest` step only. Path deps, no external crates:
 # nothing here needs one, and keeping it that way means the generator builds
 # anywhere the workspace does.
-zvm = { path = "../zvm" }
-gvm = { path = "../gvm" }
-scott = { path = "../scott" }
-blorb = { path = "../blorb" }
-grammar-model = { path = "../grammar-model" }
+zvm = { package = "lanthorn-zvm", path = "../zvm" }
+gvm = { package = "lanthorn-gvm", path = "../gvm" }
+scott = { package = "lanthorn-scott", path = "../scott" }
+blorb = { package = "lanthorn-blorb", path = "../blorb" }
+grammar-model = { package = "lanthorn-grammar-model", path = "../grammar-model" }

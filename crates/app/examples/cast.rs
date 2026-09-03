@@ -2,10 +2,10 @@
 //!
 //! ```sh
 //! cargo build --workspace                 # the harness runs the REAL binaries
-//! cargo run -p app --example cast          # the whole manifest
-//! cargo run -p app --example cast -- --only machines,zork-map
-//! cargo run -p app --example cast -- --list
-//! cargo run -p app --example cast -- --only zork-map --gif
+//! cargo run -p lanthorn --example cast          # the whole manifest
+//! cargo run -p lanthorn --example cast -- --only machines,zork-map
+//! cargo run -p lanthorn --example cast -- --list
+//! cargo run -p lanthorn --example cast -- --only zork-map --gif
 //! ```
 //!
 //! Output lands under `target/casts/`: one `.cast` per recording plus an

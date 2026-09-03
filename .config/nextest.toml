@@ -13,8 +13,8 @@ test-threads = 6
 # command line (or in a workspace-level default-features setting Cargo itself
 # doesn't offer per-package either). So there is nothing to configure here; spell
 # the feature on the invocation instead:
-#   cargo nextest run -p app --lib --features t-input input   # one group
-#   cargo nextest run -p app --lib --all-features              # everything (what CI's
+#   cargo nextest run -p lanthorn --lib --features t-input input   # one group
+#   cargo nextest run -p lanthorn --lib --all-features              # everything (what CI's
 #                                                                 cargo test --all-features runs)
 # Omitting --features compiles NONE of app's in-crate tests (by design — that's the
 # whole point of SQ-1242) and this profile's `test-threads` still applies to whichever

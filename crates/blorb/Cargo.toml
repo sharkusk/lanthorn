@@ -1,11 +1,21 @@
 [package]
-name = "blorb"
+name = "lanthorn-blorb"
+description = "Blorb resource-container parsing plus readers for original Infocom release media (Amiga, Macintosh, DOS, Atari ST, Apple II, Commodore 1541)"
 version.workspace = true
 edition = "2021"
 license.workspace = true
-
+repository.workspace = true
+homepage.workspace = true
+rust-version.workspace = true
+readme = "README.md"
+keywords = ["interactive-fiction", "blorb", "disk-image", "infocom", "z-machine"]
+categories = ["parser-implementations", "game-development"]
+include = ["src/**", "Cargo.toml", "README.md"]
 
 [lib]
+# Package renamed for crates.io (SQ-1250); the crate name every `use blorb::…`
+# in the workspace resolves to stays "blorb".
+name = "blorb"
 # No doctests here; skip the rustdoc doctest pass (seconds of harness
 # compilation for zero tests). Remove if real doctests are added.
 doctest = false

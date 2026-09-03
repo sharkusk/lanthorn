@@ -1,11 +1,18 @@
 [package]
 name = "scott-cli"
+description = "A no-map, DOS-style command-line Scott Adams interactive-fiction player"
 version.workspace = true
 edition = "2021"
 license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+rust-version.workspace = true
+keywords = ["interactive-fiction", "scott-adams", "cli", "text-adventure"]
+categories = ["command-line-utilities", "games"]
+include = ["src/**", "Cargo.toml"]
 
 [dependencies]
-buildinfo = { path = "../buildinfo" }
-cli-host = { path = "../cli-host" }
-scott = { path = "../scott" }
+buildinfo = { package = "lanthorn-buildinfo", path = "../buildinfo", version = "0.4.1" }
+cli-host = { package = "lanthorn-cli-host", path = "../cli-host", version = "0.4.1" }
+scott = { package = "lanthorn-scott", path = "../scott", version = "0.4.1" }
 crossterm = "0.29"

@@ -7,9 +7,9 @@
 //! while still moving pixels the player sees.
 //!
 //! ```sh
-//! cargo run -p app --example v6_mode_digest > /tmp/after.txt
+//! cargo run -p lanthorn --example v6_mode_digest > /tmp/after.txt
 //! git stash push            # or: git checkout <base> -- crates/
-//! cargo run -p app --example v6_mode_digest > /tmp/before.txt
+//! cargo run -p lanthorn --example v6_mode_digest > /tmp/before.txt
 //! git stash pop
 //! diff /tmp/before.txt /tmp/after.txt        # must be empty
 //! ```

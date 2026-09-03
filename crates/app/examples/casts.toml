@@ -1,6 +1,6 @@
 # The lanthorn casts (SQ-0943) — the RECIPE for the project page's moving images.
 #
-# `cargo run -p app --example cast` records every entry below from the real
+# `cargo run -p lanthorn --example cast` records every entry below from the real
 # binaries into `target/casts/`. The `.cast` files are output and are not
 # committed; this file is.
 #

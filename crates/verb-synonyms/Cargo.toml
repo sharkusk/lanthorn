@@ -1,10 +1,21 @@
 [package]
-name = "verb-synonyms"
+name = "lanthorn-verb-synonyms"
+description = "A synonym and irregular-inflection table for interactive-fiction guess-the-verb resolution (e.g. illuminate -> light)"
 version.workspace = true
 edition = "2021"
 license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+rust-version.workspace = true
+readme = "README.md"
+keywords = ["interactive-fiction", "synonyms", "nlp", "wordnet", "parser"]
+categories = ["parser-implementations", "game-development"]
+include = ["src/**", "Cargo.toml", "README.md"]
 
 [lib]
+# Package renamed for crates.io (SQ-1250); the crate name every `use
+# verb_synonyms::…` in the workspace resolves to stays "verb_synonyms".
+name = "verb_synonyms"
 doctest = false
 
 [dependencies]

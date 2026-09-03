@@ -2,7 +2,7 @@
 //! drawn (SQ-1018/SQ-1019).
 //!
 //! ```text
-//! cargo run -p app --example font_scout -- [--entry <in-volume path>] <image>...
+//! cargo run -p lanthorn --example font_scout -- [--entry <in-volume path>] <image>...
 //! ```
 //!
 //! The browser's info panel answers "which faces does this release have". This

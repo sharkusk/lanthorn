@@ -7,9 +7,9 @@
 //! `ratatui::buffer::Buffer` — exactly the call the TUI makes every frame.
 //!
 //! ```sh
-//! cargo run --release -p app --example scroll_bench
-//! cargo run --release -p app --example scroll_bench -- --turns 100,1000,5000,20000 --repeats 8
-//! cargo run --release -p app --example scroll_bench -- --engines zvm-cell,zvm-raster
+//! cargo run --release -p lanthorn --example scroll_bench
+//! cargo run --release -p lanthorn --example scroll_bench -- --turns 100,1000,5000,20000 --repeats 8
+//! cargo run --release -p lanthorn --example scroll_bench -- --engines zvm-cell,zvm-raster
 //! ```
 //!
 //! **Always run `--release`.** A debug build's timings are dominated by
@@ -136,7 +136,7 @@ fn main() {
     if cfg!(debug_assertions) {
         eprintln!(
             "\n  *** WARNING: this is a DEBUG build. Timings below are meaningless for the \
-             shipped binary. Re-run with `cargo run --release -p app --example scroll_bench`. ***\n"
+             shipped binary. Re-run with `cargo run --release -p lanthorn --example scroll_bench`. ***\n"
         );
     }
     println!("turns sweep: {turns:?}  ·  repeats: {repeats}\n");

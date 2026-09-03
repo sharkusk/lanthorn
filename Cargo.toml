@@ -10,6 +10,13 @@ resolver = "2"
 [workspace.package]
 version = "0.4.1"
 license = "BSD-3-Clause"
+repository = "https://github.com/sharkusk/lanthorn"
+homepage = "https://github.com/sharkusk/lanthorn"
+# The toolchain `rust-toolchain.toml` pins for the clippy gate (see its own
+# comment) is also what CI's `dtolnay/rust-toolchain@stable` step builds
+# against, since rustup reads that file for every invocation including CI's —
+# so 1.98 is proven, not merely intended.
+rust-version = "1.98"
 
 # SQ-0764: the emitted-stream oracle's dependency, with its own debug assertions
 # off. `qwertty-term-vt` 0.4.0's kitty transmit path trips

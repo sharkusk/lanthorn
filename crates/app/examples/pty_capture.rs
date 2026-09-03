@@ -2,8 +2,8 @@
 //! (SQ-0762). The ad-hoc face of the harness the integration test uses.
 //!
 //! ```sh
-//! cargo build -p app                      # the harness runs the REAL binary
-//! cargo run -p app --example pty_capture -- \
+//! cargo build -p lanthorn                      # the harness runs the REAL binary
+//! cargo run -p lanthorn --example pty_capture -- \
 //!     --story "stories/Journey - The Quest Begins.adf" \
 //!     --size 117x64 --keys cr,wait:800,cr,wait:800,cr \
 //!     --out /tmp/journey.stream.txt --png /tmp/journey.png
@@ -142,7 +142,7 @@ fn main() -> std::process::ExitCode {
     }
     let Some(bin) = bin.or_else(driver::sibling_lanthorn) else {
         eprintln!(
-            "pty_capture: cannot find the lanthorn binary. Run `cargo build -p app` first, \
+            "pty_capture: cannot find the lanthorn binary. Run `cargo build -p lanthorn` first, \
              or pass --bin <path> / set LANTHORN_BIN."
         );
         return std::process::ExitCode::from(2);
