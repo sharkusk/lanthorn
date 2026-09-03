@@ -4954,20 +4954,17 @@ mod tests {
         let p = |g: &MapGraph, id: u16| g.room(id).unwrap().pos.unwrap();
         assert_eq!(p(&g,26).0, p(&g,27).0, "precondition: relayout column-aligns the 26↔27 up/down lane");
         cleanup_overlaps(&mut g, 3, 40);
-        // SQ-1274: one-way arrivals may no longer center on a room's compass-anchor slot (see
-        // `assign_side_slots`), so `74 E 25` (one-way, no back edge) now lands on 25's WEST side
-        // at an OFFSET slot instead of slot 0 — and in this deliberately dense 18-room stress
-        // fixture, that offset path clips `26 Up 25` (the up/down-protected reciprocal, itself
-        // locked to slot 0 on a DIFFERENT side of 25) in one cell cleanup's room-repositioning
-        // search cannot clear without breaking one of the two protected chains below, which are
-        // what this test exists to verify stay intact. Before SQ-1274, `74 E 25` was free to
-        // settle wherever cleanup's search happened to land it, including slot 0; the new
-        // invariant is a real, understood trade against this one contrived worst case — see the
-        // SQ-1274 side-quest note. `<=1`, not `==0`: still catches an unrelated regression that
-        // adds a SECOND residual, and this specific one is diagnosed, not a mystery.
-        assert!(render_overlap_stats(&g).0 <= 1,
-            "cleanup clears all but at most the one known SQ-1274 residual (SQ-0222 clean routing) \
-             while protecting the up/down column: {}", render_overlap_stats(&g).0);
+        // SQ-1274: `74 E 25` (one-way, no back edge, geometrically NE of 74 so its direct route
+        // lands on 25's BOTTOM door) shares that door with `26 Up 25`'s reciprocal Up/Down pair —
+        // and once the one-way is barred from centering there (see `assign_side_slots`), NO offset
+        // slot the arrival alone can take clears the resulting overlap: the reciprocal's own
+        // approach and the arrival's bent one cross somewhere in the shared gutter for every slot
+        // the arrival tries, on this dense 18-room fixture. `assign_side_slots` resolves it by
+        // nesting BOTH sides of that one pairing away from center instead of parking the reciprocal
+        // dead-center for the arrival's bent approach to sweep past (see its
+        // `nest_reciprocal_too` comment) — clean at zero illegal overlaps again.
+        assert_eq!(render_overlap_stats(&g).0, 0,
+            "cleanup clears all illegal overlaps (SQ-0222 clean routing) while protecting the up/down column");
         assert_eq!(p(&g,26).0, p(&g,27).0,
             "27 must stay directly below 26 after cleanup (up/down-protected): 26={:?} 27={:?}", p(&g,26), p(&g,27));
         assert!(p(&g,27).1 > p(&g,26).1, "27 stays south of 26 in the up/down lane");
@@ -5010,12 +5007,10 @@ mod tests {
         assert!(p(&g,78).0 < p(&g,180).0,
             "retidy must place 78 west of 180: 78={:?} 180={:?}", p(&g,78), p(&g,180));
         // SQ-1274: this is the same A129 fixture as `cleanup_keeps_updown_protected_column_chain_
-        // aligned`, which carries the full diagnosis of the one known residual (`74 E 25` vs
-        // `26 Up 25`) that cleanup's room-repositioning search cannot clear without breaking a
-        // protected column.
-        assert!(render_overlap_stats(&g).0 <= 1,
-            "repair keeps all but at most the one known SQ-1274 residual cleared (SQ-0222): {}",
-            render_overlap_stats(&g).0);
+        // aligned`, which carries the full diagnosis of the `74 E 25` vs `26 Up 25` shape
+        // `assign_side_slots` resolves by nesting both sides of that pairing away from center.
+        assert_eq!(render_overlap_stats(&g).0, 0,
+            "repair keeps all illegal overlaps cleared (SQ-0222 clean routing)");
         assert_eq!(p(&g,26).0, p(&g,27).0,
             "repair must not knock the up/down-protected 26↔27 column off alignment: 26={:?} 27={:?}", p(&g,26), p(&g,27));
         assert_eq!(p(&g,74).0, p(&g,76).0,
@@ -5180,11 +5175,9 @@ mod tests {
         // the reciprocal (verified: 76 moves from x=-1 to x=-2). WITH the lock, 76 can only move in
         // Y, so it stays on 74's column.
         //
-        // SQ-1274 leaves exactly one residual illegal overlap here (`74 E 25`, one-way, no longer
-        // free to center on room 25's slot 0, clips `26 Up 25`'s own slot-0 path in one cell) that
-        // cleanup's room-repositioning search cannot clear without moving 76 off this test's own
-        // protected column — see `cleanup_keeps_updown_protected_column_chain_aligned`'s comment
-        // for the full diagnosis; same fixture, same cause. The lock still constrains 76 correctly.
+        // SQ-1274: same fixture as `cleanup_keeps_updown_protected_column_chain_aligned`, whose
+        // comment carries the full diagnosis of the `74 E 25` vs `26 Up 25` shape
+        // `assign_side_slots` resolves. The lock still constrains 76 correctly.
         use mapper::graph::MapGraph;
         use Direction::*;
         let mut g = MapGraph::new();
@@ -5208,9 +5201,8 @@ mod tests {
         assert_eq!(p(&g,74).0, p(&g,76).0,
             "76 must stay on 74's column after cleanup (reciprocal N/S locked): 74={:?} 76={:?}", p(&g,74), p(&g,76));
         assert!(p(&g,76).1 > p(&g,74).1, "76 stays south of 74 (only slid along the shared column, if at all)");
-        assert!(render_overlap_stats(&g).0 <= 1,
-            "all illegal overlaps clear but at most the one known SQ-1274 residual (SQ-0222), \
-             with the reciprocal N/S pair still locked: {}", render_overlap_stats(&g).0);
+        assert_eq!(render_overlap_stats(&g).0, 0,
+            "all illegal overlaps clear (SQ-0222) with the reciprocal N/S pair still locked");
     }
 
     #[test]
@@ -5308,11 +5300,11 @@ mod tests {
         assert!(p(&g,78).0 < p(&g,180).0, "78 stays west of 180 through compaction");
         assert_eq!(p(&g,26).0, p(&g,27).0, "26↔27 up/down column stays aligned through compaction");
         assert_eq!(p(&g,74).0, p(&g,76).0, "reciprocal N/S pair 74<->76 stays column-locked through compaction");
-        // SQ-1274: same A129 fixture and same one known residual as
-        // `cleanup_keeps_updown_protected_column_chain_aligned`, which carries the full diagnosis.
-        assert!(render_overlap_stats(&g).0 <= 1,
-            "compaction introduces no illegal overlap beyond the one known SQ-1274 residual \
-             (SQ-0222 clean routing keeps the cluster clear): {}", render_overlap_stats(&g).0);
+        // SQ-1274: same A129 fixture as `cleanup_keeps_updown_protected_column_chain_aligned`,
+        // which carries the full diagnosis of the `74 E 25` vs `26 Up 25` shape
+        // `assign_side_slots` resolves.
+        assert_eq!(render_overlap_stats(&g).0, 0,
+            "compaction introduces no illegal overlap (SQ-0222 clean routing keeps the cluster clear)");
         // Compaction must leave only GUTTER lines — an empty interior column/row remains only when
         // collapsing it would create an illegal overlap (e.g. the column a long direct route runs up).
         // Any empty interior line that could still collapse cleanly is a compaction miss.

@@ -1363,22 +1363,60 @@ fn assign_side_slots(connectors: &mut [RoutedConnector], graph: &MapGraph) {
         // side) and collide.
         let this_room = key.0;
         let single_offset = front_eligible && members.len() == 2;
+        // The offset endpoint's (idx 1's) tangent-biased slot, precomputed so a nested front (see
+        // below) can read it: `single_offset` implies exactly two members, so idx 1 exists whenever
+        // this is `Some`.
+        let back_tangent_slot: Option<u16> = single_offset.then(|| {
+            let (_, _, _, is_exit1, ci1) = members[1];
+            let partner = if is_exit1 { connectors[ci1].dest } else { connectors[ci1].origin };
+            let tangent = match (
+                graph.room(this_room).and_then(|r| r.pos),
+                graph.room(partner).and_then(|r| r.pos),
+            ) {
+                (Some(a), Some(b)) => match key.1 {
+                    Side::Top | Side::Bottom => b.0 - a.0, // tangent axis = x
+                    Side::Left | Side::Right => b.1 - a.1, // tangent axis = y
+                },
+                _ => 0,
+            };
+            if tangent >= 0 { 1 } else { 2 }
+        });
+        // SQ-1274: an Up/Down RECIPROCAL (the front's own return path — a plain compass departure
+        // still keeps literal center, untouched) sharing a side with exactly one plain one-way
+        // COMPASS arrival (the back) is a real, if rare, shape: the arrival can never sit at center
+        // (see above), and every OFFSET this side's clamp allows it can still clip the reciprocal's
+        // own approach in the shared gutter, whichever offset the arrival takes — center is not a
+        // safe harbor here the way it is for two ordinary compass endpoints (measured on the A129
+        // fixture's `74->E->25` vs `26<->25` Up/Down pair: NO slot for the arrival alone reaches
+        // zero illegal cells against a centered reciprocal, only nesting both away from center,
+        // opposite the arrival's own bias, does). So in this one narrow case the reciprocal ALSO
+        // takes a small tangent-opposed offset instead of literal center — nesting both out of the
+        // middle rather than leaving one parked there for the other's bent approach to sweep past.
+        // Every other `single_offset` shape (a departure, or a non-Up/Down reciprocal, sharing a
+        // side with one offset endpoint) is unchanged: this reads `back_tangent_slot`, computed
+        // identically to before, so the back's own slot never moves.
+        let nest_reciprocal_too = single_offset && {
+            let (is_updown0, _, _, _, ci0) = members[0];
+            let (is_updown1, _, _, is_exit1, ci1) = members[1];
+            is_updown0
+                && connectors[ci0].reciprocal
+                && !is_updown1
+                && !is_exit1
+                && !connectors[ci1].reciprocal
+        };
         for (idx, &(_, _, _, is_exit, ci)) in members.iter().enumerate() {
             let slot = if idx == 0 && front_eligible {
-                0
+                if nest_reciprocal_too {
+                    match back_tangent_slot {
+                        Some(1) => 2, // back leans +; nest the reciprocal toward -
+                        Some(2) => 1, // back leans -; nest the reciprocal toward +
+                        _ => 0,
+                    }
+                } else {
+                    0
+                }
             } else if single_offset {
-                let partner = if is_exit { connectors[ci].dest } else { connectors[ci].origin };
-                let tangent = match (
-                    graph.room(this_room).and_then(|r| r.pos),
-                    graph.room(partner).and_then(|r| r.pos),
-                ) {
-                    (Some(a), Some(b)) => match key.1 {
-                        Side::Top | Side::Bottom => b.0 - a.0, // tangent axis = x
-                        Side::Left | Side::Right => b.1 - a.1, // tangent axis = y
-                    },
-                    _ => 0,
-                };
-                if tangent >= 0 { 1 } else { 2 }
+                back_tangent_slot.unwrap_or(1)
             } else {
                 base + idx as u16
             };
@@ -2662,6 +2700,36 @@ mod tests {
             });
             assert_eq!(arrival.entry_corner, None, "{dir:?}: a one-way diagonal never keeps a corner");
         }
+    }
+
+    #[test]
+    fn an_updown_reciprocal_and_a_oneway_arrival_sharing_a_side_both_nest_off_center() {
+        // SQ-1274, the shape found on the A129 fixture (`74 E 25` vs `26 Up 25`, see
+        // `cleanup_keeps_updown_protected_column_chain_aligned` in the app crate): a reciprocal
+        // Up/Down pair and a plain one-way compass arrival can end up sharing one destination
+        // side. The one-way can never center (see the sort-key comment above), but pinning the
+        // reciprocal to literal center instead left NO offset the one-way could take that didn't
+        // clip the reciprocal's own approach in the shared gutter, on the real fixture — so
+        // `assign_side_slots` nests BOTH off center, on opposite sides of it, rather than parking
+        // the reciprocal dead-center for the one-way's bent approach to sweep past.
+        use crate::direction::Direction::{Down, N, Up};
+        let mut g = MapGraph::new();
+        g.upsert_room(1, "A".into());
+        g.upsert_room(2, "B".into());
+        g.upsert_room(3, "C".into());
+        g.set_pos(1, (0, 0)); // A: the destination both connectors share
+        g.set_pos(2, (2, 2)); // B: A's Up/Down reciprocal partner
+        g.set_pos(3, (0, 1)); // C: south of A, one-way N into A
+        g.add_edge(2, Up, 1); // reciprocal Up/Down: 2->Up->1 / 1->Down->2
+        g.add_edge(1, Down, 2);
+        g.add_edge(3, N, 1); // one-way compass, no back edge: C north to A
+        let plan = route_lanes(&g);
+        let reciprocal = plan.connectors.iter().find(|c| c.reciprocal).expect("the Up/Down pair");
+        let one_way = plan.connectors.iter().find(|c| !c.reciprocal).expect("the one-way N edge");
+        assert_eq!(reciprocal.entry, one_way.entry, "precondition: both share A's same side");
+        assert_ne!(reciprocal.entry_slot, 0, "the reciprocal nests off center too, not pinned to it");
+        assert_ne!(one_way.entry_slot, 0, "the one-way never centers (unchanged SQ-1274 invariant)");
+        assert_ne!(reciprocal.entry_slot, one_way.entry_slot, "the two land on distinct cells");
     }
 
     #[test]
