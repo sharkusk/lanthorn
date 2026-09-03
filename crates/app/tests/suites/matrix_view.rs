@@ -43,7 +43,7 @@ fn draw(g: &MapGraph, st: &AppState, area: Rect) -> (Buffer, Vec<(RoomId, Rect)>
     let rm = mapper::render::render_layer(g, st.active_layer(g));
     let mut buf = Buffer::empty(area);
     let hits = render_map_layered(&rm, g, st, area, &mut buf);
-    (buf, hits)
+    (buf, hits.room_rects)
 }
 
 fn lines(buf: &Buffer, area: Rect) -> Vec<String> {

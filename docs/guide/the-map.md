@@ -68,6 +68,11 @@ full room name, for the ones the label column had to abbreviate. The label
 column itself grows to fit the room, wide pane permitting — abbreviation and
 its footnote only kick in once a name genuinely runs out of room.
 
+The drawn view hovers too: a room whose name keeps changing carries a small
+number beside its label, and hovering it lists the room's other names; a `?`
+random exit carries one on its border, and hovering it lists every room that
+direction has actually landed you in so far.
+
 ![The matrix map view: the map as a direction table — one row per room, every passage's true destination in its cell](../maze-grid.png)
 
 **Finding the way back.** Half of what you've walked through hangs off a

@@ -42,7 +42,7 @@ fn draw(m: &mapper::mapper::Mapper) -> (Buffer, Vec<(u16, Rect)>) {
     let area = Rect::new(0, 0, 150, 60);
     let mut buf = Buffer::empty(area);
     let hits = render_map_layered(&rm, &m.graph, &st, area, &mut buf);
-    (buf, hits)
+    (buf, hits.room_rects)
 }
 
 fn rect_of(hits: &[(u16, Rect)], id: u16) -> Rect {

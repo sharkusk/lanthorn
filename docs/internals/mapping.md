@@ -499,6 +499,15 @@ stable to draw a line to. The stub has its own style selector
 (`random=[N→(#187 "Probably New Tunnel"), …]`) beside everything else it already
 records about a room.
 
+**Both superscripts answer a mouse hover, in the drawn view.** Hovering the
+alias-count marker pops a tooltip listing the room's other names, in the order
+the graph first saw them — the same list the room card's "Also seen as" line
+gives. Hovering a `?` stub pops the direction's recorded destinations, the room
+itself printed as "back here" exactly as the room card's exit line does, or
+"destination varies — none recorded yet" for a bare `?`. Neither hover claims a
+click; the marker rects behind them (`render::map::MapHits::marker_rects`) exist
+only at Boxes zoom, since Compact and Overview draw no marker to hover.
+
 ## Finding the way back, without guessing it
 
 A map built from your moves learns a passage one direction at a time. Walk north

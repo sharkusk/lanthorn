@@ -3155,7 +3155,14 @@ pub struct AppState {
     /// occurrence the pointer was actually over.
     pub matrix_hover: Option<(RoomId, ratatui::layout::Rect)>,
 
-
+    /// The room-box marker the pointer is on, if any (SQ-1273): the alias-count superscript or
+    /// a `?` random-exit stub, paired with its kind and the exact rect it was found under —
+    /// `render::map::MapHits::marker_rects` from the last drawn frame. Set from `Moved` events
+    /// only at Boxes zoom (the only zoom that draws a marker at all); the matrix and drawn-only
+    /// hovers below never populate this and it never populates them. Same reasoning as
+    /// `matrix_hover` for carrying the rect alongside the id: one room can own more than one
+    /// marker (an alias count AND a `?` stub), so the id alone would not say which.
+    pub map_hover: Option<(RoomId, crate::render::map::MarkerKind, ratatui::layout::Rect)>,
 
     /// Session turn counter; incremented on each non-empty `SubmitCommand`.
     /// Written into `Meta` on every save (quick-save and named).
@@ -3619,6 +3626,7 @@ impl Default for AppState {
             pane_hover: None,
             control_hover: None,
             matrix_hover: None,
+            map_hover: None,
             turns: 0,
             unsaved_progress: false,
             exit_target: ExitTarget::Exit,

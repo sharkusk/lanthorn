@@ -99,6 +99,11 @@ Absolute URLs or no link.
 - **A random Up or Down exit now shows on the room's box, not just the
   matrix and room panel.** It sits right beside the room's usual stairway
   icon, the same way a random compass exit already showed on the border.
+- **Hover the little number on a room to see which rooms a random exit has
+  led to, or the room's other names.** The map's own alias-count marker and
+  `?` random-exit stub now pop a tooltip, the same way the direction matrix's
+  already did — no more switching to the room panel just to read what a
+  superscript is counting.
 
 - **The map's Nerd Font arrowheads are outline arrows now, not boxed ones.**
   The boxed set the font check used to install turns into a small square with a

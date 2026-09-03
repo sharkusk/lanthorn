@@ -236,8 +236,8 @@ fn the_dock_docks_below_the_matrix_view_too() {
     let rm = mapper::render::render_layer(&m2.graph, 1);
     let mut buf = Buffer::empty(FRAME);
     let hits = app::render::map::render_map_layered(&rm, &m2.graph, &st, open.map, &mut buf);
-    assert!(!hits.is_empty(), "the matrix still publishes click targets in the shortened pane");
-    for (_, r) in &hits {
+    assert!(!hits.room_rects.is_empty(), "the matrix still publishes click targets in the shortened pane");
+    for (_, r) in &hits.room_rects {
         assert!(r.bottom() <= open.room_dock.y, "nothing the matrix draws reaches into the dock");
     }
 }

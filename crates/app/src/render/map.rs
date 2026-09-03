@@ -594,7 +594,15 @@ impl std::ops::Deref for DerivedSource<'_> {
 /// The whole map is built in scroll-independent virtual space (see `VRect`) and
 /// blitted to the screen with a single translation, so panning never re-routes
 /// connectors — the routes are identical at every scroll offset.
-pub fn render_map(rm: &RenderMap, state: &AppState, area: Rect, buf: &mut Buffer) {
+///
+/// Returns the hover-hit rects of every superscript marker actually drawn this call — the
+/// alias-count marker and any `?` random-exit stub (SQ-1273) — collected at the exact cells
+/// `draw_box_room`/`draw_portal_icons` painted, so a rect can never claim a cell nothing was
+/// drawn to. Always empty outside Boxes zoom, since neither function draws a marker at any
+/// other zoom. Most callers (tests, the tidy animation, the dump harness) have no use for
+/// these and simply ignore the return value, exactly as they ignored the old `()`.
+pub fn render_map(rm: &RenderMap, state: &AppState, area: Rect, buf: &mut Buffer) -> Vec<(RoomId, MarkerKind, Rect)> {
+    let mut marker_rects: Vec<(RoomId, MarkerKind, Rect)> = Vec::new();
     let zoom = state.zoom;
     let scroll = state.scroll;
 
@@ -620,7 +628,7 @@ pub fn render_map(rm: &RenderMap, state: &AppState, area: Rect, buf: &mut Buffer
                 put_str(buf, area.x as i32, (area.y + top) as i32 + i as i32, &clamped,
                     transcript_style, area);
             }
-            return;
+            return marker_rects;
         }
     }
 
@@ -633,7 +641,7 @@ pub fn render_map(rm: &RenderMap, state: &AppState, area: Rect, buf: &mut Buffer
             let (vx, vy) = cell_to_virtual(room.cell, zoom);
             put_char(buf, vx + off_x, vy + off_y, '■', room_style(room, state), area);
         }
-        return;
+        return marker_rects;
     }
 
     // Boxes zoom uses the non-uniform lane-routing position tables; Compact keeps the
@@ -685,14 +693,14 @@ pub fn render_map(rm: &RenderMap, state: &AppState, area: Rect, buf: &mut Buffer
         let (vx, vy) = room_virtual(room.cell);
         let sx = vx + off_x;
         let sy = vy + off_y;
-        draw_room(room, state, zoom, sx, sy, area, buf);
+        draw_room(room, state, zoom, sx, sy, area, buf, &mut marker_rects);
     }
 
     // Portal-icon overlay (Boxes zoom), drawn after the rooms so icons sit on the box. In
     // normal view the icons go on the interior right column; in portal view (show_portal_labels)
     // they move onto the border and the destination names float outside the box.
     if boxes {
-        draw_portal_icons(rm, placed, state, state.show_portal_labels, (off_x, off_y), area, buf);
+        draw_portal_icons(rm, placed, state, state.show_portal_labels, (off_x, off_y), area, buf, &mut marker_rects);
     }
 
     // ── 5. Draw departure/arrival arrowheads LAST, so each embeds in the room ─
@@ -702,6 +710,7 @@ pub fn render_map(rm: &RenderMap, state: &AppState, area: Rect, buf: &mut Buffer
         let current_room = rm.rooms.iter().find(|r| r.is_current).map(|r| r.id);
         draw_connector_arrows(&arrowheads, (off_x, off_y), area, buf, &state.colors, state.selected_room, current_room);
     }
+    marker_rects
 }
 
 // ── Layer tab strip ───────────────────────────────────────────────────────────
@@ -811,6 +820,16 @@ pub(crate) fn loc_method_label(m: zvm::location::LocationMethod) -> &'static str
     }
 }
 
+/// Every hit-rect [`render_map_layered`] produced this frame: the room boxes (drawn view) or
+/// row/destination-cell rects (matrix view) mouse routing already used before SQ-1273, plus —
+/// Boxes zoom only, and empty in the matrix view — the superscript marker rects a `Moved` event
+/// resolves against for the room-marker hover tooltip (`main.rs`'s `map_update_hover`).
+#[derive(Debug, Clone, Default)]
+pub struct MapHits {
+    pub room_rects: Vec<(RoomId, Rect)>,
+    pub marker_rects: Vec<(RoomId, MarkerKind, Rect)>,
+}
+
 /// because in that case the border carries layer tabs via `draw_top_inset` and drawing the
 /// in-content strip would produce a double indicator and consume a content row.
 pub fn render_map_layered(
@@ -819,7 +838,7 @@ pub fn render_map_layered(
     state: &AppState,
     area: Rect,
     buf: &mut Buffer,
-) -> Vec<(RoomId, Rect)> {
+) -> MapHits {
     use crate::render::paneframe::BorderStyle;
     // Hand the pane's size to input handlers that never see a pane rect (`Action::Recenter`).
     // Recorded here, from the rect actually drawn into, so it cannot drift from what the player
@@ -838,10 +857,12 @@ pub fn render_map_layered(
     // — none of them is showing the player a layer they chose a view for.
     let layer = state.active_layer(graph);
     let hits = if graph.layer_view(layer) == mapper::layer::MapView::Matrix {
-        crate::render::matrix::render_matrix(graph, layer, state, body_area, buf)
+        let room_rects = crate::render::matrix::render_matrix(graph, layer, state, body_area, buf);
+        MapHits { room_rects, marker_rects: Vec::new() }
     } else {
-        render_map(rm, state, body_area, buf);
-        room_screen_rects(rm, state, body_area)
+        let marker_rects = render_map(rm, state, body_area, buf);
+        let room_rects = room_screen_rects(rm, state, body_area);
+        MapHits { room_rects, marker_rects }
     };
 
     // Progress bar while the `animate-tidy` frames are built on a worker thread.
@@ -850,6 +871,77 @@ pub fn render_map_layered(
         draw_tidy_progress(job, state, area, buf);
     }
     hits
+}
+
+/// A direction's word, capitalized the way a tooltip title reads it ("North", "Up") — the same
+/// words [`mapper::direction::long_label`] spells out for prose, just with the leading letter
+/// upper-cased for a title line rather than embedded mid-sentence.
+fn dir_title(dir: Direction) -> String {
+    let word = mapper::direction::long_label(dir);
+    let mut chars = word.chars();
+    match chars.next() {
+        Some(first) => first.to_uppercase().chain(chars).collect(),
+        None => String::new(),
+    }
+}
+
+/// Draw the hover tooltip for whichever room-box marker the pointer is on, if any (SQ-1273):
+/// the alias-count superscript, or a `?` random-exit stub.
+///
+/// `state.map_hover` is what `main.rs`'s `map_update_hover` last resolved from a `Moved` event
+/// against [`MapHits::marker_rects`] — the exact cells `draw_box_room`/`draw_portal_icons`
+/// painted this frame. Reuses the same floating-box renderer the matrix's own hover tip and the
+/// border-control hints already draw with (`tooltip::draw_tip`), so styling and placement
+/// (beside the anchor, clamped to `area`, flipped when the preferred side would run off) are
+/// identical to theirs — nothing new to theme.
+///
+/// - `MarkerKind::Alias`: "Also seen as:" followed by the room's other names, in stored order.
+/// - `MarkerKind::Random(dir)`: the direction's name as a title, then either every recorded
+///   destination (the room's own id printed as "back here", exactly as the room card's exit
+///   card does) or, when nothing has been recorded yet, "destination varies — none recorded
+///   yet".
+///
+/// Returns `None` — and paints nothing — while a modal overlay owns the pointer, when nothing is
+/// hovered, or when the hovered room no longer exists in `graph` (a frame drawn after the room
+/// was removed, before the next hover resolution clears it).
+pub fn draw_map_hover_tip(
+    graph: &mapper::graph::MapGraph,
+    state: &AppState,
+    area: Rect,
+    buf: &mut Buffer,
+) -> Option<Rect> {
+    if state.any_modal_overlay_open() {
+        return None;
+    }
+    let (room_id, kind, rect) = state.map_hover?;
+    let room = graph.room(room_id)?;
+
+    let lines: Vec<String> = match kind {
+        MarkerKind::Alias => {
+            let mut lines = vec!["Also seen as:".to_string()];
+            lines.extend(room.aliases.iter().cloned());
+            lines
+        }
+        MarkerKind::Random(dir) => {
+            let mut lines = vec![dir_title(dir)];
+            let dests = graph.random_destinations(room_id, dir);
+            if dests.is_empty() {
+                lines.push("destination varies — none recorded yet".to_string());
+            } else {
+                for &id in dests {
+                    lines.push(if id == room_id {
+                        "back here".to_string()
+                    } else {
+                        crate::render::room_info::display_name(graph, id)
+                    });
+                }
+            }
+            lines
+        }
+    };
+
+    let anchor_col = rect.x + rect.width / 2;
+    super::tooltip::draw_tip(buf, area, anchor_col, rect.y, &lines, &state.colors.theme, &state.symbols)
 }
 
 /// Draw a centered, bordered progress box in the map pane while the tidy animation
@@ -2076,6 +2168,7 @@ type PortalSlots<'a> = [Option<(char, Option<&'a str>)>; 3];
 /// portal's destination name is drawn right-aligned on that row with the icon pinned far-right.
 /// In the default view an up-portal claims the upper-right corner, shifting the `●` notes marker
 /// one cell left so both stay visible.
+#[allow(clippy::too_many_arguments)]
 fn draw_portal_icons(
     rm: &RenderMap,
     placed: &std::collections::HashMap<RoomId, VRect>,
@@ -2084,6 +2177,7 @@ fn draw_portal_icons(
     offset: (i32, i32),
     area: Rect,
     buf: &mut Buffer,
+    marker_rects: &mut Vec<(RoomId, MarkerKind, Rect)>,
 ) {
     use std::collections::HashMap;
     let (off_x, off_y) = offset;
@@ -2262,10 +2356,14 @@ fn draw_portal_icons(
             }
             let marker = random_stub_marker(count);
             let marker_style = accent_on(style, random_stub_style);
-            match slot {
-                0 => put_str(buf, bx + BOX_W / 2 + off_x, by + off_y, &marker, marker_style, area),
-                2 => put_str(buf, bx + BOX_W / 2 + off_x, by + BOX_H - 1 + off_y, &marker, marker_style, area),
-                _ => put_str(buf, bx + BOX_W - 1 + off_x, by + 2 + off_y, &marker, marker_style, area),
+            let (mx, my) = match slot {
+                0 => (bx + BOX_W / 2 + off_x, by + off_y),
+                2 => (bx + BOX_W / 2 + off_x, by + BOX_H - 1 + off_y),
+                _ => (bx + BOX_W - 1 + off_x, by + 2 + off_y),
+            };
+            put_str(buf, mx, my, &marker, marker_style, area);
+            if let Some(r) = clipped_marker_rect(mx, my, marker.chars().count() as i32, area) {
+                marker_rects.push((room.id, MarkerKind::Random(dir), r));
             }
         }
     }
@@ -2290,6 +2388,7 @@ fn outline_for(
 
 /// Draw a room at screen top-left `(sx, sy)` (already translated from virtual space;
 /// may be partially or fully off-area — drawing is clipped per cell).
+#[allow(clippy::too_many_arguments)]
 fn draw_room(
     room: &RenderRoom,
     state: &AppState,
@@ -2298,6 +2397,7 @@ fn draw_room(
     sy: i32,
     area: Rect,
     buf: &mut Buffer,
+    marker_rects: &mut Vec<(RoomId, MarkerKind, Rect)>,
 ) {
     let base_style = room_style(room, state);
     let selected = state.selected_room == Some(room.id);
@@ -2314,7 +2414,7 @@ fn draw_room(
             let random_stub_style = state.colors.theme.get("map.room_random_stub").style;
             draw_box_room(
                 room, sx, sy, base_style, alias_marker_style, random_stub_style, &state.symbols,
-                selected, state.show_alignment, state.show_room_numbers, area, buf,
+                selected, state.show_alignment, state.show_room_numbers, area, buf, marker_rects,
             );
         }
     }
@@ -2339,6 +2439,32 @@ fn accent_on(base: Style, accent: Style) -> Style {
 
 fn alias_marker(count: usize) -> String {
     super::superscript_count(count)
+}
+
+/// Which superscript marker a hover-rect names on a room box (SQ-1273): the alias-count marker
+/// beside the label, or a `?` random-exit stub for a specific direction. Carried alongside the
+/// room id and the exact cells it was drawn into (`MapHits::marker_rects`) so `main.rs`'s
+/// `map_update_hover` can resolve a `Moved` event to the right tooltip content.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MarkerKind {
+    Alias,
+    Random(Direction),
+}
+
+/// The visible (area-clipped) rect a `put_str` of `w` cells starting at `(x, y)` actually
+/// painted into, or `None` if none of it landed inside `area` — mirrors `put_str`/`put_char`'s
+/// own per-cell clip (`crate::render::put_str`) so a marker's hover rect can never claim a cell
+/// nothing was drawn to.
+fn clipped_marker_rect(x: i32, y: i32, w: i32, area: Rect) -> Option<Rect> {
+    if w <= 0 || y < area.y as i32 || y >= area.bottom() as i32 {
+        return None;
+    }
+    let x0 = x.max(area.x as i32);
+    let x1 = (x + w).min(area.right() as i32);
+    if x1 <= x0 {
+        return None;
+    }
+    Some(Rect::new(x0 as u16, y as u16, (x1 - x0) as u16, 1))
 }
 
 /// Draw a compact (10×4 step) room: 8×3 box with label row.
@@ -2455,6 +2581,7 @@ fn draw_box_room(
     show_room_numbers: bool,
     area: Rect,
     buf: &mut Buffer,
+    marker_rects: &mut Vec<(RoomId, MarkerKind, Rect)>,
 ) {
     let (w, h) = zoom_box_size(Zoom::Boxes); // (11, 5)
     let (w, h) = (w as i32, h as i32);
@@ -2513,14 +2640,11 @@ fn draw_box_room(
                 let pad = iw.saturating_sub(full_len);
                 let left = (pad / 2) as i32;
                 put_str(buf, sx + 1 + left, y, line, style, area);
-                put_str(
-                    buf,
-                    sx + 1 + left + line.chars().count() as i32,
-                    y,
-                    &marker,
-                    accent_on(style, alias_marker_style),
-                    area,
-                );
+                let marker_x = sx + 1 + left + line.chars().count() as i32;
+                put_str(buf, marker_x, y, &marker, accent_on(style, alias_marker_style), area);
+                if let Some(r) = clipped_marker_rect(marker_x, y, marker_w as i32, area) {
+                    marker_rects.push((room.id, MarkerKind::Alias, r));
+                }
             } else {
                 put_str(buf, sx + 1, y, &center(line, iw), style, area);
             }
@@ -2573,7 +2697,11 @@ fn draw_box_room(
     // point of the mark is that there is nowhere stable to route to.
     for &(dir, count) in &room.random_stubs {
         if let Some((x, y)) = random_stub_pos(sx, sy, dir, w, h) {
-            put_str(buf, x, y, &random_stub_marker(count), accent_on(border_style, random_stub_style), area);
+            let marker = random_stub_marker(count);
+            put_str(buf, x, y, &marker, accent_on(border_style, random_stub_style), area);
+            if let Some(r) = clipped_marker_rect(x, y, marker.chars().count() as i32, area) {
+                marker_rects.push((room.id, MarkerKind::Random(dir), r));
+            }
         }
     }
 }
@@ -3829,6 +3957,122 @@ mod tests {
             mapper::matrix::MatrixCell::Random { destinations: 1 },
             "the matrix cell is unaffected by where the render layer puts the marker"
         );
+    }
+
+    // ── SQ-1273: room-box marker hover rects ─────────────────────────────────
+
+    /// The alias-count marker publishes its own hover rect, at exactly the glyph cell it was
+    /// drawn into. Falsify by reverting the `marker_rects.push` in the alias branch of
+    /// `draw_box_room` and this fails on the empty-vec assertion.
+    #[test]
+    fn room_box_alias_marker_publishes_a_hover_rect() {
+        use mapper::graph::MapGraph;
+        let mut g = MapGraph::new();
+        g.upsert_room(1, "A".into());
+        g.upsert_room(1, "B".into());
+        g.upsert_room(1, "C".into());
+        g.upsert_room(1, "Cave".into()); // current label "Cave"; 3 aliases
+        g.set_pos(1, (0, 0));
+        let rm = render(&g);
+        let state = AppState::default();
+        let area = Rect::new(0, 0, 60, 20);
+        let mut buf = Buffer::empty(area);
+        let markers = render_map(&rm, &state, area, &mut buf);
+
+        // Same scan `room_box_alias_marker_uses_its_own_style_selector` uses to find the glyph.
+        let (mx, my) = (1u16..=9)
+            .flat_map(|x| (1u16..=2).map(move |y| (x, y)))
+            .find(|&(x, y)| buf.cell((x, y)).is_some_and(|c| c.symbol() == "³"))
+            .expect("the alias marker glyph '³' must be drawn somewhere in the box");
+        assert_eq!(
+            markers,
+            vec![(1, MarkerKind::Alias, Rect::new(mx, my, 1, 1))],
+            "exactly one alias-marker rect, at the glyph's own cell: {markers:?}"
+        );
+    }
+
+    /// A compass `?` stub publishes its own hover rect at the same border-centre cell the glyph
+    /// itself lands on.
+    #[test]
+    fn room_box_random_stub_publishes_a_hover_rect() {
+        use mapper::graph::MapGraph;
+        let mut g = MapGraph::new();
+        g.upsert_room(1, "Windy Cave".into());
+        g.upsert_room(2, "A".into());
+        g.upsert_room(3, "B".into());
+        g.set_pos(1, (0, 0));
+        g.mark_random_exit(1, mapper::direction::Direction::E);
+        g.note_random_destination(1, mapper::direction::Direction::E, 2);
+        g.note_random_destination(1, mapper::direction::Direction::E, 3);
+        let rm = render(&g);
+        let state = AppState::default();
+        let area = Rect::new(0, 0, 60, 20);
+        let mut buf = Buffer::empty(area);
+        let markers = render_map(&rm, &state, area, &mut buf);
+
+        // East's border-centre cell on an 11×5 box at (0,0) is (10, 2) — see `random_stub_pos`.
+        assert_eq!(
+            markers,
+            vec![(1, MarkerKind::Random(mapper::direction::Direction::E), Rect::new(10, 2, 1, 1))],
+            "{markers:?}"
+        );
+    }
+
+    /// A `?`-marked Up exit publishes its hover rect at the portal-badge anchor it shares with a
+    /// real Up passage (SQ-1269 hole 4).
+    #[test]
+    fn room_box_marked_up_exit_publishes_a_hover_rect_beside_the_portal_badge() {
+        use mapper::graph::MapGraph;
+        let mut g = MapGraph::new();
+        g.upsert_room(1, "Windy Cave".into());
+        g.set_pos(1, (0, 0));
+        g.mark_random_exit(1, mapper::direction::Direction::Up);
+        g.note_random_destination(1, mapper::direction::Direction::Up, 2);
+        let rm = render(&g);
+        let state = AppState::default();
+        let area = Rect::new(0, 0, 60, 20);
+        let mut buf = Buffer::empty(area);
+        let markers = render_map(&rm, &state, area, &mut buf);
+
+        // Slot 0 (Up) is the top-centre cell (5, 0) on an 11×5 box at (0,0).
+        assert_eq!(
+            markers,
+            vec![(1, MarkerKind::Random(mapper::direction::Direction::Up), Rect::new(5, 0, 1, 1))],
+            "{markers:?}"
+        );
+    }
+
+    /// A room with no alias and no random-exit mark publishes no marker rects at all.
+    #[test]
+    fn room_box_with_no_markers_publishes_no_hover_rects() {
+        use mapper::graph::MapGraph;
+        let mut g = MapGraph::new();
+        g.upsert_room(1, "Plain Room".into());
+        g.set_pos(1, (0, 0));
+        let rm = render(&g);
+        let state = AppState::default();
+        let area = Rect::new(0, 0, 60, 20);
+        let mut buf = Buffer::empty(area);
+        let markers = render_map(&rm, &state, area, &mut buf);
+        assert!(markers.is_empty(), "{markers:?}");
+    }
+
+    /// Markers exist only at Boxes zoom: the same aliased room at Compact zoom draws no
+    /// superscript at all, and so publishes no hover rect for one.
+    #[test]
+    fn compact_zoom_publishes_no_marker_rects_even_for_an_aliased_room() {
+        use mapper::graph::MapGraph;
+        let mut g = MapGraph::new();
+        g.upsert_room(1, "A".into());
+        g.upsert_room(1, "Cave".into());
+        g.set_pos(1, (0, 0));
+        let rm = render(&g);
+        let mut state = AppState::default();
+        state.zoom = Zoom::Compact;
+        let area = Rect::new(0, 0, 60, 20);
+        let mut buf = Buffer::empty(area);
+        let markers = render_map(&rm, &state, area, &mut buf);
+        assert!(markers.is_empty(), "{markers:?}");
     }
 
     /// A direction that carries BOTH a real edge and a stale random mark (a hand-edited or
@@ -6904,6 +7148,135 @@ mod tests {
         assert!(content.contains("Tidying"), "shows the Tidying label");
         assert!(content.contains('┌'), "has a top-left border corner");
         assert!(content.contains('│'), "has vertical border sides");
+    }
+
+    // ── SQ-1273: room-box marker hover tooltip ───────────────────────────────
+
+    /// Cell contents as plain strings within `rect`, concatenated — enough to search for text a
+    /// tooltip box painted. Mirrors `matrix.rs`'s own `buf_contains`.
+    fn buf_contains(buf: &Buffer, rect: Rect, needle: &str) -> bool {
+        let mut joined = String::new();
+        for y in rect.y..rect.bottom() {
+            for x in rect.x..rect.right() {
+                joined.push_str(buf.cell((x, y)).map(|c| c.symbol()).unwrap_or(" "));
+            }
+        }
+        joined.contains(needle)
+    }
+
+    /// Hovering the alias marker shows "Also seen as:" followed by every alias, in the order the
+    /// graph stores them (first-seen order — see `mapper::graph::Room::rename`).
+    #[test]
+    fn map_hover_tip_lists_aliases_in_stored_order() {
+        use mapper::graph::MapGraph;
+        let mut g = MapGraph::new();
+        g.upsert_room(1, "Twisty Cave".into());
+        g.upsert_room(1, "Twisty Place".into());
+        g.upsert_room(1, "Maze".into()); // current label; aliases: [Twisty Cave, Twisty Place]
+        g.set_pos(1, (0, 0));
+        let mut state = AppState::default();
+        state.map_hover = Some((1, MarkerKind::Alias, Rect::new(3, 1, 1, 1)));
+        let area = Rect::new(0, 0, 60, 20);
+        let mut buf = Buffer::empty(area);
+        let painted = draw_map_hover_tip(&g, &state, area, &mut buf).expect("a tip was painted");
+
+        let text: String = (painted.y..painted.bottom())
+            .flat_map(|y| (painted.x..painted.right()).map(move |x| (x, y)))
+            .map(|(x, y)| buf.cell((x, y)).map(|c| c.symbol().to_string()).unwrap_or_default())
+            .collect();
+        let head = text.find("Also seen as:").unwrap_or_else(|| panic!("no header line: {text:?}"));
+        let first = text.find("Twisty Cave").unwrap_or_else(|| panic!("no first alias: {text:?}"));
+        let second = text.find("Twisty Place").unwrap_or_else(|| panic!("no second alias: {text:?}"));
+        assert!(head < first && first < second, "header, then aliases in stored order: {text:?}");
+    }
+
+    /// Hovering a `?` stub with recorded destinations names them the way the room card's exit
+    /// card does — the room's own id prints as "back here" — under a title naming the direction.
+    #[test]
+    fn map_hover_tip_names_random_destinations_with_back_here() {
+        use mapper::graph::MapGraph;
+        let mut g = MapGraph::new();
+        g.upsert_room(1, "Windy Cave".into());
+        g.upsert_room(2, "Forest Path".into());
+        g.set_pos(1, (0, 0));
+        g.set_pos(2, (1, 0));
+        g.mark_random_exit(1, mapper::direction::Direction::S);
+        g.note_random_destination(1, mapper::direction::Direction::S, 2);
+        g.note_random_destination(1, mapper::direction::Direction::S, 1); // leads back here too
+        let mut state = AppState::default();
+        state.map_hover =
+            Some((1, MarkerKind::Random(mapper::direction::Direction::S), Rect::new(5, 4, 1, 1)));
+        let area = Rect::new(0, 0, 60, 20);
+        let mut buf = Buffer::empty(area);
+        let painted = draw_map_hover_tip(&g, &state, area, &mut buf).expect("a tip was painted");
+
+        assert!(buf_contains(&buf, painted, "South"), "titled by the direction");
+        assert!(buf_contains(&buf, painted, "Forest Path"), "names the other destination");
+        assert!(buf_contains(&buf, painted, "back here"), "the room's own id reads \"back here\"");
+    }
+
+    /// A bare `?` with no recorded destinations reads "destination varies — none recorded yet".
+    #[test]
+    fn map_hover_tip_says_none_recorded_yet_for_a_bare_stub() {
+        use mapper::graph::MapGraph;
+        let mut g = MapGraph::new();
+        g.upsert_room(1, "Windy Cave".into());
+        g.set_pos(1, (0, 0));
+        g.mark_random_exit(1, mapper::direction::Direction::S);
+        let mut state = AppState::default();
+        state.map_hover =
+            Some((1, MarkerKind::Random(mapper::direction::Direction::S), Rect::new(5, 4, 1, 1)));
+        let area = Rect::new(0, 0, 60, 20);
+        let mut buf = Buffer::empty(area);
+        let painted = draw_map_hover_tip(&g, &state, area, &mut buf).expect("a tip was painted");
+        assert!(buf_contains(&buf, painted, "destination varies — none recorded yet"));
+    }
+
+    /// No hover, or a modal overlay open, paints no tip.
+    #[test]
+    fn no_hover_or_a_modal_overlay_paints_no_map_tip() {
+        use mapper::graph::MapGraph;
+        let mut g = MapGraph::new();
+        g.upsert_room(1, "Windy Cave".into());
+        g.set_pos(1, (0, 0));
+        let area = Rect::new(0, 0, 60, 20);
+
+        let state = AppState::default();
+        let mut buf = Buffer::empty(area);
+        assert_eq!(draw_map_hover_tip(&g, &state, area, &mut buf), None, "nothing hovered");
+
+        let mut state = AppState::default();
+        state.map_hover = Some((1, MarkerKind::Alias, Rect::new(3, 1, 1, 1)));
+        state.overlays.hotkey_dialog = true;
+        let mut buf = Buffer::empty(area);
+        assert_eq!(
+            draw_map_hover_tip(&g, &state, area, &mut buf),
+            None,
+            "a modal overlay must suppress the tip"
+        );
+    }
+
+    /// The tip flips to stay inside the map pane near an edge — the same placement rule
+    /// `tooltip::draw_tip` gives the matrix's own hover tip, exercised here through the map's
+    /// entry point rather than re-tested at the tooltip layer.
+    #[test]
+    fn map_hover_tip_flips_to_stay_inside_the_pane_near_the_bottom_edge() {
+        use mapper::graph::MapGraph;
+        let mut g = MapGraph::new();
+        g.upsert_room(1, "A".into());
+        g.upsert_room(1, "Cave".into());
+        g.set_pos(1, (0, 0));
+        let area = Rect::new(0, 0, 60, 20);
+        let mut state = AppState::default();
+        // Near the pane's bottom edge: a tip preferring to drop below would run off.
+        state.map_hover = Some((1, MarkerKind::Alias, Rect::new(30, area.bottom() - 1, 1, 1)));
+        let mut buf = Buffer::empty(area);
+        let painted = draw_map_hover_tip(&g, &state, area, &mut buf).expect("a tip was painted");
+        assert!(painted.y >= area.y && painted.bottom() <= area.bottom(), "{painted:?} vs {area:?}");
+        assert!(
+            painted.bottom() <= state.map_hover.unwrap().2.y,
+            "flipped above the anchor rather than running off the pane's bottom: {painted:?}"
+        );
     }
 }
 
