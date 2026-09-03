@@ -405,6 +405,15 @@ pub enum Action {
     ToggleRoomDock,
     /// Show a specific room-dock body — a click on one of its two view tabs.
     SetRoomDockView(crate::state::RoomDockView),
+    /// A mouse-wheel notch over the room dock: scroll its ACTIVE body's
+    /// `ListScroll` by `delta` rows (SQ-1280). Same sign convention and the
+    /// same primitive as `ListWheel` — a body row is a `ListScroll` "item"
+    /// of height 1 — but a separate action, since the dock is not one of
+    /// `ListWheel`'s exclusive modal overlays: it coexists with the map and
+    /// story panes and keeps its own viewport (`AppState::room_dock_body_viewport`)
+    /// rather than sharing `modal_list_viewport`. The dock has no keyboard
+    /// focus, so this is the only way to move it.
+    RoomDockScroll(i32),
     /// Right-click on a room (SQ-1265): pin the room dock on it (keeping
     /// whichever body was last shown, like a left click) and open the room's
     /// context menu anchored at the click's terminal cell (col, row).
@@ -843,12 +852,15 @@ fn hit(rect: ratatui::layout::Rect, col: u16, row: u16) -> bool {
 /// Returns `None` when the event is not inside `dock`, which is the caller's cue to route it
 /// normally. `tabs` and `close` are the hit-rects `draw_room_dock` returned for the frame just
 /// drawn — a click on the close box (SQ-1265) closes the dock, the same effect
-/// `toggle-room-panel` has while it is open.
+/// `toggle-room-panel` has while it is open. A wheel notch anywhere inside the dock scrolls the
+/// active body (SQ-1280), honouring `invert` the way every other wheel handler resolves
+/// `mouse_wheel_invert` — via [`wheel_delta`].
 pub fn room_dock_mouse_action(
     dock: ratatui::layout::Rect,
     tabs: &[(crate::state::RoomDockView, ratatui::layout::Rect)],
     close: Option<ratatui::layout::Rect>,
     m: &crossterm::event::MouseEvent,
+    invert: bool,
 ) -> Option<Action> {
     use crossterm::event::{MouseButton, MouseEventKind};
     if dock.width == 0 || dock.height == 0 || !hit(dock, m.column, m.row) {
@@ -863,6 +875,9 @@ pub fn room_dock_mouse_action(
         }) {
             return Some(Action::SetRoomDockView(view));
         }
+    }
+    if let Some(d) = wheel_delta(m.kind, invert) {
+        return Some(Action::RoomDockScroll(d as i32));
     }
     Some(Action::None)
 }
@@ -2767,6 +2782,21 @@ fn apply_action_inner(action: Action, state: &mut AppState, mapper: &mut Mapper)
 
         Action::SetRoomDockView(view) => {
             state.room_dock_view = view;
+        }
+
+        // SQ-1280: the wheel scrolls whichever body is showing. `len()` re-records
+        // the viewport the last render measured (`room_dock_body_viewport`, synced
+        // the same way `modal_list_viewport` is) before `scroll_by` clamps against
+        // it — the same two-step every `ListWheel` arm above takes, just against a
+        // per-body `ListScroll` instead of a shared modal one.
+        Action::RoomDockScroll(delta) => {
+            let vp = state.room_dock_body_viewport as usize;
+            let anim = state.config.animation.clone();
+            let scroll = match state.room_dock_view {
+                crate::state::RoomDockView::Info => &mut state.room_dock_info_scroll,
+                crate::state::RoomDockView::Diagnostics => &mut state.room_dock_diag_scroll,
+            };
+            scroll.scroll_by(delta as isize, vp, &anim);
         }
 
         Action::ToggleRoomDock => {

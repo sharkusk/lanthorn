@@ -27,6 +27,10 @@ Absolute URLs or no link.
 > visible tag `*Next release:*`. `release.yml` refuses to cut a release
 > while any such tag, or this Unreleased section, still exists.*
 
+- **The room panel scrolls.** Notes, renamed aliases and a full exit card can
+  now run taller than the panel — scroll the mouse wheel over either the Room
+  or Diagnostics body to see the rest, and a thin scrollbar on the right edge
+  shows there's more below.
 - **`gvm-cli --version` names itself `gvm-cli` again**, not the crates.io
   package name it briefly picked up in 0.4.1.
 - **The map no longer draws an arrow for a move some games decide at random.**
