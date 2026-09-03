@@ -579,25 +579,15 @@ pub fn entry_corner(exit_dir: Direction, entry_dir: Option<Direction>) -> Option
     }
 }
 
-/// Every `(room, direction)` that a diagonal DEPARTS from — i.e. every corner already spoken for by
-/// a room's own outgoing diagonal (SQ-0314). A set of lookups only; nothing iterates it, so the
-/// hash order never reaches the output.
-fn departure_corners(graph: &MapGraph) -> std::collections::HashSet<(RoomId, Direction)> {
-    graph
-        .connections()
-        .iter()
-        .filter(|c| is_diagonal(c.dir) && c.origin != c.dest) // a self-loop departs no corner (SQ-1264)
-        .map(|c| (c.origin, c.dir))
-        .collect()
-}
-
 /// For every corner that two or more ONE-WAY diagonals want to arrive on, the `compass` index of
-/// the connector that keeps it (SQ-0314). Corners wanted by only one arrival are absent.
+/// the connector that keeps it. Corners wanted by only one arrival are absent.
 ///
-/// A corner holds one connector. `departure_corners` settles arrival-vs-DEPARTURE, but two arrivals
-/// can want the same corner with no departure in sight: two rooms both leading `NE` into the same
-/// hub both want its `SW` corner. It takes four commands to build — go NE into a room, leave it by
-/// a ladder, come back NE from somewhere else — so it is an ordinary shape, not a curiosity.
+/// Since SQ-1274, a one-way arrival never actually KEEPS a corner (`resolve_entry_corner` denies
+/// it unconditionally — every one-way diagonal falls to an ordinary side slot instead, the same
+/// as any other one-way arrival). This still matters for the one case that survives it: a
+/// RECIPROCAL pair's own corner claim (which IS the return path, and is exempt) can share a key
+/// with some unrelated one-way diagonal that also wants it; `resolve_entry_corner`'s call site
+/// consults this so that phantom contest doesn't cost the reciprocal its rightful corner.
 ///
 /// The winner is the UNDISTORTED arrival where there is one: its direction actually matches the
 /// geometry, so it has the better claim to the corner the geometry points at. Only one arrival CAN
@@ -605,8 +595,7 @@ fn departure_corners(graph: &MapGraph) -> std::collections::HashSet<(RoomId, Dir
 /// one room — so this decides all but pathological ties, which fall back to the lowest index.
 /// Computed from the graph, so it does not depend on the order connectors happen to be routed in.
 ///
-/// Reciprocals never appear here: a reciprocal owns its corner via its own back edge, and
-/// `departure_corners` already keeps one-ways off a corner the room departs from.
+/// Reciprocals never appear here: a reciprocal owns its corner via its own back edge.
 fn arrival_corner_owners(compass: &[&Connection]) -> std::collections::HashMap<(RoomId, Direction), usize> {
     let mut best: std::collections::HashMap<(RoomId, Direction), (bool, usize)> =
         std::collections::HashMap::new();
@@ -627,31 +616,20 @@ fn arrival_corner_owners(compass: &[&Connection]) -> std::collections::HashMap<(
 
 /// Resolve where a connector ARRIVES: its corner, or `None` for an ordinary side doorway.
 ///
-/// A corner hosts at most one connector, and a DEPARTURE outranks an arrival — a room's own
-/// outgoing diagonal keeps its corner, and an arrival that wanted the same one yields to a side
-/// slot (SQ-0314).
+/// SQ-1274: a corner is one of a room's eight compass slots (the four side arrowhead cells plus
+/// the four corners), and a one-way arrival landing on ANY of them reads as "that direction leads
+/// back here" — which isn't true, or it would BE a reciprocal. So a one-way arrival never keeps
+/// the corner, unconditionally, whether or not the room's own outgoing diagonal (or anything
+/// else) also wants it; it falls to an ordinary side doorway instead, exactly like a one-way
+/// arrival that was never diagonal at all (`assign_side_slots` keeps that side's own center cell
+/// off-limits to it there too, the cardinal half of the same rule).
 ///
 /// The rule only binds ONE-WAY arrivals. When a back edge exists, that edge IS this connector — the
-/// router collapsed the pair — so it owns the corner by definition and there is nothing to contend
-/// with: a room has a single edge per direction, so the back edge cannot also be some other
-/// connector's departure.
-///
-/// This contention is not a corner case; it is what an asymmetric diagonal passage *is*. `NE` from
-/// Cave to Ledge, then `SW` from Ledge to Pit rather than back to Cave: Ledge's SW corner is wanted
-/// by both the arrival from Cave and the departure to Pit. The `SW` edge is forced into distortion
-/// too, because Cave already occupies the cell it wants — three commands into a session, and the
-/// idiom every maze is built from.
-fn resolve_entry_corner(
-    exit_dir: Direction,
-    entry_dir: Option<Direction>,
-    dest: RoomId,
-    taken: &std::collections::HashSet<(RoomId, Direction)>,
-) -> Option<Direction> {
-    let want = entry_corner(exit_dir, entry_dir)?;
-    if entry_dir.is_none() && taken.contains(&(dest, want)) {
-        return None; // the destination's own diagonal departs this corner; yield to a side slot
-    }
-    Some(want)
+/// router collapsed the pair — so its arrival IS the return path (a reciprocal is exempt) and it
+/// keeps the corner its own back edge names.
+fn resolve_entry_corner(exit_dir: Direction, entry_dir: Option<Direction>) -> Option<Direction> {
+    entry_dir?; // one-way (no back edge): never a corner, per the doc comment above.
+    entry_corner(exit_dir, entry_dir)
 }
 
 /// The candidate entry sides for a NON-reciprocal connector from `a` to `b`: the
@@ -973,11 +951,9 @@ fn route_topology_with(graph: &MapGraph, greedy: bool) -> Vec<RoutedConnector> {
     // Resolve direct-route line collisions up front so the LONGER connector keeps the straight line
     // and shorter rivals weave — independent of edge listing order.
     let direct_losers = direct_route_losers(&compass, &compass_pairs, graph, &occupied);
-    // Corners already spoken for by a room's own outgoing diagonal — an arrival that wants one of
-    // these yields to a side slot (SQ-0314). Derived from the graph, not from routing order, so it
-    // is the same for every connector.
-    let dep_corners = departure_corners(graph);
-    // Which one-way arrival keeps each contested corner (SQ-0314); see `arrival_corner_owners`.
+    // Which one-way arrival keeps each contested corner (SQ-0314); see `arrival_corner_owners` —
+    // since SQ-1274 this only still matters for a reciprocal contesting an unrelated one-way's
+    // phantom claim, not for settling who keeps a corner between one-ways (neither ever does).
     let arr_owners = arrival_corner_owners(&compass);
     let mut out: Vec<RoutedConnector> = Vec::new();
     // The trunk polyline per (unordered room pair, channel), recorded when its connector is built; a
@@ -1052,14 +1028,14 @@ fn route_topology_with(graph: &MapGraph, greedy: bool) -> Vec<RoutedConnector> {
             Some(bk) => route_side(bk.dir),
             None => oneway_entry_side(c.dir),
         };
-        // Where this connector arrives: a box corner, or an ordinary side doorway when it lost the
-        // corner to the destination's own outgoing diagonal (SQ-0314). Resolve it BEFORE the direct
-        // route is considered — an arrival that yields its corner is a plain orthogonal connector
-        // again, and may take the direct route it would otherwise have been barred from.
-        let arrive = resolve_entry_corner(c.dir, back.map(|bk| bk.dir), c.dest, &dep_corners)
-            // A corner holds ONE connector: a one-way arrival that lost the corner to another
-            // one-way arrival yields to a side slot, exactly as it would to a departure. Absent
-            // from the map => uncontested => kept.
+        // Where this connector arrives: a box corner (a reciprocal only — SQ-1274), or an
+        // ordinary side doorway. Resolve it BEFORE the direct route is considered — an arrival on
+        // a side doorway is a plain orthogonal connector again, and may take the direct route a
+        // corner-ended one is barred from.
+        let arrive = resolve_entry_corner(c.dir, back.map(|bk| bk.dir))
+            // Guards a reciprocal's corner against an unrelated one-way's phantom claim on the
+            // same (room, direction) key — see `arrival_corner_owners`'s doc comment. Absent from
+            // the map => uncontested => kept.
             .filter(|&d| arr_owners.get(&(c.dest, d)).is_none_or(|&w| w == ci));
 
         // A connector with a CORNER at either end never takes the direct route (SQ-0314).
@@ -1346,27 +1322,49 @@ fn assign_side_slots(connectors: &mut [RoutedConnector], graph: &MapGraph) {
     }
     for (key, mut members) in by_side {
         let has_updown = members.iter().any(|&(is_updown, ..)| is_updown);
+        // SQ-1274: the CENTER slot (0) is the room's own compass anchor for this side — an
+        // outgoing exit in that direction, or a reciprocal pair's return path. A plain ONE-WAY
+        // connector's ARRIVAL there would draw an arrowhead reading as "that direction leads
+        // back here", which isn't true (that's exactly what a reciprocal IS, and why it's
+        // exempt). So a one-way arrival is never eligible for center: rank every eligible
+        // endpoint (a departure, or a reciprocal's arrival) ahead of every one-way arrival,
+        // regardless of the existing tie-break keys below, which still decide order WITHIN each
+        // of those two groups.
+        let eligible_for_center =
+            |is_exit: bool, ci: usize| is_exit || connectors[ci].reciprocal;
         members.sort_by_key(|&(is_updown, axis_recip, straight, is_exit, ci)| {
             // `axis_recip` only applies on sides that host an Up/Down endpoint; elsewhere it is
             // neutralized so the key reduces to the historical `(is_updown, Reverse(straight), ci,
             // is_exit)` — every compass-only side stays byte-identical. On a mixed side the order is
             // axis-reciprocal-compass → straight-through → compass-before-Up/Down → index.
             let axis_key = std::cmp::Reverse(has_updown && axis_recip);
-            (axis_key, std::cmp::Reverse(straight), is_updown, ci, is_exit)
+            (!eligible_for_center(is_exit, ci), axis_key, std::cmp::Reverse(straight), is_updown, ci, is_exit)
         });
-        // The sorted-first endpoint keeps the CENTER slot (0) — the SQ-0216/0222 winner. When the
-        // side has exactly ONE offset endpoint (the common case, incl. the 217->230 / 5->247 fixes),
-        // bias it toward its PARTNER room along this side's tangent axis: partner on the + side ->
-        // slot 1 (+offset), − side -> slot 2 (−offset), so its perpendicular stub bends toward its
-        // partner instead of running across the center connector (SQ-0224 Part B). Both are magnitude
-        // 1, always inside the border-cell clamp. With MORE than one offset, fall back to the original
-        // sequential 1,2,3,… interleave — `slot_offset` alternates sign as magnitude grows, keeping
-        // cells distinct within the side's clamped capacity; packing several same-sign offsets could
-        // exceed the clamp (±1 on a vertical side) and collide.
+        // Center goes to the sorted-first endpoint ONLY when it is eligible (a departure or a
+        // reciprocal) — the SQ-0216/0222 winner within that group. When NOTHING on this side is
+        // eligible (every endpoint is a one-way arrival, the SQ-1274 case), center stays empty and
+        // every arrival is numbered from 1 instead of 0 — the whole group shifts by one slot, so
+        // none of them ever lands on the anchor cell.
+        let front_eligible = members
+            .first()
+            .is_some_and(|&(_, _, _, is_exit, ci)| eligible_for_center(is_exit, ci));
+        let base: u16 = if front_eligible { 0 } else { 1 };
+        // When the side has exactly ONE offset endpoint besides an eligible center occupant (the
+        // common case, incl. the 217->230 / 5->247 fixes), bias it toward its PARTNER room along
+        // this side's tangent axis: partner on the + side -> slot 1 (+offset), − side -> slot 2
+        // (−offset), so its perpendicular stub bends toward its partner instead of running across
+        // the center connector (SQ-0224 Part B). Both are magnitude 1, always inside the
+        // border-cell clamp. This bias only makes sense relative to a REAL center occupant; with no
+        // eligible center (`base == 1`) every endpoint is an offset one and falls to the plain
+        // sequential branch below instead. With MORE than one offset (or no eligible center), fall
+        // back to the original sequential 1,2,3,… interleave (shifted by `base`) — `slot_offset`
+        // alternates sign as magnitude grows, keeping cells distinct within the side's clamped
+        // capacity; packing several same-sign offsets could exceed the clamp (±1 on a vertical
+        // side) and collide.
         let this_room = key.0;
-        let single_offset = members.len() == 2;
+        let single_offset = front_eligible && members.len() == 2;
         for (idx, &(_, _, _, is_exit, ci)) in members.iter().enumerate() {
-            let slot = if idx == 0 {
+            let slot = if idx == 0 && front_eligible {
                 0
             } else if single_offset {
                 let partner = if is_exit { connectors[ci].dest } else { connectors[ci].origin };
@@ -1382,7 +1380,7 @@ fn assign_side_slots(connectors: &mut [RoutedConnector], graph: &MapGraph) {
                 };
                 if tangent >= 0 { 1 } else { 2 }
             } else {
-                idx as u16
+                base + idx as u16
             };
             if is_exit {
                 connectors[ci].exit_slot = slot;
@@ -1463,8 +1461,8 @@ mod tests {
 
     /// SQ-1264: a self-loop (`origin == dest`, `MapGraph::add_self_loop`) must never produce a
     /// routed connector — it is drawn only as the room's own `↩` badge (`render/map.rs`), never a
-    /// line. Before the `c.origin != c.dest` guards in `select_shared_paths`/`route_topology_with`
-    /// / `departure_corners`, a self-loop's own (room, room) "pair" paired the edge with ITSELF —
+    /// line. Before the `c.origin != c.dest` guards in `select_shared_paths`/`route_topology_with`,
+    /// a self-loop's own (room, room) "pair" paired the edge with ITSELF —
     /// its forward and backward buckets were the same index set — and produced a bogus polyline
     /// that looped back around the room's own box, on the real Adventure map SQ-1264 was filed
     /// against ("In Forest" #42746, whose W/N/S exits are all self-loops per `advent.inf`'s
@@ -2396,15 +2394,19 @@ mod tests {
     }
 
     #[test]
-    fn diagonally_adjacent_rooms_route_as_one_pure_diagonal() {
+    fn diagonally_adjacent_rooms_route_as_one_pure_diagonal_only_when_reciprocal() {
         // SQ-0314: the corner lattice cell is odd/odd — already ON the all-odd gap lattice — so a
         // diagonal needs no perpendicular stub to reach it. For diagonally-adjacent rooms both
-        // boxes' corners resolve to the SAME shared corner, collapsing the route to
+        // boxes' corners resolve to the SAME shared corner, collapsing a RECIPROCAL's route to
         // centre → corner → centre: R1(0,1) doubled (0,2), the shared corner (1,1), R2(1,0)
         // doubled (2,0). The corner is the exact midpoint, so it renders as one clean diagonal.
         //
-        // The one-way and the reciprocal MUST agree here: an arrowhead is the only thing that
-        // should distinguish them, never the path itself.
+        // SQ-1274 supersedes this test's old claim that "the one-way and the reciprocal MUST
+        // agree here: an arrowhead is the only thing that should distinguish them, never the
+        // path itself" — a corner is one of a room's eight compass slots, and a one-way arrival
+        // there would read as a return path that does not exist. So a one-way diagonal now takes
+        // an ordinary side doorway instead of the shared corner, and the two paths visibly
+        // differ, not just their arrowheads.
         use crate::direction::Direction;
         let build = |reciprocal: bool| {
             let mut g = MapGraph::new();
@@ -2419,32 +2421,43 @@ mod tests {
             let plan = route_lanes(&g);
             plan.connectors.iter().find(|c| c.origin == 1).expect("the NE connector").clone()
         };
-        for reciprocal in [false, true] {
-            let c = build(reciprocal);
-            assert_eq!(
-                c.points,
-                vec![(0, 2), (1, 1), (2, 0)],
-                "reciprocal={reciprocal}: centre → shared corner → centre, no orthogonal dogleg",
-            );
-            assert_eq!(c.exit, Side::Right, "reciprocal={reciprocal}: NE departs the right side");
-            assert_eq!(c.entry, Side::Left, "reciprocal={reciprocal}: and arrives on the left");
-        }
 
+        let reciprocal = build(true);
+        assert_eq!(
+            reciprocal.points,
+            vec![(0, 2), (1, 1), (2, 0)],
+            "reciprocal: centre → shared corner → centre, no orthogonal dogleg",
+        );
+        assert_eq!(reciprocal.exit, Side::Right, "NE departs the right side");
+        assert_eq!(reciprocal.entry, Side::Left, "and arrives on the left, its own back edge's side");
+        assert_eq!(reciprocal.entry_corner, Some(Direction::SW), "it owns the corner via its own back edge");
         // A diagonal carries no LaneSeg: every step of the route touches an even coord (room
         // centre) or is the corner itself, so `long_runs` finds nothing to lane.
-        assert!(build(true).segs.is_empty(), "a pure diagonal occupies no channel lane");
+        assert!(reciprocal.segs.is_empty(), "a pure diagonal occupies no channel lane");
+
+        let one_way = build(false);
+        assert_eq!(one_way.exit, Side::Right, "NE still departs the right side");
+        assert_eq!(one_way.entry_corner, None, "SQ-1274: a one-way arrival never keeps the corner");
+        assert_ne!(
+            one_way.points,
+            vec![(0, 2), (1, 1), (2, 0)],
+            "SQ-1274: unlike the reciprocal, the one-way's path itself must differ",
+        );
     }
 
     #[test]
-    fn two_one_way_arrivals_cannot_claim_the_same_corner() {
-        // SQ-0314. `departure_corners` settles arrival-vs-departure, but two ARRIVALS can want the
-        // same corner with no departure involved — and this takes four ordinary commands:
+    fn two_one_way_arrivals_never_claim_the_shared_corner() {
+        // SQ-0314 built this scenario (two one-way `NE`s into one room, both geometrically
+        // wanting its SW corner) to test corner CONTENTION between them. SQ-1274 changes the
+        // answer beneath it: a one-way arrival never holds a corner at all — any of a room's
+        // eight compass slots landing an arrival reads as a return path that does not exist — so
+        // there is no contest left to referee; both simply yield. Kept as the regression pin for
+        // that, and for the newer rule: two rooms leading NE into a hub linked by a ladder is an
+        // ordinary map shape, not a curiosity.
         //   at A, go northeast  -> Target   (one-way)
         //   at Target, go up    -> B        (non-planar: no compass back-edge, so the next NE
         //                                    cannot collapse into a reciprocal)
         //   at B, go northeast  -> Target   (one-way)  <- a SECOND NE into the same room
-        // Both want Target's SW corner. Two rooms leading NE into a hub linked by a ladder is an
-        // ordinary map shape, not a curiosity.
         use crate::direction::Direction;
         use crate::mapper::Mapper;
         let mut m = Mapper::default();
@@ -2460,21 +2473,18 @@ mod tests {
             .filter(|c| c.dest == 2 && c.exit_dir == Direction::NE)
             .collect();
         assert_eq!(arrivals.len(), 2, "both NE edges are drawn: {arrivals:?}");
-        let with_corner: Vec<_> = arrivals.iter().filter(|c| c.entry_corner.is_some()).collect();
-        assert_eq!(
-            with_corner.len(),
-            1,
-            "exactly ONE may hold Target's SW corner; the other yields to a side slot",
-        );
+        for c in &arrivals {
+            assert_eq!(c.entry_corner, None, "SQ-1274: no one-way arrival may hold Target's corner: {c:?}");
+        }
 
-        // And the winner is the UNDISTORTED arrival — its direction matches the geometry, so it has
-        // the better claim to the corner that geometry points at.
-        assert!(!with_corner[0].distorted, "the undistorted arrival keeps the corner");
-        assert_eq!(with_corner[0].entry_corner, Some(Direction::SW));
-        let yielded: Vec<_> = arrivals.iter().filter(|c| c.entry_corner.is_none()).collect();
-        assert!(yielded[0].distorted, "the distorted one is the one that yields");
+        // Yielded to Target's side doorway, both land on distinct cells rather than stacking.
+        let mut slots: Vec<u16> = arrivals.iter().map(|c| c.entry_slot).collect();
+        slots.sort_unstable();
+        assert_eq!(slots.len(), arrivals.len(), "one slot per arrival");
+        assert!(slots.windows(2).all(|w| w[0] != w[1]), "no two arrivals share a slot: {slots:?}");
 
-        // Corner claims across the whole map are unique.
+        // Corner claims across the whole map are unique (only a DEPARTURE or a reciprocal ever
+        // makes one, so this is really checking those don't collide with each other).
         let mut claims: Vec<(RoomId, Direction)> = Vec::new();
         for c in &plan.connectors {
             if is_diagonal(c.exit_dir) {
@@ -2521,9 +2531,9 @@ mod tests {
         let lone = mk(1, Direction::NE, 2);
         assert_eq!(arrival_corner_owners(&[&lone]).len(), 1, "recorded, but uncontested");
 
-        // A reciprocal pair never enters the map: it owns its corner via its own back edge, and
-        // `departure_corners` already keeps one-ways off a corner the room departs from. Listing it
-        // here could make it yield its own corner to a stranger.
+        // A reciprocal pair never enters the map: it owns its corner via its own back edge (and,
+        // since SQ-1274, a one-way never keeps a corner regardless). Listing it here could make
+        // it yield its own corner to a stranger.
         let out = mk(1, Direction::NE, 2);
         let back = mk(2, Direction::SW, 1);
         let owners = arrival_corner_owners(&[&out, &back]);
@@ -2536,14 +2546,19 @@ mod tests {
 
     #[test]
     fn a_departure_outranks_an_arrival_for_a_contested_corner() {
-        // SQ-0314: a corner hosts at most one connector, and the room's OWN outgoing diagonal keeps
-        // it — the arrival yields to a side slot.
+        // SQ-0314 named this "a departure outranks an arrival": the room's OWN outgoing diagonal
+        // keeps its corner and the arrival yields to a side slot. SQ-1274 makes the arrival yield
+        // UNCONDITIONALLY — no one-way arrival ever keeps a corner, contested or not — so the
+        // departure no longer needs to "outrank" anything to keep what was always going to be
+        // its own corner regardless. Kept as the regression pin for the shape below; see
+        // `two_one_way_arrivals_never_claim_the_shared_corner` for the uncontested case.
         //
         // This is what an asymmetric diagonal passage IS, not an exotic shape: NE from Cave lands
         // in Ledge, but SW from Ledge goes to Pit rather than back to Cave. Ledge's SW corner is
-        // wanted by both the arrival from Cave and the departure to Pit. (Cave already occupies the
-        // cell Ledge's SW edge wants, so that edge is distorted too — `mark_distorted` lives in the
-        // mapper layer, above this hand-built graph, so the flag is not asserted here.)
+        // wanted by the arrival from Cave; the departure to Pit owns it regardless. (Cave already
+        // occupies the cell Ledge's SW edge wants, so that edge is distorted too —
+        // `mark_distorted` lives in the mapper layer, above this hand-built graph, so the flag is
+        // not asserted here.)
         use crate::direction::Direction;
         let mut g = MapGraph::new();
         for (id, n) in [(1u16, "Cave"), (2, "Ledge"), (3, "Pit")] {
@@ -2569,7 +2584,7 @@ mod tests {
         );
         assert_eq!(
             arrival.entry_corner, None,
-            "...but yields it to Ledge's own outgoing SW diagonal and takes a side doorway",
+            "...but SQ-1274 makes it yield unconditionally and take a side doorway",
         );
 
         // Having yielded, it is an ordinary side endpoint again — so it must be SLOTTED. Skipping
@@ -2585,10 +2600,9 @@ mod tests {
 
     #[test]
     fn a_reciprocal_diagonal_pair_keeps_its_contested_corner() {
-        // The yield rule must NOT fire for a reciprocal pair. Ledge's SW edge here IS the back edge
-        // of the same connector — the router collapsed the two — so it owns the corner by
-        // definition, and there is nothing to contend with. Reading `departure_corners` alone would
-        // see Ledge's SW edge and wrongly make the connector yield to itself.
+        // The yield rule (SQ-1274: no one-way arrival keeps a corner) must NOT fire for a
+        // reciprocal pair. Ledge's SW edge here IS the back edge of the same connector — the
+        // router collapsed the two — so it owns the corner by definition and IS the return path.
         use crate::direction::Direction;
         let mut g = MapGraph::new();
         g.upsert_room(1, "Cave".into());
@@ -2605,6 +2619,49 @@ mod tests {
             "the reciprocal keeps the corner it is itself the back edge of",
         );
         assert_eq!(plan.connectors[0].points, vec![(0, 2), (1, 1), (2, 0)], "still one pure diagonal");
+    }
+
+    #[test]
+    fn a_one_way_arrival_from_the_east_avoids_the_west_mid_side_slot() {
+        // SQ-1274 (this is the Adventure report's exact shape — #42746/#55642's `E` edges into
+        // "In A Valley" — reduced to two rooms): a one-way `E` edge ("go east") arrives on the
+        // destination's WEST side (it approaches from the west, so it enters through the west
+        // door), and it must never land on that side's MID-SIDE slot — the cell a real `W` exit
+        // or a `?` random-exit mark in that direction would use — even when nothing else is on
+        // that side to contest it with. An arrowhead there would read as "west leads back here",
+        // which isn't true for a one-way passage.
+        use crate::direction::Direction;
+        let mut g = MapGraph::new();
+        g.upsert_room(1, "Origin".into());
+        g.upsert_room(2, "Dest".into());
+        g.set_pos(1, (-1, 0)); // west of Dest
+        g.set_pos(2, (0, 0));
+        g.add_edge(1, Direction::E, 2); // one-way "go east", arrives on Dest's west side
+        let plan = route_lanes(&g);
+        let arrival = plan.connectors.iter().find(|c| c.dest == 2).expect("the E connector");
+        assert_eq!(arrival.entry, Side::Left, "it does land on Dest's west side");
+        assert_ne!(arrival.entry_slot, 0, "but never on the west mid-side slot itself");
+    }
+
+    #[test]
+    fn a_one_way_diagonal_arrival_never_lands_on_any_corner() {
+        // SQ-1274, one case per corner: a one-way diagonal never keeps ANY of the four corners —
+        // unlike the cardinal case above, there is no side to even partially land on; it falls
+        // through to an ordinary side doorway on one of Dest's four SIDES instead.
+        use crate::direction::Direction::{NE, NW, SE, SW};
+        for (dir, origin_pos) in [(NE, (-1, 1)), (NW, (1, 1)), (SE, (-1, -1)), (SW, (1, -1))] {
+            let mut g = MapGraph::new();
+            g.upsert_room(1, "Origin".into());
+            g.upsert_room(2, "Dest".into());
+            g.set_pos(1, origin_pos);
+            g.set_pos(2, (0, 0));
+            g.add_edge(1, dir, 2); // one-way diagonal, no back edge
+            let plan = route_lanes(&g);
+            let arrival = plan.connectors.iter().find(|c| c.dest == 2).unwrap_or_else(|| {
+                panic!("no connector for {dir:?} (origin {origin_pos:?}): {:?}", plan.connectors)
+            });
+            assert_eq!(arrival.entry_corner, None, "{dir:?}: a one-way diagonal never keeps a corner");
+        }
     }
 
     #[test]

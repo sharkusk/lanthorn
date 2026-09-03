@@ -283,6 +283,13 @@ Where two unrelated connectors still have to cross, the map says so rather than 
 junction: the vertical run passes through unbroken and the horizontal one breaks for a single
 cell, so a crossing never reads as a place the two passages meet.
 
+A one-way connector never lands its arrowhead on a room's own compass anchor — the
+mid-side cell a real exit or a `?` random-exit mark in that direction uses, or a
+diagonal's shared corner — even when nothing else claims it: an arrival there would
+draw exactly like "that direction leads back here", which for a one-way passage isn't
+true. It settles beside that cell instead. Only a reciprocal pair is exempt, because a
+reciprocal genuinely *is* the return path.
+
 When two connectors both want the same straight room-line and neither will fit beside the
 other, the longer one keeps it and the shorter weaves instead — and if they tie on length
 too, the one that runs straight keeps the line over one that bends, so which route wins
