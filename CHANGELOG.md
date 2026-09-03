@@ -131,6 +131,10 @@ Absolute URLs or no link.
   the others in Ghostty.** A west-pointing arrowhead followed by a short name
   used to spill into the next cell and look oversized next to every other
   arrow on the map; it now stays the same size as the rest.
+- **Room markers on a selected, current room now show the right colours.**
+  The alias-count superscript and a `?` random-exit mark used to draw as a
+  dark block with a light digit on that one room, instead of matching the
+  room's own highlighted look.
 
 ### Docker
 

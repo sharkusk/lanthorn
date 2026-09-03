@@ -2528,8 +2528,19 @@ fn draw_room(
 /// hole of default background through that — which is exactly what the alias superscript did
 /// on a selected Gnome Room. So take the base style the surrounding text or border was drawn
 /// with and swap in only the accent's foreground.
+///
+/// **Unless `base` is REVERSED** (SQ-1278): a selected CURRENT room's `room_style` sets
+/// `Modifier::REVERSED` rather than an explicit background (`room_selected`'s style with the
+/// modifier added), and under reversal the terminal paints `fg` as the VISIBLE background —
+/// so swapping the accent into `fg` put the accent colour where the room's own selection
+/// background belongs, and left the accent invisible as ink. Under reversal the fix is the
+/// mirror image: put the accent colour in `bg` instead, so the visible INK is the accent and
+/// the visible ground stays the selection's — exactly swapped from the non-reversed case,
+/// which is what reversal itself means.
 fn accent_on(base: Style, accent: Style) -> Style {
+    let reversed = base.add_modifier.contains(Modifier::REVERSED);
     match accent.fg {
+        Some(fg) if reversed => base.bg(fg),
         Some(fg) => base.fg(fg),
         None => base,
     }
@@ -3984,6 +3995,45 @@ mod tests {
         assert_eq!(marker.modifier, name.modifier, "…and its modifiers");
         assert_eq!(marker.bg, Color::Yellow, "…which is the selection background");
         assert_eq!(marker.fg, Color::Red, "while its colour stays the marker selector's own");
+    }
+
+    /// SQ-1278: a room that is BOTH current and selected gets `room_style`'s REVERSED
+    /// modifier rather than an explicit background — under reversal the terminal paints `fg`
+    /// as the visible background, so `accent_on` must put the accent colour in `bg`, not `fg`,
+    /// or the marker draws as a dark block with the accent as an invisible background colour.
+    /// Falsify by reverting the `reversed` branch in `accent_on`.
+    #[test]
+    fn room_box_alias_marker_on_a_reversed_current_selected_room_swaps_the_accent_into_bg() {
+        use mapper::graph::MapGraph;
+        let mut g = MapGraph::new();
+        g.upsert_room(1, "A".into());
+        g.upsert_room(1, "Cave".into()); // one alias: "A"
+        g.set_pos(1, (0, 0));
+        g.set_current(1);
+        let rm = render(&g);
+        let mut state = AppState::default();
+        state.selected_room = Some(1);
+        state.colors.theme = theme_with_overrides(&[
+            ("map.room_alias_marker", Style::new().fg(Color::Red).bg(Color::Black)),
+        ]);
+        let area = Rect::new(0, 0, 60, 20);
+        let mut buf = Buffer::empty(area);
+        render_map(&rm, &state, area, &mut buf);
+
+        let (mx, my) = (1u16..=9)
+            .flat_map(|x| (1u16..=2).map(move |y| (x, y)))
+            .find(|&(x, y)| buf.cell((x, y)).is_some_and(|c| c.symbol() == "¹"))
+            .expect("the alias marker glyph '¹' must be drawn somewhere in the box");
+        let marker = buf.cell((mx, my)).unwrap();
+        let name = buf.cell((mx - 1, my)).unwrap();
+        assert_eq!(name.symbol(), "e", "sanity: the marker rides right after 'Cave'");
+        assert!(
+            name.modifier.contains(Modifier::REVERSED),
+            "sanity: a current+selected room is reversed, not painted with an explicit bg"
+        );
+        assert_eq!(marker.modifier, name.modifier, "the marker keeps the room's own REVERSED modifier");
+        assert_eq!(marker.bg, Color::Red, "the accent colour rides in bg under reversal…");
+        assert_eq!(marker.fg, name.fg, "…so the visible ground (fg, under reversal) is unchanged");
     }
 
     // ── SQ-1261: `?` random-exit stubs on the room box ──────────────────────────
