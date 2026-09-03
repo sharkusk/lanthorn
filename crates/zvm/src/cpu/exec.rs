@@ -180,6 +180,20 @@ struct PendingInput {
     /// Destination variable for the result (store var of the read/read_char
     /// instruction; `None` if the instruction has no store — v3 `read` has none).
     store_var: Option<u8>,
+    /// Which instruction suspended here: `true` for `read` (a LINE of text),
+    /// `false` for `read_char` (a single keystroke).
+    ///
+    /// Stated outright rather than inferred from `text_buf == 0`, which is what
+    /// this was and what SQ-1266 cost. A `read_char` leaves both buffer
+    /// addresses zero, so a host that answered a keypress prompt with
+    /// [`Self::supply_line`] wrote the typed line to absolute address 1 —
+    /// straight over the header's Flags1 and RELEASE NUMBER. Quetzal's IFhd
+    /// validates the saved release against CURRENT memory (§5.8), so from that
+    /// moment on every restore of that session's save into a freshly booted
+    /// twin failed with `SaveMismatch`, and the fork-and-probe seam
+    /// (`app::probe`) went silently dead on every Version 6 story whose opening
+    /// parks on a keypress.
+    line_read: bool,
     /// Address of the text buffer (for `supply_line`).
     text_buf: u32,
     /// Address of the parse buffer (for `supply_line`; 0 in v5+ means skip).
@@ -2039,8 +2053,8 @@ impl Machine {
                 let interrupt_time = ops.get(2).copied().unwrap_or(0);
                 let interrupt_routine = ops.get(3).copied().unwrap_or(0);
                 self.pending_input = Some(PendingInput {
-                    store_var: store, text_buf, parse_buf, interrupt_time, interrupt_routine,
-                    instr_pc: self.cur_instr_pc,
+                    store_var: store, line_read: true, text_buf, parse_buf, interrupt_time,
+                    interrupt_routine, instr_pc: self.cur_instr_pc,
                 });
                 StepResult::NeedLine { text_buf, parse_buf }
             }
@@ -2052,8 +2066,8 @@ impl Machine {
                 let interrupt_time = ops.get(1).copied().unwrap_or(0);
                 let interrupt_routine = ops.get(2).copied().unwrap_or(0);
                 self.pending_input = Some(PendingInput {
-                    store_var: store, text_buf: 0, parse_buf: 0, interrupt_time, interrupt_routine,
-                    instr_pc: self.cur_instr_pc,
+                    store_var: store, line_read: false, text_buf: 0, parse_buf: 0, interrupt_time,
+                    interrupt_routine, instr_pc: self.cur_instr_pc,
                 });
                 StepResult::NeedChar
             }
@@ -4314,7 +4328,7 @@ impl Machine {
     /// No-op if no read is pending.
     pub fn abort_timed_input(&mut self, typed: &str) {
         match self.pending_input {
-            Some(p) if p.text_buf == 0 => {
+            Some(p) if !p.line_read => {
                 // read_char: deliver ZSCII 0.
                 self.supply_char(0);
             }
@@ -4980,6 +4994,25 @@ impl Machine {
             Some(p) => p,
             None => return, // no pending read — ignore
         };
+
+        // The machine is suspended on `read_char`, not `read`: there is no text
+        // buffer to write and the store variable wants a ZSCII key, so deliver
+        // the terminator as that key and write NOTHING to memory (SQ-1266).
+        //
+        // A host reaches here whenever it answers a keypress prompt with a line
+        // — every `submit("")` that dismisses a Version 6 title splash, and
+        // every `app::probe` shadow command typed while the story happens to be
+        // parked on a key. `read_char` leaves `text_buf` and `parse_buf` at
+        // zero, so the code below used to write the count byte to address 1 and
+        // the text from address 2: the header's Flags1 and release number. See
+        // `PendingInput::line_read` for what that then broke, and note the
+        // observable result was already this store — the memory writes were
+        // pure damage.
+        if !pending.line_read {
+            self.pending_input = Some(pending);
+            self.supply_char(terminator);
+            return;
+        }
 
         // A key actually arrived, so the v6 windows get a fresh screenful
         // before "[MORE]" is due again (frotz console_read_input, which skips
@@ -7726,6 +7759,47 @@ pub(crate) mod tests {
         }
     }
 
+    /// SQ-1266. A host that answers a `read_char` prompt with a LINE — every
+    /// `submit("")` that dismisses a Version 6 title splash — must store the
+    /// terminator as the key and write NOTHING to memory.
+    ///
+    /// `read_char` leaves both buffer addresses at zero, so `supply_line`'s
+    /// v5+ branch wrote the count byte to absolute address 1 and the text from
+    /// address 2 — Flags1 and the header's RELEASE NUMBER. Quetzal's IFhd
+    /// validates the saved release against CURRENT memory, so from the first
+    /// such keypress onward every restore of that session's save into a
+    /// separately booted twin failed with `SaveMismatch`, and `app::probe`'s
+    /// shadow went dead on every v6 story with a keypress opening (measured:
+    /// eighteen of the nineteen in `stories/`).
+    ///
+    /// Falsify by deleting the `!pending.line_read` early return in
+    /// `supply_line`: the header assertion below fails with `04 6c 6f 6f 6b`
+    /// — the length byte and `"look"` — sitting on top of the release word.
+    #[test]
+    fn a_line_supplied_to_a_read_char_stores_the_key_and_writes_no_memory() {
+        let mut buf = sample_story(5);
+        buf[0x0010] = 0xF6; // VAR read_char
+        buf[0x0011] = 0x7F; // small const, omit, omit, omit
+        buf[0x0012] = 1; // device = keyboard
+        buf[0x0013] = 0x10; // store → G0
+        buf[0x0014] = 0xBA; // quit
+        let mem = Memory::new(buf).unwrap();
+        let mut m = Machine::new(mem);
+        m.state.pc = 0x0010;
+        assert_eq!(m.step(), StepResult::NeedChar);
+
+        let header: Vec<u8> = (0u32..0x40).map(|a| m.mem.read_byte(a)).collect();
+        m.supply_line("look", 13);
+
+        assert_eq!(m.global(0), 13, "the terminator reaches the read_char's store var");
+        assert_eq!(
+            (0u32..0x40).map(|a| m.mem.read_byte(a)).collect::<Vec<u8>>(),
+            header,
+            "not one header byte moved — the release number in particular"
+        );
+        assert_eq!(m.pending_read_pc(), None, "and the suspension is consumed, not left armed");
+    }
+
     // -----------------------------------------------------------------------
     // Crafted-story / illegal-instruction hardening (SQ-0619..SQ-0622):
     // every case here used to panic, hang, overrun a buffer, or corrupt a
@@ -9621,6 +9695,7 @@ pub(crate) mod tests {
         // next few command inputs".
         m.pending_input = Some(PendingInput {
             store_var: Some(0),
+            line_read: false,
             text_buf: 0,
             parse_buf: 0,
             interrupt_time: 0,
@@ -9657,6 +9732,7 @@ pub(crate) mod tests {
 
         m.pending_input = Some(PendingInput {
             store_var: Some(0),
+            line_read: false,
             text_buf: 0,
             parse_buf: 0,
             interrupt_time: 0,
@@ -9692,6 +9768,7 @@ pub(crate) mod tests {
 
         m.pending_input = Some(PendingInput {
             store_var: Some(0),
+            line_read: false,
             text_buf: 0,
             parse_buf: 0,
             interrupt_time: 0,

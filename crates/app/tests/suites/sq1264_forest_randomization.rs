@@ -241,25 +241,36 @@ fn z6_declared_exits_toward_the_forest_are_plain_room_not_code() {
     assert_eq!(p2.session.declared_exit(valley, Direction::W), DeclaredExit::Room(forest1), "valley W — the SAME declared room as E");
 }
 
-/// Z-machine: `advent.z6`'s own random-walk cycle — first divergence marks it random (Phase 1
-/// alone), a first-walk AGREEMENT with the declared room mints an ordinary edge, and the next
-/// contradicting live walk reverts it (SQ-1264's rule) with BOTH forests in the destination pool.
+/// Z-machine: `advent.z6`'s own random-walk cycle, end to end through the REAL Phase-2 path —
+/// the Z-machine mirror of [`blb_forest_random_walk_stays_marked_once_the_pool_holds_both_forests`],
+/// at the Z-machine's own trial seeds.
 ///
-/// This does NOT exercise SQ-1257 Phase 2 (the reseeded-shadow upgrade path) — a real finding
-/// from the SQ-1264 investigation, not a gap in this suite. `advent.z6` is a "V6Lib private
-/// beta" test compile whose OWN init code writes a runtime-random value into the header's
-/// release-number field (the banner text visibly reads a different "Release NNN" on every fresh
-/// boot, though the file's OWN static header byte is fixed at release 10) — so Quetzal's IFhd
-/// validation, which reads that field from CURRENT memory, refuses to restore the live session's
-/// save into a separately-booted shadow (`GameSession::restore_state` → `BadSave("SaveMismatch")`
-/// every time, confirmed directly against the live save outside the worker thread). Phase 2's
-/// reseeded-shadow upgrade path is therefore untestable on this specific fixture — it is proven
-/// on Lost Pig instead (`declared_exit.rs`, which has no such quirk) and on the hand-built
-/// `random_exit_probe.rs` unit tests, which drive `deliver`/`deliver_upgrade` directly with a
-/// synthetic answer and need no real shadow at all. `advent.blb` (Glulx) has no such header and
-/// its own random-walk test below DOES exercise the real Phase-2 upgrade end to end.
+/// # What changed here, and why (SQ-1266)
+///
+/// This case used to carry a note saying `advent.z6` could not exercise Phase 2 at all: that it
+/// was "a V6Lib private beta test compile whose OWN init code writes a runtime-random value into
+/// the header's release-number field", so Quetzal's IFhd validation refused every restore into a
+/// separately-booted shadow and `Answer::run` was always `None`. The observation was real — the
+/// release word genuinely differed between the live session and a fresh boot — but the CAUSE was
+/// ours. `zvm`'s `supply_line` completed a `read_char` suspension as though it were a `read`,
+/// and `read_char` leaves the text buffer address at zero, so `ZPlay::advent`'s own
+/// `submit("")` splash dismissal wrote the typed line to absolute address 1: the release word.
+/// The "random" release was the next command's letters (`0x6C6F` — `"lo"`, from `look`). See
+/// `sq1266_v6_shadow_restore.rs`; the fix is `PendingInput::line_read` plus `supply_line`'s
+/// early return.
+///
+/// So the shadow restores here now, and this case asserts the working path instead of a
+/// workaround. Two concrete consequences:
+///
+/// * The `unmark_random_exit` call that used to stand in for "the Phase-2 upgrade this fixture
+///   cannot exercise" is gone — a real reseeded shadow now runs on the very first mismatch.
+/// * The pool holds BOTH forests from that first mismatch onward (`note_disagreeing_destinations`,
+///   SQ-1261, pooling what the shadow itself saw), which is precisely the pool≥2 shape SQ-1269's
+///   flicker fix is about. The old step 2 — a lucky-seed walk minting a confident edge — is
+///   therefore no longer the behaviour under test on this story either: the mark stands, exactly
+///   as it does on `advent.blb`.
 #[test]
-fn z6_forest_random_walk_agrees_then_reverts_with_both_forests_pooled() {
+fn z6_forest_random_walk_stays_marked_once_the_pool_holds_both_forests() {
     let Some(mut p) = ZPlay::advent() else { return };
     let hill = z_reach_hill(&mut p);
     let DeclaredExit::Room(forest1) = p.session.declared_exit(hill, Direction::S) else {
@@ -267,47 +278,57 @@ fn z6_forest_random_walk_agrees_then_reverts_with_both_forests_pooled() {
     };
 
     // ── 1: first walk, reseeded to land in the OTHER forest — an immediate declared_exit
-    // mismatch (Phase 1 alone). ──
+    // mismatch. `apply_turn` stashes a suspicion, `ZPlay::turn` arms the Phase-2 search for it,
+    // and the shadow's own reseeded attempts add whatever they saw. ──
     p.session.reseed_random(Z_DISAGREEING_SEED);
     p.turn("south");
     let forest2 = p.mapper.graph.current().expect("landed somewhere");
     assert_ne!(forest2, forest1, "the disagreeing seed must land in the OTHER forest");
     assert!(p.mapper.graph.is_random_exit(hill, Direction::S), "marked random on the very first mismatch");
     assert_eq!(p.edge(hill, Direction::S), None, "no edge minted");
-    assert_eq!(p.mapper.graph.random_destinations(hill, Direction::S), &[forest2]);
+    assert!(
+        p.mapper.graph.random_destinations(hill, Direction::S).contains(&forest2),
+        "at least the live landing is recorded: {:?}",
+        p.mapper.graph.random_destinations(hill, Direction::S)
+    );
 
     // Back to the hill (real navigation, not mapper bookkeeping — see `z_walk_back_to_hill`).
     z_walk_back_to_hill(&mut p, hill, forest1);
-    // Clear the mark directly — a test-harness stand-in for the Phase-2 upgrade this fixture
-    // cannot exercise (see the doc comment above): what step 3 needs to prove is the
-    // CONTRADICTION rule, and that needs only an edge to contradict, however it got there.
-    p.mapper.graph.unmark_random_exit(hill, Direction::S);
 
-    // ── 2: walk again under the seed that agrees with the DECLARED room — an ordinary first
-    // walk (Phase 1 sees no mismatch, and the direction is not marked random), so `apply_turn`
-    // mints a normal, confident edge exactly as it would for any fixed passage. ──
+    // Measured on this exact fixture/seed pair (both fixed, so this is deterministic, not
+    // flaky), and the same result the Glulx build gives: the very first mismatch's own shadow
+    // attempts already see BOTH forests. Before SQ-1266 the shadow could not restore at all and
+    // this pool was size 1.
+    assert_eq!(
+        p.mapper.graph.random_destinations(hill, Direction::S).len(),
+        2,
+        "non-vacuity guard: the real Phase-2 shadow ran and pooled what it saw"
+    );
+
+    // ── 2: the LUCKY seed lands at the DECLARED room. Pre-SQ-1269 an agreeing pair upgraded the
+    // mark to a confident edge; the flicker fix keeps it marked, because the pool alone already
+    // proves the direction varies. ──
     p.session.reseed_random(Z_LUCKY_SEED);
     p.turn("south");
-    assert_eq!(p.mapper.graph.current(), Some(forest1), "this seed lands in forest 1, matching the declared exit");
-    assert!(!p.mapper.graph.is_random_exit(hill, Direction::S), "an ordinary agreeing walk mints no mark");
-    assert_eq!(p.edge(hill, Direction::S), Some(forest1), "and a confident edge now exists");
+    assert_eq!(p.mapper.graph.current(), Some(forest1), "the lucky seed lands in forest 1");
+    assert!(
+        p.mapper.graph.is_random_exit(hill, Direction::S),
+        "SQ-1269: the pool already held both forests, so a single agreeing pair must not upgrade it"
+    );
+    assert_eq!(p.edge(hill, Direction::S), None, "SQ-1269: still no edge — the mark stands");
 
-    // Back to the hill again.
+    // Back to the hill again (forest 1 this time).
     z_walk_back_to_hill(&mut p, hill, forest1);
 
-    // ── 3: walk again under the DISAGREEING seed — lands in forest 2, contradicting the edge
-    // just minted. SQ-1264's rule fires directly out of `apply_turn`: the edge is removed and
-    // the direction marked random again, with BOTH forests in the pool. ──
+    // ── 3: the DISAGREEING seed again — an already-marked re-walk, landing in forest 2 and
+    // adding nothing new to a pool that already names both. ──
     p.session.reseed_random(Z_DISAGREEING_SEED);
     p.turn("south");
     assert_eq!(p.mapper.graph.current(), Some(forest2), "the disagreeing seed lands in forest 2 again");
-    assert!(p.mapper.graph.is_random_exit(hill, Direction::S), "SQ-1264: marked random again");
-    assert_eq!(p.edge(hill, Direction::S), None, "SQ-1264: the contradicting edge is gone");
-    assert_eq!(
-        p.mapper.graph.random_destinations(hill, Direction::S),
-        &[forest1, forest2],
-        "both forests are in the pool: the edge's old (now-disproven) destination, then the new live landing"
-    );
+    assert!(p.mapper.graph.is_random_exit(hill, Direction::S), "still marked random");
+    assert_eq!(p.edge(hill, Direction::S), None, "still no edge");
+    let pool = p.mapper.graph.random_destinations(hill, Direction::S);
+    assert!(pool.contains(&forest1) && pool.contains(&forest2), "both forests are in the pool: {pool:?}");
     assert_eq!(
         mapper::matrix::classify(&p.mapper.graph, hill, Direction::S),
         mapper::matrix::MatrixCell::Random { destinations: 2 },
@@ -553,12 +574,13 @@ fn blb_declared_exits_toward_the_forest_are_plain_room_not_code() {
 }
 
 /// Glulx: the full random-walk cycle end to end — the Glulx mirror of
-/// [`z6_forest_random_walk_agrees_then_reverts_with_both_forests_pooled`], at Glulx's own trial
+/// [`z6_forest_random_walk_stays_marked_once_the_pool_holds_both_forests`], at Glulx's own trial
 /// seeds ([`G_LUCKY_SEED`]/[`G_DISAGREEING_SEED`] — `zvm` and `gvm` do not consume `random()`
 /// draws identically for the same command sequence, so these are not the Z-machine's seeds).
 ///
-/// SQ-1269 real-game specimen of the flicker fix: unlike `advent.z6` (whose shadow can never even
-/// restore — see `ZPlay`'s own doc comment), Glulx's shadow completes real Phase-2/Suspicion
+/// SQ-1269 real-game specimen of the flicker fix — and, since SQ-1266 fixed the `zvm` defect
+/// that kept every Version 6 shadow from restoring, no longer the only one: the Z-machine case
+/// above now reaches the identical shape. Glulx's shadow completes real Phase-2/Suspicion
 /// probes here, and on this fixture the VERY FIRST mismatch's own shadow attempts already see
 /// BOTH forests — the pool is `[a, b]`, size 2, the moment it is first marked. That is exactly the
 /// shape SQ-1269's flicker fix (`deliver_upgrade`'s pool≥2 check) exists for: a later re-walk that

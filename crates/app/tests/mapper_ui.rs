@@ -50,6 +50,8 @@ mod retired_exit_surfaces;
 mod room_dock_render;
 #[path = "suites/sq1264_forest_randomization.rs"]
 mod sq1264_forest_randomization;
+#[path = "suites/sq1266_v6_shadow_restore.rs"]
+mod sq1266_v6_shadow_restore;
 #[path = "suites/sq1267_shadow_room_identity.rs"]
 mod sq1267_shadow_room_identity;
 #[path = "suites/sq1260_zil_carousel_randomization.rs"]
