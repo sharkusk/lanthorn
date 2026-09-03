@@ -173,7 +173,7 @@ version = 1   # style schema version — do not remove; lets lanthorn flag an ou
 # "edge:asym" = { parent = "map.connector" }
 # trail = { parent = "muted" }
 # box_style = "rounded"   # rounded | thick | double | solid | super-thick | ascii | borderless
-# arrow_set = "filled"   # filled | line | nerdfont | nf-bold | nf-box | nf-chevron | nf-circle | nf-outline
+# arrow_set = "filled"   # filled | line | nerdfont | nf-bold | nf-box | nf-chevron | nf-circle | nf-outline | nf-thick | nf-wind | nf-thin
 # portal_icons = "ascii"   # ascii | nerdfont | nerdfont-stairs
 # path_style = "light"   # light | heavy | dotted
 # portal_path_style = "dotted"   # light | heavy | dotted
