@@ -9,7 +9,7 @@
 //! of asserting — that is how the four files are (re)generated:
 //!
 //! ```sh
-//! LANTHORN_REGEN_DOCS=1 cargo nextest run -p app docs_reference
+//! LANTHORN_REGEN_DOCS=1 cargo nextest run -p lanthorn docs_reference
 //! ```
 //!
 //! A fifth case, [`every_relative_markdown_link_resolves`], walks every
@@ -43,7 +43,7 @@ fn check_or_regen(name: &str, rendered: String) {
         .unwrap_or_else(|e| panic!("reading {}: {e} — has it been generated yet?", path.display()));
     assert_eq!(
         committed, rendered,
-        "docs/reference/{name} is stale; run LANTHORN_REGEN_DOCS=1 cargo nextest run -p app docs_reference to regenerate"
+        "docs/reference/{name} is stale; run LANTHORN_REGEN_DOCS=1 cargo nextest run -p lanthorn docs_reference to regenerate"
     );
 }
 

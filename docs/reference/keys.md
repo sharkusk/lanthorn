@@ -57,4 +57,5 @@ The built-in key bindings, one row per binding — several keys may reach the sa
 | Browser | `Ctrl+F` | `find-story` | type to filter the whole library by title, author, filename or folder |
 | Browser | `Backspace` | `parent-folder` | leave the current library folder for the one above it |
 | Browser | `Q` | `quit-browser` | leave the story browser |
+| Browser | `Ctrl+Q` | `quit-browser` | leave the story browser |
 | Browser | `Esc` | `cancel-browser` | cancel a running fetch, or leave the browser when nothing is in flight |
