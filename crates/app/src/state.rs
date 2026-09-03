@@ -3463,6 +3463,27 @@ pub struct AppState {
     /// it stays fully interactive and the story prompt keeps the keyboard.
     pub room_dock: crate::anim::PanelSlide,
 
+    /// The room dock's two bodies scroll independently (SQ-1280), each sharing
+    /// [`crate::list_scroll::ListScroll`] with every other scrollable list in the
+    /// app rather than a bespoke offset — one dock body row is one "item";
+    /// `selected`/keyboard nav are never driven (the dock has no keyboard focus),
+    /// only [`crate::list_scroll::ListScroll::scroll_by`], from the wheel.
+    pub room_dock_info_scroll: crate::list_scroll::ListScroll,
+    /// The Diagnostics body's counterpart to [`Self::room_dock_info_scroll`].
+    pub room_dock_diag_scroll: crate::list_scroll::ListScroll,
+    /// Which room the two scrolls above currently describe. The render pass
+    /// (which alone discovers the body's true row count each frame) resets
+    /// BOTH to the top the moment this stops matching the room the dock is
+    /// actually showing — a pin, an unpin-and-follow, a walk while following,
+    /// or the dock closing (which reads as the room going to `None`) all
+    /// count, since every one of them changes what `room_dock::dock_room`
+    /// resolves to.
+    pub room_dock_scroll_room: Option<RoomId>,
+    /// The active body's viewport height (rows) as of the last render, so a
+    /// wheel action between frames has something to clamp `scroll_by` against
+    /// — the dock's own analogue of [`Self::modal_list_viewport`].
+    pub room_dock_body_viewport: u16,
+
     /// Background archive writer (SQ-1184): the per-turn auto-save builds and
     /// writes the `.lanthorn` archive off the main thread. Lazily spawns its
     /// thread on first use, so the hundreds of tests that build `AppState`
@@ -3679,6 +3700,10 @@ impl Default for AppState {
             inv_dock: crate::anim::PanelSlide::closed(),
             band_dock: crate::anim::PanelSlide::closed(),
             room_dock: crate::anim::PanelSlide::closed(),
+            room_dock_info_scroll: crate::list_scroll::ListScroll::new(),
+            room_dock_diag_scroll: crate::list_scroll::ListScroll::new(),
+            room_dock_scroll_room: None,
+            room_dock_body_viewport: 0,
             archive_worker: crate::archive_worker::ArchiveWorker::new(),
         }
     }

@@ -29,7 +29,9 @@ into named layers shown as tabs across the top of the map pane —
 `/cycle-layer next|prev` moves between them. Click a room, or use
 `/select-room`, to select it and open its room card, which lists every
 direction out of that room, where each one leads, and which you've never
-tried.
+tried. Notes, renamed aliases and a full exit card can run taller than the
+card itself — scroll the mouse wheel over it to see the rest, and a thin bar
+on the right edge shows there's more.
 
 **Connections that stay readable.** A "one arrow per exit" map turns to
 spaghetti fast, so lanthorn routes connections through lanes that eliminate

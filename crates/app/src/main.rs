@@ -540,6 +540,17 @@ struct PaneRects {
     room_dock_tabs: Vec<(app::state::RoomDockView, Rect)>,
     /// Hit-rect for the dock's close box (SQ-1265), when the frame drew one.
     room_dock_close: Option<Rect>,
+    /// The room the dock's active body actually described this frame (SQ-1280) —
+    /// `None` whenever no body was drawn (closed, or too short). The run loop
+    /// compares this against `AppState::room_dock_scroll_room` after the frame to
+    /// decide whether the displayed room changed and both scrolls reset.
+    room_dock_room: Option<RoomId>,
+    /// The active body's total row count and viewport height this frame (SQ-1280),
+    /// both 0 alongside `room_dock_room == None`. Synced into
+    /// `AppState::room_dock_{info,diag}_scroll` and `room_dock_body_viewport` the
+    /// same way `modal_list_viewport` is, right after the render call returns.
+    room_dock_body_total: u16,
+    room_dock_body_viewport: u16,
     /// The room context menu's frame and per-item hit-rects (SQ-1265), zero-area
     /// / empty when it is closed.
     room_menu_area: Rect,
@@ -695,6 +706,9 @@ fn draw_frame(
     let mut map_control_view = mapper::layer::MapView::Drawn;
     let mut room_dock_tabs_out: Vec<(app::state::RoomDockView, Rect)> = Vec::new();
     let mut room_dock_close_out: Option<Rect> = None;
+    let mut room_dock_room_out: Option<RoomId> = None;
+    let mut room_dock_body_total_out: u16 = 0;
+    let mut room_dock_body_viewport_out: u16 = 0;
     let mut room_menu_area_out: Rect = Rect::default();
     let mut room_menu_items_out: Vec<(usize, Rect)> = Vec::new();
     let mut debug_tabs_out: Vec<(usize, usize, Rect)> = Vec::new();
@@ -1057,6 +1071,20 @@ fn draw_frame(
             let dock_resize_hl = (state.resize_mode
                 && state.resize_target == app::state::ResizeTarget::RoomDock)
                 || state.boundary_active(app::layout::Boundary::RoomDockTop);
+            // SQ-1280: the active body's scroll offset, read from its `ListScroll` —
+            // unless the room this frame describes differs from the one those
+            // offsets were last synced to, in which case a reset is coming right
+            // after this draw returns (see the post-render sync below) and drawing
+            // at the STALE offset for one frame would show a scrolled window into
+            // the wrong room's content.
+            let dock_scroll_offset = if state.room_dock_scroll_room == room {
+                match state.room_dock_view {
+                    app::state::RoomDockView::Info => state.room_dock_info_scroll.display_offset() as u16,
+                    app::state::RoomDockView::Diagnostics => state.room_dock_diag_scroll.display_offset() as u16,
+                }
+            } else {
+                0
+            };
             let dock_rects = app::render::room_dock::draw_room_dock(
                 graph,
                 room,
@@ -1068,10 +1096,14 @@ fn draw_frame(
                 &state.colors,
                 &state.symbols,
                 dock_resize_hl,
+                dock_scroll_offset,
                 buf,
             );
             room_dock_tabs_out = dock_rects.tabs;
             room_dock_close_out = dock_rects.close;
+            room_dock_room_out = room;
+            room_dock_body_total_out = dock_rects.body_total;
+            room_dock_body_viewport_out = dock_rects.body_viewport;
         }
 
         // ── Inventory dock panel ──────────────────────────────────────────────
@@ -1266,7 +1298,7 @@ fn draw_frame(
 
     // The draw closure runs exactly once, so the overlay ladder always ran.
     let overlay_rects = overlay_rects.expect("draw_frame closure runs exactly once");
-    Ok(PaneRects { map: map_area, story: story_area, boundaries: pane_layout_out.boundary_zones(), pane_layout: pane_layout_out, room_rects: room_rects_out, map_marker_rects: map_marker_rects_out, map_view: map_control_view, room_dock: pane_layout_out.room_dock, room_dock_tabs: room_dock_tabs_out, room_dock_close: room_dock_close_out, room_menu_area: room_menu_area_out, room_menu_items: room_menu_items_out, layer_tabs: layer_tabs_out, border_controls: border_controls_out, debug_tabs: debug_tabs_out, dialog: overlay_rects.dialog, aux_dialog: overlay_rects.aux_dialog, history_prompt: overlay_rects.history_prompt, font_check: overlay_rects.font_check, fetch_keep: overlay_rects.fetch_keep, reset_dialog: overlay_rects.reset_dialog, region_prompt: overlay_rects.region_prompt, game_over: overlay_rects.game_over, save_name_dialog: overlay_rects.save_name_dialog, text_entry: overlay_rects.text_entry, confirm_delete: overlay_rects.confirm_delete, confirm_overwrite: overlay_rects.confirm_overwrite, quit_dialog: overlay_rects.quit_dialog, launch_dialog: overlay_rects.launch_dialog, hints_panel: overlay_rects.hints_panel, command_band: band_hits, inventory_dock: inv_hits, palette: palette_hits, transcript_links: transcript_links_out, win_rects: win_rects_out, transcript_max_scroll, transcript_viewport_rows, transcript_prompt_rows, transcript_total_rows, transcript_surface, modal_list_viewport })
+    Ok(PaneRects { map: map_area, story: story_area, boundaries: pane_layout_out.boundary_zones(), pane_layout: pane_layout_out, room_rects: room_rects_out, map_marker_rects: map_marker_rects_out, map_view: map_control_view, room_dock: pane_layout_out.room_dock, room_dock_tabs: room_dock_tabs_out, room_dock_close: room_dock_close_out, room_dock_room: room_dock_room_out, room_dock_body_total: room_dock_body_total_out, room_dock_body_viewport: room_dock_body_viewport_out, room_menu_area: room_menu_area_out, room_menu_items: room_menu_items_out, layer_tabs: layer_tabs_out, border_controls: border_controls_out, debug_tabs: debug_tabs_out, dialog: overlay_rects.dialog, aux_dialog: overlay_rects.aux_dialog, history_prompt: overlay_rects.history_prompt, font_check: overlay_rects.font_check, fetch_keep: overlay_rects.fetch_keep, reset_dialog: overlay_rects.reset_dialog, region_prompt: overlay_rects.region_prompt, game_over: overlay_rects.game_over, save_name_dialog: overlay_rects.save_name_dialog, text_entry: overlay_rects.text_entry, confirm_delete: overlay_rects.confirm_delete, confirm_overwrite: overlay_rects.confirm_overwrite, quit_dialog: overlay_rects.quit_dialog, launch_dialog: overlay_rects.launch_dialog, hints_panel: overlay_rects.hints_panel, command_band: band_hits, inventory_dock: inv_hits, palette: palette_hits, transcript_links: transcript_links_out, win_rects: win_rects_out, transcript_max_scroll, transcript_viewport_rows, transcript_prompt_rows, transcript_total_rows, transcript_surface, modal_list_viewport })
 }
 
 // ── Command-band mouse routing ───────────────────────────────────────────────
@@ -2201,6 +2233,28 @@ fn run_event_loop(boot: startup::BootResult, launched_from_library: bool) -> Run
                 // Carry this frame's modal list viewport so the next nav action
                 // can window/animate the open selection-list modal.
                 state.modal_list_viewport = panes.modal_list_viewport;
+                // Room dock body scroll (SQ-1280): sync the ACTIVE body's `ListScroll`
+                // to what the render pass just measured, mirroring `modal_list_viewport`
+                // above. A displayed-room change — a pin, an unpin-and-follow, a walk
+                // while following, or the dock closing (which reads as the room going
+                // to `None`) — resets BOTH bodies to the top rather than reclamping
+                // into a different room's content.
+                if state.room_dock_scroll_room != panes.room_dock_room {
+                    state.room_dock_info_scroll = app::list_scroll::ListScroll::new();
+                    state.room_dock_diag_scroll = app::list_scroll::ListScroll::new();
+                    state.room_dock_scroll_room = panes.room_dock_room;
+                }
+                state.room_dock_body_viewport = panes.room_dock_body_viewport;
+                let dock_scroll = match state.room_dock_view {
+                    app::state::RoomDockView::Info => &mut state.room_dock_info_scroll,
+                    app::state::RoomDockView::Diagnostics => &mut state.room_dock_diag_scroll,
+                };
+                if panes.room_dock_body_total as usize <= panes.room_dock_body_viewport as usize {
+                    // The body no longer overflows: nothing to scroll, so nothing stays scrolled.
+                    *dock_scroll = app::list_scroll::ListScroll::new();
+                } else {
+                    dock_scroll.len(panes.room_dock_body_total as usize);
+                }
                 // Replay's idx is the source of truth; keep its (animated) list
                 // scroll following it. Skip while a scroll is easing so the tween
                 // isn't restarted each frame; select() is a no-op once settled.
@@ -3639,16 +3693,17 @@ fn run_event_loop(boot: startup::BootResult, launched_from_library: bool) -> Run
                 }
                 // Room dock (SQ-0692): the dock owns every mouse event inside its
                 // rect. A left-click on one of its two view tabs switches the body;
-                // anything else inside it is simply swallowed, because the dock is
-                // carved out of the map pane and a click there is neither a map
-                // click nor a story selection — and must never reach the v6 mouse
-                // delivery path below.
+                // a wheel notch scrolls the active body (SQ-1280); anything else
+                // inside it is simply swallowed, because the dock is carved out of
+                // the map pane and a click there is neither a map click nor a story
+                // selection — and must never reach the v6 mouse delivery path below.
                 if !state.any_modal_overlay_open() {
                     if let Some(action) = app::input::room_dock_mouse_action(
                         last_panes.room_dock,
                         &last_panes.room_dock_tabs,
                         last_panes.room_dock_close,
                         &m,
+                        state.config.mouse_wheel_invert,
                     ) {
                         // (`needs_redraw` was already set for this event above.)
                         apply_action(action, &mut state, &mut mapper);

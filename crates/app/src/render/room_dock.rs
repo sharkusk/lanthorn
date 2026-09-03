@@ -113,6 +113,14 @@ pub struct RoomDockRects {
     /// A click here closes the dock — the same effect as `toggle-room-panel`
     /// while it is open. `None` when the frame was too narrow to draw one.
     pub close: Option<Rect>,
+    /// The ACTIVE body's total row count this frame (SQ-1280) — 0 when no body was
+    /// drawn (missing room, zero area). The caller syncs its `ListScroll` against
+    /// this after the draw returns, the same way it already tracks
+    /// `modal_list_viewport`.
+    pub body_total: u16,
+    /// The active body's own viewport height (rows below the header, borders
+    /// excluded) this frame — 0 under the same conditions as `body_total`.
+    pub body_viewport: u16,
 }
 
 /// Draw the room dock into `area`.
@@ -122,10 +130,14 @@ pub struct RoomDockRects {
 ///   when introspection is unavailable); `current_room` gates their display.
 /// - `highlighted` is true when resize mode targets this dock or the pointer is
 ///   on its top edge — the same accent every other pane boundary uses.
+/// - `scroll_offset` is the ACTIVE body's scroll position in rows (SQ-1280),
+///   already read from the caller's `ListScroll` for `view` — the body draw
+///   clamps it defensively, so a stale offset (the room just changed, say)
+///   never draws garbage.
 ///
 /// Returns the title-strip hit-rects, so a click on "Room"/"Diagnostics" switches
 /// the view the same way a click on a layer tab switches layers, plus the close
-/// box's rect.
+/// box's rect and the active body's row totals for the caller's scroll sync.
 #[allow(clippy::too_many_arguments)]
 pub fn draw_room_dock(
     graph: &MapGraph,
@@ -138,10 +150,11 @@ pub fn draw_room_dock(
     colors: &ColorScheme,
     symbols: &SymbolSet,
     highlighted: bool,
+    scroll_offset: u16,
     buf: &mut Buffer,
 ) -> RoomDockRects {
     if area.width == 0 || area.height == 0 {
-        return RoomDockRects { tabs: Vec::new(), close: None };
+        return RoomDockRects { tabs: Vec::new(), close: None, body_total: 0, body_viewport: 0 };
     }
     let style = colors.theme.get("room_panel").style;
     let header_style = colors
@@ -212,7 +225,7 @@ pub fn draw_room_dock(
 
     let content = frame.content;
     if content.height == 0 || content.width == 0 {
-        return RoomDockRects { tabs, close };
+        return RoomDockRects { tabs, close, body_total: 0, body_viewport: 0 };
     }
 
     draw_str_clipped(
@@ -231,7 +244,7 @@ pub fn draw_room_dock(
         content.height.saturating_sub(1),
     );
     if body.height == 0 {
-        return RoomDockRects { tabs, close };
+        return RoomDockRects { tabs, close, body_total: 0, body_viewport: 0 };
     }
 
     let Some(id) = room.filter(|id| graph.room(*id).is_some()) else {
@@ -243,10 +256,10 @@ pub fn draw_room_dock(
             style,
             body,
         );
-        return RoomDockRects { tabs, close };
+        return RoomDockRects { tabs, close, body_total: 0, body_viewport: 0 };
     };
 
-    match view {
+    let body_total = match view {
         RoomDockView::Info => super::room_info::draw_room_info_body(
             graph,
             room_objects,
@@ -257,9 +270,10 @@ pub fn draw_room_dock(
             &colors.theme,
             style,
             heading_style,
+            scroll_offset,
         ),
-        RoomDockView::Diagnostics => {
-            if let Some(diag) = super::inspector::room_diagnostics(graph, id) {
+        RoomDockView::Diagnostics => super::inspector::room_diagnostics(graph, id)
+            .map(|diag| {
                 super::inspector::draw_diagnostics_body(
                     &diag,
                     body,
@@ -267,12 +281,13 @@ pub fn draw_room_dock(
                     &colors.theme,
                     style,
                     heading_style,
-                );
-            }
-        }
-    }
+                    scroll_offset,
+                )
+            })
+            .unwrap_or(0),
+    };
 
-    RoomDockRects { tabs, close }
+    RoomDockRects { tabs, close, body_total, body_viewport: body.height }
 }
 
 // ── Tests ─────────────────────────────────────────────────────────────────────
@@ -388,14 +403,14 @@ mod tests {
         let colors = ColorScheme::default();
 
         let mut buf = Buffer::empty(area);
-        draw_room_dock(&g, Some(1), false, RoomDockView::Info, &[], Some(1), area, &colors, &SymbolSet::default(), false, &mut buf);
+        draw_room_dock(&g, Some(1), false, RoomDockView::Info, &[], Some(1), area, &colors, &SymbolSet::default(), false, 0, &mut buf);
         let info = buf_text(&buf);
         assert!(info.contains("West of House"), "the header names the room: {info}");
         assert!(info.contains("Exits:"), "the Info body draws the exit card");
         assert!(info.contains("Forest Path"), "…naming where east goes");
 
         let mut buf = Buffer::empty(area);
-        draw_room_dock(&g, Some(1), true, RoomDockView::Diagnostics, &[], Some(1), area, &colors, &SymbolSet::default(), false, &mut buf);
+        draw_room_dock(&g, Some(1), true, RoomDockView::Diagnostics, &[], Some(1), area, &colors, &SymbolSet::default(), false, 0, &mut buf);
         let diag = buf_text(&buf);
         assert!(diag.contains("Pos"), "the Diagnostics body draws the grid position: {diag}");
         assert!(diag.contains("edge"), "…and the edge summary");
@@ -407,7 +422,7 @@ mod tests {
         let g = MapGraph::new();
         let area = Rect::new(0, 0, 50, 10);
         let mut buf = Buffer::empty(area);
-        draw_room_dock(&g, None, false, RoomDockView::Info, &[], None, area, &ColorScheme::default(), &SymbolSet::default(), false, &mut buf);
+        draw_room_dock(&g, None, false, RoomDockView::Info, &[], None, area, &ColorScheme::default(), &SymbolSet::default(), false, 0, &mut buf);
         let text = buf_text(&buf);
         assert!(text.contains("nowhere yet"), "{text}");
         assert!(text.contains("not placed you in a room yet"), "{text}");
@@ -424,7 +439,7 @@ mod tests {
         let area = Rect::new(0, 0, 60, 12);
         let mut buf = Buffer::empty(area);
         let rects = draw_room_dock(&g, Some(1), false, RoomDockView::Info, &[], Some(1), area,
-            &ColorScheme::default(), &SymbolSet::default(), false, &mut buf);
+            &ColorScheme::default(), &SymbolSet::default(), false, 0, &mut buf);
         let tabs = &rects.tabs;
 
         assert_eq!(tabs.len(), 2, "one rect per view");
@@ -447,7 +462,7 @@ mod tests {
         let area = Rect::new(0, 0, 60, 12);
         let mut buf = Buffer::empty(area);
         let rects = draw_room_dock(&g, Some(1), false, RoomDockView::Info, &[], Some(1), area,
-            &ColorScheme::default(), &SymbolSet::default(), false, &mut buf);
+            &ColorScheme::default(), &SymbolSet::default(), false, 0, &mut buf);
 
         let close = rects.close.expect("a 60-wide frame has room for the close box");
         assert_eq!(close.y, area.y, "the close box sits on the header row, like the tabs");
@@ -476,7 +491,7 @@ mod tests {
         let area = Rect::new(0, 0, 60, 12);
         let mut buf = Buffer::empty(area);
         let rects = draw_room_dock(&g, Some(1), false, RoomDockView::Info, &[], Some(1), area,
-            &ColorScheme::default(), &SymbolSet::default(), false, &mut buf);
+            &ColorScheme::default(), &SymbolSet::default(), false, 0, &mut buf);
         let tabs = &rects.tabs;
 
         let click = |col: u16, row: u16| MouseEvent {
@@ -495,7 +510,7 @@ mod tests {
         for (view, r) in tabs {
             for col in r.x..r.right() {
                 st.room_dock_view = view.flipped();
-                let action = room_dock_mouse_action(area, tabs, rects.close, &click(col, r.y))
+                let action = room_dock_mouse_action(area, tabs, rects.close, &click(col, r.y), false)
                     .unwrap_or_else(|| panic!("a click inside the dock is always claimed"));
                 assert_eq!(action, Action::SetRoomDockView(*view), "col {col} of the {view:?} tab");
                 apply_action(action, &mut st, &mut m);
@@ -507,12 +522,12 @@ mod tests {
         // the click never falls through to the map or the story pane behind it.
         st.room_dock_view = RoomDockView::Info;
         let body = click(area.x + 3, area.bottom() - 2);
-        assert_eq!(room_dock_mouse_action(area, tabs, rects.close, &body), Some(Action::None));
+        assert_eq!(room_dock_mouse_action(area, tabs, rects.close, &body, false), Some(Action::None));
         assert_eq!(st.room_dock_view, RoomDockView::Info);
 
         // A click OUTSIDE the dock is not the dock's business at all.
         assert_eq!(
-            room_dock_mouse_action(area, tabs, rects.close, &click(area.x, area.bottom() + 1)),
+            room_dock_mouse_action(area, tabs, rects.close, &click(area.x, area.bottom() + 1), false),
             None,
             "an event outside the dock rect falls through to normal routing"
         );
@@ -533,7 +548,7 @@ mod tests {
         let area = Rect::new(0, 0, 60, 12);
         let mut buf = Buffer::empty(area);
         let rects = draw_room_dock(&g, Some(1), false, RoomDockView::Info, &[], Some(1), area,
-            &ColorScheme::default(), &SymbolSet::default(), false, &mut buf);
+            &ColorScheme::default(), &SymbolSet::default(), false, 0, &mut buf);
         let close = rects.close.expect("a 60-wide frame has room for the close box");
 
         let click = |col: u16, row: u16| MouseEvent {
@@ -548,7 +563,7 @@ mod tests {
         st.room_dock.toggle_to(true, true);
         assert!(st.room_dock.open, "starts open");
 
-        let action = room_dock_mouse_action(area, &rects.tabs, rects.close, &click(close.x, close.y))
+        let action = room_dock_mouse_action(area, &rects.tabs, rects.close, &click(close.x, close.y), false)
             .unwrap_or_else(|| panic!("a click on the close box is always claimed"));
         assert_eq!(action, Action::CloseRoomDock);
         apply_action(action, &mut st, &mut m);
@@ -557,7 +572,7 @@ mod tests {
         // One column short of the box: claimed by the dock (it is still inside
         // its rect) but never read as the close gesture.
         st.room_dock.toggle_to(true, true);
-        let beside = room_dock_mouse_action(area, &rects.tabs, rects.close, &click(close.x - 1, close.y))
+        let beside = room_dock_mouse_action(area, &rects.tabs, rects.close, &click(close.x - 1, close.y), false)
             .unwrap_or_else(|| panic!("still inside the dock's own rect"));
         assert_ne!(beside, Action::CloseRoomDock, "a miss beside the box is not the close gesture");
     }
@@ -581,7 +596,7 @@ mod tests {
 
         let mut buf = Buffer::empty(area);
         let tabs = draw_room_dock(&g, Some(1), false, RoomDockView::Info, &[], Some(1), area,
-            &colors, &SymbolSet::default(), false, &mut buf).tabs;
+            &colors, &SymbolSet::default(), false, 0, &mut buf).tabs;
 
         let top: String = (0..area.width).map(|x| buf.cell((x, 0)).unwrap().symbol()).collect();
         assert!(top.contains("┤ Room "), "the shared left cap: {top:?}");
@@ -595,7 +610,7 @@ mod tests {
         // …and it follows the view, not the tab order.
         let mut buf = Buffer::empty(area);
         let tabs = draw_room_dock(&g, Some(1), false, RoomDockView::Diagnostics, &[], Some(1), area,
-            &colors, &SymbolSet::default(), false, &mut buf).tabs;
+            &colors, &SymbolSet::default(), false, 0, &mut buf).tabs;
         let fg_at = |r: Rect| buf.cell((r.x + 1, r.y)).and_then(|c| c.style().fg);
         assert_eq!(fg_at(tabs[0].1), Some(Color::Blue));
         assert_eq!(fg_at(tabs[1].1), Some(Color::Green));
@@ -612,7 +627,7 @@ mod tests {
 
         let mut buf = Buffer::empty(area);
         draw_room_dock(&g, Some(1), false, RoomDockView::Info, &[], Some(1), area,
-            &colors, &SymbolSet::default(), false, &mut buf);
+            &colors, &SymbolSet::default(), false, 0, &mut buf);
         assert_eq!(
             buf.cell((0, 0)).unwrap().symbol(),
             "\u{2554}",
@@ -625,7 +640,7 @@ mod tests {
         let g = graph_with_current();
         let mut buf = Buffer::empty(Rect::new(0, 0, 1, 1));
         draw_room_dock(&g, Some(1), false, RoomDockView::Info, &[], Some(1),
-            Rect::new(0, 0, 0, 0), &ColorScheme::default(), &SymbolSet::default(), false, &mut buf);
+            Rect::new(0, 0, 0, 0), &ColorScheme::default(), &SymbolSet::default(), false, 0, &mut buf);
     }
 
     /// Every new visual element is styleable: `room_panel` paints the body and
@@ -658,17 +673,104 @@ mod tests {
         };
 
         let mut buf = Buffer::empty(area);
-        draw_room_dock(&g, Some(1), false, RoomDockView::Info, &[], Some(1), area, &colors, &SymbolSet::default(), false, &mut buf);
+        draw_room_dock(&g, Some(1), false, RoomDockView::Info, &[], Some(1), area, &colors, &SymbolSet::default(), false, 0, &mut buf);
         let fgs = fgs_of(&buf);
         assert!(fgs.contains(&Some(Color::Blue)), "the following header uses room_panel.header");
         assert!(fgs.contains(&Some(Color::Magenta)), "the body uses room_panel");
         assert!(!fgs.contains(&Some(Color::Green)), "…and not the pinned variant");
 
         let mut buf = Buffer::empty(area);
-        draw_room_dock(&g, Some(1), true, RoomDockView::Info, &[], Some(1), area, &colors, &SymbolSet::default(), false, &mut buf);
+        draw_room_dock(&g, Some(1), true, RoomDockView::Info, &[], Some(1), area, &colors, &SymbolSet::default(), false, 0, &mut buf);
         assert!(
             fgs_of(&buf).contains(&Some(Color::Green)),
             "a pinned header uses room_panel.header:pinned"
         );
+    }
+
+    // ── Scrolling (SQ-1280) ───────────────────────────────────────────────────
+
+    /// `draw_room_dock` threads `scroll_offset` through to the active body and reports its total
+    /// row count and viewport back — the two numbers the caller syncs its `ListScroll` against
+    /// after the draw returns.
+    #[test]
+    fn draw_room_dock_reports_the_active_bodys_totals_and_honours_the_offset() {
+        let g = graph_with_current();
+        // Narrow and short enough that the exit card alone overflows.
+        let area = Rect::new(0, 0, 20, 6);
+        let colors = ColorScheme::default();
+
+        let mut buf = Buffer::empty(area);
+        let at_top = draw_room_dock(&g, Some(1), false, RoomDockView::Info, &[], Some(1), area,
+            &colors, &SymbolSet::default(), false, 0, &mut buf);
+        assert!(at_top.body_total > at_top.body_viewport, "the card overflows this dock: {} vs {}", at_top.body_total, at_top.body_viewport);
+        assert!(at_top.body_viewport > 0 && at_top.body_viewport < area.height, "the body sits below the header: {}", at_top.body_viewport);
+
+        let max_offset = at_top.body_total - at_top.body_viewport;
+        let mut buf2 = Buffer::empty(area);
+        let at_end = draw_room_dock(&g, Some(1), false, RoomDockView::Info, &[], Some(1), area,
+            &colors, &SymbolSet::default(), false, max_offset, &mut buf2);
+        assert_eq!(at_end.body_total, at_top.body_total, "the same content reports the same total");
+        // Scrolling actually changed what is on screen.
+        let text_of = |b: &Buffer| b.content().iter().map(|c| c.symbol().to_owned()).collect::<String>();
+        assert_ne!(text_of(&buf), text_of(&buf2), "a nonzero offset draws a different window of the body");
+    }
+
+    /// A wheel notch anywhere inside the dock scrolls the active body — mapped to
+    /// `Action::RoomDockScroll` with the sign `wheel_delta` resolves, `mouse_wheel_invert` and
+    /// all — and the tab/close routing above it is untouched.
+    #[test]
+    fn room_dock_mouse_action_maps_a_wheel_notch_to_room_dock_scroll() {
+        use crate::input::{room_dock_mouse_action, Action};
+        use crossterm::event::{KeyModifiers, MouseEvent, MouseEventKind};
+
+        let area = Rect::new(0, 0, 60, 12);
+        let wheel = |kind: MouseEventKind| MouseEvent {
+            kind,
+            column: area.x + 3,
+            row: area.y + 3,
+            modifiers: KeyModifiers::NONE,
+        };
+
+        assert_eq!(
+            room_dock_mouse_action(area, &[], None, &wheel(MouseEventKind::ScrollDown), false),
+            Some(Action::RoomDockScroll(1)),
+        );
+        assert_eq!(
+            room_dock_mouse_action(area, &[], None, &wheel(MouseEventKind::ScrollUp), false),
+            Some(Action::RoomDockScroll(-1)),
+        );
+        // `mouse_wheel_invert` flips it, same as every other wheel handler.
+        assert_eq!(
+            room_dock_mouse_action(area, &[], None, &wheel(MouseEventKind::ScrollDown), true),
+            Some(Action::RoomDockScroll(-1)),
+        );
+
+        // A wheel event OUTSIDE the dock is still not the dock's business.
+        let outside = MouseEvent { kind: MouseEventKind::ScrollDown, column: area.x, row: area.bottom() + 1, modifiers: KeyModifiers::NONE };
+        assert_eq!(room_dock_mouse_action(area, &[], None, &outside, false), None);
+    }
+
+    /// Applying `RoomDockScroll` actually moves the right body's `ListScroll` — Info and
+    /// Diagnostics scroll independently, so a notch while one view is showing never touches the
+    /// other's remembered position.
+    #[test]
+    fn applying_room_dock_scroll_moves_the_active_bodys_list_scroll_only() {
+        use crate::input::{apply_action, Action};
+
+        let mut st = crate::state::AppState::default();
+        let mut m = mapper::mapper::Mapper::default();
+        st.room_dock_view = RoomDockView::Info;
+        st.room_dock_body_viewport = 4;
+        st.room_dock_info_scroll.len(20);
+        st.room_dock_diag_scroll.len(20);
+
+        apply_action(Action::RoomDockScroll(1), &mut st, &mut m);
+        assert_eq!(st.room_dock_info_scroll.target_offset(), 1, "the Info scroll moved");
+        assert_eq!(st.room_dock_diag_scroll.target_offset(), 0, "…and the Diagnostics one did not");
+
+        st.room_dock_view = RoomDockView::Diagnostics;
+        apply_action(Action::RoomDockScroll(1), &mut st, &mut m);
+        assert_eq!(st.room_dock_diag_scroll.target_offset(), 1, "now Diagnostics moves");
+        assert_eq!(st.room_dock_info_scroll.target_offset(), 1, "…and Info stays where it was");
     }
 }
