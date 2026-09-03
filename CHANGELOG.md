@@ -100,6 +100,10 @@ Absolute URLs or no link.
   matrix and room panel.** It sits right beside the room's usual stairway
   icon, the same way a random compass exit already showed on the border.
 
+- **Two more Nerd Font arrow sets for the map**, `nf-wind` (circled arrows,
+  all eight directions from one icon family) and `nf-thin` (bare arrows, the
+  clearest at small sizes). Set `arrow_set` in `style.toml` to try them.
+
 ### Docker
 
 - **The browser page now scrolls with a finger, not just a mouse wheel.** A

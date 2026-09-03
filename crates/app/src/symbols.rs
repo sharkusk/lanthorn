@@ -547,7 +547,10 @@ impl BoxStyle {
 impl Arrows {
     /// All known preset names for Arrows, in display order.
     pub fn preset_names() -> &'static [&'static str] {
-        &["filled", "line", "nerdfont", "nf-bold", "nf-box", "nf-chevron", "nf-circle", "nf-outline"]
+        &[
+            "filled", "line", "nerdfont", "nf-bold", "nf-box", "nf-chevron", "nf-circle", "nf-outline",
+            "nf-wind", "nf-thin",
+        ]
     }
 
     /// Return a named preset, or `None` for an unknown name.
@@ -631,6 +634,28 @@ impl Arrows {
                 // arrow-bottom-left-bold-outline F09B7, arrow-bottom-right-bold-outline F09B9
                 nw: '\u{F09C3}', ne: '\u{F09C5}',
                 sw: '\u{F09B7}', se: '\u{F09B9}',
+            },
+            // Nerd Fonts' Weather Icons `wind_*` set (E354-E35B): a circled arrow for
+            // ALL eight directions from one icon set at one weight — the only preset
+            // whose diagonals are native and match the cardinals exactly (measured:
+            // identical ink boxes at every pixel size, 2026-09-03). The names are the
+            // OPPOSITE of the arrow: `wind_north` (E35A) points DOWN — it is the wind
+            // FROM the north — so each slot takes the glyph named for its opposite.
+            "nf-wind" => Arrows {
+                north: '\u{E357}', south: '\u{E35A}', // wind_south / wind_north
+                east: '\u{E354}', west: '\u{E35B}',  // wind_west / wind_east
+                ne: '\u{E355}', nw: '\u{E356}',      // wind_south_west / wind_south_east
+                se: '\u{E358}', sw: '\u{E359}',      // wind_north_west / wind_north_east
+            },
+            // Weather Icons `direction_*` (E33F-E353, E37F, E380): bare thin arrows,
+            // all eight native. The clearest set at one-cell size, where a boxed or
+            // circled arrow collapses to a shape with a dot in it and a bare stroke
+            // still reads.
+            "nf-thin" => Arrows {
+                north: '\u{E353}', south: '\u{E340}',
+                east: '\u{E349}', west: '\u{E344}',
+                ne: '\u{E352}', nw: '\u{E37F}',
+                se: '\u{E380}', sw: '\u{E33F}',
             },
             _ => return None,
         })
@@ -1767,7 +1792,7 @@ mod tests {
 
     #[test]
     fn nf_arrow_presets_exist_and_are_single_width() {
-        for name in ["nf-bold","nf-box","nf-circle","nf-outline"] {
+        for name in ["nf-bold","nf-box","nf-circle","nf-outline","nf-wind","nf-thin"] {
             assert!(Arrows::preset_names().contains(&name), "{name} missing");
             let a = Arrows::preset(name).expect("preset");
             for ch in [a.north,a.south,a.east,a.west,a.ne,a.nw,a.se,a.sw] {
