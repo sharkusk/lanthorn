@@ -510,14 +510,55 @@ West of House, Kitchen, Living Room and Attic properties in
 `stories/zork1-r88-s840726.z3`, cross-checked byte for byte against the
 retail game's own recovered source (`1dungeon.zil`,
 <https://github.com/historicalsource/zork1>), and against the tracked
-`minizork.z3` fixture. This is Version-3 specific and the derivation refuses
-outright on anything else: object references are one byte in V3 and two in
-V4+, which collides UEXIT's length with NEXIT's fixed 2-byte string — no V4+
-ZIL fixture was available to derive the (probably tag-byte) scheme Infocom's
-later compiler actually used, so a V4+ ZIL story (Deadline, Enchanter, …)
-still answers `Unknown` here, exactly as before this quest, rather than
-guessing. See `crates/zvm/src/world.rs`'s "Declared exits: ZIL" module docs
-for the full citations and the byte layouts.
+`minizork.z3` fixture. See `crates/zvm/src/world.rs`'s "Declared exits: ZIL"
+module docs for the full citations and the byte layouts.
+
+**V4+ (SQ-1268): the room-reference width is a per-STORY fact, not a
+per-VERSION one.** SQ-1260 refused every V4+ story outright, on the theory
+that two-byte object references there (ZMSD §12.3) would collide UEXIT's
+length with a fixed 2-byte NEXIT. Checked against `stories/
+trinity-r12-s860926.z4`'s Palace Gate and Bluff — byte for byte against the
+real ZIL source (`places.zil`, <https://github.com/historicalsource/trinity>)
+— that theory was wrong in the useful direction: EVERY shape is one byte
+wider than its V3 counterpart, because the packed string/routine fields scale
+too, not just the room reference (UEXIT 2, NEXIT 3, FEXIT 4, CEXIT 5
+extrapolated/unconfirmed, DEXIT 6), so NEXIT never lands on UEXIT's length
+after all. AMFV, Bureaucracy (V4) and Beyond Zork (V5) all compile the same
+way. `stories/sherlock-r26-s880127.z5` does not — a V5 story whose compiler
+packed room references into a single byte throughout, exactly like V3 —
+checked against 221-B Baker Street's own compiled table (byte for byte, cross
+referenced by object number and name since Sherlock's ZIL source is not on
+`historicalsource`). `zvm::world::infer_zil_room_width` derives this width
+per story, empirically, off the exit tables themselves (never off the
+dictionary, never off the Z-machine version): a length-1 property whose byte
+is a plausible room number casts a "narrow" vote and a length-2 property
+whose word is one casts a "wide" vote, and whichever wins is what
+`WorldModel::resolve_zil` uses for every one of the five shapes on that
+story — `w`/`w+1`/`w+2`/`w+3`/`w+4` for UEXIT/NEXIT/FEXIT/CEXIT/DEXIT,
+reproducing V3's original table exactly at `w=1`.
+
+V6 (Zork Zero, Shogun, Arthur) needed a THIRD derivation: there is no `DIR`
+flag at all to test — ztools' own `showdict.c` skips flag decoding for
+Version 6 outright (`else if (header.version != V6)`), because V6 dictionary
+entries use a different scheme entirely (`tx.h`'s `parser_types` enum lists
+`infocom6_grammar` as its own case). Empirically, a V6 direction word's
+dictionary entry stores the exit-property number DIRECTLY in its first data
+byte, no flag or indirection — checked against Zork Zero's Banquet Hall and
+Shogun's `ON-BRIDGE`, both against their real ZIL source
+(<https://github.com/historicalsource/zorkzero>,
+<https://github.com/historicalsource/shogun>) — and `zvm::world::
+infer_zil_exits_v6` reads it that way, gated on the same `1..=63` plausible-
+property-number test the flagged derivation uses. Journey's dictionary (27
+entries) carries none of the twelve compass words at all — "no compass
+parser" is a fact about the dictionary, so the derivation naturally answers
+`None` without special-casing the game by name. `crates/app/tests/suites/
+sq1268_zil_v4plus_exits.rs` proves all of this on the real games: Trinity
+(UEXIT/NEXIT/FEXIT/DEXIT on two rooms, one real move), Sherlock (UEXIT on two
+directions plus a real move through its FEXIT), Zork Zero (UEXIT on three
+directions plus a real move — its Prologue scene kills the player outright on
+its fifth turn without hiding under a table, so the harness reaches the
+Banquet Hall adaptively rather than on a fixed turn count), Shogun (UEXIT on
+two directions, read statically) and Journey (`Unknown` everywhere).
 
 UEXIT and DEXIT both classify as `DeclaredExit::Room` — DEXIT's destination
 is a plain, static room number in every case checked, never a routine, so

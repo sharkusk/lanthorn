@@ -80,6 +80,13 @@ Absolute URLs or no link.
   west leads somewhere different EVERY time — and the map now marks those
   exits "destination varies" instead of drawing a confident arrow to whatever
   room you happened to land in first.
+- **And now the later Infocom games too** — Trinity, A Mind Forever
+  Voyaging, Bureaucracy, Beyond Zork, Sherlock, Zork Zero, Shogun, Arthur and
+  the rest of the mid-to-late-80s catalogue. The Carousel Room fix above only
+  read the earliest Infocom games' own exit tables; this reads the same
+  tables on every later one too, so a random or door-gated exit in any of
+  them gets the same honest `?` instead of a confident but sometimes-wrong
+  arrow.
 
 ### Docker
 

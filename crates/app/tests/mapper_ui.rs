@@ -54,3 +54,5 @@ mod sq1264_forest_randomization;
 mod sq1267_shadow_room_identity;
 #[path = "suites/sq1260_zil_carousel_randomization.rs"]
 mod sq1260_zil_carousel_randomization;
+#[path = "suites/sq1268_zil_v4plus_exits.rs"]
+mod sq1268_zil_v4plus_exits;

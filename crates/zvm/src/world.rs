@@ -121,6 +121,17 @@ pub struct WorldModel {
     /// looks for this convention when that comes up empty) or for a story
     /// whose dictionary carries no `DIR`-flagged words at all.
     pub zil_exit_props: [Option<u8>; 12],
+    /// How many bytes a ZIL UEXIT/DEXIT destination-room reference occupies
+    /// in THIS story's compiled exit tables (SQ-1268) — 1 or 2. Only
+    /// meaningful when `zil_exit_props` has anything `Some`; `0` otherwise
+    /// (never consulted then). Always 1 for a V3 story (SQ-1260's original,
+    /// unchanged derivation — V3 object numbers are one byte, ZMSD §12.3).
+    /// For V4+, this is NOT implied by the Z-machine version: it was measured
+    /// to vary per STORY (Trinity/AMFV/Bureaucracy/Beyond Zork all compile
+    /// 2-byte room references; Sherlock and every V6 title checked compile
+    /// 1-byte ones, matching V3's own convention despite being V5/V6) — see
+    /// [`infer_zil_room_width`] and the "Declared exits: ZIL" module docs.
+    zil_room_width: u8,
 }
 
 impl WorldModel {
@@ -188,6 +199,17 @@ impl WorldModel {
         } else {
             [None; 12]
         };
+        // SQ-1268: the room-reference width is a V3 constant (1 byte, ZMSD
+        // §12.3) but a per-STORY fact for V4+ — see `infer_zil_room_width`.
+        // Skipped (left 0, never consulted) when no ZIL convention was found
+        // at all, and not re-derived for V3 since that path is unchanged.
+        let zil_room_width = if !zil_exit_props.iter().any(Option::is_some) {
+            0
+        } else if mem.version() <= 3 {
+            1
+        } else {
+            infer_zil_room_width(mem, max_object, &zil_exit_props)
+        };
 
         Self {
             max_object,
@@ -200,6 +222,7 @@ impl WorldModel {
             door_to_prop,
             door_dir_prop_hint,
             zil_exit_props,
+            zil_room_width,
         }
     }
 
@@ -244,10 +267,19 @@ impl WorldModel {
     }
 
     /// One ZIL room's raw exit-property bytes for `prop`, already known
-    /// present on `origin` (SQ-1260) — the UEXIT/NEXIT/FEXIT/CEXIT/DEXIT
-    /// shapes [`infer_zil_exits`] found this story's `<DIRECTIONS>` compiled
-    /// to. See "Declared exits: ZIL" below for the citations and the exact
-    /// byte layouts this switches on.
+    /// present on `origin` (SQ-1260, widened to V4+ by SQ-1268) — the
+    /// UEXIT/NEXIT/FEXIT/CEXIT/DEXIT shapes [`infer_zil_exits`] found this
+    /// story's `<DIRECTIONS>` compiled to. See "Declared exits: ZIL" below
+    /// for the citations and the exact byte layouts this switches on.
+    ///
+    /// Every shape's length is `self.zil_room_width` (`w`) plus a fixed
+    /// offset — `w` itself for UEXIT, `w+1` for NEXIT, and so on through
+    /// DEXIT at `w+4` — reproducing V3's original fixed table (`w` is always
+    /// 1 there) unchanged, and matching Trinity's ground-truth-verified V4
+    /// byte layout exactly at `w=2`. See the module docs for the citations
+    /// and for why this does NOT collide the way the original SQ-1260
+    /// comment worried a fixed 2-byte NEXIT would: NEXIT scales with `w`
+    /// too, so it never lands on UEXIT's length.
     fn resolve_zil(&self, mem: &Memory, origin: u16, prop: u8) -> DeclaredExit {
         let addr = crate::objects::get_prop_addr(mem, origin, prop);
         if addr == 0 {
@@ -258,50 +290,66 @@ impl WorldModel {
             return DeclaredExit::Absent;
         }
         let len = crate::objects::get_prop_len(mem, addr);
-        let byte0 = mem.read_byte(addr as u32);
+        let w = self.zil_room_width.max(1) as u16;
         // A destination room number that isn't a plausible object is not a
         // room this derivation can vouch for — refuse rather than mint a
         // `Room` that resolves to nothing, the same discipline `resolve`'s
         // Inform branch applies to `raw > self.max_object`.
-        let room = |b: u8| {
-            let dest = b as u16;
+        let room = |dest: u16| {
             if dest == 0 || dest > self.max_object {
                 DeclaredExit::Code
             } else {
                 DeclaredExit::Room(dest)
             }
         };
-        match len {
-            // UEXIT: the property's one data byte IS the destination room
-            // number — nothing else is stored.
-            1 => room(byte0),
+        // UEXIT/DEXIT's destination room is the property's first `w` bytes —
+        // a single byte (V3, and every V4+ story measured with few enough
+        // objects to fit one) or a big-endian word (Trinity/AMFV/Bureaucracy/
+        // Beyond Zork's wider compile) — read the same way regardless of
+        // which of the two shapes this is, since both mean the same thing to
+        // the caller (see the DEXIT case below).
+        let room_ref = || -> u16 {
+            if w == 1 { mem.read_byte(addr as u32) as u16 } else { mem.read_word(addr as u32) }
+        };
+        let len = len as u16;
+        if len == w {
+            // UEXIT: the property's data IS the destination room number —
+            // nothing else is stored.
+            room(room_ref())
+        } else if len == w + 1 {
             // NEXIT: a packed STRING address (the refusal message) and
             // nothing else — there is no passage here in any state the game
             // can be in, so this is `Message`, not `Code` (SQ-1260: distinct
             // from a computed exit specifically so Phase 2 never wastes a
             // probe on a direction that can never lead anywhere).
-            2 => DeclaredExit::Message,
+            DeclaredExit::Message
+        } else if len == w + 2 {
             // FEXIT: a packed ROUTINE address decides, at run time, whether
             // and where the player moves.
-            3 => DeclaredExit::Code,
+            DeclaredExit::Code
+        } else if len == w + 3 {
             // CEXIT: [room][global variable number][packed string address] —
             // gated on a global the story can flip on any later turn, exactly
-            // as dynamic as Inform's `door_dir` pointing at a routine.
-            4 => DeclaredExit::Code,
-            // DEXIT: [room][door object][packed string address][pad byte].
-            // Byte 0 is a STATIC destination room in every DEXIT this
-            // derivation has been checked against — the compiler never
-            // stores a routine there, only whether the move actually lands
-            // this turn depends on the door (bytes 1..4), and
-            // `declared_exit`'s only caller (`session::apply_turn`'s Phase 1)
-            // acts on this exclusively when the player's live move actually
-            // changed rooms (the `moved_room` guard) — a shut door means no
-            // move at all, so it never mints a false edge from a `Room` this
-            // turn's door happened to refuse.
-            5 => room(byte0),
+            // as dynamic as Inform's `door_dir` pointing at a routine. This
+            // length is EXTRAPOLATED, not independently confirmed — see the
+            // module docs' "no CEXIT example found" note.
+            DeclaredExit::Code
+        } else if len == w + 4 {
+            // DEXIT: [room][door object][packed string address]. The
+            // destination is a STATIC room in every DEXIT this derivation has
+            // been checked against — the compiler never stores a routine
+            // there, only whether the move actually lands this turn depends
+            // on the door, and `declared_exit`'s only caller
+            // (`session::apply_turn`'s Phase 1) acts on this exclusively when
+            // the player's live move actually changed rooms (the
+            // `moved_room` guard) — a shut door means no move at all, so it
+            // never mints a false edge from a `Room` this turn's door
+            // happened to refuse.
+            room(room_ref())
+        } else {
             // A length none of the five known shapes produce — refuse rather
             // than guess at a sixth shape from one story's byte layout.
-            _ => DeclaredExit::Code,
+            DeclaredExit::Code
         }
     }
 
@@ -882,15 +930,91 @@ fn infer_door_to(
 //   len 4  CEXIT   `[room:1][global:1][string:2]`       — `string` is 0 when no ELSE
 //   len 5  DEXIT   `[room:1][door:1][string:2][pad:1]`  — `string` is 0 when no ELSE
 //
-// This is Version-3 SPECIFIC and `infer_zil_exits` refuses outright on any
-// other version: object references are ONE byte in V3 (ZMSD §12.3) and TWO in
-// V4+, and UEXIT's length (`room_width`) then COLLIDES with NEXIT's (always
-// 2, a fixed packed-address width) — the two would become indistinguishable
-// by length alone. No V4+ ZIL fixture was available to derive the actual
-// (probably tag-byte) scheme Infocom's compiler falls back to there, so this
-// stays refused rather than guessed, exactly like the rest of this module's
-// discipline: a V4+ ZIL story (Deadline, Enchanter, …) answers `Unknown` here,
-// same as before this quest, until someone can verify one.
+// ── V4+ (SQ-1268): the room-reference width is a per-STORY fact, not a
+//    per-VERSION one ─────────────────────────────────────────────────────────
+//
+// SQ-1260 refused every V4+ story outright, on the theory that object
+// references being TWO bytes there (ZMSD §12.3 vs V3's one) would make
+// UEXIT's length collide with NEXIT's (assumed fixed at a 2-byte packed
+// address). That theory turned out to be wrong in the useful direction:
+// checked against `stories/trinity-r12-s860926.z4`'s Palace Gate (object
+// #236) and Bluff (#213) — cross-referenced byte-for-byte against the real
+// ZIL source, `places.zil`
+// (<https://github.com/historicalsource/trinity>) — EVERY V4+ shape is
+// exactly ONE BYTE WIDER than its V3 counterpart, because the packed
+// string/routine address fields scale too, not just the room reference:
+//
+//   len 2  UEXIT   `[room:2]`                           — Palace Gate NORTH → Broad Walk (#354),
+//                                                          NE → The Wabe (#79), matching `(NORTH TO
+//                                                          BROAD-WALK) (NE TO WABE)` exactly
+//   len 3  NEXIT   `[string:2][pad:1]`                  — Bluff SOUTH, matching `(SOUTH SORRY "A
+//                                                          sudden cliff blocks your path.")`
+//   len 4  FEXIT   `[routine:2][pad:2]`                 — Bluff NORTH/NE/WEST/NW, all identical
+//                                                          bytes, matching `(NORTH PER YOUD-FALL)`
+//                                                          etc. (four directions, one shared routine)
+//   len 5  CEXIT   `[room:2][global:1][string:2]`       — EXTRAPOLATED, not independently
+//                                                          confirmed: no plain global-gated exit
+//                                                          (as opposed to a door-gated one) was found
+//                                                          in Trinity's, AMFV's or Bureaucracy's own
+//                                                          `places.zil`/`apartment.zil`/`prism.zil` —
+//                                                          every conditional exit in the three V4
+//                                                          fixtures checked is a DEXIT. Follows the
+//                                                          V3 table's own CEXIT/DEXIT spacing (no pad
+//                                                          on CEXIT, one pad byte on DEXIT) by analogy.
+//   len 6  DEXIT   `[room:2][door:2][string:2]`         — Bluff EAST/IN, matching `(EAST TO
+//                                                          IN-COTTAGE IF COTTAGE-DOOR IS OPEN) (IN TO
+//                                                          IN-COTTAGE IF COTTAGE-DOOR IS OPEN)`
+//                                                          (`room`=0x0147, `door`=0x0013)
+//
+// So the collision SQ-1260 worried about does not happen: NEXIT is 3 bytes
+// here, not a fixed 2, so it never lands on UEXIT's length. This shape — one
+// byte wider than V3 at every step — is what `AMFV-r77-s850814.z4` and
+// `bureaucracy-r116-s870602.z4` (both V4) and `beyondzork-r57-s871221.z5`
+// (V5) all compile to as well.
+//
+// `stories/sherlock-r26-s880127.z5` does NOT: it is V5, but its compiler
+// packed room references into a SINGLE byte, exactly like V3, throughout its
+// exit tables — checked against 221-B Baker Street (object #38): NORTH (len
+// 1, `[0x47]`=71="York Place") and SOUTH (len 1, `[0x3d]`=61="Orchard
+// Street") are both one-byte UEXITs, and WEST/IN (len 3, matching V3's own
+// FEXIT length) are FEXITs sharing one routine — plausibly `WHICH-WAY-IN`,
+// the entry-hall puzzle the game's own dictionary word list suggests, though
+// Sherlock's ZIL source is not in `historicalsource` to confirm by name.
+// Sherlock's DICTIONARY entries are narrower too (`entry_length` 8, one data
+// byte after the flags byte, vs 9/two bytes for the wide stories) — the two
+// facts likely share one cause (a compiler mode that shrinks BOTH the
+// dictionary and the exit tables when the story has few enough
+// objects/rooms to fit a byte), but this derivation does not assume that:
+// [`infer_zil_room_width`] measures the room width directly, off the exit
+// tables themselves, never off the dictionary's own width.
+//
+// V6 (Zork Zero, Shogun, Arthur) is narrower again, but for a DIFFERENT
+// reason than Sherlock: there is no `DIR` FLAG at all to test. ztools'
+// `showdict.c` (`show_dictionary`) explicitly skips flag decoding for
+// Version 6 (`else if (header.version != V6)`) — V6's dictionary entries use
+// a different scheme (`tx.h`'s `parser_types` enum lists `infocom6_grammar`
+// as its own case, distinct from `infocom_fixed`/`infocom_variable`).
+// Empirically, the FIRST data byte of a V6 direction word's entry stores the
+// exit-property number DIRECTLY, with no flag test or `DATA_FIRST`
+// indirection: `stories/zork0-r393-s890714.z6`'s `north` entry is `3f 00 0e`
+// and reads straight as property 63 — checked against Banquet Hall (object
+// #7)'s own compiled properties, which are one-byte UEXITs matching
+// `prologue.zil`'s `(WEST TO ENTRANCE-HALL) (SOUTH TO COURTYARD) (EAST TO
+// KITCHEN)` (<https://github.com/historicalsource/zorkzero>) exactly, by
+// object number AND by name (#56 "Entrance Hall", #8 "Courtyard", #59
+// "Kitchen"). `stories/shogun-r322-s890706.z6`'s `ON-BRIDGE` room checks the
+// same way against `osaka.zil`'s `(NORTH TO GATEWAY) (SOUTH TO
+// AT-PORTCULLIS)` (<https://github.com/historicalsource/shogun>). A word
+// whose first data byte is NOT a plausible property number (`> 63`, ZMSD
+// §12.4.1's 6-bit V4+ property field) is not being used as a direction here
+// — Zork Zero's, Shogun's and Arthur's own NE/NW/SE/SW dictionary entries all
+// fail this test (their first byte is well over 127, some other word class
+// entirely), matching that none of the three implements diagonal movement
+// this way. `stories/journey-r83-s890706.z6`'s entire dictionary (27 entries)
+// carries none of the twelve compass words at all — "no compass parser" is a
+// fact about the dictionary itself, so this derivation naturally answers
+// `None` for it (too few `DIR`-shaped words found) without needing to
+// special-case the game by name.
 //
 // ── Classification into the shared seam ──────────────────────────────────────
 //
@@ -928,32 +1052,53 @@ const F_ZIL_DIR_FIRST: u8 = 0x03;
 const MIN_ZIL_DIRECTION_WORDS: usize = 6;
 
 /// Derive the twelve ZIL exit-property numbers straight from the story's own
-/// dictionary (SQ-1260) — see the "Declared exits: ZIL" module docs above for
-/// the citations, the byte layouts, and why this refuses outright on anything
-/// but a Version-3 story. `None` for a story with too few `DIR`-flagged
-/// compass words to trust (Inform stories, Scott Adams, Glulx-shaped tables,
-/// and any V4+ ZIL story alike — none of them have twelve to find here).
+/// dictionary (SQ-1260, widened to V4+ by SQ-1268) — see the "Declared
+/// exits: ZIL" module docs above for the citations and the byte layouts.
+/// `None` for a story with too few direction-shaped compass words to trust
+/// (Inform stories, Scott Adams, Glulx-shaped tables, and any V1/V2 ZIL story
+/// alike — this has never been checked below V3).
 fn infer_zil_exits(mem: &Memory, max_object: u16) -> Option<[Option<u8>; 12]> {
-    if mem.version() != 3 || max_object == 0 {
+    match mem.version() {
+        3..=5 => infer_zil_exits_flagged(mem, max_object),
+        6 => infer_zil_exits_v6(mem, max_object),
+        _ => None,
+    }
+}
+
+/// V1–5's `DIR`-flag scheme (SQ-1260's original, widened to V4/V5 by
+/// SQ-1268): a direction word's dictionary entry carries the `DIR` flag, and
+/// `DATA_FIRST` says which of its data bytes holds the exit-property number.
+/// V3's dictionary key is 4 bytes (6 Z-characters, ZMSD §13.2) with a 5-bit
+/// property field (1..=31, §12.4.1); V4/V5's key is 6 bytes (9 Z-characters,
+/// §13.3/§13.4) with a 6-bit property field (1..=63) — verified against
+/// Trinity, AMFV, Bureaucracy (V4) and Beyond Zork, Sherlock (V5): every
+/// `north`/`south`/… entry in all five carries `DIR` ($10) with the same
+/// `DATA_FIRST` semantics ztools' `tx.h` documents, just wider. Sherlock's
+/// dictionary entries have only ONE data byte after the flags byte (not two,
+/// like the other four) — `d1` reads 0 rather than spilling into the next
+/// entry when `entry_length` is too short to hold it.
+fn infer_zil_exits_flagged(mem: &Memory, max_object: u16) -> Option<[Option<u8>; 12]> {
+    if max_object == 0 {
         return None;
     }
     let dict = crate::dictionary::load(mem);
     if dict.count == 0 || dict.entry_length == 0 {
         return None;
     }
-    // The v1-3 dictionary key is 4 bytes (6 Z-characters, ZMSD §13.2) — the
-    // gate above makes this the only key length this derivation ever reads.
-    const KEY_LEN: u32 = 4;
+    let key_len = dict.key_len() as u32;
     let entry_len = dict.entry_length as u32;
+    // Dictionary keys are truncated to 6 Z-characters in v1-3 and 9 in v4+
+    // (ZMSD §13.2/§13.3) — a word longer than that ("northeast") is matched
+    // by its own truncation, exactly what the compiler itself truncated to.
+    let trunc = if mem.version() <= 3 { 6 } else { 9 };
+    // Valid property numbers are 1..=31 in V3 (5-bit field) and 1..=63 in
+    // V4+ (6-bit field, ZMSD §12.4.1) — anything else is not one to trust.
+    let max_prop: u8 = if mem.version() <= 3 { 31 } else { 63 };
 
     let mut props: [Option<u8>; 12] = [None; 12];
     let mut found = 0usize;
     for dir in Compass::ALL {
-        // Dictionary keys are truncated to 6 Z-characters in v1-3, so a word
-        // longer than that ("northeast") is matched by its own truncation —
-        // exactly what the compiler itself truncated to when it built the
-        // table ("northe", matching Compass::ALL's own measured entries).
-        let key: String = dir.word().chars().take(6).collect();
+        let key: String = dir.word().chars().take(trunc).collect();
         for i in 0..dict.count as u32 {
             let entry = dict.base + i * entry_len;
             if (entry + entry_len) as usize > mem.len() {
@@ -963,15 +1108,24 @@ fn infer_zil_exits(mem: &Memory, max_object: u16) -> Option<[Option<u8>; 12]> {
             if text.trim().to_lowercase() != key {
                 continue;
             }
-            let flags = mem.read_byte(entry + KEY_LEN);
+            if entry_len < key_len + 1 {
+                break; // no data byte at all — nothing to read
+            }
+            let flags = mem.read_byte(entry + key_len);
             if flags & F_ZIL_DIR != 0 {
-                let d0 = mem.read_byte(entry + KEY_LEN + 1);
-                let d1 = mem.read_byte(entry + KEY_LEN + 2);
+                let d0 = if entry_len >= key_len + 2 {
+                    mem.read_byte(entry + key_len + 1)
+                } else {
+                    0
+                };
+                let d1 = if entry_len >= key_len + 3 {
+                    mem.read_byte(entry + key_len + 2)
+                } else {
+                    0
+                };
                 let datum =
                     if flags & F_ZIL_DATA_FIRST_MASK == F_ZIL_DIR_FIRST { d0 } else { d1 };
-                // Valid V3 property numbers are 1..=31 (ZMSD §12.4.1's 5-bit
-                // field) — anything else is not a property number to trust.
-                if datum > 0 && datum < 32 {
+                if datum > 0 && datum <= max_prop {
                     props[dir as usize] = Some(datum);
                     found += 1;
                 }
@@ -983,6 +1137,103 @@ fn infer_zil_exits(mem: &Memory, max_object: u16) -> Option<[Option<u8>; 12]> {
         return None;
     }
     Some(props)
+}
+
+/// V6's dictionary has no `DIR` flag to test at all (ztools' `showdict.c`
+/// skips flag decoding for Version 6 outright — see the module docs above)
+/// — a direction word's exit-property number is instead the dictionary
+/// entry's FIRST data byte, directly, no flag or `DATA_FIRST` indirection.
+/// Verified against Zork Zero's Banquet Hall and Shogun's `ON-BRIDGE`, both
+/// cross-checked against their real ZIL source — see the module docs. A word
+/// whose first data byte is not a plausible property number (`1..=63`) is
+/// not being used as a direction in this story.
+fn infer_zil_exits_v6(mem: &Memory, max_object: u16) -> Option<[Option<u8>; 12]> {
+    if max_object == 0 {
+        return None;
+    }
+    let dict = crate::dictionary::load(mem);
+    if dict.count == 0 || dict.entry_length == 0 {
+        return None;
+    }
+    let key_len = dict.key_len() as u32;
+    let entry_len = dict.entry_length as u32;
+    if entry_len < key_len + 1 {
+        return None;
+    }
+
+    let mut props: [Option<u8>; 12] = [None; 12];
+    let mut found = 0usize;
+    for dir in Compass::ALL {
+        // V6 dictionary keys are 6 bytes (9 Z-characters), same as V4/V5.
+        let key: String = dir.word().chars().take(9).collect();
+        for i in 0..dict.count as u32 {
+            let entry = dict.base + i * entry_len;
+            if (entry + entry_len) as usize > mem.len() {
+                break;
+            }
+            let (text, _) = crate::text::decode_string(mem, entry);
+            if text.trim().to_lowercase() != key {
+                continue;
+            }
+            let datum = mem.read_byte(entry + key_len);
+            if datum > 0 && datum <= 63 {
+                props[dir as usize] = Some(datum);
+                found += 1;
+            }
+            break;
+        }
+    }
+    if found < MIN_ZIL_DIRECTION_WORDS {
+        return None;
+    }
+    Some(props)
+}
+
+/// Per-story ZIL UEXIT/DEXIT room-reference width (SQ-1268): 1 byte or 2 —
+/// see the module docs' "V4+" section for why this cannot be assumed from
+/// the Z-machine version alone (Sherlock is V5 but narrow; Trinity is V4 but
+/// wide). Derived empirically off the exit tables themselves: for every room
+/// in the object table and every one of `zil_exit_props`' twelve properties,
+/// a length-1 property whose single byte is a plausible object number casts
+/// a "narrow" vote, and a length-2 property whose big-endian word is a
+/// plausible object number casts a "wide" vote — UEXIT is the only shape
+/// either width produces at that length (see the byte-length tables above),
+/// so whichever width racks up more votes is the one this story's own
+/// compiler chose. Defaults to 2 (the more common case measured, and the
+/// only shape SQ-1260's original V3-only code never had to ask about) when
+/// neither width finds any evidence at all. Only called when V4+ found a ZIL
+/// convention at all (`zil_exit_props` has at least six `Some` entries).
+fn infer_zil_room_width(mem: &Memory, max_object: u16, zil_exit_props: &[Option<u8>; 12]) -> u8 {
+    let props: Vec<u8> = zil_exit_props.iter().filter_map(|p| *p).collect();
+    if props.is_empty() {
+        return 2;
+    }
+    let mut narrow_votes = 0u32;
+    let mut wide_votes = 0u32;
+    for obj in 1..=max_object {
+        for &prop in &props {
+            let addr = crate::objects::get_prop_addr(mem, obj, prop);
+            if addr == 0 {
+                continue;
+            }
+            match crate::objects::get_prop_len(mem, addr) {
+                1 => {
+                    let b = mem.read_byte(addr as u32) as u16;
+                    if b != 0 && b <= max_object {
+                        narrow_votes += 1;
+                    }
+                }
+                2 => {
+                    let w = mem.read_word(addr as u32);
+                    if w != 0 && w <= max_object {
+                        wide_votes += 1;
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+    if narrow_votes > wide_votes { 1 } else { 2 }
 }
 
 // ── Attribute inference ──────────────────────────────────────────────────────
