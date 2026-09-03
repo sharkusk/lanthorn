@@ -104,6 +104,17 @@ pub fn header_line(
     }
 }
 
+/// The dock's hit-rects from one draw: the title-strip tabs, and the close box
+/// (SQ-1265) when the frame was wide enough to draw one.
+pub struct RoomDockRects {
+    /// A click on "Room"/"Diagnostics" switches the view the same way a click
+    /// on a layer tab switches layers.
+    pub tabs: Vec<(RoomDockView, Rect)>,
+    /// A click here closes the dock — the same effect as `toggle-room-panel`
+    /// while it is open. `None` when the frame was too narrow to draw one.
+    pub close: Option<Rect>,
+}
+
 /// Draw the room dock into `area`.
 ///
 /// - `room` is the resolved room ([`dock_room`]); `pinned` is `selected_room.is_some()`.
@@ -113,7 +124,8 @@ pub fn header_line(
 ///   on its top edge — the same accent every other pane boundary uses.
 ///
 /// Returns the title-strip hit-rects, so a click on "Room"/"Diagnostics" switches
-/// the view the same way a click on a layer tab switches layers.
+/// the view the same way a click on a layer tab switches layers, plus the close
+/// box's rect.
 #[allow(clippy::too_many_arguments)]
 pub fn draw_room_dock(
     graph: &MapGraph,
@@ -127,9 +139,9 @@ pub fn draw_room_dock(
     symbols: &SymbolSet,
     highlighted: bool,
     buf: &mut Buffer,
-) -> Vec<(RoomDockView, Rect)> {
+) -> RoomDockRects {
     if area.width == 0 || area.height == 0 {
-        return Vec::new();
+        return RoomDockRects { tabs: Vec::new(), close: None };
     }
     let style = colors.theme.get("room_panel").style;
     let header_style = colors
@@ -183,9 +195,24 @@ pub fn draw_room_dock(
         .zip(frame.tab_rects)
         .collect();
 
+    // The close box: same glyph, same "just inside the top-right border" spot,
+    // and the same reused border style `draw_dialog`'s `show_close` uses rather
+    // than a selector of its own (SQ-1265) — drawn LAST so it always wins the
+    // corner cell over the tab strip's own border fill.
+    let close = if area.width >= 3 {
+        let cx = area.right().saturating_sub(2);
+        let cy = area.y;
+        if let Some(cell) = buf.cell_mut((cx, cy)) {
+            cell.set_symbol("✕").set_style(border_color);
+        }
+        Some(Rect::new(cx, cy, 1, 1))
+    } else {
+        None
+    };
+
     let content = frame.content;
     if content.height == 0 || content.width == 0 {
-        return tabs;
+        return RoomDockRects { tabs, close };
     }
 
     draw_str_clipped(
@@ -204,7 +231,7 @@ pub fn draw_room_dock(
         content.height.saturating_sub(1),
     );
     if body.height == 0 {
-        return tabs;
+        return RoomDockRects { tabs, close };
     }
 
     let Some(id) = room.filter(|id| graph.room(*id).is_some()) else {
@@ -216,7 +243,7 @@ pub fn draw_room_dock(
             style,
             body,
         );
-        return tabs;
+        return RoomDockRects { tabs, close };
     };
 
     match view {
@@ -245,7 +272,7 @@ pub fn draw_room_dock(
         }
     }
 
-    tabs
+    RoomDockRects { tabs, close }
 }
 
 // ── Tests ─────────────────────────────────────────────────────────────────────
@@ -396,18 +423,45 @@ mod tests {
         let g = graph_with_current();
         let area = Rect::new(0, 0, 60, 12);
         let mut buf = Buffer::empty(area);
-        let tabs = draw_room_dock(&g, Some(1), false, RoomDockView::Info, &[], Some(1), area,
+        let rects = draw_room_dock(&g, Some(1), false, RoomDockView::Info, &[], Some(1), area,
             &ColorScheme::default(), &SymbolSet::default(), false, &mut buf);
+        let tabs = &rects.tabs;
 
         assert_eq!(tabs.len(), 2, "one rect per view");
         assert_eq!(tabs[0].0, RoomDockView::Info);
         assert_eq!(tabs[1].0, RoomDockView::Diagnostics);
-        for (view, r) in &tabs {
+        for (view, r) in tabs {
             assert!(r.width > 0 && r.height > 0, "{view:?} has a clickable rect");
             assert_eq!(r.y, area.y, "the strip sits on the panel's header row");
             assert!(r.x >= area.x && r.right() <= area.right(), "…inside the dock");
         }
         assert!(tabs[0].1.right() <= tabs[1].1.x, "the two tabs do not overlap");
+    }
+
+    /// The close box (SQ-1265) sits at the strip's right edge — the same spot
+    /// `draw_dialog`'s `show_close` uses, "just inside the top-right border" —
+    /// and is a real hit-rect on the header row, like the tabs beside it.
+    #[test]
+    fn the_dock_returns_a_hit_rect_for_the_close_box() {
+        let g = graph_with_current();
+        let area = Rect::new(0, 0, 60, 12);
+        let mut buf = Buffer::empty(area);
+        let rects = draw_room_dock(&g, Some(1), false, RoomDockView::Info, &[], Some(1), area,
+            &ColorScheme::default(), &SymbolSet::default(), false, &mut buf);
+
+        let close = rects.close.expect("a 60-wide frame has room for the close box");
+        assert_eq!(close.y, area.y, "the close box sits on the header row, like the tabs");
+        assert_eq!(close.right(), area.right() - 1, "just inside the top-right border");
+        assert!(
+            close.x >= rects.tabs[1].1.right(),
+            "the close box does not overlap the Diagnostics tab: {close:?} vs {:?}",
+            rects.tabs[1].1,
+        );
+        assert_eq!(
+            buf.cell((close.x, close.y)).unwrap().symbol(),
+            "\u{2715}",
+            "the close glyph is drawn where the rect says it is",
+        );
     }
 
     /// A click on each tab rect flips the dock to that view — driven through the SAME routing
@@ -421,8 +475,9 @@ mod tests {
         let g = graph_with_current();
         let area = Rect::new(0, 0, 60, 12);
         let mut buf = Buffer::empty(area);
-        let tabs = draw_room_dock(&g, Some(1), false, RoomDockView::Info, &[], Some(1), area,
+        let rects = draw_room_dock(&g, Some(1), false, RoomDockView::Info, &[], Some(1), area,
             &ColorScheme::default(), &SymbolSet::default(), false, &mut buf);
+        let tabs = &rects.tabs;
 
         let click = |col: u16, row: u16| MouseEvent {
             kind: MouseEventKind::Down(MouseButton::Left),
@@ -437,10 +492,10 @@ mod tests {
         assert_eq!(st.room_dock_view, RoomDockView::Info);
 
         // Every cell of each tab is a target, not just its first column.
-        for (view, r) in &tabs {
+        for (view, r) in tabs {
             for col in r.x..r.right() {
                 st.room_dock_view = view.flipped();
-                let action = room_dock_mouse_action(area, &tabs, &click(col, r.y))
+                let action = room_dock_mouse_action(area, tabs, rects.close, &click(col, r.y))
                     .unwrap_or_else(|| panic!("a click inside the dock is always claimed"));
                 assert_eq!(action, Action::SetRoomDockView(*view), "col {col} of the {view:?} tab");
                 apply_action(action, &mut st, &mut m);
@@ -452,15 +507,59 @@ mod tests {
         // the click never falls through to the map or the story pane behind it.
         st.room_dock_view = RoomDockView::Info;
         let body = click(area.x + 3, area.bottom() - 2);
-        assert_eq!(room_dock_mouse_action(area, &tabs, &body), Some(Action::None));
+        assert_eq!(room_dock_mouse_action(area, tabs, rects.close, &body), Some(Action::None));
         assert_eq!(st.room_dock_view, RoomDockView::Info);
 
         // A click OUTSIDE the dock is not the dock's business at all.
         assert_eq!(
-            room_dock_mouse_action(area, &tabs, &click(area.x, area.bottom() + 1)),
+            room_dock_mouse_action(area, tabs, rects.close, &click(area.x, area.bottom() + 1)),
             None,
             "an event outside the dock rect falls through to normal routing"
         );
+    }
+
+    /// A click on the close box closes the dock — the same effect
+    /// `toggle-room-panel` has while it is open — and the "remembered" state
+    /// (the animated slide's own open flag) flips with it, so the next frame's
+    /// layout actually gives the rows back to the map. A click just outside the
+    /// box (one column short) is claimed by the tab strip's own rect at most,
+    /// never mistaken for the close box.
+    #[test]
+    fn clicking_the_close_box_closes_the_dock() {
+        use crate::input::{apply_action, room_dock_mouse_action, Action};
+        use crossterm::event::{KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
+
+        let g = graph_with_current();
+        let area = Rect::new(0, 0, 60, 12);
+        let mut buf = Buffer::empty(area);
+        let rects = draw_room_dock(&g, Some(1), false, RoomDockView::Info, &[], Some(1), area,
+            &ColorScheme::default(), &SymbolSet::default(), false, &mut buf);
+        let close = rects.close.expect("a 60-wide frame has room for the close box");
+
+        let click = |col: u16, row: u16| MouseEvent {
+            kind: MouseEventKind::Down(MouseButton::Left),
+            column: col,
+            row,
+            modifiers: KeyModifiers::NONE,
+        };
+
+        let mut st = crate::state::AppState::default();
+        let mut m = mapper::mapper::Mapper::default();
+        st.room_dock.toggle_to(true, true);
+        assert!(st.room_dock.open, "starts open");
+
+        let action = room_dock_mouse_action(area, &rects.tabs, rects.close, &click(close.x, close.y))
+            .unwrap_or_else(|| panic!("a click on the close box is always claimed"));
+        assert_eq!(action, Action::CloseRoomDock);
+        apply_action(action, &mut st, &mut m);
+        assert!(!st.room_dock.open, "the dock's remembered open flag flips");
+
+        // One column short of the box: claimed by the dock (it is still inside
+        // its rect) but never read as the close gesture.
+        st.room_dock.toggle_to(true, true);
+        let beside = room_dock_mouse_action(area, &rects.tabs, rects.close, &click(close.x - 1, close.y))
+            .unwrap_or_else(|| panic!("still inside the dock's own rect"));
+        assert_ne!(beside, Action::CloseRoomDock, "a miss beside the box is not the close gesture");
     }
 
     /// The strip is drawn by the shared component, so it wears the shared grammar: bracketed
@@ -482,7 +581,7 @@ mod tests {
 
         let mut buf = Buffer::empty(area);
         let tabs = draw_room_dock(&g, Some(1), false, RoomDockView::Info, &[], Some(1), area,
-            &colors, &SymbolSet::default(), false, &mut buf);
+            &colors, &SymbolSet::default(), false, &mut buf).tabs;
 
         let top: String = (0..area.width).map(|x| buf.cell((x, 0)).unwrap().symbol()).collect();
         assert!(top.contains("┤ Room "), "the shared left cap: {top:?}");
@@ -496,7 +595,7 @@ mod tests {
         // …and it follows the view, not the tab order.
         let mut buf = Buffer::empty(area);
         let tabs = draw_room_dock(&g, Some(1), false, RoomDockView::Diagnostics, &[], Some(1), area,
-            &colors, &SymbolSet::default(), false, &mut buf);
+            &colors, &SymbolSet::default(), false, &mut buf).tabs;
         let fg_at = |r: Rect| buf.cell((r.x + 1, r.y)).and_then(|c| c.style().fg);
         assert_eq!(fg_at(tabs[0].1), Some(Color::Blue));
         assert_eq!(fg_at(tabs[1].1), Some(Color::Green));

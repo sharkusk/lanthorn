@@ -53,6 +53,14 @@ Absolute URLs or no link.
   alone, if it hasn't sent you anywhere yet); the direction matrix and the
   map box show how many distinct places that is, as a small superscript
   count beside the `?`.
+- **Right-click a room on the map for a context menu** — Rename Room, Move
+  Region, Rename Layer — right where you clicked. Left-click still points the
+  room panel at a room, now without forcing it back to the Room body if you
+  had Diagnostics showing; a right-click points the panel the same way and
+  opens the menu on top of it. The panel also grew a close box (✕) at the
+  right of its tab strip, and clicking "Room"/"Diagnostics" to switch its body
+  now actually works — that click used to be swallowed by the pane-resize
+  edge sharing its row.
 
 ### Docker
 

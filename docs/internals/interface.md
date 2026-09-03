@@ -10,8 +10,12 @@ inspecting the machine, and firing commands — without ever leaving the story.
 
 ## Map navigation & inspection
 - **Mouse support** — left-click a room to point the [room panel](#the-room-panel)
-  at it; right-click a room for its layout diagnostics; middle-drag anywhere to
-  pan the whole map around. The dock never interrupts the game: it reserves rows
+  at it, keeping whichever body (Room or Diagnostics) was last showing; right-click
+  a room for its context menu — **Rename Room**, **Move Region**, **Rename
+  Layer** — which also points the panel at it, the same as a left click; a click
+  outside the menu, or Esc, dismisses it without acting. A click on the panel's
+  own tabs still switches its body, and its ✕ closes it. Middle-drag anywhere
+  pans the whole map around. The dock never interrupts the game: it reserves rows
   at the bottom of the map pane rather than covering anything, so the keyboard
   stays on the story prompt and you can keep typing and pressing Enter with it
   up — handy for watching a room's exit card fill in as you walk. On a layer

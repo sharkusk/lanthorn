@@ -405,6 +405,14 @@ pub enum Action {
     ToggleRoomDock,
     /// Show a specific room-dock body — a click on one of its two view tabs.
     SetRoomDockView(crate::state::RoomDockView),
+    /// Right-click on a room (SQ-1265): pin the room dock on it (keeping
+    /// whichever body was last shown, like a left click) and open the room's
+    /// context menu anchored at the click's terminal cell (col, row).
+    OpenRoomMenu(mapper::graph::RoomId, u16, u16),
+    /// Move the room context menu's cursor by `delta` rows, wrapping.
+    RoomMenuNav(i32),
+    /// Dismiss the room context menu without acting.
+    CloseRoomMenu,
     /// Begin a middle-button drag-pan gesture at terminal cell (col, row).
     BeginDragPan(u16, u16),
     /// Continue a middle-button drag-pan gesture at terminal cell (col, row).
@@ -543,6 +551,14 @@ pub fn key_to_command(state: &AppState, key: KeyEvent) -> KeyResolve {
     // exists).
     if state.overlays.palette.is_some() {
         return palette_key_to_command(state, key);
+    }
+    // 6.5c. Room context menu (SQ-1265): owns all keys while open, the same
+    // shape as the palette above it — Up/Down move the cursor, Enter (or an
+    // item's own hotkey, of which there are none by default — see
+    // `room_menu`) resolves to a command through the ordinary slash-dispatch
+    // path, Esc closes.
+    if let Some(menu) = &state.overlays.room_menu {
+        return room_menu_key_to_command(menu, key, &state.keymap);
     }
     // 6.6. Resize mode: Tab cycles the target pane, arrows adjust it, 0 resets,
     // Esc/Enter exits. Placed ABOVE the verb-menu intercept (SQ-0238) so resize
@@ -825,10 +841,13 @@ fn hit(rect: ratatui::layout::Rect, col: u16, row: u16) -> bool {
 /// anything else inside the dock is claimed and does nothing.
 ///
 /// Returns `None` when the event is not inside `dock`, which is the caller's cue to route it
-/// normally. `tabs` are the hit-rects `draw_room_dock` returned for the frame just drawn.
+/// normally. `tabs` and `close` are the hit-rects `draw_room_dock` returned for the frame just
+/// drawn — a click on the close box (SQ-1265) closes the dock, the same effect
+/// `toggle-room-panel` has while it is open.
 pub fn room_dock_mouse_action(
     dock: ratatui::layout::Rect,
     tabs: &[(crate::state::RoomDockView, ratatui::layout::Rect)],
+    close: Option<ratatui::layout::Rect>,
     m: &crossterm::event::MouseEvent,
 ) -> Option<Action> {
     use crossterm::event::{MouseButton, MouseEventKind};
@@ -836,6 +855,9 @@ pub fn room_dock_mouse_action(
         return None;
     }
     if matches!(m.kind, MouseEventKind::Down(MouseButton::Left)) {
+        if close.is_some_and(|r| hit(r, m.column, m.row)) {
+            return Some(Action::CloseRoomDock);
+        }
         if let Some(&(view, _)) = tabs.iter().find(|(_, r)| {
             r.width > 0 && r.height > 0 && hit(*r, m.column, m.row)
         }) {
@@ -1148,7 +1170,9 @@ pub fn mouse_to_action(
         }
         // ── Left-click in map ─────────────────────────────────────────────────
         // Pin, unpin, follow (SQ-0692). A click on a room points the dock at it
-        // (opening the dock if it was closed); a second click on the SAME pinned
+        // (opening the dock if it was closed) — keeping whichever body was last
+        // shown, rather than forcing one (SQ-1265: switching bodies is by
+        // clicking the tabs, or by keyboard); a second click on the SAME pinned
         // room, or a click on empty map space, unpins and the dock goes back to
         // following the player. Focus deliberately stays on the story pane so you
         // can keep typing.
@@ -1157,7 +1181,7 @@ pub fn mouse_to_action(
                 Some(id) if state.room_dock.open && state.selected_room == Some(id) => {
                     Action::UnpinRoomDock
                 }
-                Some(id) => Action::PinRoomDock(id, crate::state::RoomDockView::Info),
+                Some(id) => Action::PinRoomDock(id, state.room_dock_view),
                 // Empty map gutter: unpin only. This used to hand the keyboard to
                 // the map, which is exactly the invisible mode SQ-0599 removed — a
                 // stray click in the gutter would silently redirect every
@@ -1166,19 +1190,13 @@ pub fn mouse_to_action(
             }
         }
         // ── Right-click in map ────────────────────────────────────────────────
-        // Same gestures, but pointed at the DIAGNOSTICS body. Only a click on a
-        // room already pinned AND already showing diagnostics unpins — otherwise
-        // the click has somewhere to take you.
+        // A click on a room opens its context menu (SQ-1265: Rename Room, Move
+        // Region, Rename Layer), pinning the dock on it exactly like a left
+        // click. A click on empty map space is the same "unpin only" as a left
+        // click there — no menu, nothing to open it on.
         MouseEventKind::Down(MouseButton::Right) if in_map => {
             match room_at_screen(room_rects, col, row) {
-                Some(id)
-                    if state.room_dock.open
-                        && state.selected_room == Some(id)
-                        && state.room_dock_view == crate::state::RoomDockView::Diagnostics =>
-                {
-                    Action::UnpinRoomDock
-                }
-                Some(id) => Action::PinRoomDock(id, crate::state::RoomDockView::Diagnostics),
+                Some(id) => Action::OpenRoomMenu(id, col, row),
                 None => Action::UnpinRoomDock,
             }
         }
@@ -1312,6 +1330,36 @@ fn palette_key_to_command(state: &AppState, key: KeyEvent) -> KeyResolve {
             KeyResolve::Action(Action::PaletteChar(c))
         }
         _ => KeyResolve::None,
+    }
+}
+
+// ── Internal: room context menu key routing ───────────────────────────────────
+
+/// Route a key while the room context menu is open (SQ-1265). Up/Down move
+/// the cursor (mutated later, in `apply_action`'s `Action::RoomMenuNav` —
+/// this stays `&AppState` like `palette_key_to_command`, so it cannot mutate
+/// the menu itself); Enter, or an item's own hotkey (a user's `[keymap.map]`
+/// override — none of the three ship with one, see `room_menu`), resolves to
+/// that item's command through the ordinary slash-dispatch path, closing the
+/// menu; Esc closes without acting.
+fn room_menu_key_to_command(
+    menu: &crate::room_menu::RoomMenu,
+    key: KeyEvent,
+    km: &crate::keymap::KeyMap,
+) -> KeyResolve {
+    use crate::room_menu::ROOM_MENU;
+    match key.code {
+        KeyCode::Esc => KeyResolve::Action(Action::CloseRoomMenu),
+        KeyCode::Up => KeyResolve::Action(Action::RoomMenuNav(-1)),
+        KeyCode::Down => KeyResolve::Action(Action::RoomMenuNav(1)),
+        KeyCode::Enter => KeyResolve::Command(ROOM_MENU[menu.cursor].command.to_string(), Context::Map),
+        _ => {
+            let pressed = KeySpec::from_key_event(key);
+            match ROOM_MENU.iter().find(|it| km.first_key(Context::Map, it.command) == Some(pressed)) {
+                Some(it) => KeyResolve::Command(it.command.to_string(), Context::Map),
+                None => KeyResolve::None,
+            }
+        }
     }
 }
 
@@ -1879,6 +1927,45 @@ pub fn cycle_panel(state: &mut AppState, mapper: &mut Mapper) {
     }
     if !state.game_dir.as_os_str().is_empty() {
         let _ = crate::styles::write_per_game_panel(&state.game_dir, Some(next));
+    }
+}
+
+/// Pin the room dock on `id` in `view` (opening it if closed), the shared body
+/// of both `Action::PinRoomDock` (left click) and `Action::OpenRoomMenu`
+/// (right click, SQ-1265) — the two gestures pin the same way, so the panel
+/// and whichever popup opened over it always agree on which room is meant.
+fn pin_room_dock(
+    state: &mut AppState,
+    mapper: &Mapper,
+    id: mapper::graph::RoomId,
+    view: crate::state::RoomDockView,
+) {
+    // Pinning IS selecting (SQ-0692): one fact drives the map highlight, the
+    // matrix cross-highlight and the dock header, so they cannot drift apart.
+    state.selected_room = Some(id);
+    state.open_room_dock(view);
+    // Focus deliberately STAYS on the story pane. Taking map focus made every
+    // letter a map command (so typing reached nothing) and dimmed the story
+    // pane on top of that. The selected-room highlight does not need focus —
+    // `render/map.rs` reads only `selected_room`.
+
+    // SQ-0693: in the MATRIX view a click also asks "and how do I walk there
+    // from here?". Only there — the drawn map has no leave-by cell to mark, so
+    // computing a route for it would buy a toast and nothing else. A route to
+    // the room you are already standing in is empty and says nothing, which
+    // is the correct amount to say.
+    state.room_path.clear();
+    if state.map_shows_matrix(&mapper.graph) {
+        if let Some(here) = mapper.graph.current() {
+            match mapper::path::route(&mapper.graph, here, id) {
+                Some(steps) => state.room_path = steps,
+                // Falling silent here reads as a broken click: the room
+                // selects, its entrances bold, and nothing says why no route
+                // appeared. A partial route to somewhere nearer would be
+                // worse — it answers a question nobody asked.
+                None => state.set_status("no known route from here"),
+            }
+        }
     }
 }
 
@@ -2661,34 +2748,7 @@ fn apply_action_inner(action: Action, state: &mut AppState, mapper: &mut Mapper)
         }
 
         Action::PinRoomDock(id, view) => {
-            // Pinning IS selecting (SQ-0692): one fact drives the map highlight,
-            // the matrix cross-highlight and the dock header, so they cannot drift
-            // apart.
-            state.selected_room = Some(id);
-            state.open_room_dock(view);
-            // Focus deliberately STAYS on the story pane. Taking map focus made
-            // every letter a map command (so typing reached nothing) and dimmed the
-            // story pane on top of that. The selected-room highlight does not need
-            // focus — `render/map.rs` reads only `selected_room`.
-
-            // SQ-0693: in the MATRIX view a click also asks "and how do I walk
-            // there from here?". Only there — the drawn map has no leave-by cell
-            // to mark, so computing a route for it would buy a toast and nothing
-            // else. A route to the room you are already standing in is empty and
-            // says nothing, which is the correct amount to say.
-            state.room_path.clear();
-            if state.map_shows_matrix(&mapper.graph) {
-                if let Some(here) = mapper.graph.current() {
-                    match mapper::path::route(&mapper.graph, here, id) {
-                        Some(steps) => state.room_path = steps,
-                        // Falling silent here reads as a broken click: the room
-                        // selects, its entrances bold, and nothing says why no
-                        // route appeared. A partial route to somewhere nearer
-                        // would be worse — it answers a question nobody asked.
-                        None => state.set_status("no known route from here"),
-                    }
-                }
-            }
+            pin_room_dock(state, mapper, id, view);
         }
 
         Action::UnpinRoomDock => {
@@ -2716,6 +2776,29 @@ fn apply_action_inner(action: Action, state: &mut AppState, mapper: &mut Mapper)
             } else {
                 state.open_room_dock(RoomDockView::Info);
             }
+        }
+
+        // ── Room context menu (SQ-1265) ───────────────────────────────────────
+
+        Action::OpenRoomMenu(id, col, row) => {
+            // The same pin a left click gives — keeping whichever body was last
+            // shown, per `pin_room_dock` — so the menu and the panel underneath
+            // always agree on which room is meant.
+            let view = state.room_dock_view;
+            pin_room_dock(state, mapper, id, view);
+            state.overlays.room_menu =
+                Some(crate::room_menu::RoomMenu::new(id, col, row));
+        }
+
+        Action::RoomMenuNav(delta) => {
+            if let Some(menu) = state.overlays.room_menu.as_mut() {
+                let n = crate::room_menu::ROOM_MENU.len() as i32;
+                menu.cursor = (menu.cursor as i32 + delta).rem_euclid(n) as usize;
+            }
+        }
+
+        Action::CloseRoomMenu => {
+            state.overlays.room_menu = None;
         }
 
         // ── Mouse drag-pan actions ────────────────────────────────────────────
@@ -6135,7 +6218,7 @@ mod tests {
 
         apply_action(Action::PinRoomDock(5, RoomDockView::Diagnostics), &mut s, &mut m);
         assert_eq!(s.selected_room, Some(5));
-        assert_eq!(s.room_dock_view, RoomDockView::Diagnostics, "a right-click re-points the view");
+        assert_eq!(s.room_dock_view, RoomDockView::Diagnostics, "re-pinning with an explicit view sets it");
 
         apply_action(Action::UnpinRoomDock, &mut s, &mut m);
         assert_eq!(s.selected_room, None, "unpinned: the dock follows the player again");
@@ -7083,7 +7166,7 @@ mod tests {
     /// It now PINS the room dock to that room — opening the dock if it was closed
     /// — which is the same gesture with a panel that does not cover the map.
     #[test]
-    fn left_down_on_room_cell_pins_the_dock_in_info_view() {
+    fn left_down_on_room_cell_pins_the_dock_keeping_the_current_view() {
         use crossterm::event::MouseEventKind;
         use crate::state::{RoomDockView, Zoom};
 
@@ -7091,6 +7174,7 @@ mod tests {
         s.zoom = Zoom::Compact; // step = (12, 5)
         s.scroll = (0, 0);
         assert!(!s.room_dock.open, "the dock starts closed");
+        assert_eq!(s.room_dock_view, RoomDockView::Info, "the default view");
 
         // Room 1 at cell (0,0). Build room_rects using render pipeline.
         let rects = room_rects_for_compact(1, (0, 0), map_rect());
@@ -7100,7 +7184,8 @@ mod tests {
         let action = mouse_to_action(&s, m, map_rect(), story_rect(), &rects, &None);
         assert!(
             matches!(action, Action::PinRoomDock(1, RoomDockView::Info)),
-            "left-down on a room with the dock CLOSED opens it pinned in Info, got {:?}", action
+            "left-down on a room with the dock CLOSED opens it pinned in the current (default \
+             Info) view, got {:?}", action
         );
 
         // Applying it opens the dock, pinned.
@@ -7108,7 +7193,20 @@ mod tests {
         assert!(s.room_dock.open);
         assert_eq!(s.selected_room, Some(1));
 
-        // With the dock already open, the same click on the SAME room unpins.
+        // SQ-1265: with Diagnostics showing (switched some other way — a tab
+        // click, a keybinding), a left click no longer forces Info back.
+        s.room_dock_view = RoomDockView::Diagnostics;
+        let m = mouse_event(MouseEventKind::Down(MouseButton::Left), 0, 0, KeyModifiers::NONE);
+        s.selected_room = None; // so the click pins rather than unpinning
+        let action = mouse_to_action(&s, m, map_rect(), story_rect(), &rects, &None);
+        assert!(
+            matches!(action, Action::PinRoomDock(1, RoomDockView::Diagnostics)),
+            "left click keeps whichever body was last shown, got {:?}", action
+        );
+        apply_action(action, &mut s, &mut Mapper::default());
+        assert_eq!(s.room_dock_view, RoomDockView::Diagnostics, "…still Diagnostics");
+
+        // With the dock already open and pinned, the same click on the SAME room unpins.
         let m = mouse_event(MouseEventKind::Down(MouseButton::Left), 0, 0, KeyModifiers::NONE);
         assert!(
             matches!(mouse_to_action(&s, m, map_rect(), story_rect(), &rects, &None), Action::UnpinRoomDock),
@@ -7116,39 +7214,48 @@ mod tests {
         );
     }
 
+    /// SQ-1265: right-click no longer switches to Diagnostics — it opens the
+    /// room's context menu and pins the dock exactly like a left click
+    /// (keeping the current view), so the menu and the panel agree on which
+    /// room is meant.
     #[test]
-    fn right_down_on_room_cell_pins_the_dock_in_diagnostics_view() {
+    fn right_down_on_room_cell_opens_the_room_menu_and_pins_the_dock() {
         use crossterm::event::MouseEventKind;
         use crate::state::{RoomDockView, Zoom};
 
         let mut s = AppState::default();
         s.zoom = Zoom::Compact;
         s.scroll = (0, 0);
+        assert_eq!(s.room_dock_view, RoomDockView::Info, "the default view");
 
         let rects = room_rects_for_compact(2, (0, 0), map_rect());
 
         let m = mouse_event(MouseEventKind::Down(MouseButton::Right), 0, 0, KeyModifiers::NONE);
         let action = mouse_to_action(&s, m, map_rect(), story_rect(), &rects, &None);
         assert!(
-            matches!(action, Action::PinRoomDock(2, RoomDockView::Diagnostics)),
-            "right-down on a room pins the dock in Diagnostics, got {:?}", action
+            matches!(action, Action::OpenRoomMenu(2, 0, 0)),
+            "right-down on a room opens its context menu anchored at the click, got {:?}", action
         );
         apply_action(action, &mut s, &mut Mapper::default());
-        assert_eq!(s.room_dock_view, RoomDockView::Diagnostics);
 
-        // Right-clicking the same room again — pinned AND already diagnostics — unpins.
-        let m = mouse_event(MouseEventKind::Down(MouseButton::Right), 0, 0, KeyModifiers::NONE);
-        assert!(
-            matches!(mouse_to_action(&s, m, map_rect(), story_rect(), &rects, &None), Action::UnpinRoomDock),
-            "a right-click on the pinned room already showing diagnostics unpins"
-        );
+        assert_eq!(s.selected_room, Some(2), "the right-click pins the dock");
+        assert_eq!(s.room_dock_view, RoomDockView::Info, "…keeping the current (default) view");
+        assert!(s.room_dock.open, "…opening it if it was closed");
+        let menu = s.overlays.room_menu.expect("the menu is open");
+        assert_eq!(menu.room, 2);
+        assert_eq!(menu.anchor, (0, 0));
+        assert_eq!(menu.cursor, 0);
 
-        // …but a LEFT click there re-points it to Info rather than unpinning: the
-        // gesture still has somewhere to take you.
-        let m = mouse_event(MouseEventKind::Down(MouseButton::Left), 0, 0, KeyModifiers::NONE);
+        // A right-click on empty map space is the same "unpin only" as a left
+        // click there — no menu, nothing to open it on.
+        let empty_rects: Vec<(mapper::graph::RoomId, ratatui::layout::Rect)> = Vec::new();
+        let m = mouse_event(MouseEventKind::Down(MouseButton::Right), 5, 5, KeyModifiers::NONE);
         assert!(
-            matches!(mouse_to_action(&s, m, map_rect(), story_rect(), &rects, &None), Action::UnpinRoomDock),
-            "left-click on the pinned room unpins regardless of view"
+            matches!(
+                mouse_to_action(&s, m, map_rect(), story_rect(), &empty_rects, &None),
+                Action::UnpinRoomDock
+            ),
+            "a right-click outside every room is the same unpin-only gutter click",
         );
     }
 
@@ -7697,7 +7804,7 @@ mod tests {
         let mut s = AppState::default(); // starts as Focus::Game
         let mut m = Mapper::default();
         apply_action(Action::PinRoomDock(2, RoomDockView::Diagnostics), &mut s, &mut m);
-        assert_eq!(s.focus, Focus::Game, "a right-click pin must NOT steal keyboard focus");
+        assert_eq!(s.focus, Focus::Game, "pinning to Diagnostics must NOT steal keyboard focus either");
         assert_eq!(s.selected_room, Some(2), "the room is still selected for rendering");
     }
 

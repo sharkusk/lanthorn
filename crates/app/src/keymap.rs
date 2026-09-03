@@ -479,6 +479,19 @@ impl KeyMap {
             .map(|(s, cmd, _)| (s, cmd.as_str()))
     }
 
+    /// The FIRST key bound to exactly `command` in `ctx`.
+    ///
+    /// "First" is binding order, authored in this file precisely so that the
+    /// key a hint or a menu row names is the one worth telling somebody about
+    /// — and a `[keymap.*]` line that reuses a default's key displaces it
+    /// there, so a genuine rebinding moves the label with it. `browser::first_key`
+    /// is this fixed to `Context::Browser`; the popup-menu widget
+    /// (`crate::menu`) takes `ctx` so its second caller (`room_menu`, reading
+    /// `Context::Map`) shares the lookup rather than re-deriving it.
+    pub fn first_key(&self, ctx: Context, command: &str) -> Option<KeySpec> {
+        self.for_context(ctx).find(|(_, cmd)| *cmd == command).map(|(s, _)| *s)
+    }
+
     /// The registry command `token` names, if it names one (SQ-0759).
     ///
     /// Used only to explain a rejected `[keymap.*]` entry: a token that is a
