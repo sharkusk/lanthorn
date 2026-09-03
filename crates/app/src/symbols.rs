@@ -549,7 +549,7 @@ impl Arrows {
     pub fn preset_names() -> &'static [&'static str] {
         &[
             "filled", "line", "nerdfont", "nf-bold", "nf-box", "nf-chevron", "nf-circle", "nf-outline",
-            "nf-wind", "nf-thin",
+            "nf-thick", "nf-wind", "nf-thin",
         ]
     }
 
@@ -558,12 +558,12 @@ impl Arrows {
     /// Presets:
     /// - "filled"     — filled triangle glyphs ▲▼▶◀ + diagonal arrows ↗↖↘↙ (default)
     /// - "line"       — thin Unicode arrows ↑↓→← + diagonal ↗↖↘↙
-    /// - "nerdfont"   — MDI bold-box arrows, the same set as "nf-box" (requires a
-    ///   patched font). This is what the font check installs, so it is the set
-    ///   most players see. It is boxed rather than bare because a connector
-    ///   arrowhead sits ON a line of path glyphs: a box gives the head an edge of
-    ///   its own, where a chevron reads as one more bend in the path.
-    ///   Diagonal: native MDI bold-box diagonals — one family for all eight,
+    /// - "nerdfont"   — MDI bold-outline arrows, the same set as "nf-outline"
+    ///   (requires a patched font). This is what the font check installs, so it
+    ///   is the set most players see (2026-09-03, user decision: it was the boxed
+    ///   set until then, which at a one-cell size collapses to a square with a
+    ///   dot in it; the outline head still reads as an arrow).
+    ///   Diagonal: native MDI bold-outline diagonals — one family for all eight,
     ///   which is the same rule `ControlGlyphs` states for its own pairs.
     /// - "nf-chevron" — the MDI chevrons "nerdfont" used to be
     ///   (U+F0143/F0140/F0142/F0141), kept reachable by name so a player who
@@ -576,7 +576,12 @@ impl Arrows {
     /// - "nf-circle"  — MDI arrow-{up,down,left,right}-bold-circle (F005F/F0047/F004F/F0056)
     ///   Diagonal: Unicode fallback ↖↗↙↘ (no native MDI circle diagonals)
     /// - "nf-outline" — MDI arrow-{up,down,left,right}-bold-outline (F09C7/F09BF/F09C0/F09C2)
-    ///   Diagonal: native MDI bold-outline diagonals (F09C3/F09C5/F09B7/F09B9)
+    ///   Diagonal: native MDI bold-outline diagonals (F09C3/F09C5/F09B7/F09B9).
+    ///   Note the family's own unevenness: its up/down heads are drawn smaller
+    ///   than its left/right and diagonal ones (12 vs 14 px at a 28 px cell).
+    /// - "nf-thick"   — MDI arrow-{up,down,left,right}-thick (F005E/F0046/F004E/F0055)
+    ///   Diagonal: native MDI thick diagonals (F09C4/F09C6/F09B8/F09BA). The one
+    ///   MDI family measured uniform in all eight directions.
     pub fn preset(name: &str) -> Option<Arrows> {
         Some(match name {
             "filled" => Arrows {
@@ -602,10 +607,7 @@ impl Arrows {
                 // No native MDI plain-bold diagonal arrows; use Unicode fallback
                 ne: '↗', nw: '↖', se: '↘', sw: '↙',
             },
-            // One arm, two names: "nerdfont" is what the font check writes and
-            // "nf-box" is what it IS. Spelling the glyphs once means the set the
-            // check installs and the set that name promises cannot drift apart.
-            "nerdfont" | "nf-box" => Arrows {
+            "nf-box" => Arrows {
                 // MDI arrow-up-bold-box F0738, arrow-down-bold-box F072F,
                 // arrow-left-bold-box F0732, arrow-right-bold-box F0735
                 north: '\u{F0738}', south: '\u{F072F}',
@@ -624,7 +626,10 @@ impl Arrows {
                 // No native MDI circle diagonal arrows; use Unicode fallback
                 ne: '↗', nw: '↖', se: '↘', sw: '↙',
             },
-            "nf-outline" => Arrows {
+            // One arm, two names: "nerdfont" is what the font check writes and
+            // "nf-outline" is what it IS. Spelling the glyphs once means the set the
+            // check installs and the set that name promises cannot drift apart.
+            "nerdfont" | "nf-outline" => Arrows {
                 // MDI arrow-up-bold-outline F09C7, arrow-down-bold-outline F09BF,
                 // arrow-left-bold-outline F09C0, arrow-right-bold-outline F09C2
                 north: '\u{F09C7}', south: '\u{F09BF}',
@@ -634,6 +639,14 @@ impl Arrows {
                 // arrow-bottom-left-bold-outline F09B7, arrow-bottom-right-bold-outline F09B9
                 nw: '\u{F09C3}', ne: '\u{F09C5}',
                 sw: '\u{F09B7}', se: '\u{F09B9}',
+            },
+            // MDI arrow-*-thick: the one MDI family whose eight heads measure the
+            // same (14x14 at a 28 px cell, cardinals and diagonals alike, 2026-09-03).
+            "nf-thick" => Arrows {
+                north: '\u{F005E}', south: '\u{F0046}',
+                east: '\u{F0055}', west: '\u{F004E}',
+                ne: '\u{F09C6}', nw: '\u{F09C4}',
+                se: '\u{F09BA}', sw: '\u{F09B8}',
             },
             // Nerd Fonts' Weather Icons `wind_*` set (E354-E35B): a circled arrow for
             // ALL eight directions from one icon set at one weight — the only preset
@@ -1792,7 +1805,7 @@ mod tests {
 
     #[test]
     fn nf_arrow_presets_exist_and_are_single_width() {
-        for name in ["nf-bold","nf-box","nf-circle","nf-outline","nf-wind","nf-thin"] {
+        for name in ["nf-bold","nf-box","nf-circle","nf-outline","nf-thick","nf-wind","nf-thin"] {
             assert!(Arrows::preset_names().contains(&name), "{name} missing");
             let a = Arrows::preset(name).expect("preset");
             for ch in [a.north,a.south,a.east,a.west,a.ne,a.nw,a.se,a.sw] {
@@ -1805,6 +1818,12 @@ mod tests {
         assert_eq!(b.south, '\u{F072E}');
         assert_eq!(b.east,  '\u{F0734}');
         assert_eq!(b.west,  '\u{F0731}');
+        // "nerdfont" is the outline set, spelled once (2026-09-03):
+        let nf = Arrows::preset("nerdfont").unwrap();
+        let ol = Arrows::preset("nf-outline").unwrap();
+        assert_eq!([nf.north, nf.south, nf.east, nf.west, nf.ne, nf.nw, nf.se, nf.sw],
+                   [ol.north, ol.south, ol.east, ol.west, ol.ne, ol.nw, ol.se, ol.sw]);
+        assert_eq!(nf.north, '\u{F09C7}', "md-arrow_up_bold_outline");
         // nf-box native diagonals:
         let bx = Arrows::preset("nf-box").unwrap();
         assert_eq!(bx.ne, '\u{F196A}');

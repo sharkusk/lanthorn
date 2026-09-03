@@ -184,7 +184,7 @@ fn role_line(name: &str) -> String {
 fn enum_hint(row: &RegRow) -> &'static str {
     match row.name {
         "map.box_style" => "   # rounded | thick | double | solid | super-thick | ascii | borderless",
-        "map.arrow_set" => "   # filled | line | nerdfont | nf-bold | nf-box | nf-chevron | nf-circle | nf-outline",
+        "map.arrow_set" => "   # filled | line | nerdfont | nf-bold | nf-box | nf-chevron | nf-circle | nf-outline | nf-thick | nf-wind | nf-thin",
         "map.portal_icons" => "   # ascii | nerdfont | nerdfont-stairs",
         "map.path_style" | "map.portal_path_style" => "   # light | heavy | dotted",
         "map.control_icons" => "   # plain | nerdfont   (every border control: both panes' clusters and the tooltip pointer)",

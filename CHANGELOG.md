@@ -100,9 +100,13 @@ Absolute URLs or no link.
   matrix and room panel.** It sits right beside the room's usual stairway
   icon, the same way a random compass exit already showed on the border.
 
-- **Two more Nerd Font arrow sets for the map**, `nf-wind` (circled arrows,
-  all eight directions from one icon family) and `nf-thin` (bare arrows, the
-  clearest at small sizes). Set `arrow_set` in `style.toml` to try them.
+- **The map's Nerd Font arrowheads are outline arrows now, not boxed ones.**
+  The boxed set the font check used to install turns into a small square with a
+  dot in it at ordinary font sizes; the outline heads still read as arrows.
+  Anyone who preferred the boxes keeps them with `arrow_set = "nf-box"`. Three
+  more sets to choose from: `nf-thick` (the one Material family whose eight
+  heads are all the same size), `nf-wind` (circled arrows from the Weather
+  Icons) and `nf-thin` (bare arrows, the clearest at small sizes).
 
 ### Docker
 

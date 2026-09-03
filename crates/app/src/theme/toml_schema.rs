@@ -331,7 +331,7 @@ loc_indicator        = { parent = "muted" }
 # ── Map-wide glyph SET presets. A single glyph is overridden by slot name in ───
 # ── the [map.overrides] table below — selectors carry colours, not glyphs. ─────
 box_style            = "rounded"    # room boxes: rounded | thick | double | solid | super-thick | ascii | borderless
-arrow_set            = "filled"     # cardinal connector arrows: filled | line | nerdfont | nf-bold | nf-box | nf-chevron | nf-circle | nf-outline
+arrow_set            = "filled"     # cardinal connector arrows: filled | line | nerdfont | nf-bold | nf-box | nf-chevron | nf-circle | nf-outline | nf-thick | nf-wind | nf-thin
 portal_icons         = "ascii"      # up/down/in/out endpoint icons: ascii | nerdfont | nerdfont-stairs
 path_style           = "light"      # cardinal (N/S/E/W) connector line: light | heavy | dotted
 portal_path_style    = "dotted"     # up/down/in/out connector line — styled separately from cardinal paths

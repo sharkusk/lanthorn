@@ -566,14 +566,16 @@ touching a line of code:
   `super-thick`, `ascii`, or `borderless`.
 - `arrow_set` — connector arrowheads: `filled` (default), `line`, or a family of
   Nerd Font sets (`nerdfont`, `nf-bold`, `nf-box`, `nf-chevron`, `nf-circle`,
-  `nf-outline`, `nf-wind`, `nf-thin`) for patched fonts. `nf-wind` is the Weather
+  `nf-outline`, `nf-thick`, `nf-wind`, `nf-thin`) for patched fonts. `nf-thick` is
+  the one Material family whose eight heads measure the same. `nf-wind` is the Weather
   Icons circled-arrow set — the one Nerd Font family whose eight directions are
   drawn at one weight from one source (its glyphs are named for the direction the
   wind comes FROM, so each slot takes the glyph named for its opposite); `nf-thin`
-  is the same family's bare arrows, the most legible set at a one-cell size. `nerdfont` — what the font check installs when
-  you tell it your terminal draws row 1 — is the boxed set, the same glyphs as
-  `nf-box`: an arrowhead sits *on* a line of path glyphs, and a box gives it an
-  edge of its own where a bare chevron reads as one more bend in the path. All
+  is the same family's bare arrows, the most legible set at a one-cell size.
+  `nerdfont` — what the font check installs when you tell it your terminal draws
+  row 1 — is the outline set, the same glyphs as `nf-outline` (it was the boxed
+  `nf-box` set until 2026-09-03: at a one-cell size a boxed head collapses to a
+  square with a dot in it, where an outline head still reads as an arrow). All
   eight directions come from one icon family, diagonals included. `nf-chevron`
   keeps the older bare chevrons for anyone who preferred them.
 - `path_style` — the line-art that draws the cardinal (N/S/E/W) connectors:

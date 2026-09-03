@@ -16,7 +16,7 @@
 //! is the one that does not line up with its neighbours.
 //!
 //! **Why one glyph per source family.** The presets are not one font.
-//! `Arrows::nerdfont` is Material Design chevrons, `PortalGlyphs::nerdfont-stairs`
+//! `Arrows::nerdfont` is Material Design bold-outline arrows, `PortalGlyphs::nerdfont-stairs`
 //! mixes Font Awesome (the marker and the question mark) with MDI (the stairs,
 //! the door in, the runner out), and the Guiding Light's mark is MDI
 //! `md-post_lamp`. A partially patched font carries some ranges and not others,
@@ -496,7 +496,7 @@ mod tests {
     #[test]
     fn the_nerd_row_spans_every_family_the_answer_installs() {
         let g = sample_glyphs(true);
-        assert!(g.contains(&'\u{F0738}'), "MDI arrow-up-bold-box, from Arrows::nerdfont");
+        assert!(g.contains(&'\u{F09C7}'), "MDI arrow-up-bold-outline, from Arrows::nerdfont");
         assert!(g.contains(&'\u{F111}'), "Font Awesome circle, from PortalGlyphs::nerdfont-stairs");
         assert!(g.contains(&'\u{F12BD}'), "MDI stairs-up, from PortalGlyphs::nerdfont-stairs");
         assert!(g.contains(&ASSIST_LAMP), "md-post_lamp, the Guiding Light's mark");
