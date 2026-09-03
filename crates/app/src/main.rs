@@ -2448,8 +2448,14 @@ fn run_event_loop(boot: startup::BootResult, launched_from_library: bool) -> Run
             // so they must be excluded from the drag the same way a border
             // control is — otherwise a Down on "Room"/"Diagnostics" starts a
             // resize instead of ever reaching `room_dock_mouse_action`.
-            let dock_chrome: Vec<Rect> =
-                last_panes.room_dock_tabs.iter().map(|(_, r)| *r).collect();
+            let dock_chrome: Vec<Rect> = last_panes
+                .room_dock_tabs
+                .iter()
+                .map(|(_, r)| *r)
+                // The close box sits on the same border row as the tabs and needs
+                // the same exclusion, or a click on it starts a resize too.
+                .chain(last_panes.room_dock_close)
+                .collect();
             match app::pane_drag::on_mouse(&mut state, m, &last_panes.pane_layout, &last_panes.boundaries, &last_panes.border_controls, &dock_chrome) {
                 DragOutcome::Ignored => {}
                 DragOutcome::Consumed => continue,
