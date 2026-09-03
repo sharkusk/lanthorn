@@ -7124,12 +7124,12 @@ mod sq1255_canyon_view {
     /// **The reported defect.** No connector belonging to some OTHER pair of rooms may run
     /// flush along a room's box border — the one-cell ring around the box must stay clear.
     ///
-    /// This is the case the shipped code fails. `overlap_stats` (and therefore
-    /// `cleanup_overlaps`, which minimises it) scores only cells owned by two or more
-    /// CONNECTORS; a connector running alongside a BOX is owned by one connector and
-    /// scores zero, so nothing in the pipeline has a reason to prefer the straight route.
+    /// `overlap_stats` (and therefore `cleanup_overlaps`, which minimises it) scores only
+    /// cells owned by two or more CONNECTORS; a connector running alongside a BOX is owned
+    /// by one connector and scores zero, so nothing in the pipeline has a reason to prefer
+    /// the straight route. Fixed by `direct_route_losers`' straightness tiebreak (SQ-1255):
+    /// kept un-ignored as the regression pin.
     #[test]
-    #[ignore = "SQ-1255: the reported defect — a connector run flush along a room box"]
     fn sq1255_no_foreign_connector_hugs_a_room_box() {
         let m = replay(WALK.len());
         let rm = mapper::render::render_layer(&m.graph, MAIN_LAYER);

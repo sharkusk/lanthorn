@@ -282,6 +282,11 @@ Where two unrelated connectors still have to cross, the map says so rather than 
 junction: the vertical run passes through unbroken and the horizontal one breaks for a single
 cell, so a crossing never reads as a place the two passages meet.
 
+When two connectors both want the same straight room-line and neither will fit beside the
+other, the longer one keeps it and the shorter weaves instead — and if they tie on length
+too, the one that runs straight keeps the line over one that bends, so which route wins
+never depends on the order the rooms were explored in.
+
 Confirmed reciprocal N/S and E/W adjacencies are treated as inviolable: an up/down
 move yields rather than shove a reciprocal partner off its shared column or row, and
 overlap cleanup may only slide a reciprocal room *along* its own axis, never off it.

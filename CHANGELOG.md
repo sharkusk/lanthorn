@@ -37,6 +37,12 @@ Absolute URLs or no link.
 - **`gvm-cli --version` names itself `gvm-cli` again**, not the crates.io
   package name it briefly picked up in 0.4.1.
 
+### Fixed
+
+- **Map connectors no longer take long detours hugging a neighbouring room's
+  box when a straight line was free.** Which of two equally short routes wins
+  no longer depends on the order the rooms were explored in.
+
 ---
 
 ## v0.4.1 — 2026-09-02

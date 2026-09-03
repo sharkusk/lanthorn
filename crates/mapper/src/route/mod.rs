@@ -851,12 +851,20 @@ fn path_len(pts: &[(i32, i32)]) -> i32 {
     pts.windows(2).map(|w| (w[0].0 - w[1].0).abs() + (w[0].1 - w[1].1).abs()).sum()
 }
 
+/// One `direct_route_losers` candidate: (compass index, is the route collinear/straight, polyline).
+type DirectCand = (usize, bool, Vec<(i32, i32)>);
+
 /// Decide which connectors may keep a straight DIRECT route when several would collide on the same
 /// room line. Two direct routes on one room line cannot be separated (a direct route carries no
 /// lane), so at most one survives; the LONGER one wins (its detour through channels would be the
-/// ugliest) and the shorter ones are returned as "losers" that must weave instead. Without this the
-/// outcome is order-dependent — whichever edge is listed first keeps the line — which can force a
-/// long path to weave around a short one (e.g. 76↔78 weaving aside for the short 180↔78).
+/// ugliest) and the shorter ones are returned as "losers" that must weave instead. When two
+/// candidates tie on length, the COLLINEAR (straight) one wins over a bent L — a straight room-line
+/// is the whole point of a direct route, and a bent one is already halfway to weaving, so it loses
+/// nothing by giving way (SQ-1255). Only once length and straightness both tie does edge-listing
+/// index settle it, which is the one part of this that is still, unavoidably, order-dependent.
+/// Without the straightness tiebreak the outcome was order-dependent on the tie itself — whichever
+/// edge is listed first kept the line — which can force a long straight path to weave around a
+/// short bent one (e.g. 76↔78 weaving aside for the short 180↔78).
 fn direct_route_losers(
     compass: &[&Connection],
     compass_pairs: &std::collections::BTreeSet<(RoomId, RoomId)>,
@@ -867,7 +875,7 @@ fn direct_route_losers(
     // the pair's direct route (reverse/extra edges are consumed or become merge stubs there).
     let mut seen_pairs: std::collections::BTreeSet<(RoomId, RoomId)> = std::collections::BTreeSet::new();
     let empty = std::collections::BTreeSet::new();
-    let mut cands: Vec<(usize, Vec<(i32, i32)>)> = Vec::new();
+    let mut cands: Vec<DirectCand> = Vec::new();
     for (ci, c) in compass.iter().enumerate() {
         let pair = (c.origin.min(c.dest), c.origin.max(c.dest));
         // A pair's direct room-line belongs to its COMPASS edge. When a pair has both, skip the
@@ -887,16 +895,20 @@ fn direct_route_losers(
             back_edge_idx(compass, ci, c, &empty).and_then(|pi| route_side(compass[pi].dir));
         if let Some((sentry, pts)) = direct_route(a, exit, b, occupied) {
             if required_entry.is_none_or(|req| req == sentry) {
-                cands.push((ci, pts));
+                let straight = is_collinear(&pts);
+                cands.push((ci, straight, pts));
             }
         }
     }
-    // Longest first (index breaks ties deterministically); a candidate that collides with an already
-    // accepted winner becomes a loser.
-    cands.sort_by(|x, y| path_len(&y.1).cmp(&path_len(&x.1)).then(x.0.cmp(&y.0)));
+    // Longest first; on a length tie, straight (collinear) beats bent; index breaks any remaining
+    // tie deterministically. A candidate that collides with an already accepted winner becomes a
+    // loser.
+    cands.sort_by(|x, y| {
+        path_len(&y.2).cmp(&path_len(&x.2)).then(y.1.cmp(&x.1)).then(x.0.cmp(&y.0))
+    });
     let mut accepted: Vec<Vec<(i32, i32)>> = Vec::new();
     let mut losers = std::collections::BTreeSet::new();
-    for (ci, pts) in cands {
+    for (ci, _straight, pts) in cands {
         if accepted.iter().any(|w| polylines_overlap(&pts, w)) {
             losers.insert(ci);
         } else {
@@ -1646,6 +1658,43 @@ mod tests {
         let plan = route_lanes(&g);
         let conn = plan.connectors.iter().find(|c| c.origin == 1 && c.dest == 2).unwrap();
         assert!(!is_collinear(&conn.points), "occupied gap must dip into a channel: {:?}", conn.points);
+    }
+
+    #[test]
+    fn direct_route_tie_prefers_straight_over_bent_regardless_of_order() {
+        // Three rooms sharing one contested empty cell (SQ-1255): #1 (analogue of Canyon
+        // View's #230) sits between #2 due north and #3 to the northeast. `1 N 2` wants the
+        // straight vertical room-line; `3 W 1` wants an L that turns onto that same column
+        // one row above #1, so the two direct routes' polylines overlap by more than the
+        // shared arrival doorway. Both are length 6 in doubled coords, so before the
+        // straightness tiebreak this was a pure insertion-index tie — whichever edge was
+        // added first kept the straight line, even when it was the BENT one. The straight
+        // `1 N 2` route must win regardless of which edge is added first.
+        let build = |straight_first: bool| -> MapGraph {
+            let mut g = MapGraph::new();
+            for id in 1..=3 { g.upsert_room(id, "r".into()); }
+            g.set_pos(1, (0, 0));
+            g.set_pos(2, (0, -3));
+            g.set_pos(3, (2, -1));
+            if straight_first {
+                g.add_edge(1, Direction::N, 2);
+                g.add_edge(3, Direction::W, 1);
+            } else {
+                g.add_edge(3, Direction::W, 1);
+                g.add_edge(1, Direction::N, 2);
+            }
+            g
+        };
+        for straight_first in [true, false] {
+            let g = build(straight_first);
+            let plan = route_lanes(&g);
+            let straight = plan.connectors.iter().find(|c| c.origin == 1 && c.dest == 2).unwrap();
+            assert!(
+                is_collinear(&straight.points),
+                "straight_first={straight_first}: #1 N #2 must keep the straight room-line: {:?}",
+                straight.points
+            );
+        }
     }
 
     /// Count direction changes (turns) in a doubled-coord polyline.
