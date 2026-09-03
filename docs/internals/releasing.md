@@ -75,7 +75,47 @@ step 3 fails here instead of shipping half-drained docs.
   naming the tag — `gh workflow run docker.yml --ref main -f tag=v0.4.0` —
   and it builds that tag and pushes it, exactly as the tag push would have.
 
-## 6. Afterwards
+## 6. crates.io
+
+`release.yml`'s `publish` job runs after the platform archives are built on a
+tag and pushes every publishable crate to crates.io in dependency order
+(leaves first: `lanthorn-grammar-model`, `lanthorn-verb-synonyms`, the VM
+crates, `lanthorn-blorb`, `lanthorn-mapper`, `lanthorn-audio`,
+`lanthorn-buildinfo`, `lanthorn-cli-host`, the CLIs, then `lanthorn` itself).
+It needs `CARGO_REGISTRY_TOKEN` in the repository's Actions secrets and is
+skipped — not failed — when that secret is absent, so a fork or a repo that
+has not opted in yet still gets a clean release.
+
+**The very first publish is done by hand**, because crates.io has no token
+until an owner creates one:
+
+```sh
+cargo login                          # paste the token from https://crates.io/me
+cargo publish -p lanthorn-grammar-model
+cargo publish -p lanthorn-verb-synonyms
+cargo publish -p lanthorn-zvm
+cargo publish -p lanthorn-gvm
+cargo publish -p lanthorn-scott
+cargo publish -p lanthorn-blorb
+cargo publish -p lanthorn-mapper
+cargo publish -p lanthorn-audio
+cargo publish -p lanthorn-buildinfo
+cargo publish -p lanthorn-cli-host
+cargo publish -p zvm-cli
+cargo publish -p lanthorn-gvm-cli
+cargo publish -p scott-cli
+cargo publish -p lanthorn
+```
+
+Each command needs its dependencies to already be live on the index (crates.io
+rejects a path dependency it cannot resolve against a published version), so
+the order matters and a short wait between crates is normal — `cargo publish`
+polls the index for its own upload before returning, but a *dependent*
+crate's publish can still race the index briefly. After that first run, add
+`CARGO_REGISTRY_TOKEN` (an API token scoped to publish) to the repository's
+Actions secrets and every later release publishes itself from the tag.
+
+## 7. Afterwards
 
 `README.md` now describes the new release, so new unreleased work goes back
 to carrying `*Next release:*` tags at each feature's normal spot in the

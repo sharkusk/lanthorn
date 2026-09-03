@@ -94,7 +94,9 @@ jobs:
         shell: bash
         env:
           # The four shipped binaries: the mapping TUI + the three no-map CLIs.
-          BINS: "-p app -p zvm-cli -p gvm-cli -p scott-cli"
+          # Package names (SQ-1250): "app" -> "lanthorn", "gvm-cli" ->
+          # "lanthorn-gvm-cli" (its binary is still named "gvm-cli", see below).
+          BINS: "-p lanthorn -p zvm-cli -p lanthorn-gvm-cli -p scott-cli"
         run: |
           set -euo pipefail
           if [ "${{ matrix.name }}" = "macos-universal2" ]; then
@@ -264,3 +266,57 @@ jobs:
           generate_release_notes: true
           fail_on_unmatched_files: true
           body_path: release-notes.md
+
+  publish:
+    name: Publish to crates.io
+    needs: build
+    # Full releases only — a hyphenated tag (v0.2.0-rc.1) is a pre-release and
+    # crates.io has no such concept; publishing a pre-release version there
+    # would need bumping Cargo.toml to a real pre-release identifier, which
+    # this workflow does not do.
+    if: startsWith(github.ref, 'refs/tags/v') && !contains(github.ref_name, '-')
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      # Same as the build job: give the runner its own core count rather than
+      # the developer-Mac-sized cap in .cargo/config.toml.
+      - name: Un-cap build jobs for the runner
+        run: |
+          n=$(nproc 2>/dev/null || true)
+          case "$n" in ''|*[!0-9]*) : ;; *) echo "CARGO_BUILD_JOBS=$n" >> "$GITHUB_ENV" ;; esac
+
+      # SQ-1250: cargo's own dependency-order publish (stable since well
+      # before the 1.98 this repo pins). A missing token SKIPS rather than
+      # fails — the very first publish is done by hand (see
+      # docs/internals/releasing.md §6) because crates.io has no token to put
+      # in this secret until an owner creates one, and every release before
+      # that point should still succeed at building and shipping binaries.
+      #
+      # --no-verify, not a verify build: `lanthorn` (the app crate) currently
+      # depends on this workspace's own [patch.crates-io] fork of
+      # ratatui-image (see the root Cargo.toml's SQ-0972 comment) for
+      # `Capability::KittyCompression` and `Picker::new_protocol_with_id`,
+      # neither of which exists in the vanilla 11.0.6 on crates.io — a patch
+      # is workspace-local and never travels with a published crate, so an
+      # isolated verify build of `lanthorn` fails even though the workspace
+      # itself builds cleanly. **`lanthorn` will publish a crate that fails
+      # to build for every consumer until that patch is upstreamed and
+      # removed** (the Cargo.toml comment already says "remove this once a
+      # release carrying all of them exists") — do not tag a real release
+      # while it is still in place without accepting that. Every other
+      # workspace crate (the engines, buildinfo, cli-host, the three CLIs)
+      # has no such blocker and verifies cleanly on its own.
+      - name: cargo publish --workspace
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
+        run: |
+          set -euo pipefail
+          if [ -z "${CARGO_REGISTRY_TOKEN:-}" ]; then
+            echo "::warning::CARGO_REGISTRY_TOKEN is not set; skipping the crates.io publish for ${GITHUB_REF_NAME}. See docs/internals/releasing.md for the first, by-hand publish."
+            exit 0
+          fi
+          cargo publish --workspace --no-verify

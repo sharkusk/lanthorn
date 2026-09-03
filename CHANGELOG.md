@@ -19,6 +19,22 @@ Absolute URLs or no link.
 
 ---
 
+## Unreleased
+
+> *This section is drained when a version is cut. README.md describes the
+> RELEASED build; prose for a feature that is in `main` but not yet released
+> goes into the README in place, at its normal destination, marked with the
+> visible tag `*Next release:*`. `release.yml` refuses to cut a release
+> while any such tag, or this Unreleased section, still exists.*
+
+- **lanthorn and its engine crates are on crates.io.** `lanthorn-zvm`,
+  `lanthorn-gvm`, `lanthorn-scott`, `lanthorn-blorb`, `lanthorn-mapper` and
+  `lanthorn-audio` are usable standalone by anything that wants to run
+  Z-machine, Glulx or Scott Adams story files; `cargo install lanthorn` builds
+  the player itself from source.
+
+---
+
 ## v0.4.1 — 2026-09-02
 
 ### Highlights
