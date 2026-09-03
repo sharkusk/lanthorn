@@ -76,6 +76,10 @@ Absolute URLs or no link.
   same-named compass direction. Several other classic titles pick up the same
   fix for free — Lurking Horror's and The Witness's inventory panels now
   track "the hacker" and "the detective" instead of staying empty all game.
+- **A story you opened from the list now brings you back to the list when it
+  ends**, however it ends — winning, losing, or quitting — instead of dropping
+  you out to the terminal. And `Ctrl-Q` now quits lanthorn from the list
+  itself, the same key that quits mid-game.
 
 ---
 

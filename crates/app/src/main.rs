@@ -1949,6 +1949,12 @@ fn run_event_loop(boot: startup::BootResult, launched_from_library: bool) -> Run
     // Whether a story library exists to return to; gates `/quit-to-library`. Set
     // once here from the launch context. (SQ-0435)
     state.launched_from_library = launched_from_library;
+    // A story launched from the list always resolves back to it, on every way
+    // the run can end — the game's own quit included — not only the explicit
+    // `/quit-to-library` path. Seeding the default here means a game-driven quit
+    // (`should_exit_on_turn`, never touched by any quit dispatch) resolves
+    // correctly with no separate wiring of its own (SQ-1258).
+    state.exit_target = app::state::ExitTarget::for_launch(launched_from_library);
 
     // ── 5. Event loop ─────────────────────────────────────────────────────────
 
@@ -2725,10 +2731,12 @@ fn run_event_loop(boot: startup::BootResult, launched_from_library: bool) -> Run
                     }
                     OverlayAct::QuitCancel => {
                         // Cancelling the dialog abandons the pending intent, so
-                        // reset the target to Exit — a later plain quit through the
-                        // same dialog must not inherit a stale Library. (SQ-0435)
+                        // reset the target back to this launch's default — a later
+                        // plain quit through the same dialog must not inherit
+                        // whatever a superseded `/quit-to-library` left behind.
+                        // (SQ-0435, SQ-1258)
                         state.overlays.quit_dialog = false;
-                        state.exit_target = app::state::ExitTarget::Exit;
+                        state.exit_target = app::state::ExitTarget::for_launch(state.launched_from_library);
                     }
                     OverlayAct::LaunchResume => {
                         if let Some((save, lines, kinds, screen)) = state.pending_resume.take() {
@@ -3692,10 +3700,12 @@ fn run_event_loop(boot: startup::BootResult, launched_from_library: bool) -> Run
             // ── Caller-handled actions ─────────────────────────────────────────
 
             Action::Quit => {
-                // A key-driven quit resolves the loop to Exit (never the library).
+                // Ctrl-Q/Ctrl-C (the only route to this action — `input.rs`'s
+                // hardwired step 1) resolves like every other way the run can end:
+                // back to the library when one exists, Exit otherwise (SQ-1258).
                 // Set it explicitly so a superseded `/quit-to-library` can't leave
-                // the target pointing at the library. (SQ-0435)
-                state.exit_target = app::state::ExitTarget::Exit;
+                // a stale target behind.
+                state.exit_target = app::state::ExitTarget::for_launch(state.launched_from_library);
                 if should_prompt_save_on_quit(&state) {
                     state.overlays.quit_dialog = true;
                     state.overlays.dialog_focus = 0;
@@ -4674,10 +4684,38 @@ mod tests {
 
     use super::{
         dim_area, is_slash, matrix_update_hover, scroll_for_match, should_prompt_save_on_quit,
-        PaneRects, RoomId,
+        PaneRects, RoomId, RunOutcome,
     };
     use app::render::paneframe::{draw_pane_frame, draw_top_inset, InsetCaps, InsetSegment, PaneGlyphs};
-    use app::state::AppState;
+    use app::state::{AppState, ExitTarget};
+
+    // ── SQ-1258: a picker-launched run always resolves back to the library ─────
+
+    /// The outer loop's whole exit-resolution rule is `ExitTarget::for_launch`
+    /// plus this `From` — nothing else decides it (`run_event_loop` seeds
+    /// `exit_target` from it at boot; `Action::Quit`, `SlashOutcome::Quit`, and
+    /// `OverlayAct::QuitCancel` all resolve or restore through the same call). A
+    /// game's own clean quit never touches `exit_target` at all, so it inherits
+    /// whatever the boot default was — meaning "launched from the picker + the
+    /// GAME quit" and "launched from the picker + the player's own `quit`
+    /// command / Ctrl-Q" reach the identical answer this pins.
+    #[test]
+    fn library_launch_always_resolves_to_the_library() {
+        assert_eq!(
+            RunOutcome::from(ExitTarget::for_launch(true)),
+            RunOutcome::ToLibrary,
+            "a picker launch returns to the list on ANY way the run ends"
+        );
+    }
+
+    #[test]
+    fn command_line_launch_always_resolves_to_exit() {
+        assert_eq!(
+            RunOutcome::from(ExitTarget::for_launch(false)),
+            RunOutcome::Exit,
+            "no picker exists to return to — every ending leaves lanthorn"
+        );
+    }
 
     // ── SQ-0649: the panic hook must not tear down a live session ──────────────
 

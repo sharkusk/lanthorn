@@ -430,10 +430,12 @@ pub(crate) fn dispatch_slash_outcome(
             }
         }
         SlashOutcome::Quit => {
-            // A plain quit resolves the loop to Exit. Set it explicitly so a
-            // prior `/quit-to-library` that opened (then was superseded by) this
-            // path can't leave the target pointing at the library. (SQ-0435)
-            state.exit_target = ExitTarget::Exit;
+            // A plain quit resolves like every other way the run can end: back
+            // to the library when the story was launched from one, Exit
+            // otherwise (SQ-1258). Set it explicitly so a prior
+            // `/quit-to-library` that opened (then was superseded by) this path
+            // can't leave a stale target behind. (SQ-0435)
+            state.exit_target = ExitTarget::for_launch(state.launched_from_library);
             if should_prompt_save_on_quit(state) {
                 state.overlays.quit_dialog = true;
                 state.overlays.dialog_focus = 0;
@@ -1411,10 +1413,26 @@ mod debug_dispatch_tests {
     }
 
     #[test]
-    fn quit_sets_exit_target_to_exit() {
+    fn quit_from_a_library_launch_resolves_to_library() {
+        // SQ-1258: a story reached through the picker returns to it on every way
+        // the run ends, including the player's own `quit` command — not only
+        // `/quit-to-library`.
         let mut state = AppState::default();
-        // Even after a prior quit-to-library set the target, a plain Quit resets it.
         state.launched_from_library = true;
+        state.exit_target = ExitTarget::Exit; // whatever the boot default left behind
+        state.unsaved_progress = false;
+        let should_break = dispatch_quit_like(&mut state, SlashOutcome::Quit);
+        assert!(should_break, "no unsaved progress → quit breaks immediately");
+        assert_eq!(state.exit_target, ExitTarget::Library, "quit must resolve to Library");
+    }
+
+    #[test]
+    fn quit_from_a_command_line_launch_resolves_to_exit() {
+        // No picker to return to → quit still leaves lanthorn entirely (SQ-1258).
+        let mut state = AppState::default();
+        state.launched_from_library = false;
+        // A stale Library target (left behind by a since-superseded intent) must
+        // not survive a plain Quit either.
         state.exit_target = ExitTarget::Library;
         state.unsaved_progress = false;
         let should_break = dispatch_quit_like(&mut state, SlashOutcome::Quit);

@@ -2212,6 +2212,20 @@ pub enum ExitTarget {
     Library,
 }
 
+impl ExitTarget {
+    /// The target a launch resolves to absent any other signal: `Library` when a
+    /// picker exists to return to, `Exit` otherwise. Every way a run can end —
+    /// the game's own quit, the player's `quit` command, Ctrl-Q — shares this
+    /// answer, since a story reached through the list always goes back to the
+    /// list; the CLI's single-file launch has no list to return to, so it always
+    /// leaves lanthorn (SQ-1258). Set once at boot and restored whenever a quit
+    /// intent (`quit_dialog` cancel) is abandoned, so nothing has to remember to
+    /// pick `Exit` by hand at each of those sites.
+    pub fn for_launch(launched_from_library: bool) -> ExitTarget {
+        if launched_from_library { ExitTarget::Library } else { ExitTarget::Exit }
+    }
+}
+
 /// Percentage-based pane sizes, seeded from `Config` at startup and mirrored
 /// here for the layout code to consume. `config` stays the persisted source
 /// of truth; this is the runtime-facing copy.
@@ -5665,6 +5679,15 @@ mod tests {
     fn appstate_history_defaults_empty() {
         let s = AppState::default();
         assert!(s.history.is_empty(), "history starts empty");
+    }
+
+    /// SQ-1258: a picker-launched run always resolves back to the library, a
+    /// command-line launch always leaves lanthorn — the ONE fact every quit
+    /// path (game-driven, `quit`, Ctrl-Q, `/quit-to-library`) is meant to agree on.
+    #[test]
+    fn exit_target_for_launch_follows_whether_a_library_exists() {
+        assert_eq!(ExitTarget::for_launch(true), ExitTarget::Library);
+        assert_eq!(ExitTarget::for_launch(false), ExitTarget::Exit);
     }
 
     #[test]

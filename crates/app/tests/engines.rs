@@ -70,6 +70,8 @@ mod headless;
 mod interpreter_profile;
 #[path = "suites/launch_options.rs"]
 mod launch_options;
+#[path = "suites/library_quit_resolution.rs"]
+mod library_quit_resolution;
 #[path = "suites/picture_override.rs"]
 mod picture_override;
 #[path = "suites/period_look_media.rs"]

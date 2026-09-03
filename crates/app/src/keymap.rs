@@ -423,7 +423,11 @@ impl Default for KeyMap {
         // the root), and neither collides with a letter the picker already uses.
         bind!(g(Char('f'), true, false), "find-story", Context::Browser);
         bind!(plain(Backspace), "parent-folder", Context::Browser);
+        // `q` LEADS so the footer hint keeps naming the plain letter; Ctrl-Q is
+        // the same key that quits mid-game (`Action::Quit`, `input.rs`'s hardwired
+        // step 1), bound here too so it works the same in the list (SQ-1258).
         bind!(plain(Char('q')), "quit-browser", Context::Browser);
+        bind!(ctrl(Char('q')), "quit-browser", Context::Browser);
         bind!(plain(Esc), "cancel-browser", Context::Browser);
 
         KeyMap { bindings: b }

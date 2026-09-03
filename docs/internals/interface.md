@@ -958,11 +958,14 @@ Years like `(1993)` are never mistaken for disk numbers, `Zork I`/`II`/`III` are
 words rather than digits, and a set whose first disk you don't have isn't
 detected at all — you'll still see every game, just listed disk by disk.
 
-When you launch from a directory this way, `/quit-to-library` drops the current
-story and returns you to the picker to choose another (honouring the usual
-save-on-quit prompt) — `/quit` still exits lanthorn outright. Launched against a
-single story file, there's no library to return to, so `/quit-to-library` just
-says so.
+When you launch from a directory this way, every way a story's run can end —
+`/quit-to-library`, a plain `/quit`, Ctrl-Q, or the game's own quit — drops the
+current story and returns you to the picker to choose another (honouring the
+usual save-on-quit prompt): a story reached through the list always goes back
+to it (SQ-1258). Launched against a single story file, there's no library to
+return to, so every one of those leaves lanthorn outright instead, and
+`/quit-to-library` just says so. The only way to leave lanthorn entirely once
+you're in the list is `q`/Ctrl-Q **in the list itself**.
 
 Every key on this screen is **rebindable**. The picker runs before there is a
 game to act on, so it has its own layer in the one command registry — its own
@@ -985,7 +988,8 @@ gestures that act on ONE story — launch options, fetch, hints, the manual IFDB
 URL — moved into a menu behind `Space`, because each of them used to cost a
 footer segment and each was the first thing dropped on any terminal narrower
 than a page. The alternates stay bound and unadvertised: `i`, `Esc`,
-`Shift+Enter`, `k`/`j` all still work. As the pane narrows the hints go in a
+`Shift+Enter`, `k`/`j`, and Ctrl-Q (`quit`'s own second key, SQ-1258) all still
+work — the full reference behind `?` lists every one. As the pane narrows the hints go in a
 fixed order — `Ctrl+F: find` first, then `refresh`, `sort`, `covers`, `IFDB`,
 `info`, and `keys` last — while `open`, `menu` and `quit` are never dropped
 (without the first two nothing else is discoverable, and without the third

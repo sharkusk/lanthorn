@@ -362,6 +362,8 @@ mod tests {
         );
         assert_eq!(key(KeyCode::Esc, KeyModifiers::NONE), Some(BrowserAction::CancelBrowser));
         assert_eq!(key(KeyCode::Char('q'), KeyModifiers::NONE), Some(BrowserAction::QuitBrowser));
+        // SQ-1258: Ctrl-Q quits the list exactly as it quits mid-game.
+        assert_eq!(key(KeyCode::Char('q'), KeyModifiers::CONTROL), Some(BrowserAction::QuitBrowser));
         // Nothing is bound to `z`, and an unbound key is silence, not a default.
         assert_eq!(key(KeyCode::Char('z'), KeyModifiers::NONE), None);
     }
