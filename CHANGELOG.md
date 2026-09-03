@@ -87,6 +87,25 @@ Absolute URLs or no link.
   tables on every later one too, so a random or door-gated exit in any of
   them gets the same honest `?` instead of a confident but sometimes-wrong
   arrow.
+- **A passage that changes for good is now redrawn, not marked uncertain.**
+  Some games contradict their own exit table on every single walk (an
+  "instead of going" rule that always redirects you, or a door that now
+  leads somewhere new) — the map used to read that as randomness and mark it
+  `?`. It now checks first: if a couple of quiet trial walks agree on where
+  you actually end up, the map simply redraws the arrow to the new room; only
+  a passage that genuinely disagrees with itself gets the `?`.
+- **A `?` exit no longer flips back to a confident arrow on a lucky repeat.**
+  With two possible destinations, a single lucky agreement had about a 1-in-4
+  chance of convincing the map a random exit had "settled down" and clearing
+  the mark — it now waits for the destination list itself to say so.
+- **A direction that sometimes leads back into the room you're standing in,
+  and sometimes doesn't, now counts that among its destinations.** The room
+  panel's "destination varies" list can now say "…, back here" alongside the
+  other rooms it has sent you to, and the loop badge no longer sits beside a
+  `?` mark on the same exit.
+- **A random Up or Down exit now shows on the room's box, not just the
+  matrix and room panel.** It sits right beside the room's usual stairway
+  icon, the same way a random compass exit already showed on the border.
 
 ### Docker
 

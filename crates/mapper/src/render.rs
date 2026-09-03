@@ -32,6 +32,13 @@ pub struct RenderRoom {
     pub has_layer_portal: bool,
     /// Directions that lead back INTO this room — see [`MapGraph::self_loops`] (SQ-0666).
     /// Carried here so the drawn view can badge the box without a second pass over the graph.
+    ///
+    /// Filtered to exclude a direction that ALSO carries a `?` random-exit mark (SQ-1269): current
+    /// code never leaves the two coexisting on one key (marking a direction removes whatever old
+    /// edge/self-loop stood there — see `Mapper::resolve_suspicion_as_random`), but a map file
+    /// saved before that held both, and `crate::matrix::classify` already prefers the mark — the
+    /// stronger, more specific fact — over the loop badge on the same key. The box agrees: the `?`
+    /// stub supersedes the loop badge for that direction, never both.
     pub self_loops: Vec<crate::direction::Direction>,
     /// How many OTHER names the story has printed for this room (SQ-1257 Phase 3) — see
     /// [`crate::graph::Room::aliases`]. Carried as a count, not the list itself: the drawn box
@@ -96,7 +103,11 @@ pub fn render_traced(graph: &MapGraph, on_step: &mut dyn FnMut(&str)) -> RenderM
                 is_current: Some(room.id) == current,
                 align_code,
                 has_layer_portal: false,
-                self_loops: graph.self_loops(room.id),
+                self_loops: graph
+                    .self_loops(room.id)
+                    .into_iter()
+                    .filter(|&d| !graph.is_random_exit(room.id, d))
+                    .collect(),
                 alias_count: room.aliases.len(),
                 random_stubs: room
                     .random_exits

@@ -3922,23 +3922,24 @@ pub fn apply_turn(
             .current()
             .zip(parse_direction(command))
             .is_some_and(|(here, d)| mapper.graph.is_random_exit(here, d));
-        // SQ-1264: the live-walk CONTRADICTION rule. `declared_exit` alone (Z-machine) or its
-        // Glulx mirror only ever fires from a STATIC table read, and Adventure's forests are not
-        // caught by it at all — the room's own `e_to`/`w_to`/etc name a perfectly ordinary FIXED
-        // room; the randomness is a redirect the DESTINATION performs on arrival (its `initial`
-        // routine rerolling `PlayerTo` half the time), which nothing in the origin's own exit
-        // table can see. Phase 2's reseeded shadow probe is what actually proves such a direction
-        // random — but Phase 2 itself has a statistical hole: once a direction is marked random,
-        // an UPGRADE re-probe's two reseeded attempts each have (with two possible destinations) a
-        // 50% chance of independently agreeing with whatever the live walk just landed in, so they
-        // agree with EACH OTHER purely by luck one time in four, and a confident edge gets minted
-        // right back for a direction that is still random. This rule closes that hole with
-        // evidence Phase 2 does not need: if the graph ALREADY holds an edge for this exact
-        // (origin, direction) pointing at some OTHER room than where the player just landed, that
-        // contradiction is itself proof the exit is random — a fixed passage cannot lead to two
-        // different rooms. Fires regardless of `declared_exit`, so it protects an engine with no
-        // declared-exit seam at all, and re-marks a direction Phase 2 mistakenly upgraded, the next
-        // time the story proves it wrong again.
+        // SQ-1264 / SQ-1269: does the graph ALREADY claim something for (origin, dir) that this
+        // move's landing CONTRADICTS? `declared_exit` alone (Z-machine) or its Glulx mirror only
+        // ever fires from a STATIC table read, and Adventure's forests are not caught by it at
+        // all — the room's own `e_to`/`w_to`/etc name a perfectly ordinary FIXED room; the
+        // randomness is a redirect the DESTINATION performs on arrival (its `initial` routine
+        // rerolling `PlayerTo` half the time), which nothing in the origin's own exit table can
+        // see. This check closes that hole with evidence `declared_exit` does not need: if the
+        // graph already holds an edge for this exact (origin, direction) pointing at some OTHER
+        // room than where the player just landed, that contradiction is itself proof the exit is
+        // random — a fixed passage cannot lead to two different rooms. Fires regardless of
+        // `declared_exit`, so it protects an engine with no declared-exit seam at all.
+        //
+        // SQ-1269 widens it to a SELF-LOOP too: "leads back here" is as much a claimed
+        // destination as a real edge is (`old_dest == here`, the room itself — the room card's
+        // "back here" once this is pooled), so a landing elsewhere contradicts it exactly the
+        // same way. `.or_else` only runs when no real edge already answered the question, so a
+        // room with both an edge AND a leftover self-loop on the same key (an older map file;
+        // current code never leaves the two coexisting) still prefers the more specific fact.
         let existing_conflict: Option<mapper::graph::RoomId> = moved_room
             .then(|| mapper.graph.current())
             .flatten()
@@ -3950,14 +3951,24 @@ pub fn apply_turn(
                     .iter()
                     .find(|c| c.origin == here && c.dir == d && c.dest != here && c.dest != snap.number)
                     .map(|c| c.dest)
+                    .or_else(|| mapper.graph.self_loops(here).contains(&d).then_some(here))
             });
-        let random_exit = already_random
-            || existing_conflict.is_some()
-            || (moved_room
-                && matches!(
-                    result.declared_exit,
-                    Some(crate::engine::DeclaredExit::Room(r)) if r != snap.number
-                ));
+        let declared_mismatch = moved_room
+            && matches!(
+                result.declared_exit,
+                Some(crate::engine::DeclaredExit::Room(r)) if r != snap.number
+            );
+        // SQ-1269: "suspicion, not proof". A declared mismatch or a live contradiction against
+        // something the map already believed is no longer marked on the spot — Inform 7's
+        // "instead of going" redirects contradict the exit table every time, and games change
+        // passages permanently, and neither guess is proof the destination VARIES. Left for
+        // `turn::finish_command_turn` to hand to a probe (`random_exit_probe::SearchKind::
+        // Suspicion`, see [`mapper::mapper::Mapper::note_random_exit_suspicion`]) when one can
+        // run, or resolved immediately (`Mapper::resolve_suspicion_as_random`, unchanged from the
+        // old immediate-marking behaviour) when none can — this function has no engine to ask.
+        // `already_random` stays its own, separate, IMMEDIATE branch below: a re-walk of a
+        // direction already marked is Phase 2's own UPGRADE territory, never a new suspicion.
+        let suspicious = !already_random && (existing_conflict.is_some() || declared_mismatch);
         if fatal {
             // The game said the player died this turn and moved them somewhere that is NOT
             // reachable by the command they typed (e.g. a grue kills you in the dark and drops
@@ -3979,34 +3990,15 @@ pub fn apply_turn(
             // died. (SQ-0673)
             mapper.observe_relocation(snap.number, &snap.name);
             death.unresolved = false;
-        } else if random_exit {
-            // The destination is still observed as the current room — its own exits
-            // work and it appears on the map — but NO edge is minted from the origin,
-            // and the origin/direction is recorded as a stored fact of its own
-            // (`?` in the matrix, "destination varies" on the room card) so the map
-            // never draws a confident arrow for a passage the story never committed
-            // to. Not `observe_relocation` alone: that would leave no trace at all
-            // that this direction was ever tried, indistinguishable from a direction
-            // nobody has explored.
+        } else if already_random {
+            // SQ-1257 Phase 2 territory, unchanged by SQ-1269: a re-walk of a direction ALREADY
+            // marked random mints no edge — one lucky landing is not proof the story stopped
+            // randomising. The destination is still observed as the current room, and the live
+            // landing is noted as evidence of where the story sends the player (SQ-1261);
+            // `finish_command_turn` decides separately whether to arm an UPGRADE probe
+            // (`random_exit_probe::SearchKind::Upgrade`) from `MapGraph::is_random_exit` alone,
+            // which this branch's own marking does not change.
             if let (Some(origin), Some(d)) = (mapper.graph.current(), parse_direction(command)) {
-                // SQ-1264: the contradiction rule fired — an edge already claimed this exact
-                // (origin, direction) led somewhere ELSE. Remove it (the same removal
-                // `random_exit_probe::deliver_first_walk` uses for the same reason) and note
-                // that room as a destination too, alongside wherever the player landed this
-                // time — both are real places the story has now been proven to send the player.
-                if let Some(other) = existing_conflict {
-                    mapper.graph.remove_connection(origin, d);
-                    mapper.graph.note_random_destination(origin, d, other);
-                }
-                mapper.record_random_exit(origin, d);
-                // SQ-1261: every live walk of a marked direction that lands somewhere other than
-                // the origin is evidence of WHERE the story sends the player — covers both the
-                // very first mismatch (this walk is what just earned the mark) and every re-walk
-                // of an already-marked direction. `snap.number != origin` excludes the one shape
-                // where this branch runs without the player having actually left: an already-marked
-                // direction walked again that bounced them right back (`moved_room` false, caught
-                // only by `already_random` above) — that landing is the origin itself and names no
-                // destination worth recording.
                 if snap.number != origin {
                     mapper.graph.note_random_destination(origin, d, snap.number);
                 }
@@ -4015,12 +4007,54 @@ pub fn apply_turn(
             // Ordinary play resuming, same reasoning as the `arrived` branch below:
             // whatever death was outstanding is settled without a resurrection.
             death.unresolved = false;
+        } else if suspicious {
+            // SQ-1269: neither a declared-exit mismatch nor a contradicted edge/self-loop is
+            // PROOF the destination varies — mint nothing, mark nothing, leave whatever the graph
+            // already claimed (an edge, a self-loop, or nothing at all) standing exactly as it
+            // was, and stash the fact so `finish_command_turn` can hand it to a probe. The
+            // destination is still observed as the current room in the meantime.
+            if let (Some(origin), Some(d)) = (mapper.graph.current(), parse_direction(command)) {
+                mapper.note_random_exit_suspicion(origin, d, existing_conflict, snap.number);
+            }
+            mapper.observe_relocation(snap.number, &snap.name);
+            death.unresolved = false;
         } else if arrived {
             // The game printed this room's heading again, so the player MOVED — even if they
             // came out where they went in. That is the only evidence a maze self-loop ever
             // leaves, and without it "west leads back here" is indistinguishable from walking
             // into a wall and thrown away (SQ-0666).
-            mapper.observe_moved(snap.number, &snap.name, parse_direction(command));
+            //
+            // SQ-1269 hole 3: before minting an ordinary self-loop, check whether this exact
+            // (origin, direction) already carries a REAL edge elsewhere — a fixed passage that a
+            // same-room landing now contradicts, exactly the same shape as the moved-room
+            // contradiction above, just arriving back rather than leaving. A RENAME overrides
+            // this: `Mapper::observe_moved`'s own rename-loop check is structural (the story
+            // renamed the room in the same breath — proof on its own, no probe needed), so it is
+            // read here FIRST and, when it fires, this contradiction check is skipped entirely —
+            // the rename already decides the move.
+            let origin = mapper.graph.current();
+            let dir = parse_direction(command);
+            let renamed = origin
+                .and_then(|o| mapper.graph.room(o))
+                .is_some_and(|r| r.label() != snap.name);
+            let conflicting_edge: Option<mapper::graph::RoomId> = if renamed {
+                None
+            } else {
+                origin.zip(dir).and_then(|(o, d)| {
+                    mapper
+                        .graph
+                        .connections()
+                        .iter()
+                        .find(|c| c.origin == o && c.dir == d && c.dest != o)
+                        .map(|c| c.dest)
+                })
+            };
+            if let (Some(o), Some(d), Some(old)) = (origin, dir, conflicting_edge) {
+                mapper.note_random_exit_suspicion(o, d, Some(old), o);
+                mapper.observe_relocation(snap.number, &snap.name);
+            } else {
+                mapper.observe_moved(snap.number, &snap.name, dir);
+            }
             // A heading reprinted in the room the player is already standing in — a `look`, a
             // maze self-loop, a move the game refused with a re-description — is ordinary play
             // resuming, so whatever death was outstanding has been settled without a

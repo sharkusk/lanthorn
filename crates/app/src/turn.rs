@@ -252,11 +252,38 @@ pub(crate) fn finish_command_turn(
             if let Some((saved_room, save)) = &state.random_exit_pre_move_save {
                 if *saved_room == origin {
                     let save = std::sync::Arc::clone(save);
+                    let kind = if already_random {
+                        app::random_exit_probe::SearchKind::Upgrade
+                    } else {
+                        app::random_exit_probe::SearchKind::FirstWalk
+                    };
                     app::random_exit_probe::arm_random_exit_search(
-                        state, &*session, origin, dir, live_dest, already_random, save,
+                        state, &*session, origin, dir, live_dest, kind, save,
                     );
                 }
             }
+        }
+    }
+
+    // SQ-1269: a suspicion `apply_turn` left pending rather than marking on the spot — a
+    // declared-exit mismatch, or a live contradiction against an edge/self-loop the map already
+    // believed. Arm a probe to decide it when one can run, exactly like the shapes above; when
+    // none can (no snapshot this turn, or the infra below refuses to arm), resolve it immediately
+    // — the same immediate marking `apply_turn` always did for this shape before SQ-1269.
+    if let Some(susp) = mapper.take_random_exit_suspicion() {
+        let mut armed = false;
+        if let Some((saved_room, save)) = &state.random_exit_pre_move_save {
+            if *saved_room == susp.origin {
+                let save = std::sync::Arc::clone(save);
+                app::random_exit_probe::arm_random_exit_search(
+                    state, &*session, susp.origin, susp.dir, susp.live_dest,
+                    app::random_exit_probe::SearchKind::Suspicion { old_dest: susp.old_dest }, save,
+                );
+                armed = state.random_exit_search.is_some();
+            }
+        }
+        if !armed {
+            mapper.resolve_suspicion_as_random(susp);
         }
     }
 

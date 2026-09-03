@@ -121,12 +121,40 @@ impl Play {
                 if let Some((saved_room, save)) = &self.state.random_exit_pre_move_save {
                     if *saved_room == origin {
                         let save = Arc::clone(save);
+                        let kind = if already_random {
+                            app::random_exit_probe::SearchKind::Upgrade
+                        } else {
+                            app::random_exit_probe::SearchKind::FirstWalk
+                        };
                         app::random_exit_probe::arm_random_exit_search(
-                            &mut self.state, &self.session, origin, d, dest, already_random, save,
+                            &mut self.state, &self.session, origin, d, dest, kind, save,
                         );
                         app::random_exit_probe::settle_random_exit_search(&mut self.state, &mut self.mapper);
                     }
                 }
+            }
+        }
+
+        // SQ-1269: a suspicion `apply_turn` left pending rather than marking on the spot — arm a
+        // probe to decide it, mirroring `turn::finish_command_turn`, resolving immediately when
+        // none can run.
+        if let Some(susp) = self.mapper.take_random_exit_suspicion() {
+            let mut armed = false;
+            if let Some((saved_room, save)) = &self.state.random_exit_pre_move_save {
+                if *saved_room == susp.origin {
+                    let save = Arc::clone(save);
+                    app::random_exit_probe::arm_random_exit_search(
+                        &mut self.state, &self.session, susp.origin, susp.dir, susp.live_dest,
+                        app::random_exit_probe::SearchKind::Suspicion { old_dest: susp.old_dest }, save,
+                    );
+                    if self.state.random_exit_search.is_some() {
+                        app::random_exit_probe::settle_random_exit_search(&mut self.state, &mut self.mapper);
+                        armed = true;
+                    }
+                }
+            }
+            if !armed {
+                self.mapper.resolve_suspicion_as_random(susp);
             }
         }
 

@@ -118,6 +118,19 @@ impl MatrixCell {
 /// commits to a destination" is the stronger of the two things to say about it. `↩` therefore
 /// means "the only thing this direction ever did was bring me back, under the same name every
 /// time".
+///
+/// SQ-1269 widens what can produce a mark on this key without changing this precedence at all:
+/// a rename-loop stays the one IMMEDIATE mark (structural — the story renamed the room in the
+/// same breath, which is proof on its own); an existing self-loop or edge that a NEW landing
+/// contradicts is no longer marked on the spot — it is left a suspicion for a probe to judge
+/// (`app::random_exit_probe`'s `Suspicion` shape), and only a DISAGREEING probe answer removes
+/// the old self-loop/edge and marks the direction (via `Mapper::resolve_suspicion_as_random`),
+/// pooling the room itself as a destination when a self-loop was the thing contradicted — the
+/// room card's "back here". An AGREEING probe answer instead concludes the passage merely
+/// CHANGED and mints straight over the old self-loop/edge with no mark at all
+/// (`Mapper::resolve_suspicion_as_changed`). Either way the self-loop and the mark still never
+/// coexist going forward; this cell's precedence is what protects an older save that predates
+/// the rule from showing both at once.
 pub fn classify(graph: &MapGraph, room: RoomId, dir: Direction) -> MatrixCell {
     classify_with(graph, &ConnIndex::new(graph), room, dir)
 }

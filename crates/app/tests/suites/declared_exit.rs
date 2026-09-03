@@ -157,6 +157,13 @@ fn falsify_without_declared_exit_a_random_move_mints_a_normal_edge() {
 /// mismatching `Room(_)`, the same shape of move records NO edge and instead
 /// marks the origin's direction as a random exit — [`mapper::matrix::classify`]
 /// then reads `?`, not `⇢`.
+///
+/// SQ-1269: `apply_turn` no longer marks this on the spot — it leaves a
+/// [`mapper::mapper::RandomExitSuspicion`] pending instead (proven directly here) and the mark
+/// only lands once that is resolved. This bare call has no probe apparatus at all, so it stands
+/// for the "no probe can run" case — `resolve_suspicion_as_random` is exactly the immediate
+/// fallback `turn::finish_command_turn` reaches for then, and produces the same end state the old
+/// immediate marking always did.
 #[test]
 fn synthetic_random_exit_records_no_edge_and_marks_the_cell_random() {
     let mut mapper = Mapper::default();
@@ -166,6 +173,10 @@ fn synthetic_random_exit_records_no_edge_and_marks_the_cell_random() {
     let mut r = TurnResult::observation(snap(2, "Other Tunnel"));
     r.declared_exit = Some(DeclaredExit::Room(3)); // declared a THIRD room, not 2
     apply_turn(&mut mapper, "north", &r, &mut death);
+    assert!(!mapper.graph.is_random_exit(1, Direction::N), "not marked yet — this is a suspicion, not proof");
+    let susp = mapper.take_random_exit_suspicion().expect("the declared mismatch left a suspicion pending");
+    assert_eq!((susp.origin, susp.dir, susp.old_dest, susp.live_dest), (1, Direction::N, None, 2));
+    mapper.resolve_suspicion_as_random(susp); // no probe available — resolve immediately
 
     assert!(
         !mapper.graph.connections().iter().any(|c| c.origin == 1 && c.dir == Direction::N),
@@ -220,9 +231,13 @@ fn snap(number: u16, name: &str) -> zvm::ObjectSnapshot {
 // leaves it `None`), so the rule is proven here on evidence alone: the graph's
 // own edges contradicting each other.
 
-/// E→A, then E→B: the second walk contradicts the edge the first one minted, so
-/// the rule removes it, marks the direction random, and records BOTH
-/// destinations — with no `declared_exit` involved at any point.
+/// E→A, then E→B: the second walk contradicts the edge the first one minted. SQ-1269: this is no
+/// longer settled on the spot — `apply_turn` leaves the edge standing and a
+/// [`mapper::mapper::RandomExitSuspicion`] pending (proven directly here); this bare call has no
+/// probe apparatus, so it stands for the "no probe can run" case, and `resolve_suspicion_as_random`
+/// (the same immediate fallback `turn::finish_command_turn` reaches for then) is what actually
+/// removes the stale edge, marks the direction random, and records BOTH destinations — the same
+/// end state SQ-1264's old immediate rule produced, with no `declared_exit` involved at any point.
 #[test]
 fn a_contradicting_live_walk_marks_the_exit_random_with_no_declared_exit_seam() {
     let mut mapper = Mapper::default();
@@ -241,6 +256,14 @@ fn a_contradicting_live_walk_marks_the_exit_random_with_no_declared_exit_seam() 
     // Back to room 1, then E → B: a DIFFERENT destination for the same (origin, direction).
     mapper.graph.set_current(1);
     apply_turn(&mut mapper, "east", &TurnResult::observation(snap(3, "Room B")), &mut death);
+    assert_eq!(
+        mapper.graph.connections().iter().find(|c| c.origin == 1 && c.dir == Direction::E).map(|c| c.dest),
+        Some(2),
+        "the edge stands — nothing decided yet, this is a suspicion, not proof"
+    );
+    let susp = mapper.take_random_exit_suspicion().expect("the contradiction left a suspicion pending");
+    assert_eq!((susp.origin, susp.dir, susp.old_dest, susp.live_dest), (1, Direction::E, Some(2), 3));
+    mapper.resolve_suspicion_as_random(susp); // no probe available — resolve immediately
 
     assert!(
         !mapper.graph.connections().iter().any(|c| c.origin == 1 && c.dir == Direction::E),
@@ -466,14 +489,43 @@ impl Play {
                 if let Some((saved_room, save)) = &self.state.random_exit_pre_move_save {
                     if *saved_room == origin {
                         let save = Arc::clone(save);
+                        let kind = if already_random {
+                            app::random_exit_probe::SearchKind::Upgrade
+                        } else {
+                            app::random_exit_probe::SearchKind::FirstWalk
+                        };
                         app::random_exit_probe::arm_random_exit_search(
-                            &mut self.state, &self.session, origin, d, dest, already_random, save,
+                            &mut self.state, &self.session, origin, d, dest, kind, save,
                         );
                         app::random_exit_probe::settle_random_exit_search(
                             &mut self.state, &mut self.mapper,
                         );
                     }
                 }
+            }
+        }
+
+        // SQ-1269: a suspicion `apply_turn` left pending (a declared-exit mismatch, or a live
+        // contradiction against something the map already believed) rather than marking on the
+        // spot — arm a probe to decide it, mirroring `turn::finish_command_turn`, and resolve it
+        // immediately when no probe can run.
+        if let Some(susp) = self.mapper.take_random_exit_suspicion() {
+            let mut armed = false;
+            if let Some((saved_room, save)) = &self.state.random_exit_pre_move_save {
+                if *saved_room == susp.origin {
+                    let save = Arc::clone(save);
+                    app::random_exit_probe::arm_random_exit_search(
+                        &mut self.state, &self.session, susp.origin, susp.dir, susp.live_dest,
+                        app::random_exit_probe::SearchKind::Suspicion { old_dest: susp.old_dest }, save,
+                    );
+                    if self.state.random_exit_search.is_some() {
+                        app::random_exit_probe::settle_random_exit_search(&mut self.state, &mut self.mapper);
+                        armed = true;
+                    }
+                }
+            }
+            if !armed {
+                self.mapper.resolve_suspicion_as_random(susp);
             }
         }
 

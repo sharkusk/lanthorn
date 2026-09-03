@@ -25,6 +25,32 @@ pub struct Mapper {
     /// about the crossing that produced it and a stale one describes a step the player has already
     /// walked away from. What DOES persist is the answer (`MapGraph::seam_decision`).
     pub(crate) pending_suggestion: Option<LayerSuggestion>,
+    /// A move `apply_turn` could not settle on its own — a declared-exit mismatch or a live
+    /// contradiction against something the map already believed — waiting for a caller with a
+    /// probe to judge it (SQ-1269). See [`RandomExitSuspicion`].
+    ///
+    /// Transient like `pending_suggestion`: set at most once per move, and taken (never merely
+    /// read) by whoever resolves it, so a suspicion nobody looked at cannot leak into the next
+    /// move's decision.
+    pub(crate) pending_random_exit_suspicion: Option<RandomExitSuspicion>,
+}
+
+/// A move that CONTRADICTS what the map already believed about `(origin, dir)`, left for a caller
+/// with a probe to decide (SQ-1269) — see the module's "suspicion, not proof" design at
+/// [`Mapper::note_random_exit_suspicion`].
+///
+/// `old_dest` is whatever the map already claimed for `(origin, dir)` before this move: `Some(x)`
+/// for an existing edge OR self-loop (a self-loop's "destination" is the room itself — `x ==
+/// origin` — which is itself a real pooled destination once the direction is marked, the room
+/// card's "back here"), `None` when nothing existed yet (a Phase-1 declared-exit mismatch with no
+/// prior edge to contradict). `live_dest` is where the player actually landed this move — `==
+/// origin` for a same-room arrival that contradicts an edge elsewhere.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct RandomExitSuspicion {
+    pub origin: RoomId,
+    pub dir: Direction,
+    pub old_dest: Option<RoomId>,
+    pub live_dest: RoomId,
 }
 
 /// One passage a return probe walked: out of `from`, heading `dir`, arriving in `to` (SQ-0785).
@@ -59,7 +85,7 @@ impl Mapper {
     /// CURRENT session — the passage just walked, and what the map made of it — and a restore has
     /// walked nothing yet, so both start empty.
     pub fn restored(graph: MapGraph) -> Self {
-        Mapper { graph, arrived_via: None, pending_suggestion: None }
+        Mapper { graph, arrived_via: None, pending_suggestion: None, pending_random_exit_suspicion: None }
     }
 
     /// Observe the player's location after a turn. The conservative form: when the location has
@@ -103,6 +129,55 @@ impl Mapper {
         }
         self.graph.mark_random_exit(origin, dir);
         true
+    }
+
+    /// Leave a move `apply_turn` could not settle on its own for a caller with a probe to decide
+    /// (SQ-1269): a Phase-1 declared-exit mismatch or a live contradiction against something the
+    /// map already believed. Mints nothing and marks nothing — the caller's own move already
+    /// relocated the player (via [`Mapper::observe_relocation`]) — this only stashes the fact so
+    /// [`Mapper::take_random_exit_suspicion`] can hand it to a probe, or, when no probe can run,
+    /// straight to [`Mapper::resolve_suspicion_as_random`] (today's old immediate-marking
+    /// behaviour, unchanged in effect).
+    pub fn note_random_exit_suspicion(&mut self, origin: RoomId, dir: Direction, old_dest: Option<RoomId>, live_dest: RoomId) {
+        self.pending_random_exit_suspicion = Some(RandomExitSuspicion { origin, dir, old_dest, live_dest });
+    }
+
+    /// Take the suspicion the last move left, if it left one (SQ-1269). Taking it is how a caller
+    /// claims responsibility for resolving it — arming a probe, or resolving it immediately when
+    /// none can run — so it is asked at most once.
+    pub fn take_random_exit_suspicion(&mut self) -> Option<RandomExitSuspicion> {
+        self.pending_random_exit_suspicion.take()
+    }
+
+    /// Resolve a [`RandomExitSuspicion`] as PROVEN random (SQ-1269): remove whatever old edge or
+    /// self-loop stood on `(origin, dir)`, mark the direction `?`, and pool both the old
+    /// destination (if any) and the live landing. Used both when no probe can run at all — the
+    /// same immediate marking `apply_turn` always did for this shape before SQ-1269 — and by
+    /// `app::random_exit_probe::deliver` when a Phase-2 probe disagrees.
+    pub fn resolve_suspicion_as_random(&mut self, s: RandomExitSuspicion) {
+        if let Some(old) = s.old_dest {
+            self.graph.remove_connection(s.origin, s.dir);
+            self.graph.note_random_destination(s.origin, s.dir, old);
+        }
+        self.record_random_exit(s.origin, s.dir);
+        if s.live_dest != s.origin {
+            self.graph.note_random_destination(s.origin, s.dir, s.live_dest);
+        }
+    }
+
+    /// Resolve a [`RandomExitSuspicion`] as PROVEN deterministic but CHANGED (SQ-1269): the
+    /// passage used to lead to `old_dest` (or nowhere recorded at all) and a probe confirms it now
+    /// reliably leads to `live_dest` instead — remove the stale edge/self-loop and mint the new
+    /// one. No mark, no pool: the direction never was, and still is not, random.
+    pub fn resolve_suspicion_as_changed(&mut self, s: RandomExitSuspicion) {
+        if s.old_dest.is_some() {
+            self.graph.remove_connection(s.origin, s.dir);
+        }
+        if s.live_dest != s.origin {
+            self.mint_passage(s.origin, s.dir, s.live_dest);
+        } else {
+            self.graph.add_self_loop(s.origin, s.dir);
+        }
     }
 
     fn observe_inner(&mut self, location: RoomId, name: &str, via: Option<Direction>, moved: bool) {

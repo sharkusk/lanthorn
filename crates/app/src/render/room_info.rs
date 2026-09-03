@@ -80,7 +80,15 @@ fn card_detail(
             if dests.is_empty() {
                 ("?", "destination varies".to_string())
             } else {
-                let names: Vec<String> = dests.iter().map(|&id| name(id)).collect();
+                // SQ-1269: a direction whose destinations include the room itself — a self-loop
+                // that a live landing elsewhere contradicted — pools the room ITSELF, since "back
+                // here" is a real destination this direction sometimes leads to. Naming it via
+                // `name(room_id)` would print the room's own label recursively; say what it means
+                // instead, the same words `MatrixCell::SelfLoop` uses.
+                let names: Vec<String> = dests
+                    .iter()
+                    .map(|&id| if id == room_id { "back here".to_string() } else { name(id) })
+                    .collect();
                 ("?", format!("destination varies: {}", names.join(", ")))
             }
         }

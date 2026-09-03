@@ -141,12 +141,40 @@ impl ZPlay {
                 if let Some((saved_room, save)) = &self.state.random_exit_pre_move_save {
                     if *saved_room == origin {
                         let save = Arc::clone(save);
+                        let kind = if already_random {
+                            app::random_exit_probe::SearchKind::Upgrade
+                        } else {
+                            app::random_exit_probe::SearchKind::FirstWalk
+                        };
                         app::random_exit_probe::arm_random_exit_search(
-                            &mut self.state, &self.session, origin, d, dest, already_random, save,
+                            &mut self.state, &self.session, origin, d, dest, kind, save,
                         );
                         app::random_exit_probe::settle_random_exit_search(&mut self.state, &mut self.mapper);
                     }
                 }
+            }
+        }
+
+        // SQ-1269: a suspicion `apply_turn` left pending rather than marking on the spot — arm a
+        // probe to decide it, mirroring `turn::finish_command_turn`, resolving immediately when
+        // none can run.
+        if let Some(susp) = self.mapper.take_random_exit_suspicion() {
+            let mut armed = false;
+            if let Some((saved_room, save)) = &self.state.random_exit_pre_move_save {
+                if *saved_room == susp.origin {
+                    let save = Arc::clone(save);
+                    app::random_exit_probe::arm_random_exit_search(
+                        &mut self.state, &self.session, susp.origin, susp.dir, susp.live_dest,
+                        app::random_exit_probe::SearchKind::Suspicion { old_dest: susp.old_dest }, save,
+                    );
+                    if self.state.random_exit_search.is_some() {
+                        app::random_exit_probe::settle_random_exit_search(&mut self.state, &mut self.mapper);
+                        armed = true;
+                    }
+                }
+            }
+            if !armed {
+                self.mapper.resolve_suspicion_as_random(susp);
             }
         }
 
@@ -400,12 +428,40 @@ impl GPlay {
                 if let Some((saved_room, save)) = &self.state.random_exit_pre_move_save {
                     if *saved_room == origin {
                         let save = Arc::clone(save);
+                        let kind = if already_random {
+                            app::random_exit_probe::SearchKind::Upgrade
+                        } else {
+                            app::random_exit_probe::SearchKind::FirstWalk
+                        };
                         app::random_exit_probe::arm_random_exit_search(
-                            &mut self.state, &self.session, origin, d, dest, already_random, save,
+                            &mut self.state, &self.session, origin, d, dest, kind, save,
                         );
                         app::random_exit_probe::settle_random_exit_search(&mut self.state, &mut self.mapper);
                     }
                 }
+            }
+        }
+
+        // SQ-1269: a suspicion `apply_turn` left pending rather than marking on the spot — arm a
+        // probe to decide it, mirroring `turn::finish_command_turn`, resolving immediately when
+        // none can run.
+        if let Some(susp) = self.mapper.take_random_exit_suspicion() {
+            let mut armed = false;
+            if let Some((saved_room, save)) = &self.state.random_exit_pre_move_save {
+                if *saved_room == susp.origin {
+                    let save = Arc::clone(save);
+                    app::random_exit_probe::arm_random_exit_search(
+                        &mut self.state, &self.session, susp.origin, susp.dir, susp.live_dest,
+                        app::random_exit_probe::SearchKind::Suspicion { old_dest: susp.old_dest }, save,
+                    );
+                    if self.state.random_exit_search.is_some() {
+                        app::random_exit_probe::settle_random_exit_search(&mut self.state, &mut self.mapper);
+                        armed = true;
+                    }
+                }
+            }
+            if !armed {
+                self.mapper.resolve_suspicion_as_random(susp);
             }
         }
 
@@ -500,8 +556,19 @@ fn blb_declared_exits_toward_the_forest_are_plain_room_not_code() {
 /// [`z6_forest_random_walk_agrees_then_reverts_with_both_forests_pooled`], at Glulx's own trial
 /// seeds ([`G_LUCKY_SEED`]/[`G_DISAGREEING_SEED`] — `zvm` and `gvm` do not consume `random()`
 /// draws identically for the same command sequence, so these are not the Z-machine's seeds).
+///
+/// SQ-1269 real-game specimen of the flicker fix: unlike `advent.z6` (whose shadow can never even
+/// restore — see `ZPlay`'s own doc comment), Glulx's shadow completes real Phase-2/Suspicion
+/// probes here, and on this fixture the VERY FIRST mismatch's own shadow attempts already see
+/// BOTH forests — the pool is `[a, b]`, size 2, the moment it is first marked. That is exactly the
+/// shape SQ-1269's flicker fix (`deliver_upgrade`'s pool≥2 check) exists for: a later re-walk that
+/// happens to AGREE with the live landing on both reseeded attempts must not flip the mark back to
+/// a confident edge, because the pool alone already proves the direction varies. Before SQ-1269
+/// this test pinned the OPPOSITE — a `G_LUCKY_SEED` walk clearing the mark — which was the
+/// statistical hole itself, caught here on a real story rather than only the synthetic
+/// `random_exit_probe` unit tests.
 #[test]
-fn blb_forest_random_walk_upgrades_then_reverts_with_both_forests_pooled() {
+fn blb_forest_random_walk_stays_marked_once_the_pool_holds_both_forests() {
     let Some(mut p) = GPlay::advent() else { return };
     let hill = g_reach_hill(&mut p);
     let DeclaredExit::Room(forest1) = p.session.declared_exit(hill, Direction::S) else {
@@ -538,12 +605,27 @@ fn blb_forest_random_walk_upgrades_then_reverts_with_both_forests_pooled() {
     p.turn("west"); // -> hill
     assert_eq!(p.mapper.graph.current(), Some(hill), "back at the hill");
 
-    // ── 2: the LUCKY seed upgrades the mark to a confident edge. ──
+    // Measured on this exact fixture/seed pair (both fixed, so this is deterministic, not
+    // flaky): the very first mismatch's own shadow attempts already see BOTH forests, so the
+    // pool is size 2 before step 2 even runs.
+    assert_eq!(
+        p.mapper.graph.random_destinations(hill, Direction::S).len(),
+        2,
+        "non-vacuity guard: this test is specifically about the pool≥2 shape"
+    );
+
+    // ── 2: the LUCKY seed lands at the DECLARED room and, pre-SQ-1269, upgraded the mark to a
+    // confident edge — the statistical hole this quest closes. SQ-1269's flicker fix keeps it
+    // marked instead: the pool already proves the direction varies, so one agreeing pair must
+    // not undo that. ──
     p.session.reseed_random(G_LUCKY_SEED);
     p.turn("south");
     assert_eq!(p.mapper.graph.current(), Some(forest1), "the lucky seed lands in forest 1");
-    assert!(!p.mapper.graph.is_random_exit(hill, Direction::S), "Phase 2 upgraded — the mark is cleared");
-    assert_eq!(p.edge(hill, Direction::S), Some(forest1), "and a confident edge now exists");
+    assert!(
+        p.mapper.graph.is_random_exit(hill, Direction::S),
+        "SQ-1269: the pool already held both forests, so a single agreeing pair must not upgrade it"
+    );
+    assert_eq!(p.edge(hill, Direction::S), None, "SQ-1269: still no edge — the mark stands");
 
     // Back to the hill (forest 1 this time).
     p.turn("east"); // -> valley
@@ -551,12 +633,14 @@ fn blb_forest_random_walk_upgrades_then_reverts_with_both_forests_pooled() {
     p.turn("west"); // -> hill
     assert_eq!(p.mapper.graph.current(), Some(hill));
 
-    // ── 3: the DISAGREEING seed contradicts the minted edge — SQ-1264's rule fires. ──
+    // ── 3: the DISAGREEING seed again — still no edge to contradict (the mark never lifted), so
+    // this is simply another already-marked re-walk, landing in forest 2 again and adding nothing
+    // new to a pool that already names both. ──
     p.session.reseed_random(G_DISAGREEING_SEED);
     p.turn("south");
     assert_eq!(p.mapper.graph.current(), Some(forest2), "the disagreeing seed lands in forest 2 again");
-    assert!(p.mapper.graph.is_random_exit(hill, Direction::S), "SQ-1264: marked random again");
-    assert_eq!(p.edge(hill, Direction::S), None, "SQ-1264: the contradicting edge is gone");
+    assert!(p.mapper.graph.is_random_exit(hill, Direction::S), "still marked random");
+    assert_eq!(p.edge(hill, Direction::S), None, "still no edge");
     let pool = p.mapper.graph.random_destinations(hill, Direction::S);
     assert!(pool.contains(&forest1) && pool.contains(&forest2), "both forests are in the pool: {pool:?}");
 }

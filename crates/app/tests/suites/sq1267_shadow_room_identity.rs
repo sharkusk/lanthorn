@@ -170,8 +170,13 @@ impl GPlay {
                 if let Some((saved_room, save)) = &self.state.random_exit_pre_move_save {
                     if *saved_room == origin {
                         let save = Arc::clone(save);
+                        let kind = if already_random {
+                            app::random_exit_probe::SearchKind::Upgrade
+                        } else {
+                            app::random_exit_probe::SearchKind::FirstWalk
+                        };
                         arm_random_exit_search(
-                            &mut self.state, &self.session, origin, d, dest, already_random, save,
+                            &mut self.state, &self.session, origin, d, dest, kind, save,
                         );
                         // Inlined `random_exit_probe::settle_random_exit_search`, so the RAW
                         // answer (every step the shadow reported, before `deliver`'s own
@@ -184,6 +189,35 @@ impl GPlay {
                         }
                     }
                 }
+            }
+        }
+
+        // SQ-1269: a suspicion `apply_turn` left pending (a declared-exit mismatch is exactly
+        // this suite's own trigger, once the origin already carries no edge) — arm a probe to
+        // decide it, capturing the RAW answer the same way the shape above does, and resolve
+        // immediately when no probe can run.
+        if let Some(susp) = self.mapper.take_random_exit_suspicion() {
+            let mut armed = false;
+            if let Some((saved_room, save)) = &self.state.random_exit_pre_move_save {
+                if *saved_room == susp.origin {
+                    let save = Arc::clone(save);
+                    arm_random_exit_search(
+                        &mut self.state, &self.session, susp.origin, susp.dir, susp.live_dest,
+                        app::random_exit_probe::SearchKind::Suspicion { old_dest: susp.old_dest }, save,
+                    );
+                    if self.state.random_exit_search.is_some() {
+                        armed = true;
+                        if let Some(answer) = self.state.probe.settle() {
+                            app::random_exit_probe::deliver(&mut self.state, &mut self.mapper, &answer);
+                            self.last_answer = Some(answer);
+                        } else {
+                            self.state.random_exit_search = None;
+                        }
+                    }
+                }
+            }
+            if !armed {
+                self.mapper.resolve_suspicion_as_random(susp);
             }
         }
 

@@ -466,16 +466,13 @@ Scott answer `Unknown` — for the room being LEFT and the direction just typed,
 before `apply_turn` decides what the move means, and stores it on that turn's
 `TurnResult`. `apply_turn` then compares: a `Room(x)` that matches where the
 player actually landed is an ordinary passage, recorded exactly as before; a
-`Room(x)` that does NOT match is the story overriding its own declared exit,
-and mints no edge — instead `Mapper::record_random_exit` marks the direction a
-fact of its own (`MatrixCell::Random`, drawn `?`), so the map can say
-"explored, but the destination varies" instead of drawing a confident arrow
-for a passage the story never committed to. `Code`, `Message`, `Absent` and
-`Unknown` all leave THIS PART of the turn exactly as it read before this seam
-existed — a routine-computed exit, a printed refusal, or no data at all are
-none of them, on their own, proof the destination varies; most `Code` exits
-are perfectly deterministic doors whose destination just happens to be
-computed instead of stored.
+`Room(x)` that does NOT match is the story overriding its own declared exit —
+but, since SQ-1269 (see below), that mismatch is no longer treated as proof on
+its own. `Code`, `Message`, `Absent` and `Unknown` all leave THIS PART of the
+turn exactly as it read before this seam existed — a routine-computed exit, a
+printed refusal, or no data at all are none of them, on their own, proof the
+destination varies; most `Code` exits are perfectly deterministic doors whose
+destination just happens to be computed instead of stored.
 
 ### Declared exits: the ZIL convention (SQ-1260)
 
@@ -904,17 +901,13 @@ direction that is still random underneath. The rule needs no shadow and no
 lands in `dest != origin` and the graph ALREADY holds an edge
 `origin --dir--> other` with `other != dest`, that contradiction is itself
 proof the exit is random — a fixed passage cannot lead to two different
-rooms. `apply_turn` removes the stale edge (the same `MapGraph::
-remove_connection` call `random_exit_probe::deliver_first_walk` uses),
-marks the direction random (`Mapper::record_random_exit`), and records BOTH
-rooms as evidence (`MapGraph::note_random_destination` for `other`, then for
-the new `dest`) — the contradiction proves both are real destinations the
-story has sent the player to, not just the latest one. It is folded into the
-same `random_exit` boolean the declared-exit mismatch already sets, so an
-engine with a working `declared_exit` seam gets it as a second, independent
-line of evidence, and an engine with NONE at all (or one whose derivation
-fails to find the convention) is still protected — the rule reads only the
-graph the mapper already keeps.
+rooms. It is folded into the same suspicion the declared-exit mismatch
+already raises (SQ-1269, below), so an engine with a working `declared_exit`
+seam gets it as a second, independent trigger, and an engine with NONE at all
+(or one whose derivation fails to find the convention) is still protected —
+the rule reads only the graph the mapper already keeps. What it used to do —
+mark the direction on the spot, unconditionally — is exactly what SQ-1269
+replaced: read on.
 
 **Proof, on both engines, needed two real fixture quirks worked around, not
 fixed** — both are properties of the `.z6`/`.blb` files themselves, not of
@@ -978,7 +971,138 @@ new room a disagreeing attempt is the only thing to have found (the reason
 it does not simply require "already on the map" — SQ-1261 depends on that
 staying possible).
 
-**A self-loop is drawn only as a badge, never a line.** Before this quest, a
+### SQ-1269: suspicion, not proof — the probe decides
+
+Three holes SQ-1257/SQ-1261/SQ-1264 left, all in the DECISION layer rather
+than the detection layer above: the mechanisms that spot a mismatch were
+sound, but what `apply_turn` and `random_exit_probe` did with a mismatch
+was not.
+
+**(1) Flicker.** Phase 2's UPGRADE path (`deliver_upgrade`) cleared a `?` mark
+back to a confident edge on a single agreement between two reseeded shadow
+attempts and the live landing — but with two possible destinations, that is a
+25% chance of pure luck. `deliver_upgrade` now refuses to upgrade at all once
+`MapGraph::random_destinations(origin, dir)` already holds **two or more**
+distinct rooms: the pool itself is already proof the direction varies, and a
+single agreeing pair cannot outweigh it. Upgrade stays possible only while
+the pool holds fewer than two rooms — the mark came from a single mismatch,
+or a disagreement that pooled exactly one room besides the live landing.
+Measured on a REAL fixture, not just the synthetic unit tests: Adventure's
+Glulx build (`advent.blb`) pools BOTH forests from the very first mismatch's
+own shadow attempts, so `blb_forest_random_walk_stays_marked_once_the_pool_
+holds_both_forests` (`sq1264_forest_randomization.rs`) is a walk that, before
+SQ-1269, cleared the mark on its "lucky" reseed and now correctly stays
+marked.
+
+**(2) Suspicion is not proof; the probe decides.** Both the declared-exit
+mismatch (Phase 1, above) and the live-walk contradiction rule (SQ-1264,
+above) used to mark `?` on the spot, unconditionally. Both misfire on
+DETERMINISTIC behaviour: Inform 7's `instead of going north, move the player
+to X` contradicts the room's own exit table on every single walk, and a game
+that changes a passage permanently (a door now leads somewhere new) looks
+identical to one that rolls dice for it. Neither guess is proof.
+
+`session::apply_turn` now computes `existing_conflict` (an edge OR a
+self-loop already on `(origin, dir)` that the live landing contradicts — see
+(3)) and `declared_mismatch` (the Phase-1 shape) as before, but where either
+fires and `already_random` does not (a re-walk of an ALREADY-marked
+direction stays Phase 2's own immediate territory, untouched), it does not
+mark anything: it mints nothing, marks nothing, leaves whatever the graph
+already believed (an edge, a self-loop, or nothing) standing exactly as it
+was, and instead calls `Mapper::note_random_exit_suspicion(origin, dir,
+old_dest, live_dest)` — a new transient field on `Mapper`
+(`pending_random_exit_suspicion: Option<RandomExitSuspicion>`, the same
+one-shot shape `pending_suggestion` already uses), where `old_dest` is
+whatever the graph claimed before (`None` for a bare declared mismatch with
+no prior edge, `Some(x)` for a contradicted edge, `Some(origin)` — the room
+ITSELF — for a contradicted self-loop, see (3)).
+
+`turn::finish_command_turn` drains it with `Mapper::take_random_exit_suspicion`
+after the ordinary Phase-1/Phase-2 arming block (this is the "snapshot
+condition" extension: the pre-move engine snapshot `random_exit_pre_move_save`
+was already captured unconditionally every turn a `rng_seed`-supporting
+engine reports one — see Phase 2 above — so the change here is entirely in
+what gets ARMED from it, widened from `Absent`/`Code` alone to a declared
+`Room(_)` mismatch or an existing-edge/self-loop contradiction too) and,
+when a pre-move snapshot exists for the right origin, arms a THIRD search
+shape, `random_exit_probe::SearchKind::Suspicion { old_dest }`, reusing the
+exact same infra (`arm_random_exit_search`, two reseeded attempts) the other
+two shapes do. `random_exit_probe::deliver`'s `Suspicion` arm
+(`deliver_suspicion`) is where the question actually gets answered: full
+agreement on both attempts means the passage is DETERMINISTIC and has
+CHANGED — `Mapper::resolve_suspicion_as_changed` removes the old edge/
+self-loop (if any) and mints the new one straight to `live_dest`, no mark at
+all; any disagreement means it is genuinely random —
+`Mapper::resolve_suspicion_as_random` removes the old edge/self-loop, marks
+the direction, and pools `old_dest` (when it names one) alongside
+`live_dest` and everything the shadow itself saw
+(`note_disagreeing_destinations`, SQ-1261/SQ-1267's existing pool hygiene,
+unchanged). A STALE answer — the state the search was about has already
+changed by the time it arrives, exactly the same discipline `deliver_
+first_walk`/`deliver_upgrade` already apply — is dropped rather than acted
+on.
+
+Where NO probe can run at all — an engine with no `rng_seed`/`reseed_random`
+(Scott Adams; Glulx before its room-lock has anything to key a snapshot by),
+or simply no usable pre-move snapshot for this turn — `finish_command_turn`
+resolves the suspicion immediately via `Mapper::resolve_suspicion_as_random`:
+exactly the OLD unconditional-marking behaviour, unchanged in effect for a
+turn this module never gets a chance to look at. **A probe that DID arm but
+came back with no usable evidence at all resolves the same way.** This is
+not a corner case invented for symmetry: `advent.z6`'s own Quetzal quirk (its
+init code writes a runtime-random release number into the header, so
+`GameSession::restore_state` refuses every shadow restore — see SQ-1264
+above) means EVERY Suspicion search on that specific fixture comes back with
+`Answer::run: None`, every time — a broken shadow is, from `deliver_
+suspicion`'s point of view, structurally indistinguishable from a probe that
+never ran, and treating them differently would have meant `advent.z6`'s own
+forest never gets marked at all, silently, forever. `random_exit_probe::
+tests::a_broken_shadow_answer_resolves_a_suspicion_the_same_as_no_probe_at_
+all` pins the synthetic shape of the same fact.
+
+**(3) Self-loops are destinations.** A direction that sometimes leads back
+into the room and sometimes out used to be an ordinary self-loop badge
+(`↩`) plus, on the next contradicting walk, a plain `?` mark that named only
+the NEW landing — the fact that it ALSO, sometimes, leads back into the room
+it leaves was thrown away. The room itself is now counted as a destination:
+`existing_conflict`'s computation gains an `.or_else` that checks
+`MapGraph::self_loops(origin)` whenever no real edge already answers the
+question — a landing elsewhere contradicts a recorded self-loop exactly the
+way it contradicts a recorded edge, with `old_dest = Some(origin)` (the room
+IS the "destination" a self-loop claims). The same-room ARRIVAL side gets
+the mirror check, in `apply_turn`'s `arrived` branch, BEFORE the rename-loop
+structural check (which stays immediate — a rename is proof on its own, no
+probing needed) and before the ordinary self-loop path: an EXISTING real
+edge for `(origin, dir)` that a same-room landing now contradicts is the
+same suspicion, `old_dest = Some(that edge's destination)`, `live_dest =
+origin`. Once resolved as random, `MapGraph::remove_connection` deletes
+whichever kind of connection stood there (a self-loop is stored as an
+ordinary `Connection` with `dest == origin`, so the same removal call
+handles both), and the pool gets `origin` itself alongside whatever else —
+the room card's "destination varies: …, back here" (`render::room_info::
+card_detail`'s `Random` arm special-cases `id == room_id` to print "back
+here" rather than recursing into the room's own name). The render layer
+follows: `mapper::render::RenderRoom::self_loops` is now filtered to exclude
+any direction that ALSO carries a `?` mark (defensive — current code never
+leaves a self-loop CONNECTION coexisting with a mark on the same key, since
+marking removes it, but an older map file could) — the `?` stub supersedes
+the loop badge, never both. `crate::matrix::classify`'s existing precedence
+(a random mark already beat a self-loop on the same key, SQ-1257 Phase 3)
+needed no code change at all; only its doc comment, and this defensive
+render filter, are new.
+
+**Presentation: random Up/Down/In/Out now show on the box.** `random_stub_
+pos` has no border/corner cell for a non-planar direction (SQ-1261's own
+doc already noted this as a known gap), so a `?`-marked Up exit showed in
+the matrix and the room card but nowhere on the drawn box. `render::map::
+draw_portal_icons` — the pass that already places a real portal edge's
+glyph in one of three fixed slots (Up → top-centre, In/Out/Unknown → the
+free interior cell nearest the partner, Down → bottom-centre) — now also
+checks each room's `random_stubs` for a vertical direction whose slot no
+real edge has claimed, and draws the same `random_stub_marker` (a bare `?`,
+or the superscript destination count) at that slot's fixed anchor, styled
+through the existing `map.room_random_stub` selector — no new selector, no
+new glyph, just a place for one that already existed to land.
 self-loop connection (`origin == dest`, `MapGraph::add_self_loop`) was never
 excluded from `crates/mapper/src/route/mod.rs`'s routing passes — `origin ==
 dest` forms a degenerate "pair" whose forward and backward buckets in

@@ -2158,6 +2158,7 @@ fn draw_portal_icons(
         }
     }
 
+    let random_stub_style = state.colors.theme.get("map.room_random_stub").style;
     let icon_col = BOX_W - 2; // far-right interior column — the fallback when the interior is full
     for room in &rm.rooms {
         let Some(&rect) = placed.get(&room.id) else { continue };
@@ -2165,7 +2166,13 @@ fn draw_portal_icons(
         let slots = chosen.get(&room.id).unwrap_or(&empty);
         let layers: &[Direction] = layer_badges.get(&room.id).map_or(&[], |v| v.as_slice());
         let borders = layer_borders.get(&room.id).map_or(&[][..], |v| v.as_slice());
-        if slots.iter().all(Option::is_none) && layers.is_empty() && borders.is_empty() {
+        // SQ-1269 hole 4: a `?`-marked Up/Down/In/Out direction has no real edge to route
+        // (`RenderRoom::random_stubs` already excludes any direction that also carries one), so
+        // it never reaches `rm.edges` and never fills a slot above — without this it has nowhere
+        // on the box to show at all, unlike a compass random stub's border cell.
+        let vertical_stubs: Vec<(Direction, usize)> =
+            room.random_stubs.iter().copied().filter(|&(d, _)| portal_slot(d).is_some()).collect();
+        if slots.iter().all(Option::is_none) && layers.is_empty() && borders.is_empty() && vertical_stubs.is_empty() {
             continue;
         }
         let style = room_style(room, state);
@@ -2239,6 +2246,26 @@ fn draw_portal_icons(
                 let dest = mid_edge.get(&room.id).map(|&(_, d)| d);
                 let dir = mid_edge.get(&room.id).map_or(Direction::Unknown, |&(d, _)| d);
                 place(dir, dest, glyph_ch, buf);
+            }
+        }
+
+        // SQ-1269 hole 4: give the marker its slot's fixed border anchor whenever nothing else —
+        // a real edge in the same slot — already claimed it (an In/Out/Unknown slot is shared;
+        // Up/Down never collide with a real edge on the SAME direction, since `random_stubs`
+        // already excludes that). Same fixed positions the portal-view badges use for slots 0/1/2
+        // (top-centre / right-mid / bottom-centre) in every view: there is no real passage to
+        // aim at, so the border anchor a real edge would use is exactly what stays free.
+        for &(dir, count) in &vertical_stubs {
+            let Some(slot) = portal_slot(dir) else { continue };
+            if slots[slot].is_some() {
+                continue; // a real edge already drew this slot
+            }
+            let marker = random_stub_marker(count);
+            let marker_style = accent_on(style, random_stub_style);
+            match slot {
+                0 => put_str(buf, bx + BOX_W / 2 + off_x, by + off_y, &marker, marker_style, area),
+                2 => put_str(buf, bx + BOX_W / 2 + off_x, by + BOX_H - 1 + off_y, &marker, marker_style, area),
+                _ => put_str(buf, bx + BOX_W - 1 + off_x, by + 2 + off_y, &marker, marker_style, area),
             }
         }
     }
@@ -3769,6 +3796,38 @@ mod tests {
         assert_ne!(
             stub_selector_fg, room_selector_fg,
             "sanity: the two selectors resolve to different defaults, so this test can tell them apart"
+        );
+    }
+
+    /// SQ-1269 hole 4: `random_stub_pos` has no border/corner cell for Up/Down/In/Out — before
+    /// this, a `?`-marked vertical direction showed nowhere on the box at all, only in the matrix
+    /// and the room panel. It now claims the same fixed anchor a real portal edge in that slot
+    /// would (Up → top-centre, the row 1's slot-0 badge position), themed through the same
+    /// `map.room_random_stub` selector the compass stubs use, while the matrix cell itself is
+    /// unaffected by any of this — `classify` reads the graph, never the render layer.
+    #[test]
+    fn room_box_draws_a_marked_up_exit_beside_the_portal_badge() {
+        use mapper::graph::MapGraph;
+        let mut g = MapGraph::new();
+        g.upsert_room(1, "Windy Cave".into());
+        g.set_pos(1, (0, 0));
+        g.mark_random_exit(1, mapper::direction::Direction::Up);
+        g.note_random_destination(1, mapper::direction::Direction::Up, 2);
+        let rm = render(&g);
+        let state = AppState::default();
+        let area = Rect::new(0, 0, 60, 20);
+        let mut buf = Buffer::empty(area);
+        render_map(&rm, &state, area, &mut buf);
+
+        // Box is 11×5 at (0,0): slot 0 (Up) is the top-centre cell (5, 0) — the same anchor a
+        // real Up portal badge takes.
+        let sym = buf.cell((5u16, 0u16)).map(|c| c.symbol().to_string()).unwrap_or_default();
+        assert_eq!(sym, "¹", "one recorded destination draws its superscript count, same as a border stub");
+
+        assert_eq!(
+            mapper::matrix::classify(&g, 1, mapper::direction::Direction::Up),
+            mapper::matrix::MatrixCell::Random { destinations: 1 },
+            "the matrix cell is unaffected by where the render layer puts the marker"
         );
     }
 
