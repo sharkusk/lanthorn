@@ -315,14 +315,21 @@ fn diagonal_arrow(dir: Direction, arrows: &crate::symbols::Arrows) -> char {
 /// The box-corner cell (virtual pixels) for a diagonal direction: NE→top-right, NW→top-left,
 /// SE→bottom-right, SW→bottom-left.
 fn corner_anchor(cols: &PosTable, rows: &PosTable, cell: (i32, i32), dir: Direction) -> (i32, i32) {
-    let bx = cols.room_pixel(cell.0);
-    let by = rows.room_pixel(cell.1);
+    corner_anchor_at(cols.room_pixel(cell.0), rows.room_pixel(cell.1), BOX_W, BOX_H, dir)
+}
+
+/// [`corner_anchor`]'s geometry, taking the box's own top-left `(bx, by)` and size `(w, h)`
+/// directly instead of a `PosTable` lookup — the primitive [`random_stub_cells`] (SQ-1275)
+/// shares, since `draw_box_room` already has its box's screen position in hand and has no
+/// `PosTable` to derive it from. Kept in exact lock-step with `corner_anchor` by construction:
+/// that function is now nothing but this one fed a `PosTable`-derived `(bx, by)`.
+fn corner_anchor_at(bx: i32, by: i32, w: i32, h: i32, dir: Direction) -> (i32, i32) {
     match dir {
-        Direction::NE => (bx + BOX_W - 1, by),
+        Direction::NE => (bx + w - 1, by),
         Direction::NW => (bx, by),
-        Direction::SE => (bx + BOX_W - 1, by + BOX_H - 1),
-        Direction::SW => (bx, by + BOX_H - 1),
-        _ => (bx + BOX_W / 2, by), // unreachable when guarded by is_diagonal
+        Direction::SE => (bx + w - 1, by + h - 1),
+        Direction::SW => (bx, by + h - 1),
+        _ => (bx + w / 2, by), // unreachable when guarded by is_diagonal
     }
 }
 
@@ -1945,19 +1952,24 @@ fn slot_offset(slot: u16, max: i32) -> i32 {
 /// Slots map to distinct INTERIOR rows/cols along the side (never the corners), so two
 /// connectors sharing a side land on distinct border cells.
 fn box_edge_anchor(cols: &PosTable, rows: &PosTable, cell: (i32, i32), side: Side, slot: u16) -> (i32, i32) {
-    let bx = cols.room_pixel(cell.0);
-    let by = rows.room_pixel(cell.1);
-    let cx = bx + BOX_W / 2;
-    let cy = by + BOX_H / 2;
+    box_edge_anchor_at(cols.room_pixel(cell.0), rows.room_pixel(cell.1), BOX_W, BOX_H, side, slot)
+}
+
+/// [`box_edge_anchor`]'s geometry, taking the box's own top-left `(bx, by)` and size `(w, h)`
+/// directly instead of a `PosTable` lookup — see [`corner_anchor_at`] for why. `box_edge_anchor`
+/// is now nothing but this fed a `PosTable`-derived `(bx, by)`, so the two can never disagree.
+fn box_edge_anchor_at(bx: i32, by: i32, w: i32, h: i32, side: Side, slot: u16) -> (i32, i32) {
+    let cx = bx + w / 2;
+    let cy = by + h / 2;
     // Along a vertical side (Left/Right) the edge runs in y; offset rows, clamped so the
     // anchor stays on the box's interior rows (off the corners). Along a horizontal side
     // (Top/Bottom) offset cols likewise.
-    let v_max = BOX_H / 2 - 1; // keep off the corners
-    let h_max = BOX_W / 2 - 1;
+    let v_max = h / 2 - 1; // keep off the corners
+    let h_max = w / 2 - 1;
     match side {
-        Side::Right => (bx + BOX_W - 1, cy + slot_offset(slot, v_max)),
+        Side::Right => (bx + w - 1, cy + slot_offset(slot, v_max)),
         Side::Left => (bx, cy + slot_offset(slot, v_max)),
-        Side::Bottom => (cx + slot_offset(slot, h_max), by + BOX_H - 1),
+        Side::Bottom => (cx + slot_offset(slot, h_max), by + h - 1),
         Side::Top => (cx + slot_offset(slot, h_max), by),
     }
 }
@@ -2449,6 +2461,10 @@ fn alias_marker(count: usize) -> String {
 pub enum MarkerKind {
     Alias,
     Random(Direction),
+    /// The primary arrowhead of a stacked same-destination group (SQ-1276), carrying its own
+    /// (primary) direction — the hover tip re-derives the destination and the rest of the
+    /// group's directions from the graph at hover time (see `draw_map_hover_tip`).
+    Stacked(Direction),
 }
 
 /// The visible (area-clipped) rect a `put_str` of `w` cells starting at `(x, y)` actually
@@ -2465,6 +2481,26 @@ fn clipped_marker_rect(x: i32, y: i32, w: i32, area: Rect) -> Option<Rect> {
         return None;
     }
     Some(Rect::new(x0 as u16, y as u16, (x1 - x0) as u16, 1))
+}
+
+/// The visible (area-clipped) bounding rect spanning two adjacent single-cell points `a` and `b`
+/// (SQ-1275): generalizes [`clipped_marker_rect`] to a marker whose two cells differ in either
+/// axis — a `?` mark's arrowhead and superscript share a row for E/W and every diagonal, but a
+/// column for N/S — so hovering EITHER cell resolves the same tooltip. `None` when neither cell
+/// lands inside `area`.
+fn clipped_marker_span(a: (i32, i32), b: (i32, i32), area: Rect) -> Option<Rect> {
+    let x0 = a.0.min(b.0);
+    let x1 = a.0.max(b.0) + 1;
+    let y0 = a.1.min(b.1);
+    let y1 = a.1.max(b.1) + 1;
+    let cx0 = x0.max(area.x as i32);
+    let cx1 = x1.min(area.right() as i32);
+    let cy0 = y0.max(area.y as i32);
+    let cy1 = y1.min(area.bottom() as i32);
+    if cx1 <= cx0 || cy1 <= cy0 {
+        return None;
+    }
+    Some(Rect::new(cx0 as u16, cy0 as u16, (cx1 - cx0) as u16, (cy1 - cy0) as u16))
 }
 
 /// Draw a compact (10×4 step) room: 8×3 box with label row.
@@ -3379,6 +3415,7 @@ mod tests {
             &state.colors,
             state.symbols.diagonal_corners,
             &edge_kinds(&rm),
+            &std::collections::HashSet::new(),
         );
 
         let dep = arrowheads.iter().find(|a| a.room == 1).expect("A's departure glyph");
@@ -3842,19 +3879,21 @@ mod tests {
         let mut buf = Buffer::empty(area);
         render_map(&rm, &state, area, &mut buf);
 
-        // Box is 11×5 at (0,0): south's border-centre cell is (5, 4).
-        let sym = buf.cell((5u16, 4u16)).map(|c| c.symbol().to_string()).unwrap_or_default();
-        assert_eq!(sym, "?", "bare `?`, no destinations recorded");
-        // Nothing beyond the box — no connector, no second glyph past the border.
+        // Box is 11×5 at (0,0): south's border-centre cell is (5, 4), one cell beyond it (5, 5).
+        let arrow = buf.cell((5u16, 4u16)).map(|c| c.symbol().to_string()).unwrap_or_default();
+        assert_eq!(arrow, state.symbols.arrows.south.to_string(), "the border shows the south arrowhead");
+        let count = buf.cell((5u16, 5u16)).map(|c| c.symbol().to_string()).unwrap_or_default();
+        assert_eq!(count, "?", "bare `?`, no destinations recorded, one cell beyond the arrowhead");
+        // Nothing beyond THAT — no connector, no second glyph.
         assert!(
-            buf.cell((5u16, 5u16)).map(|c| c.symbol()).unwrap_or(" ").trim().is_empty(),
-            "no connector drawn beyond the stub"
+            buf.cell((5u16, 6u16)).map(|c| c.symbol()).unwrap_or(" ").trim().is_empty(),
+            "no connector drawn beyond the mark"
         );
     }
 
-    /// A `?` mark with recorded destinations draws the superscript count in the same slot
-    /// instead of the bare `?` — `╰───²───╯` on the south border for two recorded destinations.
-    /// Falsify by reverting `random_stub_marker` to always return `"?"` and this fails.
+    /// A `?` mark with recorded destinations draws the superscript count one cell beyond the
+    /// arrowhead instead of the bare `?`. Falsify by reverting `random_stub_marker` to always
+    /// return `"?"` and this fails.
     #[test]
     fn room_box_draws_the_superscript_destination_count_on_the_stub() {
         use mapper::graph::MapGraph;
@@ -3872,13 +3911,15 @@ mod tests {
         let mut buf = Buffer::empty(area);
         render_map(&rm, &state, area, &mut buf);
 
-        let bottom_row: String =
-            (0u16..=10).map(|x| buf.cell((x, 4)).map(|c| c.symbol().to_string()).unwrap_or_default()).collect();
-        assert_eq!(bottom_row, "╰────²────╯", "the south border carries the superscript count, no bare `?`");
+        let arrow = buf.cell((5u16, 4u16)).map(|c| c.symbol().to_string()).unwrap_or_default();
+        assert_eq!(arrow, state.symbols.arrows.south.to_string(), "the border keeps the south arrowhead");
+        let count = buf.cell((5u16, 5u16)).map(|c| c.symbol().to_string()).unwrap_or_default();
+        assert_eq!(count, "²", "the superscript count sits one cell beyond the arrowhead, no bare `?`");
     }
 
-    /// A diagonal `?` mark lands at the box CORNER — the same cell a diagonal departure's
-    /// arrowhead would take — overwriting the rounded corner glyph.
+    /// A diagonal `?` mark's arrowhead lands at the box CORNER — the same cell a diagonal
+    /// departure's arrowhead would take — and its count one cell further along the same row
+    /// (SQ-1275).
     #[test]
     fn room_box_draws_a_diagonal_random_stub_at_the_corner() {
         use mapper::graph::MapGraph;
@@ -3892,13 +3933,15 @@ mod tests {
         let mut buf = Buffer::empty(area);
         render_map(&rm, &state, area, &mut buf);
 
-        // Box is 11×5 at (0,0): the SE corner is (10, 4).
-        let sym = buf.cell((10u16, 4u16)).map(|c| c.symbol().to_string()).unwrap_or_default();
-        assert_eq!(sym, "?", "the diagonal stub overwrites the rounded corner glyph");
+        // Box is 11×5 at (0,0): the SE corner is (10, 4); the count cell is (11, 4).
+        let arrow = buf.cell((10u16, 4u16)).map(|c| c.symbol().to_string()).unwrap_or_default();
+        assert_eq!(arrow, state.symbols.arrows.se.to_string(), "the diagonal arrowhead overwrites the rounded corner glyph");
+        let count = buf.cell((11u16, 4u16)).map(|c| c.symbol().to_string()).unwrap_or_default();
+        assert_eq!(count, "?", "the bare `?` sits one cell beyond the corner, along the same row");
     }
 
-    /// The stub is its own themeable element (`map.room_random_stub`), not a reuse of the room's
-    /// base colour.
+    /// The mark is its own themeable element (`map.room_random_stub`), not a reuse of the room's
+    /// base colour — applies to both the arrowhead and the count cell.
     #[test]
     fn room_box_random_stub_uses_its_own_style_selector() {
         use mapper::graph::MapGraph;
@@ -3912,19 +3955,78 @@ mod tests {
         let mut buf = Buffer::empty(area);
         render_map(&rm, &state, area, &mut buf);
 
-        let stub_fg = buf.cell((5u16, 4u16)).and_then(|c| (c.symbol() == "?").then_some(c.fg));
-        assert!(stub_fg.is_some(), "the stub glyph must be drawn");
         let stub_selector_fg = state.colors.theme.get("map.room_random_stub").style.fg;
+        let arrow_fg = buf.cell((5u16, 4u16)).map(|c| c.fg);
+        assert_eq!(arrow_fg, stub_selector_fg, "the arrowhead's colour must come from map.room_random_stub");
+        let count_fg = buf.cell((5u16, 5u16)).and_then(|c| (c.symbol() == "?").then_some(c.fg));
+        assert!(count_fg.is_some(), "the count glyph must be drawn");
         assert_eq!(
-            stub_fg,
+            count_fg,
             stub_selector_fg,
-            "the drawn stub's colour must come from the map.room_random_stub selector"
+            "the count's colour must also come from the map.room_random_stub selector"
         );
         let room_selector_fg = state.colors.theme.get("map.room").style.fg;
         assert_ne!(
             stub_selector_fg, room_selector_fg,
             "sanity: the two selectors resolve to different defaults, so this test can tell them apart"
         );
+    }
+
+    /// `random_stub_cells` (SQ-1275) must match a REAL connector's own geometry for every
+    /// compass direction, in both `diagonal_corners` states: the arrowhead lands exactly on
+    /// `plot_connector`'s `dep_anchor`, and the count cell lands exactly on the connector's own
+    /// first step beyond it (the chain's first cell for a diagonal with the toggle on, else the
+    /// first cell of its perpendicular departure leg). Both are derived independently — the
+    /// stub's own cells via `random_stub_cells`, the real ones by routing an actual edge in the
+    /// same direction on a SIBLING room and reading `render_lane_connectors`'s own plotting
+    /// (`plot_connector`) — so this can only pass if the two genuinely agree. Falsify by
+    /// reverting `random_stub_cells` to hand-rolled positions and this fails on the very first
+    /// direction.
+    #[test]
+    fn random_stub_cells_matches_a_real_connectors_geometry_for_every_direction() {
+        use mapper::direction::Direction;
+        let all_dirs = [
+            Direction::N, Direction::S, Direction::E, Direction::W,
+            Direction::NE, Direction::NW, Direction::SE, Direction::SW,
+        ];
+        for &dir in &all_dirs {
+            for &diag_on in &[true, false] {
+                let mut g = mapper::graph::MapGraph::new();
+                g.upsert_room(1, "A".into());
+                g.upsert_room(2, "B".into());
+                g.set_pos(1, (0, 0));
+                let off = mapper::direction::grid_offset(dir).expect("compass direction");
+                g.set_pos(2, (off.0 * 3, off.1 * 3)); // enough gap for a lane/chain to draw
+                g.add_edge(1, dir, 2);
+
+                let plan = mapper::route::route_lanes(&g);
+                let bounds = ((0.min(off.0 * 3), 0.min(off.1 * 3)), (0.max(off.0 * 3), 0.max(off.1 * 3)));
+                let (cols, rows) = boxes_axes(&plan, bounds);
+                let conn = plan.connectors.iter().find(|c| c.origin == 1).expect("the edge routes");
+
+                let sym = crate::symbols::SymbolSet::default();
+                let diag = diag_on.then_some(&sym.path);
+                let plot = plot_connector(conn, &cols, &rows, diag).expect("plots");
+
+                let (bx, by) = (cols.room_pixel(0), rows.room_pixel(0));
+                let (arrow, count) = random_stub_cells(bx, by, BOX_W, BOX_H, dir).expect("planar direction");
+
+                assert_eq!(
+                    arrow, plot.dep_anchor,
+                    "{dir:?} diagonal_corners={diag_on}: arrowhead must match the real departure anchor"
+                );
+
+                let expected_count = if mapper::direction::is_diagonal(dir) && diag_on {
+                    plot.diag_cells.first().map(|(c, _)| *c).expect("a diagonal chain draws at least one cell")
+                } else {
+                    plot.cells.get(1).map(|(c, _)| *c).expect("the connector steps at least one cell beyond its anchor")
+                };
+                assert_eq!(
+                    count, expected_count,
+                    "{dir:?} diagonal_corners={diag_on}: count cell must match the connector's own first step"
+                );
+            }
+        }
     }
 
     /// SQ-1269 hole 4: `random_stub_pos` has no border/corner cell for Up/Down/In/Out — before
@@ -3991,8 +4093,8 @@ mod tests {
         );
     }
 
-    /// A compass `?` stub publishes its own hover rect at the same border-centre cell the glyph
-    /// itself lands on.
+    /// A compass `?` mark publishes ONE hover rect spanning BOTH cells it draws into — the
+    /// arrowhead and the superscript — so hovering either resolves the tooltip (SQ-1275).
     #[test]
     fn room_box_random_stub_publishes_a_hover_rect() {
         use mapper::graph::MapGraph;
@@ -4010,10 +4112,10 @@ mod tests {
         let mut buf = Buffer::empty(area);
         let markers = render_map(&rm, &state, area, &mut buf);
 
-        // East's border-centre cell on an 11×5 box at (0,0) is (10, 2) — see `random_stub_pos`.
+        // East's border-centre cell on an 11×5 box at (0,0) is (10, 2); the count cell is (11, 2).
         assert_eq!(
             markers,
-            vec![(1, MarkerKind::Random(mapper::direction::Direction::E), Rect::new(10, 2, 1, 1))],
+            vec![(1, MarkerKind::Random(mapper::direction::Direction::E), Rect::new(10, 2, 2, 1))],
             "{markers:?}"
         );
     }
@@ -5753,12 +5855,10 @@ mod tests {
         render_map(&rm, &st, area, &mut buf);
         let dotted = buf.content.iter().filter(|c| matches!(c.symbol(), "\u{250a}" | "\u{2504}")).count();
         assert_eq!(dotted, 0, "no second, dotted line for the passage that lost");
-        // SQ-0689 flips the second half of this pin: the collapsed staircase used to leave no
-        // icon either ("an icon has no line to follow"), which made a real, known Up passage
-        // invisible — Zork's Chasm. It now stamps its portal glyph beside the shared line's
-        // anchor, ON the line it follows.
+        // Up no longer stamps a badge either — SQ-1276 draws no glyph for a suppressed
+        // direction at all; "Up also leads there" now surfaces only on hover.
         let ups = buf.content.iter().filter(|c| c.symbol() == "\u{2191}").count();
-        assert_eq!(ups, 1, "the collapsed staircase stamps its ↑ beside the shared line");
+        assert_eq!(ups, 0, "the suppressed Up direction stamps no glyph");
     }
 
     /// SQ-0689, the Zork1 Chasm shape exactly: the winning connector's origin is the OTHER room,
@@ -6205,6 +6305,7 @@ mod tests {
             align_code: String::new(),
             alias_count: 0,
             random_stubs: Vec::new(),
+            stacked_exits: Vec::new(),
         };
 
         let mut state = AppState::default();
@@ -6241,6 +6342,7 @@ mod tests {
             align_code: String::new(),
             alias_count: 0,
             random_stubs: Vec::new(),
+            stacked_exits: Vec::new(),
         };
 
         let mut state = AppState::default();
@@ -6267,6 +6369,7 @@ mod tests {
             align_code: String::new(),
             alias_count: 0,
             random_stubs: Vec::new(),
+            stacked_exits: Vec::new(),
         };
 
         let mut state = AppState::default();
