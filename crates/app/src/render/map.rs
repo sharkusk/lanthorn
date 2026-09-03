@@ -8436,4 +8436,321 @@ mod sq1274_forest_valley {
             }
         }
     }
+
+    // ---------------------------------------------------------------- SQ-1274 follow-up
+    //
+    // The objection this answers: "if each connector simply took its shortest collision-free
+    // path the overlap would not exist — a short L from #42746's east border into the gutter
+    // between the two columns, down one row band, and east into the valley's west border never
+    // touches the road connector, so some router stage is discarding it."
+    //
+    // Measured: NO stage discards it. That L is exactly what #42746 draws
+    // (`sq1274_the_near_forest_already_takes_the_short_gutter_l` below pins the polyline), and it
+    // is the shortest path to the valley's West door — the BFS oracle
+    // (`sq1274_shortest_path_oracle`) finds nothing shorter. What the SQ-1274 report called
+    // "pushed into channel routing" IS this route; the direct-route rejection it describes is
+    // real, and its FALLBACK is the picture the objection asks for.
+    //
+    // The crossing that remains belongs to the OTHER forest, #55642, and it is not a lost short
+    // path either. Once #42746 owns gutter V(-2) (doubled x=-3, y 2..4), every single-bend route
+    // from #55642 to a side a one-way `E` arrival may use — `oneway_entry_side(E)` = Left, plus
+    // `entry_side_alternatives` = Top; never Bottom or Right — must cut that gutter run. A
+    // crossing-free route exists but needs TWO bends (down gutter V(-3) to the channel BELOW the
+    // valley's row, east, then up into the valley's West door from beneath), and
+    // `build_points_orient` emits only single-bend Ls. Adding that shape was prototyped and
+    // measured; see the side-quest report for the blast radius (it regressed
+    // `sq1255_no_foreign_connector_hugs_a_room_box`, and did not by itself reach cross=0 —
+    // `assign_side_slots` then handed the arrival coming from BELOW the upper slot).
+    //
+    // Routing ORDER cannot fix it either: `sq1274_every_routing_order` runs all six emission
+    // orders of the three contended blocks and gets cross=1 whenever the near forest routes
+    // first and cross=2 whenever the far one does — the road link's position never matters. The
+    // shipped order is already the best available, so "shortest-first" would change nothing here.
+
+    /// Every lattice point a doubled-coord polyline passes through.
+    fn trace(points: &[(i32, i32)]) -> Vec<(i32, i32)> {
+        let mut out = vec![points[0]];
+        for w in points.windows(2) {
+            let (dx, dy) = ((w[1].0 - w[0].0).signum(), (w[1].1 - w[0].1).signum());
+            let mut c = w[0];
+            while c != w[1] {
+                c = (c.0 + dx, c.1 + dy);
+                out.push(c);
+            }
+        }
+        out
+    }
+
+    fn manhattan(pts: &[(i32, i32)]) -> i32 {
+        pts.windows(2).map(|w| (w[0].0 - w[1].0).abs() + (w[0].1 - w[1].1).abs()).sum()
+    }
+
+    fn dump_points(graph: &MapGraph, tag: &str) {
+        println!("\n-- points {tag} --");
+        let plan = mapper::route::route_lanes(graph);
+        for c in &plan.connectors {
+            println!(
+                "   {} {:?} -> {} exit={:?} entry={:?} recip={} merge={} len={} pts={:?}",
+                c.origin,
+                c.exit_dir,
+                c.dest,
+                c.exit,
+                c.entry,
+                c.reciprocal,
+                c.merge,
+                manhattan(&c.points),
+                c.points
+            );
+        }
+    }
+
+    /// Shortest collision-free lattice path from `start` to `goal`, avoiding occupied room
+    /// centres and every lattice cell already used by an obstacle connector.
+    fn bfs_path(
+        start: (i32, i32),
+        goal: (i32, i32),
+        rooms: &std::collections::BTreeSet<(i32, i32)>,
+        blocked: &std::collections::BTreeSet<(i32, i32)>,
+        bound: i32,
+    ) -> Option<Vec<(i32, i32)>> {
+        use std::collections::{BTreeMap, VecDeque};
+        let free = |p: (i32, i32)| -> bool {
+            if p.0.abs() > bound || p.1.abs() > bound {
+                return false;
+            }
+            if p.0 % 2 == 0 && p.1 % 2 == 0 && rooms.contains(&(p.0 / 2, p.1 / 2)) {
+                return false;
+            }
+            !blocked.contains(&p)
+        };
+        let mut prev: BTreeMap<(i32, i32), (i32, i32)> = BTreeMap::new();
+        let mut q = VecDeque::new();
+        q.push_back(start);
+        prev.insert(start, start);
+        while let Some(p) = q.pop_front() {
+            if p == goal {
+                let mut path = vec![p];
+                let mut c = p;
+                while prev[&c] != c {
+                    c = prev[&c];
+                    path.push(c);
+                }
+                path.reverse();
+                return Some(path);
+            }
+            for (dx, dy) in [(1, 0), (-1, 0), (0, 1), (0, -1)] {
+                let n = (p.0 + dx, p.1 + dy);
+                if prev.contains_key(&n) {
+                    continue;
+                }
+                if n != goal && !free(n) {
+                    continue;
+                }
+                prev.insert(n, p);
+                q.push_back(n);
+            }
+        }
+        None
+    }
+
+    /// The same graph as `build(FOREST_NEAR, false)` but with the three contended blocks —
+    /// the near forest's edges, the far forest's edges, and the hub's own N/S link to the road
+    /// — emitted in an arbitrary order, so a routing ORDER other than insertion order can be
+    /// measured without touching the router (SQ-1274 follow-up, Part 1.3).
+    fn build_in_order(order: [char; 3]) -> MapGraph {
+        let mut g = MapGraph::new();
+        for &id in &[INSIDE_BUILDING, FOREST_NEAR, VALLEY, FOREST_FAR, HILL, ROAD_END] {
+            g.upsert_room(id, name(id).to_string());
+        }
+        g.set_pos(INSIDE_BUILDING, (0, 0));
+        g.set_pos(HILL, (-2, 0));
+        g.set_pos(ROAD_END, (-1, 0));
+        g.set_pos(VALLEY, (-1, 2));
+        g.set_pos(FOREST_NEAR, (-2, 1));
+        g.set_pos(FOREST_FAR, (-3, 1));
+        g.add_edge(ROAD_END, E, INSIDE_BUILDING);
+        g.add_edge(INSIDE_BUILDING, W, ROAD_END);
+        g.add_edge(ROAD_END, W, HILL);
+        g.add_edge(HILL, E, ROAD_END);
+        let mut distorted: Vec<usize> = Vec::new();
+        for tag in order {
+            match tag {
+                'n' => distorted.push(emit_near_block(&mut g)),
+                'f' => {
+                    let (e, w) = emit_far_block(&mut g);
+                    distorted.push(e);
+                    distorted.push(w);
+                }
+                _ => {
+                    g.add_edge(VALLEY, N, ROAD_END);
+                    g.add_edge(ROAD_END, S, VALLEY);
+                }
+            }
+        }
+        for idx in distorted {
+            g.set_conn_distorted(idx, true);
+        }
+        g
+    }
+
+    /// Every emission order of the three contended blocks, with the resulting arrival sides and
+    /// crossing count — the measurement behind "would routing in some other order fix this?"
+    /// **The disputed fact, pinned** (SQ-1274 follow-up): #42746's connector to the valley IS
+    /// the short gutter L — east out of its box into the gutter between columns -2 and -1
+    /// (doubled x = -3), one row band down, east into the valley's West border — and that L is
+    /// the shortest collision-free path there is: `sq1274_shortest_path_oracle`'s BFS, run on the
+    /// same lattice with every other connector's cells as obstacles, returns the same length (4
+    /// doubled units, centre to centre). It never touches the `49722 N 63776` road connector,
+    /// which runs down the valley's own centre column (doubled x = -2, dumped by
+    /// `sq1274_shortest_path_oracle` as `[(-2,4),(-2,3),(-2,1),(-2,0)]`).
+    ///
+    /// So the router does not discard this path — it draws it. The direct-route rejection SQ-1274
+    /// reported is real (#42746's `direct_route` L bends at room cell (-1,1) and then runs down
+    /// the valley's column, sharing doubled cells (-2,2) and (-2,3) with the road connector —
+    /// `polylines_overlap`, `crates/mapper/src/route/mod.rs`), but the channel route it falls back
+    /// to is this one. Guard it so a future router change that quietly lengthens or re-sides it
+    /// has to say so.
+    #[test]
+    fn sq1274_the_near_forest_already_takes_the_short_gutter_l() {
+        let g = build(FOREST_NEAR, false);
+        let plan = mapper::route::route_lanes(&g);
+        let c = plan
+            .connectors
+            .iter()
+            .find(|c| c.origin == FOREST_NEAR && c.dest == VALLEY && c.exit_dir == E)
+            .expect("#42746's E connector to the valley");
+        assert_eq!(c.exit, Side::Right, "it leaves #42746's east border");
+        assert_eq!(c.entry, Side::Left, "it arrives on the valley's west border");
+        assert_eq!(
+            c.points,
+            vec![(-4, 2), (-3, 2), (-3, 4), (-2, 4)],
+            "east into the gutter (doubled x=-3), one row band down, east into the valley",
+        );
+        assert_eq!(manhattan(&c.points), 4, "and nothing shorter reaches that door");
+        // It shares no cell with the road connector, which runs down the valley's own column.
+        let road = plan
+            .connectors
+            .iter()
+            .find(|r| r.origin == VALLEY && r.dest == ROAD_END)
+            .expect("the valley's N link to the road");
+        let road_cells: std::collections::BTreeSet<(i32, i32)> = trace(&road.points).into_iter().collect();
+        let valley_centre = mapper::route::cell_to_doubled(g.room(VALLEY).unwrap().pos.unwrap());
+        for cell in trace(&c.points) {
+            if cell == valley_centre {
+                continue; // both connectors end at the valley's own centre, by definition
+            }
+            assert!(!road_cells.contains(&cell), "the short L must not touch the road connector at {cell:?}");
+        }
+    }
+
+    #[test]
+    #[ignore = "SQ-1274 follow-up diagnostic"]
+    fn sq1274_every_routing_order() {
+        for order in [
+            ['n', 'r', 'f'], // (0) shipped
+            ['f', 'r', 'n'], // (b)
+            ['n', 'f', 'r'], // road last
+            ['f', 'n', 'r'],
+            ['r', 'n', 'f'], // road first
+            ['r', 'f', 'n'],
+        ] {
+            let g = build_in_order(order);
+            report(&g, &format!("order {order:?}"));
+        }
+    }
+
+    /// Print every shared render cell (crossing or illegal) with the connectors involved.
+    fn dump_shared_cells(graph: &MapGraph, tag: &str) {
+        use std::collections::{BTreeMap, HashMap};
+        println!("\n-- shared cells {tag} --");
+        let rm = mapper::render::render(graph);
+        let (cols, rows) = boxes_axes(&rm.plan, rm.bounds);
+        let mut owners: HashMap<(i32, i32), BTreeMap<usize, u8>> = HashMap::new();
+        for (ci, conn) in rm.plan.connectors.iter().enumerate() {
+            if let Some(plot) = plot_connector(conn, &cols, &rows, None) {
+                for (c, mask) in &plot.cells {
+                    *owners.entry(*c).or_default().entry(ci).or_insert(0) |= *mask;
+                }
+            }
+        }
+        let mut keys: Vec<_> = owners.keys().copied().collect();
+        keys.sort();
+        for k in keys {
+            let per = &owners[&k];
+            if per.len() < 2 {
+                continue;
+            }
+            let who: Vec<String> = per
+                .iter()
+                .map(|(&ci, &m)| {
+                    let c = &rm.plan.connectors[ci];
+                    format!("{} {:?} {} mask={m:#06b}", c.origin, c.exit_dir, c.dest)
+                })
+                .collect();
+            println!("   cell {k:?}: {who:?}");
+        }
+    }
+
+    #[test]
+    #[ignore = "SQ-1274 follow-up diagnostic"]
+    fn sq1274_shared_cells() {
+        dump_shared_cells(&build(FOREST_NEAR, false), "(0) near first");
+        dump_shared_cells(&build(FOREST_FAR, false), "(b) far first");
+    }
+
+    #[test]
+    #[ignore = "SQ-1274 follow-up diagnostic"]
+    fn sq1274_shortest_path_oracle() {
+        for (ff, tag) in [(FOREST_NEAR, "(0) near first"), (FOREST_FAR, "(b) far first")] {
+            let g = build(ff, false);
+            dump_points(&g, tag);
+            let plan = mapper::route::route_lanes(&g);
+            let rooms: std::collections::BTreeSet<(i32, i32)> =
+                g.rooms().filter_map(|r| r.pos).collect();
+            let want: [(RoomId, RoomId); 3] =
+                [(FOREST_NEAR, VALLEY), (FOREST_FAR, VALLEY), (VALLEY, ROAD_END)];
+            for &(o, d) in &want {
+                let Some(me) = plan.connectors.iter().position(|c| {
+                    c.origin == o
+                        && c.dest == d
+                        && mapper::direction::grid_offset(c.exit_dir).is_some()
+                        && !c.merge
+                }) else {
+                    println!("  !! no connector {o}->{d}");
+                    continue;
+                };
+                let mut blocked: std::collections::BTreeSet<(i32, i32)> =
+                    std::collections::BTreeSet::new();
+                for (i, c) in plan.connectors.iter().enumerate() {
+                    if i == me {
+                        continue;
+                    }
+                    for p in trace(&c.points) {
+                        blocked.insert(p);
+                    }
+                }
+                let conn = &plan.connectors[me];
+                let a = g.room(o).and_then(|r| r.pos).unwrap();
+                let b = g.room(d).and_then(|r| r.pos).unwrap();
+                let start = mapper::route::exit_point(a, conn.exit);
+                println!(
+                    "  {o}->{d} drawn: entry={:?} len={} pts={:?}",
+                    conn.entry,
+                    manhattan(&conn.points),
+                    conn.points
+                );
+                for side in [Side::Left, Side::Right, Side::Top, Side::Bottom] {
+                    let goal = mapper::route::exit_point(b, side);
+                    let mut bl = blocked.clone();
+                    bl.remove(&start);
+                    match bfs_path(start, goal, &rooms, &bl, 20) {
+                        Some(p) => {
+                            println!("      shortest to {:?}: len={} {:?}", side, p.len() - 1, p)
+                        }
+                        None => println!("      shortest to {side:?}: BLOCKED"),
+                    }
+                }
+            }
+        }
+    }
 }
