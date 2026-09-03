@@ -145,6 +145,10 @@ Absolute URLs or no link.
   ends**, however it ends — winning, losing, or quitting — instead of dropping
   you out to the terminal. And `Ctrl-Q` now quits lanthorn from the list
   itself, the same key that quits mid-game.
+- **The tooltip's little pointer no longer leaves a dark cell on a
+  highlighted room.** Hovering something on the selected current room's box
+  used to punch a dark, hollowed-out triangle into its light background;
+  the pointer now matches the room's ground correctly.
 
 ---
 

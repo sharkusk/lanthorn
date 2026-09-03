@@ -208,9 +208,23 @@ fn draw_pointer(
             // the background too, and leaving it cleared drops the cell to the
             // TERMINAL's default. That reads as a notch of bare terminal punched
             // through the pane above the tip, which is what it is.
-            let under = cell.style().bg;
+            //
+            // The underlying cell's VISIBLE background is not always its `bg`:
+            // the selected room box is painted REVERSED, so its `fg`/`bg` are
+            // swapped on screen (SQ-1279). Read the cell's *visible* colours —
+            // `fg` under REVERSED, `bg` otherwise — so the room's actual ground
+            // runs through the pointer cell instead of showing the dark block a
+            // literal `bg` read would give. The pointer keeps the tip's own
+            // colour as its ink and is drawn without REVERSED regardless of what
+            // was underneath, since `ptr` sets both colours explicitly.
+            let under_style = cell.style();
+            let visible_bg = if under_style.add_modifier.contains(ratatui::style::Modifier::REVERSED) {
+                under_style.fg
+            } else {
+                under_style.bg
+            };
             cell.reset();
-            let style = match under {
+            let style = match visible_bg {
                 Some(bg) => ptr.bg(bg),
                 // Nothing was painted here, so the terminal's own background IS
                 // what is behind the pointer, and leaving it unset is correct.
@@ -367,6 +381,122 @@ mod tests {
                 "anchor {col}: wedge at {px} escapes box {r:?}"
             );
         }
+    }
+
+    /// A pointer cell over a plain highlighted cell (e.g. an explicit light `bg`,
+    /// not REVERSED) shows that colour, not the terminal default (SQ-1279).
+    #[test]
+    fn the_pointer_shows_a_plain_cells_background() {
+        use ratatui::style::{Color, Style};
+        let area = Rect::new(0, 0, 60, 20);
+        let st = AppState::default();
+        let light = Color::Rgb(220, 220, 220);
+        let mut buf = Buffer::empty(area);
+        for cell in buf.content.iter_mut() {
+            cell.set_style(Style::new().bg(light));
+        }
+        let tipcol = st.colors.theme.get("tooltip.background").style.bg;
+        let lines = vec!["Toggle the map".to_string()];
+        let r = draw_tip_on(&mut buf, area, 30, 4, &lines, &st.colors.theme, &st.symbols, TipSide::Below)
+            .expect("the tip fits");
+
+        let (l, rg) = st.symbols.tip.wedge(true);
+        let py = r.y - 1;
+        let mut seen = 0;
+        for x in r.x..r.right() {
+            let cell = buf.cell((x, py)).unwrap();
+            if cell.symbol() != l.to_string() && cell.symbol() != rg.to_string() {
+                continue;
+            }
+            seen += 1;
+            assert_eq!(cell.style().bg, Some(light), "the pointer shows the plain cell's bg");
+            assert_eq!(cell.style().fg, tipcol, "the pointer's ink stays the tip's own colour");
+            assert!(
+                !cell.style().add_modifier.contains(ratatui::style::Modifier::REVERSED),
+                "the pointer never inherits REVERSED"
+            );
+        }
+        assert_eq!(seen, 2, "both wedge cells were found");
+    }
+
+    /// A pointer cell over a REVERSED cell (the selected room box's ground, SQ-1279)
+    /// shows that cell's *visible* background — its `fg`, since REVERSED swaps the
+    /// two on screen — not a dark block punched through the light box.
+    #[test]
+    fn the_pointer_shows_a_reversed_cells_visible_background() {
+        use ratatui::style::{Color, Modifier, Style};
+        let area = Rect::new(0, 0, 60, 20);
+        let st = AppState::default();
+        let light = Color::Rgb(220, 220, 220);
+        let dark = Color::Rgb(10, 10, 10);
+        let mut buf = Buffer::empty(area);
+        for cell in buf.content.iter_mut() {
+            cell.set_style(Style::new().fg(light).bg(dark).add_modifier(Modifier::REVERSED));
+        }
+        let tipcol = st.colors.theme.get("tooltip.background").style.bg;
+        let lines = vec!["Toggle the map".to_string()];
+        let r = draw_tip_on(&mut buf, area, 30, 4, &lines, &st.colors.theme, &st.symbols, TipSide::Below)
+            .expect("the tip fits");
+
+        let (l, rg) = st.symbols.tip.wedge(true);
+        let py = r.y - 1;
+        let mut seen = 0;
+        for x in r.x..r.right() {
+            let cell = buf.cell((x, py)).unwrap();
+            if cell.symbol() != l.to_string() && cell.symbol() != rg.to_string() {
+                continue;
+            }
+            seen += 1;
+            assert_eq!(
+                cell.style().bg,
+                Some(light),
+                "the pointer takes the REVERSED cell's fg as its visible ground"
+            );
+            assert_eq!(cell.style().fg, tipcol, "the pointer's ink stays the tip's own colour");
+            assert!(
+                !cell.style().add_modifier.contains(Modifier::REVERSED),
+                "the pointer is drawn with the colours set explicitly, not the inherited REVERSED"
+            );
+        }
+        assert_eq!(seen, 2, "both wedge cells were found");
+    }
+
+    /// A pointer cell over a plain, unstyled cell (today's dark-terminal case)
+    /// keeps today's look: no background set, i.e. the terminal's own default
+    /// shows through, exactly as before this fix.
+    #[test]
+    fn the_pointer_over_an_unstyled_cell_is_unchanged() {
+        let area = Rect::new(0, 0, 60, 20);
+        let (buf, r, syms) = tip(area, 30, 4, "Toggle the map", TipSide::Below);
+        let (l, rg) = syms.tip.wedge(true);
+        let py = r.y - 1;
+        let mut seen = 0;
+        for x in r.x..r.right() {
+            let cell = buf.cell((x, py)).unwrap();
+            if cell.symbol() != l.to_string() && cell.symbol() != rg.to_string() {
+                continue;
+            }
+            seen += 1;
+            assert_eq!(
+                cell.style().bg,
+                Some(ratatui::style::Color::Reset),
+                "an unstyled cell's default bg (Reset) is what shows through, unchanged from before this fix"
+            );
+        }
+        assert_eq!(seen, 2, "both wedge cells were found");
+    }
+
+    /// Only the pointer row changes here — the tip BODY still carries the
+    /// tooltip selector's own style, untouched by the pointer's background fix.
+    #[test]
+    fn the_tip_body_keeps_its_own_style() {
+        let area = Rect::new(0, 0, 60, 20);
+        let st = AppState::default();
+        let (buf, r, _) = tip(area, 30, 4, "Toggle the map", TipSide::Below);
+        let body_style = st.colors.theme.get("tooltip.background").style;
+        let cell = buf.cell((r.x + 1, r.y)).expect("a body cell inside the tip");
+        assert_eq!(cell.style().bg, body_style.bg, "the body cell keeps the tip selector's bg");
+        assert_eq!(cell.style().fg, body_style.fg, "the body cell keeps the tip selector's fg");
     }
 
     /// The box never covers the cell it is explaining, on either side — the whole
