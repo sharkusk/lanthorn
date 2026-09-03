@@ -327,15 +327,16 @@ impl Play {
         let live_dest = self.mapper.graph.current();
 
         if let (Some(origin), Some(d), Some(dest)) = (room_before, dir, live_dest) {
+            let already_random = self.mapper.graph.is_random_exit(origin, d);
             let worth_probing = dest != origin
-                && matches!(result.declared_exit, Some(DeclaredExit::Absent) | Some(DeclaredExit::Code))
-                && !self.mapper.graph.is_random_exit(origin, d);
+                && (already_random
+                    || matches!(result.declared_exit, Some(DeclaredExit::Absent) | Some(DeclaredExit::Code)));
             if worth_probing {
                 if let Some((saved_room, save)) = &self.state.random_exit_pre_move_save {
                     if *saved_room == origin {
                         let save = Arc::clone(save);
                         app::random_exit_probe::arm_random_exit_search(
-                            &mut self.state, &self.session, origin, d, dest, save,
+                            &mut self.state, &self.session, origin, d, dest, already_random, save,
                         );
                         app::random_exit_probe::settle_random_exit_search(
                             &mut self.state, &mut self.mapper,
@@ -420,19 +421,15 @@ fn lost_pig_tunnels_are_confirmed_random_and_the_edge_is_deleted() {
     // EDGE from Twisty Cave is missing.
     assert!(p.mapper.graph.connections().len() <= before_edges + 1, "at most the (now-deleted) edge could have existed transiently");
 
-    // Sticky: walking east again from Twisty Cave mints nothing and re-probes nothing.
-    let probes_before_second_walk = p.state.probe.probes;
-    p.mapper.graph.set_current(twisty); // stand back in Twisty Cave for a second attempt
-    p.turn("EAST");
-    assert_eq!(
-        p.edge(twisty, Direction::E),
-        None,
-        "a second walk east from Twisty Cave still mints no edge"
-    );
-    assert_eq!(
-        p.state.probe.probes, probes_before_second_walk,
-        "and the sticky mark means Phase 2 was never re-asked"
-    );
+    // The upgrade path itself (a random-marked direction later behaving deterministically) is
+    // proven deterministically by
+    // `random_exit_probe::tests::a_random_mark_upgrades_on_agreement_and_reverts_on_the_next_disagreement`
+    // — this harness cannot force the REAL game's next `random` draw to agree with the first
+    // one, and re-visiting Twisty Cave to try would need control this test does not have over
+    // where the live session actually is after a random walk. The walkthrough's own route back
+    // OUT of the tunnels (`PLAY WHISTLE` then `FOLLOW GNOME`) does not exercise it either: those
+    // are named verbs, not repeated compass directions, so no direction the tunnels marked
+    // random is ever walked a second time by that route for Phase 2 to re-judge.
 }
 
 /// The seam's own reseed derivation never repeats the input seed and never repeats itself between

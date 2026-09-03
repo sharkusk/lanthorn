@@ -3898,16 +3898,20 @@ pub fn apply_turn(
         // what the room's exit table says. `moved_room` guards it: a mismatch against
         // a room the player never left (a refusal that nonetheless prints a fresh
         // description) is not evidence of anything.
-        // STICKY (SQ-1257 Phase 2): once a direction out of the origin is already marked
-        // random, treat this move the same way without re-deciding — no re-mint, no re-probe.
-        // A lucky agreement under a reseeded Phase-2 walk is a coin flip, not proof the story
-        // stopped randomising; only the player clears a random mark.
-        let sticky_random = mapper
+        // SQ-1257 Phase 2: once a direction out of the origin is already marked random, this
+        // move mints no edge EITHER — same as the mismatch case above, and for the same reason:
+        // one lucky landing is not proof the story stopped randomising. What is different from
+        // before is that this is not the end of the story: `turn::finish_command_turn` (which
+        // sees this decision through `TurnResult`/the graph, not through a return value here)
+        // arms a Phase-2 re-probe for exactly this shape, and TWO reseeded attempts that both
+        // agree with THIS landing is what upgrades the mark to a real edge
+        // (`random_exit_probe::deliver`) — never a single move on its own, here or anywhere.
+        let already_random = mapper
             .graph
             .current()
             .zip(parse_direction(command))
             .is_some_and(|(here, d)| mapper.graph.is_random_exit(here, d));
-        let random_exit = sticky_random
+        let random_exit = already_random
             || (moved_room
                 && matches!(
                     result.declared_exit,

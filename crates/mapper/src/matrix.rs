@@ -141,21 +141,21 @@ fn classify_with(graph: &MapGraph, idx: &ConnIndex<'_>, room: RoomId, dir: Direc
     if dir == Direction::Unknown {
         return MatrixCell::Untried;
     }
-    // SQ-1257: a random mark is STICKY and checked first, ahead of any edge that may still sit
-    // in the graph for this key. `session::apply_turn` never mints a new edge here once a
-    // direction is marked random (a lucky agreement under a reseeded probe must not silently
-    // redraw the arrow), and the one that triggered the mark is deleted the moment the mark is
-    // made — but the classifier does not trust that ordering to be perfect on its own: the
-    // moment between "edge minted" and "Phase 2 answer processed" is real, and a mark, once made,
-    // reads as `?` regardless of what the graph still says next to it. Cleared only by the
-    // player, never by a later crossing.
-    if graph.is_random_exit(room, dir) {
-        return MatrixCell::Random;
-    }
     let dest = idx.from(room).iter().find(|c| c.dir == dir && c.dest != room).map(|c| c.dest);
     let Some(dest) = dest else {
         if graph.self_loops(room).contains(&dir) {
             return MatrixCell::SelfLoop;
+        }
+        // A REAL edge (above) beats this, and did not exist — so a direction the story sends
+        // somewhere different each time is reported before falling back to the tried/untried
+        // read, which cannot tell "the story decided" apart from "never tried". SQ-1257 Phase 2
+        // can UPGRADE this: a random-marked direction that later behaves deterministically gets
+        // a real edge and the mark is cleared in the same stroke
+        // (`random_exit_probe::deliver`), so the two facts never coexist in the graph for long
+        // — but while the mark stands alone (no edge yet, or the edge disagreed and was
+        // removed), this is what makes it visible.
+        if graph.is_random_exit(room, dir) {
+            return MatrixCell::Random;
         }
         // No edge at all: the room's own record of what has been TYPED here is the only thing
         // that separates a wall from unexplored ground.
@@ -464,7 +464,7 @@ mod tests {
     /// SQ-1257: a random exit reads as `?`, beats `Probed`/`Untried`, is beaten by a real edge,
     /// and never counts as a frontier.
     #[test]
-    fn a_random_exit_beats_probed_untried_and_even_a_later_edge_and_is_sticky() {
+    fn a_random_exit_beats_probed_and_untried_but_a_real_edge_beats_it() {
         let (mut g, _l) = maze();
         assert_eq!(classify(&g, 1, Direction::S), MatrixCell::Untried, "never tried south");
 
@@ -476,19 +476,20 @@ mod tests {
         g.mark_random_exit(4, Direction::E); // already Probed from `maze()`'s mark_tried
         assert_eq!(classify(&g, 4, Direction::E), MatrixCell::Random, "random beats a bare probe too");
 
-        // SQ-1257: once marked, a random exit is STICKY — a real edge in the same key does NOT
-        // win, unlike every other cell's precedence. `session::apply_turn` is what is relied on
-        // to never mint a fresh edge here once the mark exists; this pins the classifier's own
-        // half of that promise, in case an edge ever ends up sitting beside the mark anyway (the
-        // moment between a Phase-2 answer minting an edge and the same answer being judged, or a
-        // manual edit).
+        // SQ-1257 Phase 2: a random mark can be UPGRADED — a direction that later behaves
+        // deterministically gets a real edge, via `random_exit_probe::deliver`, which clears the
+        // mark in the same stroke (`MapGraph::unmark_random_exit`). The classifier does not
+        // trust that pairing to be perfect on its own: an edge sitting beside a mark that,
+        // for whatever reason, was not cleared must still read as the edge, not the mark —
+        // a stale "destination varies" badge on a passage the map can now name is a worse lie
+        // than briefly trusting an edge the mapper itself just placed.
         g.add_edge(1, Direction::S, 4);
         assert_eq!(
             classify(&g, 1, Direction::S),
-            MatrixCell::Random,
-            "a random mark is cleared only by the player, never by a later edge"
+            MatrixCell::OneWay { dest: 4 },
+            "a real edge in the same key wins over an un-cleared random mark"
         );
-        assert!(g.is_random_exit(1, Direction::S), "the random record itself is untouched");
+        assert!(g.is_random_exit(1, Direction::S), "the random record itself is untouched by classify");
     }
 
     /// SQ-1181: `build` classifies against a shared per-call [`ConnIndex`];

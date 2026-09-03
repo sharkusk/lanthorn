@@ -1109,6 +1109,16 @@ fn boot_shadow(recipe: &ShadowRecipe) -> Result<Box<dyn Engine>, String> {
     }
 }
 
+/// Test-only constructor for an [`Answer`] carrying a given `run` (SQ-1257 Phase 2) — lets a
+/// sibling module's tests (`random_exit_probe`) exercise `deliver` against a hand-built shadow
+/// answer, the same way this module's own tests hand-build a [`ProbeRun`], without a real worker
+/// thread or a real engine to boot one from. Every other field a genuine worker answer carries
+/// (`broken`/`probes`/`spent`/`phases`) is bookkeeping `deliver` never reads.
+#[cfg(all(test, feature = "t-session"))]
+pub(crate) fn test_answer(token: u64, run: Option<ProbeRun>) -> Answer {
+    Answer { token, run, broken: false, probes: 0, spent: Duration::ZERO, phases: ProbePhases::default() }
+}
+
 #[cfg(all(test, feature = "t-session"))]
 mod tests {
     use super::*;

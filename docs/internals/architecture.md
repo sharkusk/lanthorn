@@ -513,16 +513,36 @@ parallel to `commands`, `None` at every index for every OTHER probe consumer
 (a return search, a vocabulary offer) — their shadow's RNG runs wherever it
 already did, exactly as before this existed.
 
-**Sticky, on purpose.** Once a direction is marked random,
-`session::apply_turn`'s own check stops minting an edge for it at all — so
-there is nothing left for a later walk to confirm or retract, and
-`finish_command_turn` never even arms a search for one
-(`MapGraph::is_random_exit` is checked beside `DeclaredExit`). A lucky
-agreement on a reseeded walk is a coin flip, not proof the story stopped
-randomising; `mapper::matrix::classify` reads a random mark before it ever
-looks for a real edge in the same key, so the mark wins even in the moment
-between an edge being minted and a Phase-2 answer being judged. Cleared only
-by the player.
+**A random mark is not permanent — it is re-checked, not trusted.** A single
+lucky agreement never speaks for itself (one reseeded walk landing where the
+live game did could be a coincidence), which is why every judgement — first
+walk or re-walk alike — needs the SAME two-attempt agreement Phase 2 always
+asks for. But a direction that behaves deterministically on every later walk
+has to be able to become a real edge: Lost Pig's gnome, once fetched,
+deliberately leads the player back OUT of the tunnels along a fixed route,
+and a map that can never draw that route because the direction was once
+random would be wrong in the other direction — confidently withholding a
+passage the story has since committed to.
+
+So walking an already-marked direction re-probes instead of doing nothing.
+`session::apply_turn` still mints no edge for it on this move (there is
+nothing yet to mint — see the comment there), but
+`turn::finish_command_turn`'s Phase-2 gate now covers two shapes, told apart
+by `RandomExitSearch::was_random`: a first walk of `Absent`/`Code` (the edge
+`apply_turn` minted is what is being confirmed or deleted) and a re-walk of
+an already-marked direction (there is no edge — this is the UPGRADE path).
+`random_exit_probe::deliver` forks on it: agreement across both reseeded
+attempts clears the mark (`MapGraph::unmark_random_exit`) and mints the
+edge through `Mapper::record_probed_passage` — the same
+`Mapper::mint_passage` work (`add_edge`, collapsing a redundant `?` stub,
+laying the destination out) a walked crossing does, without touching
+`set_current`/`arrived_via`, since this answer can land turns after the move
+it is about; disagreement (or no evidence) leaves the mark exactly as it
+was. `mapper::matrix::classify` checks for a real edge before it ever looks
+for a random mark — the ordinary precedence every other cell already has —
+because the upgrade path means the two facts are never meant to coexist for
+long: whenever an edge exists in a marked direction, the mark is on its way
+out and the edge is what should be drawn.
 
 Measured on `LostPig.z8`, worker time, debug build: the deterministic gateway
 (Statue Room → north → Windy Cave, `Code`) costs one Phase-2 attempt pair

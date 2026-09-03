@@ -223,28 +223,37 @@ pub(crate) fn finish_command_turn(
     app::return_probe::arm_return_search(state, mapper, &*session, cmd, room_before, &mut turn_save);
 
     // SQ-1257 Phase 2: this move's own edge was minted (or not) already, by `apply_turn` above.
-    // If the room being LEFT had nothing static to check the move against — `DeclaredExit::Absent`
-    // (no map data at all: Lost Pig's gnome tunnels) or `Code` (a routine decides: the gateway
-    // into them) — and this direction is not ALREADY marked random (the sticky check in
-    // `apply_turn` means there is nothing left to confirm), ask a reseeded shadow whether the
-    // story is deciding this move at random. `room_before`/`live_dest` are only knowable here —
-    // before and after `apply_turn` respectively — which is why this lives here and not inside
-    // `random_exit_probe` itself.
+    // Two shapes are worth a reseeded shadow's opinion, and both need the player to have actually
+    // changed rooms (a refusal proves nothing):
+    //
+    // * a FIRST walk of a direction the room's own map data had nothing static to check against
+    //   (`DeclaredExit::Absent` — no map data at all, e.g. Lost Pig's gnome tunnels — or `Code` —
+    //   a routine decides, e.g. the gateway into them). `apply_turn` minted the ordinary edge for
+    //   this already; Phase 2 either confirms it or deletes it.
+    // * a RE-walk of a direction ALREADY marked random. `apply_turn`'s sticky check minted no
+    //   edge this time — Lost Pig's gnome leading the player back OUT of the tunnels is exactly
+    //   this shape, a direction the player wandered randomly before now behaving deterministically
+    //   — so this is the UPGRADE path: agreement on both reseeded attempts promotes the mark to a
+    //   real edge (`random_exit_probe::deliver`); disagreement leaves the mark exactly as it was.
+    //
+    // `room_before`/`live_dest` are only knowable here — before and after `apply_turn`
+    // respectively — which is why this lives here and not inside `random_exit_probe` itself.
     if let (Some(origin), Some(dir), Some(live_dest)) =
         (room_before, mapper::direction::parse_direction(cmd), mapper.graph.current())
     {
+        let already_random = mapper.graph.is_random_exit(origin, dir);
         let worth_probing = live_dest != origin
-            && matches!(
-                result.declared_exit,
-                Some(app::engine::DeclaredExit::Absent) | Some(app::engine::DeclaredExit::Code)
-            )
-            && !mapper.graph.is_random_exit(origin, dir);
+            && (already_random
+                || matches!(
+                    result.declared_exit,
+                    Some(app::engine::DeclaredExit::Absent) | Some(app::engine::DeclaredExit::Code)
+                ));
         if worth_probing {
             if let Some((saved_room, save)) = &state.random_exit_pre_move_save {
                 if *saved_room == origin {
                     let save = std::sync::Arc::clone(save);
                     app::random_exit_probe::arm_random_exit_search(
-                        state, &*session, origin, dir, live_dest, save,
+                        state, &*session, origin, dir, live_dest, already_random, save,
                     );
                 }
             }

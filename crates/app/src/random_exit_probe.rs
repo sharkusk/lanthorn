@@ -15,8 +15,35 @@
 //! the SAME direction from the SAME pre-move moment twice, under two
 //! different random seeds, and see whether either walk disagrees with where
 //! the live player actually landed. Disagreement is direct evidence the story
-//! rolled dice for this move; agreement on all three is evidence it did not,
-//! and the edge Phase 1 already minted stands.
+//! rolled dice for this move; agreement on all three is evidence it did not.
+//!
+//! # Two shapes, not one
+//!
+//! **A first walk of an `Absent`/`Code` direction.** `apply_turn` already
+//! minted the ordinary edge — Phase 1's usual behaviour, since neither
+//! answer is proof of anything on its own. Disagreement here DELETES that
+//! edge and marks the direction random
+//! ([`mapper::graph::MapGraph::mark_random_exit`]); agreement leaves it
+//! standing.
+//!
+//! **A re-walk of a direction ALREADY marked random.** `apply_turn`'s own
+//! check mints no edge this time (see the comment there), so there is
+//! nothing to delete — instead this is the UPGRADE path. Lost Pig's gnome
+//! leading the player back out of the tunnels is exactly this shape: a
+//! direction that wandered randomly before now behaves deterministically,
+//! and the map has to be able to say so. Agreement on both reseeded attempts
+//! clears the mark ([`mapper::graph::MapGraph::unmark_random_exit`]) and
+//! mints the now-confirmed edge, through [`Mapper::record_probed_passage`] —
+//! the same path a return-probe-discovered edge takes, which does the same
+//! `Mapper::mint_passage` work (`add_edge` + collapsing a now-redundant `?`
+//! stub + laying the destination out) a walked crossing does, without
+//! touching `MapGraph::set_current`/`arrived_via`: this answer can land
+//! several turns after the move it is about, by which point the player may
+//! not even be standing in the room any more. Disagreement leaves the mark
+//! exactly as it was — the re-walk proved nothing new.
+//!
+//! [`RandomExitSearch::was_random`] is which of the two a given search is;
+//! [`deliver`] is where the fork happens.
 //!
 //! # Why the snapshot is the END of the PREVIOUS turn
 //!
@@ -46,20 +73,10 @@
 //! game's own (`derived_seeds`), so agreement between the two attempts is
 //! actual evidence rather than an artifact of both starting from the same
 //! place.
-//!
-//! # Sticky, and why this module never re-asks
-//!
-//! Once a direction is marked random ([`mapper::graph::MapGraph::mark_random_exit`]),
-//! `session::apply_turn`'s own sticky check stops minting an edge for it at
-//! all — see the comment there — so there is nothing left for this module to
-//! confirm or retract on a later walk of the same direction. `arm` is never
-//! even called for one: `turn::finish_command_turn` checks
-//! [`mapper::graph::MapGraph::is_random_exit`] before arming, the same way it
-//! checks `DeclaredExit`.
 
 use mapper::direction::{long_label, Direction};
 use mapper::graph::RoomId;
-use mapper::mapper::Mapper;
+use mapper::mapper::{Mapper, ProbedPassage};
 
 use crate::engine::Engine;
 use crate::state::AppState;
@@ -80,10 +97,13 @@ pub struct RandomExitSearch {
     origin: RoomId,
     /// The direction walked.
     dir: Direction,
-    /// Where the LIVE player actually landed this turn — the edge Phase 1
-    /// already minted, and the ground truth both shadow walks are judged
-    /// against.
+    /// Where the LIVE player actually landed this turn — the ground truth both shadow walks are
+    /// judged against, whether or not `apply_turn` minted an edge to it this time.
     live_dest: RoomId,
+    /// Which shape this search is (see the module docs): `true` when `dir` out of `origin` was
+    /// ALREADY marked random before this move — the UPGRADE path — `false` for a first walk of
+    /// an `Absent`/`Code` direction, where `apply_turn` already minted the edge being judged.
+    was_random: bool,
     /// The token the answer will carry.
     token: u64,
 }
@@ -97,6 +117,10 @@ impl RandomExitSearch {
     pub fn dir(&self) -> Direction {
         self.dir
     }
+    /// Which shape this search is — see the module docs.
+    pub fn was_random(&self) -> bool {
+        self.was_random
+    }
 }
 
 /// Start a Phase-2 search, if this turn earned one.
@@ -105,16 +129,19 @@ impl RandomExitSearch {
 /// has settled the move. The caller is responsible for the gate — this
 /// function assumes it is worth asking and only refuses on infrastructure
 /// grounds (unarmed shadow, busy, no seed to read, no usable pre-move
-/// snapshot): whether `dir`'s `DeclaredExit` was `Absent`/`Code` and whether
-/// it is already marked random are `finish_command_turn`'s own checks, made
-/// with `DeclaredExit` and [`mapper::graph::MapGraph::is_random_exit`], which
-/// this module does not read.
+/// snapshot): whether `dir`'s `DeclaredExit` was `Absent`/`Code`, and whether
+/// it is already marked random (which decides `was_random`), are
+/// `finish_command_turn`'s own checks, made with `DeclaredExit` and
+/// [`mapper::graph::MapGraph::is_random_exit`], which this module does not
+/// read.
+#[allow(clippy::too_many_arguments)]
 pub fn arm_random_exit_search(
     state: &mut AppState,
     live: &dyn Engine,
     origin: RoomId,
     dir: Direction,
     live_dest: RoomId,
+    was_random: bool,
     pre_move_save: std::sync::Arc<crate::engine::EngineSave>,
 ) {
     if !state.probe.is_armed() {
@@ -125,9 +152,9 @@ pub fn arm_random_exit_search(
     let from = crate::probe::ProbeSnapshot::from_save(pre_move_save);
     let command = long_label(dir).to_string();
     let Some(token) = state.probe.ask_from_reseeded(&from, &command, &seeds) else {
-        return; // busy, unarmed, or mid-save — the edge Phase 1 minted simply stands
+        return; // busy, unarmed, or mid-save — this move's outcome (edge or mark) simply stands
     };
-    state.random_exit_search = Some(RandomExitSearch { origin, dir, live_dest, token });
+    state.random_exit_search = Some(RandomExitSearch { origin, dir, live_dest, was_random, token });
 }
 
 /// True when `token` answers the search running now, if any.
@@ -137,31 +164,17 @@ pub fn owns(state: &AppState, token: u64) -> bool {
 
 /// Judge a Phase-2 answer (SQ-1257).
 ///
-/// Returns true when the map changed (an edge was deleted and the direction
-/// marked random) — what tells the caller to bump the graph generation and
+/// Returns true when the map changed — an edge deleted and the direction marked random, OR a
+/// mark cleared and an edge minted — what tells the caller to bump the graph generation and
 /// redraw, the same signal [`crate::return_probe::deliver`] gives.
 ///
 /// # Evidence, not a vote
 ///
-/// A shadow step that quit, escaped, or could not say where it landed is
-/// INCONCLUSIVE and counts toward neither side — an unanswerable question is
-/// not evidence the story is deterministic, and treating it as agreement
-/// would let a shadow that merely failed to boot silently rubber-stamp every
-/// edge. Only a shadow step that DID land somewhere, and landed somewhere
-/// OTHER than the live destination, is evidence of randomness; only when at
-/// least one step gives usable evidence at all does the search have anything
-/// to decide with. No usable evidence, or every usable step agreeing with the
-/// live destination, both keep the edge Phase 1 already minted — an
-/// unproven deletion is exactly the kind of invented fact this module exists
-/// to avoid on the minting side.
-///
-/// # Staleness
-///
-/// Mirrors the return probe's silence discipline (SQ-1124), adapted for what
-/// this search actually needs to be true: the edge it is judging must still
-/// exist, AS MINTED (same origin, direction, and destination), or the player
-/// has since moved the map on in some way this answer cannot speak to, and
-/// the answer is dropped rather than acted on.
+/// A shadow step that quit, escaped, or could not say where it landed is INCONCLUSIVE and counts
+/// toward neither side — an unanswerable question is not evidence the story is deterministic,
+/// and treating it as agreement would let a shadow that merely failed to boot silently
+/// rubber-stamp every edge (or every upgrade). Evidence only comes from a step that DID land
+/// somewhere.
 pub fn deliver(state: &mut AppState, mapper: &mut Mapper, answer: &crate::probe::Answer) -> bool {
     let Some(search) = state.random_exit_search.take() else { return false };
     if search.token != answer.token {
@@ -169,12 +182,17 @@ pub fn deliver(state: &mut AppState, mapper: &mut Mapper, answer: &crate::probe:
         return false;
     }
     let Some(run) = &answer.run else { return false };
-    if !mapper.graph.connections().iter().any(|c| {
-        c.origin == search.origin && c.dir == search.dir && c.dest == search.live_dest
-    }) {
-        return false; // the edge this search was about is gone or changed; nothing to judge
-    }
 
+    if search.was_random {
+        deliver_upgrade(mapper, &search, run)
+    } else {
+        deliver_first_walk(mapper, &search, run)
+    }
+}
+
+/// Every step's verdict against `live_dest`: `(any_evidence, any_disagree)` — see [`deliver`]'s
+/// "evidence, not a vote".
+fn judge(run: &crate::probe::ProbeRun, live_dest: RoomId) -> (bool, bool) {
     let mut any_evidence = false;
     let mut any_disagree = false;
     for step in &run.steps {
@@ -183,17 +201,61 @@ pub fn deliver(state: &mut AppState, mapper: &mut Mapper, answer: &crate::probe:
         }
         let Some(loc) = step.location else { continue };
         any_evidence = true;
-        if loc != search.live_dest {
+        if loc != live_dest {
             any_disagree = true;
         }
     }
+    (any_evidence, any_disagree)
+}
+
+/// A first walk of an `Absent`/`Code` direction: `apply_turn` already minted the edge being
+/// judged. Disagreement deletes it and marks the direction random; agreement (or no evidence)
+/// leaves it standing.
+///
+/// # Staleness
+///
+/// Mirrors the return probe's silence discipline (SQ-1124), adapted for what this search
+/// actually needs to be true: the edge it is judging must still exist, AS MINTED (same origin,
+/// direction, and destination), or the player has since moved the map on in some way this answer
+/// cannot speak to, and the answer is dropped rather than acted on.
+fn deliver_first_walk(mapper: &mut Mapper, search: &RandomExitSearch, run: &crate::probe::ProbeRun) -> bool {
+    if !mapper
+        .graph
+        .connections()
+        .iter()
+        .any(|c| c.origin == search.origin && c.dir == search.dir && c.dest == search.live_dest)
+    {
+        return false; // the edge this search was about is gone or changed; nothing to judge
+    }
+    let (any_evidence, any_disagree) = judge(run, search.live_dest);
     if !any_evidence || !any_disagree {
         return false; // no usable evidence, or full agreement — the edge stands
     }
-
     mapper.graph.remove_connection(search.origin, search.dir);
     mapper.record_random_exit(search.origin, search.dir);
     true
+}
+
+/// A re-walk of a direction ALREADY marked random: there is no edge to check for staleness
+/// against (`apply_turn` minted none), so the guard instead is that the mark itself must still
+/// be there — if something else already resolved it, this answer is about a question that is no
+/// longer being asked. Agreement on every usable attempt clears the mark and mints the
+/// now-confirmed edge; disagreement (or no evidence) leaves the mark untouched.
+fn deliver_upgrade(mapper: &mut Mapper, search: &RandomExitSearch, run: &crate::probe::ProbeRun) -> bool {
+    if !mapper.graph.is_random_exit(search.origin, search.dir) {
+        return false; // no longer marked; this answer is about a question nobody is asking
+    }
+    let (any_evidence, any_disagree) = judge(run, search.live_dest);
+    if !any_evidence || any_disagree {
+        return false; // no usable evidence, or at least one attempt still disagreed — stay marked
+    }
+    let passage = ProbedPassage { from: search.origin, dir: search.dir, to: search.live_dest };
+    if mapper.record_probed_passage(passage) {
+        mapper.graph.unmark_random_exit(search.origin, search.dir);
+        true
+    } else {
+        false // e.g. a self-loop, or an edge already there another way — leave the mark as is
+    }
 }
 
 /// Run a search to its end, waiting for its answer instead of collecting one
@@ -215,4 +277,120 @@ pub fn settle_random_exit_search(state: &mut AppState, mapper: &mut Mapper) -> b
         return false;
     }
     deliver(state, mapper, &answer)
+}
+
+#[cfg(all(test, feature = "t-session"))]
+mod tests {
+    use super::*;
+    use crate::probe::{test_answer, ProbeRun, ProbeStep, WorldPrint};
+    use crate::session::{apply_turn, DeathWatch, TurnResult};
+
+    fn step(location: Option<RoomId>) -> ProbeStep {
+        ProbeStep {
+            command: "north".to_string(),
+            reply: String::new(),
+            location,
+            world: WorldPrint::default(),
+            quit: false,
+            escaped: false,
+        }
+    }
+
+    fn snap(number: RoomId, name: &str) -> zvm::ObjectSnapshot {
+        zvm::ObjectSnapshot { number, parent: 0, name: name.to_string() }
+    }
+
+    /// The full cycle a real Lost Pig-shaped direction goes through, driven exactly the way
+    /// `turn::finish_command_turn` drives it — `apply_turn` first, `deliver` second — except the
+    /// Phase-2 ANSWER is hand-built (`crate::probe::test_answer`) rather than fetched from a real
+    /// worker, since only a real Z-machine story can be booted into one. SQ-1257's corrected
+    /// design in one pass:
+    ///
+    /// 1. A direction already marked random is walked again and lands somewhere — `apply_turn`
+    ///    mints NO edge (same as before the correction).
+    /// 2. The Phase-2 re-probe (`was_random: true`) AGREES on both attempts — `deliver` clears
+    ///    the mark and mints the edge (the new part: an upgrade).
+    /// 3. The SAME direction, no longer marked, is walked again and lands somewhere ELSE —
+    ///    `apply_turn` mints the (wrong) edge as an ordinary first walk would (Phase 1 cannot
+    ///    tell `Absent`/`Code` apart from a real passage on its own).
+    /// 4. The Phase-2 first-walk probe DISAGREES — `deliver` deletes that edge and marks the
+    ///    direction random again.
+    #[test]
+    fn a_random_mark_upgrades_on_agreement_and_reverts_on_the_next_disagreement() {
+        let mut mapper = Mapper::default();
+        let mut death = DeathWatch::default();
+        apply_turn(&mut mapper, "", &TurnResult::observation(snap(1, "Tunnel")), &mut death);
+        mapper.record_random_exit(1, Direction::N);
+        assert!(mapper.graph.is_random_exit(1, Direction::N));
+
+        // ── 1: walk the marked direction, lands in room 2. No edge minted. ──
+        apply_turn(&mut mapper, "north", &TurnResult::observation(snap(2, "A")), &mut death);
+        assert_eq!(mapper.graph.connections().iter().find(|c| c.origin == 1 && c.dir == Direction::N), None);
+        assert!(mapper.graph.is_random_exit(1, Direction::N), "still marked — nothing decided yet");
+
+        // ── 2: Phase 2 re-probe agrees on both attempts. Upgrade. ──
+        let mut state = AppState::default();
+        state.random_exit_search =
+            Some(RandomExitSearch { origin: 1, dir: Direction::N, live_dest: 2, was_random: true, token: 7 });
+        let run = ProbeRun { baseline: WorldPrint::default(), steps: vec![step(Some(2)), step(Some(2))] };
+        assert!(deliver(&mut state, &mut mapper, &test_answer(7, Some(run))), "the map changed");
+        assert!(!mapper.graph.is_random_exit(1, Direction::N), "the mark is cleared");
+        assert_eq!(
+            mapper.graph.connections().iter().find(|c| c.origin == 1 && c.dir == Direction::N).map(|c| c.dest),
+            Some(2),
+            "and the confirmed edge exists, to the right destination"
+        );
+
+        // Walk back to room 1 (an unrelated move — `observe_relocation` after step 1 left
+        // `current` on room 2, and the player has to be standing in room 1 again before "walk
+        // north out of room 1" means anything).
+        apply_turn(&mut mapper, "back", &TurnResult::observation(snap(1, "Tunnel")), &mut death);
+
+        // ── 3: walk the SAME direction again — no longer marked — and land somewhere ELSE.
+        // `apply_turn` mints the edge as it would for any ordinary first walk of a direction it
+        // has no reason yet to distrust (Phase 1 alone cannot tell this apart from a real move).
+        apply_turn(&mut mapper, "north", &TurnResult::observation(snap(3, "B")), &mut death);
+        assert_eq!(
+            mapper.graph.connections().iter().find(|c| c.origin == 1 && c.dir == Direction::N).map(|c| c.dest),
+            Some(3),
+            "Phase 1 minted the new (wrong) edge, same as it always has"
+        );
+
+        // ── 4: Phase 2's first-walk probe disagrees. Deleted, marked random again. ──
+        state.random_exit_search =
+            Some(RandomExitSearch { origin: 1, dir: Direction::N, live_dest: 3, was_random: false, token: 8 });
+        let run = ProbeRun { baseline: WorldPrint::default(), steps: vec![step(Some(2)), step(Some(4))] };
+        assert!(deliver(&mut state, &mut mapper, &test_answer(8, Some(run))), "the map changed again");
+        assert_eq!(
+            mapper.graph.connections().iter().find(|c| c.origin == 1 && c.dir == Direction::N),
+            None,
+            "the wrong edge is gone"
+        );
+        assert!(mapper.graph.is_random_exit(1, Direction::N), "and the direction is random once more");
+    }
+
+    /// Falsify the upgrade half in isolation: with no usable evidence at all, `deliver` must
+    /// leave an already-random mark exactly as it was rather than guessing either way.
+    #[test]
+    fn an_inconclusive_upgrade_answer_changes_nothing() {
+        let mut mapper = Mapper::default();
+        let mut death = DeathWatch::default();
+        apply_turn(&mut mapper, "", &TurnResult::observation(snap(1, "Tunnel")), &mut death);
+        mapper.record_random_exit(1, Direction::N);
+
+        let mut state = AppState::default();
+        state.random_exit_search =
+            Some(RandomExitSearch { origin: 1, dir: Direction::N, live_dest: 2, was_random: true, token: 1 });
+        // Both attempts quit/escaped: no usable evidence either way.
+        let run = ProbeRun {
+            baseline: WorldPrint::default(),
+            steps: vec![
+                ProbeStep { quit: true, ..step(None) },
+                ProbeStep { escaped: true, ..step(None) },
+            ],
+        };
+        assert!(!deliver(&mut state, &mut mapper, &test_answer(1, Some(run))), "nothing to report");
+        assert!(mapper.graph.is_random_exit(1, Direction::N), "still marked");
+        assert_eq!(mapper.graph.connections().iter().find(|c| c.origin == 1 && c.dir == Direction::N), None);
+    }
 }

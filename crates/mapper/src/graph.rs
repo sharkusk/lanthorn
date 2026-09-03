@@ -600,6 +600,18 @@ impl MapGraph {
         self.rooms.get(&id).is_some_and(|r| r.random_exits.contains(&dir))
     }
 
+    /// Undo a [`MapGraph::mark_random_exit`] — `dir` out of `id` turned out to behave
+    /// deterministically after all (SQ-1257 Phase 2: a reseeded re-probe of a random-marked
+    /// direction agreed with the live game on every attempt). Called by
+    /// `random_exit_probe::deliver` in the same stroke it mints the now-confirmed edge; a no-op
+    /// if the direction was never marked. Does NOT touch `tried` — the direction was and remains
+    /// tried, whichever way this resolves.
+    pub fn unmark_random_exit(&mut self, id: RoomId, dir: Direction) {
+        if let Some(r) = self.rooms.get_mut(&id) {
+            r.random_exits.retain(|&d| d != dir);
+        }
+    }
+
     /// Which directions are worth probing out of `room`, best first (SQ-0785).
     ///
     /// **The one place the two records meet.** A caller that assembled this from `tried` and
