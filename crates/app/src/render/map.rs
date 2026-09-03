@@ -2283,8 +2283,25 @@ fn draw_room(
             draw_compact_room(room, sx, sy, base_style, &state.symbols, selected, area, buf);
         }
         Zoom::Boxes => {
-            draw_box_room(room, sx, sy, base_style, &state.symbols, selected, state.show_alignment, state.show_room_numbers, area, buf);
+            let alias_marker_style = state.colors.theme.get("map.room_alias_marker").style;
+            draw_box_room(
+                room, sx, sy, base_style, alias_marker_style, &state.symbols, selected,
+                state.show_alignment, state.show_room_numbers, area, buf,
+            );
         }
+    }
+}
+
+/// Superscript alias-count marker for a room box (SQ-1257 Phase 3): `""` for zero aliases, one
+/// Unicode superscript digit (¹²³⁴⁵⁶⁷⁸⁹, U+00B9/U+00B2/U+00B3/U+2074–2079) for 1–9, and `"⁹⁺"`
+/// (superscript nine plus a superscript plus, U+207A) for ten or more — the box has no room for
+/// a two-digit count, and "at least this many" is still an honest thing to say with one.
+fn alias_marker(count: usize) -> String {
+    const SUP_DIGITS: [char; 9] = ['¹', '²', '³', '⁴', '⁵', '⁶', '⁷', '⁸', '⁹'];
+    match count {
+        0 => String::new(),
+        1..=9 => SUP_DIGITS[count - 1].to_string(),
+        _ => "⁹⁺".to_string(),
     }
 }
 
@@ -2388,11 +2405,13 @@ fn center(s: &str, width: usize) -> String {
 /// border glyphs themselves are drawn non-reversed.
 /// Selected room: yellow style (SELECTED_STYLE).
 /// Notes: ● marker in top-right inner corner (row 1, col bw-2).
+#[allow(clippy::too_many_arguments)]
 fn draw_box_room(
     room: &RenderRoom,
     sx: i32,
     sy: i32,
     style: Style,
+    alias_marker_style: Style,
     sym: &SymbolSet,
     selected: bool,
     show_alignment: bool,
@@ -2434,9 +2453,35 @@ fn draw_box_room(
 
     // Room name word-wrapped + centered across the first two interior rows.
     let iw = (w - 2) as usize; // interior width (9)
-    let name_lines = wrap_two(&room.label, iw);
-    put_str(buf, sx + 1, sy + 1, &center(&name_lines[0], iw), style, area);
-    put_str(buf, sx + 1, sy + 2, &center(&name_lines[1], iw), style, area);
+    // A room the story keeps renaming (SQ-1257 Phase 3, Lost Pig's gnome tunnels) carries a
+    // small superscript count of its other names beside the label. The marker is never dropped
+    // for lack of room — the NAME shortens instead, by wrapping into a narrower width that
+    // reserves space for it.
+    let marker = alias_marker(room.alias_count);
+    if marker.is_empty() {
+        let name_lines = wrap_two(&room.label, iw);
+        put_str(buf, sx + 1, sy + 1, &center(&name_lines[0], iw), style, area);
+        put_str(buf, sx + 1, sy + 2, &center(&name_lines[1], iw), style, area);
+    } else {
+        let marker_w = marker.chars().count();
+        let name_w = iw.saturating_sub(marker_w).max(1);
+        let name_lines = wrap_two(&room.label, name_w);
+        // The marker rides on whichever line actually holds text — the second wrapped line when
+        // there is one, else the first — so it reads immediately after the last word of the name.
+        let target = if !name_lines[1].is_empty() { 1 } else { 0 };
+        for (i, line) in name_lines.iter().enumerate() {
+            let y = sy + 1 + i as i32;
+            if i == target {
+                let full_len = line.chars().count() + marker_w;
+                let pad = iw.saturating_sub(full_len);
+                let left = (pad / 2) as i32;
+                put_str(buf, sx + 1 + left, y, line, style, area);
+                put_str(buf, sx + 1 + left + line.chars().count() as i32, y, &marker, alias_marker_style, area);
+            } else {
+                put_str(buf, sx + 1, y, &center(line, iw), style, area);
+            }
+        }
+    }
 
     // Row 3: #id (centered), with alignment diagnostics appended when enabled.
     // Only drawn when show_room_numbers is true; when hidden, the row is freed for portal icons.
@@ -3464,6 +3509,67 @@ mod tests {
             .map(|x| buf.cell((x, 3)).map(|c| c.symbol().chars().next().unwrap_or(' ')).unwrap_or(' '))
             .collect();
         assert!(row3.contains("#7"), "row 3 should show the room id '#7'; got '{row3}'");
+    }
+
+    /// SQ-1257 Phase 3: a room the story has renamed three times over (Lost Pig's gnome tunnels
+    /// are the specimen) draws its CURRENT name with a superscript "³" beside it, never dropping
+    /// the marker to fit. Falsify by reverting `draw_box_room`'s marker branch back to the plain
+    /// `wrap_two`/`center` pair and this fails on the `contains('³')` assertion.
+    #[test]
+    fn room_box_shows_the_superscript_alias_count_beside_the_current_name() {
+        use mapper::graph::MapGraph;
+        let mut g = MapGraph::new();
+        g.upsert_room(1, "A".into());
+        g.upsert_room(1, "B".into());
+        g.upsert_room(1, "C".into());
+        g.upsert_room(1, "Cave".into()); // current label "Cave"; aliases A, B, C (3 of them)
+        assert_eq!(g.room(1).unwrap().aliases.len(), 3, "sanity: the fixture really has 3 aliases");
+        g.set_pos(1, (0, 0));
+        let rm = render(&g);
+        let state = AppState::default(); // Boxes zoom
+        let area = Rect::new(0, 0, 60, 20);
+        let mut buf = Buffer::empty(area);
+        render_map(&rm, &state, area, &mut buf);
+
+        // Interior rows 1-2, cols 1-9 (box width 11, interior width 9).
+        let interior: String = (1u16..=2)
+            .flat_map(|y| (1u16..=9).map(move |x| (x, y)))
+            .map(|(x, y)| buf.cell((x, y)).map(|c| c.symbol().chars().next().unwrap_or(' ')).unwrap_or(' '))
+            .collect();
+        assert!(interior.contains('³'), "the superscript count '³' must appear: {interior:?}");
+        assert!(interior.contains("Cave"), "the current name still appears: {interior:?}");
+        assert!(interior.contains("Cave³"), "the marker sits right after the name: {interior:?}");
+    }
+
+    /// The marker is its own themeable element (`map.room_alias_marker`), not a reuse of the
+    /// room's base colour — so styling it in `style.toml` must actually change what is drawn.
+    #[test]
+    fn room_box_alias_marker_uses_its_own_style_selector() {
+        use mapper::graph::MapGraph;
+        let mut g = MapGraph::new();
+        g.upsert_room(1, "A".into());
+        g.upsert_room(1, "Cave".into()); // one alias: "A"
+        g.set_pos(1, (0, 0));
+        let rm = render(&g);
+        let state = AppState::default();
+        let area = Rect::new(0, 0, 60, 20);
+        let mut buf = Buffer::empty(area);
+        render_map(&rm, &state, area, &mut buf);
+
+        let (_, _, marker_fg) = (1u16..=9)
+            .flat_map(|x| (1u16..=2).map(move |y| (x, y)))
+            .find_map(|(x, y)| buf.cell((x, y)).filter(|c| c.symbol() == "¹").map(|c| (x, y, c.fg)))
+            .expect("the alias marker glyph '¹' must be drawn somewhere in the box");
+        let marker_selector_fg = state.colors.theme.get("map.room_alias_marker").style.fg;
+        assert_eq!(
+            Some(marker_fg), marker_selector_fg,
+            "the drawn marker's colour must come from the map.room_alias_marker selector"
+        );
+        let room_selector_fg = state.colors.theme.get("map.room").style.fg;
+        assert_ne!(
+            marker_selector_fg, room_selector_fg,
+            "sanity: the two selectors resolve to different defaults, so this test can tell them apart"
+        );
     }
 
     // connector_has_corner_glyph: removed — called build_connector_mask which is gone;
@@ -5570,6 +5676,7 @@ mod tests {
             self_loops: Vec::new(),
             has_notes: false,
             align_code: String::new(),
+            alias_count: 0,
         };
 
         let mut state = AppState::default();
@@ -5604,6 +5711,7 @@ mod tests {
             self_loops: Vec::new(),
             has_notes: false,
             align_code: String::new(),
+            alias_count: 0,
         };
 
         let mut state = AppState::default();
@@ -5628,6 +5736,7 @@ mod tests {
             self_loops: Vec::new(),
             has_notes: false,
             align_code: String::new(),
+            alias_count: 0,
         };
 
         let mut state = AppState::default();

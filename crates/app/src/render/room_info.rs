@@ -274,6 +274,19 @@ pub fn draw_room_info_body(
         }
     }
 
+    // "Also seen as: ..." (SQ-1257 Phase 3) — the other names the story has printed for this
+    // room, e.g. Lost Pig's gnome tunnels rerolling a fresh name on every step. Under the notes,
+    // above the exit card, shown only when the room actually has any.
+    if !room.aliases.is_empty() && row <= max_y {
+        let aliases_style = theme.get("room_panel.aliases").style;
+        let line = format!("Also seen as: {}", room.aliases.join(", "));
+        for wrapped in crate::render::transcript::wrap_line(&line, inner_w) {
+            if row > max_y { break; }
+            draw_str_clipped(buf, inner_x, row, &wrapped, aliases_style, clip);
+            row += 1;
+        }
+    }
+
     // Objects (only for the current room) come BEFORE the card (SQ-0692). The card is a fixed
     // thirteen-line block, so in a dock shortened past its natural height it is the section that
     // runs off the bottom — and it degrades gracefully, because every one of its rows is the same
@@ -572,6 +585,30 @@ mod tests {
         assert!(!text.contains("West of House"), "the body does not repeat the header's name:\n{text}");
         assert!(text.contains("Exits:"), "it starts at the exit card:\n{text}");
         assert!(text.contains("Forest Path"), "…which names the destination");
+    }
+
+    /// SQ-1257 Phase 3: a room the story has renamed shows an "Also seen as: ..." line, under
+    /// the notes and above the exit card, listing every OTHER name in first-seen order — never
+    /// the current one.
+    #[test]
+    fn room_info_shows_also_seen_as_when_the_room_has_aliases() {
+        let (mut g, room1, _) = make_graph_with_rooms();
+        g.upsert_room(room1, "Confusing Passage".into());
+        g.upsert_room(room1, "Strange Place".into());
+        let text = render_body(&g, &[], room1, None, 60, 20);
+        assert!(
+            text.contains("Also seen as: West of House, Confusing Passage"),
+            "both older names appear, in first-seen order:\n{text}"
+        );
+        assert!(!text.contains("Strange Place,"), "the CURRENT name is never listed as an alias:\n{text}");
+    }
+
+    /// The companion case: a room with no rename shows no "Also seen as" line at all.
+    #[test]
+    fn room_info_shows_no_also_seen_as_line_without_aliases() {
+        let (g, room1, _) = make_graph_with_rooms();
+        let text = render_body(&g, &[], room1, None, 60, 20);
+        assert!(!text.contains("Also seen as"), "no aliases, so no line:\n{text}");
     }
 
     #[test]

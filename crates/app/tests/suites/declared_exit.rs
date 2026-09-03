@@ -357,7 +357,7 @@ impl Play {
     }
 }
 
-/// SQ-1257 Phase 2 on the real game, and what the real game turned out to be.
+/// SQ-1257 Phase 2 (and Phase 3) on the real game, and what the real game turned out to be.
 ///
 /// Lost Pig's "random tunnels" are ONE room object (#183) whose `printed name` is
 /// re-rolled on every move — "Confusing Passage", "Strange Place", "Twisty
@@ -365,16 +365,18 @@ impl Play {
 /// passages between them. Before SQ-1259 the room-lock keyed rooms by status-line
 /// NAME, so every re-roll minted a fresh map room and the map ran wild; since
 /// SQ-1259 the lock holds #183 through the game's own `location` global, so a
-/// tunnel move is a move that led back to the room it left. That is exactly what
-/// `apply_turn` records for it — a self-loop — and Phase 2 never fires, because
-/// its trigger is a move that CHANGED rooms. The `?` machinery is proven on the
-/// synthetic engine in `random_exit_probe::tests`; this case pins the real
-/// game's shape so the next person does not go looking for random rooms that are
-/// not there.
+/// tunnel move is a move that led back to the room it left. Since SQ-1257 Phase 3,
+/// a same-room move that ALSO renamed the room is no longer read as a self-loop —
+/// it is a random exit (`?`), because "leads back here" would be a lie about a
+/// direction whose destination never even keeps a stable NAME. Phase 2 still never
+/// fires here either way, because its trigger is a move that CHANGED rooms. The
+/// `?` machinery itself is proven on the synthetic engine in
+/// `random_exit_probe::tests`; this case pins the real game's shape so the next
+/// person does not go looking for random rooms that are not there.
 ///
 /// Non-vacuity: `Twisty Cave` is asserted by name before anything else is asked.
 #[test]
-fn lost_pig_tunnels_are_one_room_whose_name_rerolls_and_phase_2_never_fires() {
+fn lost_pig_tunnels_are_one_room_whose_name_rerolls_as_random_exits_and_phase_2_never_fires() {
     let Some(mut p) = Play::lost_pig() else {
         eprintln!("SKIP: gitignored stories/LostPig.z8 missing");
         return;
@@ -416,20 +418,42 @@ fn lost_pig_tunnels_are_one_room_whose_name_rerolls_and_phase_2_never_fires() {
     // was probed — count from here, not from before it.)
     let probed_before_tunnels = p.state.probe.probes;
     let rooms_before = p.mapper.graph.rooms().count();
-    let mut names = std::collections::BTreeSet::new();
     for cmd in ["EAST", "WEST", "NORTH", "SOUTH", "EAST"] {
         p.turn(cmd);
         assert_eq!(p.mapper.graph.current(), Some(twisty), "{cmd}: a tunnel move leads back to the tunnel room itself");
-        names.insert(p.session.current_location().map(|l| l.name).unwrap_or_default());
     }
-    assert!(names.len() >= 2, "the room's printed name re-rolls between moves: {names:?}");
     assert_eq!(p.mapper.graph.rooms().count(), rooms_before, "no new map room is minted for a re-rolled name");
     assert_eq!(p.state.probe.probes, probed_before_tunnels, "Phase 2 never fires: no move changed rooms");
-    assert!(!p.mapper.graph.is_random_exit(twisty, Direction::E), "nothing is marked `?` — the destination never varied");
+
+    // SQ-1257 Phase 3: the room's label is whatever the story is CURRENTLY calling it — the
+    // same text `current_location` itself reports — and every OTHER name it printed along
+    // the way lives in the room's aliases, never as a fresh map room.
+    let current_name = p.session.current_location().map(|l| l.name).unwrap_or_default();
     assert_eq!(
-        mapper::matrix::classify(&p.mapper.graph, twisty, Direction::E),
-        mapper::matrix::MatrixCell::SelfLoop,
-        "the matrix reads the tunnel's east exit as `leads back here`"
+        p.mapper.graph.room(twisty).map(|r| r.name.as_str()),
+        Some(current_name.as_str()),
+        "the room's label is the CURRENT name the story is showing"
+    );
+    let aliases = p.mapper.graph.room(twisty).map(|r| r.aliases.clone()).unwrap_or_default();
+    assert!(aliases.len() >= 2, "at least two other names were seen along the way: {aliases:?}");
+    assert!(
+        !aliases.contains(&current_name),
+        "the current label is never also listed among its own aliases: {aliases:?}"
+    );
+
+    // Every rename-loop direction walked above reads as `?` ("destination varies"), not `↩`
+    // ("leads back here") — and no self-loop connection was minted for #183 at all.
+    for dir in [Direction::E, Direction::W, Direction::N, Direction::S] {
+        assert_eq!(
+            mapper::matrix::classify(&p.mapper.graph, twisty, dir),
+            mapper::matrix::MatrixCell::Random,
+            "{dir:?}: a rename-loop reads as `destination varies`, not `leads back here`"
+        );
+    }
+    assert!(
+        p.mapper.graph.self_loops(twisty).is_empty(),
+        "no self-loop connection exists for the tunnel room: {:?}",
+        p.mapper.graph.connections()
     );
 }
 

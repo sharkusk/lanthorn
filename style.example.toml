@@ -61,6 +61,7 @@ version = 1   # style schema version — do not remove; lets lanthorn flag an ou
 # room_panel = { parent = "text" }
 # "room_panel.header" = { parent = "heading" }
 # "room_panel.header:pinned" = { parent = "accent", reversed = true }
+# "room_panel.aliases" = { parent = "muted" }
 # story_info_title = { parent = "heading" }
 # terminal_dump_heading = { parent = "heading", bold = true }
 # terminal_dump_assumed = { parent = "alert" }
@@ -153,6 +154,7 @@ version = 1   # style schema version — do not remove; lets lanthorn flag an ou
 # room = { parent = "text" }
 # room_current = { parent = "accent" }
 # room_selected = { parent = "accent", reversed = true }
+# room_alias_marker = { parent = "muted" }
 # connector = { parent = "accent" }
 # connector_distorted = { fg = "magenta" }
 # connector_portal = { parent = "accent" }

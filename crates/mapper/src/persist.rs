@@ -155,6 +155,36 @@ mod tests {
         assert!(m.graph.room(1).unwrap().random_exits.is_empty());
     }
 
+    /// SQ-1257 Phase 3: a room's aliases must survive the map file, or every restore would
+    /// forget every OTHER name the story ever printed for a room like Lost Pig's gnome tunnels
+    /// and start the alias list over from whatever it happens to be called at reload time.
+    #[test]
+    fn round_trips_room_aliases() {
+        let mut m = Mapper::default();
+        m.observe_moved(183, "Twisty Cave", None);
+        m.observe_moved(183, "Confusing Passage", Some(Direction::N));
+        m.observe_moved(183, "Strange Place", Some(Direction::E));
+
+        let m2 = from_json(&to_json(&m)).unwrap();
+        assert_eq!(m2.graph.room(183).unwrap().name, "Strange Place", "the current label survives");
+        assert_eq!(
+            m2.graph.room(183).unwrap().aliases,
+            vec!["Twisty Cave", "Confusing Passage"],
+            "every other name survives, in first-seen order"
+        );
+        assert!(m2.graph.is_random_exit(183, Direction::N));
+        assert!(m2.graph.is_random_exit(183, Direction::E));
+    }
+
+    /// A map file saved before SQ-1257 Phase 3 has no `aliases` field at all; it must load as an
+    /// empty list rather than fail to parse — the same back-compat shape as `random_exits` above.
+    #[test]
+    fn a_pre_phase3_map_file_has_no_aliases_field_and_loads_fine() {
+        let old = r#"{"version":1,"rooms":[{"id":1,"name":"Hall","label_override":null,"notes":"","pos":[0,0]}],"connections":[],"current":1}"#;
+        let m = from_json(old).unwrap();
+        assert!(m.graph.room(1).unwrap().aliases.is_empty());
+    }
+
     /// SQ-0672: the per-layer "last room visited" memory must survive a save/load round trip, or
     /// a layer switch after a restore would always fall back to the bounding-box centre instead
     /// of the room the player actually last stood on there.

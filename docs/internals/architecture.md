@@ -563,6 +563,64 @@ Twisty Cave costs **two** shadow attempts (one restore + one reseed + one
 worker thread, never the player's, which pays only the one host snapshot
 `finish_command_turn` already keeps a `TurnSave` for.
 
+### Phase 3: the room keeps its own name history, and a rename-loop is not a loop
+
+Lost Pig's gnome tunnels do not just send the player to a random cave — the
+room they land in prints a FRESH NAME every time ("Twisty Cave", "Confusing
+Passage", "Strange Place", …), while `location`-global room-locking (see the
+declared-exits section above) keeps it the same object throughout. Before this
+existed, a compass move that returned to the room it left was unconditionally
+a self-loop (SQ-0666): `crate::graph::MapGraph::add_self_loop` cannot tell a
+maze's honest "west leads back here" apart from a room whose very NAME is part
+of what varies, so the tunnels drew a `↩` badge that grew a fresh direction
+every crossing and a label that flickered to whatever the story rolled last.
+
+Two independent pieces close this, both living in `crates/mapper`, which never
+needed to know anything about declared exits, RNG seeds or shadows to do it —
+this is a purely STRUCTURAL fact about a name changing, visible without a
+probe:
+
+- **`crate::graph::Room::aliases`** — every OTHER name the game has printed
+  for a room, in first-seen order, maintained by the one place a rename
+  happens: `Room::note_name_change`, called from `MapGraph::upsert_room`'s
+  revisit branch whenever the incoming name differs from what the room
+  already had. The room's displayed label is still just `Room::name` (or a
+  `label_override`, unaffected) — aliases are purely the history beside it,
+  persisted with the room like every other room fact (`#[serde(default)]`,
+  so an older map file loads with an empty list).
+- **The rename-loop check in `Mapper::observe_inner`** — the one place
+  `crates/app`'s `apply_turn` ever asks the mapper to record a same-room
+  arrival (`Mapper::observe_moved`). It now captures the room's label
+  BEFORE the incoming `upsert_room` call (the only moment the previous label
+  is still readable) and, for a same-room move the caller has proven really
+  happened, compares it against this turn's printed name: unchanged is an
+  ordinary self-loop exactly as before; changed calls
+  `Mapper::record_random_exit` instead of `MapGraph::add_self_loop` — the
+  same call Phase 1 makes for a declared-exit mismatch, so a rename-loop and
+  a table-mismatch read identically to everything downstream (the matrix,
+  the room card, the map box). No self-loop edge is minted for a
+  rename-loop, so the box draws no return-arrow badge for it either.
+
+`mapper::matrix::classify` now checks `MatrixCell::Random` BEFORE
+`MatrixCell::SelfLoop` on a shared key (both fall out of the `dest.is_none()`
+branch, after a real edge, which still beats either). The rename-loop check
+means the two never coexist for a move recorded since it went in — one
+crossing writes one or the other, never both — but an OLDER map file (or a
+future writer nobody has audited yet) could still carry a self-loop and a
+random mark on the same direction, and "the story never even commits to a
+destination room name" is the more specific, truer thing to say about it than
+"leads back here". This mirrors the existing edge-beats-both precedence
+exactly: most specific, most informative fact wins.
+
+The drawn map marks a room with aliases with a small superscript count beside
+its label (`Twisty Passage⁵`, Unicode superscript digits, `⁹⁺` past nine),
+styled through its own selector (`map.room_alias_marker`) rather than the
+room's base colour; the room panel lists them under "Also seen as", and
+`/export-map`'s dump carries them on the `ROOM` line as `aka=[...]`. All three
+read `crate::graph::Room::aliases` directly — nothing recomputes the list, so
+the box, the panel and the dump can never disagree about what a room used to
+be called.
+
 ## Reading back the bytes we actually emit
 
 Every other harness in the repo renders into a ratatui `Buffer` and asserts on

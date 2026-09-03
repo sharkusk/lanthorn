@@ -73,6 +73,16 @@ pub struct Room {
     /// files, hence `serde(default)`.
     #[serde(default)]
     pub random_exits: Vec<Direction>,
+    /// Every distinct name the game has printed for this room, other than its CURRENT label
+    /// (SQ-1257 Phase 3) — Lost Pig's gnome tunnels reroll a fresh name on every compass move,
+    /// and this is where the others go so the map can keep saying "this is the same room" while
+    /// showing what the story is calling it right now. First-seen order, no duplicates; the
+    /// current label is never a member of its own list.
+    ///
+    /// Maintained by [`Room::note_name_change`], the one place a name transition happens.
+    /// Absent from a map file written before this existed, hence `serde(default)`.
+    #[serde(default)]
+    pub aliases: Vec<String>,
     /// Monotonic discovery order, stamped once by [`MapGraph::upsert_room`] the first time this
     /// room is minted and never touched again (SQ-0685). This — not the room id, which for a
     /// Z-machine game is the story's own object number and has nothing to do with when the player
@@ -91,6 +101,25 @@ impl Room {
         match &self.label_override {
             Some(l) => l.as_str(),
             None => self.name.as_str(),
+        }
+    }
+
+    /// Record that this room's printed name is about to change to `new_name` (SQ-1257 Phase 3).
+    /// Only called when the name is genuinely different — [`MapGraph::upsert_room`]'s revisit
+    /// branch checks that before calling this, so it never has to no-op on a same-name
+    /// observation.
+    ///
+    /// The raw name this room carried a moment ago joins `aliases` (deduplicated) and
+    /// `new_name` is pulled back out of `aliases` if an earlier rename had put it there: the
+    /// list holds every OTHER printed name, never the room's current one. Tracked against the
+    /// raw `name` field rather than [`Room::label`] — a `label_override` pins the DISPLAY, but
+    /// the story keeps printing its own names underneath it, and those are still worth
+    /// remembering as aliases even while the override hides the churn.
+    fn note_name_change(&mut self, new_name: String) {
+        let old_name = std::mem::replace(&mut self.name, new_name.clone());
+        self.aliases.retain(|a| *a != new_name);
+        if !self.aliases.contains(&old_name) {
+            self.aliases.push(old_name);
         }
     }
 }
@@ -353,7 +382,10 @@ impl MapGraph {
         use std::collections::btree_map::Entry;
         match self.rooms.entry(id) {
             Entry::Occupied(e) => {
-                e.into_mut().name = name;
+                let room = e.into_mut();
+                if room.name != name {
+                    room.note_name_change(name);
+                }
             }
             Entry::Vacant(e) => {
                 let seq = self.next_seq;
@@ -369,6 +401,7 @@ impl MapGraph {
                     tried: Vec::new(),
                     probed: Vec::new(),
                     random_exits: Vec::new(),
+                    aliases: Vec::new(),
                     seq,
                 });
             }
@@ -987,6 +1020,77 @@ mod tests {
         assert_eq!(g.room(10).unwrap().notes, "has lamp"); // edits preserved
     }
 
+    // ── SQ-1257 Phase 3: aliases ─────────────────────────────────────────────
+
+    /// A room renamed several times over collects every OLD name as an alias, in the order it
+    /// was first seen, and the current label is never one of them (Lost Pig's gnome tunnels:
+    /// "Twisty Cave" → "Confusing Passage" → "Strange Place" → "Twisty Place").
+    #[test]
+    fn a_repeatedly_renamed_room_collects_its_old_names_as_aliases_in_first_seen_order() {
+        let mut g = MapGraph::new();
+        g.upsert_room(183, "Twisty Cave".into());
+        assert!(g.room(183).unwrap().aliases.is_empty(), "nothing to alias yet on first sight");
+
+        g.upsert_room(183, "Confusing Passage".into());
+        assert_eq!(g.room(183).unwrap().name, "Confusing Passage");
+        assert_eq!(g.room(183).unwrap().aliases, vec!["Twisty Cave"]);
+
+        g.upsert_room(183, "Strange Place".into());
+        assert_eq!(
+            g.room(183).unwrap().aliases,
+            vec!["Twisty Cave", "Confusing Passage"],
+            "first-seen order, oldest first"
+        );
+
+        g.upsert_room(183, "Twisty Place".into());
+        assert_eq!(
+            g.room(183).unwrap().aliases,
+            vec!["Twisty Cave", "Confusing Passage", "Strange Place"]
+        );
+        assert!(
+            !g.room(183).unwrap().aliases.contains(&"Twisty Place".to_string()),
+            "the current label is never also an alias"
+        );
+
+        // A same-name re-observation (no rename) must not touch the list at all.
+        g.upsert_room(183, "Twisty Place".into());
+        assert_eq!(g.room(183).unwrap().aliases.len(), 3, "no change on a repeat observation");
+    }
+
+    /// A rename back to a PREVIOUSLY-seen name pulls that name back out of the alias list (it is
+    /// current again) and files the label it just left in its place — no duplicates either way.
+    #[test]
+    fn renaming_back_to_a_former_name_moves_it_out_of_aliases_and_the_displaced_one_in() {
+        let mut g = MapGraph::new();
+        g.upsert_room(1, "A".into());
+        g.upsert_room(1, "B".into()); // aliases: [A]
+        assert_eq!(g.room(1).unwrap().aliases, vec!["A"]);
+
+        g.upsert_room(1, "A".into()); // back to A: aliases lose A, gain B
+        assert_eq!(g.room(1).unwrap().name, "A");
+        assert_eq!(g.room(1).unwrap().aliases, vec!["B"], "B is now the alias, not A");
+    }
+
+    /// A `label_override` pins the map's display regardless of what the story prints
+    /// underneath it, so a name change while one is set changes the room's raw `name` but must
+    /// not perturb the aliases the player actually SEES (the override itself is never displaced
+    /// into `aliases`, since it is still the current label after the rename).
+    #[test]
+    fn a_label_override_is_never_displaced_into_aliases_by_a_name_change_underneath_it() {
+        let mut g = MapGraph::new();
+        g.upsert_room(1, "Twisty Cave".into());
+        g.set_label_override(1, Some("My Landmark".into()));
+        assert_eq!(g.room(1).unwrap().label(), "My Landmark");
+
+        g.upsert_room(1, "Confusing Passage".into()); // the story reroll happens underneath
+        assert_eq!(g.room(1).unwrap().label(), "My Landmark", "the override still wins");
+        assert_eq!(
+            g.room(1).unwrap().aliases,
+            vec!["Twisty Cave"],
+            "the raw name the room had before the rename is recorded, not the override"
+        );
+    }
+
     /// SQ-0632: a room can hold several non-compass passages (xyzzy AND pray). Keying Unknown
     /// edges by (origin, dir) alone made the second silently overwrite the first's destination,
     /// losing a recorded passage. Unknown edges to DIFFERENT destinations must coexist; an exact
@@ -1110,6 +1214,7 @@ mod tests {
             tried: Vec::new(),
             probed: Vec::new(),
             random_exits: Vec::new(),
+            aliases: Vec::new(),
             seq: ROOM_SEQ_MISSING,
         };
         let rooms = vec![mk(5), mk(2), mk(9)];
@@ -1140,6 +1245,7 @@ mod tests {
             tried: Vec::new(),
             probed: Vec::new(),
             random_exits: Vec::new(),
+            aliases: Vec::new(),
             seq,
         };
         // Array order (2, 1) deliberately disagrees with seq order (1, 0): if the backfill fired

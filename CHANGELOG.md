@@ -41,6 +41,13 @@ Absolute URLs or no link.
   the same direction; the room panel and the direction matrix now mark that
   exit `?` — "destination varies" — instead of pointing an arrow at whichever
   room the story happened to pick.
+- **A room that keeps changing its own name — Lost Pig's gnome tunnels again
+  — now stays ONE room on the map, not a flicker of relabels.** It is drawn
+  labelled as the story currently calls it, with a small superscript count
+  beside the name (`Twisty Passage⁵`) noting how many other names it has
+  answered to; the room panel lists them under "Also seen as". The compass
+  moves that trigger a rename now show `?` instead of the return-arrow badge
+  a same-room move used to draw.
 
 ### Fixed
 

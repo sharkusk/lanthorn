@@ -142,6 +142,14 @@ pub fn render_dump(graph: &MapGraph, symbols: &SymbolSet) -> String {
         } else {
             format!("  notes={:?}", r.notes)
         };
+        // Other names the story has printed for this room (SQ-1257 Phase 3) — Lost Pig's gnome
+        // tunnels are the specimen — so an exported map still says what the room was called
+        // before its label last changed.
+        let aka = if r.aliases.is_empty() {
+            String::new()
+        } else {
+            format!("  aka={:?}", r.aliases)
+        };
 
         // Build align= annotation.
         let mut align_parts: Vec<String> = Vec::new();
@@ -179,8 +187,8 @@ pub fn render_dump(graph: &MapGraph, symbols: &SymbolSet) -> String {
             String::new()
         };
         out.push_str(&format!(
-            "ROOM {} {:?} pos={}{} align={}{}{}\n",
-            r.id, r.label(), pos, notes, align, dropped_str, layer_str
+            "ROOM {} {:?} pos={}{}{} align={}{}{}\n",
+            r.id, r.label(), pos, notes, aka, align, dropped_str, layer_str
         ));
     }
 
@@ -313,6 +321,26 @@ mod tests {
         // The ASCII map shows room ids.
         assert!(dump.contains("#1"));
         assert!(dump.contains("#2"));
+    }
+
+    /// SQ-1257 Phase 3: a room the story has renamed carries its other names on the ROOM line
+    /// as `aka=[...]`, so `/export-map` keeps them. A room with no rename carries no `aka=`
+    /// segment at all — the field must not clutter every ordinary room.
+    #[test]
+    fn dump_room_line_carries_aka_only_when_the_room_has_aliases() {
+        let mut m = Mapper::default();
+        m.observe_moved(183, "Twisty Cave", None);
+        m.observe_moved(183, "Confusing Passage", Some(Direction::N));
+        m.observe(2, "Plain Room", None); // never renamed
+        let dump = render_dump(&m.graph, &SymbolSet::default());
+
+        assert!(
+            dump.contains(r#"aka=["Twisty Cave"]"#),
+            "the tunnel room's old name appears as aka=[...]:\n{dump}"
+        );
+        let plain_room_line =
+            dump.lines().find(|l| l.starts_with("ROOM 2 ")).expect("room 2's line");
+        assert!(!plain_room_line.contains("aka="), "an unrenamed room carries no aka= at all: {plain_room_line}");
     }
 
     #[test]

@@ -77,6 +77,7 @@ Every themeable `style.toml` selector: which role or selector it derives from, a
 | `map.room` | Map | Style | `text` |  | |
 | `map.room_current` | Map | Style | `accent` |  | |
 | `map.room_selected` | Map | Style | `accent` | `reversed` | |
+| `map.room_alias_marker` | Map | Style | `muted` |  | |
 | `map.connector` | Map | Style | `accent` |  | |
 | `map.connector_distorted` | Map | Style |  | `fg=Magenta` | |
 | `map.connector_portal` | Map | Style | `accent` |  | |
@@ -121,6 +122,7 @@ Every themeable `style.toml` selector: which role or selector it derives from, a
 | `room_panel` | Elements | Style | `text` |  | |
 | `room_panel.header` | Elements | Style | `heading` |  | |
 | `room_panel.header:pinned` | Elements | Style | `accent` | `reversed` | |
+| `room_panel.aliases` | Elements | Style | `muted` |  | |
 | `story_info_title` | Elements | Style | `heading` |  | |
 | `terminal_dump_heading` | Elements | Style | `heading` | `bold` | |
 | `terminal_dump_assumed` | Elements | Style | `alert` |  | |

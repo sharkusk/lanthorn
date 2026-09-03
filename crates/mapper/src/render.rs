@@ -33,6 +33,11 @@ pub struct RenderRoom {
     /// Directions that lead back INTO this room — see [`MapGraph::self_loops`] (SQ-0666).
     /// Carried here so the drawn view can badge the box without a second pass over the graph.
     pub self_loops: Vec<crate::direction::Direction>,
+    /// How many OTHER names the story has printed for this room (SQ-1257 Phase 3) — see
+    /// [`crate::graph::Room::aliases`]. Carried as a count, not the list itself: the drawn box
+    /// has room only for a superscript digit beside the label, and the full list belongs to the
+    /// room panel, which reads the graph directly.
+    pub alias_count: usize,
 }
 
 /// The complete zoom-independent render description of the map.
@@ -83,6 +88,7 @@ pub fn render_traced(graph: &MapGraph, on_step: &mut dyn FnMut(&str)) -> RenderM
                 align_code,
                 has_layer_portal: false,
                 self_loops: graph.self_loops(room.id),
+                alias_count: room.aliases.len(),
             })
         })
         .collect();

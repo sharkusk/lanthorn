@@ -344,6 +344,11 @@ pub static REGISTRY: std::sync::LazyLock<Vec<RegRow>> = std::sync::LazyLock::new
     row("map.room", Section::Map, Kind::Style, Some("text"), Delta::EMPTY),
     row("map.room_current", Section::Map, Kind::Style, Some("accent"), Delta::EMPTY),
     row("map.room_selected", Section::Map, Kind::Style, Some("accent"), mods(false, false, false, true)),
+    // The superscript alias-count marker beside a room's label (SQ-1257 Phase 3) — a room like
+    // Lost Pig's gnome tunnels that keeps changing its own printed name. `muted`, same reasoning
+    // as `map.loc_indicator`: a small footnote, not something competing with the label for the
+    // eye.
+    row("map.room_alias_marker", Section::Map, Kind::Style, Some("muted"), Delta::EMPTY),
     row("map.connector", Section::Map, Kind::Style, Some("accent"), Delta::EMPTY),
     // `distorted` (magenta) has no matching role — kept explicit (a distinctive marker).
     row("map.connector_distorted", Section::Map, Kind::Style, None, fg(Color::Magenta)),
@@ -469,6 +474,11 @@ pub static REGISTRY: std::sync::LazyLock<Vec<RegRow>> = std::sync::LazyLock::new
     row("room_panel", Section::Elements, Kind::Style, Some("text"), Delta::EMPTY),
     row("room_panel.header", Section::Elements, Kind::Style, Some("heading"), Delta::EMPTY),
     row("room_panel.header:pinned", Section::Elements, Kind::Style, Some("accent"), mods(false, false, false, true)),
+    // The "Also seen as: ..." line (SQ-1257 Phase 3) — the other names the story has printed
+    // for this room, e.g. Lost Pig's gnome tunnels. `muted` on purpose, same reasoning as
+    // `map.loc_indicator`: it is background information about the room, not something to draw
+    // the eye to the way the header or the exit card does.
+    row("room_panel.aliases", Section::Elements, Kind::Style, Some("muted"), Delta::EMPTY),
     row("story_info_title", Section::Elements, Kind::Style, Some("heading"), Delta::EMPTY),
     // ── `/dump-terminal` (SQ-0994). Its whole point is telling a MEASURED value
     // from an ASSUMED one, so the two get different looks: a heading to find the
@@ -727,6 +737,7 @@ mod tests {
         "map.room",
         "map.room_current",
         "map.room_selected",
+        "map.room_alias_marker",
         "map.connector",
         "map.connector_distorted",
         "map.connector_portal",
@@ -774,6 +785,7 @@ mod tests {
         "room_panel",
         "room_panel.header",
         "room_panel.header:pinned",
+        "room_panel.aliases",
         "story_info_title",
         "terminal_dump_heading",
         "terminal_dump_assumed",

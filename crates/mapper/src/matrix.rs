@@ -69,7 +69,8 @@ pub enum MatrixCell {
     /// Lost Pig's gnome tunnels are the specimen. Explored, not a frontier, and
     /// names no destination because none is stable enough to name: the room the
     /// story picks varies, so no `dest` can be trusted from one crossing to the
-    /// next. A REAL edge in the same direction beats this — see [`classify_with`].
+    /// next. A REAL edge in the same direction beats this, and this beats
+    /// [`MatrixCell::SelfLoop`] on the same key — see [`classify_with`].
     Random,
 }
 
@@ -98,10 +99,16 @@ impl MatrixCell {
 
 /// Classify `dir` out of `room`.
 ///
-/// A REAL destination beats a self-loop on the same key: the graph deliberately keeps both when it
-/// has seen both (see [`MapGraph::add_edge`]), and a passage that demonstrably leads somewhere is
-/// the more useful of the two facts. `↩` therefore means "the only thing this direction ever did
-/// was bring me back".
+/// Precedence, most specific fact first: a REAL destination beats everything else — the graph
+/// deliberately keeps a self-loop or a random mark beside a real edge on the same key (see
+/// [`MapGraph::add_edge`], [`MapGraph::mark_random_exit`]), and a passage that demonstrably
+/// leads somewhere is the more useful fact. Failing that, a RANDOM mark beats a self-loop
+/// (SQ-1257 Phase 3): the two are mutually exclusive for any move recorded since the
+/// rename-loop check went in (`Mapper::observe_inner` marks one or the other, never both, for
+/// the same crossing), but an older map file can carry both on one key, and "the story never
+/// commits to a destination" is the stronger of the two things to say about it. `↩` therefore
+/// means "the only thing this direction ever did was bring me back, under the same name every
+/// time".
 pub fn classify(graph: &MapGraph, room: RoomId, dir: Direction) -> MatrixCell {
     classify_with(graph, &ConnIndex::new(graph), room, dir)
 }
@@ -143,19 +150,24 @@ fn classify_with(graph: &MapGraph, idx: &ConnIndex<'_>, room: RoomId, dir: Direc
     }
     let dest = idx.from(room).iter().find(|c| c.dir == dir && c.dest != room).map(|c| c.dest);
     let Some(dest) = dest else {
-        if graph.self_loops(room).contains(&dir) {
-            return MatrixCell::SelfLoop;
-        }
         // A REAL edge (above) beats this, and did not exist — so a direction the story sends
-        // somewhere different each time is reported before falling back to the tried/untried
-        // read, which cannot tell "the story decided" apart from "never tried". SQ-1257 Phase 2
-        // can UPGRADE this: a random-marked direction that later behaves deterministically gets
-        // a real edge and the mark is cleared in the same stroke
+        // somewhere different each time is reported before falling back to a self-loop or the
+        // tried/untried read. Checked BEFORE self-loops (SQ-1257 Phase 3): a compass move that
+        // returns to the room it left AND renames it is recorded as a random mark, never a
+        // self-loop edge (see `Mapper::observe_inner`'s rename-loop check) — but an OLD map file
+        // saved before that distinction existed can still carry both a self-loop and a random
+        // mark on the same key, and a random exit is the stronger, more specific fact: it says
+        // not just "this returns" but "the story never commits to the same room name either".
+        // SQ-1257 Phase 2 can UPGRADE this: a random-marked direction that later behaves
+        // deterministically gets a real edge and the mark is cleared in the same stroke
         // (`random_exit_probe::deliver`), so the two facts never coexist in the graph for long
         // — but while the mark stands alone (no edge yet, or the edge disagreed and was
         // removed), this is what makes it visible.
         if graph.is_random_exit(room, dir) {
             return MatrixCell::Random;
+        }
+        if graph.self_loops(room).contains(&dir) {
+            return MatrixCell::SelfLoop;
         }
         // No edge at all: the room's own record of what has been TYPED here is the only thing
         // that separates a wall from unexplored ground.
@@ -490,6 +502,28 @@ mod tests {
             "a real edge in the same key wins over an un-cleared random mark"
         );
         assert!(g.is_random_exit(1, Direction::S), "the random record itself is untouched by classify");
+    }
+
+    /// SQ-1257 Phase 3: a key that carries BOTH a self-loop and a random mark — which
+    /// `Mapper::observe_inner`'s rename-loop check never produces for one crossing, but an older
+    /// map file can — must read as `Random`, the more specific fact ("the story never even
+    /// commits to a destination room name"). Falsify by reverting `classify_with`'s check order
+    /// back to self-loop-before-random and this fails on the first assertion.
+    #[test]
+    fn a_random_exit_beats_a_self_loop_on_the_same_key() {
+        let (mut g, _l) = maze();
+        // South out of room 1 carries no real edge in `maze()`, so a self-loop recorded there
+        // is the only fact on the key.
+        assert!(g.add_self_loop(1, Direction::S));
+        assert_eq!(classify(&g, 1, Direction::S), MatrixCell::SelfLoop, "a bare loop reads as a loop");
+
+        g.mark_random_exit(1, Direction::S);
+        assert_eq!(
+            classify(&g, 1, Direction::S),
+            MatrixCell::Random,
+            "random beats a self-loop recorded on the same key"
+        );
+        assert!(g.self_loops(1).contains(&Direction::S), "the self-loop record itself survives");
     }
 
     /// SQ-1181: `build` classifies against a shared per-call [`ConnIndex`];

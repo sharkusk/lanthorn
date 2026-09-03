@@ -470,6 +470,19 @@ badge on the room box, never as a line looping out and back: a loop has no
 geometry, and a drawn one would need its own lane to say less than three characters
 do.
 
+**A room whose own name keeps changing** — Lost Pig's gnome tunnels, where every
+compass move rerolls what the story calls the room you are standing in — stays one
+room on the map rather than a flicker of new boxes. The box shows whatever the
+story is calling it right now, with a small superscript count of its other names
+beside the label (`Twisty Passage⁵`; `⁹⁺` once there are more than nine), styled
+through its own selector (`map.room_alias_marker`) so it can be coloured apart
+from the room's own text. The room panel lists every one of them under "Also seen
+as", and a compass move that both returns to the room it left AND changes its name
+is not drawn as a self-loop at all — it reads `?` in the matrix and on the room
+card, the same "destination varies" mark a declared-exit mismatch draws, because a
+direction whose destination will not even hold still on a NAME is not honestly a
+"leads back here" either.
+
 ## Finding the way back, without guessing it
 
 A map built from your moves learns a passage one direction at a time. Walk north

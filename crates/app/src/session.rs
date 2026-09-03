@@ -6189,6 +6189,132 @@ mod tests {
         assert_eq!(conns[0].dest, 2);
     }
 
+    /// SQ-1257 Phase 3 regression, driven through the real `apply_turn` seam (a maze room whose
+    /// name does NOT change, the shape a Zork I maze self-loop takes — no `stories/` fixture
+    /// needed for this synthetic form). A compass move that reprints the SAME room heading under
+    /// the SAME name must still read as an ordinary self-loop (`↩`), never a random exit (`?`):
+    /// the rename-loop check must fire only on an actual rename, not on every same-room arrival.
+    /// Falsify by dropping the `label_before` guard in `Mapper::observe_inner` (unconditional
+    /// `add_self_loop` becomes unconditional `record_random_exit`) and the final assertion fails.
+    #[test]
+    fn apply_turn_same_room_same_name_move_stays_a_self_loop_not_a_random_exit() {
+        let mut m = Mapper::default();
+        let enter = TurnResult {
+            transcript: "Maze\nYou are in a maze of twisty little passages, all alike.".into(),
+            transcript_runs: Vec::new(),
+            location: Some(ObjectSnapshot { number: 1, parent: 0, name: "Maze".into() }),
+            quit: false,
+            erase_lower: false,
+            info: None,
+            sounds: Vec::new(),
+            glulx_sound_ops: Vec::new(),
+            diagnostics: vec![],
+            fault: None,
+            location_method: None,
+            pending_io: None,
+            timed_out: false,
+            pictures: Vec::new(),
+            transcript_elems: Vec::new(),
+            prose_retired: None,
+            declared_exit: None,
+        };
+        apply_turn(&mut m, "look", &enter, &mut Default::default());
+        assert_eq!(m.graph.current(), Some(1));
+
+        // West leads back into the SAME room object, under the SAME printed name.
+        let west = TurnResult {
+            transcript: "Maze\nYou are in a maze of twisty little passages, all alike.".into(),
+            transcript_runs: Vec::new(),
+            location: Some(ObjectSnapshot { number: 1, parent: 0, name: "Maze".into() }),
+            quit: false,
+            erase_lower: false,
+            info: None,
+            sounds: Vec::new(),
+            glulx_sound_ops: Vec::new(),
+            diagnostics: vec![],
+            fault: None,
+            location_method: None,
+            pending_io: None,
+            timed_out: false,
+            pictures: Vec::new(),
+            transcript_elems: Vec::new(),
+            prose_retired: None,
+            declared_exit: None,
+        };
+        apply_turn(&mut m, "west", &west, &mut Default::default());
+
+        assert_eq!(m.graph.current(), Some(1), "still the same room object");
+        assert_eq!(m.graph.self_loops(1), vec![Direction::W], "recorded as an ordinary self-loop");
+        assert!(!m.graph.is_random_exit(1, Direction::W), "not a random exit — the name never changed");
+        assert_eq!(
+            mapper::matrix::classify(&m.graph, 1, Direction::W),
+            mapper::matrix::MatrixCell::SelfLoop,
+            "the matrix reads it as `leads back here`, not `destination varies`"
+        );
+    }
+
+    /// The Lost Pig shape, driven through the same `apply_turn` seam: a compass move that
+    /// reprints the SAME room object's heading under a DIFFERENT name is a random exit, not a
+    /// self-loop — SQ-1257 Phase 3's rename-loop check.
+    #[test]
+    fn apply_turn_same_room_different_name_move_is_a_random_exit_not_a_self_loop() {
+        let mut m = Mapper::default();
+        let enter = TurnResult {
+            transcript: "Twisty Cave\nGnomes cavort obscenely as they dig for gold.".into(),
+            transcript_runs: Vec::new(),
+            location: Some(ObjectSnapshot { number: 183, parent: 0, name: "Twisty Cave".into() }),
+            quit: false,
+            erase_lower: false,
+            info: None,
+            sounds: Vec::new(),
+            glulx_sound_ops: Vec::new(),
+            diagnostics: vec![],
+            fault: None,
+            location_method: None,
+            pending_io: None,
+            timed_out: false,
+            pictures: Vec::new(),
+            transcript_elems: Vec::new(),
+            prose_retired: None,
+            declared_exit: None,
+        };
+        apply_turn(&mut m, "look", &enter, &mut Default::default());
+        assert_eq!(m.graph.current(), Some(183));
+
+        // North leads back into the SAME room object, but re-rolled under a different name.
+        let north = TurnResult {
+            transcript: "Confusing Passage\nGnomes cavort obscenely as they dig for gold.".into(),
+            transcript_runs: Vec::new(),
+            location: Some(ObjectSnapshot { number: 183, parent: 0, name: "Confusing Passage".into() }),
+            quit: false,
+            erase_lower: false,
+            info: None,
+            sounds: Vec::new(),
+            glulx_sound_ops: Vec::new(),
+            diagnostics: vec![],
+            fault: None,
+            location_method: None,
+            pending_io: None,
+            timed_out: false,
+            pictures: Vec::new(),
+            transcript_elems: Vec::new(),
+            prose_retired: None,
+            declared_exit: None,
+        };
+        apply_turn(&mut m, "north", &north, &mut Default::default());
+
+        assert_eq!(m.graph.current(), Some(183), "still the same room object");
+        assert!(m.graph.self_loops(183).is_empty(), "no self-loop is minted for a rename-loop");
+        assert!(m.graph.is_random_exit(183, Direction::N), "north is recorded as a random exit");
+        assert_eq!(m.graph.room(183).unwrap().name, "Confusing Passage", "the label is the CURRENT name");
+        assert_eq!(m.graph.room(183).unwrap().aliases, vec!["Twisty Cave"], "the old name joins the aliases");
+        assert_eq!(
+            mapper::matrix::classify(&m.graph, 183, Direction::N),
+            mapper::matrix::MatrixCell::Random,
+            "the matrix reads it as `destination varies`, not `leads back here`"
+        );
+    }
+
     /// SQ-0576: a compass click submits no text, but the game echoes the
     /// command it synthesized as the first output line — that echo (and only a
     /// whole-line echo) is adopted as the turn's movement command.
