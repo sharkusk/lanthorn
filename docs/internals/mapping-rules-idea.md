@@ -177,10 +177,16 @@ Returns per-node `(x_constrained, y_constrained)` flags used by collision resolu
   members get a gap-0 equality on **Y** (share a row); for every N/S chain, a gap-0
   equality on **X** (share a column). Added to the adjacency *before* directional
   constraints so a later contradicting directional constraint is the one dropped.
-- **Directional constraints** (`:82-114`): `grid_offset(dir)` gates — **non-compass edges
-  create no constraints at all**. For each non-zero axis, add a `≥ gap` separation in the
-  correct order (north = smaller y). If adding it would **close a cycle** (`creates_cycle`),
-  the edge is *dropped* and recorded in `dropped` (→ later marked distorted).
+- **Directional constraints**, taken **reciprocated first** (SQ-1287), insertion order
+  breaking ties: `grid_offset(dir)` gates — **non-compass edges create no constraints at
+  all**. For each non-zero axis, add a `≥ gap` separation in the correct order (north =
+  smaller y). If adding it would **close a cycle** (`creates_cycle`), the edge is *dropped*
+  and recorded in `dropped` (→ later marked distorted). The ordering is what decides WHICH
+  of two contradicting edges survives, so it must not be the player's route: a passage
+  walked from both ends is better evidence than a lone one-way crossing. Taken in mint
+  order instead, Adventure's opening put `In A Valley` north of `At End Of Road`, because
+  the first move of the game was one step north into a random forest room the valley
+  happens to share a row with.
 
 ### 4.5 Contiguify (`mod.rs:492-524`)
 Pulls chain members back onto their shared row/column after stress if they've drifted,

@@ -38,6 +38,17 @@ Absolute URLs or no link.
   the map, and a maze collapsed into a single node. Walk a few rooms now and the
   map settles onto the game's own pointer, exactly as it always did on
   Adventure.
+- **A passage you have walked both ways now outranks one you have walked once,
+  so the map stops flipping rooms upside down.** In Adventure's opening the
+  valley was drawn NORTH of the end of the road, with the streambed south of the
+  road — the road wedged between the valley and its own stream, and both legs of
+  the road/valley passage struck through as impossible. The culprit was the
+  forest: it is a random place, it happens to sit beside the valley, and the
+  single northward step into it was laid down first, so it got to decide which
+  way was up and dragged the valley with it. The map now settles its geometry
+  from the passages it has the best evidence for — the ones walked from both
+  ends — before it listens to a lone one-way crossing. The same map also comes
+  out the same way whichever direction you happened to explore first.
 - **Shogun: two rooms with the same name are two rooms again.** Shogun has two
   `Bridge`s, two `Main Deck`s and four `Ledge`s, and the map used to hand every
   one of them to whichever came first in the game's own object list — so the
