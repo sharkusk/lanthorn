@@ -27,6 +27,26 @@ Absolute URLs or no link.
 > visible tag `*Next release:*`. `release.yml` refuses to cut a release
 > while any such tag, or this Unreleased section, still exists.*
 
+### Fixed
+
+- **The map knows where you are before you take a step.** Counterfeit Monkey
+  never announces the Back Alley you wake up in — it tells you to type LOOK —
+  so the map used to start blank and only found the room once you had walked
+  out of it and back. Now lanthorn asks the story, quietly, and the opening
+  room is there from the first prompt.
+- **A car ride, a cutscene or a flashback no longer breaks the map.** Once
+  lanthorn has learned where a Glulx game keeps its "you are here" pointer, it
+  believes the game rather than the screen. Driving out of Deep Street — which
+  the game narrates without reprinting the room — used to leave you marked in
+  the street you had left and quietly spawn a second copy of it, and Counterfeit
+  Monkey's REMEMBER used to move you to a yacht galley you were only thinking
+  about. Both now land exactly where you really are.
+- **Rooms whose description opens with a character's name keep their names.**
+  With Counterfeit Monkey's HIGHLIGHT reading aid on, Brown's Lab, Waterstone's
+  Office and their neighbours were being labelled with the room you had just
+  left, and the mistake spread — one session ended up with a whole cluster of
+  duplicate "Samuel Johnson" rooms. Fixed.
+
 ---
 
 ## v0.4.3 — 2026-09-04

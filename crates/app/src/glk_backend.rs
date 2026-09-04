@@ -344,6 +344,12 @@ struct StoryScan {
     /// [`HEADING_LINE_REST_CAP`] chars — the evidence for
     /// [`StoryScan::line_rest_disqualifies`].
     heading_line_rest: String,
+    /// A candidate that a `Subheader` run opening the line BELOW it displaced
+    /// before anything could settle it — see [`StoryScan::capture_heading`]
+    /// (SQ-1295). Confirmed by [`StoryScan::reject_heading`] when the line that
+    /// displaced it turns out to be prose, dropped when that line turns out to
+    /// own itself (another banner).
+    heading_displaced: Option<String>,
     /// The last [`PROMPT_TAIL_CAP`] chars written to this window, kept only to
     /// answer "does the stream end at the game's read prompt?" — the test for a
     /// parser command prompt rather than a bare line read.
@@ -362,6 +368,7 @@ impl Default for StoryScan {
             heading_tail_text: String::new(),
             heading_tail_prose: false,
             heading_line_rest: String::new(),
+            heading_displaced: None,
             prompt_tail: String::new(),
         }
     }
@@ -641,7 +648,10 @@ impl AppGlk {
 
     /// Whether the story window's output currently ends at the game's read
     /// prompt — the last thing an Inform parser prints before reading a command.
-    fn ends_at_read_prompt(&mut self) -> bool {
+    ///
+    /// `pub(crate)` for `glulx_session`'s silent `look`, which must not type a
+    /// command at a page that is asking the player a question (SQ-1293).
+    pub(crate) fn ends_at_read_prompt(&mut self) -> bool {
         self.primary_scan().is_some_and(|s| s.ends_at_read_prompt())
     }
 
@@ -690,6 +700,28 @@ impl StoryScan {
             }
             if is_sub {
                 if self.at_line_start && !self.in_heading {
+                    // A `Subheader` run opening the line DIRECTLY BELOW a candidate
+                    // that is one character from confirmation would otherwise displace
+                    // it unsettled: `finalize_heading` overwrites `heading_pending`,
+                    // and SQ-1285's rule then rejects the newcomer and takes the real
+                    // heading with it. Counterfeit Monkey with HIGHLIGHT on prints
+                    // exactly that — "**Brown's Lab**" and then "**Professor Brown**,
+                    // the Reification of Abstracts researcher, is …" (SQ-1295).
+                    //
+                    // The verdict cannot be reached HERE, because it depends on what
+                    // the displacing line turns out to be: prose opened by a bolded
+                    // noun (so the candidate above it was a heading joined to its
+                    // description) or a line the newcomer owns outright (so the two
+                    // are stacked banners, THE BAT's title page — SQ-0732). So the
+                    // candidate is parked and settled once the newcomer's own line
+                    // has been judged; see `reject_heading` and `advance_heading_tail`.
+                    if self.heading_tail == HeadingTail::LineEnd {
+                        self.heading_displaced = self.heading_pending.take();
+                        self.heading_tail = HeadingTail::Idle;
+                        self.heading_tail_text.clear();
+                        self.heading_tail_prose = false;
+                        self.heading_line_rest.clear();
+                    }
                     self.in_heading = true; // a heading begins only at line start
                 }
                 if self.in_heading {
@@ -728,6 +760,10 @@ impl StoryScan {
                     if self.line_rest_disqualifies() {
                         self.reject_heading();
                     } else {
+                        // This candidate owns its own line, so anything it displaced
+                        // was a banner stacked above a banner rather than a heading
+                        // above its description (SQ-1295).
+                        self.heading_displaced = None;
                         self.heading_tail = HeadingTail::LineEnd;
                     }
                 } else if self.heading_line_rest.chars().count() < HEADING_LINE_REST_CAP {
@@ -805,6 +841,12 @@ impl StoryScan {
     /// Throw the pending candidate away: it was never a room heading. Leaves any
     /// heading already CONFIRMED this turn standing.
     fn reject_heading(&mut self) {
+        // The rejected candidate opened a line of PROSE, which is exactly the thing
+        // that confirms a heading sitting above it — so a candidate it displaced was
+        // a room heading joined to its description after all (SQ-1295).
+        if let Some(displaced) = self.heading_displaced.take() {
+            self.last_heading = Some(displaced);
+        }
         self.heading_pending = None;
         self.heading_tail = HeadingTail::Idle;
         self.heading_tail_text.clear();
@@ -814,6 +856,10 @@ impl StoryScan {
 
     /// Accept the pending candidate as this turn's room heading.
     fn confirm_heading(&mut self) {
+        // A confirmed candidate supersedes whatever it displaced, and the parked one
+        // is not confirmed in its own right — see `reject_heading` for the case that
+        // promotes it (SQ-1295).
+        self.heading_displaced = None;
         if let Some(name) = self.heading_pending.take() {
             self.last_heading = Some(name);
         }
@@ -885,6 +931,9 @@ impl StoryScan {
         } else {
             self.confirm_heading();
         }
+        // A parked candidate is per-turn evidence; it must never be promoted by a
+        // rejection that happens on some later turn (SQ-1295).
+        self.heading_displaced = None;
         self.last_heading.take()
     }
 
@@ -2528,6 +2577,40 @@ mod heading_tests {
         put(&mut b, GlkStyle::Subheader, "The barker");
         put(&mut b, GlkStyle::Normal, " is holding a tube.\n\n>");
         assert_eq!(b.take_room_heading(true).as_deref(), Some("Midway"));
+    }
+
+    #[test]
+    fn a_bolded_name_on_the_line_below_does_not_take_the_heading_with_it() {
+        // SQ-1295. The case above has a blank line between the heading and the bolded
+        // sentence, so the heading is confirmed by the description before the sentence
+        // is even seen. Counterfeit Monkey's Brown's Lab has NO such line: the NPC's
+        // bolded name is the first thing on the line directly below the heading.
+        //
+        // That candidate was one character from confirmation, and the character that
+        // arrived opened a new `Subheader` run — which used to start a fresh heading
+        // run, leaving "Brown's Lab" to be overwritten by `finalize_heading` and then
+        // thrown away with "Professor Brown" when `line_rest_disqualifies` rejected it.
+        // The turn reported NO room at all, which cost the map the room's name and, one
+        // layer up, the Glulx room lock (see `app::glulx_roomlock`).
+        let mut b = primary_backend();
+        put(&mut b, GlkStyle::Subheader, "Brown's Lab\n");
+        put(&mut b, GlkStyle::Subheader, "Professor Brown");
+        put(&mut b, GlkStyle::Normal, ", the Reification of Abstracts researcher, is hunched over his work table.\n\n>");
+        assert_eq!(b.take_room_heading(true).as_deref(), Some("Brown's Lab"));
+    }
+
+    #[test]
+    fn two_stacked_banners_do_not_promote_the_upper_one() {
+        // The other half of the rule, and the reason the verdict cannot be reached when
+        // the displacing run OPENS: a banner page stacks own-line `Subheader` lines, and
+        // the upper one is no more a room than the lower (THE BAT's title page, SQ-0732).
+        // What separates the two shapes is whether the displacing line turns out to be
+        // prose opened by a bolded noun, or a line the newcomer owns outright.
+        let mut b = primary_backend();
+        put(&mut b, GlkStyle::Subheader, "THE BAT\n");
+        put(&mut b, GlkStyle::Subheader, "An Interactive Nightmare\n");
+        put(&mut b, GlkStyle::Normal, "\nPress any key to begin.\n");
+        assert_eq!(b.take_room_heading(false), None);
     }
 
     #[test]
