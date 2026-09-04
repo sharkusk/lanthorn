@@ -51,6 +51,14 @@ Absolute URLs or no link.
   one. Those rooms are real — the map found them scouting — and the export is
   now plain that you have never stood in them.
 
+- **Picking something up no longer invents a room named after it.** In games
+  that print the names of objects in bold — Counterfeit Monkey does it whenever
+  you turn `HIGHLIGHT` on — a `GET ALL` could hand the map a "room" called
+  whatever you had just picked up, hanging off the real one on a mystery
+  passage, and then trail false connections behind you as you walked away. The
+  map now asks a room heading to own its whole line, so a bolded thing at the
+  start of a sentence stays a thing.
+
 ---
 
 ## v0.4.2 — 2026-09-03

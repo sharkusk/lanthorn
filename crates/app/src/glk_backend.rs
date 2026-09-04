@@ -285,6 +285,11 @@ const HEADING_TAIL_CAP: usize = 32;
 /// puts it at line start.
 const PROMPT_TAIL_CAP: usize = 32;
 
+/// How much of the candidate's OWN line, after the bold run ends, is kept in
+/// `StoryScan::heading_line_rest`. Only enough to see whether a word follows —
+/// see [`StoryScan::line_rest_disqualifies`].
+const HEADING_LINE_REST_CAP: usize = 24;
+
 /// Where a window's output stream sits relative to the heading
 /// candidate held in `StoryScan::heading_pending` — the states of the "is this
 /// heading joined to a room description, or set off as a banner?" test.
@@ -335,6 +340,10 @@ struct StoryScan {
     /// Set once `heading_tail_text` hit the cap: whatever follows the blank line
     /// is far too long to be a bare read prompt, so it is prose.
     heading_tail_prose: bool,
+    /// What followed the bold run on the candidate's OWN line, capped at
+    /// [`HEADING_LINE_REST_CAP`] chars — the evidence for
+    /// [`StoryScan::line_rest_disqualifies`].
+    heading_line_rest: String,
     /// The last [`PROMPT_TAIL_CAP`] chars written to this window, kept only to
     /// answer "does the stream end at the game's read prompt?" — the test for a
     /// parser command prompt rather than a bare line read.
@@ -352,6 +361,7 @@ impl Default for StoryScan {
             heading_tail: HeadingTail::Idle,
             heading_tail_text: String::new(),
             heading_tail_prose: false,
+            heading_line_rest: String::new(),
             prompt_tail: String::new(),
         }
     }
@@ -662,6 +672,10 @@ impl StoryScan {
     /// [`Self::advance_heading_tail`] — that is the test THE BAT needs, whose
     /// title page and prologue each print two own-line `Subheader` banners before
     /// play begins (SQ-0732).
+    ///
+    /// And the candidate must own its LINE, not merely open it: see
+    /// [`Self::line_rest_disqualifies`], the test a game that bolds its object
+    /// names needs (SQ-1285).
     fn capture_heading(&mut self, style: GlkStyle, s: &str) {
         let is_sub = style == GlkStyle::Subheader;
         for ch in s.chars() {
@@ -711,7 +725,13 @@ impl StoryScan {
             HeadingTail::Idle => {}
             HeadingTail::Line => {
                 if ch == '\n' {
-                    self.heading_tail = HeadingTail::LineEnd;
+                    if self.line_rest_disqualifies() {
+                        self.reject_heading();
+                    } else {
+                        self.heading_tail = HeadingTail::LineEnd;
+                    }
+                } else if self.heading_line_rest.chars().count() < HEADING_LINE_REST_CAP {
+                    self.heading_line_rest.push(ch);
                 }
             }
             HeadingTail::LineEnd => {
@@ -751,6 +771,47 @@ impl StoryScan {
         crate::session::ends_with_read_prompt(&self.prompt_tail)
     }
 
+    /// Whether the roman text that followed the bold run on the candidate's OWN
+    /// line rules it out as a room heading.
+    ///
+    /// An Inform room heading owns its line: the name in bold, and at most the
+    /// library's roman parenthetical after it ("Kitchen (on the chair)"). A bold
+    /// run that opens a SENTENCE does not — and once a game bolds the names of
+    /// its objects, sentences that open with one are everywhere. Counterfeit
+    /// Monkey's HIGHLIGHT (`boldening`, an accessibility option the game
+    /// advertises) prints every object name in bold type, which Glk carries as
+    /// `Subheader` — the very style the heading is printed in. Its `get all`
+    /// listing then reads
+    ///
+    /// ```text
+    /// ale: We acquire the ale.
+    /// ear: We take the ear.
+    /// ```
+    ///
+    /// with `ale` and `ear` bold at line start, followed by the parser's command
+    /// prompt — which is exactly the shape [`Self::take_room_heading`] accepts,
+    /// so `get all` in the Midway minted a room called "ear" (SQ-1285). The same
+    /// bolding opens paragraphs elsewhere ("**The Aquarium Bookstore** is to the
+    /// east."), so the rule has to be about the LINE, not about that one listing.
+    ///
+    /// Anything but a word disqualifies nothing: trailing spaces, a lone full
+    /// stop, the library's `(on the chair)`. It is a WORD following the name on
+    /// its own line that says "this is a sentence, not a heading".
+    fn line_rest_disqualifies(&self) -> bool {
+        let rest = self.heading_line_rest.trim();
+        !rest.is_empty() && !rest.starts_with('(') && rest.chars().any(char::is_alphanumeric)
+    }
+
+    /// Throw the pending candidate away: it was never a room heading. Leaves any
+    /// heading already CONFIRMED this turn standing.
+    fn reject_heading(&mut self) {
+        self.heading_pending = None;
+        self.heading_tail = HeadingTail::Idle;
+        self.heading_tail_text.clear();
+        self.heading_tail_prose = false;
+        self.heading_line_rest.clear();
+    }
+
     /// Accept the pending candidate as this turn's room heading.
     fn confirm_heading(&mut self) {
         if let Some(name) = self.heading_pending.take() {
@@ -759,6 +820,7 @@ impl StoryScan {
         self.heading_tail = HeadingTail::Idle;
         self.heading_tail_text.clear();
         self.heading_tail_prose = false;
+        self.heading_line_rest.clear();
     }
 
     /// Promote the accumulated `Subheader` text (if any, trimmed non-empty) to
@@ -771,6 +833,7 @@ impl StoryScan {
             self.heading_tail = HeadingTail::Line;
             self.heading_tail_text.clear();
             self.heading_tail_prose = false;
+            self.heading_line_rest.clear();
         }
     }
 
@@ -803,6 +866,12 @@ impl StoryScan {
             self.finalize_heading(); // flush a heading with no trailing separator yet
             self.in_heading = false;
         }
+        // A candidate whose own line never ended still has to answer for what
+        // shares that line with it — the turn simply stopped before the newline
+        // arrived (SQ-1285).
+        if self.heading_tail == HeadingTail::Line && self.line_rest_disqualifies() {
+            self.reject_heading();
+        }
         // The read prompt the game printed on its way to asking for input is not
         // prose: in `superbrief` a room is the heading, a blank line and ">".
         let detached = self.heading_tail == HeadingTail::Detached
@@ -829,7 +898,11 @@ impl StoryScan {
         self.in_heading = false;
         self.heading_acc.clear();
         self.prompt_tail.clear();
-        self.confirm_heading();
+        if self.heading_tail == HeadingTail::Line && self.line_rest_disqualifies() {
+            self.reject_heading(); // a sentence, not a heading — settle it that way
+        } else {
+            self.confirm_heading();
+        }
     }
 }
 
@@ -2231,10 +2304,15 @@ mod heading_tests {
 
     #[test]
     fn last_subheader_wins_over_banner_title() {
+        // The heading ends its own line — Inform's room description heading rule is
+        // `[bold type][printed name][roman type]` and the body text follows a paragraph
+        // break, so the description never shares the line. The fixture used to run the
+        // two together, which made it indistinguishable from the banner above it once
+        // `line_rest_disqualifies` existed to tell them apart (SQ-1285).
         let mut b = primary_backend();
         put(&mut b, GlkStyle::Subheader, "Coloratura");
         put(&mut b, GlkStyle::Normal, " by lynnea glasser\n");
-        put(&mut b, GlkStyle::Subheader, "Inside the Cellarium");
+        put(&mut b, GlkStyle::Subheader, "Inside the Cellarium\n");
         put(&mut b, GlkStyle::Normal, "A white structure.\n");
         assert_eq!(b.take_room_heading(true).as_deref(), Some("Inside the Cellarium"));
     }
@@ -2385,6 +2463,71 @@ mod heading_tests {
         put(&mut b, GlkStyle::Subheader, "– Interlude –\n");
         put(&mut b, GlkStyle::Normal, "\nThe guests are arriving.\n");
         assert_eq!(b.take_room_heading(false).as_deref(), Some("Master's Bedroom"));
+    }
+
+    #[test]
+    fn a_bolded_object_name_opening_a_take_listing_is_not_a_room() {
+        // SQ-1285. Counterfeit Monkey's HIGHLIGHT option (`boldening`) prints every
+        // object name in bold type, which Glk carries as `Subheader`. Its `get all`
+        // listing therefore opens each line with a bold noun, and the turn ends at the
+        // parser's own command prompt — everything the old rule asked for. The room the
+        // player is standing in is the Midway; "ear" is a severed ear in their hands.
+        let mut b = primary_backend();
+        put(&mut b, GlkStyle::Subheader, "ale");
+        put(&mut b, GlkStyle::Normal, ": We acquire the ");
+        put(&mut b, GlkStyle::Subheader, "ale");
+        put(&mut b, GlkStyle::Normal, ".\n");
+        put(&mut b, GlkStyle::Subheader, "ear");
+        put(&mut b, GlkStyle::Normal, ": We take the ");
+        put(&mut b, GlkStyle::Subheader, "ear");
+        put(&mut b, GlkStyle::Normal, ".\n\n>");
+        assert_eq!(b.take_room_heading(true), None);
+    }
+
+    #[test]
+    fn a_bolded_object_name_opening_a_paragraph_is_not_a_room() {
+        // The same bolding opens ordinary prose all over that game — an initial
+        // appearance is a paragraph, so its first word sits at line start too.
+        let mut b = primary_backend();
+        put(&mut b, GlkStyle::Subheader, "The Aquarium Bookstore");
+        put(&mut b, GlkStyle::Normal, " is to the east. It's dim inside.\n\n>");
+        assert_eq!(b.take_room_heading(true), None);
+    }
+
+    #[test]
+    fn a_heading_keeps_its_roman_parenthetical() {
+        // What may share the heading's line: the library's "(on the chair)", printed in
+        // roman after the bold name. That is still a room.
+        let mut b = primary_backend();
+        put(&mut b, GlkStyle::Subheader, "Studio Apartment");
+        put(&mut b, GlkStyle::Normal, " (on the bed)\n");
+        put(&mut b, GlkStyle::Normal, "You climb out of bed.\n");
+        assert_eq!(b.take_room_heading(true).as_deref(), Some("Studio Apartment"));
+    }
+
+    #[test]
+    fn a_room_bolded_by_the_same_option_still_reads_as_a_room() {
+        // Non-vacuity for the two rejections above: with HIGHLIGHT on, Counterfeit
+        // Monkey's own room description bolds every noun in it, and only the heading
+        // owns its line. The room must still be found.
+        let mut b = primary_backend();
+        put(&mut b, GlkStyle::Subheader, "Midway\n");
+        put(&mut b, GlkStyle::Normal, "Here in front of the ");
+        put(&mut b, GlkStyle::Subheader, "pharmacy");
+        put(&mut b, GlkStyle::Normal, ", various contests have been set up.\n\n>");
+        assert_eq!(b.take_room_heading(true).as_deref(), Some("Midway"));
+    }
+
+    #[test]
+    fn an_earlier_room_survives_a_sentence_that_opens_with_a_bolded_name() {
+        // Rejecting a candidate must not take the heading already confirmed this turn
+        // with it: the walk into the room comes first, its bolded description after.
+        let mut b = primary_backend();
+        put(&mut b, GlkStyle::Subheader, "Midway\n");
+        put(&mut b, GlkStyle::Normal, "Contests have been set up.\n\n");
+        put(&mut b, GlkStyle::Subheader, "The barker");
+        put(&mut b, GlkStyle::Normal, " is holding a tube.\n\n>");
+        assert_eq!(b.take_room_heading(true).as_deref(), Some("Midway"));
     }
 
     #[test]
