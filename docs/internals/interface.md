@@ -999,6 +999,13 @@ fixed order — `Ctrl+F: find` first, then `refresh`, `sort`, `covers`, `IFDB`,
 (without the first two nothing else is discoverable, and without the third
 there is no way out). The order they are *drawn* in never changes.
 
+**The title bar along the top names the folder and shows the running
+version**, right-aligned — the same build string `lanthorn --version` prints
+(SQ-1282). It used to carry a `[i: info · g: covers]` hotkey reminder too, but
+the hint bar below already names both keys, so that line now belongs to the
+title and the version alone; on a pane too narrow for both, the version is the
+one that drops.
+
 **`Space`, or a single right-click, opens that story's menu** — a small bordered
 popup beside the highlighted row or cover, listing Open, Launch options…, Fetch
 metadata, Get hints and Set IFDB URL… with each item's own hotkey right-aligned

@@ -674,15 +674,18 @@ impl<'a> PickerHeading<'a> {
         if self.find.is_some() { self.root } else { self.dir }
     }
 
-    /// The title line. `toggle` is the view-flip hint (`g: covers` / `g: list`).
-    fn line(&self, stories: &[app::picker::StoryEntry], toggle: &str) -> String {
+    /// The title line. Hotkeys used to ride here too (`[i: info · g: covers]`),
+    /// but the footer and `?` help already carry every key that was in it, so
+    /// SQ-1282 dropped the hint and gave the row's right edge to the running
+    /// version instead (see `draw_top_bar_version`).
+    fn line(&self, stories: &[app::picker::StoryEntry]) -> String {
         match &self.find {
             Some(f) => {
                 let n = stories.len();
                 let es = if n == 1 { "" } else { "es" };
                 let progress = if f.done { String::new() } else { format!(" · indexing, {} so far", f.indexed) };
                 format!(
-                    " lanthorn — find a story  ({n} match{es} for “{}” in {}{progress})   [i: info · {toggle}]",
+                    " lanthorn — find a story  ({n} match{es} for “{}” in {}{progress})",
                     f.query,
                     self.root.display()
                 )
@@ -691,7 +694,7 @@ impl<'a> PickerHeading<'a> {
                 let status = self.all_folders.expect("checked");
                 let progress = if status.done { String::new() } else { format!(" · indexing, {} so far", status.indexed) };
                 format!(
-                    " lanthorn — choose a story  ({} in {} and its folders{progress})   [i: info · {toggle}]",
+                    " lanthorn — choose a story  ({} in {} and its folders{progress})",
                     stories.len(),
                     self.dir.display()
                 )
@@ -704,10 +707,28 @@ impl<'a> PickerHeading<'a> {
                     1 => ", 1 folder".to_string(),
                     k => format!(", {k} folders"),
                 };
-                format!(" lanthorn — choose a story  ({n} found{f} in {})   [i: info · {toggle}]", self.dir.display())
+                format!(" lanthorn — choose a story  ({n} found{f} in {})", self.dir.display())
             }
         }
     }
+}
+
+/// Right-align the running lanthorn version on the picker's title row, the
+/// same build string `lanthorn --version` prints (`buildinfo::LONG`: the
+/// crate version plus a short git hash, `-dirty` and all, which is what makes
+/// a bug report self-identifying). Skipped entirely — never truncated or
+/// overlapped onto the title — when the row isn't wide enough for both; the
+/// title always wins the space (SQ-1282).
+fn draw_top_bar_version(buf: &mut ratatui::buffer::Buffer, area: Rect, title: &str, style: ratatui::style::Style) {
+    const GAP: u16 = 2;
+    let version = buildinfo::LONG;
+    let title_w = UnicodeWidthStr::width(title) as u16;
+    let version_w = UnicodeWidthStr::width(version) as u16;
+    if area.width < title_w + GAP + version_w {
+        return;
+    }
+    let x = area.right().saturating_sub(version_w);
+    draw_str_clipped(buf, x, area.y, version, style, area);
 }
 
 /// The info panel for a folder row: where it leads, and how. Returns the
@@ -2717,9 +2738,10 @@ fn draw_story_picker(
         }
     }
 
-    // Header.
-    let header = heading.line(stories, "g: covers");
+    // Header. Version right-aligned when there's room beside the title.
+    let header = heading.line(stories);
     draw_str_clipped(buf, area.x, area.y, &header, dialog_title, area);
+    draw_top_bar_version(buf, area, &header, dialog_title);
 
     // List region (title bar + column-header row at top, footer at bottom).
     let list_top = area.y + 2;
@@ -2999,9 +3021,10 @@ fn draw_story_gallery(
         }
     }
 
-    // Header (matches the list view's, with the toggle hint flipped).
-    let header = heading.line(stories, "g: list");
+    // Header (matches the list view's).
+    let header = heading.line(stories);
     draw_str_clipped(buf, area.x, area.y, &header, dialog_title, area);
+    draw_top_bar_version(buf, area, &header, dialog_title);
 
     // Grid region: below the header, above the footer row.
     let grid_top = area.y + 2;
@@ -4464,6 +4487,60 @@ mod tests {
         assert!(row_text(&buf, 4, area).contains("Anchorhead"), "stories follow the folders");
     }
 
+    /// SQ-1282: the top bar shows the running lanthorn version — the same
+    /// build string `lanthorn --version` prints — right-aligned, and no
+    /// longer carries the `[i: info · g: covers]` hotkey hint that used to
+    /// live there (the footer and `?` help carry those keys already).
+    #[test]
+    fn top_bar_shows_the_version_and_drops_the_hotkey_hint() {
+        use ratatui::{buffer::Buffer, layout::Rect};
+        let stories = make_two_test_stories();
+        let list = app::list_scroll::ListScroll::new();
+        let badges = vec![app::picker::RowBadges::default(); stories.len()];
+        let sym = app::style::finalize_symbols(&app::style::load_style(None, std::path::Path::new("/nonexistent")).0.symbols);
+        let glyphs = app::picker::BadgeGlyphs::from_symbols(&sym);
+        let cs = app::colors::ColorScheme::terminal_default();
+        let area = Rect::new(0, 0, 120, 10);
+        let mut buf = Buffer::empty(area);
+        super::draw_story_picker(
+            &stories, &list, &badges, &glyphs, &super::PickerHeading::browse(std::path::Path::new("/tmp")),
+            &cs, &km(), app::picker::Sort::default(), area, &mut buf,
+        );
+        let header = row_text(&buf, 0, area);
+        assert!(header.contains(buildinfo::LONG), "version missing from the top bar: {header:?}");
+        assert!(
+            !header.contains("i: info") && !header.contains("g: covers"),
+            "the top bar's hotkey hint should be gone: {header:?}"
+        );
+    }
+
+    /// On a pane too narrow for the title AND the version, the title wins —
+    /// the version is dropped entirely rather than truncated or overlapping
+    /// the title text.
+    #[test]
+    fn top_bar_drops_the_version_rather_than_overflow_a_narrow_pane() {
+        use ratatui::{buffer::Buffer, layout::Rect};
+        let stories = make_two_test_stories();
+        let list = app::list_scroll::ListScroll::new();
+        let badges = vec![app::picker::RowBadges::default(); stories.len()];
+        let sym = app::style::finalize_symbols(&app::style::load_style(None, std::path::Path::new("/nonexistent")).0.symbols);
+        let glyphs = app::picker::BadgeGlyphs::from_symbols(&sym);
+        let cs = app::colors::ColorScheme::terminal_default();
+        let heading = super::PickerHeading::browse(std::path::Path::new("/tmp"));
+        let title_w = unicode_width::UnicodeWidthStr::width(heading.line(&stories).as_str()) as u16;
+
+        // Exactly enough room for the title; none left for the gap + version.
+        let area = Rect::new(0, 0, title_w, 10);
+        let mut buf = Buffer::empty(area);
+        super::draw_story_picker(&stories, &list, &badges, &glyphs, &heading, &cs, &km(), app::picker::Sort::default(), area, &mut buf);
+        let header = row_text(&buf, 0, area);
+        assert!(header.contains("lanthorn"), "the title should still render at this width: {header:?}");
+        assert!(
+            !header.contains(buildinfo::LONG),
+            "the version should be dropped once there's no room beside the title: {header:?}"
+        );
+    }
+
     /// The gallery's header says it is showing the folder and everything
     /// under it, and how far the index has got while it is still building.
     #[test]
@@ -4477,12 +4554,12 @@ mod tests {
             find: None,
             all_folders: Some(super::IndexStatus { indexed: 2, done: false }),
         };
-        let line = building.line(&stories, "g: list");
+        let line = building.line(&stories);
         // Built from `display()`, since the separator is the platform's.
         let expected = format!("2 in {} and its folders · indexing, 2 so far", sub.display());
         assert!(line.contains(&expected), "{line:?}");
         let done = super::PickerHeading { all_folders: Some(super::IndexStatus { indexed: 2, done: true }), ..building };
-        let line = done.line(&stories, "g: list");
+        let line = done.line(&stories);
         assert!(line.contains("and its folders)") && !line.contains("indexing"), "{line:?}");
     }
 

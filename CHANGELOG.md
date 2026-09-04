@@ -27,6 +27,13 @@ Absolute URLs or no link.
 > visible tag `*Next release:*`. `release.yml` refuses to cut a release
 > while any such tag, or this Unreleased section, still exists.*
 
+### Changed
+
+- **The story list's title bar now shows the running lanthorn version**,
+  right-aligned — the same build string `lanthorn --version` prints, short git
+  hash and all — and no longer clutters that line with hotkey hints; the
+  footer along the bottom and `?` already carry every one of those keys.
+
 ### Fixed
 
 - **Glulx: the map tells same-named rooms apart on the big games too.** lanthorn
