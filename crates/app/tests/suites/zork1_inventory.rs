@@ -71,7 +71,7 @@ fn zork1_carried_items_are_live_without_ever_typing_inventory() {
         "the avatar is #{player} — must be \"cretin\", never the globals-parked \"you\""
     );
     assert_eq!(
-        zvm::objects::get_parent(&session.machine.mem, player),
+        zvm::objects::get_parent(&session.machine.mem, player) as mapper::graph::RoomId,
         room.number,
         "the avatar sits in the detected room"
     );

@@ -3339,7 +3339,7 @@ pub struct AppState {
     /// Empty whenever the panel is neither shown nor sliding.
     pub inventory_click_words: Vec<String>,
     /// The player's previous room (global 0 value from the previous turn).
-    pub prev_location: Option<u16>,
+    pub prev_location: Option<mapper::graph::RoomId>,
     /// Objects whose parent was prev_location at the end of the previous turn.
     pub prev_objects_here: std::collections::BTreeSet<u16>,
 

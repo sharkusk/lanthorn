@@ -521,7 +521,7 @@ mod tests {
     fn retidy_keeps_180_north_west_of_80_and_south_west_of_81() {
         use mapper::direction::Direction::*;
         let mut g = mapper::graph::MapGraph::new();
-        for id in [25u16, 26, 27, 74, 75, 76, 77, 78, 79, 80, 81, 88, 136, 143, 180, 193, 201, 203, 239] {
+        for id in [25u32, 26, 27, 74, 75, 76, 77, 78, 79, 80, 81, 88, 136, 143, 180, 193, 201, 203, 239] {
             g.upsert_room(id, "r".into());
         }
         for (o, d, dst) in [
@@ -541,7 +541,7 @@ mod tests {
         let region = mapper::layer::planar_region(&g, 27); // the user's scenario: 27/136 in their own layer
         let _ = mapper::layer::move_region(&mut g, &region, mapper::layer::MoveTarget::New);
         run_tidy_pipeline(&mut g, 0, None);
-        let p = |id: u16| g.room(id).unwrap().pos.unwrap();
+        let p = |id: mapper::graph::RoomId| g.room(id).unwrap().pos.unwrap();
         let (a, b, c) = (p(180), p(80), p(81));
         assert!(a.0 < b.0 && a.1 < b.1, "180 {a:?} must be NW of 80 {b:?}");
         assert!(a.0 < c.0 && a.1 > c.1, "180 {a:?} must be SW of 81 {c:?}");
@@ -634,7 +634,7 @@ mod tests {
         let _ = run_tidy_pipeline(&mut animated.graph, layer, None);
         tidy_layer_silent(&mut silent.graph, layer);
 
-        for id in [1u16, 2, 3, 4] {
+        for id in [1u32, 2, 3, 4] {
             assert_eq!(
                 animated.graph.room(id).unwrap().pos,
                 silent.graph.room(id).unwrap().pos,
@@ -690,7 +690,7 @@ mod tests {
         use mapper::graph::MapGraph;
 
         let mut sub = MapGraph::new();
-        for id in [1u16, 2, 3, 4] {
+        for id in [1u32, 2, 3, 4] {
             sub.upsert_room(id, format!("R{id}"));
         }
         sub.add_edge(1, N, 2); // places room 2 from the anchor

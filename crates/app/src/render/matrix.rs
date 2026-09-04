@@ -520,7 +520,7 @@ mod tests {
     fn tiny() -> MapGraph {
         let mut g = MapGraph::new();
         for (id, n) in [(1u16, "Maze"), (2, "Maze"), (3, "Dead End, near Vending Machine")] {
-            g.upsert_room(id, n.into());
+            g.upsert_room(id.into(), n.into());
         }
         g.add_edge(1, Direction::N, 2);
         g.add_edge(2, Direction::W, 1);

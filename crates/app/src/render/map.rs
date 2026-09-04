@@ -3780,7 +3780,7 @@ mod tests {
         use Direction::*;
         let mut g = MapGraph::new();
         for id in [25u16, 26, 27, 74, 75, 76, 77, 78, 79, 80, 81, 136, 143, 180, 193, 201, 203, 239] {
-            g.upsert_room(id, "r".into());
+            g.upsert_room(id.into(), "r".into());
         }
         for (o, d, dst) in [
             (180, N, 81), (81, W, 180), (180, W, 78), (78, N, 143), (143, E, 77), (77, S, 74), (74, S, 76),
@@ -3798,7 +3798,7 @@ mod tests {
         // SQ-0222: the 26/27/136 cluster now routes cleanly, so cleanup clears every illegal overlap.
         assert_eq!(render_overlap_stats(&g).0, 0,
             "cleanup clears all illegal overlaps while keeping protected up/down rooms in place");
-        let p = |id: u16| g.room(id).unwrap().pos.unwrap();
+        let p = |id: u16| g.room(id.into()).unwrap().pos.unwrap();
         // Up/down-protected column stays aligned: 27 stays directly below 26 (26→Down→27).
         assert_eq!(p(26).0, p(27).0, "26/27 up/down column must stay aligned: 26={:?} 27={:?}", p(26), p(27));
         assert!(p(27).1 > p(26).1, "27 stays south of 26 (below it in the up/down lane)");
@@ -5471,7 +5471,7 @@ mod tests {
         use Direction::*;
         let mut g = MapGraph::new();
         for id in [25u16,26,27,74,75,76,77,78,79,80,81,136,143,180,193,201,203,239] {
-            g.upsert_room(id, "r".into());
+            g.upsert_room(id.into(), "r".into());
         }
         for (o, d, dst) in [
             (180,N,81),(81,W,180),(180,W,78),(78,N,143),(143,E,77),(77,S,74),(74,S,76),
@@ -5484,7 +5484,7 @@ mod tests {
             (239,W,77),(81,N,75),(25,Down,26),
         ] { g.add_edge(o, d, dst); }
         mapper::layout::relayout_auto(&mut g);
-        let p = |g: &MapGraph, id: u16| g.room(id).unwrap().pos.unwrap();
+        let p = |g: &MapGraph, id: u16| g.room(id.into()).unwrap().pos.unwrap();
         assert_eq!(p(&g,26).0, p(&g,27).0, "precondition: relayout column-aligns the 26↔27 up/down lane");
         cleanup_overlaps(&mut g, 3, 40);
         // SQ-1274: `74 E 25` (one-way, no back edge, geometrically NE of 74 so its direct route
@@ -5521,7 +5521,7 @@ mod tests {
         use Direction::*;
         let mut g = MapGraph::new();
         for id in [25u16,26,27,74,75,76,77,78,79,80,81,136,143,180,193,201,203,239] {
-            g.upsert_room(id, "r".into());
+            g.upsert_room(id.into(), "r".into());
         }
         for (o, d, dst) in [
             (180,N,81),(81,W,180),(180,W,78),(78,N,143),(143,E,77),(77,S,74),(74,S,76),
@@ -5536,7 +5536,7 @@ mod tests {
         mapper::layout::relayout_auto(&mut g);
         cleanup_overlaps(&mut g, 3, 40);
         repair_directional_hints(&mut g, 3, 40);
-        let p = |g: &MapGraph, id: u16| g.room(id).unwrap().pos.unwrap();
+        let p = |g: &MapGraph, id: u16| g.room(id.into()).unwrap().pos.unwrap();
         assert!(p(&g,78).0 < p(&g,180).0,
             "retidy must place 78 west of 180: 78={:?} 180={:?}", p(&g,78), p(&g,180));
         // SQ-1274: this is the same A129 fixture as `cleanup_keeps_updown_protected_column_chain_
@@ -5676,7 +5676,7 @@ mod tests {
         use Direction::*;
         let mut g = MapGraph::new();
         for id in [1u16, 2, 3, 4, 5] {
-            g.upsert_room(id, "r".into());
+            g.upsert_room(id.into(), "r".into());
         }
         // 1<->2 reciprocal N/S (1 N->2, 2 S->1): column chain.
         g.add_edge(1, N, 2);
@@ -5715,7 +5715,7 @@ mod tests {
         use Direction::*;
         let mut g = MapGraph::new();
         for id in [25u16,26,27,74,75,76,77,78,79,80,81,136,143,180,193,201,203,239] {
-            g.upsert_room(id, "r".into());
+            g.upsert_room(id.into(), "r".into());
         }
         for (o, d, dst) in [
             (180,N,81),(81,W,180),(180,W,78),(78,N,143),(143,E,77),(77,S,74),(74,S,76),
@@ -5728,7 +5728,7 @@ mod tests {
             (239,W,77),(81,N,75),(25,Down,26),
         ] { g.add_edge(o, d, dst); }
         mapper::layout::relayout_auto(&mut g);
-        let p = |g: &MapGraph, id: u16| g.room(id).unwrap().pos.unwrap();
+        let p = |g: &MapGraph, id: u16| g.room(id.into()).unwrap().pos.unwrap();
         assert_eq!(p(&g,74).0, p(&g,76).0, "precondition: relayout column-aligns the 74<->76 reciprocal N/S pair");
         cleanup_overlaps(&mut g, 3, 40);
         assert_eq!(p(&g,74).0, p(&g,76).0,
@@ -5751,7 +5751,7 @@ mod tests {
         use Direction::*;
         let mut g = MapGraph::new();
         for id in [25u16,26,27,74,75,76,77,78,79,80,81,136,143,180,193,201,203,239] {
-            g.upsert_room(id, "r".into());
+            g.upsert_room(id.into(), "r".into());
         }
         for (o, d, dst) in [
             (180,N,81),(81,W,180),(180,W,78),(78,N,143),(143,E,77),(77,S,74),(74,S,76),
@@ -5764,7 +5764,7 @@ mod tests {
             (239,W,77),(81,N,75),(25,Down,26),
         ] { g.add_edge(o, d, dst); }
         mapper::layout::relayout_auto(&mut g);
-        let p = |g: &MapGraph, id: u16| g.room(id).unwrap().pos.unwrap();
+        let p = |g: &MapGraph, id: u16| g.room(id.into()).unwrap().pos.unwrap();
         let ew_row = [74u16, 79, 203, 193];
         let r0 = p(&g, 74).1;
         assert!(ew_row.iter().all(|&id| p(&g, id).1 == r0),
@@ -5781,7 +5781,7 @@ mod tests {
     fn compact_collapses_empty_interior_column_and_row() {
         use mapper::graph::MapGraph;
         let mut g = MapGraph::new();
-        for id in [1u16, 2, 3] { g.upsert_room(id, "r".into()); }
+        for id in [1u16, 2, 3] { g.upsert_room(id.into(), "r".into()); }
         g.set_pos(1, (0, 0));
         g.set_pos(2, (2, 0)); // empty column at x=1
         g.set_pos(3, (0, 2)); // empty row at y=1
@@ -5813,7 +5813,7 @@ mod tests {
         use Direction::*;
         let mut g = MapGraph::new();
         for id in [25u16,26,27,74,75,76,77,78,79,80,81,136,143,180,193,201,203,239] {
-            g.upsert_room(id, "r".into());
+            g.upsert_room(id.into(), "r".into());
         }
         for (o, d, dst) in [
             (180,N,81),(81,W,180),(180,W,78),(78,N,143),(143,E,77),(77,S,74),(74,S,76),
@@ -5829,7 +5829,7 @@ mod tests {
         cleanup_overlaps(&mut g, 3, 40);
         repair_directional_hints(&mut g, 3, 40);
         compact_empty_lines(&mut g);
-        let p = |g: &MapGraph, id: u16| g.room(id).unwrap().pos.unwrap();
+        let p = |g: &MapGraph, id: u16| g.room(id.into()).unwrap().pos.unwrap();
         assert!(p(&g,78).0 < p(&g,180).0, "78 stays west of 180 through compaction");
         assert_eq!(p(&g,26).0, p(&g,27).0, "26↔27 up/down column stays aligned through compaction");
         assert_eq!(p(&g,74).0, p(&g,76).0, "reciprocal N/S pair 74<->76 stays column-locked through compaction");
@@ -5873,7 +5873,7 @@ mod tests {
         use mapper::layout::relayout_auto;
         let build = || {
             let mut g = MapGraph::new();
-            for id in [1u16, 2, 3, 4, 5] { g.upsert_room(id, "r".into()); }
+            for id in [1u16, 2, 3, 4, 5] { g.upsert_room(id.into(), "r".into()); }
             g.add_edge(1, Direction::E, 2);
             g.add_edge(2, Direction::N, 3);
             g.add_edge(3, Direction::W, 4);
@@ -5928,7 +5928,7 @@ mod tests {
         use mapper::layout::relayout_auto;
         let build = || {
             let mut g = MapGraph::new();
-            for id in [1u16, 2, 3, 4, 5] { g.upsert_room(id, "r".into()); }
+            for id in [1u16, 2, 3, 4, 5] { g.upsert_room(id.into(), "r".into()); }
             g.add_edge(1, Direction::E, 2);
             g.add_edge(2, Direction::N, 3);
             g.add_edge(3, Direction::W, 4);

@@ -2,27 +2,29 @@
 //!
 //! RoomIds with the high bit set are synthetic: derived from a room's displayed
 //! name when it could not be resolved to a game object. The high bit guarantees
-//! no collision with real object numbers (no IF game has >= 32768 objects).
+//! no collision with real object numbers (no IF game has >= 2^31 objects).
+
+use mapper::graph::RoomId;
 
 /// Set on a RoomId to mark it a name-only (non-object) room.
-pub const SYNTHETIC_ROOM_FLAG: u16 = 0x8000;
+pub const SYNTHETIC_ROOM_FLAG: RoomId = 0x8000_0000;
 
 /// True when `id` denotes a name-only room (high bit set).
-pub fn is_synthetic_room(id: u16) -> bool {
+pub fn is_synthetic_room(id: RoomId) -> bool {
     id & SYNTHETIC_ROOM_FLAG != 0
 }
 
 /// Deterministic, save/reload-stable RoomId for a name-only room. Normalizes the
 /// name (trim, collapse whitespace, lowercase) then FNV-1a hashes it into the
-/// low 15 bits, with the high bit set.
-pub fn synthetic_room_id(name: &str) -> u16 {
+/// low 31 bits, with the high bit set.
+pub fn synthetic_room_id(name: &str) -> RoomId {
     let norm: String = name.split_whitespace().collect::<Vec<_>>().join(" ").to_lowercase();
     let mut h: u32 = 0x811c_9dc5;
     for b in norm.bytes() {
         h ^= b as u32;
         h = h.wrapping_mul(0x0100_0193);
     }
-    SYNTHETIC_ROOM_FLAG | (h as u16 & 0x7FFF)
+    SYNTHETIC_ROOM_FLAG | (h & 0x7FFF_FFFF)
 }
 
 /// RoomId for a Glulx room identified by its OBJECT ADDRESS rather than its name
@@ -32,19 +34,19 @@ pub fn synthetic_room_id(name: &str) -> u16 {
 /// name — which makes every same-named room one room, and collapses a maze into a
 /// single node. Once the `location` global is located
 /// ([`crate::glulx_roomlock`]), the room's own address is available and is a true
-/// identity. Hashed into the same 15-bit space with the synthetic flag set,
+/// identity. Hashed into the same 31-bit space with the synthetic flag set,
 /// because these are not Z-machine object numbers either.
 ///
 /// Two rooms can still collide, as they can under [`synthetic_room_id`] — but
 /// that is a remote accident here, where under the name hash it was a certainty
 /// for every repeated name.
-pub fn glulx_room_id(addr: u32) -> u16 {
+pub fn glulx_room_id(addr: u32) -> RoomId {
     let mut h: u32 = 0x811c_9dc5;
     for b in addr.to_be_bytes() {
         h ^= b as u32;
         h = h.wrapping_mul(0x0100_0193);
     }
-    SYNTHETIC_ROOM_FLAG | (h as u16 & 0x7FFF)
+    SYNTHETIC_ROOM_FLAG | (h & 0x7FFF_FFFF)
 }
 
 #[cfg(all(test, feature = "t-state"))]
@@ -56,7 +58,7 @@ mod tests {
     #[test]
     fn distinct_addresses_give_distinct_ids() {
         // Adventure's three maze rooms, all printing the heading "Maze".
-        let ids: Vec<u16> = [0x21b0c, 0x21b2c, 0x21b4c].iter().map(|&a| glulx_room_id(a)).collect();
+        let ids: Vec<RoomId> = [0x21b0c, 0x21b2c, 0x21b4c].iter().map(|&a| glulx_room_id(a)).collect();
         assert_eq!(
             ids.iter().collect::<std::collections::BTreeSet<_>>().len(),
             3,
@@ -67,6 +69,34 @@ mod tests {
             synthetic_room_id("Maze"),
             "whereas the name hash gives them all the same id — the bug"
         );
+    }
+
+    /// SQ-1297: with a 15-bit synthetic space, two differently-named Counterfeit
+    /// Monkey rooms hashed to the same id (43044) and were merged into one room on
+    /// the map. Widening to 31 usable bits must separate them.
+    #[test]
+    fn sq1297_observed_collision_your_bunk_vs_language_studies() {
+        assert_ne!(
+            synthetic_room_id("Your Bunk"),
+            synthetic_room_id("Language Studies Seminar Room"),
+            "these two real Counterfeit Monkey rooms collided at 43044 under the old 15-bit fold"
+        );
+    }
+
+    /// SQ-1297: the other observed collision was a Glulx address-hashed room
+    /// (Private Beach) landing on the same id as a name-hashed one (Roundabout,
+    /// 49352). We don't know Private Beach's real address, so sweep a handful of
+    /// plausible ones and confirm none lands on Roundabout's new (wider) id.
+    #[test]
+    fn sq1297_glulx_and_synthetic_ids_stay_apart_over_a_plausible_range() {
+        let roundabout = synthetic_room_id("Roundabout");
+        for addr in (0x1000u32..0x20000).step_by(0x101) {
+            assert_ne!(
+                glulx_room_id(addr),
+                roundabout,
+                "addr {addr:#x} collided with \"Roundabout\" in the widened space"
+            );
+        }
     }
 
     #[test]

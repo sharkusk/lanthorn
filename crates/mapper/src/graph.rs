@@ -4,7 +4,7 @@ use crate::direction::Direction;
 use crate::layer::{LayerId, LayerMeta, MapView, MAIN_LAYER};
 use crate::suggest::{SeamDecision, SeamKey};
 
-pub type RoomId = u16;
+pub type RoomId = u32;
 
 /// Sentinel used only on the wire: a room whose save predates SQ-0685 has no `seq` field at all,
 /// and deserializes to this rather than a real ordinal. [`MapGraph::from_parts`] recognises it and
@@ -1300,7 +1300,7 @@ mod tests {
         // A→B Unknown must survive when only the REVERSE B→A is directional (return trips are
         // not guaranteed to be the geometric opposite), and when it has no known counterpart.
         let mut g = MapGraph::new();
-        for id in [1u16, 2, 3, 4] { g.upsert_room(id, "r".into()); }
+        for id in [1u16, 2, 3, 4] { g.upsert_room(id.into(), "r".into()); }
         g.add_edge(1, Direction::Unknown, 2); // reverse-only pair
         g.add_edge(2, Direction::S, 1); // return trip is directional, forward was Unknown
         g.add_edge(3, Direction::Unknown, 4); // lone Unknown, no known counterpart
@@ -1313,7 +1313,7 @@ mod tests {
     fn collapse_unknown_ignores_known_edge_to_a_different_dest() {
         // A→B Unknown is not affected by a known A→C edge (same origin, different dest).
         let mut g = MapGraph::new();
-        for id in [1u16, 2, 3] { g.upsert_room(id, "r".into()); }
+        for id in [1u16, 2, 3] { g.upsert_room(id.into(), "r".into()); }
         g.add_edge(1, Direction::Unknown, 2);
         g.add_edge(1, Direction::N, 3);
         let removed = g.collapse_unknown_edges();

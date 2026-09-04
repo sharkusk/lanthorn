@@ -46,6 +46,12 @@ Absolute URLs or no link.
   Office and their neighbours were being labelled with the room you had just
   left, and the mistake spread — one session ended up with a whole cluster of
   duplicate "Samuel Johnson" rooms. Fixed.
+- **Two differently named rooms could occasionally be merged into one on the
+  map.** Rooms lanthorn can't identify by a game object (a Glulx room, or a
+  Z-machine room known only by name) were being squeezed into too small a
+  numbering space, and two unrelated rooms could land on the same number and
+  get drawn as a single room. That numbering space is now far larger, so this
+  can no longer happen in practice.
 
 ---
 

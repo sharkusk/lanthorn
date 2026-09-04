@@ -52,7 +52,7 @@ fn boot_anchor_into_play() -> Option<GameSession> {
 }
 
 /// The room the mapper is standing in, as `(id, name)`.
-fn here(m: &Mapper) -> Option<(u16, String)> {
+fn here(m: &Mapper) -> Option<(mapper::graph::RoomId, String)> {
     let id = m.graph.current()?;
     Some((id, m.graph.room(id)?.name.clone()))
 }
@@ -123,7 +123,7 @@ fn anchor_automap_tracks_rooms_and_connections() {
     );
 
     use mapper::direction::Direction;
-    let conns: Vec<(u16, Direction, u16)> =
+    let conns: Vec<(mapper::graph::RoomId, Direction, mapper::graph::RoomId)> =
         map.graph.connections().iter().map(|c| (c.origin, c.dir, c.dest)).collect();
     assert!(
         conns.contains(&(start.number, Direction::W, narrow.0)),

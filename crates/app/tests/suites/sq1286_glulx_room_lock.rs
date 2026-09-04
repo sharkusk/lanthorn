@@ -121,7 +121,7 @@ enum Keying {
     Object,
 }
 
-fn keying(s: &GlulxSession) -> Option<(String, u16, Keying)> {
+fn keying(s: &GlulxSession) -> Option<(String, mapper::graph::RoomId, Keying)> {
     let l = s.current_location()?;
     let k = if l.number == synthetic_room_id(&l.name) { Keying::Named } else { Keying::Object };
     Some((l.name, l.number, k))

@@ -880,7 +880,7 @@ mod tests {
         let build = |unknown: bool| {
             let mut g = MapGraph::new();
             for id in [1u16, 2, 3] {
-                g.upsert_room(id, "r".into());
+                g.upsert_room(id.into(), "r".into());
             }
             g.add_edge(1, Direction::E, 2);
             g.add_edge(2, Direction::E, 3);
@@ -949,12 +949,12 @@ mod tests {
             g.add_edge(1, Direction::SW, 2);
             for i in 0..8i32 {
                 let (below, above) = (10 + 2 * i as u16, 11 + 2 * i as u16);
-                g.upsert_room(below, "below".into());
-                g.upsert_room(above, "above".into());
-                g.set_pos(below, (5, 10 + i * 3));
-                g.set_pos(above, (5, if stairs_ok { 9 + i * 3 } else { 11 + i * 3 }));
-                g.add_edge(below, Direction::Up, above);
-                g.add_edge(above, Direction::Down, below);
+                g.upsert_room(below.into(), "below".into());
+                g.upsert_room(above.into(), "above".into());
+                g.set_pos(below.into(), (5, 10 + i * 3));
+                g.set_pos(above.into(), (5, if stairs_ok { 9 + i * 3 } else { 11 + i * 3 }));
+                g.add_edge(below.into(), Direction::Up, above.into());
+                g.add_edge(above.into(), Direction::Down, below.into());
             }
             g
         };
@@ -1089,9 +1089,9 @@ mod tests {
         graph.add_edge(1, Direction::E, 3);
         graph.add_edge(2, Direction::E, 4);
         relayout_auto(&mut graph);
-        let positions_first: Vec<_> = (1u16..=4).map(|id| graph.room(id).unwrap().pos).collect();
+        let positions_first: Vec<_> = (1u16..=4).map(|id| graph.room(id.into()).unwrap().pos).collect();
         relayout_auto(&mut graph);
-        let positions_second: Vec<_> = (1u16..=4).map(|id| graph.room(id).unwrap().pos).collect();
+        let positions_second: Vec<_> = (1u16..=4).map(|id| graph.room(id.into()).unwrap().pos).collect();
         assert_eq!(positions_first, positions_second, "relayout must be deterministic");
     }
 
@@ -1258,7 +1258,7 @@ mod tests {
     fn a129_house_graph() -> crate::graph::MapGraph {
         let mut g = crate::graph::MapGraph::new();
         for id in [25u16,26,27,74,75,76,77,78,79,80,81,136,143,180,193,201,203,239] {
-            g.upsert_room(id, "r".into());
+            g.upsert_room(id.into(), "r".into());
         }
         use Direction::*;
         for (o, d, dst) in [
@@ -1285,7 +1285,7 @@ mod tests {
         // the diagonals survive.
         let mut g = a129_house_graph();
         relayout_auto(&mut g);
-        let p = |id: u16| g.room(id).unwrap().pos.unwrap();
+        let p = |id: u16| g.room(id.into()).unwrap().pos.unwrap();
         let (p79, p80, p81, p180) = (p(79), p(80), p(81), p(180));
         // 80 SOUTHEAST of 180; 81 NORTH of 180.
         assert!(p80.1 > p180.1, "80 must stay SOUTH of 180: 80={p80:?} 180={p180:?}");
@@ -1345,7 +1345,7 @@ mod tests {
         let mut g = a129_house_graph();
         relayout_auto(&mut g);
         let e = |o, d| g.connections().iter().find(|c| c.origin == o && c.dest == d).unwrap();
-        let p = |id: u16| g.room(id).unwrap().pos.unwrap();
+        let p = |id: u16| g.room(id.into()).unwrap().pos.unwrap();
         // 26 sits southeast of 25 (both Up and E hints satisfied) → the E edge is diagonal.
         assert!(e(25, 26).distorted, "25→E→26 is diagonal: 26 is southeast of 25 (up + east)");
         // 26→Up→25 puts 25 NORTH of 26, so 26 sits SOUTH (and E) of 25 → southeast.
@@ -1419,7 +1419,7 @@ mod tests {
         // 1↔2↔3 reciprocal E/W chain → all three on EXACTLY one row. A single ≤ (gap 0)
         // would let the row drift across three rooms; both-leg equality pins them equal.
         let mut g = crate::graph::MapGraph::new();
-        for id in [1u16, 2, 3] { g.upsert_room(id, "r".into()); }
+        for id in [1u16, 2, 3] { g.upsert_room(id.into(), "r".into()); }
         for (o, d, dst) in [
             (1, Direction::E, 2), (2, Direction::W, 1),
             (2, Direction::E, 3), (3, Direction::W, 2),
@@ -1438,7 +1438,7 @@ mod tests {
         // row; no foreign room may sit between them on it (members may have gaps — eject-only
         // never moves members, only ejects interlopers).
         let mut g = crate::graph::MapGraph::new();
-        for id in [79u16, 180, 193, 203] { g.upsert_room(id, "r".into()); }
+        for id in [79u16, 180, 193, 203] { g.upsert_room(id.into(), "r".into()); }
         for (o, d, dst) in [
             (79, Direction::W, 203), (203, Direction::E, 79),
             (203, Direction::W, 193), (193, Direction::E, 203),
@@ -1479,7 +1479,7 @@ mod tests {
             .expect("27's region peels into a new layer");
         let mut sub = g.layer_subgraph(crate::layer::MAIN_LAYER);
         relayout_auto(&mut sub);
-        let p = |id: u16| sub.room(id).unwrap().pos.unwrap();
+        let p = |id: u16| sub.room(id.into()).unwrap().pos.unwrap();
         let (p193, p203) = (p(193), p(203));
         assert_eq!(p193.1, p203.1, "193 and 203 must share a row: 193={p193:?} 203={p203:?}");
         assert_eq!(
@@ -1499,7 +1499,7 @@ mod tests {
         // "consecutive".)
         let mut g = a129_house_graph();
         relayout_auto(&mut g);
-        let p = |id: u16| g.room(id).unwrap().pos.unwrap();
+        let p = |id: u16| g.room(id.into()).unwrap().pos.unwrap();
         let (p193, p203, p79) = (p(193), p(203), p(79));
         // All three chain members share one row.
         assert_eq!(p193.1, p203.1, "193 and 203 must share a row: {p193:?} {p203:?}");
@@ -1510,7 +1510,7 @@ mod tests {
         let xs_min = xs[0];
         let xs_max = xs[2];
         // No foreign room sits on the chain row strictly between the chain's min and max x.
-        let chain_ids: std::collections::BTreeSet<u16> = [193, 203, 79].into();
+        let chain_ids: std::collections::BTreeSet<RoomId> = [193, 203, 79].into();
         for r in g.rooms() {
             if chain_ids.contains(&r.id) { continue; }
             let pos = r.pos.unwrap();
@@ -1532,8 +1532,8 @@ mod tests {
         // every room with no overlap (and not run the O(n²) solve).
         let mut g = crate::graph::MapGraph::new();
         let count = (super::MAX_NODES + 5) as u16;
-        for id in 1..=count { g.upsert_room(id, "r".into()); }
-        for id in 1..count { g.add_edge(id, Direction::E, id + 1); }
+        for id in 1..=count { g.upsert_room(id.into(), "r".into()); }
+        for id in 1..count { g.add_edge(id.into(), Direction::E, (id + 1).into()); }
         relayout_auto(&mut g);
         let placed = g.rooms().filter(|r| r.pos.is_some()).count();
         assert_eq!(placed, count as usize, "every room placed via fallback");
@@ -1547,7 +1547,7 @@ mod tests {
     fn observed_emits_five_stage_labels_in_order() {
         // A small 4-room graph with reciprocal edges to exercise all stages.
         let mut g = crate::graph::MapGraph::new();
-        for id in [1u16, 2, 3, 4] { g.upsert_room(id, "r".into()); }
+        for id in [1u16, 2, 3, 4] { g.upsert_room(id.into(), "r".into()); }
         g.add_edge(1, Direction::N, 2);
         g.add_edge(2, Direction::S, 1);
         g.add_edge(2, Direction::E, 3);
@@ -1573,7 +1573,7 @@ mod tests {
         // Use the A129 house graph — a moderately complex real-world topology.
         let mut plain = a129_house_graph();
         relayout_auto(&mut plain);
-        let plain_positions: Vec<(u16, Option<(i32, i32)>)> =
+        let plain_positions: Vec<(RoomId, Option<(i32, i32)>)> =
             plain.rooms().map(|r| (r.id, r.pos)).collect();
         let plain_distorted: Vec<bool> =
             plain.connections().iter().map(|c| c.distorted).collect();
@@ -1583,7 +1583,7 @@ mod tests {
         relayout_auto_observed(&mut observed_g, Some(&mut |_graph, _label, _desc, _stats| {
             call_count += 1;
         }));
-        let obs_positions: Vec<(u16, Option<(i32, i32)>)> =
+        let obs_positions: Vec<(RoomId, Option<(i32, i32)>)> =
             observed_g.rooms().map(|r| (r.id, r.pos)).collect();
         let obs_distorted: Vec<bool> =
             observed_g.connections().iter().map(|c| c.distorted).collect();
@@ -1605,7 +1605,7 @@ mod tests {
         // A 3-room northward cycle: 1-N-2-N-3-N-1. Two of the three N constraints can be
         // satisfied; the third closes a cycle and must be dropped (constraints_dropped >= 1).
         let mut g = crate::graph::MapGraph::new();
-        for id in [1u16, 2, 3] { g.upsert_room(id, "r".into()); }
+        for id in [1u16, 2, 3] { g.upsert_room(id.into(), "r".into()); }
         g.add_edge(1, Direction::N, 2);
         g.add_edge(2, Direction::N, 3);
         g.add_edge(3, Direction::N, 1);

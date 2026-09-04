@@ -22,11 +22,29 @@ use crate::session::{FilenameReq, InputKind, TurnResult};
 /// an object's adjectives at all, which is a different claim from having none.
 pub use grammar_model::{Adjectives, ObjectWordSet, ObjectWords};
 
-/// What a room's own exit table declares for one direction (SQ-1257),
-/// re-exported so a caller of [`Engine::declared_exit`] names it without
-/// depending on `zvm` directly — the same reason [`ObjectWords`] travels
-/// through this module above.
-pub use zvm::world::DeclaredExit;
+/// What a room's own exit table declares for one direction (SQ-1257).
+///
+/// Not a re-export of `zvm::world::DeclaredExit` (SQ-1297): that type's
+/// `Room(u16)` is a real Z-machine object number, which zvm (zero external
+/// deps) has no reason to know about `RoomId`. `Engine::declared_exit` is
+/// implemented by every engine, and Glulx's declared destination is a
+/// [`crate::roomid::glulx_room_id`] hash that needs the full widened `RoomId`
+/// space — so this app-level type carries a `RoomId` and each engine's
+/// `declared_exit` converts its own `zvm`/`gvm` answer into it at the boundary.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DeclaredExit {
+    /// The exit is a fixed room.
+    Room(mapper::graph::RoomId),
+    /// The destination is computed at run time.
+    Code,
+    /// The property holds a printed string rather than a destination.
+    Message,
+    /// The compass was identified for this story, and this direction's
+    /// property is simply absent.
+    Absent,
+    /// No exit is declared this way at all.
+    Unknown,
+}
 
 // ── Neutral key input ───────────────────────────────────────────────────────
 
@@ -495,14 +513,20 @@ pub trait Introspect {
     /// [`Self::visible_contents`] for the question SCOPE asks.
     fn contents(&self, container: u16) -> Vec<ObjectWords>;
     /// The objects located directly in `room`.
-    fn room_objects(&self, room: u16) -> Vec<ObjectWords>;
+    fn room_objects(&self, room: mapper::graph::RoomId) -> Vec<ObjectWords>;
     /// Same as [`Self::room_objects`], but omitting `exclude` (the command
     /// band's "here" column passes the player object — SQ-0667). The player
     /// object is structurally a child of whatever room they're in, so
     /// without this it would show up in every room of every game; excluded
     /// by id, deliberately not by name (a scenery object could coincidentally
     /// share the player's printed name).
-    fn room_objects_excluding(&self, room: u16, exclude: Option<u16>) -> Vec<ObjectWords>;
+    ///
+    /// `room` is a [`mapper::graph::RoomId`], not a plain object handle like
+    /// `exclude`: Glulx's room handles are the same widened
+    /// [`crate::roomid::glulx_room_id`] hash the mapper uses (SQ-1297), so this
+    /// needs the full RoomId space to stay unambiguous, where an ordinary
+    /// object handle (`exclude`, the player object) never approaches it.
+    fn room_objects_excluding(&self, room: mapper::graph::RoomId, exclude: Option<u16>) -> Vec<ObjectWords>;
     /// The contents of `container` the player can SEE: its direct children,
     /// plus the contents of any child whose contents are visible, as deep as
     /// the engine's own containment model will vouch for (SQ-1133).
@@ -568,7 +592,14 @@ pub trait Introspect {
         self.all_object_words().map(|objs| std::sync::Arc::new(ObjectWordSet::build(&objs)))
     }
     /// The object handles whose parent is `parent` (drives inventory tracking).
-    fn children_of(&self, parent: u16) -> std::collections::BTreeSet<u16>;
+    ///
+    /// `parent` is a [`mapper::graph::RoomId`] rather than a plain object
+    /// handle (SQ-1297): its one real caller (`turn::post_turn_bookkeeping`)
+    /// passes the CURRENT ROOM, and on Glulx that is the same widened
+    /// [`crate::roomid::glulx_room_id`] hash `room_objects_excluding` needs —
+    /// see that method's doc for why. An ordinary object handle passed here
+    /// (as in the test suite) is always far smaller and fits either way.
+    fn children_of(&self, parent: mapper::graph::RoomId) -> std::collections::BTreeSet<u16>;
     /// The player object, if it can be identified.
     fn player_object(&self) -> Option<u16>;
 }
@@ -727,7 +758,21 @@ pub trait Debugger {
 // ── Engine-tagged save ──────────────────────────────────────────────────────
 
 /// The location/room currency shared between the engine and the mapper.
-pub type LocationInfo = zvm::ObjectSnapshot;
+///
+/// Not `zvm::ObjectSnapshot` (SQ-1297): `zvm` takes zero external deps and
+/// knows nothing of `mapper::graph::RoomId`, and its own `ObjectSnapshot.number`
+/// stays `u16` because that is a real Z-machine object number, which always
+/// fits. `LocationInfo.number` is a full `RoomId` — Glulx and Scott Adams rooms
+/// are synthetic ids that need the whole widened space, not real object
+/// numbers. A Z-machine session crosses this boundary once, in
+/// `session::location_to_snapshot`, converting a `zvm::ObjectSnapshot`'s
+/// `u16` into this `RoomId`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LocationInfo {
+    pub number: mapper::graph::RoomId,
+    pub parent: u16,
+    pub name: String,
+}
 
 /// A persisted game state, tagged with the engine that produced it.
 ///

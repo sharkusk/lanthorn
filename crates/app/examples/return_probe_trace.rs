@@ -215,6 +215,6 @@ fn boot_bytes(story: &str) -> Vec<u8> {
     }
 }
 
-fn room(m: &Mapper, id: Option<mapper::graph::RoomId>) -> Option<(u16, String)> {
+fn room(m: &Mapper, id: Option<mapper::graph::RoomId>) -> Option<(mapper::graph::RoomId, String)> {
     id.and_then(|i| m.graph.room(i).map(|r| (i, r.name.clone())))
 }

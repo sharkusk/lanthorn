@@ -96,6 +96,21 @@ mod tests {
     use crate::mapper::Mapper;
     use crate::direction::Direction;
 
+    /// SQ-1297: `RoomId` widened from u16 to u32 so a Glulx/name-hash synthetic id gets the full
+    /// 31-bit space instead of folding into 15 bits (where two real Counterfeit Monkey rooms
+    /// collided). A save must carry an id well above the old u16 ceiling without truncating it.
+    #[test]
+    fn round_trips_a_room_id_above_u16_max() {
+        let big: crate::graph::RoomId = 0x8000_1234; // > 65535, high bit set like a synthetic id
+        let mut m = Mapper::default();
+        m.observe(big, "Your Bunk", None);
+        let json = to_json(&m);
+        assert!(json.contains("2147488308"), "the id must be written in full, not folded: {json}");
+        let m2 = from_json(&json).unwrap();
+        assert_eq!(m2.graph.current(), Some(big));
+        assert_eq!(m2.graph.room(big).unwrap().label(), "Your Bunk");
+    }
+
     #[test]
     fn round_trips_layers() {
         let mut m = Mapper::default();

@@ -462,8 +462,12 @@ pub(crate) fn list_room_objects_excluding(
     if crate::roomid::is_synthetic_room(room_id) {
         return Vec::new();
     }
+    // `is_synthetic_room` already returned above for anything that isn't a
+    // real Z-machine object number, so this always fits: `room_id` widened
+    // from a `u16` object number in the first place (SQ-1297).
+    let Ok(room_num) = u16::try_from(room_id) else { return Vec::new() };
     model
-        .visible_room_objects(mem, room_id, exclude)
+        .visible_room_objects(mem, room_num, exclude)
         .into_iter()
         .map(|o| crate::inventory::object_words(mem, names, o))
         // An object the story holds neither a printed name nor a parse name for

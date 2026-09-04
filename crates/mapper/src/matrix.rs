@@ -457,7 +457,7 @@ mod tests {
             (4, "Dead End, near Vending Machine"),
             (9, "At West End of Long Hall"),
         ] {
-            g.upsert_room(id, n.into());
+            g.upsert_room(id.into(), n.into());
         }
         let l = g.new_layer(Some(MAIN_LAYER), "Maze".into());
         for id in [1, 2, 3, 4] {
@@ -663,7 +663,7 @@ mod tests {
     fn two_repeating_names_disambiguate_their_numbers() {
         let mut g = MapGraph::new();
         for (id, n) in [(1u16, "Maze"), (2, "Maze"), (3, "Cave"), (4, "Cave")] {
-            g.upsert_room(id, n.into());
+            g.upsert_room(id.into(), n.into());
         }
         let lbl = labels(&g, MAIN_LAYER);
         assert_eq!(lbl.tag_of(2), "M2");

@@ -5417,9 +5417,9 @@ mod tests {
         );
         // The worker's frames and tidied graph match the instant-tidy result room-for-room.
         for id in [1u16, 2, 3] {
-            let inst = m_inst.graph.room(id).unwrap().pos;
-            assert_eq!(frames.last().unwrap().graph.room(id).unwrap().pos, inst);
-            assert_eq!(tidied.room(id).unwrap().pos, inst);
+            let inst = m_inst.graph.room(id.into()).unwrap().pos;
+            assert_eq!(frames.last().unwrap().graph.room(id.into()).unwrap().pos, inst);
+            assert_eq!(tidied.room(id.into()).unwrap().pos, inst);
         }
     }
 
@@ -6881,8 +6881,8 @@ mod tests {
         use mapper::layer::MAIN_LAYER;
 
         let mut g = MapGraph::new();
-        g.upsert_room(id, "Room".into());
-        g.set_pos(id, cell);
+        g.upsert_room(id.into(), "Room".into());
+        g.set_pos(id.into(), cell);
 
         let mut s = AppState::default();
         s.zoom = Zoom::Compact;
@@ -8131,7 +8131,11 @@ mod tests {
             let seed_result = TurnResult {
                 transcript: String::new(),
                 transcript_runs: Vec::new(),
-                location: Some(snap),
+                location: Some(crate::engine::LocationInfo {
+                    number: snap.number.into(),
+                    parent: snap.parent,
+                    name: snap.name.clone(),
+                }),
                 quit: false,
                 erase_lower: false,
                 info: None,
@@ -8180,7 +8184,11 @@ mod tests {
             let seed_result = TurnResult {
                 transcript: String::new(),
                 transcript_runs: Vec::new(),
-                location: Some(snap),
+                location: Some(crate::engine::LocationInfo {
+                    number: snap.number.into(),
+                    parent: snap.parent,
+                    name: snap.name.clone(),
+                }),
                 quit: false,
                 erase_lower: false,
                 info: None,
@@ -11269,9 +11277,9 @@ mod tests {
         // Three rooms whose bounding box centres uniquely on room 3, at (6, 6): the box runs
         // (2,2)-(10,2) x (2,2)-(6,6) → centre (6, 4), and only room 3 sits near it.
         for (id, pos) in [(2u16, (2, 2)), (3, (6, 6)), (4, (10, 2))] {
-            m.graph.upsert_room(id, format!("Room {id}"));
-            m.graph.set_pos(id, pos);
-            m.graph.set_room_layer(id, l);
+            m.graph.upsert_room(id.into(), format!("Room {id}"));
+            m.graph.set_pos(id.into(), pos);
+            m.graph.set_room_layer(id.into(), l);
         }
         assert_eq!(m.graph.last_visited(l), None, "never visited");
 
@@ -11325,9 +11333,9 @@ mod tests {
         m.graph.set_layer_view(maze, Some(mapper::layer::MapView::Matrix));
         // Ten rooms on the maze layer — more than a small pane can show at once.
         for id in 2..=11u16 {
-            m.graph.upsert_room(id, format!("Room {id}"));
-            m.graph.set_room_layer(id, maze);
-            m.graph.set_pos(id, (0, id as i32));
+            m.graph.upsert_room(id.into(), format!("Room {id}"));
+            m.graph.set_room_layer(id.into(), maze);
+            m.graph.set_pos(id.into(), (0, id as i32));
         }
         m.graph.set_current(9); // visits room 9 — recorded as the maze's last-visited room
         m.graph.set_current(1); // then leaves, back to Main

@@ -13,10 +13,10 @@ use ratatui::layout::Rect;
 use app::render::map::render_map_layered;
 use app::state::AppState;
 
-const DEEP_CANYON: u16 = 170;
-const CHASM: u16 = 112;
-const EW_PASSAGE: u16 = 136;
-const NS_PASSAGE: u16 = 183;
+const DEEP_CANYON: mapper::graph::RoomId = 170;
+const CHASM: mapper::graph::RoomId = 112;
+const EW_PASSAGE: mapper::graph::RoomId = 136;
+const NS_PASSAGE: mapper::graph::RoomId = 183;
 const LAYER: u16 = 6;
 
 fn underground() -> mapper::mapper::Mapper {
@@ -35,7 +35,7 @@ fn underground() -> mapper::mapper::Mapper {
     m
 }
 
-fn draw(m: &mapper::mapper::Mapper) -> (Buffer, Vec<(u16, Rect)>) {
+fn draw(m: &mapper::mapper::Mapper) -> (Buffer, Vec<(mapper::graph::RoomId, Rect)>) {
     let mut st = AppState::default();
     st.set_viewed_layer(Some(LAYER));
     let rm = mapper::render::render_layer(&m.graph, LAYER);
@@ -45,7 +45,7 @@ fn draw(m: &mapper::mapper::Mapper) -> (Buffer, Vec<(u16, Rect)>) {
     (buf, hits.room_rects)
 }
 
-fn rect_of(hits: &[(u16, Rect)], id: u16) -> Rect {
+fn rect_of(hits: &[(mapper::graph::RoomId, Rect)], id: mapper::graph::RoomId) -> Rect {
     hits.iter().find(|(h, _)| *h == id).map(|(_, r)| *r).expect("room drawn")
 }
 

@@ -216,8 +216,8 @@ fn synthetic_random_exit_records_no_edge_and_marks_the_cell_random() {
     );
 }
 
-fn snap(number: u16, name: &str) -> zvm::ObjectSnapshot {
-    zvm::ObjectSnapshot { number, parent: 0, name: name.to_string() }
+fn snap(number: mapper::graph::RoomId, name: &str) -> app::engine::LocationInfo {
+    app::engine::LocationInfo { number, parent: 0, name: name.to_string() }
 }
 
 // ── SQ-1264: the live-walk contradiction rule ───────────────────────────────

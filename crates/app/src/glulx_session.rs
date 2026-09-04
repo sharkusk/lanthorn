@@ -158,7 +158,7 @@ pub struct GlulxSession {
     /// it is looked up. Grows for the life of the session; never needs
     /// invalidating, because a Glulx object's address is fixed at compile
     /// time and never moves.
-    room_addrs: std::cell::RefCell<std::collections::HashMap<u16, u32>>,
+    room_addrs: std::cell::RefCell<std::collections::HashMap<mapper::graph::RoomId, u32>>,
     /// The [`parse_names`](Self::parse_names) walk folded into the one set the
     /// bulk callers query — "does ANY object answer to this word" (SQ-1176,
     /// SQ-1210). Same shape and soundness argument as
@@ -945,7 +945,13 @@ impl GlulxSession {
 impl GlulxSession {
     /// The object address an [`Introspect`] handle names, or `None` when the
     /// handle names nothing this session can resolve (see the note above).
-    fn resolve_handle(&self, handle: u16) -> Option<u32> {
+    ///
+    /// `handle` is widened to `mapper::graph::RoomId` (SQ-1297): an ordinary
+    /// object handle (from [`Self::handle_for`]) is always a small 1-based
+    /// index and fits comfortably, but a ROOM handle is the same
+    /// [`crate::roomid::glulx_room_id`] hash the mapper uses and needs the
+    /// full widened space to stay unambiguous.
+    fn resolve_handle(&self, handle: mapper::graph::RoomId) -> Option<u32> {
         let names = self.parse_names()?;
         if crate::roomid::is_synthetic_room(handle) {
             let addr = self.location_addr()?;
@@ -963,7 +969,7 @@ impl GlulxSession {
     fn handle_for(&self, addr: u32) -> Option<u16> {
         let index = self.parse_names()?.index_of(addr)?;
         let handle = u16::try_from(index + 1).ok()?;
-        (!crate::roomid::is_synthetic_room(handle)).then_some(handle)
+        (!crate::roomid::is_synthetic_room(handle.into())).then_some(handle)
     }
 
     fn appglk(&mut self) -> &mut AppGlk {
@@ -1163,7 +1169,7 @@ impl GlulxSession {
                 // `room_addrs`'s field docs for why `declared_exit` needs a
                 // cache rather than being able to invert the hash itself.
                 self.room_addrs.borrow_mut().insert(id, addr);
-                zvm::ObjectSnapshot { number: id, parent: 0, name: name.to_string() }
+                LocationInfo { number: id, parent: 0, name: name.to_string() }
             }
             None => heading_to_room(name),
         }
@@ -1652,7 +1658,7 @@ pub fn glk_hyperlink_window(
 /// Build a name-based room snapshot from an Inform room heading. Glulx has no
 /// readable object tree, so identity is the synthetic id of the normalized name.
 fn heading_to_room(name: &str) -> LocationInfo {
-    zvm::ObjectSnapshot {
+    LocationInfo {
         number: crate::roomid::synthetic_room_id(name),
         parent: 0,
         name: name.to_string(),
@@ -2184,19 +2190,19 @@ impl Introspect for GlulxSession {
     }
 
     fn contents(&self, container: u16) -> Vec<crate::engine::ObjectWords> {
-        let (Some(names), Some(addr)) = (self.parse_names(), self.resolve_handle(container)) else {
+        let (Some(names), Some(addr)) = (self.parse_names(), self.resolve_handle(container.into())) else {
             return Vec::new();
         };
         names.contents(self.machine.mem(), addr)
     }
 
-    fn room_objects(&self, room: u16) -> Vec<crate::engine::ObjectWords> {
+    fn room_objects(&self, room: mapper::graph::RoomId) -> Vec<crate::engine::ObjectWords> {
         self.room_objects_excluding(room, None)
     }
 
     fn room_objects_excluding(
         &self,
-        room: u16,
+        room: mapper::graph::RoomId,
         exclude: Option<u16>,
     ) -> Vec<crate::engine::ObjectWords> {
         let (Some(names), Some(addr)) = (self.parse_names(), self.resolve_handle(room)) else {
@@ -2205,7 +2211,7 @@ impl Introspect for GlulxSession {
         // The avatar is structurally a child of the room it stands in, so
         // without this it appears in every room of every game (SQ-0667). By
         // handle, never by name: an Inform 7 object prints nothing at all.
-        let skip = exclude.and_then(|h| self.resolve_handle(h));
+        let skip = exclude.and_then(|h| self.resolve_handle(h.into()));
         names
             .children(self.machine.mem(), addr)
             .into_iter()
@@ -2224,7 +2230,7 @@ impl Introspect for GlulxSession {
         Engine::object_word_set(self)
     }
 
-    fn children_of(&self, parent: u16) -> std::collections::BTreeSet<u16> {
+    fn children_of(&self, parent: mapper::graph::RoomId) -> std::collections::BTreeSet<u16> {
         let (Some(names), Some(addr)) = (self.parse_names(), self.resolve_handle(parent)) else {
             return std::collections::BTreeSet::new();
         };
@@ -3299,7 +3305,7 @@ mod tests {
         // Every handle an object can get, from the first to the last one
         // `handle_for` will hand out.
         for h in [1u16, 2, 1000, 0x7FFE, 0x7FFF] {
-            assert!(!is_synthetic_room(h), "object handle {h} must not read as a room");
+            assert!(!is_synthetic_room(h.into()), "object handle {h} must not read as a room");
         }
         // …and every room id, however it was minted.
         for addr in [0x1000u32, 0x21b0c, 0x53f973, u32::MAX] {
