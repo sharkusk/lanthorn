@@ -144,21 +144,41 @@ pub fn build_axis_constraints(graph: &MapGraph, ids: &[RoomId], gap: f64) -> Axi
         }
     }
 
-    // Directional constraints, STRONGEST EVIDENCE FIRST (SQ-1287) rather than in the order the
-    // player happened to mint them. A reciprocated compass pair — the passage walked from both
-    // ends, the two observations agreeing — is better evidence about geometry than a single
-    // one-way crossing, so it claims its axis first and a contradicting one-way edge is the one
-    // `creates_cycle` drops. Insertion order breaks ties, so the pass stays deterministic.
+    // Directional constraints, STRONGEST EVIDENCE FIRST (SQ-1287/SQ-1291) rather than in the
+    // order the player happened to mint them. Three tiers, insertion order breaking ties inside
+    // each so the pass stays deterministic:
+    //
+    //   0. A **reciprocated compass pair** — the passage walked from both ends, the two
+    //      observations agreeing — is the best evidence about geometry the map has, so it claims
+    //      its axis first and a contradicting edge is the one `creates_cycle` drops (SQ-1287).
+    //   1. A **one-way compass edge**: one observation, but still the game's own word for where
+    //      the room lies.
+    //   2. **Up/Down**, reciprocated or not (SQ-1291). North-for-up is a DRAWING CONVENTION —
+    //      `layout_offset` invents it, `grid_offset` does not — so a stairwell must never outrank
+    //      a room that was actually described as lying north or south of somewhere. Zork I's
+    //      `East-West Passage` and `Chasm` are joined by a reciprocated `Down`/`Up` pair AND by
+    //      the chasm's one-way `SW` back to the passage; ranking the stairwell as a reciprocated
+    //      pair pinned the chasm a row south and dropped the compass bearing, so the map
+    //      contradicted both the game's prose ("a stairway leading down at the north end") and
+    //      the player's own return walk.
+    //
+    // Losing an Up/Down constraint costs nothing on screen: `mark_distorted` gates on
+    // `grid_offset`, so a stairwell is never drawn distorted whatever happens here.
     let conns = graph.connections();
     let mut order: Vec<usize> = (0..conns.len()).collect();
     order.sort_by_key(|&ci| {
         let c = &conns[ci];
-        let reciprocated = !c.is_self_loop()
-            && grid_offset(c.dir).is_some()
-            && conns
-                .iter()
-                .any(|o| o.origin == c.dest && o.dest == c.origin && o.dir == crate::direction::opposite(c.dir));
-        (!reciprocated, ci)
+        let tier = if c.is_self_loop() || grid_offset(c.dir).is_none() {
+            2 // Up/Down (and anything else with no compass bearing, which makes no constraint)
+        } else if conns
+            .iter()
+            .any(|o| o.origin == c.dest && o.dest == c.origin && o.dir == crate::direction::opposite(c.dir))
+        {
+            0 // reciprocated compass pair
+        } else {
+            1 // one-way compass edge
+        };
+        (tier, ci)
     });
     for ci in order {
         let conn = &conns[ci];
@@ -297,6 +317,73 @@ mod tests {
         assert_eq!((ac.y[0].left, ac.y[0].right), (1, 0)); // B(idx1) left, A(idx0) right
         assert!(ac.x.is_empty());
         assert!(ac.dropped.is_empty());
+    }
+
+    // ── SQ-1291: Up/Down rank below every compass edge ───────────────────────────
+
+    /// The Zork I shape. `East-West Passage` and `Chasm` are joined by a stairwell walked from
+    /// BOTH ends (`136 Down 112` / `112 Up 136`) and, separately, by the chasm's ONE-WAY
+    /// `southwest` back to the passage. Under SQ-1287's two tiers the stairwell counted as a
+    /// reciprocated pair, claimed the Y axis first, and pinned the chasm a row SOUTH; the
+    /// compass bearing then closed a cycle and was dropped. North-for-up is a drawing
+    /// convention, so the one-way compass word must win instead.
+    #[test]
+    fn a_one_way_compass_bearing_outranks_a_reciprocated_stairwell() {
+        let mut g = two_rooms(); // 1 = the passage, 2 = the chasm
+        g.add_edge(1, Direction::Down, 2);
+        g.add_edge(2, Direction::Up, 1);
+        g.add_edge(2, Direction::SW, 1); // the passage is south-WEST of the chasm
+        let ac = build_axis_constraints(&g, &[1, 2], 1.0);
+        // SW's y leg: dy > 0, so origin(the chasm, local idx 1) is "left" — the smaller y, i.e.
+        // the chasm to the NORTH. Exactly one y constraint survives, and it is that one.
+        assert_eq!(ac.y.len(), 1, "one y constraint survives the contest: {:?}", ac.y);
+        assert_eq!((ac.y[0].left, ac.y[0].right), (1, 0), "the chasm sits north of the passage");
+        assert_eq!(ac.x.len(), 1, "and SW's west leg places the passage on the x axis too");
+        assert_eq!((ac.x[0].left, ac.x[0].right), (0, 1), "the passage is west of the chasm");
+        let dropped: Vec<_> = ac.dropped.iter().map(|&i| g.connections()[i].dir).collect();
+        assert!(
+            dropped.contains(&Direction::Down) || dropped.contains(&Direction::Up),
+            "a leg of the stairwell is what gives way, not the bearing: {dropped:?}"
+        );
+        assert!(!dropped.contains(&Direction::SW), "the compass bearing survives: {dropped:?}");
+    }
+
+    /// …and the stairwell pays nothing on screen for losing: `mark_distorted` gates on
+    /// `grid_offset`, which is `None` for Up/Down, so a dropped stairwell constraint never
+    /// draws a passage as distorted.
+    #[test]
+    fn a_dropped_stairwell_constraint_never_draws_distorted() {
+        let mut g = two_rooms();
+        g.add_edge(1, Direction::Down, 2);
+        g.add_edge(2, Direction::Up, 1);
+        g.add_edge(2, Direction::SW, 1);
+        super::super::relayout_auto(&mut g);
+        for c in g.connections() {
+            assert!(!c.distorted, "nothing here may draw distorted: {:?}", c.dir);
+        }
+    }
+
+    /// A one-way compass edge still yields to a RECIPROCATED one (SQ-1287's tier, unchanged):
+    /// the three tiers are ordered, not flattened into two.
+    #[test]
+    fn a_reciprocated_compass_pair_still_outranks_a_one_way_compass_edge() {
+        let mut g = two_rooms();
+        g.upsert_room(3, "C".into());
+        g.add_edge(1, Direction::N, 3); // one-way, minted FIRST
+        g.add_edge(1, Direction::S, 3); // …and reciprocated, minted second
+        g.add_edge(3, Direction::N, 1);
+        let ac = build_axis_constraints(&g, &[1, 3], 1.0);
+        assert!(
+            ac.y.iter().all(|c| (c.left, c.right) == (0, 1)),
+            "both legs of the reciprocated pair agree that C is south: {:?}",
+            ac.y
+        );
+        assert_eq!(ac.dropped.len(), 1, "and the one-way N edge is the one dropped");
+        assert_eq!(
+            g.connections()[*ac.dropped.iter().next().unwrap()].dir,
+            Direction::N,
+            "specifically the one-way north edge"
+        );
     }
 
     #[test]

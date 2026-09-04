@@ -2135,6 +2135,15 @@ fn draw_stub(
 /// `partner` is `None` when the destination is on another layer (a cross-layer `In`/`Out` has
 /// nothing to aim at on this plane) or has no position yet; the badge then stays centred.
 ///
+/// **Up/Down never reach here with a partner, and that is not an oversight** (SQ-1291). A
+/// SAME-layer stairwell is lane-routed like any compass passage and its glyph rides the
+/// connector's departure anchor (see `render_lane_connectors`), which is derived from the two
+/// rooms' cells and so already faces the partner — it never becomes a stub, so it never reaches
+/// `draw_portal_icons` at all. What does reach this arm is the CROSS-layer portal, and its
+/// destination is by definition not on this layer, so `cell_of` cannot resolve a cell for it: the
+/// caller passes `None` because there is nothing else it could pass. Top/bottom is therefore the
+/// only answer available, and the right one — it is the direction of travel off the plane.
+///
 /// Returned as a unit-ish `(dx, dy)` in room-cell space, y down.
 fn badge_bearing(dir: Direction, origin: (i32, i32), partner: Option<(i32, i32)>) -> Option<(i32, i32)> {
     match dir {
@@ -9506,5 +9515,121 @@ mod sq1274_forest_valley {
                 }
             }
         }
+    }
+}
+
+#[cfg(all(test, feature = "t-render"))]
+mod sq1291_zork_chasm_badges {
+    //! SQ-1291's other half, on screen: which SIDE of the East-West Passage the player's eye
+    //! finds the stairway down on.
+    //!
+    //! A same-layer Up/Down passage is lane-routed like any other, and its glyph rides the
+    //! connector's DEPARTURE ANCHOR on the box border — not [`super::badge_bearing`], which only
+    //! ever sees the CROSS-layer portals (whose partner is by construction on another plane, so
+    //! it is handed no cell to aim at; see that function's own note). The anchor is derived from
+    //! the rooms' cells, so it faces the partner already: the whole of what the player saw wrong
+    //! was the LAYOUT putting the Chasm south. These cases pin both readings of the same three
+    //! edges against the two layouts, so the badge can never quietly stop tracking its partner.
+    use super::*;
+    use mapper::direction::Direction::{Down, Up, E, SW, W};
+    use mapper::graph::{MapGraph, RoomId};
+    use mapper::layer::MAIN_LAYER;
+
+    const PASSAGE: RoomId = 136;
+    const CHASM: RoomId = 112;
+    const TROLL: RoomId = 133;
+    const ROUND: RoomId = 16;
+
+    /// Zork I's cellar row with the chasm at `chasm`: the troll room west of the passage, the
+    /// round room east, and the chasm reached by a stairwell down AND named by its own
+    /// `southwest` return.
+    fn cellar(chasm: (i32, i32)) -> MapGraph {
+        let mut g = MapGraph::new();
+        for (id, name, pos) in [
+            (TROLL, "The Troll Room", (-2, 0)),
+            (PASSAGE, "East-West Passage", (-1, 0)),
+            (ROUND, "Round Room", (0, 0)),
+            (CHASM, "Chasm", chasm),
+        ] {
+            g.upsert_room(id, name.to_string());
+            g.set_pos(id, pos);
+        }
+        for (o, d, t) in [
+            (TROLL, E, PASSAGE),
+            (PASSAGE, W, TROLL),
+            (PASSAGE, Down, CHASM),
+            (CHASM, Up, PASSAGE),
+            (CHASM, SW, PASSAGE),
+            (PASSAGE, E, ROUND),
+            (ROUND, W, PASSAGE),
+        ] {
+            g.add_edge(o, d, t);
+        }
+        g
+    }
+
+    /// Where `glyph` sits on `id`'s box: `(dx, dy)` from the box's top-left corner, plus the
+    /// box's own centre column and row to compare them against.
+    fn badge_at(g: &MapGraph, id: RoomId, glyph: char) -> (i32, i32, i32, i32) {
+        let rm = mapper::render::render_layer(g, MAIN_LAYER);
+        let mut st = AppState::default();
+        st.scroll = rm.bounds.0;
+        let area = Rect::new(0, 0, 70, 30);
+        let mut buf = Buffer::empty(area);
+        render_map(&rm, &st, area, &mut buf);
+        let rect = room_screen_rects(&rm, &st, area)
+            .into_iter()
+            .find(|&(r, _)| r == id)
+            .map(|(_, r)| r)
+            .unwrap_or_else(|| panic!("room #{id} is drawn"));
+        let want = glyph.to_string();
+        for y in rect.y..rect.bottom() {
+            for x in rect.x..rect.right() {
+                if buf.cell((x, y)).is_some_and(|c| c.symbol() == want) {
+                    return (
+                        (x - rect.x) as i32,
+                        (y - rect.y) as i32,
+                        (rect.width / 2) as i32,
+                        (rect.height / 2) as i32,
+                    );
+                }
+            }
+        }
+        panic!("#{id} shows no {glyph:?} anywhere on its box");
+    }
+
+    /// The fix. With the chasm north-east of the passage — where its own `southwest` return puts
+    /// it — the passage's `↓` sits on the passage's NORTH-EAST, so the badge agrees with the
+    /// game's own prose: "a stairway leading down at the north end of the room".
+    #[test]
+    fn the_stairway_down_shows_on_the_side_the_chasm_is_on() {
+        let g = cellar((0, -1)); // north-east of the passage
+        let st = AppState::default();
+        let (dx, dy, cx, cy) = badge_at(&g, PASSAGE, st.symbols.portal.down);
+        assert!(dx > cx, "the ↓ leans EAST toward the chasm (dx={dx}, centre {cx})");
+        assert!(dy < cy, "…and NORTH, the end of the room the stairway is at (dy={dy}, centre {cy})");
+    }
+
+    /// And the chasm's own `southwest` bearing back to the passage lands on the chasm's
+    /// SOUTH-WEST — the two ends of the passage face each other.
+    #[test]
+    fn the_chasms_return_bearing_shows_on_its_south_west() {
+        let g = cellar((0, -1));
+        let st = AppState::default();
+        let (dx, dy, cx, cy) = badge_at(&g, CHASM, diagonal_arrow(SW, &st.symbols.arrows));
+        assert!(dx < cx, "the ↙ leans WEST toward the passage (dx={dx}, centre {cx})");
+        assert!(dy > cy, "…and SOUTH (dy={dy}, centre {cy})");
+    }
+
+    /// The falsifier for the pair above, and the picture the player reported: with the chasm laid
+    /// out SOUTH-east — the cells their `map.json` carried — the very same `↓` sits on the
+    /// passage's SOUTH side. The badge always tracked its partner; it was the LAYOUT that had the
+    /// chasm in the wrong place, which is what SQ-1291's constraint tiers fix.
+    #[test]
+    fn the_reported_layout_put_the_same_badge_on_the_passages_south_side() {
+        let g = cellar((0, 1)); // south-east, as reported
+        let st = AppState::default();
+        let (_, dy, _, cy) = badge_at(&g, PASSAGE, st.symbols.portal.down);
+        assert!(dy > cy, "as reported, the ↓ leans SOUTH (dy={dy}, centre {cy})");
     }
 }

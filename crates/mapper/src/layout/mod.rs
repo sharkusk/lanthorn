@@ -367,22 +367,37 @@ pub fn room_alignment_score(graph: &MapGraph, id: RoomId) -> usize {
 /// is free). Each DIRECTED connection counts once, so a reciprocal pair contributes 2, naturally
 /// weighting bidirectional links above one-way exits without a separate weight. The directional
 /// repair pass maximizes this (subject to not adding illegal overlaps).
+///
+/// **A satisfied Up/Down hint is worth strictly less than any satisfied compass hint** (SQ-1291),
+/// the same rule `constraints::build_axis_constraints` sorts its tiers by: north-for-up is a
+/// drawing convention this crate invents in [`layout_offset`], where a compass word is the game's
+/// own statement of where the room lies. A compass hint is therefore weighed at more than every
+/// stairwell on the map put together, which makes the sum a LEXICOGRAPHIC comparison — compass
+/// hints first, stairwells only as the tie-break. Zork I's `East-West Passage` needed it: the
+/// solver had already placed the `Chasm` north-east of it, honouring the chasm's own `southwest`
+/// return, and this pass then dragged the chasm due south to satisfy the two legs of the
+/// stairwell instead — which is the map contradicting the game's prose to draw a staircase
+/// straight down. Scores are only ever compared WITHIN one graph (the repair pass's hill climb),
+/// so a weight derived from that graph's connection count is well defined.
 pub fn directional_hint_score(graph: &MapGraph) -> usize {
+    let compass_weight = graph.connections().len() + 1;
     graph
         .connections()
         .iter()
-        .filter(|c| {
-            let Some(delta) = layout_offset(c.dir) else { return false };
-            let (Some(op), Some(dp)) = (
-                graph.room(c.origin).and_then(|r| r.pos),
-                graph.room(c.dest).and_then(|r| r.pos),
-            ) else {
-                return false;
-            };
+        .filter_map(|c| {
+            let delta = layout_offset(c.dir)?;
+            let (op, dp) = (
+                graph.room(c.origin).and_then(|r| r.pos)?,
+                graph.room(c.dest).and_then(|r| r.pos)?,
+            );
             let actual = (dp.0 - op.0, dp.1 - op.1);
-            axis_side_respected(actual.0, delta.0) && axis_side_respected(actual.1, delta.1)
+            if axis_side_respected(actual.0, delta.0) && axis_side_respected(actual.1, delta.1) {
+                Some(if grid_offset(c.dir).is_some() { compass_weight } else { 1 })
+            } else {
+                None
+            }
         })
-        .count()
+        .sum()
 }
 
 /// Number of room `id`'s compass (grid-offset) edges — its directional-constraint count.
@@ -891,10 +906,66 @@ mod tests {
         g.set_pos(2, (1, 0)); // 2 east of 1
         g.add_edge(1, Direction::E, 2); // satisfied (2 is east)
         g.add_edge(2, Direction::W, 1); // satisfied (1 is west) — reciprocal, so both count
-        assert_eq!(directional_hint_score(&g), 2, "reciprocal E/W pair: both directed edges satisfied");
+        let both = directional_hint_score(&g);
         // Flip 2 to the wrong side: both directed edges now violated.
         g.set_pos(2, (-1, 0));
         assert_eq!(directional_hint_score(&g), 0, "2 west of 1 violates both E and W edges");
+
+        // Half the pair, half the score. SQ-1291 made a compass hint's WEIGHT depend on how many
+        // connections the graph holds, so the reference graph carries a second connection too —
+        // an `Unknown` stub, which is not a hint and scores nothing.
+        let mut one = MapGraph::new();
+        one.upsert_room(1, "a".into());
+        one.upsert_room(2, "b".into());
+        one.set_pos(1, (0, 0));
+        one.set_pos(2, (1, 0));
+        one.add_edge(1, Direction::E, 2);
+        one.add_edge(1, Direction::Unknown, 2);
+        let one_way = directional_hint_score(&one);
+        assert!(one_way > 0, "the lone east edge is satisfied");
+        assert_eq!(both, 2 * one_way, "reciprocal E/W pair: both directed edges satisfied");
+    }
+
+    /// SQ-1291: a satisfied compass hint outranks EVERY satisfied Up/Down hint on the map put
+    /// together. North-for-up is this crate's own drawing convention (`layout_offset`); a compass
+    /// word is the game's statement of where the room is, so the repair pass must never trade one
+    /// away for any number of tidy-looking staircases. Zork I's `Chasm` is where it bit: the
+    /// solver put it north-east of the `East-West Passage`, honouring the chasm's own `southwest`
+    /// return, and `repair_directional_hints` then dragged it due south to straighten the
+    /// stairwell's two legs.
+    #[test]
+    fn one_compass_hint_outweighs_every_updown_hint_on_the_map() {
+        use crate::direction::Direction;
+        use crate::graph::MapGraph;
+        // A hub with ONE `SW` bearing, plus eight two-room stairwells — sixteen directed
+        // Up/Down legs. Both arrangements below hold the same seventeen connections, so the
+        // scores are comparable; only which hints are SATISFIED differs.
+        let g = |sw_ok: bool, stairs_ok: bool| {
+            let mut g = MapGraph::new();
+            g.upsert_room(1, "hub".into());
+            g.set_pos(1, (0, 0));
+            g.upsert_room(2, "the other room".into());
+            g.set_pos(2, if sw_ok { (-1, 1) } else { (1, -1) });
+            g.add_edge(1, Direction::SW, 2);
+            for i in 0..8i32 {
+                let (below, above) = (10 + 2 * i as u16, 11 + 2 * i as u16);
+                g.upsert_room(below, "below".into());
+                g.upsert_room(above, "above".into());
+                g.set_pos(below, (5, 10 + i * 3));
+                g.set_pos(above, (5, if stairs_ok { 9 + i * 3 } else { 11 + i * 3 }));
+                g.add_edge(below, Direction::Up, above);
+                g.add_edge(above, Direction::Down, below);
+            }
+            g
+        };
+        let compass_only = directional_hint_score(&g(true, false));
+        let stairs_only = directional_hint_score(&g(false, true));
+        assert!(stairs_only > 0, "the sixteen stairwell legs are satisfied and do count");
+        assert!(
+            compass_only > stairs_only,
+            "one satisfied compass bearing ({compass_only}) must outweigh all sixteen satisfied \
+             stairwell legs ({stairs_only}) put together"
+        );
     }
 
     #[test]

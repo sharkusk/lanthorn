@@ -54,6 +54,8 @@ mod sq1264_forest_randomization;
 mod sq1287_advent_map_layout;
 #[path = "suites/sq1289_random_room_placement.rs"]
 mod sq1289_random_room_placement;
+#[path = "suites/sq1291_zork_chasm_layout.rs"]
+mod sq1291_zork_chasm_layout;
 #[path = "suites/sq1266_v6_shadow_restore.rs"]
 mod sq1266_v6_shadow_restore;
 #[path = "suites/sq1267_shadow_room_identity.rs"]
