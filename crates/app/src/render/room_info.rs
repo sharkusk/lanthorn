@@ -37,7 +37,7 @@ fn dest_name(graph: &MapGraph, labels: &mapper::matrix::MatrixLabels, layer: map
             return row.to_string();
         }
     }
-    graph.room(id).map(|r| r.label().to_owned()).unwrap_or_else(|| crate::roomid::display_room_id(id))
+    graph.room(id).map(|r| r.label().to_owned()).unwrap_or_else(|| crate::roomid::room_label_no(graph, id))
 }
 
 /// One card line for a direction: the glyph, and what it means spelled out.
@@ -65,8 +65,10 @@ fn card_detail(
         C::LeavesLayer { dest } => {
             // Cross-layer: `dest` has no row in THIS layer's `labels` to number it with, exactly
             // like the matrix's own `⇱out` footnote, which names the same way.
-            let raw =
-                graph.room(dest).map(|r| r.label().to_owned()).unwrap_or_else(|| crate::roomid::display_room_id(dest));
+            let raw = graph
+                .room(dest)
+                .map(|r| r.label().to_owned())
+                .unwrap_or_else(|| crate::roomid::room_label_no(graph, dest));
             ("⇱", format!("{} · {}", raw, graph.layer_name(graph.layer_of(dest))))
         }
         C::Probed => ("×", "tried, no way through".to_string()),

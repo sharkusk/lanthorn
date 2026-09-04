@@ -437,6 +437,20 @@ true visit order (each room's position in the save file), the first time it
 reloads. Names too long for the label column are abbreviated and spelled out in a
 footnote.
 
+**Room ids on the map.** A Z-machine room's `#id` is the story's own object
+number — small, and worth referencing directly. A Glulx or name-only room has no
+such thing: its id is a hash, which used to be shown as `#8000ABCD`-style hex
+everywhere the map names a room. It now shows a small per-map ORDINAL instead —
+`#1` for the first room you ever discover this session, `#2` the second, and so
+on — because the hex is opaque where the ordinal is something you can actually
+hold in your head. The two diagnostic surfaces built for tracing a reported
+problem (the room dock's Diagnostics body, and `/export-map`'s `ROOM` line) show
+both forms together (`#12 (8000ABCD)`), so a bug report can still be matched back
+to the exact id every other tool — `export-dot`'s node ids included — uses. The
+ordinal is a property of the room itself: a room the Glulx lock later re-keys
+onto its real object address keeps the number it already had, and a `tidy-map` or
+layer move never renumbers anything.
+
 **Selection** moves with ↑/↓ (or Home/End, PageUp/PageDown) when the map pane has
 focus, or by clicking a row. Clicking a *destination cell* jumps the selection to
 that room's row. Selecting a room **bolds every cell elsewhere that arrives at it**

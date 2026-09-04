@@ -27,6 +27,17 @@ Absolute URLs or no link.
 > visible tag `*Next release:*`. `release.yml` refuses to cut a release
 > while any such tag, or this Unreleased section, still exists.*
 
+### Changed
+
+- **A room lanthorn can't identify by a game object now shows a small number,
+  not a long code.** A Glulx room, or a Z-machine room known only by its name,
+  used to show an 8-character code like `#8000ABCD` on the map and everywhere
+  else a room number appears. It now shows a small ordinal instead — `#1` for
+  the first such room you find, `#2` the next, and so on — the same kind of
+  number the map already gives you elsewhere. The room panel and `/export-map`
+  still show the old code alongside the new number, for matching a bug report
+  back to the exact room.
+
 ### Fixed
 
 - **The map knows where you are before you take a step.** Counterfeit Monkey

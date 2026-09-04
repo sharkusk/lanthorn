@@ -253,7 +253,11 @@ const INTERFACE: &[Row] = &[
         ],
     ),
     d("show_status_bar", "true", &["Show the status/score bar across the top of the story pane."]),
-    d("show_room_numbers", "false", &["Show room numbers (#id) inside Boxes-zoom room boxes."]),
+    d(
+        "show_room_numbers",
+        "false",
+        &["Show room numbers (#id, or a small ordinal for a name-only room) inside Boxes-zoom room boxes."],
+    ),
     d("split_ratio", "50", &["The story pane's share of the story/map split, as a percentage."]),
     d("inv_dock_pct", "33", &["Inventory panel height cap, as a percentage of screen height."]),
     d(

@@ -205,3 +205,84 @@ fn the_opening_room_is_on_the_map_before_the_player_leaves_it() {
         mapper.graph.connections()
     );
 }
+
+/// SQ-1300: the Back Alley and Sigil Street must keep reading "1" and "2" — their small per-map
+/// ordinals — in `/export-map`'s dump even after the Glulx room lock lands and re-keys them from
+/// name-derived ids onto their real object addresses (`app::turn`'s `take_room_remap` /
+/// `Mapper::rekey_room`, exercised here the same way `turn.rs` drives it every real turn). The
+/// ordinal is a property of the room NODE, so a re-key must carry it along unchanged — this is
+/// the real-game half of the coverage `roomid::tests::room_label_no_survives_a_rekey` and
+/// `graph::tests::rekey_room_carries_the_ordinal_with_it` give it synthetically.
+#[test]
+fn opening_rooms_keep_their_ordinals_across_the_lock_rekey() {
+    let Some((mut s, prologue_turns)) = prologue() else { return };
+
+    let mut mapper = Mapper::default();
+    let mut death = DeathWatch::default();
+    for (step, r) in PROLOGUE.iter().zip(&prologue_turns) {
+        apply_turn(&mut mapper, step.unwrap_or("<key>"), r, &mut death);
+    }
+
+    // Drive the same rekey the app's own turn loop performs every turn (`app::turn`), so a
+    // room the lock renames mid-walk lands on the same node afterward rather than a duplicate.
+    // Returns how many rooms it actually re-keyed, for the non-vacuity check below.
+    let rekey_after = |s: &mut GlulxSession, mapper: &mut Mapper| -> usize {
+        let mut done = 0;
+        for (name, addr) in s.take_room_remap() {
+            let old_id = app::roomid::synthetic_room_id(&name);
+            let new_id = app::roomid::glulx_room_id(addr);
+            if mapper.rekey_room(old_id, new_id) {
+                done += 1;
+            }
+        }
+        done
+    };
+
+    // Walk back and forth between the Back Alley and Sigil Street enough times to give the
+    // room-lock learner the repeated room-change evidence it needs to resolve (SQ-1286).
+    const WALK: [&str; 8] = ["n", "s", "n", "s", "n", "s", "n", "s"];
+    let mut rekeys = 0;
+    for cmd in WALK {
+        let r = s.submit(cmd);
+        rekeys += rekey_after(&mut s, &mut mapper);
+        apply_turn(&mut mapper, cmd, &r, &mut death);
+    }
+
+    assert!(
+        s.locked_room_global().is_some(),
+        "non-vacuity: the walk must resolve the room lock, or this test never reaches a re-key"
+    );
+    assert!(
+        rekeys > 0,
+        "non-vacuity: the lock resolving is not enough — the walk must actually trigger at \
+         least one re-key, or this test never exercises what SQ-1300 is about"
+    );
+
+    let names: Vec<String> = mapper.graph.rooms().map(|r| r.label().to_string()).collect();
+    assert_eq!(
+        names.iter().filter(|n| n.as_str() == BACK_ALLEY).count(),
+        1,
+        "the re-key must not leave a duplicate Back Alley beside the renamed node: {names:?}"
+    );
+
+    let dump = app::map_dump::render_dump(&mapper.graph, &app::symbols::SymbolSet::default());
+    let alley_line = dump
+        .lines()
+        .find(|l| l.starts_with("ROOM ") && l.contains(&format!("{BACK_ALLEY:?}")))
+        .unwrap_or_else(|| panic!("Back Alley's ROOM line: {dump}"));
+    assert!(
+        alley_line.starts_with("ROOM #1 "),
+        "Back Alley is the first room discovered and must still read #1 after the lock's \
+         re-key: {alley_line}"
+    );
+
+    let sigil_line = dump
+        .lines()
+        .find(|l| l.starts_with("ROOM ") && l.contains("\"Sigil Street\""))
+        .unwrap_or_else(|| panic!("Sigil Street's ROOM line: {dump}"));
+    assert!(
+        sigil_line.starts_with("ROOM #2 "),
+        "Sigil Street is the second room discovered and must still read #2 after the lock's \
+         re-key: {sigil_line}"
+    );
+}

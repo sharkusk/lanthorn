@@ -48,7 +48,7 @@ fn replay_build_and_placement(
     use mapper::layout::{place_incremental, TidyStats};
 
     let name_of = |g: &MapGraph, id: RoomId| -> String {
-        g.room(id).map(|r| r.label().to_string()).unwrap_or_else(|| crate::roomid::display_room_id(id))
+        g.room(id).map(|r| r.label().to_string()).unwrap_or_else(|| crate::roomid::room_label_no(g, id))
     };
 
     let conns = sub.connections();
