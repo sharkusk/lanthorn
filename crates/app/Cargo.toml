@@ -80,24 +80,24 @@ t-misc = []     # everything with no closer home: anim, assets, docs_reference, 
 t-all = ["t-input", "t-render", "t-picker", "t-session", "t-guidance", "t-persist", "t-theme", "t-state", "t-misc"]
 
 [dependencies]
-buildinfo = { package = "lanthorn-buildinfo", path = "../buildinfo", version = "0.4.2" }
+buildinfo = { package = "lanthorn-buildinfo", path = "../buildinfo", version = "0.4.3" }
 # SQ-0850: the per-game save-directory key and the canonical-title table the
 # readable half of it comes from. Shared with `zvm-cli` so the TUI and the CLI
 # cannot name one game's save directory two different ways.
-cli-host = { package = "lanthorn-cli-host", path = "../cli-host", version = "0.4.2" }
-zvm = { package = "lanthorn-zvm", path = "../zvm", version = "0.4.2" }
-gvm = { package = "lanthorn-gvm", path = "../gvm", version = "0.4.2" }
-scott = { package = "lanthorn-scott", path = "../scott", version = "0.4.2" }
+cli-host = { package = "lanthorn-cli-host", path = "../cli-host", version = "0.4.3" }
+zvm = { package = "lanthorn-zvm", path = "../zvm", version = "0.4.3" }
+gvm = { package = "lanthorn-gvm", path = "../gvm", version = "0.4.3" }
+scott = { package = "lanthorn-scott", path = "../scott", version = "0.4.3" }
 # SQ-1041: the shape of what a story's parser accepts, produced by both grammar
 # readers, so the vocabulary offer is one piece of code for every engine.
-grammar-model = { package = "lanthorn-grammar-model", path = "../grammar-model", version = "0.4.2" }
+grammar-model = { package = "lanthorn-grammar-model", path = "../grammar-model", version = "0.4.3" }
 # SQ-1119: the one thing a story file cannot answer — that `illuminate` means
 # `light`. A shipped table, parsed lazily behind a `OnceLock` on the first
 # rejected word, so a session that never has one never reads it.
-verb-synonyms = { package = "lanthorn-verb-synonyms", path = "../verb-synonyms", version = "0.4.2" }
-mapper = { package = "lanthorn-mapper", path = "../mapper", version = "0.4.2" }
-blorb = { package = "lanthorn-blorb", path = "../blorb", version = "0.4.2" }
-audio = { package = "lanthorn-audio", path = "../audio", version = "0.4.2" }
+verb-synonyms = { package = "lanthorn-verb-synonyms", path = "../verb-synonyms", version = "0.4.3" }
+mapper = { package = "lanthorn-mapper", path = "../mapper", version = "0.4.3" }
+blorb = { package = "lanthorn-blorb", path = "../blorb", version = "0.4.3" }
+audio = { package = "lanthorn-audio", path = "../audio", version = "0.4.3" }
 ratatui = { version = "0.30", features = ["crossterm_0_29"] }
 crossterm = "0.29"
 ratatui-image = { version = "11.0.6", default-features = false }

@@ -19,11 +19,11 @@ name = "zvm-cli"
 path = "src/main.rs"
 
 [dependencies]
-buildinfo = { package = "lanthorn-buildinfo", path = "../buildinfo", version = "0.4.2" }
-cli-host = { package = "lanthorn-cli-host", path = "../cli-host", version = "0.4.2" }
-zvm = { package = "lanthorn-zvm", path = "../zvm", version = "0.4.2" }
-blorb = { package = "lanthorn-blorb", path = "../blorb", version = "0.4.2" }
-audio = { package = "lanthorn-audio", path = "../audio", version = "0.4.2" }
+buildinfo = { package = "lanthorn-buildinfo", path = "../buildinfo", version = "0.4.3" }
+cli-host = { package = "lanthorn-cli-host", path = "../cli-host", version = "0.4.3" }
+zvm = { package = "lanthorn-zvm", path = "../zvm", version = "0.4.3" }
+blorb = { package = "lanthorn-blorb", path = "../blorb", version = "0.4.3" }
+audio = { package = "lanthorn-audio", path = "../audio", version = "0.4.3" }
 crossterm = "0.29"
 
 # SQ-0909: the terminal itself is the scrollback, and a DECSTBM scroll region is

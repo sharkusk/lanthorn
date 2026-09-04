@@ -6,7 +6,7 @@ All notable changes to lanthorn are recorded here.
 [`.github/workflows/release.yml`](.github/workflows/release.yml)). A tag whose
 name contains a hyphen — `v0.1.0-beta.1`, `v0.2.0-rc.1` — is published as a
 **pre-release**; a bare `vMAJOR.MINOR.PATCH` is a full release. The workspace
-version in `Cargo.toml` (currently `0.4.2`) versions every crate and every
+version in `Cargo.toml` (currently `0.4.3`) versions every crate and every
 binary's `--version` at once, and carries any pre-release suffix so a build
 identifies itself without reading its git hash.
 
@@ -19,13 +19,36 @@ Absolute URLs or no link.
 
 ---
 
-## Unreleased
+## v0.4.3 — 2026-09-04
 
-> *This section is drained when a version is cut. README.md describes the
-> RELEASED build; prose for a feature that is in `main` but not yet released
-> goes into the README in place, at its normal destination, marked with the
-> visible tag `*Next release:*`. `release.yml` refuses to cut a release
-> while any such tag, or this Unreleased section, still exists.*
+### Highlights
+
+- **The map is a lot smarter about finding the way back.** An attempt that
+  wandered somewhere you hadn't been yet used to count as tried and never got
+  asked again — now it gets another chance once you've actually walked it.
+  And when a staircase and a compass direction both claim the same room, the
+  compass wins, the way it should: Zork I's Chasm sits where the East-West
+  Passage's own "southwest" puts it, not straight below where "down" would
+  draw it.
+- **Same-named rooms are told apart on the big Glulx games too**, not just
+  the small ones — Counterfeit Monkey, Anchorhead, Cragne Manor and the rest
+  now settle onto the game's own "you are here" pointer instead of collapsing
+  every room that shares a name into one.
+- **Layout stopped letting a staircase or a random room shove the rest of the
+  map around.** A passage walked both ways now outranks one walked only
+  once, so a lone step into Adventure's forest can no longer flip the valley
+  upside down; and a room a game scatters you into at random — the forest
+  itself — is now placed last, out of the way, instead of shoving real
+  geometry aside.
+- **Shogun's ship listens in its own language.** The map's silent scouting
+  for the way back used to ask in compass words first, even on a ship that
+  only understands fore, aft, port and starboard — now it asks in the word
+  you used and gets the right answer immediately.
+- **The story list's title bar shows the running lanthorn version**, right
+  where the hotkey hints used to crowd it.
+- **Arthur's ornamental frame follows the scene again** when you walk back
+  into a room you've already visited, instead of keeping the colours of
+  whatever room you saw first.
 
 ### Changed
 

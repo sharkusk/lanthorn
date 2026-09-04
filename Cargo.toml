@@ -8,7 +8,7 @@ resolver = "2"
 # Shared package metadata inherited by each crate via `<field>.workspace = true`.
 # Bump `version` here to version every crate (and the binaries' --version) at once.
 [workspace.package]
-version = "0.4.2"
+version = "0.4.3"
 license = "BSD-3-Clause"
 repository = "https://github.com/sharkusk/lanthorn"
 homepage = "https://github.com/sharkusk/lanthorn"
