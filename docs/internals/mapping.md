@@ -194,10 +194,12 @@ The map is a place you can move through, not just a picture.
   And whatever you answer, lanthorn remembers it, in the map file, against the passage you
   will cross again — the way out when you were noticed leaving, the trapdoor itself when
   you were noticed inside. **Not now** re-arms
-  the seam for your next crossing, **never** silences that passage for good, and folding
-  a layer back into another silences every passage it just closed — you have already
-  said those rooms belong together. A prompt that comes back on the very next step is
-  worse than no prompt at all, because it teaches you to dismiss it blind.
+  the seam for your next crossing, **not this passage** silences that one passage for good,
+  **never for this story** silences the whole prompt — every trigger, every passage — for the
+  rest of this map, and folding a layer back into another silences every passage it just
+  closed — you have already said those rooms belong together. A prompt that comes back on
+  the very next step is worse than no prompt at all, because it teaches you to dismiss it
+  blind.
   A layer you have flagged as a maze is exempt from the structural trigger outright:
   the point of flagging it was to keep the whole maze together.
   The offer itself is a small modal: what it noticed, which rooms would travel, and the
@@ -210,9 +212,11 @@ The map is a place you can move through, not just a picture.
   count, so the modal grows **taller** for a big region rather than eliding names into a line
   too narrow to hold them. Past eight names it stops naming and starts counting — *"…and 12
   more"* — and on a terminal too short for all of it the list is what gives up rows, never the
-  choices or the buttons. Three buttons, and they
-  are the three answers: **Separate** does it, **Not now** re-arms the seam for your next
-  crossing, **Never** silences that passage for good. `Esc` means *not now* — declining to
+  choices or the buttons. Four buttons, and they
+  are the four answers: **Separate** does it, **Not now** re-arms the seam for your next
+  crossing, **Not this passage** silences that one passage for good, and **Never for this
+  story** silences the prompt entirely — structural and maze-name alike — for the rest of
+  this map. `Esc` means *not now* — declining to
   answer is not the same as saying no, which is why there is no Cancel. And it waits its
   turn: a suggestion never shoulders in front of a dialog you opened yourself, and a dropped
   one costs nothing, because nothing is written down until you answer.

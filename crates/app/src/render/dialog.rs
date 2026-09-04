@@ -137,11 +137,14 @@ pub enum ButtonId {
     PlayAgain,
     Restore,
     Quit,
-    /// The region prompt's three outcomes (SQ-0439): carve these rooms out now, ask again the
-    /// next time this passage is crossed, never ask about it again.
+    /// The region prompt's outcomes (SQ-0439): carve these rooms out now, ask again the next time
+    /// this passage is crossed, never ask about THIS passage again.
     Separate,
     Later,
     Never,
+    /// "Never for this story" (SQ-1298): stop the layer-suggestion prompt on this map entirely,
+    /// not just at the one passage that was open.
+    NeverStory,
     /// The region prompt's confirm when it is a pick rather than a suggestion.
     MoveRegion,
     /// The keep-this-download prompt's middle answer (SQ-1086): keep the fetched

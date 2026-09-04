@@ -2487,6 +2487,48 @@ mod tests {
         assert!(control.overlays.region_prompt.is_some(), "an unanswered seam still speaks up");
     }
 
+    /// SQ-1298, the story-wide sibling of the test above: "Never for this story" pressed IN THE
+    /// PROMPT must also come back out of the archive still meaning it, silencing a passage the
+    /// player never even answered — that is the whole difference from the per-seam "Never".
+    #[test]
+    fn a_never_for_story_pressed_in_the_prompt_survives_the_archive() {
+        use crate::input::{apply_region_prompt, offer_layer_suggestion};
+        use crate::state::{AppState, RegionPromptAct};
+
+        let fixture = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../zvm/tests/fixtures/czech.z5");
+        if !fixture.exists() {
+            return; // fixture absent — skip
+        }
+
+        let mut state = AppState::default();
+        let mut mapper = small_cellar_mapper();
+        mapper.observe(1, "Hall", Some(Direction::Up)); // the return crossing
+        offer_layer_suggestion(&mut state, &mut mapper);
+        assert!(state.overlays.region_prompt.is_some(), "the prompt is what is being answered");
+        apply_region_prompt(&mut state, &mut mapper, RegionPromptAct::NeverForStory);
+        assert!(mapper.graph.suggestions_disabled(), "the flag is set before the save");
+
+        let path = temp_archive_path("prompt-never-story");
+        save_archive_m(&path, &mapper, &dummy_machine(), &[], &[], &[], &[], &[])
+            .expect("save_archive");
+        let ac = load_archive(&path).expect("load_archive");
+        let _ = std::fs::remove_file(&path);
+
+        let mut restored = ac.mapper;
+        assert!(restored.graph.suggestions_disabled(), "the flag itself survives the archive");
+
+        // Perturb, THEN assert: the DESCENT seam is a different passage the player never pressed
+        // anything about, and it must stay silent too.
+        let mut after = AppState::default();
+        restored.observe(3, "Cellar", Some(Direction::Down));
+        offer_layer_suggestion(&mut after, &mut restored);
+        assert!(
+            after.overlays.region_prompt.is_none(),
+            "a restored game stays quiet on a passage it was never asked about, story-wide"
+        );
+    }
+
     /// The fixture `a_declined_layer_suggestion_survives_the_archive` compares against: the same
     /// manor, with nothing declined.
     fn small_cellar_mapper() -> Mapper {

@@ -4464,10 +4464,10 @@ fn open_dest_prompt(
 
 /// Apply what the player told the region prompt to do, and close it (SQ-0439).
 ///
-/// The three suggestion outcomes are a gradient over one mechanism — separate now / ask again next
-/// crossing / never ask about this passage — so only the last two write anything down, and
-/// accepting writes nothing at all: the move puts the seam across two layers, which silences it by
-/// construction.
+/// The suggestion outcomes are a gradient over one mechanism — separate now / ask again next
+/// crossing / never ask about this passage / never ask about anything on this map (SQ-1298) — so
+/// only the last three write anything down, and accepting writes nothing at all: the move puts the
+/// seam across two layers, which silences it by construction.
 pub fn apply_region_prompt(state: &mut AppState, mapper: &mut Mapper, act: crate::state::RegionPromptAct) {
     use crate::state::{RegionOption, RegionPromptAct as A, RegionPromptKind as K};
     use mapper::suggest::{SeamDecision, Trigger};
@@ -4481,8 +4481,11 @@ pub fn apply_region_prompt(state: &mut AppState, mapper: &mut Mapper, act: crate
         (K::Suggest { seam, .. }, A::Never) => {
             mapper.graph.set_seam_decision(*seam, SeamDecision::Ignored);
         }
+        (K::Suggest { .. }, A::NeverForStory) => {
+            mapper.graph.set_suggestions_disabled(true);
+        }
         // A pick has nothing to remember: declining to choose decided nothing.
-        (_, A::Defer | A::Never) => {}
+        (_, A::Defer | A::Never | A::NeverForStory) => {}
         (K::Suggest { trigger, region, .. }, A::Accept) => {
             let Some(RegionOption::Dest { target, .. }) = chosen else { return };
             if let Some(landed) = perform_move(state, mapper, region, None, target) {
@@ -11051,6 +11054,59 @@ mod tests {
         m.observe(1, "Hall", Some(Direction::Up));
         offer_layer_suggestion(&mut s, &mut m);
         assert!(s.overlays.region_prompt.is_none(), "and it never asks again");
+    }
+
+    /// "Never for this story" (SQ-1298) is story-wide, not per-seam: it silences a passage the
+    /// prompt was never even asked about, which is exactly what the field report complained
+    /// "Never" (now labelled "Not this passage") could not do.
+    #[test]
+    fn never_for_story_silences_a_seam_it_was_never_asked_about() {
+        use crate::state::RegionPromptAct;
+        let mut s = AppState::default();
+        let mut m = manor();
+        m.observe(1, "Hall", Some(Direction::Up));
+        offer_layer_suggestion(&mut s, &mut m);
+        assert!(s.overlays.region_prompt.is_some(), "the cellar wing asks, same as ever");
+        apply_region_prompt(&mut s, &mut m, RegionPromptAct::NeverForStory);
+        assert!(m.graph.suggestions_disabled(), "the story-wide flag is set");
+
+        // A different four-room wing, behind a different portal from Hall, that the flag was never
+        // asked about — it must stay silent too, which is the whole point of "for this story".
+        m.observe(2, "Study", Some(Direction::E));
+        m.observe(7, "Attic", Some(Direction::In));
+        m.observe(8, "Loft", Some(Direction::E));
+        m.observe(9, "Rafters", Some(Direction::E));
+        m.observe(10, "Belfry", Some(Direction::E));
+        m.observe(9, "Rafters", Some(Direction::W));
+        m.observe(8, "Loft", Some(Direction::W));
+        m.observe(7, "Attic", Some(Direction::W));
+        m.observe(2, "Study", Some(Direction::Out));
+        offer_layer_suggestion(&mut s, &mut m);
+        assert!(
+            s.overlays.region_prompt.is_none(),
+            "never-for-story silenced a seam it was never asked about"
+        );
+    }
+
+    /// The story-wide flag stops the NAME trigger too, not just the structural one — SQ-1298 asked
+    /// for both `Trigger::Structural` and `Trigger::Name` to go quiet.
+    #[test]
+    fn never_for_story_also_silences_the_name_trigger() {
+        use crate::state::RegionPromptAct;
+        let mut s = AppState::default();
+        let mut m = manor();
+        m.observe(1, "Hall", Some(Direction::Up));
+        offer_layer_suggestion(&mut s, &mut m);
+        apply_region_prompt(&mut s, &mut m, RegionPromptAct::NeverForStory);
+
+        // A room simply called "Maze" would otherwise speak up immediately, on first contact.
+        m.observe(2, "Study", Some(Direction::E));
+        m.observe(20, "Maze", Some(Direction::N));
+        offer_layer_suggestion(&mut s, &mut m);
+        assert!(
+            s.overlays.region_prompt.is_none(),
+            "the name trigger is silenced too, not just the structural one"
+        );
     }
 
     /// It must not steal focus mid-turn: a modal the player asked for outranks a suggestion nobody

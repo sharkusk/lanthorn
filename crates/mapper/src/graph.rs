@@ -186,6 +186,11 @@ pub struct MapGraph {
     /// asking about the trapdoor", so unlike everything else the detector uses, this has to be
     /// carried in the save.
     seam_decisions: BTreeMap<SeamKey, SeamDecision>,
+    /// "Never for this story" (SQ-1298): the player has said the layer-suggestion prompt itself is
+    /// unwelcome on this map, not merely at one seam. Unlike `seam_decisions` this is a single flag
+    /// rather than something keyed — there is only one story per graph — but it is the same kind of
+    /// thing: a DECISION nothing can recompute, so it is carried in the save alongside them.
+    suggestions_disabled: bool,
 }
 
 impl Default for MapGraph {
@@ -201,6 +206,7 @@ impl Default for MapGraph {
             next_seq: 0,
             last_visited: BTreeMap::new(),
             seam_decisions: BTreeMap::new(),
+            suggestions_disabled: false,
         }
     }
 }
@@ -269,6 +275,10 @@ impl MapGraph {
             // Restored separately (`restore_seam_decisions`) rather than as an eighth positional
             // argument: this list validates against the rooms `from_parts` has just settled.
             seam_decisions: BTreeMap::new(),
+            // Restored separately too (`set_suggestions_disabled`) — a bare bool has nothing to
+            // validate against the rooms, but going through the same setter as every other caller
+            // keeps this one path the only place the flag is ever written.
+            suggestions_disabled: false,
         }
     }
 
@@ -303,6 +313,18 @@ impl MapGraph {
             .into_iter()
             .filter(|(k, _)| self.rooms.contains_key(&k.from))
             .collect();
+    }
+
+    /// True once the player has told the layer-suggestion prompt "Never for this story" (SQ-1298).
+    /// Unlike a per-seam [`SeamDecision::Ignored`] this is not keyed to any one passage: it stops
+    /// `mapper::suggest` from minting a suggestion at all, structural or maze-name alike.
+    pub fn suggestions_disabled(&self) -> bool {
+        self.suggestions_disabled
+    }
+
+    /// Set/clear the story-wide "never suggest layers" flag.
+    pub fn set_suggestions_disabled(&mut self, disabled: bool) {
+        self.suggestions_disabled = disabled;
     }
 
     pub fn room(&self, id: RoomId) -> Option<&Room> {
@@ -894,6 +916,7 @@ impl MapGraph {
             last_visited: BTreeMap::new(),
             // A routing scratch graph never prompts, so it carries no prompt answers either.
             seam_decisions: BTreeMap::new(),
+            suggestions_disabled: false,
         }
     }
 

@@ -56,20 +56,24 @@ pub struct RegionPromptRects {
     pub later: Option<Rect>,
     /// Suggestion only: never ask about this passage again.
     pub never: Option<Rect>,
+    /// Suggestion only: never ask about ANY passage on this map again (SQ-1298).
+    pub never_story: Option<Rect>,
     /// Pick only: close without moving anything.
     pub cancel: Option<Rect>,
 }
 
 // ── Buttons ───────────────────────────────────────────────────────────────────
 
-/// The buttons this prompt shows, left to right. A suggestion offers the three outcomes the
-/// design settled on; a pick is an ordinary confirm/cancel because declining to pick decides
-/// nothing and remembers nothing.
+/// The buttons this prompt shows, left to right. A suggestion offers the design's declining
+/// gradient — put it off, silence this passage, silence the whole story — beside the accept; a
+/// pick is an ordinary confirm/cancel because declining to pick decides nothing and remembers
+/// nothing.
 fn buttons_for(prompt: &RegionPrompt) -> &'static [DialogButton] {
     const SUGGEST: &[DialogButton] = &[
         DialogButton { id: ButtonId::Separate, label: "Separate" },
         DialogButton { id: ButtonId::Later, label: "Not now" },
-        DialogButton { id: ButtonId::Never, label: "Never" },
+        DialogButton { id: ButtonId::Never, label: "Not this passage" },
+        DialogButton { id: ButtonId::NeverStory, label: "Never for this story" },
     ];
     const PICK: &[DialogButton] = &[
         DialogButton { id: ButtonId::MoveRegion, label: "Move" },
@@ -88,6 +92,18 @@ fn option_line(opt: &RegionOption, chosen: bool) -> String {
         RegionOption::Dest { label, .. } | RegionOption::Seam { label, .. } => label,
     };
     format!("({mark}) {label}")
+}
+
+/// How wide the button row draws, laid out the same way `draw_dialog` lays it out: each button is
+/// its label padded by one reversed space on each side, with one plain space between buttons.
+///
+/// Counted into the modal's width (SQ-1298) so a fourth, longer button — "Never for this story" —
+/// widens the modal to hold it rather than being silently dropped off the left the way
+/// `draw_dialog`'s own button layout gives up on a button it has no room left for.
+fn button_row_width(buttons: &[DialogButton]) -> u16 {
+    let widths: u16 = buttons.iter().map(|b| b.label.chars().count() as u16 + 2).sum();
+    let seps = buttons.len().saturating_sub(1) as u16;
+    widths + seps
 }
 
 /// The room block as it is drawn: a count header, up to [`ROOMS_SHOWN`] bulleted names, and an
@@ -138,13 +154,16 @@ pub fn draw_region_prompt(state: &AppState, area: Rect, buf: &mut Buffer) -> Opt
     let content_rows = prompt.body.len() as u16 + rooms.len() as u16 + 1 + prompt.options.len() as u16 + 1;
     let want_h = (content_rows + 3).max(MIN_H);
     // The room names count towards the width too: leaving them out is what let real room names run
-    // off the edge of a modal sized for its body alone (SQ-0858).
+    // off the edge of a modal sized for its body alone (SQ-0858). The button row counts too
+    // (SQ-1298): a fourth, longer button would otherwise be sized for and then dropped off the
+    // left by `draw_dialog`'s own layout, which gives up on whatever does not fit.
     let widest = prompt
         .body
         .iter()
         .map(|s| s.chars().count())
         .chain(rooms.iter().map(|(s, _)| s.chars().count()))
         .chain(prompt.options.iter().map(|o| option_line(o, true).chars().count()))
+        .chain(std::iter::once(button_row_width(buttons_for(prompt)) as usize))
         .max()
         .unwrap_or(0) as u16;
     let want_w = (widest + 4).clamp(MIN_W, MAX_W);
@@ -221,6 +240,7 @@ pub fn draw_region_prompt(state: &AppState, area: Rect, buf: &mut Buffer) -> Opt
         accept: find(ButtonId::Separate).or_else(|| find(ButtonId::MoveRegion)),
         later: find(ButtonId::Later),
         never: find(ButtonId::Never),
+        never_story: find(ButtonId::NeverStory),
         cancel: find(ButtonId::Cancel),
     })
 }
@@ -248,6 +268,7 @@ pub fn region_prompt_key_focused(
             None | Some(0) => Some(RegionPromptAct::Accept),
             Some(1) => Some(if suggest { RegionPromptAct::Defer } else { RegionPromptAct::Dismiss }),
             Some(2) if suggest => Some(RegionPromptAct::Never),
+            Some(3) if suggest => Some(RegionPromptAct::NeverForStory),
             _ => None,
         },
         _ => None,
@@ -334,9 +355,10 @@ mod tests {
     }
 
     /// The modal draws its title, its body, its room list and one marked radio row per option,
-    /// and hands back a hit-rect for each of them plus the three outcome buttons.
+    /// and hands back a hit-rect for each of them plus the four outcome buttons (SQ-1298: the
+    /// declining gradient is now Not now / Not this passage / Never for this story, beside Separate).
     #[test]
-    fn suggestion_renders_options_and_three_outcomes() {
+    fn suggestion_renders_options_and_four_outcomes() {
         use ratatui::{backend::TestBackend, Terminal};
         let mut state = AppState::default();
         state.overlays.region_prompt = Some(suggestion_prompt());
@@ -346,7 +368,9 @@ mod tests {
         terminal.draw(|f| { rects = draw_region_prompt(&state, f.area(), f.buffer_mut()); }).unwrap();
         let r = rects.expect("an open prompt draws");
         assert_eq!(r.options.len(), 2, "one hit-rect per option");
-        assert!(r.accept.is_some() && r.later.is_some() && r.never.is_some());
+        assert!(
+            r.accept.is_some() && r.later.is_some() && r.never.is_some() && r.never_story.is_some()
+        );
         assert!(r.cancel.is_none(), "a suggestion has no Cancel — every outcome is a decision");
         let all: String =
             terminal.backend().buffer().content().iter().flat_map(|c| c.symbol().chars()).collect();
@@ -358,7 +382,10 @@ mod tests {
         }
         assert!(all.contains("(•) a new layer"), "the chosen option is marked");
         assert!(all.contains("( ) Main"), "the unchosen one is not");
-        assert!(all.contains("Separate") && all.contains("Not now") && all.contains("Never"));
+        assert!(all.contains("Separate"));
+        assert!(all.contains("Not now"));
+        assert!(all.contains("Not this passage"), "the renamed per-seam never");
+        assert!(all.contains("Never for this story"), "the new story-wide never");
     }
 
     /// A pick is an ordinary confirm/cancel: Move and Cancel, no memory buttons.
@@ -373,7 +400,10 @@ mod tests {
         terminal.draw(|f| { rects = draw_region_prompt(&state, f.area(), f.buffer_mut()); }).unwrap();
         let r = rects.expect("an open prompt draws");
         assert!(r.accept.is_some() && r.cancel.is_some());
-        assert!(r.later.is_none() && r.never.is_none(), "nothing is remembered about a pick");
+        assert!(
+            r.later.is_none() && r.never.is_none() && r.never_story.is_none(),
+            "nothing is remembered about a pick"
+        );
     }
 
     // ── SQ-0858: the list the player complained was cut off ───────────────────
@@ -435,7 +465,10 @@ mod tests {
         );
         let more = row_with(&rows, "…and 12 more");
         assert_eq!(more, row_with(&rows, &format!("• Room {ROOMS_SHOWN} ")) + 1, "and it is the tail");
-        assert!(r.accept.is_some() && r.later.is_some() && r.never.is_some(), "all three still fit");
+        assert!(
+            r.accept.is_some() && r.later.is_some() && r.never.is_some() && r.never_story.is_some(),
+            "all four still fit"
+        );
     }
 
     /// On a terminal too short for all of it, the ROOM LIST is what gives up rows — the options are
@@ -450,7 +483,9 @@ mod tests {
         for opt in &r.options {
             assert!(opt.height > 0, "…and neither was clipped away: {:?}", r.options);
         }
-        assert!(r.accept.is_some() && r.later.is_some() && r.never.is_some());
+        assert!(
+            r.accept.is_some() && r.later.is_some() && r.never.is_some() && r.never_story.is_some()
+        );
         row_with(&rows, "20 rooms:");
         assert!(
             rows.iter().any(|row| row.contains("more")),
@@ -488,18 +523,23 @@ mod tests {
     }
 
     /// Esc means "not now" on a suggestion — the answer that re-arms — and a plain close on a
-    /// pick. Enter confirms from an option row and from the first button; the second and third
-    /// buttons carry the other two outcomes.
+    /// pick. Enter confirms from an option row and from the first button; the second, third and
+    /// fourth buttons carry the other three outcomes (SQ-1298).
     #[test]
-    fn keys_map_to_the_three_outcomes() {
+    fn keys_map_to_the_four_outcomes() {
         use crossterm::event::KeyCode;
         let s = suggestion_prompt();
         assert_eq!(region_prompt_key_focused(KeyCode::Esc, &s, 0), Some(RegionPromptAct::Defer));
-        // Focus 0 and 1 are the two options; 2/3/4 are Separate / Not now / Never.
+        // Focus 0 and 1 are the two options; 2/3/4/5 are Separate / Not now / Not this passage /
+        // Never for this story.
         assert_eq!(region_prompt_key_focused(KeyCode::Enter, &s, 1), Some(RegionPromptAct::Accept));
         assert_eq!(region_prompt_key_focused(KeyCode::Enter, &s, 2), Some(RegionPromptAct::Accept));
         assert_eq!(region_prompt_key_focused(KeyCode::Enter, &s, 3), Some(RegionPromptAct::Defer));
         assert_eq!(region_prompt_key_focused(KeyCode::Enter, &s, 4), Some(RegionPromptAct::Never));
+        assert_eq!(
+            region_prompt_key_focused(KeyCode::Enter, &s, 5),
+            Some(RegionPromptAct::NeverForStory)
+        );
         // Space stays widget-reserved: it decides nothing here.
         assert_eq!(region_prompt_key_focused(KeyCode::Char(' '), &s, 0), None);
 

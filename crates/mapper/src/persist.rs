@@ -41,6 +41,11 @@ pub struct PersistState {
     /// passage already declined would be the exact nagging the prompt was designed to avoid.
     #[serde(default)]
     pub seams: Vec<SeamRecord>,
+    /// "Never for this story" (SQ-1298): the player has told the layer-suggestion prompt not to
+    /// speak up at all on this map. Absent from any file written before this existed, which loads
+    /// as `false` — nobody has said it yet.
+    #[serde(default)]
+    pub suggestions_disabled: bool,
 }
 
 pub fn to_json(mapper: &Mapper) -> String {
@@ -59,6 +64,7 @@ pub fn to_json(mapper: &Mapper) -> String {
             .iter()
             .map(|(k, v)| SeamRecord { from: k.from, dir: k.dir, decision: *v })
             .collect(),
+        suggestions_disabled: mapper.graph.suggestions_disabled(),
     };
     serde_json::to_string_pretty(&state).expect("PersistState is always serializable")
 }
@@ -78,6 +84,7 @@ pub fn from_json(s: &str) -> Result<Mapper, serde_json::Error> {
             .into_iter()
             .map(|r| (SeamKey { from: r.from, dir: r.dir }, r.decision)),
     );
+    graph.set_suggestions_disabled(state.suggestions_disabled);
     // A loaded map has no walked arrival: the player has not moved yet this
     // session, so a bare peel falls back to the portal-seam search until they do.
     Ok(Mapper::restored(graph))

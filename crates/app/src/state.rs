@@ -2025,10 +2025,10 @@ impl RegionPrompt {
         self.options.len() + self.buttons()
     }
 
-    /// How many buttons this prompt shows — three outcomes for a suggestion, Move/Cancel for a
-    /// pick.
+    /// How many buttons this prompt shows — four declining outcomes for a suggestion (SQ-1298:
+    /// Not now / Not this passage / Never for this story, plus Separate), Move/Cancel for a pick.
     pub fn buttons(&self) -> usize {
-        if matches!(self.kind, RegionPromptKind::Suggest { .. }) { 3 } else { 2 }
+        if matches!(self.kind, RegionPromptKind::Suggest { .. }) { 4 } else { 2 }
     }
 
     /// The chosen option, or `None` when the list is somehow empty.
@@ -2045,8 +2045,12 @@ pub enum RegionPromptAct {
     /// Put it off: re-arm this seam for the next crossing. Also what Esc means on a suggestion,
     /// because declining to answer is not the same as saying no.
     Defer,
-    /// Never ask about this passage again.
+    /// Never ask about this passage again. Labelled "Not this passage" in the prompt (SQ-1298) —
+    /// the variant name stays, only the wording changed.
     Never,
+    /// "Never for this story" (SQ-1298): stop the layer-suggestion prompt entirely on this map,
+    /// every trigger and every passage, not just the one that was open.
+    NeverForStory,
     /// Close a manual pick without moving anything.
     Dismiss,
 }
