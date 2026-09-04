@@ -29,6 +29,15 @@ Absolute URLs or no link.
 
 ### Fixed
 
+- **Glulx: the map tells same-named rooms apart on the big games too.** lanthorn
+  works out where a Glulx game keeps its "you are here" pointer by watching
+  which part of its memory changes when you walk, and on all but the smallest
+  games it had been throwing the right answer away — so Counterfeit Monkey,
+  Anchorhead, Cragne Manor and most of the rest identified a room by nothing but
+  the name at the top of the screen. Every room sharing a name was one room on
+  the map, and a maze collapsed into a single node. Walk a few rooms now and the
+  map settles onto the game's own pointer, exactly as it always did on
+  Adventure.
 - **Shogun: two rooms with the same name are two rooms again.** Shogun has two
   `Bridge`s, two `Main Deck`s and four `Ledge`s, and the map used to hand every
   one of them to whichever came first in the game's own object list — so the

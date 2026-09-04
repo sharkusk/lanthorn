@@ -60,5 +60,7 @@ mod sq1260_zil_carousel_randomization;
 mod sq1268_zil_v4plus_exits;
 #[path = "suites/sq1284_glulx_restore_room_cache.rs"]
 mod sq1284_glulx_restore_room_cache;
+#[path = "suites/sq1286_glulx_room_lock.rs"]
+mod sq1286_glulx_room_lock;
 #[path = "suites/sq1283_shogun_room_identity.rs"]
 mod sq1283_shogun_room_identity;

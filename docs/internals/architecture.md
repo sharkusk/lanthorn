@@ -229,7 +229,15 @@ knowing, because each of these is a refusal rather than a stub:
 - **Where the player is** comes from the `location` global, which the room-lock
   learner (`glulx_roomlock.rs`, SQ-0526) finds by watching which RAM word changes
   when the room does, and remembers per game. Before it resolves, the room
-  questions answer empty.
+  questions answer empty. What settles the winner among the words that correlate
+  is the VALUE it holds: it has to be a real object of this story, checked
+  against `ParseNames`' own object list (SQ-1286). That used to be approximated
+  by "an address inside the scanned 64 KB window", which is ample for the global
+  — Inform lays its globals at the start of RAM — and far too small for what the
+  global points at, since the object table follows the globals and the arrays.
+  Only five of the 42 Glulx stories in `stories/` keep their objects within that
+  window; Counterfeit Monkey's are 1.9 MB above it, so the true candidate was
+  discarded every turn and the game keyed rooms by name for whole sessions.
 - **Who the player is** is `ParseNames::find_player`, the same rule
   `zvm::location::find_player_object` applies: avatar-ish PRINTED names
   (`PLAYER_NAMES`) OR parse WORDS (`PLAYER_WORDS`: `me`/`myself`/`self`/
