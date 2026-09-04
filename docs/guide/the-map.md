@@ -53,7 +53,8 @@ asking `/tidy-map` to try again. lanthorn also notices, at most a couple
 of times in a game, when a cluster of rooms wants to be its own layer — a
 cellar reachable only through one portal, or a room the game itself names a
 "Maze" — and offers to split it off. It never acts on its own: separate it,
-put it off for now, or tell it never to ask about that passage again.
+put it off for now, tell it never to ask about that passage again, or tell
+it never to ask about *anything* for the rest of this story.
 
 **Mazes get a table, not a lie.** A compass-drawn maze is a lie told
 carefully — real "all alike" rooms have passages that don't come back the way

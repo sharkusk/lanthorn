@@ -1002,7 +1002,7 @@ impl Overlay for RegionPromptOverlay {
         }
         let hit = |r: &Option<Rect>| r.is_some_and(|r| r.contains(pt));
         // Closing a suggestion is "not now" — the same as Esc, and not a refusal.
-        let closing = if state.overlays.region_prompt.as_ref().is_some_and(|p| p.buttons() == 3) {
+        let closing = if state.overlays.region_prompt.as_ref().is_some_and(|p| p.buttons() == 4) {
             A::Defer
         } else {
             A::Dismiss
@@ -1011,6 +1011,8 @@ impl Overlay for RegionPromptOverlay {
             OverlayOutcome::Act(OverlayAct::RegionPrompt(A::Accept))
         } else if hit(&rp.never) {
             OverlayOutcome::Act(OverlayAct::RegionPrompt(A::Never))
+        } else if hit(&rp.never_story) {
+            OverlayOutcome::Act(OverlayAct::RegionPrompt(A::NeverForStory))
         } else if hit(&rp.later) || hit(&rp.cancel) || hit(&rp.close) {
             OverlayOutcome::Act(OverlayAct::RegionPrompt(closing))
         } else {
