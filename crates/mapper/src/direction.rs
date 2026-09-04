@@ -40,10 +40,16 @@ pub fn parse_direction(cmd: &str) -> Option<Direction> {
         "in" | "inside" | "enter" => Some(Direction::In),
         "out" | "outside" | "exit" => Some(Direction::Out),
         // Ship directions (Seastalker et al.): the bow/front points north.
-        "fore" | "forward" | "bow" => Some(Direction::N),
-        "aft" | "stern" => Some(Direction::S),
-        "port" => Some(Direction::W),
-        "starboard" => Some(Direction::E),
+        "fore" | "forward" | "bow" | "f" => Some(Direction::N),
+        "aft" | "stern" | "a" | "af" => Some(Direction::S),
+        "port" | "p" => Some(Direction::W),
+        "starboard" | "sb" => Some(Direction::E),
+        // Quarter directions (Counterfeit Monkey's Atlantida Herself, SQ-1296): the ship's four
+        // diagonals, halfway between a cardinal ship direction and its neighbour.
+        "aft-port" | "pa" | "ap" => Some(Direction::SW),
+        "aft-starboard" | "sa" | "as" | "asb" => Some(Direction::SE),
+        "fore-port" | "pf" | "fp" => Some(Direction::NW),
+        "fore-starboard" | "sf" | "fs" | "fsb" => Some(Direction::NE),
         _ => None,
     }
 }
@@ -141,12 +147,18 @@ pub fn reciprocal_word(cmd: &str) -> Option<(&'static str, Direction)> {
     let first = tokens.next()?;
     let word = if first == "go" { tokens.next()? } else { first };
     match word {
-        "fore" | "forward" => Some(("aft", Direction::S)),
+        "fore" | "forward" | "f" => Some(("aft", Direction::S)),
         "bow" => Some(("stern", Direction::S)),
-        "aft" => Some(("fore", Direction::N)),
+        "aft" | "a" | "af" => Some(("fore", Direction::N)),
         "stern" => Some(("bow", Direction::N)),
-        "port" => Some(("starboard", Direction::E)),
-        "starboard" => Some(("port", Direction::W)),
+        "port" | "p" => Some(("starboard", Direction::E)),
+        "starboard" | "sb" => Some(("port", Direction::W)),
+        // Quarter directions (Counterfeit Monkey's Atlantida Herself, SQ-1296): each answers with
+        // its opposite quarter, the full word the game's own parser accepts.
+        "aft-port" | "pa" | "ap" => Some(("fore-starboard", Direction::NE)),
+        "aft-starboard" | "sa" | "as" | "asb" => Some(("fore-port", Direction::NW)),
+        "fore-port" | "pf" | "fp" => Some(("aft-starboard", Direction::SE)),
+        "fore-starboard" | "sf" | "fs" | "fsb" => Some(("aft-port", Direction::SW)),
         _ => None,
     }
 }
@@ -321,6 +333,43 @@ mod tests {
         assert_eq!(parse_direction("go Starboard"), Some(Direction::E));
     }
 
+    /// Counterfeit Monkey's Atlantida Herself (SQ-1296): the four quarter directions and every
+    /// abbreviation "Act V Atlantida Herself.i7x" declares for them, plus the short forms of the
+    /// plain four this ship set also uses (`f`, `a`/`af`, `p`, `sb`).
+    #[test]
+    fn parses_quarter_directions_and_short_abbreviations() {
+        assert_eq!(parse_direction("f"), Some(Direction::N));
+        assert_eq!(parse_direction("a"), Some(Direction::S));
+        assert_eq!(parse_direction("af"), Some(Direction::S));
+        assert_eq!(parse_direction("p"), Some(Direction::W));
+        assert_eq!(parse_direction("sb"), Some(Direction::E));
+
+        assert_eq!(parse_direction("aft-port"), Some(Direction::SW));
+        assert_eq!(parse_direction("pa"), Some(Direction::SW));
+        assert_eq!(parse_direction("ap"), Some(Direction::SW));
+
+        assert_eq!(parse_direction("aft-starboard"), Some(Direction::SE));
+        assert_eq!(parse_direction("sa"), Some(Direction::SE));
+        assert_eq!(parse_direction("as"), Some(Direction::SE));
+        assert_eq!(parse_direction("asb"), Some(Direction::SE));
+
+        assert_eq!(parse_direction("fore-port"), Some(Direction::NW));
+        assert_eq!(parse_direction("pf"), Some(Direction::NW));
+        assert_eq!(parse_direction("fp"), Some(Direction::NW));
+
+        assert_eq!(parse_direction("fore-starboard"), Some(Direction::NE));
+        assert_eq!(parse_direction("sf"), Some(Direction::NE));
+        assert_eq!(parse_direction("fs"), Some(Direction::NE));
+        assert_eq!(parse_direction("fsb"), Some(Direction::NE));
+
+        // Case-insensitive and works after "go", like every other spelling.
+        assert_eq!(parse_direction("go FS"), Some(Direction::NE));
+        assert_eq!(parse_direction("Aft-Port"), Some(Direction::SW));
+
+        // Still nothing for words this set does not use.
+        assert_eq!(parse_direction("xyzzy"), None);
+    }
+
     #[test]
     fn reciprocal_word_answers_only_the_nautical_family() {
         assert_eq!(reciprocal_word("fore"), Some(("aft", Direction::S)));
@@ -340,6 +389,46 @@ mod tests {
         assert_eq!(reciprocal_word("up"), None);
         assert_eq!(reciprocal_word("enter"), None);
         assert_eq!(reciprocal_word("xyzzy"), None);
+    }
+
+    /// Every quarter-direction spelling answers with the FULL opposite word (SQ-1296) — the word
+    /// Atlantida Herself's own parser accepts, not the compass equivalent.
+    #[test]
+    fn reciprocal_word_answers_the_quarter_directions_and_short_forms() {
+        assert_eq!(reciprocal_word("f"), Some(("aft", Direction::S)));
+        assert_eq!(reciprocal_word("a"), Some(("fore", Direction::N)));
+        assert_eq!(reciprocal_word("af"), Some(("fore", Direction::N)));
+        assert_eq!(reciprocal_word("p"), Some(("starboard", Direction::E)));
+        assert_eq!(reciprocal_word("sb"), Some(("port", Direction::W)));
+
+        assert_eq!(reciprocal_word("aft-port"), Some(("fore-starboard", Direction::NE)));
+        assert_eq!(reciprocal_word("pa"), Some(("fore-starboard", Direction::NE)));
+        assert_eq!(reciprocal_word("ap"), Some(("fore-starboard", Direction::NE)));
+
+        assert_eq!(reciprocal_word("aft-starboard"), Some(("fore-port", Direction::NW)));
+        assert_eq!(reciprocal_word("sa"), Some(("fore-port", Direction::NW)));
+        assert_eq!(reciprocal_word("as"), Some(("fore-port", Direction::NW)));
+        assert_eq!(reciprocal_word("asb"), Some(("fore-port", Direction::NW)));
+
+        assert_eq!(reciprocal_word("fore-port"), Some(("aft-starboard", Direction::SE)));
+        assert_eq!(reciprocal_word("pf"), Some(("aft-starboard", Direction::SE)));
+        assert_eq!(reciprocal_word("fp"), Some(("aft-starboard", Direction::SE)));
+
+        assert_eq!(reciprocal_word("fore-starboard"), Some(("aft-port", Direction::SW)));
+        assert_eq!(reciprocal_word("sf"), Some(("aft-port", Direction::SW)));
+        assert_eq!(reciprocal_word("fs"), Some(("aft-port", Direction::SW)));
+        assert_eq!(reciprocal_word("fsb"), Some(("aft-port", Direction::SW)));
+
+        // Every reciprocal word is itself something `parse_direction` accepts, and resolves to
+        // the SAME direction reported alongside it — the probe has to be able to type what it
+        // is handed back.
+        for cmd in [
+            "f", "a", "af", "p", "sb", "aft-port", "pa", "ap", "aft-starboard", "sa", "as", "asb",
+            "fore-port", "pf", "fp", "fore-starboard", "sf", "fs", "fsb",
+        ] {
+            let (word, dir) = reciprocal_word(cmd).unwrap();
+            assert_eq!(parse_direction(word), Some(dir), "{cmd} -> {word} must parse back to {dir:?}");
+        }
     }
 
     #[test]

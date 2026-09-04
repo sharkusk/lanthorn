@@ -21,7 +21,9 @@
   returns **`None`** for all five. This `None` is the de-facto "is this a portal?"
   test used everywhere in the engine.
 - **Direction parsing** (`direction.rs:18-49`): also maps nautical terms — `fore/forward/bow → N`,
-  `aft/stern → S`, `port → W`, `starboard → E` (for Seastalker-style games).
+  `aft/stern → S`, `port → W`, `starboard → E` (for Seastalker-style games), plus the four
+  quarter directions and their abbreviations — `fore-starboard → NE`, `aft-starboard → SE`,
+  `aft-port → SW`, `fore-port → NW` (for Counterfeit Monkey's Atlantida Herself).
 - **Layer** — a manual grouping of rooms drawn as one floor/region. `MAIN_LAYER = 0`
   always exists. Layers are never auto-derived; only explicit peel/merge create them.
 - **Two layout regimes**: *incremental* (per-turn, local, stable) and *relayout*
