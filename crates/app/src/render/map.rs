@@ -951,10 +951,12 @@ fn dir_title(dir: Direction) -> String {
 ///   destination (the room's own id printed as "back here", exactly as the room card's exit
 ///   card does) or, when nothing has been recorded yet, "destination varies — none recorded
 ///   yet".
-/// - `MarkerKind::Stacked(primary)`: the destination's own name as a title, then `primary`'s
-///   direction, then `also via <direction>` for every other direction that leads to the same
-///   destination (SQ-1276) — read fresh from `graph` each time, so it always matches whatever
-///   the graph currently says regardless of which direction happened to route.
+/// - `MarkerKind::Stacked(primary)`: every direction that leads to the same destination as
+///   `primary`, drawn as its own arrow glyph — `arrow_for_direction` for compass directions, the
+///   portal icon set for Up/Down/In/Out, exactly as a room box's own badges resolve one — space
+///   separated on one line, `primary` first (SQ-1276). No title and no room name: the glyphs
+///   themselves are the fact being shown, read fresh from `graph` each time so they always match
+///   whatever the graph currently says regardless of which direction happened to route.
 ///
 /// Returns `None` — and paints nothing — while a modal overlay owns the pointer, when nothing is
 /// hovered, or when the hovered room no longer exists in `graph` (a frame drawn after the room
@@ -997,12 +999,11 @@ pub fn draw_map_hover_tip(
             let Some(dest) = graph.connections().iter().find(|c| c.origin == room_id && c.dir == primary).map(|c| c.dest) else {
                 return None; // a stale rect from a frame before the model changed
             };
-            let mut lines = vec![crate::render::room_info::display_name(graph, dest)];
-            lines.push(dir_title(primary));
+            let mut glyphs = vec![arrow_for_direction(primary, &state.symbols.arrows, &state.symbols.portal).to_string()];
             for c in graph.connections().iter().filter(|c| c.origin == room_id && c.dest == dest && c.dir != primary) {
-                lines.push(format!("also via {}", dir_title(c.dir)));
+                glyphs.push(arrow_for_direction(c.dir, &state.symbols.arrows, &state.symbols.portal).to_string());
             }
-            lines
+            vec![glyphs.join(" ")]
         }
     };
 
@@ -3499,6 +3500,113 @@ mod tests {
         assert!(
             arrow_cell.modifier.contains(ratatui::style::Modifier::REVERSED),
             "the stacked primary's own accent (map.room_stacked_exit) defaults to reversed",
+        );
+    }
+
+    /// SQ-1276's colour rule: the stacked primary's arrowhead reads as the room's own BORDER
+    /// reversed, not the exit arrow's accent reversed — `map.room_stacked_exit` derives from
+    /// `map.room` (SQ-1276 follow-up), and `draw_box_room` always strips REVERSED from the
+    /// border it draws, so on an unselected room the arrowhead's raw fg/bg equal the plain
+    /// border cell beside it, with only REVERSED added on top.
+    #[test]
+    fn stacked_primary_arrowhead_matches_the_unselected_borders_colour_reversed() {
+        use mapper::direction::Direction;
+        use mapper::graph::MapGraph;
+
+        let mut g = MapGraph::new();
+        g.upsert_room(1, "A".into());
+        g.upsert_room(2, "B".into());
+        g.set_pos(1, (0, 0));
+        g.set_pos(2, (0, -1));
+        g.add_edge(1, Direction::N, 2);
+        g.add_edge(1, Direction::Up, 2);
+
+        let state = AppState::default(); // neither current nor selected
+        let rm = mapper::render::render(&g);
+        let area = Rect::new(0, 0, 60, 30);
+        let mut buf = Buffer::empty(area);
+        let markers = render_map(&rm, &state, area, &mut buf);
+
+        let (_, _, rect) = markers
+            .iter()
+            .find(|(_, k, _)| matches!(k, MarkerKind::Stacked(_)))
+            .expect("the collapsed staircase publishes a Stacked hover rect");
+        let arrow_cell = buf.cell((rect.x, rect.y)).unwrap();
+
+        // A plain border cell on the same top-border row, a few columns either side of the
+        // arrowhead — an ordinary `─` (or a corner, at the box's own ends), never the arrow
+        // itself.
+        let neighbor = (rect.x.saturating_sub(3)..=rect.x + 3)
+            .filter(|&x| x != rect.x)
+            .find_map(|x| {
+                let c = buf.cell((x, rect.y))?;
+                (c.symbol() != " ").then_some(c)
+            })
+            .expect("a plain border cell beside the arrowhead");
+
+        assert_eq!(arrow_cell.fg, neighbor.fg, "arrowhead fg matches the plain border fg");
+        assert_eq!(arrow_cell.bg, neighbor.bg, "arrowhead bg matches the plain border bg");
+        assert!(
+            arrow_cell.modifier.contains(ratatui::style::Modifier::REVERSED),
+            "the arrowhead adds REVERSED on top of the border's own colour"
+        );
+        assert!(
+            !neighbor.modifier.contains(ratatui::style::Modifier::REVERSED),
+            "the plain border itself is never reverse-video (draw_box_room strips it)"
+        );
+    }
+
+    /// The same colour rule on a SELECTED CURRENT room. `draw_box_room` always strips REVERSED
+    /// from the border it draws (only a room's INTERIOR ever reverses), so there is no border
+    /// REVERSED for the arrowhead's own REVERSED to cancel against — but this pins the actual
+    /// composed result rather than trusting that reasoning: the arrowhead must still paint a
+    /// real glyph, and its raw fg/bg must differ from the reversed interior beside it, on both
+    /// counts distinct from an invisible cell (fg == bg).
+    #[test]
+    fn stacked_primary_arrowhead_stays_visible_on_a_selected_current_room() {
+        use mapper::direction::Direction;
+        use mapper::graph::MapGraph;
+
+        let mut g = MapGraph::new();
+        g.upsert_room(1, "A".into());
+        g.upsert_room(2, "B".into());
+        g.set_pos(1, (0, 0));
+        g.set_pos(2, (0, -1));
+        g.add_edge(1, Direction::N, 2);
+        g.add_edge(1, Direction::Up, 2);
+        g.set_current(1);
+
+        let mut state = AppState::default();
+        state.selected_room = Some(1); // room 1 is both current AND selected
+        let rm = mapper::render::render(&g);
+        let area = Rect::new(0, 0, 60, 30);
+        let mut buf = Buffer::empty(area);
+        let markers = render_map(&rm, &state, area, &mut buf);
+
+        let (_, _, rect) = markers
+            .iter()
+            .find(|(_, k, _)| matches!(k, MarkerKind::Stacked(_)))
+            .expect("the collapsed staircase publishes a Stacked hover rect");
+        let arrow_cell = buf.cell((rect.x, rect.y)).unwrap();
+        assert_eq!(
+            arrow_cell.symbol(),
+            state.symbols.arrows.north.to_string(),
+            "a real glyph is drawn, not a blank cell"
+        );
+        assert_ne!(arrow_cell.fg, arrow_cell.bg, "not an invisible cell");
+
+        // An interior cell of the same box (the current+selected room's reversed fill).
+        let room = rm.rooms.iter().find(|r| r.id == 1).expect("room 1 is in the render");
+        let (bx, by) = cell_to_screen(room.cell, state.zoom, state.scroll, area)
+            .expect("room 1's box is on screen");
+        let interior = buf.cell((bx + 1, by + 1)).unwrap();
+        assert!(
+            interior.modifier.contains(ratatui::style::Modifier::REVERSED),
+            "sanity: the current+selected room's interior is itself reverse-video"
+        );
+        assert!(
+            arrow_cell.fg != interior.fg || arrow_cell.bg != interior.bg,
+            "the arrowhead's raw colours differ from the reversed interior beside it"
         );
     }
     #[test]
@@ -7624,6 +7732,17 @@ mod tests {
         joined.contains(needle)
     }
 
+    /// A single tip row's text, trimmed of the box's one-space side padding — for a
+    /// glyphs-only tip (SQ-1276's `MarkerKind::Stacked`) this is the exact content, with no
+    /// surrounding title or room name to trim away.
+    fn tip_row(buf: &Buffer, rect: Rect, row: u16) -> String {
+        (rect.x..rect.right())
+            .map(|x| buf.cell((x, row)).map(|c| c.symbol()).unwrap_or(" ").to_string())
+            .collect::<String>()
+            .trim()
+            .to_string()
+    }
+
     /// Hovering the alias marker shows "Also seen as:" followed by every alias, in the order the
     /// graph stores them (first-seen order — see `mapper::graph::Room::rename`).
     #[test]
@@ -7695,8 +7814,8 @@ mod tests {
     // ── SQ-1276: stacked same-destination exits ──────────────────────────────
 
     /// Two compass directions (N and S) from one room to the same destination: only N's
-    /// arrowhead is drawn, styled with `map.room_stacked_exit`, and its hover tip titles the
-    /// destination's own name with N first and "also via South" beneath it.
+    /// arrowhead is drawn, styled with `map.room_stacked_exit`, and its hover tip is the two
+    /// arrow glyphs alone — north's, then south's — with no title or room name.
     #[test]
     fn two_compass_stack_draws_one_reversed_arrowhead_with_a_tooltip_listing_both() {
         use mapper::direction::Direction;
@@ -7730,9 +7849,12 @@ mod tests {
         st.map_hover = Some((1, *kind, *rect));
         let mut buf2 = Buffer::empty(area);
         let painted = draw_map_hover_tip(&g, &st, area, &mut buf2).expect("a tip was painted");
-        assert!(buf_contains(&buf2, painted, "Cellar"), "titled by the destination's own name");
-        assert!(buf_contains(&buf2, painted, "North"), "names the primary direction");
-        assert!(buf_contains(&buf2, painted, "also via South"), "and the secondary, prefixed");
+        let expected = format!("{} {}", st.symbols.arrows.north, st.symbols.arrows.south);
+        assert_eq!(
+            tip_row(&buf2, painted, painted.y),
+            expected,
+            "glyphs only — north's arrow first, then south's — no title or room name"
+        );
 
         // Model-side facts are untouched: the matrix and the graph itself still show both edges.
         assert_eq!(
@@ -7747,8 +7869,9 @@ mod tests {
     }
 
     /// A compass direction plus Down to the same destination: no portal badge is drawn for
-    /// Down (nothing left in `rm.edges` for `draw_portal_icons` to read), and the tooltip lists
-    /// it as "also via Down".
+    /// Down (nothing left in `rm.edges` for `draw_portal_icons` to read), and the tooltip is
+    /// exactly the two glyphs — East's arrow, then Down's portal icon — primary first, one line,
+    /// no other text.
     #[test]
     fn compass_plus_down_stack_draws_no_portal_badge_and_tooltip_names_it() {
         use mapper::direction::Direction;
@@ -7781,7 +7904,12 @@ mod tests {
         st.map_hover = Some((1, *kind, *rect));
         let mut buf2 = Buffer::empty(area);
         let painted = draw_map_hover_tip(&g, &st, area, &mut buf2).expect("a tip was painted");
-        assert!(buf_contains(&buf2, painted, "also via Down"));
+        let expected = format!("{} {}", st.symbols.arrows.east, st.symbols.portal.down);
+        assert_eq!(
+            tip_row(&buf2, painted, painted.y),
+            expected,
+            "glyphs only — East's arrow first, then Down's portal icon — no other text"
+        );
     }
 
     /// A destination reached ONLY by a portal (Up here) is unaffected: no Stacked marker, and

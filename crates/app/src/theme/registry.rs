@@ -356,9 +356,13 @@ pub static REGISTRY: std::sync::LazyLock<Vec<RegRow>> = std::sync::LazyLock::new
     row("map.connector", Section::Map, Kind::Style, Some("accent"), Delta::EMPTY),
     // The PRIMARY arrowhead of a stacked same-destination group (SQ-1276): several of a room's
     // own exits collapse to one line, and this is the accent that tells it apart from an
-    // ordinary passage. Defaults to the exit arrow's own colour, reversed — the same "accented
-    // by inversion" idiom `map.room_selected` already uses on the room box itself.
-    row("map.room_stacked_exit", Section::Map, Kind::Style, Some("map.connector"), mods(false, false, false, true)),
+    // ordinary passage. Defaults to the room BORDER's own colour, reversed, not the exit arrow's
+    // — `draw_box_room` draws a border in `map.room`'s style (current/selected rooms are handled
+    // at draw time by `draw_connector_arrows`'s own per-room background pick, not by this
+    // selector), so the primary reads as a bite taken out of that room's own frame rather than as
+    // another connector colour landing on it. The same "accented by inversion" idiom
+    // `map.room_selected` already uses on the room box itself.
+    row("map.room_stacked_exit", Section::Map, Kind::Style, Some("map.room"), mods(false, false, false, true)),
     // `distorted` (magenta) has no matching role — kept explicit (a distinctive marker).
     row("map.connector_distorted", Section::Map, Kind::Style, None, fg(Color::Magenta)),
     row("map.connector_portal", Section::Map, Kind::Style, Some("accent"), Delta::EMPTY),

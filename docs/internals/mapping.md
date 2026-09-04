@@ -525,8 +525,9 @@ the same few border cells and said nothing a single line couldn't; now only the
 PRIMARY direction — whichever one's compass bearing actually matches where the
 neighbour sits, undistorted, with a fixed tie-break (north, south, east, west,
 then the diagonals) on a genuine tie — is routed and drawn, in a REVERSED accent
-(`map.room_stacked_exit`, defaulting to the ordinary connector colour with the
-video inverted) so it reads as standing in for more than itself. The rest are
+(`map.room_stacked_exit`, defaulting to the room's own BORDER colour with the
+video inverted, not the ordinary connector's — it reads as a bite taken out of
+the room's own frame) so it reads as standing in for more than itself. The rest are
 suppressed entirely: no line, no border badge, no portal icon. The GRAPH still
 carries every direction — the matrix, the room card, `/export-map`'s dump and the
 save archive show all of them exactly as before; only the drawing collapses. A
@@ -539,9 +540,11 @@ the graph first saw them — the same list the room card's "Also seen as" line
 gives. Hovering EITHER cell of a `?` mark — the arrowhead or the count — pops the
 direction's recorded destinations, the room itself printed as "back here" exactly
 as the room card's exit line does, or "destination varies — none recorded yet"
-for a bare `?`. Hovering a stacked primary's arrowhead pops the destination's own
-name as a title, the primary direction, then "also via <direction>" for every
-direction the collapse suppressed. Neither hover claims a click; the marker rects
+for a bare `?`. Hovering a stacked primary's arrowhead pops the arrow glyph for
+every direction the collapse covers, space-separated on one line, primary first
+— no title, no room name, just the glyphs themselves (Up/Down/In/Out draw their
+portal icon rather than a compass arrow, the same resolver a room box's own
+badges use). Neither hover claims a click; the marker rects
 behind them (`render::map::MapHits::marker_rects`) exist only at Boxes zoom, since
 Compact and Overview draw no marker to hover.
 

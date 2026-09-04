@@ -157,7 +157,7 @@ version = 1   # style schema version — do not remove; lets lanthorn flag an ou
 # room_alias_marker = { parent = "muted" }
 # room_random_stub = { parent = "alert" }
 # connector = { parent = "accent" }
-# room_stacked_exit = { parent = "map.connector", reversed = true }
+# room_stacked_exit = { parent = "map.room", reversed = true }
 # connector_distorted = { fg = "magenta" }
 # connector_portal = { parent = "accent" }
 # shared_path = { fg = "light-cyan" }
