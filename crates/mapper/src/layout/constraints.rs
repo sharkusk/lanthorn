@@ -4,7 +4,7 @@
 
 use std::collections::BTreeSet;
 
-use crate::direction::layout_offset;
+use crate::direction::{grid_offset, layout_offset};
 use crate::graph::{MapGraph, RoomId};
 
 use super::vpsc::Constraint;
@@ -79,7 +79,24 @@ pub fn build_axis_constraints(graph: &MapGraph, ids: &[RoomId], gap: f64) -> Axi
         }
     }
 
-    for (ci, conn) in graph.connections().iter().enumerate() {
+    // Directional constraints, STRONGEST EVIDENCE FIRST (SQ-1287) rather than in the order the
+    // player happened to mint them. A reciprocated compass pair — the passage walked from both
+    // ends, the two observations agreeing — is better evidence about geometry than a single
+    // one-way crossing, so it claims its axis first and a contradicting one-way edge is the one
+    // `creates_cycle` drops. Insertion order breaks ties, so the pass stays deterministic.
+    let conns = graph.connections();
+    let mut order: Vec<usize> = (0..conns.len()).collect();
+    order.sort_by_key(|&ci| {
+        let c = &conns[ci];
+        let reciprocated = !c.is_self_loop()
+            && grid_offset(c.dir).is_some()
+            && conns
+                .iter()
+                .any(|o| o.origin == c.dest && o.dest == c.origin && o.dir == crate::direction::opposite(c.dir));
+        (!reciprocated, ci)
+    });
+    for ci in order {
+        let conn = &conns[ci];
         if conn.is_self_loop() {
             continue; // "x < x" is not a solvable constraint (SQ-0666)
         }
