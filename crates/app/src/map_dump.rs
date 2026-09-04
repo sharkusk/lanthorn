@@ -12,6 +12,13 @@
 //!
 //! Lines starting with `#` are comments: the file is meant to be annotated (mark
 //! which room ids look wrong) and handed back for analysis.
+//!
+//! A Z-machine room's id is always its own real, stable object number (`#136`). A synthetic
+//! room (Glulx or name-only — see [`crate::roomid::is_synthetic_room`]) instead shows its small
+//! per-map discovery ORDINAL (`#12`) everywhere except the ROOM line, which carries both the
+//! ordinal and the raw id it stands for (`#12 (8000ABCD)`) so a reported problem can still be
+//! traced to the exact id every other diagnostic surface (the room panel, `crate::export_dot`)
+//! uses (SQ-1300).
 
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
@@ -120,7 +127,8 @@ pub fn render_dump(graph: &MapGraph, symbols: &SymbolSet) -> String {
 
     let mut out = String::new();
     out.push_str("# lanthorn map dump\n");
-    let current = graph.current().map(crate::roomid::display_room_id).unwrap_or_else(|| "none".into());
+    let current =
+        graph.current().map(|id| crate::roomid::room_label_no(graph, id)).unwrap_or_else(|| "none".into());
     out.push_str(&format!(
         "# rooms: {}, edges: {}, current: {}\n#\n",
         rooms.len(),
@@ -172,7 +180,7 @@ pub fn render_dump(graph: &MapGraph, symbols: &SymbolSet) -> String {
                             // for it. Say that outright: an empty `""` there read as a room
                             // whose name went missing and sent SQ-1284 hunting a room-identity
                             // bug that was not one.
-                            let shown = crate::roomid::display_room_id(id);
+                            let shown = crate::roomid::room_label_no(graph, id);
                             match graph.room(id) {
                                 Some(rr) => format!("{shown} {:?}", rr.label()),
                                 None => format!("{shown} <unvisited>"),
@@ -189,12 +197,12 @@ pub fn render_dump(graph: &MapGraph, symbols: &SymbolSet) -> String {
         let mut align_parts: Vec<String> = Vec::new();
         if let Some(&cid) = chains.ew.get(&r.id) {
             let members: Vec<String> =
-                chains.ew_members[cid].iter().map(|&id| crate::roomid::display_room_id(id)).collect();
+                chains.ew_members[cid].iter().map(|&id| crate::roomid::room_label_no(graph, id)).collect();
             align_parts.push(format!("row[{}]", members.join(",")));
         }
         if let Some(&cid) = chains.ns.get(&r.id) {
             let members: Vec<String> =
-                chains.ns_members[cid].iter().map(|&id| crate::roomid::display_room_id(id)).collect();
+                chains.ns_members[cid].iter().map(|&id| crate::roomid::room_label_no(graph, id)).collect();
             align_parts.push(format!("col[{}]", members.join(",")));
         }
         let align = if align_parts.is_empty() {
@@ -210,9 +218,9 @@ pub fn render_dump(graph: &MapGraph, symbols: &SymbolSet) -> String {
             .map(|c| {
                 format!(
                     "{}→{}→{}",
-                    crate::roomid::display_room_id(c.origin),
+                    crate::roomid::room_label_no(graph, c.origin),
                     dir_str(c.dir),
-                    crate::roomid::display_room_id(c.dest)
+                    crate::roomid::room_label_no(graph, c.dest)
                 )
             })
             .collect();
@@ -231,7 +239,7 @@ pub fn render_dump(graph: &MapGraph, symbols: &SymbolSet) -> String {
         };
         out.push_str(&format!(
             "ROOM {} {:?} pos={}{}{}{} align={}{}{}\n",
-            crate::roomid::display_room_id(r.id), r.label(), pos, notes, aka, random, align, dropped_str, layer_str
+            crate::roomid::room_label_full(graph, r.id), r.label(), pos, notes, aka, random, align, dropped_str, layer_str
         ));
     }
 
@@ -240,9 +248,9 @@ pub fn render_dump(graph: &MapGraph, symbols: &SymbolSet) -> String {
         let dist = if c.distorted { "  distorted" } else { "" };
         out.push_str(&format!(
             "EDGE {} {} {}{}\n",
-            crate::roomid::display_room_id(c.origin),
+            crate::roomid::room_label_no(graph, c.origin),
             dir_str(c.dir),
-            crate::roomid::display_room_id(c.dest),
+            crate::roomid::room_label_no(graph, c.dest),
             dist
         ));
     }
@@ -255,9 +263,9 @@ pub fn render_dump(graph: &MapGraph, symbols: &SymbolSet) -> String {
             let glyph = arrow_for_direction(c.dir, &symbols.arrows, &symbols.portal);
             format!(
                 "PORTAL {} {} {} {}",
-                crate::roomid::display_room_id(c.origin),
+                crate::roomid::room_label_no(graph, c.origin),
                 glyph,
-                crate::roomid::display_room_id(c.dest),
+                crate::roomid::room_label_no(graph, c.dest),
                 name
             )
         })
@@ -376,6 +384,37 @@ mod tests {
         // The ASCII map shows room ids.
         assert!(dump.contains("#1"));
         assert!(dump.contains("#2"));
+    }
+
+    /// SQ-1300: a synthetic (name-only/Glulx) room's ROOM line carries BOTH its small per-map
+    /// ordinal and the raw hex id underneath it, so a reported problem can still be traced to the
+    /// exact id every other diagnostic surface uses — while every OTHER reference to the same
+    /// room (the EDGE list, the ASCII grid) carries only the short ordinal form, matching what the
+    /// screen itself shows. A Z-machine room's id is untouched by any of this.
+    #[test]
+    fn dump_room_line_carries_both_forms_for_a_synthetic_room_edges_carry_only_the_ordinal() {
+        let mut m = Mapper::default();
+        let alley = crate::roomid::synthetic_room_id("Back Alley");
+        let sigil = crate::roomid::synthetic_room_id("Sigil Street");
+        m.observe(alley, "Back Alley", None);
+        m.observe(sigil, "Sigil Street", Some(Direction::N));
+        let dump = render_dump(&m.graph, &SymbolSet::default());
+
+        let hex = crate::roomid::display_room_id(alley);
+        let room_line = dump.lines().find(|l| l.starts_with("ROOM #1 ")).expect("Back Alley's ROOM line");
+        assert!(
+            room_line.contains(&format!("#1 ({})", hex.trim_start_matches('#'))),
+            "ROOM line carries both the ordinal and the raw hex id: {room_line}"
+        );
+
+        assert!(dump.contains("EDGE #1 N #2"), "EDGE line carries only the short ordinal form:\n{dump}");
+        assert!(!dump.contains(&hex), "the raw hex id appears nowhere outside the ROOM line:\n{dump}");
+
+        // A Z-machine room (below the synthetic flag) is untouched by any of this.
+        let mut m2 = Mapper::default();
+        m2.observe(136, "Hallway", None);
+        let dump2 = render_dump(&m2.graph, &SymbolSet::default());
+        assert!(dump2.contains("ROOM #136 \"Hallway\""), "a real object number keeps its plain form:\n{dump2}");
     }
 
     /// SQ-1257 Phase 3: a room the story has renamed carries its other names on the ROOM line

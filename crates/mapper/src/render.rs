@@ -19,6 +19,11 @@ use crate::router::{route_all, RoutedEdge};
 pub struct RenderRoom {
     pub id: RoomId,
     pub label: String,
+    /// This room's 1-based per-map discovery ordinal — [`crate::graph::Room::ordinal`] (SQ-1300).
+    /// Carried here rather than left for the drawn box to look up: `draw_box_room` (the one
+    /// consumer that needs it, for a synthetic room's `#12`-style label) only ever sees a
+    /// `RenderRoom`, never the live `MapGraph`.
+    pub ordinal: u64,
     /// Logical grid cell `(col, row)`.
     pub cell: (i32, i32),
     /// True when the room has non-empty notes.
@@ -218,6 +223,7 @@ pub fn render_traced(graph: &MapGraph, on_step: &mut dyn FnMut(&str)) -> RenderM
             Some(RenderRoom {
                 id: room.id,
                 label: room.label().to_string(),
+                ordinal: room.ordinal(),
                 cell,
                 has_notes: !room.notes.is_empty(),
                 is_current: Some(room.id) == current,

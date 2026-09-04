@@ -36,6 +36,10 @@ pub struct EdgeInfo {
 #[derive(Debug, Clone)]
 pub struct RoomDiagnostics {
     pub id: RoomId,
+    /// The "both" spelling of `id` (SQ-1300): `#136` alone for a Z-machine room, or
+    /// `#12 (8000ABCD)` — the ordinal shown everywhere else on the map plus the raw id — for a
+    /// synthetic one. See [`crate::roomid::room_label_full`].
+    pub id_label: String,
     pub name: String,
     pub layer_id: mapper::layer::LayerId,
     pub layer_name: String,
@@ -59,6 +63,7 @@ pub fn room_diagnostics(graph: &MapGraph, id: RoomId) -> Option<RoomDiagnostics>
     let layer_name = graph.layer_name(layer_id).to_owned();
     let pos = room.pos;
     let name = room.label().to_owned();
+    let id_label = crate::roomid::room_label_full(graph, id);
 
     let edges: Vec<EdgeInfo> = graph
         .connections()
@@ -68,7 +73,7 @@ pub fn room_diagnostics(graph: &MapGraph, id: RoomId) -> Option<RoomDiagnostics>
             let neighbour_name = graph
                 .room(c.dest)
                 .map(|r| r.label().to_owned())
-                .unwrap_or_else(|| crate::roomid::display_room_id(c.dest));
+                .unwrap_or_else(|| crate::roomid::room_label_no(graph, c.dest));
             EdgeInfo {
                 dir: c.dir,
                 neighbour_id: c.dest,
@@ -82,7 +87,18 @@ pub fn room_diagnostics(graph: &MapGraph, id: RoomId) -> Option<RoomDiagnostics>
     let distorted_count = edges.iter().filter(|e| e.distorted).count();
 
     let loc_method = room.loc_method.clone();
-    Some(RoomDiagnostics { id, name, layer_id, layer_name, pos, edges, edge_count, distorted_count, loc_method })
+    Some(RoomDiagnostics {
+        id,
+        id_label,
+        name,
+        layer_id,
+        layer_name,
+        pos,
+        edges,
+        edge_count,
+        distorted_count,
+        loc_method,
+    })
 }
 
 // ── Render ────────────────────────────────────────────────────────────────────
@@ -103,7 +119,7 @@ fn build_diagnostics_rows(diag: &RoomDiagnostics, theme: &Theme, body: Style, he
     };
 
     let mut rows = Vec::new();
-    rows.push((format!("{} {}", crate::roomid::display_room_id(diag.id), diag.name), label_style));
+    rows.push((format!("{} {}", diag.id_label, diag.name), label_style));
     rows.push((format!("Layer {} \"{}\"", diag.layer_id, diag.layer_name), value_style));
     rows.push((format!("Pos {}", pos_str), value_style));
     // How this room was first detected (SQ-0527). Kept on the room, so it is
@@ -290,6 +306,21 @@ mod tests {
         assert!(any_distorted, "impossible loop must leave at least one distorted edge");
     }
 
+    /// SQ-1300: the Diagnostics header shows BOTH forms for a synthetic room — its per-map
+    /// ordinal and the raw id underneath it — and only its plain decimal id for a Z-machine room.
+    #[test]
+    fn diagnostics_id_label_carries_both_forms_for_a_synthetic_room() {
+        let mut g = MapGraph::new();
+        let alley = crate::roomid::synthetic_room_id("Back Alley");
+        g.upsert_room(alley, "Back Alley".into());
+        let d = room_diagnostics(&g, alley).unwrap();
+        assert_eq!(d.id_label, format!("#1 ({:08X})", alley));
+
+        g.upsert_room(136, "Hallway".into());
+        let d2 = room_diagnostics(&g, 136).unwrap();
+        assert_eq!(d2.id_label, "#136", "a real object number carries no parenthetical");
+    }
+
     #[test]
     fn diagnostics_layer_name_for_non_main_layer() {
         let mut g = MapGraph::new();
@@ -309,6 +340,7 @@ mod tests {
         let distorted_count = edges.iter().filter(|e| e.distorted).count();
         RoomDiagnostics {
             id,
+            id_label: crate::roomid::display_room_id(id),
             name: name.to_owned(),
             layer_id: 0,
             layer_name: "Main".to_owned(),

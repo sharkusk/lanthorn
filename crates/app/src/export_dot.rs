@@ -57,6 +57,13 @@ fn dot_escape(s: &str) -> String {
 /// object number reads as `r57` and a synthetic id as `r8000ABCD` rather than a
 /// 10-digit decimal, the same real/synthetic distinction every other room-id
 /// display uses (SQ-1297).
+///
+/// Deliberately NOT [`crate::roomid::room_label_no`]'s per-map ordinal (SQ-1300): the ordinal is
+/// discovery order for THIS playthrough, so two exports of the same story explored in a different
+/// order would number the same physical room differently, where a DOT file's whole point is to be
+/// compared — against another export, against notes, against a previous run. The raw id (a real
+/// object number, or a hash of the room's name/Glulx address) has no such dependency on how the
+/// player got there. The exported graph's node LABELS still show the room's name either way.
 fn node_id(id: mapper::graph::RoomId) -> String {
     format!("r{}", crate::roomid::display_room_id(id).trim_start_matches('#'))
 }

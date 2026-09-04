@@ -120,6 +120,16 @@ impl Room {
         }
     }
 
+    /// This room's 1-based per-map ordinal — "1" for the first room ever discovered, "2" for the
+    /// second, and so on (SQ-1300). Exactly `seq + 1`: `seq` already stamps first-discovery order
+    /// once and never renumbers a room afterward (survives a rename, a re-key, a tidy pass), which
+    /// is everything a small per-map number for a synthetic (Glulx/name-only) room needs — so this
+    /// reuses it rather than carrying a second, parallel counter that could drift from the first.
+    /// `app::roomid::room_label_no` is the one place this is ever shown to a player.
+    pub fn ordinal(&self) -> u64 {
+        self.seq + 1
+    }
+
     /// Record that this room's printed name is about to change to `new_name` (SQ-1257 Phase 3).
     /// Only called when the name is genuinely different — [`MapGraph::upsert_room`]'s revisit
     /// branch checks that before calling this, so it never has to no-op on a same-name
@@ -973,6 +983,35 @@ mod tests {
             "re-keying ONTO an existing room would be a merge, not a rename, and must be refused"
         );
         assert_eq!(g.room(2).map(|r| r.name.as_str()), Some("Cave"), "the refused merge changed nothing");
+    }
+
+    /// SQ-1300: a room's ordinal (its display number, `seq + 1`) is a property of the room NODE,
+    /// so a re-key — the Glulx lock landing on a name-derived id and swapping it for the room's
+    /// real object address — must carry it across unchanged, exactly like the name and the edges
+    /// already do. A room re-keyed a third of the way into a session must keep reading "1", "2",
+    /// "3" … in true discovery order rather than picking up a fresh number at its new id.
+    #[test]
+    fn rekey_room_carries_the_ordinal_with_it() {
+        let mut g = MapGraph::new();
+        g.upsert_room(1, "Hall".into());
+        g.upsert_room(2, "Cave".into());
+        g.upsert_room(3, "Loft".into());
+        assert_eq!(g.room(1).unwrap().ordinal(), 1, "first room discovered");
+        assert_eq!(g.room(2).unwrap().ordinal(), 2);
+        assert_eq!(g.room(3).unwrap().ordinal(), 3);
+
+        assert!(g.rekey_room(2, 0x8000_5678), "re-key the middle room onto a far-away new id");
+        assert_eq!(
+            g.room(0x8000_5678).unwrap().ordinal(),
+            2,
+            "the ordinal moved with the room, not with the numeric id"
+        );
+        assert_eq!(g.room(1).unwrap().ordinal(), 1, "untouched rooms keep their own ordinals");
+        assert_eq!(g.room(3).unwrap().ordinal(), 3);
+
+        // A room discovered AFTER the re-key still gets the next ordinal in true order.
+        g.upsert_room(4, "Attic".into());
+        assert_eq!(g.room(4).unwrap().ordinal(), 4, "next_seq was not disturbed by the re-key");
     }
 
     use super::*;

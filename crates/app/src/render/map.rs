@@ -2794,10 +2794,12 @@ fn draw_box_room(
         }
     }
 
-    // Row 3: #id (centered), with alignment diagnostics appended when enabled.
+    // Row 3: #id (centered), with alignment diagnostics appended when enabled. A synthetic room
+    // (Glulx or name-only) shows its small per-map ordinal here instead of the raw hex id — see
+    // `RenderRoom::ordinal` and `crate::roomid::room_label_no_of` (SQ-1300).
     // Only drawn when show_room_numbers is true; when hidden, the row is freed for portal icons.
     if show_room_numbers {
-        let mut row3 = crate::roomid::display_room_id(room.id);
+        let mut row3 = crate::roomid::room_label_no_of(room.id, Some(room.ordinal));
         if show_alignment && !room.align_code.is_empty() {
             row3.push(' ');
             row3.push_str(&room.align_code);
@@ -4011,6 +4013,34 @@ mod tests {
             .map(|x| buf.cell((x, 3)).map(|c| c.symbol().chars().next().unwrap_or(' ')).unwrap_or(' '))
             .collect();
         assert!(row3.contains("#7"), "row 3 should show the room id '#7'; got '{row3}'");
+    }
+
+    /// SQ-1300: a synthetic (Glulx/name-only) room's box shows its small per-map ORDINAL on row
+    /// 3, not the raw hex id underneath it — `#1` for the first room ever discovered, not
+    /// something like `#8000ABCD`.
+    #[test]
+    fn room_box_shows_ordinal_not_hex_for_a_synthetic_room() {
+        use mapper::graph::MapGraph;
+        let mut g = MapGraph::new();
+        let alley = crate::roomid::synthetic_room_id("Back Alley");
+        g.upsert_room(alley, "Back Alley".into());
+        g.set_pos(alley, (0, 0));
+        let rm = render(&g);
+        let mut state = AppState::default();
+        state.show_room_numbers = true;
+        let area = Rect::new(0, 0, 60, 30);
+        let mut buf = Buffer::empty(area);
+        render_map(&rm, &state, area, &mut buf);
+
+        let row3: String = (1u16..=9)
+            .map(|x| buf.cell((x, 3)).map(|c| c.symbol().chars().next().unwrap_or(' ')).unwrap_or(' '))
+            .collect();
+        assert!(row3.contains("#1"), "row 3 should show the ordinal '#1'; got '{row3}'");
+        let hex = crate::roomid::display_room_id(alley);
+        assert!(
+            !row3.contains(hex.trim_start_matches('#')),
+            "the raw hex id {hex} must not leak onto the box: '{row3}'"
+        );
     }
 
     /// SQ-1257 Phase 3: a room the story has renamed three times over (Lost Pig's gnome tunnels
@@ -6761,6 +6791,7 @@ mod tests {
 
         let room = RenderRoom {
             id: 1,
+            ordinal: 1,
             cell: (0, 0),
             label: "Test".into(),
             is_current: true,
@@ -6798,6 +6829,7 @@ mod tests {
 
         let room = RenderRoom {
             id: 2,
+            ordinal: 2,
             cell: (0, 0),
             label: "Test".into(),
             is_current: true,
@@ -6825,6 +6857,7 @@ mod tests {
 
         let room = RenderRoom {
             id: 3,
+            ordinal: 3,
             cell: (0, 0),
             label: "Test".into(),
             is_current: false,

@@ -403,6 +403,41 @@ mod tests {
         assert_eq!(lbl.row_of(2), "Maze 3", "the newcomer is numbered after both, not before");
     }
 
+    /// SQ-1300: `Room::ordinal` (`seq + 1`, the small per-map number a synthetic room shows a
+    /// player instead of its raw hex id) is not a separate field — it rides on `seq`, which the
+    /// test above already proves round-trips and resumes correctly. Pinned here too, by the
+    /// public name a caller actually reads, so a future refactor that DID split them apart would
+    /// have to keep both round-tripping, not just one.
+    #[test]
+    fn ordinal_round_trips_via_seq() {
+        let mut m = Mapper::default();
+        m.observe(5, "Alley", None);
+        m.observe(7, "Street", Some(Direction::N));
+        assert_eq!(m.graph.room(5).unwrap().ordinal(), 1);
+        assert_eq!(m.graph.room(7).unwrap().ordinal(), 2);
+
+        let m2 = from_json(&to_json(&m)).unwrap();
+        assert_eq!(m2.graph.room(5).unwrap().ordinal(), 1, "ordinal survives the round trip");
+        assert_eq!(m2.graph.room(7).unwrap().ordinal(), 2);
+    }
+
+    /// SQ-1300: a save written before `seq` existed (SQ-0685) has no counter to resume either —
+    /// `from_parts` backfills both from the rooms' array position, so the very first room loaded
+    /// from such a file still reads ordinal 1, not 0 or something derived from its (irrelevant)
+    /// room id.
+    #[test]
+    fn ordinal_re_derives_the_counter_on_a_save_with_no_seq_field_at_all() {
+        // id 2147488308 = 0x8000_1234, a synthetic id (high bit set) spelled decimal for JSON —
+        // the same id `round_trips_a_room_id_above_u16_max` above uses.
+        let old = r#"{"version":1,"rooms":[
+            {"id":2147488308,"name":"Alley","label_override":null,"notes":"","pos":[0,0]},
+            {"id":42,"name":"Street","label_override":null,"notes":"","pos":[1,0]}],
+            "connections":[],"current":null}"#;
+        let m = from_json(old).unwrap();
+        assert_eq!(m.graph.room(2147488308).unwrap().ordinal(), 1, "array position 0");
+        assert_eq!(m.graph.room(42).unwrap().ordinal(), 2, "array position 1");
+    }
+
     #[test]
     fn round_trips_full_state() {
         let mut m = Mapper::default();
