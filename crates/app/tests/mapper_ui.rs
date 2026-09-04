@@ -84,3 +84,5 @@ mod sq1294_glulx_silent_vehicle_move;
 mod sq1295_glulx_bold_name_below_heading;
 #[path = "suites/sq1294b_glulx_flashback_heading.rs"]
 mod sq1294b_glulx_flashback_heading;
+#[path = "suites/sq1301_spider_and_web_twin_rooms.rs"]
+mod sq1301_spider_and_web_twin_rooms;
