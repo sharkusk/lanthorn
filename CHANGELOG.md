@@ -37,6 +37,19 @@ Absolute URLs or no link.
   map knew the deck's stairs led somewhere else and refused to draw the
   passage. It now reads the game's own "you are here" pointer to tell the twins
   apart, and the ship's decks join up.
+- **Glulx games no longer sprout phantom exits from the map's own quiet
+  scouting.** Between your turns the map plays a silent copy of the game to
+  work out the way back through a passage you have walked only one way. When
+  that copy tried a direction the game simply refuses — "you cannot go up from
+  here" — it could still report itself standing wherever it had last walked,
+  and the map drew an arrow to that room. Commercial Anchorhead's "Outside the
+  Real Estate Office" ended up with seven of them, every one pointing at the
+  same office. A refused direction now teaches the map nothing, which is what
+  it always should have.
+- **`/export-map` writes `<unvisited>` for a random exit's destination you have
+  not reached yet**, instead of leaving the name blank as though it had lost
+  one. Those rooms are real — the map found them scouting — and the export is
+  now plain that you have never stood in them.
 
 ---
 
