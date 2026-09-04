@@ -36,6 +36,14 @@ Absolute URLs or no link.
 
 ### Fixed
 
+- **The map no longer lets a staircase overrule a compass direction.** A room
+  reached both by going down and by a passage the game named — Zork I's Chasm,
+  which the East-West Passage reaches by a stairway at its north end and which
+  answers with `southwest` — was drawn straight below the room instead, with the
+  `southwest` leg greyed out as impossible. Up and down are only a drawing habit
+  ("up is north"); a compass word is the game telling you where the room is, so
+  it now wins. The Chasm sits north-east of the passage where you found it, the
+  stairway glyph is on the passage's north-east side, and nothing is greyed out.
 - **Arthur: the ornamental frame follows the scene again when you walk back into
   a room you have already been in.** Arthur's border art takes its colours from
   whatever picture the game last painted, so it turns brown inside the church and

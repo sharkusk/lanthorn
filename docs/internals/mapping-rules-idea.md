@@ -177,16 +177,34 @@ Returns per-node `(x_constrained, y_constrained)` flags used by collision resolu
   members get a gap-0 equality on **Y** (share a row); for every N/S chain, a gap-0
   equality on **X** (share a column). Added to the adjacency *before* directional
   constraints so a later contradicting directional constraint is the one dropped.
-- **Directional constraints**, taken **reciprocated first** (SQ-1287), insertion order
-  breaking ties: `grid_offset(dir)` gates — **non-compass edges create no constraints at
-  all**. For each non-zero axis, add a `≥ gap` separation in the correct order (north =
-  smaller y). If adding it would **close a cycle** (`creates_cycle`), the edge is *dropped*
-  and recorded in `dropped` (→ later marked distorted). The ordering is what decides WHICH
-  of two contradicting edges survives, so it must not be the player's route: a passage
-  walked from both ends is better evidence than a lone one-way crossing. Taken in mint
-  order instead, Adventure's opening put `In A Valley` north of `At End Of Road`, because
-  the first move of the game was one step north into a random forest room the valley
-  happens to share a row with.
+- **Directional constraints**, taken **strongest evidence first**, insertion order breaking
+  ties inside each tier. `layout_offset(dir)` gates, so In/Out/Unknown create no constraints
+  at all, while Up/Down do — as the weakest tier. The three tiers:
+  1. **Reciprocated compass pairs** (SQ-1287) — the passage walked from both ends, two
+     observations agreeing.
+  2. **One-way compass edges** — one observation, but still the game's own word.
+  3. **Up/Down**, reciprocated or not (SQ-1291).
+
+  For each non-zero axis, add a `≥ gap` separation in the correct order (north = smaller y).
+  If adding it would **close a cycle** (`creates_cycle`), the edge is *dropped* and recorded
+  in `dropped` (→ later marked distorted). The ordering is what decides WHICH of two
+  contradicting edges survives, so it must not be the player's route: a passage walked from
+  both ends is better evidence than a lone one-way crossing. Taken in mint order instead,
+  Adventure's opening put `In A Valley` north of `At End Of Road`, because the first move of
+  the game was one step north into a random forest room the valley happens to share a row with.
+  - **Why Up/Down come last** (SQ-1291). North-for-up is a *drawing convention* this crate
+    invents in `layout_offset`; `grid_offset` — what `mark_distorted`, the chain detector and
+    the router all read — says Up/Down have no bearing at all. A compass word is the game's
+    own statement of where a room IS, so it must outrank a staircase even when the staircase
+    was walked both ways and the compass word only once. Zork I's `East-West Passage` is the
+    case: it reaches `Chasm` by a reciprocated `Down`/`Up` pair *and* the chasm names its own
+    `SW` return. Ranked as a reciprocated pair, the stairwell claimed the Y axis first, pinned
+    the chasm a row south, and the `SW` bearing — arriving at a Y axis that already
+    contradicted it — was dropped and drawn distorted. The map then disagreed with both the
+    game's prose ("a stairway leading down at the north end of the room") and the player's own
+    return walk.
+  - A dropped Up/Down constraint costs nothing on screen: `mark_distorted` gates on
+    `grid_offset`, so a stairwell is never drawn distorted whatever the solver does with it.
 - **Rooms whose own evidence contradicts itself are left out entirely** (SQ-1289,
   `positionally_unreliable`). A room qualifies on two counts together: (1) two of its
   **outgoing** compass edges name the same neighbour on opposing sides of an axis —
@@ -237,8 +255,15 @@ decide it by an accident of the story's object numbering. Finally anchor lowest 
   (cross-axis free). Reciprocal (bidirectional) edges weighted ×2 (`RECIPROCAL_WEIGHT`).
 - `room_alignment_score` (`:341`): same, but **strict** (exact row/column) — protects
   clean chains from being disturbed.
-- `directional_hint_score` (`:375`): whole-map count of directed compass edges on the
-  correct side.
+- `directional_hint_score` (`:375`): whole-map weighted count of directed edges on the
+  correct side. A satisfied **compass** hint is worth more than every satisfied **Up/Down**
+  hint on the map put together (SQ-1291), so the sum reads as a lexicographic comparison —
+  compass hints first, stairwells only as the tie-break, the same rule §4.4 sorts its tiers
+  by. Without it §5b undid §4.4: the solver put Zork I's `Chasm` north-east of the
+  `East-West Passage`, honouring the chasm's own `SW` return, and the repair pass then
+  dragged it due south because straightening the stairwell's two legs scored +2 against the
+  bearing's +1. Scores are only ever compared **within one graph**, so deriving the compass
+  weight from that graph's connection count is well defined.
 - `room_compass_degree` (`:396`): number of a room's compass edges (fewer = safer to nudge).
 - `mark_distorted` (`:566`): non-compass edges are **never** distorted; compass edges are
   distorted if dropped or not `edge_is_satisfied`.
@@ -405,6 +430,17 @@ Three placement modes:
    marker shifts one cell left (col 8) so both stay visible.
 3. **Numbers hidden**: all present glyphs on interior row 3, space-separated, centered in the
    9-wide interior.
+
+**None of this reaches a SAME-LAYER stairwell** (SQ-1291, worth knowing before hunting a
+badge on the wrong side of a box). A same-layer Up/Down passage is lane-routed like any
+compass passage, so it is never a stub and never enters `draw_portal_icons` at all: its `↑`/`↓`
+rides the connector's **departure anchor** on the box border (§7, `render_lane_connectors`),
+which is derived from the two rooms' cells and therefore already faces the partner. What does
+reach `badge_bearing`'s Up/Down arm is the **cross-layer** portal, whose destination is on
+another plane — so no partner cell exists to aim at, and top/bottom (the direction of travel
+off the plane) is both the only answer available and the right one. When a stairway glyph
+appears on the wrong side of a room, the layout put the partner there; the badge is a
+faithful reporter.
 
 ---
 
