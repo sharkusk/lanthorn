@@ -54,13 +54,27 @@
 //! do something" is only answerable in words. "Am I back where I started" is
 //! answerable in a room number.
 //!
-//! **A probe that lands in a room the map does NOT hold records the ATTEMPT and
-//! nothing else.** Not room C, not the edge to it, not its existence. The map is
-//! a record of what the PLAYER has seen, and keeping C "known but hidden" would
-//! leak straight back out through the layout, the pathfinder and click-to-route.
-//! Total failure likewise says nothing about the map: it proves only that these
-//! directions did not work from here, this time. A door may need opening, and a
-//! one-way passage is a real and beloved part of these games.
+//! **A probe that lands in a room the map does NOT hold records NOTHING — not
+//! even the attempt** (SQ-1292). Not room C, not the edge to it, not its
+//! existence, and not "this direction is spent". The map is a record of what the
+//! PLAYER has seen, and keeping C "known but hidden" would leak straight back out
+//! through the layout, the pathfinder and click-to-route. Total failure likewise
+//! says nothing about the map: it proves only that these directions did not work
+//! from here, this time. A door may need opening, and a one-way passage is a real
+//! and beloved part of these games.
+//!
+//! The attempt itself is withheld for the same reason the room is. `probed` is
+//! read forever after by [`mapper::graph::MapGraph::probe_candidates`], which
+//! never offers a direction it holds — so a mark is permanent, and it has to
+//! state a fact about the WORLD rather than about the map's coverage at one
+//! instant. "Wherever that goes, the player has not been there yet" is the second
+//! kind, and it stops being true the moment they walk in. Marking it anyway spent
+//! the direction for good: Zork I's forest and cellar rooms finish a playthrough
+//! with all twelve marked, and every later arrival there finds no way back until
+//! the player walks it. A REFUSED move is not affected — it names no room at all
+//! ("The windows are all boarded" moves nobody, so the step reports no location),
+//! which is as informative as it will ever be, so it is remembered and never
+//! re-asked. Only a landing the map could not READ is held open.
 //!
 //! **But a room the map ALREADY HOLDS is a room the player has stood in**, and a
 //! passage between two such rooms reveals nothing unseen — so it is recorded even
@@ -136,12 +150,13 @@
 //! turn that does not move the player (`look`, `take lamp`, a refused direction)
 //! leaves the search running.
 //!
-//! Aborting is cheap because progress is durable: every answered attempt marks
-//! the probed record before anything else happens, so the next visit resumes
-//! where this one stopped instead of starting over. The single attempt that was
-//! IN FLIGHT when the abort came is the one thing not carried — its answer was
-//! never read, so nothing was learned about it, and it is offered again next
-//! time rather than being written off.
+//! Aborting is cheap because progress is durable: every ANSWERED attempt marks
+//! the probed record, so the next visit resumes where this one stopped instead of
+//! starting over. Two things are deliberately not carried. The attempt that was
+//! IN FLIGHT when the abort came — its answer was never read, so nothing was
+//! learned about it. And any attempt that came out where the map could not name
+//! it (above): that one is offered again on a later visit precisely because the
+//! map may by then be able to.
 //!
 //! # Sharing one shadow with the vocabulary offer
 //!
@@ -334,20 +349,22 @@ pub fn owns(state: &AppState, token: u64) -> bool {
 ///
 /// Four outcomes, in the order they are decided:
 ///
-/// 1. **The attempt is recorded as probed, whatever it found.** First, and
-///    unconditionally, so an abort a moment later still leaves the search one
-///    step further along than it was.
-/// 2. **It came out in a room the map already holds** — the passage is real, and
+/// 1. **It came out in a room the map already holds** — the passage is real, and
 ///    goes on the map through the same call a walked crossing makes.
 ///    [`Mapper::record_probed_passage`] is what enforces the no-leak rule: it
 ///    refuses a room the map does not have, so an unvisited room cannot arrive
 ///    this way however the probe lands.
+/// 2. **…and the attempt is recorded as probed** — but ONLY here, because only an
+///    ANSWERED attempt is spent (SQ-1292). See the comment at the mark itself: a
+///    landing the map cannot name says nothing permanent, and remembering it as
+///    spent is what stopped a room from ever learning its way back.
 /// 3. **…and if that room is the one the player LEFT, the search is over.**
 ///    Otherwise it keeps going: the gap it was opened to close is still open, and
 ///    what it just recorded is a different question's answer (SQ-0785).
 /// 4. **Anything else** — an unknown room, nowhere at all, a death, a story that
-///    ended, an engine that cannot say where it is — and nothing is recorded but
-///    the attempt. The search moves on to the next direction.
+///    ended, an engine that cannot say where it is — and nothing is recorded at
+///    all, the attempt included. The search moves on to the next direction, and a
+///    later visit may ask this one again.
 pub fn deliver(
     state: &mut AppState,
     mapper: &mut Mapper,
@@ -358,17 +375,44 @@ pub fn deliver(
     search.attempt = None;
     let (here, origin) = (search.here, search.origin);
 
-    // (1) The attempt is durable before anything is judged.
-    mapper.graph.mark_probed(here, attempt.dir);
-
-    // (2) WHERE did it come out? Room identity and nothing else — a step that
+    // (1) WHERE did it come out? Room identity and nothing else — a step that
     // ended the story or reached for a file answers nothing about the map,
     // whatever `location` happens to hold.
     let landed = answer.run.as_ref().and_then(|run| {
         run.steps.first().filter(|s| !s.quit && !s.escaped).and_then(|s| s.location)
     });
-    let Some(landed) = landed else {
-        return None; // no room. Nothing about it is recorded, not even that it exists.
+    // (2) The attempt is spent unless it was ANSWERED — when the shadow came
+    // out somewhere the map can name (SQ-1292). `probed` is consulted forever
+    // after by `MapGraph::probe_candidates`, which never offers a direction it
+    // holds, so a mark written here is permanent: it must therefore record a
+    // fact about the WORLD ("this way leads there", or "this way is refused"),
+    // never one about the map's coverage at this instant.
+    //
+    // A landing in a room the map does not hold is the second kind. It says only
+    // "wherever that goes, the player has not been there YET" — which stops being
+    // true the moment they walk in, and by then the direction is on the record and
+    // can never be asked again. That is the reported defect: Zork I's forest and
+    // cellar rooms end a playthrough with every one of the twelve directions
+    // marked, so every later arrival there finds no way back until the player
+    // walks it themselves. And it is DIRECTION-SHAPED, which is how it was seen:
+    // a failing search burns the cardinals first (the seed, the two
+    // perpendiculars, then the head of `PROBE_FALLBACK_DIRS`), the diagonals only
+    // if it gets that far, and — since SQ-1290 took portals out of that fallback —
+    // Up/Down/In/Out never at all. So the way back showed up reliably for a
+    // staircase, usually for a diagonal, and not until walked for a compass exit.
+    //
+    // A move that named NO room still burns, exactly as it always did — a refusal
+    // (which moves nobody, so the step reports no location at all), a death, a
+    // story that ended. Those are as informative as they will ever be, and
+    // re-asking them every visit would buy nothing. The one attempt withheld is
+    // the one whose answer the map could not READ yet, and it is offered again on
+    // a later visit by which time it may be able to.
+    let unnameable = landed.is_some_and(|r| mapper.graph.room(r).is_none());
+    if !unnameable {
+        mapper.graph.mark_probed(here, attempt.dir);
+    }
+    let Some(landed) = landed.filter(|_| !unnameable) else {
+        return None; // no room, or none this map can name: nothing is recorded.
     };
 
     // (3) A room the map already holds is a room the PLAYER has stood in, so the

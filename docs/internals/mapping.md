@@ -608,9 +608,32 @@ Three things it is careful about:
   already on the map.
 
 The work happens on a worker thread, so the story answers you at once and the map
-catches up a beat later. Every direction it tries is remembered *permanently*, so
-a room is searched once in the life of a map rather than once per visit, and a
-search you interrupt by walking on resumes where it stopped.
+catches up a beat later. Every direction it **answers** is remembered
+*permanently*, so a room is searched once in the life of a map rather than once
+per visit, and a search you interrupt by walking on resumes where it stopped.
+
+An attempt is answered when the shadow comes out somewhere the map can read — a
+room it holds, or no room at all, which is what a refusal looks like ("The
+windows are all boarded" moves nobody), so a boarded window is remembered and
+never asked again. An attempt that comes out in a room the map does **not** hold
+is the one exception, and it leaves nothing behind at all: not the edge, not the
+room, and not the attempt. That record is consulted forever after, so it has to
+state a fact about the world rather than about how much of the map you had drawn
+at one moment. "Wherever that goes, you have not
+been there yet" is the second kind, and it stops being true the moment you walk
+in — after which the direction would have been spent, and the room could never
+learn its way back. The cost of asking again is one shadow move on a later
+visit, and by then the map may well be able to read the answer.
+
+It showed up as a difference between *directions*, which is the part worth
+remembering. A search that does not answer at once spends the cardinals first —
+the opposite of your move, the two perpendiculars, then the head of the compass
+list — reaches the diagonals only if it gets that far, and never touches up,
+down, in or out, which are only ever asked as a portal reciprocal. So a
+staircase's way back turned up every time, a diagonal's usually, and a plain
+compass exit's not until you walked it yourself. Worse, on Zork I's Behind House
+the spent `south` pushed the search onto `southwest`, which also reaches South of
+House — so the map drew a *diagonal* where a cardinal was the truth.
 
 It is **on by default** — the probing shares the snapshot the turn already
 takes for its own bookkeeping, so it costs the move almost nothing — and the

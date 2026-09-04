@@ -222,11 +222,23 @@ fn zork1_learns_the_way_back_which_is_not_the_way_it_came() {
         "the room east of here was walked into and deliberately forgotten"
     );
 
-    // Every attempt is on the probe's record and none of them on the player's,
-    // so the map still offers south and east as exits nobody has explored.
-    for d in [Direction::S, Direction::E, Direction::W] {
-        assert!(p.mapper.graph.is_probed(north, d), "{d:?} was attempted");
+    // Every ANSWERED attempt is on the probe's record and none of them on the player's, so the
+    // map still offers south and east as exits nobody has explored.
+    //
+    // South is refused ("The windows are all boarded") and west reaches West of House: both are
+    // answers, and both are spent for good. East is neither — it came out in Behind House, which
+    // this map does not hold, so it says only "the player has not been there YET" and is NOT
+    // spent (SQ-1292). `probed` is consulted forever after by `probe_candidates`, which never
+    // offers a direction it holds; marking east here would mean that on a later visit — with
+    // Behind House by then on the map — North of House could never learn its way back east, and
+    // the search would settle for the diagonal instead.
+    for d in [Direction::S, Direction::W] {
+        assert!(p.mapper.graph.is_probed(north, d), "{d:?} was attempted and answered");
     }
+    assert!(
+        !p.mapper.graph.is_probed(north, Direction::E),
+        "east was attempted but the map could not read the answer, so it stays askable"
+    );
     let room = p.mapper.graph.room(north).unwrap();
     assert!(room.tried.is_empty(), "the PLAYER has typed nothing here: {:?}", room.tried);
     assert!(p.mapper.graph.untried(north).contains(&Direction::S), "south is still on offer");

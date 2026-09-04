@@ -90,8 +90,9 @@ are full of one-way drops and doors that open from only one side. So the
 forks your game into a silent, throwaway copy, stands it where you're
 standing, and walks the direction that would bring you back. Land in the room
 you just left and that passage joins the map for real; land anywhere else and
-nothing at all is recorded — not the edge, not even that the room exists. It's
-on by default, and the footprint control on the story pane's bottom border
+nothing at all is recorded — not the edge, not even that the room exists, and
+not that the direction was tried, so it can be asked again later once you've
+found what's over there. It's on by default, and the footprint control on the story pane's bottom border
 shows whether it's currently running; toggle it per story with
 `/set-return-probe`.
 

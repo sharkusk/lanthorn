@@ -36,6 +36,17 @@ Absolute URLs or no link.
 
 ### Fixed
 
+- **The map finds a way back it once gave up on.** When lanthorn quietly checks
+  how you'd get back out of a room, an attempt that wandered into somewhere you
+  hadn't been yet used to count as tried — so it was never asked again, even
+  after you'd found the place. Rooms you passed through early in a game ended up
+  with every direction crossed off, and their way back only ever appeared once
+  you walked it yourself. It fell hardest on plain compass exits, which those
+  first searches spend first, so a staircase's way back turned up every time and
+  north/south/east/west's didn't; on Zork I's Behind House it even pushed the
+  search onto `southwest`, drawing a diagonal where `south` was the truth. An
+  attempt lanthorn couldn't read the answer to now leaves no mark, and gets asked
+  again on a later visit — by which time it usually can.
 - **The map no longer lets a staircase overrule a compass direction.** A room
   reached both by going down and by a passage the game named — Zork I's Chasm,
   which the East-West Passage reaches by a stairway at its north end and which

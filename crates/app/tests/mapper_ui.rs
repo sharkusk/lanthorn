@@ -56,6 +56,8 @@ mod sq1287_advent_map_layout;
 mod sq1289_random_room_placement;
 #[path = "suites/sq1291_zork_chasm_layout.rs"]
 mod sq1291_zork_chasm_layout;
+#[path = "suites/sq1292_probed_return_arrow.rs"]
+mod sq1292_probed_return_arrow;
 #[path = "suites/sq1266_v6_shadow_restore.rs"]
 mod sq1266_v6_shadow_restore;
 #[path = "suites/sq1267_shadow_room_identity.rs"]
