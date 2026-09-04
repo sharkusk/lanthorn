@@ -11,7 +11,7 @@
 
 use std::any::Any;
 
-use mapper::direction::parse_direction;
+use mapper::direction::{is_travel_to_command, parse_direction};
 use mapper::mapper::Mapper;
 use zvm::cpu::exec::{Machine, PictureEvent, SoundEvent, StepResult};
 use zvm::error::ZError;
@@ -3841,7 +3841,13 @@ pub fn echoed_direction_command(transcript: &str) -> Option<&str> {
 
 /// Pure bridge: observe the new location (if any) into the mapper.
 ///
-/// Calls `mapper.observe(snap.number, &snap.name, parse_direction(command))`.
+/// Calls `mapper.observe(snap.number, &snap.name, parse_direction(command))` for an ordinary
+/// move. Several turn shapes call [`Mapper::observe_relocation`] instead, because the room
+/// change they describe is not a walked passage: a death/resurrection, a random-exit landing, a
+/// suspicious contradiction left for a probe, and — since SQ-1299 — a `go to` / `goto` /
+/// `go back to` / `return to` / `revisit` command ([`is_travel_to_command`]) that actually moved
+/// the player, which the game's own "Approaching" action may have routed through any number of
+/// unseen rooms in one turn.
 /// In Auto mode, runs a light overlap cleanup (radius 2, max 20 passes) after each
 /// observation so the live map never shows an illegal connector overlap.
 /// No-op when `result.location` is `None`.
@@ -4018,6 +4024,15 @@ pub fn apply_turn(
             }
             mapper.observe_relocation(snap.number, &snap.name);
             death.unresolved = false;
+        } else if moved_room && is_travel_to_command(command) {
+            // GO TO / GOTO / GO BACK TO / RETURN TO / REVISIT (SQ-1299): Counterfeit Monkey's
+            // "Approaching" action walks the player through however many unseen rooms the route
+            // needs, in one turn. There is no direction to record and the rooms in between were
+            // never announced, so — like a death or a teleport — this is a relocation, not a
+            // walked passage: no edge is minted between the origin and wherever the route ended.
+            // A `go to` that did NOT move the player (refused, or already there) falls through to
+            // the ordinary branches below unchanged.
+            mapper.observe_relocation(snap.number, &snap.name);
         } else if arrived {
             // The game printed this room's heading again, so the player MOVED — even if they
             // came out where they went in. That is the only evidence a maze self-loop ever
@@ -6531,6 +6546,100 @@ mod tests {
             !m.graph.connections().iter().any(|c| c.origin == 2 && c.dest == 3),
             "no edge from the room we died in to the resurrection room"
         );
+    }
+
+    /// SQ-1299: a GO TO command (Counterfeit Monkey's "Approaching" action) that actually moves
+    /// the player must record a relocation, not a walked passage — no edge between rooms that
+    /// may be several apart, and no `arrived_via` (nobody walked anything). An ordinary compass
+    /// move in the same session still mints its edge exactly as before.
+    #[test]
+    fn apply_turn_go_to_records_relocation_not_a_directional_edge() {
+        let mk = |num: u16, name: &str, transcript: &str| TurnResult {
+            transcript: transcript.into(),
+            transcript_runs: Vec::new(),
+            location: Some(ObjectSnapshot { number: num, parent: 0, name: name.into() }),
+            quit: false,
+            erase_lower: false,
+            info: None,
+            sounds: Vec::new(),
+            glulx_sound_ops: Vec::new(),
+            diagnostics: vec![],
+            fault: None,
+            location_method: None,
+            pending_io: None,
+            timed_out: false,
+            pictures: Vec::new(),
+            transcript_elems: Vec::new(),
+            prose_retired: None,
+            declared_exit: None,
+        };
+        let mut m = Mapper::default();
+        apply_turn(&mut m, "", &mk(1, "The Bar", "The Bar\n"), &mut Default::default());
+
+        // "go to Deep Street" lands several unseen rooms away — no direction, no edge.
+        apply_turn(
+            &mut m,
+            "go to Deep Street",
+            &mk(2, "Deep Street", "Deep Street\nYou are on a busy street.\n"),
+            &mut Default::default(),
+        );
+        assert_eq!(m.graph.current(), Some(2), "player is now at the travel destination");
+        assert_eq!(m.graph.connections().len(), 0, "a travel command must not mint any edge");
+        assert_eq!(
+            m.arrived_via(),
+            None,
+            "nobody walked anything — no arrival passage to cut a peel at"
+        );
+
+        // A real compass move afterwards still mints its edge exactly as before.
+        apply_turn(
+            &mut m,
+            "north",
+            &mk(3, "Alleyway", "Alleyway\nA narrow gap between buildings.\n"),
+            &mut Default::default(),
+        );
+        let conns = m.graph.connections();
+        assert_eq!(conns.len(), 1, "the ordinary compass move mints its own edge");
+        assert_eq!(conns[0].origin, 2);
+        assert_eq!(conns[0].dir, Direction::N);
+        assert_eq!(conns[0].dest, 3);
+        assert_eq!(m.arrived_via(), Some((2, Direction::N)));
+    }
+
+    /// A `go to` that does NOT move the player (refused, or already standing there) is left to
+    /// the ordinary branches unchanged — [`is_travel_to_command`] gates on `moved_room` too.
+    #[test]
+    fn apply_turn_go_to_refused_leaves_current_room_untouched() {
+        let mk = |num: u16, name: &str, transcript: &str| TurnResult {
+            transcript: transcript.into(),
+            transcript_runs: Vec::new(),
+            location: Some(ObjectSnapshot { number: num, parent: 0, name: name.into() }),
+            quit: false,
+            erase_lower: false,
+            info: None,
+            sounds: Vec::new(),
+            glulx_sound_ops: Vec::new(),
+            diagnostics: vec![],
+            fault: None,
+            location_method: None,
+            pending_io: None,
+            timed_out: false,
+            pictures: Vec::new(),
+            transcript_elems: Vec::new(),
+            prose_retired: None,
+            declared_exit: None,
+        };
+        let mut m = Mapper::default();
+        apply_turn(&mut m, "", &mk(1, "The Bar", "The Bar\n"), &mut Default::default());
+        apply_turn(
+            &mut m,
+            "go to the bar",
+            &mk(1, "The Bar", "You're already there.\n"),
+            &mut Default::default(),
+        );
+        assert_eq!(m.graph.current(), Some(1));
+        assert_eq!(m.graph.connections().len(), 0);
+        assert!(m.graph.self_loops(1).is_empty(), "an already-there go to mints no self-loop either");
     }
 
     #[test]

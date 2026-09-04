@@ -392,6 +392,12 @@ relocation is swallowed: play resuming — a room description reprinted where yo
 stand, or the arrival itself — settles the death, and the next passage you walk maps
 like any other.
 
+A travel command joins the same family: `GO TO`/`GOTO`/`GO BACK TO`/`RETURN
+TO`/`REVISIT` a named room (Counterfeit Monkey's "Approaching" action, and other
+Inform games built the same way) can walk you through any number of unseen rooms in
+one turn, so it mints no passage either — just the relocation to wherever you ended
+up, exactly like a death or a teleport.
+
 **Reading it.** `▸` marks the room you are standing in. `⇲` marks a room a passage
 from *outside* the layer leads into — a doorway into the maze, listed in a footnote
 (`⇲ in:  <origin room> —<direction>→ <target>`) alongside where `⇱out` cells lead.
