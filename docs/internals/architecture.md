@@ -238,6 +238,59 @@ knowing, because each of these is a refusal rather than a stub:
   Only five of the 42 Glulx stories in `stories/` keep their objects within that
   window; Counterfeit Monkey's are 1.9 MB above it, so the true candidate was
   discarded every turn and the game keyed rooms by name for whole sessions.
+- **And once it has resolved, the lock is the authority** (SQ-1294). It decides
+  the room's identity *and* whether the room changed at all; the heading only
+  supplies the NAME. The rule used to be the other way round — the heading said
+  whether you had moved, and a locked word that disagreed was thrown away — and
+  the turns where the two disagree are exactly the turns the lock exists for.
+  Counterfeit Monkey drives its car out of Deep Street narrating the whole
+  arrival without reprinting a room; its `REMEMBER` verb prints a flashback
+  heading for a yacht galley while the player stands still in a hostel dormitory.
+  Each used to `relearn`, and every room until the lock re-resolved was keyed by
+  a name hash again — which is how one Deep Street became two, and how a session
+  ended up with "a bunch of Samuel Johnson rooms". The only thing that can
+  falsify a lock now is its own VALUE: a word no longer holding one of this
+  story's objects is not the `location` global, whatever the screen says. (A zero
+  is not evidence either way — a game may park `location` at nothing mid-scene —
+  and an address outside the scanned window is still dropped on sight, because it
+  could never be checked at all, SQ-0658.) Two consequences worth knowing: a
+  heading printed on a turn the lock calls stationary names nothing, so a room the
+  story genuinely RENAMES is re-read the next time you walk into it; and there is
+  no `Ambiguous` movement any more, because two rooms can share a name but an
+  address cannot be ambiguous about itself — a maze step is a plain move.
+- **A room the story moved you into but never named** is asked about directly:
+  `GlulxSession::silent_look` snapshots the VM, types `look` into it, reads the
+  heading off the backend, throws the answer away and restores. The snapshot is
+  taken and put back at the same point in the same turn, so what the player's next
+  command runs against is exactly what it would have run against — a
+  restore-to-self, not the kind of restore SQ-0587/0588 warns about. **Two
+  snapshots, because the game's state lives in two places**: `Machine::save_state`
+  covers the VM and gvm's own Glk model, and `AppGlk::display_snapshot` covers what
+  each window CONTAINS — the buffer logs and their drain pointers, the grid cells,
+  the per-window heading scans, the scroll offsets, the graphics canvases and the
+  layout. Restoring only the VM is not enough and is not merely untidy: the drain
+  pointer moves past prose the log still holds, so the player is owed the room
+  description on their *next* turn and reads it twice. It exists
+  because a Glulx room's NAME has only one source: Inform 7 compiles no hardware
+  short name for its objects, so `ParseNames::short_name` of a room is the empty
+  string, and on Counterfeit Monkey `find_player` refuses the story outright — the
+  object table can identify the room and cannot say what it is called. The
+  question is spent only where there is no name to be had (the opening room, or an
+  arrival the lock saw and the story did not announce), never on a turn that
+  printed a heading, and a story that refuses four in a row is not asked again.
+  Note it is *not* `probe.rs`'s shadow: that is owned by `AppState`, armed with a
+  recipe and answered on a worker thread a beat later, where this is needed
+  synchronously inside the turn that noticed — and in sessions (headless
+  harnesses, the shadow itself) where no `AppState` exists. What the shadow buys
+  is isolation from a question with side effects, and `look` is the one question
+  that has none.
+
+  This is where the Z-machine and Glulx sides genuinely differ. `GameSession`'s
+  `current_location` re-derives the room from the LIVE object tree on every call
+  (`zvm::location::detect_location_with`), so it answers correctly at boot with
+  nothing printed and no probe; the Glulx adapter has no tree to read a player's
+  parent from and no printed name to read off it, so it has to make the story
+  speak.
 - **Who the player is** is `ParseNames::find_player`, the same rule
   `zvm::location::find_player_object` applies: avatar-ish PRINTED names
   (`PLAYER_NAMES`) OR parse WORDS (`PLAYER_WORDS`: `me`/`myself`/`self`/

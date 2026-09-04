@@ -107,6 +107,25 @@ discovered it.
   was the story window at the time would lose the room you actually start in —
   and with it the object-tree read that tells the inventory panel what you're
   carrying (SQ-1241).
+  A heading owns its LINE, too, and that cuts both ways. Counterfeit Monkey's
+  HIGHLIGHT option prints every object's name in bold — the same style the room
+  heading uses — so a bolded noun opening a sentence used to become a room ("I
+  typed GET ALL and lanthorn detected a new room called *ear*"), and a bolded
+  NPC's name opening the line *directly below* a heading used to swallow the
+  heading whole, which is how Brown's Lab spent a session being called the Samuel
+  Johnson Basement. A word following the name on its own line says "sentence";
+  a line the newcomer owns outright above prose says "the heading was real"
+  (SQ-1285, SQ-1295).
+  Once lanthorn has learned where a Glulx game keeps its `location` global,
+  though, the heading stops being the thing that decides you have MOVED — it only
+  says what the room is called. The story's own word is better evidence, and it is
+  right about the turns the heading is wrong about: a car that drives you across
+  town narrating the trip without reprinting a room, and a flashback that prints a
+  heading for somewhere you have never been. And when the story moves you
+  somewhere it declines to name — including the room you wake up in, which
+  Counterfeit Monkey never announces until you type LOOK — lanthorn asks it, by
+  running a `look` in a copy of the game and throwing everything but the answer
+  away (SQ-1293, SQ-1294).
 - **Scott Adams** adventures feed their locations straight through the same
   engine-agnostic pipeline — nothing special to configure.
 

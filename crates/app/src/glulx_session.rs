@@ -39,6 +39,18 @@ pub const GLULX_ENGINE: &str = "glulx";
 /// The save-format version within the `glulx` engine (gvm snapshot).
 const GLULX_SAVE_FORMAT: u32 = 1;
 
+/// How many silent `look`s in a row may come back with no room heading before this
+/// session stops asking (SQ-1293). See [`GlulxSession::silent_look`].
+///
+/// It cannot be one, because a refusal is only evidence about the MOMENT it was
+/// asked: a story is not obliged to be at its parser just because it printed a read
+/// prompt, and Counterfeit Monkey's prologue asks "Can you hear me?" and "Do you
+/// remember our name?" behind exactly that prompt — `look` is not a command there,
+/// and one refusal from it would poison a whole session that answers perfectly well
+/// two turns later. Four in a row is a story that does not name its rooms this way;
+/// any answer at all resets the count.
+const NAMING_LOOK_REFUSALS: u8 = 4;
+
 // ── key → Glk keycode ──────────────────────────────────────────────────────────
 
 /// Map a neutral [`KeyInput`] to a Glk character-input code (`keycode_*` from
@@ -179,6 +191,11 @@ pub struct GlulxSession {
     /// Learns which RAM word holds the game's `location` global, so same-named
     /// rooms get distinct ids (SQ-0526). See [`crate::glulx_roomlock`].
     room_lock: crate::glulx_roomlock::RoomLock,
+    /// Consecutive silent `look`s that came back with no room heading, capped by
+    /// [`NAMING_LOOK_REFUSALS`]: a story that will not name its rooms that way must
+    /// stop being asked. Reset by any answer. See [`GlulxSession::silent_look`]
+    /// (SQ-1293).
+    naming_look_refusals: u8,
     /// When false, the game's own trailing `>` read prompt is kept in the
     /// transcript instead of being stripped. Default true. See
     /// [`Engine::set_strip_prompt`].
@@ -591,6 +608,7 @@ impl GlulxSession {
             aux_dirty: false,
             last_room: None,
             room_lock: crate::glulx_roomlock::RoomLock::new(0, 0),
+            naming_look_refusals: 0,
             strip_prompt: true,
             store,
         };
@@ -1025,11 +1043,6 @@ impl GlulxSession {
         // command — cragne Manor's content warning (SQ-0733).
         let awaiting_line_input = self.pending == InputKind::Line;
         let heading = self.appglk().take_room_heading(awaiting_line_input);
-        let movement = match (&heading, self.last_room.as_ref().map(|r| &r.name)) {
-            (None, _) => crate::glulx_roomlock::Movement::Unchanged,
-            (Some(h), Some(prev)) if h == prev => crate::glulx_roomlock::Movement::Ambiguous,
-            (Some(_), _) => crate::glulx_roomlock::Movement::Changed,
-        };
         // SQ-1286: the learner scores every RAM word, and what tells the room
         // apart from the counters that also change with it is that its value is a
         // real OBJECT of this story. Walk the object table once, the first turn a
@@ -1040,6 +1053,18 @@ impl GlulxSession {
             self.room_lock.set_objects(addrs);
         }
         let ram = self.scan_ram();
+        // SQ-1294: **once the lock has resolved, the STORY says whether the room
+        // changed**, and the heading only says what it is called. Comparing headings
+        // is what a learning session has and nothing more: a game that narrates a
+        // move without reprinting the room looks stationary, and a game that prints
+        // a heading for a flashback looks like it moved. Both used to be scored as
+        // contradictions and cost the lock its life (see `RoomLock::verify`).
+        let heading_movement = match (&heading, self.last_room.as_ref().map(|r| &r.name)) {
+            (None, _) => crate::glulx_roomlock::Movement::Unchanged,
+            (Some(h), Some(prev)) if h == prev => crate::glulx_roomlock::Movement::Ambiguous,
+            (Some(_), _) => crate::glulx_roomlock::Movement::Changed,
+        };
+        let movement = self.room_lock.movement(&ram).unwrap_or(heading_movement);
         let name = heading.clone().or_else(|| self.last_room.as_ref().map(|r| r.name.clone()));
         let was_locked = self.room_lock.locked();
         self.room_lock.observe(ram.clone(), name.clone(), movement);
@@ -1049,14 +1074,35 @@ impl GlulxSession {
         // Re-resolve the room every turn, not only when a heading is printed: a
         // maze step prints the SAME heading from a different room, so the id has
         // to come from the global even when the name did not change.
-        if let Some(n) = name {
-            self.last_room = Some(self.room_for(&n, &ram));
+        //
+        // The exception is a heading printed on a turn the lock says was NOT a move
+        // (SQ-1294). We are standing where we were standing, so that heading names
+        // nothing: Counterfeit Monkey's `remember` prints "Galley" for a flashback
+        // aboard a yacht while the player never leaves the Dormitory Room, and
+        // adopting it renamed the room under them. A room whose name the story
+        // really does change is re-read the next time they walk into it, which is
+        // the only moment the new name can be told from a memory.
+        if self.adopt_heading_for_room(movement, &ram) {
+            if let Some(n) = &name {
+                self.last_room = Some(self.room_for(n, &ram));
+            }
         }
-        let location = self.last_room.clone();
-        let location_method = location.as_ref().map(|_| LocationMethod::RoomHeading);
         let diagnostics = std::mem::take(&mut self.machine.diagnostics);
         let fault = self.machine.take_fault_trace().map(|t| t.to_lines());
         let glulx_sound_ops = self.appglk().take_sound_ops();
+        // SQ-1293 / SQ-1294: the story moved us somewhere it did not name — or has
+        // not named anywhere yet, because Counterfeit Monkey's opening room is not
+        // announced until something asks. Ask it, out of the player's sight. Last,
+        // so the turn's own diagnostics, fault trace, transcript and sound ops are
+        // already out of the way and anything the question stirs up can simply be
+        // thrown away with the rest of it.
+        if self.needs_a_room_name(&heading, movement) {
+            if let Some(looked) = self.silent_look() {
+                self.last_room = Some(self.room_for(&looked, &ram));
+            }
+        }
+        let location = self.last_room.clone();
+        let location_method = location.as_ref().map(|_| LocationMethod::RoomHeading);
         TurnResult {
             transcript,
             transcript_runs,
@@ -1121,6 +1167,143 @@ impl GlulxSession {
             }
             None => heading_to_room(name),
         }
+    }
+
+    /// Whether this turn's room name may be taken from what the story printed.
+    ///
+    /// Always, while the lock is still learning: the heading is the only witness
+    /// there is. Once it has resolved, only on a turn the LOCK calls a move — see
+    /// the call site for the flashback this refuses, and [`RoomLock::verify`] for
+    /// why the lock outranks the heading at all (SQ-1294).
+    ///
+    /// A room we have no name for at all is always worth naming, however we got
+    /// there; and a locked word holding nothing identifiable — a zero, mid-scene —
+    /// would only re-key the room we are standing in under a NAME hash, which is
+    /// the duplicate this whole change exists to stop.
+    fn adopt_heading_for_room(&self, movement: crate::glulx_roomlock::Movement, ram: &[u32]) -> bool {
+        if self.last_room.is_none() {
+            return true;
+        }
+        if self.room_lock.locked().is_none() {
+            return true;
+        }
+        self.room_lock.room_id(ram).is_some()
+            && movement != crate::glulx_roomlock::Movement::Unchanged
+    }
+
+    /// Whether the story owes us a room name that only asking will get.
+    ///
+    /// Two shapes, and they are the same shape: the map is standing somewhere it
+    /// cannot put a label on. Counterfeit Monkey's opening room is never announced
+    /// — the prologue tells the player to type LOOK and prints no heading until
+    /// they do (SQ-1293) — and its car drives out of Deep Street narrating the
+    /// whole arrival without reprinting a room (SQ-1294).
+    ///
+    /// Deliberately narrow, because the answer costs a turn of the story's time
+    /// (see [`Self::silent_look`]): a heading printed this turn has already
+    /// answered the question, a story that has refused [`NAMING_LOOK_REFUSALS`]
+    /// times running is not going to start now, and a locked word that did not move
+    /// leaves us in a room whose name we already know.
+    fn needs_a_room_name(&self, heading: &Option<String>, movement: crate::glulx_roomlock::Movement) -> bool {
+        if heading.is_some() || self.naming_look_refusals >= NAMING_LOOK_REFUSALS {
+            return false;
+        }
+        let arrived = self.room_lock.locked().is_some()
+            && movement == crate::glulx_roomlock::Movement::Changed;
+        self.last_room.is_none() || arrived
+    }
+
+    /// Ask the story what room this is, and put it back exactly as it was.
+    ///
+    /// A Glulx room has an identity the story will tell us — its `location` global,
+    /// once [`crate::glulx_roomlock`] has found it — and a NAME it will only print.
+    /// Inform 7 compiles no hardware short name for its objects, so the object
+    /// table cannot supply one either: measured on Counterfeit Monkey release 11,
+    /// `ParseNames::short_name` of the room the lock points at is the empty string
+    /// for every room in the game, and `find_player` refuses that story outright
+    /// (its own doc comment says why), so the containment tree is no route in. The
+    /// only thing that knows the name is the story, and the only way to make it say
+    /// so is to ask.
+    ///
+    /// So: snapshot the VM, type `look` into it, read the heading off the backend,
+    /// throw away everything else the answer left behind, and restore. The snapshot
+    /// is taken and put back at the same point in the same turn, so the state the
+    /// player's next command runs against is the state it would have run against —
+    /// that identity is the whole safety argument, and it is why this is a
+    /// restore-to-self rather than the kind of restore SQ-0587/0588 warns about.
+    ///
+    /// **Why not [`crate::probe`]'s shadow.** That is the right machinery for asking
+    /// a story a question, and it cannot serve this seam: `ShadowProbe` is owned by
+    /// `AppState`, armed with a recipe, and answers on a worker thread a beat later
+    /// — where a room name is needed synchronously, inside the turn that discovered
+    /// it was missing, in sessions (the headless harnesses, the shadow itself) where
+    /// no `AppState` exists at all. What the shadow buys over this is isolation from
+    /// a question with side effects, and `look` is the one question that has none.
+    ///
+    /// The cost is one turn of the story's own time per naming, and the guards in
+    /// [`Self::needs_a_room_name`] are what keep that to the opening room and the
+    /// occasional narrated move rather than every turn. A story that answers with no
+    /// heading is asked once and never again.
+    fn silent_look(&mut self) -> Option<String> {
+        // Never while the game is not simply waiting for a command: mid-dialog, at a
+        // keypress page, or suspended on its own save/restore, `look` is not a
+        // command at all — it is an answer to whatever was asked, and it would be
+        // the player's answer. Counterfeit Monkey's prologue is exactly that trap:
+        // "Do you remember our name?" reads a line, and the reply it wants is not
+        // LOOK. The read prompt is the thing that tells a parser apart from a
+        // question, the same test `take_room_heading` applies to a heading.
+        if self.quit
+            || self.pending != InputKind::Line
+            || self.pending_io.is_some()
+            || self.pending_filename.is_some()
+            || !self.appglk().ends_at_read_prompt()
+        {
+            return None;
+        }
+        // TWO snapshots, because the game's state lives in two places. gvm holds the
+        // VM and its own Glk model; the BACKEND holds what each window contains, and
+        // the app renders from the backend — `screen_model` and `window_dump_lines`
+        // read a buffer's whole log, not its undrained tail, so draining the
+        // question's output is not the same as undoing it. Restore only the VM and
+        // the room description stays on the player's screen and in `/dump-windows`,
+        // in a session whose transcript never saw it.
+        let snapshot = self.machine.save_state();
+        let display = self.appglk().display_snapshot();
+        let kept_diagnostics = std::mem::take(&mut self.machine.diagnostics);
+        self.drop_world_caches();
+        self.machine.supply_line("look");
+        let stopped = drive_auto(&mut self.machine, &self.store);
+        self.machine.flush();
+        // A `look` that reached for a file or ended the story is not an answer, and
+        // the state it left is about to be discarded anyway.
+        let heading = match stopped {
+            DriveStop::Input(_) | DriveStop::Event => self.appglk().take_room_heading(true),
+            _ => None,
+        };
+        // Everything the question printed belongs to a turn that never happened. The
+        // sound ops are the one thing the display snapshot does not carry, because
+        // they are a per-turn queue rather than window state: drain them here.
+        let _ = self.appglk().take_sound_ops();
+        self.machine.diagnostics = kept_diagnostics;
+        let _ = self.machine.take_fault_trace();
+        let restored = self.machine.restore_state(&snapshot).is_ok();
+        self.appglk().restore_display_snapshot(display);
+        self.drop_world_caches();
+        // Last, so the window tree comes from the VM gvm has just put back rather
+        // than from anything the question did to it.
+        self.refresh_screen();
+        if !restored {
+            // Nothing can put this session back; refuse the name rather than report
+            // one read off a game that has moved on without the player.
+            self.naming_look_refusals = NAMING_LOOK_REFUSALS;
+            return None;
+        }
+        if heading.is_none() {
+            self.naming_look_refusals = self.naming_look_refusals.saturating_add(1);
+        } else {
+            self.naming_look_refusals = 0;
+        }
+        heading
     }
 
     /// The re-key table produced when the lock resolves: rooms mapped under a
@@ -3527,5 +3710,116 @@ mod tests {
             None,
             "drawn but not watching → declined",
         );
+    }
+
+    // ── The silent look must leave no trace (SQ-1293) ──────────────────────────
+
+    /// `stories/CounterfeitMonkey-11.gblorb`, or `None` — it is gitignored, so this
+    /// skips vacuously without it. Release 11 / serial 230220 / Inform 7 6M62.
+    fn counterfeit_monkey() -> Option<Vec<u8>> {
+        let p = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../stories/CounterfeitMonkey-11.gblorb");
+        match std::fs::read(&p) {
+            Ok(b) => Some(b),
+            Err(_) => {
+                eprintln!("SKIP: gitignored story missing at {}", p.display());
+                None
+            }
+        }
+    }
+
+    /// Boot Counterfeit Monkey and play its prologue — `y`, `andra`, a keypress —
+    /// which ends at the first command prompt, where the naming look fires.
+    /// `ask` false pre-spends the refusal budget so this session never asks: the
+    /// control the subject is compared against.
+    fn cm_through_prologue(bytes: Vec<u8>, ask: bool) -> GlulxSession {
+        let pict = blorb::Blorb::parse(bytes.clone()).ok();
+        let crate::hints::LoadedStory::Glulx(image) =
+            crate::hints::extract_story(bytes).expect("a readable container")
+        else {
+            panic!("Counterfeit Monkey is a Glulx story");
+        };
+        let mut s = GlulxSession::new(image, 80, 30, true, false, false, (8, 16), pict, &[])
+            .expect("Counterfeit Monkey boots");
+        let _ = s.take_transcript();
+        if !ask {
+            s.naming_look_refusals = NAMING_LOOK_REFUSALS;
+        }
+        let _ = s.submit("y");
+        let _ = s.submit("andra");
+        let _ = s.submit_key(KeyInput::Enter).expect("Glulx takes keys");
+        s
+    }
+
+    /// Every character the backend's own window state holds: each grid's cells and
+    /// each non-primary buffer's lines. The primary buffer carries none — the app
+    /// renders it from the transcript — which is why the transcript is compared
+    /// separately below.
+    fn window_text(s: &GlulxSession) -> String {
+        fn walk(n: &WinNode, out: &mut String) {
+            match n {
+                WinNode::Pair { first, second, .. } => {
+                    walk(first, out);
+                    walk(second, out);
+                }
+                WinNode::Grid(g) => {
+                    for row in 1..=g.rows {
+                        for col in 1..=g.cols {
+                            out.push(g.cell(row, col).ch);
+                        }
+                        out.push('\n');
+                    }
+                }
+                WinNode::Buffer(b) => {
+                    for line in &b.lines {
+                        out.push_str(line);
+                        out.push('\n');
+                    }
+                }
+                WinNode::Layered(ws) => ws.iter().for_each(|w| walk(&w.node, out)),
+                WinNode::Graphics(_) | WinNode::Blank => {}
+            }
+        }
+        let mut out = String::new();
+        walk(&s.screen().root, &mut out);
+        out
+    }
+
+    /// SQ-1293: `silent_look` types a command nobody asked for. Restoring the VM
+    /// puts back gvm's state and NOT the backend's — the backend keeps its own copy
+    /// of what every window holds, and the app renders from that one. So the
+    /// question must be undone in both places, and the way to prove it is a control
+    /// session driven identically that never asks: after the turn where the subject
+    /// asks, the two must be indistinguishable in everything except the answer.
+    #[test]
+    fn a_silent_look_leaves_the_backend_exactly_as_it_found_it() {
+        let Some(bytes) = counterfeit_monkey() else { return };
+        let mut subject = cm_through_prologue(bytes.clone(), true);
+        let mut control = cm_through_prologue(bytes, false);
+
+        // Non-vacuity: the look is the ONLY difference between these two sessions,
+        // and it is what put a room on the map.
+        assert_eq!(
+            subject.current_location().map(|l| l.name),
+            Some("Back Alley".to_string()),
+            "the subject asked, and got the opening room"
+        );
+        assert_eq!(control.current_location(), None, "the control never asked, so it has none");
+
+        // Everything else must match: the windows the app renders …
+        assert_eq!(subject.window_dump(), control.window_dump(), "the window tree");
+        assert_eq!(window_text(&subject), window_text(&control), "and what the windows hold");
+        // … and the next turn, which is where a polluted heading scan or a stale
+        // read-prompt tail would surface.
+        let a = subject.submit("look");
+        let b = control.submit("look");
+        assert_eq!(a.transcript, b.transcript, "the next turn prints the same thing");
+        assert_eq!(
+            a.location.map(|l| l.name),
+            b.location.map(|l| l.name),
+            "and is read the same way"
+        );
+        assert_eq!(subject.window_dump(), control.window_dump(), "still the same windows after it");
+        assert_eq!(window_text(&subject), window_text(&control));
     }
 }

@@ -76,3 +76,11 @@ mod sq1283_shogun_room_identity;
 mod sq1283b_shogun_below_decks_fan;
 #[path = "suites/sq1285_bolded_object_name_room.rs"]
 mod sq1285_bolded_object_name_room;
+#[path = "suites/sq1293_glulx_opening_room.rs"]
+mod sq1293_glulx_opening_room;
+#[path = "suites/sq1294_glulx_silent_vehicle_move.rs"]
+mod sq1294_glulx_silent_vehicle_move;
+#[path = "suites/sq1295_glulx_bold_name_below_heading.rs"]
+mod sq1295_glulx_bold_name_below_heading;
+#[path = "suites/sq1294b_glulx_flashback_heading.rs"]
+mod sq1294b_glulx_flashback_heading;

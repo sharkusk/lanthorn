@@ -164,7 +164,7 @@ pub fn theme_style_colours(colors: &crate::colors::ColorScheme) -> GlkStylePairs
 type GridBufCell = (char, u8, u32, u32, u32, u8);
 
 /// A text-grid window's cell buffer (cells keyed by 0-based `(row, col)`).
-#[derive(Default)]
+#[derive(Default, Clone)]
 struct GridBuf {
     width: u32,
     height: u32,
@@ -175,6 +175,7 @@ struct GridBuf {
 }
 
 /// One entry in a text-buffer window's ordered output log.
+#[derive(Clone)]
 enum BufElem {
     /// A run of printed text with its style bits, packed colours, Glk hyperlink
     /// value (0 = no link), paragraph layout format (SQ-0330) and Glk style class
@@ -185,7 +186,7 @@ enum BufElem {
 }
 
 /// A text-buffer window's ordered output log (text runs + inline images).
-#[derive(Default)]
+#[derive(Default, Clone)]
 struct BufBuf {
     log: Vec<BufElem>,
     /// Number of leading log entries already drained by `take_transcript*`.
@@ -205,6 +206,39 @@ struct SoundChannel {
     /// cleared by `schannel_unpause`, and snapshotted into each `Play` op so a
     /// sound played on a channel paused while empty starts paused.
     paused: bool,
+}
+
+/// Everything a question asked behind the player's back must put back (SQ-1293).
+///
+/// `Machine::restore_state` rolls back *gvm's* Glk model, and none of this: the
+/// backend keeps its own copies of what every window holds, and the app renders
+/// from those, not from gvm. So a silent `look` whose VM is restored still leaves
+/// its room description in `buffers[*].log` — where `screen_model` and
+/// `window_dump_lines` both read the WHOLE log, not the undrained tail — and its
+/// status-line rewrite in `grids[*].cells`, on a screen whose transcript never saw
+/// either. Draining is not undoing: `take_transcript_elems` only advances
+/// `drained`.
+///
+/// The buffer logs are cloned whole rather than remembered by length, because a
+/// window the question CLEARS shrinks rather than grows and a length cannot undo
+/// that. It is affordable because it is rare — see
+/// [`crate::glulx_session::GlulxSession::silent_look`] for what limits how often a
+/// question is asked at all.
+///
+/// `layout` and `layout_tree` are here too, and for the same reason they look
+/// redundant: `refresh_screen`'s `sync_window_tree` re-pushes gvm's own tree after
+/// the restore, so the tree ends up gvm's either way — but the flat `layout` has no
+/// such re-push, and a story that reopens a window on `look` would otherwise leave
+/// the hit-test rectangles describing a screen that never happened.
+pub(crate) struct DisplaySnapshot {
+    layout: Vec<(u32, WinType, GlkRect, Option<bool>)>,
+    layout_tree: Option<WinTree>,
+    grids: BTreeMap<u32, GridBuf>,
+    buffers: BTreeMap<u32, BufBuf>,
+    scans: BTreeMap<u32, StoryScan>,
+    graphics: BTreeMap<u32, crate::graphics::Canvas>,
+    primary: Option<u32>,
+    primary_cleared: bool,
 }
 
 /// The app Glk display backend (see the module docs).
@@ -314,6 +348,7 @@ enum HeadingTail {
 /// that was `primary` at write time; see the doc on `AppGlk::scans` for why that
 /// lost City of Secrets' opening room. The state machine itself is unchanged —
 /// it simply now belongs to the window whose stream it describes.
+#[derive(Clone)]
 struct StoryScan {
     /// Accumulator for the current run of `Subheader` text (the Inform room
     /// heading, captured char-by-char).
@@ -344,6 +379,12 @@ struct StoryScan {
     /// [`HEADING_LINE_REST_CAP`] chars — the evidence for
     /// [`StoryScan::line_rest_disqualifies`].
     heading_line_rest: String,
+    /// A candidate that a `Subheader` run opening the line BELOW it displaced
+    /// before anything could settle it — see [`StoryScan::capture_heading`]
+    /// (SQ-1295). Confirmed by [`StoryScan::reject_heading`] when the line that
+    /// displaced it turns out to be prose, dropped when that line turns out to
+    /// own itself (another banner).
+    heading_displaced: Option<String>,
     /// The last [`PROMPT_TAIL_CAP`] chars written to this window, kept only to
     /// answer "does the stream end at the game's read prompt?" — the test for a
     /// parser command prompt rather than a bare line read.
@@ -362,6 +403,7 @@ impl Default for StoryScan {
             heading_tail_text: String::new(),
             heading_tail_prose: false,
             heading_line_rest: String::new(),
+            heading_displaced: None,
             prompt_tail: String::new(),
         }
     }
@@ -639,9 +681,42 @@ impl AppGlk {
         Some(self.scans.entry(pid).or_default())
     }
 
+    /// Take a [`DisplaySnapshot`] of everything a silent question could disturb.
+    /// Paired with [`Self::restore_display_snapshot`]; see the snapshot's own docs
+    /// for what is in it and why (SQ-1293).
+    pub(crate) fn display_snapshot(&self) -> DisplaySnapshot {
+        DisplaySnapshot {
+            layout: self.layout.clone(),
+            layout_tree: self.layout_tree.clone(),
+            grids: self.grids.clone(),
+            buffers: self.buffers.clone(),
+            scans: self.scans.clone(),
+            graphics: self.graphics.clone(),
+            primary: self.primary,
+            primary_cleared: self.primary_cleared,
+        }
+    }
+
+    /// Put a [`DisplaySnapshot`] back, wholesale. Windows the question opened go
+    /// with it, because the map is replaced rather than merged — and gvm's own
+    /// model, restored alongside, does not have them either.
+    pub(crate) fn restore_display_snapshot(&mut self, snap: DisplaySnapshot) {
+        self.layout = snap.layout;
+        self.layout_tree = snap.layout_tree;
+        self.grids = snap.grids;
+        self.buffers = snap.buffers;
+        self.scans = snap.scans;
+        self.graphics = snap.graphics;
+        self.primary = snap.primary;
+        self.primary_cleared = snap.primary_cleared;
+    }
+
     /// Whether the story window's output currently ends at the game's read
     /// prompt — the last thing an Inform parser prints before reading a command.
-    fn ends_at_read_prompt(&mut self) -> bool {
+    ///
+    /// `pub(crate)` for `glulx_session`'s silent `look`, which must not type a
+    /// command at a page that is asking the player a question (SQ-1293).
+    pub(crate) fn ends_at_read_prompt(&mut self) -> bool {
         self.primary_scan().is_some_and(|s| s.ends_at_read_prompt())
     }
 
@@ -690,6 +765,28 @@ impl StoryScan {
             }
             if is_sub {
                 if self.at_line_start && !self.in_heading {
+                    // A `Subheader` run opening the line DIRECTLY BELOW a candidate
+                    // that is one character from confirmation would otherwise displace
+                    // it unsettled: `finalize_heading` overwrites `heading_pending`,
+                    // and SQ-1285's rule then rejects the newcomer and takes the real
+                    // heading with it. Counterfeit Monkey with HIGHLIGHT on prints
+                    // exactly that — "**Brown's Lab**" and then "**Professor Brown**,
+                    // the Reification of Abstracts researcher, is …" (SQ-1295).
+                    //
+                    // The verdict cannot be reached HERE, because it depends on what
+                    // the displacing line turns out to be: prose opened by a bolded
+                    // noun (so the candidate above it was a heading joined to its
+                    // description) or a line the newcomer owns outright (so the two
+                    // are stacked banners, THE BAT's title page — SQ-0732). So the
+                    // candidate is parked and settled once the newcomer's own line
+                    // has been judged; see `reject_heading` and `advance_heading_tail`.
+                    if self.heading_tail == HeadingTail::LineEnd {
+                        self.heading_displaced = self.heading_pending.take();
+                        self.heading_tail = HeadingTail::Idle;
+                        self.heading_tail_text.clear();
+                        self.heading_tail_prose = false;
+                        self.heading_line_rest.clear();
+                    }
                     self.in_heading = true; // a heading begins only at line start
                 }
                 if self.in_heading {
@@ -728,6 +825,10 @@ impl StoryScan {
                     if self.line_rest_disqualifies() {
                         self.reject_heading();
                     } else {
+                        // This candidate owns its own line, so anything it displaced
+                        // was a banner stacked above a banner rather than a heading
+                        // above its description (SQ-1295).
+                        self.heading_displaced = None;
                         self.heading_tail = HeadingTail::LineEnd;
                     }
                 } else if self.heading_line_rest.chars().count() < HEADING_LINE_REST_CAP {
@@ -805,6 +906,12 @@ impl StoryScan {
     /// Throw the pending candidate away: it was never a room heading. Leaves any
     /// heading already CONFIRMED this turn standing.
     fn reject_heading(&mut self) {
+        // The rejected candidate opened a line of PROSE, which is exactly the thing
+        // that confirms a heading sitting above it — so a candidate it displaced was
+        // a room heading joined to its description after all (SQ-1295).
+        if let Some(displaced) = self.heading_displaced.take() {
+            self.last_heading = Some(displaced);
+        }
         self.heading_pending = None;
         self.heading_tail = HeadingTail::Idle;
         self.heading_tail_text.clear();
@@ -814,6 +921,10 @@ impl StoryScan {
 
     /// Accept the pending candidate as this turn's room heading.
     fn confirm_heading(&mut self) {
+        // A confirmed candidate supersedes whatever it displaced, and the parked one
+        // is not confirmed in its own right — see `reject_heading` for the case that
+        // promotes it (SQ-1295).
+        self.heading_displaced = None;
         if let Some(name) = self.heading_pending.take() {
             self.last_heading = Some(name);
         }
@@ -885,6 +996,9 @@ impl StoryScan {
         } else {
             self.confirm_heading();
         }
+        // A parked candidate is per-turn evidence; it must never be promoted by a
+        // rejection that happens on some later turn (SQ-1295).
+        self.heading_displaced = None;
         self.last_heading.take()
     }
 
@@ -2528,6 +2642,133 @@ mod heading_tests {
         put(&mut b, GlkStyle::Subheader, "The barker");
         put(&mut b, GlkStyle::Normal, " is holding a tube.\n\n>");
         assert_eq!(b.take_room_heading(true).as_deref(), Some("Midway"));
+    }
+
+    #[test]
+    fn a_bolded_name_on_the_line_below_does_not_take_the_heading_with_it() {
+        // SQ-1295. The case above has a blank line between the heading and the bolded
+        // sentence, so the heading is confirmed by the description before the sentence
+        // is even seen. Counterfeit Monkey's Brown's Lab has NO such line: the NPC's
+        // bolded name is the first thing on the line directly below the heading.
+        //
+        // That candidate was one character from confirmation, and the character that
+        // arrived opened a new `Subheader` run — which used to start a fresh heading
+        // run, leaving "Brown's Lab" to be overwritten by `finalize_heading` and then
+        // thrown away with "Professor Brown" when `line_rest_disqualifies` rejected it.
+        // The turn reported NO room at all, which cost the map the room's name and, one
+        // layer up, the Glulx room lock (see `app::glulx_roomlock`).
+        let mut b = primary_backend();
+        put(&mut b, GlkStyle::Subheader, "Brown's Lab\n");
+        put(&mut b, GlkStyle::Subheader, "Professor Brown");
+        put(&mut b, GlkStyle::Normal, ", the Reification of Abstracts researcher, is hunched over his work table.\n\n>");
+        assert_eq!(b.take_room_heading(true).as_deref(), Some("Brown's Lab"));
+    }
+
+    /// A single-leaf `WinTree` for this module (the other test module has its own).
+    fn win_leaf(id: u32, wintype: WinType, width: u32, height: u32) -> WinTree {
+        WinTree::Leaf {
+            id,
+            wintype,
+            rect: GlkRect { left: 0, top: 0, width, height },
+            bg: None,
+            fg: None,
+            reverse: false,
+        }
+    }
+
+    /// Every character the grid windows of `b`'s screen model hold, row by row.
+    fn grid_text(b: &AppGlk) -> String {
+        fn walk(n: &crate::engine::WinNode, out: &mut String) {
+            match n {
+                crate::engine::WinNode::Pair { first, second, .. } => {
+                    walk(first, out);
+                    walk(second, out);
+                }
+                crate::engine::WinNode::Grid(g) => {
+                    for row in 1..=g.rows {
+                        for col in 1..=g.cols {
+                            out.push(g.cell(row, col).ch);
+                        }
+                        out.push('\n');
+                    }
+                }
+                _ => {}
+            }
+        }
+        let mut out = String::new();
+        walk(&b.screen_model().root, &mut out);
+        out
+    }
+
+    #[test]
+    fn a_display_snapshot_puts_back_what_a_silent_question_wrote() {
+        // SQ-1293. `GlulxSession::silent_look` types a command nobody asked for and
+        // restores the VM afterwards — but the VM is only half the game's state. The
+        // backend keeps what every window CONTAINS and the app renders from that, so
+        // the question has to be undone here too. Every assertion below names one
+        // thing a VM-only restore leaves behind.
+        let mut b = primary_backend();
+        b.window_open(2, WinType::TextGrid);
+        let two_windows = [
+            (2, WinType::TextGrid, GlkRect { left: 0, top: 0, width: 80, height: 1 }, Some(true)),
+            (1, WinType::TextBuffer, GlkRect { left: 0, top: 1, width: 80, height: 23 }, Some(true)),
+        ];
+        b.window_layout(&two_windows);
+        b.window_tree(Some(win_leaf(2, WinType::TextGrid, 80, 1)));
+        b.grid_put(2, 0, 0, GlkStyle::Normal, "Maze                Score: 0");
+        put(&mut b, GlkStyle::Subheader, "Maze\n");
+        put(&mut b, GlkStyle::Normal, "You are in a maze.\n\n>");
+        // The real turn drains its own output and reads its own room, exactly as
+        // `finish_turn` does before the question is asked.
+        let _ = b.take_transcript_elems();
+        assert_eq!(b.take_room_heading(true).as_deref(), Some("Maze"), "the real turn's own room");
+        let before_dump = b.window_dump_lines();
+        let before_grid = grid_text(&b);
+
+        // Ask the question: more prose, a rewritten status line, a window opened
+        // while answering, and a heading that must not stand in for the next turn's.
+        let snap = b.display_snapshot();
+        put(&mut b, GlkStyle::Normal, "look\n"); // the parser's echo of the question
+        put(&mut b, GlkStyle::Subheader, "Cavern\n");
+        put(&mut b, GlkStyle::Normal, "A dripping cave.\n\n>");
+        b.grid_put(2, 0, 0, GlkStyle::Normal, "Cavern              Score: 9");
+        assert_eq!(b.take_room_heading(true).as_deref(), Some("Cavern"), "the answer, read once");
+        b.window_open(3, WinType::TextBuffer);
+        b.window_tree(Some(win_leaf(3, WinType::TextBuffer, 80, 24)));
+        b.restore_display_snapshot(snap);
+
+        // The status line the question rewrote.
+        assert_eq!(grid_text(&b), before_grid, "the grid is back");
+        // The window it opened, and the tree the app lays out from.
+        assert_eq!(b.window_dump_lines(), before_dump, "so is the window tree");
+        // The buffer log, which is what a VM-only restore leaves growing: the drain
+        // pointer moves, the text does not, so the question's prose is owed to the
+        // player's transcript on the NEXT turn and prints the room description twice.
+        assert!(
+            b.take_transcript_elems().is_empty(),
+            "the question's prose is owed to nobody, and a moved drain pointer over an \
+             un-rewound log would owe the player the room description a second time"
+        );
+        // And the heading scan, so the next turn is read the way the real one left it.
+        assert_eq!(
+            b.take_room_heading(true),
+            None,
+            "the answer must not stand in for the next turn's room"
+        );
+    }
+
+    #[test]
+    fn two_stacked_banners_do_not_promote_the_upper_one() {
+        // The other half of the rule, and the reason the verdict cannot be reached when
+        // the displacing run OPENS: a banner page stacks own-line `Subheader` lines, and
+        // the upper one is no more a room than the lower (THE BAT's title page, SQ-0732).
+        // What separates the two shapes is whether the displacing line turns out to be
+        // prose opened by a bolded noun, or a line the newcomer owns outright.
+        let mut b = primary_backend();
+        put(&mut b, GlkStyle::Subheader, "THE BAT\n");
+        put(&mut b, GlkStyle::Subheader, "An Interactive Nightmare\n");
+        put(&mut b, GlkStyle::Normal, "\nPress any key to begin.\n");
+        assert_eq!(b.take_room_heading(false), None);
     }
 
     #[test]
