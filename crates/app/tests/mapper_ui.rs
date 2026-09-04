@@ -68,5 +68,7 @@ mod sq1284_glulx_restore_room_cache;
 mod sq1286_glulx_room_lock;
 #[path = "suites/sq1283_shogun_room_identity.rs"]
 mod sq1283_shogun_room_identity;
+#[path = "suites/sq1283b_shogun_below_decks_fan.rs"]
+mod sq1283b_shogun_below_decks_fan;
 #[path = "suites/sq1285_bolded_object_name_room.rs"]
 mod sq1285_bolded_object_name_room;

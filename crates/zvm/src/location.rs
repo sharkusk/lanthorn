@@ -375,6 +375,94 @@ fn is_v6_status_strip(
         && w.y_coord + w.y_size > story_top
 }
 
+/// Every paint run the v6 band is made of, as `(window index, run index)` into
+/// `machine.screen.v6` — the ONE place the band's extent is decided.
+///
+/// Two callers need the same answer to two different questions: what the band
+/// SAYS ([`v6_status_candidates`]) and, after a restore that brought no screen
+/// with it, what has to STOP saying it ([`clear_v6_status_band`]). Restating the
+/// rule beside each would be exactly the hand-maintained invariant across
+/// functions that CLAUDE.md's refactoring policy exists to refuse — and here the
+/// two halves disagreeing is silent by construction: a run the reader still sees
+/// and the clear missed reports a room from another moment, self-consistently.
+fn v6_band_runs(machine: &Machine) -> Vec<(usize, usize)> {
+    // SQ-0917: the session's cell, which every pixel-to-row step below divides by.
+    let cell = machine.v6_cell();
+    let Some(v6) = machine.screen.v6.as_ref() else {
+        return Vec::new();
+    };
+    // The window the game streams prose through — window 0 for Infocom, window 7 for
+    // Inform 6's v6 library, decided by the same wrap+scroll test the printer uses
+    // (SQ-0459/SQ-0583). advent.z6 never touches window 0, so window 0 keeps its
+    // boot-time full-screen rect: reading the band above THAT finds nothing once the
+    // game splits the screen and moves its status bar down beside the real prose.
+    let prose_idx = {
+        let cur = v6.current as usize;
+        if v6.windows[cur].attributes & 0b11 == 0b11 { cur } else { 0 }
+    };
+    let story_top = v6.windows[prose_idx].y_coord.max(1);
+
+    let mut out = Vec::new();
+    for (i, w) in v6.windows.iter().enumerate() {
+        // A status STRIP overlays the story window instead of sitting above it
+        // (SQ-0581): advent.z6 leaves window 0 covering the whole screen and hangs
+        // window 1 — one row tall, pinned at the top — over its first row, painting
+        // "At End Of Road   Score: 36   Moves: 1" there. Nothing is above the story
+        // window, so the rule below finds no band at all. Such a strip IS the band,
+        // and only its own rows are: window 0's prose is never scooped in, because
+        // window 0 can't be a strip.
+        let strip_bottom =
+            is_v6_status_strip(i, prose_idx, w, story_top, cell).then(|| w.y_coord + w.y_size);
+        for (j, t) in w.texts.iter().enumerate() {
+            if t.text.is_empty() {
+                continue;
+            }
+            // Wholly above the story text: a run straddling the boundary is prose.
+            let above_story = t.y + cell.h() <= story_top;
+            let in_strip = strip_bottom.is_some_and(|b| t.y + cell.h() <= b);
+            if above_story || in_strip {
+                out.push((i, j));
+            }
+        }
+    }
+    out
+}
+
+/// Erase the v6 status band's paint, the way [`crate::screen::UpperWindow::blank`]
+/// erases the v4+ grid — for a restore that brought game memory **without** a
+/// screen to go with it (SQ-1283).
+///
+/// Quetzal archives no screen by design, so after such a restore whatever is
+/// painted belongs to the moment just left. On v4+ that is the upper-window grid
+/// and blanking it is enough; a v6 story paints its status text into the window
+/// model instead, and nothing was clearing it — so [`detect_location`] went on
+/// answering out of the previous moment's band. The Shogun report: a shadow
+/// restored below decks still held `Deck` (or `Bridge`) from an earlier probe,
+/// and Shogun repaints line 2 only when `HERE` changes, so a refused `se` printed
+/// "You can't go that way", repainted nothing, and detection confidently named
+/// the room the shadow had walked into on its PREVIOUS question. The return probe
+/// minted a passage to it — one phantom edge per direction it tried, all fanning
+/// out of Below Decks.
+///
+/// **Only the band**, not the whole window model: the prose window's own text is
+/// the v6 analogue of the v4+ LOWER window, which `blank` has never touched, and
+/// a rewind that restores memory without a screen would otherwise wipe the page
+/// the player is reading. The extent comes from [`v6_band_runs`], so what stops
+/// being read and what stops being shown are the same set by construction.
+///
+/// A no-op on a story with no v6 window table.
+pub fn clear_v6_status_band(machine: &mut Machine) {
+    let runs = v6_band_runs(machine);
+    if runs.is_empty() {
+        return; // no band, and no generation bump to spend either
+    }
+    let Some(v6) = machine.screen.v6_mut() else { return };
+    // Descending, so removing one run cannot shift the index of the next.
+    for (wi, ti) in runs.into_iter().rev() {
+        v6.windows[wi].texts.remove(ti);
+    }
+}
+
 /// Ordered v6 status-band room candidates: left-anchored fields first (top rows
 /// first), then centered/other fields. A pure read of the v6 paint model; empty
 /// when the story is not v6 or paints no text above the story window.
@@ -394,42 +482,15 @@ fn v6_status_candidates(machine: &Machine) -> Vec<V6Candidate> {
     let Some(v6) = machine.screen.v6.as_ref() else {
         return Vec::new();
     };
-    // The window the game streams prose through — window 0 for Infocom, window 7 for
-    // Inform 6's v6 library, decided by the same wrap+scroll test the printer uses
-    // (SQ-0459/SQ-0583). advent.z6 never touches window 0, so window 0 keeps its
-    // boot-time full-screen rect: reading the band above THAT finds nothing once the
-    // game splits the screen and moves its status bar down beside the real prose.
-    let prose_idx = {
-        let cur = v6.current as usize;
-        if v6.windows[cur].attributes & 0b11 == 0b11 { cur } else { 0 }
-    };
-    let story_top = v6.windows[prose_idx].y_coord.max(1);
 
     use std::collections::BTreeMap;
     // Group band runs by row (absolute y), carrying each run's window left edge
     // so left-anchoring is measured relative to the window, not the screen.
     let mut rows: BTreeMap<u16, Vec<(&crate::screen::V6Text, u16)>> = BTreeMap::new();
-    for (i, w) in v6.windows.iter().enumerate() {
-        // A status STRIP overlays the story window instead of sitting above it
-        // (SQ-0581): advent.z6 leaves window 0 covering the whole screen and hangs
-        // window 1 — one row tall, pinned at the top — over its first row, painting
-        // "At End Of Road   Score: 36   Moves: 1" there. Nothing is above the story
-        // window, so the rule below finds no band at all. Such a strip IS the band,
-        // and only its own rows are: window 0's prose is never scooped in, because
-        // window 0 can't be a strip.
-        let strip_bottom =
-            is_v6_status_strip(i, prose_idx, w, story_top, cell).then(|| w.y_coord + w.y_size);
-        for t in w.texts.iter() {
-            if t.text.is_empty() {
-                continue;
-            }
-            // Wholly above the story text: a run straddling the boundary is prose.
-            let above_story = t.y + cell.h() <= story_top;
-            let in_strip = strip_bottom.is_some_and(|b| t.y + cell.h() <= b);
-            if above_story || in_strip {
-                rows.entry(t.y).or_default().push((t, w.x_coord));
-            }
-        }
+    for (wi, ti) in v6_band_runs(machine) {
+        let w = &v6.windows[wi];
+        let t = &w.texts[ti];
+        rows.entry(t.y).or_default().push((t, w.x_coord));
     }
     let mut left = Vec::new();
     let mut other = Vec::new();
@@ -2293,6 +2354,56 @@ mod tests {
         let mut m = make_machine(build_v5_forests());
         m.screen.v6 = Some(v);
         assert_eq!(v6_status_room_candidates(&m), vec!["Bridge".to_string(), "SHOGUN".to_string()]);
+    }
+
+    /// SQ-1283: a restore brings no screen, so the band must stop answering —
+    /// and only the band. The prose window is v6's LOWER window, which
+    /// `UpperWindow::blank` has never touched on any other version.
+    #[test]
+    fn clearing_the_v6_band_erases_the_status_text_and_leaves_the_prose() {
+        let mut v = v6_band(&[(17, 3, "Bridge"), (1, 250, "SHOGUN")]);
+        // Prose in the story window, painted below its own top edge (y=79).
+        v.windows[0].texts.push(V6Text::derived(
+            95,
+            3,
+            "You open the focsle door and go through.".into(),
+            0,
+            ZColour::Default,
+            ZColour::Default,
+            crate::screen::V6Cell::DEFAULT,
+        ));
+        let mut m = make_machine(build_v5_forests());
+        m.screen.v6 = Some(v);
+        assert_eq!(
+            v6_status_room_candidates(&m),
+            vec!["Bridge".to_string(), "SHOGUN".to_string()],
+            "non-vacuity: the band is readable before the clear"
+        );
+        let before = m.screen.v6_generation();
+
+        clear_v6_status_band(&mut m);
+
+        assert!(
+            v6_status_room_candidates(&m).is_empty(),
+            "the band has nothing left to answer a heading-less turn with"
+        );
+        let prose = &m.screen.v6.as_ref().expect("still a v6 table").windows[0].texts;
+        assert_eq!(prose.len(), 1, "…and the story window's own page is untouched");
+        assert!(prose[0].text.starts_with("You open the focsle door"));
+        assert!(
+            m.screen.v6_generation() > before,
+            "erasing paint is a mutation, and a cache keyed on the generation has to see it"
+        );
+    }
+
+    /// …and it is a no-op where there is no band to clear, including on a story
+    /// with no v6 window table at all (every v1-v5/v7/v8 restore takes this path).
+    #[test]
+    fn clearing_the_v6_band_is_a_no_op_without_one() {
+        let mut m = make_machine(build_v5_forests());
+        assert!(m.screen.v6.is_none(), "a v5 story has no v6 window table");
+        clear_v6_status_band(&mut m);
+        assert_eq!(m.screen.v6_generation(), 0, "and spends no generation saying so");
     }
 
     #[test]

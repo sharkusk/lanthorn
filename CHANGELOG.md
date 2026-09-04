@@ -82,6 +82,17 @@ Absolute URLs or no link.
   map knew the deck's stairs led somewhere else and refused to draw the
   passage. It now reads the game's own "you are here" pointer to tell the twins
   apart, and the ship's decks join up.
+- **…and the graphical Infocom games no longer sprout phantom exits from the
+  map's own quiet scouting either.** Between your turns the map plays a silent
+  copy of the game to find the way back through a passage you have walked one
+  way. Zork Zero, Shogun, Arthur and their kin print the room name into their
+  status band and only repaint it when you actually change rooms — so the copy,
+  handed a direction the game refuses, printed nothing, and the band still named
+  the room it had walked into on the question before. Below decks on the Erasmus
+  ended up with an arrow to the bridge in all eight compass directions, and the
+  deck itself was written off as leading somewhere different each time you went
+  forward. The copy now starts every question with its status band cleared, so a
+  refused direction teaches the map nothing at all.
 - **Glulx games no longer sprout phantom exits from the map's own quiet
   scouting.** Between your turns the map plays a silent copy of the game to
   work out the way back through a passage you have walked only one way. When

@@ -987,6 +987,35 @@ new room a disagreeing attempt is the only thing to have found (the reason
 it does not simply require "already on the map" — SQ-1261 depends on that
 staying possible).
 
+**And the other half of the same duty: the SCREEN a restore does not bring
+with it.** Room identity is host-side state on Glulx; on the Z-machine it is
+read off the *screen*, and a save archives none (Quetzal's design — the story
+is assumed to repaint). So `GameSession::restore_state` blanks everything the
+location ladder reads, and each version keeps its room name somewhere else:
+
+| version | where the room name is | what `restore_state` clears |
+|---|---|---|
+| v1–v3 | global 0, inside the snapshot | nothing to clear |
+| v4/v5/v7/v8 | the upper-window grid | `UpperWindow::blank` (SQ-0785) |
+| **v6** | the window model's paint runs | `zvm::location::clear_v6_status_band` (SQ-1283) |
+
+Each is the same rule — *memory restored without a screen must not be read
+against another moment's screen* — and it is `probe::serve`'s restore-before-
+every-command that makes breaking it visible: a story that repaints its band
+only when the room changes (Shogun's status routine, Zork Zero's, Arthur's)
+leaves a refused move printing nothing at all, and detection then names the
+room the shadow walked into on the question BEFORE. `return_probe::deliver`
+mints a passage to it — `record_probed_passage` refuses `from == to`, but a
+stale room is not `from` — so the map grows one phantom edge per direction the
+search tries, all fanning onto the same room. The Shogun report was exactly
+that: `Below Decks` joined to the Erasmus's `Bridge` in all eight compass
+directions (`crates/app/tests/suites/sq1283b_shogun_below_decks_fan.rs`
+replays it), and `GlulxSession::restore_state` clearing `last_room` is the
+same fix on the engine with no screen at all (SQ-1284). The v6 clear takes
+only the BAND — the extent `detect_location_v6` reads, derived once in
+`v6_band_runs` and shared by the reader and the clear — never the prose
+window, which is v6's lower window and has never been blanked on any version.
+
 ### SQ-1269: suspicion, not proof — the probe decides
 
 Three holes SQ-1257/SQ-1261/SQ-1264 left, all in the DECISION layer rather

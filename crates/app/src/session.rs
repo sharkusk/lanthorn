@@ -5141,6 +5141,17 @@ impl Engine for GameSession {
         // (`restore_screen`, the `.lanthorn` archive path) replaces the whole
         // `ScreenState` immediately after this and never sees the blank.
         self.machine.screen.upper.blank();
+        // The v6 half of the same duty (SQ-1283). A Version 6 story paints its
+        // status text into the window model rather than the grid above, so
+        // blanking the grid left a v6 band standing — and `detect_location` reads
+        // the band. A shadow restored below decks on Shogun still held the room
+        // its PREVIOUS question had walked into, and Shogun repaints line 2 only
+        // when `HERE` changes, so a refused `se` printed "You can't go that way",
+        // repainted nothing, and detection named that stale room. The return probe
+        // minted a passage to it, once per direction it tried. Only the band goes:
+        // the prose window is v6's lower window and blanking has never touched
+        // that. See `zvm::location::clear_v6_status_band`.
+        zvm::location::clear_v6_status_band(&mut self.machine);
         // A Save State is snapshotted at an input prompt; its PC points AT the
         // read/read_char instruction (save_pc rewinds it), so run forward to
         // re-execute that read — re-arming the pending input on the freshly
