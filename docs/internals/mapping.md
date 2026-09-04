@@ -506,12 +506,15 @@ in the first cell a real connector leaving that side would step into. `diagonal_
 plays no part: the router leaves a diagonal exit's corner in the same place either
 way (only the LINE ART between corners differs), so a diagonal `?` mark's two cells
 never move when you toggle it. Nothing is drawn beyond the count cell: the whole
-point of the mark is that there is nowhere stable to draw a line to, and the
-router reserves that exact cell (`mapper::route`'s `reserved_doorways`) so an
-unrelated connector elsewhere on the map can never be drawn through it either —
-it detours instead. `/export-map`'s dump lists the recorded destinations on the
-`ROOM` line (`random=[N→(#187 "Probably New Tunnel"), …]`) beside everything else
-it already records about a room.
+point of the mark is that there is nowhere stable to draw a line to. The router does
+NOT reserve that cell — an unrelated connector elsewhere on the map is free to route
+straight through it (SQ-1275 tried reserving it and disqualifying any crossing
+candidate route, which cost a real Adventure map its shortest gutter-L route into a
+marked room and had to be reverted, SQ-1281); the count is simply painted LAST, after
+every connector in the frame, so its digit always wins the shared cell over the
+crossing line. `/export-map`'s dump lists the recorded destinations on the `ROOM`
+line (`random=[N→(#187 "Probably New Tunnel"), …]`) beside everything else it already
+records about a room.
 
 **Several exits to one destination collapse to a single arrowhead** (SQ-1276).
 A room whose own name keeps rerolling isn't the only thing that can point at one

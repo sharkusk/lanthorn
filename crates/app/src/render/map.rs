@@ -2828,10 +2828,11 @@ fn draw_box_room(
     // the superscript count (or bare `?`) sits one cell beyond it, in the first lane cell a real
     // connector on that direction would step into — both drawn LAST so the arrowhead overwrites
     // whatever the border loops above already painted there (a straight run of `─`/`│`, or a
-    // corner glyph for a diagonal). Never a connector beyond the count cell: the whole point of
-    // the mark is that there is nowhere stable to route to — and the router reserves that exact
-    // cell so a real connector elsewhere on the map can never draw through it either (see
-    // `mapper::route::reserved_doorways`).
+    // corner glyph for a diagonal). The router does NOT reserve that cell (SQ-1275 tried that and
+    // it regressed real routes — see SQ-1281): an unrelated connector elsewhere on the map may
+    // legitimately cross it, and wins or loses the cell purely by DRAW ORDER — `render_map` plots
+    // every connector before it draws any room box, so this loop (running strictly after) always
+    // paints the mark's own glyphs on top.
     for &(dir, count) in &room.random_stubs {
         if let Some((arrow_at, count_at)) = random_stub_cells(sx, sy, w, h, dir) {
             let stub_style = accent_on(border_style, random_stub_style);
@@ -9161,12 +9162,80 @@ mod sq1274_forest_valley {
     /// `polylines_overlap`, `crates/mapper/src/route/mod.rs`), but the channel route it falls back
     /// to is this one. Guard it so a future router change that quietly lengthens or re-sides it
     /// has to say so.
-    /// IGNORED since the SQ-1275 merge: the valley's `?` W mark now reserves the
-    /// first lane cell outside its west border (`mapper::route::reserved_doorways`),
-    /// and the near forest's short gutter L descends through that very cell, so the
-    /// arrival is pushed to Top and the crossing this quest measured is back. That
-    /// is the SQ-1281 regression; un-ignore this pin when it is resolved.
-    #[ignore]
+    /// The near forest's short gutter L (pinned above) legitimately crosses VALLEY's own `?` W
+    /// mark's count cell (SQ-1281): the SQ-1275 router-side reservation that used to disqualify
+    /// this exact route is gone (it was the SQ-1281 regression this quest fixes), so the router
+    /// draws straight through it, and the renderer's own draw order is what decides which glyph
+    /// wins the shared cell. `render_map` plots every connector's line-art
+    /// (`render_lane_connectors`) before it draws any room box (`draw_room`/`draw_box_room`,
+    /// which paints a mark's arrowhead + count last within its own box), so the digit must always
+    /// win — the count cell shows VALLEY's superscript, not a `─`/`│`/`┼` line glyph. Falsify by
+    /// drawing marks before connectors and this fails (the cell would show a line glyph instead).
+    #[test]
+    fn sq1274_the_crossing_connector_never_hides_the_valleys_own_mark_count() {
+        let g = build(FOREST_NEAR, false);
+        let rm = mapper::render::render_layer(&g, MAIN_LAYER);
+        let (cols, rows) = boxes_axes(&rm.plan, rm.bounds);
+        let valley_cell = g.room(VALLEY).unwrap().pos.unwrap();
+        let (vbx, vby) = (cols.room_pixel(valley_cell.0), rows.room_pixel(valley_cell.1));
+        let (_, vcount_at) = random_stub_cells(vbx, vby, BOX_W, BOX_H, W).expect("W is planar");
+
+        // Precondition: the near forest's own connector really does cross VALLEY's mark's count
+        // cell — otherwise this test would prove nothing. This is the exact crossing the removed
+        // SQ-1275 router reservation used to disqualify.
+        let conn = rm
+            .plan
+            .connectors
+            .iter()
+            .find(|c| c.origin == FOREST_NEAR && c.dest == VALLEY && c.exit_dir == E)
+            .expect("the near forest's E connector to the valley");
+        let plot = plot_connector(conn, &cols, &rows, None).expect("it plots");
+        assert!(
+            plot.cells.iter().any(|(c, _)| *c == vcount_at),
+            "sanity: the near forest's route must cross VALLEY's W mark's count cell {vcount_at:?}, plot={:?}",
+            plot.cells
+        );
+
+        let mut state = AppState::default();
+        // Default scroll (0,0) views from logical column/row 0 rightward/downward — VALLEY sits
+        // west of that (column -1) and would scroll off-screen. Scroll to the map's own top-left
+        // bound so every room in it, VALLEY included, is on screen.
+        state.scroll = rm.bounds.0;
+        let area = Rect::new(0, 0, 80, 40);
+        let mut buf = Buffer::empty(area);
+        render_map(&rm, &state, area, &mut buf);
+
+        // Translate from the virtual-pixel space above into the screen cells `render_map` actually
+        // drew, the same way it does — via VALLEY's own screen box (`room_screen_rects` is the
+        // production entry point other callers use for exactly this).
+        let (_, valley_rect) = room_screen_rects(&rm, &state, area)
+            .into_iter()
+            .find(|&(id, _)| id == VALLEY)
+            .expect("VALLEY is on screen");
+        let (arrow_at, count_at) = random_stub_cells(
+            valley_rect.x as i32,
+            valley_rect.y as i32,
+            valley_rect.width as i32,
+            valley_rect.height as i32,
+            W,
+        )
+        .expect("W is planar");
+
+        let arrow_sym = buf.cell((arrow_at.0 as u16, arrow_at.1 as u16)).map(|c| c.symbol().to_string());
+        assert_eq!(
+            arrow_sym.as_deref(),
+            Some(state.symbols.arrows.west.to_string()).as_deref(),
+            "the west arrowhead still draws on VALLEY's border"
+        );
+        let count_sym = buf.cell((count_at.0 as u16, count_at.1 as u16)).map(|c| c.symbol().to_string());
+        assert_eq!(
+            count_sym.as_deref(),
+            Some(crate::render::superscript_count(2)).as_deref(),
+            "VALLEY's W mark records 2 destinations (SQ-1275); its superscript must win the \
+             crossing connector's line, not `─`/`│`/`┼`"
+        );
+    }
+
     #[test]
     fn sq1274_the_near_forest_already_takes_the_short_gutter_l() {
         let g = build(FOREST_NEAR, false);
