@@ -152,9 +152,10 @@ itself.**
   Switch on the return probe and it will go and **find
   the way back** for you, in a silent throwaway copy of your game — closing the
   one-way gaps an automap is otherwise full of, and never once assuming that a
-  passage runs both ways. *Next release:* a move some games decide at random —
-  Lost Pig's gnome tunnels are the example — draws no arrow at all, just a `?`
-  marking that the destination varies.
+  passage runs both ways. A move some games decide at random — Lost Pig's
+  gnome tunnels are the example — draws no arrow at all, just a `?` marking
+  that the destination varies; hover the little number beside it to see
+  where it's actually sent you.
   → [the map](docs/guide/the-map.md)
 - **The original disks, as the original machines** — hand it an Amiga, Macintosh,
   Apple II, Atari ST, PC or Commodore floppy and it plays the build on that disk,
@@ -343,9 +344,9 @@ docker run -d -p 7681:7681 -p 7682:7682 -v ~/if-games:/stories -v lanthorn-data:
 Mount your game folder at `/stories`; saves live in the `lanthorn-data` volume.
 `docker compose up -d` with the repo's `docker-compose.yml` does the browser
 mode in one line. The browser page ships its own Nerd Font, so icons and map
-diagonals draw correctly on any machine. *Next release:* the served page also
-scrolls the transcript and map with a finger drag, so it's usable on an iPad
-or phone, not just a desktop with a mouse wheel.
+diagonals draw correctly on any machine, and it scrolls the transcript and map
+with a finger drag, so it's usable on an iPad or phone, not just a desktop
+with a mouse wheel.
 
 → [**play in a browser**](docs/guide/play-in-a-browser.md)
 

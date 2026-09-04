@@ -22,7 +22,7 @@ name = "cli_host"
 # SQ-0850: the per-game save key of a story mounted out of a disk image is its
 # release and serial, which means mounting the image to read them. `blorb` takes
 # no external dependencies of its own, so this costs the CLIs nothing.
-blorb = { package = "lanthorn-blorb", path = "../blorb", version = "0.4.1" }
+blorb = { package = "lanthorn-blorb", path = "../blorb", version = "0.4.2" }
 crossterm = "0.29"
 
 # SQ-0909: `pin.rs` claims that a scroll region discards the lines that scroll out

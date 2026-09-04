@@ -147,7 +147,7 @@ dependencies = [
 
 [[package]]
 name = "audio-relay"
-version = "0.4.1"
+version = "0.4.2"
 dependencies = [
  "libc",
  "tungstenite",
@@ -1419,7 +1419,7 @@ checksum = "bf36173d4167ed999940f804952e6b08197cae5ad5d572eb4db150ce8ad5d58f"
 
 [[package]]
 name = "lanthorn"
-version = "0.4.1"
+version = "0.4.2"
 dependencies = [
  "clap",
  "crossterm",
@@ -1459,7 +1459,7 @@ dependencies = [
 
 [[package]]
 name = "lanthorn-audio"
-version = "0.4.1"
+version = "0.4.2"
 dependencies = [
  "rodio",
  "self_cell",
@@ -1469,15 +1469,15 @@ dependencies = [
 
 [[package]]
 name = "lanthorn-blorb"
-version = "0.4.1"
+version = "0.4.2"
 
 [[package]]
 name = "lanthorn-buildinfo"
-version = "0.4.1"
+version = "0.4.2"
 
 [[package]]
 name = "lanthorn-cli-host"
-version = "0.4.1"
+version = "0.4.2"
 dependencies = [
  "crossterm",
  "lanthorn-blorb",
@@ -1486,11 +1486,11 @@ dependencies = [
 
 [[package]]
 name = "lanthorn-grammar-model"
-version = "0.4.1"
+version = "0.4.2"
 
 [[package]]
 name = "lanthorn-gvm"
-version = "0.4.1"
+version = "0.4.2"
 dependencies = [
  "lanthorn-blorb",
  "lanthorn-grammar-model",
@@ -1498,7 +1498,7 @@ dependencies = [
 
 [[package]]
 name = "lanthorn-gvm-cli"
-version = "0.4.1"
+version = "0.4.2"
 dependencies = [
  "crossterm",
  "jiff",
@@ -1510,7 +1510,7 @@ dependencies = [
 
 [[package]]
 name = "lanthorn-mapper"
-version = "0.4.1"
+version = "0.4.2"
 dependencies = [
  "serde",
  "serde_json",
@@ -1518,14 +1518,14 @@ dependencies = [
 
 [[package]]
 name = "lanthorn-scott"
-version = "0.4.1"
+version = "0.4.2"
 dependencies = [
  "lanthorn-grammar-model",
 ]
 
 [[package]]
 name = "lanthorn-scott-cli"
-version = "0.4.1"
+version = "0.4.2"
 dependencies = [
  "crossterm",
  "lanthorn-buildinfo",
@@ -1535,18 +1535,18 @@ dependencies = [
 
 [[package]]
 name = "lanthorn-verb-synonyms"
-version = "0.4.1"
+version = "0.4.2"
 
 [[package]]
 name = "lanthorn-zvm"
-version = "0.4.1"
+version = "0.4.2"
 dependencies = [
  "lanthorn-grammar-model",
 ]
 
 [[package]]
 name = "lanthorn-zvm-cli"
-version = "0.4.1"
+version = "0.4.2"
 dependencies = [
  "crossterm",
  "lanthorn-audio",
@@ -3327,7 +3327,7 @@ dependencies = [
 
 [[package]]
 name = "verb-synonyms-gen"
-version = "0.4.1"
+version = "0.4.2"
 dependencies = [
  "lanthorn-blorb",
  "lanthorn-grammar-model",

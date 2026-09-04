@@ -25,4 +25,4 @@ doctest = false
 # The grammar value types both VM crates return (SQ-1103) — an internal,
 # zero-dependency workspace crate, so this stays a zero-EXTERNAL-dependency
 # crate exactly as before.
-grammar-model = { package = "lanthorn-grammar-model", path = "../grammar-model", version = "0.4.1" }
+grammar-model = { package = "lanthorn-grammar-model", path = "../grammar-model", version = "0.4.2" }

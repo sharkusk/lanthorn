@@ -6,7 +6,7 @@ All notable changes to lanthorn are recorded here.
 [`.github/workflows/release.yml`](.github/workflows/release.yml)). A tag whose
 name contains a hyphen — `v0.1.0-beta.1`, `v0.2.0-rc.1` — is published as a
 **pre-release**; a bare `vMAJOR.MINOR.PATCH` is a full release. The workspace
-version in `Cargo.toml` (currently `0.4.0`) versions every crate and every
+version in `Cargo.toml` (currently `0.4.2`) versions every crate and every
 binary's `--version` at once, and carries any pre-release suffix so a build
 identifies itself without reading its git hash.
 
@@ -27,123 +27,41 @@ Absolute URLs or no link.
 > visible tag `*Next release:*`. `release.yml` refuses to cut a release
 > while any such tag, or this Unreleased section, still exists.*
 
-- **The room panel scrolls.** Notes, renamed aliases and a full exit card can
-  now run taller than the panel — scroll the mouse wheel over either the Room
-  or Diagnostics body to see the rest, and a thin scrollbar on the right edge
-  shows there's more below.
-- **`gvm-cli --version` names itself `gvm-cli` again**, not the crates.io
-  package name it briefly picked up in 0.4.1.
-- **A one-way passage no longer draws its arrowhead where a room's own exit or
-  `?` mark already sits.** Two rooms both leading into the same hub could land
-  one arrival right on top of the hub's own random-exit stub, reading as a
-  return path that didn't exist; arrivals now settle beside that cell instead,
-  unless the passage genuinely runs both ways.
-- **The map no longer draws an arrow for a move some games decide at random.**
-  Lost Pig's gnome tunnels send you to a different room every time you walk
-  the same direction; the room panel and the direction matrix now mark that
-  exit `?` — "destination varies" — instead of pointing an arrow at whichever
-  room the story happened to pick.
-- **A room that keeps changing its own name — Lost Pig's gnome tunnels again
-  — now stays ONE room on the map, not a flicker of relabels.** It is drawn
-  labelled as the story currently calls it, with a small superscript count
-  beside the name (`Twisty Passage⁵`) noting how many other names it has
-  answered to; the room panel lists them under "Also seen as". The compass
-  moves that trigger a rename now show `?` instead of the return-arrow badge
-  a same-room move used to draw.
-- **A `?` exit now remembers where it has sent you.** The room panel names
-  every place the story has actually landed you (or "destination varies"
-  alone, if it hasn't sent you anywhere yet); the direction matrix and the
-  map box show how many distinct places that is, as a small superscript
-  count beside the `?`.
-- **Right-click a room on the map for a context menu** — Rename Room, Move
-  Region, Rename Layer — right where you clicked. Left-click still points the
-  room panel at a room, now without forcing it back to the Room body if you
-  had Diagnostics showing; a right-click points the panel the same way and
-  opens the menu on top of it. The panel also grew a close box (✕) at the
-  right of its tab strip, and clicking "Room"/"Diagnostics" to switch its body
-  now actually works — that click used to be swallowed by the pane-resize
-  edge sharing its row.
-- **Glulx games now get the same `?` treatment for random exits as Z-machine
-  games do.** Colossal Cave Adventure's two forest clearings — walking into
-  one sends you to either at random — now show "destination varies" on both
-  the Z-machine and the Glulx build of the story, where they used to draw a
-  confident arrow to whichever forest you happened to land in first. And on
-  either engine, a passage that LOOKS deterministic for a while and then
-  turns out to send you somewhere else is corrected on the spot: the map
-  drops the wrong arrow and marks the exit `?` the moment it catches the
-  story in the act, rather than waiting on a slower re-check that could
-  itself get unlucky.
-- **A room whose exit leads back into itself no longer occasionally grows a
-  stray loop of line drawn around its own box.** The `↩` badge on the room's
-  border is the only mark such an exit gets now.
-- **The `?` treatment for random exits now works on the original Infocom
-  games too, not just Inform-compiled ones.** Zork II's spinning Carousel
-  Room sends you out in a random direction almost every time you walk one —
-  west leads somewhere different EVERY time — and the map now marks those
-  exits "destination varies" instead of drawing a confident arrow to whatever
-  room you happened to land in first.
-- **And now the later Infocom games too** — Trinity, A Mind Forever
-  Voyaging, Bureaucracy, Beyond Zork, Sherlock, Zork Zero, Shogun, Arthur and
-  the rest of the mid-to-late-80s catalogue. The Carousel Room fix above only
-  read the earliest Infocom games' own exit tables; this reads the same
-  tables on every later one too, so a random or door-gated exit in any of
-  them gets the same honest `?` instead of a confident but sometimes-wrong
-  arrow.
-- **A passage that changes for good is now redrawn, not marked uncertain.**
-  Some games contradict their own exit table on every single walk (an
-  "instead of going" rule that always redirects you, or a door that now
-  leads somewhere new) — the map used to read that as randomness and mark it
-  `?`. It now checks first: if a couple of quiet trial walks agree on where
-  you actually end up, the map simply redraws the arrow to the new room; only
-  a passage that genuinely disagrees with itself gets the `?`.
-- **A `?` exit no longer flips back to a confident arrow on a lucky repeat.**
-  With two possible destinations, a single lucky agreement had about a 1-in-4
-  chance of convincing the map a random exit had "settled down" and clearing
-  the mark — it now waits for the destination list itself to say so.
-- **A direction that sometimes leads back into the room you're standing in,
-  and sometimes doesn't, now counts that among its destinations.** The room
-  panel's "destination varies" list can now say "…, back here" alongside the
-  other rooms it has sent you to, and the loop badge no longer sits beside a
-  `?` mark on the same exit.
-- **A random Up or Down exit now shows on the room's box, not just the
-  matrix and room panel.** It sits right beside the room's usual stairway
-  icon, the same way a random compass exit already showed on the border.
-- **Hover the little number on a room to see which rooms a random exit has
-  led to, or the room's other names.** The map's own alias-count marker and
-  `?` random-exit mark now pop a tooltip, the same way the direction matrix's
-  already did — no more switching to the room panel just to read what a
-  superscript is counting.
-- **A random exit now shows its own arrowhead, with the count where the line
-  would start.** The `?` mark used to replace the room's border with a bare
-  `?` or a count, hiding that a real exit sits there. Now the border shows the
-  direction's arrowhead — a room's ordinary passage would look the same —
-  and the count (or a bare `?` before anything's been recorded) sits one cell
-  further out, right where a real line would begin. Hovering either cell
-  still pops the same tooltip.
-- **Several exits to one room now collapse to a single highlighted arrowhead
-  instead of competing for the same border cells.** When two directions, or a
-  staircase alongside a compass exit, both lead to the same neighbour, the map
-  now draws only one line — picked out with a reversed accent so it's clear
-  more than one way leads there — and hovering it lists every direction that
-  gets you to that room. Nothing about the direction matrix, the room panel,
-  or `/export-map`'s dump changes; every direction is still there, just drawn
-  once.
+---
 
-- **The map's Nerd Font arrowheads are outline arrows now, not boxed ones.**
-  The boxed set the font check used to install turns into a small square with a
-  dot in it at ordinary font sizes; the outline heads still read as arrows.
-  Anyone who preferred the boxes keeps them with `arrow_set = "nf-box"`. Three
-  more sets to choose from: `nf-thick` (the one Material family whose eight
-  heads are all the same size), `nf-wind` (circled arrows from the Weather
-  Icons) and `nf-thin` (bare arrows, the clearest at small sizes).
-- **Arrowheads on the left side of a room no longer sometimes draw larger than
-  the others in Ghostty.** A west-pointing arrowhead followed by a short name
-  used to spill into the next cell and look oversized next to every other
-  arrow on the map; it now stays the same size as the rest.
-- **Room markers on a selected, current room now show the right colours.**
-  The alias-count superscript and a `?` random-exit mark used to draw as a
-  dark block with a light digit on that one room, instead of matching the
-  room's own highlighted look.
+## v0.4.2 — 2026-09-03
+
+### Highlights
+
+- **The map now knows when a game is sending you somewhere at random, and
+  marks it `?` instead of drawing a confident — and sometimes wrong — arrow.**
+  Lost Pig's gnome tunnels and Colossal Cave Adventure's two forest clearings
+  are the clearest examples: walk the same direction twice and land somewhere
+  different both times. The map catches it whether the story is Inform,
+  Glulx, or one of Infocom's own games, from the earliest titles through Zork
+  Zero, Shogun and Arthur. A passage that changes for good, rather than
+  randomly, is simply redrawn with its new arrow instead of being marked
+  uncertain. Hover the small number beside a `?` to see exactly which rooms
+  it has actually led to.
+- **A room that keeps renaming itself now stays one room on the map**, not a
+  flicker of relabels. Lost Pig's gnome tunnels are drawn under whatever name
+  the story currently uses, with a small superscript count noting how many
+  other names they've answered to — hover it, or check the room panel's
+  "Also seen as" list, to see them all.
+- **Right-click a room on the map for a quick menu** — rename it, move it to
+  another region, or rename its layer, right where you clicked. The room panel now
+  scrolls when its contents run long (a full exit card, a pile of aliases)
+  instead of cutting them off, and grew a close box to dismiss it.
+- **A story you opened from the list now brings you back to the list when it
+  ends**, however it ends — winning, losing, or quitting — instead of
+  dropping you out to the terminal.
+- **The Docker browser page scrolls by touch drag, not just a mouse wheel**,
+  and opens with the right letter spacing on the very first visit instead of
+  needing a refresh to fix itself.
+- **New arrowhead styles for the map.** Outline arrows are now the default —
+  the old boxed set turns into a small square with a dot in it at ordinary
+  font sizes. `nf-thick`, `nf-wind` and `nf-thin` are three more to choose
+  from, alongside the original boxed set (`arrow_set = "nf-box"`).
 
 ### Docker
 
@@ -157,30 +75,34 @@ Absolute URLs or no link.
 
 ### Fixed
 
-- **A Glulx game's `?` random-exit count no longer includes a destination
-  that isn't really there.** A background check that verifies a random exit
-  could, on a Glulx story, occasionally credit it with a destination the map
-  had never actually seen — inflating "destination varies ³" to a count one
-  higher than the story really has. Colossal Cave Adventure's two forest
-  clearings now always show exactly two.
-- **Map connectors no longer take long detours hugging a neighbouring room's
-  box when a straight line was free.** Which of two equally short routes wins
-  no longer depends on the order the rooms were explored in.
 - **Games whose hero has a name of their own now show the right things.**
   Lost Pig's inventory panel now shows what Grunk actually carries (a torch
   and his pants), instead of reading an unused stand-in that was never really
   playing the game; its automap now tracks the room itself rather than a
-  same-named compass direction. Several other classic titles pick up the same
-  fix for free — Lurking Horror's and The Witness's inventory panels now
-  track "the hacker" and "the detective" instead of staying empty all game.
-- **A story you opened from the list now brings you back to the list when it
-  ends**, however it ends — winning, losing, or quitting — instead of dropping
-  you out to the terminal. And `Ctrl-Q` now quits lanthorn from the list
-  itself, the same key that quits mid-game.
+  same-named compass direction. Lurking Horror's and The Witness's inventory
+  panels now track "the hacker" and "the detective" the same way, instead of
+  staying empty all game.
+- **Map connectors no longer take long detours** hugging a neighbouring
+  room's box when a straight line was free — Zork I's Canyon View included.
+  Which of two equally short routes wins no longer depends on the order the
+  rooms were explored in.
+- **Map probes on graphical Infocom games work again.** Zork Zero, Shogun,
+  Arthur and the rest of that catalogue used to refuse the background check
+  the map's `?` marks depend on; now they get it too.
+- **Arrowheads on the left side of a room no longer sometimes draw larger
+  than the others in Ghostty.** A west-pointing arrowhead followed by a short
+  name used to spill into the next cell and look oversized next to every
+  other arrow on the map; it now stays the same size as the rest.
+- **Room markers on a selected, current room now show the right colours.**
+  The alias-count superscript and a `?` random-exit mark used to draw as a
+  dark block with a light digit on that one room, instead of matching the
+  room's own highlighted look.
 - **The tooltip's little pointer no longer leaves a dark cell on a
   highlighted room.** Hovering something on the selected current room's box
-  used to punch a dark, hollowed-out triangle into its light background;
-  the pointer now matches the room's ground correctly.
+  used to punch a dark, hollowed-out triangle into its light background; the
+  pointer now matches the room's ground correctly.
+- **`gvm-cli --version` names itself `gvm-cli` again**, not the crates.io
+  package name it briefly picked up in 0.4.1.
 
 ---
 
