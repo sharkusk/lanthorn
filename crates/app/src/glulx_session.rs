@@ -1654,6 +1654,30 @@ impl Engine for GlulxSession {
         // it keeps answering for the session we just left (SQ-1176). The
         // `parse_names` layout survives: same story, same compiler tables.
         self.drop_world_caches();
+        // …and the room cache with them (SQ-1284). `last_room` is the room the
+        // story last printed a HEADING for — a screen fact, held host-side because
+        // no Glulx snapshot carries it — and `drive_turn` treats it as sticky, so a
+        // turn that prints no heading (a refused move, `take`, `wait`) reports it
+        // again as "where you still are". That is right within one run and a lie
+        // across a restore: memory restored without a screen must not be read
+        // against another moment's screen, the same rule `GameSession::restore_state`
+        // follows when it blanks the upper window (SQ-0785).
+        //
+        // The shadow probe is where it bit. `probe::serve` restores to the player's
+        // moment before every command, and a refused move there printed no heading —
+        // so the shadow reported the room its PREVIOUS question had walked into, and
+        // `return_probe::deliver` minted an edge to it. Commercial Anchorhead never
+        // resolves its room lock, so ids come from `heading_to_room` on that stale
+        // NAME: "Outside the Real Estate Office" grew edges NW, NE, S, SW, U, D and
+        // OUT all landing on "Office", one per refused direction the search tried.
+        // `record_probed_passage` already refuses `from == to`, so the honest `None`
+        // this leaves behind records nothing at all, which is the right answer for a
+        // move that never happened.
+        //
+        // Every LIVE restore path re-seeds it immediately from the archive's own
+        // `Meta::location` (`engine_helpers::seed_resumed_location`, SQ-0523), so
+        // clearing it here costs a resume nothing.
+        self.last_room = None;
         // Nothing the previous run was waiting on survives the swap.
         // `Machine::restore_state` drops the VM-side suspensions (SQ-0656); these
         // are the host-side halves of the same records, and leaving them set would

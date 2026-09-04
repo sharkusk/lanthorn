@@ -165,9 +165,17 @@ pub fn render_dump(graph: &MapGraph, symbols: &SymbolSet) -> String {
                         .random_destinations(r.id, d)
                         .iter()
                         .map(|&id| {
-                            let name =
-                                graph.room(id).map(|rr| rr.label().to_string()).unwrap_or_default();
-                            format!("#{id} {name:?}")
+                            // A pool member the map has no node for is a room only the SHADOW
+                            // has stood in — the random-exit probe deliberately admits a
+                            // destination the live player has never visited (SQ-1261), and the
+                            // map is a record of what the PLAYER has seen, so no room is added
+                            // for it. Say that outright: an empty `""` there read as a room
+                            // whose name went missing and sent SQ-1284 hunting a room-identity
+                            // bug that was not one.
+                            match graph.room(id) {
+                                Some(rr) => format!("#{id} {:?}", rr.label()),
+                                None => format!("#{id} <unvisited>"),
+                            }
                         })
                         .collect();
                     format!("{}→({})", dir_str(d), dests.join(", "))
@@ -392,6 +400,28 @@ mod tests {
         assert!(
             !plain_room_line.contains("random="),
             "a room with no random exit carries no random= at all: {plain_room_line}"
+        );
+    }
+
+    /// SQ-1284: a pooled destination the map holds no room for is a room only the SHADOW has
+    /// stood in — the pool admits one deliberately (SQ-1261) — and the dump must SAY so rather
+    /// than print an empty name, which reads as a room whose name went missing.
+    #[test]
+    fn dump_names_a_pooled_room_the_map_does_not_hold() {
+        let mut m = Mapper::default();
+        m.observe(1, "Twisting Lane", None);
+        assert!(m.record_random_exit(1, Direction::E));
+        m.graph.note_random_destination(1, Direction::E, 55341); // never observed as a room
+        let dump = render_dump(&m.graph, &SymbolSet::default());
+
+        let line = dump.lines().find(|l| l.starts_with("ROOM 1 ")).expect("room 1's line");
+        assert!(
+            line.contains("#55341 <unvisited>"),
+            "an unvisited pool member is named as such, not as an empty name: {line}"
+        );
+        assert!(
+            !line.contains(r#"#55341 """#),
+            "…and never as `#55341 \"\"`, the spelling that read as a lost room name: {line}"
         );
     }
 
