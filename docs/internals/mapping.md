@@ -262,7 +262,11 @@ and it understands the awkward cases:
 - **Nautical directions** — ship games (Seastalker and kin) that steer by
   *fore / aft / port / starboard* (plus *bow* / *stern* / *forward*) instead of the
   compass are understood: those map onto north / south / west / east so the vessel's
-  decks lay out correctly.
+  decks lay out correctly. Ships with quarter directions too (Counterfeit Monkey's
+  Atlantida Herself) are understood the same way — *fore-port / fore-starboard /
+  aft-port / aft-starboard* and every abbreviation the story accepts (`f`, `a`/`af`,
+  `p`, `sb`, `pf`/`fp`, `sf`/`fs`/`fsb`, `pa`/`ap`, `sa`/`as`/`asb`) map onto the four
+  intercardinals.
 - **Combined multi-direction paths** — two rooms get **one** line between them, however
   many ways you can actually walk it. Zork's around-the-house ring links each pair by
   both a cardinal and a diagonal; Adventure's maze will happily connect the same two
@@ -590,7 +594,9 @@ fore/aft/port/starboard as exits distinct from the compass refuses the compass
 word outright and would otherwise make the search wander past several refusals
 before settling for whatever it found first, which more than once was a real
 passage the wrong distance away — a staircase up, when the honest word for what
-you asked was `aft`.
+you asked was `aft`. Counterfeit Monkey's Atlantida Herself adds the four
+quarter directions on top of that same set — after `fore-starboard` the search
+tries `aft-port` first, in whatever spelling or abbreviation you typed.
 
 Three things it is careful about:
 
