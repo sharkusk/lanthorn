@@ -94,11 +94,29 @@
 //!
 //! The way back is overwhelmingly the way you came, so the search leads with
 //! `opposite(D)`, then the two perpendiculars, then the two diagonals beside the
-//! opposite, then everything else — all twelve real passages. Starting wide is
-//! deliberate: narrowing the list is a measurement decision and there was no
-//! measurement yet. Every attempt that is answered is recorded permanently, so
-//! the cost of a wide list is paid once per room in the life of a map, not once
-//! per visit.
+//! opposite, then everything else — the eight compass points, and never a
+//! portal that was not the seed itself (see below). Starting wide is
+//! deliberate: narrowing the list further is a measurement decision and there
+//! was no measurement yet. Every attempt that is answered is recorded
+//! permanently, so the cost of a wide list is paid once per room in the life
+//! of a map, not once per visit.
+//!
+//! **Up/Down/In/Out are asked only as the direct reciprocal of a portal move
+//! the player just made** (SQ-1290) — climb down and the seed is Up, walk in
+//! and the seed is Out — never as a blind fallback once the compass words run
+//! out. A search that did not just cross a portal has no business revealing
+//! one the player has not walked: on an ordinary compass map the only way
+//! back from some room may genuinely be `up`, and finding that and drawing it
+//! before the player has ever gone up is exactly what this search must not
+//! do. See [`mapper::direction::PROBE_FALLBACK_DIRS`].
+//!
+//! **And the reciprocal is asked in the player's OWN words, when their move
+//! belongs to a vocabulary family the compass does not cover.** After `fore`
+//! the way back is `aft`, not the compass `south` — both fill the same
+//! [`mapper::direction::Direction::S`] slot, but a story that models
+//! FORE/AFT/PORT/STARBOARD as exits distinct from the compass (Shogun) refuses
+//! the compass word and answers only the nautical one. See
+//! [`mapper::direction::reciprocal_word`].
 //!
 //! # On the worker, and why staleness does not apply
 //!
@@ -160,11 +178,14 @@ pub struct ReturnSearch {
     /// The room the player is standing in, and the room every attempt starts from.
     /// The search ends the moment this stops being where they are.
     here: RoomId,
-    /// The directions still to try, best first — [`MapGraph::probe_candidates`]'s
-    /// order, taken once when the search is armed.
+    /// The directions still to try, best first, each paired with the WORD that attempt sends —
+    /// [`MapGraph::probe_candidates`]'s order, taken once when the search is armed, with one word
+    /// substituted (SQ-1290): see [`arm_return_search`]. The vocabulary is a property of the
+    /// candidate, not a special case in the pump loop — every entry already carries the exact
+    /// command to send, so [`pump_return_search`] never re-derives one from the direction.
     ///
     /// [`MapGraph::probe_candidates`]: mapper::graph::MapGraph::probe_candidates
-    queue: Vec<Direction>,
+    queue: Vec<(Direction, &'static str)>,
     /// The attempt out with the worker, if any.
     attempt: Option<Attempt>,
     /// The moment every attempt is asked from: the live game as it stood the
@@ -247,9 +268,23 @@ pub fn arm_return_search(
     if mapper.graph.connections().iter().any(|c| c.origin == here && c.dest == origin) {
         return;
     }
-    let mut queue = mapper.graph.probe_candidates(here, mapper::direction::parse_direction(cmd));
-    if queue.is_empty() {
+    let candidates = mapper.graph.probe_candidates(here, mapper::direction::parse_direction(cmd));
+    if candidates.is_empty() {
         return;
+    }
+    let mut queue: Vec<(Direction, &'static str)> =
+        candidates.iter().map(|&d| (d, long_label(d))).collect();
+    // SQ-1290: ask the way back in the player's OWN vocabulary first. After "fore" the way back
+    // is overwhelmingly "aft", not the compass "south" — both fill the same slot
+    // ([`mapper::direction::reciprocal_word`]'s second element), but a story that models
+    // FORE/AFT/PORT/STARBOARD as exits distinct from the compass (Shogun) refuses the compass
+    // word and answers only the nautical one. Only when that slot survived
+    // `probe_candidates`'s own tried/probed filter — respecting the same "never re-ask a
+    // direction already spent" rule as every other candidate, not a special case for this one.
+    if let Some((word, dir)) = mapper::direction::reciprocal_word(cmd) {
+        if candidates.contains(&dir) {
+            queue.insert(0, (dir, word));
+        }
     }
     // The one snapshot the whole search runs from, and the one thing here the
     // player's thread pays for. Taken now rather than per attempt — and shared
@@ -271,13 +306,13 @@ pub fn pump_return_search(state: &mut AppState) -> bool {
     if search.attempt.is_some() {
         return false; // one out already
     }
-    let Some(&dir) = search.queue.last() else {
+    let Some(&(dir, word)) = search.queue.last() else {
         // Nothing left to try. Total failure records nothing about the map: a
         // door may need opening, and a one-way passage is a real answer.
         state.return_search = None;
         return false;
     };
-    let Some(token) = state.probe.ask_from(&search.from, &[long_label(dir).to_string()]) else {
+    let Some(token) = state.probe.ask_from(&search.from, &[word.to_string()]) else {
         return false; // busy, unarmed, or mid-save — ask again next pass
     };
     if let Some(search) = &mut state.return_search {
@@ -440,7 +475,10 @@ mod tests {
         arm_return_search(&mut state, &m, &blind(), "enter window", Some(1), &mut crate::engine::TurnSave::default());
         let s = state.return_search.as_ref().expect("a gap to close");
         assert_eq!((s.here(), s.origin()), (2, 1));
-        assert_eq!(s.remaining(), 12, "all twelve, best first");
+        // SQ-1290: Out (the seeded portal reciprocal of `enter`), plus the eight compass
+        // points — nine, not twelve, since Up/Down/In/Out no longer fall through as a
+        // blind fallback (`PROBE_FALLBACK_DIRS` carries only the compass eight).
+        assert_eq!(s.remaining(), 9, "the seeded portal reciprocal, then all eight compass points");
 
         // Now the player walks back themselves, and the gap is gone.
         m.observe(1, "Behind House", Some(Direction::E));
@@ -517,6 +555,7 @@ mod tests {
         let mut state = armed_state();
         arm_return_search(&mut state, &m, &blind(), "enter window", Some(1), &mut crate::engine::TurnSave::default());
         let s = state.return_search.as_ref().expect("still worth asking");
-        assert_eq!(s.remaining(), 10, "the two already walked are not offered again");
+        // SQ-1290: nine to begin with (see above), minus the two already walked.
+        assert_eq!(s.remaining(), 7, "the two already walked are not offered again");
     }
 }

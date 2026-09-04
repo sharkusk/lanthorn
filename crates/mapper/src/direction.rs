@@ -77,6 +77,13 @@ pub const UNTRIED_DIRS: [Direction; 10] = [
 /// All twelve real passages — wider than [`UNTRIED_DIRS`], which deliberately omits In/Out
 /// because they are not part of the compass rose a player scans. A probe is not scanning a rose;
 /// it is looking for the way back, and `out` is very often exactly that.
+///
+/// **Not what [`MapGraph::probe_candidates`]'s own fallback step draws from any more** — see
+/// [`PROBE_FALLBACK_DIRS`] (SQ-1290). This full list is still what a caller wanting every real
+/// direction word wants (`vocab`'s vetting-plan alternates, the return-probe cost harness), so it
+/// keeps its four portals; only the return search's OWN blind-fallback step was narrowed.
+///
+/// [`MapGraph::probe_candidates`]: crate::graph::MapGraph::probe_candidates
 pub const PROBE_DIRS: [Direction; 12] = [
     Direction::N,
     Direction::E,
@@ -91,6 +98,58 @@ pub const PROBE_DIRS: [Direction; 12] = [
     Direction::In,
     Direction::Out,
 ];
+
+/// The directions [`MapGraph::probe_candidates`]'s step 4 — "everything else" — may add once the
+/// seeded reciprocal and its bearing-widened neighbours are exhausted (SQ-1290).
+///
+/// **The eight compass points only — never Up/Down/In/Out.** A portal is asked ONLY as the direct
+/// reciprocal of a portal move the player just made (`moved.map(opposite)`, e.g. Down → Up), never
+/// as a blind fallback once the compass words run out. A search that has not just crossed a portal
+/// has no business revealing one the player has not walked: on an ordinary compass map the only
+/// way back from some room may genuinely be `up`, and finding that and drawing it before the
+/// player has ever gone up is exactly what this list must not do. [`PROBE_DIRS`] stays the full
+/// twelve for callers that want every direction word; only this fallback step was narrowed.
+///
+/// [`MapGraph::probe_candidates`]: crate::graph::MapGraph::probe_candidates
+pub const PROBE_FALLBACK_DIRS: [Direction; 8] = [
+    Direction::N,
+    Direction::E,
+    Direction::S,
+    Direction::W,
+    Direction::NE,
+    Direction::SE,
+    Direction::SW,
+    Direction::NW,
+];
+
+/// The reciprocal WORD for a direction command from a non-compass vocabulary family (SQ-1290):
+/// the nautical fore/aft/port/starboard set and its bow/stern synonyms.
+///
+/// A return probe should ask the way back in the words the PLAYER used. After "fore" the way
+/// back is overwhelmingly "aft", not "south" — both parse to the same [`Direction::S`], but a
+/// story that models FORE/AFT/PORT/STARBOARD as exits distinct from the compass (Shogun's
+/// `defs.zil`: `<DIRECTIONS NORTH ... FORE AFT PORT STARBOARD>`) refuses the compass word and
+/// answers only the nautical one.
+///
+/// `None` for a plain compass word — [`parse_direction`] still resolves it; there is simply no
+/// other vocabulary family to prefer — and for anything [`parse_direction`] does not recognise at
+/// all. Returns the word alongside the compass [`Direction`] it fills, so a caller can send the
+/// word and record the slot it stands for in one step.
+pub fn reciprocal_word(cmd: &str) -> Option<(&'static str, Direction)> {
+    let lower = cmd.trim().to_lowercase();
+    let mut tokens = lower.split_whitespace();
+    let first = tokens.next()?;
+    let word = if first == "go" { tokens.next()? } else { first };
+    match word {
+        "fore" | "forward" => Some(("aft", Direction::S)),
+        "bow" => Some(("stern", Direction::S)),
+        "aft" => Some(("fore", Direction::N)),
+        "stern" => Some(("bow", Direction::N)),
+        "port" => Some(("starboard", Direction::E)),
+        "starboard" => Some(("port", Direction::W)),
+        _ => None,
+    }
+}
 
 /// A compass direction's bearing in degrees, north being 0 and east 90.
 ///
@@ -260,6 +319,27 @@ mod tests {
         assert_eq!(parse_direction("starboard"), Some(Direction::E));
         // Still works after "go" and case-insensitively.
         assert_eq!(parse_direction("go Starboard"), Some(Direction::E));
+    }
+
+    #[test]
+    fn reciprocal_word_answers_only_the_nautical_family() {
+        assert_eq!(reciprocal_word("fore"), Some(("aft", Direction::S)));
+        assert_eq!(reciprocal_word("forward"), Some(("aft", Direction::S)));
+        assert_eq!(reciprocal_word("aft"), Some(("fore", Direction::N)));
+        assert_eq!(reciprocal_word("port"), Some(("starboard", Direction::E)));
+        assert_eq!(reciprocal_word("starboard"), Some(("port", Direction::W)));
+        assert_eq!(reciprocal_word("bow"), Some(("stern", Direction::S)));
+        assert_eq!(reciprocal_word("stern"), Some(("bow", Direction::N)));
+        // Case-insensitive and works after "go", like `parse_direction`.
+        assert_eq!(reciprocal_word("Fore"), Some(("aft", Direction::S)));
+        assert_eq!(reciprocal_word("go aft"), Some(("fore", Direction::N)));
+        // A plain compass word parses to a Direction just fine, but has no OTHER
+        // vocabulary family to prefer, so this yields nothing to prepend.
+        assert_eq!(reciprocal_word("north"), None);
+        assert_eq!(reciprocal_word("n"), None);
+        assert_eq!(reciprocal_word("up"), None);
+        assert_eq!(reciprocal_word("enter"), None);
+        assert_eq!(reciprocal_word("xyzzy"), None);
     }
 
     #[test]

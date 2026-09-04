@@ -114,6 +114,17 @@ Absolute URLs or no link.
   passage, and then trail false connections behind you as you walked away. The
   map now asks a room heading to own its whole line, so a bolded thing at the
   start of a sentence stays a thing.
+- **The map's silent scouting for the way back now speaks a ship's own
+  language.** On games that use nautical directions — Shogun's fore, aft,
+  port and starboard — the scouting used to ask the compass equivalent first
+  ("south" for aft), which the ship doesn't recognise, and only found the
+  real return after wandering through several refused directions and landing
+  on whichever one happened to work first. Climb below decks on the Erasmus
+  and the return used to show as "up" — a real passage, just the wrong one —
+  instead of "aft". The scouting now asks in the same word you used, and gets
+  the right answer immediately. It also no longer reveals a whole staircase
+  or hatch you have never explored just because it stumbled onto one while
+  looking for the way back through an ordinary compass passage.
 
 ---
 

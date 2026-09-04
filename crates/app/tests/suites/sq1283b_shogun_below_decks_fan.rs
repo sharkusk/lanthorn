@@ -61,6 +61,8 @@ const BRIDGE_OF_ERASMUS: u16 = 57;
 const ON_DECK: u16 = 10;
 /// `BELOW-DECKS`, forward through the focsle door.
 const BELOW_DECKS: u16 = 13;
+/// The room `aft` reaches from `Deck` — the second SQ-1290 specimen.
+const PASSAGEWAY: u16 = 56;
 
 /// The nine commands the reported session was made of, from its
 /// `command_history.json` — including the two the parser refused, which is part
@@ -311,11 +313,18 @@ fn replaying_the_reported_walk_leaves_no_fan_out_of_below_decks() {
     }
     let below = mapper.graph.room(BELOW_DECKS).expect("Below Decks");
     assert!(
-        below.probed.len() >= 4,
+        !below.probed.is_empty(),
         "non-vacuity: the return search must actually have walked out of Below Decks — a run \
          that probed nothing could not fan either; probed {:?}",
         below.probed
     );
+    // SQ-1290 shrank the count this can pin: before it, the search burned through eight
+    // refused compass words before `up` was the first thing that worked, so this room's
+    // probed list ran to several entries. Now the player's own word ("aft") is tried FIRST
+    // out of Below Decks and succeeds immediately, so a single probed entry is not a weaker
+    // signal of a real run — it is what a search that got the answer right on the first try
+    // looks like. Non-vacuity only needs "not empty"; a specific count would be pinning the
+    // OLD bug's shape.
 
     // ── The fan ────────────────────────────────────────────────────────────
     let edges: Vec<_> =
@@ -362,5 +371,156 @@ fn replaying_the_reported_walk_leaves_no_fan_out_of_below_decks() {
     assert!(
         edges.contains(&(ON_DECK, Direction::Up, BRIDGE_OF_ERASMUS)),
         "…as does the deck's own climb to the bridge; got {edges:?}"
+    );
+}
+
+/// Drive an armed `return_search` to completion (or exhaustion) the way
+/// `settle_return_search` does, but keep the FIRST attempt's command word —
+/// which `settle_return_search` throws away and SQ-1290's pin needs to assert
+/// on directly.
+fn drain_search(state: &mut AppState, mapper: &mut Mapper) -> Option<String> {
+    let mut first = None;
+    while state.return_search.is_some() {
+        if !app::return_probe::pump_return_search(state) && state.return_search.is_none() {
+            break;
+        }
+        let Some(answer) = state.probe.settle() else { break };
+        if !app::return_probe::owns(state, answer.token) {
+            continue;
+        }
+        if first.is_none() {
+            first = answer.run.as_ref().and_then(|run| run.steps.first()).map(|s| s.command.clone());
+        }
+        if app::return_probe::deliver(state, mapper, &answer).is_some() {
+            break;
+        }
+    }
+    first
+}
+
+/// SQ-1290: the return probe must ask the way back in the player's OWN
+/// vocabulary before falling through to a portal. Reported: "if we go down to
+/// the deck, then fore to below decks, the return path is immediately shown
+/// as up, vs the reciprocal aft."
+///
+/// Traced live (`d`, `forward`): compass `south`…`northwest` are all refused
+/// out of `Below Decks` — Shogun models FORE/AFT as exits distinct from the
+/// compass — and before this fix `up` was the first thing that worked, so the
+/// map recorded `Below Decks -Up-> Deck` and never asked `aft` at all. `aft`
+/// is a real, deterministic passage back (confirmed by walking it live), so
+/// once it is tried FIRST the search never reaches `up`.
+///
+/// Falsify: revert the `reciprocal_word` prepend in `arm_return_search` and
+/// this fails with `first_word == Some("south")` and the recorded edge
+/// `(BELOW_DECKS, Up, ON_DECK)` from the probe rather than `(.., S, ..)`.
+#[test]
+fn sq1290_reciprocal_word_wins_the_below_decks_return() {
+    let Some(bytes) = story_bytes() else { return };
+    let Some(mut live) = boot_live() else { return };
+    assert!(advance_to_line(&mut live, 16), "Shogun reaches an in-game prompt after its menu");
+
+    let mut state = AppState::default();
+    state.config.return_probe = true;
+    state.probe.arm(recipe(&bytes));
+
+    let mut mapper = Mapper::default();
+    let mut death = DeathWatch::default();
+
+    let mut first_word = None;
+    for cmd in ["straighten wheel", "d", "forward"] {
+        assert!(advance_to_line(&mut live, 8), "a line prompt before {cmd:?}");
+        let room_before = mapper.graph.current();
+        let mut result = live.submit(cmd);
+        if let (Some(origin), Some(dir)) = (room_before, parse_direction(cmd)) {
+            result.declared_exit = Some(live.declared_exit(origin, dir));
+        }
+        apply_turn(&mut mapper, cmd, &result, &mut death);
+
+        let mut turn_save = app::engine::TurnSave::default();
+        app::return_probe::arm_return_search(&mut state, &mapper, &live, cmd, room_before, &mut turn_save);
+        first_word = drain_search(&mut state, &mut mapper);
+    }
+
+    assert_eq!(
+        mapper.graph.current(),
+        Some(BELOW_DECKS),
+        "non-vacuity: the walk really reaches Below Decks"
+    );
+    assert_eq!(
+        first_word.as_deref(),
+        Some("aft"),
+        "the probe's first question out of Below Decks must be the player's own word"
+    );
+    let edges: Vec<_> = mapper.graph.connections().iter().map(|c| (c.origin, c.dir, c.dest)).collect();
+    assert!(
+        edges.contains(&(BELOW_DECKS, Direction::S, ON_DECK)),
+        "the return is recorded in the aft/S slot, from the word \"aft\"; got {edges:?}"
+    );
+    assert!(
+        !edges.contains(&(BELOW_DECKS, Direction::Up, ON_DECK)),
+        "SQ-1290: `up` must not be what this probe records, even though climbing up is itself a \
+         real passage the player later walks — this search's job is the aft return, and it must \
+         not settle for a portal it found only because aft was never asked; got {edges:?}"
+    );
+}
+
+/// SQ-1290, second specimen: from `Deck`, `aft` leads to `Passageway` (#56),
+/// whose own reciprocal is `fore` (confirmed live: `fore` really does climb
+/// back to `Deck`). Before this fix the probe walked north/west/east/…/up/
+/// down/in and settled for `out` — the first word Shogun happened to accept —
+/// without ever asking `fore`; after the fix `fore`, the player's own word
+/// for the N slot, is tried FIRST and succeeds immediately.
+///
+/// Falsify: revert the `reciprocal_word` prepend and this fails with
+/// `first_word == Some("north")` and the recorded edge
+/// `(PASSAGEWAY, Out, ON_DECK)` rather than `(.., N, ..)`.
+#[test]
+fn sq1290_reciprocal_word_wins_the_deck_return() {
+    let Some(bytes) = story_bytes() else { return };
+    let Some(mut live) = boot_live() else { return };
+    assert!(advance_to_line(&mut live, 16), "Shogun reaches an in-game prompt after its menu");
+
+    let mut state = AppState::default();
+    state.config.return_probe = true;
+    state.probe.arm(recipe(&bytes));
+
+    let mut mapper = Mapper::default();
+    let mut death = DeathWatch::default();
+
+    let mut first_word = None;
+    for cmd in ["straighten wheel", "d", "aft"] {
+        assert!(advance_to_line(&mut live, 8), "a line prompt before {cmd:?}");
+        let room_before = mapper.graph.current();
+        let mut result = live.submit(cmd);
+        if let (Some(origin), Some(dir)) = (room_before, parse_direction(cmd)) {
+            result.declared_exit = Some(live.declared_exit(origin, dir));
+        }
+        apply_turn(&mut mapper, cmd, &result, &mut death);
+
+        let mut turn_save = app::engine::TurnSave::default();
+        app::return_probe::arm_return_search(&mut state, &mapper, &live, cmd, room_before, &mut turn_save);
+        first_word = drain_search(&mut state, &mut mapper);
+    }
+
+    assert_eq!(
+        mapper.graph.current(),
+        Some(PASSAGEWAY),
+        "non-vacuity: the walk really reaches the room aft of Deck"
+    );
+    assert_eq!(
+        first_word.as_deref(),
+        Some("fore"),
+        "the probe's first question out of Passageway must be the player's own word"
+    );
+    let edges: Vec<_> = mapper.graph.connections().iter().map(|c| (c.origin, c.dir, c.dest)).collect();
+    assert!(
+        edges.contains(&(PASSAGEWAY, Direction::N, ON_DECK)),
+        "the return is recorded in the fore/N slot, from the word \"fore\"; got {edges:?}"
+    );
+    assert!(
+        !edges.contains(&(PASSAGEWAY, Direction::Out, ON_DECK)),
+        "SQ-1290: `out` must not be what this probe records — it is merely the first word \
+         Shogun happens to accept once the compass runs out, tried only because the nautical \
+         word was never asked first; got {edges:?}"
     );
 }

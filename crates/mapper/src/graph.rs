@@ -713,22 +713,34 @@ impl MapGraph {
     /// do not reciprocate:
     ///
     /// 1. `opposite(moved)`
-    /// 2. the two directions perpendicular to it (±90°)
-    /// 3. the two diagonals adjacent to it (±45°)
-    /// 4. everything else that survives the filter
+    /// 2. the two directions perpendicular to it (±90°) — only when step 1 has a bearing
+    /// 3. the two diagonals adjacent to it (±45°) — only when step 1 has a bearing
+    /// 4. everything else that survives the filter: the eight compass points, and NOTHING else
     ///
-    /// With no direction to seed from (`climb tree`), there is no opposite and no bearing, so the
-    /// order is simply the likeliest shapes first: cardinals, diagonals, up/down, in/out.
-    /// Steps 2 and 3 are defined by BEARING rather than by a table, so they mean the same thing
-    /// for a diagonal opposite as for a cardinal one; Up/Down/In/Out have no bearing and fall
-    /// through to step 4 together.
+    /// With no direction to seed from (`climb tree`), there is no opposite, so the order is simply
+    /// the eight compass points, cardinals then diagonals ([`crate::direction::PROBE_FALLBACK_DIRS`]).
+    /// Steps 2 and 3 are defined by BEARING rather than by a table, so they mean the same thing for
+    /// a diagonal opposite as for a cardinal one.
     ///
-    /// Starting at all twelve is deliberate — narrowing is a measurement decision, not a guess.
+    /// **Up/Down/In/Out are asked ONLY as `opposite(moved)` when `moved` was itself one of them
+    /// (SQ-1290)** — climb down and the seed is Up; walk in and the seed is Out — never as a
+    /// fallback once the compass words run out. Reaching a portal in step 4 would mean revealing
+    /// an unexplored exit the player has not walked: on an ordinary compass map the only way back
+    /// from some room may genuinely be `up`, and finding that BEFORE the player has ever gone up
+    /// is not this search's business. [`crate::direction::PROBE_FALLBACK_DIRS`], the list step 4
+    /// draws from, carries only the eight compass points for exactly this reason; a portal never
+    /// reaches step 4 no matter what `moved` was, because it is not IN that list to reach. The
+    /// full [`crate::direction::PROBE_DIRS`] (all twelve) is unaffected — this fallback step is
+    /// the only caller narrowed.
+    ///
+    /// Starting at all eight compass points (nine when `moved` seeded a portal reciprocal) is
+    /// deliberate — narrowing further is a measurement decision, not a guess.
     pub fn probe_candidates(&self, room: RoomId, moved: Option<Direction>) -> Vec<Direction> {
         if !self.rooms.contains_key(&room) {
             return Vec::new();
         }
-        let mut order: Vec<Direction> = Vec::with_capacity(crate::direction::PROBE_DIRS.len());
+        // Up to eight compass points, plus one portal reciprocal when `moved` seeded one.
+        let mut order: Vec<Direction> = Vec::with_capacity(crate::direction::PROBE_FALLBACK_DIRS.len() + 1);
         let push = |order: &mut Vec<Direction>, d: Direction| {
             if !order.contains(&d) {
                 order.push(d);
@@ -749,7 +761,7 @@ impl MapGraph {
                 }
             }
         }
-        for d in crate::direction::PROBE_DIRS {
+        for d in crate::direction::PROBE_FALLBACK_DIRS {
             push(&mut order, d);
         }
         order.into_iter().filter(|d| !self.is_tried(room, *d) && !self.is_probed(room, *d)).collect()
@@ -1419,7 +1431,9 @@ mod probe_record_tests {
     fn candidates_lead_with_the_way_back_then_widen_by_bearing() {
         let g = two_rooms();
         let c = g.probe_candidates(2, Some(Direction::N));
-        assert_eq!(c.len(), 12, "all twelve to begin with: {c:?}");
+        // Eight, not twelve (SQ-1290): a compass-seeded search never reaches a portal, because
+        // step 4 now draws from `PROBE_FALLBACK_DIRS`, which carries none.
+        assert_eq!(c.len(), 8, "the eight compass points, no portal among them: {c:?}");
         assert_eq!(c[0], Direction::S, "the opposite of the move");
         assert_eq!(
             c[..5],
@@ -1437,19 +1451,51 @@ mod probe_record_tests {
 
     /// `enter window` parses as In, so its opposite is Out and it is treated as directional.
     /// A command that names no direction at all has no bearing to seed from and falls back to
-    /// cardinals → diagonals → up/down → in/out.
+    /// the eight compass points, cardinals then diagonals.
     #[test]
     fn a_move_with_no_direction_falls_back_to_the_plain_order() {
         let g = two_rooms();
         assert_eq!(g.probe_candidates(2, Some(Direction::In))[0], Direction::Out);
         let c = g.probe_candidates(2, None);
-        assert_eq!(c, crate::direction::PROBE_DIRS.to_vec());
+        // SQ-1290: with nothing to seed from there is no portal reciprocal either, so this is
+        // exactly `PROBE_FALLBACK_DIRS` — not the full `PROBE_DIRS`, which still carries the four
+        // portals for callers that want every direction word.
+        assert_eq!(c, crate::direction::PROBE_FALLBACK_DIRS.to_vec());
         assert_eq!(c[..4], [Direction::N, Direction::E, Direction::S, Direction::W]);
-        assert_eq!(c[8..], [Direction::Up, Direction::Down, Direction::In, Direction::Out]);
+        assert_eq!(c.len(), 8, "no portal fallback with nothing to seed from: {c:?}");
+        for portal in [Direction::Up, Direction::Down, Direction::In, Direction::Out] {
+            assert!(!c.contains(&portal), "{portal:?} must not appear unseeded: {c:?}");
+        }
+    }
+
+    /// Up/Down/In/Out are asked ONLY as the direct reciprocal of a portal move the player just
+    /// made — never as a fallback once the compass words run out (SQ-1290). A search seeded by a
+    /// COMPASS move must find no portal anywhere in its list; a search seeded by a portal move
+    /// must find that one portal and no other.
+    #[test]
+    fn portals_are_never_a_fallback_only_ever_the_seeded_reciprocal() {
+        let g = two_rooms();
+        let compass_seeded = g.probe_candidates(2, Some(Direction::N));
+        for portal in [Direction::Up, Direction::Down, Direction::In, Direction::Out] {
+            assert!(
+                !compass_seeded.contains(&portal),
+                "a compass move must never fall through to a portal: {compass_seeded:?}"
+            );
+        }
+
+        let portal_seeded = g.probe_candidates(2, Some(Direction::Down));
+        assert_eq!(portal_seeded[0], Direction::Up, "the reciprocal of the player's own move");
+        for other in [Direction::Down, Direction::In, Direction::Out] {
+            assert!(
+                !portal_seeded.contains(&other),
+                "no OTHER portal — only the one reciprocal to what was walked: {portal_seeded:?}"
+            );
+        }
+        assert_eq!(portal_seeded.len(), 9, "the seeded Up, plus all eight compass points");
     }
 
     /// Both records filter, and the order survives the filtering. An unknown room offers
-    /// nothing rather than twelve directions into the void.
+    /// nothing rather than a directions list into the void.
     #[test]
     fn candidates_are_filtered_by_both_records() {
         let mut g = two_rooms();
@@ -1460,7 +1506,7 @@ mod probe_record_tests {
         for gone in [Direction::S, Direction::E, Direction::W] {
             assert!(!c.contains(&gone), "{gone:?} should be filtered out of {c:?}");
         }
-        assert_eq!(c.len(), 9);
+        assert_eq!(c.len(), 5, "eight compass points minus the three filtered away");
         assert_eq!(c[0], Direction::SE, "the surviving head of the priority order");
         assert!(g.probe_candidates(404, None).is_empty());
     }

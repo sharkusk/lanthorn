@@ -569,11 +569,28 @@ that the room exists. The map stays a record of what *you* have seen.
 
 It leads with the way you came and widens from there — the opposite of your move,
 then the two directions perpendicular to it, then the two diagonals beside it,
-then everything else, twelve in all. Zork I's North of House is the case worth
-knowing: south is boarded up and east is somewhere else entirely, and it is
-**west** that takes you home. The search walks past the refusal and past the
-wrong room to find it, and Behind House — which it really did walk into — never
-appears on your map.
+then everything else the compass offers, eight directions in all. Zork I's North
+of House is the case worth knowing: south is boarded up and east is somewhere
+else entirely, and it is **west** that takes you home. The search walks past the
+refusal and past the wrong room to find it, and Behind House — which it really
+did walk into — never appears on your map.
+
+Up, down, in and out are asked only as the direct reciprocal of a portal move
+you just made — climb down and it asks up, walk in and it asks out — never as a
+blind fallback once the compass words are exhausted. A search that did not just
+cross a portal has no business finding one you have never explored: on an
+ordinary compass map the only way back from some room may genuinely be a
+staircase you have not climbed, and drawing that before you have ever gone up
+is exactly what the search must not do.
+
+And on a ship — Shogun's fore, aft, port and starboard — the search asks the
+way back in your own words, not the compass equivalent. After `fore` it tries
+`aft` first, not `south`; both name the same passage, but a game that treats
+fore/aft/port/starboard as exits distinct from the compass refuses the compass
+word outright and would otherwise make the search wander past several refusals
+before settling for whatever it found first, which more than once was a real
+passage the wrong distance away — a staircase up, when the honest word for what
+you asked was `aft`.
 
 Three things it is careful about:
 
