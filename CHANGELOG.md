@@ -56,6 +56,16 @@ Absolute URLs or no link.
   from the passages it has the best evidence for — the ones walked from both
   ends — before it listens to a lone one-way crossing. The same map also comes
   out the same way whichever direction you happened to explore first.
+- **A room the game scatters you into no longer elbows the rest of the map
+  aside.** Adventure's forest is a random place: go in and the game may put you
+  in either of two clearings, so the map ends up recording that the valley is
+  west of the forest *and* east of it — which cannot both be true. The map used
+  to lay rooms out as if it were, and the forest took the row directly below the
+  end of the road, leaving the valley stranded a second row down with an empty
+  gap above it. A room whose own directions disagree like that is now placed
+  last, in whatever space is left beside the rooms it connects to, and never
+  pushes a room you have actually walked between out of position. Adventure's
+  valley sits directly south of the road again, the streambed directly below it.
 - **Shogun: two rooms with the same name are two rooms again.** Shogun has two
   `Bridge`s, two `Main Deck`s and four `Ledge`s, and the map used to hand every
   one of them to whichever came first in the game's own object list — so the

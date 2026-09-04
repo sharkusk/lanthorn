@@ -187,6 +187,33 @@ Returns per-node `(x_constrained, y_constrained)` flags used by collision resolu
   order instead, Adventure's opening put `In A Valley` north of `At End Of Road`, because
   the first move of the game was one step north into a random forest room the valley
   happens to share a row with.
+- **Rooms whose own evidence contradicts itself are left out entirely** (SQ-1289,
+  `positionally_unreliable`). A room qualifies on two counts together: (1) two of its
+  **outgoing** compass edges name the same neighbour on opposing sides of an axis —
+  "the valley is west of me" *and* "the valley is east of me" — and (2) it has **no
+  reciprocated compass pair** anywhere to anchor it. Every edge touching such a room,
+  inbound as well as outbound, is skipped: no separation constraint, and (unlike a
+  cycle-closing drop) nothing added to `dropped`, so the edge is flagged distorted or
+  not purely on where the room ends up. Self-loops and non-compass directions are not
+  evidence and neither test looks at them.
+  - Outgoing only: `A E B` together with `B E A` is two rooms each making one coherent
+    claim, and the acyclic pass above already settles that by dropping one leg. Marking
+    both rooms unreliable would throw away the half of the evidence that is sound.
+  - Condition (2) is what keeps this narrow. A room with one muddled bearing and a
+    passage walked from both ends keeps all its constraints — the reciprocated pair
+    (§4.4 above, SQ-1287) is the best evidence the map has. It also means an unreliable
+    room can never be a chain member, so the equalities above are untouched.
+  - The room still lands on the map: the stress solve places it by graph distance among
+    its neighbours, and §4.6 gives it a free cell. It simply stops pushing rooms whose
+    geometry *is* known apart on the strength of a position it does not have.
+  - Adventure's `In Forest` #55642 is the case this was found on. The story scatters
+    arrivals between two rooms of that name (SQ-1264), so exits recorded against one id
+    were walked from whichever forest the player was really in, and the bundle is a
+    mixture. `HILL S FOREST` and `VALLEY Up FOREST` contradict nothing, so `creates_cycle`
+    never got a say — the forest quietly claimed the row between `At End Of Road` and
+    `In A Valley` and pushed the valley to road + 2. Note that *ordering* those edges last
+    changes nothing (measured): the sort only decides which of two **contradicting** edges
+    gives way.
 
 ### 4.5 Contiguify (`mod.rs:492-524`)
 Pulls chain members back onto their shared row/column after stress if they've drifted,
@@ -195,10 +222,13 @@ dropped, or with < 2 members in the component). Members are never moved off-line
 
 ### 4.6 Pack & resolve collisions (`mod.rs:746-771`)
 Normalize each component to its own origin, place components left-to-right (`pack_x += 2`,
-one-cell gap). Resolve any residual collisions in ascending room-id order via
-`place_preserving_alignment` — which searches *along* a constrained row/column (to keep
-alignment) or spirals if free on both axes. Finally anchor lowest room-id at `(0,0)` and
-`mark_distorted`.
+one-cell gap). Resolve any residual collisions with the rooms
+that have real geometry first and the `positionally_unreliable` ones (§4.4) last, each
+group in ascending room-id order, via `place_preserving_alignment` — which searches *along* a constrained row/column (to keep
+alignment) or spirals if free on both axes. The ordering is the guarantee that a room with
+no geometry never bumps one that has geometry off its cell (SQ-1289) — room id alone would
+decide it by an accident of the story's object numbering. Finally anchor lowest room-id at
+`(0,0)` and `mark_distorted`.
 
 ### Scoring functions (mostly consumed by app-side passes)
 - `edge_is_satisfied` (`mod.rs:158`): non-compass → **always true**; compass → strict —
