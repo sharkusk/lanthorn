@@ -36,6 +36,14 @@ Absolute URLs or no link.
 
 ### Fixed
 
+- **Arthur: the ornamental frame follows the scene again when you walk back into
+  a room you have already been in.** Arthur's border art takes its colours from
+  whatever picture the game last painted, so it turns brown inside the church and
+  blue out in the churchyard. Since a recent speed-up it only changed the first
+  time you saw a place: walk out of the church and the churchyard came back
+  wearing the church's browns, and the F1 picture screen no longer came back the
+  way it went away. Revisiting a scene now recolours the frame exactly as arriving
+  for the first time does.
 - **Glulx: the map tells same-named rooms apart on the big games too.** lanthorn
   works out where a Glulx game keeps its "you are here" pointer by watching
   which part of its memory changes when you walk, and on all but the smallest

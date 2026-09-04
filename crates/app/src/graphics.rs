@@ -1034,27 +1034,48 @@ impl PictSource {
 
     /// Shared cache lookup/populate for [`Self::scaled_image`] and
     /// [`Self::scaled_image_under_current_palette`]: `decode` is whichever of
-    /// the two source methods the caller wants on a miss, so both share one
-    /// cache and one eviction story instead of duplicating it.
+    /// the two source methods the caller wants, so both share one cache and one
+    /// eviction story instead of duplicating it.
+    ///
+    /// **`decode` runs on a cache HIT too, and that is the point (SQ-1288).**
+    /// [`Self::image`] is not a pure function: drawing a NON-adaptive picture
+    /// establishes the Current Palette from its PLTE (§11.3, see
+    /// [`Self::set_current_palette_from`]), which is the whole mechanism by
+    /// which a later adaptive picture follows the scene. SQ-1196 returned early
+    /// on a `scaled_cache` hit and so skipped that call for any base picture the
+    /// session had already drawn once — and a game revisits its scenes. Arthur
+    /// kept the church's brown frame after walking back out to the blue
+    /// churchyard, and its F1 picture screen no longer came back the way it went
+    /// away, because the second draw of Pict 4 established nothing.
+    ///
+    /// Only the RESAMPLE is cached here, which is the cost SQ-1196 set out to
+    /// remove: `decode` itself is already cached ([`Self::cache`] /
+    /// [`Self::adaptive_cache`]), so a repeat draw pays a hash lookup and an
+    /// `Arc` clone, not a decompress.
     fn scaled_cached(
         &mut self,
         resnum: u32,
         scale: (u32, u32),
         decode: impl FnOnce(&mut Self) -> Option<Arc<DynamicImage>>,
     ) -> Option<Arc<DynamicImage>> {
+        let source = decode(self)?;
+        // Read `palette_gen` AFTER the decode: a base picture drawn on a
+        // one-screen-palette machine (SQ-0887) is palette-dependent by
+        // `is_palette_dependent` and yet bumps the generation on its way
+        // through, so the pixels just decoded belong to the NEW generation.
         if self.is_palette_dependent(resnum) {
             let key = (resnum, self.palette_gen);
             if let Some(img) = self.adaptive_scaled_cache.get(&key) {
                 return Some(Arc::clone(img));
             }
-            let scaled = scale_art(&decode(self)?, scale);
+            let scaled = scale_art(&source, scale);
             self.adaptive_scaled_cache.insert(key, Arc::clone(&scaled));
             return Some(scaled);
         }
         if let Some(img) = self.scaled_cache.get(&resnum) {
             return Some(Arc::clone(img));
         }
-        let scaled = scale_art(&decode(self)?, scale);
+        let scaled = scale_art(&source, scale);
         self.scaled_cache.insert(resnum, Arc::clone(&scaled));
         Some(scaled)
     }
@@ -2703,6 +2724,40 @@ mod tests {
             "the palette changed the source pixels: the next draw resamples again"
         );
         assert_eq!(top_left(&scaled_gen2), [200, 0, 0, 255], "recoloured under the new (red) palette");
+    }
+
+    #[test]
+    fn a_redrawn_base_picture_re_establishes_its_palette_through_the_scaled_cache() {
+        // SQ-1288: `scaled_image` is the LIVE DRAW path, and drawing a
+        // non-adaptive picture is what establishes the Current Palette (§11.3).
+        // SQ-1196's scaled cache returned early on a hit and so never called
+        // `image()` for a base picture the session had already drawn — but a
+        // game revisits its scenes. Arthur walked out of the brown church back
+        // into the blue churchyard and kept the church's frame, because the
+        // SECOND draw of the churchyard picture established nothing.
+        //
+        // Falsify: return early on a `scaled_cache` hit again and the last
+        // assertion reads red — the palette Pict 3 left behind.
+        let base_green = indexed_png(2, 1, &[0, 0, 0, 0, 170, 0], None, &[&[1, 1]]);
+        let base_red = indexed_png(2, 1, &[0, 0, 0, 200, 0, 0], None, &[&[1, 1]]);
+        let adaptive = indexed_png(2, 1, &[0, 0, 0, 170, 0, 170], None, &[&[1, 1]]);
+        let blorb = blorb_apal(&[(1, &base_green), (2, &adaptive), (3, &base_red)], &[2]);
+        let mut src = PictSource::new(Some(blorb));
+
+        src.scaled_image(1, (2, 2)).unwrap(); // the green scene
+        assert_eq!(top_left(&src.scaled_image(2, (2, 2)).unwrap()), [0, 170, 0, 255], "green scene");
+
+        src.scaled_image(3, (2, 2)).unwrap(); // the red scene
+        assert_eq!(top_left(&src.scaled_image(2, (2, 2)).unwrap()), [200, 0, 0, 255], "red scene");
+
+        // Back to the green scene — a REDRAW of Pict 1, already in the scaled
+        // cache. It must still establish green.
+        src.scaled_image(1, (2, 2)).unwrap();
+        assert_eq!(
+            top_left(&src.scaled_image(2, (2, 2)).unwrap()),
+            [0, 170, 0, 255],
+            "revisiting the green scene re-establishes its palette: the adaptive picture follows back"
+        );
     }
 
     /// A `PictSource` over one of `stories/`'s native Infocom archives, or
