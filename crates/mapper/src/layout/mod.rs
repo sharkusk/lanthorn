@@ -37,6 +37,7 @@ mod stress;
 mod chains;
 pub use incremental::place_incremental;
 pub use chains::{detect_chains, Chains};
+pub use constraints::positionally_unreliable;
 
 /// Separation gap and ideal edge length (in grid cells).
 const GAP: f64 = 1.0;
@@ -649,6 +650,10 @@ pub fn relayout_auto_observed(graph: &mut MapGraph, mut obs: Option<TidyObserver
     }
 
     let chains_for_comp = detect_chains(graph);
+    // Rooms whose own compass claims contradict each other (SQ-1289). Their edges make no
+    // separation constraints, so they take whatever cell is left over — which is only true if
+    // they claim one LAST, below, after every reliable room has had its pick.
+    let unreliable = constraints::positionally_unreliable(graph);
     let components = connected_components(graph, &ids);
     let mut dropped_all: BTreeSet<usize> = BTreeSet::new();
     let mut final_pos: BTreeMap<RoomId, (i32, i32)> = BTreeMap::new();
@@ -753,7 +758,13 @@ pub fn relayout_auto_observed(graph: &mut MapGraph, mut obs: Option<TidyObserver
         // spiraling off it, so collision resolution doesn't re-distort an aligned chain
         // (e.g. #193 bumped off #203's row by #180).
         let mut max_x_used = pack_x;
-        for (i, &id) in comp.iter().enumerate() {
+        // Reliable rooms first, then the positionally unreliable ones (SQ-1289) — a room with
+        // no geometry of its own must never bump one that has geometry off its cell. Stable
+        // within each group, so the pass stays deterministic.
+        let mut claim_order: Vec<usize> = (0..comp.len()).collect();
+        claim_order.sort_by_key(|&i| unreliable.contains(&comp[i]));
+        for i in claim_order {
+            let id = comp[i];
             let row_aligned = !y_constrained[i];
             let col_aligned = !x_constrained[i];
             let before = snapped[i];
