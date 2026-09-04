@@ -1030,6 +1030,15 @@ impl GlulxSession {
             (Some(h), Some(prev)) if h == prev => crate::glulx_roomlock::Movement::Ambiguous,
             (Some(_), _) => crate::glulx_roomlock::Movement::Changed,
         };
+        // SQ-1286: the learner scores every RAM word, and what tells the room
+        // apart from the counters that also change with it is that its value is a
+        // real OBJECT of this story. Walk the object table once, the first turn a
+        // learning session needs it — a whole-image scan, so not per turn, and
+        // never for a session that booted already locked.
+        if self.room_lock.locked().is_none() && self.room_lock.needs_objects() {
+            let addrs = self.parse_names().map(|p| p.objects().collect::<Vec<u32>>());
+            self.room_lock.set_objects(addrs);
+        }
         let ram = self.scan_ram();
         let name = heading.clone().or_else(|| self.last_room.as_ref().map(|r| r.name.clone()));
         let was_locked = self.room_lock.locked();

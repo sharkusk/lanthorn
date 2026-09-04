@@ -31,6 +31,27 @@
 //!   either a `look`, or a move into a DIFFERENT room bearing the SAME NAME.
 //!   Scoring these would punish the correct candidate on every maze step — the
 //!   one place the whole feature has to work.
+//!
+//! ## What a surviving candidate's VALUE has to look like
+//!
+//! Correlation alone leaves a handful of words standing, so the winner also has
+//! to hold something that could BE a room — and the only exact answer to that is
+//! the story's own object table, which `gvm::objects::ParseNames` walks
+//! (SQ-1286). [`RoomLock::set_objects`] hands it over; a candidate whose value is
+//! not one of those addresses is not a room, whatever it correlates with.
+//!
+//! It used to be approximated by "a nonzero address inside the scanned RAM
+//! window", and that approximation is why the lock had never resolved on most of
+//! the corpus. The window is 64 KB from `ramstart` — plenty for the GLOBAL, which
+//! Inform lays out at the very start of RAM — but an Inform story's object table
+//! sits *after* its globals and arrays, and on all but the smallest games that is
+//! far beyond the window: measured across the 42 Glulx stories in `stories/`,
+//! only five keep their objects within 64 KB of `ramstart`. Counterfeit Monkey's
+//! `location` global is `ramstart+0x98` and holds `0x5440b3` — an object **1.9 MB
+//! above** the window — so the true candidate was thrown away every turn and the
+//! game keyed rooms by name hash for the whole session. The fallback below is
+//! still the old range test, for a story whose object table cannot be found at
+//! all.
 
 /// How many confidently-observed room changes must agree before a candidate is
 /// trusted. Three is enough to shake out counters and turn tallies (which change
@@ -81,6 +102,10 @@ pub struct RoomLock {
     history: Vec<Observation>,
     /// The previous turn's snapshot and heading.
     prev: Option<Observation>,
+    /// The story's object addresses, sorted — what a candidate's VALUE is
+    /// checked against (SQ-1286). `None` until [`RoomLock::set_objects`] supplies
+    /// them, and after a story whose object table could not be walked at all.
+    objects: Option<Vec<u32>>,
     /// The locked address, once the evidence is one-sided.
     locked: Option<u32>,
     /// Set for one call after a lock resolves, so the caller can re-key the rooms
@@ -99,6 +124,7 @@ impl RoomLock {
             stills: 0,
             history: Vec::new(),
             prev: None,
+            objects: None,
             locked: None,
             pending_remap: Vec::new(),
         }
@@ -117,6 +143,26 @@ impl RoomLock {
     /// The locked address, or `None` while still learning.
     pub fn locked(&self) -> Option<u32> {
         self.locked
+    }
+
+    /// True while no object table has been supplied — the caller's cue to walk
+    /// one and hand it over. Asked rather than pushed on every turn because
+    /// deriving the table is a whole-image scan, and a learner only ever needs
+    /// it once.
+    pub fn needs_objects(&self) -> bool {
+        self.objects.is_none()
+    }
+
+    /// Supply the story's object addresses, in any order — what
+    /// [`RoomLock::try_lock`] checks a candidate's VALUE against. `None` means
+    /// the story's object table could not be walked, and leaves the learner on
+    /// the range approximation the module docs describe.
+    pub fn set_objects(&mut self, addrs: Option<Vec<u32>>) {
+        self.objects = addrs.map(|mut v| {
+            v.sort_unstable();
+            v.dedup();
+            v
+        });
     }
 
     /// The room id for the current turn: the locked word's value, or `None` while
@@ -188,9 +234,10 @@ impl RoomLock {
         }
         let scored = self.changes + self.stills;
         // Survivors: perfect agreement across every turn we were sure about, and a
-        // value that could be an object — a nonzero address inside the scanned
-        // region. The counters and flags that merely correlate get filtered by the
-        // heading-less turns; this filters the rest.
+        // value that really is an object of this story (or, with no object table
+        // to consult, one that could be — see the module docs). The counters and
+        // flags that merely correlate get filtered by the heading-less turns; this
+        // filters the rest.
         let end = self.base + (self.agree.len() as u32) * 4;
         let cur = match self.history.last() {
             Some(o) => &o.ram,
@@ -202,7 +249,7 @@ impl RoomLock {
                 continue;
             }
             let v = cur.get(i).copied().unwrap_or(0);
-            if v == 0 || v < self.base || v >= end {
+            if !self.is_room_value(v, end) {
                 continue;
             }
             // Aliases of the same global are common (`real_location`, the player's
@@ -233,6 +280,17 @@ impl RoomLock {
         self.disagree = Vec::new();
     }
 
+    /// Could `v` be a room? Exactly — it is one of the story's own objects — when
+    /// an object table has been supplied, and approximately — a nonzero address
+    /// inside the scanned window — when none could be walked. See the module docs
+    /// for why the approximation alone is not enough (SQ-1286).
+    fn is_room_value(&self, v: u32, end: u32) -> bool {
+        match &self.objects {
+            Some(objs) => objs.binary_search(&v).is_ok(),
+            None => v != 0 && v >= self.base && v < end,
+        }
+    }
+
     /// Once locked, keep checking: a locked word that contradicts a turn we were
     /// sure about was the wrong guess, so drop it and learn again from scratch. A
     /// wrong lock must never be sticky — it would mis-key every room after it.
@@ -242,7 +300,7 @@ impl RoomLock {
         // be a permanently unfalsifiable lock. Drop it here instead and re-learn.
         // (SQ-0658; see `word_index` for where such an address comes from.)
         let Some(idx) = self.word_index(addr) else {
-            *self = RoomLock::new(self.base, ram.len());
+            self.relearn(ram.len());
             return;
         };
         let (Some(prev), Movement::Changed | Movement::Unchanged) = (&self.prev, movement) else {
@@ -250,9 +308,17 @@ impl RoomLock {
         };
         let (Some(&a), Some(&b)) = (prev.ram.get(idx), ram.get(idx)) else { return };
         if (a != b) != (movement == Movement::Changed) {
-            let words = ram.len();
-            *self = RoomLock::new(self.base, words);
+            self.relearn(ram.len());
         }
+    }
+
+    /// Throw the model away and learn again from scratch, keeping the object
+    /// table — it is a property of the STORY, not of the guess that just failed,
+    /// and re-deriving it means another whole-image scan.
+    fn relearn(&mut self, words: usize) {
+        let objects = self.objects.take();
+        *self = RoomLock::new(self.base, words);
+        self.objects = objects;
     }
 }
 
@@ -362,6 +428,93 @@ mod tests {
             Some(0x1000),
             "maze steps carry no information and must leave the correct candidate unpenalised"
         );
+    }
+
+    #[test]
+    fn an_object_outside_the_scan_window_is_still_a_room() {
+        // SQ-1286: the value filter used to demand an address inside the scanned
+        // region, and an Inform story's object table sits after its globals and
+        // arrays — beyond that region on all but the smallest games. Counterfeit
+        // Monkey's `location` is `ramstart+0x98` and holds an object 1.9 MB
+        // higher, so the one true candidate was thrown away every turn.
+        let (base, words) = base_region();
+        let far = base + 0x4000; // an object well past `base + words*4`
+        let mut l = RoomLock::new(base, words);
+        l.set_objects(Some(vec![far + 0x20, far, far + 0x10]));
+        drive(
+            &mut l,
+            &[
+                (Movement::Unchanged, far),
+                (Movement::Changed, far + 0x10),
+                (Movement::Unchanged, far + 0x10),
+                (Movement::Changed, far + 0x20),
+                (Movement::Changed, far),
+            ],
+        );
+        assert_eq!(
+            l.locked(),
+            Some(base),
+            "a candidate holding a real object of the story locks however far that object is"
+        );
+    }
+
+    #[test]
+    fn a_word_that_correlates_but_holds_no_object_is_rejected() {
+        // The other half: knowing the object table also RULES OUT a word that
+        // tracks the room perfectly and holds something that is not a room. The
+        // old range test could not tell those apart, and took the lowest address.
+        let (base, words) = base_region();
+        let mut l = RoomLock::new(base, words);
+        l.set_objects(Some(vec![0x2000, 0x2004, 0x2008]));
+        drive(
+            &mut l,
+            &[
+                (Movement::Unchanged, 0x1000),
+                (Movement::Changed, 0x1004),
+                (Movement::Unchanged, 0x1004),
+                (Movement::Changed, 0x1008),
+                (Movement::Changed, 0x1000),
+            ],
+        );
+        assert_eq!(
+            l.locked(),
+            None,
+            "the word tracks the room but holds no object of this story, so it is not the room"
+        );
+    }
+
+    #[test]
+    fn with_no_object_table_the_range_approximation_still_applies() {
+        // A story whose object table cannot be walked keeps exactly the behaviour
+        // it had: the in-window range test, and the lock it always produced.
+        let (base, words) = base_region();
+        let mut l = RoomLock::new(base, words);
+        l.set_objects(None);
+        assert!(l.needs_objects(), "`None` is not an answer, so the caller may try again");
+        drive(
+            &mut l,
+            &[
+                (Movement::Unchanged, 0x1000),
+                (Movement::Changed, 0x1004),
+                (Movement::Unchanged, 0x1004),
+                (Movement::Changed, 0x1008),
+                (Movement::Changed, 0x1000),
+            ],
+        );
+        assert_eq!(l.locked(), Some(0x1000), "unchanged from before the object table existed");
+    }
+
+    #[test]
+    fn a_relearn_keeps_the_object_table() {
+        // The table is the STORY's, not the guess's: re-deriving it is a whole
+        // image scan, and a contradicted lock says nothing about it.
+        let (base, words) = base_region();
+        let mut l = RoomLock::locked_at(base, words, 0x1000);
+        l.set_objects(Some(vec![0x1000, 0x1004, 0x1008]));
+        l.observe(vec![0x1000, 1, 7], Some("a".into()), Movement::Unchanged);
+        l.observe(vec![0x1000, 2, 7], Some("b".into()), Movement::Changed);
+        assert_eq!(l.locked(), None, "the lock was contradicted and given up");
+        assert!(!l.needs_objects(), "…but the object table survived the re-learn");
     }
 
     #[test]
