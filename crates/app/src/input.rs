@@ -4259,7 +4259,7 @@ fn perform_move(
 
 /// A room's name, or `#id` when the map has forgotten it.
 fn room_label(graph: &mapper::graph::MapGraph, id: mapper::graph::RoomId) -> String {
-    graph.room(id).map(|r| r.label().to_string()).unwrap_or_else(|| format!("#{id}"))
+    graph.room(id).map(|r| r.label().to_string()).unwrap_or_else(|| crate::roomid::display_room_id(id))
 }
 
 /// Every room a region holds, named, in region order — the bulleted list under the question.
@@ -4536,7 +4536,7 @@ fn region_refusal_message(
 ) -> String {
     use mapper::layer::RegionRefusal as R;
     let name = |id: mapper::graph::RoomId| {
-        graph.room(id).map(|r| r.label().to_string()).unwrap_or_else(|| format!("#{id}"))
+        graph.room(id).map(|r| r.label().to_string()).unwrap_or_else(|| crate::roomid::display_room_id(id))
     };
     let here = name(room);
     let layer = graph.layer_name(graph.layer_of(room));

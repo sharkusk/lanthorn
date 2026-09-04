@@ -68,7 +68,7 @@ pub fn room_diagnostics(graph: &MapGraph, id: RoomId) -> Option<RoomDiagnostics>
             let neighbour_name = graph
                 .room(c.dest)
                 .map(|r| r.label().to_owned())
-                .unwrap_or_else(|| format!("#{}", c.dest));
+                .unwrap_or_else(|| crate::roomid::display_room_id(c.dest));
             EdgeInfo {
                 dir: c.dir,
                 neighbour_id: c.dest,
@@ -103,7 +103,7 @@ fn build_diagnostics_rows(diag: &RoomDiagnostics, theme: &Theme, body: Style, he
     };
 
     let mut rows = Vec::new();
-    rows.push((format!("#{} {}", diag.id, diag.name), label_style));
+    rows.push((format!("{} {}", crate::roomid::display_room_id(diag.id), diag.name), label_style));
     rows.push((format!("Layer {} \"{}\"", diag.layer_id, diag.layer_name), value_style));
     rows.push((format!("Pos {}", pos_str), value_style));
     // How this room was first detected (SQ-0527). Kept on the room, so it is

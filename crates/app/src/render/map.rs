@@ -2797,7 +2797,7 @@ fn draw_box_room(
     // Row 3: #id (centered), with alignment diagnostics appended when enabled.
     // Only drawn when show_room_numbers is true; when hidden, the row is freed for portal icons.
     if show_room_numbers {
-        let mut row3 = format!("#{}", room.id);
+        let mut row3 = crate::roomid::display_room_id(room.id);
         if show_alignment && !room.align_code.is_empty() {
             row3.push(' ');
             row3.push_str(&room.align_code);

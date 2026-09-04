@@ -14,6 +14,27 @@ pub fn is_synthetic_room(id: RoomId) -> bool {
     id & SYNTHETIC_ROOM_FLAG != 0
 }
 
+/// The one spelling a room id is ever shown in, everywhere it reaches a player
+/// or a file written for one — the map's boxes, the room panel, `/export-map`'s
+/// dump, the DOT/SVG exporters (SQ-1297).
+///
+/// A real Z-machine object number stays plain decimal (`#123`): small, and
+/// nothing about it is a hash. A synthetic id (the high bit set — see
+/// [`is_synthetic_room`]) prints as `#` plus its 8 uppercase hex digits
+/// (`#8000ABCD`) instead of decimal: decimal would run to 10 digits since every
+/// synthetic id is now >= 2^31, and `#` + 9 or 10 digits no longer fits the
+/// 9-character interior Boxes-zoom centres a room's id in — the truncation that
+/// motivated this function, since two different large ids can share a leading
+/// 9 digits and would otherwise draw identically. Hex is also the more natural
+/// reading for a Glulx id: `glulx_room_id` folds an object ADDRESS into it.
+pub fn display_room_id(id: RoomId) -> String {
+    if is_synthetic_room(id) {
+        format!("#{id:08X}")
+    } else {
+        format!("#{id}")
+    }
+}
+
 /// Deterministic, save/reload-stable RoomId for a name-only room. Normalizes the
 /// name (trim, collapse whitespace, lowercase) then FNV-1a hashes it into the
 /// low 31 bits, with the high bit set.
@@ -124,5 +145,28 @@ mod tests {
     #[test]
     fn synthetic_id_differs_for_distinct_names() {
         assert_ne!(synthetic_room_id("Bedroom"), synthetic_room_id("Kitchen"));
+    }
+
+    /// SQ-1297: a real object number is small enough that decimal never overflows
+    /// the 9-char box interior, so it stays decimal.
+    #[test]
+    fn display_room_id_real_object_stays_decimal() {
+        assert_eq!(display_room_id(57), "#57");
+        assert_eq!(display_room_id(65535), "#65535");
+    }
+
+    /// SQ-1297: a synthetic id is always >= 2^31 (10 decimal digits), which
+    /// overflows the 9-char box interior; hex holds it in exactly `#` + 8 digits.
+    #[test]
+    fn display_room_id_synthetic_is_9_char_hex() {
+        let s = display_room_id(synthetic_room_id("Your Bunk"));
+        assert_eq!(s.len(), 9, "# plus 8 hex digits: {s}");
+        assert!(s.starts_with('#'));
+        assert_eq!(s, s.to_uppercase(), "hex digits are uppercase");
+    }
+
+    #[test]
+    fn display_room_id_is_exact_hex_of_the_id() {
+        assert_eq!(display_room_id(0x8000_ABCD), "#8000ABCD");
     }
 }
