@@ -393,10 +393,12 @@ stand, or the arrival itself — settles the death, and the next passage you wal
 like any other.
 
 A travel command joins the same family: `GO TO`/`GOTO`/`GO BACK TO`/`RETURN
-TO`/`REVISIT` a named room (Counterfeit Monkey's "Approaching" action, and other
-Inform games built the same way) can walk you through any number of unseen rooms in
-one turn, so it mints no passage either — just the relocation to wherever you ended
-up, exactly like a death or a teleport.
+TO`/`REVISIT`/`WALK TO` a named room (Counterfeit Monkey's "Approaching" action, and
+other Inform games built the same way) can walk you through any number of unseen
+rooms in one turn, so it mints no passage either — just the relocation to wherever
+you ended up, exactly like a death or a teleport. `WALK TO` is not part of
+Counterfeit Monkey's own grammar, but is accepted anyway as a common synonym other
+Inform and TADS games do declare.
 
 **Reading it.** `▸` marks the room you are standing in. `⇲` marks a room a passage
 from *outside* the layer leads into — a doorway into the maze, listed in a footnote

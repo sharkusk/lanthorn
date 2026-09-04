@@ -55,13 +55,13 @@ pub fn parse_direction(cmd: &str) -> Option<Direction> {
 }
 
 /// True for a "travel to a room" command (SQ-1299) — Counterfeit Monkey's (and other Inform
-/// games') GO TO / GOTO / GO BACK TO / RETURN TO / REVISIT, which the game's own "Approaching"
-/// action walks through however many unseen rooms lie on the route, in one turn. A caller that
-/// sees the room change on such a turn must record it as a relocation
+/// games') GO TO / GOTO / GO BACK TO / RETURN TO / REVISIT / WALK TO, which the game's own
+/// "Approaching" action walks through however many unseen rooms lie on the route, in one turn.
+/// A caller that sees the room change on such a turn must record it as a relocation
 /// ([`crate::mapper::Mapper::observe_relocation`]), never as a walked passage: the route the
 /// game took is unknown, and the rooms it passed through were never announced.
 ///
-/// The verb list is Counterfeit Monkey's own, not a guess: its bundled "Approaching
+/// Most of the verb list is Counterfeit Monkey's own, not a guess: its bundled "Approaching
 /// Speedups.i7x" (`Counterfeit Monkey.materials/Extensions/Counterfeit Monkey/`) declares
 ///
 /// ```text
@@ -73,9 +73,13 @@ pub fn parse_direction(cmd: &str) -> Option<Direction> {
 /// — replacing the same grammar line in the base extension it builds on, Emily Short's
 /// "Approaches.i7x", which declares `go to`, `go back to`, `return to` and `revisit` (CM adds
 /// only the one-word `goto` spelling and widens `[any visited room]` to `[any nonsecret room]`,
-/// neither of which changes what counts as the verb). Notably absent from both: `walk to`,
-/// `head to`, `travel to`, `run to` — none of them is a recognised approaching verb, so none is
-/// accepted here.
+/// neither of which changes what counts as the verb).
+///
+/// `walk to` is the one addition NOT in either extension — CM does not declare it. It is added
+/// by the user's own explicit decision, because it is a common synonym in other Inform and TADS
+/// games' own travel grammars even where CM's is silent, and a `walk to` that turns out to be
+/// refused changes no room and so costs nothing to accept. `head to`, `travel to` and `run to`
+/// remain rejected: neither CM's grammar nor the user's decision covers them.
 ///
 /// `go to` alone (no room named) and `go north` (a real direction) are NOT travel commands —
 /// the former names nothing to walk to, and [`parse_direction`] already resolves the latter.
@@ -92,6 +96,7 @@ pub fn is_travel_to_command(cmd: &str) -> bool {
         "goto" => tokens.next().is_some(),
         "return" => tokens.next() == Some("to") && tokens.next().is_some(),
         "revisit" => tokens.next().is_some(),
+        "walk" => tokens.next() == Some("to") && tokens.next().is_some(),
         _ => false,
     }
 }
@@ -546,8 +551,10 @@ mod tests {
         assert_eq!(sorted.len(), words.len(), "no two directions read the same: {words:?}");
     }
 
-    /// Counterfeit Monkey's own "Approaching Speedups.i7x" verb list (SQ-1299): GO TO, GOTO,
-    /// GO BACK TO, RETURN TO, REVISIT — each wants at least one more word (the room named).
+    /// Counterfeit Monkey's own "Approaching Speedups.i7x" verb list (SQ-1299) plus `walk to`
+    /// (the user's explicit addition, not CM's grammar — common in other Inform/TADS games'
+    /// travel grammars): GO TO, GOTO, GO BACK TO, RETURN TO, REVISIT, WALK TO — each wants at
+    /// least one more word (the room named).
     #[test]
     fn is_travel_to_command_matches_cm_verb_list() {
         assert!(is_travel_to_command("go to kitchen"));
@@ -556,13 +563,16 @@ mod tests {
         assert!(is_travel_to_command("go back to the bar"));
         assert!(is_travel_to_command("return to the lobby"));
         assert!(is_travel_to_command("revisit forest"));
+        assert!(is_travel_to_command("walk to kitchen"));
+        assert!(is_travel_to_command("walk to the dungeon of doom"));
         // Case-insensitive, like every other command-parsing helper here.
         assert!(is_travel_to_command("Go To Deep Street"));
         assert!(is_travel_to_command("GOTO Deep Street"));
+        assert!(is_travel_to_command("Walk To Deep Street"));
     }
 
-    /// Negatives: no room named, a real direction, and the verbs CM's grammar does NOT declare
-    /// (walk/head/travel/run) — none of these is a travel-to command.
+    /// Negatives: no room named, a real direction, and the verbs neither CM's grammar nor the
+    /// user's `walk to` addition covers (head/travel/run) — none of these is a travel-to command.
     #[test]
     fn is_travel_to_command_rejects_bare_and_unrelated_forms() {
         assert!(!is_travel_to_command("go to"));
@@ -573,8 +583,10 @@ mod tests {
         assert!(!is_travel_to_command("return"));
         assert!(!is_travel_to_command("return north"));
         assert!(!is_travel_to_command("revisit"));
-        // Not in CM's own grammar, so not accepted even though they read plausibly.
-        assert!(!is_travel_to_command("walk to kitchen"));
+        assert!(!is_travel_to_command("walk"));
+        assert!(!is_travel_to_command("walk to"));
+        assert!(!is_travel_to_command("walk north"));
+        // Not in CM's grammar or the user's `walk to` addition, so still rejected.
         assert!(!is_travel_to_command("head to kitchen"));
         assert!(!is_travel_to_command("travel to kitchen"));
         assert!(!is_travel_to_command("run to kitchen"));

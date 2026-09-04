@@ -3845,9 +3845,9 @@ pub fn echoed_direction_command(transcript: &str) -> Option<&str> {
 /// move. Several turn shapes call [`Mapper::observe_relocation`] instead, because the room
 /// change they describe is not a walked passage: a death/resurrection, a random-exit landing, a
 /// suspicious contradiction left for a probe, and — since SQ-1299 — a `go to` / `goto` /
-/// `go back to` / `return to` / `revisit` command ([`is_travel_to_command`]) that actually moved
-/// the player, which the game's own "Approaching" action may have routed through any number of
-/// unseen rooms in one turn.
+/// `go back to` / `return to` / `revisit` / `walk to` command ([`is_travel_to_command`]) that
+/// actually moved the player, which the game's own "Approaching" action may have routed through
+/// any number of unseen rooms in one turn.
 /// In Auto mode, runs a light overlap cleanup (radius 2, max 20 passes) after each
 /// observation so the live map never shows an illegal connector overlap.
 /// No-op when `result.location` is `None`.
@@ -4025,7 +4025,7 @@ pub fn apply_turn(
             mapper.observe_relocation(snap.number, &snap.name);
             death.unresolved = false;
         } else if moved_room && is_travel_to_command(command) {
-            // GO TO / GOTO / GO BACK TO / RETURN TO / REVISIT (SQ-1299): Counterfeit Monkey's
+            // GO TO / GOTO / GO BACK TO / RETURN TO / REVISIT / WALK TO (SQ-1299): Counterfeit Monkey's
             // "Approaching" action walks the player through however many unseen rooms the route
             // needs, in one turn. There is no direction to record and the rooms in between were
             // never announced, so — like a death or a teleport — this is a relocation, not a
