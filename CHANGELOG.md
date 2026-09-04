@@ -27,6 +27,17 @@ Absolute URLs or no link.
 > visible tag `*Next release:*`. `release.yml` refuses to cut a release
 > while any such tag, or this Unreleased section, still exists.*
 
+### Fixed
+
+- **Shogun: two rooms with the same name are two rooms again.** Shogun has two
+  `Bridge`s, two `Main Deck`s and four `Ledge`s, and the map used to hand every
+  one of them to whichever came first in the game's own object list — so the
+  Erasmus's bridge was quietly filed as a bridge in Osaka castle from the
+  opening turn. The visible damage was on the way back up from below decks: the
+  map knew the deck's stairs led somewhere else and refused to draw the
+  passage. It now reads the game's own "you are here" pointer to tell the twins
+  apart, and the ship's decks join up.
+
 ---
 
 ## v0.4.2 — 2026-09-03

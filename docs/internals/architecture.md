@@ -243,8 +243,16 @@ knowing, because each of these is a refusal rather than a stub:
   The room-name side has an analogous trap: a status line's short name is not
   unique (a compass direction can share a room's own name), so
   `zvm::location::resolve_room_object` prefers the object the game's own
-  `location` global names, then a top-level (parent-0) match, before falling
-  back to the old longest-match/lowest-number rule.
+  `location` global names — global 0 for Inform, and, when that says nothing,
+  any of the 240 globals so long as exactly one of the same-named candidates is
+  held there (ZIL keeps the current room in `HERE`, an ordinary global the
+  compiler places wherever it likes; SQ-1283) — then a top-level (parent-0)
+  match, before falling back to the old longest-match/lowest-number rule.
+  Shogun is the story that needs the widened read: it ships two rooms called
+  `Bridge`, two called `Main Deck` and four called `Ledge`, keeps its rooms in a
+  `ROOMS` container (so the parent-0 rule cannot separate them) and holds a
+  constant NPC in global 0, so the lowest-numbered twin used to win every time
+  and the Erasmus's own bridge was reported as a bridge in Osaka from turn one.
 - **A corpus sweep for these heuristics**: `cargo run -p lanthorn --example location_scan --release` boots every Z-machine story under `stories/` (or `--corpus DIR`, `--only a,b`, `--json`), plays `""` then `look`, and prints one row per story — the detected room (id/name/`LocationMethod`), the detected player (id/short name), and the carried items' display names, straight off `zvm::location::detect_location`/`find_player_object` and the session's own `Introspect::contents`. Any change to `zvm::location`'s heuristics should be run through it before and after, with the two JSON outputs diffed — a rule that looks right on the one story it was fixing for can silently rewire another's room or avatar (SQ-1259 found nine such stories on its own change: real fixes, and one real regression it did not ship with).
 - **One level, not scope.** `visible_contents` is the direct children. Nesting
   into an open container needs the `container`/`open`/`transparent` attributes,

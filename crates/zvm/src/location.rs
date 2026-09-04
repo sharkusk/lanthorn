@@ -555,20 +555,7 @@ fn global_room_by_shown_text(machine: &Machine, cands: &[V6Candidate]) -> Option
     if max_obj == 0 {
         return None;
     }
-    // The 240 globals (ZMSD §6.2), deduplicated and filtered to plausible object
-    // numbers: these games mirror the room pointer into several globals, and the
-    // duplicates all name the same object. Slots past the end of memory are
-    // skipped rather than read — a short or hand-built story must not be turned
-    // into a memory fault by our own scan.
-    let base = mem.global_vars() as u32;
-    let mut objs: Vec<u16> = (0..240u32)
-        .map(|i| base + i * 2)
-        .take_while(|&at| at as usize + 1 < mem.len())
-        .map(|at| mem.read_word(at))
-        .filter(|&v| v != 0 && v <= max_obj)
-        .collect();
-    objs.sort_unstable();
-    objs.dedup();
+    let objs = objects_named_by_globals(mem, max_obj);
 
     for cand in cands {
         if normalize_name(&cand.name).len() < V6_GLOBAL_ROOM_MIN_LEN {
@@ -581,6 +568,27 @@ fn global_room_by_shown_text(machine: &Machine, cands: &[V6Candidate]) -> Option
         }
     }
     None
+}
+
+/// Every object number the story's own global variables currently hold, sorted
+/// and deduplicated.
+///
+/// The 240 globals (ZMSD §6.2), filtered to plausible object numbers: a game
+/// mirrors its room pointer into several globals, and the duplicates all name
+/// the same object. Slots past the end of memory are skipped rather than read —
+/// a short or hand-built story must not be turned into a memory fault by our own
+/// scan.
+fn objects_named_by_globals(mem: &crate::memory::Memory, max_obj: u16) -> Vec<u16> {
+    let base = mem.global_vars() as u32;
+    let mut objs: Vec<u16> = (0..240u32)
+        .map(|i| base + i * 2)
+        .take_while(|&at| at as usize + 1 < mem.len())
+        .map(|at| mem.read_word(at))
+        .filter(|&v| v != 0 && v <= max_obj)
+        .collect();
+    objs.sort_unstable();
+    objs.dedup();
+    objs
 }
 
 /// The text of `obj`'s first property that reads as a string the status band is
@@ -995,6 +1003,16 @@ fn global_room_via_player_ancestor(
 ///    it is trusted only NAME-VALIDATED like this, never on its own. If it
 ///    names one of the matches, that object is the room: it is the game's own
 ///    answer to "where is the player", not a guess from a name.
+///    Then the SAME evidence for a story whose current-room variable is NOT
+///    global 0 — every ZIL game, whose `HERE` the compiler puts wherever it
+///    likes. If exactly ONE of the matches is currently held by any of the
+///    story's 240 globals, that is the room (SQ-1283). Shogun is why: it ships
+///    two rooms called "Bridge" (#57, the Erasmus's, and #42, Osaka castle's),
+///    two called "Main Deck" and four called "Ledge", its rooms are children of
+///    a `ROOMS` container so rule 2 cannot separate them, and its global 0
+///    holds a constant NPC — so rule 3 handed every one of them to the
+///    lowest-numbered twin, and the Erasmus's own bridge was reported as a
+///    bridge in Osaka from the first turn of the game.
 /// 2. A room is a top-level object (parent 0); a compass direction sits
 ///    inside the DIRECTIONS/compass object and a conversation topic inside a
 ///    topics bag. Prefer parent-0 matches over those.
@@ -1027,6 +1045,26 @@ fn resolve_room_object(machine: &Machine, name: &str) -> Option<ObjectSnapshot> 
             if matches.iter().any(|&(_, obj)| obj == global_room.number) {
                 return Some(global_room);
             }
+        }
+        // (1b) The same evidence, for a story that does not keep the room in
+        // global 0. ZIL's current-room variable is `HERE`, an ordinary global
+        // the compiler places wherever it likes — Shogun's global 0 holds a
+        // constant NPC and its `HERE` is four globals further in — so rule (1)
+        // above, which only ever reads slot 0, is blind on every Infocom v4+
+        // game (SQ-1283).
+        //
+        // Widening the read to all 240 globals cannot pick a WRONG room, and
+        // that is the whole argument for it: whichever slot a story keeps its
+        // current room in, that slot is IN this set, so the right answer is
+        // always among the survivors and filtering can only ever discard wrong
+        // ones. What the set may also contain is a stale or decorative
+        // reference to some OTHER same-named room, which is why the filter is
+        // trusted only when it leaves exactly one — anything less decisive
+        // falls through to the rules below, exactly as it did before.
+        let held = objects_named_by_globals(mem, n);
+        let mut named = matches.iter().filter(|&&(_, obj)| held.binary_search(&obj).is_ok());
+        if let (Some(&(_, only)), None) = (named.next(), named.next()) {
+            return Some(object_snapshot(mem, only));
         }
         // (2) Prefer a top-level object — a room — over a direction or topic.
         let top_level: Vec<(usize, u16)> =
@@ -2087,6 +2125,44 @@ mod tests {
             a.object().unwrap().number,
             b.object().unwrap().number,
             "two different forest rooms must not collapse to one id"
+        );
+    }
+
+    /// A ZIL story keeps its current room in `HERE`, an ordinary global the
+    /// compiler places wherever it likes — never global 0, which rule (1) is
+    /// the only reader of. With no avatar in the tree to validate against, the
+    /// three same-named "forest" objects used to be settled by "lowest object
+    /// number", which is a coin toss (SQ-1283). One global naming #5 and
+    /// nothing naming #1 or #3 settles it exactly.
+    #[test]
+    fn resolve_room_object_prefers_the_room_a_non_zero_global_names() {
+        let mut buf = build_v5_forests();
+        put_word(&mut buf, v5_entry(4) + 6, 0); // no avatar anywhere: names alone must decide
+        put_word(&mut buf, GLOBAL_VARS as usize, 0); // global 0 says nothing (ZIL's does not)
+        put_word(&mut buf, GLOBAL_VARS as usize + 2 * 7, 5); // some later global IS `HERE`
+        let m = make_machine(buf);
+        assert_eq!(
+            resolve_room_object(&m, "forest").map(|o| o.number),
+            Some(5),
+            "the room the story's own global names must win over the lowest-numbered twin"
+        );
+    }
+
+    /// …and the widened read is trusted only when it is DECISIVE. Two globals
+    /// naming two different same-named rooms is no evidence at all — one of
+    /// them is stale or decorative — so the old ordering stands unchanged.
+    #[test]
+    fn resolve_room_object_ignores_globals_that_name_more_than_one_twin() {
+        let mut buf = build_v5_forests();
+        put_word(&mut buf, v5_entry(4) + 6, 0);
+        put_word(&mut buf, GLOBAL_VARS as usize, 0);
+        put_word(&mut buf, GLOBAL_VARS as usize + 2 * 7, 5);
+        put_word(&mut buf, GLOBAL_VARS as usize + 2 * 9, 3);
+        let m = make_machine(buf);
+        assert_eq!(
+            resolve_room_object(&m, "forest").map(|o| o.number),
+            Some(1),
+            "ambiguous globals must fall through to the longest-then-lowest rule"
         );
     }
 
