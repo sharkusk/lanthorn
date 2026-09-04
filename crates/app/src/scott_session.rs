@@ -160,7 +160,7 @@ impl ScottSession {
 
     fn snapshot_location(&self) -> Option<LocationInfo> {
         let r = self.vm.current_room();
-        Some(LocationInfo { number: r as u16, parent: 0, name: self.vm.room_name(r).to_string() })
+        Some(LocationInfo { number: r as mapper::graph::RoomId, parent: 0, name: self.vm.room_name(r).to_string() })
     }
 }
 

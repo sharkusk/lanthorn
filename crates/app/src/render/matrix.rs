@@ -218,7 +218,7 @@ pub fn layout(graph: &MapGraph, layer: LayerId, width: u16) -> MatrixLayout {
         for (i, cell) in row.cells.iter().enumerate() {
             let MatrixCell::LeavesLayer { dest } = cell else { continue };
             let name =
-                graph.room(*dest).map(|r| r.label().to_string()).unwrap_or_else(|| format!("#{dest}"));
+                graph.room(*dest).map(|r| r.label().to_string()).unwrap_or_else(|| crate::roomid::display_room_id(*dest));
             let text = format!(
                 "⇱out: {} from {} → {}",
                 short_label(MATRIX_DIRS[i]).to_uppercase(),
@@ -239,7 +239,7 @@ pub fn layout(graph: &MapGraph, layer: LayerId, width: u16) -> MatrixLayout {
     for (origin, dir, dest) in matrix::inbound_border_edges(graph, layer) {
         entry_rooms.insert(dest);
         let origin_name =
-            graph.room(origin).map(|r| r.label().to_string()).unwrap_or_else(|| format!("#{origin}"));
+            graph.room(origin).map(|r| r.label().to_string()).unwrap_or_else(|| crate::roomid::display_room_id(origin));
         let dest_label = m.labels.row_of(dest).to_string();
         let text =
             format!("⇲ in:  {origin_name} —{}→ {dest_label}", short_label(dir).to_uppercase());
@@ -520,7 +520,7 @@ mod tests {
     fn tiny() -> MapGraph {
         let mut g = MapGraph::new();
         for (id, n) in [(1u16, "Maze"), (2, "Maze"), (3, "Dead End, near Vending Machine")] {
-            g.upsert_room(id, n.into());
+            g.upsert_room(id.into(), n.into());
         }
         g.add_edge(1, Direction::N, 2);
         g.add_edge(2, Direction::W, 1);

@@ -42,11 +42,11 @@ use mapper::mapper::Mapper;
 const SHOGUN: &str = "shogun-r322-s890706.z6";
 
 /// The Erasmus's bridge — `BRIDGE-OF-ERASMUS`, `erasmus.zil`.
-const BRIDGE_OF_ERASMUS: u16 = 57;
+const BRIDGE_OF_ERASMUS: mapper::graph::RoomId = 57;
 /// Osaka castle's bridge over the moat — `ON-BRIDGE`, `osaka.zil`. Same `DESC`.
-const ON_BRIDGE: u16 = 42;
+const ON_BRIDGE: mapper::graph::RoomId = 42;
 /// `ON-DECK`, the Erasmus's main deck.
-const ON_DECK: u16 = 10;
+const ON_DECK: mapper::graph::RoomId = 10;
 
 /// Boot Shogun the way `v6_shogun_gameplay` does — the picture source and the
 /// archive's own standard window, so the game lays its windows out the way the

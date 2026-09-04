@@ -188,7 +188,7 @@ fn panning_scrolls_the_table_when_the_matrix_is_showing() {
 fn the_trail_remembers_the_last_eight_steps_and_ignores_standing_still() {
     let mut st = AppState::default();
     for id in 1..=12u16 {
-        st.push_trail(id);
+        st.push_trail(id.into());
     }
     assert_eq!(st.map_trail.len(), app::state::MAP_TRAIL_LEN);
     assert_eq!(st.map_trail.back(), Some(&12), "the newest step is last");

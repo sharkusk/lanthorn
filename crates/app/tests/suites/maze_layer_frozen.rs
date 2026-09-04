@@ -24,11 +24,11 @@ use app::tidy::{
 
 /// A turn result that reports arriving in `(num, name)`, with the room heading printed — the
 /// evidence a real move leaves.
-fn turn(num: u16, name: &str) -> TurnResult {
+fn turn(num: RoomId, name: &str) -> TurnResult {
     TurnResult {
         transcript: format!("{name}\n"),
         transcript_runs: Vec::new(),
-        location: Some(zvm::ObjectSnapshot { number: num, parent: 0, name: name.into() }),
+        location: Some(app::engine::LocationInfo { number: num, parent: 0, name: name.into() }),
         quit: false,
         erase_lower: false,
         info: None,
@@ -53,7 +53,7 @@ fn maze_and_corridor() -> (Mapper, LayerId) {
     // The corridor, on Main: A -E-> B -E-> C with reciprocals, deliberately placed badly so a
     // tidy has something to fix.
     for (id, n) in [(10u16, "Hall"), (11, "Study"), (12, "Attic")] {
-        m.graph.upsert_room(id, n.into());
+        m.graph.upsert_room(id.into(), n.into());
     }
     for (a, b) in [(10, 11), (11, 12)] {
         m.graph.add_edge(a, Direction::E, b);
@@ -66,8 +66,8 @@ fn maze_and_corridor() -> (Mapper, LayerId) {
     // The maze, on its own layer: every room called "Maze", almost nothing reciprocal.
     let maze = m.graph.new_layer(Some(MAIN_LAYER), "Maze".into());
     for id in [1u16, 2, 3, 4] {
-        m.graph.upsert_room(id, "Maze".into());
-        m.graph.set_room_layer(id, maze);
+        m.graph.upsert_room(id.into(), "Maze".into());
+        m.graph.set_room_layer(id.into(), maze);
     }
     for (o, d, dst) in [
         (1, Direction::N, 2),
@@ -81,7 +81,7 @@ fn maze_and_corridor() -> (Mapper, LayerId) {
         m.graph.add_edge(o, d, dst);
     }
     for (id, p) in [(1u16, (0, 0)), (2, (0, -1)), (3, (0, -2)), (4, (-1, -1))] {
-        m.graph.set_pos(id, p);
+        m.graph.set_pos(id.into(), p);
     }
     m.graph.set_layer_maze(maze, true);
     m.graph.set_current(1);
@@ -124,7 +124,7 @@ fn maze_positions_are_byte_stable_across_turns_while_the_other_layer_tidies() {
 
     // Four turns of walking the maze, each one the loop the run loop runs: observe, then
     // schedule background maintenance for the layer the player is standing in.
-    for (cmd, id) in [("north", 2u16), ("north", 3), ("west", 4), ("east", 2)] {
+    for (cmd, id) in [("north", 2u32), ("north", 3), ("west", 4), ("east", 2)] {
         apply_turn(&mut m, cmd, &turn(id, "Maze"), &mut Default::default());
         if should_schedule_tidy(&m.graph, maze, true) {
             tidy_layer_silent(&mut m.graph, maze);

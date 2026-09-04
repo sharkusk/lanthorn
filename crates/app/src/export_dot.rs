@@ -52,9 +52,19 @@ fn dot_escape(s: &str) -> String {
 
 /// Render a `MapGraph` to a Graphviz DOT document string.
 ///
-/// The node id is `r<object-number>`, so same-named rooms stay distinct. The
-/// current room is filled gold; rooms with notes carry their notes as a tooltip
-/// and a `●` marker in the label.
+/// A room's DOT node identifier: `r` plus [`crate::roomid::display_room_id`]'s
+/// digits, minus the `#` — a bare DOT identifier cannot contain one — so a real
+/// object number reads as `r57` and a synthetic id as `r8000ABCD` rather than a
+/// 10-digit decimal, the same real/synthetic distinction every other room-id
+/// display uses (SQ-1297).
+fn node_id(id: mapper::graph::RoomId) -> String {
+    format!("r{}", crate::roomid::display_room_id(id).trim_start_matches('#'))
+}
+
+/// The node id is `r<object-number>` (or `r<hex>` for a synthetic id — see
+/// [`node_id`]), so same-named rooms stay distinct. The current room is filled
+/// gold; rooms with notes carry their notes as a tooltip and a `●` marker in
+/// the label.
 pub fn render_dot(graph: &MapGraph) -> String {
     let mut out = String::new();
 
@@ -88,15 +98,15 @@ pub fn render_dot(graph: &MapGraph) -> String {
         if has_notes {
             attrs.push_str(&format!(", tooltip=\"{}\"", dot_escape(&room.notes)));
         }
-        out.push_str(&format!("  r{} [{}];\n", room.id, attrs));
+        out.push_str(&format!("  {} [{}];\n", node_id(room.id), attrs));
     }
 
     // Edges, in connection order.
     for conn in graph.connections() {
         out.push_str(&format!(
-            "  r{} -> r{} [label=\"{}\"];\n",
-            conn.origin,
-            conn.dest,
+            "  {} -> {} [label=\"{}\"];\n",
+            node_id(conn.origin),
+            node_id(conn.dest),
             dir_label(conn.dir)
         ));
     }

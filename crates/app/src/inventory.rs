@@ -18,9 +18,9 @@ use zvm::objects::{get_child, get_sibling, short_name};
 /// When prev_location == current_location (no move), or either is 0, returns `None`
 /// (not enough information to lock — we re-try next move).
 pub fn detect_player_obj(
-    prev_location: Option<u16>,
+    prev_location: Option<mapper::graph::RoomId>,
     prev_objects_here: &BTreeSet<u16>,
-    current_location: u16,
+    current_location: mapper::graph::RoomId,
     objects_here: &BTreeSet<u16>,
 ) -> Option<u16> {
     let prev = prev_location?;

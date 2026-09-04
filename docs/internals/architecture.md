@@ -216,8 +216,12 @@ the whole game.
 
 They now read the story's own object tree, and everything about the FORMAT lives
 in `gvm::objects` (see the crate table above); `glulx_session.rs` only translates
-between that reader's 32-bit addresses and the trait's `u16` handles. Worth
-knowing, because each of these is a refusal rather than a stub:
+between that reader's 32-bit addresses and the trait's handles — an ordinary
+object handle (a container, the player) stays a `u16`, but the ROOM-shaped ones
+(`Introspect::room_objects`/`room_objects_excluding`, and `children_of`'s
+`parent`) are a full `mapper::graph::RoomId` (`u32` since SQ-1297), because on
+Glulx that handle IS the widened `roomid` hash below. Worth knowing, because
+each of these is a refusal rather than a stub:
 
 - **Handles.** A Glulx object has no number, so the adapter hands out its
   one-based position in the object list. That space and the room space are
@@ -929,9 +933,12 @@ self-loop directions).
 `zvm::world`'s `door_dir`/`*_to`/`door_to` derivation, existing because `gvm`
 takes no dependency on `zvm` (each VM core stays independent — see the hard
 rules in `CLAUDE.md`): its own `Compass`/`DeclaredExit`, shaped identically,
-converted to the shared `zvm::world::DeclaredExit` only at the `GlulxSession`
-boundary (`crate::engine::DeclaredExit` is already that same re-export every
-other caller uses). Reading through `gvm::objects::ParseNames` — which needed
+converted to `crate::engine::DeclaredExit` at the `GlulxSession` boundary —
+an app-level type, not a re-export of either VM's own `DeclaredExit` since
+SQ-1297 (its `Room` variant carries a `mapper::graph::RoomId`, which `zvm`
+and `gvm` cannot know about being zero-dependency crates), and the same type
+`GameSession`'s own `declared_exit` converts `zvm::world::DeclaredExit` into.
+Reading through `gvm::objects::ParseNames` — which needed
 two new general methods, `property`/`property_word`, since its existing
 `name_array` reader stops at the FIRST property (assumed to be property 1,
 correct only for the `name` array itself) rather than walking the whole

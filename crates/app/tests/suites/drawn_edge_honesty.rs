@@ -107,10 +107,10 @@ fn a_self_loop_is_a_badge_on_the_box_and_never_a_connector() {
 #[test]
 fn a_self_loop_survives_a_full_relayout_without_disturbing_it() {
     let mut g = MapGraph::new();
-    for (id, n) in [(1u16, "A"), (2, "B"), (3, "C")] {
+    for (id, n) in [(1u32, "A"), (2, "B"), (3, "C")] {
         g.upsert_room(id, n.into());
     }
-    for (a, b) in [(1u16, 2u16), (2, 3)] {
+    for (a, b) in [(1u32, 2u32), (2, 3)] {
         g.add_edge(a, Direction::E, b);
         g.add_edge(b, Direction::W, a);
     }

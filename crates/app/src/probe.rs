@@ -244,7 +244,7 @@ pub struct WorldPrint {
     carried: Option<u64>,
     /// Where the player is, when the engine can say. Screen-derived above v3;
     /// see the type docs.
-    here: Option<u16>,
+    here: Option<mapper::graph::RoomId>,
     /// What is in that room besides the player. `None` whenever `here` is,
     /// because then the question was never asked.
     room: Option<u64>,
@@ -290,7 +290,7 @@ impl WorldPrint {
     #[cfg(all(test, any(feature = "t-session", feature = "t-guidance")))]
     pub(crate) fn from_parts(
         carried: Option<u64>,
-        here: Option<u16>,
+        here: Option<mapper::graph::RoomId>,
         room: Option<u64>,
     ) -> WorldPrint {
         WorldPrint { carried, here, room }
@@ -305,7 +305,7 @@ pub struct ProbeStep {
     /// Everything the story printed in reply, and nothing else.
     pub reply: String,
     /// The room the shadow ended the command in, when the engine can say.
-    pub location: Option<u16>,
+    pub location: Option<mapper::graph::RoomId>,
     /// The world after the command.
     pub world: WorldPrint,
     /// The story ended.

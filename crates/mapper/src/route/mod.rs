@@ -1667,7 +1667,7 @@ mod tests {
         let routed = route_topology(&g);
         // T's column is the contested room line (doubled x=0). The winner runs straight up it; the
         // loser yields it and routes up an adjacent channel instead.
-        let runs = |o: u16, d: u16| {
+        let runs = |o: RoomId, d: RoomId| {
             let c = routed.iter().find(|c| c.origin == o && c.dest == d).unwrap();
             all_runs(if c.points.len() > 2 { &c.points[1..c.points.len() - 1] } else { &[] })
         };
@@ -1835,7 +1835,7 @@ mod tests {
         g.add_edge(1, Direction::S, 2);
         g.add_edge(1, Direction::E, 3);
         let plan = route_lanes(&g);
-        let entry = |o: u16, d: u16| plan.connectors.iter().find(|c| c.origin == o && c.dest == d).unwrap().entry;
+        let entry = |o: RoomId, d: RoomId| plan.connectors.iter().find(|c| c.origin == o && c.dest == d).unwrap().entry;
         assert_eq!(entry(1, 2), Side::Top, "S edge enters destination's north side");
         assert_eq!(entry(1, 3), Side::Left, "E edge enters destination's west side");
     }
@@ -2411,7 +2411,7 @@ mod tests {
         use crate::direction::Direction;
         let build = |partner_x: i32| {
             let mut g = MapGraph::new();
-            for id in [1u16, 2, 3] { g.upsert_room(id, "r".into()); }
+            for id in [1u16, 2, 3] { g.upsert_room(id.into(), "r".into()); }
             g.set_pos(1, (0, 0));
             g.set_pos(2, (0, -1)); // due north: straight N/S reciprocal → center winner
             g.set_pos(3, (partner_x, -1)); // the single offset's partner (east or west)
@@ -2600,7 +2600,7 @@ mod tests {
         use crate::direction::Direction;
         let mut g = MapGraph::new();
         for (id, n) in [(1u16, "Cave"), (2, "Ledge"), (3, "Pit")] {
-            g.upsert_room(id, n.into());
+            g.upsert_room(id.into(), n.into());
         }
         g.set_pos(1, (0, 0));
         g.set_pos(2, (1, -1)); // NE of Cave
@@ -2780,7 +2780,7 @@ mod tests {
         // the E line off-centre; now the E line keeps the centre and the corners are free.
         use crate::direction::Direction;
         let mut g = MapGraph::new();
-        for id in [1u16, 2, 3, 4] { g.upsert_room(id, "r".into()); }
+        for id in [1u16, 2, 3, 4] { g.upsert_room(id.into(), "r".into()); }
         g.set_pos(1, (0, 0));
         g.set_pos(2, (1, 0)); // due east: straight E/W reciprocal
         g.set_pos(3, (1, -1)); // NE
@@ -2850,7 +2850,7 @@ mod tests {
         // with or without B's Up edge (the guard works), and that B's Up edge now draws.
         let build = |with_up: bool| {
             let mut g = MapGraph::new();
-            for id in [1u16, 2, 3] { g.upsert_room(id, "r".into()); }
+            for id in [1u16, 2, 3] { g.upsert_room(id.into(), "r".into()); }
             g.set_pos(1, (0, 0)); // T
             g.set_pos(2, (3, 4)); // A (far)
             g.set_pos(3, (1, 2)); // B (near)

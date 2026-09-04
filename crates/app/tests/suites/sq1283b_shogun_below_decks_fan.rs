@@ -56,13 +56,13 @@ use mapper::mapper::Mapper;
 const SHOGUN: &str = "shogun-r322-s890706.z6";
 
 /// `BRIDGE-OF-ERASMUS`, `erasmus.zil` — the room every phantom edge landed on.
-const BRIDGE_OF_ERASMUS: u16 = 57;
+const BRIDGE_OF_ERASMUS: mapper::graph::RoomId = 57;
 /// `ON-DECK`, the Erasmus's main deck.
-const ON_DECK: u16 = 10;
+const ON_DECK: mapper::graph::RoomId = 10;
 /// `BELOW-DECKS`, forward through the focsle door.
-const BELOW_DECKS: u16 = 13;
+const BELOW_DECKS: mapper::graph::RoomId = 13;
 /// The room `aft` reaches from `Deck` — the second SQ-1290 specimen.
-const PASSAGEWAY: u16 = 56;
+const PASSAGEWAY: mapper::graph::RoomId = 56;
 
 /// The nine commands the reported session was made of, from its
 /// `command_history.json` — including the two the parser refused, which is part

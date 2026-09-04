@@ -15,7 +15,7 @@ use mapper::render::render as render_map_data;
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
 use ratatui::style::{Color, Modifier};
-use zvm::ObjectSnapshot;
+use app::engine::LocationInfo;
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -42,11 +42,11 @@ fn minimal_machine() -> zvm::cpu::exec::Machine {
 }
 
 /// Build a synthetic `TurnResult` for room `number` / `name`, no quit.
-fn turn(number: u16, name: &str) -> TurnResult {
+fn turn(number: mapper::graph::RoomId, name: &str) -> TurnResult {
     TurnResult {
         transcript: String::new(),
         transcript_runs: Vec::new(),
-        location: Some(ObjectSnapshot { number, parent: 0, name: name.to_owned() }),
+        location: Some(LocationInfo { number, parent: 0, name: name.to_owned() }),
         quit: false,
         erase_lower: false,
         info: None,

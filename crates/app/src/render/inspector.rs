@@ -68,7 +68,7 @@ pub fn room_diagnostics(graph: &MapGraph, id: RoomId) -> Option<RoomDiagnostics>
             let neighbour_name = graph
                 .room(c.dest)
                 .map(|r| r.label().to_owned())
-                .unwrap_or_else(|| format!("#{}", c.dest));
+                .unwrap_or_else(|| crate::roomid::display_room_id(c.dest));
             EdgeInfo {
                 dir: c.dir,
                 neighbour_id: c.dest,
@@ -103,7 +103,7 @@ fn build_diagnostics_rows(diag: &RoomDiagnostics, theme: &Theme, body: Style, he
     };
 
     let mut rows = Vec::new();
-    rows.push((format!("#{} {}", diag.id, diag.name), label_style));
+    rows.push((format!("{} {}", crate::roomid::display_room_id(diag.id), diag.name), label_style));
     rows.push((format!("Layer {} \"{}\"", diag.layer_id, diag.layer_name), value_style));
     rows.push((format!("Pos {}", pos_str), value_style));
     // How this room was first detected (SQ-0527). Kept on the room, so it is
@@ -278,14 +278,14 @@ mod tests {
     fn diagnostics_distorted_loop_marks_at_least_one() {
         // An impossible 3-room northward loop: at least one edge must be distorted.
         let mut g = MapGraph::new();
-        for id in 1u16..=3 { g.upsert_room(id, "r".into()); }
+        for id in 1u16..=3 { g.upsert_room(id.into(), "r".into()); }
         g.add_edge(1, Direction::N, 2);
         g.add_edge(2, Direction::N, 3);
         g.add_edge(3, Direction::N, 1); // closes an impossible loop
         relayout_auto(&mut g);
         // At least one of the three rooms must report a distorted outgoing edge.
         let any_distorted = [1u16, 2, 3].iter().any(|&id| {
-            room_diagnostics(&g, id).map(|d| d.distorted_count > 0).unwrap_or(false)
+            room_diagnostics(&g, id.into()).map(|d| d.distorted_count > 0).unwrap_or(false)
         });
         assert!(any_distorted, "impossible loop must leave at least one distorted edge");
     }

@@ -18,7 +18,8 @@ use zvm::error::ZError;
 use zvm::io::{Output, TextAttrs};
 use zvm::location::{detect_location_with, Location, LocationMethod, PlayerCandidates};
 use zvm::screen::ZColour;
-use zvm::ObjectSnapshot;
+
+use crate::engine::LocationInfo;
 
 use crate::state::ParaFmt;
 use zvm::memory::Memory;
@@ -469,7 +470,7 @@ pub struct TurnResult {
     /// chunks carry bits 0, default colours and default `para` when the turn emitted
     /// no styling (the Z-machine path never sets a non-default `para`).
     pub transcript_runs: Vec<CaptureRun>,
-    pub location: Option<ObjectSnapshot>,
+    pub location: Option<LocationInfo>,
     pub quit: bool,
     /// The game cleared the screen this turn — a Z-machine `erase_window`
     /// (lower / all, ZMSD §8.7.3) or a Glulx `glk_window_clear` on the primary
@@ -543,7 +544,7 @@ impl TurnResult {
     /// is the shape that let the BOOT's seed quietly claim `erase_lower: false`
     /// about a boot that had erased the screen (SQ-1106) — a hand-filled literal
     /// answers a question it was never asked.
-    pub fn observation(location: ObjectSnapshot) -> TurnResult {
+    pub fn observation(location: LocationInfo) -> TurnResult {
         TurnResult { location: Some(location), ..TurnResult::default() }
     }
 }
@@ -3796,18 +3797,21 @@ fn machine_screen_pair(machine: &Machine) -> Option<(ZColour, ZColour)> {
     zvm::screen::machine_screen_pair(machine)
 }
 
-/// Convert a detected `Location` into the `ObjectSnapshot` used as a room id.
+/// Convert a detected `Location` into the [`LocationInfo`] used as a room id.
 /// `NameOnly` (no backing object) gets a stable synthetic id from its name;
-/// every other variant carries a real object. Shared by per-turn draining and
-/// the startup seed so both assign the same room id.
-fn location_to_snapshot(loc: &Location) -> zvm::ObjectSnapshot {
+/// every other variant carries a real object, whose `u16` object number is
+/// widened into a `RoomId` here — the one place a Z-machine `zvm::ObjectSnapshot`
+/// becomes the engine-neutral `LocationInfo` (SQ-1297). Shared by per-turn
+/// draining and the startup seed so both assign the same room id.
+fn location_to_snapshot(loc: &Location) -> LocationInfo {
     match loc {
-        Location::NameOnly(name) => zvm::ObjectSnapshot {
-            number: crate::roomid::synthetic_room_id(name),
-            parent: 0,
-            name: name.clone(),
-        },
-        _ => loc.object().expect("non-NameOnly variants carry an object").clone(),
+        Location::NameOnly(name) => {
+            LocationInfo { number: crate::roomid::synthetic_room_id(name), parent: 0, name: name.clone() }
+        }
+        _ => {
+            let obj = loc.object().expect("non-NameOnly variants carry an object");
+            LocationInfo { number: obj.number.into(), parent: obj.parent, name: obj.name.clone() }
+        }
     }
 }
 
@@ -4617,7 +4621,7 @@ pub fn format_pane_title(name: &str, filename: &str, disk_image: bool) -> String
 
 use crate::engine::{
     BorderPref, BufferWindow, Debugger, DisasmProvenance, Engine, EngineError, EngineSave, GraphicsWindow,
-    GridCell, GridWindow, Introspect, KeyInput, LocationInfo, PositionedWindow, ScreenModel, Split,
+    GridCell, GridWindow, Introspect, KeyInput, PositionedWindow, ScreenModel, Split,
     StatusField, StatusModel, WinNode,
 };
 
@@ -5279,7 +5283,19 @@ impl Engine for GameSession {
         }) else {
             return crate::engine::DeclaredExit::Unknown;
         };
-        self.world_model().declared_exit(&self.machine.mem, origin, compass)
+        // `origin` is a RoomId; the Z-machine world model wants a real object
+        // number. Always fits — a Z-machine RoomId IS an object number,
+        // widened at `location_to_snapshot` and never larger than u16::MAX.
+        let Ok(origin) = u16::try_from(origin) else {
+            return crate::engine::DeclaredExit::Unknown;
+        };
+        match self.world_model().declared_exit(&self.machine.mem, origin, compass) {
+            zvm::world::DeclaredExit::Room(r) => crate::engine::DeclaredExit::Room(r.into()),
+            zvm::world::DeclaredExit::Code => crate::engine::DeclaredExit::Code,
+            zvm::world::DeclaredExit::Message => crate::engine::DeclaredExit::Message,
+            zvm::world::DeclaredExit::Absent => crate::engine::DeclaredExit::Absent,
+            zvm::world::DeclaredExit::Unknown => crate::engine::DeclaredExit::Unknown,
+        }
     }
 
     fn rng_seed(&self) -> Option<u32> {
@@ -5481,7 +5497,7 @@ impl Introspect for GameSession {
         crate::inventory::list_inventory(&self.machine.mem, self.parse_names(), container)
     }
 
-    fn room_objects(&self, room: u16) -> Vec<crate::engine::ObjectWords> {
+    fn room_objects(&self, room: mapper::graph::RoomId) -> Vec<crate::engine::ObjectWords> {
         crate::render::room_info::list_room_objects(
             self.world_model(),
             self.parse_names(),
@@ -5492,7 +5508,7 @@ impl Introspect for GameSession {
 
     fn room_objects_excluding(
         &self,
-        room: u16,
+        room: mapper::graph::RoomId,
         exclude: Option<u16>,
     ) -> Vec<crate::engine::ObjectWords> {
         crate::render::room_info::list_room_objects_excluding(
@@ -5536,7 +5552,11 @@ impl Introspect for GameSession {
         Some(set)
     }
 
-    fn children_of(&self, parent: u16) -> std::collections::BTreeSet<u16> {
+    fn children_of(&self, parent: mapper::graph::RoomId) -> std::collections::BTreeSet<u16> {
+        // A Z-machine `parent` is always a real object number (RoomId widened
+        // at `location_to_snapshot`, never larger than u16::MAX); anything
+        // else has no children here.
+        let Ok(parent) = u16::try_from(parent) else { return std::collections::BTreeSet::new() };
         let max_obj = zvm::object_tree_view(&self.machine)
             .into_iter()
             .map(|s| s.number)
@@ -6247,7 +6267,7 @@ mod tests {
         let first = TurnResult {
             transcript: String::new(),
             transcript_runs: Vec::new(),
-            location: Some(ObjectSnapshot { number: 1, parent: 0, name: "Hall".into() }),
+            location: Some(LocationInfo { number: 1, parent: 0, name: "Hall".into() }),
             quit: false,
             erase_lower: false,
             info: None,
@@ -6272,7 +6292,7 @@ mod tests {
         let second = TurnResult {
             transcript: String::new(),
             transcript_runs: Vec::new(),
-            location: Some(ObjectSnapshot { number: 2, parent: 0, name: "Attic".into() }),
+            location: Some(LocationInfo { number: 2, parent: 0, name: "Attic".into() }),
             quit: false,
             erase_lower: false,
             info: None,
@@ -6312,7 +6332,7 @@ mod tests {
         let enter = TurnResult {
             transcript: "Maze\nYou are in a maze of twisty little passages, all alike.".into(),
             transcript_runs: Vec::new(),
-            location: Some(ObjectSnapshot { number: 1, parent: 0, name: "Maze".into() }),
+            location: Some(LocationInfo { number: 1, parent: 0, name: "Maze".into() }),
             quit: false,
             erase_lower: false,
             info: None,
@@ -6335,7 +6355,7 @@ mod tests {
         let west = TurnResult {
             transcript: "Maze\nYou are in a maze of twisty little passages, all alike.".into(),
             transcript_runs: Vec::new(),
-            location: Some(ObjectSnapshot { number: 1, parent: 0, name: "Maze".into() }),
+            location: Some(LocationInfo { number: 1, parent: 0, name: "Maze".into() }),
             quit: false,
             erase_lower: false,
             info: None,
@@ -6372,7 +6392,7 @@ mod tests {
         let enter = TurnResult {
             transcript: "Twisty Cave\nGnomes cavort obscenely as they dig for gold.".into(),
             transcript_runs: Vec::new(),
-            location: Some(ObjectSnapshot { number: 183, parent: 0, name: "Twisty Cave".into() }),
+            location: Some(LocationInfo { number: 183, parent: 0, name: "Twisty Cave".into() }),
             quit: false,
             erase_lower: false,
             info: None,
@@ -6395,7 +6415,7 @@ mod tests {
         let north = TurnResult {
             transcript: "Confusing Passage\nGnomes cavort obscenely as they dig for gold.".into(),
             transcript_runs: Vec::new(),
-            location: Some(ObjectSnapshot { number: 183, parent: 0, name: "Confusing Passage".into() }),
+            location: Some(LocationInfo { number: 183, parent: 0, name: "Confusing Passage".into() }),
             quit: false,
             erase_lower: false,
             info: None,
@@ -6504,7 +6524,7 @@ mod tests {
         let mk = |num: u16, name: &str, transcript: &str| TurnResult {
             transcript: transcript.into(),
             transcript_runs: Vec::new(),
-            location: Some(ObjectSnapshot { number: num, parent: 0, name: name.into() }),
+            location: Some(LocationInfo { number: num.into(), parent: 0, name: name.into() }),
             quit: false,
             erase_lower: false,
             info: None,
@@ -6557,7 +6577,7 @@ mod tests {
         let mk = |num: u16, name: &str, transcript: &str| TurnResult {
             transcript: transcript.into(),
             transcript_runs: Vec::new(),
-            location: Some(ObjectSnapshot { number: num, parent: 0, name: name.into() }),
+            location: Some(LocationInfo { number: num.into(), parent: 0, name: name.into() }),
             quit: false,
             erase_lower: false,
             info: None,
@@ -6613,7 +6633,7 @@ mod tests {
         let mk = |num: u16, name: &str, transcript: &str| TurnResult {
             transcript: transcript.into(),
             transcript_runs: Vec::new(),
-            location: Some(ObjectSnapshot { number: num, parent: 0, name: name.into() }),
+            location: Some(LocationInfo { number: num.into(), parent: 0, name: name.into() }),
             quit: false,
             erase_lower: false,
             info: None,
@@ -6650,7 +6670,7 @@ mod tests {
         let mk = |method: Option<LocationMethod>, num: u16, name: &str| TurnResult {
             transcript: String::new(),
             transcript_runs: Vec::new(),
-            location: Some(ObjectSnapshot { number: num, parent: 0, name: name.into() }),
+            location: Some(LocationInfo { number: num.into(), parent: 0, name: name.into() }),
             quit: false,
             erase_lower: false,
             info: None,
@@ -6709,7 +6729,7 @@ mod tests {
         let result = TurnResult {
             transcript: String::new(),
             transcript_runs: Vec::new(),
-            location: Some(ObjectSnapshot { number: 333, parent: 0, name: "Orbiting Boony".into() }),
+            location: Some(LocationInfo { number: 333, parent: 0, name: "Orbiting Boony".into() }),
             quit: false,
             erase_lower: false,
             info: None,
@@ -6764,7 +6784,7 @@ mod tests {
         TurnResult {
             transcript: String::new(),
             transcript_runs: Vec::new(),
-            location: Some(ObjectSnapshot { number, parent: 0, name: name.into() }),
+            location: Some(LocationInfo { number: number.into(), parent: 0, name: name.into() }),
             quit: false,
             erase_lower: false,
             info: None,
@@ -9563,7 +9583,7 @@ mod untried_turn_tests {
         TurnResult {
             transcript: transcript.into(),
             transcript_runs: Vec::new(),
-            location: loc.map(|(n, name)| zvm::ObjectSnapshot { number: n, parent: 0, name: name.into() }),
+            location: loc.map(|(n, name)| LocationInfo { number: n.into(), parent: 0, name: name.into() }),
             quit: false, erase_lower: false, info: None, sounds: Vec::new(),
             glulx_sound_ops: Vec::new(), diagnostics: vec![], fault: None,
             location_method: None, pending_io: None, timed_out: false,

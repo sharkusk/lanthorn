@@ -106,11 +106,11 @@ mod tests {
     fn chain(n: u16) -> MapGraph {
         let mut g = MapGraph::new();
         for i in 1..=n {
-            g.upsert_room(i, format!("R{i}"));
+            g.upsert_room(i.into(), format!("R{i}"));
         }
         for i in 1..n {
-            g.add_edge(i, Direction::E, i + 1);
-            g.add_edge(i + 1, Direction::W, i);
+            g.add_edge(i.into(), Direction::E, (i + 1).into());
+            g.add_edge((i + 1).into(), Direction::W, i.into());
         }
         g
     }
@@ -140,7 +140,7 @@ mod tests {
     fn a_one_way_passage_is_walkable_forward_and_not_backward() {
         let mut g = MapGraph::new();
         for i in 1u16..=3 {
-            g.upsert_room(i, format!("R{i}"));
+            g.upsert_room(i.into(), format!("R{i}"));
         }
         g.add_edge(1, Direction::N, 2); // one-way: nothing comes back
         g.add_edge(2, Direction::E, 3);
@@ -161,7 +161,7 @@ mod tests {
     fn a_non_compass_passage_is_not_a_walkable_step() {
         let mut g = MapGraph::new();
         for i in 1u16..=2 {
-            g.upsert_room(i, format!("R{i}"));
+            g.upsert_room(i.into(), format!("R{i}"));
         }
         g.add_edge(1, Direction::Unknown, 2);
         assert_eq!(route(&g, 1, 2), None, "the magic word is not a compass direction");
@@ -202,7 +202,7 @@ mod tests {
         // can show that the long way IS a route before the short one is added to beat it.
         let mut g = MapGraph::new();
         for i in 1u16..=6 {
-            g.upsert_room(i, format!("R{i}"));
+            g.upsert_room(i.into(), format!("R{i}"));
         }
         g.add_edge(1, Direction::N, 2);
         g.add_edge(2, Direction::N, 3);
@@ -225,7 +225,7 @@ mod tests {
     fn equal_length_routes_break_ties_deterministically() {
         let mut g = MapGraph::new();
         for i in 1u16..=4 {
-            g.upsert_room(i, format!("R{i}"));
+            g.upsert_room(i.into(), format!("R{i}"));
         }
         // Two one-step-each ways to room 4, minted worst-first.
         g.add_edge(1, Direction::W, 3); // W is column 3

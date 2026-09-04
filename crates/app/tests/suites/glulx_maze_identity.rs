@@ -63,7 +63,7 @@ fn walking_locks_the_location_global() {
         }
     }
     let by_name: BTreeSet<&String> = ids.iter().map(|(n, _)| n).collect();
-    let by_id: BTreeSet<u16> = ids.iter().map(|(_, i)| *i).collect();
+    let by_id: BTreeSet<mapper::graph::RoomId> = ids.iter().map(|(_, i)| *i).collect();
     assert_eq!(
         by_name.len(),
         by_id.len(),
@@ -99,7 +99,7 @@ fn maze_rooms_sharing_a_name_get_distinct_ids() {
     let mut s = boot(image);
     Engine::restore_state(&mut s, &ac.engine_save()).expect("restore the maze save");
     s.relock_room_global(addr);
-    let mut seen: Vec<(String, u16)> = Vec::new();
+    let mut seen: Vec<(String, mapper::graph::RoomId)> = Vec::new();
     for cmd in ["look", "n", "s", "e", "w", "n", "e", "s", "w", "n", "u", "d", "n", "e"] {
         let r = Engine::submit(&mut s, cmd);
         if let Some(l) = r.location {
@@ -113,7 +113,7 @@ fn maze_rooms_sharing_a_name_get_distinct_ids() {
         1,
         "this fixture is the maze: every heading is the same name, got {names:?}"
     );
-    let ids: BTreeSet<u16> = seen.iter().map(|(_, i)| *i).collect();
+    let ids: BTreeSet<mapper::graph::RoomId> = seen.iter().map(|(_, i)| *i).collect();
     assert!(
         ids.len() >= 3,
         "the maze rooms must come back as SEPARATE rooms despite the shared name — \
@@ -135,7 +135,7 @@ fn room_ids_are_identical_across_separate_loads() {
     let Some(image) = advent_image() else { return };
     let route = ["in", "take lamp", "wait", "down", "west", "west", "east", "east"];
 
-    let walk = |img: Vec<u8>| -> Vec<(String, u16)> {
+    let walk = |img: Vec<u8>| -> Vec<(String, mapper::graph::RoomId)> {
         let mut s = boot(img);
         let mut out = Vec::new();
         for cmd in route {

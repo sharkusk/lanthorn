@@ -37,7 +37,7 @@ fn dest_name(graph: &MapGraph, labels: &mapper::matrix::MatrixLabels, layer: map
             return row.to_string();
         }
     }
-    graph.room(id).map(|r| r.label().to_owned()).unwrap_or_else(|| format!("#{id}"))
+    graph.room(id).map(|r| r.label().to_owned()).unwrap_or_else(|| crate::roomid::display_room_id(id))
 }
 
 /// One card line for a direction: the glyph, and what it means spelled out.
@@ -65,7 +65,8 @@ fn card_detail(
         C::LeavesLayer { dest } => {
             // Cross-layer: `dest` has no row in THIS layer's `labels` to number it with, exactly
             // like the matrix's own `⇱out` footnote, which names the same way.
-            let raw = graph.room(dest).map(|r| r.label().to_owned()).unwrap_or_else(|| format!("#{dest}"));
+            let raw =
+                graph.room(dest).map(|r| r.label().to_owned()).unwrap_or_else(|| crate::roomid::display_room_id(dest));
             ("⇱", format!("{} · {}", raw, graph.layer_name(graph.layer_of(dest))))
         }
         C::Probed => ("×", "tried, no way through".to_string()),
@@ -462,8 +463,12 @@ pub(crate) fn list_room_objects_excluding(
     if crate::roomid::is_synthetic_room(room_id) {
         return Vec::new();
     }
+    // `is_synthetic_room` already returned above for anything that isn't a
+    // real Z-machine object number, so this always fits: `room_id` widened
+    // from a `u16` object number in the first place (SQ-1297).
+    let Ok(room_num) = u16::try_from(room_id) else { return Vec::new() };
     model
-        .visible_room_objects(mem, room_id, exclude)
+        .visible_room_objects(mem, room_num, exclude)
         .into_iter()
         .map(|o| crate::inventory::object_words(mem, names, o))
         // An object the story holds neither a printed name nor a parse name for

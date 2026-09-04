@@ -67,7 +67,7 @@ fn boot(name: &str) -> Option<GameSession> {
 
 /// A `TurnResult` carrying nothing but a location, as `startup.rs` builds to seed
 /// the opening room (note `location_method: None` — the seed is not gated).
-fn seed_of(snap: zvm::ObjectSnapshot) -> TurnResult {
+fn seed_of(snap: app::engine::LocationInfo) -> TurnResult {
     TurnResult {
         transcript: String::new(),
         transcript_runs: Vec::new(),
@@ -222,7 +222,7 @@ fn beyond_zork_character_sheet_is_not_the_first_room() {
 trait LocName {
     fn as_deref_name(&self) -> Option<&str>;
 }
-impl LocName for Option<zvm::ObjectSnapshot> {
+impl LocName for Option<app::engine::LocationInfo> {
     fn as_deref_name(&self) -> Option<&str> {
         self.as_ref().map(|s| s.name.as_str())
     }

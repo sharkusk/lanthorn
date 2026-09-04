@@ -110,15 +110,15 @@ fn trinity_v4_bluff_covers_uexit_nexit_fexit_and_dexit_in_one_room() {
         "non-vacuity guard: object #213 must actually be Bluff"
     );
 
-    assert_eq!(s.declared_exit(BLUFF, Direction::SE), DeclaredExit::Room(441), "SE: a UEXIT to At Crater");
-    assert_eq!(s.declared_exit(BLUFF, Direction::SW), DeclaredExit::Room(306), "SW: a UEXIT to At Chasm");
-    assert_eq!(s.declared_exit(BLUFF, Direction::S), DeclaredExit::Message, "SOUTH: a NEXIT — a refusal, never a passage");
+    assert_eq!(s.declared_exit(BLUFF.into(), Direction::SE), DeclaredExit::Room(441), "SE: a UEXIT to At Crater");
+    assert_eq!(s.declared_exit(BLUFF.into(), Direction::SW), DeclaredExit::Room(306), "SW: a UEXIT to At Chasm");
+    assert_eq!(s.declared_exit(BLUFF.into(), Direction::S), DeclaredExit::Message, "SOUTH: a NEXIT — a refusal, never a passage");
     for dir in [Direction::N, Direction::NE, Direction::W, Direction::NW] {
-        assert_eq!(s.declared_exit(BLUFF, dir), DeclaredExit::Code, "{dir:?}: an FEXIT (PER YOUD-FALL)");
+        assert_eq!(s.declared_exit(BLUFF.into(), dir), DeclaredExit::Code, "{dir:?}: an FEXIT (PER YOUD-FALL)");
     }
     for dir in [Direction::E, Direction::In] {
         assert_eq!(
-            s.declared_exit(BLUFF, dir),
+            s.declared_exit(BLUFF.into(), dir),
             DeclaredExit::Room(327),
             "{dir:?}: a DEXIT (TO IN-COTTAGE IF COTTAGE-DOOR IS OPEN) — a STATIC destination room, matching the \
              module docs' \"UEXIT and DEXIT both resolve to Room\"; whether the door actually lets a live move \
@@ -297,12 +297,12 @@ fn shogun_v6_on_bridge_matches_the_real_zil_source() {
     assert_eq!(zvm::objects::short_name(&mem, ON_BRIDGE), "Bridge", "non-vacuity guard: object #42 must actually be Bridge");
     assert_eq!(
         model.declared_exit(&mem, ON_BRIDGE, zvm::world::Compass::N),
-        DeclaredExit::Room(20),
+        zvm::world::DeclaredExit::Room(20),
         "north: a one-byte UEXIT to Gateway"
     );
     assert_eq!(
         model.declared_exit(&mem, ON_BRIDGE, zvm::world::Compass::S),
-        DeclaredExit::Room(72),
+        zvm::world::DeclaredExit::Room(72),
         "south: a one-byte UEXIT to Portcullis"
     );
     assert_eq!(zvm::objects::short_name(&mem, 20), "Gateway");
@@ -328,7 +328,7 @@ fn journey_v6_has_no_compass_parser_and_stays_unknown_everywhere() {
     for dir in zvm::world::Compass::ALL {
         assert_eq!(
             model.declared_exit(&mem, 1, dir),
-            DeclaredExit::Unknown,
+            zvm::world::DeclaredExit::Unknown,
             "{dir:?}: no convention at all means Unknown, not a guessed answer"
         );
     }

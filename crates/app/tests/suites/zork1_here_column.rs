@@ -154,7 +154,7 @@ fn zork1_behind_house_lists_the_window_which_is_no_rooms_child() {
     let list = here(&session);
     assert!(has(&list, "window"), "the window is what you use to get in: {list:?}");
     assert!(
-        zvm::objects::get_parent(&session.machine.mem, 253) != loc.number,
+        zvm::objects::get_parent(&session.machine.mem, 253) as mapper::graph::RoomId != loc.number,
         "…and it is emphatically not a child of the room, so this cannot be a child walk"
     );
 }
@@ -240,7 +240,7 @@ fn planetfall_declines_to_guess_at_openness_and_nests_nothing() {
     let loc = session.current_location().unwrap();
     let mem = &session.machine.mem;
     let model = session.world_model();
-    for &obj in &model.visible_room_objects(mem, loc.number, 0) {
+    for &obj in &model.visible_room_objects(mem, loc.number.try_into().unwrap(), 0) {
         assert!(
             !model.shows_contents(mem, obj),
             "no object may be treated as open when the bit is unknown (#{obj})"

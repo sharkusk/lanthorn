@@ -1176,7 +1176,7 @@ mod tests {
         let mut m = walked();
         let mut counter = 0u32;
         for (id, name) in [(3u16, "Behind House"), (4, "Kitchen"), (5, "Attic")] {
-            m.observe(id, name, Some(mapper::direction::Direction::E));
+            m.observe(id.into(), name, Some(mapper::direction::Direction::E));
             super::schedule_map_maintenance(&mut s, &m, true, true, &mut counter);
         }
         assert!(s.tidy_job.is_none(), "three turns hidden, three jobs not spawned");
@@ -1573,7 +1573,7 @@ mod tests {
         }
     }
 
-    fn game_driven_result(location: Option<zvm::ObjectSnapshot>) -> super::TurnResult {
+    fn game_driven_result(location: Option<app::engine::LocationInfo>) -> super::TurnResult {
         super::TurnResult {
             transcript: String::new(),
             transcript_runs: Vec::new(),
@@ -1702,12 +1702,12 @@ mod tests {
         let eng = TraceOnlyEngine { line: None, v6: None, filename_req: None };
 
         // Re-reporting the SAME room (a menu keystroke) must not re-route.
-        let same = game_driven_result(Some(zvm::ObjectSnapshot { number: 1, parent: 0, name: "Lab".into() }));
+        let same = game_driven_result(Some(app::engine::LocationInfo { number: 1, parent: 0, name: "Lab".into() }));
         super::apply_game_driven_result(&mut state, &mut m, &same, &tmp, rect, &eng, app::pager::Driver::PlayerInput);
         assert_eq!(state.graph_gen, gen0, "re-reporting a known room must not bump graph_gen");
 
         // Revealing a NEW room must bump (the map has to update).
-        let moved = game_driven_result(Some(zvm::ObjectSnapshot { number: 2, parent: 0, name: "Hall".into() }));
+        let moved = game_driven_result(Some(app::engine::LocationInfo { number: 2, parent: 0, name: "Hall".into() }));
         super::apply_game_driven_result(&mut state, &mut m, &moved, &tmp, rect, &eng, app::pager::Driver::PlayerInput);
         assert_ne!(state.graph_gen, gen0, "a new room on a game-driven turn must bump graph_gen");
 

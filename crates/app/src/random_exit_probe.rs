@@ -453,8 +453,8 @@ mod tests {
         }
     }
 
-    fn snap(number: RoomId, name: &str) -> zvm::ObjectSnapshot {
-        zvm::ObjectSnapshot { number, parent: 0, name: name.to_string() }
+    fn snap(number: RoomId, name: &str) -> crate::engine::LocationInfo {
+        crate::engine::LocationInfo { number, parent: 0, name: name.to_string() }
     }
 
     fn arm(origin: RoomId, dir: Direction, live_dest: RoomId, kind: SearchKind, token: u64) -> RandomExitSearch {

@@ -320,7 +320,7 @@ mod tests {
         // 3 fixes 1's row (1 south of 3); 2 is due-east of 1 with no N/S edge.
         // After sort, 2 must share 1's row so 1→E→2 is straight (same y).
         let mut g = MapGraph::new();
-        for id in [1u16, 2, 3] { g.upsert_room(id, "r".into()); }
+        for id in [1u16, 2, 3] { g.upsert_room(id.into(), "r".into()); }
         g.add_edge(3, Direction::S, 1); // 1 is south of 3 → fixes y[1]
         g.add_edge(1, Direction::E, 2); // 2 due east of 1, no vertical constraint
         let pos = sort_layout(&g);
@@ -332,7 +332,7 @@ mod tests {
     fn align_keeps_no_overlap_and_is_deterministic() {
         let build = || {
             let mut g = MapGraph::new();
-            for id in 1u16..=5 { g.upsert_room(id, "r".into()); }
+            for id in 1u16..=5 { g.upsert_room(id.into(), "r".into()); }
             g.add_edge(1, Direction::E, 2);
             g.add_edge(2, Direction::E, 3);
             g.add_edge(1, Direction::S, 4);
@@ -364,7 +364,7 @@ mod tests {
         // Removing them restores this fixture to its stated premise: #203/#193 reach the house
         // ONLY via E/W edges, so they are genuinely Y-free.
         for id in [25u16,26,27,74,75,76,77,78,79,80,81,136,143,180,193,203,239] {
-            g.upsert_room(id, "r".into());
+            g.upsert_room(id.into(), "r".into());
         }
         use Direction::*;
         for (o, d, dst) in [

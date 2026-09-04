@@ -199,7 +199,7 @@ mod tests {
     fn three_room_ew_chain_and_cross_chain_room() {
         // 79↔203↔193 is one E/W chain; 74↔76 is an N/S chain; 74↔79 puts 74 in the E/W chain too.
         let mut g = MapGraph::new();
-        for id in [74u16, 76, 79, 193, 203] { g.upsert_room(id, "r".into()); }
+        for id in [74u16, 76, 79, 193, 203] { g.upsert_room(id.into(), "r".into()); }
         for (o, d, dst) in [
             (79, Direction::W, 203), (203, Direction::E, 79),
             (203, Direction::W, 193), (193, Direction::E, 203),
