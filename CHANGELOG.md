@@ -38,6 +38,14 @@ Absolute URLs or no link.
   passage. It now reads the game's own "you are here" pointer to tell the twins
   apart, and the ship's decks join up.
 
+- **Picking something up no longer invents a room named after it.** In games
+  that print the names of objects in bold — Counterfeit Monkey does it whenever
+  you turn `HIGHLIGHT` on — a `GET ALL` could hand the map a "room" called
+  whatever you had just picked up, hanging off the real one on a mystery
+  passage, and then trail false connections behind you as you walked away. The
+  map now asks a room heading to own its whole line, so a bolded thing at the
+  start of a sentence stays a thing.
+
 ---
 
 ## v0.4.2 — 2026-09-03
