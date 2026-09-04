@@ -1260,7 +1260,15 @@ impl GlulxSession {
         {
             return None;
         }
+        // TWO snapshots, because the game's state lives in two places. gvm holds the
+        // VM and its own Glk model; the BACKEND holds what each window contains, and
+        // the app renders from the backend — `screen_model` and `window_dump_lines`
+        // read a buffer's whole log, not its undrained tail, so draining the
+        // question's output is not the same as undoing it. Restore only the VM and
+        // the room description stays on the player's screen and in `/dump-windows`,
+        // in a session whose transcript never saw it.
         let snapshot = self.machine.save_state();
+        let display = self.appglk().display_snapshot();
         let kept_diagnostics = std::mem::take(&mut self.machine.diagnostics);
         self.drop_world_caches();
         self.machine.supply_line("look");
@@ -1272,14 +1280,17 @@ impl GlulxSession {
             DriveStop::Input(_) | DriveStop::Event => self.appglk().take_room_heading(true),
             _ => None,
         };
-        // Everything the question printed belongs to a turn that never happened.
-        let _ = self.appglk().take_transcript_elems();
-        let _ = self.appglk().take_primary_cleared();
+        // Everything the question printed belongs to a turn that never happened. The
+        // sound ops are the one thing the display snapshot does not carry, because
+        // they are a per-turn queue rather than window state: drain them here.
         let _ = self.appglk().take_sound_ops();
         self.machine.diagnostics = kept_diagnostics;
         let _ = self.machine.take_fault_trace();
         let restored = self.machine.restore_state(&snapshot).is_ok();
+        self.appglk().restore_display_snapshot(display);
         self.drop_world_caches();
+        // Last, so the window tree comes from the VM gvm has just put back rather
+        // than from anything the question did to it.
         self.refresh_screen();
         if !restored {
             // Nothing can put this session back; refuse the name rather than report
@@ -3699,5 +3710,116 @@ mod tests {
             None,
             "drawn but not watching → declined",
         );
+    }
+
+    // ── The silent look must leave no trace (SQ-1293) ──────────────────────────
+
+    /// `stories/CounterfeitMonkey-11.gblorb`, or `None` — it is gitignored, so this
+    /// skips vacuously without it. Release 11 / serial 230220 / Inform 7 6M62.
+    fn counterfeit_monkey() -> Option<Vec<u8>> {
+        let p = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../stories/CounterfeitMonkey-11.gblorb");
+        match std::fs::read(&p) {
+            Ok(b) => Some(b),
+            Err(_) => {
+                eprintln!("SKIP: gitignored story missing at {}", p.display());
+                None
+            }
+        }
+    }
+
+    /// Boot Counterfeit Monkey and play its prologue — `y`, `andra`, a keypress —
+    /// which ends at the first command prompt, where the naming look fires.
+    /// `ask` false pre-spends the refusal budget so this session never asks: the
+    /// control the subject is compared against.
+    fn cm_through_prologue(bytes: Vec<u8>, ask: bool) -> GlulxSession {
+        let pict = blorb::Blorb::parse(bytes.clone()).ok();
+        let crate::hints::LoadedStory::Glulx(image) =
+            crate::hints::extract_story(bytes).expect("a readable container")
+        else {
+            panic!("Counterfeit Monkey is a Glulx story");
+        };
+        let mut s = GlulxSession::new(image, 80, 30, true, false, false, (8, 16), pict, &[])
+            .expect("Counterfeit Monkey boots");
+        let _ = s.take_transcript();
+        if !ask {
+            s.naming_look_refusals = NAMING_LOOK_REFUSALS;
+        }
+        let _ = s.submit("y");
+        let _ = s.submit("andra");
+        let _ = s.submit_key(KeyInput::Enter).expect("Glulx takes keys");
+        s
+    }
+
+    /// Every character the backend's own window state holds: each grid's cells and
+    /// each non-primary buffer's lines. The primary buffer carries none — the app
+    /// renders it from the transcript — which is why the transcript is compared
+    /// separately below.
+    fn window_text(s: &GlulxSession) -> String {
+        fn walk(n: &WinNode, out: &mut String) {
+            match n {
+                WinNode::Pair { first, second, .. } => {
+                    walk(first, out);
+                    walk(second, out);
+                }
+                WinNode::Grid(g) => {
+                    for row in 1..=g.rows {
+                        for col in 1..=g.cols {
+                            out.push(g.cell(row, col).ch);
+                        }
+                        out.push('\n');
+                    }
+                }
+                WinNode::Buffer(b) => {
+                    for line in &b.lines {
+                        out.push_str(line);
+                        out.push('\n');
+                    }
+                }
+                WinNode::Layered(ws) => ws.iter().for_each(|w| walk(&w.node, out)),
+                WinNode::Graphics(_) | WinNode::Blank => {}
+            }
+        }
+        let mut out = String::new();
+        walk(&s.screen().root, &mut out);
+        out
+    }
+
+    /// SQ-1293: `silent_look` types a command nobody asked for. Restoring the VM
+    /// puts back gvm's state and NOT the backend's — the backend keeps its own copy
+    /// of what every window holds, and the app renders from that one. So the
+    /// question must be undone in both places, and the way to prove it is a control
+    /// session driven identically that never asks: after the turn where the subject
+    /// asks, the two must be indistinguishable in everything except the answer.
+    #[test]
+    fn a_silent_look_leaves_the_backend_exactly_as_it_found_it() {
+        let Some(bytes) = counterfeit_monkey() else { return };
+        let mut subject = cm_through_prologue(bytes.clone(), true);
+        let mut control = cm_through_prologue(bytes, false);
+
+        // Non-vacuity: the look is the ONLY difference between these two sessions,
+        // and it is what put a room on the map.
+        assert_eq!(
+            subject.current_location().map(|l| l.name),
+            Some("Back Alley".to_string()),
+            "the subject asked, and got the opening room"
+        );
+        assert_eq!(control.current_location(), None, "the control never asked, so it has none");
+
+        // Everything else must match: the windows the app renders …
+        assert_eq!(subject.window_dump(), control.window_dump(), "the window tree");
+        assert_eq!(window_text(&subject), window_text(&control), "and what the windows hold");
+        // … and the next turn, which is where a polluted heading scan or a stale
+        // read-prompt tail would surface.
+        let a = subject.submit("look");
+        let b = control.submit("look");
+        assert_eq!(a.transcript, b.transcript, "the next turn prints the same thing");
+        assert_eq!(
+            a.location.map(|l| l.name),
+            b.location.map(|l| l.name),
+            "and is read the same way"
+        );
+        assert_eq!(subject.window_dump(), control.window_dump(), "still the same windows after it");
+        assert_eq!(window_text(&subject), window_text(&control));
     }
 }

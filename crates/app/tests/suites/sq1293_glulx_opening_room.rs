@@ -130,6 +130,23 @@ fn the_opening_room_is_on_the_map_before_the_player_leaves_it() {
         .expect("the player is standing in a room; the map must know which one");
     assert_eq!(here.name, BACK_ALLEY);
 
+    // ── …and the question was asked BEHIND the player ───────────────────────
+    // `silent_look` restores gvm's state, and the BACKEND is a second copy of the
+    // game's state that the app renders from. Restoring only the VM leaves the
+    // question's prose sitting in the buffer's log with the drain pointer moved
+    // past it, so the player is owed the room description on the NEXT turn and
+    // reads it twice. Look for the description rather than the heading: the
+    // heading is the thing we asked for.
+    const ONLY_IN_THE_DESCRIPTION: &str = "peeling yellow paint";
+    for turn in &prologue_turns {
+        assert!(
+            !turn.transcript.contains(ONLY_IN_THE_DESCRIPTION),
+            "the prologue prints no room description; this is the silent look's, \
+             leaking into the player's transcript: {:?}",
+            turn.transcript
+        );
+    }
+
     // ── The map's half: the FIRST move out records its own edge ──────────────
     let mut mapper = Mapper::default();
     let mut death = DeathWatch::default();
@@ -141,6 +158,12 @@ fn the_opening_room_is_on_the_map_before_the_player_leaves_it() {
         north.location.as_ref().map(|l| l.name.as_str()),
         Some("Sigil Street"),
         "north from the Back Alley is Sigil Street"
+    );
+    assert!(
+        !north.transcript.contains(ONLY_IN_THE_DESCRIPTION),
+        "the turn after the question is where a half-restored backend hands the \
+         player the answer they never asked for: {:?}",
+        north.transcript
     );
     apply_turn(&mut mapper, "n", &north, &mut death);
 

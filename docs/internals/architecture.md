@@ -263,7 +263,14 @@ knowing, because each of these is a refusal rather than a stub:
   heading off the backend, throws the answer away and restores. The snapshot is
   taken and put back at the same point in the same turn, so what the player's next
   command runs against is exactly what it would have run against — a
-  restore-to-self, not the kind of restore SQ-0587/0588 warns about. It exists
+  restore-to-self, not the kind of restore SQ-0587/0588 warns about. **Two
+  snapshots, because the game's state lives in two places**: `Machine::save_state`
+  covers the VM and gvm's own Glk model, and `AppGlk::display_snapshot` covers what
+  each window CONTAINS — the buffer logs and their drain pointers, the grid cells,
+  the per-window heading scans, the scroll offsets, the graphics canvases and the
+  layout. Restoring only the VM is not enough and is not merely untidy: the drain
+  pointer moves past prose the log still holds, so the player is owed the room
+  description on their *next* turn and reads it twice. It exists
   because a Glulx room's NAME has only one source: Inform 7 compiles no hardware
   short name for its objects, so `ParseNames::short_name` of a room is the empty
   string, and on Counterfeit Monkey `find_player` refuses the story outright — the

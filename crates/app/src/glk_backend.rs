@@ -164,7 +164,7 @@ pub fn theme_style_colours(colors: &crate::colors::ColorScheme) -> GlkStylePairs
 type GridBufCell = (char, u8, u32, u32, u32, u8);
 
 /// A text-grid window's cell buffer (cells keyed by 0-based `(row, col)`).
-#[derive(Default)]
+#[derive(Default, Clone)]
 struct GridBuf {
     width: u32,
     height: u32,
@@ -175,6 +175,7 @@ struct GridBuf {
 }
 
 /// One entry in a text-buffer window's ordered output log.
+#[derive(Clone)]
 enum BufElem {
     /// A run of printed text with its style bits, packed colours, Glk hyperlink
     /// value (0 = no link), paragraph layout format (SQ-0330) and Glk style class
@@ -185,7 +186,7 @@ enum BufElem {
 }
 
 /// A text-buffer window's ordered output log (text runs + inline images).
-#[derive(Default)]
+#[derive(Default, Clone)]
 struct BufBuf {
     log: Vec<BufElem>,
     /// Number of leading log entries already drained by `take_transcript*`.
@@ -205,6 +206,39 @@ struct SoundChannel {
     /// cleared by `schannel_unpause`, and snapshotted into each `Play` op so a
     /// sound played on a channel paused while empty starts paused.
     paused: bool,
+}
+
+/// Everything a question asked behind the player's back must put back (SQ-1293).
+///
+/// `Machine::restore_state` rolls back *gvm's* Glk model, and none of this: the
+/// backend keeps its own copies of what every window holds, and the app renders
+/// from those, not from gvm. So a silent `look` whose VM is restored still leaves
+/// its room description in `buffers[*].log` — where `screen_model` and
+/// `window_dump_lines` both read the WHOLE log, not the undrained tail — and its
+/// status-line rewrite in `grids[*].cells`, on a screen whose transcript never saw
+/// either. Draining is not undoing: `take_transcript_elems` only advances
+/// `drained`.
+///
+/// The buffer logs are cloned whole rather than remembered by length, because a
+/// window the question CLEARS shrinks rather than grows and a length cannot undo
+/// that. It is affordable because it is rare — see
+/// [`crate::glulx_session::GlulxSession::silent_look`] for what limits how often a
+/// question is asked at all.
+///
+/// `layout` and `layout_tree` are here too, and for the same reason they look
+/// redundant: `refresh_screen`'s `sync_window_tree` re-pushes gvm's own tree after
+/// the restore, so the tree ends up gvm's either way — but the flat `layout` has no
+/// such re-push, and a story that reopens a window on `look` would otherwise leave
+/// the hit-test rectangles describing a screen that never happened.
+pub(crate) struct DisplaySnapshot {
+    layout: Vec<(u32, WinType, GlkRect, Option<bool>)>,
+    layout_tree: Option<WinTree>,
+    grids: BTreeMap<u32, GridBuf>,
+    buffers: BTreeMap<u32, BufBuf>,
+    scans: BTreeMap<u32, StoryScan>,
+    graphics: BTreeMap<u32, crate::graphics::Canvas>,
+    primary: Option<u32>,
+    primary_cleared: bool,
 }
 
 /// The app Glk display backend (see the module docs).
@@ -314,6 +348,7 @@ enum HeadingTail {
 /// that was `primary` at write time; see the doc on `AppGlk::scans` for why that
 /// lost City of Secrets' opening room. The state machine itself is unchanged —
 /// it simply now belongs to the window whose stream it describes.
+#[derive(Clone)]
 struct StoryScan {
     /// Accumulator for the current run of `Subheader` text (the Inform room
     /// heading, captured char-by-char).
@@ -644,6 +679,36 @@ impl AppGlk {
     fn primary_scan(&mut self) -> Option<&mut StoryScan> {
         let pid = self.primary?;
         Some(self.scans.entry(pid).or_default())
+    }
+
+    /// Take a [`DisplaySnapshot`] of everything a silent question could disturb.
+    /// Paired with [`Self::restore_display_snapshot`]; see the snapshot's own docs
+    /// for what is in it and why (SQ-1293).
+    pub(crate) fn display_snapshot(&self) -> DisplaySnapshot {
+        DisplaySnapshot {
+            layout: self.layout.clone(),
+            layout_tree: self.layout_tree.clone(),
+            grids: self.grids.clone(),
+            buffers: self.buffers.clone(),
+            scans: self.scans.clone(),
+            graphics: self.graphics.clone(),
+            primary: self.primary,
+            primary_cleared: self.primary_cleared,
+        }
+    }
+
+    /// Put a [`DisplaySnapshot`] back, wholesale. Windows the question opened go
+    /// with it, because the map is replaced rather than merged — and gvm's own
+    /// model, restored alongside, does not have them either.
+    pub(crate) fn restore_display_snapshot(&mut self, snap: DisplaySnapshot) {
+        self.layout = snap.layout;
+        self.layout_tree = snap.layout_tree;
+        self.grids = snap.grids;
+        self.buffers = snap.buffers;
+        self.scans = snap.scans;
+        self.graphics = snap.graphics;
+        self.primary = snap.primary;
+        self.primary_cleared = snap.primary_cleared;
     }
 
     /// Whether the story window's output currently ends at the game's read
@@ -2597,6 +2662,99 @@ mod heading_tests {
         put(&mut b, GlkStyle::Subheader, "Professor Brown");
         put(&mut b, GlkStyle::Normal, ", the Reification of Abstracts researcher, is hunched over his work table.\n\n>");
         assert_eq!(b.take_room_heading(true).as_deref(), Some("Brown's Lab"));
+    }
+
+    /// A single-leaf `WinTree` for this module (the other test module has its own).
+    fn win_leaf(id: u32, wintype: WinType, width: u32, height: u32) -> WinTree {
+        WinTree::Leaf {
+            id,
+            wintype,
+            rect: GlkRect { left: 0, top: 0, width, height },
+            bg: None,
+            fg: None,
+            reverse: false,
+        }
+    }
+
+    /// Every character the grid windows of `b`'s screen model hold, row by row.
+    fn grid_text(b: &AppGlk) -> String {
+        fn walk(n: &crate::engine::WinNode, out: &mut String) {
+            match n {
+                crate::engine::WinNode::Pair { first, second, .. } => {
+                    walk(first, out);
+                    walk(second, out);
+                }
+                crate::engine::WinNode::Grid(g) => {
+                    for row in 1..=g.rows {
+                        for col in 1..=g.cols {
+                            out.push(g.cell(row, col).ch);
+                        }
+                        out.push('\n');
+                    }
+                }
+                _ => {}
+            }
+        }
+        let mut out = String::new();
+        walk(&b.screen_model().root, &mut out);
+        out
+    }
+
+    #[test]
+    fn a_display_snapshot_puts_back_what_a_silent_question_wrote() {
+        // SQ-1293. `GlulxSession::silent_look` types a command nobody asked for and
+        // restores the VM afterwards — but the VM is only half the game's state. The
+        // backend keeps what every window CONTAINS and the app renders from that, so
+        // the question has to be undone here too. Every assertion below names one
+        // thing a VM-only restore leaves behind.
+        let mut b = primary_backend();
+        b.window_open(2, WinType::TextGrid);
+        let two_windows = [
+            (2, WinType::TextGrid, GlkRect { left: 0, top: 0, width: 80, height: 1 }, Some(true)),
+            (1, WinType::TextBuffer, GlkRect { left: 0, top: 1, width: 80, height: 23 }, Some(true)),
+        ];
+        b.window_layout(&two_windows);
+        b.window_tree(Some(win_leaf(2, WinType::TextGrid, 80, 1)));
+        b.grid_put(2, 0, 0, GlkStyle::Normal, "Maze                Score: 0");
+        put(&mut b, GlkStyle::Subheader, "Maze\n");
+        put(&mut b, GlkStyle::Normal, "You are in a maze.\n\n>");
+        // The real turn drains its own output and reads its own room, exactly as
+        // `finish_turn` does before the question is asked.
+        let _ = b.take_transcript_elems();
+        assert_eq!(b.take_room_heading(true).as_deref(), Some("Maze"), "the real turn's own room");
+        let before_dump = b.window_dump_lines();
+        let before_grid = grid_text(&b);
+
+        // Ask the question: more prose, a rewritten status line, a window opened
+        // while answering, and a heading that must not stand in for the next turn's.
+        let snap = b.display_snapshot();
+        put(&mut b, GlkStyle::Normal, "look\n"); // the parser's echo of the question
+        put(&mut b, GlkStyle::Subheader, "Cavern\n");
+        put(&mut b, GlkStyle::Normal, "A dripping cave.\n\n>");
+        b.grid_put(2, 0, 0, GlkStyle::Normal, "Cavern              Score: 9");
+        assert_eq!(b.take_room_heading(true).as_deref(), Some("Cavern"), "the answer, read once");
+        b.window_open(3, WinType::TextBuffer);
+        b.window_tree(Some(win_leaf(3, WinType::TextBuffer, 80, 24)));
+        b.restore_display_snapshot(snap);
+
+        // The status line the question rewrote.
+        assert_eq!(grid_text(&b), before_grid, "the grid is back");
+        // The window it opened, and the tree the app lays out from.
+        assert_eq!(b.window_dump_lines(), before_dump, "so is the window tree");
+        // The buffer log, which is what a VM-only restore leaves growing: the drain
+        // pointer moves, the text does not, so the question's prose is owed to the
+        // player's transcript on the NEXT turn and prints the room description twice.
+        assert!(
+            b.take_transcript_elems().is_empty(),
+            "the question's prose is owed to nobody, and a moved drain pointer over an \
+             un-rewound log would owe the player the room description a second time"
+        );
+        // And the heading scan, so the next turn is read the way the real one left it.
+        assert_eq!(
+            b.take_room_heading(true),
+            None,
+            "the answer must not stand in for the next turn's room"
+        );
     }
 
     #[test]
