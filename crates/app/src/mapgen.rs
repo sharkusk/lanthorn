@@ -332,6 +332,68 @@ fn maze_region(graph: &MapGraph, start: RoomId) -> mapper::layer::Region {
     mapper::layer::Region { anchor: start, rooms }
 }
 
+/// SQ-1311: absorb onto a maze layer any room still on Main whose EVERY
+/// compass edge — as origin or as destination, `IN`/`OUT`/`UP`/`DOWN` are
+/// portals and never counted — leads to a room already on that ONE maze
+/// layer. [`maze_region`]'s walk stops at a room name on purpose (the Cyclops
+/// Room case in its doc comment), so a genuine maze exit merely named "Dead
+/// End" is excluded from the region and left stranded on Main; this repairs
+/// that without touching the walk, since it runs only after every maze
+/// region already exists.
+///
+/// The Cyclops Room protection still holds: a room with even one compass
+/// edge to a non-maze room, or to a second maze layer, is left exactly where
+/// it was. Iterates to a fixed point, because a dead end can hang off
+/// another dead end that only just got absorbed this round (a corridor of
+/// them, each one compass step from the last).
+fn absorb_maze_adjacent_rooms(graph: &mut MapGraph) {
+    loop {
+        let mut absorbed_any = false;
+        let candidates: Vec<RoomId> =
+            graph.rooms().filter(|r| r.layer == mapper::layer::MAIN_LAYER).map(|r| r.id).collect();
+        for room in candidates {
+            let mut target: Option<mapper::layer::LayerId> = None;
+            let mut any_compass = false;
+            let mut ok = true;
+            for c in graph.connections() {
+                if mapper::direction::grid_offset(c.dir).is_none() || c.is_self_loop() {
+                    continue;
+                }
+                let other = if c.origin == room {
+                    c.dest
+                } else if c.dest == room {
+                    c.origin
+                } else {
+                    continue;
+                };
+                any_compass = true;
+                let layer = graph.layer_of(other);
+                if layer == mapper::layer::MAIN_LAYER || !graph.layer_is_maze(layer) {
+                    ok = false;
+                    break;
+                }
+                match target {
+                    None => target = Some(layer),
+                    Some(t) if t == layer => {}
+                    Some(_) => {
+                        ok = false; // compass edges to two different maze layers — not one region's
+                        break;
+                    }
+                }
+            }
+            if ok && any_compass {
+                if let Some(layer) = target {
+                    graph.set_room_layer(room, layer);
+                    absorbed_any = true;
+                }
+            }
+        }
+        if !absorbed_any {
+            break;
+        }
+    }
+}
+
 /// Split `graph`'s `MAIN_LAYER` the way the APP's own layer suggestions would if
 /// a player accepted every one of them (SQ-1308) — reusing
 /// [`mapper::layer::planar_region`] and [`mapper::layer::move_region`] rather
@@ -390,6 +452,17 @@ pub fn split_layers(graph: &mut MapGraph, opts: &MapgenOptions) -> Vec<LayerSpli
                 maze: true,
             });
         }
+    }
+
+    // ── 1b. Dead ends off a maze ────────────────────────────────────────────
+    // `maze_region`'s walk deliberately refuses to cross into a room whose
+    // name does not mention "maze" (its own doc comment, the Cyclops Room
+    // case), so a maze exit that happens to be named "Dead End" is excluded
+    // from the region above and left stranded on Main. Absorb it now that the
+    // regions exist to absorb it onto.
+    absorb_maze_adjacent_rooms(graph);
+    for split in splits.iter_mut().filter(|s| s.maze) {
+        split.rooms = graph.rooms_in_layer(split.id).len();
     }
 
     // ── 2. Portal-only regions among what is left on Main ──────────────────
@@ -830,6 +903,37 @@ fn zmachine_map(bytes: &[u8], file: String) -> Result<GeneratedMap, GenError> {
             declares.insert(obj, here);
         }
     }
+
+    // SQ-1311: an object with no printed name whose ENTIRE declared exit list
+    // leads only to ITSELF (or nowhere the derivation can resolve — a routine
+    // or a refusal message) is not a room a player could ever stand in. Zork
+    // I's object #41 declares nothing but `IN -> 41` — a pseudo-room with no
+    // name and no way out — which nonetheless "declares an exit" and would
+    // otherwise pass the derivation above. Narrow on purpose: an unnamed room
+    // with a real exit elsewhere stays (it may still be named at runtime, or
+    // simply never printed), and so does one some OTHER object genuinely
+    // leads to — that is a real destination, whatever this object calls
+    // itself, and excluding it would leave that edge dangling.
+    let mut pseudo_rooms: BTreeSet<u16> = BTreeSet::new();
+    for (&obj, here) in &declares {
+        if !zvm::objects::short_name(&mem, obj).trim().is_empty() {
+            continue;
+        }
+        let self_or_nowhere = here.iter().all(|&(_, detail)| match detail.destination() {
+            None => true,
+            Some(d) => d == obj,
+        });
+        if self_or_nowhere {
+            pseudo_rooms.insert(obj);
+        }
+    }
+    pseudo_rooms.retain(|&obj| {
+        !declares.iter().any(|(&other, here)| {
+            other != obj && here.iter().any(|&(_, detail)| detail.destination() == Some(obj))
+        })
+    });
+    declares.retain(|obj, _| !pseudo_rooms.contains(obj));
+    destinations.retain(|d| !pseudo_rooms.contains(d));
 
     let room_set: BTreeSet<u16> =
         declares.keys().copied().chain(destinations.iter().copied()).collect();

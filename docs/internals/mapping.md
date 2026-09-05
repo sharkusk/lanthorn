@@ -893,6 +893,22 @@ passes, in order:
    freezes its layout exactly as the app's own maze flag does. One layer per
    *component* — a twenty-room maze that is all one connected cluster is one
    layer, not twenty.
+1b. **Dead ends off a maze (SQ-1311).** The maze walk's own name-boundary
+   restriction (above) is deliberate, but it has a cost: a genuine maze exit
+   that happens to be named something other than "maze" — a "Dead End", a
+   "Grating Room" — gets excluded from the region and left stranded on Main,
+   because it never mentions "maze" itself. `absorb_maze_adjacent_rooms` runs
+   immediately after every maze region is formed and recovers exactly these:
+   a room still on Main joins a maze layer once EVERY compass edge touching
+   it — as origin or as destination, `Up`/`Down`/`In`/`Out` are portals and
+   never counted — leads to a room already on that ONE maze layer. The
+   Cyclops Room protection still holds here: a room with even one compass
+   edge to a non-maze room (or to a second maze layer) is left exactly where
+   it was, so the restriction that keeps the maze WALK from sweeping in an
+   unrelated hub is not weakened, only applied a second time to what the walk
+   necessarily left behind. It iterates to a fixed point, because a dead end
+   can hang off another dead end that only just got absorbed this round (a
+   corridor of them, each one compass step from the last).
 2. **Portal-only regions.** What's left of Main is partitioned into
    compass-connected components (`planar_region`, one per unvisited room).
    Mapgen has no start room to anchor a "primary" layer on the way the live
@@ -930,13 +946,17 @@ its own. A maze has no floor: any size gets its own layer once its name says
 so. `--no-auto-layers` skips all three passes, reproducing the flat,
 single-layer map mapgen wrote before SQ-1308.
 
-Zork I r52/s871125 splits into six layers at the default floor: `Main` (59
+Zork I r52/s871125 splits into six layers at the default floor: `Main` (54
 rooms — the underground core, once the maze that used to bridge it to the
-surface is gone), `Maze` (15, flagged), `Rocky Ledge` (22 — the surface
-world, named for the room its portal from underground opens onto, plus the
-Attic, Up a Tree and the Grating Room adopted onto it by pass 3), `Coal Mine`
-(6, plus Ladder Top adopted from pass 3), `Ladder Bottom` (5) and `Torch
-Room` (4).
+surface is gone), `Maze` (20, flagged — the ten rooms actually named "Maze"
+plus four "Dead End"s and the Grating Room, all absorbed by pass 1b because
+every compass edge each one has leads back into the maze), `Rocky Ledge` (21
+— the surface world, named for the room its portal from underground opens
+onto, plus the Attic and Up a Tree adopted onto it by pass 3; the Grating
+Room moved to the maze in pass 1b, before pass 3 ever saw it), `Coal Mine`
+(6, plus Ladder Top adopted from pass 3), `Ladder Bottom` (5, including its
+OWN "Dead End" at the bottom of the mine shaft — no compass edge to the maze,
+so pass 1b leaves it alone) and `Torch Room` (4).
 
 ### What each source covers, and what it does not
 
@@ -957,6 +977,19 @@ is the only signal available. The second half — "plus every object an exit lea
 to" — is what keeps a room whose *own* exits are all computed from going missing
 from its own map. Neither half needs the object tree, which is why the same code
 serves ZIL (whose rooms are not parented to a rooms object the way Inform's are).
+
+**One narrow exclusion from the Z-machine derivation (SQ-1311): an unnamed
+object whose entire declared exit list leads only to ITSELF.** "Declares an
+exit" is enough to pass the derivation above even when that exit is `IN ->
+self` — Zork I's object #41 and Mini-Zork's object #27 are both exactly this,
+a pseudo-room with no printed name and no way anywhere, compiled into the
+object table for some reason the story keeps to itself. `zmachine_map` drops
+an object from the room set when its printed name is empty AND every one of
+its own declared exits resolves to `None` or to itself; the exclusion is
+narrow on purpose — an unnamed room with a real exit ELSEWHERE stays (it may
+simply never be printed), and so does one some OTHER object genuinely leads
+to, since that is a real destination whatever this object calls itself and
+excluding it would leave that edge dangling.
 
 **Three things a static map cannot have.**
 

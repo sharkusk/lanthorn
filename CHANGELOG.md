@@ -48,6 +48,13 @@ Absolute URLs or no link.
   nothing was actually wrong with them. Each part of the map is now worked out
   on its own, so a ring outside a building can stretch a little to make room
   without ever breaking a door inside it.
+- **`lanthorn-mapgen`'s maze split now catches the dead ends hanging off a
+  maze, not just the rooms literally named "Maze"** — a "Dead End" or a
+  "Grating Room" one step from the maze now lands on the maze's own layer
+  instead of being stranded off in a corner of the main map. And a pseudo-room
+  some stories compile in with no name and no way anywhere (an object that
+  declares nothing but an exit back to itself) no longer shows up on the
+  generated map at all.
 
 ---
 

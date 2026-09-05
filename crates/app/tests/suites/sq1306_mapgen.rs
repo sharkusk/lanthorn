@@ -150,6 +150,31 @@ fn zil_story_maps_from_its_exit_properties() {
     }
 }
 
+/// SQ-1311: an object with no printed name whose only declared exit leads
+/// back to ITSELF is not a room. Mini-Zork's object #27 declares nothing but
+/// `IN -> 27` — a pseudo-room with no name and no way out — which passed the
+/// room-set derivation ("declares an exit") before this fix, because a
+/// self-referential exit is still an exit as far as "does this object declare
+/// anything at all" is concerned.
+#[test]
+fn a_self_referential_unnamed_exit_is_not_a_room() {
+    let map = mapgen::generate(&fixture_path("minizork-r34-s871124.z3"), false)
+        .expect("minizork.z3 is a tracked fixture and must map");
+
+    // The narrow rule doesn't forbid an empty name on its own — only an empty
+    // name COMBINED with exits that lead nowhere real — so check the specific
+    // object rather than asserting no story ever has a blank-named room.
+    assert!(
+        !map.engine_refs.values().any(|r| matches!(r, mapgen::EngineRef::ZObject(27))),
+        "object #27 (unnamed, self-referential IN) must not appear as a room"
+    );
+    assert!(
+        map.graph.rooms().all(|r| !r.label().trim().is_empty()),
+        "Mini-Zork has no other unnamed room, so none should remain: {:?}",
+        map.graph.rooms().filter(|r| r.label().trim().is_empty()).map(|r| r.id).collect::<Vec<_>>()
+    );
+}
+
 /// A story with no map anywhere in it is refused, and says so — this is the
 /// exit-2 path, and `czech.z5` (a Z-machine conformance test, not a game) is a
 /// tracked example of it.
@@ -358,6 +383,15 @@ fn zork1_static_map_reads_its_zil_exits() {
     assert!(
         has_edge(&map, "West of House", Direction::SW, "Stone Barrow"),
         "the conditional passage to the Stone Barrow is a real passage"
+    );
+
+    // SQ-1311: object #41 declares nothing but a self-referential `IN -> 41`
+    // and must not appear as a room, same shape as Mini-Zork's #27
+    // (`a_self_referential_unnamed_exit_is_not_a_room`, which carries the
+    // CI-runnable coverage of this same code path).
+    assert!(
+        !map.engine_refs.values().any(|r| matches!(r, mapgen::EngineRef::ZObject(41))),
+        "object #41 (unnamed, self-referential IN) must not appear as a room"
     );
 }
 
