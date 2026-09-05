@@ -1085,6 +1085,10 @@ impl GlulxSession {
         self.room_lock.observe(ram.clone(), name.clone(), movement);
         if let (None, Some(addr)) = (was_locked, self.room_lock.locked()) {
             self.remember_room_global(addr);
+            // SQ-1304: `take_room_remap` re-keys the MAP's pre-lock rooms; this is
+            // the session's own half of the same swap, and the only moment it can
+            // be done.
+            self.rekey_last_room_to_lock(&ram);
         }
         // Re-resolve the room every turn, not only when a heading is printed: a
         // maze step prints the SAME heading from a different room, so the id has
@@ -1190,6 +1194,38 @@ impl GlulxSession {
             }
             None => heading_to_room(name),
         }
+    }
+
+    /// Re-key the cached room to the address the lock has just resolved (SQ-1304).
+    ///
+    /// `last_room` is host-side state that `take_room_remap` cannot reach. `turn.rs`
+    /// applies the remap to the MAP, re-keying every pre-lock room from the hash of
+    /// its heading to its real address — and the session goes on answering with the
+    /// hash the map has just retired, because [`Self::last_room`] is only rebuilt on
+    /// a turn [`Self::adopt_heading_for_room`] approves, and once the lock has
+    /// resolved that refuses every [`crate::glulx_roomlock::Movement::Unchanged`]
+    /// turn: a `wait`, a `take`, a refused move, a keypress. So the first such turn
+    /// after the lock lands hands `apply_turn` a dead id, the mapper mints it as a
+    /// room it has never seen, and the room the player is standing in is on the map
+    /// twice — wired to its own twin by an edge no passage explains, and `distorted`
+    /// because no layout can satisfy it. Measured on the Anchorhead demo, five turns
+    /// in.
+    ///
+    /// The NAME is not in question here, only which id carries it, so this rebuilds
+    /// the cached `LocationInfo` through [`Self::room_for`] — which also refreshes
+    /// the `room_addrs` entry `declared_exit` reads — and changes nothing else. Do
+    /// NOT reach for this by loosening `adopt_heading_for_room` instead: that
+    /// function refuses a heading on a still turn for a different reason entirely
+    /// (SQ-1294's flashback), and the two must not be traded for one another.
+    ///
+    /// A no-op for a session with no cached room yet, and for one whose lock cannot
+    /// name a room from this snapshot.
+    fn rekey_last_room_to_lock(&mut self, ram: &[u32]) {
+        let Some(name) = self.last_room.as_ref().map(|r| r.name.clone()) else { return };
+        if self.room_lock.room_id(ram).is_none() {
+            return;
+        }
+        self.last_room = Some(self.room_for(&name, ram));
     }
 
     /// Whether this turn's room name may be taken from what the story printed.

@@ -126,6 +126,15 @@ discovered it.
   Counterfeit Monkey never announces until you type LOOK — lanthorn asks it, by
   running a `look` in a copy of the game and throwing everything but the answer
   away (SQ-1293, SQ-1294).
+  The moment the lock lands is its own small event: every room walked before it is
+  still keyed by the hash of its heading, so the learner hands back the real id for
+  each and the map re-keys them in place. The session's OWN cached room has to be
+  re-keyed in the same breath — it is only rebuilt on a turn the lock calls a move,
+  so without that a single `wait` afterwards would hand the map an id it had just
+  retired and draw the room you were standing in a second time, tangled into its own
+  twin (SQ-1304). Rooms that *shared* a heading before the lock are a harder case
+  and still open: they were one node, and re-keying can rename a node but not split
+  one.
   And when a game will not print a heading at all, the **status line** is the
   answer. *The Wizard Sniffer* keeps the room name entirely in its own two-row
   status bar — `Atop a Mountain` over `Exit: north` — and prints nothing but the
