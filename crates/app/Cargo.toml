@@ -27,6 +27,16 @@ doctest = false
 name = "lanthorn"
 path = "src/main.rs"
 
+# SQ-1306: the static map generator — draws a story's whole map from the story
+# file with nothing played. Named explicitly rather than left to `src/bin/`
+# auto-discovery so `include` above (which lists `src/**`) and the release
+# workflow's per-binary copy loop both have something to point at. Ships with
+# the release archives and with `cargo install lanthorn`, which installs every
+# `[[bin]]` in the package.
+[[bin]]
+name = "lanthorn-mapgen"
+path = "src/bin/lanthorn_mapgen.rs"
+
 # `cargo binstall lanthorn` (SQ-1250) fetches a prebuilt release archive
 # instead of compiling. `release.yml` names archives
 # "lanthorn-{version}-{name}.{tar.gz|zip}" where {name} is NOT a Rust target
