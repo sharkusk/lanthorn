@@ -643,12 +643,14 @@ impl GlulxSession {
         };
         session.refresh_screen();
         session.room_lock = match session.remembered_room_global() {
-            Some(addr) => crate::glulx_roomlock::RoomLock::locked_at(
-                session.machine.mem().ramstart(),
-                session.scan_words(),
-                addr,
-            ),
-            None => crate::glulx_roomlock::RoomLock::new(
+            Some(addr) if session.sidecar_addr_plausible(addr) => {
+                crate::glulx_roomlock::RoomLock::locked_at(
+                    session.machine.mem().ramstart(),
+                    session.scan_words(),
+                    addr,
+                )
+            }
+            _ => crate::glulx_roomlock::RoomLock::new(
                 session.machine.mem().ramstart(),
                 session.scan_words(),
             ),
@@ -992,6 +994,38 @@ impl GlulxSession {
         }
     }
 
+    /// BOOT-ONLY cross-check on a sidecar address before it is ever trusted
+    /// (SQ-1305), where the compiled world model can say something about it.
+    /// The image-identity token on [`Self::remembered_room_global`] already
+    /// refuses a sidecar written by a DIFFERENT build, but Inform lays globals
+    /// out in declaration order — adding one anywhere before `location` in a
+    /// rebuild that otherwise keeps the same checksum and length (unlikely,
+    /// not impossible: both are just sums) shifts every later one down, so an
+    /// image-identity match alone cannot rule out "right build, wrong address"
+    /// with certainty. A value that is neither `0` (a game may legitimately
+    /// park `location` at nothing for a turn, see `RoomLock::verify`) nor one
+    /// of this story's own ROOMS is not a plausible `location` global at boot,
+    /// whatever the sidecar remembers.
+    ///
+    /// `true` when there is no compiled world model to ask (every story
+    /// `gvm::i7map` refuses), which leaves the sidecar exactly as trusted as
+    /// it was before this existed.
+    ///
+    /// **Boot-only, on purpose.** Past the opening moment a locked word CAN
+    /// legitimately hold a non-room object of the story — darkness parks
+    /// `location` on `thedark` (see `RoomLock::is_known_room`'s docs and the
+    /// SQ-1303 test `a_lock_survives_the_player_walking_into_the_dark`) — so
+    /// this check must never run on a live turn, only on the untouched address
+    /// a sidecar hands back before a single word of RAM has moved.
+    fn sidecar_addr_plausible(&self, addr: u32) -> bool {
+        let Some(world) = self.i7_world() else { return true };
+        match self.machine.mem().read32(addr) {
+            Some(0) => true,
+            Some(v) => world.is_room(v),
+            None => false,
+        }
+    }
+
     /// The address the game's `location` global currently holds — the room the
     /// player is in, as the STORY sees it (SQ-1241).
     ///
@@ -1247,7 +1281,12 @@ impl GlulxSession {
         let movement = self.room_lock.movement(&ram).unwrap_or(heading_movement);
         let name = heading.clone().or_else(|| self.last_room.as_ref().map(|r| r.name.clone()));
         let was_locked = self.room_lock.locked();
-        self.room_lock.observe(ram.clone(), name.clone(), movement);
+        // SQ-1305: `heading_movement` is threaded through separately from
+        // `movement` — once locked it feeds `RoomLock::verify`'s frozen-lock
+        // check, which needs the printed-heading verdict rather than the
+        // story-side one `movement` already carries here (see `observe`'s docs
+        // for why the two can't be reconstructed from one another).
+        self.room_lock.observe(ram.clone(), name.clone(), movement, heading_movement);
         if let (None, Some(addr)) = (was_locked, self.room_lock.locked()) {
             self.remember_room_global(addr);
             // SQ-1304: `take_room_remap` re-keys the MAP's pre-lock rooms; this is
@@ -1620,22 +1659,63 @@ impl GlulxSession {
         (!self.store.absent()).then(|| self.store.dir().join("room-global"))
     }
 
-    /// The address learned in an earlier run of this story, if any.
+    /// An identity for the RUNNING image, cheap enough to stamp on every write
+    /// (SQ-1305): the header's whole-image checksum (bytes 0x20-0x23 —
+    /// GLULX_NOTES.md §"Header field layout" / Glulx spec §1.4) paired with
+    /// EXTSTART, which the same doc's §2 states IS the image file's length
+    /// ("The image file length equals EXTSTART, the stored initial memory").
+    /// Two words rather than one: a rebuild that happens to preserve the
+    /// checksum (a comment-only recompile can, since the checksum sums 32-bit
+    /// words of content) is vanishingly unlikely to also preserve EXTSTART,
+    /// and neither field alone is a byte-for-byte hash — this is a cheap
+    /// double-check, not cryptographic identity.
+    ///
+    /// The save directory is keyed by the story's FILENAME
+    /// (`~/.lanthorn/saves/<file>.save/`), so a story replaced under the same
+    /// name — a new release of a `.gblorb`, an author's rebuild — reuses the
+    /// old sidecar unless something here refuses it.
+    fn image_identity(&self) -> (u32, u32) {
+        let mem = self.machine.mem();
+        (mem.checksum(), mem.extstart())
+    }
+
+    /// The address learned in an earlier run of THIS BUILD of this story, if
+    /// any — `None` for a sidecar stamped by a different one (see
+    /// [`Self::image_identity`]), which is treated exactly like an absent
+    /// sidecar: the learner starts fresh and [`Self::remember_room_global`]
+    /// overwrites the stale file once it resolves again.
     ///
     /// Persisting it is not an optimisation, it is what keeps a RESUME correct:
     /// the learner needs unambiguous room changes to converge, and a save parked
     /// somewhere ambiguous — the maze, where every heading repeats — could never
     /// re-learn. Falling back to name-derived ids there would key the resumed
     /// rooms differently from the ones already in the restored map and duplicate
-    /// every one of them. Object addresses are fixed for a given story file, so a
-    /// remembered address stays valid; it is verified every turn regardless, and
-    /// dropped if the game ever contradicts it.
+    /// every one of them. Object addresses are fixed for a given BUILD of a
+    /// story file, so a remembered address stays valid there; it is still
+    /// verified every turn regardless (see `RoomLock::verify`), and dropped if
+    /// the game ever contradicts it — the pre-SQ-1294 doc line this replaced
+    /// promised that check alone would catch a rebuild that reused the address
+    /// for some OTHER object, which SQ-1294 made no longer true for the reason
+    /// [`RoomLock::verify`] now documents.
+    ///
+    /// The on-disk shape is one line, `"<addr> <checksum>:<extstart>"`, both of
+    /// the second field's halves hex — a bare decimal address with no token at
+    /// all is the pre-SQ-1305 format and is stale by definition (pre-release:
+    /// no back-compat shims), so it is refused here exactly like a mismatched
+    /// token.
     fn remembered_room_global(&self) -> Option<u32> {
         let raw = std::fs::read_to_string(self.room_global_path()?).ok()?;
-        raw.trim().parse::<u32>().ok().filter(|&a| a != 0)
+        let (addr, token) = raw.trim().split_once(' ')?;
+        let addr = addr.parse::<u32>().ok().filter(|&a| a != 0)?;
+        let (checksum, extstart) = token.split_once(':')?;
+        let checksum = u32::from_str_radix(checksum, 16).ok()?;
+        let extstart = u32::from_str_radix(extstart, 16).ok()?;
+        (self.image_identity() == (checksum, extstart)).then_some(addr)
     }
 
-    /// Remember a freshly learned address for later runs. Best-effort: a story
+    /// Remember a freshly learned address for later runs, stamped with this
+    /// build's [`Self::image_identity`] so a later run under a REBUILT story of
+    /// the same filename does not inherit it (SQ-1305). Best-effort: a story
     /// with no writable directory simply re-learns next time.
     fn remember_room_global(&self, addr: u32) {
         if !self.store.may_write() {
@@ -1645,7 +1725,8 @@ impl GlulxSession {
             if let Some(dir) = p.parent() {
                 let _ = std::fs::create_dir_all(dir);
             }
-            let _ = std::fs::write(p, addr.to_string());
+            let (checksum, extstart) = self.image_identity();
+            let _ = std::fs::write(p, format!("{addr} {checksum:x}:{extstart:x}"));
         }
     }
 
@@ -1655,9 +1736,16 @@ impl GlulxSession {
     }
 
     /// Start already locked to a previously learned address (see
-    /// [`Self::locked_room_global`]). Object addresses are fixed for a given story
-    /// file, so a remembered address is valid on every later run — and the lock is
-    /// still verified each turn, so a wrong one is dropped rather than trusted.
+    /// [`Self::locked_room_global`]). Object addresses are fixed for a given BUILD
+    /// of a story file, so a remembered address stays valid across runs of that
+    /// same build — the caller is responsible for that precondition (the
+    /// on-disk sidecar's route in, [`Self::remembered_room_global`], checks it
+    /// against [`Self::image_identity`] before ever calling this; the live
+    /// shadow-sync route, [`Self::apply_room_identity_state`], carries it from
+    /// another session of the SAME running image and needs no such check). The
+    /// lock is still verified every turn regardless (see `RoomLock::verify`),
+    /// so an address that turns out wrong is dropped rather than trusted
+    /// forever.
     pub fn relock_room_global(&mut self, addr: u32) {
         self.room_lock = crate::glulx_roomlock::RoomLock::locked_at(
             self.machine.mem().ramstart(),
@@ -4137,5 +4225,95 @@ mod tests {
         );
         assert_eq!(subject.window_dump(), control.window_dump(), "still the same windows after it");
         assert_eq!(window_text(&subject), window_text(&control));
+    }
+
+    // ── SQ-1305: the `room-global` sidecar carries the image it was written for ──
+
+    /// Boot a tiny session against `dir` and immediately read back what the
+    /// room-lock resolved to (before any turn is played, so this is purely
+    /// about what the boot path did with `dir/room-global`).
+    fn boot_for_sidecar(dir: &std::path::Path) -> GlulxSession {
+        let body = enc(0x120, &[]); // quit immediately; the boot drive is all we need
+        GlulxSession::new_in(
+            dir.to_path_buf(), image_for(body, 1), 80, 24, true, false, false, false,
+            (1, 1), None, &[], [[(None, None); 11]; 2], false, None,
+        )
+        .expect("tiny image boots")
+    }
+
+    /// This test image's (checksum, EXTSTART) — the token
+    /// [`GlulxSession::image_identity`] stamps a sidecar with.
+    fn sidecar_test_token() -> (u32, u32) {
+        let body = enc(0x120, &[]);
+        let mem = gvm::memory::Memory::new(image_for(body, 1)).expect("valid header");
+        (mem.checksum(), mem.extstart())
+    }
+
+    #[test]
+    fn a_sidecar_stamped_with_this_images_token_is_honoured() {
+        let dir = crate::scratch_dir("sq1305-token-match");
+        let (checksum, extstart) = sidecar_test_token();
+        std::fs::write(dir.join("room-global"), format!("1024 {checksum:x}:{extstart:x}"))
+            .expect("write sidecar");
+
+        let s = boot_for_sidecar(&dir);
+        assert_eq!(
+            s.locked_room_global(),
+            Some(1024),
+            "a sidecar whose token matches the running image is trusted at boot"
+        );
+    }
+
+    #[test]
+    fn a_sidecar_stamped_with_a_different_images_token_is_ignored() {
+        let dir = crate::scratch_dir("sq1305-token-mismatch");
+        let (checksum, extstart) = sidecar_test_token();
+        // Flip a bit of the checksum: same shape, different image.
+        std::fs::write(dir.join("room-global"), format!("1024 {:x}:{extstart:x}", checksum ^ 1))
+            .expect("write sidecar");
+
+        let s = boot_for_sidecar(&dir);
+        assert_eq!(
+            s.locked_room_global(),
+            None,
+            "a sidecar stamped for a DIFFERENT image (a rebuilt story) is treated as absent, \
+             not trusted with a possibly-wrong address"
+        );
+    }
+
+    #[test]
+    fn a_legacy_bare_address_sidecar_is_ignored() {
+        // Pre-SQ-1305 format: a bare decimal address, no token at all. Stale by
+        // definition (pre-release: no back-compat shims) — treated exactly like
+        // an absent sidecar, and overwritten the next time this session's lock
+        // resolves.
+        let dir = crate::scratch_dir("sq1305-legacy-format");
+        std::fs::write(dir.join("room-global"), "1024").expect("write legacy sidecar");
+
+        let s = boot_for_sidecar(&dir);
+        assert_eq!(
+            s.locked_room_global(),
+            None,
+            "a bare-address (pre-token) sidecar carries no image identity and is refused"
+        );
+    }
+
+    #[test]
+    fn remember_room_global_stamps_the_running_images_token() {
+        let dir = crate::scratch_dir("sq1305-stamp-roundtrip");
+        {
+            let s = boot_for_sidecar(&dir);
+            s.remember_room_global(2048);
+        }
+        let raw = std::fs::read_to_string(dir.join("room-global")).expect("sidecar written");
+        let (checksum, extstart) = sidecar_test_token();
+        assert_eq!(
+            raw.trim(),
+            format!("2048 {checksum:x}:{extstart:x}"),
+            "the written line carries the address and this image's checksum:extstart token"
+        );
+        // And round-trips: a second boot against the same story and dir honours it.
+        let s2 = boot_for_sidecar(&dir);
+        assert_eq!(s2.locked_room_global(), Some(2048), "what was written is what gets read back");
     }
 }

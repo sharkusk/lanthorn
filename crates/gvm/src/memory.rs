@@ -71,6 +71,18 @@ impl Memory {
     pub fn decode_table(&self) -> u32 {
         self.header.decode_table
     }
+    /// The whole-image checksum word stored in the header (bytes 0x20-0x23 —
+    /// GLULX_NOTES.md §"Header field layout" / Glulx spec §1.4: "the sum of the
+    /// whole initial memory as 32-bit ints"), exactly as the compiler wrote it.
+    /// Not itself a validity check — see [`Self::checksum_ok`] for that — just
+    /// the raw field, which a host can use as part of an identity for the image
+    /// that produced a piece of state it persists across runs (e.g. lanthorn's
+    /// Glulx room-lock sidecar, SQ-1305: a story rebuilt under the same
+    /// filename gets a different checksum, so stale host state keyed to the old
+    /// build is never mistaken for the new one's).
+    pub fn checksum(&self) -> u32 {
+        self.header.checksum
+    }
 
     // ── size ──────────────────────────────────────────────────────────────────
 

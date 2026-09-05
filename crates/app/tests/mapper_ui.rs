@@ -94,3 +94,5 @@ mod sq1304_anchorhead_twisting_lane;
 mod sq1303_glulx_static_world;
 #[path = "suites/sq1306_mapgen.rs"]
 mod sq1306_mapgen;
+#[path = "suites/sq1305_glulx_stale_sidecar.rs"]
+mod sq1305_glulx_stale_sidecar;

@@ -111,6 +111,14 @@ Absolute URLs or no link.
   door that wouldn't open — it was drawn a second time, joined to its own
   double by a connection that isn't there. Anchorhead showed this within five
   moves of the opening street.
+- **Updating a Glulx story file no longer freezes its map.** Lanthorn
+  remembers how a Glulx game tracks your location so it doesn't have to work
+  it out again on your next session — but if the story file was replaced with
+  a new build under the same name, that memory could point at the wrong thing,
+  and the map would stop moving no matter where you went. It now checks that
+  the memory still matches the story it was learned from, and even if a wrong
+  guess somehow slips through, it notices within a few turns and corrects
+  itself on its own.
 
 ---
 
