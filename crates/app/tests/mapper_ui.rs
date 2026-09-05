@@ -100,3 +100,5 @@ mod sq1305_glulx_stale_sidecar;
 mod sq1308_mapgen_layers;
 #[path = "suites/sq1314_nautical_passage_erasure.rs"]
 mod sq1314_nautical_passage_erasure;
+#[path = "suites/sq1315_anchorhead_2018.rs"]
+mod sq1315_anchorhead_2018;

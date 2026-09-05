@@ -179,6 +179,17 @@ pub struct RoomLock {
     /// Set for one call after a lock resolves, so the caller can re-key the rooms
     /// that were mapped under name-derived ids before the address was known.
     pending_remap: Vec<(String, u32)>,
+    /// Addresses a lock was taken on and then CAUGHT OUT, sorted — never
+    /// offered as a candidate again for the life of this learner (SQ-1315).
+    ///
+    /// Without this a rejection is a loop rather than a correction: the
+    /// learner keeps the story's room set, [`name_witness`](Self::name_witness)
+    /// fires again on the very next move, and its address tie-break re-elects
+    /// the same losing word — Anchorhead's `2242360` for as many turns as the
+    /// player cares to play. Kept across [`relearn`](Self::relearn) with
+    /// `objects` and `rooms`, for the same reason both of those are: it is
+    /// knowledge about the STORY, not about the guess that just failed.
+    rejected: Vec<u32>,
 }
 
 impl RoomLock {
@@ -197,6 +208,7 @@ impl RoomLock {
             locked: None,
             frozen_headings: 0,
             pending_remap: Vec::new(),
+            rejected: Vec::new(),
         }
     }
 
@@ -301,6 +313,46 @@ impl RoomLock {
         addr.checked_sub(self.base).map(|off| (off / 4) as usize)
     }
 
+    /// The story itself contradicted the locked word: give the address up, and
+    /// never take it again (SQ-1315).
+    ///
+    /// [`verify`](Self::verify) can only ask whether the locked word still looks
+    /// like a room global — which a word that has never been one passes forever.
+    /// Anchorhead's is Inform 7's own *room gone to*, a going-action variable
+    /// that sits four bytes below `location` in RAM and therefore wins
+    /// [`name_witness`](Self::name_witness)'s address tie-break on the first
+    /// move. It tracks the room perfectly for as long as every move succeeds,
+    /// and then says two different false things: on a move a check rule refuses
+    /// it holds the room BEHIND the locked door the player never went through,
+    /// and on a move an `instead` rule reroutes it holds nothing at all. Both
+    /// are ordinary Inform, and neither is visible to a test that only asks
+    /// whether the value is an object of this story.
+    ///
+    /// What CAN see it is the story's own answer: a room the game named this
+    /// turn — a printed heading, or [`crate::glulx_session::GlulxSession`]'s
+    /// silent `look` — which the compiled world model resolves to exactly one
+    /// address that is not the one this word holds. The caller owns that
+    /// comparison (only it can read the story); this is what it does with the
+    /// answer.
+    ///
+    /// Relearns from scratch, keeping everything [`relearn`](Self::relearn)
+    /// keeps plus the growing rejection list, so the next lock is taken on a
+    /// DIFFERENT word. Inform keeps several aliases of the current room side by
+    /// side (`location`, `real_location`, the player's parent), so there is
+    /// normally another one a move or two away; a story with no survivor simply
+    /// never locks again and keeps the identity `room_by_static_name` gives it.
+    pub fn reject(&mut self, addr: u32, words: usize) {
+        if let Err(i) = self.rejected.binary_search(&addr) {
+            self.rejected.insert(i, addr);
+        }
+        self.relearn(words);
+    }
+
+    /// Has `addr` already been caught out once? [`reject`](Self::reject).
+    fn is_rejected(&self, addr: u32) -> bool {
+        self.rejected.binary_search(&addr).is_ok()
+    }
+
     /// Take the re-key table produced when a lock resolves: `(room name, real id)`
     /// for each room seen while learning. Empty except on the turn a lock lands,
     /// and empty entirely for a learner that started locked.
@@ -400,6 +452,13 @@ impl RoomLock {
         let prev = self.prev.as_ref()?;
         let (mut value, mut best): (Option<u32>, Option<u32>) = (None, None);
         for (i, &v) in ram.iter().enumerate() {
+            // A word the story has already caught out is not a candidate, and is
+            // not a witness against one either — it is out of the question
+            // entirely, maze test included (SQ-1315).
+            let addr = self.base + (i as u32) * 4;
+            if self.is_rejected(addr) {
+                continue;
+            }
             // Only a word that MOVED this turn is a witness: the player arrived
             // somewhere, and the global that says where went with them.
             if prev.ram.get(i) == Some(&v) {
@@ -414,7 +473,6 @@ impl RoomLock {
                 return None; // two rooms of that name: a maze, and a name cannot say which
             }
             value = Some(v);
-            let addr = self.base + (i as u32) * 4;
             if best.is_none_or(|b| addr < b) {
                 best = Some(addr);
             }
@@ -451,6 +509,10 @@ impl RoomLock {
             // parent). Any of them identifies the room, so take the lowest address
             // for a deterministic, reproducible choice.
             let addr = self.base + (i as u32) * 4;
+            // …unless the story has already caught that one out (SQ-1315).
+            if self.is_rejected(addr) {
+                continue;
+            }
             if best.is_none_or(|b| addr < b) {
                 best = Some(addr);
             }
@@ -571,15 +633,18 @@ impl RoomLock {
     }
 
     /// Throw the model away and learn again from scratch, keeping the object
-    /// table and the room set — both are properties of the STORY, not of the
-    /// guess that just failed, and re-deriving either means another whole-image
-    /// scan.
+    /// table, the room set and the rejection list — all three are properties of
+    /// the STORY, not of the guess that just failed, and re-deriving the first
+    /// two means another whole-image scan (see [`reject`](Self::reject) for why
+    /// the third must survive too).
     fn relearn(&mut self, words: usize) {
         let objects = self.objects.take();
         let rooms = self.rooms.take();
+        let rejected = std::mem::take(&mut self.rejected);
         *self = RoomLock::new(self.base, words);
         self.objects = objects;
         self.rooms = rooms;
+        self.rejected = rejected;
     }
 }
 
@@ -1084,4 +1149,91 @@ mod tests {
         assert!(!l.needs_objects(), "…and so did the object table");
     }
 
+    // ── SQ-1315: a word the STORY caught out is never offered again ───────────
+
+    #[test]
+    fn a_rejected_word_is_never_locked_on_again_and_the_next_alias_wins() {
+        // Anchorhead in miniature: two words hold the room and the LOWER one is a
+        // going-action variable that tracks it only while every move succeeds.
+        // Rejecting it must not simply relearn — `name_witness` would re-elect the
+        // same address on the very next move, forever.
+        let (base, _) = base_region();
+        let (far, rooms) = three_rooms(base);
+        let mut l = RoomLock::new(base, 3);
+        l.set_objects(Some(vec![far, far + 0x10, far + 0x20]));
+        l.set_rooms(Some(rooms));
+
+        l.observe(vec![far, far, 7], Some("Back Alley".into()), Movement::Unchanged, Movement::Unchanged);
+        l.observe(
+            vec![far + 0x10, far + 0x10, 7],
+            Some("Sigil Street".into()),
+            Movement::Changed,
+            Movement::Changed,
+        );
+        assert_eq!(l.locked(), Some(base), "the lower of the two agreeing words, as ever");
+
+        // The caller reads the story and finds the two disagree.
+        l.reject(base, 3);
+        assert_eq!(l.locked(), None, "the address is given up on the spot");
+        assert!(!l.needs_rooms(), "…and the room set survives, as for any other re-learn");
+        assert!(!l.needs_objects(), "…and so does the object table");
+
+        // Learn again from the same shape of evidence. The lower word is out of the
+        // running now, so the alias beside it is what locks.
+        l.observe(vec![far, far, 7], Some("Back Alley".into()), Movement::Unchanged, Movement::Unchanged);
+        l.observe(
+            vec![far + 0x10, far + 0x10, 7],
+            Some("Sigil Street".into()),
+            Movement::Changed,
+            Movement::Changed,
+        );
+        assert_eq!(
+            l.locked(),
+            Some(base + 4),
+            "the next word up — the rejected one may not be re-elected however well it witnesses"
+        );
+    }
+
+    #[test]
+    fn a_rejected_word_is_out_of_the_correlation_lock_too() {
+        // The same exclusion on the slow route in: `try_lock`'s correlation must
+        // not hand back an address `name_witness` has been told to refuse, or the
+        // rejection would last exactly as long as the story kept printing headings.
+        let (base, words) = base_region();
+        let mut l = RoomLock::new(base, words);
+        l.reject(base, words);
+        drive(
+            &mut l,
+            &[
+                (Movement::Unchanged, 0x1000),
+                (Movement::Changed, 0x1004),
+                (Movement::Unchanged, 0x1004),
+                (Movement::Changed, 0x1008),
+                (Movement::Changed, 0x1000),
+            ],
+        );
+        assert_eq!(
+            l.locked(),
+            None,
+            "word 0 is the only one that correlates, and it is out of the running"
+        );
+    }
+
+    #[test]
+    fn a_rejected_word_survives_a_later_relearn() {
+        // A rejection is a fact about the STORY, so it has to outlive the ordinary
+        // re-learn that `verify` triggers — otherwise one dark room or one stale
+        // sidecar hands the caught-out word straight back.
+        let (base, words) = base_region();
+        let mut l = RoomLock::new(base, words);
+        l.reject(base, words);
+        l.set_objects(Some(vec![0x2000]));
+        // A `locked_at` whose word holds no object of the story: `verify` relearns.
+        let mut l2 = RoomLock::locked_at(base, words, base + 8);
+        l2.rejected = l.rejected.clone();
+        l2.set_objects(Some(vec![0x2000]));
+        l2.observe(vec![1, 1, 1], Some("a".into()), Movement::Unchanged, Movement::Unchanged);
+        assert_eq!(l2.locked(), None, "the lock was dropped by the value check");
+        assert!(l2.is_rejected(base), "…and the rejection list came through the re-learn intact");
+    }
 }

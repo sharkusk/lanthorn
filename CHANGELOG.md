@@ -56,6 +56,21 @@ Absolute URLs or no link.
 
 ### Fixed
 
+- **A door the game refuses no longer puts you on the other side of it.** In
+  *Anchorhead* (the 2018 illustrated edition), trying the estate agent's locked
+  door drew you straight into the office you had just been told you could not
+  enter — a room on the map you had never seen, with a passage into it you had
+  never walked. The same mistake had a second half: *Twisting Lane*, where
+  every direction sends you wandering off to a random street, looked to the map
+  like a room you never left, so your next move drew a passage out of the lane
+  instead. That is where the lane's fistful of impossible exits came from. Both
+  came from the map watching the wrong scrap of the game's memory; it now
+  checks that scrap against the room the story itself names, drops it the
+  moment the two disagree, and finds the right one within a move or two.
+  Wandering out of the lane is now what it always was — an exit whose
+  destination varies, marked `?` and listing the streets it has actually put
+  you on.
+
 - **A ship's map no longer erases itself as you sail it.** Walking Slango's
   yacht in *Counterfeit Monkey* with the ship's own words — `fs`, `ap`, `aft`,
   `port` — drew each passage and then quietly rubbed it out, until the boat was
