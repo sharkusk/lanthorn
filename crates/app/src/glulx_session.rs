@@ -1319,6 +1319,7 @@ impl GlulxSession {
         // so the turn's own diagnostics, fault trace, transcript and sound ops are
         // already out of the way and anything the question stirs up can simply be
         // thrown away with the rest of it.
+        let mut story_named = heading.clone();
         if self.needs_a_room_name(&heading, movement) {
             // SQ-1302: the refusal itself is what unlocks the status line
             // (`status_line_room`), so read it on the turn the story declined
@@ -1330,8 +1331,12 @@ impl GlulxSession {
             };
             if let Some(n) = named {
                 self.last_room = Some(self.room_for(&n, &ram));
+                story_named = Some(n);
             }
         }
+        // SQ-1315: last of all, because it needs everything above — the name the
+        // story gave this turn, whichever channel it came from.
+        self.check_room_lock_against_story(&ram, movement, story_named.as_deref());
         let location = self.last_room.clone();
         let location_method = location.as_ref().map(|_| LocationMethod::RoomHeading);
         TurnResult {
@@ -1467,6 +1472,110 @@ impl GlulxSession {
         }
         self.room_lock.room_id(ram).is_some()
             && movement != crate::glulx_roomlock::Movement::Unchanged
+    }
+
+    /// Check the locked word against what the STORY said this turn, and give the
+    /// address up when the two name different rooms (SQ-1315).
+    ///
+    /// [`crate::glulx_roomlock::RoomLock::verify`] asks whether the locked word
+    /// still holds an object of this story, and whether it has gone dead while
+    /// the screen fills with new room names. Neither question can catch a word
+    /// that has never been the room global and looks exactly like one: Anchorhead
+    /// (2018, release 1 / serial 171017) parks Inform 7's *room gone to* four
+    /// bytes below `location`, so it wins the first move's tie-break and then
+    /// tells two lies that are ordinary Inform, not corruption —
+    ///
+    /// * a move a CHECK rule refuses leaves it holding the room behind the door.
+    ///   `east` at Outside the Real Estate Office prints *"The glass-paneled door
+    ///   is locked, and you lack a key"* and the word reads `Office`, so the map
+    ///   drew an east passage into a room the player was refused entry to — the
+    ///   report's *"attempting to enter a room and failing, the game thinks you
+    ///   entered the room"*;
+    /// * a move an INSTEAD rule reroutes leaves it holding nothing. Twisting
+    ///   Lane's every direction wanders the player into a random street; the word
+    ///   reads zero, [`Self::adopt_heading_for_room`] refuses a zero, and the map
+    ///   stayed in the lane while the player walked off — so the NEXT move's
+    ///   passage was minted out of the lane, which is the report's *"rooms that
+    ///   teleport you randomly"* arriving as a fistful of fixed lane exits.
+    ///
+    /// The evidence that settles it is the one thing `verify` has no access to:
+    /// the room the story NAMED this turn — a printed heading, the answer to
+    /// [`Self::silent_look`], or failing both the status line — resolved through
+    /// the compiled world model ([`Self::room_by_static_name`]) to exactly one
+    /// address. Disagreement with the locked word is not a heuristic; it is the
+    /// story contradicting the guess outright.
+    ///
+    /// The status line is read here and **nowhere else in this file** without
+    /// SQ-1302's gates, and the difference is what it is used FOR: naming a room
+    /// from the grid is a claim, and this is a refusal to believe one. It is also
+    /// the only witness a refused move leaves — Anchorhead prints a heading when
+    /// the player arrives somewhere and nothing whatever when the door is locked,
+    /// and its `look` prints the room name in plain roman rather than as a
+    /// `Subheader`, so the silent look comes back empty too (measured: three
+    /// consecutive refusals, `naming_look_refusals` climbing).
+    ///
+    /// Three conditions keep a CORRECT lock safe, and each has a suite behind it:
+    ///
+    /// * **only on a turn the LOCKED WORD says was a move.** Counterfeit Monkey's
+    ///   `remember` prints a `Galley` heading for a flashback while the player
+    ///   never leaves the Dormitory Room (SQ-1294b) — the word does not move, so
+    ///   nothing is scored against it. This is the exact complement of
+    ///   `verify`'s frozen-lock check, which watches the other pairing (the word
+    ///   still, the headings new).
+    /// * **only when both sides resolve.** A name the model cannot turn into
+    ///   exactly one address says nothing — two rooms of one name is a maze, and
+    ///   `location` parked on `thedark` is a room global telling the truth
+    ///   about a dark room. Either way the check declines to judge.
+    /// * **agreement is checked first, and cheaply.** One
+    ///   [`Self::static_room_name`] of the value in hand answers the ordinary
+    ///   turn; the whole-room-set scan behind `room_by_static_name` runs only
+    ///   where the two names already differ.
+    ///
+    /// On a contradiction the address is rejected for the rest of the session
+    /// ([`crate::glulx_roomlock::RoomLock::reject`]), the sidecar that would
+    /// re-lock it at the next launch is deleted, and THIS turn's room is rebuilt
+    /// from the name the story gave — so the move that caught the lock out is
+    /// also the first move mapped correctly, rather than one more wrong edge.
+    fn check_room_lock_against_story(
+        &mut self,
+        ram: &[u32],
+        movement: crate::glulx_roomlock::Movement,
+        story_named: Option<&str>,
+    ) {
+        if movement != crate::glulx_roomlock::Movement::Changed {
+            return;
+        }
+        let Some(locked) = self.room_lock.locked() else { return };
+        // The strongest witness first. The buffer channels are what SQ-1293 and
+        // SQ-1302 already trust to NAME a room; the status line is added here
+        // only as a check, and it is the only channel a refused move leaves —
+        // Anchorhead prints its heading on arrival and nothing at all when the
+        // door is locked, while the grid says where the player is standing the
+        // whole time.
+        let named = match story_named {
+            Some(n) => n.to_string(),
+            None => match self.appglk().status_room_name() {
+                Some(n) => n,
+                None => return,
+            },
+        };
+        let held = self.room_lock.room_id(ram);
+        if let Some(v) = held {
+            // A value whose name the model cannot state is a value this check
+            // cannot judge — say nothing rather than guess. `thedark` lands here,
+            // which is the darkness case `RoomLock::is_known_room` documents.
+            let Some(held_name) = self.static_room_name(v) else { return };
+            if zvm::location::status_name_matches(&named, &held_name) {
+                return;
+            }
+        }
+        let Some(addr) = self.room_by_static_name(&named) else { return };
+        if held == Some(addr) {
+            return;
+        }
+        self.room_lock.reject(locked, ram.len());
+        self.forget_room_global();
+        self.last_room = Some(self.room_for(&named, ram));
     }
 
     /// This turn's room heading, falling back to the STATUS LINE for a story that
@@ -1727,6 +1836,20 @@ impl GlulxSession {
             }
             let (checksum, extstart) = self.image_identity();
             let _ = std::fs::write(p, format!("{addr} {checksum:x}:{extstart:x}"));
+        }
+    }
+
+    /// Delete the remembered address (SQ-1315). Called where the story has just
+    /// contradicted the lock: without this the sidecar would hand the very word
+    /// the story caught out straight back at the next launch, before a single
+    /// turn has been played and with the rejection list — which is a fact about
+    /// this SESSION's learning, not about the story file — starting empty again.
+    fn forget_room_global(&self) {
+        if !self.store.may_write() {
+            return;
+        }
+        if let Some(p) = self.room_global_path() {
+            let _ = std::fs::remove_file(p);
         }
     }
 

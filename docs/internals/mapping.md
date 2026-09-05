@@ -180,6 +180,21 @@ discovered it.
   twin (SQ-1304). Rooms that *shared* a heading before the lock are a harder case
   and still open: they were one node, and re-keying can rename a node but not split
   one.
+  A lock can also land on the **wrong word entirely**, and only the story can say
+  so. Inform keeps several words holding the current room side by side, and where
+  they tie the lower address wins — which on *Anchorhead* (2018) is not `location`
+  but the going action's own destination variable, four bytes below it. That word
+  tracks the room perfectly for as long as every move succeeds, then holds the room
+  *behind* a locked door the player was refused, and nothing at all when a rule
+  reroutes the move somewhere else. Neither looks like corruption, so the checks
+  that ask what the WORD looks like cannot catch either. What can is the room the
+  story NAMED this turn — heading, silent `look`, or failing both the status bar —
+  turned back into an address through the compiled map: when that disagrees with
+  the locked word on a turn the word itself calls a move, the address is given up
+  for the session, never offered again, and the room is re-read from the name on
+  the spot, so the move that catches the lock out is also the first one mapped
+  correctly. Anchorhead gives its wrong word up at the first locked door and
+  re-locks on the real `location` two moves later (SQ-1315).
   And when a game will not print a heading at all, the **status line** is the
   answer. *The Wizard Sniffer* keeps the room name entirely in its own two-row
   status bar — `Atop a Mountain` over `Exit: north` — and prints nothing but the
@@ -674,6 +689,20 @@ every connector in the frame, so its digit always wins the shared cell over the
 crossing line. `/export-map`'s dump lists the recorded destinations on the `ROOM`
 line (`random=[N→(#187 "Probably New Tunnel"), …]`) beside everything else it already
 records about a room.
+
+**A randomiser the map cannot see is one it never had a chance to mark.** Every
+piece of the machinery above — the declared-exit check, the contradicted edge, the
+`?` and its list — starts from noticing that *this* direction out of *this* room
+landed you somewhere new. A story that teleports you while the map still thinks you
+are standing where you were produces none of that evidence: it produces a fixed
+passage, minted on your NEXT move, out of the room you already left. *Anchorhead*'s
+Twisting Lane declares no exits in any direction at all — every way out is a rule
+that wanders you into a random street — and the whole of it was invisible until the
+room lock was reading the right word (see [knowing where you
+are](#knowing-where-you-are--across-three-engines)). With that fixed, it is an
+ordinary `?`: the first walk mints a passage and asks the silent copy about it, and
+the second landing somewhere else is the contradiction that marks the direction and
+starts the list (SQ-1315).
 
 **On a ship, the map asks in your words, not the compass equivalent.** `fore`,
 `aft`, `port`, `starboard` and the four quarters (`fore-starboard` and its
