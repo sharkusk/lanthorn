@@ -3963,7 +3963,16 @@ pub fn apply_turn(
                     .map(|c| c.dest)
                     .or_else(|| mapper.graph.self_loops(here).contains(&d).then_some(here))
             });
+        // SQ-1314: and it only means anything for a move made ON THE COMPASS. `declared_exit`
+        // answers about the story's own compass column for `dir`; a nautical word — Counterfeit
+        // Monkey's yacht, Shogun's decks — fills that same `Direction` slot on the MAP while the
+        // story files it under a direction object of its own, so the compass column describes a
+        // passage the player did not walk. `turn::finish_command_turn` no longer even asks in that
+        // case (`declared_exit` stays `None`), and this restates the rule where the decision is
+        // actually made: `apply_turn` is engine-neutral and takes whatever `declared_exit` a
+        // caller hands it, so the guard has to hold here too.
         let declared_mismatch = moved_room
+            && mapper::direction::is_compass_command(command)
             && matches!(
                 result.declared_exit,
                 Some(crate::engine::DeclaredExit::Room(r)) if r != snap.number
@@ -6450,6 +6459,56 @@ mod tests {
             m.graph.random_destinations(183, Direction::N).is_empty(),
             "a rename-loop records no destination — the room never actually changed"
         );
+    }
+
+    /// SQ-1314: the declared-exit mismatch rule is about a move made ON THE COMPASS, and a
+    /// nautical word is not one.
+    ///
+    /// `Engine::declared_exit` takes a [`Direction`] and reads the story's own compass column for
+    /// it. A ship word fills that same slot on the MAP through a projection nothing in the story
+    /// shares — Counterfeit Monkey files `fore` under a direction object of its own, and the
+    /// compass column for the slot `fore` projects onto may name a completely different room, or
+    /// none. So a mismatch between that column and where a `fore` actually landed is a mismatch
+    /// between two different questions, and marking the passage suspicious on it is a lie about a
+    /// move the player just completed.
+    ///
+    /// `turn::finish_command_turn` no longer even asks in that case; this pins the rule where the
+    /// decision is made, because `apply_turn` believes whatever `declared_exit` it is handed.
+    #[test]
+    fn a_declared_mismatch_against_a_nautical_word_is_not_a_suspicion() {
+        let room = |n: u32, name: &str| LocationInfo { number: n, parent: 0, name: name.into() };
+
+        // The compass baseline: `north` really is the column `declared_exit` answered about, so a
+        // mismatch there is a genuine contradiction and still raises a suspicion.
+        let mut m = Mapper::default();
+        apply_turn(&mut m, "", &TurnResult::observation(room(1, "Open Sea")), &mut Default::default());
+        let mut r = TurnResult::observation(room(2, "Sunning Deck"));
+        r.declared_exit = Some(crate::engine::DeclaredExit::Room(9));
+        apply_turn(&mut m, "north", &r, &mut Default::default());
+        assert!(
+            m.take_random_exit_suspicion().is_some(),
+            "a compass move contradicting its own compass column is still suspicious"
+        );
+        assert!(m.graph.connections().iter().all(|c| !(c.origin == 1 && c.dir == Direction::N)));
+
+        // The same numbers, walked with the ship's own word. `fore` projects onto NORTH on the
+        // map, but the story routed it through a direction object of its own, so the north column
+        // says nothing about it — and the passage must be minted like any ordinary walk.
+        let mut m = Mapper::default();
+        apply_turn(&mut m, "", &TurnResult::observation(room(1, "Galley")), &mut Default::default());
+        let mut r = TurnResult::observation(room(2, "Brock's Stateroom"));
+        r.declared_exit = Some(crate::engine::DeclaredExit::Room(9));
+        apply_turn(&mut m, "fore", &r, &mut Default::default());
+        assert!(
+            m.take_random_exit_suspicion().is_none(),
+            "a compass column cannot contradict a move that was not made on the compass"
+        );
+        assert_eq!(
+            m.graph.connections().iter().find(|c| c.origin == 1 && c.dir == Direction::N).map(|c| c.dest),
+            Some(2),
+            "the ship passage is minted, drawn, and not marked `?`"
+        );
+        assert!(!m.graph.is_random_exit(1, Direction::N));
     }
 
     /// SQ-0576: a compass click submits no text, but the game echoes the

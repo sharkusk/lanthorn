@@ -15,43 +15,132 @@ pub enum Direction {
     Unknown,
 }
 
-pub fn parse_direction(cmd: &str) -> Option<Direction> {
+/// Which VOCABULARY FAMILY a direction word belongs to (SQ-1314).
+///
+/// A direction and the word a player reached it by are two different facts, and aboard a ship
+/// they disagree: `aft-port` and `southwest` fill the same [`Direction`] slot on the map, and the
+/// story accepts exactly one of them. Anything that types a direction back AT the game — a
+/// probe's shadow — must know which family the player's own word came from; anything that reads
+/// the game's own COMPASS map data must know whether the move it is checking was made on the
+/// compass at all.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DirFamily {
+    /// The compass rose and its portals: the words Inform's and ZIL's own direction objects
+    /// answer to, and the only moves a compass-column read is about.
+    Compass,
+    /// The nautical set: fore/aft/port/starboard, their bow/stern synonyms, and the four quarter
+    /// directions. A story that models these as its OWN direction objects — Shogun's `defs.zil`,
+    /// Counterfeit Monkey's yacht — refuses the compass word for them entirely.
+    Nautical,
+}
+
+/// The word a direction command turns on: lower-cased, with a leading `go` stripped.
+///
+/// `None` for an empty command. Every direction fact below is derived from this one token, so the
+/// parse, the word a probe types back, and the family it belongs to can never disagree about what
+/// the player said (SQ-1314).
+fn command_token(cmd: &str) -> Option<String> {
     let lower = cmd.trim().to_lowercase();
     let mut tokens = lower.split_whitespace();
     let first = tokens.next()?;
+    let word = if first == "go" { tokens.next()? } else { first };
+    Some(word.to_string())
+}
 
-    let word = if first == "go" {
-        tokens.next()?
-    } else {
-        first
-    };
-
-    match word {
-        "n" | "north" => Some(Direction::N),
-        "s" | "south" => Some(Direction::S),
-        "e" | "east" => Some(Direction::E),
-        "w" | "west" => Some(Direction::W),
-        "ne" | "northeast" => Some(Direction::NE),
-        "nw" | "northwest" => Some(Direction::NW),
-        "se" | "southeast" => Some(Direction::SE),
-        "sw" | "southwest" => Some(Direction::SW),
-        "u" | "up" => Some(Direction::Up),
-        "d" | "down" => Some(Direction::Down),
-        "in" | "inside" | "enter" => Some(Direction::In),
-        "out" | "outside" | "exit" => Some(Direction::Out),
+/// The ONE table: every direction word this map understands, the slot it fills, and the family it
+/// came from. Everything else here reads it — there is no second list to keep in step.
+fn word_direction(word: &str) -> Option<(Direction, DirFamily)> {
+    use DirFamily::{Compass, Nautical};
+    Some(match word {
+        "n" | "north" => (Direction::N, Compass),
+        "s" | "south" => (Direction::S, Compass),
+        "e" | "east" => (Direction::E, Compass),
+        "w" | "west" => (Direction::W, Compass),
+        "ne" | "northeast" => (Direction::NE, Compass),
+        "nw" | "northwest" => (Direction::NW, Compass),
+        "se" | "southeast" => (Direction::SE, Compass),
+        "sw" | "southwest" => (Direction::SW, Compass),
+        "u" | "up" => (Direction::Up, Compass),
+        "d" | "down" => (Direction::Down, Compass),
+        "in" | "inside" | "enter" => (Direction::In, Compass),
+        "out" | "outside" | "exit" => (Direction::Out, Compass),
         // Ship directions (Seastalker et al.): the bow/front points north.
-        "fore" | "forward" | "bow" | "f" => Some(Direction::N),
-        "aft" | "stern" | "a" | "af" => Some(Direction::S),
-        "port" | "p" => Some(Direction::W),
-        "starboard" | "sb" => Some(Direction::E),
+        "fore" | "forward" | "bow" | "f" => (Direction::N, Nautical),
+        "aft" | "stern" | "a" | "af" => (Direction::S, Nautical),
+        "port" | "p" => (Direction::W, Nautical),
+        "starboard" | "sb" => (Direction::E, Nautical),
         // Quarter directions (Counterfeit Monkey's Atlantida Herself, SQ-1296): the ship's four
         // diagonals, halfway between a cardinal ship direction and its neighbour.
-        "aft-port" | "pa" | "ap" => Some(Direction::SW),
-        "aft-starboard" | "sa" | "as" | "asb" => Some(Direction::SE),
-        "fore-port" | "pf" | "fp" => Some(Direction::NW),
-        "fore-starboard" | "sf" | "fs" | "fsb" => Some(Direction::NE),
-        _ => None,
+        "aft-port" | "pa" | "ap" => (Direction::SW, Nautical),
+        "aft-starboard" | "sa" | "as" | "asb" => (Direction::SE, Nautical),
+        "fore-port" | "pf" | "fp" => (Direction::NW, Nautical),
+        "fore-starboard" | "sf" | "fs" | "fsb" => (Direction::NE, Nautical),
+        _ => return None,
+    })
+}
+
+pub fn parse_direction(cmd: &str) -> Option<Direction> {
+    WalkedDir::parse(cmd).map(|w| w.dir())
+}
+
+/// A direction AS WALKED: the slot the map files it under, and the word the player actually typed
+/// for it (SQ-1314).
+///
+/// The two travel together because they must be considered together, and either alone is a
+/// *plausible* wrong answer. `Direction::SW` out of Counterfeit Monkey's Galley is true — the map
+/// draws the passage down-left — and `southwest` typed back into that room is refused, because
+/// what the player walked was `ap`. A shadow probe re-asking with the compass word lands back
+/// where it started, reads the refusal as a disagreement, and erases the very passage it was
+/// checking: that was SQ-1314, and it happened because a bare `Direction` reached something that
+/// had to SPEAK it.
+///
+/// [`WalkedDir::parse`] is the only constructor, so the word and the slot are always the same
+/// player's move.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct WalkedDir {
+    dir: Direction,
+    word: String,
+    family: DirFamily,
+}
+
+impl WalkedDir {
+    /// Read a command. `None` when it names no direction — exactly the commands
+    /// [`parse_direction`] refuses, by construction: it *is* this function.
+    pub fn parse(cmd: &str) -> Option<WalkedDir> {
+        let word = command_token(cmd)?;
+        let (dir, family) = word_direction(&word)?;
+        Some(WalkedDir { dir, word, family })
     }
+
+    /// The map slot this move fills.
+    pub fn dir(&self) -> Direction {
+        self.dir
+    }
+
+    /// The word to TYPE at the game for this move — the player's own, never a translation.
+    pub fn word(&self) -> &str {
+        &self.word
+    }
+
+    /// Which vocabulary the word came from.
+    pub fn family(&self) -> DirFamily {
+        self.family
+    }
+
+    /// True when the player named a compass point (or a portal), so the story's own compass map
+    /// data is about the move they actually made. False for the nautical set, whose columns a
+    /// compass read cannot see — see [`DirFamily`].
+    pub fn is_compass(&self) -> bool {
+        self.family == DirFamily::Compass
+    }
+}
+
+/// True when `cmd` names a direction from the COMPASS family (SQ-1314) — the question "does the
+/// story's own compass map data have anything to say about this move?".
+///
+/// False both for a nautical word and for a command that names no direction at all.
+pub fn is_compass_command(cmd: &str) -> bool {
+    WalkedDir::parse(cmd).is_some_and(|w| w.is_compass())
 }
 
 /// True for a "travel to a room" command (SQ-1299) — Counterfeit Monkey's (and other Inform
@@ -415,6 +504,67 @@ mod tests {
 
         // Still nothing for words this set does not use.
         assert_eq!(parse_direction("xyzzy"), None);
+    }
+
+    /// SQ-1314: a walked direction carries the player's OWN word, never a translation of it.
+    /// Counterfeit Monkey's yacht accepts `ap` out of the Galley and refuses `southwest`, so a
+    /// probe handed only the `Direction` asks a question the story will not answer.
+    #[test]
+    fn a_walked_direction_keeps_the_word_the_player_typed() {
+        let ap = WalkedDir::parse("ap").expect("`ap` is a direction");
+        assert_eq!(ap.dir(), Direction::SW);
+        assert_eq!(ap.word(), "ap", "the shadow must re-ask with the player's own word");
+        assert_eq!(ap.family(), DirFamily::Nautical);
+        assert!(!ap.is_compass());
+
+        // Lower-cased, and the leading `go` stripped — exactly the token `parse_direction` reads.
+        let fs = WalkedDir::parse("GO Fs").expect("`go fs` is a direction");
+        assert_eq!((fs.dir(), fs.word()), (Direction::NE, "fs"));
+
+        // A compass word keeps ITS spelling too; nothing is normalised to the long label.
+        let n = WalkedDir::parse("n").expect("`n` is a direction");
+        assert_eq!((n.dir(), n.word(), n.is_compass()), (Direction::N, "n", true));
+
+        assert_eq!(WalkedDir::parse("xyzzy"), None);
+        assert_eq!(WalkedDir::parse(""), None);
+    }
+
+    /// The parse and the word can never disagree, because one is defined in terms of the other.
+    #[test]
+    fn every_walked_direction_agrees_with_parse_direction() {
+        for cmd in [
+            "n", "north", "go south", "u", "d", "in", "out", "enter", "exit", "fore", "aft",
+            "port", "starboard", "sb", "ap", "as", "fp", "fs", "bow", "stern", "xyzzy", "",
+            "take lamp",
+        ] {
+            assert_eq!(
+                WalkedDir::parse(cmd).map(|w| w.dir()),
+                parse_direction(cmd),
+                "{cmd:?} must parse to the same direction either way"
+            );
+        }
+    }
+
+    /// SQ-1314: the compass family is the one a story's own compass map data is about. The
+    /// nautical family fills the same map slots through a projection that is the MAP's, not the
+    /// game's — Counterfeit Monkey files `aft-port` under a direction object of its own and
+    /// declares nothing southwest — so a compass-column read says nothing about a nautical move.
+    #[test]
+    fn only_a_compass_word_is_a_compass_command() {
+        for cmd in ["n", "north", "go northeast", "up", "down", "in", "out", "enter", "exit"] {
+            assert!(is_compass_command(cmd), "{cmd:?} is on the compass");
+        }
+        for cmd in [
+            "fore", "forward", "bow", "f", "aft", "stern", "a", "af", "port", "p", "starboard",
+            "sb", "ap", "pa", "aft-port", "as", "asb", "fp", "fs", "fore-starboard",
+        ] {
+            assert!(!is_compass_command(cmd), "{cmd:?} is nautical, not a compass point");
+            assert!(parse_direction(cmd).is_some(), "{cmd:?} is still a direction");
+        }
+        // Not a direction at all is not a compass command either.
+        assert!(!is_compass_command("xyzzy"));
+        assert!(!is_compass_command("take lamp"));
+        assert!(!is_compass_command(""));
     }
 
     #[test]

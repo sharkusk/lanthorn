@@ -186,10 +186,10 @@ pub(crate) fn finish_command_turn(
     // SQ-1257: what the room being LEFT declares for the direction just typed, read before
     // `apply_turn` decides what this move means. Needs a live engine handle and the pre-move
     // room, which is why this lives here and not inside `apply_turn` itself (an engine-neutral
-    // pure function with neither).
-    if let (Some(origin), Some(dir)) = (room_before, mapper::direction::parse_direction(cmd)) {
-        result.declared_exit = Some(session.declared_exit(origin, dir));
-    }
+    // pure function with neither). SQ-1314: `None` for a move made off the compass — see the
+    // function's own docs.
+    result.declared_exit =
+        app::random_exit_probe::declared_exit_for_command(cmd, room_before, |o, d| session.declared_exit(o, d));
 
     apply_turn(mapper, cmd, &result, &mut state.death_watch);
 
@@ -223,69 +223,18 @@ pub(crate) fn finish_command_turn(
     app::return_probe::arm_return_search(state, mapper, &*session, cmd, room_before, &mut turn_save);
 
     // SQ-1257 Phase 2: this move's own edge was minted (or not) already, by `apply_turn` above.
-    // Two shapes are worth a reseeded shadow's opinion, and both need the player to have actually
-    // changed rooms (a refusal proves nothing):
-    //
-    // * a FIRST walk of a direction the room's own map data had nothing static to check against
-    //   (`DeclaredExit::Absent` — no map data at all, e.g. Lost Pig's gnome tunnels — or `Code` —
-    //   a routine decides, e.g. the gateway into them). `apply_turn` minted the ordinary edge for
-    //   this already; Phase 2 either confirms it or deletes it.
-    // * a RE-walk of a direction ALREADY marked random. `apply_turn`'s sticky check minted no
-    //   edge this time — Lost Pig's gnome leading the player back OUT of the tunnels is exactly
-    //   this shape, a direction the player wandered randomly before now behaving deterministically
-    //   — so this is the UPGRADE path: agreement on both reseeded attempts promotes the mark to a
-    //   real edge (`random_exit_probe::deliver`); disagreement leaves the mark exactly as it was.
-    //
-    // `room_before`/`live_dest` are only knowable here — before and after `apply_turn`
-    // respectively — which is why this lives here and not inside `random_exit_probe` itself.
-    if let (Some(origin), Some(dir), Some(live_dest)) =
-        (room_before, mapper::direction::parse_direction(cmd), mapper.graph.current())
-    {
-        let already_random = mapper.graph.is_random_exit(origin, dir);
-        let worth_probing = live_dest != origin
-            && (already_random
-                || matches!(
-                    result.declared_exit,
-                    Some(app::engine::DeclaredExit::Absent) | Some(app::engine::DeclaredExit::Code)
-                ));
-        if worth_probing {
-            if let Some((saved_room, save)) = &state.random_exit_pre_move_save {
-                if *saved_room == origin {
-                    let save = std::sync::Arc::clone(save);
-                    let kind = if already_random {
-                        app::random_exit_probe::SearchKind::Upgrade
-                    } else {
-                        app::random_exit_probe::SearchKind::FirstWalk
-                    };
-                    app::random_exit_probe::arm_random_exit_search(
-                        state, &*session, origin, dir, live_dest, kind, save,
-                    );
-                }
-            }
-        }
-    }
-
-    // SQ-1269: a suspicion `apply_turn` left pending rather than marking on the spot — a
-    // declared-exit mismatch, or a live contradiction against an edge/self-loop the map already
-    // believed. Arm a probe to decide it when one can run, exactly like the shapes above; when
-    // none can (no snapshot this turn, or the infra below refuses to arm), resolve it immediately
-    // — the same immediate marking `apply_turn` always did for this shape before SQ-1269.
-    if let Some(susp) = mapper.take_random_exit_suspicion() {
-        let mut armed = false;
-        if let Some((saved_room, save)) = &state.random_exit_pre_move_save {
-            if *saved_room == susp.origin {
-                let save = std::sync::Arc::clone(save);
-                app::random_exit_probe::arm_random_exit_search(
-                    state, &*session, susp.origin, susp.dir, susp.live_dest,
-                    app::random_exit_probe::SearchKind::Suspicion { old_dest: susp.old_dest }, save,
-                );
-                armed = state.random_exit_search.is_some();
-            }
-        }
-        if !armed {
-            mapper.resolve_suspicion_as_random(susp);
-        }
-    }
+    // Which reseeded shadow this turn earns — a first walk, an upgrade, or a suspicion left
+    // pending — is `random_exit_probe`'s own decision, and lives there in ONE place: five real-
+    // story harnesses mirror this call and every one of them used to restate the gate by hand
+    // (SQ-1314). `room_before` is the only fact this scope has that it does not.
+    app::random_exit_probe::arm_for_finished_turn(
+        state,
+        &*session,
+        mapper,
+        cmd,
+        room_before,
+        result.declared_exit,
+    );
 
     // Bump the graph generation ONLY when the turn actually changed the map's
     // routed geometry (a room or connection added/removed). This invalidates the

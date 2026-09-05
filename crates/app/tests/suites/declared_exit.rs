@@ -473,61 +473,21 @@ impl Play {
     fn turn(&mut self, cmd: &str) {
         let room_before = self.mapper.graph.current();
         let mut result = self.session.submit(cmd);
-        let dir = mapper::direction::parse_direction(cmd);
-        if let (Some(o), Some(d)) = (room_before, dir) {
-            result.declared_exit = Some(self.session.declared_exit(o, d));
-        }
+        result.declared_exit = app::random_exit_probe::declared_exit_for_command(cmd, room_before, |o, d| {
+            Engine::declared_exit(&self.session, o, d)
+        });
         apply_turn(&mut self.mapper, cmd, &result, &mut self.death);
-        let live_dest = self.mapper.graph.current();
-
-        if let (Some(origin), Some(d), Some(dest)) = (room_before, dir, live_dest) {
-            let already_random = self.mapper.graph.is_random_exit(origin, d);
-            let worth_probing = dest != origin
-                && (already_random
-                    || matches!(result.declared_exit, Some(DeclaredExit::Absent) | Some(DeclaredExit::Code)));
-            if worth_probing {
-                if let Some((saved_room, save)) = &self.state.random_exit_pre_move_save {
-                    if *saved_room == origin {
-                        let save = Arc::clone(save);
-                        let kind = if already_random {
-                            app::random_exit_probe::SearchKind::Upgrade
-                        } else {
-                            app::random_exit_probe::SearchKind::FirstWalk
-                        };
-                        app::random_exit_probe::arm_random_exit_search(
-                            &mut self.state, &self.session, origin, d, dest, kind, save,
-                        );
-                        app::random_exit_probe::settle_random_exit_search(
-                            &mut self.state, &mut self.mapper,
-                        );
-                    }
-                }
-            }
-        }
-
-        // SQ-1269: a suspicion `apply_turn` left pending (a declared-exit mismatch, or a live
-        // contradiction against something the map already believed) rather than marking on the
-        // spot — arm a probe to decide it, mirroring `turn::finish_command_turn`, and resolve it
-        // immediately when no probe can run.
-        if let Some(susp) = self.mapper.take_random_exit_suspicion() {
-            let mut armed = false;
-            if let Some((saved_room, save)) = &self.state.random_exit_pre_move_save {
-                if *saved_room == susp.origin {
-                    let save = Arc::clone(save);
-                    app::random_exit_probe::arm_random_exit_search(
-                        &mut self.state, &self.session, susp.origin, susp.dir, susp.live_dest,
-                        app::random_exit_probe::SearchKind::Suspicion { old_dest: susp.old_dest }, save,
-                    );
-                    if self.state.random_exit_search.is_some() {
-                        app::random_exit_probe::settle_random_exit_search(&mut self.state, &mut self.mapper);
-                        armed = true;
-                    }
-                }
-            }
-            if !armed {
-                self.mapper.resolve_suspicion_as_random(susp);
-            }
-        }
+        // The Phase-2 gate is `random_exit_probe`'s own, in one place (SQ-1314) — this harness
+        // used to restate it, and the copy drifted.
+        app::random_exit_probe::arm_for_finished_turn(
+            &mut self.state,
+            &self.session,
+            &mut self.mapper,
+            cmd,
+            room_before,
+            result.declared_exit,
+        );
+        app::random_exit_probe::settle_random_exit_search(&mut self.state, &mut self.mapper);
 
         self.state.random_exit_pre_move_save = self
             .session
