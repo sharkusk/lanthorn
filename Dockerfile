@@ -43,6 +43,12 @@ COPY . .
 # a cache mount's contents are not part of the image.
 # The repo builds into `target.noindex` on a developer Mac; the image wants the
 # conventional path so the `cp target/release/...` below holds.
+#
+# `lanthorn-mapgen` (SQ-1306) is deliberately NOT copied out, though `-p
+# lanthorn` builds it: this image is the browser/ttyd wrapper — it exists to
+# serve a PLAYABLE session over a web terminal, and a developer tool that writes
+# map files into a container filesystem nobody can reach has no role in it. It
+# ships in the release archives and via `cargo install lanthorn` instead.
 ENV CARGO_TARGET_DIR=target
 RUN --mount=type=cache,target=/usr/local/cargo/registry \
     --mount=type=cache,target=/usr/local/rustup \
