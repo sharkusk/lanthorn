@@ -823,3 +823,180 @@ Legacy Computing) in favour of plain orthogonal corner exits — the escape hatc
 for a font that has no glyphs for them. Reload changes live with `reload-style`. See
 [customization & configuration](customization.md) for the full styling surface, and
 [interface](interface.md) for mouse-driven map navigation.
+
+## Generating a reference map
+
+Everything above builds a map out of what a *player* has seen. `lanthorn-mapgen`
+answers the other question — what the story file itself *declares* — and it
+answers it without playing a turn (SQ-1306). Two things want that: reference
+maps to measure the layout engine against, and hundred-room graphs to stress the
+router with, neither of which anyone wants to produce by hand.
+
+```sh
+cargo run -p lanthorn --bin lanthorn-mapgen -- stories/advent.blb --out /tmp/maps
+```
+
+It writes four artefacts named after the story's own stem, and prints a summary:
+
+| artefact | what it is |
+|---|---|
+| `<stem>.map.txt` | `app::map_dump::render_dump` — the annotated dump, with the ASCII drawing |
+| `<stem>.svg` | `app::export_svg::render_svg`, over `mapper::render::render` |
+| `<stem>.dot` | `app::export_dot::render_dot` |
+| `<stem>.map.json` | the documented, versioned JSON map described below |
+
+Naming any of `--dump`, `--svg`, `--dot`, `--json` writes only the ones named;
+naming none writes all four. `--no-layout` skips
+`mapper::layout::relayout_auto`, leaving pure topology with no room positions —
+much faster on a large map, and the right choice for a consumer doing its own
+layout. Exit status is `0` for a map written, `1` for an I/O failure, and **`2`
+for a story that declares no map anywhere in the file**, which is a distinct
+code so that a script sweeping a shelf can skip rather than stop.
+
+### What each source covers, and what it does not
+
+`lanthorn-mapgen` adds no format knowledge of its own; each source is read by
+the module that already owns it. The room-set derivation differs per source and
+is worth knowing, because it is the part that can be wrong:
+
+| source | reader | rooms are | doors | conditionals |
+|---|---|---|---|---|
+| `i7-world` | `gvm::i7map::I7World` | `I7World::rooms()` — the story's own `Map_Storage` row order, so the set is exact and nothing is derived | resolved: a two-sided door becomes an ordinary edge marked `door`, naming the door in `via` | n/a |
+| `i6-library` (Glulx) | `gvm::world::WorldModel` | objects that declare an exit, plus every object an exit leads to | **invisible** — `gvm::world` resolves `door_to` and reports a plain room, so the passage is right and the door is lost | n/a |
+| `zil` / `i6-library` (Z-machine) | `zvm::world::WorldModel` | the same derivation, over object numbers `1..=max_object` | DEXIT and Inform's `door_to` hop both keep the door (`ExitDetail::Door`) | CEXIT is drawn and marked `conditional` |
+| `scott` | `scott::Database` | `db.rooms[1..]` — complete by construction; index 0 is the format's "no room" sentinel and is not a place | n/a | n/a |
+
+The two Inform-6-style derivations deserve a word: neither `zvm::world` nor
+`gvm::world` exposes a room list, so "a room is an object that declares an exit"
+is the only signal available. The second half — "plus every object an exit leads
+to" — is what keeps a room whose *own* exits are all computed from going missing
+from its own map. Neither half needs the object tree, which is why the same code
+serves ZIL (whose rooms are not parented to a rooms object the way Inform's are).
+
+**Three things a static map cannot have.**
+
+- **Runtime map edits.** Inform 7's `AssertMapConnection`, an Inform 6
+  `door_dir` holding a routine, and ZIL's FEXIT all decide while the game runs
+  and leave nothing in the file. A static map can therefore be missing a passage
+  a player would find, and — where a story dismantles a connection — can show
+  one a player never can. A headless walker is the answer and is a separate
+  quest; nothing here is built toward it.
+- **Randomised destinations.** No static source knows a passage is randomised,
+  so `EdgeKind::Random` exists in the vocabulary and is never emitted.
+- **Stories that declare no map at all.** The Inform 7 reader refuses an Inform 6
+  build and any I7 build predating `Map_Storage`; where the Inform 6 reader also
+  finds nothing (Kerkerkruip is the specimen — it builds its dungeon as you
+  play), there is no source and the tool exits 2.
+
+**Conditional exits are drawn, and this is why `zvm::world::ExitDetail` exists.**
+`DeclaredExit` is the answer a live turn wants, and it flattens a ZIL CEXIT to
+`Code`: correct for `session::apply_turn`, which must not mint an edge through a
+gate that may be shut, and wrong for a map, which loses a real passage. Zork I
+r52 has 25 of them, including West of House → Stone Barrow and both ends of the
+rainbow. `declared_exit` is now `declared_exit_detail(..).flatten()`, so there is
+one description of each compiled shape.
+
+The CEXIT's second byte is reported raw and unattributed. The V3 table calls it
+`[global:1]` and it is **not** the global's Z-machine variable number: on Zork I
+r52 the seven CEXITs gated on `RAINBOW-FLAG` and on `WON-FLAG` all read `0`, and
+two distinct flags cannot be one variable. So the map says "conditional" and
+declines to name a global it cannot identify.
+
+### The `.map.json` schema
+
+Version 1. Designed for a consumer that has never seen lanthorn — an offline
+map-building tool, a graph analysis, a diff between two releases of a game. It
+carries **no lanthorn-internal state**: no seam decisions, no render slots, no
+terminal cells.
+
+Two rules for a reader. Refuse a file whose `format` is not `lanthorn-map`, and
+**ignore any key or enum value you do not recognise** — the format grows by
+addition, and only a change a version-1 reader could not survive bumps
+`version`.
+
+- **Top level** — `format` (always `"lanthorn-map"`), `version` (`1`),
+  `generator` `{name, version}` (the binary and its full build string),
+  `story`, `directions`, `rooms`, `edges`, `layers`.
+- **`story`** — `file` (base name only; a reference map is read on other
+  machines and an absolute path is noise), `engine` (`z-machine` / `glulx` /
+  `scott`), `source` (`i7-world` / `i6-library` / `zil` / `scott`), `release`,
+  `serial`, `checksum` (Z-machine only, ZMSD §11.1; `null` elsewhere),
+  `generated_at` (RFC 3339, UTC).
+- **`directions`** — the direction vocabulary, so a consumer need not hard-code
+  it: `word` (what an edge's `dir` says), `short`, and `bearing` in degrees,
+  north 0, clockwise. **`bearing` is `null` for up, down, in and out**, which is
+  exactly what tells a consumer which directions it can lay out on a grid.
+- **`rooms`** — `id` (the display id every lanthorn surface uses: `"#136"` for a
+  Z-machine object number, `"#12"` for a synthetic room's ordinal), `raw_id`
+  (the numeric `RoomId`), `name`, `ordinal`, `layer`, `pos` `{x, y}`, `flags`,
+  and `engine_ref`.
+  - **`pos` is the mapper's LOGICAL grid cell** — one unit is one room step, not
+    a pixel and not a terminal cell. It is `null` throughout under `--no-layout`.
+  - **`engine_ref`** is the engine-native identity, and it is load-bearing: for
+    Glulx, `id` is a *hash* of the object address (`roomid::glulx_room_id`) and
+    irreversible, so the address has to travel beside it. `{kind: "z-object",
+    number}`, `{kind: "glulx-object", address}` (hex, `0x`-prefixed), or
+    `{kind: "scott-room", number}`.
+- **`edges`** — `from`, `to` (room `id`s), `dir` (canonical lowercase word,
+  `"?"` for unknown), `kind`, `reciprocal`, `via`, `note`.
+  - **`kind`** is the most specific of `random` > `conditional` > `door` >
+    `one-way` > `declared`, so an edge is never labelled twice.
+  - **`reciprocal`** is reported independently, because a door or a conditional
+    can be one-way too and `kind` has room for only one fact.
+  - **`via`** names the door object when `kind` is `door`, else `null`; `note` is
+    free text.
+- **`layers`** — `id`, `name`, `maze`, `rooms`.
+
+A worked example, trimmed to one room and one edge:
+
+```json
+{
+  "format": "lanthorn-map",
+  "version": 1,
+  "generator": { "name": "lanthorn-mapgen", "version": "0.4.3 (32148ae5)" },
+  "story": {
+    "file": "zork1-invclues-r52-s871125.z5",
+    "engine": "z-machine",
+    "source": "zil",
+    "release": 52,
+    "serial": "871125",
+    "checksum": 19255,
+    "generated_at": "2026-09-05T02:52:34Z"
+  },
+  "directions": [
+    { "word": "north", "short": "n", "bearing": 0 },
+    { "word": "up",    "short": "u", "bearing": null }
+  ],
+  "rooms": [
+    {
+      "id": "#68",
+      "raw_id": 68,
+      "name": "West of House",
+      "ordinal": 35,
+      "layer": 0,
+      "pos": { "x": -5, "y": -3 },
+      "flags": [],
+      "engine_ref": { "kind": "z-object", "number": 68, "address": null }
+    }
+  ],
+  "edges": [
+    {
+      "from": "#68",
+      "to": "#254",
+      "dir": "southwest",
+      "kind": "conditional",
+      "reciprocal": true,
+      "via": null,
+      "note": "open only while the story allows it (ZIL CEXIT)"
+    }
+  ],
+  "layers": [ { "id": 0, "name": "Main", "maze": false, "rooms": 111 } ]
+}
+```
+
+The suite is `crates/app/tests/suites/sq1306_mapgen.rs`, in the `mapper_ui`
+group binary, and it drives `app::mapgen::generate` rather than shelling out.
+Three of the four sources run on CI — `minizork.z3` (ZIL) and
+`tiny_cave.dat` (Scott) are tracked fixtures, and `czech.z5` is the negative
+case. The two Inform sources have no tracked fixture and skip vacuously without
+`stories/`, so **symlink it into a worktree before believing a green run there**.

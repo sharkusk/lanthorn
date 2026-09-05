@@ -93,9 +93,15 @@ jobs:
       - name: Build binaries
         shell: bash
         env:
-          # The four shipped binaries: the mapping TUI + the three no-map CLIs.
+          # The five shipped binaries: the mapping TUI, the three no-map CLIs,
+          # and the static map generator (SQ-1306).
           # Package names (SQ-1250): "app" -> "lanthorn" and every CLI ->
           # "lanthorn-<name>-cli" (the binaries keep their bare names, see below).
+          #
+          # `lanthorn-mapgen` needs no entry here: it is a second `[[bin]]` of
+          # the `lanthorn` PACKAGE, and `-p` selects a package with all of its
+          # binary targets. It does need naming in both loops below, which copy
+          # binaries one at a time by name.
           BINS: "-p lanthorn -p lanthorn-zvm-cli -p lanthorn-gvm-cli -p lanthorn-scott-cli"
         run: |
           set -euo pipefail
@@ -104,7 +110,7 @@ jobs:
             cargo build --release --locked $BINS --target aarch64-apple-darwin
             cargo build --release --locked $BINS --target x86_64-apple-darwin
             mkdir -p target/universal/release
-            for bin in lanthorn zvm-cli gvm-cli scott-cli; do
+            for bin in lanthorn lanthorn-mapgen zvm-cli gvm-cli scott-cli; do
               lipo -create -output "target/universal/release/$bin" \
                 "target/aarch64-apple-darwin/release/$bin" \
                 "target/x86_64-apple-darwin/release/$bin"
@@ -138,7 +144,7 @@ jobs:
             *)                RELDIR="target/${{ matrix.target }}/release"; EXT="" ;;
           esac
 
-          for bin in lanthorn zvm-cli gvm-cli scott-cli; do
+          for bin in lanthorn lanthorn-mapgen zvm-cli gvm-cli scott-cli; do
             cp "${RELDIR}/${bin}${EXT}" "dist/${NAME}/"
           done
           cp README.md LICENSE "dist/${NAME}/"

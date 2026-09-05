@@ -329,6 +329,16 @@ no panes, your scrollback intact. Useful over a slow link, for a screen reader
 (`--screen-reader` emits zero escape sequences), or for debugging one engine
 without the TUI around it. They ship in every release archive.
 
+*Next release:* `lanthorn-mapgen` ships alongside them, and it does the opposite
+of playing: hand it a story and it reads the map the game was *built* with —
+every room, every exit, no walking — and writes it out four ways, as an
+annotated text dump with the map drawn in it, as an SVG, as a Graphviz `.dot`,
+and as a documented JSON file for whatever you want to do with it next. Doors
+and exits that only open once you've earned them are marked as such. It is
+honest about its limits: a passage a game conjures up mid-play was never in the
+file to find, and a few games keep their map somewhere nothing can read without
+running them — for those it says so and stops.
+
 → [**the command line**](docs/guide/command-line.md)
 
 ---

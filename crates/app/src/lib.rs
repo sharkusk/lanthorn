@@ -366,6 +366,7 @@ pub mod native_sound;
 pub mod layout;
 pub mod list_scroll;
 pub mod map_dump;
+pub mod mapgen;
 pub mod menu;
 pub mod notify;
 pub mod pager;

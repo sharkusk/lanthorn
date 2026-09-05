@@ -43,6 +43,23 @@ Absolute URLs or no link.
   covers; the rest — older Inform 7 builds, and games that build their maps as
   you play, like Kerkerkruip — are untouched and map exactly as they did.
 
+### Added
+
+- **`lanthorn-mapgen` draws a game's whole map without playing it.** A new
+  companion tool in every release archive: hand it a story file and it reads the
+  map the game was *built* with — every room, every exit, every door — and hands
+  you back four files. An annotated text dump with the map drawn into it, an SVG
+  you can open in anything, a Graphviz `.dot` for graph tools, and a documented
+  JSON file for writing your own. It reads Inform 7's map table, the Inform 6
+  library's exits, Infocom's own ZIL exits and Scott Adams databases, so it
+  covers everything lanthorn plays. Passages that only open once you've earned
+  them — Zork I's rainbow, the barrow at the end — are drawn and marked rather
+  than quietly dropped, and so are doors. Its limits are stated plainly: a
+  passage a game conjures up while you play was never in the file to find, and
+  a handful of games keep their map somewhere nothing can read without running
+  them, for which it says so and stops rather than guessing. Run
+  `lanthorn-mapgen --help` for the whole of it.
+
 ### Changed
 
 - **A room lanthorn can't identify by a game object now shows a small number,
