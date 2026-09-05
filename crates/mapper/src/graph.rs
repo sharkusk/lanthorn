@@ -156,6 +156,29 @@ pub struct Connection {
     pub dir: Direction,
     pub dest: RoomId,
     pub distorted: bool,
+    /// **A passage the story GATES, so it is the one to bend when the map cannot hold every
+    /// passage flat** (SQ-1312).
+    ///
+    /// A soft edge is a real passage and is drawn, routed and distortion-flagged exactly like
+    /// any other. The flag says only how much its GEOMETRY is worth as evidence: a gated
+    /// passage — a doorway you have to open — is one the author put there because the fiction
+    /// wanted a way through, not because the two rooms are neighbours, and it is routinely the
+    /// edge that makes a planar arrangement impossible. So `build_axis_constraints` ranks soft
+    /// edges BELOW even `Up`/`Down`, making them the first constraints dropped when a cycle
+    /// closes; `detect_chains` refuses to build a row or column out of one; and
+    /// `sort::align_free_axes` gives one no vote on which row a room belongs to.
+    ///
+    /// Zork I's white house is the case. `Behind House` is at once the east corner of the ring
+    /// around the house (three reciprocated diagonals through North and South of House) and,
+    /// through the kitchen WINDOW, the east end of the `Kitchen` ─ `Living Room` row. One room
+    /// cannot be in both places, and with the window ranked as ordinary evidence it was the ring
+    /// that broke: `West of House` ended up between the Living Room and the Kitchen, was evicted
+    /// from there, and `Stone Barrow` was left with both legs of its only door distorted.
+    ///
+    /// Only `lanthorn-mapgen` sets this today, and only for an `EdgeFact` of kind `Door` — see
+    /// the measurement there for why `Conditional` is deliberately left hard. A walked map has no
+    /// equivalent knowledge yet and leaves every edge hard.
+    pub soft: bool,
 }
 
 impl Connection {
@@ -459,6 +482,12 @@ impl MapGraph {
     }
 
     pub fn add_edge(&mut self, origin: RoomId, dir: Direction, dest: RoomId) {
+        self.add_edge_soft(origin, dir, dest, false);
+    }
+
+    /// [`MapGraph::add_edge`], stating whether the passage is SOFT — one the story gates, whose
+    /// geometry is the first thing the layout bends (see [`Connection::soft`]).
+    pub fn add_edge_soft(&mut self, origin: RoomId, dir: Direction, dest: RoomId, soft: bool) {
         // A compass direction (or Up/Down/In/Out) can only lead one place, so those edges are
         // keyed (origin, dir) and a repeat observation updates the destination. Unknown is not a
         // direction but a bucket: a room can hold SEVERAL non-compass passages (xyzzy and pray
@@ -474,14 +503,15 @@ impl MapGraph {
         // to `↩` — rather than silently picking a winner.
         if dir == Direction::Unknown || origin == dest {
             if !self.conns.iter().any(|c| c.origin == origin && c.dir == dir && c.dest == dest) {
-                self.conns.push(Connection { origin, dir, dest, distorted: false });
+                self.conns.push(Connection { origin, dir, dest, distorted: false, soft });
             }
         } else if let Some(conn) =
             self.conns.iter_mut().find(|c| c.origin == origin && c.dir == dir && c.dest != c.origin)
         {
             conn.dest = dest;
+            conn.soft = soft;
         } else {
-            self.conns.push(Connection { origin, dir, dest, distorted: false });
+            self.conns.push(Connection { origin, dir, dest, distorted: false, soft });
         }
     }
 

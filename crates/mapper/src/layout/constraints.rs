@@ -145,7 +145,7 @@ pub fn build_axis_constraints(graph: &MapGraph, ids: &[RoomId], gap: f64) -> Axi
     }
 
     // Directional constraints, STRONGEST EVIDENCE FIRST (SQ-1287/SQ-1291) rather than in the
-    // order the player happened to mint them. Three tiers, insertion order breaking ties inside
+    // order the player happened to mint them. Four tiers, insertion order breaking ties inside
     // each so the pass stays deterministic — EXCEPT that within a tier, a cardinal (N/S/E/W)
     // edge is tried before a diagonal one (SQ-1309):
     //
@@ -162,6 +162,14 @@ pub fn build_axis_constraints(graph: &MapGraph, ids: &[RoomId], gap: f64) -> Axi
     //      pair pinned the chasm a row south and dropped the compass bearing, so the map
     //      contradicted both the game's prose ("a stairway leading down at the north end") and
     //      the player's own return walk.
+    //   3. A **SOFT edge** ranks below every one of those (SQ-1312) — below `Up`/`Down` as well,
+    //      so it is the FIRST constraint dropped when a cycle closes. A soft edge is a passage
+    //      the story gates (see `crate::graph::Connection::soft`): the author put it there
+    //      because the fiction wanted a way through, not because the two rooms are neighbours,
+    //      and it is routinely the edge that makes a planar arrangement impossible. Zork I's
+    //      kitchen WINDOW is the case — it makes `Behind House` the east end of the Kitchen's
+    //      row while the outdoor ring needs it as its own east corner, and no grid holds a room
+    //      in two places. The gated passage is the one to bend.
     //
     // Losing an Up/Down constraint costs nothing on screen: `mark_distorted` gates on
     // `grid_offset`, so a stairwell is never drawn distorted whatever happens here.
@@ -182,13 +190,17 @@ pub fn build_axis_constraints(graph: &MapGraph, ids: &[RoomId], gap: f64) -> Axi
     let mut order: Vec<usize> = (0..conns.len()).collect();
     order.sort_by_key(|&ci| {
         let c = &conns[ci];
-        let tier = if c.is_self_loop() || grid_offset(c.dir).is_none() {
+        let tier = if c.soft {
+            3 // a passage the story gates: bend this one first
+        } else if c.is_self_loop() || grid_offset(c.dir).is_none() {
             2 // Up/Down (and anything else with no compass bearing, which makes no constraint)
-        } else if conns
-            .iter()
-            .any(|o| o.origin == c.dest && o.dest == c.origin && o.dir == crate::direction::opposite(c.dir))
-        {
-            0 // reciprocated compass pair
+        } else if conns.iter().any(|o| {
+            o.origin == c.dest
+                && o.dest == c.origin
+                && o.dir == crate::direction::opposite(c.dir)
+                && !o.soft
+        }) {
+            0 // reciprocated compass pair, hard both ways
         } else {
             1 // one-way compass edge
         };

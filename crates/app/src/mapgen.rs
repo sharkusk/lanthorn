@@ -767,7 +767,22 @@ fn assemble(
         // connection in the same direction rather than doubling it, which is
         // what we want when a story declares the same passage twice (ZIL's
         // EAST and OUT commonly compile to identical DEXIT bytes).
-        graph.add_edge(e.origin, e.dir, e.dest);
+        //
+        // A `Door` exit goes in SOFT (`mapper::graph::Connection::soft`): a doorway is a passage
+        // the story GATES, so the layout bends its geometry before anything else's when a planar
+        // arrangement is impossible. Zork I's white house is the case that needed it (SQ-1312) —
+        // `Behind House` is both the east corner of the outdoor ring and, through the kitchen
+        // WINDOW, the east end of the Kitchen's row, and no grid holds a room in both places.
+        //
+        // **`Conditional` is deliberately NOT soft**, though a `CEXIT` is a gate too. Measured on
+        // Zork I: marking conditionals soft costs `The Troll Room` ─ `East-West Passage` — the
+        // troll gates both of the Troll Room's compass exits, so the pair stops forming a run and
+        // East-West Passage leaves the Round Room row that SQ-1309 exists to keep it on — and
+        // raises the story's distorted-edge count from 80 to 83, while changing the white house
+        // not at all (identical cells either way). A monster standing in a doorway is not a
+        // statement about where the two rooms are; a door in a wall between two floor plans is.
+        let soft = matches!(e.kind, EdgeKind::Door);
+        graph.add_edge_soft(e.origin, e.dir, e.dest, soft);
         let reciprocal = declared.contains(&(e.dest, e.origin));
         let kind = match e.kind {
             // Only a plain declared edge is demoted to one-way: a door or a

@@ -48,15 +48,23 @@ Absolute URLs or no link.
   nothing was actually wrong with them. Each part of the map is now worked out
   on its own, so a ring outside a building can stretch a little to make room
   without ever breaking a door inside it.
-- **A dead-end room now sits right next to the room it opens off, and a
-  crossroads keeps the spot that suits all its doors.** A room with only one way
-  in and out used to drift two or three squares away from its neighbour with
-  nothing but blank map in between — Zork I's Studio floated well clear of the
-  Gallery. And a room with several passages walked from both ends is no longer
-  shoved aside just to tidy up a row of rooms it happens to sit in — unless it
-  is standing BETWEEN two rooms you can walk between in one step, which nothing
-  is allowed to do: that pair's own passage would then be drawn straight through
-  its box. On the live map and in `lanthorn-mapgen`'s generated ones.
+- **Rooms you can walk between in one step are now drawn next to each other.**
+  If you have walked a passage in both directions then the two rooms it joins are
+  neighbours, and the map now treats that as the one thing it must never break.
+  Rooms that used to drift two or three squares apart with blank map in between —
+  Zork I's Studio floating clear of the Gallery — are pulled together, and no room
+  is left standing in the gap with someone else's passage drawn straight through
+  it. A crossroads keeps the spot that suits all its doors, too, instead of being
+  shoved aside to tidy up a row it happens to sit in.
+
+  Where a map genuinely cannot lie flat, the passage that bends is now the one the
+  story **gates**: a door you have to open is a way through the author wanted, not
+  a claim that the two rooms are side by side. (A passage merely blocked by a
+  monster is not a gate — the troll stands in a doorway that is still a plain
+  east-west corridor, and it stays straight.) That is what finally lets Zork I's
+  white house come out right, with the north, south and barrow paths all in the
+  correct corner from West of House instead of leaving it stranded four squares
+  from its own front garden. On the live map and in `lanthorn-mapgen`'s alike.
 - **`lanthorn-mapgen`'s maze split now catches the dead ends hanging off a
   maze, not just the rooms literally named "Maze"** — a "Dead End" or a
   "Grating Room" one step from the maze now lands on the maze's own layer

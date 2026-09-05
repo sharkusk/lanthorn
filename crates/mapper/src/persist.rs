@@ -326,9 +326,9 @@ mod tests {
                 {"id":2,"name":"B","label_override":null,"notes":"","pos":[0,-1]},
                 {"id":3,"name":"C","label_override":null,"notes":"","pos":[1,0]}],
             "connections":[
-                {"origin":1,"dir":"Unknown","dest":2,"distorted":false},
-                {"origin":1,"dir":"N","dest":2,"distorted":false},
-                {"origin":2,"dir":"Unknown","dest":3,"distorted":false}],
+                {"origin":1,"dir":"Unknown","dest":2,"distorted":false,"soft":false},
+                {"origin":1,"dir":"N","dest":2,"distorted":false,"soft":false},
+                {"origin":2,"dir":"Unknown","dest":3,"distorted":false,"soft":false}],
             "current":1}"#;
         let m = from_json(json).unwrap();
         assert!(
@@ -353,9 +353,9 @@ mod tests {
                 {"id":1,"name":"A","label_override":null,"notes":"","pos":[0,0]},
                 {"id":2,"name":"B","label_override":null,"notes":"","pos":[1,0]}],
             "connections":[
-                {"origin":1,"dir":"E","dest":2,"distorted":false},
-                {"origin":1,"dir":"N","dest":99,"distorted":false},
-                {"origin":98,"dir":"S","dest":1,"distorted":false}],
+                {"origin":1,"dir":"E","dest":2,"distorted":false,"soft":false},
+                {"origin":1,"dir":"N","dest":99,"distorted":false,"soft":false},
+                {"origin":98,"dir":"S","dest":1,"distorted":false,"soft":false}],
             "current":42}"#;
         let m = from_json(json).unwrap();
         assert_eq!(
@@ -452,5 +452,30 @@ mod tests {
         assert_eq!(m2.graph.current(), Some(2));
         assert_eq!(m2.graph.connections(), m.graph.connections());
         assert_eq!(m2.graph.room(2).unwrap().pos, m.graph.room(2).unwrap().pos);
+    }
+
+    /// SQ-1312: a SOFT edge — a passage the story gates, whose geometry the layout bends first —
+    /// survives a save/load round trip, and a hard edge beside it stays hard. The flag changes
+    /// which constraints `build_axis_constraints` drops and whether `detect_chains` will build a
+    /// row out of the pair, so a save that lost it would relayout into a different map.
+    #[test]
+    fn a_soft_edge_survives_the_round_trip() {
+        let mut m = Mapper::default();
+        m.graph.upsert_room(1, "Kitchen".into());
+        m.graph.upsert_room(2, "Behind House".into());
+        m.graph.upsert_room(3, "Living Room".into());
+        m.graph.add_edge_soft(1, Direction::E, 2, true); // through the kitchen window: a door
+        m.graph.add_edge(1, Direction::W, 3); // an ordinary open passage
+
+        let json = to_json(&m);
+        assert!(json.contains("\"soft\": true"), "the flag is written: {json}");
+        let m2 = from_json(&json).unwrap();
+
+        let soft_of = |g: &crate::graph::MapGraph, origin, dir| {
+            g.connections().iter().find(|c| c.origin == origin && c.dir == dir).unwrap().soft
+        };
+        assert!(soft_of(&m2.graph, 1, Direction::E), "the gated passage loads back soft");
+        assert!(!soft_of(&m2.graph, 1, Direction::W), "and the ordinary one loads back hard");
+        assert_eq!(m2.graph.connections(), m.graph.connections());
     }
 }

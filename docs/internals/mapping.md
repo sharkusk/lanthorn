@@ -414,19 +414,28 @@ grows. How eagerly is up to you (`background_tidy`): after every new room (the
 default), only when a new room overlaps an old one (`on_overlap`), debounced every
 few rooms (`debounced`), or off entirely. Force a pass any time with `tidy-map`.
 
-Two touches happen after the solve, because the solver cannot make them itself.
+Three touches happen after the solve, because the solver cannot make them itself.
 A **leaf** — a room whose compass exits all lead to one neighbour — is snapped onto
 that neighbour's doorstep, since the separation a compass edge buys the solver is
 only a minimum and a room hanging off the side of the map otherwise drifts two or
-three cells out with nothing in between. And a **hub** — a room with two or more
-passages walked from both ends — is no longer shoved aside to tidy a row it happens
-to sit in, because the intersection of its own bearings is generally the one cell
-that honours every door it has.
+three cells out with nothing in between. A **run** of rooms joined by passages walked
+from both ends has its internal gaps closed, for the same reason — though only for
+rooms that owe no direction to anywhere outside the run, since closing a gap must not
+cost some third room its bearing. And a **hub** — a room with two or more passages
+walked from both ends — is never shoved aside to tidy a row it happens to sit in,
+because the intersection of its own bearings is generally the one cell that honours
+every door it has.
 
 One thing outranks even the hub, and it is the rule the whole engine is built around:
 two rooms joined by a north/south or east/west passage walked from both ends are *next
-to each other*, and nothing may stand between them. A hub that wants a cell in the
-middle of such a pair gives it up, whatever that costs its own corners.
+to each other*, and nothing may stand between them. Where that leaves the map with a
+demand it cannot meet — Zork's Behind House is at once the east corner of the ring
+around the house and, through the kitchen window, the east end of the kitchen's row,
+and no grid puts one room in two places — the passage that bends is the one the story
+**gates**. A door you have to open is a way through the fiction wanted, not a statement
+that the two rooms are neighbours, so the map bends the window rather than the walls.
+(A passage merely blocked by a monster is not a gate in this sense: Zork's troll stands
+in a doorway that is still a plain east/west corridor, and the map draws it straight.)
 
 **Maze layers are left alone.** A layer flagged as a maze (below) is *frozen*: it
 schedules no tidy, `tidy-map` on it answers "maze layer: geometry is frozen — the

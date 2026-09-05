@@ -20,15 +20,18 @@
 //!    at (0,0); residual collisions are resolved on the grid, keeping an aligned room on
 //!    its row/column where possible (`place_preserving_alignment`) before spiralling.
 //!
-//! The contiguity stage also does two things the solve itself cannot (SQ-1312): it snaps
-//! every **leaf** — a room whose compass edges all name one partner — onto that partner's
-//! doorstep, since the separation a compass edge buys is only a MINIMUM and the solve
-//! leaves slack; and it protects every **hub** — a room with two or more reciprocated
-//! compass partners — from eviction, since such a room is pinned by the intersection of
-//! its own bearings. But never on a cell that SPLITS a cardinal-reciprocal run: that a
-//! passage walked from both ends joins ADJACENT rooms is the one claim here nothing
-//! outranks, and a room standing between two members of a run has that run's passage
-//! drawn straight through its own box.
+//! The contiguity stage then repairs what the solve cannot promise, in this order (SQ-1312).
+//! A **hub** — a room with two or more reciprocated compass partners — is protected from
+//! eviction, since its bearings intersect at one cell; but never on a cell that SPLITS a
+//! cardinal-reciprocal run, which is the one claim in this engine nothing outranks. Every
+//! run's internal gaps are then closed, because the separation a compass edge buys from VPSC
+//! is only a MINIMUM where "exactly one cell apart" is what a reciprocal pair MEANS. And
+//! every **leaf** — a room whose compass edges all name one partner — is snapped onto that
+//! partner's doorstep, for the same reason.
+//!
+//! Where those demands are genuinely incompatible, it is the **soft** edges that give: a
+//! passage the story GATES (see [`crate::graph::Connection::soft`]) ranks below every other
+//! kind of evidence, forms no run, and casts no vote on which row a room belongs to.
 //!
 //! After either regime, `mark_distorted` flags every compass edge whose final grid
 //! geometry contradicts its direction. (Connector routing and any render-aware
@@ -55,6 +58,8 @@ const GAP: f64 = 1.0;
 const ITERS: usize = 60;
 /// Above this room count, skip the O(ITERS·n²) solve and use the longest-path sort.
 const MAX_NODES: usize = 400;
+/// How far `place_by_bearings` looks for a free cell before falling back to the plain spiral.
+const BEARING_BUMP_RADIUS: i32 = 3;
 
 // ── Public helpers ────────────────────────────────────────────────────────────
 
@@ -137,6 +142,57 @@ fn place_preserving_alignment(
                     return cand;
                 }
             }
+        }
+    }
+    nearest_free_cell(occupied, from)
+}
+
+/// Resolve a collision for a room constrained on BOTH axes — a diagonal room, or a hub — by
+/// keeping as many of its own (reciprocal-weighted) bearings as any free cell nearby allows
+/// (SQ-1312).
+///
+/// `place_preserving_alignment` has nothing to preserve here: with neither axis free it falls
+/// straight through to `nearest_free_cell`, whose spiral starts at the cell due north-west and
+/// takes the first vacancy it finds. For a room whose whole position IS its quadrants that throws
+/// the answer away — Zork I's `North of House` rounded onto the `Kitchen`'s cell and the spiral
+/// put it due west of `West of House`, breaking a reciprocated diagonal the solve had satisfied.
+fn place_by_bearings(
+    occupied: &BTreeSet<(i32, i32)>,
+    from: (i32, i32),
+    graph: &MapGraph,
+    index: &BTreeMap<RoomId, usize>,
+    snapped: &[(i32, i32)],
+    id: RoomId,
+) -> (i32, i32) {
+    if !occupied.contains(&from) {
+        return from;
+    }
+    /// Most bearings respected first, then nearest, then west, then north (deterministic).
+    type BumpRank = (std::cmp::Reverse<usize>, i32, i32, i32);
+    let mut best: Option<(BumpRank, (i32, i32))> = None;
+    for r in 1..=BEARING_BUMP_RADIUS {
+        for dy in -r..=r {
+            for dx in -r..=r {
+                if dx.abs().max(dy.abs()) != r {
+                    continue; // perimeter of this ring only
+                }
+                let cand = (from.0 + dx, from.1 + dy);
+                if occupied.contains(&cand) {
+                    continue;
+                }
+                let key = (
+                    std::cmp::Reverse(edges_respected_at(graph, index, snapped, id, cand)),
+                    dx.abs() + dy.abs(),
+                    cand.0,
+                    cand.1,
+                );
+                if best.as_ref().is_none_or(|(b, _)| key < *b) {
+                    best = Some((key, cand));
+                }
+            }
+        }
+        if let Some((_, cell)) = best {
+            return cell; // nearest ring with any vacancy wins; bearings decide within it
         }
     }
     nearest_free_cell(occupied, from)
@@ -698,6 +754,100 @@ fn snap_leaves(
     }
 }
 
+/// Close every empty gap inside a cardinal-reciprocal run (SQ-1312).
+///
+/// A reciprocal cardinal pair means EXACTLY one cell apart — that is the one claim in this engine
+/// nothing outranks — but the solve only ever promises "at least one cell apart": VPSC's
+/// separation is a minimum, and SMACOF settles wherever the whole component's stress is lowest.
+/// Zork I's `Kitchen` and `Living Room` came out two cells apart with nothing between them, so
+/// their passage was drawn as a two-cell reach through empty map, and until `eject_interlopers`
+/// cleared it the `West of House` hub had been sitting in the gap.
+///
+/// Each run is walked along its own line and every member past a gap is pulled back with the
+/// whole tail behind it, so the run's internal order and every other member's spacing survive.
+///
+/// **Only rooms with nothing else to lose are moved**, and that guard is what keeps the pass
+/// honest: a member may shift only when every one of its HARD compass bearings leads to another
+/// member of this same run, so closing the gap cannot cost it a bearing to anywhere else. A room
+/// with an outside neighbour is left where the solve put it and the gap simply stays — better a
+/// pair reaching two cells than a room dragged out of some third room's quadrant to spare it.
+/// (Zork I's `Kitchen` qualifies: its only hard compass bearing is west to the `Living Room`, the
+/// window east to `Behind House` being soft and the stairs to the `Attic` carrying no bearing.)
+///
+/// A shift is abandoned rather than forced when it would land on another room, when it would put
+/// a member inside a DIFFERENT run's span, or when any room it moves also belongs to a run on the
+/// perpendicular axis — that room's column is a claim of exactly the same rank as this row, and
+/// trading one for the other decides nothing.
+fn tighten_runs(
+    spans: &[(ChainSpan, BTreeSet<usize>)],
+    comp: &[RoomId],
+    index: &BTreeMap<RoomId, usize>,
+    snapped: &mut [(i32, i32)],
+    graph: &MapGraph,
+) {
+    for (span, members) in spans {
+        let horizontal = span.horizontal;
+        // A member of a run on the OTHER axis cannot be slid along this one.
+        let cross: BTreeSet<usize> = spans
+            .iter()
+            .filter(|(s, _)| s.horizontal != horizontal)
+            .flat_map(|(_, m)| m.iter().copied())
+            .collect();
+        // …nor can a member that owes a bearing to anyone outside this run.
+        let free_to_move = |m: usize| {
+            let id = comp[m];
+            graph.connections().iter().all(|c| {
+                if c.is_self_loop() || c.soft || grid_offset(c.dir).is_none() {
+                    return true;
+                }
+                let other = if c.origin == id {
+                    c.dest
+                } else if c.dest == id {
+                    c.origin
+                } else {
+                    return true;
+                };
+                index.get(&other).is_none_or(|o| members.contains(o))
+            })
+        };
+        let par = |c: (i32, i32)| if horizontal { c.0 } else { c.1 };
+        loop {
+            let mut order: Vec<usize> = members.iter().copied().collect();
+            order.sort_by_key(|&i| par(snapped[i]));
+            let Some(at) = (1..order.len()).find(|&k| {
+                par(snapped[order[k]]) - par(snapped[order[k - 1]]) > 1
+            }) else {
+                break;
+            };
+            let shift = par(snapped[order[at]]) - par(snapped[order[at - 1]]) - 1;
+            let movers: BTreeSet<usize> = order[at..].iter().copied().collect();
+            if movers.iter().any(|&m| cross.contains(&m) || !free_to_move(m)) {
+                break; // a column, or a neighbour outside the run, claims these rooms too
+            }
+            let dest = |c: (i32, i32)| {
+                if horizontal { (c.0 - shift, c.1) } else { (c.0, c.1 - shift) }
+            };
+            let blocked = (0..snapped.len()).any(|q| {
+                !movers.contains(&q) && movers.iter().any(|&m| dest(snapped[m]) == snapped[q])
+            }) || movers.iter().any(|&m| {
+                spans.iter().any(|(s, ms)| {
+                    !ms.contains(&m) && {
+                        let c = dest(snapped[m]);
+                        let (perp, p) = if s.horizontal { (c.1, c.0) } else { (c.0, c.1) };
+                        perp == s.line && p > s.lo && p < s.hi
+                    }
+                })
+            });
+            if blocked {
+                break;
+            }
+            for &m in &movers {
+                snapped[m] = dest(snapped[m]);
+            }
+        }
+    }
+}
+
 /// Rooms with two or more RECIPROCATED compass partners (SQ-1312).
 ///
 /// A reciprocated bearing — the passage walked from both ends, the two observations agreeing —
@@ -717,12 +867,12 @@ fn hub_rooms(graph: &MapGraph, index: &BTreeMap<RoomId, usize>) -> BTreeSet<usiz
     let conns = graph.connections();
     let mut partners: BTreeMap<RoomId, BTreeSet<RoomId>> = BTreeMap::new();
     for c in conns {
-        if c.is_self_loop() || grid_offset(c.dir).is_none() {
-            continue;
+        if c.is_self_loop() || c.soft || grid_offset(c.dir).is_none() {
+            continue; // a gated passage is not evidence a room belongs anywhere (SQ-1312)
         }
         if conns
             .iter()
-            .any(|o| o.origin == c.dest && o.dest == c.origin && o.dir == opposite(c.dir))
+            .any(|o| o.origin == c.dest && o.dest == c.origin && o.dir == opposite(c.dir) && !o.soft)
         {
             partners.entry(c.origin).or_default().insert(c.dest);
             partners.entry(c.dest).or_default().insert(c.origin);
@@ -761,16 +911,17 @@ fn contiguify(
     let hubs = hub_rooms(graph, index);
     let mut snapped_v: Vec<(i32, i32)> = snapped.to_vec();
     let spans = chain_spans(chains, index, &snapped_v);
-    // Leaves first: pulling one in can only shrink a chain's span, never grow it, so the spans
-    // above stay valid (and a tighter chain has less zone to clear).
-    snap_leaves(&spans, comp, index, &mut snapped_v, graph);
-    let spans = chain_spans(chains, index, &snapped_v);
     let protected = |q: usize, cell: (i32, i32)| {
         members.contains(&q) || (hubs.contains(&q) && !splits_a_run(&spans, cell))
     };
     for &(span, _) in &spans {
         eject_interlopers(&mut snapped_v, &protected, span, comp, index, graph);
     }
+    // Then close the runs' own gaps, and only then pull the leaves in — a leaf's doorstep is
+    // computed against where its partner FINALLY stands, and tightening moves members.
+    tighten_runs(&spans, comp, index, &mut snapped_v, graph);
+    let spans = chain_spans(chains, index, &snapped_v);
+    snap_leaves(&spans, comp, index, &mut snapped_v, graph);
     snapped.copy_from_slice(&snapped_v);
 }
 
@@ -1022,7 +1173,17 @@ pub fn relayout_auto_observed(graph: &mut MapGraph, mut obs: Option<TidyObserver
             let row_aligned = !y_constrained[i];
             let col_aligned = !x_constrained[i];
             let before = snapped[i];
-            let cell = place_preserving_alignment(&occupied, snapped[i], row_aligned, col_aligned);
+            // A room constrained on BOTH axes has no aligned axis to walk along, so
+            // `place_preserving_alignment` spirals — and a blind spiral is how a diagonal room
+            // loses the quadrant the solve had just given it (SQ-1312). Pick by its own bearings
+            // instead: Zork I's `North of House` rounded onto the `Kitchen`'s cell, spiralled to
+            // the first free neighbour, and came out due WEST of `West of House` instead of
+            // north-east of it.
+            let cell = if x_constrained[i] && y_constrained[i] {
+                place_by_bearings(&occupied, snapped[i], graph, &index, &snapped, id)
+            } else {
+                place_preserving_alignment(&occupied, snapped[i], row_aligned, col_aligned)
+            };
             if cell != before {
                 stats.rooms_moved += 1;
             }
@@ -2074,11 +2235,61 @@ mod tests {
         g
     }
 
-    /// No room at all stands strictly between two members of a cardinal-reciprocal run
-    /// (SQ-1312) — the passage between those two members would otherwise be drawn straight
-    /// through the third room's box.
-    fn assert_no_room_splits_a_run(g: &MapGraph) {
+    /// Zork I's white house as the story actually compiles it: the ring above, the underground
+    /// chain that hangs off the Living Room going west, and — the one GATE in the picture — the
+    /// kitchen window.
+    ///
+    /// `Strange Passage`(123) sits west of the `Living Room` with `Cyclops Room`(82) west of
+    /// that, all hard reciprocal cardinals, so the Living Room's row runs three rooms west. And
+    /// `Behind House` ─ `Kitchen` is the WINDOW, marked SOFT: the mapgen dump reads
+    /// `door=[E→"kitchen window"]` on the Kitchen and `door=[W→"kitchen window"]` on Behind
+    /// House.
+    ///
+    /// That one flag is what makes the picture drawable. `Behind House` is at once the east
+    /// corner of the outdoor ring and the east end of the Kitchen's row, and a grid cannot hold
+    /// a room in both places: chained to the Kitchen it drags the ring onto the Kitchen's row,
+    /// where `West of House` must then stand between the Living Room and the Kitchen — and be
+    /// evicted, losing all three of its diagonals.
+    fn house_ring_with_the_kitchen_window() -> crate::graph::MapGraph {
+        let mut g = house_ring_graph();
+        g.upsert_room(82, "r".into());
+        g.upsert_room(123, "r".into());
+        g.add_edge(79, Direction::W, 123); // Living Room ─ the magic-word passage
+        g.add_edge(123, Direction::E, 79);
+        g.add_edge(82, Direction::E, 123); // Cyclops Room ─ the same passage
+        g.add_edge(123, Direction::W, 82);
+        g.add_edge_soft(28, Direction::E, 89, true); // the kitchen window: a door, so soft
+        g.add_edge_soft(89, Direction::W, 28, true);
+        g
+    }
+
+    /// The invariant nothing in this engine outranks (SQ-1312): a reciprocal CARDINAL pair is
+    /// exactly one cell apart on its axis and exactly aligned on the other, and no room at all
+    /// stands strictly between two members of such a run. Both halves matter — a pair widened to
+    /// two cells with a third room in the gap draws its passage straight through that room's box.
+    fn assert_runs_are_tight_and_unsplit(g: &MapGraph) {
         let p = |id: RoomId| g.room(id).unwrap().pos.unwrap();
+        for c in g.connections() {
+            let Some(off) = grid_offset(c.dir) else { continue };
+            if c.is_self_loop() || c.soft || off.0 != 0 && off.1 != 0 {
+                continue; // diagonals have slack, gated passages have slack; cardinals do not
+            }
+            if !g.connections().iter().any(|o| {
+                o.origin == c.dest
+                    && o.dest == c.origin
+                    && o.dir == crate::direction::opposite(c.dir)
+                    && !o.soft
+            }) {
+                continue; // one-way, or gated on the way back: not a run
+            }
+            let (a, b) = (p(c.origin), p(c.dest));
+            assert_eq!(
+                (b.0 - a.0, b.1 - a.1),
+                off,
+                "reciprocal cardinal {} -{:?}-> {} must be exactly adjacent: {a:?} {b:?}",
+                c.origin, c.dir, c.dest,
+            );
+        }
         let chains = detect_chains(g);
         for (horizontal, groups) in [(true, &chains.ew_members), (false, &chains.ns_members)] {
             for ms in groups {
@@ -2123,13 +2334,65 @@ mod tests {
     fn a_hub_keeps_its_cell_but_never_by_splitting_a_run() {
         let mut g = house_ring_graph();
         relayout_auto(&mut g);
-        assert_no_room_splits_a_run(&g);
+        assert_runs_are_tight_and_unsplit(&g);
 
         let p = |id: u32| g.room(id).unwrap().pos.unwrap();
         let (woh, barrow) = (p(68), p(254));
         assert!(
             barrow.0 < woh.0 && barrow.1 > woh.1,
             "Stone Barrow must stay south-west of West of House: {barrow:?} vs {woh:?}",
+        );
+
+        let cells: Vec<_> = g.rooms().filter_map(|r| r.pos).collect();
+        let set: BTreeSet<_> = cells.iter().collect();
+        assert_eq!(cells.len(), set.len(), "no room overlap");
+    }
+
+    /// SQ-1312: a SOFT edge is the one the map bends when it cannot hold every passage flat.
+    ///
+    /// Zork I's white house cannot be drawn flat. `Behind House` is the east corner of the
+    /// outdoor ring AND the east end of the Kitchen's row, and one room cannot be in two places:
+    /// with the kitchen window ranked as ordinary evidence the ring was dragged onto the
+    /// Kitchen's row, `West of House` ended up standing between the `Living Room` and the
+    /// `Kitchen`, and it was then evicted from there — losing all three of its reciprocated
+    /// diagonals and stranding `Stone Barrow` with both legs of its only door distorted.
+    ///
+    /// The window is a door, so it is soft: it ranks below even `Up`/`Down`, builds no run of its
+    /// own, casts no vote on which row a room belongs to, and gives way. Every HARD reciprocal
+    /// cardinal then stays exactly adjacent with nothing standing between the members of a run,
+    /// and `West of House` keeps its three diagonals. Falsify by passing `false` for `soft` in
+    /// `house_ring_with_the_kitchen_window`.
+    #[test]
+    fn a_gated_passage_is_the_one_the_layout_bends() {
+        let mut g = house_ring_with_the_kitchen_window();
+        relayout_auto(&mut g);
+        assert_runs_are_tight_and_unsplit(&g);
+
+        let p = |id: u32| g.room(id).unwrap().pos.unwrap();
+        let (woh, noh, soh, barrow) = (p(68), p(143), p(217), p(254));
+        assert!(
+            noh.0 > woh.0 && noh.1 < woh.1,
+            "North of House stays north-east of West of House: {noh:?} vs {woh:?}",
+        );
+        assert!(
+            soh.0 > woh.0 && soh.1 > woh.1,
+            "South of House stays south-east of it: {soh:?} vs {woh:?}",
+        );
+        assert!(
+            barrow.0 < woh.0 && barrow.1 > woh.1,
+            "Stone Barrow stays south-west of it: {barrow:?} vs {woh:?}",
+        );
+
+        // The gated passage is the ONLY thing allowed to come out bent.
+        let bent: Vec<_> = g
+            .connections()
+            .iter()
+            .filter(|c| c.distorted)
+            .map(|c| (c.origin, c.dir, c.dest, c.soft))
+            .collect();
+        assert!(
+            bent.iter().all(|&(.., soft)| soft),
+            "only the gated passage may distort, got: {bent:?}",
         );
 
         let cells: Vec<_> = g.rooms().filter_map(|r| r.pos).collect();

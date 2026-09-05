@@ -16,16 +16,24 @@ pub struct Chains {
     pub ns_members: Vec<Vec<RoomId>>,
 }
 
+/// A run is built only from HARD reciprocals — both legs, and neither of them soft (SQ-1312).
+///
+/// A chain is the strongest claim in the engine: `build_axis_constraints` turns it into an
+/// unconditional equality (an E/W run shares one row exactly), added before any directional
+/// constraint, so a chain edge cannot be the one a cycle drops. A passage the story GATES has no
+/// business making that claim — Zork I's kitchen WINDOW did, and the row it put `Behind House`
+/// on is a row the white house's own ring cannot spare it to.
+/// See [`crate::graph::Connection::soft`].
 pub fn detect_chains(graph: &MapGraph) -> Chains {
     let conns = graph.connections();
     let reciprocal = |a: RoomId, b: RoomId, dir| {
-        conns.iter().any(|c| c.origin == b && c.dest == a && c.dir == opposite(dir))
+        conns.iter().any(|c| c.origin == b && c.dest == a && c.dir == opposite(dir) && !c.soft)
     };
     let mut ew_pairs: Vec<(RoomId, RoomId)> = Vec::new();
     let mut ns_pairs: Vec<(RoomId, RoomId)> = Vec::new();
     for c in conns {
-        if c.is_self_loop() {
-            continue; // a room is not chained to itself (SQ-0666)
+        if c.is_self_loop() || c.soft {
+            continue; // a room is not chained to itself (SQ-0666), nor by a gated passage
         }
         match grid_offset(c.dir) {
             Some((dx, dy)) if dx != 0 && dy == 0 => {

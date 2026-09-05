@@ -118,6 +118,14 @@ pub(crate) fn align_free_axes(
         }
         // Alignment neighbour lists stay `grid_offset`-only: up/down edges contribute no
         // alignment target (no column pull — that was tried and rejected for long lanes).
+        // Nor does a SOFT edge (SQ-1312): a passage the story gates has no vote on which row a
+        // room belongs to, and it wins by sheer count where it does. Zork I's `Living Room` has
+        // one hard E/W neighbour (the `Kitchen`, on its own run's row) and one gated one (the
+        // magic-word `Strange Passage`); the median of the two pulled it off the run the solve
+        // had just placed it on, and the run's own passage was then drawn bent.
+        if c.soft {
+            continue;
+        }
         if let Some((dx, dy)) = grid_offset(c.dir) {
             if dx != 0 && dy == 0 {
                 ew[a].push(b);
