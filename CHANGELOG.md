@@ -70,6 +70,14 @@ Absolute URLs or no link.
   numbering space, and two unrelated rooms could land on the same number and
   get drawn as a single room. That numbering space is now far larger, so this
   can no longer happen in practice.
+- **The room you were standing in when the map worked out a Glulx game's
+  layout could appear twice.** A few moves into a Glulx story, lanthorn works
+  out how the game tracks where you are and re-labels everything it has drawn
+  so far. The room you were actually in kept its old label, so the very next
+  time you did something that didn't move you — a WAIT, picking something up, a
+  door that wouldn't open — it was drawn a second time, joined to its own
+  double by a connection that isn't there. Anchorhead showed this within five
+  moves of the opening street.
 
 ---
 

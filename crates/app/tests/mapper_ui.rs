@@ -88,3 +88,5 @@ mod sq1294b_glulx_flashback_heading;
 mod sq1301_spider_and_web_twin_rooms;
 #[path = "suites/sq1302_wizard_sniffer_rooms.rs"]
 mod sq1302_wizard_sniffer_rooms;
+#[path = "suites/sq1304_anchorhead_twisting_lane.rs"]
+mod sq1304_anchorhead_twisting_lane;
