@@ -1703,6 +1703,15 @@ fn render_lane_connectors(
         std::collections::HashMap::new();
     let mut updown_cells: std::collections::HashMap<(i32, i32), (u8, usize)> =
         std::collections::HashMap::new();
+    // Cells whose mask carries bits a DIAGONAL CHAIN merged in (SQ-0356). They must be exempt
+    // from the crossing rule below: a chain that flattened to `─` for one cell is indistinguishable
+    // from a horizontal RUN by its mask alone, and the crossing rule would then hand the cell to
+    // the vertical outright and throw the chain's bits away — which is the one outcome SQ-0356
+    // exists to prevent. Order used to hide this (the run happened to paint first, and the chain
+    // ORed onto it), so the promise of order-independence in the chain loop's comment was only
+    // ever true in one direction; SQ-1316's lane changes moved a Zork-shaped fixture into the
+    // other one.
+    let mut chain_merged: std::collections::HashSet<(i32, i32)> = std::collections::HashSet::new();
     // Dotted glyph set for up/down connector bodies: straight runs read as dotted; any turn
     // glyph falls back to the solid corner set (up/down routes like N/S so may still turn).
     let dotted_path = crate::symbols::PathGlyphs {
@@ -1784,6 +1793,7 @@ fn render_lane_connectors(
             // exists to remove; breaking a line there would hide a real layout defect and cost
             // the turning connector its corner.
             let crossing = owner != ci
+                && !chain_merged.contains(c)
                 && matches!((prev, *mask), (m, n) | (n, m) if m == DIR_N | DIR_S && n == DIR_E | DIR_W);
             if crossing {
                 if *mask == DIR_N | DIR_S {
@@ -1823,6 +1833,7 @@ fn render_lane_connectors(
                 Some(bits) => {
                     let entry = cell_map.entry(*c).or_insert((0, ci));
                     entry.0 |= bits;
+                    chain_merged.insert(*c);
                     glyph_for(entry.0, glyphs).unwrap_or(*ch).to_string()
                 }
                 None => ch.to_string(),
@@ -3045,6 +3056,147 @@ pub(crate) fn render_overlap_stats(graph: &mapper::graph::MapGraph) -> (usize, u
     let rm = mapper::render::render(graph);
     let (cols, rows) = boxes_axes(&rm.plan, rm.bounds);
     overlap_stats(&rm.plan, &cols, &rows)
+}
+
+/// Render ONE layer of `graph` and return its (illegal_overlaps, crossings).
+///
+/// The public face of [`overlap_stats`] for the SQ-1316 no-overlap invariant. A multi-layer map
+/// is never drawn on one canvas — two rooms on different layers routinely share a cell, so
+/// [`render_overlap_stats`]'s whole-graph render would report overlaps between passages that are
+/// never on screen together (`export_svg::render_svg_layered`'s doc comment covers why). Each
+/// layer is measured on its own, which is how it is drawn.
+pub fn layer_overlap_stats(
+    graph: &mapper::graph::MapGraph,
+    layer: mapper::layer::LayerId,
+) -> (usize, usize) {
+    let rm = mapper::render::render_layer(graph, layer);
+    let (cols, rows) = boxes_axes(&rm.plan, rm.bounds);
+    overlap_stats(&rm.plan, &cols, &rows)
+}
+
+/// Every ILLEGAL shared cell of one layer, as `(cell, the connectors that stomp on it)` —
+/// indices into that layer's own `mapper::render::render_layer(graph, layer).plan.connectors`
+/// (SQ-1316). The structured form behind [`overlap_report`], for a caller that needs to classify
+/// a residual by SHAPE rather than read a sentence about it.
+///
+/// "Illegal" is [`overlap_stats`]'s reading: a cell two or more connectors draw through that is
+/// not a clean perpendicular crossing and not one passage's own trunk-and-stub junction.
+pub fn overlap_cells(
+    graph: &mapper::graph::MapGraph,
+    layer: mapper::layer::LayerId,
+) -> Vec<((i32, i32), Vec<usize>)> {
+    use std::collections::{BTreeMap, BTreeSet};
+    let rm = mapper::render::render_layer(graph, layer);
+    let (cols, rows) = boxes_axes(&rm.plan, rm.bounds);
+    let plan = &rm.plan;
+    let mut owners: BTreeMap<(i32, i32), BTreeMap<usize, u8>> = BTreeMap::new();
+    for (ci, conn) in plan.connectors.iter().enumerate() {
+        if let Some(plot) = plot_connector(conn, &cols, &rows, None) {
+            for (c, mask) in &plot.cells {
+                *owners.entry(*c).or_default().entry(ci).or_insert(0) |= *mask;
+            }
+        }
+    }
+    let ew = DIR_E | DIR_W;
+    let ns = DIR_N | DIR_S;
+    let mut expected = [ns, ew];
+    expected.sort_unstable();
+    let mut out = Vec::new();
+    for (cell, per_conn) in &owners {
+        if per_conn.len() < 2 {
+            continue;
+        }
+        let pairs: BTreeSet<_> = per_conn
+            .keys()
+            .map(|&ci| {
+                let c = &plan.connectors[ci];
+                (c.origin.min(c.dest), c.origin.max(c.dest))
+            })
+            .collect();
+        if pairs.len() == 1 {
+            continue; // a trunk and its merge stubs: a legal T-junction
+        }
+        let mut masks: Vec<u8> = per_conn.values().copied().collect();
+        masks.sort_unstable();
+        if per_conn.len() == 2 && masks == expected {
+            continue; // a clean crossing, which is allowed
+        }
+        out.push((*cell, per_conn.keys().copied().collect()));
+    }
+    out
+}
+
+/// The same reading as [`overlap_stats`], but naming every ILLEGAL cell and the connectors that
+/// stomp on it — so a failing no-overlap case points at a place on the map rather than at a count
+/// (SQ-1316).
+///
+/// One line per illegal cell: the virtual pixel, then each contributor as
+/// `Origin->Dest(dir)[mask]`, where the mask is the compass strokes that connector draws through
+/// the cell. Reading them is how the routing defect is identified: two `EW` contributors are a
+/// line-on-line stomp, an `EW` beside an `ES` is a bend landing on someone's run, three
+/// contributors is a pile-up.
+pub fn overlap_report(
+    graph: &mapper::graph::MapGraph,
+    layer: mapper::layer::LayerId,
+) -> Vec<String> {
+    use std::collections::{BTreeMap, BTreeSet};
+    let rm = mapper::render::render_layer(graph, layer);
+    let (cols, rows) = boxes_axes(&rm.plan, rm.bounds);
+    let plan = &rm.plan;
+    let mut owners: BTreeMap<(i32, i32), BTreeMap<usize, u8>> = BTreeMap::new();
+    for (ci, conn) in plan.connectors.iter().enumerate() {
+        if let Some(plot) = plot_connector(conn, &cols, &rows, None) {
+            for (c, mask) in &plot.cells {
+                *owners.entry(*c).or_default().entry(ci).or_insert(0) |= *mask;
+            }
+        }
+    }
+    let spell = |m: u8| {
+        let mut s = String::new();
+        for (bit, ch) in [(DIR_N, 'N'), (DIR_S, 'S'), (DIR_E, 'E'), (DIR_W, 'W')] {
+            if m & bit != 0 {
+                s.push(ch);
+            }
+        }
+        if s.is_empty() { "-".into() } else { s }
+    };
+    let name = |id| {
+        graph.room(id).map(|r| r.label().to_string()).unwrap_or_else(|| format!("#{id:?}"))
+    };
+    let ew = DIR_E | DIR_W;
+    let ns = DIR_N | DIR_S;
+    let mut expected = [ns, ew];
+    expected.sort_unstable();
+    let mut out = Vec::new();
+    for (cell, per_conn) in &owners {
+        if per_conn.len() < 2 {
+            continue;
+        }
+        let pairs: BTreeSet<_> = per_conn
+            .keys()
+            .map(|&ci| {
+                let c = &plan.connectors[ci];
+                (c.origin.min(c.dest), c.origin.max(c.dest))
+            })
+            .collect();
+        if pairs.len() == 1 {
+            continue; // a trunk and its merge stubs: a legal T-junction
+        }
+        let mut masks: Vec<u8> = per_conn.values().copied().collect();
+        masks.sort_unstable();
+        if per_conn.len() == 2 && masks == expected {
+            continue; // a clean crossing, which is allowed
+        }
+        let who: Vec<String> = per_conn
+            .iter()
+            .map(|(&ci, &m)| {
+                let c = &plan.connectors[ci];
+                format!("{}->{}({:?})[{}]", name(c.origin), name(c.dest), c.exit_dir, spell(m))
+            })
+            .collect();
+        out.push(format!("cell {cell:?}: {}", who.join(" + ")));
+    }
+    out
 }
 
 /// True unless moving room `id` to `cell` would disturb a well-placed Up/Down relationship: an Up

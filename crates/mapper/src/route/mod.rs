@@ -749,24 +749,26 @@ fn greedy_adds_overlap(default: &[RoutedConnector], greedy: &[RoutedConnector]) 
 /// perpendicular crosser cuts each. This mirrors the renderer's per-cell `┼` detection, so
 /// minimizing it tracks the visible crossing count rather than a raw-lattice proxy.
 fn total_crossings(conns: &[RoutedConnector]) -> usize {
-    // (connector idx, channel, start, end) for every long run, with a stable run id.
-    let mut runs: Vec<(usize, Channel, i32, i32)> = Vec::new(); // (run id, channel, s, e)
-    let mut owner: Vec<usize> = Vec::new(); // run id → connector idx
+    // Lanes are resolved over the FULL claim set (`laned_claims`), so the lane a run lands on is
+    // the one the renderer will draw it in — a diagonal's dogleg leg included.
+    let mut claims: Vec<(usize, Claim)> = Vec::new();
+    let mut owner: Vec<usize> = Vec::new(); // claim id → connector idx
     for (ci, c) in conns.iter().enumerate() {
-        for (ch, s, e) in long_runs(&c.points) {
-            runs.push((owner.len(), ch, s, e));
+        for claim in laned_claims(&c.points) {
+            claims.push((owner.len(), claim));
             owner.push(ci);
         }
     }
-    let (lane_of, _counts) = assign_lanes(&runs);
+    let (lane_of, _counts) = assign_lanes(&claims);
     // Split runs into horizontals and verticals, carrying connector idx and lane.
     let mut horiz: Vec<(usize, u16, i32, i32, i32)> = Vec::new(); // (conn, lane, y, xs, xe)
     let mut vert: Vec<(usize, u16, i32, i32, i32)> = Vec::new(); // (conn, lane, x, ys, ye)
-    for &(id, ch, s, e) in &runs {
+    for &(id, c) in &claims {
         let lane = lane_of[&id];
-        match ch {
+        let (s, e) = (c.start, c.end);
+        match c.channel {
             Channel::H(r) => horiz.push((owner[id], lane, 2 * r + 1, s, e)),
-            Channel::V(c) => vert.push((owner[id], lane, 2 * c + 1, s, e)),
+            Channel::V(cc) => vert.push((owner[id], lane, 2 * cc + 1, s, e)),
         }
     }
     let mut n = 0;
@@ -1200,6 +1202,162 @@ fn route_topology_with(graph: &MapGraph, greedy: bool) -> Vec<RoutedConnector> {
     out
 }
 
+/// Which side of a channel a claim's coarse preference points to, used only as a TIE-BREAK when
+/// the hard ordering in [`assign_lanes`] leaves two claims free to swap.
+///
+/// Lane 0 of a channel is the one nearest the LOW-side box — `lane_pixel` lays `V(c)` out as
+/// `room_pixel(c) + box_dim + LANE_BASE + lane * LANE_SPACING`, so the lane index grows AWAY from
+/// column `c` and toward column `c+1`. A claim that reaches only the low box wants to be near it;
+/// one that reaches only the high box wants to be far.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+enum Depth {
+    Low,
+    Free,
+    High,
+}
+
+/// One connector's claim on a channel: the extent it occupies, plus the along-coordinates at
+/// which it BRIDGES out to a box on either side of the channel.
+///
+/// The bridge is the thing that makes lane order matter (SQ-1316). A connector on lane `k` does
+/// not merely occupy lane `k`: the renderer draws a line from the box's own edge across every
+/// lane between the box and `k`, along the doorway's own row (or column). So two connectors
+/// bridging into one channel from OPPOSITE boxes at the SAME along-coordinate run on top of each
+/// other exactly when the near box's connector sits on the farther lane. Requiring
+/// `lane(low bridge) < lane(high bridge)` at every shared coordinate is what makes the two
+/// bridges disjoint — the low box's line stops short of where the high box's line begins.
+///
+/// Two bridges from the SAME side at one coordinate are not this problem: they are two
+/// connectors on one box side, which `assign_side_slots` already pushes onto different border
+/// cells.
+#[derive(Debug, Clone, Copy)]
+struct Claim {
+    channel: Channel,
+    start: i32,
+    end: i32,
+    /// Along-coordinate at which this claim bridges to the channel's LOW-side box, if it does.
+    low_at: Option<i32>,
+    /// Along-coordinate at which it bridges to the HIGH-side box, if it does.
+    high_at: Option<i32>,
+}
+
+impl Claim {
+    /// The coarse preference, for tie-breaking only.
+    fn depth(&self) -> Depth {
+        match (self.low_at, self.high_at) {
+            (Some(_), None) => Depth::Low,
+            (None, Some(_)) => Depth::High,
+            _ => Depth::Free,
+        }
+    }
+}
+
+/// Every channel run a polyline occupies, as claims the lane assigner can separate.
+///
+/// This is [`long_runs`] plus the two things it cannot see, both of which the renderer draws
+/// anyway and which therefore have to hold a lane or they land on somebody else's (SQ-1316):
+///
+/// * **A DIAGONAL step, which is not drawn diagonally everywhere.** The SVG and any terminal
+///   without the half-diagonal glyphs draw a diagonal exit as an orthogonal DOGLEG — out of the
+///   box corner along its own row, then down the gutter to the lattice point
+///   (`render::map::attach_bridge`). A diagonal always leaves and enters on a Left or Right side
+///   (`router::side_for`), so that dogleg's long leg is always VERTICAL and always sits in the
+///   channel the corner is in. `long_runs` sees none of it — a step that changes both coordinates
+///   matches neither of its arms — so the leg held no lane, `seg_lane` answered 0 for it, and the
+///   diagonal was silently drawn down whichever lane 0 already belonged to. Two of the Rocky
+///   Ledge stomps in the quest are exactly this: `West of House→South of House`'s SE corner
+///   against the `Living Room↔Strange Passage` conditional, and `South of House→Forest`'s NW
+///   arrival against the long `Forest→Forest`.
+/// * **Where each end bridges out to a box**, recorded as `low_at`/`high_at` so lane order can
+///   keep two facing bridges apart. See [`Claim`].
+///
+/// A connector's claims are then MERGED per channel wherever they touch, so its occupancy is one
+/// run per contiguous stretch. A pure diagonal is why: it arrives at the corner from one room and
+/// leaves toward the other, two steps that the renderer draws as one unbroken line down one lane.
+fn laned_claims(points: &[(i32, i32)]) -> Vec<Claim> {
+    let mut out: Vec<Claim> = Vec::new();
+    // Which box a lattice point reaches through its neighbour `n`: `n` sitting on the channel's
+    // low room line (`2c`) means this end bridges to the low box, `2c + 2` to the high one.
+    // Anything else is another lattice point — a turn, not a doorway.
+    let side = |c: i32, n: (i32, i32), horizontal: bool| -> Option<Depth> {
+        let coord = if horizontal { n.1 } else { n.0 };
+        if coord == 2 * c {
+            Some(Depth::Low)
+        } else if coord == 2 * c + 2 {
+            Some(Depth::High)
+        } else {
+            None
+        }
+    };
+    let mut push = |channel: Channel, start: i32, end: i32, ends: [(Option<Depth>, i32); 2]| {
+        let mut low_at = None;
+        let mut high_at = None;
+        for (d, at) in ends {
+            match d {
+                Some(Depth::Low) => low_at = Some(at),
+                Some(Depth::High) => high_at = Some(at),
+                _ => {}
+            }
+        }
+        out.push(Claim { channel, start, end, low_at, high_at });
+    };
+    for (i, w) in points.windows(2).enumerate() {
+        let (a, b) = (w[0], w[1]);
+        let horizontal = a.1 == b.1 && a.0 != b.0;
+        let vertical = a.0 == b.0 && a.1 != b.1;
+        if horizontal && a.1 % 2 != 0 {
+            let c = (a.1 - 1).div_euclid(2);
+            let before = (i > 0).then(|| side(c, points[i - 1], true)).flatten();
+            let after = (i + 2 < points.len()).then(|| side(c, points[i + 2], true)).flatten();
+            push(Channel::H(c), a.0.min(b.0), a.0.max(b.0), [(before, a.0), (after, b.0)]);
+        } else if vertical && a.0 % 2 != 0 {
+            let c = (a.0 - 1).div_euclid(2);
+            let before = (i > 0).then(|| side(c, points[i - 1], false)).flatten();
+            let after = (i + 2 < points.len()).then(|| side(c, points[i + 2], false)).flatten();
+            push(Channel::V(c), a.1.min(b.1), a.1.max(b.1), [(before, a.1), (after, b.1)]);
+        } else if !horizontal && !vertical && a != b {
+            // A diagonal step, between a room centre and an all-odd lattice corner. Claim the
+            // dogleg the orthogonal renderers actually draw: down the corner's own VERTICAL
+            // channel, from the room's row to the corner's. The short horizontal arm runs along
+            // the BOX's row, which is nobody's channel, so it claims nothing.
+            let (corner, room) = if a.0 % 2 != 0 && a.1 % 2 != 0 { (a, b) } else { (b, a) };
+            if corner.0 % 2 == 0 || corner.1 % 2 == 0 {
+                continue; // neither end is a lattice point: not a shape this router emits
+            }
+            let vc = (corner.0 - 1).div_euclid(2);
+            push(
+                Channel::V(vc),
+                corner.1.min(room.1),
+                corner.1.max(room.1),
+                [(side(vc, room, false), room.1), (None, corner.1)],
+            );
+        }
+        // steps touching even coords are the stubs (room↔lattice); they carry no lane.
+    }
+    // One connector's occupancy of one channel is one run per CONTIGUOUS stretch. A pure diagonal
+    // emits two claims that meet at the corner — the renderer draws them as one line down one
+    // lane, and leaving them separate would ask for two lanes and widen the gutter for a single
+    // stroke. Anchors are unioned, not dropped: a pure diagonal reaches the low box at one end and
+    // the high box at the other, and a claim that forgot half of that would be ordered as though
+    // it only touched one side.
+    let mut merged: Vec<Claim> = Vec::new();
+    for c in out {
+        let hit = merged.iter_mut().find(|m| {
+            m.channel == c.channel && c.start <= m.end && m.start <= c.end
+        });
+        match hit {
+            Some(m) => {
+                m.start = m.start.min(c.start);
+                m.end = m.end.max(c.end);
+                m.low_at = m.low_at.or(c.low_at);
+                m.high_at = m.high_at.or(c.high_at);
+            }
+            None => merged.push(c),
+        }
+    }
+    merged
+}
+
 /// Extract the long runs of a doubled-coord polyline as (channel, start, end) with
 /// start<=end, skipping the room-cell endpoints and zero-length steps. A horizontal run
 /// (constant odd y) → `H((y-1)/2)`; a vertical run (constant odd x) → `V((x-1)/2)`.
@@ -1220,33 +1378,113 @@ fn long_runs(points: &[(i32, i32)]) -> Vec<(Channel, i32, i32)> {
     runs
 }
 
-/// Left-edge interval colouring per channel. Returns, for each input run, the lane it was
-/// assigned, plus the per-channel lane count. Runs are processed in a deterministic order
-/// (by channel, then start, then end) so assignment is stable.
+/// Interval colouring per channel, ordered so a claim's bridge to its box never sweeps across
+/// another claim's bridge (SQ-1316). Returns, for each input claim, the lane it was assigned,
+/// plus the per-channel lane count.
+///
+/// Three rules, in order:
+///
+/// 1. **The bridge order is a hard constraint.** Where one claim bridges to the LOW-side box and
+///    another to the HIGH-side box at the SAME along-coordinate, the low one must take the lower
+///    lane — otherwise the two bridges run along the same line across the same stretch of gutter
+///    (see [`Claim`]). Those pairs form a DAG, which is walked before anything else is decided.
+/// 2. **Extent**, so claims that cannot see each other share a lane. Overlap is CLOSED — two
+///    claims touching end to end still take different lanes, because they meet at a lattice cell
+///    the renderer draws a corner in.
+/// 3. **[`Depth`] as the tie-break**, so a claim that reaches only one side of the channel sits
+///    near that side when nothing forces it either way.
+///
+/// The lane's occupancy is tracked as the full list of intervals placed on it, not as a single
+/// running right edge. The old scalar form was correct only while claims arrived in increasing
+/// `start`, which rules 1 and 3 break: a low-side claim starting late is now placed before a
+/// high-side one starting early, and a scalar right edge would let the second slide underneath
+/// the first.
+///
+/// Deterministic throughout: the DAG walk breaks ties on `(depth, start, end, id)` and falls back
+/// to the same key when a cycle (a pair each of which must sit below the other, which two
+/// coordinates can contrive) leaves nothing ready.
 fn assign_lanes(
-    runs: &[(usize, Channel, i32, i32)], // (connector-run id, channel, start, end)
+    claims: &[(usize, Claim)],
 ) -> (std::collections::HashMap<usize, u16>, BTreeMap<Channel, u16>) {
     use std::collections::HashMap;
-    // bucket by channel
-    let mut by_ch: BTreeMap<Channel, Vec<(usize, i32, i32)>> = BTreeMap::new();
-    for &(id, ch, s, e) in runs {
-        by_ch.entry(ch).or_default().push((id, s, e));
+    let mut by_ch: BTreeMap<Channel, Vec<(usize, Claim)>> = BTreeMap::new();
+    for &(id, claim) in claims {
+        by_ch.entry(claim.channel).or_default().push((id, claim));
     }
     let mut lane_of: HashMap<usize, u16> = HashMap::new();
     let mut counts: BTreeMap<Channel, u16> = BTreeMap::new();
     for (ch, mut items) in by_ch {
-        items.sort_by_key(|&(_, s, e)| (s, e));
-        // lane_end[l] = current right edge occupied on lane l (exclusive comparison).
-        let mut lane_end: Vec<i32> = Vec::new();
-        for (id, s, e) in items {
-            // first lane whose last extent ends strictly before s
-            let lane = match lane_end.iter().position(|&end| end < s) {
-                Some(l) => { lane_end[l] = e; l }
-                None => { lane_end.push(e); lane_end.len() - 1 }
-            };
-            lane_of.insert(id, lane as u16);
+        items.sort_by_key(|&(id, c)| (c.depth(), c.start, c.end, id));
+        // below[i] = the claims that must sit on a HIGHER lane than i.
+        let n = items.len();
+        let mut below: Vec<Vec<usize>> = vec![Vec::new(); n];
+        let mut indeg = vec![0usize; n];
+        for i in 0..n {
+            for j in 0..n {
+                if i == j {
+                    continue;
+                }
+                // `i` must sit below `j` when `i` reaches the low box at a coordinate where `j`
+                // reaches the high one — and only when neither ALSO reaches the other side there.
+                // A claim that spans the whole gutter depth at that coordinate (a pure diagonal,
+                // corner to corner) can be ordered against nothing: demanding it sit both below
+                // and above its partner is a two-cycle, and breaking that cycle arbitrarily is
+                // what put two crossing diagonals on separate lanes and made their bridges
+                // overlap. Leaving them unordered lets them share the one cell they meet in.
+                let (ci, cj) = (items[i].1, items[j].1);
+                let orderable = matches!((ci.low_at, cj.high_at), (Some(a), Some(b)) if a == b
+                    && ci.high_at != Some(a)
+                    && cj.low_at != Some(a));
+                if orderable {
+                    below[i].push(j);
+                    indeg[j] += 1;
+                }
+            }
         }
-        counts.insert(ch, lane_end.len() as u16);
+        // Kahn, taking the ready claim with the smallest sort position; on a cycle, take the
+        // smallest remaining claim outright and let its constraints go unmet rather than stall.
+        let mut done = vec![false; n];
+        let mut order = Vec::with_capacity(n);
+        for _ in 0..n {
+            let pick = (0..n)
+                .find(|&i| !done[i] && indeg[i] == 0)
+                .or_else(|| (0..n).find(|&i| !done[i]));
+            let Some(i) = pick else { break };
+            done[i] = true;
+            for &j in &below[i] {
+                indeg[j] = indeg[j].saturating_sub(1);
+            }
+            order.push(i);
+        }
+        let mut lanes: Vec<Vec<(i32, i32)>> = Vec::new();
+        let mut placed: Vec<(usize, u16)> = Vec::new(); // (index into items, lane)
+        for i in order {
+            let (id, c) = items[i];
+            // Every claim that must sit below this one and is already placed sets the floor.
+            let floor = placed
+                .iter()
+                .filter(|&&(p, _)| below[p].contains(&i))
+                .map(|&(_, l)| l as usize + 1)
+                .max()
+                .unwrap_or(0);
+            let free = |placed_on: &Vec<(i32, i32)>| {
+                placed_on.iter().all(|&(s, e)| c.end < s || e < c.start)
+            };
+            let mut lane = floor;
+            loop {
+                match lanes.get(lane) {
+                    Some(occ) if !free(occ) => lane += 1,
+                    Some(_) => break,
+                    None => {
+                        lanes.push(Vec::new());
+                    }
+                }
+            }
+            lanes[lane].push((c.start, c.end));
+            lane_of.insert(id, lane as u16);
+            placed.push((i, lane as u16));
+        }
+        counts.insert(ch, lanes.len() as u16);
     }
     (lane_of, counts)
 }
@@ -1434,17 +1672,19 @@ pub fn route_lanes(graph: &MapGraph) -> RoutePlan {
     let mut connectors = route_topology(graph);
     assign_side_slots(&mut connectors, graph);
 
-    // Flatten every connector's long runs into a global list with stable ids.
-    let mut runs: Vec<(usize, Channel, i32, i32)> = Vec::new();
+    // Flatten every connector's channel claims into a global list with stable ids. `laned_claims`
+    // rather than `long_runs`: a diagonal step's lattice corner has to hold a lane too, or
+    // `seg_lane` answers 0 for it and the corner is drawn on top of whoever owns lane 0 (SQ-1316).
+    let mut claims: Vec<(usize, Claim)> = Vec::new();
     let mut owner: Vec<(usize, Channel, i32, i32)> = Vec::new(); // (connector idx, channel, s, e)
     for (ci, c) in connectors.iter().enumerate() {
-        for (ch, s, e) in long_runs(&c.points) {
-            let id = runs.len();
-            runs.push((id, ch, s, e));
-            owner.push((ci, ch, s, e));
+        for claim in laned_claims(&c.points) {
+            let id = claims.len();
+            claims.push((id, claim));
+            owner.push((ci, claim.channel, claim.start, claim.end));
         }
     }
-    let (lane_of, counts) = assign_lanes(&runs);
+    let (lane_of, counts) = assign_lanes(&claims);
 
     // Attach lanes back onto each connector.
     for (id, (ci, ch, s, e)) in owner.into_iter().enumerate() {
@@ -1462,6 +1702,151 @@ pub fn route_lanes(graph: &MapGraph) -> RoutePlan {
     }
     let diag_corners = diagonal_corners(&connectors);
     RoutePlan { connectors, h_lanes, v_lanes, diag_corners }
+}
+
+// ── Overlap invariant (SQ-1316) ───────────────────────────────────────────────
+
+/// One straight run of a connector in the space the RENDERER actually places it in: the grid
+/// line it sits on plus, when that line is a channel, the lane within it.
+///
+/// This is the unit the no-overlap invariant is stated over. A raw polyline run is not enough,
+/// because two runs on the same channel are separated by the lane system and two runs on the
+/// same ROOM line (a `direct_route`, which carries no lane) are not — so the two cases have to
+/// be told apart before extents are compared at all.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub struct PlacedRun {
+    /// True for a run of constant `y` (varying x).
+    pub horizontal: bool,
+    /// The doubled coordinate of the line: EVEN is a room row/column centre (no lane), ODD is
+    /// a routing channel.
+    pub line: i32,
+    /// Lane within the channel. Always 0 on a room line, which has exactly one.
+    pub lane: u16,
+    /// Closed extent along the run's free axis, `start <= end`.
+    pub start: i32,
+    pub end: i32,
+}
+
+impl PlacedRun {
+    /// True when two runs sit on the same drawn line — same axis, same grid line, same lane.
+    fn same_line(&self, other: &PlacedRun) -> bool {
+        self.horizontal == other.horizontal && self.line == other.line && self.lane == other.lane
+    }
+
+    /// The shared extent of two runs on the same line, when they share MORE than a single point.
+    /// Touching end-to-end (one run's `end` == the other's `start`) is a corner meeting, not an
+    /// overlap, and is excluded.
+    fn shared_span(&self, other: &PlacedRun) -> Option<(i32, i32)> {
+        let lo = self.start.max(other.start);
+        let hi = self.end.min(other.end);
+        (lo < hi).then_some((lo, hi))
+    }
+}
+
+/// Every straight run of `conn`'s polyline, resolved into the renderer's lane space.
+///
+/// The first and last SEGMENT are dropped: those are the room-exit doorway stubs, which the
+/// renderer re-anchors per `exit_slot`/`entry_slot` rather than drawing where the doubled-coord
+/// polyline puts them. Two connectors leaving one box side legitimately share that stub cell in
+/// doubled coords and land on distinct border cells on screen, so comparing stubs would report
+/// an overlap the picture does not have (the same convention `polylines_overlap` follows).
+///
+/// A DIAGONAL step (both coordinates change) is not a run and is skipped.
+pub fn placed_runs(conn: &RoutedConnector) -> Vec<PlacedRun> {
+    let pts = &conn.points;
+    if pts.len() < 3 {
+        return Vec::new();
+    }
+    let interior = &pts[1..pts.len() - 1];
+    let mut out = Vec::new();
+    for w in interior.windows(2) {
+        let (a, b) = (w[0], w[1]);
+        let (horizontal, line, s, e) = if a.1 == b.1 && a.0 != b.0 {
+            (true, a.1, a.0.min(b.0), a.0.max(b.0))
+        } else if a.0 == b.0 && a.1 != b.1 {
+            (false, a.0, a.1.min(b.1), a.1.max(b.1))
+        } else {
+            continue; // a diagonal step, or no step at all
+        };
+        // An odd line is a channel and carries a lane; an even line is a room row/column, which
+        // has exactly one. `seg_lane`'s rule, kept here so the invariant reads the same lane the
+        // renderer will.
+        let lane = if line.rem_euclid(2) == 0 {
+            0
+        } else {
+            let channel = if horizontal {
+                Channel::H((line - 1).div_euclid(2))
+            } else {
+                Channel::V((line - 1).div_euclid(2))
+            };
+            conn.segs
+                .iter()
+                .find(|sg| sg.channel == channel && sg.start <= s && e <= sg.end)
+                .map(|sg| sg.lane)
+                .unwrap_or(0)
+        };
+        out.push(PlacedRun { horizontal, line, lane, start: s, end: e });
+    }
+    out
+}
+
+/// Two connectors running ON TOP OF each other: the same line, the same lane, and more than a
+/// single shared point of extent.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct LaneOverlap {
+    /// Indices into `RoutePlan::connectors`, `a < b`.
+    pub a: usize,
+    pub b: usize,
+    pub horizontal: bool,
+    pub line: i32,
+    pub lane: u16,
+    /// The shared extent along the line.
+    pub start: i32,
+    pub end: i32,
+}
+
+/// Every OVERLAP in a route plan: a pair of distinct connectors sharing a stretch of one lane
+/// (SQ-1316).
+///
+/// This is the invariant the router must hold. Crossings are explicitly NOT overlaps — two
+/// connectors meeting perpendicular at a point is a `┼`, which the renderer has a convention for
+/// and the user asked to keep. Only running ALONG one another is the defect.
+///
+/// Same-PAIR connectors are exempt: a trunk plus the merge stubs that T-junction onto it belong
+/// to one passage between one pair of rooms, and their share is the junction, not a stomp (the
+/// same exemption `render::map::overlap_stats` makes at the cell level).
+///
+/// Deterministic: connectors are compared in index order, so the result order is fixed.
+pub fn plan_overlaps(plan: &RoutePlan) -> Vec<LaneOverlap> {
+    let runs: Vec<Vec<PlacedRun>> = plan.connectors.iter().map(placed_runs).collect();
+    let pair_of = |c: &RoutedConnector| (c.origin.min(c.dest), c.origin.max(c.dest));
+    let mut out = Vec::new();
+    for a in 0..plan.connectors.len() {
+        for b in (a + 1)..plan.connectors.len() {
+            if pair_of(&plan.connectors[a]) == pair_of(&plan.connectors[b]) {
+                continue; // one passage's trunk and its merge stubs
+            }
+            for ra in &runs[a] {
+                for rb in &runs[b] {
+                    if !ra.same_line(rb) {
+                        continue;
+                    }
+                    if let Some((start, end)) = ra.shared_span(rb) {
+                        out.push(LaneOverlap {
+                            a,
+                            b,
+                            horizontal: ra.horizontal,
+                            line: ra.line,
+                            lane: ra.lane,
+                            start,
+                            end,
+                        });
+                    }
+                }
+            }
+        }
+    }
+    out
 }
 
 /// Collect the gap-lattice corners every diagonal step passes through, as `(v_channel,
@@ -1571,7 +1956,8 @@ mod tests {
         // one overlapping both ([1,5]) must take a new lane. Directly exercises the
         // core invariant (a graph-level test can't force a shared lane reliably).
         let ch = Channel::H(0);
-        let runs = vec![(0usize, ch, 0, 2), (1usize, ch, 4, 6), (2usize, ch, 1, 5)];
+        let run = |start, end| Claim { channel: ch, start, end, low_at: None, high_at: None };
+        let runs = vec![(0usize, run(0, 2)), (1usize, run(4, 6)), (2usize, run(1, 5))];
         let (lane_of, counts) = assign_lanes(&runs);
         assert_eq!(lane_of[&0], 0, "first run → lane 0");
         assert_eq!(lane_of[&1], 0, "disjoint run shares lane 0");
@@ -1580,8 +1966,8 @@ mod tests {
         // Invariant: any two runs sharing a lane have disjoint extents.
         let mut by_lane: std::collections::BTreeMap<u16, Vec<(i32, i32)>> =
             std::collections::BTreeMap::new();
-        for &(id, _, s, e) in &runs {
-            by_lane.entry(lane_of[&id]).or_default().push((s, e));
+        for &(id, c) in &runs {
+            by_lane.entry(lane_of[&id]).or_default().push((c.start, c.end));
         }
         for (_lane, mut ivs) in by_lane {
             ivs.sort();
@@ -2469,9 +2855,28 @@ mod tests {
         assert_eq!(reciprocal.exit, Side::Right, "NE departs the right side");
         assert_eq!(reciprocal.entry, Side::Left, "and arrives on the left, its own back edge's side");
         assert_eq!(reciprocal.entry_corner, Some(Direction::SW), "it owns the corner via its own back edge");
-        // A diagonal carries no LaneSeg: every step of the route touches an even coord (room
-        // centre) or is the corner itself, so `long_runs` finds nothing to lane.
-        assert!(reciprocal.segs.is_empty(), "a pure diagonal occupies no channel lane");
+        // A pure diagonal has no axis-aligned RUN — every step touches an even coord (room
+        // centre) or is the corner itself — and until SQ-1316 it therefore held no lane at all.
+        // It has to hold one. The SVG and any terminal without half-diagonal glyphs draw it as
+        // an orthogonal DOGLEG: out of R1's corner along its own row, down the gutter column to
+        // R2's row, and along R2's row to its corner. That vertical leg spans BOTH rooms' rows,
+        // and `seg_lane` answers lane 0 for a channel the connector holds no segment in — so
+        // before this the leg was silently drawn down whichever lane 0 already belonged to.
+        //
+        // One claim, not two: the corner's HORIZONTAL arms run along the boxes' own rows, which
+        // are nobody's channel, and the two diagonal steps meet at the corner, so the vertical
+        // is one unbroken stretch [0, 2] rather than [1, 2] plus [0, 1] on separate lanes.
+        let mut claims: Vec<_> = reciprocal
+            .segs
+            .iter()
+            .map(|s| (s.channel, s.lane, s.start, s.end))
+            .collect();
+        claims.sort_by_key(|&(ch, lane, s, e)| (ch, lane, s, e));
+        assert_eq!(
+            claims,
+            vec![(Channel::V(0), 0, 0, 2)],
+            "a pure diagonal claims the gutter column its dogleg descends, and nothing else"
+        );
 
         let one_way = build(false);
         assert_eq!(one_way.exit, Side::Right, "NE still departs the right side");
