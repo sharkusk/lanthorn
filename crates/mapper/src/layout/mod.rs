@@ -430,9 +430,19 @@ struct ChainSpan {
 /// the line (past the member span) or OFF the line entirely; the destination is the free,
 /// off-span cell that respects the most of the ejected room's own (reciprocal-weighted) compass
 /// edges, then nearest, then west/north.
+///
+/// "Member" here means a member of ANY chain, not just the one whose span is being cleared
+/// (SQ-1309): a room that shares a row with one set of neighbours can easily sit, by sheer
+/// coincidence of where the stress solve put it, inside a completely unrelated column chain's
+/// span. Excluding only the current chain's own members let that unrelated chain treat a real
+/// E/W chain member as a foreign interloper and eject it off its own row — Zork I's East-West
+/// Passage was pulled off the Round Room/Troll Room row this way, evicted by an unrelated
+/// column chain (rooms #128/#229) it happened to cross. `protected` is every room this
+/// component's `contiguify` pass has ANY chain claim on, so no chain's cleanup can undo another
+/// chain's alignment.
 fn eject_interlopers(
     snapped: &mut [(i32, i32)],
-    member_idxs: &[usize],
+    protected: &BTreeSet<usize>,
     span: ChainSpan,
     comp: &[RoomId],
     index: &BTreeMap<RoomId, usize>,
@@ -448,7 +458,7 @@ fn eject_interlopers(
     };
     loop {
         let victim = (0..snapped.len())
-            .find(|&q| !member_idxs.contains(&q) && between(snapped[q]));
+            .find(|&q| !protected.contains(&q) && between(snapped[q]));
         let Some(q) = victim else { break };
         let from = snapped[q];
         let occ: BTreeSet<(i32, i32)> =
@@ -511,6 +521,16 @@ fn contiguify(
     // Eject foreign interlopers from between chain members; never move members (see
     // `eject_interlopers`). Chains may legitimately keep gaps between members — only a foreign
     // room sitting *between* them is a problem (it would interleave the chain visually).
+    //
+    // `protected` covers every room this component's EW or NS chains claim at all (SQ-1309):
+    // a room that is legitimately a member of one chain must not be treated as an interloper
+    // and evicted by a DIFFERENT, unrelated chain whose span it happens to cross.
+    let protected: BTreeSet<usize> = chains
+        .ew_members
+        .iter()
+        .chain(chains.ns_members.iter())
+        .flat_map(|members| members.iter().filter_map(|id| index.get(id).copied()))
+        .collect();
     let mut snapped_v: Vec<(i32, i32)> = snapped.to_vec();
     for members in &chains.ew_members {
         let idxs: Vec<usize> = members.iter().filter_map(|id| index.get(id).copied()).collect();
@@ -520,7 +540,7 @@ fn contiguify(
         let lo = idxs.iter().map(|&i| snapped_v[i].0).min().unwrap();
         let hi = idxs.iter().map(|&i| snapped_v[i].0).max().unwrap();
         let span = ChainSpan { horizontal: true, line, lo, hi };
-        eject_interlopers(&mut snapped_v, &idxs, span, comp, index, graph);
+        eject_interlopers(&mut snapped_v, &protected, span, comp, index, graph);
     }
     for members in &chains.ns_members {
         let idxs: Vec<usize> = members.iter().filter_map(|id| index.get(id).copied()).collect();
@@ -530,7 +550,7 @@ fn contiguify(
         let lo = idxs.iter().map(|&i| snapped_v[i].1).min().unwrap();
         let hi = idxs.iter().map(|&i| snapped_v[i].1).max().unwrap();
         let span = ChainSpan { horizontal: false, line, lo, hi };
-        eject_interlopers(&mut snapped_v, &idxs, span, comp, index, graph);
+        eject_interlopers(&mut snapped_v, &protected, span, comp, index, graph);
     }
     snapped.copy_from_slice(&snapped_v);
 }
@@ -1524,6 +1544,48 @@ mod tests {
         let cells: Vec<_> = g.rooms().filter_map(|r| r.pos).collect();
         let set: BTreeSet<_> = cells.iter().collect();
         assert_eq!(cells.len(), set.len(), "room positions must be unique");
+    }
+
+    /// SQ-1309: a chain member must never be evicted by a DIFFERENT chain's contiguity pass.
+    ///
+    /// A-B-C is a reciprocal E/W chain sharing row y=5; D-E is a wholly unrelated reciprocal N/S
+    /// chain sharing column x=0, spanning y=3..=7. B — a real member of the E/W chain — happens to
+    /// land at (0, 5): exactly on the N/S chain's column, inside its span. Before SQ-1309,
+    /// `eject_interlopers` only protected the CURRENT chain's own members, so processing the D-E
+    /// column chain saw B as a foreign interloper and evicted it off its own row, wrecking the E/W
+    /// chain's alignment (Zork I's East-West Passage, evicted from the Round Room/Troll Room row
+    /// by an unrelated column chain it happened to cross). Falsify by reverting `contiguify`'s
+    /// `protected` set to just the current chain's own `idxs`.
+    #[test]
+    fn a_chain_member_is_never_evicted_by_an_unrelated_chain() {
+        let mut g = crate::graph::MapGraph::new();
+        for id in [1u32, 2, 3, 4, 5] {
+            g.upsert_room(id, "r".into());
+        }
+        // A-B-C: reciprocal E/W chain.
+        g.add_edge(1, Direction::E, 2);
+        g.add_edge(2, Direction::W, 1);
+        g.add_edge(2, Direction::E, 3);
+        g.add_edge(3, Direction::W, 2);
+        // D-E: reciprocal N/S chain, wholly unrelated to A/B/C.
+        g.add_edge(4, Direction::S, 5);
+        g.add_edge(5, Direction::N, 4);
+
+        let chains = detect_chains(&g);
+        assert_eq!(chains.ew_members, vec![vec![1, 2, 3]], "sanity: the E/W chain is A-B-C");
+        assert_eq!(chains.ns_members, vec![vec![4, 5]], "sanity: the N/S chain is D-E");
+
+        let comp: Vec<RoomId> = vec![1, 2, 3, 4, 5];
+        let index: BTreeMap<RoomId, usize> = comp.iter().enumerate().map(|(i, &id)| (id, i)).collect();
+        // A=(-1,5) B=(0,5) C=(1,5): the E/W chain's row. D=(0,3) E=(0,7): the N/S chain's column —
+        // B sits squarely inside it, sharing no edge with either D or E.
+        let mut snapped: Vec<(i32, i32)> = vec![(-1, 5), (0, 5), (1, 5), (0, 3), (0, 7)];
+
+        contiguify(&chains, &comp, &index, &mut snapped, &g);
+
+        assert_eq!(snapped[index[&2]], (0, 5), "B must stay put: it is a real E/W chain member, not an interloper");
+        assert_eq!(snapped[index[&1]], (-1, 5), "A must stay put (never a victim's own chain)");
+        assert_eq!(snapped[index[&3]], (1, 5), "C must stay put (never a victim's own chain)");
     }
 
     #[test]

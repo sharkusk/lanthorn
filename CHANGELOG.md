@@ -35,6 +35,19 @@ Absolute URLs or no link.
   `.dot`, `.map.txt` and `.map.json` all show the split; `--layer-min` sets how
   big a region has to be first, and `--no-auto-layers` turns it off for one
   flat map as before.
+- **`lanthorn-mapgen` gives a single room reached only through a passage —
+  climbing up into an attic, say — the same map layer as the place it opens
+  onto**, instead of stranding it on its own by default.
+
+### Fixed
+
+- **A room ring around a building no longer breaks the building's own doors.**
+  Generating a full map used to lay every room out in one giant pass, so a
+  loop of rooms around an outdoor area (a house with a path circling it) could
+  shove the house's own front and back doors out of alignment even though
+  nothing was actually wrong with them. Each part of the map is now worked out
+  on its own, so a ring outside a building can stretch a little to make room
+  without ever breaking a door inside it.
 
 ---
 

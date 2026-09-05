@@ -414,8 +414,13 @@ pub fn split_layers(graph: &mut MapGraph, opts: &MapgenOptions) -> Vec<LayerSpli
         .max_by_key(|&(i, r)| (r.rooms.len(), std::cmp::Reverse(i)))
         .map(|(i, _)| i);
 
+    let mut below_floor: Vec<Region> = Vec::new();
     for (i, region) in components.into_iter().enumerate() {
-        if Some(i) == main_idx || region.rooms.len() < opts.layer_min {
+        if Some(i) == main_idx {
+            continue;
+        }
+        if region.rooms.len() < opts.layer_min {
+            below_floor.push(region);
             continue;
         }
         let named = name_region_by_entry(graph, region);
@@ -429,7 +434,88 @@ pub fn split_layers(graph: &mut MapGraph, opts: &MapgenOptions) -> Vec<LayerSpli
         }
     }
 
+    // ── 3. Adopt below-floor leftovers onto a portal-connected layer ───────
+    adopt_stranded_regions(graph, below_floor);
+
     splits
+}
+
+/// SQ-1310: a below-floor component (too small for its own layer) still gets
+/// discovered on whichever layer the PLAYER was standing on — a one-room attic
+/// reached by `Up` from the Kitchen stays with the house, never lands on Main
+/// by itself. `split_layers`'s pass 2 has no such context (it only ever sees
+/// Main), so every stranded component defaults there; this pass corrects that
+/// by following each one's own portal edges (`Up`/`Down`/`In`/`Out` —
+/// [`mapper::direction::grid_offset`] is `None` for exactly these) to whichever
+/// neighbouring layer is already settled.
+///
+/// A neighbour "already settled" means outside every region still in `pending`
+/// — Main itself counts (its rooms sit on [`mapper::layer::MAIN_LAYER`] from the
+/// start), and so does every maze/portal layer pass 1/2 just created. Ties among
+/// a region's several portal neighbours go to whichever layer has the MOST
+/// portal links into the region, and ties on THAT go to the lowest layer id, so
+/// the outcome never depends on `BTreeSet`/`Vec` iteration order. Adoption
+/// repeats to a fixed point (`loop`) because one stranded component can hang
+/// off ANOTHER stranded component that only just got a home this pass — the
+/// order they happen to appear in `pending` must not matter.
+///
+/// A maze layer only ever adopts a component whose own room names
+/// [`mapper::suggest::mentions_maze`] — a stray one-room dead end that merely
+/// happens to open off a maze stays with whatever NON-maze neighbour it has
+/// instead (or Main, if it has none), exactly as pass 1 never pulls an
+/// unrelated room onto a maze layer by accident.
+fn adopt_stranded_regions(graph: &mut MapGraph, mut pending: Vec<mapper::layer::Region>) {
+    loop {
+        let pending_rooms: BTreeSet<RoomId> =
+            pending.iter().flat_map(|r| r.rooms.iter().copied()).collect();
+        let mut next_pending = Vec::new();
+        let mut adopted_any = false;
+
+        for region in pending {
+            let is_maze_named = region.rooms.iter().any(|&id| {
+                graph.room(id).map(|r| mapper::suggest::mentions_maze(r.label())).unwrap_or(false)
+            });
+
+            let mut tally: BTreeMap<mapper::layer::LayerId, usize> = BTreeMap::new();
+            for c in graph.connections() {
+                if mapper::direction::grid_offset(c.dir).is_some() || c.is_self_loop() {
+                    continue; // a compass edge is not a portal, and a self-loop links nothing
+                }
+                let outside = if region.rooms.contains(&c.origin) && !region.rooms.contains(&c.dest) {
+                    c.dest
+                } else if region.rooms.contains(&c.dest) && !region.rooms.contains(&c.origin) {
+                    c.origin
+                } else {
+                    continue;
+                };
+                if pending_rooms.contains(&outside) {
+                    continue; // that neighbour has no home yet either — wait for it
+                }
+                let layer = graph.layer_of(outside);
+                if graph.layer_is_maze(layer) && !is_maze_named {
+                    continue; // SQ-1310: only a maze-named region may adopt onto a maze layer
+                }
+                *tally.entry(layer).or_insert(0) += 1;
+            }
+
+            match tally.into_iter().max_by_key(|&(layer, count)| (count, std::cmp::Reverse(layer))) {
+                Some((layer, _)) => {
+                    for &id in &region.rooms {
+                        graph.set_room_layer(id, layer);
+                    }
+                    adopted_any = true;
+                }
+                None => next_pending.push(region),
+            }
+        }
+
+        pending = next_pending;
+        if !adopted_any || pending.is_empty() {
+            break; // fixed point: nothing left adopted anything this round, or nothing is left
+        }
+    }
+    // Whatever remains in `pending` has no portal-connected home at all — it
+    // stays on Main untouched, exactly as pass 2 already left it.
 }
 
 /// Re-anchor `region` on the room its entering portal leads into, so
@@ -466,7 +552,9 @@ fn name_region_by_entry(graph: &MapGraph, region: mapper::layer::Region) -> mapp
 ///
 /// `layout` runs the mapper's own tidy pass ([`mapper::layout::relayout_auto`])
 /// over the finished graph, which is what gives every room a position; without
-/// it the graph is pure topology and every `pos` is `None`.
+/// it the graph is pure topology and every `pos` is `None`. It runs **once per
+/// layer** ([`layout_all_layers`]) rather than once over the whole graph — see
+/// that function's doc comment for why (SQ-1309).
 ///
 /// The story is mounted through [`crate::hints::load_mounted_story`] — the same
 /// call `startup.rs` boots from — so a Blorb, a zip and a disk image all reach
@@ -494,11 +582,62 @@ pub fn generate_with_options(
 
     if layout {
         let t = Instant::now();
-        mapper::layout::relayout_auto(&mut map.graph);
+        layout_all_layers(&mut map.graph);
         map.layout_time = Some(t.elapsed());
     }
     annotate_rooms(&mut map);
     Ok(map)
+}
+
+/// Lay out every layer of `graph` INDEPENDENTLY, the way the live app's
+/// `run_tidy_pipeline`/`tidy_layer_silent` (`crates/app/src/tidy.rs`) tidy one
+/// layer at a time via `graph.layer_subgraph` (SQ-1309).
+///
+/// Calling [`mapper::layout::relayout_auto`] once over the WHOLE graph runs every
+/// layer's rooms through one shared stress-solve and one shared pack stage. Two
+/// layers connected only by a portal (a maze reached by `Up`, a side region
+/// reached by a one-way stub) are still one graph-connected component to that
+/// solve, so it treats a maze's tangle of one-way passages as evidence about
+/// where the PARENT layer's rooms belong, and packs rooms from unrelated layers
+/// into the same cells the way it would pack two components of one real layer.
+/// On Zork I this misplaced the Torch Room's four rooms entirely (a maze-free
+/// layer, yet colliding with Main-layer cells it was never laid out against) and
+/// pulled Main's own East-West Passage and Chasm off their rows and columns.
+///
+/// `graph.layer_subgraph(layer)` already drops every connection that crosses a
+/// layer boundary (both endpoints must be in `layer`), so running the exact same
+/// [`mapper::layout::relayout_auto`] pass on each layer's subgraph in isolation
+/// gives each layer its own solve and its own pack, with no other layer's rooms
+/// or portals in the room to compete with. A maze layer gets no special-case
+/// here (unlike the live app, which freezes a maze layer's positions once it has
+/// any — SQ-0671): mapgen has no earlier incremental placement to freeze, so the
+/// maze still needs an initial layout, and running it in its own subgraph rather
+/// than freezing it here confines whatever a maze's unsatisfiable geometry does
+/// to the maze's own layer.
+pub fn layout_all_layers(graph: &mut MapGraph) {
+    let layer_ids: Vec<mapper::layer::LayerId> = graph.layers().keys().copied().collect();
+    for layer in layer_ids {
+        let mut sub = graph.layer_subgraph(layer);
+        mapper::layout::relayout_auto(&mut sub);
+
+        for id in graph.rooms_in_layer(layer) {
+            if let Some(p) = sub.room(id).and_then(|r| r.pos) {
+                graph.set_pos(id, p);
+            }
+        }
+
+        let n = graph.connections().len();
+        for idx in 0..n {
+            let c = graph.connections()[idx].clone();
+            if graph.layer_of(c.origin) == layer && graph.layer_of(c.dest) == layer {
+                if let Some(sc) =
+                    sub.connections().iter().find(|s| s.origin == c.origin && s.dir == c.dir && s.dest == c.dest)
+                {
+                    graph.set_conn_distorted(idx, sc.distorted);
+                }
+            }
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------
