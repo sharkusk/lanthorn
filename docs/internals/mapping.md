@@ -675,6 +675,23 @@ crossing line. `/export-map`'s dump lists the recorded destinations on the `ROOM
 line (`random=[N→(#187 "Probably New Tunnel"), …]`) beside everything else it already
 records about a room.
 
+**On a ship, the map asks in your words, not the compass equivalent.** `fore`,
+`aft`, `port`, `starboard` and the four quarters (`fore-starboard` and its
+family, in whatever abbreviation you type) all fill a compass slot on the map,
+because a map has to draw them somewhere — but that projection is the map's,
+not the game's. Counterfeit Monkey's yacht files `aft-port` under a direction
+of its own and declares *nothing* to the southwest; ask that boat "southwest"
+and it refuses. Two things follow, and both used to go wrong at once. The
+silent copy that checks whether a passage varies now types the word **you**
+typed, so it gets a real answer rather than a refusal; and a refusal, wherever
+it comes from, is no longer read as "the story sent me back where I started" —
+a shadow that never moved has not arrived anywhere. Before this, walking
+Slango's yacht with its own words erased it a passage at a time: each move drew
+its arrow, the check asked in the wrong language, the refusal read as proof the
+destination varied, and the arrow was replaced by a `?` whose list of
+destinations named the room you had just left. The only passages that survived
+were the companionways, where `up` and `down` are the ship's words too.
+
 **Several exits to one destination collapse to a single arrowhead** (SQ-1276).
 A room whose own name keeps rerolling isn't the only thing that can point at one
 place two ways — a staircase alongside a compass passage, or two compass

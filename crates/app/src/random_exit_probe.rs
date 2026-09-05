@@ -86,7 +86,7 @@
 //! actual evidence rather than an artifact of both starting from the same
 //! place.
 
-use mapper::direction::{long_label, Direction};
+use mapper::direction::{Direction, WalkedDir};
 use mapper::graph::RoomId;
 use mapper::mapper::{Mapper, ProbedPassage, RandomExitSuspicion};
 
@@ -145,6 +145,24 @@ impl RandomExitSearch {
     pub fn kind(&self) -> SearchKind {
         self.kind
     }
+
+    /// Is a shadow step that came out in the ORIGIN room telling this search anything? (SQ-1314)
+    ///
+    /// Almost never. The shadow types a direction word at the game; when the game refuses it —
+    /// no such exit, a door that wants opening, a vocabulary this room does not accept — the
+    /// shadow player never leaves, and `location` reports the room it started in. That is a
+    /// refusal, not an arrival, and counting it as a landing is what erased Counterfeit Monkey's
+    /// yacht (see [`landings`]).
+    ///
+    /// The exception is a search whose SUBJECT is a passage that leads back here: the live player
+    /// came out where they went in (`live_dest == origin`), or the map already held a self-loop
+    /// for this direction and the suspicion is about contradicting it (`old_dest == origin`,
+    /// SQ-1269's "back here"). There, standing still is exactly the evidence being weighed, and
+    /// filtering it would leave the search unable to gather any.
+    fn self_landing_is_evidence(&self) -> bool {
+        self.live_dest == self.origin
+            || matches!(self.kind, SearchKind::Suspicion { old_dest: Some(o) } if o == self.origin)
+    }
 }
 
 /// Start a Phase-2 search, if this turn earned one.
@@ -157,12 +175,20 @@ impl RandomExitSearch {
 /// is already marked random, and whether `apply_turn` left a
 /// [`RandomExitSuspicion`] pending (which together decide `kind`) are
 /// `finish_command_turn`'s own checks, which this module does not read.
+/// # The word the shadow types (SQ-1314)
+///
+/// `walked` carries the direction AND the word the player reached it by, and the shadow is asked
+/// with **the player's own word** — never `long_label(dir)`. On Counterfeit Monkey's yacht every
+/// passage is walked with a nautical word (`ap`, `fs`, `aft`) whose compass spelling the story
+/// refuses outright: asked "southwest" the shadow does not move, lands on its own origin, and the
+/// refusal reads as a disagreement that deletes the edge being judged. That is why
+/// [`mapper::direction::WalkedDir`] exists and why a bare `Direction` cannot reach this function.
 #[allow(clippy::too_many_arguments)]
 pub fn arm_random_exit_search(
     state: &mut AppState,
     live: &dyn Engine,
     origin: RoomId,
-    dir: Direction,
+    walked: &WalkedDir,
     live_dest: RoomId,
     kind: SearchKind,
     pre_move_save: std::sync::Arc<crate::engine::EngineSave>,
@@ -173,11 +199,119 @@ pub fn arm_random_exit_search(
     let Some(live_seed) = live.rng_seed() else { return };
     let seeds = derived_seeds(live_seed);
     let from = crate::probe::ProbeSnapshot::from_save(live, pre_move_save);
-    let command = long_label(dir).to_string();
+    let command = walked.word().to_string();
     let Some(token) = state.probe.ask_from_reseeded(&from, &command, &seeds) else {
         return; // busy, unarmed, or mid-save — this move's outcome (edge or mark) simply stands
     };
-    state.random_exit_search = Some(RandomExitSearch { origin, dir, live_dest, kind, token });
+    state.random_exit_search =
+        Some(RandomExitSearch { origin, dir: walked.dir(), live_dest, kind, token });
+}
+
+/// What the room being LEFT declares for the command about to be applied (SQ-1257), or `None`
+/// when the story's own compass map data has nothing to say about this move at all.
+///
+/// `None` for a command that names no direction, and — since SQ-1314 — for one that names a
+/// NAUTICAL direction. [`Engine::declared_exit`] takes a [`Direction`] and reads the story's
+/// COMPASS column for it; a ship word fills that same slot on the map through a projection the
+/// story does not share, so the column describes a passage the player did not walk. Counterfeit
+/// Monkey's Galley declares `aft-port` to Slango's Bunk and nothing southwest, and that truthful
+/// `Absent` about a question nobody asked is what armed the probe that erased the passage.
+///
+/// `read` is the engine seam — `|o, d| session.declared_exit(o, d)` at every production call site.
+/// It is a closure rather than an `&dyn Engine` so that this rule can be exercised over a story's
+/// compiled map directly, in rooms a live session has never stood in (`sq1314_nautical_passage_
+/// erasure`); an engine cannot answer for those, and a test that restated the rule to work around
+/// that would be checking its own copy of it.
+pub fn declared_exit_for_command(
+    cmd: &str,
+    origin: Option<mapper::graph::RoomId>,
+    read: impl FnOnce(mapper::graph::RoomId, Direction) -> crate::engine::DeclaredExit,
+) -> Option<crate::engine::DeclaredExit> {
+    let walked = WalkedDir::parse(cmd).filter(WalkedDir::is_compass)?;
+    Some(read(origin?, walked.dir()))
+}
+
+/// Arm whichever Phase-2 search this finished turn has earned, if any — the module docs' three
+/// shapes, decided in `turn::finish_command_turn`'s own order.
+///
+/// Called immediately after [`crate::session::apply_turn`], with the `declared` that was read
+/// BEFORE it ([`declared_exit_for_command`]) and the room the player was standing in then. Two
+/// shapes need the player to have actually changed rooms (a refusal proves nothing):
+///
+/// * a FIRST walk of a direction the room's own map data had nothing static to check against
+///   (`DeclaredExit::Absent`/`Code`) — `apply_turn` minted the ordinary edge already, and Phase 2
+///   either confirms it or deletes it;
+/// * a RE-walk of a direction ALREADY marked random — the UPGRADE path.
+///
+/// Then the SUSPICION `apply_turn` may have left pending (SQ-1269): armed when a probe can run,
+/// and resolved immediately as random when none can, which is the immediate marking `apply_turn`
+/// itself used to do.
+///
+/// **This is the ONE implementation of that gate** (SQ-1314). It was copied by hand into five
+/// test harnesses that drive a real story the way the run loop does, each restating the order and
+/// the conditions, and the copies drifted: none of them knew a compass column must not be read
+/// for a nautical move. A rule spelled in six places is a rule kept in one of them.
+pub fn arm_for_finished_turn(
+    state: &mut AppState,
+    live: &dyn Engine,
+    mapper: &mut Mapper,
+    cmd: &str,
+    room_before: Option<mapper::graph::RoomId>,
+    declared: Option<crate::engine::DeclaredExit>,
+) {
+    // The direction just typed AND the word it was typed with — one value, because a probe has to
+    // speak the word back at the game while the map files the move under the slot (SQ-1314).
+    let walked = WalkedDir::parse(cmd);
+
+    if let (Some(origin), Some(w), Some(live_dest)) =
+        (room_before, walked.as_ref(), mapper.graph.current())
+    {
+        let already_random = mapper.graph.is_random_exit(origin, w.dir());
+        let worth_probing = live_dest != origin
+            && (already_random
+                || matches!(
+                    declared,
+                    Some(crate::engine::DeclaredExit::Absent)
+                        | Some(crate::engine::DeclaredExit::Code)
+                ));
+        if worth_probing {
+            if let Some((saved_room, save)) = &state.random_exit_pre_move_save {
+                if *saved_room == origin {
+                    let save = std::sync::Arc::clone(save);
+                    let kind =
+                        if already_random { SearchKind::Upgrade } else { SearchKind::FirstWalk };
+                    arm_random_exit_search(state, live, origin, w, live_dest, kind, save);
+                }
+            }
+        }
+    }
+
+    if let Some(susp) = mapper.take_random_exit_suspicion() {
+        let mut armed = false;
+        // A suspicion can only exist for a move `apply_turn` parsed a direction out of, so
+        // `walked` is the very command that raised it — and its WORD is the one the shadow must
+        // re-ask with (SQ-1314).
+        let walked_susp = walked.as_ref().filter(|w| w.dir() == susp.dir);
+        if let (Some((saved_room, save)), Some(w)) = (&state.random_exit_pre_move_save, walked_susp)
+        {
+            if *saved_room == susp.origin {
+                let save = std::sync::Arc::clone(save);
+                arm_random_exit_search(
+                    state,
+                    live,
+                    susp.origin,
+                    w,
+                    susp.live_dest,
+                    SearchKind::Suspicion { old_dest: susp.old_dest },
+                    save,
+                );
+                armed = state.random_exit_search.is_some();
+            }
+        }
+        if !armed {
+            mapper.resolve_suspicion_as_random(susp);
+        }
+    }
 }
 
 /// True when `token` answers the search running now, if any.
@@ -221,18 +355,47 @@ pub fn deliver(state: &mut AppState, mapper: &mut Mapper, answer: &crate::probe:
     }
 }
 
+/// Every room a shadow run actually ARRIVED in — the one reading of `run.steps` that both
+/// [`judge`] and [`note_disagreeing_destinations`] go through, so the two can never disagree
+/// about which steps are evidence (SQ-1314).
+///
+/// A step that quit or escaped, or that could not say where it ended up, says nothing: an
+/// unanswerable question is not evidence the story is deterministic.
+///
+/// # A refused move is not an arrival (SQ-1314)
+///
+/// **And neither is a step that came out in the room it started in.** The shadow types a
+/// direction word at the game; when the game refuses it — no such exit, a door that wants
+/// opening, a vocabulary the room does not accept — the shadow player never leaves, and
+/// `location` reports the ORIGIN. Counted as a landing, that origin is a room "the story sent us
+/// to", which is how Counterfeit Monkey's yacht filled with random pools naming their own rooms
+/// (`ROOM #86 "Your Head" random=[N→(#82 "Your Bunk", #86 "Your Head")]`) and lost every passage
+/// that produced one: staying put read as a disagreement, and a disagreement deletes the edge.
+///
+/// The one shape where standing still IS the answer is a search whose subject is a passage that
+/// leads back here — see [`RandomExitSearch::self_landing_is_evidence`], which is the only place
+/// that judgement is made.
+fn landings<'a>(
+    run: &'a crate::probe::ProbeRun,
+    search: &RandomExitSearch,
+) -> impl Iterator<Item = RoomId> + 'a {
+    let origin = search.origin;
+    let keep_self = search.self_landing_is_evidence();
+    run.steps
+        .iter()
+        .filter(|s| !s.quit && !s.escaped)
+        .filter_map(|s| s.location)
+        .filter(move |&loc| keep_self || loc != origin)
+}
+
 /// Every step's verdict against `live_dest`: `(any_evidence, any_disagree)` — see [`deliver`]'s
-/// "evidence, not a vote".
-fn judge(run: &crate::probe::ProbeRun, live_dest: RoomId) -> (bool, bool) {
+/// "evidence, not a vote", and [`landings`] for what counts as a step that landed at all.
+fn judge(run: &crate::probe::ProbeRun, search: &RandomExitSearch) -> (bool, bool) {
     let mut any_evidence = false;
     let mut any_disagree = false;
-    for step in &run.steps {
-        if step.quit || step.escaped {
-            continue;
-        }
-        let Some(loc) = step.location else { continue };
+    for loc in landings(run, search) {
         any_evidence = true;
-        if loc != live_dest {
+        if loc != search.live_dest {
             any_disagree = true;
         }
     }
@@ -261,23 +424,20 @@ fn judge(run: &crate::probe::ProbeRun, live_dest: RoomId) -> (bool, bool) {
 /// the primary guard. But it is computed directly from what the live game printed, not guessed
 /// at generically, which is what lets it reject exactly the phantom this bug produced without
 /// also rejecting a genuinely new room a disagreeing attempt is the only thing to have found.
+/// A step that never left the origin is excluded too, through [`landings`] — a refusal is not a
+/// destination, and pooling one is what put every yacht room's own id in its own pool (SQ-1314).
 fn note_disagreeing_destinations(
     mapper: &mut Mapper,
-    origin: RoomId,
-    dir: Direction,
-    live_dest: RoomId,
+    search: &RandomExitSearch,
     run: &crate::probe::ProbeRun,
 ) {
+    let (origin, dir, live_dest) = (search.origin, search.dir, search.live_dest);
     mapper.graph.note_random_destination(origin, dir, live_dest);
     let known_phantom = mapper.graph.room(live_dest).map(|r| crate::roomid::synthetic_room_id(r.label()));
-    for step in &run.steps {
-        if step.quit || step.escaped {
-            continue;
-        }
-        let Some(loc) = step.location else { continue };
-        if Some(loc) == known_phantom && loc != live_dest {
-            continue; // SQ-1267: the exact unlocked name-hash phantom this bug reported
-        }
+    let pooled: Vec<RoomId> = landings(run, search)
+        .filter(|&loc| !(Some(loc) == known_phantom && loc != live_dest))
+        .collect(); // SQ-1267: the exact unlocked name-hash phantom that bug reported
+    for loc in pooled {
         mapper.graph.note_random_destination(origin, dir, loc);
     }
 }
@@ -301,7 +461,7 @@ fn deliver_first_walk(mapper: &mut Mapper, search: &RandomExitSearch, run: &crat
     {
         return false; // the edge this search was about is gone or changed; nothing to judge
     }
-    let (any_evidence, any_disagree) = judge(run, search.live_dest);
+    let (any_evidence, any_disagree) = judge(run, search);
     if !any_evidence || !any_disagree {
         return false; // no usable evidence, or full agreement — the edge stands
     }
@@ -310,7 +470,7 @@ fn deliver_first_walk(mapper: &mut Mapper, search: &RandomExitSearch, run: &crat
     // SQ-1261: this is the FIRST evidence the direction is random at all, so nothing about it
     // has been noted yet — not by `apply_turn` (which minted the now-deleted edge on the belief
     // this was an ordinary passage) and not by an earlier disagreement (there isn't one).
-    note_disagreeing_destinations(mapper, search.origin, search.dir, search.live_dest, run);
+    note_disagreeing_destinations(mapper, search, run);
     true
 }
 
@@ -323,7 +483,7 @@ fn deliver_upgrade(mapper: &mut Mapper, search: &RandomExitSearch, run: &crate::
     if !mapper.graph.is_random_exit(search.origin, search.dir) {
         return false; // no longer marked; this answer is about a question nobody is asking
     }
-    let (any_evidence, any_disagree) = judge(run, search.live_dest);
+    let (any_evidence, any_disagree) = judge(run, search);
     if !any_evidence {
         return false; // nothing usable either way — stay marked
     }
@@ -333,7 +493,7 @@ fn deliver_upgrade(mapper: &mut Mapper, search: &RandomExitSearch, run: &crate::
         // attempts saw that the live walk did not — still worth recording, even though the
         // upgrade itself does not go through: disagreement here is fresh evidence the direction
         // keeps varying, not proof of nothing.
-        note_disagreeing_destinations(mapper, search.origin, search.dir, search.live_dest, run);
+        note_disagreeing_destinations(mapper, search, run);
         return false; // at least one attempt disagreed — stay marked
     }
     // SQ-1269: the flicker fix. With two possible destinations, two reseeded attempts agree with
@@ -398,7 +558,7 @@ fn deliver_suspicion(
     // `run: None` — a broken shadow, e.g. a restore the engine refused — is exactly as
     // inconclusive as a run whose every step quit, escaped, or reported no location: neither
     // tells this search anything, so both take the same "no evidence at all" path below.
-    let (any_evidence, any_disagree) = run.map(|r| judge(r, search.live_dest)).unwrap_or((false, false));
+    let (any_evidence, any_disagree) = run.map(|r| judge(r, search)).unwrap_or((false, false));
     let suspicion = RandomExitSuspicion { origin: search.origin, dir: search.dir, old_dest, live_dest: search.live_dest };
     if !any_evidence {
         mapper.resolve_suspicion_as_random(suspicion);
@@ -408,7 +568,7 @@ fn deliver_suspicion(
         mapper.resolve_suspicion_as_random(suspicion);
         // SQ-1261: everything the SHADOW itself saw is fresh evidence too, beyond the old
         // destination and the live landing `resolve_suspicion_as_random` already pooled.
-        note_disagreeing_destinations(mapper, search.origin, search.dir, search.live_dest, run.expect("any_evidence implies a run"));
+        note_disagreeing_destinations(mapper, search, run.expect("any_evidence implies a run"));
     } else {
         mapper.resolve_suspicion_as_changed(suspicion);
     }
@@ -872,5 +1032,131 @@ mod tests {
         let run = ProbeRun { baseline: WorldPrint::default(), steps: vec![step(Some(2)), step(Some(2))] };
         assert!(!deliver(&mut state, &mut mapper, &test_answer(52, Some(run))), "stale — declined");
         assert!(mapper.graph.is_random_exit(1, Direction::N), "still marked, untouched by the stale answer");
+    }
+
+    // ── SQ-1314: a refused move is not an arrival ─────────────────────────────────────────────
+
+    /// The reported bug, in miniature. The player walks `ap` out of Counterfeit Monkey's Galley
+    /// and lands in Slango's Bunk; `apply_turn` mints the ordinary edge. A shadow that asked the
+    /// question in the WRONG vocabulary ("southwest", which that room refuses) never leaves the
+    /// Galley and reports the Galley as its landing — and, read as an arrival, that is a
+    /// disagreement, which DELETES the edge and marks the direction random with the Galley itself
+    /// in its own pool. Exactly the dump the report came with:
+    /// `ROOM #83 "Galley" random=[SW→(#84 "Slango's Bunk", #83 "Galley")]`.
+    ///
+    /// A landing on the search's own origin is a refusal. The edge must stand.
+    #[test]
+    fn a_shadow_that_never_left_the_origin_is_a_refusal_and_leaves_the_edge_alone() {
+        let mut mapper = Mapper::default();
+        let mut death = DeathWatch::default();
+        apply_turn(&mut mapper, "", &TurnResult::observation(snap(1, "Galley")), &mut death);
+        let mut r = TurnResult::observation(snap(2, "Slango's Bunk"));
+        r.declared_exit = Some(crate::engine::DeclaredExit::Absent);
+        apply_turn(&mut mapper, "ap", &r, &mut death);
+        assert_eq!(
+            mapper.graph.connections().iter().find(|c| c.origin == 1 && c.dir == Direction::SW).map(|c| c.dest),
+            Some(2),
+            "the walk minted the ordinary edge"
+        );
+
+        let mut state = AppState::default();
+        state.random_exit_search = Some(arm(1, Direction::SW, 2, SearchKind::FirstWalk, 61));
+        // Both reseeded attempts were refused, so both report the room they started in.
+        let run = ProbeRun { baseline: WorldPrint::default(), steps: vec![step(Some(1)), step(Some(1))] };
+        assert!(!deliver(&mut state, &mut mapper, &test_answer(61, Some(run))), "nothing to change");
+        assert_eq!(
+            mapper.graph.connections().iter().find(|c| c.origin == 1 && c.dir == Direction::SW).map(|c| c.dest),
+            Some(2),
+            "a refusal is not evidence the destination varies — the passage stays drawn"
+        );
+        assert!(!mapper.graph.is_random_exit(1, Direction::SW), "and is not marked `?`");
+        assert!(
+            mapper.graph.random_destinations(1, Direction::SW).is_empty(),
+            "nothing pooled at all, least of all the origin room itself"
+        );
+    }
+
+    /// A run that mixes a refusal with a REAL disagreement still proves randomness — and pools
+    /// only the rooms the shadow actually reached, never the origin it never left (SQ-1314).
+    #[test]
+    fn a_refusal_beside_a_real_disagreement_pools_only_the_rooms_reached() {
+        let mut mapper = Mapper::default();
+        let mut death = DeathWatch::default();
+        apply_turn(&mut mapper, "", &TurnResult::observation(snap(1, "Tunnel")), &mut death);
+        let mut r = TurnResult::observation(snap(2, "Cave"));
+        r.declared_exit = Some(crate::engine::DeclaredExit::Code);
+        apply_turn(&mut mapper, "north", &r, &mut death);
+
+        let mut state = AppState::default();
+        state.random_exit_search = Some(arm(1, Direction::N, 2, SearchKind::FirstWalk, 62));
+        let run =
+            ProbeRun { baseline: WorldPrint::default(), steps: vec![step(Some(1)), step(Some(7))] };
+        assert!(deliver(&mut state, &mut mapper, &test_answer(62, Some(run))), "the map changed");
+        assert!(mapper.graph.is_random_exit(1, Direction::N), "the real disagreement still counts");
+        assert_eq!(
+            mapper.graph.random_destinations(1, Direction::N),
+            &[2, 7],
+            "the live landing and the room the shadow reached — and NOT the origin it did not leave"
+        );
+    }
+
+    /// The one shape where standing still IS the answer, so the guard must not fire: a search
+    /// whose subject is a passage that leads back here. `deliver_upgrade`'s and `deliver_first_
+    /// walk`'s own callers never build one (`worth_probing` requires the live player to have
+    /// moved), but a self-loop SUSPICION does — see
+    /// `self_loop_suspicion_disagreement_pools_the_room_itself_as_back_here`, which this backs up
+    /// at the level of the rule itself.
+    #[test]
+    fn a_search_about_a_passage_back_here_still_reads_its_own_origin() {
+        let back_here = arm(1, Direction::N, 1, SearchKind::FirstWalk, 63);
+        assert!(back_here.self_landing_is_evidence(), "the live player came out where they went in");
+
+        let contradicted_loop =
+            arm(1, Direction::N, 5, SearchKind::Suspicion { old_dest: Some(1) }, 64);
+        assert!(
+            contradicted_loop.self_landing_is_evidence(),
+            "the map already claimed this way leads back here; a shadow that agrees is evidence"
+        );
+
+        let ordinary = arm(1, Direction::N, 5, SearchKind::Suspicion { old_dest: Some(9) }, 65);
+        assert!(!ordinary.self_landing_is_evidence(), "nothing here is about a passage back to 1");
+        assert!(!arm(1, Direction::N, 5, SearchKind::FirstWalk, 66).self_landing_is_evidence());
+        assert!(!arm(1, Direction::N, 5, SearchKind::Upgrade, 67).self_landing_is_evidence());
+    }
+
+    // ── SQ-1314: the shadow asks in the player's own words ────────────────────────────────────
+
+    /// Rule 1, end to end through a real armed shadow: the command that reaches the shadow's
+    /// stdin is the word the PLAYER typed, not `long_label(dir)`.
+    ///
+    /// `minizork.z3` is the fixture only because arming needs an engine that can answer
+    /// [`Engine::rng_seed`] and be snapshotted; it is never asked to understand `ap`. What is
+    /// asserted is the question, which is the half that was wrong.
+    #[test]
+    fn the_shadow_is_asked_in_the_players_own_word() {
+        let fixture = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../zvm/tests/fixtures/minizork.z3");
+        let story = std::fs::read(&fixture).expect("minizork.z3 fixture");
+        let live = crate::session::GameSession::new(story.clone(), true, false, None)
+            .expect("minizork boots");
+
+        let mut state = AppState::default();
+        state.probe.arm(crate::probe::ShadowRecipe {
+            story_bytes: std::sync::Arc::new(story),
+            ..Default::default()
+        });
+        let save = std::sync::Arc::new(crate::engine::Engine::save_state(&live));
+        let walked = mapper::direction::WalkedDir::parse("ap").expect("`ap` is a direction");
+        assert_eq!(walked.dir(), Direction::SW, "and it fills the southwest slot on the map");
+
+        arm_random_exit_search(&mut state, &live, 1, &walked, 2, SearchKind::FirstWalk, save);
+        assert!(state.random_exit_search.is_some(), "a search is running");
+        let answer = state.probe.settle().expect("the shadow answers");
+        let run = answer.run.expect("a run");
+        let asked: Vec<&str> = run.steps.iter().map(|s| s.command.as_str()).collect();
+        assert!(
+            !asked.is_empty() && asked.iter().all(|&c| c == "ap"),
+            "every reseeded attempt must type the player's own word; it typed {asked:?}"
+        );
     }
 }

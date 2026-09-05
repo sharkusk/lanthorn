@@ -56,6 +56,19 @@ Absolute URLs or no link.
 
 ### Fixed
 
+- **A ship's map no longer erases itself as you sail it.** Walking Slango's
+  yacht in *Counterfeit Monkey* with the ship's own words — `fs`, `ap`, `aft`,
+  `port` — drew each passage and then quietly rubbed it out, until the boat was
+  a scatter of disconnected rooms joined by nothing. The map draws those words
+  on the compass, because it has to draw them somewhere, but the *game* files
+  them under directions of its own and refuses "southwest" outright. The check
+  that quietly re-walks a passage to see whether it varies was asking in the
+  compass word, getting refused, and reading "I did not move" as "the story
+  sent me somewhere else" — proof enough to delete the arrow it had just drawn.
+  It now asks in the word you typed, and a refusal is never mistaken for an
+  arrival. Only the companionways survived before, where `up` and `down` happen
+  to be the ship's words too.
+
 - **A room ring around a building no longer breaks the building's own doors.**
   Generating a full map used to lay every room out in one giant pass, so a
   loop of rooms around an outdoor area (a house with a path circling it) could

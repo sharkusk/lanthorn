@@ -98,3 +98,5 @@ mod sq1306_mapgen;
 mod sq1305_glulx_stale_sidecar;
 #[path = "suites/sq1308_mapgen_layers.rs"]
 mod sq1308_mapgen_layers;
+#[path = "suites/sq1314_nautical_passage_erasure.rs"]
+mod sq1314_nautical_passage_erasure;

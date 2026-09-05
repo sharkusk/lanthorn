@@ -240,60 +240,24 @@ fn replaying_the_reported_walk_leaves_no_fan_out_of_below_decks() {
         assert!(advance_to_line(&mut live, 8), "a line prompt before {cmd:?}");
         let room_before = mapper.graph.current();
         let mut result = live.submit(cmd);
-        if let (Some(origin), Some(dir)) = (room_before, parse_direction(cmd)) {
-            result.declared_exit = Some(live.declared_exit(origin, dir));
-        }
+        result.declared_exit =
+            app::random_exit_probe::declared_exit_for_command(cmd, room_before, |o, d| live.declared_exit(o, d));
         apply_turn(&mut mapper, cmd, &result, &mut death);
 
         let mut turn_save = app::engine::TurnSave::default();
         app::return_probe::arm_return_search(
             &mut state, &mapper, &live, cmd, room_before, &mut turn_save,
         );
-        // The Phase-2 shapes `finish_command_turn` arms, in its own order.
-        if let (Some(origin), Some(dir), Some(live_dest)) =
-            (room_before, parse_direction(cmd), mapper.graph.current())
-        {
-            let already_random = mapper.graph.is_random_exit(origin, dir);
-            let worth_probing = live_dest != origin
-                && (already_random
-                    || matches!(
-                        result.declared_exit,
-                        Some(app::engine::DeclaredExit::Absent)
-                            | Some(app::engine::DeclaredExit::Code)
-                    ));
-            if worth_probing {
-                if let Some((saved_room, save)) = &state.random_exit_pre_move_save {
-                    if *saved_room == origin {
-                        let save = Arc::clone(save);
-                        let kind = if already_random {
-                            app::random_exit_probe::SearchKind::Upgrade
-                        } else {
-                            app::random_exit_probe::SearchKind::FirstWalk
-                        };
-                        app::random_exit_probe::arm_random_exit_search(
-                            &mut state, &live, origin, dir, live_dest, kind, save,
-                        );
-                    }
-                }
-            }
-        }
-        if let Some(susp) = mapper.take_random_exit_suspicion() {
-            let mut armed = false;
-            if let Some((saved_room, save)) = &state.random_exit_pre_move_save {
-                if *saved_room == susp.origin {
-                    let save = Arc::clone(save);
-                    app::random_exit_probe::arm_random_exit_search(
-                        &mut state, &live, susp.origin, susp.dir, susp.live_dest,
-                        app::random_exit_probe::SearchKind::Suspicion { old_dest: susp.old_dest },
-                        save,
-                    );
-                    armed = state.random_exit_search.is_some();
-                }
-            }
-            if !armed {
-                mapper.resolve_suspicion_as_random(susp);
-            }
-        }
+        // The Phase-2 shapes `finish_command_turn` arms, in its own order — its own code, not a
+        // copy of it (SQ-1314): this harness restated the gate by hand and the copy drifted.
+        app::random_exit_probe::arm_for_finished_turn(
+            &mut state,
+            &live,
+            &mut mapper,
+            cmd,
+            room_before,
+            result.declared_exit,
+        );
         // Both searches share one shadow, so drain them rather than racing the
         // event loop's per-pass dispatch.
         let _ = app::random_exit_probe::settle_random_exit_search(&mut state, &mut mapper);

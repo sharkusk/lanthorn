@@ -1316,6 +1316,101 @@ route::tests::a_self_loop_is_never_routed_as_a_connector`, falsified by
 reverting the three guards and confirming the pinned save's forest room
 grows exactly the bogus loop described above).
 
+### SQ-1314: a direction is not a word — the ship's own vocabulary
+
+`Direction` is a MAP slot. The word a player reached it by is a different
+fact, and aboard a ship the two disagree: Counterfeit Monkey's `aft-port` and
+`southwest` fill the same slot, and the story accepts exactly one of them.
+Everything above reads a direction; two things have to SPEAK one — a shadow
+probe, which types a command at a real parser, and `Engine::declared_exit`,
+which reads the story's own COMPASS column for it — and both were handed the
+slot without the word.
+
+Reported against 0.4.4: *"Initially, the map seemed to understand nautical
+directions, but as I used them, the map gradually erased them, until the boat
+was full of disconnected rooms."* Nine of the ten rooms of Slango's yacht
+ended up carrying a `random=` pool, and every pool named its own origin —
+
+```text
+ROOM #83 "Galley"  random=[SW→(#84 "Slango's Bunk", #83 "Galley"), …]
+```
+
+A pool member equal to its own origin means a REFUSED move was recorded as an
+arrival. Read off the compiled image (`gvm::i7map`, no turn played), the story
+says why. Counterfeit Monkey declares **twenty** direction columns: the twelve
+compass points and portals, then eight of its own — `Starboard`, `port`,
+`fore`, `aft` and the four quarters `aft-port`, `aft-starboard`, `fore-port`,
+`fore-starboard`. Every yacht room hangs its passages on those and declares
+**nothing** on the compass point the map projects them onto:
+
+```text
+ROOM "Galley"  up -> Navigation Area | fore -> Brock's Stateroom
+               aft-port -> Slango's Bunk | aft-starboard -> Your Bunk
+    compass asks: N=Absent … Sw=Absent … Up=Some(Navigation Area)
+```
+
+So, once SQ-1296 taught `parse_direction` the quarter directions and `ap`
+began resolving to `Direction::SW`, each yacht move ran this chain:
+
+1. `finish_command_turn` asked `declared_exit(Galley, SW)`, which read the
+   SOUTHWEST column — empty — and answered `Absent`.
+2. `apply_turn` minted the ordinary edge. The map was still right.
+3. `Absent` put the move in Phase 2's "worth probing" set, arming a
+   `SearchKind::FirstWalk`.
+4. The probe typed `long_label(SW)` — **"southwest"** — into a reseeded shadow
+   of the Galley. The story refuses it, the shadow never left, and its step
+   reported the Galley as its landing.
+5. `judge` read that as a disagreement; `deliver_first_walk` DELETED the edge,
+   marked the direction random, and pooled Slango's Bunk *and the Galley*.
+
+Which is why the four `up`/`down` passages were the only yacht edges still
+standing in the reported dump: there, the compass word IS the ship's word.
+
+Three rules, each closing a different half:
+
+**A direction that will be spoken travels with its word.**
+`mapper::direction::WalkedDir` carries the slot, the player's own word, and
+the [`DirFamily`] it came from; `WalkedDir::parse` is its only constructor, so
+the two can never be a different player's move. `arm_random_exit_search` takes
+one and types `walked.word()` — a bare `Direction` can no longer reach it,
+which is a compile error rather than a convention. `parse_direction` is now
+defined *as* `WalkedDir::parse(cmd).map(|w| w.dir())` over one word table, so
+the parse, the word and the family cannot drift. (The return probe already
+asked the way back in the player's vocabulary — `reciprocal_word`, SQ-1290.)
+
+**A refused move is not an arrival.** `random_exit_probe::landings` is the one
+reading of a shadow run's steps that both `judge` and
+`note_disagreeing_destinations` go through, and it discards a step that came
+out in the search's own origin: the shadow never left. The exception is a
+search whose SUBJECT is a passage that leads back here — the live player came
+out where they went in, or the map already held a self-loop the suspicion is
+contradicting — and that judgement lives in exactly one place,
+`RandomExitSearch::self_landing_is_evidence`, so the SQ-1269 "back here" pool
+still works.
+
+**A compass column is not asked about a non-compass move.**
+`declared_exit_for_command` answers `None` for a nautical word: the projection
+onto `Direction::SW` is the MAP's, not the story's, so the southwest column
+describes a passage the player did not walk. That truthful `Absent` about a
+question nobody asked is what armed step 3. `apply_turn`'s declared-mismatch
+rule restates the guard, because it is engine-neutral and believes whatever
+`declared_exit` a caller hands it.
+
+**And the gate itself now exists once.** The Phase-2 arming block was copied
+by hand into five real-story harnesses that drive a turn the way the run loop
+does, each restating the order and the conditions — and none of the copies
+knew about any of this. `random_exit_probe::arm_for_finished_turn` is the
+single implementation; `turn::finish_command_turn` and all five harnesses call
+it. A rule spelled in six places is a rule kept in one of them.
+
+`sq1314_nautical_passage_erasure` is the fixture-backed suite. It does not
+play to the yacht — Counterfeit Monkey's own `test_full_game_alt.txt` is the
+only script that reaches it, and 553 headless inputs cost 4m10s and
+desynchronise before the last dozen — so it asks the story the question it can
+answer with no turn played: its own compiled map. Every route it walks is
+built from the passages the story itself declares, so it cannot drift from the
+fixture the way a hand-copied walkthrough can.
+
 ## Reading back the bytes we actually emit
 
 Every other harness in the repo renders into a ratatui `Buffer` and asserts on
