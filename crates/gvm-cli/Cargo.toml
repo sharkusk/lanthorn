@@ -19,9 +19,9 @@ name = "gvm-cli"
 path = "src/main.rs"
 
 [dependencies]
-buildinfo = { package = "lanthorn-buildinfo", path = "../buildinfo", version = "0.4.3" }
-cli-host = { package = "lanthorn-cli-host", path = "../cli-host", version = "0.4.3" }
-gvm = { package = "lanthorn-gvm", path = "../gvm", version = "0.4.3" }
-blorb = { package = "lanthorn-blorb", path = "../blorb", version = "0.4.3" }
+buildinfo = { package = "lanthorn-buildinfo", path = "../buildinfo", version = "0.4.4" }
+cli-host = { package = "lanthorn-cli-host", path = "../cli-host", version = "0.4.4" }
+gvm = { package = "lanthorn-gvm", path = "../gvm", version = "0.4.4" }
+blorb = { package = "lanthorn-blorb", path = "../blorb", version = "0.4.4" }
 crossterm = "0.29"
 jiff = "0.2"

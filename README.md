@@ -156,7 +156,7 @@ itself.**
   gnome tunnels are the example — draws no arrow at all, just a `?` marking
   that the destination varies; hover the little number beside it to see
   where it's actually sent you.
-  *Next release:* an Inform 7 game hands over its own world model, so the room
+  An Inform 7 game hands over its own world model, so the room
   you wake up in is on the map at the first prompt under the author's own name
   for it, and no room is ever drawn twice because the game spelled its name two
   ways.
@@ -329,7 +329,7 @@ no panes, your scrollback intact. Useful over a slow link, for a screen reader
 (`--screen-reader` emits zero escape sequences), or for debugging one engine
 without the TUI around it. They ship in every release archive.
 
-*Next release:* `lanthorn-mapgen` ships alongside them, and it does the opposite
+`lanthorn-mapgen` ships alongside them, and it does the opposite
 of playing: hand it a story and it reads the map the game was *built* with —
 every room, every exit, no walking — and writes it out four ways, as an
 annotated text dump with the map drawn in it, as an SVG, as a Graphviz `.dot`,
