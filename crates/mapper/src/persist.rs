@@ -326,9 +326,9 @@ mod tests {
                 {"id":2,"name":"B","label_override":null,"notes":"","pos":[0,-1]},
                 {"id":3,"name":"C","label_override":null,"notes":"","pos":[1,0]}],
             "connections":[
-                {"origin":1,"dir":"Unknown","dest":2,"distorted":false,"soft":false},
-                {"origin":1,"dir":"N","dest":2,"distorted":false,"soft":false},
-                {"origin":2,"dir":"Unknown","dest":3,"distorted":false,"soft":false}],
+                {"origin":1,"dir":"Unknown","dest":2,"distorted":false,"weight":"Hard"},
+                {"origin":1,"dir":"N","dest":2,"distorted":false,"weight":"Hard"},
+                {"origin":2,"dir":"Unknown","dest":3,"distorted":false,"weight":"Hard"}],
             "current":1}"#;
         let m = from_json(json).unwrap();
         assert!(
@@ -353,9 +353,9 @@ mod tests {
                 {"id":1,"name":"A","label_override":null,"notes":"","pos":[0,0]},
                 {"id":2,"name":"B","label_override":null,"notes":"","pos":[1,0]}],
             "connections":[
-                {"origin":1,"dir":"E","dest":2,"distorted":false,"soft":false},
-                {"origin":1,"dir":"N","dest":99,"distorted":false,"soft":false},
-                {"origin":98,"dir":"S","dest":1,"distorted":false,"soft":false}],
+                {"origin":1,"dir":"E","dest":2,"distorted":false,"weight":"Hard"},
+                {"origin":1,"dir":"N","dest":99,"distorted":false,"weight":"Hard"},
+                {"origin":98,"dir":"S","dest":1,"distorted":false,"weight":"Hard"}],
             "current":42}"#;
         let m = from_json(json).unwrap();
         assert_eq!(
@@ -454,28 +454,41 @@ mod tests {
         assert_eq!(m2.graph.room(2).unwrap().pos, m.graph.room(2).unwrap().pos);
     }
 
-    /// SQ-1312: a SOFT edge — a passage the story gates, whose geometry the layout bends first —
-    /// survives a save/load round trip, and a hard edge beside it stays hard. The flag changes
-    /// which constraints `build_axis_constraints` drops and whether `detect_chains` will build a
-    /// row out of the pair, so a save that lost it would relayout into a different map.
+    /// SQ-1312: a passage's WEIGHT survives a save/load round trip, all three levels of it.
+    ///
+    /// The weight decides which constraint the layout gives up when a cycle closes, and whether
+    /// a room may stand in a run's gap, so a save that lost it would relayout into a different
+    /// map. It is an ORDERING, not a flag: `Hard` beats `Door` beats `Conditional`, and the two
+    /// gated levels must come back distinct — a door is a real walkable way through the
+    /// geography, a conditional exit is usually a secret and yields first.
     #[test]
-    fn a_soft_edge_survives_the_round_trip() {
+    fn a_passage_weight_survives_the_round_trip() {
+        use crate::graph::PassageWeight;
         let mut m = Mapper::default();
         m.graph.upsert_room(1, "Kitchen".into());
         m.graph.upsert_room(2, "Behind House".into());
         m.graph.upsert_room(3, "Living Room".into());
-        m.graph.add_edge_soft(1, Direction::E, 2, true); // through the kitchen window: a door
+        m.graph.upsert_room(4, "Strange Passage".into());
+        m.graph.add_edge_weighted(1, Direction::E, 2, PassageWeight::Door); // the kitchen window
         m.graph.add_edge(1, Direction::W, 3); // an ordinary open passage
+        m.graph.add_edge_weighted(3, Direction::N, 4, PassageWeight::Conditional); // magic word
 
         let json = to_json(&m);
-        assert!(json.contains("\"soft\": true"), "the flag is written: {json}");
+        assert!(json.contains("\"weight\": \"Door\""), "the weight is written: {json}");
+        assert!(json.contains("\"weight\": \"Conditional\""), "all of it: {json}");
         let m2 = from_json(&json).unwrap();
 
-        let soft_of = |g: &crate::graph::MapGraph, origin, dir| {
-            g.connections().iter().find(|c| c.origin == origin && c.dir == dir).unwrap().soft
+        let weight_of = |g: &crate::graph::MapGraph, origin, dir| {
+            g.connections().iter().find(|c| c.origin == origin && c.dir == dir).unwrap().weight
         };
-        assert!(soft_of(&m2.graph, 1, Direction::E), "the gated passage loads back soft");
-        assert!(!soft_of(&m2.graph, 1, Direction::W), "and the ordinary one loads back hard");
+        assert_eq!(weight_of(&m2.graph, 1, Direction::E), PassageWeight::Door);
+        assert_eq!(weight_of(&m2.graph, 1, Direction::W), PassageWeight::Hard);
+        assert_eq!(weight_of(&m2.graph, 3, Direction::N), PassageWeight::Conditional);
+        assert!(
+            PassageWeight::Hard < PassageWeight::Door
+                && PassageWeight::Door < PassageWeight::Conditional,
+            "the ordering the layout sorts by: surrender the later one first",
+        );
         assert_eq!(m2.graph.connections(), m.graph.connections());
     }
 }

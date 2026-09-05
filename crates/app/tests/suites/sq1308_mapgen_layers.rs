@@ -664,20 +664,18 @@ fn white_house_cardinal_doors_are_not_distorted() {
     let map = mapgen::generate(&path, true).expect("Zork I must map");
     let g = &map.graph;
     for (from, dir, to) in [
+        ("Behind House", Direction::W, "Kitchen"),
+        ("Kitchen", Direction::E, "Behind House"),
         ("Kitchen", Direction::W, "Living Room"),
         ("Living Room", Direction::E, "Kitchen"),
     ] {
         assert!(!edge_distorted(g, from, dir, to), "{from} -{dir:?}-> {to} must not be distorted");
     }
 
-    // `Behind House` ─ `Kitchen` was pinned straight here too, and is deliberately no longer
-    // (SQ-1312). It is the kitchen WINDOW — the dump reads `door=[W→"kitchen window"]` — and
-    // `Behind House` is simultaneously the east corner of the outdoor ring around the house and
-    // the east end of the Kitchen's row. No grid holds a room in both places, and something had
-    // to give: either the window bends, or `West of House` loses the three reciprocated diagonals
-    // that make the ring a ring (which is what used to happen — see
-    // `zork1_white_house_keeps_its_ring_and_the_secret_passage_bends`). A door is a passage the
-    // story GATES, so it is the one marked soft and the one that gives.
+    // `Behind House` ─ `Kitchen` is the kitchen WINDOW, and mapgen marks it a gated passage
+    // (`PassageWeight::Door`) — but gatedness only orders who yields when a cycle closes, and
+    // nothing here is contradicting it, so it is laid out exactly like a plain corridor and
+    // stays exactly adjacent (SQ-1312).
     let window = g
         .connections()
         .iter()
@@ -687,7 +685,16 @@ fn white_house_cardinal_doors_are_not_distorted() {
                 && c.dest == room_id(g, "Kitchen")
         })
         .expect("Behind House -W-> Kitchen exists");
-    assert!(window.soft, "the kitchen window is a door, and doors are soft");
+    assert_eq!(window.weight, mapper::graph::PassageWeight::Door, "the window is a door");
+    let (bh, kitchen) = (
+        g.room(room_id(g, "Behind House")).unwrap().pos.unwrap(),
+        g.room(room_id(g, "Kitchen")).unwrap().pos.unwrap(),
+    );
+    assert_eq!(
+        (kitchen.0 - bh.0, kitchen.1 - bh.1),
+        (-1, 0),
+        "and it is drawn as one step west, not stretched: {kitchen:?} {bh:?}",
+    );
 }
 
 /// Zork I's Round Room / Troll Room / East-West Passage / Chasm (SQ-1309): a real
@@ -777,22 +784,21 @@ fn zork1_leaves_sit_on_their_partners_doorstep() {
 
 }
 
-/// SQ-1312: Zork I's white house keeps its ring, and the magic-word passage is what bends.
+/// SQ-1312: Zork I's white house keeps its ring, its kitchen row runs INSIDE it, and the
+/// magic-word passage is the one thing that stretches.
 ///
 /// `West of House` holds three reciprocated diagonals (`North of House` NE, `South of House` SE,
-/// `Stone Barrow` SW) and the solve finds the cell that satisfies all three. Two things used to
-/// take it away. The contiguity pass evicted it as a "foreign interloper" of the row it happened
-/// to sit in, stranding the barrow under the Living Room with both legs of its only door
-/// distorted. And protecting it there was no answer either: the cell lay between the `Living
-/// Room` and the `Kitchen`, so their passage was then drawn straight through its box.
+/// `Stone Barrow` SW) whose intersection is a cell on the row that runs `Cyclops Room` ─
+/// `Strange Passage` ─ `Living Room` ─ `Kitchen` ─ `Behind House`. Every arrangement that tried
+/// to keep both broke something: evicting the hub stranded the barrow four cells away with both
+/// legs of its only door distorted, and protecting it put it between the Living Room and the
+/// Kitchen with their passage drawn through its box.
 ///
-/// The row was the thing that was wrong. `Living Room` → W → `Strange Passage` and `Cyclops
-/// Room` → E → the same room are ZIL `CEXIT`s onto the passage the magic word opens, and ranking
-/// them as ordinary reciprocated cardinals handed the underground chain the very row and
-/// direction the house's own ring needs. They are SOFT now
-/// (`mapper::graph::Connection::soft`) and yield. The run of HARD cardinals that survives is
-/// `Living Room` ─ `Kitchen` alone — the window between the Kitchen and Behind House is a door,
-/// so it is soft too — and it comes out exactly adjacent with nothing standing in it.
+/// The row stretches instead, at its most GATED link. Two of its links are ZIL `CEXIT`s onto the
+/// passage the magic word opens, and a secret passage reaching one cell further than its
+/// neighbours is a fair drawing of a secret passage — where a corridor, or the kitchen WINDOW,
+/// doing the same would be a lie. So `West of House` stands in the Strange Passage's gap, and
+/// everything else on the row stays exactly adjacent.
 #[test]
 fn zork1_white_house_keeps_its_ring_and_the_secret_passage_bends() {
     let Some(path) = story("zork1-invclues-r52-s871125.z5") else {
@@ -809,6 +815,7 @@ fn zork1_white_house_keeps_its_ring_and_the_secret_passage_bends() {
         pos("Stone Barrow"),
     );
 
+    // The ring: three reciprocated diagonals, none of them distorted, the barrow exact.
     assert!(
         noh.0 > woh.0 && noh.1 < woh.1,
         "North of House is north-east of West of House: {noh:?} {woh:?}",
@@ -817,9 +824,10 @@ fn zork1_white_house_keeps_its_ring_and_the_secret_passage_bends() {
         soh.0 > woh.0 && soh.1 > woh.1,
         "South of House is south-east of it: {soh:?} {woh:?}",
     );
-    assert!(
-        barrow.0 < woh.0 && barrow.1 > woh.1,
-        "Stone Barrow is south-west of it: {barrow:?} {woh:?}",
+    assert_eq!(
+        barrow,
+        (woh.0 - 1, woh.1 + 1),
+        "Stone Barrow is exactly one south-west of it: {barrow:?} {woh:?}",
     );
     for (from, dir, to) in [
         ("West of House", Direction::SW, "Stone Barrow"),
@@ -832,18 +840,36 @@ fn zork1_white_house_keeps_its_ring_and_the_secret_passage_bends() {
         assert!(!edge_distorted(g, from, dir, to), "{from} -{dir:?}-> {to} must not be distorted");
     }
 
-    // The Kitchen and the Living Room are joined by a plain passage — the only HARD reciprocal
-    // cardinal left in the house — so they are exactly adjacent, and nothing stands between them.
-    let (kitchen, living) = (pos("Kitchen"), pos("Living Room"));
-    assert_eq!(
-        (living.0 - kitchen.0, living.1 - kitchen.1),
-        (-1, 0),
-        "Living Room is exactly one cell west of the Kitchen: {living:?} {kitchen:?}",
+    // The kitchen row runs INSIDE the ring, tight, the window included — those two were the
+    // defects of the arrangement this replaced: the Kitchen fell outside the ring, and Behind
+    // House came away from it entirely.
+    let (living, kitchen, behind) = (pos("Living Room"), pos("Kitchen"), pos("Behind House"));
+    assert_eq!(kitchen, (living.0 + 1, living.1), "Kitchen is one east of the Living Room");
+    assert_eq!(behind, (kitchen.0 + 1, kitchen.1), "Behind House is one east of the Kitchen");
+    assert!(
+        woh.0 < living.0 && behind.0 > noh.0 && behind.0 > soh.0,
+        "and the whole row lies inside the ring: {woh:?} {living:?} {behind:?} {noh:?} {soh:?}",
     );
-    assert_ne!(woh, (kitchen.0 - 1, kitchen.1), "and West of House is not standing in between");
 
-    // The gated passage gave way rather than the house: it keeps its own bearing, west, and it
-    // is the Cyclops chain that moved off the Living Room's row rather than the ring.
+    // The most gated link is the one that stretched: West of House stands in it.
     let strange = pos("Strange Passage");
-    assert!(strange.0 < living.0, "the magic-word passage still lies west: {strange:?} {living:?}");
+    assert_eq!(strange.1, living.1, "the Strange Passage keeps the Living Room's row");
+    assert!(
+        strange.0 < woh.0 && woh.0 < living.0,
+        "with West of House standing in its gap: {strange:?} {woh:?} {living:?}",
+    );
+    let magic = g
+        .connections()
+        .iter()
+        .find(|c| {
+            c.origin == room_id(g, "Living Room")
+                && c.dir == Direction::W
+                && c.dest == room_id(g, "Strange Passage")
+        })
+        .expect("Living Room -W-> Strange Passage exists");
+    assert_eq!(
+        magic.weight,
+        mapper::graph::PassageWeight::Conditional,
+        "and it is the conditional exit, the weakest claim on the row",
+    );
 }

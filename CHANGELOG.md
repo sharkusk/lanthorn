@@ -57,14 +57,19 @@ Absolute URLs or no link.
   it. A crossroads keeps the spot that suits all its doors, too, instead of being
   shoved aside to tidy up a row it happens to sit in.
 
-  Where a map genuinely cannot lie flat, the passage that bends is now the one the
-  story **gates**: a door you have to open is a way through the author wanted, not
-  a claim that the two rooms are side by side. (A passage merely blocked by a
-  monster is not a gate — the troll stands in a doorway that is still a plain
-  east-west corridor, and it stays straight.) That is what finally lets Zork I's
-  white house come out right, with the north, south and barrow paths all in the
-  correct corner from West of House instead of leaving it stranded four squares
-  from its own front garden. On the live map and in `lanthorn-mapgen`'s alike.
+  Where a map genuinely cannot hold every passage flat, the one that bends is now
+  the one the story **gates** — and the more gated of two goes first. A plain
+  passage says two rooms are neighbours. A door is a real way through that merely
+  needs opening, so it holds. A secret passage the game only opens under its own
+  conditions is what stretches, which is a fair drawing of a secret passage. A
+  passage merely blocked by a monster is not gated at all: the troll stands in a
+  doorway that is still a plain east-west corridor, and it stays straight.
+
+  That is what finally lets Zork I's white house come out right. West of House
+  keeps the north, south and barrow paths in their correct corners, and the
+  kitchen and living room now sit *inside* the ring of paths around the house,
+  where they belong, instead of the house being pulled apart to make room for the
+  passage behind the cyclops. On the live map and in `lanthorn-mapgen`'s alike.
 - **`lanthorn-mapgen`'s maze split now catches the dead ends hanging off a
   maze, not just the rooms literally named "Maze"** — a "Dead End" or a
   "Grating Room" one step from the maze now lands on the maze's own layer

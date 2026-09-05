@@ -479,7 +479,7 @@ mod tests {
         let mut m = Mapper::default();
         m.observe(1, "West of House", None);
         m.observe(2, "Forest", Some(Direction::N));
-        assert_eq!(m.graph.connections(), &[crate::graph::Connection{origin:1,dir:Direction::N,dest:2,distorted:false,soft:false}]);
+        assert_eq!(m.graph.connections(), &[crate::graph::Connection{origin:1,dir:Direction::N,dest:2,distorted:false,weight:crate::graph::PassageWeight::Hard}]);
         assert_eq!(m.graph.current(), Some(2));
     }
 

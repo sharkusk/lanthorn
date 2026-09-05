@@ -955,833 +955,833 @@
       "dir": "N",
       "dest": 143,
       "distorted": true,
-      "soft": false
+      "weight": "Hard"
     },
     {
       "origin": 143,
       "dir": "E",
       "dest": 89,
       "distorted": true,
-      "soft": false
+      "weight": "Hard"
     },
     {
       "origin": 89,
       "dir": "E",
       "dest": 134,
       "distorted": false,
-      "soft": false
+      "weight": "Hard"
     },
     {
       "origin": 134,
       "dir": "W",
       "dest": 89,
       "distorted": false,
-      "soft": false
+      "weight": "Hard"
     },
     {
       "origin": 89,
       "dir": "W",
       "dest": 28,
       "distorted": false,
-      "soft": false
+      "weight": "Hard"
     },
     {
       "origin": 28,
       "dir": "W",
       "dest": 79,
       "distorted": false,
-      "soft": false
+      "weight": "Hard"
     },
     {
       "origin": 79,
       "dir": "Down",
       "dest": 34,
       "distorted": false,
-      "soft": false
+      "weight": "Hard"
     },
     {
       "origin": 34,
       "dir": "N",
       "dest": 133,
       "distorted": false,
-      "soft": false
+      "weight": "Hard"
     },
     {
       "origin": 133,
       "dir": "W",
       "dest": 109,
       "distorted": true,
-      "soft": false
+      "weight": "Hard"
     },
     {
       "origin": 109,
       "dir": "N",
       "dest": 109,
       "distorted": false,
-      "soft": false
+      "weight": "Hard"
     },
     {
       "origin": 109,
       "dir": "W",
       "dest": 201,
       "distorted": true,
-      "soft": false
+      "weight": "Hard"
     },
     {
       "origin": 201,
       "dir": "N",
       "dest": 109,
       "distorted": true,
-      "soft": false
+      "weight": "Hard"
     },
     {
       "origin": 109,
       "dir": "S",
       "dest": 20,
       "distorted": true,
-      "soft": false
+      "weight": "Hard"
     },
     {
       "origin": 20,
       "dir": "E",
       "dest": 57,
       "distorted": false,
-      "soft": false
+      "weight": "Hard"
     },
     {
       "origin": 57,
       "dir": "W",
       "dest": 20,
       "distorted": false,
-      "soft": false
+      "weight": "Hard"
     },
     {
       "origin": 20,
       "dir": "S",
       "dest": 109,
       "distorted": true,
-      "soft": false
+      "weight": "Hard"
     },
     {
       "origin": 57,
       "dir": "N",
       "dest": 201,
       "distorted": true,
-      "soft": false
+      "weight": "Hard"
     },
     {
       "origin": 201,
       "dir": "E",
       "dest": 154,
       "distorted": true,
-      "soft": false
+      "weight": "Hard"
     },
     {
       "origin": 154,
       "dir": "S",
       "dest": 201,
       "distorted": true,
-      "soft": false
+      "weight": "Hard"
     },
     {
       "origin": 201,
       "dir": "W",
       "dest": 57,
       "distorted": true,
-      "soft": false
+      "weight": "Hard"
     },
     {
       "origin": 57,
       "dir": "Up",
       "dest": 227,
       "distorted": false,
-      "soft": false
+      "weight": "Hard"
     },
     {
       "origin": 227,
       "dir": "E",
       "dest": 148,
       "distorted": false,
-      "soft": false
+      "weight": "Hard"
     },
     {
       "origin": 148,
       "dir": "W",
       "dest": 227,
       "distorted": false,
-      "soft": false
+      "weight": "Hard"
     },
     {
       "origin": 227,
       "dir": "N",
       "dest": 57,
       "distorted": true,
-      "soft": false
+      "weight": "Hard"
     },
     {
       "origin": 227,
       "dir": "SW",
       "dest": 140,
       "distorted": false,
-      "soft": false
+      "weight": "Hard"
     },
     {
       "origin": 140,
       "dir": "E",
       "dest": 165,
       "distorted": false,
-      "soft": false
+      "weight": "Hard"
     },
     {
       "origin": 165,
       "dir": "S",
       "dest": 178,
       "distorted": false,
-      "soft": false
+      "weight": "Hard"
     },
     {
       "origin": 178,
       "dir": "W",
       "dest": 54,
       "distorted": true,
-      "soft": false
+      "weight": "Hard"
     },
     {
       "origin": 54,
       "dir": "S",
       "dest": 165,
       "distorted": true,
-      "soft": false
+      "weight": "Hard"
     },
     {
       "origin": 165,
       "dir": "E",
       "dest": 53,
       "distorted": true,
-      "soft": false
+      "weight": "Hard"
     },
     {
       "origin": 53,
       "dir": "NE",
       "dest": 165,
       "distorted": true,
-      "soft": false
+      "weight": "Hard"
     },
     {
       "origin": 53,
       "dir": "SE",
       "dest": 150,
       "distorted": false,
-      "soft": false
+      "weight": "Hard"
     },
     {
       "origin": 150,
       "dir": "N",
       "dest": 53,
       "distorted": true,
-      "soft": false
+      "weight": "Hard"
     },
     {
       "origin": 53,
       "dir": "W",
       "dest": 53,
       "distorted": false,
-      "soft": false
+      "weight": "Hard"
     },
     {
       "origin": 165,
       "dir": "W",
       "dest": 140,
       "distorted": false,
-      "soft": false
+      "weight": "Hard"
     },
     {
       "origin": 140,
       "dir": "W",
       "dest": 140,
       "distorted": false,
-      "soft": false
+      "weight": "Hard"
     },
     {
       "origin": 140,
       "dir": "Up",
       "dest": 85,
       "distorted": false,
-      "soft": false
+      "weight": "Hard"
     },
     {
       "origin": 85,
       "dir": "NW",
       "dest": 85,
       "distorted": false,
-      "soft": false
+      "weight": "Hard"
     },
     {
       "origin": 85,
       "dir": "N",
       "dest": 140,
       "distorted": true,
-      "soft": false
+      "weight": "Hard"
     },
     {
       "origin": 140,
       "dir": "Down",
       "dest": 227,
       "distorted": false,
-      "soft": false
+      "weight": "Hard"
     },
     {
       "origin": 109,
       "dir": "E",
       "dest": 133,
       "distorted": true,
-      "soft": false
+      "weight": "Hard"
     },
     {
       "origin": 20,
       "dir": "Down",
       "dest": 201,
       "distorted": false,
-      "soft": false
+      "weight": "Hard"
     },
     {
       "origin": 165,
       "dir": "Up",
       "dest": 54,
       "distorted": false,
-      "soft": false
+      "weight": "Hard"
     },
     {
       "origin": 54,
       "dir": "W",
       "dest": 178,
       "distorted": true,
-      "soft": false
+      "weight": "Hard"
     },
     {
       "origin": 178,
       "dir": "S",
       "dest": 165,
       "distorted": true,
-      "soft": false
+      "weight": "Hard"
     },
     {
       "origin": 165,
       "dir": "Down",
       "dest": 154,
       "distorted": false,
-      "soft": false
+      "weight": "Hard"
     },
     {
       "origin": 85,
       "dir": "S",
       "dest": 169,
       "distorted": false,
-      "soft": false
+      "weight": "Hard"
     },
     {
       "origin": 169,
       "dir": "S",
       "dest": 35,
       "distorted": false,
-      "soft": false
+      "weight": "Hard"
     },
     {
       "origin": 35,
       "dir": "E",
       "dest": 85,
       "distorted": true,
-      "soft": false
+      "weight": "Hard"
     },
     {
       "origin": 85,
       "dir": "E",
       "dest": 35,
       "distorted": true,
-      "soft": false
+      "weight": "Hard"
     },
     {
       "origin": 35,
       "dir": "W",
       "dest": 169,
       "distorted": true,
-      "soft": false
+      "weight": "Hard"
     },
     {
       "origin": 169,
       "dir": "E",
       "dest": 85,
       "distorted": true,
-      "soft": false
+      "weight": "Hard"
     },
     {
       "origin": 85,
       "dir": "W",
       "dest": 44,
       "distorted": false,
-      "soft": false
+      "weight": "Hard"
     },
     {
       "origin": 44,
       "dir": "N",
       "dest": 160,
       "distorted": false,
-      "soft": false
+      "weight": "Hard"
     },
     {
       "origin": 160,
       "dir": "S",
       "dest": 44,
       "distorted": false,
-      "soft": false
+      "weight": "Hard"
     },
     {
       "origin": 44,
       "dir": "E",
       "dest": 169,
       "distorted": true,
-      "soft": false
+      "weight": "Hard"
     },
     {
       "origin": 169,
       "dir": "W",
       "dest": 159,
       "distorted": false,
-      "soft": false
+      "weight": "Hard"
     },
     {
       "origin": 159,
       "dir": "NE",
       "dest": 225,
       "distorted": false,
-      "soft": false
+      "weight": "Hard"
     },
     {
       "origin": 225,
       "dir": "Up",
       "dest": 167,
       "distorted": false,
-      "soft": false
+      "weight": "Hard"
     },
     {
       "origin": 167,
       "dir": "S",
       "dest": 247,
       "distorted": false,
-      "soft": false
+      "weight": "Hard"
     },
     {
       "origin": 247,
       "dir": "E",
       "dest": 33,
       "distorted": false,
-      "soft": false
+      "weight": "Hard"
     },
     {
       "origin": 33,
       "dir": "W",
       "dest": 247,
       "distorted": false,
-      "soft": false
+      "weight": "Hard"
     },
     {
       "origin": 247,
       "dir": "S",
       "dest": 143,
       "distorted": false,
-      "soft": false
+      "weight": "Hard"
     },
     {
       "origin": 143,
       "dir": "N",
       "dest": 247,
       "distorted": false,
-      "soft": false
+      "weight": "Hard"
     },
     {
       "origin": 33,
       "dir": "S",
       "dest": 134,
       "distorted": false,
-      "soft": false
+      "weight": "Hard"
     },
     {
       "origin": 134,
       "dir": "N",
       "dest": 33,
       "distorted": false,
-      "soft": false
+      "weight": "Hard"
     },
     {
       "origin": 33,
       "dir": "E",
       "dest": 175,
       "distorted": false,
-      "soft": false
+      "weight": "Hard"
     },
     {
       "origin": 175,
       "dir": "W",
       "dest": 33,
       "distorted": false,
-      "soft": false
+      "weight": "Hard"
     },
     {
       "origin": 247,
       "dir": "W",
       "dest": 91,
       "distorted": false,
-      "soft": false
+      "weight": "Hard"
     },
     {
       "origin": 91,
       "dir": "N",
       "dest": 167,
       "distorted": true,
-      "soft": false
+      "weight": "Hard"
     },
     {
       "origin": 167,
       "dir": "Down",
       "dest": 225,
       "distorted": false,
-      "soft": false
+      "weight": "Hard"
     },
     {
       "origin": 167,
       "dir": "E",
       "dest": 33,
       "distorted": true,
-      "soft": false
+      "weight": "Hard"
     },
     {
       "origin": 175,
       "dir": "N",
       "dest": 33,
       "distorted": true,
-      "soft": false
+      "weight": "Hard"
     },
     {
       "origin": 175,
       "dir": "S",
       "dest": 33,
       "distorted": true,
-      "soft": false
+      "weight": "Hard"
     },
     {
       "origin": 91,
       "dir": "S",
       "dest": 230,
       "distorted": true,
-      "soft": false
+      "weight": "Hard"
     },
     {
       "origin": 230,
       "dir": "W",
       "dest": 91,
       "distorted": true,
-      "soft": false
+      "weight": "Hard"
     },
     {
       "origin": 91,
       "dir": "E",
       "dest": 247,
       "distorted": false,
-      "soft": false
+      "weight": "Hard"
     },
     {
       "origin": 143,
       "dir": "W",
       "dest": 68,
       "distorted": true,
-      "soft": false
+      "weight": "Hard"
     },
     {
       "origin": 68,
       "dir": "S",
       "dest": 217,
       "distorted": true,
-      "soft": false
+      "weight": "Hard"
     },
     {
       "origin": 217,
       "dir": "E",
       "dest": 89,
       "distorted": true,
-      "soft": false
+      "weight": "Hard"
     },
     {
       "origin": 89,
       "dir": "S",
       "dest": 217,
       "distorted": true,
-      "soft": false
+      "weight": "Hard"
     },
     {
       "origin": 217,
       "dir": "W",
       "dest": 68,
       "distorted": true,
-      "soft": false
+      "weight": "Hard"
     },
     {
       "origin": 217,
       "dir": "S",
       "dest": 230,
       "distorted": true,
-      "soft": false
+      "weight": "Hard"
     },
     {
       "origin": 230,
       "dir": "N",
       "dest": 134,
       "distorted": false,
-      "soft": false
+      "weight": "Hard"
     },
     {
       "origin": 134,
       "dir": "S",
       "dest": 230,
       "distorted": false,
-      "soft": false
+      "weight": "Hard"
     },
     {
       "origin": 134,
       "dir": "E",
       "dest": 23,
       "distorted": true,
-      "soft": false
+      "weight": "Hard"
     },
     {
       "origin": 23,
       "dir": "Down",
       "dest": 22,
       "distorted": false,
-      "soft": false
+      "weight": "Hard"
     },
     {
       "origin": 22,
       "dir": "Up",
       "dest": 23,
       "distorted": false,
-      "soft": false
+      "weight": "Hard"
     },
     {
       "origin": 23,
       "dir": "W",
       "dest": 230,
       "distorted": true,
-      "soft": false
+      "weight": "Hard"
     },
     {
       "origin": 34,
       "dir": "S",
       "dest": 258,
       "distorted": false,
-      "soft": false
+      "weight": "Hard"
     },
     {
       "origin": 258,
       "dir": "N",
       "dest": 34,
       "distorted": false,
-      "soft": false
+      "weight": "Hard"
     },
     {
       "origin": 258,
       "dir": "E",
       "dest": 128,
       "distorted": false,
-      "soft": false
+      "weight": "Hard"
     },
     {
       "origin": 128,
       "dir": "N",
       "dest": 229,
       "distorted": false,
-      "soft": false
+      "weight": "Hard"
     },
     {
       "origin": 229,
       "dir": "S",
       "dest": 128,
       "distorted": false,
-      "soft": false
+      "weight": "Hard"
     },
     {
       "origin": 128,
       "dir": "W",
       "dest": 258,
       "distorted": false,
-      "soft": false
+      "weight": "Hard"
     },
     {
       "origin": 133,
       "dir": "E",
       "dest": 136,
       "distorted": false,
-      "soft": false
+      "weight": "Hard"
     },
     {
       "origin": 136,
       "dir": "W",
       "dest": 133,
       "distorted": false,
-      "soft": false
+      "weight": "Hard"
     },
     {
       "origin": 136,
       "dir": "N",
       "dest": 112,
       "distorted": false,
-      "soft": false
+      "weight": "Hard"
     },
     {
       "origin": 112,
       "dir": "S",
       "dest": 183,
       "distorted": true,
-      "soft": false
+      "weight": "Hard"
     },
     {
       "origin": 183,
       "dir": "NE",
       "dest": 170,
       "distorted": false,
-      "soft": false
+      "weight": "Hard"
     },
     {
       "origin": 170,
       "dir": "Down",
       "dest": 213,
       "distorted": false,
-      "soft": false
+      "weight": "Hard"
     },
     {
       "origin": 213,
       "dir": "E",
       "dest": 26,
       "distorted": false,
-      "soft": false
+      "weight": "Hard"
     },
     {
       "origin": 26,
       "dir": "W",
       "dest": 213,
       "distorted": false,
-      "soft": false
+      "weight": "Hard"
     },
     {
       "origin": 213,
       "dir": "W",
       "dest": 16,
       "distorted": true,
-      "soft": false
+      "weight": "Hard"
     },
     {
       "origin": 16,
       "dir": "N",
       "dest": 183,
       "distorted": true,
-      "soft": false
+      "weight": "Hard"
     },
     {
       "origin": 183,
       "dir": "N",
       "dest": 112,
       "distorted": true,
-      "soft": false
+      "weight": "Hard"
     },
     {
       "origin": 112,
       "dir": "Up",
       "dest": 136,
       "distorted": false,
-      "soft": false
+      "weight": "Hard"
     },
     {
       "origin": 133,
       "dir": "S",
       "dest": 34,
       "distorted": false,
-      "soft": false
+      "weight": "Hard"
     },
     {
       "origin": 85,
       "dir": "Down",
       "dest": 159,
       "distorted": false,
-      "soft": false
+      "weight": "Hard"
     },
     {
       "origin": 159,
       "dir": "NW",
       "dest": 169,
       "distorted": true,
-      "soft": false
+      "weight": "Hard"
     },
     {
       "origin": 159,
       "dir": "SW",
       "dest": 44,
       "distorted": true,
-      "soft": false
+      "weight": "Hard"
     },
     {
       "origin": 44,
       "dir": "SW",
       "dest": 159,
       "distorted": true,
-      "soft": false
+      "weight": "Hard"
     },
     {
       "origin": 159,
       "dir": "Down",
       "dest": 35,
       "distorted": false,
-      "soft": false
+      "weight": "Hard"
     },
     {
       "origin": 35,
       "dir": "Up",
       "dest": 159,
       "distorted": false,
-      "soft": false
+      "weight": "Hard"
     },
     {
       "origin": 225,
       "dir": "SW",
       "dest": 159,
       "distorted": false,
-      "soft": false
+      "weight": "Hard"
     },
     {
       "origin": 89,
       "dir": "N",
       "dest": 143,
       "distorted": true,
-      "soft": false
+      "weight": "Hard"
     },
     {
       "origin": 247,
       "dir": "N",
       "dest": 167,
       "distorted": false,
-      "soft": false
+      "weight": "Hard"
     },
     {
       "origin": 79,
       "dir": "E",
       "dest": 28,
       "distorted": false,
-      "soft": false
+      "weight": "Hard"
     },
     {
       "origin": 28,
       "dir": "E",
       "dest": 89,
       "distorted": false,
-      "soft": false
+      "weight": "Hard"
     }
   ],
   "current": 23,
