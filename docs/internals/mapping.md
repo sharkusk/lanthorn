@@ -419,9 +419,14 @@ A **leaf** — a room whose compass exits all lead to one neighbour — is snapp
 that neighbour's doorstep, since the separation a compass edge buys the solver is
 only a minimum and a room hanging off the side of the map otherwise drifts two or
 three cells out with nothing in between. And a **hub** — a room with two or more
-passages walked from both ends — is never shoved aside to tidy a row it happens to
-sit in, because the intersection of its own bearings is generally the one cell that
-honours every door it has.
+passages walked from both ends — is no longer shoved aside to tidy a row it happens
+to sit in, because the intersection of its own bearings is generally the one cell
+that honours every door it has.
+
+One thing outranks even the hub, and it is the rule the whole engine is built around:
+two rooms joined by a north/south or east/west passage walked from both ends are *next
+to each other*, and nothing may stand between them. A hub that wants a cell in the
+middle of such a pair gives it up, whatever that costs its own corners.
 
 **Maze layers are left alone.** A layer flagged as a maze (below) is *frozen*: it
 schedules no tidy, `tidy-map` on it answers "maze layer: geometry is frozen — the

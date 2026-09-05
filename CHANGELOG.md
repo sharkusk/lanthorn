@@ -52,11 +52,11 @@ Absolute URLs or no link.
   crossroads keeps the spot that suits all its doors.** A room with only one way
   in and out used to drift two or three squares away from its neighbour with
   nothing but blank map in between — Zork I's Studio floated well clear of the
-  Gallery. And a room with several passages walked from both ends could be
-  shoved aside just to tidy up a row of rooms it happened to sit in, which is how
-  the Stone Barrow ended up nowhere near West of House with both ends of the path
-  between them drawn as broken. Both are fixed, on the live map and in
-  `lanthorn-mapgen`'s generated ones.
+  Gallery. And a room with several passages walked from both ends is no longer
+  shoved aside just to tidy up a row of rooms it happens to sit in — unless it
+  is standing BETWEEN two rooms you can walk between in one step, which nothing
+  is allowed to do: that pair's own passage would then be drawn straight through
+  its box. On the live map and in `lanthorn-mapgen`'s generated ones.
 - **`lanthorn-mapgen`'s maze split now catches the dead ends hanging off a
   maze, not just the rooms literally named "Maze"** — a "Dead End" or a
   "Grating Room" one step from the maze now lands on the maze's own layer

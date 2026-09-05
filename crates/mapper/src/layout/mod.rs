@@ -25,7 +25,10 @@
 //! doorstep, since the separation a compass edge buys is only a MINIMUM and the solve
 //! leaves slack; and it protects every **hub** — a room with two or more reciprocated
 //! compass partners — from eviction, since such a room is pinned by the intersection of
-//! its own bearings and has nowhere better to go.
+//! its own bearings. But never on a cell that SPLITS a cardinal-reciprocal run: that a
+//! passage walked from both ends joins ADJACENT rooms is the one claim here nothing
+//! outranks, and a room standing between two members of a run has that run's passage
+//! drawn straight through its own box.
 //!
 //! After either regime, `mark_distorted` flags every compass edge whose final grid
 //! geometry contradicts its direction. (Connector routing and any render-aware
@@ -423,6 +426,7 @@ pub fn room_compass_degree(graph: &MapGraph, id: RoomId) -> usize {
 /// A chain's occupied line: `horizontal` true for an E/W chain (`line` = shared row y,
 /// `lo..=hi` = member x-extent), false for an N/S chain (`line` = shared column x, `lo..=hi`
 /// = member y-extent).
+#[derive(Clone, Copy)]
 struct ChainSpan {
     horizontal: bool,
     line: i32,
@@ -444,12 +448,14 @@ struct ChainSpan {
 /// span. Excluding only the current chain's own members let that unrelated chain treat a real
 /// E/W chain member as a foreign interloper and eject it off its own row — Zork I's East-West
 /// Passage was pulled off the Round Room/Troll Room row this way, evicted by an unrelated
-/// column chain (rooms #128/#229) it happened to cross. `protected` is every room this
-/// component's `contiguify` pass has ANY chain claim on, so no chain's cleanup can undo another
-/// chain's alignment.
+/// column chain (rooms #128/#229) it happened to cross. `protected` answers, for a room and the
+/// cell it currently holds, whether this pass may move it: every room any chain claims, plus a
+/// hub holding a cell that does not split a run (SQ-1312). It takes the CELL because a hub's
+/// claim is conditional on where it stands — an ejected room can land inside a later chain's
+/// span, and asking again at that cell is what stops it resting there.
 fn eject_interlopers(
     snapped: &mut [(i32, i32)],
-    protected: &BTreeSet<usize>,
+    protected: &impl Fn(usize, (i32, i32)) -> bool,
     span: ChainSpan,
     comp: &[RoomId],
     index: &BTreeMap<RoomId, usize>,
@@ -465,7 +471,7 @@ fn eject_interlopers(
     };
     loop {
         let victim = (0..snapped.len())
-            .find(|&q| !protected.contains(&q) && between(snapped[q]));
+            .find(|&q| !protected(q, snapped[q]) && between(snapped[q]));
         let Some(q) = victim else { break };
         let from = snapped[q];
         let occ: BTreeSet<(i32, i32)> =
@@ -553,6 +559,23 @@ fn chain_spans(
 fn cell_is_on_span(span: &ChainSpan, cell: (i32, i32)) -> bool {
     let (perp, par) = if span.horizontal { (cell.1, cell.0) } else { (cell.0, cell.1) };
     perp == span.line && par >= span.lo && par <= span.hi
+}
+
+/// True iff `cell` sits STRICTLY between two members of some cardinal-reciprocal run — on the
+/// run's line with a member on either side of it (SQ-1312).
+///
+/// This is the one thing no room may do, whatever else it has going for it. A reciprocal
+/// cardinal pair means "exactly one row or column apart"; a room parked between two members
+/// widens the pair to two cells and the passage between them is then drawn straight through
+/// that room's box. Everything else the layout weighs — a diagonal's quadrant, a hub's several
+/// bearings — has SLACK (`edge_is_satisfied` is sign-based per axis, so a stretched diagonal
+/// still reads correctly), and slack is what gives way first. Endpoints are excluded on
+/// purpose: a room rounding onto a member's own cell is a plain overlap, not a split run.
+fn splits_a_run(spans: &[(ChainSpan, BTreeSet<usize>)], cell: (i32, i32)) -> bool {
+    spans.iter().any(|(s, _)| {
+        let (perp, par) = if s.horizontal { (cell.1, cell.0) } else { (cell.0, cell.1) };
+        perp == s.line && par > s.lo && par < s.hi
+    })
 }
 
 /// The one room every one of `id`'s compass edges names, together with the unit offset FROM `id`
@@ -682,7 +705,14 @@ fn snap_leaves(
 /// them is pinned by their intersection: there is generally exactly one cell that satisfies all
 /// of a hub's bearings at once, and the stress solve has already found it. Moving such a room
 /// breaks several doors to tidy one row, so a hub is protected from eviction the same way a
-/// chain member is.
+/// chain member is — **except on a cell that splits a cardinal-reciprocal run**
+/// (`splits_a_run`), which no claim outranks. Zork I's `West of House` holds three reciprocated
+/// diagonals and the solve found the cell that satisfies all three, but it lay between the
+/// `Living Room` and the `Kitchen` — a passage walked from both ends — and drawing that passage
+/// through the middle of a third room is a worse map than stretching a diagonal corner. So the
+/// hub gives way there, and `eject_interlopers` moves it to the free off-span cell that respects
+/// the most of its own reciprocal-weighted bearings; the diagonals it cannot keep stretch (the
+/// sign-based check still accepts them) or, failing that, draw distorted.
 fn hub_rooms(graph: &MapGraph, index: &BTreeMap<RoomId, usize>) -> BTreeSet<usize> {
     let conns = graph.connections();
     let mut partners: BTreeMap<RoomId, BTreeSet<RoomId>> = BTreeMap::new();
@@ -716,24 +746,29 @@ fn contiguify(
     // `eject_interlopers`). Chains may legitimately keep gaps between members — only a foreign
     // room sitting *between* them is a problem (it would interleave the chain visually).
     //
-    // `protected` covers every room this component's EW or NS chains claim at all (SQ-1309):
+    // `members` covers every room this component's EW or NS chains claim at all (SQ-1309):
     // a room that is legitimately a member of one chain must not be treated as an interloper
-    // and evicted by a DIFFERENT, unrelated chain whose span it happens to cross. It also
-    // covers every HUB — a room with two or more reciprocated compass partners, pinned by
-    // their intersection to the cell the solve gave it (SQ-1312).
-    let mut protected: BTreeSet<usize> = chains
+    // and evicted by a DIFFERENT, unrelated chain whose span it happens to cross.
+    let members: BTreeSet<usize> = chains
         .ew_members
         .iter()
         .chain(chains.ns_members.iter())
-        .flat_map(|members| members.iter().filter_map(|id| index.get(id).copied()))
+        .flat_map(|ms| ms.iter().filter_map(|id| index.get(id).copied()))
         .collect();
-    protected.extend(hub_rooms(graph, index));
+    // A HUB is protected too — but only where it stands (SQ-1312). See `hub_rooms`: its several
+    // reciprocated bearings pin it to one cell, and that outranks tidying a row, right up until
+    // the cell it wants splits a cardinal-reciprocal run. Nothing outranks that.
+    let hubs = hub_rooms(graph, index);
     let mut snapped_v: Vec<(i32, i32)> = snapped.to_vec();
     let spans = chain_spans(chains, index, &snapped_v);
     // Leaves first: pulling one in can only shrink a chain's span, never grow it, so the spans
     // above stay valid (and a tighter chain has less zone to clear).
     snap_leaves(&spans, comp, index, &mut snapped_v, graph);
-    for (span, _) in chain_spans(chains, index, &snapped_v) {
+    let spans = chain_spans(chains, index, &snapped_v);
+    let protected = |q: usize, cell: (i32, i32)| {
+        members.contains(&q) || (hubs.contains(&q) && !splits_a_run(&spans, cell))
+    };
+    for &(span, _) in &spans {
         eject_interlopers(&mut snapped_v, &protected, span, comp, index, graph);
     }
     snapped.copy_from_slice(&snapped_v);
@@ -2014,22 +2049,11 @@ mod tests {
         );
     }
 
-    /// SQ-1312 (B): a HUB — a room with two or more RECIPROCATED compass partners — must never
-    /// be evicted as a chain's "foreign interloper".
-    ///
-    /// Zork I's `West of House` has three reciprocated diagonals (`North of House` NE,
-    /// `South of House` SE, `Stone Barrow` SW). The stress solve placed it on the one cell that
-    /// satisfies all three — which happened to fall in the gap the solve left between the
-    /// `Living Room` and the `Kitchen` on the Behind House row — and `eject_interlopers` then
-    /// threw it four cells west as an interloper, leaving `Stone Barrow` stranded under the
-    /// Living Room with both legs of its only door distorted. A room whose own reciprocated
-    /// bearings pin it to a cell has as strong a claim on that cell as a chain member does.
-    /// Falsify by dropping `hub_rooms` from `contiguify`'s `protected` set.
-    #[test]
-    fn a_diagonal_hub_is_not_evicted_by_the_row_it_sits_in() {
-        // West of House(68), North of House(143), South of House(217), Stone Barrow(254),
-        // Behind House(89), Kitchen(28), Living Room(79) — Zork I's house ring, compass
-        // reciprocals only.
+    /// Zork I's white house as a graph (SQ-1312): `West of House`(68) holds three reciprocated
+    /// diagonals — `North of House`(143) NE, `South of House`(217) SE, `Stone Barrow`(254) SW —
+    /// North and South of House are each diagonally reciprocal to `Behind House`(89), and Behind
+    /// House ─ `Kitchen`(28) ─ `Living Room`(79) is a reciprocal E/W run of CARDINALS.
+    fn house_ring_graph() -> crate::graph::MapGraph {
         let mut g = crate::graph::MapGraph::new();
         for id in [28u32, 68, 79, 89, 143, 217, 254] {
             g.upsert_room(id, "r".into());
@@ -2042,38 +2066,70 @@ mod tests {
             (143, SE, 89), (89, NW, 143),       // Behind House south-east of North of House
             (217, NE, 89), (89, SW, 217),       // and north-east of South of House
             (89, W, 28), (28, E, 89),           // Behind House ─ Kitchen ─ Living Room:
-            (28, W, 79), (79, E, 28),           // a reciprocal E/W chain
+            (28, W, 79), (79, E, 28),           // a reciprocal E/W run of cardinals
         ] {
             g.add_edge(o, d, dst);
         }
         g.add_edge(68, In, 254); // the barrow's other door: no bearing, no claim
+        g
+    }
 
+    /// No room at all stands strictly between two members of a cardinal-reciprocal run
+    /// (SQ-1312) — the passage between those two members would otherwise be drawn straight
+    /// through the third room's box.
+    fn assert_no_room_splits_a_run(g: &MapGraph) {
+        let p = |id: RoomId| g.room(id).unwrap().pos.unwrap();
+        let chains = detect_chains(g);
+        for (horizontal, groups) in [(true, &chains.ew_members), (false, &chains.ns_members)] {
+            for ms in groups {
+                let cells: Vec<(i32, i32)> = ms.iter().map(|&id| p(id)).collect();
+                let line = if horizontal { cells[0].1 } else { cells[0].0 };
+                let par = |c: (i32, i32)| if horizontal { c.0 } else { c.1 };
+                let (lo, hi) = (
+                    cells.iter().map(|&c| par(c)).min().unwrap(),
+                    cells.iter().map(|&c| par(c)).max().unwrap(),
+                );
+                for r in g.rooms() {
+                    if ms.contains(&r.id) {
+                        continue;
+                    }
+                    let c = r.pos.unwrap();
+                    let perp = if horizontal { c.1 } else { c.0 };
+                    assert!(
+                        !(perp == line && par(c) > lo && par(c) < hi),
+                        "room {} at {c:?} splits the run {ms:?} on line {line} ({lo}..={hi})",
+                        r.id,
+                    );
+                }
+            }
+        }
+    }
+
+    /// SQ-1312: a HUB — a room with two or more RECIPROCATED compass partners — keeps the cell
+    /// its bearings pin it to rather than being evicted as a chain's "foreign interloper"…
+    ///
+    /// Zork I's `West of House` has three reciprocated diagonals and the stress solve found the
+    /// one cell that satisfies all three; `eject_interlopers` then threw it four cells west
+    /// merely because that cell fell inside the Behind House row's span, leaving `Stone Barrow`
+    /// stranded under the Living Room with both legs of its only door distorted. Falsify by
+    /// dropping `hubs` from `contiguify`'s `protected` predicate.
+    ///
+    /// …**but never on a cell that splits a run.** That is the other half, and it is the half
+    /// that outranks the hub: a reciprocal cardinal pair means "exactly one cell apart", and a
+    /// hub parked between the Living Room and the Kitchen widens their passage to two cells and
+    /// has it drawn through its own box. Falsify by dropping the `!splits_a_run(…)` clause from
+    /// the same predicate.
+    #[test]
+    fn a_hub_keeps_its_cell_but_never_by_splitting_a_run() {
+        let mut g = house_ring_graph();
         relayout_auto(&mut g);
-        let p = |id: u32| g.room(id).unwrap().pos.unwrap();
-        let (woh, noh, soh, barrow) = (p(68), p(143), p(217), p(254));
+        assert_no_room_splits_a_run(&g);
 
-        assert!(
-            noh.0 > woh.0 && noh.1 < woh.1,
-            "North of House must stay north-east of West of House: {noh:?} vs {woh:?}",
-        );
-        assert!(
-            soh.0 > woh.0 && soh.1 > woh.1,
-            "South of House must stay south-east of West of House: {soh:?} vs {woh:?}",
-        );
+        let p = |id: u32| g.room(id).unwrap().pos.unwrap();
+        let (woh, barrow) = (p(68), p(254));
         assert!(
             barrow.0 < woh.0 && barrow.1 > woh.1,
             "Stone Barrow must stay south-west of West of House: {barrow:?} vs {woh:?}",
-        );
-
-        let distorted: Vec<_> = g
-            .connections()
-            .iter()
-            .filter(|c| c.distorted)
-            .map(|c| (c.origin, c.dir, c.dest))
-            .collect();
-        assert!(
-            distorted.is_empty(),
-            "every bearing here is a reciprocated pair on a grid that can hold them all: {distorted:?}",
         );
 
         let cells: Vec<_> = g.rooms().filter_map(|r| r.pos).collect();
