@@ -27,6 +27,15 @@ Absolute URLs or no link.
 > visible tag `*Next release:*`. `release.yml` refuses to cut a release
 > while any such tag, or this Unreleased section, still exists.*
 
+### Added
+
+- **`lanthorn-mapgen` now splits a story's mazes and portal-only regions onto
+  their own map layers**, the way accepting every one of the interpreter's own
+  "give these rooms their own layer?" prompts would. A generated map's `.svg`,
+  `.dot`, `.map.txt` and `.map.json` all show the split; `--layer-min` sets how
+  big a region has to be first, and `--no-auto-layers` turns it off for one
+  flat map as before.
+
 ---
 
 ## v0.4.4 — 2026-09-04

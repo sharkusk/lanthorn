@@ -13,6 +13,7 @@
 /// Because a room cell `(c,r)` maps to fine cell `(2c, 2r)`, multiplying a fine coord
 /// by `HALF_W` is the same as multiplying its logical coord by `CELL_W` — the two
 /// mappings are identical and consistent.
+use mapper::graph::MapGraph;
 use mapper::render::RenderMap;
 use std::fmt::Write as FmtWrite;
 use std::path::Path;
@@ -52,8 +53,25 @@ fn xml_escape(s: &str) -> String {
 ///
 /// Empty map (no rooms): returns a minimal valid `<svg></svg>`.
 pub fn render_svg(rm: &RenderMap) -> String {
-    if rm.rooms.is_empty() {
+    let Some((body, width, height)) = render_svg_body(rm) else {
         return "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"1\" height=\"1\"></svg>".to_string();
+    };
+    format!(
+        "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"{width}\" height=\"{height}\">\
+         <rect width=\"{width}\" height=\"{height}\" fill=\"#1a1a2e\"/>{body}</svg>"
+    )
+}
+
+/// The room/edge markup for one `RenderMap`, with no outer `<svg>` tag and no
+/// background rect — just the pieces [`render_svg`] wraps directly, and
+/// [`render_svg_layered`] wraps once per layer inside a translated `<g>`.
+/// `None` for an empty map, matching `render_svg`'s own empty-map case.
+///
+/// Returns the markup plus the `(width, height)` a caller needs to size its
+/// own canvas around it.
+fn render_svg_body(rm: &RenderMap) -> Option<(String, i32, i32)> {
+    if rm.rooms.is_empty() {
+        return None;
     }
 
     let ((min_col, min_row), (max_col, max_row)) = rm.bounds;
@@ -90,18 +108,6 @@ pub fn render_svg(rm: &RenderMap) -> String {
     };
 
     let mut svg = String::new();
-    let _ = write!(
-        svg,
-        "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"{}\" height=\"{}\">",
-        width, height
-    );
-
-    // Background.
-    let _ = write!(
-        svg,
-        "<rect width=\"{}\" height=\"{}\" fill=\"#1a1a2e\"/>",
-        width, height
-    );
 
     // ── Edges ────────────────────────────────────────────────────────────────
 
@@ -190,8 +196,72 @@ pub fn render_svg(rm: &RenderMap) -> String {
         }
     }
 
-    svg.push_str("</svg>");
-    svg
+    Some((svg, width, height))
+}
+
+/// Render every non-empty layer of `graph` as one standalone SVG document, each
+/// layer its own coordinate plane stacked top-to-bottom under a heading naming
+/// it (SQ-1308) — the same rule [`crate::map_dump::render_dump`] draws its ASCII
+/// map by.
+///
+/// [`render_svg`] draws a single [`RenderMap`] on one shared canvas with no
+/// notion of layer at all, which [`mapper::render::render`] (as opposed to
+/// [`mapper::render::render_layer`]) never distinguishes either — safe only
+/// when there is exactly one layer. A room peeled onto a fresh layer keeps
+/// whatever cell it already had on the layer it left
+/// ([`mapper::layer::move_region`]'s doc comment), so two rooms on different
+/// layers can and routinely do share a cell; drawing every layer on one canvas
+/// would then draw them on top of each other. Stacking each layer's own
+/// [`mapper::render::render_layer`] output avoids that by construction, since
+/// each one gets its own canvas.
+///
+/// A single-layer graph renders exactly as `render_svg(&mapper::render::render(graph))`
+/// always has — no heading, no change from before SQ-1308.
+pub fn render_svg_layered(graph: &MapGraph) -> String {
+    let mut layers: Vec<mapper::layer::LayerId> = graph
+        .layers()
+        .keys()
+        .copied()
+        .filter(|&l| !graph.rooms_in_layer(l).is_empty())
+        .collect();
+    layers.sort_unstable();
+    if layers.len() <= 1 {
+        return render_svg(&mapper::render::render(graph));
+    }
+
+    const HEADING_H: i32 = 24;
+    const GAP: i32 = 16;
+    let mut y = 0i32;
+    let mut max_w = MARGIN * 2;
+    let mut body = String::new();
+    for &l in &layers {
+        let rm = mapper::render::render_layer(graph, l);
+        let heading = format!(
+            "{}{} ({} rooms)",
+            graph.layer_name(l),
+            if graph.layer_is_maze(l) { " [maze]" } else { "" },
+            graph.rooms_in_layer(l).len()
+        );
+        let _ = write!(
+            body,
+            "<text x=\"{}\" y=\"{}\" font-size=\"14\" fill=\"#ddd\" font-family=\"monospace\">{}</text>",
+            MARGIN,
+            y + 16,
+            xml_escape(&heading)
+        );
+        y += HEADING_H;
+        if let Some((frag, w, h)) = render_svg_body(&rm) {
+            let _ = write!(body, "<g transform=\"translate(0,{y})\">{frag}</g>");
+            y += h;
+            max_w = max_w.max(w);
+        }
+        y += GAP;
+    }
+    let total_h = y.max(1);
+    format!(
+        "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"{max_w}\" height=\"{total_h}\">\
+         <rect width=\"{max_w}\" height=\"{total_h}\" fill=\"#1a1a2e\"/>{body}</svg>"
+    )
 }
 
 /// Write `render_svg(rm)` to the file at `path`.

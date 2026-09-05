@@ -840,9 +840,9 @@ It writes four artefacts named after the story's own stem, and prints a summary:
 
 | artefact | what it is |
 |---|---|
-| `<stem>.map.txt` | `app::map_dump::render_dump` — the annotated dump, with the ASCII drawing |
-| `<stem>.svg` | `app::export_svg::render_svg`, over `mapper::render::render` |
-| `<stem>.dot` | `app::export_dot::render_dot` |
+| `<stem>.map.txt` | `app::map_dump::render_dump` — the annotated dump, with the ASCII drawing, each layer under its own heading |
+| `<stem>.svg` | `app::export_svg::render_svg_layered` — every layer stacked top to bottom under a heading, one shared canvas |
+| `<stem>.dot` | `app::export_dot::render_dot` — every layer as its own Graphviz cluster once there is more than one |
 | `<stem>.map.json` | the documented, versioned JSON map described below |
 
 Naming any of `--dump`, `--svg`, `--dot`, `--json` writes only the ones named;
@@ -852,6 +852,57 @@ much faster on a large map, and the right choice for a consumer doing its own
 layout. Exit status is `0` for a map written, `1` for an I/O failure, and **`2`
 for a story that declares no map anywhere in the file**, which is a distinct
 code so that a script sweeping a shelf can skip rather than stop.
+
+### Layers: mazes and portal-only regions split themselves out (SQ-1308)
+
+Everything used to land on one flat `MAIN_LAYER`. `app::mapgen::split_layers`
+now runs between building the graph and laying it out, splitting it the way
+the APP's own layer suggestions (`mapper::suggest`) would if a player accepted
+every one of them — the same `mapper::layer::move_region` a peel or a merge
+in the TUI calls, never a second implementation of what a region is. Two
+passes, in order:
+
+1. **Maze layers.** Every room still on Main whose name
+   `mapper::suggest::mentions_maze` anchors a walk that stays within
+   maze-named rooms — a maze-to-maze compass walk, not
+   `mapper::layer::planar_region`'s unrestricted one. That restriction is not
+   pedantry: Mini-Zork I's Cyclops Room has an *unconditional* compass exit
+   out to the Living Room ("Strange Passage"), so a bare `planar_region` from
+   any maze room sweeps up 55 of its 70 rooms — Kitchen and West of House
+   included — which is not a maze layer, it is everything but the dozen rooms
+   directly behind Troll Room. Even `mapper::layer::region_at_arrival` (the
+   live app's own `name_trigger` walk) cannot do better here: probed at all
+   three of the maze's real entrances, it is `NotASeam` at two and, at the
+   third, excludes only that one entrance room while pulling in the same
+   sweep, because the other two entrances are still open. So the maze pass
+   stops at the room-name boundary directly. Once a region moves, its layer
+   is flagged a maze (`mapper::graph::MapGraph::set_layer_maze`), which
+   freezes its layout exactly as the app's own maze flag does. One layer per
+   *component* — a twenty-room maze that is all one connected cluster is one
+   layer, not twenty.
+2. **Portal-only regions.** What's left of Main is partitioned into
+   compass-connected components (`planar_region`, one per unvisited room).
+   Mapgen has no start room to anchor a "primary" layer on the way the live
+   map anchors on wherever the player began, so the **largest** component is
+   kept as Main instead; every other component at or above `--layer-min`
+   becomes its own layer, named after the room its entering portal leads
+   into — the same anchor a peel names a fresh layer after
+   (`MoveTarget::New`'s doc comment). A component under the floor stays on
+   Main, undisturbed.
+
+`--layer-min N` sets the portal-only floor; it defaults to
+`mapper::suggest::STRUCTURAL_FLOOR` (4) — **the same constant the live
+suggestion engine floors a structural region at**, so a static map and a
+played one agree about how big a region has to be before it earns a layer of
+its own. A maze has no floor: any size gets its own layer once its name says
+so. `--no-auto-layers` skips both passes, reproducing the flat, single-layer
+map mapgen wrote before SQ-1308.
+
+Zork I r52/s871125 splits into six layers at the default floor: `Main` (64
+rooms — the underground core, once the maze that used to bridge it to the
+surface is gone), `Maze` (15, flagged), `Rocky Ledge` (18 — the surface world,
+named for the room its portal from underground opens onto), `Coal Mine` (5),
+`Ladder Bottom` (5) and `Torch Room` (4).
 
 ### What each source covers, and what it does not
 
