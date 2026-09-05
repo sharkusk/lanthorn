@@ -264,6 +264,19 @@ pub struct Cli {
     #[arg(long, value_enum, value_name = "ON|OFF")]
     pub sound: Option<OnOff>,
 
+    /// Save the resume state after every turn for this run, so an abrupt end —
+    /// a killed process, a dropped connection, a closed laptop — loses at most
+    /// the turn in progress. Overrides the config's `auto_save` in both
+    /// directions.
+    ///
+    /// The write is off the main thread and coalescing (`archive_worker`), so
+    /// the cost to a turn is a channel send. Like every flag here it is never
+    /// written back to config.toml; `docker/entrypoint.sh` passes `--auto-save
+    /// on` in the container's browser mode, where the pty can vanish under a
+    /// game at any moment (SQ-1323).
+    #[arg(long = "auto-save", value_enum, value_name = "ON|OFF")]
+    pub auto_save: Option<OnOff>,
+
     /// Force the terminal image protocol for cover art (default: auto-detect).
     #[arg(long, value_enum, default_value_t = ImageProtocol::Auto)]
     pub image_protocol: ImageProtocol,
@@ -1195,6 +1208,7 @@ pub mod keys {
     pub const USER_DIR: &str = "user_dir";
     pub const HONOR_GAME_COLOURS: &str = "honor_game_colours";
     pub const ENABLE_SOUND: &str = "enable_sound";
+    pub const AUTO_SAVE: &str = "auto_save";
     pub const INTERPRETER_NUMBER: &str = "interpreter_number";
     pub const V6_PIXEL_LOCK: &str = "v6_pixel_lock";
     pub const GUIDANCE: &str = "guidance";
@@ -2318,6 +2332,14 @@ pub fn resolve(cli: &Cli) -> Config {
         cfg.one_run.pin(keys::ENABLE_SOUND, bool::from(v));
     }
 
+    // Pinned like the rest: `auto_save` is a persisted key, so one `--auto-save on`
+    // launch plus any settings save would otherwise bake this run's cadence into
+    // the user's file for good. (SQ-1323.)
+    if let Some(v) = cli.auto_save {
+        cfg.auto_save = v.into();
+        cfg.one_run.pin(keys::AUTO_SAVE, bool::from(v));
+    }
+
     // Pinned like the rest: `guidance` is a persisted key, so one `--guidance off`
     // launch plus any settings save would otherwise bake this run's instruction
     // into the user's file for good.
@@ -3070,6 +3092,7 @@ mod tests {
             config: Some(path.to_path_buf()),
             accel: None,
             sound: None,
+            auto_save: None,
             image_protocol: ImageProtocol::Auto,
             images: None,
             game_colours: None,
@@ -3159,6 +3182,7 @@ mod tests {
             config: Some(cfg_path.clone()),
             accel: None,
             sound: None,
+            auto_save: None,
             image_protocol: ImageProtocol::Auto,
             images: None,
             game_colours: None,
@@ -3192,6 +3216,7 @@ mod tests {
             config: Some(PathBuf::from("/nonexistent/path/config.toml")),
             accel: None,
             sound: None,
+            auto_save: None,
             image_protocol: ImageProtocol::Auto,
             images: None,
             game_colours: None,
@@ -3225,6 +3250,7 @@ mod tests {
             config: Some(cfg_path.clone()),
             accel: None,
             sound: None,
+            auto_save: None,
             image_protocol: ImageProtocol::Auto,
             images: None,
             game_colours: None,
@@ -3890,6 +3916,7 @@ use_defaults = false
             config: Some(PathBuf::from("/nonexistent/path/config.toml")),
             accel: Some(OnOff::Off),
             sound: None,
+            auto_save: None,
             image_protocol: ImageProtocol::Auto,
             images: None,
             game_colours: None,
@@ -3921,6 +3948,7 @@ use_defaults = false
             config: Some(PathBuf::from("/nonexistent/path/config.toml")),
             accel: None,
             sound: None,
+            auto_save: None,
             image_protocol: ImageProtocol::Auto,
             images: None,
             game_colours: None,
@@ -3969,6 +3997,7 @@ use_defaults = false
             config: Some(cfg_path.clone()),
             accel: None,
             sound: None,
+            auto_save: None,
             image_protocol: ImageProtocol::Auto,
             images: None,
             game_colours: None,
@@ -4067,6 +4096,7 @@ use_defaults = false
             config: Some(cfg_path.clone()),
             accel: None,
             sound: None,
+            auto_save: None,
             image_protocol: ImageProtocol::Auto,
             images: None,
             game_colours: None,
@@ -4100,6 +4130,7 @@ use_defaults = false
             config: Some(PathBuf::from("/nonexistent/path/config.toml")),
             accel: None,
             sound: None,
+            auto_save: None,
             image_protocol: ImageProtocol::Auto,
             images: None,
             game_colours: None,
@@ -4134,6 +4165,7 @@ use_defaults = false
             config: Some(PathBuf::from("/nonexistent/path/config.toml")),
             accel: None,
             sound: None,
+            auto_save: None,
             image_protocol: ImageProtocol::Auto,
             images: Some(OnOff::Off),
             game_colours: None,
@@ -4203,6 +4235,7 @@ use_defaults = false
             config: None,
             accel: None,
             sound: None,
+            auto_save: None,
             image_protocol: ImageProtocol::Auto,
             images: None,
             game_colours: None,
@@ -4265,6 +4298,7 @@ use_defaults = false
             config: Some(home.join("config.toml")),
             accel: None,
             sound: None,
+            auto_save: None,
             image_protocol: ImageProtocol::Auto,
             images: None,
             game_colours: None,
@@ -4315,6 +4349,7 @@ use_defaults = false
             config: Some(path.clone()),
             accel: None,
             sound: None,
+            auto_save: None,
             image_protocol: ImageProtocol::Auto,
             images: None,
             game_colours: None,
@@ -4409,6 +4444,44 @@ use_defaults = false
         write_config(&dir, &cfg).unwrap();
         let back = std::fs::read_to_string(&cfg_path).unwrap();
         assert!(!toml::from_str::<Config>(&back).unwrap().enable_sound, "an explicit off persists");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// `--auto-save on` turns the per-turn resume write on for ONE run, in both
+    /// directions and without persisting — the shape the container's browser mode
+    /// needs (SQ-1323), where a dropped websocket can end the process at any
+    /// moment and the stock `auto_save = false` means nothing was ever written.
+    #[test]
+    fn auto_save_flag_overrides_the_file_for_one_run_only() {
+        let dir = crate::scratch_dir("autosave-flag");
+        let cfg_path = dir.join("config.toml");
+        std::fs::write(&cfg_path, "# mine\nauto_save = false\n").unwrap();
+
+        let base = cli_with_config(&cfg_path, None);
+        assert!(!resolve(&base).auto_save, "the file's value stands with no flag");
+
+        let cli = Cli { auto_save: Some(OnOff::On), ..cli_with_config(&cfg_path, None) };
+        let mut cfg = resolve(&cli);
+        assert!(cfg.auto_save, "the flag turns per-turn saving on for this run");
+
+        write_config(&dir, &cfg).unwrap();
+        let back = std::fs::read_to_string(&cfg_path).unwrap();
+        assert!(
+            !toml::from_str::<Config>(&back).unwrap().auto_save,
+            "--auto-save on is for one run; the FILE must still say false: {back}"
+        );
+        assert!(back.contains("# mine"), "and the user's comment survives: {back}");
+
+        // The settings panel turning it on IS a decision, and it persists.
+        cfg.one_run.release(keys::AUTO_SAVE);
+        write_config(&dir, &cfg).unwrap();
+        let back = std::fs::read_to_string(&cfg_path).unwrap();
+        assert!(toml::from_str::<Config>(&back).unwrap().auto_save, "an explicit on persists");
+
+        // And the flag points both ways: `off` beats a file that says true.
+        std::fs::write(&cfg_path, "auto_save = true\n").unwrap();
+        let off = Cli { auto_save: Some(OnOff::Off), ..cli_with_config(&cfg_path, None) };
+        assert!(!resolve(&off).auto_save, "--auto-save off beats a file that says true");
         let _ = std::fs::remove_dir_all(&dir);
     }
 
@@ -4510,6 +4583,7 @@ use_defaults = false
             config: Some(cfg_path.clone()),
             accel: None,
             sound: None,
+            auto_save: None,
             image_protocol: ImageProtocol::Auto,
             images: None,
             game_colours: None,
@@ -4571,6 +4645,7 @@ use_defaults = false
             config: Some(cfg_path.clone()),
             accel: None,
             sound: None,
+            auto_save: None,
             image_protocol: ImageProtocol::Auto,
             images: None,
             game_colours: None,
@@ -4630,6 +4705,7 @@ use_defaults = false
             config: Some(cfg_path.clone()),
             accel: None,
             sound: None,
+            auto_save: None,
             image_protocol: ImageProtocol::Auto,
             images: None,
             game_colours: None,
