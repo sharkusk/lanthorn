@@ -40,6 +40,13 @@ Absolute URLs or no link.
 
 ### Fixed
 
+- **Games that keep the room name in their status bar now map.** *The Wizard
+  Sniffer* never prints a room title in the story text — the name lives only in
+  its own status bar, beside the exits — and lanthorn found no rooms in it at
+  all, start to finish. It now reads the bar, the way it always has on the
+  Z-machine side, for any game that names its rooms nowhere else. *Brain
+  Guzzlers from Beyond!* and *Zozzled* map from the first move for the same
+  reason.
 - **The map knows where you are before you take a step.** Counterfeit Monkey
   never announces the Back Alley you wake up in — it tells you to type LOOK —
   so the map used to start blank and only found the room once you had walked

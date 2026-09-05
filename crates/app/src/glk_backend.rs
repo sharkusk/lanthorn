@@ -727,6 +727,48 @@ impl AppGlk {
         let at_command_prompt = awaiting_line_input && self.ends_at_read_prompt();
         self.primary_scan()?.take_room_heading(at_command_prompt)
     }
+
+    /// The room name painted on the game's STATUS LINE — its first text-grid
+    /// window — or `None` if it holds nothing that could be one (SQ-1302).
+    ///
+    /// A Glk story does not have to print a room heading. *The Wizard Sniffer*
+    /// (release 1 / serial 171007 / Inform 7 build 6L38) never prints one in any
+    /// style: its whole presentation puts the room name in a two-row status grid
+    /// — `" Atop a Mountain"` over `" Exit: north"` — and the buffer carries the
+    /// description alone, so [`Self::take_room_heading`] has nothing to read and
+    /// the map stayed empty for the entire game. Measured across the 60 Glulx
+    /// files in `stories/`, three more do the same (*Brain Guzzlers from Beyond!*,
+    /// *Zozzled*, and Counterfeit Monkey before its first `look`).
+    ///
+    /// This is the Glk twin of `zvm::location::status_line_room_name`, which has
+    /// read the Z-machine's upper window this way since long before — the parse is
+    /// the same one, on the other engine's grid: the FIRST row of the LOWEST-id
+    /// grid window (the status line Inform splits off first), its first non-blank
+    /// segment (text between runs of 2+ spaces, which is what separates a room
+    /// name from the score block beside it, and what finds a CENTERED title), with
+    /// any qualifier after the first comma dropped ("Back Alley, noon").
+    ///
+    /// The caller decides *when* this may be believed; see
+    /// `GlulxSession::status_line_room`. What it decides HERE is only whether the
+    /// segment could be a name at all — the same job [`StoryScan::line_rest_disqualifies`]
+    /// does for a bold run, and needed for the same reason. A status line is not
+    /// always a room: City of Secrets paints `" For instructions and information
+    /// type ABOUT and press return."` there, and FooFoo's single row is the bare
+    /// label `" Exits:"`. Neither is a noun phrase, so neither is a room.
+    pub(crate) fn status_room_name(&self) -> Option<String> {
+        let grid = self.grids.values().next()?;
+        // Row 0 from the CELLS rather than from `width`, so a status line painted
+        // before the window has been laid out still reads.
+        let last = grid.cells.range((0, 0)..(1, 0)).next_back().map(|(&(_, c), _)| c)?;
+        let row: String = (0..=last).map(|c| grid.cells.get(&(0, c)).map_or(' ', |cell| cell.0)).collect();
+        let segment = row.split("  ").map(str::trim).find(|s| !s.is_empty())?;
+        let name = segment.split(',').next().unwrap_or(segment).trim();
+        // A room name is a noun phrase. A sentence (it ends in stops) and a bare
+        // field label (it ends in a colon) are the two things a status line holds
+        // instead, and both are banners the map must not mint a room from.
+        let shaped = name.chars().any(char::is_alphanumeric) && !name.ends_with([':', '.', '!', '?']);
+        shaped.then(|| name.to_string())
+    }
 }
 
 impl StoryScan {
@@ -2781,5 +2823,68 @@ mod heading_tests {
         put(&mut b, GlkStyle::Normal, " the screen reader mode? Please enter: Yes or No\n");
         put(&mut b, GlkStyle::Normal, "\nThis option can be changed later from the menu.\n");
         assert_eq!(b.take_room_heading(false), None);
+    }
+
+    /// The status-line grid (id 2) above the primary buffer, the shape every
+    /// Inform Glulx story splits off — see [`AppGlk::status_room_name`].
+    fn with_status_line(rows: &[&str]) -> AppGlk {
+        let mut b = primary_backend();
+        b.window_open(2, WinType::TextGrid);
+        let h = rows.len() as u32;
+        b.window_layout(&[
+            (2, WinType::TextGrid, GlkRect { left: 0, top: 0, width: 80, height: h }, Some(true)),
+            (1, WinType::TextBuffer, GlkRect { left: 0, top: h, width: 80, height: 24 - h }, Some(true)),
+        ]);
+        for (y, row) in rows.iter().enumerate() {
+            b.grid_put(2, 0, y as u32, GlkStyle::Normal, row);
+        }
+        b
+    }
+
+    #[test]
+    fn the_wizard_sniffer_names_its_room_only_on_the_status_line() {
+        // SQ-1302, and the exact styled sequence release 1 / serial 171007 / Inform 7
+        // build 6L38 prints on the turn that first hands the player a command prompt:
+        // a banner and a room DESCRIPTION in the buffer, with not one `Subheader` run
+        // anywhere, and the room's name in the two-row status grid beside "Exit:".
+        let mut b = with_status_line(&[" Atop a Mountain", " Exit: north"]);
+        put(&mut b, GlkStyle::Header, "The Wizard Sniffer");
+        put(&mut b, GlkStyle::Normal, "\nAn Interactive Fiction by Buster Hudson\n");
+        put(&mut b, GlkStyle::Normal, "Release 1 / Serial number 171007 / Inform 7 build 6L38\n\n");
+        put(&mut b, GlkStyle::Normal, "You stand before the raised drawbridge of an evil fortress.\n\n>");
+        assert_eq!(
+            b.take_room_heading(true),
+            None,
+            "the story prints no Subheader run at all; this is why the map stayed empty"
+        );
+        assert_eq!(b.status_room_name().as_deref(), Some("Atop a Mountain"));
+    }
+
+    #[test]
+    fn a_status_line_room_is_read_past_the_score_block_and_its_qualifier() {
+        // Counterfeit Monkey paints " Back Alley, noon    Goals: 1  Score: 0": the room
+        // is the first 2+-space segment, and the time of day is a qualifier after the
+        // comma exactly as a Z-machine status line's posture is.
+        let b = with_status_line(&[" Back Alley, noon                          Goals: 1  Score: 0"]);
+        assert_eq!(b.status_room_name().as_deref(), Some("Back Alley"));
+        // Zozzled puts the exits on the same row instead.
+        let b = with_status_line(&[" Hotel Lobby                                    Exits:  N S E"]);
+        assert_eq!(b.status_room_name().as_deref(), Some("Hotel Lobby"));
+        // Slouching Towards Bedlam CENTRES its title, so the first segment is blank.
+        let b = with_status_line(&["                                   Office"]);
+        assert_eq!(b.status_room_name().as_deref(), Some("Office"));
+    }
+
+    #[test]
+    fn a_status_line_that_is_not_a_room_mints_none() {
+        // City of Secrets paints an instruction there — a sentence, not a noun phrase.
+        let b = with_status_line(&[" For instructions and information type ABOUT and press return."]);
+        assert_eq!(b.status_room_name(), None);
+        // FooFoo's single row is a bare field label with nothing in it.
+        let b = with_status_line(&[" Exits:"]);
+        assert_eq!(b.status_room_name(), None);
+        // And a story with no status line at all has nothing to say.
+        let b = primary_backend();
+        assert_eq!(b.status_room_name(), None);
     }
 }
