@@ -130,6 +130,30 @@ fn a_five_room_portal_region_splits_at_the_default_floor() {
     assert_eq!(g.rooms_in_layer(MAIN_LAYER).len(), 10, "the ten-room hall stays Main");
 }
 
+/// SQ-1310: a one-room Attic hanging `Up` off Loft 3 (part of the five-room
+/// portal region, big enough for its own layer) must land on THAT layer, not
+/// stranded on Main the way pass 2 alone would leave it — pass 2 never sees
+/// past Main, so a component below the floor defaults there regardless of
+/// which OTHER layer it actually opens onto.
+#[test]
+fn a_below_floor_component_adopts_the_layer_of_the_region_it_opens_onto() {
+    let mut g = synthetic_portal_region();
+    g.upsert_room(200, "Attic".into());
+    g.add_edge(103, Direction::Up, 200);
+    g.add_edge(200, Direction::Down, 103);
+    // A second singleton with NO portal at all: nothing to adopt onto, so it
+    // must stay on Main exactly as pass 2 already leaves it.
+    g.upsert_room(201, "Nowhere".into());
+
+    let opts = MapgenOptions::default();
+    mapgen::split_layers(&mut g, &opts);
+
+    let loft_layer = g.layer_of(100);
+    assert_ne!(loft_layer, MAIN_LAYER, "sanity: the loft region got its own layer");
+    assert_eq!(g.layer_of(200), loft_layer, "the Attic must join the loft's layer, not stay on Main");
+    assert_eq!(g.layer_of(201), MAIN_LAYER, "a portal-less singleton has nothing to adopt onto: stays Main");
+}
+
 /// Raise the floor to 6 and the same five-room region is under it: everything
 /// stays on Main, and `split_layers` reports no split at all.
 #[test]
@@ -234,6 +258,16 @@ fn zork1_maze_is_one_layer_and_main_is_the_largest_component() {
     // The portal-only split: pinned by name and count against this exact
     // release/serial, the way `real_media_releases.rs` pins a floppy's release
     // rather than asserting "some release or other maps".
+    //
+    // Re-pinned for SQ-1310: Coal Mine gained Ladder Top (5→6) and Rocky Ledge
+    // gained Attic, Up a Tree and the Grating Room (18→21) — three one-room dead
+    // ends reached only by a portal (`Up`/`Down`) from a room already on that
+    // layer. Before SQ-1310's `adopt_stranded_regions`, pass 2 had no way to see
+    // past Main, so every one of those below-floor singletons defaulted there
+    // regardless of which layer it actually opened onto — an attic reached by
+    // climbing UP from the Kitchen was landing on the SAME layer as the far end
+    // of the Coal Mine. Verified by reverting `adopt_stranded_regions`'s call
+    // site: the counts go back to 5/5/18/4 and Main gains the four rooms back.
     let mut portal_only: Vec<String> = g
         .layers()
         .keys()
@@ -245,12 +279,25 @@ fn zork1_maze_is_one_layer_and_main_is_the_largest_component() {
     assert_eq!(
         portal_only,
         vec![
-            "Coal Mine (5 rooms)".to_string(),
+            "Coal Mine (6 rooms)".to_string(),
             "Ladder Bottom (5 rooms)".to_string(),
-            "Rocky Ledge (18 rooms)".to_string(),
+            "Rocky Ledge (22 rooms)".to_string(),
             "Torch Room (4 rooms)".to_string(),
         ],
         "the portal-only split at the default floor changed shape"
+    );
+
+    // SQ-1310's own named cases: the Attic (off the Kitchen) and Up a Tree (off
+    // the Forest Path) must land on Rocky Ledge — the house's own layer — not on
+    // Main by default.
+    let rocky_ledge = room_id(g, "Kitchen");
+    let rocky_ledge_layer = g.layer_of(rocky_ledge);
+    assert_ne!(rocky_ledge_layer, MAIN_LAYER, "sanity: the Kitchen is on its own portal layer");
+    assert_eq!(g.layer_of(room_id(g, "Attic")), rocky_ledge_layer, "the Attic must join the Kitchen's layer");
+    assert_eq!(
+        g.layer_of(room_id(g, "Up a Tree")),
+        rocky_ledge_layer,
+        "Up a Tree must join the Forest Path's layer"
     );
 }
 

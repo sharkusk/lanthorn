@@ -900,22 +900,43 @@ passes, in order:
    kept as Main instead; every other component at or above `--layer-min`
    becomes its own layer, named after the room its entering portal leads
    into — the same anchor a peel names a fresh layer after
-   (`MoveTarget::New`'s doc comment). A component under the floor stays on
-   Main, undisturbed.
+   (`MoveTarget::New`'s doc comment). A component under the floor is set
+   aside for pass 3 rather than moved.
+3. **Below-floor leftovers adopt a neighbour's layer (SQ-1310).** A component
+   too small for its own layer does not simply default to Main — the live
+   app never has this problem, because a room is discovered on whichever
+   layer the player is STANDING on, so a one-room attic reached by climbing
+   `Up` from the Kitchen is born on the Kitchen's own layer. Mapgen has no
+   player to inherit that context from, so `adopt_stranded_regions` follows
+   each below-floor component's own portal edges (`Up`/`Down`/`In`/`Out` —
+   `mapper::direction::grid_offset` is `None` for exactly these, same gate
+   `mark_distorted` uses) out to whichever neighbouring layer is ALREADY
+   settled — Main itself counts, and so does anything pass 1 or 2 just
+   created. Several portal neighbours on different layers is resolved by
+   whichever layer has the most portal links into the component, ties going
+   to the lowest layer id; a component with no portal neighbour at all still
+   defaults to Main. This repeats to a fixed point, since one stranded
+   one-room dead end can hang off ANOTHER stranded one-room dead end that
+   only just got a home. A maze layer is adopted onto only by a component
+   whose own room names mention "maze" — a stray dead end that merely opens
+   off a maze keeps looking for a non-maze neighbour (or Main) instead,
+   mirroring pass 1's own restriction against sweeping in unrelated rooms.
 
 `--layer-min N` sets the portal-only floor; it defaults to
 `mapper::suggest::STRUCTURAL_FLOOR` (4) — **the same constant the live
 suggestion engine floors a structural region at**, so a static map and a
 played one agree about how big a region has to be before it earns a layer of
 its own. A maze has no floor: any size gets its own layer once its name says
-so. `--no-auto-layers` skips both passes, reproducing the flat, single-layer
-map mapgen wrote before SQ-1308.
+so. `--no-auto-layers` skips all three passes, reproducing the flat,
+single-layer map mapgen wrote before SQ-1308.
 
-Zork I r52/s871125 splits into six layers at the default floor: `Main` (64
+Zork I r52/s871125 splits into six layers at the default floor: `Main` (59
 rooms — the underground core, once the maze that used to bridge it to the
-surface is gone), `Maze` (15, flagged), `Rocky Ledge` (18 — the surface world,
-named for the room its portal from underground opens onto), `Coal Mine` (5),
-`Ladder Bottom` (5) and `Torch Room` (4).
+surface is gone), `Maze` (15, flagged), `Rocky Ledge` (22 — the surface
+world, named for the room its portal from underground opens onto, plus the
+Attic, Up a Tree and the Grating Room adopted onto it by pass 3), `Coal Mine`
+(6, plus Ladder Top adopted from pass 3), `Ladder Bottom` (5) and `Torch
+Room` (4).
 
 ### What each source covers, and what it does not
 
