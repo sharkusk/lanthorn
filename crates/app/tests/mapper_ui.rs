@@ -92,3 +92,5 @@ mod sq1302_wizard_sniffer_rooms;
 mod sq1304_anchorhead_twisting_lane;
 #[path = "suites/sq1303_glulx_static_world.rs"]
 mod sq1303_glulx_static_world;
+#[path = "suites/sq1305_glulx_stale_sidecar.rs"]
+mod sq1305_glulx_stale_sidecar;

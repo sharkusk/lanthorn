@@ -303,6 +303,36 @@ each of these is a refusal rather than a stub:
   story genuinely RENAMES is re-read the next time you walk into it; and there is
   no `Ambiguous` movement any more, because two rooms can share a name but an
   address cannot be ambiguous about itself — a maze step is a plain move.
+- **A remembered address outlives the story it was learned from, so the
+  `room-global` sidecar carries the image's own identity, not just an address**
+  (SQ-1305). The save directory is keyed by the story's FILENAME
+  (`~/.lanthorn/saves/<file>.save/`), so a story rebuilt under the same name — a
+  new release of a `.gblorb`, an author's own rebuild — reuses the old sidecar,
+  and a value check alone cannot always catch a wrong address: the globals
+  region is full of OTHER objects (`player`, `actor`, `real_location`) a rebuild
+  can just as easily leave the word pointing at, and such a word never fails
+  the object-value test. `GlulxSession::image_identity` pairs the header's
+  whole-image checksum (bytes 0x20-0x23, GLULX_NOTES.md §"Header field layout")
+  with EXTSTART (which the same doc's §2 states equals the image FILE's length),
+  formats it `hex:hex`, and every sidecar line is `"<addr> <checksum>:<extstart>"`
+  — a line with no token at all is the pre-SQ-1305 format and is stale by
+  definition (pre-release: no back-compat), refused exactly like a mismatched
+  one. And where this story's compiled I7 world model is readable, a sidecar
+  address is cross-checked ONCE more, at boot only: a value that is neither `0`
+  nor one of the story's own ROOMS is refused before it is ever trusted
+  (`GlulxSession::sidecar_addr_plausible`) — narrower than the checksum+length
+  match can be, since a rebuild that inserts one global before `location` can
+  keep an unchanged checksum and length while shifting every later global's
+  address down.
+- **And even a lock that DID get installed wrongly recovers on its own**
+  (SQ-1305's other half): three straight turns of a FRESH heading printed while
+  the locked word does not move (`RoomLock::verify`'s `FROZEN_LOCK_HEADINGS`)
+  drops the lock and relearns, the same `relearn` the value check already used.
+  One such turn is not evidence — Counterfeit Monkey's `REMEMBER` flashback is
+  exactly one heading-only turn over a motionless word, and a correct lock must
+  survive it — so the threshold is one more than a flashback can produce on its
+  own, and small enough that a genuinely frozen lock recovers within a couple of
+  turns of the player noticing the map has stopped.
 - **A room the story moved you into but never named** is asked about directly:
   `GlulxSession::silent_look` snapshots the VM, types `look` into it, reads the
   heading off the backend, throws the answer away and restores. The snapshot is

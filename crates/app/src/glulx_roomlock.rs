@@ -86,6 +86,29 @@ const REQUIRED_CHANGES: u32 = 3;
 /// to move the player.
 const REQUIRED_STILLS: u32 = 1;
 
+/// Consecutive turns of a NEW heading printed while the locked word's value sat
+/// still before a lock is declared frozen and dropped (SQ-1305).
+///
+/// The object-value check in [`RoomLock::verify`] catches a stale sidecar
+/// address whose word has stopped holding an object of the story at all, but a
+/// story rebuild can just as easily leave it parked on a word that is still
+/// SOME object of the story forever — the globals region is full of them
+/// (`player`, `actor`, `real_location`) — and such a word never fails that
+/// test. What it can't do is keep agreeing with what the game is telling the
+/// player: a run of turns where a brand-new room name appears on screen while
+/// this word never moves is the story narrating the player somewhere this word
+/// never noticed.
+///
+/// One such turn is not evidence — Counterfeit Monkey's `remember` flashback
+/// (SQ-1294b) prints exactly one heading for a place the player never went
+/// without moving the locked word, and a correct lock must survive it
+/// (`sq1294b_glulx_flashback_heading` is the guard). Three is one more than
+/// the flashback can produce on its own and small enough that a genuinely
+/// frozen lock recovers within a couple of turns of the player noticing the
+/// map has stopped, the same shake-out-coincidences-while-reacting-quickly
+/// trade [`REQUIRED_CHANGES`] makes for the pre-lock learner.
+const FROZEN_LOCK_HEADINGS: u32 = 3;
+
 /// The most learning snapshots retained. Each is one `u32` per RAM word (~53 KB
 /// for Adventure), kept only until the lock resolves — they are what lets the
 /// pre-lock rooms be re-keyed to their real ids once the address is known.
@@ -148,6 +171,11 @@ pub struct RoomLock {
     rooms: Option<Vec<(u32, Option<String>)>>,
     /// The locked address, once the evidence is one-sided.
     locked: Option<u32>,
+    /// Consecutive turns, once locked, on which a NEW heading was printed
+    /// while the locked word's value did not change — see
+    /// [`FROZEN_LOCK_HEADINGS`] (SQ-1305). Reset to 0 by any turn that doesn't
+    /// fit that shape, and irrelevant (left at 0) while still learning.
+    frozen_headings: u32,
     /// Set for one call after a lock resolves, so the caller can re-key the rooms
     /// that were mapped under name-derived ids before the address was known.
     pending_remap: Vec<(String, u32)>,
@@ -167,6 +195,7 @@ impl RoomLock {
             objects: None,
             rooms: None,
             locked: None,
+            frozen_headings: 0,
             pending_remap: Vec::new(),
         }
     }
@@ -281,10 +310,30 @@ impl RoomLock {
 
     /// Fold this turn into the model. `ram` is the snapshot taken after the turn
     /// ran; `heading` is the room heading in force (sticky across heading-less
-    /// turns); `movement` is what the caller could tell about the room changing.
-    pub fn observe(&mut self, ram: Vec<u32>, heading: Option<String>, movement: Movement) {
+    /// turns); `movement` is what the caller could tell about the room
+    /// changing — the STORY's own verdict once locked, and otherwise identical
+    /// to `heading_movement` (see below).
+    ///
+    /// `heading_movement` is the verdict `finish_turn` computes purely from the
+    /// printed heading (`Changed`/`Unchanged`/`Ambiguous`, the same comparison
+    /// the pre-lock learner has always used) — supplied on every call, but only
+    /// read once locked, where it feeds [`Self::verify`]'s frozen-lock check
+    /// (SQ-1305). It has to be threaded in from the caller rather than
+    /// reconstructed here from `self.prev`'s stored heading: the SQ-1294b
+    /// flashback turn writes a heading (`"Galley"`) into `self.prev` without
+    /// the player having moved, so a NEXT turn's heading comparing against that
+    /// stored value would read `Changed` even when the game's own notion of
+    /// "last named room" never left the Dormitory Room — exactly the false
+    /// positive the frozen-lock check must not produce from one flashback.
+    pub fn observe(
+        &mut self,
+        ram: Vec<u32>,
+        heading: Option<String>,
+        movement: Movement,
+        heading_movement: Movement,
+    ) {
         if let Some(addr) = self.locked {
-            self.verify(&ram, addr);
+            self.verify(&ram, addr, heading_movement);
             self.prev = Some(Observation { ram, heading });
             return;
         }
@@ -472,12 +521,17 @@ impl RoomLock {
     /// telling the truth, and every room until it re-resolved was keyed by the hash
     /// of a room NAME again — which is how one Deep Street becomes two.
     ///
-    /// So the only thing that can falsify a lock now is its own VALUE: a word that
-    /// no longer holds one of this story's objects is not the `location` global,
+    /// So one thing that can falsify a lock is its own VALUE: a word that no
+    /// longer holds one of this story's objects is not the `location` global,
     /// whatever the screen says. A zero is not evidence either way (a game may park
     /// `location` at nothing for a turn mid-scene) and [`RoomLock::room_id`] already
     /// refuses to identify a room from one.
-    fn verify(&mut self, ram: &[u32], addr: u32) {
+    ///
+    /// The other (SQ-1305) is a lock that never falsifies by that test because
+    /// its word genuinely holds SOME object of the story forever, just not the
+    /// right one — see [`FROZEN_LOCK_HEADINGS`] for why and how many turns of
+    /// disagreement that takes.
+    fn verify(&mut self, ram: &[u32], addr: u32, heading_movement: Movement) {
         // An address outside the scanned window can never be verified against a
         // snapshot, so it can never be dropped by the check below either — it would
         // be a permanently unfalsifiable lock. Drop it here instead and re-learn.
@@ -487,14 +541,32 @@ impl RoomLock {
             return;
         };
         let Some(&v) = ram.get(idx) else { return };
-        if v == 0 {
-            return;
+        if v != 0 {
+            // `agree` is released the moment a lock resolves, so the fallback range
+            // test takes its bound from the snapshot in hand rather than from that
+            // vector.
+            let end = self.base + (ram.len() as u32) * 4;
+            if !self.is_room_value(v, end) {
+                self.relearn(ram.len());
+                return;
+            }
         }
-        // `agree` is released the moment a lock resolves, so the fallback range test
-        // takes its bound from the snapshot in hand rather than from that vector.
-        let end = self.base + (ram.len() as u32) * 4;
-        if !self.is_room_value(v, end) {
-            self.relearn(ram.len());
+        // Did THIS turn move the locked word? `self.prev` is still last turn's
+        // snapshot — the caller updates it to this turn's only after this call
+        // returns. No predecessor (the very first observe of a session that
+        // booted already locked) is an arrival, exactly as `movement` documents
+        // it — not frozen evidence either way.
+        let word_changed = match &self.prev {
+            Some(p) => p.ram.get(idx) != Some(&v),
+            None => true,
+        };
+        if !word_changed && heading_movement == Movement::Changed {
+            self.frozen_headings += 1;
+            if self.frozen_headings >= FROZEN_LOCK_HEADINGS {
+                self.relearn(ram.len());
+            }
+        } else {
+            self.frozen_headings = 0;
         }
     }
 
@@ -525,7 +597,11 @@ mod tests {
             let ram = vec![room, counter, 7];
             let heading = Some(format!("room-{room}"));
             let _ = i;
-            l.observe(ram, heading, mv);
+            // Pre-lock, `heading_movement` is always the same verdict as `mv` —
+            // `GlulxSession` only ever computes them differently once locked
+            // (see `observe`'s docs) — so every `drive`-driven test (all of
+            // them pre-lock) can pass the one value twice.
+            l.observe(ram, heading, mv, mv);
         }
     }
 
@@ -552,7 +628,7 @@ mod tests {
         // And it must not be sticky: it can never be checked against a snapshot, so
         // it could never be falsified by the usual `verify` either. Drop it and
         // learn again from scratch.
-        l.observe(ram, Some("Hall".to_string()), Movement::Changed);
+        l.observe(ram, Some("Hall".to_string()), Movement::Changed, Movement::Changed);
         assert_eq!(l.locked(), None, "an unverifiable lock is dropped, not kept forever");
     }
 
@@ -700,7 +776,7 @@ mod tests {
         let (base, words) = base_region();
         let mut l = RoomLock::locked_at(base, words, 0x1000);
         l.set_objects(Some(vec![0x2000, 0x2004, 0x2008]));
-        l.observe(vec![0x1000, 1, 7], Some("a".into()), Movement::Unchanged);
+        l.observe(vec![0x1000, 1, 7], Some("a".into()), Movement::Unchanged, Movement::Unchanged);
         assert_eq!(l.locked(), None, "the locked word holds nothing that is a room of this story");
         assert!(!l.needs_objects(), "…but the object table survived the re-learn");
     }
@@ -721,7 +797,7 @@ mod tests {
         let (base, words) = base_region();
         let mut l = RoomLock::locked_at(base, words, 0x1000);
         l.set_objects(Some(vec![0x2000, 0x2004]));
-        l.observe(vec![0x1000, 1, 7], Some("a".into()), Movement::Unchanged);
+        l.observe(vec![0x1000, 1, 7], Some("a".into()), Movement::Unchanged, Movement::Unchanged);
         assert_eq!(l.locked(), None, "0x1000 is not one of this story's objects");
     }
 
@@ -733,7 +809,7 @@ mod tests {
         let (base, words) = base_region();
         let mut l = RoomLock::locked_at(base, words, 0x1000);
         l.set_objects(Some(vec![0x2000, 0x2004]));
-        l.observe(vec![0, 1, 7], Some("a".into()), Movement::Unchanged);
+        l.observe(vec![0, 1, 7], Some("a".into()), Movement::Unchanged, Movement::Unchanged);
         assert_eq!(l.locked(), Some(0x1000), "a zero says nothing");
         assert_eq!(l.room_id(&[0, 1, 7]), None, "…and still identifies no room");
     }
@@ -746,14 +822,47 @@ mod tests {
         // reverse, the locked word moving with no heading printed at all (the car
         // driving out of Deep Street). Each used to `relearn`, and every room after
         // it was keyed by the hash of a NAME again.
+        //
+        // This is also exactly ONE of the [`FROZEN_LOCK_HEADINGS`] (SQ-1305)
+        // shape — word still, new heading — and one is under the threshold of
+        // three: `frozen_lock_survives_two_fresh_headings_but_drops_on_three`
+        // below is where the boundary itself is pinned.
         let (base, words) = base_region();
         let mut l = RoomLock::locked_at(base, words, 0x1000);
         l.set_objects(Some(vec![0x2000, 0x2004]));
-        l.observe(vec![0x2000, 1, 7], Some("Dormitory Room".into()), Movement::Unchanged);
-        l.observe(vec![0x2000, 2, 7], Some("Galley".into()), Movement::Changed);
+        l.observe(vec![0x2000, 1, 7], Some("Dormitory Room".into()), Movement::Unchanged, Movement::Changed);
+        l.observe(vec![0x2000, 2, 7], Some("Galley".into()), Movement::Changed, Movement::Changed);
         assert_eq!(l.locked(), Some(0x1000), "a flashback heading is not evidence about the lock");
-        l.observe(vec![0x2004, 3, 7], None, Movement::Unchanged);
+        l.observe(vec![0x2004, 3, 7], None, Movement::Unchanged, Movement::Unchanged);
         assert_eq!(l.locked(), Some(0x1000), "nor is a move the story narrated without a heading");
+    }
+
+    #[test]
+    fn frozen_lock_survives_two_fresh_headings_but_drops_on_three() {
+        // SQ-1305: a stale sidecar can point at a word that holds SOME object
+        // of the story forever — never zero, never outside the object table —
+        // so `verify`'s value check alone never falsifies it. Three straight
+        // turns of a brand-new heading with the locked word not moving an inch
+        // is the story narrating the player somewhere this word never noticed.
+        let (base, words) = base_region();
+        let mut l = RoomLock::locked_at(base, words, 0x1000);
+        l.set_objects(Some(vec![0x2000, 0x2004]));
+
+        // Turn 1: the arrival. No predecessor, so this is never frozen evidence.
+        l.observe(vec![0x2000, 1, 7], Some("Room A".into()), Movement::Unchanged, Movement::Changed);
+        assert_eq!(l.locked(), Some(0x1000));
+
+        // Turns 2 and 3: a fresh heading each time, the locked word never moving.
+        // Two in a row is still under the threshold — the SQ-1294b flashback is
+        // exactly one of these and must survive.
+        l.observe(vec![0x2000, 2, 7], Some("Room B".into()), Movement::Unchanged, Movement::Changed);
+        assert_eq!(l.locked(), Some(0x1000), "one fresh heading over a still word: the flashback shape");
+        l.observe(vec![0x2000, 3, 7], Some("Room C".into()), Movement::Unchanged, Movement::Changed);
+        assert_eq!(l.locked(), Some(0x1000), "two in a row still isn't three");
+
+        // The third in a row: the lock is frozen and must be dropped.
+        l.observe(vec![0x2000, 4, 7], Some("Room D".into()), Movement::Unchanged, Movement::Changed);
+        assert_eq!(l.locked(), None, "three straight fresh headings over a motionless word is a frozen lock");
     }
 
     #[test]
@@ -770,7 +879,7 @@ mod tests {
             Some(Movement::Changed),
             "the first turn of a session that booted locked is an arrival"
         );
-        l.observe(vec![0x2000, 1, 7], Some("Maze".into()), Movement::Changed);
+        l.observe(vec![0x2000, 1, 7], Some("Maze".into()), Movement::Changed, Movement::Changed);
         assert_eq!(l.movement(&[0x2000, 2, 7]), Some(Movement::Unchanged));
         assert_eq!(l.movement(&[0x2004, 2, 7]), Some(Movement::Changed), "a maze step is a move");
         assert_eq!(RoomLock::new(base, words).movement(&[0x2000, 1, 7]), None, "silent while learning");
@@ -828,12 +937,12 @@ mod tests {
         l.set_objects(Some(vec![far, far + 0x10, far + 0x20]));
         l.set_rooms(Some(rooms));
 
-        l.observe(vec![far, 1, 7], Some("Back Alley".into()), Movement::Unchanged);
+        l.observe(vec![far, 1, 7], Some("Back Alley".into()), Movement::Unchanged, Movement::Unchanged);
         assert_eq!(l.locked(), None, "nothing has moved yet");
 
         // One move north. Word 0 changes to the Sigil Street room; word 1 is a
         // turn counter that changes too and holds nothing that is a room.
-        l.observe(vec![far + 0x10, 2, 7], Some("Sigil Street".into()), Movement::Changed);
+        l.observe(vec![far + 0x10, 2, 7], Some("Sigil Street".into()), Movement::Changed, Movement::Changed);
         assert_eq!(
             l.locked(),
             Some(base),
@@ -852,8 +961,8 @@ mod tests {
         let mut l = RoomLock::new(base, 3);
         l.set_objects(Some(vec![far, far + 0x10, far + 0x20]));
         l.set_rooms(Some(rooms));
-        l.observe(vec![far, far, 7], Some("Back Alley".into()), Movement::Unchanged);
-        l.observe(vec![far + 0x10, far + 0x10, 7], Some("Sigil Street".into()), Movement::Changed);
+        l.observe(vec![far, far, 7], Some("Back Alley".into()), Movement::Unchanged, Movement::Unchanged);
+        l.observe(vec![far + 0x10, far + 0x10, 7], Some("Sigil Street".into()), Movement::Changed, Movement::Changed);
         assert_eq!(l.locked(), Some(base), "the lower of the two agreeing words");
     }
 
@@ -871,8 +980,8 @@ mod tests {
             (far + 0x10, Some("Maze".to_string())),
             (far + 0x20, Some("Maze".to_string())),
         ]));
-        l.observe(vec![far, far, 7], Some("Hall".into()), Movement::Unchanged);
-        l.observe(vec![far + 0x10, far + 0x20, 7], Some("Maze".into()), Movement::Changed);
+        l.observe(vec![far, far, 7], Some("Hall".into()), Movement::Unchanged, Movement::Unchanged);
+        l.observe(vec![far + 0x10, far + 0x20, 7], Some("Maze".into()), Movement::Changed, Movement::Changed);
         assert_eq!(
             l.locked(),
             None,
@@ -908,7 +1017,7 @@ mod tests {
             (Movement::Changed, 0x20),
             (Movement::Changed, 0x00),
         ] {
-            l.observe(vec![thing + step, far + step, 7], None, mv);
+            l.observe(vec![thing + step, far + step, 7], None, mv, mv);
         }
         assert_eq!(
             l.locked(),
@@ -930,7 +1039,7 @@ mod tests {
         let mut l = RoomLock::locked_at(base, 3, base);
         l.set_objects(Some(vec![far, far + 0x10, thedark]));
         l.set_rooms(Some(vec![(far, None), (far + 0x10, None)]));
-        l.observe(vec![thedark, 1, 7], Some("Darkness".into()), Movement::Changed);
+        l.observe(vec![thedark, 1, 7], Some("Darkness".into()), Movement::Changed, Movement::Changed);
         assert_eq!(
             l.locked(),
             Some(base),
@@ -969,7 +1078,7 @@ mod tests {
         let mut l = RoomLock::locked_at(base, words, 0x1000);
         l.set_objects(Some(vec![0x2000, 0x2004]));
         l.set_rooms(Some(vec![(0x2000, None)]));
-        l.observe(vec![0x1000, 1, 7], Some("a".into()), Movement::Unchanged);
+        l.observe(vec![0x1000, 1, 7], Some("a".into()), Movement::Unchanged, Movement::Unchanged);
         assert_eq!(l.locked(), None, "the locked word holds nothing that is a room of this story");
         assert!(!l.needs_rooms(), "…but the room set survived the re-learn");
         assert!(!l.needs_objects(), "…and so did the object table");
