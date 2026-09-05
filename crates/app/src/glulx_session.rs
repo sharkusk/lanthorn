@@ -196,6 +196,11 @@ pub struct GlulxSession {
     /// stop being asked. Reset by any answer. See [`GlulxSession::silent_look`]
     /// (SQ-1293).
     naming_look_refusals: u8,
+    /// Whether this story has EVER printed a `Subheader` room heading. Latches on
+    /// the first one and never clears, because it is the answer to "does this game
+    /// name its rooms in the buffer?" — see [`GlulxSession::status_line_room`]
+    /// (SQ-1302).
+    saw_buffer_heading: bool,
     /// When false, the game's own trailing `>` read prompt is kept in the
     /// transcript instead of being stripped. Default true. See
     /// [`Engine::set_strip_prompt`].
@@ -609,6 +614,7 @@ impl GlulxSession {
             last_room: None,
             room_lock: crate::glulx_roomlock::RoomLock::new(0, 0),
             naming_look_refusals: 0,
+            saw_buffer_heading: false,
             strip_prompt: true,
             store,
         };
@@ -634,10 +640,9 @@ impl GlulxSession {
         // hash when nothing is locked, which is every game that never learns.
         let ram = session.scan_ram();
         let awaiting_line_input = session.pending == InputKind::Line;
-        session.last_room = session
-            .appglk()
-            .take_room_heading(awaiting_line_input)
-            .map(|n| session.room_for(&n, &ram));
+        let heading = session.appglk().take_room_heading(awaiting_line_input);
+        let heading = session.name_this_room(heading, awaiting_line_input);
+        session.last_room = heading.map(|n| session.room_for(&n, &ram));
         Ok(session)
     }
 
@@ -1049,6 +1054,10 @@ impl GlulxSession {
         // command — cragne Manor's content warning (SQ-0733).
         let awaiting_line_input = self.pending == InputKind::Line;
         let heading = self.appglk().take_room_heading(awaiting_line_input);
+        // SQ-1302: a story that names its rooms only on the STATUS LINE — never in
+        // the buffer — is read from there instead, and everything below treats the
+        // answer as the heading it stands in for.
+        let heading = self.name_this_room(heading, awaiting_line_input);
         // SQ-1286: the learner scores every RAM word, and what tells the room
         // apart from the counters that also change with it is that its value is a
         // real OBJECT of this story. Walk the object table once, the first turn a
@@ -1103,8 +1112,16 @@ impl GlulxSession {
         // already out of the way and anything the question stirs up can simply be
         // thrown away with the rest of it.
         if self.needs_a_room_name(&heading, movement) {
-            if let Some(looked) = self.silent_look() {
-                self.last_room = Some(self.room_for(&looked, &ram));
+            // SQ-1302: the refusal itself is what unlocks the status line
+            // (`status_line_room`), so read it on the turn the story declined
+            // rather than leaving the opening room nameless for one more turn.
+            let looked = self.silent_look();
+            let named = match looked {
+                Some(n) => Some(n),
+                None => self.status_line_room(awaiting_line_input),
+            };
+            if let Some(n) = named {
+                self.last_room = Some(self.room_for(&n, &ram));
             }
         }
         let location = self.last_room.clone();
@@ -1195,6 +1212,68 @@ impl GlulxSession {
         }
         self.room_lock.room_id(ram).is_some()
             && movement != crate::glulx_roomlock::Movement::Unchanged
+    }
+
+    /// This turn's room heading, falling back to the STATUS LINE for a story that
+    /// will not print one (SQ-1302).
+    ///
+    /// *The Wizard Sniffer* (release 1 / serial 171007 / Inform 7 build 6L38) is
+    /// the report — *"doesn't seem to detect any rooms at all"*, and literally
+    /// none. It prints the room name ONLY into its two-row status grid
+    /// (`" Atop a Mountain"` over `" Exit: north"`) and never emits a `Subheader`
+    /// run in the buffer, so `StoryScan` had nothing to capture; and because
+    /// [`crate::glulx_roomlock`] scores its candidates against observed heading
+    /// CHANGES, every turn read `Unchanged` and the lock could not learn its way
+    /// out either. Nor could [`Self::silent_look`] (SQ-1293): a `look` here prints
+    /// the description and, again, no heading.
+    ///
+    /// The name was on the player's screen the whole time, and this reads it —
+    /// [`crate::glk_backend::AppGlk::status_room_name`], the Glk twin of
+    /// `zvm::location::status_line_room_name`. What matters is *when*, because a
+    /// status line is chrome the author wrote and a heading is the room's own name;
+    /// three gates keep the chrome from reaching a story the heading already
+    /// serves:
+    ///
+    /// * **The buffer wins, for good.** The moment this story prints one heading,
+    ///   [`Self::saw_buffer_heading`] latches and the status line is never read
+    ///   again. A status line is not always a room even when the game has one —
+    ///   FooFoo's single row is the bare label `" Exits:"` while its heading says
+    ///   "Studio Apartment".
+    /// * **Asking beats reading.** The status line is consulted only once a silent
+    ///   `look` has actually been spent and come back nameless
+    ///   (`naming_look_refusals`), so a story that WILL name its room when asked is
+    ///   still asked, and answers with its own spelling. Counterfeit Monkey's grid
+    ///   reads `" Back Alley, noon"` where its heading reads "Back Alley"; SQ-1293's
+    ///   route is untouched because that look never refuses.
+    /// * **The same banner test a heading gets.** A name is only a room when the
+    ///   turn hands the player the parser's command prompt (SQ-0732 / SQ-0733); a
+    ///   status line painted behind a title card or a "press any key" page is as
+    ///   much a banner as a `Subheader` line printed on one.
+    ///
+    /// A grid-derived name then flows on exactly as a heading would, the room lock
+    /// included — where a REPEATED name is `Ambiguous` for the same reason a
+    /// repeated heading is, so a status-line-only story keeps name-derived room ids
+    /// rather than risking a lock learned from a signal that can never say
+    /// "unchanged".
+    fn name_this_room(&mut self, heading: Option<String>, awaiting_line_input: bool) -> Option<String> {
+        if heading.is_some() {
+            self.saw_buffer_heading = true;
+            return heading;
+        }
+        self.status_line_room(awaiting_line_input)
+    }
+
+    /// The room name on the status line, if this story has earned the right to be
+    /// read that way — see [`Self::name_this_room`] for all three gates.
+    fn status_line_room(&mut self, awaiting_line_input: bool) -> Option<String> {
+        if self.saw_buffer_heading
+            || self.naming_look_refusals == 0
+            || !awaiting_line_input
+            || !self.appglk().ends_at_read_prompt()
+        {
+            return None;
+        }
+        self.appglk().status_room_name()
     }
 
     /// Whether the story owes us a room name that only asking will get.
@@ -3749,7 +3828,16 @@ mod tests {
             .expect("Counterfeit Monkey boots");
         let _ = s.take_transcript();
         if !ask {
+            // A session with NO route to a room name, which is what makes the look
+            // the only difference between the two. Both routes have to be shut off:
+            // the refusal cap stops the silent look, and pretending the buffer has
+            // already named a room stops the status line (SQ-1302) — which would
+            // otherwise answer "Back Alley, noon" off Counterfeit Monkey's own grid
+            // and leave this case comparing two sessions that both know where they
+            // are. No real session is ever in this state; that is the point of a
+            // control.
             s.naming_look_refusals = NAMING_LOOK_REFUSALS;
+            s.saw_buffer_heading = true;
         }
         let _ = s.submit("y");
         let _ = s.submit("andra");

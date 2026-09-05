@@ -126,6 +126,20 @@ discovered it.
   Counterfeit Monkey never announces until you type LOOK — lanthorn asks it, by
   running a `look` in a copy of the game and throwing everything but the answer
   away (SQ-1293, SQ-1294).
+  And when a game will not print a heading at all, the **status line** is the
+  answer. *The Wizard Sniffer* keeps the room name entirely in its own two-row
+  status bar — `Atop a Mountain` over `Exit: north` — and prints nothing but the
+  description below, so every route above came up empty and the map stayed blank
+  for the whole game. Reading the bar is exactly what lanthorn has always done for
+  the Z-machine, and it now does it for Glk too, under three conditions that keep
+  it off any game the heading already serves: the story must have printed no
+  heading anywhere, the silent `look` must have been spent and come back nameless
+  (so a game that *will* name its room when asked still answers in its own words),
+  and the turn must end at the command prompt, so a status bar behind a title card
+  is as much a banner as a bold line on one. What the bar holds must also look like
+  a room: City of Secrets paints "For instructions and information type ABOUT…"
+  there and FooFoo's whole bar is the bare word "Exits:", and a sentence or an
+  empty label is not a place (SQ-1302).
 - **Scott Adams** adventures feed their locations straight through the same
   engine-agnostic pipeline — nothing special to configure.
 
