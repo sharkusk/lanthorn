@@ -29,6 +29,21 @@ Absolute URLs or no link.
 
 ### Added
 
+- **The exported SVG map now shows the passages between the rooms.** Every
+  connection is drawn as its own rounded, right-angled line running in the
+  channel between the rooms — never through a room box, never on top of
+  another passage — arriving at its own spot on the room's edge, with an
+  arrowhead saying which way it goes: one arrow for a one-way passage, one at
+  each end for a way you can walk both directions. A passage drawn a different
+  way round than the word you type (a northeast that had to be walked round a
+  corner) carries a small `NE` beside the arrow, so the map never quietly
+  renames an exit. Room boxes grow to fit their names instead of cropping
+  them, doors are marked with a bar across the line, a secret exit the story
+  gates is dotted, up/down/in/out passages get a lettered badge on the side of
+  the room they leave by — with the destination named when it is on another
+  layer — and a legend in the corner says what every mark means. The whole
+  drawing is styled by a stylesheet in the file, so the colours can be changed
+  without re-exporting. Nothing in it needs a special font.
 - **`lanthorn-mapgen` now splits a story's mazes and portal-only regions onto
   their own map layers**, the way accepting every one of the interpreter's own
   "give these rooms their own layer?" prompts would. A generated map's `.svg`,
