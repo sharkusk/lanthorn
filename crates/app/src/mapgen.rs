@@ -466,7 +466,9 @@ fn name_region_by_entry(graph: &MapGraph, region: mapper::layer::Region) -> mapp
 ///
 /// `layout` runs the mapper's own tidy pass ([`mapper::layout::relayout_auto`])
 /// over the finished graph, which is what gives every room a position; without
-/// it the graph is pure topology and every `pos` is `None`.
+/// it the graph is pure topology and every `pos` is `None`. It runs **once per
+/// layer** ([`layout_all_layers`]) rather than once over the whole graph — see
+/// that function's doc comment for why (SQ-1309).
 ///
 /// The story is mounted through [`crate::hints::load_mounted_story`] — the same
 /// call `startup.rs` boots from — so a Blorb, a zip and a disk image all reach
@@ -494,11 +496,62 @@ pub fn generate_with_options(
 
     if layout {
         let t = Instant::now();
-        mapper::layout::relayout_auto(&mut map.graph);
+        layout_all_layers(&mut map.graph);
         map.layout_time = Some(t.elapsed());
     }
     annotate_rooms(&mut map);
     Ok(map)
+}
+
+/// Lay out every layer of `graph` INDEPENDENTLY, the way the live app's
+/// `run_tidy_pipeline`/`tidy_layer_silent` (`crates/app/src/tidy.rs`) tidy one
+/// layer at a time via `graph.layer_subgraph` (SQ-1309).
+///
+/// Calling [`mapper::layout::relayout_auto`] once over the WHOLE graph runs every
+/// layer's rooms through one shared stress-solve and one shared pack stage. Two
+/// layers connected only by a portal (a maze reached by `Up`, a side region
+/// reached by a one-way stub) are still one graph-connected component to that
+/// solve, so it treats a maze's tangle of one-way passages as evidence about
+/// where the PARENT layer's rooms belong, and packs rooms from unrelated layers
+/// into the same cells the way it would pack two components of one real layer.
+/// On Zork I this misplaced the Torch Room's four rooms entirely (a maze-free
+/// layer, yet colliding with Main-layer cells it was never laid out against) and
+/// pulled Main's own East-West Passage and Chasm off their rows and columns.
+///
+/// `graph.layer_subgraph(layer)` already drops every connection that crosses a
+/// layer boundary (both endpoints must be in `layer`), so running the exact same
+/// [`mapper::layout::relayout_auto`] pass on each layer's subgraph in isolation
+/// gives each layer its own solve and its own pack, with no other layer's rooms
+/// or portals in the room to compete with. A maze layer gets no special-case
+/// here (unlike the live app, which freezes a maze layer's positions once it has
+/// any — SQ-0671): mapgen has no earlier incremental placement to freeze, so the
+/// maze still needs an initial layout, and running it in its own subgraph rather
+/// than freezing it here confines whatever a maze's unsatisfiable geometry does
+/// to the maze's own layer.
+pub fn layout_all_layers(graph: &mut MapGraph) {
+    let layer_ids: Vec<mapper::layer::LayerId> = graph.layers().keys().copied().collect();
+    for layer in layer_ids {
+        let mut sub = graph.layer_subgraph(layer);
+        mapper::layout::relayout_auto(&mut sub);
+
+        for id in graph.rooms_in_layer(layer) {
+            if let Some(p) = sub.room(id).and_then(|r| r.pos) {
+                graph.set_pos(id, p);
+            }
+        }
+
+        let n = graph.connections().len();
+        for idx in 0..n {
+            let c = graph.connections()[idx].clone();
+            if graph.layer_of(c.origin) == layer && graph.layer_of(c.dest) == layer {
+                if let Some(sc) =
+                    sub.connections().iter().find(|s| s.origin == c.origin && s.dir == c.dir && s.dest == c.dest)
+                {
+                    graph.set_conn_distorted(idx, sc.distorted);
+                }
+            }
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------

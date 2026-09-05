@@ -146,7 +146,8 @@ pub fn build_axis_constraints(graph: &MapGraph, ids: &[RoomId], gap: f64) -> Axi
 
     // Directional constraints, STRONGEST EVIDENCE FIRST (SQ-1287/SQ-1291) rather than in the
     // order the player happened to mint them. Three tiers, insertion order breaking ties inside
-    // each so the pass stays deterministic:
+    // each so the pass stays deterministic — EXCEPT that within a tier, a cardinal (N/S/E/W)
+    // edge is tried before a diagonal one (SQ-1309):
     //
     //   0. A **reciprocated compass pair** — the passage walked from both ends, the two
     //      observations agreeing — is the best evidence about geometry the map has, so it claims
@@ -164,6 +165,19 @@ pub fn build_axis_constraints(graph: &MapGraph, ids: &[RoomId], gap: f64) -> Axi
     //
     // Losing an Up/Down constraint costs nothing on screen: `mark_distorted` gates on
     // `grid_offset`, so a stairwell is never drawn distorted whatever happens here.
+    //
+    // **Cardinal before diagonal, within a tier** (SQ-1309). A cycle on the grid can always be
+    // broken by stretching a diagonal instead of severing a cardinal pair: a diagonal edge only
+    // pins its endpoint to the right QUADRANT (`mark_distorted`/`edge_is_satisfied` are sign-based
+    // per axis, not exact-offset — see their doc comments), so a diagonal room landing one cell
+    // further out than a unit step still satisfies its own bearing and draws as a slightly wider
+    // corner, never as a broken door. A cardinal pair has no such slack: E/W or N/S mean exactly
+    // one row or column apart, so severing one is a door the player can no longer see. Zork I's
+    // house ring closes exactly this cycle — West of House → North of House → Behind House by
+    // three reciprocated diagonals, then Behind House → Kitchen → Living Room → West of House by
+    // three reciprocated CARDINALS back to the room the ring started from — and insertion order
+    // alone (the diagonals happened to be minted first) sacrificed all three cardinal doors
+    // instead of stretching one diagonal corner.
     let conns = graph.connections();
     let mut order: Vec<usize> = (0..conns.len()).collect();
     order.sort_by_key(|&ci| {
@@ -178,7 +192,14 @@ pub fn build_axis_constraints(graph: &MapGraph, ids: &[RoomId], gap: f64) -> Axi
         } else {
             1 // one-way compass edge
         };
-        (tier, ci)
+        let is_diagonal = matches!(
+            c.dir,
+            crate::direction::Direction::NE
+                | crate::direction::Direction::NW
+                | crate::direction::Direction::SE
+                | crate::direction::Direction::SW
+        );
+        (tier, is_diagonal, ci)
     });
     for ci in order {
         let conn = &conns[ci];
@@ -534,5 +555,119 @@ mod tests {
         let has_10 = ac.x.iter().any(|c| c.left == 1 && c.right == 0 && c.gap == 0.0);
         assert!(has_01, "missing X equality leg (0,1,0.0)");
         assert!(has_10, "missing X equality leg (1,0,0.0)");
+    }
+
+    // ── SQ-1309: a cardinal reciprocal outranks a diagonal reciprocal on a shared tier ──
+
+    /// A direct, minimal version of the conflict SQ-1309's tiering exists for: a diagonal
+    /// reciprocal pair and a cardinal reciprocal pair that flatly disagree about which of two
+    /// rooms is west of the other, so exactly one must be dropped as the cycle-closer. `1 NE 2`
+    /// (reciprocated by `2 SW 1`) says room 1 is west of room 2; `1 W 2` (reciprocated by `2 E 1`)
+    /// says the opposite. Both pairs share tier 0 (SQ-1287: both reciprocated), so before
+    /// SQ-1309 raw insertion order broke the tie — here the diagonal is minted first, so it would
+    /// win and the cardinal would be the one `creates_cycle` drops. Falsify by removing the
+    /// `is_diagonal` term from the sort key in `build_axis_constraints`: the cardinal legs (indices
+    /// 2 and 3, minted after the diagonal) are then the ones in `ac.dropped`.
+    #[test]
+    fn a_cardinal_reciprocal_beats_a_directly_conflicting_diagonal_reciprocal() {
+        let mut g = two_rooms();
+        g.add_edge(1, Direction::NE, 2); // ci=0: diagonal, minted FIRST — says 1 west of 2
+        g.add_edge(2, Direction::SW, 1); // ci=1: its reciprocal partner
+        g.add_edge(1, Direction::W, 2); // ci=2: cardinal, minted SECOND — says 2 west of 1
+        g.add_edge(2, Direction::E, 1); // ci=3: its reciprocal partner
+        let ac = build_axis_constraints(&g, &[1, 2], 1.0);
+        // Both x constraints agree (the reciprocal cardinal pair is redundant with itself) and
+        // both are the CARDINAL's claim: local idx 1 (room 2) west of idx 0 (room 1).
+        assert!(ac.x.iter().all(|c| (c.left, c.right) == (1, 0)), "the cardinal's claim (2 west of 1) wins: {:?}", ac.x);
+        // The diagonal pair (ci 0 and 1) is what gives way, not the cardinal (ci 2 and 3).
+        assert!(ac.dropped.contains(&0) || ac.dropped.contains(&1), "a diagonal leg must be dropped: {:?}", ac.dropped);
+        assert!(!ac.dropped.contains(&2) && !ac.dropped.contains(&3), "the cardinal pair must survive: {:?}", ac.dropped);
+    }
+
+    /// The exact shape around Zork I's white house: a diagonal ring — West of House ↔ North of
+    /// House ↔ Behind House ↔ South of House ↔ West of House, each leg a reciprocated diagonal —
+    /// plus the game's own one-way N/S/E/W bearings between those same four rooms, plus the front
+    /// door itself: Behind House ↔ Kitchen ↔ Living Room, each leg a reciprocated CARDINAL.
+    ///
+    /// On the real map (SQ-1309) this shape's cardinal doors were dropped, but NOT by a raw
+    /// `creates_cycle` tie here — on this isolated 6-room graph, nothing conflicts and this test
+    /// passes unchanged with or without the `is_diagonal` tiering above (verified: reverting it
+    /// leaves this test green). The real cause was `app::mapgen` running one shared relayout over
+    /// EVERY layer at once, so the house's chain competed with a hundred unrelated rooms from
+    /// other layers for cells and `contiguify` (`mod.rs`) evicted the house's own chain members as
+    /// if they were foreign interlopers. This test stays as an end-to-end regression on the shape
+    /// itself — see `crates/app/tests/suites/sq1308_mapgen_layers.rs` and the real-game assertions
+    /// in `sq1306_mapgen`/`sq1308_mapgen_layers` for the tests that actually falsify against the
+    /// per-layer and contiguify fixes.
+    #[test]
+    fn a_cardinal_reciprocal_outranks_a_diagonal_reciprocal_closing_the_same_cycle() {
+        use Direction::*;
+        let mut g = MapGraph::new();
+        for (id, name) in [
+            (68u32, "West of House"),
+            (143, "North of House"),
+            (217, "South of House"),
+            (89, "Behind House"),
+            (28, "Kitchen"),
+            (79, "Living Room"),
+        ] {
+            g.upsert_room(id, name.into());
+        }
+        // Diagonal ring: three reciprocated diagonal pairs.
+        g.add_edge(68, NE, 143);
+        g.add_edge(143, SW, 68);
+        g.add_edge(143, SE, 89);
+        g.add_edge(89, NW, 143);
+        g.add_edge(217, NE, 89);
+        g.add_edge(89, SW, 217);
+        // The game's own one-way N/S/E/W bearings among the ring rooms (not reciprocated).
+        g.add_edge(68, N, 143);
+        g.add_edge(68, S, 217);
+        g.add_edge(217, W, 68);
+        g.add_edge(89, N, 143);
+        g.add_edge(143, E, 89);
+        g.add_edge(89, S, 217);
+        g.add_edge(217, E, 89);
+        // The front door: two reciprocated cardinal pairs closing the cycle back toward West of House.
+        g.add_edge(89, W, 28);
+        g.add_edge(28, E, 89);
+        g.add_edge(28, W, 79);
+        g.add_edge(79, E, 28);
+
+        super::super::relayout_auto(&mut g);
+
+        let pos = |id: u32| g.room(id).unwrap().pos.unwrap();
+        let (p_kitchen, p_behind, p_living, p_west) = (pos(28), pos(89), pos(79), pos(68));
+
+        // Kitchen, Behind House and Living Room all sit on one row, in that order — and,
+        // critically, no OTHER room in the graph rounds onto the row strictly between the
+        // Kitchen/Behind and Kitchen/Living pairs (the shape SQ-1309's `contiguify` protection
+        // in `mod.rs` also guards, though nothing here should trigger it — this graph has no
+        // room outside the chain to interlope).
+        assert_eq!(p_kitchen.1, p_behind.1, "Kitchen and Behind House share a row: {p_kitchen:?} {p_behind:?}");
+        assert_eq!(p_kitchen.1, p_living.1, "Kitchen and Living Room share a row: {p_kitchen:?} {p_living:?}");
+        let (lo, hi) = (p_kitchen.0.min(p_behind.0), p_kitchen.0.max(p_behind.0));
+        assert!(
+            !g.rooms().any(|r| r.id != 28
+                && r.id != 89
+                && r.pos.is_some_and(|p| p.1 == p_kitchen.1 && p.0 > lo && p.0 < hi)),
+            "no foreign room interleaves Kitchen and Behind House on their row"
+        );
+        let (lo, hi) = (p_kitchen.0.min(p_living.0), p_kitchen.0.max(p_living.0));
+        assert!(
+            !g.rooms().any(|r| r.id != 28
+                && r.id != 79
+                && r.pos.is_some_and(|p| p.1 == p_kitchen.1 && p.0 > lo && p.0 < hi)),
+            "no foreign room interleaves Kitchen and Living Room on their row"
+        );
+        assert_ne!(p_living, p_west, "Living Room must not land on West of House's own cell");
+
+        let distorted = |o: RoomId, d: Direction, dest: RoomId| {
+            g.connections().iter().find(|c| c.origin == o && c.dir == d && c.dest == dest).unwrap().distorted
+        };
+        assert!(!distorted(89, W, 28), "Behind House→W→Kitchen must survive");
+        assert!(!distorted(28, E, 89), "Kitchen→E→Behind House must survive");
+        assert!(!distorted(28, W, 79), "Kitchen→W→Living Room must survive");
+        assert!(!distorted(79, E, 28), "Living Room→E→Kitchen must survive");
     }
 }

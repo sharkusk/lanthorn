@@ -299,3 +299,249 @@ fn split_layers_runs_even_when_layout_is_skipped() {
     // still runs `split_layers` without panicking and leaves one layer.
     assert_eq!(map.graph.layers().len(), 1);
 }
+
+// ---------------------------------------------------------------------------
+// SQ-1309: each layer must be laid out independently of every other layer
+// ---------------------------------------------------------------------------
+
+/// The room in `graph` whose label is exactly `label`. Ids, not names, are what a
+/// reader assigns, so a test that wants to pin GEOMETRY names rooms this way rather
+/// than hardcoding an id.
+fn room_id(graph: &MapGraph, label: &str) -> mapper::graph::RoomId {
+    graph
+        .rooms()
+        .find(|r| r.label() == label)
+        .unwrap_or_else(|| panic!("no room named {label:?}"))
+        .id
+}
+
+/// True if the connection `from --dir--> to` (by label) is marked `distorted`.
+fn edge_distorted(graph: &MapGraph, from: &str, dir: Direction, to: &str) -> bool {
+    let (o, d) = (room_id(graph, from), room_id(graph, to));
+    graph
+        .connections()
+        .iter()
+        .find(|c| c.origin == o && c.dir == dir && c.dest == d)
+        .map(|c| c.distorted)
+        .unwrap_or_else(|| panic!("no edge {from} -{dir:?}-> {to}"))
+}
+
+/// A reproduction of Zork I's Torch Room layer's SHAPE (SQ-1309): four rooms, a
+/// trivially planar diamond, on their OWN layer, alongside an unrelated 4x4-grid
+/// "town square" on Main — plus a one-way portal from the small layer back into
+/// Main (the real game's `Altar --D--> Cave`, a room on Main), so the two layers
+/// are still ONE connected component of the raw graph (`connected_components`
+/// counts `Down`/`Up`/`In`/`Out` edges as connecting).
+///
+/// This asserts what `layout_all_layers` must guarantee — the small layer's shape
+/// exactly matches the real game (Torch Room, Temple, Altar in one column, Egyptian
+/// Room east of the Temple, nothing distorted) and Main's own grid stays intact —
+/// but note it does NOT itself falsify against `mapper::layout::relayout_auto` run
+/// once over the whole graph: at this scale (twenty rooms, one thin portal, no
+/// interlocking chains crossing near the origin) a single combined relayout
+/// happens to reach the same answer anyway, verified by reverting
+/// `layout_all_layers`'s body to a bare `relayout_auto(graph)` call and rerunning
+/// this case (still green). The real defect needed Zork I's actual richness — 64
+/// Main rooms with many crossing E/W and N/S chains — to manifest; the real-game
+/// Zork I assertions below (`torch_room_layer_matches_the_real_game_and_is_not_distorted`
+/// and the Main-layer row/column cases) are what actually falsifies this fix.
+/// This case stays as a regression pin on the SHAPE and on `layout_all_layers`'s
+/// documented contract (each layer solved and packed independently).
+///
+/// The Up/Down pair Temple↔Torch Room agrees with the N/S pair; the Up/Down pair
+/// Temple↔Egyptian Room CONTRADICTS the E/W pair and must yield (SQ-1291: Up/Down
+/// never outranks a compass placement) — that part needs no per-layer fix, since
+/// `mark_distorted` already gates on `grid_offset` (`None` for Up/Down) and
+/// SQ-1287/1291's tiers already rank Up/Down last.
+#[test]
+fn a_small_layer_lays_out_independently_of_an_unrelated_main_layer_component() {
+    let mut g = MapGraph::new();
+    // The small layer: Temple/Torch Room/Altar/Egyptian Room, on their own layer.
+    for (id, name) in [(1u32, "Temple"), (2, "Torch Room"), (3, "Altar"), (4, "Egyptian Room")] {
+        g.upsert_room(id, name.into());
+    }
+    let small_layer = g.new_layer(None, "Torch Room".into());
+    for id in [1u32, 2, 3, 4] {
+        g.set_room_layer(id, small_layer);
+    }
+    g.add_edge(1, Direction::N, 2);
+    g.add_edge(2, Direction::S, 1);
+    g.add_edge(1, Direction::E, 4);
+    g.add_edge(4, Direction::W, 1);
+    g.add_edge(1, Direction::S, 3);
+    g.add_edge(3, Direction::N, 1);
+    g.add_edge(1, Direction::Up, 2); // agrees with N/S
+    g.add_edge(2, Direction::Down, 1);
+    g.add_edge(1, Direction::Down, 4); // CONTRADICTS E/W — must yield
+    g.add_edge(4, Direction::Up, 1);
+
+    // An unrelated Main-layer 4x4 grid of rooms, richly cross-linked with reciprocal
+    // E/W and N/S chains along every row and column (a "town square"), the way
+    // Zork I's own 64-room Main layer is.
+    for y in 0..4i32 {
+        for x in 0..4i32 {
+            let id = 100 + (y * 4 + x) as u32;
+            g.upsert_room(id, format!("Hall {x},{y}"));
+        }
+    }
+    let id_at = |x: i32, y: i32| 100 + (y * 4 + x) as u32;
+    for y in 0..4i32 {
+        for x in 0..4i32 {
+            if x + 1 < 4 {
+                g.add_edge(id_at(x, y), Direction::E, id_at(x + 1, y));
+                g.add_edge(id_at(x + 1, y), Direction::W, id_at(x, y));
+            }
+            if y + 1 < 4 {
+                g.add_edge(id_at(x, y), Direction::S, id_at(x, y + 1));
+                g.add_edge(id_at(x, y + 1), Direction::N, id_at(x, y));
+            }
+        }
+    }
+    // The real game's cross-layer portal: Altar --Down--> Cave (a Main room). This is
+    // the ONLY thing that makes the small layer and Main one connected component.
+    g.add_edge(3, Direction::Down, id_at(0, 0));
+
+    app::mapgen::layout_all_layers(&mut g);
+
+    let pos = |label: &str| g.room(room_id(&g, label)).unwrap().pos.unwrap();
+    let (p_temple, p_torch, p_altar, p_egyptian) =
+        (pos("Temple"), pos("Torch Room"), pos("Altar"), pos("Egyptian Room"));
+
+    assert_eq!(p_torch, (p_temple.0, p_temple.1 - 1), "Torch Room is north of the Temple: {p_torch:?} {p_temple:?}");
+    assert_eq!(p_altar, (p_temple.0, p_temple.1 + 1), "Altar is south of the Temple: {p_altar:?} {p_temple:?}");
+    assert_eq!(
+        p_egyptian,
+        (p_temple.0 + 1, p_temple.1),
+        "Egyptian Room is east of the Temple: {p_egyptian:?} {p_temple:?}"
+    );
+
+    for (from, dir, to) in [
+        ("Temple", Direction::N, "Torch Room"),
+        ("Torch Room", Direction::S, "Temple"),
+        ("Temple", Direction::E, "Egyptian Room"),
+        ("Egyptian Room", Direction::W, "Temple"),
+        ("Temple", Direction::S, "Altar"),
+        ("Altar", Direction::N, "Temple"),
+    ] {
+        assert!(!edge_distorted(&g, from, dir, to), "{from} -{dir:?}-> {to} must not be distorted");
+    }
+
+    // Main's own grid must be undisturbed too: each layer is laid out (and anchored
+    // at its own origin) independently, so raw coordinates may coincide across
+    // layers — that is fine, since they are rendered on separate planes — but
+    // Main's sixteen rooms must still occupy sixteen DISTINCT cells among themselves.
+    let main_labels: Vec<String> =
+        (0..4).flat_map(|y| (0..4).map(move |x| format!("Hall {x},{y}"))).collect();
+    let main_cells: std::collections::BTreeSet<(i32, i32)> =
+        main_labels.iter().map(|l| pos(l)).collect();
+    assert_eq!(main_cells.len(), 16, "Main's own grid must not have collapsed: {main_cells:?}");
+}
+
+/// Zork I's real Torch Room layer (SQ-1309), the shape the synthetic case above
+/// reproduces: four rooms — Temple, Torch Room, Altar, Egyptian Room — reached from
+/// Main only through Altar's `Down` portal into the Cave. This is the real-game
+/// falsifier for the per-layer isolation fix in `app::mapgen::layout_all_layers`:
+/// before it, this exact layer's four rooms were laid out in the SAME relayout call
+/// as all 64 of Main's rooms and 111 rooms overall, and landed with EVERY compass
+/// edge distorted and nonsense positions (pinned in the SQ-1309 quest history).
+#[test]
+fn torch_room_layer_matches_the_real_game_and_is_not_distorted() {
+    let Some(path) = story("zork1-invclues-r52-s871125.z5") else {
+        eprintln!("SKIP: stories/zork1-invclues-r52-s871125.z5 absent");
+        return;
+    };
+    let map = mapgen::generate(&path, true).expect("Zork I must map");
+    let g = &map.graph;
+    let pos = |label: &str| g.room(room_id(g, label)).unwrap().pos.unwrap();
+    let (p_temple, p_torch, p_altar, p_egyptian) =
+        (pos("Temple"), pos("Torch Room"), pos("Altar"), pos("Egyptian Room"));
+
+    assert_eq!(p_torch, (p_temple.0, p_temple.1 - 1), "Torch Room north of Temple: {p_torch:?} {p_temple:?}");
+    assert_eq!(p_altar, (p_temple.0, p_temple.1 + 1), "Altar south of Temple: {p_altar:?} {p_temple:?}");
+    assert_eq!(
+        p_egyptian,
+        (p_temple.0 + 1, p_temple.1),
+        "Egyptian Room east of Temple: {p_egyptian:?} {p_temple:?}"
+    );
+    for (from, dir, to) in [
+        ("Temple", Direction::N, "Torch Room"),
+        ("Torch Room", Direction::S, "Temple"),
+        ("Temple", Direction::E, "Egyptian Room"),
+        ("Egyptian Room", Direction::W, "Temple"),
+        ("Temple", Direction::S, "Altar"),
+        ("Altar", Direction::N, "Temple"),
+    ] {
+        assert!(!edge_distorted(g, from, dir, to), "{from} -{dir:?}-> {to} must not be distorted");
+    }
+}
+
+/// Zork I's white house (SQ-1309): a diagonal ring — West of House, North of House,
+/// Behind House, South of House — plus the front door itself, Behind House ↔
+/// Kitchen ↔ Living Room, each leg a reciprocated CARDINAL. Before the per-layer
+/// isolation fix, the house's own "Rocky Ledge" layer (18 rooms) was laid out
+/// alongside Main's 64 and every other layer in one shared relayout, and Kitchen's
+/// real east/west doors — walked from both ends in the game — came out distorted.
+#[test]
+fn white_house_cardinal_doors_are_not_distorted() {
+    let Some(path) = story("zork1-invclues-r52-s871125.z5") else {
+        eprintln!("SKIP: stories/zork1-invclues-r52-s871125.z5 absent");
+        return;
+    };
+    let map = mapgen::generate(&path, true).expect("Zork I must map");
+    let g = &map.graph;
+    for (from, dir, to) in [
+        ("Behind House", Direction::W, "Kitchen"),
+        ("Kitchen", Direction::E, "Behind House"),
+        ("Kitchen", Direction::W, "Living Room"),
+        ("Living Room", Direction::E, "Kitchen"),
+    ] {
+        assert!(!edge_distorted(g, from, dir, to), "{from} -{dir:?}-> {to} must not be distorted");
+    }
+}
+
+/// Zork I's Round Room / Troll Room / East-West Passage / Chasm (SQ-1309): a real
+/// case of the `contiguify` chain-member-eviction bug fixed in `mapper::layout::mod`
+/// — East-West Passage is a genuine member of the Round Room/Troll Room row (a
+/// reciprocated E/W chain) but, before the fix, an unrelated column chain elsewhere
+/// on the same 64-room Main layer treated it as a foreign interloper and evicted it
+/// off that row entirely.
+#[test]
+fn east_west_passage_stays_on_the_round_room_row_and_the_chasm_column_is_intact() {
+    let Some(path) = story("zork1-invclues-r52-s871125.z5") else {
+        eprintln!("SKIP: stories/zork1-invclues-r52-s871125.z5 absent");
+        return;
+    };
+    let map = mapgen::generate(&path, true).expect("Zork I must map");
+    let g = &map.graph;
+    let pos = |label: &str| g.room(room_id(g, label)).unwrap().pos.unwrap();
+
+    // East-West Passage shares the Round Room / Troll Room row.
+    let (p_round, p_troll, p_ew) = (pos("Round Room"), pos("The Troll Room"), pos("East-West Passage"));
+    assert_eq!(p_ew.1, p_round.1, "East-West Passage shares the Round Room's row: {p_ew:?} {p_round:?}");
+    assert_eq!(p_ew.1, p_troll.1, "East-West Passage shares the Troll Room's row: {p_ew:?} {p_troll:?}");
+    for (from, dir, to) in [
+        ("East-West Passage", Direction::E, "Round Room"),
+        ("Round Room", Direction::W, "East-West Passage"),
+        ("East-West Passage", Direction::W, "The Troll Room"),
+        ("The Troll Room", Direction::E, "East-West Passage"),
+    ] {
+        assert!(!edge_distorted(g, from, dir, to), "{from} -{dir:?}-> {to} must not be distorted");
+    }
+
+    // Chasm sits above North-South Passage, in the Round Room's own column.
+    let (p_chasm, p_ns) = (pos("Chasm"), pos("North-South Passage"));
+    assert_eq!(p_chasm.0, p_round.0, "Chasm shares the Round Room's column: {p_chasm:?} {p_round:?}");
+    assert_eq!(p_chasm.0, p_ns.0, "Chasm shares North-South Passage's column: {p_chasm:?} {p_ns:?}");
+    assert!(p_chasm.1 < p_ns.1, "Chasm is north (smaller y) of North-South Passage: {p_chasm:?} {p_ns:?}");
+    for (from, dir, to) in [("North-South Passage", Direction::N, "Chasm"), ("Chasm", Direction::S, "North-South Passage")] {
+        assert!(!edge_distorted(g, from, dir, to), "{from} -{dir:?}-> {to} must not be distorted");
+    }
+
+    // Reservoir South sits northeast of the Chasm (reciprocated diagonal).
+    let p_reservoir = pos("Reservoir South");
+    assert_eq!(p_reservoir.0, p_chasm.0 + 1, "Reservoir South is one east of the Chasm: {p_reservoir:?} {p_chasm:?}");
+    assert_eq!(p_reservoir.1, p_chasm.1 - 1, "Reservoir South is one north of the Chasm: {p_reservoir:?} {p_chasm:?}");
+    for (from, dir, to) in [("Chasm", Direction::NE, "Reservoir South"), ("Reservoir South", Direction::SW, "Chasm")] {
+        assert!(!edge_distorted(g, from, dir, to), "{from} -{dir:?}-> {to} must not be distorted");
+    }
+}

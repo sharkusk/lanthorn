@@ -394,6 +394,19 @@ Confirmed reciprocal N/S and E/W adjacencies are treated as inviolable: an up/do
 move yields rather than shove a reciprocal partner off its shared column or row, and
 overlap cleanup may only slide a reciprocal room *along* its own axis, never off it.
 
+That **N, S, E, W, NE, NW, SE, SW, up, down** order above is which single line the
+*render* draws when several passages share a room pair — it says nothing about how
+the rooms got their positions. The *layout* engine breaks its own ties differently:
+when a cycle on the grid forces it to give up one direction's evidence, it gives up a
+diagonal before a cardinal. A diagonal only pins a room to the right quadrant (it's
+satisfied by any offset with the right two signs, not an exact unit step), so
+stretching one draws a slightly wider corner; a cardinal means exactly one shared row
+or column, so losing one is a door that vanishes from the map entirely. Zork's
+around-the-house ring is the case that forced this: the diagonal skirt (West of
+House–North of House–Behind House) and the cardinal spine through the front door
+(Behind House–Kitchen–Living Room–West of House) close one cycle together, and it's
+the ring's own corners that give a little rather than any of the three doors.
+
 ## Keeping the layout tidy
 
 The whole map re-optimizes itself as you discover rooms, so it stays readable as it
