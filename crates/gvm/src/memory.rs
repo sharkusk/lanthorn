@@ -71,6 +71,12 @@ impl Memory {
     pub fn decode_table(&self) -> u32 {
         self.header.decode_table
     }
+    /// The header's stored whole-image checksum (offset 0x20, Glulx spec §1.4)
+    /// — the value as recorded in the file, not recomputed. See
+    /// [`Memory::checksum_ok`] to verify it against the loaded image.
+    pub fn checksum(&self) -> u32 {
+        self.header.checksum
+    }
 
     // ── size ──────────────────────────────────────────────────────────────────
 
