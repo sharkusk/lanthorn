@@ -236,9 +236,31 @@ impl WorldModel {
     /// in. See the module docs on [`Compass`] and [`DeclaredExit`] for what the
     /// answer does and does not promise.
     pub fn declared_exit(&self, mem: &Memory, origin: u16, dir: Compass) -> DeclaredExit {
+        self.declared_exit_detail(mem, origin, dir).flatten()
+    }
+
+    /// The same derivation as [`Self::declared_exit`], keeping the SHAPE the
+    /// story compiled instead of flattening it away (SQ-1306).
+    ///
+    /// [`DeclaredExit`] is deliberately lossy, because it answers the one
+    /// question `session::apply_turn` asks — "does this direction lead to a
+    /// fixed room, and which one?" So a ZIL CEXIT (a real destination behind a
+    /// global flag) and a ZIL FEXIT (a routine nothing can resolve statically)
+    /// both collapse to [`DeclaredExit::Code`], and both DEXIT and Inform's
+    /// `door_to` hop collapse to a bare [`DeclaredExit::Room`] with the door
+    /// thrown away.
+    ///
+    /// That is the right answer for a live turn and the wrong one for anything
+    /// DRAWING the map. A static map generator wants the conditional exit's
+    /// destination — Zork I's grating and trap door are CEXITs, and dropping
+    /// them loses real passages — and wants to say which edges are doors. This
+    /// returns all of it, and [`Self::declared_exit`] is now literally
+    /// `declared_exit_detail(..).flatten()`, so there is exactly ONE
+    /// description of each compiled shape and the two can never disagree.
+    pub fn declared_exit_detail(&self, mem: &Memory, origin: u16, dir: Compass) -> ExitDetail {
         if let Some(prop) = self.exit_props[dir as usize] {
             if origin == 0 || origin > self.max_object {
-                return DeclaredExit::Unknown;
+                return ExitDetail::Unknown;
             }
             let raw = crate::objects::get_prop(mem, origin, prop);
             // Distinguished from `Unknown` (SQ-1257 Phase 2): the compass WAS
@@ -250,7 +272,7 @@ impl WorldModel {
             // absent — a "before going" rule intercepts the move before the
             // library's own exit-table code ever reads it.
             if raw == 0 {
-                return DeclaredExit::Absent;
+                return ExitDetail::Absent;
             }
             return self.resolve(mem, origin, raw);
         }
@@ -259,9 +281,9 @@ impl WorldModel {
         // doesn't-declare contract as the Inform branch above; the shape of
         // the property's DATA is what differs, so the byte-length dispatch
         // lives in `resolve_zil` rather than `resolve`.
-        let Some(prop) = self.zil_exit_props[dir as usize] else { return DeclaredExit::Unknown };
+        let Some(prop) = self.zil_exit_props[dir as usize] else { return ExitDetail::Unknown };
         if origin == 0 || origin > self.max_object {
-            return DeclaredExit::Unknown;
+            return ExitDetail::Unknown;
         }
         self.resolve_zil(mem, origin, prop)
     }
@@ -280,14 +302,14 @@ impl WorldModel {
     /// and for why this does NOT collide the way the original SQ-1260
     /// comment worried a fixed 2-byte NEXIT would: NEXIT scales with `w`
     /// too, so it never lands on UEXIT's length.
-    fn resolve_zil(&self, mem: &Memory, origin: u16, prop: u8) -> DeclaredExit {
+    fn resolve_zil(&self, mem: &Memory, origin: u16, prop: u8) -> ExitDetail {
         let addr = crate::objects::get_prop_addr(mem, origin, prop);
         if addr == 0 {
             // The compass word IS a real ZIL direction in this story — that's
             // how `prop` was found at all — and this room simply declares
             // nothing for it: the ZIL-side equivalent of the Inform branch's
             // Lost Pig case above, and of SQ-1257 Phase 2's `Absent`.
-            return DeclaredExit::Absent;
+            return ExitDetail::Absent;
         }
         let len = crate::objects::get_prop_len(mem, addr);
         let w = self.zil_room_width.max(1) as u16;
@@ -295,11 +317,12 @@ impl WorldModel {
         // room this derivation can vouch for — refuse rather than mint a
         // `Room` that resolves to nothing, the same discipline `resolve`'s
         // Inform branch applies to `raw > self.max_object`.
+        let plausible = |dest: u16| dest != 0 && dest <= self.max_object;
         let room = |dest: u16| {
-            if dest == 0 || dest > self.max_object {
-                DeclaredExit::Code
+            if plausible(dest) {
+                ExitDetail::Room(dest)
             } else {
-                DeclaredExit::Room(dest)
+                ExitDetail::Code
             }
         };
         // UEXIT/DEXIT's destination room is the property's first `w` bytes —
@@ -322,18 +345,29 @@ impl WorldModel {
             // can be in, so this is `Message`, not `Code` (SQ-1260: distinct
             // from a computed exit specifically so Phase 2 never wastes a
             // probe on a direction that can never lead anywhere).
-            DeclaredExit::Message
+            ExitDetail::Message
         } else if len == w + 2 {
             // FEXIT: a packed ROUTINE address decides, at run time, whether
             // and where the player moves.
-            DeclaredExit::Code
+            ExitDetail::Code
         } else if len == w + 3 {
             // CEXIT: [room][global variable number][packed string address] —
             // gated on a global the story can flip on any later turn, exactly
             // as dynamic as Inform's `door_dir` pointing at a routine. This
             // length is EXTRAPOLATED, not independently confirmed — see the
             // module docs' "no CEXIT example found" note.
-            DeclaredExit::Code
+            //
+            // The destination is a real, static room number and is kept here
+            // (SQ-1306); `flatten` throws it away again so `declared_exit`
+            // answers `Code` exactly as it always has. A live turn must not
+            // trust it — the global may be clear — but a MAP drawn from the
+            // story file should show the passage, because it is one.
+            let dest = room_ref();
+            if plausible(dest) {
+                ExitDetail::Conditional { dest, gate: mem.read_byte(addr as u32 + w as u32) }
+            } else {
+                ExitDetail::Code
+            }
         } else if len == w + 4 {
             // DEXIT: [room][door object][packed string address]. The
             // destination is a STATIC room in every DEXIT this derivation has
@@ -345,11 +379,31 @@ impl WorldModel {
             // `moved_room` guard) — a shut door means no move at all, so it
             // never mints a false edge from a `Room` this turn's door
             // happened to refuse.
-            room(room_ref())
+            //
+            // Which door it is has been kept since SQ-1306 — `flatten` drops
+            // it back to a bare `Room`, so every existing caller sees exactly
+            // what it saw before, and a map generator can label the edge.
+            // Door offsets straight off the two tables in "Declared exits:
+            // ZIL" below, which is the only place they are written down:
+            // `[room:1][door:1][string:2][pad:1]` at `w == 1`, and
+            // `[room:2][door:2][string:2]` at `w == 2`. So the door slot is
+            // one byte at `addr + 1` narrow and a word at `addr + 2` wide —
+            // it is `w`-sized, exactly like the room reference beside it.
+            let dest = room_ref();
+            let door = if w == 1 {
+                mem.read_byte(addr as u32 + 1) as u16
+            } else {
+                mem.read_word(addr as u32 + 2)
+            };
+            match (plausible(dest), plausible(door)) {
+                (true, true) => ExitDetail::Door { dest, door },
+                (true, false) => ExitDetail::Room(dest),
+                (false, _) => ExitDetail::Code,
+            }
         } else {
             // A length none of the five known shapes produce — refuse rather
             // than guess at a sixth shape from one story's byte layout.
-            DeclaredExit::Code
+            ExitDetail::Code
         }
     }
 
@@ -359,32 +413,35 @@ impl WorldModel {
     /// it means something different at the top level (`Absent`) than partway
     /// through a door hop (`Code`, below: a door with no static far side is
     /// exactly as unresolvable as one whose `door_to` is a routine).
-    fn resolve(&self, mem: &Memory, holder: u16, raw: u16) -> DeclaredExit {
+    fn resolve(&self, mem: &Memory, holder: u16, raw: u16) -> ExitDetail {
         if raw > self.max_object {
             // A packed routine or string address — GoSub's `metaclass() ==
             // Routine`/`String` branches. zvm has no general way to tell those
             // two apart without executing the story (see module docs), so both
             // collapse to `Code`; `Message` is reserved for a future refinement.
-            return DeclaredExit::Code;
+            return ExitDetail::Code;
         }
         // `raw` is a plausible object number. If it does not itself carry the
         // `door_dir` property, it is not a connector in this story's
         // convention (see `infer_exits`) and IS the destination room.
-        let Some(dd) = self.door_dir_prop_hint else { return DeclaredExit::Room(raw) };
+        let Some(dd) = self.door_dir_prop_hint else { return ExitDetail::Room(raw) };
         if crate::objects::get_prop_addr(mem, raw, dd) == 0 || raw == holder {
-            return DeclaredExit::Room(raw);
+            return ExitDetail::Room(raw);
         }
         // `raw` is a door. Follow `door_to`, one hop only — GoSub itself never
         // chases a second door from the far side of the first.
-        let Some(door_to) = self.door_to_prop else { return DeclaredExit::Code };
+        let Some(door_to) = self.door_to_prop else { return ExitDetail::Code };
         let k = crate::objects::get_prop(mem, raw, door_to);
         if k == 0 {
-            return DeclaredExit::Code;
+            return ExitDetail::Code;
         }
         if k > self.max_object {
-            return DeclaredExit::Code;
+            return ExitDetail::Code;
         }
-        DeclaredExit::Room(k)
+        // The hop succeeded, and `raw` was the door it went through — kept
+        // since SQ-1306 so a map can label the edge. `flatten` drops it back
+        // to `Room(k)`, which is what every caller before that saw.
+        ExitDetail::Door { dest: k, door: raw }
     }
 
     /// True when `obj`'s contents are visible to the player right now.
@@ -577,6 +634,82 @@ impl Compass {
             Compass::Down => "down",
             Compass::In => "in",
             Compass::Out => "out",
+        }
+    }
+}
+
+/// What a room's own exit table declares for one direction, in the shape the
+/// story compiled it (SQ-1306) — see [`WorldModel::declared_exit_detail`].
+///
+/// This is the derivation's full answer; [`DeclaredExit`] is the projection of
+/// it that a live turn wants, and [`ExitDetail::flatten`] is the only place the
+/// two are related. Every variant here means what its [`DeclaredExit`]
+/// counterpart means; the two extra ones carry a fact `DeclaredExit` has
+/// nowhere to put.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ExitDetail {
+    /// An unconditional passage to a fixed room: Inform's `*_to` naming a room
+    /// directly, or ZIL's UEXIT.
+    Room(u16),
+    /// ZIL's CEXIT: a passage to `dest` the story allows only while a condition
+    /// holds. The destination is static and real — what the condition gates is
+    /// whether the move HAPPENS, not where it goes — so a map drawn from the
+    /// story file should show it, marked conditional. A live turn must not
+    /// trust it, which is why [`Self::flatten`] answers [`DeclaredExit::Code`].
+    ///
+    /// `gate` is the CEXIT's second byte, RAW and deliberately unattributed.
+    /// The V3 table below calls that slot `[global:1]`, and it is not the
+    /// global's Z-machine variable number: on Zork I r52 the seven CEXITs that
+    /// the game gates on RAINBOW-FLAG (Aragain Falls and End of Rainbow → On
+    /// the Rainbow) and on WON-FLAG (West of House → Stone Barrow) ALL read 0,
+    /// and two distinct flags cannot be one variable. The other eighteen read
+    /// 75–101, which look like variable numbers and may be. Until something
+    /// authoritative says which it is, callers get the byte and no claim about
+    /// it — `lanthorn-mapgen` prints "conditional" and does not name a global.
+    Conditional { dest: u16, gate: u8 },
+    /// A passage to `dest` through door object `door`: ZIL's DEXIT, or Inform's
+    /// `*_to` naming a door whose `door_to` names the far side. Whether the
+    /// move lands this turn depends on the door being open; where it goes does
+    /// not, so [`Self::flatten`] answers [`DeclaredExit::Room`].
+    Door { dest: u16, door: u16 },
+    /// The destination is computed at run time — ZIL's FEXIT, or an Inform
+    /// `*_to`/`door_to` holding a routine.
+    Code,
+    /// A fixed refusal message and no passage at all: ZIL's NEXIT.
+    Message,
+    /// The compass was identified for this story and this room declares
+    /// nothing for it. See [`DeclaredExit::Absent`].
+    Absent,
+    /// No exit is declared this way at all. See [`DeclaredExit::Unknown`].
+    Unknown,
+}
+
+impl ExitDetail {
+    /// Project down to the [`DeclaredExit`] a live turn asks for: keep the
+    /// destination where one is static enough to walk, and throw away the door
+    /// and the conditional's destination.
+    ///
+    /// `Conditional` becomes [`DeclaredExit::Code`] rather than
+    /// [`DeclaredExit::Room`] deliberately — the global may be clear, and
+    /// `session::apply_turn` mints an edge from a `Room` answer.
+    pub fn flatten(self) -> DeclaredExit {
+        match self {
+            ExitDetail::Room(r) | ExitDetail::Door { dest: r, .. } => DeclaredExit::Room(r),
+            ExitDetail::Conditional { .. } | ExitDetail::Code => DeclaredExit::Code,
+            ExitDetail::Message => DeclaredExit::Message,
+            ExitDetail::Absent => DeclaredExit::Absent,
+            ExitDetail::Unknown => DeclaredExit::Unknown,
+        }
+    }
+
+    /// The room this passage leads to, when the derivation could name one —
+    /// including a conditional's destination, which [`Self::flatten`] drops.
+    pub fn destination(self) -> Option<u16> {
+        match self {
+            ExitDetail::Room(r)
+            | ExitDetail::Conditional { dest: r, .. }
+            | ExitDetail::Door { dest: r, .. } => Some(r),
+            _ => None,
         }
     }
 }
