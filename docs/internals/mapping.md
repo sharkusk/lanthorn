@@ -414,6 +414,35 @@ grows. How eagerly is up to you (`background_tidy`): after every new room (the
 default), only when a new room overlaps an old one (`on_overlap`), debounced every
 few rooms (`debounced`), or off entirely. Force a pass any time with `tidy-map`.
 
+Three touches happen after the solve, because the solver cannot make them itself.
+A **leaf** — a room whose compass exits all lead to one neighbour — is snapped onto
+that neighbour's doorstep, since the separation a compass edge buys the solver is
+only a minimum and a room hanging off the side of the map otherwise drifts two or
+three cells out with nothing in between. A **run** of rooms joined by passages walked
+from both ends has its internal gaps closed, for the same reason — from whichever end
+can move without costing some third room its bearing. And a **crossroads** — a room
+with two or more passages walked from both ends — keeps the spot where all of them
+are satisfied, rather than being shoved aside to tidy a row it happens to sit in.
+
+One thing outranks even the crossroads, and it is the rule the whole engine is built
+around: two rooms joined by a north/south or east/west passage walked from both ends
+are *next to each other*, and nothing may stand between them.
+
+Sometimes a map cannot honour all of that at once. Zork's Behind House is at one and
+the same time the east corner of the ring around the white house and, through the
+kitchen window, the east end of the kitchen's row — and no grid puts one room in two
+places. So the layout ranks passages by how firm a claim each makes on geography, and
+gives up the weakest. A plain passage is the game saying two rooms are neighbours. A
+**door** is a real walkable way through, which merely needs opening — it holds. A
+**conditional** exit is usually a secret the fiction wanted: the magic-word passage
+west of the living room, the rainbow. That is the one that yields, and a secret
+passage drawn reaching one square further than its neighbours is a fair drawing of a
+secret passage, where a corridor doing the same would be a lie.
+
+The ranking changes nothing else. While no other claim is arguing with it, a gated
+passage chains, aligns, tightens and snaps exactly like any other — the troll stands
+in a doorway that is still a plain east-west corridor, and the map draws it straight.
+
 **Maze layers are left alone.** A layer flagged as a maze (below) is *frozen*: it
 schedules no tidy, `tidy-map` on it answers "maze layer: geometry is frozen — the
 matrix is the view", and its rooms keep the positions they were first given. There

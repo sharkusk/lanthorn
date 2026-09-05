@@ -156,6 +156,59 @@ pub struct Connection {
     pub dir: Direction,
     pub dest: RoomId,
     pub distorted: bool,
+    /// How firm a claim this passage makes about GEOMETRY (SQ-1312).
+    ///
+    /// A gated passage is still a real passage: it is drawn, routed, aligned, tightened,
+    /// chained and distortion-flagged exactly like any other, and while nothing contradicts
+    /// it the map honours it in full. The weight decides one thing only — **who yields when
+    /// a cycle closes and something must give**. `build_axis_constraints` inserts constraints
+    /// weakest-last, so a gated passage is the first one `creates_cycle` drops; and a room may
+    /// stand between two members of a run only where the link it stands in is gated
+    /// (`layout::splits_a_run`).
+    ///
+    /// The order is the author's own: a plain passage states that two rooms are neighbours; a
+    /// DOOR is a real walkable way through the geography that happens to need opening; a
+    /// CONDITIONAL exit is typically a secret — Zork I's magic-word `Strange Passage`, the
+    /// rainbow — put there because the fiction wanted it, and is the first thing to bend.
+    pub weight: PassageWeight,
+}
+
+/// How firm a claim a [`Connection`] makes about geometry — `Hard` strongest, `Conditional`
+/// weakest (SQ-1312). See [`Connection::weight`].
+///
+/// The derived `Ord` is the ordering the layout sorts by: `Hard < Door < Conditional` reads as
+/// "surrender the later one first".
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Default, serde::Serialize, serde::Deserialize)]
+pub enum PassageWeight {
+    /// A plain passage: the game's own statement that these two rooms are neighbours.
+    #[default]
+    Hard,
+    /// Through a door object. A real walkable way through the geography — it just needs opening.
+    Door,
+    /// A gated exit the story opens only under its own conditions (ZIL's `CEXIT`): usually a
+    /// secret passage, and the first claim the layout gives up.
+    Conditional,
+}
+
+impl PassageWeight {
+    /// True for anything the story gates — i.e. anything but [`PassageWeight::Hard`].
+    pub fn is_gated(self) -> bool {
+        self != PassageWeight::Hard
+    }
+
+    /// True for a passage that may be drawn REACHING past an intervening room — only
+    /// [`PassageWeight::Conditional`] (SQ-1312).
+    ///
+    /// This is the one place the two gated levels part company, and it is why they are an
+    /// ordering rather than a flag. A DOOR is a real walkable way through the geography that
+    /// happens to need opening: Zork I's kitchen window joins two rooms that genuinely are
+    /// next to each other, and drawing a third room in between would be as much a lie as it
+    /// would for a plain corridor. A CONDITIONAL exit is typically a secret — the magic-word
+    /// `Strange Passage`, the rainbow — and a secret passage reaching past the rooms above it
+    /// is a fair drawing of a secret passage.
+    pub fn may_reach_past_a_room(self) -> bool {
+        self == PassageWeight::Conditional
+    }
 }
 
 impl Connection {
@@ -459,6 +512,18 @@ impl MapGraph {
     }
 
     pub fn add_edge(&mut self, origin: RoomId, dir: Direction, dest: RoomId) {
+        self.add_edge_weighted(origin, dir, dest, PassageWeight::Hard);
+    }
+
+    /// [`MapGraph::add_edge`], stating how firm a claim the passage makes about geometry — a
+    /// gated one is the first the layout gives up (see [`Connection::weight`]).
+    pub fn add_edge_weighted(
+        &mut self,
+        origin: RoomId,
+        dir: Direction,
+        dest: RoomId,
+        weight: PassageWeight,
+    ) {
         // A compass direction (or Up/Down/In/Out) can only lead one place, so those edges are
         // keyed (origin, dir) and a repeat observation updates the destination. Unknown is not a
         // direction but a bucket: a room can hold SEVERAL non-compass passages (xyzzy and pray
@@ -474,14 +539,15 @@ impl MapGraph {
         // to `↩` — rather than silently picking a winner.
         if dir == Direction::Unknown || origin == dest {
             if !self.conns.iter().any(|c| c.origin == origin && c.dir == dir && c.dest == dest) {
-                self.conns.push(Connection { origin, dir, dest, distorted: false });
+                self.conns.push(Connection { origin, dir, dest, distorted: false, weight });
             }
         } else if let Some(conn) =
             self.conns.iter_mut().find(|c| c.origin == origin && c.dir == dir && c.dest != c.origin)
         {
             conn.dest = dest;
+            conn.weight = weight;
         } else {
-            self.conns.push(Connection { origin, dir, dest, distorted: false });
+            self.conns.push(Connection { origin, dir, dest, distorted: false, weight });
         }
     }
 

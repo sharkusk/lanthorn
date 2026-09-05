@@ -48,6 +48,28 @@ Absolute URLs or no link.
   nothing was actually wrong with them. Each part of the map is now worked out
   on its own, so a ring outside a building can stretch a little to make room
   without ever breaking a door inside it.
+- **Rooms you can walk between in one step are now drawn next to each other.**
+  If you have walked a passage in both directions then the two rooms it joins are
+  neighbours, and the map now treats that as the one thing it must never break.
+  Rooms that used to drift two or three squares apart with blank map in between —
+  Zork I's Studio floating clear of the Gallery — are pulled together, and no room
+  is left standing in the gap with someone else's passage drawn straight through
+  it. A crossroads keeps the spot that suits all its doors, too, instead of being
+  shoved aside to tidy up a row it happens to sit in.
+
+  Where a map genuinely cannot hold every passage flat, the one that bends is now
+  the one the story **gates** — and the more gated of two goes first. A plain
+  passage says two rooms are neighbours. A door is a real way through that merely
+  needs opening, so it holds. A secret passage the game only opens under its own
+  conditions is what stretches, which is a fair drawing of a secret passage. A
+  passage merely blocked by a monster is not gated at all: the troll stands in a
+  doorway that is still a plain east-west corridor, and it stays straight.
+
+  That is what finally lets Zork I's white house come out right. West of House
+  keeps the north, south and barrow paths in their correct corners, and the
+  kitchen and living room now sit *inside* the ring of paths around the house,
+  where they belong, instead of the house being pulled apart to make room for the
+  passage behind the cyclops. On the live map and in `lanthorn-mapgen`'s alike.
 - **`lanthorn-mapgen`'s maze split now catches the dead ends hanging off a
   maze, not just the rooms literally named "Maze"** — a "Dead End" or a
   "Grating Room" one step from the maze now lands on the maze's own layer

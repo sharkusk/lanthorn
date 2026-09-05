@@ -2547,7 +2547,7 @@ mod tests {
         // the layout's dropped-constraint set, not from geometry), and the integration test above
         // covers the real-layout path.
         use crate::direction::Direction;
-        let mk = |origin, dest, distorted| Connection { origin, dir: Direction::NE, dest, distorted };
+        let mk = |origin, dest, distorted| Connection { origin, dir: Direction::NE, dest, distorted, weight: crate::graph::PassageWeight::Hard };
         let undistorted = mk(1, 2, false);
         let distorted = mk(3, 2, true);
 
@@ -2563,7 +2563,7 @@ mod tests {
     fn an_uncontested_or_reciprocal_corner_is_left_alone() {
         // The map holds only CONTESTED corners; everything else must pass through untouched.
         use crate::direction::Direction;
-        let mk = |origin, dir, dest| Connection { origin, dir, dest, distorted: false };
+        let mk = |origin, dir, dest| Connection { origin, dir, dest, distorted: false, weight: crate::graph::PassageWeight::Hard };
 
         // A lone one-way arrival contends with nobody.
         let lone = mk(1, Direction::NE, 2);

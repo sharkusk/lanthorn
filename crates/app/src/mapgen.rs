@@ -767,7 +767,19 @@ fn assemble(
         // connection in the same direction rather than doubling it, which is
         // what we want when a story declares the same passage twice (ZIL's
         // EAST and OUT commonly compile to identical DEXIT bytes).
-        graph.add_edge(e.origin, e.dir, e.dest);
+        //
+        // The edge carries its WEIGHT into the graph (`mapper::graph::PassageWeight`): a `Door`
+        // or a `Conditional` exit is a passage the story GATES, so it is what the layout
+        // surrenders first when a cycle closes and something must give. `Conditional` ranks
+        // below `Door` because a door is a real walkable way through the geography that happens
+        // to need opening, where a conditional exit is typically a secret the fiction wanted —
+        // Zork I's magic-word `Strange Passage`, the rainbow (SQ-1312).
+        let weight = match e.kind {
+            EdgeKind::Door => mapper::graph::PassageWeight::Door,
+            EdgeKind::Conditional => mapper::graph::PassageWeight::Conditional,
+            _ => mapper::graph::PassageWeight::Hard,
+        };
+        graph.add_edge_weighted(e.origin, e.dir, e.dest, weight);
         let reciprocal = declared.contains(&(e.dest, e.origin));
         let kind = match e.kind {
             // Only a plain declared edge is demoted to one-way: a door or a

@@ -5,7 +5,11 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use crate::direction::{grid_offset, opposite};
-use crate::graph::{MapGraph, RoomId};
+use crate::graph::{MapGraph, PassageWeight, RoomId};
+
+/// One reciprocated cardinal pair, carrying the weight of the WEAKER of its two legs — the claim
+/// the pair as a whole is worth, and what decides which link in a run gives way first (SQ-1312).
+pub type Link = (RoomId, RoomId, PassageWeight);
 
 pub struct Chains {
     /// room → its E/W chain id (rooms sharing a row), if any.
@@ -14,28 +18,53 @@ pub struct Chains {
     pub ns: BTreeMap<RoomId, usize>,
     pub ew_members: Vec<Vec<RoomId>>,
     pub ns_members: Vec<Vec<RoomId>>,
+    /// Every reciprocated E/W pair that went into a run, with its weight.
+    pub ew_links: Vec<Link>,
+    /// Every reciprocated N/S pair that went into a run, with its weight.
+    pub ns_links: Vec<Link>,
 }
 
+impl Chains {
+    /// The weight of the link joining `a` and `b`, when the two are a reciprocated cardinal pair.
+    pub fn link_weight(&self, a: RoomId, b: RoomId) -> Option<PassageWeight> {
+        self.ew_links
+            .iter()
+            .chain(self.ns_links.iter())
+            .find(|&&(x, y, _)| (x, y) == (a, b) || (x, y) == (b, a))
+            .map(|&(_, _, w)| w)
+    }
+}
+
+/// **A GATED passage builds a run exactly like any other** (SQ-1312). While nothing contradicts
+/// it the map honours it in full — same row, tightened, aligned — and its weight decides only who
+/// yields when something must give. Each pair therefore records the weight of its WEAKER leg, so
+/// `build_axis_constraints` can insert a run's equalities weakest-last and `layout::splits_a_run`
+/// can tell which link in a run a room may legitimately be standing in.
+/// See [`crate::graph::Connection::weight`].
 pub fn detect_chains(graph: &MapGraph) -> Chains {
     let conns = graph.connections();
     let reciprocal = |a: RoomId, b: RoomId, dir| {
-        conns.iter().any(|c| c.origin == b && c.dest == a && c.dir == opposite(dir))
+        conns
+            .iter()
+            .find(|c| c.origin == b && c.dest == a && c.dir == opposite(dir))
+            .map(|c| c.weight)
     };
-    let mut ew_pairs: Vec<(RoomId, RoomId)> = Vec::new();
-    let mut ns_pairs: Vec<(RoomId, RoomId)> = Vec::new();
+    let mut ew_pairs: Vec<Link> = Vec::new();
+    let mut ns_pairs: Vec<Link> = Vec::new();
     for c in conns {
         if c.is_self_loop() {
             continue; // a room is not chained to itself (SQ-0666)
         }
         match grid_offset(c.dir) {
             Some((dx, dy)) if dx != 0 && dy == 0 => {
-                if reciprocal(c.origin, c.dest, c.dir) {
-                    ew_pairs.push((c.origin, c.dest));
+                if let Some(back) = reciprocal(c.origin, c.dest, c.dir) {
+                    ew_pairs.push((c.origin, c.dest, c.weight.max(back)));
                 }
             }
-            Some((dx, dy)) if dy != 0 && dx == 0
-                && reciprocal(c.origin, c.dest, c.dir) => {
-                ns_pairs.push((c.origin, c.dest));
+            Some((dx, dy)) if dy != 0 && dx == 0 => {
+                if let Some(back) = reciprocal(c.origin, c.dest, c.dir) {
+                    ns_pairs.push((c.origin, c.dest, c.weight.max(back)));
+                }
             }
             _ => {}
         }
@@ -51,20 +80,20 @@ pub fn detect_chains(graph: &MapGraph) -> Chains {
     // Dam, so that leg of the N/S chain must survive. Without the equalities the two directions
     // simply compose — north gives "above", east gives "right" — and the room lands northeast.
     let key = |a: RoomId, b: RoomId| (a.min(b), a.max(b));
-    let ew_keys: BTreeSet<(RoomId, RoomId)> = ew_pairs.iter().map(|&(a, b)| key(a, b)).collect();
-    let ns_keys: BTreeSet<(RoomId, RoomId)> = ns_pairs.iter().map(|&(a, b)| key(a, b)).collect();
+    let ew_keys: BTreeSet<(RoomId, RoomId)> = ew_pairs.iter().map(|&(a, b, _)| key(a, b)).collect();
+    let ns_keys: BTreeSet<(RoomId, RoomId)> = ns_pairs.iter().map(|&(a, b, _)| key(a, b)).collect();
     let both: BTreeSet<(RoomId, RoomId)> = ew_keys.intersection(&ns_keys).copied().collect();
-    ew_pairs.retain(|&(a, b)| !both.contains(&key(a, b)));
-    ns_pairs.retain(|&(a, b)| !both.contains(&key(a, b)));
+    ew_pairs.retain(|&(a, b, _)| !both.contains(&key(a, b)));
+    ns_pairs.retain(|&(a, b, _)| !both.contains(&key(a, b)));
 
     let (ew, ew_members) = build(&ew_pairs);
     let (ns, ns_members) = build(&ns_pairs);
-    Chains { ew, ns, ew_members, ns_members }
+    Chains { ew, ns, ew_members, ns_members, ew_links: ew_pairs, ns_links: ns_pairs }
 }
 
 /// Union-find the pairs, then assign chain ids in ascending lowest-member order
 /// (deterministic). Returns (room→chain id, chain id→sorted members).
-fn build(pairs: &[(RoomId, RoomId)]) -> (BTreeMap<RoomId, usize>, Vec<Vec<RoomId>>) {
+fn build(pairs: &[Link]) -> (BTreeMap<RoomId, usize>, Vec<Vec<RoomId>>) {
     // Union-find over the room ids present in `pairs`.
     let mut parent: BTreeMap<RoomId, RoomId> = BTreeMap::new();
     fn find(parent: &mut BTreeMap<RoomId, RoomId>, x: RoomId) -> RoomId {
@@ -77,7 +106,7 @@ fn build(pairs: &[(RoomId, RoomId)]) -> (BTreeMap<RoomId, usize>, Vec<Vec<RoomId
             r
         }
     }
-    for &(a, b) in pairs {
+    for &(a, b, _) in pairs {
         parent.entry(a).or_insert(a);
         parent.entry(b).or_insert(b);
         let ra = find(&mut parent, a);

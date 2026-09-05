@@ -118,9 +118,15 @@ pub fn build_axis_constraints(graph: &MapGraph, ids: &[RoomId], gap: f64) -> Axi
     // Chain equalities: reciprocal E/W chains share a row (equality on Y); reciprocal N/S
     // chains share a column (equality on X). Equality coord[a]==coord[b] is BOTH a≤b and
     // b≤a with gap 0 — block-merge collapses them to one coordinate when either is violated.
-    // Both legs are added UNCONDITIONALLY: a gap-0 two-leg cycle is always feasible. They go
-    // into *_adj so a later DIRECTIONAL constraint contradicting the equality is the one
-    // creates_cycle drops (→ distorted). Added before the directional loop.
+    // A HARD pair's two legs are added UNCONDITIONALLY: a gap-0 two-leg cycle is always
+    // feasible. They go into *_adj so a later DIRECTIONAL constraint contradicting the equality
+    // is the one creates_cycle drops (→ distorted). Added before the directional loop.
+    //
+    // Equalities are added one PAIR at a time rather than over a run's sorted members, and
+    // weakest-last (SQ-1312): the run is the transitive closure of its pairs either way, but
+    // this way each pair's own weight decides when it is considered, and a GATED pair — the
+    // kitchen window, the magic-word passage — is the one that finds the row already claimed
+    // and gives it up. A hard pair never does; it is exactly as unconditional as it always was.
     let unreliable = positionally_unreliable(graph);
     let chains = super::chains::detect_chains(graph);
     fn add_equality(a: usize, b: usize, adj: &mut [Vec<usize>], out: &mut Vec<Constraint>) {
@@ -129,18 +135,19 @@ pub fn build_axis_constraints(graph: &MapGraph, ids: &[RoomId], gap: f64) -> Axi
         out.push(Constraint { left: a, right: b, gap: 0.0 });
         out.push(Constraint { left: b, right: a, gap: 0.0 });
     }
-    for members in &chains.ew_members {
-        for w in members.windows(2) {
-            if let (Some(&a), Some(&b)) = (index.get(&w[0]), index.get(&w[1])) {
-                add_equality(a, b, &mut y_adj, &mut y); // E/W chain → equal Y
-            }
-        }
-    }
-    for members in &chains.ns_members {
-        for w in members.windows(2) {
-            if let (Some(&a), Some(&b)) = (index.get(&w[0]), index.get(&w[1])) {
-                add_equality(a, b, &mut x_adj, &mut x); // N/S chain → equal X
-            }
+    let mut links: Vec<(bool, &super::chains::Link)> = chains
+        .ew_links
+        .iter()
+        .map(|l| (false, l)) // E/W run → equal Y
+        .chain(chains.ns_links.iter().map(|l| (true, l))) // N/S run → equal X
+        .collect();
+    links.sort_by_key(|&(on_x, &(a, b, w))| (w, on_x, a, b));
+    for (on_x, &(ra, rb, w)) in links {
+        let (Some(&a), Some(&b)) = (index.get(&ra), index.get(&rb)) else { continue };
+        let (adj, out) =
+            if on_x { (&mut x_adj, &mut x) } else { (&mut y_adj, &mut y) };
+        if w == crate::graph::PassageWeight::Hard || !creates_cycle(adj, a, b) {
+            add_equality(a, b, adj, out);
         }
     }
 
@@ -162,6 +169,15 @@ pub fn build_axis_constraints(graph: &MapGraph, ids: &[RoomId], gap: f64) -> Axi
     //      pair pinned the chasm a row south and dropped the compass bearing, so the map
     //      contradicted both the game's prose ("a stairway leading down at the north end") and
     //      the player's own return walk.
+
+    // **A GATED passage is considered after every ungated one, whatever its evidence tier**
+    // (SQ-1312) — `Up`/`Down` included, so it is the FIRST constraint `creates_cycle` drops.
+    // That is the ONLY thing weight does: while nothing contradicts a gated passage the layout
+    // honours it in full — it chains, aligns, tightens and snaps exactly like any other. And
+    // `Conditional` goes after `Door`, because a door is a real walkable way through the
+    // geography that happens to need opening, where a conditional exit is typically a secret the
+    // fiction wanted (Zork I's magic-word `Strange Passage`, the rainbow). When both sit in one
+    // cycle, the secret is the one that yields.
     //
     // Losing an Up/Down constraint costs nothing on screen: `mark_distorted` gates on
     // `grid_offset`, so a stairwell is never drawn distorted whatever happens here.
@@ -184,10 +200,11 @@ pub fn build_axis_constraints(graph: &MapGraph, ids: &[RoomId], gap: f64) -> Axi
         let c = &conns[ci];
         let tier = if c.is_self_loop() || grid_offset(c.dir).is_none() {
             2 // Up/Down (and anything else with no compass bearing, which makes no constraint)
-        } else if conns
-            .iter()
-            .any(|o| o.origin == c.dest && o.dest == c.origin && o.dir == crate::direction::opposite(c.dir))
-        {
+        } else if conns.iter().any(|o| {
+            o.origin == c.dest
+                && o.dest == c.origin
+                && o.dir == crate::direction::opposite(c.dir)
+        }) {
             0 // reciprocated compass pair
         } else {
             1 // one-way compass edge
@@ -199,7 +216,7 @@ pub fn build_axis_constraints(graph: &MapGraph, ids: &[RoomId], gap: f64) -> Axi
                 | crate::direction::Direction::SE
                 | crate::direction::Direction::SW
         );
-        (tier, is_diagonal, ci)
+        (c.weight, tier, is_diagonal, ci)
     });
     for ci in order {
         let conn = &conns[ci];
