@@ -10,7 +10,7 @@ use std::process::ExitCode;
 
 use clap::Parser;
 
-use app::mapgen::{self, Artefacts};
+use app::mapgen::{self, Artefacts, MapgenOptions};
 
 /// The exit code for "this story file has no static map source". Distinct from
 /// 1 (an ordinary failure: unreadable file, bad path, write error) so a script
@@ -34,6 +34,10 @@ with the same automapper the lanthorn interpreter draws with, and writes it out 
 <stem>.map.json  a documented, versioned JSON map for other programs to read\n\n\
 Understands the same files lanthorn does: bare story files (.z3-.z8, .ulx, .dat), Blorbs \
 (.zblorb, .gblorb, .blb), zips, and release disk images.\n\n\
+LAYERS. A maze room, and a portal-only region big enough to be a floor plan, are split onto \
+their own layer — the same split the interpreter offers a player as a prompt, applied as if \
+every prompt were accepted. --no-auto-layers turns this off for one flat map; --layer-min sets \
+how big a portal-only region has to be first (mazes have no floor).\n\n\
 LIMITS. This is the map as compiled, so a passage a story builds or removes while it runs is \
 not in it, and neither is one whose destination a routine decides. Conditional exits and doors \
 ARE included, and are marked as such. Some stories declare no map anywhere in the file; \
@@ -75,12 +79,29 @@ struct Cli {
     /// so they are far less useful without it.
     #[arg(long)]
     no_layout: bool,
+
+    /// Do not split mazes and portal-only regions onto their own layers
+    /// (SQ-1308): everything lands on one flat map, as before that quest.
+    #[arg(long)]
+    no_auto_layers: bool,
+
+    /// The smallest portal-only region worth its own layer. Defaults to the
+    /// same floor the live app's layer suggestions use
+    /// (`mapper::suggest::STRUCTURAL_FLOOR`) so a static map and a played one
+    /// agree; a maze region has no floor and always gets its own layer.
+    #[arg(long, value_name = "N")]
+    layer_min: Option<usize>,
 }
 
 fn main() -> ExitCode {
     let cli = Cli::parse();
 
-    let map = match mapgen::generate(&cli.story, !cli.no_layout) {
+    let mut opts = MapgenOptions { auto_layers: !cli.no_auto_layers, ..MapgenOptions::default() };
+    if let Some(n) = cli.layer_min {
+        opts.layer_min = n;
+    }
+
+    let map = match mapgen::generate_with_options(&cli.story, !cli.no_layout, &opts) {
         Ok(m) => m,
         Err(e @ mapgen::GenError::NoStaticSource(_)) => {
             eprintln!("lanthorn-mapgen: {}: {e}", cli.story.display());
@@ -132,6 +153,14 @@ fn main() -> ExitCode {
     println!("  doors         {}", map.doors());
     println!("  conditionals  {}", map.conditionals());
     println!("  layout        {layout}");
+    let mut layer_ids: Vec<_> = map.graph.layers().keys().copied().collect();
+    layer_ids.sort_unstable();
+    println!("  layers        {}", layer_ids.len());
+    for id in layer_ids {
+        let n = map.graph.rooms_in_layer(id).len();
+        let maze = if map.graph.layer_is_maze(id) { ", maze" } else { "" };
+        println!("    {} (id {id}): {n} rooms{maze}", map.graph.layer_name(id));
+    }
     for p in &written {
         println!("  wrote         {}", p.display());
     }

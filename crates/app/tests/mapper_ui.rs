@@ -96,3 +96,5 @@ mod sq1303_glulx_static_world;
 mod sq1306_mapgen;
 #[path = "suites/sq1305_glulx_stale_sidecar.rs"]
 mod sq1305_glulx_stale_sidecar;
+#[path = "suites/sq1308_mapgen_layers.rs"]
+mod sq1308_mapgen_layers;

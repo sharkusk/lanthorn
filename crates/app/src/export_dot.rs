@@ -11,10 +11,12 @@
 //! assumed reciprocal: `A -> B [label="N"]` and `B -> A [label="W"]` are two
 //! independent edges, exactly as observed.
 
+use std::collections::BTreeMap;
 use std::path::Path;
 
 use mapper::direction::Direction;
 use mapper::graph::MapGraph;
+use mapper::layer::LayerId;
 
 /// Short label string for a connection direction, matching the TUI conventions.
 fn dir_label(d: Direction) -> &'static str {
@@ -85,27 +87,45 @@ pub fn render_dot(graph: &MapGraph) -> String {
     out.push_str("  node [shape=box, style=\"rounded\", fontname=\"monospace\"];\n");
     out.push_str("  edge [fontname=\"monospace\", fontsize=10];\n");
 
-    // Nodes, in ascending id order for deterministic output.
+    // Nodes, in ascending id order for deterministic output, grouped into one
+    // Graphviz cluster per map layer (SQ-1308) — a single-layer graph groups
+    // everything under one (unlabelled, undrawn) cluster, so this reproduces
+    // the un-clustered output byte for byte until a second layer exists.
     let mut rooms: Vec<&mapper::graph::Room> = graph.rooms().collect();
     rooms.sort_by_key(|r| r.id);
+    let mut by_layer: BTreeMap<LayerId, Vec<&mapper::graph::Room>> = BTreeMap::new();
+    for room in &rooms {
+        by_layer.entry(room.layer).or_default().push(room);
+    }
+    let multi_layer = by_layer.len() > 1;
 
     let current = graph.current();
 
-    for room in &rooms {
-        let has_notes = !room.notes.is_empty();
-        let mut label = dot_escape(room.label());
-        if has_notes {
-            label.push_str(" ●");
+    for (layer, layer_rooms) in &by_layer {
+        if multi_layer {
+            out.push_str(&format!("  subgraph cluster_{layer} {{\n"));
+            out.push_str(&format!("    label=\"{}\";\n", dot_escape(graph.layer_name(*layer))));
         }
+        let indent = if multi_layer { "    " } else { "  " };
+        for room in layer_rooms {
+            let has_notes = !room.notes.is_empty();
+            let mut label = dot_escape(room.label());
+            if has_notes {
+                label.push_str(" ●");
+            }
 
-        let mut attrs = format!("label=\"{}\"", label);
-        if Some(room.id) == current {
-            attrs.push_str(", style=\"rounded,filled\", fillcolor=\"gold\"");
+            let mut attrs = format!("label=\"{}\"", label);
+            if Some(room.id) == current {
+                attrs.push_str(", style=\"rounded,filled\", fillcolor=\"gold\"");
+            }
+            if has_notes {
+                attrs.push_str(&format!(", tooltip=\"{}\"", dot_escape(&room.notes)));
+            }
+            out.push_str(&format!("{indent}{} [{}];\n", node_id(room.id), attrs));
         }
-        if has_notes {
-            attrs.push_str(&format!(", tooltip=\"{}\"", dot_escape(&room.notes)));
+        if multi_layer {
+            out.push_str("  }\n");
         }
-        out.push_str(&format!("  {} [{}];\n", node_id(room.id), attrs));
     }
 
     // Edges, in connection order.

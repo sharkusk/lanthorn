@@ -244,7 +244,225 @@ impl std::fmt::Display for GenError {
 
 impl std::error::Error for GenError {}
 
-/// Generate the static map for the story at `path`.
+/// Knobs for the auto-split pass ([`split_layers`]) that runs between building
+/// the graph and laying it out.
+///
+/// `layer_min` is deliberately the SAME constant the live app's suggestion
+/// engine floors a structural region at
+/// ([`mapper::suggest::STRUCTURAL_FLOOR`]) unless a caller overrides it — the
+/// two are meant to agree, and drifting apart would mean a static map and a
+/// played one disagree about how big a region has to be before it earns a
+/// layer of its own.
+#[derive(Debug, Clone, Copy)]
+pub struct MapgenOptions {
+    /// Split maze and portal-only regions onto their own layers ([`split_layers`]).
+    /// `false` reproduces the pre-SQ-1308 behaviour: everything on `MAIN_LAYER`.
+    pub auto_layers: bool,
+    /// The smallest portal-only region worth its own layer — [`STRUCTURAL_FLOOR`]
+    /// by default. A maze region has no floor: any size gets its own layer once
+    /// its name says so.
+    ///
+    /// [`STRUCTURAL_FLOOR`]: mapper::suggest::STRUCTURAL_FLOOR
+    pub layer_min: usize,
+}
+
+impl Default for MapgenOptions {
+    fn default() -> Self {
+        MapgenOptions { auto_layers: true, layer_min: mapper::suggest::STRUCTURAL_FLOOR }
+    }
+}
+
+/// One layer [`split_layers`] carved out, for the summary the binary prints.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LayerSplit {
+    pub id: mapper::layer::LayerId,
+    pub name: String,
+    pub rooms: usize,
+    pub maze: bool,
+}
+
+/// The compass-connected cluster of maze-named rooms containing `start`, all on
+/// the layer `start` is on — every step of the walk, not just its first, must
+/// [`mapper::suggest::mentions_maze`].
+///
+/// This is deliberately **not** [`mapper::layer::planar_region`], which has no
+/// way to stop at a name and sweeps up anything compass-reachable regardless —
+/// and Zork I's own maze is exactly the story that makes that the wrong walk.
+/// Verified against `crates/zvm/tests/fixtures/minizork.z3` (Mini-Zork I,
+/// r34/s871124): the Cyclops Room has an UNCONDITIONAL compass link out to the
+/// Living Room ("Strange Passage" — `Cyclops Room -NW-> Maze` is how the maze
+/// is entered from that side), so a bare `planar_region` from any maze room
+/// pulls in 55 of the story's 70 rooms — Kitchen, Living Room, Troll Room,
+/// West of House and the rest of the surface included, i.e. everything BUT the
+/// dozen rooms directly behind Troll Room, which is not a maze layer.
+/// [`mapper::layer::region_at_arrival`] — the live app's own `name_trigger`
+/// walk — fares no better: probed at all three of the maze's real compass
+/// entrances (Troll Room, Cyclops Room, Grating Room), it is `NotASeam` at two
+/// of them and, at the third, succeeds only by excluding that ONE entrance
+/// room while including the same 54-room sweep, because the other two
+/// entrances are still standing open for the walk to leave through. Neither of
+/// `mapper::layer`'s public region walks can be asked to stop at a room-name
+/// boundary, so this one does it directly with the graph.
+fn maze_region(graph: &MapGraph, start: RoomId) -> mapper::layer::Region {
+    let layer = graph.layer_of(start);
+    let mut rooms: BTreeSet<RoomId> = BTreeSet::new();
+    rooms.insert(start);
+    let mut q: std::collections::VecDeque<RoomId> = std::collections::VecDeque::new();
+    q.push_back(start);
+    while let Some(cur) = q.pop_front() {
+        for c in graph.connections() {
+            if mapper::direction::grid_offset(c.dir).is_none() {
+                continue; // a portal is a boundary, exactly as for planar_region
+            }
+            let other = if c.origin == cur {
+                c.dest
+            } else if c.dest == cur {
+                c.origin
+            } else {
+                continue;
+            };
+            if graph.layer_of(other) == layer
+                && graph.room(other).is_some_and(|r| mapper::suggest::mentions_maze(r.label()))
+                && rooms.insert(other)
+            {
+                q.push_back(other);
+            }
+        }
+    }
+    mapper::layer::Region { anchor: start, rooms }
+}
+
+/// Split `graph`'s `MAIN_LAYER` the way the APP's own layer suggestions would if
+/// a player accepted every one of them (SQ-1308) — reusing
+/// [`mapper::layer::planar_region`] and [`mapper::layer::move_region`] rather
+/// than a second implementation of what a region is.
+///
+/// Two passes, in order:
+///
+/// 1. **Maze layers.** Every room still on `MAIN_LAYER` whose name
+///    [`mapper::suggest::mentions_maze`] anchors a [`maze_region`] walk; if
+///    that region is still (wholly) on Main — an earlier maze room's region may
+///    already have carried it away, which is what "one layer per component"
+///    means — it moves to a fresh layer flagged as a maze, exactly as accepting
+///    the app's [`mapper::suggest::Trigger::Name`] prompt does
+///    ([`crate::input::apply_region_prompt`]).
+/// 2. **Portal-only regions.** What is left of Main is partitioned into
+///    compass-connected components. Mapgen has no start room to anchor a
+///    "primary" layer on the way the live map anchors on wherever the player
+///    began, so the LARGEST component is kept as Main instead; every other
+///    component at or above `opts.layer_min` becomes its own layer, named
+///    after the room its entering portal leads into — the same anchor
+///    [`move_region`]'s `New` target names a peel after
+///    ([`mapper::layer::move_region`]'s doc comment on `MoveTarget::New`).
+///    A component under the floor stays on Main untouched.
+///
+/// `opts.auto_layers = false` skips both passes and returns an empty list —
+/// the pre-SQ-1308 flat map.
+pub fn split_layers(graph: &mut MapGraph, opts: &MapgenOptions) -> Vec<LayerSplit> {
+    use mapper::layer::{move_region, planar_region, MoveTarget, Region, MAIN_LAYER};
+
+    let mut splits = Vec::new();
+    if !opts.auto_layers {
+        return splits;
+    }
+
+    // ── 1. Maze layers ──────────────────────────────────────────────────────
+    let maze_rooms: Vec<RoomId> = graph
+        .rooms()
+        .filter(|r| r.layer == MAIN_LAYER && mapper::suggest::mentions_maze(r.label()))
+        .map(|r| r.id)
+        .collect();
+    let mut done: BTreeSet<RoomId> = BTreeSet::new();
+    for room in maze_rooms {
+        // Already carried off by an earlier maze room's region: "one layer per
+        // component", not one per room that happens to be named "maze".
+        if graph.layer_of(room) != MAIN_LAYER || done.contains(&room) {
+            continue;
+        }
+        let region = maze_region(graph, room);
+        done.extend(region.rooms.iter().copied());
+        if let Ok(layer) = move_region(graph, &region, MoveTarget::New) {
+            graph.set_layer_maze(layer, true);
+            splits.push(LayerSplit {
+                id: layer,
+                name: graph.layer_name(layer).to_string(),
+                rooms: region.rooms.len(),
+                maze: true,
+            });
+        }
+    }
+
+    // ── 2. Portal-only regions among what is left on Main ──────────────────
+    let mut seen: BTreeSet<RoomId> = BTreeSet::new();
+    let mut components: Vec<Region> = Vec::new();
+    let remaining: Vec<RoomId> = graph.rooms().filter(|r| r.layer == MAIN_LAYER).map(|r| r.id).collect();
+    for room in remaining {
+        if seen.contains(&room) {
+            continue;
+        }
+        let region = planar_region(graph, room);
+        seen.extend(region.rooms.iter().copied());
+        components.push(region);
+    }
+
+    // The largest component is Main; ties keep whichever was found first
+    // (ascending room id), so the choice is deterministic rather than an
+    // artifact of `BTreeSet` iteration.
+    let main_idx = components
+        .iter()
+        .enumerate()
+        .max_by_key(|&(i, r)| (r.rooms.len(), std::cmp::Reverse(i)))
+        .map(|(i, _)| i);
+
+    for (i, region) in components.into_iter().enumerate() {
+        if Some(i) == main_idx || region.rooms.len() < opts.layer_min {
+            continue;
+        }
+        let named = name_region_by_entry(graph, region);
+        if let Ok(layer) = move_region(graph, &named, MoveTarget::New) {
+            splits.push(LayerSplit {
+                id: layer,
+                name: graph.layer_name(layer).to_string(),
+                rooms: named.rooms.len(),
+                maze: false,
+            });
+        }
+    }
+
+    splits
+}
+
+/// Re-anchor `region` on the room its entering portal leads into, so
+/// [`mapper::layer::move_region`]'s `MoveTarget::New` names the fresh layer
+/// after that room rather than whichever room `planar_region`'s own BFS
+/// happened to start from.
+///
+/// "The entering portal" is any portal connection whose destination is IN the
+/// region and whose origin is not — mirroring [`mapper::suggest::entry_seam`]'s
+/// restriction to portals (an `Unknown` edge is a cut for [`planar_region`]'s
+/// purposes but not a passage anyone can point at). Unlike `entry_seam`, this
+/// has no discovery order to break ties with (mapgen plays nothing), so among
+/// several candidate entrances the lowest room id wins — deterministic, and
+/// the room a static reader would call "first" for want of any other order.
+/// A region with no inbound portal at all (an island with no edge in from
+/// anywhere) falls back to its lowest room id, same tie-break, one level up.
+fn name_region_by_entry(graph: &MapGraph, region: mapper::layer::Region) -> mapper::layer::Region {
+    let entry = graph
+        .connections()
+        .iter()
+        .filter(|c| {
+            region.rooms.contains(&c.dest)
+                && !region.rooms.contains(&c.origin)
+                && mapper::direction::is_portal(c.dir)
+        })
+        .map(|c| c.dest)
+        .min()
+        .unwrap_or_else(|| *region.rooms.iter().min().expect("a region always has a room"));
+    mapper::layer::Region { anchor: entry, rooms: region.rooms }
+}
+
+/// Generate the static map for the story at `path`, with mapgen's own defaults
+/// (SQ-1308's layer auto-split, floored at [`mapper::suggest::STRUCTURAL_FLOOR`]).
 ///
 /// `layout` runs the mapper's own tidy pass ([`mapper::layout::relayout_auto`])
 /// over the finished graph, which is what gives every room a position; without
@@ -254,6 +472,15 @@ impl std::error::Error for GenError {}
 /// call `startup.rs` boots from — so a Blorb, a zip and a disk image all reach
 /// here as bare executable bytes, classified by engine.
 pub fn generate(path: &Path, layout: bool) -> Result<GeneratedMap, GenError> {
+    generate_with_options(path, layout, &MapgenOptions::default())
+}
+
+/// [`generate`], with the auto-split pass's knobs exposed ([`MapgenOptions`]).
+pub fn generate_with_options(
+    path: &Path,
+    layout: bool,
+    opts: &MapgenOptions,
+) -> Result<GeneratedMap, GenError> {
     let (loaded, _medium) = crate::hints::load_mounted_story(path).map_err(GenError::Load)?;
     let file = path.file_name().map(|s| s.to_string_lossy().into_owned()).unwrap_or_default();
 
@@ -262,6 +489,8 @@ pub fn generate(path: &Path, layout: bool) -> Result<GeneratedMap, GenError> {
         LoadedStory::Glulx(bytes) => glulx_map(bytes, file)?,
         LoadedStory::Scott(bytes) => scott_map(bytes, file)?,
     };
+
+    split_layers(&mut map.graph, opts);
 
     if layout {
         let t = Instant::now();
@@ -865,8 +1094,7 @@ pub fn write_artefacts(
     }
     if what.svg {
         let p = out_dir.join(format!("{stem}.svg"));
-        let rm = mapper::render::render(&map.graph);
-        std::fs::write(&p, crate::export_svg::render_svg(&rm))?;
+        std::fs::write(&p, crate::export_svg::render_svg_layered(&map.graph))?;
         written.push(p);
     }
     if what.dot {
