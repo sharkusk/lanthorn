@@ -42,6 +42,15 @@ fidelity, SSH to the host and run lanthorn there directly instead — see
 [command line](command-line.md). The page brings its own font, so icons and
 map diagonals draw correctly on any machine.
 
+## Playing on a tablet or phone
+
+Dragging one finger up or down the transcript or the story picker's list
+scrolls it, same as a mouse wheel. Drag one finger sideways, or drag with two
+fingers in any direction, to pan the map or resize a pane's splitter — a
+plain tap still just taps, so the on-screen keyboard still comes up when you
+need it. `LANTHORN_WEB_TOUCH=off` turns all of this off if you'd rather the
+browser handle touch its own way.
+
 ## Sound in the browser
 
 Sound plays too, over a second connection alongside the terminal — a terminal

@@ -68,6 +68,7 @@ Serve-mode knobs, as environment variables:
 | `LANTHORN_WEB_IMAGES` | `sixel` or `halfblocks`: how pictures are sent to the browser | `sixel` |
 | `LANTHORN_WEB_FONT` | a CSS font-family name to prefer over the page's own embedded font (which still loads as a fallback) | unset |
 | `LANTHORN_WEB_FONT_SIZE` | the terminal's font size in the page | `16` |
+| `LANTHORN_WEB_TOUCH` | `on` or `off`: turn touch drags into scroll and mouse-drag reports (see below) | `on` |
 
 **Do not expose an unauthenticated port beyond localhost** — a lanthorn
 session includes a story picker that can browse and download into `/stories`,
@@ -122,6 +123,36 @@ lanthorn instead draws such an image as a plain background-filled footprint
 while the transcript is still moving, and re-sends the full picture once the
 scroll settles, so a scroll session costs one payload per image rather than
 one per step (SQ-1198).
+
+### Touch, on tablets and phones
+
+xterm.js wires `touchstart`/`touchmove` only to its own scrollback viewport
+(`browser/Viewport.ts`), which is a no-op on lanthorn's alternate screen — a
+drag on a touchscreen would otherwise reach nothing. `docker/web-touch.js`
+(injected by `build_index` unless `LANTHORN_WEB_TOUCH=off`) turns a touch
+drag into the mouse events xterm.js already knows how to forward, classified
+once per touch contact:
+
+| fingers | direction | becomes |
+|---|---|---|
+| 1 | vertical (or still) | synthetic wheel events (as before SQ-1324) |
+| 1 | horizontal | synthetic mouse drag (down/move/up) |
+| 2 | either | synthetic mouse drag (down/move/up) |
+| 1 | none (a tap) | nothing — tap-to-focus and the on-screen keyboard still work |
+
+One-finger horizontal and two-finger touches were dead before this (xterm's
+own viewport only scrolls vertically), so claiming them for a drag costs
+nothing and leaves one-finger vertical scroll untouched. The drag path relies
+on xterm.js's `Terminal.bindMouse()` (`browser/Terminal.ts`) attaching an
+"always on" `mousedown` listener to the same `.xterm` element the wheel
+synthesis dispatches on, and on `MouseService.getMouseReportCoords` reading
+only `event.clientX`/`clientY` — so a synthetic `MouseEvent` with real
+coordinates is indistinguishable from a native one. It only works because
+lanthorn's own `EnableMouseCapture` (crossterm's `?1000h?1002h?1003h?1006h`)
+already asked the terminal for button-motion tracking; see
+`docker/web-touch.js`'s header comment for the full chain and
+`docker/web-touch.test.js` (`node docker/web-touch.test.js`, no CI wiring —
+see the file for why) for the gesture classifier's own tests.
 
 ### The page's own font
 
