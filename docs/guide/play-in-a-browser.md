@@ -62,6 +62,15 @@ image, so this is yours to fill, or use the picker's built-in IFDB search
 saves, `config.toml`/`style.toml`, and the map archives, so name it a
 persistent volume and everything survives an image upgrade.
 
+The compose file's default (`lanthorn-data`, a named Docker volume) is the
+easiest way to keep that: Docker manages it for you and it just works across
+upgrades. If you'd rather see your saves as ordinary files on your machine,
+mount a folder of your own there instead — but mount it at
+`/data/.lanthorn`, not `/data` itself, and pick a dedicated folder like
+`~/lanthorn-docker` rather than your host's own `~/.lanthorn`, since a
+native lanthorn install and the container don't understand each other's
+story paths. `docker-compose.yml` has that alternative ready to uncomment.
+
 On a shared server you want the library's titles, blurbs, ratings and cover
 art fetched once, up front, rather than per visitor. Run the fetch on the
 server itself:
