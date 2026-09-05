@@ -18,6 +18,7 @@ pub mod exec;
 pub mod glk;
 pub mod grammar;
 pub mod header;
+pub mod i7map;
 pub mod memory;
 pub mod objects;
 pub mod trace;

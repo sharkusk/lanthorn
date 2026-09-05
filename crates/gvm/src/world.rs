@@ -89,7 +89,7 @@ impl Compass {
     /// The word the Inform 6 library's compass objects carry for this
     /// direction (`english.h`'s `CompassDirection ->` entries) — what
     /// [`ParseNames::find`] is asked for.
-    fn word(self) -> &'static str {
+    pub(crate) fn word(self) -> &'static str {
         match self {
             Compass::N => "north",
             Compass::S => "south",
