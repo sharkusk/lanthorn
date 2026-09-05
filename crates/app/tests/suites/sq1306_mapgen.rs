@@ -469,6 +469,13 @@ fn zork1_svg_shows_every_room_and_no_connector_crosses_a_room() {
     // The geometric invariant, checked by the same code the unit cases use.
     let bad = app::export_svg::connector_room_crossings(&svg);
     assert!(bad.is_empty(), "connectors must not run through room boxes: {bad:?}");
+
+    // And the typographic one (SQ-1317): no direction tag and no cross-layer badge name may sit
+    // on a room box or on another label. A hundred-room map is where that pressure is — this
+    // caught `Maze` written straight through `Cyclops Room`'s own name, which no synthetic
+    // fixture in `export_svg`'s own module produces.
+    let bad = app::export_svg::label_collisions(&svg);
+    assert!(bad.is_empty(), "labels must stay clear of rooms and of each other: {bad:#?}");
 }
 
 /// The Inform 6 library on Glulx — a different reader from Inform 7's, reached

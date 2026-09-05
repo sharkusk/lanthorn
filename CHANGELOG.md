@@ -64,6 +64,18 @@ Absolute URLs or no link.
   gets a channel of its own and the gap between the rooms widens to hold them.
   Passages that merely **cross** are untouched: they still cross, with the
   break in the horizontal line that says the two do not meet there.
+- **A two-way passage in the exported SVG now reads as one line, not a bowtie.**
+  Between two rooms sitting side by side there is barely any room between the
+  boxes, and the two arrowheads met nose to nose in the middle of it. Each head
+  now sits at its own room, pointing in — the same double-headed line the legend
+  has always drawn for a way you can walk both directions.
+- **Labels in the exported SVG stay out of each other's way.** A direction tag
+  and the name beside a passage that leads off the layer now go wherever there
+  is room — beside the badge, above it, below it — instead of always to one
+  side; where there is no room at all the name gives way and the lettered badge
+  carries the passage on its own. In Zork I this had written `Maze` straight
+  across `Cyclops Room`'s own name, and drawn every up-and-down passage's letter
+  twice, one on top of the other.
 
 ### Fixed
 
