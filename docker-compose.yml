@@ -11,9 +11,11 @@
 # full list of serve-mode environment knobs.
 services:
   lanthorn:
-    build: .
-    # Or run a published image instead of building:
-    # image: ghcr.io/sharkusk/lanthorn:latest
+    # `docker compose pull` picks up a new release. Pin a minor line instead
+    # of floating on `latest` with e.g. ghcr.io/sharkusk/lanthorn:0.4.
+    image: ghcr.io/sharkusk/lanthorn:latest
+    # Developers: build from this checkout instead of the published image:
+    # build: .
     command: serve
     ports:
       - "7681:7681"   # the terminal
@@ -21,6 +23,28 @@ services:
     volumes:
       - ./stories:/stories
       - lanthorn-data:/data
+      # Alternative to the named volume above: keep saves in a host
+      # directory instead. Two facts make this work:
+      #   (a) the container's $HOME is /data, so the host directory that
+      #       corresponds to a native install's ~/.lanthorn mounts at
+      #       /data/.lanthorn, NOT at /data:
+      #         - ~/lanthorn-docker:/data/.lanthorn
+      #   (b) the container runs as uid 1000, so the host directory must
+      #       either be writable by uid 1000, or the service needs:
+      #         user: "${UID:-1000}:${GID:-1000}"
+      #       (compose reads UID/GID from the environment; most shells
+      #       don't export UID, so `export UID GID` first or put them in
+      #       a .env file)
+      #
+      # Don't point this at your native ~/.lanthorn: config.toml's story
+      # paths and recent-stories list are container paths (/stories/...)
+      # that mean nothing to a native lanthorn on the host, and vice versa
+      # — the two installs would fight over one config. Use a dedicated
+      # directory (e.g. ~/lanthorn-docker) if you want a bind mount at
+      # all; otherwise the named volume above is upgrade-safe with no uid
+      # fuss. Back it up with:
+      #   docker run --rm -v lanthorn-data:/data -v "$PWD":/backup debian \
+      #     tar czf /backup/lanthorn-data.tgz -C /data .
     # Uncomment to require HTTP basic auth (strongly recommended before
     # exposing the port beyond localhost; add TLS via a reverse proxy):
     # environment:

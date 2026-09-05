@@ -183,6 +183,18 @@ bind-mount host directories and see permission errors, either `chown` them to
 uid 1000 or run with `--user "$(id -u):$(id -g)"` (then `$HOME` is still
 `/data`, so keep that mount writable by your uid).
 
+If you'd rather bind-mount a host directory for `/data` than use a named
+volume, mount it at `/data/.lanthorn`, not `/data` — `$HOME` is `/data`, and
+that's where saves, configs, and archives actually live underneath it. Don't
+point it at your native `~/.lanthorn`: `config.toml`'s story paths and
+recent-stories list are container paths (`/stories/...`) that mean nothing to
+a native lanthorn on the host, and vice versa, so the two installs would
+fight over one config. Use a dedicated host directory (e.g.
+`~/lanthorn-docker`) if you want a bind mount at all — the named volume is
+still the simpler default (upgrade-safe, no uid fuss); back it up with
+`docker run --rm -v lanthorn-data:/data -v "$PWD":/backup debian tar czf
+/backup/lanthorn-data.tgz -C /data .`.
+
 ## Publishing
 
 `.github/workflows/docker.yml` builds the image on every version tag and
