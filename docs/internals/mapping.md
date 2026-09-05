@@ -393,6 +393,35 @@ Where two unrelated connectors still have to cross, the map says so rather than 
 junction: the vertical run passes through unbroken and the horizontal one breaks for a single
 cell, so a crossing never reads as a place the two passages meet.
 
+**A crossing is fine; running alongside is not.** Two passages that meet at a point and part
+again are both still followable — that is what the break above is for. Two that share a stretch
+of one lane are not: one of them simply disappears under the other, and no amount of styling
+brings it back. So overlap is what the router spends its budget on, and crossings are what it
+accepts in exchange.
+
+Two things enforce that, and they answer different halves of it:
+
+- **Choosing the route.** A connector is offered several candidates — both L orientations, and
+  for a one-way the entry sides that still face its origin — and the one that would run
+  alongside something already placed is disqualified outright, before crossings are counted at
+  all. An overlap-free route wins however many crossings it costs.
+- **Choosing the lane.** Connectors that share a channel are separated into lanes, and the
+  channel simply widens to hold them. A lane is not the whole story, though: a connector on the
+  third lane still has to reach its room, and the line it draws from the box edge out to its
+  lane crosses every lane in between. Two passages bridging into one gap from *opposite* rooms
+  at the same doorway therefore run along each other exactly when the near room's passage took
+  the farther lane — so lane order is settled by which room each end reaches, before anything
+  else is decided.
+
+The one shape that still defeats it is two DIAGONALS crossing inside a single gap. A diagonal is
+drawn as an orthogonal dogleg (out of the box corner, down the gutter, along to the far corner),
+and two doglegs crossing in one gap have to share a row at both ends — there is no pair of lanes
+that separates them at the top without joining them at the bottom. Counterfeit Monkey's park
+corner is the case: Church Forecourt, Park Center and Monumental Staircase in a row over Midway,
+Fair and Heritage Corner, with two diagonals crossing between the columns. Drawing a crossing
+diagonal as a true 45° line would settle it, and that is a change to how a diagonal is drawn
+rather than to where it is routed.
+
 A one-way connector never lands its arrowhead on a room's own compass anchor — the
 mid-side cell a real exit or a `?` random-exit mark in that direction uses, or a
 diagonal's shared corner — even when nothing else claims it: an arrival there would

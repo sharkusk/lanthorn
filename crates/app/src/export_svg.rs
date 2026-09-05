@@ -356,6 +356,21 @@ fn arrowhead(at: (f64, f64), u: (f64, f64), class: &str) -> String {
     )
 }
 
+/// The head of a TWO-WAY passage at one of its box ends: the same triangle, occupying the same
+/// stretch of channel, but pointing INTO the box instead of out of it (SQ-1317).
+///
+/// A reciprocal draws a head at each end. Pointed outward — the way a one-way's single head
+/// points, which is that room's own exit (SQ-0688) — the two heads of a passage between ADJACENT
+/// boxes come nose to nose across a channel a few pixels wide, and the line reads as a bowtie.
+/// Turned around they sit at the two ends of one line pointing into the rooms it joins, which is
+/// the ordinary double-headed arrow for "you can go both ways", is what the legend has always
+/// drawn for two-way, and can never meet in the middle however short the channel.
+///
+/// `at` is the point ON the box edge; `u` is that side's outward normal, as everywhere else.
+fn arrowhead_inward(at: (f64, f64), u: (f64, f64), class: &str) -> String {
+    arrowhead((at.0 + u.0 * 9.0, at.1 + u.1 * 9.0), (-u.0, -u.1), class)
+}
+
 /// A lettered badge — the export's up/down/in/out glyph, spelled as a letter so the document
 /// needs no symbol font at all.
 fn badge(at: (f64, f64), letter: &str) -> String {
@@ -445,6 +460,21 @@ fn render_svg_body(
     let mut ext = Extent::default();
     let mut edges = String::new(); // under the rooms
     let mut over = String::new(); // arrowheads, badges, tags — on top of the rooms
+    // Every room box is off-limits to a label from the start (SQ-1317). A room's NAME is drawn
+    // inside its box, so blocking the box blocks the name — and blocks the box outline too,
+    // which a tag written across is just as unreadable on.
+    let mut placer = TextPlacer::default();
+    for room in &rm.rooms {
+        placer.block(box_px_rect(&cols, &rows, room.cell));
+    }
+    // The `(room, direction)` ends the CONNECTOR pass badges. An Up/Down passage reaches this
+    // function twice — once as a routed portal connector and once as a `RoutedEdge` stub, since
+    // `router::side_for` gives Up and Down no planar side — and each pass drew its own badge. The
+    // two landed a pixel apart and read as one slightly bold circle, so the duplication went
+    // unnoticed until `settle_badge` started sliding coincident badges apart and turned every
+    // vertical passage on the map into `Ⓤ Ⓤ`. The stub pass now yields to this one.
+    let mut portal_ends: std::collections::HashSet<(RoomId, Direction)> =
+        std::collections::HashSet::new();
     let mut boxes = String::new();
 
     // ── Connectors ───────────────────────────────────────────────────────────────────────
@@ -520,25 +550,40 @@ fn render_svg_body(
         let dep_u = outward(conn.exit);
         let arrow_class = if conn.distorted { "arrow distorted" } else { "arrow" };
         if is_portal {
-            let at = (pts[0].0 + dep_u.0 * 8.0, pts[0].1 + dep_u.1 * 8.0);
+            let root = (pts[0].0 + dep_u.0 * 8.0, pts[0].1 + dep_u.1 * 8.0);
+            let at = settle_badge(&mut placer, root, (-dep_u.1, dep_u.0));
+            portal_ends.insert((conn.origin, conn.exit_dir));
             over.push_str(&badge(at, if conn.exit_dir == Direction::Up { "U" } else { "D" }));
             ext.add(at.0 - 8.0, at.1 - 8.0);
             ext.add(at.0 + 8.0, at.1 + 8.0);
         } else {
-            over.push_str(&arrowhead(pts[0], dep_u, arrow_class));
+            // A two-way passage's heads point INTO the rooms, so the two of them sit at the ends
+            // of one line instead of meeting nose to nose in the channel — see `arrowhead_inward`.
+            let two_way = conn.reciprocal && !conn.merge;
+            over.push_str(&if two_way {
+                arrowhead_inward(pts[0], dep_u, arrow_class)
+            } else {
+                arrowhead(pts[0], dep_u, arrow_class)
+            });
             // The drawn side and the passage's own word disagree — a diagonal walked round
             // the corner orthogonally, or a distorted edge leaving by a side that is not its
             // direction. Say which word it was.
             if side_dir(conn.exit) != conn.exit_dir {
-                let at = (pts[0].0 + dep_u.0 * 14.0 + 3.0, pts[0].1 + dep_u.1 * 14.0 - 3.0);
-                let _ = write!(
-                    over,
-                    "<text class=\"tag\" x=\"{}\" y=\"{}\">{}</text>",
-                    f(at.0),
-                    f(at.1),
-                    direction::short_label(conn.exit_dir).to_uppercase()
-                );
-                ext.add(at.0 + 16.0, at.1);
+                let tag = direction::short_label(conn.exit_dir).to_uppercase();
+                let root = (pts[0].0 + dep_u.0 * 11.0, pts[0].1 + dep_u.1 * 11.0);
+                if let Some(spot) = placer.place(tag.chars().count(), &spots_around(root, dep_u, 5.0)) {
+                    let _ = write!(
+                        over,
+                        "<text class=\"tag\"{} x=\"{}\" y=\"{}\">{}</text>",
+                        spot.anchor.attr(),
+                        f(spot.x),
+                        f(spot.y),
+                        tag
+                    );
+                    let r = spot.rect(tag.chars().count());
+                    ext.add(r.0, r.1);
+                    ext.add(r.0 + r.2, r.1 + r.3);
+                }
             }
         }
 
@@ -547,22 +592,32 @@ fn render_svg_body(
             let arr_u = outward(conn.entry);
             let arr_dir = conn.entry_dir.unwrap_or(direction::opposite(conn.exit_dir));
             if matches!(arr_dir, Direction::Up | Direction::Down) {
-                let at = (last.0 + arr_u.0 * 8.0, last.1 + arr_u.1 * 8.0);
+                let root = (last.0 + arr_u.0 * 8.0, last.1 + arr_u.1 * 8.0);
+                let at = settle_badge(&mut placer, root, (-arr_u.1, arr_u.0));
+                portal_ends.insert((conn.dest, arr_dir));
                 over.push_str(&badge(at, if arr_dir == Direction::Up { "U" } else { "D" }));
                 ext.add(at.0 - 8.0, at.1 - 8.0);
                 ext.add(at.0 + 8.0, at.1 + 8.0);
             } else {
-                over.push_str(&arrowhead(last, arr_u, arrow_class));
+                over.push_str(&arrowhead_inward(last, arr_u, arrow_class));
                 if side_dir(conn.entry) != arr_dir {
-                    let at = (last.0 + arr_u.0 * 14.0 + 3.0, last.1 + arr_u.1 * 14.0 - 3.0);
-                    let _ = write!(
-                        over,
-                        "<text class=\"tag\" x=\"{}\" y=\"{}\">{}</text>",
-                        f(at.0),
-                        f(at.1),
-                        direction::short_label(arr_dir).to_uppercase()
-                    );
-                    ext.add(at.0 + 16.0, at.1);
+                    let tag = direction::short_label(arr_dir).to_uppercase();
+                    let root = (last.0 + arr_u.0 * 11.0, last.1 + arr_u.1 * 11.0);
+                    if let Some(spot) =
+                        placer.place(tag.chars().count(), &spots_around(root, arr_u, 5.0))
+                    {
+                        let _ = write!(
+                            over,
+                            "<text class=\"tag\"{} x=\"{}\" y=\"{}\">{}</text>",
+                            spot.anchor.attr(),
+                            f(spot.x),
+                            f(spot.y),
+                            tag
+                        );
+                        let r = spot.rect(tag.chars().count());
+                        ext.add(r.0, r.1);
+                        ext.add(r.0 + r.2, r.1 + r.3);
+                    }
                 }
             }
         }
@@ -577,6 +632,9 @@ fn render_svg_body(
     for edge in &rm.edges {
         if !edge.is_stub || edge.dir == Direction::Unknown {
             continue;
+        }
+        if portal_ends.contains(&(edge.origin, edge.dir)) {
+            continue; // the connector pass already badged this end — see `portal_ends`
         }
         stubs_by_room.entry(edge.origin).or_default().push(Stub {
             dir: edge.dir,
@@ -601,29 +659,37 @@ fn render_svg_body(
                 .unwrap_or(Side::Right);
             let list = &per_side[&s];
             let u = outward(side);
+            let tangent = (-u.1, u.0);
             for (i, &Stub { dir, dest, interlayer: inter }) in list.iter().enumerate() {
                 let step = i as f64 * 17.0;
-                let at = match side {
+                let root = match side {
                     Side::Top => (bx + bw / 2.0 + step, by - 9.0),
                     Side::Bottom => (bx + bw / 2.0 + step, by + bh + 9.0),
                     Side::Left => (bx - 9.0, by + bh / 2.0 + step),
                     Side::Right => (bx + bw + 9.0, by + bh / 2.0 + step),
                 };
+                let at = settle_badge(&mut placer, root, tangent);
                 over.push_str(&badge(at, &direction::short_label(dir).to_uppercase()));
                 ext.add(at.0 - 8.0, at.1 - 8.0);
                 ext.add(at.0 + 8.0, at.1 + 8.0);
                 if inter {
                     if let Some(name) = dest {
-                        let lx = at.0 + u.0 * 9.0 + 2.0;
-                        let ly = at.1 + u.1 * 9.0 + 3.0;
-                        let _ = write!(
-                            over,
-                            "<text class=\"badge-dest\" x=\"{}\" y=\"{}\">{}</text>",
-                            f(lx),
-                            f(ly),
-                            xml_escape(name)
-                        );
-                        ext.add(lx + name.chars().count() as f64 * 4.9, ly + 3.0);
+                        // The name goes wherever it fits; when nothing fits it is dropped and
+                        // the letter alone carries the passage. See `TextPlacer`.
+                        let len = name.chars().count();
+                        if let Some(spot) = placer.place(len, &spots_around(at, u, 9.0)) {
+                            let _ = write!(
+                                over,
+                                "<text class=\"badge-dest\"{} x=\"{}\" y=\"{}\">{}</text>",
+                                spot.anchor.attr(),
+                                f(spot.x),
+                                f(spot.y),
+                                xml_escape(name)
+                            );
+                            let r = spot.rect(len);
+                            ext.add(r.0, r.1);
+                            ext.add(r.0 + r.2, r.1 + r.3);
+                        }
                     }
                 }
             }
@@ -707,6 +773,146 @@ fn render_svg_body(
         f(oy)
     );
     Some((body, width.max(1), height.max(1)))
+}
+
+// ── Text placement ────────────────────────────────────────────────────────────
+
+/// A rectangle in SVG pixels: `(x, y, w, h)`.
+type PxRect = (f64, f64, f64, f64);
+
+/// The advance of one character of the 8px labels (`.tag`, `.badge-dest`) in the monospace stack
+/// the document asks for. The badge pass has always used this number to grow the drawing's
+/// extent; it is named here because the overlap test needs the same one.
+const SMALL_ADV: f64 = 4.9;
+/// Cap height of those labels, and how far the box rises above the baseline.
+const SMALL_PX: f64 = 8.0;
+
+/// Which end of a `<text>` sits on its `x`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Anchor {
+    Start,
+    Middle,
+    End,
+}
+
+impl Anchor {
+    /// The `text-anchor` attribute, or `""` for the SVG default (`start`).
+    fn attr(self) -> &'static str {
+        match self {
+            Anchor::Start => "",
+            Anchor::Middle => " text-anchor=\"middle\"",
+            Anchor::End => " text-anchor=\"end\"",
+        }
+    }
+}
+
+/// One candidate place for a short label: the anchor point, and which end of the text sits on it.
+#[derive(Debug, Clone, Copy)]
+struct Spot {
+    x: f64,
+    y: f64,
+    anchor: Anchor,
+}
+
+impl Spot {
+    /// The box `len` characters would occupy here. SVG `y` is the BASELINE, so the box rises
+    /// above it.
+    fn rect(self, len: usize) -> PxRect {
+        let w = len as f64 * SMALL_ADV;
+        let x = match self.anchor {
+            Anchor::Start => self.x,
+            Anchor::Middle => self.x - w / 2.0,
+            Anchor::End => self.x - w,
+        };
+        (x, self.y - SMALL_PX * 0.8, w, SMALL_PX)
+    }
+}
+
+/// Keeps short labels off things already drawn (SQ-1317).
+///
+/// A direction tag and a cross-layer badge's destination name are both written OUTWARD from an
+/// anchor, and an outward offset says nothing about what is out there. On Zork I that put
+/// `Maze` straight through `Cyclops Room`'s own name — the badge sits on the room's LEFT side,
+/// the name was written left-anchored from it, and left-anchored text runs RIGHT, back across
+/// the box it was meant to sit beside.
+///
+/// So a label states several places it would accept, in order of preference, and takes the first
+/// that is clear of every room, every badge, and every label already placed. When none is clear
+/// the label is DROPPED and its glyph stays: a badge without its destination name still says a
+/// passage leads off the layer, and the legend explains the letter, where a name written over a
+/// room name costs both.
+#[derive(Default)]
+struct TextPlacer {
+    taken: Vec<PxRect>,
+}
+
+impl TextPlacer {
+    fn block(&mut self, r: PxRect) {
+        self.taken.push(r);
+    }
+
+    fn is_free(&self, r: PxRect) -> bool {
+        !self.taken.iter().any(|&t| {
+            r.0 < t.0 + t.2 && t.0 < r.0 + r.2 && r.1 < t.1 + t.3 && t.1 < r.1 + r.3
+        })
+    }
+
+    /// The first candidate whose box is clear, marked taken. `None` when every one is occupied.
+    fn place(&mut self, len: usize, candidates: &[Spot]) -> Option<Spot> {
+        let spot = *candidates.iter().find(|s| self.is_free(s.rect(len)))?;
+        self.block(spot.rect(len));
+        Some(spot)
+    }
+}
+
+/// The box a badge drawn at `at` occupies (radius 6.5, plus a pixel of air).
+fn badge_rect(at: (f64, f64)) -> PxRect {
+    (at.0 - 8.0, at.1 - 8.0, 16.0, 16.0)
+}
+
+/// Settle a badge at `at`, sliding it along `tangent` until it is clear of every badge and room
+/// already placed, and reserve where it lands (SQ-1317).
+///
+/// Two badges landing on one point is not only a same-room affair, which is why the stub pass's
+/// own `i * 17` stacking was not enough: `Clearing`'s DOWN badge sits below its box and
+/// `Forest Path`'s UP badge sits above its own, and the two rooms are vertical neighbours — one
+/// gutter, one point, two letters on top of each other. Sliding on a shared occupancy map sees
+/// that, where per-room stacking cannot.
+///
+/// Gives up after a few steps and returns the last position rather than sliding a badge halfway
+/// across the map: a badge belongs to the box side it names, and one that has wandered says less
+/// than one that overlaps.
+fn settle_badge(placer: &mut TextPlacer, at: (f64, f64), tangent: (f64, f64)) -> (f64, f64) {
+    let mut p = at;
+    for _ in 0..4 {
+        if placer.is_free(badge_rect(p)) {
+            break;
+        }
+        p = (p.0 + tangent.0 * 17.0, p.1 + tangent.1 * 17.0);
+    }
+    placer.block(badge_rect(p));
+    p
+}
+
+/// The four places a short label can sit around an anchor whose outward normal is `u`: along the
+/// normal first (the historical placement, and the one that reads as belonging to the anchor),
+/// then back the other way, then above and below.
+fn spots_around(at: (f64, f64), u: (f64, f64), gap: f64) -> Vec<Spot> {
+    let away = |ux: f64, uy: f64| {
+        let (x, y) = (at.0 + ux * gap, at.1 + uy * gap);
+        Spot {
+            x,
+            y: y + if uy == 0.0 { 3.0 } else { 0.0 },
+            anchor: if ux > 0.0 {
+                Anchor::Start
+            } else if ux < 0.0 {
+                Anchor::End
+            } else {
+                Anchor::Middle
+            },
+        }
+    };
+    vec![away(u.0, u.1), away(-u.0, -u.1), away(0.0, -1.0), away(0.0, 1.0)]
 }
 
 // ── Legend ────────────────────────────────────────────────────────────────────
@@ -1025,6 +1231,102 @@ pub fn connector_room_crossings(svg: &str) -> Vec<String> {
     out
 }
 
+/// One `<text>` the map draws: its `class`, its content, and its approximate box in document
+/// coordinates. The three travel together because a collision report is useless without all
+/// of them — a rectangle nobody can name says only that something is somewhere.
+type LabelBox = (String, String, PxRect);
+
+/// Every `<text>` the MAP draws, as `(class, content, bounding box)` in document coordinates.
+///
+/// The box is approximate — SVG carries no metrics and the document asks for a monospace stack,
+/// so a character is charged `0.6125 * font-size` wide, the same ratio the badge pass has always
+/// used to grow the drawing's extent. That is enough to tell a label sitting ON a room name from
+/// one sitting beside it, which is the question (SQ-1317).
+///
+/// The legend is excluded, as everywhere else here: it draws a sample of every mark the map can
+/// carry, in a panel of its own.
+fn text_boxes(svg: &str) -> Vec<LabelBox> {
+    let doc = roxmltree::Document::parse(svg).expect("well-formed SVG");
+    let mut out = Vec::new();
+    for node in doc.descendants() {
+        if node.tag_name().name() != "text" || under_class(node, "legend-block") {
+            continue;
+        }
+        let cls = node.attribute("class").unwrap_or("").to_string();
+        if cls.starts_with("heading") || cls.starts_with("legend") {
+            continue;
+        }
+        // `badge-text` is the letter INSIDE a badge circle, not a placed label: it goes wherever
+        // its badge goes, and `settle_badge` is what keeps the badge off rooms and other badges.
+        // Charging it a monospace box would also mismeasure it — a two-letter badge like `NW`
+        // overhangs its own 13px circle, which is a cosmetic matter for the badge, not a
+        // collision for the label placer to solve.
+        if cls.starts_with("badge-text") {
+            continue;
+        }
+        let text: String = node.text().unwrap_or("").to_string();
+        if text.is_empty() {
+            continue;
+        }
+        let px: f64 = match cls.split_whitespace().next().unwrap_or("") {
+            "room-label" => 11.0,
+            "random" => 9.0,
+            _ => 8.0,
+        };
+        let offset = translate_of(node);
+        let g = |a: &str| node.attribute(a).and_then(|v| v.parse::<f64>().ok()).unwrap_or(0.0);
+        let (x, y) = (g("x") + offset.0, g("y") + offset.1);
+        let w = text.chars().count() as f64 * px * 0.6125;
+        let x = match node.attribute("text-anchor").unwrap_or("start") {
+            "middle" => x - w / 2.0,
+            "end" => x - w,
+            _ => x,
+        };
+        out.push((cls, text, (x, y - px * 0.8, w, px)));
+    }
+    out
+}
+
+/// Every label the map draws over something it must not: another label, or a room box that is
+/// not its own (SQ-1317).
+///
+/// A room's NAME is drawn inside its box and is the one label a box legitimately holds, so a
+/// `room-label` is exempt from the box test — everything else (a direction tag, a cross-layer
+/// badge's destination name, a `?` count) is not.
+///
+/// **Public so a real story's generated map can be checked by the same code the unit cases use**,
+/// the way [`connector_room_crossings`] is: the synthetic graphs in this file cannot produce the
+/// label pressure a hundred rooms do.
+pub fn label_collisions(svg: &str) -> Vec<String> {
+    let rooms = room_rects(svg);
+    let texts = text_boxes(svg);
+    let hits = |a: (f64, f64, f64, f64), b: (f64, f64, f64, f64)| {
+        a.0 < b.0 + b.2 && b.0 < a.0 + a.2 && a.1 < b.1 + b.3 && b.1 < a.1 + a.3
+    };
+    let mut out = Vec::new();
+    for (cls, text, r) in &texts {
+        if cls.split_whitespace().next() == Some("room-label") {
+            continue;
+        }
+        for room in &rooms {
+            if hits(*r, *room) {
+                out.push(format!("{cls:?} {text:?} at {r:?} sits on room box {room:?}"));
+            }
+        }
+    }
+    for i in 0..texts.len() {
+        for j in (i + 1)..texts.len() {
+            if hits(texts[i].2, texts[j].2) {
+                out.push(format!(
+                    "{:?} {:?} overlaps {:?} {:?}",
+                    texts[i].0, texts[i].1, texts[j].0, texts[j].1
+                ));
+            }
+        }
+    }
+    out
+}
+
 // ── Tests ─────────────────────────────────────────────────────────────────────
 
 #[cfg(all(test, feature = "t-state"))]
@@ -1126,6 +1428,113 @@ mod tests {
             "a one-way passage carries one arrowhead — the line ending bare IS the reading"
         );
         assert!(one.contains("oneway"), "and says so in its class");
+    }
+
+
+    /// SQ-1317: between ADJACENT boxes a two-way passage must not read as a bowtie.
+    ///
+    /// The channel there is a few pixels wide, and two heads pointed outward — the way a one-way's
+    /// single head points, which is that room's own exit (SQ-0688) — come nose to nose in the
+    /// middle of it. So a reciprocal's heads point INTO the boxes: one line, a head at each box
+    /// end, which is also what the legend has always drawn for two-way.
+    ///
+    /// Measured off the emitted geometry rather than the source: each head's TIP (the first
+    /// vertex `arrowhead` writes) must sit on a box edge, and its base must be out in the channel
+    /// on the far side of that tip from the box.
+    #[test]
+    fn a_two_way_passage_between_adjacent_boxes_points_its_heads_into_the_rooms() {
+        let mut m = Mapper::default();
+        m.observe(1, "A", None);
+        m.observe(2, "B", Some(Direction::E));
+        m.observe(1, "A", Some(Direction::W));
+        let svg = render_svg_of(&render(&m.graph), Some(&m.graph));
+        let rooms = room_rects(&svg);
+        assert_eq!(rooms.len(), 2, "the case must draw exactly the two adjacent rooms");
+
+        let doc = roxmltree::Document::parse(&svg).expect("well-formed SVG");
+        let arrows: Vec<Vec<(f64, f64)>> = doc
+            .descendants()
+            .filter(|n| {
+                n.tag_name().name() == "polygon"
+                    && n.attribute("class").unwrap_or("").split_whitespace().any(|c| c == "arrow")
+                    && !under_class(*n, "legend-block")
+            })
+            .map(|n| {
+                let off = translate_of(n);
+                n.attribute("points")
+                    .unwrap_or("")
+                    .split_whitespace()
+                    .filter_map(|p| {
+                        let (a, b) = p.split_once(',')?;
+                        Some((a.parse::<f64>().ok()? + off.0, b.parse::<f64>().ok()? + off.1))
+                    })
+                    .collect()
+            })
+            .collect();
+        assert_eq!(arrows.len(), 2, "a two-way passage carries a head at each end");
+
+        // The two heads are between the boxes; they must not meet. `A`'s right edge and `B`'s
+        // left edge bound the channel.
+        let mut xs: Vec<f64> = rooms.iter().map(|r| r.0).collect();
+        xs.sort_by(|a, b| a.partial_cmp(b).unwrap());
+        for tri in &arrows {
+            assert_eq!(tri.len(), 3, "an arrowhead is a triangle");
+            let tip = tri[0];
+            let base_x = (tri[1].0 + tri[2].0) / 2.0;
+            // The tip sits on one of the two box edges facing the channel...
+            let on_edge = rooms
+                .iter()
+                .any(|&(x, _, w, _)| (tip.0 - x).abs() < 1.5 || (tip.0 - (x + w)).abs() < 1.5);
+            assert!(on_edge, "a head's tip belongs on a box edge, got {tip:?} against {rooms:?}");
+            // ...and its base is further out in the channel than its tip, i.e. it points INTO
+            // the box. Two heads built this way can never meet, whatever the channel's width.
+            let left_box = rooms.iter().any(|&(x, _, w, _)| (tip.0 - (x + w)).abs() < 1.5);
+            if left_box {
+                assert!(base_x > tip.0, "the left box's head must point back into it: {tri:?}");
+            } else {
+                assert!(base_x < tip.0, "the right box's head must point back into it: {tri:?}");
+            }
+        }
+    }
+
+    /// SQ-1317: no label may sit on a room box or on another label.
+    ///
+    /// The bug this pins: a cross-layer badge's destination name was written left-anchored from a
+    /// badge on the room's LEFT side, and left-anchored text runs RIGHT — straight back across the
+    /// box, through the room's own name. Zork I drew `Maze` over `Cyclops Room`. Labels now state
+    /// several places they would accept and take the first that is clear, and drop themselves
+    /// rather than land on something (see `TextPlacer`).
+    #[test]
+    fn no_label_sits_on_a_room_or_another_label() {
+        let m = zork_house();
+        let svg = render_svg_of(&render(&m.graph), Some(&m.graph));
+        assert!(!room_rects(&svg).is_empty(), "the case must actually draw some rooms");
+        let bad = label_collisions(&svg);
+        assert!(bad.is_empty(), "labels must stay clear: {bad:#?}");
+    }
+
+    /// The same rule with a cross-layer badge in play — the shape the Zork I defect had.
+    ///
+    /// A room on the LEFT of the map with a passage to a room peeled onto another layer gets a
+    /// badge on its left side and a `name · layer` caption beside it. The caption has to go left
+    /// of the badge, away from the box, which is the placement the old outward-offset-with-start-
+    /// anchor could not express.
+    #[test]
+    fn a_cross_layer_badge_name_does_not_run_back_across_its_room() {
+        use mapper::layer::LayerId;
+        let mut m = Mapper::default();
+        m.observe(1, "Cyclops Room", None);
+        m.observe(2, "Strange Passage", Some(Direction::E));
+        m.observe(3, "Maze", Some(Direction::NW));
+        let ids: Vec<_> = m.graph.rooms().map(|r| r.id).collect();
+        let far = *ids.iter().find(|&&i| m.graph.room(i).unwrap().label() == "Maze").unwrap();
+        let root = m.graph.layer_of(ids[0]);
+        let other: LayerId = m.graph.new_layer(Some(root), "Maze".into());
+        m.graph.set_room_layer(far, other);
+        let svg = render_svg_layered(&m.graph);
+        assert!(svg.contains("badge-dest"), "the case must actually draw a cross-layer name");
+        let bad = label_collisions(&svg);
+        assert!(bad.is_empty(), "a cross-layer name must stay off its room: {bad:#?}");
     }
 
     #[test]

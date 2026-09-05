@@ -36,11 +36,38 @@
 //! order); both are geometrically equivalent so render output is unaffected.
 //! Stubs (Up/Down/In/Out/Unknown) are never deduped.
 //!
-//! # v1 limitations
+//! # Crossings are fine; OVERLAPS are not
 //!
-//! Full crossing-minimisation is NOT implemented. The L/Z router is deterministic and correct
-//! but may produce crossings when connections overlap in the grid. A future version may apply
-//! a Sugiyama-style crossing-reduction step.
+//! The rule the drawn map is held to is the user's, verbatim: *"crossings are okay, overlaps
+//! need to be avoided."* Two connectors meeting perpendicular at a point is a crossing — the
+//! terminal breaks the horizontal for one cell and both lines stay followable. Two connectors
+//! running ALONG each other for any length is an overlap, and one of the two passages simply
+//! disappears under the other.
+//!
+//! This module's `route_all` is the STUB router: one polyline per connection, first
+//! non-colliding L, no lanes and no notion of what anything else is doing. Nothing here can
+//! honour that rule, and nothing here is asked to — the drawn map is routed by
+//! [`crate::route::route_lanes`], and that is where the cost model lives:
+//!
+//! * **`route_topology_with` chooses a route by cost, not by first fit.** Each connector is
+//!   offered both L orientations and (for a one-way) the entry sides still facing its origin.
+//!   A candidate that would run alongside an already-placed connector scores an overlap, and
+//!   overlaps are the PRIMARY key — an overlap-free route always wins, however many crossings
+//!   it costs. Crossings are the secondary key, then a fixed preference rank, then the points
+//!   themselves, so the choice is deterministic.
+//! * **`assign_lanes` then separates what shares a channel**, and its cost is the lane index:
+//!   a busy channel simply widens (`render::map::channel_width` grows with the lane count)
+//!   rather than stacking two lines on one. Its ordering is a hard constraint, not a
+//!   preference — see [`crate::route::Claim`] for why a connector occupies more of a channel
+//!   than its own lane, and what happens when two of them bridge in from opposite sides.
+//!
+//! `crate::route::plan_overlaps` states the invariant on the finished plan, renderer-
+//! independently; `render::map::overlap_cells` states it again on the drawn cells. Both are
+//! zero on the Zork I map (SQ-1316).
+//!
+//! Full crossing MINIMISATION — a Sugiyama-style global reduction — is still not implemented,
+//! and is a much weaker want: a crossing is legible, so the greedy per-connector reduction
+//! `route_topology` already does is enough.
 
 use std::collections::HashSet;
 
