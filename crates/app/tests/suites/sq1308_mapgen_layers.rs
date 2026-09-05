@@ -720,13 +720,22 @@ fn east_west_passage_stays_on_the_round_room_row_and_the_chasm_column_is_intact(
     }
 }
 
-/// SQ-1312: Zork I's `Studio` sits directly north of the `Gallery`.
+/// SQ-1312: the two rooms Zork I's whole-game layout still put in the wrong cell — a leaf
+/// left hanging three rows off its only neighbour, and a leaf stranded because the room it
+/// hangs off had itself been evicted.
 ///
-/// The `Studio`'s only on-layer bearing is a reciprocated `N`/`S` pair with the `Gallery` (the
-/// `Kitchen`'s `Down` into it crosses a layer boundary and is not in the subgraph at all). The
-/// stress solve left it at `(-1, 5)` with the `Gallery` at `(-1, 8)` and both cells between them
-/// empty: SMACOF averages over every pair in the component, and the separation VPSC enforces for
-/// a cardinal pair is only a MINIMUM. The leaf snap pulls it onto the doorstep.
+/// **`Studio` / `Gallery` (Main).** The `Studio`'s only on-layer bearing is a reciprocated
+/// `N`/`S` pair with the `Gallery` (the `Kitchen`'s `Down` into it crosses a layer boundary and
+/// is not in the subgraph at all). The stress solve left it at `(-1, 5)` with the `Gallery` at
+/// `(-1, 8)` and both cells between them empty: SMACOF averages over every pair in the
+/// component, and the separation VPSC enforces for a cardinal pair is only a MINIMUM. The leaf
+/// snap pulls it onto the doorstep.
+///
+/// **`Stone Barrow` / `West of House` (Rocky Ledge).** `West of House` holds three reciprocated
+/// diagonals and the solve found the one cell that satisfies all of them — which fell inside the
+/// `Living Room`/`Kitchen`/`Behind House` row's span, so the contiguity pass threw it four cells
+/// west as a foreign interloper and left the barrow under the Living Room with both legs of its
+/// only door distorted. A hub is now protected from eviction the way a chain member is.
 #[test]
 fn zork1_leaves_sit_on_their_partners_doorstep() {
     let Some(path) = story("zork1-invclues-r52-s871125.z5") else {
@@ -748,4 +757,28 @@ fn zork1_leaves_sit_on_their_partners_doorstep() {
     {
         assert!(!edge_distorted(g, from, dir, to), "{from} -{dir:?}-> {to} must not be distorted");
     }
+
+    let (p_woh, p_barrow) = (pos("West of House"), pos("Stone Barrow"));
+    assert_eq!(
+        p_barrow,
+        (p_woh.0 - 1, p_woh.1 + 1),
+        "Stone Barrow is one south-west of West of House: {p_barrow:?} {p_woh:?}",
+    );
+    for (from, dir, to) in [
+        ("West of House", Direction::SW, "Stone Barrow"),
+        ("Stone Barrow", Direction::NE, "West of House"),
+    ] {
+        assert!(!edge_distorted(g, from, dir, to), "{from} -{dir:?}-> {to} must not be distorted");
+    }
+
+    // And the hub's other two reciprocated diagonals, which the eviction had also broken.
+    let (p_noh, p_soh) = (pos("North of House"), pos("South of House"));
+    assert!(
+        p_noh.0 > p_woh.0 && p_noh.1 < p_woh.1,
+        "North of House stays north-east of West of House: {p_noh:?} {p_woh:?}",
+    );
+    assert!(
+        p_soh.0 > p_woh.0 && p_soh.1 > p_woh.1,
+        "South of House stays south-east of West of House: {p_soh:?} {p_woh:?}",
+    );
 }

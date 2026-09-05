@@ -20,9 +20,12 @@
 //!    at (0,0); residual collisions are resolved on the grid, keeping an aligned room on
 //!    its row/column where possible (`place_preserving_alignment`) before spiralling.
 //!
-//! The contiguity stage also snaps every **leaf** — a room whose compass edges all name one
-//! partner — onto that partner's doorstep, since the separation a compass edge buys is only
-//! a MINIMUM and the solve leaves slack (SQ-1312).
+//! The contiguity stage also does two things the solve itself cannot (SQ-1312): it snaps
+//! every **leaf** — a room whose compass edges all name one partner — onto that partner's
+//! doorstep, since the separation a compass edge buys is only a MINIMUM and the solve
+//! leaves slack; and it protects every **hub** — a room with two or more reciprocated
+//! compass partners — from eviction, since such a room is pinned by the intersection of
+//! its own bearings and has nowhere better to go.
 //!
 //! After either regime, `mark_distorted` flags every compass edge whose final grid
 //! geometry contradicts its direction. (Connector routing and any render-aware
@@ -30,7 +33,7 @@
 
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 
-use crate::direction::{grid_offset, layout_offset, Direction};
+use crate::direction::{grid_offset, layout_offset, opposite, Direction};
 use crate::graph::{Connection, MapGraph, RoomId};
 
 mod sort;
@@ -672,6 +675,36 @@ fn snap_leaves(
     }
 }
 
+/// Rooms with two or more RECIPROCATED compass partners (SQ-1312).
+///
+/// A reciprocated bearing — the passage walked from both ends, the two observations agreeing —
+/// is the strongest evidence the map has about geometry (SQ-1287), and a room holding two of
+/// them is pinned by their intersection: there is generally exactly one cell that satisfies all
+/// of a hub's bearings at once, and the stress solve has already found it. Moving such a room
+/// breaks several doors to tidy one row, so a hub is protected from eviction the same way a
+/// chain member is.
+fn hub_rooms(graph: &MapGraph, index: &BTreeMap<RoomId, usize>) -> BTreeSet<usize> {
+    let conns = graph.connections();
+    let mut partners: BTreeMap<RoomId, BTreeSet<RoomId>> = BTreeMap::new();
+    for c in conns {
+        if c.is_self_loop() || grid_offset(c.dir).is_none() {
+            continue;
+        }
+        if conns
+            .iter()
+            .any(|o| o.origin == c.dest && o.dest == c.origin && o.dir == opposite(c.dir))
+        {
+            partners.entry(c.origin).or_default().insert(c.dest);
+            partners.entry(c.dest).or_default().insert(c.origin);
+        }
+    }
+    partners
+        .into_iter()
+        .filter(|(_, p)| p.len() >= 2)
+        .filter_map(|(id, _)| index.get(&id).copied())
+        .collect()
+}
+
 fn contiguify(
     chains: &Chains,
     comp: &[RoomId],
@@ -685,13 +718,16 @@ fn contiguify(
     //
     // `protected` covers every room this component's EW or NS chains claim at all (SQ-1309):
     // a room that is legitimately a member of one chain must not be treated as an interloper
-    // and evicted by a DIFFERENT, unrelated chain whose span it happens to cross.
-    let protected: BTreeSet<usize> = chains
+    // and evicted by a DIFFERENT, unrelated chain whose span it happens to cross. It also
+    // covers every HUB — a room with two or more reciprocated compass partners, pinned by
+    // their intersection to the cell the solve gave it (SQ-1312).
+    let mut protected: BTreeSet<usize> = chains
         .ew_members
         .iter()
         .chain(chains.ns_members.iter())
         .flat_map(|members| members.iter().filter_map(|id| index.get(id).copied()))
         .collect();
+    protected.extend(hub_rooms(graph, index));
     let mut snapped_v: Vec<(i32, i32)> = snapped.to_vec();
     let spans = chain_spans(chains, index, &snapped_v);
     // Leaves first: pulling one in can only shrink a chain's span, never grow it, so the spans
@@ -1976,5 +2012,72 @@ mod tests {
             (0, -1),
             "the stairwell is not a compass edge: room 4 is still a leaf and still snaps",
         );
+    }
+
+    /// SQ-1312 (B): a HUB — a room with two or more RECIPROCATED compass partners — must never
+    /// be evicted as a chain's "foreign interloper".
+    ///
+    /// Zork I's `West of House` has three reciprocated diagonals (`North of House` NE,
+    /// `South of House` SE, `Stone Barrow` SW). The stress solve placed it on the one cell that
+    /// satisfies all three — which happened to fall in the gap the solve left between the
+    /// `Living Room` and the `Kitchen` on the Behind House row — and `eject_interlopers` then
+    /// threw it four cells west as an interloper, leaving `Stone Barrow` stranded under the
+    /// Living Room with both legs of its only door distorted. A room whose own reciprocated
+    /// bearings pin it to a cell has as strong a claim on that cell as a chain member does.
+    /// Falsify by dropping `hub_rooms` from `contiguify`'s `protected` set.
+    #[test]
+    fn a_diagonal_hub_is_not_evicted_by_the_row_it_sits_in() {
+        // West of House(68), North of House(143), South of House(217), Stone Barrow(254),
+        // Behind House(89), Kitchen(28), Living Room(79) — Zork I's house ring, compass
+        // reciprocals only.
+        let mut g = crate::graph::MapGraph::new();
+        for id in [28u32, 68, 79, 89, 143, 217, 254] {
+            g.upsert_room(id, "r".into());
+        }
+        use Direction::*;
+        for (o, d, dst) in [
+            (68u32, NE, 143u32), (143, SW, 68), // North of House north-east of West of House
+            (68, SE, 217), (217, NW, 68),       // South of House south-east of it
+            (68, SW, 254), (254, NE, 68),       // Stone Barrow south-west of it (a leaf)
+            (143, SE, 89), (89, NW, 143),       // Behind House south-east of North of House
+            (217, NE, 89), (89, SW, 217),       // and north-east of South of House
+            (89, W, 28), (28, E, 89),           // Behind House ─ Kitchen ─ Living Room:
+            (28, W, 79), (79, E, 28),           // a reciprocal E/W chain
+        ] {
+            g.add_edge(o, d, dst);
+        }
+        g.add_edge(68, In, 254); // the barrow's other door: no bearing, no claim
+
+        relayout_auto(&mut g);
+        let p = |id: u32| g.room(id).unwrap().pos.unwrap();
+        let (woh, noh, soh, barrow) = (p(68), p(143), p(217), p(254));
+
+        assert!(
+            noh.0 > woh.0 && noh.1 < woh.1,
+            "North of House must stay north-east of West of House: {noh:?} vs {woh:?}",
+        );
+        assert!(
+            soh.0 > woh.0 && soh.1 > woh.1,
+            "South of House must stay south-east of West of House: {soh:?} vs {woh:?}",
+        );
+        assert!(
+            barrow.0 < woh.0 && barrow.1 > woh.1,
+            "Stone Barrow must stay south-west of West of House: {barrow:?} vs {woh:?}",
+        );
+
+        let distorted: Vec<_> = g
+            .connections()
+            .iter()
+            .filter(|c| c.distorted)
+            .map(|c| (c.origin, c.dir, c.dest))
+            .collect();
+        assert!(
+            distorted.is_empty(),
+            "every bearing here is a reciprocated pair on a grid that can hold them all: {distorted:?}",
+        );
+
+        let cells: Vec<_> = g.rooms().filter_map(|r| r.pos).collect();
+        let set: BTreeSet<_> = cells.iter().collect();
+        assert_eq!(cells.len(), set.len(), "no room overlap");
     }
 }
