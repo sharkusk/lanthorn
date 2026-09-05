@@ -70,6 +70,14 @@ fn scott_database_maps_completely() {
     assert_eq!(map.story.engine, "scott");
     assert_eq!(map.graph.rooms().count(), 3, "three rooms; index 0 is the sentinel, not a place");
 
+    // A Scott Adams database has no release, serial or checksum field at all
+    // (SQ-1306) — unlike the Z-machine and an Inform-compiled Glulx image,
+    // which both self-identify. All three stay null rather than substituting
+    // the trailer's adventure number, which is a title id, not a build identity.
+    assert_eq!(map.story.release, None);
+    assert_eq!(map.story.serial, None);
+    assert_eq!(map.story.checksum, None);
+
     // Four edges: down the chain twice, and back up twice. The grotto's DOWN
     // and the clearing's UP are both 0 in the database, which means "no exit".
     assert_eq!(map.facts.len(), 4, "edges: {:?}", map.facts);
@@ -107,6 +115,14 @@ fn zil_story_maps_from_its_exit_properties() {
     assert_eq!(map.story.engine, "z-machine");
     assert_eq!(map.story.release, Some(34), "Mini-Zork I release 34");
     assert_eq!(map.story.serial.as_deref(), Some("871124"));
+
+    // ZMSD §11.1: checksum is the word at $1C, reported as a lowercase
+    // `0x`-prefixed hex string. Read straight out of the fixture's own bytes
+    // rather than pinning a magic number, so this doesn't silently start
+    // testing the wrong fixture if minizork.z3 is ever replaced.
+    let bytes = std::fs::read(fixture_path("minizork-r34-s871124.z3")).unwrap();
+    let want_checksum = format!("0x{:04x}", u16::from_be_bytes([bytes[0x1C], bytes[0x1D]]));
+    assert_eq!(map.story.checksum.as_deref(), Some(want_checksum.as_str()));
 
     assert!(has_edge(&map, "West of House", Direction::N, "North of House"));
     assert!(has_edge(&map, "West of House", Direction::NE, "North of House"));
@@ -241,6 +257,19 @@ fn counterfeit_monkey_static_map_covers_every_walked_room() {
     let map = mapgen::generate(&path, true).expect("Counterfeit Monkey must map");
     assert_eq!(map.source, SourceKind::I7World, "CM is an Inform 7 build");
 
+    // Glulx-Inform-Tech.html §1 "Static Data": CM's own `Info` block reports
+    // release 11, serial "230220" — verified directly against the bytes at
+    // 0x24 in its embedded Glulx chunk. Every Glulx image also carries a
+    // whole-image checksum (Glulx spec §1.4, offset 0x20), which is never
+    // absent the way release/serial can be for a non-Inform build.
+    assert_eq!(map.story.release, Some(11), "Counterfeit Monkey release 11");
+    assert_eq!(map.story.serial.as_deref(), Some("230220"));
+    assert!(
+        matches!(map.story.checksum.as_deref(), Some(s) if s.starts_with("0x") && s.len() == 10),
+        "checksum must be a non-null 0x-prefixed 32-bit hex string: {:?}",
+        map.story.checksum
+    );
+
     let generated = names(&map);
     for walked in WALKED_COUNTERFEIT_MONKEY_ROOMS {
         assert!(
@@ -344,6 +373,12 @@ fn adventure_static_map_reads_the_inform6_library() {
     let map = mapgen::generate(&path, true).expect("Adventure must map");
     assert_eq!(map.source, SourceKind::I6Library, "advent.blb is an Inform 6 build");
     assert_eq!(map.story.engine, "glulx");
+
+    // The Inform 6 library build carries its own `Info` block too — reading
+    // it does not depend on the I7 world model, which this build has none of.
+    assert_eq!(map.story.release, Some(5), "advent.blb release 5");
+    assert_eq!(map.story.serial.as_deref(), Some("961209"));
+    assert!(map.story.checksum.is_some());
 
     let generated = names(&map);
     assert!(

@@ -919,9 +919,24 @@ addition, and only a change a version-1 reader could not survive bumps
   `story`, `directions`, `rooms`, `edges`, `layers`.
 - **`story`** — `file` (base name only; a reference map is read on other
   machines and an absolute path is noise), `engine` (`z-machine` / `glulx` /
-  `scott`), `source` (`i7-world` / `i6-library` / `zil` / `scott`), `release`,
-  `serial`, `checksum` (Z-machine only, ZMSD §11.1; `null` elsewhere),
-  `generated_at` (RFC 3339, UTC).
+  `scott`), `source` (`i7-world` / `i6-library` / `zil` / `scott`), `release`
+  (integer), `serial` (string), `checksum` (lowercase `0x`-prefixed hex
+  string), `generated_at` (RFC 3339, UTC).
+  - **Z-machine** (ZMSD §11.1): release is the word at `$02`, serial the six
+    ASCII digits at `$12..$18`, checksum the word at `$1C` — all three always
+    present.
+  - **Glulx**: `checksum` is the header's own whole-image checksum (Glulx spec
+    §1.4, offset `0x20`) and is always present. `release`/`serial` come from
+    the Inform compiler's `Info` block, which sits immediately after the
+    36-byte header (Glulx-Inform-Tech.html §1 "Static Data": magic `'Info'` at
+    `0x24`, then a memory-layout word, two 4-byte ASCII version strings, a
+    release `short` at `0x34`, and a 6-byte serial at `0x36`) — read only when
+    that magic matches, so both are `null` for a non-Inform Glulx image rather
+    than a guess. Both Inform 6 and Inform 7 builds carry this block; it does
+    not depend on the Inform 7 world model.
+  - **Scott Adams**: the format has no release, serial or checksum field at
+    all, so all three are `null`. (The trailer's adventure number, where
+    present, is a title id, not a build identity, and is not reported here.)
 - **`directions`** — the direction vocabulary, so a consumer need not hard-code
   it: `word` (what an edge's `dir` says), `short`, and `bearing` in degrees,
   north 0, clockwise. **`bearing` is `null` for up, down, in and out**, which is
@@ -960,7 +975,7 @@ A worked example, trimmed to one room and one edge:
     "source": "zil",
     "release": 52,
     "serial": "871125",
-    "checksum": 19255,
+    "checksum": "0x4b37",
     "generated_at": "2026-09-05T02:52:34Z"
   },
   "directions": [

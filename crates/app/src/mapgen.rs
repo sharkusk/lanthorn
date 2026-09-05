@@ -177,10 +177,16 @@ pub struct StoryIdent {
     /// read on other machines, and an absolute path is noise there.
     pub file: String,
     pub engine: &'static str,
-    /// Z-machine only (ZMSD §11.1): release number, serial code, checksum.
+    /// Z-machine (ZMSD §11.1) or an Inform-compiled Glulx image (Glulx-Inform-Tech
+    /// §1 "Static Data"): release number and serial code. `None` for a Scott
+    /// Adams database, whose format carries neither.
     pub release: Option<u16>,
     pub serial: Option<String>,
-    pub checksum: Option<u16>,
+    /// The story's own header checksum, formatted as a lowercase `0x`-prefixed
+    /// hex string — a Z-machine word (ZMSD §11.1, `$1C`) or a Glulx image's
+    /// whole-memory sum (Glulx spec §1.4, offset `0x20`). `None` for Scott
+    /// Adams, which has no such field.
+    pub checksum: Option<String>,
 }
 
 /// A complete static map: the graph, laid out unless asked not to, plus
@@ -519,7 +525,8 @@ fn zmachine_map(bytes: &[u8], file: String) -> Result<GeneratedMap, GenError> {
         release: (bytes.len() > 0x03).then(|| u16::from_be_bytes([bytes[0x02], bytes[0x03]])),
         serial: (bytes.len() >= 0x18)
             .then(|| String::from_utf8_lossy(&bytes[0x12..0x18]).into_owned()),
-        checksum: (bytes.len() > 0x1D).then(|| u16::from_be_bytes([bytes[0x1C], bytes[0x1D]])),
+        checksum: (bytes.len() > 0x1D)
+            .then(|| format!("0x{:04x}", u16::from_be_bytes([bytes[0x1C], bytes[0x1D]]))),
     };
     Ok(assemble(rooms, edges, source, story))
 }
@@ -573,16 +580,20 @@ fn glulx_map(bytes: &[u8], file: String) -> Result<GeneratedMap, GenError> {
     let names = gvm::objects::ParseNames::detect(&mem)
         .map_err(|e| GenError::Engine(format!("Glulx object table not readable: {e:?}")))?;
 
-    let story = StoryIdent {
-        file,
-        engine: "glulx",
-        // Glulx's header carries no release, serial or checksum the way the
-        // Z-machine's does; an Inform 7 build's identity lives in metadata a
-        // Blorb may or may not carry, so these stay null rather than guessed.
-        release: None,
-        serial: None,
-        checksum: None,
+    // Glulx spec §1.4: the header's own whole-image checksum, offset 0x20 —
+    // every Glulx image has one, unlike release/serial below.
+    let checksum = Some(format!("0x{:08x}", mem.checksum()));
+
+    // The release and serial are not part of the Glulx spec itself; they are
+    // the Inform compiler's own `Info` block, read only when its magic at
+    // 0x24 confirms the image actually carries one (Glulx-Inform-Tech.html
+    // §1 "Static Data") — a bare non-Inform Glulx image has neither.
+    let (release, serial) = match gvm::header::parse_inform_info(bytes) {
+        Some(info) => (Some(info.release), Some(info.serial)),
+        None => (None, None),
     };
+
+    let story = StoryIdent { file, engine: "glulx", release, serial, checksum };
 
     // Inform 7's own map table first — it is the higher authority for any story
     // that has one, since it is what the I7 runtime itself reads.
@@ -800,9 +811,11 @@ fn scott_map(bytes: &[u8], file: String) -> Result<GeneratedMap, GenError> {
     let story = StoryIdent {
         file,
         engine: "scott",
+        // A Scott Adams database has no release, serial or checksum field at
+        // all (SQ-1306) — the trailer's adventure number is a title id, not a
+        // build identity, so it does not belong in any of these three.
         release: None,
-        // A Scott database's only self-identification is its adventure number.
-        serial: Some(format!("adventure {}", db.adventure_number)),
+        serial: None,
         checksum: None,
     };
     Ok(assemble(rooms, edges, SourceKind::Scott, story))
@@ -907,7 +920,7 @@ struct JsonStory<'a> {
     source: &'static str,
     release: Option<u16>,
     serial: Option<&'a str>,
-    checksum: Option<u16>,
+    checksum: Option<&'a str>,
     generated_at: String,
 }
 
@@ -1113,7 +1126,7 @@ pub fn render_json(map: &GeneratedMap) -> String {
             source: map.source.as_str(),
             release: map.story.release,
             serial: map.story.serial.as_deref(),
-            checksum: map.story.checksum,
+            checksum: map.story.checksum.as_deref(),
             generated_at: rfc3339_now(),
         },
         directions,
