@@ -19,6 +19,16 @@ Absolute URLs or no link.
 
 ---
 
+## Unreleased
+
+> *This section is drained when a version is cut. README.md describes the
+> RELEASED build; prose for a feature that is in `main` but not yet released
+> goes into the README in place, at its normal destination, marked with the
+> visible tag `*Next release:*`. `release.yml` refuses to cut a release
+> while any such tag, or this Unreleased section, still exists.*
+
+---
+
 ## v0.4.4 — 2026-09-04
 
 ### Highlights
