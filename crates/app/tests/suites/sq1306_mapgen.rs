@@ -39,6 +39,58 @@ fn names(map: &mapgen::GeneratedMap) -> Vec<String> {
     map.graph.rooms().map(|r| r.label().to_string()).collect()
 }
 
+/// SQ-1319's ghost accounting, checked against the graph rather than eyeballed: every interlayer
+/// connection draws exactly one departure ghost on its origin's layer, and a one-way one (no
+/// connection back the other way) draws an extra arrival ghost on its destination's layer — never
+/// more, never fewer, and never one that overlaps a room or another ghost. `mapgen` only ever
+/// cuts layers at a portal seam (Up/Down/In/Out — see `mapper::layer::planar_region`), so a real
+/// story's `stories/`-only fixture is the only place this exercises the general "compass or
+/// portal" rule `export_svg`'s own synthetic cases cannot reach.
+fn assert_ghost_accounting(svg: &str, graph: &mapper::graph::MapGraph) {
+    let doc = roxmltree::Document::parse(svg).expect("well-formed SVG");
+    let count = |want: &str| {
+        doc.descendants()
+            .filter(|n| {
+                n.tag_name().name() == "rect"
+                    && n.attribute("class") == Some(want)
+                    && !app::export_svg::under_class(*n, "legend-block")
+            })
+            .count()
+    };
+    let departures = count("ghost");
+    let arrivals = count("ghost arrival");
+
+    let interlayer: Vec<&mapper::graph::Connection> =
+        graph.connections().iter().filter(|c| mapper::layer::is_interlayer(graph, c)).collect();
+    let one_way = interlayer
+        .iter()
+        .filter(|c| !graph.connections().iter().any(|c2| c2.origin == c.dest && c2.dest == c.origin))
+        .count();
+
+    assert_eq!(departures, interlayer.len(), "one departure ghost per interlayer connection");
+    assert_eq!(arrivals, one_way, "one arrival ghost per one-way interlayer connection");
+
+    let bad = app::export_svg::ghost_box_overlaps(svg);
+    assert!(bad.is_empty(), "ghost boxes must stay clear of rooms and each other: {bad:#?}");
+
+    // Every ghost names a real room and a real layer — never the legend's own sample.
+    let room_names: std::collections::HashSet<&str> = graph.rooms().map(|r| r.label()).collect();
+    let layer_names: std::collections::HashSet<&str> =
+        graph.layers().keys().map(|&l| graph.layer_name(l)).collect();
+    for n in doc.descendants().filter(|n| {
+        n.attribute("class") == Some("ghost-name") && !app::export_svg::under_class(*n, "legend-block")
+    }) {
+        let text = n.text().unwrap_or("");
+        assert!(room_names.contains(text), "ghost names a real room, got {text:?}");
+    }
+    for n in doc.descendants().filter(|n| {
+        n.attribute("class") == Some("ghost-layer") && !app::export_svg::under_class(*n, "legend-block")
+    }) {
+        let text = n.text().unwrap_or("");
+        assert!(layer_names.contains(text), "ghost names a real layer, got {text:?}");
+    }
+}
+
 /// True when `map` has an edge from a room named `from`, in direction `dir`, to
 /// a room named `to`. Names rather than ids on purpose: an id is an
 /// implementation detail of whichever engine read the story, and a test that
@@ -476,6 +528,32 @@ fn zork1_svg_shows_every_room_and_no_connector_crosses_a_room() {
     // fixture in `export_svg`'s own module produces.
     let bad = app::export_svg::label_collisions(&svg);
     assert!(bad.is_empty(), "labels must stay clear of rooms and of each other: {bad:#?}");
+
+    // SQ-1319: Kitchen's Down passage to Studio (a layer peeled off by a portal seam) is the
+    // exact case `place_ghost`'s fallback exists for — its ghost was dropped outright under the
+    // fixed-candidate search SQ-1317 shipped with, on this map's dense house layer.
+    assert_ghost_accounting(&svg, &map.graph);
+}
+
+/// The same ghost accounting as Zork I, on a denser Glulx map — Anchorhead's own house has more
+/// rooms competing for the same badge sides than Zork I's does, which is the density SQ-1319's
+/// fallback has to survive rather than merely pass on a roomy layer.
+#[test]
+fn anchorhead_svg_ghosts_every_cross_layer_passage() {
+    let Some(path) = story("Anchorhead.gblorb") else {
+        eprintln!("SKIP: stories/Anchorhead.gblorb absent");
+        return;
+    };
+    let map = mapgen::generate(&path, true).expect("Anchorhead must map");
+    let svg = app::export_svg::render_svg_layered(&map.graph);
+    roxmltree::Document::parse(&svg).expect("the export must be well-formed XML");
+
+    let bad = app::export_svg::connector_room_crossings(&svg);
+    assert!(bad.is_empty(), "connectors must not run through room boxes: {bad:?}");
+    let bad = app::export_svg::label_collisions(&svg);
+    assert!(bad.is_empty(), "labels must stay clear of rooms and of each other: {bad:#?}");
+
+    assert_ghost_accounting(&svg, &map.graph);
 }
 
 /// The Inform 6 library on Glulx — a different reader from Inform 7's, reached
