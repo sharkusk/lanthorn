@@ -59,6 +59,13 @@ Absolute URLs or no link.
   a handful of games keep their map somewhere nothing can read without running
   them, for which it says so and stops rather than guessing. Run
   `lanthorn-mapgen --help` for the whole of it.
+- **The map now understands a ship's quarter directions.** Sailing games like
+  Counterfeit Monkey's yacht ask for fore, aft, port and starboard, and the
+  diagonals fore-port, fore-starboard, aft-port, aft-starboard — and every
+  abbreviation such games accept (`f`, `a`, `p`, `sb`, `fp`, `as`, …). The map
+  now reads them and maps them onto the compass diagonals so a ship's deck lays
+  out correctly. Return-path probing types the ship's own word back — after
+  fore-starboard it asks for aft-port, not southwest.
 
 ### Changed
 
@@ -70,9 +77,20 @@ Absolute URLs or no link.
   number the map already gives you elsewhere. The room panel and `/export-map`
   still show the old code alongside the new number, for matching a bug report
   back to the exact room.
+- **The "give these rooms their own layer?" prompt now offers three ways to
+  decline.** Before, you could only say "Never" and it would silence that one
+  passage, but the next passage would ask again. Now you get Not now, Not this
+  passage, and Never for this story — and the story-wide choice is remembered
+  with the map.
 
 ### Fixed
 
+- **`GO TO <room>` (and `WALK TO`, `RETURN TO`, `REVISIT`) no longer draws
+  false passages.** These commands, which some games offer as shortcuts to jump
+  across several rooms at once, used to create a phantom passage between the
+  room you left and the one you arrived in, as if the map didn't know you'd
+  skipped the middle. Now the map just moves you there, the same way it handles
+  a cutscene or a flashback.
 - **Games that keep the room name in their status bar now map.** *The Wizard
   Sniffer* never prints a room title in the story text — the name lives only in
   its own status bar, beside the exits — and lanthorn found no rooms in it at
