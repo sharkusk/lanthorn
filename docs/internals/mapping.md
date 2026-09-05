@@ -887,6 +887,54 @@ It writes four artefacts named after the story's own stem, and prints a summary:
 | `<stem>.dot` | `app::export_dot::render_dot` — every layer as its own Graphviz cluster once there is more than one |
 | `<stem>.map.json` | the documented, versioned JSON map described below |
 
+#### The SVG draws the terminal's own routes (SQ-1313)
+
+`app::export_svg` contains **no geometry of its own**. It calls exactly what the
+Boxes-zoom cell renderer calls:
+
+| shared from `app::render::map` | what it decides |
+|---|---|
+| `boxes_axes_sized` → `PosTable` | the non-uniform axes — where each room line starts, and how wide the CHANNEL after it grows to hold the lanes `mapper::route::RoutePlan` assigned |
+| `plot_connector` → `ConnectorPlot` | one connector's orthogonal run through those channels, its side-anchor slot on each box, and its departure/arrival arrowhead anchors |
+| `random_stub_cells` | where a `?` random-exit mark sits — the same primitive a real exit's own anchor is built from |
+
+`ConnectorPlot` carries the run twice, in the two readings the two renderers
+need: `cells` (per-cell direction-bit masks, for line-art glyphs) and `path`
+(the same run reduced to its turning points, for a stroked polyline). The
+terminal never reads `path`; the SVG never reads `cells`. There is no second
+router to drift from the first.
+
+`boxes_axes_sized` is `boxes_axes` with per-grid-line box sizes, which is how a
+room box grows to fit its own name. A `RoutePlan` is expressed in doubled *cell*
+coordinates and knows nothing about how big a box is, so widening a column moves
+the boxes and the channels together and leaves every routing decision untouched
+— the terminal passes empty override maps and gets the layout it always had.
+
+What the drawing shows, beyond the rooms:
+
+- **Every connector in its own lane**, as a rounded orthogonal polyline attached
+  to its own anchor slot on the room's side. A unit case asserts the geometric
+  invariant directly: no drawn segment passes through a room rect.
+- **Arrowheads by the terminal's own rule** — an arrow on a room border is that
+  room's own EXIT (SQ-0688). A reciprocal pair (one collapsed connector) gets one
+  at each end; a one-way gets one, and the bare far end *is* the reading; an
+  asymmetric pair is two connectors, each with its own departure arrow.
+- **A direction tag** at the departure anchor when the side a connector actually
+  leaves by disagrees with the passage's word — a diagonal walked round the
+  corner orthogonally, or a distorted edge routed out of another side.
+- **Weights** (SQ-1312): a `Door` gets a bar across the line with a gap punched
+  under it, a `Conditional` exit is dotted, and a distorted edge stays dashed red.
+- **Up/Down/In/Out** as a lettered badge (`U`/`D`/`I`/`O`) on the side the
+  passage leaves by, with the destination's name beside it when it crosses a
+  layer. Letters, not glyphs: **the export must not depend on Nerd Fonts.**
+- **A legend** in the bottom-left of each document naming every mark.
+
+Styling is a `<style>` block of CSS classes — `.room`, `.room.current`,
+`.room-label`, `.edge` plus one of `.reciprocal`/`.asym`/`.oneway`, `.edge.portal`,
+`.edge.conditional`, `.edge.distorted`, `.edge.stub`, `.arrow`, `.door`, `.badge`,
+`.tag`, `.legend` — rather than per-element attributes, so a consumer can restyle
+an exported map without re-rendering it. The dark palette is the default.
+
 Naming any of `--dump`, `--svg`, `--dot`, `--json` writes only the ones named;
 naming none writes all four. `--no-layout` skips
 `mapper::layout::relayout_auto`, leaving pure topology with no room positions —

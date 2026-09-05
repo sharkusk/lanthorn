@@ -1584,7 +1584,7 @@ fn handle_map_export(
             let path = app::export::resolve_export_path(dest.as_deref(), game_dir, "map.svg");
             if let Some(p) = path.parent() { let _ = std::fs::create_dir_all(p); }
             let rm = render_map_data(&mapper.graph);
-            match export_svg(&path, &rm) {
+            match export_svg(&path, &rm, Some(&mapper.graph)) {
                 Ok(()) => state.push_notice(&format!("[SVG exported to {}]", abbreviate_home(&path))),
                 Err(e) => state.push_notice(&format!("[SVG export failed: {}]", e)),
             }

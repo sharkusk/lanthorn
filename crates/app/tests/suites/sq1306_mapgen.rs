@@ -395,6 +395,82 @@ fn zork1_static_map_reads_its_zil_exits() {
     );
 }
 
+/// The SVG a generated Zork I map exports (SQ-1313): every room named, every
+/// drawn connector a stroked path, and not one segment running through a room
+/// box.
+///
+/// The synthetic graphs `app::export_svg`'s own unit cases build cannot produce
+/// the lane pressure a hundred-room map does — the crossing check only means
+/// something once several connectors are competing for one channel — so this is
+/// the case that actually exercises it, on the map the whole quest was reported
+/// against. It skips vacuously without `stories/`, so it prints what it skipped.
+#[test]
+fn zork1_svg_shows_every_room_and_no_connector_crosses_a_room() {
+    let Some(path) = story("zork1-invclues-r52-s871125.z5") else {
+        eprintln!("SKIP: stories/zork1-invclues-r52-s871125.z5 absent");
+        return;
+    };
+    let map = mapgen::generate(&path, true).expect("Zork I must map");
+    let svg = app::export_svg::render_svg_layered(&map.graph);
+
+    let doc = roxmltree::Document::parse(&svg).expect("the export must be well-formed XML");
+
+    // Every room the map holds is named on the drawing. Labels wrap onto at most
+    // two lines, so a name is matched against the concatenation of its own box's
+    // text rather than against any single `<text>`.
+    let drawn: Vec<String> = doc
+        .descendants()
+        .filter(|n| {
+            n.attribute("class").unwrap_or("").split_whitespace().any(|c| c == "room-label")
+        })
+        .map(|n| n.text().unwrap_or("").to_string())
+        .collect();
+    let haystack = drawn.join("\u{1}");
+    let mut missing: Vec<String> = Vec::new();
+    for room in map.graph.rooms() {
+        let label = room.label();
+        let joined = label.split_whitespace().collect::<Vec<_>>().join(" ");
+        // A label is drawn whole, or split across the two lines of its box.
+        let found = haystack.contains(&joined)
+            || haystack.replace('\u{1}', " ").contains(&joined)
+            || label.chars().count() > 34; // ellipsised at the widest box
+        if !found {
+            missing.push(label.to_string());
+        }
+    }
+    assert!(missing.is_empty(), "rooms missing from the SVG: {missing:?}");
+
+    // One stroked path per drawn connector — the export draws no bare polylines
+    // and no `<line>` for a real passage, so a count of `.edge` paths is the
+    // count of connectors reaching the drawing.
+    let edge_paths = doc
+        .descendants()
+        .filter(|n| {
+            n.tag_name().name() == "path"
+                && n.attribute("class").unwrap_or("").split_whitespace().any(|c| c == "edge")
+                // The legend draws a sample of every mark; only the map's own count matters.
+                && !app::export_svg::under_class(*n, "legend-block")
+        })
+        .count();
+    let drawn_connectors: usize = map
+        .graph
+        .layers()
+        .keys()
+        .copied()
+        .filter(|&l| !map.graph.rooms_in_layer(l).is_empty())
+        .map(|l| mapper::render::render_layer(&map.graph, l).plan.connectors.len())
+        .sum();
+    assert!(drawn_connectors > 40, "Zork I must route a real number of connectors, got {drawn_connectors}");
+    assert_eq!(
+        edge_paths, drawn_connectors,
+        "every routed connector must reach the drawing as its own path"
+    );
+
+    // The geometric invariant, checked by the same code the unit cases use.
+    let bad = app::export_svg::connector_room_crossings(&svg);
+    assert!(bad.is_empty(), "connectors must not run through room boxes: {bad:?}");
+}
+
 /// The Inform 6 library on Glulx — a different reader from Inform 7's, reached
 /// only when no `Map_Storage` table is found.
 #[test]
