@@ -1438,7 +1438,7 @@ pub(crate) fn plot_connector(
     // Convert the doubled polyline to a virtual-pixel polyline, resolving each point's lane
     // against this connector's segments by channel + extent (a connector may have two runs
     // in one channel on different lanes).
-    let pix: Vec<(i32, i32)> = conn
+    let mut pix: Vec<(i32, i32)> = conn
         .points
         .iter()
         .map(|&p| lane_pixel(p, cols, rows, &conn.segs))
@@ -1462,12 +1462,6 @@ pub(crate) fn plot_connector(
         box_edge_anchor(cols, rows, origin_cell, conn.exit, conn.exit_slot)
     };
 
-    // The connector leaves the box straight out at 90° (a perpendicular stub on the anchor's own
-    // row/col), then steps along the edge into the first interior channel point. Distinct slots
-    // give distinct border cells; the straight connector on each side keeps slot 0 (centre), so a
-    // displaced connector crosses it as a single clean ┼ instead of a corner stomp.
-    let first_interior = pix[1];
-
     // The arrival anchor does not depend on the departure geometry, so resolve it first: a
     // corner-to-corner diagonal aims its chain straight at it (SQ-0314), and so needs it up front.
     //
@@ -1476,14 +1470,39 @@ pub(crate) fn plot_connector(
     // two ends cannot drift apart. It covers the one-way diagonal (no back edge, but still arrives
     // on the corner facing its origin) and the arrival that YIELDED its corner to the destination's
     // own outgoing diagonal — that one is back on a side doorway, at a real slot.
-    let arr_target = (!conn.merge).then(|| {
-        let last = conn.points[conn.points.len() - 1];
-        let dest_cell = (last.0.div_euclid(2), last.1.div_euclid(2));
-        match conn.entry_corner {
-            Some(d) => corner_anchor(cols, rows, dest_cell, d),
-            None => box_edge_anchor(cols, rows, dest_cell, conn.entry, conn.entry_slot),
-        }
+    let last_point = conn.points[conn.points.len() - 1];
+    let dest_cell = (last_point.0.div_euclid(2), last_point.1.div_euclid(2));
+    let arr_target = (!conn.merge).then(|| match conn.entry_corner {
+        Some(d) => corner_anchor(cols, rows, dest_cell, d),
+        None => box_edge_anchor(cols, rows, dest_cell, conn.entry, conn.entry_slot),
     });
+
+    // SQ-1320: aim the final approach at the SLOT the arrowhead will actually use, not at the
+    // side's centre cell with a sidestep tacked on at the end.
+    //
+    // The router's polyline ends on the destination's COMPASS anchor — its `eb` stub is the side
+    // midpoint, because the fine grid has no way to name a cell part-way along a box edge. The
+    // slot displacement is then applied here, to the anchor alone, and `attach_bridge` bridges
+    // the gap. Where the route approaches ALONG the edge (its last run parallel to the side) that
+    // costs nothing: the offset merely lengthens or shortens the perpendicular stub and the two
+    // merge into one straight run. Where it approaches HEAD-ON — the last run perpendicular to
+    // the side, aimed straight at the midpoint — the bridge has to step sideways in the gutter
+    // immediately outside the box, which is the little jog the user reported on
+    // `Frigid River --W--> White Cliffs Beach` and `Clearing --E--> Forest`.
+    //
+    // So displace the whole final perpendicular RUN, not just its last cell: the line then comes
+    // down (or across) the slot's own column/row from its last turn and enters the box straight.
+    // The preceding run is parallel to the edge, so shifting the turn only changes its LENGTH —
+    // every segment stays orthogonal, and the arrowhead does not move.
+    if let Some(aa) = arr_target.filter(|_| conn.entry_corner.is_none()) {
+        straighten_arrival(&mut pix, conn.entry, aa, box_edge_anchor(cols, rows, dest_cell, conn.entry, 0));
+    }
+
+    // The connector leaves the box straight out at 90° (a perpendicular stub on the anchor's own
+    // row/col), then steps along the edge into the first interior channel point. Distinct slots
+    // give distinct border cells; the straight connector on each side keeps slot 0 (centre), so a
+    // displaced connector crosses it as a single clean ┼ instead of a corner stomp.
+    let first_interior = pix[1];
 
     // SQ-0314: a diagonal exit leaves the corner on a chain of half-diagonals, and the orthogonal
     // path resumes at the chain's far end (a │ attachment point).
@@ -2164,6 +2183,55 @@ fn attach_bridge(anchor: (i32, i32), interior: (i32, i32), side: Side) -> Vec<(i
         Vec::new()
     } else {
         vec![turn]
+    }
+}
+
+/// Slide a connector's final approach onto its arrival SLOT, so the last leg runs straight into
+/// the arrowhead instead of aiming at the side's centre and stepping across at the last moment
+/// (SQ-1320).
+///
+/// `pix` is the whole virtual-pixel polyline, room centre to room centre; only its interior
+/// points are touched, and only when the approach is HEAD-ON — the polyline's last run
+/// perpendicular to `entry`, i.e. pointed straight at the side midpoint. An approach that already
+/// runs ALONG the edge needs nothing: `attach_bridge` absorbs the offset into the perpendicular
+/// stub and draws one straight run either way.
+///
+/// The shift is `arrival - centre` on the side's TANGENT axis (x for Top/Bottom, y for Left/Right)
+/// — the same displacement [`box_edge_anchor`] gave the anchor, so the run lands on the anchor's
+/// own column/row. The whole run moves, not just its last point: shifting one end alone would
+/// make the segment diagonal. The run BEFORE it is parallel to the edge (a merged-collinear
+/// polyline alternates axes), so moving that turn along the tangent only changes that run's
+/// length and every segment stays orthogonal.
+fn straighten_arrival(
+    pix: &mut [(i32, i32)],
+    entry: Side,
+    arrival: (i32, i32),
+    centre: (i32, i32),
+) {
+    // The tangent axis of `entry`: 0 = x (a horizontal side), 1 = y (a vertical side).
+    let tangent_is_x = matches!(entry, Side::Top | Side::Bottom);
+    let tangent = |p: (i32, i32)| if tangent_is_x { p.0 } else { p.1 };
+    let shift = tangent(arrival) - tangent(centre);
+    // `k` is the last INTERIOR point: `pix` ends on the destination's centre, which is trimmed.
+    if shift == 0 || pix.len() < 4 {
+        return;
+    }
+    let k = pix.len() - 2;
+    // Walk back over the tail that shares `pix[k]`'s tangent coordinate — the final run, aimed at
+    // the side. Stop at index 1: `pix[0]` is the origin's centre, which `attach_bridge` replaces.
+    let mut j = k;
+    while j > 1 && tangent(pix[j - 1]) == tangent(pix[k]) {
+        j -= 1;
+    }
+    if j == k {
+        return; // the last run is parallel to the side: no jog to remove
+    }
+    for p in &mut pix[j..=k] {
+        if tangent_is_x {
+            p.0 += shift;
+        } else {
+            p.1 += shift;
+        }
     }
 }
 
@@ -9886,5 +9954,215 @@ mod sq1291_zork_chasm_badges {
         let st = AppState::default();
         let (_, dy, _, cy) = badge_at(&g, PASSAGE, st.symbols.portal.down);
         assert!(dy > cy, "as reported, the ↓ leans SOUTH (dy={dy}, centre {cy})");
+    }
+}
+
+
+#[cfg(all(test, feature = "t-render"))]
+mod sq1320_arrival_slots {
+    //! **A one-way arrival runs STRAIGHT into the cell its arrowhead lands on** (SQ-1320).
+    //!
+    //! Two things had to change for that, and they are separable — the cases below keep them so.
+    //!
+    //! 1. **The route is aimed at the slot** ([`straighten_arrival`]). The router's polyline ends
+    //!    on the destination's compass anchor, because the fine grid cannot name a cell part-way
+    //!    along a box edge; the slot displacement used to be applied to the ANCHOR alone, leaving
+    //!    [`attach_bridge`] to sidestep across in the one gutter cell outside the box. Where the
+    //!    approach was head-on that read as a little jog right at the room.
+    //! 2. **The rule about WHICH slot was relaxed** (`route::assign_side_slots`). SQ-1274 barred a
+    //!    one-way arrival from the side's centre cell unconditionally; it now yields only to
+    //!    something of the room's OWN — an exit or a `?` mark in that direction, a reciprocal, or
+    //!    a second arrival.
+    //!
+    //! The two Zork I shapes the user reported are `Frigid River --W--> White Cliffs Beach`
+    //! (#47→#192, the beach one row south and one column west) and `Clearing --E--> Forest`
+    //! (#167→#33, two columns east and one row south), both distorted one-ways. They are rebuilt
+    //! here as synthetic graphs of the same shape so the cases run on CI, where `stories/` is
+    //! absent; `sq1316_connector_overlaps` states the same rule over the real map.
+
+    use super::*;
+    use mapper::direction::Direction::{self, E, N, S, W};
+    use mapper::graph::{MapGraph, RoomId};
+    use mapper::layer::MAIN_LAYER;
+
+    const ORIGIN: RoomId = 1;
+    const DEST: RoomId = 2;
+
+    /// The compass direction a room `side`'s CENTRE border cell stands for — the direction an
+    /// exit drawn from that cell points. Mirrors `route`'s own `side_compass`, deliberately
+    /// spelled again here so the case states its own reading of the rule.
+    fn side_compass(side: Side) -> Direction {
+        match side {
+            Side::Top => N,
+            Side::Bottom => S,
+            Side::Left => W,
+            Side::Right => E,
+        }
+    }
+
+    /// What one arrival at `DEST` looks like once plotted.
+    struct Arrival {
+        entry: Side,
+        slot: u16,
+        /// `dep_anchor → … → arr_anchor`, spur-collapsed and reduced to its turns.
+        path: Vec<(i32, i32)>,
+        arr: (i32, i32),
+        /// The cell `arr` would sit on at slot 0 — the room's own compass anchor.
+        centre: (i32, i32),
+    }
+
+    impl Arrival {
+        /// The length in cells of the leg that carries the arrowhead: the last segment of the
+        /// path, which must run perpendicular into the box border.
+        fn final_leg(&self) -> i32 {
+            let n = self.path.len();
+            assert!(n >= 2, "a plotted connector has at least two path points");
+            let (a, b) = (self.path[n - 2], self.path[n - 1]);
+            (a.0 - b.0).abs() + (a.1 - b.1).abs()
+        }
+
+        /// True when the whole final leg lies on the arrowhead's own column (a horizontal side)
+        /// or row (a vertical one) — i.e. the line comes straight in rather than sliding across.
+        fn final_leg_is_straight_in(&self) -> bool {
+            let a = self.path[self.path.len() - 2];
+            match self.entry {
+                Side::Top | Side::Bottom => a.0 == self.arr.0,
+                Side::Left | Side::Right => a.1 == self.arr.1,
+            }
+        }
+    }
+
+    /// Route `g` and plot its one connector into `DEST`.
+    fn arrival(g: &MapGraph) -> Arrival {
+        let rm = mapper::render::render_layer(g, MAIN_LAYER);
+        let (cols, rows) = boxes_axes(&rm.plan, rm.bounds);
+        let conn = rm
+            .plan
+            .connectors
+            .iter()
+            .find(|c| c.dest == DEST && !c.merge && c.entry_corner.is_none())
+            .expect("one connector arrives at DEST on a side doorway");
+        let plot = plot_connector(conn, &cols, &rows, None).expect("it plots");
+        let cell = g.room(DEST).and_then(|r| r.pos).expect("DEST is placed");
+        Arrival {
+            entry: conn.entry,
+            slot: conn.entry_slot,
+            path: plot.path.clone(),
+            arr: plot.arr_anchor,
+            centre: box_edge_anchor(&cols, &rows, cell, conn.entry, 0),
+        }
+    }
+
+    /// One one-way edge `ORIGIN -dir-> DEST` with the two rooms at the given cells, plus whatever
+    /// `claim` adds to the destination.
+    fn one_way(
+        dir: Direction,
+        opos: (i32, i32),
+        dpos: (i32, i32),
+        claim: impl FnOnce(&mut MapGraph),
+    ) -> MapGraph {
+        let mut g = MapGraph::new();
+        g.upsert_room(ORIGIN, "Origin".to_string());
+        g.upsert_room(DEST, "Dest".to_string());
+        g.set_pos(ORIGIN, opos);
+        g.set_pos(DEST, dpos);
+        g.add_edge(ORIGIN, dir, DEST);
+        claim(&mut g);
+        g
+    }
+
+    /// The user's two shapes: `(tag, direction, origin cell, destination cell)`.
+    const SHAPES: [(&str, Direction, (i32, i32), (i32, i32)); 2] = [
+        ("Frigid River --W--> White Cliffs Beach (#47->#192)", W, (6, 5), (5, 6)),
+        ("Clearing --E--> Forest (#167->#33)", E, (1, 0), (3, 1)),
+    ];
+
+    /// **The reported defect, gone.** On both shapes the connector runs straight into the cell
+    /// its arrowhead lands on: the leg carrying the arrowhead lies on that cell's own column (or
+    /// row) and is longer than the single gutter cell a sidestep would leave it.
+    ///
+    /// One cell is the whole tell. Lane 0 of a channel sits `LANE_BASE` BEYOND the ring of cells
+    /// immediately outside a box (`room_pixel + BOX_W + LANE_BASE`), so a connector turning in
+    /// from a real channel always has two cells or more to cover; a one-cell final leg can only
+    /// be the slot sidestep, made in the last gutter cell before the room.
+    #[test]
+    fn the_reported_one_ways_run_straight_into_their_arrowhead() {
+        for (tag, dir, opos, dpos) in SHAPES {
+            let a = arrival(&one_way(dir, opos, dpos, |_| {}));
+            assert!(
+                a.final_leg_is_straight_in(),
+                "{tag}: the last leg must lie on the arrowhead's own column/row \
+                 (entry {:?}, arrowhead {:?}, last turn {:?})",
+                a.entry,
+                a.arr,
+                a.path[a.path.len() - 2],
+            );
+            assert!(
+                a.final_leg() >= 2,
+                "{tag}: the arrowhead's leg is {} cell(s) — a one-cell leg is the jog (path {:?})",
+                a.final_leg(),
+                a.path,
+            );
+        }
+    }
+
+    /// **And the straightening is not just the free-slot rule wearing a hat.** Mark the
+    /// destination's own `?` exit in the direction the arrival lands from: the arrival yields the
+    /// centre cell (SQ-1274's rule, which SQ-1320 keeps where it means something) and STILL comes
+    /// straight in on the offset cell's own column/row, with no jog in the last gutter.
+    ///
+    /// A `?` mark rather than an edge on purpose — it draws no connector at all, so nothing about
+    /// the ROUTE changes between this case and the one above; only the slot does.
+    #[test]
+    fn a_claimed_compass_anchor_is_yielded_and_still_entered_straight() {
+        for (tag, dir, opos, dpos) in SHAPES {
+            let side = arrival(&one_way(dir, opos, dpos, |_| {})).entry;
+            let claimed = side_compass(side);
+            let a = arrival(&one_way(dir, opos, dpos, |g| g.mark_random_exit(DEST, claimed)));
+            assert_eq!(a.entry, side, "{tag}: the mark does not move the arrival's side");
+            assert_ne!(a.slot, 0, "{tag}: the `?{claimed:?}` mark holds the centre cell");
+            assert_ne!(a.arr, a.centre, "{tag}: …so the arrowhead sits beside it");
+            assert!(
+                a.final_leg_is_straight_in(),
+                "{tag}: the last leg must still lie on the arrowhead's own column/row \
+                 (arrowhead {:?}, last turn {:?})",
+                a.arr,
+                a.path[a.path.len() - 2],
+            );
+            assert!(
+                a.final_leg() >= 2,
+                "{tag}: the arrowhead's leg is {} cell(s) — the jog is back (path {:?})",
+                a.final_leg(),
+                a.path,
+            );
+        }
+    }
+
+    /// The straightening stated as geometry rather than as a claim about a map: which polylines
+    /// it moves, which it leaves exactly as it found them, and that what it emits is still
+    /// orthogonal.
+    #[test]
+    fn straighten_arrival_moves_only_a_displaced_head_on_approach() {
+        // No displacement (a slot-0 arrival): nothing to do.
+        let mut pix = vec![(0, 0), (10, 0), (10, 8), (10, 10)];
+        let before = pix.clone();
+        straighten_arrival(&mut pix, Side::Top, (10, 9), (10, 9));
+        assert_eq!(pix, before, "no displacement, no change");
+        // An approach ALONG the edge: `attach_bridge` absorbs the offset into the stub already.
+        let mut along = vec![(0, 0), (0, 8), (10, 8), (10, 10)];
+        let before = along.clone();
+        straighten_arrival(&mut along, Side::Top, (12, 9), (10, 9));
+        assert_eq!(along, before, "the last run is along the edge; nothing to straighten");
+        // Head-on and displaced: the whole final run moves, turn included, so the leg into the
+        // arrowhead is on the arrowhead's own column and every segment stays orthogonal.
+        let mut head_on = vec![(0, 0), (10, 0), (10, 8), (10, 10)];
+        straighten_arrival(&mut head_on, Side::Top, (12, 9), (10, 9));
+        assert_eq!(head_on, vec![(0, 0), (12, 0), (12, 8), (10, 10)]);
+        // Orthogonal across every segment the plot actually draws. The final point is the
+        // destination's CENTRE, which `plot_connector` trims and replaces with the box-edge
+        // anchor, so it is not one of them.
+        for w in head_on[..head_on.len() - 1].windows(2) {
+            assert!(w[0].0 == w[1].0 || w[0].1 == w[1].1, "still orthogonal: {w:?}");
+        }
     }
 }
