@@ -176,20 +176,37 @@ pub(crate) const BOX_H: i32 = 5;
 pub struct PosTable {
     room_start: std::collections::BTreeMap<i32, i32>, // grid line index → pixel start of the box
     channel_w: std::collections::BTreeMap<i32, i32>,  // grid line index → pixel width of the gap after it
+    /// Per-line box size along this axis, for a caller whose boxes are not all one size.
+    /// Absent → `box_dim`. The terminal never fills this: its boxes are `BOX_W`×`BOX_H`
+    /// everywhere, so every lookup answers `box_dim` and the arithmetic is the arithmetic
+    /// it always was. The SVG export fills it, because there a box is as wide as its name
+    /// needs (SQ-1313).
+    box_dims: std::collections::BTreeMap<i32, i32>,
     lo: i32,                                           // lowest grid line index
     hi: i32,                                           // highest grid line index
-    box_dim: i32,                                      // box size along this axis (pixels)
+    box_dim: i32,                                      // default box size along this axis (pixels)
 }
 impl PosTable {
     pub fn room_pixel(&self, idx: i32) -> i32 { self.line_pixel(idx) }
     pub fn channel_span(&self, idx: i32) -> i32 { *self.channel_w.get(&idx).unwrap_or(&MIN_GUTTER) }
+
+    /// The box size along this axis at grid line `idx` — `box_dim` unless the caller asked
+    /// for a per-line one. Every consumer of the shared geometry (`lane_pixel`,
+    /// `box_edge_anchor`, `corner_anchor`, `total_pixels`) reads the box size through here
+    /// rather than from `BOX_W`/`BOX_H` directly, so one table describes one layout.
+    pub fn box_dim_at(&self, idx: i32) -> i32 {
+        *self.box_dims.get(&idx).unwrap_or(&self.box_dim)
+    }
+
+    /// Lowest / highest tabulated grid line.
+    pub fn range(&self) -> (i32, i32) { (self.lo, self.hi) }
 
     /// Total pixel extent from the first room's box-left to just past the last room's
     /// trailing channel. This is the minimum pixel span needed to draw all rooms and
     /// their inter-room channels without clipping.
     pub fn total_pixels(&self) -> i32 {
         let last = self.room_pixel(self.hi);
-        last + self.box_dim + self.channel_span(self.hi)
+        last + self.box_dim_at(self.hi) + self.channel_span(self.hi)
     }
 
     /// Pixel-x (or -y) of the box left/top edge at grid line `idx`, extrapolating with a
@@ -205,7 +222,7 @@ impl PosTable {
         } else {
             // Past the last room: its start, its own box+channel, then default strides.
             let last = self.room_start.get(&self.hi).copied().unwrap_or(0);
-            let after = last + self.box_dim + self.channel_span(self.hi);
+            let after = last + self.box_dim_at(self.hi) + self.channel_span(self.hi);
             after + (idx - self.hi - 1) * (self.box_dim + MIN_GUTTER)
         }
     }
@@ -222,12 +239,33 @@ fn channel_width(lanes: u16) -> i32 {
     }
 }
 
-/// Build the (columns, rows) position tables from the plan and the room bounds.
+/// Build the (columns, rows) position tables from the plan and the room bounds, with every
+/// box `BOX_W`×`BOX_H` — the terminal's own layout.
 pub fn boxes_axes(plan: &RoutePlan, bounds: ((i32, i32), (i32, i32))) -> (PosTable, PosTable) {
+    let none = std::collections::BTreeMap::new();
+    boxes_axes_sized(plan, bounds, BOX_W, &none, BOX_H, &none)
+}
+
+/// [`boxes_axes`], with per-grid-line box sizes: `col_dims`/`row_dims` override `box_w`/`box_h`
+/// at the lines they name and every other line keeps the default (SQ-1313).
+///
+/// The ROUTE is unaffected by any of this — `RoutePlan` is in doubled cell coordinates and knows
+/// nothing of box sizes — so a caller that widens a column gets the terminal's own routes through
+/// the terminal's own channels, drawn against wider boxes. Passing empty maps is exactly
+/// [`boxes_axes`], which is what keeps the drawn view identical.
+pub fn boxes_axes_sized(
+    plan: &RoutePlan,
+    bounds: ((i32, i32), (i32, i32)),
+    box_w: i32,
+    col_dims: &std::collections::BTreeMap<i32, i32>,
+    box_h: i32,
+    row_dims: &std::collections::BTreeMap<i32, i32>,
+) -> (PosTable, PosTable) {
     let ((min_c, min_r), (max_c, max_r)) = bounds;
     let build = |lo: i32,
                  hi: i32,
                  box_dim: i32,
+                 dims: &std::collections::BTreeMap<i32, i32>,
                  lanes: &std::collections::BTreeMap<i32, u16>,
                  floor: &std::collections::BTreeMap<i32, i32>| {
         let mut room_start = std::collections::BTreeMap::new();
@@ -238,9 +276,9 @@ pub fn boxes_axes(plan: &RoutePlan, bounds: ((i32, i32), (i32, i32))) -> (PosTab
             let w = channel_width(lanes.get(&idx).copied().unwrap_or(0))
                 .max(floor.get(&idx).copied().unwrap_or(0));
             channel_w.insert(idx, w);
-            x += box_dim + w;
+            x += dims.get(&idx).copied().unwrap_or(box_dim) + w;
         }
-        PosTable { room_start, channel_w, lo, hi, box_dim }
+        PosTable { room_start, channel_w, box_dims: dims.clone(), lo, hi, box_dim }
     };
     // Rows first: a diagonal's COLUMN demand is expressed relative to the row gap it must cross
     // (SQ-0314), so the vertical spacing has to be known before the horizontal is sized.
@@ -254,7 +292,7 @@ pub fn boxes_axes(plan: &RoutePlan, bounds: ((i32, i32), (i32, i32))) -> (PosTab
         row_floor.insert(h, DIAG_GUTTER);
     }
     let (min_r, max_r) = span_over(min_r, max_r, plan.diag_corners.iter().map(|&(_, h)| h));
-    let rows = build(min_r, max_r, BOX_H, &plan.h_lanes, &row_floor);
+    let rows = build(min_r, max_r, box_h, row_dims, &plan.h_lanes, &row_floor);
     let mut col_floor: std::collections::BTreeMap<i32, i32> = std::collections::BTreeMap::new();
     for &(v, h) in &plan.diag_corners {
         let need = diagonal_col_gap(rows.channel_span(h));
@@ -262,7 +300,7 @@ pub fn boxes_axes(plan: &RoutePlan, bounds: ((i32, i32), (i32, i32))) -> (PosTab
         *slot = (*slot).max(need);
     }
     let (min_c, max_c) = span_over(min_c, max_c, plan.diag_corners.iter().map(|&(v, _)| v));
-    let cols = build(min_c, max_c, BOX_W, &plan.v_lanes, &col_floor);
+    let cols = build(min_c, max_c, box_w, col_dims, &plan.v_lanes, &col_floor);
     (cols, rows)
 }
 
@@ -314,8 +352,14 @@ fn diagonal_arrow(dir: Direction, arrows: &crate::symbols::Arrows) -> char {
 
 /// The box-corner cell (virtual pixels) for a diagonal direction: NE→top-right, NW→top-left,
 /// SE→bottom-right, SW→bottom-left.
-fn corner_anchor(cols: &PosTable, rows: &PosTable, cell: (i32, i32), dir: Direction) -> (i32, i32) {
-    corner_anchor_at(cols.room_pixel(cell.0), rows.room_pixel(cell.1), BOX_W, BOX_H, dir)
+pub(crate) fn corner_anchor(cols: &PosTable, rows: &PosTable, cell: (i32, i32), dir: Direction) -> (i32, i32) {
+    corner_anchor_at(
+        cols.room_pixel(cell.0),
+        rows.room_pixel(cell.1),
+        cols.box_dim_at(cell.0),
+        rows.box_dim_at(cell.1),
+        dir,
+    )
 }
 
 /// [`corner_anchor`]'s geometry, taking the box's own top-left `(bx, by)` and size `(w, h)`
@@ -1154,21 +1198,21 @@ fn lane_pixel(
     // the doorway cell, so lines still visibly touch the box.
     let px = if dx.rem_euclid(2) == 0 {
         let c = dx.div_euclid(2);
-        cols.room_pixel(c) + BOX_W / 2
+        cols.room_pixel(c) + cols.box_dim_at(c) / 2
     } else {
         let c = (dx - 1).div_euclid(2);
         // A V(c) run varies along y; pick the segment whose y-extent contains dy.
         let lane = seg_lane(segs, Channel::V(c), dy) as i32;
-        cols.room_pixel(c) + BOX_W + LANE_BASE + lane * LANE_SPACING
+        cols.room_pixel(c) + cols.box_dim_at(c) + LANE_BASE + lane * LANE_SPACING
     };
     let py = if dy.rem_euclid(2) == 0 {
         let r = dy.div_euclid(2);
-        rows.room_pixel(r) + BOX_H / 2
+        rows.room_pixel(r) + rows.box_dim_at(r) / 2
     } else {
         let r = (dy - 1).div_euclid(2);
         // An H(r) run varies along x; pick the segment whose x-extent contains dx.
         let lane = seg_lane(segs, Channel::H(r), dx) as i32;
-        rows.room_pixel(r) + BOX_H + LANE_BASE + lane * LANE_SPACING
+        rows.room_pixel(r) + rows.box_dim_at(r) + LANE_BASE + lane * LANE_SPACING
     };
     (px, py)
 }
@@ -1227,7 +1271,7 @@ struct Arrowhead {
 ///
 /// Keyed by the full `(origin, dest, dir)` triple because a room pair can hold several passages
 /// and they need not agree about the way back.
-fn edge_kinds(rm: &RenderMap) -> std::collections::HashMap<(RoomId, RoomId, Direction), EdgeKind> {
+pub(crate) fn edge_kinds(rm: &RenderMap) -> std::collections::HashMap<(RoomId, RoomId, Direction), EdgeKind> {
     rm.edges
         .iter()
         .map(|e| {
@@ -1245,15 +1289,21 @@ fn edge_kinds(rm: &RenderMap) -> std::collections::HashMap<(RoomId, RoomId, Dire
 /// contributes there, plus its departure/arrival arrowhead anchors. This is the single
 /// source of truth for connector plotting: the renderer ORs these per-cell masks into the
 /// shared buffer, and tests re-derive per-connector ownership from the same geometry.
-struct ConnectorPlot {
-    cells: Vec<((i32, i32), u8)>,
+pub(crate) struct ConnectorPlot {
+    pub(crate) cells: Vec<((i32, i32), u8)>,
+    /// The same run as `cells`, reduced to its TURNING POINTS: the orthogonal polyline
+    /// `dep_anchor → … → arr_anchor`, spur-collapsed, with every collinear point between two
+    /// corners dropped. The cell renderer paints per-cell glyphs and never looks at this; a
+    /// vector renderer draws exactly this polyline, so the two describe one route by
+    /// construction rather than by two routers agreeing (SQ-1313).
+    pub(crate) path: Vec<(i32, i32)>,
     /// Explicit-glyph cells for a diagonal corner stub (SQ-0314), painted directly
     /// rather than through the 4-bit orthogonal mask — a diagonal has no
     /// representation in `glyph_for`'s N/E/S/W bits, and `dir_bit` would misfile a
     /// (+1,+1) step as East. Empty unless `diagonal_corners` is on.
-    diag_cells: Vec<((i32, i32), char)>,
-    dep_anchor: (i32, i32),
-    arr_anchor: (i32, i32),
+    pub(crate) diag_cells: Vec<((i32, i32), char)>,
+    pub(crate) dep_anchor: (i32, i32),
+    pub(crate) arr_anchor: (i32, i32),
 }
 
 /// The direction bit that seams a `dir` chain to the orthogonal cell it hands off to (SQ-0314).
@@ -1379,7 +1429,7 @@ fn diagonal_chain(
 /// selects the fallback for terminals without those glyphs — the SAME corner anchor, walked
 /// orthogonally. The toggle picks glyphs, not geometry: where a connector departs and arrives is
 /// the router's business, and both settings ask it the same questions.
-fn plot_connector(
+pub(crate) fn plot_connector(
     conn: &mapper::route::RoutedConnector,
     cols: &PosTable,
     rows: &PosTable,
@@ -1566,6 +1616,19 @@ fn plot_connector(
         }
     }
 
+    // The vector reading of the same run: keep the endpoints and every cell where the run
+    // turns, drop the collinear ones between (SQ-1313).
+    let mut path: Vec<(i32, i32)> = Vec::with_capacity(run.len().min(16));
+    for i in 0..run.len() {
+        let turn = i == 0
+            || i + 1 == run.len()
+            || (run[i + 1].0 - run[i].0, run[i + 1].1 - run[i].1)
+                != (run[i].0 - run[i - 1].0, run[i].1 - run[i - 1].1);
+        if turn {
+            path.push(run[i]);
+        }
+    }
+
     let mut cells = Vec::with_capacity(run.len());
     for i in 0..run.len() {
         let c = run[i];
@@ -1584,7 +1647,7 @@ fn plot_connector(
         }
         cells.push((c, mask));
     }
-    Some(ConnectorPlot { cells, diag_cells, dep_anchor, arr_anchor })
+    Some(ConnectorPlot { cells, path, diag_cells, dep_anchor, arr_anchor })
 }
 
 /// Draw every plan connector as box-drawing line-art along its lanes, and RETURN the departure
@@ -2038,8 +2101,15 @@ fn slot_offset(slot: u16, max: i32) -> i32 {
 ///
 /// Slots map to distinct INTERIOR rows/cols along the side (never the corners), so two
 /// connectors sharing a side land on distinct border cells.
-fn box_edge_anchor(cols: &PosTable, rows: &PosTable, cell: (i32, i32), side: Side, slot: u16) -> (i32, i32) {
-    box_edge_anchor_at(cols.room_pixel(cell.0), rows.room_pixel(cell.1), BOX_W, BOX_H, side, slot)
+pub(crate) fn box_edge_anchor(cols: &PosTable, rows: &PosTable, cell: (i32, i32), side: Side, slot: u16) -> (i32, i32) {
+    box_edge_anchor_at(
+        cols.room_pixel(cell.0),
+        rows.room_pixel(cell.1),
+        cols.box_dim_at(cell.0),
+        rows.box_dim_at(cell.1),
+        side,
+        slot,
+    )
 }
 
 /// [`box_edge_anchor`]'s geometry, taking the box's own top-left `(bx, by)` and size `(w, h)`
@@ -2896,7 +2966,7 @@ fn side_step(side: Side) -> (i32, i32) {
 /// direction (Up/Down/In/Out/Unknown): those have no side or corner of their own to sit on, and
 /// stay visible on the matrix, the room panel and the portal-badge overlay instead.
 /// [`mapper::render::RenderRoom::random_stubs`] never carries a direction a real edge also uses.
-fn random_stub_cells(bx: i32, by: i32, w: i32, h: i32, dir: Direction) -> Option<((i32, i32), (i32, i32))> {
+pub(crate) fn random_stub_cells(bx: i32, by: i32, w: i32, h: i32, dir: Direction) -> Option<((i32, i32), (i32, i32))> {
     let side = mapper::router::side_for(dir)?;
     let arrow = if mapper::direction::is_diagonal(dir) {
         corner_anchor_at(bx, by, w, h, dir)
