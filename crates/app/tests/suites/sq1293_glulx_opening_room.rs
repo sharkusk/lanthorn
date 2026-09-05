@@ -207,12 +207,22 @@ fn the_opening_room_is_on_the_map_before_the_player_leaves_it() {
 }
 
 /// SQ-1300: the Back Alley and Sigil Street must keep reading "1" and "2" — their small per-map
-/// ordinals — in `/export-map`'s dump even after the Glulx room lock lands and re-keys them from
-/// name-derived ids onto their real object addresses (`app::turn`'s `take_room_remap` /
-/// `Mapper::rekey_room`, exercised here the same way `turn.rs` drives it every real turn). The
-/// ordinal is a property of the room NODE, so a re-key must carry it along unchanged — this is
-/// the real-game half of the coverage `roomid::tests::room_label_no_survives_a_rekey` and
-/// `graph::tests::rekey_room_carries_the_ordinal_with_it` give it synthetically.
+/// ordinals — in `/export-map`'s dump across the whole walk, whatever the room lock does to their
+/// ids underneath.
+///
+/// **SQ-1303 removed the re-key this case used to watch, and that is the fix, not a regression.**
+/// Counterfeit Monkey's compiled Inform 7 world model names every one of its rooms, so
+/// `GlulxSession::room_for` resolves the opening room to its own object ADDRESS from the very
+/// first prompt — before the lock has learned anything — and no room on this route is ever minted
+/// under the hash of a heading. `take_room_remap` therefore hands back nothing to re-key, which
+/// this case now asserts outright: the strongest possible version of "the ordinals survive the
+/// re-key" is that there is no re-key to survive.
+///
+/// The re-key path itself is still covered on a real game — `sq1304_anchorhead_twisting_lane`,
+/// whose fixture is Inform 7 build 4K41 and carries no `Map_Storage` for the reader to find, so
+/// it maps by heading hash and re-keys exactly as this one used to. Synthetically it is
+/// `roomid::tests::room_label_no_survives_a_rekey` and
+/// `graph::tests::rekey_room_carries_the_ordinal_with_it`.
 #[test]
 fn opening_rooms_keep_their_ordinals_across_the_lock_rekey() {
     let Some((mut s, prologue_turns)) = prologue() else { return };
@@ -250,13 +260,24 @@ fn opening_rooms_keep_their_ordinals_across_the_lock_rekey() {
 
     assert!(
         s.locked_room_global().is_some(),
-        "non-vacuity: the walk must resolve the room lock, or this test never reaches a re-key"
+        "non-vacuity: the walk must resolve the room lock, or this test asks nothing"
     );
-    assert!(
-        rekeys > 0,
-        "non-vacuity: the lock resolving is not enough — the walk must actually trigger at \
-         least one re-key, or this test never exercises what SQ-1300 is about"
+    // SQ-1303: nothing to re-key, because nothing on this route was ever keyed by a name. See
+    // this case's doc comment for why that is the assertion now and where the re-key path is
+    // covered instead.
+    assert_eq!(
+        rekeys, 0,
+        "this story's own world model names its rooms, so every one of them is keyed by its \
+         object address from the first prompt and the lock's remap has nothing to correct"
     );
+    for r in mapper.graph.rooms() {
+        assert_ne!(
+            r.id,
+            app::roomid::synthetic_room_id(r.label()),
+            "{:?} is keyed by the hash of its name, not by its address",
+            r.label()
+        );
+    }
 
     let names: Vec<String> = mapper.graph.rooms().map(|r| r.label().to_string()).collect();
     assert_eq!(

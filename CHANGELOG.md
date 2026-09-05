@@ -27,6 +27,22 @@ Absolute URLs or no link.
 > visible tag `*Next release:*`. `release.yml` refuses to cut a release
 > while any such tag, or this Unreleased section, still exists.*
 
+### Highlights
+
+- **Inform 7 games hand lanthorn their map, and it takes it.** A modern Glulx
+  story compiled with Inform 7 carries its whole world inside the story file —
+  every room, what every room is called, and where every exit leads — and
+  lanthorn now reads it before you type a word. The room you wake up in is on
+  the map at the first prompt, under the name the author gave it. The map no
+  longer spends the opening ten commands working out how the game tracks you: it
+  settles on your first move, so no room gets drawn twice because the game
+  spelled its name two ways. And a game's own exits are checked the way Infocom's
+  always have been, which is what catches a passage whose far end shuffles rather
+  than drawing it as a fixed corridor. Counterfeit Monkey, The Wizard Sniffer and
+  Skuga Lake are among the 23 of 31 Inform 7 games in the test collection this
+  covers; the rest — older Inform 7 builds, and games that build their maps as
+  you play, like Kerkerkruip — are untouched and map exactly as they did.
+
 ### Changed
 
 - **A room lanthorn can't identify by a game object now shows a small number,

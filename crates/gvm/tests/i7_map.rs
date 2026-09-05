@@ -366,3 +366,74 @@ fn every_map_this_reader_reports_is_internally_consistent() {
     // Not pinned exactly, because the directory is a working collection.
     assert!(found >= declined, "{found} maps read, {declined} refused");
 }
+
+// ── The map is LIVE data, not a fact about the file ─────────────────────────
+
+#[test]
+fn a_map_cell_rewritten_in_ram_is_seen_by_the_next_ask() {
+    // `Map_Storage` is in RAM because `WorldModel.i6t`'s `AssertMapConnection`
+    // writes to it ("change the north exit of the Hall to the Cellar"), so a
+    // reader that answered from the boot image would go on describing a
+    // passage the story has since moved. `I7World::exit` reads `mem` every
+    // time; this perturbs one cell exactly as the story would and re-asks.
+    //
+    // Counterfeit Monkey is the fixture that makes the point twice over: the
+    // SQ-1303 spike measured two rooms whose played connections disagree with
+    // the compiled map, because this game rewrites its own.
+    let Some((mut mem, pn, w)) = world("CounterfeitMonkey-11.gblorb") else {
+        return;
+    };
+    let find = |mem: &Memory, name: &str| -> u32 {
+        *w.rooms()
+            .iter()
+            .find(|&&r| w.printed_name(mem, &pn, r).as_deref() == Some(name))
+            .unwrap_or_else(|| panic!("{name} is one of this story's rooms"))
+    };
+    let sigil = find(&mem, "Sigil Street");
+    let bend = find(&mem, "Ampersand Bend");
+    let fair = find(&mem, "Fair");
+
+    let east = w.compass_column(Compass::E).expect("this story has an east");
+    assert_eq!(
+        w.exit(&mem, &pn, sigil, east),
+        Some(I7Exit::Room(bend)),
+        "the compiled map runs Sigil Street east to Ampersand Bend"
+    );
+
+    // The row/column arithmetic the runtime template itself uses:
+    // `Map_Storage` indexed by `room_index * No_Directions + dir_index`.
+    let row = w.rooms().iter().position(|&r| r == sigil).expect("Sigil Street has a row");
+    let cell = w.map_storage() + ((row * w.directions().len() + east) as u32) * 4;
+    assert_eq!(mem.read32(cell), Some(bend), "…and that is the cell holding it");
+
+    mem.write32(cell, fair).expect("Map_Storage is in RAM and writable");
+    assert_eq!(
+        w.exit(&mem, &pn, sigil, east),
+        Some(I7Exit::Room(fair)),
+        "a rewritten cell is what the next ask reports — the model is not a boot-time snapshot"
+    );
+
+    mem.write32(cell, 0).expect("Map_Storage is in RAM and writable");
+    assert_eq!(
+        w.exit(&mem, &pn, sigil, east),
+        None,
+        "…and a cell cleared to zero declares nothing that way"
+    );
+}
+
+#[test]
+fn a_direction_this_story_does_not_have_has_no_column() {
+    // `compass_column` is the caller's only way to tell "this story has no such
+    // direction" from "this room declares nothing that way", which is the
+    // `Unknown` / `Absent` split every declared-exit consumer is built around.
+    let Some((_mem, _pn, w)) = world("CounterfeitMonkey-11.gblorb") else {
+        return;
+    };
+    for c in Compass::ALL {
+        assert!(w.compass_column(c).is_some(), "Counterfeit Monkey declares all twelve: {c:?}");
+    }
+    // …and the eight it adds on top are author-defined, so no compass claims them.
+    let named: usize = Compass::ALL.into_iter().filter_map(|c| w.compass_column(c)).count();
+    assert_eq!(named, 12, "twelve of the twenty columns are compass points");
+    assert_eq!(w.directions().len(), 20);
+}

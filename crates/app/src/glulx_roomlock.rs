@@ -52,6 +52,27 @@
 //! game keyed rooms by name hash for the whole session. The fallback below is
 //! still the old range test, for a story whose object table cannot be found at
 //! all.
+//!
+//! ## When the story has already written the answer down (SQ-1303)
+//!
+//! An Inform **7** story carries its whole compiled world model — which objects
+//! are rooms, and what each room is called — and `gvm::i7map` reads it off the
+//! image without playing a turn. Where that reader succeeds,
+//! [`RoomLock::set_rooms`] hands the result over and two things get sharper:
+//!
+//! * the candidate pool narrows from "holds an object" to "holds a ROOM", which
+//!   is what the `location` global actually holds;
+//! * and the correlation stops being the only route in. A word that has just
+//!   changed to a room **whose static name is the heading the story printed this
+//!   turn** is the global on the evidence of ONE move
+//!   ([`RoomLock::name_witness`]) — measured on Counterfeit Monkey, the first
+//!   step north out of the Back Alley rather than the tenth command.
+//!
+//! Both are about CHOOSING a candidate. Neither is allowed to falsify a lock:
+//! see [`RoomLock::is_known_room`] for the dark room that would otherwise cost a
+//! correct lock its life. And a story the reader refuses — an Inform 6 game, a
+//! pre-6L02 build, one that generates its map at run time — supplies no room set
+//! and behaves exactly as it did before any of this existed.
 
 /// How many confidently-observed room changes must agree before a candidate is
 /// trusted. Three is enough to shake out counters and turn tallies (which change
@@ -106,6 +127,25 @@ pub struct RoomLock {
     /// checked against (SQ-1286). `None` until [`RoomLock::set_objects`] supplies
     /// them, and after a story whose object table could not be walked at all.
     objects: Option<Vec<u32>>,
+    /// This story's ROOMS and what each one is statically called, sorted by
+    /// address (SQ-1303) — `None` for every story whose compiled world model
+    /// `gvm::i7map` refuses, which is where this whole file behaves exactly as
+    /// it did before the reader existed.
+    ///
+    /// Strictly narrower than [`objects`](Self::objects) and used for two
+    /// things, both of them about CHOOSING a candidate:
+    ///
+    /// * [`try_lock`](Self::try_lock) will not commit to a word whose current
+    ///   value is merely an object when the rooms are known — the `location`
+    ///   global holds a ROOM, and a word holding the player, a container or a
+    ///   scenery item is not it however well it correlates;
+    /// * [`name_witness`](Self::name_witness) locks on the very first move by
+    ///   matching a candidate's new value's static name against the heading the
+    ///   story just printed.
+    ///
+    /// **Never used to falsify a lock** — see [`verify`](Self::verify) for the
+    /// darkness case that rule exists for.
+    rooms: Option<Vec<(u32, Option<String>)>>,
     /// The locked address, once the evidence is one-sided.
     locked: Option<u32>,
     /// Set for one call after a lock resolves, so the caller can re-key the rooms
@@ -125,6 +165,7 @@ impl RoomLock {
             history: Vec::new(),
             prev: None,
             objects: None,
+            rooms: None,
             locked: None,
             pending_remap: Vec::new(),
         }
@@ -163,6 +204,26 @@ impl RoomLock {
             v.dedup();
             v
         });
+    }
+
+    /// Supply this story's ROOMS and their static names, in any order — see the
+    /// [`rooms`](Self::rooms) field for what they are and are not used for
+    /// (SQ-1303). `None` is the answer for a story with no readable compiled
+    /// world model, and leaves every decision below exactly where SQ-1286 left
+    /// it.
+    pub fn set_rooms(&mut self, rooms: Option<Vec<(u32, Option<String>)>>) {
+        self.rooms = rooms.map(|mut v| {
+            v.sort_by_key(|&(a, _)| a);
+            v.dedup_by_key(|&mut (a, _)| a);
+            v
+        });
+    }
+
+    /// True while no room set has been supplied — the caller's cue to derive one
+    /// and hand it over, asked rather than pushed for the same reason
+    /// [`needs_objects`](Self::needs_objects) is.
+    pub fn needs_rooms(&self) -> bool {
+        self.rooms.is_none()
     }
 
     /// What the LOCKED word says about this turn — the story's own answer to "did
@@ -227,6 +288,13 @@ impl RoomLock {
             self.prev = Some(Observation { ram, heading });
             return;
         }
+        // SQ-1303: the one witness strong enough to lock on its own, checked
+        // against the turn we are about to fold in rather than after it, because
+        // it needs the PREVIOUS snapshot to say which words moved.
+        let witness = match (movement, heading.as_deref()) {
+            (Movement::Changed, Some(h)) => self.name_witness(&ram, h),
+            _ => None,
+        };
         if let (Some(prev), Movement::Changed | Movement::Unchanged) = (&self.prev, movement) {
             let expect_change = movement == Movement::Changed;
             for (i, (a, b)) in prev.ram.iter().zip(ram.iter()).enumerate() {
@@ -248,7 +316,61 @@ impl RoomLock {
         }
         self.history.push(Observation { ram: ram.clone(), heading: heading.clone() });
         self.prev = Some(Observation { ram, heading });
-        self.try_lock();
+        match witness {
+            Some(addr) => self.commit(addr),
+            None => self.try_lock(),
+        }
+    }
+
+    /// The word this turn's HEADING identifies outright, or `None` (SQ-1303).
+    ///
+    /// The correlation below needs several turns because a heading alone says
+    /// only "the room changed", and plenty of words change with it. A story
+    /// whose compiled world model this reader can hand over says something much
+    /// stronger: it names every room, so a word that has just changed to a room
+    /// **whose own static name is the name the story just printed** is the
+    /// `location` global on the evidence of one move. Counterfeit Monkey took
+    /// ten commands to lock by correlation and locks on the first move north out
+    /// of the Back Alley by this; every room mapped in between was keyed by the
+    /// hash of a NAME and had to be re-keyed afterwards.
+    ///
+    /// **Two words normally agree, and either is correct.** Inform keeps
+    /// `location` and `real_location` side by side and both hold the room the
+    /// player is in, so the winner is the lower ADDRESS — a deterministic,
+    /// reproducible choice, and the same tie-break [`try_lock`] already makes for
+    /// the same reason. (In DARKNESS the two do differ — `location` holds
+    /// `thedark` and `real_location` the room — but nothing here can tell which
+    /// is which without walking into a dark room, and a lock on `location` then
+    /// reports the darkness, exactly as this map has always done.)
+    ///
+    /// Two words holding DIFFERENT rooms of that name is a refusal, not a
+    /// tie-break: that is a maze, the case the lock exists for, and a name
+    /// cannot settle it.
+    fn name_witness(&self, ram: &[u32], heading: &str) -> Option<u32> {
+        let rooms = self.rooms.as_ref()?;
+        let prev = self.prev.as_ref()?;
+        let (mut value, mut best): (Option<u32>, Option<u32>) = (None, None);
+        for (i, &v) in ram.iter().enumerate() {
+            // Only a word that MOVED this turn is a witness: the player arrived
+            // somewhere, and the global that says where went with them.
+            if prev.ram.get(i) == Some(&v) {
+                continue;
+            }
+            let Ok(k) = rooms.binary_search_by_key(&v, |&(a, _)| a) else { continue };
+            let Some(name) = rooms[k].1.as_deref() else { continue };
+            if !zvm::location::status_name_matches(heading, name) {
+                continue;
+            }
+            if value.is_some_and(|seen| seen != v) {
+                return None; // two rooms of that name: a maze, and a name cannot say which
+            }
+            value = Some(v);
+            let addr = self.base + (i as u32) * 4;
+            if best.is_none_or(|b| addr < b) {
+                best = Some(addr);
+            }
+        }
+        best
     }
 
     /// Commit to a candidate once the evidence is one-sided.
@@ -273,7 +395,7 @@ impl RoomLock {
                 continue;
             }
             let v = cur.get(i).copied().unwrap_or(0);
-            if !self.is_room_value(v, end) {
+            if !self.is_room_value(v, end) || !self.is_known_room(v) {
                 continue;
             }
             // Aliases of the same global are common (`real_location`, the player's
@@ -285,11 +407,17 @@ impl RoomLock {
             }
         }
         let Some(addr) = best else { return };
+        self.commit(addr);
+    }
+
+    /// Take `addr` as the `location` global, whichever route found it — the
+    /// correlation in [`try_lock`] or [`name_witness`]'s one-move evidence.
+    fn commit(&mut self, addr: u32) {
         self.locked = Some(addr);
         // Rooms already mapped under a name-derived id: hand back the real id for
         // each heading seen while learning, so the caller can re-key them instead
         // of leaving a duplicate behind.
-        let idx = ((addr - self.base) / 4) as usize;
+        let idx = ((addr.saturating_sub(self.base)) / 4) as usize;
         let mut seen: Vec<(String, u32)> = Vec::new();
         for o in &self.history {
             let (Some(name), Some(&v)) = (o.heading.as_ref(), o.ram.get(idx)) else { continue };
@@ -312,6 +440,23 @@ impl RoomLock {
         match &self.objects {
             Some(objs) => objs.binary_search(&v).is_ok(),
             None => v != 0 && v >= self.base && v < end,
+        }
+    }
+
+    /// Is `v` one of this story's ROOMS, where the compiled world model could say
+    /// (SQ-1303)? `true` for every value when it could not, so a story without one
+    /// keeps exactly the candidate pool [`is_room_value`](Self::is_room_value)
+    /// gave it.
+    ///
+    /// This narrows [`try_lock`]'s candidates and NOTHING else. It deliberately
+    /// has no part in [`verify`](Self::verify): in darkness Inform parks
+    /// `location` on `thedark`, which is an object of the story and not a room,
+    /// so a rooms-only falsification test would throw away a lock that is telling
+    /// the truth the moment the player walks into an unlit room.
+    fn is_known_room(&self, v: u32) -> bool {
+        match &self.rooms {
+            Some(rooms) => rooms.binary_search_by_key(&v, |&(a, _)| a).is_ok(),
+            None => true,
         }
     }
 
@@ -354,12 +499,15 @@ impl RoomLock {
     }
 
     /// Throw the model away and learn again from scratch, keeping the object
-    /// table — it is a property of the STORY, not of the guess that just failed,
-    /// and re-deriving it means another whole-image scan.
+    /// table and the room set — both are properties of the STORY, not of the
+    /// guess that just failed, and re-deriving either means another whole-image
+    /// scan.
     fn relearn(&mut self, words: usize) {
         let objects = self.objects.take();
+        let rooms = self.rooms.take();
         *self = RoomLock::new(self.base, words);
         self.objects = objects;
+        self.rooms = rooms;
     }
 }
 
@@ -650,4 +798,181 @@ mod tests {
         );
         assert!(l.take_remap().is_empty(), "the table is handed over once");
     }
+
+    // ── SQ-1303: what the story's own compiled world model buys the learner ──
+
+    /// A synthetic room set in the shape [`RoomLock::set_rooms`] takes: three
+    /// rooms well outside the scan window (where a real Inform story keeps its
+    /// object table), each with the name the story would print for it.
+    fn three_rooms(base: u32) -> (u32, Vec<(u32, Option<String>)>) {
+        let far = base + 0x4000;
+        (
+            far,
+            vec![
+                (far, Some("Back Alley".to_string())),
+                (far + 0x10, Some("Sigil Street".to_string())),
+                (far + 0x20, Some("Ampersand Bend".to_string())),
+            ],
+        )
+    }
+
+    #[test]
+    fn a_heading_that_names_the_room_a_word_moved_to_locks_on_the_first_move() {
+        // The whole point of reading the compiled world model: Counterfeit Monkey
+        // took ten commands to lock by correlation alone, and every room mapped in
+        // between was keyed by the hash of a NAME. One move is enough when the
+        // story has already told us what its rooms are called.
+        let (base, _) = base_region();
+        let (far, rooms) = three_rooms(base);
+        let mut l = RoomLock::new(base, 3);
+        l.set_objects(Some(vec![far, far + 0x10, far + 0x20]));
+        l.set_rooms(Some(rooms));
+
+        l.observe(vec![far, 1, 7], Some("Back Alley".into()), Movement::Unchanged);
+        assert_eq!(l.locked(), None, "nothing has moved yet");
+
+        // One move north. Word 0 changes to the Sigil Street room; word 1 is a
+        // turn counter that changes too and holds nothing that is a room.
+        l.observe(vec![far + 0x10, 2, 7], Some("Sigil Street".into()), Movement::Changed);
+        assert_eq!(
+            l.locked(),
+            Some(base),
+            "the word that moved to a room whose static name is the printed heading IS the global"
+        );
+    }
+
+    #[test]
+    fn two_words_holding_the_same_room_take_the_lower_address() {
+        // Inform keeps `location` and `real_location` side by side and both hold
+        // the room. Either identifies it, so the tie-break is deterministic
+        // rather than clever — see `name_witness`'s docs for the darkness caveat
+        // that is the one place they differ.
+        let (base, _) = base_region();
+        let (far, rooms) = three_rooms(base);
+        let mut l = RoomLock::new(base, 3);
+        l.set_objects(Some(vec![far, far + 0x10, far + 0x20]));
+        l.set_rooms(Some(rooms));
+        l.observe(vec![far, far, 7], Some("Back Alley".into()), Movement::Unchanged);
+        l.observe(vec![far + 0x10, far + 0x10, 7], Some("Sigil Street".into()), Movement::Changed);
+        assert_eq!(l.locked(), Some(base), "the lower of the two agreeing words");
+    }
+
+    #[test]
+    fn two_rooms_of_one_name_refuse_the_witness_and_leave_the_learner_learning() {
+        // A maze is exactly the case the lock exists for, and exactly the case a
+        // NAME cannot settle. Two words moved to two DIFFERENT rooms that are both
+        // called "Maze": the fast path must decline rather than pick one.
+        let (base, _) = base_region();
+        let far = base + 0x4000;
+        let mut l = RoomLock::new(base, 3);
+        l.set_objects(Some(vec![far, far + 0x10, far + 0x20]));
+        l.set_rooms(Some(vec![
+            (far, Some("Hall".to_string())),
+            (far + 0x10, Some("Maze".to_string())),
+            (far + 0x20, Some("Maze".to_string())),
+        ]));
+        l.observe(vec![far, far, 7], Some("Hall".into()), Movement::Unchanged);
+        l.observe(vec![far + 0x10, far + 0x20, 7], Some("Maze".into()), Movement::Changed);
+        assert_eq!(
+            l.locked(),
+            None,
+            "two rooms of that name: the heading cannot say which word is the global"
+        );
+    }
+
+    #[test]
+    fn the_room_set_rules_out_a_word_that_holds_an_object_which_is_not_a_room() {
+        // The narrowing half. Word 0 tracks the room perfectly and holds an
+        // OBJECT of the story — the player's own avatar, say — which the SQ-1286
+        // filter accepts and this one does not. Word 1 is the real global.
+        let (base, _) = base_region();
+        let far = base + 0x4000;
+        let thing = far + 0x100; // three non-room objects: a vehicle, a held item…
+        let mut l = RoomLock::new(base, 3);
+        l.set_objects(Some(vec![
+            far,
+            far + 0x10,
+            far + 0x20,
+            thing,
+            thing + 0x10,
+            thing + 0x20,
+        ]));
+        l.set_rooms(Some(vec![(far, None), (far + 0x10, None), (far + 0x20, None)]));
+        // Word 0 changes EXACTLY when word 1 does, so the correlation cannot
+        // separate them and the lower address would win. No heading names a room
+        // here, so only the correlation and the room set are in play.
+        for (mv, step) in [
+            (Movement::Unchanged, 0x00),
+            (Movement::Changed, 0x10),
+            (Movement::Unchanged, 0x10),
+            (Movement::Changed, 0x20),
+            (Movement::Changed, 0x00),
+        ] {
+            l.observe(vec![thing + step, far + step, 7], None, mv);
+        }
+        assert_eq!(
+            l.locked(),
+            Some(base + 4),
+            "the room set skips the word holding a non-room object and takes the one holding a room"
+        );
+    }
+
+    #[test]
+    fn a_lock_survives_the_player_walking_into_the_dark() {
+        // The rule the room set is NOT allowed to break. In darkness Inform parks
+        // `location` on `thedark`, which is an object of the story and not one of
+        // its rooms; a rooms-only falsification test would drop a lock that is
+        // telling the truth, on the one turn the player most needs the map to hold
+        // still. `verify` therefore stays on OBJECTS.
+        let (base, _) = base_region();
+        let far = base + 0x4000;
+        let thedark = far + 0x200;
+        let mut l = RoomLock::locked_at(base, 3, base);
+        l.set_objects(Some(vec![far, far + 0x10, thedark]));
+        l.set_rooms(Some(vec![(far, None), (far + 0x10, None)]));
+        l.observe(vec![thedark, 1, 7], Some("Darkness".into()), Movement::Changed);
+        assert_eq!(
+            l.locked(),
+            Some(base),
+            "`thedark` is an object of this story, so it is no evidence against the lock"
+        );
+    }
+
+    #[test]
+    fn a_story_with_no_readable_world_model_learns_exactly_as_it_did_before() {
+        // Kerkerkruip generates its dungeon at run time and `gvm::i7map` refuses
+        // it; an Inform 6 story has no `Map_Storage` at all. Both hand over `None`,
+        // and every decision here must be the SQ-1286 one, unchanged.
+        let (base, words) = base_region();
+        let mut l = RoomLock::new(base, words);
+        l.set_objects(Some(vec![0x1000, 0x1004, 0x1008]));
+        l.set_rooms(None);
+        assert!(l.needs_rooms(), "`None` is not an answer, so the caller may try again");
+        drive(
+            &mut l,
+            &[
+                (Movement::Unchanged, 0x1000),
+                (Movement::Changed, 0x1004),
+                (Movement::Unchanged, 0x1004),
+                (Movement::Changed, 0x1008),
+                (Movement::Changed, 0x1000),
+            ],
+        );
+        assert_eq!(l.locked(), Some(0x1000), "unchanged from before the world model existed");
+    }
+
+    #[test]
+    fn a_relearn_keeps_the_room_set_too() {
+        // Same argument as the object table: the rooms are the STORY's, not the
+        // failed guess's, and re-deriving them is another whole-image scan.
+        let (base, words) = base_region();
+        let mut l = RoomLock::locked_at(base, words, 0x1000);
+        l.set_objects(Some(vec![0x2000, 0x2004]));
+        l.set_rooms(Some(vec![(0x2000, None)]));
+        l.observe(vec![0x1000, 1, 7], Some("a".into()), Movement::Unchanged);
+        assert_eq!(l.locked(), None, "the locked word holds nothing that is a room of this story");
+        assert!(!l.needs_rooms(), "…but the room set survived the re-learn");
+        assert!(!l.needs_objects(), "…and so did the object table");
+    }
+
 }

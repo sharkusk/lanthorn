@@ -1099,10 +1099,11 @@ pub trait Engine {
     /// every engine here is that engine's own object-number space.
     ///
     /// Default `DeclaredExit::Unknown`: an engine with no such table (Scott
-    /// Adams, or a Glulx story — Inform 7 for Glulx keeps its map in Glulx
-    /// memory in a shape this seam does not read yet) has nothing to answer
-    /// with, which is a real answer and not a failure to look. `GameSession`
-    /// (Z-machine) is the only override today.
+    /// Adams) has nothing to answer with, which is a real answer and not a
+    /// failure to look. `GameSession` (Z-machine) and `GlulxSession` override
+    /// it — the latter from the Inform 6 `door_dir` convention where the story
+    /// has one (SQ-1264) and from Inform 7's own `Map_Storage` array where it
+    /// does not (SQ-1303).
     fn declared_exit(
         &self,
         _origin: mapper::graph::RoomId,
