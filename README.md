@@ -156,6 +156,10 @@ itself.**
   gnome tunnels are the example — draws no arrow at all, just a `?` marking
   that the destination varies; hover the little number beside it to see
   where it's actually sent you.
+  *Next release:* an Inform 7 game hands over its own world model, so the room
+  you wake up in is on the map at the first prompt under the author's own name
+  for it, and no room is ever drawn twice because the game spelled its name two
+  ways.
   → [the map](docs/guide/the-map.md)
 - **The original disks, as the original machines** — hand it an Amiga, Macintosh,
   Apple II, Atari ST, PC or Commodore floppy and it plays the build on that disk,

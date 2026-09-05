@@ -116,6 +116,51 @@ discovered it.
   Johnson Basement. A word following the name on its own line says "sentence";
   a line the newcomer owns outright above prose says "the heading was real"
   (SQ-1285, SQ-1295).
+  All of that is what lanthorn does when it has to *watch* a game to find out
+  where you are. An **Inform 7** story has already written the answer down.
+  The compiler emits the whole map as one array in memory — `Map_Storage`, one row
+  per room, one column per direction — and puts every room's printed name in a
+  property beside it, so which objects are rooms, what each is called and where
+  each direction leads are all in the file before a single turn is played.
+  Nothing in a Glulx image names a table or an address, so each of those four
+  facts is recovered from its own signature rather than looked up (`gvm::i7map`'s
+  header derives them at length, against Inform's own runtime template).
+  Where that read succeeds it becomes the top of the order of authority, and it
+  changes three things:
+  * **The room you start in is a real room from the first prompt.** The name on
+    screen is matched against the story's own room names and, when exactly one
+    answers, the map keys the room by that room's object address — so Counterfeit
+    Monkey's Back Alley is on the map before you type anything, and never as a
+    name-derived node that has to be corrected later. Two rooms sharing a name is
+    a maze, which a name cannot settle, so lanthorn declines instead of guessing.
+  * **The `location` global is found on your first move, not your tenth command.**
+    The learner below needs several unambiguous room changes to tell that global
+    apart from every counter that moves with it; a word that has just changed to
+    the room the story has *just named* is that global on one move's evidence.
+    Measured on Counterfeit Monkey: the tenth command became the first step north
+    out of the alley, and every room mapped in between stopped being provisional.
+  * **A room is called what the story calls it**, not what it happened to print
+    this turn. Heading, status line and silent `look` can each spell one room
+    differently — Counterfeit Monkey's bar reads `Back Alley, noon` where its
+    heading reads `Back Alley` — and two spellings of one room is exactly how one
+    room becomes two dots.
+
+  The exits come with it. An I7 room's own row says where each direction leads, so
+  the check a Z-machine game gets against its compiled exit table — noticing that a
+  passage's destination *varies* rather than minting a false edge for it — now runs
+  for Inform 7 games too. That row lives in *writable* memory, on purpose: a story
+  can move its own passages at run time ("change the north exit of the Hall to the
+  Cellar"), and Counterfeit Monkey does. So lanthorn reads it fresh on every ask
+  rather than trusting a copy taken at launch.
+
+  None of this is available everywhere, and everything below is what happens when
+  it is not. An Inform 6 game has no such array; nor does an Inform 7 build older
+  than the array itself (*Anchorhead: Special Edition Demo* is one); and a game
+  that *builds* its map as you play — Kerkerkruip deals a fresh dungeon every
+  time — ships one full of zeros, which lanthorn refuses rather than reporting
+  whichever three-room accident scores highest. Those games map exactly as they
+  did before, by the chain that follows.
+
   Once lanthorn has learned where a Glulx game keeps its `location` global,
   though, the heading stops being the thing that decides you have MOVED — it only
   says what the room is called. The story's own word is better evidence, and it is
