@@ -3194,6 +3194,95 @@ pub fn overlap_cells(
     out
 }
 
+/// How every connector on one layer makes its FINAL APPROACH into its destination (SQ-1320):
+/// `(side arrivals measured, jogs excused by the crowded-side rule, one line per jog that is not)`.
+///
+/// The rule, stated on [`ConnectorPlot::path`] — the drawn polyline reduced to its turns,
+/// `dep_anchor → … → arr_anchor`. An orthogonal route reaches a box in one of exactly two shapes,
+/// and both are fine:
+///
+/// * **head-on** — the last segment runs perpendicular to the entry side, straight down (or
+///   across) the arrowhead's own column/row from wherever the route last turned; or
+/// * **along the channel** — the route runs down the gutter beside the box, parallel to the side,
+///   and turns in once. The turn-in leg is then as short as that gutter is wide, which can be a
+///   single cell, and there is nothing wrong with it.
+///
+/// **The jog is the third shape**, and it is what SQ-1320 removed: a head-on approach aimed at the
+/// side's CENTRE cell with a ONE-CELL lateral hop spliced in at the end to reach the slot the
+/// arrowhead actually uses. So the test is that hop, not the turn-in leg: the segment immediately
+/// before the last one runs PARALLEL to the entry side and is exactly one cell long. A genuine
+/// along-the-channel approach covers real distance in that segment (fourteen cells for Zork I's
+/// `Atlantis Room --S--> Reservoir North`); a sidestep covers one, by construction, because a slot
+/// is one cell off centre.
+///
+/// The final segment must also be perpendicular to the entry side — the arrowhead sits ON the box
+/// border and the line has to reach it from outside — which is reported the same way.
+///
+/// **Excused: a jog on a destination side carrying two or more arrivals.** Such a side has two
+/// cells to fill and only one of them can be reached head-on, so the second may have to weave in.
+/// The exemption applies to the FINDING, not to the measurement — every side arrival is measured,
+/// and an excused jog is counted and returned rather than silently dropped, because a rule whose
+/// exemption quietly grows is no rule.
+///
+/// A merge stub (which ends on the trunk, not at a box) and a corner arrival (which anchors on a
+/// box corner and takes no slot) have no side approach to measure, and are in neither count.
+pub fn arrival_approach_report(
+    graph: &mapper::graph::MapGraph,
+    layer: mapper::layer::LayerId,
+) -> (usize, usize, Vec<String>) {
+    let rm = mapper::render::render_layer(graph, layer);
+    let (cols, rows) = boxes_axes(&rm.plan, rm.bounds);
+    let plan = &rm.plan;
+    let name = |id| {
+        graph.room(id).map(|r| r.label().to_string()).unwrap_or_else(|| format!("#{id:?}"))
+    };
+    let side_arrival = |c: &mapper::route::RoutedConnector| !c.merge && c.entry_corner.is_none();
+    let mut per_side: std::collections::BTreeMap<(RoomId, Side), usize> = Default::default();
+    for c in plan.connectors.iter().filter(|c| side_arrival(c)) {
+        *per_side.entry((c.dest, c.entry)).or_default() += 1;
+    }
+    let (mut checked, mut excused) = (0usize, 0usize);
+    let mut out = Vec::new();
+    for conn in plan.connectors.iter().filter(|c| side_arrival(c)) {
+        let Some(plot) = plot_connector(conn, &cols, &rows, None) else { continue };
+        let n = plot.path.len();
+        if n < 2 {
+            continue;
+        }
+        checked += 1;
+        let tangent_is_x = matches!(conn.entry, Side::Top | Side::Bottom);
+        let along =
+            |a: (i32, i32), b: (i32, i32)| if tangent_is_x { a.0 != b.0 } else { a.1 != b.1 };
+        let (turn, head) = (plot.path[n - 2], plot.path[n - 1]);
+        let complaint = if along(turn, head) {
+            Some("the arrowhead's own leg runs ALONG the side, not into it")
+        } else if n >= 3 {
+            let prev = plot.path[n - 3];
+            let hop = (prev.0 - turn.0).abs() + (prev.1 - turn.1).abs();
+            (along(prev, turn) && hop == 1).then_some("a one-cell sidestep into the slot")
+        } else {
+            None
+        };
+        let Some(why) = complaint else { continue };
+        // The exemption is applied to the FINDING, not to the measurement: a jog on a crowded side
+        // is excused and counted, never quietly skipped, so a caller can watch that number.
+        if per_side.get(&(conn.dest, conn.entry)).copied().unwrap_or(0) >= 2 {
+            excused += 1;
+            continue;
+        }
+        out.push(format!(
+            "{} -{:?}-> {} arrives {:?} slot {}: {why} — path {:?}",
+            name(conn.origin),
+            conn.exit_dir,
+            name(conn.dest),
+            conn.entry,
+            conn.entry_slot,
+            plot.path,
+        ));
+    }
+    (checked, excused, out)
+}
+
 /// The same reading as [`overlap_stats`], but naming every ILLEGAL cell and the connectors that
 /// stomp on it — so a failing no-overlap case points at a place on the map rather than at a count
 /// (SQ-1316).
@@ -10071,8 +10160,11 @@ mod sq1320_arrival_slots {
         g
     }
 
-    /// The user's two shapes: `(tag, direction, origin cell, destination cell)`.
-    const SHAPES: [(&str, Direction, (i32, i32), (i32, i32)); 2] = [
+    /// One of the user's reported shapes: `(tag, direction, origin cell, destination cell)`.
+    type Shape = (&'static str, Direction, (i32, i32), (i32, i32));
+
+    /// The user's two shapes.
+    const SHAPES: [Shape; 2] = [
         ("Frigid River --W--> White Cliffs Beach (#47->#192)", W, (6, 5), (5, 6)),
         ("Clearing --E--> Forest (#167->#33)", E, (1, 0), (3, 1)),
     ];
@@ -10103,6 +10195,17 @@ mod sq1320_arrival_slots {
                 a.final_leg(),
                 a.path,
             );
+        }
+    }
+
+    /// **The relaxed rule.** Nothing of the destination's own is on the side these land on, so
+    /// they take its centre cell — which is what makes both of them a plain unbent L.
+    #[test]
+    fn a_free_compass_anchor_is_used() {
+        for (tag, dir, opos, dpos) in SHAPES {
+            let a = arrival(&one_way(dir, opos, dpos, |_| {}));
+            assert_eq!(a.slot, 0, "{tag}: the destination uses nothing on its {:?} side", a.entry);
+            assert_eq!(a.arr, a.centre, "{tag}: …so the arrowhead is on the compass anchor");
         }
     }
 

@@ -69,6 +69,15 @@ Absolute URLs or no link.
   boxes, and the two arrowheads met nose to nose in the middle of it. Each head
   now sits at its own room, pointing in — the same double-headed line the legend
   has always drawn for a way you can walk both directions.
+- **Passages arrive at a room in a straight line.** A one-way passage used to be
+  drawn as if it were heading for the middle of the room's side and then step
+  aside at the very last moment — a small kink right against the box, on Zork
+  I's river crossing to the White Cliffs Beach and the clearing east into the
+  forest. Every passage now aims at the spot its arrowhead will actually land on
+  and runs straight in. And a one-way may now use the middle of a side when the
+  room itself makes nothing of that direction: it still steps aside for the
+  room's own exits, its `?` marks and its two-way passages, but it no longer
+  moves out of the way of nothing at all.
 - **Labels in the exported SVG stay out of each other's way.** A direction tag
   and the name beside a passage that leads off the layer now go wherever there
   is room — beside the badge, above it, below it — instead of always to one

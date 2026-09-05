@@ -422,12 +422,31 @@ Fair and Heritage Corner, with two diagonals crossing between the columns. Drawi
 diagonal as a true 45° line would settle it, and that is a change to how a diagonal is drawn
 rather than to where it is routed.
 
-A one-way connector never lands its arrowhead on a room's own compass anchor — the
-mid-side cell a real exit or a `?` random-exit mark in that direction uses, or a
-diagonal's shared corner — even when nothing else claims it: an arrival there would
-draw exactly like "that direction leads back here", which for a one-way passage isn't
-true. It settles beside that cell instead. Only a reciprocal pair is exempt, because a
-reciprocal genuinely *is* the return path.
+**A room's compass anchor belongs to the room first.** Each side of a box has one
+mid-side cell — the cell a real exit, a `?` random-exit mark or a probed way back in
+that direction is drawn from — and three kinds of thing want it, in this order:
+
+1. **The room's own exits and marks.** An edge of the room in that direction, drawn or
+   `?`-marked, whether or not it is the line that got drawn.
+2. **A reciprocal partner.** A passage that runs both ways genuinely *is* the return
+   path, so its arrowhead belongs on the anchor as much as an exit's does.
+3. **A one-way arrival**, which takes the cell only when the first two want nothing
+   there and no second arrival is contending for the same side. If anything of the
+   room's own needs the cell, the one-way yields and settles beside it.
+
+A free anchor is safe for an arrival because the arrowhead already says which way the
+passage goes — it points *into* the room — and the room's own exits are all drawn from
+that very cell, so with none of them there, there is nothing for it to be mistaken for.
+Barring it unconditionally cost more than it bought: a line aimed at the middle of a
+side and then bent aside in the last gutter cell, to stand beside an anchor nothing was
+using. A diagonal is a separate matter — it anchors on the box corner rather than a side
+midpoint, and a one-way diagonal always yields that corner.
+
+Wherever the arrowhead ends up, **the line runs straight into it.** The route is aimed
+at the slot the arrowhead will actually use, rather than at the side's centre with a
+sidestep tacked on at the end, so the last leg comes down (or across) the arrowhead's
+own column with no kink beside the room. A connector that arrives *along* the gutter
+instead still turns in once, which is the shape that gutter is for.
 
 When two connectors both want the same straight room-line and neither will fit beside the
 other, the longer one keeps it and the shorter weaves instead — and if they tie on length

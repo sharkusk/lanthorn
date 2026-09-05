@@ -1502,6 +1502,32 @@ fn is_collinear(points: &[(i32, i32)]) -> bool {
     points.iter().all(|p| p.0 == points[0].0) || points.iter().all(|p| p.1 == points[0].1)
 }
 
+/// The cardinal direction a room `side`'s CENTRE border cell stands for — the direction an exit
+/// drawn from that cell points. The inverse of [`crate::router::side_for`] on the cardinals; a
+/// diagonal anchors on a box corner instead and claims no side midpoint.
+fn side_compass(side: Side) -> Direction {
+    match side {
+        Side::Top => Direction::N,
+        Side::Bottom => Direction::S,
+        Side::Left => Direction::W,
+        Side::Right => Direction::E,
+    }
+}
+
+/// True when something OF THE ROOM'S OWN already stands on `side`'s centre border cell (SQ-1320):
+/// an edge of `room` in that direction, or a `?` random-exit mark on it (SQ-1275, whose stub
+/// arrowhead is drawn at exactly `box_edge_anchor(.., side, 0)`).
+///
+/// Read from the GRAPH rather than from the side's routed endpoints, because a claim need not be
+/// a connector: a `?` mark draws no line, a self-loop shows as a badge, and an edge the layer
+/// split left on the other plane shows as a portal badge — all of them still facts about that
+/// direction, and the last thing a reader should have to disentangle from an arrowhead.
+fn room_claims_compass_anchor(graph: &MapGraph, room: RoomId, side: Side) -> bool {
+    let dir = side_compass(side);
+    graph.is_random_exit(room, dir)
+        || graph.connections().iter().any(|c| c.origin == room && c.dir == dir)
+}
+
 fn assign_side_slots(connectors: &mut [RoutedConnector], graph: &MapGraph) {
     // Collect every endpoint as (room, side, is_exit, connector index).
     //
@@ -1568,6 +1594,23 @@ fn assign_side_slots(connectors: &mut [RoutedConnector], graph: &MapGraph) {
         // endpoint (a departure, or a reciprocal's arrival) ahead of every one-way arrival,
         // regardless of the existing tie-break keys below, which still decide order WITHIN each
         // of those two groups.
+        //
+        // SQ-1320 relaxes WHO ends up there, not that order. A one-way arrival still yields the
+        // cell to anything of the room's own; it may take it only when the cell is genuinely
+        // FREE. Three tiers, in priority:
+        //
+        //   1. the room's own exits and marks — an edge of the room in that direction, drawn or
+        //      `?`-marked, whether or not it draws a connector (`room_claims_compass_anchor`);
+        //   2. reciprocal partners — an arrival whose passage runs both ways, so the cell is its
+        //      return path (departures and reciprocals share this rank, and the SQ-0216/0222 keys
+        //      below order them: both are the room's own geometry, and only one can be centred);
+        //   3. one-way arrivals, which take the cell only when tiers 1 and 2 are empty AND no
+        //      second arrival contends for the side.
+        //
+        // Why a free cell is safe for an arrival: the arrowhead points INTO the room, and says on
+        // its own which way the passage runs. What it must not do is sit where the reader would
+        // read it as one of the room's OWN exits — and those are drawn from this very cell, so as
+        // long as nothing of the room's is on it, there is nothing to confuse it with.
         let eligible_for_center =
             |is_exit: bool, ci: usize| is_exit || connectors[ci].reciprocal;
         members.sort_by_key(|&(is_updown, axis_recip, straight, is_exit, ci)| {
@@ -1580,13 +1623,23 @@ fn assign_side_slots(connectors: &mut [RoutedConnector], graph: &MapGraph) {
         });
         // Center goes to the sorted-first endpoint ONLY when it is eligible (a departure or a
         // reciprocal) — the SQ-0216/0222 winner within that group. When NOTHING on this side is
-        // eligible (every endpoint is a one-way arrival, the SQ-1274 case), center stays empty and
-        // every arrival is numbered from 1 instead of 0 — the whole group shifts by one slot, so
-        // none of them ever lands on the anchor cell.
+        // eligible (every endpoint is a one-way arrival, the SQ-1274 case), center is the room's
+        // own anchor cell and the arrivals are numbered from 1 instead of 0 — the whole group
+        // shifts by one slot, so none of them lands on it.
+        //
+        // Except when the cell is FREE (SQ-1320): a LONE one-way arrival on a side whose compass
+        // direction the room itself does not use takes center after all, and so runs straight in
+        // rather than weaving to a cell beside an anchor nothing occupies. "Lone" is the second
+        // half of free — a side with two arrivals has two cells to fill and no reason to prefer
+        // either for the middle, so both stay off it as before.
+        let this_room = key.0;
         let front_eligible = members
             .first()
             .is_some_and(|&(_, _, _, is_exit, ci)| eligible_for_center(is_exit, ci));
-        let base: u16 = if front_eligible { 0 } else { 1 };
+        let anchor_free = !front_eligible
+            && members.len() == 1
+            && !room_claims_compass_anchor(graph, this_room, key.1);
+        let base: u16 = if front_eligible || anchor_free { 0 } else { 1 };
         // When the side has exactly ONE offset endpoint besides an eligible center occupant (the
         // common case, incl. the 217->230 / 5->247 fixes), bias it toward its PARTNER room along
         // this side's tangent axis: partner on the + side -> slot 1 (+offset), − side -> slot 2
@@ -1599,7 +1652,6 @@ fn assign_side_slots(connectors: &mut [RoutedConnector], graph: &MapGraph) {
         // alternates sign as magnitude grows, keeping cells distinct within the side's clamped
         // capacity; packing several same-sign offsets could exceed the clamp (±1 on a vertical
         // side) and collide.
-        let this_room = key.0;
         let single_offset = front_eligible && members.len() == 2;
         // The offset endpoint's (idx 1's) tangent-biased slot, precomputed so a nested front (see
         // below) can read it: `single_offset` implies exactly two members, so idx 1 exists whenever
@@ -3064,15 +3116,10 @@ mod tests {
         assert_eq!(plan.connectors[0].points, vec![(0, 2), (1, 1), (2, 0)], "still one pure diagonal");
     }
 
-    #[test]
-    fn a_one_way_arrival_from_the_east_avoids_the_west_mid_side_slot() {
-        // SQ-1274 (this is the Adventure report's exact shape — #42746/#55642's `E` edges into
-        // "In A Valley" — reduced to two rooms): a one-way `E` edge ("go east") arrives on the
-        // destination's WEST side (it approaches from the west, so it enters through the west
-        // door), and it must never land on that side's MID-SIDE slot — the cell a real `W` exit
-        // or a `?` random-exit mark in that direction would use — even when nothing else is on
-        // that side to contest it with. An arrowhead there would read as "west leads back here",
-        // which isn't true for a one-way passage.
+    /// The two-room reduction of the Adventure report's shape (#42746/#55642's `E` edges into
+    /// "In A Valley"): a one-way `E` edge ("go east") arrives on the destination's WEST side —
+    /// it approaches from the west, so it enters through the west door.
+    fn one_way_from_the_west(claim: impl FnOnce(&mut MapGraph)) -> RoutedConnector {
         use crate::direction::Direction;
         let mut g = MapGraph::new();
         g.upsert_room(1, "Origin".into());
@@ -3080,10 +3127,70 @@ mod tests {
         g.set_pos(1, (-1, 0)); // west of Dest
         g.set_pos(2, (0, 0));
         g.add_edge(1, Direction::E, 2); // one-way "go east", arrives on Dest's west side
+        claim(&mut g);
         let plan = route_lanes(&g);
         let arrival = plan.connectors.iter().find(|c| c.dest == 2).expect("the E connector");
         assert_eq!(arrival.entry, Side::Left, "it does land on Dest's west side");
-        assert_ne!(arrival.entry_slot, 0, "but never on the west mid-side slot itself");
+        arrival.clone()
+    }
+
+    /// **SQ-1274's rule, kept where it means something** (SQ-1320): when the destination itself
+    /// uses that direction, its own anchor cell is taken and the one-way arrival goes beside it.
+    /// An arrowhead ON it would sit exactly where the room's own `W` exit — or its `?` mark — is
+    /// drawn from, and the reader would have the two to tell apart.
+    #[test]
+    fn a_one_way_arrival_yields_a_claimed_mid_side_slot() {
+        use crate::direction::Direction;
+        // Claimed by a real `W` exit of the destination's own (to a third room, so the pair does
+        // not collapse into a reciprocal).
+        let by_exit = one_way_from_the_west(|g| {
+            g.upsert_room(3, "Elsewhere".into());
+            g.set_pos(3, (0, 1));
+            g.add_edge(2, Direction::W, 3);
+        });
+        assert_ne!(by_exit.entry_slot, 0, "the room's own W exit holds the west mid-side cell");
+        // Claimed by a `?` random-exit mark, which draws no connector at all — the reason this
+        // is read off the GRAPH and not off the side's routed endpoints.
+        let by_mark = one_way_from_the_west(|g| g.mark_random_exit(2, Direction::W));
+        assert_ne!(by_mark.entry_slot, 0, "and so does a `?W` mark");
+    }
+
+    /// **The relaxation** (SQ-1320): with the destination using nothing westward — no exit, no
+    /// `?` mark, nothing else arriving on that side — the cell is free, and the one-way takes it
+    /// rather than weaving to a slot beside an anchor that does not exist. The arrowhead points
+    /// INTO the room and says which way the passage runs; there is no exit of the room's own on
+    /// that cell for it to be confused with.
+    ///
+    /// This case asserted `!= 0` under SQ-1274, which barred the centre unconditionally. The
+    /// unconditional bar is what produced the jog the user reported — a line aimed at the middle
+    /// of a side and bent aside in the last gutter cell, for no gain on a side nothing else uses.
+    #[test]
+    fn a_one_way_arrival_takes_a_free_mid_side_slot() {
+        let arrival = one_way_from_the_west(|_| {});
+        assert_eq!(arrival.entry_slot, 0, "nothing of Dest's own is on its west cell");
+    }
+
+    /// …but two arrivals on one side still both stay off it: there are two cells to fill and no
+    /// reason to prefer either for the middle.
+    #[test]
+    fn two_one_way_arrivals_on_one_side_both_stay_off_the_mid_side_slot() {
+        use crate::direction::Direction;
+        let mut g = MapGraph::new();
+        for (id, name, pos) in
+            [(1, "West A", (-1, 0)), (2, "Dest", (0, 0)), (3, "West B", (-2, 0))]
+        {
+            g.upsert_room(id, name.into());
+            g.set_pos(id, pos);
+        }
+        g.add_edge(1, Direction::E, 2);
+        g.add_edge(3, Direction::E, 2);
+        let plan = route_lanes(&g);
+        let west: Vec<&RoutedConnector> =
+            plan.connectors.iter().filter(|c| c.dest == 2 && c.entry == Side::Left).collect();
+        assert_eq!(west.len(), 2, "both arrive on Dest's west side");
+        for c in west {
+            assert_ne!(c.entry_slot, 0, "#{} keeps off the mid-side cell", c.origin);
+        }
     }
 
     #[test]

@@ -164,6 +164,64 @@ fn zork1_routing_moves_no_rooms() {
     assert_eq!(before, after, "routing must not change any room position");
 }
 
+/// **No connector bends in the last channel before its destination** (SQ-1320).
+///
+/// The user's report was about the picture right at the room: a one-way aimed at the
+/// destination's side CENTRE and then stepping sideways into the slot its arrowhead would
+/// actually use — "a little jog", on `Frigid River --W--> White Cliffs Beach` (#47→#192) and
+/// `Clearing --E--> Forest` (#167→#33). `render::map::sq1320_arrival_slots` states the rule on
+/// synthetic graphs of those two shapes so CI can fail on it; this states it over the whole real
+/// map, where a route can arrive at a box from a direction no synthetic pair produces.
+///
+/// **"A bend in the last channel", precisely**, is stated once on
+/// [`app::render::map::arrival_approach_report`] and read from `ConnectorPlot.path` — the drawn
+/// polyline reduced to its turns. In short: the segment immediately before the arrowhead's own leg
+/// runs PARALLEL to the entry side and is exactly ONE cell long. That is the sidestep, and only
+/// the sidestep: a route arriving ALONG the channel covers real distance in that segment
+/// (`Atlantis Room --S--> Reservoir North` covers fourteen cells) and its one-cell turn-in leg is
+/// simply how wide that gutter is.
+///
+/// A destination side with two or more arrivals may excuse a jog — it has two cells to fill and
+/// only one of them can be reached head-on. Zork I needs that excuse nowhere, which the case
+/// asserts too: every one of its measured arrivals passes the rule on its own merits.
+#[test]
+fn zork1_no_connector_bends_in_the_last_channel() {
+    let Some(map) = zork1_map() else {
+        eprintln!("SKIP zork1_no_connector_bends_in_the_last_channel: stories/{ZORK1} absent");
+        return;
+    };
+    let mut layers: Vec<mapper::layer::LayerId> = map
+        .graph
+        .layers()
+        .keys()
+        .copied()
+        .filter(|&l| !map.graph.rooms_in_layer(l).is_empty())
+        .collect();
+    layers.sort_unstable();
+    let (mut checked, mut excused) = (0usize, 0usize);
+    let mut failures = Vec::new();
+    for l in layers {
+        let (n, e, jogs) = app::render::map::arrival_approach_report(&map.graph, l);
+        checked += n;
+        excused += e;
+        for line in jogs {
+            failures.push(format!("[{}] {line}", map.graph.layer_name(l)));
+        }
+    }
+    assert!(
+        failures.is_empty(),
+        "{} connector(s) jog into their arrowhead on the Zork I map:\n{}",
+        failures.len(),
+        failures.join("\n")
+    );
+    // Non-vacuity: the rule has to be measuring the map, not an empty list.
+    assert!(checked > 100, "only {checked} arrivals measured — the filter has eaten the map");
+    // And the exemption is not carrying the result: no jog on this map is excused, so every one of
+    // the 200-odd arrivals above passes the rule on its own merits. If this ever grows, a crowded
+    // side has started weaving and the picture is worth looking at before the number is re-pinned.
+    assert_eq!(excused, 0, "no jog on the Zork I map needs the crowded-side exemption");
+}
+
 /// Counterfeit Monkey: a Glulx map an order of magnitude larger than Zork I, and the second
 /// graph the SVG is regenerated against. A rule that only holds on the graph it was written for
 /// is a coincidence.
@@ -267,7 +325,12 @@ fn counterfeit_monkey_overlaps_are_only_the_crossing_diagonals() {
         crossing_diagonal_cells, 6,
         "the crossing-diagonal residual has changed size — re-read the doc comment above"
     );
-    assert_eq!(isolated_touches, 1, "exactly one point-touch on this map");
+    // Was 1 before SQ-1320 — `Roget Close→gate` and `Winding Footpath→Roget Close` each turned
+    // in the same cell of one gutter, because each was aimed at its destination side's CENTRE and
+    // bent aside into its slot in the last channel. Now both run straight into the slot they
+    // actually use, and the two turns are no longer in the same place. Zero is a stronger pin
+    // than one, so it stays an equality: a shape reappearing here is a finding either way.
+    assert_eq!(isolated_touches, 0, "no point-touches left on this map");
 }
 
 // ---------------------------------------------------------------------------
