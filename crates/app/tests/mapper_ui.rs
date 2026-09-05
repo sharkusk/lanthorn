@@ -90,3 +90,5 @@ mod sq1301_spider_and_web_twin_rooms;
 mod sq1302_wizard_sniffer_rooms;
 #[path = "suites/sq1304_anchorhead_twisting_lane.rs"]
 mod sq1304_anchorhead_twisting_lane;
+#[path = "suites/sq1303_glulx_static_world.rs"]
+mod sq1303_glulx_static_world;

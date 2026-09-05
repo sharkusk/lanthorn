@@ -139,6 +139,28 @@ pub struct GlulxSession {
     /// `None` inside the cell is a real answer — a story with no `door_dir`
     /// convention (or no readable object tree at all) — not a failure to look.
     world_model: std::cell::OnceCell<Option<gvm::world::WorldModel>>,
+    /// This story's compiled Inform **7** world model (SQ-1303) — which objects
+    /// are rooms, what each room is called, and which room each direction leads
+    /// to — read off the image by `gvm::i7map` with no turn played.
+    ///
+    /// Forced at BOOT rather than on first use, because the two things it buys
+    /// are both about the opening moments: the room the player starts in is
+    /// keyed by its own address from turn zero, and the room lock can resolve on
+    /// the first move instead of the tenth command. A cell all the same, so the
+    /// derivation has one home and a session built by a path that never boots
+    /// (none today) still gets the right answer lazily.
+    ///
+    /// `None` inside the cell is a real answer and the common one: an Inform 6
+    /// story, an I7 build older than `Map_Storage`, a story that builds its map
+    /// at run time, or no readable object list at all. Every behaviour that
+    /// reads this is skipped for such a story, which then identifies its rooms
+    /// exactly as it did before this existed.
+    ///
+    /// Measured cost of the derivation, release build: 202 ms on
+    /// `CounterfeitMonkey-11.gblorb` (100 rooms, a 5.5 MB image — the largest in
+    /// the corpus), 3 ms on `The_Wizard_Sniffer.gblorb`, 23 ms for Kerkerkruip's
+    /// refusal, 0.2 ms for the Anchorhead demo's.
+    i7_world: std::cell::OnceCell<Option<gvm::i7map::I7World>>,
     /// Reverse map from a room's [`mapper::graph::RoomId`] (SQ-0526's
     /// `crate::roomid::glulx_room_id` HASH of the object address) back to that
     /// address (SQ-1264).
@@ -606,6 +628,7 @@ impl GlulxSession {
             disasm_cache: std::cell::RefCell::new(None),
             parse_names: std::cell::OnceCell::new(),
             world_model: std::cell::OnceCell::new(),
+            i7_world: std::cell::OnceCell::new(),
             room_addrs: std::cell::RefCell::new(std::collections::HashMap::new()),
             object_word_set: std::cell::RefCell::new(None),
             player_addr: std::cell::RefCell::new(None),
@@ -630,6 +653,13 @@ impl GlulxSession {
                 session.scan_words(),
             ),
         };
+        // SQ-1303: read this story's compiled Inform 7 world model NOW, before the
+        // opening room is resolved below — that resolution is the first thing it
+        // pays for, and the room lock wants the room set from its very first
+        // observation rather than from the turn it happens to be asked. `None` for
+        // every story the reader refuses, and everything below then behaves exactly
+        // as it did before. See the `i7_world` field for the measured cost.
+        session.arm_room_lock();
         // Resolve the opening room's id the way a live TURN does, not with a bare
         // name hash. When this story's `location` global was learned in an earlier
         // run the lock is already restored above, so a turn keys rooms by the room's
@@ -826,6 +856,140 @@ impl GlulxSession {
         self.world_model
             .get_or_init(|| self.parse_names().map(|n| gvm::world::WorldModel::discover(self.machine.mem(), n)))
             .as_ref()
+    }
+
+    /// This story's compiled Inform 7 world model, derived on first use and
+    /// forced at boot — see the [`i7_world`](Self::i7_world) field for what it
+    /// costs and what `None` means (SQ-1303).
+    pub fn i7_world(&self) -> Option<&gvm::i7map::I7World> {
+        self.i7_world
+            .get_or_init(|| {
+                self.parse_names().and_then(|n| gvm::i7map::I7World::detect(self.machine.mem(), n))
+            })
+            .as_ref()
+    }
+
+    /// What the STORY calls the room at `addr`, where its compiled world model
+    /// says so (SQ-1303).
+    ///
+    /// This is the name that stops one room becoming two nodes. The heading is
+    /// what the story chose to PRINT on the turn it printed it, and it varies:
+    /// Counterfeit Monkey's status line reads `" Back Alley, noon"` where its
+    /// heading reads `"Back Alley"`, a heading can be re-styled or suppressed,
+    /// and a story that renames a room mid-play prints a different string for
+    /// the same place. The `printed name` property is the room's own, so every
+    /// route into [`Self::room_for`] agrees on one label for one address.
+    ///
+    /// `None` — and the heading is used, exactly as before — for a story with no
+    /// world model, for an address that is not one of its rooms, and for a room
+    /// whose printed name is a ROUTINE rather than a constant string (21 of
+    /// Counterfeit Monkey's 2,480 named objects; only running the story can say
+    /// what "the [colour] door" says today).
+    fn static_room_name(&self, addr: u32) -> Option<String> {
+        let world = self.i7_world()?;
+        if !world.is_room(addr) {
+            return None;
+        }
+        world.printed_name(self.machine.mem(), self.parse_names()?, addr)
+    }
+
+    /// The one room this story statically calls `name`, or `None` (SQ-1303).
+    ///
+    /// What lets a story's OPENING room be keyed by its own address before the
+    /// room lock has resolved anything: the player is standing somewhere the
+    /// story has named, and the world model can turn that name back into an
+    /// address without a single move being made. Without it the opening room is
+    /// minted under the hash of its heading and re-keyed later — or, on a story
+    /// that never locks, forever.
+    ///
+    /// **Unique or nothing.** Two rooms of one name is a maze, and a name cannot
+    /// say which one the player is in; that is the whole reason the room lock
+    /// exists, and guessing here would put the map in the wrong room rather than
+    /// merely in a name-keyed one. Matched with
+    /// [`zvm::location::status_name_matches`], the same normalisation the
+    /// Z-machine side has always compared a screen name against an object name
+    /// with.
+    fn room_by_static_name(&self, name: &str) -> Option<u32> {
+        let world = self.i7_world()?;
+        let names = self.parse_names()?;
+        let mem = self.machine.mem();
+        let mut found = None;
+        for &addr in world.rooms() {
+            let Some(printed) = world.printed_name(mem, names, addr) else { continue };
+            if !zvm::location::status_name_matches(name, &printed) {
+                continue;
+            }
+            if found.is_some() {
+                return None; // two rooms of that name; the name cannot say which
+            }
+            found = Some(addr);
+        }
+        found
+    }
+
+    /// What `Map_Storage` declares for `addr` in `compass` (SQ-1303) — the
+    /// Inform **7** half of [`Engine::declared_exit`], asked only where the
+    /// Inform 6 `door_dir` convention had nothing to say (which for an I7 story
+    /// is every direction of every room: that convention is not what its
+    /// compiler emits).
+    ///
+    /// Read from LIVE memory on every ask, not from the boot image. The array is
+    /// in RAM precisely so `AssertMapConnection` can rewrite it — "change the
+    /// north exit of the Hall to the Cellar" — and Counterfeit Monkey does: two
+    /// of the rooms in the SQ-1303 spike's played dump have connections its
+    /// compiled map does not.
+    ///
+    /// The four answers, and what each one means to
+    /// [`crate::random_exit_probe`], which is what consumes them:
+    ///
+    /// * a cell naming a room, or a two-sided door whose far side the model can
+    ///   resolve → [`AppExit::Room`], a fixed destination this move can be
+    ///   checked against;
+    /// * a cell naming a door whose far side only `door_to()` can compute →
+    ///   [`AppExit::Code`], which is exactly what that variant is for;
+    /// * a zero cell in a column this story HAS → [`AppExit::Absent`];
+    /// * no such direction in this story, or no world model, or an origin that
+    ///   is not one of its rooms → [`AppExit::Unknown`].
+    fn i7_declared_exit(
+        &self,
+        names: &gvm::objects::ParseNames,
+        addr: u32,
+        compass: gvm::world::Compass,
+    ) -> crate::engine::DeclaredExit {
+        use crate::engine::DeclaredExit as AppExit;
+        let Some(world) = self.i7_world() else { return AppExit::Unknown };
+        if !world.is_room(addr) {
+            return AppExit::Unknown;
+        }
+        let Some(col) = world.compass_column(compass) else { return AppExit::Unknown };
+        match world.exit(self.machine.mem(), names, addr, col) {
+            None => AppExit::Absent,
+            Some(gvm::i7map::I7Exit::Door(_)) => AppExit::Code,
+            Some(e) => match e.destination() {
+                Some(r) => AppExit::Room(crate::roomid::glulx_room_id(r)),
+                None => AppExit::Code,
+            },
+        }
+    }
+
+    /// Hand the room lock everything this story can be made to say about its own
+    /// rooms: the object table (SQ-1286) and, where there is one, the compiled
+    /// world model's room set with each room's static name (SQ-1303).
+    ///
+    /// One call rather than two at each site, because a lock built with only
+    /// half of it is a lock that learns more slowly for no reason anybody would
+    /// notice — and there are four places a `RoomLock` is built.
+    fn arm_room_lock(&mut self) {
+        if self.room_lock.needs_objects() {
+            let addrs = self.parse_names().map(|p| p.objects().collect::<Vec<u32>>());
+            self.room_lock.set_objects(addrs);
+        }
+        if self.room_lock.needs_rooms() {
+            let rooms = self.i7_world().map(|w| {
+                w.rooms().iter().map(|&a| (a, self.static_room_name(a))).collect::<Vec<_>>()
+            });
+            self.room_lock.set_rooms(rooms);
+        }
     }
 
     /// The address the game's `location` global currently holds — the room the
@@ -1060,12 +1224,13 @@ impl GlulxSession {
         let heading = self.name_this_room(heading, awaiting_line_input);
         // SQ-1286: the learner scores every RAM word, and what tells the room
         // apart from the counters that also change with it is that its value is a
-        // real OBJECT of this story. Walk the object table once, the first turn a
-        // learning session needs it — a whole-image scan, so not per turn, and
-        // never for a session that booted already locked.
-        if self.room_lock.locked().is_none() && self.room_lock.needs_objects() {
-            let addrs = self.parse_names().map(|p| p.objects().collect::<Vec<u32>>());
-            self.room_lock.set_objects(addrs);
+        // real OBJECT of this story — and, where the story says so, a real ROOM
+        // (SQ-1303). Both are whole-image scans, so they are done once and never
+        // for a session that booted already locked; `new_with_store` has normally
+        // armed the lock already, and this is the belt for a `RoomLock` rebuilt
+        // mid-session (a restore, a `relearn`).
+        if self.room_lock.locked().is_none() {
+            self.arm_room_lock();
         }
         let ram = self.scan_ram();
         // SQ-1294: **once the lock has resolved, the STORY says whether the room
@@ -1179,18 +1344,33 @@ impl GlulxSession {
             .collect()
     }
 
-    /// The room id for this turn: the locked `location` global when it is known,
-    /// else the hash of the room name — which is what every Glulx game used before
-    /// the lock existed, and what a game that never locks keeps using.
+    /// The room id for this turn, in the order of authority the whole Glulx
+    /// identity path is built on:
+    ///
+    /// 1. the locked `location` global, when [`crate::glulx_roomlock`] has
+    ///    resolved which RAM word it is (SQ-0526);
+    /// 2. failing that, the address this story's own compiled world model gives
+    ///    for a room it uniquely calls `name` (SQ-1303) — which is how a game
+    ///    that has not locked yet, or never will, still gets a real identity
+    ///    from its very first prompt;
+    /// 3. failing both, the hash of the name, which is what every Glulx game
+    ///    used before any of this existed.
+    ///
+    /// And once an ADDRESS is in hand, the name comes from the story's model
+    /// too where it can ([`Self::static_room_name`]) — the heading only says
+    /// what the room was called on the turn it was printed, and two spellings
+    /// of one room is how one room becomes two nodes.
     fn room_for(&self, name: &str, ram: &[u32]) -> LocationInfo {
-        match self.room_lock.room_id(ram) {
+        let addr = self.room_lock.room_id(ram).or_else(|| self.room_by_static_name(name));
+        match addr {
             Some(addr) => {
                 let id = crate::roomid::glulx_room_id(addr);
                 // SQ-1264: remember the address behind this hash — see
                 // `room_addrs`'s field docs for why `declared_exit` needs a
                 // cache rather than being able to invert the hash itself.
                 self.room_addrs.borrow_mut().insert(id, addr);
-                LocationInfo { number: id, parent: 0, name: name.to_string() }
+                let name = self.static_room_name(addr).unwrap_or_else(|| name.to_string());
+                LocationInfo { number: id, parent: 0, name }
             }
             None => heading_to_room(name),
         }
@@ -2131,16 +2311,22 @@ impl Engine for GlulxSession {
         }) else {
             return AppExit::Unknown;
         };
-        let Some(model) = self.world_model() else { return AppExit::Unknown };
         let Some(names) = self.parse_names() else { return AppExit::Unknown };
         let Some(&addr) = self.room_addrs.borrow().get(&origin) else { return AppExit::Unknown };
-        match model.declared_exit(self.machine.mem(), names, addr, compass) {
-            gvm::world::DeclaredExit::Room(r) => AppExit::Room(crate::roomid::glulx_room_id(r)),
-            gvm::world::DeclaredExit::Code => AppExit::Code,
-            gvm::world::DeclaredExit::Message => AppExit::Message,
-            gvm::world::DeclaredExit::Absent => AppExit::Absent,
-            gvm::world::DeclaredExit::Unknown => AppExit::Unknown,
+        let i6 = match self.world_model() {
+            Some(model) => match model.declared_exit(self.machine.mem(), names, addr, compass) {
+                gvm::world::DeclaredExit::Room(r) => AppExit::Room(crate::roomid::glulx_room_id(r)),
+                gvm::world::DeclaredExit::Code => AppExit::Code,
+                gvm::world::DeclaredExit::Message => AppExit::Message,
+                gvm::world::DeclaredExit::Absent => AppExit::Absent,
+                gvm::world::DeclaredExit::Unknown => AppExit::Unknown,
+            },
+            None => AppExit::Unknown,
+        };
+        if i6 != AppExit::Unknown {
+            return i6;
         }
+        self.i7_declared_exit(names, addr, compass)
     }
 
     fn rng_seed(&self) -> Option<u32> {
