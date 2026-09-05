@@ -122,6 +122,17 @@ pub struct I7World {
     rooms: Vec<u32>,
     directions: Vec<u32>,
     room_index: HashMap<u32, usize>,
+    /// Which compass point each `Map_Storage` COLUMN is, in
+    /// [`Self::directions`] order — `None` for an author-defined direction
+    /// this reader cannot name (Counterfeit Monkey has eight).
+    ///
+    /// Resolved once at [`Self::detect`] rather than per ask, because the
+    /// derivation decodes every direction object's parser words and a live
+    /// caller asks per typed move: `GlulxSession::declared_exit` is on the
+    /// turn path. The words are RAM a story can rewrite, but the compass a
+    /// direction OBJECT stands for is not something an Inform story rewrites
+    /// — the same reasoning `gvm::world`'s own `exit_props` are cached under.
+    dir_compass: Vec<Option<Compass>>,
 }
 
 /// What one entry of a room's row in `Map_Storage` turns out to be.
@@ -167,6 +178,7 @@ impl I7World {
 
         let room_index = rooms.iter().enumerate().map(|(i, &a)| (a, i)).collect();
         let name_prop = props.printed_name_property(mem);
+        let dir_compass = directions.iter().map(|&d| compass_of(mem, names, d)).collect();
         Some(I7World {
             room_prop,
             dir_prop,
@@ -175,6 +187,7 @@ impl I7World {
             rooms,
             directions,
             room_index,
+            dir_compass,
         })
     }
 
@@ -204,6 +217,30 @@ impl I7World {
     /// Is `addr` one of this story's rooms?
     pub fn is_room(&self, addr: u32) -> bool {
         self.room_index.contains_key(&addr)
+    }
+
+    /// Which `Map_Storage` COLUMN `compass` is, or `None` when this story
+    /// declares no direction answering to that word.
+    ///
+    /// `None` is a real answer and not a failure to look: an Inform 7 author
+    /// may drop a Standard Rules direction, and the caller must be able to
+    /// tell "this story has no `up`" from "this room declares nothing upward"
+    /// — the same distinction [`crate::world::DeclaredExit`] draws between
+    /// `Unknown` and `Absent`.
+    pub fn compass_column(&self, compass: Compass) -> Option<usize> {
+        self.dir_compass.iter().position(|&c| c == Some(compass))
+    }
+
+    /// What `room` declares in column `dir`, read from LIVE memory.
+    ///
+    /// `None` for a `0` entry (no exit that way), and for a `room`/`dir` that
+    /// is not one of ours. **The read goes to `mem` every time on purpose**:
+    /// `Map_Storage` is in RAM and `WorldModel.i6t`'s `AssertMapConnection`
+    /// writes to it, so an answer cached from the boot image is a claim about
+    /// a map the story may since have rewritten (Counterfeit Monkey does).
+    pub fn exit(&self, mem: &Memory, names: &ParseNames, room: u32, dir: usize) -> Option<I7Exit> {
+        let entry = self.raw_exit(mem, room, dir)?;
+        Some(self.resolve(mem, names, room, entry))
     }
 
     /// The raw `Map_Storage` entry for `room` in direction column `dir` — an
@@ -237,7 +274,7 @@ impl I7World {
                 continue;
             };
             out.push((
-                self.compass_of(mem, names, dir_obj),
+                self.dir_compass[d],
                 dir_obj,
                 self.resolve(mem, names, room, entry),
             ));
@@ -300,14 +337,16 @@ impl I7World {
         None
     }
 
-    /// Which compass point `dir_obj` is, by the dictionary words the parser
-    /// accepts for it. `None` for an author-defined direction.
-    fn compass_of(&self, mem: &Memory, names: &ParseNames, dir_obj: u32) -> Option<Compass> {
-        let words = names.of(mem, dir_obj)?.words;
-        Compass::ALL
-            .into_iter()
-            .find(|c| words.iter().any(|w| w.eq_ignore_ascii_case(c.word())))
-    }
+}
+
+/// Which compass point `dir_obj` is, by the dictionary words the parser accepts
+/// for it. `None` for an author-defined direction. Run once per direction at
+/// [`I7World::detect`] and remembered in [`I7World::dir_compass`].
+fn compass_of(mem: &Memory, names: &ParseNames, dir_obj: u32) -> Option<Compass> {
+    let words = names.of(mem, dir_obj)?.words;
+    Compass::ALL
+        .into_iter()
+        .find(|c| words.iter().any(|w| w.eq_ignore_ascii_case(c.word())))
 }
 
 /// Highest property id [`I7World::door_sides`] scans for a door's `found_in`
