@@ -20,6 +20,10 @@
 //!    at (0,0); residual collisions are resolved on the grid, keeping an aligned room on
 //!    its row/column where possible (`place_preserving_alignment`) before spiralling.
 //!
+//! The contiguity stage also snaps every **leaf** — a room whose compass edges all name one
+//! partner — onto that partner's doorstep, since the separation a compass edge buys is only
+//! a MINIMUM and the solve leaves slack (SQ-1312).
+//!
 //! After either regime, `mark_distorted` flags every compass edge whose final grid
 //! geometry contradicts its direction. (Connector routing and any render-aware
 //! overlap cleanup live in the `app` crate, not here.)
@@ -511,6 +515,163 @@ fn eject_interlopers(
     }
 }
 
+/// Every chain of this component that currently holds its line, with the local indices of its
+/// members. Members are never moved by `eject_interlopers` (they are all `protected`), so the
+/// spans computed here stay valid for the whole contiguity pass.
+fn chain_spans(
+    chains: &Chains,
+    index: &BTreeMap<RoomId, usize>,
+    snapped: &[(i32, i32)],
+) -> Vec<(ChainSpan, BTreeSet<usize>)> {
+    let mut out = Vec::new();
+    for (horizontal, groups) in [(true, &chains.ew_members), (false, &chains.ns_members)] {
+        for members in groups {
+            let idxs: Vec<usize> =
+                members.iter().filter_map(|id| index.get(id).copied()).collect();
+            if idxs.len() < 2 {
+                continue;
+            }
+            let coord = |i: usize| if horizontal { snapped[i].1 } else { snapped[i].0 };
+            let line = coord(idxs[0]);
+            if !idxs.iter().all(|&i| coord(i) == line) {
+                continue; // the chain's equality was dropped — it has no line to defend
+            }
+            let par = |i: usize| if horizontal { snapped[i].0 } else { snapped[i].1 };
+            let lo = idxs.iter().map(|&i| par(i)).min().unwrap();
+            let hi = idxs.iter().map(|&i| par(i)).max().unwrap();
+            out.push((ChainSpan { horizontal, line, lo, hi }, idxs.into_iter().collect()));
+        }
+    }
+    out
+}
+
+/// True iff `cell` lies on `span`'s line within its member extent (endpoints included) — the
+/// zone `eject_interlopers` clears.
+fn cell_is_on_span(span: &ChainSpan, cell: (i32, i32)) -> bool {
+    let (perp, par) = if span.horizontal { (cell.1, cell.0) } else { (cell.0, cell.1) };
+    perp == span.line && par >= span.lo && par <= span.hi
+}
+
+/// The one room every one of `id`'s compass edges names, together with the unit offset FROM `id`
+/// TO that room — or `None` when `id` has no compass edge at all, names more than one partner, or
+/// the bearings between the pair contradict each other on an axis. Such a room is a **leaf**: the
+/// map holds one coherent statement about where it lies and nothing else.
+///
+/// `In`/`Out`/`Unknown` are not compass bearings (`grid_offset` returns `None` for them), so they
+/// never disqualify a leaf: Zork I's `Stone Barrow` is a leaf south-west of `West of House` even
+/// though the same door is also an `IN` (SQ-1312).
+///
+/// Nor does a stairwell to ANOTHER room — Zork I's `Studio` is a leaf hanging south of the
+/// `Gallery` even though the `Kitchen` also drops into it. But a stairwell joining the PAIR is a
+/// second, vertical claim on the same relationship (the alignment stage honours it through
+/// `layout_offset`), so a leaf whose partner is also reached by `Up`/`Down` keeps the cell the
+/// solve gave it — Zork I's `Egyptian Room` is west of the `Temple` and also up from it.
+///
+/// Every compass edge BETWEEN the pair then COMPOSES into the offset, one axis at a time, exactly
+/// the way `build_axis_constraints` composes them: `A→N→B` with `B→W→A` says north AND east, so
+/// the doorstep is the north-east diagonal, not either cardinal on its own.
+fn leaf_partner(graph: &MapGraph, id: RoomId) -> Option<(RoomId, (i32, i32))> {
+    let conns = graph.connections();
+    let mut partner: Option<RoomId> = None;
+    for c in conns {
+        if c.is_self_loop() || grid_offset(c.dir).is_none() {
+            continue;
+        }
+        let other = if c.origin == id {
+            c.dest
+        } else if c.dest == id {
+            c.origin
+        } else {
+            continue;
+        };
+        match partner {
+            None => partner = Some(other),
+            Some(p) if p == other => {}
+            Some(_) => return None, // a second compass partner: not a leaf
+        }
+    }
+    let partner = partner?;
+    // Compose the bearings between the pair. A conflicting sign on either axis means the two
+    // observations cannot both be true, so there is no doorstep to snap to; a stairwell between
+    // the pair is a vertical claim the snap has no way to honour, so it declines outright.
+    let mut off = (0_i32, 0_i32);
+    for c in conns {
+        let outgoing = if c.origin == id && c.dest == partner {
+            true
+        } else if c.dest == id && c.origin == partner {
+            false
+        } else {
+            continue;
+        };
+        let Some(o) = grid_offset(c.dir) else {
+            if layout_offset(c.dir).is_some() {
+                return None; // Up/Down between the pair
+            }
+            continue;
+        };
+        let to_partner = if outgoing { o } else { (-o.0, -o.1) };
+        for (axis, sign) in [(&mut off.0, to_partner.0), (&mut off.1, to_partner.1)] {
+            if sign == 0 {
+                continue;
+            }
+            if *axis != 0 && *axis != sign.signum() {
+                return None; // "the partner is east of me" and "west of me"
+            }
+            *axis = sign.signum();
+        }
+    }
+    (off != (0, 0)).then_some((partner, off))
+}
+
+/// Pull every leaf onto its partner's doorstep — the cell exactly one step back along its own
+/// bearing (SQ-1312).
+///
+/// `stress_layout` minimises an objective averaged over EVERY pair in the component, and the VPSC
+/// separation a compass edge contributes is only a MINIMUM ("at least one cell apart"), so a room
+/// hanging off the side of the map routinely settles two or three cells out with nothing in
+/// between: Zork I's `Studio` sat three rows above the `Gallery`, its only neighbour, with the
+/// intervening cell free. A leaf is the one room this can be fixed for unilaterally — the map
+/// holds exactly one statement about where it lies, so there is no second constraint to trade
+/// against and no other room's position changes.
+///
+/// The leaf moves only INWARD along the bearing (Chebyshev distance to the partner never grows),
+/// only onto a free cell, and never onto the span of a chain it does not itself belong to — the
+/// zone `eject_interlopers` clears, which is the one place a room may not come to rest.
+fn snap_leaves(
+    spans: &[(ChainSpan, BTreeSet<usize>)],
+    comp: &[RoomId],
+    index: &BTreeMap<RoomId, usize>,
+    snapped: &mut [(i32, i32)],
+    graph: &MapGraph,
+) {
+    let cheb = |a: (i32, i32), b: (i32, i32)| (a.0 - b.0).abs().max((a.1 - b.1).abs());
+    for i in 0..comp.len() {
+        let Some((partner, off)) = leaf_partner(graph, comp[i]) else { continue };
+        let Some(&pi) = index.get(&partner) else { continue };
+        if pi == i {
+            continue;
+        }
+        let ppos = snapped[pi];
+        let cur = snapped[i];
+        let occupied: BTreeSet<(i32, i32)> =
+            (0..snapped.len()).filter(|&k| k != i).map(|k| snapped[k]).collect();
+        let forbidden = |c: (i32, i32)| {
+            spans.iter().any(|(s, members)| !members.contains(&i) && cell_is_on_span(s, c))
+        };
+        // Walk out from the partner along the bearing; the first free, legal cell wins.
+        for d in 1..=MAX_BUMP_SPAN {
+            let cand = (ppos.0 - off.0 * d, ppos.1 - off.1 * d);
+            if occupied.contains(&cand) || forbidden(cand) {
+                continue;
+            }
+            if cheb(cand, ppos) <= cheb(cur, ppos) {
+                snapped[i] = cand;
+            }
+            break;
+        }
+    }
+}
+
 fn contiguify(
     chains: &Chains,
     comp: &[RoomId],
@@ -532,24 +693,11 @@ fn contiguify(
         .flat_map(|members| members.iter().filter_map(|id| index.get(id).copied()))
         .collect();
     let mut snapped_v: Vec<(i32, i32)> = snapped.to_vec();
-    for members in &chains.ew_members {
-        let idxs: Vec<usize> = members.iter().filter_map(|id| index.get(id).copied()).collect();
-        if idxs.len() < 2 { continue; }
-        let line = snapped_v[idxs[0]].1; // shared row
-        if !idxs.iter().all(|&i| snapped_v[i].1 == line) { continue; } // dropped equality → skip
-        let lo = idxs.iter().map(|&i| snapped_v[i].0).min().unwrap();
-        let hi = idxs.iter().map(|&i| snapped_v[i].0).max().unwrap();
-        let span = ChainSpan { horizontal: true, line, lo, hi };
-        eject_interlopers(&mut snapped_v, &protected, span, comp, index, graph);
-    }
-    for members in &chains.ns_members {
-        let idxs: Vec<usize> = members.iter().filter_map(|id| index.get(id).copied()).collect();
-        if idxs.len() < 2 { continue; }
-        let line = snapped_v[idxs[0]].0; // shared column
-        if !idxs.iter().all(|&i| snapped_v[i].0 == line) { continue; }
-        let lo = idxs.iter().map(|&i| snapped_v[i].1).min().unwrap();
-        let hi = idxs.iter().map(|&i| snapped_v[i].1).max().unwrap();
-        let span = ChainSpan { horizontal: false, line, lo, hi };
+    let spans = chain_spans(chains, index, &snapped_v);
+    // Leaves first: pulling one in can only shrink a chain's span, never grow it, so the spans
+    // above stay valid (and a tighter chain has less zone to clear).
+    snap_leaves(&spans, comp, index, &mut snapped_v, graph);
+    for (span, _) in chain_spans(chains, index, &snapped_v) {
         eject_interlopers(&mut snapped_v, &protected, span, comp, index, graph);
     }
     snapped.copy_from_slice(&snapped_v);
@@ -1752,5 +1900,81 @@ mod tests {
         g.add_edge(1, Direction::Up, 2);
         mark_distorted(&mut g, &BTreeSet::new());
         assert!(!g.connections()[0].distorted, "up/down is never marked distorted");
+    }
+
+    // ── SQ-1312 ───────────────────────────────────────────────────────────────
+
+    /// SQ-1312 (A): a LEAF — a room whose on-layer compass edges all name ONE partner —
+    /// must end up on that partner's own doorstep, not merely somewhere on the right side.
+    ///
+    /// `stress_layout`'s SMACOF objective averages over every pair in the component, and the
+    /// VPSC separation for a cardinal pair is only a MINIMUM ("at least one cell apart"), so
+    /// a leaf routinely settles two or three cells out with nothing in between. Zork I's
+    /// `Studio` sat three rows above its only neighbour `Gallery` with the intervening cells
+    /// free. A leaf has no other constraint to trade against, so snapping it in cannot break
+    /// anything else. Falsify by removing the `snap_leaves` call from `contiguify`.
+    #[test]
+    fn a_leaf_snaps_onto_its_only_partners_doorstep() {
+        let mut g = crate::graph::MapGraph::new();
+        for id in [1u32, 2, 3, 4] {
+            g.upsert_room(id, "r".into());
+        }
+        // 1-2-3: reciprocal E/W chain on one row.
+        g.add_edge(1, Direction::E, 2);
+        g.add_edge(2, Direction::W, 1);
+        g.add_edge(2, Direction::E, 3);
+        g.add_edge(3, Direction::W, 2);
+        // 4: a leaf, reciprocally north of the middle room.
+        g.add_edge(2, Direction::N, 4);
+        g.add_edge(4, Direction::S, 2);
+
+        let chains = detect_chains(&g);
+        let comp: Vec<RoomId> = vec![1, 2, 3, 4];
+        let index: BTreeMap<RoomId, usize> =
+            comp.iter().enumerate().map(|(i, &id)| (id, i)).collect();
+        // The row at y=0, and the leaf left three rows north with (0,-1) and (0,-2) free.
+        let mut snapped: Vec<(i32, i32)> = vec![(-1, 0), (0, 0), (1, 0), (0, -3)];
+
+        contiguify(&chains, &comp, &index, &mut snapped, &g);
+
+        assert_eq!(snapped[index[&4]], (0, -1), "the leaf must sit directly north of its partner");
+        assert_eq!(snapped[index[&1]], (-1, 0), "the row is untouched");
+        assert_eq!(snapped[index[&2]], (0, 0), "the row is untouched");
+        assert_eq!(snapped[index[&3]], (1, 0), "the row is untouched");
+    }
+
+    /// SQ-1312 (A′): an `Up`/`Down` edge is not a compass bearing, so it neither stops a room
+    /// counting as a leaf nor pulls on where the snap puts it. Zork I's `Studio` is reached
+    /// from the `Kitchen` by a `Down` that crosses a layer boundary and contributes nothing;
+    /// the same must hold for a stairwell inside one layer.
+    #[test]
+    fn an_updown_edge_does_not_disqualify_a_leaf() {
+        let mut g = crate::graph::MapGraph::new();
+        for id in [1u32, 2, 3, 4, 5] {
+            g.upsert_room(id, "r".into());
+        }
+        g.add_edge(1, Direction::E, 2);
+        g.add_edge(2, Direction::W, 1);
+        g.add_edge(2, Direction::E, 3);
+        g.add_edge(3, Direction::W, 2);
+        g.add_edge(2, Direction::N, 4);
+        g.add_edge(4, Direction::S, 2);
+        // A stairwell between room 5 and the leaf: no compass bearing, so no claim on room 4.
+        g.add_edge(5, Direction::Down, 4);
+        g.add_edge(4, Direction::Up, 5);
+
+        let chains = detect_chains(&g);
+        let comp: Vec<RoomId> = vec![1, 2, 3, 4, 5];
+        let index: BTreeMap<RoomId, usize> =
+            comp.iter().enumerate().map(|(i, &id)| (id, i)).collect();
+        let mut snapped: Vec<(i32, i32)> = vec![(-1, 0), (0, 0), (1, 0), (0, -3), (4, -3)];
+
+        contiguify(&chains, &comp, &index, &mut snapped, &g);
+
+        assert_eq!(
+            snapped[index[&4]],
+            (0, -1),
+            "the stairwell is not a compass edge: room 4 is still a leaf and still snaps",
+        );
     }
 }

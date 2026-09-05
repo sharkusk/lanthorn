@@ -719,3 +719,33 @@ fn east_west_passage_stays_on_the_round_room_row_and_the_chasm_column_is_intact(
         assert!(!edge_distorted(g, from, dir, to), "{from} -{dir:?}-> {to} must not be distorted");
     }
 }
+
+/// SQ-1312: Zork I's `Studio` sits directly north of the `Gallery`.
+///
+/// The `Studio`'s only on-layer bearing is a reciprocated `N`/`S` pair with the `Gallery` (the
+/// `Kitchen`'s `Down` into it crosses a layer boundary and is not in the subgraph at all). The
+/// stress solve left it at `(-1, 5)` with the `Gallery` at `(-1, 8)` and both cells between them
+/// empty: SMACOF averages over every pair in the component, and the separation VPSC enforces for
+/// a cardinal pair is only a MINIMUM. The leaf snap pulls it onto the doorstep.
+#[test]
+fn zork1_leaves_sit_on_their_partners_doorstep() {
+    let Some(path) = story("zork1-invclues-r52-s871125.z5") else {
+        eprintln!("SKIP: stories/zork1-invclues-r52-s871125.z5 absent");
+        return;
+    };
+    let map = mapgen::generate(&path, true).expect("Zork I must map");
+    let g = &map.graph;
+    let pos = |label: &str| g.room(room_id(g, label)).unwrap().pos.unwrap();
+
+    let (p_gallery, p_studio) = (pos("Gallery"), pos("Studio"));
+    assert_eq!(
+        p_studio,
+        (p_gallery.0, p_gallery.1 - 1),
+        "Studio is directly north of the Gallery: {p_studio:?} {p_gallery:?}",
+    );
+    for (from, dir, to) in
+        [("Gallery", Direction::N, "Studio"), ("Studio", Direction::S, "Gallery")]
+    {
+        assert!(!edge_distorted(g, from, dir, to), "{from} -{dir:?}-> {to} must not be distorted");
+    }
+}

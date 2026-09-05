@@ -414,6 +414,12 @@ grows. How eagerly is up to you (`background_tidy`): after every new room (the
 default), only when a new room overlaps an old one (`on_overlap`), debounced every
 few rooms (`debounced`), or off entirely. Force a pass any time with `tidy-map`.
 
+One touch happens after the solve, because the solver cannot make it itself: a
+**leaf** — a room whose compass exits all lead to one neighbour — is snapped onto
+that neighbour's doorstep, since the separation a compass edge buys the solver is
+only a minimum and a room hanging off the side of the map otherwise drifts two or
+three cells out with nothing in between.
+
 **Maze layers are left alone.** A layer flagged as a maze (below) is *frozen*: it
 schedules no tidy, `tidy-map` on it answers "maze layer: geometry is frozen — the
 matrix is the view", and its rooms keep the positions they were first given. There
