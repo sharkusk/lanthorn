@@ -54,6 +54,17 @@ Absolute URLs or no link.
   climbing up into an attic, say — the same map layer as the place it opens
   onto**, instead of stranding it on its own by default.
 
+### Changed
+
+- **Passages no longer run on top of each other.** On the map and in the
+  exported SVG, two connections that happened to want the same channel were
+  drawn along the same line, and the one underneath vanished — in Zork I the
+  conditional passage from the Living Room to the Strange Passage disappeared
+  under the West of House diagonal for the length of the house. Each passage now
+  gets a channel of its own and the gap between the rooms widens to hold them.
+  Passages that merely **cross** are untouched: they still cross, with the
+  break in the horizontal line that says the two do not meet there.
+
 ### Fixed
 
 - **A ship's map no longer erases itself as you sail it.** Walking Slango's
