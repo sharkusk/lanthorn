@@ -30,8 +30,9 @@ fn tracked(rel: &str) -> PathBuf {
 // ---------------------------------------------------------------------------
 
 /// Mini-Zork I's maze — ten rooms literally named "Maze" — lands on one
-/// maze-flagged layer, and no room that ISN'T named "Maze" comes along for the
-/// ride.
+/// maze-flagged layer, alongside only the Grating Room (SQ-1311: absorbed
+/// because every one of ITS compass edges leads into the maze too), and no
+/// room reachable any other way comes along for the ride.
 ///
 /// The second half is the case that actually needed proving: a bare
 /// `mapper::layer::planar_region` walk from a maze room does not stop at the
@@ -39,7 +40,9 @@ fn tracked(rel: &str) -> PathBuf {
 /// the Living Room, so the naive walk sweeps up 55 of Mini-Zork's 70 rooms,
 /// Kitchen and West of House included. `app::mapgen::maze_region` (private;
 /// exercised only through `split_layers`) stops at the room-name boundary
-/// instead, which is what this pins.
+/// instead, which is what this pins — SQ-1311's absorb pass recovers the
+/// Grating Room afterward, but by its own compass edges alone, never by
+/// sweeping up an unrelated hub the way the naive walk does.
 #[test]
 fn minizork_maze_lands_on_one_maze_flagged_layer_alone() {
     let map = mapgen::generate(&fixture_path("minizork-r34-s871124.z3"), true)
@@ -59,16 +62,52 @@ fn minizork_maze_lands_on_one_maze_flagged_layer_alone() {
         assert_eq!(r.layer, maze_layer, "{:?} must be on the SAME maze layer", r.label());
     }
 
-    // The other half: nothing that ISN'T named "maze" is on that layer either —
-    // the failure mode a bare `planar_region` walk falls into on this exact story.
+    // The other half: every room on the layer is either named "maze" or is the
+    // one SQ-1311 absorbed onto it by its own compass edges (the Grating
+    // Room) — never one of the rooms the naive `planar_region` walk would
+    // wrongly sweep up (Kitchen, Living Room, West of House and the rest of
+    // the surface, none of which have every edge leading into the maze).
     for r in map.graph.rooms_in_layer(maze_layer) {
         let room = map.graph.room(r).unwrap();
         assert!(
-            mapper::suggest::mentions_maze(room.label()),
-            "{:?} is on the maze layer but its name doesn't mention \"maze\"",
+            mapper::suggest::mentions_maze(room.label()) || room.label() == "Grating Room",
+            "{:?} is on the maze layer but its name doesn't mention \"maze\" and it isn't the Grating Room",
             room.label()
         );
     }
+    for surface in ["Kitchen", "Living Room", "West of House", "Cyclops Room"] {
+        let r = map.graph.rooms().find(|r| r.label() == surface).expect(surface);
+        assert_ne!(r.layer, maze_layer, "{surface} must not be swept onto the maze layer");
+    }
+}
+
+/// SQ-1311: Mini-Zork's maze has no room literally named "Dead End", but it
+/// does have a Grating Room — reached from the maze by a reciprocal compass
+/// pair (SW/NE) and from the surface only by a portal (`Up`) through the
+/// grating door — which must join the maze layer for the same reason a dead
+/// end would, and must NOT be pulled in by `maze_region`'s own name-bounded
+/// walk (its name never mentions "maze").
+#[test]
+fn minizork_grating_room_joins_the_maze_by_its_compass_edge_alone() {
+    let map = mapgen::generate(&fixture_path("minizork-r34-s871124.z3"), true)
+        .expect("minizork.z3 is a tracked fixture and must map");
+    let g = &map.graph;
+
+    let grating = g
+        .rooms()
+        .find(|r| r.label() == "Grating Room")
+        .expect("Mini-Zork has a Grating Room");
+    assert!(
+        !mapper::suggest::mentions_maze(grating.label()),
+        "sanity: the Grating Room's own name never mentions \"maze\""
+    );
+
+    let maze_layer = g
+        .rooms()
+        .find(|r| mapper::suggest::mentions_maze(r.label()))
+        .expect("Mini-Zork has a maze")
+        .layer;
+    assert_eq!(grating.layer, maze_layer, "the Grating Room must join the maze layer");
 }
 
 /// `--no-auto-layers` (`MapgenOptions::auto_layers = false`) reproduces the
@@ -184,6 +223,7 @@ fn auto_layers_false_skips_the_split() {
 fn a_maze_named_region_splits_and_is_flagged_regardless_of_floor() {
     let mut g = MapGraph::new();
     g.upsert_room(1, "Troll Room".into());
+    g.upsert_room(5, "Round Room".into());
     for id in 2..=4u32 {
         g.upsert_room(id, "Maze".into());
     }
@@ -193,6 +233,11 @@ fn a_maze_named_region_splits_and_is_flagged_regardless_of_floor() {
     g.add_edge(3, Direction::S, 2);
     g.add_edge(3, Direction::E, 4);
     g.add_edge(4, Direction::W, 3);
+    // Troll Room also has a compass edge to a non-maze room (SQ-1311's absorb
+    // pass would otherwise pull a room with only ONE edge — the maze one — in
+    // alongside it; a real Troll Room is a hub with many non-maze edges too).
+    g.add_edge(1, Direction::E, 5);
+    g.add_edge(5, Direction::W, 1);
 
     // A floor far above the maze's own size: it still splits, because a maze
     // has no floor — only a portal-only region does.
@@ -203,6 +248,61 @@ fn a_maze_named_region_splits_and_is_flagged_regardless_of_floor() {
     assert_eq!(splits[0].rooms, 3);
     assert_eq!(g.layer_of(1), MAIN_LAYER, "Troll Room is not named \"maze\" and stays put");
     assert!(g.layer_is_maze(splits[0].id));
+}
+
+/// SQ-1311: a "Dead End" hanging off a maze by a single reciprocal compass
+/// pair joins the maze layer even though its own name never mentions "maze" —
+/// `maze_region`'s walk stops at the name (the Cyclops Room protection), so
+/// this has to be recovered afterward by `absorb_maze_adjacent_rooms`.
+#[test]
+fn a_dead_end_off_a_maze_joins_the_maze_layer() {
+    let mut g = MapGraph::new();
+    g.upsert_room(1, "Maze".into());
+    g.upsert_room(2, "Maze".into());
+    g.upsert_room(3, "Maze".into());
+    g.upsert_room(4, "Dead End".into());
+    g.add_edge(1, Direction::E, 2);
+    g.add_edge(2, Direction::W, 1);
+    g.add_edge(2, Direction::N, 3);
+    g.add_edge(3, Direction::S, 2);
+    // The dead end hangs off room 3 by a reciprocal compass pair — its ONLY edge.
+    g.add_edge(3, Direction::E, 4);
+    g.add_edge(4, Direction::W, 3);
+
+    let splits = mapgen::split_layers(&mut g, &MapgenOptions::default());
+    assert_eq!(splits.len(), 1, "one maze layer, splits: {splits:?}");
+    let maze_layer = splits[0].id;
+    assert!(splits[0].maze);
+    assert_eq!(splits[0].rooms, 4, "the dead end must be counted on the maze layer");
+    assert_eq!(g.layer_of(4), maze_layer, "the dead end must land on the maze layer");
+}
+
+/// The Cyclops Room protection extends to the absorb pass too: a "Dead End"
+/// with even ONE compass edge to a non-maze room must stay off the maze layer,
+/// exactly as `maze_region`'s own walk already refuses to cross into one.
+#[test]
+fn a_dead_end_with_a_non_maze_compass_edge_is_not_absorbed() {
+    let mut g = MapGraph::new();
+    g.upsert_room(1, "Maze".into());
+    g.upsert_room(2, "Maze".into());
+    g.upsert_room(3, "Maze".into());
+    g.upsert_room(4, "Dead End".into());
+    g.upsert_room(5, "Cellar".into());
+    g.add_edge(1, Direction::E, 2);
+    g.add_edge(2, Direction::W, 1);
+    g.add_edge(2, Direction::N, 3);
+    g.add_edge(3, Direction::S, 2);
+    // The "dead end" has a compass edge into the maze AND one to a plain room.
+    g.add_edge(3, Direction::E, 4);
+    g.add_edge(4, Direction::W, 3);
+    g.add_edge(4, Direction::N, 5);
+    g.add_edge(5, Direction::S, 4);
+
+    let splits = mapgen::split_layers(&mut g, &MapgenOptions::default());
+    assert_eq!(splits.len(), 1, "one maze layer, splits: {splits:?}");
+    assert_eq!(splits[0].rooms, 3, "the dead end must NOT be counted on the maze layer");
+    assert_eq!(g.layer_of(4), MAIN_LAYER, "a compass edge to a non-maze room keeps it off the maze layer");
+    assert_eq!(g.layer_of(5), MAIN_LAYER, "Cellar was never a candidate and stays put");
 }
 
 /// A graph with no maze and no region past the floor produces no split at all
@@ -243,9 +343,29 @@ fn zork1_maze_is_one_layer_and_main_is_the_largest_component() {
     let maze_layer = maze_rooms[0].layer;
     assert!(g.layer_is_maze(maze_layer));
     assert!(maze_rooms.iter().all(|r| r.layer == maze_layer), "one maze layer, not several");
-    for r in g.rooms_in_layer(maze_layer) {
-        assert!(mapper::suggest::mentions_maze(g.room(r).unwrap().label()));
+
+    // SQ-1311: the maze layer is no longer EVERY room named "maze" and NOTHING
+    // else — `absorb_maze_adjacent_rooms` also pulls in a dead end or a Grating
+    // Room whose every compass edge leads only into this layer, so the room
+    // set here is a SUPERSET of the maze-named rooms rather than identical to
+    // them. Pin the absorbed rooms by their Z-machine object numbers (several
+    // share the printed name "Dead End", so a name lookup can't tell them
+    // apart): #148/#150/#154/#160 are the maze's own dead ends and #225 is the
+    // Grating Room, all reached ONLY by a compass edge into the maze; #163 is
+    // a DIFFERENT "Dead End" at the bottom of the Ladder Bottom mine shaft,
+    // with no compass edge to the maze at all, and must stay off this layer.
+    for &absorbed in &[148u32, 150, 154, 160, 225] {
+        assert_eq!(
+            g.layer_of(absorbed),
+            maze_layer,
+            "#{absorbed} has every compass edge into the maze and must join its layer"
+        );
     }
+    assert_ne!(
+        g.layer_of(163),
+        maze_layer,
+        "#163 (Ladder Bottom's own dead end) has no compass edge to the maze and must stay off it"
+    );
 
     // Main is whichever layer holds the most rooms — mapgen has no start room
     // to anchor Main on the way the live map does, so "biggest wins" is the
@@ -268,6 +388,13 @@ fn zork1_maze_is_one_layer_and_main_is_the_largest_component() {
     // climbing UP from the Kitchen was landing on the SAME layer as the far end
     // of the Coal Mine. Verified by reverting `adopt_stranded_regions`'s call
     // site: the counts go back to 5/5/18/4 and Main gains the four rooms back.
+    //
+    // Re-pinned again for SQ-1311: Rocky Ledge loses the Grating Room (21→20) —
+    // it now joins the maze directly in pass 1b (`absorb_maze_adjacent_rooms`),
+    // every one of its compass edges leading into the maze, so it never reaches
+    // pass 3's portal-adoption at all. Main also loses five rooms (its own four
+    // maze dead ends plus the now-excluded pseudo-room #41), but Main is not
+    // pinned here by count — only the portal-only layers are.
     let mut portal_only: Vec<String> = g
         .layers()
         .keys()
@@ -281,7 +408,7 @@ fn zork1_maze_is_one_layer_and_main_is_the_largest_component() {
         vec![
             "Coal Mine (6 rooms)".to_string(),
             "Ladder Bottom (5 rooms)".to_string(),
-            "Rocky Ledge (22 rooms)".to_string(),
+            "Rocky Ledge (21 rooms)".to_string(),
             "Torch Room (4 rooms)".to_string(),
         ],
         "the portal-only split at the default floor changed shape"
