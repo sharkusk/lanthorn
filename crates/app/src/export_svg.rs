@@ -539,14 +539,20 @@ fn arrowhead(at: (f64, f64), u: (f64, f64), class: &str) -> String {
 /// The head of a TWO-WAY passage at one of its box ends: the same triangle, occupying the same
 /// stretch of channel, but pointing INTO the box instead of out of it (SQ-1317).
 ///
-/// A reciprocal draws a head at each end. Pointed outward — the way a one-way's single head
-/// points, which is that room's own exit (SQ-0688) — the two heads of a passage between ADJACENT
-/// boxes come nose to nose across a channel a few pixels wide, and the line reads as a bowtie.
-/// Turned around they sit at the two ends of one line pointing into the rooms it joins, which is
-/// the ordinary double-headed arrow for "you can go both ways", is what the legend has always
-/// drawn for two-way — and, since SQ-1322, is GUARANTEED a real shaft between the two backs
-/// however short the channel's own CELL count: `MIN_CHANNEL_PX` widens the SVG's pixel mapping of
-/// a channel that would otherwise leave the two backs meeting or overlapping (see `PxAxis`).
+/// A reciprocal draws a head at each end. Pointed outward — the way plain `arrowhead` points,
+/// which since SQ-1346 is reserved for a MERGE stub's departure marker (it has no destination
+/// edge of its own to arrive at — see `RoutedConnector::merge`) — the two heads of a passage
+/// between ADJACENT boxes come nose to nose across a channel a few pixels wide, and the line
+/// reads as a bowtie. Turned around they sit at the two ends of one line pointing into the rooms
+/// it joins, which is the ordinary double-headed arrow for "you can go both ways", is what the
+/// legend has always drawn for two-way — and, since SQ-1322, is GUARANTEED a real shaft between
+/// the two backs however short the channel's own CELL count: `MIN_CHANNEL_PX` widens the SVG's
+/// pixel mapping of a channel that would otherwise leave the two backs meeting or overlapping
+/// (see `PxAxis`).
+///
+/// A one-way passage's own single head uses this same inward style (SQ-1346): every marker for a
+/// travel sits at the end that travel arrives at, so a one-way's head reads as its destination's
+/// arrival exactly the way each of a two-way's two heads does — never as its origin's departure.
 ///
 /// `at` is the point ON the box edge; `u` is that side's outward normal, as everywhere else.
 /// Reflecting through `at + (ARROW_TIP + ARROW_BASE)·u` swaps `arrowhead`'s two reaches: the sharp
@@ -583,6 +589,62 @@ fn badge(at: (f64, f64), letter: &str) -> String {
         f(at.1 + 3.0),
         xml_escape(letter)
     )
+}
+
+/// The marker set for ONE travel of a connector — a lettered badge for a vertical (Up/Down)
+/// word, since a flat arrowhead cannot show "up" or "down" in a 2-D drawing; a plain
+/// `arrowhead_inward` for everything else, plus the mismatched-word `tag` when the side the
+/// passage is drawn leaving by disagrees with its own compass word (a diagonal walked round the
+/// corner orthogonally, or a distorted edge).
+///
+/// SQ-1346: every marker describing a travel sits at the end that travel ARRIVES at, beside the
+/// head that points into the room it enters — so `pos`/`u` here are always the ARRIVAL point and
+/// its outward normal, never the departure. `side` is nonetheless the travel's own DEPARTURE
+/// side (`conn.exit` for the connector's own A→B word, `conn.entry` for a reciprocal's B→A word)
+/// because the mismatch this checks for is about how the passage LEFT its room, not where its
+/// head is drawn. `room` is the room this travel's word belongs to (the badge's own room, not
+/// necessarily the one nearest `pos`), used only to key `portal_ends` so the stub pass below
+/// doesn't also badge the same compass exit a second time.
+#[allow(clippy::too_many_arguments)]
+fn draw_travel_arrival(
+    over: &mut String,
+    ext: &mut Extent,
+    placer: &mut TextPlacer,
+    portal_ends: &mut std::collections::HashSet<(RoomId, Direction)>,
+    pos: (f64, f64),
+    u: (f64, f64),
+    side: Side,
+    word: Direction,
+    room: RoomId,
+    arrow_class: &str,
+) {
+    if matches!(word, Direction::Up | Direction::Down) {
+        let root = (pos.0 + u.0 * 8.0, pos.1 + u.1 * 8.0);
+        let at = settle_badge(placer, root, (-u.1, u.0));
+        portal_ends.insert((room, word));
+        over.push_str(&badge(at, if word == Direction::Up { "U" } else { "D" }));
+        ext.add(at.0 - 8.0, at.1 - 8.0);
+        ext.add(at.0 + 8.0, at.1 + 8.0);
+        return;
+    }
+    over.push_str(&arrowhead_inward(pos, u, arrow_class));
+    if side_dir(side) != word {
+        let tag = direction::short_label(word).to_uppercase();
+        let root = (pos.0 + u.0 * 11.0, pos.1 + u.1 * 11.0);
+        if let Some(spot) = placer.place(tag.chars().count(), &spots_around(root, u, 5.0)) {
+            let _ = write!(
+                over,
+                "<text class=\"tag\"{} x=\"{}\" y=\"{}\">{}</text>",
+                spot.anchor.attr(),
+                f(spot.x),
+                f(spot.y),
+                tag
+            );
+            let r = spot.rect(tag.chars().count());
+            ext.add(r.0, r.1);
+            ext.add(r.0 + r.2, r.1 + r.3);
+        }
+    }
 }
 
 /// The door mark: a bar across the line with a gap punched under it.
@@ -773,68 +835,33 @@ fn render_svg_body(
             }
         }
 
-        // Departure end: a portal's letter, everything else's arrowhead. An arrow on a room
-        // border is that room's own EXIT (the terminal's one arrow rule, SQ-0688), so a
-        // one-way passage gets nothing at its far end and the bare line IS the reading.
+        // Every marker sits at the end its own travel ARRIVES at (SQ-1346): a two-way passage's
+        // heads point INTO the rooms, so the two of them sit at the ends of one line instead of
+        // meeting nose to nose in the channel (see `arrowhead_inward`) — and the badge/tag that
+        // goes with each head travels to the SAME end, not the room it started from. A one-way
+        // passage has exactly one travel and gets exactly one marker set, at its destination; the
+        // bare line back to its origin IS the reading there (the terminal's one arrow rule,
+        // SQ-0688).
         let dep_u = outward(conn.exit);
         let arrow_class = if conn.distorted { "arrow distorted" } else { "arrow" };
-        if is_portal {
-            let root = (pts[0].0 + dep_u.0 * 8.0, pts[0].1 + dep_u.1 * 8.0);
-            let at = settle_badge(&mut placer, root, (-dep_u.1, dep_u.0));
-            portal_ends.insert((conn.origin, conn.exit_dir));
-            over.push_str(&badge(at, if conn.exit_dir == Direction::Up { "U" } else { "D" }));
-            ext.add(at.0 - 8.0, at.1 - 8.0);
-            ext.add(at.0 + 8.0, at.1 + 8.0);
-        } else {
-            // A two-way passage's heads point INTO the rooms, so the two of them sit at the ends
-            // of one line instead of meeting nose to nose in the channel — see `arrowhead_inward`.
-            let two_way = conn.reciprocal && !conn.merge;
-            over.push_str(&if two_way {
-                arrowhead_inward(pts[0], dep_u, arrow_class)
-            } else {
-                arrowhead(pts[0], dep_u, arrow_class)
-            });
-            // The drawn side and the passage's own word disagree — a diagonal walked round
-            // the corner orthogonally, or a distorted edge leaving by a side that is not its
-            // direction. Say which word it was.
-            if side_dir(conn.exit) != conn.exit_dir {
-                let tag = direction::short_label(conn.exit_dir).to_uppercase();
-                let root = (pts[0].0 + dep_u.0 * 11.0, pts[0].1 + dep_u.1 * 11.0);
-                if let Some(spot) = placer.place(tag.chars().count(), &spots_around(root, dep_u, 5.0)) {
-                    let _ = write!(
-                        over,
-                        "<text class=\"tag\"{} x=\"{}\" y=\"{}\">{}</text>",
-                        spot.anchor.attr(),
-                        f(spot.x),
-                        f(spot.y),
-                        tag
-                    );
-                    let r = spot.rect(tag.chars().count());
-                    ext.add(r.0, r.1);
-                    ext.add(r.0 + r.2, r.1 + r.3);
-                }
-            }
-        }
-
-        if conn.reciprocal && !conn.merge {
-            let last = pts[pts.len() - 1];
-            let arr_u = outward(conn.entry);
-            let arr_dir = conn.entry_dir.unwrap_or(direction::opposite(conn.exit_dir));
-            if matches!(arr_dir, Direction::Up | Direction::Down) {
-                let root = (last.0 + arr_u.0 * 8.0, last.1 + arr_u.1 * 8.0);
-                let at = settle_badge(&mut placer, root, (-arr_u.1, arr_u.0));
-                portal_ends.insert((conn.dest, arr_dir));
-                over.push_str(&badge(at, if arr_dir == Direction::Up { "U" } else { "D" }));
+        if conn.merge {
+            // A merge stub ends on another connector's TRUNK (a T-junction), not on a room edge —
+            // see `RoutedConnector::merge` — so it has no arrival end of its own to carry a head
+            // to. It keeps its long-standing departure-only marker: the shared trunk it joins is
+            // what actually carries the arrival head into the destination room.
+            if is_portal {
+                let root = (pts[0].0 + dep_u.0 * 8.0, pts[0].1 + dep_u.1 * 8.0);
+                let at = settle_badge(&mut placer, root, (-dep_u.1, dep_u.0));
+                portal_ends.insert((conn.origin, conn.exit_dir));
+                over.push_str(&badge(at, if conn.exit_dir == Direction::Up { "U" } else { "D" }));
                 ext.add(at.0 - 8.0, at.1 - 8.0);
                 ext.add(at.0 + 8.0, at.1 + 8.0);
             } else {
-                over.push_str(&arrowhead_inward(last, arr_u, arrow_class));
-                if side_dir(conn.entry) != arr_dir {
-                    let tag = direction::short_label(arr_dir).to_uppercase();
-                    let root = (last.0 + arr_u.0 * 11.0, last.1 + arr_u.1 * 11.0);
-                    if let Some(spot) =
-                        placer.place(tag.chars().count(), &spots_around(root, arr_u, 5.0))
-                    {
+                over.push_str(&arrowhead(pts[0], dep_u, arrow_class));
+                if side_dir(conn.exit) != conn.exit_dir {
+                    let tag = direction::short_label(conn.exit_dir).to_uppercase();
+                    let root = (pts[0].0 + dep_u.0 * 11.0, pts[0].1 + dep_u.1 * 11.0);
+                    if let Some(spot) = placer.place(tag.chars().count(), &spots_around(root, dep_u, 5.0)) {
                         let _ = write!(
                             over,
                             "<text class=\"tag\"{} x=\"{}\" y=\"{}\">{}</text>",
@@ -848,6 +875,40 @@ fn render_svg_body(
                         ext.add(r.0 + r.2, r.1 + r.3);
                     }
                 }
+            }
+        } else {
+            // This connector's own word (A→B, `conn.exit_dir`) arrives at the far end.
+            let last = pts[pts.len() - 1];
+            let arr_u = outward(conn.entry);
+            draw_travel_arrival(
+                &mut over,
+                &mut ext,
+                &mut placer,
+                &mut portal_ends,
+                last,
+                arr_u,
+                conn.exit,
+                conn.exit_dir,
+                conn.origin,
+                arrow_class,
+            );
+
+            if conn.reciprocal {
+                // The paired back-edge (B→A) is the OTHER travel this one line stands for, and
+                // it arrives back at the departure end.
+                let arr_dir = conn.entry_dir.unwrap_or(direction::opposite(conn.exit_dir));
+                draw_travel_arrival(
+                    &mut over,
+                    &mut ext,
+                    &mut placer,
+                    &mut portal_ends,
+                    pts[0],
+                    dep_u,
+                    conn.entry,
+                    arr_dir,
+                    conn.dest,
+                    arrow_class,
+                );
             }
         }
     }
@@ -1448,8 +1509,10 @@ fn legend_rows() -> Vec<(String, &'static str)> {
     };
     vec![
         (
-            format!("{}{}", line("edge oneway"), arrowhead((6.0, 0.0), (-1.0, 0.0), "arrow")),
-            "one-way passage — the arrow is the way OUT",
+            // SQ-1346: the head sits at the DESTINATION end, same as a two-way's own arrival
+            // head (below) — a one-way's line just never grows the matching head at its origin.
+            format!("{}{}", line("edge oneway"), arrowhead((54.0, 0.0), (1.0, 0.0), "arrow")),
+            "one-way passage — the arrow points where it leads",
         ),
         (
             format!(
@@ -2746,20 +2809,6 @@ mod tests {
     }
 
     #[test]
-    fn a_diagonal_drawn_orthogonally_is_tagged_with_its_own_word() {
-        let mut m = Mapper::default();
-        m.observe(1, "A", None);
-        m.observe(2, "B", Some(Direction::NE));
-        m.observe(1, "A", Some(Direction::SW));
-        let svg = render_svg(&render(&m.graph));
-        assert!(
-            svg.contains("class=\"tag\""),
-            "a diagonal walked round the corner names the direction it really is"
-        );
-        assert!(svg.contains(">NE<") || svg.contains(">SW<"));
-    }
-
-    #[test]
     fn an_up_passage_with_no_planar_route_gets_a_lettered_badge() {
         let mut m = Mapper::default();
         m.observe(1, "Cellar", None);
@@ -2798,5 +2847,119 @@ mod tests {
         let long = wrap_label(&"x".repeat(200));
         assert_eq!(long.len(), 1);
         assert!(long[0].ends_with('…'), "a single unsplittable word is ellipsised");
+    }
+
+    /// SQ-1346: a one-way passage's single arrowhead reads as its DESTINATION's arrival, the
+    /// same "head points into the room it enters" rule a two-way's two heads already follow —
+    /// falsify by reverting `draw_travel_arrival`'s call site back to `arrowhead(pts[0], ...)`
+    /// and this fails (the tip lands back on A instead of B).
+    #[test]
+    fn a_one_way_arrowhead_sits_at_the_destination_not_the_origin() {
+        let mut m = Mapper::default();
+        m.observe(1, "A", None);
+        m.observe(2, "B", Some(Direction::E));
+        let svg = render_svg_of(&render(&m.graph), Some(&m.graph));
+        let rooms = room_rects(&svg);
+        assert_eq!(rooms.len(), 2, "the case must draw exactly the two rooms");
+        let (a_rect, b_rect) = (rooms[0], rooms[1]);
+        let tips = arrow_tips(&svg);
+        assert_eq!(tips.len(), 1, "a one-way passage carries exactly one arrowhead");
+        let tip = tips[0];
+        assert!(
+            near_rect_edge(tip, b_rect, 1.5),
+            "the one-way head must sit on B's own edge: tip={tip:?} a={a_rect:?} b={b_rect:?}"
+        );
+        assert!(
+            !near_rect_edge(tip, a_rect, 1.5),
+            "the one-way head must not sit on A's edge: tip={tip:?} a={a_rect:?}"
+        );
+    }
+
+    /// SQ-1346, extended to badges: a lettered U/D badge is this rule's stand-in for a head
+    /// where a flat arrowhead can't show "up"/"down" — it travels to the SAME end a head would,
+    /// so a one-way "up" passage's badge reads nearer its destination than its origin.
+    #[test]
+    fn a_one_way_vertical_badge_sits_nearer_the_destination_than_the_origin() {
+        let mut m = Mapper::default();
+        m.observe(1, "Cellar", None);
+        m.observe(2, "Attic", Some(Direction::Up));
+        let svg = render_svg_of(&render(&m.graph), Some(&m.graph));
+        let rooms = room_rects(&svg);
+        assert_eq!(rooms.len(), 2, "the case must draw exactly the two rooms");
+        let (cellar, attic) = (rooms[0], rooms[1]);
+        let doc = roxmltree::Document::parse(&svg).expect("well-formed SVG");
+        let badge_pos = doc
+            .descendants()
+            .find(|n| {
+                n.tag_name().name() == "circle"
+                    && n.attribute("class") == Some("badge")
+                    && !under_class(*n, "legend-block")
+            })
+            .map(|n| {
+                let o = translate_of(n);
+                (
+                    n.attribute("cx").unwrap().parse::<f64>().unwrap() + o.0,
+                    n.attribute("cy").unwrap().parse::<f64>().unwrap() + o.1,
+                )
+            })
+            .expect("the map draws exactly one badge");
+        let edge_dist_y = |y: f64, (_, ry, _, rh): (f64, f64, f64, f64)| -> f64 {
+            (y - ry).abs().min((y - (ry + rh)).abs())
+        };
+        let (d_cellar, d_attic) = (edge_dist_y(badge_pos.1, cellar), edge_dist_y(badge_pos.1, attic));
+        assert!(
+            d_attic < d_cellar,
+            "the U badge must sit nearer Attic than Cellar: badge={badge_pos:?} cellar={cellar:?} attic={attic:?}"
+        );
+    }
+
+    /// SQ-1346, extended to compass tags: each end's mismatched-word `tag` travels with the head
+    /// for the SAME travel — `NE` (A→B) now reads at B, `SW` (B→A) reads at A, a swap from where
+    /// each sat before this quest (previously both departure-anchored).
+    #[test]
+    fn a_diagonal_drawn_orthogonally_is_tagged_with_its_own_word() {
+        let mut m = Mapper::default();
+        m.observe(1, "A", None);
+        m.observe(2, "B", Some(Direction::NE));
+        m.observe(1, "A", Some(Direction::SW));
+        let svg = render_svg_of(&render(&m.graph), Some(&m.graph));
+        assert!(
+            svg.contains("class=\"tag\""),
+            "a diagonal walked round the corner names the direction it really is"
+        );
+        assert!(svg.contains(">NE<") || svg.contains(">SW<"));
+
+        let rooms = room_rects(&svg);
+        assert_eq!(rooms.len(), 2, "the case must draw exactly the two rooms");
+        let (a_rect, b_rect) = (rooms[0], rooms[1]);
+        let doc = roxmltree::Document::parse(&svg).expect("well-formed SVG");
+        let tag_pos = |word: &str| -> Option<(f64, f64)> {
+            doc.descendants()
+                .find(|n| {
+                    n.tag_name().name() == "text"
+                        && n.attribute("class") == Some("tag")
+                        && n.text() == Some(word)
+                        && !under_class(*n, "legend-block")
+                })
+                .map(|n| {
+                    let o = translate_of(n);
+                    (
+                        n.attribute("x").unwrap().parse::<f64>().unwrap() + o.0,
+                        n.attribute("y").unwrap().parse::<f64>().unwrap() + o.1,
+                    )
+                })
+        };
+        if let Some(ne) = tag_pos("NE") {
+            assert!(
+                near_rect_edge(ne, b_rect, 20.0),
+                "NE (A→B) must read near B, where that travel arrives: {ne:?} vs b={b_rect:?}"
+            );
+        }
+        if let Some(sw) = tag_pos("SW") {
+            assert!(
+                near_rect_edge(sw, a_rect, 20.0),
+                "SW (B→A) must read near A, where that travel arrives: {sw:?} vs a={a_rect:?}"
+            );
+        }
     }
 }
