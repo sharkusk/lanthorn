@@ -441,7 +441,13 @@ lanthorn is better for the people who send it work. Thank you:
 - [**@dfabulich**](https://github.com/dfabulich) — the return probe: the map
   checks that a passage really leads back the way it came before it draws the
   connection, an idea he sent as a pull request before the project was taking
-  them.
+  them. Then the beta testing that shaped 0.4 and 0.5: a steady stream of
+  precise map reports across Lost Pig, Anchorhead, Adventure, Counterfeit
+  Monkey, Spider and Web and The Wizard Sniffer (#5), each with the map dump
+  that made it reproducible. The Glulx room identity work, the nautical
+  directions, the ship-map and Twisting Lane fixes, and a good deal of the map
+  layout and routing rework exist because he kept looking closely and kept
+  writing it down.
 
 Pull requests are welcome — the architecture notes in
 [**docs/internals/architecture.md**](docs/internals/architecture.md) are the map, and
