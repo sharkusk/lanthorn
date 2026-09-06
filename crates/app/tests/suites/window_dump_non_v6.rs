@@ -7,10 +7,30 @@
 //! (so Inform box quotes survive it) — the two can now legitimately differ,
 //! and the old dump had no way to show that.
 //!
-//! `anchor.z8` exercises both states: at boot its upper window holds an
-//! 11-row painted quote box behind a 1-row split, and once play begins the
-//! split collapses to an ordinary 1-row status line with a 1-row grid to
-//! match.
+//! `anchor.z8` exercises both states: at boot its upper window holds a painted
+//! quote box behind a 1-row split, and once play begins the split collapses to
+//! an ordinary 1-row status line with a 1-row grid to match.
+//!
+//! **The boot grid is 10 rows, not 11** (SQ-1371). This case pinned 11 from
+//! SQ-0699 until SQ-1355, and 11 was the ALLOCATION, not the paint. Traced with
+//! `trace_screen` on, Inform's `Box__Routine` veneer does exactly this at boot:
+//!
+//! ```text
+//! @split_window(11)   @set_window(upper)   @set_text_style(reverse)
+//! @set_cursor(row=4,  col=16)                     ← top border, spaces
+//! @set_cursor(row=5..9, col=16) + (row=5..9, col=18)  ← pad, then the quote
+//! @set_cursor(row=10, col=16)                     ← bottom border, spaces
+//! @set_text_style(roman)   @set_window(lower)   @split_window(1)
+//! ```
+//!
+//! Row 4 and row 10 are spaces carrying the reverse-video bit, so they are
+//! paint and `last_painted_row` counts them. Row **11** is never addressed at
+//! all: no cursor is ever set there, nothing is printed there, and a probe at
+//! 8b296ff9 (the commit before SQ-1355) confirms it held `style 0`, default
+//! colours, eighty spaces. It existed solely because `@split_window(11)` had
+//! allocated it, and a real interpreter — which has no per-window grid — shows
+//! nothing there either. So 10 is the box's true depth and the old 11 was the
+//! artefact SQ-1355 removed.
 //!
 //! The story is gitignored, so this skips vacuously when absent.
 
@@ -46,8 +66,12 @@ fn dump_windows_reports_split_vs_painted_divergence_at_boot() {
         "the boot quote box is behind a 1-row split: {dump}"
     );
     assert!(
-        dump.contains("grid: 11 row(s) painted"),
-        "the boot quote box painted 11 rows that the shrink must not truncate: {dump}"
+        dump.contains("grid: 10 row(s) painted"),
+        "the box's reverse-video border reaches row 10, and the shrink must not truncate it: {dump}"
+    );
+    assert!(
+        !dump.contains("grid: 11 row(s) painted"),
+        "row 11 was allocated by `@split_window(11)` and never painted, so the shrink releases it (SQ-1371): {dump}"
     );
     assert!(dump.contains("<- diverge"), "split and painted height disagree at boot, and the dump must flag it: {dump}");
     assert!(dump.contains("H.P. Lovecraft"), "the painted rows are printed as quoted text: {dump}");
