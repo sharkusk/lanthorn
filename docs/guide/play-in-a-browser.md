@@ -65,7 +65,9 @@ Dragging one finger up or down the transcript or the story picker's list
 scrolls it, same as a mouse wheel. Drag one finger sideways, or drag with two
 fingers in any direction, to pan the map or resize a pane's splitter — a
 plain tap still just taps, so the on-screen keyboard still comes up when you
-need it. `LANTHORN_WEB_TOUCH=off` turns all of this off if you'd rather the
+need it. To resize the dividers between panes, drag them with two fingers,
+since a one-finger drag that starts moving up or down is read as a scroll.
+`LANTHORN_WEB_TOUCH=off` turns all of this off if you'd rather the
 browser handle touch its own way.
 
 The edges you drag are made wider here than on a desktop, because a fingertip
