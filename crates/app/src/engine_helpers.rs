@@ -268,6 +268,11 @@ pub(crate) fn apply_archive_state(
     // engine, and `begin_turn` also retires anything the previous world was
     // still waiting on (a pending vocab offer, a lit reveal).
     state.begin_turn();
+    // A restore resumes play, so any earlier clean-quit marker no longer
+    // describes where the session is (SQ-1342) — otherwise a Scott game-over
+    // "Restore" that loads a save and is later left with a host `/quit` would
+    // wrongly read as a game-driven exit and clear the resume point.
+    state.game_ended = false;
     if let Some(scr) = ac.screen.clone() {
         if let Some(z) = zvm_session_opt_mut(session) {
             app::session::restore_screen(z, scr);

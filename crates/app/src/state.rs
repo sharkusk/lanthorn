@@ -3480,6 +3480,16 @@ pub struct AppState {
     /// deliberately. Reset to `false` on game restart.
     pub vm_halted: bool,
 
+    /// Set exactly where `should_exit_on_turn` answers true — a CLEAN, game-driven
+    /// exit (the story's own `@quit`/`glk_exit`/Scott win-or-loss quit), never a
+    /// host-driven one (`/quit`, Ctrl+Q, "Save State & quit", a signal, a VM
+    /// fault). The exit path (`main.rs` §6) reads this to decide whether to leave
+    /// a resumable auto-save or clear it (SQ-1342): finishing the story should not
+    /// hand the player back the turn before they typed `quit`. Reset to `false` on
+    /// game restart and on any restore (`apply_archive_state`), so it never
+    /// outlives the turn it describes.
+    pub game_ended: bool,
+
     /// Slide-in inventory dock (bottom). Session-only; starts closed.
     pub inv_dock: crate::anim::PanelSlide,
     /// Slide-in command band (bottom). Session-only; starts closed.
@@ -3723,6 +3733,7 @@ impl Default for AppState {
             graphics_render: std::cell::RefCell::new(Default::default()),
             inline_image_render: std::cell::RefCell::new(Default::default()),
             vm_halted: false,
+            game_ended: false,
             inv_dock: crate::anim::PanelSlide::closed(),
             band_dock: crate::anim::PanelSlide::closed(),
             room_dock: crate::anim::PanelSlide::closed(),

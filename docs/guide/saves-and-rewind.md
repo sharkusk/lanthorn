@@ -29,7 +29,9 @@ travels.
 Turn on auto-save and lanthorn snapshots after every turn; leave auto-load on
 (the default) and opening a story drops you straight back where you quit, map
 included. Switch auto-load off to start a session fresh while keeping the map
-you've already drawn.
+you've already drawn. That resume only applies when YOU leave — finishing the
+story or typing `quit` from inside the game starts it fresh next time, map
+still intact, rather than dropping you back a turn before the ending.
 
 **Rewind further than the game's own `undo`.** Switch on
 `record_turn_history` and lanthorn keeps a save of every turn you take, and

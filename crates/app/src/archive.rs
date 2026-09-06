@@ -930,6 +930,54 @@ pub fn save_archive_meta_pics(
     crate::storage::atomic_write(path, &bytes)
 }
 
+/// Rewrite a `.lanthorn` archive with NO resume point (SQ-1342): a clean,
+/// GAME-driven exit (the story's own `@quit`/`glk_exit`, or a Scott win/loss
+/// quit) should not hand the player back the turn before they typed `quit`.
+///
+/// "No resume point" means an [`EngineSave`] with **empty** `bytes` —
+/// [`ArchiveContents::save`]`.is_empty()` is exactly what `startup.rs`'s
+/// auto-load check reads — and no screen state, transcript, or rewind/replay
+/// history. The mapper (the player's own knowledge of the map), the aux
+/// table, and the command history are NOT turn-specific, so they survive
+/// exactly as a normal exit leaves them.
+///
+/// `save` supplies only the ENGINE TAG and FORMAT VERSION the empty save must
+/// carry (its `bytes` are discarded and written empty regardless of what is
+/// in them) — pass the live `Engine::save_state()` so the tag matches the
+/// engine that just quit; `restore_engine_allowed` reads it on a later
+/// restore attempt the same as any other archive.
+pub fn write_cleared_resume_archive(
+    path: &Path,
+    mapper: &Mapper,
+    save: &EngineSave,
+    aux: &BTreeMap<String, Vec<u8>>,
+    ifid: &str,
+    saved_at: String,
+    command_history: &[String],
+) -> io::Result<()> {
+    let empty_save = EngineSave { engine: save.engine.clone(), format_version: save.format_version, bytes: Vec::new() };
+    let meta = Meta {
+        format_version: CURRENT_FORMAT_VERSION,
+        ifid: Some(ifid.to_string()),
+        name: None,
+        turns: 0,
+        saved_at,
+        location: None,
+        score: None,
+        trigger: SaveTrigger::HostState,
+    };
+    let session = SessionRecord {
+        transcript: &[],
+        kinds: &[],
+        runs: &[],
+        para: &[],
+        images: &[],
+        history: &[],
+        command_history,
+    };
+    save_archive_meta_pics(path, mapper, &empty_save, None, aux, meta, &session, &[], None, None)
+}
+
 /// Build the `.lanthorn` archive ZIP in memory, without writing to disk.
 ///
 /// The shared builder behind [`save_archive_meta_pics`] (every synchronous

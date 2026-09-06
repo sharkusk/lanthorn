@@ -297,6 +297,7 @@ pub(crate) fn reset_game(
             state.turns = 0;
             state.unsaved_progress = false; // restart: fresh game, nothing to save
             state.vm_halted = false;
+            state.game_ended = false;
             state.input.clear();
             state.suggestions.clear();
             state.suggestion_idx = 0;

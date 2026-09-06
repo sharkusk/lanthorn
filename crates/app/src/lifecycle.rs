@@ -73,6 +73,58 @@ pub(crate) fn exit_auto_save(
     }
 }
 
+/// Exit path for a CLEAN, game-driven quit (SQ-1342): rewrite the archive with
+/// no resume point instead of `exit_auto_save`'s snapshot, so reopening the
+/// story starts it fresh rather than one turn before the player typed `quit`.
+///
+/// "No resume point" means an [`app::engine::EngineSave`] with empty `bytes`
+/// (`ArchiveContents::save.is_empty()` is what `startup.rs`'s auto-load check
+/// reads) and no screen/transcript/history — but the mapper (the player's own
+/// knowledge of the map), the aux table, and the command history all survive a
+/// clean finish exactly as they do today, because nothing about THOSE is
+/// specific to the turn the player quit on.
+///
+/// Called instead of, never alongside, `exit_auto_save` — see the call site in
+/// `main.rs` §6 gated on `state.game_ended`.
+pub(crate) fn exit_clear_resume_save(
+    session: &mut dyn Engine,
+    mapper: &Mapper,
+    state: &app::state::AppState,
+    ifid: &str,
+    arc_file: &std::path::Path,
+) {
+    if !state.config.auto_save || session.is_saveload_pending() {
+        return;
+    }
+    let _writing = crate::ExitSaveGuard::new();
+    // Land any in-flight per-turn auto-save BEFORE this write (see the matching
+    // comment in `exit_auto_save`): a background write for an earlier turn that
+    // lands AFTER this one would silently put the resume point right back.
+    state.archive_worker.flush();
+    // A full save just to discard its bytes looks wasteful, but this runs once,
+    // at exit, and it is the only way to get the CORRECT engine tag/format
+    // version stamped on an empty save — the same ones a real save on this
+    // engine would carry, so a hand-rolled shortcut can't drift from them.
+    // `write_cleared_resume_archive` (`app::archive`) is the shared, testable
+    // core: it discards `save.bytes` itself and writes no transcript/history/
+    // screen, keeping only the mapper/aux (passed through) and command history.
+    let save = session.save_state();
+    let saved_at = format_rfc3339(
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_secs())
+            .unwrap_or(0),
+    );
+    match app::archive::write_cleared_resume_archive(arc_file, mapper, &save, session.aux_data(), ifid, saved_at, &state.command_history) {
+        Ok(()) => {
+            eprintln!("lanthorn: map saved to {} (story finished — no resume point)", arc_file.display());
+        }
+        Err(e) => {
+            eprintln!("lanthorn: warning: could not save to {}: {}", arc_file.display(), e);
+        }
+    }
+}
+
 /// Quit-dialog "Save State & quit" host snapshot, extracted from the quit-dialog
 /// keyboard and mouse handlers so the guard below is unit-testable.
 /// Skip while a Glulx in-game @save/@restore is suspended, awaiting host I/O:
@@ -425,6 +477,140 @@ mod tests {
         assert_eq!(
             meta.turns, 0,
             "exit's own write must be the one left on disk, not the stale background job (SQ-1184)"
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    // ── SQ-1342: a clean, game-driven quit leaves no resume point ──────────────
+
+    /// The exit path this quest adds: `exit_clear_resume_save` must empty the
+    /// save (what `startup.rs`'s auto-load check reads) and drop the
+    /// transcript/rewind-history, while the mapper, aux table, and command
+    /// history — none of which is specific to the turn the player quit on —
+    /// survive exactly as a normal exit leaves them.
+    #[test]
+    fn exit_clear_resume_save_empties_the_save_but_keeps_mapper_aux_and_command_history_sq1342() {
+        let dir = app::scratch_dir("lifecycle-clear-resume");
+        let arc_file = dir.join("default.lanthorn");
+
+        let mut engine = SnapshotableEngine::new();
+        engine.aux.insert("k".to_string(), vec![7, 7]);
+        let mut state = app::state::AppState::default();
+        state.config.auto_save = true;
+        state.command_history = vec!["look".to_string(), "north".to_string()];
+        let mut mapper = mapper::mapper::Mapper::default();
+        mapper.observe(1, "Lab", None);
+
+        // Seed the slot exactly as a prior per-turn auto-save would have left it
+        // (non-empty save, some transcript/history) — the state a clean quit's
+        // OWN per-turn save is now skipped from ever adding to (turn.rs), but
+        // an EARLIER turn's write is exactly what must be cleared here.
+        let seed_save = app::engine::EngineSave::new("test", 1, vec![1, 2, 3]);
+        let seed_meta = app::archive::Meta {
+            format_version: app::archive::CURRENT_FORMAT_VERSION,
+            ifid: Some("ZCODE-1".to_string()),
+            name: None,
+            turns: 5,
+            saved_at: String::new(),
+            location: Some("Lab".to_string()),
+            score: Some(10),
+            trigger: app::archive::SaveTrigger::HostState,
+        };
+        let lines = vec!["You are in a lab.".to_string()];
+        let kinds = vec![app::state::TranscriptKind::Story];
+        let runs = vec![Vec::new()];
+        let para = vec![app::state::ParaFmt::default()];
+        let images = vec![None];
+        let seed_session = app::archive::SessionRecord {
+            transcript: &lines,
+            kinds: &kinds,
+            runs: &runs,
+            para: &para,
+            images: &images,
+            history: &[],
+            command_history: &state.command_history,
+        };
+        app::archive::save_archive_meta_pics(
+            &arc_file, &mapper, &seed_save, None, &engine.aux, seed_meta, &seed_session, &[], None, None,
+        ).expect("seed a non-empty archive");
+        let before = app::archive::load_archive(&arc_file).expect("seeded archive readable");
+        assert!(!before.save.is_empty(), "sanity: the seeded save is non-empty");
+        assert!(!before.transcript.is_empty(), "sanity: the seeded transcript is non-empty");
+
+        super::exit_clear_resume_save(&mut engine, &mapper, &state, "ZCODE-1", &arc_file);
+
+        let after = app::archive::load_archive(&arc_file).expect("cleared archive readable");
+        assert!(after.save.is_empty(), "a clean game quit must leave no resume point (SQ-1342)");
+        assert!(after.screen.is_none(), "no screen state after a clean quit");
+        assert!(after.transcript.is_empty(), "no transcript after a clean quit");
+        assert!(after.history.is_empty(), "no rewind/replay history after a clean quit");
+        assert_eq!(after.mapper.graph.rooms().count(), 1, "the mapper survives a clean quit");
+        assert_eq!(after.aux.get("k"), Some(&vec![7, 7]), "the aux table survives a clean quit");
+        assert_eq!(
+            after.command_history, state.command_history,
+            "command history survives a clean quit"
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Mirrors `exit_auto_save_flushes_a_pending_background_write_before_its_own_write`:
+    /// the clearing write must also land any in-flight per-turn auto-save first,
+    /// or a slow background write for an earlier turn can overwrite the clearing
+    /// write with stale (non-empty) data — silently putting the resume point
+    /// right back (SQ-1342).
+    #[test]
+    fn exit_clear_resume_save_flushes_a_pending_background_write_before_its_own_write_sq1342() {
+        let dir = app::scratch_dir("lifecycle-clear-resume-flush");
+        let arc_file = dir.join("default.lanthorn");
+
+        let mut engine = SnapshotableEngine::new();
+        let mut state = app::state::AppState::default();
+        state.config.auto_save = true;
+        let mapper = mapper::mapper::Mapper::default();
+
+        // Several MB of incompressible bytes: a real Deflate pass, so this job
+        // reliably outlasts the clearing write's own write when NOT flushed first.
+        let mut noise = vec![0u8; 6 * 1024 * 1024];
+        let mut x: u64 = 0x9E37_79B9_7F4A_7C15;
+        for b in noise.iter_mut() {
+            x ^= x << 13;
+            x ^= x >> 7;
+            x ^= x << 17;
+            *b = x as u8;
+        }
+        let mut aux = std::collections::BTreeMap::new();
+        aux.insert("noise".to_string(), noise);
+        let stale_job = app::archive_worker::ArchiveJob {
+            path: arc_file.clone(),
+            mapper_graph: mapper::mapper::Mapper::default().graph,
+            save: std::sync::Arc::new(app::engine::EngineSave::new("test", 1, vec![9, 9, 9])),
+            screen: None,
+            aux,
+            meta: app::archive::Meta {
+                format_version: app::archive::CURRENT_FORMAT_VERSION,
+                ifid: None,
+                name: None,
+                turns: 999, // the STALE marker this test must NOT see win
+                saved_at: String::new(),
+                location: None,
+                score: None,
+                trigger: app::archive::SaveTrigger::HostState,
+            },
+            session: app::archive::SessionRecord::empty().snapshot(),
+            pictures: Vec::new(),
+            display: None,
+            ground: None,
+        };
+        state.archive_worker.enqueue(stale_job);
+
+        super::exit_clear_resume_save(&mut engine, &mapper, &state, "ZCODE-1", &arc_file);
+
+        let ac = app::archive::load_archive(&arc_file).expect("archive readable");
+        assert!(
+            ac.save.is_empty(),
+            "the clearing write must be the one left on disk, not the stale (non-empty) background job"
         );
 
         let _ = std::fs::remove_dir_all(&dir);
