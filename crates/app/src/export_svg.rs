@@ -429,6 +429,13 @@ struct ArrivalGhost {
 /// connection back (however indirect the reciprocity), the destination's own panel draws its own
 /// outgoing ghost for it, which IS the mirror this crossing needs. Only a genuinely one-way
 /// crossing leaves the arriving side with nothing, and that is what this fills in.
+///
+/// SQ-1347: this is WHY a reciprocal crossing never grows a second head on either stub — a ghost
+/// stub carries only the travel that LEAVES its own layer, never the return word too, which is
+/// captured by the other layer's own outgoing stub instead. Excluding every reciprocal pair here
+/// is what keeps that true; widening this filter (e.g. to only the exact-opposite word) would
+/// let a same-word-both-ways graph slip through and draw both a departure AND an arrival ghost
+/// for one physical crossing.
 fn arrival_ghosts(graph: &MapGraph, layer: mapper::layer::LayerId) -> HashMap<RoomId, Vec<ArrivalGhost>> {
     let mut out: HashMap<RoomId, Vec<ArrivalGhost>> = HashMap::new();
     for c in graph.connections() {
@@ -957,43 +964,70 @@ fn render_svg_body(
             for (i, &Stub { dir, dest, interlayer: inter }) in list.iter().enumerate() {
                 let step = i as f64 * 17.0;
                 let root = side_root(rect, side, 9.0, step);
-                let at = settle_badge(&mut placer, root, tangent);
+
+                // SQ-1347: place the ghost (when this crossing draws one) BEFORE the badge, so
+                // the badge can anchor off the ghost end — the arrival of this travel — rather
+                // than the room's own edge, which is only where it departs from. The connector
+                // line itself still runs from the room's own edge (`root`, unnudged by the
+                // badge) to the ghost, exactly as it always has.
+                let ghost = inter.then_some(dest).flatten().map(|full| {
+                    let (name, layer_name) = full.split_once(" · ").unwrap_or((full, ""));
+                    let text = GhostText { name, layer: layer_name };
+                    let (gw, gh) = ghost_dims(text);
+                    let gp = place_ghost(
+                        &mut placer,
+                        &all_segments,
+                        &room_boxes,
+                        &ghost_boxes,
+                        root,
+                        u,
+                        GHOST_DEPARTURE_GAP,
+                        gw,
+                        gh,
+                    );
+                    let near = ghost_near_edge(gp.rect, gp.dir);
+                    (gp, text, near)
+                });
+
+                // The badge (and, were a mismatched-word tag ever needed here — SQ-1346) sits
+                // beside the head, at the end THIS travel arrives at: the ghost when this stub
+                // draws one, the room's own edge when it does not (a same-layer stub with no
+                // planar route has no other end to stand on).
+                let (badge_root, badge_tangent) = match &ghost {
+                    Some((gp, _, near)) => {
+                        ((near.0 - gp.dir.0 * 9.0, near.1 - gp.dir.1 * 9.0), (-gp.dir.1, gp.dir.0))
+                    }
+                    None => (root, tangent),
+                };
+                let at = settle_badge(&mut placer, badge_root, badge_tangent);
                 over.push_str(&badge(at, &direction::short_label(dir).to_uppercase()));
                 ext.add(at.0 - 8.0, at.1 - 8.0);
                 ext.add(at.0 + 8.0, at.1 + 8.0);
-                if inter {
-                    if let Some(full) = dest {
-                        let (name, layer_name) = full.split_once(" · ").unwrap_or((full, ""));
-                        let text = GhostText { name, layer: layer_name };
-                        let (gw, gh) = ghost_dims(text);
-                        let gp = place_ghost(
-                            &mut placer,
-                            &all_segments,
-                            &room_boxes,
-                            &ghost_boxes,
-                            at,
-                            u,
-                            GHOST_DEPARTURE_GAP,
-                            gw,
-                            gh,
-                        );
-                        ghost_boxes.push(gp.rect);
-                        // A departure ghost stands for THIS room's own exit leaving toward it, so
-                        // the arrow sits at the GHOST end, tip on its near edge, pointing further
-                        // in — reading as "leaving here, arriving there" (SQ-1330). That is the
-                        // mirror of an arrival ghost's arrow, which sits at the ROOM end instead
-                        // (below): a ghost pair is two one-ways, one per panel, never a single
-                        // two-way head pointing back at the room it started from. `gp.dir` is the
-                        // axis the ghost actually landed on — `u` only when the direct side was
-                        // clear, a tangent when SQ-1333's bend fired instead.
-                        let near = ghost_near_edge(gp.rect, gp.dir);
-                        over.push_str(&arrowhead_inward(near, (-gp.dir.0, -gp.dir.1), "arrow"));
-                        over.push_str(&draw_ghost(at, gp.dir, gp.bend, gp.rect, text, false));
-                        ext.add(gp.rect.0, gp.rect.1);
-                        ext.add(gp.rect.0 + gp.rect.2, gp.rect.1 + gp.rect.3);
-                        if let Some(b) = gp.bend {
-                            ext.add(b.0, b.1);
-                        }
+
+                if let Some((gp, text, near)) = ghost {
+                    ghost_boxes.push(gp.rect);
+                    // A departure ghost stands for THIS room's own exit leaving toward it, so
+                    // the arrow sits at the GHOST end, tip on its near edge, pointing further
+                    // in — reading as "leaving here, arriving there" (SQ-1330). That is the
+                    // mirror of an arrival ghost's arrow, which sits at the ROOM end instead
+                    // (below): a ghost pair is two one-ways, one per panel, never a single
+                    // two-way head pointing back at the room it started from. `gp.dir` is the
+                    // axis the ghost actually landed on — `u` only when the direct side was
+                    // clear, a tangent when SQ-1333's bend fired instead.
+                    //
+                    // SQ-1347: this stub carries ONLY `dir`, the word that leaves THIS room —
+                    // one badge (drawn above, beside this arrow at the GHOST end) and this one
+                    // arrowhead, never a second marker for the return word even when the
+                    // crossing is reciprocal. The other layer's own panel draws its own outgoing
+                    // stub for the way back (`arrival_ghosts` excludes any reciprocal pair for
+                    // exactly this reason), so a ghost stub never needs to say more than "this
+                    // is the way out."
+                    over.push_str(&arrowhead_inward(near, (-gp.dir.0, -gp.dir.1), "arrow"));
+                    over.push_str(&draw_ghost(root, gp.dir, gp.bend, gp.rect, text, false));
+                    ext.add(gp.rect.0, gp.rect.1);
+                    ext.add(gp.rect.0 + gp.rect.2, gp.rect.1 + gp.rect.3);
+                    if let Some(b) = gp.bend {
+                        ext.add(b.0, b.1);
                     }
                 }
             }
@@ -1007,6 +1041,11 @@ fn render_svg_body(
     // ends to say where a crossing goes, so the arriving room gets an inward arrowhead (arriving,
     // not leaving — no letter, since there is no local direction the story ever printed for it)
     // and its own ghost, naming where the passage came FROM instead of where it leads.
+    //
+    // `arrivals` (built by `arrival_ghosts`) never contains a reciprocal crossing (SQ-1347), so
+    // this ONE arrowhead at the room is this stub's only marker too, exactly as the departure
+    // side above carries only one — nothing is ever drawn on the GHOST end here: it names where
+    // the passage came from, not a second travel.
     for room in &rm.rooms {
         let Some(list) = arrivals.get(&room.id) else { continue };
         let rect = box_px_rect(&cols, &rows, &px_cols, &px_rows, room.cell);
@@ -2535,6 +2574,98 @@ mod tests {
         }
         assert!(svg.contains(">D<"), "Hall's own badge names the direction it travels");
         assert!(svg.contains(">U<"), "Cellar's own badge names the direction it travels back");
+    }
+
+    /// SQ-1347: a reciprocal cross-layer passage's ghost stub carries ONLY the travel that
+    /// leaves its own layer — one badge, one arrowhead, never a second marker for the return
+    /// word too. Falsify by widening `arrival_ghosts`'s reciprocal exclusion (or dropping it) and
+    /// this fails: a spurious second head lands on one of the two ghost stubs.
+    #[test]
+    fn a_reciprocal_cross_layer_passage_carries_one_head_per_layer_never_two_on_one_stub() {
+        use mapper::graph::MapGraph;
+        let mut g = MapGraph::new();
+        g.upsert_room(1, "Hall".into());
+        g.upsert_room(2, "Cellar".into());
+        g.set_pos(1, (0, 0));
+        g.set_pos(2, (0, 1));
+        g.add_edge(1, Direction::Down, 2);
+        g.add_edge(2, Direction::Up, 1);
+        let below = g.new_layer(Some(mapper::layer::MAIN_LAYER), "Below".into());
+        g.set_room_layer(2, below);
+        let svg = render_svg_layered(&g);
+        let map = layered_map_only(&svg);
+
+        assert_eq!(
+            map.matches("class=\"ghost arrival\"").count(),
+            0,
+            "a reciprocal crossing never grows an arrival ghost — each layer's own departure \
+             ghost already is the return trip's mirror"
+        );
+        assert_eq!(map.matches("class=\"badge\"").count(), 2, "one badge per layer, never two on one stub");
+        let deps = ghost_rects_of(&svg, "ghost");
+        assert_eq!(deps.len(), 2, "one departure ghost stub per layer");
+        let tips = arrow_tips(&svg);
+        assert_eq!(tips.len(), 2, "one arrowhead per layer's ghost stub — never two on one stub");
+        for &tip in &tips {
+            let hits = deps.iter().filter(|&&r| near_rect_edge(tip, r, 1.5)).count();
+            assert_eq!(hits, 1, "each arrowhead sits on exactly one ghost stub: {tip:?} vs {deps:?}");
+        }
+        assert!(svg.contains(">D<"), "Hall's stub names only its own outgoing word");
+        assert!(svg.contains(">U<"), "Cellar's stub names only its own outgoing word");
+    }
+
+    /// SQ-1347: a departure stub's badge sits beside its head at the GHOST end — the arrival of
+    /// this travel — never at the room it leaves. Falsify by reverting the departure loop to
+    /// anchor the badge off the room's own edge (`root`/`tangent`) instead of the ghost's, and
+    /// this fails: the badge lands nearer the room again in both panels.
+    #[test]
+    fn a_departure_stubs_badge_sits_nearer_the_ghost_than_the_room() {
+        use mapper::graph::MapGraph;
+        let mut g = MapGraph::new();
+        g.upsert_room(1, "Hall".into());
+        g.upsert_room(2, "Cellar".into());
+        g.set_pos(1, (0, 0));
+        g.set_pos(2, (0, 1));
+        g.add_edge(1, Direction::Down, 2);
+        g.add_edge(2, Direction::Up, 1);
+        let below = g.new_layer(Some(mapper::layer::MAIN_LAYER), "Below".into());
+        g.set_room_layer(2, below);
+        let svg = render_svg_layered(&g);
+        let rooms = room_rects(&svg);
+        let ghosts = ghost_rects_of(&svg, "ghost");
+        assert_eq!(rooms.len(), 2, "one room per panel");
+        assert_eq!(ghosts.len(), 2, "one departure ghost per panel");
+        let doc = roxmltree::Document::parse(&svg).expect("well-formed SVG");
+        let badges: Vec<(f64, f64)> = doc
+            .descendants()
+            .filter(|n| {
+                n.tag_name().name() == "circle"
+                    && n.attribute("class") == Some("badge")
+                    && !under_class(*n, "legend-block")
+            })
+            .map(|n| {
+                let o = translate_of(n);
+                (
+                    n.attribute("cx").unwrap().parse::<f64>().unwrap() + o.0,
+                    n.attribute("cy").unwrap().parse::<f64>().unwrap() + o.1,
+                )
+            })
+            .collect();
+        assert_eq!(badges.len(), 2, "one badge per panel");
+        let edge_dist_y = |y: f64, (_, ry, _, rh): (f64, f64, f64, f64)| -> f64 {
+            (y - ry).abs().min((y - (ry + rh)).abs())
+        };
+        for &badge in &badges {
+            let room_dist =
+                rooms.iter().map(|&r| edge_dist_y(badge.1, r)).fold(f64::MAX, f64::min);
+            let ghost_dist =
+                ghosts.iter().map(|&r| edge_dist_y(badge.1, r)).fold(f64::MAX, f64::min);
+            assert!(
+                ghost_dist < room_dist,
+                "the badge at {badge:?} must sit nearer a ghost than a room: \
+                 ghost_dist={ghost_dist} room_dist={room_dist}"
+            );
+        }
     }
 
     /// A ONE-WAY crossing has no connection back, so `interlayer_badges` never fires on the
