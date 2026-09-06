@@ -81,6 +81,17 @@ Absolute URLs or no link.
 
 ### Fixed
 
+- **Rooms are called what the game calls them, so Adventure's mazes are mazes
+  again.** Some games give a whole class of rooms one name — every room of
+  Adventure's maze prints `Maze` — and lanthorn was reading the compiler's
+  internal label instead, putting rooms named `(Alike_Maze_8)` and
+  `(Dead_End_7)` on the map. Both mazes now peel onto maze layers of their own,
+  each named after the room it is entered from (`Maze (off At West End of Hall
+  of Mists)`) so you can tell one from the other, and the dead ends go with
+  them. Playing the Z-machine Adventure, the map used to stop dead at the
+  maze's doorway and stay there however far you wandered; it now follows you
+  room by room.
+
 - **Two rooms you walked between in both directions are drawn side by side, and
   a passage the map cannot honour now admits it.** Zork I's Clearing and the
   Forest below it came out one cell too far apart, with an empty square between

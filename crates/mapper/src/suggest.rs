@@ -127,10 +127,16 @@ pub struct LayerSuggestion {
 ///
 /// The word boundaries are the entire point. "Amazement" and "Amazed" contain the letters and mean
 /// nothing of the sort, and a room called "A Maze of Twisty Little Passages" means exactly it.
+///
+/// **`_` is a SEPARATOR here, not a word character** (SQ-1372). A name reaching this function is
+/// sometimes a compiler's identifier rather than prose — Inform 6 writes `(Alike_Maze_8)` into the
+/// header of an object declared with no quoted name, and a static reader that finds no printed name
+/// has nothing else to offer. Underscore is how an identifier spells the space that prose would
+/// have, so treating it as a letter made `Alike_Maze_8` fail the very test its middle word passes.
 pub fn mentions_maze(name: &str) -> bool {
     const WORD: [char; 4] = ['m', 'a', 'z', 'e'];
     let chars: Vec<char> = name.chars().collect();
-    let is_word_char = |c: char| c.is_alphanumeric() || c == '_';
+    let is_word_char = |c: char| c.is_alphanumeric();
     for i in 0..chars.len().saturating_sub(WORD.len() - 1) {
         if !(0..WORD.len()).all(|k| chars[i + k].to_ascii_lowercase() == WORD[k]) {
             continue;
@@ -804,6 +810,20 @@ mod tests {
         assert!(!mentions_maze("Mazes"));
         assert!(!mentions_maze("Hall of Mirrors"));
         assert!(!mentions_maze(""));
+    }
+
+    /// SQ-1372: an underscore separates words, because a name reaching this
+    /// function is sometimes a compiler's identifier. Inform 6 writes
+    /// `(Alike_Maze_8)` into the header of an object declared with no quoted
+    /// name, and Adventure's thirty-nine maze rooms are declared exactly so —
+    /// with `_` treated as a letter, not one of them mentioned a maze.
+    #[test]
+    fn an_identifier_underscore_is_a_word_boundary() {
+        assert!(mentions_maze("(Alike_Maze_8)"));
+        assert!(mentions_maze("Different_Maze_1"));
+        assert!(mentions_maze("maze_room"));
+        assert!(!mentions_maze("Amazed_Hall"), "the letters still have to be the word");
+        assert!(!mentions_maze("Amazed Hall"));
     }
 
     /// Walking into a room called "Maze" says everything at the doorway: no floor, no waiting for

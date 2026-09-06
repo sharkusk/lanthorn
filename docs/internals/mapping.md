@@ -1246,7 +1246,21 @@ passes, in order:
    is flagged a maze (`mapper::graph::MapGraph::set_layer_maze`), which
    freezes its layout exactly as the app's own maze flag does. One layer per
    *component* — a twenty-room maze that is all one connected cluster is one
-   layer, not twenty.
+   layer, not twenty. **The maze walk is the one region walk that crosses
+   `Up`/`Down` (SQ-1372)**: a portal is a boundary between floors, which is
+   right for `planar_region`, but the twisty little passage that happens to go
+   up is no more a change of floor than the one that goes north — Adventure's
+   fourteen-room "all alike" maze hangs together through six `u_to`/`d_to`
+   links, and stopping at them split it into layers of eleven, three and one.
+   The name filter is what keeps this walk honest; the direction never was.
+1a. **Telling one maze from another (SQ-1372).** Every room of a maze is
+   called the same thing, so every maze layer is too — and a story with two
+   mazes gets two layers called `Maze`, which names neither. A maze layer
+   whose name is shared is renamed after the room it is ENTERED FROM (the
+   outside room with the most edges into it; ties to the lowest room id):
+   `Maze (off At West End of Hall of Mists)`. That is the disambiguator a
+   player already uses, and unlike an ordinal it does not renumber when the
+   story is re-read. A story with one maze keeps the plain `Maze`.
 1b. **Dead ends off a maze (SQ-1311).** The maze walk's own name-boundary
    restriction (above) is deliberate, but it has a cost: a genuine maze exit
    that happens to be named something other than "maze" — a "Dead End", a
@@ -1352,6 +1366,23 @@ narrow on purpose — an unnamed room with a real exit ELSEWHERE stays (it may
 simply never be printed), and so does one some OTHER object genuinely leads
 to, since that is a real destination whatever this object calls itself and
 excluding it would leave that edge dangling.
+
+**A room's name is its `short_name` PROPERTY, not its object header (SQ-1372).**
+The Inform 6 library prints an object through `parserm.h`'s `PrintShortName`,
+which runs the `short_name` property first and falls back to the header name
+only when that prints nothing — so a class declaring `short_name "Maze"` names
+every room in it `Maze`, whatever the compiler wrote into their headers. Reading
+the header alone is how Adventure's mazes came out as `(Alike_Maze_8)`: Inform
+compiles the parenthesised IDENTIFIER as the header name of an object declared
+with no quoted name, and no player ever sees it. `zvm::objects::printed_name`
+and `gvm::objects::ParseNames::printed_name` are the readers both mapgen and the
+live location ladder go through. Two limits are worth knowing: a `short_name`
+holding a ROUTINE keeps the header name (machine code cannot be read
+statically), and the property NUMBER is not a constant — the compiler fixes only
+`name` = 1, so the number is read out of the story's own *Table of Identifier
+Names*, which means a story compiled with `$OMIT_SYMBOL_TABLE=1` (or by a
+compiler too old to write one, such as Curses' 1993 build) keeps the header name
+throughout.
 
 **Three things a static map cannot have.**
 

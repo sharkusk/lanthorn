@@ -119,6 +119,97 @@ pub const NAME_PROPERTY: u32 = 1;
 /// A property table entry is `{short id, short length, long data, short flags}`.
 const PROP_ENTRY_BYTES: u32 = 10;
 
+/// Bytes of directory in front of Inform's *Table of Identifier Names* —
+/// "eight pairs of values" in `Inform6/tables.c`'s own words. See
+/// [`short_name_property`].
+const IDENT_TABLE_DIRECTORY_BYTES: u32 = 32;
+
+/// Inform's `short_name` property number for this image, read out of the
+/// story's OWN symbol table (SQ-1372). `None` for an image that carries none —
+/// a non-Inform Glulx image, or a compile with `$OMIT_SYMBOL_TABLE=1`.
+///
+/// The number cannot be assumed, and is not the Z-machine's either: the
+/// compiler hardwires only [`NAME_PROPERTY`], and everything after it is
+/// numbered in declaration order, so the same *Adventure* is `short_name` 45
+/// compiled to Glulx and 46 compiled to the Z-machine (`advent.z6`). What both
+/// back-ends do carry is Inform's *Table of Identifier Names*, and
+/// `Inform6/tables.c`'s `construct_storyfile_g` gives its Glulx shape exactly:
+///
+/// ```text
+/// identifier_names_offset:                 /* eight pairs of values */
+///     +0   address of the property-names array   (= this address + 32)
+///     +4   no_properties                         (its length)
+///     +8   address of the individual-property names, +12 its length
+///     +16  address of the attribute names,        +20 its length
+///     +24  address of the action names,           +28 its length
+/// ```
+///
+/// then the property-names array itself: one long per property number, indexed
+/// BY that number, each a string address or 0.
+///
+/// The directory is what makes the table findable without guessing. Its first
+/// long points at the array that immediately follows it — the compiler writes
+/// `mark += 32` and then stores `Write_RAM_At + mark` — so `read32(d) == d + 32`
+/// identifies a candidate on arithmetic alone, and the entry at index 1 is then
+/// required to decode to exactly `"name"`, the one property number the compiler
+/// fixes. Both arrays live in RAM (`Write_RAM_At`), which bounds the search.
+///
+/// Nothing here reads the SECOND array (individual properties, numbered from
+/// `INDIV_PROP_START`): the directory's own count bounds the search to the
+/// common properties, which is where a library `Property short_name` is.
+pub fn short_name_property(mem: &Memory) -> Option<u16> {
+    let dt = mem.decode_table();
+    let end = mem.extstart();
+    let name_at = |addr: u32| crate::disasm::string_text(mem, dt, addr, Some(32));
+    'table: for d in mem.ramstart()..end.saturating_sub(IDENT_TABLE_DIRECTORY_BYTES) {
+        let array = d + IDENT_TABLE_DIRECTORY_BYTES;
+        if mem.read32(d) != Some(array) {
+            continue;
+        }
+        let Some(count) = mem.read32(d + 4) else { continue };
+        if count < 2 || array + count * 4 > end {
+            continue;
+        }
+        if mem.read32(array + 4).and_then(name_at).as_deref() != Some("name") {
+            continue;
+        }
+        // Every entry is a compiler symbol or zero. Prose here means the
+        // arithmetic matched something that is not this table after all — the
+        // Z-machine side has met exactly that (`zvm::objects`'s own scan).
+        let mut found = None;
+        let mut named = 0;
+        for prop in 2..count {
+            let Some(text) = mem.read32(array + prop * 4).and_then(name_at) else { continue };
+            if !is_inform_identifier(&text) {
+                continue 'table;
+            }
+            named += 1;
+            if text == "short_name" {
+                found = u16::try_from(prop).ok();
+            }
+        }
+        if named >= MIN_IDENTIFIERS {
+            if let Some(prop) = found {
+                return Some(prop);
+            }
+        }
+    }
+    None
+}
+
+/// How many named entries a candidate identifiers table must carry before it is
+/// believed — see [`short_name_property`].
+const MIN_IDENTIFIERS: usize = 8;
+
+/// Whether `s` is shaped like a compiler symbol, which every entry of Inform's
+/// identifier-names table is.
+fn is_inform_identifier(s: &str) -> bool {
+    !s.is_empty()
+        && s.len() <= 40
+        && s.starts_with(|c: char| c.is_ascii_alphabetic() || c == '_')
+        && s.chars().all(|c| c.is_ascii_alphanumeric() || c == '_')
+}
+
 /// Bytes of an object after `NUM_ATTR_BYTES`: six longs (next, name, property
 /// table, parent, sibling, child). Plus the one `$70` tag byte before them.
 const OBJECT_TAIL_BYTES: u32 = 6 * 4;
@@ -229,6 +320,11 @@ pub struct ParseNames {
     stride: u32,
     count: usize,
     tables: Tables,
+    /// Inform's `short_name` property number for this image, or `None` where
+    /// the image carries no symbol table to read it out of (SQ-1372). Found
+    /// once, here, because [`short_name_property`] reads the whole of RAM and
+    /// [`ParseNames::printed_name`] is asked per object.
+    short_name_prop: Option<u16>,
 }
 
 impl ParseNames {
@@ -252,9 +348,11 @@ impl ParseNames {
                 }
                 saw_tree = true;
                 let candidate =
-                    ParseNames { head: addr, attr_bytes, stride, count, tables };
+                    ParseNames { head: addr, attr_bytes, stride, count, tables, short_name_prop: None };
                 if candidate.readable_name_arrays(mem) >= MIN_OBJECTS {
-                    return Ok(candidate);
+                    // Only now: the symbol-table scan reads the whole of RAM,
+                    // and a rejected candidate would pay for it too.
+                    return Ok(ParseNames { short_name_prop: short_name_property(mem), ..candidate });
                 }
             }
         }
@@ -305,7 +403,7 @@ impl ParseNames {
         }
         Some(ObjectWords::new(
             addr,
-            self.printed_name(mem, addr),
+            self.hardware_name(mem, addr),
             words,
             Some(NAME_PROPERTY),
             Some(self.tables.dict_word_size as usize),
@@ -407,7 +505,7 @@ impl ParseNames {
             .into_iter()
             .map(|c| {
                 self.of(mem, c).unwrap_or_else(|| {
-                    ObjectWords::new(c, self.printed_name(mem, c), Vec::new(), None, None)
+                    ObjectWords::new(c, self.hardware_name(mem, c), Vec::new(), None, None)
                 })
             })
             .collect()
@@ -483,7 +581,7 @@ impl ParseNames {
                 // An object with no readable `name` array can still be the
                 // avatar by its printed name alone — Inform 6's `selfobj` has
                 // both, but a game that strips one keeps the other.
-                None => PLAYER_NAMES.contains(&self.printed_name(mem, addr).to_lowercase().as_str()),
+                None => PLAYER_NAMES.contains(&self.hardware_name(mem, addr).to_lowercase().as_str()),
             })
             .collect();
         let situated: Vec<u32> =
@@ -512,9 +610,9 @@ impl ParseNames {
         self.is_object(mem, target).then_some(target)
     }
 
-    /// The object's hardware short name — what the story PRINTS for it. Empty
-    /// where it has none, which is the ordinary case on Inform 7; `None` when
-    /// `addr` is not an object of this list.
+    /// The object's HARDWARE short name — the string §2's object structure
+    /// points at. Empty where it has none, which is the ordinary case on Inform
+    /// 7; `None` when `addr` is not an object of this list.
     ///
     /// [`of`](ParseNames::of) already carries this, but only for an object with
     /// a readable `name` array. This answers for one without — which is how the
@@ -522,13 +620,62 @@ impl ParseNames {
     /// being an object nothing has to be able to refer to by word (SQ-1241).
     /// The Z-machine side has always found the room this way
     /// (`zvm::location::status_name_matches` against the status line).
+    ///
+    /// **Not always what the story prints** — see [`Self::printed_name`], which
+    /// consults the `short_name` property first. This one deliberately stays
+    /// the hardware name, because the app matches a printed room heading
+    /// against it: a `short_name` that is one word for a whole class of rooms
+    /// ("Maze") matches dozens of objects at once and identifies none of them,
+    /// where the hardware name is unique per object even when it is only the
+    /// compiled identifier.
     pub fn short_name(&self, mem: &Memory, addr: u32) -> Option<String> {
-        self.is_object(mem, addr).then(|| self.printed_name(mem, addr))
+        self.is_object(mem, addr).then(|| self.hardware_name(mem, addr))
+    }
+
+    /// What the story PRINTS for the object at `addr`: its `short_name`
+    /// property where that holds a string, and [`Self::short_name`]'s hardware
+    /// name otherwise (SQ-1372). `None` when `addr` is not an object of this
+    /// list.
+    ///
+    /// The Inform 6 library prints objects through `parserm.h`'s
+    /// `PrintShortName`, which runs the `short_name` property first and falls
+    /// back to the hardware name only when it prints nothing — so a class that
+    /// declares `short_name "Maze"` names every room in that class "Maze",
+    /// whatever the compiler wrote into their headers. Graham Nelson's
+    /// *Adventure* declares exactly that, and its thirty-nine maze rooms carry
+    /// the parenthesised identifiers `(Alike_Maze_1)`… as hardware names, which
+    /// no player ever sees.
+    ///
+    /// **A `short_name` ROUTINE keeps the hardware name.** `PrintOrRun` calls
+    /// it, and machine code cannot be read statically. That case is detected
+    /// rather than guessed: Glulx tags every object in memory, and
+    /// [`crate::disasm::string_text`] answers `None` for anything that is not
+    /// one of the string types (§1.6.1's `E0`/`E1`/`E2`), a function (`C0`/`C1`)
+    /// included.
+    pub fn printed_name(&self, mem: &Memory, addr: u32) -> Option<String> {
+        if !self.is_object(mem, addr) {
+            return None;
+        }
+        Some(self.inform_short_name(mem, addr).unwrap_or_else(|| self.hardware_name(mem, addr)))
+    }
+
+    /// The decoded `short_name` property of the object at `addr` — `None` when
+    /// the image names no such property, this object does not carry it, or its
+    /// value is not a string. See [`Self::printed_name`].
+    fn inform_short_name(&self, mem: &Memory, addr: u32) -> Option<String> {
+        let prop = self.short_name_prop?;
+        // §3: a property's data is `length` LONGS; a `short_name` is one value.
+        let (data, length) = self.property(mem, addr, prop)?;
+        if length != 1 {
+            return None;
+        }
+        let text = crate::disasm::string_text(mem, mem.decode_table(), mem.read32(data)?, None)?;
+        (!text.trim().is_empty()).then_some(text)
     }
 
     /// The object's hardware short name, decoded. Empty when it has none, which
     /// is the normal case for Inform 7.
-    fn printed_name(&self, mem: &Memory, addr: u32) -> String {
+    fn hardware_name(&self, mem: &Memory, addr: u32) -> String {
         let string = match mem.read32(self.field(addr, Field::Name)) {
             Some(a) if a != 0 => a,
             _ => return String::new(),
@@ -714,7 +861,7 @@ mod tests {
     // [`ParseNames::detect`] end to end rather than around it.
 
     const RAM: u32 = 0x100;
-    const EXT: u32 = 0x700;
+    const EXT: u32 = 0xA00;
     /// Inform's `NUM_ATTR_BYTES` default, and the corpus's.
     const NAB: u32 = 7;
     /// `1 + NUM_ATTR_BYTES + 6 longs` (§2).
@@ -724,8 +871,22 @@ mod tests {
     // them, sized for `N_OBJ` objects, so the ninth object ([`LETTER`]) has
     // room without hand-picking gaps.
     const PROPS: u32 = OBJ + N_OBJ as u32 * STRIDE;
-    const NAMEDATA: u32 = PROPS + N_OBJ as u32 * 16;
+    /// Bytes per object's property table: §3's long count plus room for two
+    /// ten-byte entries — `name`, and the `short_name` two objects carry.
+    const PROP_BLOCK: u32 = 32;
+    const NAMEDATA: u32 = PROPS + N_OBJ as u32 * PROP_BLOCK;
     const STRINGS: u32 = NAMEDATA + N_OBJ as u32 * 16;
+    /// Inform's *Table of Identifier Names* and the strings it points at
+    /// (SQ-1372), after everything else. `IDENT_DIR` is the 32-byte directory
+    /// `tables.c::construct_storyfile_g` writes; the property-names array
+    /// follows it immediately, which is what makes the table findable.
+    const IDENT_STRINGS: u32 = STRINGS + N_OBJ as u32 * 24;
+    const IDENT_DIR: u32 = IDENT_STRINGS + 0x100;
+    /// How many property names the directory claims.
+    const IDENT_COUNT: u32 = 20;
+    /// The property number this story gives `short_name` — not the 45
+    /// `advent.blb` uses, because the point is that it is read, not assumed.
+    const SHORT_NAME_PROP: u16 = 12;
     const DICT: u32 = 0x118;
     /// `DICT_ENTRY_BYTE_LENGTH` for a byte-valued dictionary of nine
     /// characters: `7 + DICT_WORD_SIZE` (`Inform6/inform.c`).
@@ -773,6 +934,7 @@ mod tests {
             s.w32(0x18, 0x40); // start function; never executed here
             s.tables();
             s.objects();
+            s.identifiers();
             s
         }
 
@@ -859,7 +1021,7 @@ mod tests {
                 let sname = self.string(STRINGS + i as u32 * 24, printed);
                 self.w32(base + 4, sname);
                 // long 2: property table address.
-                let table = PROPS + i as u32 * 16;
+                let table = PROPS + i as u32 * PROP_BLOCK;
                 self.w32(base + 8, table);
                 // longs 3, 4, 5: parent, sibling, child.
                 let addr_of = |o: &Option<usize>| o.map(|k| OBJ + k as u32 * STRIDE).unwrap_or(0);
@@ -872,17 +1034,77 @@ mod tests {
                 // — the shape a `parse_name`-routine object compiles to,
                 // which has no static `name` array to read (SQ-1241).
                 let data = NAMEDATA + i as u32 * 16;
-                self.w32(table, if words.is_empty() { 0 } else { 1 });
+                let mut entries = 0;
                 if !words.is_empty() {
                     self.w16(table + 4, NAME_PROPERTY as u16);
                     self.w16(table + 6, words.len() as u16);
                     self.w32(table + 8, data);
                     self.w16(table + 12, 0);
+                    entries += 1;
                     for (j, w) in words.iter().enumerate() {
                         let a = self.word_addr(w);
                         self.w32(data + j as u32 * 4, a);
                     }
                 }
+                // SQ-1372: two objects also carry `short_name`, the property
+                // the Inform 6 library prints an object THROUGH. §3 sorts
+                // entries by id, so it follows `name`. The room's is a string
+                // (it is what the story prints); the table's is a function,
+                // which cannot be read statically and must be refused.
+                if let Some(value) = self.short_name_value(i) {
+                    let slot = data + 12; // a spare long inside this object's block
+                    self.w32(slot, value);
+                    let e = table + 4 + entries * 10;
+                    self.w16(e, SHORT_NAME_PROP);
+                    self.w16(e + 2, 1); // one long of data
+                    self.w32(e + 4, slot);
+                    self.w16(e + 8, 0);
+                    entries += 1;
+                }
+                self.w32(table, entries);
+            }
+        }
+
+        /// The `short_name` value object `i` carries, or `None` where it
+        /// carries none — see [`short_name_property`] and the objects() call
+        /// above. `ROOM` gets a string, `TABLE` a function.
+        fn short_name_value(&mut self, i: usize) -> Option<u32> {
+            match i {
+                ROOM => Some(self.string(IDENT_STRINGS + 0xC0, "Maze")),
+                TABLE => {
+                    // §1.6.1: `C1` starts a function with local-format args.
+                    let at = IDENT_STRINGS + 0xE0;
+                    self.b(at, 0xC1);
+                    Some(at)
+                }
+                _ => None,
+            }
+        }
+
+        /// Inform's *Table of Identifier Names* (SQ-1372), exactly as
+        /// `tables.c::construct_storyfile_g` writes it: a 32-byte directory of
+        /// eight values, the first pair being the address and length of the
+        /// property-names array, which follows the directory immediately.
+        fn identifiers(&mut self) {
+            let names: [(u32, &str); 11] = [
+                (NAME_PROPERTY, "name"),
+                (2, "before"),
+                (3, "after"),
+                (4, "life"),
+                (5, "description"),
+                (6, "capacity"),
+                (7, "found_in"),
+                (8, "initial"),
+                (9, "article"),
+                (10, "each_turn"),
+                (SHORT_NAME_PROP as u32, "short_name"),
+            ];
+            let array = IDENT_DIR + 32;
+            self.w32(IDENT_DIR, array);
+            self.w32(IDENT_DIR + 4, IDENT_COUNT);
+            for (i, (prop, text)) in names.iter().enumerate() {
+                let at = self.string(IDENT_STRINGS + i as u32 * 16, text);
+                self.w32(array + prop * 4, at);
             }
         }
 
@@ -905,6 +1127,49 @@ mod tests {
         assert_eq!(pn.attr_bytes(), NAB, "NUM_ATTR_BYTES is derived from the stride that closes");
         assert_eq!(pn.len(), N_OBJ, "every object of the `next` chain is counted");
         assert!(!pn.is_empty());
+    }
+
+    #[test]
+    fn short_name_property_number_comes_from_the_storys_own_symbol_table() {
+        let (_s, mem, _pn) = detected();
+        assert_eq!(
+            short_name_property(&mem),
+            Some(SHORT_NAME_PROP),
+            "the directory names the array, and the array names the property"
+        );
+    }
+
+    /// SQ-1372: what the story PRINTS is the `short_name` property when that
+    /// holds a string, and the hardware name otherwise — a FUNCTION there is
+    /// machine code and keeps the hardware name.
+    #[test]
+    fn printed_name_prefers_a_string_short_name_and_refuses_a_function() {
+        let (s, mem, pn) = detected();
+        assert_eq!(
+            pn.short_name(&mem, s.obj(ROOM)).as_deref(),
+            Some("Kitchen"),
+            "the hardware name"
+        );
+        assert_eq!(
+            pn.printed_name(&mem, s.obj(ROOM)).as_deref(),
+            Some("Maze"),
+            "…but the story prints its short_name property"
+        );
+        assert_eq!(
+            pn.printed_name(&mem, s.obj(TABLE)).as_deref(),
+            Some("table"),
+            "a `C1` function is not a string: the hardware name stands"
+        );
+        assert_eq!(
+            pn.printed_name(&mem, s.obj(LAMP)).as_deref(),
+            Some("brass lamp"),
+            "an object with no short_name at all is unaffected"
+        );
+        assert_eq!(
+            pn.printed_name(&mem, OBJ - 1),
+            None,
+            "and a non-object is still not an object"
+        );
     }
 
     #[test]

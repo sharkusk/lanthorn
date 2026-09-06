@@ -47,7 +47,7 @@
 use crate::cpu::exec::Machine;
 use crate::memory::Memory;
 use crate::objects::{
-    entries_base, entry_size, get_parent, object_snapshot, prop_table_ptr_offset, short_name,
+    entries_base, entry_size, get_parent, object_snapshot, printed_name, prop_table_ptr_offset,
     ObjectSnapshot, ParseNames,
 };
 use crate::screen::{UpperWindow, V6Cell};
@@ -900,7 +900,7 @@ impl PlayerCandidates {
         let mut by_name = Vec::new();
         let mut widened = Vec::new();
         for obj in 1..=n {
-            let nm = normalize_name(&short_name(mem, obj));
+            let nm = normalize_name(&printed_name(mem, obj));
             if PLAYER_NAMES.contains(&nm.as_str()) {
                 by_name.push(obj);
                 widened.push(obj);
@@ -933,7 +933,7 @@ fn nearest_matching_ancestor(machine: &Machine, start: u16, name: &str) -> Optio
         if cur == 0 {
             break;
         }
-        if status_name_matches(name, &short_name(mem, cur)) {
+        if status_name_matches(name, &printed_name(mem, cur)) {
             return Some(object_snapshot(mem, cur));
         }
         cur = get_parent(mem, cur);
@@ -1025,7 +1025,7 @@ fn global_room_via_player_ancestor(
     if !candidates.widened.iter().any(|&c| has_ancestor(machine, c, global.number)) {
         return None;
     }
-    let sn = short_name(&machine.mem, global.number);
+    let sn = printed_name(&machine.mem, global.number);
     if status_name_matches(name, &sn) {
         Some(global)
     } else {
@@ -1086,7 +1086,7 @@ fn resolve_room_object(machine: &Machine, name: &str) -> Option<ObjectSnapshot> 
     let mut matches: Vec<(usize, u16)> = Vec::new(); // (normalized short-name length, object)
     let mut exact: Vec<(usize, u16)> = Vec::new();
     for obj in 1..=n {
-        let sn = short_name(mem, obj);
+        let sn = printed_name(mem, obj);
         if status_name_matches(name, &sn) {
             let len = normalize_name(&sn).len();
             matches.push((len, obj));
@@ -1158,7 +1158,7 @@ fn names_an_object_ignoring_spaces(machine: &Machine, name: &str) -> bool {
         return false;
     }
     (1..=max_object_number(mem))
-        .any(|obj| normalize_name(&short_name(mem, obj)).replace(' ', "") == wanted)
+        .any(|obj| normalize_name(&printed_name(mem, obj)).replace(' ', "") == wanted)
 }
 
 /// How the current room was determined (drives the map indicator label).
@@ -1397,6 +1397,9 @@ mod tests {
     use crate::cpu::exec::{Machine, StepResult};
     use crate::header::tests_support::sample_story;
     use crate::memory::Memory;
+    // The ladder itself reads `printed_name` (SQ-1372); these cases assert on
+    // the HEADER name of a hand-built object, which is what they build.
+    use crate::objects::short_name;
     use crate::screen::UpperWindow;
 
     fn upper_with(rows: &[&str]) -> UpperWindow {

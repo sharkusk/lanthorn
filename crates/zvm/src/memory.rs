@@ -19,6 +19,15 @@ pub struct Memory {
     /// size_bytes, addr). Interior-mutable so read paths (&self) can record it.
     /// Drained by `take_mem_fault`; the CPU checks it after each instruction.
     mem_fault: std::cell::Cell<Option<(bool, u8, u32)>>,
+    /// Memo for `objects::short_name_property` — the property number this
+    /// story's own symbol table gives Inform's `short_name`, or `None` where it
+    /// carries no such table (SQ-1372). Finding it reads the whole image once;
+    /// `objects::printed_name` asks for it per object, per turn.
+    ///
+    /// A story's property numbering is fixed at compile time, so one answer
+    /// serves the whole session — a `@restore` rewrites dynamic memory with the
+    /// same story's bytes, and the identifiers table is part of them.
+    short_name_prop: std::cell::OnceCell<Option<u8>>,
 }
 
 /// Parse the custom Unicode translation table from raw story bytes if present
@@ -84,7 +93,14 @@ impl Memory {
             header,
             unicode_table,
             mem_fault: std::cell::Cell::new(None),
+            short_name_prop: std::cell::OnceCell::new(),
         })
+    }
+
+    /// The `short_name` property-number memo — see the field, and
+    /// `objects::printed_name` which is its only caller.
+    pub(crate) fn short_name_prop_memo(&self) -> &std::cell::OnceCell<Option<u8>> {
+        &self.short_name_prop
     }
 
     /// Length of the story file in bytes.
