@@ -122,6 +122,10 @@ Absolute URLs or no link.
   its own heading, with the same cross-layer arrows and legend
   `lanthorn-mapgen` draws for a story's whole map. The room you're currently
   in is still highlighted.
+- **A new `/export-json [file]` writes the map you've actually walked** in the
+  same versioned JSON format `lanthorn-mapgen` uses for a story's whole map —
+  handy for feeding your own tools, or comparing what you've found against
+  the complete map.
 
 ### Changed
 

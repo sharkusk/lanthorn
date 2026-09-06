@@ -62,6 +62,7 @@ Every slash command, grouped the way `/help` groups them. Type any of these afte
 | Export | `export-svg [file]` | export the map as SVG; default path when omitted |
 | Export | `export-dot [file]` | export the map as Graphviz DOT; default path when omitted |
 | Export | `export-map [file]` | dump the map structure; default path when omitted |
+| Export | `export-json [file]` | export the map as versioned lanthorn-map JSON, the same schema lanthorn-mapgen writes; default path when omitted |
 | Animation | `animate-tidy` | animate a tidy pass |
 | Animation | `anim-step forward|back` | step the animation one frame |
 | Animation | `anim-play` | toggle animation play/pause |

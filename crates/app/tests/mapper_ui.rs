@@ -106,3 +106,5 @@ mod sq1315_anchorhead_2018;
 mod sq1316_connector_overlaps;
 #[path = "suites/sq1332_connector_bends.rs"]
 mod sq1332_connector_bends;
+#[path = "suites/sq1336_export_json.rs"]
+mod sq1336_export_json;

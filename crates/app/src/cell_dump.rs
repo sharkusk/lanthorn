@@ -2,8 +2,8 @@
 //! glyphs, and the STYLE of every cell (SQ-0761).
 //!
 //! Nothing else dumps this. `export-transcript` writes transcript text,
-//! `export-svg`/`export-dot`/`export-map` write the map, and `/dump-windows`
-//! writes GEOMETRY — which window mapped onto which cells. Every Journey defect
+//! `export-svg`/`export-dot`/`export-map`/`export-json` write the map, and
+//! `/dump-windows` writes GEOMETRY — which window mapped onto which cells. Every Journey defect
 //! chased in the session that asked for this was ultimately *a colour landing in a
 //! cell*, and geometry cannot show one:
 //!

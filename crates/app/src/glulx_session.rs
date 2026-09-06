@@ -1146,6 +1146,17 @@ impl GlulxSession {
 // `current_location()` straight through.
 
 impl GlulxSession {
+    /// A snapshot of every room this session has resolved an object address for
+    /// (SQ-1336) — every room the player has stood in since the room lock first
+    /// resolved one, per [`Self::room_addrs`]'s own field docs. `/export-json`
+    /// is the one caller: a played [`mapper::graph::RoomId`] is a HASH of the
+    /// address for Glulx, so the address has to travel beside it in the JSON's
+    /// `engine_ref`, exactly as `lanthorn-mapgen`'s own [`crate::mapgen::EngineRef::GlulxAddr`]
+    /// does for a static map.
+    pub fn known_room_addresses(&self) -> std::collections::HashMap<mapper::graph::RoomId, u32> {
+        self.room_addrs.borrow().clone()
+    }
+
     /// The object address an [`Introspect`] handle names, or `None` when the
     /// handle names nothing this session can resolve (see the note above).
     ///

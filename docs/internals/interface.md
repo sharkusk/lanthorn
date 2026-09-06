@@ -774,13 +774,18 @@ know which side you're on).
   line is tagged by category — **story**, your **input** echo, **meta**
   (app/slash), and VM **warnings** — each independently themeable; meta and
   warning lines get their own configurable gutter markers (`▏` / `!`).
-- **Map export** — `/export-svg [file]`, `/export-dot [file]`, and
-  `/export-map [file]` write the map as an SVG, a Graphviz DOT graph, or an
-  annotatable text/ASCII dump. The SVG stacks every map layer, not only the
-  one you're standing on, exactly as `lanthorn-mapgen`'s own SVG does
-  (SQ-1337). Each defaults to a fixed name in the story's per-game directory
-  (`map.svg` / `map.dot` / `map.txt`, overwriting); the optional `[file]`
-  argument resolves the same way the transcript export does.
+- **Map export** — `/export-svg [file]`, `/export-dot [file]`, `/export-map
+  [file]`, and `/export-json [file]` write the map as an SVG, a Graphviz DOT
+  graph, an annotatable text/ASCII dump, or the versioned `lanthorn-map` JSON
+  (SQ-1336) — the same schema `lanthorn-mapgen` writes for a story's whole map
+  (see [Generating a reference map](mapping.md#generating-a-reference-map)),
+  with `story.source: "walked"` and no fields a played map cannot know (a
+  door's own name, a secret exit's condition — both `null`). The SVG stacks
+  every map layer, not only the one you're standing on, exactly as
+  `lanthorn-mapgen`'s own SVG does (SQ-1337). Each defaults to a fixed name in
+  the story's per-game directory (`map.svg` / `map.dot` / `map.txt` /
+  `map.json`, overwriting); the optional `[file]` argument resolves the same
+  way the transcript export does.
 
 ## Story picker
 Point lanthorn at a directory instead of a story file

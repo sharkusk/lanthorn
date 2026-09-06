@@ -1022,6 +1022,14 @@ answers it without playing a turn (SQ-1306). Two things want that: reference
 maps to measure the layout engine against, and hundred-room graphs to stress the
 router with, neither of which anyone wants to produce by hand.
 
+The interactive app's own `/export-json [file]` (SQ-1336) is the inverse: the
+map as PLAYED, in the exact same versioned `.map.json` schema below
+(`story.source: "walked"`, the app's own name as `generator.name`) — one
+serialiser for both, `app::mapgen::render_json_view`, so a reader never has to
+learn two formats for the same underlying question. See the JSON schema
+section below for exactly what a walked map cannot fill in that a static one
+can (a door's own name, a secret exit's condition).
+
 ```sh
 cargo run -p lanthorn --bin lanthorn-mapgen -- stories/advent.blb --out /tmp/maps
 ```
@@ -1303,13 +1311,16 @@ addition, and only a change a version-1 reader could not survive bumps
 `version`.
 
 - **Top level** — `format` (always `"lanthorn-map"`), `version` (`1`),
-  `generator` `{name, version}` (the binary and its full build string),
-  `story`, `directions`, `rooms`, `edges`, `layers`.
+  `generator` `{name, version}` (the binary and its full build string —
+  `"lanthorn-mapgen"` for a static map, `"lanthorn"` for the interactive
+  app's own `/export-json`, SQ-1336), `story`, `directions`, `rooms`, `edges`,
+  `layers`.
 - **`story`** — `file` (base name only; a reference map is read on other
   machines and an absolute path is noise), `engine` (`z-machine` / `glulx` /
-  `scott`), `source` (`i7-world` / `i6-library` / `zil` / `scott`), `release`
-  (integer), `serial` (string), `checksum` (lowercase `0x`-prefixed hex
-  string), `generated_at` (RFC 3339, UTC).
+  `scott`), `source` (`i7-world` / `i6-library` / `zil` / `scott` for a static
+  map; `walked` for `/export-json`'s own map of what the PLAYER has actually
+  seen, SQ-1336), `release` (integer), `serial` (string), `checksum`
+  (lowercase `0x`-prefixed hex string), `generated_at` (RFC 3339, UTC).
   - **Z-machine** (ZMSD §11.1): release is the word at `$02`, serial the six
     ASCII digits at `$12..$18`, checksum the word at `$1C` — all three always
     present.
@@ -1339,7 +1350,15 @@ addition, and only a change a version-1 reader could not survive bumps
     Glulx, `id` is a *hash* of the object address (`roomid::glulx_room_id`) and
     irreversible, so the address has to travel beside it. `{kind: "z-object",
     number}`, `{kind: "glulx-object", address}` (hex, `0x`-prefixed), or
-    `{kind: "scott-room", number}`.
+    `{kind: "scott-room", number}`. **For a `walked` map** (SQ-1336), a
+    Z-machine or Scott Adams room's `engine_ref` is always complete — its
+    `RoomId` IS the engine's own object number/room index — but a Glulx
+    room's only resolves once lanthorn's own room lock has resolved a real
+    object address for it (see [knowing where you
+    are](#knowing-where-you-are--across-three-engines)); a room the lock never
+    keyed to a real address — reached before the lock activated, in a story it
+    never locks at all — reports `{kind: "none"}` instead of a guessed
+    address.
 - **`edges`** — `from`, `to` (room `id`s), `dir` (canonical lowercase word,
   `"?"` for unknown), `kind`, `reciprocal`, `via`, `note`.
   - **`kind`** is the most specific of `random` > `conditional` > `routine` >
@@ -1358,6 +1377,18 @@ addition, and only a change a version-1 reader could not survive bumps
     can be one-way too and `kind` has room for only one fact.
   - **`via`** names the door object when `kind` is `door`, else `null`; `note` is
     free text.
+  - **For a `walked` map** (SQ-1336), `kind` is read straight off what the
+    live graph already knows — `random` for a direction the map has marked
+    randomised, `door`/`conditional` from the passage's own weight (SQ-1312,
+    set when the player opens a door or the story visibly gates a passage),
+    else `one-way`/`declared` from whether the reverse was ever walked too.
+    `routine` never appears — it names a mapgen-only reconciliation
+    (recovering a ZIL FEXIT's destination from another room's declared
+    reverse) that a played graph has no use for, since every edge here was
+    walked and its destination is never in question. **`via` and `note` are
+    always `null`**: the graph records THAT a passage is a door or is gated,
+    never a door's own name or a CEXIT's condition, so neither fact is ever
+    available to write down.
 - **`layers`** — `id`, `name`, `maze`, `rooms`.
 
 A worked example, trimmed to one room and one edge:

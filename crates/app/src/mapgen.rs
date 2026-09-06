@@ -1092,19 +1092,27 @@ fn zmachine_map(bytes: &[u8], file: String) -> Result<GeneratedMap, GenError> {
         }
     }
 
-    let story = StoryIdent {
+    let story = z_story_ident(bytes, file);
+    Ok(assemble(rooms, edges, source, story))
+}
+
+/// A Z-machine story's own header identity (ZMSD §11.1): release at $02 (word),
+/// serial at $12..$18 (six ASCII digits), checksum at $1C (word). Read here
+/// rather than through `header::parse_header`, which does not carry them.
+///
+/// Shared by [`zmachine_map`] and the live app's own `/export-json` (SQ-1336),
+/// which has no [`GeneratedMap`] to read a [`StoryIdent`] off of — a running
+/// session's raw story bytes are exactly what this wants.
+pub fn z_story_ident(bytes: &[u8], file: String) -> StoryIdent {
+    StoryIdent {
         file,
         engine: "z-machine",
-        // ZMSD §11.1: release at $02 (word), serial at $12..$18 (six ASCII
-        // digits), checksum at $1C (word). Read here rather than through
-        // `header::parse_header`, which does not carry them.
         release: (bytes.len() > 0x03).then(|| u16::from_be_bytes([bytes[0x02], bytes[0x03]])),
         serial: (bytes.len() >= 0x18)
             .then(|| String::from_utf8_lossy(&bytes[0x12..0x18]).into_owned()),
         checksum: (bytes.len() > 0x1D)
             .then(|| format!("0x{:04x}", u16::from_be_bytes([bytes[0x1C], bytes[0x1D]]))),
-    };
-    Ok(assemble(rooms, edges, source, story))
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -1156,20 +1164,7 @@ fn glulx_map(bytes: &[u8], file: String) -> Result<GeneratedMap, GenError> {
     let names = gvm::objects::ParseNames::detect(&mem)
         .map_err(|e| GenError::Engine(format!("Glulx object table not readable: {e:?}")))?;
 
-    // Glulx spec §1.4: the header's own whole-image checksum, offset 0x20 —
-    // every Glulx image has one, unlike release/serial below.
-    let checksum = Some(format!("0x{:08x}", mem.checksum()));
-
-    // The release and serial are not part of the Glulx spec itself; they are
-    // the Inform compiler's own `Info` block, read only when its magic at
-    // 0x24 confirms the image actually carries one (Glulx-Inform-Tech.html
-    // §1 "Static Data") — a bare non-Inform Glulx image has neither.
-    let (release, serial) = match gvm::header::parse_inform_info(bytes) {
-        Some(info) => (Some(info.release), Some(info.serial)),
-        None => (None, None),
-    };
-
-    let story = StoryIdent { file, engine: "glulx", release, serial, checksum };
+    let story = glulx_story_ident(bytes, file);
 
     // Inform 7's own map table first — it is the higher authority for any story
     // that has one, since it is what the I7 runtime itself reads.
@@ -1177,6 +1172,27 @@ fn glulx_map(bytes: &[u8], file: String) -> Result<GeneratedMap, GenError> {
         return Ok(i7_map(&mem, &names, &w, story));
     }
     i6_glulx_map(&mem, &names, story)
+}
+
+/// A Glulx image's own header identity: the whole-image checksum (Glulx spec
+/// §1.4, offset 0x20 — every well-formed image has one) and, when the Inform
+/// compiler's own `Info` block is present (magic at 0x24 confirms it —
+/// Glulx-Inform-Tech.html §1 "Static Data"), the release and serial it carries.
+/// `None` for a bare non-Inform Glulx image, which has neither.
+///
+/// Shared by [`glulx_map`] and the live app's own `/export-json` (SQ-1336),
+/// same reason as [`z_story_ident`] — read straight off the raw image bytes
+/// rather than through a parsed [`gvm::memory::Memory`], which the live path
+/// has no reason to build again just for this.
+pub fn glulx_story_ident(bytes: &[u8], file: String) -> StoryIdent {
+    let checksum = (bytes.len() >= 0x24).then(|| {
+        format!("0x{:08x}", u32::from_be_bytes([bytes[0x20], bytes[0x21], bytes[0x22], bytes[0x23]]))
+    });
+    let (release, serial) = match gvm::header::parse_inform_info(bytes) {
+        Some(info) => (Some(info.release), Some(info.serial)),
+        None => (None, None),
+    };
+    StoryIdent { file, engine: "glulx", release, serial, checksum }
 }
 
 fn i7_map(
@@ -1636,13 +1652,43 @@ fn rfc3339_now() -> String {
     )
 }
 
+/// Everything [`render_json_view`] needs, borrowed rather than owned, so both
+/// [`render_json`] (a mapgen [`GeneratedMap`]) and the live app's own
+/// `/export-json` (SQ-1336, over a played [`MapGraph`] with no `GeneratedMap`
+/// to speak of) feed the one serialiser — one JSON writer, not two that can
+/// drift apart on what a "declared" edge or a room's `engine_ref` means.
+pub struct JsonMapView<'a> {
+    /// The binary that produced the file (`"lanthorn-mapgen"` or `"lanthorn"`).
+    pub generator: &'static str,
+    pub graph: &'a MapGraph,
+    pub story: &'a StoryIdent,
+    /// The `story.source` tag — mapgen's own [`SourceKind::as_str`], or
+    /// `"walked"` for a map read off actual play.
+    pub source: &'static str,
+    pub facts: &'a [EdgeFact],
+    pub engine_refs: &'a BTreeMap<RoomId, EngineRef>,
+}
+
 /// Render `map` as the versioned, self-describing JSON map.
 ///
 /// The schema is documented in `docs/internals/mapping.md`. Nothing
 /// lanthorn-internal goes in: no seam decisions, no render slots, no terminal
 /// cells — only what a tool that has never seen lanthorn could use.
 pub fn render_json(map: &GeneratedMap) -> String {
-    let graph = &map.graph;
+    render_json_view(&JsonMapView {
+        generator: "lanthorn-mapgen",
+        graph: &map.graph,
+        story: &map.story,
+        source: map.source.as_str(),
+        facts: &map.facts,
+        engine_refs: &map.engine_refs,
+    })
+}
+
+/// [`render_json`], over a [`JsonMapView`] rather than a [`GeneratedMap`] — see
+/// that type's docs for why there are two callers and one serialiser.
+pub fn render_json_view(view: &JsonMapView) -> String {
+    let graph = view.graph;
 
     let directions = DIRS
         .iter()
@@ -1656,7 +1702,7 @@ pub fn render_json(map: &GeneratedMap) -> String {
     let rooms: Vec<JsonRoom> = graph
         .rooms()
         .map(|r| {
-            let engine_ref = match map.engine_refs.get(&r.id) {
+            let engine_ref = match view.engine_refs.get(&r.id) {
                 Some(EngineRef::ZObject(n)) => JsonEngineRef {
                     kind: "z-object",
                     number: Some(*n as u64),
@@ -1691,11 +1737,11 @@ pub fn render_json(map: &GeneratedMap) -> String {
         })
         .collect();
 
-    let edges: Vec<JsonEdge> = map
+    let edges: Vec<JsonEdge> = view
         .facts
         .iter()
         .map(|f| {
-            let reciprocal = map
+            let reciprocal = view
                 .facts
                 .iter()
                 .any(|g| g.origin == f.dest && g.dest == f.origin);
@@ -1729,14 +1775,14 @@ pub fn render_json(map: &GeneratedMap) -> String {
     let doc = JsonMap {
         format: JSON_FORMAT,
         version: JSON_VERSION,
-        generator: JsonGenerator { name: "lanthorn-mapgen", version: buildinfo::LONG },
+        generator: JsonGenerator { name: view.generator, version: buildinfo::LONG },
         story: JsonStory {
-            file: &map.story.file,
-            engine: map.story.engine,
-            source: map.source.as_str(),
-            release: map.story.release,
-            serial: map.story.serial.as_deref(),
-            checksum: map.story.checksum.as_deref(),
+            file: &view.story.file,
+            engine: view.story.engine,
+            source: view.source,
+            release: view.story.release,
+            serial: view.story.serial.as_deref(),
+            checksum: view.story.checksum.as_deref(),
             generated_at: rfc3339_now(),
         },
         directions,
