@@ -30,6 +30,8 @@ mod more_pager_first_new_row;
 mod pane_title_sources;
 #[path = "suites/print_then_erase_boundary.rs"]
 mod print_then_erase_boundary;
+#[path = "suites/sq1355_bureaucracy_form_exit.rs"]
+mod sq1355_bureaucracy_form_exit;
 #[path = "suites/transparent_backdrop_audit.rs"]
 mod transparent_backdrop_audit;
 #[path = "suites/upper_grid_resize.rs"]

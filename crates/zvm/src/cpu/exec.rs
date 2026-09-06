@@ -2223,17 +2223,10 @@ impl Machine {
                     // would otherwise allocate rows×cols cells (~400 MB at 80
                     // cols) before the terminal could ever show them.
                     let rows = rows.min(GRID_CELL_CAP);
-                    // SQ-1088: does THIS split STRAND the rows below it? Only a
-                    // shrink can — a boundary that moves UP past rows already
-                    // painted. A split that grows, or that opens a window over a
-                    // grid no taller than itself, strands nothing, so whatever a
-                    // game paints below it afterwards is live content and not a
-                    // quote box awaiting retirement. See
-                    // `retire_stranded_upper_rows`. Recomputed on every split, so
-                    // the answer always describes the split the grid stands on.
+                    // Where the boundary was, kept for the v4+ arm below: whether
+                    // this split STRANDS anything is a question about the move,
+                    // not about the new height (SQ-1088).
                     let prev_split = self.screen.upper_window_rows;
-                    self.screen.upper_rows_stranded_by_split =
-                        self.mem.version() > 3 && rows < prev_split && self.screen.upper.rows > rows;
                     self.screen.upper_window_rows = rows;
                     let cols = self.mem.read_byte(0x21) as u16;
                     // ZMSD §15 split_window: "In Version 3 (only) the upper
@@ -2242,6 +2235,7 @@ impl Machine {
                     // turn and repaint only the fields that changed), so grow
                     // with blanks / shrink by truncation instead of reallocating.
                     if self.mem.version() <= 3 {
+                        self.screen.upper_rows_stranded_by_split = false;
                         self.screen.upper.resize(rows, cols.max(1));
                         let bg = self.screen.current_bg;
                         self.screen.upper.clear_to(bg);
@@ -2267,16 +2261,52 @@ impl Machine {
                         // window repaints nothing — the rows keep displaying what
                         // was put there.
                         //
-                        // So the allocation only ever grows here. `upper.rows`
-                        // already exceeds `upper_window_rows` whenever a game
-                        // paints below its own split (LostPig's HELP menu), and
-                        // every host already renders the full grown height, so
-                        // the quote lands exactly where the game placed it —
-                        // including in `--screen-reader`, where a region taller
-                        // than one row is read as content rather than quietened
-                        // chrome. `erase_window` reallocates and is what clears
-                        // it, which is the same moment a real screen loses it.
-                        let painted = self.screen.upper.rows.max(rows);
+                        // …but "what was PAINTED" is the paint, not the
+                        // ALLOCATION (SQ-1355). The grid keeps whatever row count
+                        // the tallest split it has ever stood at left behind, and
+                        // a shrink that preserved that count preserved BLANK rows
+                        // — which no real interpreter can be showing, because it
+                        // has no per-window grid at all: Infocom's own EZIP moves
+                        // the boundary and repaints nothing (`OPSPLT` in
+                        // `ibmzip/ezip/loop.c` is `spltflg = temp; winlen = slpp -
+                        // spltflg;` plus a cursor nudge), so what is below the new
+                        // split is simply whatever pixels were left there. Erase
+                        // those pixels first and there is nothing to leave:
+                        // `md_clr(1)` in the same interpreter's `sysdep.c` blanks
+                        // rows 0..spltflg-1, the whole upper window at its CURRENT
+                        // height, which is exactly ZMSD §8.7.3.2's "the specified
+                        // window can be cleared to background colour".
+                        //
+                        // Bureaucracy's licence form is that sequence: `<CLEAR
+                        // ,S-WINDOW>` over a 24-row split, then `<SPLIT 1>` for
+                        // the status line (`forms.zil` FILL-FORM →
+                        // `other-misc.zil` INIT-STATUS-LINE). Keeping the
+                        // allocation handed the host a 24-row status grid holding
+                        // one row of text, so the banner and the first room
+                        // printed into a story pane with no rows left — and only
+                        // the player's next keypress, which
+                        // `retire_stranded_upper_rows` acts on, gave the screen
+                        // back. `last_painted_row` asks the grid instead: a
+                        // shrink keeps the rows that have something on them and
+                        // lets the empty ones go.
+                        //
+                        // Anything genuinely painted below the new split still
+                        // stays — that is the quote box above, and LostPig's HELP
+                        // menu, whose rows the host renders in full (including in
+                        // `--screen-reader`, where a region taller than one row is
+                        // read as content rather than quietened chrome).
+                        let painted = self.screen.upper.last_painted_row().max(rows);
+                        // SQ-1088: does THIS split STRAND rows below it? Only a
+                        // shrink can — a boundary that moves UP past rows already
+                        // painted. A split that grows, or that opens a window over
+                        // a grid with nothing under the new boundary, strands
+                        // nothing, so whatever a game paints below it afterwards
+                        // is live content and not a quote box awaiting retirement.
+                        // See `retire_stranded_upper_rows`. Recomputed on every
+                        // split, so the answer always describes the split the grid
+                        // stands on.
+                        self.screen.upper_rows_stranded_by_split =
+                            rows < prev_split && painted > rows;
                         self.screen.upper.resize_preserving(painted, cols.max(1));
                     }
                     self.screen.cursor_row = 1;
@@ -9681,6 +9711,13 @@ pub(crate) mod tests {
         assert_eq!(m.screen.upper.cell(1, 1).ch, 'H', "v5 re-split keeps the old contents");
         assert_eq!(m.screen.upper.rows, 3, "and still resizes");
         assert_eq!(m.screen.upper.cell(3, 1).ch, ' ', "the new row is blank");
+        // The quote itself, on a row BELOW the split the game is about to shrink
+        // back to — which is what makes this a quote box rather than a status
+        // line. A shrink over rows with nothing on them strands nothing and keeps
+        // nothing (SQ-1355).
+        m.screen.cursor_row = 3;
+        m.screen.cursor_col = 1;
+        m.print_text("QUOTE");
         // SQ-0696: a shrink no longer truncates on the spot. The Inform box
         // quote paints a tall upper window and shrinks it back BEFORE asking for
         // the keypress that is meant to display it, so what was painted has to
@@ -9689,6 +9726,7 @@ pub(crate) mod tests {
         assert_eq!(m.screen.upper_window_rows, 1, "the SPLIT shrinks immediately");
         assert_eq!(m.screen.upper.rows, 3, "…but the painted rows stay on screen");
         assert_eq!(m.screen.upper.cell(1, 1).ch, 'H', "the surviving row survives");
+        assert_eq!(m.screen.upper.cell(3, 1).ch, 'Q', "and so does the quote below the split");
 
         // They are retired when the player next acts — the box "would then
         // scroll away as part of the story window's natural scrolling, over the
@@ -9705,6 +9743,41 @@ pub(crate) mod tests {
         m.supply_char(b' ');
         assert_eq!(m.screen.upper.rows, 1, "a real keypress retires the stranded rows");
         assert_eq!(m.screen.upper.cell(1, 1).ch, 'H', "the status row itself is untouched");
+    }
+
+    /// SQ-1355: a shrink over rows the game has already ERASED keeps nothing,
+    /// and needs no keypress to say so.
+    ///
+    /// Bureaucracy's licence form ends `<CLEAR ,S-WINDOW>` `<CLEAR ,S-TEXT>`
+    /// `<SPLIT 1>` (`forms.zil` FILL-FORM, then `other-misc.zil`
+    /// INIT-STATUS-LINE). The erase blanks the whole 24-row upper window —
+    /// ZMSD §8.7.3.2, "the specified window can be cleared to background colour",
+    /// and `md_clr(1)` in Infocom's own IBM interpreter scrolls rows
+    /// `0..spltflg-1` blank — so the split that follows has no pixels below it to
+    /// leave standing. Preserving the ALLOCATION handed the host a 24-row status
+    /// grid holding one row of text, and the game's banner and first room printed
+    /// into a story pane with no rows left.
+    #[test]
+    fn a_shrink_over_erased_rows_collapses_the_grid_at_once() {
+        let mut m = screen_machine(5);
+        m.mem.write_byte(0x20, 24);
+        m.exec_var(0x0A, &[24], None, None); // split_window 24 — the form's own split
+        m.screen.current_window = 1;
+        m.screen.cursor_row = 12;
+        m.screen.cursor_col = 1;
+        m.print_text("Last name:");
+        assert_eq!(m.screen.upper.last_painted_row(), 12, "the form painted row 12");
+
+        m.exec_var(0x0D, &[1], None, None); // <CLEAR ,S-WINDOW> — erase_window 1
+        assert_eq!(m.screen.upper.last_painted_row(), 0, "the erase took the paint with it");
+
+        m.exec_var(0x0A, &[1], None, None); // <SPLIT 1> — the status line
+        assert_eq!(m.screen.upper_window_rows, 1, "the split is one row");
+        assert_eq!(m.screen.upper.rows, 1, "and so is the grid: there was nothing to strand");
+        assert!(
+            !m.screen.upper_rows_stranded_by_split,
+            "nothing was stranded, so no retirement is pending"
+        );
     }
 
     #[test]

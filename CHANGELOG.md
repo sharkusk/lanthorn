@@ -42,6 +42,14 @@ Absolute URLs or no link.
 
 ### Fixed
 
+- **Bureaucracy's licence form hands you back a screen you can read.** Filling in
+  the last field used to leave the story pane blank until you pressed Enter
+  again — and in that game an empty command is answered with "[What?]" and a
+  jump in your blood pressure. The banner and the Front Room description are now
+  on screen the moment the form ends, exactly as they are in DOS. Any game that
+  wipes a tall status window and then shrinks it gets its screen back the same
+  way.
+
 - **Finishing a story no longer resumes it a turn early.** With auto-save on,
   quitting or winning a game from inside it used to leave the same auto-resume
   point a mid-game exit does, so reopening the story dropped you back one turn
