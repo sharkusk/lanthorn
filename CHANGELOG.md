@@ -34,6 +34,11 @@ Absolute URLs or no link.
   panel of its own, all the same width, instead of headings floating loose
   over a shared background — and the legend's widest line ("exit to another
   layer") no longer runs past the edge of its own box.
+- The SVG map's one-way arrows now point at the room they lead to, not the
+  room they leave — the same "arrow points into the room it enters" rule a
+  two-way passage's pair of arrows already followed.
+- A cross-layer passage's exported SVG badge now sits next to its arrowhead,
+  by the ghost box it leads to, instead of back at the room it leaves.
 
 ### Fixed
 
