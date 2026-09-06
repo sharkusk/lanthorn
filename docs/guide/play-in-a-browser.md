@@ -57,8 +57,7 @@ a dropped connection, a restarted server included.
 
 Six hours is a default, not a rule: `LANTHORN_WEB_SESSION_TTL` (in seconds)
 sets how long an untouched game is kept, and `LANTHORN_WEB_DETACH=off` turns
-the whole thing off — see [the trade](#sound-in-the-browser) below for the one
-reason you might want to.
+the whole thing off, for a server that would rather every visit start fresh.
 
 ## Playing on a tablet or phone
 
@@ -87,13 +86,11 @@ publishes two ports: 7681 for the terminal, 7682 for sound.
 single-port setup. Full detail, including what to do behind a reverse proxy,
 lives in [sound](sound.md) and [remote sound](../internals/remote-sound.md).
 
-**One catch, and it is a real one.** A game that survives a dropped connection
-can't also send sound to the browser: the sound channel belongs to the
-connection, and when that goes, so does it. So out of the box the browser is
-silent and your game is safe. If you'd rather have it the other way round —
-sound while you play, and a dropped connection ends the session (your progress
-still saved, and picked up next time you open the page) — set
-`LANTHORN_WEB_DETACH=off`.
+**And the sound survives a reconnect too.** Close the tab in the middle of a
+storm and the game keeps playing it; come back and you hear where the game is
+now, not where you left it. There is nothing to switch on and nothing to click
+— the page reopens the sound connection by itself, the same way it finds your
+game again.
 
 ## The library and its metadata
 

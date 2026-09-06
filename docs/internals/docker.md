@@ -185,23 +185,56 @@ libc, and has the attach-or-create semantics this needs. The flags are
 type a key *at the parser*), `-E` (no detach character — `^\` belongs to the
 game) and `-z` (so does `^Z`).
 
-#### The sound trade
+#### The sound follows the session
 
-**A detachable session has no browser sound.** The audio FIFO is created when
-the page's audio socket opens and unlinked when it closes
-(`crates/audio-relay/src/lib.rs`), so it is a property of the *connection*. A
-game that outlives its connection has ALSA bound to a pipe whose reader is gone,
-and the next write fills the pipe buffer and wedges the audio thread for good —
-there is no way to re-point a running process's `LANTHORN_AUDIO_OUT`. So a
-detachable session plays into the entrypoint's paced sink instead: silent in the
-browser, and never stuck.
+**A detached game keeps its sound** (SQ-1328). It did not at first: the audio
+FIFO was created when the page's audio socket opened and unlinked when it
+closed, which made it a property of the *connection*, and a game that outlived
+its connection would have had ALSA bound to a pipe nobody reads. So a detachable
+session played into the paced sink and was silent in the browser — the one trade
+SQ-1323 asked for.
 
-`LANTHORN_WEB_DETACH=off` takes the other side of the trade — sound in the
-browser, and a dropped connection ends the game (with its progress still saved
-by the per-turn auto-save, and still resumed on the next visit). Having both
-would need the relay to keep a dropped session's FIFO alive and drained until
-the same id reconnects, which is a change in `crates/audio-relay` rather than in
-the container.
+The FIFO now belongs to the **session**. `crates/audio-relay` keeps a per-id
+session — the FIFO, a reader thread that is always reading it, and whichever
+websocket is attached at the moment — so a dropped tab merely *detaches*: the
+thread goes on draining at real time and discarding, the game is never held up,
+and the next connection with the same id attaches to the same FIFO, gets a fresh
+header frame, and hears the game where it is now. `docker/web-audio.js` is the
+other half, reopening the audio socket with the same id after a drop (backing
+off 0.5 s to 8 s) and emptying its queue on each header frame, since whatever
+was buffered belongs to a connection that is over.
+
+Three details are worth knowing before touching any of it:
+
+- **The relay can never see its game exit.** It holds the pipe's write end
+  itself — which is what stops a quiet moment between two sounds reading as EOF
+  — so ending a session is somebody else's word, and the word is the FIFO's
+  *absence*. `reap_stale_sessions` unlinks `<id>.pcm` beside the stamp and the
+  pid file, and the drain loop, polling anyway, notices within half a second.
+  That is deliberately a **condition it polls** rather than an event it is sent:
+  a `DELETE /audio/<id>` that went astray would leak a reader thread and an open
+  pipe for the life of the container, where a missed sweep merely waits for the
+  next one.
+- **Sends are gated on the socket being writable**, and a chunk that would have
+  to wait is dropped. A blocking send into a full socket buffer would stop the
+  thread reading the FIFO, the pipe would fill, and the game's audio thread
+  would block on `write` — the wedge this design exists to avoid, arriving by
+  the front door. Ten seconds of an unwritable socket and the peer counts as
+  gone, so a tab suspended with the laptop lid does not hold the session's
+  sound.
+- **Whether sessions detach is settled once, in the entrypoint**, which does the
+  `command -v dtach` check and exports its conclusion. Read separately at each
+  end, a container without dtach would have the wrapper running one game per
+  websocket while the relay kept every FIFO alive — and a session nothing ever
+  reaps holds a reader thread until the container stops.
+
+`LANTHORN_WEB_DETACH=off` still means one game per websocket, and there the FIFO
+dies with the socket exactly as it always did.
+
+One wrinkle players may notice: up to a pipeful (64 KB, about a third of a
+second) of the audio played while nobody was attached is still in the FIFO when
+a tab comes back, so a reconnect can open on the tail of a sound that has
+already finished. The page's own one-second cap keeps that bounded.
 
 ### Fetching the library's metadata on the server
 
@@ -310,13 +343,15 @@ channel beside the terminal, because a pty carries no audio:
 - `lanthorn-audio-relay` (a fourth binary in the image, `crates/audio-relay`)
   listens on port **7682**. A browser connecting to `ws://host:7682/audio/<id>`
   gets a FIFO created for that id, a JSON frame naming the format, then the
-  raw PCM as it is played.
-- ttyd serves its own page with a small script added (`docker/web-audio.js`).
-  The script mints a session id, opens the audio socket, and passes the id to
-  the terminal through ttyd's `?arg=`; a per-connection wrapper
-  (`docker/serve-session.sh`) strips that argument and points ALSA at the
-  session's FIFO before starting lanthorn. Playback starts on the first key or
-  click, which is the gesture browsers require before they will play anything.
+  raw PCM as it is played. The FIFO belongs to the *session*, not to that
+  socket: see [the sound follows the session](#the-sound-follows-the-session).
+- ttyd serves its own page with two small scripts added. `docker/web-session.js`
+  owns the session id, and `docker/web-audio.js` opens `…/audio/<id>` with it
+  (and reopens it after a drop); the id reaches the terminal through ttyd's
+  `?arg=`, where the per-connection wrapper (`docker/serve-session.sh`) strips
+  it and points ALSA at that session's FIFO before starting lanthorn. Playback
+  starts on the first key or click, which is the gesture browsers require
+  before they will play anything.
 
 So publish **both** ports (`-p 7681:7681 -p 7682:7682`; the compose file does).
 Behind a reverse proxy, the page connects to the same hostname on port 7682

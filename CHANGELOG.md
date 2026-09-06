@@ -35,11 +35,11 @@ Absolute URLs or no link.
   your map where you left them. Your browser quietly remembers which game is
   yours, so there is nothing to click and nothing to restore. That holds for
   six hours of being away; after that the game is put down, with its progress
-  saved, and the next visit picks it straight back up. One catch, and it is a
-  real one: a game that survives a dropped connection cannot also send sound to
-  the browser, because the sound channel belongs to the connection. Out of the
-  box the browser is silent and your game is safe; `LANTHORN_WEB_DETACH=off`
-  takes the other side of that trade.
+  saved, and the next visit picks it straight back up. The sound comes back
+  with it: close the tab in the middle of a storm and the game keeps playing
+  it, and when you return you hear where the game is now. Set
+  `LANTHORN_WEB_DETACH=off` for a server that would rather every visit started
+  fresh.
 
 - **The pane edges you drag are wider in a browser on a tablet.** The splitter
   between the story and the map, and the top edges of the inventory and room
