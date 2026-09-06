@@ -36,6 +36,14 @@
 //! the house at all. A push is only legible if the rooms that depend on the pushed room travel
 //! with it, so the chain is extended with its **dependants** — see [`hangs_off`] — before anything
 //! moves.
+//!
+//! **But that rule may not CANCEL a push** (SQ-1367). On Zork I's Maze the dependant closure is
+//! transitive through a tangle of passages that point every which way, so pushing one room up a
+//! cell gathered nine more, outgrew [`MAX_PUSH_SET`] and refused the whole push — and the
+//! `Clearing` ghost, whose `Down` wanted exactly that cell, was parked east of `Grating Room`
+//! instead, four turns of line between two adjacent boxes. The dependants say how a push travels;
+//! a party that is oversized or vetoed falls back to the bare column ([`push_chain`]), under the
+//! same veto, rather than giving up the cell.
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -177,50 +185,43 @@ fn extend_with_dependants(
     }
 }
 
-/// Push whatever stands on `want` — whatever THAT would displace, and whatever hangs off any of
-/// them — one cell further along `offset`, as a rigid chain (SQ-1358, SQ-1363).
+/// The COLUMN a push moves through: whatever stands on `want`, whatever stands behind THAT along
+/// the bearing, and so on until the bearing reaches open ground (SQ-1358).
 ///
-/// Walks the bearing from `want` until it reaches a free cell, gathering every room on the way;
-/// that column is then extended with its dependants ([`extend_with_dependants`]), and with any
-/// room those newcomers would in turn displace, until the party settles. The whole party moves by
-/// `offset` together, so each moved room keeps its exact offset from every other moved room.
-///
-/// `Some` with the pushed positions when the move is legal — every cardinal-reciprocal pair in
-/// `keep` (the map's set BEFORE the push) is still adjacent after, so a partner either travelled
-/// with the party or was never adjacent to begin with; `None` when a partner would be left behind,
-/// when the column is deeper than [`MAX_PUSH_CHAIN`] cells, or when the party outgrows
-/// [`MAX_PUSH_SET`] rooms.
-///
-/// The anchor stands one cell BACK from `want`, against the bearing — but a DISTORTED passage may
-/// claim a bearing its cells do not bear out, so the anchor can be swept into the party by a rule
-/// that reads directions rather than positions. The final check that `want` is free says so
-/// rather than assuming it.
-fn push_chain(
-    graph: &MapGraph,
+/// `None` when it does not reach open ground inside [`MAX_PUSH_CHAIN`] cells — the bearing is
+/// plainly full and nobody is stepping aside.
+fn push_column(
     positions: &BTreeMap<RoomId, (i32, i32)>,
-    keep: &BTreeSet<(RoomId, RoomId)>,
     want: (i32, i32),
     offset: (i32, i32),
-) -> Option<BTreeMap<RoomId, (i32, i32)>> {
+) -> Option<BTreeSet<RoomId>> {
     let mut cell = want;
-    let mut moving: BTreeSet<RoomId> = BTreeSet::new();
-    let mut reached_open_ground = false;
+    let mut column: BTreeSet<RoomId> = BTreeSet::new();
     for _ in 0..MAX_PUSH_CHAIN {
         let here: Vec<RoomId> =
             positions.iter().filter(|(_, &p)| p == cell).map(|(&r, _)| r).collect();
         if here.is_empty() {
-            reached_open_ground = true;
-            break;
+            return Some(column);
         }
-        moving.extend(here);
+        column.extend(here);
         cell = (cell.0 + offset.0, cell.1 + offset.1);
     }
-    if !reached_open_ground {
-        return None;
-    }
+    None
+}
 
-    // Dependants join, then whatever they would run into joins, then THEIR dependants — repeat
-    // both until neither adds anybody.
+/// The whole party `column` ends up dragging: its dependants ([`extend_with_dependants`]),
+/// whatever THOSE would displace, and their dependants in turn — repeated until neither pass adds
+/// anybody (SQ-1363).
+///
+/// `None` when the party outgrows [`MAX_PUSH_SET`] rooms, at which point the push is shunting a
+/// neighbourhood rather than asking a room to step aside.
+fn settle_party(
+    graph: &MapGraph,
+    positions: &BTreeMap<RoomId, (i32, i32)>,
+    column: &BTreeSet<RoomId>,
+    offset: (i32, i32),
+) -> Option<BTreeSet<RoomId>> {
+    let mut moving = column.clone();
     loop {
         if moving.len() > MAX_PUSH_SET {
             return None;
@@ -239,10 +240,25 @@ fn push_chain(
             .collect();
         moving.extend(displaced);
         if moving.len() == before {
-            break;
+            return Some(moving);
         }
     }
+}
 
+/// Move `moving` one cell along `offset` as a rigid body, if the result is legal.
+///
+/// `Some` with the pushed positions when every cardinal-reciprocal pair in `keep` (the map's set
+/// BEFORE the push) is still adjacent after, so a partner either travelled with the party or was
+/// never adjacent to begin with; `None` when a partner would be left behind, or when the party
+/// lands back on `want` — the very cell the newcomer is being seated in.
+fn apply_push(
+    graph: &MapGraph,
+    positions: &BTreeMap<RoomId, (i32, i32)>,
+    keep: &BTreeSet<(RoomId, RoomId)>,
+    moving: &BTreeSet<RoomId>,
+    want: (i32, i32),
+    offset: (i32, i32),
+) -> Option<BTreeMap<RoomId, (i32, i32)>> {
     let mut trial = positions.clone();
     for (r, p) in trial.iter_mut() {
         if moving.contains(r) {
@@ -253,6 +269,45 @@ fn push_chain(
         return None; // the party filled the very cell the newcomer is being seated in
     }
     keep.is_subset(&adjacent_reciprocals(graph, &trial)).then_some(trial)
+}
+
+/// Push whatever stands on `want` — whatever THAT would displace, and whatever hangs off any of
+/// them — one cell further along `offset`, as a rigid chain (SQ-1358, SQ-1363, SQ-1367).
+///
+/// [`push_column`] walks the bearing to open ground, [`settle_party`] grows that column into the
+/// party which must travel with it, and [`apply_push`] moves the party and judges the result. The
+/// whole party moves by `offset` together, so each moved room keeps its exact offset from every
+/// other moved room.
+///
+/// **The dependants are how a push TRAVELS, never a reason not to push** (SQ-1367). A party that
+/// is oversized or vetoed falls back to the bare COLUMN — exactly the push SQ-1358 shipped —
+/// rather than abandoning the seating, because the alternative to pushing is not "nothing moves":
+/// it is the newcomer seated somewhere else entirely, its line looping around a room the passage
+/// never touches. Zork I's Maze is the specimen. One room, `Maze #169`, stood on the cell the
+/// `Clearing` ghost's `Down` wanted, and asking it to step one cell up was legal and correct — but
+/// a maze's passages point every which way, so the transitive dependant closure swallowed nine
+/// more rooms, blew [`MAX_PUSH_SET`] and refused the push outright. The ghost fell to the
+/// perpendicular side, and the two adjacent boxes that portal joins were drawn with four turns of
+/// line between them. Both attempts face the same veto, so the fallback can no more pull an
+/// adjacent reciprocal pair apart than the widened party could.
+///
+/// `None` when neither party is legal, or when the column never reaches open ground.
+///
+/// The anchor stands one cell BACK from `want`, against the bearing — but a DISTORTED passage may
+/// claim a bearing its cells do not bear out, so the anchor can be swept into the party by a rule
+/// that reads directions rather than positions. [`apply_push`]'s check that `want` ends up free
+/// says so rather than assuming it.
+fn push_chain(
+    graph: &MapGraph,
+    positions: &BTreeMap<RoomId, (i32, i32)>,
+    keep: &BTreeSet<(RoomId, RoomId)>,
+    want: (i32, i32),
+    offset: (i32, i32),
+) -> Option<BTreeMap<RoomId, (i32, i32)>> {
+    let column = push_column(positions, want, offset)?;
+    settle_party(graph, positions, &column, offset)
+        .and_then(|party| apply_push(graph, positions, keep, &party, want, offset))
+        .or_else(|| apply_push(graph, positions, keep, &column, want, offset))
 }
 
 /// Where a late-arriving room seats itself relative to `anchor`, and what the map had to do to
@@ -725,6 +780,68 @@ mod tests {
         for (id, cell) in HOUSE_AT_REST {
             assert_eq!(pos[&id], cell, "room {id} did not move");
         }
+    }
+
+    // ── SQ-1367: an oversized party falls back to the bare column ──────────────
+
+    /// Zork I's Maze, reduced to its shape: `Grating Room` holds the doorstep the `Clearing`
+    /// ghost's `Down` wants, one `Maze` room stands on it, and `deps` more hang NORTH off that
+    /// blocker down a chain of one-way maze passages — the bearing's own side, so every one of
+    /// them is a dependant. None of them is a cell apart from its neighbour, so nothing in the
+    /// tangle is an adjacent reciprocal pair and the blocker is free to step aside alone.
+    ///
+    /// The `Clearing`/`Forest` pair straddles the cut at `y = -1`, exactly as it does in
+    /// [`house`], so the whole-side slide is vetoed and the push is the only way through.
+    fn maze(deps: usize) -> (MapGraph, BTreeMap<RoomId, (i32, i32)>) {
+        let mut rooms: Vec<(RoomId, &str)> =
+            vec![(1, "Grating Room"), (2, "Maze"), (6, "Clearing"), (7, "Forest")];
+        let mut edges = vec![(6, Direction::S, 7), (7, Direction::N, 6)];
+        let mut pos: BTreeMap<RoomId, (i32, i32)> =
+            [(1, (0, 0)), (2, (0, -1)), (6, (5, -1)), (7, (5, 0))].into_iter().collect();
+        let mut prev = 2;
+        for k in 0..deps {
+            let id = 10 + k as RoomId;
+            rooms.push((id, "Maze"));
+            edges.push((prev, Direction::N, id));
+            pos.insert(id, (3 + k as i32 * 2, -3));
+            prev = id;
+        }
+        (g_with(&rooms, &edges), pos)
+    }
+
+    /// The reported case (SQ-1367): the dependant closure swallows the maze, blows
+    /// [`MAX_PUSH_SET`] — and the push happens anyway, with the blocker alone. Before this the
+    /// whole push was refused and the ghost was seated on the perpendicular side, so the portal
+    /// drew four turns between two adjacent boxes.
+    #[test]
+    fn an_oversized_dependant_party_falls_back_to_the_bare_column() {
+        let (g, mut pos) = maze(MAX_PUSH_SET + 1);
+        let seat = seat_adjacent(&g, &mut pos, 1, (0, -1)).unwrap();
+        assert_eq!(seat.cell, (0, -1), "the ghost keeps the cell its bearing points at");
+        assert_ne!(seat.cell, (1, 0), "never beside the anchor while the straight cell is free");
+        assert!(seat.moved_map);
+        assert_eq!(pos[&2], (0, -2), "the blocker alone stepped aside");
+        assert_eq!(pos[&1], (0, 0), "the anchor never moves");
+        assert_eq!((pos[&6], pos[&7]), ((5, -1), (5, 0)), "and the pair that vetoed the slide");
+        for k in 0..MAX_PUSH_SET + 1 {
+            let id = 10 + k as RoomId;
+            assert_eq!(pos[&id], (3 + k as i32 * 2, -3), "dependant {id} stayed where it was");
+        }
+    }
+
+    /// …and a party that FITS still travels whole, so SQ-1363's rule is untouched wherever it can
+    /// be honoured: the same shape with two dependants moves all three rooms together.
+    #[test]
+    fn a_party_within_the_cap_still_takes_its_dependants() {
+        let (g, mut pos) = maze(2);
+        let seat = seat_adjacent(&g, &mut pos, 1, (0, -1)).unwrap();
+        assert_eq!(seat.cell, (0, -1));
+        assert!(seat.moved_map);
+        assert_eq!(
+            (pos[&2], pos[&10], pos[&11]),
+            ((0, -2), (3, -4), (5, -4)),
+            "the blocker and both dependants moved one row, keeping their own offsets"
+        );
     }
 
     /// The case the pass exists for: a portal-only room hanging off a hub in the middle of a
