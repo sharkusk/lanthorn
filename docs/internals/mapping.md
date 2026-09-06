@@ -391,7 +391,10 @@ and it understands the awkward cases:
 
 Where two unrelated connectors still have to cross, the map says so rather than drawing a
 junction: the vertical run passes through unbroken and the horizontal one breaks for a single
-cell, so a crossing never reads as a place the two passages meet.
+cell, so a crossing never reads as a place the two passages meet. A half-diagonal slope crossing
+another connector follows the same rule: it is simply not drawn at that one cell, leaving a
+one-cell gap, and the other connector keeps its own ordinary glyph — never a manufactured junction
+of the two (SQ-1331).
 
 **A crossing is fine; running alongside is not.** Two passages that meet at a point and part
 again are both still followable — that is what the break above is for. Two that share a stretch
@@ -425,11 +428,19 @@ rather than to where it is routed.
 With the half-diagonal glyphs on, those two crossings ARE drawn as true slopes — those rooms are
 diagonally adjacent — and they cost two cells apiece rather than a point, because a half-diagonal
 step is two glyphs tall. At each of those cells the two lines want complementary halves of one
-crossing, Unicode has the glyph that draws both (U+1FBA6 🮦 and U+1FBA7 🮧, the same Legacy
-Computing block the halves come from), and the renderer has no combined form to reach for — so one
-slope overwrites the other and the passage underneath shows a two-cell break where they cross. It
-is a crossing drawn imperfectly rather than a passage lost, it long predates the rule above about
-which passages are drawn as slopes at all, and it is the only such cell on either reference map.
+crossing, and Unicode has the glyph that draws both (U+1FBA6 🮦 and U+1FBA7 🮧, the same Legacy
+Computing block the halves come from) — but the renderer reaches for neither. Instead it extends
+the crossing convention above to slopes (SQ-1331): the slope plotted FIRST (in the router's own
+plan order) keeps every cell it wants, and the other slope simply yields a one-cell gap there
+rather than drawing over it — the same "one line passes through, the other breaks" reading a
+compass crossing gets, not a merged glyph and not an overwrite. It is a crossing drawn as a gap
+rather than a passage lost, and it is the only such shape on either reference map.
+
+The same extension covers a slope crossing ordinary compass line-art, which the park corner does
+not exercise but Zork I does: `West of House↔Stone Barrow`'s slope crosses the
+`Strange Passage↔Living Room` conditional connector routed under West of House. Compass line-art
+always wins there — the orthogonal run keeps its ordinary glyph, unbroken, and the slope leaves its
+gap — since only a SLOPE can be one cell short without losing its readability as one.
 
 **A room's compass anchor belongs to the room first.** Each side of a box has one
 mid-side cell — the cell a real exit, a `?` random-exit mark or a probed way back in

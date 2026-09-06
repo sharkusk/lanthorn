@@ -219,6 +219,12 @@ Absolute URLs or no link.
   some stories compile in with no name and no way anywhere (an object that
   declares nothing but an exit back to itself) no longer shows up on the
   generated map at all.
+- **A diagonal passage crossing another line no longer garbles either one.**
+  With the diagonal map style on, Zork I's slope from West of House down to
+  the Stone Barrow used to sprout a stray dash where it crossed the secret
+  passage running under the house. It now leaves the same clean one-cell gap
+  any other crossing on the map does, and the passage underneath keeps its own
+  line unbroken — the two read as a crossing, not a tangle.
 
 ---
 
