@@ -999,6 +999,58 @@ fn render_svg_body(
                 );
             }
         }
+
+        // SQ-1368: a same-pair passage the router folded onto this shared line — instead of
+        // drawing its own — still keeps a marker of its own
+        // (`RoutedConnector::secondary_exit`/`secondary_entry`), one per collapsed direction, at
+        // the end THAT direction's own travel arrives at (SQ-1346's rule, the same one every
+        // other marker in this file follows): a direction recorded in `secondary_exit` travels
+        // origin→dest and so arrives at `pts`'s own END; `secondary_entry` travels dest→origin
+        // and arrives at `pts`'s own START. It carries no arrowhead of its own — one line, one
+        // head per travel — so only the letter/tag says which way it goes, rooted beside
+        // whatever already marks that end rather than on top of it. A merge stub's `pts` END is
+        // a trunk junction, not a room edge, so it has nowhere valid to arrive and is skipped.
+        //
+        // A collapsed Up/Down/In/Out direction is ALSO still a stub in `rm.edges` (the graph
+        // never learns its own passage got folded onto another room's line) — `room` here is the
+        // direction's own true graph-origin (`conn.origin` for `secondary_exit`, `conn.dest` for
+        // `secondary_entry`), fed into `portal_ends` exactly as `draw_travel_arrival` feeds its
+        // own badges, so the stub pass below recognises this one as already drawn and skips it
+        // rather than stamping a second badge for the same passage.
+        if !conn.merge {
+            for (dirs, pos, u, room) in [
+                (&conn.secondary_exit, pts[pts.len() - 1], outward(conn.entry), conn.origin),
+                (&conn.secondary_entry, pts[0], outward(conn.exit), conn.dest),
+            ] {
+                for &dir in dirs {
+                    if matches!(dir, Direction::Up | Direction::Down | Direction::In | Direction::Out) {
+                        let root = (pos.0 + u.0 * PORTAL_BADGE_GAP, pos.1 + u.1 * PORTAL_BADGE_GAP);
+                        let at = settle_badge(&mut placer, root, (-u.1, u.0));
+                        let letter = direction::short_label(dir).to_uppercase();
+                        over.push_str(&badge(at, &letter));
+                        portal_ends.insert((room, dir));
+                        ext.add(at.0 - 8.0, at.1 - 8.0);
+                        ext.add(at.0 + 8.0, at.1 + 8.0);
+                    } else {
+                        let tag = direction::short_label(dir).to_uppercase();
+                        let root = (pos.0 + u.0 * 11.0, pos.1 + u.1 * 11.0);
+                        if let Some(spot) = placer.place(tag.chars().count(), &spots_around(root, u, 5.0)) {
+                            let _ = write!(
+                                over,
+                                "<text class=\"tag\"{} x=\"{}\" y=\"{}\">{}</text>",
+                                spot.anchor.attr(),
+                                f(spot.x),
+                                f(spot.y),
+                                tag
+                            );
+                            let r = spot.rect(tag.chars().count());
+                            ext.add(r.0, r.1);
+                            ext.add(r.0 + r.2, r.1 + r.3);
+                        }
+                    }
+                }
+            }
+        }
     }
 
     // ── Portal / cross-layer badges ──────────────────────────────────────────────────────
@@ -1351,6 +1403,19 @@ fn legend_rows() -> Vec<(String, &'static str)> {
                 badge((37.0, 0.0), "U")
             ),
             "stairs, ladders, in/out — the arrow points where it leads, the letter is the way you travel",
+        ),
+        (
+            // SQ-1368: the router folds an extra passage between the SAME two rooms onto the
+            // winning connector's own line rather than drawing a second one
+            // (`RoutedConnector::secondary_exit`/`secondary_entry`) — the line still carries only
+            // one head per travel, and the folded direction gets a tag of its own where it
+            // arrives instead of vanishing.
+            format!(
+                "{}{}<text class=\"tag\" x=\"37\" y=\"-4\">E</text>",
+                line("edge shared"),
+                arrowhead((54.0, 0.0), (1.0, 0.0), "arrow")
+            ),
+            "two passages on one line — the extra direction is tagged where it arrives",
         ),
         (
             format!(
@@ -3000,6 +3065,55 @@ mod tests {
 
         assert!(label_collisions(&svg).is_empty());
         assert!(ghost_box_overlaps(&svg).is_empty());
+        assert!(connector_room_crossings(&svg).is_empty());
+    }
+
+    // ── SQ-1368: a passage folded onto a shared line keeps its own marker ───────────────
+
+    /// A→B carries a compass `E` AND a portal `Down`, both leaving A for B — the same shape as
+    /// the field report's Canyon View→Down→Rocky Ledge plus Canyon View→E→Rocky Ledge. This is
+    /// `collapse_stacked_exits` territory (SQ-1276), NOT `RoutedConnector::secondary_exit`: a
+    /// portal never has a bearing to prefer over a compass one, so `Down` is suppressed at the
+    /// SOURCE — before the router ever sees it — as room A's `stacked_exits`, and this file
+    /// still draws nothing for it (a pre-existing gap this quest does not claim to close).
+    ///
+    /// `E` wins and is routed as an ordinary one-way. What SQ-1368 actually fixes shows up one
+    /// level later: B ALSO has its own `Up` back to A, and since `Up` can only pair with a
+    /// `Down` (never a compass word), the router cannot join it to `E` as a reciprocal — so `Up`
+    /// becomes `RoutedConnector::secondary_entry` on E's own connector, arriving back at A
+    /// (SQ-1346's rule) instead of drawing its own line. Before this fix that arrival vanished
+    /// entirely; now it gets the same lettered badge a plain portal arrival would.
+    #[test]
+    fn a_passage_folded_onto_a_shared_line_keeps_its_marker() {
+        use mapper::graph::MapGraph;
+        let mut g = MapGraph::new();
+        g.upsert_room(1, "A".into());
+        g.upsert_room(2, "B".into());
+        g.set_pos(1, (0, 0));
+        g.set_pos(2, (1, 0)); // east of A, matching E's own bearing — keeps the line undistorted
+        g.add_edge(1, Direction::Down, 2);
+        g.add_edge(1, Direction::E, 2);
+        g.add_edge(2, Direction::Up, 1);
+
+        let svg = render_svg_of(&render(&g), Some(&g));
+        let rooms = room_rects(&svg);
+        assert_eq!(rooms.len(), 2, "the case must draw exactly the two rooms");
+        let a = rooms[0];
+
+        let tips = arrow_tips(&svg);
+        assert_eq!(tips.len(), 1, "E is routed as one ordinary one-way head, into B");
+
+        let badges = badges_of(&svg);
+        assert_eq!(badges.len(), 1, "Up, folded onto E's line, still gets its own badge");
+        let (letter, badge_pos) = &badges[0];
+        assert_eq!(letter, "U", "the folded direction is Up");
+        assert!(
+            near_rect_edge(*badge_pos, a, 20.0),
+            "Up travels B→A and so arrives at A: badge={badge_pos:?} vs a={a:?}"
+        );
+
+        // The badge must not sit on top of A's own box or overlap the room label.
+        assert!(label_collisions(&svg).is_empty());
         assert!(connector_room_crossings(&svg).is_empty());
     }
 }
