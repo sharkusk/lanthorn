@@ -37,6 +37,11 @@ Absolute URLs or no link.
   Zork I's house grows a row and both cellar stairs sit under it, rather than
   one of them being parked past the neighbour with its line looping around.
 
+- **And a room asked to step aside now takes its own neighbours with it.** The
+  rooms that hang off it on the side it is moving towards travel along, so a
+  clearing that lies south of a house stays south of it after the house shuffles
+  down, instead of ending up level with it.
+
 - **A generated map now opens where the game does.** `lanthorn-mapgen` boots the
   story for a moment before reading it, purely to find out which room you start
   in — so the main layer of the map is the part of the world the game begins in,
