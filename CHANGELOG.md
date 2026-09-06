@@ -6,7 +6,7 @@ All notable changes to lanthorn are recorded here.
 [`.github/workflows/release.yml`](.github/workflows/release.yml)). A tag whose
 name contains a hyphen — `v0.1.0-beta.1`, `v0.2.0-rc.1` — is published as a
 **pre-release**; a bare `vMAJOR.MINOR.PATCH` is a full release. The workspace
-version in `Cargo.toml` (currently `0.4.4`) versions every crate and every
+version in `Cargo.toml` (currently `0.5.0`) versions every crate and every
 binary's `--version` at once, and carries any pre-release suffix so a build
 identifies itself without reading its git hash.
 
@@ -19,13 +19,30 @@ Absolute URLs or no link.
 
 ---
 
-## Unreleased
+## v0.5.0 — 2026-09-05
 
-> *This section is drained when a version is cut. README.md describes the
-> RELEASED build; prose for a feature that is in `main` but not yet released
-> goes into the README in place, at its normal destination, marked with the
-> visible tag `*Next release:*`. `release.yml` refuses to cut a release
-> while any such tag, or this Unreleased section, still exists.*
+### Highlights
+
+- **Play in a browser without fear of the connection.** Close the tab, lose the
+  Wi-Fi, let the tablet sleep: coming back to the same address puts you in the
+  same room mid-sentence, sound and all, for up to six hours. On a touchscreen
+  the map pans with a finger, the pane splitters drag, a tap takes the word
+  completion, and the grab zones are sized for fingers.
+- **The map's passages finally behave.** Lines never run on top of each other,
+  a passage arrives at its room in a straight line, nothing takes a turn it
+  was not forced to, and a diagonal is drawn as a slope only where the rooms
+  really sit corner to corner. One router draws the terminal map and the SVG.
+- **The exported SVG is a map you can read.** Every passage in its own lane
+  with arrows that say which way it goes, doors and gated exits marked, every
+  exit to another layer named at both ends, and a legend. `/export-svg` now
+  writes every layer, and the new `/export-json` writes the map you walked in
+  the same format `lanthorn-mapgen` uses.
+- **`lanthorn-mapgen` grows up.** Mazes and portal-only regions split onto
+  their own layers, dead ends stay with their maze, and a passage the story
+  computes in code is drawn when the way back gives it away. Two field reports
+  fixed along the way: Counterfeit Monkey's yacht no longer erases its own
+  passages as you sail it, and Anchorhead no longer puts you through a door it
+  refused.
 
 ### Added
 
