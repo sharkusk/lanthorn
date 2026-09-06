@@ -121,6 +121,18 @@ fn ascii_map(graph: &MapGraph, layer: mapper::layer::LayerId, symbols: &SymbolSe
 
 /// Produce the full map dump string for `graph`, drawn with the player's `symbols`.
 pub fn render_dump(graph: &MapGraph, symbols: &SymbolSet) -> String {
+    render_dump_with_header(graph, symbols, &[])
+}
+
+/// [`render_dump`], with `extra` lines added to the `#` header block after the
+/// room/edge/current line.
+///
+/// One caller: `lanthorn-mapgen`, which has a fact about the map that the graph
+/// itself has nowhere to put — where the story STARTS the player, and whether
+/// it could be learned at all (SQ-1359, `app::mapgen::StartProbe`). Each line
+/// is written verbatim behind a `# `, so a caller passes a sentence and not a
+/// format.
+pub fn render_dump_with_header(graph: &MapGraph, symbols: &SymbolSet, extra: &[String]) -> String {
     let mut rooms: Vec<&mapper::graph::Room> = graph.rooms().collect();
     rooms.sort_by_key(|r| r.id);
     let conns = graph.connections();
@@ -130,11 +142,15 @@ pub fn render_dump(graph: &MapGraph, symbols: &SymbolSet) -> String {
     let current =
         graph.current().map(|id| crate::roomid::room_label_no(graph, id)).unwrap_or_else(|| "none".into());
     out.push_str(&format!(
-        "# rooms: {}, edges: {}, current: {}\n#\n",
+        "# rooms: {}, edges: {}, current: {}\n",
         rooms.len(),
         conns.len(),
         current
     ));
+    for line in extra {
+        out.push_str(&format!("# {line}\n"));
+    }
+    out.push_str("#\n");
 
     if rooms.is_empty() {
         out.push_str("# (empty map)\n");

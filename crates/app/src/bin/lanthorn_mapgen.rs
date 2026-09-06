@@ -36,8 +36,10 @@ Understands the same files lanthorn does: bare story files (.z3-.z8, .ulx, .dat)
 (.zblorb, .gblorb, .blb), zips, and release disk images.\n\n\
 LAYERS. A maze room, and a portal-only region big enough to be a floor plan, are split onto \
 their own layer — the same split the interpreter offers a player as a prompt, applied as if \
-every prompt were accepted. --no-auto-layers turns this off for one flat map; --layer-min sets \
-how big a portal-only region has to be first (mazes have no floor).\n\n\
+every prompt were accepted. The layer holding the room the story STARTS in is the main one, \
+which is why mapgen boots the story for a moment before reading it; --no-boot skips that and \
+keeps the largest region instead. --no-auto-layers turns layers off for one flat map; \
+--layer-min sets how big a portal-only region has to be first (mazes have no floor).\n\n\
 LIMITS. This is the map as compiled, so a passage a story builds or removes while it runs is \
 not in it, and neither is one whose destination a routine decides. Conditional exits and doors \
 ARE included, and are marked as such. Some stories declare no map anywhere in the file; \
@@ -85,6 +87,17 @@ struct Cli {
     #[arg(long)]
     no_auto_layers: bool,
 
+    /// Do not boot the story to learn which room it starts the player in.
+    ///
+    /// Mapgen otherwise runs the story headlessly for a moment — no more than
+    /// a couple of dozen keypresses and two `look`s — purely to read the
+    /// starting room, which is then the room the map highlights and the room
+    /// whose layer is called `Main`. Without it the largest region is `Main`
+    /// instead, which is what mapgen did before SQ-1359. Nothing else about
+    /// the map depends on it, and the map is still read statically either way.
+    #[arg(long)]
+    no_boot: bool,
+
     /// The smallest portal-only region worth its own layer. Defaults to the
     /// same floor the live app's layer suggestions use
     /// (`mapper::suggest::STRUCTURAL_FLOOR`) so a static map and a played one
@@ -96,7 +109,11 @@ struct Cli {
 fn main() -> ExitCode {
     let cli = Cli::parse();
 
-    let mut opts = MapgenOptions { auto_layers: !cli.no_auto_layers, ..MapgenOptions::default() };
+    let mut opts = MapgenOptions {
+        auto_layers: !cli.no_auto_layers,
+        boot_for_start: !cli.no_boot,
+        ..MapgenOptions::default()
+    };
     if let Some(n) = cli.layer_min {
         opts.layer_min = n;
     }
@@ -147,6 +164,7 @@ fn main() -> ExitCode {
     if let (Some(r), Some(s)) = (map.story.release, map.story.serial.as_deref()) {
         println!("  release       {r} / serial {s}");
     }
+    println!("  {}", map.start.header_line());
     println!("  rooms         {}", map.graph.rooms().count());
     println!("  named rooms   {}", map.named_rooms());
     println!("  exits         {}", map.facts.len());

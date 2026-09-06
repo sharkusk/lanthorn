@@ -1149,9 +1149,56 @@ Naming any of `--dump`, `--svg`, `--dot`, `--json` writes only the ones named;
 naming none writes all four. `--no-layout` skips
 `mapper::layout::relayout_auto`, leaving pure topology with no room positions —
 much faster on a large map, and the right choice for a consumer doing its own
-layout. Exit status is `0` for a map written, `1` for an I/O failure, and **`2`
+layout. `--no-boot` skips the one-moment headless boot that learns the starting
+room (below), leaving the largest region as `Main` and the map with no current
+room. Exit status is `0` for a map written, `1` for an I/O failure, and **`2`
 for a story that declares no map anywhere in the file**, which is a distinct
 code so that a script sweeping a shelf can skip rather than stop.
+
+### The one thing mapgen plays: where the story starts (SQ-1359)
+
+Before it reads anything, mapgen **boots the story headlessly for a moment**
+and asks where the player is standing — `app::mapgen::probe_start_room`,
+through the very same session the interpreter plays it with
+(`GameSession`, `GlulxSession`, `ScottSession`). Nothing is rendered and
+nothing is saved; the session is dropped the instant it has answered, and the
+map itself is still read statically. Two things come out of that one question:
+
+- **the layer holding the start room is `Main`** (the split's pass 2, below), and
+- **the start room is the map's `current` room**, so the SVG's yellow "you are
+  here" box and the dump's `current:` line point at where the game begins
+  rather than at nothing.
+
+Each engine answers differently, and one of them sometimes cannot:
+
+| engine | how the room is learned | when it fails |
+|---|---|---|
+| Z-machine | the player's containing object, resolved during boot — Zork I answers `West of House` with no turn played | a story that never reaches a prompt |
+| Glulx | the room HEADING the story prints, via the room lock; a `look` is spent if boot printed none (SQ-1293) | a prologue that names no room, e.g. Counterfeit Monkey's |
+| Scott Adams | the VM's own current room, true from the first instruction | — |
+
+An opening KEYPRESS gate is cleared with SPACE (Curses' `[Please press SPACE to
+begin.]`), the same idiom `declared_exit.rs` and `vocabulary_vetting.rs` use and
+for the same reason — a line routed to a `read_char` arrives as its first
+character, which Curses reads as `l` and ignores. Both spends are **hard-capped**
+(24 keypresses, two `look`s) so a menu-driven title cannot hang a tool whose job
+is to read a file and stop.
+
+The answer is then matched against the static graph by ID first — every engine's
+`LocationInfo::number` is already the id space its reader keys rooms by (a
+Z-machine object number, `roomid::glulx_room_id` of the address, a Scott room
+index) — and, failing that, by an unambiguous room NAME, which is the case a
+Glulx session whose room lock never resolved lands in. No match, or no boot at
+all (`--no-boot`), and the map says so: the dump header and the summary both
+carry one of
+
+```
+# start room: West of House (#68)
+# start room: unknown (largest component kept as Main)
+# start room: not probed (--no-boot; largest component kept as Main)
+```
+
+and the JSON's `start_room` is `null` for the latter two.
 
 ### Layers: mazes and portal-only regions split themselves out (SQ-1308)
 
@@ -1198,13 +1245,16 @@ passes, in order:
    corridor of them, each one compass step from the last).
 2. **Portal-only regions.** What's left of Main is partitioned into
    compass-connected components (`planar_region`, one per unvisited room).
-   Mapgen has no start room to anchor a "primary" layer on the way the live
-   map anchors on wherever the player began, so the **largest** component is
-   kept as Main instead; every other component at or above `--layer-min`
-   becomes its own layer, named after the room its entering portal leads
-   into — the same anchor a peel names a fresh layer after
-   (`MoveTarget::New`'s doc comment). A component under the floor is set
-   aside for pass 3 rather than moved.
+   The component holding the **start room** is kept as Main (SQ-1359, above) —
+   the same anchor the live map uses, which is wherever play began; every
+   other component at or above `--layer-min` becomes its own layer, **the
+   largest one included when it is not the start's**, named after the room its
+   entering portal leads into — the same anchor a peel names a fresh layer
+   after (`MoveTarget::New`'s doc comment). A component under the floor is set
+   aside for pass 3 rather than moved. With no start room to be had
+   (`--no-boot`, or a story that would not say), the largest component is kept
+   instead, which is what mapgen did before SQ-1359 and is the only answer
+   available when nothing says where play begins.
 3. **Below-floor leftovers adopt a neighbour's layer (SQ-1310).** A component
    too small for its own layer does not simply default to Main — the live
    app never has this problem, because a room is discovered on whichever
@@ -1233,17 +1283,22 @@ its own. A maze has no floor: any size gets its own layer once its name says
 so. `--no-auto-layers` skips all three passes, reproducing the flat,
 single-layer map mapgen wrote before SQ-1308.
 
-Zork I r52/s871125 splits into six layers at the default floor: `Main` (54
-rooms — the underground core, once the maze that used to bridge it to the
-surface is gone), `Maze` (20, flagged — the ten rooms actually named "Maze"
-plus four "Dead End"s and the Grating Room, all absorbed by pass 1b because
-every compass edge each one has leads back into the maze), `Rocky Ledge` (21
-— the surface world, named for the room its portal from underground opens
-onto, plus the Attic and Up a Tree adopted onto it by pass 3; the Grating
-Room moved to the maze in pass 1b, before pass 3 ever saw it), `Coal Mine`
-(6, plus Ladder Top adopted from pass 3), `Ladder Bottom` (5, including its
-OWN "Dead End" at the bottom of the mine shaft — no compass edge to the maze,
-so pass 1b leaves it alone) and `Torch Room` (4).
+Zork I r52/s871125 splits into six layers at the default floor: `Main` (21
+rooms — the surface world, because West of House is where the game starts,
+plus the Attic and Up a Tree adopted onto it by pass 3; the Grating Room moved
+to the maze in pass 1b, before pass 3 ever saw it), `Maze` (20, flagged — the
+ten rooms actually named "Maze" plus four "Dead End"s and the Grating Room, all
+absorbed by pass 1b because every compass edge each one has leads back into the
+maze), `Cellar` (54 — the underground core, once the maze that used to bridge
+it to the surface is gone, named for the room its entering portal leads into),
+`Coal Mine` (6, plus Ladder Top adopted from pass 3), `Ladder Bottom` (5,
+including its OWN "Dead End" at the bottom of the mine shaft — no compass edge
+to the maze, so pass 1b leaves it alone) and `Torch Room` (4).
+
+This story is exactly why the rule changed. Its underground is more than twice
+the size of its surface, so "largest wins" put West of House, the white house,
+the forest and everything a player sees in the first ten minutes on a layer
+called `Rocky Ledge`, and called the Cellar and its neighbours `Main`.
 
 ### What each source covers, and what it does not
 
@@ -1331,8 +1386,15 @@ addition, and only a change a version-1 reader could not survive bumps
 - **Top level** — `format` (always `"lanthorn-map"`), `version` (`1`),
   `generator` `{name, version}` (the binary and its full build string —
   `"lanthorn-mapgen"` for a static map, `"lanthorn"` for the interactive
-  app's own `/export-json`, SQ-1336), `story`, `directions`, `rooms`, `edges`,
-  `layers`.
+  app's own `/export-json`, SQ-1336), `story`, `start_room`, `directions`,
+  `rooms`, `edges`, `layers`.
+- **`start_room`** — the room the story starts the player in, spelled exactly as
+  `rooms[].id` spells it (`"#68"`), or `null` when nothing could say (SQ-1359).
+  It is the room the map's `Main` layer was chosen around, and the one a drawing
+  highlights. Always `null` for a walked `/export-json` map, whose current room
+  is wherever the player is standing NOW — a different fact, and not this one.
+  Added without a `version` bump, which is what the "ignore what you do not
+  recognise" rule above is for.
 - **`story`** — `file` (base name only; a reference map is read on other
   machines and an absolute path is noise), `engine` (`z-machine` / `glulx` /
   `scott`), `source` (`i7-world` / `i6-library` / `zil` / `scott` for a static
@@ -1425,6 +1487,7 @@ A worked example, trimmed to one room and one edge:
     "checksum": "0x4b37",
     "generated_at": "2026-09-05T02:52:34Z"
   },
+  "start_room": "#68",
   "directions": [
     { "word": "north", "short": "n", "bearing": 0 },
     { "word": "up",    "short": "u", "bearing": null }

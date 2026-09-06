@@ -143,6 +143,10 @@ pub fn render_walked_json(graph: &MapGraph, story: &WalkedStory) -> String {
         source: "walked",
         facts: &facts,
         engine_refs: &engine_refs,
+        // A walked map has no start room to declare: `graph.current()` here is
+        // where the player is standing NOW, which is a different fact from the
+        // one `start_room` names (SQ-1359).
+        start_room: None,
     })
 }
 

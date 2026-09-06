@@ -196,6 +196,63 @@ pub struct StoryIdent {
     pub checksum: Option<String>,
 }
 
+/// The room the story puts the player in at boot, once it has been matched to
+/// a node of the static graph.
+///
+/// The name travels with the id because the id alone is engine-native and
+/// unreadable — a Z-machine object number, a hashed Glulx address, a Scott
+/// room index — and every surface that reports the start room reports it by
+/// name.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct StartRoom {
+    pub id: RoomId,
+    pub name: String,
+}
+
+/// What the headless boot ([`probe_start_room`]) learned about where the story
+/// starts — the three states the dump header and the JSON both report.
+///
+/// The distinction between [`Unknown`](Self::Unknown) and
+/// [`Skipped`](Self::Skipped) is worth keeping: the first says the story was
+/// booted and would not say (a menu-driven v6 title that never reaches a line
+/// prompt, a Glulx prologue whose room lock never resolves), the second says
+/// nobody asked. Both fall back to the largest-component rule, and a reader of
+/// a dump should be able to tell which happened.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum StartProbe {
+    /// The boot named a room and it matched a room of this graph.
+    Found(StartRoom),
+    /// The boot ran and could not name a room this map has.
+    Unknown,
+    /// No boot was run — [`MapgenOptions::boot_for_start`] was false.
+    Skipped,
+}
+
+impl StartProbe {
+    /// The room, when there is one.
+    pub fn room(&self) -> Option<&StartRoom> {
+        match self {
+            StartProbe::Found(r) => Some(r),
+            _ => None,
+        }
+    }
+
+    /// The one line the text dump's header carries and the binary prints — the
+    /// same sentence in both, so a dump and a terminal never disagree about
+    /// what happened.
+    pub fn header_line(&self) -> String {
+        match self {
+            StartProbe::Found(r) => format!("start room: {} (#{})", r.name, r.id),
+            StartProbe::Unknown => {
+                "start room: unknown (largest component kept as Main)".to_string()
+            }
+            StartProbe::Skipped => {
+                "start room: not probed (--no-boot; largest component kept as Main)".to_string()
+            }
+        }
+    }
+}
+
 /// A complete static map: the graph, laid out unless asked not to, plus
 /// everything about it that the graph cannot hold.
 #[derive(Debug)]
@@ -208,6 +265,10 @@ pub struct GeneratedMap {
     /// How long [`mapper::layout::relayout_auto`] took, or `None` when the
     /// caller asked for no layout (in which case no room has a position).
     pub layout_time: Option<Duration>,
+    /// Where the story starts the player, and how confidently (SQ-1359). When
+    /// this is [`StartProbe::Found`], `graph.current()` is that room and the
+    /// layer holding it is `Main`.
+    pub start: StartProbe,
 }
 
 impl GeneratedMap {
@@ -271,11 +332,25 @@ pub struct MapgenOptions {
     ///
     /// [`STRUCTURAL_FLOOR`]: mapper::suggest::STRUCTURAL_FLOOR
     pub layer_min: usize,
+    /// Boot the story headlessly, once, to learn which room it starts the
+    /// player in ([`probe_start_room`]) — the room whose layer is then kept as
+    /// `Main` and which the graph carries as its `current` room.
+    ///
+    /// `false` skips the boot entirely (`--no-boot`), which is what a caller
+    /// wants when the story is a menu-driven title that reaches no prompt, or
+    /// when a purely static read is the point. Nothing else about the map
+    /// changes: the split falls back to the largest component, exactly as it
+    /// did before SQ-1359.
+    pub boot_for_start: bool,
 }
 
 impl Default for MapgenOptions {
     fn default() -> Self {
-        MapgenOptions { auto_layers: true, layer_min: mapper::suggest::STRUCTURAL_FLOOR }
+        MapgenOptions {
+            auto_layers: true,
+            layer_min: mapper::suggest::STRUCTURAL_FLOOR,
+            boot_for_start: true,
+        }
     }
 }
 
@@ -416,14 +491,25 @@ fn absorb_maze_adjacent_rooms(graph: &mut MapGraph) {
 ///    the app's [`mapper::suggest::Trigger::Name`] prompt does
 ///    ([`crate::input::apply_region_prompt`]).
 /// 2. **Portal-only regions.** What is left of Main is partitioned into
-///    compass-connected components. Mapgen has no start room to anchor a
-///    "primary" layer on the way the live map anchors on wherever the player
-///    began, so the LARGEST component is kept as Main instead; every other
-///    component at or above `opts.layer_min` becomes its own layer, named
-///    after the room its entering portal leads into — the same anchor
-///    [`move_region`]'s `New` target names a peel after
-///    ([`mapper::layer::move_region`]'s doc comment on `MoveTarget::New`).
-///    A component under the floor stays on Main untouched.
+///    compass-connected components. **The component holding the graph's
+///    CURRENT room is kept as Main** (SQ-1359) — mapgen sets that to the room
+///    the story boots the player into ([`probe_start_room`]), so a static map
+///    anchors its primary layer on exactly what the live map anchors on:
+///    wherever play begins. Every other component at or above
+///    `opts.layer_min` becomes its own layer — INCLUDING the largest, when the
+///    largest is not the start's — named after the room its entering portal
+///    leads into, the same anchor [`move_region`]'s `New` target names a peel
+///    after ([`mapper::layer::move_region`]'s doc comment on
+///    `MoveTarget::New`). A component under the floor stays on Main untouched.
+///
+///    With no current room — `--no-boot`, a story that reaches no prompt, a
+///    caller driving this function over a graph of its own — the LARGEST
+///    component is kept instead, which is what mapgen did before SQ-1359 and
+///    is still the only answer available when nothing says where play starts.
+///    Zork I r52 is why the rule changed: its underground is bigger than its
+///    surface, so the largest-component rule put West of House and the whole
+///    above-ground world on a layer called "Rocky Ledge" and called the
+///    Cellar and its neighbours "Main".
 ///
 /// `opts.auto_layers = false` skips both passes and returns an empty list —
 /// the pre-SQ-1308 flat map.
@@ -485,14 +571,28 @@ pub fn split_layers(graph: &mut MapGraph, opts: &MapgenOptions) -> Vec<LayerSpli
         components.push(region);
     }
 
-    // The largest component is Main; ties keep whichever was found first
-    // (ascending room id), so the choice is deterministic rather than an
-    // artifact of `BTreeSet` iteration.
-    let main_idx = components
-        .iter()
-        .enumerate()
-        .max_by_key(|&(i, r)| (r.rooms.len(), std::cmp::Reverse(i)))
-        .map(|(i, _)| i);
+    // SQ-1359: the component the player STARTS in is Main. `graph.current()`
+    // is where `generate_with_options` recorded that (and is what the live map
+    // means by the same field), so this needs no extra argument and no second
+    // notion of "primary" — a caller who never set one gets the old rule.
+    //
+    // The start room can legitimately be absent from `components`: pass 1 may
+    // already have carried it onto a maze layer, in which case no component on
+    // Main holds it. Falling through to the largest is right there too.
+    let start_idx = graph
+        .current()
+        .and_then(|id| components.iter().position(|r| r.rooms.contains(&id)));
+
+    // Failing that, the largest component is Main; ties keep whichever was
+    // found first (ascending room id), so the choice is deterministic rather
+    // than an artifact of `BTreeSet` iteration.
+    let main_idx = start_idx.or_else(|| {
+        components
+            .iter()
+            .enumerate()
+            .max_by_key(|&(i, r)| (r.rooms.len(), std::cmp::Reverse(i)))
+            .map(|(i, _)| i)
+    });
 
     let mut below_floor: Vec<Region> = Vec::new();
     for (i, region) in components.into_iter().enumerate() {
@@ -627,6 +727,144 @@ fn name_region_by_entry(graph: &MapGraph, region: mapper::layer::Region) -> mapp
     mapper::layer::Region { anchor: entry, rooms: region.rooms }
 }
 
+// ---------------------------------------------------------------------------
+// Where the story starts (SQ-1359)
+// ---------------------------------------------------------------------------
+
+/// The most keypresses [`probe_start_room`] will spend clearing an opening
+/// gate. A story that wants more than this is one nobody is playing past
+/// either — and the cap is what keeps a menu-driven title from hanging mapgen,
+/// which reads a file and must always terminate.
+const START_PROBE_KEYS: usize = 24;
+
+/// The most LINE commands [`probe_start_room`] will spend. Two, because the
+/// only line it ever types is `look`, and a story that will not name its room
+/// after being asked twice is not going to.
+const START_PROBE_LINES: usize = 2;
+
+/// Boot `loaded` headlessly through the SAME session the app plays it with and
+/// ask where the player is standing (SQ-1359).
+///
+/// This is the one thing in this module that RUNS the story, and it is
+/// deliberately the smallest run that can answer the question: nothing is
+/// rendered, nothing is saved, and the session is dropped the moment it has
+/// answered. The map itself is still read statically — the boot decides only
+/// which layer is called `Main` and which room the drawing highlights.
+///
+/// Three shapes of story, three answers:
+///
+/// - **Z-machine.** [`crate::session::GameSession`] resolves the player's
+///   containing object during boot, so Zork I answers `West of House` with no
+///   turn played at all.
+/// - **Glulx.** There is no object tree to walk: [`crate::glulx_session`]
+///   recovers the room from the heading the story PRINTS, so a story whose
+///   prologue prints none (Counterfeit Monkey — SQ-1293) may answer nothing
+///   until it hands over the command prompt. A `look` is spent to ask, and if
+///   the answer is still nothing, so be it.
+/// - **Scott Adams.** The VM's own current room, which exists from the first
+///   instruction.
+///
+/// An opening KEYPRESS gate is cleared with SPACE, the same idiom (and for the
+/// same reason) as `declared_exit.rs`'s `boot` and `vocabulary_vetting.rs`'s
+/// `Play::gated_z5`: a story waiting on `read_char` never reaches its first
+/// room until a key is actually pressed, and it must be a KEY — a line routed
+/// to a char prompt is delivered as its first character, which Curses reads as
+/// `l` and ignores. Both spends are capped ([`START_PROBE_KEYS`],
+/// [`START_PROBE_LINES`]).
+pub fn probe_start_room(loaded: &LoadedStory) -> Option<crate::engine::LocationInfo> {
+    use crate::engine::Engine;
+
+    let mut engine: Box<dyn Engine> = match loaded {
+        LoadedStory::ZCode(bytes) => Box::new(
+            crate::session::GameSession::new_with_trace(
+                bytes.clone(),
+                true,
+                false,
+                None,
+                false,
+                Vec::new(),
+                None,
+                None,
+                Some((25, 80)),
+            )
+            .ok()?,
+        ),
+        LoadedStory::Glulx(image) => Box::new(
+            crate::glulx_session::GlulxSession::new(
+                image.clone(),
+                80,
+                30,
+                true,
+                false,
+                false,
+                (8, 16),
+                None,
+                &[],
+            )
+            .ok()?,
+        ),
+        LoadedStory::Scott(bytes) => {
+            Box::new(crate::scott_session::ScottSession::new(bytes.clone(), None).ok()?)
+        }
+    };
+
+    let mut keys = 0usize;
+    let mut lines = 0usize;
+    loop {
+        // A room with a name is an answer; a room with an EMPTY name is what a
+        // Glulx session reports before its lock resolves, and is not one.
+        if let Some(loc) = engine.current_location() {
+            if !loc.name.trim().is_empty() {
+                return Some(loc);
+            }
+        }
+        match engine.pending_input() {
+            crate::session::InputKind::Char if keys < START_PROBE_KEYS => {
+                keys += 1;
+                let _ = engine.submit_key(crate::engine::KeyInput::Char(' '));
+            }
+            crate::session::InputKind::Line if lines < START_PROBE_LINES => {
+                lines += 1;
+                let _ = engine.submit("look");
+            }
+            // Out of budget, or waiting for something no probe should answer
+            // (a filename, a quit): whatever the session knows now is the last
+            // word, and it may well be nothing.
+            _ => return engine.current_location(),
+        }
+    }
+}
+
+/// Match what [`probe_start_room`] found against the STATIC graph's own rooms.
+///
+/// Every engine's [`crate::engine::LocationInfo::number`] is already in the
+/// same id space the corresponding reader keys its rooms by — a Z-machine
+/// object number, `crate::roomid::glulx_room_id` of the room's address, a
+/// Scott room index — so the id is tried first and is what answers for all
+/// three in the ordinary case.
+///
+/// The NAME is the fallback, and only when it is unambiguous: a Glulx session
+/// whose room lock never resolved reports a room hashed from the printed
+/// HEADING instead of from an address (`glulx_session::heading_to_room`), which
+/// is a real room under an id the static reader has never heard of. One room
+/// of the map bearing that exact name is the same room; two are not evidence
+/// of anything, and no match at all is the honest answer.
+fn resolve_start(graph: &MapGraph, loc: &crate::engine::LocationInfo) -> Option<StartRoom> {
+    if let Some(r) = graph.room(loc.number) {
+        return Some(StartRoom { id: r.id, name: r.label().to_string() });
+    }
+    let name = loc.name.trim();
+    if name.is_empty() {
+        return None;
+    }
+    let mut hits = graph.rooms().filter(|r| r.label().trim() == name);
+    let first = hits.next()?;
+    if hits.next().is_some() {
+        return None; // ambiguous: two rooms of this map answer to that name
+    }
+    Some(StartRoom { id: first.id, name: first.label().to_string() })
+}
+
 /// Generate the static map for the story at `path`, with mapgen's own defaults
 /// (SQ-1308's layer auto-split, floored at [`mapper::suggest::STRUCTURAL_FLOOR`]).
 ///
@@ -656,6 +894,22 @@ pub fn generate_with_options(
         LoadedStory::ZCode(bytes) => zmachine_map(bytes, file)?,
         LoadedStory::Glulx(bytes) => glulx_map(bytes, file)?,
         LoadedStory::Scott(bytes) => scott_map(bytes, file)?,
+    };
+
+    // SQ-1359: learn where play begins BEFORE the split, because the split
+    // reads it (`split_layers`' pass 2) — and record it as the graph's current
+    // room, which is what puts the drawing's "you are here" highlight on the
+    // starting room rather than on nothing.
+    map.start = if opts.boot_for_start {
+        match probe_start_room(&loaded).as_ref().and_then(|loc| resolve_start(&map.graph, loc)) {
+            Some(start) => {
+                map.graph.set_current(start.id);
+                StartProbe::Found(start)
+            }
+            None => StartProbe::Unknown,
+        }
+    } else {
+        StartProbe::Skipped
     };
 
     split_layers(&mut map.graph, opts);
@@ -850,7 +1104,17 @@ fn assemble(
         });
     }
 
-    GeneratedMap { graph, source, story, facts, engine_refs, layout_time: None }
+    GeneratedMap {
+        graph,
+        source,
+        story,
+        facts,
+        engine_refs,
+        layout_time: None,
+        // Filled in by `generate_with_options`, the only place that boots
+        // anything; a map assembled straight from bytes has asked nobody.
+        start: StartProbe::Skipped,
+    }
 }
 
 /// Write each room's door, conditional and routine exits into its `notes`, so
@@ -1487,7 +1751,17 @@ pub fn write_artefacts(
 
     if what.dump {
         let p = out_dir.join(format!("{stem}.map.txt"));
-        std::fs::write(&p, crate::map_dump::render_dump(&map.graph, &crate::symbols::SymbolSet::default()))?;
+        std::fs::write(
+            &p,
+            crate::map_dump::render_dump_with_header(
+                &map.graph,
+                &crate::symbols::SymbolSet::default(),
+                // SQ-1359: which room the story starts in — the one fact
+                // behind this map's choice of `Main` that the graph itself has
+                // nowhere to record.
+                &[map.start.header_line()],
+            ),
+        )?;
         written.push(p);
     }
     if what.svg {
@@ -1518,7 +1792,8 @@ pub const JSON_FORMAT: &str = "lanthorn-map";
 
 /// The `version` every `.map.json` carries. Bump it only for a change that a
 /// version-1 reader could not survive — adding a field is not one, since the
-/// format asks consumers to ignore what they do not recognise.
+/// format asks consumers to ignore what they do not recognise. SQ-1359's
+/// `start_room` is exactly such an addition and does NOT bump this.
 pub const JSON_VERSION: u32 = 1;
 
 #[derive(serde::Serialize)]
@@ -1527,6 +1802,10 @@ struct JsonMap<'a> {
     version: u32,
     generator: JsonGenerator,
     story: JsonStory<'a>,
+    /// The room the story starts the player in, spelled as `rooms[].id` spells
+    /// it, or `null` when nothing could say (SQ-1359). It is the room the map's
+    /// `Main` layer was chosen around, and the one a drawing highlights.
+    start_room: Option<String>,
     directions: Vec<JsonDirection>,
     rooms: Vec<JsonRoom>,
     edges: Vec<JsonEdge>,
@@ -1667,6 +1946,11 @@ pub struct JsonMapView<'a> {
     pub source: &'static str,
     pub facts: &'a [EdgeFact],
     pub engine_refs: &'a BTreeMap<RoomId, EngineRef>,
+    /// The story's starting room (SQ-1359), for the JSON's `start_room`.
+    /// `None` for the live app's `/export-json`, which exports a map read off
+    /// actual play: its `current` room is wherever the player is standing NOW,
+    /// which is a different fact and must not be written into this field.
+    pub start_room: Option<RoomId>,
 }
 
 /// Render `map` as the versioned, self-describing JSON map.
@@ -1682,6 +1966,7 @@ pub fn render_json(map: &GeneratedMap) -> String {
         source: map.source.as_str(),
         facts: &map.facts,
         engine_refs: &map.engine_refs,
+        start_room: map.start.room().map(|r| r.id),
     })
 }
 
@@ -1785,6 +2070,7 @@ pub fn render_json_view(view: &JsonMapView) -> String {
             checksum: view.story.checksum.as_deref(),
             generated_at: rfc3339_now(),
         },
+        start_room: view.start_room.map(|id| json_room_id(graph, id)),
         directions,
         rooms,
         edges,
@@ -1836,6 +2122,71 @@ mod tests {
             [(10u16, Direction::Up, 5u16), (20u16, Direction::Up, 5u16)].into_iter(),
         );
         assert_eq!(routine_destination(&declared_to, 5, Direction::Down), Some(10));
+    }
+
+    /// SQ-1359, on a synthetic graph so the rule is stated without a story in the way: two
+    /// compass-connected components joined by one portal, the big one five rooms and the small
+    /// one exactly `layer_min`. With NOTHING saying where play begins, the big one is Main —
+    /// the only answer available, and the one mapgen gave before this quest.
+    #[test]
+    fn with_no_start_room_the_largest_component_is_still_main() {
+        let mut g = two_components();
+        let splits = split_layers(&mut g, &MapgenOptions { layer_min: 4, ..Default::default() });
+        assert_eq!(g.layer_of(1), mapper::layer::MAIN_LAYER, "the five-room component is Main");
+        assert_ne!(g.layer_of(10), mapper::layer::MAIN_LAYER, "the four-room component peels off");
+        assert_eq!(splits.len(), 1);
+        assert_eq!(splits[0].name, "Cellar", "a peel is named after the room its portal enters");
+    }
+
+    /// The same graph with the START ROOM in the SMALL component — which is what
+    /// `generate_with_options` records as the graph's `current` before calling this. Now the
+    /// small component is Main and the big one peels off, which is the whole of the fix: Zork I's
+    /// underground is bigger than its surface, and the surface is where the player stands.
+    #[test]
+    fn the_component_holding_the_start_room_is_main_however_small_it_is() {
+        let mut g = two_components();
+        g.set_current(10); // the small component's own entry room
+        let splits = split_layers(&mut g, &MapgenOptions { layer_min: 4, ..Default::default() });
+        assert_eq!(g.layer_of(10), mapper::layer::MAIN_LAYER, "the START's component is Main");
+        assert_ne!(
+            g.layer_of(1),
+            mapper::layer::MAIN_LAYER,
+            "the LARGEST component peels off when it is not the start's"
+        );
+        assert_eq!(splits.len(), 1);
+        assert_eq!(splits[0].name, "West of House", "the peel is named after its own entry room");
+    }
+
+    /// Five rooms one way, four the other, one staircase between them. Nothing here mentions a
+    /// maze, so pass 1 never fires and pass 2 sees both components whole.
+    fn two_components() -> MapGraph {
+        let mut g = MapGraph::new();
+        for (id, name) in [
+            (1, "West of House"),
+            (2, "North of House"),
+            (3, "Behind House"),
+            (4, "South of House"),
+            (5, "Forest"),
+            (10, "Cellar"),
+            (11, "Troll Room"),
+            (12, "East-West Passage"),
+            (13, "Round Room"),
+        ] {
+            g.upsert_room(id, name.to_string());
+        }
+        for (a, b) in [(1, 2), (2, 3), (3, 4), (4, 5)] {
+            g.add_edge(a, Direction::E, b);
+            g.add_edge(b, Direction::W, a);
+        }
+        for (a, b) in [(10, 11), (11, 12), (12, 13)] {
+            g.add_edge(a, Direction::E, b);
+            g.add_edge(b, Direction::W, a);
+        }
+        // The one link between them is a PORTAL, so `planar_region` cuts here and the two are
+        // separate components — which is the situation pass 2 exists to resolve.
+        g.add_edge(1, Direction::Down, 10);
+        g.add_edge(10, Direction::Up, 1);
+        g
     }
 
     /// A `Conditional` exit's destination counts as a declared reverse too (not only a plain
