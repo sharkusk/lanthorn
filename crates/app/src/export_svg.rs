@@ -362,23 +362,30 @@ fn outward(side: Side) -> (f64, f64) {
     }
 }
 
-/// The row-axis channel `idx` (the sense `PosTable::channel_span(idx)` uses: the channel
-/// following row `idx`, between it and `idx + 1`) that a portal marker leaving `room`'s box by
-/// `side` reaches into — `None` for anything but `Side::Top`/`Side::Bottom`, which a portal
-/// never uses (SQ-1362; `route_side` puts Up on the north border and Down on the south, always).
-/// `Top` reaches into the channel ABOVE the room, i.e. the one following row `cell.1 - 1`;
-/// `Bottom` reaches into the channel following the room's own row.
-fn portal_channel_row(
-    cell_of: &HashMap<RoomId, (i32, i32)>,
-    room: RoomId,
-    side: Side,
-) -> Option<i32> {
-    let (_, ry) = *cell_of.get(&room)?;
-    match side {
-        Side::Top => Some(ry - 1),
-        Side::Bottom => Some(ry),
-        Side::Left | Side::Right => None,
-    }
+/// Which axis, and which channel `idx` on it (the sense `PosTable::channel_span(idx)` uses: the
+/// channel following row/column `idx`, between it and `idx + 1`), a portal marker leaving `room`'s
+/// box by `side` reaches into.
+///
+/// A portal's DEPARTURE side is always `Top`/`Bottom` (SQ-1362; `route_side` puts Up on the north
+/// border and Down on the south, always) — but its ARRIVAL side is not: the router picks whichever
+/// side the geometry favours, and a cross-layer ghost seated BESIDE its anchor rather than in line
+/// with it (SQ-1356's own fallback, when the straight seat was taken) arrives on the anchor's
+/// `Left` or `Right` edge exactly as easily as its `Top` or `Bottom` (SQ-1366). So this reaches
+/// into a ROW channel for `Top`/`Bottom`, same as it always did, and a COLUMN channel — the row
+/// axis's own counterpart — for `Left`/`Right`.
+enum PortalChannel {
+    Row(i32),
+    Col(i32),
+}
+
+fn portal_channel(cell_of: &HashMap<RoomId, (i32, i32)>, room: RoomId, side: Side) -> Option<PortalChannel> {
+    let (cx, cy) = *cell_of.get(&room)?;
+    Some(match side {
+        Side::Top => PortalChannel::Row(cy - 1),
+        Side::Bottom => PortalChannel::Row(cy),
+        Side::Left => PortalChannel::Col(cx - 1),
+        Side::Right => PortalChannel::Col(cx),
+    })
 }
 
 /// The box side a passage travelling `dir` leaves by. Up and Down take the top and bottom
@@ -542,14 +549,28 @@ const PORTAL_ARROW_REACH: f64 = PORTAL_BADGE_GAP + 8.0;
 /// see `PxAxis::build`'s `wide_channels` — everything else keeps the plain floor.
 const PORTAL_MIN_CHANNEL_PX: f64 = 2.0 * PORTAL_ARROW_REACH + 2.0 * ARROW_HEAD_LEN;
 
+/// The badge's own drawn radius — the `badge()` circle's `r` — pulled out so anything computing
+/// how much room a badge needs, like `PORTAL_ARRIVAL_RUN_PX` below, states it once.
+const BADGE_R: f64 = 6.5;
+
+/// The shortest a portal arrival's FINAL straight run — the leg the badge rides, ending at the
+/// head — may be (SQ-1366). The user's rule: the badge is always ON the line, on the straight
+/// run right before the head; a right angle before the badge is fine, a right angle INTO the head
+/// is not. `PORTAL_ARROW_REACH` already reaches the badge's own far edge from the box, so a run
+/// that long fits the badge with nothing to spare; this adds one more badge diameter of slack plus
+/// `CORNER_R`'s own rounding radius, since the corner at the FAR end of this run eats into it by
+/// exactly as much as it rounds.
+const PORTAL_ARRIVAL_RUN_PX: f64 = PORTAL_ARROW_REACH + 2.0 * BADGE_R + CORNER_R;
+
 /// A lettered badge — the export's up/down/in/out glyph, spelled as a letter so the document
 /// needs no symbol font at all.
 fn badge(at: (f64, f64), letter: &str) -> String {
     format!(
-        "<circle class=\"badge\" cx=\"{}\" cy=\"{}\" r=\"6.5\"/>\
+        "<circle class=\"badge\" cx=\"{}\" cy=\"{}\" r=\"{}\"/>\
          <text class=\"badge-text\" x=\"{}\" y=\"{}\">{}</text>",
         f(at.0),
         f(at.1),
+        f(BADGE_R),
         f(at.0),
         f(at.1 + 3.0),
         xml_escape(letter)
@@ -586,9 +607,22 @@ fn draw_travel_arrival(
     arrow_class: &str,
 ) {
     if matches!(word, Direction::Up | Direction::Down) {
+        // SQ-1366: the badge is always ON the line, riding the FINAL STRAIGHT RUN into the head —
+        // never off to the side of it. A right angle before the badge is fine (the line can turn
+        // wherever the router put its corner); a right angle INTO the head is not, because there
+        // is then no straight run left for the badge to ride. `pos`/`u` are the box edge and its
+        // outward normal, so `root`, sitting `PORTAL_BADGE_GAP` back along that same axis, is
+        // guaranteed to fall ON the polyline's final segment — `extend_portal_arrival` (called by
+        // this file's connector pass before `pos`'s line is even drawn) has already lengthened
+        // that segment to at least `PORTAL_ARRIVAL_RUN_PX`, wider than `PORTAL_BADGE_GAP` plus the
+        // badge's own reach, so `root` never has to slide to find room: it is placed exactly
+        // there and reserved for later placements, never nudged sideways by `settle_badge`. A
+        // collision here would mean the channel was not widened enough — the bug to fix, not a
+        // reason to slide the badge off its line.
         over.push_str(&arrowhead_inward(pos, u, arrow_class));
         let root = (pos.0 + u.0 * PORTAL_BADGE_GAP, pos.1 + u.1 * PORTAL_BADGE_GAP);
-        let at = settle_badge(placer, root, (-u.1, u.0));
+        placer.block(badge_rect(root));
+        let at = root;
         portal_ends.insert((room, word));
         over.push_str(&badge(at, if word == Direction::Up { "U" } else { "D" }));
         ext.add(at.0 - 8.0, at.1 - 8.0);
@@ -613,6 +647,62 @@ fn draw_travel_arrival(
             ext.add(r.0 + r.2, r.1 + r.3);
         }
     }
+}
+
+/// Lengthen a portal's polyline so its FINAL leg into `pos` — the room/ghost edge it arrives
+/// at, along `pos`'s own outward normal `u` — is at least `PORTAL_ARRIVAL_RUN_PX` long (SQ-1366).
+///
+/// The router's own polyline can turn its last corner closer to the box edge than that run
+/// needs — a cross-layer ghost seated BESIDE its anchor rather than in line with it (SQ-1356's own
+/// fallback) routes exactly this way, arriving on a side the portal-widened channels never
+/// expected (`PortalChannel`). The corner itself is fine wherever the router put it; what breaks
+/// is a corner too close to the edge, which leaves no straight room for the badge behind the head.
+/// The fix moves that corner farther out along the SAME axis it was already on — the line still
+/// turns exactly where the router chose, just farther from the room — never re-routing the turn.
+///
+/// `at_start` is `true` to extend the polyline's own START (`pts[0]`, used for a reciprocal's
+/// back-travel, which arrives there) or `false` to extend its END (the connector's own arrival,
+/// `pts[last]`). Does nothing when the leg leading to that end is not already parallel to `u` —
+/// an orthogonally-routed approach's final leg always is, so a mismatch means this polyline's
+/// shape is not what this function assumes, and guessing at a fix would be worse than leaving it.
+fn extend_portal_arrival(pts: &mut [(f64, f64)], at_start: bool, u: (f64, f64)) {
+    let n = pts.len();
+    if n < 4 {
+        // A single bend (n == 3) sits directly between the connector's two fixed anchors — its
+        // OTHER neighbour is the far end's own departure/arrival point, not a free corner this
+        // function may move. Sliding the near bend along `u` without also sliding that neighbour
+        // would leave the corner no longer square; sliding the neighbour would drag a fixed
+        // box-edge anchor off the box it's snapped to. Neither is right, so this is left alone
+        // rather than guessed at — every case this bug actually produces has a real dogleg
+        // (n >= 4), because a bend that close to a single-corner route only arises from a second
+        // corner (the departure jogging around something) in the first place.
+        return;
+    }
+    let (pos, bend_i) = if at_start { (pts[0], 1) } else { (pts[n - 1], n - 2) };
+    let bend = pts[bend_i];
+    let (dx, dy) = (bend.0 - pos.0, bend.1 - pos.1);
+    // The bend must already lie on the arrival axis (an orthogonal approach's final leg is
+    // always parallel to the side it lands on) — a perpendicular deviation means this polyline's
+    // shape is not what this function assumes, so leave it untouched rather than guess.
+    let perp = (dx * u.1 - dy * u.0).abs();
+    if perp > 0.5 {
+        return;
+    }
+    let len = (dx * dx + dy * dy).sqrt();
+    if len >= PORTAL_ARRIVAL_RUN_PX {
+        return;
+    }
+    let shift = PORTAL_ARRIVAL_RUN_PX - len;
+    pts[bend_i] = (bend.0 + u.0 * shift, bend.1 + u.1 * shift);
+    // The segment on the OTHER side of this bend met it at a right angle (consecutive legs of an
+    // orthogonal route always alternate axis), so translating the bend along `u` must translate
+    // that far neighbour by the same amount too, or the corner stops being square. `n >= 4`
+    // (checked above) guarantees that neighbour is itself an interior point, never one of the
+    // two fixed box-edge anchors — the segment beyond IT is aligned WITH `u`, so shifting it only
+    // changes that segment's own length, not its direction, and needs no further propagation.
+    let nb_i = if at_start { bend_i + 1 } else { bend_i - 1 };
+    let nb = pts[nb_i];
+    pts[nb_i] = (nb.0 + u.0 * shift, nb.1 + u.1 * shift);
 }
 
 /// The door mark: a bar across the line with a gap punched under it.
@@ -687,32 +777,43 @@ fn render_svg_body(
     let (cols, rows) = boxes_axes_sized(&rm.plan, rm.bounds, BOX_W, &col_dims, BOX_H, &no_rows);
 
     let cell_of: HashMap<RoomId, (i32, i32)> = rm.rooms.iter().map(|r| (r.id, r.cell)).collect();
-    // SQ-1362: which ROW channels carry a portal head+badge, so `PxAxis::build` can grow only
-    // those to `PORTAL_MIN_CHANNEL_PX` rather than bumping every channel on the map. A portal
-    // never touches a COLUMN channel — Up always departs the box's north border and Down its
-    // south (`route_side`) — so only the row axis needs this pass. Only a NON-merge connector's
-    // marker counts: a merge stub's own departure badge (see below) stays small and needs no
-    // extra room, and only the entry end always gets a marker while the exit end gets one only
-    // when the connector is reciprocal, mirroring exactly what `draw_travel_arrival` draws.
+    // SQ-1362/SQ-1366: which ROW and COLUMN channels carry a portal head+badge, so
+    // `PxAxis::build` can grow only those to `PORTAL_MIN_CHANNEL_PX` rather than bumping every
+    // channel on the map (see `PortalChannel`). Only a NON-merge connector's marker counts: a
+    // merge stub's own departure badge (see below) stays small and needs no extra room, and only
+    // the entry end always gets a marker while the exit end gets one only when the connector is
+    // reciprocal, mirroring exactly what `draw_travel_arrival` draws.
     let mut wide_row_channels: std::collections::HashSet<i32> = std::collections::HashSet::new();
+    let mut wide_col_channels: std::collections::HashSet<i32> = std::collections::HashSet::new();
     for conn in &rm.plan.connectors {
         if conn.merge || !matches!(conn.exit_dir, Direction::Up | Direction::Down) {
             continue;
         }
-        if let Some(idx) = portal_channel_row(&cell_of, conn.dest, conn.entry) {
-            wide_row_channels.insert(idx);
+        match portal_channel(&cell_of, conn.dest, conn.entry) {
+            Some(PortalChannel::Row(idx)) => {
+                wide_row_channels.insert(idx);
+            }
+            Some(PortalChannel::Col(idx)) => {
+                wide_col_channels.insert(idx);
+            }
+            None => {}
         }
         if conn.reciprocal {
-            if let Some(idx) = portal_channel_row(&cell_of, conn.origin, conn.exit) {
-                wide_row_channels.insert(idx);
+            match portal_channel(&cell_of, conn.origin, conn.exit) {
+                Some(PortalChannel::Row(idx)) => {
+                    wide_row_channels.insert(idx);
+                }
+                Some(PortalChannel::Col(idx)) => {
+                    wide_col_channels.insert(idx);
+                }
+                None => {}
             }
         }
     }
     // SQ-1322: the SVG's own pixel geometry for each axis, widening a channel already at
     // `MIN_GUTTER` cells so a two-way passage between adjacent boxes gets a real shaft — see
     // `PxAxis`. `cols`/`rows` themselves are untouched and still the terminal's own cell layout.
-    let no_wide_cols = std::collections::HashSet::new();
-    let px_cols = PxAxis::build(&cols, CELL_W, &no_wide_cols);
+    let px_cols = PxAxis::build(&cols, CELL_W, &wide_col_channels);
     let px_rows = PxAxis::build(&rows, CELL_H, &wide_row_channels);
 
     let rect_of = |id: RoomId| -> Option<(f64, f64, f64, f64)> {
@@ -762,6 +863,17 @@ fn render_svg_body(
             if let Some(r) = rect_of(conn.dest) {
                 let last = pts.len() - 1;
                 pts[last] = snap_to_edge(pts[last], r, conn.entry);
+            }
+        }
+        // SQ-1366: every portal arrival's final leg must be a real straight run, long enough for
+        // the badge that rides it — see `extend_portal_arrival`. A merge stub has no arrival end
+        // of its own (its `pts[last]` is a trunk junction, not a room edge) so it is excluded here
+        // exactly as it is from `draw_travel_arrival` below. The start end is extended only for a
+        // reciprocal, matching the one case `draw_travel_arrival` draws a second arrival at all.
+        if is_portal && !conn.merge {
+            extend_portal_arrival(&mut pts, false, outward(conn.entry));
+            if conn.reciprocal {
+                extend_portal_arrival(&mut pts, true, outward(conn.exit));
             }
         }
         for &p in &pts {
@@ -885,6 +997,58 @@ fn render_svg_body(
                     conn.dest,
                     arrow_class,
                 );
+            }
+        }
+
+        // SQ-1368: a same-pair passage the router folded onto this shared line — instead of
+        // drawing its own — still keeps a marker of its own
+        // (`RoutedConnector::secondary_exit`/`secondary_entry`), one per collapsed direction, at
+        // the end THAT direction's own travel arrives at (SQ-1346's rule, the same one every
+        // other marker in this file follows): a direction recorded in `secondary_exit` travels
+        // origin→dest and so arrives at `pts`'s own END; `secondary_entry` travels dest→origin
+        // and arrives at `pts`'s own START. It carries no arrowhead of its own — one line, one
+        // head per travel — so only the letter/tag says which way it goes, rooted beside
+        // whatever already marks that end rather than on top of it. A merge stub's `pts` END is
+        // a trunk junction, not a room edge, so it has nowhere valid to arrive and is skipped.
+        //
+        // A collapsed Up/Down/In/Out direction is ALSO still a stub in `rm.edges` (the graph
+        // never learns its own passage got folded onto another room's line) — `room` here is the
+        // direction's own true graph-origin (`conn.origin` for `secondary_exit`, `conn.dest` for
+        // `secondary_entry`), fed into `portal_ends` exactly as `draw_travel_arrival` feeds its
+        // own badges, so the stub pass below recognises this one as already drawn and skips it
+        // rather than stamping a second badge for the same passage.
+        if !conn.merge {
+            for (dirs, pos, u, room) in [
+                (&conn.secondary_exit, pts[pts.len() - 1], outward(conn.entry), conn.origin),
+                (&conn.secondary_entry, pts[0], outward(conn.exit), conn.dest),
+            ] {
+                for &dir in dirs {
+                    if matches!(dir, Direction::Up | Direction::Down | Direction::In | Direction::Out) {
+                        let root = (pos.0 + u.0 * PORTAL_BADGE_GAP, pos.1 + u.1 * PORTAL_BADGE_GAP);
+                        let at = settle_badge(&mut placer, root, (-u.1, u.0));
+                        let letter = direction::short_label(dir).to_uppercase();
+                        over.push_str(&badge(at, &letter));
+                        portal_ends.insert((room, dir));
+                        ext.add(at.0 - 8.0, at.1 - 8.0);
+                        ext.add(at.0 + 8.0, at.1 + 8.0);
+                    } else {
+                        let tag = direction::short_label(dir).to_uppercase();
+                        let root = (pos.0 + u.0 * 11.0, pos.1 + u.1 * 11.0);
+                        if let Some(spot) = placer.place(tag.chars().count(), &spots_around(root, u, 5.0)) {
+                            let _ = write!(
+                                over,
+                                "<text class=\"tag\"{} x=\"{}\" y=\"{}\">{}</text>",
+                                spot.anchor.attr(),
+                                f(spot.x),
+                                f(spot.y),
+                                tag
+                            );
+                            let r = spot.rect(tag.chars().count());
+                            ext.add(r.0, r.1);
+                            ext.add(r.0 + r.2, r.1 + r.3);
+                        }
+                    }
+                }
             }
         }
     }
@@ -1239,6 +1403,19 @@ fn legend_rows() -> Vec<(String, &'static str)> {
                 badge((37.0, 0.0), "U")
             ),
             "stairs, ladders, in/out — the arrow points where it leads, the letter is the way you travel",
+        ),
+        (
+            // SQ-1368: the router folds an extra passage between the SAME two rooms onto the
+            // winning connector's own line rather than drawing a second one
+            // (`RoutedConnector::secondary_exit`/`secondary_entry`) — the line still carries only
+            // one head per travel, and the folded direction gets a tag of its own where it
+            // arrives instead of vanishing.
+            format!(
+                "{}{}<text class=\"tag\" x=\"37\" y=\"-4\">E</text>",
+                line("edge shared"),
+                arrowhead((54.0, 0.0), (1.0, 0.0), "arrow")
+            ),
+            "two passages on one line — the extra direction is tagged where it arrives",
         ),
         (
             format!(
@@ -1895,6 +2072,85 @@ mod tests {
                 (t.text().unwrap_or("").to_string(), (x, y))
             })
             .collect()
+    }
+
+    /// The TRUE vertices of an `M`/`L`/`Q` path — unlike `path_points`, only a `Q`'s CONTROL
+    /// point (the un-rounded corner `rounded_path` was given) is kept, not the point just past it
+    /// that exists only to trace the rounding arc onto the next leg. `path_points` deliberately
+    /// keeps that point too (a crossing check wants every point the drawn curve visits, rounding
+    /// included); this instead reconstructs the exact polyline BEFORE `rounded_path` shortened
+    /// each corner's two adjoining legs by `CORNER_R` — the shape `extend_portal_arrival` itself
+    /// measures (SQ-1366), so a reader checking its work needs the same un-rounded lengths.
+    ///
+    /// The grammar `rounded_path` emits is `M x y` then, for each interior point, `L a Q c b`,
+    /// ending in a final plain `L`. So a `L` immediately followed by a `Q` is that corner's
+    /// pre-rounding approach point — an artifact, not a vertex — and every other `L` (the very
+    /// last one) is real.
+    fn path_vertices(d: &str) -> Vec<(f64, f64)> {
+        let mut out = Vec::new();
+        let mut toks = d.split_whitespace().peekable();
+        let take2 = |toks: &mut std::iter::Peekable<std::str::SplitWhitespace<'_>>| -> (f64, f64) {
+            let x = toks.next().and_then(|s| s.parse().ok()).unwrap_or(0.0);
+            let y = toks.next().and_then(|s| s.parse().ok()).unwrap_or(0.0);
+            (x, y)
+        };
+        while let Some(t) = toks.next() {
+            match t {
+                "M" => out.push(take2(&mut toks)),
+                "L" => {
+                    let p = take2(&mut toks);
+                    if toks.peek() != Some(&"Q") {
+                        out.push(p); // not followed by a corner: this IS the final vertex
+                    } // else: the pre-rounding approach point for the corner that follows
+                }
+                "Q" => {
+                    let c = take2(&mut toks);
+                    let _b = take2(&mut toks); // the post-rounding point; not a real vertex
+                    out.push(c);
+                }
+                _ => {}
+            }
+        }
+        out
+    }
+
+    /// The final segment `(from, to)` of the connector in `svg` whose polyline ARRIVES nearest
+    /// `target` — the last two TRUE vertices of its `<path class="edge …">`'s `d` (see
+    /// `path_vertices`), already in the document's own coordinate space via `translate_of`. This
+    /// is the leg a portal arrival's badge is meant to ride (SQ-1366).
+    ///
+    /// A layered document can draw several connectors (a crossing's own line on the panel it
+    /// leaves, PLUS the ghost line into it on the panel it arrives at), so picking "the first
+    /// path in the document" is not enough to name one connector — `target` (ordinarily the room
+    /// whose arrival is under test) disambiguates by proximity, the same way `near_rect_edge` and
+    /// `dist_from_rect_edge` already do for a single point. Excludes the legend's own sample line
+    /// exactly as `edge_segments` does. `None` when `svg` draws no such path at all.
+    fn last_connector_segment(svg: &str, target: (f64, f64, f64, f64)) -> Option<((f64, f64), (f64, f64))> {
+        let doc = roxmltree::Document::parse(svg).ok()?;
+        let mut best_seg: Option<((f64, f64), (f64, f64))> = None;
+        let mut best_dist = f64::INFINITY;
+        for node in doc.descendants().filter(|n| {
+            n.tag_name().name() == "path"
+                && n.attribute("class").is_some_and(|c| c.split_whitespace().any(|w| w == "edge"))
+                && !under_class(*n, "legend-block")
+        }) {
+            let offset = translate_of(node);
+            let pts = path_vertices(node.attribute("d").unwrap_or(""));
+            let n = pts.len();
+            if n < 2 {
+                continue;
+            }
+            let seg = (
+                (pts[n - 2].0 + offset.0, pts[n - 2].1 + offset.1),
+                (pts[n - 1].0 + offset.0, pts[n - 1].1 + offset.1),
+            );
+            let d = dist_from_rect_edge(seg.1, target);
+            if d < best_dist {
+                best_dist = d;
+                best_seg = Some(seg);
+            }
+        }
+        best_seg
     }
 
     /// The Zork-house shape used by the layout tests: a ring of rooms with a couple of
@@ -2699,5 +2955,165 @@ mod tests {
                 "SW (B→A) must read near A, where that travel arrives: {sw:?} vs a={a_rect:?}"
             );
         }
+    }
+
+    // ── SQ-1366: the badge always rides the final straight run into the head ────────────
+
+    /// The Gallery shape from the field report: a cross-layer ghost that could not seat in line
+    /// with its anchor (its straight north seat is a real reciprocal neighbour, and so is the
+    /// seat beyond THAT — SQ-1356's own fallback) lands beside it instead, one cell to the west.
+    /// The portal connector into the anchor then has to dogleg round the corner rather than
+    /// running straight up/down into it, and its arrival ends up on the anchor's LEFT edge — a
+    /// side `portal_channel_row`'s old Top/Bottom-only assumption never widened a channel for.
+    ///
+    /// The user's rule: the badge is always ON the line, riding the final straight run right
+    /// before the head. A right angle before the badge is fine; a right angle INTO the head is
+    /// not. This asserts exactly that: the polyline's final segment is straight, at least
+    /// `PORTAL_ARRIVAL_RUN_PX` long, and the badge's centre sits within 1px of that segment's own
+    /// axis (never off to the side of it, as `settle_badge`'s slide used to leave it here).
+    #[test]
+    fn a_ghost_seated_beside_its_anchor_still_rides_the_badge_on_the_line() {
+        use mapper::graph::MapGraph;
+        let mut g = MapGraph::new();
+        g.upsert_room(1, "Living Room".into());
+        g.upsert_room(2, "Cellar".into());
+        g.upsert_room(3, "North Room".into());
+        g.upsert_room(4, "East Room".into());
+        g.set_pos(2, (1, 1));
+        g.set_pos(3, (1, 0));
+        g.set_pos(4, (2, 1));
+        // A real reciprocal neighbour on Cellar's straight (north) seat, so the ghost cannot seat
+        // there — and one to the east too, so the fallback that finds west clear is exercised
+        // deterministically rather than by whichever side happens to have more free neighbours.
+        g.add_edge(2, Direction::N, 3);
+        g.add_edge(3, Direction::S, 2);
+        g.add_edge(2, Direction::E, 4);
+        g.add_edge(4, Direction::W, 2);
+        g.add_edge(1, Direction::Down, 2); // one-way crossing: Living Room, Down, into Cellar
+        let gallery = g.new_layer(Some(mapper::layer::MAIN_LAYER), "Gallery".into());
+        g.set_room_layer(2, gallery);
+        g.set_room_layer(3, gallery);
+        g.set_room_layer(4, gallery);
+
+        let svg = render_svg_layered(&g);
+        let map = layered_map_only(&svg);
+        assert!(map.contains("class=\"ghost\""), "the case must actually draw the ghost");
+
+        // Falsify the fixture itself: this only exercises SQ-1366 if the ghost really did land
+        // BESIDE Cellar rather than in line with it — a straight seat needs no dogleg and so
+        // never reproduces the bug this test is for. Find Cellar's own box by its LABEL rather
+        // than by row alone: East Room shares Cellar's row too, and matching on that alone picks
+        // whichever of the two happens first.
+        let doc = roxmltree::Document::parse(&svg).expect("well-formed SVG");
+        let cellar_label = doc
+            .descendants()
+            .find(|n| {
+                n.tag_name().name() == "text"
+                    && n.attribute("class") == Some("room-label")
+                    && n.text() == Some("Cellar")
+            })
+            .map(|n| {
+                let o = translate_of(n);
+                (
+                    n.attribute("x").unwrap().parse::<f64>().unwrap() + o.0,
+                    n.attribute("y").unwrap().parse::<f64>().unwrap() + o.1,
+                )
+            })
+            .expect("Cellar's own label");
+        let cellar = plain_room_rects(&svg)
+            .into_iter()
+            .find(|&(x, y, w, h)| {
+                cellar_label.0 >= x && cellar_label.0 <= x + w && cellar_label.1 >= y && cellar_label.1 <= y + h
+            })
+            .expect("Cellar's own box, under its own label");
+        let ghosts = ghost_rects_of(&svg, "ghost");
+        let ghost = *ghosts
+            .iter()
+            .find(|&&(_, gy, _, gh)| (gy - cellar.1).abs() < 0.5 && (gh - cellar.3).abs() < 0.5)
+            .expect("a ghost sharing Cellar's row");
+        assert!(
+            (ghost.1 - cellar.1).abs() < 0.5,
+            "the ghost must sit beside Cellar (same row), not above/below it: ghost={ghost:?} cellar={cellar:?}"
+        );
+        assert!(ghost.0 < cellar.0, "the ghost must land WEST of Cellar, matching the field report: {ghost:?} vs {cellar:?}");
+
+        let (from, to) = last_connector_segment(&svg, cellar)
+            .expect("the crossing draws a connector with at least one final segment");
+        let (dx, dy) = (to.0 - from.0, to.1 - from.1);
+        let len = (dx * dx + dy * dy).sqrt();
+        assert!(dy.abs() < 0.5, "the final run must be straight (horizontal, arriving on Cellar's side): {from:?} -> {to:?}");
+        assert!(
+            len + 0.5 >= PORTAL_ARRIVAL_RUN_PX,
+            "the final run must be at least PORTAL_ARRIVAL_RUN_PX ({PORTAL_ARRIVAL_RUN_PX}) long: got {len} ({from:?} -> {to:?})"
+        );
+
+        let badges = badges_of(&svg);
+        assert_eq!(badges.len(), 1, "one badge for the one-way crossing's single travel");
+        let (letter, badge_pos) = &badges[0];
+        assert_eq!(letter, "D", "a Down travel reads D");
+        assert!(
+            (badge_pos.1 - from.1).abs() < 1.0,
+            "the badge's centre must sit within 1px of the final segment's own axis: \
+             badge={badge_pos:?} segment y={} ({from:?} -> {to:?})",
+            from.1
+        );
+        let (lo, hi) = (from.0.min(to.0), from.0.max(to.0));
+        assert!(
+            badge_pos.0 >= lo && badge_pos.0 <= hi,
+            "the badge must sit ON the final segment, between its two ends: badge={badge_pos:?} run=[{lo},{hi}]"
+        );
+
+        assert!(label_collisions(&svg).is_empty());
+        assert!(ghost_box_overlaps(&svg).is_empty());
+        assert!(connector_room_crossings(&svg).is_empty());
+    }
+
+    // ── SQ-1368: a passage folded onto a shared line keeps its own marker ───────────────
+
+    /// A→B carries a compass `E` AND a portal `Down`, both leaving A for B — the same shape as
+    /// the field report's Canyon View→Down→Rocky Ledge plus Canyon View→E→Rocky Ledge. This is
+    /// `collapse_stacked_exits` territory (SQ-1276), NOT `RoutedConnector::secondary_exit`: a
+    /// portal never has a bearing to prefer over a compass one, so `Down` is suppressed at the
+    /// SOURCE — before the router ever sees it — as room A's `stacked_exits`, and this file
+    /// still draws nothing for it (a pre-existing gap this quest does not claim to close).
+    ///
+    /// `E` wins and is routed as an ordinary one-way. What SQ-1368 actually fixes shows up one
+    /// level later: B ALSO has its own `Up` back to A, and since `Up` can only pair with a
+    /// `Down` (never a compass word), the router cannot join it to `E` as a reciprocal — so `Up`
+    /// becomes `RoutedConnector::secondary_entry` on E's own connector, arriving back at A
+    /// (SQ-1346's rule) instead of drawing its own line. Before this fix that arrival vanished
+    /// entirely; now it gets the same lettered badge a plain portal arrival would.
+    #[test]
+    fn a_passage_folded_onto_a_shared_line_keeps_its_marker() {
+        use mapper::graph::MapGraph;
+        let mut g = MapGraph::new();
+        g.upsert_room(1, "A".into());
+        g.upsert_room(2, "B".into());
+        g.set_pos(1, (0, 0));
+        g.set_pos(2, (1, 0)); // east of A, matching E's own bearing — keeps the line undistorted
+        g.add_edge(1, Direction::Down, 2);
+        g.add_edge(1, Direction::E, 2);
+        g.add_edge(2, Direction::Up, 1);
+
+        let svg = render_svg_of(&render(&g), Some(&g));
+        let rooms = room_rects(&svg);
+        assert_eq!(rooms.len(), 2, "the case must draw exactly the two rooms");
+        let a = rooms[0];
+
+        let tips = arrow_tips(&svg);
+        assert_eq!(tips.len(), 1, "E is routed as one ordinary one-way head, into B");
+
+        let badges = badges_of(&svg);
+        assert_eq!(badges.len(), 1, "Up, folded onto E's line, still gets its own badge");
+        let (letter, badge_pos) = &badges[0];
+        assert_eq!(letter, "U", "the folded direction is Up");
+        assert!(
+            near_rect_edge(*badge_pos, a, 20.0),
+            "Up travels B→A and so arrives at A: badge={badge_pos:?} vs a={a:?}"
+        );
+
+        // The badge must not sit on top of A's own box or overlap the room label.
+        assert!(label_collisions(&svg).is_empty());
+        assert!(connector_room_crossings(&svg).is_empty());
     }
 }

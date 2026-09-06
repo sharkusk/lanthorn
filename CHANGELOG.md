@@ -99,6 +99,21 @@ Absolute URLs or no link.
   in the way when the whole party will not fit, so the clearing sits directly
   above the grating and the passage is one straight line.
 
+- **A stair or ladder's letter on the exported SVG map now always rides the
+  straight run into its own arrowhead.** Where the passage had to jog round a
+  neighbouring room first — a room on another layer seated beside its anchor
+  rather than directly above or below it, say — the line used to turn its
+  final corner too close to the edge, leaving the letter crowded against the
+  turn instead of sitting cleanly behind the arrow. The map now gives that
+  last stretch the room it needs.
+
+- **A stair or ladder that shares its line with another passage on the
+  exported SVG map keeps its own letter.** Where two passages between the same
+  pair of rooms draw as one line, the second one's own letter used to vanish
+  entirely instead of riding the shared line. It now gets a badge of its own
+  where its own travel arrives, exactly as a passage with a line of its own
+  would.
+
 - **Bureaucracy's licence form hands you back a screen you can read.** Filling in
   the last field used to leave the story pane blank until you pressed Enter
   again — and in that game an empty command is answered with "[What?]" and a
