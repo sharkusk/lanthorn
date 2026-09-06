@@ -29,6 +29,25 @@ Absolute URLs or no link.
 
 ### Added
 
+- **Playing in a browser now survives a dropped connection.** Close the tab,
+  walk out of Wi-Fi range, let a tablet fall asleep — come back to the same
+  address and you are in the same room, mid-sentence, with your transcript and
+  your map where you left them. Your browser quietly remembers which game is
+  yours, so there is nothing to click and nothing to restore. That holds for
+  six hours of being away; after that the game is put down, with its progress
+  saved, and the next visit picks it straight back up. One catch, and it is a
+  real one: a game that survives a dropped connection cannot also send sound to
+  the browser, because the sound channel belongs to the connection. Out of the
+  box the browser is silent and your game is safe; `LANTHORN_WEB_DETACH=off`
+  takes the other side of that trade.
+
+- **The pane edges you drag are wider in a browser on a tablet.** The splitter
+  between the story and the map, and the top edges of the inventory and room
+  panels, are four cells deep there instead of the two a mouse pointer wants —
+  a fingertip could not reliably land on the narrower target. Set
+  `LANTHORN_WEB_GRAB_ZONE` to pick another width, or change `grab_zone_cells`
+  in the settings screen, which wins over it from then on.
+
 - **The exported SVG map now shows the passages between the rooms.** Every
   connection is drawn as its own rounded, right-angled line running in the
   channel between the rooms — never through a room box, never on top of
@@ -82,6 +101,14 @@ Absolute URLs or no link.
   twice, one on top of the other.
 
 ### Fixed
+
+- **A game served to a browser no longer loses progress when the connection
+  drops.** Every turn was played, and none of it was written down: the served
+  container never turned on saving after each turn, so a closed tab or a
+  sleeping tablet ended the game with nothing to come back to. It now saves as
+  each turn completes, and again on the way out, so even a hard kill costs at
+  most the turn in progress. There is a switch for it anywhere lanthorn runs,
+  too — `--auto-save on` for one session, or the settings screen to keep it.
 
 - **A door the game refuses no longer puts you on the other side of it.** In
   *Anchorhead* (the 2018 illustrated edition), trying the estate agent's locked
