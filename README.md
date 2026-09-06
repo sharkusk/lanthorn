@@ -32,14 +32,14 @@ paper.
 
 | ![lanthorn walking Zork I while the automap assembles itself room by room](docs/automapping.gif) |
 |:--|
-| *Four directions out of the white house, four new rooms on the map — nothing here came from a walkthrough, just the game's own replies.* |
+| *Zork I, four moves in: the map draws itself from the game's own replies.* |
 
 **Your library at a glance.** The story picker shows it as a list or as a grid of covers. Press `[TAB]` to
 bring up the story info panel.
 
 | ![The story picker's grid view: covers beside a metadata info panel](docs/cover-gallery.png) |
 |:--|
-| *Cover art and metadata pulled straight from IFDB — `[TAB]` shows the same detail without leaving the grid.* |
+| *Grid view with cover art and metadata from IFDB; Tab opens the info panel.* |
 
 <details>
 <summary>More screenshots</summary>
@@ -48,63 +48,63 @@ bring up the story info panel.
 
 | ![Beyond Zork booting from its Amiga release floppy and building a character: the attribute bars, the arrow-driven menus, and the first room](docs/beyond-zork.gif) |
 |:--|
-| *Booted straight off its Amiga release floppy: the same attribute rolls and arrow-driven menus that game shipped on in 1987.* |
+| *Beyond Zork booted from its Amiga floppy, character creation and all.* |
 
 | ![Anchorhead's opening: a Lovecraft epigraph in a box the story splits for itself, the prologue paging past, and the first turn](docs/anchorhead.gif) |
 |:--|
-| *The story splits its own window for the epigraph — lanthorn just draws whatever window layout the game asks for.* |
+| *Anchorhead splits its own window for the epigraph; lanthorn draws whatever layout the game asks for.* |
 
 | ![lanthorn playing Zork I with a live automap of the Great Underground Empire](docs/automapping.png) |
 |:--|
-| *The Great Underground Empire, mapped live — every room and passage lanthorn has walked so far, in one view.* |
+| *Zork I with the Great Underground Empire mapped as far as it has been walked.* |
 
 | ![In-game graphics rendered with the Kitty graphics protocol](docs/kitty-graphics.png) |
 |:--|
-| *Real pixels, not block characters — the Kitty graphics protocol drawing this game's own art straight in the terminal.* |
+| *In-game artwork as real pixels through the Kitty graphics protocol.* |
 
 | ![Zork Zero with hybrid rendering mode](docs/zork-zero.png) |
 |:--|
-| *Hybrid mode: the illustrated frame is real pixels, the text inside it is real terminal cells.* |
+| *Zork Zero in hybrid mode: pixel artwork around real terminal text.* |
 
 | ![Zork Zero off its Macintosh floppy: the black-and-white press, its dithered stone columns and compass rose drawn on the Macintosh's own 7x15 cell](docs/zork-zero-mac.png) |
 |:--|
-| *The same game off its original Macintosh floppy — a different press entirely, dithered stone and all, drawn on the Mac's own 7x15 text cell.* |
+| *Zork Zero from its Macintosh floppy: the black-and-white press on the Mac's own 7x15 cell.* |
 
 | ![The same Macintosh press in a terminal far taller than the screen the game was drawn for: hybrid mode extends the border out of its own artwork, so the banded pillars pick up more rings at the artist's own spacing instead of stretching or stranding in a letterbox](docs/tall-terminal-border.png) |
 |:--|
-| *A terminal far taller than the game's own screen: hybrid mode tiles the border artwork outward at the artist's spacing instead of stretching or letterboxing it.* |
+| *A terminal taller than the game's screen: the border tiles outward instead of stretching.* |
 
 | ![Arthur's Amiga floppy drawn in its own proportional typeface, at the ten-pixel line the machine used](docs/native-font.png) |
 |:--|
-| *Arthur's Amiga floppy carries a real proportional typeface, drawn here at the ten-pixel line the original machine used.* |
+| *Arthur's Amiga floppy in its own proportional typeface at the original ten-pixel line.* |
 
 | ![Frobozz Magic VideoPoker: a v6 game's painted card table, banner and clickable menu, drawn inside its own illustrated frame](docs/frobozz-poker.png) |
 |:--|
-| *A whole card table, banner and clickable menu, painted as artwork inside a v6 game's illustrated frame.* |
+| *Frobozz Magic VideoPoker: card table, banner and clickable menu, all painted by the game.* |
 
 | ![Scopa dealt on a green baize table — a v6 game whose entire screen, cards and buttons included, is artwork](docs/scopa.png) |
 |:--|
-| *Scopa's felt table: every card and button on screen is artwork here, not text — a v6 game drawing its whole interface as one picture.* |
+| *Scopa: a v6 game whose entire screen, cards and buttons included, is artwork.* |
 
 | ![A Glulx game using a multi-window Glk layout with story-set colours](docs/multi-window-layout.png) |
 |:--|
-| *A Glulx game splitting itself into several Glk windows, each keeping the colours the story itself chose.* |
+| *A Glulx game with several Glk windows, each in the colours the story chose.* |
 
 | ![The matrix map view: the map as a direction table — one row per room, every passage's true destination in its cell](docs/maze-grid.png) |
 |:--|
-| *The matrix view turns the same map into a direction table — one row per room, every exit's real destination spelled out in its cell.* |
+| *The matrix view: one row per room, every exit's true destination in its cell.* |
 
 | ![The built-in Z-machine debug inspector: live disassembly, call stack, and opcode hover help](docs/debug-inspector.png) |
 |:--|
-| *The built-in disassembler, live: call stack, opcode-by-opcode execution, and hover help for anyone reading Z-machine bytecode.* |
+| *The built-in Z-machine inspector: live disassembly, call stack and opcode help.* |
 
 | ![A Scott Adams text adventure with its Blorb-bundled PNG artwork, playing beside its live map](docs/scott-adams-graphics.png) |
 |:--|
-| *A Scott Adams adventure, decades older than the Z-machine games above, with its Blorb-bundled artwork and live map running the same way.* |
+| *A Scott Adams adventure with its Blorb artwork and a live map, like every other engine.* |
 
 | ![The story picker's list view: a sortable, badged catalogue beside the info panel](docs/story-list.png) |
 |:--|
-| *The list view: a sortable, badged catalogue of your library, beside the same info panel the grid view shares.* |
+| *List view: a sortable, badged catalogue beside the info panel.* |
 
 </details>
 
@@ -290,7 +290,7 @@ Macintosh's monochrome plates), you can pick.
 
 | ![The launch-options panel over the story picker: Arthur's five picture archives — Blorb, CGA, EGA, MCGA, Amiga — and the interpreter the story will play as](docs/launch-options.png) |
 |:--|
-| *Arthur shipped art for five different systems — pick which one lanthorn plays back, right from the launch-options panel.* |
+| *Arthur ships art for five systems; the launch-options panel picks which one plays.* |
 
 **And the sound.** *The Lurking Horror* and *Sherlock* shipped sampled effects on
 their release disks years before Blorb existed, in a format nothing else reads.
@@ -314,7 +314,7 @@ from: your terminal's, your theme's, or the original machine's.
 
 | ![Deadline's opening screen under six of the machines Infocom shipped for — Apple IIe, Macintosh, Amiga, IBM PC, Commodore 128, Commodore 64 — each in that machine's own page, ink and status band](docs/machine-colours.png) |
 |:--|
-| *Same game, six machines: Deadline's opening screen recreated in each machine's own page, ink and status-band colours.* |
+| *Deadline's opening screen in the colours of six machines Infocom shipped for.* |
 
 → [graphics and terminals](docs/guide/graphics-and-terminals.md)
 
@@ -379,7 +379,7 @@ running them — for those it says so and stops.
 
 | ![Zork I's entire map, generated by lanthorn-mapgen straight from the story file: six layers from the Great Underground Empire down to the maze, rooms, doors and exits all drawn without a single move played](docs/zork1-map.svg) |
 |:--|
-| *Next release:* the whole game's map, read out of the story file alone — no walking required — with directions, doors, gated exits and the links out to other layers marked as it goes. |
+| *Next release:* Zork I's whole map, read from the story file alone — no walking — with doors, gated exits and layer links marked. |
 
 → [**the command line**](docs/guide/command-line.md)
 
@@ -406,7 +406,7 @@ with a mouse wheel.
 
 | ![Zork Zero's Great Hall running in Safari on an iPad, over the Docker image's browser mode: the illustrated banner, the automap beside it, and the on-screen keyboard](docs/zork-zero-ipad.png) |
 |:--|
-| *Played over the web from an iPad: the Docker image's browser terminal, sound and touch included.* |
+| *Zork Zero on an iPad over the Docker image's browser terminal, sound and touch included.* |
 
 *Next release:* a dropped connection no longer costs you the game — close the
 tab, lose the Wi-Fi, let a tablet sleep, and coming back to the same address
