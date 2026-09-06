@@ -16,13 +16,35 @@
 //! Ordering matters and is arranged by the page: the browser opens the audio
 //! socket FIRST, which is when the FIFO is created, and only then the terminal
 //! socket that spawns lanthorn. The wrapper still waits briefly for the FIFO,
-//! and falls back to `/dev/null` when there is none, so a page without the
+//! and falls back to the paced sink when there is none, so a page without the
 //! audio script (or a script the browser blocked) plays silently as before.
 //!
+//! **The FIFO belongs to the SESSION, not to the socket** (SQ-1328). A served
+//! game outlives its browser connection — `docker/serve-session.sh` runs it
+//! under `dtach`, keyed by the same id — so a FIFO that died with the socket
+//! would leave a live game's ALSA output bound to a pipe nobody reads, which is
+//! why a detachable session used to be silent. Instead the relay keeps a
+//! per-id session: the FIFO, a reader thread that is ALWAYS reading it, and
+//! whichever websocket is attached at the moment. A dropped tab merely detaches
+//! — the thread goes on draining at real time and discarding, so the game is
+//! never held up — and the next connection with the same id attaches to the
+//! same FIFO, gets a fresh header frame, and hears the game it left.
+//!
 //! The relay holds the FIFO open read-write, so the writer's `open()` never
-//! blocks on a reader and a quiet game never wedges it; a closed browser tab is
-//! noticed by the next write (data or ping) failing, at which point the FIFO
-//! is unlinked. Unix only: FIFOs are the mechanism.
+//! blocks on a reader and the read end never sees the EOF that a quiet moment
+//! between two sounds would otherwise look like. That is also why a session
+//! cannot notice its own game exiting: with our own write end open there is no
+//! EOF to notice. So ending one is somebody else's word, and the word is the
+//! FIFO's ABSENCE — `docker/entrypoint.sh`'s reaper unlinks `<id>.pcm` when it
+//! ends a session, and the loop below, which is polling anyway, sees the path
+//! gone and closes the session out. That is a poll of a CONDITION rather than
+//! the receipt of an event: a control message that never arrived would leak a
+//! thread and an open pipe for the life of the container, where a missed sweep
+//! merely waits for the next one.
+//!
+//! `LANTHORN_WEB_DETACH=off` takes the other arrangement — one game per
+//! websocket — and there the session dies with its socket, FIFO and all,
+//! exactly as it did before. Unix only: FIFOs are the mechanism.
 //!
 //! **The relay is also the clock.** ALSA's `null` slave has no timing: it
 //! accepts samples as fast as they are mixed, and rodio mixes silence without
@@ -91,22 +113,73 @@ pub fn bind_addr() -> String {
     std::env::var("LANTHORN_WEB_AUDIO_BIND").unwrap_or_else(|_| "0.0.0.0:7682".to_string())
 }
 
+/// Whether a session outlives the websocket that opened it:
+/// `LANTHORN_WEB_DETACH`, which is `on` unless it says `off` — the same rule
+/// `docker/serve-session.sh` applies to the game, read here so the FIFO and the
+/// game agree about how long they live.
+pub fn detach_enabled() -> bool {
+    std::env::var("LANTHORN_WEB_DETACH").map(|v| v != "off").unwrap_or(true)
+}
+
 #[cfg(unix)]
-pub use unix::{drain_paced, relay_session, serve};
+pub use unix::{drain_paced, serve, serve_sessions, SessionStats};
 
 #[cfg(unix)]
 mod unix {
     use super::*;
+    use std::collections::HashMap;
     use std::fs::{File, OpenOptions};
     use std::io::Read;
     use std::net::{TcpListener, TcpStream};
-    use std::os::unix::io::AsRawFd;
-    use std::time::Duration;
+    use std::os::unix::io::{AsRawFd, RawFd};
+    use std::sync::{Arc, Mutex};
+    use std::time::{Duration, Instant};
     use tungstenite::{Message, WebSocket};
 
-    /// Accept connections forever, one thread per session.
+    /// The drain's poll period, and so also how soon a reaped FIFO is noticed.
+    const TICK: Duration = Duration::from_millis(500);
+    /// How long a chunk waits for a socket that is not taking bytes before it is
+    /// dropped. Audio is real time: a late chunk is worth less than a game held
+    /// up by a browser that has stopped reading.
+    const WRITABLE_WAIT: Duration = Duration::from_millis(200);
+    /// How long a socket may stay unwritable before it counts as gone. A
+    /// suspended tab keeps its connection open and stops reading; without this
+    /// it would hold the attachment — and so the session's sound — for as long
+    /// as the laptop is shut.
+    const STALL_LIMIT: Duration = Duration::from_secs(10);
+    /// How often a session with nothing to send pings, which is how a peer that
+    /// went away without a `FIN` is noticed.
+    const PING_EVERY: Duration = Duration::from_secs(1);
+
+    /// One browser session's audio: the FIFO the game writes to, and whichever
+    /// socket is attached at the moment — `None` while the tab is away. Its
+    /// reader thread is the only thing that touches the pipe.
+    struct Session {
+        id: String,
+        fifo: PathBuf,
+        attached: Mutex<Option<WebSocket<TcpStream>>>,
+        /// Whether this session outlives its socket (`LANTHORN_WEB_DETACH`).
+        keep_when_detached: bool,
+    }
+
+    /// Every live session by id: what makes a reconnect find the FIFO it left
+    /// rather than mint a second one.
+    #[derive(Default)]
+    struct Registry {
+        map: Mutex<HashMap<String, Arc<Session>>>,
+    }
+
+    /// Accept connections forever, attaching each to its session.
     pub fn serve(listener: TcpListener, dir: PathBuf) -> io::Result<()> {
+        serve_sessions(listener, dir, detach_enabled())
+    }
+
+    /// `serve`, with the detach policy stated rather than read from the
+    /// environment — which is what the tests drive, since the environment is
+    /// process-global and they share a process under `cargo test`.
+    pub fn serve_sessions(listener: TcpListener, dir: PathBuf, keep_when_detached: bool) -> io::Result<()> {
         std::fs::create_dir_all(&dir)?;
+        let registry = Arc::new(Registry::default());
         for stream in listener.incoming() {
             let stream = match stream {
                 Ok(s) => s,
@@ -116,8 +189,9 @@ mod unix {
                 }
             };
             let dir = dir.clone();
+            let registry = Arc::clone(&registry);
             std::thread::spawn(move || {
-                if let Err(e) = handle(stream, &dir) {
+                if let Err(e) = handle(stream, &dir, &registry, keep_when_detached) {
                     eprintln!("audio-relay: {e}");
                 }
             });
@@ -125,13 +199,16 @@ mod unix {
         Ok(())
     }
 
-    fn handle(stream: TcpStream, dir: &Path) -> io::Result<()> {
+    /// One connection: shake hands, name the session, hand the socket over.
+    /// Returns as soon as it is attached — from there the SESSION owns the
+    /// socket, because the session is what outlives it.
+    fn handle(stream: TcpStream, dir: &Path, registry: &Arc<Registry>, keep_when_detached: bool) -> io::Result<()> {
         let peer = stream.peer_addr().map(|a| a.to_string()).unwrap_or_default();
         let mut path = String::new();
         // The callback's error type is tungstenite's whole HTTP response; the
         // closure never builds one, and the lint is about the type, not a cost.
         #[allow(clippy::result_large_err)]
-        let ws = tungstenite::accept_hdr(stream, |req: &tungstenite::handshake::server::Request, resp| {
+        let mut ws = tungstenite::accept_hdr(stream, |req: &tungstenite::handshake::server::Request, resp| {
             path = req.uri().path().to_string();
             Ok(resp)
         })
@@ -139,23 +216,72 @@ mod unix {
         let Some(id) = session_id(&path) else {
             return Err(io::Error::other(format!("{peer} asked for {path:?}, which is not /audio/<id>")));
         };
-        let fifo = fifo_path(dir, id);
-        eprintln!("audio-relay: {peer} listening to session {id}");
-        let t0 = std::time::Instant::now();
-        let result = relay_session(ws, &fifo);
-        let _ = std::fs::remove_file(&fifo);
-        match &result {
-            Ok(stats) => eprintln!(
-                "audio-relay: session {id} over after {:.0}s: read {} bytes ({:.1}s of audio), sent {} bytes, {} silent chunks dropped",
+        // Every attach sends the header, not just the first: a page that
+        // reconnected has a new socket and a new decoder, and has been told
+        // nothing about the format yet.
+        ws.send(Message::Text(header_json().into())).map_err(io::Error::other)?;
+        let fresh = attach(registry, dir, id, ws, keep_when_detached)?;
+        eprintln!(
+            "audio-relay: {peer} listening to session {id} ({})",
+            if fresh { "new" } else { "reattached" }
+        );
+        Ok(())
+    }
+
+    /// Attach `ws` to session `id`, starting the session if it is not running.
+    /// `Ok(true)` when it was started here, `Ok(false)` for a reattach.
+    fn attach(
+        registry: &Arc<Registry>,
+        dir: &Path,
+        id: &str,
+        ws: WebSocket<TcpStream>,
+        keep_when_detached: bool,
+    ) -> io::Result<bool> {
+        let mut map = lock(&registry.map);
+        if let Some(session) = map.get(id) {
+            // A reconnect that beat the old socket's failing send: the new one
+            // wins, and dropping the old closes it.
+            *lock(&session.attached) = Some(ws);
+            return Ok(false);
+        }
+        let session = Arc::new(Session {
+            id: id.to_string(),
+            fifo: fifo_path(dir, id),
+            attached: Mutex::new(Some(ws)),
+            keep_when_detached,
+        });
+        make_fifo(&session.fifo)?;
+        let pipe: File = OpenOptions::new().read(true).write(true).open(&session.fifo)?;
+        map.insert(session.id.clone(), Arc::clone(&session));
+        drop(map);
+
+        let registry = Arc::clone(registry);
+        std::thread::spawn(move || {
+            let t0 = Instant::now();
+            let (stats, reaped) = run_session(&session, pipe);
+            // Not when the FIFO was reaped out from under us: by now that path
+            // may already name the NEXT session's pipe.
+            if !reaped {
+                let _ = std::fs::remove_file(&session.fifo);
+            }
+            let mut map = lock(&registry.map);
+            if map.get(&session.id).is_some_and(|s| Arc::ptr_eq(s, &session)) {
+                map.remove(&session.id);
+            }
+            drop(map);
+            eprintln!(
+                "audio-relay: session {} over after {:.0}s{}: read {} bytes ({:.1}s of audio), sent {} bytes, {} silent chunks dropped, {} chunks the browser was too slow for",
+                session.id,
                 t0.elapsed().as_secs_f64(),
+                if reaped { " (reaped)" } else { "" },
                 stats.read,
                 stats.read as f64 / BYTES_PER_SECOND as f64,
                 stats.sent,
-                stats.silent_chunks
-            ),
-            Err(_) => eprintln!("audio-relay: session {id} over after {:.0}s", t0.elapsed().as_secs_f64()),
-        }
-        result.map(|_| ())
+                stats.silent_chunks,
+                stats.dropped_chunks
+            );
+        });
+        Ok(true)
     }
 
     /// What a session moved, for the log line at its end.
@@ -164,63 +290,140 @@ mod unix {
         pub read: u64,
         pub sent: u64,
         pub silent_chunks: u64,
+        pub dropped_chunks: u64,
     }
 
-    /// Create `fifo`, hold it open read-write, and forward what arrives on it
-    /// to `ws` until the socket is gone. Returns when the peer has gone away.
-    pub fn relay_session(mut ws: WebSocket<TcpStream>, fifo: &Path) -> io::Result<SessionStats> {
-        make_fifo(fifo)?;
-        let mut pipe: File = OpenOptions::new().read(true).write(true).open(fifo)?;
-        ws.send(Message::Text(header_json().into())).map_err(io::Error::other)?;
+    /// The session's whole life: read the FIFO at the format's real rate and
+    /// forward it to whoever is attached, discarding what nobody is there to
+    /// hear. Returns when the session is over, and whether it ended because its
+    /// FIFO was reaped.
+    fn run_session(session: &Session, mut pipe: File) -> (SessionStats, bool) {
         // 4096 bytes is 1024 stereo frames, 23 ms at 44.1 kHz: small enough to
         // keep the browser's queue short, large enough not to flood it.
         let mut buf = [0u8; 4096];
         // The clock starts at the first byte, so an idle wait before the game
         // plays anything is not counted as time the writer owes.
-        let mut started: Option<std::time::Instant> = None;
+        let mut started: Option<Instant> = None;
         let mut stats = SessionStats::default();
-        let mut last_send = std::time::Instant::now();
+        let mut last_send = Instant::now();
+        let mut unwritable_since: Option<Instant> = None;
         loop {
-            match wait_readable(&pipe, Duration::from_secs(1))? {
-                true => {
-                    let n = pipe.read(&mut buf)?;
-                    if n == 0 {
-                        continue;
+            // The only word we get that the game is gone; see the module docs.
+            if std::fs::symlink_metadata(&session.fifo).is_err() {
+                return (stats, true);
+            }
+            let readable = match wait_readable(&pipe, TICK) {
+                Ok(r) => r,
+                Err(e) => {
+                    eprintln!("audio-relay: session {}: poll: {e}", session.id);
+                    return (stats, false);
+                }
+            };
+            if readable {
+                let n = match pipe.read(&mut buf) {
+                    Ok(n) => n,
+                    Err(e) => {
+                        eprintln!("audio-relay: session {}: read: {e}", session.id);
+                        return (stats, false);
                     }
-                    let t0 = *started.get_or_insert_with(std::time::Instant::now);
+                };
+                if n > 0 {
+                    let t0 = *started.get_or_insert_with(Instant::now);
                     stats.read += n as u64;
+                    // Pacing is what makes this a clock rather than a drain: it
+                    // holds the writer to real time whether anybody is
+                    // listening or not.
                     let delay = pacing_delay(stats.read, t0.elapsed());
                     if !delay.is_zero() {
                         std::thread::sleep(delay);
                     }
                     if is_silence(&buf[..n]) {
                         stats.silent_chunks += 1;
-                        // A writer that never stops writing silence would keep
-                        // this loop from ever sending, and a gone peer is only
-                        // noticed by a send: ping once a second through it.
-                        if last_send.elapsed() >= Duration::from_secs(1) {
-                            if ws.send(Message::Ping(Vec::new().into())).is_err() {
-                                return Ok(stats);
+                    } else {
+                        match send_attached(session, Message::Binary(buf[..n].to_vec().into()), &mut unwritable_since) {
+                            Delivery::Sent => {
+                                stats.sent += n as u64;
+                                last_send = Instant::now();
                             }
-                            last_send = std::time::Instant::now();
+                            Delivery::Slow => stats.dropped_chunks += 1,
+                            Delivery::Nobody | Delivery::Gone => {}
                         }
-                        continue;
-                    }
-                    if ws.send(Message::Binary(buf[..n].to_vec().into())).is_err() {
-                        return Ok(stats);
-                    }
-                    last_send = std::time::Instant::now();
-                    stats.sent += n as u64;
-                }
-                // A quiet second: a ping is how a vanished peer is noticed
-                // while the game is silent.
-                false => {
-                    if ws.send(Message::Ping(Vec::new().into())).is_err() {
-                        return Ok(stats);
                     }
                 }
             }
+            // A ping through the same gate: a peer that went away is noticed by
+            // a send failing, and a game that is silent (or writing silence at
+            // full rate) sends nothing else. The stamp moves either way, so a
+            // session with nobody attached does not ping in a tight loop.
+            if last_send.elapsed() >= PING_EVERY {
+                send_attached(session, Message::Ping(Vec::new().into()), &mut unwritable_since);
+                last_send = Instant::now();
+            }
+            // One game per websocket: the session is the connection, so it ends
+            // with it — the pre-SQ-1328 behaviour, kept exactly.
+            if !session.keep_when_detached && lock(&session.attached).is_none() {
+                return (stats, false);
+            }
         }
+    }
+
+    /// What became of one frame.
+    enum Delivery {
+        /// Nobody is attached: the tab is away, and this is simply discarded.
+        Nobody,
+        Sent,
+        /// The socket is not taking bytes; dropped rather than waited on.
+        Slow,
+        /// The peer is gone, and has been detached.
+        Gone,
+    }
+
+    /// Send on the attached socket, if there is one and it is taking bytes.
+    ///
+    /// The writability gate is what keeps a stalled browser from becoming a
+    /// stalled GAME: a blocking `send` into a full socket buffer would stop this
+    /// thread reading the FIFO, the pipe would fill, and the audio thread on the
+    /// other side would block on `write` — the wedge this whole design exists to
+    /// avoid, arriving by the front door.
+    fn send_attached(session: &Session, msg: Message, unwritable_since: &mut Option<Instant>) -> Delivery {
+        let mut guard = lock(&session.attached);
+        let Some(fd) = guard.as_ref().map(|ws| ws.get_ref().as_raw_fd()) else {
+            *unwritable_since = None;
+            return Delivery::Nobody;
+        };
+        match poll_fd(fd, libc::POLLOUT, WRITABLE_WAIT) {
+            Ok(true) => {}
+            Ok(false) => {
+                let since = *unwritable_since.get_or_insert_with(Instant::now);
+                if since.elapsed() >= STALL_LIMIT {
+                    *guard = None;
+                    *unwritable_since = None;
+                    return Delivery::Gone;
+                }
+                return Delivery::Slow;
+            }
+            Err(_) => {
+                *guard = None;
+                *unwritable_since = None;
+                return Delivery::Gone;
+            }
+        }
+        *unwritable_since = None;
+        let Some(ws) = guard.as_mut() else {
+            return Delivery::Nobody;
+        };
+        if ws.send(msg).is_err() {
+            // Dropping the socket closes it, which is the whole of detaching.
+            *guard = None;
+            return Delivery::Gone;
+        }
+        Delivery::Sent
+    }
+
+    /// A lock that cannot poison the relay: a panicking session thread must not
+    /// take the registry — and every other session — down with it.
+    fn lock<T>(m: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
+        m.lock().unwrap_or_else(|e| e.into_inner())
     }
 
     /// The clock with nobody listening: create `fifo`, hold it open, and
@@ -232,17 +435,17 @@ mod unix {
         make_fifo(fifo)?;
         let mut pipe: File = OpenOptions::new().read(true).write(true).open(fifo)?;
         let mut buf = [0u8; 4096];
-        let mut started: Option<std::time::Instant> = None;
+        let mut started: Option<Instant> = None;
         let mut sent: u64 = 0;
         while !stop.load(std::sync::atomic::Ordering::Relaxed) {
-            if !wait_readable(&pipe, Duration::from_millis(500))? {
+            if !wait_readable(&pipe, TICK)? {
                 continue;
             }
             let n = pipe.read(&mut buf)?;
             if n == 0 {
                 continue;
             }
-            let t0 = *started.get_or_insert_with(std::time::Instant::now);
+            let t0 = *started.get_or_insert_with(Instant::now);
             sent += n as u64;
             let delay = pacing_delay(sent, t0.elapsed());
             if !delay.is_zero() {
@@ -269,7 +472,12 @@ mod unix {
 
     /// `poll(2)` the FIFO for readability. `Ok(false)` is a timeout.
     fn wait_readable(pipe: &File, timeout: Duration) -> io::Result<bool> {
-        let mut fds = libc::pollfd { fd: pipe.as_raw_fd(), events: libc::POLLIN, revents: 0 };
+        poll_fd(pipe.as_raw_fd(), libc::POLLIN, timeout)
+    }
+
+    /// `poll(2)` one descriptor for `events`. `Ok(false)` is a timeout.
+    fn poll_fd(fd: RawFd, events: libc::c_short, timeout: Duration) -> io::Result<bool> {
+        let mut fds = libc::pollfd { fd, events, revents: 0 };
         let ms = timeout.as_millis().min(i32::MAX as u128) as i32;
         // SAFETY: `fds` is one valid pollfd and lives across the call.
         let rc = unsafe { libc::poll(&mut fds, 1, ms) };
@@ -367,33 +575,75 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
-    /// End to end, in-process: a client connects, the relay creates the FIFO,
-    /// bytes written into the FIFO come out of the socket after the header,
-    /// and closing the socket removes the FIFO.
+    /// A scratch directory unique per CALL — an `AtomicUsize` beside the pid,
+    /// not the pid alone. This crate cannot reach `app::scratch_dir`, and under
+    /// `cargo test` (which is what CI runs) these cases share one process, so a
+    /// pid-keyed name would hand every caller the same directory and each would
+    /// delete it under the others (SQ-1131).
     #[cfg(unix)]
-    #[test]
-    fn pcm_written_to_the_fifo_arrives_on_the_socket_and_the_fifo_is_removed_after() {
-        use std::io::Write;
+    fn scratch(tag: &str) -> PathBuf {
         use std::sync::atomic::{AtomicUsize, Ordering};
         static COUNTER: AtomicUsize = AtomicUsize::new(0);
         let dir = std::env::temp_dir().join(format!(
-            "lanthorn-audio-relay-{}-{}",
+            "lanthorn-audio-{tag}-{}-{}",
             std::process::id(),
             COUNTER.fetch_add(1, Ordering::Relaxed)
         ));
         let _ = std::fs::remove_dir_all(&dir);
+        dir
+    }
+
+    /// A relay on its own port, serving `dir`. `keep_when_detached` is stated
+    /// rather than left to `LANTHORN_WEB_DETACH`, which is process-global.
+    #[cfg(unix)]
+    fn start_relay(dir: &Path, keep_when_detached: bool) -> u16 {
         let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
         let port = listener.local_addr().unwrap().port();
-        let server_dir = dir.clone();
-        std::thread::spawn(move || serve(listener, server_dir));
+        let dir = dir.to_path_buf();
+        std::thread::spawn(move || serve_sessions(listener, dir, keep_when_detached));
+        port
+    }
+
+    /// Connect as the page does, and check the header frame that every attach
+    /// opens with — a reconnecting page has a new decoder and has been told
+    /// nothing about the format yet.
+    #[cfg(unix)]
+    #[allow(clippy::type_complexity)]
+    fn attach_to(
+        port: u16,
+        id: &str,
+    ) -> tungstenite::WebSocket<tungstenite::stream::MaybeTlsStream<std::net::TcpStream>> {
+        let (mut ws, _) = tungstenite::connect(format!("ws://127.0.0.1:{port}/audio/{id}")).unwrap();
+        let header = ws.read().unwrap();
+        assert_eq!(header.into_text().unwrap().as_str(), header_json(), "every attach opens with the header frame");
+        ws
+    }
+
+    #[cfg(unix)]
+    fn wait_for(path: &Path, present: bool) -> bool {
+        let deadline = std::time::Instant::now() + Duration::from_secs(5);
+        while path.exists() != present && std::time::Instant::now() < deadline {
+            std::thread::sleep(Duration::from_millis(25));
+        }
+        path.exists() == present
+    }
+
+    /// End to end, in-process: a client connects, the relay creates the FIFO,
+    /// bytes written into the FIFO come out of the socket after the header,
+    /// and — with `LANTHORN_WEB_DETACH=off`, one game per websocket — closing
+    /// the socket removes the FIFO.
+    #[cfg(unix)]
+    #[test]
+    fn pcm_arrives_on_the_socket_and_with_detach_off_the_fifo_dies_with_it() {
+        use std::io::Write;
+        let dir = scratch("relay");
+        let port = start_relay(&dir, false);
 
         let id = "testsession_0001";
-        let (mut client, _) = tungstenite::connect(format!("ws://127.0.0.1:{port}/audio/{id}")).unwrap();
-        let header = client.read().unwrap();
-        assert_eq!(header.into_text().unwrap().as_str(), header_json());
+        let mut client = attach_to(port, id);
 
         let fifo = fifo_path(&dir, id);
-        assert!(fifo.exists(), "the relay created the FIFO on connect");
+        assert!(wait_for(&fifo, true), "the relay created the FIFO on connect");
         let payload: Vec<u8> = (0..20_000u32).map(|i| (i % 251) as u8).collect();
         {
             let mut w = std::fs::OpenOptions::new().write(true).open(&fifo).unwrap();
@@ -416,11 +666,129 @@ mod tests {
         client.close(None).unwrap();
         drop(client);
         // The relay notices on its next send: a data frame, or the one-second ping.
-        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
-        while fifo.exists() && std::time::Instant::now() < deadline {
-            std::thread::sleep(std::time::Duration::from_millis(50));
+        assert!(wait_for(&fifo, false), "the FIFO is unlinked once the socket is gone");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// The whole of SQ-1328, in one flow: the tab goes away, the FIFO stays,
+    /// the game keeps playing into a reader that is still consuming at real
+    /// time — and the next tab with the same id hears it again.
+    #[cfg(unix)]
+    #[test]
+    fn a_dropped_tab_keeps_its_fifo_draining_and_the_next_one_hears_the_game_again() {
+        use std::io::Write;
+        let dir = scratch("detach");
+        let port = start_relay(&dir, true);
+        let id = "detachsession01";
+
+        let client = attach_to(port, id);
+        let fifo = fifo_path(&dir, id);
+        assert!(wait_for(&fifo, true), "the relay created the FIFO on connect");
+        // The game's ALSA output: opened once, and it outlives every socket.
+        let mut game = std::fs::OpenOptions::new().write(true).open(&fifo).unwrap();
+
+        drop(client);
+        std::thread::sleep(Duration::from_millis(1200)); // the ping notices
+
+        // With nobody listening the FIFO must still be READ, or the pipe fills
+        // at 64 KB and the audio thread on the other end blocks for good. A
+        // second of audio is 176,400 bytes: it can only pass if the drain is
+        // still running, and it can only take about a second if it is paced.
+        let mut writer = game.try_clone().unwrap();
+        let (tx, rx) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            let second = vec![9u8; BYTES_PER_SECOND as usize];
+            let t0 = std::time::Instant::now();
+            writer.write_all(&second).unwrap();
+            let _ = tx.send(t0.elapsed());
+        });
+        let took = rx
+            .recv_timeout(Duration::from_secs(20))
+            .expect("a detached session must keep draining, or the game is wedged on a full pipe");
+        assert!(took >= Duration::from_millis(300), "the drain is still the clock: {took:?}");
+        assert!(fifo.exists(), "a detached session keeps its FIFO — it belongs to the game, not the socket");
+
+        // The tab comes back with the same id: a fresh header (checked inside
+        // attach_to) and the game it left.
+        let mut client = attach_to(port, id);
+        let payload: Vec<u8> = (0..8_000u32).map(|i| ((i % 180) + 20) as u8).collect();
+        game.write_all(&payload).unwrap();
+        let mut got = Vec::new();
+        loop {
+            // Up to a pipeful of the audio written while nobody was attached is
+            // still in flight, and the reattached tab hears the tail of it.
+            // Every byte of that is a 9 and none of the payload is.
+            while got.first() == Some(&9) {
+                got.remove(0);
+            }
+            if got.len() >= payload.len() {
+                break;
+            }
+            match client.read().unwrap() {
+                tungstenite::Message::Binary(b) => got.extend_from_slice(&b),
+                tungstenite::Message::Ping(_) => {}
+                other => panic!("unexpected frame {other:?}"),
+            }
         }
-        assert!(!fifo.exists(), "the FIFO is unlinked once the socket is gone");
+        assert_eq!(got, payload, "streaming resumes byte-exact after a reattach");
+
+        drop(client);
+        drop(game);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// The reap control path: the entrypoint unlinks a killed session's FIFO,
+    /// and that absence is the only word this relay ever gets that the game is
+    /// gone (it holds the write end itself, so there is no EOF to see). The
+    /// session must close out — socket and all — rather than read a pipe
+    /// nobody will write to again for the life of the container.
+    #[cfg(unix)]
+    #[test]
+    fn unlinking_the_fifo_ends_the_session_and_frees_the_id() {
+        let dir = scratch("reap");
+        let port = start_relay(&dir, true);
+        let id = "reapedsession01";
+
+        let mut client = attach_to(port, id);
+        let fifo = fifo_path(&dir, id);
+        assert!(wait_for(&fifo, true), "the relay created the FIFO on connect");
+
+        // Long enough that the session is inside its poll wait rather than on
+        // its very first iteration: the absence has to be noticed by the loop,
+        // which is the only place it ever can be.
+        std::thread::sleep(Duration::from_millis(200));
+        std::fs::remove_file(&fifo).unwrap();
+
+        // The session ends, which drops the socket it held: the client sees the
+        // connection close rather than hanging on a relay thread that is still
+        // there.
+        if let tungstenite::stream::MaybeTlsStream::Plain(s) = client.get_ref() {
+            s.set_read_timeout(Some(Duration::from_millis(250))).unwrap();
+        }
+        let deadline = std::time::Instant::now() + Duration::from_secs(10);
+        let mut closed = false;
+        while std::time::Instant::now() < deadline {
+            match client.read() {
+                Ok(tungstenite::Message::Close(_)) => {
+                    closed = true;
+                    break;
+                }
+                Ok(_) => {}
+                Err(tungstenite::Error::Io(e))
+                    if matches!(e.kind(), std::io::ErrorKind::WouldBlock | std::io::ErrorKind::TimedOut) => {}
+                Err(_) => {
+                    closed = true;
+                    break;
+                }
+            }
+        }
+        assert!(closed, "a reaped session closes its socket instead of holding the thread");
+
+        // …and the id is free: the next visitor gets a session of their own,
+        // with a new FIFO at the same path.
+        let next = attach_to(port, id);
+        assert!(wait_for(&fifo, true), "a reaped id can be used again");
+        drop(next);
         let _ = std::fs::remove_dir_all(&dir);
     }
 }
