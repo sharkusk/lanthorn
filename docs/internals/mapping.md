@@ -784,6 +784,35 @@ crossing line. `/export-map`'s dump lists the recorded destinations on the `ROOM
 line (`random=[N→(#187 "Probably New Tunnel"), …]`) beside everything else it already
 records about a room.
 
+**And a known pool marks the next way in at once** (SQ-1370). Adventure randomises
+on the ARRIVAL side: `In_Forest_1`'s own arrival routine sends you on to
+`In_Forest_2` half the time, so the coin flip belongs to the DESTINATION and every
+way into it is random — the hill's south, the valley's east, the valley's west, all
+three declaring the same fixed room. Each of them used to be discovered from
+scratch, an arrow drawn on the first walk and taken back by the second. Now the
+first walk of a direction the map holds nothing for, landing in a room some other
+direction's pool already names (or declaring one — a mismatch against a room known
+to be reached at random is not a mystery worth a probe round trip), is marked on
+the spot with that pool copied, and the ordinary Upgrade probe is armed behind it.
+It is a hypothesis, and the graph records it as one: `Room::random_inherited` marks
+those `?`s provisional, so a fixed corridor into a room some OTHER exit merely
+scatters you into can still be repaired by walking it, where a pool the direction
+earned itself stays untouchable. Four things are refused outright — a key the map
+already claims an edge, a self-loop or a `?` for; a move that never left the room
+(the forest's own loops all "arrive" in a pooled room); a pool naming its own origin
+room, which is SQ-1345's phantom "back here"; and a pool of one, where a direction
+that varies and a direction walked once look exactly alike.
+
+**A `?` is not undone by a lucky streak.** Two reseeded attempts agree with the live
+landing one time in four on a two-destination exit, which from the player's chair
+looks like this: walk the forest a few times, happen to get the same one, and the
+`?` turns back into a confident arrow. Agreement is now COUNTED rather than acted
+on — three consecutive agreeing walks (`random_exit_probe::AGREEING_WALKS_TO_UPGRADE`),
+one chance in sixty-four, and any disagreement in between both restarts the count and
+pools a second room, after which SQ-1269's guard holds the mark on its own. The count
+is session state and one slot wide, so every way of losing it — a different marked
+direction walked in between, a restore, a restart — leaves the `?` standing.
+
 **A randomiser the map cannot see is one it never had a chance to mark.** Every
 piece of the machinery above — the declared-exit check, the contradicted edge, the
 `?` and its list — starts from noticing that *this* direction out of *this* room

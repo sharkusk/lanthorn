@@ -29,6 +29,16 @@ Absolute URLs or no link.
 
 ### Changed
 
+- **Once the map knows a room is reached at random, every other way in is
+  marked the first time you walk it.** Adventure's two forests are the case:
+  the hill's south, the valley's east and its west all wander between the same
+  pair, and each one used to be drawn as a confident arrow until a second walk
+  came out somewhere else and took it back. The first walk is enough now, and
+  the new `?` arrives already naming both forests. The `?` is also harder to
+  lose: getting the same forest a few times running no longer turns the mark
+  back into an arrow, since a direction that varies agrees with itself by luck
+  often enough to be worth waiting out.
+
 - **A room reached by a ladder or a staircase now pushes the building's wall
   out to make room for itself.** Where the cell it wants is already occupied and
   the map cannot simply open a blank row for it — because doing so would tear

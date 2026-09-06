@@ -2559,6 +2559,23 @@ pub struct AppState {
     /// turn's move was actually taken from.
     pub random_exit_pre_move_save:
         Option<(mapper::graph::RoomId, std::sync::Arc<crate::engine::EngineSave>)>,
+    /// How many Upgrade answers IN A ROW have agreed with the live landing for one marked
+    /// direction (SQ-1370) — `(room, direction, count)`, the streak the mark is currently being
+    /// judged on, or `None` when nothing is being counted.
+    ///
+    /// A re-walk of a random direction with two destinations comes back "both reseeded attempts
+    /// agree" one time in four by pure luck, and the user reported exactly what that looks like
+    /// from the outside: play a forest whose pool has only ever named one room, get the same
+    /// forest a few times running, and watch the `?` turn back into an arrow. So an upgrade a
+    /// pool cannot outweigh (see `random_exit_probe::deliver_upgrade`) is no longer acted on the
+    /// first time — it has to happen on [`crate::random_exit_probe::AGREEING_WALKS_TO_UPGRADE`]
+    /// consecutive walks, which for a two-destination exit is one chance in sixty-four, and any
+    /// disagreement in between both resets this and pools a second room.
+    ///
+    /// One slot rather than a table, and session state, never persisted: this counts consecutive
+    /// evidence, and every way of losing it — walking a different marked direction, a restore, a
+    /// restart — resolves the same conservative way, by leaving the `?` in place.
+    pub random_exit_agreements: Option<(mapper::graph::RoomId, mapper::direction::Direction, u8)>,
     /// A vocabulary offer that has been asked of the shadow and not yet answered
     /// (SQ-1124). At most one: a second question while this is outstanding is not
     /// asked at all, and that offer falls back to what it can say unvetted.
@@ -3577,6 +3594,7 @@ impl Default for AppState {
             return_search: None,
             random_exit_search: None,
             random_exit_pre_move_save: None,
+            random_exit_agreements: None,
             vocab_pending: None,
             turn_epoch: 0,
             transcript_styles: Vec::new(),

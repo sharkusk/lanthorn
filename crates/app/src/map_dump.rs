@@ -203,7 +203,12 @@ pub fn render_dump_with_header(graph: &MapGraph, symbols: &SymbolSet, extra: &[S
                             }
                         })
                         .collect();
-                    format!("{}→({})", dir_str(d), dests.join(", "))
+                    // SQ-1370: a mark this direction did not earn — copied from a pool some
+                    // other direction proved, on the first walk into one of its rooms — says so,
+                    // because a dump is the first thing read when a `?` looks wrong and the two
+                    // kinds are judged differently on a re-walk (`random_exit_probe::deliver_upgrade`).
+                    let how = if graph.is_inherited_random_exit(r.id, d) { " inherited" } else { "" };
+                    format!("{}→({}){how}", dir_str(d), dests.join(", "))
                 })
                 .collect();
             format!("  random=[{}]", dirs.join(", "))
@@ -477,6 +482,22 @@ mod tests {
         assert!(
             !plain_room_line.contains("random="),
             "a room with no random exit carries no random= at all: {plain_room_line}"
+        );
+
+        // SQ-1370: a mark COPIED from another direction's pool is annotated, because a re-walk
+        // judges the two differently and a dump is where that question gets asked.
+        assert!(
+            !random_room_line.contains("inherited"),
+            "an earned mark says nothing extra: {random_room_line}"
+        );
+        m.graph.mark_random_exit_inherited(2, Direction::W);
+        m.graph.note_random_destination(2, Direction::W, 1);
+        let dump = render_dump(&m.graph, &SymbolSet::default());
+        let inherited_line =
+            dump.lines().find(|l| l.starts_with("ROOM #2 ")).expect("room 2's line");
+        assert!(
+            inherited_line.contains(r#"random=[W→(#1 "Windy Cave") inherited]"#),
+            "an inherited mark says so: {inherited_line}"
         );
     }
 

@@ -37,6 +37,12 @@
 //! about, by which point the player may not even be standing in the room any more. Disagreement
 //! leaves the mark exactly as it was — the re-walk proved nothing new. **SQ-1269**: agreement no
 //! longer upgrades unconditionally — see `deliver_upgrade`'s pool check, the flicker fix.
+//! **SQ-1370**: nor does it upgrade on the FIRST agreement where that check lets it through — a
+//! lucky streak of the same forest is one chance in four per walk, so it takes
+//! [`AGREEING_WALKS_TO_UPGRADE`] of them in a row. And a mark the map only INHERITED (the first
+//! walk of a new direction into a room some other direction's pool already names,
+//! [`crate::session::inherited_random_pool`]) is exempt from the pool check itself, since the
+//! pool it holds is a copy of a neighbour's rather than anything this direction ever showed.
 //!
 //! **A SUSPICION** ([`SearchKind::Suspicion`], SQ-1269) — a declared-exit mismatch or a live
 //! contradiction against something the map already believed (an existing edge, or an existing
@@ -355,7 +361,7 @@ pub fn deliver(state: &mut AppState, mapper: &mut Mapper, answer: &crate::probe:
     }
     let Some(run) = &answer.run else { return false };
     match search.kind {
-        SearchKind::Upgrade => deliver_upgrade(mapper, &search, run),
+        SearchKind::Upgrade => deliver_upgrade(state, mapper, &search, run),
         SearchKind::FirstWalk => deliver_first_walk(mapper, &search, run),
         SearchKind::Suspicion { .. } => unreachable!("handled above"),
     }
@@ -480,12 +486,42 @@ fn deliver_first_walk(mapper: &mut Mapper, search: &RandomExitSearch, run: &crat
     true
 }
 
+/// How many Upgrade answers in a row must agree before a mark SQ-1269's pool guard cannot settle
+/// is cleared (SQ-1370). Each one is a live re-walk plus two reseeded shadow attempts all landing
+/// in the same room, so for an exit with two destinations a streak this long is one chance in
+/// sixty-four — and a single disagreement anywhere in it both restarts the count and pools a
+/// second room, which the guard below then weighs on its own.
+///
+/// Three, not more, because the streak is also the only way a mark this module made on a
+/// hypothesis rather than on evidence can be taken back: a genuinely fixed passage into a random
+/// room ([`crate::session::inherited_random_pool`]) agrees every time, so three re-walks repair
+/// it, and a larger number would leave a wrong `?` standing for longer than a player would keep
+/// walking the same corridor.
+pub const AGREEING_WALKS_TO_UPGRADE: u8 = 3;
+
+/// Note that this Upgrade answer agreed, and return how many in a row now have (SQ-1370).
+/// Agreement on a DIFFERENT direction starts the count over — see
+/// [`AppState::random_exit_agreements`] for why one slot is enough.
+fn note_agreement(state: &mut AppState, origin: RoomId, dir: Direction) -> u8 {
+    let n = match state.random_exit_agreements {
+        Some((o, d, n)) if (o, d) == (origin, dir) => n.saturating_add(1),
+        _ => 1,
+    };
+    state.random_exit_agreements = Some((origin, dir, n));
+    n
+}
+
 /// A re-walk of a direction ALREADY marked random: there is no edge to check for staleness
 /// against (`apply_turn` minted none), so the guard instead is that the mark itself must still
 /// be there — if something else already resolved it, this answer is about a question that is no
 /// longer being asked. Agreement on every usable attempt clears the mark and mints the
 /// now-confirmed edge; disagreement (or no evidence) leaves the mark untouched.
-fn deliver_upgrade(mapper: &mut Mapper, search: &RandomExitSearch, run: &crate::probe::ProbeRun) -> bool {
+fn deliver_upgrade(
+    state: &mut AppState,
+    mapper: &mut Mapper,
+    search: &RandomExitSearch,
+    run: &crate::probe::ProbeRun,
+) -> bool {
     if !mapper.graph.is_random_exit(search.origin, search.dir) {
         return false; // no longer marked; this answer is about a question nobody is asking
     }
@@ -500,6 +536,11 @@ fn deliver_upgrade(mapper: &mut Mapper, search: &RandomExitSearch, run: &crate::
         // upgrade itself does not go through: disagreement here is fresh evidence the direction
         // keeps varying, not proof of nothing.
         note_disagreeing_destinations(mapper, search, run);
+        // SQ-1370: the direction has now been seen to vary on a walk of its OWN, so a mark it
+        // merely inherited from a neighbour's pool stops being provisional — and the streak of
+        // agreements any upgrade would have needed is broken.
+        mapper.graph.promote_inherited_random_exit(search.origin, search.dir);
+        state.random_exit_agreements = None;
         return false; // at least one attempt disagreed — stay marked
     }
     // SQ-1269: the flicker fix. With two possible destinations, two reseeded attempts agree with
@@ -510,12 +551,32 @@ fn deliver_upgrade(mapper: &mut Mapper, search: &RandomExitSearch, run: &crate::
     // `note_random_destination` call for a re-walk of a marked direction, SQ-1261) — so "fewer than
     // two" here means the mark came from a single mismatch, or a shadow disagreement that pooled
     // exactly one room besides the live one. Upgrade stays possible only then.
-    if mapper.graph.random_destinations(search.origin, search.dir).len() >= 2 {
+    //
+    // SQ-1370 adds the one exception the guard cannot be allowed to cover: a pool this direction
+    // never EARNED. `session::inherited_random_pool` copies a neighbour's pool onto the first walk
+    // of a new direction, which is the right call for Adventure's forests and the wrong one for a
+    // fixed corridor into a room some other exit scatters the player into — and the two are
+    // indistinguishable from that one walk. An inherited mark is therefore left open to exactly
+    // the evidence that would settle it, while an EARNED pool still outweighs any amount of
+    // agreement, which is SQ-1269 untouched.
+    let inherited = mapper.graph.is_inherited_random_exit(search.origin, search.dir);
+    if !inherited && mapper.graph.random_destinations(search.origin, search.dir).len() >= 2 {
+        state.random_exit_agreements = None;
         return false; // still marked — the pool alone outweighs one agreeing pair
+    }
+    // SQ-1370, the lucky-streak fix. One agreeing answer is one chance in four on a two-room exit,
+    // which is what the field report ran into: a forest whose pool had only ever named one room
+    // turned back into a confident arrow after a few walks that happened to pick the same forest.
+    // Nothing is wrong with that evidence — there is simply not enough of it — so the answer is
+    // COUNTED rather than acted on, and only a run of [`AGREEING_WALKS_TO_UPGRADE`] of them
+    // clears the mark.
+    if note_agreement(state, search.origin, search.dir) < AGREEING_WALKS_TO_UPGRADE {
+        return false; // still marked — a lucky streak is not yet a long enough one to be evidence
     }
     let passage = ProbedPassage { from: search.origin, dir: search.dir, to: search.live_dest };
     if mapper.record_probed_passage(passage) {
         mapper.graph.unmark_random_exit(search.origin, search.dir);
+        state.random_exit_agreements = None;
         true
     } else {
         false // e.g. a self-loop, or an edge already there another way — leave the mark as is
@@ -669,8 +730,16 @@ mod tests {
         assert_eq!(mapper.graph.random_destinations(1, Direction::N), &[2]);
         assert!(mapper.take_random_exit_suspicion().is_none(), "an already-random re-walk is Upgrade territory, not a new suspicion");
 
-        // ── 2: Phase 2 re-probe agrees on both attempts. Upgrade — the pool holds only 1 room. ──
+        // ── 2: Phase 2 re-probe agrees on both attempts. Upgrade — the pool holds only 1 room.
+        // SQ-1370: and it takes `AGREEING_WALKS_TO_UPGRADE` such answers in a row, not one; the
+        // first two are counted and change nothing, which is the whole of the lucky-streak fix. ──
         let mut state = AppState::default();
+        for token in 1..AGREEING_WALKS_TO_UPGRADE as u64 {
+            state.random_exit_search = Some(arm(1, Direction::N, 2, SearchKind::Upgrade, token));
+            let run = ProbeRun { baseline: WorldPrint::default(), steps: vec![step(Some(2)), step(Some(2))] };
+            assert!(!deliver(&mut state, &mut mapper, &test_answer(token, Some(run))), "agreement {token} is counted, not acted on");
+            assert!(mapper.graph.is_random_exit(1, Direction::N), "still marked after agreement {token}");
+        }
         state.random_exit_search = Some(arm(1, Direction::N, 2, SearchKind::Upgrade, 7));
         let run = ProbeRun { baseline: WorldPrint::default(), steps: vec![step(Some(2)), step(Some(2))] };
         assert!(deliver(&mut state, &mut mapper, &test_answer(7, Some(run))), "the map changed");
@@ -1128,6 +1197,118 @@ mod tests {
         assert!(!ordinary.self_landing_is_evidence(), "nothing here is about a passage back to 1");
         assert!(!arm(1, Direction::N, 5, SearchKind::FirstWalk, 66).self_landing_is_evidence());
         assert!(!arm(1, Direction::N, 5, SearchKind::Upgrade, 67).self_landing_is_evidence());
+    }
+
+    // ── SQ-1370: a lucky streak, and a pool that was never earned ─────────────────────────────
+
+    /// The streak has to be CONSECUTIVE. One disagreement anywhere in it is fresh proof the
+    /// direction still varies, so the count starts over — and, since the disagreement is evidence
+    /// about this direction rather than about a neighbour's, an inherited mark stops being
+    /// provisional at the same moment.
+    #[test]
+    fn a_disagreement_breaks_the_agreement_streak() {
+        let mut mapper = Mapper::default();
+        let mut death = DeathWatch::default();
+        apply_turn(&mut mapper, "", &TurnResult::observation(snap(1, "Tunnel")), &mut death);
+        // The room the agreements are about is on the map, so an upgrade that got through would
+        // really mint its edge — otherwise `Mapper::record_probed_passage` refuses and this case
+        // would pass whether the streak rule held or not.
+        mapper.graph.upsert_room(2, "Forest".to_string());
+        mapper.graph.set_current(1);
+        mapper.graph.mark_random_exit_inherited(1, Direction::N);
+        let mut state = AppState::default();
+
+        // Two agreements: counted, nothing acted on.
+        for token in [71, 72] {
+            state.random_exit_search = Some(arm(1, Direction::N, 2, SearchKind::Upgrade, token));
+            let run = ProbeRun { baseline: WorldPrint::default(), steps: vec![step(Some(2)), step(Some(2))] };
+            assert!(!deliver(&mut state, &mut mapper, &test_answer(token, Some(run))));
+        }
+        assert_eq!(state.random_exit_agreements, Some((1, Direction::N, 2)), "two in a row so far");
+
+        // A disagreement resets the count and promotes the inherited mark to an earned one.
+        state.random_exit_search = Some(arm(1, Direction::N, 2, SearchKind::Upgrade, 73));
+        let run = ProbeRun { baseline: WorldPrint::default(), steps: vec![step(Some(2)), step(Some(9))] };
+        assert!(!deliver(&mut state, &mut mapper, &test_answer(73, Some(run))));
+        assert_eq!(state.random_exit_agreements, None, "the streak is broken");
+        assert!(!mapper.graph.is_inherited_random_exit(1, Direction::N), "and the mark is earned now");
+
+        // So the next agreement is the FIRST one again, and the pool it has earned in the
+        // meantime is what SQ-1269's guard weighs from here on.
+        state.random_exit_search = Some(arm(1, Direction::N, 2, SearchKind::Upgrade, 74));
+        let run = ProbeRun { baseline: WorldPrint::default(), steps: vec![step(Some(2)), step(Some(2))] };
+        assert!(!deliver(&mut state, &mut mapper, &test_answer(74, Some(run))));
+        assert!(mapper.graph.is_random_exit(1, Direction::N), "still marked");
+        assert_eq!(state.random_exit_agreements, None, "an earned two-room pool does not even count");
+    }
+
+    /// The count belongs to one direction. Agreement about a different one is not more evidence
+    /// about this one, so it starts over — conservative by construction: every way of losing the
+    /// count leaves the `?` standing.
+    #[test]
+    fn an_agreement_about_another_direction_starts_the_count_over() {
+        let mut mapper = Mapper::default();
+        let mut death = DeathWatch::default();
+        apply_turn(&mut mapper, "", &TurnResult::observation(snap(1, "Tunnel")), &mut death);
+        // Both landing rooms on the map, for the reason the case above spells out.
+        mapper.graph.upsert_room(2, "North Room".to_string());
+        mapper.graph.upsert_room(3, "East Room".to_string());
+        mapper.graph.set_current(1);
+        mapper.record_random_exit(1, Direction::N);
+        mapper.record_random_exit(1, Direction::E);
+        let mut state = AppState::default();
+
+        for (token, dir, live) in [(81, Direction::N, 2), (82, Direction::E, 3), (83, Direction::N, 2)] {
+            state.random_exit_search = Some(arm(1, dir, live, SearchKind::Upgrade, token));
+            let run = ProbeRun { baseline: WorldPrint::default(), steps: vec![step(Some(live)), step(Some(live))] };
+            assert!(!deliver(&mut state, &mut mapper, &test_answer(token, Some(run))), "token {token}");
+        }
+        assert_eq!(
+            state.random_exit_agreements,
+            Some((1, Direction::N, 1)),
+            "north's second agreement is its first again — east's came in between"
+        );
+        assert!(mapper.graph.is_random_exit(1, Direction::N), "so nothing has been upgraded");
+    }
+
+    /// The exemption SQ-1370 adds to SQ-1269's guard, and the reason it is safe: a pool a
+    /// direction only INHERITED (`session::inherited_random_pool` copying a neighbour's) is a
+    /// hypothesis about this direction, not evidence from it — so a fixed corridor into a room
+    /// some other exit scatters the player into can still be repaired by walking it. An EARNED
+    /// two-room pool in the same position is untouchable, which
+    /// `upgrade_never_fires_once_the_pool_already_holds_two_destinations` pins.
+    #[test]
+    fn an_inherited_two_room_pool_can_still_be_cleared_by_a_long_enough_streak() {
+        let mut mapper = Mapper::default();
+        let mut death = DeathWatch::default();
+        apply_turn(&mut mapper, "", &TurnResult::observation(snap(1, "Tunnel")), &mut death);
+        // Both pooled rooms are on the map (the upgrade mints a real edge to one of them, which
+        // `Mapper::record_probed_passage` refuses to draw to a room it has never seen).
+        mapper.graph.upsert_room(2, "Forest".to_string());
+        mapper.graph.upsert_room(3, "Forest".to_string());
+        mapper.graph.set_current(1);
+        mapper.graph.mark_random_exit_inherited(1, Direction::N);
+        mapper.graph.note_random_destination(1, Direction::N, 2);
+        mapper.graph.note_random_destination(1, Direction::N, 3);
+
+        let mut state = AppState::default();
+        for token in 1..AGREEING_WALKS_TO_UPGRADE as u64 {
+            state.random_exit_search = Some(arm(1, Direction::N, 2, SearchKind::Upgrade, token));
+            let run = ProbeRun { baseline: WorldPrint::default(), steps: vec![step(Some(2)), step(Some(2))] };
+            assert!(!deliver(&mut state, &mut mapper, &test_answer(token, Some(run))), "counted, not acted on");
+            assert!(mapper.graph.is_random_exit(1, Direction::N), "still marked after agreement {token}");
+        }
+        state.random_exit_search = Some(arm(1, Direction::N, 2, SearchKind::Upgrade, 99));
+        let run = ProbeRun { baseline: WorldPrint::default(), steps: vec![step(Some(2)), step(Some(2))] };
+        assert!(deliver(&mut state, &mut mapper, &test_answer(99, Some(run))), "the map changed");
+        assert!(!mapper.graph.is_random_exit(1, Direction::N), "a mark nobody earned is repairable");
+        assert!(!mapper.graph.is_inherited_random_exit(1, Direction::N), "and the record goes with it");
+        assert_eq!(
+            mapper.graph.connections().iter().find(|c| c.origin == 1 && c.dir == Direction::N).map(|c| c.dest),
+            Some(2),
+            "with the confirmed edge minted in its place"
+        );
+        assert_eq!(state.random_exit_agreements, None, "the count is spent");
     }
 
     // ── SQ-1314: the shadow asks in the player's own words ────────────────────────────────────

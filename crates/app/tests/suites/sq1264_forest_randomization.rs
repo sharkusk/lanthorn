@@ -93,6 +93,16 @@ fn recipe_in(bytes: &[u8], store: PathBuf) -> ShadowRecipe {
 ///   same numeric value as the Z-machine's lucky seed is coincidence, not a shared derivation.
 const Z_LUCKY_SEED: u32 = 16;
 const Z_DISAGREEING_SEED: u32 = 2;
+/// SQ-1370's lucky STREAK, found the same way and for the same reason the two above were: a seed
+/// under which the live walk lands in the non-declared forest AND both reseeded shadow attempts
+/// agree with it, so the evidence never names a second room and the pool stays at one. That is
+/// the shape the field report describes — the same forest a few times running — and it is what
+/// used to upgrade the mark to a confident arrow on the very first re-walk. Seeds 19, 21, 23, 40,
+/// 42, 44 and 46 behave identically on `advent.z6`; 17 is simply the lowest.
+const Z_STREAK_SEED: u32 = 17;
+/// The same role on `advent.blb`, again by trial and again not derivable from the Z-machine's:
+/// `gvm` does not consume `random()` draws in step with `zvm`.
+const G_STREAK_SEED: u32 = 17;
 const G_LUCKY_SEED: u32 = 16;
 const G_DISAGREEING_SEED: u32 = 2;
 
@@ -106,10 +116,27 @@ struct ZPlay {
     mapper: Mapper,
     session: GameSession,
     death: DeathWatch,
+    /// The story, kept so a case that booted with NO shadow can arm one later — see
+    /// [`ZPlay::advent_without_a_shadow`].
+    bytes: Vec<u8>,
 }
 
 impl ZPlay {
     fn advent() -> Option<ZPlay> {
+        let mut p = ZPlay::advent_without_a_shadow()?;
+        p.arm_shadow();
+        Some(p)
+    }
+
+    /// [`ZPlay::advent`] with the shadow probe UNARMED (SQ-1370). Not a mere convenience: a
+    /// session that cannot run a probe is how a random mark comes to hold a pool of exactly ONE
+    /// room, which is the state the lucky-streak report was made from. `apply_turn` files the
+    /// declared mismatch as a suspicion, `arm_for_finished_turn` finds no shadow to hand it to,
+    /// and `Mapper::resolve_suspicion_as_random` marks the direction with only the live landing
+    /// pooled (`old_dest` is `None` — there was no edge to contradict). Arm the shadow afterwards
+    /// with [`ZPlay::arm_shadow`] and the re-walks that follow are ordinary Upgrade searches
+    /// judging a one-room pool.
+    fn advent_without_a_shadow() -> Option<ZPlay> {
         let bytes = story("advent.z6")?;
         let mut s = GameSession::new_with_trace(
             bytes.clone(), true, false, None, false, Vec::new(), None, None, Some((25, 80)),
@@ -117,9 +144,18 @@ impl ZPlay {
         .expect("advent.z6 boots without a ZError");
         s.set_strip_prompt(false);
         let _ = s.submit(""); // dismiss the V6 "[Press any key to start]" splash
-        let mut state = AppState::default();
-        state.probe.arm(recipe(&bytes));
-        Some(ZPlay { state, mapper: Mapper::default(), session: s, death: DeathWatch::default() })
+        Some(ZPlay {
+            state: AppState::default(),
+            mapper: Mapper::default(),
+            session: s,
+            death: DeathWatch::default(),
+            bytes,
+        })
+    }
+
+    fn arm_shadow(&mut self) {
+        let recipe = recipe(&self.bytes);
+        self.state.probe.arm(recipe);
     }
 
     fn turn(&mut self, cmd: &str) {
@@ -299,6 +335,136 @@ fn z6_forest_random_walk_stays_marked_once_the_pool_holds_both_forests() {
     );
 }
 
+/// SQ-1370, rule 1 on the Z-machine: once the hill's south is marked with both forests pooled,
+/// the FIRST walk of the valley's west — a direction the map has never seen — is marked random on
+/// the spot, with the pool copied. No second, contradicting walk, and no confident arrow drawn in
+/// between.
+///
+/// The valley's `w_to` declares `In_Forest_1` exactly as the hill's `s_to` does, so this case
+/// reseeds to LAND there: a landing in the other forest would be an ordinary declared mismatch
+/// (SQ-1257 Phase 1's own suspicion path, which already marks on the first walk) and would prove
+/// nothing about this rule. What is under test is the walk that agrees with everything the story
+/// declared and is random all the same.
+#[test]
+fn z6_a_new_direction_into_a_known_forest_is_marked_random_on_its_first_walk() {
+    let Some(mut p) = ZPlay::advent() else { return };
+    let hill = z_reach_hill(&mut p);
+    let DeclaredExit::Room(forest1) = p.session.declared_exit(hill, Direction::S) else {
+        panic!("expected a declared Room(_) south of the hill");
+    };
+
+    // The hill's south, marked random the way the suite above pins it.
+    p.session.reseed_random(Z_DISAGREEING_SEED);
+    p.turn("south");
+    let forest2 = p.mapper.graph.current().expect("landed somewhere");
+    assert_ne!(forest2, forest1, "the disagreeing seed must land in the OTHER forest");
+    assert!(p.mapper.graph.is_random_exit(hill, Direction::S), "the hill's south is marked");
+    let known: Vec<RoomId> = p.mapper.graph.random_destinations(hill, Direction::S).to_vec();
+    assert_eq!(known.len(), 2, "non-vacuity guard: the pool this rule propagates names both forests");
+
+    // Round to the valley by real navigation: back to the hill, east to At End Of Road, south.
+    z_walk_back_to_hill(&mut p, hill, forest1);
+    p.turn("east");
+    p.turn("south");
+    let valley = p.mapper.graph.current().expect("standing somewhere");
+    assert_eq!(
+        p.mapper.graph.room(valley).map(|r| r.label().to_string()),
+        Some("In A Valley".to_string()),
+        "the route reached In A Valley"
+    );
+    assert_eq!(p.session.declared_exit(valley, Direction::W), DeclaredExit::Room(forest1), "valley W");
+    assert!(!p.mapper.graph.is_random_exit(valley, Direction::W), "west out of the valley is untouched so far");
+
+    // ── The first walk of the valley's west, landing at the DECLARED room. ──
+    p.session.reseed_random(Z_LUCKY_SEED);
+    p.turn("west");
+    let landed = p.mapper.graph.current().expect("landed somewhere");
+    assert_eq!(landed, forest1, "the lucky seed lands at the declared forest — no mismatch to catch this");
+    assert!(
+        p.mapper.graph.is_random_exit(valley, Direction::W),
+        "SQ-1370: a first walk into a room the map already knows a random exit reaches is marked at once"
+    );
+    assert_eq!(p.edge(valley, Direction::W), None, "and no confident arrow is drawn for it");
+    let pool = p.mapper.graph.random_destinations(valley, Direction::W);
+    assert!(
+        pool.contains(&forest1) && pool.contains(&forest2),
+        "the pool is copied from the one the hill earned: {pool:?}"
+    );
+}
+
+/// SQ-1370, rule 2 on the Z-machine — the reported half: *"sometimes we remove the random
+/// pointers if we happen to get lucky and have the same forest picked a few times in a row."*
+///
+/// # The streak, reproduced
+///
+/// Two things have to line up, and both are ordinary play. The mark has to hold a pool of ONE
+/// room, which is what a session with no shadow armed produces ([`ZPlay::advent_without_a_shadow`]):
+/// the declared mismatch has no edge to contradict, so `resolve_suspicion_as_random` pools only
+/// the live landing. Then the same forest has to come up again — live AND on both reseeded shadow
+/// attempts — because `deliver_upgrade`'s SQ-1269 pool guard is the only other thing standing in
+/// the way, and a second distinct forest anywhere in the evidence closes the window for good.
+///
+/// [`Z_STREAK_SEED`] is a seed where exactly that happens on `advent.z6`. Before this quest the
+/// mark was gone on the FIRST such walk: pool of one, one agreeing pair, upgrade, confident arrow
+/// south out of the hill into a forest the story picks by coin flip. Now it takes
+/// [`app::random_exit_probe::AGREEING_WALKS_TO_UPGRADE`] of them in a row — and walk 3 below
+/// pins that the escape hatch still works, because a direction that has genuinely stopped
+/// wandering (Lost Pig's gnome leading the player back out) must still be able to become an arrow.
+#[test]
+fn z6_a_lucky_streak_of_the_same_forest_does_not_clear_the_mark() {
+    let Some(mut p) = ZPlay::advent_without_a_shadow() else { return };
+    let hill = z_reach_hill(&mut p);
+    let DeclaredExit::Room(forest1) = p.session.declared_exit(hill, Direction::S) else {
+        panic!("expected a declared Room(_) south of the hill");
+    };
+
+    p.session.reseed_random(Z_STREAK_SEED);
+    p.turn("south");
+    let forest2 = p.mapper.graph.current().expect("landed somewhere");
+    assert_ne!(forest2, forest1, "the streak seed lands in the OTHER forest, so this is a mismatch");
+    assert!(p.mapper.graph.is_random_exit(hill, Direction::S), "marked, with no shadow involved");
+    assert_eq!(
+        p.mapper.graph.random_destinations(hill, Direction::S),
+        &[forest2],
+        "a pool of exactly ONE room: no probe ran, so only the live landing is in it"
+    );
+
+    // Now the shadow is armed and every walk of the marked direction is an Upgrade search.
+    p.arm_shadow();
+    for walk in 1..=2 {
+        z_walk_back_to_hill(&mut p, hill, forest1);
+        p.session.reseed_random(Z_STREAK_SEED);
+        p.turn("south");
+        assert_eq!(p.mapper.graph.current(), Some(forest2), "walk {walk}: the same forest again");
+        assert!(
+            p.mapper.graph.is_random_exit(hill, Direction::S),
+            "walk {walk}: SQ-1370 — a lucky streak this short is not evidence the story stopped \
+             randomising, and before this quest the mark was gone on walk 1"
+        );
+        assert_eq!(
+            p.mapper.graph.random_destinations(hill, Direction::S),
+            &[forest2],
+            "walk {walk} non-vacuity guard: nothing disagreed, so the pool is still one room and \
+             SQ-1269's guard is NOT what is keeping the mark"
+        );
+        assert_eq!(p.edge(hill, Direction::S), None, "walk {walk}: and no arrow is drawn");
+    }
+
+    // The third agreement in a row IS acted on — one chance in sixty-four for a two-destination
+    // exit, and the only way a direction that has genuinely stopped wandering can become an arrow
+    // again. Pinned so the constant above is not silently raised into "never".
+    z_walk_back_to_hill(&mut p, hill, forest1);
+    p.session.reseed_random(Z_STREAK_SEED);
+    p.turn("south");
+    assert_eq!(
+        app::random_exit_probe::AGREEING_WALKS_TO_UPGRADE,
+        3,
+        "this case walks the streak out by hand; it has to know how long the streak is"
+    );
+    assert!(!p.mapper.graph.is_random_exit(hill, Direction::S), "the third agreement upgrades");
+    assert_eq!(p.edge(hill, Direction::S), Some(forest2), "and mints the edge it agreed on");
+}
+
 /// Z-machine: `In Forest`'s own W/N/S all declare (and, walked under many reseeds, always
 /// deliver) a self-loop — the randomization lives only in ARRIVING at the room, never in moving
 /// within it once there (verified: Inform 6's move engine never re-invokes a room's `initial`
@@ -358,6 +524,10 @@ struct GPlay {
     mapper: Mapper,
     session: GlulxSession,
     death: DeathWatch,
+    /// The blorb and the store the shadow must share, kept so a case that booted with NO shadow
+    /// can arm one later — see [`ZPlay::advent_without_a_shadow`] for what that is for.
+    bytes: Vec<u8>,
+    store: PathBuf,
 }
 
 impl GPlay {
@@ -372,6 +542,14 @@ impl GPlay {
     /// once the live lock resolves) lets the shadow read the SAME learned address at its own
     /// boot and report rooms in the same id space from its very first move.
     fn advent() -> Option<GPlay> {
+        let mut p = GPlay::advent_without_a_shadow()?;
+        p.arm_shadow();
+        Some(p)
+    }
+
+    /// [`GPlay::advent`] with the shadow probe UNARMED — the Glulx half of
+    /// [`ZPlay::advent_without_a_shadow`], for the same reason.
+    fn advent_without_a_shadow() -> Option<GPlay> {
         let bytes = story("advent.blb")?;
         let blorb = blorb::Blorb::parse(bytes.clone()).ok()?;
         let (_kind, exec) = blorb.executable().ok()?;
@@ -381,9 +559,19 @@ impl GPlay {
             [[(None, None); 11]; 2], false, None,
         )
         .expect("Adventure (Glulx) boots");
-        let mut state = AppState::default();
-        state.probe.arm(recipe_in(&bytes, store));
-        Some(GPlay { state, mapper: Mapper::default(), session: s, death: DeathWatch::default() })
+        Some(GPlay {
+            state: AppState::default(),
+            mapper: Mapper::default(),
+            session: s,
+            death: DeathWatch::default(),
+            bytes,
+            store,
+        })
+    }
+
+    fn arm_shadow(&mut self) {
+        let recipe = recipe_in(&self.bytes, self.store.clone());
+        self.state.probe.arm(recipe);
     }
 
     /// A raw, UNTRACKED submit — no `apply_turn`, no mapper bookkeeping. Used only for the
@@ -591,6 +779,122 @@ fn blb_forest_random_walk_stays_marked_once_the_pool_holds_both_forests() {
     assert_eq!(p.edge(hill, Direction::S), None, "still no edge");
     let pool = p.mapper.graph.random_destinations(hill, Direction::S);
     assert!(pool.contains(&forest1) && pool.contains(&forest2), "both forests are in the pool: {pool:?}");
+}
+
+/// Walk back to the hill from whichever forest the player is standing in, by real navigation:
+/// forest 2 goes north to `At End Of Road` directly, forest 1's own north is a self-loop and needs
+/// the east-then-north detour through the valley. Then west. The Glulx mirror of
+/// [`z_walk_back_to_hill`], which knows the two forests apart by id; this one asks the map what it
+/// is standing in, since a Glulx id is only ever discovered at run time.
+fn g_walk_back_to_hill(p: &mut GPlay, hill: RoomId) {
+    p.turn("north");
+    let at_end_of_road = p
+        .mapper
+        .graph
+        .room(p.mapper.graph.current().unwrap_or(0))
+        .map(|r| r.label().to_string())
+        == Some("At End Of Road".to_string());
+    if !at_end_of_road {
+        p.turn("east"); // forest 1 -> valley
+        p.turn("north"); // valley -> at end of road
+    }
+    p.turn("west");
+    assert_eq!(p.mapper.graph.current(), Some(hill), "back at the hill");
+}
+
+/// SQ-1370, rule 1 on Glulx — the mirror of
+/// [`z6_a_new_direction_into_a_known_forest_is_marked_random_on_its_first_walk`], on `advent.blb`.
+#[test]
+fn blb_a_new_direction_into_a_known_forest_is_marked_random_on_its_first_walk() {
+    let Some(mut p) = GPlay::advent() else { return };
+    let hill = g_reach_hill(&mut p);
+    let DeclaredExit::Room(forest1) = p.session.declared_exit(hill, Direction::S) else {
+        panic!("expected a declared Room(_) south of the hill");
+    };
+
+    p.session.reseed_random(G_DISAGREEING_SEED);
+    p.turn("south");
+    let forest2 = p.mapper.graph.current().expect("landed somewhere");
+    assert_ne!(forest2, forest1, "the disagreeing seed must land in the OTHER forest");
+    assert!(p.mapper.graph.is_random_exit(hill, Direction::S), "the hill's south is marked");
+    assert_eq!(
+        p.mapper.graph.random_destinations(hill, Direction::S).len(),
+        2,
+        "non-vacuity guard: the pool this rule propagates names both forests"
+    );
+
+    g_walk_back_to_hill(&mut p, hill);
+    p.turn("east");
+    p.turn("south");
+    let valley = p.mapper.graph.current().expect("standing somewhere");
+    assert_eq!(
+        p.mapper.graph.room(valley).map(|r| r.label().to_string()),
+        Some("In A Valley".to_string()),
+        "the route reached In A Valley"
+    );
+    assert_eq!(p.session.declared_exit(valley, Direction::W), DeclaredExit::Room(forest1), "valley W");
+
+    p.session.reseed_random(G_LUCKY_SEED);
+    p.turn("west");
+    assert_eq!(
+        p.mapper.graph.current(),
+        Some(forest1),
+        "the lucky seed lands at the declared forest — no mismatch to catch this"
+    );
+    assert!(
+        p.mapper.graph.is_random_exit(valley, Direction::W),
+        "SQ-1370: marked on the FIRST walk, from the pool the hill already earned"
+    );
+    assert_eq!(p.edge(valley, Direction::W), None, "and no confident arrow is drawn for it");
+    let pool = p.mapper.graph.random_destinations(valley, Direction::W);
+    assert!(pool.contains(&forest1) && pool.contains(&forest2), "the pool is copied: {pool:?}");
+}
+
+/// SQ-1370, rule 2 on Glulx — the mirror of
+/// [`z6_a_lucky_streak_of_the_same_forest_does_not_clear_the_mark`], at Glulx's own trial seed.
+#[test]
+fn blb_a_lucky_streak_of_the_same_forest_does_not_clear_the_mark() {
+    let Some(mut p) = GPlay::advent_without_a_shadow() else { return };
+    let hill = g_reach_hill(&mut p);
+    let DeclaredExit::Room(forest1) = p.session.declared_exit(hill, Direction::S) else {
+        panic!("expected a declared Room(_) south of the hill");
+    };
+
+    p.session.reseed_random(G_STREAK_SEED);
+    p.turn("south");
+    let forest2 = p.mapper.graph.current().expect("landed somewhere");
+    assert_ne!(forest2, forest1, "the streak seed lands in the OTHER forest, so this is a mismatch");
+    assert!(p.mapper.graph.is_random_exit(hill, Direction::S), "marked, with no shadow involved");
+    assert_eq!(
+        p.mapper.graph.random_destinations(hill, Direction::S),
+        &[forest2],
+        "a pool of exactly ONE room: no probe ran, so only the live landing is in it"
+    );
+
+    p.arm_shadow();
+    for walk in 1..=2 {
+        g_walk_back_to_hill(&mut p, hill);
+        p.session.reseed_random(G_STREAK_SEED);
+        p.turn("south");
+        assert_eq!(p.mapper.graph.current(), Some(forest2), "walk {walk}: the same forest again");
+        assert!(
+            p.mapper.graph.is_random_exit(hill, Direction::S),
+            "walk {walk}: SQ-1370 — before this quest the mark was gone on walk 1"
+        );
+        assert_eq!(
+            p.mapper.graph.random_destinations(hill, Direction::S),
+            &[forest2],
+            "walk {walk} non-vacuity guard: nothing disagreed, so SQ-1269's pool guard is not \
+             what is keeping the mark"
+        );
+        assert_eq!(p.edge(hill, Direction::S), None, "walk {walk}: and no arrow is drawn");
+    }
+
+    g_walk_back_to_hill(&mut p, hill);
+    p.session.reseed_random(G_STREAK_SEED);
+    p.turn("south");
+    assert!(!p.mapper.graph.is_random_exit(hill, Direction::S), "the third agreement upgrades");
+    assert_eq!(p.edge(hill, Direction::S), Some(forest2), "and mints the edge it agreed on");
 }
 
 /// Glulx: the seed derivation itself never repeats — same guard as `declared_exit.rs`'s, run

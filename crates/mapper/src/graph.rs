@@ -89,6 +89,29 @@ pub struct Room {
     /// `serde(default)`.
     #[serde(default)]
     pub random_destinations: Vec<(Direction, Vec<RoomId>)>,
+    /// Directions whose `?` mark was INHERITED from a pool the map already knew rather than
+    /// observed on this direction itself (SQ-1370).
+    ///
+    /// Adventure randomises on the ARRIVAL side — `In_Forest_1`'s own `initial` routine reroutes
+    /// half of every arrival on to `In_Forest_2` — so every way INTO those rooms is random, not
+    /// just the first one the player happened to walk twice. The first walk of a new direction
+    /// that lands in a room some other direction's pool already names is therefore marked on the
+    /// spot, with that pool copied (`app::session::inherited_random_pool`), instead of minting a
+    /// confident arrow and waiting for a second, contradicting walk to take it back.
+    ///
+    /// That is a hypothesis, not evidence, and this is what says so: a mark listed here is
+    /// PROVISIONAL. `random_exit_probe::deliver_upgrade` reads it to know that SQ-1269's flicker
+    /// guard — a pool of two or more rooms outweighs one agreeing pair of reseeded attempts — is
+    /// about a pool this direction EARNED, and must not lock in a pool it merely inherited; an
+    /// inherited mark can still be cleared by agreeing re-walks, which is how a genuinely fixed
+    /// passage into a random room repairs itself. Any evidence of this direction's own
+    /// ([`MapGraph::mark_random_exit`] from a probe or a contradiction, a disagreeing upgrade)
+    /// promotes the mark by dropping it from this list.
+    ///
+    /// A `Vec` for the same reason as `random_exits`. Absent from older map files, hence
+    /// `serde(default)`.
+    #[serde(default)]
+    pub random_inherited: Vec<Direction>,
     /// Every distinct name the game has printed for this room, other than its CURRENT label
     /// (SQ-1257 Phase 3) — Lost Pig's gnome tunnels reroll a fresh name on every compass move,
     /// and this is where the others go so the map can keep saying "this is the same room" while
@@ -503,6 +526,7 @@ impl MapGraph {
                     probed: Vec::new(),
                     random_exits: Vec::new(),
                     random_destinations: Vec::new(),
+                    random_inherited: Vec::new(),
                     aliases: Vec::new(),
                     seq,
                 });
@@ -738,6 +762,43 @@ impl MapGraph {
             if !r.random_exits.contains(&dir) {
                 r.random_exits.push(dir);
             }
+            // SQ-1370: this call is evidence about THIS direction — a probe disagreement, a
+            // contradicted edge, a rename loop. Whatever the mark used to rest on, it rests on
+            // that now, so a provisional inherited mark is promoted rather than left provisional.
+            r.random_inherited.retain(|&d| d != dir);
+        }
+    }
+
+    /// [`MapGraph::mark_random_exit`], but recording the mark as INHERITED (SQ-1370): the map has
+    /// not seen THIS direction vary — it has seen the room it lands in named by some other
+    /// direction's pool, and Adventure's forests randomise on arrival, so every way in is random.
+    ///
+    /// Marks exactly the same `?`. The difference is only in what may later undo it: see
+    /// [`Room::random_inherited`] and `random_exit_probe::deliver_upgrade`.
+    pub fn mark_random_exit_inherited(&mut self, id: RoomId, dir: Direction) {
+        if dir == Direction::Unknown {
+            return;
+        }
+        self.mark_random_exit(id, dir);
+        if let Some(r) = self.rooms.get_mut(&id) {
+            if r.random_exits.contains(&dir) && !r.random_inherited.contains(&dir) {
+                r.random_inherited.push(dir);
+            }
+        }
+    }
+
+    /// True when `dir` out of `id` is marked random on an INHERITED pool alone (SQ-1370) — a
+    /// provisional mark no walk of this direction has yet earned. See [`Room::random_inherited`].
+    pub fn is_inherited_random_exit(&self, id: RoomId, dir: Direction) -> bool {
+        self.rooms.get(&id).is_some_and(|r| r.random_inherited.contains(&dir))
+    }
+
+    /// Promote an inherited mark to an earned one (SQ-1370): this direction has now produced
+    /// evidence of its own, so the mark stops being provisional while staying exactly as set.
+    /// A no-op when the mark was never inherited.
+    pub fn promote_inherited_random_exit(&mut self, id: RoomId, dir: Direction) {
+        if let Some(r) = self.rooms.get_mut(&id) {
+            r.random_inherited.retain(|&d| d != dir);
         }
     }
 
@@ -757,6 +818,8 @@ impl MapGraph {
     pub fn unmark_random_exit(&mut self, id: RoomId, dir: Direction) {
         if let Some(r) = self.rooms.get_mut(&id) {
             r.random_exits.retain(|&d| d != dir);
+            // SQ-1370: an inherited mark is a mark; clearing one clears what it rested on too.
+            r.random_inherited.retain(|&d| d != dir);
             // The destinations recorded against this direction were evidence for a fact that no
             // longer holds — the direction is confirmed deterministic now, and re-marking it
             // later (SQ-1257 Phase 2's upgrade can be undone by a subsequent disagreement) starts
@@ -1320,6 +1383,43 @@ mod tests {
         assert!(g.random_destinations(404, Direction::N).is_empty());
     }
 
+    /// SQ-1370: an INHERITED mark is the same `?` with a note saying no walk of this direction
+    /// earned it — and any evidence of this direction's own takes the note away, whichever
+    /// direction that evidence points. See [`Room::random_inherited`].
+    #[test]
+    fn an_inherited_random_mark_is_promoted_by_this_directions_own_evidence() {
+        let mut g = MapGraph::default();
+        g.upsert_room(1, "Valley".into());
+
+        g.mark_random_exit_inherited(1, Direction::W);
+        assert!(g.is_random_exit(1, Direction::W), "it marks the direction like any other");
+        assert!(g.is_tried(1, Direction::W), "and marks it tried like any other");
+        assert!(g.is_inherited_random_exit(1, Direction::W), "recorded as inherited");
+        assert!(!g.is_inherited_random_exit(1, Direction::N), "and only for the direction marked");
+
+        // Evidence about THIS direction — a contradiction, a probe disagreement — re-marks it,
+        // and that promotes it.
+        g.mark_random_exit(1, Direction::W);
+        assert!(g.is_random_exit(1, Direction::W), "still marked");
+        assert!(!g.is_inherited_random_exit(1, Direction::W), "no longer provisional");
+
+        // The explicit promotion is the same fact, for a caller with nothing to re-mark.
+        g.mark_random_exit_inherited(1, Direction::E);
+        g.promote_inherited_random_exit(1, Direction::E);
+        assert!(g.is_random_exit(1, Direction::E) && !g.is_inherited_random_exit(1, Direction::E));
+
+        // And clearing the mark clears what it rested on.
+        g.mark_random_exit_inherited(1, Direction::S);
+        g.unmark_random_exit(1, Direction::S);
+        assert!(!g.is_random_exit(1, Direction::S) && !g.is_inherited_random_exit(1, Direction::S));
+
+        // An unknown room or direction is a no-op, matching every other random-exit mutator.
+        g.mark_random_exit_inherited(404, Direction::N);
+        g.mark_random_exit_inherited(1, Direction::Unknown);
+        assert!(!g.is_inherited_random_exit(404, Direction::N));
+        assert!(!g.is_inherited_random_exit(1, Direction::Unknown));
+    }
+
     /// Undoing a random mark (SQ-1257 Phase 2's upgrade path) clears the destinations recorded
     /// against it too — they were evidence for a fact that no longer holds, and a later re-mark
     /// of the same direction must not resume a stale list from before the confirmation.
@@ -1465,6 +1565,7 @@ mod tests {
             probed: Vec::new(),
             random_exits: Vec::new(),
             random_destinations: Vec::new(),
+            random_inherited: Vec::new(),
             aliases: Vec::new(),
             seq: ROOM_SEQ_MISSING,
         };
@@ -1497,6 +1598,7 @@ mod tests {
             probed: Vec::new(),
             random_exits: Vec::new(),
             random_destinations: Vec::new(),
+            random_inherited: Vec::new(),
             aliases: Vec::new(),
             seq,
         };
