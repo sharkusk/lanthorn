@@ -1559,7 +1559,24 @@ impl GameSession {
 
     /// Supply a player command, step until the next input request or Quit,
     /// and return the turn result.
+    ///
+    /// A LINE must never reach a keypress read (SQ-1270, documented on
+    /// [`crate::engine::Engine::submit`]): when the VM is waiting for
+    /// `read_char`, `command` is delivered as a single keypress — its first
+    /// character, or Enter (13) for an empty line — via [`Self::submit_char`],
+    /// exactly as the app's own keypress path would. zvm's `supply_line`
+    /// already turns a line-at-a-char-prompt into a no-op that answers with
+    /// the terminator alone and discards the text (SQ-1266); routing here
+    /// goes one step further and preserves the player's intent instead of
+    /// silently dropping it.
     pub fn submit(&mut self, command: &str) -> TurnResult {
+        if self.pending_input() == InputKind::Char {
+            let zscii = match command.chars().next() {
+                Some(c) if c.is_ascii() => c as u8,
+                _ => 13, // empty line, or a lead char with no ZSCII code: behave like Enter
+            };
+            return self.submit_char(zscii);
+        }
         self.submit_line_with_terminator(command, 13)
     }
 
@@ -7388,6 +7405,43 @@ mod tests {
         assert_eq!(session.pending_input(), InputKind::Line,
             "after quit, pending should be reset to Line");
     }
+
+    #[test]
+    fn submit_at_a_char_prompt_delivers_only_the_first_keypress() {
+        // SQ-1270: `GameSession::submit("north")` at a read_char prompt must
+        // never hand the whole line to the VM — it delivers ONE keypress, the
+        // command's first character, exactly as pressing 'n' would.
+        let story = read_char_story_v5();
+        let mut session = GameSession::new(story, true, false, None).expect("GameSession::new failed");
+        assert_eq!(session.pending_input(), InputKind::Char);
+
+        let result = session.submit("north");
+        assert!(result.quit, "read_char->quit story: the routed keypress still drives to Quit");
+        assert_eq!(session.machine.global(0), b'n' as u16,
+            "the read_char store variable holds 'n' (the line's first char), not the whole line");
+    }
+
+    #[test]
+    fn submit_at_a_char_prompt_with_an_empty_line_delivers_enter() {
+        // SQ-1270: an empty submitted line at a char prompt behaves like the
+        // app's own Enter keypress (ZSCII 13, matching `key_input_to_zscii`),
+        // not like the terminator-only zvm fallback for a NON-empty line
+        // (SQ-1266) landing on the same value by coincidence.
+        let story = read_char_story_v5();
+        let mut session = GameSession::new(story, true, false, None).expect("GameSession::new failed");
+        assert_eq!(session.pending_input(), InputKind::Char);
+
+        let result = session.submit("");
+        assert!(result.quit);
+        assert_eq!(session.machine.global(0), 13, "empty line at a char prompt reads as Enter");
+    }
+
+    // The Line-prompt path is unchanged: `the_object_word_set_is_cached_...`
+    // above and the save/restore round-trips further below all call
+    // `submit("north")`/`submit("look")` on a Line-waiting session and depend
+    // on the full command reaching the parser, so they already regress if the
+    // `pending_input() == Char` branch above were ever taken when it should
+    // not be.
 
     // ── Engine adapter (zvm) tests ─────────────────────────────────────────────
 

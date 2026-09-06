@@ -469,7 +469,12 @@ Input is engine-neutral too. A VM's `step()` returns a request —
 `NeedLine` / `NeedChar` / `NeedEvent` — and the host resolves it with
 `supply_line` / `supply_char` / `supply_filename`. The values are neutral (no
 terminal types cross the boundary), so the same host loop drives every engine and
-the CLIs can feed input from a pipe for deterministic testing.
+the CLIs can feed input from a pipe for deterministic testing. A LINE must never
+reach a keypress read (SQ-1270): `Engine::submit` routes by `pending_input()`,
+delivering a submitted line as a single keypress — its first character, or Enter
+for an empty line — when the VM is waiting on `Char`, so a caller (the app, a
+CLI, or `app::probe`'s shadow below) can always call `submit` without checking
+which kind of read is pending.
 
 ## Asking the game a question it cannot be asked out loud
 
