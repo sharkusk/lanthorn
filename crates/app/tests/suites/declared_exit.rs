@@ -8,7 +8,7 @@
 use crate::fixture_paths::fixture_path;
 
 use app::engine::{DeclaredExit, Engine};
-use app::session::{apply_turn, DeathWatch, GameSession, TurnResult};
+use app::session::{apply_turn, DeathWatch, GameSession, InputKind, TurnResult};
 use mapper::direction::Direction;
 use mapper::mapper::Mapper;
 
@@ -16,20 +16,42 @@ fn story(name: &str) -> Option<Vec<u8>> {
     std::fs::read(fixture_path(name)).ok()
 }
 
+/// Boot a story and clear any opening KEYPRESS gate before handing it back.
+///
+/// SQ-1348: a story that opens on a banner and a `read_char` — Curses r16 says
+/// `[Please press SPACE to begin.]` — never reaches its first room until a key
+/// is actually pressed, so every case built on it asserts against an empty
+/// screen. The gate must be cleared with a KEY, not a line: since SQ-1270
+/// `submit()` routes a line at a char prompt to its first character, and Curses
+/// tests the key it is given — `l` (from `submit("look")`) leaves the banner up
+/// forever. Before SQ-1270 the same call reached zvm's SQ-1266 fallback, which
+/// discards the text and answers with the TERMINATOR alone (13), and Curses
+/// happens to accept Enter — so this suite passed on a coincidence rather than
+/// on a cleared gate. Same idiom, and the same reason, as
+/// `vocabulary_vetting.rs`'s `Play::gated_z5`.
+///
+/// A no-op for a story already waiting on a Line (Zork I, Lost Pig below).
 fn boot(bytes: Vec<u8>) -> GameSession {
     let mut s = GameSession::new_with_trace(
         bytes, true, false, None, false, Vec::new(), None, None, Some((25, 80)),
     )
     .expect("story boots without a ZError");
     s.set_strip_prompt(false);
+    let mut keys = 0;
+    while s.pending_input() == InputKind::Char && keys < 12 {
+        let _ = s.submit_char(b' ');
+        keys += 1;
+    }
     s
 }
 
 // ── Curses (Inform 6): the derivation must agree with a real move ──────────
 
-/// Curses r18/s941124 opens in the Attic. A declared exit read off the
-/// starting room, for a direction the game's own text names, must name the
-/// same room the player actually lands in after walking it.
+/// `stories/curses.z5` is release 16 / serial 951024 (header bytes 2–3 and
+/// 18–23), and it opens in the Attic — behind a `[Please press SPACE to begin.]`
+/// keypress gate that [`boot`] clears. A declared exit read off the starting
+/// room, for a direction the game's own text names, must name the same room the
+/// player actually lands in after walking it.
 #[test]
 fn curses_declared_exit_matches_the_real_move() {
     let Some(bytes) = story("curses.z5") else {
