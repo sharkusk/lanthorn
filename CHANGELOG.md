@@ -74,13 +74,27 @@ Absolute URLs or no link.
   in rather than into the box. Where the old single caption used to get
   dropped in a crowded corner (Zork I's Kitchen, a step down into the Studio,
   on its busy house layer), the box now just moves farther out along the
-  passage until it finds room.
+  passage until it finds room — and that connecting line now counts as part
+  of the box's own footprint, so it never gets routed straight through
+  another room to reach one (the same Kitchen exit used to run its line
+  through South of House, reading as South of House's own exit); where the
+  straight path is blocked it now turns once and reaches the box from the
+  side instead.
 - **A two-way passage between two touching rooms no longer reads as a bowtie
   (`◄►`).** At the narrowest gutter the SVG draws, the two arrowheads used to
   meet — or nearly meet — back to back with no line visible between them
   (Zork I's Cyclops Room and Strange Passage was the reported case). The
   export now gives that gutter a little extra room, in pixels only, so there
   is always a real dash of line showing between the two heads.
+- **A passage the story computes in code is drawn when the way back gives it
+  away.** A ZIL FEXIT or an Inform routine `door_dir` names no destination of
+  its own, so it used to leave the map with nothing at all in that direction —
+  Zork I's Living Room trap door showed only `Cellar U → Living Room`, never
+  the way down. Now, when some other room's plain, door or secret exit
+  declares the way BACK, the passage is drawn too, one-way and dotted like a
+  secret exit. A passage with no such declared reverse anywhere — a joke exit
+  gated on a flag the game never sets, say — still stays off the map rather
+  than have a destination guessed for it.
 - **`lanthorn-mapgen` now splits a story's mazes and portal-only regions onto
   their own map layers**, the way accepting every one of the interpreter's own
   "give these rooms their own layer?" prompts would. A generated map's `.svg`,

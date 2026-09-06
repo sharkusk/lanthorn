@@ -445,6 +445,47 @@ fn zork1_static_map_reads_its_zil_exits() {
         !map.engine_refs.values().any(|r| matches!(r, mapgen::EngineRef::ZObject(41))),
         "object #41 (unnamed, self-referential IN) must not appear as a room"
     );
+
+    // SQ-1334: the Living Room's trap door down to the Cellar is a ZIL FEXIT
+    // (`TRAP-DOOR-EXIT`) — `Code`, with no destination of its own — but the
+    // Cellar's own plain Up exit names the Living Room, so the way back is
+    // declared even though the way there is code. Before this fix the map
+    // showed only `Cellar U -> Living Room`; the Down half is now drawn too,
+    // marked `routine`.
+    let trap_door = map
+        .facts
+        .iter()
+        .find(|f| {
+            f.dir == Direction::Down
+                && map.graph.room(f.origin).map(|r| r.label() == "Living Room").unwrap_or(false)
+                && map.graph.room(f.dest).map(|r| r.label() == "Cellar").unwrap_or(false)
+        })
+        .expect("Living Room's Down exit to the Cellar must be drawn");
+    assert_eq!(trap_door.kind, EdgeKind::Routine, "the trap door's kind must be `routine`");
+    assert_eq!(
+        trap_door.note.as_deref(),
+        Some("decided by the story's code; the way back is declared")
+    );
+
+    // The falsifier this rule guards against: a `Code` exit with NO declared
+    // reverse must stay undrawn, never invented. Kitchen's own Down to the
+    // Studio is a CEXIT joke gated on a flag the game never sets — already a
+    // real, drawn passage (`Conditional`, not `Code`) and untouched by the
+    // `routine` reconciliation, which only ever fires on an otherwise-empty
+    // `Code` exit.
+    let kitchen_down = map
+        .facts
+        .iter()
+        .find(|f| {
+            f.dir == Direction::Down
+                && map.graph.room(f.origin).map(|r| r.label() == "Kitchen").unwrap_or(false)
+        })
+        .expect("Kitchen's Down exit to the Studio must still be drawn");
+    assert_eq!(
+        kitchen_down.kind,
+        EdgeKind::Conditional,
+        "Kitchen's joke exit down to the Studio must stay `conditional`, not become `routine`"
+    );
 }
 
 /// The SVG a generated Zork I map exports (SQ-1313): every room named, every
@@ -522,6 +563,12 @@ fn zork1_svg_shows_every_room_and_no_connector_crosses_a_room() {
     let bad = app::export_svg::connector_room_crossings(&svg);
     assert!(bad.is_empty(), "connectors must not run through room boxes: {bad:?}");
 
+    // SQ-1333: a ghost's connector line is part of its footprint too — the Kitchen's Down ghost
+    // ("Studio · Main") used to run straight through South of House on this exact map to reach
+    // it, reading as South of House's own exit.
+    let bad = app::export_svg::ghost_line_room_crossings(&svg);
+    assert!(bad.is_empty(), "ghost connector lines must not run through room boxes: {bad:?}");
+
     // And the typographic one (SQ-1317): no direction tag and no cross-layer badge name may sit
     // on a room box or on another label. A hundred-room map is where that pressure is — this
     // caught `Maze` written straight through `Cyclops Room`'s own name, which no synthetic
@@ -533,6 +580,36 @@ fn zork1_svg_shows_every_room_and_no_connector_crosses_a_room() {
     // exact case `place_ghost`'s fallback exists for — its ghost was dropped outright under the
     // fixed-candidate search SQ-1317 shipped with, on this map's dense house layer.
     assert_ghost_accounting(&svg, &map.graph);
+
+    // SQ-1334: before this fix, `Cellar U -> Living Room` was the only edge crossing this seam,
+    // so the Living Room's own panel drew an ARRIVAL ghost (an inbound arrow, no departure
+    // letter). Now that the trap door's Down half is drawn too, the crossing is reciprocal —
+    // `arrival_ghosts` draws no separate arrival mechanism for that case, only each side's own
+    // DEPARTURE ghost — so the Living Room's ghost naming the Cellar must be a departure
+    // (`class="ghost"`), never `"ghost arrival"`. Found by pairing each `<rect class="ghost...">`
+    // with the `<text class="ghost-name">` `draw_ghost` always emits immediately after it.
+    let mut cellar_ghost_class: Option<String> = None;
+    let mut last_ghost_class: Option<String> = None;
+    for n in doc.descendants() {
+        if app::export_svg::under_class(n, "legend-block") {
+            continue;
+        }
+        match (n.tag_name().name(), n.attribute("class")) {
+            ("rect", Some(c)) if c == "ghost" || c == "ghost arrival" => {
+                last_ghost_class = Some(c.to_string());
+            }
+            ("text", Some("ghost-name")) if n.text() == Some("Cellar") => {
+                cellar_ghost_class = last_ghost_class.clone();
+            }
+            _ => {}
+        }
+    }
+    assert_eq!(
+        cellar_ghost_class.as_deref(),
+        Some("ghost"),
+        "the Living Room's ghost naming the Cellar must be a departure, not an arrival, \
+         now that the trap door's Down half is drawn"
+    );
 
     // SQ-1322: no two adjacent rooms — Cyclops Room ↔ Strange Passage at the minimum gutter is
     // the reported case — sit close enough to leave a two-way passage's heads meeting or
@@ -556,6 +633,8 @@ fn anchorhead_svg_ghosts_every_cross_layer_passage() {
 
     let bad = app::export_svg::connector_room_crossings(&svg);
     assert!(bad.is_empty(), "connectors must not run through room boxes: {bad:?}");
+    let bad = app::export_svg::ghost_line_room_crossings(&svg);
+    assert!(bad.is_empty(), "ghost connector lines must not run through room boxes: {bad:?}");
     let bad = app::export_svg::label_collisions(&svg);
     assert!(bad.is_empty(), "labels must stay clear of rooms and of each other: {bad:#?}");
 
