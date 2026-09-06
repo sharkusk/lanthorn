@@ -776,9 +776,11 @@ know which side you're on).
   warning lines get their own configurable gutter markers (`▏` / `!`).
 - **Map export** — `/export-svg [file]`, `/export-dot [file]`, and
   `/export-map [file]` write the map as an SVG, a Graphviz DOT graph, or an
-  annotatable text/ASCII dump. Each defaults to a fixed name in the story's
-  per-game directory (`map.svg` / `map.dot` / `map.txt`, overwriting); the
-  optional `[file]` argument resolves the same way the transcript export does.
+  annotatable text/ASCII dump. The SVG stacks every map layer, not only the
+  one you're standing on, exactly as `lanthorn-mapgen`'s own SVG does
+  (SQ-1337). Each defaults to a fixed name in the story's per-game directory
+  (`map.svg` / `map.dot` / `map.txt`, overwriting); the optional `[file]`
+  argument resolves the same way the transcript export does.
 
 ## Story picker
 Point lanthorn at a directory instead of a story file

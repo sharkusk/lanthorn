@@ -11,14 +11,13 @@ use crossterm::event::{
 use crossterm::execute;
 use crossterm::terminal::{disable_raw_mode, LeaveAlternateScreen};
 use mapper::mapper::Mapper;
-use mapper::render::{render as render_map_data, render_layer};
+use mapper::render::render_layer;
 use ratatui::backend::CrosstermBackend;
 use ratatui::layout::Rect;
 use ratatui::style::{Modifier, Style};
 use ratatui::Terminal;
 
 use app::export_dot::export_dot;
-use app::export_svg::export_svg;
 use app::map_dump::render_dump;
 use app::archive::load_archive;
 use app::input::{apply_action, apply_text_entry, key_to_command, mouse_to_action, Action, KeyResolve};
@@ -1583,8 +1582,17 @@ fn handle_map_export(
         Action::ExportSvg(dest) => {
             let path = app::export::resolve_export_path(dest.as_deref(), game_dir, "map.svg");
             if let Some(p) = path.parent() { let _ = std::fs::create_dir_all(p); }
-            let rm = render_map_data(&mapper.graph);
-            match export_svg(&path, &rm, Some(&mapper.graph)) {
+            // SQ-1337: every layer stacked, with headings, cross-layer ghosts and
+            // the legend — exactly what `lanthorn-mapgen` writes for `.map.json`'s
+            // sibling `.svg` (`mapgen::write_artefacts`). `render_svg_layered`
+            // reads the current room straight off `mapper.graph` itself
+            // (`MapGraph::current()`, set as the player moves), so the
+            // current-room highlight `render_svg_of` drew here before still
+            // shows — nothing to thread through for it.
+            match app::storage::atomic_write(
+                &path,
+                app::export_svg::render_svg_layered(&mapper.graph).as_bytes(),
+            ) {
                 Ok(()) => state.push_notice(&format!("[SVG exported to {}]", abbreviate_home(&path))),
                 Err(e) => state.push_notice(&format!("[SVG export failed: {}]", e)),
             }
