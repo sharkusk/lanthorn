@@ -79,6 +79,46 @@ pub(crate) fn apply_text_style(base: Style, bits: u8) -> Style {
     s
 }
 
+/// Light the EGA **intensity** bit on a bold run's ink, on the one display whose
+/// interpreter did (SQ-1354).
+///
+/// On the IBM PC a text cell is one attribute byte and bold is not a face — it is
+/// bit 3 of the foreground nibble, so `HLIGHT` printed the same colour *lit*.
+/// Infocom's own v1–v5 interpreter is where that is read from; `zvm::screen`'s
+/// [`ega_intense`](zvm::screen::ega_intense) carries the lines and the table, and
+/// [`Palette::bold_lights_the_intensity_bit`](zvm::screen::Palette::bold_lights_the_intensity_bit)
+/// decides which displays apply it (only the v1–v5 DOS text screen: the Version 6
+/// interpreter ignores bold outright, and the CGA card has two states and no room
+/// for a third).
+///
+/// **Applied to the run's RESOLVED ink**, after the game/slot/element chain, and
+/// that is the point rather than an implementation convenience. The attribute
+/// byte has one foreground nibble however it was filled, so the machine lit a
+/// story's own `set_colour` and the machine's DEFAULT ink alike — and the second
+/// is the case this exists for. *Bureaucracy* is Version 4, has no `set_colour` at
+/// all, and prints its room names and its bracketed notes in `HLIGHT`: with the
+/// period look laying the PC's `#AAAAAA` ink under the prose, every one of those
+/// runs resolved to that same grey plus a terminal BOLD most terminals do not
+/// brighten, where DOS drew them white.
+///
+/// A colour that is not one this palette painted comes back untouched — the
+/// 15-bit round trip is the test, so a themed `#AAAAAA` (which is not
+/// `rgb15_to_888`'s `#ADADAD`) is left alone. So is every colour when `honor` is
+/// off, which is the player saying "keep my terminal's colours" and takes the
+/// machine's screen with it exactly as the period look does.
+pub(crate) fn ibm_bold_fg(fg: Color, bits: u8, honor: bool) -> Color {
+    if bits & 0x02 == 0 || !honor || !zvm::screen::palette().bold_lights_the_intensity_bit() {
+        return fg;
+    }
+    let Color::Rgb(r, g, b) = fg else { return fg };
+    let v15 = (u16::from(b >> 3) << 10) | (u16::from(g >> 3) << 5) | u16::from(r >> 3);
+    if rgb15_to_888(v15) != (r, g, b) {
+        return fg; // not a colour the palette resolved — a theme's, and the player's
+    }
+    let (r, g, b) = rgb15_to_888(zvm::screen::ega_intense(v15));
+    Color::Rgb(r, g, b)
+}
+
 /// How a run's INK resolves on the CELL paths: whether the game's own colours are
 /// honoured, and the theme every channel it leaves alone is read against.
 ///

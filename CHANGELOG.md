@@ -49,6 +49,12 @@ Absolute URLs or no link.
   way — `/quit`, Ctrl+Q, "Save State & quit", closing a browser tab — still
   picks up right where you left off, and your map is never touched either way.
 
+- **Bold text on the IBM PC now comes out bright, the way DOS drew it.** Playing
+  with the PC's own colours, a game's room names and its bracketed asides were
+  the same light grey as the prose around them and hard to pick out. On the real
+  machine bold was not a heavier face at all — it lit the display's intensity
+  bit, so those runs were white against grey. They are again.
+
 - **Walking between two rooms that share a name is a passage again, not a
   question mark.** Zork I's four rooms called "Forest" had every path between
   them redrawn as `?`, each one claiming the destination varied between the
