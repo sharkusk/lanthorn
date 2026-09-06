@@ -124,6 +124,13 @@ Absolute URLs or no link.
   where its own travel arrives, exactly as a passage with a line of its own
   would.
 
+- **A room's own second exit to a destination it already has a line to keeps
+  its own mark too.** When several of a room's directions all lead to the same
+  other room — Zork I's Canyon View has both a stairway down and a plain walk
+  east to Rocky Ledge — only one is drawn as a line, and the rest used to
+  vanish rather than get a badge of their own. They now stamp beside the
+  shared line, on both the terminal map and an exported SVG.
+
 - **Bureaucracy's licence form hands you back a screen you can read.** Filling in
   the last field used to leave the story pane blank until you pressed Enter
   again — and in that game an empty command is answered with "[What?]" and a

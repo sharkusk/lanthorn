@@ -756,6 +756,15 @@ fn longest_mid(pts: &[(f64, f64)]) -> Option<OnLine> {
 /// A cross-layer GHOST is an ordinary entry of `rm.rooms` carrying [`mapper::render::GhostRoom`]
 /// (SQ-1356), so it is sized, seated and routed to exactly like a room — the only difference is
 /// the class its box is drawn with and the small layer line inside it.
+/// One drawn COMPASS connector's own snapped/extended geometry — SQ-1373's own record in
+/// `compass_connector_pts`, keyed by `(conn.origin, conn.dest)`. See that map's own comment.
+struct CompassConnectorGeom {
+    merge: bool,
+    entry: Side,
+    exit: Side,
+    pts: Vec<(f64, f64)>,
+}
+
 fn render_svg_body(
     rm: &RenderMap,
     weights: &HashMap<(RoomId, Direction), PassageWeight>,
@@ -839,6 +848,13 @@ fn render_svg_body(
     let mut portal_ends: std::collections::HashSet<(RoomId, Direction)> =
         std::collections::HashSet::new();
     let mut boxes = String::new();
+    // SQ-1373: every drawn COMPASS connector's own snapped/extended geometry, keyed by
+    // `(conn.origin, conn.dest)` — what a `StackedExit`'s marker pass (below) rides, since a
+    // stacked exit's own primary direction is never routed as its own connector: it just IS
+    // this pair's compass connector (see `collapse_stacked_exits`). Portal (Up/Down) connectors
+    // never key this map — a stack always has a compass primary, or `collapse_stacked_exits`
+    // leaves the group untouched (see that function's doc comment).
+    let mut compass_connector_pts: HashMap<(RoomId, RoomId), CompassConnectorGeom> = HashMap::new();
 
     // ── Connectors ───────────────────────────────────────────────────────────────────────
     //
@@ -878,6 +894,17 @@ fn render_svg_body(
         }
         for &p in &pts {
             ext.add(p.0, p.1);
+        }
+
+        // SQ-1373: record this connector's own finished geometry for the `StackedExit` pass
+        // below, which runs after every connector has been plotted (a stacked exit's primary
+        // may route as EITHER a forward `c` or a paired back-edge — see that pass's own
+        // comment — so it needs the connector keyed both ways, not just `conn.origin`).
+        if !is_portal {
+            compass_connector_pts.insert(
+                (conn.origin, conn.dest),
+                CompassConnectorGeom { merge: conn.merge, entry: conn.entry, exit: conn.exit, pts: pts.clone() },
+            );
         }
 
         let weight = [
@@ -1047,6 +1074,92 @@ fn render_svg_body(
                             ext.add(r.0, r.1);
                             ext.add(r.0 + r.2, r.1 + r.3);
                         }
+                    }
+                }
+            }
+        }
+    }
+
+    // ── SQ-1373: exits `collapse_stacked_exits` folded before the router ever saw them ─────
+    //
+    // A `StackedExit` (SQ-1276) is resolved at the SOURCE, in `mapper::render`, not by the
+    // router (contrast SQ-1368's `RoutedConnector::secondary_exit`/`secondary_entry`, folded
+    // AFTER routing onto a shared line): several of ONE room's own outgoing directions to the
+    // SAME destination collapse to one PRIMARY before `route_all` ever runs, so the connector
+    // this file draws for that pair already IS the primary — there is no `conn.secondary_*` to
+    // read for it. Every direction in one `StackedExit` (primary and secondary alike) shares
+    // its origin (`room.id`) AND its destination (`stacked.dest`), so unlike SQ-1368's fold
+    // (which can arrive at either end) a stacked exit's own travel is always room.id → dest and
+    // its marker always lands at the DEST end of that connector.
+    //
+    // The connector for that pair may have been built with room.id as `conn.origin` (the
+    // primary was chosen as the pair's forward edge, or drawn as a plain one-way — dest end is
+    // `pts[pts.len() - 1]`) or with room.id as `conn.dest` (the OTHER room's own edge was chosen
+    // as forward and the primary became its paired back-edge — dest end is `pts[0]`), so both
+    // keys of `compass_connector_pts` are tried.
+    for room in &rm.rooms {
+        for stacked in &room.stacked_exits {
+            let landing = compass_connector_pts
+                .get(&(room.id, stacked.dest))
+                .filter(|g| !g.merge)
+                .map(|g| (g.pts[g.pts.len() - 1], outward(g.entry)))
+                .or_else(|| {
+                    compass_connector_pts
+                        .get(&(stacked.dest, room.id))
+                        .filter(|g| !g.merge)
+                        .map(|g| (g.pts[0], outward(g.exit)))
+                });
+            let Some((pos, u)) = landing else {
+                // Should not happen — `collapse_stacked_exits` only ever stacks a room's own
+                // directions onto a destination it also keeps a primary, drawn route to. Stamp
+                // at the origin's own edge (the `tag` class, per the SQ-1373 brief) rather than
+                // silently dropping the direction.
+                let Some(rect) = rect_of(room.id) else { continue };
+                for &dir in &stacked.secondary {
+                    let side = side_for_travel(dir);
+                    let su = outward(side);
+                    let root = side_root(rect, side, 9.0, 0.0);
+                    let tag = direction::short_label(dir).to_uppercase();
+                    if let Some(spot) = placer.place(tag.chars().count(), &spots_around(root, su, 5.0)) {
+                        let _ = write!(
+                            over,
+                            "<text class=\"tag\"{} x=\"{}\" y=\"{}\">{}</text>",
+                            spot.anchor.attr(),
+                            f(spot.x),
+                            f(spot.y),
+                            tag
+                        );
+                        let r = spot.rect(tag.chars().count());
+                        ext.add(r.0, r.1);
+                        ext.add(r.0 + r.2, r.1 + r.3);
+                    }
+                }
+                continue;
+            };
+            for &dir in &stacked.secondary {
+                if matches!(dir, Direction::Up | Direction::Down | Direction::In | Direction::Out) {
+                    let root = (pos.0 + u.0 * PORTAL_BADGE_GAP, pos.1 + u.1 * PORTAL_BADGE_GAP);
+                    let at = settle_badge(&mut placer, root, (-u.1, u.0));
+                    let letter = direction::short_label(dir).to_uppercase();
+                    over.push_str(&badge(at, &letter));
+                    portal_ends.insert((room.id, dir));
+                    ext.add(at.0 - 8.0, at.1 - 8.0);
+                    ext.add(at.0 + 8.0, at.1 + 8.0);
+                } else {
+                    let tag = direction::short_label(dir).to_uppercase();
+                    let root = (pos.0 + u.0 * 11.0, pos.1 + u.1 * 11.0);
+                    if let Some(spot) = placer.place(tag.chars().count(), &spots_around(root, u, 5.0)) {
+                        let _ = write!(
+                            over,
+                            "<text class=\"tag\"{} x=\"{}\" y=\"{}\">{}</text>",
+                            spot.anchor.attr(),
+                            f(spot.x),
+                            f(spot.y),
+                            tag
+                        );
+                        let r = spot.rect(tag.chars().count());
+                        ext.add(r.0, r.1);
+                        ext.add(r.0 + r.2, r.1 + r.3);
                     }
                 }
             }
@@ -3074,8 +3187,10 @@ mod tests {
     /// the field report's Canyon View→Down→Rocky Ledge plus Canyon View→E→Rocky Ledge. This is
     /// `collapse_stacked_exits` territory (SQ-1276), NOT `RoutedConnector::secondary_exit`: a
     /// portal never has a bearing to prefer over a compass one, so `Down` is suppressed at the
-    /// SOURCE — before the router ever sees it — as room A's `stacked_exits`, and this file
-    /// still draws nothing for it (a pre-existing gap this quest does not claim to close).
+    /// SOURCE — before the router ever sees it — as room A's `stacked_exits`. This file used to
+    /// draw nothing for a stacked exit at all; SQ-1373 closed that gap (see
+    /// `a_stacked_exit_keeps_its_marker_in_both_renders`, below) — this case still asserts only
+    /// `Up`, which is SQ-1368's own gap, not SQ-1373's.
     ///
     /// `E` wins and is routed as an ordinary one-way. What SQ-1368 actually fixes shows up one
     /// level later: B ALSO has its own `Up` back to A, and since `Up` can only pair with a
@@ -3103,16 +3218,99 @@ mod tests {
         let tips = arrow_tips(&svg);
         assert_eq!(tips.len(), 1, "E is routed as one ordinary one-way head, into B");
 
+        let b = rooms[1];
         let badges = badges_of(&svg);
-        assert_eq!(badges.len(), 1, "Up, folded onto E's line, still gets its own badge");
-        let (letter, badge_pos) = &badges[0];
-        assert_eq!(letter, "U", "the folded direction is Up");
-        assert!(
-            near_rect_edge(*badge_pos, a, 20.0),
-            "Up travels B→A and so arrives at A: badge={badge_pos:?} vs a={a:?}"
+        // SQ-1373: `Down` is `collapse_stacked_exits`'s OWN fold (SQ-1276), not the router's —
+        // it now keeps a badge too, alongside `Up`'s router-level one this case was written for.
+        assert_eq!(badges.len(), 2, "Up (router-folded) and Down (stacked) each keep a badge");
+        let up = badges.iter().find(|(l, _)| l == "U").expect("Up's own badge").1;
+        let down = badges.iter().find(|(l, _)| l == "D").expect("Down's own badge").1;
+        assert!(near_rect_edge(up, a, 20.0), "Up travels B→A and so arrives at A: {up:?} vs a={a:?}");
+        assert!(near_rect_edge(down, b, 20.0), "Down travels A→B and so arrives at B: {down:?} vs b={b:?}");
+
+        // Neither badge may sit on top of a room box or overlap the room label.
+        assert!(label_collisions(&svg).is_empty());
+        assert!(connector_room_crossings(&svg).is_empty());
+    }
+
+    // ── SQ-1373: a stacked exit (SQ-1276) keeps its own marker too ──────────────────────
+
+    /// Room A fans out to room B with THREE directions: `N` (matching B's true bearing, so it
+    /// is `collapse_stacked_exits`'s primary and the only one routed/drawn), `E` (a second
+    /// compass member, stacked away — wants a compass `tag`), and `Down` (a portal member,
+    /// stacked away too — wants a badge). B also has its own `Up` back to A, which cannot pair
+    /// with `N` (`can_pair` never joins a compass and a vertical direction) and so becomes
+    /// `RoutedConnector::secondary_entry` on N's own connector — SQ-1368's OWN fix, arriving
+    /// back at A. Three markers total, none of them the primary's own arrowhead: `E` (tag) and
+    /// `Down` (badge `D`) at B, where all three of A's fanned-out directions travel to; `Up`
+    /// (badge `U`) at A, where B's own back-travel arrives. This is the shape SQ-1368's own
+    /// test case explicitly left open (see its doc comment).
+    #[test]
+    fn a_stacked_exit_keeps_its_marker_in_both_renders() {
+        use mapper::graph::MapGraph;
+        let mut g = MapGraph::new();
+        g.upsert_room(1, "A".into());
+        g.upsert_room(2, "B".into());
+        g.set_pos(1, (0, 0));
+        // Two rows apart, not one — the U badge (arriving at A) and the E tag / D badge
+        // (arriving at B) each want their own room in the gap between the boxes; a bare
+        // one-row gap crushes all three into the same few px and the placer starts dropping
+        // whichever loses the race, which is a geometry artifact of this fixture, not a defect.
+        g.set_pos(2, (0, -2)); // north of A, matching N's own bearing
+        g.add_edge(1, Direction::N, 2);
+        g.add_edge(1, Direction::E, 2);
+        g.add_edge(1, Direction::Down, 2);
+        g.add_edge(2, Direction::Up, 1);
+
+        let rm = render(&g);
+        assert_eq!(
+            rm.rooms.iter().find(|r| r.id == 1).unwrap().stacked_exits,
+            vec![mapper::render::StackedExit {
+                primary: Direction::N,
+                dest: 2,
+                secondary: vec![Direction::E, Direction::Down],
+            }],
+            "fixture check: N must win primary and E/Down must both stack — falsifies against \
+             the wrong graph shape rather than a real defect below"
         );
 
-        // The badge must not sit on top of A's own box or overlap the room label.
+        let svg = render_svg_of(&rm, Some(&g));
+        let rooms = room_rects(&svg);
+        assert_eq!(rooms.len(), 2, "the case must draw exactly the two rooms");
+        let a = rooms[0];
+        let b = rooms[1];
+
+        let tips = arrow_tips(&svg);
+        assert_eq!(tips.len(), 1, "N is routed as one ordinary one-way head, into B");
+
+        let badges = badges_of(&svg);
+        assert_eq!(badges.len(), 2, "Down (stacked) and Up (router-folded) each keep a badge");
+        let d = badges.iter().find(|(l, _)| l == "D").expect("Down's own badge").1;
+        let u = badges.iter().find(|(l, _)| l == "U").expect("Up's own badge").1;
+        assert!(near_rect_edge(d, b, 20.0), "Down travels A→B and so arrives at B: {d:?} vs b={b:?}");
+        assert!(near_rect_edge(u, a, 20.0), "Up travels B→A and so arrives at A: {u:?} vs a={a:?}");
+
+        let tag = text_boxes(&svg)
+            .into_iter()
+            .find(|(cls, text, _)| cls == "tag" && text == "E")
+            .expect("E's own compass tag");
+        let tag_pos = (tag.2 .0, tag.2 .1);
+        assert!(
+            near_rect_edge(tag_pos, b, 24.0),
+            "E travels A→B and so arrives at B: {tag_pos:?} vs b={b:?}"
+        );
+
+        // No two of the three markers (E's tag, Down's badge, Up's badge) may overlap each
+        // other, a room box, or the room labels.
+        let d_rect = badge_rect(d);
+        let u_rect = badge_rect(u);
+        let overlaps = |r1: PxRect, r2: PxRect| {
+            r1.0 < r2.0 + r2.2 && r2.0 < r1.0 + r1.2 && r1.1 < r2.1 + r2.3 && r2.1 < r1.1 + r1.3
+        };
+        assert!(!overlaps(d_rect, u_rect), "Down's badge and Up's badge must not overlap: {d_rect:?} vs {u_rect:?}");
+        assert!(!overlaps(d_rect, tag.2), "Down's badge and E's tag must not overlap: {d_rect:?} vs {:?}", tag.2);
+        assert!(!overlaps(u_rect, tag.2), "Up's badge and E's tag must not overlap: {u_rect:?} vs {:?}", tag.2);
+
         assert!(label_collisions(&svg).is_empty());
         assert!(connector_room_crossings(&svg).is_empty());
     }
