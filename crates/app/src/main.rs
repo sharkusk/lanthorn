@@ -4509,7 +4509,16 @@ fn run_event_loop(boot: startup::BootResult, launched_from_library: bool) -> Run
         eprintln!("{w}");
     }
 
-    lifecycle::exit_auto_save(&mut *session, &mapper, &state, &ifid, &arc_file);
+    // A clean, GAME-driven exit (the story's own quit) leaves no resume point
+    // rather than an auto-save of the turn it quit on (SQ-1342); every other
+    // exit — `/quit`, Ctrl+Q, "Save State & quit", a signal, a VM fault — still
+    // auto-saves exactly as before. `state.game_ended` is set only where
+    // `should_exit_on_turn` answers true (see `turn.rs`).
+    if state.game_ended {
+        lifecycle::exit_clear_resume_save(&mut *session, &mapper, &state, &ifid, &arc_file);
+    } else {
+        lifecycle::exit_auto_save(&mut *session, &mapper, &state, &ifid, &arc_file);
+    }
 
     // `--debug` (SQ-0449): persist the cumulative executed-PC coverage to the
     // per-story sidecar so a later `--debug`/`/debug` run resumes the blue lines.

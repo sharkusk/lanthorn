@@ -27,6 +27,15 @@ Absolute URLs or no link.
 > visible tag `*Next release:*`. `release.yml` refuses to cut a release
 > while any such tag, or this Unreleased section, still exists.*
 
+### Fixed
+
+- **Finishing a story no longer resumes it a turn early.** With auto-save on,
+  quitting or winning a game from inside it used to leave the same auto-resume
+  point a mid-game exit does, so reopening the story dropped you back one turn
+  before the ending instead of at the start. Leaving lanthorn any other
+  way — `/quit`, Ctrl+Q, "Save State & quit", closing a browser tab — still
+  picks up right where you left off, and your map is never touched either way.
+
 ---
 
 ## v0.5.0 — 2026-09-05

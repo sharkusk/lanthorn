@@ -265,6 +265,16 @@ pub(crate) fn finish_command_turn(
         return false;
     }
 
+    // Computed here, BEFORE bookkeeping, so a clean game-driven quit
+    // (`should_exit_on_turn`) can suppress this turn's own per-turn auto-save
+    // (SQ-1342): a save from the quit turn enqueued after the exit path's
+    // clearing write would leave a resume point behind again. `state.game_ended`
+    // is the flag the exit path (`main.rs` §6) reads to choose between
+    // `lifecycle::exit_auto_save` and clearing the archive; it is set ONLY here
+    // and in `finish_resumed_turn`, and cleared on restart/restore.
+    let should_exit = should_exit_on_turn(&result, state);
+    state.game_ended = should_exit;
+
     // ── Post-turn bookkeeping (history / inventory / auto-save) ──
     post_turn_bookkeeping(
         state, mapper, &mut *session, &result, cmd,
@@ -324,7 +334,7 @@ pub(crate) fn finish_command_turn(
     // loss. Rather than let a clean Scott quit exit the whole app, keep it alive
     // and raise the game-over dialog (the final message stays in the transcript
     // behind it). Every other engine keeps exiting on a clean quit.
-    let should_exit = should_exit_on_turn(&result, state);
+    // (`should_exit` was computed above, before bookkeeping — see there.)
     let is_scott = crate::engine_helpers::engine_tag(session) == "scott";
 
     // SQ-0439: the map may have something to say about the move just made — that a set of rooms
@@ -540,7 +550,11 @@ fn post_turn_bookkeeping(
     // call returns.
     // Engine-neutral: the save routes through Engine::save_state (Quetzal for
     // zvm, the gvm snapshot for Glulx); screen.json is written for zvm only.
-    if state.config.auto_save {
+    // Skipped on the quit turn itself when the exit is game-driven (SQ-1342):
+    // `state.game_ended` was just set above, and enqueuing a save here would
+    // race the exit path's clearing write — a background write that lands
+    // AFTER it would silently put the resume point right back.
+    if state.config.auto_save && !state.game_ended {
         let (location, score) = crate::engine_helpers::save_summary(session, state);
         let meta = app::archive::Meta {
             format_version: app::archive::CURRENT_FORMAT_VERSION,
@@ -704,6 +718,10 @@ pub(crate) fn finish_resumed_turn(
     // Captured before the partial move below (of `result.pending_io`) makes a
     // subsequent whole-struct borrow of `result` a borrow-checker error.
     let should_exit = should_exit_on_turn(&result, state);
+    // See the matching comment in `finish_command_turn` (SQ-1342): set before
+    // `post_turn_bookkeeping` below so a game-driven quit on the resumed half of
+    // a turn also suppresses its own per-turn auto-save.
+    state.game_ended = should_exit;
     // A chained request: the resumed turn suspended on another @save/@restore.
     // Mirror the submit path, which defers bookkeeping until the chain resolves;
     // run bookkeeping only when this turn finished without chaining.
@@ -1729,6 +1747,73 @@ mod tests {
         state.vm_halted = false;
         let not_quit = fault_test_result(false, None);
         assert!(!super::should_exit_on_turn(&not_quit, &state));
+    }
+
+    // ── SQ-1342: a clean, game-driven quit leaves no resume point ──────────────
+
+    /// `finish_resumed_turn` must set `state.game_ended` on a clean quit — set
+    /// exactly where `should_exit_on_turn` answers true — and that flag must, in
+    /// the SAME call, suppress this turn's own per-turn auto-save (the write the
+    /// exit path's clearing write must not race). `TraceOnlyEngine.save_state`
+    /// is `unreachable!()`, so this test would PANIC if the gate ever let the
+    /// auto-save reach it; not panicking, plus the archive file never appearing,
+    /// is the proof it did not.
+    #[test]
+    fn a_clean_quit_sets_game_ended_and_skips_its_own_per_turn_auto_save_sq1342() {
+        let dir = app::scratch_dir("sq1342-quit-skips-autosave");
+        let mut state = app::state::AppState::default();
+        state.config.auto_save = true;
+        let mut mapper = mapper::mapper::Mapper::default();
+        let mut eng = TraceOnlyEngine { line: None, v6: None, filename_req: None };
+        let rect = ratatui::layout::Rect::new(0, 0, 20, 20);
+        let arc_file = dir.join("default.lanthorn");
+
+        let quit_result = fault_test_result(true, None); // clean glk_exit
+        let should_exit =
+            super::finish_resumed_turn(quit_result, &mut mapper, &mut state, &mut eng, &dir, "TEST-IFID", rect);
+
+        assert!(should_exit, "a clean quit must still signal exit");
+        assert!(state.game_ended, "should_exit_on_turn true must set game_ended (SQ-1342)");
+
+        state.archive_worker.flush();
+        assert!(
+            !arc_file.exists(),
+            "the quit turn's own per-turn auto-save must be skipped entirely, not merely emptied"
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// The guard the fix must NOT widen: an ordinary game-driven turn that is
+    /// NOT a clean quit must leave `state.game_ended` false and its per-turn
+    /// auto-save running exactly as before — mirrors the SQ-0648
+    /// `per_turn_auto_save_never_prompts…` harness but drives the real
+    /// `finish_resumed_turn` entry point so this turn's new
+    /// `state.game_ended = should_exit` line is exercised on its FALSE branch too.
+    #[test]
+    fn a_non_quit_game_driven_turn_leaves_game_ended_false_and_still_auto_saves_sq1342() {
+        use app::session::GameSession;
+
+        let dir = app::scratch_dir("sq1342-nonquit-still-autosaves");
+        let arc_file = dir.join("default.lanthorn");
+        let mut sess = GameSession::new(crate::read_char_then_save_v4_story(), true, false, None).expect("new");
+        let mut state = app::state::AppState::default();
+        state.config.auto_save = true;
+        let mut mapper = mapper::mapper::Mapper::default();
+        let rect = ratatui::layout::Rect::new(0, 0, 20, 20);
+
+        let not_quit = game_driven_result(None);
+        let should_exit =
+            super::finish_resumed_turn(not_quit, &mut mapper, &mut state, &mut sess, &dir, "TEST-IFID", rect);
+
+        assert!(!should_exit, "a non-quit turn must not exit");
+        assert!(!state.game_ended, "a host-driven session must never see game_ended set (SQ-1342)");
+
+        state.archive_worker.flush();
+        let ac = app::archive::load_archive(&arc_file).expect("per-turn auto-save must still write");
+        assert!(!ac.save.is_empty(), "the per-turn auto-save must still be a real, resumable save");
+
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     // ── Scott-only game-over interception ────────────────────────────────────
