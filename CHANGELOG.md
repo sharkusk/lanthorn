@@ -53,6 +53,10 @@ Absolute URLs or no link.
 - **`lanthorn-mapgen` gives a single room reached only through a passage —
   climbing up into an attic, say — the same map layer as the place it opens
   onto**, instead of stranding it on its own by default.
+- **The draggable pane boundaries can be made easier to grab.** A new
+  `grab_zone_cells` setting widens the story/map splitter and the inventory
+  and room panel edges beyond their default one-cell reach, for anyone playing
+  on a touchscreen where a finger cannot land on so narrow a target.
 
 ### Changed
 

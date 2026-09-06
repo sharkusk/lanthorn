@@ -849,6 +849,9 @@ pub(crate) fn default_inv_dock_pct() -> u16 { 33 }
 /// about eleven rows rather than the sixteen the single column needed. 33% of a
 /// 40-row terminal is thirteen, which admits all of it with room to spare.
 pub(crate) fn default_room_dock_pct() -> u16 { 33 }
+/// Matches the zones lanthorn has always drawn for a mouse (one cell either
+/// side of the splitter, or above a dock edge); see `grab_zone_cells`.
+pub(crate) fn default_grab_zone_cells() -> u16 { 2 }
 pub(crate) fn default_band_height() -> u16 {
     crate::render::command_band::DEFAULT_BAND_ROWS
 }
@@ -1654,6 +1657,17 @@ pub struct Config {
     /// against the frame so both panels share one unit (SQ-0692).
     #[serde(default = "default_room_dock_pct")]
     pub room_dock_pct: u16,
+    /// How many cells wide (the story/map splitter) or tall (a dock's top edge)
+    /// each draggable pane boundary's grab zone is. Default 2 — one cell either
+    /// side of the divider, matching the zones lanthorn has always drawn for a
+    /// mouse. Raise it for a touchscreen session (e.g. the Docker web image on
+    /// a tablet), where a finger cannot land on so narrow a target. Clamped to
+    /// `layout::MIN_GRAB_ZONE_CELLS..=layout::MAX_GRAB_ZONE_CELLS` (1..=6). The
+    /// command band's own top edge ignores this and always keeps a single-row
+    /// zone — widening it down into the band would swallow clicks on its own
+    /// column headers (SQ-0667), a worse trade than a narrow grab (SQ-1327).
+    #[serde(default = "default_grab_zone_cells")]
+    pub grab_zone_cells: u16,
     /// Inner margin reserved inside the text-buffer (transcript) window, in
     /// character cells: `text_margin_x` blank columns on each side,
     /// `text_margin_y` blank rows top and bottom. Default 0. Populated from
@@ -2129,6 +2143,7 @@ impl Default for Config {
             command_band: CommandBandConfig::default(),
             inv_dock_pct: default_inv_dock_pct(),
             room_dock_pct: default_room_dock_pct(),
+            grab_zone_cells: default_grab_zone_cells(),
             text_margin_x: 0,
             text_margin_y: 0,
             animation: AnimationConfig::default(),
@@ -2272,6 +2287,7 @@ pub fn resolve(cli: &Cli) -> Config {
             cfg.command_band = from_file.command_band;
             cfg.inv_dock_pct = from_file.inv_dock_pct;
             cfg.room_dock_pct = from_file.room_dock_pct;
+            cfg.grab_zone_cells = from_file.grab_zone_cells;
             cfg.text_margin_x = from_file.text_margin_x;
             cfg.text_margin_y = from_file.text_margin_y;
             cfg.animation = from_file.animation;
@@ -2640,6 +2656,11 @@ pub fn write_config_at(config_path: &std::path::Path, cfg: &Config) -> std::io::
     doc.put("split_ratio", i64::from(cfg.split_ratio).into(), cfg.split_ratio == def.split_ratio);
     doc.put("inv_dock_pct", i64::from(cfg.inv_dock_pct).into(), cfg.inv_dock_pct == def.inv_dock_pct);
     doc.put("room_dock_pct", i64::from(cfg.room_dock_pct).into(), cfg.room_dock_pct == def.room_dock_pct);
+    doc.put(
+        "grab_zone_cells",
+        i64::from(cfg.grab_zone_cells).into(),
+        cfg.grab_zone_cells == def.grab_zone_cells,
+    );
     doc.put("text_margin_x", i64::from(cfg.text_margin_x).into(), cfg.text_margin_x == def.text_margin_x);
     doc.put("text_margin_y", i64::from(cfg.text_margin_y).into(), cfg.text_margin_y == def.text_margin_y);
 
@@ -3050,6 +3071,15 @@ mod tests {
         assert!(Config::default().show_status_bar);
         let cfg: Config = toml::from_str("show_status_bar = false\n").unwrap();
         assert!(!cfg.show_status_bar);
+    }
+
+    /// SQ-1327: the default (2) must match the grab zones lanthorn has always
+    /// drawn for a mouse — see `layout::default_grab_zone_cells_matches_todays_pinned_zones`.
+    #[test]
+    fn config_grab_zone_cells_defaults_to_2_and_round_trips() {
+        assert_eq!(Config::default().grab_zone_cells, 2);
+        let cfg: Config = toml::from_str("grab_zone_cells = 5\n").unwrap();
+        assert_eq!(cfg.grab_zone_cells, 5);
     }
 
     #[test]
@@ -3557,6 +3587,7 @@ use_defaults = false
             command_band: CommandBandConfig::default(),
             inv_dock_pct: 25,
             room_dock_pct: 25,
+            grab_zone_cells: 3,
             text_margin_x: 0,
             text_margin_y: 0,
             animation: AnimationConfig::default(),
@@ -3577,6 +3608,7 @@ use_defaults = false
         assert_eq!(doc["split_ratio"].as_integer(), Some(70));
         assert_eq!(doc["inv_dock_pct"].as_integer(), Some(25));
         assert_eq!(doc["room_dock_pct"].as_integer(), Some(25), "the room panel's height persists too");
+        assert_eq!(doc["grab_zone_cells"].as_integer(), Some(3), "the touch grab-zone knob persists too");
         // SQ-0573: `mouse` is at its DEFAULT and the pre-existing file did not carry
         // it, so it is deliberately not written — a default belongs in the commented
         // template, not as a live key. `user_dir` here is the test's temp dir, so it
