@@ -27,6 +27,14 @@ Absolute URLs or no link.
 > visible tag `*Next release:*`. `release.yml` refuses to cut a release
 > while any such tag, or this Unreleased section, still exists.*
 
+### Changed
+
+- **The exported SVG map frames each layer in its own panel, and the legend no
+  longer clips.** A multi-layer map now draws every layer inside a bordered
+  panel of its own, all the same width, instead of headings floating loose
+  over a shared background — and the legend's widest line ("exit to another
+  layer") no longer runs past the edge of its own box.
+
 ---
 
 ## v0.5.0 — 2026-09-05

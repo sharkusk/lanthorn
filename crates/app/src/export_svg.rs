@@ -129,10 +129,11 @@ fn stylesheet() -> String {
          .ghost-name{{fill:#cdd;font-size:{GHOST_NAME_PX}px}}\
          .ghost-layer{{fill:#99b;font-size:{GHOST_LAYER_PX}px}}\
          .random{{fill:#f8a;font-size:9px}}\
-         .heading{{fill:#dde;font-size:14px}}\
+         .heading{{fill:#fff;font-size:14px}}\
          .legend{{fill:#dde;font-size:9px}}\
          .legend-panel{{fill:#20203a;stroke:#44446a;stroke-width:1}}\
          .legend-title{{fill:#fff;font-size:10px}}\
+         .layer-frame{{fill:#20203a;stroke:#44446a;stroke-width:1}}\
          </style>"
     )
 }
@@ -1572,8 +1573,9 @@ pub fn render_svg_of(rm: &RenderMap, graph: Option<&MapGraph>) -> String {
 }
 
 /// Render every non-empty layer of `graph` as one standalone SVG document, each layer its own
-/// coordinate plane stacked top-to-bottom under a heading naming it (SQ-1308) — the same rule
-/// [`crate::map_dump::render_dump`] draws its ASCII map by.
+/// coordinate plane framed in its own panel and stacked top-to-bottom, a heading naming it in the
+/// panel's own title bar (SQ-1308, panels SQ-1343) — the same rule [`crate::map_dump::render_dump`]
+/// draws its ASCII map by.
 ///
 /// [`render_svg`] draws a single [`RenderMap`] on one shared canvas with no notion of layer at
 /// all, which [`mapper::render::render`] (as opposed to [`mapper::render::render_layer`]) never
@@ -1583,6 +1585,11 @@ pub fn render_svg_of(rm: &RenderMap, graph: Option<&MapGraph>) -> String {
 /// routinely do share a cell; drawing every layer on one canvas would then draw them on top of
 /// each other. Stacking each layer's own [`mapper::render::render_layer`] output avoids that by
 /// construction, since each one gets its own canvas.
+///
+/// Every panel is framed at the SAME width — the widest layer's fragment or heading, plus
+/// `FRAME_PAD` on each side — so the stack reads as a column of equal-width panels rather than a
+/// ragged one, which is why this is two passes: the first measures every layer before the second
+/// draws any of them.
 ///
 /// A single-layer graph renders exactly as `render_svg_of(&render(graph), Some(graph))`.
 pub fn render_svg_layered(graph: &MapGraph) -> String {
@@ -1598,11 +1605,15 @@ pub fn render_svg_layered(graph: &MapGraph) -> String {
     }
 
     const HEADING_H: i32 = 26;
-    const GAP: i32 = 22;
+    const FRAME_PAD: i32 = 12;
+    const PANEL_GAP: i32 = 16;
     let weights = weight_table(graph);
-    let mut y = 0i32;
+
+    // Pass 1: render every layer's own heading and fragment, and find the widest of either —
+    // nothing is emitted yet, because the panel width below has to be settled first.
+    type Panel = (String, Option<(String, i32, i32)>);
+    let mut panels: Vec<Panel> = Vec::with_capacity(layers.len());
     let mut max_w = 0;
-    let mut body = String::new();
     for &l in &layers {
         let rm = mapper::render::render_layer(graph, l);
         let heading = format!(
@@ -1611,23 +1622,36 @@ pub fn render_svg_layered(graph: &MapGraph) -> String {
             if graph.layer_is_maze(l) { " [maze]" } else { "" },
             graph.rooms_in_layer(l).len()
         );
+        max_w = max_w.max(heading.chars().count() as i32 * 9);
+        let arrivals = arrival_ghosts(graph, l);
+        let frag = render_svg_body(&rm, &weights, &arrivals);
+        if let Some((_, w, _)) = &frag {
+            max_w = max_w.max(*w);
+        }
+        panels.push((heading, frag));
+    }
+    let panel_w = max_w + 2 * FRAME_PAD;
+
+    // Pass 2: emit each layer inside one panel of that shared width, stacked top-to-bottom.
+    let mut y = 0i32;
+    let mut body = String::new();
+    for (heading, frag) in &panels {
+        let h = frag.as_ref().map(|&(_, _, h)| h).unwrap_or(0);
+        let panel_h = HEADING_H + FRAME_PAD + h + FRAME_PAD;
         let _ = write!(
             body,
-            "<text class=\"heading\" x=\"0\" y=\"{}\">{}</text>",
-            y + 16,
-            xml_escape(&heading)
+            "<g transform=\"translate(0,{y})\">\
+             <rect class=\"layer-frame\" x=\"0\" y=\"0\" width=\"{panel_w}\" height=\"{panel_h}\" rx=\"6\"/>\
+             <text class=\"heading\" x=\"{FRAME_PAD}\" y=\"18\">{}</text>",
+            xml_escape(heading)
         );
-        max_w = max_w.max(heading.chars().count() as i32 * 9);
-        y += HEADING_H;
-        let arrivals = arrival_ghosts(graph, l);
-        if let Some((frag, w, h)) = render_svg_body(&rm, &weights, &arrivals) {
-            let _ = write!(body, "<g transform=\"translate(0,{y})\">{frag}</g>");
-            y += h;
-            max_w = max_w.max(w);
+        if let Some((frag, _, _)) = frag {
+            let _ = write!(body, "<g transform=\"translate({FRAME_PAD},{})\">{frag}</g>", HEADING_H + FRAME_PAD);
         }
-        y += GAP;
+        body.push_str("</g>");
+        y += panel_h + PANEL_GAP;
     }
-    document(&body, max_w.max(1), y.max(1))
+    document(&body, panel_w.max(1), y.max(1))
 }
 
 /// Write `render_svg_of(rm, graph)` to the file at `path`.
@@ -2325,6 +2349,76 @@ mod tests {
         assert!(bad.is_empty(), "a cross-layer ghost's text must stay off its room: {bad:#?}");
         let bad = ghost_box_overlaps(&svg);
         assert!(bad.is_empty(), "a cross-layer ghost box must stay off rooms and other ghosts: {bad:#?}");
+    }
+
+    /// SQ-1343: a two-layer graph draws exactly two `layer-frame` panels of equal width, each
+    /// layer's heading sits inside its own panel, and each layer's room lies inside that same
+    /// panel — never another layer's.
+    #[test]
+    fn a_two_layer_graph_frames_each_layer_in_an_equal_width_panel() {
+        use mapper::graph::MapGraph;
+        let mut g = MapGraph::new();
+        g.upsert_room(1, "Hall".into());
+        g.set_pos(1, (0, 0));
+        let below = g.new_layer(Some(mapper::layer::MAIN_LAYER), "Below".into());
+        g.upsert_room(2, "Cellar".into());
+        g.set_room_layer(2, below);
+        g.set_pos(2, (0, 0));
+
+        let svg = render_svg_layered(&g);
+        let doc = roxmltree::Document::parse(&svg).expect("well-formed SVG");
+
+        let mut frames: Vec<(f64, f64, f64, f64)> = doc
+            .descendants()
+            .filter(|n| n.tag_name().name() == "rect" && n.attribute("class") == Some("layer-frame"))
+            .map(|n| {
+                let o = translate_of(n);
+                let a = |name: &str| n.attribute(name).and_then(|v| v.parse::<f64>().ok()).unwrap_or(0.0);
+                (a("x") + o.0, a("y") + o.1, a("width"), a("height"))
+            })
+            .collect();
+        assert_eq!(frames.len(), 2, "one frame per non-empty layer");
+        frames.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap());
+        assert!(
+            (frames[0].2 - frames[1].2).abs() < 0.01,
+            "both panels must share the same width: {frames:?}"
+        );
+
+        let mut headings: Vec<(f64, f64, usize)> = doc
+            .descendants()
+            .filter(|n| n.tag_name().name() == "text" && n.attribute("class") == Some("heading"))
+            .map(|n| {
+                let o = translate_of(n);
+                let a = |name: &str| n.attribute(name).and_then(|v| v.parse::<f64>().ok()).unwrap_or(0.0);
+                (a("x") + o.0, a("y") + o.1, n.text().unwrap_or("").chars().count())
+            })
+            .collect();
+        headings.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap());
+        assert_eq!(headings.len(), 2, "one heading per panel");
+        for (i, &(x, y, chars)) in headings.iter().enumerate() {
+            let (fx, fy, fw, fh) = frames[i];
+            assert!(x >= fx && x <= fx + fw, "heading {i}'s x must sit inside its frame: {x} vs {frames:?}");
+            assert!(y >= fy && y <= fy + fh, "heading {i}'s baseline must sit inside its frame: {y} vs {frames:?}");
+            // Same estimate `render_svg_layered` sized the panel with.
+            let right = x + chars as f64 * 9.0;
+            assert!(
+                right <= fx + fw + 0.01,
+                "heading {i}'s estimated right edge must stay inside its frame: {right} vs {frames:?}"
+            );
+        }
+
+        let mut rooms = room_rects(&svg);
+        assert_eq!(rooms.len(), 2, "one room per layer");
+        rooms.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap());
+        for (i, &(rx, ry, rw, rh)) in rooms.iter().enumerate() {
+            let (fx, fy, fw, fh) = frames[i];
+            assert!(
+                rx >= fx && ry >= fy && rx + rw <= fx + fw && ry + rh <= fy + fh,
+                "layer {i}'s room rect must lie inside its own frame: room {:?} frame {:?}",
+                (rx, ry, rw, rh),
+                frames[i]
+            );
+        }
     }
 
     // ── SQ-1319: ghosts at both ends, never dropped ──────────────────────────────────────
