@@ -34,6 +34,7 @@ fn capture(bytes: &[u8], flushes: &[(f64, usize, usize)]) -> Capture {
         spec,
         duration: Duration::from_secs(1),
         timed_out: false,
+        exit: None,
     }
 }
 

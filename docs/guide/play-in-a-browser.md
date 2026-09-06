@@ -14,10 +14,9 @@ mkdir -p stories && docker compose up -d
 game files into the new `stories/` folder, run that command, and open
 <http://localhost:7681>. You'll see a real terminal running lanthorn's story
 picker, delivered to the page by [ttyd](https://github.com/tsl0922/ttyd)
-serving an xterm.js terminal — every connection gets its own lanthorn
-process, so several people can play at once, each in their own session,
-sharing the same story library and the same saves. A game saved in one
-session restores in the next.
+serving an xterm.js terminal — everyone who opens it gets their own game, so
+several people can play at once, sharing the same story library and the same
+saves.
 
 Without compose, the same thing is one `docker run`:
 
@@ -42,6 +41,40 @@ fidelity, SSH to the host and run lanthorn there directly instead — see
 [command line](command-line.md). The page brings its own font, so icons and
 map diagonals draw correctly on any machine.
 
+## If your connection drops
+
+It doesn't cost you the game. Close the tab, walk out of Wi-Fi range, let a
+tablet fall asleep for an hour — come back to the same address and you are
+back in the same room, mid-sentence, with your transcript and your map exactly
+where you left them. Your browser quietly remembers which game is yours, so
+there is nothing to click and nothing to restore.
+
+That holds for six hours of being away. After that the game is put down for
+you — but not lost: lanthorn saves after every single turn here, so the next
+time you open the page it picks your progress straight back up, one turn at
+most behind where you stopped. The same is true of anything more violent than
+a dropped connection, a restarted server included.
+
+Six hours is a default, not a rule: `LANTHORN_WEB_SESSION_TTL` (in seconds)
+sets how long an untouched game is kept, and `LANTHORN_WEB_DETACH=off` turns
+the whole thing off — see [the trade](#sound-in-the-browser) below for the one
+reason you might want to.
+
+## Playing on a tablet or phone
+
+Dragging one finger up or down the transcript or the story picker's list
+scrolls it, same as a mouse wheel. Drag one finger sideways, or drag with two
+fingers in any direction, to pan the map or resize a pane's splitter — a
+plain tap still just taps, so the on-screen keyboard still comes up when you
+need it. `LANTHORN_WEB_TOUCH=off` turns all of this off if you'd rather the
+browser handle touch its own way.
+
+The edges you drag are made wider here than on a desktop, because a fingertip
+is not a mouse pointer: the splitter between the story and the map, and the
+top edges of the inventory and room panels, are four cells deep instead of
+two. `LANTHORN_WEB_GRAB_ZONE` sets that (anything from 1 to 6), and whatever
+you set in lanthorn's own settings screen wins over it from then on.
+
 ## Sound in the browser
 
 Sound plays too, over a second connection alongside the terminal — a terminal
@@ -53,6 +86,14 @@ publishes two ports: 7681 for the terminal, 7682 for sound.
 `LANTHORN_WEB_AUDIO=off` turns this off and drops back to a silent,
 single-port setup. Full detail, including what to do behind a reverse proxy,
 lives in [sound](sound.md) and [remote sound](../internals/remote-sound.md).
+
+**One catch, and it is a real one.** A game that survives a dropped connection
+can't also send sound to the browser: the sound channel belongs to the
+connection, and when that goes, so does it. So out of the box the browser is
+silent and your game is safe. If you'd rather have it the other way round —
+sound while you play, and a dropped connection ends the session (your progress
+still saved, and picked up next time you open the page) — set
+`LANTHORN_WEB_DETACH=off`.
 
 ## The library and its metadata
 

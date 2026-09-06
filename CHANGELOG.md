@@ -29,6 +29,25 @@ Absolute URLs or no link.
 
 ### Added
 
+- **Playing in a browser now survives a dropped connection.** Close the tab,
+  walk out of Wi-Fi range, let a tablet fall asleep — come back to the same
+  address and you are in the same room, mid-sentence, with your transcript and
+  your map where you left them. Your browser quietly remembers which game is
+  yours, so there is nothing to click and nothing to restore. That holds for
+  six hours of being away; after that the game is put down, with its progress
+  saved, and the next visit picks it straight back up. One catch, and it is a
+  real one: a game that survives a dropped connection cannot also send sound to
+  the browser, because the sound channel belongs to the connection. Out of the
+  box the browser is silent and your game is safe; `LANTHORN_WEB_DETACH=off`
+  takes the other side of that trade.
+
+- **The pane edges you drag are wider in a browser on a tablet.** The splitter
+  between the story and the map, and the top edges of the inventory and room
+  panels, are four cells deep there instead of the two a mouse pointer wants —
+  a fingertip could not reliably land on the narrower target. Set
+  `LANTHORN_WEB_GRAB_ZONE` to pick another width, or change `grab_zone_cells`
+  in the settings screen, which wins over it from then on.
+
 - **The exported SVG map now shows the passages between the rooms.** Every
   connection is drawn as its own rounded, right-angled line running in the
   channel between the rooms — never through a room box, never on top of
@@ -40,10 +59,25 @@ Absolute URLs or no link.
   renames an exit. Room boxes grow to fit their names instead of cropping
   them, doors are marked with a bar across the line, a secret exit the story
   gates is dotted, up/down/in/out passages get a lettered badge on the side of
-  the room they leave by — with the destination named when it is on another
-  layer — and a legend in the corner says what every mark means. The whole
-  drawing is styled by a stylesheet in the file, so the colours can be changed
-  without re-exporting. Nothing in it needs a special font.
+  the room they leave by, and a legend in the corner says what every mark
+  means. The whole drawing is styled by a stylesheet in the file, so the
+  colours can be changed without re-exporting. Nothing in it needs a special
+  font.
+- **Every passage that leaves the layer being drawn now says where it goes, at
+  both ends, and never drops the name.** A badge that crosses to another map
+  layer is joined by a short line to a small box naming the room and the
+  layer it leads to; the layer on the other side draws the matching box back,
+  and a one-way passage — nothing to draw it back FROM — gets an arrival box
+  on the far side instead, naming where it came from. Where the old single
+  caption used to get dropped in a crowded corner (Zork I's Kitchen, a step
+  down into the Studio, on its busy house layer), the box now just moves
+  farther out along the passage until it finds room.
+- **A two-way passage between two touching rooms no longer reads as a bowtie
+  (`◄►`).** At the narrowest gutter the SVG draws, the two arrowheads used to
+  meet — or nearly meet — back to back with no line visible between them
+  (Zork I's Cyclops Room and Strange Passage was the reported case). The
+  export now gives that gutter a little extra room, in pixels only, so there
+  is always a real dash of line showing between the two heads.
 - **`lanthorn-mapgen` now splits a story's mazes and portal-only regions onto
   their own map layers**, the way accepting every one of the interpreter's own
   "give these rooms their own layer?" prompts would. A generated map's `.svg`,
@@ -53,6 +87,10 @@ Absolute URLs or no link.
 - **`lanthorn-mapgen` gives a single room reached only through a passage —
   climbing up into an attic, say — the same map layer as the place it opens
   onto**, instead of stranding it on its own by default.
+- **The draggable pane boundaries can be made easier to grab.** A new
+  `grab_zone_cells` setting widens the story/map splitter and the inventory
+  and room panel edges beyond their default one-cell reach, for anyone playing
+  on a touchscreen where a finger cannot land on so narrow a target.
 
 ### Changed
 
@@ -97,6 +135,14 @@ Absolute URLs or no link.
   twice, one on top of the other.
 
 ### Fixed
+
+- **A game served to a browser no longer loses progress when the connection
+  drops.** Every turn was played, and none of it was written down: the served
+  container never turned on saving after each turn, so a closed tab or a
+  sleeping tablet ended the game with nothing to come back to. It now saves as
+  each turn completes, and again on the way out, so even a hard kill costs at
+  most the turn in progress. There is a switch for it anywhere lanthorn runs,
+  too — `--auto-save on` for one session, or the settings screen to keep it.
 
 - **A door the game refuses no longer puts you on the other side of it.** In
   *Anchorhead* (the 2018 illustrated edition), trying the estate agent's locked

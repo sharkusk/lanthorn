@@ -48,10 +48,10 @@ docker run -d --name lanthorn \
 
 Then open <http://localhost:7681>. The container runs
 [ttyd](https://github.com/tsl0922/ttyd) (a pinned static release binary,
-fetched at image-build time), which serves an xterm.js terminal in the browser and spawns **one lanthorn process
-per connection** — several people can play at once, each in their own session,
-sharing the `/stories` library and the `/data` save directory. A game saved in
-one session restores in the next.
+fetched at image-build time), which serves an xterm.js terminal in the browser and gives each visitor their
+own lanthorn session — several people can play at once, sharing the `/stories`
+library and the `/data` save directory. A session **outlives the websocket that
+started it**: see [the session model](#the-session-model) below.
 
 Arguments after `serve` go to lanthorn (`... lanthorn serve /stories/zork1.z5`
 pins every connection to one story); with none, each connection gets the
@@ -68,6 +68,12 @@ Serve-mode knobs, as environment variables:
 | `LANTHORN_WEB_IMAGES` | `sixel` or `halfblocks`: how pictures are sent to the browser | `sixel` |
 | `LANTHORN_WEB_FONT` | a CSS font-family name to prefer over the page's own embedded font (which still loads as a fallback) | unset |
 | `LANTHORN_WEB_FONT_SIZE` | the terminal's font size in the page | `16` |
+| `LANTHORN_WEB_TOUCH` | `on` or `off`: turn touch drags into scroll and mouse-drag reports (see below) | `on` |
+| `LANTHORN_WEB_DETACH` | `on` or `off`: keep a game running when its connection drops (see below) | `on` |
+| `LANTHORN_WEB_SESSION_TTL` | seconds an abandoned game is kept before it is ended | `21600` (6 h) |
+| `LANTHORN_WEB_SESSION_DIR` | where detached sessions keep their sockets and stamps | `/tmp/lanthorn-sessions` |
+| `LANTHORN_WEB_AUTOSAVE` | `on` or `off`: pass `--auto-save on` to every served game | `on` |
+| `LANTHORN_WEB_GRAB_ZONE` | `1`-`6` or `off`: how many cells wide the draggable pane boundaries are (see below) | `4` |
 
 **Do not expose an unauthenticated port beyond localhost** — a lanthorn
 session includes a story picker that can browse and download into `/stories`,
@@ -78,6 +84,124 @@ speaks plain HTTP/WebSocket here.
 
 `docker-compose.yml` at the repo root is a ready-made example of this mode:
 `mkdir -p stories && docker compose up -d`.
+
+### The touch grab zone
+
+`grab_zone_cells` (SQ-1327) says how wide a target the draggable pane
+boundaries present — the story/map splitter and the dock panels' top edges.
+lanthorn's own default is **2**, which is drawn for a mouse pointer; on a tablet
+a finger cannot reliably land on so narrow a strip, and the browser image is
+where the tablets are. Serve mode therefore seeds **4**, adjustable with
+`LANTHORN_WEB_GRAB_ZONE` (1-6, or `off` to leave the setting entirely alone).
+
+This is the one serve knob that writes into a file the player owns, because
+`grab_zone_cells` has no command-line flag to state it with for one run. The
+rules that make that safe, all checked by `docker/test-entrypoint.sh`:
+
+- **Only where the player has not answered.** An uncommented `grab_zone_cells =`
+  anywhere in `$HOME/.lanthorn/config.toml` stops the seed dead. A *commented*
+  one — which is what lanthorn's own seeded template carries — does not, because
+  that is documentation rather than a decision.
+- **Inserted above the first `[table]`, never appended.** The template has real
+  section headers, and a top-level key written after one silently becomes a key
+  *inside* that section.
+- **A value outside 1-6 is refused rather than written.** `grab_zone_cells =
+  banana` is not merely a bad setting: it makes `config.toml` unparseable, after
+  which `write_config_at` refuses to save *any* setting until somebody edits the
+  file by hand.
+- **A config.toml that does not exist yet is created holding just this line.**
+  That costs nothing, because `config_template::top_up` appends every documented
+  setting an existing file has never held, commented, on the next launch — so
+  the player still ends up with the full annotated catalogue, with this one key
+  already answered.
+
+Once seeded the key is the player's: the settings screen writes over it like any
+other, and the container never touches it again.
+
+### The session model
+
+A browser connection is a fragile thing — a closed tab, a sleeping tablet, a
+train going into a tunnel — and ttyd's answer to a dropped websocket is to
+signal the process it started. Two mechanisms, added by SQ-1323, mean that no
+longer costs the player anything.
+
+**Every served game saves after every turn.** The entrypoint passes
+`--auto-save on`, so the resume archive in `/data` is rewritten as each turn
+completes and again on the way out. This is a flag on the command line rather
+than a line written into `/data/.lanthorn/config.toml`, deliberately: the
+container's cadence must never silently become the player's own setting, and a
+desktop lanthorn still ships with `auto_save = false`. `LANTHORN_WEB_AUTOSAVE=off`
+turns it off; an explicit `--auto-save off` after `serve` wins over both.
+
+**And the game outlives the connection.** Each visitor's page mints a session id
+(`docker/web-session.js`), keeps it in `localStorage` for its origin, and passes
+it back on the command line through ttyd's `--url-arg` as
+`--web-session=<id>` — the same channel the browser-audio FIFO id already used,
+now shared rather than duplicated. `docker/serve-session.sh` runs the game as
+`dtach -A /tmp/lanthorn-sessions/<id>.sock … lanthorn …`, so a reconnect with
+that id **attaches to the running game** instead of starting a new one.
+
+Why that survives the hang-up, precisely. ttyd's `LWS_CALLBACK_CLOSED`
+(`src/protocol.c:373-379`) calls `pty_kill(pss->process, server->sig_code)`;
+`pty_kill` is `uv_kill(-process->pid, sig)` (`src/pty.c:158-164`), a signal at
+the process *group*, and `sig_code` defaults to `SIGHUP` (`src/server.c:169`).
+That group contains the wrapper and the dtach *client* — the client's handler
+prints `[detached]` and exits (`attach.c:202`, `:90`) — but not the dtach
+*master*, which `setsid()`s into its own session (`master.c:462`) and sets
+`SIGHUP` to `SIG_IGN` besides (`master.c:483`). With no client attached the
+master reads the pty and discards it (`master.c:337`), so a detached game
+neither blocks on a full pipe nor spins.
+
+The reaper. A background loop in `docker/entrypoint.sh` sweeps every five
+minutes and ends any session nobody has been in for `LANTHORN_WEB_SESSION_TTL`.
+"Nobody has been in" is a heartbeat, not an event: `serve-session.sh` writes
+`<id>.seen` every 30 seconds for as long as a browser is attached, so
+`stale_sessions()` is pure arithmetic over a directory and a clock — which is
+exactly what lets `docker/test-entrypoint.sh` check the TTL boundary, a corrupt
+stamp, an empty stamp and an empty directory without a container. Ending a
+session is a **SIGTERM at the game** (whose pid `docker/session-run.sh`
+recorded, because dtach daemonises its master and hands back no handle), so
+lanthorn runs its own termination path — restore the terminal, write the resume
+archive — and the player who comes back after the TTL still resumes from the
+save. Only the *live* session is gone.
+
+Two supporting details that are not obvious from the outside:
+
+- `docker/session-run.sh` waits for the attacher's window-size packet before
+  starting lanthorn. dtach's `init_pty` creates the session's pty with no
+  winsize at all ("we don't have to set the window size here, because the
+  attacher will send it in a packet"), and a full-screen TUI that measures the
+  terminal in that window lays its first frame out on nothing.
+- `init: true` in `docker-compose.yml` gives the container a real init as pid 1.
+  Without it ttyd is pid 1, and ttyd does not `wait()` for children it did not
+  spawn — so every reaped session's daemonised master would linger as a zombie.
+
+**dtach, not abduco.** abduco is the smaller, tidier program and would have been
+the first choice; it is simply **not packaged for Debian trixie**
+(`packages.debian.org/trixie/abduco` is a 404 — 0.6-1 exists in forky and sid
+only), which the runtime image is. dtach 0.9-7 is in trixie, is one binary over
+libc, and has the attach-or-create semantics this needs. The flags are
+`-r winch` (a reattach repaints via `SIGWINCH`; dtach's default `ctrl_l` would
+type a key *at the parser*), `-E` (no detach character — `^\` belongs to the
+game) and `-z` (so does `^Z`).
+
+#### The sound trade
+
+**A detachable session has no browser sound.** The audio FIFO is created when
+the page's audio socket opens and unlinked when it closes
+(`crates/audio-relay/src/lib.rs`), so it is a property of the *connection*. A
+game that outlives its connection has ALSA bound to a pipe whose reader is gone,
+and the next write fills the pipe buffer and wedges the audio thread for good —
+there is no way to re-point a running process's `LANTHORN_AUDIO_OUT`. So a
+detachable session plays into the entrypoint's paced sink instead: silent in the
+browser, and never stuck.
+
+`LANTHORN_WEB_DETACH=off` takes the other side of the trade — sound in the
+browser, and a dropped connection ends the game (with its progress still saved
+by the per-turn auto-save, and still resumed on the next visit). Having both
+would need the relay to keep a dropped session's FIFO alive and drained until
+the same id reconnects, which is a change in `crates/audio-relay` rather than in
+the container.
 
 ### Fetching the library's metadata on the server
 
@@ -122,6 +246,36 @@ lanthorn instead draws such an image as a plain background-filled footprint
 while the transcript is still moving, and re-sends the full picture once the
 scroll settles, so a scroll session costs one payload per image rather than
 one per step (SQ-1198).
+
+### Touch, on tablets and phones
+
+xterm.js wires `touchstart`/`touchmove` only to its own scrollback viewport
+(`browser/Viewport.ts`), which is a no-op on lanthorn's alternate screen — a
+drag on a touchscreen would otherwise reach nothing. `docker/web-touch.js`
+(injected by `build_index` unless `LANTHORN_WEB_TOUCH=off`) turns a touch
+drag into the mouse events xterm.js already knows how to forward, classified
+once per touch contact:
+
+| fingers | direction | becomes |
+|---|---|---|
+| 1 | vertical (or still) | synthetic wheel events (as before SQ-1324) |
+| 1 | horizontal | synthetic mouse drag (down/move/up) |
+| 2 | either | synthetic mouse drag (down/move/up) |
+| 1 | none (a tap) | nothing — tap-to-focus and the on-screen keyboard still work |
+
+One-finger horizontal and two-finger touches were dead before this (xterm's
+own viewport only scrolls vertically), so claiming them for a drag costs
+nothing and leaves one-finger vertical scroll untouched. The drag path relies
+on xterm.js's `Terminal.bindMouse()` (`browser/Terminal.ts`) attaching an
+"always on" `mousedown` listener to the same `.xterm` element the wheel
+synthesis dispatches on, and on `MouseService.getMouseReportCoords` reading
+only `event.clientX`/`clientY` — so a synthetic `MouseEvent` with real
+coordinates is indistinguishable from a native one. It only works because
+lanthorn's own `EnableMouseCapture` (crossterm's `?1000h?1002h?1003h?1006h`)
+already asked the terminal for button-motion tracking; see
+`docker/web-touch.js`'s header comment for the full chain and
+`docker/web-touch.test.js` (`node docker/web-touch.test.js`, no CI wiring —
+see the file for why) for the gesture classifier's own tests.
 
 ### The page's own font
 

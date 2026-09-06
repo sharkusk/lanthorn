@@ -1030,21 +1030,48 @@ What the drawing shows, beyond the rooms:
   room's own EXIT (SQ-0688). A reciprocal pair (one collapsed connector) gets one
   at each end; a one-way gets one, and the bare far end *is* the reading; an
   asymmetric pair is two connectors, each with its own departure arrow.
+  A channel already at its shared cell minimum (`MIN_GUTTER`, or `DIAG_GUTTER`
+  for a diagonal bend) is still widened in the SVG's own PIXEL mapping alone
+  (`PxAxis`, SQ-1322) — never in that shared cell count, which the terminal also
+  lays channels out by — so two ADJACENT rooms' reciprocal pair always shows a
+  real shaft between the heads' own flat backs instead of the two meeting or
+  overlapping (a "bowtie", `◄►`). The floor is derived from the arrowhead's own
+  geometry (twice its reach, plus twice its length), never a bare number.
 - **A direction tag** at the departure anchor when the side a connector actually
   leaves by disagrees with the passage's word — a diagonal walked round the
   corner orthogonally, or a distorted edge routed out of another side.
 - **Weights** (SQ-1312): a `Door` gets a bar across the line with a gap punched
   under it, a `Conditional` exit is dotted, and a distorted edge stays dashed red.
 - **Up/Down/In/Out** as a lettered badge (`U`/`D`/`I`/`O`) on the side the
-  passage leaves by, with the destination's name beside it when it crosses a
-  layer. Letters, not glyphs: **the export must not depend on Nerd Fonts.**
+  passage leaves by; a compass passage that crosses a layer (SQ-0360 — the
+  app's player-made layers can cut a compass seam even though `mapgen`'s
+  never do) gets the same badge, lettered with its own direction. Letters, not
+  glyphs: **the export must not depend on Nerd Fonts.**
+- **A ghost, at both ends, for every passage that leaves the layer being
+  drawn** (SQ-1319): a small dashed box, joined to the badge by a short
+  connector, naming the room it leads to and the layer it lives on. When the
+  graph carries a connection back the other way, the destination's own panel
+  draws its own ghost for it — that pairing is what "both ends" means; there
+  is no separate mirroring step. A genuinely ONE-WAY crossing has nothing to
+  mirror, so the arriving room gets an arrival ghost instead — an inward
+  arrowhead (arriving, not leaving) and a box naming where the passage came
+  FROM — which is the one case `mapper::layer::interlayer_badges` never draws
+  anything for on its own, since it only ever states a room's own outgoing
+  crossing. A ghost's placement search **never gives up**: when nothing is
+  free near the badge it keeps extending straight out along the passage's own
+  direction, one channel width at a time, until it lands clear — the panel's
+  canvas grows to fit wherever that ends up. This replaced a single inline
+  caption (SQ-1317) that was silently DROPPED under exactly this pressure —
+  Zork I's dense house layer, Kitchen's own Down passage to the Studio.
 - **A legend** in the bottom-left of each document naming every mark.
 
 Styling is a `<style>` block of CSS classes — `.room`, `.room.current`,
 `.room-label`, `.edge` plus one of `.reciprocal`/`.asym`/`.oneway`, `.edge.portal`,
 `.edge.conditional`, `.edge.distorted`, `.edge.stub`, `.arrow`, `.door`, `.badge`,
-`.tag`, `.legend` — rather than per-element attributes, so a consumer can restyle
-an exported map without re-rendering it. The dark palette is the default.
+`.tag`, `.ghost` (plus `.ghost.arrival` for the one-way mirror, and `.ghost text`
+for its two lines), `.legend` — rather than per-element attributes, so a consumer
+can restyle an exported map without re-rendering it. The dark palette is the
+default.
 
 Naming any of `--dump`, `--svg`, `--dot`, `--json` writes only the ones named;
 naming none writes all four. `--no-layout` skips
