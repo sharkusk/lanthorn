@@ -1173,6 +1173,23 @@ pub fn mouse_to_action(
         && row >= story.y && row < story.bottom();
 
     match kind {
+        // ── Left-down in story with a completion showing: accept it (SQ-1326) ──
+        // Mirrors the "autocomplete-or-ToggleFocus" gate Tab uses (step 8 in this
+        // file's module doc and in `key_to_command` below): when a suggestion is
+        // live, a click ANYWHERE in the story pane — including on the input line
+        // itself — takes it exactly as Tab would, ahead of both CursorToClick and
+        // StartSelection below. `!state.pager.active` mirrors the precedence Tab
+        // itself has: the [MORE] pager intercepts every key before step 8 ever
+        // runs, so a suggestion cannot really be "showing" while it's up.
+        MouseEventKind::Down(MouseButton::Left)
+            if in_story
+                && state.focus == Focus::Game
+                && !state.pager.active
+                && !state.current_partial().is_empty()
+                && !state.suggestions.is_empty() =>
+        {
+            Action::Autocomplete
+        }
         // ── Left-down on the input line: place the caret ──────────────────────
         // Must precede the story arm below: the input line sits inside the story pane, so a click
         // on it would otherwise start a text selection instead of moving the caret (SQ-0354).
@@ -11640,6 +11657,103 @@ mod tests {
         apply_action(Action::CursorRight, &mut s, &mut m);
         assert_eq!(s.input.value, before, "mid-line Right leaves the text alone");
         assert_eq!(s.input.cursor, 1, "it just moves the caret");
+    }
+
+    // ── SQ-1326: a click in the story pane accepts a showing completion ───────
+
+    /// A left click anywhere in the story pane, with a suggestion showing,
+    /// accepts it exactly as Tab would — same input-line result, same
+    /// `suggestion_active` flip.
+    #[test]
+    fn left_click_in_story_accepts_a_showing_completion_exactly_as_tab_would() {
+        use crossterm::event::MouseEventKind;
+
+        let mut s = AppState::default();
+        let mut m = Mapper::default();
+        for c in "/toggle-roo".chars() {
+            apply_action(Action::InputChar(c), &mut s, &mut m);
+        }
+        assert!(!s.suggestions.is_empty(), "a suggestion is showing: {:?}", s.suggestions);
+        let want = format!("/{}", s.suggestions[0]);
+
+        // A click well clear of the input line — anywhere in the story pane.
+        let click = mouse_event(MouseEventKind::Down(MouseButton::Left), 85, 5, KeyModifiers::NONE);
+        let action = mouse_to_action(&s, click, map_rect(), story_rect(), &[], &None);
+        assert!(matches!(action, Action::Autocomplete), "a showing completion is accepted, got {:?}", action);
+        apply_action(action, &mut s, &mut m);
+        assert_eq!(s.input.value, want, "the click applied the SAME completion Tab would have");
+        assert!(s.suggestion_active, "and marks it applied, exactly as Tab does");
+    }
+
+    /// The same click, even when it lands ON the input line (where a click
+    /// would otherwise place the caret via `CursorToClick`), still accepts the
+    /// completion first — "anywhere in the story pane" includes the line
+    /// itself.
+    #[test]
+    fn left_click_on_the_input_line_accepts_a_showing_completion_ahead_of_the_caret() {
+        use crossterm::event::MouseEventKind;
+
+        let mut s = AppState::default();
+        let mut m = Mapper::default();
+        for c in "/toggle-roo".chars() {
+            apply_action(Action::InputChar(c), &mut s, &mut m);
+        }
+        // story_rect() is x=80..120, y=0..40 — the origin and click must sit inside it.
+        s.input_text_origin.set(Some((85, 5)));
+        assert!(s.input_click_index(87, 5).is_some(), "sanity: this click would otherwise hit the input line");
+
+        let click = mouse_event(MouseEventKind::Down(MouseButton::Left), 87, 5, KeyModifiers::NONE);
+        let action = mouse_to_action(&s, click, map_rect(), story_rect(), &[], &None);
+        assert!(
+            matches!(action, Action::Autocomplete),
+            "a showing completion wins over CursorToClick, got {:?}", action
+        );
+    }
+
+    /// With no completion showing, a click in the story pane keeps today's
+    /// behaviour (`StartSelection`, activating the game pane) — covered
+    /// end-to-end by `left_down_in_story_starts_selection_and_activates_game`;
+    /// this pins down the negative case explicitly: a non-empty input with NO
+    /// matching suggestions must not spuriously accept anything.
+    #[test]
+    fn left_click_in_story_with_no_completion_behaves_as_before() {
+        use crossterm::event::MouseEventKind;
+
+        let mut s = AppState::default();
+        let mut m = Mapper::default();
+        for c in "zzzznosuchword".chars() {
+            apply_action(Action::InputChar(c), &mut s, &mut m);
+        }
+        assert!(s.suggestions.is_empty(), "sanity: no suggestions for this gibberish: {:?}", s.suggestions);
+
+        let click = mouse_event(MouseEventKind::Down(MouseButton::Left), 85, 5, KeyModifiers::NONE);
+        let action = mouse_to_action(&s, click, map_rect(), story_rect(), &[], &None);
+        assert!(matches!(action, Action::StartSelection(85, 5)), "no completion showing -> unchanged click behaviour, got {:?}", action);
+        apply_action(action, &mut s, &mut m);
+        assert_eq!(s.focus, Focus::Game, "the click still activates the game pane");
+    }
+
+    /// Mirrors Tab's own precedence (`key_to_command`'s pager-active early
+    /// return, ahead of step 8's autocomplete): while the [MORE] pager is up, a
+    /// click must not accept a completion either.
+    #[test]
+    fn left_click_in_story_does_not_accept_a_completion_while_the_pager_is_active() {
+        use crossterm::event::MouseEventKind;
+
+        let mut s = AppState::default();
+        let mut m = Mapper::default();
+        for c in "/toggle-roo".chars() {
+            apply_action(Action::InputChar(c), &mut s, &mut m);
+        }
+        assert!(!s.suggestions.is_empty());
+        s.pager.active = true;
+
+        let click = mouse_event(MouseEventKind::Down(MouseButton::Left), 85, 5, KeyModifiers::NONE);
+        let action = mouse_to_action(&s, click, map_rect(), story_rect(), &[], &None);
+        assert!(
+            !matches!(action, Action::Autocomplete),
+            "the pager owns the click while active, got {:?}", action
+        );
     }
 
     #[test]

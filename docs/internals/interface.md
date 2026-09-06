@@ -674,8 +674,11 @@ know which side you're on).
   lid, so the lunch inside Zork I's brown sack is not completable until you
   open it. Shown the way your shell shows it: the rest of the word
   appears in dim ghost text right under the caret as you type. **Tab** cycles
-  forward through the candidates, **Shift-Tab** back, and **→** at the end of the
-  line takes the one on offer. (With the command panel open, Tab completes from
+  forward through the candidates, **Shift-Tab** back, **→** at the end of the
+  line takes the one on offer, and so does a left-click anywhere in the story
+  pane — a plain tap accepts exactly what Tab would, with none of the mouse's
+  other story-pane meanings (placing the caret, starting a text selection)
+  reachable while a candidate is actually showing. (With the command panel open, Tab completes from
   the *band's* highlight instead — one completion source at a time.) Because the
   hint lives on the prompt row itself,
   nothing shifts when a completion appears or vanishes — the prompt stays put
