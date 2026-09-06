@@ -2191,7 +2191,23 @@ impl Engine for GlulxSession {
             self.machine.executed_pcs.clear();
         }
         if !self.quit {
-            self.machine.supply_line(command);
+            if self.pending == InputKind::Char {
+                // A LINE must never reach a keypress read (SQ-1270, contract on
+                // `Engine::submit`): deliver `command`'s first character (or
+                // Enter for an empty line) as ONE keypress, the same route
+                // `submit_key` takes, instead of handing the whole line to
+                // `supply_line` (which gvm already refuses as a mismatched
+                // event with a diagnostic — this keeps the command's intent
+                // instead of losing the turn to that no-op).
+                let key = match command.chars().next() {
+                    Some(c) => KeyInput::Char(c),
+                    None => KeyInput::Enter,
+                };
+                let code = key_to_glk(key).expect("Char and Enter always map to a Glk code");
+                self.machine.supply_char(code);
+            } else {
+                self.machine.supply_line(command);
+            }
             self.drive_turn();
         }
         self.finish_turn()
@@ -3515,6 +3531,35 @@ mod tests {
         let r = sess.submit_key(KeyInput::Char('Z')).expect("mapped key produces a turn");
         assert_eq!(r.transcript, "Z");
         assert!(r.quit);
+    }
+
+    #[test]
+    fn submit_at_a_char_prompt_delivers_only_the_first_keypress() {
+        // SQ-1270: `submit("Zebra")` at a char prompt must never hand gvm the
+        // whole line — gvm's own `supply_line_terminated` already refuses a
+        // line at a pending char event (a no-op with a diagnostic), so before
+        // this routing existed the command was silently dropped and the turn
+        // never ran. Falsify by reverting the `pending == InputKind::Char`
+        // branch in `GlulxSession::submit`: this then asserts `quit` on a
+        // session left stuck waiting, which fails.
+        let mut sess = GlulxSession::new(char_echo_image(), 80, 24, true, false, false, (1, 1), None, &[]).expect("new");
+        assert_eq!(sess.pending_input(), InputKind::Char);
+
+        let r = sess.submit("Zebra");
+        assert_eq!(r.transcript, "Z", "only the line's first character reaches the char read");
+        assert!(r.quit, "the routed keypress still drives the story to its trailing quit");
+    }
+
+    #[test]
+    fn submit_at_a_char_prompt_with_empty_line_delivers_enter() {
+        // An empty submitted line at a char prompt behaves like the app's own
+        // Enter keypress (`key_to_glk(KeyInput::Enter)`), not like the
+        // dropped-turn no-op a bare `supply_line("")` would produce.
+        let mut sess = GlulxSession::new(char_echo_image(), 80, 24, true, false, false, (1, 1), None, &[]).expect("new");
+        assert_eq!(sess.pending_input(), InputKind::Char);
+
+        let r = sess.submit("");
+        assert!(r.quit, "an empty line at a char prompt is delivered as Enter, driving the story on");
     }
 
     /// Program: open a buffer, arm a 50ms timer, then glk_select with NO line/char

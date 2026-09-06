@@ -863,6 +863,15 @@ impl std::error::Error for EngineError {}
 pub trait Engine {
     // ── turn cycle ──
     /// Supply a player command and run to the next input request / quit.
+    ///
+    /// A LINE must never reach a keypress read (SQ-1270): every adapter routes
+    /// by [`Engine::pending_input`] — while the VM is waiting for a `Char`, a
+    /// submitted line is delivered as ONE keypress (its first character, or
+    /// Enter for an empty line), never as a line; while it is waiting for a
+    /// `Line`, `command` is supplied as today. This is belt-and-braces on top
+    /// of any VM-level guard against the same mistake (e.g. zvm's `supply_line`
+    /// no-op on a `read_char`, SQ-1266) — a future engine gets the protection
+    /// from following this contract, not from remembering that history.
     fn submit(&mut self, command: &str) -> TurnResult;
     /// Supply a single keypress.  Returns `None` when the key has no input
     /// meaning for this engine (e.g. an arrow key under the Z-machine), in

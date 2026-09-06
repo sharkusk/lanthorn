@@ -165,6 +165,11 @@ impl ScottSession {
 }
 
 impl Engine for ScottSession {
+    // SQ-1270: `Engine::submit`'s contract is to route by `pending_input()`,
+    // never handing a line to a keypress read. Scott is line-only —
+    // `pending_input` below always answers `Line` and `submit_key` never
+    // issues a turn — so there is no `Char` state this could ever route to;
+    // the routing this contract asks for is unconditionally satisfied.
     fn submit(&mut self, command: &str) -> TurnResult {
         self.vm.supply_line(command);
         let _ = self.vm.step();
