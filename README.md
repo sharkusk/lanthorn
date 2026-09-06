@@ -364,8 +364,9 @@ with a mouse wheel.
 
 *Next release:* a dropped connection no longer costs you the game — close the
 tab, lose the Wi-Fi, let a tablet sleep, and coming back to the same address
-puts you in the same room mid-sentence, for up to six hours. After that the
-game is put down with its progress saved, and the next visit picks it up.
+puts you in the same room mid-sentence, sound and all, for up to six hours.
+After that the game is put down with its progress saved, and the next visit
+picks it up.
 
 → [**play in a browser**](docs/guide/play-in-a-browser.md)
 
