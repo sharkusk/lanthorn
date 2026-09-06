@@ -220,6 +220,8 @@ pub struct TerminalSnapshot {
     pub traffic: Option<TrafficStats>,
     /// Uploads the chrome-band and composite path has encoded since launch.
     pub band_encodes: u64,
+    /// Per-phase kitty-encode wall-clock timings since launch (SQ-1338).
+    pub encode_timings: crate::render::graphics::EncodeTimings,
     /// What every kitty upload since launch cost the wire, against what the same
     /// pixels would have cost uncompressed (SQ-1005).
     pub uploads: crate::render::graphics::UploadBytes,
@@ -583,7 +585,42 @@ pub fn dump_lines(s: &TerminalSnapshot) -> Vec<DumpLine> {
             thousands(u.stranded_pixels),
         )));
     }
+    // SQ-1338: per-phase kitty-encode wall-clock cost since launch. `Instant::now()`
+    // at a handful of phase boundaries per encode — nothing inside the base64 or
+    // chunk loop, nothing on the idle render path (it encodes nothing).
+    for (label, stat) in [
+        ("raster resize", s.encode_timings.raster_resize),
+        ("raster encode", s.encode_timings.raster_encode),
+        ("band encode", s.encode_timings.band_encode),
+        ("window deflate", s.encode_timings.window_deflate),
+        ("window base64", s.encode_timings.window_base64),
+    ] {
+        if stat.count == 0 {
+            out.push(value(format!("  encode time, {label}: never ran this session")));
+        } else {
+            out.push(value(format!(
+                "  encode time, {label}: {} run(s) — min {} ms, mean {} ms, max {} ms",
+                thousands(stat.count),
+                format_ms(stat.min),
+                format_ms(stat.mean().expect("count > 0 was just checked")),
+                format_ms(stat.max),
+            )));
+        }
+    }
+    out.push(assumed(
+        "  (wall-clock, not CPU time: measured on the encode worker for raster resize/encode and \
+         band encode, and on the render thread for the graphics-window phases. `encode` for raster \
+         and bands is deflate and base64 FUSED into one `ratatui-image` call this app cannot see \
+         inside of; graphics windows deflate themselves first, so their two phases are measured \
+         separately.)",
+    ));
     out
+}
+
+/// A [`std::time::Duration`] as milliseconds to two decimal places, for the encode
+/// timing lines.
+fn format_ms(d: std::time::Duration) -> String {
+    format!("{:.2}", d.as_secs_f64() * 1000.0)
 }
 
 /// The report as plain text, for the `dump-terminal.log` mirror.
@@ -610,6 +647,7 @@ mod tests {
             render: None,
             traffic: Some(TrafficStats { total_bytes: 1_234_567, flushes: 20, last_flush_bytes: 48_213 }),
             band_encodes: 87,
+            encode_timings: crate::render::graphics::EncodeTimings::default(),
             uploads: crate::render::graphics::UploadBytes {
                 wire: 200_000,
                 pixels: 12_000_000,
@@ -901,6 +939,38 @@ mod tests {
         s.forced_protocol = Some("kitty".into());
         assert!(text(&s).contains("FORCED by --image-protocol kitty"), "{}", text(&s));
         assert!(text(&snap()).contains("(auto-detected)"));
+    }
+
+    /// SQ-1338: every phase gets a line, and a phase that never ran says so
+    /// plainly rather than printing a mean of zero.
+    #[test]
+    fn a_zero_count_encode_phase_reads_never_ran() {
+        let s = snap(); // encode_timings defaults to every phase at count 0
+        let t = text(&s);
+        assert!(t.contains("encode time, raster resize: never ran this session"), "{t}");
+        assert!(t.contains("encode time, raster encode: never ran this session"), "{t}");
+        assert!(t.contains("encode time, band encode: never ran this session"), "{t}");
+        assert!(t.contains("encode time, window deflate: never ran this session"), "{t}");
+        assert!(t.contains("encode time, window base64: never ran this session"), "{t}");
+    }
+
+    /// A populated phase prints its run count and its min/mean/max in milliseconds.
+    #[test]
+    fn a_populated_encode_phase_prints_count_and_milliseconds() {
+        let mut s = snap();
+        let mut stat = crate::render::graphics::PhaseStat::default();
+        stat.record(std::time::Duration::from_micros(410));
+        stat.record(std::time::Duration::from_millis(1));
+        stat.record(std::time::Duration::from_millis(3));
+        s.encode_timings.raster_resize = stat;
+        let line = dump_lines(&s)
+            .into_iter()
+            .find(|l| l.text.contains("encode time, raster resize"))
+            .expect("a raster resize line");
+        assert_eq!(line.kind, DumpKind::Value);
+        assert!(line.text.contains("3 run(s)"), "{}", line.text);
+        assert!(line.text.contains("ms"), "{}", line.text);
+        assert!(!line.text.contains("never ran"), "{}", line.text);
     }
 
     /// `dump_text` and `dump_lines` are the same report — the file mirror must

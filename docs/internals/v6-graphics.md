@@ -3216,6 +3216,16 @@ every frame. Anything that would have needed a new counter on the frame path is
 reported as **unavailable**, with the reason, rather than instrumented into
 existence.
 
+Since SQ-1338 the report also names how long each encode phase has actually
+taken — the raster composite's resize and encode, a chrome band's encode, and a
+graphics window's own deflate and base64 (measured separately there, since
+lanthorn does its own deflating before handing `ratatui-image` the rest) — as
+min/mean/max wall-clock milliseconds since launch, so a slow machine can say
+whether `o=z` compression is costing it anything rather than guessing. It costs
+the same nothing the traffic counters do: a handful of `Instant::now()` calls per
+encode, folded into the count on the thread that installs the result rather than
+behind a lock the frame path would have to take.
+
 Like its two siblings the report is appended to a file —
 **`~/.lanthorn/dump-terminal.log`**, timestamped, path named in the transcript —
 and this is the one you actually want in a bug report. It also takes a Ctrl

@@ -1134,6 +1134,14 @@ struct V6Ready {
     /// single largest upload lanthorn makes, 2.8 MB on Journey — can only be
     /// forgotten, never freed.
     placed_id: Option<u32>,
+    /// SQ-1338: how long this encode's own resize step took — `None` on the
+    /// half-blocks arm, which resolves straight onto the cell grid and has no
+    /// separate resize to time (see [`GraphicsRender::encode_v6`]).
+    resize: Option<std::time::Duration>,
+    /// SQ-1338: how long the `picker.new_protocol*` call took — deflate and
+    /// base64 fused into one step inside `ratatui-image`, which this file
+    /// cannot time separately without patching the fork.
+    encode: std::time::Duration,
 }
 
 /// The worker-thread handle for an in-flight v6 raster encode (SQ-0469). The
@@ -1235,6 +1243,8 @@ struct BandEncoded {
     hash: u64,
     reuse: Option<u32>,
     proto: Option<Protocol>,
+    /// SQ-1338: how long the `picker.new_protocol*` call took on the worker.
+    encode: std::time::Duration,
 }
 
 /// SQ-1188: whether this backend's band encodes are worth a worker thread.
@@ -1244,6 +1254,53 @@ struct BandEncoded {
 /// it (and therefore every cell-buffer test harness) stays synchronous.
 fn band_encode_offthread(picker: &Picker) -> bool {
     !matches!(picker.protocol_type(), ratatui_image::picker::ProtocolType::Halfblocks)
+}
+
+/// One phase's timing distribution since launch (SQ-1338): how many times it ran
+/// and the min/mean/max wall-clock cost. `Default` is the "never ran" state, which
+/// [`Self::mean`] reports as `None` rather than a mean of zero.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct PhaseStat {
+    pub count: u64,
+    pub min: std::time::Duration,
+    pub max: std::time::Duration,
+    pub total: std::time::Duration,
+}
+
+impl PhaseStat {
+    /// Fold one measurement in. The first ever measurement sets both `min` and
+    /// `max` to itself rather than comparing against `Duration::default()`'s
+    /// zero, which a real encode can never beat.
+    pub fn record(&mut self, d: std::time::Duration) {
+        if self.count == 0 {
+            self.min = d;
+            self.max = d;
+        } else {
+            self.min = self.min.min(d);
+            self.max = self.max.max(d);
+        }
+        self.total += d;
+        self.count += 1;
+    }
+
+    /// The mean cost, or `None` before this phase has ever run.
+    pub fn mean(&self) -> Option<std::time::Duration> {
+        (self.count > 0).then(|| self.total / self.count as u32)
+    }
+}
+
+/// Wall-clock cost of each kitty-encode phase since launch (SQ-1338): the v6
+/// raster composite's resize and encode, one chrome band's encode, and a
+/// graphics window's own deflate and base64 steps (which `ratatui-image` fuses
+/// into one `encode` for the raster composite and chrome bands — see
+/// [`GraphicsRender::encode_v6`] and [`kitty_transmit_virtual_timed`]).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct EncodeTimings {
+    pub raster_resize: PhaseStat,
+    pub raster_encode: PhaseStat,
+    pub band_encode: PhaseStat,
+    pub window_deflate: PhaseStat,
+    pub window_base64: PhaseStat,
 }
 
 #[derive(Default)]
@@ -1330,6 +1387,14 @@ pub struct GraphicsRender {
     /// happened across an event like a restore. Dump it either side: if the number
     /// has not moved, every band was a cache hit and the terminal was sent nothing.
     pub band_encodes: u64,
+    /// SQ-1338: wall-clock cost of each kitty-encode phase since launch, as
+    /// min/mean/max over every run. Folded in on the MAIN thread by whichever
+    /// install site consumes a worker's result (`poll_v6_job`, `poll_band_job`,
+    /// `band_encode`, `render_kitty_virtual`) — the timing itself happens on the
+    /// worker (raster, bands) or inline (graphics windows), but the write into
+    /// this field never does, so the per-frame path takes no lock or atomic for
+    /// it. Read only when `/dump-terminal` runs.
+    pub encode_timings: EncodeTimings,
     /// What every kitty upload since launch has cost the wire, and what the same
     /// pixels would have cost raw (SQ-1005). Measured off the transmits themselves,
     /// so it covers `ratatui-image`'s encoder as well as ours.
@@ -1905,8 +1970,12 @@ impl GraphicsRender {
                     id: Some(entry.id),
                 });
             } else {
-                let transmit =
-                    kitty_transmit_virtual(&gw.canvas, entry.id, area.height, area.width, compress);
+                let (transmit, timing) =
+                    kitty_transmit_virtual_timed(&gw.canvas, entry.id, area.height, area.width, compress);
+                if let Some(d) = timing.deflate {
+                    self.encode_timings.window_deflate.record(d);
+                }
+                self.encode_timings.window_base64.record(timing.base64);
                 let measured = measure_transmit(&transmit);
                 self.note_upload_id(Some(entry.id), measured.pixels);
                 self.uploads.add(measured);
@@ -2000,33 +2069,41 @@ impl GraphicsRender {
         let fs = picker.font_size();
         let box_w = area.width as u32 * fs.width.max(1) as u32;
         let box_h = area.height as u32 * fs.height.max(1) as u32;
-        let (proto, pic) = if picker.protocol_type() == ratatui_image::picker::ProtocolType::Halfblocks {
-            // Half-blocks never had the stretch to fix: `Halfblocks::encode` resolves
-            // the image onto the cell grid itself, so there is no pixel size for a
-            // terminal to disagree with. Its own arm builds the grid exactly, and its
-            // picture therefore IS the whole cell rect.
-            let proto = v6_halfblocks_protocol(canvas, box_w, box_h, fs, lock)?;
-            let sz = proto.size();
-            let box_px = (
-                0,
-                0,
-                u32::from(sz.width) * u32::from(fs.width.max(1)),
-                u32::from(sz.height) * u32::from(fs.height.max(1)),
-            );
-            (proto, box_px)
-        } else {
-            let (img, fit) = v6_fit_source(canvas, box_w, box_h, lock, v6_upscale_cap(picker));
-            // Out to whole cells, so the terminal blits the composite 1:1 instead of
-            // resampling it into a box up to a cell bigger than itself (SQ-1081).
-            let (img, pic) = v6_pad_to_cells(img, box_w, box_h, fs);
-            let img = image::DynamicImage::ImageRgba8(img);
-            let size = Size::new(area.width, area.height);
-            let proto = match reuse {
-                Some(id) => picker.new_protocol_with_id(img, size, fit, id).ok()?,
-                None => picker.new_protocol(img, size, fit).ok()?,
+        let (proto, pic, resize, encode) =
+            if picker.protocol_type() == ratatui_image::picker::ProtocolType::Halfblocks {
+                // Half-blocks never had the stretch to fix: `Halfblocks::encode` resolves
+                // the image onto the cell grid itself, so there is no pixel size for a
+                // terminal to disagree with. Its own arm builds the grid exactly, and its
+                // picture therefore IS the whole cell rect. No separate resize step to
+                // time (SQ-1338): the resample happens inside this one call.
+                let t0 = std::time::Instant::now();
+                let proto = v6_halfblocks_protocol(canvas, box_w, box_h, fs, lock)?;
+                let encode = t0.elapsed();
+                let sz = proto.size();
+                let box_px = (
+                    0,
+                    0,
+                    u32::from(sz.width) * u32::from(fs.width.max(1)),
+                    u32::from(sz.height) * u32::from(fs.height.max(1)),
+                );
+                (proto, box_px, None, encode)
+            } else {
+                let t0 = std::time::Instant::now();
+                let (img, fit) = v6_fit_source(canvas, box_w, box_h, lock, v6_upscale_cap(picker));
+                // Out to whole cells, so the terminal blits the composite 1:1 instead of
+                // resampling it into a box up to a cell bigger than itself (SQ-1081).
+                let (img, pic) = v6_pad_to_cells(img, box_w, box_h, fs);
+                let resize = t0.elapsed();
+                let img = image::DynamicImage::ImageRgba8(img);
+                let size = Size::new(area.width, area.height);
+                let t1 = std::time::Instant::now();
+                let proto = match reuse {
+                    Some(id) => picker.new_protocol_with_id(img, size, fit, id).ok()?,
+                    None => picker.new_protocol(img, size, fit).ok()?,
+                };
+                let encode = t1.elapsed();
+                (proto, pic, Some(resize), encode)
             };
-            (proto, pic)
-        };
         Some(V6Ready {
             pic,
             gen,
@@ -2038,6 +2115,8 @@ impl GraphicsRender {
             // The id this composite is already placed under, carried across the
             // re-encode: `redraw_v6` re-confirms it off the placement it writes.
             placed_id: reuse,
+            resize,
+            encode,
         })
     }
 
@@ -2090,6 +2169,12 @@ impl GraphicsRender {
         let reuse = self.v6.as_ref().and_then(|r| r.placed_id);
         if self.v6.is_none() {
             self.v6 = Self::encode_v6(picker, &canvas, gen, area, frame, None);
+            if let Some(r) = &self.v6 {
+                if let Some(d) = r.resize {
+                    self.encode_timings.raster_resize.record(d);
+                }
+                self.encode_timings.raster_encode.record(r.encode);
+            }
             return;
         }
         let picker = picker.clone();
@@ -2196,6 +2281,13 @@ impl GraphicsRender {
         }
         let job = self.v6_job.take().expect("checked above");
         if let Ok(Some(ready)) = job.join() {
+            // SQ-1338: fold the worker's own timings in on this (main) thread — the
+            // worker measured them, but only the installer writes them, so the
+            // per-frame path never takes a lock for this.
+            if let Some(d) = ready.resize {
+                self.encode_timings.raster_resize.record(d);
+            }
+            self.encode_timings.raster_encode.record(ready.encode);
             // The composite being replaced is a whole-pane upload; free it in the
             // terminal rather than letting the assignment orphan it (SQ-0753). A
             // raster-mode game re-encodes on every visible change, so this is the
@@ -2752,11 +2844,14 @@ impl GraphicsRender {
         reuse: Option<u32>,
     ) -> Option<()> {
         let size = Size::new(band.width, band.height);
+        let t0 = std::time::Instant::now();
         let encoded = match reuse {
             Some(id) => picker.new_protocol_with_id(img, size, Resize::Fit(None), id),
             None => picker.new_protocol(img, size, Resize::Fit(None)),
         };
+        let elapsed = t0.elapsed();
         let p = encoded.ok()?;
+        self.encode_timings.band_encode.record(elapsed);
         self.band_encodes += 1;
         // The id carries forward with the new protocol, so the placement's cells
         // are the ones already on screen and `remember_band_id` re-confirms it.
@@ -2842,12 +2937,14 @@ impl GraphicsRender {
                     // The id-reuse discipline rides into the worker unchanged
                     // (SQ-0996): the encode goes out under the id the band is
                     // already placed as, so the placeholder cells stay stable.
+                    let t0 = std::time::Instant::now();
                     let proto = match p.reuse {
                         Some(id) => picker.new_protocol_with_id(p.img, size, Resize::Fit(None), id),
                         None => picker.new_protocol(p.img, size, Resize::Fit(None)),
                     }
                     .ok();
-                    BandEncoded { key: p.key, band: p.band, hash: p.hash, reuse: p.reuse, proto }
+                    let encode = t0.elapsed();
+                    BandEncoded { key: p.key, band: p.band, hash: p.hash, reuse: p.reuse, proto, encode }
                 })
                 .collect()
         }));
@@ -2877,6 +2974,7 @@ impl GraphicsRender {
                 let stale_id = entry.2;
                 *entry = (r.hash, proto, r.reuse);
                 self.band_encodes += 1;
+                self.encode_timings.band_encode.record(r.encode);
                 if stale_id != r.reuse {
                     self.queue_protocol_delete_after_place(stale_id);
                 }
@@ -3442,25 +3540,54 @@ fn zlib_deflate(raw: &[u8]) -> Vec<u8> {
 /// duplicate placements. A named one is replaced in the map. The placeholder cells
 /// still encode placement 0, which resolves to "the first virtual placement of
 /// this image" and therefore to the only one.
-fn kitty_transmit_virtual(
+// SQ-1338: the production caller now goes straight to `kitty_transmit_virtual_timed`
+// so it can fold the timing in; this thin wrapper exists only for the ~8 test
+// callers below that don't care about it, so it is test-only rather than a live
+// (and therefore dead-code-warned) production entry point.
+#[cfg(all(test, feature = "t-render"))]
+fn kitty_transmit_virtual(canvas: &image::RgbaImage, id: u32, rows: u16, cols: u16, compress: bool) -> String {
+    kitty_transmit_virtual_timed(canvas, id, rows, cols, compress).0
+}
+
+/// Wall-clock split of one [`kitty_transmit_virtual`] call (SQ-1338). Unlike the
+/// raster composite and chrome bands, whose deflate and base64 are fused inside
+/// one `ratatui-image` call this file cannot see into, a graphics window deflates
+/// its own payload before base64-chunking it — two real steps this file DOES
+/// control the boundary of.
+struct WindowTiming {
+    /// `None` when `compress` was false: there was no deflate to time.
+    deflate: Option<std::time::Duration>,
+    /// The whole chunk/base64 loop, timed once — not per chunk.
+    base64: std::time::Duration,
+}
+
+/// [`kitty_transmit_virtual`] plus its own timing (SQ-1338). Split out as its own
+/// function, rather than widening the public-facing one, so the ~8 existing test
+/// callers of [`kitty_transmit_virtual`] need no change; the render path is the
+/// only caller that wants the timing.
+fn kitty_transmit_virtual_timed(
     canvas: &image::RgbaImage,
     id: u32,
     rows: u16,
     cols: u16,
     compress: bool,
-) -> String {
+) -> (String, WindowTiming) {
     use std::fmt::Write as _;
     let (w, h) = (canvas.width(), canvas.height());
     let deflated;
+    let mut deflate_time = None;
     // SQ-0997: `compress` is [`kitty_compression`]'s answer for the picker in
     // force. Raw when it is false — the geometry keys are untouched either way,
     // because `o=z` describes the payload's encoding and nothing about the image.
     let (payload, encoding): (&[u8], &str) = if compress {
+        let t0 = std::time::Instant::now();
         deflated = zlib_deflate(canvas.as_raw());
+        deflate_time = Some(t0.elapsed());
         (&deflated, "o=z,")
     } else {
         (canvas.as_raw(), "")
     };
+    let t1 = std::time::Instant::now();
     let chunks: Vec<&[u8]> = payload.chunks(3072).collect();
     let n = chunks.len();
     let mut out = String::with_capacity(payload.len() / 3 * 4 + n * 24);
@@ -3479,7 +3606,8 @@ fn kitty_transmit_virtual(
         out.push_str(&kitty_b64(chunk));
         out.push_str("\x1b\\");
     }
-    out
+    let base64_time = t1.elapsed();
+    (out, WindowTiming { deflate: deflate_time, base64: base64_time })
 }
 
 /// What kitty uploads have cost, and what the same pixels would have cost with no
@@ -5405,6 +5533,23 @@ mod resample_tests {
 mod tests {
     use super::*;
 
+    /// SQ-1338: three measurements fold in as count/min/max/mean, and `mean()`
+    /// is `None` before anything has ever run.
+    #[test]
+    fn phase_stat_folds_count_min_max_mean() {
+        let mut p = PhaseStat::default();
+        assert_eq!(p.mean(), None, "nothing recorded yet");
+
+        p.record(std::time::Duration::from_millis(3));
+        p.record(std::time::Duration::from_millis(1));
+        p.record(std::time::Duration::from_millis(5));
+
+        assert_eq!(p.count, 3);
+        assert_eq!(p.min, std::time::Duration::from_millis(1));
+        assert_eq!(p.max, std::time::Duration::from_millis(5));
+        assert_eq!(p.mean(), Some(std::time::Duration::from_millis(3)));
+    }
+
     // A 100×100 native image drawn 1:1 (scale 1) into a pane at the origin with
     // 10×10-pixel cells — one cell == 10 game pixels.
     fn unit_map() -> V6ClickMap {
@@ -5677,6 +5822,11 @@ mod tests {
         let d = frame(&mut gr, 4, 2);
         assert_eq!(c.diff(&d).len(), 0, "a settled window emits nothing at all");
         assert_eq!(gr.kitty_uploads(2), Some((1, id_of(&lead_a))), "one upload, still placed");
+        // SQ-1338: exactly one base64 timing per real transmit (frames a and b) —
+        // not per redraw (c and d transmit nothing). `kitty_picker` sets no
+        // compression capability in these tests, so there is no deflate to time.
+        assert_eq!(gr.encode_timings.window_base64.count, 2, "one timing per real transmit");
+        assert_eq!(gr.encode_timings.window_deflate.count, 0, "no compression capability here");
     }
 
     /// A window animating through many canvases never holds more than ONE image in
@@ -5852,6 +6002,10 @@ mod tests {
         assert!(gr.v6_job.is_none(), "a cold-start encode runs synchronously, no worker");
         assert!(gr.v6.is_some(), "the cold-start encode installed immediately");
         assert_eq!(gr.v6.as_ref().unwrap().gen, 7);
+        // SQ-1338: the synchronous first-frame encode is folded in on install, same
+        // as the worker path below. Half-blocks has no separate resize step.
+        assert_eq!(gr.encode_timings.raster_encode.count, 1, "the sync encode is timed too");
+        assert_eq!(gr.encode_timings.raster_resize.count, 0, "half-blocks has no resize phase to time");
 
         // With a composite ready, a NEW generation encodes off-thread. While the
         // encode is in flight, no second build is requested — coalesced, even
@@ -5865,6 +6019,12 @@ mod tests {
         drain_v6_job(&mut gr);
         assert!(gr.v6.is_some(), "the worker installed the encoded protocol");
         assert_eq!(gr.v6.as_ref().unwrap().gen, 8);
+        // SQ-1338: the worker's own timing is folded in when its result is installed.
+        assert_eq!(gr.encode_timings.raster_encode.count, 2, "the worker's encode is timed too");
+        assert!(
+            gr.encode_timings.raster_encode.max >= gr.encode_timings.raster_encode.min,
+            "max must never fall below min"
+        );
 
         // `invalidate_v6` (the hybrid band path ran): back to cold — the next
         // raster frame wants a build and will encode synchronously again.
@@ -6349,6 +6509,7 @@ mod tests {
         gr.draw_chrome_band(&picker, &chrome, &scale, pane, band, &mut buf);
         assert_eq!(gr.band_encodes, 1, "first appearance encodes synchronously");
         assert!(!gr.band_encode_in_flight(), "nothing staged after a sync encode");
+        assert_eq!(gr.encode_timings.band_encode.count, 1, "SQ-1338: the sync band encode is timed too");
         let h0 = gr.chrome_band_hashes()[&key];
 
         chrome.put_pixel(1, 1, image::Rgba([200, 0, 0, 255]));
@@ -6367,6 +6528,7 @@ mod tests {
         assert_eq!(gr.band_encodes, 2, "the worker's install counts the encode");
         assert_ne!(gr.chrome_band_hashes()[&key], h0, "the installed entry answers for the NEW content");
         assert!(!gr.band_encode_in_flight(), "nothing left staged");
+        assert_eq!(gr.encode_timings.band_encode.count, 2, "SQ-1338: the worker's band encode is timed too");
 
         // The next frame's draw is a plain cache hit on the new content.
         gr.draw_chrome_band(&picker, &chrome, &scale, pane, band, &mut buf);

@@ -1030,6 +1030,7 @@ fn terminal_snapshot(
             last_flush_bytes: t.last_flush_bytes(),
         }),
         band_encodes: gr.band_encodes,
+        encode_timings: gr.encode_timings,
         uploads: gr.uploads,
         ops,
     }
