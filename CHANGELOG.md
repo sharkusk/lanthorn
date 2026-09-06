@@ -74,7 +74,12 @@ Absolute URLs or no link.
   in rather than into the box. Where the old single caption used to get
   dropped in a crowded corner (Zork I's Kitchen, a step down into the Studio,
   on its busy house layer), the box now just moves farther out along the
-  passage until it finds room.
+  passage until it finds room — and that connecting line now counts as part
+  of the box's own footprint, so it never gets routed straight through
+  another room to reach one (the same Kitchen exit used to run its line
+  through South of House, reading as South of House's own exit); where the
+  straight path is blocked it now turns once and reaches the box from the
+  side instead.
 - **A two-way passage between two touching rooms no longer reads as a bowtie
   (`◄►`).** At the narrowest gutter the SVG draws, the two arrowheads used to
   meet — or nearly meet — back to back with no line visible between them

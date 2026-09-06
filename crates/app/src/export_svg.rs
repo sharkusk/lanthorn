@@ -677,8 +677,14 @@ fn render_svg_body(
     // inside its box, so blocking the box blocks the name — and blocks the box outline too,
     // which a tag written across is just as unreadable on.
     let mut placer = TextPlacer::default();
+    // The same boxes, kept apart from `placer.taken` (which also gathers badges and labels): a
+    // ghost's CONNECTOR LINE is only ever checked against a room or another ghost (SQ-1333), never
+    // against those — see `place_ghost`.
+    let mut room_boxes: Vec<PxRect> = Vec::with_capacity(rm.rooms.len());
     for room in &rm.rooms {
-        placer.block(box_px_rect(&cols, &rows, &px_cols, &px_rows, room.cell));
+        let r = box_px_rect(&cols, &rows, &px_cols, &px_rows, room.cell);
+        placer.block(r);
+        room_boxes.push(r);
     }
     // The `(room, direction)` ends the CONNECTOR pass badges. An Up/Down passage reaches this
     // function twice — once as a routed portal connector and once as a `RoutedEdge` stub, since
@@ -693,6 +699,10 @@ fn render_svg_body(
     // off rooms and other labels (SQ-1319) — filled by the connector pass below, read by the
     // ghost passes after it.
     let mut all_segments: Vec<Segment> = Vec::new();
+    // Every ghost box already placed on this panel, so a LATER ghost's connector line can be kept
+    // off an EARLIER one too (SQ-1333) — `room_boxes` above is fixed for the whole panel, this
+    // grows as the two ghost passes below place each one.
+    let mut ghost_boxes: Vec<PxRect> = Vec::new();
 
     // ── Connectors ───────────────────────────────────────────────────────────────────────
     //
@@ -894,18 +904,34 @@ fn render_svg_body(
                         let (name, layer_name) = full.split_once(" · ").unwrap_or((full, ""));
                         let text = GhostText { name, layer: layer_name };
                         let (gw, gh) = ghost_dims(text);
-                        let gr = place_ghost(&mut placer, &all_segments, at, u, GHOST_DEPARTURE_GAP, gw, gh);
+                        let gp = place_ghost(
+                            &mut placer,
+                            &all_segments,
+                            &room_boxes,
+                            &ghost_boxes,
+                            at,
+                            u,
+                            GHOST_DEPARTURE_GAP,
+                            gw,
+                            gh,
+                        );
+                        ghost_boxes.push(gp.rect);
                         // A departure ghost stands for THIS room's own exit leaving toward it, so
                         // the arrow sits at the GHOST end, tip on its near edge, pointing further
                         // in — reading as "leaving here, arriving there" (SQ-1330). That is the
                         // mirror of an arrival ghost's arrow, which sits at the ROOM end instead
                         // (below): a ghost pair is two one-ways, one per panel, never a single
-                        // two-way head pointing back at the room it started from.
-                        let near = ghost_near_edge(gr, u);
-                        over.push_str(&arrowhead_inward(near, (-u.0, -u.1), "arrow"));
-                        over.push_str(&draw_ghost(at, u, gr, text, false));
-                        ext.add(gr.0, gr.1);
-                        ext.add(gr.0 + gr.2, gr.1 + gr.3);
+                        // two-way head pointing back at the room it started from. `gp.dir` is the
+                        // axis the ghost actually landed on — `u` only when the direct side was
+                        // clear, a tangent when SQ-1333's bend fired instead.
+                        let near = ghost_near_edge(gp.rect, gp.dir);
+                        over.push_str(&arrowhead_inward(near, (-gp.dir.0, -gp.dir.1), "arrow"));
+                        over.push_str(&draw_ghost(at, gp.dir, gp.bend, gp.rect, text, false));
+                        ext.add(gp.rect.0, gp.rect.1);
+                        ext.add(gp.rect.0 + gp.rect.2, gp.rect.1 + gp.rect.3);
+                        if let Some(b) = gp.bend {
+                            ext.add(b.0, b.1);
+                        }
                     }
                 }
             }
@@ -947,10 +973,14 @@ fn render_svg_body(
                 ext.add(anchor.0, anchor.1);
                 let text = GhostText { name: &a.origin_name, layer: &a.origin_layer };
                 let (gw, gh) = ghost_dims(text);
-                let gr = place_ghost(&mut placer, &all_segments, anchor, u, 4.0, gw, gh);
-                over.push_str(&draw_ghost(anchor, u, gr, text, true));
-                ext.add(gr.0, gr.1);
-                ext.add(gr.0 + gr.2, gr.1 + gr.3);
+                let gp = place_ghost(&mut placer, &all_segments, &room_boxes, &ghost_boxes, anchor, u, 4.0, gw, gh);
+                ghost_boxes.push(gp.rect);
+                over.push_str(&draw_ghost(anchor, gp.dir, gp.bend, gp.rect, text, true));
+                ext.add(gp.rect.0, gp.rect.1);
+                ext.add(gp.rect.0 + gp.rect.2, gp.rect.1 + gp.rect.3);
+                if let Some(b) = gp.bend {
+                    ext.add(b.0, b.1);
+                }
             }
         }
     }
@@ -1236,60 +1266,162 @@ fn ghost_near_edge((x, y, w, h): PxRect, u: (f64, f64)) -> (f64, f64) {
     }
 }
 
-/// Settle a ghost box outward from `anchor` along `u`, starting `base_gap` away and extending by
-/// a full `GHOST_STEP` at a time until it is clear of every room, badge, label and other ghost
-/// (via `placer`) and every connector lane (`segments`) — SQ-1319's "never dropped": unlike
-/// `TextPlacer::place`'s fixed candidate list, this fallback cannot run out of places to try, so
-/// a ghost always lands somewhere, and the panel's canvas grows to fit wherever that is (every
-/// caller folds the returned rect into `Extent`).
+/// How many `GHOST_STEP` extensions [`search_ghost_side`] tries along the DIRECT side (`u`
+/// itself) before giving up on it (SQ-1333): a room sitting squarely in that corridor blocks
+/// every distance beyond it — `crosses`' bounding-box test only grows MORE true as the segment
+/// lengthens through the room, never less — so an unbounded search there would never terminate
+/// now that the line check is part of it. Six steps (~100px) is generous room for anything short
+/// of that permanent block.
+const GHOST_SIDE_TRIES: u32 = 6;
+
+/// The same search's bound on a TANGENT side, tried only once the direct side above has given up.
+/// A tangent isn't provably blocked forever the way the direct side can be — a real map's rooms
+/// are finite, so sliding along a row eventually clears the last one and reaches open canvas —
+/// so this is a generous hard backstop against a genuine bug looping forever, not a distance any
+/// real map is expected to need (Anchorhead's dense house layer needed several hundred px here).
+const GHOST_TANGENT_TRIES: u32 = 2000;
+
+/// Where a ghost landed (SQ-1319; SQ-1333): its box, the axis its connector line runs along —
+/// `u` when the direct side was clear, a tangent to it when a room forced the bend below — and,
+/// only in the bent case, the point where the connector turns once on its way there.
+struct GhostPlacement {
+    rect: PxRect,
+    dir: (f64, f64),
+    bend: Option<(f64, f64)>,
+}
+
+/// The first spot along `dir`, starting `base_gap` out from `origin` and stepping by
+/// `GHOST_STEP` up to `max_tries` times, whose box is clear of every room, badge, label and other
+/// ghost (via `placer`) and every connector lane (`segments`), AND whose connector line back to
+/// `origin` crosses no room and no other ghost box (SQ-1333) — `rooms`/`ghosts` are checked
+/// against the line rather than folded into `placer`, since a connector may legally run near a
+/// label or badge it would be wrong to route through a room or another ghost's box.
+fn search_ghost_side(
+    placer: &mut TextPlacer,
+    segments: &[Segment],
+    rooms: &[PxRect],
+    ghosts: &[PxRect],
+    origin: (f64, f64),
+    dir: (f64, f64),
+    base_gap: f64,
+    w: f64,
+    h: f64,
+    max_tries: u32,
+) -> Option<PxRect> {
+    let mut dist = base_gap;
+    for _ in 0..max_tries {
+        let r = ghost_rect_at(origin, dir, dist, w, h);
+        let near = ghost_near_edge(r, dir);
+        let line_clear = !rooms.iter().any(|&room| crosses(origin, near, room))
+            && !ghosts.iter().any(|&g| crosses(origin, near, g));
+        if line_clear && placer.is_free(r) && !segments.iter().any(|&(a, b)| crosses(a, b, r)) {
+            placer.block(r);
+            return Some(r);
+        }
+        dist += GHOST_STEP;
+    }
+    None
+}
+
+/// Settle a ghost box clear of every room, badge, label and other ghost (via `placer`), every
+/// connector lane (`segments`), and — SQ-1333 — clear of any room or ghost box its OWN connector
+/// line would otherwise run through.
 ///
-/// Only ever moves along `u`, never slid tangentially like `settle_badge` — a ghost belongs to
-/// the direction its passage travels, so pushing it out is the one move that keeps reading as
-/// "further down this same passage" however far it has to go.
+/// Tries the travel direction's own side first (`u`, SQ-1330's historical placement, bounded by
+/// [`GHOST_SIDE_TRIES`] since a room directly ahead blocks every distance beyond it and never
+/// clears). When that side is blocked, it swings to whichever of the two sides tangent to `u` a
+/// room isn't on, joined to the anchor by a short stub along `u` and a single bend — the
+/// connector still reads as leaving by the badge's own side before it turns; a tangent search is
+/// bounded only by [`GHOST_TANGENT_TRIES`], generous enough to be effectively unbounded on a real
+/// map. Only when every one of those fails does it fall back to the historical unbounded push
+/// straight out along `u` with no line check (SQ-1319's "never dropped": a ghost that lands
+/// somewhere, even crossing a room, beats one silently missing) — every caller folds the
+/// returned rect, and the bend point when there is one, into `Extent`.
 fn place_ghost(
     placer: &mut TextPlacer,
     segments: &[Segment],
+    rooms: &[PxRect],
+    ghosts: &[PxRect],
     anchor: (f64, f64),
     u: (f64, f64),
     base_gap: f64,
     w: f64,
     h: f64,
-) -> PxRect {
-    let mut dist = base_gap;
+) -> GhostPlacement {
+    if let Some(rect) =
+        search_ghost_side(placer, segments, rooms, ghosts, anchor, u, base_gap, w, h, GHOST_SIDE_TRIES)
+    {
+        return GhostPlacement { rect, dir: u, bend: None };
+    }
+
+    // The direct side is blocked by a room for every distance (SQ-1333) — the stub itself must
+    // also be clear, or the bend has nowhere honest to start from.
+    let stub = (anchor.0 + u.0 * base_gap, anchor.1 + u.1 * base_gap);
+    let stub_clear = !rooms.iter().any(|&room| crosses(anchor, stub, room))
+        && !ghosts.iter().any(|&g| crosses(anchor, stub, g));
+    if stub_clear {
+        for tangent in [(-u.1, u.0), (u.1, -u.0)] {
+            if let Some(rect) = search_ghost_side(
+                placer, segments, rooms, ghosts, stub, tangent, GHOST_STEP, w, h, GHOST_TANGENT_TRIES,
+            ) {
+                return GhostPlacement { rect, dir: tangent, bend: Some(stub) };
+            }
+        }
+    }
+
+    let mut dist = base_gap + GHOST_STEP * GHOST_SIDE_TRIES as f64;
     loop {
         let r = ghost_rect_at(anchor, u, dist, w, h);
         if placer.is_free(r) && !segments.iter().any(|&(a, b)| crosses(a, b, r)) {
             placer.block(r);
-            return r;
+            return GhostPlacement { rect: r, dir: u, bend: None };
         }
         dist += GHOST_STEP;
     }
 }
 
-/// Render one ghost box at `rect`, joined to `anchor` by a short connector line along `u`
+/// Render one ghost box at `rect`, joined to `anchor` by a short connector line along `dir`
 /// (SQ-1319): a passage that leaves the layer always says where it goes, at both ends, and never
 /// drops the name for want of room — see `place_ghost`. `arrival` distinguishes the mirror drawn
 /// on a one-way crossing's arriving end (see `arrival_ghosts`), which carries no departure letter
-/// of its own.
+/// of its own. `bend`, when `Some` (SQ-1333), draws the connector as two segments — `anchor` to
+/// the bend, then the bend to the ghost's near edge — rather than one straight line, for the case
+/// where the direct line would have crossed a room.
 ///
 /// Draws no arrowhead itself (SQ-1330): a departure's caller places one at the ghost's own near
 /// edge (pointing further in) and an arrival's caller places one at the room's own edge (pointing
 /// further in there instead) — the two ends of one passage, never both on the same box.
-fn draw_ghost(anchor: (f64, f64), u: (f64, f64), rect: PxRect, text: GhostText<'_>, arrival: bool) -> String {
+fn draw_ghost(
+    anchor: (f64, f64),
+    dir: (f64, f64),
+    bend: Option<(f64, f64)>,
+    rect: PxRect,
+    text: GhostText<'_>,
+    arrival: bool,
+) -> String {
     let (x, y, w, h) = rect;
-    let near = ghost_near_edge(rect, u);
+    let near = ghost_near_edge(rect, dir);
     let cls = if arrival { "ghost arrival" } else { "ghost" };
     let name_y = y + GHOST_PAD + GHOST_NAME_PX * 0.8;
     let layer_y = name_y + GHOST_LINE_GAP + GHOST_LAYER_PX * 0.8;
+    let line = |a: (f64, f64), b: (f64, f64)| {
+        format!(
+            "<line class=\"ghost-line\" x1=\"{}\" y1=\"{}\" x2=\"{}\" y2=\"{}\"/>",
+            f(a.0),
+            f(a.1),
+            f(b.0),
+            f(b.1)
+        )
+    };
+    let lines = match bend {
+        Some(b) => line(anchor, b) + &line(b, near),
+        None => line(anchor, near),
+    };
     format!(
-        "<line class=\"ghost-line\" x1=\"{}\" y1=\"{}\" x2=\"{}\" y2=\"{}\"/>\
+        "{lines}\
          <rect class=\"{cls}\" x=\"{}\" y=\"{}\" width=\"{}\" height=\"{}\" rx=\"3\"/>\
          <text class=\"ghost-name\" text-anchor=\"middle\" x=\"{}\" y=\"{}\">{}</text>\
          <text class=\"ghost-layer\" text-anchor=\"middle\" x=\"{}\" y=\"{}\">{}</text>",
-        f(anchor.0),
-        f(anchor.1),
-        f(near.0),
-        f(near.1),
         f(x),
         f(y),
         f(w),
@@ -1534,6 +1666,27 @@ fn edge_segments(svg: &str) -> Vec<((f64, f64), (f64, f64))> {
     out
 }
 
+/// Every `<line class="ghost-line">` segment in `svg`, as pixel endpoint pairs in the document's
+/// own coordinate space — a ghost's connector, one or two segments per ghost when [`draw_ghost`]
+/// drew a bend (SQ-1333). The legend is excluded, same as [`edge_segments`].
+fn ghost_line_segments(svg: &str) -> Vec<((f64, f64), (f64, f64))> {
+    let doc = roxmltree::Document::parse(svg).expect("well-formed SVG");
+    let mut out = Vec::new();
+    for node in doc.descendants() {
+        let cls = node.attribute("class").unwrap_or("");
+        if node.tag_name().name() != "line"
+            || !cls.split_whitespace().any(|c| c == "ghost-line")
+            || under_class(node, "legend-block")
+        {
+            continue;
+        }
+        let offset = translate_of(node);
+        let g = |a: &str| node.attribute(a).and_then(|v| v.parse::<f64>().ok()).unwrap_or(0.0);
+        out.push(((g("x1") + offset.0, g("y1") + offset.1), (g("x2") + offset.0, g("y2") + offset.1)));
+    }
+    out
+}
+
 /// The accumulated `translate(x,y)` of every ancestor of `node`, including itself.
 fn translate_of(node: roxmltree::Node<'_, '_>) -> (f64, f64) {
     let mut acc = (0.0, 0.0);
@@ -1628,6 +1781,27 @@ pub fn connector_room_crossings(svg: &str) -> Vec<String> {
         for r in &rooms {
             if crosses(a, b, *r) {
                 out.push(format!("segment {a:?} → {b:?} crosses room rect {r:?}"));
+            }
+        }
+    }
+    out
+}
+
+/// Every `<line class="ghost-line">` in `svg` that passes through a room box (SQ-1333): a
+/// ghost's connector is part of its footprint just as much as its box, and one running through a
+/// room reads as that room's own exit — see `place_ghost`, which now keeps this empty by
+/// construction rather than only the box being clear (`ghost_box_overlaps`).
+///
+/// **Public so a real story's generated map can be checked by the same code the unit cases
+/// use**, the way [`connector_room_crossings`] is: the synthetic graphs in this file cannot
+/// produce the badge-side pressure a hundred rooms do.
+pub fn ghost_line_room_crossings(svg: &str) -> Vec<String> {
+    let rooms = room_rects(svg);
+    let mut out = Vec::new();
+    for (a, b) in ghost_line_segments(svg) {
+        for r in &rooms {
+            if crosses(a, b, *r) {
+                out.push(format!("ghost line {a:?} → {b:?} crosses room rect {r:?}"));
             }
         }
     }
@@ -2311,6 +2485,44 @@ mod tests {
         assert!(bad.is_empty(), "the crowded case must still land clear of labels: {bad:#?}");
         let bad = ghost_box_overlaps(&crowded);
         assert!(bad.is_empty(), "the crowded case must still land clear of rooms/ghosts: {bad:#?}");
+        // SQ-1333: `Blocker` sits squarely in the corridor the Up ghost's straight line would
+        // otherwise run through — the exact shape `place_ghost`'s bend exists for.
+        let bad = ghost_line_room_crossings(&crowded);
+        assert!(bad.is_empty(), "the crowded case's ghost line must not run through Blocker: {bad:?}");
+    }
+
+    /// SQ-1333: a room directly on the far side of a cross-layer exit must not put that room's
+    /// own box in the ghost's connector line, or the ghost reads as the room's own exit — the
+    /// exact defect on Zork I's house layer, where the Kitchen's Down ghost ran straight through
+    /// South of House to reach its "Studio · Main" label. Falsify by reverting the line check in
+    /// `search_ghost_side` (or the bend fallback in `place_ghost`) and this fails.
+    #[test]
+    fn a_ghost_line_never_runs_through_a_room_in_its_path() {
+        use mapper::graph::MapGraph;
+        let mut g = MapGraph::new();
+        g.upsert_room(1, "Kitchen".into());
+        g.upsert_room(2, "Studio".into());
+        // Directly south of Kitchen — the Down ghost's straight-line spot.
+        g.upsert_room(3, "South of House".into());
+        g.set_pos(1, (0, 0));
+        g.set_pos(2, (0, 0));
+        g.set_pos(3, (0, 1));
+        g.add_edge(1, Direction::Down, 2);
+        let studio_layer = g.new_layer(Some(mapper::layer::MAIN_LAYER), "Studio Layer".into());
+        g.set_room_layer(2, studio_layer);
+        let svg = render_svg_layered(&g);
+
+        assert!(svg.contains(">Studio<"), "the ghost must always name the room: {svg}");
+        let deps = ghost_rects_of(&svg, "ghost");
+        assert_eq!(deps.len(), 1, "one departure ghost for the one interlayer exit");
+        let bad = ghost_box_overlaps(&svg);
+        assert!(bad.is_empty(), "the ghost box must stay clear of South of House: {bad:#?}");
+        // The invariant this whole quest is about: the connector is drawn (never dropped for
+        // want of a clear line, SQ-1319's rule extended by SQ-1333), and it does not run through
+        // South of House to get there.
+        assert!(!ghost_line_segments(&svg).is_empty(), "the ghost's connector must still be drawn");
+        let bad = ghost_line_room_crossings(&svg);
+        assert!(bad.is_empty(), "the ghost's connector must not cross South of House: {bad:?}");
     }
 
     #[test]

@@ -522,6 +522,12 @@ fn zork1_svg_shows_every_room_and_no_connector_crosses_a_room() {
     let bad = app::export_svg::connector_room_crossings(&svg);
     assert!(bad.is_empty(), "connectors must not run through room boxes: {bad:?}");
 
+    // SQ-1333: a ghost's connector line is part of its footprint too — the Kitchen's Down ghost
+    // ("Studio · Main") used to run straight through South of House on this exact map to reach
+    // it, reading as South of House's own exit.
+    let bad = app::export_svg::ghost_line_room_crossings(&svg);
+    assert!(bad.is_empty(), "ghost connector lines must not run through room boxes: {bad:?}");
+
     // And the typographic one (SQ-1317): no direction tag and no cross-layer badge name may sit
     // on a room box or on another label. A hundred-room map is where that pressure is — this
     // caught `Maze` written straight through `Cyclops Room`'s own name, which no synthetic
@@ -556,6 +562,8 @@ fn anchorhead_svg_ghosts_every_cross_layer_passage() {
 
     let bad = app::export_svg::connector_room_crossings(&svg);
     assert!(bad.is_empty(), "connectors must not run through room boxes: {bad:?}");
+    let bad = app::export_svg::ghost_line_room_crossings(&svg);
+    assert!(bad.is_empty(), "ghost connector lines must not run through room boxes: {bad:?}");
     let bad = app::export_svg::label_collisions(&svg);
     assert!(bad.is_empty(), "labels must stay clear of rooms and of each other: {bad:#?}");
 
