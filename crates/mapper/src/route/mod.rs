@@ -442,6 +442,174 @@ fn merge_collinear(pts: &mut Vec<(i32, i32)>) {
     }
 }
 
+/// The number of TURNS in a polyline: consecutive steps that change direction. A straight
+/// connector has 0, an L has 1, a Z has 2. Counted on the doubled-coordinate polyline the router
+/// builds, so it is the router's own reading of "how bendy is this route" (SQ-1332).
+fn turns(pts: &[(i32, i32)]) -> usize {
+    let dir = |a: (i32, i32), b: (i32, i32)| ((b.0 - a.0).signum(), (b.1 - a.1).signum());
+    pts.windows(3)
+        .filter(|w| {
+            let (d1, d2) = (dir(w[0], w[1]), dir(w[1], w[2]));
+            d1 != (0, 0) && d2 != (0, 0) && d1 != d2
+        })
+        .count()
+}
+
+/// The room ROWS and COLUMNS that an aligned pair of connected rooms has first claim on (SQ-1332).
+///
+/// A room line carries no lane, so whoever runs along it owns it outright. Two rooms in one column
+/// with a passage between them have nothing else — their connector is a straight line down that
+/// column or it is a detour — while a THIRD connector merely passing through is using the line as a
+/// shortcut and always has a gutter route to fall back on. Left to the greedy's arrival order the
+/// shortcut wins whenever it is routed first, and the pair that owns the line then weaves around
+/// it: measured on the SQ-1274 forest/valley graph, the near forest saved one bend and the
+/// road-to-valley connector paid four.
+///
+/// So the claim is settled up front, from the graph, and is therefore independent of routing
+/// order: every connected pair sharing a row or column reserves the stretch of it between them,
+/// and [`anchor_l_points`] refuses a leg that trespasses on another pair's. The pair's own
+/// reservation never blocks it, and `direct_route`'s room-line contest (`direct_route_losers`) is
+/// left exactly as it was — that one is between two routes that both genuinely want the line.
+#[derive(Debug, Default)]
+struct ReservedLines {
+    spans: Vec<ReservedSpan>,
+}
+
+/// One reservation: `(is_horizontal, line, start, end, owning pair)` in doubled coordinates.
+type ReservedSpan = (bool, i32, i32, i32, (RoomId, RoomId));
+
+impl ReservedLines {
+    /// Every connected pair that shares a row or column, reserving the stretch between them.
+    fn new(compass: &[&Connection], graph: &MapGraph) -> Self {
+        let mut spans = Vec::new();
+        for c in compass {
+            let (Some(a), Some(b)) = (
+                graph.room(c.origin).and_then(|r| r.pos),
+                graph.room(c.dest).and_then(|r| r.pos),
+            ) else {
+                continue;
+            };
+            let pair = (c.origin.min(c.dest), c.origin.max(c.dest));
+            let (a, b) = (cell_to_doubled(a), cell_to_doubled(b));
+            if a.1 == b.1 && a.0 != b.0 {
+                spans.push((true, a.1, a.0.min(b.0), a.0.max(b.0), pair));
+            } else if a.0 == b.0 && a.1 != b.1 {
+                spans.push((false, a.0, a.1.min(b.1), a.1.max(b.1), pair));
+            }
+        }
+        spans.sort_unstable();
+        spans.dedup();
+        ReservedLines { spans }
+    }
+
+    /// True if the straight leg `p → q` runs along more than one cell of a room line reserved by
+    /// some pair other than `pair`. A leg on a gutter channel trespasses on nothing — lanes keep
+    /// those apart — and a leg that merely touches a reserved span at one cell is a crossing.
+    fn trespasses(&self, p: (i32, i32), q: (i32, i32), pair: (RoomId, RoomId)) -> bool {
+        let (horizontal, line, s, e) = if p.1 == q.1 && p.0 != q.0 {
+            (true, p.1, p.0.min(q.0), p.0.max(q.0))
+        } else if p.0 == q.0 && p.1 != q.1 {
+            (false, p.0, p.1.min(q.1), p.1.max(q.1))
+        } else {
+            return false;
+        };
+        if line.rem_euclid(2) != 0 {
+            return false;
+        }
+        self.spans.iter().any(|&(rh, rl, rs, re, owner)| {
+            rh == horizontal && rl == line && owner != pair && s.max(rs) < e.min(re)
+        })
+    }
+}
+
+/// A ONE-CORNER L built straight from the two ANCHOR points, with no gap-lattice snap (SQ-1332).
+///
+/// [`build_points_orient`] snaps each stub onto the all-odd lattice before turning, which keeps
+/// every long run inside a gutter channel — safe everywhere, and one extra bend at each end that
+/// the destination's own row or column would not have cost. The user's complaint is exactly that
+/// surplus: *"MANY cases where our path makes unnecessary turns before reaching the destination …
+/// when there is no room in the way it looks messy."*
+///
+/// So this offers the route the eye expects: leave the doorway, turn once, arrive. Its long leg
+/// may run along a room LINE (an even doubled coordinate — the box centre row/column) rather than
+/// a gutter, which carries no lane and so cannot be separated from anything else on that line — so
+/// it is admitted only when every room cell both legs pass through is EMPTY. That is the same
+/// bargain [`direct_route`] already strikes; this generalises it to the cases `direct_route`
+/// refuses, namely an exit side pointing away from the destination, and either end anchored on a
+/// box CORNER (a diagonal passage, which `route_topology_with` bars from the direct route outright).
+///
+/// Returns `None` when a room box is in the way, when the leg would trespass on a room line
+/// another pair has a stronger claim to (see [`ReservedLines`]), or when the two anchors are the
+/// same cell (the shared-doorway case `build_points_orient` collapses on its own).
+#[allow(clippy::too_many_arguments)]
+fn anchor_l_points(
+    a_cell: (i32, i32),
+    exit: Side,
+    b_cell: (i32, i32),
+    entry: Side,
+    orient: Orient,
+    exit_dir: Option<Direction>,
+    entry_dir: Option<Direction>,
+    occupied: &std::collections::BTreeSet<(i32, i32)>,
+    reserved: &ReservedLines,
+    pair: (RoomId, RoomId),
+) -> Option<Vec<(i32, i32)>> {
+    let ca = cell_to_doubled(a_cell);
+    let cb = cell_to_doubled(b_cell);
+    let ea = anchor_point(a_cell, exit, exit_dir);
+    let eb = anchor_point(b_cell, entry, entry_dir);
+    if ea == eb {
+        return None;
+    }
+    let corner = match orient {
+        Orient::HorizontalFirst => (eb.0, ea.1),
+        Orient::VerticalFirst => (ea.0, eb.1),
+    };
+    // A doubled point with BOTH coordinates even is a room cell; every other point lies on a
+    // gutter line no box reaches. Neither anchor is ever such a point (a side stub has one odd
+    // coordinate, a corner has two), so nothing needs excusing here: any occupied room cell on
+    // either leg — including the origin's or the destination's own, which a leg pointing back
+    // across its own box would cross — disqualifies the candidate.
+    let clear = |p: (i32, i32), q: (i32, i32)| {
+        let (dx, dy) = ((q.0 - p.0).signum(), (q.1 - p.1).signum());
+        let mut c = p;
+        loop {
+            if c.0.rem_euclid(2) == 0
+                && c.1.rem_euclid(2) == 0
+                && occupied.contains(&(c.0.div_euclid(2), c.1.div_euclid(2)))
+            {
+                return false;
+            }
+            if c == q {
+                return true;
+            }
+            c = (c.0 + dx, c.1 + dy);
+        }
+    };
+    if !clear(ea, corner) || !clear(corner, eb) {
+        return None;
+    }
+    if reserved.trespasses(ea, corner, pair) || reserved.trespasses(corner, eb, pair) {
+        return None;
+    }
+    let mut pts = vec![ca, ea];
+    if corner != ea && corner != eb {
+        pts.push(corner);
+    }
+    pts.push(eb);
+    pts.push(cb);
+    pts.dedup();
+    // NO `merge_collinear` here, deliberately — unlike [`build_points_orient`], whose reason for
+    // it does not arise. That call exists so a degenerate L cannot split one CHANNEL run into two
+    // `LaneSeg`s that get different lanes; a doorway stub runs from a room centre (even, even) to
+    // its own anchor, so the line it shares with a collinear leg is always an EVEN one, which
+    // carries no lane at all. Keeping the stub as its own point is what lets
+    // [`polylines_overlap`] — which excuses the first and last SEGMENT as a doorway stub — still
+    // see the long leg. Merged, a five-cell run along a room row read as a stub and two Maze
+    // connectors were allowed to share twenty-one cells of it.
+    (pts.len() >= 3).then_some(pts)
+}
+
 /// Count how many times polyline `a` crosses polyline `b`: a lattice cell where a HORIZONTAL
 /// run of one polyline passes through the INTERIOR of a VERTICAL run of the other (or vice
 /// versa). The crossing cell must be the strict interior of the run it cuts ACROSS — so a
@@ -526,6 +694,39 @@ fn polylines_overlap(a: &[(i32, i32)], b: &[(i32, i32)]) -> bool {
         for &(bh, bl, b_s, b_e) in &all_runs(bi) {
             if ah == bh && al == bl && a_s.max(b_s) < a_e.min(b_e) {
                 return true; // >1 cell of shared collinear run on the same line
+            }
+        }
+    }
+    false
+}
+
+/// True when `a` and `b` share more than one cell of a collinear run on a line that carries NO
+/// LANE — an EVEN doubled coordinate, which is a room row or column rather than a gutter channel
+/// (SQ-1332).
+///
+/// The distinction matters because the two overlaps are not equally bad. Two runs in one CHANNEL
+/// can still be pulled apart: [`assign_lanes`] widens the channel and gives each its own lane, so
+/// [`has_parallel_overlap`] is a route scored DOWN, not a route refused. A room line has no lanes
+/// to give, so two connectors that share one are on top of each other for good, and nothing
+/// downstream can rescue them — which makes this the key that must sit above every other, bends
+/// included. (Twenty-one shared cells of one Maze room row is what happens when it does not: every
+/// candidate carried some soft channel overlap, the counts tied, and the bend key then picked the
+/// one that stomped.)
+///
+/// Only each route's INTERIOR is compared, exactly as in [`polylines_overlap`] and for the same
+/// reason: the first and last segment are the doorway stubs, and two connectors leaving one room
+/// by one side legitimately share theirs.
+fn unlaned_overlap(a: &[(i32, i32)], b: &[(i32, i32)]) -> bool {
+    let ai: &[(i32, i32)] = if a.len() > 2 { &a[1..a.len() - 1] } else { &[] };
+    let bi: &[(i32, i32)] = if b.len() > 2 { &b[1..b.len() - 1] } else { &[] };
+    let runs_b = all_runs(bi);
+    for &(ah, al, a_s, a_e) in &all_runs(ai) {
+        if al.rem_euclid(2) != 0 {
+            continue; // a channel: lanes can separate it, so `has_parallel_overlap` owns it
+        }
+        for &(bh, bl, b_s, b_e) in &runs_b {
+            if ah == bh && al == bl && a_s.max(b_s) < a_e.min(b_e) {
+                return true;
             }
         }
     }
@@ -632,6 +833,46 @@ fn resolve_entry_corner(exit_dir: Direction, entry_dir: Option<Direction>) -> Op
     entry_corner(exit_dir, entry_dir)
 }
 
+/// Which of a box CORNER's two edges a connector should be RECORDED as leaving (or arriving on),
+/// given the route it actually took (SQ-1332).
+///
+/// A side doorway has one way out — straight through it — and every renderer relies on that.
+/// `render::map::attach_bridge` runs its first leg out of the anchor along the axis the side
+/// names; `export_svg::snap_to_edge` pulls the anchor onto that edge by moving only the
+/// coordinate perpendicular to it. A CORNER sits on two edges and either is a legitimate way out,
+/// so the side recorded for it is a free choice — but it is the same choice both of those
+/// renderers make silently, and naming the wrong one costs a bend in the terminal AND draws a
+/// short diagonal across the box's corner in the SVG.
+///
+/// So name the edge whose axis the route continues on. Where the run leaving the corner is
+/// VERTICAL, the line steps sideways out of the box and then turns — a Left/Right end; where it
+/// is HORIZONTAL, a Top/Bottom end. Which of the pair is fixed by the corner itself: a SW corner
+/// lies on the box's Left and Bottom edges and never on the other two.
+///
+/// SQ-0314 made this decision once, per DIRECTION — `side_for` collapses every diagonal onto
+/// Left/Right, which is right for a route that leaves the corner sideways and wrong for one that
+/// leaves it downward. This is the same decision made per ROUTE, which is the only place it can be
+/// right every time. `assign_side_slots` skips corner endpoints and every arrowhead for a diagonal
+/// comes from `diagonal_arrow`, so nothing but the two bridges reads this.
+fn corner_side(points: &[(i32, i32)], at_start: bool, dir: Direction, fallback: Side) -> Side {
+    let Some((dx, dy)) = grid_offset(dir) else { return fallback };
+    if points.len() < 3 {
+        return fallback;
+    }
+    let (anchor, next) = if at_start {
+        (points[1], points[2])
+    } else {
+        (points[points.len() - 2], points[points.len() - 3])
+    };
+    if anchor.0 == next.0 && anchor.1 != next.1 {
+        if dx > 0 { Side::Right } else { Side::Left }
+    } else if anchor.1 == next.1 && anchor.0 != next.0 {
+        if dy > 0 { Side::Bottom } else { Side::Top }
+    } else {
+        fallback
+    }
+}
+
 /// The candidate entry sides for a NON-reciprocal connector from `a` to `b`: the
 /// geometric entry side plus the next-nearest side that still faces the origin, in a
 /// deterministic order. The geometric side is always first (the default), so when no
@@ -670,9 +911,12 @@ pub fn route_topology(graph: &MapGraph) -> Vec<RoutedConnector> {
     // not add a new one. Otherwise we keep `default`. This makes crossing reduction a strict,
     // never-regressing improvement and keeps the renderer's no-overlap gate green.
     let greedy = route_topology_with(graph, true);
-    if total_crossings(&greedy) < total_crossings(&default)
-        && !greedy_adds_overlap(&default, &greedy)
-    {
+    // Compared on (BENDS, crossings) since SQ-1332, in that order — the same priority the
+    // per-connector cost uses, so the layout-wide choice cannot undo what each connector was
+    // chosen for. A layout that straightens two connectors at the price of one extra crossing
+    // is the trade the user asked for.
+    let key = |c: &[RoutedConnector]| (total_bends(c), total_crossings(c));
+    if key(&greedy) < key(&default) && !greedy_adds_overlap(&default, &greedy) {
         greedy
     } else {
         default
@@ -740,6 +984,12 @@ fn dirty_shared_cells(conns: &[RoutedConnector]) -> std::collections::BTreeSet<D
 fn greedy_adds_overlap(default: &[RoutedConnector], greedy: &[RoutedConnector]) -> bool {
     let base = dirty_shared_cells(default);
     dirty_shared_cells(greedy).iter().any(|d| !base.contains(d))
+}
+
+/// Total TURNS over a whole layout — the key SQ-1332 puts immediately below overlaps, and the
+/// one [`route_topology`] compares two layouts on before it looks at crossings.
+fn total_bends(conns: &[RoutedConnector]) -> usize {
+    conns.iter().map(|c| turns(&c.points)).sum()
 }
 
 /// Render-faithful total crossing count for a set of connectors: lanes are assigned exactly
@@ -953,6 +1203,9 @@ fn route_topology_with(graph: &MapGraph, greedy: bool) -> Vec<RoutedConnector> {
     // Resolve direct-route line collisions up front so the LONGER connector keeps the straight line
     // and shorter rivals weave — independent of edge listing order.
     let direct_losers = direct_route_losers(&compass, &compass_pairs, graph, &occupied);
+    // Which room rows and columns an aligned connected pair has first claim on (SQ-1332) — read
+    // from the graph, so no connector's shortcut depends on where it happens to fall in the order.
+    let reserved = ReservedLines::new(&compass, graph);
     // Which one-way arrival keeps each contested corner (SQ-0314); see `arrival_corner_owners` —
     // since SQ-1274 this only still matters for a reciprocal contesting an unrelated one-way's
     // phantom claim, not for settling who keeps a corner between one-ways (neither ever does).
@@ -1110,19 +1363,16 @@ fn route_topology_with(graph: &MapGraph, greedy: bool) -> Vec<RoutedConnector> {
             None if greedy => entry_side_alternatives(a, b),
             None => vec![entry_side(a, b)],
         };
-        let orients: &[Orient] = if greedy {
-            &[Orient::HorizontalFirst, Orient::VerticalFirst]
-        } else {
-            &[Orient::HorizontalFirst]
-        };
+        // BOTH L orientations, in both modes (SQ-1332). Offering only horizontal-first outside
+        // greedy mode meant the canonical layout could not answer "which way round is fewer
+        // turns" at all, and the canonical layout is what most connectors end up on.
+        let orients = [Orient::HorizontalFirst, Orient::VerticalFirst];
         // (rank, entry, points): `rank` bakes the deterministic preference — earlier entry
         // choices (geometric first) and HorizontalFirst orientation are preferred on ties.
         type Candidate = (usize, Side, Vec<(i32, i32)>);
         let mut candidates: Vec<Candidate> = Vec::new();
         for (ei, &entry) in entry_choices.iter().enumerate() {
             for (oi, &orient) in orients.iter().enumerate() {
-                // Default mode emits the canonical horizontal-first route via `build_points`;
-                // greedy mode also probes the vertical-first alternative.
                 // The connector's own directions decide where it leaves/arrives: a diagonal one
                 // anchors on the box corner (SQ-0314). This is the SAME resolved `arrive` that
                 // lands on the connector below, so every candidate polyline is built for the end
@@ -1133,7 +1383,16 @@ fn route_topology_with(graph: &MapGraph, greedy: bool) -> Vec<RoutedConnector> {
                         build_points_orient(a, exit, b, entry, orient, Some(c.dir), arrive)
                     }
                 };
-                candidates.push((ei * 2 + oi, entry, pts));
+                // The unsnapped one-corner L on the same two anchors, when no room box blocks it
+                // (SQ-1332). Ranked BELOW the lattice route of the same orientation, so it only
+                // wins when it actually saves a turn — which is the whole reason it is offered.
+                let flat = anchor_l_points(
+                    a, exit, b, entry, orient, Some(c.dir), arrive, &occupied, &reserved, pair,
+                );
+                candidates.push((ei * 4 + oi * 2, entry, pts));
+                if let Some(flat) = flat {
+                    candidates.push((ei * 4 + oi * 2 + 1, entry, flat));
+                }
             }
         }
         // Pick the candidate with the fewest crossings against already-placed connectors;
@@ -1141,30 +1400,57 @@ fn route_topology_with(graph: &MapGraph, greedy: bool) -> Vec<RoutedConnector> {
         let chosen = candidates
             .into_iter()
             .map(|(rank, entry, pts)| {
-                // Disqualify candidates that introduce a parallel line-on-line overlap the
-                // lane system can't resolve (renderer rejects these): make it the PRIMARY key
-                // so an overlap-free route always wins. Among overlap-free candidates, minimize
-                // the crossings this candidate adds against the already-placed connectors; ties
-                // break by preference rank (geometric entry, horizontal-first), then the points.
-                let overlaps = out.iter().filter(|o| has_parallel_overlap(&pts, &o.points)).count();
+                // The user's cost order (SQ-1316, SQ-1332), most significant first:
+                //
+                // 1. **Unlaned overlaps** — forbidden outright. A run shared on a ROOM LINE has
+                //    no lane to be pulled into, so one of the two passages simply disappears
+                //    under the other and nothing downstream can rescue it.
+                // 2. **Channel overlaps** — bad, but recoverable: `assign_lanes` widens the
+                //    channel and gives each run its own lane. Scored down, not refused.
+                // 3. **Bends** — *"when there is no room in the way it looks messy"*. A turn the
+                //    geometry did not force is the defect this key exists to price, and it sits
+                //    ABOVE crossings because the user has said twice that a crossing is legible
+                //    and a detour is not.
+                // 4. **Crossings** — small, and only a tie-break between equally straight routes.
+                // 5. **Length**, then the preference rank (geometric entry, horizontal-first),
+                //    then the points themselves, so the choice is fully deterministic.
+                let hard = out.iter().filter(|o| unlaned_overlap(&pts, &o.points)).count();
+                let soft = out.iter().filter(|o| has_parallel_overlap(&pts, &o.points)).count();
+                let bends = turns(&pts);
                 let crosses: usize = out.iter().map(|o| count_crossings(&pts, &o.points)).sum();
-                (overlaps, crosses, rank, entry, pts)
+                let len = path_len(&pts);
+                (hard, soft, bends, crosses, len, rank, entry, pts)
             })
             .min_by(|x, y| {
                 x.0.cmp(&y.0)
                     .then(x.1.cmp(&y.1))
                     .then(x.2.cmp(&y.2))
+                    .then(x.3.cmp(&y.3))
                     .then(x.4.cmp(&y.4))
+                    .then(x.5.cmp(&y.5))
+                    .then(x.7.cmp(&y.7))
             })
             .expect("at least one candidate route");
+
+        // A CORNER end may be recorded as leaving by either of the two edges it sits on, and the
+        // right answer depends on the route rather than on the direction (SQ-1332) — see
+        // `corner_side`. A side doorway has no such choice and keeps what it was given.
+        let (chosen_entry, chosen_points) = (chosen.6, chosen.7);
+        let exit_side = if is_diagonal(c.dir) {
+            corner_side(&chosen_points, true, c.dir, exit)
+        } else {
+            exit
+        };
+        let entry_side =
+            arrive.map_or(chosen_entry, |d| corner_side(&chosen_points, false, d, chosen_entry));
 
         out.push(RoutedConnector {
             origin: c.origin,
             dest: c.dest,
             distorted: c.distorted,
-            exit,
-            entry: chosen.3,
-            points: chosen.4,
+            exit: exit_side,
+            entry: entry_side,
+            points: chosen_points,
             segs: Vec::new(),
             exit_slot: 0,
             entry_slot: 0,
@@ -2539,12 +2825,200 @@ mod tests {
             } }
             n
         };
-        // The canonical (non-greedy) routing DOES cross here…
-        let default = route_topology_with(&g, false);
-        assert!(crossings(&default) > 0, "this graph's default routing must cross (test is meaningful)");
-        // …and `route_topology` (greedy + best-of) must pick the crossing-free route set.
+        // The graph is still a genuine crossing hazard: B routed the way the canonical layout
+        // USED to route everything — horizontal-first, no alternative considered — crosses A.
+        //
+        // This used to read `route_topology_with(&g, false)` and assert that the DEFAULT layout
+        // crosses. Since SQ-1332 it does not, and that is the fix rather than a regression: the
+        // canonical layout now offers both L orientations too, so it finds the same clean route
+        // greedy does. The non-vacuity guard therefore moves down to the construction, which is
+        // where "this graph can cross" is still a fact.
+        let a_pts = route_topology_with(&g, false)
+            .into_iter()
+            .find(|c| c.origin == 1)
+            .expect("A is routed")
+            .points;
+        let b_hf = build_points_orient(
+            (4, -2), Side::Left, (0, 2), Side::Top, Orient::HorizontalFirst, None, None,
+        );
+        assert!(count_crossings(&a_pts, &b_hf) > 0, "this graph must be able to cross (test is meaningful)");
+        // …and `route_topology` must pick the crossing-free route set.
         let chosen = route_topology(&g);
         assert_eq!(crossings(&chosen), 0, "route_topology must pick the crossing-free route set");
+    }
+
+    // ── Bends (SQ-1332) ──────────────────────────────────────────────────────────────────
+    //
+    // The user's rule: *"MANY cases where our path makes unnecessary turns before reaching the
+    // destination … when there is no room in the way it looks messy."* With nothing in the way a
+    // connector is a straight line where its anchors align and a single L where they do not; a Z
+    // is only ever the price of a room box or an overlap.
+
+    /// Two rooms on one row, a clear gap between them: no turn at all.
+    #[test]
+    fn aligned_anchors_with_nothing_between_draw_a_straight_line() {
+        let mut g = MapGraph::new();
+        for id in [1, 2] {
+            g.upsert_room(id, "r".into());
+        }
+        g.set_pos(1, (0, 0));
+        g.set_pos(2, (3, 0));
+        g.add_edge(1, Direction::E, 2);
+        g.add_edge(2, Direction::W, 1);
+        let plan = route_lanes(&g);
+        assert_eq!(plan.connectors.len(), 1);
+        assert_eq!(turns(&plan.connectors[0].points), 0, "{:?}", plan.connectors[0].points);
+    }
+
+    /// Off-axis rooms with a free L take it — ONE turn, not the two the gap-lattice route used to
+    /// cost by dipping into a channel before turning.
+    ///
+    /// The pair leaves EAST and comes back NORTH, so the two anchors sit on perpendicular edges
+    /// and one corner really does join them. (An east/west pair on different rows cannot be an L
+    /// whatever the router does: it must leave eastward and arrive westward, which is two turns
+    /// by the arrowheads alone — see `a_blocked_l_costs_at_most_two_turns`.)
+    #[test]
+    fn a_free_l_costs_exactly_one_turn() {
+        let mut g = MapGraph::new();
+        for id in [1, 2] {
+            g.upsert_room(id, "r".into());
+        }
+        g.set_pos(1, (0, 0));
+        g.set_pos(2, (3, 3));
+        g.add_edge(1, Direction::E, 2);
+        g.add_edge(2, Direction::N, 1);
+        let plan = route_lanes(&g);
+        assert_eq!(plan.connectors.len(), 1);
+        assert_eq!(turns(&plan.connectors[0].points), 1, "{:?}", plan.connectors[0].points);
+    }
+
+    /// The L that is FREE is the one taken. A room box parked on one of the two corners must send
+    /// the route round the other way rather than through it.
+    #[test]
+    fn the_chosen_l_is_the_one_that_misses_the_room_box() {
+        // 1 at (0,0), 2 at (3,3). The horizontal-first L corners at room cell (3,0); park a room
+        // there so only the vertical-first L (corner (0,3)) is clear.
+        let mut g = MapGraph::new();
+        for id in [1, 2, 3] {
+            g.upsert_room(id, "r".into());
+        }
+        g.set_pos(1, (0, 0));
+        g.set_pos(2, (3, 3));
+        g.set_pos(3, (3, 0));
+        g.add_edge(1, Direction::E, 2);
+        g.add_edge(2, Direction::W, 1);
+        let plan = route_lanes(&g);
+        let c = plan.connectors.iter().find(|c| c.origin == 1 && c.dest == 2).expect("1→2");
+        let occupied: std::collections::BTreeSet<(i32, i32)> =
+            g.rooms().filter_map(|r| r.pos).collect();
+        for w in c.points.windows(2) {
+            for p in line_cells(w[0], w[1]) {
+                if p.0.rem_euclid(2) == 0 && p.1.rem_euclid(2) == 0 {
+                    let cell = (p.0.div_euclid(2), p.1.div_euclid(2));
+                    assert!(
+                        cell == (0, 0) || cell == (3, 3) || !occupied.contains(&cell),
+                        "the route runs through room cell {cell:?}: {:?}",
+                        c.points
+                    );
+                }
+            }
+        }
+        assert!(turns(&c.points) <= 2, "and it is still at most a Z: {:?}", c.points);
+    }
+
+    /// A room box across BOTH Ls is what a second turn is for — and two is the ceiling, not a
+    /// floor a blocked route may drift above.
+    #[test]
+    fn a_blocked_l_costs_at_most_two_turns() {
+        let mut g = MapGraph::new();
+        for id in [1, 2, 3, 4] {
+            g.upsert_room(id, "r".into());
+        }
+        g.set_pos(1, (0, 0));
+        g.set_pos(2, (3, 3));
+        g.set_pos(3, (3, 0)); // blocks the horizontal-first corner
+        g.set_pos(4, (0, 3)); // blocks the vertical-first corner
+        g.add_edge(1, Direction::E, 2);
+        g.add_edge(2, Direction::W, 1);
+        let plan = route_lanes(&g);
+        let c = plan.connectors.iter().find(|c| c.origin == 1 && c.dest == 2).expect("1→2");
+        assert!(turns(&c.points) <= 2, "{:?}", c.points);
+    }
+
+    /// A DISTORTED one-way takes the direct L like anything else, and crosses what it must
+    /// (SQ-1332). Distortion is an edge whose direction the layout could not honour — it is not a
+    /// reason to route the long way round the outside.
+    #[test]
+    fn a_distorted_one_way_takes_the_direct_l_even_where_it_crosses() {
+        let mut g = MapGraph::new();
+        for id in [1, 2, 3, 4] {
+            g.upsert_room(id, "r".into());
+        }
+        // A straight E/W pair across the middle for the one-way to cross.
+        g.set_pos(3, (0, 2));
+        g.set_pos(4, (4, 2));
+        g.add_edge(3, Direction::E, 4);
+        g.add_edge(4, Direction::W, 3);
+        // 1 → N → 2 where 2 is actually SOUTH: the layout cannot honour it, so it is distorted.
+        g.set_pos(1, (1, 0));
+        g.set_pos(2, (3, 4));
+        let idx = g.connections().len();
+        g.add_edge(1, Direction::S, 2);
+        g.set_conn_distorted(idx, true);
+        let plan = route_lanes(&g);
+        let c = plan.connectors.iter().find(|c| c.origin == 1 && c.dest == 2).expect("1→2");
+        assert!(c.distorted, "the fixture must actually be distorted");
+        assert_eq!(turns(&c.points), 1, "one L, whatever it crosses: {:?}", c.points);
+    }
+
+    /// A connector pushed onto a higher LANE gets one sideways offset, not a Z. Two connectors
+    /// whose vertical runs overlap in one gutter take lanes 0 and 1, and both still draw the same
+    /// two turns — the lane index moves the run, it does not bend it.
+    #[test]
+    fn a_lane_bump_does_not_add_a_bend() {
+        let mut g = MapGraph::new();
+        for id in [1, 2, 3, 4] {
+            g.upsert_room(id, "r".into());
+        }
+        g.set_pos(1, (0, 0));
+        g.set_pos(2, (1, 4));
+        g.set_pos(3, (0, 1));
+        g.set_pos(4, (1, 5));
+        for (o, d) in [(1, 2), (3, 4)] {
+            g.add_edge(o, Direction::E, d);
+            g.add_edge(d, Direction::W, o);
+        }
+        let plan = route_lanes(&g);
+        assert_eq!(plan.connectors.len(), 2);
+        let lanes: std::collections::BTreeSet<u16> =
+            plan.connectors.iter().flat_map(|c| c.segs.iter().map(|s| s.lane)).collect();
+        assert!(lanes.len() > 1, "the fixture must actually push someone off lane 0: {lanes:?}");
+        for c in &plan.connectors {
+            assert_eq!(turns(&c.points), 2, "{:?} → {:?}: {:?}", c.origin, c.dest, c.points);
+        }
+        assert!(plan_overlaps(&plan).is_empty(), "and the two lanes really do separate them");
+    }
+
+    /// A room line belongs to the aligned pair joined along it (SQ-1332). A third connector may
+    /// not shortcut down it, because that pair has nothing but that line while the passer-by
+    /// always has the gutter.
+    #[test]
+    fn an_aligned_pairs_room_line_is_not_a_shortcut_for_anyone_else() {
+        // 1 and 2 in column 2, joined N/S with an empty cell between; 3 off to the west reaching 2.
+        let mut g = MapGraph::new();
+        for id in [1, 2, 3] {
+            g.upsert_room(id, "r".into());
+        }
+        g.set_pos(1, (2, 0));
+        g.set_pos(2, (2, 2));
+        g.set_pos(3, (0, 1));
+        g.add_edge(1, Direction::S, 2);
+        g.add_edge(2, Direction::N, 1);
+        g.add_edge(3, Direction::E, 2);
+        let plan = route_lanes(&g);
+        let pair = plan.connectors.iter().find(|c| c.origin.min(c.dest) == 1).expect("1↔2");
+        assert_eq!(turns(&pair.points), 0, "the aligned pair keeps its straight line: {:?}", pair.points);
+        assert!(plan_overlaps(&plan).is_empty(), "and nobody runs along it");
     }
 
     #[test]
@@ -2972,11 +3446,15 @@ mod tests {
             assert_eq!(c.entry_corner, None, "SQ-1274: no one-way arrival may hold Target's corner: {c:?}");
         }
 
-        // Yielded to Target's side doorway, both land on distinct cells rather than stacking.
-        let mut slots: Vec<u16> = arrivals.iter().map(|c| c.entry_slot).collect();
-        slots.sort_unstable();
-        assert_eq!(slots.len(), arrivals.len(), "one slot per arrival");
-        assert!(slots.windows(2).all(|w| w[0] != w[1]), "no two arrivals share a slot: {slots:?}");
+        // Yielded to Target's side doorway, both land on distinct cells rather than stacking. The
+        // cell is the SIDE plus the slot, not the slot alone: since SQ-1332 the bend cost can send
+        // the two arrivals to different sides of Target, and slot 0 of the Left edge is not slot 0
+        // of the Top edge. (It read `entry_slot` alone until then, which was true only while both
+        // arrivals were pinned to one side and would have passed a genuine stack on two sides.)
+        let mut cells: Vec<(Side, u16)> = arrivals.iter().map(|c| (c.entry, c.entry_slot)).collect();
+        cells.sort_unstable();
+        assert_eq!(cells.len(), arrivals.len(), "one arrival cell per arrival");
+        assert!(cells.windows(2).all(|w| w[0] != w[1]), "no two arrivals share a cell: {cells:?}");
 
         // Corner claims across the whole map are unique (only a DEPARTURE or a reciprocal ever
         // makes one, so this is really checking those don't collide with each other).

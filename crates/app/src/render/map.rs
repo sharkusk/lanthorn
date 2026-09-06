@@ -3484,6 +3484,120 @@ pub fn overlap_report(
     out
 }
 
+/// One connector's TURN BUDGET: how many bends it draws against the fewest its two anchors
+/// allow (SQ-1332).
+#[derive(Debug, Clone)]
+pub struct BendFinding {
+    pub origin: RoomId,
+    pub dest: RoomId,
+    pub dir: mapper::direction::Direction,
+    /// Turns in the drawn polyline — `ConnectorPlot.path` is already turn-reduced, so this is
+    /// its interior point count.
+    pub bends: usize,
+    /// The Manhattan optimum for this connector's own two anchors: 0 when they share a row or
+    /// column with no room box between, 1 when either L is clear of every box, else 2.
+    pub optimum: usize,
+    pub path: Vec<(i32, i32)>,
+}
+
+impl BendFinding {
+    /// Turns beyond the optimum. Zero means the connector is drawn as tightly as its anchors allow.
+    pub fn excess(&self) -> usize {
+        self.bends.saturating_sub(self.optimum)
+    }
+}
+
+/// Every drawn connector on `layer`, with its bend count and the Manhattan optimum for its
+/// anchors (SQ-1332).
+///
+/// The user's rule, verbatim: *"MANY cases where our path makes unnecessary turns before
+/// reaching the destination … when there is no room in the way it looks messy."* This is the
+/// measurement that rule needs — read from the SAME `ConnectorPlot.path` the renderer draws and
+/// `arrival_approach_report` reads, so it describes the picture rather than the plan.
+///
+/// The optimum is deliberately GEOMETRIC and blind to other connectors: it asks only what the
+/// room boxes permit, so a connector that spends a turn dodging another connector shows up as
+/// excess. That is the point — an excess of 1 is a cost the router paid for something, and the
+/// report is where you go to ask what.
+///
+/// Two kinds of connector are excluded. A **merge stub** ends on its trunk, not at a box, so it
+/// has no arrival anchor and no optimum to compare against. A **pure diagonal** — corner to
+/// corner between two diagonally adjacent boxes — is drawn as one unbroken SLOPE, and the
+/// two-turn staircase this function would otherwise count is the orthogonal fallback for a
+/// terminal without the glyphs, not a turn any reader sees.
+pub fn bend_report(
+    graph: &mapper::graph::MapGraph,
+    layer: mapper::layer::LayerId,
+) -> Vec<BendFinding> {
+    let rm = mapper::render::render_layer(graph, layer);
+    let (cols, rows) = boxes_axes(&rm.plan, rm.bounds);
+    // Every room box on the layer as a pixel rect, keyed by room, so the two rooms a connector
+    // joins can be excused (its anchors sit ON their own borders).
+    let boxes: Vec<(RoomId, (i32, i32, i32, i32))> = graph
+        .rooms_in_layer(layer)
+        .iter()
+        .filter_map(|&id| graph.room(id).and_then(|r| r.pos).map(|p| (id, p)))
+        .map(|(id, p)| {
+            let (x, y) = (cols.room_pixel(p.0), rows.room_pixel(p.1));
+            (id, (x, y, x + cols.box_dim_at(p.0) - 1, y + rows.box_dim_at(p.1) - 1))
+        })
+        .collect();
+    // The same predicate `plot_connector` uses to draw a slope instead of a staircase.
+    let pure_diagonal = |c: &mapper::route::RoutedConnector| {
+        c.points.len() == 3
+            && c.entry_corner.is_some()
+            && mapper::direction::is_diagonal(c.exit_dir)
+    };
+    let mut out = Vec::new();
+    for conn in rm.plan.connectors.iter().filter(|c| !c.merge && !pure_diagonal(c)) {
+        let Some(plot) = plot_connector(conn, &cols, &rows, None) else { continue };
+        if plot.path.len() < 2 {
+            continue;
+        }
+        let blocked = |p: (i32, i32)| {
+            boxes.iter().any(|&(id, (x0, y0, x1, y1))| {
+                id != conn.origin
+                    && id != conn.dest
+                    && p.0 >= x0
+                    && p.0 <= x1
+                    && p.1 >= y0
+                    && p.1 <= y1
+            })
+        };
+        let (a, b) = (plot.dep_anchor, plot.arr_anchor);
+        let leg_clear = |p: (i32, i32), q: (i32, i32)| {
+            let (dx, dy) = ((q.0 - p.0).signum(), (q.1 - p.1).signum());
+            let mut c = p;
+            loop {
+                if blocked(c) {
+                    return false;
+                }
+                if c == q {
+                    return true;
+                }
+                c = (c.0 + dx, c.1 + dy);
+            }
+        };
+        let l_clear = |corner: (i32, i32)| leg_clear(a, corner) && leg_clear(corner, b);
+        let optimum = if (a.0 == b.0 || a.1 == b.1) && leg_clear(a, b) {
+            0
+        } else if l_clear((b.0, a.1)) || l_clear((a.0, b.1)) {
+            1
+        } else {
+            2
+        };
+        out.push(BendFinding {
+            origin: conn.origin,
+            dest: conn.dest,
+            dir: conn.exit_dir,
+            bends: plot.path.len() - 2,
+            optimum,
+            path: plot.path.clone(),
+        });
+    }
+    out
+}
+
 /// True unless moving room `id` to `cell` would disturb a well-placed Up/Down relationship: an Up
 /// room must stay north of its partner (a Down room south), and a room currently stacked in its
 /// partner's COLUMN must stay in that column. This stops overlap cleanup from sacrificing a stacked
@@ -10577,6 +10691,96 @@ mod sq1320_arrival_slots {
         for w in head_on[..head_on.len() - 1].windows(2) {
             assert!(w[0].0 == w[1].0 || w[0].1 == w[1].1, "still orthogonal: {w:?}");
         }
+    }
+}
+
+#[cfg(all(test, feature = "t-render"))]
+mod sq1332_bends {
+    //! **A connector takes no turn the geometry did not force** (SQ-1332).
+    //!
+    //! `crates/mapper/src/route/mod.rs` holds the router's own cases, on its doubled polylines.
+    //! These are the DRAWN reading — [`bend_report`] over `ConnectorPlot.path`, which is what the
+    //! terminal paints and the SVG traces — on synthetic graphs, so they run on CI where
+    //! `stories/` is absent. The real maps are pinned in
+    //! `crates/app/tests/suites/sq1332_connector_bends.rs`.
+
+    use super::*;
+    use mapper::direction::Direction::{E, N, W};
+    use mapper::graph::MapGraph;
+    use mapper::layer::MAIN_LAYER;
+
+    /// Two rooms on one row with a clear gap: a straight line, no turn, and nothing was available
+    /// to save.
+    #[test]
+    fn an_aligned_pair_with_a_clear_gap_draws_no_turn() {
+        let mut g = MapGraph::new();
+        for id in [1, 2] {
+            g.upsert_room(id, "r".into());
+        }
+        g.set_pos(1, (0, 0));
+        g.set_pos(2, (3, 0));
+        g.add_edge(1, E, 2);
+        g.add_edge(2, W, 1);
+        let r = bend_report(&g, MAIN_LAYER);
+        assert_eq!(r.len(), 1);
+        assert_eq!((r[0].bends, r[0].optimum), (0, 0), "{:?}", r[0].path);
+    }
+
+    /// Perpendicular anchors with a free corner between them: exactly ONE turn drawn, which is
+    /// also the fewest the boxes allow.
+    #[test]
+    fn a_free_l_draws_exactly_one_turn() {
+        let mut g = MapGraph::new();
+        for id in [1, 2] {
+            g.upsert_room(id, "r".into());
+        }
+        g.set_pos(1, (0, 0));
+        g.set_pos(2, (3, 3));
+        g.add_edge(1, E, 2);
+        g.add_edge(2, N, 1);
+        let r = bend_report(&g, MAIN_LAYER);
+        assert_eq!(r.len(), 1);
+        assert_eq!((r[0].bends, r[0].optimum), (1, 1), "{:?}", r[0].path);
+        assert_eq!(r[0].excess(), 0);
+    }
+
+    /// A room box parked on the free L's corner sends the route the OTHER way round rather than
+    /// through it, and the detour costs one turn — no more.
+    ///
+    /// Three rather than one, because the arrowheads bracket it: this pair leaves EAST and arrives
+    /// from ABOVE, so once the eastward corner is occupied the line has to go east, down, east and
+    /// down again. That is the shape a second turn is FOR. What the case forbids is the third and
+    /// fourth: a route that keeps weaving after the box is behind it.
+    #[test]
+    fn a_blocked_corner_sends_the_route_round_rather_than_through() {
+        let mut g = MapGraph::new();
+        for id in [1, 2, 3] {
+            g.upsert_room(id, "r".into());
+        }
+        g.set_pos(1, (0, 0));
+        g.set_pos(2, (3, 3));
+        g.set_pos(3, (3, 0)); // sits on the horizontal-first corner
+        g.add_edge(1, E, 2);
+        g.add_edge(2, N, 1);
+        let rm = mapper::render::render_layer(&g, MAIN_LAYER);
+        let (cols, rows) = boxes_axes(&rm.plan, rm.bounds);
+        let conn = rm
+            .plan
+            .connectors
+            .iter()
+            .find(|c| c.origin == 1 && c.dest == 2)
+            .expect("1→2 is drawn");
+        let plot = plot_connector(conn, &cols, &rows, None).expect("it plots");
+        let (bx, by) = (cols.room_pixel(3), rows.room_pixel(0));
+        let (bw, bh) = (cols.box_dim_at(3), rows.box_dim_at(0));
+        for (c, _) in &plot.cells {
+            assert!(
+                !(c.0 > bx && c.0 < bx + bw - 1 && c.1 > by && c.1 < by + bh - 1),
+                "the route runs through room 3's box at {c:?}: {:?}",
+                plot.path
+            );
+        }
+        assert_eq!(plot.path.len() - 2, 3, "east, down, east, down — and no more: {:?}", plot.path);
     }
 }
 

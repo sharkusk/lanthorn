@@ -104,3 +104,5 @@ mod sq1314_nautical_passage_erasure;
 mod sq1315_anchorhead_2018;
 #[path = "suites/sq1316_connector_overlaps.rs"]
 mod sq1316_connector_overlaps;
+#[path = "suites/sq1332_connector_bends.rs"]
+mod sq1332_connector_bends;
