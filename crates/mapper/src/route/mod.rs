@@ -472,9 +472,11 @@ fn turns(pts: &[(i32, i32)]) -> usize {
 /// left exactly as it was — that one is between two routes that both genuinely want the line.
 #[derive(Debug, Default)]
 struct ReservedLines {
-    /// `(is_horizontal, line, start, end, owning pair)` in doubled coordinates.
-    spans: Vec<(bool, i32, i32, i32, (RoomId, RoomId))>,
+    spans: Vec<ReservedSpan>,
 }
+
+/// One reservation: `(is_horizontal, line, start, end, owning pair)` in doubled coordinates.
+type ReservedSpan = (bool, i32, i32, i32, (RoomId, RoomId));
 
 impl ReservedLines {
     /// Every connected pair that shares a row or column, reserving the stretch between them.
@@ -2845,7 +2847,6 @@ mod tests {
         assert_eq!(crossings(&chosen), 0, "route_topology must pick the crossing-free route set");
     }
 
-    #[test]
     // ── Bends (SQ-1332) ──────────────────────────────────────────────────────────────────
     //
     // The user's rule: *"MANY cases where our path makes unnecessary turns before reaching the
