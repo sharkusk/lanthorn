@@ -82,15 +82,16 @@ fn stories_dir() -> PathBuf {
 /// `licensed` false models `--interpreter 6` on its own — same machine, same
 /// profile source, no opt-in — which is the launch `Asked` declines.
 fn ibm_config(licensed: bool) -> app::config::Config {
-    let mut cfg = app::config::Config::default();
-    cfg.interpreter_number = Some(6);
-    cfg.interpreter_profile = InterpreterProfile::IbmPc;
-    cfg.interpreter_source = ProfileSource::Asked;
-    cfg.colour_source = app::config::ColourSource::Machine;
-    cfg.system_colours = licensed;
-    cfg.honor_game_colours = true;
-    cfg.period_look = true;
-    cfg
+    app::config::Config {
+        interpreter_number: Some(6),
+        interpreter_profile: InterpreterProfile::IbmPc,
+        interpreter_source: ProfileSource::Asked,
+        colour_source: app::config::ColourSource::Machine,
+        system_colours: licensed,
+        honor_game_colours: true,
+        period_look: true,
+        ..Default::default()
+    }
 }
 
 /// Boot the story the way `startup.rs` boots it under those flags, in the same
@@ -431,27 +432,25 @@ fn flat(pane: &[(String, Vec<Color>)]) -> String {
 
 
 /// The two other things on that same pane, pinned so the bold rule's REACH is a
-/// record rather than an accident — one line it lights, one it does not.
+/// record rather than an accident — one line it lights, and one that used to be
+/// a built-in rule's but now lights the same way.
 ///
 /// - **`BUREAUCRACY`** is `V-VERSION`'s banner, printed inside `HLIGHT ,H-BOLD`,
 ///   and no built-in rule matches it. So it inherits the machine's body ink and
 ///   the bold rule lights it: `#FFFFFF`, which is what
 ///   `machine-screenshots/dos-bureaucracy.png` shows.
-/// - **`Front Room`**, the room-name heading, is the built-in LOCATION rule's, and
-///   that rule is **not** withdrawn on a machine frame — SQ-0822 kept it
-///   deliberately, on the reasoning that it is a reading aid painting an accent
-///   rather than a mute, and an accent is legible on any page. The accent is a
-///   theme colour, so `ibm_bold_fg`'s round-trip guard leaves it alone and the
-///   heading is `transcript_location`'s cyan whatever the game asked for.
-///
-/// **The capture disagrees with the second one**: DOS draws that heading bold
-/// white, like the banner above it, because the game prints it exactly the same
-/// way. Whether the location rule should stand down on a machine frame for the
-/// same reason the system rule does is a decision SQ-0822 took the other way and
-/// this quest did not reopen — so it is pinned here, with the disagreement named,
-/// rather than left to be discovered as a surprise.
+/// - **`Front Room`**, the room-name heading, used to be the built-in LOCATION
+///   rule's — SQ-0822 kept that rule standing on machine frames, reasoning that
+///   it is a reading aid painting an accent rather than a mute, and an accent is
+///   legible on any page. The capture disagreed: DOS draws the heading bold
+///   white, identical to the banner above it, because the game prints both with
+///   `HLIGHT ,H-BOLD` and the IBM PC has no third colour to paint a reading aid
+///   in. SQ-1357 withdrew the LOCATION rule on machine frames for the same reason
+///   SQ-0822 withdrew the SYSTEM rule, and this case is that fix's positive: the
+///   heading now falls through to base — the machine's own ink — and the bold
+///   rule lights it exactly like the banner.
 #[test]
-fn the_banner_lights_and_the_room_name_heading_keeps_its_accent() {
+fn the_banner_lights_and_the_room_name_heading_lights_with_it() {
     let _g = app::v6_palette(zvm::screen::Palette::IbmXzip);
     let Some(pane) = frame(true) else { return };
 
@@ -472,12 +471,13 @@ fn the_banner_lights_and_the_room_name_heading_keeps_its_accent() {
         })
         .unwrap_or_else(|| panic!("the room heading is not on screen; pane was:\n{}", flat(&pane)));
     assert!(
-        heading.iter().all(|&c| c == Color::Cyan),
-        "the built-in LOCATION rule paints the heading `transcript_location`'s \
-         accent, which SQ-0822 left standing on machine frames: {heading:?}"
+        heading.iter().all(|&c| c == LIT_INK),
+        "the LOCATION rule is withdrawn on a machine frame (SQ-1357), so the \
+         heading falls through to base and the bold rule lights it exactly like \
+         the banner: {heading:?}"
     );
     assert!(
-        heading.iter().all(|&c| c != Color::DarkGray),
-        "…and NOT the muted system colour, which is the rule this quest withdrew"
+        heading.iter().all(|&c| c != Color::Cyan),
+        "…and never the theme's accent, which is the rule this quest withdrew"
     );
 }
