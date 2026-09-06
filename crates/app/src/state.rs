@@ -209,7 +209,21 @@ impl SidePanel {
 
 // ── Drag-pan state ────────────────────────────────────────────────────────────
 
-/// Middle-button drag-pan accumulator state.
+/// What a map press-release WITHOUT any drag motion should resolve to once the
+/// drag ends (SQ-1325) — the plain-click target, resolved once at Down and
+/// replayed by `EndDragPan` only when the pointer never moved in between.
+/// `Room` and `Empty` mirror exactly what the old unconditional
+/// `Down(Left) if in_map` arm used to decide immediately; deferring the
+/// decision to Up is what lets the SAME press turn into a drag-to-pan instead.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MapClick {
+    /// The press landed on this room's box.
+    Room(RoomId),
+    /// The press landed on empty map space.
+    Empty,
+}
+
+/// Middle-button and left-button-on-map drag-pan accumulator state.
 #[derive(Debug, Clone, Copy)]
 pub struct DragState {
     /// Terminal cell position of the last drag event.
@@ -218,6 +232,14 @@ pub struct DragState {
     pub acc_x: i32,
     /// Sub-cell accumulator for y (in terminal rows).
     pub acc_y: i32,
+    /// Set once a `Drag` event has moved the pointer since `Down` (SQ-1325) —
+    /// distinguishes a plain click from a genuine drag-to-pan gesture. Always
+    /// `false` at rest between events; irrelevant to the middle-button pan,
+    /// which has no click meaning to defer.
+    pub moved: bool,
+    /// The deferred click target for a left-button map press (SQ-1325), or
+    /// `None` for the middle-button pan (which is never a click).
+    pub map_click: Option<MapClick>,
 }
 
 // ── Command band state ────────────────────────────────────────────────────────
