@@ -29,6 +29,13 @@
 //! on its own. So a blocked bearing now tries a **chain push** as well — move the blocker one
 //! cell further along the bearing, and whatever IT would then displace with it, as a rigid chain
 //! — under exactly the same veto, room by room instead of side by side.
+//!
+//! **And a pushed room takes what HANGS OFF it with it** (SQ-1363). The same Zork I map, one room
+//! further on: `South of House` stepped down correctly, and the `Forest` its own `S` exit leads to
+//! stayed where it was, so the two ended level and the map stopped saying the forest was south of
+//! the house at all. A push is only legible if the rooms that depend on the pushed room travel
+//! with it, so the chain is extended with its **dependants** — see [`hangs_off`] — before anything
+//! moves.
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -104,18 +111,90 @@ fn open_line(positions: &mut BTreeMap<RoomId, (i32, i32)>, horizontal: bool, lin
 /// is full, and the newcomer is better off beside its anchor.
 const MAX_PUSH_CHAIN: usize = 4;
 
-/// Push whatever stands on `want` — and whatever THAT would displace — one cell further along
-/// `offset`, as a rigid chain (SQ-1358).
+/// The most rooms one push may move once the DEPENDANTS are counted in (SQ-1363).
+///
+/// [`MAX_PUSH_CHAIN`] bounds the column the newcomer is pushing THROUGH, which is a line; this
+/// bounds the whole party that ends up travelling, which a dependant closure can spread across
+/// several columns and so needs a count of its own. Eight is a house and its doorstep — Zork I's
+/// case moves two — and past it a late arrival is shunting a neighbourhood rather than asking a
+/// room to step aside, which is the point [`MAX_PUSH_CHAIN`] already makes about depth.
+const MAX_PUSH_SET: usize = 8;
+
+/// Does a passage running `dir` say the room at its far end HANGS OFF the moved room, on the far
+/// side of `bearing`? (SQ-1363)
+///
+/// `from_moved` says which end was walked: `true` when the moved room owns the passage
+/// (`moved --dir--> candidate`, so the candidate lies `dir`-ward of it), `false` when the
+/// candidate does (`candidate --dir--> moved`, so the moved room lies `dir`-ward and the
+/// candidate lies back the other way).
+///
+/// **Read off the PASSAGE'S DIRECTION, not off reciprocity and not off the cells.** The specimen
+/// is exactly why: Zork I's `South of House --S--> Forest` is answered by
+/// `Forest --NW--> South of House`, so the two are not a reciprocal pair in the sense
+/// [`adjacent_reciprocals`] means at all — and yet both halves say the same thing to a reader,
+/// that the forest lies south of the house. A rule keyed on reciprocity drops this case, which is
+/// the whole case; a rule keyed on the direction keeps it, and keeps every honest one-way exit
+/// with it. A neighbour to the SIDE (`E`, `W` against a downward bearing, dot product zero) or
+/// BEHIND (`N` out of the moved room) is anchored by whatever is over there, and is left alone.
+fn hangs_off(dir: Direction, from_moved: bool, bearing: (i32, i32)) -> bool {
+    let Some(v) = grid_offset(dir) else { return false };
+    let (dx, dy) = if from_moved { v } else { (-v.0, -v.1) };
+    dx * bearing.0 + dy * bearing.1 > 0
+}
+
+/// Grow `moving` with every placed room that [`hangs_off`] one of its members, until it stops
+/// growing (SQ-1363).
+///
+/// Transitive: a room that hangs off a dependant hangs off the push, and a chain of two is not
+/// rarer than a chain of one.
+fn extend_with_dependants(
+    graph: &MapGraph,
+    positions: &BTreeMap<RoomId, (i32, i32)>,
+    moving: &mut BTreeSet<RoomId>,
+    bearing: (i32, i32),
+) {
+    let conns = graph.connections();
+    loop {
+        let mut found: Vec<RoomId> = Vec::new();
+        for c in conns {
+            if c.is_self_loop() {
+                continue;
+            }
+            let (other, from_moved) = match (moving.contains(&c.origin), moving.contains(&c.dest)) {
+                (true, false) => (c.dest, true),
+                (false, true) => (c.origin, false),
+                _ => continue,
+            };
+            if positions.contains_key(&other) && hangs_off(c.dir, from_moved, bearing) {
+                found.push(other);
+            }
+        }
+        let before = moving.len();
+        moving.extend(found);
+        if moving.len() == before {
+            return;
+        }
+    }
+}
+
+/// Push whatever stands on `want` — whatever THAT would displace, and whatever hangs off any of
+/// them — one cell further along `offset`, as a rigid chain (SQ-1358, SQ-1363).
 ///
 /// Walks the bearing from `want` until it reaches a free cell, gathering every room on the way;
-/// the whole gathered set then moves by `offset`, so each moved room keeps its exact offset from
-/// every other moved room. `Some` with the pushed positions when the move is legal — every
-/// cardinal-reciprocal pair in `keep` (the map's set BEFORE the push) is still adjacent after, so
-/// a partner either travelled in the chain or was never adjacent to begin with; `None` when a
-/// partner would be left behind, or when the chain is longer than [`MAX_PUSH_CHAIN`] cells.
+/// that column is then extended with its dependants ([`extend_with_dependants`]), and with any
+/// room those newcomers would in turn displace, until the party settles. The whole party moves by
+/// `offset` together, so each moved room keeps its exact offset from every other moved room.
 ///
-/// The anchor stands one cell BACK from `want`, against the bearing, so it is never on the chain
-/// and never moves.
+/// `Some` with the pushed positions when the move is legal — every cardinal-reciprocal pair in
+/// `keep` (the map's set BEFORE the push) is still adjacent after, so a partner either travelled
+/// with the party or was never adjacent to begin with; `None` when a partner would be left behind,
+/// when the column is deeper than [`MAX_PUSH_CHAIN`] cells, or when the party outgrows
+/// [`MAX_PUSH_SET`] rooms.
+///
+/// The anchor stands one cell BACK from `want`, against the bearing — but a DISTORTED passage may
+/// claim a bearing its cells do not bear out, so the anchor can be swept into the party by a rule
+/// that reads directions rather than positions. The final check that `want` is free says so
+/// rather than assuming it.
 fn push_chain(
     graph: &MapGraph,
     positions: &BTreeMap<RoomId, (i32, i32)>,
@@ -125,22 +204,55 @@ fn push_chain(
 ) -> Option<BTreeMap<RoomId, (i32, i32)>> {
     let mut cell = want;
     let mut moving: BTreeSet<RoomId> = BTreeSet::new();
+    let mut reached_open_ground = false;
     for _ in 0..MAX_PUSH_CHAIN {
         let here: Vec<RoomId> =
             positions.iter().filter(|(_, &p)| p == cell).map(|(&r, _)| r).collect();
         if here.is_empty() {
-            let mut trial = positions.clone();
-            for (r, p) in trial.iter_mut() {
-                if moving.contains(r) {
-                    *p = (p.0 + offset.0, p.1 + offset.1);
-                }
-            }
-            return keep.is_subset(&adjacent_reciprocals(graph, &trial)).then_some(trial);
+            reached_open_ground = true;
+            break;
         }
         moving.extend(here);
         cell = (cell.0 + offset.0, cell.1 + offset.1);
     }
-    None
+    if !reached_open_ground {
+        return None;
+    }
+
+    // Dependants join, then whatever they would run into joins, then THEIR dependants — repeat
+    // both until neither adds anybody.
+    loop {
+        if moving.len() > MAX_PUSH_SET {
+            return None;
+        }
+        let before = moving.len();
+        extend_with_dependants(graph, positions, &mut moving, offset);
+        let ahead: BTreeSet<(i32, i32)> = moving
+            .iter()
+            .filter_map(|r| positions.get(r))
+            .map(|p| (p.0 + offset.0, p.1 + offset.1))
+            .collect();
+        let displaced: Vec<RoomId> = positions
+            .iter()
+            .filter(|(r, &p)| !moving.contains(r) && ahead.contains(&p))
+            .map(|(&r, _)| r)
+            .collect();
+        moving.extend(displaced);
+        if moving.len() == before {
+            break;
+        }
+    }
+
+    let mut trial = positions.clone();
+    for (r, p) in trial.iter_mut() {
+        if moving.contains(r) {
+            *p = (p.0 + offset.0, p.1 + offset.1);
+        }
+    }
+    if trial.values().any(|&p| p == want) {
+        return None; // the party filled the very cell the newcomer is being seated in
+    }
+    keep.is_subset(&adjacent_reciprocals(graph, &trial)).then_some(trial)
 }
 
 /// Where a late-arriving room seats itself relative to `anchor`, and what the map had to do to
@@ -175,8 +287,10 @@ pub struct Seat {
 ///    still is (see the module docs). A diagonal `offset` may open EITHER of its two lines, so
 ///    both are tried, the horizontal one first;
 /// 3. the slide is vetoed, so the blocker alone is asked to step aside: it moves one cell further
-///    along the bearing, and whatever it would then displace moves with it as a rigid chain, up
-///    to [`MAX_PUSH_CHAIN`] cells of it — under the same veto, and the newcomer still gets the
+///    along the bearing, and whatever it would then displace — plus everything that HANGS OFF any
+///    of them, so a pushed room does not leave its own southern neighbours behind (SQ-1363) —
+///    moves with it as a rigid chain, up to [`MAX_PUSH_CHAIN`] cells deep and [`MAX_PUSH_SET`]
+///    rooms wide — under the same veto, and the newcomer still gets the
 ///    cell it wanted. This is what a slide cannot do, because a slide is all-or-nothing: one
 ///    faraway pair straddling the cut vetoes it for the whole side, however free the blocker
 ///    itself is (SQ-1358 — Zork I's `South of House`, see the module docs);
@@ -531,6 +645,86 @@ mod tests {
         assert!(!seat.moved_map, "the column stayed put");
         assert_eq!(seat.cell, (-1, 0), "beside the anchor instead");
         assert_eq!(pos[&11], (0, 1), "the blocker never budged");
+    }
+
+    // ── SQ-1363: a pushed room takes what hangs off it ─────────────────────────
+
+    /// The reported case, reduced: the Studio's ghost pushes `South of House` down out of its way,
+    /// and the `Forest` that room's own `S` exit leads to goes down with it — so the forest is
+    /// still drawn below the house afterwards, which is the only thing the passage says.
+    ///
+    /// The pair is deliberately NOT reciprocal in the strict sense: `5 --S--> 8` is answered by
+    /// `8 --NW--> 5`, exactly as Zork I walks it. A rule keyed on reciprocity would leave `8`
+    /// behind; [`hangs_off`] reads the direction instead.
+    #[test]
+    fn a_pushed_blocker_takes_the_room_hanging_off_its_south_exit() {
+        let (g, mut pos) = house(&[
+            (5, Direction::W, 1),
+            (1, Direction::S, 5),
+            (5, Direction::E, 3),
+            (3, Direction::S, 5),
+            (5, Direction::S, 8),
+            (8, Direction::NW, 5),
+        ]);
+        pos.insert(8, (2, 2));
+        let seat = seat_adjacent(&g, &mut pos, 2, (0, 1)).unwrap();
+        assert_eq!(seat.cell, (0, 1), "the ghost took the doorstep it wanted");
+        assert!(seat.moved_map);
+        assert_eq!(pos[&5], (0, 2), "South of House stepped down a row");
+        assert_eq!(pos[&8], (2, 3), "and the Forest hanging off its S exit came with it");
+        for (id, cell) in HOUSE_AT_REST {
+            assert_eq!(pos[&id], cell, "room {id} did not move");
+        }
+    }
+
+    /// Dependence is transitive: a room hanging off the dependant travels too, and the whole party
+    /// keeps its own shape.
+    #[test]
+    fn a_chain_of_two_dependants_all_move() {
+        let (g, mut pos) = house(&[
+            (5, Direction::W, 1),
+            (1, Direction::S, 5),
+            (5, Direction::S, 8),
+            (8, Direction::NW, 5),
+            (8, Direction::SE, 9),
+            (9, Direction::N, 8),
+        ]);
+        pos.insert(8, (2, 2));
+        pos.insert(9, (3, 3));
+        let seat = seat_adjacent(&g, &mut pos, 2, (0, 1)).unwrap();
+        assert_eq!(seat.cell, (0, 1));
+        assert!(seat.moved_map);
+        assert_eq!(
+            (pos[&5], pos[&8], pos[&9]),
+            ((0, 2), (2, 3), (3, 4)),
+            "the blocker and both dependants moved one row, keeping their own offsets"
+        );
+        for (id, cell) in HOUSE_AT_REST {
+            assert_eq!(pos[&id], cell, "room {id} did not move");
+        }
+    }
+
+    /// The boundary the rule draws, pinned from the other side: a neighbour due EAST of the
+    /// blocker is perpendicular to the bearing, so it is anchored where it stands and is NOT a
+    /// dependant — and because the two are an adjacent reciprocal pair, leaving it behind would
+    /// pull that pair apart, which vetoes the push outright. The seating falls back exactly as it
+    /// did before SQ-1363.
+    #[test]
+    fn a_perpendicular_neighbour_is_not_a_dependant_and_its_pair_vetoes_the_push() {
+        let (g, mut pos) = house(&[
+            (5, Direction::W, 1),
+            (1, Direction::S, 5),
+            (5, Direction::E, 8),
+            (8, Direction::W, 5),
+        ]);
+        pos.insert(8, (1, 1)); // due east of `South of House`, exactly one cell away
+        let seat = seat_adjacent(&g, &mut pos, 2, (0, 1)).unwrap();
+        assert!(!seat.moved_map, "nothing legal to move: the E/W pair would be stretched");
+        assert_eq!(seat.cell, (0, 2), "past the blocker, exactly as before SQ-1358");
+        assert_eq!((pos[&5], pos[&8]), ((0, 1), (1, 1)), "and the pair is still adjacent");
+        for (id, cell) in HOUSE_AT_REST {
+            assert_eq!(pos[&id], cell, "room {id} did not move");
+        }
     }
 
     /// The case the pass exists for: a portal-only room hanging off a hub in the middle of a
