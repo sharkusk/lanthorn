@@ -121,8 +121,13 @@ FROM debian:trixie-slim
 # libasound2t64 (trixie's name for libasound2): the release binaries link ALSA
 # (harmless without a sound device — the app degrades to silent).
 # ca-certificates: HTTPS for the picker's built-in IFDB story downloads.
+# dtach: the session detacher that lets a game outlive the websocket that
+#   started it (SQ-1323) — 0.9-7 in trixie, GPL-2, one binary, no libraries
+#   beyond libc. `abduco` would have been the smaller choice but is NOT
+#   packaged for trixie (it is in forky/sid only), and a source-built C
+#   program in the runtime image costs more than it saves here.
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends libasound2t64 ca-certificates \
+    && apt-get install -y --no-install-recommends libasound2t64 ca-certificates dtach \
     && rm -rf /var/lib/apt/lists/*
 
 # A container has no sound card. ALSA's default device is the `file` plugin
@@ -135,18 +140,23 @@ COPY --from=builder /out/ /usr/local/bin/
 COPY --from=ttyd-fetch /ttyd /usr/local/bin/ttyd
 COPY --from=ttyd-fetch /ttyd-index.html /usr/local/share/lanthorn/ttyd-index.html
 COPY --from=font-fetch /fonts/ /usr/local/share/lanthorn/fonts/
+COPY docker/web-session.js /usr/local/share/lanthorn/web-session.js
 COPY docker/web-audio.js /usr/local/share/lanthorn/web-audio.js
 COPY docker/web-touch.js /usr/local/share/lanthorn/web-touch.js
 COPY docker/web-font.js /usr/local/share/lanthorn/web-font.js
 COPY docker/entrypoint.sh /usr/local/bin/lanthorn-entrypoint
 COPY docker/serve-session.sh /usr/local/bin/lanthorn-serve-session
+COPY docker/session-run.sh /usr/local/bin/lanthorn-session-run
 
 # /data is $HOME (saves, config, archives under /data/.lanthorn); /stories is
 # the library the picker opens on. Both are meant to be volume-mounted.
 RUN useradd --uid 1000 --create-home --home-dir /data lanthorn \
     && mkdir -p /stories \
     && chown lanthorn:lanthorn /stories \
-    && chmod +x /usr/local/bin/lanthorn-entrypoint /usr/local/bin/lanthorn-serve-session
+    && mkdir -p /tmp/lanthorn-sessions \
+    && chown lanthorn:lanthorn /tmp/lanthorn-sessions \
+    && chmod +x /usr/local/bin/lanthorn-entrypoint /usr/local/bin/lanthorn-serve-session \
+                /usr/local/bin/lanthorn-session-run
 
 USER lanthorn
 ENV HOME=/data \

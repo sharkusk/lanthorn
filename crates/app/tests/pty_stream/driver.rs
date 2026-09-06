@@ -189,6 +189,37 @@ pub struct Spec {
     /// only a label and [`Spec::hide_map`] is not acted on, because there is no
     /// per-game sidecar to write for a program that has no per-game anything.
     pub argv: Option<Vec<String>>,
+    /// End the run the way **ttyd ends a session whose websocket dropped** —
+    /// `kill(-pid, SIGHUP)` at the child's process group — instead of the
+    /// unconditional `SIGKILL` every other harness closes with (SQ-1323).
+    ///
+    /// This is the only shutdown lanthorn's own exit path can survive: SIGKILL
+    /// is uncatchable, so a harness that ends that way can never observe the
+    /// auto-save, the terminal restore, or the `128 + signum` exit code — and
+    /// the browser-in-a-container question ("does a dropped connection lose the
+    /// game?") is exactly a question about that path.
+    ///
+    /// ttyd 1.7.7 `src/protocol.c:373-379` (`LWS_CALLBACK_CLOSED`) calls
+    /// `pty_kill(pss->process, server->sig_code)`, and `pty_kill` is
+    /// `uv_kill(-process->pid, sig)` (`src/pty.c:158-164`) — a PROCESS-GROUP
+    /// signal — with `sig_code` defaulting to `SIGHUP` (`src/server.c:169`).
+    /// The child here is a session/group leader (`spawn`'s `setsid`), so the
+    /// negative pid reaches it the same way.
+    ///
+    /// One deliberate difference: ttyd also `pty_pause`s (stops reading the
+    /// master) before it signals, and this keeps draining. The bytes an exiting
+    /// lanthorn writes are a few hundred — far inside any pty buffer — so the
+    /// pause changes nothing about whether it can finish, and draining keeps
+    /// the terminal-restore sequence in the capture where a case can assert on
+    /// it.
+    ///
+    /// [`Capture::exit`] then carries how the child actually ended.
+    pub hangup: bool,
+    /// How long [`Self::hangup`] waits for the child to exit on its own before
+    /// falling back to `SIGKILL`. Generous next to the app's own watchdog (600 ms
+    /// grace, 10 s hard cap in `main.rs`), because the point is to let the exit
+    /// save finish, not to time it.
+    pub hangup_grace: Duration,
     /// Run the child from this directory instead of inheriting ours.
     ///
     /// For a launch where the PATH IS PART OF THE PICTURE (SQ-1080): the story
@@ -221,6 +252,8 @@ impl Spec {
             defer_by: Duration::ZERO,
             answer_kitty: true,
             argv: None,
+            hangup: false,
+            hangup_grace: Duration::from_secs(15),
             cwd: None,
         }
     }
@@ -295,6 +328,10 @@ pub struct Capture {
     pub spec: Spec,
     pub duration: Duration,
     pub timed_out: bool,
+    /// How the child ended, when [`Spec::hangup`] asked for a survivable
+    /// shutdown. `None` for every other run — those close with `SIGKILL`, which
+    /// makes the status a statement about the harness rather than the app.
+    pub exit: Option<std::process::ExitStatus>,
 }
 
 /// One scripted keystroke, and the moment it was written to the pty.
@@ -799,9 +836,65 @@ pub fn run(spec: Spec) -> std::io::Result<Capture> {
         }
     }
 
-    let _ = child.kill();
-    let _ = child.wait();
-    Ok(Capture { bytes, flushes, answered, resizes, typed, spec, duration: start.elapsed(), timed_out })
+    let exit = if spec.hangup {
+        Some(hang_up(&mut child, master.as_raw_fd(), &mut bytes, spec.hangup_grace)?)
+    } else {
+        let _ = child.kill();
+        let _ = child.wait();
+        None
+    };
+    Ok(Capture { bytes, flushes, answered, resizes, typed, spec, duration: start.elapsed(), timed_out, exit })
+}
+
+/// Hang the session up the way ttyd does and wait for the app to end itself.
+///
+/// See [`Spec::hangup`] for the ttyd source this mirrors. Output keeps being
+/// drained into `bytes` while we wait, so the terminal-restore sequence the app
+/// writes on its way out is part of the capture; `SIGKILL` is the backstop if
+/// `grace` runs out, and a run that needed it is a run in which the app did NOT
+/// exit on its own — which the returned status then says.
+fn hang_up(
+    child: &mut Child,
+    master: RawFd,
+    bytes: &mut Vec<u8>,
+    grace: Duration,
+) -> std::io::Result<std::process::ExitStatus> {
+    let pid = child.id() as libc::pid_t;
+    // The NEGATIVE pid is the point: ttyd signals the process GROUP, and
+    // `spawn`'s `setsid` made the child its leader.
+    // SAFETY: a plain kill(2) on a pid we spawned.
+    unsafe {
+        libc::kill(-pid, libc::SIGHUP);
+    }
+    let deadline = Instant::now() + grace;
+    let mut buf = [0u8; 8192];
+    // A pty master whose child has gone reports EIO on Linux rather than EOF, and
+    // a read can be cut short by the SIGCHLD we are waiting for — so neither a
+    // poll nor a read failing here is an error of the RUN. The child's exit
+    // status is the only thing this loop actually needs.
+    let mut sip = |bytes: &mut Vec<u8>| {
+        if matches!(poll_readable(master, Duration::from_millis(20)), Ok(true)) {
+            // SAFETY: a read(2) into an owned buffer on a fd the caller holds open.
+            let n = unsafe { libc::read(master, buf.as_mut_ptr().cast(), buf.len()) };
+            if n > 0 {
+                bytes.extend_from_slice(&buf[..n as usize]);
+                return true;
+            }
+        }
+        false
+    };
+    loop {
+        if let Some(status) = child.try_wait()? {
+            // Drain whatever is still in the pty after the app let go of it.
+            while sip(bytes) {}
+            return Ok(status);
+        }
+        if Instant::now() >= deadline {
+            let _ = child.kill();
+            return child.wait();
+        }
+        sip(bytes);
+    }
 }
 
 fn poll_readable(fd: RawFd, timeout: Duration) -> std::io::Result<bool> {

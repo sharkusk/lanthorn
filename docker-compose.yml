@@ -3,9 +3,12 @@
 #   mkdir -p stories        # drop your story files in here
 #   docker compose up -d    # then open http://localhost:7681
 #
-# Each browser connection gets its own lanthorn process; they share the
-# /stories library and the /data home (saves, config, map archives), so a
-# game saved in one session can be restored in the next.
+# Each browser gets its own lanthorn session, and the session OUTLIVES the
+# connection: close the tab, lose the Wi-Fi, let a tablet sleep, and coming
+# back to the same URL puts you back in the same game, mid-sentence. Sessions
+# share the /stories library and the /data home (saves, config, map archives).
+# An abandoned one is ended after six hours (LANTHORN_WEB_SESSION_TTL) with its
+# progress saved, so it can still be resumed from the archive after that.
 #
 # See docs/internals/docker.md for details and docker/entrypoint.sh for the
 # full list of serve-mode environment knobs.
@@ -17,6 +20,10 @@ services:
     # Developers: build from this checkout instead of the published image:
     # build: .
     command: serve
+    # A real init as pid 1, so the reaped session processes are collected
+    # rather than left as zombies: ttyd is pid 1 without this and does not
+    # wait() for children it did not spawn.
+    init: true
     ports:
       - "7681:7681"   # the terminal
       - "7682:7682"   # the game's sound, streamed to the browser
@@ -53,6 +60,27 @@ services:
     # Nerd Font Mono (which still loads as a fallback):
     # environment:
     #   LANTHORN_WEB_FONT: "JetBrainsMono Nerd Font Mono"
+    #
+    # Uncomment to keep an abandoned game for a different length of time
+    # (seconds; the default is six hours). A longer TTL costs memory — every
+    # waiting session is a live interpreter — and a shorter one is friendlier
+    # to a busy public server; either way the game's progress is saved before
+    # the session is ended:
+    # environment:
+    #   LANTHORN_WEB_SESSION_TTL: "21600"
+    #
+    # Uncomment to change how wide the draggable pane boundaries are, in
+    # cells (1-6, or `off` to leave lanthorn's own default of 2 alone). The
+    # browser image seeds 4, because a fingertip is not a mouse pointer:
+    # environment:
+    #   LANTHORN_WEB_GRAB_ZONE: "4"
+    #
+    # Uncomment to turn the whole thing off and take the other side of the
+    # trade: a dropped connection ends the game (its progress still saved and
+    # resumed next time), and in exchange the browser gets the game's SOUND,
+    # which a detachable session cannot have — see docker/serve-session.sh:
+    # environment:
+    #   LANTHORN_WEB_DETACH: "off"
     restart: unless-stopped
 
 volumes:
