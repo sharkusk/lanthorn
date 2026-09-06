@@ -3,6 +3,9 @@
 </p>
 
 [![Test](https://github.com/sharkusk/lanthorn/actions/workflows/test.yml/badge.svg)](https://github.com/sharkusk/lanthorn/actions/workflows/test.yml)
+[![Rust 1.98+](https://img.shields.io/badge/rust-1.98-orange?logo=rust)](https://www.rust-lang.org/)
+[![Ratatui 0.30](https://img.shields.io/badge/ratatui-0.30-blue)](https://ratatui.rs)
+[![License: BSD-3-Clause](https://img.shields.io/badge/license-BSD--3--Clause-green)](LICENSE)
 [![Made with Side-Quest](https://img.shields.io/badge/Made%20with-Side--Quest-f97316)](https://github.com/sharkusk/side-quest)
 
 **Lanthorn plays interactive fiction in your terminal and lights the way: a live automap, spoiler-free guidance, and the game's own artwork.**
