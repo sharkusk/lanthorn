@@ -820,12 +820,26 @@ fn draw_progress_line(
 /// font size then pin the protocol. Returns `None` only if construction fails.
 pub(crate) fn build_cover_picker(mode: app::config::ImageProtocol) -> Option<ratatui_image::picker::Picker> {
     use app::config::ImageProtocol as M;
-    use ratatui_image::picker::{Picker, ProtocolType};
+    use ratatui_image::picker::{Picker, ProtocolType, cap_parser::QueryStdioOptions};
+    // Opt in to kitty's `o=z` zlib transmission compression (off by default
+    // upstream, since it trades render latency for bandwidth). lanthorn takes
+    // that trade on purpose: encodes run on a worker thread rather than the
+    // render loop (`spawn_v6_encode`, `spawn_band_jobs`), so the CPU cost is
+    // off the UI's critical path; the composites are flat indexed colour that
+    // deflates enormously; and SSH — where the terminal link is the actual
+    // bottleneck — is a first-class way to run this app. SQ-1339.
+    let query_options = || QueryStdioOptions {
+        kitty_compression: true,
+        ..Default::default()
+    };
     match mode {
         M::Halfblocks => Some(Picker::halfblocks()),
-        M::Auto => Some(Picker::from_query_stdio().unwrap_or_else(|_| Picker::halfblocks())),
+        M::Auto => Some(
+            Picker::from_query_stdio_with_options(query_options())
+                .unwrap_or_else(|_| Picker::halfblocks()),
+        ),
         M::Kitty | M::Sixel | M::Iterm2 => {
-            let mut p = Picker::from_query_stdio().ok()?;
+            let mut p = Picker::from_query_stdio_with_options(query_options()).ok()?;
             p.set_protocol_type(match mode {
                 M::Kitty => ProtocolType::Kitty,
                 M::Sixel => ProtocolType::Sixel,
