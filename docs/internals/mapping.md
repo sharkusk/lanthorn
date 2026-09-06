@@ -422,6 +422,15 @@ Fair and Heritage Corner, with two diagonals crossing between the columns. Drawi
 diagonal as a true 45° line would settle it, and that is a change to how a diagonal is drawn
 rather than to where it is routed.
 
+With the half-diagonal glyphs on, those two crossings ARE drawn as true slopes — those rooms are
+diagonally adjacent — and they cost two cells apiece rather than a point, because a half-diagonal
+step is two glyphs tall. At each of those cells the two lines want complementary halves of one
+crossing, Unicode has the glyph that draws both (U+1FBA6 🮦 and U+1FBA7 🮧, the same Legacy
+Computing block the halves come from), and the renderer has no combined form to reach for — so one
+slope overwrites the other and the passage underneath shows a two-cell break where they cross. It
+is a crossing drawn imperfectly rather than a passage lost, it long predates the rule above about
+which passages are drawn as slopes at all, and it is the only such cell on either reference map.
+
 **A room's compass anchor belongs to the room first.** Each side of a box has one
 mid-side cell — the cell a real exit, a `?` random-exit mark or a probed way back in
 that direction is drawn from — and three kinds of thing want it, in this order:
@@ -954,9 +963,17 @@ route to the room you clicked), `map.matrix.cell:frontier` (the dimmed `·`/`×`
 cells) and `map.matrix.footnote`; `map.trail` colours the maze breadcrumb.
 
 Individual glyphs can be overridden one at a time in `[map.overrides]`, and
-`diagonal_corners = false` drops the half-diagonal corner stubs (🮠🮡🮢🮣, Unicode 13
+`diagonal_corners = false` drops the half-diagonal slopes (🮠🮡🮢🮣, Unicode 13
 Legacy Computing) in favour of plain orthogonal corner exits — the escape hatch
-for a font that has no glyphs for them. Reload changes live with `reload-style`. See
+for a font that has no glyphs for them. With it ON, a passage is drawn with those
+glyphs only when the two rooms are diagonally adjacent, so the whole line is one
+unbroken slope from corner to corner (in Zork I, *North of House* and *South of
+House* to *Behind House*). Every other diagonal passage — a destination farther
+away, off the true diagonal, or a route that has to bend — still departs from the
+box CORNER, which is what says it is a diagonal, and is then drawn with plain
+horizontal and vertical segments. A line that sets off as a slope and turns square
+halfway is neither one thing nor the other, and around a crowded corner of the map
+it is mostly extra ink. Reload changes live with `reload-style`. See
 [customization & configuration](customization.md) for the full styling surface, and
 [interface](interface.md) for mouse-driven map navigation.
 

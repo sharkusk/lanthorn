@@ -78,6 +78,16 @@ Absolute URLs or no link.
   room itself makes nothing of that direction: it still steps aside for the
   room's own exits, its `?` marks and its two-way passages, but it no longer
   moves out of the way of nothing at all.
+- **Diagonal passages are drawn as slopes only where they really are diagonal.**
+  With the map's diagonal corner glyphs turned on, a northeast passage used to set
+  off from the room's corner as a slanted line and then turn square partway across,
+  wherever the far room was not the next one along the diagonal. Those half-slopes
+  are gone: a passage is drawn as one unbroken slope only between two rooms that
+  sit corner to corner — around Zork I's house, *North of House* and *South of
+  House* to *Behind House* — and every other diagonal still leaves by the room's
+  corner, so you can see it is a diagonal, but travels in straight lines. The
+  crowded corner of the map around West of House, Stone Barrow and the Living Room
+  is noticeably clearer for it.
 - **Labels in the exported SVG stay out of each other's way.** A direction tag
   and the name beside a passage that leads off the layer now go wherever there
   is room — beside the badge, above it, below it — instead of always to one

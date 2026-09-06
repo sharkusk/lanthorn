@@ -1306,21 +1306,6 @@ pub(crate) struct ConnectorPlot {
     pub(crate) arr_anchor: (i32, i32),
 }
 
-/// The direction bit that seams a `dir` chain to the orthogonal cell it hands off to (SQ-0314).
-///
-/// A chain leaves its last cell through that cell's upper- or lower-centre, and the handoff cell
-/// sits immediately beyond it. For the orthogonal glyph there to actually MEET the chain, it needs
-/// a stroke running from its centre back to the shared edge — i.e. pointing at the chain. A N-ward
-/// chain (NE/NW) hands off upward, so the cell above it needs `DIR_S`; a S-ward chain needs
-/// `DIR_N`. Without this bit the handoff cell draws a bare `─` through its middle and the diagonal
-/// visibly stops one half-cell short.
-fn chain_seam_bit(dir: Direction) -> u8 {
-    match dir {
-        Direction::NE | Direction::NW => DIR_S,
-        _ => DIR_N,
-    }
-}
-
 /// A half-diagonal chain: the `(cell, glyph)` pairs it plots, plus the point where an orthogonal
 /// path resumes. See `diagonal_chain`.
 type DiagonalChain = (Vec<((i32, i32), char)>, (i32, i32));
@@ -1504,61 +1489,45 @@ pub(crate) fn plot_connector(
     // displaced connector crosses it as a single clean ┼ instead of a corner stomp.
     let first_interior = pix[1];
 
-    // SQ-0314: a diagonal exit leaves the corner on a chain of half-diagonals, and the orthogonal
-    // path resumes at the chain's far end (a │ attachment point).
+    // SQ-0314: a diagonal exit leaves the box CORNER, and with the diagonal glyphs on it can leave
+    // it on a chain of half-diagonals rather than walking that corner orthogonally.
     //
-    // A PURE diagonal — centre → shared corner → centre, the diagonally-adjacent case the router
-    // collapses — aims the chain at the ARRIVAL corner and has no orthogonal leg at all when the
-    // two gaps are square. Every other diagonal chains a while and then bridges to its first
-    // interior channel point as usual.
+    // **Only a PURE diagonal does** (SQ-1321). Pure means the whole connector is one corner-to-
+    // corner run — centre → shared corner → centre, the diagonally-adjacent case the router
+    // collapses, which in Zork I is `North of House ↔ Behind House` and `South of House ↔ Behind
+    // House`. There the diagonal glyphs draw the passage the reader is actually looking at: one
+    // unbroken slope between two boxes that really do touch at a corner.
     //
-    // With `diag` off, or for a non-diagonal exit, `bridge_from` stays the anchor and the geometry
-    // below is the plain corner/edge-to-bridge route.
+    // Every OTHER diagonal passage — a destination farther away, or off the true diagonal, or a
+    // route that has to bend — keeps its corner ANCHOR (that is what tells the reader the passage
+    // is a diagonal) and is drawn entirely with horizontal and vertical segments, exactly as the
+    // `diagonal_corners = false` style draws it. A chain that runs a few cells and then turns
+    // orthogonal is not a diagonal, it is a staircase pretending to be one; the user's words are
+    // "the partial diagonal lines look pretty ugly anyhow", and around Stone Barrow, West of
+    // House, South of House, Strange Passage and Living Room they were also so much extra ink in
+    // the tightest part of the map.
+    //
+    // With `diag` off, or for anything but a pure diagonal, `bridge_from` stays the anchor and the
+    // geometry below is the plain corner/edge-to-bridge route.
     let arrive_dir = conn.entry_corner;
-    // "Pure" means the WHOLE connector is one diagonal, corner to corner — so BOTH ends must be
-    // diagonal. Testing only the arrival was a bug: a cardinal-out/diagonal-in pair (E out, NW
-    // back) between adjacent rooms also collapses to three points, and it would then take the pure
-    // branch with an empty chain — suppressing the arrival diagonal and drawing nothing diagonal at
-    // all. (SQ-0314)
+    // "Pure" needs BOTH ends diagonal. Testing only the arrival was a bug: a cardinal-out/
+    // diagonal-in pair (E out, NW back) between adjacent rooms also collapses to three points, and
+    // it would then take the pure branch with an empty chain — suppressing the arrival diagonal and
+    // drawing nothing diagonal at all. (SQ-0314)
     let pure_diagonal = arr_target.is_some()
         && pix.len() == 3
         && arrive_dir.is_some()
         && mapper::direction::is_diagonal(conn.exit_dir);
     let mut diag_cells: Vec<((i32, i32), char)> = Vec::new();
-    // Mask bits that seam a chain to the orthogonal cell it hands off to. The chain attaches at a
-    // cell EDGE midpoint, but an orthogonal run is drawn through the cell's CENTRE — so the
-    // handoff cell must also carry a stroke reaching the edge the chain arrives at, or the two
-    // leave a visible gap. `chain_seam_bit` names that edge.
-    let mut seams: Vec<((i32, i32), u8)> = Vec::new();
     let mut bridge_from = dep_anchor;
-    if let Some(g) = diag {
-        if mapper::direction::is_diagonal(conn.exit_dir) {
-            let target = if pure_diagonal { arr_target.unwrap() } else { first_interior };
-            if let Some((chain, resume)) = diagonal_chain(dep_anchor, target, conn.exit_dir, g) {
-                diag_cells = chain;
-                bridge_from = resume;
-                if !pure_diagonal {
-                    seams.push((resume, chain_seam_bit(conn.exit_dir)));
-                }
-            }
+    if let (Some(g), true) = (diag, pure_diagonal) {
+        let target = arr_target.expect("a pure diagonal has an arrival corner");
+        if let Some((chain, resume)) = diagonal_chain(dep_anchor, target, conn.exit_dir, g) {
+            diag_cells = chain;
+            bridge_from = resume;
         }
     }
-
-    // The ARRIVAL end mirrors the departure: the router emits a diagonal step INTO the destination
-    // corner too (SQ-0314), so a non-adjacent diagonal reads as diagonal-out, run, diagonal-in
-    // rather than losing its diagonals to doglegs at both ends. Chain BACKWARDS from the corner
-    // toward the last interior point — same helper, same geometry, just aimed the other way.
-    let mut bridge_to = arr_target;
-    if let (Some(g), Some(d), Some(aa)) = (diag, arrive_dir, arr_target) {
-        if !pure_diagonal && !conn.merge {
-            let last_interior = pix[pix.len() - 2];
-            if let Some((chain, resume)) = diagonal_chain(aa, last_interior, d, g) {
-                diag_cells.extend(chain);
-                bridge_to = Some(resume);
-                seams.push((resume, chain_seam_bit(d)));
-            }
-        }
-    }
+    let bridge_to = arr_target;
 
     let mut inner_v: Vec<(i32, i32)> = Vec::with_capacity(pix.len() + 6);
     inner_v.push(bridge_from);
@@ -1657,12 +1626,6 @@ pub(crate) fn plot_connector(
         }
         if i + 1 < run.len() {
             mask |= dir_bit(c, run[i + 1]);
-        }
-        // Seam a chain's handoff cell to the chain (SQ-0314); see `chain_seam_bit`.
-        for &(at, bit) in &seams {
-            if at == c {
-                mask |= bit;
-            }
         }
         cells.push((c, mask));
     }
@@ -3194,6 +3157,59 @@ pub fn overlap_cells(
     out
 }
 
+/// Every cell a DIAGONAL GLYPH run of one connector shares with a DIFFERENT connector, on one
+/// layer, with the `diagonal_corners` glyph style on (SQ-1321).
+///
+/// [`overlap_cells`] cannot see these. It plots every connector with `None` on purpose — the
+/// orthogonal reading, so the tidy metric does not move when a user toggles a display setting —
+/// and a half-diagonal chain claims no lane and contributes no compass mask, so it is invisible
+/// to that reading twice over. This is the other half: plot with the glyphs on and ask whether a
+/// chain cell landed on someone else's line.
+///
+/// A chain cell that meets an orthogonal run is not automatically a defect — the renderer MERGES
+/// the two into a junction glyph (see `chain_glyph_bits`), which is a crossing and allowed, the
+/// same reading `overlap_stats` takes of two orthogonal runs. What is reported here is the shape
+/// no junction can express: two connectors both drawing a DIAGONAL through one cell, where the
+/// second glyph simply replaces the first.
+///
+/// One line per offending cell, naming both connectors, so a failure points at a place on the map.
+pub fn diagonal_glyph_overlaps(
+    graph: &mapper::graph::MapGraph,
+    layer: mapper::layer::LayerId,
+) -> Vec<String> {
+    let rm = mapper::render::render_layer(graph, layer);
+    let (cols, rows) = boxes_axes(&rm.plan, rm.bounds);
+    let plan = &rm.plan;
+    let glyphs = crate::symbols::SymbolSet::default().path;
+    let name = |id| {
+        graph.room(id).map(|r| r.label().to_string()).unwrap_or_else(|| format!("#{id:?}"))
+    };
+    let mut owners: std::collections::BTreeMap<(i32, i32), Vec<usize>> = Default::default();
+    for (ci, conn) in plan.connectors.iter().enumerate() {
+        let Some(plot) = plot_connector(conn, &cols, &rows, Some(&glyphs)) else { continue };
+        for (c, _) in &plot.diag_cells {
+            let e = owners.entry(*c).or_default();
+            if !e.contains(&ci) {
+                e.push(ci);
+            }
+        }
+    }
+    owners
+        .into_iter()
+        .filter(|(_, who)| who.len() > 1)
+        .map(|(cell, who)| {
+            let names: Vec<String> = who
+                .iter()
+                .map(|&ci| {
+                    let c = &plan.connectors[ci];
+                    format!("{}->{}({:?})", name(c.origin), name(c.dest), c.exit_dir)
+                })
+                .collect();
+            format!("cell {cell:?}: {}", names.join(" + "))
+        })
+        .collect()
+}
+
 /// How every connector on one layer makes its FINAL APPROACH into its destination (SQ-1320):
 /// `(side arrivals measured, jogs excused by the crowded-side rule, one line per jog that is not)`.
 ///
@@ -3751,6 +3767,12 @@ mod tests {
     /// two connectors at all. The diagonal is kept and the colliding run now belongs to a
     /// DIFFERENT pair — a column-aligned A/B link that lane-routes past #68 — which is the shape
     /// this merge exists for anyway: two unrelated connectors wanting one cell.
+    ///
+    /// The two rooms are now DIAGONALLY ADJACENT (SQ-1321): a chain is drawn only for an unbroken
+    /// corner-to-corner slope, so the three-columns-apart pair this used to place drew no chain at
+    /// all and the fixture stopped producing its collision. The A/B link is unchanged and still
+    /// threads #68's own column; it now crosses the one gap that slope occupies, which is the only
+    /// place a chain cell and a foreign run can still meet.
     #[test]
     fn a_chain_cell_on_another_connectors_run_merges_into_a_junction() {
         use mapper::graph::MapGraph;
@@ -3760,13 +3782,13 @@ mod tests {
         g.upsert_room(68, "West of House".into());
         g.upsert_room(143, "North of House".into());
         g.set_pos(68, (-2, 3));
-        g.set_pos(143, (1, 2));
+        g.set_pos(143, (-1, 2)); // diagonally adjacent: the NE/SW pair is one pure slope
         g.add_edge(68, Direction::NE, 143);
         g.add_edge(143, Direction::SW, 68); // reciprocal: collapses with the NE into one diagonal
         g.upsert_room(300, "A".into());
         g.upsert_room(301, "B".into());
         g.set_pos(300, (-2, -1));
-        g.set_pos(301, (-2, 4)); // same column as #68, which sits between them
+        g.set_pos(301, (-2, 5)); // same column as #68, which sits between them
         g.add_edge(300, Direction::S, 301);
         g.add_edge(301, Direction::N, 300);
 
@@ -4718,11 +4740,22 @@ mod tests {
                     "{dir:?} diagonal_corners={diag_on}: arrowhead must match the real departure anchor"
                 );
 
-                let expected_count = if mapper::direction::is_diagonal(dir) && diag_on {
-                    plot.diag_cells.first().map(|(c, _)| *c).expect("a diagonal chain draws at least one cell")
-                } else {
-                    plot.cells.get(1).map(|(c, _)| *c).expect("the connector steps at least one cell beyond its anchor")
-                };
+                // One expectation for both glyph styles, and for every direction (SQ-1321). The
+                // rooms here are three cells apart, so no diagonal between them is the unbroken
+                // corner-to-corner slope that earns diagonal glyphs: every route is drawn
+                // orthogonally, and its first step beyond the anchor is `plot.cells[1]` whichever
+                // style is on. Before SQ-1321 the diagonal-glyph style chained out of the corner
+                // even here, and this had to read the chain's first cell instead.
+                assert!(
+                    plot.diag_cells.is_empty(),
+                    "{dir:?} diagonal_corners={diag_on}: rooms three cells apart are not \
+                     diagonally adjacent, so nothing here is drawn with diagonal glyphs"
+                );
+                let expected_count = plot
+                    .cells
+                    .get(1)
+                    .map(|(c, _)| *c)
+                    .expect("the connector steps at least one cell beyond its anchor");
                 assert_eq!(
                     count, expected_count,
                     "{dir:?} diagonal_corners={diag_on}: count cell must match the connector's own first step"
@@ -5159,25 +5192,34 @@ mod tests {
         }
     }
 
+    /// **Which passages are drawn with diagonal glyphs, over all 64 direction pairs** — the whole
+    /// matrix in one case, so the answer can never be inferred from the adjacent NE example alone.
+    ///
+    /// SQ-0314 asked for a half-diagonal wherever EITHER end of a connector was diagonal, and three
+    /// separate faults each silenced a slice of that matrix — `direct_route` anchoring both ends
+    /// with `exit_point` and knowing nothing of corners; `pure_diagonal` testing only the arrival,
+    /// so a cardinal exit took the pure branch with an empty chain; a route wrapping around its
+    /// destination into a channel outside the rooms' bounds, where the diagonal's gutter floor was
+    /// dropped (see `span_over`).
+    ///
+    /// **SQ-1321 narrows the rule to what a diagonal glyph can honestly say.** A connector is drawn
+    /// with half-diagonals only when it is one unbroken corner-to-corner slope, which between two
+    /// adjacent rooms means exactly the four true-reciprocal diagonal pairs — NE↔SW, SW↔NE, NW↔SE,
+    /// SE↔NW, the shape of Zork I's `North of House ↔ Behind House`. Every other pairing here is
+    /// cardinally adjacent, or pairs a diagonal with something that is not its opposite, and the
+    /// route between them bends: it keeps its corner ANCHOR and is drawn orthogonally, exactly as
+    /// the `diagonal_corners = false` style draws it. The user's reading, on the partial chains
+    /// this replaces: "the partial diagonal lines look pretty ugly anyhow".
+    ///
+    /// The three faults above are still pinned, from the other side — each of them made one of
+    /// these four pairs lose its diagonal, so a regression to any of them fails here as an ABSENCE
+    /// rather than as an extra.
     #[test]
-    fn every_diagonal_direction_pair_actually_draws_a_diagonal() {
-        // SQ-0314: sweep all 64 reciprocal direction pairs between two adjacent rooms. If EITHER
-        // end of the connector is diagonal, the render must contain at least one half-diagonal —
-        // the corner is the whole point of the feature, and a diagonal that quietly degrades into
-        // an orthogonal dogleg is the bug this pins.
-        //
-        // Three separate faults each used to silence a slice of this matrix, and none of them were
-        // visible from the adjacent NE case alone:
-        //   * `direct_route` anchors both ends with `exit_point` and knows nothing of corners, so a
-        //     cardinal-out/diagonal-back pair (E out, NW back) never got a corner route at all.
-        //   * `pure_diagonal` only checked the ARRIVAL, so a cardinal exit took the pure branch
-        //     with an empty chain and suppressed the arrival diagonal too.
-        //   * a route that wraps around its destination uses a channel OUTSIDE the rooms' bounds,
-        //     where the diagonal's gutter floor was silently dropped (see `span_over`).
+    fn only_a_corner_to_corner_diagonal_pair_draws_diagonal_glyphs() {
         use Direction::*;
         let dirs = [N, S, E, W, NE, NW, SE, SW];
         let area = Rect::new(0, 0, 120, 40);
-        let mut missing = Vec::new();
+        let mut drawn = Vec::new();
         for d1 in dirs {
             for d2 in dirs {
                 let off = mapper::direction::grid_offset(d1).expect("compass dirs have an offset");
@@ -5195,18 +5237,93 @@ mod tests {
                 state.symbols.diagonal_corners = true;
                 let mut buf = Buffer::empty(area);
                 render_map(&rm, &state, area, &mut buf);
-                let drew = count_diag_glyphs(&buf, area) > 0;
-                let wants = mapper::direction::is_diagonal(d1) || mapper::direction::is_diagonal(d2);
-                if wants && !drew {
-                    missing.push(format!("{d1:?}<->{d2:?}"));
+                if count_diag_glyphs(&buf, area) > 0 {
+                    drawn.push(format!("{d1:?}<->{d2:?}"));
                 }
-                // And the converse: a pair with no diagonal end must not sprout one.
-                if !wants {
-                    assert!(!drew, "{d1:?}<->{d2:?} has no diagonal end but drew a half-diagonal");
-                }
+                // The corner ANCHOR is not what changed: a diagonal end still departs (or arrives
+                // on) the box corner however the line between is drawn, which is what tells the
+                // reader the passage is a diagonal at all. Assert it on the plan, where the glyph
+                // style cannot reach.
+                let corner_ends = rm.plan.connectors.iter().any(|c| {
+                    mapper::direction::is_diagonal(c.exit_dir) || c.entry_corner.is_some()
+                });
+                assert_eq!(
+                    corner_ends,
+                    mapper::direction::is_diagonal(d1) || mapper::direction::is_diagonal(d2),
+                    "{d1:?}<->{d2:?}: a diagonal end must keep its corner anchor",
+                );
             }
         }
-        assert!(missing.is_empty(), "these pairs lost their diagonal: {missing:?}");
+        assert_eq!(
+            drawn,
+            ["NE<->SW", "NW<->SE", "SE<->NW", "SW<->NE"],
+            "only a true-reciprocal diagonal between diagonally-adjacent rooms is drawn diagonally",
+        );
+    }
+
+    /// **A diagonal that is not corner-to-corner keeps its corner but loses its glyphs** (SQ-1321).
+    ///
+    /// Two rooms two cells apart on the true diagonal: the passage is still a diagonal, and still
+    /// departs from — and arrives on — the box CORNER, which is what tells the reader so. What it
+    /// no longer does is start off as a slope and turn orthogonal partway, which is the "partial
+    /// diagonal" the user asked to be rid of. With the glyph style on it draws exactly what the
+    /// style-off render draws, cell for cell.
+    #[test]
+    fn a_diagonal_two_cells_away_keeps_its_corner_and_drops_its_glyphs() {
+        let mut g = mapper::graph::MapGraph::new();
+        g.upsert_room(1, "R1".into());
+        g.upsert_room(2, "R2".into());
+        g.set_pos(1, (0, 2));
+        g.set_pos(2, (2, 0)); // two cells north-east: on the diagonal, but not adjacent
+        g.add_edge(1, Direction::NE, 2);
+        g.add_edge(2, Direction::SW, 1);
+        let rm = mapper::render::render(&g);
+        let (cols, rows) = boxes_axes(&rm.plan, rm.bounds);
+        let conn = rm.plan.connectors.iter().find(|c| c.origin == 1).expect("the pair routes");
+        let glyphs = crate::symbols::SymbolSet::default().path;
+        let on = plot_connector(conn, &cols, &rows, Some(&glyphs)).expect("plots with glyphs");
+        let off = plot_connector(conn, &cols, &rows, None).expect("plots without");
+
+        assert!(on.diag_cells.is_empty(), "no half-diagonal is drawn: {:?}", on.diag_cells);
+        assert_eq!(
+            on.dep_anchor,
+            corner_anchor(&cols, &rows, (0, 2), Direction::NE),
+            "it still departs from R1's north-east CORNER",
+        );
+        assert_eq!(
+            conn.entry_corner,
+            Some(Direction::SW),
+            "and still arrives on R2's south-west corner",
+        );
+        assert_eq!(
+            on.arr_anchor,
+            corner_anchor(&cols, &rows, (2, 0), Direction::SW),
+            "…on that corner's own cell",
+        );
+        assert_eq!(on.cells, off.cells, "the glyph style picks glyphs, never geometry");
+        assert_eq!(on.path, off.path, "…and the vector reading is the same polyline");
+
+        // The falsifier for the pair above: the ADJACENT version of the same passage does draw a
+        // slope, so this case is measuring the distance and not some unrelated suppression.
+        let mut adj = mapper::graph::MapGraph::new();
+        adj.upsert_room(1, "R1".into());
+        adj.upsert_room(2, "R2".into());
+        adj.set_pos(1, (0, 1));
+        adj.set_pos(2, (1, 0));
+        adj.add_edge(1, Direction::NE, 2);
+        adj.add_edge(2, Direction::SW, 1);
+        let rm2 = mapper::render::render(&adj);
+        let (c2, r2) = boxes_axes(&rm2.plan, rm2.bounds);
+        let conn2 = rm2.plan.connectors.iter().find(|c| c.origin == 1).expect("routes");
+        let on2 = plot_connector(conn2, &c2, &r2, Some(&glyphs)).expect("plots");
+        assert!(!on2.diag_cells.is_empty(), "diagonally ADJACENT, so it is drawn as a slope");
+        // And that slope is nothing but half-diagonals: a pure run, no orthogonal fill.
+        let halves = [glyphs.diag_ul, glyphs.diag_ur, glyphs.diag_ll, glyphs.diag_lr];
+        assert!(
+            on2.diag_cells.iter().all(|(_, ch)| halves.contains(ch)),
+            "every cell of a pure slope is a half-diagonal: {:?}",
+            on2.diag_cells,
+        );
     }
 
     #[test]
@@ -10269,3 +10386,6 @@ mod sq1320_arrival_slots {
         }
     }
 }
+
+
+
