@@ -5,24 +5,17 @@
 // Order is the whole trick: the audio socket is opened BEFORE ttyd's script
 // opens the terminal socket, because the relay creates the session's FIFO on
 // connect and the per-connection wrapper looks for it when lanthorn starts.
-// The session id travels to that wrapper in the URL, as `?arg=--web-audio=ID`,
-// which ttyd (--url-arg) appends to the command line; a page without the id
-// rewrites its own URL and reloads once.
+//
+// The session id is not this file's any more — docker/web-session.js owns it,
+// runs first, persists it in localStorage and puts it in the URL as
+// `?arg=--web-session=ID` (SQ-1323). Minting one here as well would have given
+// the audio socket a different name from the one the game session is filed
+// under. With no id there is no FIFO to name, and the page is simply silent.
 (function () {
-  var TAG = "--web-audio=";
-  var params = new URLSearchParams(window.location.search);
-  var have = params.getAll("arg").filter(function (a) { return a.indexOf(TAG) === 0; })[0];
-  if (!have) {
-    var alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789";
-    var id = "";
-    var rnd = new Uint8Array(16);
-    (window.crypto || window.msCrypto).getRandomValues(rnd);
-    for (var i = 0; i < 16; i++) { id += alphabet[rnd[i] % alphabet.length]; }
-    params.append("arg", TAG + id);
-    window.location.replace(window.location.pathname + "?" + params.toString() + window.location.hash);
+  var session = window.LANTHORN_SESSION_ID;
+  if (typeof session !== "string" || !/^[A-Za-z0-9_-]{8,64}$/.test(session)) {
     return;
   }
-  var session = have.slice(TAG.length);
   var port = window.LANTHORN_WEB_AUDIO_PORT || 7682;
   var scheme = window.location.protocol === "https:" ? "wss" : "ws";
   var ws;

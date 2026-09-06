@@ -9,6 +9,14 @@
 # original page, both before and after </head>, survives the splice
 # unchanged.
 #
+# Since SQ-1323 it also covers the browser-session machinery: that
+# docker/web-session.js is always injected and always ahead of the audio script
+# that reads the id it mints; that the id rule which turns that id into a FIFO,
+# a socket and a stamp rejects everything it should; that the reaper's
+# stale-session arithmetic holds against stamps written by hand; and that the
+# real serve dispatch actually passes `--url-arg` and `--auto-save on` on to
+# ttyd, which is the only place a correctly-resolved knob can still be dropped.
+#
 # Self-contained: builds a fixture directory instead of touching the image's
 # real /usr/local/share/lanthorn (LANTHORN_SHARE_DIR overrides it), so this
 # needs no Docker build. Run it with:
@@ -25,6 +33,7 @@ fixture_dir="$(mktemp -d)"
 trap 'rm -rf "$fixture_dir"' EXIT
 
 mkdir -p "$fixture_dir/fonts"
+cp "$repo_root/docker/web-session.js" "$fixture_dir/web-session.js"
 cp "$repo_root/docker/web-audio.js" "$fixture_dir/web-audio.js"
 cp "$repo_root/docker/web-touch.js" "$fixture_dir/web-touch.js"
 cp "$repo_root/docker/web-font.js" "$fixture_dir/web-font.js"
@@ -55,6 +64,19 @@ funcs="$fixture_dir/entrypoint_functions.sh"
 head -n "$marker_line" "$repo_root/docker/entrypoint.sh" > "$funcs"
 # shellcheck source=/dev/null
 . "$funcs"
+
+# Same trick for the per-connection wrapper's id/socket derivation (SQ-1323):
+# those are pure functions above their own marker, and the half below it runs
+# dtach.
+wrapper_marker="$(grep -n '^# --- end of function definitions; the wrapper.s own work begins below --- #$' "$repo_root/docker/serve-session.sh" | head -1 | cut -d: -f1)"
+if [ -z "$wrapper_marker" ]; then
+    echo "docker/test-entrypoint.sh: marker comment not found in serve-session.sh" >&2
+    exit 1
+fi
+wrapper_funcs="$fixture_dir/wrapper_functions.sh"
+head -n "$wrapper_marker" "$repo_root/docker/serve-session.sh" > "$wrapper_funcs"
+# shellcheck source=/dev/null
+. "$wrapper_funcs"
 # entrypoint.sh's own `set -eu` just carried into this shell via the source
 # above — drop the -e half so a `grep -q` that legitimately finds nothing
 # doesn't abort this test script before it gets to report that as a pass.
@@ -123,7 +145,7 @@ build_index "7682" "$fixture_font_family" "$fixture_font_size" > "$out2"
 grep -q 'window.LANTHORN_WEB_AUDIO_PORT=7682;' "$out2"
 check "audio: script carries the given port" "$?"
 
-grep -q 'TAG = "--web-audio="' "$out2"
+grep -q 'crates/audio-relay/src/lib.rs' "$out2"
 check "audio: web-audio.js content is actually inlined, not just referenced" "$?"
 
 n="$(grep -c '@font-face' "$out2")"
@@ -179,6 +201,247 @@ check "LANTHORN_WEB_TOUCH=off: font-ready script is still injected" "$?"
 
 grep -q "window.LANTHORN_WEB_FONT='$fixture_font_family';window.LANTHORN_WEB_FONT_SIZE=$fixture_font_size;" "$out3"
 check "LANTHORN_WEB_TOUCH=off: injected window.LANTHORN_WEB_FONT/SIZE still match" "$?"
+
+# --- the session id (SQ-1323) ---
+#
+# The page's session id is what makes a reconnect find the game it left, and it
+# names a file at three ends — the audio FIFO, the dtach socket, the reaper's
+# stamp. Everything below is the arithmetic that has to hold before any of that
+# is safe.
+
+grep -q 'lanthorn.session' "$out1"
+check "session: web-session.js is injected even when audio is off" "$?"
+
+grep -q 'lanthorn.session' "$out2"
+check "session: web-session.js is injected when audio is on too" "$?"
+
+# It has to run BEFORE web-audio.js: it owns the id that file reads, and it may
+# reload the page before the audio socket is ever opened.
+sess_line="$(grep -n 'lanthorn.session' "$out2" | head -1 | cut -d: -f1)"
+audio_line="$(grep -n 'LANTHORN_WEB_AUDIO_PORT=7682' "$out2" | head -1 | cut -d: -f1)"
+[ -n "$sess_line" ] && [ -n "$audio_line" ] && [ "$sess_line" -lt "$audio_line" ]
+check "session: the session script is spliced ahead of the audio script" "$?"
+
+sess_head_line="$(grep -n '</head>' "$out2" | head -1 | cut -d: -f1)"
+[ -n "$sess_line" ] && [ -n "$sess_head_line" ] && [ "$sess_line" -lt "$sess_head_line" ]
+check "session: the session script lands before </head>" "$?"
+
+grep -q 'lanthorn.session' "$out3"
+check "LANTHORN_WEB_TOUCH=off: the session script is still injected" "$?"
+
+# valid_session_id: the rule the relay applies, restated where a path is built.
+[ "$(valid_session_id 'abcdefgh12345678')" = "abcdefgh12345678" ]
+check "id: a plain 16-character id is accepted" "$?"
+
+[ "$(valid_session_id 'a-b_c-d_e')" = "a-b_c-d_e" ]
+check "id: dashes and underscores are accepted" "$?"
+
+[ -z "$(valid_session_id 'short')" ]
+check "id: fewer than 8 characters is rejected" "$?"
+
+[ -z "$(valid_session_id "$(printf 'x%.0s' 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20 21 22 23 24 25 26 27 28 29 30 31 32 33 34 35 36 37 38 39 40 41 42 43 44 45 46 47 48 49 50 51 52 53 54 55 56 57 58 59 60 61 62 63 64 65)")" ]
+check "id: more than 64 characters is rejected" "$?"
+
+[ -z "$(valid_session_id '../../etc/passwd')" ]
+check "id: a path traversal is rejected before it can name a socket" "$?"
+
+[ -z "$(valid_session_id 'has space here')" ]
+check "id: a space is rejected" "$?"
+
+[ -z "$(valid_session_id '')" ]
+check "id: the empty string is rejected" "$?"
+
+# session_socket: the derivation itself, which is what `dtach -A` is handed.
+[ "$(session_socket /tmp/lanthorn-sessions 'abcdefgh12345678')" = "/tmp/lanthorn-sessions/abcdefgh12345678.sock" ]
+check "socket: a good id becomes <dir>/<id>.sock" "$?"
+
+[ -z "$(session_socket /tmp/lanthorn-sessions '../../etc/passwd')" ]
+check "socket: a rejected id yields no path at all, so there is nothing to open" "$?"
+
+[ -z "$(session_socket /tmp/lanthorn-sessions '')" ]
+check "socket: no id yields no path" "$?"
+
+# --- the reaper's arithmetic (SQ-1323) ---
+#
+# `stale_sessions` is a pure function of a directory and a clock precisely so it
+# can be checked here, against stamps written by hand, with no dtach, no
+# container and no waiting six hours.
+
+sess_dir="$fixture_dir/sessions"
+mkdir -p "$sess_dir"
+now=1000000
+ttl=21600                                  # the shipped six hours
+
+printf '%s\n' "$now" > "$sess_dir/freshsession01.seen"
+printf '%s\n' "$((now - ttl + 60))" > "$sess_dir/nearlystale01.seen"
+printf '%s\n' "$((now - ttl))" > "$sess_dir/exactlyold01.seen"
+printf '%s\n' "$((now - 999999))" > "$sess_dir/ancientone01.seen"
+printf 'not-a-number\n' > "$sess_dir/corruptstamp1.seen"
+: > "$sess_dir/emptystamp01.seen"
+# Not a stamp at all: the socket and pid files live in the same directory and
+# must not be mistaken for sessions.
+: > "$sess_dir/freshsession01.pid"
+: > "$sess_dir/freshsession01.sock"
+
+stale="$(stale_sessions "$sess_dir" "$now" "$ttl" | sort | tr '\n' ' ')"
+expected="ancientone01 corruptstamp1 emptystamp01 exactlyold01 "
+[ "$stale" = "$expected" ]
+check "reaper: names exactly the stale sessions (got '$stale', want '$expected')" "$?"
+
+printf '%s' "$stale" | grep -q 'freshsession01'
+[ "$?" != "0" ]
+check "reaper: a session beating right now is never named" "$?"
+
+printf '%s' "$stale" | grep -q 'nearlystale01'
+[ "$?" != "0" ]
+check "reaper: a session one minute short of the TTL is left alone" "$?"
+
+printf '%s' "$stale" | grep -q 'exactlyold01'
+check "reaper: a session exactly at the TTL is reaped (the boundary is inclusive)" "$?"
+
+printf '%s' "$stale" | grep -q 'corruptstamp1'
+check "reaper: an unreadable stamp counts as long ago, not as forever-fresh" "$?"
+
+printf '%s' "$stale" | grep -q 'emptystamp01'
+check "reaper: an empty stamp counts as long ago too" "$?"
+
+n="$(stale_sessions "$sess_dir" "$now" "$ttl" | grep -c 'sock\|pid')"
+[ "$n" = "0" ]
+check "reaper: sockets and pid files in the same directory are not sessions (got $n)" "$?"
+
+# An empty directory must produce nothing rather than the unmatched glob itself
+# — `for s in dir/*.seen` iterates the literal pattern when nothing matches, and
+# a reaper that then tried to kill a session called `*` would be a very bad day.
+empty_dir="$fixture_dir/sessions-empty"
+mkdir -p "$empty_dir"
+n="$(stale_sessions "$empty_dir" "$now" "$ttl" | wc -l | tr -d ' ')"
+[ "$n" = "0" ]
+check "reaper: an empty session directory names nothing, not the unmatched glob (got $n)" "$?"
+
+n="$(stale_sessions "$fixture_dir/no-such-dir" "$now" "$ttl" | wc -l | tr -d ' ')"
+[ "$n" = "0" ]
+check "reaper: a session directory that does not exist names nothing (got $n)" "$?"
+
+# --- the serve dispatch itself (SQ-1323) ---
+#
+# Everything above tests functions in isolation; this runs the real dispatch
+# with stub `ttyd`, `lanthorn-audio-relay` and `dtach` on PATH and reads back
+# the exact ttyd command line it built. It is the only check that can catch a
+# knob that resolves correctly and is then never passed on — a missing
+# `--url-arg` (the page's session id never reaches the wrapper, so nothing
+# detaches and nothing has sound) or a missing `--auto-save on` (the container
+# stops saving per turn, which is SQ-1323 all over again) both look exactly like
+# a working image until somebody's connection drops.
+
+stub_dir="$fixture_dir/bin"
+mkdir -p "$stub_dir"
+
+cat > "$stub_dir/ttyd" <<'STUB'
+#!/bin/sh
+# The entrypoint execs this last; record the whole command line and stop.
+printf '%s\n' "$@" > "$TTYD_ARGS_OUT"
+STUB
+
+cat > "$stub_dir/lanthorn-audio-relay" <<'STUB'
+#!/bin/sh
+# `sink <path>` is the only form the entrypoint waits on: it polls for the FIFO
+# to appear, so making one is the whole of what this has to do.
+if [ "${1:-}" = "sink" ]; then
+    mkfifo "$2" 2>/dev/null || true
+fi
+STUB
+
+# dtach only has to EXIST for the wrapper to choose the detaching path; nothing
+# here ever runs a session.
+printf '#!/bin/sh\nexit 0\n' > "$stub_dir/dtach"
+chmod +x "$stub_dir/ttyd" "$stub_dir/lanthorn-audio-relay" "$stub_dir/dtach"
+
+TTYD_ARGS_OUT="$fixture_dir/ttyd_args.txt"
+export TTYD_ARGS_OUT
+
+# Run one dispatch with the current environment and leave its ttyd command line
+# in $TTYD_ARGS_OUT, one argument per line. The sweeper the entrypoint starts is
+# killed afterwards — `exec ttyd` orphans it, and a test must not leave a loop
+# running on the developer's machine.
+run_dispatch() {
+    _sess="$fixture_dir/sessions-live"
+    rm -rf "$_sess" "$fixture_dir/audio"
+    mkdir -p "$_sess" "$fixture_dir/audio"
+    rm -f "$TTYD_ARGS_OUT"
+    (
+        PATH="$stub_dir:$PATH"
+        export PATH
+        LANTHORN_AUDIO_DIR="$fixture_dir/audio"
+        export LANTHORN_AUDIO_DIR
+        LANTHORN_WEB_SESSION_DIR="$_sess"
+        export LANTHORN_WEB_SESSION_DIR
+        sh "$repo_root/docker/entrypoint.sh" serve /stories
+    ) >/dev/null 2>&1
+    if [ -f "$_sess/reaper.pid" ]; then
+        kill "$(cat "$_sess/reaper.pid")" 2>/dev/null || true
+    fi
+}
+
+# $1 = the argument to look for, exactly.
+ttyd_has() {
+    grep -qxF -- "$1" "$TTYD_ARGS_OUT"
+}
+
+run_dispatch
+
+ttyd_has "--url-arg"
+check "dispatch: ttyd is told to accept the page's session argument" "$?"
+
+ttyd_has "--auto-save"
+check "dispatch: the served game is launched with --auto-save" "$?"
+
+ttyd_has "on"
+check "dispatch: ...and the value is on" "$?"
+
+ttyd_has "/usr/local/bin/lanthorn-serve-session"
+check "dispatch: the game still runs through the per-connection wrapper" "$?"
+
+ttyd_has "--writable"
+check "dispatch: ttyd is still writable, or the game is unplayable" "$?"
+
+[ -f "$fixture_dir/sessions-live/reaper.pid" ]
+check "dispatch: the session sweeper is started and names itself" "$?"
+
+# --- LANTHORN_WEB_AUTOSAVE=off ---
+LANTHORN_WEB_AUTOSAVE=off
+export LANTHORN_WEB_AUTOSAVE
+run_dispatch
+unset LANTHORN_WEB_AUTOSAVE
+
+ttyd_has "--auto-save"
+[ "$?" != "0" ]
+check "LANTHORN_WEB_AUTOSAVE=off: the flag is not passed" "$?"
+
+ttyd_has "--url-arg"
+check "LANTHORN_WEB_AUTOSAVE=off: the session argument is still accepted" "$?"
+
+# --- LANTHORN_WEB_DETACH=off with audio off: nothing wants a URL argument ---
+LANTHORN_WEB_DETACH=off
+LANTHORN_WEB_AUDIO=off
+export LANTHORN_WEB_DETACH LANTHORN_WEB_AUDIO
+run_dispatch
+
+ttyd_has "--url-arg"
+[ "$?" != "0" ]
+check "detach+audio off: ttyd takes no arguments from a URL at all" "$?"
+
+[ -f "$fixture_dir/sessions-live/reaper.pid" ]
+[ "$?" != "0" ]
+check "LANTHORN_WEB_DETACH=off: no session sweeper is started" "$?"
+
+# --- LANTHORN_WEB_DETACH=on with audio off: the id is still needed ---
+LANTHORN_WEB_DETACH=on
+export LANTHORN_WEB_DETACH
+run_dispatch
+unset LANTHORN_WEB_DETACH LANTHORN_WEB_AUDIO
+
+ttyd_has "--url-arg"
+check "detach on, audio off: the session id is still passed through" "$?"
 
 if [ "$fail" != "0" ]; then
     echo "docker/test-entrypoint.sh: FAILED" >&2

@@ -12,13 +12,40 @@
 #   LANTHORN_WEB_AUDIO        on (default) or off: sound in the browser, via
 #                             lanthorn-audio-relay on its own port
 #   LANTHORN_WEB_AUDIO_PORT   that port (default 7682)
-#   LANTHORN_WEB_TOUCH        on (default) or off: convert a vertical touch
-#                             drag on the served page into wheel-scroll
-#                             reports lanthorn already understands, so the
-#                             transcript and map scroll on a tablet or phone
-#                             (xterm.js's own touch handling only scrolls its
-#                             own viewport, a no-op on lanthorn's alternate
-#                             screen)
+#   LANTHORN_WEB_TOUCH        on (default) or off: turn touch drags on the
+#                             served page into the mouse reports lanthorn
+#                             already understands, classified once per
+#                             contact — one finger vertical becomes
+#                             wheel-scroll (the transcript and map scroll on a
+#                             tablet), one finger HORIZONTAL or ANY two-finger
+#                             drag becomes a synthetic mouse drag (pan and
+#                             resize), and a tap is left alone so
+#                             tap-to-focus and the on-screen keyboard still
+#                             work. xterm.js's own touch handling only
+#                             scrolls its own viewport, a no-op on lanthorn's
+#                             alternate screen.
+#   LANTHORN_WEB_DETACH       on (default) or off: keep a game running when
+#                             its browser connection drops, so reconnecting
+#                             resumes it mid-sentence instead of starting
+#                             over. Needs the page's session id (see
+#                             docker/web-session.js) and `dtach`; without
+#                             either it quietly behaves as `off`. A
+#                             detachable session plays into the paced sink
+#                             rather than the browser — see the audio note in
+#                             docker/serve-session.sh for why the two cannot
+#                             both be had.
+#   LANTHORN_WEB_SESSION_TTL  seconds a detached game with nobody attached is
+#                             kept before it is ended (default 21600, six
+#                             hours). Ending it is a SIGTERM, so the app
+#                             writes its resume state on the way out and the
+#                             next visit picks up from there.
+#   LANTHORN_WEB_SESSION_DIR  where detached sessions keep their sockets and
+#                             stamps (default /tmp/lanthorn-sessions)
+#   LANTHORN_WEB_AUTOSAVE     on (default) or off: pass `--auto-save on` to
+#                             every served game, so the resume state is
+#                             written after each turn. A pty that can vanish
+#                             under a game wants this; a desktop lanthorn
+#                             still defaults to off.
 #   LANTHORN_WEB_IMAGES       sixel (default) or halfblocks: how pictures are
 #                             sent to the browser. ttyd's xterm.js can render
 #                             sixel, so covers and v6 art show as real images;
@@ -50,10 +77,66 @@ start_sink() {
     done
 }
 
+# Detached sessions whose last-seen stamp is older than `ttl` (SQ-1323).
+#
+# A pure function of the directory's contents and the clock — no processes, no
+# `abduco`-style listing to parse — which is what lets docker/test-entrypoint.sh
+# feed it fixture stamps and check the arithmetic. `docker/serve-session.sh`
+# writes `<id>.seen` every 30 seconds for as long as a browser is attached, so
+# "the stamp is old" is exactly "nobody has been here for a while", including
+# for a wrapper that died without running its trap.
+stale_sessions() {
+    _dir="$1"
+    _now="$2"
+    _ttl="$3"
+    for _s in "$_dir"/*.seen; do
+        [ -f "$_s" ] || continue
+        _id="${_s##*/}"
+        _id="${_id%.seen}"
+        _seen="$(cat "$_s" 2>/dev/null || printf '')"
+        # A stamp we cannot read as a number is a stamp from a broken write, and
+        # the safe reading of that is "long ago" — an unreapable session would
+        # hold a game and its memory for the life of the container.
+        case "$_seen" in
+            ''|*[!0-9]*) _seen=0 ;;
+        esac
+        if [ "$((_now - _seen))" -ge "$_ttl" ]; then
+            printf '%s\n' "$_id"
+        fi
+    done
+}
+
+# End the sessions `stale_sessions` names, and forget them.
+#
+# SIGTERM at the GAME (whose pid docker/session-run.sh recorded), not SIGKILL at
+# dtach: lanthorn answers a termination signal by restoring the terminal and
+# writing its resume state, so an expired session becomes a save the player can
+# come back to rather than an hour thrown away. dtach's master sees the child go
+# and unlinks its own socket (`atexit(unlink_socket)`).
+#
+# The socket check is the guard against a recycled pid: a session whose master is
+# already gone has no socket, and its stale pid file must not be allowed to name
+# somebody else's process.
+reap_stale_sessions() {
+    _dir="$1"
+    stale_sessions "$1" "$2" "$3" | while IFS= read -r _id; do
+        _pid="$(cat "$_dir/$_id.pid" 2>/dev/null || printf '')"
+        case "$_pid" in
+            ''|*[!0-9]*) _pid="" ;;
+        esac
+        if [ -n "$_pid" ] && [ -S "$_dir/$_id.sock" ]; then
+            kill -TERM "$_pid" 2>/dev/null || true
+        fi
+        rm -f "$_dir/$_id.seen" "$_dir/$_id.pid"
+    done
+}
+
 # ttyd's own page, with the served IosevkaTerm Nerd Font Mono faces always
 # inlined into <head> (so icons and the map's diagonals render regardless of
-# the visitor's own font), docker/web-audio.js added only when a browser
-# audio port is live ($1 — empty means audio is off), docker/web-touch.js
+# the visitor's own font), docker/web-session.js always added and always FIRST
+# (it owns the session id both of the others depend on, and it may reload the
+# page before either of them has run), docker/web-audio.js added only when a
+# browser audio port is live ($1 — empty means audio is off), docker/web-touch.js
 # added unless LANTHORN_WEB_TOUCH=off, and docker/web-font.js always added
 # ($2/$3 — the same fontFamily/fontSize string ttyd's own `-t` options get,
 # see the dispatch below). web-font.js re-measures xterm.js's character cell
@@ -95,16 +178,18 @@ build_index() {
     merged_tmp="$(mktemp)"
     awk -v f="$LANTHORN_SHARE_DIR/web-audio.js" -v port="$audio_port" \
         -v tf="$LANTHORN_SHARE_DIR/web-touch.js" -v touch_on="$touch_on" \
+        -v sf="$LANTHORN_SHARE_DIR/web-session.js" \
         -v ff="$LANTHORN_SHARE_DIR/web-font.js" -v tfont="$term_font_family" -v tsize="$term_font_size" '
         BEGIN {
             if (port != "") { while ((getline l < f) > 0) js = js l "\n" }
             if (touch_on != "") { while ((getline l < tf) > 0) tjs = tjs l "\n" }
+            while ((getline l < sf) > 0) sjs = sjs l "\n"
             while ((getline l < ff) > 0) fjs = fjs l "\n"
         }
         {
             i = index($0, "</head>")
             if (i && !done) {
-                head_insert = ""
+                head_insert = "\n<script>\n" sjs "</script>"
                 if (port != "") {
                     head_insert = head_insert "\n<script>window.LANTHORN_WEB_AUDIO_PORT=" port ";\n" js "</script>"
                 }
@@ -139,14 +224,53 @@ if [ "${1:-}" = "serve" ]; then
     # No story args after `serve` means the picker on the library mount.
     [ "$#" -gt 0 ] || set -- /stories
 
-    # Each connection runs through the session wrapper, which strips the
-    # page's audio argument and points ALSA at the session's FIFO. Pictures are
-    # sent as sixel unless configured otherwise: xterm.js renders it once the
-    # page addon is on (-t enableSixel below), and lanthorn's auto-detection
-    # cannot learn that from xterm.js.
+    # Each connection runs through the session wrapper, which strips the page's
+    # session argument, points ALSA at the right place, and — unless
+    # LANTHORN_WEB_DETACH=off — hands the connection to the dtach session named
+    # after that id. Pictures are sent as sixel unless configured otherwise:
+    # xterm.js renders it once the page addon is on (-t enableSixel below), and
+    # lanthorn's auto-detection cannot learn that from xterm.js.
     images="${LANTHORN_WEB_IMAGES:-sixel}"
-    set -- /usr/local/bin/lanthorn-serve-session lanthorn --image-protocol "$images" "$@"
+
+    # A pty here can disappear under a running game at any moment — a closed
+    # tab, a sleeping tablet, a roaming Wi-Fi hop — so the served build saves
+    # the resume state every turn, where a desktop lanthorn leaves that off
+    # (SQ-1323). It is a FLAG rather than a line written into /data's
+    # config.toml, so it can never silently become the player's own setting.
+    #
+    # Ahead of "$@" — the arguments the operator wrote after `serve` — for the
+    # same reason `--image-protocol` is: ours is the default, theirs is the
+    # instruction, and clap's last occurrence wins.
+    if [ "${LANTHORN_WEB_AUTOSAVE:-on}" != "off" ]; then
+        set -- lanthorn --image-protocol "$images" --auto-save on "$@"
+    else
+        set -- lanthorn --image-protocol "$images" "$@"
+    fi
+    set -- /usr/local/bin/lanthorn-serve-session "$@"
     start_sink
+
+    # Detached sessions: where they live, and the loop that ends the abandoned
+    # ones. Started before ttyd so it is already sweeping when the first
+    # connection arrives, and it survives the `exec` below as ttyd's own child.
+    detach_on=""
+    if [ "${LANTHORN_WEB_DETACH:-on}" != "off" ]; then
+        detach_on="1"
+        session_dir="${LANTHORN_WEB_SESSION_DIR:-/tmp/lanthorn-sessions}"
+        export LANTHORN_WEB_SESSION_DIR="$session_dir"
+        mkdir -p "$session_dir"
+        session_ttl="${LANTHORN_WEB_SESSION_TTL:-21600}"
+        (
+            while :; do
+                sleep "${LANTHORN_WEB_SESSION_SWEEP:-300}"
+                reap_stale_sessions "$session_dir" "$(date +%s)" "$session_ttl"
+            done
+        ) &
+        # Named so it can be found: `exec ttyd` below replaces this shell, which
+        # leaves the sweeper with no parent to ask about it. An operator who
+        # wants the sweeping stopped — and docker/test-entrypoint.sh, which
+        # starts a real dispatch and must not leave one behind — has this.
+        printf '%s\n' "$!" > "$session_dir/reaper.pid"
+    fi
 
     audio_port=""
     if [ "${LANTHORN_WEB_AUDIO:-on}" != "off" ]; then
@@ -166,13 +290,16 @@ if [ "${1:-}" = "serve" ]; then
     fi
     font_size="${LANTHORN_WEB_FONT_SIZE:-16}"
 
-    # build_index always inlines the served font; it adds the audio script
-    # only when audio_port is non-empty. --index serves the generated page
-    # either way; --url-arg (letting the page pass its session id back) is
-    # only needed when that page opens the audio socket.
+    # build_index always inlines the served font and the session script; it adds
+    # the audio script only when audio_port is non-empty. --index serves the
+    # generated page either way; --url-arg is what lets the page pass its
+    # session id back on the command line, and BOTH features need it — the audio
+    # socket to name its FIFO, and a detachable session to find the game it
+    # belongs to. Without either, ttyd need not accept arguments from a URL at
+    # all, and does not.
     build_index "$audio_port" "$font_family" "$font_size" > /tmp/lanthorn-index.html
     set -- --index /tmp/lanthorn-index.html "$@"
-    if [ -n "$audio_port" ]; then
+    if [ -n "$audio_port" ] || [ -n "$detach_on" ]; then
         set -- --url-arg "$@"
     fi
     if [ -n "${LANTHORN_WEB_CREDENTIAL:-}" ]; then
