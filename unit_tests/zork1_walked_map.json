@@ -1,0 +1,1157 @@
+{
+  "version": 1,
+  "rooms": [
+    {
+      "id": 5,
+      "name": "Up a Tree",
+      "label_override": null,
+      "notes": "",
+      "pos": [
+        1,
+        -1
+      ],
+      "layer": 0,
+      "loc_method": "via player object",
+      "tried": [
+        "Down"
+      ],
+      "probed": [
+        "Down"
+      ],
+      "random_exits": [],
+      "random_destinations": [],
+      "aliases": [],
+      "seq": 22
+    },
+    {
+      "id": 22,
+      "name": "Rocky Ledge",
+      "label_override": null,
+      "notes": "",
+      "pos": [
+        4,
+        5
+      ],
+      "layer": 0,
+      "loc_method": "via player object",
+      "tried": [
+        "Down",
+        "N",
+        "Up"
+      ],
+      "probed": [
+        "Up"
+      ],
+      "random_exits": [],
+      "random_destinations": [],
+      "aliases": [],
+      "seq": 23
+    },
+    {
+      "id": 23,
+      "name": "Canyon View",
+      "label_override": null,
+      "notes": "",
+      "pos": [
+        3,
+        4
+      ],
+      "layer": 0,
+      "loc_method": "via player object",
+      "tried": [
+        "W",
+        "Down",
+        "E",
+        "N",
+        "S"
+      ],
+      "probed": [
+        "W",
+        "S",
+        "N",
+        "SW",
+        "NW"
+      ],
+      "random_exits": [],
+      "random_destinations": [],
+      "aliases": [],
+      "seq": 9
+    },
+    {
+      "id": 28,
+      "name": "Kitchen",
+      "label_override": null,
+      "notes": "",
+      "pos": [
+        0,
+        3
+      ],
+      "layer": 0,
+      "loc_method": "via player object",
+      "tried": [
+        "W",
+        "Up",
+        "E"
+      ],
+      "probed": [
+        "E",
+        "Down",
+        "N",
+        "S",
+        "NE",
+        "SE",
+        "SW",
+        "NW"
+      ],
+      "random_exits": [],
+      "random_destinations": [],
+      "aliases": [],
+      "seq": 12
+    },
+    {
+      "id": 33,
+      "name": "Forest",
+      "label_override": null,
+      "notes": "",
+      "pos": [
+        2,
+        0
+      ],
+      "layer": 0,
+      "loc_method": "via player object",
+      "tried": [
+        "W",
+        "S",
+        "E"
+      ],
+      "probed": [
+        "S",
+        "N",
+        "SW",
+        "NW",
+        "NE",
+        "SE"
+      ],
+      "random_exits": [],
+      "random_destinations": [],
+      "aliases": [],
+      "seq": 6
+    },
+    {
+      "id": 34,
+      "name": "Cellar",
+      "label_override": null,
+      "notes": "",
+      "pos": [
+        0,
+        -1
+      ],
+      "layer": 1,
+      "loc_method": "via player object",
+      "tried": [
+        "N",
+        "E",
+        "W",
+        "S"
+      ],
+      "probed": [
+        "Up",
+        "E",
+        "W",
+        "NE",
+        "SE",
+        "SW",
+        "NW"
+      ],
+      "random_exits": [],
+      "random_destinations": [],
+      "aliases": [],
+      "seq": 14
+    },
+    {
+      "id": 68,
+      "name": "West of House",
+      "label_override": null,
+      "notes": "",
+      "pos": [
+        -2,
+        3
+      ],
+      "layer": 0,
+      "loc_method": "via player object",
+      "tried": [
+        "N",
+        "W"
+      ],
+      "probed": [
+        "E",
+        "S"
+      ],
+      "random_exits": [],
+      "random_destinations": [],
+      "aliases": [],
+      "seq": 0
+    },
+    {
+      "id": 78,
+      "name": "Canyon Bottom",
+      "label_override": null,
+      "notes": "",
+      "pos": [
+        4,
+        6
+      ],
+      "layer": 0,
+      "loc_method": "via player object",
+      "tried": [
+        "N",
+        "Up"
+      ],
+      "probed": [
+        "Up"
+      ],
+      "random_exits": [],
+      "random_destinations": [],
+      "aliases": [],
+      "seq": 24
+    },
+    {
+      "id": 79,
+      "name": "Living Room",
+      "label_override": null,
+      "notes": "",
+      "pos": [
+        -1,
+        3
+      ],
+      "layer": 0,
+      "loc_method": "via player object",
+      "tried": [
+        "Down"
+      ],
+      "probed": [
+        "E"
+      ],
+      "random_exits": [],
+      "random_destinations": [],
+      "aliases": [],
+      "seq": 13
+    },
+    {
+      "id": 89,
+      "name": "Behind House",
+      "label_override": null,
+      "notes": "",
+      "pos": [
+        1,
+        3
+      ],
+      "layer": 0,
+      "loc_method": "via player object",
+      "tried": [
+        "S",
+        "E",
+        "W",
+        "N"
+      ],
+      "probed": [
+        "W",
+        "N"
+      ],
+      "random_exits": [],
+      "random_destinations": [],
+      "aliases": [],
+      "seq": 10
+    },
+    {
+      "id": 91,
+      "name": "Forest",
+      "label_override": null,
+      "notes": "",
+      "pos": [
+        -3,
+        0
+      ],
+      "layer": 0,
+      "loc_method": "via player object",
+      "tried": [
+        "S",
+        "N",
+        "W",
+        "E"
+      ],
+      "probed": [
+        "E",
+        "N",
+        "NE",
+        "SE",
+        "SW",
+        "NW"
+      ],
+      "random_exits": [],
+      "random_destinations": [],
+      "aliases": [],
+      "seq": 3
+    },
+    {
+      "id": 109,
+      "name": "Maze",
+      "label_override": null,
+      "notes": "",
+      "pos": [
+        -1,
+        -2
+      ],
+      "layer": 2,
+      "loc_method": "via player object",
+      "tried": [
+        "E"
+      ],
+      "probed": [
+        "E"
+      ],
+      "random_exits": [],
+      "random_destinations": [],
+      "aliases": [],
+      "seq": 20
+    },
+    {
+      "id": 128,
+      "name": "Gallery",
+      "label_override": null,
+      "notes": "",
+      "pos": [
+        1,
+        0
+      ],
+      "layer": 1,
+      "loc_method": "via player object",
+      "tried": [
+        "N",
+        "E",
+        "W"
+      ],
+      "probed": [
+        "W"
+      ],
+      "random_exits": [],
+      "random_destinations": [],
+      "aliases": [],
+      "seq": 17
+    },
+    {
+      "id": 131,
+      "name": "End of Rainbow",
+      "label_override": null,
+      "notes": "",
+      "pos": [
+        5,
+        5
+      ],
+      "layer": 0,
+      "loc_method": "via player object",
+      "tried": [
+        "SW"
+      ],
+      "probed": [
+        "S",
+        "E",
+        "W",
+        "SE",
+        "SW"
+      ],
+      "random_exits": [],
+      "random_destinations": [],
+      "aliases": [],
+      "seq": 25
+    },
+    {
+      "id": 133,
+      "name": "The Troll Room",
+      "label_override": null,
+      "notes": "",
+      "pos": [
+        0,
+        -2
+      ],
+      "layer": 1,
+      "loc_method": "via player object",
+      "tried": [
+        "S",
+        "E",
+        "W"
+      ],
+      "probed": [
+        "S"
+      ],
+      "random_exits": [],
+      "random_destinations": [],
+      "aliases": [],
+      "seq": 15
+    },
+    {
+      "id": 134,
+      "name": "Clearing",
+      "label_override": null,
+      "notes": "",
+      "pos": [
+        2,
+        3
+      ],
+      "layer": 0,
+      "loc_method": "via player object",
+      "tried": [
+        "N",
+        "S",
+        "E",
+        "W"
+      ],
+      "probed": [
+        "S",
+        "W"
+      ],
+      "random_exits": [],
+      "random_destinations": [],
+      "aliases": [],
+      "seq": 5
+    },
+    {
+      "id": 136,
+      "name": "East-West Passage",
+      "label_override": null,
+      "notes": "",
+      "pos": [
+        1,
+        -2
+      ],
+      "layer": 1,
+      "loc_method": "via player object",
+      "tried": [
+        "W"
+      ],
+      "probed": [
+        "W"
+      ],
+      "random_exits": [],
+      "random_destinations": [],
+      "aliases": [],
+      "seq": 19
+    },
+    {
+      "id": 143,
+      "name": "North of House",
+      "label_override": null,
+      "notes": "",
+      "pos": [
+        0,
+        1
+      ],
+      "layer": 0,
+      "loc_method": "via player object",
+      "tried": [
+        "N",
+        "W",
+        "E",
+        "S"
+      ],
+      "probed": [
+        "S",
+        "W"
+      ],
+      "random_exits": [],
+      "random_destinations": [],
+      "aliases": [],
+      "seq": 1
+    },
+    {
+      "id": 167,
+      "name": "Clearing",
+      "label_override": null,
+      "notes": "",
+      "pos": [
+        0,
+        -1
+      ],
+      "layer": 0,
+      "loc_method": "via player object",
+      "tried": [
+        "W",
+        "E"
+      ],
+      "probed": [
+        "S"
+      ],
+      "random_exits": [],
+      "random_destinations": [],
+      "aliases": [],
+      "seq": 7
+    },
+    {
+      "id": 175,
+      "name": "Forest",
+      "label_override": null,
+      "notes": "",
+      "pos": [
+        3,
+        0
+      ],
+      "layer": 0,
+      "loc_method": "via player object",
+      "tried": [
+        "N",
+        "S"
+      ],
+      "probed": [
+        "W"
+      ],
+      "random_exits": [],
+      "random_destinations": [],
+      "aliases": [],
+      "seq": 8
+    },
+    {
+      "id": 195,
+      "name": "Attic",
+      "label_override": null,
+      "notes": "",
+      "pos": [
+        0,
+        2
+      ],
+      "layer": 0,
+      "loc_method": "via player object",
+      "tried": [
+        "Down"
+      ],
+      "probed": [
+        "Down"
+      ],
+      "random_exits": [],
+      "random_destinations": [],
+      "aliases": [],
+      "seq": 21
+    },
+    {
+      "id": 217,
+      "name": "South of House",
+      "label_override": null,
+      "notes": "",
+      "pos": [
+        0,
+        4
+      ],
+      "layer": 0,
+      "loc_method": "via player object",
+      "tried": [
+        "W",
+        "S"
+      ],
+      "probed": [
+        "N",
+        "W",
+        "E"
+      ],
+      "random_exits": [],
+      "random_destinations": [],
+      "aliases": [],
+      "seq": 11
+    },
+    {
+      "id": 229,
+      "name": "Studio",
+      "label_override": null,
+      "notes": "",
+      "pos": [
+        1,
+        -1
+      ],
+      "layer": 1,
+      "loc_method": "via player object",
+      "tried": [
+        "N",
+        "S",
+        "Up"
+      ],
+      "probed": [
+        "S"
+      ],
+      "random_exits": [],
+      "random_destinations": [],
+      "aliases": [],
+      "seq": 18
+    },
+    {
+      "id": 230,
+      "name": "Forest",
+      "label_override": null,
+      "notes": "",
+      "pos": [
+        2,
+        5
+      ],
+      "layer": 0,
+      "loc_method": "via player object",
+      "tried": [
+        "N",
+        "S",
+        "E",
+        "W",
+        "NW"
+      ],
+      "probed": [
+        "W",
+        "NE",
+        "SE",
+        "SW",
+        "NW"
+      ],
+      "random_exits": [],
+      "random_destinations": [],
+      "aliases": [],
+      "seq": 4
+    },
+    {
+      "id": 247,
+      "name": "Forest Path",
+      "label_override": null,
+      "notes": "",
+      "pos": [
+        0,
+        0
+      ],
+      "layer": 0,
+      "loc_method": "via player object",
+      "tried": [
+        "W",
+        "N",
+        "S",
+        "Up"
+      ],
+      "probed": [
+        "S",
+        "E"
+      ],
+      "random_exits": [],
+      "random_destinations": [],
+      "aliases": [],
+      "seq": 2
+    },
+    {
+      "id": 258,
+      "name": "East of Chasm",
+      "label_override": null,
+      "notes": "",
+      "pos": [
+        0,
+        0
+      ],
+      "layer": 1,
+      "loc_method": "via player object",
+      "tried": [
+        "E",
+        "W",
+        "N"
+      ],
+      "probed": [
+        "N"
+      ],
+      "random_exits": [],
+      "random_destinations": [],
+      "aliases": [],
+      "seq": 16
+    }
+  ],
+  "connections": [
+    {
+      "origin": 68,
+      "dir": "N",
+      "dest": 143,
+      "distorted": true,
+      "weight": "Hard"
+    },
+    {
+      "origin": 143,
+      "dir": "W",
+      "dest": 68,
+      "distorted": true,
+      "weight": "Hard"
+    },
+    {
+      "origin": 143,
+      "dir": "N",
+      "dest": 247,
+      "distorted": false,
+      "weight": "Hard"
+    },
+    {
+      "origin": 247,
+      "dir": "S",
+      "dest": 143,
+      "distorted": false,
+      "weight": "Hard"
+    },
+    {
+      "origin": 247,
+      "dir": "W",
+      "dest": 91,
+      "distorted": false,
+      "weight": "Hard"
+    },
+    {
+      "origin": 91,
+      "dir": "E",
+      "dest": 247,
+      "distorted": false,
+      "weight": "Hard"
+    },
+    {
+      "origin": 91,
+      "dir": "S",
+      "dest": 230,
+      "distorted": true,
+      "weight": "Hard"
+    },
+    {
+      "origin": 230,
+      "dir": "W",
+      "dest": 91,
+      "distorted": true,
+      "weight": "Hard"
+    },
+    {
+      "origin": 230,
+      "dir": "N",
+      "dest": 134,
+      "distorted": false,
+      "weight": "Hard"
+    },
+    {
+      "origin": 134,
+      "dir": "S",
+      "dest": 230,
+      "distorted": false,
+      "weight": "Hard"
+    },
+    {
+      "origin": 134,
+      "dir": "N",
+      "dest": 33,
+      "distorted": false,
+      "weight": "Hard"
+    },
+    {
+      "origin": 33,
+      "dir": "S",
+      "dest": 134,
+      "distorted": false,
+      "weight": "Hard"
+    },
+    {
+      "origin": 33,
+      "dir": "W",
+      "dest": 247,
+      "distorted": false,
+      "weight": "Hard"
+    },
+    {
+      "origin": 247,
+      "dir": "E",
+      "dest": 33,
+      "distorted": false,
+      "weight": "Hard"
+    },
+    {
+      "origin": 247,
+      "dir": "N",
+      "dest": 167,
+      "distorted": false,
+      "weight": "Hard"
+    },
+    {
+      "origin": 167,
+      "dir": "S",
+      "dest": 247,
+      "distorted": false,
+      "weight": "Hard"
+    },
+    {
+      "origin": 167,
+      "dir": "W",
+      "dest": 91,
+      "distorted": true,
+      "weight": "Hard"
+    },
+    {
+      "origin": 91,
+      "dir": "N",
+      "dest": 167,
+      "distorted": true,
+      "weight": "Hard"
+    },
+    {
+      "origin": 167,
+      "dir": "E",
+      "dest": 33,
+      "distorted": true,
+      "weight": "Hard"
+    },
+    {
+      "origin": 33,
+      "dir": "E",
+      "dest": 175,
+      "distorted": false,
+      "weight": "Hard"
+    },
+    {
+      "origin": 175,
+      "dir": "W",
+      "dest": 33,
+      "distorted": false,
+      "weight": "Hard"
+    },
+    {
+      "origin": 175,
+      "dir": "N",
+      "dest": 33,
+      "distorted": true,
+      "weight": "Hard"
+    },
+    {
+      "origin": 175,
+      "dir": "S",
+      "dest": 33,
+      "distorted": true,
+      "weight": "Hard"
+    },
+    {
+      "origin": 68,
+      "dir": "W",
+      "dest": 91,
+      "distorted": true,
+      "weight": "Hard"
+    },
+    {
+      "origin": 134,
+      "dir": "E",
+      "dest": 23,
+      "distorted": true,
+      "weight": "Hard"
+    },
+    {
+      "origin": 23,
+      "dir": "W",
+      "dest": 230,
+      "distorted": true,
+      "weight": "Hard"
+    },
+    {
+      "origin": 23,
+      "dir": "NW",
+      "dest": 134,
+      "distorted": false,
+      "weight": "Hard"
+    },
+    {
+      "origin": 143,
+      "dir": "E",
+      "dest": 89,
+      "distorted": true,
+      "weight": "Hard"
+    },
+    {
+      "origin": 89,
+      "dir": "N",
+      "dest": 143,
+      "distorted": true,
+      "weight": "Hard"
+    },
+    {
+      "origin": 89,
+      "dir": "S",
+      "dest": 217,
+      "distorted": true,
+      "weight": "Hard"
+    },
+    {
+      "origin": 217,
+      "dir": "W",
+      "dest": 68,
+      "distorted": true,
+      "weight": "Hard"
+    },
+    {
+      "origin": 217,
+      "dir": "E",
+      "dest": 89,
+      "distorted": true,
+      "weight": "Hard"
+    },
+    {
+      "origin": 68,
+      "dir": "S",
+      "dest": 217,
+      "distorted": true,
+      "weight": "Hard"
+    },
+    {
+      "origin": 89,
+      "dir": "E",
+      "dest": 134,
+      "distorted": false,
+      "weight": "Hard"
+    },
+    {
+      "origin": 134,
+      "dir": "W",
+      "dest": 89,
+      "distorted": false,
+      "weight": "Hard"
+    },
+    {
+      "origin": 89,
+      "dir": "W",
+      "dest": 28,
+      "distorted": false,
+      "weight": "Hard"
+    },
+    {
+      "origin": 28,
+      "dir": "E",
+      "dest": 89,
+      "distorted": false,
+      "weight": "Hard"
+    },
+    {
+      "origin": 28,
+      "dir": "W",
+      "dest": 79,
+      "distorted": false,
+      "weight": "Hard"
+    },
+    {
+      "origin": 79,
+      "dir": "E",
+      "dest": 28,
+      "distorted": false,
+      "weight": "Hard"
+    },
+    {
+      "origin": 79,
+      "dir": "Down",
+      "dest": 34,
+      "distorted": false,
+      "weight": "Hard"
+    },
+    {
+      "origin": 34,
+      "dir": "N",
+      "dest": 133,
+      "distorted": false,
+      "weight": "Hard"
+    },
+    {
+      "origin": 133,
+      "dir": "S",
+      "dest": 34,
+      "distorted": false,
+      "weight": "Hard"
+    },
+    {
+      "origin": 34,
+      "dir": "S",
+      "dest": 258,
+      "distorted": false,
+      "weight": "Hard"
+    },
+    {
+      "origin": 258,
+      "dir": "N",
+      "dest": 34,
+      "distorted": false,
+      "weight": "Hard"
+    },
+    {
+      "origin": 258,
+      "dir": "E",
+      "dest": 128,
+      "distorted": false,
+      "weight": "Hard"
+    },
+    {
+      "origin": 128,
+      "dir": "W",
+      "dest": 258,
+      "distorted": false,
+      "weight": "Hard"
+    },
+    {
+      "origin": 128,
+      "dir": "N",
+      "dest": 229,
+      "distorted": false,
+      "weight": "Hard"
+    },
+    {
+      "origin": 229,
+      "dir": "S",
+      "dest": 128,
+      "distorted": false,
+      "weight": "Hard"
+    },
+    {
+      "origin": 133,
+      "dir": "E",
+      "dest": 136,
+      "distorted": false,
+      "weight": "Hard"
+    },
+    {
+      "origin": 136,
+      "dir": "W",
+      "dest": 133,
+      "distorted": false,
+      "weight": "Hard"
+    },
+    {
+      "origin": 133,
+      "dir": "W",
+      "dest": 109,
+      "distorted": false,
+      "weight": "Hard"
+    },
+    {
+      "origin": 109,
+      "dir": "E",
+      "dest": 133,
+      "distorted": false,
+      "weight": "Hard"
+    },
+    {
+      "origin": 229,
+      "dir": "Up",
+      "dest": 28,
+      "distorted": false,
+      "weight": "Hard"
+    },
+    {
+      "origin": 28,
+      "dir": "Up",
+      "dest": 195,
+      "distorted": false,
+      "weight": "Hard"
+    },
+    {
+      "origin": 195,
+      "dir": "Down",
+      "dest": 28,
+      "distorted": false,
+      "weight": "Hard"
+    },
+    {
+      "origin": 247,
+      "dir": "Up",
+      "dest": 5,
+      "distorted": false,
+      "weight": "Hard"
+    },
+    {
+      "origin": 5,
+      "dir": "Down",
+      "dest": 247,
+      "distorted": false,
+      "weight": "Hard"
+    },
+    {
+      "origin": 217,
+      "dir": "S",
+      "dest": 230,
+      "distorted": true,
+      "weight": "Hard"
+    },
+    {
+      "origin": 230,
+      "dir": "NW",
+      "dest": 217,
+      "distorted": false,
+      "weight": "Hard"
+    },
+    {
+      "origin": 23,
+      "dir": "Down",
+      "dest": 22,
+      "distorted": false,
+      "weight": "Hard"
+    },
+    {
+      "origin": 22,
+      "dir": "Up",
+      "dest": 23,
+      "distorted": false,
+      "weight": "Hard"
+    },
+    {
+      "origin": 22,
+      "dir": "Down",
+      "dest": 78,
+      "distorted": false,
+      "weight": "Hard"
+    },
+    {
+      "origin": 78,
+      "dir": "Up",
+      "dest": 22,
+      "distorted": false,
+      "weight": "Hard"
+    },
+    {
+      "origin": 78,
+      "dir": "N",
+      "dest": 131,
+      "distorted": true,
+      "weight": "Hard"
+    },
+    {
+      "origin": 131,
+      "dir": "SW",
+      "dest": 78,
+      "distorted": false,
+      "weight": "Hard"
+    },
+    {
+      "origin": 23,
+      "dir": "E",
+      "dest": 22,
+      "distorted": true,
+      "weight": "Hard"
+    }
+  ],
+  "current": 230,
+  "layers": {
+    "0": {
+      "name": "Main",
+      "parent": null,
+      "maze": false,
+      "view": null
+    },
+    "1": {
+      "name": "Gallery",
+      "parent": 0,
+      "maze": false,
+      "view": null
+    },
+    "2": {
+      "name": "Maze",
+      "parent": 1,
+      "maze": true,
+      "view": null
+    }
+  },
+  "next_layer_id": 3,
+  "last_visited": {
+    "0": 230,
+    "1": 229
+  },
+  "next_seq": 26,
+  "seams": [],
+  "suggestions_disabled": false
+}

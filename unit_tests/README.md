@@ -114,9 +114,21 @@ is the negative control, and its ring of rooms around the white house is the
 closest a real overworld comes to a maze — 4 rooms, 1.00 asymmetry, held off by
 the room-count bar alone. Loaded by `crates/mapper/tests/zork1_maze.rs`.
 
-Both are committed as-is rather than regenerated, because the point of them is
+`zork1_walked_map.json` — a third snapshot of the same story, and the one the
+LAYOUT is argued from rather than the matrix view (SQ-1364). 26 rooms across
+three layers, 66 connections, 19 rooms above ground; the player had walked the
+white house, the forest and as far as the Troll Room. What it carries that no
+synthetic graph carries as economically is a three-way conflict over one cell:
+the `Forest` #230 is reciprocally south of the `Clearing` #134 (walked both
+ways), and `South of House` #217 makes two separate ONE-WAY claims on the same
+room — an `S` into it, answered by a `NW` back out. The solve used to split the
+difference and drop the Forest an extra row, leaving the reciprocated pair
+aligned but two cells apart and still flagged undistorted. Loaded by
+`crates/mapper/tests/sq1364_clearing_gap.rs`.
+
+All three are committed as-is rather than regenerated, because the point of them is
 that they are real: an actual snapshot of what a player knew mid-game, and no
-synthetic graph reproduces the particular mess. Loaded by
+synthetic graph reproduces the particular mess. The first two are also loaded by
 `crates/app/tests/matrix_view.rs` and `crates/mapper/tests/advent_maze.rs`.
 
 ## Authored fixtures
