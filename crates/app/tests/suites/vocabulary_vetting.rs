@@ -679,6 +679,25 @@ fn a_lighter_glulx_story_is_still_probed() {
             .expect("Coloratura boots");
     let mut probe = app::probe::ShadowProbe::default();
     probe.arm(recipe(&bytes));
+    // Coloratura opens on three keypress pages of prose before its first `>`, and since
+    // SQ-1349 the seam declines any story that is not waiting for a LINE — its question is a
+    // typed command and a story parked on `read_char` cannot be asked one. Drive to the prompt
+    // the way a player does before probing; without this the "reply" measured here was an
+    // intro page turning under the command's first letter, which is an answer about the
+    // story's key handling rather than about the command.
+    let mut live = live;
+    for _ in 0..8 {
+        if live.pending_input() == app::session::InputKind::Line {
+            break;
+        }
+        let _ = live.submit("");
+    }
+    assert_eq!(
+        live.pending_input(),
+        app::session::InputKind::Line,
+        "Coloratura must reach its own line prompt before the seam has any question for it"
+    );
+
     let t = std::time::Instant::now();
     let run = probe.run(&live, &["zqxwvj".to_string(), "take zqxwvj".to_string()]);
     eprintln!(

@@ -44,6 +44,24 @@
 //! `@save`. So "what would happen if I typed this?" is answerable by typing it
 //! somewhere the answer costs nothing.
 //!
+//! # And what it cannot be asked: a story that is not waiting for a line (SQ-1349)
+//!
+//! Every question this seam puts is a typed command, so the shadow can only
+//! answer while the story is waiting for one. [`ShadowProbe::snapshot_from`]
+//! therefore refuses whenever the live session's [`Engine::pending_input`] is
+//! anything but `Line` — a title splash, a `[MORE]`, a yes/no, a Glk timer
+//! event — alongside the unarmed and mid-save refusals it already made, and
+//! before paying for the snapshot (SQ-1177). A caller sees the same synchronous
+//! `None` from [`ShadowProbe::ask`] it already handles as "no probe was
+//! possible", rather than a worker round trip that comes back empty.
+//!
+//! This is not an edge case waiting to happen: `journey-r83-s890706.z6` is
+//! driven entirely from menus and never presents a line prompt at all, so there
+//! is no moment in that story at which the seam has a question to ask. Before
+//! this refusal the shadow typed `look` into Journey's menu, the `l` turned an
+//! intro page, and the page's text came back looking like a reply — an answer
+//! about the story's key handling dressed as an answer about the command.
+//!
 //! # How this story says no, discovered rather than assumed
 //!
 //! The interesting question is almost never *did the parser understand this* —
@@ -799,7 +817,8 @@ impl ShadowProbe {
     ///
     /// `None` for a suspended VM: snapshotting one would capture it
     /// mid-file-operation, and the shadow would resume into an I/O request
-    /// nobody can answer.
+    /// nobody can answer. `None` too when the story is not waiting for a LINE
+    /// (SQ-1349) — see [`snapshot_from`](Self::snapshot_from).
     pub fn snapshot(&self, live: &dyn Engine) -> Option<ProbeSnapshot> {
         self.snapshot_from(live, || std::sync::Arc::new(live.save_state()))
     }
@@ -818,7 +837,20 @@ impl ShadowProbe {
         live: &dyn Engine,
         save: impl FnOnce() -> std::sync::Arc<crate::engine::EngineSave>,
     ) -> Option<ProbeSnapshot> {
-        if !self.is_armed() || live.is_saveload_pending() {
+        // And `None` for a story that is not waiting for a LINE (SQ-1349). A
+        // probe's question is a typed command; a game parked on `read_char` —
+        // a title splash, a `[MORE]`, a yes/no, or Journey's menus, which are
+        // the whole of that game's interface — cannot be asked one, so there is
+        // no answer to wait for and nothing worth a snapshot. The suspension
+        // travels in the save, so the shadow would land on the same keypress
+        // prompt the live session is on, and whatever it did with the command
+        // there would be an accident of the story's key handling rather than a
+        // reply. `InputKind::Event` (a Glulx timer/mouse `glk_select` with no
+        // typed request) is refused for the same reason.
+        if !self.is_armed()
+            || live.is_saveload_pending()
+            || live.pending_input() != crate::session::InputKind::Line
+        {
             return None;
         }
         Some(ProbeSnapshot { save: save(), baseline: WorldPrint::of(live), room_identity: live.room_identity_state() })
@@ -1418,6 +1450,15 @@ mod tests {
     /// a refused `ask` has no business touching is `unreachable!`.
     struct CountingEngine {
         saves: std::cell::Cell<u32>,
+        /// What the story is waiting for. `Line` is the ordinary case; the
+        /// SQ-1349 case sets `Char`.
+        pending: crate::session::InputKind,
+    }
+
+    impl CountingEngine {
+        fn at_a_line_prompt() -> Self {
+            Self { saves: std::cell::Cell::new(0), pending: crate::session::InputKind::Line }
+        }
     }
 
     impl Engine for CountingEngine {
@@ -1434,7 +1475,7 @@ mod tests {
             false
         }
         fn pending_input(&self) -> crate::session::InputKind {
-            crate::session::InputKind::Line
+            self.pending
         }
         fn resume_save(&mut self, _wrote_ok: bool) -> crate::session::TurnResult {
             unreachable!("not exercised by this test")
@@ -1494,9 +1535,46 @@ mod tests {
         assert!(p.is_armed(), "armed, so busyness is the only refusal in play");
         p.inflight = Some(1); // a question is out with the worker
         assert!(p.is_busy());
-        let live = CountingEngine { saves: std::cell::Cell::new(0) };
+        let live = CountingEngine::at_a_line_prompt();
         assert_eq!(p.ask(&live, &["north".to_string()]), None, "busy refuses");
         assert_eq!(live.saves.get(), 0, "and the refusal must cost no save_state");
+    }
+
+    /// SQ-1349: a story that is not waiting for a LINE cannot be asked one, so
+    /// the seam refuses — and refuses where the other guards do, before the
+    /// snapshot is paid for.
+    ///
+    /// `journey-r83-s890706.z6` is the specimen: menu-driven from the splash
+    /// on, `pending_input` never anything but `Char`. Without this the shadow
+    /// typed `look` at its menu, the routing (SQ-1270) delivered `l`, an intro
+    /// page turned, and the page came back as though it were a reply to the
+    /// command. Falsify by deleting the `pending_input` clause in
+    /// `snapshot_from`: the snapshot is taken and `ask` answers `Some`.
+    #[test]
+    fn a_story_waiting_on_a_keypress_is_asked_nothing_and_costs_no_snapshot() {
+        let mut p = ShadowProbe::default();
+        p.arm(ShadowRecipe::default());
+        assert!(
+            p.is_armed() && !p.is_busy(),
+            "armed and idle, so the prompt kind is the only refusal in play"
+        );
+
+        let mut live = CountingEngine::at_a_line_prompt();
+        live.pending = crate::session::InputKind::Char;
+        assert_eq!(p.ask(&live, &["north".to_string()]), None, "a keypress prompt refuses");
+        assert_eq!(live.saves.get(), 0, "and the refusal must cost no save_state");
+
+        // A Glulx timer/mouse event is no more answerable than a keypress.
+        live.pending = crate::session::InputKind::Event;
+        assert_eq!(p.ask(&live, &["north".to_string()]), None, "a bare Glk event refuses too");
+        assert_eq!(live.saves.get(), 0);
+
+        // Non-vacuity: the same probe, same engine, at a line prompt, gets past the guard and
+        // pays for its snapshot. (`snapshot` rather than `ask`, so no job goes to a worker
+        // holding a default recipe with no story in it.)
+        live.pending = crate::session::InputKind::Line;
+        assert!(p.snapshot(&live).is_some(), "a line prompt is snapshotted");
+        assert_eq!(live.saves.get(), 1, "and that one paid for exactly one save_state");
     }
 
     /// The guards hold on the shared-save seam too: an unarmed probe refuses
@@ -1504,7 +1582,7 @@ mod tests {
     #[test]
     fn snapshot_from_refuses_before_materialising_the_save() {
         let p = ShadowProbe::default();
-        let live = CountingEngine { saves: std::cell::Cell::new(0) };
+        let live = CountingEngine::at_a_line_prompt();
         let took = std::cell::Cell::new(false);
         let snap = p.snapshot_from(&live, || {
             took.set(true);

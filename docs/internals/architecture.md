@@ -503,6 +503,19 @@ Two things about it are load-bearing and easy to get wrong:
   wrong room, so controls and question run in the same `run`, off the same
   snapshot.
 
+- **It only asks a story that is waiting for a LINE** (SQ-1349). Every question
+  the seam puts is a typed command, so `ShadowProbe::snapshot_from` refuses
+  outright — synchronously, before it pays for a snapshot — whenever the live
+  session's `Engine::pending_input` is anything but `Line`: a title splash, a
+  `[MORE]`, a yes/no, a Glk timer event. A caller sees the `None` from
+  `ask`/`snapshot` it already handles as "no probe was possible". This is not a
+  hypothetical: `journey-r83-s890706.z6` is driven entirely from menus and never
+  presents a line prompt at all. Asked one anyway, the shadow typed `look` at
+  the menu, the routing (SQ-1270) delivered the `l`, an intro page turned, and
+  the page's prose came back looking like a reply — an answer about the story's
+  key handling wearing the clothes of an answer about the command. A harness
+  that wants a real answer drives the story to its own prompt first
+  (`vocabulary_vetting`'s `gated_z5` and its Coloratura case are the pattern).
 - **It runs on a worker thread, and a late answer is dropped** (SQ-1124). Only
   the story interpreter belongs on the main thread, so `ShadowProbe::ask` hands
   the worker a snapshot and returns; the event loop collects the answer with
