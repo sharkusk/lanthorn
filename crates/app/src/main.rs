@@ -2542,6 +2542,20 @@ fn run_event_loop(boot: startup::BootResult, launched_from_library: bool) -> Run
             state.graphics_render.borrow_mut().invalidate_cell_geometry();
         }
 
+        // SQ-1340: a resize is also the only hook a dtach reattach gives us
+        // (`docker/serve-session.sh` runs the web image under `dtach -A ... -r
+        // winch`, and `-r winch` delivers SIGWINCH — a fresh `Event::Resize` —
+        // on every attach). The browser tab that just reattached has a brand
+        // new xterm.js instance that never saw the launch-time
+        // `EnableBracketedPaste`/`EnableMouseCapture` escapes, so touch
+        // scrolling, map dragging and divider dragging are dead until
+        // something re-sends them. Same shared fn as the launch site
+        // (`startup::reassert_terminal_modes`), so the two cannot drift; on an
+        // ordinary local resize this is a harmless idempotent re-send.
+        if matches!(&event, Event::Resize(_, _)) {
+            let _ = startup::reassert_terminal_modes(&mut stdout(), state.config.mouse);
+        }
+
         // If more input is already queued behind this event, defer the next
         // redraw so the whole burst collapses into a single frame. Cleared at
         // the draw gate once the queue empties (poll(ZERO) == false).

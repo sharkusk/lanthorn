@@ -47,7 +47,9 @@ It doesn't cost you the game. Close the tab, walk out of Wi-Fi range, let a
 tablet fall asleep for an hour — come back to the same address and you are
 back in the same room, mid-sentence, with your transcript and your map exactly
 where you left them. Your browser quietly remembers which game is yours, so
-there is nothing to click and nothing to restore.
+there is nothing to click and nothing to restore — and mouse clicks, map
+dragging and touch scrolling all keep working on the reattached tab too,
+with nothing for you to re-enable.
 
 That holds for six hours of being away. After that the game is put down for
 you — but not lost: lanthorn saves after every single turn here, so the next

@@ -856,6 +856,34 @@ pub(crate) fn host_story_screen(state: &AppState) -> Option<(u16, u16)> {
     app::render::screen::story_screen_dims(pane_layout.story, state)
 }
 
+/// Re-issue bracketed paste and (when `mouse` is on) mouse capture.
+///
+/// Written once here so the launch path below and every `Event::Resize` arm
+/// call the SAME two `execute!`s instead of hand-copying them — they cannot
+/// drift apart, and this is also why both the launch site's original modes
+/// and a resize's re-assertion trace to one function.
+///
+/// The resize call exists for the web image (SQ-1340): `docker/serve-session.sh`
+/// runs the game inside `dtach -A ... -r winch`, and a browser tab reattaching
+/// to that session gets a brand-new xterm.js instance that never saw the
+/// escapes this function's launch-site caller sent at boot — mouse capture and
+/// bracketed paste are per-terminal state, not per-session state, and dtach
+/// only reconnects the byte stream, not the terminal mode. `-r winch` delivers
+/// SIGWINCH on every attach, which crossterm surfaces as `Event::Resize`, so a
+/// resize is the only hook a reattach gives us. Before this fix, the picker
+/// happened to be the sole thing re-enabling mouse capture (it does so
+/// unconditionally on open), which is why a reattached iPad regained mouse
+/// input only after opening the story list, and never regained bracketed
+/// paste at all. Both sequences are idempotent on every terminal we support,
+/// so calling this on a plain local resize (no reattach involved) is harmless.
+pub(crate) fn reassert_terminal_modes<W: std::io::Write>(w: &mut W, mouse: bool) -> std::io::Result<()> {
+    execute!(w, EnableBracketedPaste)?;
+    if mouse {
+        execute!(w, EnableMouseCapture)?;
+    }
+    Ok(())
+}
+
 /// Build the per-story engine + mapper + UI state + terminal for `story_path`,
 /// using the one-time [`LaunchCtx`]. This is the per-story half of the old
 /// `boot()` (load the story, build the engine, load the mapper/archive, seed the
@@ -2139,7 +2167,11 @@ pub(crate) fn boot_story(
         eprintln!("lanthorn: cannot enter alternate screen: {}", e);
         std::process::exit(1);
     }
-    // Bracketed paste (SQ-0653). Without it the terminal replays a paste as raw
+    // Bracketed paste (SQ-0653) and mouse capture (opt-in via config `mouse`),
+    // via the shared [`reassert_terminal_modes`] so the launch site and every
+    // `Event::Resize` re-assertion (SQ-1340) send the same bytes.
+    //
+    // Bracketed paste: without it the terminal replays a paste as raw
     // keystrokes, and the app cannot tell them from typing: a Tab fired
     // autocomplete, a leading '/' opened the command palette, and every newline
     // SUBMITTED a line to the game — so pasting a walkthrough played it. With the
@@ -2147,16 +2179,13 @@ pub(crate) fn boot_story(
     // field as literal text. Best-effort: a terminal that ignores the sequence
     // simply never sends `Event::Paste`, which is exactly today's behavior.
     // `restore_terminal()` always issues DisableBracketedPaste.
-    let _ = execute!(stdout(), EnableBracketedPaste);
-
-    // Mouse capture is opt-in (config `mouse = true`). Capture puts the terminal
-    // in any-motion reporting mode, so every mouse movement wakes the event loop
-    // and forces a full redraw; leaving it off keeps idle/scroll responsive and
-    // preserves the terminal's native text selection. restore_terminal() always
-    // issues DisableMouseCapture, which is a harmless no-op when it was never on.
-    if state.config.mouse {
-        let _ = execute!(stdout(), EnableMouseCapture);
-    }
+    //
+    // Mouse capture puts the terminal in any-motion reporting mode, so every
+    // mouse movement wakes the event loop and forces a full redraw; leaving it
+    // off keeps idle/scroll responsive and preserves the terminal's native text
+    // selection. restore_terminal() always issues DisableMouseCapture, which is
+    // a harmless no-op when it was never on.
+    let _ = reassert_terminal_modes(&mut stdout(), state.config.mouse);
 
     // The fork-and-probe seam (SQ-1121). Armed with the story's own bytes and the
     // boot facts that change how it runs, so the shadow a vetted suggestion is
@@ -2278,8 +2307,26 @@ fn prompt_yes_no(question: &str) -> bool {
 
 #[cfg(all(test, feature = "t-session"))]
 mod tests {
-    use super::should_ask_font_check;
+    use super::{reassert_terminal_modes, should_ask_font_check};
     use app::config::OnOff;
+
+    /// SQ-1340: a resize re-asserts bracketed paste always, and mouse capture
+    /// only when the config asked for it — the same rule the launch site
+    /// applies, since both call the one function.
+    #[test]
+    fn reassert_terminal_modes_gates_mouse_on_config() {
+        let mut with_mouse = Vec::new();
+        reassert_terminal_modes(&mut with_mouse, true).unwrap();
+        let with_mouse = String::from_utf8(with_mouse).unwrap();
+        assert!(with_mouse.contains("\x1b[?2004h"), "bracketed paste: {with_mouse:?}");
+        assert!(with_mouse.contains("\x1b[?1000h"), "mouse capture: {with_mouse:?}");
+
+        let mut without_mouse = Vec::new();
+        reassert_terminal_modes(&mut without_mouse, false).unwrap();
+        let without_mouse = String::from_utf8(without_mouse).unwrap();
+        assert!(without_mouse.contains("\x1b[?2004h"), "bracketed paste: {without_mouse:?}");
+        assert!(!without_mouse.contains("\x1b[?1000h"), "mouse capture: {without_mouse:?}");
+    }
 
     /// SQ-1112: the reported bug, and the guard that made it hard to fix.
     ///

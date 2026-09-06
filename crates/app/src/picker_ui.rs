@@ -2349,6 +2349,13 @@ pub(crate) fn run_story_picker(
                 if cover_picker.as_mut().is_some_and(refresh_cell_size) {
                     cover.invalidate_cell_geometry();
                 }
+                // SQ-1340: a dtach reattach (the web image) hands this loop a
+                // resize from a browser tab whose fresh xterm.js never saw this
+                // loop's own mouse-capture enable a few lines up (or the
+                // launch-time bracketed paste) — re-send both via the same
+                // shared fn the launch site and the game loop use, so the
+                // picker cannot drift from either.
+                let _ = crate::startup::reassert_terminal_modes(&mut stdout(), cfg.mouse);
             }
             Ok(_) => {}
             Err(_) => break None,
