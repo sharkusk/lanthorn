@@ -55,6 +55,13 @@ Absolute URLs or no link.
   forest you actually reach and "back here" — the map mistook a crossing for a
   step that led nowhere, because both ends print the same heading.
 
+- **A conversation is no longer a room on the map.** In *Never Gives Up Her
+  Dead*, asking for your `TOPICS` put "Things to say to Gareth" on the map as a
+  place — and the map stayed inside it for the rest of the call, so the next
+  door you walked through led out of the conversation instead of out of the
+  room. A game that names the room on its status line is now believed over a
+  bold heading that says otherwise.
+
 ---
 
 ## v0.5.0 — 2026-09-05
