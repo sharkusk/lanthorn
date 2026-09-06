@@ -456,6 +456,91 @@ fn counterfeit_monkey_overlaps_are_only_the_crossing_diagonals() {
     assert_eq!(isolated_touches, 0, "no point-touches left on this map");
 }
 
+/// Anchorhead: a Glulx map whose "Out to Sea" area is a 3x3 grid of nine rooms with every
+/// diagonal routed between them — four X's, not Counterfeit Monkey's two. Its plan is clean like
+/// the other two fixtures; its rendered cells keep the same one residual shape as Counterfeit
+/// Monkey (see that test's own doc comment for why two doglegs sharing a stub is unavoidable at
+/// the CELL level — the fix for the unreadable PICTURE is SQ-1365's SVG-only straight diagonal,
+/// which does not touch this plan/cell-level metric at all).
+#[test]
+fn anchorhead_overlaps_are_only_the_crossing_diagonals() {
+    let Some(path) = story("Anchorhead.gblorb") else {
+        eprintln!("SKIP anchorhead_overlaps_are_only_the_crossing_diagonals: fixture absent");
+        return;
+    };
+    let map = app::mapgen::generate(&path, true).expect("mapgen");
+    let mut failures = Vec::new();
+    for (layer, overlaps) in layer_reports(&map.graph) {
+        for o in overlaps {
+            failures.push(format!("[{layer}] plan: {o}"));
+        }
+    }
+    let mut layers: Vec<mapper::layer::LayerId> = map
+        .graph
+        .layers()
+        .keys()
+        .copied()
+        .filter(|&l| !map.graph.rooms_in_layer(l).is_empty())
+        .collect();
+    layers.sort_unstable();
+    let mut crossing_diagonal_cells = 0usize;
+    let mut isolated_touches = 0usize;
+    for l in layers {
+        let plan = mapper::render::render_layer(&map.graph, l).plan;
+        let name = |id| {
+            map.graph.room(id).map(|r| r.label().to_string()).unwrap_or_else(|| format!("#{id:?}"))
+        };
+        let shared = app::render::map::overlap_cells(&map.graph, l);
+        for (cell, who) in &shared {
+            let (cell, who) = (*cell, who.clone());
+            // A cell the same two connectors share with NO shared neighbour is a TOUCH: two
+            // polylines meeting at a point and parting again, which is the crossing the user's
+            // rule allows, not the running-alongside it forbids.
+            let adjacent = |d: (i32, i32)| {
+                let n = (cell.0 + d.0, cell.1 + d.1);
+                shared.iter().any(|(c, w)| *c == n && *w == who)
+            };
+            if !adjacent((1, 0)) && !adjacent((-1, 0)) && !adjacent((0, 1)) && !adjacent((0, -1)) {
+                isolated_touches += 1;
+                continue;
+            }
+            // The exempt shape: exactly two connectors, both leaving on a diagonal, and their
+            // doubled-coord polylines pass through a common gap-lattice corner — i.e. they cross.
+            let diagonal_pair = who.len() == 2
+                && who.iter().all(|&ci| mapper::direction::is_diagonal(plan.connectors[ci].exit_dir));
+            let shares_a_corner = diagonal_pair && {
+                let pts = |ci: usize| plan.connectors[ci].points.clone();
+                let (a, b) = (pts(who[0]), pts(who[1]));
+                a.iter().any(|p| p.0 % 2 != 0 && p.1 % 2 != 0 && b.contains(p))
+            };
+            if diagonal_pair && shares_a_corner {
+                crossing_diagonal_cells += 1;
+                continue;
+            }
+            let names: Vec<String> = who
+                .iter()
+                .map(|&ci| {
+                    let c = &plan.connectors[ci];
+                    format!("{}->{}({:?})", name(c.origin), name(c.dest), c.exit_dir)
+                })
+                .collect();
+            failures.push(format!(
+                "[{}] cell {cell:?}: {}",
+                map.graph.layer_name(l),
+                names.join(" + ")
+            ));
+        }
+    }
+    assert!(failures.is_empty(), "{} overlap(s):\n{}", failures.len(), failures.join("\n"));
+    // Non-vacuity: four crossings in the "Out to Sea" grid, three cells apiece — see the doc
+    // comment above for why each crossing costs three shared cells at the cell level.
+    assert_eq!(
+        crossing_diagonal_cells, 12,
+        "the crossing-diagonal residual has changed size — re-read the doc comment above"
+    );
+    assert_eq!(isolated_touches, 0, "no point-touches left on this map");
+}
+
 // ---------------------------------------------------------------------------
 // CI-runnable: tracked fixtures and synthetic shapes
 // ---------------------------------------------------------------------------

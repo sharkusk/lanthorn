@@ -362,6 +362,34 @@ fn outward(side: Side) -> (f64, f64) {
     }
 }
 
+/// The box CORNER `dir` names, in SVG pixels — `rect`'s own top-right/top-left/bottom-right/
+/// bottom-left. Mirrors `render::map::corner_anchor`'s cell-space corner exactly (NE = top-right,
+/// NW = top-left, SE = bottom-right, SW = bottom-left) so a pure diagonal's SVG endpoint and the
+/// terminal's own anchor cell name the same physical corner (SQ-1365).
+fn px_corner(rect: (f64, f64, f64, f64), dir: Direction) -> (f64, f64) {
+    let (x, y, w, h) = rect;
+    match dir {
+        Direction::NE => (x + w, y),
+        Direction::NW => (x, y),
+        Direction::SE => (x + w, y + h),
+        Direction::SW => (x, y + h),
+        _ => (x + w / 2.0, y), // unreachable when guarded by is_diagonal
+    }
+}
+
+/// `outward`'s counterpart for the four intercardinal directions: the outward unit vector at a
+/// box corner, pointing away from the box along the slope (SQ-1365).
+fn outward_diag(dir: Direction) -> (f64, f64) {
+    const D: f64 = std::f64::consts::FRAC_1_SQRT_2;
+    match dir {
+        Direction::NE => (D, -D),
+        Direction::NW => (-D, -D),
+        Direction::SE => (D, D),
+        Direction::SW => (-D, D),
+        _ => (0.0, -1.0), // unreachable when guarded by is_diagonal
+    }
+}
+
 /// Which axis, and which channel `idx` on it (the sense `PosTable::channel_span(idx)` uses: the
 /// channel following row/column `idx`, between it and `idx + 1`), a portal marker leaving `room`'s
 /// box by `side` reaches into.
@@ -863,35 +891,65 @@ fn render_svg_body(
     // router laid out either way — the toggle only ever picked which GLYPHS the intermediate
     // run used. A diagonal therefore arrives here as the dogleg it is, and says so with a
     // direction tag at its departure anchor.
+    //
+    // EXCEPT a PURE diagonal (SQ-1365): the whole connector is one corner-to-corner run — centre
+    // → shared corner → centre, `conn.points.len() == 3` — the diagonally-adjacent case the
+    // router collapses (see `route::mod`'s own comment on `build_points_orient`, "a reciprocal
+    // DIAGONAL pair on diagonally-adjacent rooms lands here too"). That is exactly the terminal's
+    // own `pure_diagonal` test (`render::map::plot_connector`, guarded by `diag.is_some()` there
+    // only because the CHAIN needs glyphs — the shape itself doesn't). SVG has no glyph budget,
+    // so it draws the shape outright: one straight line between the two box corners, instead of
+    // the orthogonal dogleg every other connector still gets below.
     for conn in &rm.plan.connectors {
-        let Some(plot) = plot_connector(conn, &cols, &rows, None) else { continue };
-        if plot.path.len() < 2 {
-            continue;
-        }
         let is_portal = matches!(conn.exit_dir, Direction::Up | Direction::Down);
-        let mut pts: Vec<(f64, f64)> = plot.path.iter().map(|&c| cell_px(&px_cols, &px_rows, c)).collect();
 
-        // Snap the two ends onto their boxes' pixel edges (see `snap_to_edge`).
-        if let Some(r) = rect_of(conn.origin) {
-            pts[0] = snap_to_edge(pts[0], r, conn.exit);
-        }
-        if !conn.merge {
-            if let Some(r) = rect_of(conn.dest) {
-                let last = pts.len() - 1;
-                pts[last] = snap_to_edge(pts[last], r, conn.entry);
+        let pure_diag = !conn.merge
+            && conn.points.len() == 3
+            && conn.entry_corner.is_some()
+            && direction::is_diagonal(conn.exit_dir);
+        // Both rects must resolve for the straight-line path to be taken; a missing room is not
+        // expected to happen (`cell_of` is built from `rm.rooms`, the same source `rect_of`
+        // reads), but falling through to the ordinary dogleg is the safe answer if it ever did.
+        let pure_diag_corners = pure_diag
+            .then(|| Some((rect_of(conn.origin)?, rect_of(conn.dest)?, conn.entry_corner?)))
+            .flatten();
+
+        let (pts, dep_u, arr_u) = if let Some((ro, rd, entry_corner)) = pure_diag_corners {
+            let op = px_corner(ro, conn.exit_dir);
+            let dp = px_corner(rd, entry_corner);
+            (vec![op, dp], outward_diag(conn.exit_dir), outward_diag(entry_corner))
+        } else {
+            let Some(plot) = plot_connector(conn, &cols, &rows, None) else { continue };
+            if plot.path.len() < 2 {
+                continue;
             }
-        }
-        // SQ-1366: every portal arrival's final leg must be a real straight run, long enough for
-        // the badge that rides it — see `extend_portal_arrival`. A merge stub has no arrival end
-        // of its own (its `pts[last]` is a trunk junction, not a room edge) so it is excluded here
-        // exactly as it is from `draw_travel_arrival` below. The start end is extended only for a
-        // reciprocal, matching the one case `draw_travel_arrival` draws a second arrival at all.
-        if is_portal && !conn.merge {
-            extend_portal_arrival(&mut pts, false, outward(conn.entry));
-            if conn.reciprocal {
-                extend_portal_arrival(&mut pts, true, outward(conn.exit));
+            let mut pts: Vec<(f64, f64)> =
+                plot.path.iter().map(|&c| cell_px(&px_cols, &px_rows, c)).collect();
+
+            // Snap the two ends onto their boxes' pixel edges (see `snap_to_edge`).
+            if let Some(r) = rect_of(conn.origin) {
+                pts[0] = snap_to_edge(pts[0], r, conn.exit);
             }
-        }
+            if !conn.merge {
+                if let Some(r) = rect_of(conn.dest) {
+                    let last = pts.len() - 1;
+                    pts[last] = snap_to_edge(pts[last], r, conn.entry);
+                }
+            }
+            // SQ-1366: every portal arrival's final leg must be a real straight run, long enough
+            // for the badge that rides it — see `extend_portal_arrival`. A merge stub has no
+            // arrival end of its own (its `pts[last]` is a trunk junction, not a room edge) so it
+            // is excluded here exactly as it is from `draw_travel_arrival` below. The start end is
+            // extended only for a reciprocal, matching the one case `draw_travel_arrival` draws a
+            // second arrival at all.
+            if is_portal && !conn.merge {
+                extend_portal_arrival(&mut pts, false, outward(conn.entry));
+                if conn.reciprocal {
+                    extend_portal_arrival(&mut pts, true, outward(conn.exit));
+                }
+            }
+            (pts, outward(conn.exit), outward(conn.entry))
+        };
         for &p in &pts {
             ext.add(p.0, p.1);
         }
@@ -954,7 +1012,12 @@ fn render_svg_body(
         // SQ-0688). Since SQ-1362 a portal's own arrival marker is a head with its badge riding
         // just behind it (see `draw_travel_arrival`), not the badge alone — matching every other
         // passage's grammar: the arrow points where the travel leads, the letter says how.
-        let dep_u = outward(conn.exit);
+        //
+        // `dep_u`/`arr_u` are already the right outward vector for wherever `pts` actually lands
+        // — the box edge's cardinal normal for the ordinary dogleg, or the box corner's diagonal
+        // normal for a pure diagonal (SQ-1365) — bound above alongside `pts` itself, since a merge
+        // connector (below) never takes the pure-diagonal branch and so always gets the cardinal
+        // one.
         let arrow_class = if conn.distorted { "arrow distorted" } else { "arrow" };
         if conn.merge {
             // A merge stub ends on another connector's TRUNK (a T-junction), not on a room edge —
@@ -994,7 +1057,6 @@ fn render_svg_body(
         } else {
             // This connector's own word (A→B, `conn.exit_dir`) arrives at the far end.
             let last = pts[pts.len() - 1];
-            let arr_u = outward(conn.entry);
             draw_travel_arrival(
                 &mut over,
                 &mut ext,
@@ -1044,10 +1106,15 @@ fn render_svg_body(
         // `secondary_entry`), fed into `portal_ends` exactly as `draw_travel_arrival` feeds its
         // own badges, so the stub pass below recognises this one as already drawn and skips it
         // rather than stamping a second badge for the same passage.
+        //
+        // `arr_u`/`dep_u`, not a fresh `outward(conn.entry)`/`outward(conn.exit)`: `pts`'s own
+        // ends already carry whichever normal is right for wherever they actually landed (a pure
+        // diagonal's box CORNER per SQ-1365, same as everywhere else in this loop), and re-deriving
+        // a cardinal one here would point a collapsed marker off to the side of the line it rides.
         if !conn.merge {
             for (dirs, pos, u, room) in [
-                (&conn.secondary_exit, pts[pts.len() - 1], outward(conn.entry), conn.origin),
-                (&conn.secondary_entry, pts[0], outward(conn.exit), conn.dest),
+                (&conn.secondary_exit, pts[pts.len() - 1], arr_u, conn.origin),
+                (&conn.secondary_entry, pts[0], dep_u, conn.dest),
             ] {
                 for &dir in dirs {
                     if matches!(dir, Direction::Up | Direction::Down | Direction::In | Direction::Out) {
@@ -3023,8 +3090,14 @@ mod tests {
     /// SQ-1346, extended to compass tags: each end's mismatched-word `tag` travels with the head
     /// for the SAME travel — `NE` (A→B) now reads at B, `SW` (B→A) reads at A, a swap from where
     /// each sat before this quest (previously both departure-anchored).
+    ///
+    /// SQ-1365: A and B are diagonally-adjacent rooms with a reciprocal NE/SW pair between
+    /// them — a PURE diagonal, per `render::map::plot_connector`'s own test — so the line is now a
+    /// single straight run between the two box corners, not the dogleg this case was named for
+    /// before this quest (the tag/head assertions below are unaffected: a diagonal word never
+    /// matches the cardinal `side` a pure diagonal still carries, so both still get tagged).
     #[test]
-    fn a_diagonal_drawn_orthogonally_is_tagged_with_its_own_word() {
+    fn a_pure_diagonal_between_neighbours_is_a_straight_corner_to_corner_line() {
         let mut m = Mapper::default();
         m.observe(1, "A", None);
         m.observe(2, "B", Some(Direction::NE));
@@ -3032,13 +3105,28 @@ mod tests {
         let svg = render_svg_of(&render(&m.graph), Some(&m.graph));
         assert!(
             svg.contains("class=\"tag\""),
-            "a diagonal walked round the corner names the direction it really is"
+            "a diagonal names the direction it really is even when drawn as a true slope"
         );
         assert!(svg.contains(">NE<") || svg.contains(">SW<"));
 
         let rooms = room_rects(&svg);
         assert_eq!(rooms.len(), 2, "the case must draw exactly the two rooms");
         let (a_rect, b_rect) = (rooms[0], rooms[1]);
+
+        // The one connector between A and B is drawn as exactly one segment, corner to corner —
+        // no orthogonal dogleg, no shared horizontal/vertical stub in the gutter between them.
+        let segs = edge_segments(&svg);
+        assert_eq!(segs.len(), 1, "a pure diagonal draws ONE segment, not a multi-leg dogleg: {segs:?}");
+        let (p0, p1) = segs[0];
+        assert!(
+            (p0.0 - p1.0).abs() > 1.0 && (p0.1 - p1.1).abs() > 1.0,
+            "the segment must move on BOTH axes — an axis-aligned stub means the old hairpin \
+             survived: {p0:?} -> {p1:?}"
+        );
+
+        let tips = arrow_tips(&svg);
+        assert_eq!(tips.len(), 2, "a reciprocal diagonal carries a head at each end");
+
         let doc = roxmltree::Document::parse(&svg).expect("well-formed SVG");
         let tag_pos = |word: &str| -> Option<(f64, f64)> {
             doc.descendants()
@@ -3068,6 +3156,83 @@ mod tests {
                 "SW (B→A) must read near A, where that travel arrives: {sw:?} vs a={a_rect:?}"
             );
         }
+    }
+
+    /// SQ-1365: a 2x2 block with BOTH diagonals routed (an X between four rooms) draws two
+    /// straight lines that cross in the shared gutter, not two orthogonal hairpins forced to
+    /// share their horizontal stubs — which is the unreadable picture this quest was filed
+    /// against (Anchorhead's nine-room "Out to Sea" grid is the real-game case, four of these).
+    #[test]
+    fn a_crossing_diagonal_pair_is_two_straight_lines_not_shared_stubs() {
+        let mut g = MapGraph::new();
+        for (id, label, pos) in
+            [(1u32, "NW", (0, 0)), (2, "NE", (1, 0)), (3, "SW", (0, 1)), (4, "SE", (1, 1))]
+        {
+            g.upsert_room(id, label.into());
+            g.set_pos(id, pos);
+        }
+        g.add_edge(1, Direction::SE, 4);
+        g.add_edge(4, Direction::NW, 1);
+        g.add_edge(2, Direction::SW, 3);
+        g.add_edge(3, Direction::NE, 2);
+
+        let svg = render_svg_of(&render(&g), Some(&g));
+        let rooms = room_rects(&svg);
+        assert_eq!(rooms.len(), 4, "the case must draw exactly the four rooms");
+
+        let segs = edge_segments(&svg);
+        assert_eq!(segs.len(), 2, "each diagonal draws ONE segment, two connectors: {segs:?}");
+        for (p0, p1) in &segs {
+            assert!(
+                (p0.0 - p1.0).abs() > 1.0 && (p0.1 - p1.1).abs() > 1.0,
+                "each of the crossing pair must move on BOTH axes — an axis-aligned stub means a \
+                 hairpin survived: {p0:?} -> {p1:?}"
+            );
+        }
+        // The two segments must not share a horizontal (or vertical) run — the defect this quest
+        // fixes is exactly the two doglegs' shared stub landing on one line in the gutter.
+        let (a0, a1) = segs[0];
+        let (b0, b1) = segs[1];
+        let is_horiz = |p: (f64, f64), q: (f64, f64)| (p.1 - q.1).abs() < 0.5;
+        let is_vert = |p: (f64, f64), q: (f64, f64)| (p.0 - q.0).abs() < 0.5;
+        assert!(
+            !(is_horiz(a0, a1) && is_horiz(b0, b1) && (a0.1 - b0.1).abs() < 0.5),
+            "the two diagonals must not share one horizontal run: {a0:?}->{a1:?} vs {b0:?}->{b1:?}"
+        );
+        assert!(
+            !(is_vert(a0, a1) && is_vert(b0, b1) && (a0.0 - b0.0).abs() < 0.5),
+            "the two diagonals must not share one vertical run: {a0:?}->{a1:?} vs {b0:?}->{b1:?}"
+        );
+    }
+
+    /// A diagonal that is NOT pure — the destination is two columns over, so the router's
+    /// polyline bends rather than collapsing to centre→corner→centre — still draws the
+    /// orthogonal dogleg exactly as before this quest (SQ-1365 only touches the corner-to-corner
+    /// case; everything else is untouched).
+    #[test]
+    fn a_non_pure_diagonal_still_draws_the_orthogonal_dogleg() {
+        let mut g = MapGraph::new();
+        g.upsert_room(1, "A".into());
+        g.upsert_room(2, "B".into());
+        g.set_pos(1, (0, 0));
+        g.set_pos(2, (2, -1));
+        g.add_edge(1, Direction::NE, 2);
+        g.add_edge(2, Direction::SW, 1);
+
+        let svg = render_svg_of(&render(&g), Some(&g));
+        let rooms = room_rects(&svg);
+        assert_eq!(rooms.len(), 2, "the case must draw exactly the two rooms");
+
+        let segs = edge_segments(&svg);
+        assert!(
+            segs.len() > 1,
+            "a non-pure diagonal must still bend — a single segment here would mean this case \
+             stopped exercising the dogleg path: {segs:?}"
+        );
+        assert!(
+            segs.iter().any(|(p0, p1)| (p0.0 - p1.0).abs() < 0.5 || (p0.1 - p1.1).abs() < 0.5),
+            "the dogleg's own legs are axis-aligned: {segs:?}"
+        );
     }
 
     // ── SQ-1366: the badge always rides the final straight run into the head ────────────

@@ -442,14 +442,26 @@ Three things buy that:
 Measured on Zork I, that took the whole map from 151 drawn turns to 122 — with `West of House →
 Forest`, which used to loop up and around the Attic, down from five turns to two.
 
-The one shape that still defeats it is two DIAGONALS crossing inside a single gap. A diagonal is
-drawn as an orthogonal dogleg (out of the box corner, down the gutter, along to the far corner),
-and two doglegs crossing in one gap have to share a row at both ends — there is no pair of lanes
-that separates them at the top without joining them at the bottom. Counterfeit Monkey's park
-corner is the case: Church Forecourt, Park Center and Monumental Staircase in a row over Midway,
-Fair and Heritage Corner, with two diagonals crossing between the columns. Drawing a crossing
-diagonal as a true 45° line would settle it, and that is a change to how a diagonal is drawn
-rather than to where it is routed.
+The one shape that still defeats the tidy metric is two DIAGONALS crossing inside a single gap.
+The BEND-COST score above, and `render::map::overlap_stats` it shares the reading with, both count
+a diagonal as an orthogonal dogleg on purpose (out of the box corner, down the gutter, along to
+the far corner) — that is the one reading every route has to be scored and checked against, so it
+cannot vary with a display setting — and two doglegs crossing in one gap have to share a row at
+both ends: there is no pair of lanes that separates them at the top without joining them at the
+bottom. Counterfeit Monkey's park corner is the case: Church Forecourt, Park Center and Monumental
+Staircase in a row over Midway, Fair and Heritage Corner, with two diagonals crossing between the
+columns; Anchorhead's nine-room "Out to Sea" grid has four such crossings, one per pair of adjacent
+rows and columns.
+
+The unreadable PICTURE that residual used to produce is settled, though not by moving the route:
+a **pure diagonal** — the corner-to-corner case these crossings are made of, `conn.points.len() ==
+3` — is drawn as a true straight line between the two box corners rather than the dogleg, in the
+SVG export unconditionally (SQ-1365) and in the terminal whenever the half-diagonal glyphs are on
+(see below). Two pure diagonals crossing then read as a plain X, because the lines genuinely do
+cross rather than sharing a stub in the gutter. The dogleg reading survives everywhere the score
+itself needs it to: `plot_connector`'s own orthogonal run, `overlap_stats`, and the terminal with
+the half-diagonal glyphs off are all unchanged, which is what keeps the bend-cost number above
+meaningful from one route to the next.
 
 With the half-diagonal glyphs on, those two crossings ARE drawn as true slopes — those rooms are
 diagonally adjacent — and they cost two cells apiece rather than a point, because a half-diagonal
@@ -1089,6 +1101,16 @@ need: `cells` (per-cell direction-bit masks, for line-art glyphs) and `path`
 terminal never reads `path`; the SVG never reads `cells`. There is no second
 router to drift from the first.
 
+The one exception is a **pure diagonal** (SQ-1365) — a connector whose whole
+route is one corner-to-corner run, `conn.points.len() == 3`, exactly the shape
+`plot_connector`'s own `pure_diagonal` test names for the terminal's
+half-diagonal chain. There the SVG skips `plot_connector` and its dogleg
+entirely and draws one straight line between the two box corners (`rect_of`
+plus the connector's own `exit_dir`/`entry_corner`) instead — vector art has no
+per-cell glyph budget to spend on a half-diagonal chain, so it draws the shape
+outright rather than approximating it. Every other connector, diagonal or not,
+still takes the `plot_connector` path unchanged.
+
 `boxes_axes_sized` is `boxes_axes` with per-grid-line box sizes, which is how a
 room box grows to fit its own name. A `RoutePlan` is expressed in doubled *cell*
 coordinates and knows nothing about how big a box is, so widening a column moves
@@ -1112,8 +1134,10 @@ What the drawing shows, beyond the rooms:
   overlapping (a "bowtie", `◄►`). The floor is derived from the arrowhead's own
   geometry (twice its reach, plus twice its length), never a bare number.
 - **A direction tag** at the departure anchor when the side a connector actually
-  leaves by disagrees with the passage's word — a diagonal walked round the
-  corner orthogonally, or a distorted edge routed out of another side.
+  leaves by disagrees with the passage's word — a diagonal (whether drawn as a
+  dogleg or, since SQ-1365, as a true corner-to-corner line — the side the
+  router assigned it stays cardinal either way), or a distorted edge routed out
+  of another side.
 - **Weights** (SQ-1312): a `Door` gets a bar across the line with a gap punched
   under it, a `Conditional` exit is dotted, and a distorted edge stays dashed red.
 - **Up/Down/In/Out** as a lettered badge (`U`/`D`/`I`/`O`) on the side the

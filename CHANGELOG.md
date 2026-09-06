@@ -27,6 +27,13 @@ Absolute URLs or no link.
 > visible tag `*Next release:*`. `release.yml` refuses to cut a release
 > while any such tag, or this Unreleased section, still exists.*
 
+### Fixed
+
+- **A diagonal passage between neighbouring rooms now draws as a real
+  diagonal line in the exported SVG**, instead of a right-angled hairpin out
+  of the box corner and down the gutter — so two diagonals crossing between
+  four rooms read as a clean X rather than a tangle of shared stubs.
+
 ---
 
 ## v0.5.1 — 2026-09-06
