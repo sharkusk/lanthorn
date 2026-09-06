@@ -1494,12 +1494,26 @@ fn legend_rows() -> Vec<(String, &'static str)> {
     ]
 }
 
+/// The x each row's caption is drawn at, and the right margin left past its longest line.
+const LEGEND_TEXT_X: i32 = 80;
+const LEGEND_TEXT_MARGIN: i32 = 10;
+
 /// The legend block, drawn with its top-left at `(0, 0)`. Returns `(markup, width, height)`.
+///
+/// The panel is at least `LEGEND_W` wide, but a caption longer than that (SQ-1344: "exit to
+/// another layer — arrow shows the way you travel" ran past the right edge) widens it — using the
+/// same 9px-class character-width estimate `text_boxes()` charges every 9px `.legend` label, so
+/// the two never disagree about how wide a row's text really is.
 fn legend() -> (String, i32, i32) {
     let rows = legend_rows();
     let h = LEGEND_ROW * rows.len() as i32 + 34;
+    let max_caption_w = rows
+        .iter()
+        .map(|(_, caption)| caption.chars().count() as f64 * 9.0 * 0.6125)
+        .fold(0.0_f64, f64::max);
+    let w = LEGEND_W.max((LEGEND_TEXT_X as f64 + max_caption_w).ceil() as i32 + LEGEND_TEXT_MARGIN);
     let mut s = format!(
-        "<rect class=\"legend-panel\" x=\"0\" y=\"0\" width=\"{LEGEND_W}\" height=\"{h}\" rx=\"5\"/>\
+        "<rect class=\"legend-panel\" x=\"0\" y=\"0\" width=\"{w}\" height=\"{h}\" rx=\"5\"/>\
          <text class=\"legend-title\" x=\"10\" y=\"15\">Legend</text>"
     );
     for (i, (sample, caption)) in rows.iter().enumerate() {
@@ -1507,12 +1521,12 @@ fn legend() -> (String, i32, i32) {
         let _ = write!(s, "<g transform=\"translate(6,{y})\">{sample}</g>");
         let _ = write!(
             s,
-            "<text class=\"legend\" x=\"80\" y=\"{}\">{}</text>",
+            "<text class=\"legend\" x=\"{LEGEND_TEXT_X}\" y=\"{}\">{}</text>",
             y + 3,
             xml_escape(caption)
         );
     }
-    (s, LEGEND_W, h)
+    (s, w, h)
 }
 
 // ── Documents ─────────────────────────────────────────────────────────────────
@@ -2559,6 +2573,46 @@ mod tests {
         ] {
             assert!(svg.contains(caption), "legend must name {caption:?}");
         }
+    }
+
+    /// SQ-1344: every `.legend` caption's estimated right edge stays inside the
+    /// `legend-panel` rect — the panel is sized off the longest row rather than a fixed
+    /// `LEGEND_W`, using the same 9px character-width estimate `text_boxes()` charges a 9px
+    /// `.legend` label elsewhere in this file.
+    #[test]
+    fn every_legend_row_fits_inside_its_panel() {
+        let m = zork_house();
+        let svg = render_svg_of(&render(&m.graph), Some(&m.graph));
+        let doc = roxmltree::Document::parse(&svg).expect("well-formed SVG");
+
+        let panel = doc
+            .descendants()
+            .find(|n| n.tag_name().name() == "rect" && n.attribute("class") == Some("legend-panel"))
+            .expect("the legend panel must be drawn");
+        let panel_off = translate_of(panel);
+        let panel_right =
+            panel_off.0 + panel.attribute("x").unwrap().parse::<f64>().unwrap()
+                + panel.attribute("width").unwrap().parse::<f64>().unwrap();
+
+        let mut checked = 0;
+        for text in doc
+            .descendants()
+            .filter(|n| n.tag_name().name() == "text" && n.attribute("class") == Some("legend"))
+        {
+            let off = translate_of(text);
+            let x = off.0 + text.attribute("x").unwrap().parse::<f64>().unwrap();
+            let caption = text.text().unwrap_or("");
+            // Same estimate `legend()` sized the panel with, and `text_boxes()` uses for every
+            // other 9px `.legend`-class label.
+            let w = caption.chars().count() as f64 * 9.0 * 0.6125;
+            assert!(
+                x + w <= panel_right + 0.01,
+                "caption {caption:?} right edge {} must sit inside the panel's {panel_right}",
+                x + w
+            );
+            checked += 1;
+        }
+        assert!(checked >= legend_rows().len(), "must have checked every legend row");
     }
 
     #[test]
