@@ -212,6 +212,35 @@ impl UpperWindow {
     pub fn clear_to(&mut self, bg: ZColour) {
         self.cells.fill(Cell { ch: ' ', style: 0, fg: ZColour::Default, bg });
     }
+    /// The 1-based index of the deepest row that has anything on it — 0 when the
+    /// grid is entirely blank. (SQ-1355)
+    ///
+    /// This is how far down the screen the game's own printing actually reaches,
+    /// which is a different question from how many rows the grid has been
+    /// ALLOCATED: rows below the split exist only to hold what was painted there
+    /// (`grow_rows`, and `split_window`'s shrink), and once nothing is painted in
+    /// them they describe no pixel a real interpreter would still be showing.
+    ///
+    /// A cell counts as painted if it carries a glyph or a style bit. Colour is
+    /// deliberately not consulted: [`clear_to`](Self::clear_to) blanks the window
+    /// TO the background colour (ZMSD §8.7.3.2, "the specified window can be
+    /// cleared to background colour"), so a cell's background says what the ERASE
+    /// left, not what the game drew — counting it would make a freshly erased
+    /// window read as fully painted. The style bit is consulted because that is
+    /// what a reverse-video bar is made of, and such a bar IS paint.
+    pub fn last_painted_row(&self) -> u16 {
+        let cols = self.cols as usize;
+        if cols == 0 {
+            return 0;
+        }
+        for r in (0..self.rows as usize).rev() {
+            let row = &self.cells[r * cols..(r + 1) * cols];
+            if row.iter().any(|c| c.ch != ' ' || c.style != 0) {
+                return r as u16 + 1;
+            }
+        }
+        0
+    }
     /// Grow the grid to at least `new_rows` rows, preserving existing content.
     /// No-op when the grid is already tall enough. Used when a game draws in the
     /// upper window at rows beyond the current split height (Frotz keeps such
