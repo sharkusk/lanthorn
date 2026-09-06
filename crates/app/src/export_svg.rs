@@ -259,7 +259,14 @@ struct PxAxis {
 impl PxAxis {
     /// Build from `axis`'s own cell layout — `range()`, `box_dim_at()`, `channel_span()`, the same
     /// public accessors any other consumer of a `PosTable` uses.
-    fn build(axis: &PosTable, cell_unit: i32) -> PxAxis {
+    ///
+    /// `wide_channels` names the channel `idx`s (the channel following that row/column, in the
+    /// same sense `channel_span(idx)` uses) that must additionally clear `PORTAL_MIN_CHANNEL_PX`
+    /// rather than the plain `MIN_CHANNEL_PX` — SQ-1362's portal head+badge reaches farther out
+    /// from a box edge than a bare arrowhead, so a channel carrying one needs more room than a
+    /// channel that doesn't. Empty for the column axis, which a portal never touches (Up always
+    /// departs the north border and Down the south — `route_side`).
+    fn build(axis: &PosTable, cell_unit: i32, wide_channels: &std::collections::HashSet<i32>) -> PxAxis {
         let (lo, hi) = axis.range();
         let mut width = Vec::new();
         for idx in lo..=hi {
@@ -275,8 +282,8 @@ impl PxAxis {
             // it always had.
             let chan = axis.channel_span(idx);
             let default_px = chan as f64 * cell_unit as f64;
-            let per_cell =
-                if default_px < MIN_CHANNEL_PX { MIN_CHANNEL_PX / chan as f64 } else { cell_unit as f64 };
+            let floor = if wide_channels.contains(&idx) { PORTAL_MIN_CHANNEL_PX } else { MIN_CHANNEL_PX };
+            let per_cell = if default_px < floor { floor / chan as f64 } else { cell_unit as f64 };
             for _ in 0..chan {
                 width.push(per_cell);
             }
@@ -352,6 +359,25 @@ fn outward(side: Side) -> (f64, f64) {
         Side::Left => (-1.0, 0.0),
         Side::Top => (0.0, -1.0),
         Side::Bottom => (0.0, 1.0),
+    }
+}
+
+/// The row-axis channel `idx` (the sense `PosTable::channel_span(idx)` uses: the channel
+/// following row `idx`, between it and `idx + 1`) that a portal marker leaving `room`'s box by
+/// `side` reaches into — `None` for anything but `Side::Top`/`Side::Bottom`, which a portal
+/// never uses (SQ-1362; `route_side` puts Up on the north border and Down on the south, always).
+/// `Top` reaches into the channel ABOVE the room, i.e. the one following row `cell.1 - 1`;
+/// `Bottom` reaches into the channel following the room's own row.
+fn portal_channel_row(
+    cell_of: &HashMap<RoomId, (i32, i32)>,
+    room: RoomId,
+    side: Side,
+) -> Option<i32> {
+    let (_, ry) = *cell_of.get(&room)?;
+    match side {
+        Side::Top => Some(ry - 1),
+        Side::Bottom => Some(ry),
+        Side::Left | Side::Right => None,
     }
 }
 
@@ -496,6 +522,26 @@ fn arrowhead_inward(at: (f64, f64), u: (f64, f64), class: &str) -> String {
 /// the shared CELL count the terminal also lays channels out by.
 const MIN_CHANNEL_PX: f64 = 2.0 * ARROW_TIP + 2.0 * ARROW_HEAD_LEN;
 
+/// Distance from a box edge to a portal badge's own root, before `settle_badge` slides it clear
+/// of anything already placed — behind the arrowhead's flat back (`ARROW_TIP`, 8.5px) so the two
+/// read as one marker, head first (SQ-1362). Shares the `17` quantum `settle_badge`'s own slide
+/// step and the stub side-stacking step already use elsewhere in this file.
+const PORTAL_BADGE_GAP: f64 = 17.0;
+
+/// How far a portal's head+badge pair reaches out from its box edge: the badge's own root
+/// (`PORTAL_BADGE_GAP`) plus half its rendered footprint (`badge_rect`'s 8px half-width,
+/// radius 6.5 plus a pixel of air).
+const PORTAL_ARROW_REACH: f64 = PORTAL_BADGE_GAP + 8.0;
+
+/// The SVG's own minimum channel width for a channel that carries a portal head+badge
+/// (SQ-1362), the portal counterpart of `MIN_CHANNEL_PX` above and derived the same way: two
+/// reaches facing each other across a channel of width `w` leave a shaft of `w - 2 *
+/// PORTAL_ARROW_REACH` between them, and the ask is the same shaft `MIN_CHANNEL_PX` asks for — at
+/// least twice one (bare) arrowhead's own length — giving `w >= 2 * PORTAL_ARROW_REACH + 2 *
+/// ARROW_HEAD_LEN`. Only the channels `render_svg_body`'s pre-pass names actually widen to this —
+/// see `PxAxis::build`'s `wide_channels` — everything else keeps the plain floor.
+const PORTAL_MIN_CHANNEL_PX: f64 = 2.0 * PORTAL_ARROW_REACH + 2.0 * ARROW_HEAD_LEN;
+
 /// A lettered badge — the export's up/down/in/out glyph, spelled as a letter so the document
 /// needs no symbol font at all.
 fn badge(at: (f64, f64), letter: &str) -> String {
@@ -510,11 +556,13 @@ fn badge(at: (f64, f64), letter: &str) -> String {
     )
 }
 
-/// The marker set for ONE travel of a connector — a lettered badge for a vertical (Up/Down)
-/// word, since a flat arrowhead cannot show "up" or "down" in a 2-D drawing; a plain
-/// `arrowhead_inward` for everything else, plus the mismatched-word `tag` when the side the
-/// passage is drawn leaving by disagrees with its own compass word (a diagonal walked round the
-/// corner orthogonally, or a distorted edge).
+/// The marker set for ONE travel of a connector: an `arrowhead_inward` into the room the travel
+/// arrives at, exactly like every other passage — plus, for a vertical (Up/Down) word, a
+/// lettered badge riding just behind the head on the same line, since a flat arrowhead cannot
+/// show "up" or "down" on its own (SQ-1362; before this the badge stood in for the head instead
+/// of beside it, and a portal line carried no arrival marker at all). A horizontal word instead
+/// gets the mismatched-word `tag` when the side the passage is drawn leaving by disagrees with
+/// its own compass word (a diagonal walked round the corner orthogonally, or a distorted edge).
 ///
 /// SQ-1346: every marker describing a travel sits at the end that travel ARRIVES at, beside the
 /// head that points into the room it enters — so `pos`/`u` here are always the ARRIVAL point and
@@ -538,7 +586,8 @@ fn draw_travel_arrival(
     arrow_class: &str,
 ) {
     if matches!(word, Direction::Up | Direction::Down) {
-        let root = (pos.0 + u.0 * 8.0, pos.1 + u.1 * 8.0);
+        over.push_str(&arrowhead_inward(pos, u, arrow_class));
+        let root = (pos.0 + u.0 * PORTAL_BADGE_GAP, pos.1 + u.1 * PORTAL_BADGE_GAP);
         let at = settle_badge(placer, root, (-u.1, u.0));
         portal_ends.insert((room, word));
         over.push_str(&badge(at, if word == Direction::Up { "U" } else { "D" }));
@@ -636,13 +685,36 @@ fn render_svg_body(
     }
     let no_rows = BTreeMap::new();
     let (cols, rows) = boxes_axes_sized(&rm.plan, rm.bounds, BOX_W, &col_dims, BOX_H, &no_rows);
+
+    let cell_of: HashMap<RoomId, (i32, i32)> = rm.rooms.iter().map(|r| (r.id, r.cell)).collect();
+    // SQ-1362: which ROW channels carry a portal head+badge, so `PxAxis::build` can grow only
+    // those to `PORTAL_MIN_CHANNEL_PX` rather than bumping every channel on the map. A portal
+    // never touches a COLUMN channel — Up always departs the box's north border and Down its
+    // south (`route_side`) — so only the row axis needs this pass. Only a NON-merge connector's
+    // marker counts: a merge stub's own departure badge (see below) stays small and needs no
+    // extra room, and only the entry end always gets a marker while the exit end gets one only
+    // when the connector is reciprocal, mirroring exactly what `draw_travel_arrival` draws.
+    let mut wide_row_channels: std::collections::HashSet<i32> = std::collections::HashSet::new();
+    for conn in &rm.plan.connectors {
+        if conn.merge || !matches!(conn.exit_dir, Direction::Up | Direction::Down) {
+            continue;
+        }
+        if let Some(idx) = portal_channel_row(&cell_of, conn.dest, conn.entry) {
+            wide_row_channels.insert(idx);
+        }
+        if conn.reciprocal {
+            if let Some(idx) = portal_channel_row(&cell_of, conn.origin, conn.exit) {
+                wide_row_channels.insert(idx);
+            }
+        }
+    }
     // SQ-1322: the SVG's own pixel geometry for each axis, widening a channel already at
     // `MIN_GUTTER` cells so a two-way passage between adjacent boxes gets a real shaft — see
     // `PxAxis`. `cols`/`rows` themselves are untouched and still the terminal's own cell layout.
-    let px_cols = PxAxis::build(&cols, CELL_W);
-    let px_rows = PxAxis::build(&rows, CELL_H);
+    let no_wide_cols = std::collections::HashSet::new();
+    let px_cols = PxAxis::build(&cols, CELL_W, &no_wide_cols);
+    let px_rows = PxAxis::build(&rows, CELL_H, &wide_row_channels);
 
-    let cell_of: HashMap<RoomId, (i32, i32)> = rm.rooms.iter().map(|r| (r.id, r.cell)).collect();
     let rect_of = |id: RoomId| -> Option<(f64, f64, f64, f64)> {
         cell_of.get(&id).map(|&c| box_px_rect(&cols, &rows, &px_cols, &px_rows, c))
     };
@@ -740,14 +812,19 @@ fn render_svg_body(
         // goes with each head travels to the SAME end, not the room it started from. A one-way
         // passage has exactly one travel and gets exactly one marker set, at its destination; the
         // bare line back to its origin IS the reading there (the terminal's one arrow rule,
-        // SQ-0688).
+        // SQ-0688). Since SQ-1362 a portal's own arrival marker is a head with its badge riding
+        // just behind it (see `draw_travel_arrival`), not the badge alone — matching every other
+        // passage's grammar: the arrow points where the travel leads, the letter says how.
         let dep_u = outward(conn.exit);
         let arrow_class = if conn.distorted { "arrow distorted" } else { "arrow" };
         if conn.merge {
             // A merge stub ends on another connector's TRUNK (a T-junction), not on a room edge —
             // see `RoutedConnector::merge` — so it has no arrival end of its own to carry a head
             // to. It keeps its long-standing departure-only marker: the shared trunk it joins is
-            // what actually carries the arrival head into the destination room.
+            // what actually carries the arrival head into the destination room. That is still true
+            // after SQ-1362 — this is a DEPARTURE mark, not an arrival, so it stays badge-only
+            // exactly as the non-portal sibling below stays a bare outward arrowhead with no
+            // badge; neither grew a second marker.
             if is_portal {
                 let root = (pts[0].0 + dep_u.0 * 8.0, pts[0].1 + dep_u.1 * 8.0);
                 let at = settle_badge(&mut placer, root, (-dep_u.1, dep_u.0));
@@ -1153,8 +1230,15 @@ fn legend_rows() -> Vec<(String, &'static str)> {
         (line("edge conditional"), "conditional exit — the story gates it"),
         (line("edge distorted"), "distorted — drawn out of true"),
         (
-            format!("{}{}", line("edge portal"), badge((30.0, 0.0), "U")),
-            "up / down (U D I O = the way you travel)",
+            // SQ-1362: a portal draws the same arrival head every other passage does — the badge
+            // rides just behind it on the line, at the destination end, never in place of it.
+            format!(
+                "{}{}{}",
+                line("edge portal"),
+                arrowhead((54.0, 0.0), (1.0, 0.0), "arrow"),
+                badge((37.0, 0.0), "U")
+            ),
+            "stairs, ladders, in/out — the arrow points where it leads, the letter is the way you travel",
         ),
         (
             format!(
@@ -1769,6 +1853,50 @@ mod tests {
         on_x_edge || on_y_edge
     }
 
+    /// Straight-line distance from `p` to `rect`'s nearer boundary — `0.0` for a point already
+    /// inside or on it, the plain perpendicular gap for a point squarely off one side (the shape
+    /// every portal marker sits in, SQ-1362), general enough to answer "which is farther from the
+    /// room" regardless of `settle_badge`'s own tangential slide.
+    fn dist_from_rect_edge(p: (f64, f64), rect: (f64, f64, f64, f64)) -> f64 {
+        let (x, y, w, h) = rect;
+        let dx = if p.0 < x { x - p.0 } else if p.0 > x + w { p.0 - (x + w) } else { 0.0 };
+        let dy = if p.1 < y { y - p.1 } else if p.1 > y + h { p.1 - (y + h) } else { 0.0 };
+        (dx * dx + dy * dy).sqrt()
+    }
+
+    /// Every non-legend portal badge's own `(letter, centre)` — `badge()` always pushes the
+    /// circle immediately followed by its text, so pairing the two node lists by document order
+    /// is safe (SQ-1362; used to tell a `U` badge from its own `D` on a two-way stairway).
+    fn badges_of(svg: &str) -> Vec<(String, (f64, f64))> {
+        let doc = roxmltree::Document::parse(svg).expect("well-formed SVG");
+        let circles: Vec<_> = doc
+            .descendants()
+            .filter(|n| {
+                n.tag_name().name() == "circle"
+                    && n.attribute("class") == Some("badge")
+                    && !under_class(*n, "legend-block")
+            })
+            .collect();
+        let texts: Vec<_> = doc
+            .descendants()
+            .filter(|n| {
+                n.tag_name().name() == "text"
+                    && n.attribute("class") == Some("badge-text")
+                    && !under_class(*n, "legend-block")
+            })
+            .collect();
+        circles
+            .iter()
+            .zip(texts.iter())
+            .map(|(c, t)| {
+                let o = translate_of(*c);
+                let x = c.attribute("cx").unwrap().parse::<f64>().unwrap() + o.0;
+                let y = c.attribute("cy").unwrap().parse::<f64>().unwrap() + o.1;
+                (t.text().unwrap_or("").to_string(), (x, y))
+            })
+            .collect()
+    }
+
     /// The Zork-house shape used by the layout tests: a ring of rooms with a couple of
     /// diagonals and a vertical, which is enough to exercise lanes, corners and portals.
     fn zork_house() -> Mapper {
@@ -2128,6 +2256,35 @@ mod tests {
                 "a ghost box is a room box: {gh:?} vs {rooms:?}"
             );
         }
+
+        // SQ-1362: a ghost is an ordinary passage's arrival room, so the portal into it gets the
+        // same head-plus-trailing-badge marker every other passage's arrival gets — not the badge
+        // alone. Each panel draws a FULL reciprocal (its own real room is drawn beside a ghost
+        // standing in for the other, SQ-1356), so each panel carries two heads: one back into its
+        // own room, one into its ghost — four heads and four badges over the two panels.
+        let tips = arrow_tips(&svg);
+        assert_eq!(tips.len(), 4, "each panel's reciprocal draws a head into its own room AND into its ghost");
+        let badges = badges_of(&svg);
+        assert_eq!(badges.len(), 4, "and a badge riding behind each of those heads");
+        for gh in &ghosts {
+            let tip = *tips
+                .iter()
+                .find(|t| near_rect_edge(**t, *gh, 1.5))
+                .unwrap_or_else(|| panic!("a head must land on this ghost: {gh:?} tips={tips:?}"));
+            let (letter, badge_pos) = badges
+                .iter()
+                .min_by(|(_, a), (_, b)| {
+                    dist_from_rect_edge(*a, *gh).partial_cmp(&dist_from_rect_edge(*b, *gh)).unwrap()
+                })
+                .expect("at least one badge on the map");
+            assert!(letter == "U" || letter == "D", "a portal badge reads U or D, got {letter:?}");
+            let (tip_dist, badge_dist) = (dist_from_rect_edge(tip, *gh), dist_from_rect_edge(*badge_pos, *gh));
+            assert!(
+                badge_dist > tip_dist,
+                "the {letter} badge must ride behind its own head into the ghost: \
+                 tip={tip:?} ({tip_dist}) badge={badge_pos:?} ({badge_dist})"
+            );
+        }
     }
 
     /// A one-way crossing says which way it runs, in words, on both panels: the leaving end
@@ -2409,6 +2566,89 @@ mod tests {
             d_attic < d_cellar,
             "the U badge must sit nearer Attic than Cellar: badge={badge_pos:?} cellar={cellar:?} attic={attic:?}"
         );
+    }
+
+    /// SQ-1362: a portal reads exactly like every other passage now — an arrowhead into the room
+    /// the travel arrives at, with the lettered badge riding just behind it on the same line.
+    /// Before this, a portal's arrival end carried the badge and NOTHING else, so a reader could
+    /// not tell "leads down" from "arrived by going down". Unlike the stub cases above, this
+    /// graph gives both rooms real positions (`set_pos`), so `route_lanes` draws a genuine routed
+    /// portal connector — the code path `draw_travel_arrival` actually marks.
+    #[test]
+    fn a_one_way_portal_head_sits_near_destination_with_its_badge_riding_behind() {
+        use mapper::graph::MapGraph;
+        let mut g = MapGraph::new();
+        g.upsert_room(1, "Cellar".into());
+        g.upsert_room(2, "Attic".into());
+        g.set_pos(1, (0, 0));
+        g.set_pos(2, (0, -1));
+        g.add_edge(1, Direction::Up, 2);
+
+        let svg = render_svg_of(&render(&g), Some(&g));
+        let rooms = room_rects(&svg);
+        assert_eq!(rooms.len(), 2, "the case must draw exactly the two rooms");
+        let (cellar, attic) = (rooms[0], rooms[1]);
+
+        let tips = arrow_tips(&svg);
+        assert_eq!(tips.len(), 1, "a one-way portal carries exactly one arrowhead");
+        let tip = tips[0];
+        assert!(
+            near_rect_edge(tip, attic, 1.5),
+            "the head must sit on Attic's own edge: tip={tip:?} attic={attic:?}"
+        );
+        assert!(!near_rect_edge(tip, cellar, 1.5), "the head must not sit on Cellar's edge: tip={tip:?}");
+
+        let badges = badges_of(&svg);
+        assert_eq!(badges.len(), 1, "a one-way portal carries exactly one badge");
+        let (letter, badge_pos) = &badges[0];
+        assert_eq!(letter, "U", "an Up travel reads U");
+
+        let (tip_dist, badge_dist) = (dist_from_rect_edge(tip, attic), dist_from_rect_edge(*badge_pos, attic));
+        assert!(
+            badge_dist > tip_dist,
+            "the badge must sit farther from Attic than the head that points into it: \
+             tip={tip:?} ({tip_dist}) badge={badge_pos:?} ({badge_dist})"
+        );
+    }
+
+    /// SQ-1362, the two-way case: a reciprocal stairway draws a head AND a badge at each end,
+    /// each badge riding behind its own head — never a bare pair of letters facing each other.
+    #[test]
+    fn a_two_way_stairway_draws_two_heads_each_with_its_badge_riding_behind() {
+        use mapper::graph::MapGraph;
+        let mut g = MapGraph::new();
+        g.upsert_room(1, "Cellar".into());
+        g.upsert_room(2, "Attic".into());
+        g.set_pos(1, (0, 0));
+        g.set_pos(2, (0, -1));
+        g.add_edge(1, Direction::Up, 2);
+        g.add_edge(2, Direction::Down, 1);
+
+        let svg = render_svg_of(&render(&g), Some(&g));
+        let rooms = room_rects(&svg);
+        assert_eq!(rooms.len(), 2, "the case must draw exactly the two rooms");
+        let (cellar, attic) = (rooms[0], rooms[1]);
+
+        let tips = arrow_tips(&svg);
+        assert_eq!(tips.len(), 2, "a two-way stairway carries a head at each end");
+        let badges = badges_of(&svg);
+        assert_eq!(badges.len(), 2, "and a badge riding behind each head");
+
+        for tip in &tips {
+            let (near_attic, near_cellar) = (near_rect_edge(*tip, attic, 1.5), near_rect_edge(*tip, cellar, 1.5));
+            assert!(near_attic != near_cellar, "a head belongs to exactly one box's edge: tip={tip:?}");
+            let (dest, want_letter) = if near_attic { (attic, "U") } else { (cellar, "D") };
+            let (_, badge_pos) = badges
+                .iter()
+                .find(|(l, _)| l == want_letter)
+                .unwrap_or_else(|| panic!("a {want_letter} badge for the head into {dest:?}: {badges:?}"));
+            let (tip_dist, badge_dist) = (dist_from_rect_edge(*tip, dest), dist_from_rect_edge(*badge_pos, dest));
+            assert!(
+                badge_dist > tip_dist,
+                "the {want_letter} badge must sit farther from its own room than its own head: \
+                 tip={tip:?} ({tip_dist}) badge={badge_pos:?} ({badge_dist})"
+            );
+        }
     }
 
     /// SQ-1346, extended to compass tags: each end's mismatched-word `tag` travels with the head

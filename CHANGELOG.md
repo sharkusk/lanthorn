@@ -69,6 +69,10 @@ Absolute URLs or no link.
   two-way passage's pair of arrows already followed.
 - A cross-layer passage's exported SVG badge now sits next to its arrowhead,
   by the ghost box it leads to, instead of back at the room it leaves.
+- The SVG map's stairs, ladders and in/out passages now end in an arrowhead
+  too, with the letter riding just behind it on the line — before, a portal's
+  only mark was the letter, so there was no way to tell "leads down" from
+  "arrived by going down".
 
 ### Fixed
 
