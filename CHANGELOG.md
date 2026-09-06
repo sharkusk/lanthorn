@@ -63,6 +63,14 @@ Absolute URLs or no link.
   machine bold was not a heavier face at all — it lit the display's intensity
   bit, so those runs were white against grey. They are again.
 
+- **…and the bracketed asides come out bright with them.** *Bureaucracy*'s
+  "[Your blood pressure just went up.]" stayed grey even so: lanthorn dims a
+  whole line in brackets on the assumption it came from the interpreter rather
+  than the game, and that guess had already been withdrawn for a game wearing
+  its own machine's screen — but only for Version 6. It now stands down for
+  every machine screen, so a v1-v5 game's bracketed notes are the game's prose
+  in the machine's pens, bold and bright where the game asked for bold.
+
 - **Walking between two rooms that share a name is a passage again, not a
   question mark.** Zork I's four rooms called "Forest" had every path between
   them redrawn as `?`, each one claiming the destination varied between the

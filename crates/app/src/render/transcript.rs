@@ -2108,6 +2108,45 @@ fn render_input_content(
     }
 }
 
+/// Is the ink on this frame's Story lines the MACHINE's rather than the theme's?
+///
+/// This is [`ColorScheme::resolve_story_style`](crate::colors::ColorScheme::resolve_story_style)'s
+/// `machine_owns_ink`, and what it withdraws is the built-in "a whole line in
+/// brackets came from the interpreter" rule — see that function for why (SQ-0822:
+/// the rule's payload is a MUTE chosen to recede against the theme's page, and on
+/// a machine with one pair for the whole screen there is no third colour to
+/// recede into).
+///
+/// **Two frames answer yes, and the second is why this is a function** (SQ-1354).
+///
+/// - A **v6 machine page**: `render::screen::v6_machine_page` has already laid
+///   §8.3's pair under `normal_style`, so an inherited channel is the machine's.
+///   This was the whole of the answer, and it is a v6-only fact — `v6_page_pair`
+///   is set nowhere else.
+/// - A **period look**: `state.period_look` is the same claim on v1–v5, laid under
+///   the theme by `period::apply_to_theme` instead of into `normal_style`, and
+///   already carrying the gate — `period::resolve` answers `Some` only when the
+///   look is enabled, `honor_game_colours` is on, and the medium or the flags
+///   LICENSE the machine.
+///
+/// *Bureaucracy* release 116 is the specimen the second clause exists for. It is
+/// Version 4, so it has no page pair and never will, and it prints both of the
+/// lines an empty command earns inside brackets:
+///
+/// ```text
+/// [What?]                              ; plain TELL      — the body grey
+/// [Your blood pressure just went up.]  ; inside HLIGHT   — that grey, LIT
+/// ```
+///
+/// `machine-screenshots/dos-bureaucracy.png` measures `#A0A0A0` and `#FFFFFF`.
+/// With the rule still firing, both took `transcript_system`'s muted theme colour
+/// — which is not a colour this palette painted, so `render::ibm_bold_fg`'s
+/// round-trip guard then correctly declined to light it, and the brightening
+/// SQ-1354 added could never reach the one game it was reported on.
+fn machine_owns_ink(state: &AppState) -> bool {
+    state.v6_page_pair.get().is_some() || state.period_look.is_some()
+}
+
 /// Render the middle section: suggestion line (or search hint), transcript body.
 /// Returns this pass's [`TranscriptRender`] — the scrollbar gutter flag, the
 /// scroll clamps, the rows this frame really gave to prose, and the per-frame
@@ -2273,14 +2312,10 @@ fn render_middle(
         // kinds use their fixed per-category style. Resolving here (not per wrapped
         // fragment) keeps whole-line matching correct when a line wraps.
         let room_name = state.current_room_name.as_deref();
-        // SQ-0822: `normal_style` already carries §8.3's Amiga machine pair when
-        // there is one (`v6_machine_page`, above), so a Story line whose channels
-        // are inherited resolves them from the MACHINE rather than from the theme —
-        // and the built-in "bracketed line came from the interpreter" rule stands
-        // down, because on that machine the line is the game's prose in the game's
-        // pens. Off the Amiga `normal_style` IS `colors.transcript` and the flag is
-        // false, so every other frame resolves exactly as before.
-        let machine_owns_ink = state.v6_page_pair.get().is_some();
+        // SQ-0822/SQ-1354: whether this frame's inherited ink is the MACHINE's,
+        // which withdraws the built-in bracketed-line rule. Both frames that
+        // answer yes, and why, are on `machine_owns_ink` itself.
+        let machine_owns_ink = machine_owns_ink(state);
         // SQ-0954: AND THE STORY WINDOW'S OWN PAGE OVER THAT, for lanthorn's own
         // annotations.
         //

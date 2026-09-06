@@ -683,6 +683,16 @@ impl ColorScheme {
     /// because it differs in kind: it is a reading aid, it paints an accent rather
     /// than a mute, and an accent is legible on any page — whereas the system rule
     /// asserts something about the line's provenance that is simply untrue here.
+    ///
+    /// **And "exactly those frames" is not a v6 fact** (SQ-1354). The flag was read
+    /// off the v6 page pair alone, so a v1–v5 story wearing its machine's PERIOD
+    /// LOOK — the same claim, laid under the theme instead of into `base` — kept
+    /// the rule. *Bureaucracy* release 116 is Version 4 and prints both of the
+    /// lines an empty command earns in brackets, one of them inside
+    /// `HLIGHT ,H-BOLD`; the mute took them off the palette entirely, so the IBM
+    /// PC's bold-lights-the-intensity-bit rule had no palette colour left to
+    /// light. `render::transcript::machine_owns_ink` is the one place that
+    /// question is answered now, and it carries the specimen.
     pub fn resolve_story_style(
         &self,
         base: Style,
