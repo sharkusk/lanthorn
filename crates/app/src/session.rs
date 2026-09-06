@@ -4005,6 +4005,25 @@ pub fn apply_turn(
         // `already_random` stays its own, separate, IMMEDIATE branch below: a re-walk of a
         // direction already marked is Phase 2's own UPGRADE territory, never a new suspicion.
         let suspicious = !already_random && (existing_conflict.is_some() || declared_mismatch);
+        // SQ-1370: the pool a brand-new direction inherits, because the room it just reached (or
+        // the fixed room its own table named for the move) is one the map already knows a random
+        // exit sends the player to. Computed here beside the other pre-decisions — it reads the
+        // graph immutably, and every branch below mutates it.
+        //
+        // It ranks BELOW `already_random`, which is Phase 2's upgrade territory and says
+        // something about this very direction, and ABOVE `suspicious`, which does not: a declared
+        // mismatch against a room the map already knows is reached at random is not a mystery
+        // needing a probe round trip, it is the randomness the player has already proved. Left as
+        // a suspicion it would be settled by a shadow that agrees with the live landing one time
+        // in four and mint a confident arrow for a coin flip. `inherited_random_pool` refuses
+        // every key the map already claims an EDGE or a self-loop for, so the other half of
+        // `suspicious` — a live contradiction — is never the branch this overtakes.
+        let inherited_pool: Option<Vec<mapper::graph::RoomId>> = (moved_room && !already_random)
+            .then(|| mapper.graph.current().zip(parse_direction(command)))
+            .flatten()
+            .and_then(|(here, d)| {
+                inherited_random_pool(&mapper.graph, here, d, snap.number, result.declared_exit)
+            });
         if fatal {
             // The game said the player died this turn and moved them somewhere that is NOT
             // reachable by the command they typed (e.g. a grue kills you in the dark and drops
@@ -4042,6 +4061,29 @@ pub fn apply_turn(
             mapper.observe_relocation(snap.number, &snap.name);
             // Ordinary play resuming, same reasoning as the `arrived` branch below:
             // whatever death was outstanding is settled without a resurrection.
+            death.unresolved = false;
+        } else if let Some(pool) = &inherited_pool {
+            // SQ-1370: the first walk of a direction the map knew nothing about, into a room some
+            // other direction's pool already names. Mint NO edge — Adventure's forests randomise
+            // on arrival, so the arrow this walk would draw is exactly the one the NEXT walk of
+            // the same direction would have had to take back. Mark it instead, copy the pool so
+            // the room card can name where the story sends the player from the very first walk,
+            // and let `turn::finish_command_turn` arm the ordinary Upgrade probe (which it does
+            // from `MapGraph::is_random_exit` alone, so this branch's own marking is what asks
+            // for it). The mark is recorded as INHERITED: no walk of this direction has proved
+            // anything yet, and `random_exit_probe::deliver_upgrade` needs to know that before it
+            // applies SQ-1269's pool guard to a pool this direction never earned.
+            if let (Some(origin), Some(d)) = (mapper.graph.current(), parse_direction(command)) {
+                mapper.graph.mark_random_exit_inherited(origin, d);
+                // The live landing first — it is the one destination this direction has actually
+                // been seen to reach — then the inherited members, in the pool's own order.
+                mapper.graph.note_random_destination(origin, d, snap.number);
+                for &dest in pool {
+                    mapper.graph.note_random_destination(origin, d, dest);
+                }
+            }
+            mapper.observe_relocation(snap.number, &snap.name);
+            // Ordinary play resuming, same reasoning as every other branch that relocates.
             death.unresolved = false;
         } else if suspicious {
             // SQ-1269: neither a declared-exit mismatch nor a contradicted edge/self-loop is
@@ -4172,6 +4214,95 @@ pub struct DeathWatch {
     /// reprinted in place (ordinary play resuming). It suppresses exactly one relocation, never a
     /// second.
     pub unresolved: bool,
+}
+
+/// The pool a NEW direction should inherit, because the room it just reached is one the map
+/// already knows a random exit sends the player to (SQ-1370) — or `None` when nothing here has
+/// earned that.
+///
+/// # Why a landing is enough
+///
+/// Adventure randomises on the ARRIVAL side. `At_Hill_In_Road`'s `s_to`, `In_A_Valley`'s `e_to`
+/// and its `w_to` all declare the same perfectly ordinary FIXED room, `In_Forest_1`, whose own
+/// `initial` routine reroutes half of every arrival on to `In_Forest_2`. So the randomness is a
+/// property of the DESTINATION, shared by every way in — and yet each of those three directions
+/// used to be discovered from scratch: mint a confident arrow on the first walk, wait for a
+/// second walk to contradict it, and only then mark `?`. The player who has already proved the
+/// hill's south is random has proved something about the valley's west too, and this is where the
+/// map says so: the first walk of a new direction into a pooled room is marked on the spot, with
+/// the pool copied, and `random_exit_probe::arm_for_finished_turn` arms the same Upgrade probe it
+/// arms for any other marked direction.
+///
+/// # It is a hypothesis, and it is recorded as one
+///
+/// The same evidence reads differently when the randomness lives on the ORIGIN side: one exit
+/// that scatters the player among five rooms says nothing about the fixed corridor into any one
+/// of them. That direction is marked all the same — the two cases are indistinguishable from a
+/// single landing — but as an INHERITED mark ([`mapper::graph::MapGraph::mark_random_exit_inherited`]),
+/// which agreeing re-walks are allowed to clear where an earned one's pool would lock it in. A
+/// fixed passage into a random room therefore repairs itself; see `random_exit_probe::deliver_upgrade`.
+///
+/// # What is refused
+///
+/// * A key the map already claims something for — an edge, a self-loop, or a `?` — because this
+///   is the FIRST-walk rule; a second walk that contradicts an edge is SQ-1264's contradiction
+///   rule, and a re-walk of a marked direction is Phase 2's upgrade. Only a direction the map has
+///   nothing to say about reaches here.
+/// * A move that did not leave the room (`landed == origin`): `In Forest`'s own north, south and
+///   west all loop back, and the room the loop returns to is of course in its own neighbours'
+///   pools. A self-loop is a fact about staying put, not about arriving anywhere.
+/// * A pool that names its OWN origin room (SQ-1345). Zork I's four same-named forests filled the
+///   field map with pools like `[#175, #33]` on room #33 — the real destination plus a phantom
+///   "back here" — and a corrupt pool must not seed more marks from the rooms it wrongly names.
+/// * A pool of fewer than two rooms: one sighting is where a direction that varies and one that
+///   was walked once look exactly alike, and propagating from it would spread a guess made from
+///   a single observation.
+pub fn inherited_random_pool(
+    graph: &mapper::graph::MapGraph,
+    origin: mapper::graph::RoomId,
+    dir: mapper::direction::Direction,
+    landed: mapper::graph::RoomId,
+    declared: Option<crate::engine::DeclaredExit>,
+) -> Option<Vec<mapper::graph::RoomId>> {
+    use mapper::direction::Direction;
+    if dir == Direction::Unknown || landed == origin {
+        return None;
+    }
+    if graph.is_random_exit(origin, dir)
+        || graph.self_loops(origin).contains(&dir)
+        || graph.connections().iter().any(|c| c.origin == origin && c.dir == dir)
+    {
+        return None; // the map already claims something here; this rule is about first walks
+    }
+    // The rooms this move can be recognised by: where the player actually came out, and — since
+    // the origin's own table is what a declared mismatch would have been read against — whatever
+    // fixed room that table named. Adventure's valley declares `In_Forest_1` both ways, so a walk
+    // that happens to land in the OTHER forest is recognised by either half.
+    let mut keys = vec![landed];
+    if let Some(crate::engine::DeclaredExit::Room(r)) = declared {
+        if r != origin && !keys.contains(&r) {
+            keys.push(r);
+        }
+    }
+    let mut pool: Vec<mapper::graph::RoomId> = Vec::new();
+    // `rooms()` walks a BTreeMap, so the union below is built in room-id order and two runs over
+    // the same map produce the same pool in the same order.
+    for room in graph.rooms() {
+        for (d, dests) in &room.random_destinations {
+            if (room.id, *d) == (origin, dir) || dests.contains(&room.id) {
+                continue; // itself, or SQ-1345's phantom self-entry
+            }
+            if !dests.iter().any(|x| keys.contains(x)) {
+                continue;
+            }
+            for &dest in dests {
+                if dest != origin && !pool.contains(&dest) {
+                    pool.push(dest);
+                }
+            }
+        }
+    }
+    (pool.len() >= 2).then_some(pool)
 }
 
 /// The `tried` record this turn's command is about to create: `(the room the player is standing
@@ -9756,4 +9887,212 @@ mod untried_turn_tests {
         assert!(left.contains(&Direction::S) && left.contains(&Direction::Up), "{left:?}");
     }
 
+}
+
+#[cfg(all(test, feature = "t-session"))]
+mod inherited_random_pool_tests {
+    //! SQ-1370 rule 1, on a synthetic map: the first walk of a NEW direction into a room some
+    //! other direction's pool already names is marked random on the spot, with that pool copied,
+    //! instead of minting a confident arrow a second walk would have to take back.
+    //!
+    //! Everything here goes through [`apply_turn`], the engine-neutral function both the
+    //! Z-machine and the Glulx session reach this rule by (`turn::finish_command_turn` calls it
+    //! for every engine), so these cases and the real-story ones in
+    //! `crates/app/tests/suites/sq1264_forest_randomization.rs` exercise one rule and not two.
+    //! `TurnResult::observation` leaves `declared_exit` at `None`, which is the "engine with no
+    //! declared-exit seam at all" case; the one case that needs a declaration sets it.
+
+    use super::*;
+    use mapper::direction::Direction;
+    use mapper::graph::RoomId;
+
+    fn snap(number: RoomId, name: &str) -> LocationInfo {
+        LocationInfo { number, parent: 0, name: name.to_string() }
+    }
+
+    /// A map with room 1's north already marked random over the pool `[2, 3]` — the shape a
+    /// contradicted walk leaves behind — and the player standing in room 4.
+    fn map_with_a_known_pool() -> (Mapper, DeathWatch) {
+        let mut mapper = Mapper::default();
+        let mut death = DeathWatch::default();
+        apply_turn(&mut mapper, "", &TurnResult::observation(snap(1, "Hill")), &mut death);
+        mapper.record_random_exit(1, Direction::N);
+        mapper.graph.note_random_destination(1, Direction::N, 2);
+        mapper.graph.note_random_destination(1, Direction::N, 3);
+        apply_turn(&mut mapper, "", &TurnResult::observation(snap(4, "Valley")), &mut death);
+        (mapper, death)
+    }
+
+    fn edge(mapper: &Mapper, from: RoomId, dir: Direction) -> Option<RoomId> {
+        mapper.graph.connections().iter().find(|c| c.origin == from && c.dir == dir).map(|c| c.dest)
+    }
+
+    #[test]
+    fn a_first_walk_into_a_pooled_room_is_marked_random_with_the_pool_copied() {
+        let (mut mapper, mut death) = map_with_a_known_pool();
+        apply_turn(&mut mapper, "west", &TurnResult::observation(snap(2, "Forest")), &mut death);
+
+        assert!(mapper.graph.is_random_exit(4, Direction::W), "marked on the FIRST walk");
+        assert_eq!(edge(&mapper, 4, Direction::W), None, "and no confident arrow drawn");
+        assert_eq!(
+            mapper.graph.random_destinations(4, Direction::W),
+            &[2, 3],
+            "the live landing first, then the rest of the pool it inherited"
+        );
+        assert!(
+            mapper.graph.is_inherited_random_exit(4, Direction::W),
+            "recorded as INHERITED: no walk of this direction has proved anything yet"
+        );
+        assert_eq!(mapper.graph.current(), Some(2), "the player is still observed as having arrived");
+        assert!(
+            mapper.take_random_exit_suspicion().is_none(),
+            "decided here, not left for a probe to settle"
+        );
+        assert_eq!(
+            mapper::matrix::classify(&mapper.graph, 4, Direction::W),
+            mapper::matrix::MatrixCell::Random { destinations: 2 },
+            "the matrix reads `?²` straight away"
+        );
+    }
+
+    /// The other half of rule 1: the origin's own table names a pooled room, and the player lands
+    /// somewhere the map has never seen. `In_A_Valley` declares `In_Forest_1` for both east and
+    /// west, so the declaration alone is enough to recognise the move.
+    #[test]
+    fn a_declared_exit_naming_a_pooled_room_is_enough_on_its_own() {
+        let (mut mapper, mut death) = map_with_a_known_pool();
+        let mut r = TurnResult::observation(snap(9, "Somewhere New"));
+        r.declared_exit = Some(crate::engine::DeclaredExit::Room(2)); // 2 is in room 1's pool
+        apply_turn(&mut mapper, "west", &r, &mut death);
+
+        assert!(mapper.graph.is_random_exit(4, Direction::W), "marked from the declaration");
+        assert_eq!(edge(&mapper, 4, Direction::W), None);
+        assert_eq!(
+            mapper.graph.random_destinations(4, Direction::W),
+            &[9, 2, 3],
+            "where the player actually came out, plus the pool the declaration matched"
+        );
+    }
+
+    /// An ordinary walk into a room NOTHING pools mints its edge exactly as it always did — the
+    /// negative control, so a rule that fired on every move would be caught here.
+    #[test]
+    fn a_first_walk_into_an_unpooled_room_still_mints_its_edge() {
+        let (mut mapper, mut death) = map_with_a_known_pool();
+        apply_turn(&mut mapper, "south", &TurnResult::observation(snap(7, "Meadow")), &mut death);
+        assert_eq!(edge(&mapper, 4, Direction::S), Some(7), "an ordinary passage, ordinarily drawn");
+        assert!(!mapper.graph.is_random_exit(4, Direction::S));
+    }
+
+    /// A SELF-LOOP is not an arrival anywhere. `In Forest`'s own north, south and west all come
+    /// back to the room the player is standing in — which is of course a room its neighbours'
+    /// pools name — and reading that as "a direction into a pooled room" would mark every forest
+    /// loop random. (`advent.z6` proves the same thing end to end in
+    /// `z6_forest_self_loop_directions_are_always_deterministic`.)
+    #[test]
+    fn a_move_that_never_left_the_room_is_not_an_arrival_in_a_pooled_room() {
+        let (mut mapper, mut death) = map_with_a_known_pool();
+        // Walk into the pooled room 2 first (marked, per the case above), then loop inside it.
+        // The loop turn carries a REPRINTED heading, which is the only evidence a self-loop ever
+        // leaves (SQ-0666) and what puts this move on `apply_turn`'s `arrived` branch at all.
+        apply_turn(&mut mapper, "west", &TurnResult::observation(snap(2, "Forest")), &mut death);
+        let mut loop_turn = TurnResult::observation(snap(2, "Forest"));
+        loop_turn.transcript = "Forest\n\nYou are in a forest.\n".to_string();
+        apply_turn(&mut mapper, "north", &loop_turn, &mut death);
+        assert!(!mapper.graph.is_random_exit(2, Direction::N), "the loop is not a random exit");
+        assert_eq!(mapper.graph.self_loops(2), vec![Direction::N], "it is recorded as what it is");
+    }
+
+    /// This is the FIRST-walk rule and nothing else. A direction the map already claims something
+    /// for is somebody else's business: a contradicted edge is SQ-1264's contradiction rule (a
+    /// suspicion for a probe to settle), and a re-walk of a marked direction is Phase 2's upgrade.
+    #[test]
+    fn a_direction_the_map_already_claims_something_for_is_left_alone() {
+        // An existing edge that this landing AGREES with: re-walked, still an ordinary passage.
+        let (mut mapper, mut death) = map_with_a_known_pool();
+        mapper.graph.add_edge(4, Direction::W, 2);
+        apply_turn(&mut mapper, "west", &TurnResult::observation(snap(2, "Forest")), &mut death);
+        assert!(!mapper.graph.is_random_exit(4, Direction::W), "a known passage is not re-judged here");
+        assert_eq!(edge(&mapper, 4, Direction::W), Some(2), "and its edge stands");
+
+        // An existing edge this landing CONTRADICTS: SQ-1264/SQ-1269's suspicion, untouched.
+        let (mut mapper, mut death) = map_with_a_known_pool();
+        mapper.graph.add_edge(4, Direction::W, 8);
+        apply_turn(&mut mapper, "west", &TurnResult::observation(snap(2, "Forest")), &mut death);
+        assert_eq!(edge(&mapper, 4, Direction::W), Some(8), "the old edge stands — nothing decided yet");
+        assert!(!mapper.graph.is_random_exit(4, Direction::W), "not marked either");
+        let susp =
+            mapper.take_random_exit_suspicion().expect("a contradiction is a suspicion, as before");
+        assert_eq!(
+            (susp.origin, susp.dir, susp.old_dest, susp.live_dest),
+            (4, Direction::W, Some(8), 2)
+        );
+    }
+
+    /// SQ-1345: Zork I's four same-named forests filled a field map with pools naming their OWN
+    /// room — `#33 E → [#175, #33]`, the real destination plus a phantom "back here". A corrupt
+    /// pool must not go on to seed marks on every direction that reaches the rooms it names.
+    #[test]
+    fn a_pool_that_names_its_own_origin_room_never_propagates() {
+        let mut mapper = Mapper::default();
+        let mut death = DeathWatch::default();
+        apply_turn(&mut mapper, "", &TurnResult::observation(snap(33, "Forest")), &mut death);
+        mapper.record_random_exit(33, Direction::E);
+        mapper.graph.note_random_destination(33, Direction::E, 175);
+        mapper.graph.note_random_destination(33, Direction::E, 33); // the phantom self-entry
+        apply_turn(&mut mapper, "", &TurnResult::observation(snap(247, "Forest Path")), &mut death);
+
+        apply_turn(&mut mapper, "east", &TurnResult::observation(snap(175, "Forest")), &mut death);
+        assert!(!mapper.graph.is_random_exit(247, Direction::E), "a corrupt pool seeds nothing");
+        assert_eq!(edge(&mapper, 247, Direction::E), Some(175), "the ordinary crossing keeps its edge");
+    }
+
+    /// One sighting is where "this direction varies" and "this direction was walked once" look
+    /// exactly alike, so a pool of one is not enough to propagate from.
+    #[test]
+    fn a_pool_of_one_room_is_not_enough_to_propagate() {
+        let mut mapper = Mapper::default();
+        let mut death = DeathWatch::default();
+        apply_turn(&mut mapper, "", &TurnResult::observation(snap(1, "Hill")), &mut death);
+        mapper.record_random_exit(1, Direction::N);
+        mapper.graph.note_random_destination(1, Direction::N, 2);
+        apply_turn(&mut mapper, "", &TurnResult::observation(snap(4, "Valley")), &mut death);
+
+        apply_turn(&mut mapper, "west", &TurnResult::observation(snap(2, "Forest")), &mut death);
+        assert!(!mapper.graph.is_random_exit(4, Direction::W), "one sighting propagates nothing");
+        assert_eq!(edge(&mapper, 4, Direction::W), Some(2), "the ordinary edge is minted, as before");
+    }
+
+    /// The helper itself, read directly: it answers with the pool it would copy, so the decision
+    /// can be seen without going through a turn.
+    #[test]
+    fn the_helper_answers_with_the_union_of_every_pool_that_names_the_room() {
+        let mut mapper = Mapper::default();
+        let mut death = DeathWatch::default();
+        apply_turn(&mut mapper, "", &TurnResult::observation(snap(1, "Hill")), &mut death);
+        mapper.record_random_exit(1, Direction::N);
+        mapper.graph.note_random_destination(1, Direction::N, 2);
+        mapper.graph.note_random_destination(1, Direction::N, 3);
+        mapper.graph.upsert_room(5, "Ridge".to_string());
+        mapper.record_random_exit(5, Direction::S);
+        mapper.graph.note_random_destination(5, Direction::S, 3);
+        mapper.graph.note_random_destination(5, Direction::S, 6);
+        mapper.graph.upsert_room(4, "Valley".to_string());
+
+        assert_eq!(
+            inherited_random_pool(&mapper.graph, 4, Direction::W, 3, None),
+            Some(vec![2, 3, 6]),
+            "room 3 is named by both pools, so both are copied — in room-id order, deterministically"
+        );
+        assert_eq!(
+            inherited_random_pool(&mapper.graph, 4, Direction::W, 7, None),
+            None,
+            "a room nothing pools is nothing to inherit from"
+        );
+        assert_eq!(
+            inherited_random_pool(&mapper.graph, 4, Direction::Unknown, 3, None),
+            None,
+            "a move with no direction has nothing to mark"
+        );
+    }
 }
