@@ -2313,7 +2313,13 @@ mod tests {
     /// SQ-1340: a resize re-asserts bracketed paste always, and mouse capture
     /// only when the config asked for it — the same rule the launch site
     /// applies, since both call the one function.
+    ///
+    /// This assertion is Unix-only. crossterm enables mouse capture on Windows
+    /// through the console API, not an escape sequence, so there are no bytes to
+    /// assert on there; the function itself is exercised by the launch path on
+    /// every platform.
     #[test]
+    #[cfg(not(windows))]
     fn reassert_terminal_modes_gates_mouse_on_config() {
         let mut with_mouse = Vec::new();
         reassert_terminal_modes(&mut with_mouse, true).unwrap();
