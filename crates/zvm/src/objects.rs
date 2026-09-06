@@ -1926,7 +1926,7 @@ mod tests {
                 panic!("z_string cannot encode {ch:?}");
             }
         }
-        while z.len() % 3 != 0 {
+        while !z.len().is_multiple_of(3) {
             z.push(5); // §3.6.1's padding: a shift with nothing after it
         }
         let mut out = Vec::new();
