@@ -64,14 +64,17 @@ Absolute URLs or no link.
   colours can be changed without re-exporting. Nothing in it needs a special
   font.
 - **Every passage that leaves the layer being drawn now says where it goes, at
-  both ends, and never drops the name.** A badge that crosses to another map
-  layer is joined by a short line to a small box naming the room and the
-  layer it leads to; the layer on the other side draws the matching box back,
-  and a one-way passage — nothing to draw it back FROM — gets an arrival box
-  on the far side instead, naming where it came from. Where the old single
-  caption used to get dropped in a crowded corner (Zork I's Kitchen, a step
-  down into the Studio, on its busy house layer), the box now just moves
-  farther out along the passage until it finds room.
+  both ends, never drops the name, and its own arrow shows which way you
+  travel.** A badge that crosses to another map layer is joined by a short
+  line to a small box naming the room and the layer it leads to, with an
+  arrowhead pointing into that box; the layer on the other side draws the
+  matching box back, its own arrow pointing into IT — and a one-way passage —
+  nothing to draw it back FROM — gets an arrival box on the far side instead,
+  naming where it came from, with the arrow pointing into the room you arrive
+  in rather than into the box. Where the old single caption used to get
+  dropped in a crowded corner (Zork I's Kitchen, a step down into the Studio,
+  on its busy house layer), the box now just moves farther out along the
+  passage until it finds room.
 - **A two-way passage between two touching rooms no longer reads as a bowtie
   (`◄►`).** At the narrowest gutter the SVG draws, the two arrowheads used to
   meet — or nearly meet — back to back with no line visible between them
@@ -227,6 +230,12 @@ Absolute URLs or no link.
   some stories compile in with no name and no way anywhere (an object that
   declares nothing but an exit back to itself) no longer shows up on the
   generated map at all.
+- **A diagonal passage crossing another line no longer garbles either one.**
+  With the diagonal map style on, Zork I's slope from West of House down to
+  the Stone Barrow used to sprout a stray dash where it crossed the secret
+  passage running under the house. It now leaves the same clean one-cell gap
+  any other crossing on the map does, and the passage underneath keeps its own
+  line unbroken — the two read as a crossing, not a tangle.
 
 ---
 

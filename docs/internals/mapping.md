@@ -391,7 +391,10 @@ and it understands the awkward cases:
 
 Where two unrelated connectors still have to cross, the map says so rather than drawing a
 junction: the vertical run passes through unbroken and the horizontal one breaks for a single
-cell, so a crossing never reads as a place the two passages meet.
+cell, so a crossing never reads as a place the two passages meet. A half-diagonal slope crossing
+another connector follows the same rule: it is simply not drawn at that one cell, leaving a
+one-cell gap, and the other connector keeps its own ordinary glyph — never a manufactured junction
+of the two (SQ-1331).
 
 **A crossing is fine; running alongside is not.** Two passages that meet at a point and part
 again are both still followable — that is what the break above is for. Two that share a stretch
@@ -451,11 +454,19 @@ rather than to where it is routed.
 With the half-diagonal glyphs on, those two crossings ARE drawn as true slopes — those rooms are
 diagonally adjacent — and they cost two cells apiece rather than a point, because a half-diagonal
 step is two glyphs tall. At each of those cells the two lines want complementary halves of one
-crossing, Unicode has the glyph that draws both (U+1FBA6 🮦 and U+1FBA7 🮧, the same Legacy
-Computing block the halves come from), and the renderer has no combined form to reach for — so one
-slope overwrites the other and the passage underneath shows a two-cell break where they cross. It
-is a crossing drawn imperfectly rather than a passage lost, it long predates the rule above about
-which passages are drawn as slopes at all, and it is the only such cell on either reference map.
+crossing, and Unicode has the glyph that draws both (U+1FBA6 🮦 and U+1FBA7 🮧, the same Legacy
+Computing block the halves come from) — but the renderer reaches for neither. Instead it extends
+the crossing convention above to slopes (SQ-1331): the slope plotted FIRST (in the router's own
+plan order) keeps every cell it wants, and the other slope simply yields a one-cell gap there
+rather than drawing over it — the same "one line passes through, the other breaks" reading a
+compass crossing gets, not a merged glyph and not an overwrite. It is a crossing drawn as a gap
+rather than a passage lost, and it is the only such shape on either reference map.
+
+The same extension covers a slope crossing ordinary compass line-art, which the park corner does
+not exercise but Zork I does: `West of House↔Stone Barrow`'s slope crosses the
+`Strange Passage↔Living Room` conditional connector routed under West of House. Compass line-art
+always wins there — the orthogonal run keeps its ordinary glyph, unbroken, and the slope leaves its
+gap — since only a SLOPE can be one cell short without losing its readability as one.
 
 **A room's compass anchor belongs to the room first.** Each side of a box has one
 mid-side cell — the cell a real exit, a `?` random-exit mark or a probed way back in
@@ -1075,13 +1086,22 @@ What the drawing shows, beyond the rooms:
   glyphs: **the export must not depend on Nerd Fonts.**
 - **A ghost, at both ends, for every passage that leaves the layer being
   drawn** (SQ-1319): a small dashed box, joined to the badge by a short
-  connector, naming the room it leads to and the layer it lives on. When the
-  graph carries a connection back the other way, the destination's own panel
-  draws its own ghost for it — that pairing is what "both ends" means; there
-  is no separate mirroring step. A genuinely ONE-WAY crossing has nothing to
-  mirror, so the arriving room gets an arrival ghost instead — an inward
-  arrowhead (arriving, not leaving) and a box naming where the passage came
-  FROM — which is the one case `mapper::layer::interlayer_badges` never draws
+  connector, naming the room it leads to and the layer it lives on, with an
+  arrowhead showing which way the passage runs (SQ-1330). A ghost stands for
+  the far end of ONE passage as seen from this panel, so its own arrow shows
+  that passage's direction of travel and nothing else. A DEPARTURE ghost (the
+  room has an exit leaving toward it) carries the arrowhead at the GHOST's own
+  edge, pointing further in — the mirror of a one-way passage's own exit arrow
+  (SQ-0688), never a two-way head pointing back at the room it started from.
+  When the graph carries a connection back the other way, the destination's
+  own panel draws its own departure ghost for it — that pairing is what "both
+  ends" means, and it holds even then: the way back is a SEPARATE one-way,
+  drawn on the other panel, never a single two-way head shared between them.
+  There is no separate mirroring step. A genuinely ONE-WAY crossing has
+  nothing to mirror, so the arriving room gets an arrival ghost instead — the
+  arrowhead sits at the ROOM's own edge instead, pointing INTO the room
+  (arriving, not leaving) — and a box naming where the passage came FROM —
+  which is the one case `mapper::layer::interlayer_badges` never draws
   anything for on its own, since it only ever states a room's own outgoing
   crossing. A ghost's placement search **never gives up**: when nothing is
   free near the badge it keeps extending straight out along the passage's own

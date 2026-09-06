@@ -1127,25 +1127,6 @@ const DIR_E: u8 = 2;
 const DIR_S: u8 = 4;
 const DIR_W: u8 = 8;
 
-/// The cell-edge midpoints a chain glyph reaches, as direction bits — `None` for a glyph
-/// `diagonal_chain` never emits.
-///
-/// Every half-diagonal endpoint is an edge MIDPOINT, exactly where `─` and `│` attach, so a
-/// chain glyph and an orthogonal run through the same cell describe strokes to the SAME points.
-/// That is what lets the two merge into one mask rather than one overwriting the other
-/// (SQ-0356). Matched against `path`, not against literals: every glyph here is themeable.
-fn chain_glyph_bits(ch: char, path: &crate::symbols::PathGlyphs) -> Option<u8> {
-    Some(match ch {
-        c if c == path.diag_ul => DIR_N | DIR_W,
-        c if c == path.diag_ur => DIR_N | DIR_E,
-        c if c == path.diag_ll => DIR_S | DIR_W,
-        c if c == path.diag_lr => DIR_S | DIR_E,
-        c if c == path.ns => DIR_N | DIR_S,
-        c if c == path.ew => DIR_E | DIR_W,
-        _ => return None,
-    })
-}
-
 /// Box-drawing glyph for a set of direction bits.
 fn glyph_for(mask: u8, path: &crate::symbols::PathGlyphs) -> Option<char> {
     Some(match mask {
@@ -1632,6 +1613,40 @@ pub(crate) fn plot_connector(
     Some(ConnectorPlot { cells, path, diag_cells, dep_anchor, arr_anchor })
 }
 
+/// Resolve which connector wins each diagonal-chain cell under the SQ-1331 crossing rule, given
+/// every connector's plot (in plan order — the same order `plots` is built in everywhere it is
+/// used) and the set of cells ANY compass connector already claims.
+///
+/// Extends the SQ-0525 crossing convention (a vertical run passes through unbroken, a horizontal
+/// one breaks for a single cell) to slopes: a slope cell some other connector also occupies is
+/// not drawn there at all, leaving a one-cell gap, rather than either line losing its shape to a
+/// manufactured junction glyph. Compass line-art always wins over a slope, which is why a cell it
+/// claims is never entered into the returned map at all; between two slopes, the one plotted
+/// FIRST (lower index into `plots`) wins and every later one yields.
+///
+/// `render_lane_connectors` calls this to decide what to paint, and the `diagonal_glyph_*`
+/// measurement functions below call it to check what got painted — one algorithm, so the drawn
+/// picture and what a test asserts about it cannot drift apart.
+///
+/// `plots` pairs each plot with an ordering key — the caller's own notion of "plan order",
+/// which need not be a freshly-resequenced index; a plan-connector index with gaps (some
+/// connectors never plotted at all) works exactly as well, since only relative order matters.
+fn resolve_diagonal_winners<'a>(
+    plots: impl IntoIterator<Item = (usize, &'a ConnectorPlot)>,
+    compass_cells: &std::collections::HashSet<(i32, i32)>,
+) -> std::collections::HashMap<(i32, i32), usize> {
+    let mut winners = std::collections::HashMap::new();
+    for (ci, plot) in plots {
+        for (c, _) in &plot.diag_cells {
+            if compass_cells.contains(c) {
+                continue;
+            }
+            winners.entry(*c).or_insert(ci);
+        }
+    }
+    winners
+}
+
 /// Draw every plan connector as box-drawing line-art along its lanes, and RETURN the departure
 /// (and reciprocal arrival) arrowheads as `(virtual pixel, glyph, distorted, is_portal, room_id)`.
 /// The arrowheads are NOT drawn here: each sits ON a room's border cell, so the caller draws them
@@ -1685,15 +1700,6 @@ fn render_lane_connectors(
         std::collections::HashMap::new();
     let mut updown_cells: std::collections::HashMap<(i32, i32), (u8, usize)> =
         std::collections::HashMap::new();
-    // Cells whose mask carries bits a DIAGONAL CHAIN merged in (SQ-0356). They must be exempt
-    // from the crossing rule below: a chain that flattened to `─` for one cell is indistinguishable
-    // from a horizontal RUN by its mask alone, and the crossing rule would then hand the cell to
-    // the vertical outright and throw the chain's bits away — which is the one outcome SQ-0356
-    // exists to prevent. Order used to hide this (the run happened to paint first, and the chain
-    // ORed onto it), so the promise of order-independence in the chain loop's comment was only
-    // ever true in one direction; SQ-1316's lane changes moved a Zork-shaped fixture into the
-    // other one.
-    let mut chain_merged: std::collections::HashSet<(i32, i32)> = std::collections::HashSet::new();
     // Dotted glyph set for up/down connector bodies: straight runs read as dotted; any turn
     // glyph falls back to the solid corner set (up/down routes like N/S so may still turn).
     let dotted_path = crate::symbols::PathGlyphs {
@@ -1707,21 +1713,26 @@ fn render_lane_connectors(
     // instead of `map.connector`/`map.connector_distorted`.
     let mut arrowheads: Vec<Arrowhead> = Vec::new();
 
-    // Plot every connector up front: the diagonal-chain merge below needs to know whether ANY
-    // connector claims a cell with compass line-art, which a single pass painting as it goes
-    // cannot answer for connectors it has not reached yet.
+    // Plot every connector up front: the diagonal-chain crossing rule below needs to know
+    // whether ANY connector claims a cell with compass line-art, which a single pass painting
+    // as it goes cannot answer for connectors it has not reached yet.
     let plots: Vec<(&mapper::route::RoutedConnector, ConnectorPlot)> = plan
         .connectors
         .iter()
         .filter_map(|c| plot_connector(c, cols, rows, diag).map(|p| (c, p)))
         .collect();
     // Cells carrying compass line-art. Up/down connectors are excluded: they accumulate in their
-    // own mask with their own dotted glyphs, so a chain has nothing there to merge WITH.
+    // own mask with their own dotted glyphs, so a slope has nothing there to cross.
     let compass_cells: std::collections::HashSet<(i32, i32)> = plots
         .iter()
         .filter(|(c, _)| !matches!(c.exit_dir, Direction::Up | Direction::Down))
         .flat_map(|(_, p)| p.cells.iter().map(|(c, _)| *c))
         .collect();
+    // Which connector wins each diagonal-chain cell (SQ-1331) — see `resolve_diagonal_winners`.
+    // The per-connector check below need only ask "am I the recorded winner here", covering both
+    // a compass yield and a diagonal-vs-diagonal one with one lookup.
+    let diag_winners =
+        resolve_diagonal_winners(plots.iter().enumerate().map(|(ci, (_, p))| (ci, p)), &compass_cells);
 
     let mut pending_markers: Vec<PendingMarker> = Vec::new();
     for (ci, (conn, plot)) in plots.iter().enumerate() {
@@ -1775,7 +1786,6 @@ fn render_lane_connectors(
             // exists to remove; breaking a line there would hide a real layout defect and cost
             // the turning connector its corner.
             let crossing = owner != ci
-                && !chain_merged.contains(c)
                 && matches!((prev, *mask), (m, n) | (n, m) if m == DIR_N | DIR_S && n == DIR_E | DIR_W);
             if crossing {
                 if *mask == DIR_N | DIR_S {
@@ -1797,29 +1807,23 @@ fn render_lane_connectors(
         // 4-bit mask representation, and letting it OR into a neighbour's mask would corrupt
         // that neighbour's glyph choice. Always empty when `diagonal_corners` is off.
         //
-        // On a cell some OTHER connector runs orthogonal line-art through, there is no glyph
-        // for "half-diagonal crossing a line", so the chain MERGES instead: its endpoint bits
-        // OR into the shared mask and the cell renders as the junction that joins them — the
-        // diagonal flattens for that one cell rather than either line losing it (SQ-0356).
-        // Merging via the mask (not by painting a glyph) is what makes this order-independent:
-        // a connector painting the cell later ORs on top and the chain's bits survive.
+        // A cell some OTHER connector also occupies is not drawn as a half-diagonal at all
+        // (SQ-1331): `diag_winners`, computed once above, already says who — compass line-art
+        // always wins, and between two slopes the earlier one in plan order does. This connector
+        // draws the cell only when IT is the recorded winner; otherwise the slope simply leaves a
+        // one-cell gap there and the other connector keeps its own unbroken glyph, exactly as an
+        // orthogonal crossing breaks the horizontal and leaves the vertical unbroken (SQ-0525).
+        // Never a manufactured junction glyph: a slope cell renders as either its own chain glyph
+        // or nothing, never a merge of the two.
         for (c, ch) in &plot.diag_cells {
             let (sx, sy) = (c.0 + off_x, c.1 + off_y);
             if !in_area(sx, sy, area) {
                 continue;
             }
-            let merge = (!is_updown && compass_cells.contains(c))
-                .then(|| chain_glyph_bits(*ch, glyphs))
-                .flatten();
-            let glyph_s = match merge {
-                Some(bits) => {
-                    let entry = cell_map.entry(*c).or_insert((0, ci));
-                    entry.0 |= bits;
-                    chain_merged.insert(*c);
-                    glyph_for(entry.0, glyphs).unwrap_or(*ch).to_string()
-                }
-                None => ch.to_string(),
-            };
+            if diag_winners.get(c) != Some(&ci) {
+                continue; // yields to compass line-art, or to an earlier slope
+            }
+            let glyph_s = ch.to_string();
             if let Some(cell) = buf.cell_mut((sx as u16, sy as u16)) {
                 cell.set_symbol(&glyph_s).set_style(style);
             }
@@ -3157,57 +3161,165 @@ pub fn overlap_cells(
     out
 }
 
-/// Every cell a DIAGONAL GLYPH run of one connector shares with a DIFFERENT connector, on one
-/// layer, with the `diagonal_corners` glyph style on (SQ-1321).
+/// Build one layer's diagonal-chain plots, the compass cells they might cross, and who wins each
+/// crossing (SQ-1331) — the shared setup every `diagonal_glyph_*` measurement below needs, kept
+/// in one place so the two cannot quietly diverge from each other or from
+/// `resolve_diagonal_winners`'s own idea of "wins".
 ///
-/// [`overlap_cells`] cannot see these. It plots every connector with `None` on purpose — the
-/// orthogonal reading, so the tidy metric does not move when a user toggles a display setting —
-/// and a half-diagonal chain claims no lane and contributes no compass mask, so it is invisible
-/// to that reading twice over. This is the other half: plot with the glyphs on and ask whether a
-/// chain cell landed on someone else's line.
+/// Each plot is paired with its connector's index into `rm.plan.connectors` (in plan order, with
+/// gaps where a connector failed to plot at all) — the same index `resolve_diagonal_winners`
+/// records as a winner, so a caller looks a winning connector back up as
+/// `rm.plan.connectors[idx]`, never by re-deriving a fresh sequential id of its own.
+type DiagonalCrossingState = (
+    mapper::render::RenderMap,
+    Vec<(usize, ConnectorPlot)>,
+    std::collections::HashSet<(i32, i32)>,
+    std::collections::HashMap<(i32, i32), usize>,
+);
+
+fn diagonal_crossing_state(graph: &mapper::graph::MapGraph, layer: mapper::layer::LayerId) -> DiagonalCrossingState {
+    let rm = mapper::render::render_layer(graph, layer);
+    let (cols, rows) = boxes_axes(&rm.plan, rm.bounds);
+    let glyphs = crate::symbols::SymbolSet::default().path;
+    let plots: Vec<(usize, ConnectorPlot)> = rm
+        .plan
+        .connectors
+        .iter()
+        .enumerate()
+        .filter_map(|(ci, c)| plot_connector(c, &cols, &rows, Some(&glyphs)).map(|p| (ci, p)))
+        .collect();
+    let compass_cells: std::collections::HashSet<(i32, i32)> = plots
+        .iter()
+        .filter(|(ci, _)| !matches!(rm.plan.connectors[*ci].exit_dir, Direction::Up | Direction::Down))
+        .flat_map(|(_, p)| p.cells.iter().map(|(c, _)| *c))
+        .collect();
+    let winners = resolve_diagonal_winners(plots.iter().map(|(ci, p)| (*ci, p)), &compass_cells);
+    (rm, plots, compass_cells, winners)
+}
+
+/// Every diagonal-chain cell that YIELDS under the SQ-1331 crossing rule on one layer, with the
+/// `diagonal_corners` glyph style on (SQ-1321): a slope cell some other connector also occupies
+/// is not drawn there at all — compass line-art always wins, and between two slopes the one
+/// earlier in plan order does (`resolve_diagonal_winners`). One line per yielded cell, naming the
+/// yielding connector and what it yielded to, so a result points at a place on the map.
 ///
-/// A chain cell that meets an orthogonal run is not automatically a defect — the renderer MERGES
-/// the two into a junction glyph (see `chain_glyph_bits`), which is a crossing and allowed, the
-/// same reading `overlap_stats` takes of two orthogonal runs. What is reported here is the shape
-/// no junction can express: two connectors both drawing a DIAGONAL through one cell, where the
-/// second glyph simply replaces the first.
+/// This is the residual the fix leaves behind, sized so it cannot quietly grow — see
+/// `diagonal_glyph_overlaps` for the complementary invariant that a yield always actually
+/// happens (nothing here should ever show up doubled in the render).
+pub fn diagonal_glyph_yields(
+    graph: &mapper::graph::MapGraph,
+    layer: mapper::layer::LayerId,
+) -> Vec<String> {
+    let (rm, plots, compass_cells, winners) = diagonal_crossing_state(graph, layer);
+    let plan = &rm.plan;
+    let name = |id| graph.room(id).map(|r| r.label().to_string()).unwrap_or_else(|| format!("#{id:?}"));
+    let label = |ci: usize| {
+        let c = &plan.connectors[ci];
+        format!("{}->{}({:?})", name(c.origin), name(c.dest), c.exit_dir)
+    };
+    let mut out = Vec::new();
+    for (ci, plot) in &plots {
+        let conn = &plan.connectors[*ci];
+        for (c, _) in &plot.diag_cells {
+            let yields_to = if compass_cells.contains(c) {
+                Some("compass line-art".to_string())
+            } else {
+                match winners.get(c) {
+                    Some(&owner) if owner != *ci => Some(label(owner)),
+                    _ => None,
+                }
+            };
+            if let Some(to) = yields_to {
+                out.push(format!(
+                    "cell {c:?}: {}->{}({:?}) yields to {to}",
+                    name(conn.origin),
+                    name(conn.dest),
+                    conn.exit_dir
+                ));
+            }
+        }
+    }
+    out
+}
+
+/// Every diagonal-chain cell where the ACTUAL rendered buffer — the same `render_map` the
+/// terminal calls, at Boxes zoom with `diagonal_corners` on — disagrees with what
+/// `resolve_diagonal_winners` says should be there: a winning connector whose own chain glyph
+/// failed to render, or a yielded connector's glyph rendering anyway. Checked against the real
+/// render rather than re-derived from the plan alone, so a bug in `render_lane_connectors`
+/// itself — not just in a test's model of it — fails here.
 ///
-/// One line per offending cell, naming both connectors, so a failure points at a place on the map.
+/// Always empty on a correct render (see [`diagonal_glyph_yields`] for the expected, non-zero
+/// count of cells a slope yields at all); a non-empty result is a genuine defect in the crossing
+/// rule's own mechanism, never an accepted residual.
 pub fn diagonal_glyph_overlaps(
     graph: &mapper::graph::MapGraph,
     layer: mapper::layer::LayerId,
 ) -> Vec<String> {
-    let rm = mapper::render::render_layer(graph, layer);
+    let (rm, plots, compass_cells, winners) = diagonal_crossing_state(graph, layer);
     let (cols, rows) = boxes_axes(&rm.plan, rm.bounds);
     let plan = &rm.plan;
-    let glyphs = crate::symbols::SymbolSet::default().path;
-    let name = |id| {
-        graph.room(id).map(|r| r.label().to_string()).unwrap_or_else(|| format!("#{id:?}"))
+    let name = |id| graph.room(id).map(|r| r.label().to_string()).unwrap_or_else(|| format!("#{id:?}"));
+
+    // Render the same layer through the real pipeline: Boxes zoom, `diagonal_corners` on — the
+    // same technique `crate::map_dump`'s ascii dump uses.
+    let ((min_col, min_row), _) = rm.bounds;
+    let pad_w = cols.room_pixel(min_col) - cols.room_pixel(min_col - 2);
+    let pad_h = rows.room_pixel(min_row) - rows.room_pixel(min_row - 2);
+    let area = Rect::new(
+        0,
+        0,
+        (cols.total_pixels() + pad_w + 30) as u16,
+        (rows.total_pixels() + pad_h + 20) as u16,
+    );
+    let mut state = AppState::default();
+    state.symbols.diagonal_corners = true;
+    state.zoom = Zoom::Boxes;
+    state.scroll = (min_col - 2, min_row - 2);
+    let mut buf = Buffer::empty(area);
+    render_map(&rm, &state, area, &mut buf);
+    let sym_at = |c: (i32, i32)| -> String {
+        let sx = c.0 - cols.room_pixel(min_col - 2);
+        let sy = c.1 - rows.room_pixel(min_row - 2);
+        buf.cell((sx as u16, sy as u16)).map(|cell| cell.symbol().to_string()).unwrap_or_default()
     };
-    let mut owners: std::collections::BTreeMap<(i32, i32), Vec<usize>> = Default::default();
-    for (ci, conn) in plan.connectors.iter().enumerate() {
-        let Some(plot) = plot_connector(conn, &cols, &rows, Some(&glyphs)) else { continue };
-        for (c, _) in &plot.diag_cells {
-            let e = owners.entry(*c).or_default();
-            if !e.contains(&ci) {
-                e.push(ci);
+
+    // A yielded cell's OWN chain glyph is not proof of anything by character alone: the fill
+    // glyphs (`─`/`│`) a chain also emits are the same characters an ordinary compass run draws,
+    // so a yielded fill cell showing '─' because the WINNING compass connector is itself a
+    // straight horizontal run there is the render working correctly, not a leak. Only the four
+    // half-diagonal CORNER glyphs are unambiguous — nothing but a chain ever emits one — so a
+    // yield to compass line-art is checked against those specifically, never against the fill
+    // pair. A yield to an earlier SLOPE has no such gap: the winner's own glyph is asserted
+    // directly below, which is the check that actually pins the winner side of the rule.
+    let glyphs = crate::symbols::SymbolSet::default().path;
+    let corner_glyphs: [char; 4] = [glyphs.diag_ul, glyphs.diag_ur, glyphs.diag_ll, glyphs.diag_lr];
+
+    let mut out = Vec::new();
+    for (ci, plot) in &plots {
+        let conn = &plan.connectors[*ci];
+        for (c, ch) in &plot.diag_cells {
+            let is_winner = !compass_cells.contains(c) && winners.get(c) == Some(ci);
+            let rendered = sym_at(*c);
+            let bad = if is_winner {
+                rendered != ch.to_string()
+            } else if compass_cells.contains(c) {
+                corner_glyphs.iter().any(|g| rendered == g.to_string())
+            } else {
+                false
+            };
+            if bad {
+                out.push(format!(
+                    "cell {c:?}: {}->{}({:?}) expected {} chain glyph {ch:?} here but the render shows {rendered:?}",
+                    name(conn.origin),
+                    name(conn.dest),
+                    conn.exit_dir,
+                    if is_winner { "its own" } else { "NO" }
+                ));
             }
         }
     }
-    owners
-        .into_iter()
-        .filter(|(_, who)| who.len() > 1)
-        .map(|(cell, who)| {
-            let names: Vec<String> = who
-                .iter()
-                .map(|&ci| {
-                    let c = &plan.connectors[ci];
-                    format!("{}->{}({:?})", name(c.origin), name(c.dest), c.exit_dir)
-                })
-                .collect();
-            format!("cell {cell:?}: {}", names.join(" + "))
-        })
-        .collect()
+    out
 }
 
 /// How every connector on one layer makes its FINAL APPROACH into its destination (SQ-1320):
@@ -3854,41 +3966,26 @@ mod tests {
         )
     }
 
-    /// The two edge-midpoints each half-diagonal reaches, per its Unicode name. Guards the
-    /// bits table against the endpoints actually being somewhere else (SQ-0356).
-    #[test]
-    fn chain_glyph_bits_name_each_half_diagonals_own_endpoints() {
-        let p = crate::symbols::SymbolSet::default().path;
-        // U+1FBA0 upper-centre ↔ middle-left; U+1FBA1 upper-centre ↔ middle-right;
-        // U+1FBA2 middle-left ↔ lower-centre; U+1FBA3 middle-right ↔ lower-centre.
-        assert_eq!(chain_glyph_bits(p.diag_ul, &p), Some(DIR_N | DIR_W));
-        assert_eq!(chain_glyph_bits(p.diag_ur, &p), Some(DIR_N | DIR_E));
-        assert_eq!(chain_glyph_bits(p.diag_ll, &p), Some(DIR_S | DIR_W));
-        assert_eq!(chain_glyph_bits(p.diag_lr, &p), Some(DIR_S | DIR_E));
-        // The fill glyphs a chain also emits reach the same midpoints ─/│ always do.
-        assert_eq!(chain_glyph_bits(p.ns, &p), Some(DIR_N | DIR_S));
-        assert_eq!(chain_glyph_bits(p.ew, &p), Some(DIR_E | DIR_W));
-        // Anything a chain never emits has no merge reading.
-        assert_eq!(chain_glyph_bits(p.nesw, &p), None);
-        assert_eq!(chain_glyph_bits('x', &p), None);
-    }
-
-    /// SQ-0356: a chain cell landing on another connector's orthogonal run must MERGE with it.
+    /// SQ-1331: a chain cell landing on another connector's orthogonal run must YIELD to it — the
+    /// orthogonal keeps its own ordinary glyph (no junction), and the slope shows a one-cell gap
+    /// there, extending the SQ-0525 crossing convention (a vertical run passes through unbroken,
+    /// a horizontal one breaks) to slopes.
     ///
     /// The fixture was originally Zork's "West of House" (#68) / "North of House" (#143) pair,
     /// whose reciprocal NE/SW diagonal collided with a second W edge back between the SAME two
     /// rooms. SQ-0522 collapses same-pair extras into icons, so that shape can no longer produce
     /// two connectors at all. The diagonal is kept and the colliding run now belongs to a
     /// DIFFERENT pair — a column-aligned A/B link that lane-routes past #68 — which is the shape
-    /// this merge exists for anyway: two unrelated connectors wanting one cell.
+    /// this rule exists for anyway: two unrelated connectors wanting one cell.
     ///
     /// The two rooms are now DIAGONALLY ADJACENT (SQ-1321): a chain is drawn only for an unbroken
     /// corner-to-corner slope, so the three-columns-apart pair this used to place drew no chain at
     /// all and the fixture stopped producing its collision. The A/B link is unchanged and still
     /// threads #68's own column; it now crosses the one gap that slope occupies, which is the only
-    /// place a chain cell and a foreign run can still meet.
+    /// place a chain cell and a foreign run can still meet — the same shape SQ-1316's real Zork I
+    /// map hits between West of House/Stone Barrow and Strange Passage/Living Room.
     #[test]
-    fn a_chain_cell_on_another_connectors_run_merges_into_a_junction() {
+    fn a_chain_cell_on_another_connectors_run_yields_to_it() {
         use mapper::graph::MapGraph;
         use mapper::render::render;
 
@@ -3926,10 +4023,8 @@ mod tests {
             chain.keys().filter(|c| orth.contains_key(c)).cloned().collect();
         assert_eq!(hits.len(), 1, "fixture must still produce exactly one collision");
         let hit = hits[0];
-        // The junction both strokes describe: the run's mask ORed with the chain glyph's bits.
-        // Derived the same way the renderer derives it, so this survives a geometry change.
-        let want = glyph_for(orth[&hit] | chain_glyph_bits(chain[&hit], &glyphs).expect("a chain glyph"), &glyphs)
-            .expect("the merged mask has a glyph");
+        // The orthogonal's own glyph, unmixed with anything the chain wanted there.
+        let want_orth = glyph_for(orth[&hit], &glyphs).expect("the orthogonal run has its own glyph");
 
         // Render the whole map off-screen, the way `map_dump::ascii_map` does.
         let ((min_col, min_row), _) = rm.bounds;
@@ -3947,17 +4042,115 @@ mod tests {
         let mut buf = Buffer::empty(area);
         render_map(&rm, &state, area, &mut buf);
 
-        let sx = hit.0 - cols.room_pixel(min_col - 2);
-        let sy = hit.1 - rows.room_pixel(min_row - 2);
-        let sym = buf.cell((sx as u16, sy as u16)).unwrap().symbol();
+        let sym_at = |c: (i32, i32)| -> String {
+            let sx = c.0 - cols.room_pixel(min_col - 2);
+            let sy = c.1 - rows.room_pixel(min_row - 2);
+            buf.cell((sx as u16, sy as u16)).unwrap().symbol().to_string()
+        };
 
-        // Both strokes must survive as one junction glyph. Neither line may lose the cell —
-        // a bare `│` would be the vertical winning, a bare chain glyph the diagonal winning.
+        // The orthogonal keeps the cell, with its own ordinary glyph — never a manufactured
+        // junction of the two.
         assert_eq!(
-            sym,
-            want.to_string(),
-            "chain-on-run cell must render as the junction carrying both strokes, got {sym:?}"
+            sym_at(hit),
+            want_orth.to_string(),
+            "the orthogonal run must keep the crossing cell with its own glyph, unmixed"
         );
+        // The slope itself must never appear there: no half-diagonal glyph landed on the cell
+        // the orthogonal now owns.
+        let diag_glyphs = [glyphs.diag_ul, glyphs.diag_ur, glyphs.diag_ll, glyphs.diag_lr];
+        assert!(
+            !diag_glyphs.iter().any(|g| sym_at(hit) == g.to_string()),
+            "the slope must yield a gap at the crossing cell, not draw over the orthogonal"
+        );
+        // Every OTHER cell of the chain still renders as its own glyph — the slope has exactly
+        // one gap, not a whole side lost.
+        for (c, ch) in &chain {
+            if *c == hit {
+                continue;
+            }
+            assert_eq!(
+                sym_at(*c),
+                ch.to_string(),
+                "chain cell {c:?} away from the crossing must still render its own glyph"
+            );
+        }
+    }
+
+    /// SQ-1331: two SLOPES crossing in one gap — the Counterfeit Monkey park-corner shape,
+    /// minimised to its four rooms. A 2x2 block with both diagonals of the square drawn
+    /// (TopLeft↔BottomRight, TopRight↔BottomLeft) crosses both pure-diagonal chains through the
+    /// same interior gap. The one plotted FIRST in plan order keeps every shared cell; the other
+    /// yields — never a cell showing both, and never a manufactured junction.
+    #[test]
+    fn two_crossing_slopes_only_the_earlier_one_wins() {
+        use mapper::graph::MapGraph;
+        use mapper::render::render;
+
+        let mut g = MapGraph::new();
+        g.upsert_room(1, "TopLeft".into());
+        g.upsert_room(2, "TopRight".into());
+        g.upsert_room(3, "BottomLeft".into());
+        g.upsert_room(4, "BottomRight".into());
+        g.set_pos(1, (0, 0));
+        g.set_pos(2, (1, 0));
+        g.set_pos(3, (0, 1));
+        g.set_pos(4, (1, 1));
+        // TopLeft<->BottomRight (SE/NW) and TopRight<->BottomLeft (SW/NE): both diagonals of the
+        // square, each a pure corner-to-corner slope, crossing at the block's own centre.
+        g.add_edge(1, Direction::SE, 4);
+        g.add_edge(4, Direction::NW, 1);
+        g.add_edge(2, Direction::SW, 3);
+        g.add_edge(3, Direction::NE, 2);
+
+        let rm = render(&g);
+        let (cols, rows) = boxes_axes(&rm.plan, rm.bounds);
+        let glyphs = crate::symbols::SymbolSet::default().path;
+
+        // Every cell more than one connector's chain wants, keyed by which connectors (by plan
+        // index) and what glyph each of them would draw there. Derived from the plots, not
+        // hard-coded, so a geometry change relocates the assertion instead of silently aiming it
+        // at blank space.
+        type Contenders = Vec<(usize, char)>;
+        let mut chain: std::collections::HashMap<(i32, i32), Contenders> = Default::default();
+        for (ci, conn) in rm.plan.connectors.iter().enumerate() {
+            let Some(plot) = plot_connector(conn, &cols, &rows, Some(&glyphs)) else { continue };
+            for (c, ch) in &plot.diag_cells {
+                chain.entry(*c).or_default().push((ci, *ch));
+            }
+        }
+        let crossings: Vec<((i32, i32), Contenders)> =
+            chain.into_iter().filter(|(_, who)| who.len() > 1).collect();
+        assert!(!crossings.is_empty(), "fixture must produce at least one crossing cell");
+
+        let ((min_col, min_row), _) = rm.bounds;
+        let pad_w = cols.room_pixel(min_col) - cols.room_pixel(min_col - 2);
+        let pad_h = rows.room_pixel(min_row) - rows.room_pixel(min_row - 2);
+        let area = Rect::new(
+            0,
+            0,
+            (cols.total_pixels() + pad_w + 30) as u16,
+            (rows.total_pixels() + pad_h + 20) as u16,
+        );
+        let mut state = AppState::default();
+        state.zoom = Zoom::Boxes;
+        state.scroll = (min_col - 2, min_row - 2);
+        let mut buf = Buffer::empty(area);
+        render_map(&rm, &state, area, &mut buf);
+        let sym_at = |c: (i32, i32)| -> String {
+            let sx = c.0 - cols.room_pixel(min_col - 2);
+            let sy = c.1 - rows.room_pixel(min_row - 2);
+            buf.cell((sx as u16, sy as u16)).unwrap().symbol().to_string()
+        };
+
+        for (cell, contenders) in &crossings {
+            let winner_ci = contenders.iter().map(|(ci, _)| *ci).min().expect("non-empty");
+            let winner_ch = contenders.iter().find(|(ci, _)| *ci == winner_ci).unwrap().1;
+            assert_eq!(
+                sym_at(*cell),
+                winner_ch.to_string(),
+                "cell {cell:?}: the earlier-plotted slope (connector {winner_ci}) must keep the cell, exactly one winner"
+            );
+        }
     }
 
     #[test]

@@ -222,7 +222,8 @@ fn zork1_no_connector_bends_in_the_last_channel() {
     assert_eq!(excused, 0, "no jog on the Zork I map needs the crowded-side exemption");
 }
 
-/// **The map is still overlap-free with the DIAGONAL GLYPHS on** (SQ-1321).
+/// **The map is still overlap-free with the DIAGONAL GLYPHS on** (SQ-1321), and every slope that
+/// crosses another connector actually YIELDS the cell rather than drawing over it (SQ-1331).
 ///
 /// `zork1_renders_no_illegal_cell_overlaps` above measures the orthogonal reading, because that is
 /// what `overlap_stats` and the tidy metric are defined on — a display setting must not move a
@@ -232,9 +233,13 @@ fn zork1_no_connector_bends_in_the_last_channel() {
 /// for the dogleg leg.
 ///
 /// SQ-1321 shrinks the hole to almost nothing by construction — a chain is now drawn only for an
-/// unbroken corner-to-corner slope between two diagonally-adjacent rooms, so every other diagonal
-/// draws exactly what the orthogonal reading already measured — but "almost nothing" is not
-/// nothing, and two such slopes could still cross in one gap.
+/// unbroken corner-to-corner slope between two diagonally-adjacent rooms — but "almost nothing" is
+/// not nothing: Zork I's own `West of House↔Stone Barrow` slope crosses the
+/// `Strange Passage↔Living Room` conditional connector routed under West of House. SQ-1331 makes
+/// that a clean crossing instead of a manufactured junction — see [`app::render::map::diagonal_glyph_overlaps`]'s
+/// own doc for exactly what "clean" means here: checked against the REAL rendered buffer, not
+/// re-derived from the plan, so a regression in the crossing rule's own mechanism fails here, not
+/// just in a synthetic fixture.
 #[test]
 fn zork1_has_no_diagonal_glyph_overlaps() {
     let Some(map) = zork1_map() else {
@@ -250,23 +255,35 @@ fn zork1_has_no_diagonal_glyph_overlaps() {
         .collect();
     layers.sort_unstable();
     let mut failures = Vec::new();
+    let mut yields = Vec::new();
     for l in layers {
         for line in app::render::map::diagonal_glyph_overlaps(&map.graph, l) {
             failures.push(format!("[{}] {line}", map.graph.layer_name(l)));
         }
+        yields.extend(app::render::map::diagonal_glyph_yields(&map.graph, l));
     }
     assert!(
         failures.is_empty(),
-        "{} diagonal-glyph overlap(s) on the Zork I map:\n{}",
+        "{} diagonal-glyph overlap(s) on the Zork I map — no slope cell may render alongside \
+         another connector's own glyph:\n{}",
         failures.len(),
         failures.join("\n")
+    );
+    // Non-vacuity: the House layer's West of House/Stone Barrow slope really does cross the
+    // Strange Passage/Living Room connector (the shape SQ-1331 was filed against), so this
+    // fixture must exercise the yield path at least once, not merely fail to find a bug because
+    // nothing ever collided.
+    assert!(
+        !yields.is_empty(),
+        "expected at least one slope to yield on the Zork I map (e.g. West of House↔Stone \
+         Barrow crossing Strange Passage↔Living Room) — the fixture may have changed shape"
     );
 }
 
 /// The same on Counterfeit Monkey, whose park corner is the one place on either fixture where two
-/// corner-to-corner slopes CROSS inside a single gap — and which keeps a residual this pins.
+/// corner-to-corner slopes CROSS inside a single gap.
 ///
-/// **The residual, and why it is not SQ-1321's.** `Fair↔Church Forecourt` (NW) crosses
+/// **The shape, and why it is not SQ-1321's.** `Fair↔Church Forecourt` (NW) crosses
 /// `Park Center↔Midway` (SW), and `Fair↔Monumental Staircase` (NE) crosses
 /// `Park Center↔Heritage Corner` (SE): four rooms in a row over four rooms, all diagonally
 /// adjacent, so all four passages were already drawn as slopes long before SQ-1321 — which only
@@ -275,17 +292,18 @@ fn zork1_has_no_diagonal_glyph_overlaps() {
 ///
 /// Each crossing costs two cells rather than one, because a half-diagonal step is two glyphs tall:
 /// at `(38, 51)` the NW slope wants `🮢` (middle-left → lower-centre) and the SW slope wants `🮣`
-/// (middle-right → lower-centre); at `(38, 52)` they want `🮡` and `🮠`. The two are complementary
-/// halves of one crossing, and Unicode has the glyph that draws both — U+1FBA6 `🮦` MIDDLE LEFT TO
-/// LOWER CENTRE TO MIDDLE RIGHT and U+1FBA7 `🮧` MIDDLE LEFT TO UPPER CENTRE TO MIDDLE RIGHT, in
-/// the same Legacy Computing block `symbols.rs` already treats as one narrow-glyph family. The
-/// renderer has no combined form to reach for, so one chain simply overwrites the other and one
-/// passage shows a two-cell break where it crosses.
+/// (middle-right → lower-centre); at `(38, 52)` they want `🮡` and `🮠`.
 ///
-/// That is a crossing drawn imperfectly, not a passage lost — the same standing the orthogonal
-/// residual has in `counterfeit_monkey_overlaps_are_only_the_crossing_diagonals` below — and
-/// fixing it means two new themeable path glyphs plus a merge rule, which is a feature and not
-/// this quest. Pinned by shape AND by count so it cannot quietly grow.
+/// **Before SQ-1331** the renderer had no combined form for the two complementary halves — Unicode
+/// has one, U+1FBA6 `🮦` and U+1FBA7 `🮧`, in the same Legacy Computing block `symbols.rs` already
+/// treats as one narrow-glyph family, but the renderer never reached for it — so one chain simply
+/// OVERWROTE the other and the passage underneath showed a two-cell break where it crossed: four
+/// overwritten cells, pinned by shape and count so the residual could not quietly grow.
+///
+/// **After SQ-1331**, extending the SQ-0525 crossing convention to slopes: the earlier-plotted
+/// slope keeps every shared cell and the later one YIELDS a one-cell gap instead of drawing over
+/// it — zero overwritten cells, and the same four cells now show up as yielded gaps rather than
+/// clobbered glyphs.
 #[test]
 fn counterfeit_monkey_diagonal_glyph_overlaps_are_only_the_two_crossings() {
     let Some(path) = story("CounterfeitMonkey-11.gblorb") else {
@@ -301,21 +319,30 @@ fn counterfeit_monkey_diagonal_glyph_overlaps_are_only_the_two_crossings() {
         .filter(|&l| !map.graph.rooms_in_layer(l).is_empty())
         .collect();
     layers.sort_unstable();
-    let mut lines = Vec::new();
-    for l in layers {
+
+    // Zero overwritten cells: the render never shows two connectors' glyphs fighting for one
+    // cell, checked against the ACTUAL rendered buffer (see `diagonal_glyph_overlaps`'s own doc).
+    let mut overlaps = Vec::new();
+    let mut yields = Vec::new();
+    for &l in &layers {
         for line in app::render::map::diagonal_glyph_overlaps(&map.graph, l) {
-            lines.push(format!("[{}] {line}", map.graph.layer_name(l)));
+            overlaps.push(format!("[{}] {line}", map.graph.layer_name(l)));
+        }
+        for line in app::render::map::diagonal_glyph_yields(&map.graph, l) {
+            yields.push(format!("[{}] {line}", map.graph.layer_name(l)));
         }
     }
-    // Exactly the park corner: two crossings, two cells each, and nothing anywhere else.
+    assert!(overlaps.is_empty(), "{} overwritten cell(s):\n{}", overlaps.len(), overlaps.join("\n"));
+
+    // Exactly the park corner: two crossings, two yielded cells each, and nothing anywhere else.
     let park = |s: &String| {
         (s.contains("Fair->Church Forecourt(NW)") && s.contains("Park Center->Midway(SW)"))
             || (s.contains("Fair->Monumental Staircase(NE)")
                 && s.contains("Park Center->Heritage Corner(SE)"))
     };
-    let strays: Vec<&String> = lines.iter().filter(|s| !park(s)).collect();
-    assert!(strays.is_empty(), "diagonal-glyph overlap outside the park corner:\n{strays:?}");
-    assert_eq!(lines.len(), 4, "two crossings, two cells each — see the doc comment above");
+    let strays: Vec<&String> = yields.iter().filter(|s| !park(s)).collect();
+    assert!(strays.is_empty(), "diagonal-glyph yield outside the park corner:\n{strays:?}");
+    assert_eq!(yields.len(), 4, "two crossings, two yielded cells each — see the doc comment above");
 }
 
 /// Counterfeit Monkey: a Glulx map an order of magnitude larger than Zork I, and the second
