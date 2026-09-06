@@ -783,9 +783,20 @@ pub fn render_map(rm: &RenderMap, state: &AppState, area: Rect, buf: &mut Buffer
         .iter()
         .flat_map(|r| r.stacked_exits.iter().map(move |s| (r.id, s.primary)))
         .collect();
+    // SQ-1373: every `StackedExit`'s own SECONDARY directions, keyed by the (room, dest) pair
+    // whose primary IS the connector `render_lane_connectors` draws for it — there is no
+    // separate connector to read these off, since `collapse_stacked_exits` removed them before
+    // the router ever ran (contrast `RoutedConnector::secondary_exit`/`secondary_entry`, folded
+    // AFTER routing). Keyed by the pair so the connector loop can look it up however that
+    // connector happens to be oriented (see that loop's own comment).
+    let stacked_secondaries: std::collections::HashMap<(RoomId, RoomId), Vec<Direction>> = rm
+        .rooms
+        .iter()
+        .flat_map(|r| r.stacked_exits.iter().map(move |s| ((r.id, s.dest), s.secondary.clone())))
+        .collect();
     let mut arrowheads: Vec<Arrowhead> = Vec::new();
     if let Some((cols, rows)) = axes {
-        arrowheads = render_lane_connectors(&rm.plan, cols, rows, (off_x, off_y), area, buf, &state.symbols.arrows, &state.symbols.path, &state.symbols.portal, &state.colors, state.symbols.diagonal_corners, &derived.kinds, &stacked_primaries);
+        arrowheads = render_lane_connectors(&rm.plan, cols, rows, (off_x, off_y), area, buf, &state.symbols.arrows, &state.symbols.path, &state.symbols.portal, &state.colors, state.symbols.diagonal_corners, &derived.kinds, &stacked_primaries, &stacked_secondaries);
     }
 
     // ── 4. Draw rooms on top of the line-art (translate + clip) ───────────────
@@ -1682,6 +1693,7 @@ fn render_lane_connectors(
     diagonal_corners: bool,
     kinds: &std::collections::HashMap<(RoomId, RoomId, Direction), EdgeKind>,
     stacked_primaries: &std::collections::HashSet<(RoomId, Direction)>,
+    stacked_secondaries: &std::collections::HashMap<(RoomId, RoomId), Vec<Direction>>,
 ) -> Vec<Arrowhead> {
     let (off_x, off_y) = offset;
     // SQ-0314: when on, a diagonal exit leaves its corner on a chain of half-diagonals; `None`
@@ -1900,9 +1912,20 @@ fn render_lane_connectors(
         // staircase that lost the pairing (Zork's Chasm: N wins the line, Up collapses) was
         // invisible. Each secondary direction now queues its glyph beside the shared line's
         // anchor, on the border of the room the collapsed edge DEPARTS from.
+        //
+        // SQ-1373: a `StackedExit`'s own secondaries (SQ-1276, collapsed at the SOURCE before
+        // the router ever ran) queue exactly the same way — every direction in one stack shares
+        // its origin, so unlike the pair above there is only ONE departure room to consider, but
+        // it may be either end of THIS connector depending on which side of the pair won the
+        // routing tie (see `stacked_secondaries`' own comment at the call site).
+        let empty: Vec<Direction> = Vec::new();
+        let stacked_dep = stacked_secondaries.get(&(conn.origin, conn.dest)).unwrap_or(&empty);
+        let stacked_arr = stacked_secondaries.get(&(conn.dest, conn.origin)).unwrap_or(&empty);
         for (dirs, anchor, side, room) in [
             (&conn.secondary_exit, plot.dep_anchor, conn.exit, conn.origin),
             (&conn.secondary_entry, plot.arr_anchor, conn.entry, conn.dest),
+            (stacked_dep, plot.dep_anchor, conn.exit, conn.origin),
+            (stacked_arr, plot.arr_anchor, conn.entry, conn.dest),
         ] {
             for &dir in dirs.iter() {
                 pending_markers.push(PendingMarker {
@@ -1925,8 +1948,18 @@ fn render_lane_connectors(
     // arrow rule); a departure arrow or an earlier marker there pushes this one a step along.
     // Placement runs after EVERY connector has queued its arrowheads, so a marker can never
     // overwrite another connector's departure arrow that lands beside the same anchor.
-    let mut occupied: std::collections::HashSet<(i32, i32)> =
-        arrowheads.iter().map(|a| a.at).collect();
+    //
+    // SQ-1373: a half-diagonal's own CHAIN cell is reserved too. A diagonal leaves its box from
+    // the CORNER (SQ-0314), one step off the same border a `StackedExit`'s own secondary steps
+    // along, and stepping ±1/±2 from a departure anchor beside it can land squarely on that
+    // chain's first glyph — a real Zork I shape (Behind House's own `NW` diagonal to North of
+    // House, stacked against `N`) rendered a stray `▶` clean over the chain's own corner glyph
+    // before this was reserved.
+    let mut occupied: std::collections::HashSet<(i32, i32)> = arrowheads
+        .iter()
+        .map(|a| a.at)
+        .chain(plots.iter().flat_map(|(_, p)| p.diag_cells.iter().map(|(c, _)| *c)))
+        .collect();
     for m in pending_markers {
         let along: fn((i32, i32), i32) -> (i32, i32) = match m.side {
             Side::Top | Side::Bottom => |a, k| (a.0 + k, a.1),
@@ -4143,13 +4176,15 @@ mod tests {
         assert!(!text.contains('▲'), "the Up connector must NOT render a filled N arrow");
     }
 
-    /// A--North-->B AND A--Up-->B: only the N line is drawn, now as a STACKED primary (SQ-1276
-    /// supersedes SQ-0689's old per-secondary `↑` badge for this exact shape): no `↑` glyph
-    /// anywhere on the box, the N arrowhead carries the `map.room_stacked_exit` accent, and a
-    /// `MarkerKind::Stacked` hover rect sits on it — hovering it is how "Up also leads there"
-    /// surfaces now, not a border badge competing with the arrowhead for a cell.
+    /// A--North-->B AND A--Up-->B: only the N line is drawn, as a STACKED primary — the N
+    /// arrowhead carries the `map.room_stacked_exit` accent and a `MarkerKind::Stacked` hover
+    /// rect sits on it, unchanged since SQ-1276. SQ-1373 restores what SQ-1276 took away for
+    /// this exact shape: the stacked `Up` direction ALSO keeps its own `↑` border badge (the
+    /// same `PendingMarker` collision-stepping SQ-0689's router-level fold uses, landing one
+    /// cell along from N's own arrowhead on room A's border, where `Up` departs from) —
+    /// hovering the stacked arrowhead is no longer the ONLY way "Up also leads there" surfaces.
     #[test]
-    fn a_pair_with_both_a_compass_edge_and_a_staircase_draws_only_the_compass_line() {
+    fn a_pair_with_both_a_compass_edge_and_a_staircase_draws_the_compass_line_plus_a_badge() {
         use mapper::direction::Direction;
         use mapper::graph::MapGraph;
 
@@ -4169,7 +4204,7 @@ mod tests {
 
         let up = state.symbols.portal.up;
         let text: String = buf.content.iter().flat_map(|c| c.symbol().chars()).collect();
-        assert_eq!(text.matches(up).count(), 0, "SQ-1276: the suppressed Up direction stamps no glyph at all");
+        assert_eq!(text.matches(up).count(), 1, "SQ-1373: the stacked Up direction keeps its own border badge");
         assert!(text.contains(state.symbols.arrows.north), "the N passage keeps its own arrowhead");
 
         let (mid, kind, rect) = markers
@@ -4343,6 +4378,7 @@ mod tests {
             state.symbols.diagonal_corners,
             &edge_kinds(&rm),
             &std::collections::HashSet::new(),
+            &std::collections::HashMap::new(),
         );
 
         let dep = arrowheads.iter().find(|a| a.room == 1).expect("A's departure glyph");
@@ -7117,10 +7153,12 @@ mod tests {
         render_map(&rm, &st, area, &mut buf);
         let dotted = buf.content.iter().filter(|c| matches!(c.symbol(), "\u{250a}" | "\u{2504}")).count();
         assert_eq!(dotted, 0, "no second, dotted line for the passage that lost");
-        // Up no longer stamps a badge either — SQ-1276 draws no glyph for a suppressed
-        // direction at all; "Up also leads there" now surfaces only on hover.
+        // SQ-1373: Up still draws no SECOND LINE of its own, but it is no longer invisible — it
+        // queues the same portal-badge marker `RoutedConnector::secondary_exit` gets when the
+        // ROUTER folds a passage (SQ-0689), on the border of the room it departs from (room 1,
+        // the same border N's own arrowhead sits on — the pair share one departure room).
         let ups = buf.content.iter().filter(|c| c.symbol() == "\u{2191}").count();
-        assert_eq!(ups, 0, "the suppressed Up direction stamps no glyph");
+        assert_eq!(ups, 1, "the stacked Up direction keeps its own portal-badge marker");
     }
 
     /// SQ-0689, the Zork1 Chasm shape exactly: the winning connector's origin is the OTHER room,
@@ -8501,8 +8539,13 @@ mod tests {
     /// `select_shared_paths` as an ordinary same-PAIR collapse, painted with `map.shared_path`.
     /// SQ-1276 supersedes that path for it: S/SE is itself a stacked same-DESTINATION group from
     /// 68 (so is W/NW from 217), so `collapse_stacked_exits` already removes S and W before
-    /// `select_shared_paths` ever runs — nothing is left for it to collapse, and the remaining
-    /// SE/NW pair is a plain reciprocal diagonal, styled with the STACKED accent instead.
+    /// `select_shared_paths` ever runs — nothing is left for IT to collapse (the router's own
+    /// `secondary_exit`/`secondary_entry` stay empty), and the remaining SE/NW pair is a plain
+    /// reciprocal diagonal, styled with the STACKED accent. SQ-1373 gives the stacked S/W their
+    /// OWN border badges (through the very same `PendingMarker` queue `select_shared_paths`'s own
+    /// fold uses, and so `map.shared_path`-coloured too) — `shared_fg` cells are no longer proof
+    /// of nothing here, so the "collapsed at the source" claim is pinned directly against the
+    /// connector's router-level fields instead of against colour.
     #[test]
     fn stacked_same_destination_pair_uses_the_stacked_exit_color_not_shared_path() {
         use crate::state::AppState;
@@ -8519,6 +8562,11 @@ mod tests {
         }
         let state = AppState::default(); // Boxes zoom by default
         let rm = mapper::render::render(&g);
+        assert_eq!(rm.plan.connectors.len(), 1, "one line for the pair, whatever the directions");
+        assert!(
+            rm.plan.connectors[0].secondary_exit.is_empty() && rm.plan.connectors[0].secondary_entry.is_empty(),
+            "S and W never reach select_shared_paths — collapse_stacked_exits already removed them",
+        );
         let area = Rect::new(0, 0, 60, 30);
         let mut buf = Buffer::empty(area);
         render_map(&rm, &state, area, &mut buf);
@@ -8526,13 +8574,11 @@ mod tests {
         // Style: ratatui's `Cell::set_style` patches rather than replaces, so `Cell::style()`
         // always synthesizes concrete `bg`/`underline_color`, unlike these selectors' `bg: None`).
         let stacked_fg = state.colors.theme.get("map.room_stacked_exit").style.fg.expect("has an fg color");
-        let shared_fg = state.colors.theme.get("map.shared_path").style.fg.expect("has an fg color");
         let any_cell = |fg: ratatui::style::Color| {
             (0..area.width).flat_map(|x| (0..area.height).map(move |y| (x, y)))
                 .any(|(x, y)| buf.cell((x, y)).map(|c| c.fg == fg).unwrap_or(false))
         };
         assert!(any_cell(stacked_fg), "SE/NW's arrowheads must paint with the stacked-exit accent");
-        assert!(!any_cell(shared_fg), "nothing is left for select_shared_paths to collapse");
     }
 
     #[test]
@@ -8690,8 +8736,11 @@ mod tests {
     // ── SQ-1276: stacked same-destination exits ──────────────────────────────
 
     /// Two compass directions (N and S) from one room to the same destination: only N's
-    /// arrowhead is drawn, styled with `map.room_stacked_exit`, and its hover tip is the two
-    /// arrow glyphs alone — north's, then south's — with no title or room name.
+    /// arrowhead is drawn as the ROUTED line, styled with `map.room_stacked_exit`, and its hover
+    /// tip is the two arrow glyphs alone — north's, then south's — with no title or room name.
+    /// SQ-1373 gives the stacked `S` its own border badge too (S's own arrow glyph, queued
+    /// through the same `PendingMarker` pass as a router-level fold, landing beside N's
+    /// arrowhead on the SAME border room 1's `N` exit departs from — `S` shares that origin).
     #[test]
     fn two_compass_stack_draws_one_reversed_arrowhead_with_a_tooltip_listing_both() {
         use mapper::direction::Direction;
@@ -8711,7 +8760,11 @@ mod tests {
         let markers = render_map(&rm, &state, area, &mut buf);
 
         let text: String = buf.content.iter().flat_map(|c| c.symbol().chars()).collect();
-        assert_eq!(text.matches(state.symbols.arrows.south).count(), 0, "S draws no glyph at all");
+        assert_eq!(
+            text.matches(state.symbols.arrows.south).count(),
+            1,
+            "SQ-1373: the stacked S direction keeps its own border badge",
+        );
         assert_eq!(text.matches(state.symbols.arrows.north).count(), 1, "only N's arrowhead is drawn");
 
         let (mid, kind, rect) = markers
@@ -8744,12 +8797,15 @@ mod tests {
         );
     }
 
-    /// A compass direction plus Down to the same destination: no portal badge is drawn for
-    /// Down (nothing left in `rm.edges` for `draw_portal_icons` to read), and the tooltip is
-    /// exactly the two glyphs — East's arrow, then Down's portal icon — primary first, one line,
-    /// no other text.
+    /// A compass direction plus Down to the same destination — the exact field-report shape
+    /// (Canyon View's `Down`/`E` both to Rocky Ledge). `draw_portal_icons` still has nothing to
+    /// badge (the suppressed `Down` edge never reaches `route_all`), but SQ-1373 gives the
+    /// stacked-exit marker pass its own border badge for it, one cell along from `E`'s own
+    /// arrowhead on Hall's border, where `Down` departs from. The tooltip is unchanged: exactly
+    /// the two glyphs — East's arrow, then Down's portal icon — primary first, one line, no
+    /// other text.
     #[test]
-    fn compass_plus_down_stack_draws_no_portal_badge_and_tooltip_names_it() {
+    fn compass_plus_down_stack_draws_its_own_border_badge_and_tooltip_names_it() {
         use mapper::direction::Direction;
         use mapper::graph::MapGraph;
         let mut g = MapGraph::new();
@@ -8770,7 +8826,11 @@ mod tests {
             "the suppressed Down edge never reaches route_all, so draw_portal_icons has nothing to badge",
         );
         let text: String = buf.content.iter().flat_map(|c| c.symbol().chars()).collect();
-        assert_eq!(text.matches(state.symbols.portal.down).count(), 0, "no portal badge for Down");
+        assert_eq!(
+            text.matches(state.symbols.portal.down).count(),
+            1,
+            "SQ-1373: the stacked Down direction keeps its own border badge",
+        );
 
         let (_, kind, rect) = markers
             .iter()
@@ -8785,6 +8845,74 @@ mod tests {
             tip_row(&buf2, painted, painted.y),
             expected,
             "glyphs only — East's arrow first, then Down's portal icon — no other text"
+        );
+    }
+
+    /// The SVG export's own `a_stacked_exit_keeps_its_marker_in_both_renders` fixture, at Boxes
+    /// zoom: room A fans out to room B with `N` (primary), `E` (a second compass member,
+    /// stacked away) and `Down` (a portal member, stacked away too), and B has its own `Up`
+    /// back to A (a router-level fold, SQ-0689 — not SQ-1373's own territory, included so the
+    /// two mechanisms are seen sharing one border without colliding). `E` and `Down` both
+    /// depart FROM A (SQ-1373's own rule for the terminal renderer — unlike the SVG's arrival
+    /// rule), landing beside N's own arrowhead on A's TOP border; `Up` departs from B, landing
+    /// on B's BOTTOM border (SQ-0689, unchanged).
+    #[test]
+    fn a_stacked_exit_keeps_its_glyph_on_the_departure_room_at_boxes_zoom() {
+        use mapper::direction::Direction;
+        use mapper::graph::MapGraph;
+        let mut g = MapGraph::new();
+        g.upsert_room(1, "A".into());
+        g.upsert_room(2, "B".into());
+        g.set_pos(1, (0, 0));
+        g.set_pos(2, (0, -2)); // north of A, two rows clear — room for three markers in the gap
+        g.add_edge(1, Direction::N, 2);
+        g.add_edge(1, Direction::E, 2);
+        g.add_edge(1, Direction::Down, 2);
+        g.add_edge(2, Direction::Up, 1);
+
+        let rm = mapper::render::render(&g);
+        let r1 = rm.rooms.iter().find(|r| r.id == 1).unwrap();
+        assert_eq!(
+            r1.stacked_exits,
+            vec![mapper::render::StackedExit {
+                primary: Direction::N,
+                dest: 2,
+                secondary: vec![Direction::E, Direction::Down],
+            }],
+            "fixture check: N must win primary and E/Down must both stack"
+        );
+
+        let mut state = AppState::default(); // Boxes zoom by default
+        state.scroll = rm.bounds.0; // B sits at a negative row; scroll to it like every other case here
+        let area = Rect::new(0, 0, 60, 30);
+        let mut buf = Buffer::empty(area);
+        render_map(&rm, &state, area, &mut buf);
+
+        let rects = room_screen_rects(&rm, &state, area);
+        let a_rect = rects.iter().find(|(id, _)| *id == 1).unwrap().1;
+        let b_rect = rects.iter().find(|(id, _)| *id == 2).unwrap().1;
+
+        let find_row = |glyph: char, row: u16| -> usize {
+            (0..area.width)
+                .filter(|&x| buf.cell((x, row)).is_some_and(|c| c.symbol() == glyph.to_string()))
+                .count()
+        };
+        assert_eq!(find_row(state.symbols.arrows.north, a_rect.y), 1, "N's own arrowhead, on A's top border");
+        assert_eq!(
+            find_row(state.symbols.arrows.east, a_rect.y),
+            1,
+            "SQ-1373: E's own glyph, beside N's arrowhead on A's top border (not B's, per the terminal renderer's departure rule)"
+        );
+        assert_eq!(
+            find_row(state.symbols.portal.down, a_rect.y),
+            1,
+            "SQ-1373: Down's own badge, also on A's top border"
+        );
+        let b_bottom = b_rect.y + b_rect.height - 1;
+        assert_eq!(
+            find_row(state.symbols.portal.up, b_bottom),
+            1,
+            "SQ-0689 (unchanged): Up departs from B, so its badge sits on B's bottom border"
         );
     }
 

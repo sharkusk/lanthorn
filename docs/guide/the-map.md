@@ -41,7 +41,10 @@ spaghetti fast, so lanthorn routes connections through lanes that eliminate
 crossings and overlaps. Two rooms linked several ways — a compass direction
 and a diagonal, a staircase shadowing a corridor — collapse to a single line,
 and the passages that lost the collapse stamp their own small glyph beside it,
-so nothing is hidden, only unstacked. Up and down moves get dotted connectors
+so nothing is hidden, only unstacked — that holds whether two exits from one
+room happen to land on the same destination or the router folds them onto a
+shared line later, and on both the terminal map and an exported SVG. Up and
+down moves get dotted connectors
 with stairway glyphs rather than arrows. And every arrow is honest: it marks
 that room's *own* exit, so a one-way passage wears an arrowhead only at its
 origin — nothing known brings you back, and the map says so rather than
