@@ -1092,38 +1092,56 @@ What the drawing shows, beyond the rooms:
   app's player-made layers can cut a compass seam even though `mapgen`'s
   never do) gets the same badge, lettered with its own direction. Letters, not
   glyphs: **the export must not depend on Nerd Fonts.**
-- **A ghost, at both ends, for every passage that leaves the layer being
-  drawn** (SQ-1319): a small dashed box, joined to the badge by a short
-  connector, naming the room it leads to and the layer it lives on, with an
-  arrowhead showing which way the passage runs (SQ-1330). A ghost stands for
-  the far end of ONE passage as seen from this panel, so its own arrow shows
-  that passage's direction of travel and nothing else. A DEPARTURE ghost (the
-  room has an exit leaving toward it) carries the arrowhead at the GHOST's own
-  edge, pointing further in — the mirror of a one-way passage's own exit arrow
-  (SQ-0688), never a two-way head pointing back at the room it started from.
-  When the graph carries a connection back the other way, the destination's
-  own panel draws its own departure ghost for it — that pairing is what "both
-  ends" means, and it holds even then: the way back is a SEPARATE one-way,
-  drawn on the other panel, never a single two-way head shared between them.
-  There is no separate mirroring step. A genuinely ONE-WAY crossing has
-  nothing to mirror, so the arriving room gets an arrival ghost instead — the
-  arrowhead sits at the ROOM's own edge instead, pointing INTO the room
-  (arriving, not leaving) — and a box naming where the passage came FROM —
-  which is the one case `mapper::layer::interlayer_badges` never draws
-  anything for on its own, since it only ever states a room's own outgoing
-  crossing. A ghost's placement search **never gives up**: when nothing is
-  free near the badge it keeps extending straight out along the passage's own
-  direction, one channel width at a time, until it lands clear — the panel's
-  canvas grows to fit wherever that ends up. This replaced a single inline
-  caption (SQ-1317) that was silently DROPPED under exactly this pressure —
-  Zork I's dense house layer, Kitchen's own Down passage to the Studio.
+- **A ghost box for every ROOM beyond the layer being drawn that one of its
+  own passages touches** (SQ-1319; SQ-1356). A ghost is not a caption beside a
+  badge any more: `mapper::render::render_layer` seats it as a NODE, in the
+  layer's own grid, and hands it back as an ordinary `RenderRoom` carrying a
+  `GhostRoom` (the foreign room's name, the layer it lives on, and which of the
+  three readings applies). So the passage to it is an ordinary routed
+  connector, with the same heads, stair badges and direction tags every other
+  passage gets — a crossing walked both ways draws the ordinary two-headed
+  arrow, which the old stub could not express at all (SQ-1347's "only the
+  outgoing travel" rule existed for exactly that reason, and is gone with it).
+  The box is a room's own size, dashed, with the room name at the room-label
+  size and the layer name smaller beneath it. One ghost per foreign ROOM, not
+  per passage: two staircases to one room are two lines to one box.
+
+  **The label states the reading, and only the reading** — `Cellar` when the
+  crossing is walkable both ways (the box reads exactly as a room's would),
+  `to Cellar` when it only leaves this layer, `from Maze` when it only arrives.
+  Never a two-way "to/from" form: a passage that goes both ways is a passage,
+  not two. `mapper::render::GhostRoom::label_for` is the only place that
+  spelling is decided, and the drawn map, the SVG and the room card all read
+  it from there.
+
+  **Seating** is `mapper::layout::seat_adjacent` (SQ-1356), shared with the
+  portal-only-room pass below. A ghost takes the free cell adjacent to its
+  anchor along the passage's own bearing (`seat_offset`: `layout_offset` where
+  it has an answer, so Up seats north and Down south, plus East/West for
+  In/Out). Where that cell is taken, a blank LINE is opened at it — every room
+  at or beyond it slides one cell further out — which preserves every offset
+  within each side of the cut and can only stretch links that STRADDLE it. A
+  straddling cardinal RECIPROCAL vetoes the whole shift, since "exactly one
+  cell apart" is what such a pair means.
+
+  Where the line cannot open, the newcomer stays on the anchor's **doorstep**:
+  a free cell perpendicular to the bearing (roomier side first — both are
+  equally correct as geometry, so the tie-break is which one's line has
+  somewhere to go), then the side opposite it, and only if every side is taken
+  does it walk out along the bearing. Going straight past the blocker is the
+  LAST resort rather than the first, because a newcomer on the far side of the
+  room that blocked it has that room standing between the two boxes its own
+  passage joins, and the line has to be routed all the way around it — Zork I's
+  Gallery layer, where the `from Living Room` ghost wants the cell The Troll
+  Room holds, is the specimen. Ghosts are derived at render time and nothing
+  about them is persisted.
 - **A legend** in the bottom-left of each document naming every mark.
 
 Styling is a `<style>` block of CSS classes — `.room`, `.room.current`,
 `.room-label`, `.edge` plus one of `.reciprocal`/`.asym`/`.oneway`, `.edge.portal`,
 `.edge.conditional`, `.edge.distorted`, `.edge.stub`, `.arrow`, `.door`, `.badge`,
-`.tag`, `.ghost` (plus `.ghost.arrival` for the one-way mirror, and `.ghost text`
-for its two lines), `.legend` — rather than per-element attributes, so a consumer
+`.tag`, `.ghost` (the dashed cross-layer box) with `.ghost-name`/`.ghost-layer`
+for its two lines, `.legend` — rather than per-element attributes, so a consumer
 can restyle an exported map without re-rendering it. The dark palette is the
 default.
 

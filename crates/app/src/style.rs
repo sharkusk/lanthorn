@@ -124,6 +124,7 @@ pub fn decl_to_style(d: &Decl, scheme: &colors::GhosttyScheme) -> Style {
 #[derive(Debug, Clone, Default, PartialEq, serde::Deserialize)]
 pub struct StyleSymbols {
     pub box_style: Option<String>,
+    pub ghost_box_style: Option<String>,
     pub arrow_set: Option<String>,
     pub portal_icons: Option<String>,
     pub path_style: Option<String>,
@@ -167,6 +168,10 @@ pub fn finalize_symbols(s: &StyleSymbols) -> crate::config::SymbolConfig {
         .unwrap_or(crate::symbols::StoryBadges::PLAIN);
     crate::config::SymbolConfig {
         box_style: s.box_style.clone().unwrap_or_else(crate::config::default_box_style),
+        ghost_box_style: s
+            .ghost_box_style
+            .clone()
+            .unwrap_or_else(crate::config::default_ghost_box_style),
         arrow_set: s.arrow_set.clone().unwrap_or_else(crate::config::default_arrow_set),
         portal_icons: s.portal_icons.clone().unwrap_or_else(crate::config::default_portal_icons),
         path_style: s.path_style.clone().unwrap_or_else(crate::config::default_path_style),
@@ -296,6 +301,11 @@ pub fn merge(base: &StyleDoc, over: &StyleDoc) -> StyleDoc {
     // symbols presets: over wins if set
     let symbols = StyleSymbols {
         box_style: over.symbols.box_style.clone().or(base.symbols.box_style.clone()),
+        ghost_box_style: over
+            .symbols
+            .ghost_box_style
+            .clone()
+            .or(base.symbols.ghost_box_style.clone()),
         arrow_set: over.symbols.arrow_set.clone().or(base.symbols.arrow_set.clone()),
         portal_icons: over.symbols.portal_icons.clone().or(base.symbols.portal_icons.clone()),
         path_style: over.symbols.path_style.clone().or(base.symbols.path_style.clone()),
@@ -374,7 +384,7 @@ fn merge_decl(base: &Decl, over: &Decl) -> Decl {
 /// Accepts the format used by BOTH style files and `config.toml` override sections:
 /// - `[colors]` with optional `scheme` string and selector keys as inline tables
 ///   (e.g. `"room:current" = { reversed = true }`).
-/// - `[map]` with the glyph-set preset keys (`box_style`, `arrow_set`,
+/// - `[map]` with the glyph-set preset keys (`box_style`, `ghost_box_style`, `arrow_set`,
 ///   `portal_icons`, `path_style`, `portal_path_style`), the `diagonal_corners`
 ///   flag, and a `[map.overrides]` per-slot glyph table. `[map]`'s remaining
 ///   keys are colour selectors, read by [`theme::toml_schema`](crate::theme::toml_schema),
@@ -413,6 +423,7 @@ pub fn parse_style_toml(text: &str) -> Result<StyleDoc, String> {
         for (key, val) in map_table {
             match key.as_str() {
                 "box_style"    => symbols.box_style    = val.as_str().map(str::to_string),
+                "ghost_box_style" => symbols.ghost_box_style = val.as_str().map(str::to_string),
                 "arrow_set"    => symbols.arrow_set    = val.as_str().map(str::to_string),
                 "portal_icons" => symbols.portal_icons = val.as_str().map(str::to_string),
                 "path_style"   => symbols.path_style   = val.as_str().map(str::to_string),

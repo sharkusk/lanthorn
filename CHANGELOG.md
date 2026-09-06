@@ -29,11 +29,24 @@ Absolute URLs or no link.
 
 ### Changed
 
+- **A passage that leaves the layer now leads to a room, not a label.** The
+  room across the boundary is drawn beside its neighbour as a *ghost* — a box
+  the size of a real room, in the cell the passage points at, with a broken
+  border and quiet text — and the passage to it is drawn like any other, with
+  the same arrowheads, stair glyphs and direction tags. A crossing you can walk
+  both ways gets the ordinary two-headed arrow and the plain room name; one you
+  can only walk one way reads `to Cellar` on the side you leave from and `from
+  Maze` on the side you arrive at. Select a ghost and the room card names the
+  layer it really lives on. Both the drawn map and the exported SVG show the
+  same thing; the box's border style is `map.ghost_box_style` (dashed, dotted
+  or ascii) and its colour `map.room_ghost`. A room whose only way in is a
+  staircase now sits on its neighbour's doorstep too, rather than wherever the
+  layout could fit it.
 - **The exported SVG map frames each layer in its own panel, and the legend no
   longer clips.** A multi-layer map now draws every layer inside a bordered
   panel of its own, all the same width, instead of headings floating loose
-  over a shared background — and the legend's widest line ("exit to another
-  layer") no longer runs past the edge of its own box.
+  over a shared background — and the legend's widest line no longer runs past
+  the edge of its own box.
 - The SVG map's one-way arrows now point at the room they lead to, not the
   room they leave — the same "arrow points into the room it enters" rule a
   two-way passage's pair of arrows already followed.

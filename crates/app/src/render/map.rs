@@ -435,7 +435,12 @@ fn guard_symbol_spill(buf: &mut Buffer, x: i32, y: i32, area: Rect) {
 fn room_style(room: &RenderRoom, state: &AppState) -> Style {
     let is_selected = state.selected_room == Some(room.id);
     let theme = &state.colors.theme;
-    if room.is_current && is_selected {
+    // A cross-layer ghost is never the current room (`render_layer` clears the flag), so the two
+    // arms below can never both fire; selection still wins, since a selected ghost has to be
+    // visibly the one the room card is describing.
+    if room.ghost.is_some() && !is_selected {
+        theme.get("map.room_ghost").style
+    } else if room.is_current && is_selected {
         theme.get("map.room_selected").style.add_modifier(Modifier::REVERSED)
     } else if room.is_current {
         theme.get("map.room_current").style
@@ -2333,45 +2338,6 @@ fn portal_slot(dir: Direction) -> Option<usize> {
     }
 }
 
-/// Where a portal-view badge sits for a passage leaving on `bearing`: the border cell it leads
-/// through, and where its floating name goes (SQ-0363).
-///
-/// Returns `(glyph_cell, label_cell, right_align)`. `right_align` means the name ends AT
-/// `label_cell` rather than starting there — a westward passage's name has to run back toward the
-/// box, not away from it.
-///
-/// One rule for all eight directions. It reproduces the three fixed slots exactly — Up lands on
-/// `(bx + BOX_W/2, by)`, Down on `(bx + BOX_W/2, by + BOX_H - 1)`, an eastward In/Out on
-/// `(bx + BOX_W - 1, by + BOX_H/2)` — which is what says it is the same rule they always were,
-/// just written for every direction instead of the four that could cross a layer before SQ-0360.
-fn portal_border_placement(
-    (bx, by): (i32, i32),
-    bearing: (i32, i32),
-) -> ((i32, i32), (i32, i32), bool) {
-    let (dx, dy) = bearing;
-    let col = match dx.signum() {
-        -1 => bx,
-        1 => bx + BOX_W - 1,
-        _ => bx + BOX_W / 2,
-    };
-    let row = match dy.signum() {
-        -1 => by,
-        1 => by + BOX_H - 1,
-        _ => by + BOX_H / 2,
-    };
-    // A name floats clear of the box on whichever side the passage leaves by. With any vertical
-    // component it goes above or below, aligned to the box's left edge (as Up/Down always have);
-    // a purely horizontal one goes out to the side, on the glyph's own row.
-    let label = if dy != 0 {
-        (bx, if dy < 0 { by - 1 } else { by + BOX_H })
-    } else if dx > 0 {
-        (bx + BOX_W, row)
-    } else {
-        (bx - 1, row)
-    };
-    ((col, row), label, dy == 0 && dx < 0)
-}
-
 /// Mid-slot precedence when a room has several of In/Out/Unknown (lower wins): In ▸ Out ▸ Unknown.
 fn mid_precedence(dir: Direction) -> u8 {
     match dir {
@@ -2425,10 +2391,6 @@ fn draw_portal_icons(
     let mut mid_rank: HashMap<RoomId, u8> = HashMap::new();
     // The mid slot's own edge, kept so its badge can be aimed (the glyph alone can't say where).
     let mut mid_edge: HashMap<RoomId, (Direction, RoomId)> = HashMap::new();
-    // Cross-layer portals: the direction of travel to the other layer, per room (SQ-0223).
-    let mut layer_badges: HashMap<RoomId, Vec<Direction>> = HashMap::new();
-    // Portal view only: cross-layer COMPASS passages, which have no portal slot (SQ-0363).
-    let mut layer_borders: HashMap<RoomId, Vec<(Direction, Option<&str>)>> = HashMap::new();
     for edge in &rm.edges {
         if !edge.is_stub {
             continue;
@@ -2436,29 +2398,10 @@ fn draw_portal_icons(
         if edge.dir == Direction::Unknown {
             continue; // Unknown edges are non-spatial (e.g. death/respawn) — show no portal icon
         }
-        // A cross-layer portal gets its own badge, placed by the same rule but marking a way OFF
-        // this layer (SQ-0223). It must not also feed the slots: its destination is not on this
-        // plane, so the slot machinery — which assumes a same-layer partner — cannot aim it.
-        //
-        // Portal view is exempt. There the icons live on the BORDER with the destination name
-        // floating outside, and a cross-layer badge already names its target layer ("Cellar ·
-        // Cellar") — a strictly better answer than a bare glyph. Diverting it there would delete
-        // that label, so in that view the edge keeps its old path through the slots.
-        if edge.is_interlayer && !show_labels {
-            layer_badges.entry(edge.origin).or_default().push(edge.dir);
-            continue;
-        }
-        // A cross-layer COMPASS passage has no portal slot — the slots only ever had to hold the
-        // four directions that could leave a layer before a named seam could cut at
-        // compass ones (SQ-0360). Falling through to `portal_slot` therefore dropped it silently,
-        // icon and label both. Place it by bearing instead (SQ-0363).
-        if edge.is_interlayer && portal_slot(edge.dir).is_none() {
-            layer_borders
-                .entry(edge.origin)
-                .or_default()
-                .push((edge.dir, edge.dest_label.as_deref()));
-            continue;
-        }
+        // Since SQ-1356 a cross-layer passage has no special case here at all: the room it
+        // leads to is drawn as a GHOST on this very panel, and the passage to it is an ordinary
+        // routed connector — so it arrives here, if it arrives at all, as the plain Up/Down/In/Out
+        // stub any portal is, aimed at a partner that really does have a cell on this plane.
         let Some(slot) = portal_slot(edge.dir) else { continue };
         let glyph_ch = dir_glyph(edge.dir);
         let label = edge.dest_label.as_deref();
@@ -2482,15 +2425,13 @@ fn draw_portal_icons(
         let Some(&rect) = placed.get(&room.id) else { continue };
         let empty: PortalSlots<'_> = [None, None, None];
         let slots = chosen.get(&room.id).unwrap_or(&empty);
-        let layers: &[Direction] = layer_badges.get(&room.id).map_or(&[], |v| v.as_slice());
-        let borders = layer_borders.get(&room.id).map_or(&[][..], |v| v.as_slice());
         // SQ-1269 hole 4: a `?`-marked Up/Down/In/Out direction has no real edge to route
         // (`RenderRoom::random_stubs` already excludes any direction that also carries one), so
         // it never reaches `rm.edges` and never fills a slot above — without this it has nowhere
         // on the box to show at all, unlike a compass random stub's border cell.
         let vertical_stubs: Vec<(Direction, usize)> =
             room.random_stubs.iter().copied().filter(|&(d, _)| portal_slot(d).is_some()).collect();
-        if slots.iter().all(Option::is_none) && layers.is_empty() && borders.is_empty() && vertical_stubs.is_empty() {
+        if slots.iter().all(Option::is_none) && vertical_stubs.is_empty() {
             continue;
         }
         let style = room_style(room, state);
@@ -2506,26 +2447,7 @@ fn draw_portal_icons(
             put_str(buf, col + off_x, row + off_y, &glyph.to_string(), style, area);
         };
 
-        // A cross-layer portal is drawn in every view: it marks a way OFF this layer, which the
-        // border icons below never expressed. Its glyph is the direction of travel (SQ-0223), so
-        // the badge reads as the move the player makes — ↑/↓ stairs, ◉/◎ a doorway.
-        for &dir in layers {
-            place(dir, None, dir_glyph(dir), buf);
-        }
-
         if show_labels {
-            // A cross-layer compass passage sits on the border it points through, with its
-            // "Room · Layer" name floating outside on that side — the same shape the slotted
-            // portals have always had, for the directions they never covered (SQ-0363).
-            for &(dir, label) in borders {
-                let Some(bearing) = badge_bearing(dir, room.cell, None) else { continue };
-                let ((gc, gr), (lc, lr), right_align) = portal_border_placement((bx, by), bearing);
-                put_str(buf, gc + off_x, gr + off_y, &dir_glyph(dir).to_string(), style, area);
-                if let Some(name) = label {
-                    let col = if right_align { lc - name.chars().count() as i32 + 1 } else { lc };
-                    put_str(buf, col + off_x, lr + off_y, name, style, area);
-                }
-            }
             // Portal view: icons move onto the border; destination names float OUTSIDE the box.
             if let Some((glyph_ch, label)) = slots[0] {
                 let gs = glyph_ch.to_string();
@@ -2597,14 +2519,21 @@ fn draw_portal_icons(
 
 /// Pick the outline `BoxStyle` for a room given its flags.
 ///
-/// Precedence: current > portal > selected > normal.
+/// Precedence: ghost > current > portal > selected > normal.
+///
+/// A GHOST outranks everything (SQ-1356): the broken border is the only thing on the box that
+/// says "this room is somewhere else", and a ghost that borrowed the selected or portal outline
+/// would read as one of the layer's own rooms. Selection and the room card still mark it — by
+/// colour, through `room_style` — which is the channel the outline is not using.
 fn outline_for(
     sym: &SymbolSet,
+    is_ghost: bool,
     is_current: bool,
     has_portal: bool,
     selected: bool,
 ) -> &BoxStyle {
-    if is_current { &sym.room_current }
+    if is_ghost { &sym.room_ghost }
+    else if is_current { &sym.room_current }
     else if has_portal { &sym.room_portal }
     else if selected { &sym.room_selected }
     else { &sym.room_normal }
@@ -2752,7 +2681,7 @@ fn draw_compact_room(
     let mut border_style = style;
     border_style.add_modifier.remove(Modifier::REVERSED);
 
-    let bs = outline_for(sym, is_current, room.has_layer_portal, selected);
+    let bs = outline_for(sym, room.ghost.is_some(), is_current, room.has_layer_portal, selected);
     let (tl, tr, bl, br, h, v) = (bs.tl, bs.tr, bs.bl, bs.br, bs.h, bs.v);
 
     // Top border
@@ -2799,6 +2728,28 @@ fn wrap_two(s: &str, width: usize) -> [String; 2] {
         }
     }
     lines
+}
+
+/// Mark `lines` as clipped when [`wrap_two`] could not fit all of `s` (SQ-1356).
+///
+/// `wrap_two` drops what will not fit, silently — fine for a room name the player has just read
+/// off the story's own prose, and NOT fine for a ghost, whose label this file composes itself:
+/// `from Living Room` comes out as `from` / `Living`, which reads as a room called "Living"
+/// rather than as a truncation. The ellipsis says which it is; the room card (whose header names
+/// the room and the layer it really lives on) is where the whole name still lives.
+///
+/// Ghosts only, deliberately: a room's own name is the story's, and eliding one everywhere would
+/// change every long room box on the map for a reason that belongs to ghosts.
+fn elide_if_clipped(s: &str, lines: &mut [String; 2], width: usize) {
+    let kept = if lines[1].is_empty() { lines[0].clone() } else { format!("{} {}", lines[0], lines[1]) };
+    if kept == s.split_whitespace().collect::<Vec<_>>().join(" ") {
+        return;
+    }
+    let last = if lines[1].is_empty() { 0 } else { 1 };
+    if lines[last].chars().count() >= width {
+        lines[last] = lines[last].chars().take(width.saturating_sub(1)).collect();
+    }
+    lines[last].push('…');
 }
 
 /// Center `s` within `width` columns (truncated to `width` if longer).
@@ -2854,7 +2805,7 @@ fn draw_box_room(
     border_style.add_modifier.remove(Modifier::REVERSED);
 
     // Box outline picked by precedence: current > portal > selected > normal.
-    let bs = outline_for(sym, is_current, room.has_layer_portal, selected);
+    let bs = outline_for(sym, room.ghost.is_some(), is_current, room.has_layer_portal, selected);
     let (tl, tr, bl, br, horiz, vert) = (bs.tl, bs.tr, bs.bl, bs.br, bs.h, bs.v);
 
     // Top border
@@ -2882,7 +2833,10 @@ fn draw_box_room(
     // reserves space for it.
     let marker = alias_marker(room.alias_count);
     if marker.is_empty() {
-        let name_lines = wrap_two(&room.label, iw);
+        let mut name_lines = wrap_two(&room.label, iw);
+        if room.ghost.is_some() {
+            elide_if_clipped(&room.label, &mut name_lines, iw);
+        }
         put_str(buf, sx + 1, sy + 1, &center(&name_lines[0], iw), style, area);
         put_str(buf, sx + 1, sy + 2, &center(&name_lines[1], iw), style, area);
     } else {
@@ -7605,6 +7559,7 @@ mod tests {
             alias_count: 0,
             random_stubs: Vec::new(),
             stacked_exits: Vec::new(),
+            ghost: None,
         };
 
         let mut state = AppState::default();
@@ -7643,6 +7598,7 @@ mod tests {
             alias_count: 0,
             random_stubs: Vec::new(),
             stacked_exits: Vec::new(),
+            ghost: None,
         };
 
         let mut state = AppState::default();
@@ -7671,6 +7627,7 @@ mod tests {
             alias_count: 0,
             random_stubs: Vec::new(),
             stacked_exits: Vec::new(),
+            ghost: None,
         };
 
         let mut state = AppState::default();
@@ -8182,74 +8139,179 @@ mod tests {
             .collect()
     }
 
-
-    /// SQ-0363: with portal labels on, a cross-layer COMPASS passage rendered NOTHING — no icon,
-    /// no name. `portal_slot` only ever had to hold Up/Down/In/Out, the four directions that could
-    /// leave a layer before a named seam could cut at compass ones, so a compass edge
-    /// fell through it and was dropped. Each direction must land on the border it leads through,
-    /// with its "Room · Layer" name floating clear on that side.
-    #[test]
-    fn portal_view_shows_a_cross_layer_compass_passage_on_the_border_it_leads_through() {
-        use mapper::graph::MapGraph;
-        use mapper::render::render_layer;
-
-        // (direction, the Vault's cell, the row/col the badge must land on relative to the box)
-        for (dir, cell) in [
-            (Direction::E, (1, 0)),
-            (Direction::W, (-1, 0)),
-            (Direction::N, (0, -1)),
-            (Direction::S, (0, 1)),
-            (Direction::NE, (1, -1)),
-        ] {
-            let mut g = MapGraph::new();
-            g.upsert_room(1, "Here".into());
-            g.upsert_room(2, "Vault".into());
-            g.set_pos(1, (0, 0));
-            g.set_pos(2, cell);
-            g.add_edge(1, dir, 2);
-            g.add_edge(2, mapper::direction::opposite(dir), 1);
-            // Peel the VAULT's side (SQ-0364: a peel takes the selected room's own side), so
-            // Here stays on Main and its `dir` passage is the one that crosses.
-            let region = mapper::layer::region_at_edge(&g, 2, mapper::direction::opposite(dir))
-                .expect("the walked passage is a seam");
-            mapper::layer::move_region(&mut g, &region, mapper::layer::MoveTarget::New)
-                .expect("cut at the seam");
-
-            let rm = render_layer(&g, mapper::layer::MAIN_LAYER);
-            let mut st = AppState::default();
-            st.scroll = (rm.bounds.0 .0 - 1, rm.bounds.0 .1 - 1);
-            st.show_portal_labels = true;
-            let area = Rect::new(0, 0, 46, 26);
-            let mut buf = Buffer::empty(area);
-            render_map(&rm, &st, area, &mut buf);
-
-            let text: String = (0..area.height)
-                .map(|y| {
-                    (0..area.width)
-                        .map(|x| buf.cell((x, y)).map(|c| c.symbol()).unwrap_or(" ").to_string())
-                        .collect::<String>()
-                })
-                .collect::<Vec<_>>()
-                .join("\n");
-
-            let arrow = arrow_for_direction(dir, &st.symbols.arrows, &st.symbols.portal);
-            assert!(
-                text.contains(arrow),
-                "{dir:?}: the badge shows the direction travelled ({arrow:?})\n{text}"
-            );
-            assert!(
-                text.contains("Vault · Vault"),
-                "{dir:?}: and names the room and layer it leads to\n{text}"
-            );
-        }
+    /// Every cell of `buf` inside `area`, row by row — what a "does the drawn map say X" assert
+    /// is made against.
+    fn buffer_text(buf: &Buffer, area: Rect) -> String {
+        (0..area.height)
+            .map(|y| {
+                (0..area.width)
+                    .map(|x| buf.cell((x, y)).map(|c| c.symbol()).unwrap_or(" ").to_string())
+                    .collect::<String>()
+            })
+            .collect::<Vec<_>>()
+            .join("\n")
     }
 
+    // ── SQ-1356: a cross-layer ghost is a room box with a broken border ───────────────────
+
+    /// Everything the drawn map has to say about a ghost, on the simplest crossing there is:
+    /// a two-layer graph, `Hall` above and `Cellar` below, walked both ways.
+    ///
+    /// The ghost is a BOX — same 11x5 as a room's, one cell south of its anchor because that is
+    /// where `Down` points — drawn with the dashed border glyphs and nothing else's, and labelled
+    /// with the plain room name because the crossing is walkable both ways.
     #[test]
-    fn a_cross_layer_compass_badge_shows_its_direction_not_the_unknown_marker() {
-        // SQ-0362. Until a named seam (SQ-0360) could cut at compass passages, only
-        // portals could ever cross layers — so the badge mapped Up/Down/In/Out and let every
-        // compass direction fall through to `unknown`. A room whose east passage leads to another
-        // layer then wore a "?", about a direction we know perfectly well.
+    fn a_cross_layer_ghost_is_a_dashed_room_box_on_the_cell_its_passage_points_at() {
+        use mapper::graph::MapGraph;
+        use mapper::layer::{move_region, planar_region, MoveTarget, MAIN_LAYER};
+        let mut g = MapGraph::new();
+        g.upsert_room(1, "Hall".into());
+        g.upsert_room(2, "Cellar".into());
+        g.set_pos(1, (0, 0));
+        g.set_pos(2, (0, 1));
+        g.add_edge(1, Direction::Down, 2);
+        g.add_edge(2, Direction::Up, 1);
+        let region = planar_region(&g, 2);
+        move_region(&mut g, &region, MoveTarget::New).expect("the cellar peels into its own layer");
+        let rm = mapper::render::render_layer(&g, MAIN_LAYER);
+        let ghost = rm.rooms.iter().find(|r| r.id == 2).expect("the crossing draws a ghost");
+        assert_eq!(ghost.cell, (0, 1), "Down seats it one cell south of the Hall");
+        assert_eq!(ghost.label, "Cellar", "walked both ways: the plain room name");
+
+        let mut st = AppState::default();
+        st.scroll = rm.bounds.0;
+        let area = Rect::new(0, 0, 80, 40);
+        let mut buf = Buffer::empty(area);
+        render_map(&rm, &st, area, &mut buf);
+        let text = buffer_text(&buf, area);
+        let sym = SymbolSet::default();
+        assert!(text.contains("Cellar"), "the ghost names the room it stands for:\n{text}");
+        assert!(
+            text.contains(&sym.room_ghost.h.to_string()),
+            "the ghost's border uses the dashed run glyph {:?}:\n{text}",
+            sym.room_ghost.h
+        );
+        assert!(
+            text.contains(&sym.room_ghost.v.to_string()),
+            "…on both axes ({:?}):\n{text}",
+            sym.room_ghost.v
+        );
+        // The layer it really lives on has no room in an 11x5 box — the room card says it
+        // instead, from the graph, because a ghost's id IS that room's id.
+        assert_eq!(
+            crate::render::room_dock::header_line(&g, Some(2), true, &sym)
+                .split("  ")
+                .next()
+                .unwrap_or(""),
+            "Cellar \u{b7} Cellar",
+            "selecting a ghost names its real layer in the room card's header"
+        );
+    }
+
+    /// The `ascii` preset, for a face with no Box Drawing dashes: `-`/`:` runs and `+` corners,
+    /// and not one glyph of the default set anywhere near the ghost.
+    #[test]
+    fn the_ascii_ghost_preset_draws_a_box_out_of_ascii_alone() {
+        let dashed = BoxStyle::ghost_preset("dashed").expect("the default preset");
+        let ascii = BoxStyle::ghost_preset("ascii").expect("the ascii preset");
+        assert_eq!(ascii, BoxStyle { tl: '+', tr: '+', bl: '+', br: '+', h: '-', v: ':' });
+        assert!(ascii.h.is_ascii() && ascii.v.is_ascii() && ascii.tl.is_ascii());
+        assert_eq!(BoxStyle::ghost_preset("dotted").unwrap().h, '\u{2504}');
+        assert_eq!(BoxStyle::ghost_preset("nonsense"), None);
+        assert!(BoxStyle::ghost_preset_names().contains(&"ascii"));
+
+        // …and the preset the player asks for is the one the map draws with.
+        let mut cfg = crate::config::SymbolConfig::default();
+        cfg.ghost_box_style = "ascii".into();
+        assert_eq!(SymbolSet::resolve(&cfg).room_ghost, ascii);
+        cfg.ghost_box_style = "nonsense".into();
+        assert_eq!(SymbolSet::resolve(&cfg).room_ghost, dashed, "an unknown name keeps the default");
+    }
+
+    /// A ghost outranks every other outline, and takes its colour from `map.room_ghost` — but a
+    /// SELECTED ghost takes the selection's, so the box the room card is describing is still the
+    /// one that stands out.
+    #[test]
+    fn a_ghost_takes_the_room_ghost_selector_unless_it_is_selected() {
+        use mapper::render::{GhostKind, GhostRoom, RenderRoom};
+        let ghost_room = |id| RenderRoom {
+            id,
+            ordinal: 1,
+            cell: (0, 0),
+            label: "Cellar".into(),
+            has_notes: false,
+            is_current: false,
+            align_code: String::new(),
+            has_layer_portal: false,
+            self_loops: Vec::new(),
+            alias_count: 0,
+            random_stubs: Vec::new(),
+            stacked_exits: Vec::new(),
+            ghost: Some(GhostRoom {
+                name: "Cellar".into(),
+                layer: 1,
+                layer_name: "Under".into(),
+                kind: GhostKind::TwoWay,
+            }),
+        };
+        let mut st = AppState::default();
+        assert_eq!(
+            room_style(&ghost_room(7), &st),
+            st.colors.theme.get("map.room_ghost").style,
+            "an unselected ghost is drawn in its own selector"
+        );
+        st.selected_room = Some(7);
+        assert_eq!(
+            room_style(&ghost_room(7), &st),
+            st.colors.theme.get("map.room_selected").style,
+            "a selected ghost still shows the selection"
+        );
+
+        let sym = SymbolSet::default();
+        assert_eq!(
+            outline_for(&sym, true, true, true, true),
+            &sym.room_ghost,
+            "the broken border outranks current, portal and selected alike"
+        );
+    }
+
+    /// The label rules, end to end through the drawn map (SQ-1356): `to <room>` where the
+    /// crossing only leaves this layer, `from <room>` where it only arrives, and never both.
+    #[test]
+    fn a_one_way_crossing_says_to_on_one_layer_and_from_on_the_other() {
+        use mapper::graph::MapGraph;
+        let mut g = MapGraph::new();
+        g.upsert_room(1, "Alcove".into());
+        g.upsert_room(2, "Vault".into());
+        g.set_pos(1, (0, 0));
+        g.set_pos(2, (1, 0));
+        g.add_edge(1, Direction::E, 2); // one-way: no edge back
+        let deep = g.new_layer(Some(mapper::layer::MAIN_LAYER), "Deep".into());
+        g.set_room_layer(2, deep);
+
+        let draw = |layer| {
+            let rm = mapper::render::render_layer(&g, layer);
+            let mut st = AppState::default();
+            st.scroll = (rm.bounds.0 .0 - 1, rm.bounds.0 .1 - 1);
+            let area = Rect::new(0, 0, 80, 40);
+            let mut buf = Buffer::empty(area);
+            render_map(&rm, &st, area, &mut buf);
+            buffer_text(&buf, area)
+        };
+        let main = draw(mapper::layer::MAIN_LAYER);
+        assert!(main.contains("to"), "the leaving layer says where the passage leads:\n{main}");
+        assert!(main.contains("Vault"), "…and names it:\n{main}");
+        let far = draw(deep);
+        assert!(far.contains("from"), "the arriving layer says where it came from:\n{far}");
+        assert!(far.contains("Alcove"), "…and names it:\n{far}");
+        assert!(!far.contains("to"), "never a two-way to/from form on one box:\n{far}");
+    }
+
+    /// A cross-layer COMPASS passage is routed like any other now: the east arrowhead reaches the
+    /// ghost box, and the `?` unknown marker — which every compass crossing wore before SQ-0362,
+    /// and which the badge path could still reach — never appears.
+    #[test]
+    fn a_cross_layer_compass_passage_is_drawn_as_an_ordinary_east_connector() {
         use mapper::graph::MapGraph;
         use mapper::render::render_layer;
 
@@ -8260,33 +8322,31 @@ mod tests {
         g.set_pos(2, (1, 0));
         g.add_edge(1, Direction::E, 2);
         g.add_edge(2, Direction::W, 1);
-        // Peel THERE's side, so HERE stays on Main and its east passage crosses layers. A peel
-        // takes the selected room's OWN side (SQ-0364), hence standing at the far end.
         let region = mapper::layer::region_at_edge(&g, 2, Direction::W).expect("cut at the seam");
         let peeled = mapper::layer::move_region(&mut g, &region, mapper::layer::MoveTarget::New)
             .expect("and the region moves onto a fresh layer");
         assert_eq!(g.layer_of(2), peeled, "There is now a layer away, across a COMPASS edge");
-        assert_eq!(g.layer_of(1), mapper::layer::MAIN_LAYER, "Here stayed put");
 
         let rm = render_layer(&g, mapper::layer::MAIN_LAYER);
+        let ghost = rm.rooms.iter().find(|r| r.id == 2).expect("a ghost for There");
+        assert_eq!(ghost.cell, (1, 0), "east of Here, where the passage points");
         let mut st = AppState::default();
-        st.scroll = rm.bounds.0;
+        st.scroll = (rm.bounds.0 .0, rm.bounds.0 .1 - 1);
         let area = Rect::new(0, 0, 80, 40);
         let mut buf = Buffer::empty(area);
         render_map(&rm, &st, area, &mut buf);
-
-        let here: Vec<String> = interior_rows(&buf, 0, 0);
-        let joined = here.join("");
-        let east_arrow = st.symbols.arrows.east; // '▶' by default
+        let text = buffer_text(&buf, area);
+        assert!(text.contains("There"), "the ghost names the room across the seam:\n{text}");
         assert!(
-            joined.contains(east_arrow),
-            "the badge shows the direction travelled ({east_arrow:?}): {here:?}"
+            text.contains(st.symbols.arrows.east),
+            "the crossing draws its own east arrowhead:\n{text}"
         );
         assert!(
-            !joined.contains(st.symbols.portal.unknown),
-            "and never the unknown marker for a passage whose direction is known: {here:?}"
+            !text.contains(st.symbols.portal.unknown),
+            "and never the unknown marker for a passage whose direction is known:\n{text}"
         );
     }
+
 
     #[test]
     fn an_in_out_badge_is_pulled_toward_the_room_it_connects_to() {
@@ -8359,45 +8419,6 @@ mod tests {
         // Every name character is still present — nothing was overwritten.
         let all: String = rows.concat();
         assert_eq!(all.matches("Behind").count(), 1, "name not clipped by the badge: {rows:?}");
-    }
-
-    #[test]
-    fn a_cross_layer_portal_shows_its_direction_of_travel_inside_the_room() {
-        // SQ-0223. A room with a staircase to another layer carries a badge of the direction the
-        // player travels — `Down` → `↓` — placed by SQ-0351's rule. `Down` HAS a bearing, so it is
-        // read straight off the compass and lands on the bottom row; no partner lookup, which
-        // matters because the destination is on another plane entirely.
-        use mapper::graph::MapGraph;
-        use mapper::layer::{move_region, planar_region, MoveTarget, MAIN_LAYER};
-        let mut g = MapGraph::new();
-        g.upsert_room(1, "Hall".into());
-        g.upsert_room(2, "Cellar".into());
-        g.set_pos(1, (0, 0));
-        g.set_pos(2, (0, 1));
-        g.add_edge(1, Direction::Down, 2);
-        g.add_edge(2, Direction::Up, 1);
-        let region = planar_region(&g, 2);
-        move_region(&mut g, &region, MoveTarget::New).expect("the cellar peels into its own layer");
-        let rm = mapper::render::render_layer(&g, MAIN_LAYER);
-        assert!(
-            rm.rooms.iter().find(|r| r.id == 1).unwrap().has_layer_portal,
-            "Hall owns the cross-layer portal",
-        );
-        let mut st = AppState::default();
-        st.scroll = rm.bounds.0;
-        let area = Rect::new(0, 0, 80, 40);
-        let mut buf = Buffer::empty(area);
-        render_map(&rm, &st, area, &mut buf);
-
-        let rows = interior_rows(&buf, 0, 0);
-        assert!(
-            rows[2].contains("↓"),
-            "Down to another layer shows ↓ on the bottom interior row: {rows:?}",
-        );
-        // Before SQ-0223 a cross-layer portal drew NOTHING inside the room — same-layer Up/Down
-        // put their glyph on the connector's border anchor, and a cross-layer stub has no
-        // connector, so it fell through every branch.
-        assert!(!rows[0].contains("↓") && !rows[1].contains("↓"), "only one badge: {rows:?}");
     }
 
     #[test]

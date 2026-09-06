@@ -47,6 +47,21 @@ that room's *own* exit, so a one-way passage wears an arrowhead only at its
 origin — nothing known brings you back, and the map says so rather than
 guessing.
 
+**Passages that leave the layer still have somewhere to land.** A layer only
+draws its own rooms, so a staircase down to the cellar used to end at a badge
+on the wall. Now the room it leads to is drawn beside it as a *ghost* — a box
+of exactly a room's size, in the cell the passage points at, with a broken
+border and quiet text to say it belongs somewhere else. The line between them
+is an ordinary passage, with the same arrowheads, stair glyphs and direction
+tags every other passage gets: walk it both ways and you get the two-headed
+arrow, and the ghost simply names the room. A crossing you can only walk one
+way says so in words instead — `to Cellar` on the side you leave from, `from
+Maze` on the side you arrive at. Select a ghost and the room card names the
+layer it really lives on; the exported SVG has room to print that inside the
+box. Ghosts are worked out as the map is drawn, so nothing about them is
+saved, and they never push a real room out of its cell: the map opens a gap
+for one only where doing so costs no adjacency it had already earned.
+
 **Keeping it tidy.** The whole layout re-optimizes as you explore.
 `background_tidy` controls how eagerly — after every new room (the default),
 only when rooms start to overlap, debounced every few rooms, or off entirely —

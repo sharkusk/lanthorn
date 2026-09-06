@@ -64,6 +64,59 @@ pub struct RenderRoom {
     /// and drawn; the render layer accent-styles its arrowhead and the rest surface on hover.
     /// The GRAPH carries every direction regardless — this is a rendering fact only.
     pub stacked_exits: Vec<StackedExit>,
+    /// Set when this entry is a cross-layer GHOST rather than one of the layer's own rooms
+    /// (SQ-1356) — see [`GhostRoom`] and [`render_layer`]. `None` for every real room, and for
+    /// every room in an all-layers [`render`], which has no layer boundary to cross.
+    pub ghost: Option<GhostRoom>,
+}
+
+/// What a cross-layer ghost stands for (SQ-1356): a room on ANOTHER layer that this one has a
+/// passage to, drawn here as a placeholder so the passage has somewhere to land.
+///
+/// The four facts travel together because a ghost drawn with any of them missing is a lie: the
+/// name without the layer says a room is here that is not, and the kind is what decides whether
+/// the label reads `Cellar`, `to Cellar` or `from Maze` — see [`GhostRoom::label_for`], the only
+/// place that spelling is decided.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct GhostRoom {
+    /// The foreign room's own plain name — what [`RenderRoom::label`] carries for a real room.
+    pub name: String,
+    /// The layer that room actually lives on.
+    pub layer: LayerId,
+    /// That layer's display name, for the second line of the drawn box (or, where there is no
+    /// room for one, the room card).
+    pub layer_name: String,
+    /// How this layer reaches it.
+    pub kind: GhostKind,
+}
+
+impl GhostRoom {
+    /// The label a ghost box shows: the plain room name when the crossing is walkable both ways
+    /// (the box reads exactly as a real room's would, and the passage draws the ordinary
+    /// two-headed arrow), and a direction word when it is not.
+    ///
+    /// Never a "to/from" pair: a passage that goes both ways is a passage, not two.
+    pub fn label_for(kind: GhostKind, name: &str) -> String {
+        match kind {
+            GhostKind::TwoWay => name.to_string(),
+            GhostKind::To => format!("to {name}"),
+            GhostKind::From => format!("from {name}"),
+        }
+    }
+}
+
+/// How a layer reaches the room one of its ghosts stands for (SQ-1356).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum GhostKind {
+    /// Passages run BOTH ways across the boundary — the ordinary case, and the one a two-headed
+    /// arrow is drawn for.
+    TwoWay,
+    /// A one-way passage LEAVES this layer for it, with no way back.
+    To,
+    /// A one-way passage ARRIVES from it, which this layer has no way to walk back along. The
+    /// only mark the crossing gets on this side, since the other layer's own panel draws nothing
+    /// for a passage that does not leave it.
+    From,
 }
 
 /// One room's redundant fan-out to a single destination (SQ-1276): several of ITS OWN outgoing
@@ -242,6 +295,7 @@ pub fn render_traced(graph: &MapGraph, on_step: &mut dyn FnMut(&str)) -> RenderM
                     .map(|&d| (d, graph.random_destinations(room.id, d).len()))
                     .collect(),
                 stacked_exits: stacked.remove(&room.id).unwrap_or_default(),
+                ghost: None, // `render_layer` fills these in; a plain render crosses no boundary
             })
         })
         .collect();
@@ -264,11 +318,84 @@ pub fn render_traced(graph: &MapGraph, on_step: &mut dyn FnMut(&str)) -> RenderM
     RenderMap { rooms, edges, bounds, plan }
 }
 
-/// Build a `RenderMap` for a single layer. Rooms and grid connectors come from the
-/// layer's sub-graph (so the existing routers are reused unchanged). Inter-layer edges
-/// (Phase 2) are appended by `interlayer_badges`, which is empty while there is one layer.
+/// Build a `RenderMap` for a single layer: the layer's own rooms, plus a GHOST for every room on
+/// another layer this one has a passage to (SQ-1356).
+///
+/// The ghosts are seated in the layer's own grid and their passages routed as ordinary passages,
+/// so the drawn map, the vector export and the terminal all show the same thing — a box beside
+/// the room the crossing touches, joined to it by a line with a head at whichever end each
+/// travel arrives at.
 pub fn render_layer(graph: &MapGraph, layer: LayerId) -> RenderMap {
     render_layer_traced(graph, layer, &mut |_| {})
+}
+
+/// One cross-layer ghost to seat, before it has a cell (SQ-1356).
+///
+/// `anchor` is the room on THIS layer the crossing touches and `offset` the grid step the
+/// passage's own direction wants the ghost to sit at — the two the seating pass needs together;
+/// `kind` decides the label. Built by [`ghost_specs`] and nowhere else.
+struct GhostSpec {
+    id: RoomId,
+    anchor: RoomId,
+    offset: (i32, i32),
+    kind: GhostKind,
+}
+
+/// Every foreign room `layer` needs a ghost for, one per ROOM rather than one per passage: two
+/// passages from this layer to the same room beyond it are two lines to one box, exactly as two
+/// passages between two rooms of one layer are.
+///
+/// A crossing walked both ways is [`GhostKind::TwoWay`] (the ordinary case); one that only
+/// LEAVES this layer is `To`, one that only arrives is `From`. Where a foreign room is reached
+/// several ways at once the strongest reading wins — a reciprocal crossing anywhere makes the
+/// ghost two-way, since the room genuinely is walkable both ways from here.
+///
+/// Anchor and offset come from the FIRST passage in `connections()` order that names the room, so
+/// the placement is stable for a given graph. An ARRIVING passage seats its ghost where the
+/// return trip would have left from — the opposite of the word walked — since that is the side of
+/// the anchor the traveller came in on.
+fn ghost_specs(graph: &MapGraph, layer: LayerId) -> Vec<GhostSpec> {
+    use std::collections::BTreeMap;
+    let mut order: Vec<RoomId> = Vec::new();
+    let mut found: BTreeMap<RoomId, GhostSpec> = BTreeMap::new();
+    for c in graph.connections() {
+        if !crate::layer::is_interlayer(graph, c) {
+            continue;
+        }
+        let leaving = graph.layer_of(c.origin) == layer;
+        if !leaving && graph.layer_of(c.dest) != layer {
+            continue;
+        }
+        let reciprocal =
+            graph.connections().iter().any(|o| o.origin == c.dest && o.dest == c.origin);
+        let (id, anchor, dir) = if leaving {
+            (c.dest, c.origin, c.dir)
+        } else {
+            (c.origin, c.dest, crate::direction::opposite(c.dir))
+        };
+        let kind = if reciprocal {
+            GhostKind::TwoWay
+        } else if leaving {
+            GhostKind::To
+        } else {
+            GhostKind::From
+        };
+        let Some(offset) = crate::layout::seat_offset(dir) else { continue };
+        match found.get_mut(&id) {
+            // A room reached several ways keeps the first passage's placement, but a reciprocal
+            // crossing upgrades the reading: that is true of the ROOM, not of one passage to it.
+            Some(spec) => {
+                if kind == GhostKind::TwoWay {
+                    spec.kind = GhostKind::TwoWay;
+                }
+            }
+            None => {
+                order.push(id);
+                found.insert(id, GhostSpec { id, anchor, offset, kind });
+            }
+        }
+    }
+    order.into_iter().filter_map(|id| found.remove(&id)).collect()
 }
 
 /// [`render_layer`] with per-phase step reporting (see [`render_traced`]).
@@ -278,17 +405,72 @@ pub fn render_layer_traced(
     on_step: &mut dyn FnMut(&str),
 ) -> RenderMap {
     on_step("layer subgraph");
-    let sub = graph.layer_subgraph(layer);
+    let mut sub = graph.layer_subgraph(layer);
+
+    on_step("seat ghosts");
+    // Every real room's cell, as the plane the ghosts are seated into. `seat_adjacent` may open a
+    // line in it to make room — real rooms shift together when it does, so their reciprocal
+    // adjacencies survive — which is why the cells are read back out of `plane` afterwards
+    // instead of left as the layer's own.
+    let mut plane: std::collections::BTreeMap<RoomId, (i32, i32)> =
+        sub.rooms().filter_map(|r| r.pos.map(|p| (r.id, p))).collect();
+    let specs = ghost_specs(graph, layer);
+    let mut ghosts: Vec<(RoomId, GhostRoom)> = Vec::new();
+    for spec in &specs {
+        let Some(room) = graph.room(spec.id) else { continue };
+        let Some(seat) = crate::layout::seat_adjacent(&sub, &mut plane, spec.anchor, spec.offset)
+        else {
+            continue; // the anchor is unplaced: nothing to seat against
+        };
+        let dest_layer = graph.layer_of(spec.id);
+        sub.upsert_room(spec.id, GhostRoom::label_for(spec.kind, room.label()));
+        plane.insert(spec.id, seat.cell);
+        ghosts.push((
+            spec.id,
+            GhostRoom {
+                name: room.label().to_string(),
+                layer: dest_layer,
+                layer_name: graph.layer_name(dest_layer).to_string(),
+                kind: spec.kind,
+            },
+        ));
+    }
+    // Every crossing this layer touches, as an ordinary connection of the sub-graph: the routers
+    // draw a two-way crossing with a head at each end and a one-way with one, exactly as they do
+    // for a passage between two real rooms.
+    let ghost_ids: std::collections::BTreeSet<RoomId> = ghosts.iter().map(|(id, _)| *id).collect();
+    for c in graph.connections() {
+        if !crate::layer::is_interlayer(graph, c) {
+            continue;
+        }
+        let touches = (ghost_ids.contains(&c.dest) && graph.layer_of(c.origin) == layer)
+            || (ghost_ids.contains(&c.origin) && graph.layer_of(c.dest) == layer);
+        if touches {
+            sub.add_edge_weighted(c.origin, c.dir, c.dest, c.weight);
+        }
+    }
+    for (&id, &pos) in &plane {
+        sub.set_pos(id, pos);
+    }
+
     let mut rm = render_traced(&sub, on_step);
-    on_step("layer badges");
-    let badges = crate::layer::interlayer_badges(graph, layer);
-    // Flag rooms that own an outgoing cross-layer portal so the renderer can mark them
-    // with a distinct box outline.
-    let portal_rooms: std::collections::BTreeSet<RoomId> = badges.iter().map(|e| e.origin).collect();
+    // Flag rooms that own an outgoing cross-layer portal so the renderer can mark them with a
+    // distinct box outline. A ghost is never flagged: the outline says "this room leads off the
+    // layer", and a ghost is where it leads.
+    let portal_rooms: std::collections::BTreeSet<RoomId> = graph
+        .connections()
+        .iter()
+        .filter(|c| crate::layer::is_interlayer(graph, c) && graph.layer_of(c.origin) == layer)
+        .map(|c| c.origin)
+        .collect();
     for r in &mut rm.rooms {
         r.has_layer_portal = portal_rooms.contains(&r.id);
+        if let Some((_, ghost)) = ghosts.iter().find(|(id, _)| *id == r.id) {
+            r.has_layer_portal = false;
+            r.is_current = false; // the player is never standing in a placeholder
+            r.ghost = Some(ghost.clone());
+        }
     }
-    rm.edges.extend(badges);
     rm
 }
 
@@ -556,7 +738,195 @@ mod tests {
         let l = m.graph.new_layer(Some(0), "Other".into());
         m.graph.set_room_layer(2, l);
         let main = render_layer(&m.graph, 0);
-        assert!(main.rooms.iter().any(|r| r.id == 1));
-        assert!(!main.rooms.iter().any(|r| r.id == 2), "room 2 lives in another layer");
+        let a = main.rooms.iter().find(|r| r.id == 1).unwrap();
+        assert!(a.ghost.is_none(), "room 1 is this layer's own");
+        // Room 2 lives elsewhere, so it appears only as the GHOST its crossing lands on (SQ-1356)
+        // — never as one of the layer's own rooms.
+        let b = main.rooms.iter().find(|r| r.id == 2).expect("the crossing draws a ghost for it");
+        assert!(b.ghost.is_some(), "room 2 lives in another layer: it is a ghost here");
+    }
+
+    // ── SQ-1356: cross-layer ghosts are rooms the layout places ────────────────
+
+    /// Two layers, one crossing walked BOTH ways and one walked only one way. Each layer's render
+    /// carries a ghost per foreign room, labelled by which of the three readings applies, seated
+    /// in the free cell the passage's own direction points at.
+    #[test]
+    fn each_layer_ghosts_its_crossings_with_the_right_label_and_cell() {
+        let mut g = crate::graph::MapGraph::new();
+        for (id, n) in [(1, "Hall"), (2, "Study"), (3, "Cellar"), (4, "Sump")] {
+            g.upsert_room(id, n.into());
+        }
+        g.set_pos(1, (0, 0));
+        g.set_pos(2, (1, 0));
+        g.set_pos(3, (0, 0));
+        g.set_pos(4, (1, 0));
+        g.add_edge(1, Direction::E, 2);
+        g.add_edge(2, Direction::W, 1);
+        g.add_edge(3, Direction::E, 4);
+        g.add_edge(4, Direction::W, 3);
+        let l = g.new_layer(Some(0), "Under".into());
+        g.set_room_layer(3, l);
+        g.set_room_layer(4, l);
+        // Hall ⇄ Cellar, walked both ways; Study → Sump, walked one way only.
+        g.add_edge(1, Direction::Down, 3);
+        g.add_edge(3, Direction::Up, 1);
+        g.add_edge(2, Direction::Down, 4);
+
+        let main = render_layer(&g, 0);
+        let cellar = main.rooms.iter().find(|r| r.id == 3).expect("a ghost for the Cellar");
+        let ghost = cellar.ghost.as_ref().unwrap();
+        assert_eq!(ghost.kind, GhostKind::TwoWay);
+        assert_eq!(ghost.name, "Cellar");
+        assert_eq!(ghost.layer_name, "Under");
+        assert_eq!(cellar.label, "Cellar", "a two-way crossing names the room plainly");
+        assert_eq!(cellar.cell, (0, 1), "Down seats it directly below its anchor");
+        let sump = main.rooms.iter().find(|r| r.id == 4).expect("a ghost for the Sump");
+        assert_eq!(sump.ghost.as_ref().unwrap().kind, GhostKind::To);
+        assert_eq!(sump.label, "to Sump", "a one-way crossing OUT says where it leads");
+        assert_eq!(sump.cell, (1, 1));
+
+        let under = render_layer(&g, l);
+        let hall = under.rooms.iter().find(|r| r.id == 1).expect("a ghost for the Hall");
+        assert_eq!(hall.ghost.as_ref().unwrap().kind, GhostKind::TwoWay);
+        assert_eq!(hall.label, "Hall");
+        assert_eq!(hall.cell, (0, -1), "Up seats it directly above the Cellar");
+        let study = under.rooms.iter().find(|r| r.id == 2).expect("a ghost for the Study");
+        assert_eq!(study.ghost.as_ref().unwrap().kind, GhostKind::From);
+        assert_eq!(study.label, "from Study", "the arriving end says where it came FROM");
+        assert_eq!(study.cell, (1, -1), "seated where the return trip would have left from");
+    }
+
+    /// A ghost's passage is an ORDINARY connection, so the router draws it: a two-way crossing
+    /// comes out as one reciprocal connector, a one-way as a plain one. Nothing is a stub any
+    /// more (`interlayer_badges` is gone with SQ-1356).
+    #[test]
+    fn a_ghosts_passage_is_routed_like_any_other() {
+        let mut g = crate::graph::MapGraph::new();
+        for (id, n) in [(1, "Hall"), (2, "Cellar")] {
+            g.upsert_room(id, n.into());
+        }
+        g.set_pos(1, (0, 0));
+        g.set_pos(2, (0, 0));
+        let l = g.new_layer(Some(0), "Under".into());
+        g.set_room_layer(2, l);
+        g.add_edge(1, Direction::Down, 2);
+        g.add_edge(2, Direction::Up, 1);
+        let rm = render_layer(&g, 0);
+        let c = rm
+            .plan
+            .connectors
+            .iter()
+            .find(|c| c.origin == 1 && c.dest == 2)
+            .expect("the crossing is routed as a connector");
+        assert!(c.reciprocal, "walked both ways: one line, a head at each end");
+        // The only stubs left are the ordinary Up/Down portal stubs ANY vertical passage gets
+        // (`router::side_for` gives Up and Down no planar side) — never a cross-layer badge, which
+        // SQ-1356 retired along with `interlayer_badges`.
+        let mut stubs: Vec<_> = rm
+            .edges
+            .iter()
+            .filter(|e| e.is_stub)
+            .map(|e| (e.origin, crate::direction::short_label(e.dir)))
+            .collect();
+        stubs.sort();
+        assert_eq!(stubs, vec![(1, "d"), (2, "u")], "{:?}", rm.edges);
+    }
+
+    /// Two staircases from one layer to two different rooms beyond it draw two ghosts, one per
+    /// destination room — the reading `interlayer_badges_are_per_edge` used to pin on badges.
+    #[test]
+    fn two_staircases_to_two_rooms_draw_two_ghosts() {
+        let mut g = crate::graph::MapGraph::new();
+        for (id, n) in [(1, "HallN"), (2, "HallS"), (3, "CellarN"), (4, "CellarS")] {
+            g.upsert_room(id, n.into());
+        }
+        g.set_pos(1, (0, 0));
+        g.set_pos(2, (0, 1));
+        g.set_pos(3, (0, 0));
+        g.set_pos(4, (0, 1));
+        g.add_edge(1, Direction::E, 2);
+        g.add_edge(2, Direction::W, 1);
+        let l = g.new_layer(Some(0), "Cellar".into());
+        g.set_room_layer(3, l);
+        g.set_room_layer(4, l);
+        g.add_edge(1, Direction::Down, 3);
+        g.add_edge(2, Direction::Down, 4);
+        let rm = render_layer(&g, 0);
+        let mut named: Vec<_> = rm
+            .rooms
+            .iter()
+            .filter_map(|r| r.ghost.as_ref().map(|gh| (gh.name.as_str(), gh.layer_name.as_str())))
+            .collect();
+        named.sort();
+        assert_eq!(named, vec![("CellarN", "Cellar"), ("CellarS", "Cellar")]);
+    }
+
+    /// A crowded layer: the wanted cell is taken, so the map OPENS to make room — and every real
+    /// room's reciprocal adjacencies survive it (SQ-1356). Compared as adjacency PAIRS, not
+    /// absolute cells: opening a line moves rooms on purpose.
+    #[test]
+    fn a_crowded_layer_opens_for_a_ghost_without_costing_a_single_adjacency() {
+        let mut g = crate::graph::MapGraph::new();
+        for (id, n) in [(1, "Hall"), (2, "West"), (3, "East"), (4, "Cellar")] {
+            g.upsert_room(id, n.into());
+        }
+        g.set_pos(1, (0, 0));
+        g.set_pos(2, (-1, 1));
+        g.set_pos(3, (0, 1)); // exactly where the Hall's Down wants its ghost
+        g.set_pos(4, (0, 0));
+        g.add_edge(2, Direction::E, 3);
+        g.add_edge(3, Direction::W, 2);
+        let l = g.new_layer(Some(0), "Under".into());
+        g.set_room_layer(4, l);
+        g.add_edge(1, Direction::Down, 4);
+        g.add_edge(4, Direction::Up, 1);
+
+        // Every reciprocal cardinal pair, as the offsets they sit at, before ghosts exist.
+        let pairs = |rm: &RenderMap| {
+            let cell = |id| rm.rooms.iter().find(|r| r.id == id).map(|r| r.cell);
+            vec![(cell(2), cell(3))]
+        };
+        let bare = render(&g.layer_subgraph(0));
+        let rm = render_layer(&g, 0);
+        let a = rm.rooms.iter().find(|r| r.id == 2).unwrap().cell;
+        let b = rm.rooms.iter().find(|r| r.id == 3).unwrap().cell;
+        assert_eq!((b.0 - a.0, b.1 - a.1), (1, 0), "West─East is still exactly adjacent");
+        assert_eq!(pairs(&bare).len(), pairs(&rm).len());
+        let ghost = rm.rooms.iter().find(|r| r.id == 4).unwrap();
+        assert_eq!(ghost.cell, (0, 1), "the ghost took the cell it wanted");
+        assert_eq!(rm.rooms.iter().find(|r| r.id == 1).unwrap().cell, (0, 0), "the anchor stayed");
+        assert!(a.1 > 1 && b.1 > 1, "the row below opened to let it in: {a:?} {b:?}");
+    }
+
+    /// …and when opening the line WOULD cost an adjacency, it is not opened: the ghost takes a
+    /// free cell still beside its anchor — never one past the room that blocked it, which would
+    /// leave an unrelated room standing between the two boxes the crossing joins — and every real
+    /// room stays put.
+    #[test]
+    fn a_ghost_never_pulls_a_reciprocal_pair_apart() {
+        let mut g = crate::graph::MapGraph::new();
+        for (id, n) in [(1, "Hall"), (2, "Below"), (3, "Cellar")] {
+            g.upsert_room(id, n.into());
+        }
+        g.set_pos(1, (0, 0));
+        g.set_pos(2, (0, 1));
+        g.set_pos(3, (0, 0));
+        g.add_edge(1, Direction::S, 2);
+        g.add_edge(2, Direction::N, 1);
+        let l = g.new_layer(Some(0), "Under".into());
+        g.set_room_layer(3, l);
+        g.add_edge(1, Direction::Down, 3);
+        g.add_edge(3, Direction::Up, 1);
+        let rm = render_layer(&g, 0);
+        assert_eq!(rm.rooms.iter().find(|r| r.id == 1).unwrap().cell, (0, 0));
+        assert_eq!(rm.rooms.iter().find(|r| r.id == 2).unwrap().cell, (0, 1), "still adjacent");
+        let ghost = rm.rooms.iter().find(|r| r.id == 3).unwrap().cell;
+        assert_eq!(ghost, (-1, 0), "the ghost took a free side of its anchor instead");
+        assert_ne!(ghost, (0, 2), "never past `Below`, which has nothing to do with the crossing");
+        assert!(
+            (ghost.0).abs() <= 1 && (ghost.1).abs() <= 1,
+            "and it is still on the Hall's own doorstep: {ghost:?}"
+        );
     }
 }
