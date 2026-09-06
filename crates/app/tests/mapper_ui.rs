@@ -108,3 +108,5 @@ mod sq1316_connector_overlaps;
 mod sq1332_connector_bends;
 #[path = "suites/sq1336_export_json.rs"]
 mod sq1336_export_json;
+#[path = "suites/sq1345_zork1_forest_shadow.rs"]
+mod sq1345_zork1_forest_shadow;

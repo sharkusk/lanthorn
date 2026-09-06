@@ -145,6 +145,12 @@ impl RandomExitSearch {
     pub fn kind(&self) -> SearchKind {
         self.kind
     }
+    /// Where the LIVE player landed — the ground truth the shadow attempts are judged against,
+    /// for tests and diagnostics. A search whose `live_dest` is a room the player never reached
+    /// judges honest shadow evidence against a phantom (SQ-1345).
+    pub fn live_dest(&self) -> RoomId {
+        self.live_dest
+    }
 
     /// Is a shadow step that came out in the ORIGIN room telling this search anything? (SQ-1314)
     ///

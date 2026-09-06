@@ -4077,12 +4077,26 @@ pub fn apply_turn(
             // renamed the room in the same breath — proof on its own, no probe needed), so it is
             // read here FIRST and, when it fires, this contradiction check is skipped entirely —
             // the rename already decides the move.
+            //
+            // SQ-1345: `moved_room` disqualifies it just as firmly, and for a reason the rename
+            // check cannot see. `renamed` asks whether the room the player is standing in prints
+            // a DIFFERENT name now — a fine proxy for "you changed rooms" only while names are
+            // unique. Zork I ships four rooms called `Forest`, so a walk from one into another is
+            // a genuine crossing whose heading is identical to the one it left, `renamed` is
+            // false, and this branch read an ordinary passage as a contradicted self-loop: it
+            // filed the suspicion with the ORIGIN as the live landing ("back here"), against the
+            // very edge the previous walk of that direction had correctly minted. Two Forests,
+            // one arrow, and the room card said `E ? destination varies: Forest 3, back here`.
+            // Room identity is a fact the detector states outright (`snap.number`), so read it
+            // rather than inferring it from the printed name. A move that DID change rooms and
+            // contradicts something is the `existing_conflict`/`suspicious` branch above, which
+            // files the suspicion with the real landing.
             let origin = mapper.graph.current();
             let dir = parse_direction(command);
             let renamed = origin
                 .and_then(|o| mapper.graph.room(o))
                 .is_some_and(|r| r.label() != snap.name);
-            let conflicting_edge: Option<mapper::graph::RoomId> = if renamed {
+            let conflicting_edge: Option<mapper::graph::RoomId> = if renamed || moved_room {
                 None
             } else {
                 origin.zip(dir).and_then(|(o, d)| {
