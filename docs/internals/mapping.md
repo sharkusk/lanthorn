@@ -1177,7 +1177,34 @@ What the drawing shows, beyond the rooms:
   straddling cardinal RECIPROCAL vetoes the whole shift, since "exactly one
   cell apart" is what such a pair means.
 
-  Where the line cannot open, the newcomer stays on the anchor's **doorstep**:
+  **Cardinal, and nothing else** (SQ-1375). A diagonal only ever pinned its far
+  end to a QUADRANT — that is `layout::edge_is_satisfied`'s rule since SQ-1364,
+  and `mark_distorted` reads the same one — so stretching a diagonal is the
+  layout's ordinary currency and never vetoes anything. `adjacent_reciprocals`
+  asked `grid_offset`, which answers for all eight compass points, and so held
+  diagonals as tightly as cardinals for four quests. Zork I's house paid for it:
+  `Attic #195` hangs off `Kitchen #28` by a staircase and wants the cell above,
+  and the row that would have opened for it was vetoed by `North of House #143`
+  sitting one diagonal step from `Behind House #89` — a diagonal the LAYOUT
+  itself wrote, as the repair for a walked `E` that came out distorted. The
+  `Attic` was drawn four cells up a column of its own; the `Studio` ghost was
+  walked out past `South of House` the same way. Both sit on the doorstep now.
+
+  Where the line cannot open, the blocker is asked to **step aside**: it moves
+  one cell further along the bearing, together with whatever it would then
+  displace, everything that HANGS OFF any of them along the bearing (SQ-1363),
+  and every SIDE neighbour whose cardinal adjacency the move would otherwise
+  strand (SQ-1375) — all as one rigid party, under the same veto, bounded by
+  `MAX_PUSH_CHAIN` cells of depth and `MAX_PUSH_SET` rooms of width. That last
+  clause is the user's rule stated once: *when a room gets pushed, the rooms
+  that depend on it get pushed the same way*, and the neighbour the map is
+  promising to keep beside it is as dependent as the room downwind. A party
+  that is oversized or still vetoed falls back to the bare column (SQ-1367)
+  rather than giving up the cell. The one room that can never join the party is
+  the ANCHOR — a party holding it lands on the very cell the newcomer is being
+  seated in, which the push already refuses.
+
+  Where even that cannot happen, the newcomer stays on the anchor's **doorstep**:
   a free cell perpendicular to the bearing (roomier side first — both are
   equally correct as geometry, so the tie-break is which one's line has
   somewhere to go), then the side opposite it, and only if every side is taken

@@ -77,6 +77,15 @@ fn totals(map: &app::mapgen::GeneratedMap) -> (usize, usize, usize) {
 /// arrowheads: the first leaves WEST for a room that is north-east, and the other two arrive on a
 /// box CORNER whose channel lane sits one cell off it. Neither is a detour — pinning 2 rather
 /// than 1 is the honest reading of "as tight as this passage can be drawn".
+///
+/// **`#68↔#217` is 3 since SQ-1375, and the extra turn is the `Studio` ghost taking its doorstep.**
+/// The ghost wants the cell below the `Kitchen`, where `South of House #217` stands, and until
+/// SQ-1375 the push that would have moved `South of House` aside was vetoed by a DIAGONAL — the
+/// repair edge the layout wrote between it and `Behind House #89` — so the ghost was walked out
+/// PAST it instead and `South of House` never budged. Now the push goes through: the ghost sits on
+/// the doorstep and `South of House` is one row further down, which is one row further from
+/// `West of House #68` diagonally opposite it. The connector pays a turn for that, and it is the
+/// right trade — the passage the ghost stands for was the one drawn round a room it never touches.
 #[test]
 fn zork1_named_connectors_take_the_fewest_turns_their_anchors_allow() {
     let Some(path) = story(ZORK1) else {
@@ -94,7 +103,7 @@ fn zork1_named_connectors_take_the_fewest_turns_their_anchors_allow() {
     layers.sort_unstable();
     let report: Vec<_> =
         layers.iter().flat_map(|&l| app::render::map::bend_report(&map.graph, l)).collect();
-    for (origin, dest, want) in [(68u32, 91u32, 2usize), (68, 217, 2), (78, 131, 2)] {
+    for (origin, dest, want) in [(68u32, 91u32, 2usize), (68, 217, 3), (78, 131, 2)] {
         let f = report
             .iter()
             .find(|f| (f.origin, f.dest) == (origin, dest) || (f.origin, f.dest) == (dest, origin))
@@ -151,6 +160,18 @@ fn zork1_named_connectors_take_the_fewest_turns_their_anchors_allow() {
 /// boxes. Measured on the merged tree, taking SQ-1367 out puts the numbers back at 86 and 161 and
 /// nothing outside the Maze layer moves either way; Anchorhead's totals never budged across any of
 /// the three.
+///
+/// **SQ-1375 moved both numbers DOWN: optimum 84 → 81, drawn 155 → 153.** Unusually for this pin,
+/// nothing about the router changed and nothing got looser — the map got LESS blocked. Seating
+/// stopped treating a diagonal reciprocal as a claim on a cell (see `mapper::layout::seat`), which
+/// is what its own docs, `layout::edge_is_satisfied` and `mark_distorted` had all said since
+/// SQ-1364, and two boxes that had been parked out in the open came in to sit on the doorsteps they
+/// belong on: `Attic #195` next to `Kitchen #28` instead of four cells up a column of its own, and
+/// the `Studio` ghost below the `Kitchen` instead of past `South of House`. Fewer boxes stranded in
+/// the middle of the map is fewer boxes for a connector to route around, and the anchor optimum —
+/// "what the anchors and the boxes between them permit" — fell with it. One connector went the
+/// other way and gained a turn; `zork1_named_connectors_take_the_fewest_turns_their_anchors_allow`
+/// names it and says why.
 #[test]
 fn zork1_spends_no_more_turns_than_its_budget() {
     let Some(path) = story(ZORK1) else {
@@ -160,8 +181,8 @@ fn zork1_spends_no_more_turns_than_its_budget() {
     let map = app::mapgen::generate(&path, true).expect("mapgen");
     let (n, bends, opt) = totals(&map);
     assert!(n > 100, "Zork I must draw a real number of connectors, got {n}");
-    assert_eq!(opt, 84, "the anchor optimum is a property of the LAYOUT, not the router");
-    assert!(bends <= 155, "Zork I draws {bends} turns against a budget of 155 (was 158)");
+    assert_eq!(opt, 81, "the anchor optimum is a property of the LAYOUT, not the router");
+    assert!(bends <= 153, "Zork I draws {bends} turns against a budget of 153 (was 155)");
 }
 
 /// The same budget on the denser fixture. Before SQ-1332: **110** turns against an optimum of 52.

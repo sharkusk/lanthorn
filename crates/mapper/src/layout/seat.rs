@@ -19,6 +19,19 @@
 //! opening would pull one apart is not opened at all. A passage that is one-way, diagonal, gated
 //! or already stretched may lengthen — none of those claims a cell count.
 //!
+//! **The word CARDINAL in that sentence went unimplemented for four quests** (SQ-1375).
+//! [`adjacent_reciprocals`] asked `grid_offset`, which answers `Some` for all eight compass
+//! points, so a DIAGONAL pair was as binding here as a cardinal one — against this module's own
+//! rule above, against `layout::edge_is_satisfied`'s (SQ-1364) and against `mark_distorted`'s,
+//! all three of which let a diagonal stretch to any distance inside its quadrant. Zork I's
+//! `Attic` paid for it: it hangs off the `Kitchen` by a staircase and wants the cell above, and
+//! the row that would have opened for it was vetoed by `North of House` sitting one diagonal step
+//! from `Behind House` — a diagonal the LAYOUT itself had written, as the repair for a walked `E`
+//! that came out distorted. So the `Attic` walked four cells up a column of its own, past
+//! `North of House`, `Forest Path` and `Clearing`, to reach open ground. With the diagonal free to
+//! stretch, the row opens, every cardinal pair on the map keeps its cell, and the `Attic` is drawn
+//! on the doorstep.
+//!
 //! **A whole-side slide is all-or-nothing, though, and that was not enough** (SQ-1358). Zork I's
 //! house: the Studio's stairs arrive from below the `Kitchen`, whose doorstep `South of House`
 //! holds. Opening the row would have separated a `Clearing` from the `Forest` directly below it —
@@ -44,6 +57,18 @@
 //! instead, four turns of line between two adjacent boxes. The dependants say how a push travels;
 //! a party that is oversized or vetoed falls back to the bare column ([`push_chain`]), under the
 //! same veto, rather than giving up the cell.
+//!
+//! **And a KEPT ADJACENCY is another way a push travels, not a reason to refuse one** (SQ-1375).
+//! SQ-1363 swept in the rooms downwind of the party and left the ones beside it standing — so a
+//! blocker with a cardinal neighbour due east of it could not be pushed north at all, because the
+//! neighbour would have been stranded and [`apply_push`] refuses exactly that. The same fact reads
+//! two ways, and the user's rule settles which: when a room gets pushed, the rooms that depend on
+//! it get pushed the same way, and the neighbour whose adjacency the map is promising to keep is
+//! as dependent as the room downwind. [`stranded_partners`] brings it along, transitively and
+//! together with whatever it displaces, under the same [`MAX_PUSH_SET`] and the same fallback to
+//! the bare column. Zork I's house again: `Forest Path` cannot step north without `Forest`, due
+//! west of it, coming too. The one room that can never join is the ANCHOR — a party containing it
+//! lands on the very cell the newcomer is being seated in, which [`apply_push`] already refuses.
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -72,6 +97,23 @@ pub fn seat_offset(dir: Direction) -> Option<(i32, i32)> {
 /// The one invariant [`seat_adjacent`] will not trade away. Keyed by the ordered pair so the set
 /// is comparable across a trial shift; a pair whose rooms are already further apart than the
 /// passage claims is not in here at all, and so cannot be made worse by a shift either.
+///
+/// **CARDINAL means cardinal: a DIAGONAL claims no cell count** (SQ-1375). `N` names the room in
+/// the next cell up; `NW` only ever pinned its endpoint to a QUADRANT, and stretching one is the
+/// layout's ordinary currency — which is exactly what `layout::edge_is_satisfied` decided at
+/// SQ-1364 (`Some((dx, dy)) if dx == 0 || dy == 0`), what `mark_distorted` reads, and what this
+/// module's own docs have said since SQ-1356 ("a passage that is one-way, diagonal, gated or
+/// already stretched may lengthen"). The filter below is the line that had been missing: without
+/// it `grid_offset` answers `Some` for all eight compass points, so a diagonal was silently as
+/// binding here as a cardinal and vetoed shifts the rest of the mapper considers free.
+///
+/// Zork I's `Attic` is the specimen. It hangs off the `Kitchen` by a staircase and wanted the cell
+/// directly above it, where `North of House` stands. Opening that row would have moved
+/// `North of House` off the DIAGONAL it sits on from `Behind House` — the repair edge the layout
+/// itself wrote when the walked `E` came out distorted — and that one diagonal vetoed the whole
+/// slide, so the `Attic` walked four cells out of the house and was drawn past `North of House`,
+/// `Forest Path` and `Clearing`, in a column of its own. With the diagonal free to stretch the row
+/// opens, every cardinal pair on the map keeps its cell, and the `Attic` sits on the doorstep.
 fn adjacent_reciprocals(
     graph: &MapGraph,
     positions: &BTreeMap<RoomId, (i32, i32)>,
@@ -82,7 +124,7 @@ fn adjacent_reciprocals(
         if c.is_self_loop() {
             continue;
         }
-        let Some(off) = grid_offset(c.dir) else { continue };
+        let Some(off) = grid_offset(c.dir).filter(|&(dx, dy)| dx == 0 || dy == 0) else { continue };
         let (Some(&a), Some(&b)) = (positions.get(&c.origin), positions.get(&c.dest)) else {
             continue;
         };
@@ -143,7 +185,16 @@ const MAX_PUSH_SET: usize = 8;
 /// that the forest lies south of the house. A rule keyed on reciprocity drops this case, which is
 /// the whole case; a rule keyed on the direction keeps it, and keeps every honest one-way exit
 /// with it. A neighbour to the SIDE (`E`, `W` against a downward bearing, dot product zero) or
-/// BEHIND (`N` out of the moved room) is anchored by whatever is over there, and is left alone.
+/// BEHIND (`N` out of the moved room) is anchored by whatever is over there, and is not a
+/// dependant.
+///
+/// **Not a dependant is not the same as left behind** (SQ-1375). A side neighbour whose adjacency
+/// the map is currently PROMISING — a cardinal reciprocal exactly one cell away — travels with the
+/// party all the same, because leaving it would break that promise; [`stranded_partners`] is where
+/// that half of the closure lives, and it reads the cells rather than the directions, because
+/// "would this move break a kept adjacency" is a question about geometry. This function stays a
+/// question about what the passages SAY, which is why a one-way `S` exit to a room two cells
+/// diagonally away still drags it along.
 fn hangs_off(dir: Direction, from_moved: bool, bearing: (i32, i32)) -> bool {
     let Some(v) = grid_offset(dir) else { return false };
     let (dx, dy) = if from_moved { v } else { (-v.0, -v.1) };
@@ -155,6 +206,9 @@ fn hangs_off(dir: Direction, from_moved: bool, bearing: (i32, i32)) -> bool {
 ///
 /// Transitive: a room that hangs off a dependant hangs off the push, and a chain of two is not
 /// rarer than a chain of one.
+///
+/// One of the two halves of the party closure; [`stranded_partners`] is the other, and
+/// [`settle_party`] alternates them because each can hand the other new members.
 fn extend_with_dependants(
     graph: &MapGraph,
     positions: &BTreeMap<RoomId, (i32, i32)>,
@@ -209,15 +263,54 @@ fn push_column(
     None
 }
 
-/// The whole party `column` ends up dragging: its dependants ([`extend_with_dependants`]),
-/// whatever THOSE would displace, and their dependants in turn — repeated until neither pass adds
-/// anybody (SQ-1363).
+/// Every room in `positions` that is half of a `keep` pair whose OTHER half is already moving
+/// (SQ-1375).
+///
+/// A push moves its party as a rigid body, so a kept adjacency survives it exactly when both ends
+/// travel. [`apply_push`] reads that as a veto — the partner was left behind, so refuse — and this
+/// reads the same fact as an instruction: bring the partner. Which of the two applies is settled
+/// by whether the partner CAN come, and [`apply_push`] still has the last word on that.
+fn stranded_partners(
+    positions: &BTreeMap<RoomId, (i32, i32)>,
+    keep: &BTreeSet<(RoomId, RoomId)>,
+    moving: &BTreeSet<RoomId>,
+) -> Vec<RoomId> {
+    keep.iter()
+        .filter_map(|&(a, b)| match (moving.contains(&a), moving.contains(&b)) {
+            (true, false) => Some(b),
+            (false, true) => Some(a),
+            _ => None,
+        })
+        .filter(|r| positions.contains_key(r))
+        .collect()
+}
+
+/// The whole party `column` ends up dragging: its dependants ([`extend_with_dependants`]), the
+/// partners its kept adjacencies would otherwise strand ([`stranded_partners`]), whatever ALL of
+/// them would displace, and their dependants and partners in turn — repeated until no pass adds
+/// anybody (SQ-1363, SQ-1375).
+///
+/// **A kept adjacency is a reason to bring a room, not a reason to stop** (SQ-1375). SQ-1363 swept
+/// in the rooms that hang off the party along the bearing and left the ones to the SIDE of it
+/// where they stood — and a side neighbour joined by a cardinal reciprocal is precisely the shape
+/// [`apply_push`] refuses, so the push died on a room that would have been perfectly happy to step
+/// across with everybody else. That is the user's rule stated once: when a room gets pushed, the
+/// rooms that depend on it get pushed the same way, and "depends on" covers the neighbour whose
+/// adjacency the map is promising to keep as much as it covers the room downwind. Zork I's house
+/// is the specimen — `Forest Path` cannot be nudged north without `Forest`, due west of it,
+/// coming along.
+///
+/// The anchor is the one room that can never join: it is where the newcomer is being seated
+/// FROM. Nothing here says so, because nothing here has to — the anchor stands one cell back
+/// along the bearing, so a party containing it lands on `want`, and [`apply_push`]'s check that
+/// `want` comes out free refuses that party without a special case for it (see [`push_chain`]).
 ///
 /// `None` when the party outgrows [`MAX_PUSH_SET`] rooms, at which point the push is shunting a
 /// neighbourhood rather than asking a room to step aside.
 fn settle_party(
     graph: &MapGraph,
     positions: &BTreeMap<RoomId, (i32, i32)>,
+    keep: &BTreeSet<(RoomId, RoomId)>,
     column: &BTreeSet<RoomId>,
     offset: (i32, i32),
 ) -> Option<BTreeSet<RoomId>> {
@@ -228,6 +321,8 @@ fn settle_party(
         }
         let before = moving.len();
         extend_with_dependants(graph, positions, &mut moving, offset);
+        let partners = stranded_partners(positions, keep, &moving);
+        moving.extend(partners);
         let ahead: BTreeSet<(i32, i32)> = moving
             .iter()
             .filter_map(|r| positions.get(r))
@@ -271,8 +366,9 @@ fn apply_push(
     keep.is_subset(&adjacent_reciprocals(graph, &trial)).then_some(trial)
 }
 
-/// Push whatever stands on `want` — whatever THAT would displace, and whatever hangs off any of
-/// them — one cell further along `offset`, as a rigid chain (SQ-1358, SQ-1363, SQ-1367).
+/// Push whatever stands on `want` — whatever THAT would displace, whatever hangs off any of them,
+/// and whatever kept adjacency they would otherwise strand — one cell further along `offset`, as a
+/// rigid chain (SQ-1358, SQ-1363, SQ-1367, SQ-1375).
 ///
 /// [`push_column`] walks the bearing to open ground, [`settle_party`] grows that column into the
 /// party which must travel with it, and [`apply_push`] moves the party and judges the result. The
@@ -291,12 +387,23 @@ fn apply_push(
 /// line between them. Both attempts face the same veto, so the fallback can no more pull an
 /// adjacent reciprocal pair apart than the widened party could.
 ///
+/// **Two rungs, not three** (SQ-1375). The partner closure only ever adds a room whose kept
+/// adjacency the smaller party would have broken — and a party that breaks a kept adjacency is a
+/// party [`apply_push`] refuses. So wherever the widened party differs from SQ-1363's, SQ-1363's
+/// was already vetoed, and an intermediate rung between the two would be dead code. The fallback
+/// that matters is still the bare COLUMN.
+///
 /// `None` when neither party is legal, or when the column never reaches open ground.
 ///
 /// The anchor stands one cell BACK from `want`, against the bearing — but a DISTORTED passage may
 /// claim a bearing its cells do not bear out, so the anchor can be swept into the party by a rule
-/// that reads directions rather than positions. [`apply_push`]'s check that `want` ends up free
-/// says so rather than assuming it.
+/// that reads directions rather than positions, and since SQ-1375 by one that reads the kept
+/// adjacencies too: the anchor's own eastern neighbour joining the party drags the anchor in
+/// behind it. [`apply_push`]'s check that `want` ends up free says so rather than assuming it, and
+/// is the only guard the anchor needs — the party lands ON `want` the moment the anchor is in it.
+/// Zork I's `Studio` ghost takes that route every run: `Behind House` is a cardinal neighbour of
+/// the `Kitchen` it is being seated against, so the closure reaches the anchor, the party is
+/// refused, and the bare column — `South of House` alone — is what actually steps aside.
 fn push_chain(
     graph: &MapGraph,
     positions: &BTreeMap<RoomId, (i32, i32)>,
@@ -305,7 +412,7 @@ fn push_chain(
     offset: (i32, i32),
 ) -> Option<BTreeMap<RoomId, (i32, i32)>> {
     let column = push_column(positions, want, offset)?;
-    settle_party(graph, positions, &column, offset)
+    settle_party(graph, positions, keep, &column, offset)
         .and_then(|party| apply_push(graph, positions, keep, &party, want, offset))
         .or_else(|| apply_push(graph, positions, keep, &column, want, offset))
 }
@@ -343,7 +450,8 @@ pub struct Seat {
 ///    both are tried, the horizontal one first;
 /// 3. the slide is vetoed, so the blocker alone is asked to step aside: it moves one cell further
 ///    along the bearing, and whatever it would then displace — plus everything that HANGS OFF any
-///    of them, so a pushed room does not leave its own southern neighbours behind (SQ-1363) —
+///    of them, so a pushed room does not leave its own southern neighbours behind (SQ-1363), plus
+///    every SIDE neighbour whose kept adjacency the move would otherwise strand (SQ-1375) —
 ///    moves with it as a rigid chain, up to [`MAX_PUSH_CHAIN`] cells deep and [`MAX_PUSH_SET`]
 ///    rooms wide — under the same veto, and the newcomer still gets the
 ///    cell it wanted. This is what a slide cannot do, because a slide is all-or-nothing: one
@@ -759,13 +867,45 @@ mod tests {
         }
     }
 
-    /// The boundary the rule draws, pinned from the other side: a neighbour due EAST of the
-    /// blocker is perpendicular to the bearing, so it is anchored where it stands and is NOT a
-    /// dependant — and because the two are an adjacent reciprocal pair, leaving it behind would
-    /// pull that pair apart, which vetoes the push outright. The seating falls back exactly as it
-    /// did before SQ-1363.
+    // ── SQ-1375: diagonals claim no cell, and a kept pair travels ──────────────
+
+    /// **A DIAGONAL reciprocal claims no cell count, so it never vetoes a slide.** `6`/`7` sit one
+    /// diagonal step apart across the cut the newcomer needs opened. Were that binding — as
+    /// [`adjacent_reciprocals`] wrongly made it until SQ-1375 — the row could not open, and the
+    /// newcomer would be pushed past its blocker or parked beside its anchor; that is exactly what
+    /// happened to Zork I's `Attic`. A cardinal pair in the same position still vetoes, which is
+    /// what [`a_blocked_bearing_falls_back_to_a_neighbour_never_past_the_blocker`] pins.
     #[test]
-    fn a_perpendicular_neighbour_is_not_a_dependant_and_its_pair_vetoes_the_push() {
+    fn a_diagonal_reciprocal_does_not_veto_a_slide() {
+        let g = g_with(
+            &[(1, "Hall"), (2, "Below"), (6, "Clearing"), (7, "Forest")],
+            &[(6, Direction::SE, 7), (7, Direction::NW, 6)],
+        );
+        let mut pos: BTreeMap<RoomId, (i32, i32)> =
+            [(1, (0, 0)), (2, (0, 1)), (6, (2, 0)), (7, (3, 1))].into_iter().collect();
+        let seat = seat_adjacent(&g, &mut pos, 1, (0, 1)).unwrap();
+        assert_eq!(seat.cell, (0, 1), "the newcomer takes the cell it wanted");
+        assert!(seat.moved_map, "the row opened");
+        assert_eq!(pos[&1], (0, 0), "the anchor never moves");
+        assert_eq!((pos[&2], pos[&7]), ((0, 2), (3, 2)), "the row below slid, diagonal and all");
+        assert_eq!(pos[&6], (2, 0), "and the far half of the diagonal stayed where it was");
+    }
+
+    // ── SQ-1375: a kept adjacency travels with the party ───────────────────────
+
+    /// **The boundary SQ-1363 drew, moved.** A neighbour due EAST of the blocker is perpendicular
+    /// to the bearing, so [`hangs_off`] says nothing about it and it is not a dependant — and up
+    /// to SQ-1375 that meant it stood still, the E/W pair was pulled apart, and the push was
+    /// vetoed outright: the newcomer went PAST the blocker and the two boxes its passage joins
+    /// stopped being neighbours.
+    ///
+    /// The user's rule says the opposite. A room the map is promising to keep beside a pushed room
+    /// is as dependent on it as the room downwind, so the partner travels too
+    /// ([`stranded_partners`]), the pair keeps its cell, and the newcomer gets the doorstep it
+    /// asked for. This case is the one this quest deliberately inverted; the paragraph above is
+    /// what it used to pin.
+    #[test]
+    fn a_perpendicular_neighbour_travels_with_the_blocker_it_is_paired_to() {
         let (g, mut pos) = house(&[
             (5, Direction::W, 1),
             (1, Direction::S, 5),
@@ -774,12 +914,185 @@ mod tests {
         ]);
         pos.insert(8, (1, 1)); // due east of `South of House`, exactly one cell away
         let seat = seat_adjacent(&g, &mut pos, 2, (0, 1)).unwrap();
-        assert!(!seat.moved_map, "nothing legal to move: the E/W pair would be stretched");
-        assert_eq!(seat.cell, (0, 2), "past the blocker, exactly as before SQ-1358");
-        assert_eq!((pos[&5], pos[&8]), ((0, 1), (1, 1)), "and the pair is still adjacent");
+        assert_eq!(seat.cell, (0, 1), "the ghost took the doorstep it wanted");
+        assert_ne!(seat.cell, (0, 2), "never past the blocker any more");
+        assert!(seat.moved_map);
+        assert_eq!(pos[&5], (0, 2), "South of House stepped down a row");
+        assert_eq!(pos[&8], (1, 2), "and its eastern partner stepped down with it");
+        assert_eq!(pos[&8].0 - pos[&5].0, 1, "the E/W pair is still exactly one cell apart");
+        assert_eq!(pos[&8].1, pos[&5].1);
         for (id, cell) in HOUSE_AT_REST {
             assert_eq!(pos[&id], cell, "room {id} did not move");
         }
+    }
+
+    /// …and the partner closure is TRANSITIVE and drags what it displaces, exactly as the
+    /// dependant closure does: the partner's own partner comes, and a room standing where the
+    /// party is headed is swept up rather than sat on.
+    #[test]
+    fn a_partner_brings_its_own_partner_and_whatever_stands_in_their_way() {
+        let (g, mut pos) = house(&[
+            (5, Direction::W, 1),
+            (1, Direction::S, 5),
+            (5, Direction::E, 8),
+            (8, Direction::W, 5),
+            (8, Direction::E, 9),
+            (9, Direction::W, 8),
+        ]);
+        pos.insert(8, (1, 1));
+        pos.insert(9, (2, 1)); // partner of the partner
+        pos.insert(10, (2, 2)); // …and squarely in `9`'s way
+        let seat = seat_adjacent(&g, &mut pos, 2, (0, 1)).unwrap();
+        assert_eq!(seat.cell, (0, 1));
+        assert!(seat.moved_map);
+        assert_eq!(
+            (pos[&5], pos[&8], pos[&9], pos[&10]),
+            ((0, 2), (1, 2), (2, 2), (2, 3)),
+            "blocker, partner, partner's partner and the room they displaced all moved one row"
+        );
+    }
+
+    /// **The anchor never joins, however the closure reaches it.** Here the blocker's eastern
+    /// partner is the ANCHOR's eastern neighbour too, so bringing the partner would bring the
+    /// anchor — and a party holding the anchor lands on the very cell the newcomer wants. The
+    /// party is refused, the bare column is refused with it (the pair it would strand is exactly
+    /// the one that started this), and the seating falls back the way it always did. This is Zork
+    /// I's `Studio` ghost in miniature: `Behind House` is cardinally beside the `Kitchen`.
+    #[test]
+    fn a_partner_that_would_drag_the_anchor_in_refuses_the_push() {
+        // `2` is the anchor, `5` the blocker on its doorstep, `8` the blocker's eastern partner,
+        // `9` the partner's northern partner — and `9` is the ANCHOR's eastern partner too, so the
+        // closure walks 5 → 8 → 9 → 2. `6`/`7` shut the whole-side slide as they do in `house`.
+        let g = g_with(
+            &[
+                (2, "Kitchen"),
+                (5, "South of House"),
+                (8, "Beside"),
+                (9, "Behind House"),
+                (6, "Clearing"),
+                (7, "Forest"),
+            ],
+            &[
+                (5, Direction::E, 8),
+                (8, Direction::W, 5),
+                (8, Direction::N, 9),
+                (9, Direction::S, 8),
+                (2, Direction::E, 9),
+                (9, Direction::W, 2),
+                (6, Direction::S, 7),
+                (7, Direction::N, 6),
+            ],
+        );
+        let mut pos: BTreeMap<RoomId, (i32, i32)> =
+            [(2, (0, 0)), (5, (0, 1)), (8, (1, 1)), (9, (1, 0)), (6, (3, 0)), (7, (3, 1))]
+                .into_iter()
+                .collect();
+        let seat = seat_adjacent(&g, &mut pos, 2, (0, 1)).unwrap();
+        assert!(!seat.moved_map, "the closure reached the anchor, so nothing legal to move");
+        assert_eq!(seat.cell, (-1, 0), "beside the anchor, exactly as before SQ-1375");
+        assert_eq!(
+            (pos[&5], pos[&8], pos[&9]),
+            ((0, 1), (1, 1), (1, 0)),
+            "and every kept pair is still exactly one cell apart"
+        );
+        assert_eq!(pos[&2], (0, 0), "the anchor never moves");
+    }
+
+    /// A partner closure that blows [`MAX_PUSH_SET`] is not a reason to abandon the cell: the
+    /// party is refused and the BARE COLUMN is tried under the same veto, exactly as SQ-1367
+    /// arranged for an oversized DEPENDANT closure. Here the blocker itself is half of no kept
+    /// pair, so the bare push is legal and the newcomer keeps its doorstep — at the cost of the
+    /// dependant `4` staying put, which is precisely the trade SQ-1367 made.
+    #[test]
+    fn an_oversized_partner_closure_falls_back_to_the_bare_column() {
+        // `4` hangs off the blocker's `S` exit (a distorted one — two cells away diagonally, so no
+        // kept pair) and carries a chain of E/W partners long enough to blow the cap. `6`/`7` shut
+        // the whole-side slide.
+        let mut rooms: Vec<(RoomId, &str)> =
+            vec![(1, "Hall"), (2, "Below"), (4, "Dependant"), (6, "Clearing"), (7, "Forest")];
+        let mut edges = vec![(2, Direction::S, 4), (6, Direction::S, 7), (7, Direction::N, 6)];
+        let mut pos: BTreeMap<RoomId, (i32, i32)> =
+            [(1, (0, 0)), (2, (0, 1)), (4, (2, 2)), (6, (-2, 0)), (7, (-2, 1))]
+                .into_iter()
+                .collect();
+        let mut prev = 4;
+        for k in 0..MAX_PUSH_SET + 1 {
+            let id = 10 + k as RoomId;
+            rooms.push((id, "Chain"));
+            edges.push((prev, Direction::E, id));
+            edges.push((id, Direction::W, prev));
+            pos.insert(id, (k as i32 + 3, 2));
+            prev = id;
+        }
+        let g = g_with(&rooms, &edges);
+        let seat = seat_adjacent(&g, &mut pos, 1, (0, 1)).unwrap();
+        assert_eq!(seat.cell, (0, 1), "the newcomer keeps the cell its bearing points at");
+        assert!(seat.moved_map);
+        assert_eq!(pos[&2], (0, 2), "the bare column stepped aside alone");
+        assert_eq!(pos[&4], (2, 2), "its dependant stayed put, exactly as SQ-1367 allows");
+        for k in 0..MAX_PUSH_SET + 1 {
+            let id = 10 + k as RoomId;
+            assert_eq!(pos[&id], (k as i32 + 3, 2), "partner {id} stayed where it was");
+        }
+    }
+
+    /// **Zork I's `Attic`, reduced to its shape.** The anchor is the `Kitchen`; `North of House`
+    /// stands on the cell the staircase points at, with `Forest Path` and `Clearing` behind it up
+    /// the column, and `Forest` due WEST of `Forest Path` in a cardinal reciprocal pair. Before
+    /// SQ-1375 that pair vetoed both the push and its bare-column fallback and the `Attic` walked
+    /// four cells out of the house; now `Forest` travels with the column and the `Attic` takes
+    /// the doorstep.
+    ///
+    /// The slide (step 2) is vetoed here by the `Clearing`/`Forest` pair that vetoes it in
+    /// [`house`], so this measures the PUSH rather than the line-opening the real map happens to
+    /// get.
+    #[test]
+    fn the_zork_house_column_steps_north_and_takes_the_forest_beside_it() {
+        let g = g_with(
+            &[
+                (2, "Kitchen"),
+                (143, "North of House"),
+                (247, "Forest Path"),
+                (167, "Clearing"),
+                (91, "Forest"),
+                (6, "Clearing"),
+                (7, "Forest"),
+            ],
+            &[
+                (143, Direction::N, 247),
+                (247, Direction::S, 143),
+                (247, Direction::N, 167),
+                (167, Direction::S, 247),
+                // `Forest` due west of `Forest Path`: the pair that used to veto everything.
+                (91, Direction::E, 247),
+                (247, Direction::W, 91),
+                // …and the far-away pair that shuts the whole-side slide, as in `house`.
+                (6, Direction::S, 7),
+                (7, Direction::N, 6),
+            ],
+        );
+        let mut pos: BTreeMap<RoomId, (i32, i32)> = [
+            (2, (1, 3)),
+            (143, (1, 2)),
+            (247, (1, 1)),
+            (167, (1, 0)),
+            (91, (0, 1)),
+            (6, (4, 2)),
+            (7, (4, 3)),
+        ]
+        .into_iter()
+        .collect();
+        let seat = seat_adjacent(&g, &mut pos, 2, (0, -1)).unwrap();
+        assert_eq!(seat.cell, (1, 2), "the Attic sits on the Kitchen's doorstep");
+        assert_ne!(seat.cell, (1, -1), "not four cells up a column of its own");
+        assert!(seat.moved_map);
+        assert_eq!(
+            (pos[&143], pos[&247], pos[&167], pos[&91]),
+            ((1, 1), (1, 0), (1, -1), (0, 0)),
+            "the whole column moved one cell north, and the Forest beside it came too"
+        );
+        assert_eq!(pos[&2], (1, 3), "the Kitchen never moves");
+        assert_eq!((pos[&6], pos[&7]), ((4, 2), (4, 3)), "and the pair that vetoed the slide");
     }
 
     // ── SQ-1367: an oversized party falls back to the bare column ──────────────

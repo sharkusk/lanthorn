@@ -100,6 +100,8 @@ mod sq1305_glulx_stale_sidecar;
 mod sq1308_mapgen_layers;
 #[path = "suites/sq1372_adventure_maze.rs"]
 mod sq1372_adventure_maze;
+#[path = "suites/sq1375_zork_house_makes_room.rs"]
+mod sq1375_zork_house_makes_room;
 #[path = "suites/sq1314_nautical_passage_erasure.rs"]
 mod sq1314_nautical_passage_erasure;
 #[path = "suites/sq1315_anchorhead_2018.rs"]
