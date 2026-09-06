@@ -63,27 +63,11 @@ const MAX_BOX_CELLS: i32 = 30;
 /// Corner radius of a connector's right-angle turns.
 const CORNER_R: f64 = 5.0;
 
-/// A cross-layer ghost's two text lines (SQ-1319): the room name, and the layer name smaller
-/// beneath it. Padding, sizes and per-character advances for both, at the small scale the map's
-/// direction tags and badge names already use (`SMALL_ADV`/`SMALL_PX` below share the same
-/// 0.6125 ratio for the same monospace stack).
-const GHOST_PAD: f64 = 4.0;
-const GHOST_NAME_PX: f64 = 8.0;
-const GHOST_LAYER_PX: f64 = 6.5;
-const GHOST_NAME_ADV: f64 = GHOST_NAME_PX * 0.6125;
-const GHOST_LAYER_ADV: f64 = GHOST_LAYER_PX * 0.6125;
-const GHOST_LINE_GAP: f64 = 3.0;
-/// The distance `place_ghost` extends by each time the current spot is occupied — one lane's
-/// worth, matching `settle_badge`'s own step so a pushed-out ghost still reads as "one channel
-/// over" rather than landing at an arbitrary distance.
-const GHOST_STEP: f64 = 17.0;
-
-/// A departure ghost's own starting gap (SQ-1330): the minimum distance, in SVG px, from a
-/// portal badge's centre to its ghost's near edge. Wide enough for the badge's own visual
-/// radius (6.5, see `badge`) plus one arrowhead's full length (`ARROW_HEAD_LEN`) plus a couple
-/// of pixels of daylight, so the new "into the ghost" arrowhead — which occupies the LAST
-/// `ARROW_HEAD_LEN` px before the ghost — never overlaps the badge it travels away from.
-const GHOST_DEPARTURE_GAP: f64 = 6.5 + ARROW_HEAD_LEN + 2.5;
+/// The type size of the LAYER line inside a cross-layer ghost's box (SQ-1356) — the small second
+/// line naming where the room it stands for actually lives, beneath the name drawn at
+/// `LABEL_PX` like any other room's. Smaller than the name for the same reason the room card's
+/// footnotes are: it is a qualifier on the name, not a competitor for the eye.
+const GHOST_LAYER_PX: f64 = 8.0;
 
 /// Margin between the drawing and the canvas edge.
 const MARGIN: i32 = 24;
@@ -123,11 +107,8 @@ fn stylesheet() -> String {
          .badge-dest{{fill:#a99cc8;font-size:8px}}\
          .tag{{fill:#9ab;font-size:8px}}\
          .ghost{{fill:#1f1f38;stroke:#77c;stroke-width:1;stroke-dasharray:3 2}}\
-         .ghost.arrival{{stroke:#8bf}}\
-         .ghost-line{{stroke:#77c;stroke-width:1;stroke-dasharray:2 2;fill:none}}\
-         .ghost text{{text-anchor:middle}}\
-         .ghost-name{{fill:#cdd;font-size:{GHOST_NAME_PX}px}}\
-         .ghost-layer{{fill:#99b;font-size:{GHOST_LAYER_PX}px}}\
+         .ghost-name{{fill:#cdd;font-size:{LABEL_PX}px;text-anchor:middle}}\
+         .ghost-layer{{fill:#99b;font-size:{GHOST_LAYER_PX}px;text-anchor:middle}}\
          .random{{fill:#f8a;font-size:9px}}\
          .heading{{fill:#fff;font-size:14px}}\
          .legend{{fill:#dde;font-size:9px}}\
@@ -374,34 +355,11 @@ fn outward(side: Side) -> (f64, f64) {
     }
 }
 
-/// One passage with no planar route (`RoutedEdge::is_stub`), as the badge pass needs it: which
-/// way it leads, what it leads TO, and whether that is on another layer.
-///
-/// The three travel together because the badge is wrong without all of them — a letter with no
-/// side to sit on, or a destination name on a passage that never left the layer.
-#[derive(Debug, Clone, Copy)]
-struct Stub<'a> {
-    dir: Direction,
-    dest: Option<&'a str>,
-    interlayer: bool,
-}
-
-impl Stub<'_> {
-    /// The box side this passage leaves by — see [`side_for_travel`].
-    fn side(self) -> Side {
-        side_for_travel(self.dir)
-    }
-}
-
 /// The box side a passage travelling `dir` leaves by. Up and Down take the top and bottom
 /// borders (as they do in the drawn view's portal slots); In and Out have no bearing of their
 /// own and take the right; a compass passage (including one walked diagonally, or one that
 /// crossed a layer per SQ-0360) asks the router the same question a real connector's own
 /// perpendicular leg does.
-///
-/// Also used, with `dir` reversed, to guess which side a one-way cross-layer ARRIVAL belongs on
-/// (SQ-1319's `arrival_ghosts`) — there is no routed geometry to ask on that end, so the arrival
-/// is placed as if the return trip had been walked.
 fn side_for_travel(dir: Direction) -> Side {
     match dir {
         Direction::Up => Side::Top,
@@ -409,52 +367,6 @@ fn side_for_travel(dir: Direction) -> Side {
         Direction::In | Direction::Out => Side::Right,
         d => mapper::router::side_for(d).unwrap_or(Side::Right),
     }
-}
-
-/// A one-way cross-layer arrival (SQ-1319): a passage lands on a room being drawn in the current
-/// layer's panel, travelled by `traveled` on the ORIGIN's side, from `origin_name` on
-/// `origin_layer` — and no connection runs back the other way, so this room's own ghost is the
-/// only place the crossing is ever named (see `arrival_ghosts`).
-#[derive(Debug, Clone)]
-struct ArrivalGhost {
-    traveled: Direction,
-    origin_name: String,
-    origin_layer: String,
-}
-
-/// One-way cross-layer arrivals landing in `layer` (SQ-1319): every interlayer connection whose
-/// destination lives here, with no connection back the other way.
-///
-/// `interlayer_badges` only ever emits a room's own OUTGOING crossing — when the graph has a
-/// connection back (however indirect the reciprocity), the destination's own panel draws its own
-/// outgoing ghost for it, which IS the mirror this crossing needs. Only a genuinely one-way
-/// crossing leaves the arriving side with nothing, and that is what this fills in.
-///
-/// SQ-1347: this is WHY a reciprocal crossing never grows a second head on either stub — a ghost
-/// stub carries only the travel that LEAVES its own layer, never the return word too, which is
-/// captured by the other layer's own outgoing stub instead. Excluding every reciprocal pair here
-/// is what keeps that true; widening this filter (e.g. to only the exact-opposite word) would
-/// let a same-word-both-ways graph slip through and draw both a departure AND an arrival ghost
-/// for one physical crossing.
-fn arrival_ghosts(graph: &MapGraph, layer: mapper::layer::LayerId) -> HashMap<RoomId, Vec<ArrivalGhost>> {
-    let mut out: HashMap<RoomId, Vec<ArrivalGhost>> = HashMap::new();
-    for c in graph.connections() {
-        if !mapper::layer::is_interlayer(graph, c) || graph.layer_of(c.dest) != layer {
-            continue;
-        }
-        let reciprocal =
-            graph.connections().iter().any(|c2| c2.origin == c.dest && c2.dest == c.origin);
-        if reciprocal {
-            continue;
-        }
-        let Some(origin) = graph.room(c.origin) else { continue };
-        out.entry(c.dest).or_default().push(ArrivalGhost {
-            traveled: c.dir,
-            origin_name: origin.label().to_string(),
-            origin_layer: graph.layer_name(graph.layer_of(c.origin)).to_string(),
-        });
-    }
-    out
 }
 
 /// The compass direction a connector leaving by `side` APPEARS to take.
@@ -674,10 +586,6 @@ fn door_mark(at: (f64, f64), u: (f64, f64)) -> String {
 /// the other from another.
 type OnLine = ((f64, f64), (f64, f64));
 
-/// A drawn line segment's two endpoints, in SVG pixels — what `all_segments` collects and
-/// `place_ghost` keeps a ghost box clear of (SQ-1319).
-type Segment = ((f64, f64), (f64, f64));
-
 /// The midpoint of the longest segment of `pts`, with that segment's unit direction.
 fn longest_mid(pts: &[(f64, f64)]) -> Option<OnLine> {
     let mut best_len = 0.0f64;
@@ -706,13 +614,12 @@ fn longest_mid(pts: &[(f64, f64)]) -> Option<OnLine> {
 /// Returns the markup plus the `(width, height)` a caller needs to size its own canvas around
 /// it. The markup's own top-left is already at `(0, 0)`.
 ///
-/// `arrivals` names the one-way cross-layer crossings landing on THIS panel's rooms with no
-/// connection back the other way (SQ-1319) — see [`arrival_ghosts`], the only place that builds
-/// one. Empty for [`render_svg_of`], which has no layer context to compute it from.
+/// A cross-layer GHOST is an ordinary entry of `rm.rooms` carrying [`mapper::render::GhostRoom`]
+/// (SQ-1356), so it is sized, seated and routed to exactly like a room — the only difference is
+/// the class its box is drawn with and the small layer line inside it.
 fn render_svg_body(
     rm: &RenderMap,
     weights: &HashMap<(RoomId, Direction), PassageWeight>,
-    arrivals: &HashMap<RoomId, Vec<ArrivalGhost>>,
 ) -> Option<(String, i32, i32)> {
     if rm.rooms.is_empty() {
         return None;
@@ -747,14 +654,8 @@ fn render_svg_body(
     // inside its box, so blocking the box blocks the name — and blocks the box outline too,
     // which a tag written across is just as unreadable on.
     let mut placer = TextPlacer::default();
-    // The same boxes, kept apart from `placer.taken` (which also gathers badges and labels): a
-    // ghost's CONNECTOR LINE is only ever checked against a room or another ghost (SQ-1333), never
-    // against those — see `place_ghost`.
-    let mut room_boxes: Vec<PxRect> = Vec::with_capacity(rm.rooms.len());
     for room in &rm.rooms {
-        let r = box_px_rect(&cols, &rows, &px_cols, &px_rows, room.cell);
-        placer.block(r);
-        room_boxes.push(r);
+        placer.block(box_px_rect(&cols, &rows, &px_cols, &px_rows, room.cell));
     }
     // The `(room, direction)` ends the CONNECTOR pass badges. An Up/Down passage reaches this
     // function twice — once as a routed portal connector and once as a `RoutedEdge` stub, since
@@ -765,14 +666,6 @@ fn render_svg_body(
     let mut portal_ends: std::collections::HashSet<(RoomId, Direction)> =
         std::collections::HashSet::new();
     let mut boxes = String::new();
-    // Every drawn connector segment, so a ghost box can be kept off the lanes just as it is kept
-    // off rooms and other labels (SQ-1319) — filled by the connector pass below, read by the
-    // ghost passes after it.
-    let mut all_segments: Vec<Segment> = Vec::new();
-    // Every ghost box already placed on this panel, so a LATER ghost's connector line can be kept
-    // off an EARLIER one too (SQ-1333) — `room_boxes` above is fixed for the whole panel, this
-    // grows as the two ghost passes below place each one.
-    let mut ghost_boxes: Vec<PxRect> = Vec::new();
 
     // ── Connectors ───────────────────────────────────────────────────────────────────────
     //
@@ -802,7 +695,6 @@ fn render_svg_body(
         for &p in &pts {
             ext.add(p.0, p.1);
         }
-        all_segments.extend(pts.windows(2).map(|w| (w[0], w[1])));
 
         let weight = [
             weights.get(&(conn.origin, conn.exit_dir)).copied(),
@@ -922,14 +814,11 @@ fn render_svg_body(
 
     // ── Portal / cross-layer badges ──────────────────────────────────────────────────────
     //
-    // A stub is a passage with no planar route — up, down, in, out, or a compass passage whose
-    // destination lives on another layer. It gets a lettered badge on the side it leads by,
-    // and — when it crosses a layer — a ghost box naming the room and layer it leads to,
-    // joined to the badge by a short connector with an arrowhead into the ghost (SQ-1319; SQ-1330;
-    // see `place_ghost`). The ghost is never dropped: unlike the single inline label this
-    // replaced, its placement search always succeeds by extending outward until the panel has
-    // room for it.
-    let mut stubs_by_room: HashMap<RoomId, Vec<Stub<'_>>> = HashMap::new();
+    // A stub is a passage with no planar route — up, down, in or out. It gets a lettered badge
+    // on the side it leads by. A passage that CROSSES A LAYER is no longer one of these: since
+    // SQ-1356 the room it leads to is drawn as a ghost box on this very panel, and the passage
+    // to it is an ordinary routed connector like any other.
+    let mut stubs_by_room: HashMap<RoomId, Vec<Direction>> = HashMap::new();
     for edge in &rm.edges {
         if !edge.is_stub || edge.dir == Direction::Unknown {
             continue;
@@ -937,19 +826,15 @@ fn render_svg_body(
         if portal_ends.contains(&(edge.origin, edge.dir)) {
             continue; // the connector pass already badged this end — see `portal_ends`
         }
-        stubs_by_room.entry(edge.origin).or_default().push(Stub {
-            dir: edge.dir,
-            dest: edge.dest_label.as_deref(),
-            interlayer: edge.is_interlayer,
-        });
+        stubs_by_room.entry(edge.origin).or_default().push(edge.dir);
     }
     for room in &rm.rooms {
         let Some(stubs) = stubs_by_room.get(&room.id) else { continue };
         let rect = box_px_rect(&cols, &rows, &px_cols, &px_rows, room.cell);
         // Group by the side each passage leads out of, then stack along that side.
-        let mut per_side: HashMap<u8, Vec<Stub<'_>>> = HashMap::new();
-        for &stub in stubs {
-            per_side.entry(stub.side() as u8).or_default().push(stub);
+        let mut per_side: HashMap<u8, Vec<Direction>> = HashMap::new();
+        for &dir in stubs {
+            per_side.entry(side_for_travel(dir) as u8).or_default().push(dir);
         }
         let mut sides: Vec<u8> = per_side.keys().copied().collect();
         sides.sort_unstable();
@@ -961,127 +846,13 @@ fn render_svg_body(
             let list = &per_side[&s];
             let u = outward(side);
             let tangent = (-u.1, u.0);
-            for (i, &Stub { dir, dest, interlayer: inter }) in list.iter().enumerate() {
+            for (i, &dir) in list.iter().enumerate() {
                 let step = i as f64 * 17.0;
                 let root = side_root(rect, side, 9.0, step);
-
-                // SQ-1347: place the ghost (when this crossing draws one) BEFORE the badge, so
-                // the badge can anchor off the ghost end — the arrival of this travel — rather
-                // than the room's own edge, which is only where it departs from. The connector
-                // line itself still runs from the room's own edge (`root`, unnudged by the
-                // badge) to the ghost, exactly as it always has.
-                let ghost = inter.then_some(dest).flatten().map(|full| {
-                    let (name, layer_name) = full.split_once(" · ").unwrap_or((full, ""));
-                    let text = GhostText { name, layer: layer_name };
-                    let (gw, gh) = ghost_dims(text);
-                    let gp = place_ghost(
-                        &mut placer,
-                        &all_segments,
-                        &room_boxes,
-                        &ghost_boxes,
-                        root,
-                        u,
-                        GHOST_DEPARTURE_GAP,
-                        gw,
-                        gh,
-                    );
-                    let near = ghost_near_edge(gp.rect, gp.dir);
-                    (gp, text, near)
-                });
-
-                // The badge (and, were a mismatched-word tag ever needed here — SQ-1346) sits
-                // beside the head, at the end THIS travel arrives at: the ghost when this stub
-                // draws one, the room's own edge when it does not (a same-layer stub with no
-                // planar route has no other end to stand on).
-                let (badge_root, badge_tangent) = match &ghost {
-                    Some((gp, _, near)) => {
-                        ((near.0 - gp.dir.0 * 9.0, near.1 - gp.dir.1 * 9.0), (-gp.dir.1, gp.dir.0))
-                    }
-                    None => (root, tangent),
-                };
-                let at = settle_badge(&mut placer, badge_root, badge_tangent);
+                let at = settle_badge(&mut placer, root, tangent);
                 over.push_str(&badge(at, &direction::short_label(dir).to_uppercase()));
                 ext.add(at.0 - 8.0, at.1 - 8.0);
                 ext.add(at.0 + 8.0, at.1 + 8.0);
-
-                if let Some((gp, text, near)) = ghost {
-                    ghost_boxes.push(gp.rect);
-                    // A departure ghost stands for THIS room's own exit leaving toward it, so
-                    // the arrow sits at the GHOST end, tip on its near edge, pointing further
-                    // in — reading as "leaving here, arriving there" (SQ-1330). That is the
-                    // mirror of an arrival ghost's arrow, which sits at the ROOM end instead
-                    // (below): a ghost pair is two one-ways, one per panel, never a single
-                    // two-way head pointing back at the room it started from. `gp.dir` is the
-                    // axis the ghost actually landed on — `u` only when the direct side was
-                    // clear, a tangent when SQ-1333's bend fired instead.
-                    //
-                    // SQ-1347: this stub carries ONLY `dir`, the word that leaves THIS room —
-                    // one badge (drawn above, beside this arrow at the GHOST end) and this one
-                    // arrowhead, never a second marker for the return word even when the
-                    // crossing is reciprocal. The other layer's own panel draws its own outgoing
-                    // stub for the way back (`arrival_ghosts` excludes any reciprocal pair for
-                    // exactly this reason), so a ghost stub never needs to say more than "this
-                    // is the way out."
-                    over.push_str(&arrowhead_inward(near, (-gp.dir.0, -gp.dir.1), "arrow"));
-                    over.push_str(&draw_ghost(root, gp.dir, gp.bend, gp.rect, text, false));
-                    ext.add(gp.rect.0, gp.rect.1);
-                    ext.add(gp.rect.0 + gp.rect.2, gp.rect.1 + gp.rect.3);
-                    if let Some(b) = gp.bend {
-                        ext.add(b.0, b.1);
-                    }
-                }
-            }
-        }
-    }
-
-    // ── Cross-layer arrivals (one-way only) ─────────────────────────────────────────────
-    //
-    // A one-way crossing has no connection back, so the loop above — which only ever fires from
-    // the ORIGIN's own layer — never draws anything on the arriving side. SQ-1319 requires both
-    // ends to say where a crossing goes, so the arriving room gets an inward arrowhead (arriving,
-    // not leaving — no letter, since there is no local direction the story ever printed for it)
-    // and its own ghost, naming where the passage came FROM instead of where it leads.
-    //
-    // `arrivals` (built by `arrival_ghosts`) never contains a reciprocal crossing (SQ-1347), so
-    // this ONE arrowhead at the room is this stub's only marker too, exactly as the departure
-    // side above carries only one — nothing is ever drawn on the GHOST end here: it names where
-    // the passage came from, not a second travel.
-    for room in &rm.rooms {
-        let Some(list) = arrivals.get(&room.id) else { continue };
-        let rect = box_px_rect(&cols, &rows, &px_cols, &px_rows, room.cell);
-        let mut per_side: HashMap<u8, Vec<&ArrivalGhost>> = HashMap::new();
-        for a in list {
-            per_side.entry(side_for_travel(direction::opposite(a.traveled)) as u8).or_default().push(a);
-        }
-        let mut sides: Vec<u8> = per_side.keys().copied().collect();
-        sides.sort_unstable();
-        for s in sides {
-            let side = [Side::Right, Side::Left, Side::Top, Side::Bottom]
-                .into_iter()
-                .find(|x| *x as u8 == s)
-                .unwrap_or(Side::Right);
-            let u = outward(side);
-            for (i, a) in per_side[&s].iter().enumerate() {
-                let step = i as f64 * 17.0;
-                let edge_pt = side_root(rect, side, 0.0, step);
-                over.push_str(&arrowhead_inward(edge_pt, u, "arrow"));
-                ext.add(edge_pt.0 - 9.0, edge_pt.1 - 9.0);
-                ext.add(edge_pt.0 + 9.0, edge_pt.1 + 9.0);
-                let anchor = side_root(rect, side, 13.0, step);
-                // The connector line runs from `anchor` to the ghost box's near edge; both ends
-                // must be IN `ext` for the panel's height to include the whole line. The
-                // arrowhead footprint above only reaches ~8.5px out, short of `anchor` at 13px.
-                ext.add(anchor.0, anchor.1);
-                let text = GhostText { name: &a.origin_name, layer: &a.origin_layer };
-                let (gw, gh) = ghost_dims(text);
-                let gp = place_ghost(&mut placer, &all_segments, &room_boxes, &ghost_boxes, anchor, u, 4.0, gw, gh);
-                ghost_boxes.push(gp.rect);
-                over.push_str(&draw_ghost(anchor, gp.dir, gp.bend, gp.rect, text, true));
-                ext.add(gp.rect.0, gp.rect.1);
-                ext.add(gp.rect.0 + gp.rect.2, gp.rect.1 + gp.rect.3);
-                if let Some(b) = gp.bend {
-                    ext.add(b.0, b.1);
-                }
             }
         }
     }
@@ -1118,10 +889,18 @@ fn render_svg_body(
     }
 
     // ── Rooms ────────────────────────────────────────────────────────────────────────────
+    //
+    // A cross-layer GHOST is drawn here, with the rooms, because that is what it is (SQ-1356):
+    // the same box at the same size, with a dashed outline, muted text, and the layer it really
+    // lives on as a small second line inside the box.
     for room in &rm.rooms {
         let (x, y, w, h) = box_px_rect(&cols, &rows, &px_cols, &px_rows, room.cell);
         ext.add_rect(x, y, w, h);
-        let cls = if room.is_current { "room current" } else { "room" };
+        let cls = match (&room.ghost, room.is_current) {
+            (Some(_), _) => "ghost",
+            (None, true) => "room current",
+            (None, false) => "room",
+        };
         let _ = write!(
             boxes,
             "<rect class=\"{cls}\" x=\"{}\" y=\"{}\" width=\"{}\" height=\"{}\" rx=\"4\"/>",
@@ -1132,8 +911,16 @@ fn render_svg_body(
         );
         let empty = Vec::new();
         let lines = labels.get(&room.id).unwrap_or(&empty);
-        let label_cls = if room.is_current { "room-label current" } else { "room-label" };
-        let first = y + h / 2.0 - (lines.len() as f64 - 1.0) * (LABEL_PX * 0.62) + LABEL_PX * 0.36;
+        let label_cls = match (&room.ghost, room.is_current) {
+            (Some(_), _) => "ghost-name",
+            (None, true) => "room-label current",
+            (None, false) => "room-label",
+        };
+        // A ghost's name lifts by half the layer line it makes room for, so the two together sit
+        // centred in the box the way a plain name does on its own.
+        let lift = if room.ghost.is_some() { GHOST_LAYER_PX * 0.62 } else { 0.0 };
+        let first =
+            y + h / 2.0 - (lines.len() as f64 - 1.0) * (LABEL_PX * 0.62) + LABEL_PX * 0.36 - lift;
         for (i, line) in lines.iter().enumerate() {
             // `text-anchor="middle"` inline, not just via the `.room-label` CSS rule (which
             // already centres it visually): `text_boxes()` reads the ATTRIBUTE to measure a
@@ -1147,6 +934,15 @@ fn render_svg_body(
                 f(x + w / 2.0),
                 f(first + i as f64 * LABEL_PX * 1.24),
                 xml_escape(line)
+            );
+        }
+        if let Some(ghost) = &room.ghost {
+            let _ = write!(
+                boxes,
+                "<text class=\"ghost-layer\" text-anchor=\"middle\" x=\"{}\" y=\"{}\">{}</text>",
+                f(x + w / 2.0),
+                f(first + (lines.len() as f64 - 1.0) * LABEL_PX * 1.24 + LABEL_PX * 1.1),
+                xml_escape(&ghost.layer_name)
             );
         }
         if room.has_notes {
@@ -1324,218 +1120,6 @@ fn side_root((bx, by, bw, bh): PxRect, side: Side, gap: f64, step: f64) -> (f64,
     }
 }
 
-// ── Cross-layer ghosts (SQ-1319) ─────────────────────────────────────────────────
-
-/// A ghost's two lines of text: the room a crossing leads to (or arrives from), and the layer it
-/// lives on. The two travel together because a ghost is never drawn with only one of them.
-#[derive(Debug, Clone, Copy)]
-struct GhostText<'a> {
-    name: &'a str,
-    layer: &'a str,
-}
-
-/// The ghost box's own size for `text`, in SVG pixels: two centred lines, the room name at
-/// `GHOST_NAME_PX` and the layer name smaller beneath it at `GHOST_LAYER_PX`.
-fn ghost_dims(text: GhostText<'_>) -> (f64, f64) {
-    let w = (text.name.chars().count() as f64 * GHOST_NAME_ADV)
-        .max(text.layer.chars().count() as f64 * GHOST_LAYER_ADV)
-        + 2.0 * GHOST_PAD;
-    let h = GHOST_NAME_PX + GHOST_LINE_GAP + GHOST_LAYER_PX + 2.0 * GHOST_PAD;
-    (w, h)
-}
-
-/// The ghost box's rect were it placed `dist` px out from `anchor` along `u` — always one of the
-/// four outward unit normals, so the box is never rotated: it sits centred on the anchor's other
-/// axis and offset along `u`'s.
-fn ghost_rect_at(anchor: (f64, f64), u: (f64, f64), dist: f64, w: f64, h: f64) -> PxRect {
-    if u.1 == 0.0 {
-        let x = if u.0 > 0.0 { anchor.0 + dist } else { anchor.0 - dist - w };
-        (x, anchor.1 - h / 2.0, w, h)
-    } else {
-        let y = if u.1 > 0.0 { anchor.1 + dist } else { anchor.1 - dist - h };
-        (anchor.0 - w / 2.0, y, w, h)
-    }
-}
-
-/// The point on the ghost box's own near edge (the one facing the room) a connector line lands
-/// on.
-fn ghost_near_edge((x, y, w, h): PxRect, u: (f64, f64)) -> (f64, f64) {
-    if u.1 == 0.0 {
-        (if u.0 > 0.0 { x } else { x + w }, y + h / 2.0)
-    } else {
-        (x + w / 2.0, if u.1 > 0.0 { y } else { y + h })
-    }
-}
-
-/// How many `GHOST_STEP` extensions [`search_ghost_side`] tries along the DIRECT side (`u`
-/// itself) before giving up on it (SQ-1333): a room sitting squarely in that corridor blocks
-/// every distance beyond it — `crosses`' bounding-box test only grows MORE true as the segment
-/// lengthens through the room, never less — so an unbounded search there would never terminate
-/// now that the line check is part of it. Six steps (~100px) is generous room for anything short
-/// of that permanent block.
-const GHOST_SIDE_TRIES: u32 = 6;
-
-/// The same search's bound on a TANGENT side, tried only once the direct side above has given up.
-/// A tangent isn't provably blocked forever the way the direct side can be — a real map's rooms
-/// are finite, so sliding along a row eventually clears the last one and reaches open canvas —
-/// so this is a generous hard backstop against a genuine bug looping forever, not a distance any
-/// real map is expected to need (Anchorhead's dense house layer needed several hundred px here).
-const GHOST_TANGENT_TRIES: u32 = 2000;
-
-/// Where a ghost landed (SQ-1319; SQ-1333): its box, the axis its connector line runs along —
-/// `u` when the direct side was clear, a tangent to it when a room forced the bend below — and,
-/// only in the bent case, the point where the connector turns once on its way there.
-struct GhostPlacement {
-    rect: PxRect,
-    dir: (f64, f64),
-    bend: Option<(f64, f64)>,
-}
-
-/// The first spot along `dir`, starting `base_gap` out from `origin` and stepping by
-/// `GHOST_STEP` up to `max_tries` times, whose box is clear of every room, badge, label and other
-/// ghost (via `placer`) and every connector lane (`segments`), AND whose connector line back to
-/// `origin` crosses no room and no other ghost box (SQ-1333) — `rooms`/`ghosts` are checked
-/// against the line rather than folded into `placer`, since a connector may legally run near a
-/// label or badge it would be wrong to route through a room or another ghost's box.
-fn search_ghost_side(
-    placer: &mut TextPlacer,
-    segments: &[Segment],
-    rooms: &[PxRect],
-    ghosts: &[PxRect],
-    origin: (f64, f64),
-    dir: (f64, f64),
-    base_gap: f64,
-    w: f64,
-    h: f64,
-    max_tries: u32,
-) -> Option<PxRect> {
-    let mut dist = base_gap;
-    for _ in 0..max_tries {
-        let r = ghost_rect_at(origin, dir, dist, w, h);
-        let near = ghost_near_edge(r, dir);
-        let line_clear = !rooms.iter().any(|&room| crosses(origin, near, room))
-            && !ghosts.iter().any(|&g| crosses(origin, near, g));
-        if line_clear && placer.is_free(r) && !segments.iter().any(|&(a, b)| crosses(a, b, r)) {
-            placer.block(r);
-            return Some(r);
-        }
-        dist += GHOST_STEP;
-    }
-    None
-}
-
-/// Settle a ghost box clear of every room, badge, label and other ghost (via `placer`), every
-/// connector lane (`segments`), and — SQ-1333 — clear of any room or ghost box its OWN connector
-/// line would otherwise run through.
-///
-/// Tries the travel direction's own side first (`u`, SQ-1330's historical placement, bounded by
-/// [`GHOST_SIDE_TRIES`] since a room directly ahead blocks every distance beyond it and never
-/// clears). When that side is blocked, it swings to whichever of the two sides tangent to `u` a
-/// room isn't on, joined to the anchor by a short stub along `u` and a single bend — the
-/// connector still reads as leaving by the badge's own side before it turns; a tangent search is
-/// bounded only by [`GHOST_TANGENT_TRIES`], generous enough to be effectively unbounded on a real
-/// map. Only when every one of those fails does it fall back to the historical unbounded push
-/// straight out along `u` with no line check (SQ-1319's "never dropped": a ghost that lands
-/// somewhere, even crossing a room, beats one silently missing) — every caller folds the
-/// returned rect, and the bend point when there is one, into `Extent`.
-fn place_ghost(
-    placer: &mut TextPlacer,
-    segments: &[Segment],
-    rooms: &[PxRect],
-    ghosts: &[PxRect],
-    anchor: (f64, f64),
-    u: (f64, f64),
-    base_gap: f64,
-    w: f64,
-    h: f64,
-) -> GhostPlacement {
-    if let Some(rect) =
-        search_ghost_side(placer, segments, rooms, ghosts, anchor, u, base_gap, w, h, GHOST_SIDE_TRIES)
-    {
-        return GhostPlacement { rect, dir: u, bend: None };
-    }
-
-    // The direct side is blocked by a room for every distance (SQ-1333) — the stub itself must
-    // also be clear, or the bend has nowhere honest to start from.
-    let stub = (anchor.0 + u.0 * base_gap, anchor.1 + u.1 * base_gap);
-    let stub_clear = !rooms.iter().any(|&room| crosses(anchor, stub, room))
-        && !ghosts.iter().any(|&g| crosses(anchor, stub, g));
-    if stub_clear {
-        for tangent in [(-u.1, u.0), (u.1, -u.0)] {
-            if let Some(rect) = search_ghost_side(
-                placer, segments, rooms, ghosts, stub, tangent, GHOST_STEP, w, h, GHOST_TANGENT_TRIES,
-            ) {
-                return GhostPlacement { rect, dir: tangent, bend: Some(stub) };
-            }
-        }
-    }
-
-    let mut dist = base_gap + GHOST_STEP * GHOST_SIDE_TRIES as f64;
-    loop {
-        let r = ghost_rect_at(anchor, u, dist, w, h);
-        if placer.is_free(r) && !segments.iter().any(|&(a, b)| crosses(a, b, r)) {
-            placer.block(r);
-            return GhostPlacement { rect: r, dir: u, bend: None };
-        }
-        dist += GHOST_STEP;
-    }
-}
-
-/// Render one ghost box at `rect`, joined to `anchor` by a short connector line along `dir`
-/// (SQ-1319): a passage that leaves the layer always says where it goes, at both ends, and never
-/// drops the name for want of room — see `place_ghost`. `arrival` distinguishes the mirror drawn
-/// on a one-way crossing's arriving end (see `arrival_ghosts`), which carries no departure letter
-/// of its own. `bend`, when `Some` (SQ-1333), draws the connector as two segments — `anchor` to
-/// the bend, then the bend to the ghost's near edge — rather than one straight line, for the case
-/// where the direct line would have crossed a room.
-///
-/// Draws no arrowhead itself (SQ-1330): a departure's caller places one at the ghost's own near
-/// edge (pointing further in) and an arrival's caller places one at the room's own edge (pointing
-/// further in there instead) — the two ends of one passage, never both on the same box.
-fn draw_ghost(
-    anchor: (f64, f64),
-    dir: (f64, f64),
-    bend: Option<(f64, f64)>,
-    rect: PxRect,
-    text: GhostText<'_>,
-    arrival: bool,
-) -> String {
-    let (x, y, w, h) = rect;
-    let near = ghost_near_edge(rect, dir);
-    let cls = if arrival { "ghost arrival" } else { "ghost" };
-    let name_y = y + GHOST_PAD + GHOST_NAME_PX * 0.8;
-    let layer_y = name_y + GHOST_LINE_GAP + GHOST_LAYER_PX * 0.8;
-    let line = |a: (f64, f64), b: (f64, f64)| {
-        format!(
-            "<line class=\"ghost-line\" x1=\"{}\" y1=\"{}\" x2=\"{}\" y2=\"{}\"/>",
-            f(a.0),
-            f(a.1),
-            f(b.0),
-            f(b.1)
-        )
-    };
-    let lines = match bend {
-        Some(b) => line(anchor, b) + &line(b, near),
-        None => line(anchor, near),
-    };
-    format!(
-        "{lines}\
-         <rect class=\"{cls}\" x=\"{}\" y=\"{}\" width=\"{}\" height=\"{}\" rx=\"3\"/>\
-         <text class=\"ghost-name\" text-anchor=\"middle\" x=\"{}\" y=\"{}\">{}</text>\
-         <text class=\"ghost-layer\" text-anchor=\"middle\" x=\"{}\" y=\"{}\">{}</text>",
-        f(x),
-        f(y),
-        f(w),
-        f(h),
-        f(x + w / 2.0),
-        f(name_y),
-        xml_escape(text.name),
-        f(x + w / 2.0),
-        f(layer_y),
-        xml_escape(text.layer)
-    )
-}
-
 // ── Legend ────────────────────────────────────────────────────────────────────
 
 const LEGEND_W: i32 = 336;
@@ -1585,14 +1169,14 @@ fn legend_rows() -> Vec<(String, &'static str)> {
         ),
         (
             format!(
-                "<line class=\"ghost-line\" x1=\"2\" y1=\"0\" x2=\"13\" y2=\"0\"/>\
+                "<line class=\"edge reciprocal\" x1=\"2\" y1=\"0\" x2=\"13\" y2=\"0\"/>\
                  {}\
-                 <rect class=\"ghost\" x=\"13\" y=\"-8\" width=\"40\" height=\"16\" rx=\"3\"/>\
-                 <text class=\"ghost-name\" text-anchor=\"middle\" x=\"33\" y=\"-1\">Studio</text>\
-                 <text class=\"ghost-layer\" text-anchor=\"middle\" x=\"33\" y=\"6\">Main</text>",
+                 <rect class=\"ghost\" x=\"13\" y=\"-8\" width=\"44\" height=\"16\" rx=\"3\"/>\
+                 <text class=\"ghost-name\" x=\"35\" y=\"-1\">Studio</text>\
+                 <text class=\"ghost-layer\" x=\"35\" y=\"6\">Main</text>",
                 arrowhead_inward((13.0, 0.0), (-1.0, 0.0), "arrow")
             ),
-            "exit to another layer — arrow shows the way you travel",
+            "a room on another layer — the layer it lives on beneath its name",
         ),
     ]
 }
@@ -1665,10 +1249,7 @@ pub fn render_svg(rm: &RenderMap) -> String {
 /// own weight: a door marked, a conditional exit dotted (SQ-1312/SQ-1313).
 pub fn render_svg_of(rm: &RenderMap, graph: Option<&MapGraph>) -> String {
     let weights = graph.map(weight_table).unwrap_or_default();
-    // No layer context here, so no cross-layer arrivals to draw (see `render_svg_layered`, which
-    // is the only caller that ever has a non-empty one).
-    let arrivals = HashMap::new();
-    let Some((body, w, h)) = render_svg_body(rm, &weights, &arrivals) else {
+    let Some((body, w, h)) = render_svg_body(rm, &weights) else {
         return "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"1\" height=\"1\"></svg>".to_string();
     };
     document(&body, w, h)
@@ -1725,8 +1306,7 @@ pub fn render_svg_layered(graph: &MapGraph) -> String {
             graph.rooms_in_layer(l).len()
         );
         max_w = max_w.max(heading.chars().count() as i32 * 9);
-        let arrivals = arrival_ghosts(graph, l);
-        let frag = render_svg_body(&rm, &weights, &arrivals);
+        let frag = render_svg_body(&rm, &weights);
         if let Some((_, w, _)) = &frag {
             max_w = max_w.max(*w);
         }
@@ -1806,27 +1386,6 @@ fn edge_segments(svg: &str) -> Vec<((f64, f64), (f64, f64))> {
     out
 }
 
-/// Every `<line class="ghost-line">` segment in `svg`, as pixel endpoint pairs in the document's
-/// own coordinate space — a ghost's connector, one or two segments per ghost when [`draw_ghost`]
-/// drew a bend (SQ-1333). The legend is excluded, same as [`edge_segments`].
-fn ghost_line_segments(svg: &str) -> Vec<((f64, f64), (f64, f64))> {
-    let doc = roxmltree::Document::parse(svg).expect("well-formed SVG");
-    let mut out = Vec::new();
-    for node in doc.descendants() {
-        let cls = node.attribute("class").unwrap_or("");
-        if node.tag_name().name() != "line"
-            || !cls.split_whitespace().any(|c| c == "ghost-line")
-            || under_class(node, "legend-block")
-        {
-            continue;
-        }
-        let offset = translate_of(node);
-        let g = |a: &str| node.attribute(a).and_then(|v| v.parse::<f64>().ok()).unwrap_or(0.0);
-        out.push(((g("x1") + offset.0, g("y1") + offset.1), (g("x2") + offset.0, g("y2") + offset.1)));
-    }
-    out
-}
-
 /// The accumulated `translate(x,y)` of every ancestor of `node`, including itself.
 fn translate_of(node: roxmltree::Node<'_, '_>) -> (f64, f64) {
     let mut acc = (0.0, 0.0);
@@ -1876,11 +1435,28 @@ fn path_points(d: &str) -> Vec<(f64, f64)> {
 
 /// Every `<rect class="room …">` in `svg`, in the document's own coordinate space.
 fn room_rects(svg: &str) -> Vec<(f64, f64, f64, f64)> {
+    box_rects(svg, &["room", "ghost"])
+}
+
+/// Only the rooms this layer actually holds — a cross-layer ghost is NOT one (SQ-1356). Used
+/// where the two have to be told apart: `ghost_box_overlaps` compares one list against the other,
+/// and would otherwise report every ghost as sitting on itself.
+fn plain_room_rects(svg: &str) -> Vec<(f64, f64, f64, f64)> {
+    box_rects(svg, &["room"])
+}
+
+/// Every drawn box in `svg` whose class carries one of `kinds`, in the document's own coordinate
+/// space, excluding the legend's own samples.
+fn box_rects(svg: &str, kinds: &[&str]) -> Vec<(f64, f64, f64, f64)> {
     let doc = roxmltree::Document::parse(svg).expect("well-formed SVG");
     doc.descendants()
         .filter(|n| {
             n.tag_name().name() == "rect"
-                && n.attribute("class").unwrap_or("").split_whitespace().any(|c| c == "room")
+                && n
+                    .attribute("class")
+                    .unwrap_or("")
+                    .split_whitespace()
+                    .any(|c| kinds.contains(&c))
                 && !under_class(*n, "legend-block")
         })
         .map(|n| {
@@ -1921,27 +1497,6 @@ pub fn connector_room_crossings(svg: &str) -> Vec<String> {
         for r in &rooms {
             if crosses(a, b, *r) {
                 out.push(format!("segment {a:?} → {b:?} crosses room rect {r:?}"));
-            }
-        }
-    }
-    out
-}
-
-/// Every `<line class="ghost-line">` in `svg` that passes through a room box (SQ-1333): a
-/// ghost's connector is part of its footprint just as much as its box, and one running through a
-/// room reads as that room's own exit — see `place_ghost`, which now keeps this empty by
-/// construction rather than only the box being clear (`ghost_box_overlaps`).
-///
-/// **Public so a real story's generated map can be checked by the same code the unit cases
-/// use**, the way [`connector_room_crossings`] is: the synthetic graphs in this file cannot
-/// produce the badge-side pressure a hundred rooms do.
-pub fn ghost_line_room_crossings(svg: &str) -> Vec<String> {
-    let rooms = room_rects(svg);
-    let mut out = Vec::new();
-    for (a, b) in ghost_line_segments(svg) {
-        for r in &rooms {
-            if crosses(a, b, *r) {
-                out.push(format!("ghost line {a:?} → {b:?} crosses room rect {r:?}"));
             }
         }
     }
@@ -2030,7 +1585,7 @@ fn text_boxes(svg: &str) -> Vec<LabelBox> {
             continue;
         }
         let px: f64 = match cls.split_whitespace().next().unwrap_or("") {
-            "room-label" => 11.0,
+            "room-label" | "ghost-name" => LABEL_PX,
             "random" => 9.0,
             "ghost-layer" => GHOST_LAYER_PX,
             _ => 8.0,
@@ -2067,7 +1622,14 @@ pub fn label_collisions(svg: &str) -> Vec<String> {
     };
     let mut out = Vec::new();
     for (cls, text, r) in &texts {
-        if cls.split_whitespace().next() == Some("room-label") {
+        // A label drawn INSIDE a box is not a placed label — the box is what keeps it clear, and
+        // it necessarily overlaps its own room rect. `ghost-name`/`ghost-layer` join `room-label`
+        // here for exactly that reason since SQ-1356, when a ghost stopped being a floating
+        // caption and became a box of its own (which `room_rects` now gathers).
+        if matches!(
+            cls.split_whitespace().next(),
+            Some("room-label") | Some("ghost-name") | Some("ghost-layer")
+        ) {
             continue;
         }
         for room in &rooms {
@@ -2089,16 +1651,14 @@ pub fn label_collisions(svg: &str) -> Vec<String> {
     out
 }
 
-/// Every ghost BOX in `svg` — the dashed `<rect class="ghost">`/`<rect class="ghost arrival">`, not
-/// its text — that overlaps a room or another ghost (SQ-1319).
+/// Every ghost BOX in `svg` — the dashed `<rect class="ghost">`, not its text — that overlaps a
+/// room or another ghost (SQ-1319; SQ-1356).
 ///
-/// [`label_collisions`] already catches a ghost's own TEXT running onto a room or a neighbouring
-/// label, since the text is measured like any other. It cannot see the box's own padding, though
-/// — the rect is bigger than the text it holds — so this checks the rect directly, the way
-/// [`connector_room_crossings`] checks a connector's drawn line rather than inferring it from
-/// something else.
+/// Since SQ-1356 a ghost takes a CELL, so `render_layer` keeps this empty by construction rather
+/// than by search. It is kept as the check that says so: a seating pass that stopped honouring
+/// "free cells only" would fail here, on a real story's map, before anyone noticed on screen.
 pub fn ghost_box_overlaps(svg: &str) -> Vec<String> {
-    let rooms = room_rects(svg);
+    let rooms = plain_room_rects(svg);
     let doc = roxmltree::Document::parse(svg).expect("well-formed SVG");
     let mut ghosts: Vec<PxRect> = Vec::new();
     for node in doc.descendants() {
@@ -2145,7 +1705,7 @@ mod tests {
     /// mark the map can carry and would otherwise answer every such question by itself.
     fn body_of(rm: &RenderMap, graph: Option<&MapGraph>) -> String {
         let weights = graph.map(weight_table).unwrap_or_default();
-        render_svg_body(rm, &weights, &HashMap::new()).expect("a non-empty map").0
+        render_svg_body(rm, &weights).expect("a non-empty map").0
     }
 
     /// [`render_svg_layered`]'s document, up to (not including) the legend block — what a count
@@ -2523,11 +2083,13 @@ mod tests {
         }
     }
 
-    // ── SQ-1319: ghosts at both ends, never dropped ──────────────────────────────────────
+    // ── SQ-1356: a cross-layer ghost is a room the layout places ────────────────────────
 
-    /// A reciprocal Up/Down crossing between two layers: each panel draws its own OUTGOING
-    /// ghost, which is the mirror the other panel needs — no separate "arrival" mechanism is
-    /// required when the graph already carries a connection back.
+    /// A reciprocal Up/Down crossing between two layers: each panel draws a ghost box for the
+    /// room beyond it, at the same size as a real room's, in the cell the passage's own direction
+    /// points at — and names the layer it really lives on inside the box.
+    ///
+    /// Falsify by reverting `render_layer`'s ghost seating and this fails on the ghost count.
     #[test]
     fn a_reciprocal_crossing_ghosts_both_panels_naming_the_partner() {
         use mapper::graph::MapGraph;
@@ -2542,137 +2104,36 @@ mod tests {
         g.set_room_layer(2, below);
         let svg = render_svg_layered(&g);
         let map = layered_map_only(&svg);
-        assert_eq!(map.matches("class=\"ghost\"").count(), 2, "one departure ghost per panel");
-        assert_eq!(map.matches("class=\"ghost arrival\"").count(), 0, "neither end is one-way");
+        assert_eq!(map.matches("class=\"ghost\"").count(), 2, "one ghost per panel");
         assert!(svg.contains(">Cellar<"), "Hall's panel names the room it leads to");
-        assert!(svg.contains(">Below<"), "Hall's panel names the layer it leads to");
+        assert!(svg.contains(">Below<"), "…and the layer that room lives on");
         assert!(svg.contains(">Hall<"), "Cellar's panel names the room it leads back to");
-        assert!(svg.contains(">Main<"), "Cellar's panel names the layer it leads back to");
+        assert!(svg.contains(">Main<"), "…and the layer THAT room lives on");
+        // Walked both ways, so the label is the plain room name — never a "to/from" form.
+        assert!(!svg.contains(">to Cellar<") && !svg.contains(">from Hall<"));
         assert!(label_collisions(&svg).is_empty());
         assert!(ghost_box_overlaps(&svg).is_empty());
-
-        // SQ-1330: a ghost pair is two one-ways, one per panel — each panel's departure ghost
-        // carries its OWN arrowhead, at the ghost's own edge, never at the room's (that would
-        // read as the two-way inward-head convention SQ-1317 reserves for adjacent room boxes,
-        // and never as a single head pointing back at the room it started from).
-        let deps = ghost_rects_of(&svg, "ghost");
-        assert_eq!(deps.len(), 2, "one departure ghost per panel");
-        let tips = arrow_tips(&svg);
-        assert_eq!(tips.len(), 2, "each panel's departure ghost carries its own arrowhead");
-        for &tip in &tips {
-            assert!(
-                deps.iter().any(|&r| near_rect_edge(tip, r, 1.5)),
-                "arrowhead {tip:?} must sit on a departure ghost's own edge: {deps:?}"
-            );
-        }
-        let rooms = room_rects(&svg);
-        for &tip in &tips {
-            assert!(
-                !rooms.iter().any(|&r| near_rect_edge(tip, r, 1.5)),
-                "a departure arrowhead must never sit on a room's own edge: {tip:?} vs {rooms:?}"
-            );
-        }
-        assert!(svg.contains(">D<"), "Hall's own badge names the direction it travels");
-        assert!(svg.contains(">U<"), "Cellar's own badge names the direction it travels back");
-    }
-
-    /// SQ-1347: a reciprocal cross-layer passage's ghost stub carries ONLY the travel that
-    /// leaves its own layer — one badge, one arrowhead, never a second marker for the return
-    /// word too. Falsify by widening `arrival_ghosts`'s reciprocal exclusion (or dropping it) and
-    /// this fails: a spurious second head lands on one of the two ghost stubs.
-    #[test]
-    fn a_reciprocal_cross_layer_passage_carries_one_head_per_layer_never_two_on_one_stub() {
-        use mapper::graph::MapGraph;
-        let mut g = MapGraph::new();
-        g.upsert_room(1, "Hall".into());
-        g.upsert_room(2, "Cellar".into());
-        g.set_pos(1, (0, 0));
-        g.set_pos(2, (0, 1));
-        g.add_edge(1, Direction::Down, 2);
-        g.add_edge(2, Direction::Up, 1);
-        let below = g.new_layer(Some(mapper::layer::MAIN_LAYER), "Below".into());
-        g.set_room_layer(2, below);
-        let svg = render_svg_layered(&g);
-        let map = layered_map_only(&svg);
-
-        assert_eq!(
-            map.matches("class=\"ghost arrival\"").count(),
-            0,
-            "a reciprocal crossing never grows an arrival ghost — each layer's own departure \
-             ghost already is the return trip's mirror"
+        assert!(
+            !svg.contains("ghost-line"),
+            "SQ-1356 retired the ghost's own connector: it is an ordinary routed passage now"
         );
-        assert_eq!(map.matches("class=\"badge\"").count(), 2, "one badge per layer, never two on one stub");
-        let deps = ghost_rects_of(&svg, "ghost");
-        assert_eq!(deps.len(), 2, "one departure ghost stub per layer");
-        let tips = arrow_tips(&svg);
-        assert_eq!(tips.len(), 2, "one arrowhead per layer's ghost stub — never two on one stub");
-        for &tip in &tips {
-            let hits = deps.iter().filter(|&&r| near_rect_edge(tip, r, 1.5)).count();
-            assert_eq!(hits, 1, "each arrowhead sits on exactly one ghost stub: {tip:?} vs {deps:?}");
-        }
-        assert!(svg.contains(">D<"), "Hall's stub names only its own outgoing word");
-        assert!(svg.contains(">U<"), "Cellar's stub names only its own outgoing word");
-    }
 
-    /// SQ-1347: a departure stub's badge sits beside its head at the GHOST end — the arrival of
-    /// this travel — never at the room it leaves. Falsify by reverting the departure loop to
-    /// anchor the badge off the room's own edge (`root`/`tangent`) instead of the ghost's, and
-    /// this fails: the badge lands nearer the room again in both panels.
-    #[test]
-    fn a_departure_stubs_badge_sits_nearer_the_ghost_than_the_room() {
-        use mapper::graph::MapGraph;
-        let mut g = MapGraph::new();
-        g.upsert_room(1, "Hall".into());
-        g.upsert_room(2, "Cellar".into());
-        g.set_pos(1, (0, 0));
-        g.set_pos(2, (0, 1));
-        g.add_edge(1, Direction::Down, 2);
-        g.add_edge(2, Direction::Up, 1);
-        let below = g.new_layer(Some(mapper::layer::MAIN_LAYER), "Below".into());
-        g.set_room_layer(2, below);
-        let svg = render_svg_layered(&g);
-        let rooms = room_rects(&svg);
+        // Same box SIZE as the room it sits beside — a ghost takes a cell like any other room.
+        let rooms = plain_room_rects(&svg);
         let ghosts = ghost_rects_of(&svg, "ghost");
-        assert_eq!(rooms.len(), 2, "one room per panel");
-        assert_eq!(ghosts.len(), 2, "one departure ghost per panel");
-        let doc = roxmltree::Document::parse(&svg).expect("well-formed SVG");
-        let badges: Vec<(f64, f64)> = doc
-            .descendants()
-            .filter(|n| {
-                n.tag_name().name() == "circle"
-                    && n.attribute("class") == Some("badge")
-                    && !under_class(*n, "legend-block")
-            })
-            .map(|n| {
-                let o = translate_of(n);
-                (
-                    n.attribute("cx").unwrap().parse::<f64>().unwrap() + o.0,
-                    n.attribute("cy").unwrap().parse::<f64>().unwrap() + o.1,
-                )
-            })
-            .collect();
-        assert_eq!(badges.len(), 2, "one badge per panel");
-        let edge_dist_y = |y: f64, (_, ry, _, rh): (f64, f64, f64, f64)| -> f64 {
-            (y - ry).abs().min((y - (ry + rh)).abs())
-        };
-        for &badge in &badges {
-            let room_dist =
-                rooms.iter().map(|&r| edge_dist_y(badge.1, r)).fold(f64::MAX, f64::min);
-            let ghost_dist =
-                ghosts.iter().map(|&r| edge_dist_y(badge.1, r)).fold(f64::MAX, f64::min);
+        assert_eq!(ghosts.len(), 2);
+        for gh in &ghosts {
             assert!(
-                ghost_dist < room_dist,
-                "the badge at {badge:?} must sit nearer a ghost than a room: \
-                 ghost_dist={ghost_dist} room_dist={room_dist}"
+                rooms.iter().any(|r| (r.2 - gh.2).abs() < 0.5 && (r.3 - gh.3).abs() < 0.5),
+                "a ghost box is a room box: {gh:?} vs {rooms:?}"
             );
         }
     }
 
-    /// A ONE-WAY crossing has no connection back, so `interlayer_badges` never fires on the
-    /// arriving side — the far panel would otherwise say nothing at all about it. The arriving
-    /// room gets its own ghost instead, naming where the passage came from.
+    /// A one-way crossing says which way it runs, in words, on both panels: the leaving end
+    /// reads `to <room>`, the arriving end `from <room>` — and never a two-way "to/from" pair.
     #[test]
-    fn a_one_way_crossing_gets_an_arrival_ghost_on_the_far_panel() {
+    fn a_one_way_crossing_labels_its_two_ends_to_and_from() {
         use mapper::graph::MapGraph;
         let mut g = MapGraph::new();
         g.upsert_room(1, "Alcove".into());
@@ -2684,82 +2145,24 @@ mod tests {
         g.set_room_layer(2, deep);
         let svg = render_svg_layered(&g);
         let map = layered_map_only(&svg);
-        assert_eq!(map.matches("class=\"ghost\"").count(), 1, "Alcove's panel gets a departure ghost");
-        assert_eq!(map.matches("class=\"ghost arrival\"").count(), 1, "Vault's panel gets an arrival ghost");
-        assert!(svg.contains(">Vault<") && svg.contains(">Deep<"), "the departure ghost names Vault/Deep");
-        assert!(svg.contains(">Alcove<") && svg.contains(">Main<"), "the arrival ghost names Alcove/Main");
+        assert_eq!(map.matches("class=\"ghost\"").count(), 2, "one ghost per panel");
+        assert!(svg.contains(">to Vault<"), "Alcove's panel says where the passage LEADS: {svg}");
+        assert!(svg.contains(">from Alcove<"), "Vault's panel says where it CAME FROM: {svg}");
+        assert!(svg.contains(">Deep<") && svg.contains(">Main<"), "each names the other's layer");
         assert!(label_collisions(&svg).is_empty());
         assert!(ghost_box_overlaps(&svg).is_empty());
 
-        // SQ-1330: the departure end's arrow sits at the GHOST (Alcove leaving toward Vault); the
-        // arrival end's sits at the ROOM (Vault arriving from Alcove) — the two ends of one
-        // passage, each read from its own panel, never both at the same box.
-        let deps = ghost_rects_of(&svg, "ghost");
-        let arrs = ghost_rects_of(&svg, "ghost arrival");
-        let rooms = room_rects(&svg);
-        assert_eq!(deps.len(), 1);
-        assert_eq!(arrs.len(), 1);
+        // One travel, so one head — at the end that travel ARRIVES at (SQ-1346), which on each
+        // panel is the box standing for the far end of the crossing.
         let tips = arrow_tips(&svg);
-        assert_eq!(tips.len(), 2, "one arrowhead at the departure ghost, one at the arrival room");
-        assert!(
-            tips.iter().any(|&t| deps.iter().any(|&r| near_rect_edge(t, r, 1.5))),
-            "the departure ghost must carry its own arrowhead: {tips:?} vs {deps:?}"
-        );
-        assert!(
-            tips.iter().any(|&t| rooms.iter().any(|&r| near_rect_edge(t, r, 1.5))),
-            "the arrival room must carry its own arrowhead: {tips:?} vs {rooms:?}"
-        );
-        assert!(
-            !tips.iter().any(|&t| arrs.iter().any(|&r| near_rect_edge(t, r, 1.5))),
-            "the arrival GHOST box (unlike the room) carries no letter and no arrowhead of its own: {tips:?} vs {arrs:?}"
-        );
+        assert_eq!(tips.len(), 2, "one head per panel: {tips:?}");
     }
 
-    /// SQ-1330: a departure badge's letter and its arrow must agree about which way the passage
-    /// runs — a `D` badge (down) sends its arrow BELOW the badge, toward the ghost it leads to,
-    /// never above it.
+    /// A ghost is seated into a FREE cell, so it can never sit on a room — and its passage is an
+    /// ordinary connector, so it can never be routed through one either. Both halves are checked
+    /// with `Blocker` standing exactly where the crossing's own bearing points.
     #[test]
-    fn a_departure_arrow_points_the_way_its_badge_letter_says() {
-        use mapper::graph::MapGraph;
-        let mut g = MapGraph::new();
-        g.upsert_room(1, "Attic".into());
-        g.upsert_room(2, "Cellar".into());
-        g.set_pos(1, (0, 0));
-        g.set_pos(2, (0, 0));
-        g.add_edge(1, Direction::Down, 2); // one-way: no edge back
-        let below = g.new_layer(Some(mapper::layer::MAIN_LAYER), "Below".into());
-        g.set_room_layer(2, below);
-        let svg = render_svg_layered(&g);
-        assert!(svg.contains(">D<"), "the badge names the direction actually travelled");
-        let doc = roxmltree::Document::parse(&svg).expect("well-formed SVG");
-        let badge_y = doc
-            .descendants()
-            .find(|n| n.tag_name().name() == "circle" && n.attribute("class") == Some("badge"))
-            .map(|n| {
-                let o = translate_of(n);
-                n.attribute("cy").unwrap().parse::<f64>().unwrap() + o.1
-            })
-            .expect("Attic's panel draws a badge");
-        // One-way, so Cellar's own panel also gets an arrival arrow — filter to the one that
-        // belongs to Attic's departure ghost specifically, by finding the tip that sits on it.
-        let deps = ghost_rects_of(&svg, "ghost");
-        assert_eq!(deps.len(), 1, "Attic's panel gets exactly one departure ghost");
-        let ghost_tip = arrow_tips(&svg)
-            .into_iter()
-            .find(|&t| deps.iter().any(|&r| near_rect_edge(t, r, 1.5)))
-            .expect("the departure ghost must carry its own arrowhead");
-        assert!(
-            ghost_tip.1 > badge_y,
-            "a `D` badge's arrow must sit BELOW it, toward the ghost it leads to: badge y={badge_y}, tip={ghost_tip:?}"
-        );
-    }
-
-    /// A room with every side already crowded still gets its ghost, pushed farther out by
-    /// `place_ghost`'s fallback rather than dropped (SQ-1319's whole point — falsify by reverting
-    /// `place_ghost` to a fixed-candidate search and this must fail on `ghost_box_overlaps`, or
-    /// on the ghost vanishing outright).
-    #[test]
-    fn a_crowded_departure_ghost_still_lands_clear() {
+    fn a_crowded_ghost_still_lands_clear_of_every_room() {
         use mapper::graph::MapGraph;
         let build = |crowd: bool| {
             let mut g = MapGraph::new();
@@ -2769,7 +2172,7 @@ mod tests {
             g.set_pos(2, (0, 0));
             g.add_edge(1, Direction::Up, 2);
             if crowd {
-                // Directly north of Landing: crowds the Up ghost's usual spot right above the box.
+                // Directly north of Landing: the Up ghost's own cell.
                 g.upsert_room(3, "Blocker".into());
                 g.set_pos(3, (0, -1));
             }
@@ -2777,54 +2180,18 @@ mod tests {
             g.set_room_layer(2, loft);
             render_svg_layered(&g)
         };
-        let base = build(false);
-        let crowded = build(true);
-        for svg in [&base, &crowded] {
-            assert!(svg.contains(">Loft<"), "the ghost must always name the room: {svg}");
+        for svg in [&build(false), &build(true)] {
+            assert!(svg.contains(">to Loft<"), "the ghost must always name the room: {svg}");
             assert!(svg.contains(">Loft Layer<"), "the ghost must always name the layer: {svg}");
+            let bad = label_collisions(svg);
+            assert!(bad.is_empty(), "labels must stay clear: {bad:#?}");
+            let bad = ghost_box_overlaps(svg);
+            assert!(bad.is_empty(), "the ghost must stay clear of rooms and ghosts: {bad:#?}");
+            // `room_rects` gathers ghost boxes too since SQ-1356, so this is the SQ-1333 reading
+            // as well: no connector runs through a ghost box either.
+            let bad = connector_room_crossings(svg);
+            assert!(bad.is_empty(), "no passage may run through a box: {bad:?}");
         }
-        let bad = label_collisions(&crowded);
-        assert!(bad.is_empty(), "the crowded case must still land clear of labels: {bad:#?}");
-        let bad = ghost_box_overlaps(&crowded);
-        assert!(bad.is_empty(), "the crowded case must still land clear of rooms/ghosts: {bad:#?}");
-        // SQ-1333: `Blocker` sits squarely in the corridor the Up ghost's straight line would
-        // otherwise run through — the exact shape `place_ghost`'s bend exists for.
-        let bad = ghost_line_room_crossings(&crowded);
-        assert!(bad.is_empty(), "the crowded case's ghost line must not run through Blocker: {bad:?}");
-    }
-
-    /// SQ-1333: a room directly on the far side of a cross-layer exit must not put that room's
-    /// own box in the ghost's connector line, or the ghost reads as the room's own exit — the
-    /// exact defect on Zork I's house layer, where the Kitchen's Down ghost ran straight through
-    /// South of House to reach its "Studio · Main" label. Falsify by reverting the line check in
-    /// `search_ghost_side` (or the bend fallback in `place_ghost`) and this fails.
-    #[test]
-    fn a_ghost_line_never_runs_through_a_room_in_its_path() {
-        use mapper::graph::MapGraph;
-        let mut g = MapGraph::new();
-        g.upsert_room(1, "Kitchen".into());
-        g.upsert_room(2, "Studio".into());
-        // Directly south of Kitchen — the Down ghost's straight-line spot.
-        g.upsert_room(3, "South of House".into());
-        g.set_pos(1, (0, 0));
-        g.set_pos(2, (0, 0));
-        g.set_pos(3, (0, 1));
-        g.add_edge(1, Direction::Down, 2);
-        let studio_layer = g.new_layer(Some(mapper::layer::MAIN_LAYER), "Studio Layer".into());
-        g.set_room_layer(2, studio_layer);
-        let svg = render_svg_layered(&g);
-
-        assert!(svg.contains(">Studio<"), "the ghost must always name the room: {svg}");
-        let deps = ghost_rects_of(&svg, "ghost");
-        assert_eq!(deps.len(), 1, "one departure ghost for the one interlayer exit");
-        let bad = ghost_box_overlaps(&svg);
-        assert!(bad.is_empty(), "the ghost box must stay clear of South of House: {bad:#?}");
-        // The invariant this whole quest is about: the connector is drawn (never dropped for
-        // want of a clear line, SQ-1319's rule extended by SQ-1333), and it does not run through
-        // South of House to get there.
-        assert!(!ghost_line_segments(&svg).is_empty(), "the ghost's connector must still be drawn");
-        let bad = ghost_line_room_crossings(&svg);
-        assert!(bad.is_empty(), "the ghost's connector must not cross South of House: {bad:?}");
     }
 
     #[test]
@@ -2857,7 +2224,7 @@ mod tests {
             "door",
             "conditional exit",
             "distorted",
-            "exit to another layer",
+            "a room on another layer",
         ] {
             assert!(svg.contains(caption), "legend must name {caption:?}");
         }
@@ -2908,7 +2275,7 @@ mod tests {
         let svg = render_svg(&render(&zork_house().graph));
         for sel in [
             ".room", ".edge", ".edge.reciprocal", ".edge.distorted", ".edge.conditional", ".door",
-            ".badge", ".legend", ".ghost", ".ghost.arrival",
+            ".badge", ".legend", ".ghost", ".ghost-name", ".ghost-layer",
         ] {
             assert!(svg.contains(sel), "the stylesheet must define {sel}");
         }

@@ -39,55 +39,85 @@ fn names(map: &mapgen::GeneratedMap) -> Vec<String> {
     map.graph.rooms().map(|r| r.label().to_string()).collect()
 }
 
-/// SQ-1319's ghost accounting, checked against the graph rather than eyeballed: every interlayer
-/// connection draws exactly one departure ghost on its origin's layer, and a one-way one (no
-/// connection back the other way) draws an extra arrival ghost on its destination's layer — never
-/// more, never fewer, and never one that overlaps a room or another ghost. `mapgen` only ever
-/// cuts layers at a portal seam (Up/Down/In/Out — see `mapper::layer::planar_region`), so a real
-/// story's `stories/`-only fixture is the only place this exercises the general "compass or
-/// portal" rule `export_svg`'s own synthetic cases cannot reach.
+/// SQ-1356's ghost accounting, checked against the graph rather than eyeballed: every layer
+/// draws exactly one ghost box per ROOM beyond it that one of its own passages touches — never
+/// more, never fewer, none overlapping a room or another ghost, and every one naming a real room
+/// and a real layer. `mapgen` only ever cuts layers at a portal seam (Up/Down/In/Out — see
+/// `mapper::layer::planar_region`), so a real story's `stories/`-only fixture is the only place
+/// this exercises the general "compass or portal" rule `export_svg`'s own synthetic cases cannot
+/// reach.
+///
+/// One per room rather than one per PASSAGE (SQ-1319's rule): two staircases from one layer to
+/// the same room beyond it are two lines to one box, exactly as two passages between two rooms of
+/// one layer are.
 fn assert_ghost_accounting(svg: &str, graph: &mapper::graph::MapGraph) {
     let doc = roxmltree::Document::parse(svg).expect("well-formed SVG");
-    let count = |want: &str| {
-        doc.descendants()
-            .filter(|n| {
-                n.tag_name().name() == "rect"
-                    && n.attribute("class") == Some(want)
-                    && !app::export_svg::under_class(*n, "legend-block")
-            })
-            .count()
-    };
-    let departures = count("ghost");
-    let arrivals = count("ghost arrival");
-
-    let interlayer: Vec<&mapper::graph::Connection> =
-        graph.connections().iter().filter(|c| mapper::layer::is_interlayer(graph, c)).collect();
-    let one_way = interlayer
-        .iter()
-        .filter(|c| !graph.connections().iter().any(|c2| c2.origin == c.dest && c2.dest == c.origin))
+    let drawn = doc
+        .descendants()
+        .filter(|n| {
+            n.tag_name().name() == "rect"
+                && n.attribute("class") == Some("ghost")
+                && !app::export_svg::under_class(*n, "legend-block")
+        })
         .count();
 
-    assert_eq!(departures, interlayer.len(), "one departure ghost per interlayer connection");
-    assert_eq!(arrivals, one_way, "one arrival ghost per one-way interlayer connection");
+    // The same count off the graph: per layer, the distinct foreign rooms its crossings touch.
+    let mut want = 0usize;
+    for &layer in graph.layers().keys() {
+        if graph.rooms_in_layer(layer).is_empty() {
+            continue;
+        }
+        let mut seen: std::collections::BTreeSet<mapper::graph::RoomId> = Default::default();
+        for c in graph.connections() {
+            if !mapper::layer::is_interlayer(graph, c) {
+                continue;
+            }
+            if graph.layer_of(c.origin) == layer {
+                seen.insert(c.dest);
+            } else if graph.layer_of(c.dest) == layer {
+                seen.insert(c.origin);
+            }
+        }
+        want += seen.len();
+    }
+    assert_eq!(drawn, want, "one ghost box per foreign room each layer's crossings touch");
 
     let bad = app::export_svg::ghost_box_overlaps(svg);
     assert!(bad.is_empty(), "ghost boxes must stay clear of rooms and each other: {bad:#?}");
 
-    // Every ghost names a real room and a real layer — never the legend's own sample.
+    // Every ghost names a real room — under whichever of SQ-1356's three labellings applies —
+    // and a real layer, never the legend's own sample. A long name wraps into several
+    // `ghost-name` lines inside one box, so the lines are joined back up per box first.
     let room_names: std::collections::HashSet<&str> = graph.rooms().map(|r| r.label()).collect();
     let layer_names: std::collections::HashSet<&str> =
         graph.layers().keys().map(|&l| graph.layer_name(l)).collect();
-    for n in doc.descendants().filter(|n| {
-        n.attribute("class") == Some("ghost-name") && !app::export_svg::under_class(*n, "legend-block")
-    }) {
-        let text = n.text().unwrap_or("");
-        assert!(room_names.contains(text), "ghost names a real room, got {text:?}");
+    let mut lines: Vec<String> = Vec::new();
+    let mut names: Vec<String> = Vec::new();
+    let flush = |lines: &mut Vec<String>, names: &mut Vec<String>| {
+        if !lines.is_empty() {
+            names.push(lines.join(" "));
+            lines.clear();
+        }
+    };
+    for n in doc.descendants() {
+        // Elements only: `descendants()` also yields each element's own TEXT node, which carries
+        // no class and would flush the run of `ghost-name` lines between every pair of them.
+        if !n.is_element() || app::export_svg::under_class(n, "legend-block") {
+            continue;
+        }
+        match n.attribute("class") {
+            Some("ghost-name") => lines.push(n.text().unwrap_or("").to_string()),
+            Some("ghost-layer") => {
+                flush(&mut lines, &mut names);
+                let text = n.text().unwrap_or("");
+                assert!(layer_names.contains(text), "ghost names a real layer, got {text:?}");
+            }
+            _ => flush(&mut lines, &mut names),
+        }
     }
-    for n in doc.descendants().filter(|n| {
-        n.attribute("class") == Some("ghost-layer") && !app::export_svg::under_class(*n, "legend-block")
-    }) {
-        let text = n.text().unwrap_or("");
-        assert!(layer_names.contains(text), "ghost names a real layer, got {text:?}");
+    for name in names {
+        let bare = name.strip_prefix("to ").or_else(|| name.strip_prefix("from ")).unwrap_or(&name);
+        assert!(room_names.contains(bare), "ghost names a real room, got {name:?}");
     }
 }
 
@@ -563,11 +593,6 @@ fn zork1_svg_shows_every_room_and_no_connector_crosses_a_room() {
     let bad = app::export_svg::connector_room_crossings(&svg);
     assert!(bad.is_empty(), "connectors must not run through room boxes: {bad:?}");
 
-    // SQ-1333: a ghost's connector line is part of its footprint too — the Kitchen's Down ghost
-    // ("Studio · Main") used to run straight through South of House on this exact map to reach
-    // it, reading as South of House's own exit.
-    let bad = app::export_svg::ghost_line_room_crossings(&svg);
-    assert!(bad.is_empty(), "ghost connector lines must not run through room boxes: {bad:?}");
 
     // And the typographic one (SQ-1317): no direction tag and no cross-layer badge name may sit
     // on a room box or on another label. A hundred-room map is where that pressure is — this
@@ -581,34 +606,22 @@ fn zork1_svg_shows_every_room_and_no_connector_crosses_a_room() {
     // fixed-candidate search SQ-1317 shipped with, on this map's dense house layer.
     assert_ghost_accounting(&svg, &map.graph);
 
-    // SQ-1334: before this fix, `Cellar U -> Living Room` was the only edge crossing this seam,
-    // so the Living Room's own panel drew an ARRIVAL ghost (an inbound arrow, no departure
-    // letter). Now that the trap door's Down half is drawn too, the crossing is reciprocal —
-    // `arrival_ghosts` draws no separate arrival mechanism for that case, only each side's own
-    // DEPARTURE ghost — so the Living Room's ghost naming the Cellar must be a departure
-    // (`class="ghost"`), never `"ghost arrival"`. Found by pairing each `<rect class="ghost...">`
-    // with the `<text class="ghost-name">` `draw_ghost` always emits immediately after it.
-    let mut cellar_ghost_class: Option<String> = None;
-    let mut last_ghost_class: Option<String> = None;
-    for n in doc.descendants() {
-        if app::export_svg::under_class(n, "legend-block") {
-            continue;
-        }
-        match (n.tag_name().name(), n.attribute("class")) {
-            ("rect", Some(c)) if c == "ghost" || c == "ghost arrival" => {
-                last_ghost_class = Some(c.to_string());
-            }
-            ("text", Some("ghost-name")) if n.text() == Some("Cellar") => {
-                cellar_ghost_class = last_ghost_class.clone();
-            }
-            _ => {}
-        }
-    }
-    assert_eq!(
-        cellar_ghost_class.as_deref(),
-        Some("ghost"),
-        "the Living Room's ghost naming the Cellar must be a departure, not an arrival, \
-         now that the trap door's Down half is drawn"
+    // SQ-1334/SQ-1356: the trap door's Down half means the Living Room ⇄ Cellar crossing runs
+    // both ways, so the Living Room's own panel names the Cellar PLAINLY — a `to Cellar` there
+    // would say the trap door is one-way, which is exactly what SQ-1334 fixed.
+    let cellar_labels: Vec<String> = doc
+        .descendants()
+        .filter(|n| {
+            n.attribute("class") == Some("ghost-name")
+                && !app::export_svg::under_class(*n, "legend-block")
+        })
+        .filter_map(|n| n.text().map(str::to_string))
+        .filter(|t| t.contains("Cellar"))
+        .collect();
+    assert!(!cellar_labels.is_empty(), "the Living Room's panel must ghost the Cellar");
+    assert!(
+        cellar_labels.iter().all(|t| !t.starts_with("to ") && !t.starts_with("from ")),
+        "a two-way crossing names the room plainly: {cellar_labels:?}"
     );
 
     // SQ-1322: no two adjacent rooms — Cyclops Room ↔ Strange Passage at the minimum gutter is
@@ -633,8 +646,6 @@ fn anchorhead_svg_ghosts_every_cross_layer_passage() {
 
     let bad = app::export_svg::connector_room_crossings(&svg);
     assert!(bad.is_empty(), "connectors must not run through room boxes: {bad:?}");
-    let bad = app::export_svg::ghost_line_room_crossings(&svg);
-    assert!(bad.is_empty(), "ghost connector lines must not run through room boxes: {bad:?}");
     let bad = app::export_svg::label_collisions(&svg);
     assert!(bad.is_empty(), "labels must stay clear of rooms and of each other: {bad:#?}");
 
