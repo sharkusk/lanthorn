@@ -29,6 +29,13 @@ Absolute URLs or no link.
 
 ### Changed
 
+- **A room reached by a ladder or a staircase now pushes the building's wall
+  out to make room for itself.** Where the cell it wants is already occupied and
+  the map cannot simply open a blank row for it — because doing so would tear
+  two rooms you walked between apart — the room standing in the way is asked to
+  step aside instead, one cell further on, taking anything behind it along. So
+  Zork I's house grows a row and both cellar stairs sit under it, rather than
+  one of them being parked past the neighbour with its line looping around.
 - **A passage that leaves the layer now leads to a room, not a label.** The
   room across the boundary is drawn beside its neighbour as a *ghost* — a box
   the size of a real room, in the cell the passage points at, with a broken
