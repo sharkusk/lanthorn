@@ -711,7 +711,7 @@ mod tests {
         let z = zones
             .iter()
             .find(|z| z.boundary == Boundary::CommandBandTop)
-            .expect("command band top zone");
+            .expect("command panel top zone");
         assert_eq!(z.rect.height, 1, "stays a single row regardless of the knob");
         assert_eq!(z.rect.y, pl.command_band.y - 1);
         assert_eq!(
