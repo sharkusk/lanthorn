@@ -81,6 +81,14 @@ Absolute URLs or no link.
 
 ### Fixed
 
+- **A stair or ladder's letter on the exported SVG map now always rides the
+  straight run into its own arrowhead.** Where the passage had to jog round a
+  neighbouring room first — a room on another layer seated beside its anchor
+  rather than directly above or below it, say — the line used to turn its
+  final corner too close to the edge, leaving the letter crowded against the
+  turn instead of sitting cleanly behind the arrow. The map now gives that
+  last stretch the room it needs.
+
 - **Bureaucracy's licence form hands you back a screen you can read.** Filling in
   the last field used to leave the story pane blank until you pressed Enter
   again — and in that game an empty command is answered with "[What?]" and a
