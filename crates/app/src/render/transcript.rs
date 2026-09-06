@@ -1446,7 +1446,11 @@ pub(crate) fn draw_str_runs(
                 let game_fg = run.and_then(|r| game(r.fg));
                 let game_bg = run.and_then(|r| game(r.bg));
                 if let Some(c) = resolve_glk_channel(game_fg, slot.fg, base_style.fg, honor) {
-                    s = s.fg(c);
+                    // SQ-1354: and on the IBM PC's v1-v5 text screen a bold run is
+                    // that same ink with the EGA intensity bit lit. Applied to the
+                    // RESOLVED colour, because the machine's attribute byte has one
+                    // foreground nibble however it was filled.
+                    s = s.fg(crate::render::ibm_bold_fg(c, bits, honor));
                 }
                 if let Some(c) = resolve_glk_channel(game_bg, slot.bg, base_style.bg, honor) {
                     s = s.bg(c);
@@ -3949,6 +3953,80 @@ mod tests {
         assert_ne!(buf[(1, 0)].fg, Color::Magenta);
         assert!(!buf[(5, 0)].modifier.contains(Modifier::UNDERLINED));
         assert_ne!(buf[(5, 0)].fg, Color::Magenta);
+    }
+
+    /// SQ-1354: on the IBM PC a bold run is the machine's ink with the EGA
+    /// intensity bit lit, so a room name comes out white where the prose beside it
+    /// is `#AAAAAA`.
+    ///
+    /// The `#ADADAD` here is not a typo for `#AAAAAA`: `rgb15_to_888` expands the
+    /// palette's 5-bit `21` as `(c << 3) | (c >> 2)`, which is what every other
+    /// path in lanthorn already draws EGA entry 7 as.
+    ///
+    /// Both `honor_game_colours` modes are pinned. The false mode is the player
+    /// saying "keep my terminal's colours", and it takes the machine's screen with
+    /// it — the period look does not apply, and neither does this.
+    #[test]
+    fn ibm_bold_runs_light_the_intensity_bit_in_both_gate_states() {
+        use ratatui::{buffer::Buffer, layout::Rect, style::{Color, Style}};
+        // Held for the whole case, and the scheme below is built inside it so its
+        // palette slots resolve through the machine's table (CLAUDE.md, SQ-0958).
+        let _g = crate::v6_palette(zvm::screen::Palette::IbmXzip);
+        let cs = crate::colors::ColorScheme::terminal_default();
+
+        // EGA entry 7 and entry 15, as this palette resolves standard white 9
+        // plain and lit.
+        let grey = Color::Rgb(0xAD, 0xAD, 0xAD);
+        let white = Color::Rgb(0xFF, 0xFF, 0xFF);
+        assert_eq!(
+            crate::render::resolve_zcolour(zvm::screen::ZColour::Standard(9), &cs),
+            grey,
+            "XZIP resolves white 9 to EGA 7",
+        );
+
+        let area = Rect::new(0, 0, 6, 1);
+        // The machine's own ink under the prose, which is what the period look
+        // lays there for a Version 4 story that never names a colour.
+        let machine_ink = Style::new().fg(grey);
+        let draw = |base: Style, bits: u8, fg: u32, honor: bool| {
+            let mut b = Buffer::empty(area);
+            let runs = vec![StyleRun { start: 0, end: 3, bits, fg, bg: 0, link: 0, glk_style: 0 }];
+            draw_str_runs(&mut b, 0, 0, "abc", base, &runs, None, area, crate::render::TextInk::new(honor, &cs));
+            b[(0, 0)].fg
+        };
+
+        // The reported case: Version 4, no `set_colour`, the machine's default ink.
+        assert_eq!(draw(machine_ink, 0x00, 0, true), grey, "plain prose stays EGA 7");
+        assert_eq!(draw(machine_ink, 0x02, 0, true), white, "a bold room name lights to EGA 15");
+        // …and the game's own `set_colour(9)` lights the same way, because the
+        // attribute byte has one foreground nibble however it was filled.
+        let std_white = crate::state::pack_zcolour(zvm::screen::ZColour::Standard(9));
+        assert_eq!(draw(Style::new(), 0x00, std_white, true), grey, "set_colour(9) plain");
+        assert_eq!(draw(Style::new(), 0x02, std_white, true), white, "set_colour(9) bold");
+
+        // honor off: the machine's screen is off with it, so a bold run keeps
+        // whatever the theme put there.
+        assert_eq!(draw(machine_ink, 0x02, 0, false), grey, "honor off: no brightening");
+        let themed = Style::new().fg(Color::Rgb(0x33, 0x77, 0xBB));
+        assert_eq!(draw(themed, 0x02, 0, true), Color::Rgb(0x33, 0x77, 0xBB), "a themed ink is not an EGA colour");
+        assert_eq!(draw(themed, 0x02, 0, false), Color::Rgb(0x33, 0x77, 0xBB), "…in either gate state");
+    }
+
+    /// …and no other display does it — the Amiga and the §8.3.1 table have no
+    /// intensity bit, so their bold runs are the terminal's BOLD and nothing else.
+    #[test]
+    fn bold_does_not_brighten_off_the_ibm_text_screen() {
+        use ratatui::{buffer::Buffer, layout::Rect, style::Style};
+        let area = Rect::new(0, 0, 6, 1);
+        for p in [zvm::screen::Palette::Standard, zvm::screen::Palette::Amiga, zvm::screen::Palette::IbmYzip] {
+            let _g = crate::v6_palette(p);
+            let cs = crate::colors::ColorScheme::terminal_default();
+            let ink = crate::render::resolve_zcolour(zvm::screen::ZColour::Standard(9), &cs);
+            let mut b = Buffer::empty(area);
+            let runs = vec![StyleRun { start: 0, end: 3, bits: 0x02, fg: 0, bg: 0, link: 0, glk_style: 0 }];
+            draw_str_runs(&mut b, 0, 0, "abc", Style::new().fg(ink), &runs, None, area, crate::render::TextInk::new(true, &cs));
+            assert_eq!(b[(0, 0)].fg, ink, "{p:?}: bold is the terminal's, not a second colour");
+        }
     }
 
     #[test]

@@ -2082,6 +2082,30 @@ impl Palette {
     pub fn two_colour_card(self) -> bool {
         matches!(self, Self::IbmCga)
     }
+
+    /// Does a `HLIGHT` **bold** run light the EGA intensity bit on this display
+    /// (SQ-1354)?
+    ///
+    /// **Only [`Palette::IbmXzip`]**, and every clause of that is read out of
+    /// Infocom's own interpreters rather than reasoned from the hardware:
+    ///
+    /// - **XZIP and EZIP** — the v1–v5 DOS interpreters, which is what this
+    ///   palette IS — paint into a text cell's attribute byte and OR bit 3 into
+    ///   its foreground nibble for bold. See [`ega_intense`] for the lines.
+    /// - **YZIP declines.** The Version 6 interpreter draws its text into a
+    ///   graphics screen, and its `md_hlite` (`ibmzip/yzip/sysdep1.c`) reads
+    ///   `attrib` only to swap the pair for `REVERSE`; `BOLD` appears nowhere in
+    ///   its screen code, in that file or in any of releases 65–71 beside it. A
+    ///   bold run on that machine was simply not distinguished, so brightening one
+    ///   here would be inventing a behaviour rather than reproducing it.
+    /// - **The CGA card declines** for a different reason: it is a *two-state*
+    ///   display ([`Palette::two_colour_card`]) whose whole content is `#000000`
+    ///   and `#AAAAAA`. A third value is exactly what that variant exists to rule
+    ///   out.
+    /// - The Amiga and the §8.3.1 table have no intensity bit to light.
+    pub fn bold_lights_the_intensity_bit(self) -> bool {
+        matches!(self, Self::IbmXzip)
+    }
 }
 
 /// The `(foreground, background)` a two-colour card shows, as §8.3.1 colour
@@ -2409,6 +2433,89 @@ pub fn ega_true_colour(n: u8, yzip: bool) -> Option<u16> {
         9 => 0x56B5,                            // white   EGA 7  #AAAAAA
         _ => return None,
     })
+}
+
+/// The **high-intensity sibling** of an EGA/CGA colour, as 15-bit RGB — what a
+/// bold run looked like on an IBM PC (SQ-1354).
+///
+/// # The rule, and where it is read from
+///
+/// A DOS text cell is one attribute byte: `bbbbffff`, the low nibble the
+/// foreground. Bit 3 of that nibble is the **intensity** bit, so the sixteen
+/// text colours are eight base colours and the same eight lit. Infocom's own IBM
+/// interpreters set `HLIGHT` bold (§8.7.1's bit `0x02`, `BOLD 2` in their
+/// `zipdefs.h`) by ORing that bit into whatever the foreground already was —
+/// `md_hlite` in `ibmzip/sysdep.c`, the EZIP (Version 4) interpreter, and
+/// verbatim again in `ibmzip/xzip/sysdep.c`:
+///
+/// ```text
+///     if (graphics < 0) THEN {            /* text mode */
+///       if (docolor > 0) THEN {
+///         if (attrib & REVERSE) THEN
+///           curattr = ((curattr >> 4) & 7) | ((curattr & 7) << 4);
+///         if (attrib & BOLD) THEN
+///           curattr = curattr | 8;        /* intense foreground */
+///         }                               /* underlining done manually */
+///        else {                           /* black and white */
+///         if (attrib & REVERSE) THEN
+///           curattr = 0x70;
+///         if (attrib & BOLD) THEN
+///           curattr = curattr | 8;
+/// ```
+///
+/// (`ibmzip.zip` from Andrew Plotkin's Infocom catalogue,
+/// <https://eblong.com/infocom/#terps>, the "IBM PC, C" package.) Both branches
+/// light the same bit, so the brightening is the machine's, not the colour
+/// mode's — which is why it applies to whatever put the low three bits there: a
+/// story's own `set_colour`, or the machine's default ink.
+///
+/// | base | | lit | |
+/// |---|---|---|---|
+/// | 0 black `#000000` | → | 8 dark grey | `#555555` |
+/// | 1 blue `#0000AA` | → | 9 light blue | `#5555FF` |
+/// | 2 green `#00AA00` | → | 10 light green | `#55FF55` |
+/// | 3 cyan `#00AAAA` | → | 11 light cyan | `#55FFFF` |
+/// | 4 red `#AA0000` | → | 12 light red | `#FF5555` |
+/// | 5 magenta `#AA00AA` | → | 13 light magenta | `#FF55FF` |
+/// | 6 brown `#AA5500` | → | 14 yellow | `#FFFF55` |
+/// | 7 light grey `#AAAAAA` | → | 15 white | `#FFFFFF` |
+///
+/// Anything already lit — and anything that is not an EGA colour at all — comes
+/// back unchanged, because there is no second intensity bit to set.
+///
+/// # What is deliberately NOT modelled
+///
+/// **The reverse-then-brighten order.** The excerpt above swaps the nibbles
+/// *before* ORing bit 3, so on the real machine a run that is both reversed and
+/// bold lights the colour that ends up in front — the pair's old background. Here
+/// the caller intensifies the run's logical foreground and lets the terminal
+/// perform the single swap, so a REVERSE+BOLD run lights its ground instead. The
+/// case is rare enough that carrying the swap through the cell renderer would cost
+/// more than it buys; it is named here so it is a known gap rather than a
+/// surprise.
+pub fn ega_intense(v15: u16) -> u16 {
+    match v15 {
+        0x0000 => 0x294A, // 0 black       → 8  dark grey    #555555
+        0x5400 => 0x7D4A, // 1 blue        → 9  light blue   #5555FF
+        0x02A0 => 0x2BEA, // 2 green       → 10 light green  #55FF55
+        0x56A0 => 0x7FEA, // 3 cyan        → 11 light cyan   #55FFFF
+        0x0015 => 0x295F, // 4 red         → 12 light red    #FF5555
+        0x5415 => 0x7D5F, // 5 magenta     → 13 light magenta #FF55FF
+        0x0155 => 0x2BFF, // 6 brown       → 14 yellow       #FFFF55
+        0x56B5 => 0x7FFF, // 7 light grey  → 15 white        #FFFFFF
+        already => already,
+    }
+}
+
+/// [`ega_true_colour`] for a run the story printed with `HLIGHT` **bold**: the
+/// same table with the EGA intensity bit lit (SQ-1354).
+///
+/// [`ega_intense`] carries the rule and Infocom's own code for it. Which
+/// PALETTES actually apply it is a separate question, and
+/// [`Palette::bold_lights_the_intensity_bit`] is where that is decided — this
+/// function answers for the table alone.
+pub fn ega_true_colour_styled(n: u8, yzip: bool, bold: bool) -> Option<u16> {
+    ega_true_colour(n, yzip).map(|v| if bold { ega_intense(v) } else { v })
 }
 
 /// The Amiga palette for standard colour numbers 2..=12, as 15-bit RGB.
@@ -3397,6 +3504,69 @@ mod tests {
         }
         set_palette(held);
         assert_eq!(CGA_CARD_PAIR, (9, 2), "white ink over a black page");
+    }
+
+    // ── SQ-1354: bold is the EGA intensity bit ───────────────────────────────
+
+    /// Every colour number the IBM tables answer for, bold, on BOTH interpreters
+    /// — the eight attributes `Zip_to_ega`/`zip_to_ibm_color` reach.
+    ///
+    /// The pairs are `attr` → `attr | 8` read off the EGA/CGA text palette; see
+    /// [`ega_intense`] for the `curattr | 8` that produces them.
+    #[test]
+    fn bold_lights_every_ibm_colour_on_both_tables() {
+        // (colour number, plain, lit) — identical for XZIP and YZIP except white.
+        let common: [(u8, u16, u16); 7] = [
+            (2, 0x0000, 0x294A), // black   EGA 0  → 8  dark grey
+            (3, 0x0015, 0x295F), // red     EGA 4  → 12 light red
+            (4, 0x02A0, 0x2BEA), // green   EGA 2  → 10 light green
+            (5, 0x2BFF, 0x2BFF), // yellow  EGA 14 is already lit
+            (6, 0x5400, 0x7D4A), // blue    EGA 1  → 9  light blue
+            (7, 0x5415, 0x7D5F), // magenta EGA 5  → 13 light magenta
+            (8, 0x56A0, 0x7FEA), // cyan    EGA 3  → 11 light cyan
+        ];
+        for yzip in [false, true] {
+            for (n, plain, lit) in common {
+                assert_eq!(ega_true_colour_styled(n, yzip, false), Some(plain), "{n} plain (yzip={yzip})");
+                assert_eq!(ega_true_colour_styled(n, yzip, true), Some(lit), "{n} bold (yzip={yzip})");
+            }
+        }
+        // White is the one entry the two tables disagree on, and bold closes the
+        // gap: XZIP's EGA 7 lights to 15, which is where YZIP already was.
+        assert_eq!(ega_true_colour_styled(9, false, false), Some(0x56B5), "xzip white: EGA 7, #AAAAAA");
+        assert_eq!(ega_true_colour_styled(9, false, true), Some(0x7FFF), "…lit: EGA 15, #FFFFFF");
+        assert_eq!(ega_true_colour_styled(9, true, false), Some(0x7FFF), "yzip white is already EGA 15");
+        assert_eq!(ega_true_colour_styled(9, true, true), Some(0x7FFF), "…and has no second bit to set");
+        // The sentinels and the greys answer nothing, bold or not.
+        for n in [0u8, 1, 10, 11, 12, 13, 14, 15] {
+            assert_eq!(ega_true_colour_styled(n, false, true), None, "{n} is not in the IBM table");
+        }
+    }
+
+    /// Brown is the one EGA base colour no Z-machine number reaches, and
+    /// [`ega_intense`] still has to answer for it: the table is the DISPLAY's, and
+    /// the machine's own default ink resolves through it too.
+    #[test]
+    fn the_intensity_table_covers_the_display_not_just_the_colour_numbers() {
+        assert_eq!(ega_intense(0x0155), 0x2BFF, "6 brown #AA5500 → 14 yellow #FFFF55");
+        // Already-lit entries and non-EGA values are returned untouched — there is
+        // no second intensity bit.
+        for lit in [0x294A, 0x7D4A, 0x2BEA, 0x7FEA, 0x295F, 0x7D5F, 0x2BFF, 0x7FFF] {
+            assert_eq!(ega_intense(lit), lit, "{lit:#06X} is already intense");
+        }
+        assert_eq!(ega_intense(0x39CE), 0x39CE, "the Amiga's medium grey is not an EGA colour");
+    }
+
+    /// Which displays apply it — and, just as much, which do not.
+    #[test]
+    fn only_the_xzip_display_lights_bold() {
+        for p in [Palette::Standard, Palette::Amiga, Palette::IbmXzip, Palette::IbmYzip, Palette::IbmCga] {
+            assert_eq!(
+                p.bold_lights_the_intensity_bit(),
+                p == Palette::IbmXzip,
+                "{p:?}: only the v1–v5 DOS text display ORs bit 3 for HLIGHT",
+            );
+        }
     }
 
     /// **The rule, both ways round.** A pair carries one bit for a two-state

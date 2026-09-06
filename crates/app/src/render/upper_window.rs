@@ -57,7 +57,10 @@ fn cell_style(cell: zvm::screen::Cell, glk_style: u8, scheme: &ColorScheme, hono
     // fg/bg swap here (which would be a no-op for Default/Reset channels, C1 bug).
     let mut s = crate::render::apply_text_style(base, cell.style);
     if let Some(c) = crate::render::resolve_glk_channel(game_fg, glk.fg, base.fg, honor_game_colours) {
-        s = s.fg(c);
+        // SQ-1354: a bold cell on the IBM PC's v1-v5 text screen is the same ink
+        // with the EGA intensity bit lit — the grid is the same attribute byte the
+        // prose is drawn through.
+        s = s.fg(crate::render::ibm_bold_fg(c, cell.style, honor_game_colours));
     }
     // The theme's per-Glk-style slot never paints a Glk grid cell's BACKGROUND
     // (SQ-1219): only the ground (`base.bg`, above) or a colour the GAME itself
