@@ -349,6 +349,11 @@ pub static REGISTRY: std::sync::LazyLock<Vec<RegRow>> = std::sync::LazyLock::new
     // as `map.loc_indicator`: a small footnote, not something competing with the label for the
     // eye.
     row("map.room_alias_marker", Section::Map, Kind::Style, Some("muted"), Delta::EMPTY),
+    // The box drawn for a room that lives on ANOTHER layer (SQ-1356). `muted`, because a ghost
+    // is a signpost rather than a place: it must be legible enough to read the name off, and
+    // quiet enough that a layer's own rooms are what the eye lands on first. The broken outline
+    // (`map.ghost_box_style`) is what carries the distinction where colour cannot.
+    row("map.room_ghost", Section::Map, Kind::Style, Some("muted"), Delta::EMPTY),
     // The `?` random-exit stub on a room box's border/corner (SQ-1261) — the same fact
     // `map.matrix.cell:random` marks in the table, so it shares that selector's `alert` role
     // rather than inventing a second colour for one idea.
@@ -396,6 +401,7 @@ pub static REGISTRY: std::sync::LazyLock<Vec<RegRow>> = std::sync::LazyLock::new
     row("map.trail", Section::Map, Kind::Style, Some("muted"), Delta::EMPTY),
     // Glyph-set presets (the old [symbols] section, merged in): preset name in `glyph`.
     row("map.box_style", Section::Map, Kind::Placement, None, glyph("rounded")),
+    row("map.ghost_box_style", Section::Map, Kind::Placement, None, glyph("dashed")),
     row("map.arrow_set", Section::Map, Kind::Placement, None, glyph("filled")),
     row("map.portal_icons", Section::Map, Kind::Placement, None, glyph("ascii")),
     row("map.path_style", Section::Map, Kind::Placement, None, glyph("light")),
@@ -752,6 +758,7 @@ mod tests {
         "map.room_selected",
         "map.room_alias_marker",
         "map.room_random_stub",
+        "map.room_ghost",
         "map.connector",
         "map.room_stacked_exit",
         "map.connector_distorted",
@@ -770,6 +777,7 @@ mod tests {
         "map.edge:asym",
         "map.trail",
         "map.box_style",
+        "map.ghost_box_style",
         "map.arrow_set",
         "map.portal_icons",
         "map.path_style",

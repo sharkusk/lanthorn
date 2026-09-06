@@ -68,6 +68,7 @@ pub(crate) fn default_badge_hint_available() -> String {
 }
 pub(crate) fn default_diagonal_corners() -> bool { true }
 pub(crate) fn default_portal_path_style() -> String { "dotted".into() }
+pub(crate) fn default_ghost_box_style() -> String { "dashed".into() }
 pub(crate) fn default_control_icons() -> String { "plain".into() }
 
 /// The resolved map glyph configuration, built from style.toml's `[map]`
@@ -78,6 +79,11 @@ pub struct SymbolConfig {
     /// Room outline style preset name.
     #[serde(default = "default_box_style")]
     pub box_style: String,
+    /// Outline preset for a CROSS-LAYER GHOST box (SQ-1356): "dashed" (the default), "dotted",
+    /// or "ascii". Separate from `box_style` because it says how a ghost differs from a room,
+    /// not what the house line art is — see [`crate::symbols::BoxStyle::ghost_preset`].
+    #[serde(default = "default_ghost_box_style")]
+    pub ghost_box_style: String,
     /// Arrow glyph set preset name.
     #[serde(default = "default_arrow_set")]
     pub arrow_set: String,
@@ -125,6 +131,7 @@ impl Default for SymbolConfig {
             portal_icons: default_portal_icons(),
             path_style: default_path_style(),
             portal_path_style: default_portal_path_style(),
+            ghost_box_style: default_ghost_box_style(),
             control_icons: default_control_icons(),
             badge_save: default_badge_save(),
             badge_hint: default_badge_hint(),

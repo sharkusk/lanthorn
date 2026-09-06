@@ -334,6 +334,16 @@ pub struct SymbolSet {
     pub room_portal: BoxStyle,
     /// Selected room outline. Defaults to normal (selection is color-only today).
     pub room_selected: BoxStyle,
+    /// Cross-layer GHOST outline (SQ-1356): the box drawn for a room that lives on ANOTHER
+    /// layer, at the same size as a real room's so the grid stays a grid, but with a BROKEN
+    /// border — the one property of a line that says "this is a stand-in" without needing a
+    /// colour, so it still reads on a monochrome terminal and under any theme.
+    ///
+    /// Chosen by `map.ghost_box_style` rather than by `map.box_style`, because the two answer
+    /// different questions: `box_style` picks the house line-art vocabulary, this picks how the
+    /// ghost DIFFERS from it, and a player who moved to `ascii` for coverage still wants the
+    /// ghost to differ from their rooms. See [`BoxStyle::ghost_preset`].
+    pub room_ghost: BoxStyle,
     pub arrows: Arrows,
     pub path: PathGlyphs,
     pub portal: PortalGlyphs,
@@ -404,6 +414,7 @@ impl Default for SymbolSet {
             room_current: BoxStyle { tl: '┏', tr: '┓', bl: '┗', br: '┛', h: '━', v: '┃' },
             room_portal: BoxStyle { tl: '╔', tr: '╗', bl: '╚', br: '╝', h: '═', v: '║' },
             room_selected: room_normal, // color-only selection today
+            room_ghost: BoxStyle { tl: '╭', tr: '╮', bl: '╰', br: '╯', h: '╌', v: '╎' },
             arrows: Arrows {
                 north: '▲',
                 south: '▼',
@@ -539,6 +550,31 @@ impl BoxStyle {
             "super-thick" => BoxStyle { tl: '▛', tr: '▜', bl: '▙', br: '▟', h: '█', v: '█' },
             "ascii" => BoxStyle { tl: '+', tr: '+', bl: '+', br: '+', h: '-', v: '|' },
             "borderless" => BoxStyle { tl: ' ', tr: ' ', bl: ' ', br: ' ', h: ' ', v: ' ' },
+            _ => return None,
+        })
+    }
+
+    /// All known preset names for a cross-layer ghost's outline, in display order (SQ-1356).
+    pub fn ghost_preset_names() -> &'static [&'static str] {
+        &["dashed", "dotted", "ascii"]
+    }
+
+    /// A ghost box's broken outline, or `None` for an unknown name.
+    ///
+    /// Every preset keeps SOLID corners: a box whose corners are also broken stops reading as a
+    /// box at 11x5, which is the size the drawn map has to say all this in. Only the runs break.
+    ///
+    /// - "dashed"  — `╌`/`╎` (U+254C/U+254E), the light double-dash pair (default)
+    /// - "dotted"  — `┄`/`┆` (U+2504/U+2506), the light triple-dash pair: a finer break, and the
+    ///   same glyphs `portal_path_style`'s own dotted preset draws its connectors with
+    /// - "ascii"   — `-`/`:`, for a face with no Box Drawing dashes at all; the corners come down
+    ///   to `+` with them, since a rounded corner in a `-`/`:` box would be the only non-ASCII
+    ///   glyph left and would defeat the point of asking for this preset
+    pub fn ghost_preset(name: &str) -> Option<BoxStyle> {
+        Some(match name {
+            "dashed" => BoxStyle { tl: '╭', tr: '╮', bl: '╰', br: '╯', h: '╌', v: '╎' },
+            "dotted" => BoxStyle { tl: '╭', tr: '╮', bl: '╰', br: '╯', h: '┄', v: '┆' },
+            "ascii" => BoxStyle { tl: '+', tr: '+', bl: '+', br: '+', h: '-', v: ':' },
             _ => return None,
         })
     }
@@ -1040,6 +1076,8 @@ impl SymbolSet {
             room_current: SymbolSet::default().room_current,
             room_portal: SymbolSet::default().room_portal,
             room_selected: BoxStyle::preset(&cfg.box_style).unwrap_or_else(|| SymbolSet::default().room_selected),
+            room_ghost: BoxStyle::ghost_preset(&cfg.ghost_box_style)
+                .unwrap_or_else(|| SymbolSet::default().room_ghost),
             arrows: Arrows::preset(&cfg.arrow_set).unwrap_or_else(|| SymbolSet::default().arrows),
             path: PathGlyphs::preset(&cfg.path_style).unwrap_or_else(|| SymbolSet::default().path),
             portal: PortalGlyphs::preset(&cfg.portal_icons).unwrap_or_else(|| SymbolSet::default().portal),
@@ -1081,6 +1119,7 @@ impl SymbolSet {
     pub fn from_preset_names(box_: &str, arrow: &str, portal: &str, path: &str) -> SymbolSet {
         let cfg = crate::config::SymbolConfig {
             box_style: box_.to_owned(),
+            ghost_box_style: crate::config::default_ghost_box_style(),
             arrow_set: arrow.to_owned(),
             portal_icons: portal.to_owned(),
             path_style: path.to_owned(),
@@ -1368,6 +1407,7 @@ mod tests {
     fn from_preset_names_matches_resolve() {
         let cfg = crate::config::SymbolConfig {
             box_style: "ascii".into(),
+            ghost_box_style: crate::config::default_ghost_box_style(),
             arrow_set: "filled".into(),
             portal_icons: "ascii".into(),
             path_style: "light".into(),

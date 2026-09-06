@@ -155,6 +155,7 @@ version = 1   # style schema version — do not remove; lets lanthorn flag an ou
 # room_current = { parent = "accent" }
 # room_selected = { parent = "accent", reversed = true }
 # room_alias_marker = { parent = "muted" }
+# room_ghost = { parent = "muted" }
 # room_random_stub = { parent = "alert" }
 # connector = { parent = "accent" }
 # room_stacked_exit = { parent = "map.room", reversed = true }
@@ -174,6 +175,7 @@ version = 1   # style schema version — do not remove; lets lanthorn flag an ou
 # "edge:asym" = { parent = "map.connector" }
 # trail = { parent = "muted" }
 # box_style = "rounded"   # rounded | thick | double | solid | super-thick | ascii | borderless
+# ghost_box_style = "dashed"   # dashed | dotted | ascii   (the broken border of a room on ANOTHER layer)
 # arrow_set = "filled"   # filled | line | nerdfont | nf-bold | nf-box | nf-chevron | nf-circle | nf-outline | nf-thick | nf-wind | nf-thin
 # portal_icons = "ascii"   # ascii | nerdfont | nerdfont-stairs
 # path_style = "light"   # light | heavy | dotted
