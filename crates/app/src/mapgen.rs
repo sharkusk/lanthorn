@@ -363,9 +363,19 @@ pub struct LayerSplit {
     pub maze: bool,
 }
 
-/// The compass-connected cluster of maze-named rooms containing `start`, all on
-/// the layer `start` is on — every step of the walk, not just its first, must
+/// The connected cluster of maze-named rooms containing `start`, all on the
+/// layer `start` is on — every step of the walk, not just its first, must
 /// [`mapper::suggest::mentions_maze`].
+///
+/// **Vertical passages count here, unlike everywhere else a region is walked**
+/// (SQ-1372). A portal is a boundary between FLOORS, and that is exactly what
+/// `planar_region` is right to stop at — but a maze is one warren whose name
+/// says so, and the twisty little passage that happens to go UP is no more a
+/// change of floor than the one that goes north. Adventure's "all alike" maze
+/// is fourteen rooms hanging together through six `u_to`/`d_to` links, and
+/// stopping at those split it into layers of eleven, three and ONE — three
+/// floor plans of a warren that has no floors. The name filter is what keeps
+/// this walk honest (see below); the direction never was.
 ///
 /// This is deliberately **not** [`mapper::layer::planar_region`], which has no
 /// way to stop at a name and sweeps up anything compass-reachable regardless —
@@ -393,9 +403,6 @@ fn maze_region(graph: &MapGraph, start: RoomId) -> mapper::layer::Region {
     q.push_back(start);
     while let Some(cur) = q.pop_front() {
         for c in graph.connections() {
-            if mapper::direction::grid_offset(c.dir).is_none() {
-                continue; // a portal is a boundary, exactly as for planar_region
-            }
             let other = if c.origin == cur {
                 c.dest
             } else if c.dest == cur {
@@ -412,6 +419,77 @@ fn maze_region(graph: &MapGraph, start: RoomId) -> mapper::layer::Region {
         }
     }
     mapper::layer::Region { anchor: start, rooms }
+}
+
+/// Rename maze layers that share a name, after the room each is ENTERED FROM
+/// (SQ-1372) — "Maze (off At West End of Hall of Mists)".
+///
+/// Every room of a maze is called the same thing; that is what a maze is, and
+/// it is why the layer a maze region becomes takes that one name. A story with
+/// TWO mazes therefore ends up with two layers called "Maze", which names
+/// neither of them: Adventure ships an "all alike" maze and an "all different"
+/// one, and its alike maze arrives in two pieces besides (`At Brink of Pit` is
+/// a named room standing in the middle of it, and [`maze_region`]'s walk stops
+/// at a name).
+///
+/// The entrance is the disambiguator a player already uses — the maze *off the
+/// Hall of Mists*, the one *off the Long Hall* — and it is a fact of the map
+/// rather than an ordinal, so it does not renumber when a story is re-read.
+/// Where a region has several outside neighbours, the one with the most edges
+/// into it wins, ties going to the lowest room id; a `#2` suffix is the last
+/// resort for two layers that really are entered from the same room, so that
+/// layer names stay unique whatever the map does.
+///
+/// Only layers whose name is NOT unique are touched: one maze in a story stays
+/// plainly "Maze".
+fn name_maze_layers_by_entrance(graph: &mut MapGraph, splits: &mut [LayerSplit]) {
+    let mut count: BTreeMap<String, usize> = BTreeMap::new();
+    for m in graph.layers().values() {
+        *count.entry(m.name.clone()).or_default() += 1;
+    }
+    let mut used: BTreeSet<String> = graph.layers().values().map(|m| m.name.clone()).collect();
+    let ambiguous: Vec<usize> = splits
+        .iter()
+        .enumerate()
+        .filter(|(_, s)| s.maze && count.get(&s.name).copied().unwrap_or(0) > 1)
+        .map(|(i, _)| i)
+        .collect();
+    for i in ambiguous {
+        let Some(entrance) = maze_entrance(graph, splits[i].id) else { continue };
+        let base = format!("{} (off {})", splits[i].name, entrance);
+        let mut name = base.clone();
+        let mut n = 2;
+        while !used.insert(name.clone()) {
+            name = format!("{base} #{n}");
+            n += 1;
+        }
+        graph.set_layer_name(splits[i].id, name.clone());
+        splits[i].name = name;
+    }
+}
+
+/// The room `layer` is most entered from: the room OUTSIDE it with the most
+/// edges into it, ties to the lowest room id. `None` for a layer nothing leads
+/// into. See [`name_maze_layers_by_entrance`].
+fn maze_entrance(graph: &MapGraph, layer: mapper::layer::LayerId) -> Option<String> {
+    let mut edges: BTreeMap<RoomId, usize> = BTreeMap::new();
+    for c in graph.connections() {
+        if c.is_self_loop() {
+            continue;
+        }
+        let outside = match (graph.layer_of(c.origin) == layer, graph.layer_of(c.dest) == layer) {
+            (true, false) => c.dest,
+            (false, true) => c.origin,
+            _ => continue,
+        };
+        *edges.entry(outside).or_default() += 1;
+    }
+    // `BTreeMap` iterates by ascending room id, and `max_by_key` keeps the LAST
+    // maximum — so reverse the id to make a tie fall to the lowest.
+    edges
+        .into_iter()
+        .max_by_key(|&(id, n)| (n, std::cmp::Reverse(id)))
+        .and_then(|(id, _)| graph.room(id).map(|r| r.label().to_string()))
 }
 
 /// SQ-1311: absorb onto a maze layer any room still on Main whose EVERY
@@ -557,6 +635,9 @@ pub fn split_layers(graph: &mut MapGraph, opts: &MapgenOptions) -> Vec<LayerSpli
     for split in splits.iter_mut().filter(|s| s.maze) {
         split.rooms = graph.rooms_in_layer(split.id).len();
     }
+
+    // ── 1c. Tell one maze from another ─────────────────────────────────────
+    name_maze_layers_by_entrance(graph, &mut splits);
 
     // ── 2. Portal-only regions among what is left on Main ──────────────────
     let mut seen: BTreeSet<RoomId> = BTreeSet::new();
@@ -1259,7 +1340,7 @@ fn zmachine_map(bytes: &[u8], file: String) -> Result<GeneratedMap, GenError> {
     // itself, and excluding it would leave that edge dangling.
     let mut pseudo_rooms: BTreeSet<u16> = BTreeSet::new();
     for (&obj, here) in &declares {
-        if !zvm::objects::short_name(&mem, obj).trim().is_empty() {
+        if !zvm::objects::printed_name(&mem, obj).trim().is_empty() {
             continue;
         }
         let self_or_nowhere = here.iter().all(|&(_, detail)| match detail.destination() {
@@ -1292,7 +1373,7 @@ fn zmachine_map(bytes: &[u8], file: String) -> Result<GeneratedMap, GenError> {
         .iter()
         .map(|&obj| RawRoom {
             id: obj as RoomId,
-            name: zvm::objects::short_name(&mem, obj),
+            name: zvm::objects::printed_name(&mem, obj),
             engine_ref: EngineRef::ZObject(obj),
         })
         .collect();
@@ -1319,7 +1400,7 @@ fn zmachine_map(bytes: &[u8], file: String) -> Result<GeneratedMap, GenError> {
                 zvm::world::ExitDetail::Door { dest, door } => (
                     dest,
                     EdgeKind::Door,
-                    Some(zvm::objects::short_name(&mem, door)),
+                    Some(zvm::objects::printed_name(&mem, door)),
                     None,
                 ),
                 // Deliberately no claim about WHAT the condition is: the
@@ -1600,7 +1681,7 @@ fn i6_glulx_map(
         .iter()
         .map(|&addr| RawRoom {
             id: crate::roomid::glulx_room_id(addr),
-            name: names.short_name(mem, addr).unwrap_or_default(),
+            name: names.printed_name(mem, addr).unwrap_or_default(),
             engine_ref: EngineRef::GlulxAddr(addr),
         })
         .collect();
