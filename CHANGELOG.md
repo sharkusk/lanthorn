@@ -144,6 +144,17 @@ Absolute URLs or no link.
 
 ### Fixed
 
+- **Passages on the map stop wandering.** A line between two rooms with nothing
+  in the way now goes straight there — one corner if it has to turn, none at
+  all if the two ends line up — instead of stepping sideways into the gutter,
+  running along, and stepping back. In Zork I, *West of House → Forest* used to
+  set off west and then loop up and around the Attic to come back at the forest
+  from the far side; it is two turns now instead of five. The whole Zork I map
+  lost about a fifth of its corners. A line still detours to get around a room
+  box, or to keep clear of another passage — a passage vanishing under its
+  neighbour is worse than a bend — but it no longer detours for nothing. This
+  is one router, so the terminal map and the exported SVG both straighten out.
+
 - **A game served to a browser no longer loses progress when the connection
   drops.** Every turn was played, and none of it was written down: the served
   container never turned on saving after each turn, so a closed tab or a

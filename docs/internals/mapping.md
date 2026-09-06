@@ -413,6 +413,32 @@ Two things enforce that, and they answer different halves of it:
   the farther lane — so lane order is settled by which room each end reaches, before anything
   else is decided.
 
+**And a turn nothing forced is a defect too.** With nothing in the way, a connector should be a
+straight line where its two ends line up and a single corner where they do not; anything longer
+is the map making the reader trace a detour to find out it went nowhere. So bends are priced
+directly, and priced above crossings — a crossing is legible, a detour is not.
+
+Three things buy that:
+
+- **Both L orientations, always.** The router used to build one canonical route per connector
+  (turn horizontally first, then vertically) and only consider the other way round while hunting
+  for a crossing to remove. It now costs both every time, so "which way round is fewer turns" is
+  a question it can actually answer.
+- **The L on the anchors themselves.** Every long run used to be pushed out into a gutter channel
+  before it turned, which is safe everywhere and costs one extra bend at each end. Where nothing
+  is in the way, the connector may now run straight along the destination's own row or column
+  instead — the same thing an ordinary short straight passage does. That leg carries no lane, so
+  it is offered only when every room cell it passes through is empty, and never where two rooms
+  in that row or column are joined to each other: their passage is a straight line down it or a
+  detour, while a connector merely passing through always has the gutter to fall back on.
+- **A corner may leave the box either way.** A side doorway has one way out, straight through it.
+  A box *corner* — where a diagonal passage anchors — sits on two edges and can leave along
+  either, so it leaves along whichever one continues the run already coming in, and the two merge
+  into one line instead of stepping around each other.
+
+Measured on Zork I, that took the whole map from 151 drawn turns to 122 — with `West of House →
+Forest`, which used to loop up and around the Attic, down from five turns to two.
+
 The one shape that still defeats it is two DIAGONALS crossing inside a single gap. A diagonal is
 drawn as an orthogonal dogleg (out of the box corner, down the gutter, along to the far corner),
 and two doglegs crossing in one gap have to share a row at both ends — there is no pair of lanes
