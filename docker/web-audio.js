@@ -11,6 +11,12 @@
 // `?arg=--web-session=ID` (SQ-1323). Minting one here as well would have given
 // the audio socket a different name from the one the game session is filed
 // under. With no id there is no FIFO to name, and the page is simply silent.
+//
+// AND THE SOCKET COMES BACK (SQ-1328). The game outlives a dropped connection
+// and so does its FIFO, so the audio socket is reopened with the SAME id after
+// a drop and the sound picks up where the game is now — not where it was. Each
+// attach opens with a fresh header frame, and the queue is emptied when one
+// arrives: whatever was still buffered belongs to a connection that is over.
 (function () {
   var session = window.LANTHORN_SESSION_ID;
   if (typeof session !== "string" || !/^[A-Za-z0-9_-]{8,64}$/.test(session)) {
@@ -18,13 +24,11 @@
   }
   var port = window.LANTHORN_WEB_AUDIO_PORT || 7682;
   var scheme = window.location.protocol === "https:" ? "wss" : "ws";
-  var ws;
-  try {
-    ws = new WebSocket(scheme + "://" + window.location.hostname + ":" + port + "/audio/" + session);
-  } catch (e) {
-    return;
-  }
-  ws.binaryType = "arraybuffer";
+  var url = scheme + "://" + window.location.hostname + ":" + port + "/audio/" + session;
+  var ws = null;
+  var retry = 500;                      // ms, doubling to RETRY_MAX
+  var RETRY_MAX = 8000;
+  var closing = false;
 
   var rate = 44100, channels = 2;
   var ctx = null, node = null;
@@ -50,13 +54,18 @@
     window.addEventListener(ev, ensureContext, { capture: true, passive: true });
   });
 
-  ws.onmessage = function (e) {
+  function onMessage(e) {
     if (typeof e.data === "string") {
       try {
         var h = JSON.parse(e.data);
         rate = h.rate || rate;
         channels = h.channels || channels;
       } catch (err) { /* not ours */ }
+      // A header opens every attachment, this one included: start the decoder
+      // clean rather than playing out a queue from a connection that is over.
+      queue = [];
+      queued = 0;
+      primed = false;
       return;
     }
     var pcm = new Int16Array(e.data);
@@ -64,7 +73,42 @@
     queued += pcm.length;
     var cap = rate * channels * CAP_SECONDS;
     while (queued > cap && queue.length > 1) { queued -= queue.shift().length; }
-  };
+  }
+
+  function connect() {
+    try {
+      ws = new WebSocket(url);
+    } catch (e) {
+      ws = null;
+      reconnect();
+      return;
+    }
+    ws.binaryType = "arraybuffer";
+    ws.onmessage = onMessage;
+    ws.onopen = function () { retry = 500; };
+    // Both ends of a dropped connection: the relay is still draining the game's
+    // FIFO for this id, so coming back is a matter of asking again.
+    ws.onclose = reconnect;
+    ws.onerror = function () { /* onclose follows */ };
+  }
+
+  function reconnect() {
+    if (closing) { return; }
+    window.setTimeout(connect, retry);
+    retry = Math.min(retry * 2, RETRY_MAX);
+  }
+
+  // A page that is going away must not spend its last moments reconnecting —
+  // but a page merely FROZEN into the back/forward cache (`persisted`, which is
+  // what a backgrounded tab on a phone does) is coming back, and its timers
+  // come back with it, so that one is left alone to reconnect on its own.
+  window.addEventListener("pagehide", function (e) {
+    if (e.persisted) { return; }
+    closing = true;
+    if (ws) { try { ws.close(); } catch (err) { /* already gone */ } }
+  });
+
+  connect();
 
   function fill(ev) {
     var out = [];

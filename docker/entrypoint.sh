@@ -29,11 +29,11 @@
 #                             resumes it mid-sentence instead of starting
 #                             over. Needs the page's session id (see
 #                             docker/web-session.js) and `dtach`; without
-#                             either it quietly behaves as `off`. A
-#                             detachable session plays into the paced sink
-#                             rather than the browser — see the audio note in
-#                             docker/serve-session.sh for why the two cannot
-#                             both be had.
+#                             either it quietly behaves as `off`. Sound
+#                             survives the drop with it (SQ-1328): the audio
+#                             FIFO belongs to the session, not to the
+#                             websocket, and the relay keeps draining it while
+#                             nobody is listening.
 #   LANTHORN_WEB_SESSION_TTL  seconds a detached game with nobody attached is
 #                             kept before it is ended (default 21600, six
 #                             hours). Ending it is a SIGTERM, so the app
@@ -125,8 +125,19 @@ stale_sessions() {
 # The socket check is the guard against a recycled pid: a session whose master is
 # already gone has no socket, and its stale pid file must not be allowed to name
 # somebody else's process.
+#
+# $4, the audio directory, is the RELAY's half of ending a session (SQ-1328).
+# The session's FIFO now outlives every websocket, so somebody has to say when
+# the game it belonged to is gone — and unlinking `<id>.pcm` is that word. The
+# relay holds the pipe's write end itself and can never see an EOF, so it
+# watches for the path instead, and notices within half a second. Said with a
+# `rm` rather than a request to the relay because this is a CONDITION it can
+# poll: a control message that went astray would leak a reader thread and an
+# open pipe for the life of the container, where a missed sweep merely waits for
+# the next one.
 reap_stale_sessions() {
     _dir="$1"
+    _audio="${4:-}"
     stale_sessions "$1" "$2" "$3" | while IFS= read -r _id; do
         _pid="$(cat "$_dir/$_id.pid" 2>/dev/null || printf '')"
         case "$_pid" in
@@ -136,6 +147,9 @@ reap_stale_sessions() {
             kill -TERM "$_pid" 2>/dev/null || true
         fi
         rm -f "$_dir/$_id.seen" "$_dir/$_id.pid"
+        if [ -n "$_audio" ]; then
+            rm -f "$_audio/$_id.pcm"
+        fi
     done
 }
 
@@ -319,9 +333,29 @@ if [ "${1:-}" = "serve" ]; then
     # Detached sessions: where they live, and the loop that ends the abandoned
     # ones. Started before ttyd so it is already sweeping when the first
     # connection arrives, and it survives the `exec` below as ttyd's own child.
+    # Whether sessions detach is settled HERE, once, for everybody: the wrapper
+    # points a game at its FIFO or at the sink on this answer, and the relay
+    # decides on the same answer how long that FIFO lives (SQ-1328). Read
+    # separately at each end, a container without dtach would have the wrapper
+    # saying "one game per websocket" while the relay kept every FIFO — and a
+    # session nothing ever reaps holds a reader thread until the container
+    # stops. So the dtach check lives here and the conclusion is exported.
     detach_on=""
     if [ "${LANTHORN_WEB_DETACH:-on}" != "off" ]; then
-        detach_on="1"
+        if command -v dtach >/dev/null 2>&1; then
+            detach_on="1"
+        else
+            echo "lanthorn: dtach is not installed; sessions will not survive a dropped connection" >&2
+        fi
+    fi
+    if [ -n "$detach_on" ]; then
+        LANTHORN_WEB_DETACH=on
+    else
+        LANTHORN_WEB_DETACH=off
+    fi
+    export LANTHORN_WEB_DETACH
+
+    if [ -n "$detach_on" ]; then
         session_dir="${LANTHORN_WEB_SESSION_DIR:-/tmp/lanthorn-sessions}"
         export LANTHORN_WEB_SESSION_DIR="$session_dir"
         mkdir -p "$session_dir"
@@ -329,7 +363,7 @@ if [ "${1:-}" = "serve" ]; then
         (
             while :; do
                 sleep "${LANTHORN_WEB_SESSION_SWEEP:-300}"
-                reap_stale_sessions "$session_dir" "$(date +%s)" "$session_ttl"
+                reap_stale_sessions "$session_dir" "$(date +%s)" "$session_ttl" "$LANTHORN_AUDIO_DIR"
             done
         ) &
         # Named so it can be found: `exec ttyd` below replaces this shell, which

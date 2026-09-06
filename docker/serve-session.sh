@@ -18,19 +18,22 @@
 #                 a dropped connection ends the game (which still auto-saves —
 #                 see --auto-save in docker/entrypoint.sh).
 #
-# AUDIO, AND THE TRADE. Browser sound arrives over a FIFO the relay creates when
-# the audio socket opens and UNLINKS when it closes (crates/audio-relay), so it
-# is a property of the CONNECTION. A detached game outlives its connection, and
-# its ALSA output was bound to that FIFO at the first sound and cannot be
-# re-pointed afterwards; writing into a pipe with no reader is how an audio
-# thread wedges. So a detachable session plays into the entrypoint's paced sink
-# instead: silent in the browser, and never stuck. `LANTHORN_WEB_DETACH=off`
-# takes the other side of the trade — sound, but a dropped connection ends the
-# game.
+# AUDIO. Browser sound arrives over a FIFO named after the same session id, and
+# since SQ-1328 that FIFO belongs to the SESSION rather than to the websocket:
+# the relay creates it on the page's first audio socket and goes on reading it —
+# draining at real time and discarding — while nobody is attached, so a detached
+# game is never writing into a pipe nobody reads. Both modes therefore point
+# LANTHORN_AUDIO_OUT at the session's own FIFO, and a game that drops its
+# connection keeps its sound for whoever comes back to it.
 #
-# No FIFO and no detach (a page without the script, audio switched off, a
-# blocked socket) means LANTHORN_AUDIO_OUT points at the paced sink and the
-# session is silent: as before.
+# The wait below is only ever paid ONCE per game. A game's ALSA path is fixed
+# when it opens the device and nothing here can re-point it afterwards, so a
+# REATTACH — a dtach socket already exists for this id — has nothing to wait for
+# and does not.
+#
+# No FIFO (a page without the script, audio switched off, a blocked socket)
+# means LANTHORN_AUDIO_OUT points at the entrypoint's paced sink and the session
+# is silent: as before, and never spinning a core on /dev/null.
 set -eu
 
 # --- functions (docker/test-entrypoint.sh sources everything above the marker
@@ -84,15 +87,32 @@ if [ "${LANTHORN_WEB_DETACH:-on}" != "off" ] && [ -n "$session" ] && command -v 
     detach="1"
 fi
 
-if [ -z "$detach" ] && [ -n "$session" ]; then
+sock=""
+if [ -n "$detach" ]; then
+    sock="$(session_socket "$session_dir" "$session")"
+fi
+
+# Is this connection joining a game that is already running? Then its ALSA path
+# was settled when that game started, and the wait below would buy nothing.
+attaching=""
+if [ -n "$sock" ] && [ -S "$sock" ]; then
+    attaching="1"
+fi
+
+if [ -n "$session" ] && [ "${LANTHORN_WEB_AUDIO:-on}" != "off" ]; then
     fifo="$audio_dir/$session.pcm"
-    # The page opens the audio socket before the terminal one, but the two
-    # handshakes race; give the relay up to two seconds to create the FIFO.
-    tries=0
-    while [ ! -p "$fifo" ] && [ "$tries" -lt 20 ]; do
-        sleep 0.1
-        tries=$((tries+1))
-    done
+    if [ -z "$attaching" ]; then
+        # The page opens the audio socket before the terminal one, but the two
+        # handshakes race; give the relay up to two seconds to create the FIFO.
+        tries=0
+        while [ ! -p "$fifo" ] && [ "$tries" -lt 20 ]; do
+            sleep 0.1
+            tries=$((tries+1))
+        done
+    fi
+    # Named even on a reattach, where it costs nothing and covers the one case
+    # `-S` reads wrong: a socket left behind by a master that died without
+    # unlinking it, which `dtach -A` answers by starting a NEW game.
     if [ -p "$fifo" ]; then
         export LANTHORN_AUDIO_OUT="$fifo"
     fi
@@ -109,7 +129,6 @@ if [ -z "$detach" ]; then
 fi
 
 mkdir -p "$session_dir"
-sock="$(session_socket "$session_dir" "$session")"
 seen="$session_dir/$session.seen"
 pid_file="$session_dir/$session.pid"
 

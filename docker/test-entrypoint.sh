@@ -576,6 +576,160 @@ run_grab_dispatch
 check "LANTHORN_WEB_GRAB_ZONE=99: out of range is ignored too" "$?"
 unset LANTHORN_WEB_GRAB_ZONE
 
+# --- the reaper's audio half (SQ-1328) ---
+#
+# A session's audio FIFO now outlives every websocket, so ending the session has
+# to end the FIFO too — and unlinking it is the ONLY word the relay ever gets
+# that the game is gone (it holds the pipe's write end itself, so there is no
+# EOF to see). Leave it behind and a reader thread and an open pipe stay for the
+# life of the container; take the wrong one and a live game goes silent.
+
+reap_dir="$fixture_dir/sessions-reap"
+reap_audio="$fixture_dir/audio-reap"
+mkdir -p "$reap_dir" "$reap_audio"
+printf '%s\n' "$now" > "$reap_dir/freshsession01.seen"
+printf '%s\n' "$((now - 999999))" > "$reap_dir/ancientone01.seen"
+mkfifo "$reap_audio/freshsession01.pcm"
+mkfifo "$reap_audio/ancientone01.pcm"
+
+reap_stale_sessions "$reap_dir" "$now" "$ttl" "$reap_audio"
+
+[ ! -p "$reap_audio/ancientone01.pcm" ]
+check "reaper: an ended session's audio FIFO is unlinked, which is how the relay hears about it" "$?"
+
+[ -p "$reap_audio/freshsession01.pcm" ]
+check "reaper: a live session's FIFO is left exactly where its game is writing" "$?"
+
+[ ! -f "$reap_dir/ancientone01.seen" ]
+check "reaper: an ended session's bookkeeping is forgotten" "$?"
+
+[ -f "$reap_dir/freshsession01.seen" ]
+check "reaper: a live session's stamp survives the sweep" "$?"
+
+# The audio directory is a fourth argument with a default, and `set -u` would
+# abort the whole sweep on an unset $4 — so a three-argument call must still
+# end the session it was called about.
+printf '%s\n' "$((now - 999999))" > "$reap_dir/ancienttwo01.seen"
+reap_stale_sessions "$reap_dir" "$now" "$ttl"
+[ ! -f "$reap_dir/ancienttwo01.seen" ]
+check "reaper: called without an audio directory it still ends the session" "$?"
+
+# --- the wrapper's audio path, per mode (SQ-1328) ---
+#
+# Since the FIFO belongs to the session rather than to the websocket, BOTH modes
+# point a game at its own `<id>.pcm`; only the absence of one falls back to the
+# paced sink. Nothing but the environment the game is actually launched in
+# settles that, so these run the real wrapper with a stub `dtach` and a stub
+# game and read back the LANTHORN_AUDIO_OUT each was handed.
+
+wrap_audio="$fixture_dir/wrap-audio"
+wrap_sess="$fixture_dir/wrap-sessions"
+wrap_id="wrappersession1"
+GAME_ENV_OUT="$fixture_dir/game_audio_out.txt"
+DTACH_ARGS_OUT="$fixture_dir/dtach_args.txt"
+export GAME_ENV_OUT DTACH_ARGS_OUT
+
+cat > "$stub_dir/fake-game" <<'STUB'
+#!/bin/sh
+# The wrapper execs this in non-detach mode; all it has to do is say where its
+# sound was pointed.
+printf '%s\n' "${LANTHORN_AUDIO_OUT:-<unset>}" > "$GAME_ENV_OUT"
+STUB
+
+# From here on `dtach` records rather than merely existing: the environment it
+# would have started the game in is where the audio path actually lands. (The
+# dispatch checks above ran against the do-nothing stub, and must stay above
+# this line.)
+cat > "$stub_dir/dtach" <<'STUB'
+#!/bin/sh
+printf '%s\n' "${LANTHORN_AUDIO_OUT:-<unset>}" > "$GAME_ENV_OUT"
+printf '%s\n' "$@" > "$DTACH_ARGS_OUT"
+STUB
+chmod +x "$stub_dir/fake-game" "$stub_dir/dtach"
+
+# $1 = LANTHORN_WEB_DETACH, $2 = LANTHORN_WEB_AUDIO, $3 = the session argument
+# (empty for a page that sent none). Leaves the game's audio path in
+# $GAME_ENV_OUT and the elapsed seconds in $wrap_seconds.
+run_wrapper() {
+    rm -f "$GAME_ENV_OUT" "$DTACH_ARGS_OUT"
+    _start="$(date +%s)"
+    (
+        PATH="$stub_dir:$PATH"
+        LANTHORN_AUDIO_DIR="$wrap_audio"
+        LANTHORN_WEB_SESSION_DIR="$wrap_sess"
+        LANTHORN_WEB_DETACH="$1"
+        LANTHORN_WEB_AUDIO="$2"
+        export PATH LANTHORN_AUDIO_DIR LANTHORN_WEB_SESSION_DIR LANTHORN_WEB_DETACH LANTHORN_WEB_AUDIO
+        if [ -n "$3" ]; then
+            sh "$repo_root/docker/serve-session.sh" "--web-session=$3" fake-game
+        else
+            sh "$repo_root/docker/serve-session.sh" fake-game
+        fi
+    ) >/dev/null 2>&1
+    wrap_seconds="$(( $(date +%s) - _start ))"
+}
+
+wrap_says() {
+    [ "$(cat "$GAME_ENV_OUT" 2>/dev/null || printf '')" = "$1" ]
+}
+
+rm -rf "$wrap_audio" "$wrap_sess"
+mkdir -p "$wrap_audio" "$wrap_sess"
+mkfifo "$wrap_audio/null.pcm"
+mkfifo "$wrap_audio/$wrap_id.pcm"
+
+# 1. Detachable, with the relay's FIFO already there: the game plays into it.
+#    This is the whole quest — before SQ-1328 this case chose the paced sink.
+run_wrapper on on "$wrap_id"
+wrap_says "$wrap_audio/$wrap_id.pcm"
+check "wrapper: a detachable session is pointed at its own FIFO, not at the sink" "$?"
+
+grep -qxF -- "/usr/local/bin/lanthorn-session-run" "$DTACH_ARGS_OUT"
+check "wrapper: ...and it is still a dtach session, started through session-run" "$?"
+
+# 2. One game per websocket: the same FIFO, chosen the same way.
+run_wrapper off on "$wrap_id"
+wrap_says "$wrap_audio/$wrap_id.pcm"
+check "LANTHORN_WEB_DETACH=off: the game still plays into the session's FIFO" "$?"
+
+[ ! -f "$DTACH_ARGS_OUT" ]
+check "LANTHORN_WEB_DETACH=off: ...and dtach is not involved at all" "$?"
+
+# 3. No id from the page (no script, or a browser that refuses storage): there
+#    is no FIFO to name, and the paced sink is what stops the audio thread
+#    spinning a core on /dev/null.
+run_wrapper on on ""
+wrap_says "$wrap_audio/null.pcm"
+check "wrapper: a session with no id plays into the paced sink" "$?"
+
+# 4. Audio switched off for the whole container: the sink, and no waiting about
+#    for a FIFO that no relay is going to create.
+rm -f "$wrap_audio/$wrap_id.pcm"
+run_wrapper on off "$wrap_id"
+wrap_says "$wrap_audio/null.pcm"
+check "LANTHORN_WEB_AUDIO=off: the session plays into the paced sink" "$?"
+
+[ "$wrap_seconds" -lt 2 ]
+check "LANTHORN_WEB_AUDIO=off: ...without waiting two seconds for a FIFO nobody will make (took ${wrap_seconds}s)" "$?"
+
+# 5. A reattach — the id already has a dtach socket — must not wait either. The
+#    running game's ALSA path was settled when it started and nothing here can
+#    re-point it, so a wait here would be two seconds added to every reconnect.
+#    `-S` means a real unix socket and nothing else, which shell alone cannot
+#    make; without python3 this one check is skipped rather than faked, since a
+#    regular file would exercise the opposite branch and still pass.
+if command -v python3 >/dev/null 2>&1; then
+    python3 -c 'import socket,sys
+s = socket.socket(socket.AF_UNIX)
+s.bind(sys.argv[1])' "$wrap_sess/$wrap_id.sock"
+    run_wrapper on on "$wrap_id"
+    [ "$wrap_seconds" -lt 2 ]
+    check "wrapper: a reattach does not wait for a FIFO (took ${wrap_seconds}s)" "$?"
+    rm -f "$wrap_sess/$wrap_id.sock"
+else
+    echo "SKIP: reattach timing (needs python3 to make a unix socket)"
+fi
+
 if [ "$fail" != "0" ]; then
     echo "docker/test-entrypoint.sh: FAILED" >&2
     exit 1
