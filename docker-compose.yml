@@ -69,6 +69,12 @@ services:
     # environment:
     #   LANTHORN_WEB_SESSION_TTL: "21600"
     #
+    # Uncomment to change how wide the draggable pane boundaries are, in
+    # cells (1-6, or `off` to leave lanthorn's own default of 2 alone). The
+    # browser image seeds 4, because a fingertip is not a mouse pointer:
+    # environment:
+    #   LANTHORN_WEB_GRAB_ZONE: "4"
+    #
     # Uncomment to turn the whole thing off and take the other side of the
     # trade: a dropped connection ends the game (its progress still saved and
     # resumed next time), and in exchange the browser gets the game's SOUND,

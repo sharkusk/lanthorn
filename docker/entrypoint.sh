@@ -46,6 +46,14 @@
 #                             written after each turn. A pty that can vanish
 #                             under a game wants this; a desktop lanthorn
 #                             still defaults to off.
+#   LANTHORN_WEB_GRAB_ZONE    how many cells wide the draggable pane
+#                             boundaries are (1-6, default 4, or `off` to
+#                             leave the setting alone). A fingertip is not a
+#                             mouse pointer, and lanthorn's own default of 2
+#                             is drawn for a pointer. Unlike the knobs above
+#                             this has no command-line flag, so it is SEEDED
+#                             into $HOME/.lanthorn/config.toml — once, and
+#                             never over a value the player has already set.
 #   LANTHORN_WEB_IMAGES       sixel (default) or halfblocks: how pictures are
 #                             sent to the browser. ttyd's xterm.js can render
 #                             sixel, so covers and v6 art show as real images;
@@ -129,6 +137,49 @@ reap_stale_sessions() {
         fi
         rm -f "$_dir/$_id.seen" "$_dir/$_id.pid"
     done
+}
+
+# Whether `file` already SETS `key` — an uncommented `key = …` at the start of a
+# line, which is the only form actually in force. A commented `# key = 2` in
+# lanthorn's own seeded template is documentation, not a decision, and must not
+# stop the container stating a default beside it.
+config_sets_key() {
+    [ -f "$1" ] || return 1
+    grep -qE "^[[:space:]]*$2[[:space:]]*=" "$1"
+}
+
+# Put `key = value` into `file` unless the player has already said something
+# about it (SQ-1327). For a setting the container wants a different DEFAULT for
+# and that has no command-line flag to say it with.
+#
+# Inserted before the file's first `[table]` header, never appended: lanthorn's
+# seeded config.toml carries real section headers, and a top-level key written
+# after one would silently become a key IN that section.
+#
+# A file that does not exist yet is created holding just this line. That costs
+# the player nothing — `config_template::top_up` appends every documented
+# setting an existing file has never held, commented, on the next launch — so
+# they still end up with the full annotated catalogue, with this one key already
+# answered.
+seed_config_key() {
+    _file="$1"
+    _key="$2"
+    _value="$3"
+    if config_sets_key "$_file" "$_key"; then
+        return 0
+    fi
+    mkdir -p "$(dirname "$_file")" 2>/dev/null || return 0
+    if [ ! -f "$_file" ]; then
+        printf '%s = %s\n' "$_key" "$_value" > "$_file" 2>/dev/null || true
+        return 0
+    fi
+    _tmp="$_file.lanthorn-seed"
+    awk -v line="$_key = $_value" '
+        !seeded && /^[[:space:]]*\[/ { print line; print ""; seeded = 1 }
+        { print }
+        END { if (!seeded) print line }
+    ' "$_file" > "$_tmp" 2>/dev/null && mv "$_tmp" "$_file" 2>/dev/null
+    rm -f "$_tmp" 2>/dev/null || true
 }
 
 # ttyd's own page, with the served IosevkaTerm Nerd Font Mono faces always
@@ -247,6 +298,22 @@ if [ "${1:-}" = "serve" ]; then
         set -- lanthorn --image-protocol "$images" "$@"
     fi
     set -- /usr/local/bin/lanthorn-serve-session "$@"
+
+    # A fingertip is not a mouse pointer, and lanthorn's `grab_zone_cells`
+    # default of 2 is drawn for a pointer — on a tablet the splitter between the
+    # story and the map is a target a finger cannot reliably land on (SQ-1327).
+    # There is no flag for it, so it is seeded into the data home's config.toml,
+    # and only where the player has not already answered. A value that is not a
+    # number in range is ignored rather than written: an invalid `config.toml` is
+    # not merely a bad setting — `write_config_at` then refuses to save settings
+    # at all until somebody fixes the file by hand.
+    grab_zone="${LANTHORN_WEB_GRAB_ZONE:-4}"
+    case "$grab_zone" in
+        [1-6]) seed_config_key "${HOME:-/data}/.lanthorn/config.toml" grab_zone_cells "$grab_zone" ;;
+        off|'') : ;;
+        *) echo "lanthorn: ignoring LANTHORN_WEB_GRAB_ZONE=$grab_zone (want 1-6, or off)" >&2 ;;
+    esac
+
     start_sink
 
     # Detached sessions: where they live, and the loop that ends the abandoned

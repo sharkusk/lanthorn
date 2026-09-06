@@ -17,6 +17,11 @@
 # real serve dispatch actually passes `--url-arg` and `--auto-save on` on to
 # ttyd, which is the only place a correctly-resolved knob can still be dropped.
 #
+# SQ-1327 adds the touch grab zone the container seeds into the player's own
+# config.toml, which is the one knob here that writes to a file somebody else
+# owns — so every insertion point, every refusal and every idempotence case is
+# checked.
+#
 # Self-contained: builds a fixture directory instead of touching the image's
 # real /usr/local/share/lanthorn (LANTHORN_SHARE_DIR overrides it), so this
 # needs no Docker build. Run it with:
@@ -322,6 +327,93 @@ n="$(stale_sessions "$fixture_dir/no-such-dir" "$now" "$ttl" | wc -l | tr -d ' '
 [ "$n" = "0" ]
 check "reaper: a session directory that does not exist names nothing (got $n)" "$?"
 
+# --- the touch grab zone seeded into config.toml (SQ-1327) ---
+#
+# `grab_zone_cells` has no command-line flag, so the container states its
+# different default by writing the key into the player's own config.toml. That
+# makes every one of these a check on somebody's file: a wrong insertion point
+# silently moves a top-level key into a [section], and a value that is not a
+# number makes the whole file unparseable — after which lanthorn refuses to save
+# any setting at all until it is fixed by hand.
+
+cfg_dir="$fixture_dir/cfghome"
+mkdir -p "$cfg_dir"
+
+# A file shaped like lanthorn's seeded template: commented defaults, then real
+# section headers.
+template_cfg() {
+    cat > "$1" <<'CFG'
+# lanthorn config
+# volume = 30
+# grab_zone_cells = 2
+
+[map]
+# icons = "nerd"
+CFG
+}
+
+# 1. A fresh install: no file at all.
+rm -f "$cfg_dir/fresh.toml"
+seed_config_key "$cfg_dir/fresh.toml" grab_zone_cells 4
+[ "$(cat "$cfg_dir/fresh.toml")" = "grab_zone_cells = 4" ]
+check "grab zone: an absent config.toml is created holding just the key" "$?"
+
+# 2. The template: the key exists only as a COMMENT, which is documentation, not
+#    a decision — so the container may still state its default.
+template_cfg "$cfg_dir/template.toml"
+seed_config_key "$cfg_dir/template.toml" grab_zone_cells 4
+grep -qx 'grab_zone_cells = 4' "$cfg_dir/template.toml"
+check "grab zone: a commented default does not count as the player having chosen" "$?"
+
+# …and it must land BEFORE the first [table], or it becomes a key inside it.
+seed_line="$(grep -n '^grab_zone_cells = 4$' "$cfg_dir/template.toml" | head -1 | cut -d: -f1)"
+table_line="$(grep -n '^\[map\]$' "$cfg_dir/template.toml" | head -1 | cut -d: -f1)"
+[ -n "$seed_line" ] && [ -n "$table_line" ] && [ "$seed_line" -lt "$table_line" ]
+check "grab zone: the key is inserted above the first [table], not appended into it" "$?"
+
+grep -q '^# volume = 30$' "$cfg_dir/template.toml"
+check "grab zone: the rest of the player's file survives untouched" "$?"
+
+grep -q '^# icons = "nerd"$' "$cfg_dir/template.toml"
+check "grab zone: content after the first [table] survives too" "$?"
+
+[ ! -f "$cfg_dir/template.toml.lanthorn-seed" ]
+check "grab zone: no temp file is left beside the config" "$?"
+
+# 3. The player has already answered. Never clobber it.
+printf 'grab_zone_cells = 6\n\n[map]\n' > "$cfg_dir/mine.toml"
+seed_config_key "$cfg_dir/mine.toml" grab_zone_cells 4
+grep -qx 'grab_zone_cells = 6' "$cfg_dir/mine.toml"
+check "grab zone: a value the player set is left alone" "$?"
+
+n="$(grep -c 'grab_zone_cells' "$cfg_dir/mine.toml")"
+[ "$n" = "1" ]
+check "grab zone: ...and no second copy of the key is added (got $n)" "$?"
+
+# 4. Running twice must be the same as running once — the container restarts.
+template_cfg "$cfg_dir/twice.toml"
+seed_config_key "$cfg_dir/twice.toml" grab_zone_cells 4
+seed_config_key "$cfg_dir/twice.toml" grab_zone_cells 4
+n="$(grep -c '^grab_zone_cells' "$cfg_dir/twice.toml")"
+[ "$n" = "1" ]
+check "grab zone: seeding is idempotent across restarts (got $n)" "$?"
+
+# 5. Leading whitespace still counts as set — TOML allows it.
+printf '  grab_zone_cells = 3\n' > "$cfg_dir/indented.toml"
+seed_config_key "$cfg_dir/indented.toml" grab_zone_cells 4
+n="$(grep -c 'grab_zone_cells' "$cfg_dir/indented.toml")"
+[ "$n" = "1" ]
+check "grab zone: an indented key counts as set (got $n)" "$?"
+
+# 6. A file with no [table] at all: appended is correct there.
+printf 'volume = 30\n' > "$cfg_dir/flat.toml"
+seed_config_key "$cfg_dir/flat.toml" grab_zone_cells 4
+grep -qx 'grab_zone_cells = 4' "$cfg_dir/flat.toml"
+check "grab zone: a config with no sections gets the key appended" "$?"
+
+grep -qx 'volume = 30' "$cfg_dir/flat.toml"
+check "grab zone: ...without disturbing what was there" "$?"
+
 # --- the serve dispatch itself (SQ-1323) ---
 #
 # Everything above tests functions in isolation; this runs the real dispatch
@@ -442,6 +534,47 @@ unset LANTHORN_WEB_DETACH LANTHORN_WEB_AUDIO
 
 ttyd_has "--url-arg"
 check "detach on, audio off: the session id is still passed through" "$?"
+
+# --- the grab zone through a real dispatch (SQ-1327) ---
+#
+# run_dispatch points HOME at the fixture, so the seeded config.toml lands
+# where the test can read it rather than in the developer's own home.
+grab_home="$fixture_dir/grabhome"
+
+run_grab_dispatch() {
+    rm -rf "$grab_home"
+    mkdir -p "$grab_home"
+    ( HOME="$grab_home"; export HOME; run_dispatch )
+}
+
+run_grab_dispatch
+grep -qx 'grab_zone_cells = 4' "$grab_home/.lanthorn/config.toml"
+check "dispatch: serve mode seeds the wider touch grab zone by default" "$?"
+
+LANTHORN_WEB_GRAB_ZONE=6
+export LANTHORN_WEB_GRAB_ZONE
+run_grab_dispatch
+grep -qx 'grab_zone_cells = 6' "$grab_home/.lanthorn/config.toml"
+check "LANTHORN_WEB_GRAB_ZONE=6: the given width is what is written" "$?"
+
+LANTHORN_WEB_GRAB_ZONE=off
+run_grab_dispatch
+[ ! -f "$grab_home/.lanthorn/config.toml" ]
+check "LANTHORN_WEB_GRAB_ZONE=off: nothing is written to the player's config" "$?"
+
+# Anything that is not 1-6 must be REFUSED, not written: `grab_zone_cells =
+# banana` is invalid TOML, and lanthorn then declines to save any setting at all
+# until somebody edits the file by hand.
+LANTHORN_WEB_GRAB_ZONE=banana
+run_grab_dispatch
+[ ! -f "$grab_home/.lanthorn/config.toml" ]
+check "LANTHORN_WEB_GRAB_ZONE=banana: a bad value is ignored, never written" "$?"
+
+LANTHORN_WEB_GRAB_ZONE=99
+run_grab_dispatch
+[ ! -f "$grab_home/.lanthorn/config.toml" ]
+check "LANTHORN_WEB_GRAB_ZONE=99: out of range is ignored too" "$?"
+unset LANTHORN_WEB_GRAB_ZONE
 
 if [ "$fail" != "0" ]; then
     echo "docker/test-entrypoint.sh: FAILED" >&2
