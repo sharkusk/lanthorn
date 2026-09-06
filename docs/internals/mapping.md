@@ -1122,9 +1122,19 @@ What the drawing shows, beyond the rooms:
   at or beyond it slides one cell further out — which preserves every offset
   within each side of the cut and can only stretch links that STRADDLE it. A
   straddling cardinal RECIPROCAL vetoes the whole shift, since "exactly one
-  cell apart" is what such a pair means; the ghost then walks out along its own
-  bearing to the first free cell and the router draws the longer line. Ghosts
-  are derived at render time and nothing about them is persisted.
+  cell apart" is what such a pair means.
+
+  Where the line cannot open, the newcomer stays on the anchor's **doorstep**:
+  a free cell perpendicular to the bearing (roomier side first — both are
+  equally correct as geometry, so the tie-break is which one's line has
+  somewhere to go), then the side opposite it, and only if every side is taken
+  does it walk out along the bearing. Going straight past the blocker is the
+  LAST resort rather than the first, because a newcomer on the far side of the
+  room that blocked it has that room standing between the two boxes its own
+  passage joins, and the line has to be routed all the way around it — Zork I's
+  Gallery layer, where the `from Living Room` ghost wants the cell The Troll
+  Room holds, is the specimen. Ghosts are derived at render time and nothing
+  about them is persisted.
 - **A legend** in the bottom-left of each document naming every mark.
 
 Styling is a `<style>` block of CSS classes — `.room`, `.room.current`,

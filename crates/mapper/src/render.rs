@@ -899,8 +899,10 @@ mod tests {
         assert!(a.1 > 1 && b.1 > 1, "the row below opened to let it in: {a:?} {b:?}");
     }
 
-    /// …and when opening the line WOULD cost an adjacency, it is not opened: the ghost walks out
-    /// to the first free cell along its own bearing instead, and every real room stays put.
+    /// …and when opening the line WOULD cost an adjacency, it is not opened: the ghost takes a
+    /// free cell still beside its anchor — never one past the room that blocked it, which would
+    /// leave an unrelated room standing between the two boxes the crossing joins — and every real
+    /// room stays put.
     #[test]
     fn a_ghost_never_pulls_a_reciprocal_pair_apart() {
         let mut g = crate::graph::MapGraph::new();
@@ -919,6 +921,12 @@ mod tests {
         let rm = render_layer(&g, 0);
         assert_eq!(rm.rooms.iter().find(|r| r.id == 1).unwrap().cell, (0, 0));
         assert_eq!(rm.rooms.iter().find(|r| r.id == 2).unwrap().cell, (0, 1), "still adjacent");
-        assert_eq!(rm.rooms.iter().find(|r| r.id == 3).unwrap().cell, (0, 2), "the ghost gave way");
+        let ghost = rm.rooms.iter().find(|r| r.id == 3).unwrap().cell;
+        assert_eq!(ghost, (-1, 0), "the ghost took a free side of its anchor instead");
+        assert_ne!(ghost, (0, 2), "never past `Below`, which has nothing to do with the crossing");
+        assert!(
+            (ghost.0).abs() <= 1 && (ghost.1).abs() <= 1,
+            "and it is still on the Hall's own doorstep: {ghost:?}"
+        );
     }
 }

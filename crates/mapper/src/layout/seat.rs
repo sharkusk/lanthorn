@@ -111,15 +111,27 @@ pub struct Seat {
 /// earlier newcomers have already been seated — and the newcomer itself must NOT be in it. On
 /// return the chosen cell is free in `positions`; the caller inserts the newcomer there.
 ///
-/// Three outcomes, in order:
+/// Four outcomes, in order:
 ///
 /// 1. the wanted cell is free and is taken;
 /// 2. it is not, and a blank line is opened at it by sliding that whole side of the map one cell
 ///    further out — accepted only when every cardinal-reciprocal pair that was exactly adjacent
 ///    still is (see the module docs). A diagonal `offset` may open EITHER of its two lines, so
 ///    both are tried, the horizontal one first;
-/// 3. neither, and the newcomer walks out along its own bearing to the first free cell — the
-///    behaviour that predates this function, with the router drawing the longer line.
+/// 3. neither, and the newcomer takes a free cell still ADJACENT to the anchor, off the bearing:
+///    the two sides perpendicular to it first, then the side opposite. That is what a real room
+///    arriving to find its slot taken gets — a neighbour with a one-bend line — and it beats
+///    step 4 by a distance: a newcomer pushed PAST the room blocking its bearing lands on the
+///    far side of it, so the line has to be routed all the way around a room that has nothing to
+///    do with the passage, and the two boxes it does join are no longer neighbours at all;
+/// 4. only then does it walk out along the bearing to the first free cell, which is where a
+///    genuinely boxed-in anchor ends up.
+///
+/// **The perpendicular sides are tried roomier-first.** Both are equally correct as geometry —
+/// the passage is a portal or a crossing, so neither side is the direction anything was walked —
+/// and the one with more free cells around it is the one whose line has somewhere to go and
+/// whose box has room to be read. Ties keep the left-hand rotation, so the choice stays
+/// deterministic.
 ///
 /// `None` when `anchor` is not in `positions` (nothing to seat against).
 pub fn seat_adjacent(
@@ -154,7 +166,25 @@ pub fn seat_adjacent(
         }
     }
 
-    // Nothing legal to open: walk out along the bearing. Each step lands on a distinct cell, so
+    // Nothing legal to open: stay ADJACENT to the anchor instead of going round the blocker.
+    // Perpendicular sides first, roomier one first; then the side opposite the bearing.
+    let free_neighbours = |c: (i32, i32)| {
+        [(1, 0), (-1, 0), (0, 1), (0, -1)]
+            .into_iter()
+            .filter(|(dx, dy)| !taken(positions, (c.0 + dx, c.1 + dy)))
+            .count()
+    };
+    let mut sides = vec![(-offset.1, offset.0), (offset.1, -offset.0)];
+    sides.sort_by_key(|&d| std::cmp::Reverse(free_neighbours((a.0 + d.0, a.1 + d.1))));
+    sides.push((-offset.0, -offset.1));
+    for d in sides {
+        let c = (a.0 + d.0, a.1 + d.1);
+        if c != want && !taken(positions, c) {
+            return Some(Seat { cell: c, direct: false, opened_line: false });
+        }
+    }
+
+    // Boxed in on every side: walk out along the bearing. Each step lands on a distinct cell, so
     // one more step than there are rooms is guaranteed to find a free one.
     let mut c = want;
     for _ in 0..=positions.len() {
@@ -274,18 +304,43 @@ mod tests {
     }
 
     /// …but not when opening it would pull a cardinal-reciprocal pair apart: `1`–`2` is walked
-    /// both ways, so the line stays shut and the newcomer walks out to the first free cell.
+    /// both ways, so the line stays shut and the newcomer stays ADJACENT to its anchor, on a side
+    /// perpendicular to the bearing — never past `2`, which would put the blocker between the two
+    /// boxes the passage joins.
     #[test]
-    fn a_straddling_reciprocal_vetoes_the_shift() {
+    fn a_blocked_bearing_falls_back_to_a_neighbour_never_past_the_blocker() {
         let g = g_with(
             &[(1, "Hall"), (2, "Below")],
             &[(1, Direction::S, 2), (2, Direction::N, 1), (1, Direction::Down, 9)],
         );
         let mut pos: BTreeMap<RoomId, (i32, i32)> = [(1, (0, 0)), (2, (0, 1))].into_iter().collect();
         let seat = seat_adjacent(&g, &mut pos, 1, (0, 1)).unwrap();
-        assert_eq!(seat.cell, (0, 2), "the first free cell along the bearing instead");
+        assert_eq!(seat.cell, (-1, 0), "beside the anchor, perpendicular to the blocked bearing");
+        assert_ne!(seat.cell, (0, 2), "never on the far side of the room that blocked it");
         assert!(!seat.opened_line);
         assert_eq!(pos[&2], (0, 1), "and the pair is still exactly one cell apart");
+        let (ax, ay) = pos[&1];
+        assert!(
+            (seat.cell.0 - ax).abs() <= 1 && (seat.cell.1 - ay).abs() <= 1,
+            "still on the anchor's own doorstep: {:?} vs {:?}",
+            seat.cell,
+            (ax, ay)
+        );
+    }
+
+    /// Both perpendicular sides are free, so the ROOMIER one wins — the side whose own
+    /// neighbourhood has somewhere for the line to go and room for the box to be read. Here east
+    /// of the anchor is walled in by `3` and `4`, so the newcomer goes west.
+    #[test]
+    fn the_roomier_perpendicular_side_wins() {
+        let g = g_with(
+            &[(1, "Hall"), (2, "Below"), (3, "East"), (4, "Corner")],
+            &[(1, Direction::S, 2), (2, Direction::N, 1), (1, Direction::Down, 9)],
+        );
+        let mut pos: BTreeMap<RoomId, (i32, i32)> =
+            [(1, (0, 0)), (2, (0, 1)), (3, (2, 0)), (4, (1, -1))].into_iter().collect();
+        let seat = seat_adjacent(&g, &mut pos, 1, (0, 1)).unwrap();
+        assert_eq!(seat.cell, (-1, 0), "west: east is hemmed in on two more sides");
     }
 
     /// The case the pass exists for: a portal-only room hanging off a hub in the middle of a
