@@ -78,6 +78,7 @@ Every themeable `style.toml` selector: which role or selector it derives from, a
 | `map.room_current` | Map | Style | `accent` |  | |
 | `map.room_selected` | Map | Style | `accent` | `reversed` | |
 | `map.room_alias_marker` | Map | Style | `muted` |  | |
+| `map.room_ghost` | Map | Style | `muted` |  | |
 | `map.room_random_stub` | Map | Style | `alert` |  | |
 | `map.connector` | Map | Style | `accent` |  | |
 | `map.room_stacked_exit` | Map | Style | `map.room` | `reversed` | |
@@ -97,6 +98,7 @@ Every themeable `style.toml` selector: which role or selector it derives from, a
 | `map.edge:asym` | Map | Style | `map.connector` |  | |
 | `map.trail` | Map | Style | `muted` |  | |
 | `map.box_style` | Map | Placement |  | `glyph="rounded"` | |
+| `map.ghost_box_style` | Map | Placement |  | `glyph="dashed"` | |
 | `map.arrow_set` | Map | Placement |  | `glyph="filled"` | |
 | `map.portal_icons` | Map | Placement |  | `glyph="ascii"` | |
 | `map.path_style` | Map | Placement |  | `glyph="light"` | |
