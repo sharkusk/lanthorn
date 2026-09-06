@@ -5,7 +5,7 @@
 [![Test](https://github.com/sharkusk/lanthorn/actions/workflows/test.yml/badge.svg)](https://github.com/sharkusk/lanthorn/actions/workflows/test.yml)
 [![Made with Side-Quest](https://img.shields.io/badge/Made%20with-Side--Quest-f97316)](https://github.com/sharkusk/side-quest)
 
-**Play interactive fiction in your terminal while lanthorn draws the map for you — live, as you explore.**
+**Lanthorn plays interactive fiction in your terminal and lights the way: a live automap, spoiler-free guidance, and the game's own artwork.**
 
 ### Supported story formats:
 
