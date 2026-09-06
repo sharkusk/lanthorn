@@ -110,3 +110,5 @@ mod sq1332_connector_bends;
 mod sq1336_export_json;
 #[path = "suites/sq1342_quit_clears_resume.rs"]
 mod sq1342_quit_clears_resume;
+#[path = "suites/sq1345_zork1_forest_shadow.rs"]
+mod sq1345_zork1_forest_shadow;

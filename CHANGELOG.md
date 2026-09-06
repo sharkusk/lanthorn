@@ -44,6 +44,12 @@ Absolute URLs or no link.
   way — `/quit`, Ctrl+Q, "Save State & quit", closing a browser tab — still
   picks up right where you left off, and your map is never touched either way.
 
+- **Walking between two rooms that share a name is a passage again, not a
+  question mark.** Zork I's four rooms called "Forest" had every path between
+  them redrawn as `?`, each one claiming the destination varied between the
+  forest you actually reach and "back here" — the map mistook a crossing for a
+  step that led nowhere, because both ends print the same heading.
+
 ---
 
 ## v0.5.0 — 2026-09-05
