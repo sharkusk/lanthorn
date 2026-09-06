@@ -12,7 +12,8 @@ steals it: **Tab** completes from the things actually in front of you first
 has just used, then its whole dictionary — checked against the story's own
 parser, so you're never offered a word it would refuse. The rest of the
 match ghosts in dim text right after the caret; `Tab`/`Shift-Tab` cycle
-candidates, `→` at the end of the line takes the one on offer.
+candidates, `→` at the end of the line takes the one on offer — and so does a
+click anywhere in the story pane, if you'd rather reach for the mouse.
 
 Type `/` on an empty line and a fuzzy palette opens over every command
 lanthorn knows — the fastest way to find out what's there without

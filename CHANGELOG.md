@@ -91,6 +91,14 @@ Absolute URLs or no link.
   `grab_zone_cells` setting widens the story/map splitter and the inventory
   and room panel edges beyond their default one-cell reach, for anyone playing
   on a touchscreen where a finger cannot land on so narrow a target.
+- **The map now pans by dragging it with the mouse.** Press and drag anywhere
+  on the map — a room box or open space, it makes no difference — and the
+  view follows your pointer exactly, like scrolling a map on a phone. Letting
+  go without moving still does what a click always did: selects (or
+  deselects) a room.
+- **A click in the story pane accepts a showing word completion.** When the
+  dim ghost text after your cursor is offering a word, clicking anywhere in
+  the story pane takes it, the same as pressing `Tab` or `→`.
 
 ### Changed
 

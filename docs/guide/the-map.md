@@ -24,8 +24,11 @@ Inform prints as you enter — but you never configure any of it.
 
 **Getting around.** `/zoom-map in|out|reset` scales between a detailed view
 and a compact overview; `/pan-map <dx> <dy>` slides the viewport and
-`/center-map` snaps back to wherever you're standing. Multi-level areas split
-into named layers shown as tabs across the top of the map pane —
+`/center-map` snaps back to wherever you're standing. You can also press and
+drag anywhere on the map — a room box included — to pan it by hand; the map
+follows your pointer exactly, and letting go without moving leaves a click's
+usual meaning (selecting a room, or deselecting on empty space) untouched.
+Multi-level areas split into named layers shown as tabs across the top of the map pane —
 `/cycle-layer next|prev` moves between them. Click a room, or use
 `/select-room`, to select it and open its room card, which lists every
 direction out of that room, where each one leads, and which you've never

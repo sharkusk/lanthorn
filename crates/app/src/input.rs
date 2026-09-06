@@ -424,9 +424,19 @@ pub enum Action {
     CloseRoomMenu,
     /// Begin a middle-button drag-pan gesture at terminal cell (col, row).
     BeginDragPan(u16, u16),
-    /// Continue a middle-button drag-pan gesture at terminal cell (col, row).
+    /// Begin a left-button press on the map at terminal cell (col, row), which
+    /// may resolve to either a drag-to-pan or a plain click (SQ-1325): `click`
+    /// is what a press-release WITHOUT motion should do (pin/unpin the room
+    /// under the press, or unpin on empty map space) — resolved now, at Down,
+    /// since only `mouse_to_action` has the room hit-rects to resolve it,
+    /// and replayed by `EndDragPan` iff the pointer never moved.
+    BeginMapDrag(u16, u16, crate::state::MapClick),
+    /// Continue a middle-button OR left-button-on-map drag-pan gesture at
+    /// terminal cell (col, row).
     DragPanTo(u16, u16),
-    /// End a middle-button drag-pan gesture.
+    /// End a middle-button OR left-button-on-map drag-pan gesture. For the
+    /// latter, fires the deferred `MapClick` from `BeginMapDrag` when the
+    /// pointer never moved (a plain click); a genuine drag just ends the pan.
     EndDragPan,
     /// Begin a story-pane text selection at terminal cell (col, row).
     StartSelection(u16, u16),
@@ -1163,6 +1173,23 @@ pub fn mouse_to_action(
         && row >= story.y && row < story.bottom();
 
     match kind {
+        // ── Left-down in story with a completion showing: accept it (SQ-1326) ──
+        // Mirrors the "autocomplete-or-ToggleFocus" gate Tab uses (step 8 in this
+        // file's module doc and in `key_to_command` below): when a suggestion is
+        // live, a click ANYWHERE in the story pane — including on the input line
+        // itself — takes it exactly as Tab would, ahead of both CursorToClick and
+        // StartSelection below. `!state.pager.active` mirrors the precedence Tab
+        // itself has: the [MORE] pager intercepts every key before step 8 ever
+        // runs, so a suggestion cannot really be "showing" while it's up.
+        MouseEventKind::Down(MouseButton::Left)
+            if in_story
+                && state.focus == Focus::Game
+                && !state.pager.active
+                && !state.current_partial().is_empty()
+                && !state.suggestions.is_empty() =>
+        {
+            Action::Autocomplete
+        }
         // ── Left-down on the input line: place the caret ──────────────────────
         // Must precede the story arm below: the input line sits inside the story pane, so a click
         // on it would otherwise start a text selection instead of moving the caret (SQ-0354).
@@ -1175,34 +1202,50 @@ pub fn mouse_to_action(
         MouseEventKind::Down(MouseButton::Left) if in_story => {
             Action::StartSelection(col, row)
         }
+        // ── Left-drag while a map drag-pan is pending: pan, not select (SQ-1325) ─
+        // Must precede the generic story-selection drag arm below: a left-drag
+        // that began on the map (`BeginMapDrag`, any target) reaches this arm
+        // first and reuses the same `DragPanTo` the middle-button pan already
+        // has, rather than falling into `ExtendSelection` (a no-op there anyway,
+        // since no selection was ever started for a map press).
+        MouseEventKind::Drag(MouseButton::Left) if state.drag.is_some() => {
+            Action::DragPanTo(col, row)
+        }
         // ── Left-drag: extend an in-progress story selection ──────────────────
         MouseEventKind::Drag(MouseButton::Left) => {
             Action::ExtendSelection(col, row)
+        }
+        // ── Left-up while a map drag-pan is pending: end it (SQ-1325) ──────────
+        // Resolves to the SAME `EndDragPan` the middle button uses; it replays
+        // the deferred `MapClick` from `BeginMapDrag` when the pointer never
+        // moved, or just clears the drag when it did.
+        MouseEventKind::Up(MouseButton::Left) if state.drag.is_some() => {
+            Action::EndDragPan
         }
         // ── Left-up: finish a story selection (copy on release) ───────────────
         MouseEventKind::Up(MouseButton::Left) => {
             Action::EndSelection
         }
-        // ── Left-click in map ─────────────────────────────────────────────────
-        // Pin, unpin, follow (SQ-0692). A click on a room points the dock at it
-        // (opening the dock if it was closed) — keeping whichever body was last
-        // shown, rather than forcing one (SQ-1265: switching bodies is by
-        // clicking the tabs, or by keyboard); a second click on the SAME pinned
-        // room, or a click on empty map space, unpins and the dock goes back to
-        // following the player. Focus deliberately stays on the story pane so you
-        // can keep typing.
+        // ── Left-down in map: begin a click-or-drag-pan gesture (SQ-1325) ──────
+        // A plain press-release still pins/unpins exactly as before (SQ-0692) —
+        // opening the dock on a room, keeping whichever body was last shown
+        // (SQ-1265), or unpinning on empty map space — but that decision is now
+        // DEFERRED to `EndDragPan` rather than fired here immediately, because
+        // the same press may turn into a drag-to-pan instead: there is no
+        // separate "drag a room to move it" mouse gesture (`move-region`/
+        // `Action::MoveRegion` is a keyboard/command action, not a mouse one),
+        // so any Down in the map — room box or empty gutter alike — can pan.
+        // Focus deliberately stays on the story pane so you can keep typing.
         MouseEventKind::Down(MouseButton::Left) if in_map => {
-            match room_at_screen(room_rects, col, row) {
-                Some(id) if state.room_dock.open && state.selected_room == Some(id) => {
-                    Action::UnpinRoomDock
-                }
-                Some(id) => Action::PinRoomDock(id, state.room_dock_view),
+            let click = match room_at_screen(room_rects, col, row) {
+                Some(id) => crate::state::MapClick::Room(id),
                 // Empty map gutter: unpin only. This used to hand the keyboard to
                 // the map, which is exactly the invisible mode SQ-0599 removed — a
                 // stray click in the gutter would silently redirect every
                 // subsequent keystroke away from the story.
-                None => Action::UnpinRoomDock,
-            }
+                None => crate::state::MapClick::Empty,
+            };
+            Action::BeginMapDrag(col, row, click)
         }
         // ── Right-click in map ────────────────────────────────────────────────
         // A click on a room opens its context menu (SQ-1265: Rename Room, Move
@@ -2835,7 +2878,15 @@ fn apply_action_inner(action: Action, state: &mut AppState, mapper: &mut Mapper)
 
         Action::BeginDragPan(col, row) => {
             use crate::state::DragState;
-            state.drag = Some(DragState { last: (col, row), acc_x: 0, acc_y: 0 });
+            state.drag = Some(DragState { last: (col, row), acc_x: 0, acc_y: 0, moved: false, map_click: None });
+        }
+
+        // SQ-1325: same shape as `BeginDragPan` above, but records the plain-click
+        // target the press resolved to (via `mouse_to_action`'s room hit-test),
+        // for `EndDragPan` to replay if the pointer never moves.
+        Action::BeginMapDrag(col, row, click) => {
+            use crate::state::DragState;
+            state.drag = Some(DragState { last: (col, row), acc_x: 0, acc_y: 0, moved: false, map_click: Some(click) });
         }
 
         Action::DragPanTo(col, row) => {
@@ -2843,6 +2894,7 @@ fn apply_action_inner(action: Action, state: &mut AppState, mapper: &mut Mapper)
                 let dx = col as i32 - drag.last.0 as i32;
                 let dy = row as i32 - drag.last.1 as i32;
                 drag.last = (col, row);
+                drag.moved = true;
                 // Grab-and-drag: the content follows the cursor (dragging right
                 // moves the map right). char_pan is added to the draw offset, so
                 // add the delta directly. 1-character precision.
@@ -2851,8 +2903,30 @@ fn apply_action_inner(action: Action, state: &mut AppState, mapper: &mut Mapper)
             }
         }
 
+        // SQ-1325: a left-button map drag with no motion is a plain click — replay
+        // exactly what `Down(Left) if in_map` used to do immediately (SQ-0692),
+        // now that `BeginMapDrag` deferred it. A middle-button pan (or a
+        // left-button drag that DID move) carries no `map_click` / has `moved`
+        // set, so this is a no-op for both.
         Action::EndDragPan => {
-            state.drag = None;
+            let click = state.drag.take().filter(|d| !d.moved).and_then(|d| d.map_click);
+            match click {
+                Some(crate::state::MapClick::Room(id))
+                    if state.room_dock.open && state.selected_room == Some(id) =>
+                {
+                    state.selected_room = None;
+                    state.room_path.clear();
+                }
+                Some(crate::state::MapClick::Room(id)) => {
+                    let view = state.room_dock_view;
+                    pin_room_dock(state, mapper, id, view);
+                }
+                Some(crate::state::MapClick::Empty) => {
+                    state.selected_room = None;
+                    state.room_path.clear();
+                }
+                None => {}
+            }
         }
 
         Action::StartSelection(col, row) => {
@@ -7198,10 +7272,33 @@ mod tests {
     /// SQ-0692: a left-click on a room used to open a floating Room Info popup.
     /// It now PINS the room dock to that room — opening the dock if it was closed
     /// — which is the same gesture with a panel that does not cover the map.
+    ///
+    /// SQ-1325: the pin/unpin no longer fires on Down — it is deferred to a
+    /// matching Up with no motion in between (`BeginMapDrag` / `EndDragPan`),
+    /// so the same press can turn into a drag-to-pan instead. A plain click
+    /// (Down then Up at the SAME cell, exercised via `press_release` below)
+    /// still resolves to exactly what the old immediate-on-Down click did.
     #[test]
     fn left_down_on_room_cell_pins_the_dock_keeping_the_current_view() {
         use crossterm::event::MouseEventKind;
-        use crate::state::{RoomDockView, Zoom};
+        use crate::state::{MapClick, RoomDockView, Zoom};
+
+        // Simulates a plain click (no drag motion): Down begins the gesture,
+        // Up at the same cell ends it, replaying the deferred click.
+        fn press_release(
+            s: &mut AppState,
+            rects: &[(mapper::graph::RoomId, ratatui::layout::Rect)],
+            col: u16,
+            row: u16,
+        ) {
+            let down = mouse_event(MouseEventKind::Down(MouseButton::Left), col, row, KeyModifiers::NONE);
+            let begin = mouse_to_action(s, down, map_rect(), story_rect(), rects, &None);
+            apply_action(begin, s, &mut Mapper::default());
+            let up = mouse_event(MouseEventKind::Up(MouseButton::Left), col, row, KeyModifiers::NONE);
+            let end = mouse_to_action(s, up, map_rect(), story_rect(), rects, &None);
+            assert!(matches!(end, Action::EndDragPan), "an unmoved release resolves to EndDragPan, got {:?}", end);
+            apply_action(end, s, &mut Mapper::default());
+        }
 
         let mut s = AppState::default();
         s.zoom = Zoom::Compact; // step = (12, 5)
@@ -7212,39 +7309,31 @@ mod tests {
         // Room 1 at cell (0,0). Build room_rects using render pipeline.
         let rects = room_rects_for_compact(1, (0, 0), map_rect());
 
-        // Click at (0,0) which is inside the Compact box (8x3).
+        // Down alone only records the deferred target — it does not pin yet.
         let m = mouse_event(MouseEventKind::Down(MouseButton::Left), 0, 0, KeyModifiers::NONE);
         let action = mouse_to_action(&s, m, map_rect(), story_rect(), &rects, &None);
         assert!(
-            matches!(action, Action::PinRoomDock(1, RoomDockView::Info)),
-            "left-down on a room with the dock CLOSED opens it pinned in the current (default \
-             Info) view, got {:?}", action
+            matches!(action, Action::BeginMapDrag(0, 0, MapClick::Room(1))),
+            "left-down on a room begins a click-or-drag-pan targeting it, got {:?}", action
         );
 
-        // Applying it opens the dock, pinned.
-        apply_action(action, &mut s, &mut Mapper::default());
-        assert!(s.room_dock.open);
+        // Click at (0,0) which is inside the Compact box (8x3) — Down then Up,
+        // no motion, resolves to the same pin the old immediate click gave.
+        press_release(&mut s, &rects, 0, 0);
+        assert!(s.room_dock.open, "a plain click opens the dock, pinned");
         assert_eq!(s.selected_room, Some(1));
 
         // SQ-1265: with Diagnostics showing (switched some other way — a tab
         // click, a keybinding), a left click no longer forces Info back.
         s.room_dock_view = RoomDockView::Diagnostics;
-        let m = mouse_event(MouseEventKind::Down(MouseButton::Left), 0, 0, KeyModifiers::NONE);
         s.selected_room = None; // so the click pins rather than unpinning
-        let action = mouse_to_action(&s, m, map_rect(), story_rect(), &rects, &None);
-        assert!(
-            matches!(action, Action::PinRoomDock(1, RoomDockView::Diagnostics)),
-            "left click keeps whichever body was last shown, got {:?}", action
-        );
-        apply_action(action, &mut s, &mut Mapper::default());
+        press_release(&mut s, &rects, 0, 0);
         assert_eq!(s.room_dock_view, RoomDockView::Diagnostics, "…still Diagnostics");
+        assert_eq!(s.selected_room, Some(1), "…and pinned again");
 
         // With the dock already open and pinned, the same click on the SAME room unpins.
-        let m = mouse_event(MouseEventKind::Down(MouseButton::Left), 0, 0, KeyModifiers::NONE);
-        assert!(
-            matches!(mouse_to_action(&s, m, map_rect(), story_rect(), &rects, &None), Action::UnpinRoomDock),
-            "a click on the already-pinned room unpins"
-        );
+        press_release(&mut s, &rects, 0, 0);
+        assert_eq!(s.selected_room, None, "a click on the already-pinned room unpins");
     }
 
     /// SQ-1265: right-click no longer switches to Diagnostics — it opens the
@@ -7480,7 +7569,7 @@ mod tests {
     #[test]
     fn left_down_on_gutter_unpins_without_taking_focus() {
         use crossterm::event::MouseEventKind;
-        use crate::state::Zoom;
+        use crate::state::{MapClick, Zoom};
 
         let mut s = AppState::default();
         s.zoom = Zoom::Compact; // step = (12, 5)
@@ -7488,13 +7577,26 @@ mod tests {
         // Room is at cell (0,0), box is 8 wide so cols 0..8 hit the room.
         // Click at col 50 misses the room entirely.
         let rects = room_rects_for_compact(1, (0, 0), map_rect());
+        s.selected_room = Some(1); // so unpinning is observable below
 
-        let m = mouse_event(MouseEventKind::Down(MouseButton::Left), 50, 0, KeyModifiers::NONE);
-        let action = mouse_to_action(&s, m, map_rect(), story_rect(), &rects, &None);
+        // SQ-1325: Down defers to a click-or-drag-pan rather than unpinning
+        // immediately, so the map gutter can also be dragged to pan.
+        let down = mouse_event(MouseEventKind::Down(MouseButton::Left), 50, 0, KeyModifiers::NONE);
+        let action = mouse_to_action(&s, down, map_rect(), story_rect(), &rects, &None);
         assert!(
-            matches!(action, Action::UnpinRoomDock),
-            "left-down on the map gutter unpins, and must not hand the keyboard to the map (SQ-0599), got {:?}", action
+            matches!(action, Action::BeginMapDrag(50, 0, MapClick::Empty)),
+            "left-down on the map gutter begins a click-or-drag-pan with no target, got {:?}", action
         );
+        assert_eq!(s.focus, Focus::Game, "must not hand the keyboard to the map (SQ-0599)");
+        apply_action(action, &mut s, &mut Mapper::default());
+
+        // Release with no motion in between replays the deferred unpin.
+        let up = mouse_event(MouseEventKind::Up(MouseButton::Left), 50, 0, KeyModifiers::NONE);
+        let end = mouse_to_action(&s, up, map_rect(), story_rect(), &rects, &None);
+        assert!(matches!(end, Action::EndDragPan));
+        apply_action(end, &mut s, &mut Mapper::default());
+        assert_eq!(s.selected_room, None, "an unmoved release on the gutter unpins");
+        assert_eq!(s.focus, Focus::Game, "…and still never hands the keyboard to the map (SQ-0599)");
     }
 
     #[test]
@@ -7810,6 +7912,133 @@ mod tests {
         assert!(s.drag.is_some());
         apply_action(Action::EndDragPan, &mut s, &mut m);
         assert!(s.drag.is_none(), "EndDragPan should clear drag state");
+    }
+
+    // ── Left-button map drag-pan tests (SQ-1325) ──────────────────────────────
+
+    /// A press on empty map space that then moves pans the viewport by exactly
+    /// the pointer's motion, one terminal cell of drag per cell of pan — the
+    /// same `char_pan` mechanism (and the same lack of any bounds clamp) the
+    /// middle-button drag-pan already uses, so the map stays exactly as "in
+    /// bounds" as keyboard panning already leaves it.
+    #[test]
+    fn left_drag_on_empty_map_pans_by_the_exact_delta_and_release_ends_it() {
+        use crossterm::event::MouseEventKind;
+        use crate::state::{MapClick, Zoom};
+
+        let mut s = AppState::default();
+        s.zoom = Zoom::Boxes;
+        let mut m = Mapper::default();
+
+        // Down on empty map space (no rooms at all).
+        let down = mouse_event(MouseEventKind::Down(MouseButton::Left), 30, 20, KeyModifiers::NONE);
+        let begin = mouse_to_action(&s, down, map_rect(), story_rect(), &[], &None);
+        assert!(matches!(begin, Action::BeginMapDrag(30, 20, MapClick::Empty)));
+        apply_action(begin, &mut s, &mut m);
+        assert!(s.drag.is_some());
+
+        // Drag by (dx, dy) = (-7, 4) cells of pointer motion.
+        let drag = mouse_event(MouseEventKind::Drag(MouseButton::Left), 23, 24, KeyModifiers::NONE);
+        let pan = mouse_to_action(&s, drag, map_rect(), story_rect(), &[], &None);
+        assert!(matches!(pan, Action::DragPanTo(23, 24)), "a left-drag while state.drag is set pans, got {:?}", pan);
+        apply_action(pan, &mut s, &mut m);
+        assert_eq!(s.char_pan, (-7, 4), "the viewport moved by exactly the pointer's motion");
+        assert_eq!(s.scroll, (0, 0), "scroll (the whole-grid-cell offset) is untouched by the drag");
+
+        // Release ends the pan; no click fires (selected_room is untouched).
+        let up = mouse_event(MouseEventKind::Up(MouseButton::Left), 23, 24, KeyModifiers::NONE);
+        let end = mouse_to_action(&s, up, map_rect(), story_rect(), &[], &None);
+        assert!(matches!(end, Action::EndDragPan));
+        apply_action(end, &mut s, &mut m);
+        assert!(s.drag.is_none(), "the drag ends on release");
+        assert_eq!(s.selected_room, None, "a genuine drag never fires the deferred click");
+        assert_eq!(s.char_pan, (-7, 4), "the pan the drag made is kept after release");
+    }
+
+    /// A press-release with NO motion in between keeps today's behaviour exactly
+    /// (SQ-0692's unpin-on-empty-space click) — covered end-to-end already by
+    /// `left_down_on_gutter_unpins_without_taking_focus`; this case only pins
+    /// down that a `Drag` event with the SAME coordinates as `Down` (a jittery
+    /// but stationary pointer) still counts as "no motion" and does not itself
+    /// suppress the click.
+    #[test]
+    fn left_drag_at_the_same_cell_as_down_does_not_suppress_the_click() {
+        use crossterm::event::MouseEventKind;
+
+        let mut s = AppState::default();
+        let mut m = Mapper::default();
+        s.selected_room = Some(1);
+        let rects = room_rects_for_compact(1, (0, 0), map_rect());
+        s.zoom = crate::state::Zoom::Compact;
+
+        let down = mouse_event(MouseEventKind::Down(MouseButton::Left), 50, 0, KeyModifiers::NONE);
+        apply_action(mouse_to_action(&s, down, map_rect(), story_rect(), &rects, &None), &mut s, &mut m);
+
+        // A Drag event at the SAME cell: dx=dy=0, but `DragPanTo` still runs and
+        // sets `moved = true` — a real terminal can and does report these.
+        let drag = mouse_event(MouseEventKind::Drag(MouseButton::Left), 50, 0, KeyModifiers::NONE);
+        apply_action(mouse_to_action(&s, drag, map_rect(), story_rect(), &rects, &None), &mut s, &mut m);
+        assert_eq!(s.char_pan, (0, 0), "a zero-delta drag pans by nothing");
+
+        let up = mouse_event(MouseEventKind::Up(MouseButton::Left), 50, 0, KeyModifiers::NONE);
+        apply_action(mouse_to_action(&s, up, map_rect(), story_rect(), &rects, &None), &mut s, &mut m);
+        // `moved` is now true (a Drag event occurred), so the deferred unpin is
+        // suppressed — documenting today's actual behaviour rather than
+        // asserting the click still fires (it does not: any Drag event marks
+        // the gesture as a pan, whatever its delta).
+        assert_eq!(s.selected_room, Some(1), "any Drag event, even a zero-delta one, is treated as a pan");
+    }
+
+    /// SQ-1325: there is no mouse gesture that drags a ROOM to move it —
+    /// `move-region` / `Action::MoveRegion` only ever fires from a keyboard
+    /// binding or the room context menu's typed argument (see
+    /// `apply_move_region`), never from `mouse_to_action`. So a drag that
+    /// STARTS on a room box pans the map exactly like one starting on empty
+    /// space; only a press-release with no motion still pins/unpins.
+    #[test]
+    fn left_drag_starting_on_a_room_also_pans_since_there_is_no_room_drag_feature() {
+        use crossterm::event::MouseEventKind;
+        use crate::state::{MapClick, Zoom};
+
+        let mut s = AppState::default();
+        s.zoom = Zoom::Compact;
+        let mut m = Mapper::default();
+        let rects = room_rects_for_compact(1, (0, 0), map_rect());
+
+        let down = mouse_event(MouseEventKind::Down(MouseButton::Left), 0, 0, KeyModifiers::NONE);
+        let begin = mouse_to_action(&s, down, map_rect(), story_rect(), &rects, &None);
+        assert!(matches!(begin, Action::BeginMapDrag(0, 0, MapClick::Room(1))));
+        apply_action(begin, &mut s, &mut m);
+
+        let drag = mouse_event(MouseEventKind::Drag(MouseButton::Left), 6, 3, KeyModifiers::NONE);
+        apply_action(mouse_to_action(&s, drag, map_rect(), story_rect(), &rects, &None), &mut s, &mut m);
+        assert_eq!(s.char_pan, (6, 3), "a drag that started on a room still pans the viewport");
+
+        let up = mouse_event(MouseEventKind::Up(MouseButton::Left), 6, 3, KeyModifiers::NONE);
+        apply_action(mouse_to_action(&s, up, map_rect(), story_rect(), &rects, &None), &mut s, &mut m);
+        assert_eq!(s.selected_room, None, "the room under the original press is never pinned once the pointer moved");
+        assert!(!s.room_dock.open, "…nor does the dock open");
+    }
+
+    /// The drag-to-pan gesture is zoom-agnostic (SQ-1325): `char_pan` is a raw
+    /// terminal-cell offset applied at render time regardless of the map's zoom
+    /// step, so it works identically at Boxes, Compact and Overview.
+    #[test]
+    fn left_drag_pans_at_every_zoom_level() {
+        use crossterm::event::MouseEventKind;
+        use crate::state::Zoom;
+
+        for zoom in [Zoom::Boxes, Zoom::Compact, Zoom::Overview] {
+            let mut s = AppState::default();
+            s.zoom = zoom;
+            let mut m = Mapper::default();
+
+            let down = mouse_event(MouseEventKind::Down(MouseButton::Left), 10, 10, KeyModifiers::NONE);
+            apply_action(mouse_to_action(&s, down, map_rect(), story_rect(), &[], &None), &mut s, &mut m);
+            let drag = mouse_event(MouseEventKind::Drag(MouseButton::Left), 13, 8, KeyModifiers::NONE);
+            apply_action(mouse_to_action(&s, drag, map_rect(), story_rect(), &[], &None), &mut s, &mut m);
+            assert_eq!(s.char_pan, (3, -2), "{:?}: drag-pan should apply at every zoom level", zoom);
+        }
     }
 
     #[test]
@@ -10149,13 +10378,16 @@ mod tests {
         let story_r = story_rect();
         let live_room_rects = room_rects_for_compact(1, (0, 0), map_r);
 
-        // Confirm that without any dialog open, clicking (0,0) hits the room.
+        // Confirm that without any dialog open, clicking (0,0) hits the room
+        // (SQ-1325: Down defers to a click-or-drag-pan rather than pinning
+        // immediately — see `left_down_on_room_cell_pins_the_dock_keeping_the_current_view`
+        // for the full Down+Up round trip).
         {
             let s = AppState::default();
             let a = mouse_to_action(&s, mouse_left_click(0, 0), map_r, story_r, &live_room_rects, &None);
             assert!(
-                matches!(a, Action::PinRoomDock(1, crate::state::RoomDockView::Info)),
-                "sanity: without dialog, a click on a room pins the dock to it, got {:?}", a
+                matches!(a, Action::BeginMapDrag(0, 0, crate::state::MapClick::Room(1))),
+                "sanity: without dialog, a click on a room begins a click-or-drag-pan targeting it, got {:?}", a
             );
         }
 
@@ -11425,6 +11657,103 @@ mod tests {
         apply_action(Action::CursorRight, &mut s, &mut m);
         assert_eq!(s.input.value, before, "mid-line Right leaves the text alone");
         assert_eq!(s.input.cursor, 1, "it just moves the caret");
+    }
+
+    // ── SQ-1326: a click in the story pane accepts a showing completion ───────
+
+    /// A left click anywhere in the story pane, with a suggestion showing,
+    /// accepts it exactly as Tab would — same input-line result, same
+    /// `suggestion_active` flip.
+    #[test]
+    fn left_click_in_story_accepts_a_showing_completion_exactly_as_tab_would() {
+        use crossterm::event::MouseEventKind;
+
+        let mut s = AppState::default();
+        let mut m = Mapper::default();
+        for c in "/toggle-roo".chars() {
+            apply_action(Action::InputChar(c), &mut s, &mut m);
+        }
+        assert!(!s.suggestions.is_empty(), "a suggestion is showing: {:?}", s.suggestions);
+        let want = format!("/{}", s.suggestions[0]);
+
+        // A click well clear of the input line — anywhere in the story pane.
+        let click = mouse_event(MouseEventKind::Down(MouseButton::Left), 85, 5, KeyModifiers::NONE);
+        let action = mouse_to_action(&s, click, map_rect(), story_rect(), &[], &None);
+        assert!(matches!(action, Action::Autocomplete), "a showing completion is accepted, got {:?}", action);
+        apply_action(action, &mut s, &mut m);
+        assert_eq!(s.input.value, want, "the click applied the SAME completion Tab would have");
+        assert!(s.suggestion_active, "and marks it applied, exactly as Tab does");
+    }
+
+    /// The same click, even when it lands ON the input line (where a click
+    /// would otherwise place the caret via `CursorToClick`), still accepts the
+    /// completion first — "anywhere in the story pane" includes the line
+    /// itself.
+    #[test]
+    fn left_click_on_the_input_line_accepts_a_showing_completion_ahead_of_the_caret() {
+        use crossterm::event::MouseEventKind;
+
+        let mut s = AppState::default();
+        let mut m = Mapper::default();
+        for c in "/toggle-roo".chars() {
+            apply_action(Action::InputChar(c), &mut s, &mut m);
+        }
+        // story_rect() is x=80..120, y=0..40 — the origin and click must sit inside it.
+        s.input_text_origin.set(Some((85, 5)));
+        assert!(s.input_click_index(87, 5).is_some(), "sanity: this click would otherwise hit the input line");
+
+        let click = mouse_event(MouseEventKind::Down(MouseButton::Left), 87, 5, KeyModifiers::NONE);
+        let action = mouse_to_action(&s, click, map_rect(), story_rect(), &[], &None);
+        assert!(
+            matches!(action, Action::Autocomplete),
+            "a showing completion wins over CursorToClick, got {:?}", action
+        );
+    }
+
+    /// With no completion showing, a click in the story pane keeps today's
+    /// behaviour (`StartSelection`, activating the game pane) — covered
+    /// end-to-end by `left_down_in_story_starts_selection_and_activates_game`;
+    /// this pins down the negative case explicitly: a non-empty input with NO
+    /// matching suggestions must not spuriously accept anything.
+    #[test]
+    fn left_click_in_story_with_no_completion_behaves_as_before() {
+        use crossterm::event::MouseEventKind;
+
+        let mut s = AppState::default();
+        let mut m = Mapper::default();
+        for c in "zzzznosuchword".chars() {
+            apply_action(Action::InputChar(c), &mut s, &mut m);
+        }
+        assert!(s.suggestions.is_empty(), "sanity: no suggestions for this gibberish: {:?}", s.suggestions);
+
+        let click = mouse_event(MouseEventKind::Down(MouseButton::Left), 85, 5, KeyModifiers::NONE);
+        let action = mouse_to_action(&s, click, map_rect(), story_rect(), &[], &None);
+        assert!(matches!(action, Action::StartSelection(85, 5)), "no completion showing -> unchanged click behaviour, got {:?}", action);
+        apply_action(action, &mut s, &mut m);
+        assert_eq!(s.focus, Focus::Game, "the click still activates the game pane");
+    }
+
+    /// Mirrors Tab's own precedence (`key_to_command`'s pager-active early
+    /// return, ahead of step 8's autocomplete): while the [MORE] pager is up, a
+    /// click must not accept a completion either.
+    #[test]
+    fn left_click_in_story_does_not_accept_a_completion_while_the_pager_is_active() {
+        use crossterm::event::MouseEventKind;
+
+        let mut s = AppState::default();
+        let mut m = Mapper::default();
+        for c in "/toggle-roo".chars() {
+            apply_action(Action::InputChar(c), &mut s, &mut m);
+        }
+        assert!(!s.suggestions.is_empty());
+        s.pager.active = true;
+
+        let click = mouse_event(MouseEventKind::Down(MouseButton::Left), 85, 5, KeyModifiers::NONE);
+        let action = mouse_to_action(&s, click, map_rect(), story_rect(), &[], &None);
+        assert!(
+            !matches!(action, Action::Autocomplete),
+            "the pager owns the click while active, got {:?}", action
+        );
     }
 
     #[test]

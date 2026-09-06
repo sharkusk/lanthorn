@@ -14,14 +14,22 @@ inspecting the machine, and firing commands — without ever leaving the story.
   a room for its context menu — **Rename Room**, **Move Region**, **Rename
   Layer** — which also points the panel at it, the same as a left click; a click
   outside the menu, or Esc, dismisses it without acting. A click on the panel's
-  own tabs still switches its body, and its ✕ closes it. Middle-drag anywhere
-  pans the whole map around. The dock never interrupts the game: it reserves rows
-  at the bottom of the map pane rather than covering anything, so the keyboard
-  stays on the story prompt and you can keep typing and pressing Enter with it
-  up — handy for watching a room's exit card fill in as you walk. On a layer
+  own tabs still switches its body, and its ✕ closes it. On a layer
   showing the [matrix view](mapping.md#mazes-the-matrix-view) the same click
   selects a row — and a click on a destination cell jumps the selection to the
   room it names.
+- **Drag anywhere on the map to pan it** — left-button or middle-button, a room
+  box or open gutter, it makes no difference: the viewport follows the pointer
+  one terminal cell at a time, the same `char_pan` offset either button drives.
+  There is no separate gesture for dragging a room to reposition it — layout is
+  the automapper's job (see [Keeping it tidy](mapping.md)) — so a left-press
+  that starts on a room and then moves pans instead of fighting the layout. Only
+  a press-release with NO motion in between keeps the click meaning above: pin
+  (or unpin) the room panel, or select a matrix row. The dock never interrupts
+  the game: it reserves rows at the bottom of the map pane rather than covering
+  anything, so the keyboard stays on the story prompt and you can keep typing
+  and pressing Enter with it up — handy for watching a room's exit card fill in
+  as you walk.
 - **Mouse wheel** pans the map (hold Shift for horizontal, Ctrl to zoom) and
   scrolls every other scrollable surface too — the transcript and the lists
   inside modals (saves, file browser, gallery, config, command palette, the
@@ -666,8 +674,11 @@ know which side you're on).
   lid, so the lunch inside Zork I's brown sack is not completable until you
   open it. Shown the way your shell shows it: the rest of the word
   appears in dim ghost text right under the caret as you type. **Tab** cycles
-  forward through the candidates, **Shift-Tab** back, and **→** at the end of the
-  line takes the one on offer. (With the command panel open, Tab completes from
+  forward through the candidates, **Shift-Tab** back, **→** at the end of the
+  line takes the one on offer, and so does a left-click anywhere in the story
+  pane — a plain tap accepts exactly what Tab would, with none of the mouse's
+  other story-pane meanings (placing the caret, starting a text selection)
+  reachable while a candidate is actually showing. (With the command panel open, Tab completes from
   the *band's* highlight instead — one completion source at a time.) Because the
   hint lives on the prompt row itself,
   nothing shifts when a completion appears or vanishes — the prompt stays put
