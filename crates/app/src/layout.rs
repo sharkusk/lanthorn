@@ -34,6 +34,12 @@ pub struct PaneLayout {
     /// rows, so nothing downstream has to subtract it again.
     pub room_dock: Rect,
     pub help_row: Rect,
+    /// How wide/tall each draggable boundary's grab zone reaches, in cells —
+    /// `Config::grab_zone_cells` clamped to `MIN_GRAB_ZONE_CELLS..=
+    /// MAX_GRAB_ZONE_CELLS` (SQ-1327). `boundary_zones` reads this; it does not
+    /// affect `CommandBandTop`, which always keeps a single-row zone — see its
+    /// doc comment.
+    pub grab_zone_cells: u16,
 }
 
 // ── Draggable pane boundaries (SQ-0669) ───────────────────────────────────────
@@ -53,6 +59,13 @@ pub const MAX_INV_DOCK_PCT: u16 = 80;
 /// pane — a percentage cannot know how many rows the map pane has.
 pub const MIN_ROOM_DOCK_PCT: u16 = MIN_INV_DOCK_PCT;
 pub const MAX_ROOM_DOCK_PCT: u16 = MAX_INV_DOCK_PCT;
+/// Smallest / largest width (splitter) or height (dock edges) of a draggable
+/// boundary's grab zone, in cells. `Config::grab_zone_cells` is clamped to this
+/// range when [`compute_pane_layout`] resolves it — a mouse click is a point but
+/// a finger is not, so a touch session (the Docker web image on a tablet) wants
+/// a wider target than the default (SQ-1327).
+pub const MIN_GRAB_ZONE_CELLS: u16 = 1;
+pub const MAX_GRAB_ZONE_CELLS: u16 = 6;
 
 /// A pane boundary the mouse can grab and drag.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -94,22 +107,32 @@ impl PaneLayout {
 
     /// The draggable boundaries of this frame, with their grab zones.
     ///
-    /// A one-cell target is hard to hit with a mouse, so each zone is the whole
-    /// divider that is actually DRAWN there:
+    /// A one-cell target is hard to hit with a mouse and harder still with a
+    /// finger, so each zone straddles the divider that is actually DRAWN there,
+    /// reaching `self.grab_zone_cells` cells out from it in total (default 2,
+    /// raised from `Config::grab_zone_cells` for touch — SQ-1327):
     ///
-    /// - the splitter is two columns — the story pane's right border and the map
+    /// - the splitter straddles the story pane's right border and the map
     ///   pane's left border, which abut (`story.right() == map.x`);
-    /// - the inventory dock's top edge is two rows — the pane border above it and
-    ///   the dock's own top border;
-    /// - the command band has no border of its own (SQ-0667 made it a borderless
-    ///   strip), so its zone is the single pane-border row above it. Widening it
-    ///   into the band would swallow clicks on the band's column headers, which
-    ///   is a worse trade than a one-row grab.
+    /// - the inventory and room docks' top edges straddle the pane border above
+    ///   them and their own top border, the same way.
+    ///
+    /// At the default of 2 that is exactly one cell either side, which is the
+    /// whole divider these three actually draw and matches lanthorn's original
+    /// (unconfigurable) zones.
+    ///
+    /// `CommandBandTop` is the one exception: it has no border of its own
+    /// (SQ-0667 made it a borderless strip), so its zone stays the single
+    /// pane-border row above it REGARDLESS of `grab_zone_cells`. Widening it
+    /// down into the band would swallow clicks on the band's column headers,
+    /// which is a worse trade than a narrow grab — so a touch session widens
+    /// every other boundary and leaves this one alone.
     ///
     /// The splitter comes first, so the corner cell where it meets a horizontal
     /// edge grabs the splitter (`boundary_at` takes the first match).
     pub fn boundary_zones(&self) -> Vec<BoundaryZone> {
         let mut zones = Vec::new();
+        let reach = self.grab_zone_cells;
 
         // Splitter: only when both panes are actually on screen and adjacent.
         let split_live = self.story.width > 0
@@ -118,12 +141,13 @@ impl PaneLayout {
             && self.map.height > 0
             && self.story.right() == self.map.x;
         if split_live {
+            let into_story = reach / 2;
             zones.push(BoundaryZone {
                 boundary: Boundary::StoryMapSplit,
                 rect: Rect::new(
-                    self.story.right().saturating_sub(1),
+                    self.story.right().saturating_sub(into_story),
                     self.story.y,
-                    2,
+                    reach,
                     self.story.height,
                 ),
             });
@@ -140,16 +164,17 @@ impl PaneLayout {
             if band.width == 0 || band.height == 0 {
                 continue;
             }
-            let top = band.y.saturating_sub(1);
-            // The band's own top row joins the zone only when it draws a border
-            // there; the borderless command band contributes nothing.
-            let bottom = match boundary {
-                Boundary::InvDockTop | Boundary::RoomDockTop => band.y,
-                _ => top,
+            // CommandBandTop ignores `grab_zone_cells` — see the doc comment
+            // above — and keeps the single pane-border row above the band;
+            // the other two split `reach` across the border they actually draw.
+            let (rows, above) = match boundary {
+                Boundary::CommandBandTop => (1, 1),
+                _ => (reach, reach / 2),
             };
+            let top = band.y.saturating_sub(above);
             zones.push(BoundaryZone {
                 boundary,
-                rect: Rect::new(band.x, top, band.width, bottom - top + 1),
+                rect: Rect::new(band.x, top, band.width, rows),
             });
         }
 
@@ -304,6 +329,7 @@ pub fn compute_pane_layout(area: Rect, state: &AppState, inv_item_count: usize) 
         inv_dock: inv_dock_area,
         room_dock: room_dock_area,
         help_row,
+        grab_zone_cells: state.config.grab_zone_cells.clamp(MIN_GRAB_ZONE_CELLS, MAX_GRAB_ZONE_CELLS),
     }
 }
 
@@ -600,5 +626,98 @@ mod tests {
             let pl = compute_pane_layout(area80x24(), &state, 0);
             assert_eq!(pl.panes_area(), Rect::new(0, 0, 80, 23), "{layout:?}");
         }
+    }
+
+    // ── grab_zone_cells (SQ-1327) ─────────────────────────────────────────────
+
+    /// The shipped default must reproduce lanthorn's original, unconfigurable
+    /// zones exactly — a mouse user sees no change.
+    #[test]
+    fn default_grab_zone_cells_matches_todays_pinned_zones() {
+        let state = AppState::default();
+        assert_eq!(state.config.grab_zone_cells, 2, "the shipped default");
+        let pl = compute_pane_layout(area80x24(), &state, 0);
+        assert_eq!(pl.grab_zone_cells, 2);
+
+        let zones = pl.boundary_zones();
+        let split = zones.iter().find(|z| z.boundary == Boundary::StoryMapSplit).unwrap();
+        assert_eq!(
+            split.rect,
+            Rect::new(pl.story.right() - 1, pl.story.y, 2, pl.story.height),
+            "one column either side of the splitter, same as before this knob existed"
+        );
+    }
+
+    /// A wider `grab_zone_cells` reaches further from the splitter on both
+    /// sides — a press two cells away, unreachable at the default of 2, now
+    /// grabs it.
+    #[test]
+    fn wider_grab_zone_cells_reaches_further_from_the_splitter() {
+        let mut state = AppState::default();
+        state.config.grab_zone_cells = 4;
+        let pl = compute_pane_layout(area80x24(), &state, 0);
+        let zones = pl.boundary_zones();
+
+        assert_eq!(boundary_at(&zones, pl.story.right() - 2, 5), Some(Boundary::StoryMapSplit));
+        assert_eq!(boundary_at(&zones, pl.map.x + 1, 5), Some(Boundary::StoryMapSplit));
+        // Still bounded: three cells out either way is past a 4-wide zone.
+        assert_eq!(boundary_at(&zones, pl.story.right() - 3, 5), None);
+        assert_eq!(boundary_at(&zones, pl.map.x + 2, 5), None);
+    }
+
+    /// A wider zone also reaches further above the inventory dock's own edge.
+    #[test]
+    fn wider_grab_zone_cells_reaches_further_above_a_dock_edge() {
+        let mut state = AppState::default();
+        state.show_inventory = true;
+        state.inv_dock.toggle_to(true, true);
+        state.config.grab_zone_cells = 4;
+        let pl = compute_pane_layout(area80x24(), &state, 3);
+        let zones = pl.boundary_zones();
+
+        assert_eq!(boundary_at(&zones, 10, pl.inv_dock.y - 2), Some(Boundary::InvDockTop));
+        assert_eq!(boundary_at(&zones, 10, pl.inv_dock.y - 3), None, "past the 4-wide zone");
+    }
+
+    /// Out-of-range config values clamp rather than producing a zero-width or
+    /// runaway zone.
+    #[test]
+    fn grab_zone_cells_clamps_to_a_sane_range() {
+        let mut state = AppState::default();
+        state.config.grab_zone_cells = 0;
+        assert_eq!(
+            compute_pane_layout(area80x24(), &state, 0).grab_zone_cells,
+            MIN_GRAB_ZONE_CELLS
+        );
+
+        state.config.grab_zone_cells = 99;
+        assert_eq!(
+            compute_pane_layout(area80x24(), &state, 0).grab_zone_cells,
+            MAX_GRAB_ZONE_CELLS
+        );
+    }
+
+    /// The borderless command band (SQ-0667) keeps its snug one-row grab no
+    /// matter how wide the knob is set — widening it would swallow clicks on
+    /// the band's own column headers.
+    #[test]
+    fn command_band_top_grab_zone_ignores_grab_zone_cells() {
+        let mut state = AppState::default();
+        open_band(&mut state);
+        state.config.grab_zone_cells = MAX_GRAB_ZONE_CELLS;
+        let pl = compute_pane_layout(area80x24(), &state, 0);
+        let zones = pl.boundary_zones();
+
+        let z = zones
+            .iter()
+            .find(|z| z.boundary == Boundary::CommandBandTop)
+            .expect("command band top zone");
+        assert_eq!(z.rect.height, 1, "stays a single row regardless of the knob");
+        assert_eq!(z.rect.y, pl.command_band.y - 1);
+        assert_eq!(
+            boundary_at(&zones, 10, pl.command_band.y),
+            None,
+            "the header row stays clickable even at the widest setting"
+        );
     }
 }
