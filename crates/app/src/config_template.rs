@@ -258,6 +258,18 @@ const INTERFACE: &[Row] = &[
         "false",
         &["Show room numbers (#id, or a small ordinal for a name-only room) inside Boxes-zoom room boxes."],
     ),
+    d(
+        "grab_zone_cells",
+        "2",
+        &[
+            "How many cells wide the draggable pane boundaries are: the story/map",
+            "splitter and the inventory/room panel top edges. Raise it for touch —",
+            "e.g. the Docker web image on a tablet, where a finger cannot land on",
+            "so narrow a target. The command band's own top edge is unaffected and",
+            "always stays a single row, so it never swallows clicks on its own",
+            "column headers. Clamped to 1-6.",
+        ],
+    ),
     d("split_ratio", "50", &["The story pane's share of the story/map split, as a percentage."]),
     d("inv_dock_pct", "33", &["Inventory panel height cap, as a percentage of screen height."]),
     d(
