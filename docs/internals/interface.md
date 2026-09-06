@@ -748,8 +748,11 @@ know which side you're on).
   hardcoded 10x20)**; the cell aspect and its signed distance from the 2.000 that
   makes a half-block sample square; the capability list — including whether kitty
   uploads are actually going out compressed, which fails silently in both
-  directions; and the render state and byte counts that explain each other when a
-  session feels slow. Printed to the transcript and appended to
+  directions; the render state and byte counts that explain each other when a
+  session feels slow; and, per encode phase (resize, encode, deflate, base64),
+  how many times it has run and its min/mean/max wall-clock cost since launch —
+  so a slow machine can say whether compression is actually costing it anything.
+  Printed to the transcript and appended to
   `~/.lanthorn/dump-terminal.log`, which is the copy to attach to a bug report.
   See [the v6 graphics notes](v6-graphics.md) for a worked example.
 - **Command palette** — a fuzzy-searchable popup over *every* registry command,
