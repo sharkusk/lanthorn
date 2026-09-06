@@ -50,11 +50,26 @@
 //! [`crate::route::route_lanes`], and that is where the cost model lives:
 //!
 //! * **`route_topology_with` chooses a route by cost, not by first fit.** Each connector is
-//!   offered both L orientations and (for a one-way) the entry sides still facing its origin.
-//!   A candidate that would run alongside an already-placed connector scores an overlap, and
-//!   overlaps are the PRIMARY key — an overlap-free route always wins, however many crossings
-//!   it costs. Crossings are the secondary key, then a fixed preference rank, then the points
-//!   themselves, so the choice is deterministic.
+//!   offered both L orientations, the unsnapped L on its own two anchors (`anchor_l_points`),
+//!   and — for a one-way — the entry sides still facing its origin. The cost keys, in order:
+//!
+//!   1. **An overlap on a room LINE is forbidden.** A room row or column carries no lane, so two
+//!      connectors that share one are on top of each other for good (`unlaned_overlap`).
+//!   2. **An overlap in a CHANNEL is merely bad** (`has_parallel_overlap`): `assign_lanes` can
+//!      widen the channel and give each run its own lane, so this is a route scored down rather
+//!      than refused.
+//!   3. **Bends**, and they outrank crossings (SQ-1332). The user's rule, verbatim: *"MANY cases
+//!      where our path makes unnecessary turns before reaching the destination … when there is
+//!      no room in the way it looks messy."* A crossing is legible and a detour is not, so a
+//!      connector takes the straight line when its anchors align and a single L when they do
+//!      not; a Z or anything longer is only ever the price of dodging a room box or an overlap.
+//!   4. **Crossings**, then **length**, then a fixed preference rank, then the points
+//!      themselves, so the choice is deterministic.
+//!
+//!   **Nothing here reads `distorted`, and nothing should.** A distorted one-way is an edge whose
+//!   direction the layout could not honour, not an edge that deserves a longer route: it takes
+//!   the direct L like everything else and crosses what it must. (`arrival_corner_owners` is the
+//!   one place the flag is read at all, and only to settle which of two arrivals keeps a corner.)
 //! * **`assign_lanes` then separates what shares a channel**, and its cost is the lane index:
 //!   a busy channel simply widens (`render::map::channel_width` grows with the lane count)
 //!   rather than stacking two lines on one. Its ordering is a hard constraint, not a
