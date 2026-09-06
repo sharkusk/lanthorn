@@ -63,6 +63,12 @@ Absolute URLs or no link.
   machine bold was not a heavier face at all — it lit the display's intensity
   bit, so those runs were white against grey. They are again.
 
+- **On a machine's own colours, room names are drawn the way the machine drew
+  them.** Playing with a game's own palette (Amiga, IBM PC, and the rest), the
+  room heading used to always get a theme accent colour, even when the machine
+  itself printed it in plain or bold text like everything else on the line. Now
+  it takes whatever ink the machine gave it, matching the original.
+
 - **…and the bracketed asides come out bright with them.** *Bureaucracy*'s
   "[Your blood pressure just went up.]" stayed grey even so: lanthorn dims a
   whole line in brackets on the assumption it came from the interpreter rather

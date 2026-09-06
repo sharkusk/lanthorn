@@ -661,7 +661,8 @@ impl ColorScheme {
     /// Resolve the style for one Story line: first matching user rule wins, else
     /// the built-in location rule (line matches `room_name`), else the built-in
     /// system rule (whole line bracketed), else `base` unpatched. A match patches
-    /// its style over `base` (overriding only set fields).
+    /// its style over `base` (overriding only set fields). On a frame the machine
+    /// owns (`machine_owns_ink`), both built-in rules are withdrawn — see below.
     ///
     /// `base` is normally this scheme's own `transcript` style; under ZMSD §8.3's
     /// Amiga interpreter it is that style with the MACHINE's ink and page laid
@@ -678,11 +679,20 @@ impl ColorScheme {
     /// symptom looked like. On a machine with one pair for the whole screen there
     /// is no third colour to recede into.
     ///
-    /// The other two rules still fire. A user `transcript_rules` entry is explicit
-    /// configuration and must always win. The built-in LOCATION rule survives
-    /// because it differs in kind: it is a reading aid, it paints an accent rather
-    /// than a mute, and an accent is legible on any page — whereas the system rule
-    /// asserts something about the line's provenance that is simply untrue here.
+    /// `machine_owns_ink` also withdraws the built-in **location** rule (SQ-1357,
+    /// see below) — the same flag, both built-ins.
+    ///
+    /// A user `transcript_rules` entry is explicit configuration and always wins,
+    /// on any frame. The built-in LOCATION rule is withdrawn on machine frames too
+    /// (SQ-1357): the capture shows the heading in the machine's own bold ink, and
+    /// a theme accent on a machine frame is a colour the machine never had.
+    /// `machine-screenshots/dos-bureaucracy.png` draws Bureaucracy's `Front Room`
+    /// heading in the same bold white as the `BUREAUCRACY` banner — the game prints
+    /// both with `HLIGHT ,H-BOLD`, and the IBM PC's one pair has no third colour to
+    /// paint a reading aid in. SQ-0822 kept this rule standing on the reasoning
+    /// that "an accent is legible on any page"; the capture says otherwise — on a
+    /// frame the machine owns, the room heading is whatever the game printed it as,
+    /// in the machine's ink, same as everything else on the line.
     ///
     /// **And "exactly those frames" is not a v6 fact** (SQ-1354). The flag was read
     /// off the v6 page pair alone, so a v1–v5 story wearing its machine's PERIOD
@@ -705,9 +715,11 @@ impl ColorScheme {
                 return base.patch(rule.style);
             }
         }
-        if let Some(name) = room_name {
-            if zvm::location::status_name_matches(line, name) {
-                return base.patch(self.theme.get("transcript_location").style);
+        if !machine_owns_ink {
+            if let Some(name) = room_name {
+                if zvm::location::status_name_matches(line, name) {
+                    return base.patch(self.theme.get("transcript_location").style);
+                }
             }
         }
         let t = line.trim();
@@ -1063,13 +1075,16 @@ mod tests {
         assert_eq!(cs.resolve_story_style(base, "West of House", None, false), cs.transcript);
     }
 
-    /// SQ-0822: under ZMSD §8.3's Amiga interpreter the machine owns the screen's
-    /// one pair of pens, and the built-in "bracketed line = a message from the
-    /// interpreter" guess is withdrawn — the line is the game's prose, and muting
-    /// it paints dark grey on the Amiga's dark-grey page. The two rules either
-    /// side of it are untouched.
+    /// SQ-0822/SQ-1357: under ZMSD §8.3's Amiga interpreter the machine owns the
+    /// screen's one pair of pens, and both built-in guesses are withdrawn — the
+    /// bracketed "system message" guess (SQ-0822: the line is the game's prose,
+    /// and muting it paints dark grey on the Amiga's dark-grey page) and the
+    /// room-heading accent (SQ-1357: `machine-screenshots/dos-bureaucracy.png`
+    /// draws `Front Room` in the same bold white as the banner — a theme accent
+    /// is a colour the machine never had). A user rule is the one thing that
+    /// still wins on either machine.
     #[test]
-    fn the_machine_ink_withdraws_the_built_in_system_rule_and_nothing_else() {
+    fn the_machine_ink_withdraws_both_built_in_rules() {
         use ratatui::style::{Color, Modifier};
         let mut cs = ColorScheme::terminal_default();
         cs.transcript_rules.push(CompiledRule {
@@ -1094,15 +1109,28 @@ mod tests {
             cs.resolve_story_style(base, notice, None, false).fg,
             cs.theme.get("transcript_system").style.fg,
         );
-        // A user rule still wins on either machine, and the location aid still fires.
+
+        // The location rule is withdrawn the same way: on a machine frame the
+        // room heading falls through to base (the machine's own ink), never the
+        // theme's accent.
+        let loc = cs.resolve_story_style(base, "West of House", Some("West of House"), true);
+        assert_eq!(loc, base, "the heading is prose too: the machine's ink, the machine's page");
+        assert_ne!(
+            loc.fg,
+            cs.theme.get("transcript_location").style.fg,
+            "…and never the theme accent the machine never had",
+        );
+        // Off the machine the location rule still paints the accent.
+        assert_eq!(
+            cs.resolve_story_style(base, "West of House", Some("West of House"), false).fg,
+            cs.theme.get("transcript_location").style.fg,
+        );
+
+        // A user rule still wins on either machine.
         assert!(cs
             .resolve_story_style(base, "> go north", None, true)
             .add_modifier
             .contains(Modifier::BOLD));
-        assert_eq!(
-            cs.resolve_story_style(base, "West of House", Some("West of House"), true).fg,
-            cs.theme.get("transcript_location").style.fg,
-        );
     }
 
     #[test]

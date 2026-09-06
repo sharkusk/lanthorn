@@ -2111,11 +2111,12 @@ fn render_input_content(
 /// Is the ink on this frame's Story lines the MACHINE's rather than the theme's?
 ///
 /// This is [`ColorScheme::resolve_story_style`](crate::colors::ColorScheme::resolve_story_style)'s
-/// `machine_owns_ink`, and what it withdraws is the built-in "a whole line in
-/// brackets came from the interpreter" rule — see that function for why (SQ-0822:
-/// the rule's payload is a MUTE chosen to recede against the theme's page, and on
-/// a machine with one pair for the whole screen there is no third colour to
-/// recede into).
+/// `machine_owns_ink`, and what it withdraws is both built-in rules — "a whole
+/// line in brackets came from the interpreter" (SQ-0822: the rule's payload is a
+/// MUTE chosen to recede against the theme's page, and on a machine with one pair
+/// for the whole screen there is no third colour to recede into) and the
+/// room-heading accent (SQ-1357: a theme accent is a colour the machine never
+/// had) — see that function for the detail on each.
 ///
 /// **Two frames answer yes, and the second is why this is a function** (SQ-1354).
 ///
