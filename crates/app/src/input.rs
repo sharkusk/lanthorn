@@ -165,6 +165,10 @@ pub enum Action {
     ExportDot(Option<String>),
     /// Caller: write an annotatable text/ASCII map dump. `Some(dest)` is the optional `[file]` arg.
     ExportMap(Option<String>),
+    /// Caller: export the map as the versioned `lanthorn-map` JSON (SQ-1336),
+    /// the same schema `lanthorn-mapgen` writes. `Some(dest)` is the optional
+    /// `[file]` arg.
+    ExportJson(Option<String>),
     /// Toggle the in-box alignment code overlay (palette-only since SQ-0446).
     ToggleAlignment,
     /// Toggle portal destination name labels beside in-room portal icons
@@ -1899,7 +1903,7 @@ pub fn cycle_focus(idx: usize, len: usize, delta: i32) -> usize {
 ///
 /// **Caller-handled actions** (silently ignored here — the run loop must act on
 /// them): `SubmitCommand` (game focus), `SaveGame`, `RestoreGame`, `ExportSvg`,
-/// `Quit`.
+/// `ExportJson`, `Quit`.
 ///
 /// The former bottom-bar prompt sub-mode is gone: rename/notes/relabel/layer/
 /// config-path/create-file open the `text_entry` modal (submit via
@@ -3427,6 +3431,7 @@ fn apply_action_inner(action: Action, state: &mut AppState, mapper: &mut Mapper)
         | Action::ExportSvg(_)
         | Action::ExportDot(_)
         | Action::ExportMap(_)
+        | Action::ExportJson(_)
         | Action::SavesLoad
         | Action::SavesImport
         | Action::FbEnter

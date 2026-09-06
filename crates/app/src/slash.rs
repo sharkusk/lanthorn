@@ -599,6 +599,9 @@ pub static COMMANDS: &[CommandSpec] = &[
     CommandSpec { name: "export-map", category: Category::Export, context: Context::Global,
         usage: "export-map [file]", description: "dump the map structure; default path when omitted",
         dispatch: |a| SlashOutcome::Action(crate::input::Action::ExportMap(a.first().map(|s| s.to_string()))) },
+    CommandSpec { name: "export-json", category: Category::Export, context: Context::Global,
+        usage: "export-json [file]", description: "export the map as versioned lanthorn-map JSON, the same schema lanthorn-mapgen writes; default path when omitted",
+        dispatch: |a| SlashOutcome::Action(crate::input::Action::ExportJson(a.first().map(|s| s.to_string()))) },
 
     // ── Animation ─────────────────────────────────────────────────────────
     CommandSpec { name: "animate-tidy", category: Category::Animation, context: Context::Global,
@@ -1139,7 +1142,9 @@ mod tests {
         // SQ-1227 added `open-story-menu` and `show-browser-keys` — the browser's
         // per-story menu and its own key reference, which between them are what
         // let the footer shrink to one key per hint.
-        assert_eq!(COMMANDS.len(), 90, "registry must match the spec's Full command table");
+        // SQ-1336 added `export-json`: the played map in the same versioned
+        // `lanthorn-map` JSON `lanthorn-mapgen` writes for a static one.
+        assert_eq!(COMMANDS.len(), 91, "registry must match the spec's Full command table");
     }
 
     /// SQ-1237 unified the panel vocabulary — `command band` became `command

@@ -11,14 +11,13 @@ use crossterm::event::{
 use crossterm::execute;
 use crossterm::terminal::{disable_raw_mode, LeaveAlternateScreen};
 use mapper::mapper::Mapper;
-use mapper::render::{render as render_map_data, render_layer};
+use mapper::render::render_layer;
 use ratatui::backend::CrosstermBackend;
 use ratatui::layout::Rect;
 use ratatui::style::{Modifier, Style};
 use ratatui::Terminal;
 
 use app::export_dot::export_dot;
-use app::export_svg::export_svg;
 use app::map_dump::render_dump;
 use app::archive::load_archive;
 use app::input::{apply_action, apply_text_entry, key_to_command, mouse_to_action, Action, KeyResolve};
@@ -1568,23 +1567,40 @@ fn toggle_style_watch(
     set_style_watch(state, watcher, watcher.is_none());
 }
 
-/// Run a map-export Action (SVG/DOT/dump) into the per-game dir. Returns true if
-/// `action` was a map-export action (so callers fall through otherwise). Mirrors
-/// the resolve→create_dir_all→render→write→notice logic that was inline at the
-/// main-loop Action::Export* arms (SQ-0297: slash commands never reached that
-/// match, so this is shared so both the slash and key-dispatch paths export).
+/// Run a map-export Action (SVG/DOT/dump/JSON) into the per-game dir. Returns
+/// true if `action` was a map-export action (so callers fall through
+/// otherwise). Mirrors the resolve→create_dir_all→render→write→notice logic
+/// that was inline at the main-loop Action::Export* arms (SQ-0297: slash
+/// commands never reached that match, so this is shared so both the slash and
+/// key-dispatch paths export).
+///
+/// `session`/`story_bytes`/`story_path` are only ever read by the
+/// `ExportJson` arm (SQ-1336), to build the played story's own identity —
+/// see [`app::export_json::build_walked_story`]. Every other arm ignores them.
 fn handle_map_export(
     action: &Action,
     game_dir: &std::path::Path,
     mapper: &Mapper,
     state: &mut AppState,
+    session: &dyn Engine,
+    story_bytes: &[u8],
+    story_path: &std::path::Path,
 ) -> bool {
     match action {
         Action::ExportSvg(dest) => {
             let path = app::export::resolve_export_path(dest.as_deref(), game_dir, "map.svg");
             if let Some(p) = path.parent() { let _ = std::fs::create_dir_all(p); }
-            let rm = render_map_data(&mapper.graph);
-            match export_svg(&path, &rm, Some(&mapper.graph)) {
+            // SQ-1337: every layer stacked, with headings, cross-layer ghosts and
+            // the legend — exactly what `lanthorn-mapgen` writes for `.map.json`'s
+            // sibling `.svg` (`mapgen::write_artefacts`). `render_svg_layered`
+            // reads the current room straight off `mapper.graph` itself
+            // (`MapGraph::current()`, set as the player moves), so the
+            // current-room highlight `render_svg_of` drew here before still
+            // shows — nothing to thread through for it.
+            match app::storage::atomic_write(
+                &path,
+                app::export_svg::render_svg_layered(&mapper.graph).as_bytes(),
+            ) {
                 Ok(()) => state.push_notice(&format!("[SVG exported to {}]", abbreviate_home(&path))),
                 Err(e) => state.push_notice(&format!("[SVG export failed: {}]", e)),
             }
@@ -1609,6 +1625,16 @@ fn handle_map_export(
             match std::fs::write(&path, render_dump(&mapper.graph, &state.symbols)) {
                 Ok(()) => state.push_notice(&format!("[map dump written to {}]", abbreviate_home(&path))),
                 Err(e) => state.push_notice(&format!("[map dump failed: {}]", e)),
+            }
+            true
+        }
+        Action::ExportJson(dest) => {
+            let path = app::export::resolve_export_path(dest.as_deref(), game_dir, "map.json");
+            if let Some(p) = path.parent() { let _ = std::fs::create_dir_all(p); }
+            let walked = app::export_json::build_walked_story(session, story_bytes, story_path);
+            match app::export_json::export_json(&path, &mapper.graph, &walked) {
+                Ok(()) => state.push_notice(&format!("[JSON exported to {}]", abbreviate_home(&path))),
+                Err(e) => state.push_notice(&format!("[JSON export failed: {}]", e)),
             }
             true
         }
@@ -4101,8 +4127,8 @@ fn run_event_loop(boot: startup::BootResult, launched_from_library: bool) -> Run
 
             // SQ-0297: shared with the slash-command path via handle_map_export
             // (dispatch_slash_outcome never reaches this match).
-            a @ (Action::ExportSvg(_) | Action::ExportDot(_) | Action::ExportMap(_)) => {
-                handle_map_export(&a, &game_dir, &mapper, &mut state);
+            a @ (Action::ExportSvg(_) | Action::ExportDot(_) | Action::ExportMap(_) | Action::ExportJson(_)) => {
+                handle_map_export(&a, &game_dir, &mapper, &mut state, &*session, &story_bytes, &story_path);
             }
 
             // ── Saves-manager actions ─────────────────────────────────────────
@@ -5267,17 +5293,23 @@ mod tests {
 
         let mapper = Mapper::default();
         let mut state = AppState::default();
+        let engine = ClocklessEngine;
+        let story_bytes: &[u8] = &[];
+        let story_path = std::path::Path::new("test.z5");
 
-        assert!(super::handle_map_export(&Action::ExportSvg(None), &dir, &mapper, &mut state));
+        assert!(super::handle_map_export(&Action::ExportSvg(None), &dir, &mapper, &mut state, &engine, story_bytes, story_path));
         assert!(dir.join("map.svg").exists(), "SVG export must write map.svg into the game dir");
 
-        assert!(super::handle_map_export(&Action::ExportDot(Some("mymap".into())), &dir, &mapper, &mut state));
+        assert!(super::handle_map_export(&Action::ExportDot(Some("mymap".into())), &dir, &mapper, &mut state, &engine, story_bytes, story_path));
         assert!(dir.join("mymap.dot").exists(), "DOT export with a bare-name arg must land in the game dir");
 
-        assert!(super::handle_map_export(&Action::ExportMap(None), &dir, &mapper, &mut state));
+        assert!(super::handle_map_export(&Action::ExportMap(None), &dir, &mapper, &mut state, &engine, story_bytes, story_path));
         assert!(dir.join("map.txt").exists(), "dump export must write map.txt into the game dir");
 
-        assert!(!super::handle_map_export(&Action::ToggleWatch, &dir, &mapper, &mut state),
+        assert!(super::handle_map_export(&Action::ExportJson(None), &dir, &mapper, &mut state, &engine, story_bytes, story_path));
+        assert!(dir.join("map.json").exists(), "JSON export must write map.json into the game dir");
+
+        assert!(!super::handle_map_export(&Action::ToggleWatch, &dir, &mapper, &mut state, &engine, story_bytes, story_path),
             "a non-export action must not be treated as handled");
 
         let _ = fs::remove_dir_all(&dir);

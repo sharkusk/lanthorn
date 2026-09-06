@@ -116,6 +116,16 @@ Absolute URLs or no link.
 - **A click in the story pane accepts a showing word completion.** When the
   dim ghost text after your cursor is offering a word, clicking anywhere in
   the story pane takes it, the same as pressing `Tab` or `→`.
+- **`/export-svg` now draws every map layer, not just the one you're standing
+  on.** A maze or a side wing on its own layer used to be left out of the
+  file entirely; the export now stacks every layer top to bottom, each under
+  its own heading, with the same cross-layer arrows and legend
+  `lanthorn-mapgen` draws for a story's whole map. The room you're currently
+  in is still highlighted.
+- **A new `/export-json [file]` writes the map you've actually walked** in the
+  same versioned JSON format `lanthorn-mapgen` uses for a story's whole map —
+  handy for feeding your own tools, or comparing what you've found against
+  the complete map.
 
 ### Changed
 

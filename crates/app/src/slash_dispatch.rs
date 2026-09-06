@@ -53,7 +53,7 @@ pub(crate) fn dispatch_slash_outcome(
                 let entries = combined_saves(game_dir);
                 apply_action(Action::OpenSaves, state, mapper);
                 state.overlays.saves = Some(SavesState { entries, scroll: Default::default() });
-            } else if handle_map_export(&a, game_dir, mapper, state) {
+            } else if handle_map_export(&a, game_dir, mapper, state, &*session, story_bytes, story_path) {
                 // handled
             } else if matches!(a, Action::ToggleWatch) {
                 toggle_style_watch(state, style_watcher);
