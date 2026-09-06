@@ -164,6 +164,160 @@ fn zork1_routing_moves_no_rooms() {
     assert_eq!(before, after, "routing must not change any room position");
 }
 
+/// **No connector bends in the last channel before its destination** (SQ-1320).
+///
+/// The user's report was about the picture right at the room: a one-way aimed at the
+/// destination's side CENTRE and then stepping sideways into the slot its arrowhead would
+/// actually use — "a little jog", on `Frigid River --W--> White Cliffs Beach` (#47→#192) and
+/// `Clearing --E--> Forest` (#167→#33). `render::map::sq1320_arrival_slots` states the rule on
+/// synthetic graphs of those two shapes so CI can fail on it; this states it over the whole real
+/// map, where a route can arrive at a box from a direction no synthetic pair produces.
+///
+/// **"A bend in the last channel", precisely**, is stated once on
+/// [`app::render::map::arrival_approach_report`] and read from `ConnectorPlot.path` — the drawn
+/// polyline reduced to its turns. In short: the segment immediately before the arrowhead's own leg
+/// runs PARALLEL to the entry side and is exactly ONE cell long. That is the sidestep, and only
+/// the sidestep: a route arriving ALONG the channel covers real distance in that segment
+/// (`Atlantis Room --S--> Reservoir North` covers fourteen cells) and its one-cell turn-in leg is
+/// simply how wide that gutter is.
+///
+/// A destination side with two or more arrivals may excuse a jog — it has two cells to fill and
+/// only one of them can be reached head-on. Zork I needs that excuse nowhere, which the case
+/// asserts too: every one of its measured arrivals passes the rule on its own merits.
+#[test]
+fn zork1_no_connector_bends_in_the_last_channel() {
+    let Some(map) = zork1_map() else {
+        eprintln!("SKIP zork1_no_connector_bends_in_the_last_channel: stories/{ZORK1} absent");
+        return;
+    };
+    let mut layers: Vec<mapper::layer::LayerId> = map
+        .graph
+        .layers()
+        .keys()
+        .copied()
+        .filter(|&l| !map.graph.rooms_in_layer(l).is_empty())
+        .collect();
+    layers.sort_unstable();
+    let (mut checked, mut excused) = (0usize, 0usize);
+    let mut failures = Vec::new();
+    for l in layers {
+        let (n, e, jogs) = app::render::map::arrival_approach_report(&map.graph, l);
+        checked += n;
+        excused += e;
+        for line in jogs {
+            failures.push(format!("[{}] {line}", map.graph.layer_name(l)));
+        }
+    }
+    assert!(
+        failures.is_empty(),
+        "{} connector(s) jog into their arrowhead on the Zork I map:\n{}",
+        failures.len(),
+        failures.join("\n")
+    );
+    // Non-vacuity: the rule has to be measuring the map, not an empty list.
+    assert!(checked > 100, "only {checked} arrivals measured — the filter has eaten the map");
+    // And the exemption is not carrying the result: no jog on this map is excused, so every one of
+    // the 200-odd arrivals above passes the rule on its own merits. If this ever grows, a crowded
+    // side has started weaving and the picture is worth looking at before the number is re-pinned.
+    assert_eq!(excused, 0, "no jog on the Zork I map needs the crowded-side exemption");
+}
+
+/// **The map is still overlap-free with the DIAGONAL GLYPHS on** (SQ-1321).
+///
+/// `zork1_renders_no_illegal_cell_overlaps` above measures the orthogonal reading, because that is
+/// what `overlap_stats` and the tidy metric are defined on — a display setting must not move a
+/// layout decision. That leaves a hole exactly the size of the diagonal glyph path: a half-diagonal
+/// chain claims no lane and contributes no compass mask, so a chain running over another
+/// connector's line is invisible to every count above, the same class of blind spot SQ-1316 closed
+/// for the dogleg leg.
+///
+/// SQ-1321 shrinks the hole to almost nothing by construction — a chain is now drawn only for an
+/// unbroken corner-to-corner slope between two diagonally-adjacent rooms, so every other diagonal
+/// draws exactly what the orthogonal reading already measured — but "almost nothing" is not
+/// nothing, and two such slopes could still cross in one gap.
+#[test]
+fn zork1_has_no_diagonal_glyph_overlaps() {
+    let Some(map) = zork1_map() else {
+        eprintln!("SKIP zork1_has_no_diagonal_glyph_overlaps: stories/{ZORK1} absent");
+        return;
+    };
+    let mut layers: Vec<mapper::layer::LayerId> = map
+        .graph
+        .layers()
+        .keys()
+        .copied()
+        .filter(|&l| !map.graph.rooms_in_layer(l).is_empty())
+        .collect();
+    layers.sort_unstable();
+    let mut failures = Vec::new();
+    for l in layers {
+        for line in app::render::map::diagonal_glyph_overlaps(&map.graph, l) {
+            failures.push(format!("[{}] {line}", map.graph.layer_name(l)));
+        }
+    }
+    assert!(
+        failures.is_empty(),
+        "{} diagonal-glyph overlap(s) on the Zork I map:\n{}",
+        failures.len(),
+        failures.join("\n")
+    );
+}
+
+/// The same on Counterfeit Monkey, whose park corner is the one place on either fixture where two
+/// corner-to-corner slopes CROSS inside a single gap — and which keeps a residual this pins.
+///
+/// **The residual, and why it is not SQ-1321's.** `Fair↔Church Forecourt` (NW) crosses
+/// `Park Center↔Midway` (SW), and `Fair↔Monumental Staircase` (NE) crosses
+/// `Park Center↔Heritage Corner` (SE): four rooms in a row over four rooms, all diagonally
+/// adjacent, so all four passages were already drawn as slopes long before SQ-1321 — which only
+/// ever REMOVED chains, from the partial diagonals that are not corner-to-corner. Reverting
+/// SQ-1321 does not change one cell of this.
+///
+/// Each crossing costs two cells rather than one, because a half-diagonal step is two glyphs tall:
+/// at `(38, 51)` the NW slope wants `🮢` (middle-left → lower-centre) and the SW slope wants `🮣`
+/// (middle-right → lower-centre); at `(38, 52)` they want `🮡` and `🮠`. The two are complementary
+/// halves of one crossing, and Unicode has the glyph that draws both — U+1FBA6 `🮦` MIDDLE LEFT TO
+/// LOWER CENTRE TO MIDDLE RIGHT and U+1FBA7 `🮧` MIDDLE LEFT TO UPPER CENTRE TO MIDDLE RIGHT, in
+/// the same Legacy Computing block `symbols.rs` already treats as one narrow-glyph family. The
+/// renderer has no combined form to reach for, so one chain simply overwrites the other and one
+/// passage shows a two-cell break where it crosses.
+///
+/// That is a crossing drawn imperfectly, not a passage lost — the same standing the orthogonal
+/// residual has in `counterfeit_monkey_overlaps_are_only_the_crossing_diagonals` below — and
+/// fixing it means two new themeable path glyphs plus a merge rule, which is a feature and not
+/// this quest. Pinned by shape AND by count so it cannot quietly grow.
+#[test]
+fn counterfeit_monkey_diagonal_glyph_overlaps_are_only_the_two_crossings() {
+    let Some(path) = story("CounterfeitMonkey-11.gblorb") else {
+        eprintln!("SKIP counterfeit_monkey_diagonal_glyph_overlaps_are_only_the_two_crossings: fixture absent");
+        return;
+    };
+    let map = app::mapgen::generate(&path, true).expect("mapgen");
+    let mut layers: Vec<mapper::layer::LayerId> = map
+        .graph
+        .layers()
+        .keys()
+        .copied()
+        .filter(|&l| !map.graph.rooms_in_layer(l).is_empty())
+        .collect();
+    layers.sort_unstable();
+    let mut lines = Vec::new();
+    for l in layers {
+        for line in app::render::map::diagonal_glyph_overlaps(&map.graph, l) {
+            lines.push(format!("[{}] {line}", map.graph.layer_name(l)));
+        }
+    }
+    // Exactly the park corner: two crossings, two cells each, and nothing anywhere else.
+    let park = |s: &String| {
+        (s.contains("Fair->Church Forecourt(NW)") && s.contains("Park Center->Midway(SW)"))
+            || (s.contains("Fair->Monumental Staircase(NE)")
+                && s.contains("Park Center->Heritage Corner(SE)"))
+    };
+    let strays: Vec<&String> = lines.iter().filter(|s| !park(s)).collect();
+    assert!(strays.is_empty(), "diagonal-glyph overlap outside the park corner:\n{strays:?}");
+    assert_eq!(lines.len(), 4, "two crossings, two cells each — see the doc comment above");
+}
+
 /// Counterfeit Monkey: a Glulx map an order of magnitude larger than Zork I, and the second
 /// graph the SVG is regenerated against. A rule that only holds on the graph it was written for
 /// is a coincidence.
@@ -267,7 +421,12 @@ fn counterfeit_monkey_overlaps_are_only_the_crossing_diagonals() {
         crossing_diagonal_cells, 6,
         "the crossing-diagonal residual has changed size — re-read the doc comment above"
     );
-    assert_eq!(isolated_touches, 1, "exactly one point-touch on this map");
+    // Was 1 before SQ-1320 — `Roget Close→gate` and `Winding Footpath→Roget Close` each turned
+    // in the same cell of one gutter, because each was aimed at its destination side's CENTRE and
+    // bent aside into its slot in the last channel. Now both run straight into the slot they
+    // actually use, and the two turns are no longer in the same place. Zero is a stronger pin
+    // than one, so it stays an equality: a shape reappearing here is a finding either way.
+    assert_eq!(isolated_touches, 0, "no point-touches left on this map");
 }
 
 // ---------------------------------------------------------------------------
