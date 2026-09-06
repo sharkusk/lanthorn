@@ -112,3 +112,5 @@ mod sq1336_export_json;
 mod sq1342_quit_clears_resume;
 #[path = "suites/sq1345_zork1_forest_shadow.rs"]
 mod sq1345_zork1_forest_shadow;
+#[path = "suites/sq1351_nguhd_topics.rs"]
+mod sq1351_nguhd_topics;

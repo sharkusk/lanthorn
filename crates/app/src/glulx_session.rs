@@ -1263,6 +1263,9 @@ impl GlulxSession {
         // command — cragne Manor's content warning (SQ-0733).
         let awaiting_line_input = self.pending == InputKind::Line;
         let heading = self.appglk().take_room_heading(awaiting_line_input);
+        // SQ-1351: and a banner the story's own status line contradicts is not a
+        // heading at all, whatever it is styled as.
+        let heading = self.refuse_banner_the_status_line_contradicts(heading);
         // SQ-1302: a story that names its rooms only on the STATUS LINE — never in
         // the buffer — is read from there instead, and everything below treats the
         // answer as the heading it stands in for.
@@ -1649,6 +1652,66 @@ impl GlulxSession {
             return None;
         }
         self.appglk().status_room_name()
+    }
+
+    /// Drop a bold own-line banner the story's own STATUS LINE contradicts
+    /// (SQ-1351) — it names something, but not the room.
+    ///
+    /// *Never Gives Up Her Dead* (Brian Rushton, Inform 7, Glulx) is the report:
+    /// *"conversation topics end up as rooms on the map"*. Its topic system
+    /// prints its list under a `Subheader` banner — `"Things to say to Gareth"`
+    /// — set flush against the topics below it, which is precisely the shape
+    /// [`crate::glk_backend::StoryScan`] has to accept as a room heading: an
+    /// own-line bold run JOINED to the text beneath it, exactly as Inform prints
+    /// `"Storage Room"` above a room description. Every heuristic in the buffer
+    /// scan says room. Measured on the opening, `TOPICS` minted *Things to say to
+    /// Gareth* as a node, and because the cached room is sticky the map stayed in
+    /// it for the rest of the conversation — so the next real move out of the
+    /// storage room was minted as a passage from the TOPIC, and the story's own
+    /// rooms hung off a node the game has no such place for.
+    ///
+    /// The buffer cannot settle this, but the story is saying where the player is
+    /// somewhere else at the same time: this story paints the room name into its
+    /// status grid, and it read `" Storage Room"` on the very turn the banner
+    /// said otherwise. So the grid is used here the way
+    /// [`Self::check_room_lock_against_story`] uses it and for the same reason —
+    /// naming a room from the grid is a CLAIM (and stays gated behind SQ-1302's
+    /// `status_line_room`), while this is a REFUSAL to believe one.
+    ///
+    /// Both halves of the gate are needed, and each failure leaves the heading
+    /// exactly as trusted as it was before this existed:
+    ///
+    /// * **the grid must be corroborating the room the map is already in.** A
+    ///   status line is chrome the author wrote and need not be a room at all;
+    ///   one that has just agreed with the room we are standing in has earned
+    ///   the right to disagree about a banner. This is what keeps a story whose
+    ///   grid holds a chapter title, a score or a name from silently refusing
+    ///   every real heading it prints — such a grid never matches the current
+    ///   room, so it never gets a vote.
+    /// * **and it must contradict the banner.** A genuine move repaints both
+    ///   together — measured here, `west` out of the storage room printed the
+    ///   `"Darkness"` heading with `" Darkness"` in the grid — so an arrival
+    ///   never reaches the refusal, and neither does a `look`.
+    ///
+    /// A refused banner is treated as a turn that printed no heading, which is
+    /// what it is: [`crate::glulx_roomlock::Movement::Unchanged`], the room name
+    /// carried over from the cached room, and one more still turn for the
+    /// learner to score. That also keeps a run of topic banners away from
+    /// `RoomLock::verify`'s frozen-lock counter, which would otherwise read three
+    /// topic lists in a row as a lock that has stopped tracking the story.
+    fn refuse_banner_the_status_line_contradicts(
+        &mut self,
+        heading: Option<String>,
+    ) -> Option<String> {
+        let banner = heading.clone()?;
+        let Some(here) = self.last_room.as_ref().map(|r| r.name.clone()) else { return heading };
+        let Some(status) = self.appglk().status_room_name() else { return heading };
+        let corroborates_here = zvm::location::status_name_matches(&status, &here);
+        let contradicts_banner = !zvm::location::status_name_matches(&status, &banner);
+        if corroborates_here && contradicts_banner {
+            return None;
+        }
+        heading
     }
 
     /// Whether the story owes us a room name that only asking will get.
