@@ -81,6 +81,15 @@ Absolute URLs or no link.
 
 ### Fixed
 
+- **Two rooms you walked between in both directions are drawn side by side, and
+  a passage the map cannot honour now admits it.** Zork I's Clearing and the
+  Forest below it came out one cell too far apart, with an empty square between
+  them and a straight line drawn through it, because two one-way exits into that
+  same Forest were allowed to overrule a passage you had walked both ways. A
+  passage walked from both ends now wins, and any passage whose two rooms are
+  not where its compass word says is drawn as a bent line rather than passing
+  itself off as straight.
+
 - **Bureaucracy's licence form hands you back a screen you can read.** Filling in
   the last field used to leave the story pane blank until you pressed Enter
   again — and in that game an empty command is answered with "[What?]" and a

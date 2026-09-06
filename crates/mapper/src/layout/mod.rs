@@ -215,6 +215,16 @@ fn place_by_bearings(
 ///     as the directional sense is correct (e.g. a North edge is satisfied whenever dest is
 ///     *anywhere* north, i.e. `dest.y < origin.y`).
 ///
+/// **A CARDINAL compass bearing has no such slack** (SQ-1364). `N` names the room in the next
+/// cell up, not "somewhere above": that is what a reciprocal cardinal pair MEANS everywhere else
+/// in this module (`splits_a_run`, `tighten_runs`), and a pair the layout could not bring
+/// together must say so rather than let a straight line down an empty column pass for an
+/// honoured claim. Zork I's `Clearing` and the `Forest` two rows below it were flagged
+/// undistorted, so seating's `adjacent_reciprocals`, the dump's `align=col[…]` and the SVG's
+/// straight edge all reported an adjacency the grid did not hold. A DIAGONAL keeps its slack —
+/// it only ever pinned its endpoint to a quadrant (see `axis_side_respected` and
+/// `constraints::build_axis_constraints`), and stretching one is the layout's ordinary currency.
+///
 /// For a non-compass edge (In/Out/Unknown, where `layout_offset` returns `None`):
 ///   - returns `true` unconditionally. These edges are stubs with no spatial offset to violate;
 ///     treating them as "satisfied" ensures the post-placement sweep never marks them distorted.
@@ -230,7 +240,20 @@ pub fn edge_is_satisfied(graph: &MapGraph, conn: &Connection) -> bool {
                 (Some(op), Some(dp)) => {
                     let actual = (dp.0 - op.0, dp.1 - op.1);
                     // Sign-based: each axis of delta must agree in sign (or be zero if delta is 0).
-                    axis_sign_ok(actual.0, delta.0) && axis_sign_ok(actual.1, delta.1)
+                    if !(axis_sign_ok(actual.0, delta.0) && axis_sign_ok(actual.1, delta.1)) {
+                        return false;
+                    }
+                    // …and a CARDINAL compass bearing must also be ADJACENT (SQ-1364). The sign
+                    // check has already forced the cross axis to zero, so this is exactly "one
+                    // cell along the named axis". `grid_offset` is what decides: Up/Down borrow
+                    // an N/S offset from `layout_offset` as a drawing hint and are not compass
+                    // bearings, and a diagonal keeps its quadrant slack.
+                    match grid_offset(conn.dir) {
+                        Some((dx, dy)) if dx == 0 || dy == 0 => {
+                            actual.0.abs().max(actual.1.abs()) == 1
+                        }
+                        _ => true,
+                    }
                 }
                 _ => false, // unplaced endpoint → unsatisfied
             }
@@ -883,11 +906,22 @@ fn snap_leaves(
 ///
 /// Three ways not: a mover also belongs to a run on the PERPENDICULAR axis (that column is a
 /// claim of exactly the same rank as this row, and trading one for the other decides nothing); a
-/// mover would BREAK a compass bearing to a room outside this run (stretching one is fine — a
-/// diagonal only pins its endpoint to a quadrant — but losing the quadrant is not); or the
-/// destination is occupied, or lands inside a DIFFERENT run's span. "Different" is load-bearing:
-/// a PASSENGER — a room standing in one of this run's own gaps and travelling with it — is not a
-/// member, so without that filter this run's own span would veto its own shift.
+/// mover would BREAK a RECIPROCATED compass bearing to a room outside this run (stretching one is
+/// fine — a diagonal only pins its endpoint to a quadrant — but losing the quadrant is not); or
+/// the destination is occupied, or lands inside a DIFFERENT run's span. "Different" is
+/// load-bearing: a PASSENGER — a room standing in one of this run's own gaps and travelling with
+/// it — is not a member, so without that filter this run's own span would veto its own shift.
+///
+/// **Only a RECIPROCATED outside bearing vetoes** (SQ-1364). A run's own links are reciprocated
+/// cardinal pairs by construction ([`crate::layout::chains::detect_chains`]) — the strongest
+/// claim the map makes (SQ-1287) — and a one-way exit is exactly the slack that is supposed to
+/// give way to one, the same ordering `reciprocals_respected_at` scores a hub's cell by. Zork I's
+/// `Clearing` and the `Forest` below it are a walked-both-ways N/S pair that came out two rows
+/// apart with nothing between them, and every attempt to close the gap was vetoed by the Forest's
+/// two one-way bearings to `South of House` — a `S` answered by a `NW`, which cannot both be true
+/// of any pair of cells and so decides nothing. Letting a one-way veto meant sacrificing the
+/// reciprocal pair to a bearing of strictly lower rank; now the pair closes up and the one-way
+/// draws distorted, which is what `mark_distorted` is for.
 #[allow(clippy::too_many_arguments)]
 fn shift_is_legal(
     runs: &[Run],
@@ -909,7 +943,9 @@ fn shift_is_legal(
     // diagonal only pins its endpoint to a quadrant (`axis_side_respected`), so `Behind House`
     // may slide a cell along the Kitchen's row and still be south-east of `North of House` —
     // but not one cell further (SQ-1312). A bearing that is ALREADY violated cannot get worse,
-    // so it does not veto.
+    // so it does not veto. Nor does a ONE-WAY bearing: it is of strictly lower rank than the
+    // reciprocated pair this shift is closing up, and yielding is what lower rank means
+    // (SQ-1364).
     let breaks_an_outside_bearing = |m: usize| {
         let id = comp[m];
         graph.connections().iter().any(|c| {
@@ -917,6 +953,13 @@ fn shift_is_legal(
                 return false;
             }
             let Some(delta) = grid_offset(c.dir) else { return false };
+            if !graph
+                .connections()
+                .iter()
+                .any(|o| o.origin == c.dest && o.dest == c.origin && o.dir == opposite(c.dir))
+            {
+                return false; // one-way: slack, and slack is what gives way
+            }
             let (other, is_origin) = if c.origin == id {
                 (c.dest, true)
             } else if c.dest == id {
@@ -2739,5 +2782,160 @@ mod tests {
         let cells: Vec<_> = g.rooms().filter_map(|r| r.pos).collect();
         let set: BTreeSet<_> = cells.iter().collect();
         assert_eq!(cells.len(), set.len(), "no room overlap");
+    }
+
+    // ── SQ-1364 ───────────────────────────────────────────────────────────────
+
+    /// The three-way conflict on Zork I's `Forest` #230, in miniature.
+    ///
+    /// Room 2 is reciprocally SOUTH of room 1 (`1 S 2` / `2 N 1`) and must therefore sit in the
+    /// cell directly below it. Room 3 makes two ONE-WAY claims on the same room — `3 S 2` says
+    /// "the forest is below the house", `2 NW 3` says "the house is up and to the left of the
+    /// forest" — which no pair of cells satisfies at once once the pair is tight. Room 1 cannot
+    /// move (it belongs to run 1–5 on the perpendicular axis, a claim of exactly the same rank),
+    /// so the only way to close the gap is to pull room 2 up, and the only thing that ever
+    /// objected was a pair of one-way bearings.
+    ///
+    /// Falsify by restoring the reciprocity filter in `shift_is_legal`'s
+    /// `breaks_an_outside_bearing`: `3 S 2` is respected at (0, 2) and broken at (0, 1), so the
+    /// shift is refused and room 2 stays two rows down with an empty cell between the pair.
+    #[test]
+    fn a_reciprocal_cardinal_pair_closes_up_over_a_one_way_bearing() {
+        let mut g = crate::graph::MapGraph::new();
+        for id in [1u32, 2, 3, 5, 6] {
+            g.upsert_room(id, "r".into());
+        }
+        // The reciprocal N/S pair the gap is in.
+        g.add_edge(1, Direction::S, 2);
+        g.add_edge(2, Direction::N, 1);
+        // Room 1 also holds a reciprocal E/W run, so it is the one that cannot give.
+        g.add_edge(1, Direction::W, 5);
+        g.add_edge(5, Direction::E, 1);
+        // Room 3's two one-way claims on room 2, and a second partner so 3 is not a leaf.
+        g.add_edge(3, Direction::S, 2);
+        g.add_edge(2, Direction::NW, 3);
+        g.add_edge(3, Direction::W, 6);
+        g.add_edge(6, Direction::E, 3);
+
+        let chains = detect_chains(&g);
+        let comp: Vec<RoomId> = vec![1, 2, 3, 5, 6];
+        let index: BTreeMap<RoomId, usize> =
+            comp.iter().enumerate().map(|(i, &id)| (id, i)).collect();
+        //   5 1        row 0
+        // 6 3          row 1, and (0,1) empty — the gap
+        //     2        row 2
+        let mut snapped: Vec<(i32, i32)> = vec![(0, 0), (0, 2), (-2, 1), (-1, 0), (-3, 1)];
+
+        contiguify(&chains, &comp, &index, &mut snapped, &g);
+
+        assert_eq!(
+            snapped[index[&2]],
+            (0, 1),
+            "the reciprocal pair must end up adjacent; the one-way bearings yield",
+        );
+        assert_eq!(snapped[index[&1]], (0, 0), "the pinned room does not move");
+    }
+
+    /// …and the bearings that lost must SAY so (SQ-1364).
+    ///
+    /// End-to-end over the same shape: after `relayout_auto` the reciprocal pair is adjacent, and
+    /// the two one-way claims that could not be honoured are flagged `distorted` so the renderer
+    /// draws them bent rather than as straight lines asserting a geometry the grid does not hold.
+    #[test]
+    fn the_one_way_bearings_that_lost_are_flagged_distorted() {
+        let mut g = crate::graph::MapGraph::new();
+        for id in [1u32, 2, 3, 5, 6] {
+            g.upsert_room(id, "r".into());
+        }
+        g.add_edge(1, Direction::S, 2);
+        g.add_edge(2, Direction::N, 1);
+        g.add_edge(1, Direction::W, 5);
+        g.add_edge(5, Direction::E, 1);
+        g.add_edge(3, Direction::S, 2);
+        g.add_edge(2, Direction::NW, 3);
+        g.add_edge(3, Direction::W, 6);
+        g.add_edge(6, Direction::E, 3);
+
+        relayout_auto(&mut g);
+
+        let p = |id: u32| g.room(id).unwrap().pos.unwrap();
+        assert_eq!(
+            (p(2).0 - p(1).0, p(2).1 - p(1).1),
+            (0, 1),
+            "room 2 sits in the cell directly south of room 1: {:?} vs {:?}",
+            p(1),
+            p(2),
+        );
+        // Every compass edge's flag agrees with the final grid, by construction of
+        // `mark_distorted` — and the pair that could not be honoured is among the flagged.
+        let flag = |o: u32, d: Direction, e: u32| {
+            g.connections()
+                .iter()
+                .find(|c| c.origin == o && c.dir == d && c.dest == e)
+                .unwrap()
+                .distorted
+        };
+        assert!(!flag(1, Direction::S, 2), "the reciprocal pair is honoured");
+        assert!(!flag(2, Direction::N, 1), "the reciprocal pair is honoured");
+        assert!(
+            flag(3, Direction::S, 2) || flag(2, Direction::NW, 3),
+            "a one-way claim the layout could not honour must be drawn distorted",
+        );
+    }
+
+    /// A CARDINAL pair sharing a column with an empty cell between them is DISTORTED (SQ-1364).
+    ///
+    /// `edge_is_satisfied` was sign-based on both axes, so "anywhere due south" passed — and a
+    /// pair two rows apart on one column reported itself honoured to every consumer that reads
+    /// the flag. `N` names the next cell up, which is what the rest of this module already means
+    /// by a reciprocal cardinal pair (`splits_a_run`, `tighten_runs`).
+    #[test]
+    fn a_same_column_pair_with_a_gap_is_distorted() {
+        use crate::graph::MapGraph;
+        let mut g = MapGraph::new();
+        g.upsert_room(1, "A".into());
+        g.upsert_room(2, "B".into());
+        g.add_edge(1, Direction::S, 2);
+        g.add_edge(2, Direction::N, 1);
+
+        // Adjacent: honoured.
+        g.set_pos(1, (0, 0));
+        g.set_pos(2, (0, 1));
+        mark_distorted(&mut g, &BTreeSet::new());
+        assert!(
+            g.connections().iter().all(|c| !c.distorted),
+            "an adjacent reciprocal N/S pair is not distorted",
+        );
+
+        // One empty cell between them, same column: distorted, both ways.
+        g.set_pos(2, (0, 2));
+        mark_distorted(&mut g, &BTreeSet::new());
+        assert!(
+            g.connections().iter().all(|c| c.distorted),
+            "a same-column pair with a gap must say it is not adjacent: {:?}",
+            g.connections(),
+        );
+    }
+
+    /// …but a DIAGONAL keeps the quadrant slack it has always had (SQ-1364).
+    ///
+    /// The layout's ordinary currency is stretching a diagonal — `axis_side_respected`,
+    /// `build_axis_constraints` and `shift_is_legal` all treat one as a claim about a quadrant,
+    /// not a distance — so the adjacency rule above must not reach it.
+    #[test]
+    fn a_stretched_diagonal_is_still_satisfied() {
+        use crate::graph::MapGraph;
+        let mut g = MapGraph::new();
+        g.upsert_room(1, "A".into());
+        g.upsert_room(2, "B".into());
+        g.add_edge(1, Direction::SE, 2);
+        g.add_edge(2, Direction::NW, 1);
+        g.set_pos(1, (0, 0));
+        g.set_pos(2, (3, 2));
+        mark_distorted(&mut g, &BTreeSet::new());
+        assert!(
+            g.connections().iter().all(|c| !c.distorted),
+            "a diagonal pins its endpoint to a quadrant, not to a cell",
+        );
     }
 }
