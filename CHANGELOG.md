@@ -90,6 +90,15 @@ Absolute URLs or no link.
   not where its compass word says is drawn as a bent line rather than passing
   itself off as straight.
 
+- **A room in a maze no longer refuses to step aside.** Asking the room in the
+  way to move takes its own neighbours along with it, but in a maze — where the
+  passages point every which way — that could gather half the layer and the map
+  gave up on the move altogether. Zork I's grating was the casualty: the
+  clearing above it was drawn off to one side with its line looping four times
+  round to reach the box next door. The move now goes ahead with just the room
+  in the way when the whole party will not fit, so the clearing sits directly
+  above the grating and the passage is one straight line.
+
 - **Bureaucracy's licence form hands you back a screen you can read.** Filling in
   the last field used to leave the story pane blank until you pressed Enter
   again — and in that game an empty command is answered with "[What?]" and a

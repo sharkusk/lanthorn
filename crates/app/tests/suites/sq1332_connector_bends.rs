@@ -126,21 +126,31 @@ fn zork1_named_connectors_take_the_fewest_turns_their_anchors_allow() {
 /// before the ghosts and 79 before SQ-1332 — the ghosts are boxes to go round, and going round
 /// them costs turns.
 ///
-/// **And again at SQ-1363, by two rooms on the MAZE layer** — 83 → **85**, 152 → **158**. A pushed
-/// room now takes its dependants with it, which moved the `Clearing` ghost from `(0, 5)` to
-/// `(1, 6)` and `Maze #169` from `(0, 4)` into the cell the ghost vacated. Two connectors gained,
-/// and no other number on the map moved (the Main layer's report is byte-identical, and
-/// Anchorhead's totals did not move at all):
+/// **Then three layout changes in a row moved it, and this pin is the tree that carries all
+/// three** — SQ-1363, SQ-1364 and SQ-1367 together, measured once on the merged tree rather than
+/// three times on trees that will never ship: optimum **84**, drawn **155**.
+///
+/// SQ-1363 (83 → 85, 152 → 158) made a pushed room take its dependants with it, which is right;
+/// but on a MAZE, where the passages point every which way, the transitive closure of that rule
+/// swallowed ten rooms, blew the party cap and REFUSED a push that was legal without it. So the
+/// `Clearing` ghost lost the cell its `Down` pointed at, `Maze #169` stayed standing in it, and
+/// two connectors gained turns. SQ-1364 (85 → 86, 158 → 161 on the tree that still had that
+/// defect) closed the Clearing/Forest gap on the Main layer and made a cardinal bearing whose
+/// rooms are not adjacent draw as a bent line, both of which cost turns honestly. **SQ-1367** then
+/// gave the Maze's two back: a push whose dependant party is oversized or vetoed now falls back to
+/// the bare column (`mapper::layout::seat`), so the ghost keeps its straight cell.
 ///
 /// | passage | layer | optimum | drawn |
 /// |---|---|---|---|
-/// | `Clearing #167 --Down--> Grating Room #225` | Maze | 0 → 1 | 0 → 4 |
-/// | `Maze #159 --NW--> Maze #169` | Maze | 1 → 2 | 2 → 4 |
+/// | `Clearing #167 --Down--> Grating Room #225` | Maze | 0 → 1 → 0 | 0 → 4 → 0 |
+/// | `Maze #159 --NW--> Maze #169` | Maze | 1 → 2 → 1 | 2 → 4 → 2 |
 ///
-/// The first is worth a look rather than only a number: the ghost used to sit directly north of
-/// Grating Room `(0, 6)` and the passage was one straight cell, and it now sits directly EAST of
-/// it and the same passage loops out, west, north, west and back down — four turns between two
-/// adjacent boxes. Both are still inside the per-connector ceiling below, so nothing fails on it.
+/// The first is worth a look rather than only a number: the ghost sat directly north of Grating
+/// Room `(0, 6)` and the passage was one straight cell; under SQ-1363 it sat directly EAST and the
+/// same passage looped out, west, north, west and back down — four turns between two adjacent
+/// boxes. Measured on the merged tree, taking SQ-1367 out puts the numbers back at 86 and 161 and
+/// nothing outside the Maze layer moves either way; Anchorhead's totals never budged across any of
+/// the three.
 #[test]
 fn zork1_spends_no_more_turns_than_its_budget() {
     let Some(path) = story(ZORK1) else {
@@ -150,8 +160,8 @@ fn zork1_spends_no_more_turns_than_its_budget() {
     let map = app::mapgen::generate(&path, true).expect("mapgen");
     let (n, bends, opt) = totals(&map);
     assert!(n > 100, "Zork I must draw a real number of connectors, got {n}");
-    assert_eq!(opt, 85, "the anchor optimum is a property of the LAYOUT, not the router");
-    assert!(bends <= 158, "Zork I draws {bends} turns against a budget of 158 (was 152)");
+    assert_eq!(opt, 84, "the anchor optimum is a property of the LAYOUT, not the router");
+    assert!(bends <= 155, "Zork I draws {bends} turns against a budget of 155 (was 158)");
 }
 
 /// The same budget on the denser fixture. Before SQ-1332: **110** turns against an optimum of 52.
@@ -159,7 +169,7 @@ fn zork1_spends_no_more_turns_than_its_budget() {
 ///
 /// Re-based at SQ-1360 for the reason the Zork I case above states at length — eight ghost boxes
 /// across Anchorhead's six layers, and the same stale-box measurement fault. Optimum **54**,
-/// drawn **112**. SQ-1363 moved neither: its two pushes are both on Zork I's Maze layer.
+/// drawn **112**. None of SQ-1363, SQ-1364 or SQ-1367 moved either number.
 #[test]
 fn anchorhead_spends_no_more_turns_than_its_budget() {
     let Some(path) = story(ANCHORHEAD) else {
