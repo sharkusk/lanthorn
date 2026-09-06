@@ -1049,13 +1049,22 @@ What the drawing shows, beyond the rooms:
   glyphs: **the export must not depend on Nerd Fonts.**
 - **A ghost, at both ends, for every passage that leaves the layer being
   drawn** (SQ-1319): a small dashed box, joined to the badge by a short
-  connector, naming the room it leads to and the layer it lives on. When the
-  graph carries a connection back the other way, the destination's own panel
-  draws its own ghost for it — that pairing is what "both ends" means; there
-  is no separate mirroring step. A genuinely ONE-WAY crossing has nothing to
-  mirror, so the arriving room gets an arrival ghost instead — an inward
-  arrowhead (arriving, not leaving) and a box naming where the passage came
-  FROM — which is the one case `mapper::layer::interlayer_badges` never draws
+  connector, naming the room it leads to and the layer it lives on, with an
+  arrowhead showing which way the passage runs (SQ-1330). A ghost stands for
+  the far end of ONE passage as seen from this panel, so its own arrow shows
+  that passage's direction of travel and nothing else. A DEPARTURE ghost (the
+  room has an exit leaving toward it) carries the arrowhead at the GHOST's own
+  edge, pointing further in — the mirror of a one-way passage's own exit arrow
+  (SQ-0688), never a two-way head pointing back at the room it started from.
+  When the graph carries a connection back the other way, the destination's
+  own panel draws its own departure ghost for it — that pairing is what "both
+  ends" means, and it holds even then: the way back is a SEPARATE one-way,
+  drawn on the other panel, never a single two-way head shared between them.
+  There is no separate mirroring step. A genuinely ONE-WAY crossing has
+  nothing to mirror, so the arriving room gets an arrival ghost instead — the
+  arrowhead sits at the ROOM's own edge instead, pointing INTO the room
+  (arriving, not leaving) — and a box naming where the passage came FROM —
+  which is the one case `mapper::layer::interlayer_badges` never draws
   anything for on its own, since it only ever states a room's own outgoing
   crossing. A ghost's placement search **never gives up**: when nothing is
   free near the badge it keeps extending straight out along the passage's own

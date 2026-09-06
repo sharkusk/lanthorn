@@ -78,6 +78,13 @@ const GHOST_LINE_GAP: f64 = 3.0;
 /// over" rather than landing at an arbitrary distance.
 const GHOST_STEP: f64 = 17.0;
 
+/// A departure ghost's own starting gap (SQ-1330): the minimum distance, in SVG px, from a
+/// portal badge's centre to its ghost's near edge. Wide enough for the badge's own visual
+/// radius (6.5, see `badge`) plus one arrowhead's full length (`ARROW_HEAD_LEN`) plus a couple
+/// of pixels of daylight, so the new "into the ghost" arrowhead — which occupies the LAST
+/// `ARROW_HEAD_LEN` px before the ghost — never overlaps the badge it travels away from.
+const GHOST_DEPARTURE_GAP: f64 = 6.5 + ARROW_HEAD_LEN + 2.5;
+
 /// Margin between the drawing and the canvas edge.
 const MARGIN: i32 = 24;
 
@@ -839,9 +846,10 @@ fn render_svg_body(
     // A stub is a passage with no planar route — up, down, in, out, or a compass passage whose
     // destination lives on another layer. It gets a lettered badge on the side it leads by,
     // and — when it crosses a layer — a ghost box naming the room and layer it leads to,
-    // joined to the badge by a short connector (SQ-1319; see `place_ghost`). The ghost is never
-    // dropped: unlike the single inline label this replaced, its placement search always
-    // succeeds by extending outward until the panel has room for it.
+    // joined to the badge by a short connector with an arrowhead into the ghost (SQ-1319; SQ-1330;
+    // see `place_ghost`). The ghost is never dropped: unlike the single inline label this
+    // replaced, its placement search always succeeds by extending outward until the panel has
+    // room for it.
     let mut stubs_by_room: HashMap<RoomId, Vec<Stub<'_>>> = HashMap::new();
     for edge in &rm.edges {
         if !edge.is_stub || edge.dir == Direction::Unknown {
@@ -886,7 +894,15 @@ fn render_svg_body(
                         let (name, layer_name) = full.split_once(" · ").unwrap_or((full, ""));
                         let text = GhostText { name, layer: layer_name };
                         let (gw, gh) = ghost_dims(text);
-                        let gr = place_ghost(&mut placer, &all_segments, at, u, 9.0, gw, gh);
+                        let gr = place_ghost(&mut placer, &all_segments, at, u, GHOST_DEPARTURE_GAP, gw, gh);
+                        // A departure ghost stands for THIS room's own exit leaving toward it, so
+                        // the arrow sits at the GHOST end, tip on its near edge, pointing further
+                        // in — reading as "leaving here, arriving there" (SQ-1330). That is the
+                        // mirror of an arrival ghost's arrow, which sits at the ROOM end instead
+                        // (below): a ghost pair is two one-ways, one per panel, never a single
+                        // two-way head pointing back at the room it started from.
+                        let near = ghost_near_edge(gr, u);
+                        over.push_str(&arrowhead_inward(near, (-u.0, -u.1), "arrow"));
                         over.push_str(&draw_ghost(at, u, gr, text, false));
                         ext.add(gr.0, gr.1);
                         ext.add(gr.0 + gr.2, gr.1 + gr.3);
@@ -1255,6 +1271,10 @@ fn place_ghost(
 /// drops the name for want of room — see `place_ghost`. `arrival` distinguishes the mirror drawn
 /// on a one-way crossing's arriving end (see `arrival_ghosts`), which carries no departure letter
 /// of its own.
+///
+/// Draws no arrowhead itself (SQ-1330): a departure's caller places one at the ghost's own near
+/// edge (pointing further in) and an arrival's caller places one at the room's own edge (pointing
+/// further in there instead) — the two ends of one passage, never both on the same box.
 fn draw_ghost(anchor: (f64, f64), u: (f64, f64), rect: PxRect, text: GhostText<'_>, arrival: bool) -> String {
     let (x, y, w, h) = rect;
     let near = ghost_near_edge(rect, u);
@@ -1329,12 +1349,15 @@ fn legend_rows() -> Vec<(String, &'static str)> {
             "the room you are in",
         ),
         (
-            "<line class=\"ghost-line\" x1=\"2\" y1=\"0\" x2=\"13\" y2=\"0\"/>\
-             <rect class=\"ghost\" x=\"13\" y=\"-8\" width=\"40\" height=\"16\" rx=\"3\"/>\
-             <text class=\"ghost-name\" text-anchor=\"middle\" x=\"33\" y=\"-1\">Studio</text>\
-             <text class=\"ghost-layer\" text-anchor=\"middle\" x=\"33\" y=\"6\">Main</text>"
-                .to_string(),
-            "exit to another layer — named at both ends",
+            format!(
+                "<line class=\"ghost-line\" x1=\"2\" y1=\"0\" x2=\"13\" y2=\"0\"/>\
+                 {}\
+                 <rect class=\"ghost\" x=\"13\" y=\"-8\" width=\"40\" height=\"16\" rx=\"3\"/>\
+                 <text class=\"ghost-name\" text-anchor=\"middle\" x=\"33\" y=\"-1\">Studio</text>\
+                 <text class=\"ghost-layer\" text-anchor=\"middle\" x=\"33\" y=\"6\">Main</text>",
+                arrowhead_inward((13.0, 0.0), (-1.0, 0.0), "arrow")
+            ),
+            "exit to another layer — arrow shows the way you travel",
         ),
     ]
 }
@@ -1819,6 +1842,59 @@ mod tests {
         svg.split("<g class=\"legend-block\"").next().unwrap_or(svg)
     }
 
+    /// Every `<rect class="...">` in `svg` whose class attribute is EXACTLY `class` (excluding
+    /// the legend's own sample), in the document's own coordinate space — an exact match tells a
+    /// departure ghost (`"ghost"`) apart from an arrival one (`"ghost arrival"`), the same way
+    /// `map.matches("class=\"ghost\"")` above already does (SQ-1330).
+    fn ghost_rects_of(svg: &str, class: &str) -> Vec<(f64, f64, f64, f64)> {
+        let doc = roxmltree::Document::parse(svg).expect("well-formed SVG");
+        doc.descendants()
+            .filter(|n| {
+                n.tag_name().name() == "rect"
+                    && n.attribute("class") == Some(class)
+                    && !under_class(*n, "legend-block")
+            })
+            .map(|n| {
+                let g = |a: &str| n.attribute(a).and_then(|v| v.parse::<f64>().ok()).unwrap_or(0.0);
+                let o = translate_of(n);
+                (g("x") + o.0, g("y") + o.1, g("width"), g("height"))
+            })
+            .collect()
+    }
+
+    /// The tip (first vertex) of every non-legend `<polygon class="arrow">` in `svg`, in the
+    /// document's own coordinate space (SQ-1330).
+    fn arrow_tips(svg: &str) -> Vec<(f64, f64)> {
+        let doc = roxmltree::Document::parse(svg).expect("well-formed SVG");
+        doc.descendants()
+            .filter(|n| {
+                n.tag_name().name() == "polygon"
+                    && n.attribute("class").unwrap_or("").split_whitespace().any(|c| c == "arrow")
+                    && !under_class(*n, "legend-block")
+            })
+            .map(|n| {
+                let o = translate_of(n);
+                let first =
+                    n.attribute("points").unwrap_or("0,0").split_whitespace().next().unwrap_or("0,0");
+                let (a, b) = first.split_once(',').unwrap_or(("0", "0"));
+                (a.parse::<f64>().unwrap_or(0.0) + o.0, b.parse::<f64>().unwrap_or(0.0) + o.1)
+            })
+            .collect()
+    }
+
+    /// True if `p` sits within `tol` px of one of `rect`'s four edges (and within the OTHER
+    /// axis's span, so a point merely level with an edge's infinite line doesn't count).
+    fn near_rect_edge(p: (f64, f64), rect: (f64, f64, f64, f64), tol: f64) -> bool {
+        let (x, y, w, h) = rect;
+        let on_x_edge = ((p.0 - x).abs() < tol || (p.0 - (x + w)).abs() < tol)
+            && p.1 > y - tol
+            && p.1 < y + h + tol;
+        let on_y_edge = ((p.1 - y).abs() < tol || (p.1 - (y + h)).abs() < tol)
+            && p.0 > x - tol
+            && p.0 < x + w + tol;
+        on_x_edge || on_y_edge
+    }
+
     /// The Zork-house shape used by the layout tests: a ring of rooms with a couple of
     /// diagonals and a vertical, which is enough to exercise lanes, corners and portals.
     fn zork_house() -> Mapper {
@@ -2090,6 +2166,30 @@ mod tests {
         assert!(svg.contains(">Main<"), "Cellar's panel names the layer it leads back to");
         assert!(label_collisions(&svg).is_empty());
         assert!(ghost_box_overlaps(&svg).is_empty());
+
+        // SQ-1330: a ghost pair is two one-ways, one per panel — each panel's departure ghost
+        // carries its OWN arrowhead, at the ghost's own edge, never at the room's (that would
+        // read as the two-way inward-head convention SQ-1317 reserves for adjacent room boxes,
+        // and never as a single head pointing back at the room it started from).
+        let deps = ghost_rects_of(&svg, "ghost");
+        assert_eq!(deps.len(), 2, "one departure ghost per panel");
+        let tips = arrow_tips(&svg);
+        assert_eq!(tips.len(), 2, "each panel's departure ghost carries its own arrowhead");
+        for &tip in &tips {
+            assert!(
+                deps.iter().any(|&r| near_rect_edge(tip, r, 1.5)),
+                "arrowhead {tip:?} must sit on a departure ghost's own edge: {deps:?}"
+            );
+        }
+        let rooms = room_rects(&svg);
+        for &tip in &tips {
+            assert!(
+                !rooms.iter().any(|&r| near_rect_edge(tip, r, 1.5)),
+                "a departure arrowhead must never sit on a room's own edge: {tip:?} vs {rooms:?}"
+            );
+        }
+        assert!(svg.contains(">D<"), "Hall's own badge names the direction it travels");
+        assert!(svg.contains(">U<"), "Cellar's own badge names the direction it travels back");
     }
 
     /// A ONE-WAY crossing has no connection back, so `interlayer_badges` never fires on the
@@ -2114,6 +2214,68 @@ mod tests {
         assert!(svg.contains(">Alcove<") && svg.contains(">Main<"), "the arrival ghost names Alcove/Main");
         assert!(label_collisions(&svg).is_empty());
         assert!(ghost_box_overlaps(&svg).is_empty());
+
+        // SQ-1330: the departure end's arrow sits at the GHOST (Alcove leaving toward Vault); the
+        // arrival end's sits at the ROOM (Vault arriving from Alcove) — the two ends of one
+        // passage, each read from its own panel, never both at the same box.
+        let deps = ghost_rects_of(&svg, "ghost");
+        let arrs = ghost_rects_of(&svg, "ghost arrival");
+        let rooms = room_rects(&svg);
+        assert_eq!(deps.len(), 1);
+        assert_eq!(arrs.len(), 1);
+        let tips = arrow_tips(&svg);
+        assert_eq!(tips.len(), 2, "one arrowhead at the departure ghost, one at the arrival room");
+        assert!(
+            tips.iter().any(|&t| deps.iter().any(|&r| near_rect_edge(t, r, 1.5))),
+            "the departure ghost must carry its own arrowhead: {tips:?} vs {deps:?}"
+        );
+        assert!(
+            tips.iter().any(|&t| rooms.iter().any(|&r| near_rect_edge(t, r, 1.5))),
+            "the arrival room must carry its own arrowhead: {tips:?} vs {rooms:?}"
+        );
+        assert!(
+            !tips.iter().any(|&t| arrs.iter().any(|&r| near_rect_edge(t, r, 1.5))),
+            "the arrival GHOST box (unlike the room) carries no letter and no arrowhead of its own: {tips:?} vs {arrs:?}"
+        );
+    }
+
+    /// SQ-1330: a departure badge's letter and its arrow must agree about which way the passage
+    /// runs — a `D` badge (down) sends its arrow BELOW the badge, toward the ghost it leads to,
+    /// never above it.
+    #[test]
+    fn a_departure_arrow_points_the_way_its_badge_letter_says() {
+        use mapper::graph::MapGraph;
+        let mut g = MapGraph::new();
+        g.upsert_room(1, "Attic".into());
+        g.upsert_room(2, "Cellar".into());
+        g.set_pos(1, (0, 0));
+        g.set_pos(2, (0, 0));
+        g.add_edge(1, Direction::Down, 2); // one-way: no edge back
+        let below = g.new_layer(Some(mapper::layer::MAIN_LAYER), "Below".into());
+        g.set_room_layer(2, below);
+        let svg = render_svg_layered(&g);
+        assert!(svg.contains(">D<"), "the badge names the direction actually travelled");
+        let doc = roxmltree::Document::parse(&svg).expect("well-formed SVG");
+        let badge_y = doc
+            .descendants()
+            .find(|n| n.tag_name().name() == "circle" && n.attribute("class") == Some("badge"))
+            .map(|n| {
+                let o = translate_of(n);
+                n.attribute("cy").unwrap().parse::<f64>().unwrap() + o.1
+            })
+            .expect("Attic's panel draws a badge");
+        // One-way, so Cellar's own panel also gets an arrival arrow — filter to the one that
+        // belongs to Attic's departure ghost specifically, by finding the tip that sits on it.
+        let deps = ghost_rects_of(&svg, "ghost");
+        assert_eq!(deps.len(), 1, "Attic's panel gets exactly one departure ghost");
+        let ghost_tip = arrow_tips(&svg)
+            .into_iter()
+            .find(|&t| deps.iter().any(|&r| near_rect_edge(t, r, 1.5)))
+            .expect("the departure ghost must carry its own arrowhead");
+        assert!(
+            ghost_tip.1 > badge_y,
+            "a `D` badge's arrow must sit BELOW it, toward the ghost it leads to: badge y={badge_y}, tip={ghost_tip:?}"
+        );
     }
 
     /// A room with every side already crowded still gets its ghost, pushed farther out by
