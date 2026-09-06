@@ -40,10 +40,25 @@ Absolute URLs or no link.
   renames an exit. Room boxes grow to fit their names instead of cropping
   them, doors are marked with a bar across the line, a secret exit the story
   gates is dotted, up/down/in/out passages get a lettered badge on the side of
-  the room they leave by — with the destination named when it is on another
-  layer — and a legend in the corner says what every mark means. The whole
-  drawing is styled by a stylesheet in the file, so the colours can be changed
-  without re-exporting. Nothing in it needs a special font.
+  the room they leave by, and a legend in the corner says what every mark
+  means. The whole drawing is styled by a stylesheet in the file, so the
+  colours can be changed without re-exporting. Nothing in it needs a special
+  font.
+- **Every passage that leaves the layer being drawn now says where it goes, at
+  both ends, and never drops the name.** A badge that crosses to another map
+  layer is joined by a short line to a small box naming the room and the
+  layer it leads to; the layer on the other side draws the matching box back,
+  and a one-way passage — nothing to draw it back FROM — gets an arrival box
+  on the far side instead, naming where it came from. Where the old single
+  caption used to get dropped in a crowded corner (Zork I's Kitchen, a step
+  down into the Studio, on its busy house layer), the box now just moves
+  farther out along the passage until it finds room.
+- **A two-way passage between two touching rooms no longer reads as a bowtie
+  (`◄►`).** At the narrowest gutter the SVG draws, the two arrowheads used to
+  meet — or nearly meet — back to back with no line visible between them
+  (Zork I's Cyclops Room and Strange Passage was the reported case). The
+  export now gives that gutter a little extra room, in pixels only, so there
+  is always a real dash of line showing between the two heads.
 - **`lanthorn-mapgen` now splits a story's mazes and portal-only regions onto
   their own map layers**, the way accepting every one of the interpreter's own
   "give these rooms their own layer?" prompts would. A generated map's `.svg`,
