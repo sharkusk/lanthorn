@@ -994,6 +994,13 @@ What the drawing shows, beyond the rooms:
   room's own EXIT (SQ-0688). A reciprocal pair (one collapsed connector) gets one
   at each end; a one-way gets one, and the bare far end *is* the reading; an
   asymmetric pair is two connectors, each with its own departure arrow.
+  A channel already at its shared cell minimum (`MIN_GUTTER`, or `DIAG_GUTTER`
+  for a diagonal bend) is still widened in the SVG's own PIXEL mapping alone
+  (`PxAxis`, SQ-1322) — never in that shared cell count, which the terminal also
+  lays channels out by — so two ADJACENT rooms' reciprocal pair always shows a
+  real shaft between the heads' own flat backs instead of the two meeting or
+  overlapping (a "bowtie", `◄►`). The floor is derived from the arrowhead's own
+  geometry (twice its reach, plus twice its length), never a bare number.
 - **A direction tag** at the departure anchor when the side a connector actually
   leaves by disagrees with the passage's word — a diagonal walked round the
   corner orthogonally, or a distorted edge routed out of another side.

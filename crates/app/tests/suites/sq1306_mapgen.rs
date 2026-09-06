@@ -533,6 +533,12 @@ fn zork1_svg_shows_every_room_and_no_connector_crosses_a_room() {
     // exact case `place_ghost`'s fallback exists for — its ghost was dropped outright under the
     // fixed-candidate search SQ-1317 shipped with, on this map's dense house layer.
     assert_ghost_accounting(&svg, &map.graph);
+
+    // SQ-1322: no two adjacent rooms — Cyclops Room ↔ Strange Passage at the minimum gutter is
+    // the reported case — sit close enough to leave a two-way passage's heads meeting or
+    // overlapping (a "bowtie", `◄►`) rather than showing a real shaft between them.
+    let bad = app::export_svg::narrow_channel_gaps(&svg);
+    assert!(bad.is_empty(), "every adjacent-room channel must meet the SVG's pixel floor: {bad:?}");
 }
 
 /// The same ghost accounting as Zork I, on a denser Glulx map — Anchorhead's own house has more
@@ -554,6 +560,9 @@ fn anchorhead_svg_ghosts_every_cross_layer_passage() {
     assert!(bad.is_empty(), "labels must stay clear of rooms and of each other: {bad:#?}");
 
     assert_ghost_accounting(&svg, &map.graph);
+
+    let bad = app::export_svg::narrow_channel_gaps(&svg);
+    assert!(bad.is_empty(), "every adjacent-room channel must meet the SVG's pixel floor: {bad:?}");
 }
 
 /// The Inform 6 library on Glulx — a different reader from Inform 7's, reached

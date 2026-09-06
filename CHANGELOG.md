@@ -53,6 +53,12 @@ Absolute URLs or no link.
   caption used to get dropped in a crowded corner (Zork I's Kitchen, a step
   down into the Studio, on its busy house layer), the box now just moves
   farther out along the passage until it finds room.
+- **A two-way passage between two touching rooms no longer reads as a bowtie
+  (`◄►`).** At the narrowest gutter the SVG draws, the two arrowheads used to
+  meet — or nearly meet — back to back with no line visible between them
+  (Zork I's Cyclops Room and Strange Passage was the reported case). The
+  export now gives that gutter a little extra room, in pixels only, so there
+  is always a real dash of line showing between the two heads.
 - **`lanthorn-mapgen` now splits a story's mazes and portal-only regions onto
   their own map layers**, the way accepting every one of the interpreter's own
   "give these rooms their own layer?" prompts would. A generated map's `.svg`,

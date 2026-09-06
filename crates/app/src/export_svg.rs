@@ -241,6 +241,92 @@ fn weight_table(graph: &MapGraph) -> HashMap<(RoomId, Direction), PassageWeight>
 
 // ── Geometry helpers ──────────────────────────────────────────────────────────
 
+/// One axis's SVG pixel geometry (SQ-1322): the per-cell pixel width of every cell in `cols`'s or
+/// `rows'`s virtual grid — `CELL_W`/`CELL_H` for a box-interior cell, or for a channel whose plain
+/// `cell_count * CELL_W` already meets `MIN_CHANNEL_PX` (a "busy" channel — two or more lanes, or
+/// widened for a diagonal bend), or `MIN_CHANNEL_PX` split evenly across the cells of a channel
+/// that does not.
+///
+/// This is the ONLY place a shared cell count (`render::map::MIN_GUTTER`, or `DIAG_GUTTER` for a
+/// diagonal) turns into an SVG pixel count. `PosTable`, `lane_pixel` and `plot_connector` are
+/// untouched — every point they hand back is
+/// still an ordinary CELL index, exactly what the terminal resolves it to — so nothing about the
+/// shared routing or the terminal's own layout changes; only the LAST step, converting one of
+/// those cell indices into a pixel for this file's own drawing, reads this table instead of a
+/// flat multiply. A lane's cell-domain offset is therefore unaffected (still `LANE_BASE +
+/// lane * LANE_SPACING` cells from the box edge, same as the terminal); it simply lands somewhere
+/// inside the channel's own (possibly widened) pixel span rather than outside it, since every
+/// cell in that span — including the lane's own — got an equal, non-negative share of it.
+struct PxAxis {
+    /// Pixel position of the START of cell `origin + i`.
+    start: Vec<f64>,
+    /// Pixel width of cell `origin + i`.
+    width: Vec<f64>,
+    origin: i32,
+    /// The flat per-cell scale (`CELL_W` or `CELL_H`) used outside the tabulated span.
+    cell_unit: i32,
+}
+
+impl PxAxis {
+    /// Build from `axis`'s own cell layout — `range()`, `box_dim_at()`, `channel_span()`, the same
+    /// public accessors any other consumer of a `PosTable` uses.
+    fn build(axis: &PosTable, cell_unit: i32) -> PxAxis {
+        let (lo, hi) = axis.range();
+        let mut width = Vec::new();
+        for idx in lo..=hi {
+            for _ in 0..axis.box_dim_at(idx) {
+                width.push(cell_unit as f64);
+            }
+            // A floor on the RESULTING pixel width, not on the cell count that produced it: a
+            // channel widened to `DIAG_GUTTER` (3 cells, SQ-0314) for a diagonal bend elsewhere
+            // in this same column/row is still only 27px at `CELL_W`=9 — short of
+            // `MIN_CHANNEL_PX` just as a bare `MIN_GUTTER` (2 cells) is, and a straight two-way
+            // passage sharing that column reads as a bowtie exactly the same way. Whatever
+            // ALREADY clears the floor (two or more lanes) is left at the plain `cell_unit` scale
+            // it always had.
+            let chan = axis.channel_span(idx);
+            let default_px = chan as f64 * cell_unit as f64;
+            let per_cell =
+                if default_px < MIN_CHANNEL_PX { MIN_CHANNEL_PX / chan as f64 } else { cell_unit as f64 };
+            for _ in 0..chan {
+                width.push(per_cell);
+            }
+        }
+        let mut start = Vec::with_capacity(width.len());
+        let mut acc = 0.0;
+        for &w in &width {
+            start.push(acc);
+            acc += w;
+        }
+        PxAxis { start, width, origin: axis.room_pixel(lo), cell_unit }
+    }
+
+    /// Pixel position of the START (left/top edge) of cell `c`.
+    fn start_of(&self, c: i32) -> f64 {
+        let i = c - self.origin;
+        if i >= 0 && (i as usize) < self.start.len() {
+            self.start[i as usize]
+        } else {
+            // Outside the tabulated span. A real route never reaches here in practice —
+            // `span_over` already widens `lo..hi` to cover everywhere a route runs — so this is a
+            // defensive fallback, continuous with the tabulated portion at the flat `cell_unit`
+            // scale rather than a hard failure.
+            c as f64 * self.cell_unit as f64
+        }
+    }
+
+    /// Pixel CENTRE of cell `c` — what a connector's own resolved cell/lane coordinate draws at.
+    fn center_of(&self, c: i32) -> f64 {
+        let i = c - self.origin;
+        let w = if i >= 0 && (i as usize) < self.width.len() {
+            self.width[i as usize]
+        } else {
+            self.cell_unit as f64
+        };
+        self.start_of(c) + w / 2.0
+    }
+}
+
 /// A room's box, in layout cells: `(left, top, width, height)`.
 fn box_cell_rect(cols: &PosTable, rows: &PosTable, cell: (i32, i32)) -> (i32, i32, i32, i32) {
     (
@@ -251,15 +337,23 @@ fn box_cell_rect(cols: &PosTable, rows: &PosTable, cell: (i32, i32)) -> (i32, i3
     )
 }
 
-/// A room's box in SVG pixels.
-fn box_px_rect(cols: &PosTable, rows: &PosTable, cell: (i32, i32)) -> (f64, f64, f64, f64) {
+/// A room's box in SVG pixels. `px_cols`/`px_rows` are the axes' [`PxAxis`] geometry (SQ-1322) —
+/// only the box's START moves when a channel before it was widened; its own width never does,
+/// since a box's interior cells are never widened.
+fn box_px_rect(
+    cols: &PosTable,
+    rows: &PosTable,
+    px_cols: &PxAxis,
+    px_rows: &PxAxis,
+    cell: (i32, i32),
+) -> (f64, f64, f64, f64) {
     let (bx, by, w, h) = box_cell_rect(cols, rows, cell);
-    ((bx * CELL_W) as f64, (by * CELL_H) as f64, (w * CELL_W) as f64, (h * CELL_H) as f64)
+    (px_cols.start_of(bx), px_rows.start_of(by), (w * CELL_W) as f64, (h * CELL_H) as f64)
 }
 
 /// The centre of layout cell `c` in SVG pixels.
-fn cell_px(c: (i32, i32)) -> (f64, f64) {
-    ((c.0 * CELL_W) as f64 + CELL_W as f64 / 2.0, (c.1 * CELL_H) as f64 + CELL_H as f64 / 2.0)
+fn cell_px(px_cols: &PxAxis, px_rows: &PxAxis, c: (i32, i32)) -> (f64, f64) {
+    (px_cols.center_of(c.0), px_rows.center_of(c.1))
 }
 
 /// The outward unit normal of `side`.
@@ -406,10 +500,18 @@ fn rounded_path(pts: &[(f64, f64)]) -> String {
     d
 }
 
+/// `arrowhead`'s own two reaches along its `(at, u)` axis: the sharp point at `ARROW_TIP`, the
+/// flat back (the two `perp`-offset corners) at `ARROW_BASE`. Named so `MIN_CHANNEL_PX` below can
+/// derive its number from the actual triangle instead of repeating "8.5"/"0.5" unexplained.
+const ARROW_TIP: f64 = 8.5;
+const ARROW_BASE: f64 = 0.5;
+/// The triangle's own length along its axis, tip to back.
+const ARROW_HEAD_LEN: f64 = ARROW_TIP - ARROW_BASE;
+
 /// A filled arrowhead sitting on the first ~8px of a connector leaving `at` along `u`.
 fn arrowhead(at: (f64, f64), u: (f64, f64), class: &str) -> String {
-    let tip = (at.0 + u.0 * 8.5, at.1 + u.1 * 8.5);
-    let base = (at.0 + u.0 * 0.5, at.1 + u.1 * 0.5);
+    let tip = (at.0 + u.0 * ARROW_TIP, at.1 + u.1 * ARROW_TIP);
+    let base = (at.0 + u.0 * ARROW_BASE, at.1 + u.1 * ARROW_BASE);
     let perp = (-u.1, u.0);
     let (l, r) = (
         (base.0 + perp.0 * 3.7, base.1 + perp.1 * 3.7),
@@ -434,12 +536,32 @@ fn arrowhead(at: (f64, f64), u: (f64, f64), class: &str) -> String {
 /// boxes come nose to nose across a channel a few pixels wide, and the line reads as a bowtie.
 /// Turned around they sit at the two ends of one line pointing into the rooms it joins, which is
 /// the ordinary double-headed arrow for "you can go both ways", is what the legend has always
-/// drawn for two-way, and can never meet in the middle however short the channel.
+/// drawn for two-way — and, since SQ-1322, is GUARANTEED a real shaft between the two backs
+/// however short the channel's own CELL count: `MIN_CHANNEL_PX` widens the SVG's pixel mapping of
+/// a channel that would otherwise leave the two backs meeting or overlapping (see `PxAxis`).
 ///
 /// `at` is the point ON the box edge; `u` is that side's outward normal, as everywhere else.
+/// Reflecting through `at + (ARROW_TIP + ARROW_BASE)·u` swaps `arrowhead`'s two reaches: the sharp
+/// tip lands `ARROW_BASE` from `at` (hugging the edge, pointing into the room) and the flat back
+/// lands `ARROW_TIP` out — the reach `MIN_CHANNEL_PX` is sized against.
 fn arrowhead_inward(at: (f64, f64), u: (f64, f64), class: &str) -> String {
-    arrowhead((at.0 + u.0 * 9.0, at.1 + u.1 * 9.0), (-u.0, -u.1), class)
+    let flip = ARROW_TIP + ARROW_BASE;
+    arrowhead((at.0 + u.0 * flip, at.1 + u.1 * flip), (-u.0, -u.1), class)
 }
+
+/// The SVG's own minimum channel width, in pixels (SQ-1322) — wide enough that a two-way passage
+/// between ADJACENT boxes shows a real shaft between its two inward-pointing heads' own flat
+/// backs, rather than the two backs meeting or overlapping (a "bowtie", `◄►`).
+///
+/// Derived from the arrowhead geometry itself, never a bare number: each inward head's flat back
+/// sits `ARROW_TIP` px out from its own box edge (see `arrowhead_inward`), so two heads facing
+/// each other across a channel of width `w` leave a shaft of `w - 2 * ARROW_TIP` between their
+/// backs. The ask is a shaft at least twice one head's own length (`ARROW_HEAD_LEN`), giving
+/// `w >= 2 * ARROW_TIP + 2 * ARROW_HEAD_LEN`.
+///
+/// This is an SVG-only pixel floor — see `PxAxis` — and never changes `render::map::MIN_GUTTER`,
+/// the shared CELL count the terminal also lays channels out by.
+const MIN_CHANNEL_PX: f64 = 2.0 * ARROW_TIP + 2.0 * ARROW_HEAD_LEN;
 
 /// A lettered badge — the export's up/down/in/out glyph, spelled as a letter so the document
 /// needs no symbol font at all.
@@ -530,10 +652,15 @@ fn render_svg_body(
     }
     let no_rows = BTreeMap::new();
     let (cols, rows) = boxes_axes_sized(&rm.plan, rm.bounds, BOX_W, &col_dims, BOX_H, &no_rows);
+    // SQ-1322: the SVG's own pixel geometry for each axis, widening a channel already at
+    // `MIN_GUTTER` cells so a two-way passage between adjacent boxes gets a real shaft — see
+    // `PxAxis`. `cols`/`rows` themselves are untouched and still the terminal's own cell layout.
+    let px_cols = PxAxis::build(&cols, CELL_W);
+    let px_rows = PxAxis::build(&rows, CELL_H);
 
     let cell_of: HashMap<RoomId, (i32, i32)> = rm.rooms.iter().map(|r| (r.id, r.cell)).collect();
     let rect_of = |id: RoomId| -> Option<(f64, f64, f64, f64)> {
-        cell_of.get(&id).map(|&c| box_px_rect(&cols, &rows, c))
+        cell_of.get(&id).map(|&c| box_px_rect(&cols, &rows, &px_cols, &px_rows, c))
     };
 
     let mut ext = Extent::default();
@@ -544,7 +671,7 @@ fn render_svg_body(
     // which a tag written across is just as unreadable on.
     let mut placer = TextPlacer::default();
     for room in &rm.rooms {
-        placer.block(box_px_rect(&cols, &rows, room.cell));
+        placer.block(box_px_rect(&cols, &rows, &px_cols, &px_rows, room.cell));
     }
     // The `(room, direction)` ends the CONNECTOR pass badges. An Up/Down passage reaches this
     // function twice — once as a routed portal connector and once as a `RoutedEdge` stub, since
@@ -573,7 +700,7 @@ fn render_svg_body(
             continue;
         }
         let is_portal = matches!(conn.exit_dir, Direction::Up | Direction::Down);
-        let mut pts: Vec<(f64, f64)> = plot.path.iter().map(|&c| cell_px(c)).collect();
+        let mut pts: Vec<(f64, f64)> = plot.path.iter().map(|&c| cell_px(&px_cols, &px_rows, c)).collect();
 
         // Snap the two ends onto their boxes' pixel edges (see `snap_to_edge`).
         if let Some(r) = rect_of(conn.origin) {
@@ -731,7 +858,7 @@ fn render_svg_body(
     }
     for room in &rm.rooms {
         let Some(stubs) = stubs_by_room.get(&room.id) else { continue };
-        let rect = box_px_rect(&cols, &rows, room.cell);
+        let rect = box_px_rect(&cols, &rows, &px_cols, &px_rows, room.cell);
         // Group by the side each passage leads out of, then stack along that side.
         let mut per_side: HashMap<u8, Vec<Stub<'_>>> = HashMap::new();
         for &stub in stubs {
@@ -778,7 +905,7 @@ fn render_svg_body(
     // and its own ghost, naming where the passage came FROM instead of where it leads.
     for room in &rm.rooms {
         let Some(list) = arrivals.get(&room.id) else { continue };
-        let rect = box_px_rect(&cols, &rows, room.cell);
+        let rect = box_px_rect(&cols, &rows, &px_cols, &px_rows, room.cell);
         let mut per_side: HashMap<u8, Vec<&ArrivalGhost>> = HashMap::new();
         for a in list {
             per_side.entry(side_for_travel(direction::opposite(a.traveled)) as u8).or_default().push(a);
@@ -818,11 +945,11 @@ fn render_svg_body(
     // so a `?` can never be drawn somewhere a real exit would not.
     for room in &rm.rooms {
         let (bx, by, bw, bh) = box_cell_rect(&cols, &rows, room.cell);
-        let rect = box_px_rect(&cols, &rows, room.cell);
+        let rect = box_px_rect(&cols, &rows, &px_cols, &px_rows, room.cell);
         for &(dir, count) in &room.random_stubs {
             let Some(side) = mapper::router::side_for(dir) else { continue };
             let Some((arrow, out_cell)) = random_stub_cells(bx, by, bw, bh, dir) else { continue };
-            let start = snap_to_edge(cell_px(arrow), rect, side);
+            let start = snap_to_edge(cell_px(&px_cols, &px_rows, arrow), rect, side);
             let u = outward(side);
             let end = (start.0 + u.0 * 13.0, start.1 + u.1 * 13.0);
             let _ = write!(
@@ -845,7 +972,7 @@ fn render_svg_body(
 
     // ── Rooms ────────────────────────────────────────────────────────────────────────────
     for room in &rm.rooms {
-        let (x, y, w, h) = box_px_rect(&cols, &rows, room.cell);
+        let (x, y, w, h) = box_px_rect(&cols, &rows, &px_cols, &px_rows, room.cell);
         ext.add_rect(x, y, w, h);
         let cls = if room.is_current { "room current" } else { "room" };
         let _ = write!(
@@ -1484,6 +1611,50 @@ pub fn connector_room_crossings(svg: &str) -> Vec<String> {
     out
 }
 
+/// Every gap between two SAME-ROW or SAME-COLUMN room boxes in `svg` narrower than
+/// `MIN_CHANNEL_PX` (SQ-1322): the SVG's own pixel floor for a channel already at the shared
+/// `MIN_GUTTER` cell minimum, sized so a two-way passage between the two rooms shows a real shaft
+/// between its two inward-pointing heads rather than the two meeting or overlapping (a "bowtie",
+/// `◄►`) — see `PxAxis`.
+///
+/// Geometric, not routing-aware: any two room boxes at the same height (a row) or the same
+/// width-and-x (a column) with nothing between them are exactly one channel apart, whether or not
+/// a connector actually routes through it — `PxAxis` widens every minimum channel
+/// unconditionally, so this needs no connector attribution to check, only room positions.
+///
+/// **Public so a real story's generated map can be checked by the same code the unit cases
+/// use** — the synthetic graphs in this file cannot produce a hundred rooms' worth of adjacent
+/// pairs (`sq1306_mapgen`'s Zork I and Anchorhead cases are what can).
+pub fn narrow_channel_gaps(svg: &str) -> Vec<String> {
+    let rooms = room_rects(svg);
+    let close = |a: f64, b: f64| (a - b).abs() < 0.5;
+    let mut out = Vec::new();
+
+    let mut by_row: Vec<&PxRect> = rooms.iter().collect();
+    by_row.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap().then(a.0.partial_cmp(&b.0).unwrap()));
+    for w in by_row.windows(2) {
+        let (a, b) = (w[0], w[1]);
+        if close(a.1, b.1) && close(a.3, b.3) {
+            let gap = b.0 - (a.0 + a.2);
+            if gap > 0.0 && gap < MIN_CHANNEL_PX - 0.5 {
+                out.push(format!("row gap {gap} between {a:?} and {b:?} is narrower than {MIN_CHANNEL_PX}"));
+            }
+        }
+    }
+    let mut by_col: Vec<&PxRect> = rooms.iter().collect();
+    by_col.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap().then(a.1.partial_cmp(&b.1).unwrap()));
+    for w in by_col.windows(2) {
+        let (a, b) = (w[0], w[1]);
+        if close(a.0, b.0) && close(a.2, b.2) {
+            let gap = b.1 - (a.1 + a.3);
+            if gap > 0.0 && gap < MIN_CHANNEL_PX - 0.5 {
+                out.push(format!("column gap {gap} between {a:?} and {b:?} is narrower than {MIN_CHANNEL_PX}"));
+            }
+        }
+    }
+    out
+}
+
 /// One `<text>` the map draws: its `class`, its content, and its approximate box in document
 /// coordinates. The three travel together because a collision report is useless without all
 /// of them — a rectangle nobody can name says only that something is somewhere.
@@ -1799,6 +1970,54 @@ mod tests {
                 assert!(base_x < tip.0, "the right box's head must point back into it: {tri:?}");
             }
         }
+    }
+
+    /// SQ-1322: between ADJACENT boxes, a two-way passage's shaft — the plain gap between the two
+    /// heads' own flat backs — must be at least `2 * ARROW_HEAD_LEN`, not merely non-overlapping.
+    /// SQ-1317 (above) fixed the OVERLAP; a channel that leaves the two backs a hair's breadth
+    /// apart still reads as a bowtie (`◄►`), which is what this pins.
+    #[test]
+    fn a_two_way_passage_between_adjacent_boxes_shows_a_real_shaft() {
+        let mut m = Mapper::default();
+        m.observe(1, "A", None);
+        m.observe(2, "B", Some(Direction::E));
+        m.observe(1, "A", Some(Direction::W));
+        let svg = render_svg_of(&render(&m.graph), Some(&m.graph));
+        let doc = roxmltree::Document::parse(&svg).expect("well-formed SVG");
+        let mut base_xs: Vec<f64> = doc
+            .descendants()
+            .filter(|n| {
+                n.tag_name().name() == "polygon"
+                    && n.attribute("class").unwrap_or("").split_whitespace().any(|c| c == "arrow")
+                    && !under_class(*n, "legend-block")
+            })
+            .map(|n| {
+                let off = translate_of(n);
+                let pts: Vec<(f64, f64)> = n
+                    .attribute("points")
+                    .unwrap_or("")
+                    .split_whitespace()
+                    .filter_map(|p| {
+                        let (a, b) = p.split_once(',')?;
+                        Some((a.parse::<f64>().ok()? + off.0, b.parse::<f64>().ok()? + off.1))
+                    })
+                    .collect();
+                (pts[1].0 + pts[2].0) / 2.0
+            })
+            .collect();
+        assert_eq!(base_xs.len(), 2, "a two-way passage carries a head at each end");
+        base_xs.sort_by(|a, b| a.partial_cmp(b).unwrap());
+        let shaft = base_xs[1] - base_xs[0];
+        assert!(
+            shaft >= 2.0 * ARROW_HEAD_LEN - 0.01,
+            "shaft must be at least 2x an arrowhead's own length ({}), got {shaft}",
+            2.0 * ARROW_HEAD_LEN
+        );
+
+        // The same invariant, checked the way a real-game map's rooms (not its arrowheads) get
+        // checked (`narrow_channel_gaps`) — the two must agree, since both describe one channel.
+        let bad = narrow_channel_gaps(&svg);
+        assert!(bad.is_empty(), "the channel itself must already meet the floor: {bad:?}");
     }
 
     /// SQ-1317: no label may sit on a room box or on another label.
