@@ -226,13 +226,6 @@ pub struct RoutedEdge {
     /// the renderer can label the badge without re-resolving it (and so the target may live
     /// off the current layer in future). `None` for routed compass edges.
     pub dest_label: Option<String>,
-    /// True when `dest` lives on a DIFFERENT layer than `origin` (SQ-0223).
-    ///
-    /// Set only by `interlayer_badges`; every route within one layer is `false`. The renderer
-    /// needs this to tell a cross-layer badge from an ordinary stub, and it cannot infer it —
-    /// `dest` is simply absent from the layer's rooms, which is indistinguishable from a room
-    /// that has no position yet.
-    pub is_interlayer: bool,
 }
 
 // ── route_all ─────────────────────────────────────────────────────────────────
@@ -286,7 +279,6 @@ pub fn route_all(graph: &MapGraph) -> Vec<RoutedEdge> {
                 label,
                 arrival_dir: None,
                 dest_label: graph.room(conn.dest).map(|r| r.label().to_string()),
-                is_interlayer: false,
             });
             continue;
         }
@@ -329,7 +321,6 @@ pub fn route_all(graph: &MapGraph) -> Vec<RoutedEdge> {
             label: None,
             arrival_dir,
             dest_label: None,
-                is_interlayer: false,
         });
 
         emitted.insert((conn.origin, conn.dir, conn.dest));

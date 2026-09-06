@@ -50,9 +50,11 @@ mod vpsc;
 mod constraints;
 mod stress;
 mod chains;
+mod seat;
 pub use incremental::place_incremental;
 pub use chains::{detect_chains, Chains};
 pub use constraints::positionally_unreliable;
+pub use seat::{seat_adjacent, seat_offset, seat_portal_leaves, Seat};
 
 /// Separation gap and ideal edge length (in grid cells).
 const GAP: f64 = 1.0;
@@ -1531,6 +1533,11 @@ pub fn relayout_auto_observed(graph: &mut MapGraph, mut obs: Option<TidyObserver
             p.1 -= ay;
         }
     }
+
+    // Last: a room whose every passage is a portal has no bearing the solve could seat it by,
+    // so it goes onto its anchor's doorstep now that everything WITH a bearing has settled —
+    // opening a line if it must (SQ-1356). See `seat::seat_portal_leaves`.
+    seat_portal_leaves(graph, &mut final_pos);
 
     for (&id, &p) in &final_pos {
         graph.set_pos(id, p);
