@@ -210,7 +210,7 @@ fn the_same_region_stays_on_main_once_the_floor_is_raised_above_it() {
 #[test]
 fn auto_layers_false_skips_the_split() {
     let mut g = synthetic_portal_region();
-    let opts = MapgenOptions { auto_layers: false, layer_min: 1 };
+    let opts = MapgenOptions { auto_layers: false, layer_min: 1, ..MapgenOptions::default() };
     let splits = mapgen::split_layers(&mut g, &opts);
     assert_eq!(splits, vec![]);
     assert_eq!(g.layers().len(), 1);
@@ -324,12 +324,17 @@ fn a_graph_with_nothing_to_split_produces_no_layers() {
 // Real-game: Zork I (skip vacuously without `stories/`)
 // ---------------------------------------------------------------------------
 
-/// Zork I's release 52: the maze is one maze layer, the largest remaining
-/// component stays Main, and the default floor's portal-only layers are named
-/// and counted — a frame, pinned the way `docs/internals` asks any
-/// topology-dependent count to be (SQ-1308's own floor, not a magic number).
+/// Zork I's release 52: the maze is one maze layer, the START ROOM's component
+/// stays Main, and the default floor's portal-only layers are named and counted
+/// — a frame, pinned the way `docs/internals` asks any topology-dependent count
+/// to be (SQ-1308's own floor, not a magic number).
+///
+/// Re-pinned for SQ-1359, which is what swapped the two big layers over: Main
+/// was the 54-room underground (the largest component) and the surface was a
+/// layer called `Rocky Ledge`; the surface is where the game starts, so it is
+/// Main now and the underground is the layer named after its own entrance.
 #[test]
-fn zork1_maze_is_one_layer_and_main_is_the_largest_component() {
+fn zork1_maze_is_one_layer_and_main_is_the_start_rooms_component() {
     let Some(path) = story("zork1-invclues-r52-s871125.z5") else {
         eprintln!("SKIP: stories/zork1-invclues-r52-s871125.z5 absent");
         return;
@@ -367,13 +372,20 @@ fn zork1_maze_is_one_layer_and_main_is_the_largest_component() {
         "#163 (Ladder Bottom's own dead end) has no compass edge to the maze and must stay off it"
     );
 
-    // Main is whichever layer holds the most rooms — mapgen has no start room
-    // to anchor Main on the way the live map does, so "biggest wins" is the
-    // rule, and it must actually be the layer `move_region` never touched.
+    // SQ-1359: Main is the layer holding the room the story STARTS in — mapgen
+    // boots the story for a moment to learn it — and it must be the layer
+    // `move_region` never touched. Here that is emphatically NOT the biggest:
+    // Zork I's underground has more than twice the surface's rooms.
+    let start = map.start.room().expect("Zork I opens standing in West of House");
+    assert_eq!(start.name, "West of House");
+    assert_eq!(g.layer_of(start.id), MAIN_LAYER, "the start room's layer is Main");
     let mut by_size: Vec<(mapper::layer::LayerId, usize)> =
         g.layers().keys().map(|&id| (id, g.rooms_in_layer(id).len())).collect();
     by_size.sort_by_key(|&(_, n)| std::cmp::Reverse(n));
-    assert_eq!(by_size[0].0, MAIN_LAYER, "the largest layer must be the one still called Main");
+    assert_ne!(
+        by_size[0].0, MAIN_LAYER,
+        "and on THIS story the largest layer is not Main, which is the whole of SQ-1359"
+    );
 
     // The portal-only split: pinned by name and count against this exact
     // release/serial, the way `real_media_releases.rs` pins a floppy's release
@@ -389,12 +401,16 @@ fn zork1_maze_is_one_layer_and_main_is_the_largest_component() {
     // of the Coal Mine. Verified by reverting `adopt_stranded_regions`'s call
     // site: the counts go back to 5/5/18/4 and Main gains the four rooms back.
     //
-    // Re-pinned again for SQ-1311: Rocky Ledge loses the Grating Room (21→20) —
-    // it now joins the maze directly in pass 1b (`absorb_maze_adjacent_rooms`),
-    // every one of its compass edges leading into the maze, so it never reaches
-    // pass 3's portal-adoption at all. Main also loses five rooms (its own four
-    // maze dead ends plus the now-excluded pseudo-room #41), but Main is not
-    // pinned here by count — only the portal-only layers are.
+    // Re-pinned again for SQ-1311: the surface layer loses the Grating Room
+    // (21→20) — it now joins the maze directly in pass 1b
+    // (`absorb_maze_adjacent_rooms`), every one of its compass edges leading
+    // into the maze, so it never reaches pass 3's portal-adoption at all.
+    //
+    // And re-pinned for SQ-1359: the surface (21 rooms) is Main now and so is
+    // no longer in this list, while the underground it displaced appears here
+    // as `Cellar` — `name_region_by_entry` naming it, as it names every other
+    // peel, after the room its entering portal leads into. Main is not pinned
+    // here by count; only the portal-only layers are.
     let mut portal_only: Vec<String> = g
         .layers()
         .keys()
@@ -406,25 +422,38 @@ fn zork1_maze_is_one_layer_and_main_is_the_largest_component() {
     assert_eq!(
         portal_only,
         vec![
+            "Cellar (54 rooms)".to_string(),
             "Coal Mine (6 rooms)".to_string(),
             "Ladder Bottom (5 rooms)".to_string(),
-            "Rocky Ledge (21 rooms)".to_string(),
             "Torch Room (4 rooms)".to_string(),
         ],
         "the portal-only split at the default floor changed shape"
     );
 
-    // SQ-1310's own named cases: the Attic (off the Kitchen) and Up a Tree (off
-    // the Forest Path) must land on Rocky Ledge — the house's own layer — not on
-    // Main by default.
-    let rocky_ledge = room_id(g, "Kitchen");
-    let rocky_ledge_layer = g.layer_of(rocky_ledge);
-    assert_ne!(rocky_ledge_layer, MAIN_LAYER, "sanity: the Kitchen is on its own portal layer");
-    assert_eq!(g.layer_of(room_id(g, "Attic")), rocky_ledge_layer, "the Attic must join the Kitchen's layer");
+    // SQ-1310's own named cases: a below-floor component lands on whichever
+    // layer its own portal opens off, never on Main by default. The Attic (off
+    // the Kitchen) and Up a Tree (off the Forest Path) join the house's layer —
+    // which since SQ-1359 IS Main, so those two no longer tell adoption apart
+    // from the default and are kept only as statements of where they belong.
+    let house_layer = g.layer_of(room_id(g, "Kitchen"));
+    assert_eq!(house_layer, MAIN_LAYER, "the house is the start room's own layer");
+    assert_eq!(g.layer_of(room_id(g, "Attic")), house_layer, "the Attic must join the Kitchen's layer");
     assert_eq!(
         g.layer_of(room_id(g, "Up a Tree")),
-        rocky_ledge_layer,
+        house_layer,
         "Up a Tree must join the Forest Path's layer"
+    );
+
+    // The one that still falsifies pass 3 on this story: Ladder Top is a
+    // one-room component reached only by climbing DOWN from the Coal Mine, and
+    // it must be on the Coal Mine's layer — which is neither Main nor the layer
+    // its own default would have been.
+    let coal_mine = g.layer_of(room_id(g, "Coal Mine"));
+    assert_ne!(coal_mine, MAIN_LAYER, "sanity: the Coal Mine has a layer of its own");
+    assert_eq!(
+        g.layer_of(room_id(g, "Ladder Top")),
+        coal_mine,
+        "Ladder Top is adopted onto the Coal Mine it hangs off, not left on Main"
     );
 }
 
@@ -652,8 +681,9 @@ fn torch_room_layer_matches_the_real_game_and_is_not_distorted() {
 /// Zork I's white house (SQ-1309): a diagonal ring — West of House, North of House,
 /// Behind House, South of House — plus the front door itself, Behind House ↔
 /// Kitchen ↔ Living Room, each leg a reciprocated CARDINAL. Before the per-layer
-/// isolation fix, the house's own "Rocky Ledge" layer (18 rooms) was laid out
-/// alongside Main's 64 and every other layer in one shared relayout, and Kitchen's
+/// isolation fix, the house's own layer (18 rooms, called "Rocky Ledge" before
+/// SQ-1359 made the start room's layer Main) was laid out alongside the
+/// underground's 64 and every other layer in one shared relayout, and Kitchen's
 /// real east/west doors — walked from both ends in the game — came out distorted.
 #[test]
 fn white_house_cardinal_doors_are_not_distorted() {
@@ -755,7 +785,8 @@ fn east_west_passage_stays_on_the_round_room_row_and_the_chasm_column_is_intact(
 /// component, and the separation VPSC enforces for a cardinal pair is only a MINIMUM. The leaf
 /// snap pulls it onto the doorstep.
 ///
-/// **`Stone Barrow` / `West of House` (Rocky Ledge).** `West of House` holds three reciprocated
+/// **`Stone Barrow` / `West of House` (the house's layer — `Rocky Ledge` until SQ-1359 made it
+/// Main).** `West of House` holds three reciprocated
 /// diagonals and the solve found the one cell that satisfies all of them — which fell inside the
 /// `Living Room`/`Kitchen`/`Behind House` row's span, so the contiguity pass threw it four cells
 /// west as a foreign interloper and left the barrow under the Living Room with both legs of its

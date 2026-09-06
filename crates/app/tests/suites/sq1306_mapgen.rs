@@ -518,6 +518,159 @@ fn zork1_static_map_reads_its_zil_exits() {
     );
 }
 
+/// SQ-1359: **the layer holding the room the story starts in is `Main`.**
+///
+/// Zork I r52 is the story that made the old rule visibly wrong. Its underground is 54 rooms
+/// against 21 above ground, so keeping the LARGEST component as Main put West of House, the
+/// white house, the forest and the whole surface on a layer called "Rocky Ledge" — named after
+/// the room a portal up from the mine happens to enter — and called the Cellar and its
+/// neighbours "Main". A player opening that map is looking for the room the game opens in.
+///
+/// Both halves are asserted, because only the pair is evidence: mapgen boots the story (see
+/// `app::mapgen::probe_start_room`) and finds West of House, and with that boot turned OFF the
+/// old answer comes back. The second half is the falsifier — without it this case would still
+/// pass if the split rule were reverted and Zork I merely happened to name its biggest component
+/// something else.
+#[test]
+fn zork1_main_layer_is_the_one_the_story_starts_in() {
+    let Some(path) = story("zork1-invclues-r52-s871125.z5") else {
+        eprintln!("SKIP: stories/zork1-invclues-r52-s871125.z5 absent");
+        return;
+    };
+    let map = mapgen::generate(&path, true).expect("Zork I must map");
+
+    // ── the boot found the room, by name and as the graph's current room ──
+    let start = map.start.room().expect("Zork I reaches its first prompt standing in a room");
+    assert_eq!(start.name, "West of House");
+    assert_eq!(
+        map.graph.current(),
+        Some(start.id),
+        "the start room is the map's current room, so a drawing highlights it"
+    );
+    assert_eq!(map.start.header_line(), format!("start room: West of House (#{})", start.id));
+
+    // ── and its layer is Main ────────────────────────────────────────────
+    assert_eq!(
+        map.graph.layer_of(start.id),
+        mapper::layer::MAIN_LAYER,
+        "West of House is on Main"
+    );
+    let main_names: Vec<&str> = map
+        .graph
+        .rooms_in_layer(mapper::layer::MAIN_LAYER)
+        .iter()
+        .filter_map(|&id| map.graph.room(id).map(|r| r.label()))
+        .collect();
+    for surface in ["North of House", "Behind House", "Kitchen", "Living Room"] {
+        assert!(main_names.contains(&surface), "the surface world is on Main; {surface} is not");
+    }
+
+    // ── the underground is a layer of its own, named after its own entrance ──
+    let cellar = map
+        .graph
+        .rooms()
+        .find(|r| r.label() == "Cellar")
+        .expect("Zork I has a Cellar")
+        .id;
+    let under = map.graph.layer_of(cellar);
+    assert_ne!(under, mapper::layer::MAIN_LAYER, "the underground is no longer Main");
+    assert!(
+        !map.graph.layer_name(under).is_empty() && map.graph.layer_name(under) != "Main",
+        "the underground layer is named after the room its entering portal leads into, got {:?}",
+        map.graph.layer_name(under)
+    );
+    assert!(
+        map.graph.rooms_in_layer(under).len() > main_names.len(),
+        "and it is the BIGGER of the two, which is the whole point of this case"
+    );
+
+    // ── the falsifier: the old rule, reproduced by skipping the boot ─────
+    let flat = mapgen::generate_with_options(
+        &path,
+        false,
+        &mapgen::MapgenOptions { boot_for_start: false, ..Default::default() },
+    )
+    .expect("Zork I must map with no boot too");
+    assert_eq!(flat.start, mapgen::StartProbe::Skipped);
+    assert_eq!(flat.graph.current(), None, "no boot, no current room");
+    let flat_start = flat.graph.rooms().find(|r| r.label() == "West of House").unwrap().id;
+    assert_ne!(
+        flat.graph.layer_of(flat_start),
+        mapper::layer::MAIN_LAYER,
+        "without the boot the largest component is Main and West of House is NOT on it — this is \
+         the defect SQ-1359 fixed, and if it stops reproducing the case above proves nothing"
+    );
+}
+
+/// The other half of SQ-1359, drawn: the SVG highlights exactly one room, and it is the one the
+/// story starts in.
+///
+/// The `room current` class is the yellow box `export_svg` draws for "you are here"; before this
+/// quest a generated map had no current room at all and drew none.
+#[test]
+fn zork1_svg_highlights_west_of_house_as_the_current_room() {
+    let Some(path) = story("zork1-invclues-r52-s871125.z5") else {
+        eprintln!("SKIP: stories/zork1-invclues-r52-s871125.z5 absent");
+        return;
+    };
+    let map = mapgen::generate(&path, true).expect("Zork I must map");
+    let svg = app::export_svg::render_svg_layered(&map.graph);
+
+    let doc = roxmltree::Document::parse(&svg).expect("well-formed SVG");
+    let current: Vec<_> = doc
+        .descendants()
+        .filter(|n| {
+            n.tag_name().name() == "rect"
+                && n.attribute("class") == Some("room current")
+                && !app::export_svg::under_class(*n, "legend-block")
+        })
+        .collect();
+    assert_eq!(current.len(), 1, "exactly one room is drawn as the current one");
+
+    // The room's label is the text element immediately after its rect (`export_svg` emits the
+    // box and then its caption), which is how the drawing itself associates the two.
+    let label = current[0]
+        .next_siblings()
+        .find(|n| n.is_element() && n.tag_name().name() == "text")
+        .and_then(|n| n.text())
+        .expect("the highlighted room carries a label");
+    assert_eq!(label, "West of House");
+}
+
+/// The rule must not disturb a story whose start room was in the largest component ANYWAY —
+/// which is most of them, and is why this quest is a correction rather than a rearrangement.
+///
+/// Mini-Zork I (r34/s871124) is tracked, so this half runs on CI: its 58-room surface-and-cellar
+/// component holds West of House and is also the biggest, so booting for the start room changes
+/// nothing about the split. The current room is set either way it is learned, and that IS a
+/// change — the drawing now has a room to highlight.
+#[test]
+fn minizork_start_is_in_the_largest_component_so_the_split_is_unchanged() {
+    let path = fixture_path("minizork-r34-s871124.z3");
+    let booted = mapgen::generate(&path, false).expect("minizork.z3 is a tracked fixture");
+    let flat = mapgen::generate_with_options(
+        &path,
+        false,
+        &mapgen::MapgenOptions { boot_for_start: false, ..Default::default() },
+    )
+    .expect("minizork.z3 is a tracked fixture");
+
+    let layers = |m: &mapgen::GeneratedMap| -> Vec<(String, usize)> {
+        let mut ids: Vec<_> = m.graph.layers().keys().copied().collect();
+        ids.sort_unstable();
+        ids.into_iter()
+            .map(|id| (m.graph.layer_name(id).to_string(), m.graph.rooms_in_layer(id).len()))
+            .collect()
+    };
+    assert_eq!(layers(&booted), layers(&flat), "the split is identical either way");
+
+    let start = booted.start.room().expect("Mini-Zork opens in West of House");
+    assert_eq!(start.name, "West of House");
+    assert_eq!(booted.graph.layer_of(start.id), mapper::layer::MAIN_LAYER);
+    assert_eq!(booted.graph.current(), Some(start.id));
+    assert_eq!(flat.graph.current(), None, "and skipping the boot leaves no current room");
+}
+
 /// The SVG a generated Zork I map exports (SQ-1313): every room named, every
 /// drawn connector a stroked path, and not one segment running through a room
 /// box.

@@ -29,6 +29,15 @@ Absolute URLs or no link.
 
 ### Changed
 
+- **A generated map now opens where the game does.** `lanthorn-mapgen` boots the
+  story for a moment before reading it, purely to find out which room you start
+  in — so the main layer of the map is the part of the world the game begins in,
+  and that room is highlighted the way the room you are standing in is while you
+  play. On Zork I that means the white house, the forest and everything above
+  ground are the main map, instead of being filed away on a layer named after a
+  ledge in a coal mine while the cellar took the front page. `--no-boot` skips
+  the boot if you want the file read and nothing else run.
+
 - **A passage that leaves the layer now leads to a room, not a label.** The
   room across the boundary is drawn beside its neighbour as a *ghost* — a box
   the size of a real room, in the cell the passage points at, with a broken
