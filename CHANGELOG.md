@@ -6,7 +6,7 @@ All notable changes to lanthorn are recorded here.
 [`.github/workflows/release.yml`](.github/workflows/release.yml)). A tag whose
 name contains a hyphen — `v0.1.0-beta.1`, `v0.2.0-rc.1` — is published as a
 **pre-release**; a bare `vMAJOR.MINOR.PATCH` is a full release. The workspace
-version in `Cargo.toml` (currently `0.5.0`) versions every crate and every
+version in `Cargo.toml` (currently `0.5.1`) versions every crate and every
 binary's `--version` at once, and carries any pre-release suffix so a build
 identifies itself without reading its git hash.
 
@@ -19,13 +19,36 @@ Absolute URLs or no link.
 
 ---
 
-## Unreleased
+## v0.5.1 — 2026-09-06
 
-> *This section is drained when a version is cut. README.md describes the
-> RELEASED build; prose for a feature that is in `main` but not yet released
-> goes into the README in place, at its normal destination, marked with the
-> visible tag `*Next release:*`. `release.yml` refuses to cut a release
-> while any such tag, or this Unreleased section, still exists.*
+### Highlights
+
+- **The map's other layers are rooms now.** A passage that leaves the layer
+  shows the room it leads to as a dashed box the layout seats like any other,
+  on both the terminal map and the SVG, pushing the building's walls out to
+  make space and taking neighbours along; two-way passages get two-headed
+  arrows, one-way ones say `to` / `from`.
+- **The exported SVG reads the way the terminal map does.** Every arrowhead,
+  stair badge and compass tag sits where the travel arrives; stairs and
+  ladders end in a real arrowhead with the letter behind it; a passage folded
+  onto another's line, or a second exit to the same room, keeps its marker;
+  each layer sits in its own panel and the legend no longer clips.
+- **Adventure and Zork I on the map.** Adventure's mazes are called "Maze"
+  and peel onto their own layers (static and live), its random forests are
+  marked on the first walk and stay marked through a lucky streak, and Zork
+  I's four Forests no longer read as "back here". `lanthorn-mapgen` opens
+  where the game does: the starting room's layer is Main and it is the
+  highlighted room.
+- **Bureaucracy on the IBM PC looks like DOSBox.** The licence form hands
+  back a readable screen with no extra Enter (and no blood-pressure
+  penalty), and bold text — room names, the bracketed asides — comes out
+  bright white the way the DOS interpreter drew it.
+
+### Added
+
+- **`/dump-terminal` now reports how long image encodes take.** Resize,
+  deflate and base64 each get their own min, mean and max since launch, so a
+  slow frame can be pinned on the stage that's actually slow.
 
 ### Changed
 
@@ -88,6 +111,13 @@ Absolute URLs or no link.
   too, with the letter riding just behind it on the line — before, a portal's
   only mark was the letter, so there was no way to tell "leads down" from
   "arrived by going down".
+- **The exported SVG map's marks now sit where the travel arrives, across
+  the board.** One-way arrows point at the room they lead to, and every
+  stair badge and compass tag sits at the end its own passage arrives at,
+  rather than the end it leaves.
+- **Stairs, ladders and in/out passages on the exported SVG map lay out the
+  extra room their badge needs.** The letter now always has space to ride
+  behind a real arrowhead instead of crowding against it.
 
 ### Fixed
 
@@ -189,6 +219,16 @@ Absolute URLs or no link.
   door you walked through led out of the conversation instead of out of the
   room. A game that names the room on its status line is now believed over a
   bold heading that says otherwise.
+
+- **A browser tab reconnecting to a detached game in the Docker image no
+  longer comes back half-working.** Mouse clicks, map dragging and touch
+  scrolling now all work again at once, instead of only after opening the
+  story list first.
+
+- **The overlaps and stray bends the new ghost rooms had introduced in dense
+  layers are gone.** A layer already tight for space could end up with a
+  ghost box sitting on top of a real room, or a passage bent for no reason to
+  dodge one; both are cleared up now.
 
 ---
 
