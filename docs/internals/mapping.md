@@ -1191,8 +1191,8 @@ is worth knowing, because it is the part that can be wrong:
 | source | reader | rooms are | doors | conditionals |
 |---|---|---|---|---|
 | `i7-world` | `gvm::i7map::I7World` | `I7World::rooms()` — the story's own `Map_Storage` row order, so the set is exact and nothing is derived | resolved: a two-sided door becomes an ordinary edge marked `door`, naming the door in `via` | n/a |
-| `i6-library` (Glulx) | `gvm::world::WorldModel` | objects that declare an exit, plus every object an exit leads to | **invisible** — `gvm::world` resolves `door_to` and reports a plain room, so the passage is right and the door is lost | n/a |
-| `zil` / `i6-library` (Z-machine) | `zvm::world::WorldModel` | the same derivation, over object numbers `1..=max_object` | DEXIT and Inform's `door_to` hop both keep the door (`ExitDetail::Door`) | CEXIT is drawn and marked `conditional` |
+| `i6-library` (Glulx) | `gvm::world::WorldModel` | objects that declare an exit, plus every object an exit leads to | **invisible** — `gvm::world` resolves `door_to` and reports a plain room, so the passage is right and the door is lost | n/a — see the `routine` reconciliation below, which this source shares with ZIL's |
+| `zil` / `i6-library` (Z-machine) | `zvm::world::WorldModel` | the same derivation, over object numbers `1..=max_object` | DEXIT and Inform's `door_to` hop both keep the door (`ExitDetail::Door`) | CEXIT is drawn and marked `conditional`; a `Code` exit (FEXIT / routine `door_dir`) is drawn as `routine` when some other room declares the way back (SQ-1334, see below) |
 | `scott` | `scott::Database` | `db.rooms[1..]` — complete by construction; index 0 is the format's "no room" sentinel and is not a place | n/a | n/a |
 
 The two Inform-6-style derivations deserve a word: neither `zvm::world` nor
@@ -1219,10 +1219,19 @@ excluding it would leave that edge dangling.
 
 - **Runtime map edits.** Inform 7's `AssertMapConnection`, an Inform 6
   `door_dir` holding a routine, and ZIL's FEXIT all decide while the game runs
-  and leave nothing in the file. A static map can therefore be missing a passage
-  a player would find, and — where a story dismantles a connection — can show
-  one a player never can. A headless walker is the answer and is a separate
-  quest; nothing here is built toward it.
+  and leave nothing in the file naming THIS exit's own destination. A static
+  map can therefore still be missing a passage a player would find, and —
+  where a story dismantles a connection — can show one a player never can.
+  **One narrower case is recovered (SQ-1334):** when some OTHER room's plain,
+  door or conditional exit declares the way back to a `Code` exit's own room,
+  in the opposite direction, the story's exit table is still saying the
+  passage is real even though it never names where THIS end leads — Zork I's
+  Living Room has no declared Down exit (its trap door is a FEXIT), but the
+  Cellar's own Up names the Living Room, so the passage is drawn one-way,
+  marked `routine`. A `Code` exit with no such reverse — Kitchen's joke CEXIT
+  down to the Studio is `Conditional`, not `Code`, and stays exactly as
+  before — is still invisible, and a headless walker remains the only way to
+  recover the general case; nothing here is built toward that.
 - **Randomised destinations.** No static source knows a passage is randomised,
   so `EdgeKind::Random` exists in the vocabulary and is never emitted.
 - **Stories that declare no map at all.** The Inform 7 reader refuses an Inform 6
@@ -1296,8 +1305,18 @@ addition, and only a change a version-1 reader could not survive bumps
     `{kind: "scott-room", number}`.
 - **`edges`** — `from`, `to` (room `id`s), `dir` (canonical lowercase word,
   `"?"` for unknown), `kind`, `reciprocal`, `via`, `note`.
-  - **`kind`** is the most specific of `random` > `conditional` > `door` >
-    `one-way` > `declared`, so an edge is never labelled twice.
+  - **`kind`** is the most specific of `random` > `conditional` > `routine` >
+    `door` > `one-way` > `declared`, so an edge is never labelled twice.
+  - **`routine`** (SQ-1334) is a passage whose own destination is computed by
+    the story's code (a ZIL FEXIT, or an Inform `door_dir`/`*_to` routine) and
+    therefore unresolvable on its own — but some OTHER room's plain, door or
+    conditional exit declares the way BACK, in the opposite direction, so the
+    story's own exit table still says the passage is real. Zork I's Living
+    Room has no declared Down exit at all (its trap door is a FEXIT); the
+    Cellar's plain Up exit names the Living Room, so `Living Room -down->
+    Cellar` is drawn, marked `routine`, styled dotted like `conditional`. A
+    `Code` exit with no such reverse stays undrawn, same as always — a guessed
+    destination would be worse than a missing one.
   - **`reciprocal`** is reported independently, because a door or a conditional
     can be one-way too and `kind` has room for only one fact.
   - **`via`** names the door object when `kind` is `door`, else `null`; `note` is

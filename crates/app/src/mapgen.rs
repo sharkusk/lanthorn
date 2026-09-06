@@ -43,7 +43,7 @@
 //! becomes an edge to a node standing for the DOOR itself rather than a guess
 //! at the room behind it.
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
@@ -99,10 +99,11 @@ impl SourceKind {
 
 /// What kind of passage an edge is, most specific wins.
 ///
-/// The precedence is `Random` > `Conditional` > `Door` > `OneWay` > `Declared`,
-/// so an edge is never labelled twice and a consumer can switch on one value.
-/// `reciprocal` is reported alongside and independently, because a door or a
-/// conditional can be one-way too and the kind has room for only one fact.
+/// The precedence, most to least specific, is `Random`, `Conditional`,
+/// `Routine`, `Door`, `OneWay`, `Declared` — so an edge is never labelled
+/// twice and a consumer can switch on one value. `reciprocal` is reported
+/// alongside and independently, because a door or a conditional can be
+/// one-way too and the kind has room for only one fact.
 ///
 /// **A consumer should tolerate a kind it does not know.** Phase 1 never emits
 /// `Random` — no static source can know that a passage is randomised — but the
@@ -118,6 +119,11 @@ pub enum EdgeKind {
     Door,
     /// The passage exists only while the story allows it — ZIL's CEXIT.
     Conditional,
+    /// The destination is computed by the story's own code (a ZIL FEXIT, or an
+    /// Inform `door_dir`/`*_to` routine) rather than declared directly, but
+    /// SOME other room's plain, door or conditional exit declares the way back
+    /// — see the `declared_to` lookup in `zmachine_map` (SQ-1334).
+    Routine,
     /// The destination is drawn from a pool. Never emitted by phase 1.
     Random,
 }
@@ -130,6 +136,7 @@ impl EdgeKind {
             EdgeKind::OneWay => "one-way",
             EdgeKind::Door => "door",
             EdgeKind::Conditional => "conditional",
+            EdgeKind::Routine => "routine",
             EdgeKind::Random => "random",
         }
     }
@@ -737,6 +744,49 @@ struct RawEdge {
     note: Option<String>,
 }
 
+/// The note every [`EdgeKind::Routine`] edge carries (SQ-1334): the SAME text
+/// regardless of which engine's reader found it, so a consumer never sees two
+/// spellings of the same fact.
+const ROUTINE_NOTE: &str = "decided by the story's code; the way back is declared";
+
+/// From every declared exit that resolves to a destination — `(origin, dir,
+/// dest)` triples — the `(destination, the direction that reaches it) ->
+/// declaring room` lookup a `Code`/routine exit's own missing destination is
+/// recovered through (SQ-1334): does anything declare a plain, door or
+/// conditional exit BACK to a given room, travelling a given direction.
+/// `or_insert` keeps the first (lowest room id, by iteration order) declarer
+/// when more than one room declares the identical reverse.
+///
+/// Generic over the room-id type so the Z-machine's `u16` object numbers
+/// (`zmachine_map`) and Glulx's `u32` addresses (`i6_glulx_map`) share the one
+/// function — both readers already have their own declared-exits table in
+/// exactly this `(origin, dir, dest)` shape by the time they call it.
+fn declared_reverse_lookup<Id: Copy + Eq + std::hash::Hash>(
+    declared: impl Iterator<Item = (Id, Direction, Id)>,
+) -> HashMap<(Id, Direction), Id> {
+    let mut declared_to: HashMap<(Id, Direction), Id> = HashMap::new();
+    for (origin, dir, dest) in declared {
+        declared_to.entry((dest, dir)).or_insert(origin);
+    }
+    declared_to
+}
+
+/// The room a `Code`/routine exit at `(obj, dir)` should be drawn to (SQ-1334):
+/// [`declared_reverse_lookup`]'s answer to "does anything declare a plain,
+/// door or conditional exit back to `obj`, travelling the direction opposite
+/// `dir`". `None` when nothing does, in which case the exit stays undrawn —
+/// Zork I's Kitchen has no such reverse for its own `Code` exit down to the
+/// Studio (a CEXIT joke gated on a flag the game never sets, already drawn as
+/// `Conditional` and untouched by this path) and a guessed destination would
+/// be worse than a missing one.
+fn routine_destination<Id: Copy + Eq + std::hash::Hash>(
+    declared_to: &HashMap<(Id, Direction), Id>,
+    obj: Id,
+    dir: Direction,
+) -> Option<Id> {
+    declared_to.get(&(obj, mapper::direction::opposite(dir))).copied()
+}
+
 /// Turn agreed rooms and edges into a graph plus the facts beside it.
 ///
 /// Every reader funnels through here, so room insertion order (and therefore
@@ -773,10 +823,12 @@ fn assemble(
         // surrenders first when a cycle closes and something must give. `Conditional` ranks
         // below `Door` because a door is a real walkable way through the geography that happens
         // to need opening, where a conditional exit is typically a secret the fiction wanted —
-        // Zork I's magic-word `Strange Passage`, the rainbow (SQ-1312).
+        // Zork I's magic-word `Strange Passage`, the rainbow (SQ-1312). `Routine` shares
+        // `Conditional`'s weight and dotted styling (SQ-1334): its own direction is code, exactly
+        // as unpredictable at layout time as a CEXIT's gate.
         let weight = match e.kind {
             EdgeKind::Door => mapper::graph::PassageWeight::Door,
-            EdgeKind::Conditional => mapper::graph::PassageWeight::Conditional,
+            EdgeKind::Conditional | EdgeKind::Routine => mapper::graph::PassageWeight::Conditional,
             _ => mapper::graph::PassageWeight::Hard,
         };
         graph.add_edge_weighted(e.origin, e.dir, e.dest, weight);
@@ -801,8 +853,8 @@ fn assemble(
     GeneratedMap { graph, source, story, facts, engine_refs, layout_time: None }
 }
 
-/// Write each room's door and conditional exits into its `notes`, so the text
-/// dump says them.
+/// Write each room's door, conditional and routine exits into its `notes`, so
+/// the text dump says them.
 ///
 /// [`crate::map_dump::render_dump`] prints `notes=` from the graph, and
 /// [`mapper::graph::Connection`] has nowhere to put a per-edge annotation — so
@@ -810,29 +862,44 @@ fn assemble(
 /// ever produces, the facts are summarised onto the ORIGIN room in the same
 /// `key=[…]` style as the dump's own `random=` and `dropped=` notes.
 fn annotate_rooms(map: &mut GeneratedMap) {
-    let mut by_room: BTreeMap<RoomId, (Vec<String>, Vec<String>)> = BTreeMap::new();
+    #[derive(Default)]
+    struct Notes {
+        doors: Vec<String>,
+        conds: Vec<String>,
+        routines: Vec<String>,
+    }
+    let mut by_room: BTreeMap<RoomId, Notes> = BTreeMap::new();
     for f in &map.facts {
         let entry = by_room.entry(f.origin).or_default();
         let dir = mapper::direction::short_label(f.dir).to_uppercase();
         match f.kind {
             EdgeKind::Door => {
                 let via = f.via.as_deref().unwrap_or("door");
-                entry.0.push(format!("{dir}→{via:?}"));
+                entry.doors.push(format!("{dir}→{via:?}"));
             }
             EdgeKind::Conditional => {
                 let note = f.note.as_deref().unwrap_or("condition unknown");
-                entry.1.push(format!("{dir}→({note})"));
+                entry.conds.push(format!("{dir}→({note})"));
+            }
+            // SQ-1334: the destination came from another room's declared
+            // reverse, not from this room's own (unresolvable) code.
+            EdgeKind::Routine => {
+                let note = f.note.as_deref().unwrap_or("decided by the story's code");
+                entry.routines.push(format!("{dir}→({note})"));
             }
             _ => {}
         }
     }
-    for (id, (doors, conds)) in by_room {
+    for (id, notes) in by_room {
         let mut parts = Vec::new();
-        if !doors.is_empty() {
-            parts.push(format!("door=[{}]", doors.join(", ")));
+        if !notes.doors.is_empty() {
+            parts.push(format!("door=[{}]", notes.doors.join(", ")));
         }
-        if !conds.is_empty() {
-            parts.push(format!("conditional=[{}]", conds.join(", ")));
+        if !notes.conds.is_empty() {
+            parts.push(format!("conditional=[{}]", notes.conds.join(", ")));
+        }
+        if !notes.routines.is_empty() {
+            parts.push(format!("routine=[{}]", notes.routines.join(", ")));
         }
         if !parts.is_empty() {
             map.graph.room_mut_notes(id, &parts.join(" "));
@@ -966,6 +1033,20 @@ fn zmachine_map(bytes: &[u8], file: String) -> Result<GeneratedMap, GenError> {
         })
         .collect();
 
+    // SQ-1334: a `Code` exit's own destination is unresolvable — the story
+    // computes it in a routine — but the story's exit table can still say the
+    // passage is real, when some OTHER room declares a plain/door/conditional
+    // exit back to this one in the opposite direction. The Living Room's own
+    // Down is a ZIL FEXIT (`TRAP-DOOR-EXIT`) and therefore `Code`, but the
+    // Cellar declares a plain UP exit to the Living Room — the way back is
+    // declared even though the way there is code, so `Living Room D → Cellar`
+    // is drawn, one-way, as [`EdgeKind::Routine`]. See `declared_reverse_lookup`.
+    let declared_to: HashMap<(u16, Direction), u16> = declared_reverse_lookup(declares.iter().flat_map(
+        |(&obj, declared)| {
+            declared.iter().filter_map(move |&(dir, detail)| detail.destination().map(|dest| (obj, dir, dest)))
+        },
+    ));
+
     let mut edges = Vec::new();
     for (&obj, declared) in &declares {
         for &(dir, detail) in declared {
@@ -988,11 +1069,22 @@ fn zmachine_map(bytes: &[u8], file: String) -> Result<GeneratedMap, GenError> {
                     None,
                     Some("open only while the story allows it (ZIL CEXIT)".to_string()),
                 ),
-                // A routine or a refusal message: real map data, but not a
-                // passage anything static can draw. Deliberately no edge — a
-                // guessed one would be worse than a missing one.
-                zvm::world::ExitDetail::Code
-                | zvm::world::ExitDetail::Message
+                // SQ-1334: a `Code` exit whose destination some other room's
+                // own declared exit gives away (see `declared_to` above).
+                zvm::world::ExitDetail::Code => match routine_destination(&declared_to, obj, dir) {
+                    Some(dest) => (
+                        dest,
+                        EdgeKind::Routine,
+                        None,
+                        Some(ROUTINE_NOTE.to_string()),
+                    ),
+                    None => continue,
+                },
+                // A refusal message, or a routine with no declared way back:
+                // real map data, but not a passage anything static can draw.
+                // Deliberately no edge — a guessed one would be worse than a
+                // missing one.
+                zvm::world::ExitDetail::Message
                 | zvm::world::ExitDetail::Absent
                 | zvm::world::ExitDetail::Unknown => continue,
             };
@@ -1093,6 +1185,10 @@ fn i7_map(
     w: &gvm::i7map::I7World,
     story: StoryIdent,
 ) -> GeneratedMap {
+    // SQ-1334's `Code`/`Routine` reconciliation is N/A here: `Map_Storage` is
+    // a plain per-room, per-direction DATA table, not compiled branches, so
+    // [`gvm::i7map::I7Exit`] has nothing shaped like a routine to begin with —
+    // one cell is a room, a door, or absent (filtered out below), never code.
     let name_of = |addr: u32| w.printed_name(mem, names, addr).unwrap_or_default();
 
     // The room set is the story's own: `Map_Storage` is indexed by room, so
@@ -1178,6 +1274,12 @@ fn i6_glulx_map(
     let mut declares: BTreeMap<u32, Vec<(Direction, u32)>> = BTreeMap::new();
     let mut destinations: BTreeSet<u32> = BTreeSet::new();
     let mut any_declaration = false;
+    // SQ-1334: `Code` carries no destination of its own — `gvm::world` has no
+    // `ExitDetail`-shaped alternative — but it may still be a real passage
+    // when some OTHER room's plain exit declares the way back, in the
+    // opposite direction (see `declared_to` below). Kept separately from
+    // `declares`, which stays exactly the plain-exit table it always was.
+    let mut code_exits: Vec<(u32, Direction)> = Vec::new();
     for obj in names.objects() {
         let mut here = Vec::new();
         for dir in DIRS {
@@ -1187,7 +1289,11 @@ fn i6_glulx_map(
                     destinations.insert(d);
                     here.push((dir, d));
                 }
-                gvm::world::DeclaredExit::Code | gvm::world::DeclaredExit::Message => {
+                gvm::world::DeclaredExit::Code => {
+                    any_declaration = true;
+                    code_exits.push((obj, dir));
+                }
+                gvm::world::DeclaredExit::Message => {
                     any_declaration = true;
                 }
                 gvm::world::DeclaredExit::Absent | gvm::world::DeclaredExit::Unknown => {}
@@ -1219,7 +1325,7 @@ fn i6_glulx_map(
         })
         .collect();
 
-    let edges: Vec<RawEdge> = declares
+    let mut edges: Vec<RawEdge> = declares
         .iter()
         .flat_map(|(&obj, ds)| {
             ds.iter().map(move |&(dir, dest)| RawEdge {
@@ -1232,6 +1338,27 @@ fn i6_glulx_map(
             })
         })
         .collect();
+
+    // SQ-1334: the same reconciliation `zmachine_map` does for a ZIL FEXIT —
+    // built over the same `declares` table the loop above already reads, so a
+    // `Code` exit at `(obj, dir)` looks up whichever room declares a plain
+    // exit back to `obj` in the opposite direction. See `declared_reverse_lookup`.
+    let declared_to: HashMap<(u32, Direction), u32> =
+        declared_reverse_lookup(declares.iter().flat_map(|(&obj, ds)| {
+            ds.iter().map(move |&(dir, dest)| (obj, dir, dest))
+        }));
+    for (obj, dir) in code_exits {
+        if let Some(dest) = routine_destination(&declared_to, obj, dir) {
+            edges.push(RawEdge {
+                origin: crate::roomid::glulx_room_id(obj),
+                dir,
+                dest: crate::roomid::glulx_room_id(dest),
+                kind: EdgeKind::Routine,
+                via: None,
+                note: Some(ROUTINE_NOTE.to_string()),
+            });
+        }
+    }
 
     Ok(assemble(rooms, edges, SourceKind::I6Library, story))
 }
@@ -1620,4 +1747,60 @@ pub fn render_json(map: &GeneratedMap) -> String {
 
     // `to_string_pretty` because these files are read, diffed and checked in.
     serde_json::to_string_pretty(&doc).unwrap_or_else(|e| format!("{{\"error\":\"{e}\"}}")) + "\n"
+}
+
+#[cfg(all(test, feature = "t-state"))]
+mod tests {
+    use super::*;
+
+    /// SQ-1334's reconciliation, on plain `(origin, dir, dest)` triples rather than a full story
+    /// fixture: Living Room's own Down is `Code` (unresolvable on its own), but the Cellar
+    /// declares a plain Up exit to the Living Room — the way back — so the Down exit's
+    /// destination is recovered as the Cellar.
+    #[test]
+    fn a_code_exits_destination_is_recovered_from_the_reverse_declared_exit() {
+        // The Cellar (34) declares UP -> Living Room (79); nothing else is declared here at all,
+        // in particular nothing declares Living Room's own Down.
+        let declared_to =
+            declared_reverse_lookup([(34u16, Direction::Up, 79u16)].into_iter());
+        assert_eq!(
+            routine_destination(&declared_to, 79, Direction::Down),
+            Some(34),
+            "Living Room's Code exit down recovers the Cellar from the Cellar's own declared Up"
+        );
+    }
+
+    /// The falsifier for the rule above: a `Code` exit with no declared reverse anywhere stays
+    /// undrawn — Zork I's Kitchen has a `Code`-shaped joke exit down to the Studio with nothing
+    /// declaring the way back, and inventing a destination would be worse than missing one.
+    #[test]
+    fn a_code_exit_with_no_declared_reverse_recovers_nothing() {
+        // Nothing at all declares an exit back to the Kitchen (28) from the north (the reverse
+        // of a southbound Code exit) — only an unrelated declaration elsewhere.
+        let declared_to =
+            declared_reverse_lookup([(1u16, Direction::N, 2u16)].into_iter());
+        assert_eq!(routine_destination(&declared_to, 28, Direction::S), None);
+    }
+
+    /// When two different rooms both declare the reverse, the lookup is deterministic: the FIRST
+    /// one in iteration order wins, not whichever happens to be inserted last by hash order.
+    #[test]
+    fn two_declared_reverses_pick_the_first_in_iteration_order() {
+        let declared_to = declared_reverse_lookup(
+            [(10u16, Direction::Up, 5u16), (20u16, Direction::Up, 5u16)].into_iter(),
+        );
+        assert_eq!(routine_destination(&declared_to, 5, Direction::Down), Some(10));
+    }
+
+    /// A `Conditional` exit's destination counts as a declared reverse too (not only a plain
+    /// one) — Zork I's Studio has a `Code` exit up, and the ONLY thing declaring the way back is
+    /// the Kitchen's own CEXIT down to the Studio, a `Conditional` exit that still names a real
+    /// destination. The reconciliation reads any exit `ExitDetail::destination()` answers, not
+    /// only `Room`, so this must be recovered too.
+    #[test]
+    fn a_conditional_exits_destination_also_counts_as_a_declared_reverse() {
+        let declared_to =
+            declared_reverse_lookup([(28u16, Direction::Down, 229u16)].into_iter());
+        assert_eq!(routine_destination(&declared_to, 229, Direction::Up), Some(28));
+    }
 }

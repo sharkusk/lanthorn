@@ -86,6 +86,15 @@ Absolute URLs or no link.
   (Zork I's Cyclops Room and Strange Passage was the reported case). The
   export now gives that gutter a little extra room, in pixels only, so there
   is always a real dash of line showing between the two heads.
+- **A passage the story computes in code is drawn when the way back gives it
+  away.** A ZIL FEXIT or an Inform routine `door_dir` names no destination of
+  its own, so it used to leave the map with nothing at all in that direction —
+  Zork I's Living Room trap door showed only `Cellar U → Living Room`, never
+  the way down. Now, when some other room's plain, door or secret exit
+  declares the way BACK, the passage is drawn too, one-way and dotted like a
+  secret exit. A passage with no such declared reverse anywhere — a joke exit
+  gated on a flag the game never sets, say — still stays off the map rather
+  than have a destination guessed for it.
 - **`lanthorn-mapgen` now splits a story's mazes and portal-only regions onto
   their own map layers**, the way accepting every one of the interpreter's own
   "give these rooms their own layer?" prompts would. A generated map's `.svg`,
