@@ -15,8 +15,17 @@
 //! excess. That makes the totals below a BUDGET rather than a target — the number to watch is
 //! whether it goes UP.
 //!
+//! **The totals below count GHOST boxes as rooms** (SQ-1360). Since SQ-1356 a cross-layer ghost
+//! is a room the layout seats, `render_layer` shifts the layer's real rooms to make space for one,
+//! and `bend_report` reads its boxes from that render — so every number here is of a map with
+//! more boxes on it than the one SQ-1332 measured, and none of them is comparable across that
+//! change. Each case says what moved and by how much.
+//!
 //! Zork I and Anchorhead both live under the gitignored `stories/`, so every case here skips
-//! vacuously off CI and says so.
+//! vacuously off CI and says so. **That is why this suite reddened main for two days**: the
+//! SQ-1356 lane verified with name filters that never matched it, and CI structurally cannot.
+//! Run `cargo nextest run -p lanthorn sq1316 sq1332` against a checkout with `stories/` after any
+//! layout, seating or routing change.
 
 use std::path::{Path, PathBuf};
 
@@ -100,6 +109,22 @@ fn zork1_named_connectors_take_the_fewest_turns_their_anchors_allow() {
 /// (an excess of 79). After: **122** against the same 72 (an excess of 50). The pins are ceilings,
 /// so a router change that straightens more is free and one that bends more has to come here and
 /// say why.
+///
+/// **Re-based at SQ-1360, because the MAP grew, not because the router got worse.** SQ-1356 made a
+/// cross-layer ghost a room the layout seats: Zork I's six layers gained twenty ghost boxes
+/// between them (five on Main alone), and `render_layer`'s seating shifts the layer's real rooms
+/// to make space. So this is a different map with more boxes in the way, and the optimum — "what
+/// the anchors and the boxes between them permit" — moved with it: **83**, from 72.
+///
+/// Two thirds of that jump was a MEASUREMENT fault SQ-1360 also fixed, and the number is not
+/// comparable across it: `bend_report` took its boxes from `graph.rooms_in_layer(layer)` while
+/// plotting the connectors from `render_layer`'s own plan, so it was asking about rectangles at
+/// the cells the layout had BEFORE the ghosts were seated, and about no ghost at all. On the same
+/// tree the stale reading says 81 where the honest one says 83.
+///
+/// The drawn total moved with it: **152**, from 122. The excess over optimum is 69, against 50
+/// before the ghosts and 79 before SQ-1332 — the ghosts are boxes to go round, and going round
+/// them costs turns.
 #[test]
 fn zork1_spends_no_more_turns_than_its_budget() {
     let Some(path) = story(ZORK1) else {
@@ -109,12 +134,16 @@ fn zork1_spends_no_more_turns_than_its_budget() {
     let map = app::mapgen::generate(&path, true).expect("mapgen");
     let (n, bends, opt) = totals(&map);
     assert!(n > 100, "Zork I must draw a real number of connectors, got {n}");
-    assert_eq!(opt, 72, "the anchor optimum is a property of the LAYOUT, not the router");
-    assert!(bends <= 122, "Zork I draws {bends} turns against a budget of 122 (was 151)");
+    assert_eq!(opt, 83, "the anchor optimum is a property of the LAYOUT, not the router");
+    assert!(bends <= 152, "Zork I draws {bends} turns against a budget of 152 (was 122)");
 }
 
 /// The same budget on the denser fixture. Before SQ-1332: **110** turns against an optimum of 52.
 /// After: **98**.
+///
+/// Re-based at SQ-1360 for the reason the Zork I case above states at length — eight ghost boxes
+/// across Anchorhead's six layers, and the same stale-box measurement fault. Optimum **54**,
+/// drawn **112**.
 #[test]
 fn anchorhead_spends_no_more_turns_than_its_budget() {
     let Some(path) = story(ANCHORHEAD) else {
@@ -124,16 +153,33 @@ fn anchorhead_spends_no_more_turns_than_its_budget() {
     let map = app::mapgen::generate(&path, true).expect("mapgen");
     let (n, bends, opt) = totals(&map);
     assert!(n > 100, "Anchorhead must draw a real number of connectors, got {n}");
-    assert_eq!(opt, 52, "the anchor optimum is a property of the LAYOUT, not the router");
-    assert!(bends <= 98, "Anchorhead draws {bends} turns against a budget of 98 (was 110)");
+    assert_eq!(opt, 54, "the anchor optimum is a property of the LAYOUT, not the router");
+    assert!(bends <= 112, "Anchorhead draws {bends} turns against a budget of 112 (was 98)");
 }
 
 /// A connector that draws a turn its anchors did not force is paying for something, and this is
-/// the ceiling on how MUCH any single one may pay. Four is a Z with a detour on the end; nothing
-/// on either reference map needs more, and a route that does is the "long dashed detour up and
-/// around the Attic" shape the quest was filed against.
+/// the ceiling on how MUCH any single one may pay. Four is a Z with a detour on the end, and a
+/// route that takes more is the "long dashed detour up and around the Attic" shape the quest was
+/// filed against.
+///
+/// **One passage on Zork I is over it, and the two boxes that put it there are GHOSTS** (SQ-1360).
+/// `Forest #91 --S--> Forest #230` on the Main layer draws five turns. #91 sits at cell `(0, 1)`
+/// and #230 at `(3, 5)`, and of the two L routes their anchors allow, the horizontal-first one is
+/// blocked by Forest Path, Up a Tree, Forest #33 and Clearing #134 — all real, all there before —
+/// while the vertical-first one runs down column 0 through Living Room and then through the
+/// **Cellar** and **Studio** ghost boxes SQ-1356 seated at `(0, 4)` and `(1, 5)`. With the whole
+/// column closed the route drops to the channel BELOW row 4, crosses east, and comes back down
+/// into #230's left side: five turns, every one of them round a box.
+///
+/// So the ceiling stays at four and the exception is named rather than the number raised — a
+/// SECOND connector over four, or this one growing a sixth turn, still fails here. The list is
+/// checked for exactly its one member, so the exemption cannot quietly absorb a pile.
 #[test]
 fn no_single_connector_takes_more_than_four_turns() {
+    // `(story, layer, origin, dest, turns)` — every passage allowed past the ceiling, and why is
+    // in the doc comment above. Matched exactly: an extra entry here needs the same treatment.
+    const EXCUSED: &[(&str, &str, u32, u32, usize)] = &[(ZORK1, "Main", 91, 230, 5)];
+
     for name in [ZORK1, ANCHORHEAD] {
         let Some(path) = story(name) else {
             eprintln!("SKIP no_single_connector_takes_more_than_four_turns: stories/{name} absent");
@@ -148,23 +194,38 @@ fn no_single_connector_takes_more_than_four_turns() {
             .filter(|&l| !map.graph.rooms_in_layer(l).is_empty())
             .collect();
         layers.sort_unstable();
+        let mut over: Vec<(String, u32, u32, usize)> = Vec::new();
         for l in layers {
             for f in app::render::map::bend_report(&map.graph, l) {
                 let name_of = |id| {
                     map.graph.room(id).map(|r| r.label().to_string()).unwrap_or_default()
                 };
+                if f.bends <= 4 {
+                    continue;
+                }
+                let layer = map.graph.layer_name(l).to_string();
                 assert!(
-                    f.bends <= 4,
-                    "[{name}/{}] {} -{:?}-> {} draws {} turns (anchors allow {}): {:?}",
-                    map.graph.layer_name(l),
+                    EXCUSED.contains(&(name, layer.as_str(), f.origin, f.dest, f.bends)),
+                    "[{name}/{layer}] {} -{:?}-> {} (#{}→#{}) draws {} turns (anchors allow {}): {:?}",
                     name_of(f.origin),
                     f.dir,
                     name_of(f.dest),
+                    f.origin,
+                    f.dest,
                     f.bends,
                     f.optimum,
                     f.path
                 );
+                over.push((layer, f.origin, f.dest, f.bends));
             }
         }
+        // Non-vacuity, and the other half of "named rather than raised": the exemption must still
+        // be describing exactly the shape it was written for on the map it was written for.
+        let want: Vec<(String, u32, u32, usize)> = EXCUSED
+            .iter()
+            .filter(|e| e.0 == name)
+            .map(|e| (e.1.to_string(), e.2, e.3, e.4))
+            .collect();
+        assert_eq!(over, want, "[{name}] the over-four list has changed shape");
     }
 }

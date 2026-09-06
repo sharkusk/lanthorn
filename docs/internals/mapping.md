@@ -1135,6 +1135,26 @@ What the drawing shows, beyond the rooms:
   Gallery layer, where the `from Living Room` ghost wants the cell The Troll
   Room holds, is the specimen. Ghosts are derived at render time and nothing
   about them is persisted.
+
+  **When you touch the layout — seating, slots, lanes, the router — run these,
+  by NAME, in a checkout with `stories/`** (SQ-1360):
+
+  ```sh
+  cargo nextest run -p lanthorn sq1316 sq1332 sq1312 sq1306 sq1308 sq1319 sq1330 sq1333 mapper_ui
+  cargo nextest run -p lanthorn-mapper
+  ```
+
+  `sq1316_connector_overlaps` and `sq1332_connector_bends` are the two that
+  state the drawn map's own invariants — no connector overlaps another, and no
+  connector turns where nothing forced it — and both are **`stories/`-only**, so
+  CI can never fail on either and a worktree without the symlink skips them
+  vacuously into a false green. SQ-1356 shipped through a verification list
+  that named neither, and both sat red on main for two days: a ghost box is a
+  new obstacle on lines that used to be clear, so seating one moves overlap
+  counts and turn budgets by construction. Expect to re-pin the budgets when
+  the map genuinely gains boxes — and to fix the router when two lines land in
+  one cell, because *crossings are fine and overlaps are not* is the rule those
+  numbers exist to keep.
 - **A legend** in the bottom-left of each document naming every mark.
 
 Styling is a `<style>` block of CSS classes — `.room`, `.room.current`,

@@ -1870,6 +1870,10 @@ fn assign_side_slots(connectors: &mut [RoutedConnector], graph: &MapGraph) {
             );
         by_side.entry((room, side)).or_default().push((is_updown, axis_recip, straight, is_exit, ci));
     }
+    // How many endpoints each side carries, read before the loop consumes `by_side`. The
+    // straight-run pass at the bottom needs it to know a side is this connector's alone.
+    let side_endpoints: BTreeMap<(RoomId, Side), usize> =
+        by_side.iter().map(|(k, v)| (*k, v.len())).collect();
     for (key, mut members) in by_side {
         let has_updown = members.iter().any(|&(is_updown, ..)| is_updown);
         // SQ-1274: the CENTER slot (0) is the room's own compass anchor for this side — an
@@ -2001,6 +2005,56 @@ fn assign_side_slots(connectors: &mut [RoutedConnector], graph: &MapGraph) {
             } else {
                 connectors[ci].entry_slot = slot;
             }
+        }
+    }
+
+    // **A straight run must not be bent by its own slots** (SQ-1360).
+    //
+    // The two sides of one passage are slotted independently, by two different groups' contention.
+    // Where the boxes are neighbours on one axis and the polyline is already a straight lattice
+    // hop, a disagreement between the two slots is the ONLY thing bending the line — and it bends
+    // it in the last channel, which is exactly the sidestep SQ-1320 removed for the arrival's own
+    // sake. Zork I's Cellar layer draws the shape: the `from Altar` ghost is seated directly north
+    // of Cave, its departure is alone on the ghost's Bottom side and takes centre, and its arrival
+    // cannot have Cave's Top centre because the reciprocal `Mirror Room↔Cave` owns it — so the
+    // straight portal stepped one cell east at the very end and dropped its corner on the Mirror
+    // connector's corner, a genuine two-glyphs-one-cell overlap.
+    //
+    // The cure moves the end that is ALONE on its side — the free one, never the contended one,
+    // whose slot was decided by a group with its own reasons. Either end can be the free one, and
+    // both shapes are on the reference maps: Zork I's ghost has the free DEPARTURE (Cave's Top is
+    // contended), while Anchorhead's `Riverwalk↓Under the Bridge` has the free ARRIVAL (Riverwalk's
+    // Bottom carries its `S` exit as well, so the departure cannot move).
+    //
+    // An arrival is never moved ONTO centre: slot 0 is the destination's own compass anchor, which
+    // is the whole of SQ-1274 — and a lone arrival that was entitled to it already has it, so a
+    // lone arrival sitting off centre is one the anchor rule put there deliberately.
+    //
+    // Confined to a single-channel hop between adjacent boxes: a longer straight run passes other
+    // rooms' gutters on the way, where shifting a whole column is not obviously free, and no
+    // fixture asks for it.
+    for c in connectors.iter_mut() {
+        if c.merge || c.entry_corner.is_some() || is_diagonal(c.exit_dir) {
+            continue;
+        }
+        if c.exit_slot == c.entry_slot || c.points.len() != 3 || !is_collinear(&c.points) {
+            continue;
+        }
+        let facing = matches!(
+            (c.exit, c.entry),
+            (Side::Top, Side::Bottom)
+                | (Side::Bottom, Side::Top)
+                | (Side::Left, Side::Right)
+                | (Side::Right, Side::Left)
+        );
+        if !facing {
+            continue;
+        }
+        let alone = |room, side| side_endpoints.get(&(room, side)).copied() == Some(1);
+        if alone(c.origin, c.exit) {
+            c.exit_slot = c.entry_slot;
+        } else if alone(c.dest, c.entry) && c.exit_slot != 0 {
+            c.entry_slot = c.exit_slot;
         }
     }
 }
@@ -2259,6 +2313,53 @@ mod tests {
         // Falsify: the two REAL edges must still route normally — this is not a test that
         // routing produced nothing at all.
         assert_eq!(routed.len(), 2, "the hill→forest and forest→valley edges still route: {routed:?}");
+    }
+
+    /// **A straight hop between two neighbouring boxes must not be bent by its own slots**
+    /// (SQ-1360).
+    ///
+    /// The shape, off Zork I's Cellar layer: `Cave` with the `from Altar` ghost seated directly
+    /// north of it, `Mirror Room` north-west, and `Mirror Room↔Cave` a reciprocal pair whose
+    /// return leg is `Cave --N-->`, so the reciprocal owns Cave's Top CENTRE and the ghost's
+    /// one-way arrival cannot have it. The ghost's own Bottom side carries nothing else, so its
+    /// departure took centre — and a passage leaving on one column and arriving on the next drew
+    /// a one-cell sidestep in the last channel, whose corner landed on the Mirror connector's
+    /// corner: two glyphs, one cell, which is the overlap the whole SQ-1316 invariant forbids.
+    ///
+    /// The free end follows the contended one. Stated here rather than only on the real map
+    /// because both fixtures that show it live under the gitignored `stories/`, where CI cannot
+    /// reach them.
+    #[test]
+    fn a_straight_hop_keeps_one_slot_at_both_ends() {
+        const GHOST: RoomId = 1; // stands in for the cross-layer `from Altar`
+        const CAVE: RoomId = 2;
+        const MIRROR: RoomId = 3;
+        let mut g = MapGraph::new();
+        for (id, label, pos) in
+            [(GHOST, "from Altar", (1, 0)), (CAVE, "Cave", (1, 1)), (MIRROR, "Mirror Room", (0, 0))]
+        {
+            g.upsert_room(id, label.into());
+            g.set_pos(id, pos);
+        }
+        // The reciprocal pair whose return leg claims Cave's Top centre.
+        g.add_edge(MIRROR, Direction::E, CAVE);
+        g.add_edge(CAVE, Direction::N, MIRROR);
+        // The one-way crossing down into Cave, alone on the ghost's Bottom side.
+        g.add_edge(GHOST, Direction::Down, CAVE);
+
+        let plan = route_lanes(&g);
+        let hop = plan
+            .connectors
+            .iter()
+            .find(|c| c.origin == GHOST && c.dest == CAVE)
+            .expect("the Down crossing routes");
+        // Non-vacuity: the shape only exists because the arrival was pushed OFF centre by the
+        // reciprocal. If this ever reads 0 the fixture has stopped reproducing the defect.
+        assert_ne!(hop.entry_slot, 0, "the reciprocal must own Cave's Top centre: {hop:?}");
+        assert_eq!(
+            hop.exit_slot, hop.entry_slot,
+            "a straight hop's two ends must share one slot, or it jogs in the last channel: {hop:?}"
+        );
     }
 
     #[test]

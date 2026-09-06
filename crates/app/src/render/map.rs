@@ -1726,13 +1726,16 @@ fn render_lane_connectors(
         .iter()
         .filter_map(|c| plot_connector(c, cols, rows, diag).map(|p| (c, p)))
         .collect();
-    // Cells carrying compass line-art. Up/down connectors are excluded: they accumulate in their
-    // own mask with their own dotted glyphs, so a slope has nothing there to cross.
-    let compass_cells: std::collections::HashSet<(i32, i32)> = plots
-        .iter()
-        .filter(|(c, _)| !matches!(c.exit_dir, Direction::Up | Direction::Down))
-        .flat_map(|(_, p)| p.cells.iter().map(|(c, _)| *c))
-        .collect();
+    // Cells carrying another connector's line-art — what a slope must yield to (SQ-1331).
+    //
+    // Up/down connectors are IN this set (SQ-1360). They were excluded on the grounds that they
+    // accumulate in their own dotted mask, "so a slope has nothing there to cross" — true of the
+    // two mask maps, false of the BUFFER, which has one cell. Zork I's Kitchen↓Studio portal runs
+    // straight down the gutter the Behind House↘South of House slope crosses, and painted its
+    // dotted `┊` over two of the slope's chain glyphs: the chain simply stopped for two rows and
+    // resumed. A yielded one-cell gap is the whole point of the rule and reads correctly here too.
+    let compass_cells: std::collections::HashSet<(i32, i32)> =
+        plots.iter().flat_map(|(_, p)| p.cells.iter().map(|(c, _)| *c)).collect();
     // Which connector wins each diagonal-chain cell (SQ-1331) — see `resolve_diagonal_winners`.
     // The per-connector check below need only ask "am I the recorded winner here", covering both
     // a compass yield and a diagonal-vs-diagonal one with one lookup.
@@ -3142,11 +3145,10 @@ fn diagonal_crossing_state(graph: &mapper::graph::MapGraph, layer: mapper::layer
         .enumerate()
         .filter_map(|(ci, c)| plot_connector(c, &cols, &rows, Some(&glyphs)).map(|p| (ci, p)))
         .collect();
-    let compass_cells: std::collections::HashSet<(i32, i32)> = plots
-        .iter()
-        .filter(|(ci, _)| !matches!(rm.plan.connectors[*ci].exit_dir, Direction::Up | Direction::Down))
-        .flat_map(|(_, p)| p.cells.iter().map(|(c, _)| *c))
-        .collect();
+    // Up/down connectors included, exactly as `render_lane_connectors` includes them (SQ-1360):
+    // the two must build this set the same way or the measurement stops describing the paint.
+    let compass_cells: std::collections::HashSet<(i32, i32)> =
+        plots.iter().flat_map(|(_, p)| p.cells.iter().map(|(c, _)| *c)).collect();
     let winners = resolve_diagonal_winners(plots.iter().map(|(ci, p)| (*ci, p)), &compass_cells);
     (rm, plots, compass_cells, winners)
 }
@@ -3487,10 +3489,18 @@ pub fn bend_report(
     let (cols, rows) = boxes_axes(&rm.plan, rm.bounds);
     // Every room box on the layer as a pixel rect, keyed by room, so the two rooms a connector
     // joins can be excused (its anchors sit ON their own borders).
-    let boxes: Vec<(RoomId, (i32, i32, i32, i32))> = graph
-        .rooms_in_layer(layer)
+    //
+    // Read from `rm.rooms`, NOT from `graph.rooms_in_layer(layer)` — the two disagree since
+    // SQ-1356 (SQ-1360). `render_layer` seats every cross-layer GHOST into the layer's grid and
+    // `seat_adjacent` may open a line to make room, shifting the layer's real rooms with it; the
+    // connectors below are plotted from that same `rm`, so boxes taken from the graph would be a
+    // set of rectangles at the cells the layout used to have, missing every ghost. `optimum` is
+    // "what the boxes between these two anchors permit", and it has to be asked of the boxes the
+    // reader can actually see.
+    let boxes: Vec<(RoomId, (i32, i32, i32, i32))> = rm
+        .rooms
         .iter()
-        .filter_map(|&id| graph.room(id).and_then(|r| r.pos).map(|p| (id, p)))
+        .map(|r| (r.id, r.cell))
         .map(|(id, p)| {
             let (x, y) = (cols.room_pixel(p.0), rows.room_pixel(p.1));
             (id, (x, y, x + cols.box_dim_at(p.0) - 1, y + rows.box_dim_at(p.1) - 1))
