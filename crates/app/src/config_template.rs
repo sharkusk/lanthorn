@@ -265,7 +265,7 @@ const INTERFACE: &[Row] = &[
             "How many cells wide the draggable pane boundaries are: the story/map",
             "splitter and the inventory/room panel top edges. Raise it for touch —",
             "e.g. the Docker web image on a tablet, where a finger cannot land on",
-            "so narrow a target. The command band's own top edge is unaffected and",
+            "so narrow a target. The command panel's own top edge is unaffected and",
             "always stays a single row, so it never swallows clicks on its own",
             "column headers. Clamped to 1-6.",
         ],
