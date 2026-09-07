@@ -2913,6 +2913,21 @@ a terminal without the feature looks like.
   `ENXIO`. The pixels go in through an `mmap`/copy/`munmap` instead, which is what
   the terminal does at the other end anyway.
 
+**A third platform fact, found on Linux instead, and this one crashes the process
+rather than staying silent (SQ-1379).** A POSIX shared memory object lives on
+`tmpfs`, and `tmpfs` allocates pages on first touch, not on `ftruncate` — so
+`ftruncate` reporting success is not proof the pages exist. A window bigger than
+the space left in `/dev/shm` (64 MB by default in a Docker container, and Docker
+is also how this image is played locally: `docker run -it`) sails through
+`ftruncate` and only finds out when the copy touches an unbacked page, at which
+point the kernel delivers **`SIGBUS`**, not an error — the whole process dies
+mid-picture with no `Result` for the fallback to catch. `posix_fallocate` after
+`ftruncate` forces the reservation up front, so the same full `tmpfs` now answers
+`ENOSPC` there instead, ordinarily, and the write takes the existing fallback like
+any other failure. Linux only: macOS's shared memory objects are ordinary
+anonymous memory with no separate quota to exhaust, so `ftruncate` already
+reserves what it names there and `posix_fallocate` does not exist to call.
+
 **The name is per *transmit*, not per image**, and that is the one place this
 differs from everything else on this page. The handover is asynchronous: the
 escape rides out on the next flush and the terminal opens the object whenever it

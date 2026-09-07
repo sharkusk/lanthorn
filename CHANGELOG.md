@@ -57,6 +57,8 @@ Absolute URLs or no link.
   the map you generate and the map you play with agree about where the rooms
   are. Zork I's generated map draws eight fewer turns and Anchorhead's twelve
   fewer, with no passage anywhere taking more than four.
+- A full `/dev/shm` can no longer crash lanthorn mid-picture; it falls back to
+  compressed transfer.
 
 ---
 

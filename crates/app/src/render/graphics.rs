@@ -3702,6 +3702,20 @@ fn kitty_shm_name(serial: u32) -> String {
 /// `s * v * bpp` (Ghostty says "shared memory size too small"), and one larger
 /// wastes a page it will never look at.
 ///
+/// **On Linux, `ftruncate` alone does not reserve the pages it names.** A POSIX
+/// shared memory object lives on `tmpfs`, and `tmpfs` allocates pages on first
+/// touch rather than on `ftruncate` — so a graphics window bigger than the
+/// remaining space in `/dev/shm` (64 MB by default in a Docker container) sails
+/// through `ftruncate` and dies on the `copy_nonoverlapping` below with **SIGBUS**,
+/// which is not a `Result` this function can hand back, or even a panic the
+/// caller could catch: it takes the whole process down. `posix_fallocate` after
+/// `ftruncate` forces the reservation up front, so a full `tmpfs` answers
+/// `ENOSPC` there instead, and this function returns `None` like any other
+/// failure — the caller already falls back to the wire. macOS has no
+/// `posix_fallocate` and needs none: its shared memory objects are ordinary
+/// anonymous memory with no separate quota to run out of, so `ftruncate` there
+/// already reserves what it names.
+///
 /// **A successful object is not unlinked here.** The protocol makes the terminal
 /// responsible: it unlinks the object once it has read it, which is what lets the
 /// handover need no synchronisation. An object no terminal ever reads does outlive
@@ -3722,7 +3736,8 @@ fn kitty_shm_write(name: &str, bytes: &[u8]) -> Option<()> {
         if fd < 0 {
             return None;
         }
-        let filled = if libc::ftruncate(fd, bytes.len() as libc::off_t) == 0 {
+        let reserved = libc::ftruncate(fd, bytes.len() as libc::off_t) == 0 && kitty_shm_reserve(fd, bytes.len());
+        let filled = if reserved {
             let ptr = libc::mmap(
                 std::ptr::null_mut(),
                 bytes.len(),
@@ -3748,6 +3763,25 @@ fn kitty_shm_write(name: &str, bytes: &[u8]) -> Option<()> {
         }
     }
     Some(())
+}
+
+/// Force the reservation `ftruncate` alone does not make on `tmpfs` (see
+/// [`kitty_shm_write`]'s doc comment). Linux only: `posix_fallocate` returns the
+/// errno directly rather than setting it and returning `-1`, so `0` — not a sign
+/// check — is success. Every other Unix `kitty_shm_write` runs on backs its
+/// shared memory with ordinary reservable memory already, so there is nothing
+/// for this to do there.
+///
+/// # Safety
+/// `fd` must be an open, writable file descriptor.
+#[cfg(target_os = "linux")]
+unsafe fn kitty_shm_reserve(fd: libc::c_int, len: usize) -> bool {
+    libc::posix_fallocate(fd, 0, len as libc::off_t) == 0
+}
+
+#[cfg(all(unix, not(target_os = "linux")))]
+unsafe fn kitty_shm_reserve(_fd: libc::c_int, _len: usize) -> bool {
+    true
 }
 
 /// The kitty transmit sequence for `canvas` as image `id`, handed over through a
@@ -7696,6 +7730,39 @@ mod tests {
                 out
             };
             assert_eq!(read_back, *img.as_raw(), "byte for byte, the canvas the terminal will read");
+        }
+
+        /// The Linux-only reservation (`posix_fallocate`, SQ-1379) still leaves a
+        /// correct object behind: this is the same round-trip as the test above,
+        /// but its purpose is to exercise the reservation path on Linux CI rather
+        /// than the write itself, which the test above already covers on every
+        /// platform. `posix_fallocate` cannot be made to fail here without a full
+        /// `/dev/shm` to provoke it, so this is the non-vacuity half — proof the
+        /// reserved object still holds exactly the bytes written, not a test of
+        /// the `ENOSPC` fallback itself.
+        #[test]
+        #[cfg(unix)]
+        fn a_reserved_shared_memory_object_still_round_trips_its_bytes() {
+            let img = canvas(24, 17);
+            let name = kitty_shm_name(0xC0FFEE);
+            kitty_shm_write(&name, img.as_raw()).expect("this platform writes a shared memory object");
+
+            let cname = std::ffi::CString::new(name.as_str()).unwrap();
+            // SAFETY: reading back the object just written, unmapped and closed
+            // before this block ends, and unlinked afterwards.
+            let read_back = unsafe {
+                let fd = libc::shm_open(cname.as_ptr(), libc::O_RDONLY, 0);
+                assert!(fd >= 0, "the object exists after the reserved write");
+                let len = img.as_raw().len();
+                let ptr = libc::mmap(std::ptr::null_mut(), len, libc::PROT_READ, libc::MAP_SHARED, fd, 0);
+                assert!(ptr != libc::MAP_FAILED, "reservation did not shrink the mapping");
+                let out = std::slice::from_raw_parts(ptr.cast::<u8>(), len).to_vec();
+                libc::munmap(ptr, len);
+                libc::close(fd);
+                libc::shm_unlink(cname.as_ptr());
+                out
+            };
+            assert_eq!(read_back, *img.as_raw(), "the reservation changes nothing about the payload");
         }
 
         /// The `t=s` escape hands over a NAME, and only a name: same placement,

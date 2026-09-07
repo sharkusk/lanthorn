@@ -36,6 +36,12 @@ your terminal size and resizes, and lanthorn's capability probes (Kitty
 graphics, colours) travel over the pty like any other escape sequences. If
 your terminal's `TERM` is something unusual, forward it: `-e TERM=$TERM`.
 
+Kitty's shared-memory art transfer needs the container and your terminal
+sharing one IPC namespace, so add `--ipc=host` if you want it; without it
+lanthorn's probe simply gets no answer and falls back to compressed transfer,
+which still draws v6 artwork correctly, just over the wire instead of through
+shared memory.
+
 ## Mode 2: serve it to browsers
 
 ```sh
