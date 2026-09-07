@@ -38,6 +38,8 @@ Absolute URLs or no link.
 - **Hovering a room's `●` notes marker in the terminal map now pops the note
   itself**, the same floating tooltip an alias marker or exit stub already
   shows — no need to open the room card just to reread a note.
+- **With a Nerd Font, a room with notes now shows a little note icon on the
+  map instead of a dot.**
 
 ### Fixed
 

@@ -17,7 +17,7 @@
 //!
 //! **Why one glyph per source family.** The presets are not one font.
 //! `Arrows::nerdfont` is Material Design bold-outline arrows, `PortalGlyphs::nerdfont-stairs`
-//! mixes Font Awesome (the marker and the question mark) with MDI (the stairs,
+//! mixes Font Awesome (the question mark) with MDI (the marker, the stairs,
 //! the door in, the runner out), and the Guiding Light's mark is MDI
 //! `md-post_lamp`. A partially patched font carries some ranges and not others,
 //! so the sample row is built out of the very [`SymbolSet`] the "yes" answer
@@ -64,8 +64,8 @@ pub const ASSIST_LAMP: char = '\u{F1A60}';
 /// The two preset names a "yes" writes into `style.toml`'s `[map]` — the arrow
 /// set and the portal icon set. `nerdfont-stairs` rather than `nerdfont` because
 /// it gives up/down/in/out four DISTINCT icons; it also spans both source
-/// families on its own (Font Awesome's circle and question mark, MDI's stairs
-/// and doors), so the sample row that shows it samples both.
+/// families on its own (Font Awesome's question mark, MDI's note marker,
+/// stairs and doors), so the sample row that shows it samples both.
 pub const NERD_ARROWS: &str = "nerdfont";
 pub const NERD_PORTALS: &str = "nerdfont-stairs";
 
@@ -491,13 +491,13 @@ mod tests {
     /// One glyph per SOURCE FAMILY, which is the reason the row is a row and not
     /// a single icon. A partially patched font carries some ranges and not
     /// others, so the sample has to span every range the answer installs:
-    /// MDI chevrons (the arrows), Font Awesome (the portal marker), MDI again
-    /// from a different block (the stairs), and the Guiding Light's lamp.
+    /// MDI chevrons (the arrows), MDI again from other blocks (the portal
+    /// marker, the stairs), and the Guiding Light's lamp.
     #[test]
     fn the_nerd_row_spans_every_family_the_answer_installs() {
         let g = sample_glyphs(true);
         assert!(g.contains(&'\u{F09C7}'), "MDI arrow-up-bold-outline, from Arrows::nerdfont");
-        assert!(g.contains(&'\u{F111}'), "Font Awesome circle, from PortalGlyphs::nerdfont-stairs");
+        assert!(g.contains(&'\u{F039E}'), "MDI note_text, from PortalGlyphs::nerdfont-stairs");
         assert!(g.contains(&'\u{F12BD}'), "MDI stairs-up, from PortalGlyphs::nerdfont-stairs");
         assert!(g.contains(&ASSIST_LAMP), "md-post_lamp, the Guiding Light's mark");
         assert!(g.contains(&'\u{F02C1}'), "md-grid, from MapControlGlyphs::nerdfont");

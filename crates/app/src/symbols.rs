@@ -782,12 +782,12 @@ impl PortalGlyphs {
     /// Presets:
     /// - "ascii"            — ASCII-compatible glyphs (default): ●/↑/↓/◉/◎/? with ┊┄ connectors
     /// - "nerdfont"         — Nerd Font single-width icon codepoints (requires patched font)
-    ///   nf-fa-circle (U+F111) for marker, nf-md-arrow_up_circle (U+F0CE1) for up,
+    ///   nf-md-note_text (U+F039E) for marker, nf-md-arrow_up_circle (U+F0CE1) for up,
     ///   nf-md-arrow_down_circle (U+F0CDB) for down, nf-fa-sign_in (U+F090) for in,
     ///   nf-fa-sign_out (U+F08B) for out, nf-fa-question_circle (U+F059) for unknown
     /// - "nerdfont-stairs"  — Nerd Font 4 distinct direction icons (requires patched font)
     ///   up=mdi-stairs-up (U+F12BD), down=mdi-stairs-down (U+F12BE),
-    ///   in=mdi-location-enter (U+F0FC4), out=mdi-exit-run (U+F0A48)
+    ///   in=mdi-location-enter (U+F0FC4), out=mdi-exit-run (U+F0A48), marker=nf-md-note_text (U+F039E)
     pub fn preset(name: &str) -> Option<PortalGlyphs> {
         Some(match name {
             // In/Out are ◉ FISHEYE (U+25C9) and ◎ BULLSEYE (U+25CE), not the ⊙ (U+2299) and
@@ -807,8 +807,12 @@ impl PortalGlyphs {
                 up: '↑', down: '↓', in_: '◉', out: '◎', unknown: '?',
             },
             "nerdfont" => PortalGlyphs {
-                // nf-fa-circle U+F111, connectors keep the same box-drawing chars
-                marker: '\u{F111}', path: '┊', path_h: '┄',
+                // nf-md-note_text U+F039E — resolved by NAME from the Nerd Fonts
+                // `glyphnames.json` (v3.5.1). A room-notes marker drawn as nf-fa-circle U+F111
+                // (until SQ-1387) was the same dot the "ascii" preset already draws with plain
+                // ● — a patched font gained a codepoint but nothing about the icon said "note".
+                // Connectors keep the same box-drawing chars.
+                marker: '\u{F039E}', path: '┊', path_h: '┄',
                 // md-arrow_up_circle U+F0CE1, md-arrow_down_circle U+F0CDB — resolved by NAME
                 // from the Nerd Fonts `glyphnames.json` (v3.5.1). They used to read F0B71 and
                 // F0B72, which that file calls md-card_bulleted_off{,_outline}: patched faces
@@ -821,8 +825,9 @@ impl PortalGlyphs {
                 unknown: '\u{F059}',
             },
             "nerdfont-stairs" => PortalGlyphs {
-                // Reuse nf-fa-circle U+F111 for marker, nf-fa-question_circle U+F059 for unknown
-                marker: '\u{F111}', path: '┊', path_h: '┄',
+                // Reuse nf-md-note_text U+F039E for marker (see the "nerdfont" arm above),
+                // nf-fa-question_circle U+F059 for unknown
+                marker: '\u{F039E}', path: '┊', path_h: '┄',
                 // Four DISTINCT direction icons (resolved from MDI webfont CSS by name):
                 // mdi-stairs-up U+F12BD
                 up: '\u{F12BD}',
@@ -1456,8 +1461,20 @@ mod tests {
         assert_eq!(p.down, '\u{F0CDB}', "md-arrow_down_circle");
         assert_eq!(p.in_, '\u{F090}', "fa-sign_in");
         assert_eq!(p.out, '\u{F08B}', "fa-sign_out");
-        assert_eq!(p.marker, '\u{F111}', "fa-circle");
+        assert_eq!(p.marker, '\u{F039E}', "md-note_text");
         assert_eq!(p.unknown, '\u{F059}', "fa-question_circle");
+    }
+
+    /// SQ-1387: the notes marker is `nf-md-note_text` (U+F039E), not
+    /// `nf-fa-circle` (U+F111) — the old codepoint drew the same dot the
+    /// "ascii" preset already draws with plain `●`, so a patched font gained a
+    /// codepoint but nothing about the icon said "note". Resolved by NAME from
+    /// the Nerd Fonts `glyphnames.json` (v3.5.1).
+    #[test]
+    fn portal_marker_is_a_note_icon_not_a_circle() {
+        assert_eq!(PortalGlyphs::preset("ascii").unwrap().marker, '●');
+        assert_eq!(PortalGlyphs::preset("nerdfont").unwrap().marker, '\u{F039E}', "md-note_text");
+        assert_eq!(PortalGlyphs::preset("nerdfont-stairs").unwrap().marker, '\u{F039E}', "md-note_text");
     }
 
     #[test]
