@@ -1524,7 +1524,12 @@ terminal core (tracking upstream Ghostty commit `2da015cd6`, including the
 no build script, builds on all three platforms. Reach for it for placement
 lifetime, z-order, overlap, stale placements, missing deletes, and anything
 turning on the unicode-placeholder continuation rules our decoder doesn't
-model.
+model. The oracle runs with the crate's own debug assertions ON (SQ-0774):
+`qwertty-term-vt` 0.4.0 mishandled a chunked kitty transmit-and-display
+(joshka/qwertty-term#327), which is fixed on our fork
+(`sharkusk/qwertty-term`, branch `lanthorn-0.4.0-chunked-fix`) pinned via
+`[patch.crates-io]` in the workspace `Cargo.toml` until an upstream release
+past 0.4.0 carries it.
 
 **It's a port, not Ghostty.** `qwertty-term-vt` tracks Ghostty's algorithm
 faithfully enough to answer "does this placement cover these cells" — but a

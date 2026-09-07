@@ -18,19 +18,6 @@ homepage = "https://github.com/sharkusk/lanthorn"
 # so 1.98 is proven, not merely intended.
 rust-version = "1.98"
 
-# SQ-0764: the emitted-stream oracle's dependency, with its own debug assertions
-# off. `qwertty-term-vt` 0.4.0's kitty transmit path trips
-# `debug_assert!(!load.more)` (src/kitty/exec.rs:208) on a chunked
-# transmit-and-display: it hands back the deferred display on EVERY intermediate
-# `m=1` chunk instead of only the last. lanthorn chunks every upload at 3072
-# bytes, so replaying any real capture hits it on the second chunk. With the
-# assertion compiled out the port behaves as it does in release — the premature
-# display finds no stored image and is refused, and the final chunk places the
-# image correctly — which is the behaviour the oracle needs. Test-profile only;
-# the crate is a dev-dependency and never reaches the shipped binary.
-[profile.dev.package.qwertty-term-vt]
-debug-assertions = false
-
 # Line-tables-only debug info: keeps panic backtraces with file/line, but drops
 # the variable-inspection DWARF that bloats debug/test binaries to ~45 MB each
 # and makes every relink slow. Test builds inherit this from [profile.dev].
@@ -72,3 +59,18 @@ debug = "line-tables-only"
 # bump the version in crates/app/Cargo.toml.
 [patch.crates-io]
 ratatui-image = { git = "https://github.com/sharkusk/ratatui-image", branch = "lanthorn-shm" }
+
+# SQ-0774: the emitted-stream oracle's dependency (`crates/app/tests/pty_stream/oracle.rs`,
+# dev-dependency only), on a fork carrying our fix for
+# https://github.com/joshka/qwertty-term/issues/327 — `qwertty-term-vt` 0.4.0's
+# kitty transmit path hands back the deferred `display` on EVERY intermediate
+# chunk of a chunked transmit-and-display (`a=T,m=1`) instead of only the last,
+# tripping `debug_assert!(!load.more)` (src/kitty/exec.rs:208) as soon as a
+# transfer needs more than two chunks — which every real capture does, since
+# lanthorn chunks uploads at 3072 bytes. Release behaviour was already correct;
+# only the assertion was wrong. `lanthorn-0.4.0-chunked-fix` branches from the
+# crate's own 0.4.0 tag with just that one fix, so this patch changes nothing
+# else about the pinned version. REMOVE THIS once a qwertty-term-vt release past
+# 0.4.0 carries the fix: delete the stanza and let the plain crates-io version
+# resolve again.
+qwertty-term-vt = { git = "https://github.com/sharkusk/qwertty-term", branch = "lanthorn-0.4.0-chunked-fix" }

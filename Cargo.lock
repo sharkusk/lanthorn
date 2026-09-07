@@ -2225,8 +2225,7 @@ dependencies = [
 [[package]]
 name = "qwertty-term-vt"
 version = "0.4.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "8e4ff8632bf9e8274f1e6f83c5fb6a56c5c0e3086c430e67f0145d5614d1a8aa"
+source = "git+https://github.com/sharkusk/qwertty-term?branch=lanthorn-0.4.0-chunked-fix#91d2dd0412dd3496352e6bd34831e2cb72f5513e"
 dependencies = [
  "base64",
 ]
