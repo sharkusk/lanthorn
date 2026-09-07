@@ -68,6 +68,10 @@ const CORNER_R: f64 = 5.0;
 /// `LABEL_PX` like any other room's. Smaller than the name for the same reason the room card's
 /// footnotes are: it is a qualifier on the name, not a competitor for the eye.
 const GHOST_LAYER_PX: f64 = 8.0;
+/// The layer line's own character advance — see `ADVANCE` for the name's. Two different sizes
+/// of the same monospace stack, so the ratio between them (`GHOST_LAYER_PX / LABEL_PX`) is also
+/// the ratio between how much room one character of each takes (SQ-1385).
+const GHOST_LAYER_ADVANCE: f64 = GHOST_LAYER_PX * 0.6;
 
 /// Margin between the drawing and the canvas edge.
 const MARGIN: i32 = 24;
@@ -169,24 +173,29 @@ impl Extent {
 
 // ── Room labels ───────────────────────────────────────────────────────────────
 
-/// The most characters a box of `cells` cells may hold on one line.
-fn chars_in(cells: i32) -> usize {
-    (((cells * CELL_W) as f64 - 2.0 * LABEL_PAD) / ADVANCE).floor().max(1.0) as usize
+/// The most characters a box of `cells` cells may hold on one line, at a line drawn with
+/// per-character advance `advance` — `ADVANCE` for a room NAME, [`GHOST_LAYER_ADVANCE`] for a
+/// ghost's own layer-name subtitle (SQ-1385): the same box-width arithmetic at two different
+/// type sizes, not two different rules.
+fn chars_in_scaled(cells: i32, advance: f64) -> usize {
+    (((cells * CELL_W) as f64 - 2.0 * LABEL_PAD) / advance).floor().max(1.0) as usize
 }
 
-/// Wrap `label` onto at most two lines, balanced so the box need be no wider than it must.
-///
-/// A label that already fits one default-width line is left alone; anything longer is split at
-/// whichever word boundary minimises the LONGER of the two lines, which is what makes a box
-/// grow by as little as possible. A single word too long for the widest box is ellipsised.
-fn wrap_label(label: &str) -> Vec<String> {
+/// The most characters a box of `cells` cells may hold on one NAME line.
+fn chars_in(cells: i32) -> usize {
+    chars_in_scaled(cells, ADVANCE)
+}
+
+/// The two-line balanced wrap [`wrap_label`] and [`wrap_ghost_subtitle`] (SQ-1385) share: split at
+/// whichever word boundary minimises the LONGER of the two lines, which is what makes a box grow
+/// by as little as possible, then ellipsise anything still too long for `cap` — a single word
+/// wider than the widest box allows, or a caller with less than two words to split at all.
+fn wrap_to_caps(label: &str, one_line: usize, cap: usize) -> Vec<String> {
     let label = label.trim();
-    let one_line = chars_in(BOX_W);
     if label.chars().count() <= one_line {
         return vec![label.to_string()];
     }
     let words: Vec<&str> = label.split_whitespace().collect();
-    let cap = chars_in(MAX_BOX_CELLS);
     let clip = |s: String| -> String {
         if s.chars().count() > cap {
             s.chars().take(cap.saturating_sub(1)).chain(std::iter::once('…')).collect()
@@ -210,11 +219,65 @@ fn wrap_label(label: &str) -> Vec<String> {
     vec![clip(a), clip(b)]
 }
 
-/// The box width, in layout cells, that holds `lines`.
-fn box_cells(lines: &[String]) -> i32 {
+/// Wrap `label` onto at most two lines, balanced so the box need be no wider than it must.
+///
+/// A label that already fits one default-width line is left alone; anything longer is split at
+/// whichever word boundary minimises the LONGER of the two lines, which is what makes a box
+/// grow by as little as possible. A single word too long for the widest box is ellipsised.
+fn wrap_label(label: &str) -> Vec<String> {
+    wrap_to_caps(label, chars_in(BOX_W), chars_in(MAX_BOX_CELLS))
+}
+
+/// [`wrap_label`]'s own rule, at the smaller [`GHOST_LAYER_PX`] scale a cross-layer ghost's
+/// subtitle draws at (SQ-1385) — only reached once [`ghost_box_cells`] finds a single subtitle
+/// line would overflow even the widest box the layout allows, so widening the box has already
+/// been preferred and failed; this is the fallback.
+fn wrap_ghost_subtitle(layer_name: &str) -> Vec<String> {
+    wrap_to_caps(
+        layer_name,
+        chars_in_scaled(BOX_W, GHOST_LAYER_ADVANCE),
+        chars_in_scaled(MAX_BOX_CELLS, GHOST_LAYER_ADVANCE),
+    )
+}
+
+/// The box width, in layout cells, that holds `lines` drawn at per-character advance `advance`.
+fn box_cells_scaled(lines: &[String], advance: f64) -> i32 {
     let widest = lines.iter().map(|l| l.chars().count()).max().unwrap_or(0) as f64;
-    let need = widest * ADVANCE + 2.0 * LABEL_PAD;
+    let need = widest * advance + 2.0 * LABEL_PAD;
     ((need / CELL_W as f64).ceil() as i32).clamp(BOX_W, MAX_BOX_CELLS)
+}
+
+/// The box width, in layout cells, that holds `lines` of a room NAME.
+fn box_cells(lines: &[String]) -> i32 {
+    box_cells_scaled(lines, ADVANCE)
+}
+
+/// A cross-layer ghost's own box width, in layout cells (SQ-1385), and the subtitle line(s) to
+/// draw inside it: the wider of its NAME lines — as any room's box already is — and its
+/// LAYER-NAME subtitle, sized at the subtitle's OWN [`GHOST_LAYER_ADVANCE`] scale rather than
+/// counted in the name's characters. Before this a ghost's box was sized from `name_lines`
+/// alone, so a short room name on a long-named layer (Counterfeit Monkey's "Samuel Johnson
+/// Basement", "Tunnel through Chalk") overflowed the box the name itself was happy in.
+///
+/// Widening is always preferred: only a subtitle that would still overflow the widest box the
+/// layout allows (`MAX_BOX_CELLS`) is wrapped onto two lines, with the same balanced-split rule
+/// `wrap_label` uses for a name (see [`wrap_ghost_subtitle`]).
+fn ghost_box_cells(name_lines: &[String], layer_name: &str) -> (i32, Vec<String>) {
+    let name_want = box_cells(name_lines);
+    // The UNCLAMPED cell count a single subtitle line needs — `box_cells_scaled` clamps to
+    // `MAX_BOX_CELLS`, which would hide the very overflow this is checking for.
+    let raw_cells = |chars: usize| -> f64 {
+        (chars as f64 * GHOST_LAYER_ADVANCE + 2.0 * LABEL_PAD) / CELL_W as f64
+    };
+    if raw_cells(layer_name.chars().count()) <= MAX_BOX_CELLS as f64 {
+        let one_line = vec![layer_name.to_string()];
+        let sub_want = box_cells_scaled(&one_line, GHOST_LAYER_ADVANCE);
+        (name_want.max(sub_want), one_line)
+    } else {
+        let sub_lines = wrap_ghost_subtitle(layer_name);
+        let sub_want = box_cells_scaled(&sub_lines, GHOST_LAYER_ADVANCE);
+        (name_want.max(sub_want), sub_lines)
+    }
 }
 
 // ── Passage weights ───────────────────────────────────────────────────────────
@@ -804,9 +867,21 @@ fn render_svg_body(
     // ── Axes: the terminal's own, with each column widened to its widest room name ────────
     let labels: HashMap<RoomId, Vec<String>> =
         rm.rooms.iter().map(|r| (r.id, wrap_label(&r.label))).collect();
+    // SQ-1385: a ghost's own subtitle lines, sized alongside its name below — kept so the draw
+    // pass below draws exactly the lines the box was WIDENED for, rather than recomputing (and
+    // risking disagreeing with) the wrap.
+    let mut ghost_subtitles: HashMap<RoomId, Vec<String>> = HashMap::new();
     let mut col_dims: BTreeMap<i32, i32> = BTreeMap::new();
     for room in &rm.rooms {
-        let want = labels.get(&room.id).map(|l| box_cells(l)).unwrap_or(BOX_W);
+        let empty = Vec::new();
+        let name_lines = labels.get(&room.id).unwrap_or(&empty);
+        let want = if let Some(ghost) = &room.ghost {
+            let (want, sub_lines) = ghost_box_cells(name_lines, &ghost.layer_name);
+            ghost_subtitles.insert(room.id, sub_lines);
+            want
+        } else {
+            box_cells(name_lines)
+        };
         let slot = col_dims.entry(room.cell.0).or_insert(BOX_W);
         *slot = (*slot).max(want);
     }
@@ -1337,9 +1412,15 @@ fn render_svg_body(
             (None, true) => "room-label current",
             (None, false) => "room-label",
         };
-        // A ghost's name lifts by half the layer line it makes room for, so the two together sit
-        // centred in the box the way a plain name does on its own.
-        let lift = if room.ghost.is_some() { GHOST_LAYER_PX * 0.62 } else { 0.0 };
+        // A ghost's name lifts by half the layer line(s) it makes room for, so the two together
+        // sit centred in the box the way a plain name does on its own — one lift's worth per
+        // subtitle line, since SQ-1385 lets that subtitle wrap to two.
+        let sub_line_count = if room.ghost.is_some() {
+            ghost_subtitles.get(&room.id).map_or(1, |l| l.len().max(1))
+        } else {
+            0
+        };
+        let lift = GHOST_LAYER_PX * 0.62 * sub_line_count as f64;
         let first =
             y + h / 2.0 - (lines.len() as f64 - 1.0) * (LABEL_PX * 0.62) + LABEL_PX * 0.36 - lift;
         for (i, line) in lines.iter().enumerate() {
@@ -1357,14 +1438,18 @@ fn render_svg_body(
                 xml_escape(line)
             );
         }
-        if let Some(ghost) = &room.ghost {
-            let _ = write!(
-                boxes,
-                "<text class=\"ghost-layer\" text-anchor=\"middle\" x=\"{}\" y=\"{}\">{}</text>",
-                f(x + w / 2.0),
-                f(first + (lines.len() as f64 - 1.0) * LABEL_PX * 1.24 + LABEL_PX * 1.1),
-                xml_escape(&ghost.layer_name)
-            );
+        if room.ghost.is_some() {
+            let sub_lines = ghost_subtitles.get(&room.id).map(Vec::as_slice).unwrap_or(&[]);
+            let sub_first = first + (lines.len() as f64 - 1.0) * LABEL_PX * 1.24 + LABEL_PX * 1.1;
+            for (i, line) in sub_lines.iter().enumerate() {
+                let _ = write!(
+                    boxes,
+                    "<text class=\"ghost-layer\" text-anchor=\"middle\" x=\"{}\" y=\"{}\">{}</text>",
+                    f(x + w / 2.0),
+                    f(sub_first + i as f64 * GHOST_LAYER_PX * 1.24),
+                    xml_escape(line)
+                );
+            }
         }
         if room.has_notes {
             let _ = write!(
@@ -2938,6 +3023,41 @@ mod tests {
         let long = wrap_label(&"x".repeat(200));
         assert_eq!(long.len(), 1);
         assert!(long[0].ends_with('…'), "a single unsplittable word is ellipsised");
+    }
+
+    /// SQ-1385: a ghost's LAYER-NAME subtitle can be far longer than the room name it stands
+    /// beside (Counterfeit Monkey ghosts a room named just "Cellar" onto "Samuel Johnson
+    /// Basement") — the box must widen to hold the SUBTITLE too, not just the name it was sized
+    /// from before. Falsify by reverting `ghost_box_cells` to size from `name_lines` alone and
+    /// this fails on the box width.
+    #[test]
+    fn a_ghost_box_widens_for_a_long_layer_name_not_just_its_room_name() {
+        use mapper::graph::MapGraph;
+        let mut g = MapGraph::new();
+        g.upsert_room(1, "Hall".into());
+        g.upsert_room(2, "X".into());
+        g.set_pos(1, (0, 0));
+        g.set_pos(2, (0, 1));
+        g.add_edge(1, Direction::Down, 2);
+        g.add_edge(2, Direction::Up, 1);
+        let below = g.new_layer(Some(mapper::layer::MAIN_LAYER), "Samuel Johnson Basement".into());
+        g.set_room_layer(2, below);
+
+        let svg = render_svg_layered(&g);
+        let map = layered_map_only(&svg);
+        assert!(map.contains("class=\"ghost\""), "the case must actually draw the ghost");
+        assert!(map.contains(">Samuel Johnson Basement<"), "the ghost must name the long layer");
+
+        let ghosts = ghost_rects_of(&svg, "ghost");
+        assert_eq!(ghosts.len(), 2, "one ghost per panel (Hall's panel and Below's)");
+        let subtitle_chars = "Samuel Johnson Basement".chars().count() as f64;
+        let estimated_w = subtitle_chars * GHOST_LAYER_ADVANCE + 2.0 * LABEL_PAD;
+        assert!(
+            ghosts.iter().any(|g| g.2 >= estimated_w - 0.5),
+            "some ghost box must be at least as wide as its subtitle needs ({estimated_w}px): {ghosts:?}"
+        );
+        assert!(label_collisions(&svg).is_empty());
+        assert!(ghost_box_overlaps(&svg).is_empty());
     }
 
     /// SQ-1346: a one-way passage's single arrowhead reads as its DESTINATION's arrival, the
