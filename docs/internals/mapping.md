@@ -1422,22 +1422,39 @@ passes, in order:
    `Maze (off At West End of Hall of Mists)`. That is the disambiguator a
    player already uses, and unlike an ordinal it does not renumber when the
    story is re-read. A story with one maze keeps the plain `Maze`.
-1b. **Dead ends off a maze (SQ-1311).** The maze walk's own name-boundary
-   restriction (above) is deliberate, but it has a cost: a genuine maze exit
-   that happens to be named something other than "maze" — a "Dead End", a
-   "Grating Room" — gets excluded from the region and left stranded on Main,
-   because it never mentions "maze" itself. `absorb_maze_adjacent_rooms` runs
-   immediately after every maze region is formed and recovers exactly these:
-   a room still on Main joins a maze layer once EVERY compass edge touching
-   it — as origin or as destination, `Up`/`Down`/`In`/`Out` are portals and
-   never counted — leads to a room already on that ONE maze layer. The
-   Cyclops Room protection still holds here: a room with even one compass
-   edge to a non-maze room (or to a second maze layer) is left exactly where
-   it was, so the restriction that keeps the maze WALK from sweeping in an
-   unrelated hub is not weakened, only applied a second time to what the walk
-   necessarily left behind. It iterates to a fixed point, because a dead end
-   can hang off another dead end that only just got absorbed this round (a
-   corridor of them, each one compass step from the last).
+1b. **Dead ends off a maze (SQ-1311, widened SQ-1391).** The maze walk's own
+   name-boundary restriction (above) is deliberate, but it has a cost: a
+   genuine maze exit that happens to be named something other than "maze" —
+   a "Dead End", a "Grating Room" — gets excluded from the region and left
+   stranded on Main, because it never mentions "maze" itself.
+   `absorb_maze_adjacent_rooms` runs immediately after every maze region is
+   formed and recovers exactly these, but ONLY compass passages ever
+   disqualify a room — a portal never does, and portals can now admit a room
+   on their own. Mini-Zork's Grating Room has one compass edge into the maze
+   and one portal (the grating itself) up to Forest Path, a genuine surface
+   room, and still joins the maze on the compass edge alone: a portal is a
+   boundary between floors everywhere else this graph is walked (the maze
+   walk above is the one exception, and only because its own name filter
+   keeps it honest), so the grating is the maze's door to the surface, not
+   evidence the room belongs elsewhere. Adventure's own maze hangs several
+   Dead Ends off it by `Down` ALONE (`#45 D #78`, nothing compass at all) —
+   SQ-1311's original sweep required at least one compass edge to fire, so a
+   portal-only pocket like this was invisible to it and stayed stranded on
+   Main; SQ-1391 lets a room with no compass edges at all join purely on its
+   portal edges. Where a pocket sits between two different mazes (Adventure's
+   `#80`: one compass passage into the "all alike" maze, two into the
+   "off At Brink of Pit" one) it joins whichever it has the most passages —
+   compass or portal — into, ties going to whichever maze layer was created
+   earlier in the walk above (the lower layer id, since layer ids are handed
+   out in the same ascending-room-id order the walk runs in). The Cyclops
+   Room protection still holds: a room with even one COMPASS edge to a
+   non-maze room is left exactly where it was, so the restriction that keeps
+   the maze WALK from sweeping in an unrelated hub is not weakened, only
+   applied a second time — now direction-aware rather than direction-blind —
+   to what the walk necessarily left behind. It iterates to a fixed point,
+   because a dead end can hang off another dead end that only just got
+   absorbed this round (a corridor of them, each one passage step from the
+   last).
 2. **Portal-only regions.** What's left of Main is partitioned into
    compass-connected components (`planar_region`, one per unvisited room).
    The component holding the **start room** is kept as Main (SQ-1359, above) —

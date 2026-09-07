@@ -67,6 +67,10 @@ Absolute URLs or no link.
   standing in the highlighted room.** It says "starting room" instead — a
   generated map has nobody in it, and its highlight is only the room the
   story begins in.
+- **A maze's dead ends stay on the maze's own layer even when the only way
+  into them is up or down.** Three of Adventure's "all alike" maze's dead
+  ends were reachable only by going down from a maze room, so they used to
+  get left behind on the main map instead of joining the maze around them.
 
 ---
 

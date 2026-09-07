@@ -86,9 +86,14 @@ fn every_adventure_maze_room_is_named_maze_and_no_room_keeps_an_identifier() {
 /// `At Brink of Pit` — a room with a name of its own, whose description says
 /// "The maze continues at this level" — stands in the middle of it, and
 /// `mapgen::maze_region` stops at a room name (the Cyclops Room rule its doc
-/// comment sets out). Absorbed `Dead End` rooms (SQ-1311) make the layers
-/// bigger than the maze rooms alone: 17 = 12 maze + 5 dead ends, 12 = 11 + 1,
-/// 3 = 2 + 1.
+/// comment sets out). Absorbed `Dead End` rooms (SQ-1311, widened by SQ-1391
+/// to follow Up/Down as readily as compass) make the layers bigger than the
+/// maze rooms alone: 20 = 12 maze + 8 dead ends, 12 = 11 + 1, 4 = 2 + 2.
+/// SQ-1391 moved three dead ends reached only by Down (`#78`, `#43`, `#49`,
+/// each hanging off the Hall-of-Mists maze by a single `U`/`D` pair with no
+/// compass edge at all) and one reached by compass into the Brink-of-Pit
+/// maze (`#80`) — see `sq1306`/`sq1308`'s Main-layer count, which drops by
+/// exactly those four.
 #[test]
 fn adventures_mazes_peel_onto_layers_named_after_their_entrances() {
     for name in ADVENTURES {
@@ -106,8 +111,8 @@ fn adventures_mazes_peel_onto_layers_named_after_their_entrances() {
         assert_eq!(
             maze_layers,
             vec![
-                ("Maze (off At Brink of Pit)".to_string(), 3),
-                ("Maze (off At West End of Hall of Mists)".to_string(), 17),
+                ("Maze (off At Brink of Pit)".to_string(), 4),
+                ("Maze (off At West End of Hall of Mists)".to_string(), 20),
                 ("Maze (off At West End of Long Hall)".to_string(), 12),
             ],
             "{name}: three maze layers, each named for the room it is entered from"
@@ -123,6 +128,57 @@ fn adventures_mazes_peel_onto_layers_named_after_their_entrances() {
             );
         }
     }
+}
+
+/// SQ-1391: a dead end that hangs off a maze by Up/Down alone is still part
+/// of the maze it dead-ends in.
+///
+/// `advent.blb` only — `mapgen`'s `RoomId` is the Glulx object's own address
+/// (`gvm::mapgen::i6_glulx_map` keys rooms by `obj: u32`, not by a display
+/// ordinal), so it has nothing in common with `advent.z6`'s small Z-machine
+/// object numbers even for the identical room; the two engines cannot share
+/// one literal-id table. `lanthorn-mapgen`'s own text dump prints each room
+/// as `#<display index> (<hex object id>)`, and the hex parenthetical below
+/// each `Dead End` is that same `RoomId` in hex, so this is exactly what
+/// `cargo run -p lanthorn --bin lanthorn-mapgen -- stories/advent.blb` shows.
+/// `adventures_mazes_peel_onto_layers_named_after_their_entrances` above
+/// already pins both engines' post-fix layer counts, so z6 is covered there.
+///
+/// `0x91F19BFB` (dump's `#78`) and `0xD5D86F21` (`#43`) and `0xEFD4C678`
+/// (`#49`) each connect to the Hall-of-Mists maze by a single `Down`/`Up`
+/// pair and nothing else — no compass edge at all, which is exactly what
+/// SQ-1311's compass-only sweep could not see. `0xB3EDFFEA` (`#80`) connects
+/// by compass to BOTH mazes (one passage into the Hall-of-Mists one, two
+/// into the Brink-of-Pit one) and settles on the one it has more passages
+/// into. Main's room count drops from 16 to 12 accordingly — the honest
+/// number this test pins, falsified by reverting SQ-1391's widening of
+/// `mapgen::absorb_maze_adjacent_rooms`.
+#[test]
+fn advents_maze_dead_ends_join_their_maze_however_they_are_reached() {
+    let Some(path) = story("advent.blb") else { return };
+    let map = mapgen::generate(&path, true).expect("Adventure declares an I6-library map");
+
+    let targets: [(RoomId, &str, &str); 4] = [
+        (0x91F19BFB, "#78", "reached from the Hall-of-Mists maze by Down alone"),
+        (0xD5D86F21, "#43", "reached from the Hall-of-Mists maze by Down alone"),
+        (0xEFD4C678, "#49", "reached from the Hall-of-Mists maze by Down alone"),
+        (0xB3EDFFEA, "#80", "a pocket between two mazes, settled by which has more passages in"),
+    ];
+    for (id, dump_id, why) in targets {
+        let room = map.graph.room(id).unwrap_or_else(|| panic!("advent.blb: room {dump_id} exists"));
+        assert_eq!(room.label(), "Dead End", "advent.blb: {dump_id} is the room the fixture names");
+        assert!(
+            map.graph.layer_is_maze(room.layer),
+            "advent.blb: {dump_id} ({why}) must be on a maze layer, is on layer {}",
+            room.layer
+        );
+    }
+
+    assert_eq!(
+        map.graph.rooms_in_layer(mapper::layer::MAIN_LAYER).len(),
+        12,
+        "advent.blb: Main held 16 rooms before SQ-1391 absorbed the four dead ends above"
+    );
 }
 
 // ---------------------------------------------------------------------------
