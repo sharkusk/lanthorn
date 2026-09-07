@@ -63,6 +63,10 @@ Absolute URLs or no link.
   touching the arrow, so it read as though it were kinking inside the arrowhead;
   gutters now leave the same clearance at both ends and the line straightens out
   before it arrives.
+- **A maze's dead ends stay on the maze's own layer even when the only way
+  into them is up or down.** Three of Adventure's "all alike" maze's dead
+  ends were reachable only by going down from a maze room, so they used to
+  get left behind on the main map instead of joining the maze around them.
 
 ---
 

@@ -492,31 +492,52 @@ fn maze_entrance(graph: &MapGraph, layer: mapper::layer::LayerId) -> Option<Stri
         .and_then(|(id, _)| graph.room(id).map(|r| r.label().to_string()))
 }
 
-/// SQ-1311: absorb onto a maze layer any room still on Main whose EVERY
-/// compass edge — as origin or as destination, `IN`/`OUT`/`UP`/`DOWN` are
-/// portals and never counted — leads to a room already on that ONE maze
-/// layer. [`maze_region`]'s walk stops at a room name on purpose (the Cyclops
-/// Room case in its doc comment), so a genuine maze exit merely named "Dead
-/// End" is excluded from the region and left stranded on Main; this repairs
-/// that without touching the walk, since it runs only after every maze
-/// region already exists.
+/// SQ-1311, widened by SQ-1391: absorb onto a maze layer any room still on
+/// Main that has no COMPASS passage anywhere but into maze layers, and at
+/// least one passage — compass or portal — into one. [`maze_region`]'s walk
+/// stops at a room name on purpose (the Cyclops Room case in its doc
+/// comment), so a genuine maze exit merely named "Dead End" is excluded from
+/// the region and left stranded on Main; this repairs that without touching
+/// the walk, since it runs only after every maze region already exists.
 ///
-/// The Cyclops Room protection still holds: a room with even one compass
-/// edge to a non-maze room, or to a second maze layer, is left exactly where
-/// it was. Iterates to a fixed point, because a dead end can hang off
-/// another dead end that only just got absorbed this round (a corridor of
-/// them, each one compass step from the last).
+/// **Only a COMPASS passage disqualifies; a portal never does, and can now
+/// admit on its own** (SQ-1391). Mini-Zork's Grating Room is the case that
+/// pins the first half: it has one compass edge into the maze and one
+/// portal — the grating itself — up to Forest Path, a genuine surface room,
+/// and it must still join the maze on the strength of the compass edge
+/// alone, exactly as it always has (`minizork_grating_room_joins_the_maze_by_its_compass_edge_alone`).
+/// A portal is a boundary between FLOORS everywhere else this graph is
+/// walked ([`maze_region`]'s own doc comment), and the grating is exactly
+/// that: the maze's door to the surface, not evidence the room is somewhere
+/// else. Adventure's dead ends pin the second half: `#78`, `#43` and `#49`
+/// hang off the "all alike" maze by Down alone (`#45 D #78`, `#78 U #45`,
+/// nothing compass at all), so SQ-1311's compass-only sweep — which required
+/// at least one compass edge to fire at all — left every one of them
+/// stranded; a portal-only pocket must be able to join too; a dead end is
+/// part of the warren it dead-ends in, whichever way you have to go to get
+/// there.
+///
+/// A pocket can sit between two DIFFERENT maze layers (Adventure's #80: one
+/// compass passage into the "all alike" maze, two into the "off At Brink of
+/// Pit" one) — those go to whichever maze the room has the most passages
+/// (compass or portal) into, ties going to whichever maze layer was created
+/// earlier in pass 1 (the lower [`mapper::layer::LayerId`], since layer ids
+/// are handed out in the order `split_layers` walks maze rooms — ascending
+/// room id — so "walked first" and "numbered lower" are the same fact).
+///
+/// Iterates to a fixed point, because a dead end can hang off another dead
+/// end that only just got absorbed this round (a corridor of them, each one
+/// passage step from the last).
 fn absorb_maze_adjacent_rooms(graph: &mut MapGraph) {
     loop {
         let mut absorbed_any = false;
         let candidates: Vec<RoomId> =
             graph.rooms().filter(|r| r.layer == mapper::layer::MAIN_LAYER).map(|r| r.id).collect();
         for room in candidates {
-            let mut target: Option<mapper::layer::LayerId> = None;
-            let mut any_compass = false;
+            let mut edge_counts: BTreeMap<mapper::layer::LayerId, usize> = BTreeMap::new();
             let mut ok = true;
             for c in graph.connections() {
-                if mapper::direction::grid_offset(c.dir).is_none() || c.is_self_loop() {
+                if c.is_self_loop() {
                     continue;
                 }
                 let other = if c.origin == room {
@@ -526,23 +547,25 @@ fn absorb_maze_adjacent_rooms(graph: &mut MapGraph) {
                 } else {
                     continue;
                 };
-                any_compass = true;
                 let layer = graph.layer_of(other);
-                if layer == mapper::layer::MAIN_LAYER || !graph.layer_is_maze(layer) {
+                let is_maze = layer != mapper::layer::MAIN_LAYER && graph.layer_is_maze(layer);
+                if is_maze {
+                    *edge_counts.entry(layer).or_default() += 1;
+                } else if mapper::direction::grid_offset(c.dir).is_some() {
+                    // A COMPASS edge to Main (or a room not yet on any maze layer) is a
+                    // genuine exit — the Cyclops Room case — and disqualifies the room
+                    // outright. A PORTAL edge to the same place is just a floor boundary
+                    // (the Grating Room case) and is silently ignored either way.
                     ok = false;
                     break;
                 }
-                match target {
-                    None => target = Some(layer),
-                    Some(t) if t == layer => {}
-                    Some(_) => {
-                        ok = false; // compass edges to two different maze layers — not one region's
-                        break;
-                    }
-                }
             }
-            if ok && any_compass {
-                if let Some(layer) = target {
+            if ok && !edge_counts.is_empty() {
+                // Most passages into wins; ties to the lower layer id (`Reverse` because
+                // `BTreeMap` iterates ascending and `max_by_key` keeps the LAST maximum).
+                if let Some((&layer, _)) =
+                    edge_counts.iter().max_by_key(|&(&id, &n)| (n, std::cmp::Reverse(id)))
+                {
                     graph.set_room_layer(room, layer);
                     absorbed_any = true;
                 }
@@ -2305,5 +2328,85 @@ mod tests {
         let declared_to =
             declared_reverse_lookup([(28u16, Direction::Down, 229u16)].into_iter());
         assert_eq!(routine_destination(&declared_to, 229, Direction::Up), Some(28));
+    }
+
+    // ── SQ-1391: a maze's dead ends stay with the maze, whichever way you go ──
+
+    /// A synthetic falsifier for SQ-1391: a three-room maze (all compass-connected, all named
+    /// "Maze") with a non-maze-named leaf hanging off ONE room by Down alone — Adventure's own
+    /// shape for `#78`, `#43` and `#49` (`#45 D #78`, `#78 U #45`, nothing compass at all).
+    /// SQ-1311's compass-only sweep could never see this passage; the leaf must still join the
+    /// maze layer, because its only way anywhere is into it.
+    #[test]
+    fn a_maze_leaf_reached_only_by_down_joins_the_maze_layer() {
+        let mut g = MapGraph::new();
+        for (id, name) in [(1, "Maze"), (2, "Maze"), (3, "Maze"), (4, "Dead End")] {
+            g.upsert_room(id, name.to_string());
+        }
+        g.add_edge(1, Direction::E, 2);
+        g.add_edge(2, Direction::W, 1);
+        g.add_edge(2, Direction::E, 3);
+        g.add_edge(3, Direction::W, 2);
+        g.add_edge(1, Direction::Down, 4);
+        g.add_edge(4, Direction::Up, 1);
+
+        split_layers(&mut g, &MapgenOptions::default());
+
+        let maze_layer = g.layer_of(1);
+        assert_ne!(maze_layer, mapper::layer::MAIN_LAYER, "the maze itself gets its own layer");
+        assert_eq!(g.layer_of(4), maze_layer, "the Down-only leaf joins it too");
+        assert!(g.layer_is_maze(maze_layer));
+    }
+
+    /// The falsifier's falsifier: the same leaf, but with a SECOND passage out to a genuine
+    /// non-maze room. That second passage is the maze's real exit — the Cyclops Room case
+    /// SQ-1311 protected against — and it must keep the leaf off the maze layer even though
+    /// every OTHER passage it has still leads into the maze.
+    #[test]
+    fn a_leaf_with_any_passage_to_a_non_maze_room_stays_off_the_maze_layer() {
+        let mut g = MapGraph::new();
+        for (id, name) in [(1, "Maze"), (2, "Maze"), (3, "Maze"), (4, "Dead End"), (5, "Clearing")] {
+            g.upsert_room(id, name.to_string());
+        }
+        g.add_edge(1, Direction::E, 2);
+        g.add_edge(2, Direction::W, 1);
+        g.add_edge(2, Direction::E, 3);
+        g.add_edge(3, Direction::W, 2);
+        g.add_edge(1, Direction::Down, 4);
+        g.add_edge(4, Direction::Up, 1);
+        g.add_edge(4, Direction::N, 5); // the leaf's real exit, to a non-maze room
+        g.add_edge(5, Direction::S, 4);
+
+        split_layers(&mut g, &MapgenOptions::default());
+
+        let maze_layer = g.layer_of(1);
+        assert_ne!(maze_layer, mapper::layer::MAIN_LAYER);
+        assert_eq!(
+            g.layer_of(4),
+            mapper::layer::MAIN_LAYER,
+            "a passage to a non-maze room is the maze's exit, and stays outside it"
+        );
+    }
+
+    /// A pocket standing between TWO different mazes — Adventure's `#80`, one compass passage
+    /// into the "all alike" maze and a bidirectional one into "off At Brink of Pit" — goes to
+    /// whichever it has the MOST passages into, not to whichever was walked first: room 2's
+    /// single one-way passage loses to room 3's two-connection bidirectional one even though
+    /// room 2 (walked first, ascending room id) gets the lower layer id.
+    #[test]
+    fn a_pocket_between_two_mazes_joins_the_one_with_more_passages() {
+        let mut g = MapGraph::new();
+        for (id, name) in [(1, "Dead End"), (2, "Maze One"), (3, "Maze Two")] {
+            g.upsert_room(id, name.to_string());
+        }
+        g.add_edge(2, Direction::S, 1); // one-way: Maze One -> the pocket, nothing back
+        g.add_edge(1, Direction::E, 3);
+        g.add_edge(3, Direction::W, 1); // bidirectional: two connections into Maze Two
+
+        split_layers(&mut g, &MapgenOptions::default());
+
+        let maze_two_layer = g.layer_of(3);
+        assert_ne!(maze_two_layer, g.layer_of(2), "the two mazes stay on separate layers");
+        assert_eq!(g.layer_of(1), maze_two_layer, "more passages in wins over walked-first");
     }
 }
