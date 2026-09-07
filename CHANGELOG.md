@@ -6,7 +6,7 @@ All notable changes to lanthorn are recorded here.
 [`.github/workflows/release.yml`](.github/workflows/release.yml)). A tag whose
 name contains a hyphen — `v0.1.0-beta.1`, `v0.2.0-rc.1` — is published as a
 **pre-release**; a bare `vMAJOR.MINOR.PATCH` is a full release. The workspace
-version in `Cargo.toml` (currently `0.5.2`) versions every crate and every
+version in `Cargo.toml` (currently `0.5.3`) versions every crate and every
 binary's `--version` at once, and carries any pre-release suffix so a build
 identifies itself without reading its git hash.
 
@@ -19,13 +19,25 @@ Absolute URLs or no link.
 
 ---
 
-## Unreleased
+## v0.5.3 — 2026-09-07
 
-> *This section is drained when a version is cut. README.md describes the
-> RELEASED build; prose for a feature that is in `main` but not yet released
-> goes into the README in place, at its normal destination, marked with the
-> visible tag `*Next release:*`. `release.yml` refuses to cut a release
-> while any such tag, or this Unreleased section, still exists.*
+### Highlights
+
+- **Room notes now show up everywhere you'd look for them** — a numbered
+  badge with a hover tooltip on the exported map, a footnote list under
+  every layer's panel, a hover tooltip on the terminal map's own marker, and
+  (with a Nerd Font) a note icon in place of the plain dot.
+- **A room whose passages all point at one free cell now gets that cell.**
+  Lost Pig's gnome room, and eleven of Anchorhead's passages with it, used
+  to be shunted rows away with every connection drawn as a red distortion;
+  now they land where they belong.
+- **Connectors no longer bend right against their own arrowhead** — gutters
+  clear the box at both ends now, so the line straightens out before it
+  arrives.
+- **A maze's dead ends stay on the maze's own layer**, even when the only
+  way in is up or down.
+- **A passage is drawn red only when the finished map really bends it**, not
+  from a stale snapshot taken partway through tidying.
 
 ### Added
 
