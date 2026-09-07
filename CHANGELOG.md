@@ -52,6 +52,17 @@ Absolute URLs or no link.
 - **A cross-layer room's box on the exported map no longer lets its layer
   name run past the edge** — a short room name on a long-named layer now
   widens the box to fit both lines.
+- **A room whose passages all point at one free cell now gets that cell.** The
+  map's tidying could decide a room in the middle of a straight run of rooms
+  was blocking that very run, and shunt it somewhere else entirely — in Lost
+  Pig, the gnome room ended up three rows away, wedged between two rooms it has
+  no passage to, with all four of its own passages drawn as red distortions.
+  Anchorhead's map loses eleven distorted passages to the same fix.
+- **Connectors no longer turn a corner right against their own arrowhead.** A
+  line coming down the gutter beside a room used to bend in the very cell
+  touching the arrow, so it read as though it were kinking inside the arrowhead;
+  gutters now leave the same clearance at both ends and the line straightens out
+  before it arrives.
 
 ---
 
