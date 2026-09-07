@@ -661,3 +661,38 @@ how to gate it.
 lands no host can point `zvm` at a story it did not write. Items 1, 3, 4 and 5
 get materially more expensive once a release exists and should be done before one
 is cut. Items 6–9 are what an embedder feels on day one, and 9 is an afternoon.
+
+## Status and plan, 2026-09-07
+
+**Landed since the review:**
+
+- The geometry clamp on `put_wind_prop` (`WINDOW_PX_CAP`, tested); `DisasmCache::unit_index_at` now uses a checked subtraction; `V6Cell`'s fields are private behind a guarded constructor.
+- SQ-1013: `std_window`, `v6_cell`, and `default_colours` live in `zvm::interpreter::MachineProfile` where they belong.
+
+**Still open, ranked by what blocks embedding:**
+
+| item | breaking | status |
+|---|---|---|
+| Palette + interpreter version process globals (`screen.rs` statics, with `app`'s lock apparatus) | yes | open |
+| `#[non_exhaustive]` sweep (read-only enums and structs; never `TextAttrs` or `V6Text`) | yes | zvm 3, gvm 4, scott 0 |
+| Privatise opcode internals and `Machine` queue fields | yes | open |
+| Gate `pub mod fixtures` | yes | still public (trivial) |
+| `print_table` / `copy_table` caps | no | open |
+| `BootConfig` and one `Restart` answer | no | open |
+| `take_paint_events` drain protocol | no | open |
+| Crate docs, `//!` headers, a compiled example | no | zvm and scott have no crate docs, `doctest = false` everywhere |
+| `location` root re-export, decide on `True24`, address docs to a stranger | partly | open |
+| Grammar model as an optional feature | no | open |
+| Screen snapshot, `FontMetrics`, `Resources` trait | no | design later |
+
+gvm: 19 non-test `unwrap`/`expect` in `glk.rs`. scott: no crate docs, two glob re-exports, a dead `Input` type.
+
+**The plan, in three waves after the next 0.5.x release:**
+
+**Wave 1** — breaking and cheap only before a release. One lane: palette and interpreter version onto `Machine`, deleting the process-global statics and every `app::v6_palette*` guard and the `palette_lock_discipline` test cases. In parallel: the `#[non_exhaustive]` sweep across all three crates, never marking `TextAttrs` or `V6Text` (both constructed by hosts), privatising internals and gating fixtures, and the `print_table` / `copy_table` caps with `gvm`'s unwrap sites turned into faults.
+
+**Wave 2** — what an embedder feels on day one. Crate docs and a compiled example per crate (dropping `doctest = false` where one exists); `BootConfig` owning the `init_caps` ordering with one `Restart` answer shared by `app` and `zvm-cli`; `take_*` drains and a merged `take_paint_events()`; dropping the `location` root re-export; deciding whether `True24` stays; addressing the docs to a stranger; and the grammar model behind a default-on `grammar` feature.
+
+**Wave 3** — design later. The screen snapshot in `zvm`, `FontMetrics`, a `Resources` trait, and `Output: Any`.
+
+**Open product call:** whether `gvm` and `scott` get the full treatment (all three waves) or only what any published crate needs (`#[non_exhaustive]`, crate docs, `gvm`'s unwraps). Wave 1 is written for the second; the first roughly doubles Wave 2.
