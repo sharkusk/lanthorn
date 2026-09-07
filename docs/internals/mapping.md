@@ -1512,6 +1512,32 @@ the size of its surface, so "largest wins" put West of House, the white house,
 the forest and everything a player sees in the first ten minutes on a layer
 called `Rocky Ledge`, and called the Cellar and its neighbours `Main`.
 
+**"Named after the room its entering portal leads into" is the lowest room
+id among the entrances, and that was questioned once (SQ-1361, 2026-09-07)
+and kept.** A region can have more than one portal in, and the lowest id is
+the STORY's own author-definition order — the order its rooms were
+compiled or declared in — which has nothing to do with a player's actual
+walk. A nearest-entrance search from the story's start room was built to
+replace it and measured against this same fixture, at three different costs
+per hop:
+
+| rule | Zork I's 54-room underground | Zork I's 6-room mine pocket | Anchorhead's upstairs | Anchorhead's tunnel |
+|---|---|---|---|---|
+| lowest room id (kept) | `Cellar` | `Coal Mine` | `Upstairs Hall` | `Storm Tunnel` |
+| nearest entrance, plain hop count | `Studio` (Kitchen's CEXIT staircase, 1 hop nearer than the trap door) | `Gas Room` | `Upstairs Landing` | `Sewer Tunnel` |
+| nearest entrance, gated exits cost 3 vs 1 | `Canyon Bottom` (an ungated canyon route at weighted distance 6, beating both gated "front doors" also at 6) | `Gas Room` | `Upstairs Landing` | `Sewer Tunnel` |
+| nearest entrance, door-like `Routine` exits cost 1 (only a true `Conditional` costs 3) | `Cellar` — but by weighted distance 5 vs 6 vs 6, ONE step | `Gas Room` | `Upstairs Landing` | `Sewer Tunnel` |
+
+Only the last of the three costings recovered `Cellar`, and it did so by a
+single step over two other candidates — a coin flip on the layer that
+matters most to a player reading the map, while every costing also renamed
+Anchorhead's two peels away from names nobody had complained about. That
+was not a good enough trade for the nondeterminism and the extra machinery
+(a weighted shortest-path search, an `EdgeKind`-vs-`PassageWeight`
+distinction the graph does not otherwise draw) a "principled" rule would
+have cost. `name_region_by_entry`'s own doc comment carries this same
+finding beside the code.
+
 ### What each source covers, and what it does not
 
 `lanthorn-mapgen` adds no format knowledge of its own; each source is read by
