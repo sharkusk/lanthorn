@@ -816,6 +816,23 @@ fn adopt_stranded_regions(graph: &mut MapGraph, mut pending: Vec<mapper::layer::
 /// the room a static reader would call "first" for want of any other order.
 /// A region with no inbound portal at all (an island with no edge in from
 /// anywhere) falls back to its lowest room id, same tie-break, one level up.
+///
+/// "Lowest room id" is the story's own author-definition order (its rooms'
+/// compiled/declared order, not a property of the map's shape) — which is
+/// why it names Zork I's underground `Cellar` (not `Studio` or `Canyon
+/// Bottom`), its mine pocket `Coal Mine`, and Anchorhead's upstairs
+/// `Upstairs Hall`. A nearest-entrance walk from the start room was built
+/// and measured here 2026-09-07 (SQ-1361) and rejected: plain hop-counting
+/// named the underground `Studio` (the Kitchen's CEXIT staircase, one hop
+/// nearer than the Living Room's trap door); costing every gated exit at 3
+/// against 1 for an ordinary one named it `Canyon Bottom` instead (an
+/// ungated canyon route at weighted distance 6, beating both gated "front
+/// doors" also at 6); and costing the trap door's own door-like ROUTINE
+/// exit back down to 1, same as a Door, restored `Cellar` — but only by ONE
+/// STEP (5 vs 6 vs 6). A rule that close to a coin flip on the layer that
+/// matters most, while also renaming two already-good peels elsewhere
+/// (Anchorhead's `Upstairs Hall`/`Storm Tunnel`), was not worth keeping over
+/// the simpler, deterministic rule already here.
 fn name_region_by_entry(graph: &MapGraph, region: mapper::layer::Region) -> mapper::layer::Region {
     let entry = graph
         .connections()
@@ -2318,6 +2335,45 @@ mod tests {
         g.add_edge(1, Direction::Down, 10);
         g.add_edge(10, Direction::Up, 1);
         g
+    }
+
+    // ── SQ-1361: `name_region_by_entry` names a peel by lowest room id ────────
+    //
+    // A nearest-entrance walk from the start room was built and measured here
+    // (2026-09-07) and rejected — see this function's own doc comment for the
+    // numbers. The lowest-id rule it replaced was never worse than a coin flip
+    // and stays; these two cases are its own doc comment turned into code.
+
+    /// Two candidate entrances into the same region: the lower room id wins,
+    /// full stop — nothing about which one is "nearer" in any other sense
+    /// enters into it.
+    #[test]
+    fn the_lowest_id_entrance_names_the_region() {
+        let mut g = MapGraph::new();
+        for (id, name) in [(1, "Start"), (5, "Low Id Room"), (9, "High Id Room")] {
+            g.upsert_room(id, name.to_string());
+        }
+        g.add_edge(1, Direction::Down, 9); // reached first, but the higher id
+        g.add_edge(1, Direction::Up, 5); // reached second, but the lower id
+        let region = mapper::layer::Region { anchor: 5, rooms: [5, 9].into_iter().collect() };
+        let named = name_region_by_entry(&g, region);
+        assert_eq!(named.anchor, 5, "the lower room id wins between two entrances");
+    }
+
+    /// A region with no inbound portal at all falls back to its own lowest room id — the
+    /// same tie-break one level up, for a region nothing points into from outside.
+    #[test]
+    fn a_region_with_no_inbound_portal_falls_back_to_its_own_lowest_id() {
+        let mut g = MapGraph::new();
+        for (id, name) in [(1, "Start"), (20, "Room A"), (15, "Room B")] {
+            g.upsert_room(id, name.to_string());
+        }
+        // The region is compass-connected internally but has no portal edge in from anywhere.
+        g.add_edge(20, Direction::E, 15);
+        g.add_edge(15, Direction::W, 20);
+        let region = mapper::layer::Region { anchor: 20, rooms: [20, 15].into_iter().collect() };
+        let named = name_region_by_entry(&g, region);
+        assert_eq!(named.anchor, 15, "no inbound portal at all falls back to the region's own lowest id");
     }
 
     /// A `Conditional` exit's destination counts as a declared reverse too (not only a plain
