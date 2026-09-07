@@ -27,6 +27,18 @@ Absolute URLs or no link.
 > visible tag `*Next release:*`. `release.yml` refuses to cut a release
 > while any such tag, or this Unreleased section, still exists.*
 
+### Added
+
+- **A room's notes now show up on the exported map** — a noted room's box
+  carries a numbered badge (hover it for the note text) and every layer's own
+  panel lists its noted rooms' full text underneath the map.
+
+### Fixed
+
+- **A cross-layer room's box on the exported map no longer lets its layer
+  name run past the edge** — a short room name on a long-named layer now
+  widens the box to fit both lines.
+
 ---
 
 ## v0.5.2 — 2026-09-07

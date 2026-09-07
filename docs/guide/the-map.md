@@ -34,7 +34,10 @@ Multi-level areas split into named layers shown as tabs across the top of the ma
 direction out of that room, where each one leads, and which you've never
 tried. Notes, renamed aliases and a full exit card can run taller than the
 card itself — scroll the mouse wheel over it to see the rest, and a thin bar
-on the right edge shows there's more.
+on the right edge shows there's more. A room's own notes travel to the
+exported map too: its box carries a small numbered badge, hovering it shows
+the note, and the panel underneath the map lists every noted room's text in
+full.
 
 **Connections that stay readable.** A "one arrow per exit" map turns to
 spaghetti fast, so lanthorn routes connections through lanes that eliminate
@@ -61,7 +64,8 @@ arrow, and the ghost simply names the room. A crossing you can only walk one
 way says so in words instead — `to Cellar` on the side you leave from, `from
 Maze` on the side you arrive at. Select a ghost and the room card names the
 layer it really lives on; the exported SVG has room to print that inside the
-box. Ghosts are worked out as the map is drawn, so nothing about them is
+box, widening it if a long layer name needs more than the room's own name
+did. Ghosts are worked out as the map is drawn, so nothing about them is
 saved, and they never push a real room out of its cell: the map opens a gap
 for one only where doing so costs no adjacency it had already earned.
 
