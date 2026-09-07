@@ -32,6 +32,15 @@ Absolute URLs or no link.
 - Right-clicking a room now offers **Edit Notes** in its context menu,
   alongside Rename Room, Move Region and Rename Layer — no more hunting
   through the leader dialog just to jot down a note.
+- **A room's notes now show up on the exported map** — a noted room's box
+  carries a numbered badge (hover it for the note text) and every layer's own
+  panel lists its noted rooms' full text underneath the map.
+
+### Fixed
+
+- **A cross-layer room's box on the exported map no longer lets its layer
+  name run past the edge** — a short room name on a long-named layer now
+  widens the box to fit both lines.
 
 ---
 

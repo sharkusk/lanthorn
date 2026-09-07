@@ -1180,6 +1180,16 @@ What the drawing shows, beyond the rooms:
   size and the layer name smaller beneath it. One ghost per foreign ROOM, not
   per passage: two staircases to one room are two lines to one box.
 
+  **The box widens for the layer name too, not just the room name** (SQ-1385).
+  Before, the box was sized from the wrapped room name alone, so a short name
+  on a long-named layer (Counterfeit Monkey's "Samuel Johnson Basement" and
+  "Tunnel through Chalk" ghosts) overflowed the box the name itself was happy
+  in. `ghost_box_cells` now takes the wider of the name's own width and the
+  subtitle's own width at its smaller type size, converted through the ratio
+  between the two sizes; widening is preferred, and only a subtitle that
+  would still overflow the widest box the layout allows is wrapped onto two
+  lines with the room name's own balanced-split rule.
+
   **The label states the reading, and only the reading** — `Cellar` when the
   crossing is walkable both ways (the box reads exactly as a room's would),
   `to Cellar` when it only leaves this layer, `from Maze` when it only arrives.
@@ -1259,15 +1269,25 @@ What the drawing shows, beyond the rooms:
   the map genuinely gains boxes — and to fix the router when two lines land in
   one cell, because *crossings are fine and overlaps are not* is the rule those
   numbers exist to keep.
+- **A numbered badge for a noted room** (SQ-1384), where the old plain yellow
+  dot used to sit, at the box's own top-right corner — the box itself carries
+  the note as a `<title>` hover tooltip (a ghost never gets one: a note
+  belongs to the real room, not the placeholder standing in for it on another
+  layer's panel), and every layer panel lists its own noted rooms' full text,
+  numbered to match, in a "Notes" block under the map — the badges are
+  numbered in READING ORDER (top-to-bottom, left-to-right by grid cell) so
+  footnote 1 is always the first a reader's eye reaches, restarting at 1 on
+  each layer's own panel. The panel — and, for a single-layer graph with no
+  panel to sit in, the plain document itself — grows to hold the block.
 - **A legend** in the bottom-left of each document naming every mark.
 
 Styling is a `<style>` block of CSS classes — `.room`, `.room.current`,
 `.room-label`, `.edge` plus one of `.reciprocal`/`.asym`/`.oneway`, `.edge.portal`,
 `.edge.conditional`, `.edge.distorted`, `.edge.stub`, `.arrow`, `.door`, `.badge`,
 `.tag`, `.ghost` (the dashed cross-layer box) with `.ghost-name`/`.ghost-layer`
-for its two lines, `.legend` — rather than per-element attributes, so a consumer
-can restyle an exported map without re-rendering it. The dark palette is the
-default.
+for its two lines, `.note-badge`/`.note-badge-text` for a noted room's numbered
+mark, `.legend` — rather than per-element attributes, so a consumer can restyle
+an exported map without re-rendering it. The dark palette is the default.
 
 Naming any of `--dump`, `--svg`, `--dot`, `--json` writes only the ones named;
 naming none writes all four. `--no-layout` skips the layout entirely, leaving pure

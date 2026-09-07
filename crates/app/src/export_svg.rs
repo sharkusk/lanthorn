@@ -68,6 +68,10 @@ const CORNER_R: f64 = 5.0;
 /// `LABEL_PX` like any other room's. Smaller than the name for the same reason the room card's
 /// footnotes are: it is a qualifier on the name, not a competitor for the eye.
 const GHOST_LAYER_PX: f64 = 8.0;
+/// The layer line's own character advance — see `ADVANCE` for the name's. Two different sizes
+/// of the same monospace stack, so the ratio between them (`GHOST_LAYER_PX / LABEL_PX`) is also
+/// the ratio between how much room one character of each takes (SQ-1385).
+const GHOST_LAYER_ADVANCE: f64 = GHOST_LAYER_PX * 0.6;
 
 /// Margin between the drawing and the canvas edge.
 const MARGIN: i32 = 24;
@@ -88,6 +92,8 @@ fn stylesheet() -> String {
          .room-label{{fill:#dde;font-size:{LABEL_PX}px;text-anchor:middle}}\
          .room.current+.room-label,.room-label.current{{fill:#ffe9b0}}\
          .notes{{fill:#fc0}}\
+         .note-badge{{fill:#463b12;stroke:#fc0;stroke-width:1.2}}\
+         .note-badge-text{{fill:#fc0;font-size:8px;text-anchor:middle}}\
          .edge{{fill:none;stroke:#8bf;stroke-width:1.6;stroke-linecap:round;stroke-linejoin:round}}\
          .edge.reciprocal{{stroke:#9cf}}\
          .edge.oneway{{stroke:#8bf}}\
@@ -169,24 +175,29 @@ impl Extent {
 
 // ── Room labels ───────────────────────────────────────────────────────────────
 
-/// The most characters a box of `cells` cells may hold on one line.
-fn chars_in(cells: i32) -> usize {
-    (((cells * CELL_W) as f64 - 2.0 * LABEL_PAD) / ADVANCE).floor().max(1.0) as usize
+/// The most characters a box of `cells` cells may hold on one line, at a line drawn with
+/// per-character advance `advance` — `ADVANCE` for a room NAME, [`GHOST_LAYER_ADVANCE`] for a
+/// ghost's own layer-name subtitle (SQ-1385): the same box-width arithmetic at two different
+/// type sizes, not two different rules.
+fn chars_in_scaled(cells: i32, advance: f64) -> usize {
+    (((cells * CELL_W) as f64 - 2.0 * LABEL_PAD) / advance).floor().max(1.0) as usize
 }
 
-/// Wrap `label` onto at most two lines, balanced so the box need be no wider than it must.
-///
-/// A label that already fits one default-width line is left alone; anything longer is split at
-/// whichever word boundary minimises the LONGER of the two lines, which is what makes a box
-/// grow by as little as possible. A single word too long for the widest box is ellipsised.
-fn wrap_label(label: &str) -> Vec<String> {
+/// The most characters a box of `cells` cells may hold on one NAME line.
+fn chars_in(cells: i32) -> usize {
+    chars_in_scaled(cells, ADVANCE)
+}
+
+/// The two-line balanced wrap [`wrap_label`] and [`wrap_ghost_subtitle`] (SQ-1385) share: split at
+/// whichever word boundary minimises the LONGER of the two lines, which is what makes a box grow
+/// by as little as possible, then ellipsise anything still too long for `cap` — a single word
+/// wider than the widest box allows, or a caller with less than two words to split at all.
+fn wrap_to_caps(label: &str, one_line: usize, cap: usize) -> Vec<String> {
     let label = label.trim();
-    let one_line = chars_in(BOX_W);
     if label.chars().count() <= one_line {
         return vec![label.to_string()];
     }
     let words: Vec<&str> = label.split_whitespace().collect();
-    let cap = chars_in(MAX_BOX_CELLS);
     let clip = |s: String| -> String {
         if s.chars().count() > cap {
             s.chars().take(cap.saturating_sub(1)).chain(std::iter::once('…')).collect()
@@ -210,11 +221,65 @@ fn wrap_label(label: &str) -> Vec<String> {
     vec![clip(a), clip(b)]
 }
 
-/// The box width, in layout cells, that holds `lines`.
-fn box_cells(lines: &[String]) -> i32 {
+/// Wrap `label` onto at most two lines, balanced so the box need be no wider than it must.
+///
+/// A label that already fits one default-width line is left alone; anything longer is split at
+/// whichever word boundary minimises the LONGER of the two lines, which is what makes a box
+/// grow by as little as possible. A single word too long for the widest box is ellipsised.
+fn wrap_label(label: &str) -> Vec<String> {
+    wrap_to_caps(label, chars_in(BOX_W), chars_in(MAX_BOX_CELLS))
+}
+
+/// [`wrap_label`]'s own rule, at the smaller [`GHOST_LAYER_PX`] scale a cross-layer ghost's
+/// subtitle draws at (SQ-1385) — only reached once [`ghost_box_cells`] finds a single subtitle
+/// line would overflow even the widest box the layout allows, so widening the box has already
+/// been preferred and failed; this is the fallback.
+fn wrap_ghost_subtitle(layer_name: &str) -> Vec<String> {
+    wrap_to_caps(
+        layer_name,
+        chars_in_scaled(BOX_W, GHOST_LAYER_ADVANCE),
+        chars_in_scaled(MAX_BOX_CELLS, GHOST_LAYER_ADVANCE),
+    )
+}
+
+/// The box width, in layout cells, that holds `lines` drawn at per-character advance `advance`.
+fn box_cells_scaled(lines: &[String], advance: f64) -> i32 {
     let widest = lines.iter().map(|l| l.chars().count()).max().unwrap_or(0) as f64;
-    let need = widest * ADVANCE + 2.0 * LABEL_PAD;
+    let need = widest * advance + 2.0 * LABEL_PAD;
     ((need / CELL_W as f64).ceil() as i32).clamp(BOX_W, MAX_BOX_CELLS)
+}
+
+/// The box width, in layout cells, that holds `lines` of a room NAME.
+fn box_cells(lines: &[String]) -> i32 {
+    box_cells_scaled(lines, ADVANCE)
+}
+
+/// A cross-layer ghost's own box width, in layout cells (SQ-1385), and the subtitle line(s) to
+/// draw inside it: the wider of its NAME lines — as any room's box already is — and its
+/// LAYER-NAME subtitle, sized at the subtitle's OWN [`GHOST_LAYER_ADVANCE`] scale rather than
+/// counted in the name's characters. Before this a ghost's box was sized from `name_lines`
+/// alone, so a short room name on a long-named layer (Counterfeit Monkey's "Samuel Johnson
+/// Basement", "Tunnel through Chalk") overflowed the box the name itself was happy in.
+///
+/// Widening is always preferred: only a subtitle that would still overflow the widest box the
+/// layout allows (`MAX_BOX_CELLS`) is wrapped onto two lines, with the same balanced-split rule
+/// `wrap_label` uses for a name (see [`wrap_ghost_subtitle`]).
+fn ghost_box_cells(name_lines: &[String], layer_name: &str) -> (i32, Vec<String>) {
+    let name_want = box_cells(name_lines);
+    // The UNCLAMPED cell count a single subtitle line needs — `box_cells_scaled` clamps to
+    // `MAX_BOX_CELLS`, which would hide the very overflow this is checking for.
+    let raw_cells = |chars: usize| -> f64 {
+        (chars as f64 * GHOST_LAYER_ADVANCE + 2.0 * LABEL_PAD) / CELL_W as f64
+    };
+    if raw_cells(layer_name.chars().count()) <= MAX_BOX_CELLS as f64 {
+        let one_line = vec![layer_name.to_string()];
+        let sub_want = box_cells_scaled(&one_line, GHOST_LAYER_ADVANCE);
+        (name_want.max(sub_want), one_line)
+    } else {
+        let sub_lines = wrap_ghost_subtitle(layer_name);
+        let sub_want = box_cells_scaled(&sub_lines, GHOST_LAYER_ADVANCE);
+        (name_want.max(sub_want), sub_lines)
+    }
 }
 
 // ── Passage weights ───────────────────────────────────────────────────────────
@@ -226,6 +291,17 @@ fn box_cells(lines: &[String]) -> i32 {
 /// layout before, so nothing carried it out this far.
 fn weight_table(graph: &MapGraph) -> HashMap<(RoomId, Direction), PassageWeight> {
     graph.connections().iter().map(|c| ((c.origin, c.dir), c.weight)).collect()
+}
+
+// ── Room notes ───────────────────────────────────────────────────────────────
+
+/// Every room's own NOTE text (SQ-1384), keyed by room id — filtered to the non-empty ones, the
+/// same population [`mapper::render::RenderRoom::has_notes`] flags but the TEXT `RenderMap` never
+/// carries (only the bool). Read off the graph rather than the render model for the same reason
+/// [`weight_table`] does: the render model is zoom-independent geometry, and a note's text isn't
+/// geometry at all.
+fn notes_table(graph: &MapGraph) -> HashMap<RoomId, String> {
+    graph.rooms().filter(|r| !r.notes.is_empty()).map(|r| (r.id, r.notes.clone())).collect()
 }
 
 // ── Geometry helpers ──────────────────────────────────────────────────────────
@@ -605,6 +681,22 @@ fn badge(at: (f64, f64), letter: &str) -> String {
     )
 }
 
+/// SQ-1384's own badge: the same circle-plus-text shape [`badge`] draws a portal letter with, at
+/// the same [`BADGE_R`], but in the yellow the plain `.notes` dot always used and carrying a
+/// footnote NUMBER — assigned in reading order over the rooms a layer panel actually holds — so a
+/// reader can find the room's own text in the panel's "Notes" block below the map.
+fn note_badge(at: (f64, f64), n: usize) -> String {
+    format!(
+        "<circle class=\"note-badge\" cx=\"{}\" cy=\"{}\" r=\"{}\"/>\
+         <text class=\"note-badge-text\" x=\"{}\" y=\"{}\">{n}</text>",
+        f(at.0),
+        f(at.1),
+        f(BADGE_R),
+        f(at.0),
+        f(at.1 + 3.0)
+    )
+}
+
 /// The marker set for ONE travel of a connector: an `arrowhead_inward` into the room the travel
 /// arrives at, exactly like every other passage — plus, for a vertical (Up/Down) word, a
 /// lettered badge riding just behind the head on the same line, since a flat arrowhead cannot
@@ -796,17 +888,41 @@ struct CompassConnectorGeom {
 fn render_svg_body(
     rm: &RenderMap,
     weights: &HashMap<(RoomId, Direction), PassageWeight>,
+    notes: &HashMap<RoomId, String>,
 ) -> Option<(String, i32, i32)> {
     if rm.rooms.is_empty() {
         return None;
     }
 
+    // SQ-1384: every room THIS map draws that carries a note, numbered in READING ORDER —
+    // top-to-bottom, left-to-right by grid cell, which is the same order pixel position sorts to
+    // since a channel widened for a long name never reorders the cells either side of it. A
+    // ghost never carries its own note (its `id` is the REAL target room's, on another layer's
+    // panel — the note belongs there, not to the placeholder standing in for it here).
+    let mut noted_rooms: Vec<&mapper::render::RenderRoom> =
+        rm.rooms.iter().filter(|r| r.ghost.is_none() && notes.contains_key(&r.id)).collect();
+    noted_rooms.sort_by_key(|r| (r.cell.1, r.cell.0));
+    let note_number: HashMap<RoomId, usize> =
+        noted_rooms.iter().enumerate().map(|(i, r)| (r.id, i + 1)).collect();
+
     // ── Axes: the terminal's own, with each column widened to its widest room name ────────
     let labels: HashMap<RoomId, Vec<String>> =
         rm.rooms.iter().map(|r| (r.id, wrap_label(&r.label))).collect();
+    // SQ-1385: a ghost's own subtitle lines, sized alongside its name below — kept so the draw
+    // pass below draws exactly the lines the box was WIDENED for, rather than recomputing (and
+    // risking disagreeing with) the wrap.
+    let mut ghost_subtitles: HashMap<RoomId, Vec<String>> = HashMap::new();
     let mut col_dims: BTreeMap<i32, i32> = BTreeMap::new();
     for room in &rm.rooms {
-        let want = labels.get(&room.id).map(|l| box_cells(l)).unwrap_or(BOX_W);
+        let empty = Vec::new();
+        let name_lines = labels.get(&room.id).unwrap_or(&empty);
+        let want = if let Some(ghost) = &room.ghost {
+            let (want, sub_lines) = ghost_box_cells(name_lines, &ghost.layer_name);
+            ghost_subtitles.insert(room.id, sub_lines);
+            want
+        } else {
+            box_cells(name_lines)
+        };
         let slot = col_dims.entry(room.cell.0).or_insert(BOX_W);
         *slot = (*slot).max(want);
     }
@@ -1317,6 +1433,13 @@ fn render_svg_body(
     for room in &rm.rooms {
         let (x, y, w, h) = box_px_rect(&cols, &rows, &px_cols, &px_rows, room.cell);
         ext.add_rect(x, y, w, h);
+        // SQ-1384: a noted room's whole box is wrapped in a `<g><title>` so the note text is a
+        // hover tooltip over the box — nothing to wrap for a room without one, and a ghost
+        // never carries this (see `noted_rooms` above).
+        let note = note_number.get(&room.id).map(|&n| (n, notes[&room.id].as_str()));
+        if let Some((_, text)) = note {
+            let _ = write!(boxes, "<g><title>{}</title>", xml_escape(text));
+        }
         let cls = match (&room.ghost, room.is_current) {
             (Some(_), _) => "ghost",
             (None, true) => "room current",
@@ -1337,9 +1460,15 @@ fn render_svg_body(
             (None, true) => "room-label current",
             (None, false) => "room-label",
         };
-        // A ghost's name lifts by half the layer line it makes room for, so the two together sit
-        // centred in the box the way a plain name does on its own.
-        let lift = if room.ghost.is_some() { GHOST_LAYER_PX * 0.62 } else { 0.0 };
+        // A ghost's name lifts by half the layer line(s) it makes room for, so the two together
+        // sit centred in the box the way a plain name does on its own — one lift's worth per
+        // subtitle line, since SQ-1385 lets that subtitle wrap to two.
+        let sub_line_count = if room.ghost.is_some() {
+            ghost_subtitles.get(&room.id).map_or(1, |l| l.len().max(1))
+        } else {
+            0
+        };
+        let lift = GHOST_LAYER_PX * 0.62 * sub_line_count as f64;
         let first =
             y + h / 2.0 - (lines.len() as f64 - 1.0) * (LABEL_PX * 0.62) + LABEL_PX * 0.36 - lift;
         for (i, line) in lines.iter().enumerate() {
@@ -1357,16 +1486,26 @@ fn render_svg_body(
                 xml_escape(line)
             );
         }
-        if let Some(ghost) = &room.ghost {
-            let _ = write!(
-                boxes,
-                "<text class=\"ghost-layer\" text-anchor=\"middle\" x=\"{}\" y=\"{}\">{}</text>",
-                f(x + w / 2.0),
-                f(first + (lines.len() as f64 - 1.0) * LABEL_PX * 1.24 + LABEL_PX * 1.1),
-                xml_escape(&ghost.layer_name)
-            );
+        if room.ghost.is_some() {
+            let sub_lines = ghost_subtitles.get(&room.id).map(Vec::as_slice).unwrap_or(&[]);
+            let sub_first = first + (lines.len() as f64 - 1.0) * LABEL_PX * 1.24 + LABEL_PX * 1.1;
+            for (i, line) in sub_lines.iter().enumerate() {
+                let _ = write!(
+                    boxes,
+                    "<text class=\"ghost-layer\" text-anchor=\"middle\" x=\"{}\" y=\"{}\">{}</text>",
+                    f(x + w / 2.0),
+                    f(sub_first + i as f64 * GHOST_LAYER_PX * 1.24),
+                    xml_escape(line)
+                );
+            }
         }
-        if room.has_notes {
+        if let Some((n, _)) = note {
+            let _ = write!(boxes, "{}", note_badge((x + w - 10.0, y + 10.0), n));
+        } else if room.has_notes {
+            // `has_notes` true but no text in `notes` only happens when a caller has no graph to
+            // read the text from (`render_svg(rm)`, SQ-1313's own headless path) — the plain dot
+            // SQ-1384 replaces everywhere the text IS known, kept here so that path still shows
+            // something rather than silently losing the mark.
             let _ = write!(
                 boxes,
                 "<circle class=\"notes\" cx=\"{}\" cy=\"{}\" r=\"2.6\"/>",
@@ -1374,17 +1513,36 @@ fn render_svg_body(
                 f(y + 6.0)
             );
         }
+        if note.is_some() {
+            boxes.push_str("</g>");
+        }
     }
 
     let (min_x, min_y, max_x, max_y) = ext.get();
     let (ox, oy) = (-min_x, -min_y);
-    let width = (max_x - min_x).ceil() as i32;
-    let height = (max_y - min_y).ceil() as i32;
-    let body = format!(
+    let mut width = (max_x - min_x).ceil() as i32;
+    let mut height = (max_y - min_y).ceil() as i32;
+    let mut body = format!(
         "<g transform=\"translate({},{})\">{edges}{boxes}{over}</g>",
         f(ox),
         f(oy)
     );
+
+    // SQ-1384: the "Notes" block, drawn once the map's own extent is settled — its rows are
+    // wrapped to that width, and the canvas grows DOWN to hold it, never sideways past what the
+    // map already needed unless a note itself is wider still.
+    if !noted_rooms.is_empty() {
+        let rows: Vec<(usize, String)> = noted_rooms
+            .iter()
+            .map(|r| (note_number[&r.id], notes[&r.id].clone()))
+            .collect();
+        let (markup, block_w, block_h) = notes_block(&rows, width.max(1));
+        width = width.max(block_w);
+        const NOTES_GAP: i32 = 14;
+        let _ = write!(body, "<g transform=\"translate(0,{})\">{markup}</g>", height + NOTES_GAP);
+        height += NOTES_GAP + block_h;
+    }
+
     Some((body, width.max(1), height.max(1)))
 }
 
@@ -1619,6 +1777,12 @@ fn legend_rows() -> Vec<(String, &'static str)> {
             ),
             "a room on another layer — the layer it lives on beneath its name",
         ),
+        (
+            // SQ-1384: the badge itself is enough to draw the reader's eye to a noted room; what
+            // it MEANS is spelled out here rather than assumed.
+            note_badge((30.0, 0.0), 1),
+            "a room with notes — find its text in the panel's own \"Notes\" list below the map",
+        ),
     ]
 }
 
@@ -1657,6 +1821,85 @@ fn legend() -> (String, i32, i32) {
     (s, w, h)
 }
 
+// ── Room notes block (SQ-1384) ──────────────────────────────────────────────────
+
+/// The per-character pixel width [`notes_block`] wraps a `.legend`-sized (9px) row against —
+/// same estimate `text_boxes()`/`legend()` already charge every 9px `.legend` label, so the two
+/// never disagree about how much text a row of a given width can hold.
+const NOTES_CHAR_W: f64 = 9.0 * 0.6125;
+
+/// Greedy word-wrap of `text` to at most `max_chars` characters per line, splitting on
+/// whitespace and hard-breaking any single word that alone exceeds `max_chars`. An embedded
+/// newline starts a fresh line of its own (SQ-1384: a note may be more than one paragraph, and
+/// the block keeps the writer's own breaks rather than running everything together).
+///
+/// General-purpose in the way `wrap_label` deliberately is not: a note has no line cap and no
+/// ellipsis — it is read in full in the block below the map, never squeezed into a room box.
+fn word_wrap(text: &str, max_chars: usize) -> Vec<String> {
+    let max_chars = max_chars.max(1);
+    let mut out: Vec<String> = Vec::new();
+    for para in text.split('\n') {
+        if para.trim().is_empty() {
+            out.push(String::new());
+            continue;
+        }
+        let mut cur = String::new();
+        for word in para.split_whitespace() {
+            let word_chars: Vec<char> = word.chars().collect();
+            if word_chars.len() > max_chars {
+                if !cur.is_empty() {
+                    out.push(std::mem::take(&mut cur));
+                }
+                for chunk in word_chars.chunks(max_chars) {
+                    out.push(chunk.iter().collect());
+                }
+                continue;
+            }
+            let added = word_chars.len() + if cur.is_empty() { 0 } else { 1 };
+            if cur.chars().count() + added > max_chars {
+                out.push(std::mem::take(&mut cur));
+            }
+            if !cur.is_empty() {
+                cur.push(' ');
+            }
+            cur.push_str(word);
+        }
+        if !cur.is_empty() {
+            out.push(cur);
+        }
+    }
+    if out.is_empty() {
+        out.push(String::new());
+    }
+    out
+}
+
+/// The "Notes" block a layer panel draws beneath its own map (SQ-1384): one row per noted room,
+/// numbered to match the badge on its box, its text wrapped to `wrap_w` at `.legend`'s own 9px —
+/// styled like the legend for the same reason the legend IS a list of what a mark means: a
+/// footnote badge only draws the eye, this is what makes the note actually readable without
+/// hovering the box's `<title>`.
+///
+/// `rows` is `(footnote number, note text)`, already in the reading order the badges use.
+/// Drawn with its top-left at `(0, 0)`; returns `(markup, width, height)`.
+fn notes_block(rows: &[(usize, String)], wrap_w: i32) -> (String, i32, i32) {
+    let max_chars = ((wrap_w as f64) / NOTES_CHAR_W).floor().max(1.0) as usize;
+    let mut s = "<text class=\"legend-title\" x=\"0\" y=\"12\">Notes</text>".to_string();
+    let mut y = 30;
+    let mut widest_chars = 0usize;
+    for (n, text) in rows {
+        for (i, line) in word_wrap(text, max_chars).iter().enumerate() {
+            let shown = if i == 0 { format!("{n}. {line}") } else { line.clone() };
+            widest_chars = widest_chars.max(shown.chars().count());
+            let _ = write!(s, "<text class=\"legend\" x=\"0\" y=\"{y}\">{}</text>", xml_escape(&shown));
+            y += LEGEND_ROW;
+        }
+    }
+    let h = y - LEGEND_ROW + 8;
+    let w = wrap_w.max((widest_chars as f64 * NOTES_CHAR_W).ceil() as i32);
+    (s, w, h)
+}
+
 // ── Documents ─────────────────────────────────────────────────────────────────
 
 /// Wrap a body of markup — already at its own `(0, 0)` — in a document, with the legend below
@@ -1690,7 +1933,8 @@ pub fn render_svg(rm: &RenderMap) -> String {
 /// own weight: a door marked, a conditional exit dotted (SQ-1312/SQ-1313).
 pub fn render_svg_of(rm: &RenderMap, graph: Option<&MapGraph>) -> String {
     let weights = graph.map(weight_table).unwrap_or_default();
-    let Some((body, w, h)) = render_svg_body(rm, &weights) else {
+    let notes = graph.map(notes_table).unwrap_or_default();
+    let Some((body, w, h)) = render_svg_body(rm, &weights, &notes) else {
         return "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"1\" height=\"1\"></svg>".to_string();
     };
     document(&body, w, h)
@@ -1732,6 +1976,7 @@ pub fn render_svg_layered(graph: &MapGraph) -> String {
     const FRAME_PAD: i32 = 12;
     const PANEL_GAP: i32 = 16;
     let weights = weight_table(graph);
+    let notes = notes_table(graph);
 
     // Pass 1: render every layer's own heading and fragment, and find the widest of either —
     // nothing is emitted yet, because the panel width below has to be settled first.
@@ -1747,7 +1992,7 @@ pub fn render_svg_layered(graph: &MapGraph) -> String {
             graph.rooms_in_layer(l).len()
         );
         max_w = max_w.max(heading.chars().count() as i32 * 9);
-        let frag = render_svg_body(&rm, &weights);
+        let frag = render_svg_body(&rm, &weights, &notes);
         if let Some((_, w, _)) = &frag {
             max_w = max_w.max(*w);
         }
@@ -2017,8 +2262,9 @@ fn text_boxes(svg: &str) -> Vec<LabelBox> {
         // its badge goes, and `settle_badge` is what keeps the badge off rooms and other badges.
         // Charging it a monospace box would also mismeasure it — a two-letter badge like `NW`
         // overhangs its own 13px circle, which is a cosmetic matter for the badge, not a
-        // collision for the label placer to solve.
-        if cls.starts_with("badge-text") {
+        // collision for the label placer to solve. `note-badge-text` (SQ-1384) is the same shape
+        // at a fixed corner of its own room's box, for the same reason.
+        if cls.starts_with("badge-text") || cls.starts_with("note-badge-text") {
             continue;
         }
         let text: String = node.text().unwrap_or("").to_string();
@@ -2146,7 +2392,8 @@ mod tests {
     /// mark the map can carry and would otherwise answer every such question by itself.
     fn body_of(rm: &RenderMap, graph: Option<&MapGraph>) -> String {
         let weights = graph.map(weight_table).unwrap_or_default();
-        render_svg_body(rm, &weights).expect("a non-empty map").0
+        let notes = graph.map(notes_table).unwrap_or_default();
+        render_svg_body(rm, &weights, &notes).expect("a non-empty map").0
     }
 
     /// [`render_svg_layered`]'s document, up to (not including) the legend block — what a count
@@ -2239,6 +2486,38 @@ mod tests {
             .filter(|n| {
                 n.tag_name().name() == "text"
                     && n.attribute("class") == Some("badge-text")
+                    && !under_class(*n, "legend-block")
+            })
+            .collect();
+        circles
+            .iter()
+            .zip(texts.iter())
+            .map(|(c, t)| {
+                let o = translate_of(*c);
+                let x = c.attribute("cx").unwrap().parse::<f64>().unwrap() + o.0;
+                let y = c.attribute("cy").unwrap().parse::<f64>().unwrap() + o.1;
+                (t.text().unwrap_or("").to_string(), (x, y))
+            })
+            .collect()
+    }
+
+    /// SQ-1384's own [`badges_of`]: every non-legend `.note-badge` circle paired with its
+    /// footnote number, in the document's own coordinate space.
+    fn note_badges_of(svg: &str) -> Vec<(String, (f64, f64))> {
+        let doc = roxmltree::Document::parse(svg).expect("well-formed SVG");
+        let circles: Vec<_> = doc
+            .descendants()
+            .filter(|n| {
+                n.tag_name().name() == "circle"
+                    && n.attribute("class") == Some("note-badge")
+                    && !under_class(*n, "legend-block")
+            })
+            .collect();
+        let texts: Vec<_> = doc
+            .descendants()
+            .filter(|n| {
+                n.tag_name().name() == "text"
+                    && n.attribute("class") == Some("note-badge-text")
                     && !under_class(*n, "legend-block")
             })
             .collect();
@@ -2940,6 +3219,41 @@ mod tests {
         assert!(long[0].ends_with('…'), "a single unsplittable word is ellipsised");
     }
 
+    /// SQ-1385: a ghost's LAYER-NAME subtitle can be far longer than the room name it stands
+    /// beside (Counterfeit Monkey ghosts a room named just "Cellar" onto "Samuel Johnson
+    /// Basement") — the box must widen to hold the SUBTITLE too, not just the name it was sized
+    /// from before. Falsify by reverting `ghost_box_cells` to size from `name_lines` alone and
+    /// this fails on the box width.
+    #[test]
+    fn a_ghost_box_widens_for_a_long_layer_name_not_just_its_room_name() {
+        use mapper::graph::MapGraph;
+        let mut g = MapGraph::new();
+        g.upsert_room(1, "Hall".into());
+        g.upsert_room(2, "X".into());
+        g.set_pos(1, (0, 0));
+        g.set_pos(2, (0, 1));
+        g.add_edge(1, Direction::Down, 2);
+        g.add_edge(2, Direction::Up, 1);
+        let below = g.new_layer(Some(mapper::layer::MAIN_LAYER), "Samuel Johnson Basement".into());
+        g.set_room_layer(2, below);
+
+        let svg = render_svg_layered(&g);
+        let map = layered_map_only(&svg);
+        assert!(map.contains("class=\"ghost\""), "the case must actually draw the ghost");
+        assert!(map.contains(">Samuel Johnson Basement<"), "the ghost must name the long layer");
+
+        let ghosts = ghost_rects_of(&svg, "ghost");
+        assert_eq!(ghosts.len(), 2, "one ghost per panel (Hall's panel and Below's)");
+        let subtitle_chars = "Samuel Johnson Basement".chars().count() as f64;
+        let estimated_w = subtitle_chars * GHOST_LAYER_ADVANCE + 2.0 * LABEL_PAD;
+        assert!(
+            ghosts.iter().any(|g| g.2 >= estimated_w - 0.5),
+            "some ghost box must be at least as wide as its subtitle needs ({estimated_w}px): {ghosts:?}"
+        );
+        assert!(label_collisions(&svg).is_empty());
+        assert!(ghost_box_overlaps(&svg).is_empty());
+    }
+
     /// SQ-1346: a one-way passage's single arrowhead reads as its DESTINATION's arrival, the
     /// same "head points into the room it enters" rule a two-way's two heads already follow —
     /// falsify by reverting `draw_travel_arrival`'s call site back to `arrowhead(pts[0], ...)`
@@ -3478,5 +3792,174 @@ mod tests {
 
         assert!(label_collisions(&svg).is_empty());
         assert!(connector_room_crossings(&svg).is_empty());
+    }
+
+    // ── SQ-1384: a noted room carries its text as a tooltip AND a numbered footnote ──────
+
+    /// A noted room's whole box is wrapped in a `<title>` carrying its note text; a room with no
+    /// notes carries none. Falsify by reverting the `<g><title>` wrap in `render_svg_body`'s room
+    /// pass and this fails on the title count.
+    #[test]
+    fn a_noted_room_carries_a_title_tooltip_and_others_do_not() {
+        use mapper::graph::MapGraph;
+        let mut g = MapGraph::new();
+        g.upsert_room(1, "Hall".into());
+        g.upsert_room(2, "Cellar".into());
+        g.set_pos(1, (0, 0));
+        g.set_pos(2, (0, 1));
+        g.add_edge(1, Direction::Down, 2);
+        g.add_edge(2, Direction::Up, 1);
+        g.set_notes(1, "a loose floorboard hides something".into());
+
+        let svg = render_svg_of(&render(&g), Some(&g));
+        let doc = roxmltree::Document::parse(&svg).expect("well-formed SVG");
+        let titles: Vec<&str> =
+            doc.descendants().filter(|n| n.tag_name().name() == "title").map(|n| n.text().unwrap_or("")).collect();
+        assert_eq!(
+            titles,
+            vec!["a loose floorboard hides something"],
+            "only the noted room may carry a title"
+        );
+    }
+
+    /// Two noted rooms are numbered in READING ORDER (top-to-bottom by cell), and the panel's own
+    /// "Notes" block lists both texts under matching numbers. Falsify by reverting the reading-order
+    /// sort in `render_svg_body` to room-id order and this fails on which room gets "1".
+    #[test]
+    fn two_noted_rooms_get_badges_in_reading_order_and_a_notes_block() {
+        use mapper::graph::MapGraph;
+        let mut g = MapGraph::new();
+        // Room ids run OPPOSITE to reading order on purpose — id 1 (Cellar) sits south of id 2
+        // (Hall) — so a numbering that (wrongly) followed room-id order would give the very
+        // answer this test rejects, rather than passing by coincidence.
+        g.upsert_room(2, "Hall".into());
+        g.upsert_room(1, "Cellar".into());
+        g.set_pos(2, (0, 0));
+        g.set_pos(1, (0, 1)); // south of Hall: reads AFTER it
+        g.add_edge(2, Direction::Down, 1);
+        g.add_edge(1, Direction::Up, 2);
+        g.set_notes(2, "first note".into());
+        g.set_notes(1, "second note".into());
+
+        let svg = render_svg_of(&render(&g), Some(&g));
+        let rooms = room_rects(&svg);
+        assert_eq!(rooms.len(), 2, "the case must draw exactly the two rooms");
+        let (hall, cellar) =
+            if rooms[0].1 < rooms[1].1 { (rooms[0], rooms[1]) } else { (rooms[1], rooms[0]) };
+
+        let badges = note_badges_of(&svg);
+        assert_eq!(badges.len(), 2, "one badge per noted room");
+        let inside =
+            |p: (f64, f64), r: PxRect| p.0 >= r.0 && p.0 <= r.0 + r.2 && p.1 >= r.1 && p.1 <= r.1 + r.3;
+        let hall_badge = badges.iter().find(|(_, p)| inside(*p, hall)).expect("Hall's own badge");
+        let cellar_badge = badges.iter().find(|(_, p)| inside(*p, cellar)).expect("Cellar's own badge");
+        assert_eq!(hall_badge.0, "1", "Hall reads first (top-to-bottom)");
+        assert_eq!(cellar_badge.0, "2", "Cellar reads second");
+
+        assert!(svg.contains(">Notes<"), "the Notes block heading must be drawn");
+        assert!(svg.contains("1. first note"), "row 1 must carry Hall's own text");
+        assert!(svg.contains("2. second note"), "row 2 must carry Cellar's own text");
+    }
+
+    /// A note containing `<`, `&` and a newline is escaped the same way in both places it is
+    /// drawn — the box's own `<title>` tooltip and the panel's "Notes" block.
+    #[test]
+    fn a_note_with_special_characters_is_escaped_in_title_and_block() {
+        use mapper::graph::MapGraph;
+        let mut g = MapGraph::new();
+        g.upsert_room(1, "Hall".into());
+        g.set_pos(1, (0, 0));
+        g.set_notes(1, "a <script> & a\nsecond line".into());
+
+        let svg = render_svg_of(&render(&g), Some(&g));
+        assert!(
+            svg.contains("<title>a &lt;script&gt; &amp; a\nsecond line</title>"),
+            "the title must escape markup and keep the writer's own newline: {svg}"
+        );
+        assert!(
+            svg.contains(">1. a &lt;script&gt; &amp; a</text>"),
+            "the block's first line must escape markup too: {svg}"
+        );
+        assert!(
+            svg.contains(">second line</text>"),
+            "the block keeps the writer's own line break as a fresh row: {svg}"
+        );
+    }
+
+    /// A layer with no noted room draws no "Notes" block at all — the block is additive, not a
+    /// standing fixture of every panel.
+    #[test]
+    fn a_layer_without_notes_emits_no_notes_block() {
+        use mapper::graph::MapGraph;
+        let mut g = MapGraph::new();
+        g.upsert_room(1, "Hall".into());
+        g.upsert_room(2, "Cellar".into());
+        g.set_pos(1, (0, 0));
+        g.set_pos(2, (0, 0));
+        g.add_edge(1, Direction::Down, 2);
+        g.add_edge(2, Direction::Up, 1);
+        let below = g.new_layer(Some(mapper::layer::MAIN_LAYER), "Below".into());
+        g.set_room_layer(2, below);
+        g.set_notes(1, "Hall has a note".into());
+        // Room 2, on the "Below" layer, carries no notes at all.
+
+        let svg = render_svg_layered(&g);
+        assert_eq!(svg.matches(">Notes<").count(), 1, "only the noted layer draws a block");
+        let notes_idx = svg.find(">Notes<").expect("the one Notes heading");
+        let below_heading_idx = svg.find("Below (").expect("the Below layer's own panel heading");
+        assert!(
+            notes_idx < below_heading_idx,
+            "the Notes block is drawn inside Main's own panel, before Below's begins: {svg}"
+        );
+    }
+
+    /// A layer's own `layer-frame` grows taller to hold its "Notes" block — falsify by reverting
+    /// the block's height out of `render_svg_body`'s own returned height and this fails on the
+    /// frame comparison (both panels come back the same height).
+    #[test]
+    fn a_notes_block_grows_the_frame_height() {
+        use mapper::graph::MapGraph;
+        fn build(note: bool) -> MapGraph {
+            let mut g = MapGraph::new();
+            g.upsert_room(1, "Hall".into());
+            g.upsert_room(2, "Cellar".into());
+            g.set_pos(1, (0, 0));
+            g.set_pos(2, (0, 0));
+            g.add_edge(1, Direction::Down, 2);
+            g.add_edge(2, Direction::Up, 1);
+            let below = g.new_layer(Some(mapper::layer::MAIN_LAYER), "Below".into());
+            g.set_room_layer(2, below);
+            if note {
+                g.set_notes(
+                    1,
+                    "a long note about several things at once, long enough to wrap across \
+                     more than one line of the panel's own Notes block"
+                        .into(),
+                );
+            }
+            g
+        }
+        fn main_frame_height(g: &MapGraph) -> f64 {
+            let svg = render_svg_layered(g);
+            let doc = roxmltree::Document::parse(&svg).expect("well-formed SVG");
+            let mut frames: Vec<(f64, f64)> = doc
+                .descendants()
+                .filter(|n| n.tag_name().name() == "rect" && n.attribute("class") == Some("layer-frame"))
+                .map(|n| {
+                    let o = translate_of(n);
+                    let y = o.1 + n.attribute("y").and_then(|v| v.parse::<f64>().ok()).unwrap_or(0.0);
+                    let h = n.attribute("height").and_then(|v| v.parse::<f64>().ok()).unwrap_or(0.0);
+                    (y, h)
+                })
+                .collect();
+            frames.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap());
+            frames[0].1 // Main sorts first: its own LayerId is the lowest
+        }
+        let h_without = main_frame_height(&build(false));
+        let h_with = main_frame_height(&build(true));
+        assert!(
+            h_with > h_without,
+            "Main's own frame must grow to hold its Notes block: {h_with} vs {h_without}"
+        );
     }
 }
