@@ -2691,6 +2691,20 @@ pending read (ZSCII 254, §3.8) — at a `>` prompt too, when the story asks for
 click terminators, which is exactly how Zork Zero's banner compass works. Click
 a spoke and you walk.
 
+**The click is delivered on the RELEASE, not on the press.** The map from a
+terminal cell back to a game pixel covers the story text as well as the artwork —
+it has to, since a hint menu is text the game expects to be clicked — so a press
+that went straight to the VM ended the read wherever it landed, and the app's own
+press-drag-release text selection could never start in Zork Zero, Shogun or
+Arthur (Journey lists no click terminator, so it was never affected). A press now
+only *records* the click and still anchors a selection; a drag drops the click and
+selects text; a release with no drag in between delivers the click exactly as the
+press used to. It is the same deferral the map makes for a room click that may
+turn into a drag-to-pan, and the whole decision is one function,
+`input::v6_mouse_outcome`, so the run loop's arm is a thin call and the gesture is
+testable without an event loop. A deferred click never outlives its gesture: a
+keypress, a resize, an overlay opening or a read that has moved on all drop it.
+
 The automapper comes along for the ride. A click types nothing, so there is no
 command to parse a direction from — but the game echoes the command it
 synthesized (`north`, alone on the first output line), and lanthorn adopts that

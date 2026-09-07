@@ -39,6 +39,12 @@ Absolute URLs or no link.
 
 ### Fixed
 
+- **Dragging to select and copy story text now works in the illustrated games
+  too** — Zork Zero, Shogun and Arthur took every press in the pane as a click
+  meant for the game, so a drag there selected nothing and copied nothing.
+  A click still reaches the game (the banner compass and the hint menus are
+  unchanged); it is now the release that delivers it, so a drag is free to
+  select text exactly as it does in every other story.
 - **A diagonal passage between neighbouring rooms now draws as a real
   diagonal line in the exported SVG**, instead of a right-angled hairpin out
   of the box corner and down the gutter — so two diagonals crossing between

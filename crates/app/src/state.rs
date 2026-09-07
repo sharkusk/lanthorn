@@ -242,6 +242,45 @@ pub struct DragState {
     pub map_click: Option<MapClick>,
 }
 
+// ── Deferred v6 game click (SQ-1378) ──────────────────────────────────────────
+
+/// Which read a deferred v6 click was recorded against (SQ-1378), and therefore
+/// how it must be delivered when the button comes up. Kept with the click rather
+/// than re-derived at the release, so a read that has moved on in between is
+/// visible as a mismatch instead of being answered with the wrong call.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum V6ClickRead {
+    /// `read_char` was pending: deliver ZSCII 254 (ZMSD §3.8) with `submit_char`.
+    Char,
+    /// A LINE read whose terminating-characters table accepts a click (SQ-0566):
+    /// deliver whatever is typed with this terminator.
+    Line { terminator: u8 },
+}
+
+/// A left-press inside the drawn v6 image that the GAME may want — held from the
+/// Down until the release (SQ-1378), exactly as [`DragState::map_click`] holds a
+/// map click.
+///
+/// SQ-0566 delivers a click to the VM the instant the button goes down, so that
+/// Zork Zero's border compass works during ordinary play. But `map_click` covers
+/// the story text as well as the artwork, so on Zork Zero, Shogun and Arthur
+/// EVERY press in the pane ended the line read as a click and `StartSelection`
+/// never ran: mouse text selection did nothing at all in a v6 game. Deferring the
+/// delivery to the Up lets the same press be either gesture — a drag cancels the
+/// click and selects text; a release with no motion in between delivers the click
+/// to the VM exactly as the Down used to.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct PendingV6Click {
+    /// The click's GAME pixel (x, y), from `V6ClickMap::map_click`. Reported to
+    /// the engine y-first (`set_mouse(y, x)`, ZMSD §11).
+    pub game_px: (u16, u16),
+    /// The terminal cell the press landed on — the gesture's anchor, kept so a
+    /// release somewhere else is still recognisably the same press.
+    pub cell: (u16, u16),
+    /// The read this click was recorded against.
+    pub read: V6ClickRead,
+}
+
 // ── Command band state ────────────────────────────────────────────────────────
 
 use crate::render::command_band::{
@@ -2822,6 +2861,11 @@ pub struct AppState {
     pub room_dock_view: RoomDockView,
     /// Middle-button drag-pan state. `Some` while a drag gesture is in progress.
     pub drag: Option<DragState>,
+    /// A left-press over the drawn v6 image that the game may want (SQ-1378).
+    /// `Some` between that Down and whatever ends the gesture — a drag (which
+    /// makes it a text selection instead), the release (which delivers it), or
+    /// any non-mouse event.
+    pub pending_v6_click: Option<PendingV6Click>,
     /// Story-pane text selection (left-drag). `Some` while selecting; the
     /// highlight is shown during the drag and copied on release.
     pub selection: Option<crate::clipboard::Selection>,
@@ -3658,6 +3702,7 @@ impl Default for AppState {
             viewed_layer: None,
             room_dock_view: RoomDockView::Info,
             drag: None,
+            pending_v6_click: None,
             selection: None,
             selection_edge: 0,
             transcript_geom: std::cell::Cell::new(None),

@@ -2610,6 +2610,13 @@ fn run_event_loop(boot: startup::BootResult, launched_from_library: bool) -> Run
             lifecycle::flush_pending_config_write(&mut state);
         }
 
+        // SQ-1378: a deferred v6 game click belongs to one press-drag-release
+        // gesture, so anything that is not a mouse event ends it — the same rule
+        // the boundary drag just above follows. A keypress can move the story to
+        // a different read entirely, and a click held over that would fire
+        // against a prompt it was never aimed at.
+        app::input::v6_click_interrupt(&mut state, &event);
+
         // ── Command-band quick-block hover (SQ-0677) ───────────────────────────
         // Mirrors `pane_drag::on_mouse`'s own Moved handling just above: pointer
         // motion with no button held just lights up whichever quick cell (rose
@@ -3817,79 +3824,116 @@ fn run_event_loop(boot: startup::BootResult, launched_from_library: bool) -> Run
                 // plus terminator 254, so the game can read the coordinates and move.
                 // Restricting delivery to `read_char` meant compass clicks did
                 // nothing except while a menu happened to be up.
-                if matches!(m.kind, crossterm::event::MouseEventKind::Down(crossterm::event::MouseButton::Left))
-                    && !state.any_overlay_open()
-                {
-                    let pending = zvm_session_opt(&*session).map(|z| z.pending_input());
-                    let line_term =
-                        zvm_session_opt(&*session).and_then(|z| z.mouse_click_terminator());
-                    let deliver = match pending {
-                        Some(app::session::InputKind::Char) => true,
-                        Some(app::session::InputKind::Line) => line_term.is_some(),
-                        _ => false,
-                    };
-                    // Only a click that maps INTO the drawn v6 image reaches the VM;
-                    // the letterbox margin and everything outside the pane fall
-                    // through to the app's own story-pane handling (selection).
-                    let hit = deliver
-                        .then(|| {
-                            state
-                                .graphics_render
-                                .borrow()
-                                .last_v6_map
-                                .as_ref()
-                                .and_then(|cm| cm.map_click(m.column, m.row))
-                        })
+                // SQ-1378: the click is RECORDED here and delivered on the release,
+                // never on the Down. `map_click` covers the story text as well as
+                // the artwork, so delivering at once meant every press in a Zork
+                // Zero / Shogun / Arthur pane ended the line read as a click and
+                // `Action::StartSelection` never ran — mouse text selection did
+                // nothing at all in those games. The event therefore falls THROUGH
+                // to the story pane's own handling below, exactly as a press in the
+                // letterbox margin always did, and the deferred click either dies
+                // on a drag or fires on the Up (the two arms below this one). Same
+                // shape as the map's own `BeginMapDrag` / `EndDragPan` (SQ-1325).
+                // A modal owns the mouse outright, and a click deferred before it
+                // opened is not the player's answer to it.
+                if state.any_overlay_open() {
+                    state.pending_v6_click = None;
+                } else {
+                    let is_left_button = matches!(
+                        m.kind,
+                        crossterm::event::MouseEventKind::Down(crossterm::event::MouseButton::Left)
+                            | crossterm::event::MouseEventKind::Drag(crossterm::event::MouseButton::Left)
+                            | crossterm::event::MouseEventKind::Up(crossterm::event::MouseButton::Left)
+                    );
+                    let read = is_left_button
+                        .then(|| zvm_session_opt(&*session).map(|z| z.pending_input()))
                         .flatten();
-                    if let Some((gx, gy)) = hit {
-                        if pending == Some(app::session::InputKind::Char) {
-                            let z = zvm_session_opt_mut(&mut *session)
-                                .expect("z-machine char read is pending");
-                            z.set_mouse(gy, gx); // engine stores (y, x)
-                            let result = z.submit_char(254); // ZSCII single-click (§3.8)
-                            if turn::apply_game_driven_result(
-                                &mut state, &mut mapper, &result, &game_dir, last_panes.map, &*session, app::pager::Driver::PlayerInput,
-                            ) {
-                                break 'event_loop state.exit_target.into();
+                    let line_term = is_left_button
+                        .then(|| zvm_session_opt(&*session).and_then(|z| z.mouse_click_terminator()))
+                        .flatten();
+                    // Only a press that maps INTO the game's own screen is a click
+                    // at all; the letterbox margin and everything outside the pane
+                    // are the app's story-pane handling (selection) alone.
+                    let hit = matches!(
+                        m.kind,
+                        crossterm::event::MouseEventKind::Down(crossterm::event::MouseButton::Left)
+                    )
+                    .then(|| {
+                        state
+                            .graphics_render
+                            .borrow()
+                            .last_v6_map
+                            .as_ref()
+                            .and_then(|cm| cm.map_click(m.column, m.row))
+                    })
+                    .flatten();
+                    match app::input::v6_mouse_outcome(state.pending_v6_click, read, line_term, hit, &m) {
+                        app::input::V6MouseOutcome::Route => {}
+                        app::input::V6MouseOutcome::ForgetAndRoute => state.pending_v6_click = None,
+                        // No `continue`: the press is still a selection anchor.
+                        app::input::V6MouseOutcome::DeferAndRoute(click) => {
+                            state.pending_v6_click = Some(click)
+                        }
+                        app::input::V6MouseOutcome::Deliver(click) => {
+                            state.pending_v6_click = None;
+                            let (gx, gy) = click.game_px;
+                            // The press anchored a zero-length selection; it is not
+                            // a copy, so it must reach neither the clipboard nor a
+                            // "Copied 0 chars" line.
+                            app::input::discard_selection(&mut state);
+                            match click.read {
+                                app::state::V6ClickRead::Char => {
+                                    let z = zvm_session_opt_mut(&mut *session)
+                                        .expect("z-machine char read is pending");
+                                    z.set_mouse(gy, gx); // engine stores (y, x)
+                                    let result = z.submit_char(254); // ZSCII single-click (§3.8)
+                                    if turn::apply_game_driven_result(
+                                        &mut state, &mut mapper, &result, &game_dir, last_panes.map, &*session, app::pager::Driver::PlayerInput,
+                                    ) {
+                                        break 'event_loop state.exit_target.into();
+                                    }
+                                    continue 'event_loop;
+                                }
+                                // Line read: a real player turn, so it goes through
+                                // the same path as a typed command — history, turn
+                                // count, mapping, autosave — carrying whatever was
+                                // already typed (usually nothing) and the click as
+                                // the terminator.
+                                app::state::V6ClickRead::Line { terminator } => {
+                                    let cmd = state.take_input();
+                                    if !cmd.is_empty() {
+                                        state.record_command(&cmd);
+                                    }
+                                    state.turns += 1;
+                                    state.unsaved_progress = true;
+                                    let result = {
+                                        let z = zvm_session_opt_mut(&mut *session)
+                                            .expect("z-machine line read is pending");
+                                        z.set_mouse(gy, gx); // engine stores (y, x)
+                                        z.submit_line_with_terminator(&cmd, terminator)
+                                    };
+                                    // SQ-0576: a compass click types nothing, but the
+                                    // game echoes the command it synthesized ("north")
+                                    // at the head of its output — adopt it so the turn
+                                    // maps (directional edge, tried-exit) exactly like
+                                    // the typed command it stands for.
+                                    let cmd = if cmd.is_empty() {
+                                        app::session::echoed_direction_command(&result.transcript)
+                                            .unwrap_or_default()
+                                            .to_string()
+                                    } else {
+                                        cmd
+                                    };
+                                    if turn::finish_command_turn(
+                                        &cmd, true, result, &mut state, &mut mapper, &mut *session,
+                                        &game_dir, &ifid, &arc_file, last_panes.map, &mut bg_tidy_counter,
+                                    ) {
+                                        break 'event_loop state.exit_target.into();
+                                    }
+                                    continue 'event_loop;
+                                }
                             }
-                            continue 'event_loop;
                         }
-                        // Line read: a real player turn, so it goes through the same
-                        // path as a typed command — history, turn count, mapping,
-                        // autosave — carrying whatever was already typed (usually
-                        // nothing) and the click as the terminator.
-                        let term = line_term.expect("gated by `deliver` above");
-                        let cmd = state.take_input();
-                        if !cmd.is_empty() {
-                            state.record_command(&cmd);
-                        }
-                        state.turns += 1;
-                        state.unsaved_progress = true;
-                        let result = {
-                            let z = zvm_session_opt_mut(&mut *session)
-                                .expect("z-machine line read is pending");
-                            z.set_mouse(gy, gx); // engine stores (y, x)
-                            z.submit_line_with_terminator(&cmd, term)
-                        };
-                        // SQ-0576: a compass click types nothing, but the game
-                        // echoes the command it synthesized ("north") at the head
-                        // of its output — adopt it so the turn maps (directional
-                        // edge, tried-exit) exactly like the typed command it
-                        // stands for.
-                        let cmd = if cmd.is_empty() {
-                            app::session::echoed_direction_command(&result.transcript)
-                                .unwrap_or_default()
-                                .to_string()
-                        } else {
-                            cmd
-                        };
-                        if turn::finish_command_turn(
-                            &cmd, true, result, &mut state, &mut mapper, &mut *session,
-                            &game_dir, &ifid, &arc_file, last_panes.map, &mut bg_tidy_counter,
-                        ) {
-                            break 'event_loop state.exit_target.into();
-                        }
-                        continue 'event_loop;
                     }
                 }
                 mouse_to_action(&state, m, last_panes.map, last_panes.story, &last_panes.room_rects, &last_panes.dialog)
@@ -3941,23 +3985,16 @@ fn run_event_loop(boot: startup::BootResult, launched_from_library: bool) -> Run
             // Story-pane selection released: copy the text extracted by render from
             // the full wrapped transcript (off-screen rows included) via OSC 52.
             Action::EndSelection => {
-                state.selection = None;
-                state.selection_edge = 0;
-                let copied = state.selection_text.borrow_mut().take();
-                if let Some(text) = copied {
-                    if !text.trim().is_empty() {
-                        use std::io::Write;
-                        let seq = app::clipboard::osc52_copy_sequence(&text);
-                        let mut out = std::io::stdout();
-                        let _ = out.write_all(seq.as_bytes());
-                        let _ = out.flush();
-                        // Report the copy as a meta line in the story output rather
-                        // than a status-bar message (which has no natural dismissal).
-                        state.push_transcript_internal(
-                            &format!("Copied {} chars to clipboard", text.chars().count()),
-                            app::state::TranscriptKind::Meta,
-                        );
-                    }
+                // Clearing the selection and reporting the copy in the transcript
+                // live in `input::finish_selection` (SQ-1378), so the release half
+                // of a press-drag-release is reachable from a test; writing to the
+                // terminal stays here, where the terminal is.
+                if let Some(text) = app::input::finish_selection(&mut state) {
+                    use std::io::Write;
+                    let seq = app::clipboard::osc52_copy_sequence(&text);
+                    let mut out = std::io::stdout();
+                    let _ = out.write_all(seq.as_bytes());
+                    let _ = out.flush();
                 }
                 continue;
             }

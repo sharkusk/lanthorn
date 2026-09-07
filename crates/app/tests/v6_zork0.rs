@@ -39,6 +39,8 @@ mod v6_macintosh_profile;
 mod v6_hint_menu_mouse;
 #[path = "suites/v6_mouse_zork0.rs"]
 mod v6_mouse_zork0;
+#[path = "suites/v6_click_vs_selection.rs"]
+mod v6_click_vs_selection;
 #[path = "suites/v6_zork0_color_command.rs"]
 mod v6_zork0_color_command;
 #[path = "suites/v6_zork0_hints.rs"]

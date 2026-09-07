@@ -1302,6 +1302,142 @@ pub fn mouse_to_action(
     }
 }
 
+// ── Deferred v6 game click (SQ-1378) ──────────────────────────────────────────
+//
+// The whole decision is `v6_mouse_outcome` below, so the run loop's arm is a thin
+// call and the gesture can be driven — and falsified — without the event loop.
+// See [`crate::state::PendingV6Click`] for why a v6 click is deferred at all.
+
+/// What the run loop does with one mouse event over a v6 pane (SQ-1378).
+///
+/// The pre-SQ-1378 answer to a press was "deliver the click to the VM and consume
+/// the event", which is why no press in a Zork Zero, Shogun or Arthur pane ever
+/// reached `Action::StartSelection`; this type is what says otherwise, and a test
+/// asking it about a press over story text is what pins the difference.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum V6MouseOutcome {
+    /// Nothing v6-specific: the event goes on to `mouse_to_action` as usual.
+    Route,
+    /// Remember this click, and STILL route the event — the same press may yet
+    /// turn out to be a text selection, so it anchors one on its way past.
+    DeferAndRoute(crate::state::PendingV6Click),
+    /// Drop the deferred click and route: the gesture is a drag-selection (or the
+    /// read it was aimed at has moved on).
+    ForgetAndRoute,
+    /// A release with no drag in between: deliver this click to the VM. The story
+    /// pane does not see the event.
+    Deliver(crate::state::PendingV6Click),
+}
+
+/// Which read a click would be delivered against, or `None` when the story is not
+/// asking for input a click can answer (SQ-0566).
+///
+/// A `read_char` always takes a click (ZSCII 254, ZMSD §3.8). A LINE read takes
+/// one only when the story lists a click among its terminating characters — Zork
+/// Zero, Shogun and Arthur do; Journey lists none, so a click there stays with the
+/// app.
+pub fn v6_click_read(
+    pending: Option<crate::session::InputKind>,
+    line_terminator: Option<u8>,
+) -> Option<crate::state::V6ClickRead> {
+    use crate::session::InputKind;
+    use crate::state::V6ClickRead;
+    match pending {
+        Some(InputKind::Char) => Some(V6ClickRead::Char),
+        Some(InputKind::Line) => line_terminator.map(|terminator| V6ClickRead::Line { terminator }),
+        _ => None,
+    }
+}
+
+/// The whole press-drag-release decision (SQ-1378), given what is already
+/// deferred, the read the story is waiting on, and — for a press — where the
+/// pointer lands in the game's own screen (`hit`, from `V6ClickMap::map_click`:
+/// `None` in the letterbox margin, outside the pane, or in the rows an extended
+/// frame added below the game's screen).
+///
+/// A press NEVER delivers. `map_click` covers the story text as well as the
+/// artwork, so delivering there is what left `Action::StartSelection` unreachable
+/// in every v6 game whose read takes a click.
+pub fn v6_mouse_outcome(
+    pending_click: Option<crate::state::PendingV6Click>,
+    read: Option<crate::session::InputKind>,
+    line_terminator: Option<u8>,
+    hit: Option<(u16, u16)>,
+    m: &MouseEvent,
+) -> V6MouseOutcome {
+    let forget_or_route = || match pending_click {
+        Some(_) => V6MouseOutcome::ForgetAndRoute,
+        None => V6MouseOutcome::Route,
+    };
+    match m.kind {
+        MouseEventKind::Down(MouseButton::Left) => {
+            match (v6_click_read(read, line_terminator), hit) {
+                (Some(read), Some(game_px)) => V6MouseOutcome::DeferAndRoute(
+                    crate::state::PendingV6Click { game_px, cell: (m.column, m.row), read },
+                ),
+                // Not a click the game can take (a Journey line read, a press in
+                // the margin): the story pane gets it, and any older deferral —
+                // a release this app never saw — goes with it.
+                _ => forget_or_route(),
+            }
+        }
+        // The gesture is a text selection after all.
+        MouseEventKind::Drag(MouseButton::Left) => forget_or_route(),
+        MouseEventKind::Up(MouseButton::Left) => match pending_click {
+            // The read can move on between the press and the release (a
+            // game-driven repaint). Deliver only against the read the click was
+            // actually aimed at; otherwise the release just ends the selection.
+            Some(click) if v6_click_read(read, line_terminator) == Some(click.read) => {
+                V6MouseOutcome::Deliver(click)
+            }
+            Some(_) => V6MouseOutcome::ForgetAndRoute,
+            None => V6MouseOutcome::Route,
+        },
+        _ => V6MouseOutcome::Route,
+    }
+}
+
+/// A deferred click belongs to ONE press-drag-release gesture: any non-mouse event
+/// ends it (SQ-1378), the way `pane_drag::interrupt` ends a boundary drag. A
+/// keypress can move the story to a different read entirely, and a click held over
+/// that would fire against a prompt it was never aimed at.
+pub fn v6_click_interrupt(state: &mut AppState, event: &crossterm::event::Event) {
+    if !matches!(event, crossterm::event::Event::Mouse(_)) {
+        state.pending_v6_click = None;
+    }
+}
+
+/// Finish a released story-pane selection: clear it, take the text this frame's
+/// render extracted from the full wrapped transcript (off-screen rows included),
+/// and — when there is any — report the copy as a meta line in the story output.
+/// The text comes back for the caller to put on the clipboard; the run loop is
+/// the only thing that may write OSC 52 to the terminal.
+///
+/// Lives here rather than inline in the run loop so the release half of a v6
+/// press-drag-release (SQ-1378) is reachable from a test.
+pub fn finish_selection(state: &mut AppState) -> Option<String> {
+    let copied = state.selection_text.borrow_mut().take();
+    state.selection = None;
+    state.selection_edge = 0;
+    let text = copied.filter(|t| !t.trim().is_empty())?;
+    // A meta line in the story output rather than a status-bar message (which
+    // has no natural dismissal).
+    state.push_transcript_internal(
+        &format!("Copied {} chars to clipboard", text.chars().count()),
+        crate::state::TranscriptKind::Meta,
+    );
+    Some(text)
+}
+
+/// Drop a selection without copying it: the release delivered a game click
+/// instead (SQ-1378), so the zero-length anchor the Down left behind must reach
+/// neither the clipboard nor the transcript.
+pub fn discard_selection(state: &mut AppState) {
+    state.selection = None;
+    state.selection_edge = 0;
+    state.selection_text.borrow_mut().take();
+}
+
 // ── Internal: hotkey dialog key routing ───────────────────────────────────────
 
 /// When the hotkey dialog is open, route keys to either close the dialog or
@@ -8073,6 +8209,180 @@ mod tests {
         apply_action(Action::PinRoomDock(2, RoomDockView::Diagnostics), &mut s, &mut m);
         assert_eq!(s.focus, Focus::Game, "pinning to Diagnostics must NOT steal keyboard focus either");
         assert_eq!(s.selected_room, Some(2), "the room is still selected for rendering");
+    }
+
+    // ── Deferred v6 game click (SQ-1378) ──────────────────────────────────────
+    //
+    // The run loop delivered a v6 click on the Down (SQ-0566), and `map_click`
+    // covers the story TEXT as well as the artwork — so in Zork Zero, Shogun and
+    // Arthur every press in the pane ended the line read as a click and
+    // `StartSelection` never ran. These pin the press-drag-release state machine
+    // the run loop's three arms are now thin calls onto.
+
+    /// The compass press, as Zork Zero delivers it: game pixel (322, 12) is the
+    /// rose's north spoke, at terminal cell (39, 0) of a 1:1 640x400 frame.
+    fn compass_press() -> crossterm::event::MouseEvent {
+        mouse_event(
+            crossterm::event::MouseEventKind::Down(MouseButton::Left),
+            39, 0, KeyModifiers::NONE,
+        )
+    }
+
+    #[test]
+    fn a_press_over_the_v6_image_is_recorded_rather_than_delivered() {
+        use crate::session::InputKind;
+        use crate::state::{PendingV6Click, V6ClickRead};
+
+        let north = Some((322u16, 12u16));
+        // A char read takes a click unconditionally (ZSCII 254, ZMSD §3.8) — but
+        // the press only RECORDS it. Delivering here is the defect.
+        assert_eq!(
+            v6_mouse_outcome(None, Some(InputKind::Char), None, north, &compass_press()),
+            V6MouseOutcome::DeferAndRoute(PendingV6Click {
+                game_px: (322, 12),
+                cell: (39, 0),
+                read: V6ClickRead::Char,
+            }),
+            "a read_char press defers the click and still routes the event"
+        );
+        // A line read takes one only when the story lists a click terminator.
+        assert_eq!(
+            v6_mouse_outcome(None, Some(InputKind::Line), Some(254), north, &compass_press()),
+            V6MouseOutcome::DeferAndRoute(PendingV6Click {
+                game_px: (322, 12),
+                cell: (39, 0),
+                read: V6ClickRead::Line { terminator: 254 },
+            }),
+            "SQ-0566: Zork Zero's `>` prompt still takes a compass click"
+        );
+        assert_eq!(
+            v6_mouse_outcome(None, Some(InputKind::Line), None, north, &compass_press()),
+            V6MouseOutcome::Route,
+            "Journey lists no terminator, so a click at its line read stays with the app"
+        );
+        // Outside the drawn image (letterbox margin, off-pane, an extended
+        // frame's own scrollback rows) there is no game click to defer.
+        assert_eq!(
+            v6_mouse_outcome(None, Some(InputKind::Char), None, None, &compass_press()),
+            V6MouseOutcome::Route,
+            "a press that maps to no game pixel records nothing"
+        );
+        assert_eq!(
+            v6_mouse_outcome(None, Some(InputKind::Event), Some(254), north, &compass_press()),
+            V6MouseOutcome::Route,
+            "a story waiting on an event has no read a click can answer"
+        );
+        assert_eq!(
+            v6_mouse_outcome(None, None, Some(254), north, &compass_press()),
+            V6MouseOutcome::Route,
+            "no z-machine, no click"
+        );
+    }
+
+    #[test]
+    fn a_drag_cancels_the_deferred_v6_click_and_a_release_delivers_it() {
+        use crossterm::event::MouseEventKind;
+        use crate::session::InputKind;
+        use crate::state::{PendingV6Click, V6ClickRead};
+
+        let click = PendingV6Click {
+            game_px: (322, 12),
+            cell: (39, 0),
+            read: V6ClickRead::Line { terminator: 254 },
+        };
+        let at = |kind| mouse_event(kind, 41, 0, KeyModifiers::NONE);
+        let (read, term) = (Some(InputKind::Line), Some(254));
+
+        assert_eq!(
+            v6_mouse_outcome(Some(click), read, term, None, &at(MouseEventKind::Drag(MouseButton::Left))),
+            V6MouseOutcome::ForgetAndRoute,
+            "the gesture turned out to be a text selection"
+        );
+        assert_eq!(
+            v6_mouse_outcome(Some(click), read, term, None, &at(MouseEventKind::Up(MouseButton::Left))),
+            V6MouseOutcome::Deliver(click),
+            "an unmoved release delivers exactly the click the press recorded"
+        );
+        assert_eq!(
+            v6_mouse_outcome(Some(click), read, term, None, &at(MouseEventKind::Moved)),
+            V6MouseOutcome::Route,
+            "pointer motion with no button held is not part of the gesture"
+        );
+        assert_eq!(
+            v6_mouse_outcome(None, read, term, None, &at(MouseEventKind::Up(MouseButton::Left))),
+            V6MouseOutcome::Route,
+            "with nothing deferred a release is an ordinary end-of-selection"
+        );
+        // The read moved on between the press and the release: the click was
+        // aimed at a prompt that is no longer there.
+        assert_eq!(
+            v6_mouse_outcome(
+                Some(click), Some(InputKind::Char), None, None,
+                &at(MouseEventKind::Up(MouseButton::Left)),
+            ),
+            V6MouseOutcome::ForgetAndRoute,
+            "a click is delivered only against the read it was aimed at"
+        );
+    }
+
+    #[test]
+    fn a_key_event_clears_a_deferred_v6_click_and_a_mouse_event_does_not() {
+        use crossterm::event::{Event, MouseEventKind};
+        use crate::state::{PendingV6Click, V6ClickRead};
+
+        let click = PendingV6Click { game_px: (322, 12), cell: (39, 0), read: V6ClickRead::Char };
+        let mut s = AppState::default();
+
+        s.pending_v6_click = Some(click);
+        v6_click_interrupt(&mut s, &Event::Mouse(mouse_event(
+            MouseEventKind::Drag(MouseButton::Left), 41, 0, KeyModifiers::NONE,
+        )));
+        assert_eq!(s.pending_v6_click, Some(click), "a mouse event is the gesture itself");
+
+        v6_click_interrupt(&mut s, &Event::Key(key(KeyCode::Char('n'))));
+        assert_eq!(
+            s.pending_v6_click, None,
+            "a keypress can move the story to another read; the click must not outlive it"
+        );
+
+        s.pending_v6_click = Some(click);
+        v6_click_interrupt(&mut s, &Event::Resize(80, 24));
+        assert_eq!(s.pending_v6_click, None, "a resize ends the gesture too");
+    }
+
+    #[test]
+    fn a_delivered_click_copies_nothing_while_a_real_selection_still_does() {
+        // The press anchors a zero-length selection on its way past
+        // `StartSelection`; delivering the click on the release must not turn
+        // that into a clipboard write or a "Copied 0 chars" line.
+        let mut s = AppState::default();
+        s.selection = Some(crate::clipboard::Selection::new(crate::clipboard::Point { row: 3, col: 5 }));
+        s.selection_edge = 1;
+        *s.selection_text.borrow_mut() = Some(String::new());
+        let before = s.transcript.len();
+        discard_selection(&mut s);
+        assert!(s.selection.is_none() && s.selection_edge == 0, "the anchor is gone");
+        assert!(s.selection_text.borrow().is_none(), "and nothing is left to copy");
+        assert_eq!(s.transcript.len(), before, "no meta line for a click that was not a copy");
+
+        // A drag that really selected text reports the copy, and hands the text
+        // back for the run loop to put on the clipboard.
+        s.selection = Some(crate::clipboard::Selection::new(crate::clipboard::Point { row: 3, col: 5 }));
+        *s.selection_text.borrow_mut() = Some("west of house".to_string());
+        let copied = finish_selection(&mut s);
+        assert_eq!(copied.as_deref(), Some("west of house"));
+        assert!(s.selection.is_none(), "the selection is released");
+        assert!(
+            s.transcript.iter().any(|l| l.contains("Copied 13 chars to clipboard")),
+            "the copy is reported in the story output: {:?}",
+            s.transcript
+        );
+
+        // An empty extract is not a copy at all.
+        *s.selection_text.borrow_mut() = Some("   ".to_string());
+        let lines = s.transcript.len();
+        assert_eq!(finish_selection(&mut s), None, "whitespace is not a copy");
+        assert_eq!(s.transcript.len(), lines, "and says nothing about it");
     }
 
     // ── Leaf 1: ToggleMap ─────────────────────────────────────────────────────

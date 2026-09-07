@@ -64,7 +64,10 @@ still one click away.
 **Left-drag** across the story pane selects transcript text; let go and it
 lands on your system clipboard, even over SSH — lanthorn copies through the
 terminal's own OSC 52 escape rather than a clipboard library, so it works
-wherever your terminal does.
+wherever your terminal does. In an illustrated v6 game the two gestures share
+the pane and never collide: a plain click goes to the game — Zork Zero's
+banner compass, a hint topic — while a drag selects text, exactly as it does
+anywhere else.
 
 `/search-transcript <query>` highlights every match and jumps to the most
 recent; `n`/`N` step through the rest. `/filter-transcript` narrows the view
