@@ -35,6 +35,9 @@ Absolute URLs or no link.
 - **A room's notes now show up on the exported map** — a noted room's box
   carries a numbered badge (hover it for the note text) and every layer's own
   panel lists its noted rooms' full text underneath the map.
+- **Hovering a room's `●` notes marker in the terminal map now pops the note
+  itself**, the same floating tooltip an alias marker or exit stub already
+  shows — no need to open the room card just to reread a note.
 
 ### Fixed
 

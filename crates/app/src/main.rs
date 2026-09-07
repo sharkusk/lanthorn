@@ -5142,6 +5142,19 @@ mod tests {
         assert_eq!(st.map_hover, Some((1, kind, rect)));
     }
 
+    /// The `●` notes marker's rect resolves to the `Notes` kind (SQ-1386) — same shape as the
+    /// alias/random cases above, over the notes marker's own rect.
+    #[test]
+    fn map_hover_resolves_over_a_published_notes_rect() {
+        let rect = Rect::new(15, 3, 1, 1);
+        let kind = app::render::map::MarkerKind::Notes;
+        let panes = marker_panes(2, kind, rect);
+        let mut st = AppState::default();
+
+        map_update_hover(&mut st, &panes, &moved_at(15, 3));
+        assert_eq!(st.map_hover, Some((2, kind, rect)));
+    }
+
     /// A point this frame's `map_marker_rects` never published resolves to no hover.
     #[test]
     fn map_hover_is_none_over_a_point_with_no_published_rect() {

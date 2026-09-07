@@ -996,8 +996,16 @@ fn dir_title(dir: Direction) -> String {
     }
 }
 
+/// Word-wrap width for a `MarkerKind::Notes` hover tip (SQ-1386): wide enough to hold a
+/// sentence or two without the box sprawling across the pane, narrow enough that
+/// `tooltip::draw_tip` — which sizes its box to the widest line it is handed, not the pane —
+/// never has to clamp a single overlong line against `area` on its own. `draw_map_hover_tip`
+/// clamps further against the map pane's actual width when it is smaller than this.
+const NOTES_TIP_WRAP_WIDTH: u16 = 40;
+
 /// Draw the hover tooltip for whichever room-box marker the pointer is on, if any (SQ-1273):
-/// the alias-count superscript, or a `?` random-exit stub.
+/// the alias-count superscript, a `?` random-exit stub, a stacked-exit arrowhead, or the `●`
+/// notes marker (SQ-1386).
 ///
 /// `state.map_hover` is what `main.rs`'s `map_update_hover` last resolved from a `Moved` event
 /// against [`MapHits::marker_rects`] — the exact cells `draw_box_room`/`draw_portal_icons`
@@ -1017,10 +1025,14 @@ fn dir_title(dir: Direction) -> String {
 ///   separated on one line, `primary` first (SQ-1276). No title and no room name: the glyphs
 ///   themselves are the fact being shown, read fresh from `graph` each time so they always match
 ///   whatever the graph currently says regardless of which direction happened to route.
+/// - `MarkerKind::Notes`: the room's note text, no title — the tip IS the note. Read fresh from
+///   `graph` each time (like `Random`/`Stacked`) and word-wrapped to [`NOTES_TIP_WRAP_WIDTH`]
+///   (or narrower, clamped to what `area` can hold) since a note can run to a paragraph and
+///   `tooltip::draw_tip` sizes its box to the widest line it is handed rather than wrapping.
 ///
 /// Returns `None` — and paints nothing — while a modal overlay owns the pointer, when nothing is
 /// hovered, or when the hovered room no longer exists in `graph` (a frame drawn after the room
-/// was removed, before the next hover resolution clears it).
+/// was removed, before the next hover resolution clears it) or its note was cleared.
 pub fn draw_map_hover_tip(
     graph: &mapper::graph::MapGraph,
     state: &AppState,
@@ -1064,6 +1076,13 @@ pub fn draw_map_hover_tip(
                 glyphs.push(arrow_for_direction(c.dir, &state.symbols.arrows, &state.symbols.portal).to_string());
             }
             vec![glyphs.join(" ")]
+        }
+        MarkerKind::Notes => {
+            if room.notes.is_empty() {
+                return None; // a stale rect from a frame before the note was cleared
+            }
+            let width = NOTES_TIP_WRAP_WIDTH.min(area.width.saturating_sub(4)).max(1);
+            room.notes.split('\n').flat_map(|line| crate::render::transcript::wrap_line(line, width)).collect()
         }
     };
 
@@ -2653,6 +2672,10 @@ pub enum MarkerKind {
     /// (primary) direction — the hover tip re-derives the destination and the rest of the
     /// group's directions from the graph at hover time (see `draw_map_hover_tip`).
     Stacked(Direction),
+    /// The `●` notes marker in a room box's top-right inner corner (SQ-1386) — the hover tip
+    /// re-reads the room's note text from the graph at hover time, wrapped to a sane width, the
+    /// same way `Random`/`Stacked` re-derive their content rather than carrying it themselves.
+    Notes,
 }
 
 /// The visible (area-clipped) rect a `put_str` of `w` cells starting at `(x, y)` actually
@@ -2913,9 +2936,15 @@ fn draw_box_room(
         put_str(buf, sx + 1, sy + 3, &center(&row3, iw), style, area);
     }
 
-    // Notes marker in top-right inner corner (row 1, col w-2).
+    // Notes marker in top-right inner corner (row 1, col w-2). Hoverable (SQ-1386): the
+    // same floating tip the alias/random/stacked markers pop, showing the room's note text.
     if room.has_notes {
-        put_char(buf, sx + w - 2, sy + 1, sym.portal.marker, style, area);
+        let marker_x = sx + w - 2;
+        let marker_y = sy + 1;
+        put_char(buf, marker_x, marker_y, sym.portal.marker, style, area);
+        if let Some(r) = clipped_marker_rect(marker_x, marker_y, 1, area) {
+            marker_rects.push((room.id, MarkerKind::Notes, r));
+        }
     }
 
     // Self-loop badge (SQ-0666): `↩` plus the directions that lead back into this room, on the
@@ -4642,6 +4671,31 @@ mod tests {
         // Notes marker '●' should appear somewhere in the buffer.
         let has_notes_marker = buf.content.iter().any(|c| c.symbol() == "●");
         assert!(has_notes_marker, "notes marker '●' should be drawn for a room with notes");
+    }
+
+    /// A room with notes publishes a `MarkerKind::Notes` hover rect at the exact cell the `●`
+    /// marker was drawn to (SQ-1386) — same shape as the alias marker's own rect publish.
+    #[test]
+    fn notes_marker_publishes_a_hover_rect_at_its_own_cell() {
+        use mapper::graph::MapGraph;
+
+        let mut g = MapGraph::new();
+        g.upsert_room(1, "A".into());
+        g.set_pos(1, (0, 0));
+        g.set_notes(1, "some notes".into());
+        let rm = render(&g);
+        let state = AppState::default();
+        let area = Rect::new(0, 0, 40, 20);
+        let mut buf = Buffer::empty(area);
+        let marker_rects = render_map(&rm, &state, area, &mut buf);
+
+        let (room_id, _, rect) = marker_rects
+            .iter()
+            .find(|(_, kind, _)| matches!(kind, MarkerKind::Notes))
+            .unwrap_or_else(|| panic!("no MarkerKind::Notes rect published: {marker_rects:?}"));
+        assert_eq!(*room_id, 1);
+        assert_eq!((rect.width, rect.height), (1, 1), "the notes marker is a single cell");
+        assert_eq!(buf.cell((rect.x, rect.y)).map(|c| c.symbol()), Some("●"), "the rect covers the '●' glyph itself");
     }
 
     #[test]
@@ -8731,6 +8785,78 @@ mod tests {
         let mut buf = Buffer::empty(area);
         let painted = draw_map_hover_tip(&g, &state, area, &mut buf).expect("a tip was painted");
         assert!(buf_contains(&buf, painted, "destination varies — none recorded yet"));
+    }
+
+    // ── SQ-1386: notes marker hover tip ───────────────────────────────────────
+
+    /// Hovering the `●` notes marker shows the room's note text with no title — the tip IS the
+    /// note, unlike the alias marker's "Also seen as:" header.
+    #[test]
+    fn map_hover_tip_shows_note_text_with_no_title() {
+        use mapper::graph::MapGraph;
+        let mut g = MapGraph::new();
+        g.upsert_room(1, "Windy Cave".into());
+        g.set_pos(1, (0, 0));
+        g.set_notes(1, "Locked door needs a brass key".into());
+        let mut state = AppState::default();
+        state.map_hover = Some((1, MarkerKind::Notes, Rect::new(5, 4, 1, 1)));
+        let area = Rect::new(0, 0, 60, 20);
+        let mut buf = Buffer::empty(area);
+        let painted = draw_map_hover_tip(&g, &state, area, &mut buf).expect("a tip was painted");
+
+        assert!(buf_contains(&buf, painted, "Locked door needs a brass key"), "shows the note text");
+        assert_eq!(painted.height, 1, "one note line, no title row");
+    }
+
+    /// A note with an embedded newline (from a multi-line note entry) splits on it into separate
+    /// rows — the newline is honoured before word-wrap ever runs.
+    #[test]
+    fn map_hover_tip_splits_a_multiline_note_on_existing_newlines() {
+        use mapper::graph::MapGraph;
+        let mut g = MapGraph::new();
+        g.upsert_room(1, "Windy Cave".into());
+        g.set_pos(1, (0, 0));
+        g.set_notes(1, "First line\nSecond line".into());
+        let mut state = AppState::default();
+        state.map_hover = Some((1, MarkerKind::Notes, Rect::new(5, 4, 1, 1)));
+        let area = Rect::new(0, 0, 60, 20);
+        let mut buf = Buffer::empty(area);
+        let painted = draw_map_hover_tip(&g, &state, area, &mut buf).expect("a tip was painted");
+
+        assert_eq!(painted.height, 2, "two source lines, two rows");
+        assert_eq!(tip_row(&buf, painted, painted.y), "First line");
+        assert_eq!(tip_row(&buf, painted, painted.y + 1), "Second line");
+    }
+
+    /// A single note line longer than [`NOTES_TIP_WRAP_WIDTH`] word-wraps into multiple rows,
+    /// none of which exceeds that width — the note is a paragraph, and `tooltip::draw_tip` sizes
+    /// its box to the widest line it is handed rather than wrapping on its own.
+    #[test]
+    fn map_hover_tip_word_wraps_a_long_note_line() {
+        use mapper::graph::MapGraph;
+        let mut g = MapGraph::new();
+        g.upsert_room(1, "Windy Cave".into());
+        g.set_pos(1, (0, 0));
+        let long = "This note runs on for quite a while so that it must wrap across more than a single row of the tooltip box";
+        g.set_notes(1, long.into());
+        let mut state = AppState::default();
+        state.map_hover = Some((1, MarkerKind::Notes, Rect::new(5, 4, 1, 1)));
+        let area = Rect::new(0, 0, 70, 20);
+        let mut buf = Buffer::empty(area);
+        let painted = draw_map_hover_tip(&g, &state, area, &mut buf).expect("a tip was painted");
+
+        assert!(painted.height > 1, "a long line wraps into more than one row");
+        for y in painted.y..painted.bottom() {
+            let row = tip_row(&buf, painted, y);
+            assert!(
+                row.chars().count() as u16 <= NOTES_TIP_WRAP_WIDTH,
+                "row {row:?} exceeds the {NOTES_TIP_WRAP_WIDTH}-cell wrap width"
+            );
+        }
+        // Reassembling the rows (word-wrap drops the break space between them, exactly like
+        // `wrap_line`'s own doc says) reconstructs the original text.
+        let joined = (painted.y..painted.bottom()).map(|y| tip_row(&buf, painted, y)).collect::<Vec<_>>().join(" ");
+        assert_eq!(joined, long);
     }
 
     // ── SQ-1276: stacked same-destination exits ──────────────────────────────

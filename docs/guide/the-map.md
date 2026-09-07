@@ -104,7 +104,8 @@ just outside it where the path would start; hover either cell and it lists
 every room that direction has actually landed you in so far. And when several
 exits from a room all lead to the very same place, only one arrowhead is
 drawn, picked out with a highlighted accent — hover it to see every direction
-that gets you there.
+that gets you there. And a room's own `●` notes marker hovers too, popping the
+note itself right there on the map without opening the room card.
 
 ![The matrix map view: the map as a direction table — one row per room, every passage's true destination in its cell](../maze-grid.png)
 
