@@ -33,6 +33,14 @@ Absolute URLs or no link.
   diagonal line in the exported SVG**, instead of a right-angled hairpin out
   of the box corner and down the gutter — so two diagonals crossing between
   four rooms read as a clean X rather than a tangle of shared stubs.
+- **Generated maps now keep a two-way passage's rooms lined up at any distance
+  instead of forcing them side by side**, so a room that lies west of two
+  different places stays west of both. Straight passages that happen to be long
+  are drawn as plain straight lines rather than as bent red ones, and
+  `lanthorn-mapgen` now tidies a map exactly the way the live automap does — so
+  the map you generate and the map you play with agree about where the rooms
+  are. Zork I's generated map draws eight fewer turns and Anchorhead's twelve
+  fewer, with no passage anywhere taking more than four.
 
 ---
 

@@ -14,10 +14,14 @@
 //! there. Every pair of rooms on the same side of that cut keeps its exact offset, so the only
 //! links that can stretch are the ones that STRADDLE the cut.
 //!
-//! **And a straddling CARDINAL RECIPROCAL is what vetoes the whole shift.** "Exactly one cell
-//! apart" is what a reciprocal pair means (see the module docs on `layout`), so a line whose
-//! opening would pull one apart is not opened at all. A passage that is one-way, diagonal, gated
-//! or already stretched may lengthen — none of those claims a cell count.
+//! **And a straddling CARDINAL RECIPROCAL is what vetoes the whole shift.** A pair the layout
+//! managed to bring together is not pulled apart again to make room for a newcomer, so a line
+//! whose opening would do that is not opened at all. A passage that is one-way, diagonal, gated
+//! or ALREADY STRETCHED may lengthen — none of those claims a cell count, and since SQ-1376 an
+//! already-stretched cardinal pair does not either: it is honoured anywhere along its own row or
+//! column (`layout::edge_is_satisfied`), so a shift cannot make it worse. [`adjacent_reciprocals`]
+//! has always read it that way — it collects only pairs standing exactly one cell apart *now* —
+//! and that is why the rule survives the change unaltered.
 //!
 //! **The word CARDINAL in that sentence went unimplemented for four quests** (SQ-1375).
 //! [`adjacent_reciprocals`] asked `grid_offset`, which answers `Some` for all eight compass

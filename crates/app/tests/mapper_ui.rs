@@ -102,6 +102,8 @@ mod sq1308_mapgen_layers;
 mod sq1372_adventure_maze;
 #[path = "suites/sq1375_zork_house_makes_room.rs"]
 mod sq1375_zork_house_makes_room;
+#[path = "suites/sq1376_forest_west_of_house.rs"]
+mod sq1376_forest_west_of_house;
 #[path = "suites/sq1314_nautical_passage_erasure.rs"]
 mod sq1314_nautical_passage_erasure;
 #[path = "suites/sq1315_anchorhead_2018.rs"]

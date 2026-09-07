@@ -521,8 +521,8 @@ the rooms got their positions. The *layout* engine breaks its own ties different
 when a cycle on the grid forces it to give up one direction's evidence, it gives up a
 diagonal before a cardinal. A diagonal only pins a room to the right quadrant (it's
 satisfied by any offset with the right two signs, not an exact unit step), so
-stretching one draws a slightly wider corner; a cardinal means exactly one shared row
-or column, so losing one is a door that vanishes from the map entirely. Zork's
+stretching one draws a slightly wider corner; a cardinal means one shared row or column,
+so losing one is a door that vanishes from the map entirely. Zork's
 around-the-house ring is the case that forced this: the diagonal skirt (West of
 House–North of House–Behind House) and the cardinal spine through the front door
 (Behind House–Kitchen–Living Room–West of House) close one cycle together, and it's
@@ -547,7 +547,28 @@ are satisfied, rather than being shoved aside to tidy a row it happens to sit in
 
 One thing outranks even the crossroads, and it is the rule the whole engine is built
 around: two rooms joined by a north/south or east/west passage walked from both ends
-are *next to each other*, and nothing may stand between them.
+share a row or a column, and nothing may stand between them.
+
+**Share a line, not a cell count** (SQ-1376, revising SQ-1364). A compass word names a
+direction, not a distance: `west` says the room is due west, and how many cells west is
+the layout's business. So an east/west pair is honoured when it is on one *row*, however
+long the line between them, and a north/south pair when it is in one *column*; the
+straight passage is drawn plain, not as a bent red distortion. Closing a gap is still
+what the tidy passes *prefer* — a run's internal gaps are pulled shut whenever the cells
+between are free and nothing else wants them — but a gap that cannot be closed is no
+longer a lie, and buying one is no longer worth a bearing the game actually stated.
+
+That distinction had a price attached, and Zork I paid it. `Forest #91` lies west of
+`Forest Path #247` (a passage walked both ways) *and* west of `West of House #68` (a
+one-way exit). Reading "west" as "the next cell west" made the first claim something the
+layout had to buy, and it bought it by dragging the forest a column east — past the house,
+so the generated map no longer said the forest was west of it at all.
+
+A **one-way** exit claims less: only the *side*. `West of House --west--> Forest` is
+honoured wherever the forest sits west of it, on any row. That is enough to place a room
+and not enough to move one, which is why a one-way yields to a walked-both-ways pair
+whenever the two disagree — and why, when a free room's row is decided by two neighbours
+that disagree about it, the walked-both-ways one gets to choose.
 
 Sometimes a map cannot honour all of that at once. Zork's Behind House is at one and
 the same time the east corner of the ring around the white house and, through the
@@ -1174,12 +1195,15 @@ What the drawing shows, beyond the rooms:
   In/Out). Where that cell is taken, a blank LINE is opened at it — every room
   at or beyond it slides one cell further out — which preserves every offset
   within each side of the cut and can only stretch links that STRADDLE it. A
-  straddling cardinal RECIPROCAL vetoes the whole shift, since "exactly one
-  cell apart" is what such a pair means.
+  straddling cardinal RECIPROCAL that is CURRENTLY one cell apart vetoes the
+  whole shift: a pair the layout managed to bring together is not pulled apart
+  again to make room for a ghost. (A pair already further apart claims no cell
+  count — see "Share a line, not a cell count" above — so it cannot be made
+  worse by a shift and never vetoes one.)
 
   **Cardinal, and nothing else** (SQ-1375). A diagonal only ever pinned its far
-  end to a QUADRANT — that is `layout::edge_is_satisfied`'s rule since SQ-1364,
-  and `mark_distorted` reads the same one — so stretching a diagonal is the
+  end to a QUADRANT — that is `layout::edge_is_satisfied`'s rule, and
+  `mark_distorted` reads the same one — so stretching a diagonal is the
   layout's ordinary currency and never vetoes anything. `adjacent_reciprocals`
   asked `grid_offset`, which answers for all eight compass points, and so held
   diagonals as tightly as cardinals for four quests. Zork I's house paid for it:
@@ -1246,10 +1270,20 @@ can restyle an exported map without re-rendering it. The dark palette is the
 default.
 
 Naming any of `--dump`, `--svg`, `--dot`, `--json` writes only the ones named;
-naming none writes all four. `--no-layout` skips
-`mapper::layout::relayout_auto`, leaving pure topology with no room positions —
-much faster on a large map, and the right choice for a consumer doing its own
-layout. `--no-boot` skips the one-moment headless boot that learns the starting
+naming none writes all four. `--no-layout` skips the layout entirely, leaving pure
+topology with no room positions — much faster on a large map, and the right choice
+for a consumer doing its own layout.
+
+**With layout on, mapgen runs exactly the tidy pipeline the live map runs**
+(SQ-1376): `relayout_auto`, `cleanup_overlaps`, `repair_directional_hints`,
+`cleanup_overlaps`, `compact_empty_lines`, once per layer — the same five stages
+`app::tidy::tidy_layer_silent` gives a played map. It ran only the first for its
+whole life, which is why a generated map and a played map could disagree about the
+same rooms with the same solver: the solve's contiguity stage deliberately breaks a
+bearing to keep a row tight, and `repair_directional_hints` is the pass that puts it
+back. (The live path's maze freeze is deliberately *not* copied — mapgen has no
+dead-reckoned positions to protect, so a maze layer still gets its one isolated
+layout.) `--no-boot` skips the one-moment headless boot that learns the starting
 room (below), leaving the largest region as `Main` and the map with no current
 room. Exit status is `0` for a map written, `1` for an I/O failure, and **`2`
 for a story that declares no map anywhere in the file**, which is a distinct

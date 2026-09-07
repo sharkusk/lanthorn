@@ -949,11 +949,12 @@ fn resolve_start(graph: &MapGraph, loc: &crate::engine::LocationInfo) -> Option<
 /// Generate the static map for the story at `path`, with mapgen's own defaults
 /// (SQ-1308's layer auto-split, floored at [`mapper::suggest::STRUCTURAL_FLOOR`]).
 ///
-/// `layout` runs the mapper's own tidy pass ([`mapper::layout::relayout_auto`])
-/// over the finished graph, which is what gives every room a position; without
-/// it the graph is pure topology and every `pos` is `None`. It runs **once per
-/// layer** ([`layout_all_layers`]) rather than once over the whole graph — see
-/// that function's doc comment for why (SQ-1309).
+/// `layout` runs the app's whole tidy pipeline over the finished graph, which is
+/// what gives every room a position; without it the graph is pure topology and
+/// every `pos` is `None`. It runs **once per layer** ([`layout_all_layers`])
+/// rather than once over the whole graph — see that function's doc comment for
+/// why (SQ-1309), and for why the pipeline is the same five stages the live map
+/// gets rather than the solve alone (SQ-1376).
 ///
 /// The story is mounted through [`crate::hints::load_mounted_story`] — the same
 /// call `startup.rs` boots from — so a Blorb, a zip and a disk image all reach
@@ -1021,7 +1022,7 @@ pub fn generate_with_options(
 ///
 /// `graph.layer_subgraph(layer)` already drops every connection that crosses a
 /// layer boundary (both endpoints must be in `layer`), so running the exact same
-/// [`mapper::layout::relayout_auto`] pass on each layer's subgraph in isolation
+/// tidy pipeline on each layer's subgraph in isolation
 /// gives each layer its own solve and its own pack, with no other layer's rooms
 /// or portals in the room to compete with. A maze layer gets no special-case
 /// here (unlike the live app, which freezes a maze layer's positions once it has
@@ -1029,11 +1030,35 @@ pub fn generate_with_options(
 /// maze still needs an initial layout, and running it in its own subgraph rather
 /// than freezing it here confines whatever a maze's unsatisfiable geometry does
 /// to the maze's own layer.
+///
+/// **And it is the WHOLE pipeline, not the solve** (SQ-1376). `relayout_auto` is stage one of
+/// five; `cleanup_overlaps`, `repair_directional_hints`, `cleanup_overlaps` and
+/// `compact_empty_lines` are the rest, and the live map has always had them
+/// ([`crate::tidy::tidy_layer_silent`]). mapgen ran the first alone for its whole life, so a
+/// generated map and a played map could disagree about the same rooms with the same solver —
+/// which is exactly how SQ-1376 was reported ("it works live"). The gap is not cosmetic: the
+/// contiguity stage inside `relayout_auto` deliberately breaks bearings to keep a row tight
+/// (see `mapper::layout::contiguify`), and `repair_directional_hints` is the pass that puts
+/// them back.
 pub fn layout_all_layers(graph: &mut MapGraph) {
     let layer_ids: Vec<mapper::layer::LayerId> = graph.layers().keys().copied().collect();
     for layer in layer_ids {
         let mut sub = graph.layer_subgraph(layer);
+        // The SAME five stages `tidy::tidy_layer_silent` runs on the live map, in the same
+        // order (SQ-1376). `relayout_auto` alone is not the app's layout — it is the first
+        // stage of it, and the four that follow are where a bearing the contiguity pass had to
+        // break gets put back. Zork I's `Forest #91` is the specimen: the stress solve places
+        // it due west of `West of House #68`, the hub-hole slide and the run tightening then
+        // move #68 a column past it, and `repair_directional_hints` is what walks #91 back
+        // west so the map still says what the game said. mapgen ran none of the four, so a
+        // generated map and a played map disagreed about the same rooms with the same solver.
+        // (The maze freeze `tidy_layer_silent` opens with is deliberately NOT copied — see this
+        // function's own note above on why mapgen has no dead-reckoned positions to protect.)
         mapper::layout::relayout_auto(&mut sub);
+        crate::render::map::cleanup_overlaps(&mut sub, 3, 40);
+        crate::render::map::repair_directional_hints(&mut sub, 3, 40);
+        crate::render::map::cleanup_overlaps(&mut sub, 3, 40);
+        crate::render::map::compact_empty_lines(&mut sub);
 
         for id in graph.rooms_in_layer(layer) {
             if let Some(p) = sub.room(id).and_then(|r| r.pos) {

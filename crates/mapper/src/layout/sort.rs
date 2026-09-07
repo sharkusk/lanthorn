@@ -84,6 +84,18 @@ const ALIGN_PASSES: usize = 4;
 /// Returns `(x_constrained, y_constrained)` per dense index: whether each room has any
 /// compass edge fixing its x / y. A room "free" on an axis was placed there by this pass
 /// (or by stress), so callers can keep it on that row/column during collision resolution.
+///
+/// **A RECIPROCATED cardinal neighbour is asked before a one-way one** (SQ-1376). Two rooms may
+/// each name a third to their west, and if they sit on different rows the median below has to
+/// choose whose row the third room takes — a choice this pass made by coordinate order alone. A
+/// passage walked from BOTH ends is the strongest evidence the map has (SQ-1287) and its two
+/// rooms genuinely share a line; a one-way exit only ever claimed a SIDE, and the side survives
+/// whichever row is chosen. So the reciprocated neighbours are the pool when there are any, and
+/// the one-ways are the fallback. Zork I's `Forest #91` is the specimen: `Forest Path #247` names
+/// it west reciprocally and `West of House #68` names it west one-way, the stress solve had
+/// correctly put it on the Forest Path's row and west of the house, and this pass pulled it onto
+/// the HOUSE's row — which cost it the pair's row and, once the contiguity stage tightened that
+/// row, the side as well.
 pub(crate) fn align_free_axes(
     graph: &MapGraph,
     index: &BTreeMap<RoomId, usize>,
@@ -95,6 +107,9 @@ pub(crate) fn align_free_axes(
     let mut y_constrained = vec![false; n];
     let mut ew: Vec<Vec<usize>> = vec![Vec::new(); n]; // E/W neighbours → align Y
     let mut ns: Vec<Vec<usize>> = vec![Vec::new(); n]; // N/S neighbours → align X
+    // The same two lists restricted to RECIPROCATED pairs (SQ-1376) — see the doc comment.
+    let mut ew_pair: Vec<Vec<usize>> = vec![Vec::new(); n];
+    let mut ns_pair: Vec<Vec<usize>> = vec![Vec::new(); n];
     for c in graph.connections() {
         if c.is_self_loop() {
             continue; // no geometry: a room is not east of itself (SQ-0666)
@@ -119,22 +134,33 @@ pub(crate) fn align_free_axes(
         // Alignment neighbour lists stay `grid_offset`-only: up/down edges contribute no
         // alignment target (no column pull — that was tried and rejected for long lanes).
         if let Some((dx, dy)) = grid_offset(c.dir) {
+            let reciprocated = graph.connections().iter().any(|o| {
+                o.origin == c.dest && o.dest == c.origin && o.dir == crate::direction::opposite(c.dir)
+            });
             if dx != 0 && dy == 0 {
                 ew[a].push(b);
                 ew[b].push(a);
+                if reciprocated {
+                    ew_pair[a].push(b);
+                    ew_pair[b].push(a);
+                }
             }
             if dy != 0 && dx == 0 {
                 ns[a].push(b);
                 ns[b].push(a);
+                if reciprocated {
+                    ns_pair[a].push(b);
+                    ns_pair[b].push(a);
+                }
             }
         }
     }
     // Dedup neighbour lists (each edge pushed both directions can duplicate a node).
     for v in 0..n {
-        ew[v].sort_unstable();
-        ew[v].dedup();
-        ns[v].sort_unstable();
-        ns[v].dedup();
+        for list in [&mut ew[v], &mut ns[v], &mut ew_pair[v], &mut ns_pair[v]] {
+            list.sort_unstable();
+            list.dedup();
+        }
     }
     let median = |coords: &[i32], neigh: &[usize]| -> i32 {
         let mut vals: Vec<i32> = neigh.iter().map(|&u| coords[u]).collect();
@@ -148,14 +174,19 @@ pub(crate) fn align_free_axes(
             // neighbours (which would otherwise out-vote a lone anchor). Fall back to all
             // neighbours when none is constrained — free chains then propagate over passes.
             if !y_constrained[v] && !ew[v].is_empty() {
+                // Reciprocated partners first, one-ways only when there are none (SQ-1376).
+                let pool: &[usize] =
+                    if ew_pair[v].is_empty() { &ew[v] } else { &ew_pair[v] };
                 let anchors: Vec<usize> =
-                    ew[v].iter().copied().filter(|&u| y_constrained[u]).collect();
-                ys[v] = median(ys, if anchors.is_empty() { &ew[v] } else { &anchors });
+                    pool.iter().copied().filter(|&u| y_constrained[u]).collect();
+                ys[v] = median(ys, if anchors.is_empty() { pool } else { &anchors });
             }
             if !x_constrained[v] && !ns[v].is_empty() {
+                let pool: &[usize] =
+                    if ns_pair[v].is_empty() { &ns[v] } else { &ns_pair[v] };
                 let anchors: Vec<usize> =
-                    ns[v].iter().copied().filter(|&u| x_constrained[u]).collect();
-                xs[v] = median(xs, if anchors.is_empty() { &ns[v] } else { &anchors });
+                    pool.iter().copied().filter(|&u| x_constrained[u]).collect();
+                xs[v] = median(xs, if anchors.is_empty() { pool } else { &anchors });
             }
         }
     }

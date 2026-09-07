@@ -157,15 +157,19 @@ fn the_clearing_keeps_the_forest_on_its_doorstep() {
     );
 }
 
-/// Every compass edge's flag agrees with the geometry it was written from (SQ-1364).
+/// Every compass edge's flag agrees with the geometry it was written from.
 ///
 /// The flag is the only thing a consumer has: `seat`'s `adjacent_reciprocals`, the text dump's
 /// `align=col[…]` and the SVG's straight edge all read it and none of them re-derives the
-/// geometry. A pair aligned on one column with an empty cell between them used to pass, because
-/// `edge_is_satisfied` was sign-based on both axes — "anywhere due south" rather than "the next
-/// cell south". Two above-ground pairs on this map genuinely cannot be brought together (each
-/// room is pinned by a run on the perpendicular axis, a claim of exactly the same rank), and
-/// this is what makes them say so instead of asserting an adjacency they do not have.
+/// geometry, so it must never contradict the positions it was computed from.
+///
+/// **RE-PINNED at SQ-1376.** SQ-1364 wrote this case to demand that a pair aligned on one column
+/// with an empty cell between them draw DISTORTED; the user reversed that rule — a cardinal
+/// names a line, not a cell count — so the same two above-ground pairs (each pinned by a run on
+/// the perpendicular axis, which is why they cannot be brought together) are now honoured where
+/// they stand, and the assertion below is inverted to say so. What has not changed is the point
+/// of the case: the flag and the grid agree, and the map really does contain a stretched
+/// cardinal, so the claim is not vacuous.
 #[test]
 fn no_compass_edge_claims_a_geometry_the_grid_does_not_hold() {
     let mut g = fixture();
@@ -196,8 +200,8 @@ fn no_compass_edge_claims_a_geometry_the_grid_does_not_hold() {
         if aligned && a.0.abs().max(a.1.abs()) > 1 {
             stretched_cardinals += 1;
             assert!(
-                c.distorted,
-                "{} {:?} -> {} is aligned but {} cells away, and must say so",
+                !c.distorted,
+                "{} {:?} -> {} is aligned {} cells away, which is honoured (SQ-1376)",
                 c.origin,
                 c.dir,
                 c.dest,

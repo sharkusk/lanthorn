@@ -215,15 +215,25 @@ fn place_by_bearings(
 ///     as the directional sense is correct (e.g. a North edge is satisfied whenever dest is
 ///     *anywhere* north, i.e. `dest.y < origin.y`).
 ///
-/// **A CARDINAL compass bearing has no such slack** (SQ-1364). `N` names the room in the next
-/// cell up, not "somewhere above": that is what a reciprocal cardinal pair MEANS everywhere else
-/// in this module (`splits_a_run`, `tighten_runs`), and a pair the layout could not bring
-/// together must say so rather than let a straight line down an empty column pass for an
-/// honoured claim. Zork I's `Clearing` and the `Forest` two rows below it were flagged
-/// undistorted, so seating's `adjacent_reciprocals`, the dump's `align=col[…]` and the SVG's
-/// straight edge all reported an adjacency the grid did not hold. A DIAGONAL keeps its slack —
-/// it only ever pinned its endpoint to a quadrant (see `axis_side_respected` and
-/// `constraints::build_axis_constraints`), and stretching one is the layout's ordinary currency.
+/// **A cardinal bearing claims a LINE, not a cell count** (SQ-1376, reversing SQ-1364). `W` names
+/// a room due west; how far west is the layout's business, and a straight passage four cells long
+/// down an empty row is an honoured claim, not a distorted one. So a cardinal is satisfied when
+/// its CROSS axis is exactly zero and its own axis has the right sign — aligned, on the named
+/// side, at any distance — which is exactly what the two `axis_sign_ok` calls below say and
+/// nothing more.
+///
+/// SQ-1364 had read `N` as "the next cell up" and marked an aligned-but-long pair distorted. That
+/// turned ADJACENCY into a claim the map had to buy, and Zork I's `Forest #91` is what it cost:
+/// the room is due west of `Forest Path #247` and also west of `West of House #68`, and the
+/// tidying pass that pulls an aligned pair together dragged it clear across the second room's
+/// column, so the map stopped saying it was west of the house at all. Adjacency is a PREFERENCE
+/// now — `tighten_runs` still closes a gap when nothing else wants the cells, and
+/// `crate::layout::seat` still refuses to pull a pair it already brought together apart — but
+/// alignment is the constraint, and a pair the layout could not tighten still reads true.
+///
+/// A DIAGONAL keeps the slack it always had: it only ever pinned its endpoint to a quadrant (see
+/// `axis_side_respected` and `constraints::build_axis_constraints`), and stretching one is the
+/// layout's ordinary currency.
 ///
 /// For a non-compass edge (In/Out/Unknown, where `layout_offset` returns `None`):
 ///   - returns `true` unconditionally. These edges are stubs with no spatial offset to violate;
@@ -239,21 +249,7 @@ pub fn edge_is_satisfied(graph: &MapGraph, conn: &Connection) -> bool {
             match (origin_pos, dest_pos) {
                 (Some(op), Some(dp)) => {
                     let actual = (dp.0 - op.0, dp.1 - op.1);
-                    // Sign-based: each axis of delta must agree in sign (or be zero if delta is 0).
-                    if !(axis_sign_ok(actual.0, delta.0) && axis_sign_ok(actual.1, delta.1)) {
-                        return false;
-                    }
-                    // …and a CARDINAL compass bearing must also be ADJACENT (SQ-1364). The sign
-                    // check has already forced the cross axis to zero, so this is exactly "one
-                    // cell along the named axis". `grid_offset` is what decides: Up/Down borrow
-                    // an N/S offset from `layout_offset` as a drawing hint and are not compass
-                    // bearings, and a diagonal keeps its quadrant slack.
-                    match grid_offset(conn.dir) {
-                        Some((dx, dy)) if dx == 0 || dy == 0 => {
-                            actual.0.abs().max(actual.1.abs()) == 1
-                        }
-                        _ => true,
-                    }
+                    axis_sign_ok(actual.0, delta.0) && axis_sign_ok(actual.1, delta.1)
                 }
                 _ => false, // unplaced endpoint → unsatisfied
             }
@@ -2883,14 +2879,15 @@ mod tests {
         );
     }
 
-    /// A CARDINAL pair sharing a column with an empty cell between them is DISTORTED (SQ-1364).
+    /// A CARDINAL pair sharing a column is HONOURED however far apart it is (SQ-1376, reversing
+    /// SQ-1364), and stops being honoured the moment it leaves the column.
     ///
-    /// `edge_is_satisfied` was sign-based on both axes, so "anywhere due south" passed — and a
-    /// pair two rows apart on one column reported itself honoured to every consumer that reads
-    /// the flag. `N` names the next cell up, which is what the rest of this module already means
-    /// by a reciprocal cardinal pair (`splits_a_run`, `tighten_runs`).
+    /// SQ-1364 had read `N` as "the next cell up" and marked a same-column pair with a gap
+    /// distorted. That made adjacency a claim the layout had to buy, and Zork I's `Forest #91`
+    /// is what it cost (see [`edge_is_satisfied`]). A cardinal names a LINE: the cross axis is
+    /// the constraint, the distance along it is the layout's business.
     #[test]
-    fn a_same_column_pair_with_a_gap_is_distorted() {
+    fn a_same_column_pair_is_honoured_at_any_length() {
         use crate::graph::MapGraph;
         let mut g = MapGraph::new();
         g.upsert_room(1, "A".into());
@@ -2907,12 +2904,21 @@ mod tests {
             "an adjacent reciprocal N/S pair is not distorted",
         );
 
-        // One empty cell between them, same column: distorted, both ways.
-        g.set_pos(2, (0, 2));
+        // Four empty cells between them, same column: still honoured, both ways.
+        g.set_pos(2, (0, 5));
+        mark_distorted(&mut g, &BTreeSet::new());
+        assert!(
+            g.connections().iter().all(|c| !c.distorted),
+            "a same-column pair is honoured at any length: {:?}",
+            g.connections(),
+        );
+
+        // One cell off the column: the cross axis is the constraint, so now it IS distorted.
+        g.set_pos(2, (1, 5));
         mark_distorted(&mut g, &BTreeSet::new());
         assert!(
             g.connections().iter().all(|c| c.distorted),
-            "a same-column pair with a gap must say it is not adjacent: {:?}",
+            "a pair off its own column is distorted: {:?}",
             g.connections(),
         );
     }
