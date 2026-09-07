@@ -50,6 +50,11 @@ Absolute URLs or no link.
   Pig, the gnome room ended up three rows away, wedged between two rooms it has
   no passage to, with all four of its own passages drawn as red distortions.
   Anchorhead's map loses eleven distorted passages to the same fix.
+- **Connectors no longer turn a corner right against their own arrowhead.** A
+  line coming down the gutter beside a room used to bend in the very cell
+  touching the arrow, so it read as though it were kinking inside the arrowhead;
+  gutters now leave the same clearance at both ends and the line straightens out
+  before it arrives.
 
 ---
 

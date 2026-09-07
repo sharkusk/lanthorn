@@ -506,6 +506,17 @@ sidestep tacked on at the end, so the last leg comes down (or across) the arrowh
 own column with no kink beside the room. A connector that arrives *along* the gutter
 instead still turns in once, which is the shape that gutter is for.
 
+**And the turn never touches the head** (SQ-1390). A gutter is wide enough that a line
+turning in from it has a cell of plain line to draw before it reaches the arrowhead; put
+the corner in the cell next to the head and the picture reads `└◀`, as though the line
+were bending inside its own arrow. That used to happen on one side of every gutter on
+every map, and no route could avoid it: a channel reserved a cell of clearance in front
+of its first lane and none behind its last, so a line turning towards the box on the far
+side had nowhere to straighten out. The clearance is the same at both ends now, which
+also means the rule applies to *departures* — a passage walked both ways is drawn once,
+from whichever room the router made the origin, so half the arrowheads on any map are the
+line's beginning rather than its end.
+
 When two connectors both want the same straight room-line and neither will fit beside the
 other, the longer one keeps it and the shorter weaves instead — and if they tie on length
 too, the one that runs straight keeps the line over one that bends, so which route wins

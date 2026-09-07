@@ -230,12 +230,23 @@ impl PosTable {
 
 fn channel_width(lanes: u16) -> i32 {
     // Reserve LANE_BASE before lane 0 plus LANE_SPACING per additional lane, so the widest
-    // lane (LANE_BASE + (lanes-1)*LANE_SPACING) stays inside the channel. Empty channels keep
-    // MIN_GUTTER so adjacent boxes never touch.
+    // lane (LANE_BASE + (lanes-1)*LANE_SPACING) stays inside the channel — and then LANE_BASE
+    // again AFTER it, so the deepest lane clears the far box by exactly as much as lane 0 clears
+    // the near one (SQ-1390). Empty channels keep MIN_GUTTER so adjacent boxes never touch.
+    //
+    // **A channel has two sides and both of them are a box edge.** The `+ 1` this used to end on
+    // reserved one cell for the deepest lane to stand in and nothing beyond it, so that lane sat
+    // flush against the far box: a connector attaching there left its arrowhead and turned in the
+    // very next cell, drawing `└◀` — the corner glyph and the arrowhead in adjacent cells, which
+    // reads as the line bending inside the head. Lane 0's own side never showed it, because
+    // LANE_BASE is exactly the clearance that stops it, so the defect was invisible from the
+    // near side of every channel and unavoidable from the far side of every channel. It is
+    // geometry, not routing: with a one-lane channel the old width was MIN_GUTTER = 2 and there
+    // was no lane a route could have taken instead.
     if lanes == 0 {
         MIN_GUTTER
     } else {
-        (LANE_BASE + (lanes as i32 - 1) * LANE_SPACING + 1).max(MIN_GUTTER)
+        (2 * LANE_BASE + (lanes as i32 - 1) * LANE_SPACING + 1).max(MIN_GUTTER)
     }
 }
 
@@ -287,11 +298,20 @@ pub fn boxes_axes_sized(
     // channel beyond the last room. `build` only tabulates `lo..=hi` and `channel_span` answers
     // `MIN_GUTTER` for anything outside, so a diagonal's floor out there would be silently dropped
     // and the diagonal would vanish. Widen the range to cover every channel a diagonal uses.
+    //
+    // **And every channel that CARRIES A LANE, for the same reason** (SQ-1390). A wrap-around route
+    // is exactly the case that uses the channel before the first room or after the last, and an
+    // untabulated channel is sized by `line_pixel`'s uniform `box_dim + MIN_GUTTER` extrapolation
+    // rather than by [`channel_width`] — so its lane sat flush against the box it turned into,
+    // which is the `└◀` this quest is about, in the one place widening `channel_width` could not
+    // reach. Zork I's `Clearing --Down--> Grating Room` and `Gas Room --Up--> Smelly Room` both
+    // wrap through the channel above their layer's first row.
     let mut row_floor: std::collections::BTreeMap<i32, i32> = std::collections::BTreeMap::new();
     for &(_, h) in &plan.diag_corners {
         row_floor.insert(h, DIAG_GUTTER);
     }
     let (min_r, max_r) = span_over(min_r, max_r, plan.diag_corners.iter().map(|&(_, h)| h));
+    let (min_r, max_r) = span_over(min_r, max_r, plan.h_lanes.keys().copied());
     let rows = build(min_r, max_r, box_h, row_dims, &plan.h_lanes, &row_floor);
     let mut col_floor: std::collections::BTreeMap<i32, i32> = std::collections::BTreeMap::new();
     for &(v, h) in &plan.diag_corners {
@@ -300,6 +320,7 @@ pub fn boxes_axes_sized(
         *slot = (*slot).max(need);
     }
     let (min_c, max_c) = span_over(min_c, max_c, plan.diag_corners.iter().map(|&(v, _)| v));
+    let (min_c, max_c) = span_over(min_c, max_c, plan.v_lanes.keys().copied());
     let cols = build(min_c, max_c, box_w, col_dims, &plan.v_lanes, &col_floor);
     (cols, rows)
 }
@@ -3350,8 +3371,17 @@ pub fn diagonal_glyph_overlaps(
 /// * **head-on** — the last segment runs perpendicular to the entry side, straight down (or
 ///   across) the arrowhead's own column/row from wherever the route last turned; or
 /// * **along the channel** — the route runs down the gutter beside the box, parallel to the side,
-///   and turns in once. The turn-in leg is then as short as that gutter is wide, which can be a
-///   single cell, and there is nothing wrong with it.
+///   and turns in once. The turn-in leg is then as long as the clearance between that gutter's
+///   lane and the box, which [`channel_width`] keeps at two cells or more.
+///
+/// **A one-cell turn-in leg is the third bad shape** (SQ-1390), and this doc used to bless it —
+/// "as short as that gutter is wide, which can be a single cell, and there is nothing wrong with
+/// it". There is: the turn and the arrowhead then occupy adjacent cells and the picture reads
+/// `└◀`, the line bending inside its own head. Lost Pig's `Shelf Room ↔ (gnomeRoom)` drew exactly
+/// that. It was never a routing choice — `channel_width` reserved `LANE_BASE` before lane 0 and
+/// nothing after the deepest one, so every channel's FAR box was one cell from a lane and every
+/// channel's NEAR box was two, whatever the route did. The width is symmetric now, so this reads
+/// as a rule rather than as a wish.
 ///
 /// **The jog is the third shape**, and it is what SQ-1320 removed: a head-on approach aimed at the
 /// side's CENTRE cell with a ONE-CELL lateral hop spliced in at the end to reach the slot the
@@ -3372,6 +3402,14 @@ pub fn diagonal_glyph_overlaps(
 ///
 /// A merge stub (which ends on the trunk, not at a box) and a corner arrival (which anchors on a
 /// box corner and takes no slot) have no side approach to measure, and are in neither count.
+///
+/// **Both ends of the drawn line are measured, not only the arrival** (SQ-1390). A reciprocal pair
+/// is drawn ONCE, from whichever room the router happened to make the origin, so half the
+/// arrowheads on any map are DEPARTURE anchors and a rule that looks only at `entry` cannot see
+/// them — which is why Lost Pig's `└◀` sat on a green suite. The departure end takes the leg test
+/// alone (there is no slot to sidestep into on the way OUT), and only when the exit is a side
+/// rather than a box corner. `checked` still counts CONNECTORS, one apiece, so the non-vacuity
+/// numbers callers pin mean what they always meant.
 pub fn arrival_approach_report(
     graph: &mapper::graph::MapGraph,
     layer: mapper::layer::LayerId,
@@ -3400,15 +3438,29 @@ pub fn arrival_approach_report(
         let along =
             |a: (i32, i32), b: (i32, i32)| if tangent_is_x { a.0 != b.0 } else { a.1 != b.1 };
         let (turn, head) = (plot.path[n - 2], plot.path[n - 1]);
+        let leg = |a: (i32, i32), b: (i32, i32)| (a.0 - b.0).abs() + (a.1 - b.1).abs();
         let complaint = if along(turn, head) {
-            Some("the arrowhead's own leg runs ALONG the side, not into it")
+            Some("the arrowhead's own leg runs ALONG the side, not into it".to_string())
+        } else if n >= 3 && leg(turn, head) == 1 {
+            // SQ-1390: the route turns in the cell touching the arrowhead — `└◀`.
+            Some("the turn touches the arrowhead: a ONE-cell leg into the side".to_string())
         } else if n >= 3 {
             let prev = plot.path[n - 3];
-            let hop = (prev.0 - turn.0).abs() + (prev.1 - turn.1).abs();
-            (along(prev, turn) && hop == 1).then_some("a one-cell sidestep into the slot")
+            let hop = leg(prev, turn);
+            (along(prev, turn) && hop == 1)
+                .then(|| "a one-cell sidestep into the slot".to_string())
         } else {
             None
-        };
+        }
+        .or_else(|| {
+            // The DEPARTURE end of the same drawn line (SQ-1390). A corner exit leaves from the box
+            // corner and has no side leg to measure.
+            let out_is_side = !mapper::direction::is_diagonal(conn.exit_dir);
+            (out_is_side && n >= 3 && leg(plot.path[0], plot.path[1]) == 1).then(|| {
+                "the turn touches the DEPARTURE arrowhead: a ONE-cell leg out of the side"
+                    .to_string()
+            })
+        });
         let Some(why) = complaint else { continue };
         // The exemption is applied to the FINDING, not to the measurement: a jog on a crowded side
         // is excused and counted, never quietly skipped, so a caller can watch that number.
@@ -10420,15 +10472,25 @@ mod sq1274_forest_valley {
     /// `polylines_overlap`, `crates/mapper/src/route/mod.rs`), but the channel route it falls back
     /// to is this one. Guard it so a future router change that quietly lengthens or re-sides it
     /// has to say so.
-    /// The near forest's short gutter L (pinned above) legitimately crosses VALLEY's own `?` W
-    /// mark's count cell (SQ-1281): the SQ-1275 router-side reservation that used to disqualify
-    /// this exact route is gone (it was the SQ-1281 regression this quest fixes), so the router
-    /// draws straight through it, and the renderer's own draw order is what decides which glyph
-    /// wins the shared cell. `render_map` plots every connector's line-art
-    /// (`render_lane_connectors`) before it draws any room box (`draw_room`/`draw_box_room`,
-    /// which paints a mark's arrowhead + count last within its own box), so the digit must always
-    /// win — the count cell shows VALLEY's superscript, not a `─`/`│`/`┼` line glyph. Falsify by
-    /// drawing marks before connectors and this fails (the cell would show a line glyph instead).
+    /// The near forest's short gutter L (pinned above) used to cross VALLEY's own `?` W mark's
+    /// count cell (SQ-1281): the SQ-1275 router-side reservation that had disqualified this exact
+    /// route was removed, so the router drew straight through it and the renderer's draw order was
+    /// what decided the shared cell. `render_map` plots every connector's line-art
+    /// (`render_lane_connectors`) before it draws any room box (`draw_room`/`draw_box_room`, which
+    /// paints a mark's arrowhead + count last within its own box), so the digit always won.
+    ///
+    /// **RE-PINNED at SQ-1390: the crossing is gone, by construction.** A side mark's count digit
+    /// sits in the LAST gutter cell before the box (`box_left - 1`), and a channel lane now sits
+    /// `LANE_BASE` inside the gutter from EITHER end ([`channel_width`]) — so no connector's
+    /// channel run can land on that cell any more, whatever route it takes. Here the L's vertical
+    /// run moved one cell further out (x = 26, not 27), the turn-in leg grew from one cell to two,
+    /// and it crosses the count cell's column one row BELOW the mark, on the slot SQ-1274 gave it.
+    ///
+    /// So this case now pins the OPPOSITE fact — VALLEY's mark draws its arrowhead and its
+    /// superscript with no connector cell contending for either — and the draw-order rule itself
+    /// stays guarded where it is exercised on purpose, by
+    /// [`random_stub_cells_matches_a_real_connectors_geometry_for_every_direction`], where a mark
+    /// and a real departing connector share the anchor by design.
     #[test]
     fn sq1274_the_crossing_connector_never_hides_the_valleys_own_mark_count() {
         let g = build(FOREST_NEAR, false);
@@ -10436,11 +10498,12 @@ mod sq1274_forest_valley {
         let (cols, rows) = boxes_axes(&rm.plan, rm.bounds);
         let valley_cell = g.room(VALLEY).unwrap().pos.unwrap();
         let (vbx, vby) = (cols.room_pixel(valley_cell.0), rows.room_pixel(valley_cell.1));
-        let (_, vcount_at) = random_stub_cells(vbx, vby, BOX_W, BOX_H, W).expect("W is planar");
+        let (varrow_at, vcount_at) =
+            random_stub_cells(vbx, vby, BOX_W, BOX_H, W).expect("W is planar");
 
-        // Precondition: the near forest's own connector really does cross VALLEY's mark's count
-        // cell — otherwise this test would prove nothing. This is the exact crossing the removed
-        // SQ-1275 router reservation used to disqualify.
+        // The near forest's own connector no longer touches either of VALLEY's mark cells — the
+        // SQ-1390 clearance put its run a cell further out. Falsify by reverting `channel_width`
+        // to its one-sided `+ 1` and this fails: the run comes back down the count cell's column.
         let conn = rm
             .plan
             .connectors
@@ -10448,11 +10511,13 @@ mod sq1274_forest_valley {
             .find(|c| c.origin == FOREST_NEAR && c.dest == VALLEY && c.exit_dir == E)
             .expect("the near forest's E connector to the valley");
         let plot = plot_connector(conn, &cols, &rows, None).expect("it plots");
-        assert!(
-            plot.cells.iter().any(|(c, _)| *c == vcount_at),
-            "sanity: the near forest's route must cross VALLEY's W mark's count cell {vcount_at:?}, plot={:?}",
-            plot.cells
-        );
+        for claimed in [varrow_at, vcount_at] {
+            assert!(
+                !plot.cells.iter().any(|(c, _)| *c == claimed),
+                "the route must clear VALLEY's own W mark cell {claimed:?}, plot={:?}",
+                plot.cells
+            );
+        }
 
         let mut state = AppState::default();
         // Default scroll (0,0) views from logical column/row 0 rightward/downward — VALLEY sits
@@ -10489,8 +10554,8 @@ mod sq1274_forest_valley {
         assert_eq!(
             count_sym.as_deref(),
             Some(crate::render::superscript_count(2)).as_deref(),
-            "VALLEY's W mark records 2 destinations (SQ-1275); its superscript must win the \
-             crossing connector's line, not `─`/`│`/`┼`"
+            "VALLEY's W mark records 2 destinations (SQ-1275); its superscript draws in the \
+             gutter cell beside the box, with no connector line to lose to"
         );
     }
 
@@ -10882,10 +10947,13 @@ mod sq1320_arrival_slots {
     /// its arrowhead lands on: the leg carrying the arrowhead lies on that cell's own column (or
     /// row) and is longer than the single gutter cell a sidestep would leave it.
     ///
-    /// One cell is the whole tell. Lane 0 of a channel sits `LANE_BASE` BEYOND the ring of cells
-    /// immediately outside a box (`room_pixel + BOX_W + LANE_BASE`), so a connector turning in
-    /// from a real channel always has two cells or more to cover; a one-cell final leg can only
-    /// be the slot sidestep, made in the last gutter cell before the room.
+    /// One cell is the whole tell. A channel reserves `LANE_BASE` before lane 0 and `LANE_BASE`
+    /// again past its deepest one ([`channel_width`]), so a connector turning in from a real
+    /// channel always has two cells or more to cover, whichever of the channel's two boxes it is
+    /// heading for; a one-cell final leg can only be the slot sidestep, made in the last gutter
+    /// cell before the room. (The far-side half of that clearance is SQ-1390's — before it, the
+    /// deepest lane sat flush against the far box and a one-cell leg there was geometry rather
+    /// than a jog. `sq1390_arrowhead_clearance` states that half.)
     #[test]
     fn the_reported_one_ways_run_straight_into_their_arrowhead() {
         for (tag, dir, opos, dpos) in SHAPES {
@@ -10975,6 +11043,147 @@ mod sq1320_arrival_slots {
         // anchor, so it is not one of them.
         for w in head_on[..head_on.len() - 1].windows(2) {
             assert!(w[0].0 == w[1].0 || w[0].1 == w[1].1, "still orthogonal: {w:?}");
+        }
+    }
+}
+
+#[cfg(all(test, feature = "t-render"))]
+mod sq1390_arrowhead_clearance {
+    //! **A connector never turns in the cell that touches its arrowhead** (SQ-1390).
+    //!
+    //! The user, looking at the mapgen Lost Pig map: the passage between `Shelf Room` and the
+    //! gnome room came down the gutter beside `Shelf Room` and turned a right angle straight into
+    //! the `◀` on its left border — `└◀`, corner and head in adjacent cells, the line apparently
+    //! bending inside its own arrowhead.
+    //!
+    //! It was never a routing choice. [`channel_width`] reserved `LANE_BASE` before lane 0 and a
+    //! single cell for the deepest lane to stand in, so a channel's NEAR box always had two cells
+    //! of clearance and its FAR box always had one — for every channel on every map, whatever
+    //! route ran through it. With a one-lane channel the whole gutter was `MIN_GUTTER` = 2 cells
+    //! and there was no other lane a route could have taken. So the fix is the width, not the
+    //! router: `LANE_BASE` on both sides of the lane band.
+    //!
+    //! The shape below is the smallest thing that produces it — a passage whose two rooms are not
+    //! adjacent because a third room stands between them, so the route must leave the box, run
+    //! down the gutter past the room in the way, and turn in. That turn is the one that used to
+    //! land against the arrowhead. Both axes, because a width bug fixed for columns and left in
+    //! for rows is still the bug.
+    //!
+    //! `sq1316_connector_overlaps` states the same rule over the real Zork I and Lost Pig maps;
+    //! `arrival_approach_report` is where "a bend in the last channel" is defined, and it grew a
+    //! third complaint here — plus the departure end, since a reciprocal pair is drawn ONCE and
+    //! half the arrowheads on any map are the origin's.
+
+    use super::*;
+    use mapper::direction::Direction::{self, E, S};
+    use mapper::graph::{MapGraph, RoomId};
+    use mapper::layer::MAIN_LAYER;
+
+    const ORIGIN: RoomId = 1;
+    const DEST: RoomId = 2;
+    const BLOCKER: RoomId = 3;
+
+    /// `ORIGIN -dir- DEST` walked from both ends, with `BLOCKER` parked on the cell between them
+    /// so the route has to go around it.
+    fn blocked(dir: Direction, opos: (i32, i32), bpos: (i32, i32), dpos: (i32, i32)) -> MapGraph {
+        let mut g = MapGraph::new();
+        for (id, name) in [(ORIGIN, "Origin"), (DEST, "Dest"), (BLOCKER, "Blocker")] {
+            g.upsert_room(id, name.to_string());
+        }
+        g.set_pos(ORIGIN, opos);
+        g.set_pos(BLOCKER, bpos);
+        g.set_pos(DEST, dpos);
+        g.add_edge(ORIGIN, dir, DEST);
+        g.add_edge(DEST, mapper::direction::opposite(dir), ORIGIN);
+        g
+    }
+
+    /// `(tag, direction, origin cell, blocker cell, destination cell)`.
+    type Shape = (&'static str, Direction, (i32, i32), (i32, i32), (i32, i32));
+
+    /// One shape per axis: the route detours around the blocker in a ROW channel and in a COLUMN
+    /// channel respectively, and each one's turn-in lands on the channel's far box.
+    const SHAPES: [Shape; 2] = [
+        ("S past a blocker", S, (0, 0), (0, 1), (0, 2)),
+        ("E past a blocker", E, (0, 0), (1, 0), (2, 0)),
+    ];
+
+    /// One BENDING connector's two end legs, in cells, with the polyline they came from.
+    struct EndLegs {
+        departure: i32,
+        arrival: i32,
+        path: Vec<(i32, i32)>,
+    }
+
+    /// Every bending side-to-side connector on the layer, measured at both ends. A straight run
+    /// and a corner anchor have no turn to land against a head, so neither is measured.
+    fn end_legs(g: &MapGraph) -> Vec<EndLegs> {
+        let rm = mapper::render::render_layer(g, MAIN_LAYER);
+        let (cols, rows) = boxes_axes(&rm.plan, rm.bounds);
+        let mut out = Vec::new();
+        for c in rm.plan.connectors.iter().filter(|c| !c.merge && c.entry_corner.is_none()) {
+            let Some(plot) = plot_connector(c, &cols, &rows, None) else { continue };
+            let n = plot.path.len();
+            if n < 3 {
+                continue;
+            }
+            let leg = |a: (i32, i32), b: (i32, i32)| (a.0 - b.0).abs() + (a.1 - b.1).abs();
+            out.push(EndLegs {
+                departure: leg(plot.path[0], plot.path[1]),
+                arrival: leg(plot.path[n - 2], plot.path[n - 1]),
+                path: plot.path.clone(),
+            });
+        }
+        out
+    }
+
+    /// **The reported defect, gone, on both axes.** Every bending connector leaves its departure
+    /// arrowhead and reaches its arrival arrowhead with at least two cells of straight line, so no
+    /// corner glyph is ever painted in the cell next to a head.
+    #[test]
+    fn a_detouring_connector_clears_both_of_its_arrowheads() {
+        for (tag, dir, opos, bpos, dpos) in SHAPES {
+            let legs = end_legs(&blocked(dir, opos, bpos, dpos));
+            assert!(!legs.is_empty(), "{tag}: the detouring connector must be plotted and bend");
+            for EndLegs { departure, arrival, path } in legs {
+                assert!(departure >= 2, "{tag}: departure leg is {departure} cell(s) — {path:?}");
+                assert!(arrival >= 2, "{tag}: arrival leg is {arrival} cell(s) — {path:?}");
+            }
+        }
+    }
+
+    /// **And the rule can now SEE it.** [`arrival_approach_report`] blessed the shape above — its
+    /// sidestep test asks whether the segment before the arrowhead's leg is one cell PARALLEL to
+    /// the side, and a genuine gutter run is long — so the defect could sit on a green suite. The
+    /// report reads both ends and both leg lengths now; this is the case that says so.
+    #[test]
+    fn the_report_names_a_turn_that_touches_an_arrowhead() {
+        for (tag, dir, opos, bpos, dpos) in SHAPES {
+            let g = blocked(dir, opos, bpos, dpos);
+            let (checked, excused, findings) = arrival_approach_report(&g, MAIN_LAYER);
+            assert!(checked >= 1, "{tag}: the connector must be measured");
+            assert_eq!(excused, 0, "{tag}: nothing here is on a crowded side");
+            assert!(findings.is_empty(), "{tag}: {}", findings.join("\n"));
+        }
+    }
+
+    /// **The width is symmetric, stated on the arithmetic alone.** Lane 0 clears the channel's
+    /// near box by `LANE_BASE`, and the deepest lane clears its far box by the same, for every
+    /// lane count — which is the invariant the two cases above depend on and the one the old
+    /// `+ 1` broke for every channel in the workspace.
+    #[test]
+    fn every_channel_clears_both_of_its_boxes_equally() {
+        for lanes in 1u16..8 {
+            let w = channel_width(lanes);
+            let deepest = LANE_BASE + (lanes as i32 - 1) * LANE_SPACING;
+            assert_eq!(
+                w - deepest,
+                LANE_BASE + 1,
+                "{lanes} lane(s): the deepest lane sits {} cell(s) from the far box, lane 0 sits \
+                 {} from the near one (width {w})",
+                w - deepest,
+                LANE_BASE + 1,
+            );
         }
     }
 }

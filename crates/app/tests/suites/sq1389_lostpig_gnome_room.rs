@@ -1,4 +1,5 @@
-//! Lost Pig's gnome room keeps the free cell its two passages name (SQ-1389).
+//! Lost Pig's gnome room keeps the free cell its two passages name (SQ-1389), and nothing on that
+//! layer bends into an arrowhead (SQ-1390).
 //!
 //! The user, looking at the mapgen Lost Pig map's `Hole` layer: `(gnomeRoom) #194` was drawn at
 //! `(1, -2)`, three rows north of where it belongs, wedged between `Statue Room #128` and
@@ -126,4 +127,51 @@ fn no_edge_on_the_hole_layer_is_distorted() {
     assert!(bad.is_empty(), "distorted on the Hole layer: {}", bad.join(", "));
     // Non-vacuity: the layer has to be the eight-room one the report is about.
     assert_eq!(map.graph.rooms_in_layer(layer).len(), 8, "the Hole layer holds eight rooms");
+}
+
+/// **`arrival_approach_report` over the whole Lost Pig map** (SQ-1390): no connector on any layer
+/// turns in the cell touching an arrowhead, at either end of the line.
+///
+/// This is the story-only half of the rule; `render::map::sq1390_arrowhead_clearance` states it on
+/// synthetic graphs so CI can fail on it, and `sq1316_connector_overlaps` states it over Zork I.
+/// The `└◀` the user reported was on the `Hole` layer and was a DEPARTURE arrowhead — a reciprocal
+/// pair is drawn once, from whichever room the router made the origin — so a report that read only
+/// the arrival end could not see it, and did not.
+#[test]
+fn no_connector_bends_into_an_arrowhead_on_the_lost_pig_map() {
+    let Some(path) = story() else {
+        eprintln!("SKIP no_connector_bends_into_an_arrowhead_on_the_lost_pig_map: stories/{LOSTPIG} absent");
+        return;
+    };
+    let map = app::mapgen::generate(&path, true).expect("mapgen");
+    let mut layers: Vec<LayerId> = map
+        .graph
+        .layers()
+        .keys()
+        .copied()
+        .filter(|&l| !map.graph.rooms_in_layer(l).is_empty())
+        .collect();
+    layers.sort_unstable();
+    let (mut checked, mut excused) = (0usize, 0usize);
+    let mut failures = Vec::new();
+    for l in layers {
+        let (n, e, jogs) = app::render::map::arrival_approach_report(&map.graph, l);
+        checked += n;
+        excused += e;
+        for line in jogs {
+            failures.push(format!("[{}] {line}", map.graph.layer_name(l)));
+        }
+    }
+    assert!(
+        failures.is_empty(),
+        "{} connector(s) bend into an arrowhead on the Lost Pig map:\n{}",
+        failures.len(),
+        failures.join("\n")
+    );
+    // Non-vacuity. Lost Pig is a small map and every one of these six side approaches is on the
+    // `Hole` layer — its other layers join their rooms by adjacent or corner connectors, which have
+    // no side approach to measure. Pinned rather than guessed at: a drop below six means the filter
+    // has started eating connectors, which is how a rule quietly stops being one.
+    assert!(checked >= 6, "only {checked} approaches measured — the filter has eaten the map");
+    assert_eq!(excused, 0, "no jog on the Lost Pig map needs the crowded-side exemption");
 }
