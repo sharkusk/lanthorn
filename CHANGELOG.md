@@ -59,6 +59,8 @@ Absolute URLs or no link.
   fewer, with no passage anywhere taking more than four.
 - A full `/dev/shm` can no longer crash lanthorn mid-picture; it falls back to
   compressed transfer.
+- In the extended v6 view, new text no longer freezes the picture on a
+  terminal using shared-memory art transfer.
 
 ---
 

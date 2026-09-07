@@ -2944,6 +2944,20 @@ truncate the object out from under a terminal still reading the first. A serial
 per transmit cannot race, and the id in the escape is still the stable one, so
 nothing about the placement changes.
 
+**Until SQ-1381, only lanthorn's own writer followed that rule.** The fork's
+`transmit_shm` (`ratatui-image::protocol::kitty`, used for the chrome bands and
+the raster composite) still named its object `/rtui-{pid}-{id}` — by the stable
+image id `StatefulKitty` deliberately reuses on every re-transmit, exactly the
+shape the paragraph above exists to avoid. Small, infrequent uploads rarely land
+in the race window a stable name opens, which is why it went unnoticed until
+Zork Zero's `extended` v6 mode — a ~3 MB composite re-uploaded on every new line
+of text — hit it on nearly every repaint: the picture froze on every new line or
+scroll, Ghostty logging "shared memory size too small" as it dropped a frame
+whose object the previous transmit's reader might still have been midway
+through. Fixed on the fork the same way as lanthorn's own writer: `transmit_shm`
+now draws the object's name from a private, per-call `AtomicU32` serial, never
+the image id, so both of lanthorn's `t=s` writers now agree on the rule.
+
 A write that fails falls back to the inline route — deflated or raw, per the same
 terminal's `o=z` answer — because a machine can run out of shared memory and a
 window that draws nothing is the failure mode this whole path exists to avoid.
