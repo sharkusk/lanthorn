@@ -637,6 +637,24 @@ fn zork1_svg_highlights_west_of_house_as_the_current_room() {
     assert_eq!(label, "West of House");
 }
 
+/// SQ-1392: `mapgen`'s own writer (`app::mapgen::write_artefacts`) calls
+/// [`app::export_svg::render_svg_layered_generated`], not the live app's
+/// [`app::export_svg::render_svg_layered`] — a generated map has no player, so its legend must not
+/// claim one is standing in the highlighted room. Drives a tracked fixture (not `stories/`) so it
+/// runs on CI.
+#[test]
+fn generated_svg_legend_says_starting_room_not_you_are_in_it() {
+    let path = fixture_path("minizork-r34-s871124.z3");
+    let map = mapgen::generate(&path, true).expect("minizork.z3 is a tracked fixture");
+
+    let svg = app::export_svg::render_svg_layered_generated(&map.graph);
+    assert!(svg.contains("starting room"), "mapgen's legend must say \"starting room\"");
+    assert!(
+        !svg.contains("the room you are in"),
+        "mapgen's legend must not claim a player is where nobody is"
+    );
+}
+
 /// The rule must not disturb a story whose start room was in the largest component ANYWAY —
 /// which is most of them, and is why this quest is a correction rather than a rearrangement.
 ///

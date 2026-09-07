@@ -1872,7 +1872,9 @@ pub fn write_artefacts(
     }
     if what.svg {
         let p = out_dir.join(format!("{stem}.svg"));
-        std::fs::write(&p, crate::export_svg::render_svg_layered(&map.graph))?;
+        // SQ-1392: `map.start` (line 1868, above) is a starting point for the highlight, not a
+        // player — the generated form of the legend says so instead of the live "you are in" text.
+        std::fs::write(&p, crate::export_svg::render_svg_layered_generated(&map.graph))?;
         written.push(p);
     }
     if what.dot {

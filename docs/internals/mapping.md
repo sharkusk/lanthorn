@@ -1126,7 +1126,7 @@ It writes four artefacts named after the story's own stem, and prints a summary:
 | artefact | what it is |
 |---|---|
 | `<stem>.map.txt` | `app::map_dump::render_dump` — the annotated dump, with the ASCII drawing, each layer under its own heading |
-| `<stem>.svg` | `app::export_svg::render_svg_layered` — every layer stacked top to bottom under a heading, one shared canvas |
+| `<stem>.svg` | `app::export_svg::render_svg_layered_generated` — every layer stacked top to bottom under a heading, one shared canvas; the legend calls the current highlight "starting room" rather than the live map's "the room you are in", since nobody is playing (SQ-1392) |
 | `<stem>.dot` | `app::export_dot::render_dot` — every layer as its own Graphviz cluster once there is more than one |
 | `<stem>.map.json` | the documented, versioned JSON map described below |
 

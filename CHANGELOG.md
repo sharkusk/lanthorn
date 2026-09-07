@@ -63,6 +63,10 @@ Absolute URLs or no link.
   touching the arrow, so it read as though it were kinking inside the arrowhead;
   gutters now leave the same clearance at both ends and the line straightens out
   before it arrives.
+- **`lanthorn-mapgen`'s exported SVG legend no longer claims a player is
+  standing in the highlighted room.** It says "starting room" instead — a
+  generated map has nobody in it, and its highlight is only the room the
+  story begins in.
 
 ---
 

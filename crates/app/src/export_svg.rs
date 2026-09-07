@@ -1703,11 +1703,24 @@ fn side_root((bx, by, bw, bh): PxRect, side: Side, gap: f64, step: f64) -> (f64,
 
 // ── Legend ────────────────────────────────────────────────────────────────────
 
+/// Which room the legend's highlighted-room row is talking about (SQ-1392). [`render_svg_layered`]
+/// (and everything it wraps) draws a live session's export, where the highlighted room really is
+/// where the player is standing; `lanthorn-mapgen` has no player at all and only sets a current
+/// room so the map has a starting point to highlight, so its legend must not claim anyone is in it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum LegendVoice {
+    /// A map exported while playing — the highlighted room is where the player is now.
+    Played,
+    /// A map generated offline by `lanthorn-mapgen` — the highlighted room is just where the
+    /// story begins.
+    Generated,
+}
+
 const LEGEND_W: i32 = 336;
 const LEGEND_ROW: i32 = 15;
 
 /// The legend rows: `(sample markup drawn at (0, 0), caption)`.
-fn legend_rows() -> Vec<(String, &'static str)> {
+fn legend_rows(voice: LegendVoice) -> Vec<(String, &'static str)> {
     let line = |class: &str| {
         format!("<path class=\"{class}\" d=\"M 4 0 L 56 0\"/>")
     };
@@ -1766,7 +1779,10 @@ fn legend_rows() -> Vec<(String, &'static str)> {
         ),
         (
             "<rect class=\"room current\" x=\"12\" y=\"-6\" width=\"36\" height=\"12\" rx=\"3\"/>".to_string(),
-            "the room you are in",
+            match voice {
+                LegendVoice::Played => "the room you are in",
+                LegendVoice::Generated => "starting room",
+            },
         ),
         (
             format!(
@@ -1798,8 +1814,8 @@ const LEGEND_TEXT_MARGIN: i32 = 10;
 /// another layer — arrow shows the way you travel" ran past the right edge) widens it — using the
 /// same 9px-class character-width estimate `text_boxes()` charges every 9px `.legend` label, so
 /// the two never disagree about how wide a row's text really is.
-fn legend() -> (String, i32, i32) {
-    let rows = legend_rows();
+fn legend(voice: LegendVoice) -> (String, i32, i32) {
+    let rows = legend_rows(voice);
     let h = LEGEND_ROW * rows.len() as i32 + 34;
     let max_caption_w = rows
         .iter()
@@ -1906,8 +1922,8 @@ fn notes_block(rows: &[(usize, String)], wrap_w: i32) -> (String, i32, i32) {
 
 /// Wrap a body of markup — already at its own `(0, 0)` — in a document, with the legend below
 /// it in the bottom-left corner.
-fn document(body: &str, body_w: i32, body_h: i32) -> String {
-    let (leg, leg_w, leg_h) = legend();
+fn document(body: &str, body_w: i32, body_h: i32, voice: LegendVoice) -> String {
+    let (leg, leg_w, leg_h) = legend(voice);
     let width = 2 * MARGIN + body_w.max(leg_w);
     let height = 2 * MARGIN + body_h + 12 + leg_h;
     format!(
@@ -1934,12 +1950,16 @@ pub fn render_svg(rm: &RenderMap) -> String {
 /// [`render_svg`], with the graph the map was rendered from so each passage can be drawn at its
 /// own weight: a door marked, a conditional exit dotted (SQ-1312/SQ-1313).
 pub fn render_svg_of(rm: &RenderMap, graph: Option<&MapGraph>) -> String {
+    render_svg_of_voiced(rm, graph, LegendVoice::Played)
+}
+
+fn render_svg_of_voiced(rm: &RenderMap, graph: Option<&MapGraph>, voice: LegendVoice) -> String {
     let weights = graph.map(weight_table).unwrap_or_default();
     let notes = graph.map(notes_table).unwrap_or_default();
     let Some((body, w, h)) = render_svg_body(rm, &weights, &notes) else {
         return "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"1\" height=\"1\"></svg>".to_string();
     };
-    document(&body, w, h)
+    document(&body, w, h, voice)
 }
 
 /// Render every non-empty layer of `graph` as one standalone SVG document, each layer its own
@@ -1963,6 +1983,18 @@ pub fn render_svg_of(rm: &RenderMap, graph: Option<&MapGraph>) -> String {
 ///
 /// A single-layer graph renders exactly as `render_svg_of(&render(graph), Some(graph))`.
 pub fn render_svg_layered(graph: &MapGraph) -> String {
+    render_svg_layered_voiced(graph, LegendVoice::Played)
+}
+
+/// As [`render_svg_layered`], but for a map nobody is playing: `lanthorn-mapgen` sets the story's
+/// starting room current purely so the map has a room to highlight, and the live wording ("the
+/// room you are in") would misdescribe a map with no player on it — this says "starting room"
+/// instead (SQ-1392).
+pub fn render_svg_layered_generated(graph: &MapGraph) -> String {
+    render_svg_layered_voiced(graph, LegendVoice::Generated)
+}
+
+fn render_svg_layered_voiced(graph: &MapGraph, voice: LegendVoice) -> String {
     let mut layers: Vec<mapper::layer::LayerId> = graph
         .layers()
         .keys()
@@ -1971,7 +2003,7 @@ pub fn render_svg_layered(graph: &MapGraph) -> String {
         .collect();
     layers.sort_unstable();
     if layers.len() <= 1 {
-        return render_svg_of(&mapper::render::render(graph), Some(graph));
+        return render_svg_of_voiced(&mapper::render::render(graph), Some(graph), voice);
     }
 
     const HEADING_H: i32 = 26;
@@ -2021,7 +2053,7 @@ pub fn render_svg_layered(graph: &MapGraph) -> String {
         body.push_str("</g>");
         y += panel_h + PANEL_GAP;
     }
-    document(&body, panel_w.max(1), y.max(1))
+    document(&body, panel_w.max(1), y.max(1), voice)
 }
 
 /// Write `render_svg_of(rm, graph)` to the file at `path`.
@@ -3104,6 +3136,26 @@ mod tests {
         }
     }
 
+    /// SQ-1392: `lanthorn-mapgen` has no player, so the legend row for the highlighted room must
+    /// not claim one is standing there — it says "starting room" instead of the live map's "the
+    /// room you are in". Both forms go through [`render_svg_layered`] (the played form) versus
+    /// [`render_svg_layered_generated`] (mapgen's), the two production entry points SQ-1392 added.
+    #[test]
+    fn a_generated_map_says_starting_room_and_a_played_map_says_you_are_in_it() {
+        let m = zork_house();
+
+        let played = render_svg_layered(&m.graph);
+        assert!(played.contains("the room you are in"), "the played legend keeps its live wording");
+        assert!(!played.contains("starting room"), "a played map has no reason to say \"starting room\"");
+
+        let generated = render_svg_layered_generated(&m.graph);
+        assert!(generated.contains("starting room"), "a generated map's legend says \"starting room\"");
+        assert!(
+            !generated.contains("the room you are in"),
+            "a generated map has no player, so it must not claim one is in the highlighted room"
+        );
+    }
+
     /// SQ-1344: every `.legend` caption's estimated right edge stays inside the
     /// `legend-panel` rect — the panel is sized off the longest row rather than a fixed
     /// `LEGEND_W`, using the same 9px character-width estimate `text_boxes()` charges a 9px
@@ -3141,7 +3193,7 @@ mod tests {
             );
             checked += 1;
         }
-        assert!(checked >= legend_rows().len(), "must have checked every legend row");
+        assert!(checked >= legend_rows(LegendVoice::Played).len(), "must have checked every legend row");
     }
 
     #[test]
