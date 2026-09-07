@@ -549,6 +549,20 @@ One thing outranks even the crossroads, and it is the rule the whole engine is b
 around: two rooms joined by a north/south or east/west passage walked from both ends
 share a row or a column, and nothing may stand between them.
 
+**And a room standing in its own run is not standing between anything** (SQ-1389).
+"Nothing may stand between them" is asked of the cell, and for a long time it was asked
+of nothing else — so every room in the *middle* of a run answered it about its own
+neighbours and was judged to be blocking the very chain it completes. Lost Pig's gnome
+room is joined to the `Table Room` and the `Shelf Room` by two passages walked from both
+ends and by nothing else, which leaves exactly one cell that satisfies it: the free one
+between them. The layout found that cell three times over — the solve, the alignment
+pass and the crossroads rule all agreed — and then the contiguity pass decided the room
+was blocking a run, went looking for somewhere else to put it, prised open the gated
+passage between the `Statue Room` and the `Windy Cave` and dropped it in there instead.
+All four of its passages then drew as distortions. A room on its run's line between two
+fellow members *is* the run; the question is asked per run, so a room can still be a
+proper member of one chain and a genuine interloper in a different one.
+
 **Share a line, not a cell count** (SQ-1376, revising SQ-1364). A compass word names a
 direction, not a distance: `west` says the room is due west, and how many cells west is
 the layout's business. So an east/west pair is honoured when it is on one *row*, however

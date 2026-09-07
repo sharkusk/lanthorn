@@ -742,8 +742,23 @@ fn cell_is_on_span(span: &ChainSpan, cell: (i32, i32)) -> bool {
 /// it is a fair drawing of a secret passage; a plain corridor or a doorway doing the same is a
 /// lie. This is the one place a weight decides anything other than constraint order, and it is
 /// the same principle either way: when two claims cannot both hold, the more gated one yields.
-fn splits_a_run(runs: &[Run], cell: (i32, i32)) -> bool {
+///
+/// **A run's OWN member never splits it** (SQ-1389). `who` is the local index of the room asking,
+/// and every run that counts it as a member is skipped: a room standing on its run's line between
+/// two fellow members *is* the run, not an interloper in it. `#147 ─E→ #194 ─E→ #157` puts #194
+/// one cell from each neighbour — exactly what the reciprocal pairs ask for — and reading that as
+/// "#194 splits the #147‥#157 run" is reading a satisfied chain as a broken one. Lost Pig's gnome
+/// room was judged stuck on the cell that satisfied both of its passages, and
+/// `open_gated_holes_for_hubs` then rehoused it three rows north, between `Statue Room` and
+/// `Windy Cave`, splitting a run that was genuinely reciprocal to un-split one that was not
+/// broken. The membership test is PER RUN, not global: a room may legitimately be a member of an
+/// E/W run and still be sitting inside somebody else's N/S run, which is the case this pass
+/// exists for.
+fn splits_a_run(runs: &[Run], who: usize, cell: (i32, i32)) -> bool {
     runs.iter().any(|r| {
+        if r.members.contains(&who) {
+            return false;
+        }
         let s = &r.span;
         let (perp, par) = if s.horizontal { (cell.1, cell.0) } else { (cell.0, cell.1) };
         perp == s.line
@@ -1147,7 +1162,7 @@ fn open_gated_holes_for_hubs(
     for &h in hubs {
         let cell = snapped[h];
         let stuck = (0..snapped.len()).any(|q| q != h && snapped[q] == cell)
-            || splits_a_run(runs, cell);
+            || splits_a_run(runs, h, cell);
         if !stuck {
             continue;
         }
@@ -1250,7 +1265,7 @@ fn contiguify(
     open_gated_holes_for_hubs(&runs, &hubs, comp, index, &mut snapped_v, graph, chains);
     let runs = chain_runs(chains, comp, index, &snapped_v);
     let protected = |q: usize, cell: (i32, i32)| {
-        members.contains(&q) || (hubs.contains(&q) && !splits_a_run(&runs, cell))
+        members.contains(&q) || (hubs.contains(&q) && !splits_a_run(&runs, q, cell))
     };
     for r in &runs {
         eject_interlopers(&mut snapped_v, &protected, r.span, comp, index, graph);
