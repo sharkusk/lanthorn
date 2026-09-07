@@ -27,6 +27,16 @@ Absolute URLs or no link.
 > visible tag `*Next release:*`. `release.yml` refuses to cut a release
 > while any such tag, or this Unreleased section, still exists.*
 
+### Added
+
+- **On a local kitty-protocol terminal, Version 6 artwork is now handed over
+  through shared memory instead of being base64-encoded into the stream** — a
+  640x400 picture goes from about 1.3 MB on the wire to under 200 bytes.
+  lanthorn asks the terminal whether it can do this before it tries, so over
+  SSH nothing changes and the pictures still arrive as they always did. Turn it
+  off with `kitty_shared_memory = "off"` in `config.toml`; `/dump-terminal`
+  names the route in force.
+
 ### Fixed
 
 - **A diagonal passage between neighbouring rooms now draws as a real

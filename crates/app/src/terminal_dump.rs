@@ -212,6 +212,10 @@ pub struct TerminalSnapshot {
     pub capabilities: Vec<String>,
     /// The terminal answered the `o=z` probe.
     pub kitty_compression: bool,
+    /// The terminal answered the `t=s` shared memory probe (SQ-1374). False also
+    /// when `kitty_shared_memory = "off"` sent no probe at all — the config is
+    /// honoured by not asking, so from here the two are the same state.
+    pub kitty_shared_memory: bool,
     /// The story pane in terminal cells.
     pub pane_cells: (u16, u16),
     pub render: Option<RenderFacts>,
@@ -437,6 +441,28 @@ pub fn dump_lines(s: &TerminalSnapshot) -> Vec<DumpLine> {
                  probe, and a transmit it cannot inflate would store no image at all",
             )
         });
+        // SQ-1374: which of the three routes a graphics window's pixels actually
+        // take. Stated as one line naming the route in force rather than as a
+        // second yes/no, because the three are alternatives — shared memory does
+        // not compress, and cannot, since there is nothing on the wire to shrink.
+        out.push(if s.kitty_shared_memory {
+            value(
+                "    window transmit: SHARED MEMORY — the terminal answered the t=s probe, so a \
+                 graphics window's pixels are handed over in a POSIX shared memory object and \
+                 never reach the wire at all",
+            )
+        } else if s.kitty_compression {
+            value(
+                "    window transmit: ZLIB — no t=s answer (a remote terminal cannot open our \
+                 shared memory, and kitty_shared_memory = \"off\" does not ask), so the pixels go \
+                 down the wire deflated",
+            )
+        } else {
+            assumed(
+                "    window transmit: PLAIN BASE64 — neither the t=s nor the o=z probe was \
+                 answered, so every pixel goes down the wire base64-encoded and whole",
+            )
+        });
     }
 
     // ── render state, insofar as it explains the traffic ─────────────────────
@@ -594,6 +620,7 @@ pub fn dump_lines(s: &TerminalSnapshot) -> Vec<DumpLine> {
         ("band encode", s.encode_timings.band_encode),
         ("window deflate", s.encode_timings.window_deflate),
         ("window base64", s.encode_timings.window_base64),
+        ("window shared memory", s.encode_timings.window_shm),
     ] {
         if stat.count == 0 {
             out.push(value(format!("  encode time, {label}: never ran this session")));
@@ -642,6 +669,7 @@ mod tests {
             reported_cell: Some((8, 18)),
             ioctl_cell: Some((8, 18)),
             capabilities: vec!["Kitty".into(), "KittyCompression".into()],
+            kitty_shared_memory: false,
             kitty_compression: true,
             pane_cells: (115, 61),
             render: None,
@@ -766,6 +794,47 @@ mod tests {
         assert!(
             !text(&s).contains("unconditionally"),
             "no path states o=z whatever the probe said any more (SQ-0997)"
+        );
+    }
+
+    /// SQ-1374: which route a graphics window's pixels take is one line naming
+    /// one of three, because they are alternatives rather than three yes/nos —
+    /// shared memory does not compress and cannot, since nothing is on the wire
+    /// to shrink.
+    ///
+    /// The plain-base64 case is the only one flagged: it is the silently slow one,
+    /// where a megabyte of pixels goes down the wire whole every frame.
+    #[test]
+    fn the_window_transmit_route_is_named_and_only_one_of_them_is() {
+        let mut s = snap();
+        s.kitty_shared_memory = true;
+        let l = dump_lines(&s).into_iter().find(|l| l.text.contains("window transmit")).unwrap();
+        assert_eq!(l.kind, DumpKind::Value, "{}", l.text);
+        assert!(l.text.contains("SHARED MEMORY"), "{}", l.text);
+        assert!(!l.text.contains("ZLIB"), "one route, not a list: {}", l.text);
+
+        // The o=z answer is still true here, and still irrelevant to this line.
+        let mut s = snap();
+        s.kitty_shared_memory = false;
+        assert!(s.kitty_compression, "snap() answers the o=z probe");
+        let l = dump_lines(&s).into_iter().find(|l| l.text.contains("window transmit")).unwrap();
+        assert_eq!(l.kind, DumpKind::Value, "{}", l.text);
+        assert!(l.text.contains("ZLIB"), "{}", l.text);
+
+        let mut s = snap();
+        s.kitty_shared_memory = false;
+        s.kitty_compression = false;
+        s.capabilities = vec!["Kitty".into()];
+        let l = dump_lines(&s).into_iter().find(|l| l.text.contains("window transmit")).unwrap();
+        assert_eq!(l.kind, DumpKind::Assumed, "a whole-pixel wire needs marking: {}", l.text);
+        assert!(l.text.contains("PLAIN BASE64"), "{}", l.text);
+
+        // And it is a kitty question, exactly like the compression lines above it.
+        let mut s = snap();
+        s.protocol = Some("sixel".into());
+        assert!(
+            !text(&s).contains("window transmit"),
+            "`t=s` is a kitty key; a sixel terminal has no answer to give"
         );
     }
 

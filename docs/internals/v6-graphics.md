@@ -2851,6 +2851,78 @@ is exactly why it went unseen. The refresh now hands the new cell size to the
 picker it already has (`Picker::set_font_size`, added to the fork for it) and
 touches nothing else (SQ-0992).
 
+## And the fastest transmission is the one that never reaches the wire
+
+Compressing a megabyte of pixels down to thirty kilobytes is a large win over
+sending a megabyte. Sending a **filename** is a larger one.
+
+The kitty protocol's `t=s` transmission medium says: I have put the pixels in a
+POSIX shared memory object called this; go and read it. The payload on the wire is
+the object's name, so a 640×400 canvas — 1,024,000 bytes of RGBA, 1,365,336 bytes
+of base64, a few thousand after deflate — becomes a single APC command of well
+under two hundred bytes. There is no chunking, because there is nothing to chunk.
+There is no `o=z` either, and that is not an oversight: deflate exists to make the
+wire smaller, and the pixels are not on the wire. The terminal reads the object
+with a `memcpy` and unlinks it (SQ-1374).
+
+**It only works on the same machine, so it is asked for rather than assumed.** A
+terminal on the far end of an ssh connection cannot open our shared memory, and —
+exactly like `o=z` above — a transmission it refuses is not slow but *invisible*.
+`ratatui-image`'s upstream patch for `t=s` was a blind opt-in, so lanthorn's own
+addition to it is a probe: a one-pixel object created at startup, named in the
+capability query already going out (`_Gi=33,a=q,t=s,f=32,s=1,v=1;<base64 name>`),
+and `Capability::KittySharedMemory` reported only on `OK`. Both encoders read it —
+`ratatui-image` for the chrome bands and the raster composite,
+`render::graphics::kitty_transmit_virtual_shm` for graphics windows — and an empty
+capability list means no, for all the same reasons.
+
+The config key is `kitty_shared_memory`, and it takes `"auto"` (the default) or
+`"off"`. There is deliberately no `"on"`: this is something a terminal can do or
+cannot, and the setting exists for someone who wants the *asking* to stop. `off`
+is honoured by never sending the probe at all — the probe creates a real object
+and adds an escape to the startup query, so declining it at the transmit would
+leave both of those happening for a user who said no. Declining it at the picker
+means the capability never appears, and every reader downstream sees exactly what
+a terminal without the feature looks like.
+
+**Two platform facts nearly buried this, both found on macOS and both silent.**
+
+- A POSIX shared memory name is capped at **31 bytes including the leading
+  slash** on macOS (`PSHMNAMLEN`); a longer one is refused with `ENAMETOOLONG`,
+  while Linux takes 255 happily. The upstream patch's
+  `/ratatui-image-kitty-shm{pid}-{id}` is 24 bytes before the numbers start and so
+  never opened at all on the platform this is mostly developed on. Ours is
+  `/lnt-{pid}-{serial}`, 26 bytes at `u32::MAX` for both, and a test asserts the
+  *widest* name the scheme can produce — a typical one fitting proves nothing.
+- macOS does not implement `read`/`write` on a shared memory object. The
+  descriptor opens, `ftruncate` succeeds, and the first `write(2)` answers
+  `ENXIO`. The pixels go in through an `mmap`/copy/`munmap` instead, which is what
+  the terminal does at the other end anyway.
+
+**The name is per *transmit*, not per image**, and that is the one place this
+differs from everything else on this page. The handover is asynchronous: the
+escape rides out on the next flush and the terminal opens the object whenever it
+gets to it. A window's image id is deliberately *stable* across re-transmits (see
+the next section), so naming the object after it would let a second transmit
+truncate the object out from under a terminal still reading the first. A serial
+per transmit cannot race, and the id in the escape is still the stable one, so
+nothing about the placement changes.
+
+A write that fails falls back to the inline route — deflated or raw, per the same
+terminal's `o=z` answer — because a machine can run out of shared memory and a
+window that draws nothing is the failure mode this whole path exists to avoid.
+That fallback is why the two capabilities travel as one `WindowWire` value rather
+than as two booleans down the same call chain: the deflate answer is still needed
+on the path where shared memory was preferred and did not work.
+
+`/dump-terminal` names the route in force — `window transmit: SHARED MEMORY` /
+`ZLIB` / `PLAIN BASE64` — as one line rather than three yes/nos, because they are
+alternatives, and times the object write as its own phase (`window shared memory`,
+which runs *instead of* `window deflate` and `window base64`, not beside them).
+
+Windows keeps the inline path: there is no POSIX shared memory there, the probe is
+never sent, and the capability cannot appear.
+
 ## A graphics window's image id never moves, so a changed picture costs the picture
 
 Compressing the payload only helps if the payload is what you are paying for. On

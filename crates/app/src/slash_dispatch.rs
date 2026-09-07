@@ -921,6 +921,10 @@ fn terminal_snapshot(
             Capability::KittyCompression => {
                 "KittyCompression — the terminal can inflate an o=z transmission".to_string()
             }
+            Capability::KittySharedMemory => {
+                "KittySharedMemory — the terminal can open a t=s shared memory object we write"
+                    .to_string()
+            }
             Capability::CellSize(Some((w, h))) => format!("CellSize({w}x{h} px, from CSI 16 t)"),
             Capability::CellSize(None) => "CellSize (answered, but named no size)".to_string(),
             Capability::TextSizingProtocol => "TextSizingProtocol".to_string(),
@@ -928,6 +932,7 @@ fn terminal_snapshot(
         })
         .collect();
     let kitty_compression = caps.contains(&Capability::KittyCompression);
+    let kitty_shared_memory = caps.contains(&Capability::KittySharedMemory);
 
     let cell = picker.map(|p| {
         let f = p.font_size();
@@ -1022,6 +1027,7 @@ fn terminal_snapshot(
         ioctl_cell,
         capabilities,
         kitty_compression,
+        kitty_shared_memory,
         pane_cells: (story_rect.width, story_rect.height),
         render,
         traffic: state.term_traffic.as_ref().map(|t| TrafficStats {

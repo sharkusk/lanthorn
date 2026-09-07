@@ -1014,6 +1014,48 @@ pub fn kitty_compression(picker: &Picker) -> bool {
     picker.capabilities().contains(&ratatui_image::picker::Capability::KittyCompression)
 }
 
+/// Whether this terminal can open a POSIX shared memory object we write (SQ-1374).
+///
+/// The same shape as [`kitty_compression`] and for the same reason: `t=s` is not a
+/// hint. A terminal that cannot reach the object refuses the transmission, stores
+/// no image, and every placement naming it draws nothing — and "cannot reach"
+/// covers the ordinary case of a terminal at the other end of an ssh connection,
+/// which is a first-class way to run this app. So it is ASKED, by
+/// `ratatui-image`'s `kitty_shared_memory_probe`: a one-pixel object created at
+/// startup, named in the capability query with `a=q,t=s`, and reported only on
+/// `OK`.
+///
+/// An empty capability list therefore means no, exactly as it does for
+/// compression, and so does `kitty_shared_memory = "off"` — that key is honoured
+/// by never sending the probe (see `picker_ui::build_cover_picker`), so a user who
+/// declined it looks from here like a terminal that cannot do it, which is the
+/// same thing for every decision downstream.
+pub fn kitty_shared_memory(picker: &Picker) -> bool {
+    picker.capabilities().contains(&ratatui_image::picker::Capability::KittySharedMemory)
+}
+
+/// How a graphics window's pixels reach this terminal (SQ-1374).
+///
+/// Two capabilities the terminal answers separately, kept as one value because
+/// every decision downstream needs BOTH: shared memory is preferred where it is
+/// available, and the deflate answer is still what the fallback needs when a
+/// shared memory write fails at runtime. Passing them as two booleans down the
+/// same call chain is the shape this codebase has been bitten by (see the
+/// refactoring policy in CLAUDE.md) — one of them gets dropped at a call site and
+/// the frame that comes out is self-consistent and wrong.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct WindowWire {
+    /// The terminal answered the `o=z` probe: a deflated payload will be inflated.
+    pub compress: bool,
+    /// The terminal answered the `t=s` probe: it can open an object we write.
+    pub shared_memory: bool,
+}
+
+/// What [`WindowWire`] this picker's terminal is owed.
+pub fn window_wire(picker: &Picker) -> WindowWire {
+    WindowWire { compress: kitty_compression(picker), shared_memory: kitty_shared_memory(picker) }
+}
+
 /// The cell rect the v6 composite occupies under HALF-BLOCKS, without building a
 /// pixel of it (SQ-0973).
 ///
@@ -1301,6 +1343,11 @@ pub struct EncodeTimings {
     pub band_encode: PhaseStat,
     pub window_deflate: PhaseStat,
     pub window_base64: PhaseStat,
+    /// Writing one graphics window's pixels into a shared memory object
+    /// (SQ-1374). Runs INSTEAD of `window_deflate` and `window_base64`, not
+    /// beside them, so a session where this one has run and those two have not is
+    /// the normal shape on a terminal that took the `t=s` probe.
+    pub window_shm: PhaseStat,
 }
 
 #[derive(Default)]
@@ -1690,7 +1737,7 @@ impl GraphicsRender {
         // (Ghostty/macOS 2×), the image covered only part of the window and
         // mouse clicks mapped to the wrong game pixels. (SQ-0520)
         if picker.protocol_type() == ratatui_image::picker::ProtocolType::Kitty {
-            self.render_kitty_virtual(gw, area, kitty_compression(picker), buf);
+            self.render_kitty_virtual(gw, area, window_wire(picker), buf);
             return;
         }
         let fresh = matches!(self.cache.get(&gw.win),
@@ -1928,7 +1975,7 @@ impl GraphicsRender {
         &mut self,
         gw: &GraphicsWindow,
         area: Rect,
-        compress: bool,
+        wire: WindowWire,
         buf: &mut Buffer,
     ) {
         // A resize invalidates this window's upload: the placement's r×c grid is
@@ -1971,11 +2018,16 @@ impl GraphicsRender {
                 });
             } else {
                 let (transmit, timing) =
-                    kitty_transmit_virtual_timed(&gw.canvas, entry.id, area.height, area.width, compress);
+                    kitty_transmit_virtual_wire(&gw.canvas, entry.id, area.height, area.width, wire);
+                if let Some(d) = timing.shm {
+                    self.encode_timings.window_shm.record(d);
+                }
                 if let Some(d) = timing.deflate {
                     self.encode_timings.window_deflate.record(d);
                 }
-                self.encode_timings.window_base64.record(timing.base64);
+                if let Some(d) = timing.base64 {
+                    self.encode_timings.window_base64.record(d);
+                }
                 let measured = measure_transmit(&transmit);
                 self.note_upload_id(Some(entry.id), measured.pixels);
                 self.uploads.add(measured);
@@ -3557,8 +3609,13 @@ fn kitty_transmit_virtual(canvas: &image::RgbaImage, id: u32, rows: u16, cols: u
 struct WindowTiming {
     /// `None` when `compress` was false: there was no deflate to time.
     deflate: Option<std::time::Duration>,
-    /// The whole chunk/base64 loop, timed once — not per chunk.
-    base64: std::time::Duration,
+    /// The whole chunk/base64 loop, timed once — not per chunk. `None` when the
+    /// pixels went through shared memory, where there is no payload to encode
+    /// (SQ-1374).
+    base64: Option<std::time::Duration>,
+    /// Writing the pixels into a shared memory object — `shm_open`, `ftruncate`
+    /// and one copy through a mapping. `None` on every other route.
+    shm: Option<std::time::Duration>,
 }
 
 /// [`kitty_transmit_virtual`] plus its own timing (SQ-1338). Split out as its own
@@ -3607,7 +3664,165 @@ fn kitty_transmit_virtual_timed(
         out.push_str("\x1b\\");
     }
     let base64_time = t1.elapsed();
-    (out, WindowTiming { deflate: deflate_time, base64: base64_time })
+    (out, WindowTiming { deflate: deflate_time, base64: Some(base64_time), shm: None })
+}
+
+/// The name of the shared memory object one graphics-window transmit is handed
+/// over in (SQ-1374).
+///
+/// **Short on purpose, and per-transmit rather than per-image.**
+///
+/// Short, because macOS caps a POSIX shared memory name at 31 bytes *including*
+/// the leading slash (`PSHMNAMLEN`) and refuses anything longer with
+/// `ENAMETOOLONG` — measured, and the reason the upstream `t=s` patch transmitted
+/// nothing at all on macOS until its names were shortened too. At `u32::MAX` for
+/// both numbers this is 26 bytes.
+///
+/// Per-transmit, because the object is handed over ASYNCHRONOUSLY: the escape
+/// rides out on the next flush and the terminal opens the object whenever it gets
+/// to it. Naming the object after the window's image id — which is stable across
+/// re-transmits, deliberately (SQ-0995) — would let a second transmit truncate the
+/// object out from under a terminal still reading the first. A fresh name per
+/// transmit cannot race, and the id in the escape is still the stable one, so
+/// nothing about the placement changes.
+#[cfg(unix)]
+fn kitty_shm_name(serial: u32) -> String {
+    format!("/lnt-{}-{serial}", std::process::id())
+}
+
+/// Write `bytes` into a fresh shared memory object called `name`, or `None` if the
+/// platform refuses (SQ-1374).
+///
+/// The bytes go in through a mapping rather than `write(2)`, because macOS does
+/// not implement read/write on a shared memory object at all — the descriptor
+/// opens, `ftruncate` succeeds, and the first write answers `ENXIO`. A mapping is
+/// also how the terminal reads it back.
+///
+/// The object is sized to exactly the payload: a terminal rejects one smaller than
+/// `s * v * bpp` (Ghostty says "shared memory size too small"), and one larger
+/// wastes a page it will never look at.
+///
+/// **A successful object is not unlinked here.** The protocol makes the terminal
+/// responsible: it unlinks the object once it has read it, which is what lets the
+/// handover need no synchronisation. An object no terminal ever reads does outlive
+/// us — which is exactly why [`kitty_shared_memory`] refuses this route unless the
+/// terminal answered a probe by reading one. A FAILED write is unlinked, because
+/// a half-written object is one nothing will ever be told about.
+#[cfg(unix)]
+fn kitty_shm_write(name: &str, bytes: &[u8]) -> Option<()> {
+    if bytes.is_empty() {
+        return None;
+    }
+    let cname = std::ffi::CString::new(name).ok()?;
+    // SAFETY: `cname` is a NUL-terminated string that outlives every call below;
+    // each descriptor and pointer is checked against its documented failure value
+    // before use, and both the mapping and the descriptor are released here.
+    unsafe {
+        let fd = libc::shm_open(cname.as_ptr(), libc::O_CREAT | libc::O_RDWR | libc::O_TRUNC, 0o600);
+        if fd < 0 {
+            return None;
+        }
+        let filled = if libc::ftruncate(fd, bytes.len() as libc::off_t) == 0 {
+            let ptr = libc::mmap(
+                std::ptr::null_mut(),
+                bytes.len(),
+                libc::PROT_READ | libc::PROT_WRITE,
+                libc::MAP_SHARED,
+                fd,
+                0,
+            );
+            if ptr == libc::MAP_FAILED {
+                false
+            } else {
+                std::ptr::copy_nonoverlapping(bytes.as_ptr(), ptr.cast::<u8>(), bytes.len());
+                libc::munmap(ptr, bytes.len());
+                true
+            }
+        } else {
+            false
+        };
+        libc::close(fd);
+        if !filled {
+            libc::shm_unlink(cname.as_ptr());
+            return None;
+        }
+    }
+    Some(())
+}
+
+/// The kitty transmit sequence for `canvas` as image `id`, handed over through a
+/// POSIX shared memory object instead of down the wire (SQ-1374).
+///
+/// The same virtual placement [`kitty_transmit_virtual_timed`] emits — `U=1` with
+/// an explicit `r×c` grid, the named placement `p=1`, `f=32` RGBA and the canvas's
+/// own `s`/`v` — with two differences, both of them the point:
+///
+///   * `t=s` instead of `t=d`, and the payload is the base64 of the object's NAME
+///     rather than of a megabyte of pixels. One chunk, always: there is nothing to
+///     chunk, and `m=0` says so.
+///   * No `o=z`. Deflate exists to make the wire smaller and the pixels are not on
+///     the wire, so compressing them would cost the deflate and buy nothing — the
+///     terminal reads the object with a copy.
+///
+/// `None` when the object could not be written, and the caller falls back to the
+/// inline route. That fallback is load-bearing rather than defensive: a machine can
+/// run out of shared memory, and a window that draws nothing is the failure mode
+/// this whole path exists to avoid.
+#[cfg(unix)]
+fn kitty_transmit_virtual_shm(
+    canvas: &image::RgbaImage,
+    id: u32,
+    rows: u16,
+    cols: u16,
+    serial: u32,
+) -> Option<(String, std::time::Duration)> {
+    use std::fmt::Write as _;
+    let (w, h) = (canvas.width(), canvas.height());
+    let name = kitty_shm_name(serial);
+    let t0 = std::time::Instant::now();
+    kitty_shm_write(&name, canvas.as_raw())?;
+    let elapsed = t0.elapsed();
+
+    let mut out = String::with_capacity(name.len() * 2 + 80);
+    write!(
+        out,
+        "\x1b_Gq=2,i={id},p={KITTY_PLACEMENT},a=T,U=1,f=32,t=s,\
+         s={w},v={h},r={rows},c={cols},m=0;"
+    )
+    .unwrap();
+    out.push_str(&kitty_b64(name.as_bytes()));
+    out.push_str("\x1b\\");
+    Some((out, elapsed))
+}
+
+/// One graphics-window transmit, by whichever route this terminal answered for
+/// (SQ-1374).
+///
+/// Shared memory first where the terminal took that probe; the inline route —
+/// deflated or raw, per the same terminal's `o=z` answer — everywhere else, and
+/// whenever a shared memory write fails. That fallback is why [`WindowWire`] is one
+/// value rather than two parameters: the deflate answer is still needed on the path
+/// where shared memory was preferred and did not work.
+fn kitty_transmit_virtual_wire(
+    canvas: &image::RgbaImage,
+    id: u32,
+    rows: u16,
+    cols: u16,
+    wire: WindowWire,
+) -> (String, WindowTiming) {
+    #[cfg(unix)]
+    if wire.shared_memory {
+        // A serial per transmit, never the image id — see [`kitty_shm_name`].
+        // Wrapping is fine and unreachable in practice: it would take four billion
+        // window repaints, and the name only has to be unique against objects a
+        // terminal has not finished reading yet.
+        static SERIAL: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+        let serial = SERIAL.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        if let Some((out, elapsed)) = kitty_transmit_virtual_shm(canvas, id, rows, cols, serial) {
+            return (out, WindowTiming { deflate: None, base64: None, shm: Some(elapsed) });
+        }
+    }
+    kitty_transmit_virtual_timed(canvas, id, rows, cols, wire.compress)
 }
 
 /// What kitty uploads have cost, and what the same pixels would have cost with no
@@ -7432,6 +7647,166 @@ mod tests {
             assert!(keys.contains(",s=232,v=304,"), "the pixel dimensions do not move: {keys}");
             assert!(keys.contains(",r=19,c=29,"), "nor does the explicit placeholder grid: {keys}");
             assert_eq!(payload, *img.as_raw(), "the payload IS the canvas, undeflated");
+        }
+
+        // ── SQ-1374: the shared memory route ─────────────────────────────────
+
+        /// A shared memory name over 31 bytes is refused on macOS
+        /// (`ENAMETOOLONG`), and the failure is silent on the screen — so the
+        /// WIDEST name the scheme can produce has to fit, not a typical one.
+        #[test]
+        #[cfg(unix)]
+        fn a_shared_memory_name_fits_the_tightest_platform_limit() {
+            const PSHMNAMLEN: usize = 31;
+            // `kitty_shm_name` takes only the serial; the pid is this process's,
+            // so the widest name is the widest pid with the widest serial.
+            let widest = kitty_shm_name(u32::MAX).len() - std::process::id().to_string().len() + 10;
+            assert!(widest <= PSHMNAMLEN, "{widest} bytes at the widest pid, macOS allows {PSHMNAMLEN}");
+            let name = kitty_shm_name(1);
+            assert!(
+                name.starts_with('/') && !name[1..].contains('/'),
+                "one leading slash and no others, for portability: {name}"
+            );
+        }
+
+        /// The object really is created, sized and filled — the syscalls, not the
+        /// string that names them. macOS answers `ENXIO` to `write(2)` on a shared
+        /// memory object, so a write loop here would build a perfectly good escape
+        /// pointing at an empty object and the window would draw nothing.
+        #[test]
+        #[cfg(unix)]
+        fn the_shared_memory_object_holds_the_pixels() {
+            let img = canvas(16, 9);
+            let name = kitty_shm_name(0xFEED);
+            kitty_shm_write(&name, img.as_raw()).expect("this platform writes a shared memory object");
+
+            let cname = std::ffi::CString::new(name.as_str()).unwrap();
+            // SAFETY: reading back the object just written, unmapped and closed
+            // before this block ends, and unlinked afterwards.
+            let read_back = unsafe {
+                let fd = libc::shm_open(cname.as_ptr(), libc::O_RDONLY, 0);
+                assert!(fd >= 0, "the object exists after the write");
+                let len = img.as_raw().len();
+                let ptr = libc::mmap(std::ptr::null_mut(), len, libc::PROT_READ, libc::MAP_SHARED, fd, 0);
+                assert!(ptr != libc::MAP_FAILED, "and it is at least as big as the pixels");
+                let out = std::slice::from_raw_parts(ptr.cast::<u8>(), len).to_vec();
+                libc::munmap(ptr, len);
+                libc::close(fd);
+                libc::shm_unlink(cname.as_ptr());
+                out
+            };
+            assert_eq!(read_back, *img.as_raw(), "byte for byte, the canvas the terminal will read");
+        }
+
+        /// The `t=s` escape hands over a NAME, and only a name: same placement,
+        /// same geometry, one chunk, and nothing claiming to be compressed.
+        #[test]
+        #[cfg(unix)]
+        fn a_shared_memory_transmit_names_the_object_and_never_deflates() {
+            let img = canvas(640, 400);
+            let (out, _) = kitty_transmit_virtual_shm(&img, 0x00B0_0007, 25, 80, 0xC0DE)
+                .expect("this platform writes a shared memory object");
+            let (keys, payload) = parse(&out);
+
+            assert!(keys.contains(",t=s,"), "the transmission medium is the object: {keys}");
+            assert!(!keys.contains("t=d"), "and nothing is inline: {keys}");
+            assert!(!keys.contains("o=z"), "nothing on the wire to deflate: {keys}");
+            assert!(keys.contains(",f=32,"), "the format the terminal finds is still RGBA: {keys}");
+            assert!(keys.contains(",s=640,v=400,"), "the canvas's own dimensions: {keys}");
+            assert!(keys.contains(",r=25,c=80,"), "the explicit placeholder grid survives (SQ-0520): {keys}");
+            assert!(keys.contains("i=11534343"), "the window's stable image id: {keys}");
+            assert!(keys.contains(&format!("p={KITTY_PLACEMENT}")), "the named placement (SQ-0995): {keys}");
+            assert!(keys.contains(",m=0"), "one chunk: a name never needs a second: {keys}");
+            assert_eq!(out.matches("\x1b_G").count(), 1, "and there IS only one command: {out}");
+
+            let name = String::from_utf8(payload).expect("the payload is the object's name");
+            assert_eq!(name, kitty_shm_name(0xC0DE));
+            assert!(
+                out.len() < 200,
+                "a megabyte of pixels became {} bytes on the wire",
+                out.len()
+            );
+
+            let cname = std::ffi::CString::new(name).unwrap();
+            // SAFETY: unlinking an object this test created and nothing reads.
+            unsafe { libc::shm_unlink(cname.as_ptr()) };
+        }
+
+        /// Without the capability the route is unchanged, byte for byte — the
+        /// gate that keeps every terminal that did not answer the `t=s` probe (an
+        /// ssh session, `kitty_shared_memory = "off"`, Windows) exactly where it
+        /// was.
+        ///
+        /// FALSIFY by making `kitty_transmit_virtual_wire` reach for shared memory
+        /// unconditionally: both assertions fail, with a name where the pixels
+        /// should be.
+        #[test]
+        fn a_terminal_that_did_not_answer_the_probe_gets_the_wire_it_always_got() {
+            let img = canvas(64, 32);
+            for compress in [false, true] {
+                let wire = WindowWire { compress, shared_memory: false };
+                let (got, timing) = kitty_transmit_virtual_wire(&img, 9, 4, 8, wire);
+                assert_eq!(
+                    got,
+                    kitty_transmit_virtual(&img, 9, 4, 8, compress),
+                    "compress={compress}: identical to the pre-SQ-1374 transmit"
+                );
+                assert!(timing.shm.is_none(), "no object was written, so there is nothing to report");
+                assert!(timing.base64.is_some(), "the payload was encoded, and the dump says what it cost");
+                assert_eq!(timing.deflate.is_some(), compress);
+            }
+        }
+
+        /// And with it, the wire carries a name — with the deflate answer still
+        /// riding along, because it is what the fallback needs when a shared
+        /// memory write fails at runtime.
+        #[test]
+        #[cfg(unix)]
+        fn a_terminal_that_answered_the_probe_is_handed_an_object() {
+            let img = canvas(64, 32);
+            let (got, timing) = kitty_transmit_virtual_wire(
+                &img,
+                9,
+                4,
+                8,
+                WindowWire { compress: true, shared_memory: true },
+            );
+            let (keys, payload) = parse(&got);
+            assert!(keys.contains(",t=s,"), "shared memory outranks compression: {keys}");
+            assert!(!keys.contains("o=z"), "and there is nothing left to compress: {keys}");
+            assert!(timing.shm.is_some(), "the object write is what /dump-terminal times here");
+            assert!(timing.deflate.is_none() && timing.base64.is_none(), "neither of the other two ran");
+
+            let cname = std::ffi::CString::new(payload).unwrap();
+            // SAFETY: unlinking an object this test created and nothing reads.
+            unsafe { libc::shm_unlink(cname.as_ptr()) };
+        }
+
+        /// Two transmits never name one object, because the terminal reads them
+        /// asynchronously: a second write to the first one's name would truncate
+        /// it under a terminal halfway through it. The image id is deliberately
+        /// stable (SQ-0995), so the name cannot be built from it.
+        #[test]
+        #[cfg(unix)]
+        fn two_transmits_of_one_image_id_use_two_objects() {
+            let img = canvas(16, 16);
+            let wire = WindowWire { compress: false, shared_memory: true };
+            let (a, _) = kitty_transmit_virtual_wire(&img, 0x00B0_0001, 1, 2, wire);
+            let (b, _) = kitty_transmit_virtual_wire(&img, 0x00B0_0001, 1, 2, wire);
+            let (ka, na) = parse(&a);
+            let (kb, nb) = parse(&b);
+            assert_eq!(
+                kitty_param(&ka, "i"),
+                kitty_param(&kb, "i"),
+                "the same window, so the same image id"
+            );
+            assert_ne!(na, nb, "but never the same object");
+
+            for name in [na, nb] {
+                let cname = std::ffi::CString::new(name).unwrap();
+                // SAFETY: unlinking objects this test created and nothing reads.
+                unsafe { libc::shm_unlink(cname.as_ptr()) };
+            }
         }
     }
 
