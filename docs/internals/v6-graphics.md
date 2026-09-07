@@ -2882,10 +2882,13 @@ with a `memcpy` and unlinks it (SQ-1374).
 **It only works on the same machine, so it is asked for rather than assumed.** A
 terminal on the far end of an ssh connection cannot open our shared memory, and —
 exactly like `o=z` above — a transmission it refuses is not slow but *invisible*.
-`ratatui-image`'s upstream patch for `t=s` was a blind opt-in, so lanthorn's own
-addition to it is a probe: a one-pixel object created at startup, named in the
-capability query already going out (`_Gi=33,a=q,t=s,f=32,s=1,v=1;<base64 name>`),
-and `Capability::KittySharedMemory` reported only on `OK`. Both encoders read it —
+`ratatui-image`'s upstream patch for `t=s` was a blind opt-in at first; lanthorn's
+fork added a probe on top of it, and as of SQ-1382 that probe is folded into the
+same option rather than a second flag — `kitty_shared_memory_object` now means
+"probe during the stdio query, and use it if the terminal answered" on its own. A
+one-pixel object is created at startup, named in the capability query already
+going out (`_Gi=33,a=q,t=s,f=32,s=1,v=1;<base64 name>`), and
+`Capability::KittySharedMemory` reported only on `OK`. Both encoders read it —
 `ratatui-image` for the chrome bands and the raster composite,
 `render::graphics::kitty_transmit_virtual_shm` for graphics windows — and an empty
 capability list means no, for all the same reasons.
@@ -2955,8 +2958,13 @@ of text — hit it on nearly every repaint: the picture froze on every new line 
 scroll, Ghostty logging "shared memory size too small" as it dropped a frame
 whose object the previous transmit's reader might still have been midway
 through. Fixed on the fork the same way as lanthorn's own writer: `transmit_shm`
-now draws the object's name from a private, per-call `AtomicU32` serial, never
-the image id, so both of lanthorn's `t=s` writers now agree on the rule.
+drew the object's name from a private, per-call `AtomicU32` serial at first, never
+the image id, so both of lanthorn's `t=s` writers agreed on the rule. SQ-1382
+dropped that second counter on the fork's side — the suffix is now
+`rand::random::<u32>()`, the same way `Picker` already draws kitty image ids —
+without changing the rule itself: lanthorn's own writer (`kitty_shm_name`) still
+counts with its own `AtomicU32`, and the two writers agree on "fresh name per
+transmit, never the image id" without agreeing on how they get there.
 
 A write that fails falls back to the inline route — deflated or raw, per the same
 terminal's `o=z` answer — because a machine can run out of shared memory and a

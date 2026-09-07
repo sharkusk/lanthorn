@@ -826,20 +826,19 @@ fn draw_progress_line(
 /// first-class way to run this app. SQ-1339.
 ///
 /// And opt in to `t=s` shared memory, which beats both: the pixels never reach
-/// the wire at all, so there is nothing to deflate and nothing to base64. The two
-/// are asked for together because they are ANSWERED separately — a terminal may
-/// take one, both or neither, and the crate hands over an object only where the
-/// probe came back `OK`, which is what makes asking for it safe over ssh.
-/// `kitty_shared_memory_object` is the blind opt-in and the probe is what turns
-/// it into an answer, so the two move together: without the probe the object
-/// would be used on a terminal that cannot open it. SQ-1374.
+/// the wire at all, so there is nothing to deflate and nothing to base64.
+/// `kitty_shared_memory_object` is a single option since SQ-1382: setting it
+/// probes for the capability during the same stdio query and the crate hands
+/// over an object only where the terminal answered `OK`, which is what makes
+/// asking for it safe over ssh — a terminal there can never open the object, and
+/// the probe is what keeps that failure invisible rather than dropped frames.
+/// SQ-1374, SQ-1382.
 fn cover_query_options(
     shm: app::config::KittySharedMemory,
 ) -> ratatui_image::picker::cap_parser::QueryStdioOptions {
     let probe_shm = shm == app::config::KittySharedMemory::Auto;
     ratatui_image::picker::cap_parser::QueryStdioOptions {
         kitty_compression: true,
-        kitty_shared_memory_probe: probe_shm,
         kitty_shared_memory_object: probe_shm.then(std::process::id),
         ..Default::default()
     }
@@ -4191,29 +4190,31 @@ mod tests {
         app::keymap::KeyMap::default()
     }
 
-    /// SQ-1374: `kitty_shared_memory = "off"` is honoured by never ASKING.
+    /// SQ-1374, SQ-1382: `kitty_shared_memory = "off"` is honoured by never
+    /// ASKING.
     ///
-    /// The probe is not a passive question — it creates a real shared memory
-    /// object and adds an escape to the startup query — so a user who declined it
-    /// must get neither. And the object option travels with the probe in both
-    /// directions: on without the probe is the blind opt-in this whole quest
-    /// exists to remove, and would hand an object to a terminal over ssh that
-    /// cannot open it.
+    /// `kitty_shared_memory_object` is a single option since SQ-1382: setting it
+    /// probes for the capability during the stdio query and creates a real
+    /// shared memory object to do it, so a user who declined it must get
+    /// neither. `auto` sets it (and would hand an object to a terminal over ssh
+    /// that cannot open it, if the probe didn't gate that); `off` leaves it
+    /// unset, so nothing is created and nothing is asked.
     #[test]
     fn the_shared_memory_probe_follows_the_config_key() {
         use app::config::KittySharedMemory as K;
 
         let auto = super::cover_query_options(K::Auto);
-        assert!(auto.kitty_shared_memory_probe, "auto asks");
         assert_eq!(
             auto.kitty_shared_memory_object,
             Some(std::process::id()),
-            "and names the object it would hand over"
+            "auto asks, and names the object it would hand over"
         );
 
         let off = super::cover_query_options(K::Off);
-        assert!(!off.kitty_shared_memory_probe, "off does not ask");
-        assert_eq!(off.kitty_shared_memory_object, None, "and so must never be handed one");
+        assert_eq!(
+            off.kitty_shared_memory_object, None,
+            "off does not ask, so nothing is ever handed over"
+        );
 
         // Compression is a separate answer and is asked for either way (SQ-1339).
         assert!(auto.kitty_compression && off.kitty_compression);

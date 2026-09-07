@@ -1020,10 +1020,10 @@ pub fn kitty_compression(picker: &Picker) -> bool {
 /// hint. A terminal that cannot reach the object refuses the transmission, stores
 /// no image, and every placement naming it draws nothing — and "cannot reach"
 /// covers the ordinary case of a terminal at the other end of an ssh connection,
-/// which is a first-class way to run this app. So it is ASKED, by
-/// `ratatui-image`'s `kitty_shared_memory_probe`: a one-pixel object created at
-/// startup, named in the capability query with `a=q,t=s`, and reported only on
-/// `OK`.
+/// which is a first-class way to run this app. So it is ASKED, by setting
+/// `ratatui-image`'s `kitty_shared_memory_object` (SQ-1382: one option, not a
+/// separate probe flag): a one-pixel object created at startup, named in the
+/// capability query with `a=q,t=s`, and reported only on `OK`.
 ///
 /// An empty capability list therefore means no, exactly as it does for
 /// compression, and so does `kitty_shared_memory = "off"` — that key is honoured
