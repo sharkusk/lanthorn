@@ -815,23 +815,55 @@ fn draw_progress_line(
     draw_str_clipped(buf, area.x, y, text, style, area);
 }
 
+/// What lanthorn asks the terminal at startup, beyond the crate's defaults.
+///
+/// Opt in to kitty's `o=z` zlib transmission compression (off by default
+/// upstream, since it trades render latency for bandwidth). lanthorn takes that
+/// trade on purpose: encodes run on a worker thread rather than the render loop
+/// (`spawn_v6_encode`, `spawn_band_jobs`), so the CPU cost is off the UI's
+/// critical path; the composites are flat indexed colour that deflates
+/// enormously; and SSH — where the terminal link is the actual bottleneck — is a
+/// first-class way to run this app. SQ-1339.
+///
+/// And opt in to `t=s` shared memory, which beats both: the pixels never reach
+/// the wire at all, so there is nothing to deflate and nothing to base64. The two
+/// are asked for together because they are ANSWERED separately — a terminal may
+/// take one, both or neither, and the crate hands over an object only where the
+/// probe came back `OK`, which is what makes asking for it safe over ssh.
+/// `kitty_shared_memory_object` is the blind opt-in and the probe is what turns
+/// it into an answer, so the two move together: without the probe the object
+/// would be used on a terminal that cannot open it. SQ-1374.
+fn cover_query_options(
+    shm: app::config::KittySharedMemory,
+) -> ratatui_image::picker::cap_parser::QueryStdioOptions {
+    let probe_shm = shm == app::config::KittySharedMemory::Auto;
+    ratatui_image::picker::cap_parser::QueryStdioOptions {
+        kitty_compression: true,
+        kitty_shared_memory_probe: probe_shm,
+        kitty_shared_memory_object: probe_shm.then(std::process::id),
+        ..Default::default()
+    }
+}
+
 /// Build the ratatui-image picker for cover art per the CLI mode. `Auto`
 /// queries the terminal (falling back to half-blocks); forced modes query for
 /// font size then pin the protocol. Returns `None` only if construction fails.
-pub(crate) fn build_cover_picker(mode: app::config::ImageProtocol) -> Option<ratatui_image::picker::Picker> {
+///
+/// `shm` is the `kitty_shared_memory` config key, and it is honoured HERE rather
+/// than at the transmit (SQ-1374). `off` has to mean "do not even ask": the probe
+/// creates a real shared memory object and writes an extra escape into the
+/// startup query, so declining it at the wire would leave both of those happening
+/// for a user who said no. Declining it here means the capability never appears,
+/// and every reader downstream — `render::graphics::window_wire`,
+/// `/dump-terminal`'s capability list — sees exactly what a terminal that cannot
+/// do shared memory looks like, which is the state `off` is asking for.
+pub(crate) fn build_cover_picker(
+    mode: app::config::ImageProtocol,
+    shm: app::config::KittySharedMemory,
+) -> Option<ratatui_image::picker::Picker> {
     use app::config::ImageProtocol as M;
-    use ratatui_image::picker::{Picker, ProtocolType, cap_parser::QueryStdioOptions};
-    // Opt in to kitty's `o=z` zlib transmission compression (off by default
-    // upstream, since it trades render latency for bandwidth). lanthorn takes
-    // that trade on purpose: encodes run on a worker thread rather than the
-    // render loop (`spawn_v6_encode`, `spawn_band_jobs`), so the CPU cost is
-    // off the UI's critical path; the composites are flat indexed colour that
-    // deflates enormously; and SSH — where the terminal link is the actual
-    // bottleneck — is a first-class way to run this app. SQ-1339.
-    let query_options = || QueryStdioOptions {
-        kitty_compression: true,
-        ..Default::default()
-    };
+    use ratatui_image::picker::{Picker, ProtocolType};
+    let query_options = move || cover_query_options(shm);
     match mode {
         M::Halfblocks => Some(Picker::halfblocks()),
         M::Auto => Some(
@@ -1100,7 +1132,7 @@ pub(crate) fn run_story_picker(
 
     // `mut` since SQ-0988: a resize can move the terminal's cell size, and the
     // picker is re-derived from `TIOCGWINSZ` when it does.
-    let mut cover_picker = if cfg.images { build_cover_picker(cfg.image_protocol) } else { None };
+    let mut cover_picker = if cfg.images { build_cover_picker(cfg.image_protocol, cfg.kitty_shared_memory) } else { None };
     let mut cover = app::cover::CoverState::default();
 
     // The browser's keys, resolved the same way the game's are (SQ-0796): the
@@ -4157,6 +4189,34 @@ mod tests {
     /// user's rebinding.
     fn km() -> app::keymap::KeyMap {
         app::keymap::KeyMap::default()
+    }
+
+    /// SQ-1374: `kitty_shared_memory = "off"` is honoured by never ASKING.
+    ///
+    /// The probe is not a passive question — it creates a real shared memory
+    /// object and adds an escape to the startup query — so a user who declined it
+    /// must get neither. And the object option travels with the probe in both
+    /// directions: on without the probe is the blind opt-in this whole quest
+    /// exists to remove, and would hand an object to a terminal over ssh that
+    /// cannot open it.
+    #[test]
+    fn the_shared_memory_probe_follows_the_config_key() {
+        use app::config::KittySharedMemory as K;
+
+        let auto = super::cover_query_options(K::Auto);
+        assert!(auto.kitty_shared_memory_probe, "auto asks");
+        assert_eq!(
+            auto.kitty_shared_memory_object,
+            Some(std::process::id()),
+            "and names the object it would hand over"
+        );
+
+        let off = super::cover_query_options(K::Off);
+        assert!(!off.kitty_shared_memory_probe, "off does not ask");
+        assert_eq!(off.kitty_shared_memory_object, None, "and so must never be handed one");
+
+        // Compression is a separate answer and is asked for either way (SQ-1339).
+        assert!(auto.kitty_compression && off.kitty_compression);
     }
 
     /// A wheel notch goes to the topmost open surface, and no further. The

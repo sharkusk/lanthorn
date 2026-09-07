@@ -1132,6 +1132,49 @@ pub fn v6_render_from_key(token: &str) -> Option<V6RenderMode> {
     }
 }
 
+/// Whether lanthorn may hand a kitty terminal its artwork through POSIX shared
+/// memory instead of base64 on the wire (SQ-1374).
+///
+/// TOML: `kitty_shared_memory = "auto"` (default) or `"off"`. Two values on
+/// purpose: there is no "on". Shared memory is a thing the terminal has to be
+/// able to DO — one on the far end of an ssh connection cannot open our object,
+/// and a transmission it refuses draws nothing at all — so the answer is asked
+/// for, never asserted. `auto` means "use it if the terminal answered the
+/// probe"; `off` means "do not even ask".
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Deserialize, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum KittySharedMemory {
+    /// Probe at startup, and use shared memory only if the terminal answered.
+    #[default]
+    Auto,
+    /// Never probe and never use it: every image goes down the wire as base64,
+    /// deflated where the terminal can inflate it.
+    Off,
+}
+
+/// The `kitty_shared_memory` token for a mode — what the file holds, so that
+/// [`write_config_at`] writes back exactly what it read (the reason
+/// [`v6_render_key`] exists).
+pub fn kitty_shared_memory_key(mode: KittySharedMemory) -> &'static str {
+    match mode {
+        KittySharedMemory::Auto => "auto",
+        KittySharedMemory::Off => "off",
+    }
+}
+
+/// Read `kitty_shared_memory`, falling back to `Auto` on any unrecognised
+/// string — the silence every other token-valued key here already has.
+fn deserialize_kitty_shared_memory<'de, D>(d: D) -> Result<KittySharedMemory, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    let s = String::deserialize(d)?;
+    Ok(match s.as_str() {
+        "off" => KittySharedMemory::Off,
+        _ => KittySharedMemory::Auto,
+    })
+}
+
 /// Read `v6_render`, falling back to the default on any unrecognised string.
 ///
 /// Deliberately silent, matching [`deserialize_easing`]: a config naming a mode
@@ -1505,6 +1548,10 @@ pub struct Config {
     /// How the v6 graphical story pane is rendered. Default: Hybrid.
     #[serde(default, deserialize_with = "deserialize_v6_render")]
     pub v6_render: V6RenderMode,
+    /// Whether a kitty terminal may be handed artwork through POSIX shared
+    /// memory rather than base64 on the wire (SQ-1374). Default: Auto.
+    #[serde(default, deserialize_with = "deserialize_kitty_shared_memory")]
+    pub kitty_shared_memory: KittySharedMemory,
     /// Fuse a 640-wide rendition's colour dither, because the card's pixels were
     /// half as wide as the unit screen's (SQ-0797). Default: true.
     ///
@@ -2143,6 +2190,7 @@ impl Default for Config {
             background_tidy: BackgroundTidy::EveryRoom,
             aux_storage: AuxStorage::Ask,
             v6_render: V6RenderMode::Hybrid,
+            kitty_shared_memory: KittySharedMemory::Auto,
             fuse_art_dither: true,
             glk_pixel_scale: GlkPixelScale::Native,
             v6_arrow_keys: false,
@@ -2279,6 +2327,7 @@ pub fn resolve(cli: &Cli) -> Config {
             cfg.background_tidy = from_file.background_tidy;
             cfg.aux_storage = from_file.aux_storage;
             cfg.v6_render = from_file.v6_render;
+            cfg.kitty_shared_memory = from_file.kitty_shared_memory;
             cfg.fuse_art_dither = from_file.fuse_art_dither;
             cfg.glk_pixel_scale = from_file.glk_pixel_scale;
             cfg.v6_arrow_keys = from_file.v6_arrow_keys;
@@ -2609,6 +2658,11 @@ pub fn write_config_at(config_path: &std::path::Path, cfg: &Config) -> std::io::
     };
     doc.put("aux_storage", aux_str.into(), cfg.aux_storage == def.aux_storage);
     doc.put("v6_render", v6_render_key(cfg.v6_render).into(), cfg.v6_render == def.v6_render);
+    doc.put(
+        "kitty_shared_memory",
+        kitty_shared_memory_key(cfg.kitty_shared_memory).into(),
+        cfg.kitty_shared_memory == def.kitty_shared_memory,
+    );
     doc.put("fuse_art_dither", cfg.fuse_art_dither.into(), cfg.fuse_art_dither == def.fuse_art_dither);
     let scale_val: toml_edit::Value = match cfg.glk_pixel_scale {
         GlkPixelScale::Native => "native".into(),
@@ -3447,6 +3501,33 @@ use_defaults = false
         }
     }
 
+    /// SQ-1374: two values and a tolerant reader. `auto` is the default because
+    /// the terminal is asked before anything is handed to it — the setting exists
+    /// for someone who wants the asking itself to stop, not to force a capability
+    /// on a terminal that does not have it, which is why there is no `"on"`.
+    #[test]
+    fn kitty_shared_memory_defaults_to_auto_and_round_trips() {
+        assert_eq!(Config::default().kitty_shared_memory, KittySharedMemory::Auto);
+        let c: Config = toml::from_str("kitty_shared_memory = \"off\"").unwrap();
+        assert_eq!(c.kitty_shared_memory, KittySharedMemory::Off);
+        let c: Config = toml::from_str("kitty_shared_memory = \"auto\"").unwrap();
+        assert_eq!(c.kitty_shared_memory, KittySharedMemory::Auto);
+        let c: Config = toml::from_str("").unwrap();
+        assert_eq!(c.kitty_shared_memory, KittySharedMemory::Auto, "absent is auto");
+        // Unrecognised reads as the default rather than failing a boot, exactly
+        // as `v6_render` and every other token-valued key here does.
+        let c: Config = toml::from_str("kitty_shared_memory = \"on\"").unwrap();
+        assert_eq!(c.kitty_shared_memory, KittySharedMemory::Auto);
+
+        // And the token written back is the token read, or a `/set` would silently
+        // un-pin the key (the reason `v6_render_key` exists).
+        for mode in [KittySharedMemory::Auto, KittySharedMemory::Off] {
+            let toml = format!("kitty_shared_memory = \"{}\"", kitty_shared_memory_key(mode));
+            let c: Config = toml::from_str(&toml).unwrap();
+            assert_eq!(c.kitty_shared_memory, mode, "{toml}");
+        }
+    }
+
     #[test]
     fn glk_pixel_scale_defaults_to_native_and_round_trips() {
         assert_eq!(
@@ -3583,6 +3664,7 @@ use_defaults = false
             background_tidy: BackgroundTidy::OnOverlap,
             aux_storage: AuxStorage::Ask,
             v6_render: V6RenderMode::Hybrid,
+            kitty_shared_memory: KittySharedMemory::Auto,
             fuse_art_dither: false,
             glk_pixel_scale: GlkPixelScale::Native,
             v6_arrow_keys: true,

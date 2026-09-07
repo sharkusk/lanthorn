@@ -475,6 +475,21 @@ const INTERPRETER: &[Row] = &[
             "back to free scaling.",
         ],
     ),
+    d(
+        "kitty_shared_memory",
+        "\"auto\"",
+        &[
+            "On a kitty-protocol terminal, hand it the artwork through shared memory",
+            "instead of base64-encoding every pixel into the stream. A 640x400 frame is",
+            "a megabyte of base64 the terminal then has to decode; through shared memory",
+            "it is a filename.",
+            "\"auto\" asks the terminal at startup and uses it only if it answered — a",
+            "terminal on the far end of an ssh connection cannot open our memory, so",
+            "over SSH nothing changes and the pictures still arrive. \"off\" does not even",
+            "ask. There is deliberately no \"on\": this is something a terminal can do or",
+            "cannot, not a preference.",
+        ],
+    ),
     ex(
         "virtual_screen_cols",
         "80",

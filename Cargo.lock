@@ -2369,8 +2369,8 @@ dependencies = [
 
 [[package]]
 name = "ratatui-image"
-version = "11.0.6"
-source = "git+https://github.com/sharkusk/ratatui-image?branch=lanthorn-11.0.6-u16-fix#fe7db0c46e99838718290ed76a95b562df46d477"
+version = "11.0.8"
+source = "git+https://github.com/sharkusk/ratatui-image?branch=lanthorn-shm#478934f577a5bb3c30d85f62d7dc8853db11d001"
 dependencies = [
  "base64-simd",
  "flate2",
@@ -3566,7 +3566,7 @@ version = "0.1.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c2a7b1c03c876122aa43f3020e6c3c3ee5c05081c9a00739faf7503aeba10d22"
 dependencies = [
- "windows-sys 0.61.2",
+ "windows-sys 0.48.0",
 ]
 
 [[package]]

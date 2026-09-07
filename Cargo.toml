@@ -38,33 +38,30 @@ debug-assertions = false
 [profile.dev]
 debug = "line-tables-only"
 
-# SQ-0972: ratatui-image 11.0.6's halfblocks encoder allocates its cell buffer
-# with `(size.width * size.height) as usize` — a u16 multiply, which WRAPS — and
-# then indexes it with `x + (size.width as usize) * (y / 2)`, in usize, which
-# does not. Below 65535 cells the two agree exactly; one cell past it the buffer
-# is allocated modulo 65536 while the loop walks the true extent, and the encode
-# panics. A 460x147 terminal gives the game pane 458x144 = 65952 cells, which
-# allocated as 416 and died at index 416.
+# `lanthorn-shm` on the fork: upstream master (v11.0.8) plus the three things
+# lanthorn needs that no release carries yet. Master itself already holds two of
+# ours — the u16 wrap fix (PR 189) and kitty `o=z` compression detection
+# (PR 190) — so the pin is no longer about them; it exists for what is still in
+# review:
 #
-# Half-blocks is the backend that reaches this first, because its resolution IS
-# the cell grid — SQ-0964 removed the 2x magnification cap there precisely so a
-# smaller font would buy a sharper picture, which walks straight into the
-# ceiling. Seven more of the same shape in `cells * font_size` (src/lib.rs,
-# src/sliced.rs) do not panic; they silently compute a wrapped pixel dimension.
+#   * kitty shared memory transmission, `t=s` (upstream PR 198, benjajaja's) —
+#     the pixels are handed over in a POSIX shared memory object instead of
+#     base64'd into the terminal's input stream. Worth roughly a megabyte a
+#     frame on a v6 raster composite.
+#   * two platform fixes to it (ours): a shared memory name over 31 bytes is
+#     refused on macOS (`PSHMNAMLEN`), and `write(2)` on a shared memory object
+#     answers `ENXIO` there — so `t=s` transmitted nothing at all on the
+#     platform this is mostly developed on.
+#   * `Capability::KittySharedMemory` and `kitty_shared_memory_probe` (ours,
+#     PR onto 198) — ASK the terminal before handing it an object it may not be
+#     able to open. Same shape and same reason as the `o=z` probe: a terminal
+#     on the other end of an ssh connection cannot open our shared memory, and
+#     a transmission it refuses is invisible rather than slow.
 #
-# The branch is the v11.0.6 release commit — deliberately NOT master, which
-# carries an unrelated change to font-size detection (ioctl + env hints), the
-# very input this geometry is derived from.
-# Upstream PR for the wrap: https://github.com/ratatui/ratatui-image/pull/189
-#
-# It has since grown three more additions, each one method or one variant, and
-# each one a thing the crate cannot express and lanthorn cannot work around:
+# Two earlier additions on the same branch, still unreleased:
 #
 #   * `Picker::set_font_size` (SQ-0992) — a mid-session font change must not
 #     rebuild the picker, which would drop the queried capability list.
-#   * `Capability::KittyCompression` + `o=z` transmits (SQ-0991) — probe the
-#     terminal before deflating, because a transmit it cannot inflate is
-#     invisible rather than slow.
 #   * `Picker::new_protocol_with_id` and a NAMED virtual placement (`p=1`,
 #     SQ-0996) — a kitty placement writes its image id into every cell it
 #     covers, so re-encoding changed art under a freshly drawn random id
@@ -74,4 +71,4 @@ debug = "line-tables-only"
 # REMOVE THIS once a release carrying all of them exists: delete the stanza and
 # bump the version in crates/app/Cargo.toml.
 [patch.crates-io]
-ratatui-image = { git = "https://github.com/sharkusk/ratatui-image", branch = "lanthorn-11.0.6-u16-fix" }
+ratatui-image = { git = "https://github.com/sharkusk/ratatui-image", branch = "lanthorn-shm" }

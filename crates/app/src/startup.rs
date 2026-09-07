@@ -1093,7 +1093,7 @@ pub(crate) fn boot_story(
     // In-game graphics Picker (None when --images off or unavailable). Built once
     // and reused both for the Glulx session's char-cell pixel size and, below,
     // AppState.game_picker (the render side already tolerates None).
-    let game_picker = if cfg.images { picker_ui::build_cover_picker(cfg.image_protocol) } else { None };
+    let game_picker = if cfg.images { picker_ui::build_cover_picker(cfg.image_protocol, cfg.kitty_shared_memory) } else { None };
     // Probe the terminal's own default fg/bg (OSC 10/11) in the same pre-UI query
     // window as the image-protocol Picker above (SQ-0510). Seeds the v6 raster
     // canvas's default ink/page so "terminal default" theme colours follow the
