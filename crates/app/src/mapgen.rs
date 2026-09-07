@@ -1100,6 +1100,15 @@ pub fn layout_all_layers(graph: &mut MapGraph) {
         crate::render::map::cleanup_overlaps(&mut sub, 3, 40);
         crate::render::map::compact_empty_lines(&mut sub);
 
+        // Re-derive every `distorted` flag from the positions the pipeline actually settled on
+        // (SQ-1377). `relayout_auto`'s own marking above is a snapshot from the END of stage
+        // one; the four stages after it move rooms, so that snapshot can go stale by the time
+        // the loop below copies flags into `graph` — a bearing the solve dropped may end up
+        // honoured (a false red), or an aligned pair may get nudged off its row by the repair
+        // or compaction passes (a false plain). This must run LAST, after every stage that can
+        // move a room, so what gets copied out below matches the map mapgen actually draws.
+        mapper::layout::remark_distorted(&mut sub);
+
         for id in graph.rooms_in_layer(layer) {
             if let Some(p) = sub.room(id).and_then(|r| r.pos) {
                 graph.set_pos(id, p);

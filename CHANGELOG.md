@@ -71,6 +71,10 @@ Absolute URLs or no link.
   into them is up or down.** Three of Adventure's "all alike" maze's dead
   ends were reachable only by going down from a maze room, so they used to
   get left behind on the main map instead of joining the maze around them.
+- **A passage is drawn red only when the finished map really bends it.** A
+  room the tidy pass moved back into line no longer keeps a stale red line —
+  the red-dashed marking is now taken from where every room actually ends up,
+  after tidying finishes, rather than from a snapshot partway through.
 
 ---
 

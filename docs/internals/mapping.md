@@ -1330,7 +1330,23 @@ same rooms with the same solver: the solve's contiguity stage deliberately break
 bearing to keep a row tight, and `repair_directional_hints` is the pass that puts it
 back. (The live path's maze freeze is deliberately *not* copied — mapgen has no
 dead-reckoned positions to protect, so a maze layer still gets its one isolated
-layout.) `--no-boot` skips the one-moment headless boot that learns the starting
+layout.)
+
+**And every layer's last stage is `mapper::layout::remark_distorted`, not
+`relayout_auto`'s own marking** (SQ-1377). `relayout_auto` calls
+`mark_distorted` at the end of its own solve, before any of the four stages
+above run — so a flag it wrote can go stale the moment `cleanup_overlaps`,
+`repair_directional_hints` or `compact_empty_lines` moves a room afterwards: a
+bearing the solve had to drop may end up honoured once the repair pass puts it
+back (a false red), or an aligned pair may get nudged off its row by a later
+cleanup (a false plain). `remark_distorted` re-derives every compass
+connection's flag from the FINAL positions with no `dropped` set — a
+constraint the solver gave up on is only truly "distorted" if the room's
+FINAL position still violates it — and both mapgen's `layout_all_layers` and
+the live app's `app::tidy::run_layer_ops_silent` call it last, after every
+stage that can move a room.
+
+`--no-boot` skips the one-moment headless boot that learns the starting
 room (below), leaving the largest region as `Main` and the map with no current
 room. Exit status is `0` for a map written, `1` for an I/O failure, and **`2`
 for a story that declares no map anywhere in the file**, which is a distinct

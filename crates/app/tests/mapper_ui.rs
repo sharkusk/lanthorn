@@ -106,6 +106,8 @@ mod sq1375_zork_house_makes_room;
 mod sq1376_forest_west_of_house;
 #[path = "suites/sq1389_lostpig_gnome_room.rs"]
 mod sq1389_lostpig_gnome_room;
+#[path = "suites/sq1377_distorted_flags_are_final.rs"]
+mod sq1377_distorted_flags_are_final;
 #[path = "suites/sq1314_nautical_passage_erasure.rs"]
 mod sq1314_nautical_passage_erasure;
 #[path = "suites/sq1315_anchorhead_2018.rs"]

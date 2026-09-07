@@ -3566,6 +3566,54 @@ pub fn overlap_report(
     out
 }
 
+/// Every compass connection whose `distorted` flag DISAGREES with the FINAL room positions
+/// (SQ-1377): one line per mismatch, naming the endpoints, the direction, the flag as stored,
+/// and what the geometry actually says.
+///
+/// This is `mapper::layout::mark_distorted`'s own rule, applied read-only with an empty
+/// `dropped` set (exactly [`mapper::layout::remark_distorted`]'s recomputation, without
+/// mutating `graph`): a compass edge with no `grid_offset` (Up/Down, In/Out/Unknown) is never
+/// distorted; a self-loop is never distorted; otherwise the flag must equal
+/// `!edge_is_satisfied(graph, conn)`. A non-empty result means some code path wrote positions
+/// after the last `distorted` marking without re-deriving the flags from them — the defect
+/// SQ-1377 fixed by making `remark_distorted` the pipeline's last step.
+///
+/// **Cross-layer connections are skipped entirely, not merely excused.** `mark_distorted` (and
+/// `remark_distorted` after it) only ever runs over a single layer's `layer_subgraph` — a
+/// connection whose two endpoints sit in different layers is never a member of ANY subgraph the
+/// marking machinery touches, so its flag carries no promise to compare against. Its two
+/// endpoints' positions are also each packed independently within their OWN layer, anchored at
+/// their own `(0,0)` — so a raw coordinate difference between them is not a geometry claim at
+/// all, just two unrelated numbers. A story with a maze split across several layers (Adventure's
+/// `Maze`/`At Brink of Pit`/`Dead End` instances each land on their own layer) draws several such
+/// boundary-crossing compass edges, and comparing them here would report the layout as broken
+/// for a reason neither pipeline claims to fix.
+pub fn distorted_flags_agree_with_geometry(graph: &mapper::graph::MapGraph) -> Vec<String> {
+    let name = |id| graph.room(id).map(|r| r.label().to_string()).unwrap_or_else(|| format!("#{id:?}"));
+    let mut out = Vec::new();
+    for conn in graph.connections() {
+        if graph.layer_of(conn.origin) != graph.layer_of(conn.dest) {
+            continue; // outside every layer_subgraph mark_distorted ever runs over
+        }
+        let geometry_says_distorted = match mapper::direction::grid_offset(conn.dir) {
+            None => false,
+            Some(_) if conn.is_self_loop() => false,
+            Some(_) => !mapper::layout::edge_is_satisfied(graph, conn),
+        };
+        if conn.distorted != geometry_says_distorted {
+            out.push(format!(
+                "{} -{:?}-> {}: flag={} geometry-says={}",
+                name(conn.origin),
+                conn.dir,
+                name(conn.dest),
+                conn.distorted,
+                geometry_says_distorted,
+            ));
+        }
+    }
+    out
+}
+
 /// One connector's TURN BUDGET: how many bends it draws against the fewest its two anchors
 /// allow (SQ-1332).
 #[derive(Debug, Clone)]

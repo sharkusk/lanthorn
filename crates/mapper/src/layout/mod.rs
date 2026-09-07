@@ -1332,6 +1332,40 @@ pub(crate) fn mark_distorted(graph: &mut MapGraph, dropped: &BTreeSet<usize>) {
     }
 }
 
+/// Re-derive every compass connection's `distorted` flag from the FINAL room positions,
+/// with no `dropped` set — geometry only (SQ-1377).
+///
+/// `relayout_auto`'s own `mark_distorted(graph, &dropped_all)` call runs BEFORE four more
+/// stages that move rooms (`cleanup_overlaps`, `repair_directional_hints`, `cleanup_overlaps`
+/// again, `compact_empty_lines` — all in `app::render::map`), so a flag it sets can go stale:
+/// the repair pass may put a dropped bearing back (the edge should draw plain, but the flag
+/// still says distorted), or a later cleanup nudge may knock an aligned pair off its row (the
+/// edge should now draw distorted, but the flag still says plain). Callers that run the full
+/// pipeline must call this LAST, after every stage that can move a room, so the flag always
+/// answers "does the drawing on screen actually violate this bearing?" rather than "did the
+/// solver have to drop it?".
+///
+/// A constraint the solver dropped is only truly "distorted" if the room's FINAL position
+/// still violates it — the repair pass exists precisely to put dropped bearings back, and a
+/// bearing that ends up honoured must draw plain. So this recomputes with an empty `dropped`
+/// set rather than remembering which indices the solve gave up on: by the time every stage has
+/// run, the only fact that matters is the geometry in front of the player.
+///
+/// Calling this right after `relayout_auto` (or `relayout_auto_observed`), with no further
+/// stage moving rooms, is harmless — though not necessarily a no-op. `mark_distorted(graph,
+/// dropped)` sets `distorted = dropped.contains(idx) || !edge_is_satisfied(graph, conn)`: for
+/// any fixed positions, that is by construction a SUPERSET of what `mark_distorted(graph,
+/// &BTreeSet::new())` marks, since dropping the `dropped.contains(idx)` disjunct can only turn
+/// a `true` into `false`, never the reverse. So an immediate second call can only clear a flag
+/// `relayout_auto` set because the solver gave up on the constraint, never set one it left
+/// clear — the same correction the whole fix makes, applied once more at the same positions.
+/// It is not a source of new drift, and every caller that runs the full pipeline must still
+/// call it LAST regardless, since that is the only call whose positions are the ones the player
+/// actually sees.
+pub fn remark_distorted(graph: &mut MapGraph) {
+    mark_distorted(graph, &BTreeSet::new());
+}
+
 /// Re-derive all room positions from scratch on every call.
 ///
 /// Delegates to [`relayout_auto_observed`] with no observer. The graph result
