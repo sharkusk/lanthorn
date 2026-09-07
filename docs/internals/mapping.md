@@ -1270,7 +1270,9 @@ What the drawing shows, beyond the rooms:
   one cell, because *crossings are fine and overlaps are not* is the rule those
   numbers exist to keep.
 - **A numbered badge for a noted room** (SQ-1384), where the old plain yellow
-  dot used to sit, at the box's own top-right corner — the box itself carries
+  dot used to sit, at the box's own bottom-right corner (SQ-1388 moved both
+  the SVG badge and the terminal map's `●` marker down from the top-right
+  corner) — the box itself carries
   the note as a `<title>` hover tooltip (a ghost never gets one: a note
   belongs to the real room, not the placeholder standing in for it on another
   layer's panel), and every layer panel lists its own noted rooms' full text,

@@ -41,6 +41,12 @@ Absolute URLs or no link.
 - **With a Nerd Font, a room with notes now shows a little note icon on the
   map instead of a dot.**
 
+### Changed
+
+- **A room's notes mark now sits in the bottom-right corner of its box**, on
+  both the terminal map and the exported map — it used to share the top-right
+  corner with the Up-portal icon.
+
 ### Fixed
 
 - **A cross-layer room's box on the exported map no longer lets its layer

@@ -1500,7 +1500,9 @@ fn render_svg_body(
             }
         }
         if let Some((n, _)) = note {
-            let _ = write!(boxes, "{}", note_badge((x + w - 10.0, y + 10.0), n));
+            // SQ-1388: bottom-right corner, same inset as the old top-right placement — matches
+            // the terminal map's own move of its `●` marker off the up-portal's former corner.
+            let _ = write!(boxes, "{}", note_badge((x + w - 10.0, y + h - 10.0), n));
         } else if room.has_notes {
             // `has_notes` true but no text in `notes` only happens when a caller has no graph to
             // read the text from (`render_svg(rm)`, SQ-1313's own headless path) — the plain dot
@@ -1510,7 +1512,7 @@ fn render_svg_body(
                 boxes,
                 "<circle class=\"notes\" cx=\"{}\" cy=\"{}\" r=\"2.6\"/>",
                 f(x + w - 6.0),
-                f(y + 6.0)
+                f(y + h - 6.0)
             );
         }
         if note.is_some() {

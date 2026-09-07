@@ -2407,12 +2407,14 @@ fn mid_precedence(dir: Direction) -> u8 {
 type PortalSlots<'a> = [Option<(char, Option<&'a str>)>; 3];
 
 /// Draw in-room portal indicators at Boxes zoom as a post-room overlay (so icons sit on top of
-/// the box interior). Each room's portal (stub) edges map to a right-interior-column slot:
-/// Up→row 1, In/Out/Unknown→row 2 (middle, by `mid_precedence`), Down→row 3. Default = the
-/// direction glyph in that slot's far-right interior cell. When `show_labels` is set, the
-/// portal's destination name is drawn right-aligned on that row with the icon pinned far-right.
-/// In the default view an up-portal claims the upper-right corner, shifting the `●` notes marker
-/// one cell left so both stay visible.
+/// the box interior). Each room's portal (stub) edges map to one of three slots: Up (row 1),
+/// In/Out/Unknown (row 2, middle, by `mid_precedence`), Down (row 3). In the default view, Up
+/// and Down show their glyph on the connector's own border anchor instead of inside the box (see
+/// `render_lane_connectors`), so only the mid slot draws here — on the free interior cell
+/// nearest the room it leads to (`nearest_free_interior`, SQ-0351). That leaves the bottom-right
+/// interior corner free for the notes marker (SQ-1388). When `show_labels` is set, all three
+/// slots float on the border instead — top/bottom centre for Up/Down, right for the mid slot —
+/// with the destination name outside the box.
 #[allow(clippy::too_many_arguments)]
 fn draw_portal_icons(
     rm: &RenderMap,
@@ -2672,9 +2674,10 @@ pub enum MarkerKind {
     /// (primary) direction — the hover tip re-derives the destination and the rest of the
     /// group's directions from the graph at hover time (see `draw_map_hover_tip`).
     Stacked(Direction),
-    /// The `●` notes marker in a room box's top-right inner corner (SQ-1386) — the hover tip
-    /// re-reads the room's note text from the graph at hover time, wrapped to a sane width, the
-    /// same way `Random`/`Stacked` re-derive their content rather than carrying it themselves.
+    /// The `●` notes marker in a room box's bottom-right inner corner (SQ-1386, moved from the
+    /// top-right corner by SQ-1388) — the hover tip re-reads the room's note text from the graph
+    /// at hover time, wrapped to a sane width, the same way `Random`/`Stacked` re-derive their
+    /// content rather than carrying it themselves.
     Notes,
 }
 
@@ -2835,7 +2838,7 @@ fn center(s: &str, width: usize) -> String {
 /// Current room: heavy border (┏ ┓ ┗ ┛ ━ ┃) with a REVERSED interior; the
 /// border glyphs themselves are drawn non-reversed.
 /// Selected room: yellow style (SELECTED_STYLE).
-/// Notes: ● marker in top-right inner corner (row 1, col bw-2).
+/// Notes: ● marker in bottom-right inner corner (row 3, col bw-2; SQ-1388).
 #[allow(clippy::too_many_arguments)]
 fn draw_box_room(
     room: &RenderRoom,
@@ -2923,6 +2926,11 @@ fn draw_box_room(
         }
     }
 
+    // Row 3 (the bottom interior row) shares its width with the notes marker (SQ-1388): a
+    // room with notes reserves the far-right column for it, the way the alias marker reserves
+    // `marker_w` out of the name rows above.
+    let row3_iw = if room.has_notes { iw.saturating_sub(1) } else { iw };
+
     // Row 3: #id (centered), with alignment diagnostics appended when enabled. A synthetic room
     // (Glulx or name-only) shows its small per-map ordinal here instead of the raw hex id — see
     // `RenderRoom::ordinal` and `crate::roomid::room_label_no_of` (SQ-1300).
@@ -2933,18 +2941,7 @@ fn draw_box_room(
             row3.push(' ');
             row3.push_str(&room.align_code);
         }
-        put_str(buf, sx + 1, sy + 3, &center(&row3, iw), style, area);
-    }
-
-    // Notes marker in top-right inner corner (row 1, col w-2). Hoverable (SQ-1386): the
-    // same floating tip the alias/random/stacked markers pop, showing the room's note text.
-    if room.has_notes {
-        let marker_x = sx + w - 2;
-        let marker_y = sy + 1;
-        put_char(buf, marker_x, marker_y, sym.portal.marker, style, area);
-        if let Some(r) = clipped_marker_rect(marker_x, marker_y, 1, area) {
-            marker_rects.push((room.id, MarkerKind::Notes, r));
-        }
+        put_str(buf, sx + 1, sy + 3, &center(&row3, row3_iw), style, area);
     }
 
     // Self-loop badge (SQ-0666): `↩` plus the directions that lead back into this room, on the
@@ -2960,8 +2957,23 @@ fn draw_box_room(
             .collect::<Vec<_>>()
             .join("");
         let badge = format!("↩{dirs}");
-        let badge: String = badge.chars().take(iw).collect();
+        let badge: String = badge.chars().take(row3_iw).collect();
         put_str(buf, sx + 1, sy + h - 2, &badge, style, area);
+    }
+
+    // Notes marker in the bottom-right inner corner (row h-2, col w-2) — moved down from the
+    // top-right corner (SQ-1388), which the up-portal icon used to claim before it moved onto
+    // the connector's border anchor. Drawn last on this row so it always wins its own cell over
+    // the id text or a self-loop badge, both reserved out of `row3_iw` above. Hoverable
+    // (SQ-1386): the same floating tip the alias/random/stacked markers pop, showing the room's
+    // note text.
+    if room.has_notes {
+        let marker_x = sx + w - 2;
+        let marker_y = sy + h - 2;
+        put_char(buf, marker_x, marker_y, sym.portal.marker, style, area);
+        if let Some(r) = clipped_marker_rect(marker_x, marker_y, 1, area) {
+            marker_rects.push((room.id, MarkerKind::Notes, r));
+        }
     }
 
     // Bottom border
@@ -4671,6 +4683,11 @@ mod tests {
         // Notes marker '●' should appear somewhere in the buffer.
         let has_notes_marker = buf.content.iter().any(|c| c.symbol() == "●");
         assert!(has_notes_marker, "notes marker '●' should be drawn for a room with notes");
+        // SQ-1388: the bottom-right interior corner (col w-2 = 9, row h-2 = 3 for room 1 at
+        // screen (0,0)), not the top-right corner it used to claim.
+        let sym = |x: u16, y: u16| buf.cell((x, y)).map(|c| c.symbol().to_string()).unwrap_or_default();
+        assert_eq!(sym(9, 3), "●", "notes marker sits in the bottom-right interior corner");
+        assert_ne!(sym(9, 1), "●", "the old top-right corner no longer carries it");
     }
 
     /// A room with notes publishes a `MarkerKind::Notes` hover rect at the exact cell the `●`
@@ -6987,19 +7004,21 @@ mod tests {
     }
 
     #[test]
-    fn portal_icon_up_no_longer_shifts_notes_marker() {
-        // The Up icon used to claim the same interior cell as the notes marker (upper-right
-        // corner), forcing the marker to shift one cell left. Now Up shows its glyph on the
-        // connector's border anchor instead, so the interior cell is free and the notes marker
-        // stays in its normal (unshifted) spot.
+    fn portal_icons_do_not_shift_notes_marker() {
+        // Up and Down both show their glyph on the connector's own border anchor rather than
+        // an interior cell (see `draw_portal_icons`'s doc comment), so the notes marker — now
+        // in the bottom-right interior corner (SQ-1388) — never has to shift for either of them.
         use mapper::graph::MapGraph;
         let mut g = MapGraph::new();
         g.upsert_room(1, "Hall".into());
         g.upsert_room(2, "Attic".into());
+        g.upsert_room(3, "Cellar".into());
         g.set_pos(1, (0, 0));
         g.set_pos(2, (0, -1));
+        g.set_pos(3, (0, 1));
         g.set_notes(1, "stuff".into());
         g.add_edge(1, Direction::Up, 2);
+        g.add_edge(1, Direction::Down, 3);
         let rm = render(&g);
         let mut state = AppState::default();
         state.show_room_numbers = true; // right-column layout requires numbers shown
@@ -7007,8 +7026,12 @@ mod tests {
         let mut buf = Buffer::empty(area);
         render_map(&rm, &state, area, &mut buf);
         let sym = |x: u16, y: u16| buf.cell((x, y)).map(|c| c.symbol().to_string()).unwrap_or_default();
-        assert_eq!(sym(9, 1), "●", "notes marker stays put; the interior up icon is gone");
-        assert_eq!(sym(5, 0), "↑", "up glyph now appears on the top border centre");
+        assert_eq!(sym(9, 3), "●", "notes marker sits unshifted in the bottom-right corner");
+        assert_eq!(sym(5, 0), "↑", "up glyph on the top border centre");
+        assert_eq!(sym(5, 4), "↓", "down glyph on the bottom border centre");
+        // And the id row still reads, clipped clear of the marker's reserved column (col 9).
+        let row3: String = (1..=8).map(|x| sym(x, 3)).collect();
+        assert!(row3.contains('#'), "room id still shows on row 3: {row3:?}");
     }
 
     #[test]
