@@ -27,6 +27,12 @@ Absolute URLs or no link.
 > visible tag `*Next release:*`. `release.yml` refuses to cut a release
 > while any such tag, or this Unreleased section, still exists.*
 
+### Added
+
+- Right-clicking a room now offers **Edit Notes** in its context menu,
+  alongside Rename Room, Move Region and Rename Layer — no more hunting
+  through the leader dialog just to jot down a note.
+
 ---
 
 ## v0.5.2 — 2026-09-07

@@ -30,12 +30,14 @@ fn first_key(km: &KeyMap, command: &str) -> Option<KeySpec> {
 }
 
 /// The menu, top to bottom. Each item dispatches an existing `slash::COMMANDS`
-/// entry, bare: `rename-room` and `move-region` act on `state.selected_room`,
-/// which the click that opens the menu has already pinned; `rename-layer`
-/// acts on the active layer (`AppState::active_layer`), which is whatever
-/// layer the map is showing — the one the clicked room is visibly on.
+/// entry, bare: `rename-room`, `edit-notes` and `move-region` act on
+/// `state.selected_room`, which the click that opens the menu has already
+/// pinned; `rename-layer` acts on the active layer (`AppState::active_layer`),
+/// which is whatever layer the map is showing — the one the clicked room is
+/// visibly on.
 pub const ROOM_MENU: &[MenuItem] = &[
     MenuItem { command: "rename-room", label: "Rename Room" },
+    MenuItem { command: "edit-notes", label: "Edit Notes" },
     MenuItem { command: "move-region", label: "Move Region" },
     MenuItem { command: "rename-layer", label: "Rename Layer" },
 ];
@@ -128,12 +130,12 @@ mod tests {
         assert_eq!(m.cursor, ROOM_MENU.len() - 1, "Up from the top wraps to the bottom");
         assert_eq!(m.on_key(key(KeyCode::Down), &km), MenuOutcome::None);
         assert_eq!(m.cursor, 0);
-        m.cursor = 1;
+        m.cursor = 2;
         assert_eq!(m.on_key(key(KeyCode::Enter), &km), MenuOutcome::Activate("move-region"));
         assert_eq!(m.on_key(key(KeyCode::Esc), &km), MenuOutcome::Close);
     }
 
-    /// None of the three ships with a bare-key binding (all three live only in
+    /// None of the four ships with a bare-key binding (all four live only in
     /// the leader/`Ctrl+P` dialog, a wholly separate table — `HotkeyLayout`,
     /// not `KeyMap`), so the key column is blank for every row, and a key that
     /// matches none of them is swallowed rather than acted on.
@@ -185,11 +187,51 @@ mod tests {
             .collect::<Vec<_>>()
             .join("\n");
         // The same bordered box with no title strip the story menu draws, and
-        // all three labels present — the key column is empty (no defaults, see
+        // all four labels present — the key column is empty (no defaults, see
         // above), so it is not asserted here.
         assert!(text.starts_with('┌') && text.contains('┐'), "shared border glyphs: {text:?}");
         assert!(text.contains("Rename Room"), "{text}");
+        assert!(text.contains("Edit Notes"), "{text}");
         assert!(text.contains("Move Region"), "{text}");
         assert!(text.contains("Rename Layer"), "{text}");
+    }
+
+    /// Activating Edit Notes from the room menu opens the text-entry dialog
+    /// prefilled with the room's existing notes — the same wiring
+    /// `Action::EditNotes` gives the leader/`Ctrl+P` path, since the menu
+    /// dispatches the same `slash::COMMANDS` entry (see `input.rs`'s
+    /// `edit_notes_prefills_with_existing_notes` for that path's own case).
+    /// Also checks that `Action::OpenRoomMenu` pinned the CLICKED room (room
+    /// 2, not room 1) — see the module doc's note that the menu and dispatch
+    /// must agree on which room is meant.
+    #[test]
+    fn activating_edit_notes_opens_the_dialog_prefilled_with_this_rooms_notes() {
+        use crate::input::{apply_action, Action};
+        use crate::state::{AppState, TextEntryKind};
+        use mapper::mapper::Mapper;
+
+        let mut mapper = Mapper::default();
+        mapper.observe(1, "Room A", None);
+        mapper.observe(2, "Room B", None);
+        mapper.set_notes(2, "watch for the troll".to_string());
+
+        let mut state = AppState::default();
+        // Right-click room 2: pins selection to it (not room 1) and opens the menu.
+        apply_action(Action::OpenRoomMenu(2, 3, 3), &mut state, &mut mapper);
+        assert_eq!(state.selected_room, Some(2));
+
+        // The same slash-dispatch path `KeyResolve::Command` feeds through in
+        // production (see `input.rs`'s `room_menu_key_to_command`).
+        let outcome = crate::slash::parse_in_context("edit-notes", '/', crate::keymap::Context::Map);
+        let action = match outcome {
+            crate::slash::SlashOutcome::Action(a) => a,
+            other => panic!("edit-notes did not resolve to an action: {other:?}"),
+        };
+        assert!(matches!(action, Action::EditNotes));
+        apply_action(action, &mut state, &mut mapper);
+
+        let dlg = state.overlays.text_entry.as_ref().expect("edit-notes opens the text-entry dialog");
+        assert!(matches!(dlg.kind, TextEntryKind::EditNotes(2)));
+        assert_eq!(dlg.field.value, "watch for the troll", "prefilled with room 2's own notes, not room 1's");
     }
 }
