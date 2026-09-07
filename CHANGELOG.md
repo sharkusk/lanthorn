@@ -6,7 +6,7 @@ All notable changes to lanthorn are recorded here.
 [`.github/workflows/release.yml`](.github/workflows/release.yml)). A tag whose
 name contains a hyphen — `v0.1.0-beta.1`, `v0.2.0-rc.1` — is published as a
 **pre-release**; a bare `vMAJOR.MINOR.PATCH` is a full release. The workspace
-version in `Cargo.toml` (currently `0.5.1`) versions every crate and every
+version in `Cargo.toml` (currently `0.5.2`) versions every crate and every
 binary's `--version` at once, and carries any pre-release suffix so a build
 identifies itself without reading its git hash.
 
@@ -19,13 +19,25 @@ Absolute URLs or no link.
 
 ---
 
-## Unreleased
+## v0.5.2 — 2026-09-07
 
-> *This section is drained when a version is cut. README.md describes the
-> RELEASED build; prose for a feature that is in `main` but not yet released
-> goes into the README in place, at its normal destination, marked with the
-> visible tag `*Next release:*`. `release.yml` refuses to cut a release
-> while any such tag, or this Unreleased section, still exists.*
+### Highlights
+
+- **Version 6 artwork now hands over through shared memory on a local
+  kitty-protocol terminal** — a 640x400 picture drops from about 1.3 MB on
+  the wire to under 200 bytes; nothing changes over SSH, since lanthorn asks
+  the terminal first.
+- **Dragging to select and copy story text now works in the illustrated
+  games too** — Zork Zero, Shogun and Arthur took every press in the pane as
+  a click meant for the game, so a drag there selected nothing; it now works
+  exactly as it does everywhere else.
+- **Generated maps draw fewer turns and seat harder-to-place rooms
+  correctly.** A two-way passage's rooms now line up at any distance instead
+  of only side by side, and a room reached only by stairs, a ladder or an
+  In/Out passage — Zork I's Attic and Studio among them — lands right beside
+  the room it hangs off instead of being parked across the map.
+- **A full `/dev/shm` can no longer crash lanthorn mid-picture**; it falls
+  back to a compressed transfer instead.
 
 ### Added
 
@@ -57,6 +69,14 @@ Absolute URLs or no link.
   the map you generate and the map you play with agree about where the rooms
   are. Zork I's generated map draws eight fewer turns and Anchorhead's twelve
   fewer, with no passage anywhere taking more than four.
+- **A room reached only by stairs, a ladder or an In/Out passage — and a room
+  shown from another layer — now seats itself right beside the room it hangs
+  off, pushing its neighbours aside to make room, instead of being parked
+  across the map.** A passage the layout had drawn on its own diagonal was
+  being treated as fixed, the same as a walked pair, so it could block the
+  move outright. Zork I's Attic and its Studio ghost paid for it, landing
+  several cells from the Kitchen with their lines looping around everything
+  in between; both now sit right on the Kitchen's doorstep.
 - A full `/dev/shm` can no longer crash lanthorn mid-picture; it falls back to
   compressed transfer.
 - In the extended v6 view, new text no longer freezes the picture on a
