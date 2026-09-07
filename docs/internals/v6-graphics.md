@@ -2908,25 +2908,32 @@ a terminal without the feature looks like.
   never opened at all on the platform this is mostly developed on. Ours is
   `/lnt-{pid}-{serial}`, 26 bytes at `u32::MAX` for both, and a test asserts the
   *widest* name the scheme can produce — a typical one fitting proves nothing.
-- macOS does not implement `read`/`write` on a shared memory object. The
-  descriptor opens, `ftruncate` succeeds, and the first `write(2)` answers
-  `ENXIO`. The pixels go in through an `mmap`/copy/`munmap` instead, which is what
-  the terminal does at the other end anyway.
+- macOS — and every non-Linux Unix — does not implement `read`/`write` on a
+  shared memory object. The descriptor opens, `ftruncate` succeeds, and the first
+  `write(2)` answers `ENXIO`. The pixels go in through an `mmap`/copy/`munmap`
+  instead there, which is what the terminal does at the other end anyway. Linux
+  answers `write(2)` normally and takes a different route entirely — see below.
 
-**A third platform fact, found on Linux instead, and this one crashes the process
-rather than staying silent (SQ-1379).** A POSIX shared memory object lives on
-`tmpfs`, and `tmpfs` allocates pages on first touch, not on `ftruncate` — so
-`ftruncate` reporting success is not proof the pages exist. A window bigger than
-the space left in `/dev/shm` (64 MB by default in a Docker container, and Docker
-is also how this image is played locally: `docker run -it`) sails through
-`ftruncate` and only finds out when the copy touches an unbacked page, at which
-point the kernel delivers **`SIGBUS`**, not an error — the whole process dies
-mid-picture with no `Result` for the fallback to catch. `posix_fallocate` after
-`ftruncate` forces the reservation up front, so the same full `tmpfs` now answers
-`ENOSPC` there instead, ordinarily, and the write takes the existing fallback like
-any other failure. Linux only: macOS's shared memory objects are ordinary
-anonymous memory with no separate quota to exhaust, so `ftruncate` already
-reserves what it names there and `posix_fallocate` does not exist to call.
+**A third platform fact, found on Linux instead, decided which syscall lanthorn
+uses there rather than adding a safeguard around the other one (SQ-1379,
+SQ-1380).** A POSIX shared memory object lives on `tmpfs`, and `tmpfs` allocates
+pages on first touch — so on the `mmap`/copy/`munmap` route above, a window
+bigger than the space left in `/dev/shm` (64 MB by default in a Docker container,
+and Docker is also how this image is played locally: `docker run -it`) would sail
+through `ftruncate` and only find out when the copy touches an unbacked page, at
+which point the kernel delivers **`SIGBUS`**, not an error — the whole process
+dying mid-picture with no `Result` for the fallback to catch. Reserving the pages
+up front with `posix_fallocate` was the first fix (SQ-1379): a full `tmpfs` then
+answered `ENOSPC` there instead, ordinarily, and the write took the existing
+fallback like any other failure. But Linux's `write(2)` on a shared memory object
+needs neither the reservation nor the mapping it was guarding — `write(2)`
+allocates the pages it touches inside the syscall, so a full `tmpfs` answers
+`ENOSPC` (or a short write) directly, as an ordinary `io::Error`, with nothing to
+reserve and nothing to map (SQ-1380). Linux now writes through the descriptor and
+skips `ftruncate` too, since the write itself sets the object's length; macOS and
+every other non-Linux Unix keep the `ftruncate` + `mmap` route above, unchanged,
+because `write(2)` is refused there and there is no separate quota to reserve
+against.
 
 **The name is per *transmit*, not per image**, and that is the one place this
 differs from everything else on this page. The handover is asynchronous: the

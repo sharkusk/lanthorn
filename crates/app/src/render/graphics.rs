@@ -3613,8 +3613,9 @@ struct WindowTiming {
     /// pixels went through shared memory, where there is no payload to encode
     /// (SQ-1374).
     base64: Option<std::time::Duration>,
-    /// Writing the pixels into a shared memory object — `shm_open`, `ftruncate`
-    /// and one copy through a mapping. `None` on every other route.
+    /// Writing the pixels into a shared memory object — `shm_open` plus a
+    /// `write(2)` on Linux, or `shm_open`, `ftruncate` and one copy through a
+    /// mapping elsewhere (SQ-1380). `None` on every other route.
     shm: Option<std::time::Duration>,
 }
 
@@ -3691,30 +3692,24 @@ fn kitty_shm_name(serial: u32) -> String {
 }
 
 /// Write `bytes` into a fresh shared memory object called `name`, or `None` if the
-/// platform refuses (SQ-1374).
+/// platform refuses (SQ-1374, SQ-1380).
 ///
-/// The bytes go in through a mapping rather than `write(2)`, because macOS does
-/// not implement read/write on a shared memory object at all — the descriptor
-/// opens, `ftruncate` succeeds, and the first write answers `ENXIO`. A mapping is
-/// also how the terminal reads it back.
+/// **Linux writes through the descriptor.** `write(2)` on a POSIX shared memory
+/// object allocates the `tmpfs` pages it touches inside the syscall itself — unlike
+/// `ftruncate`, which only names a length and lets `tmpfs` allocate on first touch
+/// — so there is nothing to reserve up front and no mapping to make: a graphics
+/// window bigger than the remaining space in `/dev/shm` (64 MB by default in a
+/// Docker container) answers `write_all` with an ordinary `io::Error` — `ENOSPC`,
+/// or a short write — which takes the same failure path as any other: the object
+/// is unlinked and this function returns `None`, and the caller already falls back
+/// to the wire. `ftruncate` is unnecessary too, since the write itself sets the
+/// object's length. `File::from_raw_fd` is the one `unsafe` this path still needs,
+/// to hand the descriptor `shm_open` returned to something that can `write_all`;
+/// past that point the file owns it and closes it on drop like any other.
 ///
-/// The object is sized to exactly the payload: a terminal rejects one smaller than
-/// `s * v * bpp` (Ghostty says "shared memory size too small"), and one larger
-/// wastes a page it will never look at.
-///
-/// **On Linux, `ftruncate` alone does not reserve the pages it names.** A POSIX
-/// shared memory object lives on `tmpfs`, and `tmpfs` allocates pages on first
-/// touch rather than on `ftruncate` — so a graphics window bigger than the
-/// remaining space in `/dev/shm` (64 MB by default in a Docker container) sails
-/// through `ftruncate` and dies on the `copy_nonoverlapping` below with **SIGBUS**,
-/// which is not a `Result` this function can hand back, or even a panic the
-/// caller could catch: it takes the whole process down. `posix_fallocate` after
-/// `ftruncate` forces the reservation up front, so a full `tmpfs` answers
-/// `ENOSPC` there instead, and this function returns `None` like any other
-/// failure — the caller already falls back to the wire. macOS has no
-/// `posix_fallocate` and needs none: its shared memory objects are ordinary
-/// anonymous memory with no separate quota to run out of, so `ftruncate` there
-/// already reserves what it names.
+/// The object still ends up sized to exactly the payload — a terminal rejects one
+/// smaller than `s * v * bpp` (Ghostty says "shared memory size too small") — which
+/// falls out of `write_all` writing exactly `bytes.len()` bytes to a fresh object.
 ///
 /// **A successful object is not unlinked here.** The protocol makes the terminal
 /// responsible: it unlinks the object once it has read it, which is what lets the
@@ -3722,7 +3717,59 @@ fn kitty_shm_name(serial: u32) -> String {
 /// us — which is exactly why [`kitty_shared_memory`] refuses this route unless the
 /// terminal answered a probe by reading one. A FAILED write is unlinked, because
 /// a half-written object is one nothing will ever be told about.
-#[cfg(unix)]
+#[cfg(target_os = "linux")]
+fn kitty_shm_write(name: &str, bytes: &[u8]) -> Option<()> {
+    use std::io::Write as _;
+    use std::os::unix::io::FromRawFd as _;
+
+    if bytes.is_empty() {
+        return None;
+    }
+    let cname = std::ffi::CString::new(name).ok()?;
+    // SAFETY: `cname` is a NUL-terminated string, and the returned descriptor is
+    // checked against its documented failure value before use.
+    let fd = unsafe { libc::shm_open(cname.as_ptr(), libc::O_CREAT | libc::O_RDWR | libc::O_TRUNC, 0o600) };
+    if fd < 0 {
+        return None;
+    }
+    // SAFETY: `fd` is the valid, freshly-opened descriptor checked above, and
+    // nothing else holds or closes it — `File` becomes its sole owner and closes
+    // it on drop, on every path out of this function.
+    let mut file = unsafe { std::fs::File::from_raw_fd(fd) };
+    let written = file.write_all(bytes).is_ok();
+    if !written {
+        // SAFETY: `cname` is the same NUL-terminated string used to open it.
+        unsafe {
+            libc::shm_unlink(cname.as_ptr());
+        }
+        return None;
+    }
+    Some(())
+}
+
+/// Write `bytes` into a fresh shared memory object called `name`, or `None` if the
+/// platform refuses (SQ-1374, SQ-1380).
+///
+/// **Every non-Linux Unix goes in through a mapping instead of `write(2)`**,
+/// because macOS does not implement read/write on a shared memory object at all —
+/// the descriptor opens, `ftruncate` succeeds, and the first write answers
+/// `ENXIO`. A mapping is also how the terminal reads the object back. macOS has no
+/// `tmpfs` quota to run out of either: its shared memory objects are ordinary
+/// anonymous memory, so `ftruncate` here already reserves what it names and needs
+/// no `posix_fallocate`-style forcing the way Linux's `tmpfs` does (see the
+/// `target_os = "linux"` twin of this function).
+///
+/// The object is sized to exactly the payload: a terminal rejects one smaller than
+/// `s * v * bpp` (Ghostty says "shared memory size too small"), and one larger
+/// wastes a page it will never look at.
+///
+/// **A successful object is not unlinked here.** The protocol makes the terminal
+/// responsible: it unlinks the object once it has read it, which is what lets the
+/// handover need no synchronisation. An object no terminal ever reads does outlive
+/// us — which is exactly why [`kitty_shared_memory`] refuses this route unless the
+/// terminal answered a probe by reading one. A FAILED write is unlinked, because
+/// a half-written object is one nothing will ever be told about.
+#[cfg(all(unix, not(target_os = "linux")))]
 fn kitty_shm_write(name: &str, bytes: &[u8]) -> Option<()> {
     if bytes.is_empty() {
         return None;
@@ -3736,8 +3783,8 @@ fn kitty_shm_write(name: &str, bytes: &[u8]) -> Option<()> {
         if fd < 0 {
             return None;
         }
-        let reserved = libc::ftruncate(fd, bytes.len() as libc::off_t) == 0 && kitty_shm_reserve(fd, bytes.len());
-        let filled = if reserved {
+        let sized = libc::ftruncate(fd, bytes.len() as libc::off_t) == 0;
+        let filled = if sized {
             let ptr = libc::mmap(
                 std::ptr::null_mut(),
                 bytes.len(),
@@ -3763,25 +3810,6 @@ fn kitty_shm_write(name: &str, bytes: &[u8]) -> Option<()> {
         }
     }
     Some(())
-}
-
-/// Force the reservation `ftruncate` alone does not make on `tmpfs` (see
-/// [`kitty_shm_write`]'s doc comment). Linux only: `posix_fallocate` returns the
-/// errno directly rather than setting it and returning `-1`, so `0` — not a sign
-/// check — is success. Every other Unix `kitty_shm_write` runs on backs its
-/// shared memory with ordinary reservable memory already, so there is nothing
-/// for this to do there.
-///
-/// # Safety
-/// `fd` must be an open, writable file descriptor.
-#[cfg(target_os = "linux")]
-unsafe fn kitty_shm_reserve(fd: libc::c_int, len: usize) -> bool {
-    libc::posix_fallocate(fd, 0, len as libc::off_t) == 0
-}
-
-#[cfg(all(unix, not(target_os = "linux")))]
-unsafe fn kitty_shm_reserve(_fd: libc::c_int, _len: usize) -> bool {
-    true
 }
 
 /// The kitty transmit sequence for `canvas` as image `id`, handed over through a
@@ -7732,17 +7760,14 @@ mod tests {
             assert_eq!(read_back, *img.as_raw(), "byte for byte, the canvas the terminal will read");
         }
 
-        /// The Linux-only reservation (`posix_fallocate`, SQ-1379) still leaves a
-        /// correct object behind: this is the same round-trip as the test above,
-        /// but its purpose is to exercise the reservation path on Linux CI rather
-        /// than the write itself, which the test above already covers on every
-        /// platform. `posix_fallocate` cannot be made to fail here without a full
-        /// `/dev/shm` to provoke it, so this is the non-vacuity half — proof the
-        /// reserved object still holds exactly the bytes written, not a test of
-        /// the `ENOSPC` fallback itself.
+        /// A second, differently-sized object proves the round-trip above is not a
+        /// coincidence of one buffer's length — on Linux this exercises the
+        /// `write(2)` path (SQ-1380), and on every other Unix the `ftruncate` +
+        /// `mmap` path (SQ-1374, SQ-1379), whichever `kitty_shm_write` compiles to
+        /// on the platform running this test.
         #[test]
         #[cfg(unix)]
-        fn a_reserved_shared_memory_object_still_round_trips_its_bytes() {
+        fn a_written_shared_memory_object_round_trips_its_bytes_on_this_platforms_path() {
             let img = canvas(24, 17);
             let name = kitty_shm_name(0xC0FFEE);
             kitty_shm_write(&name, img.as_raw()).expect("this platform writes a shared memory object");
@@ -7752,17 +7777,17 @@ mod tests {
             // before this block ends, and unlinked afterwards.
             let read_back = unsafe {
                 let fd = libc::shm_open(cname.as_ptr(), libc::O_RDONLY, 0);
-                assert!(fd >= 0, "the object exists after the reserved write");
+                assert!(fd >= 0, "the object exists after the write");
                 let len = img.as_raw().len();
                 let ptr = libc::mmap(std::ptr::null_mut(), len, libc::PROT_READ, libc::MAP_SHARED, fd, 0);
-                assert!(ptr != libc::MAP_FAILED, "reservation did not shrink the mapping");
+                assert!(ptr != libc::MAP_FAILED, "and it is at least as big as the pixels");
                 let out = std::slice::from_raw_parts(ptr.cast::<u8>(), len).to_vec();
                 libc::munmap(ptr, len);
                 libc::close(fd);
                 libc::shm_unlink(cname.as_ptr());
                 out
             };
-            assert_eq!(read_back, *img.as_raw(), "the reservation changes nothing about the payload");
+            assert_eq!(read_back, *img.as_raw(), "byte for byte, on a second, differently-sized object");
         }
 
         /// The `t=s` escape hands over a NAME, and only a name: same placement,
