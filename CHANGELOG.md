@@ -24,7 +24,9 @@ Absolute URLs or no link.
 ### Added
 
 - **A save file from the classic ScottFree interpreter can now be restored**
-  in a Scott Adams game, alongside lanthorn's own saves. (SQ-1413)
+  in a Scott Adams game, alongside lanthorn's own saves — point the restore
+  file picker (or `scott-cli`'s `/restore`) straight at an old ScottFree
+  `.sav` and it comes back to life. (SQ-1413)
 
 ### Changed
 
