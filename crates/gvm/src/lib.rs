@@ -16,16 +16,24 @@ pub mod disasm;
 pub mod error;
 pub mod exec;
 pub mod glk;
+#[cfg(feature = "grammar")]
 pub mod grammar;
 pub mod header;
+// `i7map` and `world` read the object/room model through
+// `objects::ParseNames`, which in turn locates the dictionary through
+// `grammar::locate` — there is no way to find either without a grammar
+// table reader, so all three live behind the same feature.
+#[cfg(feature = "grammar")]
 pub mod i7map;
 pub mod memory;
+#[cfg(feature = "grammar")]
 pub mod objects;
 pub mod trace;
 mod unicode_norm;
 #[rustfmt::skip]
 mod unicode_norm_tables;
 pub mod veneer;
+#[cfg(feature = "grammar")]
 pub mod world;
 
 pub use error::GError;

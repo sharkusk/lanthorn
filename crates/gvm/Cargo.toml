@@ -24,8 +24,41 @@ doctest = false
 [dependencies]
 # The grammar value types both VM crates return (SQ-1103) — an internal,
 # zero-dependency workspace crate, so this stays a zero-EXTERNAL-dependency
-# crate exactly as before.
-grammar-model = { package = "lanthorn-grammar-model", path = "../grammar-model", version = "0.5.3" }
+# crate exactly as before. Optional so an embedder who wants no grammar
+# tables takes no dependency at all (see the `grammar` feature below).
+grammar-model = { package = "lanthorn-grammar-model", path = "../grammar-model", version = "0.5.3", optional = true }
+
+[features]
+default = ["grammar"]
+# Gates `pub mod grammar` and its `grammar-model` dependency. On by default so
+# downstream crates using default features see no change; an embedder who
+# does not want grammar tables can `--no-default-features` and take no
+# dependency at all.
+grammar = ["dep:grammar-model"]
 
 [dev-dependencies]
 blorb = { package = "lanthorn-blorb", path = "../blorb", version = "0.5.3" }
+
+[[example]]
+name = "grammar_dump"
+required-features = ["grammar"]
+
+[[example]]
+name = "i7map_report"
+required-features = ["grammar"]
+
+# These three integration suites read the grammar/object/room-detection
+# surface directly (`gvm::grammar`, `gvm::objects`, `gvm::world`, `gvm::i7map`
+# — all gated behind the `grammar` feature above), so `--no-default-features`
+# must not try to build them.
+[[test]]
+name = "grammar_tables"
+required-features = ["grammar"]
+
+[[test]]
+name = "i7_map"
+required-features = ["grammar"]
+
+[[test]]
+name = "object_words"
+required-features = ["grammar"]
