@@ -1,0 +1,20 @@
+
+DateTimeTest
+Not a game.
+Release 4 / Serial number 170712 / Inform v6.34 Library 6/11 S
+
+Clock Room
+This is a room of time and space. Well, mostly time. It's not very big. But there is a faint smell of bacon.
+
+A large blue clock on the wall says "1:13 pm (local)"; a large green clock says "8:13 pm (utc)". You can examine either more closely. A ticking meter, a time zone sign, and a calendar are also hanging nearby. In one corner is an elaborate... gizmo... with seven control wheels.
+
+>You look through the calendar. A few entries are picked out.
+
+  The first Moon landing: Sunday, Jul 20, 1969 at 8:17:40 pm (utc)
+  The Unix epoch: Thursday, Jan 1, 1970 at 12:00:00 midnight (utc)
+  Einstein's first time journey: Sunday, Oct 26, 1986 at 8:20:00 am (utc)
+  The birthday of Inform 7: Sunday, Apr 30, 2006 at 5:48:09 pm (utc)
+  The American Tricentennial: Saturday, Jul 4, 2076 at 12:00:00 noon (utc)
+  The longest solar eclipse of the millennium: Sunday, Jul 16, 2186 at 3:08:05 pm (utc)
+
+>

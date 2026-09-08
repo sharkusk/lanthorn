@@ -1,0 +1,18 @@
+
+ExtBinaryFile: Not a game.
+Release 2 / Serial number 210726 / Inform v6.36, compiler options S
+Interpreter version 0.6.1 / VM 3.1.3 / game file format 3.0.0
+
+A voice booooms out: Welcome to the test chamber.
+
+* Write bytes as char/binary, read them back.
+* Write Unicode data in char/binary mode, read it back.
+* Write in word/binary mode, then read it back in char/binary.
+* Write in word/binary mode, then read it back in word/binary.
+* Write in char/text mode, then read it back in char/binary.
+* Write in word/text mode, then read it back in char/binary.
+* Write in word/text mode, using various calls.
+* Write in word/text mode, then read it back.
+* Write in word/text mode, char by char, then read it back.
+
+All tests passed.

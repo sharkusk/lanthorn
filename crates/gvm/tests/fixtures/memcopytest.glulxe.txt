@@ -1,0 +1,20 @@
+
+MemCopyTest
+Not a game.
+Release 1 / Serial number 070211 / Inform v6.30 Library 6/11 S
+
+Heap Room
+A voice booooms out: Try "say WORD", "zero POS LEN", or "copy SRCPOS DESTPOS LEN", where POS and LEN are numbers from 0 to 20.
+Array: (0)(0)(0)(0)(0)(0)(0)(0)(0)(0)(0)(0)(0)(0)(0)(0)(0)(0)(0)(0)
+
+>Array: hello(0)(0)(0)(0)(0)(0)(0)(0)(0)(0)(0)(0)(0)(0)(0)
+
+>Copying 5 bytes from 0 to 3.
+Array: helhello(0)(0)(0)(0)(0)(0)(0)(0)(0)(0)(0)(0)
+
+>Array: hello(0)(0)(0)(0)(0)(0)(0)(0)(0)(0)(0)(0)(0)(0)(0)
+
+>Copying 5 bytes from 3 to 0.
+Array: lo(0)(0)(0)(0)(0)(0)(0)(0)(0)(0)(0)(0)(0)(0)(0)(0)(0)(0)
+
+>
