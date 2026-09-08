@@ -21,11 +21,27 @@ Absolute URLs or no link.
 
 ## Unreleased
 
-> *This section is drained when a version is cut. README.md describes the
-> RELEASED build; prose for a feature that is in `main` but not yet released
-> goes into the README in place, at its normal destination, marked with the
-> visible tag `*Next release:*`. `release.yml` refuses to cut a release
-> while any such tag, or this Unreleased section, still exists.*
+### Changed
+
+- **save compatibility:** The save-archive format has changed twice in this
+  release (versions 9 and 10). Archives written by earlier releases still load:
+  your position, map, transcript and history come back in full. What can be
+  missing is the screen: a graphical game's windows come back empty until the
+  game next repaints, and a text game's status line is blank until the next
+  turn redraws it. Saving again writes the new format. If you want an old
+  graphical save restored exactly, the previous release can load it and save it
+  again. The game's own `save` files are unaffected. (SQ-1401, SQ-1403)
+
+### Fixed
+
+- **Restoring a Save State that was taken while a graphical (Version 6) game
+  was showing a full-screen picture, such as Zork Zero's splash screens, no
+  longer pages through the whole story so far with `[more]` prompts on the
+  first keypress.** The transcript is treated as already read and the game
+  continues from the picture. (SQ-1411)
+- **A Save State now keeps the colours of a game's status line cell by cell;**
+  games that colour their status line lost those colours across a Save State
+  before. (SQ-1401)
 
 ---
 
