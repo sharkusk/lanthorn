@@ -30,7 +30,7 @@ use cli_host::{HostMode, TerminalGuard};
 use crossterm::event::{self, Event, KeyCode, KeyEventKind, KeyModifiers};
 use crossterm::terminal;
 
-use scott::{Database, Vm};
+use scott::{looks_like_scottfree_save, Database, Vm};
 
 /// The canonical Scott Adams input prompt (mirrors `ScottSession::PROMPT` in the
 /// app). ScottFree prints it from its input routine; the VM stays input-agnostic,
@@ -314,9 +314,18 @@ fn do_save(
 /// way this could be worse than not having it.
 ///
 /// **A save from a different adventure is refused, not half-applied.**
-/// `Vm::restore` checks the item count against the loaded database before it
-/// writes anything, so pointing this at another game's `.sav` fails cleanly
-/// instead of scattering one adventure's item locations through another's.
+/// `Vm::restore`/`Vm::restore_scottfree` both check the loaded database
+/// before writing anything, so pointing this at another game's save fails
+/// cleanly instead of scattering one adventure's item locations through
+/// another's.
+///
+/// **Accepts either save format, detected by shape (SQ-1413):** this
+/// binary's own `Vm::snapshot` (`Vm::SNAPSHOT_MAGIC`, unambiguous — checked
+/// first) or a ScottFree 1.14 text save (`scott::looks_like_scottfree_save`)
+/// — the classic interpreter's own `.sav`, brought in from ScottFree itself
+/// or a fork that kept its format. Detection is the crate's, not
+/// reimplemented here, so the app host and this CLI can never disagree
+/// about what counts as which.
 fn do_restore(
     out: &mut impl Write,
     interactive: bool,
@@ -339,16 +348,22 @@ fn do_restore(
     let chosen = cli_host::pick_save(&typed, &saves).map_or(typed.clone(), str::to_string);
     let path = cli_host::resolve_save_input(&chosen, game_dir, cli_host::SCOTT_EXT);
     match fs::read(&path) {
-        Ok(bytes) => match vm.restore(&bytes) {
-            Ok(()) => {
-                let _ = writeln!(out, "Restored from '{}'.", path.display());
-                true
+        Ok(bytes) => {
+            let is_scottfree_save =
+                !bytes.starts_with(&Vm::SNAPSHOT_MAGIC) && looks_like_scottfree_save(&bytes);
+            let result =
+                if is_scottfree_save { vm.restore_scottfree(&bytes) } else { vm.restore(&bytes) };
+            match result {
+                Ok(()) => {
+                    let _ = writeln!(out, "Restored from '{}'.", path.display());
+                    true
+                }
+                Err(e) => {
+                    let _ = writeln!(out, "Restore failed: '{}' is not a save for this game ({e}).", path.display());
+                    false
+                }
             }
-            Err(e) => {
-                let _ = writeln!(out, "Restore failed: '{}' is not a save for this game ({e}).", path.display());
-                false
-            }
-        },
+        }
         Err(e) => {
             let _ = writeln!(out, "Restore failed: {e}");
             false
@@ -373,7 +388,8 @@ Host commands (typed at any prompt, never passed to the game):
                         .sav rather than .qzl.
   /restore [name]       Restore. Bare, it lists your saves and takes a number or
                         a name. A save from a different adventure is refused
-                        rather than half-applied. Alias: /load
+                        rather than half-applied. Also accepts a save from the
+                        classic ScottFree interpreter itself. Alias: /load
 
 Options:
       --screen-reader   Linear plain text (alias: --plain; also selected by
@@ -675,6 +691,60 @@ mod tests {
             "the player is told why: {}",
             String::from_utf8_lossy(&out)
         );
+
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    /// A hand-authored ScottFree 1.14 save (`SaveGame`/`LoadGame`,
+    /// `ScottCurses.c:653-706`), shaped for `tiny_cave.dat` (`NumItems=9`, 10
+    /// item slots, 4 rooms 0..=3): 16 `counter room` pairs, a state line,
+    /// then one location per item.
+    fn tiny_cave_scottfree_save() -> String {
+        let mut s = String::new();
+        for ct in 0..16 {
+            s.push_str(&format!("{} 1\n", ct + 1));
+        }
+        // BitFlags DarkFlag MyLoc CurrentCounter SavedRoom LightTime
+        s.push_str("0 0 3 7 1 42\n");
+        // idol (item 1) carried, lamp (item 9, LIGHT_SOURCE) in room 1.
+        s.push_str("0\n255\n0\n0\n0\n0\n0\n0\n0\n1\n");
+        s
+    }
+
+    /// `/restore` also accepts the classic ScottFree interpreter's own save
+    /// format (SQ-1413), detected by shape (`scott::looks_like_scottfree_save`)
+    /// rather than a reserved extension — this crate's own binary snapshot
+    /// and ScottFree's text format both carry `.sav`.
+    #[test]
+    fn restore_accepts_a_scottfree_save() {
+        let dir = scratch("scottfree-import");
+        let mut vm = tiny_cave();
+        let mut out: Vec<u8> = Vec::new();
+
+        fs::write(dir.join("classic.sav"), tiny_cave_scottfree_save()).unwrap();
+
+        assert!(do_restore(&mut out, false, &mut vm, &dir, "classic"));
+        assert_eq!(vm.current_room(), 3, "MyLoc=3 from the save file");
+        assert_eq!(vm.item_loc(1), scott::database::CARRIED, "the idol (255) normalises to CARRIED");
+        assert_eq!(vm.item_loc(9), 1, "the lamp is in room 1");
+
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    /// Neither this crate's own binary snapshot nor a well-formed ScottFree
+    /// save: refused with a message, not a panic, and the live game is
+    /// untouched.
+    #[test]
+    fn restore_rejects_garbage_matching_neither_format() {
+        let dir = scratch("garbage-import");
+        let mut vm = tiny_cave();
+        let before = vm.room_block();
+        let mut out: Vec<u8> = Vec::new();
+
+        fs::write(dir.join("junk.sav"), b"this is not a scott save of either format").unwrap();
+
+        assert!(!do_restore(&mut out, false, &mut vm, &dir, "junk"));
+        assert_eq!(vm.room_block(), before, "the live game is untouched");
 
         let _ = fs::remove_dir_all(&dir);
     }
