@@ -1,8 +1,8 @@
-mod database;
-mod decompile;
 mod loader;
 mod vm;
-pub use database::*;
-pub use decompile::*;
+pub mod database;
+pub mod decompile;
+pub use database::{Action, Condition, Database, Item, Room};
+pub use decompile::{decompile_action, list_items, list_rooms, list_vocab};
 pub use loader::{looks_like_scott, LoadError};
-pub use vm::{Input, StepResult, Vm};
+pub use vm::{RestoreError, StepResult, Vm};

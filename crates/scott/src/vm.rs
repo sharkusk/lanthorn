@@ -1,4 +1,5 @@
 use crate::*;
+use crate::database::{CARRIED, DARK_FLAG, LAMP_EMPTY_FLAG, LIGHT_SOURCE};
 use std::collections::HashSet;
 
 /// Condition codes 0..=19 implemented by `Vm::eval_condition` below (the
@@ -22,16 +23,42 @@ pub(crate) const FIXED_COMMAND_OPCODES: [u16; 38] = [
 ];
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum StepResult {
     Continue,
     NeedLine,
     Quit,
 }
 
-#[derive(Debug, Clone)]
-pub enum Input {
-    Line(String),
+/// Why [`Vm::restore`] rejected a snapshot.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum RestoreError {
+    /// The byte buffer ended before every field of the snapshot was read.
+    Truncated,
+    /// A room or counter index encoded in the snapshot does not fit this
+    /// game's room table.
+    OutOfRange,
+    /// The item count encoded in the snapshot does not match this game's own
+    /// item table — the usual sign of a version/format mismatch (a snapshot
+    /// taken against a different compiled `.dat`).
+    ItemCountMismatch,
+    /// Bytes remained in the buffer after every field was read.
+    TrailingData,
 }
+
+impl std::fmt::Display for RestoreError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            RestoreError::Truncated => write!(f, "save data ended before the snapshot was fully read"),
+            RestoreError::OutOfRange => write!(f, "save data names a room or counter index outside this game"),
+            RestoreError::ItemCountMismatch => write!(f, "save data's item count does not match this game"),
+            RestoreError::TrailingData => write!(f, "save data has extra bytes after the snapshot"),
+        }
+    }
+}
+
+impl std::error::Error for RestoreError {}
 
 pub struct Vm {
     pub(crate) db: Database,
@@ -255,22 +282,21 @@ impl Vm {
 
     /// Restore state from `snapshot` bytes. Rejects short/malformed input, a
     /// mismatched item count, or an out-of-range room/counter index.
-    #[allow(clippy::result_unit_err)]
-    pub fn restore(&mut self, bytes: &[u8]) -> Result<(), ()> {
-        fn read_u32(bytes: &[u8], pos: &mut usize) -> Result<u32, ()> {
-            let end = pos.checked_add(4).ok_or(())?;
-            let slice = bytes.get(*pos..end).ok_or(())?;
+    pub fn restore(&mut self, bytes: &[u8]) -> Result<(), RestoreError> {
+        fn read_u32(bytes: &[u8], pos: &mut usize) -> Result<u32, RestoreError> {
+            let end = pos.checked_add(4).ok_or(RestoreError::Truncated)?;
+            let slice = bytes.get(*pos..end).ok_or(RestoreError::Truncated)?;
             *pos = end;
             Ok(u32::from_le_bytes(slice.try_into().unwrap()))
         }
-        fn read_i32(bytes: &[u8], pos: &mut usize) -> Result<i32, ()> {
+        fn read_i32(bytes: &[u8], pos: &mut usize) -> Result<i32, RestoreError> {
             read_u32(bytes, pos).map(|v| v as i32)
         }
 
         let mut pos = 0usize;
         let item_count = read_u32(bytes, &mut pos)? as usize;
         if item_count != self.item_loc.len() {
-            return Err(());
+            return Err(RestoreError::ItemCountMismatch);
         }
         let mut item_loc = Vec::with_capacity(item_count);
         for _ in 0..item_count {
@@ -278,9 +304,9 @@ impl Vm {
         }
         let player = read_u32(bytes, &mut pos)? as usize;
         if player >= self.db.rooms.len() {
-            return Err(());
+            return Err(RestoreError::OutOfRange);
         }
-        let flags_slice = bytes.get(pos..pos + 32).ok_or(())?;
+        let flags_slice = bytes.get(pos..pos + 32).ok_or(RestoreError::Truncated)?;
         let mut flags = [false; 32];
         for (i, &b) in flags_slice.iter().enumerate() {
             flags[i] = b != 0;
@@ -293,20 +319,20 @@ impl Vm {
         }
         let saved_room = read_u32(bytes, &mut pos)? as usize;
         if saved_room >= self.db.rooms.len() {
-            return Err(());
+            return Err(RestoreError::OutOfRange);
         }
         let mut saved_rooms = [0usize; 16];
         for r in saved_rooms.iter_mut() {
             let v = read_u32(bytes, &mut pos)? as usize;
             if v >= self.db.rooms.len() {
-                return Err(());
+                return Err(RestoreError::OutOfRange);
             }
             *r = v;
         }
         let lamp = read_i32(bytes, &mut pos)?;
 
         if pos != bytes.len() {
-            return Err(());
+            return Err(RestoreError::TrailingData);
         }
 
         self.item_loc = item_loc;

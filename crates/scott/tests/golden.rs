@@ -150,7 +150,7 @@ fn snapshot_restore_round_trip() {
         vm.take_output();
     }
     assert_eq!(vm.current_room(), 2);
-    assert_eq!(vm.item_loc(9), scott::CARRIED); // lamp carried
+    assert_eq!(vm.item_loc(9), scott::database::CARRIED); // lamp carried
     assert!(vm.flag(3)); // RUB LAMP guard flag set
     assert_eq!(vm.counter(), 7); // current_counter
 
@@ -165,12 +165,12 @@ fn snapshot_restore_round_trip() {
     vm.take_output();
 
     assert_ne!(vm.current_room(), 2);
-    assert_ne!(vm.item_loc(9), scott::CARRIED);
+    assert_ne!(vm.item_loc(9), scott::database::CARRIED);
 
     vm.restore(&snap).expect("restore succeeds");
 
     assert_eq!(vm.current_room(), 2);
-    assert_eq!(vm.item_loc(9), scott::CARRIED);
+    assert_eq!(vm.item_loc(9), scott::database::CARRIED);
     assert!(vm.flag(3));
     assert_eq!(vm.counter(), 7);
 }

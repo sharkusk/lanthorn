@@ -12,7 +12,8 @@
 //! and `vm::FIXED_COMMAND_OPCODES`, so the executor and the decompiler can't
 //! silently drift apart.
 
-use crate::{Action, Condition, Database, CARRIED, DARK_FLAG, LAMP_EMPTY_FLAG};
+use crate::{Action, Condition, Database};
+use crate::database::CARRIED;
 
 /// Mnemonic for each condition code 0..=19 (must match `vm::CONDITION_CODES`
 /// key-for-key; see `condition_mnemonic_table_matches_vm_condition_codes`).
@@ -117,8 +118,8 @@ fn resolve_room(db: &Database, idx: usize) -> String {
 
 fn resolve_flag(idx: usize) -> String {
     match idx {
-        DARK_FLAG => "dark".to_string(),
-        LAMP_EMPTY_FLAG => "lamp_empty".to_string(),
+        crate::database::DARK_FLAG => "dark".to_string(),
+        crate::database::LAMP_EMPTY_FLAG => "lamp_empty".to_string(),
         other => other.to_string(),
     }
 }
@@ -411,6 +412,7 @@ pub fn list_vocab(db: &Database) -> Vec<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::database::DARK_FLAG;
     use crate::vm::{CONDITION_CODES, FIXED_COMMAND_OPCODES};
     use crate::{Item, Room};
     use std::collections::BTreeSet;
