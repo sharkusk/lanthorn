@@ -8,6 +8,7 @@ Every slash command, grouped the way `/help` groups them. Type any of these afte
 | Game | `save-state [name]` | save an emulator Save State, optionally to a named slot |
 | Game | `restore-state [name]` | restore an emulator Save State — bare opens the saves dialog to pick one; a name restores that slot directly |
 | Game | `reset-game [map] [data]` | restart the game — bare opens the options dialog; 'map' also clears the map, 'data' deletes the game's saved progress/cache so it starts fresh |
+| Game | `set-transcript on|off` | start or stop the story's own transcript, written to script.txt in the game's folder — the same switch a game's SCRIPT command throws, for the many that have none |
 | Game | `quit` | exit lanthorn |
 | Game | `quit-to-library` | exit the current story and return to the story library |
 | Game | `open-hints` | open the hints panel |

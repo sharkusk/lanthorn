@@ -53,6 +53,29 @@ Scott Adams games have no save of their own to answer, so `scott-cli` puts
 `/save` and `/restore` (alias `/load`) on its own prompt instead — same list,
 same rules.
 
+## Transcripts, recording and replay
+
+`zvm-cli` keeps the Z-machine's own script files, and each one is off until
+you name a path for it:
+
+```sh
+zvm-cli --transcript zork.txt zork1.z3       # what the game's SCRIPT writes
+zvm-cli --record walkthrough.txt zork1.z3    # every command you type
+zvm-cli --replay walkthrough.txt zork1.z3    # play it back, then hand over
+```
+
+`--transcript` gives the game's own `SCRIPT` command somewhere to write;
+without it, `SCRIPT` honestly reports that it failed. `--record` logs your
+commands, and the individual keys a game reads one at a time, one record per
+line; `--replay` reads that file back in place of the keyboard and returns
+you to the keys the moment it runs out. The file format is the one other
+interpreters use, so a script recorded in Frotz replays here and the reverse.
+
+All three take a filename you choose and overwrite it at each launch — this
+run's transcript, this run's script. (`lanthorn` itself keeps the same two
+files per game instead, and appends to them; see
+[playing](playing.md).)
+
 ## Maintaining a library without the TUI
 
 `--fetch missing` walks a directory of stories and fetches titles, blurbs,

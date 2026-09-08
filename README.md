@@ -216,6 +216,11 @@ itself.**
   just the game's own state, whether you press Ctrl+S or the story does its own
   `SAVE`. Plus Quetzal import/export and per-turn rewind.
   → [saves and rewind](docs/guide/saves-and-rewind.md)
+- **Transcripts, recording and replay** — *Next release:* a game's own
+  `SCRIPT` command now writes a real transcript beside its saves, and
+  `/set-transcript on` does the same for the many games that offer no such
+  command. Commands can be recorded to a file and played back, in the format
+  other interpreters read. → [playing](docs/guide/playing.md)
 - **A real terminal UI** — mouse, resizable panes, a story picker with IFDB
   search, command palette, in-game InvisiClues, transcript search, a debug
   disassembler, and a theme every part of which you can restyle.

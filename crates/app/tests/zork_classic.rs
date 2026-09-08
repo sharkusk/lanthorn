@@ -14,6 +14,8 @@
 #[path = "suites/fixture_paths.rs"]
 mod fixture_paths;
 
+#[path = "suites/transcript_stream_files.rs"]
+mod transcript_stream_files;
 #[path = "suites/zork0_v6_gameplay.rs"]
 mod zork0_v6_gameplay;
 #[path = "suites/zork0_v6_persistence.rs"]

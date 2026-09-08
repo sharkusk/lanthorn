@@ -228,6 +228,69 @@ struct StdoutOutput {
     /// line, but the hold never sees it, so the next announcement would insert a
     /// second newline and read as a blank line between every keypress.
     sink_mid_line: bool,
+    /// The transcript, command-record and command-replay files (ZMSD §7.1.1,
+    /// §7.1.2, §10.2). All three are off unless the player named a file.
+    streams: StreamFiles,
+}
+
+/// The external files output streams 2 and 4 and input stream 1 read and write.
+///
+/// ZMSD §7.6.5 makes these optional for an interpreter and §7.6.5.2 asks it to
+/// say so when it declines; `zvm-cli` declines by default and supports each one
+/// the moment a `--transcript` / `--record` / `--replay` path names it. The
+/// engine holds none of this — `zvm` never opens a file — so the paths, the
+/// handles and the truncate-vs-append decision all live here.
+///
+/// **Both written files are TRUNCATED at open, not appended to.** A named path
+/// is this run's transcript or script; a session that inherited the last one's
+/// tail would be unreadable, and replaying a file that a `--record` in the same
+/// run is extending would never terminate. (lanthorn's own per-game files
+/// append — there the file is the GAME's, accumulating across sessions, and the
+/// player never names it. Different question, different answer.)
+#[derive(Default)]
+struct StreamFiles {
+    /// Output stream 2's file, opened when the player named one.
+    transcript: Option<std::fs::File>,
+    /// Output stream 4's file.
+    record: Option<std::fs::File>,
+    /// Input stream 1's records, read whole at startup — a command file is a
+    /// few kilobytes of typed lines, and holding it means a `--record` writing
+    /// the same path cannot feed itself.
+    replay: std::collections::VecDeque<String>,
+}
+
+impl StreamFiles {
+    /// Open `path` for a stream that WRITES, truncating it. The error is the
+    /// player's to see: they asked for this file by name.
+    fn create(path: &str, what: &str) -> Option<std::fs::File> {
+        match std::fs::File::create(path) {
+            Ok(f) => Some(f),
+            Err(e) => {
+                eprintln!("cannot open {what} file '{path}': {e}");
+                None
+            }
+        }
+    }
+
+    /// Load a command file into the replay queue (ZMSD §10.2.1: its format is
+    /// output stream 4's). A trailing `\r` is trimmed so a file recorded on
+    /// Windows replays on Unix.
+    fn load_replay(&mut self, path: &str) {
+        match std::fs::read_to_string(path) {
+            Ok(text) => {
+                self.replay = text
+                    .split('\n')
+                    .map(|l| l.strip_suffix('\r').unwrap_or(l).to_string())
+                    .collect();
+                // A trailing newline yields one empty record that was never
+                // typed; a genuine blank line between two records was.
+                if self.replay.back().is_some_and(String::is_empty) {
+                    self.replay.pop_back();
+                }
+            }
+            Err(e) => eprintln!("cannot read command file '{path}': {e}"),
+        }
+    }
 }
 
 impl StdoutOutput {
@@ -250,6 +313,7 @@ impl StdoutOutput {
             palette,
             hold: cli_host::LineHold::new(hold_partial),
             sink_mid_line: false,
+            streams: StreamFiles::default(),
         }
     }
 
@@ -344,12 +408,79 @@ impl Output for StdoutOutput {
         self.buffer_mode = on;
     }
 
+    /// Output stream 2 — write the game's transcript straight through
+    /// (ZMSD §7.1.1). Unwrapped, as Frotz writes it: §7.2 permits wrapping but
+    /// the file is more useful as the game composed it, and `--transcript` is
+    /// for reading back and diffing.
+    ///
+    /// Flushed per run rather than at exit, because a transcript is most often
+    /// wanted from a session that ended by crashing or being killed.
+    fn transcript(&mut self, text: &str) {
+        if let Some(f) = self.streams.transcript.as_mut() {
+            let _ = f.write_all(text.as_bytes());
+            let _ = f.flush();
+        }
+    }
+
+    /// Output stream 4 — one finished record per line (ZMSD §7.1.2.3). The
+    /// engine has already escaped it (`zvm::io::encode_command_record`); the
+    /// newline is the record separator input stream 1 splits on.
+    fn command_record(&mut self, line: &str) {
+        if let Some(f) = self.streams.record.as_mut() {
+            let _ = f.write_all(line.as_bytes());
+            let _ = f.write_all(b"\n");
+            let _ = f.flush();
+        }
+    }
+
+    /// Input stream 1 — the next record of `--replay`'s file (ZMSD §10.2).
+    /// `None` when it is exhausted, which returns the machine to the keyboard.
+    fn next_command(&mut self) -> Option<String> {
+        self.streams.replay.pop_front()
+    }
+
     fn as_any(&self) -> &dyn Any {
         self
     }
 
     fn as_any_mut(&mut self) -> &mut dyn Any {
         self
+    }
+}
+
+/// Open whatever `--transcript` / `--record` / `--replay` named, and hand the
+/// handles to the sink the machine already owns (ZMSD §7.1.1, §7.1.2, §10.2).
+///
+/// `--replay` also selects input stream 1 outright, which §10.2.2 provides for:
+/// "An interpreter is free to change the input stream whenever it likes (e.g. at
+/// the player's request) or, indeed, to run the entire game under input stream 1
+/// (for testing purposes)." Waiting for the story to ask would make the flag
+/// useless — almost no story ever issues `input_stream 1`.
+///
+/// `--transcript` deliberately does NOT select output stream 2. The transcript
+/// is the GAME's to start, with its own SCRIPT verb, and §7.4 makes `Flags 2`
+/// bit 0 the record of whether it did; naming a file only means there is
+/// somewhere for it to go. (lanthorn's `/transcript on` is the other half of
+/// that, for a story with no SCRIPT verb.)
+fn attach_stream_files(machine: &mut Machine, args: &Args) {
+    let mut files = StreamFiles::default();
+    if let Some(p) = args.transcript.as_deref() {
+        files.transcript = StreamFiles::create(p, "transcript");
+    }
+    if let Some(p) = args.record.as_deref() {
+        files.record = StreamFiles::create(p, "command record");
+        // Stream 4 is the interpreter's to select — no story issues
+        // `output_stream 4` on its own, and nothing in the story can observe
+        // the state either way (contrast stream 2's Flags 2 bit, §7.4). Frotz's
+        // record command sets `ostream_record` the same way.
+        machine.set_command_record(true);
+    }
+    if let Some(p) = args.replay.as_deref() {
+        files.load_replay(p);
+        machine.set_input_stream(1);
+    }
+    if let Some(sink) = machine.output_mut().as_any_mut().downcast_mut::<StdoutOutput>() {
+        sink.streams = files;
     }
 }
 
@@ -608,6 +739,20 @@ struct Args {
     /// binaries is the defect SQ-1078 existed to remove, and a `--no-sound` here
     /// beside a `--sound on|off` there would put it straight back.
     aux: bool,
+    /// `--transcript <file>` / `--record <file>` / `--replay <file>`: the
+    /// external files of ZMSD §7.1.1 (output stream 2), §7.1.2 (output stream 4)
+    /// and §10.2 (input stream 1). `None` — the default — declines that stream,
+    /// which §7.6.5 expressly permits.
+    ///
+    /// The names are spelled out rather than borrowed: Frotz drives all three
+    /// from inside the game (its SCRIPT verb and the dumb interface's own escape
+    /// commands) and has no command-line option for any of them, so there is no
+    /// existing letter to be compatible with. The FILES are compatible — a
+    /// `--record` script and a Frotz one are the same format (see
+    /// `zvm::io::encode_command_record`).
+    transcript: Option<String>,
+    record: Option<String>,
+    replay: Option<String>,
     pager: bool,
     timed_input: bool,
     sound: bool,
@@ -634,6 +779,9 @@ const OPTS: &[cli_host::Opt] = &[
     cli_host::Opt::flag(&["--story-only", "--lower-only"]),
     cli_host::Opt::flag(&["--show-status"]),
     cli_host::Opt::valued(&["--aux"]),
+    cli_host::Opt::valued(&["--transcript"]),
+    cli_host::Opt::valued(&["--record"]),
+    cli_host::Opt::valued(&["--replay"]),
     cli_host::Opt::valued(&["--pager"]),
     cli_host::Opt::valued(&["--timed-input"]),
     cli_host::Opt::valued(&["--sound"]),
@@ -692,6 +840,9 @@ fn parse_args(argv: &[String]) -> Result<Args, String> {
         story_only: m.has("--story-only"),
         show_status: m.has("--show-status"),
         aux: cli_host::on_off("--aux", m.value("--aux"))?.unwrap_or(true),
+        transcript: m.value("--transcript").map(str::to_string),
+        record: m.value("--record").map(str::to_string),
+        replay: m.value("--replay").map(str::to_string),
         pager: cli_host::on_off("--pager", m.value("--pager"))?.unwrap_or(true),
         timed_input: cli_host::on_off("--timed-input", m.value("--timed-input"))?.unwrap_or(true),
         sound: cli_host::on_off("--sound", m.value("--sound"))?.unwrap_or(true),
@@ -1313,6 +1464,17 @@ Options:
                         what it found and stops rather than blocking.
       --aux <on|off>    Read and write v5 auxiliary (VFS) sidecar files. Default
                         on.
+      --transcript <file>
+                        Write the game's transcript to <file>. This is the file
+                        a story's own SCRIPT command writes to; without the flag
+                        there is nowhere to write and SCRIPT reports a failure,
+                        which the Standard allows. Truncated at open.
+      --record <file>   Write every command you type, and every key a game reads
+                        singly, to <file> — one record per line, in the same
+                        format Frotz records. Truncated at open.
+      --replay <file>   Take commands from <file> instead of the keyboard, in
+                        the format --record writes. Play resumes at the keyboard
+                        the moment the file runs out.
       --pager <on|off>  [MORE] paging on long output. Default on, and off
                         wherever it could not work anyway: --screen-reader, or a
                         piped stdout.
@@ -1552,7 +1714,12 @@ fn main() {
     // Plain mode also drops the pager: a [MORE] prompt is a blocking modal that
     // hides the rest of the output behind a keypress, which is exactly the shape
     // a screen reader cannot cope with (SQ-0606).
-    let paging = both_tty && args.pager && !mode.plain();
+    // …and so does a replay, for the same reason the Standard gives: ZMSD
+    // §10.2.4, "When the current stream is stream 1, the interpreter should not
+    // hold up long passages of text (by printing '[MORE]' and waiting for a
+    // keypress, for instance)." A `--replay` run has nobody at the keyboard to
+    // answer one, so a [MORE] would stall the script it was asked to play.
+    let paging = both_tty && args.pager && !mode.plain() && args.replay.is_none();
     let mut page_height = cli_host::Pager::height_for(term_rows);
     // Timed reads (read/read_char time+routine) are honored unless disabled.
     let timed = args.timed_input;
@@ -1624,6 +1791,7 @@ fn main() {
     machine.set_honor_game_colours(honor);
     machine.set_sound_available(sound_enabled);
     aux_preload(&mut machine, &aux_file, args.aux);
+    attach_stream_files(&mut machine, &args);
 
     // SQ-0873: `--period-look` — dress the terminal as this story's own machine
     // did. Every clause of the gate below is load-bearing:

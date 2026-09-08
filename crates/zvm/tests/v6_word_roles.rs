@@ -84,6 +84,14 @@ enum Verdict {
     Other,
 }
 
+/// Everything output stream 2 has taken so far. `Machine::new` gives the machine
+/// a [`zvm::io::BufferOutput`], whose `transcript` field is where the ZMSD §7.1.1
+/// transcript stream lands — the machine itself keeps no copy, since a real host
+/// is writing the text to a file as it arrives.
+fn transcript(m: &Machine) -> &str {
+    &m.buffer_output().expect("Probe boots with the default BufferOutput sink").transcript
+}
+
 /// A booted story parked at its first prompt, with a snapshot to return to.
 struct Probe {
     machine: Machine,
@@ -105,7 +113,7 @@ impl Probe {
         machine.set_screen_dims(24, 80);
         // Stream 2 is the transcript: the only text sink that sees a v6 game's
         // prose, which paints rather than streams (see `Machine::print_text`).
-        machine.streams.stream2 = true;
+        machine.set_transcript(true);
 
         let mut i = 0;
         for _ in 0..60 {
@@ -129,11 +137,11 @@ impl Probe {
     fn examine(&mut self, word: &str) -> Verdict {
         self.machine.restore_quetzal(&self.snapshot).expect("snapshot restores");
         let _ = run(&mut self.machine);
-        let before = self.machine.streams.stream2_text().len();
+        let before = transcript(&self.machine).len();
         self.machine.supply_line(&format!("x {word}"), 13);
         let result = run(&mut self.machine);
         // The games wrap their prose, so a phrase can straddle a newline.
-        let reply = self.machine.streams.stream2_text()[before..]
+        let reply = transcript(&self.machine)[before..]
             .split_whitespace()
             .collect::<Vec<_>>()
             .join(" ")
