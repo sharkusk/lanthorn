@@ -74,6 +74,7 @@ pub struct BootConfig {
     honor_game_colours: bool,
     sound_available: bool,
     rng_seed: Option<u32>,
+    rng_seed_pinned: bool,
     default_colours: Option<(u8, u8)>,
     resources: ResourceSource,
     interpreter_number: Option<u8>,
@@ -134,6 +135,7 @@ impl BootConfig {
             honor_game_colours: false,
             sound_available: false,
             rng_seed: None,
+            rng_seed_pinned: false,
             default_colours: None,
             resources: ResourceSource::None,
             interpreter_number: None,
@@ -163,8 +165,28 @@ impl BootConfig {
     /// Seed the `random` PRNG (ZMSD §2.4). Unstated leaves
     /// [`Machine::DEFAULT_RNG_SEED`], so a host that wants a reproducible
     /// sequence gets one by saying nothing.
+    ///
+    /// Does NOT pin the seed across `@restart` (ZMSD §2.4: "when the game
+    /// starts or restarts the state becomes random") — a restarted game
+    /// draws its own fresh entropy rather than replaying this seed. Use this
+    /// for a one-off draw, e.g. a fresh-per-launch entropy value the host
+    /// already resolved to a concrete number for its own reasons (a startup
+    /// banner naming the seed a story ran on). See
+    /// [`Self::with_rng_seed_pinned`] for a seed that SHOULD survive restart.
     pub fn with_rng_seed(mut self, seed: u32) -> BootConfig {
         self.rng_seed = Some(seed);
+        self.rng_seed_pinned = false;
+        self
+    }
+
+    /// Seed the `random` PRNG exactly like [`Self::with_rng_seed`], but also
+    /// PIN it: every later `@restart` reseeds from this same value instead of
+    /// drawing fresh entropy, so a run booted for reproducibility (lanthorn's
+    /// `random_seed` config key, SQ-0811) replays identically across a
+    /// restart too.
+    pub fn with_rng_seed_pinned(mut self, seed: u32) -> BootConfig {
+        self.rng_seed = Some(seed);
+        self.rng_seed_pinned = true;
         self
     }
 
@@ -325,7 +347,11 @@ impl BootConfig {
         // from the generator, so seeding after the first prompt is one turn too
         // late to change the game the player is handed (SQ-0811).
         if let Some(seed) = self.rng_seed {
-            m.set_rng_seed(seed);
+            if self.rng_seed_pinned {
+                m.set_rng_seed_pinned(seed);
+            } else {
+                m.set_rng_seed(seed);
+            }
         }
         // Before `init_caps`, which re-applies whatever pair is current over its
         // own 2/9 seed — and before the boot run, because a game that reads the

@@ -251,7 +251,16 @@ pub enum StepResult {
     /// mid-session setting the host has made since boot.
     Restart,
     /// `read` / `sread` — host must supply a line of input.
-    NeedLine { text_buf: u32, parse_buf: u32 },
+    ///
+    /// `preload` is ZMSD §15 `read`'s pre-loaded input line, decoded to text:
+    /// "if byte 1 contains a positive value at the start of the input, then
+    /// read assumes that number of characters are left over from an
+    /// interrupted previous input" (v5+ only — see [`Machine::supply_line`]).
+    /// Empty for the overwhelmingly common case (nothing pre-loaded, or a
+    /// v1-4 story, where byte 1 has no such meaning). A host should show it
+    /// as already-typed, editable text at the prompt — TerpEtude option 12
+    /// and Beyond Zork's "AGAIN" both pre-load a line this way.
+    NeedLine { text_buf: u32, parse_buf: u32, preload: String },
     /// `read_char` — host must supply a single keypress.
     NeedChar,
     /// `save` — host must write interpreter state to a file.
@@ -268,7 +277,7 @@ pub enum StepResult {
 /// host calls `supply_line` / `supply_char` with the input, which uses these
 /// fields to complete the operation (write buffers, store result) before the
 /// next `step()` call.
-#[derive(Clone, Copy)]
+#[derive(Clone)]
 struct PendingInput {
     /// Destination variable for the result (store var of the read/read_char
     /// instruction; `None` if the instruction has no store — v3 `read` has none).
@@ -291,6 +300,11 @@ struct PendingInput {
     text_buf: u32,
     /// Address of the parse buffer (for `supply_line`; 0 in v5+ means skip).
     parse_buf: u32,
+    /// ZMSD §15 `read`'s pre-loaded input line, decoded to text at the
+    /// moment the read suspended (v5+ only; empty otherwise) — see
+    /// [`StepResult::NeedLine`]. `supply_line` prepends this to the text the
+    /// host supplies, rather than overwriting it.
+    preload: String,
     /// Timed-input interval in tenths of a second (0 = untimed).
     interrupt_time: u16,
     /// Packed address of the interrupt routine (0 = none).
@@ -441,8 +455,18 @@ pub struct Machine {
     /// from entropy when that key is unset (SQ-0811). Also seeded in-game by
     /// `random` with a negative argument (ZMSD §15).
     rng_state: u32,
-    /// VAR opcodes that have hit the unimplemented fallthrough (warned once each).
-    pub(crate) warned_var_opcodes: std::collections::HashSet<u8>,
+    /// The seed [`Machine::restart`] reseeds from, when the host has pinned
+    /// one — see [`Machine::set_rng_seed_pinned`] / [`BootConfig::with_rng_seed_pinned`].
+    /// `None` (the default, and what a plain [`Machine::set_rng_seed`] call
+    /// leaves it) means no seed is pinned: `restart` draws fresh entropy
+    /// instead, per ZMSD §2.4 ("when the game starts or restarts the state
+    /// becomes random").
+    pinned_rng_seed: Option<u32>,
+    /// A free-running counter mixed into [`Machine::fresh_rng_seed`] so two
+    /// restarts land on different seeds even if the wall clock has not
+    /// visibly advanced between them (a fast scripted-restart loop, or a
+    /// clock with coarse resolution).
+    rng_entropy_calls: u32,
     /// EXT opcodes that have hit the unimplemented fallthrough (warned once each).
     pub(crate) warned_ext_opcodes: std::collections::HashSet<u8>,
     /// Sound events recorded by `sound_effect` since the host last drained them.
@@ -553,6 +577,12 @@ pub struct Machine {
     /// Host-facing diagnostic lines (e.g. unimplemented opcodes, sampled sounds)
     /// recorded since the host last drained them. The engine never prints.
     pub(crate) diagnostics: Vec<String>,
+    /// How many times each EXACT diagnostic message has been pushed via
+    /// [`Machine::push_diagnostic`] — the counter behind the repeat cap,
+    /// never cleared by [`Machine::take_diagnostics`] (the cap tracks
+    /// lifetime repeats of a message, not what a host has drained). See
+    /// [`Machine::push_diagnostic`] for why this exists.
+    pub(crate) diagnostic_repeat_counts: std::collections::HashMap<String, u32>,
     /// In-memory auxiliary save table for the v5 `save/restore table` opcodes,
     /// keyed by the game-supplied name string. The host persists/repopulates it
     /// (in the `.lanthorn` archive or a per-game global file); the engine itself
@@ -747,7 +777,8 @@ impl Machine {
             pending_restore_store: None,
             pending_restore: false,
             rng_state: Self::DEFAULT_RNG_SEED,
-            warned_var_opcodes: std::collections::HashSet::new(),
+            pinned_rng_seed: None,
+            rng_entropy_calls: 0,
             warned_ext_opcodes: std::collections::HashSet::new(),
             pending_sounds: Vec::new(),
             resources: Box::new(crate::resources::EmptyResources),
@@ -760,6 +791,7 @@ impl Machine {
             v6_screen_cleared: None,
             v6_declared_x: None,
             diagnostics: Vec::new(),
+            diagnostic_repeat_counts: std::collections::HashMap::new(),
             aux_data: std::collections::BTreeMap::new(),
             aux_dirty: false,
             honor_game_colours: false,
@@ -929,6 +961,23 @@ impl Machine {
         // `self.screen = screen` above already reset `screen.v6_input_window` to 0
         // (a reboot is back to the classic main window, SQ-0585).
         self.newline_interrupt_active = false;
+
+        // ZMSD §2.4: "When the game starts or restarts the state becomes
+        // random." A host that PINNED a reproducible seed
+        // ([`Self::set_rng_seed_pinned`] — lanthorn's `random_seed` config,
+        // SQ-0811) keeps replaying that exact sequence across every restart,
+        // which is the one case this crate treats as more important than the
+        // letter of §2.4: a scripted/reproducible run must restart
+        // reproducibly too. Anything else — no seed pinned, including a
+        // fresh per-launch entropy draw made via the un-pinned
+        // [`Self::set_rng_seed`] — draws AGAIN here, so a restarted game is
+        // not stuck replaying the run that just ended, and a mid-game
+        // `random(-n)` predictable-mode draw (ZMSD §15) left in force at the
+        // moment of restart does not survive it either.
+        self.rng_state = match self.pinned_rng_seed {
+            Some(seed) => seed,
+            None => self.fresh_rng_seed(),
+        };
 
         // Re-stamp the interpreter capability bits over the pristine header, then
         // restore the preserved Flags 2 bits and the host screen dimensions.
@@ -1427,14 +1476,51 @@ impl Machine {
     ///
     /// `0` is coerced to [`Self::DEFAULT_RNG_SEED`]: xorshift32 is an absorbing
     /// state at zero, and a machine that always returns 0 is not a random one.
+    ///
+    /// Does NOT pin the seed across `@restart` — see [`Self::set_rng_seed_pinned`]
+    /// for that. This is the right call for a one-off draw (a fresh-per-launch
+    /// entropy value, a probe's forced replay): a later `@restart` still draws
+    /// its own fresh entropy per ZMSD §2.4 rather than repeating this one.
     pub fn set_rng_seed(&mut self, seed: u32) {
         self.rng_state = if seed == 0 { Self::DEFAULT_RNG_SEED } else { seed };
+        self.pinned_rng_seed = None;
+    }
+
+    /// Seed the `random` PRNG exactly like [`Self::set_rng_seed`], but also
+    /// PIN it: every later `@restart` reseeds from this same value instead of
+    /// drawing fresh entropy, so a run booted for reproducibility (lanthorn's
+    /// `random_seed` config key, SQ-0811) replays identically across a
+    /// restart too. Un-pin by calling [`Self::set_rng_seed`] instead.
+    pub fn set_rng_seed_pinned(&mut self, seed: u32) {
+        self.set_rng_seed(seed);
+        self.pinned_rng_seed = Some(self.rng_state);
     }
 
     /// The current PRNG state — the seed the next `random` draw advances from.
     /// Diagnostic only (the startup seed report); the game never sees it.
     pub fn rng_seed(&self) -> u32 {
         self.rng_state
+    }
+
+    /// A fresh, unpredictable seed for [`Machine::restart`]'s un-pinned path
+    /// (ZMSD §2.4: "When the game starts or restarts the state becomes
+    /// random"). `zvm` takes zero external dependencies, so this draws from
+    /// `std::time` rather than a `rand` crate: nanosecond-resolution wall
+    /// clock mixed with a per-machine free-running counter (so two restarts
+    /// in the same nanosecond, or on a clock with coarse resolution, still
+    /// diverge) and the current RNG/PC state, then coerced away from zero
+    /// exactly as [`Self::set_rng_seed`] does.
+    fn fresh_rng_seed(&mut self) -> u32 {
+        self.rng_entropy_calls = self.rng_entropy_calls.wrapping_add(1);
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.subsec_nanos())
+            .unwrap_or(0);
+        let mixed = nanos
+            .wrapping_add(self.rng_entropy_calls.wrapping_mul(0x9E37_79B9))
+            ^ self.rng_state
+            ^ self.state.pc.wrapping_mul(0x2545_F491);
+        if mixed == 0 { Self::DEFAULT_RNG_SEED } else { mixed }
     }
 
     /// Publish the interpreter's own default colours to the game.
@@ -1636,10 +1722,63 @@ impl Machine {
         &self.diagnostics
     }
 
+    /// How many times an identical diagnostic message is recorded before this
+    /// machine stops recording it — see [`Machine::push_diagnostic`].
+    const DIAGNOSTIC_REPEAT_CAP: u32 = 64;
+
+    /// Record a host-facing diagnostic line, capping IDENTICAL repeats so a
+    /// per-instruction warning inside a runaway loop cannot grow
+    /// [`Self::diagnostics`] without bound. The 2026-09 zvm reference audit
+    /// measured a mutated story emitting the same repeated message fast
+    /// enough to reach tens of megabytes within seconds under a naive
+    /// push-every-time implementation — strictz.z5 requires an interpreter to
+    /// warn-and-continue on an object-0 access rather than fault, so a
+    /// runaway loop hitting one MUST keep running, and this is what stops
+    /// that from flooding the channel instead of turning it into a fault.
+    ///
+    /// The first [`Self::DIAGNOSTIC_REPEAT_CAP`] occurrences of a given
+    /// message are recorded verbatim; the next records one summary line
+    /// instead, and every later occurrence of that exact text is silently
+    /// dropped. A different message text has its own, independent count.
+    fn push_diagnostic(&mut self, msg: String) {
+        let count = self.diagnostic_repeat_counts.entry(msg.clone()).or_insert(0);
+        *count += 1;
+        if *count <= Self::DIAGNOSTIC_REPEAT_CAP {
+            self.diagnostics.push(msg);
+        } else if *count == Self::DIAGNOSTIC_REPEAT_CAP + 1 {
+            self.diagnostics.push(format!(
+                "(further occurrences of this diagnostic suppressed after {}): {msg}",
+                Self::DIAGNOSTIC_REPEAT_CAP
+            ));
+        }
+    }
+
     /// Take and clear the host-facing diagnostic lines recorded since the
     /// host last drained them.
     pub fn take_diagnostics(&mut self) -> Vec<String> {
         std::mem::take(&mut self.diagnostics)
+    }
+
+    /// Latch a fault for an opcode number this Z-machine version does not
+    /// define, and continue — [`Machine::step`] drains `state.fault` into
+    /// [`StepResult::Fault`] right after this returns (the same latch
+    /// `put_prop`/`insert_obj`/… use), so the caller need not do anything
+    /// beyond returning what this returns.
+    ///
+    /// ZMSD §14.2: "it is illegal for a game to contain an opcode not
+    /// specified for its version. An interpreter should normally halt with a
+    /// suitable message." Only EXT:29–255 are exempted (§14.2.1) and stay a
+    /// warn-and-continue no-op — see the EXT catch-all, the one caller of
+    /// this that does NOT reach it for every unmatched opcode. Every other
+    /// undefined-opcode class (2OP, 1OP, 0OP, VAR) faults outright: a
+    /// mutated/corrupted story hitting one used to spin forever instead of
+    /// stopping (the 2026-09 zvm reference audit's mutated curses.z5, where
+    /// dfrotz prints "Fatal error: Illegal opcode" and exits).
+    fn fault_illegal_opcode(&mut self, class: &str, opcode: u8) -> StepResult {
+        self.state.fault = Some(format!(
+            "illegal opcode: {class}:{opcode:#04X} is not defined for this Z-machine version (ZMSD §14.2)"
+        ));
+        StepResult::Continue
     }
 
     /// Accumulated `screen`-trace lines since the last drain, without taking
@@ -2051,8 +2190,8 @@ impl Machine {
                 }
                 StepResult::Continue
             }
-            // Unknown / unimplemented 2OP — no-op seam for Tasks 10+ (object/text ops)
-            _ => StepResult::Continue,
+            // Undefined 2OP opcode — ZMSD §14.2: halt, see `fault_illegal_opcode`.
+            _ => self.fault_illegal_opcode("2OP", opcode),
         }
     }
 
@@ -2179,8 +2318,8 @@ impl Machine {
                 }
                 StepResult::Continue
             }
-            // Unknown / unimplemented 1OP — no-op seam (object ops in Task 10)
-            _ => StepResult::Continue,
+            // Undefined 1OP opcode — ZMSD §14.2: halt, see `fault_illegal_opcode`.
+            _ => self.fault_illegal_opcode("1OP", opcode),
         }
     }
 
@@ -2253,10 +2392,22 @@ impl Machine {
                 StepResult::Continue
             }
             // 0OP:0x0D verify — checksum the story and branch on match.
+            //
+            // ZMSD §15 `verify`: "Verification counts a (two byte, unsigned)
+            // checksum of the file from $0040 onwards ... and compares this
+            // against the value in the game header, branching if the two
+            // values agree." A stored checksum of 0 is compared LIKE ANY
+            // OTHER value, not treated as "no checksum, assume genuine" —
+            // both Frotz and Bocfel (zterp.cpp) compare strictly, and the
+            // 2026-09 zvm reference audit proved the old leniency wrong on a
+            // live story: curses.z5 with its $1C word zeroed reports
+            // "verified as intact" here and "did not verify properly" under
+            // dfrotz. A real story's checksum is astronomically unlikely to
+            // BE zero, so this only ever changes the answer for a corrupted
+            // header, which is exactly the case `verify` exists to catch.
             0x0D => {
                 let header_ck = self.mem.read_word(0x1C);
-                // If the header records no checksum (some dev builds), treat as genuine.
-                let ok = header_ck == 0 || self.story_checksum() == header_ck;
+                let ok = self.story_checksum() == header_ck;
                 self.do_branch(branch, ok);
                 StepResult::Continue
             }
@@ -2309,8 +2460,8 @@ impl Machine {
                 self.screen.show_status_requested = true;
                 StepResult::Continue
             }
-            // Unknown / unimplemented 0OP — no-op
-            _ => StepResult::Continue,
+            // Undefined 0OP opcode — ZMSD §14.2: halt, see `fault_illegal_opcode`.
+            _ => self.fault_illegal_opcode("0OP", opcode),
         }
     }
 
@@ -2490,11 +2641,19 @@ impl Machine {
                 let parse_buf = ops.get(1).copied().unwrap_or(0) as u32;
                 let interrupt_time = ops.get(2).copied().unwrap_or(0);
                 let interrupt_routine = ops.get(3).copied().unwrap_or(0);
+                // ZMSD §15 read: "if byte 1 contains a positive value at the
+                // start of the input, then read assumes that number of
+                // characters are left over from an interrupted previous
+                // input" — v5+ only (v1-4's byte 1 is the first TEXT byte,
+                // not a count). Read BEFORE anything else touches the
+                // buffer: `supply_line` prepends this to whatever the host
+                // supplies, rather than overwriting it.
+                let preload = self.read_line_preload(text_buf);
                 self.pending_input = Some(PendingInput {
                     store_var: store, line_read: true, text_buf, parse_buf, interrupt_time,
-                    interrupt_routine, instr_pc: self.cur_instr_pc,
+                    interrupt_routine, instr_pc: self.cur_instr_pc, preload: preload.clone(),
                 });
-                StepResult::NeedLine { text_buf, parse_buf }
+                StepResult::NeedLine { text_buf, parse_buf, preload }
             }
             // 0x16 read_char — pause execution and wait for a single keypress (v4+).
             // Has a store var for the ZSCII code. Operands: device, + optional time/routine.
@@ -2505,7 +2664,7 @@ impl Machine {
                 let interrupt_routine = ops.get(2).copied().unwrap_or(0);
                 self.pending_input = Some(PendingInput {
                     store_var: store, line_read: false, text_buf: 0, parse_buf: 0, interrupt_time,
-                    interrupt_routine, instr_pc: self.cur_instr_pc,
+                    interrupt_routine, instr_pc: self.cur_instr_pc, preload: String::new(),
                 });
                 StepResult::NeedChar
             }
@@ -3550,13 +3709,39 @@ impl Machine {
                 }
                 StepResult::Continue
             }
-            // 0x15 sound_effect — number effect volume routine (ZMSD §9.4).
+            // 0x15 sound_effect — number effect volume routine (ZMSD §15).
             // Record a SoundEvent for every call (including #1/#2 bleeps). The host
             // drains `pending_sounds` and decides what to play / how to visualise.
+            //
+            // ZMSD §15: "In theory, @sound_effect; (with no operands at all) is
+            // illegal. However interpreters are asked to beep (as if the operand
+            // were 1) if possible" — `number` defaults to 1 (a bleep), matching
+            // Frotz's `z_sound_effect` (sound.c). The old default of 0 made a
+            // bare call fall through the `number != 0` guard below and vanish
+            // silently instead of beeping.
+            //
+            // An omitted `effect` defaults to 2 = start/play (Frotz sound.c,
+            // Bocfel sound.cpp) for a genuine sampled-sound call — the old
+            // default of 0 meant nothing to the VM, and `app/src/state.rs` used
+            // to compensate for it at the call site (`effect == 0 || effect ==
+            // 2`), a host policy patching a VM default, removed alongside this.
+            // Bleeps (number 1/2) carry no meaningful `effect` at all — §15:
+            // "in these cases the other operands must be omitted" — so they
+            // keep the pre-existing 0 rather than being handed one that means
+            // nothing to them.
+            //
+            // §15's "To clarify" paragraph: "@sound_effect 0 3/4 will stop (and
+            // unload) all sounds" — number 0 with effect 3 (stop) or 4 (finish
+            // with / unload) refers to every currently-playing sound, not to a
+            // specific one, and must be delivered like any other call; the old
+            // `if number != 0` guard treated number 0 as always "nothing to do"
+            // and dropped it.
             0x15 => {
-                let number = ops.first().copied().unwrap_or(0);
-                if number != 0 {
-                    let effect = ops.get(1).copied().unwrap_or(0) as u8;
+                let number = ops.first().copied().unwrap_or(1);
+                let is_bleep = number == 1 || number == 2;
+                let effect = ops.get(1).copied().unwrap_or(if is_bleep { 0 } else { 2 }) as u8;
+                let stop_all_sounds = number == 0 && matches!(effect, 3 | 4);
+                if number != 0 || stop_all_sounds {
                     // Volume word: low byte = volume (1..8, 255=loudest), high byte
                     // = repeat count (255 = forever, 0/omitted = play once, applied
                     // by the host). Default 8 when omitted.
@@ -3568,15 +3753,11 @@ impl Machine {
                 }
                 StepResult::Continue
             }
-            // Unknown / unimplemented VAR opcode: record once, then ignore.
-            _ => {
-                if self.warned_var_opcodes.insert(opcode) {
-                    self.diagnostics.push(format!(
-                        "unimplemented VAR opcode 0x{opcode:02X} (ignored)"
-                    ));
-                }
-                StepResult::Continue
-            }
+            // Undefined VAR opcode — ZMSD §14.2: halt, see `fault_illegal_opcode`.
+            // VAR has no EXT-style exemption: numbers 0x00-0x1F are all
+            // defined, so reaching this arm means a genuinely undefined
+            // opcode byte.
+            _ => self.fault_illegal_opcode("VAR", opcode),
         }
     }
 
@@ -4306,11 +4487,19 @@ impl Machine {
                 }
                 StepResult::Continue
             }
-            // Unknown / unimplemented EXT opcode: record once, then ignore
-            // (mirrors the VAR fallthrough for observability parity).
+            // Undefined EXT opcode. ZMSD §14.2.1 exempts EXT:29-255 from the
+            // §14.2 halt rule ("extended opcodes in the range EXT:29 to
+            // EXT:255 should be simply ignored") — EXT:29 itself
+            // (buffer_screen) has its own arm above, so only 30-255 reach
+            // here through that door; below 29 (14, 15 — the two numbers
+            // this crate's own EXT:0-13,16-29 dispatch skips) is a genuinely
+            // undefined opcode and faults like every other class.
             _ => {
+                if opcode < 29 {
+                    return self.fault_illegal_opcode("EXT", opcode);
+                }
                 if self.warned_ext_opcodes.insert(opcode) {
-                    self.diagnostics.push(format!(
+                    self.push_diagnostic(format!(
                         "unimplemented EXT opcode 0x{opcode:02X} (ignored)"
                     ));
                 }
@@ -4508,7 +4697,7 @@ impl Machine {
     /// The clock lives in the host: it polls input for `time_tenths * 100` ms and
     /// calls `run_timed_interrupt` on each timeout.
     pub fn pending_timeout(&self) -> Option<(u16, u16)> {
-        let p = self.pending_input?;
+        let p = self.pending_input.as_ref()?;
         if p.interrupt_time != 0 && p.interrupt_routine != 0 {
             Some((p.interrupt_time, p.interrupt_routine))
         } else {
@@ -4523,8 +4712,8 @@ impl Machine {
     /// input/save/restart (unsupported per ZMSD), the interrupt is abandoned and
     /// reported as non-aborting, with engine state restored.
     pub fn run_timed_interrupt(&mut self) -> TimedInterrupt {
-        let saved = match self.pending_input {
-            Some(p) if p.interrupt_routine != 0 => p, // PendingInput: Copy
+        let saved = match self.pending_input.clone() {
+            Some(p) if p.interrupt_routine != 0 => p,
             _ => return TimedInterrupt { aborted: false },
         };
         let ret = self.run_routine(saved.interrupt_routine);
@@ -4538,7 +4727,7 @@ impl Machine {
     /// left untouched. Used by timed-input interrupts and by the sound
     /// finish-routine callback.
     pub fn run_routine(&mut self, packed_routine: u16) -> u16 {
-        let saved = self.pending_input; // Option<PendingInput>: Copy
+        let saved = self.pending_input.clone();
         let base_frames = self.state.frames.len();
         let base_stack = self.state.eval_stack.len();
         // Push the routine, storing its return value onto the eval stack (var 0).
@@ -4856,7 +5045,7 @@ impl Machine {
     /// Delegates to `supply_char`/`supply_line`, which clear `pending_input`.
     /// No-op if no read is pending.
     pub fn abort_timed_input(&mut self, typed: &str) {
-        match self.pending_input {
+        match &self.pending_input {
             Some(p) if !p.line_read => {
                 // read_char: deliver ZSCII 0.
                 self.supply_char(0);
@@ -5504,6 +5693,24 @@ impl Machine {
         self.mem.write_word(base + n as u32 * 2, val);
     }
 
+    /// Decode ZMSD §15 `read`'s pre-loaded input line out of `text_buf`, at
+    /// the moment a `read` instruction suspends — see [`StepResult::NeedLine`]
+    /// and [`Self::supply_line`]. Empty below v5 (byte 1 there is the first
+    /// TEXT byte, not a count) and whenever byte 1 is 0 (the overwhelmingly
+    /// common case: nothing pre-loaded).
+    fn read_line_preload(&self, text_buf: u32) -> String {
+        if self.mem.version() < 5 {
+            return String::new();
+        }
+        let count = self.mem.read_byte(text_buf + 1);
+        if count == 0 {
+            return String::new();
+        }
+        (0..count as u32)
+            .map(|i| self.print_char_to_unicode(self.mem.read_byte(text_buf + 2 + i) as u16))
+            .collect()
+    }
+
     /// Complete a suspended `read` instruction by supplying a line of input.
     ///
     /// This is the natural hook for the future automapper to observe the player's
@@ -5572,13 +5779,20 @@ impl Machine {
         let byte0 = self.mem.read_byte(text_buf) as usize;
         let max_len = if version <= 4 { byte0.saturating_sub(1) } else { byte0 };
 
-        // Lower-case the input, convert each character to its ZSCII code
-        // (custom Unicode table first, ZMSD §3.8.5.4 — the buffer stores ZSCII
-        // bytes, never raw UTF-8: 'é' must land as one byte, code 170, or it
-        // can never match a dictionary key), and truncate to max_len
+        // ZMSD §15: the pre-loaded characters (if any — see `read_line_preload`)
+        // come FIRST, and `input` is what the host supplies AFTER them, not a
+        // replacement for them — `pending.preload` is empty in the
+        // overwhelmingly common case (nothing pre-loaded, or v1-4), so this
+        // is a no-op there.
+        //
+        // Lower-case the combined text, convert each character to its ZSCII
+        // code (custom Unicode table first, ZMSD §3.8.5.4 — the buffer stores
+        // ZSCII bytes, never raw UTF-8: 'é' must land as one byte, code 170,
+        // or it can never match a dictionary key), and truncate to max_len
         // CHARACTERS (byte-slicing a UTF-8 string here panicked mid-char).
-        let text: Vec<u8> = input
+        let text: Vec<u8> = pending.preload
             .chars()
+            .chain(input.chars())
             .map(|c| c.to_lowercase().next().unwrap_or(c))
             .take(max_len)
             .map(|c| self.mem.zscii_from_unicode(c))
@@ -5622,11 +5836,36 @@ impl Machine {
     ///
     /// `ch` is the ZSCII code of the key pressed (e.g. 65 = 'A').
     /// The value is written into the instruction's store variable.
+    ///
+    /// Normalises before storing (ZMSD §3.8): ZSCII 13 ("carriage return") is
+    /// the one code the standard defines for Return/Enter on input — 10
+    /// ("line feed") is not a legal input code at all, only an output one, so
+    /// a raw LF arriving here (a host reading an unprocessed byte off a piped
+    /// stdin, or any caller that forwards a platform newline verbatim) is
+    /// remapped to 13 rather than handed to the game as-is. `gntests` and
+    /// TerpEtude option 8 ("control character 'ctrl-J' (should NOT occur)")
+    /// both catch a raw 10 landing in a story's input; dfrotz always delivers
+    /// 13. Every other code outside the input table (§3.8's Table 2 — 8, 13,
+    /// 27, 32–126, 129–132, 133–144, 145–154, 252–254) is dropped with a
+    /// diagnostic and the read stays pending, rather than handing the game a
+    /// value the standard never defined for input.
     pub fn supply_char(&mut self, ch: u8) {
         let pending = match self.pending_input.take() {
             Some(p) => p,
             None => return,
         };
+        // §3.8: 10 (line feed) is not a legal input code; 13 (carriage
+        // return) is the one Return/Enter is defined as.
+        let ch = if ch == 10 { 13 } else { ch };
+        // 0 is our own timed-read timeout sentinel (not a ZSCII input code at
+        // all — see the call sites), so it bypasses the input-table check.
+        if ch != 0 && !is_valid_zscii_input_code(ch) {
+            self.push_diagnostic(format!(
+                "supply_char: ZSCII {ch} is not a legal input code (ZMSD §3.8); dropped"
+            ));
+            self.pending_input = Some(pending); // read is still pending
+            return;
+        }
         // As in `supply_line`: a real keystroke reloads the v6 line counts,
         // ZSCII 0 (our timed-read timeout) does not (frotz console_read_key).
         if ch != 0 {
@@ -6064,6 +6303,24 @@ impl Memory {
 }
 
 // ---------------------------------------------------------------------------
+// ZSCII input validation
+// ---------------------------------------------------------------------------
+
+/// Is `ch` one of the ZSCII codes ZMSD §3.8's Table 2 defines for INPUT (not
+/// merely for output)? 0 (our own timed-read timeout sentinel) is
+/// deliberately not part of this table — callers check it separately.
+///
+/// Table 2: 8 (delete), 13 (carriage return), 27 (escape), 32–126 (standard
+/// ASCII), 129–132 (cursor keys), 133–144 (function keys f1–f12), 145–154
+/// (keypad 0–9), 252–254 (mouse clicks). Everything else — including 10
+/// (line feed, an output-only code) and the 155–251 extra-character range,
+/// which §3.8.5.4 defines for OUTPUT via the header Unicode table only — is
+/// not a legal keystroke.
+fn is_valid_zscii_input_code(ch: u8) -> bool {
+    matches!(ch, 8 | 13 | 27 | 32..=126 | 129..=132 | 133..=144 | 145..=154 | 252..=254)
+}
+
+// ---------------------------------------------------------------------------
 // Colour helpers
 // ---------------------------------------------------------------------------
 
@@ -6354,6 +6611,64 @@ pub(crate) mod tests {
             (pristine_f2 ^ 0b11) & 0b11,
             "transcription + fixed-pitch bits preserved across @restart",
         );
+    }
+
+    /// SQ-1419 / ZMSD §2.4: a PINNED seed (lanthorn's reproducible
+    /// `random_seed` config, SQ-0811) keeps replaying the SAME sequence
+    /// across `@restart` — the one case this crate treats as more important
+    /// than the letter of §2.4's "becomes random".
+    ///
+    /// FALSIFY by dropping the `pinned_rng_seed` branch in `restart` (always
+    /// drawing fresh entropy): the two draws below then almost never match.
+    #[test]
+    fn restart_with_a_pinned_seed_replays_the_same_random_sequence() {
+        let mut m = Machine::new(Memory::new(sample_story(5)).unwrap());
+        m.set_rng_seed_pinned(0xC0FF_EE00);
+        m.exec_var(0x07, &[10], Some(0x10), None); // random(10) -> G0
+        let first_draw = m.global(0);
+
+        m.restart();
+        m.exec_var(0x07, &[10], Some(0x10), None);
+        let second_draw = m.global(0);
+
+        assert_eq!(first_draw, second_draw, "a pinned seed reproduces the same draw across @restart");
+    }
+
+    /// ZMSD §2.4: with NO pinned seed, `@restart` draws fresh entropy rather
+    /// than leaving the PRNG wherever gameplay left it (the pre-fix
+    /// behaviour) or replaying a fixed default forever.
+    ///
+    /// FALSIFY by making `restart` a no-op on `rng_state`: the two restarts
+    /// below then land on the identical value gameplay already advanced to,
+    /// every time, rather than a fresh draw each time.
+    #[test]
+    fn restart_without_a_pinned_seed_draws_fresh_entropy_each_time() {
+        let mut m = Machine::new(Memory::new(sample_story(5)).unwrap());
+        // No set_rng_seed(_pinned) call at all: the un-pinned default.
+        m.restart();
+        let first = m.rng_seed();
+        m.restart();
+        let second = m.rng_seed();
+        m.restart();
+        let third = m.rng_seed();
+        assert!(
+            first != second || second != third,
+            "three successive un-pinned restarts must not all land on the same seed \
+             (got {first:#x}, {second:#x}, {third:#x})",
+        );
+    }
+
+    /// A mid-game `random(-n)` predictable-mode draw (ZMSD §15) must not
+    /// survive an un-pinned `@restart` — the reboot draws its own fresh
+    /// state rather than leaving the game stuck in the predictable mode it
+    /// entered before restarting.
+    #[test]
+    fn restart_clears_a_mid_game_predictable_rng_mode() {
+        let mut m = Machine::new(Memory::new(sample_story(5)).unwrap());
+        m.exec_var(0x07, &[(-5i16) as u16], Some(0x10), None); // random(-5): predictable seed 5
+        assert_eq!(m.rng_seed(), 5, "predictable mode set the state to |range|");
+        m.restart();
+        assert_ne!(m.rng_seed(), 5, "restart must not leave the predictable-mode seed in force");
     }
 
     #[test]
@@ -8118,7 +8433,7 @@ pub(crate) mod tests {
         // Step 1: step() returns NeedLine with correct addresses.
         let result = m.step();
         assert!(
-            matches!(result, StepResult::NeedLine { text_buf: tb, parse_buf: pb } if tb == text_buf as u32 && pb == parse_buf as u32),
+            matches!(result, StepResult::NeedLine { text_buf: tb, parse_buf: pb, .. } if tb == text_buf as u32 && pb == parse_buf as u32),
             "expected NeedLine{{text_buf={:#x}, parse_buf={:#x}}}, got {:?}", text_buf, parse_buf, result
         );
 
@@ -8206,7 +8521,7 @@ pub(crate) mod tests {
 
         let result = m.step();
         assert!(
-            matches!(result, StepResult::NeedLine { text_buf: tb, parse_buf: pb } if tb == text_buf as u32 && pb == parse_buf as u32),
+            matches!(result, StepResult::NeedLine { text_buf: tb, parse_buf: pb, .. } if tb == text_buf as u32 && pb == parse_buf as u32),
             "expected NeedLine, got {:?}", result
         );
 
@@ -10067,6 +10382,59 @@ pub(crate) mod tests {
         assert!(m.diagnostics.is_empty(), "bleeps must not record diagnostics");
     }
 
+    /// SQ-1419 / ZMSD §15: "@sound_effect; (with no operands at all) is
+    /// illegal. However interpreters are asked to beep (as if the operand
+    /// were 1)". A bare call used to default `number` to 0 and vanish through
+    /// the `number != 0` guard instead of beeping.
+    ///
+    /// FALSIFY by reverting `number`'s default to 0: `pending_sounds` comes
+    /// back empty instead of holding one high bleep.
+    #[test]
+    fn bare_sound_effect_beeps_as_if_number_were_one() {
+        let mut m = build_test_machine(&[]);
+        m.exec_var(0x15, &[], None, None);
+        assert_eq!(
+            m.pending_sounds,
+            vec![SoundEvent { number: 1, effect: 0, volume: 8, repeats: 0, routine: 0 }],
+            "a bare @sound_effect beeps as bleep #1, not a dropped no-op",
+        );
+    }
+
+    /// ZMSD §15 "To clarify": "@sound_effect 0 3/4 will stop (and unload) all
+    /// sounds" — number 0 refers to every sound, not "no sound", and must be
+    /// delivered like any other call.
+    ///
+    /// FALSIFY by keeping the old `if number != 0` guard: `pending_sounds`
+    /// stays empty for both calls instead of recording a stop-all each.
+    #[test]
+    fn sound_effect_zero_stop_or_finish_delivers_stop_all() {
+        let mut m = build_test_machine(&[]);
+        m.exec_var(0x15, &[0, 3], None, None); // stop all
+        m.exec_var(0x15, &[0, 4], None, None); // stop and unload all
+        assert_eq!(
+            m.pending_sounds,
+            vec![
+                SoundEvent { number: 0, effect: 3, volume: 8, repeats: 0, routine: 0 },
+                SoundEvent { number: 0, effect: 4, volume: 8, repeats: 0, routine: 0 },
+            ],
+            "number 0 with effect stop/finish is a real stop-all event, not a no-op",
+        );
+    }
+
+    /// A sampled-sound call with `effect` omitted defaults to 2 = start/play
+    /// (Frotz sound.c, Bocfel sound.cpp), matching what
+    /// `app/src/state.rs` used to patch in at the call site.
+    #[test]
+    fn sound_effect_omitted_effect_defaults_to_play_for_a_sampled_sound() {
+        let mut m = build_test_machine(&[]);
+        m.exec_var(0x15, &[5], None, None); // number 5, no effect operand
+        assert_eq!(
+            m.pending_sounds,
+            vec![SoundEvent { number: 5, effect: 2, volume: 8, repeats: 0, routine: 0 }],
+            "an omitted effect on a real sound number defaults to start/play",
+        );
+    }
+
     #[test]
     fn sound_effect_records_sampled_sound_event_no_diagnostic() {
         let mut m = build_test_machine(&[]);
@@ -10088,27 +10456,107 @@ pub(crate) mod tests {
     }
 
     #[test]
-    fn unimplemented_var_opcode_records_diagnostic_not_stderr() {
+    fn undefined_var_opcode_faults() {
         let mut m = build_test_machine(&[]);
         // Every VAR opcode number 0x00..=0x1F now has an arm, so probe the defensive
         // fallthrough with an out-of-range number no valid VAR encoding can produce.
-        assert!(m.diagnostics.is_empty());
+        assert!(m.state.fault.is_none());
         m.exec_var(0xFF, &[], None, None);
-        assert_eq!(m.diagnostics.len(), 1, "fallthrough records one diagnostic line");
-        assert!(m.diagnostics[0].contains("0xFF"), "diagnostic names the opcode");
-        m.exec_var(0xFF, &[], None, None); // second call must not duplicate
-        assert_eq!(m.diagnostics.len(), 1, "warn-once: no duplicate diagnostic");
+        let fault = m.state.fault.as_deref().expect("undefined VAR opcode must latch a fault");
+        assert!(fault.contains("VAR") && fault.contains("0xFF"), "fault names the class + opcode: {fault:?}");
     }
 
+    /// SQ-1419 / ZMSD §14.2: stepping a real story onto an undefined 2OP
+    /// opcode halts with `StepResult::Fault` at that PC, instead of
+    /// continuing forever — the end-to-end path `exec_2op`'s own direct-call
+    /// tests bypass. 2OP numbers 29-31 (0x1D-0x1F) have no arm — see the
+    /// match above — so this is reachable from real bytes, unlike VAR (whose
+    /// every 0-31 number is defined) or 1OP (whose every 0-15 is).
+    ///
+    /// FALSIFY by reverting the 2OP fallthrough to the old no-op arm:
+    /// `m.step()` then returns `StepResult::Continue` instead of `Fault`.
     #[test]
-    fn unimplemented_var_opcode_is_warned_once() {
+    fn undefined_2op_opcode_halts_a_running_story_at_that_pc() {
+        let mut buf = sample_story(5);
+        // Long form, both operands small constants, opcode number 0x1D = 29
+        // (2OP:29 — undefined for every Z-machine version).
+        buf[0x10] = 0x1D;
+        buf[0x11] = 0x00; // operand 1
+        buf[0x12] = 0x00; // operand 2
+        let mem = Memory::new(buf).unwrap();
+        let mut m = Machine::new(mem);
+        m.state.pc = 0x10;
+        assert_eq!(m.step(), StepResult::Fault, "an undefined 2OP opcode halts the machine");
+    }
+
+    /// 1OP's every representable number (0-15, 4 bits) has an arm, so this
+    /// probes the defensive fallthrough directly the same way the VAR test
+    /// above does, rather than via `step()` (unreachable from real bytes).
+    #[test]
+    fn undefined_1op_opcode_faults() {
         let mut m = build_test_machine(&[]);
-        // Out-of-range VAR opcode number: no arm, hits the defensive fallthrough.
-        assert!(m.warned_var_opcodes.is_empty());
-        m.exec_var(0xFF, &[], None, None);
-        assert!(m.warned_var_opcodes.contains(&0xFF), "fallthrough records the opcode");
-        m.exec_var(0xFF, &[], None, None); // second call must not duplicate
-        assert_eq!(m.warned_var_opcodes.len(), 1, "warned at most once per opcode");
+        m.exec_1op(0xFF, &[0], None, None);
+        let fault = m.state.fault.as_deref().expect("undefined 1OP opcode must latch a fault");
+        assert!(fault.contains("1OP") && fault.contains("0xFF"), "fault names the class + opcode: {fault:?}");
+    }
+
+    /// 0OP's every representable short-form number (0-15) is either an arm
+    /// here or, at 14, the EXTENDED-opcode prefix byte intercepted earlier in
+    /// `decode()` (`zero_op_sig`'s own comment on `0x0E` says so) — so
+    /// nothing ever reaches this fallthrough from real bytes, the same as
+    /// 1OP and VAR. Probed directly, like the 1OP/VAR tests above.
+    #[test]
+    fn undefined_0op_opcode_faults() {
+        let mut m = build_test_machine(&[]);
+        m.exec_0op(0x0E, None, None, None);
+        let fault = m.state.fault.as_deref().expect("undefined 0OP opcode must latch a fault");
+        assert!(fault.contains("0OP") && fault.contains("0x0E"), "fault names the class + opcode: {fault:?}");
+    }
+
+    /// SQ-1419: a repeating per-instruction diagnostic must not grow
+    /// `diagnostics` without bound. `get_sibling 0` (1OP:0x01) is a
+    /// perfectly legal opcode call — object 0 means "no object", ZMSD §14 —
+    /// so looping it thousands of times must record nothing at all: this is
+    /// the regression guard proving the illegal-opcode fault above did not
+    /// turn a benign degenerate operand into either a fault or a diagnostic
+    /// flood.
+    #[test]
+    fn get_sibling_of_object_zero_loops_without_growing_diagnostics() {
+        let mut m = build_test_machine(&[]);
+        for _ in 0..10_000 {
+            let r = m.exec_1op(0x01, &[0], Some(0x10), None); // get_sibling(0) -> G0
+            assert!(matches!(r, StepResult::Continue));
+        }
+        assert!(m.state.fault.is_none(), "get_sibling(0) is legal and must never fault");
+        assert!(m.diagnostics.is_empty(), "a legal no-op loop records nothing");
+        assert_eq!(m.global(0), 0, "sibling of nothing is nothing");
+    }
+
+    /// [`Machine::push_diagnostic`]'s own contract: the first
+    /// `DIAGNOSTIC_REPEAT_CAP` occurrences of an identical message are kept,
+    /// the next records one summary line, and every later occurrence of that
+    /// exact text is dropped — bounding a runaway per-instruction warning
+    /// (the audit measured 42 MB of one repeated message in 8s under a
+    /// naive push-every-time implementation) without turning it into a fault
+    /// (strictz requires warn-and-continue on an object-0 access).
+    #[test]
+    fn push_diagnostic_caps_identical_repeats() {
+        let mut m = build_test_machine(&[]);
+        for _ in 0..1_000 {
+            m.push_diagnostic("repeated warning".to_string());
+        }
+        assert_eq!(
+            m.diagnostics.len(),
+            Machine::DIAGNOSTIC_REPEAT_CAP as usize + 1,
+            "capped at the repeat limit plus one summary line",
+        );
+        assert!(
+            m.diagnostics.last().unwrap().contains("suppressed"),
+            "the final line says occurrences were suppressed: {:?}", m.diagnostics.last()
+        );
+        // A DIFFERENT message gets its own, independent budget.
+        m.push_diagnostic("a different warning".to_string());
+        assert_eq!(m.diagnostics.len(), Machine::DIAGNOSTIC_REPEAT_CAP as usize + 2);
     }
 
     #[test]
@@ -10124,9 +10572,10 @@ pub(crate) mod tests {
         // Out-of-spec values are ignored, leaving the selection unchanged.
         m.exec_var(0x14, &[7], None, None);
         assert_eq!(m.streams.input_stream, 0, "out-of-range stream ignored");
-        // The opcode is implemented, so it must not record an unimplemented diagnostic.
+        // The opcode is implemented, so it must not record an unimplemented diagnostic
+        // or fault — it is a real arm, not the undefined-opcode fallthrough.
         assert!(m.diagnostics.is_empty(), "input_stream is implemented, no warning");
-        assert!(!m.warned_var_opcodes.contains(&0x14));
+        assert!(m.state.fault.is_none(), "input_stream is implemented, not the fallthrough");
     }
 
     #[test]
@@ -10147,15 +10596,41 @@ pub(crate) mod tests {
         assert_eq!(m.diagnostics.len(), 1, "warn-once: no duplicate diagnostic");
     }
 
+    /// ZMSD §14.2.1 exempts only EXT:29-255 from the §14.2 halt rule. EXT:14
+    /// and EXT:15 are the two numbers this crate's own EXT:0-13,16-29
+    /// dispatch skips — below 29, so §14.2.1 does not cover them and they
+    /// must fault like any other undefined opcode.
+    #[test]
+    fn undefined_ext_opcode_below_29_faults() {
+        let mut m = build_test_machine(&[]);
+        assert!(m.state.fault.is_none());
+        m.exec_ext(0x0E, &[], None, None); // EXT:14 — no arm, and < 29
+        let fault = m.state.fault.as_deref().expect("EXT:14 is undefined and below the §14.2.1 exemption");
+        assert!(fault.contains("EXT") && fault.contains("0x0E"), "fault names the class + opcode: {fault:?}");
+        assert!(m.warned_ext_opcodes.is_empty(), "a fault is not the warn-and-continue path");
+    }
+
+    /// ZMSD §14.2.1: "extended opcodes in the range EXT:29 to EXT:255 should
+    /// be simply ignored". EXT:30 has no arm but must NOT fault — it
+    /// continues, warned once via the existing diagnostic budget.
+    #[test]
+    fn undefined_ext_opcode_at_or_above_29_continues() {
+        let mut m = build_test_machine(&[]);
+        let r = m.exec_ext(0x1E, &[], None, None); // EXT:30
+        assert!(matches!(r, StepResult::Continue));
+        assert!(m.state.fault.is_none(), "EXT:29-255 is exempt from §14.2's halt rule");
+        assert_eq!(m.diagnostics.len(), 1, "still observable as a warning, just not fatal");
+    }
+
     #[test]
     fn erase_line_is_recognized_noop_without_warning() {
         let mut m = build_test_machine(&[]);
         let r = m.exec_var(0x0E, &[1], None, None);
         assert!(matches!(r, StepResult::Continue));
-        // It must be an explicit arm, not the unknown-opcode fallthrough (Task 6),
-        // so it is NOT recorded as a warned opcode.
-        assert!(!m.warned_var_opcodes.contains(&0x0E),
-            "erase_line is a recognized arm, not an unimplemented fallthrough");
+        // It must be an explicit arm, not the undefined-opcode fallthrough
+        // (Task 6 / SQ-1419), so it must NOT have latched a fault.
+        assert!(m.state.fault.is_none(),
+            "erase_line is a recognized arm, not an undefined-opcode fallthrough");
     }
 
     #[test]
@@ -10301,6 +10776,7 @@ pub(crate) mod tests {
             interrupt_time: 0,
             interrupt_routine: 0,
             instr_pc: 0,
+            preload: String::new(),
         });
         m.supply_char(b' ');
         assert_eq!(m.screen.upper.rows, 1, "a real keypress retires the stranded rows");
@@ -10373,6 +10849,7 @@ pub(crate) mod tests {
             interrupt_time: 0,
             interrupt_routine: 0,
             instr_pc: 0,
+            preload: String::new(),
         });
         m.supply_char(130); // ZSCII cursor down (ZMSD §3.8) — one menu arrow key
         assert_eq!(m.screen.upper.rows, 13, "an arrow key must not retire live menu rows");
@@ -10409,6 +10886,7 @@ pub(crate) mod tests {
             interrupt_time: 0,
             interrupt_routine: 0,
             instr_pc: 0,
+            preload: String::new(),
         });
         m.supply_char(b' ');
         assert_eq!(m.screen.upper.rows, 3, "so the keypress retires nothing");
@@ -10834,6 +11312,31 @@ pub(crate) mod tests {
         m.state.pc = 0x10;
         run_until_quit(&mut m);
         assert_eq!(m.global(0), 7, "verify branched false (ran the add)");
+    }
+
+    /// SQ-1419 / 2026-09 zvm reference audit: a header checksum of exactly 0
+    /// used to be treated as "some dev builds omit it, assume genuine" and
+    /// always branched true. ZMSD §15 draws no such exception — Frotz and
+    /// Bocfel both compare strictly — so a corrupted header that happens to
+    /// zero $1C must fail `verify` like any other mismatch.
+    ///
+    /// FALSIFY by restoring the `header_ck == 0` shortcut: this then asserts
+    /// `global(0) == 0` (branched true) instead of 7.
+    #[test]
+    fn verify_branches_false_when_header_checksum_is_zero_but_story_isnt() {
+        let mut buf = sample_story(5);
+        buf[0x1A] = 0x00; buf[0x1B] = 0x20; buf[0x40] = 0xAB;
+        buf[0x10] = 0xBD; buf[0x11] = 0xC6;
+        buf[0x12] = 0x14; buf[0x13] = 0x00; buf[0x14] = 0x07; buf[0x15] = 0x10;
+        buf[0x16] = 0xBA;
+        let mem = Memory::new(buf).unwrap();
+        let mut m = Machine::new(mem);
+        let ck = m.story_checksum();
+        assert_ne!(ck, 0, "checksum region non-empty so a zeroed header word is a real mismatch");
+        m.mem.write_word(0x1C, 0x0000); // header checksum corrupted to zero
+        m.state.pc = 0x10;
+        run_until_quit(&mut m);
+        assert_eq!(m.global(0), 7, "a zeroed header checksum is compared strictly, not waved through");
     }
 
     // -----------------------------------------------------------------------

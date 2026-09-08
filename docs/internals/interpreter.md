@@ -848,6 +848,22 @@ Amiga floppy or anywhere else.
   the console at startup, so an interesting run can be asked for again. The VM
   crates stay dependency-free through all of it — the entropy comes from std's
   own OS-seeded hasher, not a crate.
+- **A command a game reopens for you already has your last words in it** —
+  the standard lets `read` reopen with characters already sitting in the
+  buffer (a v5+ story sets this up itself, typically after a function key or
+  a menu cuts a `read` short), and the prompt now shows that text pre-filled
+  and editable rather than blank. Beyond Zork's AGAIN key, Zork Zero's
+  menus, and Shogun's function keys all rely on it, in both the app and
+  `zvm-cli`.
+- **A story that hits an instruction it was never compiled to contain now
+  stops with a message instead of spinning forever.** A handful of severely
+  damaged or hand-mutated story files could otherwise loop indefinitely on
+  an instruction the interpreter silently ignored; it now reports the fault
+  (with the program counter and a frame trace) and halts, matching how
+  other interpreters treat the same situation. `@restart` reshuffles the
+  random-number generator again too, the same as booting does, UNLESS you
+  pinned `random_seed` above — a pinned run replays identically across a
+  restart on purpose, since that is the whole point of pinning one.
 - **Interpreter number** — the story header's interpreter number (byte `0x1E`)
   defaults to **1 (DECSystem-20)**, following Frotz's rule (6 / IBM PC only for
   v6) — unless you opened a release disk image, in which case the medium picks
@@ -1594,7 +1610,11 @@ Amiga floppy or anywhere else.
   `/volume <0-100>`, and use `/play-sound <resource-id>` to fire a Blorb `Snd `
   resource on demand for verifying the audio path. Both the `app` and `zvm-cli`
   take `--sound off` to start muted for a single run (leaving `enable_sound`
-  untouched); `zvm-cli` also takes `--volume <0-100>`.
+  untouched); `zvm-cli` also takes `--volume <0-100>`. `sound_effect 0 3`/`4`
+  (the standard's "stop all sounds" form) actually stops everything currently
+  playing, and a call that omits its operands gets the same sensible defaults
+  other interpreters use — a bare call still beeps, and a real sound with no
+  effect given still starts playing — rather than silently doing nothing.
 - **Straight off the original floppy** — the two Infocom games that ever used sound,
   *The Lurking Horror* and *Sherlock*, shipped their effects as raw Infocom sample
   files on the release disk, years before Blorb existed. Mount one of those disks and
