@@ -5597,6 +5597,18 @@ impl AppState {
         self.seen_words.clear();
         self.seen_nouns.clear();
         self.seen_scanned = 0;
+        // The [more] pager's baseline (`last_transcript_total_rows`) is a
+        // sidecar too, and a stale one is the SQ-1411 defect: it still
+        // describes the transcript this call just replaced, so the next arm
+        // measures the WHOLE new transcript as "output since the last frame"
+        // and pages the reader through scrollback they already read (worst
+        // when the resumed frame is a v6 picture takeover with no transcript
+        // surface, which leaves the stale baseline live until the story
+        // returns to text). Marking it stale here — the one place transcript
+        // replacement is funneled through — lets `pager::apply_frame`
+        // calibrate instead of measure on the first surfaced frame after.
+        self.pager.baseline_stale = true;
+        self.pager.disarm();
     }
 
     /// Surface a transient message as a top-right notification toast (SQ-0176).
