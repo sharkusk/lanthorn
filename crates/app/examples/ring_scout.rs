@@ -273,7 +273,6 @@ fn scout(
     // No tier-3 archive is named here, so the machine comes from the medium alone.
     let (profile, profile_source) =
         app::interpreter::InterpreterProfile::resolve_with_source(p, None, None, disk_image);
-    zvm::screen::set_palette(profile.palette());
     let dims = picts.all_pict_dims();
     // The screen size the game is TOLD it has, by `startup.rs`'s own chain. The
     // `native_std_window` step is not optional decoration: it is the archive's own
@@ -310,6 +309,10 @@ fn scout(
             art_scale: picts.art_scale(),
             disks: Some(&app::system_fonts::UserDisks::new("")),
         }),
+        // SQ-1393: the machine's own colour table, which this instrument used to set
+        // process-wide before the constructor and now hands to the boot like the rest.
+        profile.palette(),
+        None,
     );
     let (std_win, art_scale) = (boot.screen_px, boot.art_scale);
     println!(

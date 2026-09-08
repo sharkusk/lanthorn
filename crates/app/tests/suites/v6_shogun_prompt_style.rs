@@ -128,7 +128,6 @@ fn boot(file: &str, honor_game_colours: bool) -> Option<GameSession> {
         "{}: the medium picks the machine",
         ctx(file)
     );
-    app::v6_set_palette(profile.palette());
     let mut picts = PictSource::resolve(&story_path, None);
     let picture_dims = picts.all_pict_dims();
     let v6_screen_px = picts.std_window().or_else(|| profile.std_window());
@@ -144,6 +143,10 @@ fn boot(file: &str, honor_game_colours: bool) -> Option<GameSession> {
         None,
     )
     .unwrap_or_else(|e| panic!("{}: should boot without a ZError: {e:?}", ctx(file)));
+    // SQ-1393: the machine's own colour table. `new_with_trace` is the
+    // no-machine door and presents §8.3.1's own, so a harness that boots a
+    // press states the press's table here.
+    session.machine.set_palette(profile.palette());
     session.set_pict_source(Some(picts));
     session.flush_boot_pictures();
     session.set_strip_prompt(false);
@@ -207,7 +210,6 @@ fn drive(session: &mut GameSession, turns: usize) -> Vec<Turn> {
 #[test]
 fn the_amiga_prompt_is_never_reverse_video() {
     for honor in [true, false] {
-        let _guard = app::v6_palette_at_boot();
         let Some(mut session) = boot(AMIGA_RELEASE, honor) else { return };
         let turns = drive(&mut session, 13);
 
@@ -244,7 +246,6 @@ fn the_amiga_prompt_is_never_reverse_video() {
 #[test]
 fn no_amiga_prose_is_reverse_video() {
     for honor in [true, false] {
-        let _guard = app::v6_palette_at_boot();
         let Some(mut session) = boot(AMIGA_RELEASE, honor) else { return };
         let turns = drive(&mut session, 13);
 
@@ -278,7 +279,6 @@ fn both_builds_style_a_room_heading_the_same_way() {
     let mut seen = 0;
     for file in [AMIGA_RELEASE, PC_RELEASE] {
         for honor in [true, false] {
-            let _guard = app::v6_palette_at_boot();
             let Some(mut session) = boot(file, honor) else { continue };
             let turns = drive(&mut session, 13);
             let Some(style) = turns.iter().find_map(|t| t.style_at("Bridge")) else {
@@ -302,7 +302,6 @@ fn both_builds_style_a_room_heading_the_same_way() {
 /// deleted feature.
 #[test]
 fn the_status_window_really_is_reverse_video() {
-    let _guard = app::v6_palette_at_boot();
     let Some(mut session) = boot(AMIGA_RELEASE, true) else { return };
     let _ = drive(&mut session, 13);
 

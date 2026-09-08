@@ -241,10 +241,11 @@ fn frame_after(file: &str, card: Card, turns: usize) -> Option<Frame> {
     let over = PictureOverride::resolve_with_session(&path, &dir, None);
     let named_art_std_window = over.std_window();
     let (profile, source) = InterpreterProfile::resolve_with_source(&path, None, over.flavour(), None);
-    app::v6_set_palette(zvm::interpreter::palette_for(
-        profile.row_number(),
-        bytes.first().copied(),
-    ));
+    // The table this press resolves colour numbers through, in the two steps
+    // `startup.rs` takes: the machine's own first, then the CARD's where the
+    // archive names one (SQ-1393).
+    let base_palette =
+        zvm::interpreter::palette_for(profile.row_number(), bytes.first().copied());
     let mut picts = PictSource::resolve_with_override(&path, over, None);
     let picture_dims = picts.all_pict_dims();
 
@@ -262,9 +263,7 @@ fn frame_after(file: &str, card: Card, turns: usize) -> Option<Frame> {
         Card::Read => picts.two_colour_card_screen(&cfg),
         Card::Blind => None,
     };
-    if let Some((palette, _)) = card_screen {
-        app::v6_set_palette(palette);
-    }
+    let machine_palette = card_screen.map(|(p, _)| p).unwrap_or(base_palette);
     let reported =
         card_screen.map(|(_, pair)| pair).or_else(|| cfg.machine_default_colours());
     // SQ-1021/SQ-1022: every per-machine fact in one value.
@@ -276,6 +275,8 @@ fn frame_after(file: &str, card: Card, turns: usize) -> Option<Frame> {
         honoured.then_some(reported).flatten(),
         true,
         app::native_font::FaceSet::none(),
+        machine_palette,
+        None,
     );
     let mut session =
         GameSession::new_for_machine(bytes, honoured, false, false, picture_dims, None, None, &boot)
@@ -289,7 +290,9 @@ fn frame_after(file: &str, card: Card, turns: usize) -> Option<Frame> {
     let _ = std::fs::remove_dir_all(&dir);
 
     let mut state = AppState::default();
-    state.colors = app::colors::ColorScheme::terminal_default();
+    // The scheme resolves standard colour numbers through the same table the
+    // machine does — the card's, on a press that has one (SQ-1393).
+    state.colors = app::colors::ColorScheme::terminal_default_in(machine_palette);
     state.game_picker = Some(ratatui_image::picker::Picker::halfblocks());
     state.config.v6_render = app::config::V6RenderMode::Hybrid;
     state.config.honor_game_colours = honoured;
@@ -324,7 +327,7 @@ fn frame_after(file: &str, card: Card, turns: usize) -> Option<Frame> {
         story_page,
         model,
         state,
-        palette: zvm::screen::palette(),
+        palette: machine_palette,
     })
 }
 
@@ -420,7 +423,6 @@ fn art_detail(f: &Frame) -> ArtDetail {
 /// serve the plate each specimen claims.
 #[test]
 fn the_press_was_actually_read() {
-    let _g = app::v6_palette_at_boot();
     let any = PRESS.iter().any(|(f, _)| present(f));
     let mut seen = 0usize;
     for (file, two_colour) in PRESS {
@@ -462,7 +464,6 @@ fn the_press_was_actually_read() {
 /// gate it turns on is asserted here, because this is the file that would break it.
 #[test]
 fn a_cga_volume_reports_the_cards_pair_and_an_ega_volume_the_machines() {
-    let _g = app::v6_palette_at_boot();
     let any = PRESS.iter().any(|(f, _)| present(f));
     let mut seen = 0usize;
     for (file, two_colour) in PRESS {
@@ -563,7 +564,6 @@ fn the_cards_pair_is_the_machines_with_one_channel_moved() {
 /// proves nothing and says so.
 #[test]
 fn the_storys_white_page_does_not_reach_a_cga_frame() {
-    let _g = app::v6_palette_at_boot();
     let any = present(CGA_DISK) || present(CGA_DISK_720);
     let mut seen = 0usize;
     for file in [CGA_DISK, CGA_DISK_720] {
@@ -678,7 +678,6 @@ fn the_storys_white_page_does_not_reach_a_cga_frame() {
 /// here is that nothing in it has a hue at all.
 #[test]
 fn the_raster_composite_and_the_floats_take_the_same_page_as_the_ring() {
-    let _g = app::v6_palette_at_boot();
     let any = present(CGA_DISK) || present(CGA_DISK_720);
     let mut seen = 0usize;
     for file in [CGA_DISK, CGA_DISK_720] {
@@ -695,7 +694,6 @@ fn the_raster_composite_and_the_floats_take_the_same_page_as_the_ring() {
             let app::engine::WinNode::Layered(items) = &f.model.root else {
                 panic!("v6 builds a Layered root")
             };
-            app::v6_set_palette(f.palette);
             let native = app::render::v6_layout::native_extent(items, &app::native_font::TextFace::cell_only(zvm::screen::V6Cell::DEFAULT));
             let layout = app::render::v6_layout::classify_windows(items, zvm::screen::V6Cell::DEFAULT);
             let (canvas, _) =
@@ -783,7 +781,7 @@ fn the_raster_composite_and_the_floats_take_the_same_page_as_the_ring() {
 /// returns early on any launch with a licensed machine, and a launch that reaches
 /// the card is licensed by construction — so it has already returned.
 ///
-/// A source-level case for the same reason `palette_lock_discipline` is one: the
+/// A source-level case for the same reason `scratch_path_discipline` is one: the
 /// hazard is an ABSENCE (a caller that should not exist, an assignment that moved
 /// back up), and no frame can be rendered that shows it.
 #[test]
@@ -904,13 +902,11 @@ fn the_cards_pair_is_settled_before_the_story_loads() {
 /// offer it. Nothing here claims it looks good.
 #[test]
 fn a_story_colour_change_moves_the_ground_the_plate_stands_on() {
-    let _g = app::v6_palette_at_boot();
     let any = present(CGA_DISK) || present(CGA_DISK_720);
     let mut seen = 0usize;
     for file in [CGA_DISK, CGA_DISK_720] {
         let Some(mut f) = frame(file, Card::Read) else { continue };
         seen += 1;
-        app::v6_set_palette(f.palette);
         let ground = |f: &Frame| {
             let app::engine::WinNode::Layered(items) = &f.model.root else {
                 panic!("v6 builds a Layered root")
@@ -978,7 +974,6 @@ fn a_story_colour_change_moves_the_ground_the_plate_stands_on() {
 /// read on it.
 #[test]
 fn the_colour_renditions_keep_the_white_page_they_asked_for() {
-    let _g = app::v6_palette_at_boot();
     let any = present(EGA_DISK) || present(MCGA_DISK_720);
     let mut seen = 0usize;
     for file in [EGA_DISK, MCGA_DISK_720] {

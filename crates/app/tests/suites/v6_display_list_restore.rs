@@ -109,27 +109,11 @@ fn canvases(s: &GameSession) -> std::collections::BTreeMap<u8, Vec<u8>> {
     s.pictures_canvas.iter().map(|(w, c)| (*w, c.img.as_raw().clone())).collect()
 }
 
-/// The palette this suite's colours resolve through, **stated rather than inherited**
-/// (SQ-0958).
-///
-/// Every story these cases drive is a bare file that names no machine — or, for the
-/// disk images, a machine whose table IS §8.3.1's — so the colour numbers behind
-/// every pixel asserted below resolve through the standard table. Until now nothing
-/// here said so, and the suite believed whatever the last suite in its group binary
-/// left behind. See [`app::v6_palette`], which is why this both names a palette and
-/// takes the shared lock; hold the guard for the whole case, because the two frames
-/// a repaint case compares are only comparable if the palette did not move between
-/// them.
-fn standard_palette() -> app::V6PaletteGuard {
-    app::v6_palette(zvm::screen::Palette::Standard)
-}
-
 /// The acceptance case. A session that saved, restored and moved must reach the same
 /// pixels as one that only moved: the move recolours the palette, and a restored screen
 /// can only follow it if it was rebuilt from ops rather than loaded as pixels.
 #[test]
 fn a_restored_screen_is_recoloured_by_a_later_palette_change() {
-    let _g = standard_palette();
     let Some(mut control) = boot() else {
         eprintln!("SKIP: gitignored story missing");
         return;
@@ -170,7 +154,6 @@ fn a_restored_screen_is_recoloured_by_a_later_palette_change() {
 /// API, with no need to corrupt anything.
 #[test]
 fn the_save_time_self_check_falls_back_to_a_png_and_says_which_window() {
-    let _g = standard_palette();
     let Some(mut session) = boot() else {
         eprintln!("SKIP: gitignored story missing");
         return;
@@ -209,7 +192,6 @@ fn the_save_time_self_check_falls_back_to_a_png_and_says_which_window() {
 /// pins the behaviour rather than pretending otherwise.
 #[test]
 fn a_legacy_archive_still_restores_from_its_canvas_pngs() {
-    let _g = standard_palette();
     let Some(mut session) = boot() else {
         eprintln!("SKIP: gitignored story missing");
         return;
@@ -229,7 +211,6 @@ fn a_legacy_archive_still_restores_from_its_canvas_pngs() {
 /// it, or the replay rebuilds the right shapes in the wrong colours.
 #[test]
 fn the_current_palette_round_trips_with_the_display_list() {
-    let _g = standard_palette();
     let Some(mut session) = boot() else {
         eprintln!("SKIP: gitignored story missing");
         return;

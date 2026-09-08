@@ -26,7 +26,7 @@
 //!   nothing a screen reader can voice.
 //!
 //! The source-level case at the bottom is the one that matters most, for the same
-//! reason `palette_lock_discipline` exists: the next four features are written by
+//! reason `scratch_path_discipline` exists: the next four features are written by
 //! someone with no reason to know any of this, and a hand-built assist line would
 //! look perfectly fine in review.
 

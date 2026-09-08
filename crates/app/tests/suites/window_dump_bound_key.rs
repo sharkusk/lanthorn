@@ -94,20 +94,6 @@ fn state_bound(entries: &[(&str, &str)]) -> (AppState, Vec<String>) {
 
 // ── (a) The contract: which side is the key ───────────────────────────────────
 
-/// The palette this suite's colour assertions resolve through, **stated rather than
-/// inherited** (SQ-0958).
-///
-/// Every story these cases drive is a bare file that names no machine, so its colour
-/// numbers resolve through ZMSD §8.3.1's own table — which is what every assertion
-/// below was written against. Until now nothing here said so, and the suite believed
-/// whatever the last suite in its group binary left behind: harmless only while every
-/// one of them happened to leave `Standard` there, and not at all once a sibling boots
-/// a machine press. See [`app::v6_palette`], which is why this both names a palette
-/// and takes the shared lock. Hold the guard for the whole case.
-fn standard_palette() -> app::V6PaletteGuard {
-    app::v6_palette(zvm::screen::Palette::Standard)
-}
-
 /// The shipped template's own examples used to be written the other way round, so
 /// pin the direction here as well as in `config_template`'s own guard: the LEFT
 /// side is the key spec, the RIGHT side is the registry's hyphenated command.
@@ -116,7 +102,6 @@ fn standard_palette() -> app::V6PaletteGuard {
 /// user who copied the old template.
 #[test]
 fn the_left_side_is_the_key_and_the_right_side_the_command() {
-    let _g = standard_palette();
     let (state, warnings) = state_bound(&[("f9", "dump-windows")]);
     assert!(warnings.is_empty(), "the documented form must resolve cleanly: {warnings:?}");
     assert_eq!(
@@ -139,7 +124,6 @@ fn the_left_side_is_the_key_and_the_right_side_the_command() {
 /// on "backwards" fails.
 #[test]
 fn an_inverted_entry_is_reported_as_inverted_not_as_a_bad_key() {
-    let _g = standard_palette();
     let (_state, warnings) = state_bound(&[("dump_windows", "f9")]);
     let w = warnings.first().expect("one warning");
     assert!(w.contains("backwards"), "must say the line is inverted: {w}");
@@ -155,7 +139,6 @@ fn an_inverted_entry_is_reported_as_inverted_not_as_a_bad_key() {
 /// the likeliest next attempt — it must not fail mutely either.
 #[test]
 fn a_snake_case_command_name_is_told_the_registry_spelling() {
-    let _g = standard_palette();
     let (_state, warnings) = state_bound(&[("f9", "dump_windows")]);
     let w = warnings.first().expect("one warning");
     assert!(w.contains("'dump-windows'"), "must offer the registry spelling: {w}");
@@ -166,7 +149,6 @@ fn a_snake_case_command_name_is_told_the_registry_spelling() {
 /// categories so a future gate on, say, `Category::Help` would fail here.
 #[test]
 fn the_keymap_binds_any_registry_command() {
-    let _g = standard_palette();
     for cmd in ["dump-windows", "toggle-map", "save-state", "zoom-map in", "animate-tidy"] {
         let (state, warnings) = state_bound(&[("f9", cmd)]);
         assert!(warnings.is_empty(), "{cmd}: {warnings:?}");
@@ -187,7 +169,6 @@ fn the_keymap_binds_any_registry_command() {
 /// `KeyResolve::Command` match fails and `any_modal_overlay_open` goes true.
 #[test]
 fn a_bound_key_dispatches_the_command_with_no_modal_open() {
-    let _g = standard_palette();
     let (state, _) = state_bound(&[("f9", "dump-windows")]);
     assert!(!state.any_modal_overlay_open(), "precondition: nothing is open");
 
@@ -215,7 +196,6 @@ fn a_bound_key_dispatches_the_command_with_no_modal_open() {
 /// resolves to `KeyResolve::None` and the key does nothing at all.
 #[test]
 fn a_ctrl_binding_survives_the_direct_set_filter() {
-    let _g = standard_palette();
     let (state, warnings) = state_bound(&[("ctrl+d", "dump-windows")]);
     assert!(warnings.is_empty(), "{warnings:?}");
     assert!(
@@ -234,7 +214,6 @@ fn a_ctrl_binding_survives_the_direct_set_filter() {
 /// and the dump is exactly the sort of thing you reach for while looking at the map.
 #[test]
 fn the_binding_also_fires_with_the_map_focused() {
-    let _g = standard_palette();
     let (mut state, _) = state_bound(&[("ctrl+d", "dump-windows")]);
     state.focus = Focus::Map;
     match key_to_command(&state, KeyEvent::new(KeyCode::Char('d'), KeyModifiers::CONTROL)) {
@@ -257,7 +236,6 @@ fn the_binding_also_fires_with_the_map_focused() {
 /// (SQ-0777).
 #[test]
 fn a_bound_key_capture_leaves_the_render_path_and_upload_count_untouched() {
-    let _g = standard_palette();
     let model = v6_model();
     let (state, _) = state_bound(&[("ctrl+d", "dump-windows")]);
 
@@ -305,7 +283,6 @@ fn a_bound_key_capture_leaves_the_render_path_and_upload_count_untouched() {
 /// pixel path afterwards invalidates every chrome band so they all re-upload.
 #[test]
 fn the_palette_route_moves_both_counters_which_is_the_defect() {
-    let _g = standard_palette();
     let model = v6_model();
     let mut state = v6_state();
 

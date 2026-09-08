@@ -30,12 +30,10 @@
 //!
 //! Every fixture here is gitignored, so each case **skips vacuously** when absent.
 //!
-//! **Palette**: every case that stands up a session opens on `app::v6_palette_at_boot`
-//! and lets `boot_named` name the table (SQ-0987); the two archive-only cases take
-//! nothing, because they touch no process state. This suite is the only palette user
-//! in its group binary today, so it races nothing right now — the guard is the point
-//! regardless, since the next suite added to `v6_state` collides with no warning and a
-//! suite should not have to audit its binary-mates.
+//! **Palette**: `boot_named` names the table on the `MachineBoot` it resolves, so
+//! every session here carries its own (SQ-1393); the two archive-only cases name
+//! none, because they never resolve a colour number. Nothing is process-wide any
+//! more, so no case can move the table another case reads.
 
 use std::collections::BTreeSet;
 use std::path::PathBuf;
@@ -90,6 +88,8 @@ fn boot(archive: &str, honor_game_colours: bool) -> Option<GameSession> {
         None,
         true,
         app::native_font::FaceSet::none(),
+        zvm::screen::Palette::Standard,
+        None,
     );
     let mut session = GameSession::new_for_machine(
         story,
@@ -155,7 +155,6 @@ fn ega_tent_closure() -> BTreeSet<Rgb> {
 /// olive the report describes.
 #[test]
 fn zork_zeros_ega_frame_is_drawn_in_ega_brown_not_dark_yellow() {
-    let _g = app::v6_palette_at_boot();
     for honor_game_colours in [true, false] {
         let Some(session) = boot("zork0.eg1", honor_game_colours) else { return };
         let seen = frame_colours(&session);
@@ -202,7 +201,6 @@ fn zork_zeros_ega_frame_is_drawn_in_ega_brown_not_dark_yellow() {
 /// `(0, 170, 0)` and `(0, 170, 170)` and nothing else.
 #[test]
 fn zork_zeros_cga_frame_is_the_cards_two_states() {
-    let _g = app::v6_palette_at_boot();
     for honor_game_colours in [true, false] {
         let Some(session) = boot("zork0.cg1", honor_game_colours) else { return };
         let seen = frame_colours(&session);
@@ -256,7 +254,6 @@ fn a_hardware_palette_archive_has_no_adaptive_pictures() {
 /// of the EGA card's four levels showing through.
 #[test]
 fn the_mcga_and_amiga_renditions_are_untouched() {
-    let _g = app::v6_palette_at_boot();
     for archive in ["zork0.mg1", "zork0.pic"] {
         let Some(raw) = read(archive) else { continue };
         let pics = InfocomPics::parse(raw).expect("parses");
@@ -308,7 +305,6 @@ fn the_mcga_and_amiga_renditions_are_untouched() {
 /// costs Shogun its whole right border.
 #[test]
 fn a_two_colour_rendition_is_told_the_interpreter_has_no_colours() {
-    let _g = app::v6_palette_at_boot();
     use zvm::screen::ZColour;
 
     // The premise: told it has colours, the game sets the same pair whatever the
@@ -373,7 +369,6 @@ fn boot_named(
     assert_eq!(u16::from_be_bytes([bytes[2], bytes[3]]), release.0, "{story}: release");
     assert_eq!(String::from_utf8_lossy(&bytes[0x12..0x18]), release.1, "{story}: serial");
     let profile = InterpreterProfile::for_art_flavour(pics.flavour());
-    app::v6_set_palette(profile.palette());
     let mut picts = PictSource::from_native(pics);
     let honoured = honour
         && !picts.declines_game_colours(profile.default_colours());
@@ -389,6 +384,8 @@ fn boot_named(
         honoured.then(|| profile.default_colours()).flatten(),
         true,
         app::native_font::FaceSet::none(),
+        profile.palette(),
+        None,
     );
     let mut session = GameSession::new_for_machine(
         bytes,
@@ -469,7 +466,6 @@ fn flank_pixels(session: &GameSession) -> (u64, u64) {
 /// half asserted here, because the two launches are now two different answers.
 #[test]
 fn shoguns_flanks_survive_the_rule_that_spared_them() {
-    let _g = app::v6_palette_at_boot();
     for archive in ["shogun.cg1", "shogun.eg1"] {
         let Some(pics) = read(archive).map(|r| InfocomPics::parse(r).expect("parses")) else {
             continue;

@@ -41,9 +41,9 @@
 //! SQ-0948 turns on is gated on that flag, so a single-mode case would pin only half
 //! of it.
 //!
-//! **Palette: stated, not inherited** (SQ-0958). Each case installs the profile's
-//! own table under `app::v6_palette`, which takes the shared lock in the same call and
-//! hands the default back when it drops.
+//! **Palette: stated, not inherited** (SQ-0958, SQ-1393). The boot carries the IBM
+//! PC's own table and the scheme every case renders through is built from the same
+//! one, so nothing here reads a table it did not name.
 
 use std::path::PathBuf;
 
@@ -88,6 +88,11 @@ fn boot(name: &str, keys: u8, taps: usize) -> Option<GameSession> {
         profile.default_colours(),
         true,
         app::native_font::FaceSet::none(),
+        // The IBM PC's own table, which is what all three cases here measure
+        // through — stated on the boot rather than installed around the case
+        // (SQ-1393).
+        InterpreterProfile::IbmPc.palette(),
+        None,
     );
     let mut session = GameSession::new_for_machine(bytes, true, false, false, dims, None, None, &boot)
     .expect("the story should boot without a ZError");
@@ -125,7 +130,7 @@ fn status_window(model: &app::engine::ScreenModel, needle: &str) -> Option<(u16,
 #[allow(deprecated)]
 fn render(model: &app::engine::ScreenModel, honor: bool, cols: u16, rows: u16) -> (Rect, Buffer) {
     let mut state = app::state::AppState::default();
-    state.colors = app::colors::ColorScheme::terminal_default();
+    state.colors = app::colors::ColorScheme::terminal_default_in(InterpreterProfile::IbmPc.palette());
     let mut picker =
         ratatui_image::picker::Picker::from_fontsize(ratatui_image::FontSize::new(8, 18));
     picker.set_protocol_type(ratatui_image::picker::ProtocolType::Kitty);
@@ -160,7 +165,6 @@ fn is_band_cell(c: &ratatui::buffer::Cell) -> bool {
 /// nothing.
 #[test]
 fn shoguns_chrome_canvas_keeps_the_status_page_off_the_ring() {
-    let _g = app::v6_palette(InterpreterProfile::IbmPc.palette());
     let Some(session) = boot("shogun-r322-s890706.z6", 13, 6) else { return };
     let model = session.screen();
     let Some((sx, sy, sw, sh)) = status_window(&model, "Score:") else {
@@ -208,7 +212,7 @@ fn shoguns_chrome_canvas_keeps_the_status_page_off_the_ring() {
         }
     }
 
-    let colors = app::colors::ColorScheme::terminal_default();
+    let colors = app::colors::ColorScheme::terminal_default_in(InterpreterProfile::IbmPc.palette());
     let build = |text: app::render::v6_layout::TextLayer<'_>| {
         let mut canvas = app::render::v6_layout::build_chrome_canvas(
             &layout.chrome,
@@ -269,7 +273,6 @@ fn shoguns_chrome_canvas_keeps_the_status_page_off_the_ring() {
 /// ground, and the assertion below reports the row as bare at both edges.
 #[test]
 fn arthurs_poles_run_through_the_status_row_unbroken() {
-    let _g = app::v6_palette(InterpreterProfile::IbmPc.palette());
     let Some(session) = boot("arthur-r74-s890714.z6", 13, 12) else { return };
     let model = session.screen();
     let Some((sx, sy, sw, sh)) = status_window(&model, "Churchyard") else {
@@ -373,7 +376,6 @@ fn arthurs_poles_run_through_the_status_row_unbroken() {
 /// consumes it.
 #[test]
 fn shoguns_status_erase_reaches_past_the_story_window_on_the_painted_ground() {
-    let _g = app::v6_palette(InterpreterProfile::IbmPc.palette());
     let Some(session) = boot("shogun-r322-s890706.z6", 13, 6) else { return };
     let model = session.screen();
     let Some((sx, sy, sw, sh)) = status_window(&model, "Score:") else {

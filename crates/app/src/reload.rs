@@ -72,7 +72,14 @@ pub fn reload_style(state: &mut AppState) -> ReloadOutcome {
         doc
     };
 
-    let (cs, set, warnings) = crate::style::resolve(&doc, &user_dir);
+    // SQ-1393: the MACHINE this launch presents is not a style fact and no reload
+    // can change it, so it is carried across from the scheme being replaced. The
+    // launch settles it once (`startup.rs`, and `reset.rs` on `@restart`); every
+    // `/reload-style`, style-watcher tick and per-game overlay re-seeds the eight
+    // Z-machine ANSI slots from the same table rather than dropping back to
+    // §8.3.1's, which is what rebuilding through `terminal_default()` would do.
+    let machine_palette = state.colors.machine_palette;
+    let (cs, set, warnings) = crate::style::resolve(&doc, &user_dir, machine_palette);
     state.colors = cs;
     state.symbols = set;
     // Re-apply the per-game garglk.ini overlay (SQ-0319): the resolve above
@@ -145,7 +152,7 @@ pub fn reload_style(state: &mut AppState) -> ReloadOutcome {
         } else {
             parse_file(Some(crate::styles::per_game_style_path(&state.game_dir)))
         };
-        let (_, gs, _) = crate::colors::resolve_base(global.scheme.as_deref(), &user_dir);
+        let (_, gs, _) = crate::colors::resolve_base(global.scheme.as_deref(), &user_dir, machine_palette);
         // SQ-0510: with no scheme configured, `resolve_base` returns an all-Reset
         // scheme and `Roles::from_scheme` falls back to a hard-coded white-on-BLACK
         // `chrome` — a black band across every chrome-derived selector on a

@@ -103,7 +103,6 @@ fn boot() -> Option<Booted> {
         }
     };
     let profile = InterpreterProfile::resolve(&path, None, None, medium);
-    app::v6_set_palette(profile.palette());
     let mut picts = PictSource::resolve_with_override(&path, app::graphics::PictureOverride::Unset, None);
     let dims = picts.all_pict_dims();
     let release = u16::from_be_bytes([bytes[2], bytes[3]]);
@@ -129,6 +128,8 @@ fn boot() -> Option<Booted> {
         honoured.then(|| profile.default_colours()).flatten(),
         true,
         faces.clone(),
+        profile.palette(),
+        None,
     );
     let art_scale = boot.art_scale;
     let face = app::native_font::TextFace::new(profile, faces, art_scale);
@@ -258,7 +259,6 @@ fn armed_words(state: &app::state::AppState) -> Vec<String> {
 /// one.
 #[test]
 fn a_raster_frame_is_legible_to_the_reveal() {
-    let _g = app::v6_palette_at_boot();
     let Some(b) = boot() else { return };
     for honor in [true, false] {
         let mut state = raster_state(&b, honor, &[PROSE]);
@@ -305,7 +305,6 @@ fn a_raster_frame_is_legible_to_the_reveal() {
 /// highlight for prose that scrolled away two hundred lines ago.
 #[test]
 fn the_reveal_reads_the_viewport_and_not_the_whole_scrollback() {
-    let _g = app::v6_palette_at_boot();
     let Some(b) = boot() else { return };
     let mut lines = vec![SCROLLED_AWAY];
     lines.extend(std::iter::repeat_n(PROSE, 200));
@@ -347,7 +346,6 @@ fn the_reveal_reads_the_viewport_and_not_the_whole_scrollback() {
 /// stated as a number.
 #[test]
 fn the_lit_words_reach_the_composite_in_the_reveals_own_ink() {
-    let _g = app::v6_palette_at_boot();
     let Some(b) = boot() else { return };
     for honor in [true, false] {
         let dark = raster_state(&b, honor, &[PROSE]);
@@ -405,7 +403,6 @@ fn the_lit_words_reach_the_composite_in_the_reveals_own_ink() {
 /// nothing else.
 #[test]
 fn a_lit_word_is_ruled_under_on_the_canvas() {
-    let _g = app::v6_palette_at_boot();
     let Some(b) = boot() else { return };
     for honor in [true, false] {
         let dark = raster_state(&b, honor, &[PROSE]);
@@ -460,7 +457,6 @@ fn a_lit_word_is_ruled_under_on_the_canvas() {
 /// Needs no story: it measures `draw_story_text` against a bare canvas.
 #[test]
 fn the_rule_is_stated_in_the_text_cell_not_the_art_scale() {
-    let _g = app::v6_palette(zvm::screen::Palette::Standard);
     for cell in [zvm::screen::V6Cell::new(8, 16), zvm::screen::V6Cell::new(7, 15)] {
         let face = app::native_font::TextFace::cell_only(cell);
         let ink = image::Rgba([255u8, 255, 255, 255]);
@@ -511,7 +507,6 @@ fn the_rule_is_stated_in_the_text_cell_not_the_art_scale() {
 /// story either.
 #[test]
 fn no_reveal_leaves_the_canvas_untouched() {
-    let _g = app::v6_palette(zvm::screen::Palette::Standard);
     let cell = zvm::screen::V6Cell::new(8, 16);
     let face = app::native_font::TextFace::cell_only(cell);
     let ink = image::Rgba([255u8, 255, 255, 255]);
@@ -552,7 +547,6 @@ fn no_reveal_leaves_the_canvas_untouched() {
 /// reason a theme may not clear it.
 #[test]
 fn the_rule_follows_the_themes_own_underline() {
-    let _g = app::v6_palette(zvm::screen::Palette::Standard);
     let cell = zvm::screen::V6Cell::new(8, 16);
     let face = app::native_font::TextFace::cell_only(cell);
     let ink = image::Rgba([255u8, 255, 255, 255]);

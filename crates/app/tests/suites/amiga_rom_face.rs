@@ -363,7 +363,6 @@ fn only_the_name_keeps_a_workbench_display_face_out() {
 /// face's own rows.
 #[test]
 fn the_renderer_draws_topaz_at_the_faces_own_scale() {
-    let _g = app::v6_palette(zvm::screen::Palette::Standard);
     let media = Media::new("blit").with_rom("Kick12.rom");
     let faces = cascade(Path::new("/nonexistent.z6"), P::Amiga, (2, 2), Some(&media.disks()));
     let tf = TextFace::new(P::Amiga, faces, Some((2, 2)));
@@ -445,7 +444,6 @@ fn arthurs_own_face_outranks_a_kickstart() {
 /// `stories/` is gitignored, so this skips vacuously.
 #[test]
 fn an_amiga_release_with_no_face_of_its_own_boots_on_topaz() {
-    let _g = app::v6_palette_at_boot();
     let media = Media::new("smoke").with_rom("Kick12.rom");
     let mut drove = 0;
     for (disk, release, serial) in [
@@ -464,7 +462,6 @@ fn an_amiga_release_with_no_face_of_its_own_boots_on_topaz() {
         let (profile, source) =
             app::interpreter::InterpreterProfile::resolve_with_source(&path, None, None, None);
         assert_eq!(profile, P::Amiga, "{disk}: the medium names the Amiga");
-        app::v6_set_palette(profile.palette());
         let picts = app::graphics::PictSource::resolve(&path, None);
         let disks = media.disks();
         let faces = app::native_font::resolve(&FaceRequest {
@@ -495,6 +492,8 @@ fn an_amiga_release_with_no_face_of_its_own_boots_on_topaz() {
             profile.default_colours(),
             true,
             faces,
+            profile.palette(),
+            None,
         );
         // The picture-space window, which the art scale turns into the 640x400 unit
         // screen — printed so a reader can check it against a `/dump-windows`

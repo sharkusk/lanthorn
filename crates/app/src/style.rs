@@ -707,7 +707,9 @@ pub fn lower_element_borders(cs: &mut ColorScheme) {
 ///
 /// Resolution:
 /// 1. Build the base `ColorScheme` from `doc.colors.scheme` via `colors::resolve_base`
-///    (handles `None` → terminal-default, built-in name, or file path).
+///    (handles `None` → terminal-default, built-in name, or file path), seeded from
+///    `machine_palette` — the table this launch's machine resolves colour NUMBERS
+///    through (SQ-1393).
 /// 2. Obtain the active `GhosttyScheme` returned by `resolve_base` (or
 ///    `GhosttyScheme::default()` for the terminal-default case).
 /// 3. Apply the structural channels of `doc.colors.selectors` (border styles,
@@ -719,10 +721,15 @@ pub fn lower_element_borders(cs: &mut ColorScheme) {
 pub fn resolve(
     doc: &StyleDoc,
     dir: &std::path::Path,
+    machine_palette: zvm::screen::Palette,
 ) -> (ColorScheme, crate::symbols::SymbolSet, Vec<String>) {
     // Step 1+2: build base ColorScheme and get the active GhosttyScheme.
+    // `machine_palette` is the MACHINE this launch presents (SQ-1393): the
+    // unconfigured base seeds its eight Z-machine ANSI slots from that table, and
+    // every scheme carries it for the renderers. `Palette::Standard` is the
+    // honest answer wherever there is no machine — a pre-game dialog, a test.
     let (mut cs, gs, mut warnings) =
-        colors::resolve_base(doc.colors.scheme.as_deref(), dir);
+        colors::resolve_base(doc.colors.scheme.as_deref(), dir, machine_palette);
 
     // Step 3: structural selector channels (SQ-0641).
     apply_structural_decls(&mut cs, &doc.colors.selectors);
@@ -1123,7 +1130,7 @@ text = "{score}"
 align = "bogus"
 "##;
         let doc = parse_style_toml(text).unwrap();
-        let (cs, _set, warnings) = resolve(&doc, std::path::Path::new("."));
+        let (cs, _set, warnings) = resolve(&doc, std::path::Path::new("."), zvm::screen::Palette::Standard);
         // Three segments, with the unknown align defaulting to Left + a warning.
         assert_eq!(cs.statusbar_layout.segments.len(), 3);
         assert!(matches!(cs.statusbar_layout.segments[0].align, Align::Left));
@@ -1139,7 +1146,7 @@ align = "bogus"
 
     #[test]
     fn resolve_no_statusbar_keeps_default_layout() {
-        let (cs, _set, _w) = resolve(&StyleDoc::default(), std::path::Path::new("."));
+        let (cs, _set, _w) = resolve(&StyleDoc::default(), std::path::Path::new("."), zvm::screen::Palette::Standard);
         assert_eq!(cs.statusbar_layout, crate::colors::StatusBarLayout::default());
     }
 
@@ -1175,7 +1182,7 @@ fg = "red"
         let doc = parse_style_toml(text).unwrap();
         assert_eq!(doc.transcript_rules.len(), 2);
         assert_eq!(doc.transcript_rules[0].pattern, "^>.*");
-        let (cs, _set, warnings) = resolve(&doc, std::path::Path::new("."));
+        let (cs, _set, warnings) = resolve(&doc, std::path::Path::new("."), zvm::screen::Palette::Standard);
         assert!(warnings.is_empty(), "{warnings:?}");
         assert_eq!(cs.transcript_rules.len(), 2);
         assert!(cs.transcript_rules[0].regex.is_match("> go north"));
@@ -1197,7 +1204,7 @@ match = "ok"
 fg = "green"
 "##;
         let doc = parse_style_toml(text).unwrap();
-        let (cs, _set, warnings) = resolve(&doc, std::path::Path::new("."));
+        let (cs, _set, warnings) = resolve(&doc, std::path::Path::new("."), zvm::screen::Palette::Standard);
         assert_eq!(warnings.len(), 1, "exactly one invalid-regex warning: {warnings:?}");
         assert_eq!(cs.transcript_rules.len(), 1, "valid rule still loads");
         assert!(cs.transcript_rules[0].regex.is_match("ok"));
@@ -1288,7 +1295,7 @@ fg = "green"
     #[test]
     fn resolve_empty_doc_equals_terminal_default() {
         let doc = StyleDoc::default();
-        let (cs, set, _w) = resolve(&doc, std::path::Path::new("."));
+        let (cs, set, _w) = resolve(&doc, std::path::Path::new("."), zvm::screen::Palette::Standard);
         assert_eq!(cs, crate::colors::ColorScheme::terminal_default());
         assert_eq!(set, crate::symbols::SymbolSet::resolve(&crate::config::SymbolConfig::default()));
     }
@@ -1664,7 +1671,7 @@ room = { fg = "white" }
     fn resolve_sets_border_style_and_default_is_single() {
         // default doc (DEFAULT_STYLE_TOML) => single map, single story (SQ-0357)
         let doc = parse_style_toml(DEFAULT_STYLE_TOML).unwrap();
-        let (cs, _set, _w) = resolve(&doc, std::path::Path::new("."));
+        let (cs, _set, _w) = resolve(&doc, std::path::Path::new("."), zvm::screen::Palette::Standard);
         assert!(matches!(cs.map_border_style, crate::render::paneframe::BorderStyle::Single));
         assert!(matches!(cs.story_border_style, crate::render::paneframe::BorderStyle::Single));
 
@@ -1673,7 +1680,7 @@ room = { fg = "white" }
         // None seeding (scheme choice silently dropping the pane borders and
         // doubling the map layer strip) shipped unnoticed.
         let doc = parse_style_toml("[colors]\nscheme = \"tomorrow-night\"\n").unwrap();
-        let (cs, _set, w) = resolve(&doc, std::path::Path::new("."));
+        let (cs, _set, w) = resolve(&doc, std::path::Path::new("."), zvm::screen::Palette::Standard);
         assert!(w.is_empty(), "built-in scheme resolves clean: {w:?}");
         assert!(
             matches!(cs.map_border_style, crate::render::paneframe::BorderStyle::Single),
@@ -1697,7 +1704,7 @@ room = { fg = "white" }
     /// Resolve a style.toml string straight to the ColorScheme.
     fn colors_from_toml(text: &str) -> crate::colors::ColorScheme {
         let doc = parse_style_toml(text).expect("style text must parse");
-        resolve(&doc, std::path::Path::new(".")).0
+        resolve(&doc, std::path::Path::new("."), zvm::screen::Palette::Standard).0
     }
 
     #[test]
@@ -1786,7 +1793,7 @@ room = { fg = "white" }
         )
         .unwrap();
         let per_game = parse_style_toml("[colors]\n\"dialog\" = { margin = 1 }\n").unwrap();
-        let (cs, _set, _w) = resolve(&merge(&global, &per_game), std::path::Path::new("."));
+        let (cs, _set, _w) = resolve(&merge(&global, &per_game), std::path::Path::new("."), zvm::screen::Palette::Standard);
         assert_eq!(cs.dialog_margin, 1, "per-game margin wins");
         assert!(cs.dialog_shadow_on, "global shadow stands");
         assert!(!cs.map_header_on, "global header toggle stands");

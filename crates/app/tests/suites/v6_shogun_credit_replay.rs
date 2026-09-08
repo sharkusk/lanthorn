@@ -93,7 +93,6 @@ fn boot(r: &Rendition) -> Option<(GameSession, String, TurnResult)> {
     );
     assert_eq!(String::from_utf8_lossy(&bytes[0x12..0x18]), r.serial, "{}: serial", r.file);
     let profile = InterpreterProfile::resolve(&path, None, None, None);
-    app::v6_set_palette(profile.palette());
     let mut picts = PictSource::resolve(&path, None);
     let picture_dims = picts.all_pict_dims();
     let v6_screen_px = picts.std_window().or_else(|| profile.std_window());
@@ -109,6 +108,10 @@ fn boot(r: &Rendition) -> Option<(GameSession, String, TurnResult)> {
         None,
     )
     .unwrap_or_else(|e| panic!("{}: should boot without a ZError: {e:?}", r.file));
+    // SQ-1393: the machine's own colour table. `new_with_trace` is the
+    // no-machine door and presents §8.3.1's own, so a harness that boots a
+    // press states the press's table here.
+    s.machine.set_palette(profile.palette());
     s.set_pict_source(Some(picts));
     s.flush_boot_pictures();
     let banner = s.take_transcript();
@@ -186,7 +189,6 @@ fn prose_box_cells(session: &GameSession) -> (u16, u16) {
 /// rather than the reported garbage.
 #[test]
 fn the_menu_sits_inside_the_story_windows_own_box() {
-    let _g = app::v6_palette_at_boot();
     for r in RENDITIONS {
         let Some((session, _, _)) = boot(r) else { continue };
         let model = session.screen();
@@ -229,7 +231,6 @@ fn the_menu_sits_inside_the_story_windows_own_box() {
 /// what "the canvas already has them" means.
 #[test]
 fn no_row_of_the_prose_box_ever_carries_a_credit() {
-    let _g = app::v6_palette_at_boot();
     for r in RENDITIONS {
         let Some((session, banner, turn)) = boot(r) else { continue };
         let (cols, rows) = prose_box_cells(&session);
@@ -266,7 +267,6 @@ fn no_row_of_the_prose_box_ever_carries_a_credit() {
 /// the game printed after it.
 #[test]
 fn the_canvas_keeps_the_credits_and_the_transcript_keeps_the_prompt() {
-    let _g = app::v6_palette_at_boot();
     for r in RENDITIONS {
         let Some((session, banner, turn)) = boot(r) else { continue };
         let rows = canvas_rows(&session).join("\n");
@@ -323,7 +323,6 @@ fn the_canvas_keeps_the_credits_and_the_transcript_keeps_the_prompt() {
 /// back as the declared width and the assertion reports both numbers.
 #[test]
 fn a_frozen_prose_box_is_the_pens_extent_not_the_declared_one() {
-    let _g = app::v6_palette_at_boot();
     let r = &RENDITIONS[0]; // the Amiga floppy — the press that freezes its credits
     let Some((mut s, _banner, _turn)) = boot(r) else { return };
 

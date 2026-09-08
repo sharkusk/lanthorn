@@ -91,7 +91,6 @@ fn buffers_equal(a: &Buffer, b: &Buffer, area: Rect) -> bool {
 
 #[test]
 fn an_unchanged_frame_replays_without_a_rebuild() {
-    let _g = app::v6_palette(zvm::screen::Palette::Standard);
     let Some(session) = boot_zork0() else { return };
     let model = session.screen();
     let mut state = render_state();
@@ -116,7 +115,6 @@ fn an_unchanged_frame_replays_without_a_rebuild() {
 /// compute half from the draw half.
 #[test]
 fn transcript_output_draws_live_without_a_rebuild() {
-    let _g = app::v6_palette(zvm::screen::Palette::Standard);
     let Some(session) = boot_zork0() else { return };
     let model = session.screen();
     let mut state = render_state();
@@ -166,7 +164,6 @@ fn perturbation_rebuilds(
 
 #[test]
 fn a_game_paint_rebuilds() {
-    let _g = app::v6_palette(zvm::screen::Palette::Standard);
     // A graphics window's version stamp is how the model says "the game drew":
     // bump one exactly as a paint would.
     perturbation_rebuilds(
@@ -187,7 +184,6 @@ fn a_game_paint_rebuilds() {
 
 #[test]
 fn a_status_text_change_rebuilds() {
-    let _g = app::v6_palette(zvm::screen::Palette::Standard);
     perturbation_rebuilds(
         |model, _| {
             let WinNode::Layered(items) = &mut model.root else { panic!("v6 root is layered") };
@@ -206,7 +202,6 @@ fn a_status_text_change_rebuilds() {
 
 #[test]
 fn a_hidden_window_rebuilds() {
-    let _g = app::v6_palette(zvm::screen::Palette::Standard);
     perturbation_rebuilds(
         |model, _| {
             let WinNode::Layered(items) = &mut model.root else { panic!("v6 root is layered") };
@@ -222,7 +217,6 @@ fn a_hidden_window_rebuilds() {
 
 #[test]
 fn a_resize_rebuilds() {
-    let _g = app::v6_palette(zvm::screen::Palette::Standard);
     let Some(session) = boot_zork0() else { return };
     let model = session.screen();
     let mut state = render_state();
@@ -237,16 +231,17 @@ fn a_resize_rebuilds() {
 
 #[test]
 fn a_palette_swap_rebuilds() {
-    let _g = app::v6_palette(zvm::screen::Palette::Standard);
     perturbation_rebuilds(
-        |_, _| app::v6_set_palette(zvm::screen::Palette::Amiga),
+        // SQ-1393: the MACHINE's table is a field on the scheme being rendered
+        // now, so a swap is a change to the state the key is computed from —
+        // which is the whole point of hashing it.
+        |_, state| state.colors.machine_palette = zvm::screen::Palette::Amiga,
         "a palette swap",
     );
 }
 
 #[test]
 fn a_theme_palette_change_rebuilds() {
-    let _g = app::v6_palette(zvm::screen::Palette::Standard);
     perturbation_rebuilds(
         |_, state| {
             // The theme's ANSI palette is an input the canvas resolves the odd
@@ -260,7 +255,6 @@ fn a_theme_palette_change_rebuilds() {
 
 #[test]
 fn a_game_colours_toggle_rebuilds() {
-    let _g = app::v6_palette(zvm::screen::Palette::Standard);
     perturbation_rebuilds(
         |_, state| state.config.honor_game_colours = !state.config.honor_game_colours,
         "a /set-game-colours toggle",
@@ -269,7 +263,6 @@ fn a_game_colours_toggle_rebuilds() {
 
 #[test]
 fn a_painted_ground_change_rebuilds() {
-    let _g = app::v6_palette(zvm::screen::Palette::Standard);
     perturbation_rebuilds(
         |_, state| {
             // scopa's whole defect class (SQ-0788): drawing that lands ONLY in

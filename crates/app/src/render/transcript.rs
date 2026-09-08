@@ -1450,7 +1450,7 @@ pub(crate) fn draw_str_runs(
                     // that same ink with the EGA intensity bit lit. Applied to the
                     // RESOLVED colour, because the machine's attribute byte has one
                     // foreground nibble however it was filled.
-                    s = s.fg(crate::render::ibm_bold_fg(c, bits, honor));
+                    s = s.fg(crate::render::ibm_bold_fg(c, bits, honor, scheme));
                 }
                 if let Some(c) = resolve_glk_channel(game_bg, slot.bg, base_style.bg, honor) {
                     s = s.bg(c);
@@ -4005,10 +4005,9 @@ mod tests {
     #[test]
     fn ibm_bold_runs_light_the_intensity_bit_in_both_gate_states() {
         use ratatui::{buffer::Buffer, layout::Rect, style::{Color, Style}};
-        // Held for the whole case, and the scheme below is built inside it so its
-        // palette slots resolve through the machine's table (CLAUDE.md, SQ-0958).
-        let _g = crate::v6_palette(zvm::screen::Palette::IbmXzip);
-        let cs = crate::colors::ColorScheme::terminal_default();
+        // The scheme states the machine's table outright, so its palette slots
+        // and the bold rule resolve through the same one (SQ-0958, SQ-1393).
+        let cs = crate::colors::ColorScheme::terminal_default_in(zvm::screen::Palette::IbmXzip);
 
         // EGA entry 7 and entry 15, as this palette resolves standard white 9
         // plain and lit.
@@ -4055,8 +4054,7 @@ mod tests {
         use ratatui::{buffer::Buffer, layout::Rect, style::Style};
         let area = Rect::new(0, 0, 6, 1);
         for p in [zvm::screen::Palette::Standard, zvm::screen::Palette::Amiga, zvm::screen::Palette::IbmYzip] {
-            let _g = crate::v6_palette(p);
-            let cs = crate::colors::ColorScheme::terminal_default();
+            let cs = crate::colors::ColorScheme::terminal_default_in(p);
             let ink = crate::render::resolve_zcolour(zvm::screen::ZColour::Standard(9), &cs);
             let mut b = Buffer::empty(area);
             let runs = vec![StyleRun { start: 0, end: 3, bits: 0x02, fg: 0, bg: 0, link: 0, glk_style: 0 }];

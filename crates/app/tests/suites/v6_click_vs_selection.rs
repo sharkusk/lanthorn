@@ -154,7 +154,6 @@ fn read_facts(session: &GameSession) -> (Option<InputKind>, Option<u8>) {
 /// Press, drag two cells along a line of story text, release — and assert the
 /// player gets a text selection and the VM is never told anything.
 fn drag_selects_text_rather_than_clicking(file: &str, release: u16, intro_taps: usize) {
-    let _g = app::v6_palette_at_boot();
     let Some(session) = boot(file, release, intro_taps) else { return };
 
     // The gate: this story is one of the three where a press used to be eaten.
@@ -277,7 +276,6 @@ fn arthur_a_drag_over_story_text_selects_instead_of_clicking() {
 /// is the behaviour the deferral had to keep while making selection possible.
 #[test]
 fn zork0_a_press_and_release_on_the_compass_still_moves_the_player() {
-    let _g = app::v6_palette_at_boot();
     let Some(mut session) = boot("zork0-r393-s890714.z6", 393, 4) else { return };
     assert!(session.wants_mouse(), "Zork Zero sets Flags2 bit 5");
 

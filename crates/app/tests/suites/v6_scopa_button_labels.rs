@@ -170,20 +170,6 @@ fn assert_labels_stay_inside(canvas: &image::RgbaImage, honor: bool, when: &str)
     }
 }
 
-/// The palette this suite's colour assertions resolve through, **stated rather than
-/// inherited** (SQ-0958).
-///
-/// Every story these cases drive is a bare file that names no machine, so its colour
-/// numbers resolve through ZMSD §8.3.1's own table — which is what every assertion
-/// below was written against. Until now nothing here said so, and the suite believed
-/// whatever the last suite in its group binary left behind: harmless only while every
-/// one of them happened to leave `Standard` there, and not at all once a sibling boots
-/// a machine press. See [`app::v6_palette`], which is why this both names a palette
-/// and takes the shared lock. Hold the guard for the whole case.
-fn standard_palette() -> app::V6PaletteGuard {
-    app::v6_palette(zvm::screen::Palette::Standard)
-}
-
 /// The premise, in the game's own numbers: the scratch window's box is not the
 /// button, and after a card is selected the "OK" run sits inside it anyway.
 ///
@@ -191,7 +177,6 @@ fn standard_palette() -> app::V6PaletteGuard {
 /// two apart, so it cannot be the discriminator.
 #[test]
 fn the_label_window_box_describes_nothing() {
-    let _g = standard_palette();
     let Some(mut s) = scopa_at_the_players_turn() else { return };
 
     let (_, lo, hi, box_l, box_r) = label(&s, "Choose").expect("the player's turn shows \"Choose\"");
@@ -227,7 +212,6 @@ fn the_label_window_box_describes_nothing() {
 ///  (625,370)".
 #[test]
 fn a_selected_card_does_not_spread_the_ok_label() {
-    let _g = standard_palette();
     let Some(mut s) = scopa_at_the_players_turn() else { return };
 
     for honor in [true, false] {

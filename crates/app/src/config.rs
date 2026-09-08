@@ -1884,6 +1884,17 @@ pub struct Config {
     /// persisted.
     #[serde(skip)]
     pub disk_entry: Option<String>,
+    /// Header `$1F`, when this run was launched with `--interpreter-version`
+    /// (SQ-0885's experiment knob).
+    ///
+    /// Not a config key, and parked here for the reason `disk_entry` and
+    /// `pictures_override` are: it rides with the story for the session. It used
+    /// to be a process-wide static in `zvm`, which is how an `@restart` kept it
+    /// without anybody carrying it; since SQ-1393 the byte is a `MachineBoot`
+    /// fact, and `reset.rs` has no other way to re-ask for a flag of THIS run.
+    /// Never persisted.
+    #[serde(skip)]
+    pub interpreter_version: Option<u8>,
     /// When true (default), play audio for `sound_effect` (bleeps + Blorb samples).
     #[serde(default = "default_enable_sound")]
     pub enable_sound: bool,
@@ -2230,6 +2241,7 @@ impl Default for Config {
             colour_source: ColourSource::default(),
             pictures_override: None,
             disk_entry: None,
+            interpreter_version: None,
             enable_sound: default_enable_sound(),
             volume: default_volume(),
             acceleration: default_acceleration(),
@@ -3693,6 +3705,7 @@ use_defaults = false
             colour_source: ColourSource::default(),
             pictures_override: None,
             disk_entry: None,
+            interpreter_version: None,
             enable_sound: true,
             volume: 100,
             search: SearchConfig::default(),

@@ -17,7 +17,7 @@
 //! and the pty-stream layer (`tests/pty_stream/`) can only show the bytes lanthorn
 //! WROTE, never what the tty handed to its successor. What is checkable is the one
 //! thing that caused it: the sequence of calls. So this pins the sequence, in the
-//! spirit of `palette_lock_discipline` — the next person to edit `restore_terminal`
+//! spirit of `scratch_path_discipline` — the next person to edit `restore_terminal`
 //! has no reason to know any of the above, and every other instrument in the repo is
 //! blind to the mistake.
 //!

@@ -116,7 +116,6 @@ fn frame_at(file: &str, pictures: Option<&str>, honor: bool, pane: Rect) -> Opti
     };
     let named_art_std_window = over.std_window();
     let profile = InterpreterProfile::resolve(&path, None, over.flavour(), None);
-    app::v6_set_palette(profile.palette());
     let mut picts = PictSource::resolve_with_override(&path, over, None);
     let picture_dims = picts.all_pict_dims();
     let honoured = honor
@@ -131,6 +130,8 @@ fn frame_at(file: &str, pictures: Option<&str>, honor: bool, pane: Rect) -> Opti
         honoured.then(|| profile.default_colours()).flatten(),
         true,
         app::native_font::FaceSet::none(),
+        profile.palette(),
+        None,
     );
     let mut session = GameSession::new_for_machine(bytes, honoured, false, false, picture_dims, None, None, &boot)
     .expect("Zork Zero should load and boot without a ZError");
@@ -246,7 +247,6 @@ fn assert_float_ground_is_the_prose_ground(f: &Frame, what: &str) {
 /// white story pane background"*, verbatim.
 #[test]
 fn the_macintosh_float_ground_is_the_machines_white_page() {
-    let _g = app::v6_palette_at_boot();
     for archive in [None, Some("Pic.data")] {
         let Some(f) = frame(MAC_DISK, archive, true) else { return };
         let what = format!("mac r296 {archive:?}");
@@ -296,7 +296,6 @@ fn the_macintosh_float_ground_is_the_machines_white_page() {
 /// must actually float something.
 #[test]
 fn the_float_strip_is_flattened_onto_the_page_the_frame_resolved() {
-    let _g = app::v6_palette_at_boot();
     for archive in [None, Some("Pic.data")] {
         let (Some(honoured), Some(declined)) =
             (frame(MAC_DISK, archive, true), frame(MAC_DISK, archive, false))
@@ -357,7 +356,6 @@ fn the_float_strip_is_flattened_onto_the_page_the_frame_resolved() {
 /// magnifications, or the case is comparing a frame with itself.
 #[test]
 fn a_float_keeps_its_footprint_when_the_art_magnification_moves() {
-    let _g = app::v6_palette_at_boot();
     const TALL: Rect = Rect { x: 0, y: 0, width: 120, height: 45 };
     const SHORT: Rect = Rect { x: 0, y: 0, width: 120, height: 25 };
     let (Some(tall), Some(short)) = (
@@ -392,7 +390,6 @@ fn a_float_keeps_its_footprint_when_the_art_magnification_moves() {
 /// white must not reach it by any other route.
 #[test]
 fn the_macintosh_machine_page_never_survives_declined_colours() {
-    let _g = app::v6_palette_at_boot();
     for archive in [None, Some("Pic.data")] {
         let Some(f) = frame(MAC_DISK, archive, false) else { return };
         let what = format!("mac r296 {archive:?} declined");
@@ -421,7 +418,6 @@ fn the_macintosh_machine_page_never_survives_declined_colours() {
 /// that does not exist on this frame.
 #[test]
 fn the_ibm_pc_control_has_no_machine_page_to_gain() {
-    let _g = app::v6_palette_at_boot();
     let Some(f) = frame(IBM_PC_STORY, None, true) else { return };
     assert!(
         f.state.v6_page_pair.get().is_none(),
@@ -445,7 +441,6 @@ fn the_ibm_pc_control_has_no_machine_page_to_gain() {
 /// different colours, or this case would prove nothing.
 #[test]
 fn an_explicit_window_page_still_beats_the_machines() {
-    let _g = app::v6_palette_at_boot();
     let Some(f) = frame(AMIGA_FLOPPY, None, true) else { return };
     let story = f.state.v6_story_page.get().expect("Zork Zero declares its own window-0 page");
     let machine = app::render::screen::v6_host_pair(&f.state).1;

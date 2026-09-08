@@ -215,7 +215,6 @@ fn boot_machine(
     // No tier-3 archive is named here — this suite resolves art through
     // `PictSource::resolve`, so the profile comes from the medium alone.
     let profile = InterpreterProfile::resolve(&path, None, None, None);
-    app::v6_set_palette(profile.palette());
     let mut picts = PictSource::resolve(&path, None);
     let picture_dims = picts.all_pict_dims();
     // `startup.rs`'s own chain, `native_std_window` included. Without that step a
@@ -233,6 +232,8 @@ fn boot_machine(
         profile.default_colours(),
         true,
         app::native_font::FaceSet::none(),
+        profile.palette(),
+        None,
     );
     let mut s = GameSession::new_for_machine(bytes, true, false, false, picture_dims, None, None, &machine)
     .unwrap_or_else(|e| panic!("{file}: should boot without a ZError: {e:?}"));
@@ -263,7 +264,6 @@ fn boot_named(story: &str, archive: &str, release: (u16, &str)) -> Option<GameSe
     assert_eq!(u16::from_be_bytes([bytes[2], bytes[3]]), release.0, "{story}: release");
     assert_eq!(String::from_utf8_lossy(&bytes[0x12..0x18]), release.1, "{story}: serial");
     let profile = InterpreterProfile::for_art_flavour(pics.flavour());
-    app::v6_set_palette(profile.palette());
     let mut picts = PictSource::from_native(pics);
     let picture_dims = picts.all_pict_dims();
     // `PictSource::std_window` answers from a Blorb's `Reso` chunk only; the
@@ -283,6 +283,8 @@ fn boot_named(story: &str, archive: &str, release: (u16, &str)) -> Option<GameSe
         profile.default_colours(),
         true,
         app::native_font::FaceSet::none(),
+        profile.palette(),
+        None,
     );
     let mut s =
         GameSession::new_for_machine(bytes, true, false, false, picture_dims, None, None, &machine)
@@ -472,7 +474,6 @@ fn lowest_flank_per_side(fl: &[Band], pane_w: u16) -> Vec<Band> {
 
 #[test]
 fn every_side_flank_is_tiled_and_none_is_stretched() {
-    let _g = app::v6_palette_at_boot();
     let mut ran = 0;
     for sp in SPECIMENS {
         let Some(mut s) = boot(sp.file, Some((sp.release, sp.serial))) else { continue };
@@ -537,7 +538,6 @@ fn every_side_flank_is_tiled_and_none_is_stretched() {
 /// must carry something, rather than the theme backdrop the clip left behind.
 #[test]
 fn a_flank_reaches_the_story_viewports_bottom() {
-    let _g = app::v6_palette_at_boot();
     for sp in SPECIMENS {
         let Some(mut s) = boot(sp.file, Some((sp.release, sp.serial))) else { continue };
         drive(&mut s, sp.turns);
@@ -608,7 +608,6 @@ fn a_flank_reaches_the_story_viewports_bottom() {
 /// the two meet at the join. A repeat cut from the graphics-only canvas does not.
 #[test]
 fn a_flank_has_no_gap_between_its_tiled_pieces() {
-    let _g = app::v6_palette_at_boot();
     for sp in SPECIMENS {
         let Some(mut s) = boot(sp.file, Some((sp.release, sp.serial))) else { continue };
         drive(&mut s, sp.turns);
@@ -693,7 +692,6 @@ fn a_flank_has_no_gap_between_its_tiled_pieces() {
 /// both lists.
 #[test]
 fn every_band_draws_at_the_frames_one_magnification() {
-    let _g = app::v6_palette_at_boot();
     let mut ran = 0;
     for sp in SPECIMENS {
         let Some(mut s) = boot(sp.file, Some((sp.release, sp.serial))) else { continue };
@@ -757,7 +755,6 @@ fn every_band_draws_at_the_frames_one_magnification() {
 /// exemption it had not earned IS the second half of SQ-0898.
 #[test]
 fn side_art_and_top_plate_share_one_horizontal_scale() {
-    let _g = app::v6_palette_at_boot();
     for sp in SPECIMENS {
         let Some(mut s) = boot(sp.file, Some((sp.release, sp.serial))) else { continue };
         drive(&mut s, sp.turns);
@@ -791,7 +788,6 @@ fn side_art_and_top_plate_share_one_horizontal_scale() {
 /// resized once, isotropically.
 #[test]
 fn no_side_flank_is_stretched_out_of_aspect() {
-    let _g = app::v6_palette_at_boot();
     for sp in SPECIMENS {
         let Some(mut s) = boot(sp.file, Some((sp.release, sp.serial))) else { continue };
         drive(&mut s, sp.turns);
@@ -829,7 +825,6 @@ fn no_side_flank_is_stretched_out_of_aspect() {
 /// nothing in Journey's frame is tiled.
 #[test]
 fn no_other_v6_title_grows_a_tiled_band() {
-    let _g = app::v6_palette_at_boot();
     for u in UNAFFECTED {
         let file = u.file;
         let Some(mut s) = (match u.rendition {
@@ -905,7 +900,6 @@ fn every_zork_zero_rendition_tiles_only_its_pillar_shaft() {
         Some("zork0.pic"), // Amiga/Mac
         None,              // Zork0.blb
     ];
-    let _g = app::v6_palette_at_boot();
     let sp = &SPECIMENS[2];
     assert_eq!(sp.title, "Zork Zero");
     for rendition in RENDITIONS {
@@ -1019,7 +1013,6 @@ fn no_tile_join_steps_harder_than_the_pillar_shaft_itself() {
     const K: usize = 16;
     const RENDITIONS: &[Option<&str>] =
         &[Some("zork0.mg1"), Some("zork0.eg1"), Some("zork0.cg1"), Some("zork0.pic"), None];
-    let _g = app::v6_palette_at_boot();
     let sp = &SPECIMENS[2];
     assert_eq!(sp.title, "Zork Zero");
     for rendition in RENDITIONS {
@@ -1161,7 +1154,6 @@ fn no_flank_join_steps_harder_than_the_art_itself() {
         Press { name: "Zork Zero IBM PC", file: "zork0-r393-s890714.z6", release: 393, serial: "890714", turns: 12, art: (0, 400), want: BorderArt::ZorkZeroPillars },
     ];
 
-    let _g = app::v6_palette_at_boot();
     for p in PRESSES {
         let Some((mut s, machine)) = boot_machine(p.file, Some((p.release, p.serial))) else {
             continue;
@@ -1232,7 +1224,6 @@ fn no_flank_join_steps_harder_than_the_art_itself() {
 #[test]
 fn each_specimen_is_recognised_as_its_own_layout() {
     use app::render::v6_border::{art_extent, recognize};
-    let _g = app::v6_palette_at_boot();
     let expected = [
         ("Arthur", BorderArt::ArthurPoles, (11u32, 379u32)),
         // **336 until SQ-1076, and that number was the defect.** Shogun's Amiga
@@ -1308,7 +1299,6 @@ fn each_specimen_is_recognised_as_its_own_layout() {
 #[test]
 fn every_rendition_is_recognised_as_its_own_titles_layout() {
     use app::render::v6_border::{art_extent, recognize};
-    let _g = app::v6_palette_at_boot();
     /// One rendition and the layout its flanks must be recognised as. `archive`
     /// is `None` for whatever `PictSource::resolve` picks off the medium.
     struct Rendition {
@@ -1373,7 +1363,6 @@ fn every_rendition_is_recognised_as_its_own_titles_layout() {
 /// regressions here before.
 #[test]
 fn shoguns_dos_flanks_tile_cleanly_in_both_colour_modes() {
-    let _g = app::v6_palette_at_boot();
     for archive in ["shogun.mg1", "shogun.eg1", "shogun.cg1"] {
         let Some(mut s) = boot_named("shogun-r322-s890706.z6", archive, (322, "890706")) else { continue };
         drive(&mut s, 12);
@@ -1442,7 +1431,6 @@ fn shoguns_dos_flanks_tile_cleanly_in_both_colour_modes() {
 ///    not a flat fill, which is what those 21 and 64 rows were.
 #[test]
 fn the_raster_composite_extends_its_side_art_to_the_native_bottom() {
-    let _g = app::v6_palette_at_boot();
     let mut ran = 0;
     for sp in SPECIMENS {
         let Some(mut s) = boot(sp.file, Some((sp.release, sp.serial))) else { continue };
@@ -1636,7 +1624,6 @@ fn zork_zeros_other_two_scene_borders_declare_no_shaft_and_agree_across_flanks()
     /// Every NATIVE archive shipped for Zork Zero. The Blorb is absent on
     /// purpose: it carries the MCGA plates `zork0.mg1` already covers.
     const RENDITIONS: &[&str] = &["zork0.mg1", "zork0.eg1", "zork0.cg1", "zork0.pic"];
-    let _g = app::v6_palette_at_boot();
     let sp = &SPECIMENS[2];
     assert_eq!(sp.title, "Zork Zero");
     let mut ran = 0;
@@ -1851,7 +1838,6 @@ fn autocorrelation_cannot_separate_zork_zeros_scene_borders() {
     /// its window is not comparable with these; case 9 covers it where the whole
     /// flank is the window.
     const RENDITIONS: &[&str] = &["zork0.mg1", "zork0.eg1", "zork0.cg1"];
-    let _g = app::v6_palette_at_boot();
     let sp = &SPECIMENS[2];
     assert_eq!(sp.title, "Zork Zero");
     let (mut castle_best, mut other_worst) = (f64::MAX, 0.0f64);
@@ -1956,7 +1942,6 @@ const MENU_STRIP: &[Specimen] = &[
 /// FLAT cannot pass by being monochrome.
 #[test]
 fn the_raster_composite_leaves_a_command_menu_alone() {
-    let _g = app::v6_palette_at_boot();
     let mut ran = 0;
     for sp in MENU_STRIP {
         let Some(mut s) = boot(sp.file, Some((sp.release, sp.serial))) else { continue };
@@ -2146,7 +2131,6 @@ fn art_band_rects(log: &[String]) -> Vec<Rect> {
 /// frame correctly throughout and a single-mode case would have passed.
 #[test]
 fn a_divider_extension_replicates_a_rule_and_never_a_picture() {
-    let _g = app::v6_palette_at_boot();
     let panes: Vec<(u16, u16)> = all_panes().collect();
     let mut ran = 0;
     for sp in JOURNEY_MEDIA {
@@ -2365,7 +2349,6 @@ fn full_width_bands(img: &image::RgbaImage, x0: u32, x1: u32, rows: std::ops::Ra
 /// mirrored. See `v6_border::flank_sections`.
 #[test]
 fn extending_a_flank_lengthens_its_shaft_and_adds_no_band() {
-    let _g = app::v6_palette_at_boot();
     let mut ran = 0;
     for sp in FLANK_SHAPES {
         let Some(mut s) = (match sp.archive {
@@ -2535,7 +2518,6 @@ fn frame_mags_locked(
 /// case that only ever saw such panes would be green with the quantization gone.
 #[test]
 fn locked_scaling_draws_the_frame_on_the_art_pixel_ladder() {
-    let _g = app::v6_palette_at_boot();
     let mut ran = 0;
     let mut bands_seen = 0;
     let mut differed = 0;
@@ -2609,7 +2591,6 @@ fn locked_scaling_draws_the_frame_on_the_art_pixel_ladder() {
 /// at least 320x200 — well past what this pane has.
 #[test]
 fn a_pane_below_the_smallest_rung_still_renders_freely() {
-    let _g = app::v6_palette_at_boot();
     let mut ran = 0;
     for sp in SPECIMENS {
         let Some(art_scale) = launch_art_scale(sp.file) else { continue };
@@ -2666,7 +2647,6 @@ fn a_pane_below_the_smallest_rung_still_renders_freely() {
 #[test]
 fn arthurs_map_backdrop_is_not_mistaken_for_a_side_border() {
     use app::render::v6_border::{art_extent, recognize};
-    let _g = app::v6_palette_at_boot();
     let Some(mut s) = boot("Arthur - The Quest for Excalibur.adf", Some((54, "890606"))) else {
         return;
     };

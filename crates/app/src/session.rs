@@ -893,8 +893,14 @@ impl GameSession {
     /// launch that resolved a native picture archive may know better — see
     /// [`Self::new_with_art_scale`] — but every caller of *this* function gets
     /// the rule exactly as it has always been.
+    ///
+    /// **Colours resolve through §8.3.1's own table** (`Palette::Standard`) and
+    /// header `$1F` keeps zvm's default, because this is the no-machine door and
+    /// neither fact has a machine to come from (SQ-1393). A caller that DOES know
+    /// its machine goes through [`Self::new_for_machine`], where the palette is one
+    /// of the `MachineBoot` facts and is in force before the boot run.
     pub fn new_with_trace(story: Vec<u8>, honor_game_colours: bool, sound_available: bool, interpreter_number: Option<u8>, trace_from_boot: bool, picture_dims: Vec<(u16, u16, u16)>, v6_screen_px: Option<(u16, u16)>, default_colours: Option<(u8, u8)>, host_screen: Option<(u16, u16)>) -> Result<GameSession, ZError> {
-        Self::new_with_art_scale(story, honor_game_colours, sound_available, interpreter_number, trace_from_boot, picture_dims, v6_screen_px, None, default_colours, host_screen, None, None)
+        Self::new_with_art_scale(story, honor_game_colours, sound_available, interpreter_number, trace_from_boot, picture_dims, v6_screen_px, None, default_colours, host_screen, None, None, zvm::screen::Palette::Standard, None)
     }
 
     /// [`Self::new_with_trace`] with the art scale supplied rather than assumed
@@ -951,6 +957,8 @@ impl GameSession {
             host_screen,
             random_seed,
             Some(boot.text_face()),
+            boot.palette,
+            boot.interpreter_version,
         )?;
         // SQ-1071. Set here rather than threaded through the private constructor
         // above, whose positional machine facts are the shape SQ-1021 closed the
@@ -986,10 +994,26 @@ impl GameSession {
     /// doors are [`Self::new_for_machine`], which takes them as one value, and
     /// [`Self::new_with_trace`], which is the honest no-machine case. This is a
     /// compile error rather than a convention, which is the point.
-    fn new_with_art_scale(story: Vec<u8>, honor_game_colours: bool, sound_available: bool, interpreter_number: Option<u8>, trace_from_boot: bool, picture_dims: Vec<(u16, u16, u16)>, v6_screen_px: Option<(u16, u16)>, v6_art_scale: Option<(u32, u32)>, default_colours: Option<(u8, u8)>, host_screen: Option<(u16, u16)>, random_seed: Option<u32>, v6_text: Option<crate::native_font::TextFace>) -> Result<GameSession, ZError> {
+    ///
+    /// The `allow` below is the same statement in clippy's voice: fourteen
+    /// positional machine facts is precisely the shape the paragraph above is
+    /// about, and the cure — a value — is `MachineBoot`, one layer up, where
+    /// every caller that has a machine already takes it. Bundling these into a
+    /// second throwaway struct here would only hide the argument list from the
+    /// lint without moving a fact anywhere.
+    #[allow(clippy::too_many_arguments)]
+    fn new_with_art_scale(story: Vec<u8>, honor_game_colours: bool, sound_available: bool, interpreter_number: Option<u8>, trace_from_boot: bool, picture_dims: Vec<(u16, u16, u16)>, v6_screen_px: Option<(u16, u16)>, v6_art_scale: Option<(u32, u32)>, default_colours: Option<(u8, u8)>, host_screen: Option<(u16, u16)>, random_seed: Option<u32>, v6_text: Option<crate::native_font::TextFace>, palette: zvm::screen::Palette, interpreter_version: Option<u8>) -> Result<GameSession, ZError> {
         let mem = Memory::new(story)?;
         let sink = Box::new(CaptureSink::new());
         let mut machine = Machine::with_output(mem, sink);
+        // SQ-1393: the machine's own colour table and its `$1F` byte, set FIRST —
+        // before `init_caps` (which latches the version byte and writes the true
+        // default colours through the table) and long before the boot run below,
+        // which is where a story's own `set_colour` and `get_wind_prop` land. Both
+        // used to be process-wide statics `startup.rs` wrote before construction;
+        // they arrive with the rest of the machine's facts now.
+        machine.set_palette(palette);
+        machine.set_interpreter_version(interpreter_version);
         machine.set_honor_game_colours(honor_game_colours);
         machine.set_sound_available(sound_available);
         if let Some(seed) = random_seed {
@@ -1952,6 +1976,7 @@ impl GameSession {
         // inherits its colour is asking the host to resolve the ground, which
         // is what the ordinary window background already does.
         let Some(rgba) = crate::render::v6_layout::explicit_pixel_rgba(
+            self.machine.palette(),
             crate::state::pack_zcolour(f.bg),
         ) else {
             return;
@@ -7378,7 +7403,7 @@ mod tests {
         use ratatui::style::{Color, Style};
         // A dark page with white ink → black background (2), white foreground (9).
         let dark = Style::new().fg(Color::Rgb(238, 238, 238)).bg(Color::Rgb(12, 12, 16));
-        let (bg, fg) = crate::colors::host_default_colour_pair(dark, None, None).expect("resolved");
+        let (bg, fg) = crate::colors::host_default_colour_pair(zvm::screen::Palette::Standard, dark, None, None).expect("resolved");
         assert_eq!((bg, fg), (2, 9));
         let s = GameSession::new_with_trace(read_char_story_v5(), true, false, None, false, Vec::new(), None, Some((bg, fg)), None)
             .expect("v5 session");
@@ -7388,7 +7413,7 @@ mod tests {
         // A light page with black ink is the mirror image, and reaches the header
         // through the live path too (a theme reload has no constructor to use).
         let light = Style::new().fg(Color::Rgb(0, 0, 0)).bg(Color::Rgb(250, 250, 250));
-        let (bg, fg) = crate::colors::host_default_colour_pair(light, None, None).expect("resolved");
+        let (bg, fg) = crate::colors::host_default_colour_pair(zvm::screen::Palette::Standard, light, None, None).expect("resolved");
         assert_eq!((bg, fg), (9, 2));
         let mut s = GameSession::new(read_char_story_v5(), true, false, None).expect("v5 session");
         Engine::set_default_colours(&mut s, bg, fg);

@@ -1168,8 +1168,8 @@ mod tests {
     /// contradicting the log it is supposed to be adding a line to.
     ///
     /// The needles themselves are built by concatenation, not written as
-    /// contiguous literals — the exact failure `palette_lock_discipline` and
-    /// `scratch_path_discipline` both warn about in their own prose: a scan
+    /// contiguous literals — the exact failure `scratch_path_discipline` warns
+    /// about in its own prose: a scan
     /// that names its own forbidden spelling verbatim finds itself.
     #[test]
     fn no_stale_panel_wording_survives() {

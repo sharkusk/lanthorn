@@ -128,8 +128,9 @@ struct Launch {
 /// them would keep passing while the shipped path regressed, which is the hazard
 /// CLAUDE.md names as "boot a harness the way `startup.rs` boots".
 ///
-/// The palette lock is the CALLER's to hold (SQ-0987): this calls
-/// `app::v6_set_palette`, which panics off a guard.
+/// The table this launch resolves colour numbers through is one of the facts the
+/// `MachineBoot` carries (SQ-1393), so it is settled here in the same two steps
+/// `startup.rs` uses and nothing outside this call can observe it.
 fn launch(
     file: &str,
     colour: ColourSource,
@@ -165,7 +166,7 @@ fn launch(
 
     // `startup.rs`, in order. The table first, before the constructor runs the
     // story and before the host resolves a single colour.
-    app::v6_set_palette(cfg.machine_text_palette(bytes.first().copied()));
+    let mut machine_palette = cfg.machine_text_palette(bytes.first().copied());
     let mut picts = PictSource::resolve_with_override(&path, over, None);
     let picture_dims = picts.all_pict_dims();
 
@@ -180,10 +181,11 @@ fn launch(
         Style::default(),
         Some(TERM_FG),
         Some(TERM_BG),
+        machine_palette,
     );
     let card = picts.two_colour_card_screen(&cfg);
     if let Some((palette, pair)) = card {
-        app::v6_set_palette(palette);
+        machine_palette = palette;
         reported = Some(pair);
     }
 
@@ -198,6 +200,8 @@ fn launch(
         // exactly this call.
         cfg.machine_colours_licensed(),
         app::native_font::FaceSet::none(),
+        machine_palette,
+        None,
     );
     let mut session = GameSession::new_for_machine(
         bytes,
@@ -218,7 +222,7 @@ fn launch(
     Some(Launch {
         profile,
         source,
-        palette: zvm::screen::palette(),
+        palette: session.machine.palette(),
         card,
         reported,
         honoured: cfg.honor_game_colours,
@@ -230,8 +234,14 @@ fn launch(
 /// snapper. Named once so no case pins a literal that would have to be re-derived
 /// when the §8.3.1 nearest-neighbour search is touched.
 fn terminals_pair() -> (u8, u8) {
-    app::colors::host_default_colour_pair(Style::default(), Some(TERM_FG), Some(TERM_BG))
-        .expect("both channels probed")
+    // §8.3.1's own table: this snaps the TERMINAL's pair, which no machine owns.
+    app::colors::host_default_colour_pair(
+        zvm::screen::Palette::Standard,
+        Style::default(),
+        Some(TERM_FG),
+        Some(TERM_BG),
+    )
+    .expect("both channels probed")
 }
 
 /// Header `$2C`/`$2D`, as the story reads them.
@@ -257,7 +267,6 @@ fn header_pair(l: &Launch) -> (u8, u8) {
 /// and both assertions fail with the Amiga's own pair under the Amiga's table.
 #[test]
 fn a_release_floppy_under_a_host_regime_is_told_the_hosts_pair() {
-    let _g = app::v6_palette_at_boot();
     if !present(AMIGA_FLOPPY) {
         eprintln!("SKIP: {AMIGA_FLOPPY} absent");
         return;
@@ -286,7 +295,6 @@ fn a_release_floppy_under_a_host_regime_is_told_the_hosts_pair() {
 /// Without this the case above is satisfied by breaking original media outright.
 #[test]
 fn the_same_floppy_under_colour_machine_is_still_an_amiga() {
-    let _g = app::v6_palette_at_boot();
     if !present(AMIGA_FLOPPY) {
         eprintln!("SKIP: {AMIGA_FLOPPY} absent");
         return;
@@ -311,7 +319,6 @@ fn the_same_floppy_under_colour_machine_is_still_an_amiga() {
 /// both modes.
 #[test]
 fn declining_game_colours_outranks_every_regime() {
-    let _g = app::v6_palette_at_boot();
     if !present(AMIGA_FLOPPY) {
         eprintln!("SKIP: {AMIGA_FLOPPY} absent");
         return;
@@ -343,7 +350,6 @@ fn declining_game_colours_outranks_every_regime() {
 /// the case would pass without testing anything.
 #[test]
 fn a_cga_press_under_a_host_regime_shows_no_card() {
-    let _g = app::v6_palette_at_boot();
     if !present(CGA_PRESS) {
         eprintln!("SKIP: {CGA_PRESS} absent");
         return;
@@ -381,7 +387,6 @@ fn a_cga_press_under_a_host_regime_shows_no_card() {
 /// pair and table, without it neither.
 #[test]
 fn colour_machine_on_a_bare_story_file_still_presents_the_asked_for_machine() {
-    let _g = app::v6_palette_at_boot();
     if !present(BARE_STORY) {
         eprintln!("SKIP: {BARE_STORY} absent");
         return;
@@ -417,7 +422,6 @@ fn colour_machine_on_a_bare_story_file_still_presents_the_asked_for_machine() {
 /// the one outcome this quest may not have.
 #[test]
 fn the_artwork_is_the_archives_and_the_regime_cannot_move_it() {
-    let _g = app::v6_palette_at_boot();
     if !present(AMIGA_FLOPPY) {
         eprintln!("SKIP: {AMIGA_FLOPPY} absent");
         return;
@@ -435,7 +439,10 @@ fn the_artwork_is_the_archives_and_the_regime_cannot_move_it() {
             system_colours: colour == ColourSource::Machine,
             ..Default::default()
         };
-        app::v6_set_palette(cfg.machine_text_palette(Some(6)));
+        // The table this regime resolves through — asked for the same reason the
+        // launch asks, and asserted on by the caller rather than installed anywhere:
+        // the artwork below must be the ARCHIVE's whatever it says (SQ-1393).
+        let _ = cfg.machine_text_palette(Some(6));
         let mut picts = PictSource::resolve_with_override(&path, over, None);
         let dims = picts.all_pict_dims();
         let (resnum, ..) = *dims.first().expect("the floppy serves plates");
@@ -546,7 +553,6 @@ fn pane_ground(l: &Launch) -> (u32, u32) {
 /// the reported ground — while every pair asserted above stays correct.
 #[test]
 fn a_machines_screen_page_is_withheld_with_its_colours_under_a_host_regime() {
-    let _g = app::v6_palette_at_boot();
     if !present(ARTHUR_BARE) {
         eprintln!("SKIP: {ARTHUR_BARE} absent");
         return;
@@ -611,7 +617,6 @@ fn a_machines_screen_page_is_withheld_with_its_colours_under_a_host_regime() {
 /// chose.
 #[test]
 fn the_amiga_pens_are_off_under_a_host_regime() {
-    let _g = app::v6_palette_at_boot();
     if !present(ARTHUR_BARE) {
         eprintln!("SKIP: {ARTHUR_BARE} absent");
         return;
@@ -639,7 +644,6 @@ fn the_amiga_pens_are_off_under_a_host_regime() {
 /// the bare file is the controlled specimen and this is the corroboration.
 #[test]
 fn the_reported_floppy_grounds_on_the_host_under_a_host_regime() {
-    let _g = app::v6_palette_at_boot();
     if !present(ARTHUR_FLOPPY) {
         eprintln!("SKIP: {ARTHUR_FLOPPY} absent");
         return;
@@ -697,7 +701,6 @@ fn the_reported_floppy_grounds_on_the_host_under_a_host_regime() {
 /// looks correct.
 #[test]
 fn a_host_save_state_does_not_carry_a_colour_regime_across() {
-    let _g = app::v6_palette_at_boot();
     if !present(ARTHUR_BARE) {
         eprintln!("SKIP: {ARTHUR_BARE} absent");
         return;

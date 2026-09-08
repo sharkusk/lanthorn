@@ -91,7 +91,6 @@ fn dump(buf: &Buffer, w: u16, h: u16) -> String {
 fn help_menu_ground_is_reversed(honor_game_colours: bool) {
     // The assertions below name colours, so the palette they resolve through is
     // stated rather than inherited from the last suite in this binary (SQ-0958).
-    let _g = app::v6_palette(zvm::screen::Palette::Standard);
     let Some(sess) = boot_cos_help_menu() else {
         eprintln!("SKIP: no CoS.blb");
         return;
@@ -185,7 +184,6 @@ fn effective_bg(cell: &ratatui::buffer::Cell) -> Option<Color> {
 fn help_menu_hyperlink_blends_with_ground(honor_game_colours: bool) {
     // The assertions below name colours, so the palette they resolve through is
     // stated rather than inherited from the last suite in this binary (SQ-0958).
-    let _g = app::v6_palette(zvm::screen::Palette::Standard);
     let Some(sess) = boot_cos_help_menu() else {
         eprintln!("SKIP: no CoS.blb");
         return;
@@ -263,7 +261,6 @@ fn make_glk_grid_colors() -> ColorScheme {
 fn glk_grid_theme_slot_bg_does_not_paint(honor_game_colours: bool) {
     // The assertions below name colours, so the palette they resolve through is
     // stated rather than inherited from the last suite in this binary (SQ-0958).
-    let _g = app::v6_palette(zvm::screen::Palette::Standard);
     let mut upper = GridWindow { win: 5, ..GridWindow::default() };
     upper.resize(1, 3);
     upper.put(1, 1, 'X', 0);
@@ -303,7 +300,6 @@ fn glk_grid_theme_slot_bg_does_not_paint_honor_off() {
 fn glk_grid_explicit_game_bg_is_bg_not_swapped(honor_game_colours: bool) {
     // The assertions below name colours, so the palette they resolve through is
     // stated rather than inherited from the last suite in this binary (SQ-0958).
-    let _g = app::v6_palette(zvm::screen::Palette::Standard);
     let mut upper = GridWindow { win: 5, ..GridWindow::default() };
     upper.resize(1, 3);
     upper.put(1, 1, 'X', 0x02); // bold

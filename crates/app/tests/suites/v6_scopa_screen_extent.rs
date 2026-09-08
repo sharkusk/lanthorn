@@ -83,20 +83,6 @@ fn items(model: &app::engine::ScreenModel) -> &[app::engine::PositionedWindow] {
     }
 }
 
-/// The palette this suite's colour assertions resolve through, **stated rather than
-/// inherited** (SQ-0958).
-///
-/// Every story these cases drive is a bare file that names no machine, so its colour
-/// numbers resolve through ZMSD §8.3.1's own table — which is what every assertion
-/// below was written against. Until now nothing here said so, and the suite believed
-/// whatever the last suite in its group binary left behind: harmless only while every
-/// one of them happened to leave `Standard` there, and not at all once a sibling boots
-/// a machine press. See [`app::v6_palette`], which is why this both names a palette
-/// and takes the shared lock. Hold the guard for the whole case.
-fn standard_palette() -> app::V6PaletteGuard {
-    app::v6_palette(zvm::screen::Palette::Standard)
-}
-
 /// The published screen stops at the screen, and the VM's own table does not.
 ///
 /// Falsified by returning `(x_size, y_size)` unclipped from `v6_clip_box`:
@@ -104,7 +90,6 @@ fn standard_palette() -> app::V6PaletteGuard {
 /// right=640x400".
 #[test]
 fn a_measuring_window_never_inflates_the_published_screen() {
-    let _g = standard_palette();
     let Some(session) = scopa_dealt() else { return };
     let model = session.screen();
     let items = items(&model);
@@ -156,7 +141,6 @@ fn a_measuring_window_never_inflates_the_published_screen() {
 /// "honor=true: the composite IS the game's screen: left=1579x1370, right=640x400".
 #[test]
 fn the_dealt_table_composites_at_screen_scale_and_paints_no_black_bands() {
-    let _g = standard_palette();
     let Some(session) = scopa_dealt() else { return };
     let model = session.screen();
     let items = items(&model);

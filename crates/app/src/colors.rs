@@ -48,28 +48,32 @@ pub const STANDARD_COLOUR_RGB15: [(u8, u16); 8] = [
     (9, 0x7FFF),
 ];
 
-/// The true-colour equivalent of Standard colour `n` as 8-bit RGB, or `None`
-/// outside 2..=9.
+/// The true-colour equivalent of Standard colour `n` as 8-bit RGB in `palette`,
+/// or `None` outside 2..=9.
 ///
-/// Resolved through `zvm::screen::standard_true_colour`, so the active
-/// interpreter palette applies (SQ-0719): under the default
-/// `Palette::Standard` this is exactly [`STANDARD_COLOUR_RGB15`] above; under
-/// `Palette::Amiga` these become the colours Infocom's own Amiga interpreter
-/// loaded. Routing through the VM's table rather than reading the local one
-/// keeps a single answer for "what colour is Standard(6)" across the terminal
-/// cell palette, the v6 pixel path and the game's own window properties 17/18.
-pub fn standard_colour_rgb(n: u8) -> Option<(u8, u8, u8)> {
+/// Resolved through `zvm::screen::true_colour_in`, so the MACHINE's own table
+/// applies (SQ-0719): under `Palette::Standard` this is exactly
+/// [`STANDARD_COLOUR_RGB15`] above; under `Palette::Amiga` these become the
+/// colours Infocom's own Amiga interpreter loaded. Routing through the VM's table
+/// rather than reading the local one keeps a single answer for "what colour is
+/// Standard(6)" across the terminal cell palette, the v6 pixel path and the
+/// game's own window properties 17/18.
+///
+/// The table is a PARAMETER since SQ-1393 — it used to be a process-wide global
+/// this read behind the caller's back. A renderer takes it from the scheme it is
+/// drawing with ([`ColorScheme::machine_palette`]).
+pub fn standard_colour_rgb(palette: zvm::screen::Palette, n: u8) -> Option<(u8, u8, u8)> {
     if !STANDARD_COLOUR_RGB15.iter().any(|(c, _)| *c == n) {
         return None;
     }
-    zvm::screen::standard_true_colour(n).map(zvm::screen::rgb15_to_888)
+    zvm::screen::true_colour_in(palette, n).map(zvm::screen::rgb15_to_888)
 }
 
 /// The §8.3.1 true-colour equivalent of Standard colour `n` as a concrete
 /// `Color::Rgb`. Panics outside 2..=9 — the only callers are the fixed 2..=9
 /// palette seed below.
-fn standard_colour(n: u8) -> Color {
-    let (r, g, b) = standard_colour_rgb(n).expect("standard colour 2..=9");
+fn standard_colour(palette: zvm::screen::Palette, n: u8) -> Color {
+    let (r, g, b) = standard_colour_rgb(palette, n).expect("standard colour 2..=9");
     Color::Rgb(r, g, b)
 }
 
@@ -80,11 +84,11 @@ fn standard_colour(n: u8) -> Color {
 ///
 /// Used to express the app's own default page/ink as the standard codes the
 /// header can carry (§8.3.3 — bytes $2C/$2D hold colour NUMBERS, not RGB).
-pub fn nearest_standard_colour(rgb: (u8, u8, u8)) -> u8 {
+pub fn nearest_standard_colour(palette: zvm::screen::Palette, rgb: (u8, u8, u8)) -> u8 {
     let (r, g, b) = (rgb.0 as i32, rgb.1 as i32, rgb.2 as i32);
     let mut best = (2u8, i32::MAX);
     for (n, _) in STANDARD_COLOUR_RGB15 {
-        let (cr, cg, cb) = standard_colour_rgb(n).expect("table entry");
+        let (cr, cg, cb) = standard_colour_rgb(palette, n).expect("table entry");
         let d = (r - cr as i32).pow(2) + (g - cg as i32).pow(2) + (b - cb as i32).pow(2);
         if d < best.1 {
             best = (n, d);
@@ -110,6 +114,7 @@ pub fn nearest_standard_colour(rgb: (u8, u8, u8)) -> u8 {
 /// neither layer resolves, `None` — the caller leaves the interpreter's own
 /// black-on-white seed (§8.3.2's colours 2 and 9) in place.
 pub fn host_default_colour_pair(
+    palette: zvm::screen::Palette,
     themed: Style,
     osc_fg: Option<(u8, u8, u8)>,
     osc_bg: Option<(u8, u8, u8)>,
@@ -127,7 +132,7 @@ pub fn host_default_colour_pair(
             _ => return None,
         },
     };
-    Some((nearest_standard_colour(bg), nearest_standard_colour(fg)))
+    Some((nearest_standard_colour(palette, bg), nearest_standard_colour(palette, fg)))
 }
 
 /// The page and ink this launch reports to the story in header `$2C`/`$2D`,
@@ -159,6 +164,7 @@ pub fn host_default_colours(
     themed: Style,
     osc_fg: Option<(u8, u8, u8)>,
     osc_bg: Option<(u8, u8, u8)>,
+    palette: zvm::screen::Palette,
 ) -> Option<(u8, u8)> {
     use crate::config::ColourSource;
     if !cfg.honor_game_colours {
@@ -166,12 +172,12 @@ pub fn host_default_colours(
     }
     match cfg.colour_source {
         ColourSource::Machine => {
-            machine.or_else(|| host_default_colour_pair(themed, osc_fg, osc_bg))
+            machine.or_else(|| host_default_colour_pair(palette, themed, osc_fg, osc_bg))
         }
-        ColourSource::Theme => host_default_colour_pair(themed, osc_fg, osc_bg),
+        ColourSource::Theme => host_default_colour_pair(palette, themed, osc_fg, osc_bg),
         // The theme is dropped by handing the pair resolver a style that names
         // neither channel, which is the state it already falls through on.
-        ColourSource::Terminal => host_default_colour_pair(Style::default(), osc_fg, osc_bg),
+        ColourSource::Terminal => host_default_colour_pair(palette, Style::default(), osc_fg, osc_bg),
     }
 }
 
@@ -487,6 +493,21 @@ pub struct ColorScheme {
     /// the individual fields above; this is populated from the same scheme/roles as
     /// those fields and must reproduce them.
     pub theme: crate::theme::resolve::Theme,
+    /// The MACHINE's colour table — what a Z-machine standard colour NUMBER means
+    /// on the machine this launch presents (SQ-1393).
+    ///
+    /// It rides on the scheme rather than beside it because the scheme is already
+    /// built THROUGH it: [`Self::terminal_default_in`] seeds `palette[0..8]` from
+    /// this table, so a launch off Amiga media has Infocom's own Amiga colours in
+    /// the ANSI slots and a bare `.z5` has §8.3.1's. Carrying the answer next to
+    /// the seed it produced is what lets a renderer resolve the greys (10..=12),
+    /// the raster path's Standard pixels and the IBM bold rule through the SAME
+    /// table the cells were painted from, instead of asking a process-wide global
+    /// that any other session could have moved.
+    ///
+    /// [`zvm::screen::Palette::Standard`] for every scheme that names no machine —
+    /// which is `terminal_default()`, `from_ghostty`, and every `AppState::default`.
+    pub machine_palette: zvm::screen::Palette,
 }
 
 /// Build the seed `glk_styles` array (SQ-0331): buffer Input(8) ← `input_text`,
@@ -509,6 +530,18 @@ impl ColorScheme {
     /// - `render/transcript.rs`: `STATUS_STYLE`, `NORMAL_STYLE`, and the `DarkGray` suggestion.
     /// - `main.rs`: `focused_border` (`Cyan + BOLD`) and `help_style` (`REVERSED`).
     pub fn terminal_default() -> ColorScheme {
+        Self::terminal_default_in(zvm::screen::Palette::Standard)
+    }
+
+    /// [`Self::terminal_default`] for a launch that knows which MACHINE it is
+    /// presenting (SQ-1393).
+    ///
+    /// The only difference is the table the eight Z-machine ANSI slots are seeded
+    /// from, and the copy of that table the scheme carries for the renderers. It
+    /// used to be the same function reading a process-wide palette that
+    /// `startup.rs` had set a few hundred lines earlier — which is exactly the
+    /// dependency this makes visible.
+    pub fn terminal_default_in(machine_palette: zvm::screen::Palette) -> ColorScheme {
         ColorScheme {
             transcript: Style::new().fg(Color::White),
             // SQ-0309: previously injected by DEFAULT_STYLE_TOML's `[colors]`
@@ -559,14 +592,14 @@ impl ColorScheme {
                 // exact RGB the v6 raster path already used (`standard_pixel_rgb`),
                 // so the same game colour looked different in cell and pixel paths.
                 // A user theme still overrides the whole palette (SQ-0532/A-F5).
-                standard_colour(2),  // 0  Z Standard(2) black
-                standard_colour(3),  // 1  Standard(3) red
-                standard_colour(4),  // 2  Standard(4) green
-                standard_colour(5),  // 3  Standard(5) yellow
-                standard_colour(6),  // 4  Standard(6) blue
-                standard_colour(7),  // 5  Standard(7) magenta
-                standard_colour(8),  // 6  Standard(8) cyan
-                standard_colour(9),  // 7  Standard(9) white
+                standard_colour(machine_palette, 2),  // 0  Z Standard(2) black
+                standard_colour(machine_palette, 3),  // 1  Standard(3) red
+                standard_colour(machine_palette, 4),  // 2  Standard(4) green
+                standard_colour(machine_palette, 5),  // 3  Standard(5) yellow
+                standard_colour(machine_palette, 6),  // 4  Standard(6) blue
+                standard_colour(machine_palette, 7),  // 5  Standard(7) magenta
+                standard_colour(machine_palette, 8),  // 6  Standard(8) cyan
+                standard_colour(machine_palette, 9),  // 7  Standard(9) white
                 Color::DarkGray,   // 8  bright black
                 Color::LightRed,   // 9
                 Color::LightGreen, // 10
@@ -583,6 +616,7 @@ impl ColorScheme {
                 &std::collections::HashMap::new(),
                 &std::collections::HashMap::new(),
             ),
+            machine_palette,
         }
     }
 
@@ -599,6 +633,7 @@ impl ColorScheme {
     pub fn from_ghostty(
         scheme: &GhosttyScheme,
         overrides: &BTreeMap<String, String>,
+        machine_palette: zvm::screen::Palette,
     ) -> ColorScheme {
         let fg = scheme.foreground;
 
@@ -655,6 +690,11 @@ impl ColorScheme {
             palette: scheme.palette,
             glk_styles: seed_glk_styles(Style::new(), Style::new().add_modifier(Modifier::BOLD)),
             theme: crate::theme::resolve::resolve_theme(scheme, &crate::theme::toml_schema::ParsedStyle::default()),
+            // A configured scheme states all sixteen ANSI slots itself, so the
+            // machine's table never reaches them — but the greys (10..=12), the
+            // raster path's Standard pixels and the IBM bold rule still resolve
+            // through it, so the scheme carries it either way (SQ-1393).
+            machine_palette,
         }
     }
 
@@ -751,11 +791,12 @@ impl Default for ColorScheme {
 pub(crate) fn resolve_base(
     scheme: Option<&str>,
     dir: &Path,
+    machine_palette: zvm::screen::Palette,
 ) -> (ColorScheme, GhosttyScheme, Vec<String>) {
     let mut warnings: Vec<String> = Vec::new();
 
     let name = match scheme {
-        None => return (ColorScheme::terminal_default(), GhosttyScheme::default(), warnings),
+        None => return (ColorScheme::terminal_default_in(machine_palette), GhosttyScheme::default(), warnings),
         Some(n) => n,
     };
 
@@ -767,7 +808,7 @@ pub(crate) fn resolve_base(
                     "built-in scheme '{}' failed to parse: {}; using terminal defaults",
                     name, e
                 ));
-                return (ColorScheme::terminal_default(), GhosttyScheme::default(), warnings);
+                return (ColorScheme::terminal_default_in(machine_palette), GhosttyScheme::default(), warnings);
             }
         },
         None => {
@@ -782,7 +823,7 @@ pub(crate) fn resolve_base(
                             e
                         ));
                         return (
-                            ColorScheme::terminal_default(),
+                            ColorScheme::terminal_default_in(machine_palette),
                             GhosttyScheme::default(),
                             warnings,
                         );
@@ -795,7 +836,7 @@ pub(crate) fn resolve_base(
                         e
                     ));
                     return (
-                        ColorScheme::terminal_default(),
+                        ColorScheme::terminal_default_in(machine_palette),
                         GhosttyScheme::default(),
                         warnings,
                     );
@@ -805,7 +846,7 @@ pub(crate) fn resolve_base(
     };
 
     let empty_overrides = std::collections::BTreeMap::new();
-    let cs = ColorScheme::from_ghostty(&gs, &empty_overrides);
+    let cs = ColorScheme::from_ghostty(&gs, &empty_overrides, machine_palette);
     (cs, gs, warnings)
 }
 
@@ -1171,7 +1212,7 @@ mod tests {
         // default Single), so any scheme dropped the pane borders and re-enabled
         // the in-content map layer strip alongside the header tabs.
         use crate::render::paneframe::{BorderStyle, PaneSides};
-        let cs = ColorScheme::from_ghostty(&sample_scheme(), &BTreeMap::new());
+        let cs = ColorScheme::from_ghostty(&sample_scheme(), &BTreeMap::new(), zvm::screen::Palette::Standard);
         let def = ColorScheme::terminal_default();
         assert_eq!(cs.map_border_style, def.map_border_style);
         assert_eq!(cs.story_border_style, def.story_border_style);
@@ -1294,7 +1335,7 @@ unknown-key = ignored
         let gs = sample_scheme();
         let mut overrides = BTreeMap::new();
         overrides.insert("transcript".to_string(), "#ff0000".to_string());
-        let cs = ColorScheme::from_ghostty(&gs, &overrides);
+        let cs = ColorScheme::from_ghostty(&gs, &overrides, zvm::screen::Palette::Standard);
         assert_eq!(cs.transcript.fg, Some(Color::Rgb(0xff, 0, 0)));
     }
 
@@ -1304,7 +1345,7 @@ unknown-key = ignored
         let mut overrides = BTreeMap::new();
         // Override transcript to use palette[1] instead of the scheme foreground.
         overrides.insert("transcript".to_string(), "palette:1".to_string());
-        let cs = ColorScheme::from_ghostty(&gs, &overrides);
+        let cs = ColorScheme::from_ghostty(&gs, &overrides, zvm::screen::Palette::Standard);
         assert_eq!(cs.transcript, Style::new().fg(gs.palette[1]));
     }
 
@@ -1313,7 +1354,7 @@ unknown-key = ignored
         let gs = sample_scheme();
         let mut overrides = BTreeMap::new();
         overrides.insert("transcript".to_string(), "cyan".to_string());
-        let cs = ColorScheme::from_ghostty(&gs, &overrides);
+        let cs = ColorScheme::from_ghostty(&gs, &overrides, zvm::screen::Palette::Standard);
         assert_eq!(cs.transcript, Style::new().fg(Color::Cyan));
     }
 
@@ -1370,7 +1411,7 @@ unknown-key = ignored
         // (`v6_layout::standard_pixel_rgb`, exercised here via its shared table).
         let s = ColorScheme::terminal_default();
         let cell = crate::render::resolve_zcolour(zvm::screen::ZColour::Standard(9), &s);
-        let raster = standard_colour_rgb(9).expect("white is in the table");
+        let raster = standard_colour_rgb(zvm::screen::Palette::Standard, 9).expect("white is in the table");
         assert_eq!(cell, Color::Rgb(raster.0, raster.1, raster.2));
         assert_eq!(raster, (255, 255, 255), "§8.3.1: 9 = white (true $7FFF)");
     }
@@ -1379,36 +1420,39 @@ unknown-key = ignored
     fn nearest_standard_colour_is_identity_on_the_table() {
         // A-F2: each §8.3.1 true colour maps back to its own colour number.
         for (n, v15) in STANDARD_COLOUR_RGB15 {
-            assert_eq!(nearest_standard_colour(zvm::screen::rgb15_to_888(v15)), n);
+            assert_eq!(
+                nearest_standard_colour(zvm::screen::Palette::Standard, zvm::screen::rgb15_to_888(v15)),
+                n,
+            );
         }
     }
 
     #[test]
     fn nearest_standard_colour_snaps_off_table_colours_sensibly() {
         // Near-misses land on the obvious neighbour...
-        assert_eq!(nearest_standard_colour((10, 10, 12)), 2, "near-black → black");
-        assert_eq!(nearest_standard_colour((250, 250, 240)), 9, "off-white → white");
-        assert_eq!(nearest_standard_colour((200, 20, 20)), 3, "dark red → red");
-        assert_eq!(nearest_standard_colour((30, 90, 160)), 6, "muted blue → blue");
+        assert_eq!(nearest_standard_colour(zvm::screen::Palette::Standard, (10, 10, 12)), 2, "near-black → black");
+        assert_eq!(nearest_standard_colour(zvm::screen::Palette::Standard, (250, 250, 240)), 9, "off-white → white");
+        assert_eq!(nearest_standard_colour(zvm::screen::Palette::Standard, (200, 20, 20)), 3, "dark red → red");
+        assert_eq!(nearest_standard_colour(zvm::screen::Palette::Standard, (30, 90, 160)), 6, "muted blue → blue");
         // Real terminal themes land where you would expect, both ends.
-        assert_eq!(nearest_standard_colour((0x28, 0x2c, 0x34)), 2, "One Dark page → black");
-        assert_eq!(nearest_standard_colour((0x00, 0x2b, 0x36)), 2, "Solarized dark page → black");
-        assert_eq!(nearest_standard_colour((0xfd, 0xf6, 0xe3)), 9, "Solarized light page → white");
+        assert_eq!(nearest_standard_colour(zvm::screen::Palette::Standard, (0x28, 0x2c, 0x34)), 2, "One Dark page → black");
+        assert_eq!(nearest_standard_colour(zvm::screen::Palette::Standard, (0x00, 0x2b, 0x36)), 2, "Solarized dark page → black");
+        assert_eq!(nearest_standard_colour(zvm::screen::Palette::Standard, (0xfd, 0xf6, 0xe3)), 9, "Solarized light page → white");
         // A mid-grey is the honest hard case: colours 2..=9 contain NO grey (the
         // greys are 10..=12, Version 6 only, and `set_default_colours` clamps to
         // 2..=9 anyway), so the nearest entry is blue — the only mid-luminance
         // colour in the set — not a coin flip between black and white.
-        assert_eq!(nearest_standard_colour((128, 128, 128)), 6, "mid grey → blue (no grey in 2..=9)");
+        assert_eq!(nearest_standard_colour(zvm::screen::Palette::Standard, (128, 128, 128)), 6, "mid grey → blue (no grey in 2..=9)");
     }
 
     #[test]
     fn host_default_pair_prefers_a_fully_concrete_theme() {
         // A-F2 / ZMSD §8.3.3: (background, foreground) in $2C/$2D order.
         let dark = Style::new().fg(Color::Rgb(240, 240, 240)).bg(Color::Rgb(8, 8, 12));
-        assert_eq!(host_default_colour_pair(dark, None, None), Some((2, 9)),
+        assert_eq!(host_default_colour_pair(zvm::screen::Palette::Standard, dark, None, None), Some((2, 9)),
             "dark page + white ink → black background, white foreground");
         let light = Style::new().fg(Color::Rgb(0, 0, 0)).bg(Color::Rgb(255, 255, 255));
-        assert_eq!(host_default_colour_pair(light, None, None), Some((9, 2)),
+        assert_eq!(host_default_colour_pair(zvm::screen::Palette::Standard, light, None, None), Some((9, 2)),
             "white page + black ink → white background, black foreground");
     }
 
@@ -1418,17 +1462,17 @@ unknown-key = ignored
         // used instead, mirroring the v6 raster's `v6_default_pair` layering.
         let half = Style::new().fg(Color::Rgb(240, 240, 240));
         assert_eq!(
-            host_default_colour_pair(half, Some((0, 0, 0)), Some((255, 255, 255))),
+            host_default_colour_pair(zvm::screen::Palette::Standard, half, Some((0, 0, 0)), Some((255, 255, 255))),
             Some((9, 2)),
             "OSC white page + black ink wins over a theme that set only fg"
         );
         // Neither layer complete → None, so the caller leaves the VM's §8.3.2
         // black-on-white seed alone.
-        assert_eq!(host_default_colour_pair(half, None, Some((255, 255, 255))), None);
-        assert_eq!(host_default_colour_pair(Style::new(), None, None), None);
+        assert_eq!(host_default_colour_pair(zvm::screen::Palette::Standard, half, None, Some((255, 255, 255))), None);
+        assert_eq!(host_default_colour_pair(zvm::screen::Palette::Standard, Style::new(), None, None), None);
         // A non-RGB (named/indexed) theme colour is not a known RGB either.
         let named = Style::new().fg(Color::White).bg(Color::Black);
-        assert_eq!(host_default_colour_pair(named, None, None), None);
+        assert_eq!(host_default_colour_pair(zvm::screen::Palette::Standard, named, None, None), None);
     }
 
     // ── SQ-0510: seeding an unconfigured scheme from the OSC 10/11 probe ──────

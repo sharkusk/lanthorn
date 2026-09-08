@@ -93,14 +93,6 @@ const SPECIMENS: [Specimen; 2] = [
     Specimen { title: "fmvpoker", file: "fmvpoker.z6", turns: 4 },
 ];
 
-/// The palette this suite resolves through, **stated rather than inherited**
-/// (SQ-0958). Both stories are bare files that name no machine, so their colour
-/// numbers resolve through ZMSD 8.3.1's own table — which is the ground every canvas
-/// measured below is painted in. Hold the guard for the whole case.
-fn standard_palette() -> app::V6PaletteGuard {
-    app::v6_palette(zvm::screen::Palette::Standard)
-}
-
 /// The booted session, the release it carries, and the unit screen it was booted at
 /// — all three printed, because a measurement whose boot chain is not stated cannot
 /// be checked against anything (SQ-0901).
@@ -121,7 +113,7 @@ fn boot(spec: &Specimen) -> Option<GameSession> {
     // `native_std_window` is what booted a 560x384 press at 640x400 and fabricated a
     // frame a whole quest was fixed against — and a hand-copied chain is exactly how
     // that keeps happening. Named `machine` because `boot` is a function here.
-    let machine = app::machine_boot::MachineBoot::resolve(profile, &picts, None, None, None, true, app::native_font::FaceSet::none());
+    let machine = app::machine_boot::MachineBoot::resolve(profile, &picts, None, None, None, true, app::native_font::FaceSet::none(), zvm::screen::Palette::Standard, None);
     eprintln!(
         "{}: v{} release {release} serial {serial}, profile {profile:?}, unit screen {:?}, art_scale {:?}",
         spec.title, bytes[0], machine.screen_px, machine.art_scale,
@@ -183,7 +175,6 @@ fn sample_grid(cells: Size) -> (u32, u32) {
 /// make every number after it a measurement of some other screen.
 #[test]
 fn both_specimens_paint_a_640x400_screen_of_their_own() {
-    let _g = standard_palette();
     let (mut any_present, mut seen) = (false, 0usize);
     for spec in &SPECIMENS {
         let Some(s) = boot(spec) else { continue };
@@ -217,7 +208,6 @@ fn both_specimens_paint_a_640x400_screen_of_their_own() {
 /// picture should take it.
 #[test]
 fn a_fine_grid_reaches_the_pane_under_halfblocks() {
-    let _g = standard_palette();
     let hb = Picker::halfblocks();
     let fs = hb.font_size();
     let (mut any_present, mut seen) = (false, 0usize);
@@ -255,7 +245,6 @@ fn a_fine_grid_reaches_the_pane_under_halfblocks() {
 /// panes, where the cap was never the binding constraint and both backends agree.
 #[test]
 fn the_kitty_composite_is_unchanged() {
-    let _g = standard_palette();
     let kitty = kitty_picker(8, 18);
     let fs = kitty.font_size();
     let (mut any_present, mut seen) = (false, 0usize);
@@ -300,7 +289,6 @@ fn the_kitty_composite_is_unchanged() {
 /// geometry change wearing a performance fix's clothes.
 #[test]
 fn the_halfblocks_cell_rect_does_not_move() {
-    let _g = standard_palette();
     let hb = Picker::halfblocks();
     let fs = hb.font_size();
     let (mut any_present, mut seen) = (false, 0usize);
@@ -350,7 +338,6 @@ fn the_halfblocks_cell_rect_does_not_move() {
 /// to 192x120.
 #[test]
 fn the_halfblocks_composite_is_one_resample_of_the_canvas() {
-    let _g = standard_palette();
     let hb = Picker::halfblocks();
     let fs = hb.font_size();
     let (mut any_present, mut seen) = (false, 0usize);

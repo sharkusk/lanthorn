@@ -401,7 +401,6 @@ fn a_promoted_menu_grid_is_not_a_transcript_surface_in_raster() {
             continue;
         };
         seen += 1;
-        let _g = app::v6_palette_at_boot();
         assert_eq!(u16::from_be_bytes([bytes[2], bytes[3]]), *release, "{file} is not the pinned release");
         let mut picts = PictSource::new(blorb::resolve_resource_blorb(&path).map(|(b, _)| b));
         let dims = picts.all_pict_dims();
@@ -526,8 +525,6 @@ fn the_macintosh_hint_menu_keeps_its_leftmost_topic_column_at_every_width() {
     // size through the full chain. Skip a link and the game lays its own windows
     // out differently and every column measured afterwards is of another screen.
     let profile = app::interpreter::InterpreterProfile::resolve(&path, None, None, None);
-    let _g = app::v6_palette_at_boot();
-    app::v6_set_palette(profile.palette());
     let mut picts = app::graphics::PictSource::resolve_with_override(&path, app::graphics::PictureOverride::Unset, None);
     let dims = picts.all_pict_dims();
     let honoured =
@@ -542,6 +539,8 @@ fn the_macintosh_hint_menu_keeps_its_leftmost_topic_column_at_every_width() {
         honoured.then(|| profile.default_colours()).flatten(),
         true,
         app::native_font::FaceSet::none(),
+        profile.palette(),
+        None,
     );
     let mut s = app::session::GameSession::new_for_machine(bytes, honoured, false, false, dims, None, None, &boot)
     .expect("Zork Zero boots off the Macintosh disk");

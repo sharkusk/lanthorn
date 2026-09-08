@@ -2,19 +2,19 @@
 //! helpers (this module) plus the stateful `ScreenView` (Task 3).
 
 use zvm::io::TextAttrs;
-use zvm::screen::{StatusLine, StatusRight, UpperWindow, ZColour, grey_rgb, rgb15_to_888};
+use zvm::screen::{Palette, StatusLine, StatusRight, UpperWindow, ZColour, grey_rgb, rgb15_to_888};
 
 pub const DEFAULT_COLS: u16 = 80;
 pub const DEFAULT_ROWS: u16 = 24;
 
 /// Push SGR parameters for one colour channel. `fg` selects 3x vs 4x codes.
-fn push_colour_sgr(params: &mut Vec<String>, c: ZColour, fg: bool) {
+fn push_colour_sgr(params: &mut Vec<String>, c: ZColour, fg: bool, palette: Palette) {
     let (base_std, base_true) = if fg { (30u16, 38u16) } else { (40u16, 48u16) };
     match c {
         ZColour::Default => {}
         ZColour::Standard(n @ 2..=9) => params.push((base_std + (n as u16 - 2)).to_string()),
         ZColour::Standard(n) => {
-            let (r, g, b) = grey_rgb(n);
+            let (r, g, b) = grey_rgb(palette, n);
             params.push(format!("{};2;{};{};{}", base_true, r, g, b));
         }
         ZColour::True(v) => {
@@ -35,11 +35,11 @@ fn push_colour_sgr(params: &mut Vec<String>, c: ZColour, fg: bool) {
 /// code for it and lets the terminal's own colour scheme resolve the actual
 /// colour, so there is no concrete triple to paint OSC 11 with; that case is
 /// also `None` rather than an invented palette value.
-pub fn zcolour_rgb(c: ZColour) -> Option<(u8, u8, u8)> {
+pub fn zcolour_rgb(c: ZColour, palette: Palette) -> Option<(u8, u8, u8)> {
     match c {
         ZColour::Default => None,
         ZColour::Standard(2..=9) => None,
-        ZColour::Standard(n) => Some(grey_rgb(n)),
+        ZColour::Standard(n) => Some(grey_rgb(palette, n)),
         ZColour::True(v) => Some(rgb15_to_888(v)),
         ZColour::True24(v) => Some((((v >> 16) & 0xFF) as u8, ((v >> 8) & 0xFF) as u8, (v & 0xFF) as u8)),
     }
@@ -51,13 +51,13 @@ pub fn zcolour_rgb(c: ZColour) -> Option<(u8, u8, u8)> {
 /// SGR set-sequence (`ESC[...m`, no trailing reset) for `attrs`, or `""` when
 /// no style/colour is active. Shared by `style_wrap` and the raw-mode input
 /// editor (to echo typed input in the game's current style/colour).
-pub fn sgr_open(attrs: TextAttrs) -> String {
+pub fn sgr_open(attrs: TextAttrs, palette: Palette) -> String {
     let mut params: Vec<String> = Vec::new();
     if attrs.style & 0x01 != 0 { params.push("7".into()); }
     if attrs.style & 0x02 != 0 { params.push("1".into()); }
     if attrs.style & 0x04 != 0 { params.push("3".into()); }
-    push_colour_sgr(&mut params, attrs.fg, true);
-    push_colour_sgr(&mut params, attrs.bg, false);
+    push_colour_sgr(&mut params, attrs.fg, true, palette);
+    push_colour_sgr(&mut params, attrs.bg, false, palette);
     if params.is_empty() {
         String::new()
     } else {
@@ -68,12 +68,12 @@ pub fn sgr_open(attrs: TextAttrs) -> String {
 /// SGR that sets only the background colour (`ESC[..m`, no reset), or `""` when
 /// the background is Default or colours are not honoured. Used to paint clears
 /// and line padding with the game's chosen background.
-pub fn bg_sgr(bg: ZColour, honor: bool) -> String {
+pub fn bg_sgr(bg: ZColour, honor: bool, palette: Palette) -> String {
     if !honor {
         return String::new();
     }
     let mut params: Vec<String> = Vec::new();
-    push_colour_sgr(&mut params, bg, false);
+    push_colour_sgr(&mut params, bg, false, palette);
     if params.is_empty() {
         String::new()
     } else {
@@ -82,11 +82,11 @@ pub fn bg_sgr(bg: ZColour, honor: bool) -> String {
 }
 
 /// Wrap lower-window text in SGR when on a TTY and any style/colour is active; else plain.
-pub fn style_wrap(s: &str, attrs: TextAttrs, is_tty: bool) -> String {
+pub fn style_wrap(s: &str, attrs: TextAttrs, is_tty: bool, palette: Palette) -> String {
     if !is_tty {
         return s.to_string();
     }
-    let open = sgr_open(attrs);
+    let open = sgr_open(attrs, palette);
     if open.is_empty() {
         s.to_string()
     } else {
@@ -202,6 +202,7 @@ pub fn upper_row_ansi(
     honor: bool,
     current_fg: ZColour,
     current_bg: ZColour,
+    palette: Palette,
 ) -> String {
     // Last column with any non-default attribute (blank cell = ' ' at style 0,
     // Default/Default); trailing defaults are dropped so the row closes reset,
@@ -233,7 +234,7 @@ pub fn upper_row_ansi(
         };
         if cur != Some((style, fg, bg)) {
             out.push_str("\x1b[0m");
-            out.push_str(&sgr_open(TextAttrs { style, fg, bg }));
+            out.push_str(&sgr_open(TextAttrs { style, fg, bg }, palette));
             cur = Some((style, fg, bg));
         }
         out.push(cell.ch);
@@ -449,6 +450,7 @@ impl ScreenView {
                         machine.honor_game_colours,
                         machine.screen.current_fg,
                         machine.screen.current_bg,
+                        machine.palette(),
                     )
                 })
                 .collect()
@@ -463,7 +465,7 @@ impl ScreenView {
         let top = Self::top_rows(machine);
         let plain = Self::rows_plain(machine, top, self.term_cols);
         let ansi = Self::rows_ansi(machine, top, self.term_cols, self.period_look);
-        let bg_paint = bg_sgr(machine.screen.current_bg, machine.honor_game_colours);
+        let bg_paint = bg_sgr(machine.screen.current_bg, machine.honor_game_colours, machine.palette());
         self.render(top, &plain, &ansi, &bg_paint)
     }
 
@@ -623,7 +625,7 @@ impl ScreenView {
     /// home the cursor, and reset the pinned-region state so the next `frame`
     /// re-establishes the region. On a piped/non-TTY sink there is no screen to
     /// clear (streaming scrollback), so it is a no-op.
-    pub fn erase(&mut self, bg: ZColour, honor: bool) -> String {
+    pub fn erase(&mut self, bg: ZColour, honor: bool, palette: Palette) -> String {
         if !self.is_tty {
             return String::new();
         }
@@ -632,7 +634,7 @@ impl ScreenView {
         // multi-row upper window, the next `render` pushes the freshly-streamed
         // lower prompt down below it (see `render`).
         self.pending_erase_shift = true;
-        let paint = bg_sgr(bg, honor);
+        let paint = bg_sgr(bg, honor, palette);
         if paint.is_empty() {
             format!("{}\x1b[2J\x1b[H", leave_region())
         } else {
@@ -987,7 +989,7 @@ mod view_tests {
         let (p, a) = v3_rows();
         let mut v = ScreenView::new(true, false, false, 24, 80);
         let _ = v.render(1, &p, &a, ""); // activate a region (active_rows = 1)
-        let out = v.erase(ZColour::Default, true);
+        let out = v.erase(ZColour::Default, true, Palette::Standard);
         assert!(out.contains("\x1b[r"), "erase leaves the scroll region: {out:?}");
         assert!(out.contains("\x1b[2J"), "erase clears the screen: {out:?}");
         assert!(out.ends_with("\x1b[H"), "erase homes the cursor: {out:?}");
@@ -1000,7 +1002,7 @@ mod view_tests {
     #[test]
     fn erase_is_noop_when_piped() {
         let mut v = ScreenView::new(false, false, false, 24, 80);
-        assert_eq!(v.erase(ZColour::Default, true), "", "piped erase emits nothing");
+        assert_eq!(v.erase(ZColour::Default, true, Palette::Standard), "", "piped erase emits nothing");
     }
 
     #[test]
@@ -1069,7 +1071,7 @@ mod view_tests {
         // scroll the lower window down and follow the cursor below the region.
         let rows = vec![String::new(); 12];
         let mut v = ScreenView::new(true, false, false, 24, 80);
-        let _ = v.erase(ZColour::Default, true); // arms the one-shot shift
+        let _ = v.erase(ZColour::Default, true, Palette::Standard); // arms the one-shot shift
         let out = v.render(12, &rows, &rows, "");
         assert!(out.contains("\x1b[12T"), "scrolls the display down by 12 (SD): {out:?}");
         assert!(out.contains("\x1b[12B"), "follows the cursor down by 12 (CUD): {out:?}");
@@ -1092,7 +1094,7 @@ mod view_tests {
         // scrolling would garble.
         let (p, a) = v3_rows();
         let mut v = ScreenView::new(true, false, false, 24, 80);
-        let _ = v.erase(ZColour::Default, true);
+        let _ = v.erase(ZColour::Default, true, Palette::Standard);
         let out = v.render(1, &p, &a, "");
         assert!(!out.contains("\x1b[1T"), "1-row status line is not shifted: {out:?}");
         assert!(out.contains("\x1b[2;24r"), "still pins the status region: {out:?}");
@@ -1118,27 +1120,27 @@ mod colour_tests {
 
     #[test]
     fn sgr_open_builds_prefix_without_reset() {
-        assert_eq!(sgr_open(TextAttrs::default()), "", "no attrs → empty");
-        assert_eq!(sgr_open(TextAttrs { style: 2, ..Default::default() }), "\x1b[1m", "bold, no reset");
+        assert_eq!(sgr_open(TextAttrs::default(), Palette::Standard), "", "no attrs → empty");
+        assert_eq!(sgr_open(TextAttrs { style: 2, ..Default::default() }, Palette::Standard), "\x1b[1m", "bold, no reset");
         let c = TextAttrs { style: 0, fg: ZColour::Standard(3), bg: ZColour::Default };
-        assert_eq!(sgr_open(c), "\x1b[31m", "fg only, no trailing reset");
+        assert_eq!(sgr_open(c, Palette::Standard), "\x1b[31m", "fg only, no trailing reset");
         // style_wrap composes sgr_open + reset.
-        assert_eq!(style_wrap("x", c, true), "\x1b[31mx\x1b[0m");
+        assert_eq!(style_wrap("x", c, true, Palette::Standard), "\x1b[31mx\x1b[0m");
     }
 
     #[test]
     fn bg_sgr_sets_background_only() {
         use zvm::screen::ZColour;
-        assert_eq!(bg_sgr(ZColour::Standard(2), true), "\x1b[40m", "black bg");
-        assert_eq!(bg_sgr(ZColour::Default, true), "", "default = no SGR");
-        assert_eq!(bg_sgr(ZColour::Standard(2), false), "", "honor off = no SGR");
+        assert_eq!(bg_sgr(ZColour::Standard(2), true, Palette::Standard), "\x1b[40m", "black bg");
+        assert_eq!(bg_sgr(ZColour::Default, true, Palette::Standard), "", "default = no SGR");
+        assert_eq!(bg_sgr(ZColour::Standard(2), false, Palette::Standard), "", "honor off = no SGR");
     }
 
     #[test]
     fn erase_paints_current_bg() {
         use zvm::screen::ZColour;
         let mut v = ScreenView::new(true, false, false, 24, 80);
-        let out = v.erase(ZColour::Standard(2), true);
+        let out = v.erase(ZColour::Standard(2), true, Palette::Standard);
         assert!(out.contains("\x1b[40m"), "bg SGR before clear: {out:?}");
         assert!(out.contains("\x1b[2J"), "screen clear present: {out:?}");
         assert!(out.find("\x1b[40m").unwrap() < out.find("\x1b[2J").unwrap(),
@@ -1156,25 +1158,25 @@ mod colour_tests {
         // like this one needs a lock again — SQ-0904/0958.
         // standard fg=red(3)->31, bg=blue(6)->44
         let a = TextAttrs { style: 0, fg: ZColour::Standard(3), bg: ZColour::Standard(6) };
-        assert_eq!(style_wrap("x", a, true), "\x1b[31;44mx\x1b[0m");
+        assert_eq!(style_wrap("x", a, true, Palette::Standard), "\x1b[31;44mx\x1b[0m");
         // default channels emit nothing; no attrs → no wrap
         let d = TextAttrs { style: 0, fg: ZColour::Default, bg: ZColour::Default };
-        assert_eq!(style_wrap("x", d, true), "x");
+        assert_eq!(style_wrap("x", d, true, Palette::Standard), "x");
         // true colour fg
         let t = TextAttrs { style: 0, fg: ZColour::True(0x7FFF), bg: ZColour::Default };
-        assert_eq!(style_wrap("x", t, true), "\x1b[38;2;255;255;255mx\x1b[0m");
+        assert_eq!(style_wrap("x", t, true, Palette::Standard), "\x1b[38;2;255;255;255mx\x1b[0m");
         // grey 11 -> 8C8C8C (ZMSD §8.3.1: medium grey is true colour $4631;
         // this used to pin the invented #808080)
         let g = TextAttrs { style: 0, fg: ZColour::Standard(11), bg: ZColour::Default };
-        assert_eq!(style_wrap("x", g, true), "\x1b[38;2;140;140;140mx\x1b[0m");
+        assert_eq!(style_wrap("x", g, true, Palette::Standard), "\x1b[38;2;140;140;140mx\x1b[0m");
         // non-tty stays plain
-        assert_eq!(style_wrap("x", a, false), "x");
+        assert_eq!(style_wrap("x", a, false, Palette::Standard), "x");
     }
 }
 
 #[cfg(test)]
 mod page_bg_tests {
-    use zvm::screen::ZColour;
+    use zvm::screen::{Palette, ZColour};
 
     // The OSC escapes and their change-detection are covered in
     // `cli_host::term` now; what stays here is the Z-machine-specific question
@@ -1182,8 +1184,8 @@ mod page_bg_tests {
 
     #[test]
     fn zcolour_rgb_default_is_none_true24_unpacks() {
-        assert_eq!(super::zcolour_rgb(ZColour::Default), None);
-        assert_eq!(super::zcolour_rgb(ZColour::True24(0x123456)), Some((0x12, 0x34, 0x56)));
+        assert_eq!(super::zcolour_rgb(ZColour::Default, Palette::Standard), None);
+        assert_eq!(super::zcolour_rgb(ZColour::True24(0x123456), Palette::Standard), Some((0x12, 0x34, 0x56)));
     }
 
     #[test]
@@ -1197,13 +1199,13 @@ mod page_bg_tests {
         // like this one needs a lock again — SQ-0904/0958.
         // 2..=9 are scheme-relative in push_colour_sgr (bare ANSI code, no RGB
         // source) — no invented palette here either.
-        assert_eq!(super::zcolour_rgb(ZColour::Standard(3)), None);
+        assert_eq!(super::zcolour_rgb(ZColour::Standard(3), Palette::Standard), None);
         // 10..=12 resolve via the shared grey_rgb table, same as push_colour_sgr.
         // ZMSD §8.3.1 fixes medium grey (11) at true colour $4631 → #8C8C8C.
         // (This assertion previously pinned the invented #808080.)
-        assert_eq!(super::zcolour_rgb(ZColour::Standard(11)), Some((0x8C, 0x8C, 0x8C)));
+        assert_eq!(super::zcolour_rgb(ZColour::Standard(11), Palette::Standard), Some((0x8C, 0x8C, 0x8C)));
         // True colour goes through rgb15_to_888, same as push_colour_sgr.
-        assert_eq!(super::zcolour_rgb(ZColour::True(0x001F)), Some((255, 0, 0)));
+        assert_eq!(super::zcolour_rgb(ZColour::True(0x001F), Palette::Standard), Some((255, 0, 0)));
     }
 }
 
@@ -1215,9 +1217,9 @@ mod tests {
     #[test]
     fn style_wrap_only_when_tty_and_styled() {
         use zvm::io::TextAttrs;
-        assert_eq!(style_wrap("hi", TextAttrs { style: 0, ..Default::default() }, true), "hi");
-        assert_eq!(style_wrap("hi", TextAttrs { style: 2, ..Default::default() }, false), "hi");
-        assert_eq!(style_wrap("hi", TextAttrs { style: 2, ..Default::default() }, true), "\x1b[1mhi\x1b[0m");
+        assert_eq!(style_wrap("hi", TextAttrs { style: 0, ..Default::default() }, true, Palette::Standard), "hi");
+        assert_eq!(style_wrap("hi", TextAttrs { style: 2, ..Default::default() }, false, Palette::Standard), "hi");
+        assert_eq!(style_wrap("hi", TextAttrs { style: 2, ..Default::default() }, true, Palette::Standard), "\x1b[1mhi\x1b[0m");
     }
 
     #[test]
@@ -1258,7 +1260,7 @@ mod tests {
         u.put(1, 2, 'i', 2, ZColour::Default, ZColour::Default); // bold
         let text = upper_row_text(&u, 1);
         assert_eq!(text, "Hi"); // trailing blanks trimmed
-        let ansi = upper_row_ansi(&u, 1, true, ZColour::Default, ZColour::Default);
+        let ansi = upper_row_ansi(&u, 1, true, ZColour::Default, ZColour::Default, Palette::Standard);
         assert!(
             ansi.contains("\x1b[1m") && ansi.ends_with("\x1b[0m"),
             "ansi: {ansi:?}"
@@ -1273,12 +1275,12 @@ mod tests {
         // "Hi" in red-on-black, honor on.
         u.put(1, 1, 'H', 0, ZColour::Standard(3), ZColour::Standard(2));
         u.put(1, 2, 'i', 0, ZColour::Standard(3), ZColour::Standard(2));
-        let on = upper_row_ansi(&u, 1, true, ZColour::Default, ZColour::Default);
+        let on = upper_row_ansi(&u, 1, true, ZColour::Default, ZColour::Default, Palette::Standard);
         assert!(on.contains("31"), "red fg SGR present: {on:?}");
         assert!(on.contains("40"), "black bg SGR present: {on:?}");
         assert!(on.contains("Hi"), "text present: {on:?}");
         // honor off: no colour SGR, text still present.
-        let off = upper_row_ansi(&u, 1, false, ZColour::Default, ZColour::Default);
+        let off = upper_row_ansi(&u, 1, false, ZColour::Default, ZColour::Default, Palette::Standard);
         assert!(!off.contains("31") && !off.contains("40"), "no colour when honor off: {off:?}");
         assert!(off.contains("Hi"), "text present when honor off: {off:?}");
     }
@@ -1293,7 +1295,7 @@ mod tests {
         u.put(1, 4, 'i', 0, ZColour::Standard(9), ZColour::Standard(2));
         // Screen background is black: leading blank cells must be painted black
         // (bg 40) BEFORE the text, not left to reset-to-terminal-default.
-        let out = upper_row_ansi(&u, 1, true, ZColour::Default, ZColour::Standard(2));
+        let out = upper_row_ansi(&u, 1, true, ZColour::Default, ZColour::Standard(2), Palette::Standard);
         // The text run at col 3 emits its own bg 40, so a plain "40 before H"
         // check would pass even unfixed. Discriminate: the segment BEFORE the
         // first (leading) space must already carry bg 40, i.e. the leading

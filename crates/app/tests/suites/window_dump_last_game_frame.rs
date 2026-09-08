@@ -82,20 +82,6 @@ fn path_rect(cells: &[app::state::V6CellRect]) -> (u16, u16, u16, u16) {
     cells.iter().find(|c| c.label.starts_with("path:")).map(|c| c.cells).unwrap_or_default()
 }
 
-/// The palette this suite's colour assertions resolve through, **stated rather than
-/// inherited** (SQ-0958).
-///
-/// Every story these cases drive is a bare file that names no machine, so its colour
-/// numbers resolve through ZMSD §8.3.1's own table — which is what every assertion
-/// below was written against. Until now nothing here said so, and the suite believed
-/// whatever the last suite in its group binary left behind: harmless only while every
-/// one of them happened to leave `Standard` there, and not at all once a sibling boots
-/// a machine press. See [`app::v6_palette`], which is why this both names a palette
-/// and takes the shared lock. Hold the guard for the whole case.
-fn standard_palette() -> app::V6PaletteGuard {
-    app::v6_palette(zvm::screen::Palette::Standard)
-}
-
 /// (a) The dump describes the GAME's frame while the modal that summoned it is
 /// still up — its render path, its pane, its window placements.
 ///
@@ -113,7 +99,6 @@ fn standard_palette() -> app::V6PaletteGuard {
 /// (SQ-0777: this comment used to claim a falsification nobody could run here).
 #[test]
 fn the_dump_describes_the_last_game_frame_not_the_modals() {
-    let _g = standard_palette();
     let model = v6_model();
     let state = v6_state();
 
@@ -166,7 +151,6 @@ fn the_dump_describes_the_last_game_frame_not_the_modals() {
 /// one-shot taken at the first frame of the session.
 #[test]
 fn a_later_game_frame_replaces_the_record() {
-    let _g = standard_palette();
     let model = v6_model();
     let mut state = v6_state();
 
@@ -188,7 +172,6 @@ fn a_later_game_frame_replaces_the_record() {
 /// this whole quest is about.
 #[test]
 fn no_game_frame_reports_unavailable_rather_than_the_modals() {
-    let _g = standard_palette();
     let model = v6_model();
     let mut state = v6_state();
     state.overlays.hotkey_dialog = true;
@@ -208,7 +191,6 @@ fn no_game_frame_reports_unavailable_rather_than_the_modals() {
 /// nothing but the dump.
 #[test]
 fn the_dump_is_written_to_a_copyable_log_verbatim() {
-    let _g = standard_palette();
     let dir = std::env::temp_dir().join(format!("lanthorn-dumpwin-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&dir);
 

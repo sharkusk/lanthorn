@@ -60,7 +60,7 @@ fn cell_style(cell: zvm::screen::Cell, glk_style: u8, scheme: &ColorScheme, hono
         // SQ-1354: a bold cell on the IBM PC's v1-v5 text screen is the same ink
         // with the EGA intensity bit lit — the grid is the same attribute byte the
         // prose is drawn through.
-        s = s.fg(crate::render::ibm_bold_fg(c, cell.style, honor_game_colours));
+        s = s.fg(crate::render::ibm_bold_fg(c, cell.style, honor_game_colours, scheme));
     }
     // The theme's per-Glk-style slot never paints a Glk grid cell's BACKGROUND
     // (SQ-1219): only the ground (`base.bg`, above) or a colour the GAME itself

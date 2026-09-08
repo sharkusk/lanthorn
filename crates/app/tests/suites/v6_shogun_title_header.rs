@@ -81,7 +81,6 @@ fn boot_release(file: &str, profile: InterpreterProfile) -> Option<GameSession> 
             return None;
         }
     };
-    app::v6_set_palette(profile.palette());
     let mut picts = PictSource::resolve(&story_path, None);
     let picture_dims = picts.all_pict_dims();
     let v6_screen_px = picts.std_window().or_else(|| profile.std_window());
@@ -97,6 +96,10 @@ fn boot_release(file: &str, profile: InterpreterProfile) -> Option<GameSession> 
         None,
     )
     .expect("Shogun (v6) should load and boot without a ZError");
+    // SQ-1393: the machine's own colour table. `new_with_trace` is the
+    // no-machine door and presents §8.3.1's own, so a harness that boots a
+    // press states the press's table here.
+    session.machine.set_palette(profile.palette());
     session.set_pict_source(Some(picts));
     session.flush_boot_pictures();
     Some(session)
@@ -167,7 +170,6 @@ fn pane_rows(state: &app::state::AppState, model: &app::engine::ScreenModel, pan
 /// > is up at row 2. The game printed it, then moved window 0 out from under it.`
 #[test]
 fn shogun_shows_its_centred_title_above_the_boot_menu_on_both_releases() {
-    let _g = app::v6_palette_at_boot();
     for (file, profile) in
         [(AMIGA_RELEASE, InterpreterProfile::Amiga), (PC_RELEASE, InterpreterProfile::IbmPc)]
     {
@@ -261,7 +263,6 @@ fn shogun_shows_its_centred_title_above_the_boot_menu_on_both_releases() {
 /// window 0 to a box that still covers eight of them.
 #[test]
 fn the_split_hands_shoguns_header_over_to_paint() {
-    let _g = app::v6_palette_at_boot();
     for (file, profile) in
         [(AMIGA_RELEASE, InterpreterProfile::Amiga), (PC_RELEASE, InterpreterProfile::IbmPc)]
     {

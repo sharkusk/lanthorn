@@ -84,7 +84,6 @@ fn journey_floppy_at_menu() -> Option<GameSession> {
     assert_eq!(&String::from_utf8_lossy(&bytes[0x12..0x18]), SERIAL, "{FIXTURE}: serial");
 
     let profile = InterpreterProfile::resolve(&path, None, None, None);
-    app::v6_set_palette(profile.palette());
     let mut picts = PictSource::resolve(&path, None);
     let picture_dims = picts.all_pict_dims();
     let v6_screen_px = picts.std_window().or_else(|| profile.std_window());
@@ -100,6 +99,10 @@ fn journey_floppy_at_menu() -> Option<GameSession> {
         None,
     )
     .expect("Journey release 30 boots without a ZError");
+    // SQ-1393: the machine's own colour table. `new_with_trace` is the
+    // no-machine door and presents §8.3.1's own, so a harness that boots a
+    // press states the press's table here.
+    session.machine.set_palette(profile.palette());
     assert!(!session.quit && session.machine.fault_trace.is_none(), "booted clean");
     session.set_pict_source(Some(picts));
     session.flush_boot_pictures();
@@ -165,7 +168,6 @@ fn resamples(state: &app::state::AppState) -> Vec<(u32, u32, u32, u32, String, S
 /// observable on the real artwork rather than on a synthetic plate.
 #[test]
 fn every_hybrid_band_resamples_in_the_direction_it_moves() {
-    let _g = app::v6_palette_at_boot();
     let Some(session) = journey_floppy_at_menu() else { return };
     let model = session.screen();
     let mut seen = 0usize;
@@ -200,7 +202,6 @@ fn every_hybrid_band_resamples_in_the_direction_it_moves() {
 /// that never leaves the magnifying regime, which is the regime that was always fine.
 #[test]
 fn the_sweep_puts_the_plate_on_both_sides_of_its_native_size() {
-    let _g = app::v6_palette_at_boot();
     let Some(session) = journey_floppy_at_menu() else { return };
     let model = session.screen();
     let (mut shrank, mut grew) = (Vec::new(), Vec::new());
@@ -241,7 +242,6 @@ fn the_sweep_puts_the_plate_on_both_sides_of_its_native_size() {
 /// exposes.
 #[test]
 fn the_raster_composite_shrinks_below_its_canvas_at_a_small_pane() {
-    let _g = app::v6_palette_at_boot();
     let Some(session) = journey_floppy_at_menu() else { return };
     let model = session.screen();
     let (mut shrank, mut grew) = (0usize, 0usize);

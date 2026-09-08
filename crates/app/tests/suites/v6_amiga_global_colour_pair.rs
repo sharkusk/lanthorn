@@ -128,7 +128,6 @@ fn boot(f: &Floppy, profile: InterpreterProfile, honor: bool) -> Option<GameSess
         ctx(f, profile, honor)
     );
 
-    app::v6_set_palette(profile.palette());
     let mut picts = PictSource::resolve(&path, None);
     let picture_dims = picts.all_pict_dims();
     // `startup.rs`'s own chain, `native_std_window` included — this suite boots disk
@@ -148,6 +147,10 @@ fn boot(f: &Floppy, profile: InterpreterProfile, honor: bool) -> Option<GameSess
         None,
     )
     .unwrap_or_else(|e| panic!("{}: should boot without a ZError: {e:?}", ctx(f, profile, honor)));
+    // SQ-1393: the machine's own colour table. `new_with_trace` is the
+    // no-machine door and presents §8.3.1's own, so a harness that boots a
+    // press states the press's table here.
+    s.machine.set_palette(profile.palette());
     s.set_pict_source(Some(picts));
     s.flush_boot_pictures();
     for _ in 0..f.turns {
@@ -207,7 +210,6 @@ fn painted_foregrounds(s: &GameSession) -> std::collections::BTreeSet<String> {
 /// every window adopts window 3's ink and this fails immediately.
 #[test]
 fn a_colour_set_outside_window_0_never_lands_on_an_amiga() {
-    let _g = app::v6_palette_at_boot();
     let Some(s) = boot(&JOURNEY, InterpreterProfile::Amiga, true) else { return };
     let who = ctx(&JOURNEY, InterpreterProfile::Amiga, true);
 
@@ -258,7 +260,6 @@ fn a_colour_set_outside_window_0_never_lands_on_an_amiga() {
 /// and the sharing rule is gone, while window 0 alone still shows the colour.
 #[test]
 fn a_colour_set_from_window_0_moves_the_pen_for_every_window() {
-    let _g = app::v6_palette_at_boot();
     let Some(s) = boot(&ZORK_ZERO, InterpreterProfile::Amiga, true) else { return };
     let who = ctx(&ZORK_ZERO, InterpreterProfile::Amiga, true);
     let pairs = window_pairs(&s);
@@ -286,7 +287,6 @@ fn a_colour_set_from_window_0_moves_the_pen_for_every_window() {
 /// out, in `amiga/yzip3.c`.)
 #[test]
 fn a_label_drawn_over_artwork_stays_over_the_artwork() {
-    let _g = app::v6_palette_at_boot();
     let Some(s) = boot(&ZORK_ZERO, InterpreterProfile::Amiga, true) else { return };
     let who = ctx(&ZORK_ZERO, InterpreterProfile::Amiga, true);
     let v6 = s.machine.screen.v6.as_ref().unwrap();
@@ -313,7 +313,6 @@ fn a_label_drawn_over_artwork_stays_over_the_artwork() {
 /// it. Arthur release 54 makes none, on either profile.
 #[test]
 fn a_title_that_never_sets_a_colour_is_untouched() {
-    let _g = app::v6_palette_at_boot();
     let Some(s) = boot(&ARTHUR, InterpreterProfile::Amiga, true) else { return };
     let who = ctx(&ARTHUR, InterpreterProfile::Amiga, true);
     for (i, (fg, bg)) in window_pairs(&s).iter().enumerate() {
@@ -333,7 +332,6 @@ fn a_title_that_never_sets_a_colour_is_untouched() {
 /// having quietly adopted window 3's ink.
 #[test]
 fn the_ibm_pc_profile_keeps_one_pair_per_window() {
-    let _g = app::v6_palette_at_boot();
     let Some(s) = boot(&JOURNEY, InterpreterProfile::IbmPc, true) else { return };
     let who = ctx(&JOURNEY, InterpreterProfile::IbmPc, true);
     let pairs = window_pairs(&s);
@@ -363,7 +361,6 @@ fn the_ibm_pc_profile_keeps_one_pair_per_window() {
 /// profile: a shared pen is still a game colour.
 #[test]
 fn with_game_colours_off_the_theme_owns_the_screen_on_both_profiles() {
-    let _g = app::v6_palette_at_boot();
     for profile in [InterpreterProfile::IbmPc, InterpreterProfile::Amiga] {
         let Some(s) = boot(&JOURNEY, profile, false) else { return };
         let who = ctx(&JOURNEY, profile, false);
@@ -393,7 +390,7 @@ fn render_hybrid(s: &GameSession, honor: bool, cols: u16, rows: u16) -> (Rect, B
     use app::engine::Engine;
     let model = s.screen();
     let mut state = app::state::AppState::default();
-    state.colors = app::colors::ColorScheme::terminal_default();
+    state.colors = app::colors::ColorScheme::terminal_default_in(s.machine.palette());
     state.game_picker =
         Some(ratatui_image::picker::Picker::from_fontsize(ratatui_image::FontSize::new(8, 18)));
     state.config.v6_render = app::config::V6RenderMode::Hybrid;
@@ -441,9 +438,10 @@ fn tally(area: Rect, buf: &Buffer) -> CellTally {
 /// the Z-machine's own currency, so this is the faithful number rather than a
 /// rounding to paper over.
 fn amiga_pair_rgb() -> (String, String) {
-    let (r, g, b) = app::colors::standard_colour_rgb(app::interpreter::AMIGA_DEFAULT_FOREGROUND)
+    let amiga = zvm::screen::Palette::Amiga;
+    let (r, g, b) = app::colors::standard_colour_rgb(amiga, app::interpreter::AMIGA_DEFAULT_FOREGROUND)
         .expect("standard 9 is white");
-    let (gr, gg, gb) = zvm::screen::grey_rgb(app::interpreter::AMIGA_DEFAULT_BACKGROUND);
+    let (gr, gg, gb) = zvm::screen::grey_rgb(amiga, app::interpreter::AMIGA_DEFAULT_BACKGROUND);
     (format!("Rgb({r}, {g}, {b})"), format!("Rgb({gr}, {gg}, {gb})"))
 }
 
@@ -465,7 +463,6 @@ fn amiga_pair_rgb() -> (String, String) {
 /// the user's symptom, verbatim.
 #[test]
 fn journey_renders_white_on_the_machines_dark_grey_on_the_amiga_floppy() {
-    let _g = app::v6_palette_at_boot();
     let Some(s) = boot(&JOURNEY, InterpreterProfile::Amiga, true) else { return };
     let who = ctx(&JOURNEY, InterpreterProfile::Amiga, true);
     let (white, grey) = amiga_pair_rgb();
@@ -503,7 +500,6 @@ fn journey_renders_white_on_the_machines_dark_grey_on_the_amiga_floppy() {
 /// exactly as it was before this quest existed — and never in the Amiga's grey.
 #[test]
 fn the_ibm_pc_profile_renders_in_the_host_theme_exactly_as_before() {
-    let _g = app::v6_palette_at_boot();
     let Some(s) = boot(&JOURNEY, InterpreterProfile::IbmPc, true) else { return };
     let who = ctx(&JOURNEY, InterpreterProfile::IbmPc, true);
     let (_, grey) = amiga_pair_rgb();
@@ -530,7 +526,6 @@ fn the_ibm_pc_profile_renders_in_the_host_theme_exactly_as_before() {
 /// pair at all.
 #[test]
 fn with_game_colours_off_the_amiga_page_never_reaches_the_cells() {
-    let _g = app::v6_palette_at_boot();
     let Some(s) = boot(&JOURNEY, InterpreterProfile::Amiga, false) else { return };
     let who = ctx(&JOURNEY, InterpreterProfile::Amiga, false);
     let (_, grey) = amiga_pair_rgb();
@@ -619,7 +614,7 @@ fn render_with_transcript(s: &GameSession, lines: &[String], honor: bool) -> (Re
     use app::engine::Engine;
     let model = s.screen();
     let mut state = app::state::AppState::default();
-    state.colors = app::colors::ColorScheme::terminal_default();
+    state.colors = app::colors::ColorScheme::terminal_default_in(s.machine.palette());
     state.game_picker =
         Some(ratatui_image::picker::Picker::from_fontsize(ratatui_image::FontSize::new(8, 18)));
     state.config.v6_render = app::config::V6RenderMode::Hybrid;
@@ -674,7 +669,6 @@ fn row_styles(area: Rect, buf: &Buffer, needle: &str) -> Option<Vec<(String, Str
 /// `ColorScheme::resolve_story_style` and only the notice row fails, on its ink.
 #[test]
 fn arthurs_notices_are_the_machines_white_on_the_machines_dark_grey() {
-    let _g = app::v6_palette_at_boot();
     let Some((s, lines)) = arthur_at_the_church(true) else { return };
     let who = ctx(&ARTHUR, InterpreterProfile::Amiga, true);
     let (white, grey) = amiga_pair_rgb();
@@ -701,15 +695,17 @@ fn arthurs_notices_are_the_machines_white_on_the_machines_dark_grey() {
     // the REFERENCE pixels. `#444444` page, `#FFFFFF` ink, straight off the Amiga
     // capture, within the two units the 4→5→8-bit widening costs (see
     // `amiga_pair_rgb`). A page of standard 11 lands on 115 and misses by 47.
-    let (pr, pg, pb) = zvm::screen::grey_rgb(app::interpreter::AMIGA_DEFAULT_BACKGROUND);
+    let (pr, pg, pb) =
+        zvm::screen::grey_rgb(s.machine.palette(), app::interpreter::AMIGA_DEFAULT_BACKGROUND);
     for (got, want, ch) in [(pr, 0x44u8, 'r'), (pg, 0x44, 'g'), (pb, 0x44, 'b')] {
         assert!(
             got.abs_diff(want) <= 2,
             "{who}: the page's {ch} channel is {got}, and the real Amiga's is {want}",
         );
     }
-    let (ir, ig, ib) = app::colors::standard_colour_rgb(app::interpreter::AMIGA_DEFAULT_FOREGROUND)
-        .expect("standard 9 is white");
+    let (ir, ig, ib) =
+        app::colors::standard_colour_rgb(s.machine.palette(), app::interpreter::AMIGA_DEFAULT_FOREGROUND)
+            .expect("standard 9 is white");
     assert_eq!((ir, ig, ib), (0xFF, 0xFF, 0xFF), "{who}: the ink is the capture's white");
 }
 
@@ -719,7 +715,6 @@ fn arthurs_notices_are_the_machines_white_on_the_machines_dark_grey() {
 /// INTERPRETER paints with is still a game colour.
 #[test]
 fn with_game_colours_off_arthurs_notice_keeps_the_themes_own_system_style() {
-    let _g = app::v6_palette_at_boot();
     let Some((s, lines)) = arthur_at_the_church(false) else { return };
     let who = ctx(&ARTHUR, InterpreterProfile::Amiga, false);
     let (_, grey) = amiga_pair_rgb();
@@ -732,7 +727,7 @@ fn with_game_colours_off_arthurs_notice_keeps_the_themes_own_system_style() {
     );
     let sys = format!(
         "{:?}",
-        app::colors::ColorScheme::terminal_default()
+        app::colors::ColorScheme::terminal_default_in(s.machine.palette())
             .theme
             .get("transcript_system")
             .style
@@ -761,7 +756,7 @@ fn render_echo(s: &GameSession, lines: &[String], honor: bool, typed: &str, comm
     use app::engine::Engine;
     let model = s.screen();
     let mut state = app::state::AppState::default();
-    state.colors = app::colors::ColorScheme::terminal_default();
+    state.colors = app::colors::ColorScheme::terminal_default_in(s.machine.palette());
     state.game_picker =
         Some(ratatui_image::picker::Picker::from_fontsize(ratatui_image::FontSize::new(8, 18)));
     state.config.v6_render = app::config::V6RenderMode::Hybrid;
@@ -820,7 +815,6 @@ fn span_look(area: Rect, buf: &Buffer, needle: &str) -> Vec<(String, String, Str
 /// machine's grey while the committed span stays `Rgb(255, 255, 255)`.
 #[test]
 fn the_amigas_typed_echo_stands_on_the_same_pair_as_its_committed_one() {
-    let _g = app::v6_palette_at_boot();
     let Some((s, lines)) = arthur_at_the_church(true) else { return };
     let who = ctx(&ARTHUR, InterpreterProfile::Amiga, true);
     let (white, grey) = amiga_pair_rgb();
@@ -847,7 +841,7 @@ fn the_amigas_typed_echo_stands_on_the_same_pair_as_its_committed_one() {
     let themed = span_look(area, &off, ">look");
     let theme_ink = format!(
         "{:?}",
-        app::colors::ColorScheme::terminal_default()
+        app::colors::ColorScheme::terminal_default_in(s.machine.palette())
             .theme
             .get("input_text")
             .style
@@ -866,7 +860,6 @@ fn the_amigas_typed_echo_stands_on_the_same_pair_as_its_committed_one() {
 /// — the SQ-0532 wave-6 path, unmoved by SQ-0847.
 #[test]
 fn a_game_that_named_its_own_pair_still_types_in_that_pair() {
-    let _g = app::v6_palette_at_boot();
     let Some(s) = boot(&ZORK_ZERO, InterpreterProfile::Amiga, true) else { return };
     let who = ctx(&ZORK_ZERO, InterpreterProfile::Amiga, true);
     let pairs = window_pairs(&s);
@@ -875,11 +868,12 @@ fn a_game_that_named_its_own_pair_still_types_in_that_pair() {
         (ZColour::Standard(2), ZColour::Standard(10)),
         "{who}: premise — the story window named its own pair",
     );
-    // Standard 2 and standard 10, resolved the way the prose resolves them — the
-    // Amiga palette is process-global here, so the greys must come through
+    // Standard 2 and standard 10, resolved the way the prose resolves them —
+    // through the SESSION's own table (SQ-1393), so the greys come through
     // `zvm::screen::grey_rgb` rather than off a default palette table.
-    let (br, bg_, bb) = app::colors::standard_colour_rgb(2).expect("standard 2 is black");
-    let (gr, gg, gb) = zvm::screen::grey_rgb(10);
+    let (br, bg_, bb) =
+        app::colors::standard_colour_rgb(s.machine.palette(), 2).expect("standard 2 is black");
+    let (gr, gg, gb) = zvm::screen::grey_rgb(s.machine.palette(), 10);
     let (black, light_grey) = (format!("Rgb({br}, {bg_}, {bb})"), format!("Rgb({gr}, {gg}, {gb})"));
 
     let (area, live) = render_echo(&s, &["Nothing happens.".to_string()], true, "look", false);
@@ -922,7 +916,6 @@ fn a_game_that_named_its_own_pair_still_types_in_that_pair() {
 /// story background, so nothing about them may move.
 #[test]
 fn chrome_inherits_the_page_the_game_dressed() {
-    let _g = app::v6_palette_at_boot();
     let mut ran = 0;
     for (f, to_menu) in [(&ZORK_ZERO, true), (&ARTHUR, false), (&JOURNEY, false)] {
         let Some(mut s) = boot(f, InterpreterProfile::Amiga, true) else { continue };
@@ -945,11 +938,11 @@ fn chrome_inherits_the_page_the_game_dressed() {
         let app::engine::WinNode::Layered(items) = &model.root else { panic!("{label}: Layered") };
         let dressed = app::render::v6_layout::story_bg_rgba(
             app::render::v6_layout::classify_windows(items.as_slice(), zvm::screen::V6Cell::DEFAULT).story,
-            &app::colors::ColorScheme::terminal_default(),
+            &app::colors::ColorScheme::terminal_default_in(s.machine.palette()),
         );
 
         let mut state = app::state::AppState::default();
-        state.colors = app::colors::ColorScheme::terminal_default();
+        state.colors = app::colors::ColorScheme::terminal_default_in(s.machine.palette());
         state.config.honor_game_colours = true;
         state.game_picker = Some(ratatui_image::picker::Picker::halfblocks());
         let area = Rect::new(0, 0, 98, 37);
@@ -962,7 +955,7 @@ fn chrome_inherits_the_page_the_game_dressed() {
             .filter(|&(x, y)| !buf[(x, y)].symbol().trim().is_empty())
             .map(|(x, y)| format!("{:?}", buf[(x, y)].bg))
             .collect();
-        let theme_ground = format!("{:?}", app::colors::ColorScheme::terminal_default().theme.get("upper_window").style.bg);
+        let theme_ground = format!("{:?}", app::colors::ColorScheme::terminal_default_in(s.machine.palette()).theme.get("upper_window").style.bg);
 
         match dressed {
             Some(p) => {

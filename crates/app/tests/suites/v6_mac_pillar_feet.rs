@@ -76,7 +76,6 @@ fn launch(pictures: Option<&str>, honor: bool) -> GameSession {
     };
     let named = over.std_window();
     let profile = InterpreterProfile::resolve(&path, None, over.flavour(), None);
-    app::v6_set_palette(profile.palette());
     let mut picts = PictSource::resolve_with_override(&path, over, None);
     let dims = picts.all_pict_dims();
     // SQ-1021/SQ-1022: every per-machine fact in one value, so this
@@ -89,6 +88,8 @@ fn launch(pictures: Option<&str>, honor: bool) -> GameSession {
         honor.then(|| profile.default_colours()).flatten(),
         true,
         app::native_font::FaceSet::none(),
+        profile.palette(),
+        None,
     );
     let mut s = GameSession::new_for_machine(bytes, honor, false, false, dims, None, None, &boot)
     .expect("Zork Zero boots off the Macintosh disk");
@@ -263,7 +264,6 @@ fn desired_heights(s: &GameSession, panes: &[(u16, u16)]) -> Vec<u32> {
 /// itself, and the assertion fails with bare shaft running past the foot.
 #[test]
 fn the_macintosh_pillar_puts_its_foot_on_the_bottom_row() {
-    let _g = app::v6_palette_at_boot();
     if mac_disk().is_none() {
         return;
     }
@@ -330,7 +330,6 @@ fn the_macintosh_pillar_puts_its_foot_on_the_bottom_row() {
 /// stops matching the others.
 #[test]
 fn the_bands_are_evenly_spaced_and_the_pane_decides_how_many() {
-    let _g = app::v6_palette_at_boot();
     if mac_disk().is_none() {
         return;
     }
@@ -452,7 +451,6 @@ fn crop(gfx: &image::RgbaImage, x0: u32, x1: u32, h: u32) -> image::RgbaImage {
 /// says WHICH part moved.
 #[test]
 fn the_colour_pillars_on_the_same_disk_keep_bocfels_composition() {
-    let _g = app::v6_palette_at_boot();
     if mac_disk().is_none() {
         return;
     }

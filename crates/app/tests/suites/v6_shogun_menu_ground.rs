@@ -86,7 +86,6 @@ fn boot(r: &Rendition) -> Option<GameSession> {
     );
     assert_eq!(String::from_utf8_lossy(&bytes[0x12..0x18]), r.serial, "{}: serial", r.file);
     let profile = InterpreterProfile::resolve(&path, None, None, None);
-    app::v6_set_palette(profile.palette());
     let mut picts = PictSource::resolve(&path, None);
     let picture_dims = picts.all_pict_dims();
     let v6_screen_px = picts.std_window().or_else(|| profile.std_window());
@@ -102,6 +101,10 @@ fn boot(r: &Rendition) -> Option<GameSession> {
         None,
     )
     .unwrap_or_else(|e| panic!("{}: should boot without a ZError: {e:?}", r.file));
+    // SQ-1393: the machine's own colour table. `new_with_trace` is the
+    // no-machine door and presents §8.3.1's own, so a harness that boots a
+    // press states the press's table here.
+    s.machine.set_palette(profile.palette());
     s.set_pict_source(Some(picts));
     s.flush_boot_pictures();
     // One keypress past the title splash is the reported screen: the credits, the
@@ -192,7 +195,6 @@ const PANES: &[(u16, u16)] = &[(100, 40), (80, 30), (159, 61), (76, 46), (78, 26
 /// them grey, and not one coloured pixel of the game's own art anywhere on it.
 #[test]
 fn the_games_own_artwork_reaches_the_pane() {
-    let _g = app::v6_palette_at_boot();
     let mut ran = 0;
     for r in RENDITIONS {
         let Some(session) = boot(r) else { continue };
@@ -248,7 +250,6 @@ fn hybrid_draws_the_credits_and_menu_as_text() {
     /// which differ by medium (295/890321, 322/890706, 311/890510).
     const LINES: &[&str] =
         &["SHOGUN", "A Story of Japan", "All rights reserved.", "START the game", "RESTORE a saved game", "QUIT the game"];
-    let _g = app::v6_palette_at_boot();
     let mut ran = 0;
     for r in RENDITIONS {
         let Some(session) = boot(r) else { continue };
@@ -306,7 +307,6 @@ fn hybrid_draws_the_credits_and_menu_as_text() {
 /// its painted panel; there are no pixels for a composite to add.
 #[test]
 fn a_menu_takeover_with_no_art_still_takes_the_cell_path() {
-    let _g = app::v6_palette_at_boot();
     let path = fixture_path("advent.z6");
     let Ok(bytes) = std::fs::read(&path) else {
         eprintln!("SKIP: gitignored story missing at {}", path.display());
@@ -356,7 +356,6 @@ fn a_menu_takeover_with_no_art_still_takes_the_cell_path() {
 /// the other, so both regimes are swept here.
 #[test]
 fn a_menu_row_paints_one_contiguous_stretch() {
-    let _g = app::v6_palette_at_boot();
     let mut ran = 0;
     for r in RENDITIONS {
         let Some(session) = boot(r) else { continue };

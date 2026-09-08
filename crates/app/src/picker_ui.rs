@@ -1093,7 +1093,10 @@ pub(crate) fn run_story_picker(
 
     // Resolve themed colors the same way the game does, so the picker matches.
     let (base, _w1) = app::style::load_style(cfg.style.as_deref(), &cfg.user_dir);
-    let (cs, _set, _w2) = app::style::resolve(&base, &cfg.user_dir);
+    // No story is booted here, so no machine names a colour table: the picker
+    // resolves standard colour numbers through §8.3.1's own (SQ-1393).
+    let (cs, _set, _w2) =
+        app::style::resolve(&base, &cfg.user_dir, zvm::screen::Palette::Standard);
 
     // Row badges: each story's per-game dir under `data_base` + one shared hint
     // index, computed once (SQ-0284). Recomputed by `resort_list` whenever the

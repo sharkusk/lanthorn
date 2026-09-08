@@ -94,26 +94,11 @@ fn render(session: &GameSession, mode: app::config::V6RenderMode, honor: bool, w
     buf
 }
 
-/// The palette this suite's colour assertions resolve through, **stated rather than
-/// inherited** (SQ-0958).
-///
-/// Every story these cases drive is a bare file that names no machine, so its colour
-/// numbers resolve through ZMSD §8.3.1's own table — which is what every assertion
-/// below was written against. Until now nothing here said so, and the suite believed
-/// whatever the last suite in its group binary left behind: harmless only while every
-/// one of them happened to leave `Standard` there, and not at all once a sibling boots
-/// a machine press. See [`app::v6_palette`], which is why this both names a palette
-/// and takes the shared lock. Hold the guard for the whole case.
-fn standard_palette() -> app::V6PaletteGuard {
-    app::v6_palette(zvm::screen::Palette::Standard)
-}
-
 /// The premise, from the screen ops: the table is an explicit-colour full-screen
 /// `erase_window`, and the painted ground does NOT carry it — so the window page
 /// is the only record there is.
 #[test]
 fn the_table_is_a_full_screen_fill_that_survives_only_as_a_window_page() {
-    let _g = standard_palette();
     let Some(session) = scopa(false, true) else { return };
     let mut session = session;
     let ops = Engine::take_screen_trace(&mut session);
@@ -163,7 +148,6 @@ fn the_table_is_a_full_screen_fill_that_survives_only_as_a_window_page() {
 /// 3400 cells are baize, wanted more than 1700".
 #[test]
 fn declining_game_colours_keeps_the_felt_table() {
-    let _g = standard_palette();
     for (label, deal) in [("title", false), ("dealt", true)] {
         let Some(session) = scopa(deal, false) else { return };
         for mode in [app::config::V6RenderMode::Hybrid, app::config::V6RenderMode::Raster] {
@@ -205,7 +189,6 @@ fn declining_game_colours_keeps_the_felt_table() {
 /// `v6_shogun_gameplay::shogun_raster_status_band_floods_game_white`.
 #[test]
 fn the_score_screen_does_not_bridge_the_gap_between_two_runs() {
-    let _g = standard_palette();
     use app::engine::{BorderPref, GridWindow, PositionedWindow, PxText, ScreenModel, StatusModel, WinNode};
 
     // scopa's own white-on-blue panel pair and its baize page, as the game names
@@ -297,7 +280,6 @@ fn the_score_screen_does_not_bridge_the_gap_between_two_runs() {
 /// Skips vacuously when the gitignored story is absent.
 #[test]
 fn no_reachable_scopa_row_floods_a_gap_it_does_not_span() {
-    let _g = standard_palette();
     use app::engine::WinNode;
 
     for deal in [false, true] {
@@ -360,7 +342,6 @@ fn no_reachable_scopa_row_floods_a_gap_it_does_not_span() {
 /// all. Every pixel on scopa's screen is its own drawing.
 #[test]
 fn scopa_looks_the_same_either_way_because_all_of_it_is_drawing() {
-    let _g = standard_palette();
     for (label, deal) in [("title", false), ("dealt", true)] {
         let Some(session) = scopa(deal, false) else { return };
         for mode in [app::config::V6RenderMode::Hybrid, app::config::V6RenderMode::Raster] {

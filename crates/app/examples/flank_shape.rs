@@ -150,7 +150,6 @@ fn shape(path: &str, entry: Option<&str>, keys: &str, archive: Option<&str>, tap
             app::interpreter::InterpreterProfile::resolve(p, None, None, medium),
         ),
     };
-    zvm::screen::set_palette(profile_.palette());
     let dims = picts.all_pict_dims();
     // SQ-1022. This dropped the CELL and the named-archive link; both ride along
     // now, and neither is this file's business to remember.
@@ -162,6 +161,10 @@ fn shape(path: &str, entry: Option<&str>, keys: &str, archive: Option<&str>, tap
         profile_.default_colours(),
         true,
         app::native_font::FaceSet::none(),
+        // The machine's own colour table, a boot fact now rather than a global
+        // this file set before the constructor ran (SQ-1393).
+        profile_.palette(),
+        None,
     );
     let std_win = boot.screen_px;
     println!(

@@ -127,7 +127,6 @@ fn boot(s: &Specimen) -> Option<(GameSession, (u32, u32))> {
         }
     };
     let profile = InterpreterProfile::resolve(&path, None, None, medium);
-    app::v6_set_palette(profile.palette());
     let mut picts = PictSource::resolve(&path, None);
     let dims = picts.all_pict_dims();
     let release = u16::from_be_bytes([bytes[2], bytes[3]]);
@@ -147,6 +146,8 @@ fn boot(s: &Specimen) -> Option<(GameSession, (u32, u32))> {
         profile.default_colours(),
         true,
         app::native_font::FaceSet::none(),
+        profile.palette(),
+        None,
     );
     let std_win = boot.screen_px;
     let art_scale = boot.art_scale;
@@ -228,7 +229,6 @@ fn grounds(buf: &Buffer, rows: std::ops::Range<u16>, cols: std::ops::Range<u16>)
 /// painted cells against 54.
 #[test]
 fn the_locked_letterbox_margins_carry_the_same_ground_on_both_sides() {
-    let _g = app::v6_palette_at_boot();
     let mut seen = 0usize;
     let mut any_present = false;
     for spec in CORPUS {
@@ -343,7 +343,6 @@ fn the_locked_letterbox_margins_carry_the_same_ground_on_both_sides() {
 /// not have said so.
 #[test]
 fn the_locked_fit_centres_the_game_screen_to_within_one_cell() {
-    let _g = app::v6_palette_at_boot();
     let mut seen = 0usize;
     let mut any_present = false;
     for spec in CORPUS {

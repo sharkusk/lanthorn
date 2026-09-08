@@ -91,6 +91,8 @@ fn boot(fixture: &str, release: u16, serial: &str) -> Option<GameSession> {
             art_scale: picts.art_scale(),
             disks: Some(&app::system_fonts::UserDisks::new("")),
         }),
+        zvm::screen::Palette::Standard,
+        None,
     );
     let mut s = GameSession::new_for_machine(bytes, true, false, false, dims, None, None, &boot)
         .unwrap_or_else(|e| panic!("{fixture}: should boot without a ZError: {e:?}"));
@@ -159,7 +161,6 @@ fn guard_shape(s: &GameSession, tag: &str) {
 /// against `machine-screenshots/amiga-shogun-hintshown.png` glyph for glyph.
 #[test]
 fn amiga_clue_wraps_where_the_machine_wrapped() {
-    let _g = app::v6_palette_at_boot();
     let Some(s) = clue_frame("James Clavell's Shogun.adf", 295, "890321") else { return };
     guard_shape(&s, "amiga");
     let runs = win0_runs(&s);
@@ -207,7 +208,6 @@ fn amiga_clue_wraps_where_the_machine_wrapped() {
 /// its break point is the one that medium's face produces.
 #[test]
 fn mac_clue_wraps_where_the_machine_wrapped() {
-    let _g = app::v6_palette_at_boot();
     let Some(s) = clue_frame("Shogun.toast", 292, "890314") else { return };
     guard_shape(&s, "macintosh");
     let runs = win0_runs(&s);

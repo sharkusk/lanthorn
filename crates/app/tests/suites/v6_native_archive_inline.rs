@@ -130,21 +130,6 @@ fn story_floats(o: &Opening) -> Vec<(u32, u32, ImageAlign)> {
     o.floats.clone()
 }
 
-/// The palette this suite's colours resolve through, **stated rather than inherited**
-/// (SQ-0958).
-///
-/// Every story these cases drive is a bare file that names no machine — or, for the
-/// disk images, a machine whose table IS §8.3.1's — so the colour numbers behind
-/// every pixel asserted below resolve through the standard table. Until now nothing
-/// here said so, and the suite believed whatever the last suite in its group binary
-/// left behind. See [`app::v6_palette`], which is why this both names a palette and
-/// takes the shared lock; hold the guard for the whole case, because the two frames
-/// a repaint case compares are only comparable if the palette did not move between
-/// them.
-fn standard_palette() -> app::V6PaletteGuard {
-    app::v6_palette(zvm::screen::Palette::Standard)
-}
-
 /// The bug, stated as the user reported it: with native art the transcript gets
 /// NO drop-cap and NO room icons at all.
 ///
@@ -152,7 +137,6 @@ fn standard_palette() -> app::V6PaletteGuard {
 /// back empty, and `canvases` grows a window 0 the Blorb path never creates.
 #[test]
 fn a_native_archive_still_floats_the_dropcap_and_room_icons() {
-    let _g = standard_palette();
     for honor_game_colours in [true, false] {
         let Some(story) = story_bytes() else { return };
         let Some(picts) = native_pics() else { return };
@@ -196,7 +180,6 @@ fn a_native_archive_still_floats_the_dropcap_and_room_icons() {
 /// archive now agrees with it picture for picture.
 #[test]
 fn the_blorb_path_is_unchanged_and_the_two_archives_agree() {
-    let _g = standard_palette();
     for honor_game_colours in [true, false] {
         let Some(story) = story_bytes() else { return };
         let story_path = stories_dir().join("zork0-r393-s890714.z6");
@@ -240,7 +223,6 @@ fn the_blorb_path_is_unchanged_and_the_two_archives_agree() {
 /// is no longer the blank the transcript started with.
 #[test]
 fn the_native_dropcap_reaches_the_rendered_transcript() {
-    let _g = standard_palette();
     use ratatui::buffer::Buffer;
     use ratatui::layout::Rect;
 

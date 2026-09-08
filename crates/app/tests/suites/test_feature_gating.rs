@@ -8,7 +8,7 @@
 //! whenever `--tests` is, features or not, so one file left ungated silently drags the
 //! whole point back to where SQ-1242 started. The next author adding a source file has
 //! no reason to know this convention exists, which is exactly the shape
-//! `palette_lock_discipline` and `scratch_path_discipline` guard elsewhere — a
+//! `scratch_path_discipline` guards elsewhere — a
 //! hand-maintained invariant across ~150 `mod tests` blocks needs a source-level case,
 //! not a comment.
 //!

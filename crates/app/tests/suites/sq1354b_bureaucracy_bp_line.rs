@@ -114,10 +114,10 @@ fn boot(licensed: bool) -> Option<(GameSession, app::config::Config)> {
     let zversion = bytes.first().copied();
     assert_eq!(zversion, Some(4), "Bureaucracy is a Version 4 story");
 
-    // The palette this launch resolves colour numbers through — installed BEFORE
-    // the constructor runs the story, exactly as `startup.rs` does.
+    // The palette this launch resolves colour numbers through — carried into the
+    // `MachineBoot` below, so it is in force before the constructor runs the
+    // story, exactly as `startup.rs` settles it.
     let palette = cfg.machine_text_palette(zversion);
-    app::v6_set_palette(palette);
     if licensed {
         assert_eq!(
             palette,
@@ -145,6 +145,8 @@ fn boot(licensed: bool) -> Option<(GameSession, app::config::Config)> {
         cfg.machine_default_colours(),
         cfg.machine_colours_licensed(),
         FaceSet::none(),
+        palette,
+        None,
     );
     let s = GameSession::new_for_machine(
         bytes,
@@ -170,7 +172,11 @@ fn boot(licensed: bool) -> Option<(GameSession, app::config::Config)> {
 /// every launch whose flags license one.
 fn state_for(cfg: &app::config::Config) -> AppState {
     let mut state = AppState::default();
-    state.colors = ColorScheme::terminal_default();
+    // The table this launch resolves colour numbers through — the same call the
+    // boot makes, so the render half cannot measure through a different one than
+    // the story was told about (SQ-1393). Unlicensed, it is §8.3.1's, which is
+    // exactly what `the_licence_is_what_lights_the_line` is about.
+    state.colors = ColorScheme::terminal_default_in(cfg.machine_text_palette(Some(4)));
     state.config = cfg.clone();
     state.story_zversion = Some(4);
     state.period_look = app::period::resolve(
@@ -326,7 +332,6 @@ fn frame(licensed: bool) -> Option<Vec<(String, Vec<Color>)>> {
 /// ```
 #[test]
 fn the_bold_bracketed_line_is_white_and_the_plain_one_is_not() {
-    let _g = app::v6_palette(zvm::screen::Palette::IbmXzip);
     let Some(pane) = frame(true) else { return };
 
     let bold = inks_of(&pane, BOLD_LINE).unwrap_or_else(|| {
@@ -357,7 +362,6 @@ fn the_bold_bracketed_line_is_white_and_the_plain_one_is_not() {
 /// would look the same from the pane.
 #[test]
 fn the_game_asks_for_bold_on_that_line_and_the_bit_survives_the_capture() {
-    let _g = app::v6_palette(zvm::screen::Palette::IbmXzip);
     let Some((mut s, cfg)) = boot(true) else { return };
     let mut state = state_for(&cfg);
     let opening = fill_the_form(&mut s);
@@ -406,7 +410,6 @@ fn the_game_asks_for_bold_on_that_line_and_the_bit_survives_the_capture() {
 /// not brighten. Nothing here is broken; it is the licence that is missing.
 #[test]
 fn the_licence_is_what_lights_the_line() {
-    let _g = app::v6_palette(zvm::screen::Palette::Standard);
     assert!(
         !ibm_config(false).machine_colours_licensed(),
         "--interpreter 6 names a machine; --colour machine is what licenses it"
@@ -451,7 +454,6 @@ fn flat(pane: &[(String, Vec<Color>)]) -> String {
 ///   rule lights it exactly like the banner.
 #[test]
 fn the_banner_lights_and_the_room_name_heading_lights_with_it() {
-    let _g = app::v6_palette(zvm::screen::Palette::IbmXzip);
     let Some(pane) = frame(true) else { return };
 
     let banner = inks_of(&pane, "BUREAUCRACY")

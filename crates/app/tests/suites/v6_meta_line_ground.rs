@@ -123,7 +123,6 @@ fn frame_driven(file: &str, honor: bool, drive: bool) -> Option<Frame> {
         }
     };
     let profile = InterpreterProfile::resolve(&path, None, PictureOverride::Unset.flavour(), None);
-    app::v6_set_palette(profile.palette());
     let mut picts = PictSource::resolve_with_override(&path, PictureOverride::Unset, None);
     let picture_dims = picts.all_pict_dims();
     let honoured = honor && !picts.declines_game_colours(profile.default_colours());
@@ -137,6 +136,8 @@ fn frame_driven(file: &str, honor: bool, drive: bool) -> Option<Frame> {
         honoured.then(|| profile.default_colours()).flatten(),
         true,
         app::native_font::FaceSet::none(),
+        profile.palette(),
+        None,
     );
     let mut session = GameSession::new_for_machine(bytes, honoured, false, false, picture_dims, None, None, &boot)
     .expect("Zork Zero should load and boot without a ZError");
@@ -254,7 +255,6 @@ fn row_grounds(f: &Frame, needle: &str) -> Option<Vec<Color>> {
 /// look's page laid over the page the frame is actually being read on.
 #[test]
 fn a_meta_line_is_read_on_one_ground_and_it_is_the_frames_own() {
-    let _g = app::v6_palette_at_boot();
     let mut seen = 0usize;
     let mut any = false;
     for (file, drive) in [
@@ -302,7 +302,6 @@ fn a_meta_line_is_read_on_one_ground_and_it_is_the_frames_own() {
 /// applying period looks at all would satisfy the relation trivially.
 #[test]
 fn the_period_look_really_does_paint_a_page_of_its_own() {
-    let _g = app::v6_palette_at_boot();
     let mut seen = 0usize;
     let mut any = false;
     for (file, declares_its_own) in [(IBM_PC_STORY, true), (AMIGA_FLOPPY, true), (MAC_DISK, false)] {

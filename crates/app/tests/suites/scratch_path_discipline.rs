@@ -92,8 +92,7 @@ fn relative(root: &Path, path: &Path) -> String {
 ///
 /// Two reasons, and the second is this file. Comments hold `fn` and `#[test]` and
 /// braces that would derail the scans below — and this file's own prose has to be able
-/// to describe the forbidden spelling without becoming an instance of it, the way
-/// `palette_lock_discipline` cannot and warns about instead.
+/// to describe the forbidden spelling without becoming an instance of it.
 ///
 /// String literals are tracked on the way through, raw strings included, so a `//`
 /// inside one is left alone.

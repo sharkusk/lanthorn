@@ -196,21 +196,6 @@ fn render_state(mode: app::config::V6RenderMode, honor: bool) -> app::state::App
 
 // ── The symptom: the graveyard lands before Merlin does ──────────────────────
 
-/// The palette this suite's colours resolve through, **stated rather than inherited**
-/// (SQ-0958).
-///
-/// Every story these cases drive is a bare file that names no machine — or, for the
-/// disk images, a machine whose table IS §8.3.1's — so the colour numbers behind
-/// every pixel asserted below resolve through the standard table. Until now nothing
-/// here said so, and the suite believed whatever the last suite in its group binary
-/// left behind. See [`app::v6_palette`], which is why this both names a palette and
-/// takes the shared lock; hold the guard for the whole case, because the two frames
-/// a repaint case compares are only comparable if the palette did not move between
-/// them.
-fn standard_palette() -> app::V6PaletteGuard {
-    app::v6_palette(zvm::screen::Palette::Standard)
-}
-
 /// THE regression this exists for. On the graveyard→Merlin turn the screen the
 /// player is shown FIRST carries the graveyard alone: inside picture 3's declared
 /// rect it disagrees with the settled composite almost everywhere, because Merlin
@@ -223,7 +208,6 @@ fn standard_palette() -> app::V6PaletteGuard {
 /// present in the first frame and the difference inside Merlin's rect was 0%.
 #[test]
 fn the_graveyard_is_on_screen_before_merlin_is() {
-    let _g = standard_palette();
     for honor in [true, false] {
         let Some(session) = arthur_on_the_merlin_turn(honor) else { return };
         let first = win0_canvas(&session.screen_now()).expect("a plate is up on the paced frame");
@@ -256,7 +240,6 @@ fn the_graveyard_is_on_screen_before_merlin_is() {
 /// visibly longer than a small icon would — effectively what the hardware did.
 #[test]
 fn the_hold_is_proportional_to_the_painted_area() {
-    let _g = standard_palette();
     let Some(session) = arthur_on_the_merlin_turn(true) else { return };
     let hold = session.paced_picture_hold().expect("the graveyard frame is held");
     // 584×392 unit pixels at the notional fill rate → ~286 ms, and comfortably
@@ -274,7 +257,6 @@ fn the_hold_is_proportional_to_the_painted_area() {
 /// render test still passes untouched.
 #[test]
 fn the_sequence_settles_on_the_composite_it_started_from() {
-    let _g = standard_palette();
     for honor in [true, false] {
         let Some(mut session) = arthur_on_the_merlin_turn(honor) else { return };
         let settled = win0_canvas(&session.screen()).expect("a plate is up");
@@ -293,7 +275,6 @@ fn the_sequence_settles_on_the_composite_it_started_from() {
 /// and lands on exactly the pixels waiting it out would have produced.
 #[test]
 fn a_keypress_collapses_the_sequence_to_the_same_pixels() {
-    let _g = standard_palette();
     for honor in [true, false] {
         let Some(mut skipped) = arthur_on_the_merlin_turn(honor) else { return };
         let Some(mut waited) = arthur_on_the_merlin_turn(honor) else { return };
@@ -314,7 +295,6 @@ fn a_keypress_collapses_the_sequence_to_the_same_pixels() {
 /// sequence cannot eat each other's key: the event is settled AND dispatched.
 #[test]
 fn collapsing_an_idle_session_changes_nothing() {
-    let _g = standard_palette();
     let Some(mut session) = boot("arthur-r74-s890714.z6", true) else { return };
     play_out(&mut session);
     let before = session.screen();
@@ -336,7 +316,6 @@ fn collapsing_an_idle_session_changes_nothing() {
 /// and end up identical to the one today's single composite produces.
 #[test]
 fn hybrid_ships_the_paced_frame_and_then_the_settled_one() {
-    let _g = standard_palette();
     for honor in [true, false] {
         let Some(mut session) = arthur_on_the_merlin_turn(honor) else { return };
         let state = render_state(app::config::V6RenderMode::Hybrid, honor);
@@ -364,7 +343,6 @@ fn hybrid_ships_the_paced_frame_and_then_the_settled_one() {
 /// RASTER — the same two claims against the full-frame composite, in pixels.
 #[test]
 fn raster_ships_the_paced_frame_and_then_the_settled_one() {
-    let _g = standard_palette();
     for honor in [true, false] {
         let Some(mut session) = arthur_on_the_merlin_turn(honor) else { return };
         let state = render_state(app::config::V6RenderMode::Raster, honor);
@@ -415,7 +393,6 @@ fn raster_ships_the_paced_frame_and_then_the_settled_one() {
 /// the right reason.
 #[test]
 fn assembly_turns_do_not_pace_only_reveals_do() {
-    let _g = standard_palette();
     // Zork Zero's boot draws EIGHT pictures into one 45x40 rect at (277,1) — a
     // frame-by-frame animation, not tiling. It paces, and that is the rule working:
     // every frame after the first paints over the one before it.
@@ -451,7 +428,6 @@ fn assembly_turns_do_not_pace_only_reveals_do() {
 /// Snapshot the recipe, not the frame that happens to be up.
 #[test]
 fn a_save_mid_sequence_persists_the_settled_screen() {
-    let _g = standard_palette();
     let Some(mut session) = arthur_on_the_merlin_turn(true) else { return };
     let mid_pngs = session.pictures_png();
     let mid_list = session.display_list();
@@ -488,7 +464,6 @@ fn a_save_mid_sequence_persists_the_settled_screen() {
 /// The guard: by the time the screen first holds, both pillars are already painted.
 #[test]
 fn a_picture_beside_the_last_one_is_not_held_by_an_animation_sharing_its_turn() {
-    let _g = standard_palette();
     let Some(session) = boot("zork0-r393-s890714.z6", true) else { return };
     assert!(
         session.paced_picture_hold().is_some(),

@@ -198,6 +198,7 @@ pub(crate) fn poll_zvm_default_colours(session: &mut dyn Engine, state: &AppStat
         return;
     };
     let Some((bg, fg)) = app::colors::host_default_colour_pair(
+        gs.machine.palette(),
         state.colors.theme.get("transcript").style,
         state.term_default_colors.fg.map(|c| (c.0[0], c.0[1], c.0[2])),
         state.term_default_colors.bg.map(|c| (c.0[0], c.0[1], c.0[2])),

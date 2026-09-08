@@ -104,23 +104,8 @@ fn banner<'a>(chrome: &[&'a PositionedWindow]) -> Option<&'a PositionedWindow> {
         .find(|pw| matches!(&pw.node, WinNode::Grid(g) if g.bg.is_some()) && pw.h_px < 200)
 }
 
-/// The palette this suite's colour assertions resolve through, **stated rather than
-/// inherited** (SQ-0958).
-///
-/// Every story these cases drive is a bare file that names no machine, so its colour
-/// numbers resolve through ZMSD §8.3.1's own table — which is what every assertion
-/// below was written against. Until now nothing here said so, and the suite believed
-/// whatever the last suite in its group binary left behind: harmless only while every
-/// one of them happened to leave `Standard` there, and not at all once a sibling boots
-/// a machine press. See [`app::v6_palette`], which is why this both names a palette
-/// and takes the shared lock. Hold the guard for the whole case.
-fn standard_palette() -> app::V6PaletteGuard {
-    app::v6_palette(zvm::screen::Palette::Standard)
-}
-
 #[test]
 fn zork0_room_icons_rest_on_the_banner_windows_own_white_page() {
-    let _g = standard_palette();
     let Some(session) = zork0_in_play(true) else { return };
     let model = session.screen();
     let WinNode::Layered(items) = &model.root else { panic!("v6 publishes a layered composite") };
@@ -213,7 +198,6 @@ fn zork0_room_icons_rest_on_the_banner_windows_own_white_page() {
 
 #[test]
 fn zork0_hybrid_ring_ships_no_black_behind_the_room_icons() {
-    let _g = standard_palette();
     let Some(session) = zork0_in_play(true) else { return };
     let model = session.screen();
 
@@ -260,7 +244,6 @@ fn zork0_hybrid_ring_ships_no_black_behind_the_room_icons() {
 
 #[test]
 fn zork0_declined_game_colours_keep_the_hosts_backdrop() {
-    let _g = standard_palette();
     // `honor_game_colours = false`: the game's pair is declined at the engine
     // boundary (the model publishes no window background) AND at the render
     // gate, so the SQ-0704 pass is a no-op and the composite is byte-identical
@@ -326,7 +309,6 @@ fn zork0_declined_game_colours_keep_the_hosts_backdrop() {
 /// `zork0_hybrid_ring_ships_the_story_page_under_the_banner` below.
 #[test]
 fn zork0_icon_strip_is_fully_resolved_by_the_grid_entry_at_the_same_rect() {
-    let _g = standard_palette();
     let Some(session) = zork0_in_play(true) else { return };
     let model = session.screen();
     let WinNode::Layered(items) = &model.root else { panic!("v6 publishes a layered composite") };
@@ -407,7 +389,6 @@ fn zork0_icon_strip_is_fully_resolved_by_the_grid_entry_at_the_same_rect() {
 /// 0 of 101, 0 of 115 at the larger sizes (`Reset` — the reported symptom).
 #[test]
 fn zork0_hybrid_ring_ships_the_story_page_under_the_banner() {
-    let _g = standard_palette();
     let Some(session) = zork0_in_play(true) else { return };
     let model = session.screen();
     let state = render_state(app::config::V6RenderMode::Hybrid, true);

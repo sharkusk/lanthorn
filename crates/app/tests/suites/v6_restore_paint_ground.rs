@@ -192,21 +192,6 @@ fn restore_into(fresh: &mut GameSession, ac: &app::archive::ArchiveContents) {
     fresh.load_paint_ground(ac.ground.as_deref());
 }
 
-/// The palette this suite's colours resolve through, **stated rather than inherited**
-/// (SQ-0958).
-///
-/// Every story these cases drive is a bare file that names no machine — or, for the
-/// disk images, a machine whose table IS §8.3.1's — so the colour numbers behind
-/// every pixel asserted below resolve through the standard table. Until now nothing
-/// here said so, and the suite believed whatever the last suite in its group binary
-/// left behind. See [`app::v6_palette`], which is why this both names a palette and
-/// takes the shared lock; hold the guard for the whole case, because the two frames
-/// a repaint case compares are only comparable if the palette did not move between
-/// them.
-fn standard_palette() -> app::V6PaletteGuard {
-    app::v6_palette(zvm::screen::Palette::Standard)
-}
-
 /// The reported defect, on the real story.
 ///
 /// A fresh boot sits on the main menu with the menu's ground painted. Restoring a
@@ -225,7 +210,6 @@ fn standard_palette() -> app::V6PaletteGuard {
 /// ```
 #[test]
 fn a_resumed_game_does_not_stand_on_the_previous_screens_ground() {
-    let _g = standard_palette();
     let Some(menu) = boot() else { return };
     let menu_ground = ground(&menu);
     drop(menu);
@@ -286,7 +270,6 @@ fn a_resumed_game_does_not_stand_on_the_previous_screens_ground() {
 /// kitty-sized picker.
 #[test]
 fn the_restored_ground_is_the_same_at_any_pane_size_and_on_any_backend() {
-    let _g = standard_palette();
     let Some(mut saved) = scopa_at_the_players_turn() else { return };
     let ac = round_trip(&mut saved);
 
@@ -351,7 +334,6 @@ fn the_restored_ground_is_the_same_at_any_pane_size_and_on_any_backend() {
 /// screen preceded the restore.
 #[test]
 fn an_archive_without_a_ground_resets_the_one_on_screen() {
-    let _g = standard_palette();
     let Some(mut fresh) = scopa_at_the_players_turn() else { return };
     assert!(Engine::paint_surface(&fresh).is_some(), "premise: this session has a ground");
 
@@ -382,7 +364,6 @@ fn an_archive_without_a_ground_resets_the_one_on_screen() {
 /// ```
 #[test]
 fn shogun_restores_its_backdrop_onto_a_boot_that_never_painted_one() {
-    let _g = standard_palette();
     let path = fixture_path("shogun-r322-s890706.z6");
     let Ok(bytes) = std::fs::read(&path) else {
         eprintln!("SKIP: gitignored story missing at {}", path.display());

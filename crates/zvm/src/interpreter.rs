@@ -1509,10 +1509,10 @@ pub fn period_look_for(number: u8, zversion: Option<u8>) -> Option<PeriodLook> {
 /// [`crate::screen::ega_true_colour`], which carries the tables and the evidence.
 ///
 /// Asked at boot, before the story runs and before the host resolves a single
-/// colour, because the palette is process-wide state that every consumer must agree
-/// on (`crate::screen::ACTIVE_PALETTE`'s own docs). A version-dependent palette that
-/// were asked LATER would mean one colour number looking like two colours on one
-/// screen, which is precisely what that global exists to prevent.
+/// colour, and then carried on the machine ([`crate::cpu::exec::Machine::palette`],
+/// SQ-1393). A version-dependent palette that were asked LATER, or asked twice on
+/// two paths, would mean one colour number looking like two colours on one screen
+/// — which is why the machine holds ONE answer that every consumer reads.
 pub fn palette_for(number: u8, zversion: Option<u8>) -> Palette {
     match machine(number).map(|m| m.palette) {
         Some(Palette::IbmXzip) if zversion == Some(6) => Palette::IbmYzip,

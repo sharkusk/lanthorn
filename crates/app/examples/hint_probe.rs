@@ -95,7 +95,6 @@ fn main() {
     let mut picts = app::graphics::PictSource::resolve(p, entry);
     let (profile, source) =
         app::interpreter::InterpreterProfile::resolve_with_source(p, None, None, medium);
-    let _g = app::v6_palette(profile.palette());
     let dims = picts.all_pict_dims();
     let face = app::native_font::resolve(&app::native_font::FaceRequest {
         story_path: p,
@@ -113,6 +112,8 @@ fn main() {
         profile.default_colours(),
         true,
         face,
+        zvm::screen::Palette::Standard,
+        None,
     );
     let art_scale = boot.art_scale;
     let text_face = boot.text_face();

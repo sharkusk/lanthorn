@@ -124,26 +124,10 @@ fn write_image(name: &str, image: &[u8]) -> std::path::PathBuf {
 
 // ── Synthetic disk: the whole loading path, no fixture ────────────────────────
 
-/// The palette this suite's colours resolve through, **stated rather than inherited**
-/// (SQ-0958).
-///
-/// Every story these cases drive is a bare file that names no machine — or, for the
-/// disk images, a machine whose table IS §8.3.1's — so the colour numbers behind
-/// every pixel asserted below resolve through the standard table. Until now nothing
-/// here said so, and the suite believed whatever the last suite in its group binary
-/// left behind. See [`app::v6_palette`], which is why this both names a palette and
-/// takes the shared lock; hold the guard for the whole case, because the two frames
-/// a repaint case compares are only comparable if the palette did not move between
-/// them.
-fn standard_palette() -> app::V6PaletteGuard {
-    app::v6_palette(zvm::screen::Palette::Standard)
-}
-
 /// The headline: pointing lanthorn at a disk image loads the game and its art
 /// with no extraction step and nothing to configure.
 #[test]
 fn a_disk_image_yields_both_the_story_and_its_artwork() {
-    let _g = standard_palette();
     let story = fake_story();
     let image = build_adf(&[
         ("Story.data", &story),
@@ -185,7 +169,6 @@ fn a_disk_image_yields_both_the_story_and_its_artwork() {
 /// floppy — must fail by saying so, not by feeding a system library to the VM.
 #[test]
 fn a_boot_disk_fails_with_a_useful_message() {
-    let _g = standard_palette();
     let image = build_adf(&[
         ("startup-sequence", b"LoadWB\n"),
         ("icon.library", &[0x00, 0x00, 0x03, 0xf3, 0x11, 0x22]),
@@ -203,7 +186,6 @@ fn a_boot_disk_fails_with_a_useful_message() {
 /// simply falls back to the Blorb tier, which finds nothing here.
 #[test]
 fn a_disk_without_artwork_still_loads_the_story() {
-    let _g = standard_palette();
     let image = build_adf(&[("Story.data", &fake_story())]);
     let path = write_image("nopics", &image);
 
@@ -235,7 +217,6 @@ fn zork_zero_disk1() -> Option<std::path::PathBuf> {
 /// disk. This is the acceptance criterion for the whole quest.
 #[test]
 fn zork_zero_boots_and_draws_from_its_release_floppy() {
-    let _g = standard_palette();
     let Some(path) = zork_zero_disk1() else { return };
 
     let loaded = app::hints::load_story(&path).expect("Story.data mounts");
@@ -276,7 +257,6 @@ fn zork_zero_boots_and_draws_from_its_release_floppy() {
 /// Blorb sitting somewhere beside it — is the source being drawn from.
 #[test]
 fn the_disk_carries_the_full_size_frames_the_blorb_crops() {
-    let _g = standard_palette();
     let Some(path) = zork_zero_disk1() else { return };
     let mut picts = PictSource::resolve(&path, None);
     for id in [5u32, 6, 7] {

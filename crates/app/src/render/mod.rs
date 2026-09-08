@@ -106,8 +106,8 @@ pub(crate) fn apply_text_style(base: Style, bits: u8) -> Style {
 /// `rgb15_to_888`'s `#ADADAD`) is left alone. So is every colour when `honor` is
 /// off, which is the player saying "keep my terminal's colours" and takes the
 /// machine's screen with it exactly as the period look does.
-pub(crate) fn ibm_bold_fg(fg: Color, bits: u8, honor: bool) -> Color {
-    if bits & 0x02 == 0 || !honor || !zvm::screen::palette().bold_lights_the_intensity_bit() {
+pub(crate) fn ibm_bold_fg(fg: Color, bits: u8, honor: bool, scheme: &ColorScheme) -> Color {
+    if bits & 0x02 == 0 || !honor || !scheme.machine_palette.bold_lights_the_intensity_bit() {
         return fg;
     }
     let Color::Rgb(r, g, b) = fg else { return fg };
@@ -191,7 +191,7 @@ pub(crate) fn resolve_zcolour(c: ZColour, scheme: &ColorScheme) -> Color {
         ZColour::Default => Color::Reset,
         ZColour::Standard(n @ 2..=9) => scheme.palette[(n - 2) as usize],
         ZColour::Standard(n @ 10..=12) => {
-            let (r, g, b) = grey_rgb(n);
+            let (r, g, b) = grey_rgb(scheme.machine_palette, n);
             Color::Rgb(r, g, b)
         }
         // The rest of the §8.3.1 table is not a paintable colour: 0 = "current",
