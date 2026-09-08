@@ -5,6 +5,8 @@
 //! Reference: ScottFree 1.14 `scott.c` (cspiegel/scottfree-glk mirror) —
 //! `MatchUpItem`, `GetInput`, `PerformActions`, `PerformLine` case 69.
 
+use std::path::PathBuf;
+
 use scott::{Action, Condition, Database, Item, LoadError, Room, Vm};
 use scott::database::{CARRIED, LAMP_EMPTY_FLAG, LIGHT_SOURCE};
 
@@ -338,4 +340,364 @@ fn out_of_range_room_exit_is_rejected_at_load() {
 
     let negative = BAD_EXIT.replacen("9 0 0 0 0 0", "-5 0 0 0 0 0", 1);
     assert_eq!(Database::parse(&negative), Err(LoadError::BadExit(-5)));
+}
+
+// ── SQ-1412: ScottFree format-required behaviours ────────────────────────────
+//
+// Reference: ScottFree 1.14 (ifarchive ScottFree.tar.gz, `ScottCurses.c`),
+// built locally against a small stdout curses stub to diff transcripts.
+// Every fixture below is purpose-built and minimal — just enough database to
+// exercise one rule in isolation, not a real game.
+
+// Item 1: GetInput's single-letter direction/INVENTORY expansion
+// (ScottCurses.c:613-625) must happen BEFORE vocabulary lookup and
+// word-length truncation.
+#[test]
+fn single_letter_directions_and_inventory_expand_before_vocab_lookup() {
+    const DAT: &str = r#"
+0 0 1 2 2 6 1 0 3 -1 0 0
+0 0 0 0 0 0 0 0
+300 0 0 0 0 0 9900 0
+"" ""
+"" "NORTH"
+"INVENTORY" ""
+0 0 0 0 0 0 "*limbo"
+2 0 0 0 0 0 "*start room"
+0 0 0 0 0 0 "*north room"
+""
+"" 0
+"#;
+    let db = Database::parse(DAT).expect("parses");
+    let mut vm = Vm::new(db);
+    vm.take_output();
+
+    vm.supply_line("n");
+    vm.step();
+    assert_eq!(vm.current_room(), 2, "'n' expands to NORTH and moves via the exit table");
+
+    vm.supply_line("i");
+    vm.step();
+    let out = vm.take_output();
+    assert!(
+        out.contains("carrying nothing"),
+        "'i' expands to INVENTORY, matches the truncated verb, and fires opcode 66: {out:?}"
+    );
+
+    // ScottFree's rule fires only when `*noun==0`: a single-letter word WITH
+    // a second word must not expand.
+    vm.supply_line("n xyzzy");
+    vm.step();
+    assert!(
+        vm.take_output().contains("You use word(s) I don't know!"),
+        "a single-letter word with a second word is not expanded"
+    );
+}
+
+// Item 2: opcode 65 (SCORE), once every treasure is stored, prints "Well
+// done." and falls through to opcode 63's ending (ScottCurses.c:899-923,
+// `goto doneit`).
+#[test]
+fn op65_win_prints_well_done_and_ends_the_game() {
+    const DAT: &str = r#"
+0 1 1 2 1 6 1 1 5 -1 0 1
+0 0 0 0 0 0 0 0
+300 0 0 0 0 0 9750 0
+"" ""
+"" ""
+"SCORE" ""
+0 0 0 0 0 0 "*limbo"
+0 0 0 0 0 0 "*vault"
+""
+"" 0
+"*gold coin" 1
+"#;
+    let db = Database::parse(DAT).expect("parses");
+    let mut vm = Vm::new(db);
+    vm.take_output();
+
+    vm.supply_line("score");
+    vm.step();
+    let out = vm.take_output();
+    assert!(out.contains("Well done."), "win prints Well done.: {out:?}");
+    assert!(
+        out.contains("The game is now over."),
+        "win falls through to opcode 63's ending line: {out:?}"
+    );
+    assert!(vm.has_quit(), "SCORE with every treasure deposited ends the game");
+}
+
+// Item 3: opcode 61's plain (non `-y`) wording is "I am dead." and does not
+// itself end the game; opcode 63 prints "The game is now over." and does
+// (ScottCurses.c:873-891).
+#[test]
+fn op61_prints_i_am_dead_and_op63_prints_game_over_and_quits() {
+    const DAT: &str = r#"
+0 0 2 3 1 6 1 0 4 -1 0 0
+0 0 0 0 0 0 0 0
+300 0 0 0 0 0 9150 0
+450 0 0 0 0 0 9450 0
+"" ""
+"" ""
+"DIE" ""
+"STOP" ""
+0 0 0 0 0 0 "*limbo"
+0 0 0 0 0 0 "*start"
+""
+"" 0
+"#;
+    let db = Database::parse(DAT).expect("parses");
+    let mut vm = Vm::new(db);
+    vm.take_output();
+
+    vm.supply_line("die");
+    vm.step();
+    let out = vm.take_output();
+    assert_eq!(out, "I am dead.\n", "op61's plain wording: {out:?}");
+    assert!(!vm.has_quit(), "op61 alone does not end the game");
+
+    vm.supply_line("stop");
+    vm.step();
+    let out = vm.take_output();
+    assert_eq!(out, "The game is now over.\n", "op63's wording: {out:?}");
+    assert!(vm.has_quit(), "op63 ends the game");
+}
+
+// Item 4: PerformActions (ScottCurses.c:1091-1133) — the dark-move warning
+// prints whether or not the move succeeds; only a move with NO exit while
+// dark ends the game.
+#[test]
+fn death_in_the_dark_matches_scottfree_wording_and_ends_the_game() {
+    const DAT: &str = r#"
+0 0 0 1 2 6 1 0 3 -1 0 0
+100 0 0 0 0 0 8400 0
+"" ""
+"" "NORTH"
+0 0 0 0 0 0 "*limbo"
+2 0 0 0 0 0 "*start room"
+0 0 0 0 0 0 "*dead end"
+""
+"" 0
+"#;
+    let db = Database::parse(DAT).expect("parses");
+    let mut vm = Vm::new(db);
+    vm.take_output(); // the opening occurrence already set the dark flag
+    assert!(vm.is_dark(), "the opening occurrence set the dark flag with no light source");
+
+    // Room 1 has a north exit: the warning prints, but the move still happens.
+    vm.supply_line("north");
+    vm.step();
+    let out = vm.take_output();
+    assert_eq!(
+        out, "Dangerous to move in the dark!\n",
+        "the warning prints even on a successful move: {out:?}"
+    );
+    assert_eq!(vm.current_room(), 2, "the move still happened");
+    assert!(!vm.has_quit());
+
+    // Room 2 is a dead end: no exit while dark is death.
+    vm.supply_line("north");
+    vm.step();
+    let out = vm.take_output();
+    assert_eq!(
+        out, "Dangerous to move in the dark!\nI fell down and broke my neck.\n",
+        "no exit while dark ends the game: {out:?}"
+    );
+    assert!(vm.has_quit(), "death in the dark ends the game");
+}
+
+// Item 5: the lamp's main-loop countdown (ScottCurses.c:1416-1450) — the
+// "growing dim" warning fires on the `<25 && %5==0` turns, and the run-out
+// warning fires on BOTH turns the live fuel crosses below 1 (0, then -1)
+// before the `!= -1` guard stops the tick for good.
+#[test]
+fn lamp_countdown_dims_once_and_runs_out_exactly_twice() {
+    const DAT: &str = r#"
+0 9 0 2 1 6 1 0 4 6 0 0
+300 0 0 0 0 0 0 0
+"" ""
+"" ""
+"WAIT" ""
+0 0 0 0 0 0 "*limbo"
+0 0 0 0 0 0 "*start room"
+""
+"" 0
+"" 0
+"" 0
+"" 0
+"" 0
+"" 0
+"" 0
+"" 0
+"" 0
+"a brass lamp" -1
+"#;
+    let db = Database::parse(DAT).expect("parses");
+    let mut vm = Vm::new(db);
+    vm.take_output();
+
+    let mut dim_count = 0;
+    let mut out_count = 0;
+    for _ in 0..10 {
+        vm.supply_line("wait");
+        vm.step();
+        let out = vm.take_output();
+        dim_count += out.matches("Your light is growing dim.").count();
+        out_count += out.matches("Your light has run out.").count();
+    }
+    assert_eq!(dim_count, 1, "the dim warning fires exactly once (fuel 5)");
+    assert_eq!(out_count, 2, "the run-out warning fires exactly twice (fuel 0, then -1)");
+    assert!(vm.flag(LAMP_EMPTY_FLAG), "the empty flag is set once the lamp runs out");
+}
+
+// Item 6a: ReadString's escaped-quote rule (`""` -> a literal `"`), CR
+// stripping, and non-ASCII -> `?` — needed now that `Database::parse` reads
+// raw bytes rather than a text file already decoded by the host's own
+// locale (SQ-1412).
+#[test]
+fn escaped_quote_cr_and_non_ascii_bytes_in_a_quoted_string() {
+    let mut src: Vec<u8> = Vec::new();
+    src.extend_from_slice(b"0 0 0 0 0 6 0 0 3 -1 1 0\n");
+    src.extend_from_slice(b"0 0 0 0 0 0 0 0\n");
+    src.extend_from_slice(b"\"\" \"\"\n");
+    src.extend_from_slice(b"0 0 0 0 0 0 \"*limbo\"\n");
+    src.extend_from_slice(b"\"\"\n"); // message 0 (empty)
+    src.push(b'"');
+    src.extend_from_slice(b"Say \"\"hi\"\" here\r\nthen ");
+    src.push(0xE9); // a non-ASCII byte
+    src.extend_from_slice(b" end");
+    src.push(b'"');
+    src.push(b'\n');
+    src.extend_from_slice(b"\"\" 0\n"); // item 0
+
+    let db = Database::parse(&src).expect("parses raw bytes with escapes/CR/non-ASCII");
+    assert_eq!(
+        db.messages[1],
+        "Say \"hi\" here\nthen ? end",
+        "doubled-quote escape, CR strip, non-ASCII -> '?'"
+    );
+}
+
+// Item 6b: the live case (Adventureland's own intro). Real commercial
+// fixture — `stories/` is gitignored, so this skips vacuously when absent
+// (worktrees lack it unless symlinked; see CLAUDE.md).
+#[test]
+fn adventureland_intro_prints_real_quotes_from_backtick_pairs() {
+    let path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../stories/adv01.dat");
+    if !path.exists() {
+        eprintln!("SKIP: {} absent", path.display());
+        return;
+    }
+    let bytes = std::fs::read(&path).unwrap();
+    let db = Database::parse(&bytes).expect("adv01.dat parses from raw bytes");
+    let found = db.rooms.iter().any(|r| r.desc.contains("\"ADVENTURELAND\""))
+        || db.messages.iter().any(|m| m.contains("\"ADVENTURELAND\""));
+    assert!(found, "the backtick pair around ADVENTURELAND became real double quotes");
+}
+
+// Item 7: ScottFree stores CARRIED as 255 (`unsigned char`, `Scott.h`); this
+// crate's live item_loc uses -1. Without normalising the item's ORIGINAL
+// start_loc at load, condition 17 ("item still at its initial location")
+// compares a live -1 against a start_loc still literally 255 the moment the
+// item is carried again after being dropped, and wrongly reports "not at
+// its initial location".
+#[test]
+fn item_start_location_255_normalizes_to_carried_and_survives_a_drop_take_cycle() {
+    const DAT: &str = r#"
+0 0 1 18 0 6 0 0 3 -1 2 0
+0 0 0 0 0 0 0 0
+1650 17 0 0 0 0 300 0
+"" ""
+"" ""
+"" ""
+"" ""
+"" ""
+"" ""
+"" ""
+"" "WIDGET"
+"" ""
+"" ""
+"GET" ""
+"CHECK" ""
+"" ""
+"" ""
+"" ""
+"" ""
+"" ""
+"" ""
+"DROP" ""
+0 0 0 0 0 0 "*start room"
+""
+""
+"AT START"
+"a widget/WID/" 255
+"#;
+    let db = Database::parse(DAT).expect("parses");
+    assert_eq!(db.items[0].start_loc, -1, "255 normalizes to CARRIED (-1) at load");
+
+    let mut vm = Vm::new(db);
+    vm.take_output();
+
+    vm.supply_line("check");
+    vm.step();
+    assert!(
+        vm.take_output().contains("AT START"),
+        "starts carried, at its initial location"
+    );
+
+    vm.supply_line("drop widget");
+    vm.step();
+    vm.take_output();
+    vm.supply_line("check");
+    vm.step();
+    assert!(
+        !vm.take_output().contains("AT START"),
+        "dropped: no longer at its initial (carried) location"
+    );
+
+    vm.supply_line("get widget");
+    vm.step();
+    vm.take_output();
+    vm.supply_line("check");
+    vm.step();
+    assert!(
+        vm.take_output().contains("AT START"),
+        "carried again: back at its initial location — fails without the 255->-1 normalisation"
+    );
+}
+
+// Item 8: auto-noun extraction (ScottCurses.c:319-327) starts at the FIRST
+// `/`, not the last, tolerates a missing close, and honours `//`/`/*` as
+// "no autoget word" markers that leave the display text untouched.
+#[test]
+fn auto_noun_extraction_matches_scottfree_first_slash_and_marker_conventions() {
+    const DAT: &str = r#"
+0 3 0 0 0 6 0 0 3 -1 0 0
+0 0 0 0 0 0 0 0
+"" ""
+0 0 0 0 0 0 "*start room"
+""
+"Luger/LUGER/GUN/" 0
+"candle//" 0
+"candle/*" 0
+"torch/TORCH" 0
+"#;
+    let db = Database::parse(DAT).expect("parses");
+
+    // FIRST slash pair wins: display "Luger", bind "LUGER" — not the old
+    // rfind-based display "Luger/LUGER" / bind "GUN" (secret.dat item 33).
+    assert_eq!(db.items[0].text, "Luger");
+    assert_eq!(db.items[0].auto_noun.as_deref(), Some("LUGER"));
+
+    // "//" means "no autoget word": ScottFree skips the split entirely, so
+    // the display text keeps its literal trailing "//".
+    assert_eq!(db.items[1].text, "candle//");
+    assert_eq!(db.items[1].auto_noun, None);
+
+    // Same for "/*".
+    assert_eq!(db.items[2].text, "candle/*");
+    assert_eq!(db.items[2].auto_noun, None);
+
+    // A missing closing slash is tolerated: the noun runs to the end.
+    assert_eq!(db.items[3].text, "torch");
+    assert_eq!(db.items[3].auto_noun.as_deref(), Some("TORCH"));
 }

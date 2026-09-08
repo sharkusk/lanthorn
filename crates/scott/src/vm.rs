@@ -593,10 +593,16 @@ impl Vm {
                 102..=u16::MAX => self.print_message(n as usize - 50),
                 52 => {
                     let item = p.next().unwrap_or(0) as usize;
-                    if self.carried_count() < self.db.max_carry {
-                        self.set_item_loc(item, CARRIED);
-                    } else {
+                    // ScottFree refuses only at EXACT capacity
+                    // (`CountCarried()==GameHeader.MaxCarry`, ScottCurses.c:831),
+                    // not `>=` — the two only disagree when something has
+                    // already pushed the count past the limit some other way,
+                    // but porting the exact comparison keeps this opcode a
+                    // faithful mirror of the source.
+                    if self.carried_count() == self.db.max_carry {
                         self.out.push_str("You are carrying too much.\n");
+                    } else {
+                        self.set_item_loc(item, CARRIED);
                     }
                 }
                 53 => {
@@ -628,7 +634,11 @@ impl Vm {
                     self.flag_set(flag, false);
                 }
                 61 => {
-                    self.out.push_str("You have died.\n");
+                    // ScottFree's `-y`/YOUARE option prints "You are dead.";
+                    // the plain default (ScottCurses.c:874-876) prints "I am
+                    // dead." — the `-y` variant is SQ-1413's (no option-flag
+                    // support here yet).
+                    self.out.push_str("I am dead.\n");
                     self.flag_set(DARK_FLAG, false);
                     if let Some(last) = self.db.rooms.len().checked_sub(1) {
                         self.player = last;
@@ -641,7 +651,13 @@ impl Vm {
                         self.set_item_loc(item, room as i32);
                     }
                 }
-                63 => self.quit = true,
+                63 => {
+                    // ScottFree's `doneit` label (ScottCurses.c:890-891),
+                    // reached both directly by opcode 63 and via opcode 65's
+                    // win check below.
+                    self.out.push_str("The game is now over.\n");
+                    self.quit = true;
+                }
                 64 => { /* LOOK: the host redraws the room panel every frame */ }
                 65 => self.print_score(),
                 66 => self.print_inventory(),
@@ -681,9 +697,12 @@ impl Vm {
                     self.current_counter = (self.current_counter - 1).max(-1);
                 }
                 78 => {
+                    // ScottFree's OutputNumber (ScottCurses.c:429-434, used
+                    // here via case 78 at :1012) is `sprintf(buf,"%d ",a)`: a
+                    // trailing space, no newline.
                     let v = self.current_counter;
                     self.out.push_str(&v.to_string());
-                    self.out.push('\n');
+                    self.out.push(' ');
                 }
                 79 => {
                     self.current_counter = p.next().unwrap_or(0) as i32;
@@ -705,6 +724,9 @@ impl Vm {
                     self.current_counter = (self.current_counter - v).max(-1);
                 }
                 84 => {
+                    // ScottFree echoes NounText exactly as the player typed
+                    // it (ScottCurses.c:1048-1049), not uppercased — see
+                    // `last_noun`'s assignment above.
                     let noun = self.last_noun.clone();
                     self.out.push_str(&noun);
                 }
@@ -740,8 +762,30 @@ impl Vm {
             self.last_blocked.clear();
         }
         let mut w = cmd.split_whitespace();
-        let w1 = w.next();
+        let w1_raw = w.next();
         let w2 = w.next();
+        // ScottFree's GetInput (ScottCurses.c:613-625) expands a LONE
+        // single-character command word — no second word typed — to the full
+        // direction/INVENTORY verb BEFORE any vocabulary lookup or
+        // word-length truncation: `n/e/s/w/u/d` to NORTH/EAST/SOUTH/WEST/
+        // UP/DOWN, and `i` to INVENTORY (the Brian Howarth extension the
+        // comment there names explicitly). Only fires when `*noun==0 &&
+        // strlen(verb)==1`, so "n" alone expands but "n x" does not.
+        let w1: Option<&str> = match (w1_raw, w2) {
+            (Some(s), None) if s.chars().count() == 1 => {
+                Some(match s.chars().next().unwrap().to_ascii_lowercase() {
+                    'n' => "NORTH",
+                    'e' => "EAST",
+                    's' => "SOUTH",
+                    'w' => "WEST",
+                    'u' => "UP",
+                    'd' => "DOWN",
+                    'i' => "INVENTORY",
+                    _ => s,
+                })
+            }
+            _ => w1_raw,
+        };
         // ScottFree's GetInput tries the FIRST word against the noun list
         // before anything else: a direction noun (1..=6) is "the Scott Adams
         // system['s] hack to avoid typing 'go'" — it becomes GO <dir> and the
@@ -771,8 +815,14 @@ impl Vm {
             return;
         };
         // ScottFree keeps NounText = the second word only (empty for a
-        // one-word command), for the print-noun opcodes and the GET/DROP hack.
-        self.last_noun = w2.unwrap_or("").to_uppercase();
+        // one-word command), for the print-noun opcodes and the GET/DROP
+        // hack. Kept in its ORIGINAL case, not uppercased: `GetInput`
+        // (ScottCurses.c:650) `strcpy(NounText,noun)`s the word exactly as
+        // typed, and opcodes 84/85 (`Output(NounText)`) echo it back that
+        // way — vocabulary lookup (`match_noun`/`match_up_item`'s `trunc`)
+        // already uppercases its own comparison internally, so nothing here
+        // depends on this being pre-uppercased.
+        self.last_noun = w2.unwrap_or("").to_string();
 
         // ScottFree resolves GO + a compass direction from the room's exit table
         // BEFORE consulting the action table, so a catch-all "GO <anything>"
@@ -781,8 +831,14 @@ impl Vm {
         let mut handled = false;
         if vb == 1 && (1..=6).contains(&no) {
             let dir = no as usize - 1;
-            if self.is_dark() {
-                self.out.push_str("It is dangerous to move in the dark!\n");
+            // ScottFree's PerformActions (ScottCurses.c:1091-1133) recomputes
+            // darkness for the move itself — `d` starts as the dark flag, then
+            // is cleared if the light source is carried or in the room, which
+            // is exactly `is_dark()` — and the warning prints whether or not
+            // the move then succeeds.
+            let dark = self.is_dark();
+            if dark {
+                self.out.push_str("Dangerous to move in the dark!\n");
             }
             let dest = self
                 .db
@@ -796,6 +852,13 @@ impl Vm {
             // nonexistent room (SQ-0629).
             if dest != 0 && dest < self.db.rooms.len() {
                 self.player = dest;
+            } else if dark {
+                // No exit while dark: ScottFree ends the game right here
+                // (ScottCurses.c:1122-1127) — no "The game is now over."
+                // line, that belongs to opcode 63's `doneit` label, not this
+                // direct death.
+                self.out.push_str("I fell down and broke my neck.\n");
+                self.quit = true;
             } else {
                 self.out.push_str("I can't go in that direction.\n");
             }
@@ -856,7 +919,10 @@ impl Vm {
             if vb == 1 {
                 self.out.push_str("I need a direction.\n");
             } else if vb == 10 {
-                if self.last_noun == "ALL" {
+                // ScottFree compares NounText case-insensitively (`strcasecmp`,
+                // ScottCurses.c:1184/1251) — `last_noun` above is kept in its
+                // original typed case, so the comparison here must be too.
+                if self.last_noun.eq_ignore_ascii_case("ALL") {
                     self.get_all();
                 } else if no == -1 {
                     // ScottFree: GET with an unknown noun is "What ?", never a grab.
@@ -874,7 +940,10 @@ impl Vm {
                     }
                 }
             } else if vb == 18 {
-                if self.last_noun == "ALL" {
+                // ScottFree compares NounText case-insensitively (`strcasecmp`,
+                // ScottCurses.c:1184/1251) — `last_noun` above is kept in its
+                // original typed case, so the comparison here must be too.
+                if self.last_noun.eq_ignore_ascii_case("ALL") {
                     self.drop_all();
                 } else if no == -1 {
                     self.out.push_str("What?\n");
@@ -892,11 +961,29 @@ impl Vm {
             }
         }
 
-        if self.db.light_time != -1 && self.item_in_play(LIGHT_SOURCE) && self.lamp > 0 {
+        // ScottFree's main loop (ScottCurses.c:1416-1450), ported field for
+        // field: the LIVE fuel value gates ticking — `self.lamp != -1`, not
+        // the database's original `light_time` — so an infinite lamp
+        // (lamp starts at -1) never ticks, and a finite one stops ticking
+        // once IT reaches -1, not once it reaches 0. That is also what makes
+        // the run-out message fire exactly twice: fuel 1 decrements to 0
+        // (message fires, `lamp<1`), the NEXT turn 0 decrements to -1
+        // (message fires again), and the turn after that the `!= -1` guard
+        // stops the tick before it would fire a third time. Both messages are
+        // shown only while the lamp is carried or in the current room, but
+        // the tick itself (and the empty flag / PREHISTORIC_LAMP-less
+        // destruction ScottFree gates on `Location!=DESTROYED`, which
+        // `item_in_play` already checks) happens regardless of location.
+        if self.lamp != -1 && self.item_in_play(LIGHT_SOURCE) {
             self.lamp -= 1;
-            if self.lamp == 0 {
+            let lit_here = self.item_present(LIGHT_SOURCE);
+            if self.lamp < 1 {
                 self.flag_set(LAMP_EMPTY_FLAG, true);
-                self.out.push_str("Your light has run out.\n");
+                if lit_here {
+                    self.out.push_str("Your light has run out.\n");
+                }
+            } else if self.lamp < 25 && self.lamp % 5 == 0 && lit_here {
+                self.out.push_str("Your light is growing dim.\n");
             }
         }
 
@@ -1158,6 +1245,21 @@ impl Vm {
         self.out.push_str(&format!(
             "You have {in_treasure_room} out of {total} treasures.\n"
         ));
+        // ScottFree's case 65 (ScottCurses.c:899-923), after printing the
+        // rating: when every treasure is stored, print "Well done." and fall
+        // through to opcode 63's `doneit` label ("The game is now over." then
+        // quit) — `goto doneit`, not a separate ending. `total > 0` guards
+        // the case ScottFree's own rating percentage would divide by zero on
+        // (`(n*100)/GameHeader.Treasures`, never reached with Treasures==0 in
+        // practice); we don't compute that percentage at all, but the same
+        // guard keeps a `num_treasures == 0` database from satisfying
+        // `in_treasure_room == total` trivially and auto-winning on the very
+        // first SCORE call.
+        if total > 0 && in_treasure_room == total {
+            self.out.push_str("Well done.\n");
+            self.out.push_str("The game is now over.\n");
+            self.quit = true;
+        }
     }
 
     // --- test-only helpers (or make fields pub(crate) and set directly) ---
@@ -2091,5 +2193,91 @@ mod tests {
         vm.seed_ever_fired(&seed);
         assert!(vm.ever_fired().contains(&3));
         assert!(vm.ever_fired().contains(&7));
+    }
+
+    // --- SQ-1412: ScottFree parity for opcodes 52, 78, 84/85 -----------------
+
+    // ScottFree's case 52 refuses ONLY when carried count EQUALS MaxCarry
+    // (`CountCarried()==GameHeader.MaxCarry`, ScottCurses.c:831), not `>=`.
+    // The two comparisons only disagree once a database is already OVER
+    // capacity — unreachable by ordinary play, but reachable by hand-building
+    // a `Database`, which is exactly what pins the exact source comparison
+    // rather than an equivalent-at-the-boundary `>=` guard.
+    #[test]
+    fn cmd_get_op52_refuses_only_at_exact_capacity_not_over() {
+        let items = vec![
+            Item { text: "a".into(), treasure: false, auto_noun: None, start_loc: CARRIED },
+            Item { text: "b".into(), treasure: false, auto_noun: None, start_loc: CARRIED },
+            Item { text: "c".into(), treasure: false, auto_noun: None, start_loc: 1 },
+        ];
+        let db = Database {
+            max_carry: 1, // already over capacity: 2 carried > 1
+            start_room: 1,
+            num_treasures: 0,
+            word_length: 3,
+            light_time: -1,
+            treasure_room: 0,
+            actions: vec![],
+            verbs: vec![String::new()],
+            nouns: vec![String::new()],
+            rooms: rooms4(),
+            messages: vec![String::new()],
+            items,
+            adventure_number: 0,
+        };
+        let mut vm = Vm::new(db);
+        vm.run_commands(&[52, 0, 0, 0], &[2]);
+        assert_eq!(
+            vm.item_loc_at(2),
+            CARRIED,
+            "GET succeeds when OVER (not AT) capacity — exact `==`, not `>=`"
+        );
+        assert!(!vm.take_output().contains("too much"));
+    }
+
+    // ScottFree's OutputNumber (ScottCurses.c:429-434), used by case 78
+    // (:1012): `sprintf(buf,"%d ",a)` — a trailing space, never a newline.
+    #[test]
+    fn cmd_tally_op78_prints_a_trailing_space_not_a_newline() {
+        let mut vm = vm_with(one_item(), rooms4(), 0);
+        vm.run_commands(&[79, 0, 0, 0], &[42]); // current = 42
+        vm.take_output();
+        vm.run_commands(&[78, 0, 0, 0], &[]);
+        assert_eq!(vm.take_output(), "42 ");
+    }
+
+    // ScottFree echoes NounText exactly as the player typed it
+    // (`Output(NounText)`, ScottCurses.c:1048-1052) — case 84/85 must not
+    // uppercase it, matching `last_noun`'s own assignment in `run_turn`.
+    #[test]
+    fn cmd_print_noun_op84_85_echo_the_typed_case_not_uppercased() {
+        let mut verbs = vec![String::new(); 3];
+        verbs[2] = "LOOK".into();
+        let db = Database {
+            max_carry: 6,
+            start_room: 1,
+            num_treasures: 0,
+            word_length: 4,
+            light_time: -1,
+            treasure_room: 0,
+            actions: vec![],
+            verbs,
+            nouns: vec![String::new(); 1],
+            rooms: rooms4(),
+            messages: vec![String::new()],
+            items: one_item(),
+            adventure_number: 0,
+        };
+        let mut vm = Vm::new(db);
+        vm.take_output();
+        vm.supply_line("look Widget"); // mixed-case second word
+        vm.step();
+        vm.take_output();
+
+        vm.run_commands(&[84, 0, 0, 0], &[]);
+        assert_eq!(vm.take_output(), "Widget", "op84 preserves the typed case, no newline");
+
+        vm.run_commands(&[85, 0, 0, 0], &[]);
+        assert_eq!(vm.take_output(), "Widget\n", "op85 preserves the typed case, with a newline");
     }
 }

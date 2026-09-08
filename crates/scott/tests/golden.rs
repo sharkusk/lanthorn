@@ -20,6 +20,13 @@
 //!     set/stash/change/stash-back round trip restores the original value (7),
 //!     which the old select-an-index counter model would report as 3.
 //!
+//! SQ-1412 (ScottFree parity) touched this transcript twice: opcode 78 (TALLY)
+//! prints the counter as `"N "` — a trailing space, no newline
+//! (`OutputNumber`, ScottCurses.c:429-434) — so each TALLY line now runs
+//! straight into the next `> cmd` with no line break between them; and opcode
+//! 63 (the win action's quit) prints ScottFree's `"The game is now over."`
+//! (`doneit`, ScottCurses.c:890-891) before ending the game.
+//!
 //! A second test exercises `Vm::snapshot`/`Vm::restore`.
 
 use scott::{Database, Vm};
@@ -94,15 +101,12 @@ A hidden door grinds open.\n\
 Dust settles in the chamber.\n\
 > count\n\
 > tally\n\
-7\n\
+7 > stash\n\
+> tally\n\
+0 > mark\n\
 > stash\n\
 > tally\n\
-0\n\
-> mark\n\
-> stash\n\
-> tally\n\
-7\n\
-> take lamp\n\
+7 > take lamp\n\
 OK.\n\
 > down\n\
 You hear water dripping somewhere in the darkness.\n\
@@ -121,7 +125,8 @@ You have 0 out of 1 treasures.\n\
 > drop idol\n\
 OK.\n\
 > score\n\
-You set the idol down. *** You have won! ***\n";
+You set the idol down. *** You have won! ***\n\
+The game is now over.\n";
     assert_eq!(transcript, expected);
     assert!(vm.has_quit(), "win action should have executed opcode 63 (quit)");
 

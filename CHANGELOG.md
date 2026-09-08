@@ -42,6 +42,15 @@ Absolute URLs or no link.
 - **A Save State now keeps the colours of a game's status line cell by cell;**
   games that colour their status line lost those colours across a Save State
   before. (SQ-1401)
+- **Scott Adams games now match the classic ScottFree interpreter more
+  closely.** Typing a single letter — `n`, `e`, `s`, `w`, `u`, `d`, or `i` —
+  now works as the full direction or `INVENTORY` command. A game ends
+  properly, with "Well done.", once every treasure is stored. Walking into
+  the dark with no way to go now kills you, just as it always warned it
+  would. The lamp now warns "Your light is growing dim." as it runs low, and
+  its "run out" warning shows twice before going dark for good, matching the
+  original. Quoted text now prints with real quotation marks instead of
+  backticks. (SQ-1412)
 
 ---
 

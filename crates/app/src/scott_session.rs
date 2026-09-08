@@ -73,9 +73,12 @@ pub struct ScottSession {
 }
 
 impl ScottSession {
-    /// Parse a ScottFree `.dat` (UTF-8 text) and start a session. `pict_blorb` is
-    /// the game's own Blorb when it is a `.blb` graphics container (carrying the
-    /// room `Pict` images); `None` for a plain text `.dat`.
+    /// Parse a ScottFree `.dat` and start a session. Any encoding loads —
+    /// `Database::parse` takes raw bytes (SQ-1412), not just UTF-8 text — so
+    /// a Latin-1 database is not rejected before it ever reaches the parser.
+    /// `pict_blorb` is the game's own Blorb when it is a `.blb` graphics
+    /// container (carrying the room `Pict` images); `None` for a plain
+    /// `.dat`.
     pub fn new(bytes: Vec<u8>, pict_blorb: Option<blorb::Blorb>) -> Result<ScottSession, String> {
         ScottSession::new_with_trace(bytes, pict_blorb, false, None)
     }
@@ -96,9 +99,10 @@ impl ScottSession {
         trace: bool,
         random_seed: Option<u32>,
     ) -> Result<ScottSession, String> {
-        let src = std::str::from_utf8(&bytes)
-            .map_err(|_| "Scott .dat is not valid text".to_string())?;
-        let db = scott::Database::parse(src).map_err(|e| format!("invalid Scott .dat: {e:?}"))?;
+        // `Database::parse` takes raw bytes (SQ-1412), so a Latin-1 or
+        // otherwise non-UTF-8 `.dat` loads here instead of being rejected by
+        // a UTF-8 check before it ever reached the parser.
+        let db = scott::Database::parse(&bytes).map_err(|e| format!("invalid Scott .dat: {e:?}"))?;
         let mut vm =
             scott::Vm::new_seeded(db, trace, random_seed.unwrap_or(scott::Vm::DEFAULT_RNG_SEED));
         let mut intro = vm.take_output();

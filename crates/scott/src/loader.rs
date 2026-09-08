@@ -8,7 +8,14 @@
 //! Every count and index in the header is bounds-checked before it sizes an
 //! allocation or indexes a table (SQ-0629): a hostile or truncated file
 //! returns a [`LoadError`] rather than exhausting memory or panicking.
+//!
+//! [`Database::parse`] takes any `AsRef<[u8]>` (a `&str` still works
+//! unchanged) and lexes over raw bytes rather than `char`s, so a Latin-1 or
+//! otherwise non-UTF-8 `.dat` loads instead of failing a UTF-8 check before
+//! it ever reaches the parser (SQ-1412). Bytes outside ASCII inside a quoted
+//! string become `?`.
 
+use crate::database::CARRIED;
 use crate::*;
 
 #[derive(Debug, Clone, PartialEq)]
@@ -25,78 +32,139 @@ pub enum LoadError {
     BadExit(i32),
 }
 
-/// Tokenizer over a `.dat` source: whitespace-separated ints and `"`-delimited strings.
-struct Lexer {
-    chars: Vec<char>,
+/// Tokenizer over a `.dat` source: whitespace-separated ints and `"`-delimited
+/// strings, over raw bytes (not `char`s) so non-UTF-8 input never panics or
+/// fails up front — see the module doc.
+struct Lexer<'a> {
+    bytes: &'a [u8],
     pos: usize,
 }
 
-impl Lexer {
-    fn new(src: &str) -> Self {
-        Lexer {
-            chars: src.chars().collect(),
-            pos: 0,
-        }
+impl<'a> Lexer<'a> {
+    fn new(src: &'a [u8]) -> Self {
+        Lexer { bytes: src, pos: 0 }
     }
 
     fn skip_ws(&mut self) {
-        while self.pos < self.chars.len() && self.chars[self.pos].is_whitespace() {
+        while self.pos < self.bytes.len() && self.bytes[self.pos].is_ascii_whitespace() {
             self.pos += 1;
         }
     }
 
     fn next_int(&mut self) -> Result<i32, LoadError> {
         self.skip_ws();
-        if self.pos >= self.chars.len() {
+        if self.pos >= self.bytes.len() {
             return Err(LoadError::Truncated);
         }
         let start = self.pos;
-        while self.pos < self.chars.len() && !self.chars[self.pos].is_whitespace() {
+        while self.pos < self.bytes.len() && !self.bytes[self.pos].is_ascii_whitespace() {
             self.pos += 1;
         }
-        let word: String = self.chars[start..self.pos].iter().collect();
+        // Header/action/exit tokens are always plain ASCII digits (optionally
+        // signed), so a lossy-to-ASCII read is exact here; a non-numeric token
+        // (including one containing non-ASCII bytes) fails to parse below.
+        let word = String::from_utf8_lossy(&self.bytes[start..self.pos]).into_owned();
         word.parse::<i32>().map_err(|_| LoadError::BadInt(word))
     }
 
+    /// Reads one `"`-delimited string, porting ScottFree 1.14's `ReadString`
+    /// (`ScottCurses.c:189-224`) byte rule-for-rule: a backtick (`` ` ``, 0x60)
+    /// becomes `"`, and a doubled `""` inside the string is an escaped literal
+    /// `"` rather than the closing quote (checked BEFORE the backtick
+    /// substitution, matching the source's order — `ReadString` tests `c=='"'`
+    /// first and only then rewrites a backtick). Two additions beyond
+    /// `ReadString`, needed because this lexer now reads raw bytes rather than
+    /// a text file already decoded by the host's own locale: a `\r` byte is
+    /// dropped (CRLF-authored `.dat`s read the same as LF ones) and a byte
+    /// outside ASCII becomes `?` (so an arbitrary, e.g. Latin-1, `.dat` is
+    /// always valid UTF-8 once lexed, never a panic or a `LoadError`).
     fn next_str(&mut self) -> Result<String, LoadError> {
         self.skip_ws();
-        if self.pos >= self.chars.len() {
+        if self.pos >= self.bytes.len() {
             return Err(LoadError::Truncated);
         }
-        if self.chars[self.pos] != '"' {
+        if self.bytes[self.pos] != b'"' {
             return Err(LoadError::Unterminated);
         }
         self.pos += 1;
-        let start = self.pos;
-        while self.pos < self.chars.len() && self.chars[self.pos] != '"' {
+        let mut s = String::new();
+        loop {
+            if self.pos >= self.bytes.len() {
+                return Err(LoadError::Unterminated);
+            }
+            let c = self.bytes[self.pos];
             self.pos += 1;
+            if c == b'\r' {
+                continue;
+            }
+            if c == b'"' {
+                if self.bytes.get(self.pos) == Some(&b'"') {
+                    self.pos += 1; // doubled quote: escaped literal '"'
+                } else {
+                    break; // the closing quote
+                }
+                s.push('"');
+                continue;
+            }
+            if c == 0x60 {
+                s.push('"'); // backtick -> '"' (ReadString, ScottCurses.c ~215)
+            } else if c.is_ascii() {
+                s.push(c as char);
+            } else {
+                s.push('?');
+            }
         }
-        if self.pos >= self.chars.len() {
-            return Err(LoadError::Unterminated);
-        }
-        let s: String = self.chars[start..self.pos].iter().collect();
-        self.pos += 1;
         Ok(s)
     }
 }
 
-/// Extracts a trailing `/NOUN/` marker from an item description, uppercasing it and
-/// stripping the marker from `text`. Returns `None` if there is no trailing marker.
+/// Extracts an item's auto-get/drop noun, porting ScottFree 1.14's item-load
+/// loop verbatim (`ScottCurses.c:319-327`):
+/// ```c
+/// ip->AutoGet=strchr(ip->Text,'/');
+/// /* Some games use // to mean no auto get/drop word! */
+/// if(ip->AutoGet && strcmp(ip->AutoGet,"//") && strcmp(ip->AutoGet,"/*"))
+/// {
+///     char *t;
+///     *ip->AutoGet++=0;
+///     t=strchr(ip->AutoGet,'/');
+///     if(t!=NULL)
+///         *t=0;
+/// }
+/// ```
+/// `AutoGet` starts at the FIRST `/`, not the last (the previous port here
+/// used `rfind` and mis-split `"Luger/LUGER/GUN/"` as display "Luger/LUGER" /
+/// bind "GUN" instead of ScottFree's display "Luger" / bind "LUGER" —
+/// `secret.dat` item 33, SQ-1412). `strcmp(AutoGet, "//")` / `"/*"` compares
+/// the WHOLE remainder of the string from that first slash to end-of-string,
+/// not a prefix — so `"//"`/`"/*"` only means "no autoget word" when the text
+/// ends there exactly; when they match, ScottFree skips the split entirely
+/// and `Text` (and the display) keeps its literal trailing `//`/`/*`. Once a
+/// real marker is found, `AutoGet` runs from just after the first `/` to the
+/// next `/` if there is one — tolerating a missing close (`t==NULL`), which
+/// leaves the noun running to the end of the original text.
 fn extract_auto_noun(text: &mut String) -> Option<String> {
-    if !text.ends_with('/') {
-        return None;
+    let first = text.find('/')?;
+    let tail = &text[first..];
+    if tail == "//" || tail == "/*" {
+        return None; // no autoget word; Text (and the display) is untouched
     }
-    let last_idx = text.rfind('/')?;
-    let before = &text[..last_idx];
-    let start_idx = before.rfind('/')?;
-    let noun = text[start_idx + 1..last_idx].to_uppercase();
-    text.truncate(start_idx);
+    let after_first = &text[first + 1..];
+    let noun = match after_first.find('/') {
+        Some(second) => after_first[..second].to_uppercase(),
+        None => after_first.to_uppercase(), // missing close: runs to the end
+    };
+    text.truncate(first);
     Some(noun)
 }
 
 impl Database {
-    pub fn parse(src: &str) -> Result<Database, LoadError> {
-        let mut lex = Lexer::new(src);
+    /// Parse a ScottFree `.dat` file. Accepts anything byte-like — `&str`,
+    /// `&[u8]`, `&Vec<u8>` — so a caller holding raw file bytes (a Latin-1 or
+    /// otherwise non-UTF-8 `.dat`, which a `&str` conversion would reject
+    /// outright) can hand them over directly; see the module doc.
+    pub fn parse<S: AsRef<[u8]> + ?Sized>(src: &S) -> Result<Database, LoadError> {
+        let mut lex = Lexer::new(src.as_ref());
 
         let _unknown = lex.next_int()?;
         let num_items = lex.next_int()?;
@@ -200,7 +268,17 @@ impl Database {
         let mut items = Vec::with_capacity(num_items as usize + 1);
         for _ in 0..=num_items {
             let mut text = lex.next_str()?;
-            let start_loc = lex.next_int()?;
+            let mut start_loc = lex.next_int()?;
+            // ScottFree stores an item's location (and start location) as an
+            // `unsigned char` with `CARRIED` defined as 255 (`Scott.h`); this
+            // crate represents "carried" as -1 (`database::CARRIED`)
+            // throughout `Vm`. Normalise at load so conditions 17/18 ("item
+            // still/not in its initial room") still hold after a
+            // programmatic take moves an item to -1 — comparing a live -1
+            // against a start_loc left at 255 would never match (SQ-1412).
+            if start_loc == 255 {
+                start_loc = CARRIED;
+            }
             let treasure = text.starts_with('*');
             let auto_noun = extract_auto_noun(&mut text);
             items.push(Item {
@@ -251,7 +329,7 @@ impl Database {
 
 /// Cheap content sniff for engine detection: parse the 12 header ints and sanity-check.
 pub fn looks_like_scott(src: &str) -> bool {
-    let mut lex = Lexer::new(src);
+    let mut lex = Lexer::new(src.as_bytes());
     let mut ints = [0i32; 12];
     for slot in ints.iter_mut() {
         match lex.next_int() {
