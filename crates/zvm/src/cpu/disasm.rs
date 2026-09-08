@@ -104,6 +104,7 @@ fn fmt_branch(b: &Branch, next_pc: u32) -> String {
 /// `dec_chk`/`pull`): rendered as the variable it names (`sp`/`localN`/`gNN`)
 /// rather than a bare constant.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
+#[non_exhaustive]
 pub enum OpRole { Plain, Object, MemAddr, Routine, StringAddr, JumpOffset, VarRef }
 
 /// Semantic role of operand `index` for this opcode (version-aware). `Plain`

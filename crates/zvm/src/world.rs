@@ -585,6 +585,7 @@ impl WorldModel {
 /// question this type can be asked — the caller simply does not call
 /// [`WorldModel::declared_exit`] for one.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum Compass {
     N = 0,
     S = 1,
@@ -647,6 +648,7 @@ impl Compass {
 /// counterpart means; the two extra ones carry a fact `DeclaredExit` has
 /// nowhere to put.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum ExitDetail {
     /// An unconditional passage to a fixed room: Inform's `*_to` naming a room
     /// directly, or ZIL's UEXIT.
@@ -718,6 +720,7 @@ impl ExitDetail {
 /// from the story's compiled data, independent of anything ever having been
 /// walked. See [`WorldModel::declared_exit`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum DeclaredExit {
     /// The exit is a fixed room: the property named it directly, or named a
     /// two-way "door" object whose own `door_to` names it.

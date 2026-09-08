@@ -1,6 +1,7 @@
 // Z-machine interpreter error types.
 
 #[derive(Debug, PartialEq)]
+#[non_exhaustive]
 pub enum ZError {
     /// The story file is too short to contain a valid header (< 64 bytes).
     NotAStoryFile,

@@ -705,6 +705,7 @@ pub fn property_numbers(mem: &Memory, obj: u16) -> Vec<u8> {
 
 /// Stable per-object identity for the automapper.
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
 pub struct ObjectSnapshot {
     pub number: u16,
     pub parent: u16,

@@ -49,6 +49,7 @@ fn run_with_input(story: Vec<u8>, inputs: &[&str]) -> String {
             StepResult::RestoreRequest => {
                 machine.complete_restore_failure();
             }
+            _ => break,
         }
     }
 

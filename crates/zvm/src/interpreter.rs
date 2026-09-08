@@ -349,6 +349,7 @@ pub const APPLE_DEFAULT_FOREGROUND: u8 = 9;
 /// `machine-screenshots/`, cell sizes included, so the proportions are the
 /// machine's rather than a guess at them.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum CursorShape {
     /// One pixel wide and a line tall, in the gap AFTER the last glyph rather than
     /// over a cell — the Macintosh insertion caret.
@@ -409,6 +410,7 @@ pub enum CursorShape {
 /// pair** — which is the finding that shaped [`PeriodLook`]. A field carrying only
 /// a page and an ink could express none of the last three.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum StatusBand {
     /// The body pair swapped, across the full width. The Apple II and the
     /// Commodore 128.
@@ -543,6 +545,7 @@ pub struct PeriodLook {
 /// Version, and one stored value cannot be true for both. The stored pair was not
 /// merely stale; it was answering a question that has two answers.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum MachineLook {
     /// Every value read off a capture in `machine-screenshots/`, which is what a
     /// machine whose screen is simply a fact states. Eight of the nine rows.
@@ -604,6 +607,7 @@ const APPLE_PERIOD_LOOK: PeriodLook = PeriodLook {
 /// <https://inform-fiction.org/zmachine/standards/z1point1/sect08.html>. So neither
 /// answer is a compliance question; the only question is what the machine DID.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum V6Emphasis {
     /// A rule along the bottom of the cell, the text's own colour, abutting the
     /// glyphs with no gap.
@@ -630,6 +634,7 @@ pub enum V6Emphasis {
 /// What a Version 6 window does with text that reaches its right margin — see
 /// [`V6WrapRegime`], which is where the machines disagree about how to choose.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum V6TextFlow {
     /// Break after the last WORD that fits, and start the next line at the left
     /// margin (ZMSD §8.8.3.1.2.2).
@@ -679,6 +684,7 @@ pub enum V6TextFlow {
 /// the Amiga after `from`, the Macintosh after `you`, which is its proportional
 /// Geneva in a wider box.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum V6WrapRegime {
     /// §8.8.3.1.1 and §8.8.3.1.2.2 as written: attribute 0 decides whether text
     /// breaks at all, attribute 3 whether it breaks by word.
@@ -747,6 +753,7 @@ impl V6WrapRegime {
 /// FIXED face's blit, which is how topaz 8's eight rows fill the Amiga's
 /// sixteen-row cell (SQ-1053).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum V6FaceSpace {
     /// The face is drawn in the ARCHIVE's picture space, so one face pixel is one
     /// art pixel and scales with the artwork.
@@ -828,6 +835,7 @@ impl V6FaceSpace {
 /// name. A row that states `None` reads a supplied disk and finds nothing, which
 /// is the same outcome as having no disk.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum V6SystemFace {
     /// A Macintosh font FAMILY number. A `FONT` resource id is
     /// `family * `[`MAC_FONT_FAMILY_STRIDE`]` + point size`, so a family names a
@@ -889,6 +897,7 @@ pub const MAC_GENEVA_FONT_FAMILY: i16 = 3;
 /// cannot source is declined (`None` / `false`) rather than guessed — see the
 /// module docs.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
 pub struct MachineProfile {
     /// The §11.1.3 number this machine writes into header `$1E`.
     pub number: u8,

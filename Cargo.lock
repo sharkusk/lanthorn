@@ -1542,6 +1542,7 @@ name = "lanthorn-zvm"
 version = "0.5.3"
 dependencies = [
  "lanthorn-grammar-model",
+ "lanthorn-zvm",
 ]
 
 [[package]]

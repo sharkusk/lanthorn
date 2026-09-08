@@ -65,7 +65,7 @@ fn scopa_paints_its_cards_as_erase_window_fills() {
             StepResult::Fault => panic!("scopa faulted while painting: {:?}", m.take_fault_trace()),
             _ => {}
         }
-        fills = m.pending_erase_fills.len();
+        fills = m.pending_erase_fills().len();
         if fills > 200 {
             break; // plenty: the mechanism is proven well before the whole deck is dealt
         }
@@ -80,12 +80,12 @@ fn scopa_paints_its_cards_as_erase_window_fills() {
     // Degenerate fills are expected and legitimate: erasing a window that was
     // never given a box (or a collapsed window 1) covers no pixels, and the host
     // simply skips it. What matters is that the PAINTING ones are real.
-    let painted: Vec<_> = m.pending_erase_fills.iter().filter(|f| f.w > 0 && f.h > 0).collect();
+    let painted: Vec<_> = m.pending_erase_fills().iter().filter(|f| f.w > 0 && f.h > 0).collect();
     assert!(
         painted.len() > 50,
         "most fills must cover real pixels: only {} of {} did",
         painted.len(),
-        m.pending_erase_fills.len()
+        m.pending_erase_fills().len()
     );
 
     // They land at MANY different positions — one window is moved between every

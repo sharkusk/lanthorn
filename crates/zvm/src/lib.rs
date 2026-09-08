@@ -1,6 +1,7 @@
 pub mod cpu;
 pub mod dictionary;
 pub mod error;
+#[cfg(feature = "fixtures")]
 pub mod fixtures;
 pub mod grammar;
 pub mod header;

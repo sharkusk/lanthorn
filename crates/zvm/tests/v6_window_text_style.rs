@@ -60,7 +60,7 @@ fn run(version: u8, prog: &[u8]) -> Machine {
     buf[PROG..PROG + prog.len()].copy_from_slice(prog);
     let mem = Memory::new(buf).expect("the hand-rolled header is structurally valid");
     let mut m = Machine::new(mem);
-    m.state.pc = PROG as u32;
+    m.state.set_pc(PROG as u32);
     for _ in 0..64 {
         if matches!(m.step(), StepResult::Quit) {
             return m;
