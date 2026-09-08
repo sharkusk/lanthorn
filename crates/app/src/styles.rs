@@ -59,6 +59,21 @@ pub struct PerGameConfig {
     pub panel: Option<crate::state::SidePanel>,
     /// Whether the return probe runs for this story (SQ-0785).
     pub return_probe: Option<bool>,
+    /// ScottFree's `-y`/`YOUARE` option for this Scott Adams story (SQ-1413):
+    /// second-person replies in place of ScottFree's plain first-person
+    /// default. Meaningless for a Z-machine/Glulx story; `scott_session.rs`
+    /// is the only reader.
+    pub scott_you_are: Option<bool>,
+    /// ScottFree's `-s`/`SCOTTLIGHT` option (SQ-1413): the original Adams
+    /// lamp countdown wording in place of ScottFree's own embellished one.
+    pub scott_light: Option<bool>,
+    /// ScottFree's `-t`/`TRS80_STYLE` option (SQ-1413): only the flag —
+    /// lanthorn's own room-block presentation is unaffected (see
+    /// `scott::Presentation`'s doc for why the two are separate).
+    pub scott_trs80_style: Option<bool>,
+    /// ScottFree's `-p`/`PREHISTORIC_LAMP` option (SQ-1413): the light
+    /// source is destroyed the instant its fuel reaches zero.
+    pub scott_prehistoric_lamp: Option<bool>,
 }
 
 impl PerGameConfig {
@@ -84,6 +99,10 @@ impl PerGameConfig {
         "pictures",
         "v6_render",
         "interpreter_number",
+        "scott_you_are",
+        "scott_light",
+        "scott_trs80_style",
+        "scott_prehistoric_lamp",
     ];
 
     /// Read the sidecar. Every key absent when the file is missing or unparseable
@@ -114,6 +133,10 @@ impl PerGameConfig {
             v6_render: s("v6_render"),
             panel: s("panel").as_deref().and_then(crate::state::SidePanel::from_key),
             return_probe: b("return_probe"),
+            scott_you_are: b("scott_you_are"),
+            scott_light: b("scott_light"),
+            scott_trs80_style: b("scott_trs80_style"),
+            scott_prehistoric_lamp: b("scott_prehistoric_lamp"),
         }
     }
 
@@ -146,6 +169,10 @@ impl PerGameConfig {
         if let Some(v) = self.interpreter_number {
             body.push_str(&format!("interpreter_number = {v}\n"));
         }
+        put_bool(&mut body, "scott_you_are", self.scott_you_are);
+        put_bool(&mut body, "scott_light", self.scott_light);
+        put_bool(&mut body, "scott_trs80_style", self.scott_trs80_style);
+        put_bool(&mut body, "scott_prehistoric_lamp", self.scott_prehistoric_lamp);
         if body.is_empty() {
             return match std::fs::remove_file(&path) {
                 Ok(()) => Ok(()),
@@ -248,6 +275,35 @@ pub fn read_per_game_panel(game_dir: &Path) -> Option<crate::state::SidePanel> {
     PerGameConfig::read(game_dir).panel
 }
 
+/// Read the per-game ScottFree `-y`/`YOUARE` override (SQ-1413). `None` = no
+/// override — `scott_session.rs` falls back to `scott::Options::default`
+/// (off, matching ScottFree's own plain build). Meaningless for a
+/// Z-machine/Glulx story.
+pub fn read_per_game_scott_you_are(game_dir: &Path) -> Option<bool> {
+    PerGameConfig::read(game_dir).scott_you_are
+}
+
+/// Read the per-game ScottFree `-s`/`SCOTTLIGHT` override (SQ-1413). `None` =
+/// no override — `scott_session.rs` falls back to `scott::Options::default`
+/// (off, matching ScottFree's own plain build).
+pub fn read_per_game_scott_light(game_dir: &Path) -> Option<bool> {
+    PerGameConfig::read(game_dir).scott_light
+}
+
+/// Read the per-game ScottFree `-t`/`TRS80_STYLE` override (SQ-1413). `None` =
+/// no override (off by default) — see `PerGameConfig::scott_trs80_style`'s
+/// doc: this sets `scott::Options::trs80_style` only, never lanthorn's own
+/// room-block presentation.
+pub fn read_per_game_scott_trs80_style(game_dir: &Path) -> Option<bool> {
+    PerGameConfig::read(game_dir).scott_trs80_style
+}
+
+/// Read the per-game ScottFree `-p`/`PREHISTORIC_LAMP` override (SQ-1413).
+/// `None` = no override (off by default).
+pub fn read_per_game_scott_prehistoric_lamp(game_dir: &Path) -> Option<bool> {
+    PerGameConfig::read(game_dir).scott_prehistoric_lamp
+}
+
 /// Read the per-game `return_probe` override (SQ-0785). `None` = no override, so
 /// the global `return_probe` decides.
 ///
@@ -263,6 +319,30 @@ pub fn read_per_game_return_probe(game_dir: &Path) -> Option<bool> {
 /// sibling key (SQ-0785).
 pub fn write_per_game_return_probe(game_dir: &Path, value: Option<bool>) -> std::io::Result<()> {
     edit(game_dir, |c| c.return_probe = value)
+}
+
+/// Persist (or clear) the per-game ScottFree `-y`/`YOUARE` override
+/// (SQ-1413), preserving every sibling key.
+pub fn write_per_game_scott_you_are(game_dir: &Path, value: Option<bool>) -> std::io::Result<()> {
+    edit(game_dir, |c| c.scott_you_are = value)
+}
+
+/// Persist (or clear) the per-game ScottFree `-s`/`SCOTTLIGHT` override
+/// (SQ-1413), preserving every sibling key.
+pub fn write_per_game_scott_light(game_dir: &Path, value: Option<bool>) -> std::io::Result<()> {
+    edit(game_dir, |c| c.scott_light = value)
+}
+
+/// Persist (or clear) the per-game ScottFree `-t`/`TRS80_STYLE` override
+/// (SQ-1413), preserving every sibling key.
+pub fn write_per_game_scott_trs80_style(game_dir: &Path, value: Option<bool>) -> std::io::Result<()> {
+    edit(game_dir, |c| c.scott_trs80_style = value)
+}
+
+/// Persist (or clear) the per-game ScottFree `-p`/`PREHISTORIC_LAMP` override
+/// (SQ-1413), preserving every sibling key.
+pub fn write_per_game_scott_prehistoric_lamp(game_dir: &Path, value: Option<bool>) -> std::io::Result<()> {
+    edit(game_dir, |c| c.scott_prehistoric_lamp = value)
 }
 
 /// Persist (or clear) the per-game `honor_game_colours` override, preserving
@@ -406,6 +486,10 @@ mod tests {
             v6_render: Some("raster".into()),
             panel: Some(crate::state::SidePanel::Command),
             return_probe: Some(true),
+            scott_you_are: Some(true),
+            scott_light: Some(true),
+            scott_trs80_style: Some(true),
+            scott_prehistoric_lamp: Some(true),
         };
         every.write(&dir).unwrap();
         let text = std::fs::read_to_string(per_game_config_path(&dir)).unwrap();
@@ -619,6 +703,40 @@ mod tests {
         write_per_game_show_map(&dir, None).unwrap();
         write_per_game_pictures(&dir, None).unwrap();
         write_per_game_interpreter_number(&dir, None).unwrap();
+        assert!(!per_game_config_path(&dir).exists());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// SQ-1413: the four ScottFree option keys roundtrip, coexist with an
+    /// unrelated sibling, and clear back to "inherit `scott::Options::default`".
+    #[test]
+    fn the_scott_option_keys_roundtrip_and_coexist() {
+        let dir = tmp("scott-options");
+        assert_eq!(read_per_game_scott_you_are(&dir), None);
+        assert_eq!(read_per_game_scott_light(&dir), None);
+        assert_eq!(read_per_game_scott_trs80_style(&dir), None);
+        assert_eq!(read_per_game_scott_prehistoric_lamp(&dir), None);
+
+        write_per_game_scott_you_are(&dir, Some(true)).unwrap();
+        write_per_game_scott_light(&dir, Some(true)).unwrap();
+        write_per_game_scott_trs80_style(&dir, Some(true)).unwrap();
+        write_per_game_scott_prehistoric_lamp(&dir, Some(true)).unwrap();
+        assert_eq!(read_per_game_scott_you_are(&dir), Some(true));
+        assert_eq!(read_per_game_scott_light(&dir), Some(true));
+        assert_eq!(read_per_game_scott_trs80_style(&dir), Some(true));
+        assert_eq!(read_per_game_scott_prehistoric_lamp(&dir), Some(true));
+
+        // An unrelated sibling write keeps them, and they keep it.
+        write_per_game_guidance(&dir, Some(false)).unwrap();
+        assert_eq!(read_per_game_scott_you_are(&dir), Some(true), "sibling write kept it");
+        assert_eq!(read_per_game_guidance(&dir), Some(false), "and it kept the sibling");
+
+        // Clearing all four (and the sibling) removes the file.
+        write_per_game_scott_you_are(&dir, None).unwrap();
+        write_per_game_scott_light(&dir, None).unwrap();
+        write_per_game_scott_trs80_style(&dir, None).unwrap();
+        write_per_game_scott_prehistoric_lamp(&dir, None).unwrap();
+        write_per_game_guidance(&dir, None).unwrap();
         assert!(!per_game_config_path(&dir).exists());
         let _ = std::fs::remove_dir_all(&dir);
     }

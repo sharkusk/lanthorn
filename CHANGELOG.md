@@ -21,6 +21,13 @@ Absolute URLs or no link.
 
 ## Unreleased
 
+### Added
+
+- **A save file from the classic ScottFree interpreter can now be restored**
+  in a Scott Adams game, alongside lanthorn's own saves — point the restore
+  file picker (or `scott-cli`'s `/restore`) straight at an old ScottFree
+  `.sav` and it comes back to life. (SQ-1413)
+
 ### Changed
 
 - **save compatibility:** The save-archive format has changed twice in this
@@ -68,6 +75,22 @@ Absolute URLs or no link.
   story writes (a transcript, a data file, an in-game save) can be shared with
   other interpreters instead of only being readable by lanthorn. And a couple
   of rarely used Glk calls now behave per spec. (SQ-1416)
+- **Scott Adams games now reply the way the classic ScottFree interpreter
+  does.** "O.K." instead of "OK.", "I'm carrying: …" laid out ScottFree's way,
+  a proper scored-and-rated line from SCORE, and a few other small wording
+  corrections. A command whose reply was blocked by something in the game
+  (rather than being unrecognised) now says "I can't do that yet." instead of
+  a plain "I don't understand" — a small but real difference for anyone
+  puzzling out what a command actually did. `GET ALL`/`DROP ALL` are more
+  faithful too: nothing to take says "Nothing taken.", a dark room refuses
+  the whole sweep, and a game's own "you can't just grab that" trap on an
+  item now fires even when you sweep it up with ALL. (SQ-1413)
+- **The classic ScottFree options are available per game**, in the story's own
+  settings sidecar: second-person replies ("You are dead." instead of "I am
+  dead." — Robin of Sherwood was written assuming this one), the original
+  lamp-countdown wording, and the light source being destroyed for good the
+  instant it runs out rather than merely going dark. `scott-cli` gets matching
+  `-y`/`-s`/`-t`/`-p` flags, same as the original ScottFree. (SQ-1413)
 
 ---
 

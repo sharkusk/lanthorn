@@ -30,7 +30,7 @@ use cli_host::{HostMode, TerminalGuard};
 use crossterm::event::{self, Event, KeyCode, KeyEventKind, KeyModifiers};
 use crossterm::terminal;
 
-use scott::{Database, Vm};
+use scott::{looks_like_scottfree_save, Database, Vm};
 
 /// The canonical Scott Adams input prompt (mirrors `ScottSession::PROMPT` in the
 /// app). ScottFree prints it from its input routine; the VM stays input-agnostic,
@@ -142,6 +142,9 @@ struct Args {
     /// `--data-dir`: where saves live. `None` puts them beside the `.dat`, which
     /// is what `cli_host::game_dir` does for the other two hosts.
     data_dir: Option<String>,
+    /// ScottFree's four runtime option flags (SQ-1413), mirroring `main`'s own
+    /// `-y`/`-s`/`-t`/`-p` (`ScottCurses.c:1299-1342`) — see `scott::Options`.
+    options: scott::Options,
 }
 
 /// Every option `scott-cli` accepts; `cli_host::args` applies the rules.
@@ -153,6 +156,10 @@ const OPTS: &[cli_host::Opt] = &[
     cli_host::Opt::valued(&["--seed"]),
     cli_host::Opt::valued(&["--max-turns"]),
     cli_host::Opt::valued(&["--data-dir"]),
+    cli_host::Opt::flag(&["--you-are", "-y"]),
+    cli_host::Opt::flag(&["--scott-light", "-s"]),
+    cli_host::Opt::flag(&["--trs80", "-t"]),
+    cli_host::Opt::flag(&["--prehistoric-lamp", "-p"]),
 ];
 
 fn parse_args(argv: &[String]) -> Result<Args, String> {
@@ -169,12 +176,28 @@ fn parse_args(argv: &[String]) -> Result<Args, String> {
             Some(v) => v.parse().map(Some).map_err(|_| format!("bad {flag} value: {v}")),
         }
     };
+    // `-t`/`--trs80` sets BOTH the flag and this crate's own `Presentation`
+    // (see `Options::trs80_style`'s doc for why they're separate knobs) —
+    // a CLI user asking for the TRS-80 flag wants the TRS-80 room-block
+    // layout too. Off, `scott-cli` keeps `Options::default`'s own
+    // `Presentation::C64` layout unchanged (SQ-1413) — the flag adds the
+    // TRS-80 choice, it does not switch the baseline to plain ScottFree.
+    let trs80 = m.has("--trs80");
+    let mut options = scott::Options::new()
+        .with_you_are(m.has("--you-are"))
+        .with_scott_light(m.has("--scott-light"))
+        .with_trs80_style(trs80)
+        .with_prehistoric_lamp(m.has("--prehistoric-lamp"));
+    if trs80 {
+        options = options.with_presentation(scott::Presentation::Trs80);
+    }
     Ok(Args {
         path: m.first_positional().ok_or("no story file given")?.to_string(),
         seed: num("--seed")?.map(|v| v as u32),
         max_turns: num("--max-turns")?,
         pager: cli_host::on_off("--pager", m.value("--pager"))?.unwrap_or(true),
         data_dir: m.value("--data-dir").map(str::to_string),
+        options,
     })
 }
 
@@ -291,9 +314,18 @@ fn do_save(
 /// way this could be worse than not having it.
 ///
 /// **A save from a different adventure is refused, not half-applied.**
-/// `Vm::restore` checks the item count against the loaded database before it
-/// writes anything, so pointing this at another game's `.sav` fails cleanly
-/// instead of scattering one adventure's item locations through another's.
+/// `Vm::restore`/`Vm::restore_scottfree` both check the loaded database
+/// before writing anything, so pointing this at another game's save fails
+/// cleanly instead of scattering one adventure's item locations through
+/// another's.
+///
+/// **Accepts either save format, detected by shape (SQ-1413):** this
+/// binary's own `Vm::snapshot` (`Vm::SNAPSHOT_MAGIC`, unambiguous — checked
+/// first) or a ScottFree 1.14 text save (`scott::looks_like_scottfree_save`)
+/// — the classic interpreter's own `.sav`, brought in from ScottFree itself
+/// or a fork that kept its format. Detection is the crate's, not
+/// reimplemented here, so the app host and this CLI can never disagree
+/// about what counts as which.
 fn do_restore(
     out: &mut impl Write,
     interactive: bool,
@@ -316,16 +348,22 @@ fn do_restore(
     let chosen = cli_host::pick_save(&typed, &saves).map_or(typed.clone(), str::to_string);
     let path = cli_host::resolve_save_input(&chosen, game_dir, cli_host::SCOTT_EXT);
     match fs::read(&path) {
-        Ok(bytes) => match vm.restore(&bytes) {
-            Ok(()) => {
-                let _ = writeln!(out, "Restored from '{}'.", path.display());
-                true
+        Ok(bytes) => {
+            let is_scottfree_save =
+                !bytes.starts_with(&Vm::SNAPSHOT_MAGIC) && looks_like_scottfree_save(&bytes);
+            let result =
+                if is_scottfree_save { vm.restore_scottfree(&bytes) } else { vm.restore(&bytes) };
+            match result {
+                Ok(()) => {
+                    let _ = writeln!(out, "Restored from '{}'.", path.display());
+                    true
+                }
+                Err(e) => {
+                    let _ = writeln!(out, "Restore failed: '{}' is not a save for this game ({e}).", path.display());
+                    false
+                }
             }
-            Err(e) => {
-                let _ = writeln!(out, "Restore failed: '{}' is not a save for this game ({e}).", path.display());
-                false
-            }
-        },
+        }
         Err(e) => {
             let _ = writeln!(out, "Restore failed: {e}");
             false
@@ -350,7 +388,8 @@ Host commands (typed at any prompt, never passed to the game):
                         .sav rather than .qzl.
   /restore [name]       Restore. Bare, it lists your saves and takes a number or
                         a name. A save from a different adventure is refused
-                        rather than half-applied. Alias: /load
+                        rather than half-applied. Also accepts a save from the
+                        classic ScottFree interpreter itself. Alias: /load
 
 Options:
       --screen-reader   Linear plain text (alias: --plain; also selected by
@@ -367,6 +406,22 @@ Options:
       --data-dir <path> Where saves live (default: a .save directory beside the
                         .dat, the same rule zvm-cli and gvm-cli follow)
       --max-turns <n>   Stop after n turns (headless/testing)
+  -y, --you-are         Second-person replies (\"You are dead.\", \"You are
+                        carrying:\") instead of ScottFree's plain first-person
+                        default (\"I am dead.\", \"I'm carrying:\"). Some
+                        Brian Howarth titles (Robin of Sherwood among them)
+                        were authored assuming this flag.
+  -s, --scott-light     The original Adams lamp countdown wording: a running
+                        \"Light runs out in N turns.\" every turn under 25,
+                        instead of ScottFree's own \"Your light is growing
+                        dim.\" every 5th turn.
+  -t, --trs80           The TRS-80 room-block layout (items suffixed \". \"
+                        and the whole block framed by the TRS-80's rule)
+                        in place of this player's own default layout.
+  -p, --prehistoric-lamp
+                        The light source is destroyed the instant its fuel
+                        reaches zero, rather than merely going dark and
+                        staying an inert carried item.
   -V, --version         Print version and exit
   -h, --help            Print this help and exit
 ";
@@ -400,10 +455,16 @@ fn main() {
         process::exit(1);
     });
 
-    let mut vm = Vm::new(db);
-    if let Some(seed) = args.seed {
-        vm.seed_rng(seed);
-    }
+    // Seed and Options both belong at construction (`Vm::new_full`'s own
+    // doc): the opening occurrence pass runs inside the constructor and can
+    // roll percentage chances or print option-gated wording, so setting
+    // either afterward would be too late for it.
+    let mut vm = Vm::new_full(
+        db,
+        false,
+        args.seed.unwrap_or(Vm::DEFAULT_RNG_SEED),
+        args.options,
+    );
     // Saves live where the other two hosts put theirs, by the same rule, so a
     // player who has learned one has learned all three (SQ-0919).
     let game_dir: PathBuf = cli_host::game_dir(Path::new(&args.path), args.data_dir.as_deref());
@@ -630,6 +691,60 @@ mod tests {
             "the player is told why: {}",
             String::from_utf8_lossy(&out)
         );
+
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    /// A hand-authored ScottFree 1.14 save (`SaveGame`/`LoadGame`,
+    /// `ScottCurses.c:653-706`), shaped for `tiny_cave.dat` (`NumItems=9`, 10
+    /// item slots, 4 rooms 0..=3): 16 `counter room` pairs, a state line,
+    /// then one location per item.
+    fn tiny_cave_scottfree_save() -> String {
+        let mut s = String::new();
+        for ct in 0..16 {
+            s.push_str(&format!("{} 1\n", ct + 1));
+        }
+        // BitFlags DarkFlag MyLoc CurrentCounter SavedRoom LightTime
+        s.push_str("0 0 3 7 1 42\n");
+        // idol (item 1) carried, lamp (item 9, LIGHT_SOURCE) in room 1.
+        s.push_str("0\n255\n0\n0\n0\n0\n0\n0\n0\n1\n");
+        s
+    }
+
+    /// `/restore` also accepts the classic ScottFree interpreter's own save
+    /// format (SQ-1413), detected by shape (`scott::looks_like_scottfree_save`)
+    /// rather than a reserved extension — this crate's own binary snapshot
+    /// and ScottFree's text format both carry `.sav`.
+    #[test]
+    fn restore_accepts_a_scottfree_save() {
+        let dir = scratch("scottfree-import");
+        let mut vm = tiny_cave();
+        let mut out: Vec<u8> = Vec::new();
+
+        fs::write(dir.join("classic.sav"), tiny_cave_scottfree_save()).unwrap();
+
+        assert!(do_restore(&mut out, false, &mut vm, &dir, "classic"));
+        assert_eq!(vm.current_room(), 3, "MyLoc=3 from the save file");
+        assert_eq!(vm.item_loc(1), scott::database::CARRIED, "the idol (255) normalises to CARRIED");
+        assert_eq!(vm.item_loc(9), 1, "the lamp is in room 1");
+
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    /// Neither this crate's own binary snapshot nor a well-formed ScottFree
+    /// save: refused with a message, not a panic, and the live game is
+    /// untouched.
+    #[test]
+    fn restore_rejects_garbage_matching_neither_format() {
+        let dir = scratch("garbage-import");
+        let mut vm = tiny_cave();
+        let before = vm.room_block();
+        let mut out: Vec<u8> = Vec::new();
+
+        fs::write(dir.join("junk.sav"), b"this is not a scott save of either format").unwrap();
+
+        assert!(!do_restore(&mut out, false, &mut vm, &dir, "junk"));
+        assert_eq!(vm.room_block(), before, "the live game is untouched");
 
         let _ = fs::remove_dir_all(&dir);
     }

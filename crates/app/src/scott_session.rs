@@ -33,6 +33,22 @@ const PROMPT: &str = "\nTell me what to do ? ";
 /// The renderer scales the picture (typically 256×96) to fit this band.
 const PICTURE_ROWS: u16 = 16;
 
+/// Resolve this story's ScottFree `-y`/`-s`/`-t`/`-p` options from its
+/// per-game sidecar (SQ-1413): `crate::styles::PerGameConfig`'s four
+/// `scott_*` keys, absent key = `scott::Options::default()`'s off. Reads
+/// only the flags — `scott::Options::presentation` is deliberately left at
+/// [`scott::Presentation::C64`] (lanthorn's own layout) regardless of
+/// `scott_trs80_style`, matching [`ScottSession::new_with_options`]'s doc.
+pub fn resolve_options(game_dir: &std::path::Path) -> scott::Options {
+    scott::Options::new()
+        .with_you_are(crate::styles::read_per_game_scott_you_are(game_dir).unwrap_or(false))
+        .with_scott_light(crate::styles::read_per_game_scott_light(game_dir).unwrap_or(false))
+        .with_trs80_style(crate::styles::read_per_game_scott_trs80_style(game_dir).unwrap_or(false))
+        .with_prehistoric_lamp(
+            crate::styles::read_per_game_scott_prehistoric_lamp(game_dir).unwrap_or(false),
+        )
+}
+
 /// Build the top room-panel buffer from a `Vm::room_block()` string: one logical
 /// line per `\n`, with the per-line style/paragraph/image tracks filled parallel
 /// (the inline-buffer renderer indexes them by line). `primary: false` so the app
@@ -93,18 +109,50 @@ impl ScottSession {
     /// opening occurrence pass rolls its percentage chances inside it. `None` —
     /// every caller but the launcher — leaves scott's own fixed default, so a
     /// test's sequence stays the reproducible one it has always been.
+    ///
+    /// Uses `scott::Options::default()` — every ScottFree `-y`/`-s`/`-p` flag
+    /// off, and this crate's own [`scott::Presentation::C64`] room-block
+    /// layout (unchanged from before SQ-1413). A caller wanting a per-game
+    /// choice of those uses [`ScottSession::new_with_options`].
     pub fn new_with_trace(
         bytes: Vec<u8>,
         pict_blorb: Option<blorb::Blorb>,
         trace: bool,
         random_seed: Option<u32>,
     ) -> Result<ScottSession, String> {
+        ScottSession::new_with_options(bytes, pict_blorb, trace, random_seed, scott::Options::default())
+    }
+
+    /// The fullest constructor: [`ScottSession::new_with_trace`] plus
+    /// ScottFree's `-y`/`-s`/`-t`/`-p` [`scott::Options`] (SQ-1413) — a
+    /// per-game choice, read from `<game_dir>/config.toml` by the caller
+    /// (`crate::styles::read_per_game_scott_you_are` and its three
+    /// siblings) and passed in here. `options` is a constructor argument for
+    /// the same reason `random_seed` is: the opening occurrence pass below
+    /// can print option-gated wording, so a session built with the wrong
+    /// options and corrected afterward would already have shown the wrong
+    /// text. `Presentation` is deliberately NOT read from the per-game
+    /// override here — lanthorn always keeps its own
+    /// [`scott::Presentation::C64`] room-block layout regardless of `-t`
+    /// (see `scott::Presentation`'s doc); only `scott-cli` lets `-t` switch
+    /// the layout too.
+    pub fn new_with_options(
+        bytes: Vec<u8>,
+        pict_blorb: Option<blorb::Blorb>,
+        trace: bool,
+        random_seed: Option<u32>,
+        options: scott::Options,
+    ) -> Result<ScottSession, String> {
         // `Database::parse` takes raw bytes (SQ-1412), so a Latin-1 or
         // otherwise non-UTF-8 `.dat` loads here instead of being rejected by
         // a UTF-8 check before it ever reached the parser.
         let db = scott::Database::parse(&bytes).map_err(|e| format!("invalid Scott .dat: {e:?}"))?;
-        let mut vm =
-            scott::Vm::new_seeded(db, trace, random_seed.unwrap_or(scott::Vm::DEFAULT_RNG_SEED));
+        let mut vm = scott::Vm::new_full(
+            db,
+            trace,
+            random_seed.unwrap_or(scott::Vm::DEFAULT_RNG_SEED),
+            options,
+        );
         let mut intro = vm.take_output();
         if !vm.has_quit() {
             intro.push_str(PROMPT);
@@ -165,6 +213,18 @@ impl ScottSession {
     fn snapshot_location(&self) -> Option<LocationInfo> {
         let r = self.vm.current_room();
         Some(LocationInfo { number: r as mapper::graph::RoomId, parent: 0, name: self.vm.room_name(r).to_string() })
+    }
+
+    /// An item's current location (`-1`/`255` = carried, `0` = nowhere, else
+    /// a room index) — `scott::Vm::item_loc`, exposed for the binary crate's
+    /// own restore-path tests (`engine_helpers::restore_from_file`,
+    /// SQ-1413) to assert what a restore actually placed, without widening
+    /// the `vm` field itself. `pub`, not `pub(crate)`: `engine_helpers.rs`
+    /// lives in the `lanthorn` BINARY crate, a separate compilation unit
+    /// from this `app` LIB crate, so `pub(crate)` here would not reach it.
+    #[allow(dead_code)] // only called from the binary crate's own t-session-gated tests
+    pub fn item_loc(&self, idx: usize) -> i32 {
+        self.vm.item_loc(idx)
     }
 }
 
@@ -333,11 +393,28 @@ impl Engine for ScottSession {
         r
     }
 
+    /// Restores from either of Scott's two save formats, detected by shape
+    /// (SQ-1413): this crate's own binary snapshot
+    /// ([`scott::Vm::SNAPSHOT_MAGIC`], unambiguous — checked first) or
+    /// ScottFree 1.14's own text save format
+    /// ([`scott::looks_like_scottfree_save`]), so a player can bring an old
+    /// ScottFree `.sav` into lanthorn. Anything matching neither falls
+    /// through to `Vm::restore`, which reports the ordinary bad-snapshot
+    /// error rather than a bespoke "unrecognised format" one — there is
+    /// nothing a third message would say that the binary-restore failure
+    /// doesn't already.
     fn restore_game_save(&mut self, bytes: &[u8]) -> Result<(), EngineError> {
-        let r = self
-            .vm
-            .restore(bytes)
-            .map_err(|e| EngineError::BadSave(format!("bad Scott snapshot: {e}")));
+        let is_scottfree_save =
+            !bytes.starts_with(&scott::Vm::SNAPSHOT_MAGIC) && scott::looks_like_scottfree_save(bytes);
+        let r = if is_scottfree_save {
+            self.vm
+                .restore_scottfree(bytes)
+                .map_err(|e| EngineError::BadSave(format!("bad ScottFree save: {e}")))
+        } else {
+            self.vm
+                .restore(bytes)
+                .map_err(|e| EngineError::BadSave(format!("bad Scott snapshot: {e}")))
+        };
         self.refresh_picture();
         r
     }
