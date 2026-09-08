@@ -491,6 +491,13 @@ pub struct Machine {
     /// one paint sequence; today they are independent because pictures and fills
     /// are drawn by different games for different purposes.
     pub(crate) pending_erase_fills: Vec<EraseFill>,
+    /// The folded per-window Version 6 paint history (SQ-1403) — a host feeds
+    /// this from its OWN drain of [`Self::take_paint_events`] (see
+    /// [`crate::paint_log`]'s "Feeding it" for why it is not fed
+    /// automatically here); `Machine` owns the storage and the fold
+    /// algorithm, and clears it structurally on [`Self::restart`]. See
+    /// [`Self::paint_log`] / [`Self::paint_log_mut`].
+    paint_log: crate::paint_log::PaintLog,
     /// Running count of chars printed to v6 window 0 (the main scrolling
     /// window) — stamps `PictureEvent::out_chars` so window-0 inline pictures
     /// anchor to their position in the text stream. Monotonic, never reset.
@@ -746,6 +753,7 @@ impl Machine {
             resources: Box::new(crate::resources::EmptyResources),
             pending_pictures: Vec::new(),
             pending_erase_fills: Vec::new(),
+            paint_log: crate::paint_log::PaintLog::default(),
             v6_win0_out_chars: 0,
             v6_prose_retired: None,
             v6_prose_retired_whole: false,
@@ -913,6 +921,9 @@ impl Machine {
         // fill stamped against a picture list that no longer exists, to be
         // replayed after the reboot's own first paints.
         self.pending_erase_fills.clear();
+        // …and the folded history built from them (SQ-1403): a rebooted screen
+        // has painted nothing yet, so no window keeps a pre-restart recipe.
+        self.paint_log.clear_all();
         self.buffer_screen_mode = 0;
         self.v6_win0_out_chars = 0;
         // `self.screen = screen` above already reset `screen.v6_input_window` to 0
@@ -1578,6 +1589,45 @@ impl Machine {
     /// render-drain path without executing real V6 bytecode.
     pub fn queue_picture_event(&mut self, ev: PictureEvent) {
         self.pending_pictures.push(ev);
+    }
+
+    /// The folded per-window Version 6 paint history (SQ-1403) — what to
+    /// replay to rebuild a window's picture canvas. Read-only; a host feeds
+    /// it via [`Self::paint_log_mut`] from its own drain of
+    /// [`Self::take_paint_events`] — see [`crate::paint_log`]'s "Feeding it".
+    pub fn paint_log(&self) -> &crate::paint_log::PaintLog {
+        &self.paint_log
+    }
+
+    /// Mutable access to the paint log — a host calls
+    /// [`crate::paint_log::PaintLog::apply`] here once per event drained from
+    /// [`Self::take_paint_events`], and
+    /// [`crate::paint_log::PaintLog::append_host_erase`] here for a
+    /// cross-window erase its own canvas model computes, in the SAME walk so
+    /// the two interleave correctly. See [`crate::paint_log`]'s "Feeding it"
+    /// for why this is the host's to drive rather than automatic.
+    pub fn paint_log_mut(&mut self) -> &mut crate::paint_log::PaintLog {
+        &mut self.paint_log
+    }
+
+    /// Replace the paint log from bytes written by
+    /// [`crate::paint_log::encode`] — the counterpart of [`Self::paint_log`]
+    /// for a host Save State restore.
+    ///
+    /// Always resets the log first, exactly as
+    /// [`Self::restore_screen_snapshot`] resets the screen: an empty `bytes`
+    /// (no log was ever archived, e.g. an older archive format) leaves the
+    /// log empty rather than untouched, and a malformed or too-new buffer
+    /// does too rather than leaving a stale pre-restore log standing. Real
+    /// decode errors (a newer format version) are still returned so a host
+    /// that wants to know can.
+    pub fn restore_paint_log(&mut self, bytes: &[u8]) -> Result<(), crate::error::ZError> {
+        self.paint_log.clear_all();
+        if bytes.is_empty() {
+            return Ok(());
+        }
+        self.paint_log = crate::paint_log::decode(bytes)?;
+        Ok(())
     }
 
     /// Filled rectangles an `erase_window` painted since the last drain,
@@ -2979,7 +3029,7 @@ impl Machine {
                     }
                     self.pending_erase_fills.extend(fills);
                     for (window, win_box) in clear_canvas {
-                        self.pending_pictures.push(PictureEvent {
+                        let ev = PictureEvent {
                             number: 0,
                             window,
                             win_box,
@@ -2993,7 +3043,8 @@ impl Machine {
                             // IS the cursor. The host's `number == 0` arm returns
                             // before reading this either way.
                             at_cursor: true,
-                        });
+                        };
+                        self.pending_pictures.push(ev);
                     }
                 } else {
                     // ZMSD §8.7.3.2.1: "In Versions 5 and later, the cursor for
@@ -4025,12 +4076,13 @@ impl Machine {
                         ));
                     }
                     let out_chars = self.v6_win0_out_chars;
-                    self.pending_pictures.push(PictureEvent {
+                    let ev = PictureEvent {
                         number, window, x, y, erase: false, out_chars, margin_after: None, win_box,
                         // Placed on the window's current text line — see
                         // `PictureEvent::at_cursor` (SQ-0695).
                         at_cursor: y == cy,
-                    });
+                    };
+                    self.pending_pictures.push(ev);
                 }
                 StepResult::Continue
             }
@@ -4064,10 +4116,11 @@ impl Machine {
                         ));
                     }
                     let out_chars = self.v6_win0_out_chars;
-                    self.pending_pictures.push(PictureEvent {
+                    let ev = PictureEvent {
                         number, window, x, y, erase: true, out_chars, margin_after: None, win_box,
                         at_cursor: y == cy,
-                    });
+                    };
+                    self.pending_pictures.push(ev);
                 }
                 StepResult::Continue
             }

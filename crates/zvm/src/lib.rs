@@ -180,6 +180,7 @@ pub mod location;
 pub mod machines;
 pub mod memory;
 pub mod objects;
+pub mod paint_log;
 pub mod quetzal;
 pub mod resources;
 pub mod screen;
