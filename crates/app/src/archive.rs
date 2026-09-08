@@ -402,6 +402,67 @@ pub struct ArchiveContents {
     pub engine: String,
 }
 
+/// The `format_version` at which `screen.bin`, zvm's own screen snapshot,
+/// first appears (SQ-1401). An archive older than this carries no screen entry
+/// at all: it restores with no saved screen (a blank status line until the
+/// next turn redraws it, empty v6 windows until the game repaints).
+const SCREEN_BLOB_FORMAT_VERSION: u32 = 9;
+
+/// The `format_version` at which `display.bin`, zvm's own paint log, first
+/// appears (SQ-1403). An archive older than this has no paint log for a v6
+/// story: its window canvases restore from `pictures/` alone, missing until
+/// the game repaints.
+const PAINT_LOG_FORMAT_VERSION: u32 = 10;
+
+/// What a restored archive is missing because it predates a persisted-format
+/// bump — SQ-1410, computed from `Meta::format_version` alone (see
+/// `docs/release/save-format-policy.md`'s 8→9 and 9→10 entries). The version
+/// says it plainly, so this never infers a gap from an absent entry the way
+/// [`load_archive`] itself sometimes does for other, unversioned fields.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct RestoreDegradation {
+    /// `format_version < 9` (SQ-1401): the archive has no `screen.bin`.
+    pub screen_missing: bool,
+    /// `is_v6 && format_version < 10` (SQ-1403): the archive has no
+    /// `display.bin` paint log. Never set for a non-v6 story, which has no
+    /// paint log to miss.
+    pub pictures_missing: bool,
+}
+
+impl RestoreDegradation {
+    /// A current-format archive: nothing missing.
+    pub fn none() -> Self {
+        Self::default()
+    }
+
+    pub fn is_none(self) -> bool {
+        self == Self::default()
+    }
+
+    /// Compute from an archive's format version and whether the restored story
+    /// is Version 6 — `pictures_missing` only applies there, since a non-v6
+    /// story has no paint log at any format version.
+    pub fn from_format_version(format_version: u32, is_v6: bool) -> Self {
+        RestoreDegradation {
+            screen_missing: format_version < SCREEN_BLOB_FORMAT_VERSION,
+            pictures_missing: is_v6 && format_version < PAINT_LOG_FORMAT_VERSION,
+        }
+    }
+
+    /// The player-facing transcript notice for this degradation, or `None` for
+    /// a current-format archive (or a non-v6 story missing only pictures it
+    /// never had). One line, combining both facts when both apply.
+    pub fn notice_text(self) -> Option<String> {
+        let what = match (self.screen_missing, self.pictures_missing) {
+            (false, false) => return None,
+            (true, true) => "the screen and pictures",
+            (true, false) => "the screen",
+            (false, true) => "pictures",
+        };
+        Some(format!("[Restored from an older save: {what} will repaint as you play.]"))
+    }
+}
+
 /// Everything the SESSION contributes to an archive, as one value.
 ///
 /// **This exists because the alternative lost data in the field.** These seven
@@ -2585,6 +2646,97 @@ mod tests {
     #[test]
     fn format_version_constant_is_frozen() {
         assert_eq!(CURRENT_FORMAT_VERSION, 10, "archive format_version changed — see docs/release/save-format-policy.md");
+    }
+
+    // -------------------------------------------------------------------------
+    // RestoreDegradation (SQ-1410): a restore-time notice naming what an
+    // older-format archive doesn't carry. Hand-built `ArchiveContents` at each
+    // pinned boundary — the detection reads only `meta.format_version`, per the
+    // "the version is the fact" rule, so no zip round-trip is needed to exercise it.
+    // -------------------------------------------------------------------------
+
+    fn archive_contents_at(format_version: u32) -> ArchiveContents {
+        ArchiveContents {
+            mapper: Mapper::default(),
+            save: Vec::new(),
+            meta: Meta {
+                format_version,
+                ifid: None,
+                name: None,
+                turns: 0,
+                saved_at: String::new(),
+                location: None,
+                score: None,
+                trigger: SaveTrigger::HostState,
+            },
+            transcript: Vec::new(),
+            transcript_kinds: Vec::new(),
+            transcript_runs: Vec::new(),
+            transcript_para: Vec::new(),
+            transcript_images: Vec::new(),
+            history: Vec::new(),
+            screen: None,
+            display: None,
+            pictures: Vec::new(),
+            ground: None,
+            aux: std::collections::BTreeMap::new(),
+            command_history: Vec::new(),
+            engine: DEFAULT_ENGINE.to_string(),
+        }
+    }
+
+    #[test]
+    fn restore_degradation_format_8_misses_screen_and_pictures_on_v6() {
+        let ac = archive_contents_at(8);
+        let d = RestoreDegradation::from_format_version(ac.meta.format_version, true);
+        assert!(d.screen_missing);
+        assert!(d.pictures_missing);
+        assert_eq!(
+            d.notice_text().as_deref(),
+            Some("[Restored from an older save: the screen and pictures will repaint as you play.]")
+        );
+    }
+
+    #[test]
+    fn restore_degradation_format_8_misses_only_screen_on_non_v6() {
+        let ac = archive_contents_at(8);
+        let d = RestoreDegradation::from_format_version(ac.meta.format_version, false);
+        assert!(d.screen_missing);
+        assert!(!d.pictures_missing, "a non-v6 story has no paint log to miss");
+        assert_eq!(
+            d.notice_text().as_deref(),
+            Some("[Restored from an older save: the screen will repaint as you play.]")
+        );
+    }
+
+    #[test]
+    fn restore_degradation_format_9_misses_only_pictures_on_v6() {
+        let ac = archive_contents_at(9);
+        let d = RestoreDegradation::from_format_version(ac.meta.format_version, true);
+        assert!(!d.screen_missing, "screen.bin exists from format_version 9");
+        assert!(d.pictures_missing, "display.bin doesn't exist until format_version 10");
+        assert_eq!(
+            d.notice_text().as_deref(),
+            Some("[Restored from an older save: pictures will repaint as you play.]")
+        );
+    }
+
+    #[test]
+    fn restore_degradation_format_9_is_none_on_non_v6() {
+        let ac = archive_contents_at(9);
+        let d = RestoreDegradation::from_format_version(ac.meta.format_version, false);
+        assert!(d.is_none());
+        assert_eq!(d.notice_text(), None);
+    }
+
+    #[test]
+    fn restore_degradation_current_format_is_always_none() {
+        let ac = archive_contents_at(CURRENT_FORMAT_VERSION);
+        for is_v6 in [true, false] {
+            let d = RestoreDegradation::from_format_version(ac.meta.format_version, is_v6);
+            assert!(d.is_none(), "a current-format archive must carry no degradation");
+            assert_eq!(d.notice_text(), None);
+        }
     }
 
     // SQ-0531: `trigger` is persisted metadata, so its wire spelling is pinned —
