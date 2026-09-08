@@ -171,8 +171,19 @@ fn glulxercise_all_groups_pass() {
     }
     stdin.flush().expect("flush stdin");
 
-    // Wait until every group has reported, or give up after a generous deadline.
-    let deadline = Instant::now() + Duration::from_secs(180);
+    // Wait until every group has reported, or give up after a deadline sized to
+    // the work rather than a flat wall-clock budget. CI runs this under `cargo
+    // test` (debug profile, sharing 3-4 cores with every other test binary in
+    // the run), several times slower than a warm local `nextest` run on an
+    // idle machine — a flat 180s deadline let both ubuntu-latest and
+    // windows-latest reach 67 of 68 groups before timing out (CI run
+    // 34277149548, commit e058047a). This test measures conformance, not
+    // speed, so its deadline scales with `want_count`: 30s/group gives ~34
+    // minutes worst case (68 groups), while the loop below still exits the
+    // moment every group has reported, so the common (fast) case pays
+    // nothing extra.
+    let wait_start = Instant::now();
+    let deadline = wait_start + Duration::from_secs(30 * want_count as u64);
     loop {
         let count = {
             let b = buf.lock().unwrap();
@@ -192,10 +203,14 @@ fn glulxercise_all_groups_pass() {
 
     let out = String::from_utf8_lossy(&buf.lock().unwrap()).to_string();
     let passed = out.matches("Passed.").count();
+    // Groups report in the order they were sent, so the (passed - 1)th entry
+    // of `want` names the last one to finish — the next timeout's first clue.
+    let last_reported = passed.checked_sub(1).and_then(|i| want.get(i));
     assert!(
         passed >= want_count,
-        "expected >= {want_count} groups ({want:?}) to report Passed., got {passed}.\n\
-         --- transcript ---\n{out}"
+        "expected >= {want_count} groups ({want:?}) to report Passed., got {passed} after \
+         {:?} (last group to report: {last_reported:?}).\n--- transcript ---\n{out}",
+        wait_start.elapsed()
     );
     assert!(
         !out.contains("tests failed"),
