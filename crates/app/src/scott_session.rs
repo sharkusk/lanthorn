@@ -33,6 +33,22 @@ const PROMPT: &str = "\nTell me what to do ? ";
 /// The renderer scales the picture (typically 256×96) to fit this band.
 const PICTURE_ROWS: u16 = 16;
 
+/// Resolve this story's ScottFree `-y`/`-s`/`-t`/`-p` options from its
+/// per-game sidecar (SQ-1413): `crate::styles::PerGameConfig`'s four
+/// `scott_*` keys, absent key = `scott::Options::default()`'s off. Reads
+/// only the flags — `scott::Options::presentation` is deliberately left at
+/// [`scott::Presentation::C64`] (lanthorn's own layout) regardless of
+/// `scott_trs80_style`, matching [`ScottSession::new_with_options`]'s doc.
+pub fn resolve_options(game_dir: &std::path::Path) -> scott::Options {
+    scott::Options::new()
+        .with_you_are(crate::styles::read_per_game_scott_you_are(game_dir).unwrap_or(false))
+        .with_scott_light(crate::styles::read_per_game_scott_light(game_dir).unwrap_or(false))
+        .with_trs80_style(crate::styles::read_per_game_scott_trs80_style(game_dir).unwrap_or(false))
+        .with_prehistoric_lamp(
+            crate::styles::read_per_game_scott_prehistoric_lamp(game_dir).unwrap_or(false),
+        )
+}
+
 /// Build the top room-panel buffer from a `Vm::room_block()` string: one logical
 /// line per `\n`, with the per-line style/paragraph/image tracks filled parallel
 /// (the inline-buffer renderer indexes them by line). `primary: false` so the app
@@ -93,18 +109,50 @@ impl ScottSession {
     /// opening occurrence pass rolls its percentage chances inside it. `None` —
     /// every caller but the launcher — leaves scott's own fixed default, so a
     /// test's sequence stays the reproducible one it has always been.
+    ///
+    /// Uses `scott::Options::default()` — every ScottFree `-y`/`-s`/`-p` flag
+    /// off, and this crate's own [`scott::Presentation::C64`] room-block
+    /// layout (unchanged from before SQ-1413). A caller wanting a per-game
+    /// choice of those uses [`ScottSession::new_with_options`].
     pub fn new_with_trace(
         bytes: Vec<u8>,
         pict_blorb: Option<blorb::Blorb>,
         trace: bool,
         random_seed: Option<u32>,
     ) -> Result<ScottSession, String> {
+        ScottSession::new_with_options(bytes, pict_blorb, trace, random_seed, scott::Options::default())
+    }
+
+    /// The fullest constructor: [`ScottSession::new_with_trace`] plus
+    /// ScottFree's `-y`/`-s`/`-t`/`-p` [`scott::Options`] (SQ-1413) — a
+    /// per-game choice, read from `<game_dir>/config.toml` by the caller
+    /// (`crate::styles::read_per_game_scott_you_are` and its three
+    /// siblings) and passed in here. `options` is a constructor argument for
+    /// the same reason `random_seed` is: the opening occurrence pass below
+    /// can print option-gated wording, so a session built with the wrong
+    /// options and corrected afterward would already have shown the wrong
+    /// text. `Presentation` is deliberately NOT read from the per-game
+    /// override here — lanthorn always keeps its own
+    /// [`scott::Presentation::C64`] room-block layout regardless of `-t`
+    /// (see `scott::Presentation`'s doc); only `scott-cli` lets `-t` switch
+    /// the layout too.
+    pub fn new_with_options(
+        bytes: Vec<u8>,
+        pict_blorb: Option<blorb::Blorb>,
+        trace: bool,
+        random_seed: Option<u32>,
+        options: scott::Options,
+    ) -> Result<ScottSession, String> {
         // `Database::parse` takes raw bytes (SQ-1412), so a Latin-1 or
         // otherwise non-UTF-8 `.dat` loads here instead of being rejected by
         // a UTF-8 check before it ever reached the parser.
         let db = scott::Database::parse(&bytes).map_err(|e| format!("invalid Scott .dat: {e:?}"))?;
-        let mut vm =
-            scott::Vm::new_seeded(db, trace, random_seed.unwrap_or(scott::Vm::DEFAULT_RNG_SEED));
+        let mut vm = scott::Vm::new_full(
+            db,
+            trace,
+            random_seed.unwrap_or(scott::Vm::DEFAULT_RNG_SEED),
+            options,
+        );
         let mut intro = vm.take_output();
         if !vm.has_quit() {
             intro.push_str(PROMPT);

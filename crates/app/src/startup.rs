@@ -1624,13 +1624,16 @@ pub(crate) fn boot_story(
                 }
             }
         }
-        app::hints::LoadedStory::Scott(bytes) => match app::scott_session::ScottSession::new_with_trace(
+        app::hints::LoadedStory::Scott(bytes) => match app::scott_session::ScottSession::new_with_options(
             bytes,
             resolve_pict_blorb(&story_path, cfg.images),
             // `--debug` (SQ-0449/SQ-0464): trace from boot so the opening
             // occurrence pass (run inside the VM constructor) is captured.
             cli.debug,
             Some(random_seed),
+            // ScottFree's `-y`/`-s`/`-t`/`-p` options, this story's own
+            // per-game choice (SQ-1413).
+            app::scott_session::resolve_options(&game_dir),
         ) {
             Ok(s) => Box::new(s),
             Err(e) => {

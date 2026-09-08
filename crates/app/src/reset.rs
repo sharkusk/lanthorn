@@ -285,12 +285,14 @@ pub(crate) fn reset_game(
                     .expect("restart re-runs the same Glulx story") = new_session;
             })
         }
-        Ok(app::hints::LoadedStory::Scott(bytes)) => app::scott_session::ScottSession::new_with_trace(
+        Ok(app::hints::LoadedStory::Scott(bytes)) => app::scott_session::ScottSession::new_with_options(
             bytes,
             resolve_pict_blorb(story_path, state.config.images),
             false,
             // Re-seeded exactly as the launch was (SQ-0811) — see the zvm arm.
             Some(state.config.effective_random_seed()),
+            // Re-resolved exactly as the launch was (SQ-1413).
+            app::scott_session::resolve_options(game_dir),
         )
         .map(|new_session| {
                 *session
