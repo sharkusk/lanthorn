@@ -627,6 +627,7 @@ impl From<zvm::cpu::disasm_cache::Provenance> for DisasmProvenance {
             P::Rd => DisasmProvenance::Rd,
             P::Soft => DisasmProvenance::Soft,
             P::Data => DisasmProvenance::Data,
+            _ => DisasmProvenance::Soft,
         }
     }
 }

@@ -1506,6 +1506,7 @@ fn zmachine_map(bytes: &[u8], file: String) -> Result<GeneratedMap, GenError> {
                 zvm::world::ExitDetail::Message
                 | zvm::world::ExitDetail::Absent
                 | zvm::world::ExitDetail::Unknown => continue,
+                _ => continue,
             };
             edges.push(RawEdge { origin: obj as RoomId, dir, dest: dest as RoomId, kind, via, note });
         }

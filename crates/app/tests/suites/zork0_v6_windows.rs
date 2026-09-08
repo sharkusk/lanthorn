@@ -107,7 +107,7 @@ fn zork0_v6_windows_smoke() {
             w.y_coord, w.x_coord, w.y_size, w.x_size, w.attributes
         );
     }
-    eprintln!("pending_pictures at first prompt: {:?}", session.machine.pending_pictures);
+    eprintln!("pending_pictures at first prompt: {:?}", session.machine.pending_pictures());
 
     // (c) At least one window has nonzero, non-underflowed size — locked to the
     // real geometry observed from a `--nocapture` run: window 0 (the status/
@@ -191,7 +191,7 @@ fn zork0_v6_windows_smoke() {
         assert!(!result.quit, "Zork0 quit on command {cmd:?}");
         assert!(result.fault.is_none(), "Zork0 faulted on command {cmd:?}: {:?}", result.fault);
         assert!(
-            session.machine.pending_pictures.is_empty(),
+            session.machine.pending_pictures().is_empty(),
             "drain_turn must drain the VM's queue every turn (Task 2)"
         );
     }

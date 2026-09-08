@@ -117,8 +117,8 @@ fn poll_sound_finish(sound: Option<&mut CliSound>, machine: &mut Machine, view: 
     }
     // A finish routine may itself start sounds (into machine.pending_sounds);
     // play them now rather than deferring to the next main-loop step().
-    if !machine.pending_sounds.is_empty() {
-        let events: Vec<zvm::cpu::exec::SoundEvent> = std::mem::take(&mut machine.pending_sounds);
+    if !machine.pending_sounds().is_empty() {
+        let events: Vec<zvm::cpu::exec::SoundEvent> = machine.take_pending_sounds();
         play_cli_sounds(cs, &events);
     }
     if ran && is_tty {
@@ -350,7 +350,7 @@ impl Output for StdoutOutput {
 /// Pair it with every status emission (status first, then this) and call it
 /// before anything else writes to stdout, blocks, or exits.
 fn release_prompt(machine: &mut Machine) {
-    if let Some(o) = machine.out.as_any_mut().downcast_mut::<StdoutOutput>() {
+    if let Some(o) = machine.output_mut().as_any_mut().downcast_mut::<StdoutOutput>() {
         o.release_partial();
     }
 }
@@ -368,6 +368,7 @@ fn current_score(machine: &Machine) -> Option<i32> {
         return match machine.status_line().right {
             zvm::screen::StatusRight::ScoreTurns { score, .. } => Some(score as i32),
             zvm::screen::StatusRight::Time { .. } => None,
+            _ => None,
         };
     }
     cli_host::score_in_status(&screen::ScreenView::status_now(machine))
@@ -380,7 +381,7 @@ fn announce_score(machine: &mut Machine, watch: &mut cli_host::ScoreWatch, on: b
     }
     if let Some(line) = watch.update(current_score(machine)) {
         println!("{line}");
-        if let Some(o) = machine.out.as_any_mut().downcast_mut::<StdoutOutput>() {
+        if let Some(o) = machine.output_mut().as_any_mut().downcast_mut::<StdoutOutput>() {
             o.note_sink("\n");
         }
     }
@@ -393,7 +394,7 @@ fn announce_score(machine: &mut Machine, watch: &mut cli_host::ScoreWatch, on: b
 /// line, print the answer, then put the prompt back so the player can see it is
 /// still their turn.
 fn print_host_answer(machine: &mut Machine, text: &str) {
-    let (at_line_start, prompt) = match machine.out.as_any().downcast_ref::<StdoutOutput>() {
+    let (at_line_start, prompt) = match machine.output().as_any().downcast_ref::<StdoutOutput>() {
         Some(o) => (o.sink_at_line_start(), o.hold.last_prompt().to_string()),
         None => (true, String::new()),
     };
@@ -402,7 +403,7 @@ fn print_host_answer(machine: &mut Machine, text: &str) {
     }
     println!("{text}");
     print!("{prompt}");
-    if let Some(o) = machine.out.as_any_mut().downcast_mut::<StdoutOutput>() {
+    if let Some(o) = machine.output_mut().as_any_mut().downcast_mut::<StdoutOutput>() {
         o.note_sink(&format!("\n{prompt}"));
     }
     let _ = io::stdout().flush();
@@ -825,7 +826,7 @@ fn print_frame(machine: &mut Machine, plain: bool, text: &str) {
     if text.is_empty() {
         return;
     }
-    let Some(o) = machine.out.as_any_mut().downcast_mut::<StdoutOutput>() else {
+    let Some(o) = machine.output_mut().as_any_mut().downcast_mut::<StdoutOutput>() else {
         print!("{text}");
         return;
     };
@@ -1210,7 +1211,7 @@ fn apply_resize(
     *page_height = cli_host::Pager::height_for(new_rows);
     view.set_term_rows(new_rows);
     view.set_term_cols(new_cols);
-    if let Some(o) = machine.out.as_any_mut().downcast_mut::<StdoutOutput>() {
+    if let Some(o) = machine.output_mut().as_any_mut().downcast_mut::<StdoutOutput>() {
         o.cols = new_cols;
         o.pager.set_page_height(*page_height);
     }
@@ -1661,6 +1662,7 @@ fn main() {
                 // It is also what a terminal draws when nobody states a shape, so
                 // saying nothing IS saying it (SQ-0947).
                 CursorShape::ReverseSpace => "",
+                _ => "",
             }
         );
         let _ = io::stdout().flush();
@@ -1748,13 +1750,13 @@ fn main() {
 
     loop {
         let step = machine.step();
-        for d in machine.diagnostics.drain(..) {
+        for d in machine.take_diagnostics() {
             eprintln!("zvm: warning: {d}");
         }
         // Bleeps + sampled sounds: drain the turn's sound events. Ring the bell for
         // #1/#2 (TTY only), and play audio when enabled.
-        if !machine.pending_sounds.is_empty() {
-            let events: Vec<zvm::cpu::exec::SoundEvent> = std::mem::take(&mut machine.pending_sounds);
+        if !machine.pending_sounds().is_empty() {
+            let events: Vec<zvm::cpu::exec::SoundEvent> = machine.take_pending_sounds();
             let beeps = events.iter().filter(|e| e.number == 1 || e.number == 2).count();
             if beeps > 0 {
                 // The device fact, not `rich`: a bell is not an escape sequence
@@ -1781,7 +1783,7 @@ fn main() {
         if machine.screen.erase_lower_requested {
             print!("{}", view.erase(machine.screen.current_bg, machine.honor_game_colours));
             let _ = io::stdout().flush();
-            if let Some(o) = machine.out.as_any_mut().downcast_mut::<StdoutOutput>() {
+            if let Some(o) = machine.output_mut().as_any_mut().downcast_mut::<StdoutOutput>() {
                 o.pager.reset();
                 o.current_col = 0;
             }
@@ -1927,7 +1929,7 @@ fn main() {
                 } else {
                     machine.supply_line(line.trim_end(), terminator);
                 }
-                if let Some(o) = machine.out.as_any_mut().downcast_mut::<StdoutOutput>() {
+                if let Some(o) = machine.output_mut().as_any_mut().downcast_mut::<StdoutOutput>() {
                     o.pager.reset();
                     o.current_col = 0; // cursor is at line start after user input + Enter
                 }
@@ -1978,7 +1980,7 @@ fn main() {
                 } else {
                     machine.supply_char(ch);
                 }
-                if let Some(o) = machine.out.as_any_mut().downcast_mut::<StdoutOutput>() {
+                if let Some(o) = machine.output_mut().as_any_mut().downcast_mut::<StdoutOutput>() {
                     o.pager.reset();
                     o.current_col = 0;
                 }
@@ -2007,6 +2009,8 @@ fn main() {
                     cli_host::pick_save(&filename, &saves).map_or(filename.clone(), str::to_string);
                 handle_restore_request(&mut machine, &game_dir, filename.trim());
             }
+
+            _ => {}
         }
     }
 }
@@ -2673,7 +2677,7 @@ mod centring_tests {
                 break;
             }
         }
-        let rec = m.out.as_any().downcast_ref::<Recorder>().expect("recorder");
+        let rec = m.output().as_any().downcast_ref::<Recorder>().expect("recorder");
         assert!(!rec.writes.is_empty(), "the title splash must have printed something");
         Some(rec.writes.clone())
     }
@@ -2773,7 +2777,7 @@ mod centring_tests {
                 .expect("a v5 story builds");
             assert_eq!(m.mem.read_byte(0x21) as u16, cols, "$21 = screen width in characters (§8.4)");
             assert_eq!(m.mem.read_word(0x22), cols, "$22 = screen width in units (§8.4.3)");
-            let sink = m.out.as_any().downcast_ref::<StdoutOutput>().expect("the stdout sink");
+            let sink = m.output().as_any().downcast_ref::<StdoutOutput>().expect("the stdout sink");
             assert_eq!(sink.cols, cols, "the sink wraps at exactly what the story was told");
         }
     }
@@ -2799,7 +2803,7 @@ mod centring_tests {
             apply_resize(r, c, &mut rows, &mut cols, &mut page, &mut m, &mut view);
             assert_eq!(m.mem.read_byte(0x21) as u16, c, "the story is told the new width");
             assert_eq!(m.mem.read_byte(0x20) as u16, r, "…and the new height");
-            let sink = m.out.as_any().downcast_ref::<StdoutOutput>().expect("the stdout sink");
+            let sink = m.output().as_any().downcast_ref::<StdoutOutput>().expect("the stdout sink");
             assert_eq!(sink.cols, c, "the sink follows it");
             assert_eq!(m.screen.upper.cols, c, "and so does the grid the game is drawing into");
         }
@@ -2878,25 +2882,25 @@ mod restore_request_tests {
     fn restore_request_completes_the_save_descriptor_forward() {
         let mem = Memory::new(save_v4_into_g0_story()).unwrap();
         let mut m = Machine::new(mem);
-        m.state.pc = 0x40;
+        m.state.set_pc(0x40);
 
         let r = m.step();
         assert_eq!(r, StepResult::SaveRequest, "save opcode suspends with SaveRequest");
-        assert_eq!(m.state.pc, 0x42, "PC is post-instruction after @save suspends");
+        assert_eq!(m.state.pc(), 0x42, "PC is post-instruction after @save suspends");
 
         let blob = m.save_quetzal();
         m.complete_save(true);
         assert_eq!(m.global(0), 1, "save success stored 1 into G0");
 
         // Clobber state the way later play would, so the restore must actually reset it.
-        m.do_store(Some(0x10), 0x99);
-        m.state.pc = 0x00AB;
+        m.set_global(0, 0x99);
+        m.state.set_pc(0x00AB);
 
         // This is the exact call zvm-cli's RestoreRequest arm makes.
         m.complete_restore_success(&blob).expect("in-game restore must succeed");
 
         assert_eq!(m.global(0), 2, "descriptor advanced: the original @save 'returns' 2");
-        assert_eq!(m.state.pc, 0x42, "execution resumes PAST the @save, not at its descriptor");
+        assert_eq!(m.state.pc(), 0x42, "execution resumes PAST the @save, not at its descriptor");
 
         // A properly-resumed machine must not immediately re-suspend.
         let r2 = m.step();
@@ -2931,7 +2935,7 @@ mod restore_request_tests {
         let dir = scratch_dir("save-cancel");
         let mem = Memory::new(save_then_restore_story()).unwrap();
         let mut m = Machine::new(mem);
-        m.state.pc = 0x40;
+        m.state.set_pc(0x40);
         assert_eq!(m.step(), StepResult::SaveRequest);
 
         handle_save_request(&mut m, &dir, "");
@@ -2951,7 +2955,7 @@ mod restore_request_tests {
         let dir = scratch_dir("restore-cancel");
         let mem = Memory::new(save_then_restore_story()).unwrap();
         let mut m = Machine::new(mem);
-        m.state.pc = 0x40;
+        m.state.set_pc(0x40);
 
         // Make a genuine save for this story and plant it where the empty
         // filename used to resolve.

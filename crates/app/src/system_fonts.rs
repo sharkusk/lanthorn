@@ -151,6 +151,7 @@ impl UserFace {
                 blorb::amiga_font::drawer_of(&self.name)
                     .is_some_and(|d| d.eq_ignore_ascii_case(drawer))
             }
+            _ => false,
         }
     }
 }

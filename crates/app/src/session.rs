@@ -1821,9 +1821,9 @@ impl GameSession {
         let location = detected.as_ref().map(location_to_snapshot);
         let location_method = detected.as_ref().map(Location::method);
 
-        let diagnostics = std::mem::take(&mut self.machine.diagnostics);
+        let diagnostics = self.machine.take_diagnostics();
         let fault = self.machine.take_fault_trace().map(|t| t.to_lines());
-        let sounds = std::mem::take(&mut self.machine.pending_sounds);
+        let sounds = self.machine.take_pending_sounds();
         // A v6 wrap+scroll window moved out from under prose it had already
         // printed, and the engine froze that prose where it was painted (SQ-0697).
         // The stamp is in the same window-0 output-char space as an inline
@@ -1832,7 +1832,7 @@ impl GameSession {
         // printed at the window's new origin. A flat `mark_screen_clear` around
         // the whole push could not split a turn that contains both halves — and
         // Shogun's opening is exactly one such turn.
-        let prose_retired_at = std::mem::take(&mut self.machine.v6_prose_retired);
+        let prose_retired_at = self.machine.take_v6_prose_retired();
         let prose_retired = prose_retired_at
             .map(|at| (at.saturating_sub(win0_base) as usize).min(transcript.chars().count()));
         // …and the head above that boundary is not scrollback, it is PAINT (SQ-0890).
@@ -2043,8 +2043,8 @@ impl GameSession {
     /// and running all the fills last let the opening full-screen clear erase both
     /// cards it had already painted.
     fn drain_pictures(&mut self) -> Vec<PictureEvent> {
-        let events = std::mem::take(&mut self.machine.pending_pictures);
-        let fills = std::mem::take(&mut self.machine.pending_erase_fills);
+        let events = self.machine.take_pending_pictures();
+        let fills = self.machine.take_pending_erase_fills();
         let mut next_fill = 0usize;
         // A new turn supersedes whatever sequence was still playing: those frames
         // describe a screen the game has already moved on from.
@@ -4465,6 +4465,7 @@ fn run_until_input(machine: &mut Machine) -> RunStop {
             // `drain_turn`.
             StepResult::Restart => machine.restart(),
             StepResult::Continue => {}
+            _ => return RunStop::Quit,
         }
     }
 }
@@ -4533,7 +4534,7 @@ pub(crate) fn ends_with_read_prompt(s: &str) -> bool {
 /// happen within this module since `GameSession::new` always installs one).
 fn sink_mut(machine: &mut Machine) -> &mut CaptureSink {
     machine
-        .out
+        .output_mut()
         .as_any_mut()
         .downcast_mut::<CaptureSink>()
         .expect("GameSession machine must have a CaptureSink output")
@@ -4565,7 +4566,7 @@ pub fn restore_screen(session: &mut GameSession, screen: zvm::screen::ScreenStat
     session.v6_model_memo.take();
     let machine = &mut session.machine;
     machine.screen = screen;
-    machine.out.set_buffer_mode(buffering);
+    machine.output_mut().set_buffer_mode(buffering);
     // SQ-0551: same class of fix as the `buffer_mode` re-sync above — state that
     // lives in two places, only one of which is archived.
     //
@@ -4822,7 +4823,7 @@ impl GameSession {
             }
         } // drop borrow_mut before confirmation / the shared borrow
         // Runtime confirmation, once per turn (skip while parked at same PC).
-        if self.last_confirmed_pc.get() != Some(self.machine.state.pc) {
+        if self.last_confirmed_pc.get() != Some(self.machine.state.pc()) {
             self.confirm_disasm();
         }
         let slot = self.disasm_cache.borrow();
@@ -4835,10 +4836,10 @@ impl GameSession {
         let mut slot = self.disasm_cache.borrow_mut();
         let Some(cache) = slot.as_mut() else { return }; // don't build just to confirm
         let mem = &self.machine.mem;
-        for f in &self.machine.state.frames {
-            cache.confirm_routine(mem, f.func_addr);
+        for f in self.machine.state.frames() {
+            cache.confirm_routine(mem, f.func_addr());
         }
-        cache.confirm_pc(mem, self.machine.state.pc);
+        cache.confirm_pc(mem, self.machine.state.pc());
         // When parked at an input prompt, `state.pc` points PAST the read to the
         // code that consumes the input; confirm the read instruction itself too, so
         // it renders as a real op instead of being eaten by a stale tiling. This is
@@ -4847,7 +4848,7 @@ impl GameSession {
         if let Some(read_pc) = self.machine.pending_read_pc() {
             cache.confirm_pc(mem, read_pc);
         }
-        for &pc in &self.machine.exec_pcs {
+        for &pc in self.machine.exec_pcs() {
             cache.confirm_pc(mem, pc);
         }
         // Draining a fault isn't needed here (confirm reads via decode which may
@@ -4864,7 +4865,7 @@ impl GameSession {
         let built = self.disasm_cache.borrow().is_some();
         if built {
             self.fold_confirmations();
-            self.last_confirmed_pc.set(Some(self.machine.state.pc));
+            self.last_confirmed_pc.set(Some(self.machine.state.pc()));
         }
     }
 
@@ -5087,6 +5088,7 @@ pub fn status_model_from_machine(machine: &Machine) -> StatusModel {
             zvm::screen::StatusRight::Time { hours, minutes } => {
                 StatusField::Time { hours, minutes }
             }
+            _ => StatusField::ScoreTurns { score: 0, turns: 0 },
         };
         StatusModel::Classic { location: sl.location, right }
     } else {
@@ -5096,7 +5098,7 @@ pub fn status_model_from_machine(machine: &Machine) -> StatusModel {
 
 impl Engine for GameSession {
     fn submit(&mut self, command: &str) -> TurnResult {
-        if self.machine.trace_exec { self.machine.exec_pcs.clear(); }
+        if self.machine.trace_exec { self.machine.clear_exec_pcs(); }
         // A turn executes new code, so its freshly-recorded boundaries must be
         // folded afterward EVEN IF it returns to the same parked PC (every
         // look/examine returns to the same input prompt). Reopen the per-turn
@@ -5108,7 +5110,7 @@ impl Engine for GameSession {
     }
 
     fn submit_key(&mut self, key: KeyInput) -> Option<TurnResult> {
-        if self.machine.trace_exec { self.machine.exec_pcs.clear(); }
+        if self.machine.trace_exec { self.machine.clear_exec_pcs(); }
         self.last_confirmed_pc.set(None); // reopen the confirmation gate each turn
         let byte = GameSession::key_input_to_zscii(key)?;
         Some(self.submit_char(byte))
@@ -5466,6 +5468,7 @@ impl Engine for GameSession {
             zvm::world::DeclaredExit::Message => crate::engine::DeclaredExit::Message,
             zvm::world::DeclaredExit::Absent => crate::engine::DeclaredExit::Absent,
             zvm::world::DeclaredExit::Unknown => crate::engine::DeclaredExit::Unknown,
+            _ => crate::engine::DeclaredExit::Unknown,
         }
     }
 
@@ -5482,7 +5485,7 @@ impl Engine for GameSession {
     }
 
     fn take_screen_trace(&mut self) -> Vec<String> {
-        std::mem::take(&mut self.machine.screen_trace)
+        self.machine.take_screen_trace()
     }
 
     fn v6_snapshot(&self) -> Option<Vec<String>> {
@@ -5526,7 +5529,7 @@ impl Engine for GameSession {
         self.machine.trace_exec = on;
         // Only the per-turn set is cleared when tracing stops; the cumulative
         // `ever_exec_pcs` (permanent colour + persisted coverage) is preserved.
-        if !on { self.machine.exec_pcs.clear(); }
+        if !on { self.machine.clear_exec_pcs(); }
     }
 
     fn seed_executed_pcs(&mut self, pcs: &std::collections::HashSet<u32>) {
@@ -5748,7 +5751,7 @@ impl Introspect for GameSession {
 
 impl Debugger for GameSession {
     fn pc(&self) -> u32 {
-        self.machine.state.pc
+        self.machine.state.pc()
     }
 
     fn disassemble(&self, addr: u32, lines: usize) -> Vec<String> {
@@ -5826,7 +5829,7 @@ impl Debugger for GameSession {
     }
 
     fn executed_pcs(&self) -> std::collections::HashSet<u32> {
-        self.machine.exec_pcs.clone()
+        self.machine.exec_pcs().clone()
     }
 
     fn ever_executed_pcs(&self) -> std::collections::HashSet<u32> {
@@ -5835,14 +5838,14 @@ impl Debugger for GameSession {
 
     fn stack_lines(&self) -> Vec<String> {
         let st = &self.machine.state;
-        if st.frames.is_empty() {
+        if st.frames().is_empty() {
             return vec!["(no frames)".to_string()];
         }
-        let mut out = Vec::with_capacity(st.frames.len());
-        for (i, f) in st.frames.iter().enumerate() {
+        let mut out = Vec::with_capacity(st.frames().len());
+        for (i, f) in st.frames().iter().enumerate() {
             out.push(format!(
                 "#{i}  fn@{:06x}  ret={:06x}  args={}",
-                f.func_addr, f.return_pc, f.arg_count
+                f.func_addr(), f.return_pc(), f.arg_count()
             ));
         }
         out
@@ -5850,22 +5853,22 @@ impl Debugger for GameSession {
 
     fn eval_stack_lines(&self) -> Vec<String> {
         let st = &self.machine.state;
-        if st.eval_stack.is_empty() {
+        if st.eval_stack().is_empty() {
             return vec!["(empty)".to_string()];
         }
         let bases: std::collections::HashSet<usize> =
-            st.frames.iter().map(|f| f.eval_base).collect();
-        st.eval_stack.iter().enumerate().rev().map(|(i, v)| {
+            st.frames().iter().map(|f| f.eval_base()).collect();
+        st.eval_stack().iter().enumerate().rev().map(|(i, v)| {
             let b = if bases.contains(&i) { "  <- frame base" } else { "" };
             format!("[{i:>3}] {:04x}  ({}){}", v, *v as i16, b)
         }).collect()
     }
 
     fn locals_lines(&self) -> Vec<String> {
-        match self.machine.state.frames.last() {
+        match self.machine.state.frames().last() {
             None => vec!["(no frame)".to_string()],
-            Some(f) if f.locals.is_empty() => vec!["(none)".to_string()],
-            Some(f) => f.locals.iter().enumerate()
+            Some(f) if f.locals().is_empty() => vec!["(none)".to_string()],
+            Some(f) => f.locals().iter().enumerate()
                 .map(|(i, w)| format!("local{i} = {:04x}  ({})", w, w))
                 .collect(),
         }
@@ -5993,10 +5996,10 @@ impl Debugger for GameSession {
     }
 
     fn frame_locals(&self, idx: usize) -> Vec<String> {
-        match self.machine.state.frames.get(idx) {
+        match self.machine.state.frames().get(idx) {
             None => vec!["(no frame)".to_string()],
-            Some(f) if f.locals.is_empty() => vec!["(no locals)".to_string()],
-            Some(f) => f.locals.iter().enumerate()
+            Some(f) if f.locals().is_empty() => vec!["(no locals)".to_string()],
+            Some(f) => f.locals().iter().enumerate()
                 .map(|(i, w)| format!("local{i} = 0x{:04x}  ({})", w, *w as i16))
                 .collect(),
         }
@@ -6005,8 +6008,8 @@ impl Debugger for GameSession {
     fn var_value(&self, var: u8) -> Option<u16> {
         let st = &self.machine.state;
         match var {
-            0 => st.eval_stack.last().copied(), // peek the top; never pops
-            1..=15 => st.frames.last()?.locals.get((var - 1) as usize).copied(),
+            0 => st.eval_stack().last().copied(), // peek the top; never pops
+            1..=15 => st.frames().last()?.locals().get((var - 1) as usize).copied(),
             n => Some(self.machine.global(n - 16)),
         }
     }
@@ -7445,7 +7448,7 @@ mod tests {
             .expect("GameSession::new failed");
         s.set_trace_screen(true);
         assert!(s.machine.trace_screen, "set_trace_screen(true) reaches the machine");
-        s.machine.screen_trace.push("@set_colour(fg=std5, bg=std2)".to_string());
+        s.machine.push_screen_trace("@set_colour(fg=std5, bg=std2)".to_string());
         let lines = s.take_screen_trace();
         assert!(lines.iter().any(|l| l.starts_with("@")), "{lines:?}");
         assert!(s.take_screen_trace().is_empty(), "second drain is empty");
@@ -7965,8 +7968,8 @@ mod tests {
         assert!(r.sounds.is_empty(), "no sounds when the game emits no sound");
         assert!(r.diagnostics.is_empty(), "no diagnostics on a clean turn");
         // VM queues are drained after the turn.
-        assert!(sess.machine.pending_sounds.is_empty());
-        assert!(sess.machine.diagnostics.is_empty());
+        assert!(sess.machine.pending_sounds().is_empty());
+        assert!(sess.machine.diagnostics().is_empty());
     }
 
     // ── Plan 1b Task 2: pending_pictures → per-window canvases ────────────────
@@ -8120,7 +8123,7 @@ mod tests {
         let mut windows: [ZWindow; 8] = Default::default();
         windows[7] = ZWindow { x_size: 64, y_size: 48, ..Default::default() };
         machine.screen.v6 = Some(V6Windows { windows, current: 7 });
-        machine.pending_pictures.push(PictureEvent { number: 1, window: 7, x: 2, y: 3, erase: false, out_chars: 0, margin_after: None, at_cursor: false, win_box: (1, 1, 64, 48) });
+        machine.queue_picture_event(PictureEvent { number: 1, window: 7, x: 2, y: 3, erase: false, out_chars: 0, margin_after: None, at_cursor: false, win_box: (1, 1, 64, 48) });
 
         // Construct the session directly (bypassing the constructor's boot
         // loop, which this synthetic story can't usefully run) with a Pict
@@ -8155,7 +8158,7 @@ mod tests {
 
         assert_eq!(result.pictures, vec![PictureEvent { number: 1, window: 7, x: 2, y: 3, erase: false, out_chars: 0, margin_after: None, at_cursor: false, win_box: (1, 1, 64, 48) }],
             "the drained event is carried on TurnResult (mirrors pending_sounds)");
-        assert!(sess.machine.pending_pictures.is_empty(), "the VM queue is drained after the turn");
+        assert!(sess.machine.pending_pictures().is_empty(), "the VM queue is drained after the turn");
 
         let canvas = sess.pictures_canvas.get(&7).expect("a canvas was created for window 7");
         assert_eq!(canvas.img.dimensions(), (64, 48), "canvas sized from the v6 window's pixel dims");
@@ -8527,8 +8530,8 @@ mod tests {
         machine.screen.v6 = Some(V6Windows { windows, current: 7 });
         // Draw, then erase the same picture — the erase must clear back to
         // transparent over the picture's own footprint (2x2, ZMSD §15).
-        machine.pending_pictures.push(PictureEvent { number: 1, window: 7, x: 2, y: 3, erase: false, out_chars: 0, margin_after: None, at_cursor: false, win_box: (1, 1, 64, 48) });
-        machine.pending_pictures.push(PictureEvent { number: 1, window: 7, x: 2, y: 3, erase: true, out_chars: 0, margin_after: None, at_cursor: false, win_box: (1, 1, 64, 48) });
+        machine.queue_picture_event(PictureEvent { number: 1, window: 7, x: 2, y: 3, erase: false, out_chars: 0, margin_after: None, at_cursor: false, win_box: (1, 1, 64, 48) });
+        machine.queue_picture_event(PictureEvent { number: 1, window: 7, x: 2, y: 3, erase: true, out_chars: 0, margin_after: None, at_cursor: false, win_box: (1, 1, 64, 48) });
 
         let blorb = crate::graphics::test_blorb_with_pict(1, &png_bytes_2x2_red());
         let mut sess = GameSession {
@@ -9400,7 +9403,7 @@ mod debugger_impl_tests {
         // a turn must reopen the gate rather than skip confirmation. (read-pc follow-up)
         let Some(mut session) = zvm_session() else { return };
         session.set_debug_trace(true);
-        let pc = session.machine.state.pc;
+        let pc = session.machine.state.pc();
         let _ = session.debugger().unwrap().disassemble(pc, 1); // builds + confirms, closes the gate
         assert_eq!(session.last_confirmed_pc.get(), Some(pc), "confirm closes the gate on the parked PC");
         let _ = Engine::submit(&mut session, "look");
@@ -9421,7 +9424,7 @@ mod debugger_impl_tests {
         assert!(s.machine.mem.take_mem_fault().is_some(), "sanity: OOB read latches a fault");
         let _ = s.machine.mem.read_word(end + 100); // re-latch (the check above drained it)
         // Any Debugger read must leave the fault cell clean.
-        let pc = s.machine.state.pc;
+        let pc = s.machine.state.pc();
         let dbg = s.debugger().expect("zvm has a debugger");
         let _ = dbg.disassemble(pc, 8);
         assert!(
@@ -9573,7 +9576,7 @@ mod debugger_impl_tests {
     fn zvm_exposes_a_debugger() {
         let Some(s) = zvm_session() else { return };
         let d = s.debugger().expect("zvm has a debugger");
-        assert_eq!(d.pc(), s.machine.state.pc);
+        assert_eq!(d.pc(), s.machine.state.pc());
         assert_eq!(d.globals_lines().len(), 240);
         assert!(!d.dictionary_lines().is_empty());
         assert!(!d.object_tree_lines().is_empty());
@@ -9805,17 +9808,17 @@ mod debugger_impl_tests {
     fn frame_func_addrs_are_promoted_to_routine_headers() {
         let Some(s) = zvm_session() else { return };
         let _ = s.disassemble(Debugger::pc(&s), 1); // build cache + fold the call stack in
-        for f in &s.machine.state.frames {
+        for f in s.machine.state.frames() {
             // Only func_addrs inside the code region get a header; disassembling
             // at one now shows a RoutineHeader unit line ("; routine").
-            let hdr = s.disassemble(f.func_addr, 1);
+            let hdr = s.disassemble(f.func_addr(), 1);
             if hdr.is_empty() {
                 continue; // outside the tiled code region
             }
             assert!(
                 hdr[0].contains("; routine"),
                 "func_addr {:06x} did not become a routine header: {:?}",
-                f.func_addr, hdr[0]
+                f.func_addr(), hdr[0]
             );
         }
     }

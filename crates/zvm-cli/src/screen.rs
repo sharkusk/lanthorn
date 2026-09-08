@@ -25,6 +25,7 @@ fn push_colour_sgr(params: &mut Vec<String>, c: ZColour, fg: bool) {
             let (r, g, b) = (((v >> 16) & 0xFF), ((v >> 8) & 0xFF), (v & 0xFF));
             params.push(format!("{};2;{};{};{}", base_true, r, g, b));
         }
+        _ => {}
     }
 }
 
@@ -42,6 +43,7 @@ pub fn zcolour_rgb(c: ZColour) -> Option<(u8, u8, u8)> {
         ZColour::Standard(n) => Some(grey_rgb(n)),
         ZColour::True(v) => Some(rgb15_to_888(v)),
         ZColour::True24(v) => Some((((v >> 16) & 0xFF) as u8, ((v >> 8) & 0xFF) as u8, (v & 0xFF) as u8)),
+        _ => None,
     }
 }
 
@@ -107,6 +109,7 @@ fn right_field(right: &StatusRight) -> String {
     match right {
         StatusRight::ScoreTurns { score, turns } => format!("Score: {score}  Moves: {turns}"),
         StatusRight::Time { hours, minutes } => format!("Time: {hours:02}:{minutes:02}"),
+        _ => String::new(),
     }
 }
 
@@ -182,6 +185,7 @@ pub fn status_band_ansi(text: &str, look: Option<zvm::interpreter::PeriodLook>) 
             }
             out
         }
+        Some(_) => reverse(text),
     }
 }
 

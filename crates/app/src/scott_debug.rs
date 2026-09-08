@@ -23,7 +23,8 @@
 
 use std::collections::HashSet;
 
-use scott::{decompile_action, list_items, list_rooms, list_vocab, Vm, CARRIED, DARK_FLAG, LAMP_EMPTY_FLAG};
+use scott::{decompile_action, list_items, list_rooms, list_vocab, Vm};
+use scott::database::{CARRIED, DARK_FLAG, LAMP_EMPTY_FLAG};
 
 use crate::debug_panel::Section;
 use crate::engine::Debugger;

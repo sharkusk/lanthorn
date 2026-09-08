@@ -182,6 +182,7 @@ pub fn status_style(look: &PeriodLook) -> Style {
         StatusBand::PerRun => body,
         StatusBand::Own { ground, ink } => Style::new().fg(rgb(ink)).bg(rgb(ground)),
         StatusBand::Ruled => body.add_modifier(Modifier::UNDERLINED),
+        _ => body,
     }
 }
 
@@ -223,6 +224,7 @@ pub fn caret_cell(look: &PeriodLook) -> Option<(&'static str, Style)> {
         CursorShape::Block => Some((" ", Style::new().fg(rgb(look.page)).bg(colour))),
         CursorShape::Underscore => Some(("▁", Style::new().fg(colour).bg(rgb(look.page)))),
         CursorShape::ReverseSpace => None,
+        _ => None,
     }
 }
 
@@ -246,6 +248,7 @@ pub fn caret_over_text(look: &PeriodLook) -> Option<Style> {
         }
         CursorShape::Bar | CursorShape::Block => Some(Style::new().fg(rgb(look.page)).bg(colour)),
         CursorShape::ReverseSpace => None,
+        _ => None,
     }
 }
 
@@ -337,11 +340,12 @@ pub fn apply_to_theme(theme: &mut Theme, look: &PeriodLook, zversion: Option<u8>
         // to state (SQ-0935). See [`machine_states_the_status_colour`]: the boundary
         // is v5, where the game gains `set_colour` and can name that row itself, NOT
         // v4, where it merely starts drawing it.
-        StatusBand::Ruled | StatusBand::Own { .. } => {
-            if machine_states_the_status_colour(zversion) {
-                theme.set_unclaimed("status_bar", "chrome", status_style(look));
-            }
+        StatusBand::Ruled | StatusBand::Own { .. }
+            if machine_states_the_status_colour(zversion) =>
+        {
+            theme.set_unclaimed("status_bar", "chrome", status_style(look));
         }
+        _ => {}
     }
 }
 

@@ -363,6 +363,7 @@ fn drive(machine: &mut Machine) -> DriveStop {
                     return DriveStop::Filename { usage, fmode };
                 }
             }
+            _ => return DriveStop::Quit,
         }
     }
 }

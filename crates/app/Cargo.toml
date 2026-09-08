@@ -150,6 +150,11 @@ flate2 = "1"
 # binary must never gain it (`cargo tree -p lanthorn -e normal | grep -c qwertty`
 # must print 0).
 [dev-dependencies]
+# SQ-1394: turns on zvm's `fixtures` feature (gated off by default so its
+# `CARGO_MANIFEST_DIR`-baking module never reaches a normal downstream build)
+# for this crate's own test builds, which is the only place `session.rs`'s
+# tests reach `zvm::fixtures::load`.
+zvm = { package = "lanthorn-zvm", path = "../zvm", version = "0.5.3", features = ["fixtures"] }
 # SQ-0942: a real typeface for the gallery tool (`--example gallery`), whose
 # output is meant to be LOOKED at. It is NOT used by the geometry oracle, which
 # keeps its deliberately-synthetic bitmap face — see

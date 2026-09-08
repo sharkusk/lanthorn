@@ -324,7 +324,7 @@ impl Engine for ScottSession {
         let r = self
             .vm
             .restore(&save.bytes)
-            .map_err(|_| EngineError::BadSave("bad Scott snapshot".to_string()));
+            .map_err(|e| EngineError::BadSave(format!("bad Scott snapshot: {e}")));
         self.refresh_picture();
         r
     }
@@ -333,7 +333,7 @@ impl Engine for ScottSession {
         let r = self
             .vm
             .restore(bytes)
-            .map_err(|_| EngineError::BadSave("bad Scott snapshot".to_string()));
+            .map_err(|e| EngineError::BadSave(format!("bad Scott snapshot: {e}")));
         self.refresh_picture();
         r
     }

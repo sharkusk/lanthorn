@@ -464,6 +464,7 @@ impl ZColourDto {
             Z::Standard(n) => ZColourDto::Standard(n),
             Z::True(v) => ZColourDto::True(v),
             Z::True24(v) => ZColourDto::True24(v),
+            _ => ZColourDto::Default,
         }
     }
     fn to_z(&self) -> zvm::screen::ZColour {

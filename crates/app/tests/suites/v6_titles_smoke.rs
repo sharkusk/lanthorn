@@ -85,7 +85,7 @@ fn smoke_v6_title(title: &str, story_path: &PathBuf) {
         );
     }
 
-    eprintln!("{title} diagnostics: {:?}", session.machine.diagnostics);
+    eprintln!("{title} diagnostics: {:?}", session.machine.diagnostics());
 }
 
 #[test]
