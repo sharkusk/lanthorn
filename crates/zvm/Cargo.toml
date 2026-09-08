@@ -26,3 +26,19 @@ doctest = false
 # zero-dependency workspace crate, so this stays a zero-EXTERNAL-dependency
 # crate exactly as before.
 grammar-model = { package = "lanthorn-grammar-model", path = "../grammar-model", version = "0.5.3" }
+
+[features]
+# Gates `pub mod fixtures` (SQ-1394): that module bakes the build machine's
+# absolute CARGO_MANIFEST_DIR into every downstream binary that links it, so
+# it must not be reachable from a normal dependent. Enabled below as a
+# dev-dependency-only feature so this crate's own integration tests (which
+# link it like any other dependent) still see it.
+fixtures = []
+
+[dev-dependencies]
+# Self-dependency purely to turn on the `fixtures` feature for this crate's
+# own `tests/*.rs` integration binaries, which build against the library the
+# same way an external dependent would and so cannot see a bare `#[cfg(test)]`
+# item — see `header::tests_support` for the item-level precedent this
+# mirrors at the module/feature level.
+lanthorn-zvm = { path = ".", features = ["fixtures"] }

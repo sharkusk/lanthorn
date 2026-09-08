@@ -5,10 +5,8 @@
 //! Reference: ScottFree 1.14 `scott.c` (cspiegel/scottfree-glk mirror) —
 //! `MatchUpItem`, `GetInput`, `PerformActions`, `PerformLine` case 69.
 
-use scott::{
-    Action, Condition, Database, Item, LoadError, Room, Vm, CARRIED, LAMP_EMPTY_FLAG,
-    LIGHT_SOURCE,
-};
+use scott::{Action, Condition, Database, Item, LoadError, Room, Vm};
+use scott::database::{CARRIED, LAMP_EMPTY_FLAG, LIGHT_SOURCE};
 
 fn rooms3() -> Vec<Room> {
     (0..3)

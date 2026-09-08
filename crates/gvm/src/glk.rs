@@ -19,6 +19,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 /// The window kinds this subset supports. (Blank is out of scope.)
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
+#[non_exhaustive]
 pub enum WinType {
     /// Internal layout node created by a split (`wintype_Pair` = 1).
     Pair,
@@ -81,6 +82,7 @@ pub const WINMETHOD_NOBORDER: u32 = 0x0100;
 
 /// A Glk style class (the `style_*` constants 0–10).
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
+#[non_exhaustive]
 pub enum GlkStyle {
     /// `style_Normal` = 0.
     Normal,

@@ -949,6 +949,7 @@ pub(crate) fn loc_method_label(m: zvm::location::LocationMethod) -> &'static str
         StatusName => "via name match",
         NameOnly => "via name (unlinked)",
         RoomHeading => "via room heading",
+        _ => "via unknown method",
     }
 }
 

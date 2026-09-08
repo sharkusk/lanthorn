@@ -39,6 +39,7 @@ pub fn glk_style_bits(style: GlkStyle) -> u8 {
         | GlkStyle::BlockQuote
         | GlkStyle::User1
         | GlkStyle::User2 => 0,
+        _ => 0,
     }
 }
 
@@ -538,6 +539,7 @@ impl AppGlk {
                         WinType::TextBuffer => "Buffer",
                         WinType::Graphics => "Graphics",
                         WinType::Pair => "Pair",
+                        _ => "Unknown",
                     };
                     let prim = if primary == Some(*id) { " (primary)" } else { "" };
                     let ginfo = if *wintype == WinType::Graphics {
@@ -1136,6 +1138,12 @@ impl AppGlk {
                     })
                 }
                 WinType::Pair => unreachable!("pair windows are never tree leaves"),
+                _ => {
+                    let mut b = self.buffer_node(*id);
+                    b.bg = *bg;
+                    b.fg = *fg;
+                    WinNode::Buffer(b)
+                }
             },
             WinTree::Pair { vertical, border, split, key_bg, key_fg, first, second, .. } => WinNode::Pair {
                 vertical: *vertical,
@@ -1298,6 +1306,7 @@ impl GlkBackend for AppGlk {
             }
             WinType::Pair => {}
             WinType::Graphics => {}
+            _ => {}
         }
     }
 
@@ -1429,6 +1438,7 @@ impl GlkBackend for AppGlk {
             WinType::TextBuffer => 0,
             WinType::TextGrid => 1,
             WinType::Pair | WinType::Graphics => return None,
+            _ => return None,
         };
         self.theme_styles[row].get(style as usize).copied()
     }

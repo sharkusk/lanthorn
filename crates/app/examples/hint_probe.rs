@@ -256,7 +256,7 @@ fn report(
     }
 
     if opts.trace {
-        for line in s.machine.screen_trace.iter() {
+        for line in s.machine.screen_trace().iter() {
             if line.contains("output_stream") || line.contains("window_style") || line.contains("put_wind_prop") || line.contains("window_size") || line.contains("set_window") {
                 println!("       trace {line}");
             }

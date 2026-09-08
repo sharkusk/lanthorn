@@ -35,6 +35,7 @@ fn boot_to_first_read(data: Vec<u8>) -> Machine {
             StepResult::NeedChar => machine.supply_char(b'\n'),
             StepResult::SaveRequest => machine.complete_save(false),
             StepResult::RestoreRequest => machine.complete_restore_failure(),
+            _ => return machine,
         }
     }
     panic!("boot_to_first_read: never reached a line-read prompt within step cap");
@@ -51,6 +52,7 @@ fn run_one_turn(machine: &mut Machine, input: &str) {
             StepResult::NeedChar => machine.supply_char(b'\n'),
             StepResult::SaveRequest => machine.complete_save(false),
             StepResult::RestoreRequest => machine.complete_restore_failure(),
+            _ => return,
         }
     }
     panic!("run_one_turn({input:?}): never reached the next prompt within step cap");
@@ -70,6 +72,7 @@ fn drain_to_next_read(machine: &mut Machine) {
             StepResult::NeedChar => machine.supply_char(b'\n'),
             StepResult::SaveRequest => machine.complete_save(false),
             StepResult::RestoreRequest => machine.complete_restore_failure(),
+            _ => return,
         }
     }
     panic!("drain_to_next_read: never reached the next prompt within step cap");
@@ -157,6 +160,7 @@ fn lanthorn_save_at_p() -> std::path::PathBuf {
                 StepResult::NeedLine { .. } | StepResult::Quit | StepResult::Restart | StepResult::Fault => {
                     panic!("lanthorn_save_at_p: expected a SaveRequest from the `save` verb but the machine reached a different terminal state first");
                 }
+                _ => {}
             }
         }
         panic!("lanthorn_save_at_p: never reached SaveRequest within step cap");

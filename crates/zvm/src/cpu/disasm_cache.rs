@@ -15,6 +15,7 @@ use std::collections::{BTreeSet, HashSet};
 /// descent from a constant call target, the initial PC, or execution-confirmed)
 /// and `Soft` when it came only from the linear scan (an unverified guess).
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
+#[non_exhaustive]
 pub enum Provenance {
     /// Hard: RD-discovered / initial-PC / execution-confirmed code.
     Rd,
@@ -26,6 +27,7 @@ pub enum Provenance {
 
 /// A single displayable unit within the disassembled code region.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
+#[non_exhaustive]
 pub enum Unit {
     /// A decoded instruction spanning `[addr, next)`.
     Instr { addr: u32, next: u32, prov: Provenance },
@@ -70,6 +72,7 @@ impl Unit {
 /// Rendering detail level for a cached unit (mirrors `disasm`'s
 /// full/basic/raw views).
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
+#[non_exhaustive]
 pub enum CacheFmt {
     Full,
     Basic,

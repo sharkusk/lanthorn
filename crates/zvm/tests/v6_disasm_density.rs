@@ -59,6 +59,7 @@ impl Density {
                 Provenance::Data => d.data_bytes += len,
                 Provenance::Soft => d.soft_bytes += len,
                 Provenance::Rd => d.rd_bytes += len,
+                _ => {}
             }
             // Data units should never claim to be code.
             if matches!(u, Unit::Data { .. }) {

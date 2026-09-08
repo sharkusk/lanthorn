@@ -18,6 +18,7 @@ use crate::objects;
 /// The right-hand portion of a v3 status line (ZMSD §8.2.3.1).
 /// Flags1 bit 1: 0 = score/turns, 1 = time (hours:minutes).
 #[derive(Debug, PartialEq)]
+#[non_exhaustive]
 pub enum StatusRight {
     ScoreTurns { score: i16, turns: u16 },
     Time { hours: u8, minutes: u8 },
@@ -45,6 +46,7 @@ pub struct StatusLine {
 /// fidelity rather than downsampled to 15-bit).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[derive(Default)]
+#[non_exhaustive]
 pub enum ZColour {
     #[default]
     Default,
@@ -2069,6 +2071,7 @@ pub fn init_header_caps(mem: &mut Memory, honor_game_colours: bool, sound_availa
 /// what every lanthorn session has always used. [`Palette::Amiga`] is the
 /// sibling, for the Amiga interpreter profile (SQ-0719).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[non_exhaustive]
 pub enum Palette {
     /// ZMSD §8.3.1's recommended true-colour table.
     #[default]

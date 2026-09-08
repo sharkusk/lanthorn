@@ -37,28 +37,55 @@ pub const MAX_EVAL_STACK: usize = 614_400;
 #[derive(Debug)]
 pub struct Frame {
     /// PC to restore when this routine returns.
-    pub return_pc: u32,
+    pub(crate) return_pc: u32,
     /// Local variables for this routine (0-indexed: local 1 is `locals[0]`).
-    pub locals: Vec<u16>,
+    pub(crate) locals: Vec<u16>,
     /// Base index into the shared eval_stack for this frame's region.
-    pub eval_base: usize,
+    pub(crate) eval_base: usize,
     /// Variable number to store the return value into, or None to discard.
-    pub store_var: Option<u8>,
+    pub(crate) store_var: Option<u8>,
     /// Number of arguments passed to this routine.
-    pub arg_count: u8,
+    pub(crate) arg_count: u8,
     /// Routine entry address of this frame (0 for base/interrupt pseudo-frames).
-    pub func_addr: u32,
+    pub(crate) func_addr: u32,
+}
+
+impl Frame {
+    /// Routine entry address of this frame (0 for base/interrupt pseudo-frames).
+    pub fn func_addr(&self) -> u32 {
+        self.func_addr
+    }
+
+    /// PC to restore when this routine returns.
+    pub fn return_pc(&self) -> u32 {
+        self.return_pc
+    }
+
+    /// Number of arguments passed to this routine.
+    pub fn arg_count(&self) -> u8 {
+        self.arg_count
+    }
+
+    /// Base index into the shared eval stack for this frame's region.
+    pub fn eval_base(&self) -> usize {
+        self.eval_base
+    }
+
+    /// Local variables for this routine (0-indexed: local 1 is `locals()[0]`).
+    pub fn locals(&self) -> &[u16] {
+        &self.locals
+    }
 }
 
 /// Z-machine interpreter execution state.
 #[derive(Debug)]
 pub struct State {
-    pub pc: u32,
-    pub frames: Vec<Frame>,
-    pub eval_stack: Vec<u16>,
+    pub(crate) pc: u32,
+    pub(crate) frames: Vec<Frame>,
+    pub(crate) eval_stack: Vec<u16>,
     /// Latched stack-underflow fault from the current instruction. Drained by
     /// the CPU after each step. `None` in normal operation.
-    pub fault: Option<String>,
+    pub(crate) fault: Option<String>,
 }
 
 impl State {
@@ -70,6 +97,28 @@ impl State {
             fault: None,
         }
     }
+
+    /// The current program counter.
+    pub fn pc(&self) -> u32 {
+        self.pc
+    }
+
+    /// Set the program counter. For a host that needs to reposition a
+    /// suspended machine directly (tests, and the archive's PC-based resume
+    /// bookkeeping) rather than through a normal `step()`.
+    pub fn set_pc(&mut self, pc: u32) {
+        self.pc = pc;
+    }
+
+    /// The live call stack, innermost (most recent) frame last.
+    pub fn frames(&self) -> &[Frame] {
+        &self.frames
+    }
+
+    /// The shared evaluation stack across every frame's region.
+    pub fn eval_stack(&self) -> &[u16] {
+        &self.eval_stack
+    }
 }
 
 /// Read variable `var` from state/memory.
@@ -77,7 +126,7 @@ impl State {
 /// - var 0x00: pop from the current frame's eval stack region
 /// - var 0x01–0x0F: local variable (1-based index into current frame's locals)
 /// - var 0x10–0xFF: global variable from dynamic memory
-pub fn read_var(state: &mut State, mem: &Memory, var: u8) -> u16 {
+pub(crate) fn read_var(state: &mut State, mem: &Memory, var: u8) -> u16 {
     match var {
         0x00 => {
             // Pop from current frame's eval stack region
@@ -108,12 +157,12 @@ pub fn read_var(state: &mut State, mem: &Memory, var: u8) -> u16 {
 }
 
 /// Peek at the top of the eval stack WITHOUT popping (ZMSD §6.3.4: `load sp`).
-pub fn peek_stack(state: &State) -> u16 {
+pub(crate) fn peek_stack(state: &State) -> u16 {
     state.eval_stack.last().copied().unwrap_or(0)
 }
 
 /// Replace the top of the eval stack in place WITHOUT changing depth (ZMSD §6.3.4: `store sp`).
-pub fn poke_stack(state: &mut State, val: u16) {
+pub(crate) fn poke_stack(state: &mut State, val: u16) {
     if let Some(top) = state.eval_stack.last_mut() {
         *top = val;
     }
@@ -124,7 +173,7 @@ pub fn poke_stack(state: &mut State, val: u16) {
 /// - var 0x00: push onto the current frame's eval stack region
 /// - var 0x01–0x0F: local variable (1-based index into current frame's locals)
 /// - var 0x10–0xFF: global variable in dynamic memory
-pub fn write_var(state: &mut State, mem: &mut Memory, var: u8, val: u16) {
+pub(crate) fn write_var(state: &mut State, mem: &mut Memory, var: u8, val: u16) {
     match var {
         0x00 => {
             // MAX_EVAL_STACK guards a hostile/buggy loop that pushes without
@@ -163,7 +212,7 @@ pub fn write_var(state: &mut State, mem: &mut Memory, var: u8, val: u16) {
 ///
 /// Packed address 0 is special: do nothing and store 0 into `store_var`
 /// immediately (ZMSD §6.4.3).
-pub fn call_routine(
+pub(crate) fn call_routine(
     state: &mut State,
     mem: &mut Memory,
     packed_addr: u16,
@@ -257,7 +306,7 @@ pub fn call_routine(
 /// Return `val` from the current routine: pop the frame, truncate the eval
 /// stack to the frame's base, store `val` into the frame's `store_var`, and
 /// restore PC to the frame's `return_pc`.
-pub fn return_value(state: &mut State, mem: &mut Memory, val: u16) {
+pub(crate) fn return_value(state: &mut State, mem: &mut Memory, val: u16) {
     let Some(frame) = state.frames.pop() else {
         state.fault = Some("stack underflow".to_string());
         return;

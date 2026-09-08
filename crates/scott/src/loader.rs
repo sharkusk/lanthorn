@@ -1,6 +1,7 @@
 use crate::*;
 
 #[derive(Debug, Clone, PartialEq)]
+#[non_exhaustive]
 pub enum LoadError {
     Truncated,
     BadInt(String),

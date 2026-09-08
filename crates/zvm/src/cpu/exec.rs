@@ -150,6 +150,7 @@ pub struct EraseFill {
 
 /// Result of executing one instruction.
 #[derive(Debug, PartialEq)]
+#[non_exhaustive]
 pub enum StepResult {
     /// Normal execution: continue to next instruction.
     Continue,
@@ -229,7 +230,7 @@ pub struct Machine {
     pub mem: Memory,
     pub state: State,
     /// Pluggable text output sink. Defaults to `BufferOutput` (Task 11).
-    pub out: Box<dyn Output>,
+    out: Box<dyn Output>,
     /// Non-None while the machine is suspended waiting for player input.
     pending_input: Option<PendingInput>,
     /// Screen model: window layout, cursor, text style.
@@ -323,7 +324,7 @@ pub struct Machine {
     /// EXT opcodes that have hit the unimplemented fallthrough (warned once each).
     pub(crate) warned_ext_opcodes: std::collections::HashSet<u8>,
     /// Sound events recorded by `sound_effect` since the host last drained them.
-    pub pending_sounds: Vec<SoundEvent>,
+    pub(crate) pending_sounds: Vec<SoundEvent>,
     /// Injected picture-dimension table for v6 `picture_data`: `(picture_number,
     /// width_px, height_px)`. Populated by the host (Task 9) before the boot run
     /// from the self-blorb's `Pict` resources; empty for non-v6 stories.
@@ -332,7 +333,7 @@ pub struct Machine {
     /// host last drained them. The engine never rasterizes; the host (Plan
     /// 1b) decodes the Blorb `Pict` resource and renders it — mirrors
     /// `pending_sounds`.
-    pub pending_pictures: Vec<PictureEvent>,
+    pub(crate) pending_pictures: Vec<PictureEvent>,
     /// Filled rectangles an `erase_window` painted, since the host last drained
     /// them (SQ-0706).
     ///
@@ -362,7 +363,7 @@ pub struct Machine {
     /// moves onto the same host surface the two queues should be unified under
     /// one paint sequence; today they are independent because pictures and fills
     /// are drawn by different games for different purposes.
-    pub pending_erase_fills: Vec<EraseFill>,
+    pub(crate) pending_erase_fills: Vec<EraseFill>,
     /// Running count of chars printed to v6 window 0 (the main scrolling
     /// window) — stamps `PictureEvent::out_chars` so window-0 inline pictures
     /// anchor to their position in the text stream. Monotonic, never reset.
@@ -378,7 +379,7 @@ pub struct Machine {
     /// scrollback above the boundary. A turn that retires twice keeps the LAST
     /// stamp — each retirement supersedes the one before it as the live screen's
     /// beginning. Set-only here; `GameSession::drain_turn` takes it.
-    pub v6_prose_retired: Option<u64>,
+    pub(crate) v6_prose_retired: Option<u64>,
     /// Whether the retirement [`Machine::v6_prose_retired`] stamps froze the
     /// window's WHOLE streamed screen, leaving nothing of it live (SQ-0890).
     ///
@@ -417,7 +418,7 @@ pub struct Machine {
     pub v6_declared_x: Option<(u8, u16, u16)>,
     /// Host-facing diagnostic lines (e.g. unimplemented opcodes, sampled sounds)
     /// recorded since the host last drained them. The engine never prints.
-    pub diagnostics: Vec<String>,
+    pub(crate) diagnostics: Vec<String>,
     /// In-memory auxiliary save table for the v5 `save/restore table` opcodes,
     /// keyed by the game-supplied name string. The host persists/repopulates it
     /// (in the `.lanthorn` archive or a per-game global file); the engine itself
@@ -452,12 +453,12 @@ pub struct Machine {
     /// (the `screen` debug section). Separate from `diagnostics`. (trace feature)
     pub trace_screen: bool,
     /// Accumulated `screen`-trace lines since the host last drained them.
-    pub screen_trace: Vec<String>,
+    pub(crate) screen_trace: Vec<String>,
     /// When true, `step()` records each instruction's start PC into `exec_pcs`
     /// (the debug inspector's execution-coverage marking).
     pub trace_exec: bool,
     /// Start PCs of instructions executed since the host last cleared them.
-    pub exec_pcs: std::collections::HashSet<u32>,
+    pub(crate) exec_pcs: std::collections::HashSet<u32>,
     /// Cumulative start PCs of every instruction ever executed while tracing was
     /// on — NEVER cleared per turn (unlike `exec_pcs`). Drives the permanent
     /// "executed" disassembly colour, and can be pre-seeded from host-persisted
@@ -640,6 +641,18 @@ impl Machine {
             newline_interrupt_active: false,
             just_restarted: false,
         }
+    }
+
+    /// The output sink this machine prints through.
+    pub fn output(&self) -> &dyn Output {
+        self.out.as_ref()
+    }
+
+    /// The output sink this machine prints through, mutably — for a host that
+    /// needs to reconfigure the sink in place (buffer mode, a test recorder's
+    /// own inspection methods) rather than replace it outright.
+    pub fn output_mut(&mut self) -> &mut dyn Output {
+        self.out.as_mut()
     }
 
     /// Set interpreter capability bits in the story header (ZMSD §11.1).
@@ -1255,6 +1268,98 @@ impl Machine {
     /// Take and clear the stack trace captured at the last fault.
     pub fn take_fault_trace(&mut self) -> Option<crate::cpu::trace::StackTrace> {
         self.fault_trace.take()
+    }
+
+    /// Sound events recorded by `sound_effect` since the last drain, without
+    /// taking them.
+    pub fn pending_sounds(&self) -> &[SoundEvent] {
+        &self.pending_sounds
+    }
+
+    /// Take and clear the sound events recorded by `sound_effect` since the
+    /// host last drained them.
+    pub fn take_pending_sounds(&mut self) -> Vec<SoundEvent> {
+        std::mem::take(&mut self.pending_sounds)
+    }
+
+    /// Draw/erase events recorded by `draw_picture`/`erase_picture` since the
+    /// last drain, without taking them.
+    pub fn pending_pictures(&self) -> &[PictureEvent] {
+        &self.pending_pictures
+    }
+
+    /// Take and clear the draw/erase events recorded by
+    /// `draw_picture`/`erase_picture` since the host last drained them.
+    pub fn take_pending_pictures(&mut self) -> Vec<PictureEvent> {
+        std::mem::take(&mut self.pending_pictures)
+    }
+
+    /// Queue a v6 picture-draw/erase event as if the opcode that produces it
+    /// had just run. For a host (and this crate's own tests) exercising the
+    /// render-drain path without executing real V6 bytecode.
+    pub fn queue_picture_event(&mut self, ev: PictureEvent) {
+        self.pending_pictures.push(ev);
+    }
+
+    /// Filled rectangles an `erase_window` painted since the last drain,
+    /// without taking them (SQ-0706).
+    pub fn pending_erase_fills(&self) -> &[EraseFill] {
+        &self.pending_erase_fills
+    }
+
+    /// Take and clear the filled rectangles an `erase_window` painted since
+    /// the host last drained them (SQ-0706).
+    pub fn take_pending_erase_fills(&mut self) -> Vec<EraseFill> {
+        std::mem::take(&mut self.pending_erase_fills)
+    }
+
+    /// Host-facing diagnostic lines recorded since the last drain, without
+    /// taking them.
+    pub fn diagnostics(&self) -> &[String] {
+        &self.diagnostics
+    }
+
+    /// Take and clear the host-facing diagnostic lines recorded since the
+    /// host last drained them.
+    pub fn take_diagnostics(&mut self) -> Vec<String> {
+        std::mem::take(&mut self.diagnostics)
+    }
+
+    /// Accumulated `screen`-trace lines since the last drain, without taking
+    /// them.
+    pub fn screen_trace(&self) -> &[String] {
+        &self.screen_trace
+    }
+
+    /// Take and clear the accumulated `screen`-trace lines since the host
+    /// last drained them.
+    pub fn take_screen_trace(&mut self) -> Vec<String> {
+        std::mem::take(&mut self.screen_trace)
+    }
+
+    /// Push one line onto the `screen`-trace buffer, as `trace_screen` would.
+    /// For a host (and this crate's own tests) that wants to exercise the
+    /// trace-drain path directly.
+    pub fn push_screen_trace(&mut self, line: String) {
+        self.screen_trace.push(line);
+    }
+
+    /// Start PCs of instructions executed since the host last cleared them.
+    pub fn exec_pcs(&self) -> &std::collections::HashSet<u32> {
+        &self.exec_pcs
+    }
+
+    /// Clear the start-PCs-executed-this-turn set (the debug inspector's
+    /// per-turn execution-coverage marking).
+    pub fn clear_exec_pcs(&mut self) {
+        self.exec_pcs.clear();
+    }
+
+    /// Take and clear the wrap+scroll-window prose-retirement stamp: a
+    /// `v6_win0_out_chars` position where prose was frozen into paint by a
+    /// window move/resize (SQ-0697), `None` when nothing was retired.
+    pub fn take_v6_prose_retired(&mut self) -> Option<u64> {
+        self.v6_prose_retired.take()
     }
 
     fn build_trace(&self, fault: String, fault_pc: u32, fault_op: String)
@@ -3927,7 +4032,7 @@ impl Machine {
     /// Offset 0 → return false (0) from current routine.
     /// Offset 1 → return true (1) from current routine.
     /// Else → pc += offset - 2  (offset is relative to next_pc already in state.pc).
-    pub fn do_branch(&mut self, branch: Option<Branch>, cond: bool) {
+    pub(crate) fn do_branch(&mut self, branch: Option<Branch>, cond: bool) {
         let br = match branch {
             Some(b) => b,
             None => return,
@@ -4431,7 +4536,7 @@ impl Machine {
     }
 
     /// Store `val` into variable `var` if `var` is Some.
-    pub fn do_store(&mut self, var: Option<u8>, val: u16) {
+    pub(crate) fn do_store(&mut self, var: Option<u8>, val: u16) {
         if let Some(v) = var {
             write_var(&mut self.state, &mut self.mem, v, val);
         }
@@ -4475,7 +4580,7 @@ impl Machine {
     /// 32–126 are translated through the Font-3 Unicode mapping table before
     /// being stored in the upper window grid or forwarded to the output sink.
     /// With any other font the output is byte-identical to the input.
-    pub fn print_text(&mut self, s: &str) {
+    pub(crate) fn print_text(&mut self, s: &str) {
         // SQ-0917: the session's v6 cell, read before any borrow of `self.screen`.
         let cell = self.v6_cell();
         // ZMSD 7.1.2.5: when stream 3 is selected it is the ONLY output stream —
@@ -5055,6 +5160,13 @@ impl Machine {
     pub fn global(&self, n: u8) -> u16 {
         let base = self.mem.global_vars() as u32;
         self.mem.read_word(base + n as u32 * 2)
+    }
+
+    /// Write global variable N (0-based). Convenience for tests: sets up a
+    /// known value before exercising a code path that is expected to overwrite it.
+    pub fn set_global(&mut self, n: u8, val: u16) {
+        let base = self.mem.global_vars() as u32;
+        self.mem.write_word(base + n as u32 * 2, val);
     }
 
     /// Complete a suspended `read` instruction by supplying a line of input.

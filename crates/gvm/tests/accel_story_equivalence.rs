@@ -181,6 +181,7 @@ fn play_named(name: &str, image: Vec<u8>, accel: bool, commands: &[&str]) -> Run
             StepResult::NeedFilename { .. } => {
                 panic!("{name}: unexpected filename prompt (accel={accel})")
             }
+            _ => break,
         }
     }
 

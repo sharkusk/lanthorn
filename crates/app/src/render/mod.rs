@@ -208,6 +208,7 @@ pub(crate) fn resolve_zcolour(c: ZColour, scheme: &ColorScheme) -> Color {
         ZColour::True24(v) => {
             Color::Rgb(((v >> 16) & 0xFF) as u8, ((v >> 8) & 0xFF) as u8, (v & 0xFF) as u8)
         }
+        _ => Color::Reset,
     }
 }
 

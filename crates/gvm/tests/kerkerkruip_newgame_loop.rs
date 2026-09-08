@@ -62,6 +62,7 @@ fn run_delivering_timers(m: &mut Machine, budget: u64) -> String {
             StepResult::SaveRequest => return "SaveRequest".into(),
             StepResult::RestoreRequest => return "RestoreRequest".into(),
             StepResult::NeedFilename { .. } => return "NeedFilename".into(),
+            _ => return "Unknown".into(),
         }
     }
 }

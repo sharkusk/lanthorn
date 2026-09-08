@@ -918,17 +918,17 @@ mod tests {
         let mut buf = sample_story_v4();
         buf[0x40] = 0xB5; buf[0x41] = 0x10; buf[0x42] = 0xBA; // save->G0 ; quit
         let mut m = Machine::new(Memory::new(buf).unwrap());
-        m.state.pc = 0x40;
+        m.state.set_pc(0x40);
         assert_eq!(m.step(), StepResult::SaveRequest);
         let blob = m.save_quetzal();               // descriptor PC (0x41), pending_save set
         m.complete_save(true);
         // Persist the game save and restore it via the game-save path.
         let tmp = std::env::temp_dir().join(format!("bm-gs-{}.qzl", std::process::id()));
         std::fs::write(&tmp, &blob).unwrap();
-        m.do_store(Some(0x10), 0x99); m.state.pc = 0x00AB;
+        m.set_global(0, 0x99); m.state.set_pc(0x00AB);
         super::restore_game(&tmp, &mut m).expect("restore game save");
         assert_eq!(m.global(0), 2, "game-save restore completes the @save descriptor (store 2)");
-        assert_eq!(m.state.pc, 0x42, "resumes at the post-@save address");
+        assert_eq!(m.state.pc(), 0x42, "resumes at the post-@save address");
         let _ = std::fs::remove_file(&tmp);
     }
 
@@ -941,7 +941,7 @@ mod tests {
         let mut buf = sample_story_v4();
         buf[0x40] = 0xB5; buf[0x41] = 0x10; buf[0x42] = 0xBA; // save->G0 ; quit
         let mut m = Machine::new(Memory::new(buf).unwrap());
-        m.state.pc = 0x40;
+        m.state.set_pc(0x40);
         assert_eq!(m.step(), StepResult::SaveRequest);
 
         // Own directory, not the bare temp root: the slug fixes the FILE name, so

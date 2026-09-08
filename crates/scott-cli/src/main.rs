@@ -321,8 +321,8 @@ fn do_restore(
                 let _ = writeln!(out, "Restored from '{}'.", path.display());
                 true
             }
-            Err(()) => {
-                let _ = writeln!(out, "Restore failed: '{}' is not a save for this game.", path.display());
+            Err(e) => {
+                let _ = writeln!(out, "Restore failed: '{}' is not a save for this game ({e}).", path.display());
                 false
             }
         },

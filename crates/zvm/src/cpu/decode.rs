@@ -13,6 +13,7 @@ use crate::text::decode::decode_string;
 
 /// A single operand value.
 #[derive(Debug, Clone, PartialEq)]
+#[non_exhaustive]
 pub enum Operand {
     /// 2-byte large constant.
     Large(u16),
@@ -24,6 +25,7 @@ pub enum Operand {
 
 /// Instruction encoding form (ZMSD §4.3).
 #[derive(Debug, Clone, PartialEq)]
+#[non_exhaustive]
 pub enum Form {
     Long,
     Short,
@@ -33,6 +35,7 @@ pub enum Form {
 
 /// Operand count class — disambiguates same-numbered opcodes in different classes.
 #[derive(Debug, Clone, PartialEq)]
+#[non_exhaustive]
 pub enum OperandCount {
     Zero,
     One,

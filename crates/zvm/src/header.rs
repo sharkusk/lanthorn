@@ -6,6 +6,7 @@ use crate::error::ZError;
 
 /// Parsed representation of the Z-machine story file header (ZMSD §11).
 #[derive(Debug)]
+#[non_exhaustive]
 pub struct Header {
     pub version: u8,
     pub high_mem_base: u16,

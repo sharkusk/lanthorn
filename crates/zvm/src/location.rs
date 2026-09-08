@@ -1163,6 +1163,7 @@ fn names_an_object_ignoring_spaces(machine: &Machine, name: &str) -> bool {
 
 /// How the current room was determined (drives the map indicator label).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum LocationMethod {
     GlobalVar0,
     PlayerParent,
@@ -1176,6 +1177,7 @@ pub enum LocationMethod {
 
 /// The mapper-facing location signal for one turn.
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum Location {
     GlobalVar0(ObjectSnapshot),
     PlayerParent(ObjectSnapshot),

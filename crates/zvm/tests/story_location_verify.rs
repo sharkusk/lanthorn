@@ -50,6 +50,7 @@ fn boot_to_first_read(data: Vec<u8>) -> Option<Machine> {
             StepResult::NeedChar => machine.supply_char(b'\n'),
             StepResult::SaveRequest => machine.complete_save(false),
             StepResult::RestoreRequest => machine.complete_restore_failure(),
+            _ => return Some(machine),
         }
     }
     None
@@ -66,6 +67,7 @@ fn run_one_turn(machine: &mut Machine, input: &str) {
             StepResult::NeedChar => machine.supply_char(b'\n'),
             StepResult::SaveRequest => machine.complete_save(false),
             StepResult::RestoreRequest => machine.complete_restore_failure(),
+            _ => return,
         }
     }
 }
@@ -295,6 +297,7 @@ fn restore_fixture(story: &str, save_name: &str) -> Option<Machine> {
             StepResult::SaveRequest => m.complete_save(false),
             StepResult::Quit | StepResult::Restart | StepResult::Fault => return None,
             StepResult::Continue => {}
+            _ => return None,
         }
     }
     None

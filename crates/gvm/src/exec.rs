@@ -20,6 +20,7 @@ pub(crate) type R<T> = Result<T, String>;
 
 /// The outcome of a single [`Machine::step`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum StepResult {
     /// Execution should continue with the next instruction.
     Continue,
@@ -218,6 +219,7 @@ struct PendingSaveLoad {
 /// ([`StepResult::SaveRequest`]/[`RestoreRequest`]): the game's target file
 /// `name` and whether it is the player's prompted SAVE/RESTORE verb.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
+#[non_exhaustive]
 pub struct SaveLoadRequest {
     /// The (sanitized) fixed file name for a game-managed save (empty if unknown).
     pub name: String,

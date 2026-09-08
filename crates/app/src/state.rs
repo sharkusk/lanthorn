@@ -1144,6 +1144,7 @@ pub fn pack_zcolour(c: zvm::screen::ZColour) -> u32 {
         ZColour::Standard(n) => (1 << 24) | n as u32,
         ZColour::True(v)    => (2 << 24) | v as u32,
         ZColour::True24(v)  => (3 << 24) | (v & 0x00FF_FFFF),
+        _ => 0,
     }
 }
 

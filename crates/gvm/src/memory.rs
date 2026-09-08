@@ -11,6 +11,7 @@ use crate::header::{parse_header, Header};
 
 /// Why a write was refused.
 #[derive(Debug, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum WriteFault {
     /// The target address is below RAMSTART (ROM). The write is a no-op.
     Rom,

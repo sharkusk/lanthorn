@@ -241,6 +241,7 @@ impl Dictionary {
 }
 
 /// A single parsed token from the input line.
+#[non_exhaustive]
 pub struct Token {
     /// Byte address of the dictionary entry, or 0 if not found.
     pub dict_addr: u16,

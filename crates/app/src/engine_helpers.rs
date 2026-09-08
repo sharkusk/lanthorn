@@ -551,7 +551,7 @@ mod tests {
         // typed command). This minimal story quits right after @save, so it runs
         // to quit; a real game lands at its next read (covered by
         // session::tests::game_save_restore_via_manager_accepts_next_command).
-        assert_ne!(fresh.machine.state.pc, 0x46,
+        assert_ne!(fresh.machine.state.pc(), 0x46,
             "restore runs forward past the @save descriptor, not parked on it (SQ-0233)");
         let _ = std::fs::remove_file(&qzl_path);
 
@@ -560,7 +560,7 @@ mod tests {
         // instead do a full session resume, landing exactly at the saved PC.
         let sess2 = GameSession::new(read_char_then_save_v4_story(), true, false, None).expect("new");
         assert_eq!(sess2.pending_input(), InputKind::Char);
-        let pc_before_restore = sess2.machine.state.pc;
+        let pc_before_restore = sess2.machine.state.pc();
         let save = sess2.save_state();
 
         let lanthorn_path = std::env::temp_dir().join(format!("bm-t3-{}.lanthorn", std::process::id()));
@@ -570,7 +570,7 @@ mod tests {
         let mut fresh2 = GameSession::new(read_char_then_save_v4_story(), true, false, None).expect("new");
         let outcome2 = super::restore_from_file(&lanthorn_path, &mut fresh2).expect("restore .lanthorn Save State");
         assert!(matches!(outcome2, super::RestoreOutcome::Resumed(_)));
-        assert_eq!(fresh2.machine.state.pc, pc_before_restore, "resume convention: lands exactly at the saved PC, not the @save descriptor");
+        assert_eq!(fresh2.machine.state.pc(), pc_before_restore, "resume convention: lands exactly at the saved PC, not the @save descriptor");
         assert_eq!(fresh2.machine.global(0), 0, "resume: @save never ran, G0 untouched (contrast with descriptor completion's 2 above)");
         let _ = std::fs::remove_file(&lanthorn_path);
     }
