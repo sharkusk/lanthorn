@@ -1000,6 +1000,21 @@ pub struct GameSession {
     ///
     /// [`declared_story_screen_dims`]: crate::render::screen::declared_story_screen_dims
     pub boot_screen_cols: u16,
+    /// The pre-loaded text (ZMSD §15 `read`, v5+ — TerpEtude option 12,
+    /// Beyond Zork's "AGAIN") `zvm` reported for the CURRENTLY pending line
+    /// read, empty when nothing is pre-loaded (the overwhelmingly common
+    /// case). Kept for the read's whole lifetime — NOT one-shot — so
+    /// [`Self::submit_line_with_terminator`] can strip it back off the
+    /// player's final text before handing the typed continuation to
+    /// [`zvm::cpu::exec::Machine::supply_line`], which prepends it again
+    /// itself. [`Self::take_line_seed`] is the one-shot door for a host that
+    /// only wants to know once per request.
+    line_preload: String,
+    /// Whether [`Self::line_preload`] has already been reported to the host
+    /// via [`Self::take_line_seed`] for the CURRENT pending read — a
+    /// `take`-like one-shot flag without discarding the value itself, since
+    /// [`Self::submit_line_with_terminator`] still needs it afterwards.
+    line_preload_seeded: bool,
 }
 
 // ── GameSession impl ──────────────────────────────────────────────────────────
@@ -1194,7 +1209,7 @@ impl GameSession {
         machine.trace_exec = trace_from_boot;
         machine.trace_screen = trace_from_boot;
 
-        let (pending, quit) = run_settled(&mut machine);
+        let (pending, quit, line_preload) = run_settled(&mut machine);
 
         Ok(GameSession {
             machine, quit, pending, strip_prompt: true, pen_before_char: None, output_continued: false,
@@ -1216,6 +1231,8 @@ impl GameSession {
             v6_win0_chars_seen: 0,
             unreplayable: std::collections::HashSet::new(),
             boot_screen_cols,
+            line_preload,
+            line_preload_seeded: false,
         })
     }
 
@@ -1674,8 +1691,19 @@ impl GameSession {
     /// Supply a player command terminated by an explicit ZSCII terminator (v5+
     /// terminating-characters table), step until the next input request or Quit,
     /// and return the turn result. `submit` is this with terminator 13 (Enter).
+    ///
+    /// `command` is the FULL text at the prompt, pre-load included — the
+    /// natural shape once [`Self::take_line_seed`] has seeded the input line
+    /// with it (SQ-1419): the player sees it already there and either leaves
+    /// it, or types more after it. [`zvm::cpu::exec::Machine::supply_line`]
+    /// re-prepends whatever pre-load is still pending on its own, so the
+    /// known prefix is stripped back off here first — passing the untouched
+    /// `command` through unchanged would double it.
     pub fn submit_line_with_terminator(&mut self, command: &str, terminator: u8) -> TurnResult {
-        self.machine.supply_line(command, terminator);
+        let typed = command.strip_prefix(self.line_preload.as_str()).unwrap_or(command);
+        self.machine.supply_line(typed, terminator);
+        self.line_preload.clear();
+        self.line_preload_seeded = false;
         self.advance_after_input(false)
     }
 
@@ -1809,13 +1837,34 @@ impl GameSession {
     fn finish_turn(&mut self, stop: RunStop) -> TurnResult {
         let (quit, pending, pending_io) = match stop {
             RunStop::Quit => (true, InputKind::Line, None),
-            RunStop::Input(k) => (false, k, None),
+            RunStop::Input(k, preload) => {
+                // A fresh read landed — restate the pre-load in force for it
+                // (empty for the common case), and re-arm the one-shot
+                // display seed so the host reports it again.
+                self.line_preload = preload;
+                self.line_preload_seeded = false;
+                (false, k, None)
+            }
             RunStop::SavePending => (false, self.pending, Some(PendingIo::Save)),
             RunStop::RestorePending => (false, self.pending, Some(PendingIo::Restore)),
         };
         self.quit = quit;
         self.pending = pending;
         self.drain_turn(quit, pending_io, false)
+    }
+
+    /// What the app's input line should hold for the newest line-input
+    /// request with a pre-loaded prefix (ZMSD §15 `read`, v5+ — TerpEtude
+    /// option 12, Beyond Zork's "AGAIN"), if one has appeared since the last
+    /// call. One-shot per request: re-polling never re-inserts it, so the
+    /// player's own typing on top of it is never clobbered on the next tick.
+    /// `None` both when nothing is pre-loaded and once already reported.
+    pub fn take_line_seed(&mut self) -> Option<String> {
+        if self.line_preload.is_empty() || self.line_preload_seeded {
+            return None;
+        }
+        self.line_preload_seeded = true;
+        Some(self.line_preload.clone())
     }
 
     /// Step the VM to the next input request (or Quit) and build the
@@ -4594,8 +4643,11 @@ fn is_death_relocation(transcript: &str) -> bool {
 
 /// Stop reason from `run_until_input`.
 enum RunStop {
-    /// VM is waiting for player input of this kind.
-    Input(InputKind),
+    /// VM is waiting for player input of this kind. The `String` is the
+    /// pre-loaded text (ZMSD §15 `read`, v5+) reported alongside a fresh
+    /// `NeedLine` — empty for `InputKind::Char` and for the overwhelmingly
+    /// common line read with nothing pre-loaded.
+    Input(InputKind, String),
     /// VM ended via `@quit` (a mid-run `@restart` re-boots in place and keeps
     /// running, so it never surfaces here).
     Quit,
@@ -4613,8 +4665,8 @@ fn run_until_input(machine: &mut Machine) -> RunStop {
         match machine.step() {
             StepResult::Quit => return RunStop::Quit,
             StepResult::Fault => return RunStop::Quit,
-            StepResult::NeedLine { .. } => return RunStop::Input(InputKind::Line),
-            StepResult::NeedChar => return RunStop::Input(InputKind::Char),
+            StepResult::NeedLine { preload, .. } => return RunStop::Input(InputKind::Line, preload),
+            StepResult::NeedChar => return RunStop::Input(InputKind::Char, String::new()),
             StepResult::SaveRequest => return RunStop::SavePending,
             StepResult::RestoreRequest => return RunStop::RestorePending,
             // @restart (ZMSD §6.1.3): re-boot the machine in place and keep
@@ -4630,7 +4682,7 @@ fn run_until_input(machine: &mut Machine) -> RunStop {
 }
 
 /// Run to a player-facing stop — an input request or a quit — returning
-/// `(pending_kind, quit)`.
+/// `(pending_kind, quit, line_preload)`.
 ///
 /// A game `@save`/`@restore` reached along the way is auto-FAILED and the drive
 /// continues, because the callers are the paths with no dialog to open: the boot
@@ -4639,11 +4691,11 @@ fn run_until_input(machine: &mut Machine) -> RunStop {
 /// and the suspension itself belongs to a run that is being replaced or has not
 /// started. This is the Z-machine twin of the Glulx `drive_settled`, so the two
 /// engines behave identically at these three points (SQ-0656).
-fn run_settled(machine: &mut Machine) -> (InputKind, bool) {
+fn run_settled(machine: &mut Machine) -> (InputKind, bool, String) {
     loop {
         match run_until_input(machine) {
-            RunStop::Input(k) => return (k, false),
-            RunStop::Quit => return (InputKind::Line, true),
+            RunStop::Input(k, preload) => return (k, false, preload),
+            RunStop::Quit => return (InputKind::Line, true, String::new()),
             RunStop::SavePending => machine.complete_save(false),
             RunStop::RestorePending => machine.complete_restore_failure(),
         }
@@ -5519,9 +5571,11 @@ impl Engine for GameSession {
         // has to be ANSWERED rather than silently dropped — dropping it parks the
         // VM on a suspension no dialog will ever open for. Uniform with the Glulx
         // adapter, whose restore runs the same settling drive. (SQ-0656)
-        let (pending, quit) = run_settled(&mut self.machine);
+        let (pending, quit, line_preload) = run_settled(&mut self.machine);
         self.pending = pending;
         self.quit = quit;
+        self.line_preload = line_preload;
+        self.line_preload_seeded = false;
         Ok(())
     }
 
@@ -5545,10 +5599,12 @@ impl Engine for GameSession {
         // that stop left the VM suspended with no dialog to answer it — every
         // later turn would re-report it. It is auto-failed and the drive
         // continues, as on the boot and Save State paths. (SQ-0656)
-        let (pending, quit) = run_settled(&mut self.machine);
+        let (pending, quit, line_preload) = run_settled(&mut self.machine);
         let _ = self.take_transcript();
         self.pending = pending;
         self.quit = quit;
+        self.line_preload = line_preload;
+        self.line_preload_seeded = false;
         Ok(())
     }
 
@@ -8212,7 +8268,7 @@ mod tests {
         // A witness the save's failure result must overwrite (0 is its own default).
         machine.mem.write_word(0x0300, 0xFFFF);
 
-        let (pending, quit) = run_settled(&mut machine);
+        let (pending, quit, _line_preload) = run_settled(&mut machine);
 
         assert_eq!(
             machine.mem.read_word(0x0300), 0,
@@ -8331,6 +8387,8 @@ mod tests {
             v6_win0_chars_seen: 0,
             unreplayable: std::collections::HashSet::new(),
             boot_screen_cols: zvm::screen::DEFAULT_SCREEN_COLS as u16,
+            line_preload: String::new(),
+            line_preload_seeded: false,
         };
         sess.set_pict_source(Some(crate::graphics::PictSource::new(Some(blorb))));
 
@@ -8404,6 +8462,8 @@ mod tests {
             v6_win0_chars_seen: 0,
             unreplayable: std::collections::HashSet::new(),
             boot_screen_cols: zvm::screen::DEFAULT_SCREEN_COLS as u16,
+            line_preload: String::new(),
+            line_preload_seeded: false,
         };
         sess.set_pict_source(Some(crate::graphics::PictSource::new(Some(blorb))));
 
@@ -8472,6 +8532,8 @@ mod tests {
             v6_win0_chars_seen: 0,
             unreplayable: std::collections::HashSet::new(),
             boot_screen_cols: zvm::screen::DEFAULT_SCREEN_COLS as u16,
+            line_preload: String::new(),
+            line_preload_seeded: false,
         };
         sess.set_pict_source(Some(crate::graphics::PictSource::new(Some(blorb))));
 
@@ -8529,6 +8591,8 @@ mod tests {
             v6_win0_chars_seen: 0,
             unreplayable: std::collections::HashSet::new(),
             boot_screen_cols: zvm::screen::DEFAULT_SCREEN_COLS as u16,
+            line_preload: String::new(),
+            line_preload_seeded: false,
         };
         sess.set_pict_source(Some(crate::graphics::PictSource::new(Some(blorb))));
 
@@ -8629,6 +8693,8 @@ mod tests {
             v6_win0_chars_seen: 0,
             unreplayable: std::collections::HashSet::new(),
             boot_screen_cols: zvm::screen::DEFAULT_SCREEN_COLS as u16,
+            line_preload: String::new(),
+            line_preload_seeded: false,
         };
         sess.set_pict_source(Some(crate::graphics::PictSource::new(Some(blorb))));
 
@@ -8688,6 +8754,8 @@ mod tests {
             v6_win0_chars_seen: 0,
             unreplayable: std::collections::HashSet::new(),
             boot_screen_cols: zvm::screen::DEFAULT_SCREEN_COLS as u16,
+            line_preload: String::new(),
+            line_preload_seeded: false,
         };
         sess.set_pict_source(Some(crate::graphics::PictSource::new(Some(blorb))));
 
@@ -8731,6 +8799,8 @@ mod tests {
             v6_win0_chars_seen: 0,
             unreplayable: std::collections::HashSet::new(),
             boot_screen_cols: zvm::screen::DEFAULT_SCREEN_COLS as u16,
+            line_preload: String::new(),
+            line_preload_seeded: false,
         };
         sess.set_pict_source(Some(crate::graphics::PictSource::new(Some(blorb))));
 
@@ -8788,6 +8858,8 @@ mod tests {
             v6_win0_chars_seen: 0,
             unreplayable: std::collections::HashSet::new(),
             boot_screen_cols: zvm::screen::DEFAULT_SCREEN_COLS as u16,
+            line_preload: String::new(),
+            line_preload_seeded: false,
         };
         // Window 7 has a rendered picture (a canvas sized to its pixel dims).
         sess.pictures_canvas.insert(7, crate::graphics::Canvas::new(64, 48));
@@ -8883,6 +8955,8 @@ mod tests {
             v6_win0_chars_seen: 0,
             unreplayable: std::collections::HashSet::new(),
             boot_screen_cols: zvm::screen::DEFAULT_SCREEN_COLS as u16,
+            line_preload: String::new(),
+            line_preload_seeded: false,
         };
         let mut canvas = crate::graphics::Canvas::new(64, 48);
         canvas.z_seq = 42;
@@ -8936,6 +9010,8 @@ mod tests {
             v6_win0_chars_seen: 0,
             unreplayable: std::collections::HashSet::new(),
             boot_screen_cols: zvm::screen::DEFAULT_SCREEN_COLS as u16,
+            line_preload: String::new(),
+            line_preload_seeded: false,
         };
         // The erase path allocates the canvas even without a resolved image.
         // (number != 0: a real erase_picture — number 0 is the erase_window
@@ -9442,6 +9518,8 @@ mod tests {
             v6_win0_chars_seen: 0,
             unreplayable: std::collections::HashSet::new(),
             boot_screen_cols: zvm::screen::DEFAULT_SCREEN_COLS as u16,
+            line_preload: String::new(),
+            line_preload_seeded: false,
         }
     }
 

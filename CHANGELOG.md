@@ -109,6 +109,25 @@ Absolute URLs or no link.
   lamp-countdown wording, and the light source being destroyed for good the
   instant it runs out rather than merely going dark. `scott-cli` gets matching
   `-y`/`-s`/`-t`/`-p` flags, same as the original ScottFree. (SQ-1413)
+- **A command a game reopens for you to finish now shows up already typed.**
+  Beyond Zork, Zork Zero and Shogun all reopen the command prompt with your
+  last command sitting there, editable, after certain function keys or after
+  a menu — that text used to vanish, leaving an empty prompt where the game
+  expected you to see it waiting. It now appears at the prompt exactly as the
+  game intended, in both the app and `zvm-cli`. (SQ-1419)
+- **A broken or corrupted story now stops with a clear message instead of
+  hanging or spinning forever.** A handful of badly damaged story files could
+  make the Z-machine loop endlessly on an instruction it didn't recognize;
+  it now reports the fault and stops, the way other interpreters do. (SQ-1419)
+- **`sound_effect`'s "stop all sounds" call now actually stops everything**,
+  and a story that plays a sound with no volume/effect specified gets the
+  interpreter's sensible defaults instead of silence. (SQ-1419)
+- **The in-game `verify` command is stricter about a corrupted story file** —
+  it no longer waves through a story whose stored checksum happens to have
+  been zeroed out. (SQ-1419)
+- **Restarting a game now reshuffles its random events** unless you've pinned
+  a specific random seed for reproducible play, matching how other
+  interpreters treat a restart. (SQ-1419)
 
 ---
 

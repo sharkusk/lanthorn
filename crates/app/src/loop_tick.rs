@@ -420,6 +420,23 @@ pub(crate) fn refresh_engine_input(
         gs.sync_line_input(&state.input.value);
     }
 
+    // The Z-machine twin (SQ-1419): ZMSD §15 `read`'s pre-loaded input line
+    // (v5+ — "if byte 1 contains a positive value at the start of the input,
+    // then read assumes that number of characters are left over from an
+    // interrupted previous input"), which TerpEtude option 12 and Beyond
+    // Zork's "AGAIN" both rely on. One-shot per request (see
+    // `GameSession::take_line_seed`), so it never re-clobbers what the
+    // player has since typed — unlike Glulx there is no live buffer to keep
+    // in sync afterwards: the whole displayed line is handed back to
+    // `Machine::supply_line` as one string when the player submits.
+    if let Some(text) =
+        crate::engine_helpers::zvm_session_opt_mut(session).and_then(|gs| gs.take_line_seed())
+    {
+        state.input.clear();
+        state.input.insert_str(&text);
+        redraw = true;
+    }
+
     // Update char_mode flag so the renderer hides the prompt during read_char.
     let prev_char_mode = state.char_mode;
     let prev_event_wait = state.event_wait;

@@ -60,12 +60,26 @@ fn sound_kind_to_format(k: blorb::SoundKind) -> Option<audio::SoundFormat> {
 fn play_cli_sounds(cs: &mut CliSound, events: &[zvm::cpu::exec::SoundEvent]) {
     for ev in events {
         match ev.number {
-            0 => {}
-            1 | 2 => {
-                if ev.effect == 0 || ev.effect == 2 {
-                    let freq = if ev.number == 1 { 800.0 } else { 400.0 };
-                    cs.backend.play_tone(freq, 150, ev.volume);
+            // ZMSD §15 "To clarify": "@sound_effect 0 3/4 will stop (and
+            // unload) all sounds" — number 0 refers to every currently
+            // playing sound; zvm now delivers this rather than dropping it
+            // (SQ-1419), so stop every sound this CLI started.
+            0 => {
+                if matches!(ev.effect, 3 | 4) {
+                    for (_, id) in cs.ids.drain() {
+                        cs.backend.stop(id);
+                    }
                 }
+            }
+            // Bleeps (§15: "the other operands must be omitted") always
+            // sound when called — `effect` is meaningless for them, so this
+            // no longer gates on it (that gate used to compensate for zvm
+            // always emitting `effect == 0` on an omitted operand; zvm now
+            // defaults a real sound's omitted effect to 2 = play, so the
+            // compensation is gone with it).
+            1 | 2 => {
+                let freq = if ev.number == 1 { 800.0 } else { 400.0 };
+                cs.backend.play_tone(freq, 150, ev.volume);
             }
             n => match ev.effect {
                 3 => { if let Some(id) = cs.ids.remove(&n) { cs.backend.stop(id); } }
@@ -1193,6 +1207,15 @@ fn read_line_stdin() -> String {
 /// `abort_timed_input`, buffer preserved in `line`); otherwise the routine's
 /// output is redrawn via `view` and the line-edit resumes. `timeout = None`
 /// keeps today's exact blocking read.
+///
+/// `preload` is ZMSD §15 `read`'s pre-loaded input line (v5+ —
+/// `StepResult::NeedLine`'s own field; empty in the overwhelmingly common
+/// case). Printed before the read starts so the player sees it as
+/// already-typed text at the prompt — TerpEtude option 12 relies on this.
+/// Neither branch below seeds the EDIT buffer with it: `Machine::supply_line`
+/// prepends the pre-load itself (SQ-1419), so whatever the player types from
+/// here — nothing at all, in TerpEtude's demonstration, or more text after
+/// it — is exactly what this function must return, unprefixed.
 fn read_line_raw(
     is_tty: bool,
     echo: zvm::io::TextAttrs,
@@ -1200,8 +1223,15 @@ fn read_line_raw(
     view: &mut screen::ScreenView,
     timeout: Option<(u16, u16)>,
     sound: &mut Option<CliSound>,
+    preload: &str,
 ) -> (String, u8, Option<(u16, u16)>, bool) {
     if !is_tty {
+        // Cooked / `--screen-reader`: no inline cursor to place text before,
+        // so announce it as its own line rather than leaving it silent.
+        if !preload.is_empty() {
+            println!("{preload}");
+            let _ = io::stdout().flush();
+        }
         return (read_line_stdin(), 13, None, false);
     }
     let _ = terminal::enable_raw_mode();
@@ -1212,6 +1242,10 @@ fn read_line_raw(
     let sgr = crate::screen::sgr_open(echo, machine.palette());
     if !sgr.is_empty() {
         print!("{sgr}");
+        let _ = io::stdout().flush();
+    }
+    if !preload.is_empty() {
+        print!("{preload}");
         let _ = io::stdout().flush();
     }
     loop {
@@ -2003,7 +2037,7 @@ fn main() {
                 aux_preload(&mut machine, &aux_file, args.aux);
             }
 
-            StepResult::NeedLine { .. } => {
+            StepResult::NeedLine { preload, .. } => {
                 // Poll for terminal resize before line input (crossterm returns
                 // current size; on piped stdout this is a no-op via is_tty guard).
                 maybe_resize(both_tty, &mut term_rows, &mut term_cols, &mut page_height, &mut machine, &mut view);
@@ -2042,7 +2076,7 @@ fn main() {
                 // that expired is NOT re-read here: the interrupt has already
                 // run and the game is owed its answer.
                 let (line, terminator, resize, aborted) = loop {
-                    let r = read_line_raw(stdin_is_tty, echo, &mut machine, &mut view, timeout, &mut sound);
+                    let r = read_line_raw(stdin_is_tty, echo, &mut machine, &mut view, timeout, &mut sound, &preload);
                     if r.3 {
                         break r;
                     }

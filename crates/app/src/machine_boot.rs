@@ -232,8 +232,14 @@ impl MachineBoot {
             .with_interpreter_version(self.interpreter_version)
             .with_picture_dims(picture_dims)
             .with_v6_text(self.text_face().metric().clone());
+        // Pinned (SQ-1419): a seed the launcher hands the machine at all is
+        // one it wants reproduced, and `@restart` honours that across the
+        // reboot too — see `zvm::cpu::exec::BootConfig::with_rng_seed_pinned`.
+        // Unstated (no seed passed here at all) keeps `Machine`'s own bare
+        // deterministic default, and a restart of THAT draws fresh entropy
+        // per ZMSD §2.4.
         if let Some(seed) = random_seed {
-            cfg = cfg.with_rng_seed(seed);
+            cfg = cfg.with_rng_seed_pinned(seed);
         }
         if let Some((bg, fg)) = self.default_colours {
             cfg = cfg.with_default_colours(bg, fg);

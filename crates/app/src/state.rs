@@ -3917,12 +3917,26 @@ impl AppState {
         let Some(backend) = self.audio.as_mut() else { return };
         for ev in sounds {
             match ev.number {
-                0 => {}
-                1 | 2 => {
-                    if ev.effect == 0 || ev.effect == 2 {
-                        let freq = if ev.number == 1 { 800.0 } else { 400.0 };
-                        backend.play_tone(freq, 150, ev.volume);
+                // ZMSD §15 "To clarify": "@sound_effect 0 3/4 will stop (and
+                // unload) all sounds" — number 0 refers to every currently
+                // playing sound, not "no sound"; zvm now delivers this rather
+                // than dropping it (SQ-1419), so stop every sound we started.
+                0 => {
+                    if matches!(ev.effect, 3 | 4) {
+                        for (_, id) in self.sound_ids.drain() {
+                            backend.stop(id);
+                        }
                     }
+                }
+                // Bleeps (§15: "the other operands must be omitted") always
+                // sound when called — `effect` is meaningless for them, so
+                // this no longer gates on it (that gate used to compensate
+                // for zvm always emitting `effect == 0` on an omitted
+                // operand; zvm now defaults a real sound's omitted effect to
+                // 2 = play, so the compensation is gone with it).
+                1 | 2 => {
+                    let freq = if ev.number == 1 { 800.0 } else { 400.0 };
+                    backend.play_tone(freq, 150, ev.volume);
                 }
                 n => match ev.effect {
                     3 => {
