@@ -55,7 +55,10 @@ Absolute URLs or no link.
   game next repaints, and a text game's status line is blank until the next
   turn redraws it. Saving again writes the new format. If you want an old
   graphical save restored exactly, the previous release can load it and save it
-  again. The game's own `save` files are unaffected. (SQ-1401, SQ-1403)
+  again. The game's own `save` files are unaffected. lanthorn now tells you
+  when this happens: restoring an old save prints a note in the transcript
+  saying the screen (and, for a graphical game, its pictures) will repaint
+  as you play. (SQ-1401, SQ-1403, SQ-1410)
 
 ### Fixed
 

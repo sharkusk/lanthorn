@@ -764,6 +764,9 @@ pub(crate) fn apply_launch_resume(
             // from (parallel to `lines`); re-attached after the sidecar reset below
             // so a resumed transcript renders its embedded art (SQ-0518).
             let mut resumed_images: Vec<Option<app::inline_image::InlineImage>> = Vec::new();
+            // What the archive is missing because it predates the screen (SQ-1401)
+            // or paint-log (SQ-1403) format bump — SQ-1410.
+            let mut restore_degradation: Option<app::archive::RestoreDegradation> = None;
             // The resumed game's map is part of its archive state — load it alongside.
             if let Ok(ac) = load_archive(arc_file) {
                 // The v6 screen: rebuilt from the archived display list under the
@@ -779,6 +782,10 @@ pub(crate) fn apply_launch_resume(
                 // Hand Glulx back the room it was saved in (SQ-0523); no-op for zvm.
                 crate::engine_helpers::seed_resumed_location(&mut *session, &ac.meta);
                 resumed_images = ac.transcript_images;
+                restore_degradation = Some(app::archive::RestoreDegradation::from_format_version(
+                    ac.meta.format_version,
+                    crate::engine_helpers::is_v6_session(&*session),
+                ));
             }
             // Reinstate the saved screen too (mirrors the auto-load path, zvm-only),
             // so a once-split game's upper window/status line shows after resuming.
@@ -805,6 +812,11 @@ pub(crate) fn apply_launch_resume(
             // Re-observe current location (same as Action::RestoreGame).
             reobserve_location(state, mapper, &*session, last_panes.map);
             state.push_notice("[Game resumed from save.]");
+            // After `state.transcript = lines` above, not before: this line must
+            // survive as the last one on screen (SQ-1410).
+            if let Some(degradation) = restore_degradation {
+                crate::engine_helpers::push_restore_degradation_notice(state, degradation);
+            }
         }
         Err(e) => {
             state.push_notice(&format!("[Resume failed: {}]", restore_error_msg(e)));

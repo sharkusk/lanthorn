@@ -247,6 +247,12 @@ restored palette, then the ground loads unconditionally (a host Save State
 swaps memory under a game that never learns it happened, so nothing repaints
 to clear a stale one on its own).
 
+**The player is told when a restore lands in this state**: every host-mediated
+restore site computes `app::archive::RestoreDegradation::from_format_version`
+from `meta.format_version` alone and pushes a one-line `TranscriptKind::Warning`
+transcript notice naming what will repaint as the player plays, rather than
+leaving the accepted break above silent (SQ-1410).
+
 ## Layer 3 — automatic per-story persistence (no explicit save)
 
 This layer needs **no player action and no Save State**. lanthorn keeps a small

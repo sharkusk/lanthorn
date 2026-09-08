@@ -1692,6 +1692,11 @@ pub(crate) fn boot_story(
     // Turn counter carried from the archive when the game is auto-restored, so a
     // later save records the cumulative count rather than only post-resume moves.
     let mut startup_turns: Option<u32> = None;
+    // What the just-restored archive is missing because it predates the screen
+    // (SQ-1401) or paint-log (SQ-1403) format bump — SQ-1410. Computed here
+    // (while `ac` still exists) and applied to the transcript once `state`
+    // exists, below.
+    let mut startup_restore_degradation: Option<app::archive::RestoreDegradation> = None;
     // When auto_load is false but a save exists and prompt_load_on_launch is true,
     // stash the save for the launch dialog instead of discarding it.
     let mut pending_resume_stash: app::state::PendingResume = None;
@@ -1713,6 +1718,10 @@ pub(crate) fn boot_story(
                             // Hand Glulx back the room it was saved in (SQ-0523);
                             // no-op for zvm.
                             crate::engine_helpers::seed_resumed_location(&mut *session, &ac.meta);
+                            startup_restore_degradation = Some(app::archive::RestoreDegradation::from_format_version(
+                                ac.meta.format_version,
+                                crate::engine_helpers::is_v6_session(&*session),
+                            ));
                             startup_transcript = Some((ac.transcript, ac.transcript_kinds, ac.transcript_runs, ac.transcript_para, ac.transcript_images));
                             startup_history = ac.history;
                             // Restore the turn counter from the same archive (SQ-0429):
@@ -2107,6 +2116,11 @@ pub(crate) fn boot_story(
         // just replaced; the sidecar reset dropped it, so rebuild it from the
         // resumed scrollback (SQ-1135).
         app::input::refresh_seen_words(&mut state, &*session);
+    }
+    // After the resumed transcript above, not before: this line must survive
+    // as the last one on screen, not be overwritten by `state.transcript = lines`.
+    if let Some(degradation) = startup_restore_degradation {
+        crate::engine_helpers::push_restore_degradation_notice(&mut state, degradation);
     }
     if !startup_history.is_empty() {
         state.history = startup_history;
