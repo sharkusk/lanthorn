@@ -171,6 +171,8 @@ must a `Machine` be told things".
 
 Additive, non-breaking, and the thing an embedder feels on day one.
 
+**Resolved (SQ-1396, 2026-09-08).** `zvm::cpu::exec::BootConfig` (in `crates/zvm/src/cpu/boot.rs`; `#[non_exhaustive]`, `new()` + `with_*` builders) and `Machine::boot(mem, out, config)` apply the ordering spelled in §1 in one stated pass (palette and interpreter version first, then the immediate header writers, RNG seed, default colours, v6 text metric, picture dims, the latched interpreter number, `init_caps`, and the screen size after it), returning a machine ready for its first `step()` without stepping. App: `MachineBoot::boot_config(...)` converts its machine facts and config into `BootConfig`; `GameSession::from_boot_config` replaces the fourteen-argument constructor; both `reset.rs` and `startup.rs` reach it through `new_for_machine`. The bare `BootConfig::new()` boots byte-for-byte as the old path did, pinned by a test. The `Restart` answer is settled: ZMSD §6.1.3 preserving "Flags 2" is now `Machine::restart()`, and `zvm-cli` calls it rather than reconstructing.
+
 ## 4. The drain protocol is prose, and one rule of it is correctness-critical
 
 `crates/zvm/src/cpu/exec.rs:212` still says "Fields are `pub` so Tasks 11+ can
@@ -193,6 +195,8 @@ reimplement the merge from prose. It should be one method — `take_paint_events
 
 Additive as `take_*` methods; breaking only if the fields are also made private,
 which they should eventually be.
+
+**Resolved (SQ-1396, 2026-09-08).** `PaintEvent { Picture, Erase }` and `Machine::take_paint_events()` merge pictures and erase fills in issue order (the order was already recoverable from `EraseFill::pics_before`, no new field); `take_pending_pictures` / `take_pending_erase_fills` are removed, the read-only views stay, and the app's own merge loop is deleted. A bug found alongside: `Machine::restart` cleared pending pictures but not pending erase fills.
 
 ## 5. Saving a screen is left entirely to the host
 
@@ -522,6 +526,8 @@ all cosmetic, all noise a newcomer reads as neglect. And `doctest = false` in
 crate meant to be embedded, **a compiled example is the cheapest possible proof
 the API is usable**, and the setting should come off the moment one exists.
 
+**Resolved (SQ-1398 / SQ-1399, 2026-09-08).** All three crates gained crate-level `//!` docs and compiled doctests (zvm's builds a v3 story by hand in memory; gvm and scott have minimal text-only backends for their examples). Module headers converted from `//` to `//!` (zvm: 17 modules, gvm: 5, scott: 3), routing all previously-invisible prose into rustdoc. Docs rephrased for a stranger, routing out lanthorn-specific references and planning-scheme names; all references to the Z-machine instead of the implementation now lead with the ZMSD section number. `cargo doc --no-deps` warnings dropped to zero for all three. `doctest = false` removed where examples now exist. Examples in `examples/run_story.rs` for gvm and scott verified independently; zvm example verified on Zork I. **Note:** The `location` root re-export drop was SQ-1397; `ZColour::True24` was kept by decision (retained as a general exact-24-bit host colour), both already recorded in §10's ledger entry.
+
 ## 10. Stability: nothing is `#[non_exhaustive]`
 
 Outside `grammar` (SQ-1040) there is not one `#[non_exhaustive]` in `zvm`, `gvm`
@@ -618,7 +624,7 @@ only producers are `crates/app/src/glk_backend.rs:75` and `:788`. A Z-machine
 embedder writes a match arm for a structurally unreachable variant belonging to a
 VM this crate does not implement.
 
-**Resolved in part (SQ-1394, SQ-1395, 2026-09-07).** `GError`, `StepResult`, `WinType`, `GlkStyle`, `WriteFault`, `SaveLoadRequest`, `StackTrace`, and `TraceFrame` are now marked `#[non_exhaustive]`. `StepResult::Fault` is a new variant, distinct from `Quit`, backed by a `faulted` flag that persists after `take_fault_trace()` drains; the fault event surface follows the crate's own stated fault-and-continue policy. The 18 non-test `unwrap`/`expect` sites in `glk.rs` (`:1873`–`:2779`) that sat on the documented window-tree invariant have been addressed: 17 became panic-free branches, one `expect` in `build_win_tree` remains and is documented as guarded by an invariant.
+**Resolved in part (SQ-1394, SQ-1395, 2026-09-07).** `GError`, `StepResult`, `WinType`, `GlkStyle`, `WriteFault`, `SaveLoadRequest`, `StackTrace`, and `TraceFrame` are now marked `#[non_exhaustive]`. `StepResult::Fault` is a new variant, distinct from `Quit`, backed by a `faulted` flag that persists after `take_fault_trace()` drains; the fault event surface follows the crate's own stated fault-and-continue policy. The 18 non-test `unwrap`/`expect` sites in `glk.rs` (`:1873`–`:2779`) that sat on the documented window-tree invariant have been addressed: 17 became panic-free branches, one `expect` in `build_win_tree` remains and is documented as guarded by an invariant. **Wave 2 extensions (SQ-1396, SQ-1397, SQ-1398, SQ-1399):** `gvm`'s diagnostics, screen_trace, trace_screen, fault_trace, trace_exec, executed_pcs, ever_executed are private behind accessors (SQ-1396). `scott` gained `Vm::room_is_literal()`, `room_exits()`, `items_in_room()`, and rebuilt `room_block()` as a convenience layout (SQ-1397). `Grammar` became a default-on Cargo feature in both zvm and gvm (SQ-1397). All three crates gained crate-level `//!` docs with compiled doctests and examples (SQ-1398, SQ-1399): `gvm` and `scott` examples feature minimal text-only backends. Module headers converted to `//!` (SQ-1398, SQ-1399): gvm: error, exec, grammar, header, memory; scott: database, loader, vm; zvm: 17 modules total.
 
 ## 12. The ledger
 
@@ -633,11 +639,11 @@ and unaffordable after a release.
 | 3 | `#[non_exhaustive]` sweep on read-only enums and structs | small | **yes** | **yes** | done, SQ-1394 |
 | 4 | privatise opcode internals (`cpu::state`, `State`/`Frame` fields, `do_branch`, `print_text`) and the queue fields | small — no external callers | **yes** | **yes** | done, SQ-1394 |
 | 5 | gate `pub mod fixtures` behind `cfg(test)` or a feature | trivial | **yes** | **yes** | done, SQ-1394 |
-| 6 | `BootConfig` owning the `init_caps` ordering and the `Restart` answer | medium | no | — | — |
-| 7 | `take_*` drains, and a merged `take_paint_events()` | small | no | — | — |
+| 6 | `BootConfig` owning the `init_caps` ordering and the `Restart` answer | medium | no | — | done, SQ-1396 |
+| 7 | `take_*` drains, and a merged `take_paint_events()` | small | no | — | done, SQ-1396 |
 | 8 | screen-snapshot format in `zvm` | medium | no | — | — |
-| 9 | module headers `//` → `//!`; crate-level `//!` docs; a compiled example | trivial | no | — | — |
-| 10 | doc pass: de-lanthorn, drop the `location` root re-export, decide `True24` | small | partly | partly | — |
+| 9 | module headers `//` → `//!`; crate-level `//!` docs; a compiled example | trivial | no | — | done, SQ-1398, SQ-1399 |
+| 10 | doc pass: de-lanthorn, drop the `location` root re-export, decide `True24` | small | partly | partly | partly: `location` re-export dropped and docs de-lanthorned (SQ-1397, SQ-1399); `True24` kept by decision |
 | 11 | `FontMetrics`, `trait Resources`, revisit `Output: Any` | large | partly | partly | — |
 
 On #5: `crates/zvm/src/fixtures.rs:11` is `PathBuf::from(env!("CARGO_MANIFEST_DIR"))`,
@@ -651,7 +657,7 @@ lands no host can point `zvm` at a story it did not write. Items 1, 3, 4 and 5
 get materially more expensive once a release exists and should be done before one
 is cut. Items 6–9 are what an embedder feels on day one, and 9 is an afternoon.
 
-## Status and plan, 2026-09-07
+## Status and plan, 2026-09-08
 
 **Wave 1 — landed 2026-09-07:**
 
@@ -661,21 +667,22 @@ is cut. Items 6–9 are what an embedder feels on day one, and 9 is an afternoon
 
 **Landed earlier:** the put_wind_prop clamp (WINDOW_PX_CAP), `DisasmCache::unit_index_at`'s checked subtraction, `V6Cell`'s private fields behind a guarded constructor (SQ-1031), and SQ-1013's MachineProfile facts.
 
+**Wave 2 — landed 2026-09-08 as SQ-1396, SQ-1397, SQ-1398, SQ-1399:**
+
+- **SQ-1396:** `BootConfig` (in `crates/zvm/src/cpu/boot.rs`; `#[non_exhaustive]`, `new()` + `with_*` builders) and `Machine::boot(mem, out, config)` apply the boot sequence in stated order. `GameSession::from_boot_config` replaces the fourteen-argument constructor. `Machine::restart()` answers ZMSD §6.1.3. `PaintEvent { Picture, Erase }` and `Machine::take_paint_events()` merge drains in issue order; `take_pending_pictures` / `take_pending_erase_fills` removed.
+- **SQ-1397:** `SoundEvent::new`, `PictureEvent::new`, `EraseFill::new`, `PeriodLook::new` added and marked `#[non_exhaustive]`. `TextAttrs`, `V6Text`, `Cell`, `ZWindow`, `V6Windows`, `ScreenState`, and `UpperWindow` deliberately left unmarked because a host must construct them by literal; constructors are Wave 3 work. `location` root re-export dropped; callers use `zvm::location::…`. `grammar` is a default-on Cargo feature in both zvm and gvm. `scott` gained `Vm::room_is_literal()`, `room_exits()`, `items_in_room()`, rebuilt `room_block()`.
+- **SQ-1398:** `gvm` and `scott` gained crate-level `//!` docs with compiled doctests. Examples in `examples/run_story.rs` feature a minimal `GlkBackend` for gvm and a minimal text-only host for scott. Module headers converted to `//!` (gvm: error, exec, grammar, header, memory; scott: database, loader, vm). `doctest = false` removed. `cargo doc --no-deps` warnings gvm 22→0, scott 2→0.
+- **SQ-1399:** `zvm` crate-level `//!` docs with a compiled doctest building a minimal v3 story by hand. Example `examples/run_story.rs` verified on Zork I. 17 module headers converted to `//!`. Docs rephrased for a stranger; `cargo doc --no-deps` warnings 40→0. `Machine::new` false "v6 is not supported" line fixed; `location` re-export caveat restored to module-level docs.
+
 **Still open, ranked by what blocks embedding:**
 
 | item | breaking | status |
 |---|---|---|
-| `BootConfig` and one `Restart` answer | no | open |
-| `take_paint_events` drain protocol | no | open |
-| Crate docs, `//!` headers, a compiled example | no | zvm and scott have no crate docs, `doctest = false` everywhere |
-| `location` root re-export, decide on `True24`, address docs to a stranger | partly | open |
-| Grammar model as an optional feature | no | open |
-| Screen snapshot, `FontMetrics`, `Resources` trait | no | design later |
+| Constructors for host-built structs (`TextAttrs`, `V6Text`, `SoundEvent`, `PictureEvent`, `EraseFill`, `PeriodLook`, `Cell`, `ZWindow`, `V6Windows`, `ScreenState`, `UpperWindow`) | no | waits on the screen snapshot (wave 3) |
+| Screen snapshot, `FontMetrics`, `Resources` trait, `Output: Any` | partly | design later |
 
-**The plan, in three waves:**
-
-**Wave 2** — what an embedder feels on day one. Constructors for host-built structs (`TextAttrs`, `V6Text`, `SoundEvent`, `PictureEvent`, `EraseFill`, `PeriodLook`, `Cell`, `ZWindow`, `V6Windows`, `ScreenState`, `UpperWindow`). Crate docs and a compiled example per crate (dropping `doctest = false` where one exists); `BootConfig` owning the `init_caps` ordering with one `Restart` answer shared by `app` and `zvm-cli`; `take_*` drains and a merged `take_paint_events()`; dropping the `location` root re-export; deciding whether `True24` stays; addressing the docs to a stranger; and the grammar model behind a default-on `grammar` feature.
+**The plan, one wave remaining:**
 
 **Wave 3** — design later. The screen snapshot in `zvm`, `FontMetrics`, a `Resources` trait, and `Output: Any`.
 
-**Product decision (2026-09-07):** `gvm` and `scott` get the full treatment — all three waves, not only "what any published crate needs". Wave 2 therefore applies to all three crates.
+**Product decision (2026-09-07):** `gvm` and `scott` get the full treatment — all three waves, not only "what any published crate needs".
