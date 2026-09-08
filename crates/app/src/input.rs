@@ -8654,7 +8654,7 @@ mod tests {
     #[test]
     fn minizork_reset_restores_opening_room_and_clears_turns() {
         use crate::session::{apply_turn, GameSession, TurnResult};
-        use zvm::current_location;
+        use zvm::location::current_location;
 
         let fixture_path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("../zvm/tests/fixtures/minizork.z3");

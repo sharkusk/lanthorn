@@ -6577,10 +6577,10 @@ mod tests {
         let mut s = AppState::default();       // audio = None, sound_blorb = None
         s.config.enable_sound = true;
         // A #1 bleep event: play_turn_sounds must not panic with no backend.
-        let ev = SoundEvent { number: 1, effect: 2, volume: 8, repeats: 0, routine: 0 };
+        let ev = SoundEvent::new(1, 2, 8, 0, 0);
         s.play_turn_sounds(&[ev]);             // no device -> silent, no panic
         // A #3 sampled start with no blorb loaded: no id remembered, no panic.
-        let ev3 = SoundEvent { number: 3, effect: 2, volume: 8, repeats: 1, routine: 0 };
+        let ev3 = SoundEvent::new(3, 2, 8, 1, 0);
         s.play_turn_sounds(&[ev3]);
         assert!(s.sound_ids.is_empty(), "no sound id remembered without a blorb");
     }

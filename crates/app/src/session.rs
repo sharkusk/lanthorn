@@ -4897,7 +4897,7 @@ impl GameSession {
     /// object entry base address -> object number.
     fn object_addr_map(&self) -> std::collections::HashMap<u32, u16> {
         let mem = &self.machine.mem;
-        zvm::object_tree_view(&self.machine)
+        zvm::location::object_tree_view(&self.machine)
             .iter()
             .map(|s| (zvm::objects::object_entry_addr(mem, s.number), s.number))
             .collect()
@@ -5450,7 +5450,7 @@ impl Engine for GameSession {
 
     fn current_location(&self) -> Option<LocationInfo> {
         // Version-aware detection (same as a turn), NOT the v3-only global-0 read:
-        // v4+ games have no location global, so `zvm::current_location` returns
+        // v4+ games have no location global, so `zvm::location::current_location` returns
         // None at boot, leaving the starting room off the map until the first turn.
         // `_with` + the cached candidate pool: this runs every rendered FRAME
         // via `command_band.rs`, not once a turn (SQ-1259).
@@ -5756,7 +5756,7 @@ impl Introspect for GameSession {
         // at `location_to_snapshot`, never larger than u16::MAX); anything
         // else has no children here.
         let Ok(parent) = u16::try_from(parent) else { return std::collections::BTreeSet::new() };
-        let max_obj = zvm::object_tree_view(&self.machine)
+        let max_obj = zvm::location::object_tree_view(&self.machine)
             .into_iter()
             .map(|s| s.number)
             .max()
@@ -5770,7 +5770,7 @@ impl Introspect for GameSession {
         // Cached candidate pool (SQ-1259): reached whenever `state.player_obj`
         // is `None`, which is every render frame until it locks, on the
         // per-frame path in `command_band.rs`/`transcript.rs`.
-        zvm::find_player_object_with(&self.machine, self.player_candidates())
+        zvm::location::find_player_object_with(&self.machine, self.player_candidates())
     }
 }
 
@@ -5911,7 +5911,7 @@ impl Debugger for GameSession {
         // directly under its parent. (Numeric order + per-object indent, which
         // this replaces, does NOT nest children under their parents.)
         let mem = &self.machine.mem;
-        let numbers: Vec<u16> = zvm::object_tree_view(&self.machine)
+        let numbers: Vec<u16> = zvm::location::object_tree_view(&self.machine)
             .iter().map(|s| s.number).collect();
         let out = build_object_tree(
             &numbers,
@@ -7774,7 +7774,7 @@ mod tests {
         let expected = zvm::dictionary::load(&sess.machine.mem).words(&sess.machine.mem);
         assert_eq!(vocab, expected);
         // player_object == today's find_player_object.
-        assert_eq!(intro.player_object(), zvm::find_player_object(&sess.machine));
+        assert_eq!(intro.player_object(), zvm::location::find_player_object(&sess.machine));
     }
 
     #[test]
@@ -8148,7 +8148,7 @@ mod tests {
         let mut windows: [ZWindow; 8] = Default::default();
         windows[7] = ZWindow { x_size: 64, y_size: 48, ..Default::default() };
         machine.screen.v6 = Some(V6Windows { windows, current: 7 });
-        machine.queue_picture_event(PictureEvent { number: 1, window: 7, x: 2, y: 3, erase: false, out_chars: 0, margin_after: None, at_cursor: false, win_box: (1, 1, 64, 48) });
+        machine.queue_picture_event(PictureEvent::new(1, 7, 2, 3, false, 0, None, false, (1, 1, 64, 48)));
 
         // Construct the session directly (bypassing the constructor's boot
         // loop, which this synthetic story can't usefully run) with a Pict
@@ -8181,7 +8181,7 @@ mod tests {
         assert!(sess.pictures_canvas.is_empty(), "no canvas before the turn is drained");
         let result = sess.drain_turn(false, None, false);
 
-        assert_eq!(result.pictures, vec![PictureEvent { number: 1, window: 7, x: 2, y: 3, erase: false, out_chars: 0, margin_after: None, at_cursor: false, win_box: (1, 1, 64, 48) }],
+        assert_eq!(result.pictures, vec![PictureEvent::new(1, 7, 2, 3, false, 0, None, false, (1, 1, 64, 48))],
             "the drained event is carried on TurnResult (mirrors pending_sounds)");
         assert!(sess.machine.pending_pictures().is_empty(), "the VM queue is drained after the turn");
 
@@ -8252,7 +8252,7 @@ mod tests {
         };
         sess.set_pict_source(Some(crate::graphics::PictSource::new(Some(blorb))));
 
-        let draw = PictureEvent { number: 1, window: 7, x: 1, y: 1, erase: false, out_chars: 0, margin_after: None, at_cursor: false, win_box: (1, 1, 320, 200) };
+        let draw = PictureEvent::new(1, 7, 1, 1, false, 0, None, false, (1, 1, 320, 200));
         sess.apply_picture_event(&draw);
         assert!(sess.story_pics.is_empty(), "graphics-window content art anchors no transcript band");
         // It really did reach the screen — the band's absence is a routing
@@ -8267,7 +8267,7 @@ mod tests {
 
         // …and neither does a fresh draw after a canvas clear (erase_window rides
         // the queue as number 0), which used to be the case that reset the dedupe.
-        sess.apply_picture_event(&PictureEvent { number: 0, window: 7, x: 1, y: 1, erase: true, out_chars: 0, margin_after: None, at_cursor: false, win_box: (1, 1, 320, 200) });
+        sess.apply_picture_event(&PictureEvent::new(0, 7, 1, 1, true, 0, None, false, (1, 1, 320, 200)));
         sess.apply_picture_event(&draw);
         assert!(sess.story_pics.is_empty(), "a post-clear draw anchors nothing");
     }
@@ -8323,10 +8323,7 @@ mod tests {
 
         // Off the cursor by the native placement inset, but with the margin the
         // prose is to flow in declared right after — an inline float.
-        sess.apply_picture_event(&PictureEvent {
-            number: 1, window: 0, x: 5, y: 19, erase: false, out_chars: 0,
-            margin_after: Some(96), at_cursor: false, win_box: (89, 81, 464, 320),
-        });
+        sess.apply_picture_event(&PictureEvent::new(1, 0, 5, 19, false, 0, Some(96), false, (89, 81, 464, 320)));
         assert_eq!(sess.story_pics.len(), 1, "the declared margin marks it as flowing with the text");
         assert_eq!(sess.story_pics[0].1.align, crate::inline_image::ImageAlign::MarginLeft);
         assert_eq!(sess.story_pics[0].1.margin_px, Some(96), "the game's own left margin rides along");
@@ -8334,10 +8331,7 @@ mod tests {
 
         // Neither signal: art the game placed for itself, which keeps the canvas
         // (Arthur's centred intro plates — SQ-0695).
-        sess.apply_picture_event(&PictureEvent {
-            number: 1, window: 0, x: 29, y: 5, erase: false, out_chars: 0,
-            margin_after: None, at_cursor: false, win_box: (1, 1, 464, 320),
-        });
+        sess.apply_picture_event(&PictureEvent::new(1, 0, 29, 5, false, 0, None, false, (1, 1, 464, 320)));
         assert_eq!(sess.story_pics.len(), 1, "placed art anchors no new float");
         assert!(sess.pictures_canvas.contains_key(&0), "placed art gets the window canvas");
     }
@@ -8384,10 +8378,7 @@ mod tests {
         sess.set_pict_source(Some(crate::graphics::PictSource::new(Some(blorb))));
 
         // The pre-restart session draws at the window's top-left corner…
-        sess.apply_picture_event(&PictureEvent {
-            number: 1, window: 7, x: 1, y: 1, erase: false, out_chars: 0, margin_after: None, at_cursor: false,
-            win_box: (1, 1, 64, 48),
-        });
+        sess.apply_picture_event(&PictureEvent::new(1, 7, 1, 1, false, 0, None, false, (1, 1, 64, 48)));
         assert_eq!(sess.display_ops.get(&7).map_or(0, Vec::len), 1, "the draw is recorded for replay");
         // …and something took window 7 out of replay (an op-cap overflow in a long
         // session; forced here, since the count itself is not the point).
@@ -8403,10 +8394,7 @@ mod tests {
 
         // The rebooted game draws the SAME picture somewhere else, then a base
         // picture establishes a new palette and every window replays.
-        sess.apply_picture_event(&PictureEvent {
-            number: 1, window: 7, x: 33, y: 1, erase: false, out_chars: 0, margin_after: None, at_cursor: false,
-            win_box: (1, 1, 64, 48),
-        });
+        sess.apply_picture_event(&PictureEvent::new(1, 7, 33, 1, false, 0, None, false, (1, 1, 64, 48)));
         sess.replay_under_current_palette();
 
         let canvas = sess.pictures_canvas.get(&7).expect("the reboot's draw made a canvas");
@@ -8476,14 +8464,9 @@ mod tests {
 
         // The pre-restart game paints a ground (a PART-screen erase naming a colour —
         // a full-screen one would be a screen clear and drop the ground by itself)…
-        sess.apply_erase_fill(&zvm::cpu::exec::EraseFill {
-            window: 7, x: 1, y: 1, w: 64, h: 48, bg: ZColour::True24(0x00FF00), pics_before: 0,
-        });
+        sess.apply_erase_fill(&zvm::cpu::exec::EraseFill::new(7, 1, 1, 64, 48, ZColour::True24(0x00FF00), 0));
         // …and draws into window 7, anchoring its canvas where the window sits now.
-        sess.apply_picture_event(&PictureEvent {
-            number: 1, window: 7, x: 1, y: 1, erase: false, out_chars: 0, margin_after: None, at_cursor: false,
-            win_box: (1, 1, 64, 48),
-        });
+        sess.apply_picture_event(&PictureEvent::new(1, 7, 1, 1, false, 0, None, false, (1, 1, 64, 48)));
         assert!(sess.paint.is_some(), "premise: the pre-restart screen has a painted ground");
         assert!(sess.canvas_anchor.contains_key(&7), "premise: and window 7's canvas is anchored");
 
@@ -8539,7 +8522,7 @@ mod tests {
         };
         sess.set_pict_source(Some(crate::graphics::PictSource::new(Some(blorb))));
 
-        sess.apply_picture_event(&PictureEvent { number: 3, window: 7, x: 1, y: 1, erase: false, out_chars: 0, margin_after: None, at_cursor: false, win_box: (1, 1, 320, 200) });
+        sess.apply_picture_event(&PictureEvent::new(3, 7, 1, 1, false, 0, None, false, (1, 1, 320, 200)));
         assert!(sess.story_pics.is_empty(), "frame art stays canvas-only");
         assert!(sess.pictures_canvas.contains_key(&7), "but it IS drawn into the window canvas");
     }
@@ -8555,8 +8538,8 @@ mod tests {
         machine.screen.v6 = Some(V6Windows { windows, current: 7 });
         // Draw, then erase the same picture — the erase must clear back to
         // transparent over the picture's own footprint (2x2, ZMSD §15).
-        machine.queue_picture_event(PictureEvent { number: 1, window: 7, x: 2, y: 3, erase: false, out_chars: 0, margin_after: None, at_cursor: false, win_box: (1, 1, 64, 48) });
-        machine.queue_picture_event(PictureEvent { number: 1, window: 7, x: 2, y: 3, erase: true, out_chars: 0, margin_after: None, at_cursor: false, win_box: (1, 1, 64, 48) });
+        machine.queue_picture_event(PictureEvent::new(1, 7, 2, 3, false, 0, None, false, (1, 1, 64, 48)));
+        machine.queue_picture_event(PictureEvent::new(1, 7, 2, 3, true, 0, None, false, (1, 1, 64, 48)));
 
         let blorb = crate::graphics::test_blorb_with_pict(1, &png_bytes_2x2_red());
         let mut sess = GameSession {
@@ -8791,7 +8774,7 @@ mod tests {
         // The erase path allocates the canvas even without a resolved image.
         // (number != 0: a real erase_picture — number 0 is the erase_window
         // canvas-clear sentinel, which removes the canvas instead.)
-        sess.apply_picture_event(&PictureEvent { number: 5, window: 7, x: 0, y: 0, erase: true, out_chars: 0, margin_after: None, at_cursor: false, win_box: (1, 1, 0xFFFF, 0xFFFF) });
+        sess.apply_picture_event(&PictureEvent::new(5, 7, 0, 0, true, 0, None, false, (1, 1, 0xFFFF, 0xFFFF)));
         let c = sess.pictures_canvas.get(&7).expect("erase allocated a canvas");
         assert!(c.img.width() <= 4096 && c.img.height() <= 4096,
             "canvas clamped, got {}x{}", c.img.width(), c.img.height());
