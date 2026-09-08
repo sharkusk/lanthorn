@@ -43,7 +43,7 @@
 //!   [`Machine::deliver_hyperlink`], [`Machine::deliver_sound_notify`] and
 //!   [`Machine::deliver_volume_notify`].
 //!
-//! [`GlkBackend`] is the seam: 34 methods, all but two (`as_any`/`as_any_mut`)
+//! [`GlkBackend`] is the seam: 35 methods, all but two (`as_any`/`as_any_mut`)
 //! defaulted to a no-op or "the host has no such facility", so a minimal
 //! text-only backend implements almost nothing and gets windows, styled
 //! text, graphics, sound, screen size and glyph metrics for free the moment

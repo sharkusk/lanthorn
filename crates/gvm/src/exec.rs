@@ -1073,15 +1073,23 @@ impl Machine {
         self.execute(opcode)
     }
 
-    /// Clear the per-turn `executed_pcs` set (call at the start/end of each turn).
-    /// Leaves the cumulative `ever_executed` intact.
+    /// A host debug affordance (SQ-1402), not part of running a story: clears
+    /// the per-turn `executed_pcs` set (call at the start/end of each turn) for
+    /// a coverage view like lanthorn's debug panel, which shades disassembly by
+    /// what has executed this turn vs. ever. Leaves the cumulative
+    /// `ever_executed` intact. A host that never enables [`Self::set_trace_exec`]
+    /// never needs this.
     pub fn clear_executed_pcs(&mut self) {
         self.executed_pcs.clear();
     }
 
-    /// Pre-seed the cumulative `ever_executed` set from host-persisted coverage
-    /// (the debug PC-set sidecar) so prior runs' disassembly tiers light up
-    /// immediately. Independent of `trace_exec`.
+    /// A host debug affordance (SQ-1402), not part of running a story:
+    /// pre-seeds the cumulative `ever_executed` set from host-persisted
+    /// coverage (a debug PC-set sidecar a host may keep between sessions) so a
+    /// coverage view like lanthorn's debug panel has prior runs' disassembly
+    /// tiers lit up immediately, before this session has executed anything of
+    /// its own. Independent of `trace_exec` — seeding the set does not turn
+    /// tracing on.
     pub fn seed_ever_executed(&mut self, pcs: &std::collections::HashSet<u32>) {
         self.ever_executed.extend(pcs.iter().copied());
     }
@@ -1094,15 +1102,19 @@ impl Machine {
     // call. They are spelled exactly as `zvm`'s equivalents, so a host driving
     // both engines learns one vocabulary.
 
-    /// Whether instruction-start PCs are being recorded (the debug inspector's
-    /// execution coverage).
+    /// Whether instruction-start PCs are being recorded (a host debug
+    /// affordance — the debug inspector's execution coverage, see
+    /// [`Self::set_trace_exec`]).
     pub fn trace_exec(&self) -> bool {
         self.trace_exec
     }
 
-    /// Record each instruction's start PC into [`Self::executed_pcs`] and
-    /// [`Self::ever_executed`]. Off by default: on, it is a single predictable
-    /// branch on the hot path (SQ-0465).
+    /// A host debug affordance (SQ-1402), not part of running a story: record
+    /// each instruction's start PC into [`Self::executed_pcs`] and
+    /// [`Self::ever_executed`] for a coverage view like lanthorn's debug
+    /// panel. Off by default, and every real host should leave it off: on, it
+    /// is a single predictable branch on the hot path (SQ-0465), paid on every
+    /// instruction the story runs.
     pub fn set_trace_exec(&mut self, on: bool) {
         self.trace_exec = on;
     }
@@ -2543,16 +2555,13 @@ impl Machine {
         // Glk model: reinstall the window/stream tree from the "Glk " chunk so a
         // restore into a fresh Machine has live windows. An older snapshot with
         // no such chunk restores with an empty model (back-compat, no panic).
-        // The per-game borderless mode is a HOST/runtime setting, not game
-        // state: it is deliberately absent from the snapshot, and the live
-        // value survives the model swap — @restoreundo runs through here with
-        // no host callback to re-apply it (SQ-0627).
-        let borderless = self.glk.borderless();
+        // The per-game borderless mode is the BACKEND's now (SQ-1402), asked
+        // fresh at the next relayout, so there is nothing here to preserve
+        // across the model swap the way SQ-0627 once had to.
         self.glk = match find(b"Glk ") {
             Some(d) => Model::deserialize(d).map_err(GError::BadSave)?,
             None => Model::new(),
         };
-        self.glk.set_borderless(borderless);
         // A snapshot never carries a suspended `@save`/`@restore`: §1.8.5 keeps
         // the interpreter's own suspensions out of the file, and the host guards
         // its snapshot trigger on `is_saveload_pending` precisely so an un-popped
@@ -2920,14 +2929,13 @@ impl Machine {
         // model will hand out the SAME ids again — tell the backend each old
         // window closed first, so a backend keyed by id cannot splice
         // pre-restart window state (grid cells, buffer logs) into the
-        // restarted game's windows. The borderless mode is a host/runtime
-        // setting, not game state: it survives the reset (SQ-0627).
+        // restarted game's windows. The borderless mode is the BACKEND's
+        // (SQ-1402): it is untouched by this reset, and the next relayout
+        // asks it fresh — nothing to re-apply here any more (was SQ-0627).
         for id in self.glk.all_window_ids() {
             self.backend.window_close(id);
         }
-        let borderless = self.glk.borderless();
         self.glk = Model::new();
-        self.glk.set_borderless(borderless);
         self.pending_input = None;
         self.pending_event = None;
         self.pending_fileref = None;
@@ -3101,12 +3109,6 @@ impl Machine {
     /// Whether Glk graphics windows are currently enabled.
     pub fn graphics_enabled(&self) -> bool {
         self.graphics_enabled
-    }
-
-    /// Set the per-game borderless-windows mode: `true` makes all window splits
-    /// abut with no reserved gutter cell and no reported border (SQ-0341).
-    pub fn set_borderless(&mut self, on: bool) {
-        self.glk.set_borderless(on);
     }
 
     /// Enable/disable Glk sound (gestalt + schannel opcodes).
@@ -5003,7 +5005,7 @@ impl Machine {
     fn relayout_glk(&mut self) {
         let (w, h) = self.backend.screen_size();
         let cp = self.backend.char_pixels();
-        let layout = self.glk.relayout(w, h, cp);
+        let layout = self.glk.relayout(w, h, cp, self.backend.borderless());
         self.backend.window_layout(&layout);
         let tree = self.glk.window_tree();
         self.backend.window_tree(tree);
@@ -8914,7 +8916,7 @@ mod tests {
         // grid stream, and a positioned grid cursor.
         let buf = m.glk.window_open(0, 0, 0, 3, 0xB0).unwrap(); // root TextBuffer
         let grid = m.glk.window_open(buf, 0x12, 3, 4, 0x61).unwrap(); // grid above, fixed 3
-        m.glk.relayout(80, 24, (1, 1));
+        m.glk.relayout(80, 24, (1, 1), false);
         let mem_stream = m.glk.stream_open_memory(0x180, 16, false, 3, 0x5E); // ReadWrite: seekable
         m.glk.stream_set_position(mem_stream, 5, 0);
         let grid_stream = m.glk.window_stream(grid).unwrap();
@@ -8953,7 +8955,7 @@ mod tests {
         // Routing after a cross-session restore: a put on the current (grid)
         // stream lands in the grid window at its restored cursor (row 1, col 2+).
         // (The host re-lays the restored tree out to its fresh backend first.)
-        let layout = m2.glk.relayout(80, 24, (1, 1));
+        let layout = m2.glk.relayout(80, 24, (1, 1), false);
         m2.backend.window_layout(&layout);
         m2.glk_stream_put(grid_stream, "Hi");
         assert_eq!(backend_of(&m2).grid_line(grid, 1), "  Hi");
@@ -12840,14 +12842,23 @@ mod tests {
         assert_eq!(glk_selector_name(0x016F), "glk_date_to_simple_time_local");
     }
 
+    /// A bare machine over a minimal image with a [`TestBackend`] reporting the
+    /// borderless-windows preference — the SQ-1402 twin of `machine_with_glk`.
+    fn machine_with_glk_borderless(body: &[u8]) -> Machine {
+        let start = asm::func(0xC1, &[], body);
+        let built = asm::assemble(&[start], 0, 0x100);
+        let mem = Memory::new(built.image).expect("valid image");
+        Machine::with_glk(mem, Box::new(TestBackend::new().with_borderless(true)))
+    }
+
     #[test]
-    fn restart_preserves_borderless_and_closes_backend_windows() {
-        // SQ-0627: @restart swapped in a fresh Model with no backend
-        // window_close notifications (per-id backend state would splice into
-        // the restarted game's colliding fresh ids) and silently dropped the
-        // per-game borderless mode (a host/runtime setting, not game state).
-        let mut m = machine_with_glk(&[]);
-        m.set_borderless(true);
+    fn restart_asks_the_backend_fresh_for_borderless_and_closes_backend_windows() {
+        // SQ-0627 gave the model its own copy of the borderless mode and had
+        // @restart re-apply it by hand. SQ-1402 moved the source of truth onto
+        // the BACKEND, which restart never touches — so there is nothing left
+        // to preserve, only the window-close notifications (a backend keyed by
+        // id cannot splice pre-restart state into the restarted game's ids).
+        let mut m = machine_with_glk_borderless(&[]);
         let win = m.glk_open_window(0, 0, 0, 3, 0);
         assert_ne!(win, 0);
         m.glk_dispatch(0x002F, &[win]).unwrap(); // set_window
@@ -12855,22 +12866,36 @@ mod tests {
         assert_eq!(backend_of(&m).runs(win).len(), 1, "backend holds the old window's text");
 
         m.op_restart().unwrap();
-        assert!(m.glk.borderless(), "borderless survives @restart");
         assert_eq!(m.glk.root(), 0, "the model itself is fresh");
         assert!(backend_of(&m).runs(win).is_empty(), "the backend was told the old window closed");
+
+        // The proof this is wired end to end, not merely unbroken because
+        // nothing touched it: a fresh, DEFAULT-bordered split opened after
+        // restart still abuts, because `glk_open_window`'s own relayout asks
+        // the (untouched) backend again.
+        let buf = m.glk_open_window(0, 0, 0, 3, 0);
+        let grid = m.glk_open_window(buf, glk::WINMETHOD_LEFT | glk::WINMETHOD_FIXED, 20, 4, 0);
+        assert_eq!(m.glk.window_size(grid).unwrap().0, 20, "fixed key keeps its 20 cols");
+        assert_eq!(m.glk.window_size(buf).unwrap().0, 60, "borderless → sibling gets 80 − 20, no gutter");
     }
 
     #[test]
-    fn restore_state_preserves_borderless() {
-        // SQ-0627: restore_state replaces the Glk model with the deserialized
-        // snapshot, which deliberately never carries the host's borderless
-        // mode — the LIVE value must survive the swap. @restoreundo runs
-        // through this path with no host callback to re-apply it.
-        let mut m = machine_with_glk(&[]);
-        m.set_borderless(true);
+    fn restore_state_still_asks_the_backend_for_borderless_at_the_next_relayout() {
+        // SQ-1402: `restore_state` swaps in a deserialized (or fresh) Model and,
+        // unlike `op_restart`, does not itself force a relayout — so the model's
+        // CACHED copy of the backend's preference can be momentarily stale right
+        // after a restore, exactly as `char_px` (the sibling fact `relayout`
+        // hands the model the same way) already is. The backend — untouched by
+        // the swap — is still the single source of truth the moment anything
+        // relayouts: this pins that the caller's own next `rearrange()` (what
+        // the app does after a Restore State, e.g. from a queued resize) sees it.
+        let mut m = machine_with_glk_borderless(&[]);
         let blob = m.save_state();
         m.restore_state(&blob).unwrap();
-        assert!(m.glk.borderless(), "borderless survives restore_state/@restoreundo");
+        let buf = m.glk_open_window(0, 0, 0, 3, 0);
+        let grid = m.glk_open_window(buf, glk::WINMETHOD_LEFT | glk::WINMETHOD_FIXED, 20, 4, 0);
+        assert_eq!(m.glk.window_size(grid).unwrap().0, 20, "fixed key keeps its 20 cols");
+        assert_eq!(m.glk.window_size(buf).unwrap().0, 60, "borderless → sibling gets 80 − 20, no gutter");
     }
 
     #[test]

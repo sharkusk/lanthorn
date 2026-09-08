@@ -186,7 +186,7 @@ fn restore_rejects_malformed_input() {
     snap.truncate(snap.len() - 1);
     assert!(vm.restore(&snap).is_err()); // truncated
 
-    let mut bad_count = vm.snapshot();
-    bad_count[0] = 0xFF; // corrupt the item_loc length prefix
-    assert!(vm.restore(&bad_count).is_err());
+    let mut bad_magic = vm.snapshot();
+    bad_magic[0] = 0xFF; // corrupt the SQ-1402 magic (byte 0 of the header, not a field any more)
+    assert!(vm.restore(&bad_magic).is_err());
 }

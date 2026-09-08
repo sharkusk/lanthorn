@@ -7158,14 +7158,18 @@ mod tests {
         // that window doubled, so the art doubles with it.
         let session = GameSession::new_with_trace(v6_boot_stub_story(), false, false, None, false, dims.clone(), Some((320, 200)), None, None)
             .expect("v6 session");
-        assert_eq!(session.machine.picture_dims, vec![(5, 200, 120), (9, 40, 60)]);
+        for &(n, w, h) in &[(5, 200, 120), (9, 40, 60)] {
+            assert_eq!(session.machine.picture_dims(n), Some((w, h)));
+        }
 
         // No `Reso` at all (scopa.blb): Blorb §11 makes every image in the file
         // non-scalable — "always displayed at their actual size. (One image pixel
         // per screen pixel.)" — so the game is told the truth (SQ-0715).
         let session = GameSession::new_with_trace(v6_boot_stub_story(), false, false, None, false, dims.clone(), None, None, None)
             .expect("v6 session");
-        assert_eq!(session.machine.picture_dims, dims);
+        for &(n, w, h) in &dims {
+            assert_eq!(session.machine.picture_dims(n), Some((w, h)));
+        }
     }
 
     /// SQ-0532/A-F1. ZMSD §8.4: the interpreter "may change the exact dimensions

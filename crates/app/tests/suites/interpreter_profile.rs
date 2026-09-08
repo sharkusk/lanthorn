@@ -215,8 +215,8 @@ fn a_story_off_a_disk_image_draws_its_art_at_the_screens_scale() {
     .expect("the stub boots");
 
     assert_eq!(
-        session.machine.picture_dims,
-        vec![(7, 8, 4)],
+        session.machine.picture_dims(7),
+        Some((8, 4)),
         "picture_data must report unit-space sizes; 4×2 here is the 1× bug",
     );
     // …and it is scaled against a screen that really is 640×400 (80×25 cells at
@@ -254,7 +254,7 @@ fn a_blorbless_story_that_is_not_a_disk_image_still_draws_at_actual_size() {
         None,
     )
     .expect("the stub boots");
-    assert_eq!(session.machine.picture_dims, dims, "actual size, one image pixel per screen pixel");
+    assert_eq!(session.machine.picture_dims(7), Some((4, 2)), "actual size, one image pixel per screen pixel");
 
     let _ = std::fs::remove_file(&plain);
 }

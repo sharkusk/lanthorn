@@ -522,7 +522,7 @@ fn zork_zeros_ega_rendition_boots_the_geometry_its_mcga_one_does() {
 
     // Boot exactly the way `startup.rs` does: the sidecar names the archive, the
     // archive supplies both the standard window and the art scale.
-    let boot = |archive: &str, scale: Option<(u32, u32)>| -> GameSession {
+    let boot = |archive: &str, scale: Option<(u32, u32)>| -> (GameSession, Vec<(u16, u16, u16)>) {
         let dir = game_dir_with(&format!("boot-{archive}"), Some(&format!("pictures = {archive:?}\n")));
         let over = PictureOverride::resolve(&z0, &dir);
         let std_window = over.std_window();
@@ -545,20 +545,17 @@ fn zork_zeros_ega_rendition_boots_the_geometry_its_mcga_one_does() {
         if let Some(forced) = scale {
             machine.art_scale = Some(forced);
         }
-        let mut s =
-            GameSession::new_for_machine(bytes.clone(), false, false, false, dims, None, None, &machine)
-        .expect("Zork Zero boots");
+        let mut s = GameSession::new_for_machine(bytes.clone(), false, false, false, dims.clone(), None, None, &machine)
+            .expect("Zork Zero boots");
         s.set_pict_source(Some(picts));
         s.flush_boot_pictures();
         let _ = std::fs::remove_dir_all(&dir);
-        s
+        (s, dims)
     };
-    let reported = |s: &GameSession, n: u16| -> Option<(u16, u16)> {
-        s.machine.picture_dims.iter().find(|&&(i, _, _)| i == n).map(|&(_, w, h)| (w, h))
-    };
+    let reported = |s: &GameSession, n: u16| -> Option<(u16, u16)> { s.machine.picture_dims(n) };
 
-    let mcga = boot("zork0.mg1", None);
-    let ega = boot("zork0.eg1", None);
+    let (mcga, mcga_dims) = boot("zork0.mg1", None);
+    let (ega, _ega_dims) = boot("zork0.eg1", None);
 
     for (name, s) in [("MCGA", &mcga), ("EGA", &ega)] {
         assert!(!s.quit, "{name} quit during boot");
@@ -576,20 +573,15 @@ fn zork_zeros_ega_rendition_boots_the_geometry_its_mcga_one_does() {
 
     // Not just picture 1: the table the game lays itself out from agrees on the
     // overwhelming majority of the 503 pictures the two renditions share.
-    let agree = mcga
-        .machine
-        .picture_dims
-        .iter()
-        .filter(|&&(n, w, h)| reported(&ega, n) == Some((w, h)))
-        .count();
+    let agree = mcga_dims.iter().filter(|&&(n, _, _)| reported(&ega, n) == reported(&mcga, n)).count();
     assert!(
-        agree * 100 >= mcga.machine.picture_dims.len() * 85,
+        agree * 100 >= mcga_dims.len() * 85,
         "only {agree}/{} picture_data answers agree between the two renditions",
-        mcga.machine.picture_dims.len(),
+        mcga_dims.len(),
     );
 
     // FALSIFICATION: the shipped uniform rule, applied to the same archive.
-    let uniform = boot("zork0.eg1", Some((2, 2)));
+    let (uniform, _) = boot("zork0.eg1", Some((2, 2)));
     assert_eq!(
         reported(&uniform, 1),
         Some((1280, 400)),

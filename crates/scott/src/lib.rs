@@ -43,16 +43,22 @@
 //!
 //! [`Vm::snapshot`] serializes the mutable half of play state (item
 //! locations, the player's room, flags, counters, the op-80/op-87 saved-room
-//! registers, and lamp fuel) to a compact byte buffer; [`Vm::restore`]
-//! reads one back, rejecting a snapshot whose shape doesn't match this
-//! `Vm`'s own database (wrong item count, an out-of-range room or counter
-//! index) with a [`RestoreError`] rather than silently corrupting state.
-//! Nothing about the encoding is Scott-Adams-standard — there is no such
-//! standard for host save state — so a snapshot is only ever read back by
-//! the same crate version that wrote it; a host wanting a durable save
-//! format of its own builds one from the accessors ([`Vm::item_loc`],
-//! [`Vm::flag`], [`Vm::counter`], [`Vm::current_room`], [`Vm::lamp`], …)
-//! rather than persisting these bytes directly.
+//! registers, and lamp fuel) to a compact byte buffer, behind a 4-byte magic
+//! ([`Vm::SNAPSHOT_MAGIC`]) and a `u16` format version
+//! ([`Vm::SNAPSHOT_VERSION`], SQ-1402); [`Vm::restore`] checks both before
+//! reading anything else, and rejects a snapshot whose shape doesn't match
+//! this `Vm`'s own database (wrong item count, an out-of-range room or
+//! counter index) — every failure mode is a [`RestoreError`] rather than
+//! silently corrupted state. Nothing about the encoding is
+//! Scott-Adams-standard — there is no such standard for host save state — so
+//! a snapshot is only ever read back by a `scott` build whose
+//! `SNAPSHOT_VERSION` is at least the one the file declares; there is no
+//! back-compat requirement pre-release, and no build reads the headerless
+//! form this crate produced before SQ-1402 (`BadMagic`, since it never wrote
+//! this magic). A host wanting a durable save format of its own builds one
+//! from the accessors ([`Vm::item_loc`], [`Vm::flag`], [`Vm::counter`],
+//! [`Vm::current_room`], [`Vm::lamp`], …) rather than persisting these bytes
+//! directly.
 //!
 //! # Example
 //!

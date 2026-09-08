@@ -303,6 +303,14 @@ pub struct AppGlk {
     /// class (SQ-0803). Pushed by the app on boot and kept fresh each loop pass
     /// (live style reload).
     theme_styles: GlkStylePairs,
+    /// The per-game borderless-windows preference (SQ-0341/SQ-1402): `true`
+    /// makes every split abut with no reserved gutter cell and no reported
+    /// border, overriding a story's own `winmethod_Border` request the way
+    /// Gargoyle's own preference does. Reported through
+    /// [`gvm::glk::GlkBackend::borderless`]; gvm asks for it fresh at every
+    /// relayout, so this is the single source of truth — nothing on the gvm
+    /// side needs to preserve it across `@restart`/`restore_state` any more.
+    borderless: bool,
 }
 
 impl Default for AppGlk {
@@ -448,7 +456,15 @@ impl AppGlk {
             next_schannel: 0,
             sound_ops: Vec::new(),
             theme_styles: [[(None, None); 11]; 2],
+            borderless: false,
         }
+    }
+
+    /// Set the per-game borderless-windows preference (see the field doc).
+    /// Takes effect at the next relayout — the caller re-lays the tree out
+    /// (e.g. `Machine::rearrange`) for it to show immediately.
+    pub fn set_borderless(&mut self, on: bool) {
+        self.borderless = on;
     }
 
     /// Update the theme's rendered default colours reported through
@@ -1291,6 +1307,10 @@ fn log_to_lines(
 impl GlkBackend for AppGlk {
     fn screen_size(&self) -> (u32, u32) {
         (self.cols, self.rows)
+    }
+
+    fn borderless(&self) -> bool {
+        self.borderless
     }
 
     fn window_open(&mut self, id: u32, wintype: WinType) {

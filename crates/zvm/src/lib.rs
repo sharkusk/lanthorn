@@ -108,6 +108,18 @@
 //! [`cpu::exec::Machine::supply_line`] answers a suspended `NeedLine`;
 //! [`cpu::exec::Machine::supply_char`] answers a suspended `NeedChar`.
 //!
+//! # Picture resources
+//!
+//! A Version 6 story asks `picture_data` (ZMSD §15) how many pictures its
+//! archive holds and how big each one is. [`resources::Resources`] answers
+//! those questions — implement it for a host whose archive is streamed or
+//! lazily decoded, or use [`resources::PictureTable`] (what
+//! [`cpu::exec::Machine::set_picture_dims`] and
+//! [`cpu::boot::BootConfig::with_picture_dims`] build) for a host that
+//! already has the whole table. Install either with
+//! [`cpu::exec::Machine::set_resources`] or
+//! [`cpu::boot::BootConfig::with_resources`].
+//!
 //! # Saving
 //!
 //! [`cpu::exec::Machine::save_quetzal`] returns the spec-conformant Quetzal
@@ -169,6 +181,7 @@ pub mod machines;
 pub mod memory;
 pub mod objects;
 pub mod quetzal;
+pub mod resources;
 pub mod screen;
 pub mod screen_snapshot;
 pub mod text;
