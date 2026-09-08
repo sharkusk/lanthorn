@@ -36,7 +36,7 @@ enum Variant {
 impl Machine {
     /// Run accelerated function `num` (assumed 1..=13) with `args`, returning its
     /// value. Never builds a frame; a memory fault propagates as an interpreter error.
-    pub(crate) fn accel_dispatch(&self, num: u32, args: &[u32]) -> R<u32> {
+    pub(crate) fn accel_dispatch(&mut self, num: u32, args: &[u32]) -> R<u32> {
         match num {
             1 => self.accel_z_region(args),
             2 => self.accel_cp_tab(args, Variant::V1),
@@ -65,12 +65,20 @@ impl Machine {
         self.accel_param(i).unwrap_or(0)
     }
 
-    /// accel.c's `accel_error(msg)` writes `"\n{msg}\n"` to the current Glk output
-    /// stream. Correct games never reach these programming-error paths (they only
-    /// fire on already-broken stories), so we keep this a documented no-op rather
-    /// than coupling to the Glk output path — on-vs-off story equivalence still
-    /// holds because correct games never hit it. See algorithms.md §"Error signaling".
-    fn accel_error(&self, _msg: &str) {}
+    /// accel.c's `accel_error(msg)` (SQ-1416 item 7): writes `"\n{msg}\n"` to the
+    /// current Glk stream, but only when the VM's I/O system is `iosys_Glk` (mode
+    /// 2) — accel.c's own comment on the `iosys_Filter` case: "there's no way to
+    /// validly call the filter function, and the Glk printing path might throw a
+    /// fatal error. Just give up." Same three calls it makes: `glk_put_char('\n')`,
+    /// `glk_put_string(msg)`, `glk_put_char('\n')`, folded into one
+    /// [`Machine::glk_put_current`] write of the same bytes. Correct games never
+    /// reach these programming-error paths (they only fire on already-broken
+    /// stories); accelfunctest's slow-vs-fast transcripts pin the wording.
+    fn accel_error(&mut self, msg: &str) {
+        if self.iosys_mode == 2 {
+            self.glk_put_current(&format!("\n{msg}\n"));
+        }
+    }
 
     /// Function 1 — Z__Region.
     fn accel_z_region(&self, args: &[u32]) -> R<u32> {
@@ -115,7 +123,7 @@ impl Machine {
     }
 
     /// Functions 2/8 — CP__Tab.
-    fn accel_cp_tab(&self, args: &[u32], variant: Variant) -> R<u32> {
+    fn accel_cp_tab(&mut self, args: &[u32], variant: Variant) -> R<u32> {
         let obj = Self::accel_arg(args, 0);
         let id = Self::accel_arg(args, 1);
         if self.accel_z_region(&[obj])? != 1 {
@@ -138,7 +146,7 @@ impl Machine {
 
     /// `get_prop(obj, id, variant)` shared helper — accel.c 230–264 / 266–303.
     /// Mutually recursive with `accel_oc_cl` via the class-property path.
-    fn get_prop(&self, mut obj: u32, mut id: u32, variant: Variant) -> R<u32> {
+    fn get_prop(&mut self, mut obj: u32, mut id: u32, variant: Variant) -> R<u32> {
         let mut cla = 0u32;
         if id & 0xFFFF_0000 != 0 {
             cla = self.m32(self.accel_param_or0(0).wrapping_add((id & 0xFFFF).wrapping_mul(4)))?;
@@ -165,7 +173,7 @@ impl Machine {
     }
 
     /// Functions 3/9 — RA__Pr.
-    fn accel_ra_pr(&self, args: &[u32], variant: Variant) -> R<u32> {
+    fn accel_ra_pr(&mut self, args: &[u32], variant: Variant) -> R<u32> {
         let prop = self.get_prop(Self::accel_arg(args, 0), Self::accel_arg(args, 1), variant)?;
         if prop == 0 {
             Ok(0)
@@ -175,7 +183,7 @@ impl Machine {
     }
 
     /// Functions 4/10 — RL__Pr.
-    fn accel_rl_pr(&self, args: &[u32], variant: Variant) -> R<u32> {
+    fn accel_rl_pr(&mut self, args: &[u32], variant: Variant) -> R<u32> {
         let prop = self.get_prop(Self::accel_arg(args, 0), Self::accel_arg(args, 1), variant)?;
         if prop == 0 {
             Ok(0)
@@ -185,7 +193,7 @@ impl Machine {
     }
 
     /// Functions 5/11 — OC__Cl. accel.c 393–458 / 573–638.
-    fn accel_oc_cl(&self, args: &[u32], variant: Variant) -> R<u32> {
+    fn accel_oc_cl(&mut self, args: &[u32], variant: Variant) -> R<u32> {
         let obj = Self::accel_arg(args, 0);
         let cla = Self::accel_arg(args, 1);
         let zr = self.accel_z_region(&[obj])?;
@@ -259,7 +267,7 @@ impl Machine {
     }
 
     /// Functions 6/12 — RV__Pr.
-    fn accel_rv_pr(&self, args: &[u32], variant: Variant) -> R<u32> {
+    fn accel_rv_pr(&mut self, args: &[u32], variant: Variant) -> R<u32> {
         let id = Self::accel_arg(args, 1);
         let addr = self.accel_ra_pr(args, variant)?;
         if addr == 0 {
@@ -273,7 +281,7 @@ impl Machine {
     }
 
     /// Functions 7/13 — OP__Pr.
-    fn accel_op_pr(&self, args: &[u32], variant: Variant) -> R<u32> {
+    fn accel_op_pr(&mut self, args: &[u32], variant: Variant) -> R<u32> {
         let obj = Self::accel_arg(args, 0);
         let id = Self::accel_arg(args, 1);
         let zr = self.accel_z_region(&[obj])?;
@@ -329,7 +337,7 @@ mod tests {
 
     #[test]
     fn z_region_classifies_addresses() {
-        let (m, obj_addr, routine_addr, string_addr) = accel_test_machine();
+        let (mut m, obj_addr, routine_addr, string_addr) = accel_test_machine();
         assert_eq!(m.accel_dispatch(1, &[10]).unwrap(), 0); // addr < 36
         assert_eq!(m.accel_dispatch(1, &[obj_addr]).unwrap(), 1); // object
         assert_eq!(m.accel_dispatch(1, &[routine_addr]).unwrap(), 2); // routine
@@ -464,7 +472,7 @@ mod tests {
 
     #[test]
     fn ra_rl_rv_on_synthetic_object() {
-        let m = accel_world();
+        let mut m = accel_world();
         // present property P on OBJ: address non-zero, length as laid out, value dereferenced
         assert_eq!(m.accel_dispatch(3, &[OBJ, P]).unwrap(), PROP_ADDR); // RA__Pr v1
         assert_eq!(m.accel_dispatch(9, &[OBJ, P]).unwrap(), PROP_ADDR); // RA__Pr v2 (same, nab=7)
@@ -477,7 +485,7 @@ mod tests {
 
     #[test]
     fn oc_cl_and_op_pr_classify() {
-        let m = accel_world();
+        let mut m = accel_world();
         assert_eq!(m.accel_dispatch(5, &[OBJ, THE_CLASS]).unwrap(), 1); // OC__Cl: obj is of class
         assert_eq!(m.accel_dispatch(5, &[OBJ, OTHER_CLASS]).unwrap(), 0);
         assert_eq!(m.accel_dispatch(7, &[OBJ, P]).unwrap(), 1); // OP__Pr: provides P
@@ -489,14 +497,14 @@ mod tests {
     #[test]
     fn cp_tab_v1_v2_agree_at_nab7_and_diverge_otherwise() {
         // With num_attr_bytes = 7 the V1 (obj+16) and V2 (obj+4*(3+7/4)=obj+16) offsets match.
-        let m = accel_world();
+        let mut m = accel_world();
         let v1 = m.accel_dispatch(2, &[OBJ, P]).unwrap();
         assert_ne!(v1, 0, "agreement check is vacuous if the shared value is 0");
         assert_eq!(v1, m.accel_dispatch(8, &[OBJ, P]).unwrap());
         // With num_attr_bytes != 7, only V2 lands on the real table. The second world's
         // object places its prop-table pointer at obj+4*(3+nab/4); assert V2 finds
         // the property and V1 (obj+16) does not.
-        let m2 = accel_world_nab(9);
+        let mut m2 = accel_world_nab(9);
         assert!(m2.accel_dispatch(8, &[OBJ, P]).unwrap() != 0);
         assert_eq!(m2.accel_dispatch(2, &[OBJ, P]).unwrap(), 0);
     }

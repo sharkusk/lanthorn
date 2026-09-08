@@ -42,6 +42,10 @@ Absolute URLs or no link.
 - **A Save State now keeps the colours of a game's status line cell by cell;**
   games that colour their status line lost those colours across a Save State
   before. (SQ-1401)
+- **Glulx games' data files now use the standard names**, so a file a Glulx
+  story writes (a transcript, a data file, an in-game save) can be shared with
+  other interpreters instead of only being readable by lanthorn. And a couple
+  of rarely used Glk calls now behave per spec. (SQ-1416)
 
 ---
 

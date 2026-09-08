@@ -166,6 +166,15 @@ struct PendingInput {
     line: bool,
     /// Whether the request was the Unicode (`_uni`) variant.
     unicode: bool,
+    /// Where this `glk_select`'s S1 (always 0; `glk_select` has no return
+    /// value) is stored — filled in by `op_glk` right after this suspends,
+    /// mirroring `PendingFileref::dest`. Deferred, not stored immediately: per
+    /// Glulx spec §2.18, "Stack output references are pushed after the Glk
+    /// call, but before the S1 result value is stored" (SQ-1416 item 3) — the
+    /// four event words (pushed by `write_event` on resume, possibly to the
+    /// stack if `event_addr` is `-1`) must land BEFORE S1, and resume happens
+    /// long after this opcode's own `op_glk` frame has returned.
+    dest: Dest,
 }
 
 /// A suspended `glk_select` awaiting a host-supplied **non-input** event: the
@@ -181,6 +190,9 @@ struct PendingEvent {
     mouse: bool,
     /// Whether any window had a pending hyperlink request at suspend time.
     hyperlink: bool,
+    /// Where this `glk_select`'s S1 is stored on resume (see
+    /// [`PendingInput::dest`]; SQ-1416 item 3).
+    dest: Dest,
 }
 
 /// A suspended game-initiated `@save`/`@restore` awaiting the host's file I/O.
@@ -2587,9 +2599,9 @@ impl Machine {
         // can still resolve it rather than being stranded.
         if let Some(pi) = self.pending_input.as_mut() {
             if let Some((win, unicode)) = self.glk.first_line_request() {
-                *pi = PendingInput { event_addr: pi.event_addr, win, line: true, unicode };
+                *pi = PendingInput { event_addr: pi.event_addr, win, line: true, unicode, dest: pi.dest };
             } else if let Some((win, unicode)) = self.glk.first_char_request() {
-                *pi = PendingInput { event_addr: pi.event_addr, win, line: false, unicode };
+                *pi = PendingInput { event_addr: pi.event_addr, win, line: false, unicode, dest: pi.dest };
             }
         }
         Ok(())
@@ -3933,6 +3945,21 @@ impl Machine {
             pf.dest = s[0];
             return Ok(());
         }
+        // `glk_select` suspends the same way (SQ-1416 item 3): its S1 is
+        // always 0, but per Glulx spec §2.18 a stack output reference (the
+        // event_t at -1) is pushed AFTER the Glk call and BEFORE S1 is
+        // stored — and here the "Glk call" doesn't finish until the host
+        // supplies the event, long after this `op_glk` frame is gone. Defer
+        // the store to `write_event`'s caller on resume (`supply_line`,
+        // `deliver_timer`, …), exactly like `pending_fileref` above.
+        if let Some(pi) = self.pending_input.as_mut() {
+            pi.dest = s[0];
+            return Ok(());
+        }
+        if let Some(pe) = self.pending_event.as_mut() {
+            pe.dest = s[0];
+            return Ok(());
+        }
         self.store(s[0], result)
     }
 
@@ -4593,8 +4620,11 @@ impl Machine {
                 0
             }
             0x00C1 => {
-                // glk_select_poll(event) — internal events only, never suspends
-                let ev = self.glk.pop_event().unwrap_or_else(GlkEvent::none);
+                // glk_select_poll(event) — internal events only, never
+                // suspends (SQ-1416 item 4): only Timer/Arrange/Redraw/
+                // SoundNotify/VolumeNotify are eligible; Char/Line/Mouse/
+                // Hyperlink are skipped and stay queued for glk_select.
+                let ev = self.glk.pop_pollable_event().unwrap_or_else(GlkEvent::none);
                 self.write_event(a(0), ev)?;
                 0
             }
@@ -4651,13 +4681,14 @@ impl Machine {
             }
             0x0004 => self.glk_gestalt(a(0), a(1)), // glk_gestalt(sel, val)
             0x0005 => {
-                // glk_gestalt_ext(sel, val, arr, arrlen). Only gestalt_CharOutput (3)
-                // writes the output array — arr[0] = glyphs printed for the char. We
-                // report ExactPrint for every char, so that is exactly one glyph. A
-                // null or zero-length array is skipped, per spec.
+                // glk_gestalt_ext(sel, val, arr, arrlen). Only gestalt_CharOutput
+                // (3) writes the output array — arr[0] = the glyph count the
+                // backend reports for `val` (SQ-1416 item 8). A null or
+                // zero-length array is skipped, per spec.
                 let (sel, val, arr, arrlen) = (a(0), a(1), a(2), a(3));
                 if sel == 3 && arr != 0 && arrlen >= 1 {
-                    self.store_mem(arr, 1)?;
+                    let (_, count) = self.backend.char_output_gestalt(val);
+                    self.store_mem(arr, count)?;
                 }
                 self.glk_gestalt(sel, val)
             }
@@ -4950,8 +4981,11 @@ impl Machine {
     }
 
     /// Write `s` to the current Glk stream (used by the put-to-current
-    /// selectors). Glk output is independent of the VM's I/O system.
-    fn glk_put_current(&mut self, s: &str) {
+    /// selectors). Glk output is independent of the VM's I/O system. `pub(crate)`
+    /// so `accel::accel_error` (SQ-1416 item 7) can reach it too — accel.c's
+    /// `accel_error` writes through `glk_put_char`/`glk_put_string`, i.e. the
+    /// current Glk stream, exactly like this.
+    pub(crate) fn glk_put_current(&mut self, s: &str) {
         let sid = self.glk.current_stream();
         self.glk_stream_put(sid, s);
     }
@@ -5079,8 +5113,23 @@ impl Machine {
         }
     }
 
-    /// Read a Glk `glktimeval_t` (3 words: high_sec, low_sec, microsec) at `addr`.
-    fn read_timeval(&self, addr: u32) -> R<glk::datetime::GlkTimeVal> {
+    /// Read a Glk `glktimeval_t` (3 words: high_sec, low_sec, microsec) at
+    /// `addr`, honoring the `-1` (0xFFFFFFFF) input-structure convention
+    /// (SQ-1416 item 2; Glulx spec §2.18: "a reference to a Glk structure …
+    /// -1 means that all the values are written to the stack … an input
+    /// structure is popped off first-topmost" — i.e. field 0 is popped first,
+    /// matching glkop.c's `ReadStructField` macro, which does one
+    /// `stackptr -= 4; return Stk4(stackptr)` per field in increasing
+    /// field-index order; the mirror image of [`Machine::glk_out_ref`]'s
+    /// OUTPUT convention, where the LAST field ends up topmost). This makes
+    /// `read_timeval` an input struct, so it must run `&mut self` to pop.
+    fn read_timeval(&mut self, addr: u32) -> R<glk::datetime::GlkTimeVal> {
+        if addr == 0xFFFF_FFFF {
+            let high_sec = self.pop32()? as i32;
+            let low_sec = self.pop32()?;
+            let microsec = self.pop32()? as i32;
+            return Ok(glk::datetime::GlkTimeVal { high_sec, low_sec, microsec });
+        }
         Ok(glk::datetime::GlkTimeVal {
             high_sec: self.m32(addr)? as i32,
             low_sec: self.m32(addr + 4)?,
@@ -5093,8 +5142,20 @@ impl Machine {
         self.glk_out_ref(addr, &[tv.high_sec as u32, tv.low_sec, tv.microsec as u32])
     }
 
-    /// Read a Glk `glkdate_t` (8 words) at `addr`.
-    fn read_glkdate(&self, addr: u32) -> R<glk::datetime::GlkDate> {
+    /// Read a Glk `glkdate_t` (8 words) at `addr`, honoring the `-1` input-
+    /// structure convention (see [`Machine::read_timeval`]; SQ-1416 item 2).
+    fn read_glkdate(&mut self, addr: u32) -> R<glk::datetime::GlkDate> {
+        if addr == 0xFFFF_FFFF {
+            let year = self.pop32()? as i32;
+            let month = self.pop32()? as i32;
+            let day = self.pop32()? as i32;
+            let weekday = self.pop32()? as i32;
+            let hour = self.pop32()? as i32;
+            let minute = self.pop32()? as i32;
+            let second = self.pop32()? as i32;
+            let microsec = self.pop32()? as i32;
+            return Ok(glk::datetime::GlkDate { year, month, day, weekday, hour, minute, second, microsec });
+        }
         Ok(glk::datetime::GlkDate {
             year: self.m32(addr)? as i32,
             month: self.m32(addr + 4)? as i32,
@@ -5308,9 +5369,12 @@ impl Machine {
             return self.write_event(event_addr, ev); // arrange/redraw, no suspend
         }
         if let Some((win, unicode)) = self.glk.first_line_request() {
-            self.pending_input = Some(PendingInput { event_addr, win, line: true, unicode });
+            // `dest` is a placeholder here (`op_glk` fills it right after this
+            // call returns, the same handshake `pending_fileref` uses) —
+            // SQ-1416 item 3.
+            self.pending_input = Some(PendingInput { event_addr, win, line: true, unicode, dest: Dest::Discard });
         } else if let Some((win, unicode)) = self.glk.first_char_request() {
-            self.pending_input = Some(PendingInput { event_addr, win, line: false, unicode });
+            self.pending_input = Some(PendingInput { event_addr, win, line: false, unicode, dest: Dest::Discard });
         } else {
             // No line/char request. If a timer/mouse/hyperlink is armed, this is a
             // legal blocking select on a non-input event (Glk §4.4): suspend and
@@ -5319,7 +5383,7 @@ impl Machine {
             let mouse = self.glk.any_mouse_requested();
             let hyperlink = self.glk.any_hyperlink_requested();
             if timer_ms.is_some() || mouse || hyperlink {
-                self.pending_event = Some(PendingEvent { event_addr, timer_ms, mouse, hyperlink });
+                self.pending_event = Some(PendingEvent { event_addr, timer_ms, mouse, hyperlink, dest: Dest::Discard });
             } else {
                 // Nothing at all is armed: a malformed program that would otherwise
                 // deadlock. Preserve the diagnostic + evtype_None escape hatch.
@@ -5610,6 +5674,9 @@ impl Machine {
         if let Err(e) = self.write_event(pi.event_addr, ev) {
             self.diagnostics.push(e);
         }
+        // S1 (always 0) stored AFTER the event words, per Glulx spec §2.18
+        // (SQ-1416 item 3).
+        let _ = self.store(pi.dest, 0);
     }
 
     /// Complete a suspended char-input `glk_select`: fill the `event_t` with
@@ -5644,6 +5711,8 @@ impl Machine {
         if let Err(e) = self.write_event(pi.event_addr, ev) {
             self.diagnostics.push(e);
         }
+        // S1 (always 0) stored AFTER the event words (SQ-1416 item 3).
+        let _ = self.store(pi.dest, 0);
     }
 
     /// Deliver an `evtype_Arrange` into a suspended `glk_select`, if one is
@@ -5659,12 +5728,20 @@ impl Machine {
             if let Err(e) = self.write_event(pi.event_addr, ev) {
                 self.diagnostics.push(e);
             }
+            let _ = self.store(pi.dest, 0); // SQ-1416 item 3: after the event words
         } else if let Some(pe) = self.pending_event.take() {
             if let Err(e) = self.write_event(pe.event_addr, ev) {
                 self.diagnostics.push(e);
             }
+            let _ = self.store(pe.dest, 0);
+        } else {
+            // SQ-1416 item 8: queue like the sound/timer/mouse/hyperlink
+            // siblings below, instead of silently dropping the event when
+            // nothing is currently blocked on a `glk_select`. The NEXT select
+            // (input or non-input) then delivers it via `glk_select`'s own
+            // `pop_event` check.
+            self.glk.push_event(ev);
         }
-        // else: no-op — an Arrange is only meaningful at a blocked `glk_select`.
     }
 
     /// Deliver a Glk `Evtype_SoundNotify` for a finished sound: `sound` is the
@@ -5679,10 +5756,12 @@ impl Machine {
             if let Err(e) = self.write_event(pi.event_addr, ev) {
                 self.diagnostics.push(e);
             }
+            let _ = self.store(pi.dest, 0); // SQ-1416 item 3: after the event words
         } else if let Some(pe) = self.pending_event.take() {
             if let Err(e) = self.write_event(pe.event_addr, ev) {
                 self.diagnostics.push(e);
             }
+            let _ = self.store(pe.dest, 0);
         } else {
             self.glk.push_event(ev);
         }
@@ -5699,10 +5778,12 @@ impl Machine {
             if let Err(e) = self.write_event(pi.event_addr, ev) {
                 self.diagnostics.push(e);
             }
+            let _ = self.store(pi.dest, 0); // SQ-1416 item 3: after the event words
         } else if let Some(pe) = self.pending_event.take() {
             if let Err(e) = self.write_event(pe.event_addr, ev) {
                 self.diagnostics.push(e);
             }
+            let _ = self.store(pe.dest, 0);
         } else {
             self.glk.push_event(ev);
         }
@@ -5728,10 +5809,12 @@ impl Machine {
             if let Err(e) = self.write_event(pi.event_addr, ev) {
                 self.diagnostics.push(e);
             }
+            let _ = self.store(pi.dest, 0); // SQ-1416 item 3: after the event words
         } else if let Some(pe) = self.pending_event.take() {
             if let Err(e) = self.write_event(pe.event_addr, ev) {
                 self.diagnostics.push(e);
             }
+            let _ = self.store(pe.dest, 0);
         } else {
             self.glk.push_event(ev);
         }
@@ -5752,10 +5835,12 @@ impl Machine {
             if let Err(e) = self.write_event(pi.event_addr, ev) {
                 self.diagnostics.push(e);
             }
+            let _ = self.store(pi.dest, 0); // SQ-1416 item 3: after the event words
         } else if let Some(pe) = self.pending_event.take() {
             if let Err(e) = self.write_event(pe.event_addr, ev) {
                 self.diagnostics.push(e);
             }
+            let _ = self.store(pe.dest, 0);
         } else {
             self.glk.push_event(ev);
         }
@@ -5783,10 +5868,12 @@ impl Machine {
             if let Err(e) = self.write_event(pi.event_addr, ev) {
                 self.diagnostics.push(e);
             }
+            let _ = self.store(pi.dest, 0); // SQ-1416 item 3: after the event words
         } else if let Some(pe) = self.pending_event.take() {
             if let Err(e) = self.write_event(pe.event_addr, ev) {
                 self.diagnostics.push(e);
             }
+            let _ = self.store(pe.dest, 0);
         } else {
             self.glk.push_event(ev);
         }
@@ -5826,9 +5913,30 @@ impl Machine {
         self.deliver_arrange();
     }
 
-    /// The Glk version this layer implements (0.7.6), reported by
-    /// `glk_gestalt(gestalt_Version)`.
-    const GLK_VERSION: u32 = 0x0000_0706;
+    /// The Glk version this layer implements, reported by
+    /// `glk_gestalt(gestalt_Version)` (encoding per Glk spec §1.8: major<<16
+    /// | minor<<8 | sub-minor, so 0.7.5 is `0x0000_0705`).
+    ///
+    /// SQ-1416 item 1: this claimed 0.7.6 (`0x0000_0706`) without
+    /// implementing `0x00EC glk_image_draw_scaled_ext` — the one call 0.7.6
+    /// added (Glk-Spec-076.html §7.2/§7.5; selector confirmed against
+    /// cheapglk `gi_dispa.c`, which is the authority since the spec's own
+    /// dispatch-selector table omits it). Declining it rather than
+    /// implementing it: for a `wintype_Graphics` window the resolution is a
+    /// one-shot "compute final (width, height) from `imagerule`, then draw"
+    /// — cheap, and could reuse the existing `graphics_draw_image` seam
+    /// unchanged — but §7.2's `imagerule_WidthRatio` in a `wintype_TextBuffer`
+    /// window is NOT one-shot: "the image width will always be relative to
+    /// the *current* window width. If the text buffer window is resized …
+    /// the image will resize too" — a standing per-image relationship that
+    /// must be re-resolved on every relayout, which is a materially bigger
+    /// feature (new per-image state, wired through window arrangement) than
+    /// "one delegated call". Absent that, claiming 0.7.6 is not honest:
+    /// `0x00EC` falls to the unhandled-selector default (logs a diagnostic,
+    /// returns 0) and `gestalt_DrawImageScale` (24) is unlisted, so it
+    /// already falls to `_ => 0` — both truthful once the version itself
+    /// stops overclaiming.
+    const GLK_VERSION: u32 = 0x0000_0705;
 
     /// Answer a `glk_gestalt` query. Truthful for what 3a-1 implements: output +
     /// Unicode are supported; graphics is supported conditionally (per
@@ -5840,7 +5948,9 @@ impl Machine {
             0 => Self::GLK_VERSION, // gestalt_Version
             1 => 1,                 // gestalt_CharInput → supported
             2 => 1,                 // gestalt_LineInput → supported
-            3 => 2,                 // gestalt_CharOutput → ExactPrint for any char
+            // gestalt_CharOutput(ch) — answered by the backend (SQ-1416 item 8),
+            // not hardcoded to ExactPrint for every code point.
+            3 => self.backend.char_output_gestalt(val).0,
             15 => 1,                // gestalt_Unicode
             16 => 1,                // gestalt_UnicodeNorm → canon_decompose/normalize supported
             17 => 1,                // gestalt_LineInputEcho → set_echo_line_event supported
@@ -9722,11 +9832,39 @@ mod tests {
         body.extend(glk_call(0x05, &[C8(0), C8(0), Zero, C8(0)], Mem16(0x0110))); // gestalt_ext Version
         body.extend(asm::ins(0x120, &[]));
         let m = run_with_ram(body, 0x200, |_| {});
-        assert_eq!(m.mem.read32(0x100).unwrap(), 0x0000_0706, "glk version 0.7.6");
+        // SQ-1416 item 1: 0.7.5, not 0.7.6 — glk_image_draw_scaled_ext (the
+        // one thing 0.7.6 added) is not implemented.
+        assert_eq!(m.mem.read32(0x100).unwrap(), 0x0000_0705, "glk version 0.7.5");
         assert_eq!(m.mem.read32(0x104).unwrap(), 2, "CharOutput = ExactPrint");
         assert_eq!(m.mem.read32(0x108).unwrap(), 1, "Unicode supported");
         assert_eq!(m.mem.read32(0x10C).unwrap(), 1, "LineInput supported (3a-2)");
-        assert_eq!(m.mem.read32(0x110).unwrap(), 0x0000_0706, "gestalt_ext mirrors gestalt");
+        assert_eq!(m.mem.read32(0x110).unwrap(), 0x0000_0705, "gestalt_ext mirrors gestalt");
+    }
+
+    /// SQ-1416 item 8: `gestalt_CharOutput` is answered from
+    /// `GlkBackend::char_output_gestalt`, not hardcoded to ExactPrint for
+    /// every code point — the default backend answer (Glk spec §2.3):
+    /// CannotPrint for the named eight-bit control ranges, ExactPrint for the
+    /// rest of Latin-1, ApproxPrint beyond that. `glk_gestalt_ext`'s output
+    /// array carries the matching glyph count.
+    #[test]
+    fn glk_gestalt_char_output_is_not_hardcoded_exact_print() {
+        use asm::Op::{C16, C32, C8, Mem16};
+        let mut body = glk_call(0x04, &[C8(3), C8(7)], Mem16(0x0100)); // CharOutput(BEL=7, control)
+        body.extend(glk_call(0x04, &[C8(3), C16(0x0100)], Mem16(0x0104))); // CharOutput(U+0100, beyond Latin-1)
+        body.extend(glk_call(0x04, &[C8(3), C8(b'Z' as i8)], Mem16(0x0108))); // CharOutput('Z')
+        // gestalt_ext(CharOutput, BEL, &len, 1) -> len is the glyph count.
+        body.extend(glk_call(0x05, &[C8(3), C8(7), C16(0x0120), C8(1)], Mem16(0x010C)));
+        body.extend(glk_call(0x05, &[C8(3), C32(0x0100), C16(0x0124), C8(1)], Mem16(0x0110)));
+        body.extend(glk_call(0x05, &[C8(3), C8(b'Z' as i8), C16(0x0128), C8(1)], Mem16(0x0114)));
+        body.extend(asm::ins(0x120, &[]));
+        let m = run_with_ram(body, 0x200, |_| {});
+        assert_eq!(m.mem.read32(0x100).unwrap(), 0, "control char (BEL) -> CannotPrint");
+        assert_eq!(m.mem.read32(0x104).unwrap(), 1, "beyond Latin-1 -> ApproxPrint");
+        assert_eq!(m.mem.read32(0x108).unwrap(), 2, "'Z' -> ExactPrint");
+        assert_eq!(m.mem.read32(0x120).unwrap(), 0, "CannotPrint's glyph count");
+        assert_eq!(m.mem.read32(0x124).unwrap(), 1, "ApproxPrint's glyph count");
+        assert_eq!(m.mem.read32(0x128).unwrap(), 1, "ExactPrint's glyph count");
     }
 
     #[test]
@@ -10009,7 +10147,7 @@ mod tests {
         assert_eq!(m.mem.read32(0x0110).unwrap(), 1, "one glyph written to arr[0]");
         // A non-CharOutput selector still returns its scalar but leaves the array alone.
         m.mem.write32(0x0110, 0x0000_DEAD).unwrap();
-        assert_eq!(m.glk_dispatch(0x0005, &[0, 0, 0x0110, 1]).unwrap(), 0x0000_0706); // Version
+        assert_eq!(m.glk_dispatch(0x0005, &[0, 0, 0x0110, 1]).unwrap(), 0x0000_0705); // Version
         assert_eq!(m.mem.read32(0x0110).unwrap(), 0x0000_DEAD, "version query leaves the array untouched");
     }
 
@@ -11316,7 +11454,9 @@ mod tests {
         let req = m.pending_saveload_request().expect("a save is pending");
         assert_eq!(
             req,
-            SaveLoadRequest { name: "startup-data".to_string(), by_prompt: false, restore: false },
+            // SQ-1416 item 6: create_by_name sanitizes + appends the usage's
+            // suffix (SavedGame -> ".glksave").
+            SaveLoadRequest { name: "startup-data.glksave".to_string(), by_prompt: false, restore: false },
             "a create_by_name @save carries its fixed name and is NOT by_prompt (host writes it silently)"
         );
     }
@@ -11334,7 +11474,8 @@ mod tests {
         assert_eq!(m.step(), StepResult::SaveRequest);
         let req = m.pending_saveload_request().expect("a save is pending");
         assert!(req.by_prompt, "a create_by_prompt @save is by_prompt (host surfaces the save UI)");
-        assert_eq!(req.name, "myslot");
+        // SQ-1416 item 6: sanitize + append ".glksave" (SavedGame usage).
+        assert_eq!(req.name, "myslot.glksave");
         assert!(!req.restore);
     }
 
@@ -11376,12 +11517,14 @@ mod tests {
         // read-write open, which preserves the prior size.)
         let body = asm::ins(0x123, &[C8(2), Mem16(0x0100)]); // @save 2 -> mem[0x100]
         let mut m = machine_with_body(&[], body);
-        // A previous launch's save already occupies the slot.
-        m.glk.seed_saved_game_file("startup-data".to_string(), 4321);
+        // A previous launch's save already occupies the slot. Seeded under the
+        // SANITIZED name (SQ-1416 item 6: create_by_name appends ".glksave" for
+        // SavedGame usage) — a host reseeding from disk keys by that same name.
+        m.glk.seed_saved_game_file("startup-data.glksave".to_string(), 4321);
         let fref = m.glk.fileref_create(0x01, "startup-data".to_string(), 0);
         let sid = m.glk.stream_open_file(fref, 0x05, false, 0); // ReadWrite -> keeps size
         assert_eq!(sid, 2);
-        assert_eq!(m.glk.saved_game_size("startup-data"), Some(4321), "the open kept the prior size");
+        assert_eq!(m.glk.saved_game_size("startup-data.glksave"), Some(4321), "the open kept the prior size");
         assert_eq!(m.step(), StepResult::SaveRequest);
 
         // The player cancels the overwrite.
@@ -11390,7 +11533,7 @@ mod tests {
         assert_eq!(m.mem.read32(0x100).unwrap(), 1, "cancelled @save stores 1 into S1");
         assert!(m.glk.fileref_exists(fref), "the pre-existing save survives a cancelled re-save");
         assert_eq!(
-            m.glk.saved_game_size("startup-data"),
+            m.glk.saved_game_size("startup-data.glksave"),
             Some(4321),
             "and keeps its original byte count — not reverted to absent like a fresh save",
         );
@@ -11435,7 +11578,8 @@ mod tests {
         let req = m.pending_saveload_request().expect("a restore is pending");
         assert_eq!(
             req,
-            SaveLoadRequest { name: "startup-data".to_string(), by_prompt: false, restore: true },
+            // SQ-1416 item 6: sanitize + append ".glksave" (SavedGame usage).
+            SaveLoadRequest { name: "startup-data.glksave".to_string(), by_prompt: false, restore: true },
             "a create_by_name @restore is silent + game-managed (host reads its fixed file, clean-fails if absent)"
         );
     }
@@ -11856,7 +12000,7 @@ mod tests {
         body.extend(glk_call(0x04, &[C8(22), C8(0)], Mem16(0x0128)));   // ResourceStream
         body.extend(asm::ins(0x120, &[]));
         let m = run_with_ram(body, 0x200, |_| {});
-        assert_eq!(m.mem.read32(0x100).unwrap(), 0x0000_0706, "Version 0.7.6");
+        assert_eq!(m.mem.read32(0x100).unwrap(), 0x0000_0705, "Version 0.7.5 (SQ-1416 item 1)");
         assert_eq!(m.mem.read32(0x104).unwrap(), 1, "CharInput supported");
         assert_eq!(m.mem.read32(0x108).unwrap(), 1, "LineInput supported");
         assert_eq!(m.mem.read32(0x10C).unwrap(), 2, "CharOutput = ExactPrint");
@@ -13014,5 +13158,143 @@ mod tests {
             }
         }
         assert!(m.halted, "the program must fault or quit cleanly, never panic");
+    }
+
+    // ── SQ-1416 item 2: -1 input structs (glk_time_to_date_utc etc.) ──────────
+
+    /// `glk_time_to_date_utc(timeval*, date*)` (selector 0x0168) with the
+    /// timeval argument at `-1` (0xFFFFFFFF): per Glulx spec §2.18, an input
+    /// structure is popped off the stack, field 0 topmost — so the CALLER
+    /// (this test, standing in for compiled game code) pushes the fields in
+    /// REVERSE field order (microsec, then low_sec, then high_sec) so that
+    /// high_sec (field 0) ends up topmost, ready to be popped first. The date*
+    /// output (a real memory address, not -1) is then checked against
+    /// `glk::datetime::time_to_date` computed directly from the same
+    /// (high_sec, low_sec, microsec) — which only matches if the three popped
+    /// values landed in the right fields.
+    #[test]
+    fn glk_time_to_date_utc_honors_stack_input_timeval() {
+        use asm::Op::{C32, Zero};
+        const DATE_ADDR: u32 = 0x0100;
+        const HIGH_SEC: u32 = 0;
+        const LOW_SEC: u32 = 1_700_000_000;
+        const MICROSEC: u32 = 500_000;
+
+        // Push the timeval's fields in REVERSE field order (2, 1, 0) so field 0
+        // (high_sec) ends up topmost — the stack layout a real compiled
+        // `glk(0x168, sp, ...)` call with an inline timeval literal produces.
+        let mut body = asm::ins(0x40, &[C32(MICROSEC), asm::Op::Stack]); // field 2 (deepest)
+        body.extend(asm::ins(0x40, &[C32(LOW_SEC), asm::Op::Stack])); // field 1
+        body.extend(asm::ins(0x40, &[C32(HIGH_SEC), asm::Op::Stack])); // field 0 (topmost)
+        body.extend(glk_call(0x0168, &[C32(0xFFFF_FFFF), C32(DATE_ADDR)], Zero));
+        body.extend(asm::ins(0x120, &[]));
+        let m = run_program(body);
+        assert!(m.diagnostics.is_empty(), "no diagnostic: {:?}", m.diagnostics);
+
+        let tv = glk::datetime::GlkTimeVal { high_sec: HIGH_SEC as i32, low_sec: LOW_SEC, microsec: MICROSEC as i32 };
+        let want = glk::datetime::time_to_date(glk::datetime::timeval_to_timestamp(tv), tv.microsec);
+
+        let got_year = m.mem.read32(DATE_ADDR).unwrap() as i32;
+        let got_month = m.mem.read32(DATE_ADDR + 4).unwrap() as i32;
+        let got_day = m.mem.read32(DATE_ADDR + 8).unwrap() as i32;
+        let got_weekday = m.mem.read32(DATE_ADDR + 12).unwrap() as i32;
+        let got_hour = m.mem.read32(DATE_ADDR + 16).unwrap() as i32;
+        let got_minute = m.mem.read32(DATE_ADDR + 20).unwrap() as i32;
+        let got_second = m.mem.read32(DATE_ADDR + 24).unwrap() as i32;
+        let got_microsec = m.mem.read32(DATE_ADDR + 28).unwrap() as i32;
+        assert_eq!(
+            (got_year, got_month, got_day, got_weekday, got_hour, got_minute, got_second, got_microsec),
+            (want.year, want.month, want.day, want.weekday, want.hour, want.minute, want.second, want.microsec),
+            "the -1 timeval's fields did not land in (high_sec, low_sec, microsec) order"
+        );
+    }
+
+    /// `glk_date_to_time_utc(date*, timeval*)` (selector 0x016C) with the date
+    /// argument at `-1`: same convention as above but 8 fields, and this time
+    /// the OUTPUT (timeval*) is a real address so the round trip is checked
+    /// end to end — an input date whose stack fields were popped into the
+    /// wrong slots would produce a wrong or garbage timeval.
+    #[test]
+    fn glk_date_to_time_utc_honors_stack_input_date() {
+        use asm::Op::{C32, Zero};
+        const TV_ADDR: u32 = 0x0100;
+        let want_date = glk::datetime::GlkDate {
+            year: 2024,
+            month: 3,
+            day: 14,
+            weekday: 4,
+            hour: 9,
+            minute: 26,
+            second: 53,
+            microsec: 0,
+        };
+        let want_tv = {
+            let (secs, micro) = glk::datetime::date_to_time(want_date);
+            glk::datetime::timestamp_to_timeval(secs, micro)
+        };
+
+        // Push the date's 8 fields in REVERSE field order (7..=0) so field 0
+        // (year) ends up topmost.
+        let mut body = asm::ins(0x40, &[C32(want_date.microsec as u32), asm::Op::Stack]);
+        body.extend(asm::ins(0x40, &[C32(want_date.second as u32), asm::Op::Stack]));
+        body.extend(asm::ins(0x40, &[C32(want_date.minute as u32), asm::Op::Stack]));
+        body.extend(asm::ins(0x40, &[C32(want_date.hour as u32), asm::Op::Stack]));
+        body.extend(asm::ins(0x40, &[C32(want_date.weekday as u32), asm::Op::Stack]));
+        body.extend(asm::ins(0x40, &[C32(want_date.day as u32), asm::Op::Stack]));
+        body.extend(asm::ins(0x40, &[C32(want_date.month as u32), asm::Op::Stack]));
+        body.extend(asm::ins(0x40, &[C32(want_date.year as u32), asm::Op::Stack]));
+        body.extend(glk_call(0x016C, &[C32(0xFFFF_FFFF), C32(TV_ADDR)], Zero));
+        body.extend(asm::ins(0x120, &[]));
+        let m = run_program(body);
+        assert!(m.diagnostics.is_empty(), "no diagnostic: {:?}", m.diagnostics);
+
+        let got_high = m.mem.read32(TV_ADDR).unwrap() as i32;
+        let got_low = m.mem.read32(TV_ADDR + 4).unwrap();
+        let got_micro = m.mem.read32(TV_ADDR + 8).unwrap() as i32;
+        assert_eq!(
+            (got_high, got_low, got_micro),
+            (want_tv.high_sec, want_tv.low_sec, want_tv.microsec),
+            "the -1 date's 8 fields did not land in declared field order"
+        );
+    }
+
+    // ── SQ-1416 item 4: glk_select_poll's Char/Line/Mouse/Hyperlink ban ───────
+
+    /// `glk_select_poll` (selector 0x00C1) must skip a queued Mouse event —
+    /// forbidden by Glk spec §4.2 ("does not check for or return
+    /// evtype_CharInput, evtype_LineInput, or evtype_MouseInput") — and
+    /// deliver the Timer event queued behind it instead, leaving the Mouse
+    /// event still queued for a real `glk_select` to pick up later.
+    #[test]
+    fn glk_select_poll_skips_mouse_and_hyperlink_but_delivers_timer() {
+        use asm::Op::{C16, Zero};
+        let mut body = glk_call(0x00C1, &[C16(0x0100)], Zero); // glk_select_poll(&event @0x100)
+        body.extend(asm::ins(0x120, &[]));
+        let mut m = machine_ram(body, 0x200);
+
+        // Queue Mouse and Hyperlink FIRST (both forbidden to glk_select_poll,
+        // Glk spec §4.2), then a Timer behind them.
+        m.glk.push_event(GlkEvent { etype: glk::evtype::MOUSE_INPUT, win: 1, val1: 3, val2: 4 });
+        m.glk.push_event(GlkEvent { etype: glk::evtype::HYPERLINK, win: 1, val1: 9, val2: 0 });
+        m.glk.push_event(GlkEvent { etype: glk::evtype::TIMER, win: 0, val1: 0, val2: 0 });
+
+        assert_eq!(step_to_event(&mut m), StepResult::Quit);
+        assert_eq!(
+            read_event(&m, 0x100),
+            (glk::evtype::TIMER, 0, 0, 0),
+            "poll delivers the Timer event, skipping the queued Mouse/Hyperlink ones"
+        );
+        // Both forbidden events are still queued, in their original order —
+        // "unavailable events remain pending for glk_select() to retrieve".
+        assert_eq!(
+            m.glk.pop_event(),
+            Some(GlkEvent { etype: glk::evtype::MOUSE_INPUT, win: 1, val1: 3, val2: 4 }),
+            "the Mouse event was left queued, not discarded"
+        );
+        assert_eq!(
+            m.glk.pop_event(),
+            Some(GlkEvent { etype: glk::evtype::HYPERLINK, win: 1, val1: 9, val2: 0 }),
+            "the Hyperlink event was left queued too"
+        );
     }
 }
