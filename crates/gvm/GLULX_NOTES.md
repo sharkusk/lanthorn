@@ -520,6 +520,54 @@ in `supply_filename`); `create_by_name`/`create_by_usage`/`create_temp` are
 flag is session-transient (defaults `false` on a Glk-snapshot restore) and adds
 no `StepResult` variant (it stays `Copy`).
 
+**Foreign-save interop, closing SQ-0229 (SQ-1417).** SQ-0229 deferred the
+cross-interpreter half of `@save`/`@restore` testing twice (2026-07-11,
+2026-07-15) for want of a headless oracle and an observable-state fixture.
+Both now exist: glulxe 0.6.1 built from source against cheapglk 1.0.7 (see
+this crate's `tests/glk_conformance_corpus.rs` module doc for how), and
+`unit_tests/statusbufferwin.ulx` (vendored by SQ-1417's corpus widening,
+where SQ-0229 originally wanted a purpose-authored `counter.ulx`) whose
+inventory state is directly observable through the standard library's
+INVENTORY/TAKE verbs — no bespoke fixture needed after all.
+
+`crates/gvm/tests/fixtures/statusbufferwin_apple_{glulxe,gvm}.glksave` are two
+`FORM IFZS` saves of the identical state (`take apple` then `save`), one
+written by each interpreter. Both directions were verified:
+
+- **glulxe's save, restored by gvm**
+  (`crates/gvm/tests/foreign_save_interop.rs`,
+  `restores_a_glulxe_written_save_and_the_apple_is_there`): automated, runs in
+  the normal test suite. Drives `statusbufferwin.ulx` to `restore`, applies
+  `statusbufferwin_apple.glulxe.glksave` via `complete_restore_quetzal`, then
+  — per this project's restore-testing convention (perturb before asserting,
+  `docs`/`CLAUDE.md` Testing conventions) — issues one more command
+  (`inventory`) and asserts the apple is there.
+- **gvm's save, restored by glulxe**: verified manually (glulxe/cheapglk are
+  an external oracle, not a workspace dependency — nothing to automate this
+  *into* without vendoring a C toolchain build into CI). `glulxe -q -u
+  statusbufferwin.ulx` scripted `restore` / `save.glksave` (cheapglk resolves
+  a by-prompt fileref relative to the STORY FILE's own directory, not the
+  process cwd — `glkunix_set_base_file`/`cgfref.c`, the thing that cost the
+  first attempt at this an hour) / `inventory`, with
+  `statusbufferwin_apple.gvm.glksave` copied to that resolved path first.
+  Output: `Enter saved game to load: Ok.` then `You are carrying: an apple`
+  — the restore succeeds and the state matches. (An initial attempt failed
+  with `Restore failed.` for an unrelated reason — the save file was in the
+  wrong directory per the `cgfref.c` resolution rule above, not a format
+  defect; instrumenting glulxe's own `perform_restore` with temporary debug
+  prints, reverted afterward, confirmed `perform_restore` was never even
+  reached — cheapglk's `access(newbuf, R_OK)` check failed first and
+  `glk_fileref_create_by_prompt` returned `NULL` before any Quetzal parsing.)
+
+Both saves' `MAll` chunks are worth noting since they look different at the
+byte level for equivalent, both spec-legal reasons: gvm's writer always emits
+`heap-start(0), count(0)` (8 bytes) when the heap was never activated, where
+glulxe's omits the chunk body entirely (0 bytes) — glulxe's own
+`heap_apply_summary` (`heap.c`) has an explicit `valcount == 2 && summary[0]
+== 0 && summary[1] == 0` case that treats gvm's shape as "no heap" too, so
+this is not a defect in either writer, just two valid spellings of the same
+fact.
+
 ## 15. Undo (Phase 2c, spec §2.11)
 
 | Opcode      | Num   | L | S | Effect                                            |
