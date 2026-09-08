@@ -94,77 +94,60 @@ time.
 
 ## 2. The process-global palette
 
-`crates/zvm/src/screen.rs:1787` and `:1793` hold two process-wide atomics —
+`crates/zvm/src/screen.rs:1787` and `:1793` held two process-wide atomics —
 `ACTIVE_PALETTE` and `INTERPRETER_VERSION` — written through `set_palette` and
-`set_interpreter_version`. This is the crate's worst embeddability defect and the
-one to fix first.
+`set_interpreter_version`. This was the crate's worst embeddability defect.
 
-The justification is stated plainly in the doc at `screen.rs:1778`: "the palette
+The justification stated in the doc at `screen.rs:1778` was: "the palette
 is a property of *the machine lanthorn is pretending to be*, and there is exactly
-one of those per run." That premise is true of lanthorn and is not a fact about
-the Z-machine. It is false for a GUI with two windows open, for a server running
+one of those per run." That premise was true of lanthorn and was not a fact about
+the Z-machine. It was false for a GUI with two windows open, for a server running
 a session per player, for a test harness comparing an Amiga press against an IBM
 one, and for any host that puts a `Machine` on a thread. Two `Machine`s in one
-process cannot have different palettes today, and there is no API by which they
+process could not have different palettes, and there was no API by which they
 could.
 
-Three things make this rank first rather than third.
+Three things made this rank first rather than third.
 
-**The project already pays for it, in a currency it can measure.** `CLAUDE.md`
-devotes its longest section to the consequences: four consecutive red builds on
+**The project already paid for it, in a currency it could measure.** `CLAUDE.md`
+devoted its longest section to the consequences: four consecutive red builds on
 main (SQ-0904, SQ-0958, SQ-0959, SQ-0987) and a three-layer apparatus built to
-contain them — a mutex kept *private to `app`* so a test suite physically cannot
-take it raw, an `app::v6_set_palette` that panics unless the calling thread holds
-a guard, and a source-scanning test, `palette_lock_discipline`, that fails any
+contain them — a mutex kept *private to `app`* so a test suite physically could not
+take it raw, an `app::v6_set_palette` that panicked unless the calling thread held
+a guard, and a source-scanning test, `palette_lock_discipline`, that failed any
 file under `tests/suites/` naming `zvm::screen::set_palette` directly. The
-apparatus is not small: `crates/app` holds **234 `v6_palette` / `v6_palette_at_boot`
-guard acquisitions and 44 `v6_set_palette` calls**, none of which would exist if
+apparatus was not small: `crates/app` held **234 `v6_palette` / `v6_palette_at_boot`
+guard acquisitions and 44 `v6_set_palette` calls**, none of which would have existed if
 the palette were a field on the session being rendered. **An
-embedder inherits the hazard and none of the apparatus**, and will not know to
-build it, because the reason it exists is documented in our repo instructions
+embedder would inherit the hazard and none of the apparatus**, and would not know to
+build it, because the reason it existed was documented in our repo instructions
 rather than in the crate.
 
-**`zvm`'s own docs argue against it.** `screen.rs:2222`, on `V6Cell`, reads: "it
+**`zvm`'s own docs argued against it.** `screen.rs:2222`, on `V6Cell`, read: "it
 is emphatically not process-global — see `zvm::screen::set_palette` for what that
-costs." The cell was moved onto `Machine` for exactly this reason. The palette is
-the same kind of fact, moved by the same argument, and has not moved.
+costs." The cell was moved onto `Machine` for exactly this reason. The palette was
+the same kind of fact, moved by the same argument, and had not moved.
 
-**The blast radius is four call sites.** Grepping non-test readers of both
-statics inside the crate finds exactly this:
+**The blast radius was four call sites.** Grepping non-test readers of both
+statics inside the crate found exactly this:
 
 | site | what reads the global |
 |---|---|
 | `screen.rs:1579` | `init_header_caps` writing the `$1F` interpreter-version byte |
 | `screen.rs:1734` | `two_colour_card_request`, reached from `exec.rs:1453` — inside `Machine`, so `&self` is in scope |
 | `screen.rs:1905` | `standard_true_colour`, the only reader of `palette()` |
-| `screen.rs:70,72` | `ZColour::true_value`, which calls the above, reached from `exec.rs:3096-3097` (window properties 16/17) |
+| `screen.rs:70,72` | `ZColour::true_value`, which called the above, reached from `exec.rs:3096-3097` (window properties 16/17) |
 
-Outside the crate there is one non-test reader, `crates/app/src/colors.rs:65`,
-which is a host renderer and should be asking the session it is rendering rather
-than the process. The plumbing for the fix already exists: `true_colour_in(p, n)`
-at `screen.rs:1918` takes the palette by value and was written precisely so
+Outside the crate there was one non-test reader, `crates/app/src/colors.rs:65`,
+which was a host renderer and should have been asking the session it was rendering rather
+than the process. The plumbing for the fix already existed: `true_colour_in(p, n)`
+at `screen.rs:1918` took the palette by value and was written precisely so
 `crates/zvm/src/machines.rs` could print every machine's table side by side
-without writing global state — the doc at `:1913` explains that a
-borrow-and-hand-back "is atomic to nobody". That argument is correct and it
-applies to sessions as much as to tables.
+without writing global state — the doc at `:1913` explained that a
+borrow-and-hand-back "is atomic to nobody". That argument was correct and it
+applied to sessions as much as to tables.
 
-**Assessment.** Add `Machine::palette` and `Machine::interpreter_version` fields
-with setters. `init_header_caps` and `two_colour_card_request` both already have a
-`Machine` in scope at their call sites. The one genuinely awkward step is
-`ZColour::true_value`, a method on a `Copy` value type that would need the palette
-as a second parameter beside the `interpreter_default` it already takes — which is
-mechanical, and is the correct shape anyway, since resolving a colour number
-without saying which machine's table you mean is the bug. The whole change deletes
-`app::v6_palette`, `app::v6_set_palette`, `app::v6_palette_at_boot`, the private
-mutex, and both cases of `palette_lock_discipline`. It is breaking, it is cheap,
-and it is the single item on this list whose cost grows fastest with delay.
-
-`set_interpreter_version`'s own doc concedes the point in advance: it says the
-byte "cannot be a session parameter because `GameSession`'s constructor runs the
-story to its first input, so the header has to be right before construction
-returns". `GameSession` is `app`'s type. That is a constraint of lanthorn's
-constructor, stated inside `zvm` as though it were a constraint of the Z-machine,
-and a `BootConfig` (§3) dissolves it.
+**Resolved (SQ-1393, 2026-09-07).** `Machine::palette` and `Machine::interpreter_version` are now fields with setters, carrying those facts on every machine instance. `init_header_caps` and `two_colour_card_request` read them from `&self`. `ZColour::true_value` takes the palette by value (alongside the `interpreter_default` it already took), resolving a colour number with both facts in scope. The change deleted `app::v6_palette`, `app::v6_set_palette`, `app::v6_palette_at_boot`, the private mutex, both cases of `palette_lock_discipline`, and every one of the 234 guard acquisitions in `app`. `MachineBoot::resolve` carries both facts and `GameSession` sets them on the machine before `init_caps`; `ColorScheme` gained `machine_palette` so renderers read the session's table. The palette problem is now `zvm`'s alone and is no longer one.
 
 ## 3. There is no boot recipe, so the host is the spec
 
@@ -344,6 +327,8 @@ there is no `fuzz/` directory in the workspace, and the one adversarial test,
 `read_byte`. That bug class has bitten before and was patched at the symptom. An
 in-repo `#[cfg(test)]` random-story harness costs no dependency and would have
 caught all of the above.
+
+**Resolved in part (SQ-1395, 2026-09-07).** `print_table` and `copy_table` check the whole table span against memory up front and fault at once; `State::MAX_CALL_DEPTH = 32_768` frames and `MAX_EVAL_STACK = 614_400` words are both derived from ZMSD §6.3.3's nfrotz figure with 10x headroom.
 
 ## 7. Missing seams, and the one `gvm` already built
 
@@ -572,6 +557,8 @@ Making these `pub(crate)` is free now and impossible later.
 **`Machine::out` is a `pub` field** (`exec.rs:218`), so a host can swap the
 output sink mid-run with no invariant governing when that is safe.
 
+**Resolved in part (SQ-1394, 2026-09-07).** All 25 of `zvm`'s public enums plus `MachineProfile`, `StackTrace`, `TraceFrame`, `Header`, `Token`, and `ObjectSnapshot` are now marked `#[non_exhaustive]`. The following were deliberately NOT marked because a host must construct them by literal (constructors are Wave 2 work): `SoundEvent`, `PictureEvent`, `EraseFill`, `PeriodLook`, `Cell`, `ZWindow`, `V6Windows`, `ScreenState`, `UpperWindow`, `TextAttrs`, and `V6Text`. `cpu::state` free functions (`do_branch`, `do_store`, `print_text`) are `pub(crate)`; `State` and `Frame` fields are now private behind read accessors (`pc()`, `frames()`, `eval_stack()`, `Frame::func_addr()` etc.); `Machine::out` is private behind `output()` and `output_mut()`; the event queues are private behind `pending_*` and `take_pending_*` drains. `pub mod fixtures` is behind a `fixtures` Cargo feature, off by default and verified absent from the built rlib.
+
 ## 11. `gvm` and `scott`, briefly
 
 Both hold the zero-dependency line, and — the useful finding — **neither has any
@@ -631,25 +618,27 @@ only producers are `crates/app/src/glk_backend.rs:75` and `:788`. A Z-machine
 embedder writes a match arm for a structurally unreachable variant belonging to a
 VM this crate does not implement.
 
+**Resolved in part (SQ-1394, SQ-1395, 2026-09-07).** `GError`, `StepResult`, `WinType`, `GlkStyle`, `WriteFault`, `SaveLoadRequest`, `StackTrace`, and `TraceFrame` are now marked `#[non_exhaustive]`. `StepResult::Fault` is a new variant, distinct from `Quit`, backed by a `faulted` flag that persists after `take_fault_trace()` drains; the fault event surface follows the crate's own stated fault-and-continue policy. The 18 non-test `unwrap`/`expect` sites in `glk.rs` (`:1873`–`:2779`) that sat on the documented window-tree invariant have been addressed: 17 became panic-free branches, one `expect` in `build_win_tree` remains and is documented as guarded by an invariant.
+
 ## 12. The ledger
 
 Ordered by what it costs an embedder, with the fix cost and whether it breaks.
 **"Free later" is the column that matters**: those changes are cheap this week
 and unaffordable after a release.
 
-| # | change | fix cost | breaking | free now, expensive later |
-|---|---|---|---|---|
-| 1 | palette + interpreter version onto `Machine`; delete both statics | medium — 4 in-crate sites, ~278 `app` sites, deletes `app`'s whole lock apparatus | **yes** | **yes** |
-| 2 | clamp `ZWindow::put_prop`; cap `print_table`/`copy_table`; fix `unit_index_at` on an empty cache; ~~privatise `V6Cell`'s fields~~ (done, SQ-1031) | small — six overflow sites collapse to one clamp | partly | partly |
-| 3 | `#[non_exhaustive]` sweep on read-only enums and structs | small | **yes** | **yes** |
-| 4 | privatise opcode internals (`cpu::state`, `State`/`Frame` fields, `do_branch`, `print_text`) and the queue fields | small — no external callers | **yes** | **yes** |
-| 5 | gate `pub mod fixtures` behind `cfg(test)` or a feature | trivial | **yes** | **yes** |
-| 6 | `BootConfig` owning the `init_caps` ordering and the `Restart` answer | medium | no | — |
-| 7 | `take_*` drains, and a merged `take_paint_events()` | small | no | — |
-| 8 | screen-snapshot format in `zvm` | medium | no | — |
-| 9 | module headers `//` → `//!`; crate-level `//!` docs; a compiled example | trivial | no | — |
-| 10 | doc pass: de-lanthorn, drop the `location` root re-export, decide `True24` | small | partly | partly |
-| 11 | `FontMetrics`, `trait Resources`, revisit `Output: Any` | large | partly | partly |
+| # | change | fix cost | breaking | free now, expensive later | status |
+|---|---|---|---|---|---|
+| 1 | palette + interpreter version onto `Machine`; delete both statics | medium — 4 in-crate sites, ~278 `app` sites, deletes `app`'s whole lock apparatus | **yes** | **yes** | done, SQ-1393 |
+| 2 | clamp `ZWindow::put_prop`; cap `print_table`/`copy_table`; fix `unit_index_at` on an empty cache; ~~privatise `V6Cell`'s fields~~ (done, SQ-1031) | small — six overflow sites collapse to one clamp | partly | partly | done (caps SQ-1395; clamp and unit_index_at landed earlier) |
+| 3 | `#[non_exhaustive]` sweep on read-only enums and structs | small | **yes** | **yes** | done, SQ-1394 |
+| 4 | privatise opcode internals (`cpu::state`, `State`/`Frame` fields, `do_branch`, `print_text`) and the queue fields | small — no external callers | **yes** | **yes** | done, SQ-1394 |
+| 5 | gate `pub mod fixtures` behind `cfg(test)` or a feature | trivial | **yes** | **yes** | done, SQ-1394 |
+| 6 | `BootConfig` owning the `init_caps` ordering and the `Restart` answer | medium | no | — | — |
+| 7 | `take_*` drains, and a merged `take_paint_events()` | small | no | — | — |
+| 8 | screen-snapshot format in `zvm` | medium | no | — | — |
+| 9 | module headers `//` → `//!`; crate-level `//!` docs; a compiled example | trivial | no | — | — |
+| 10 | doc pass: de-lanthorn, drop the `location` root re-export, decide `True24` | small | partly | partly | — |
+| 11 | `FontMetrics`, `trait Resources`, revisit `Output: Any` | large | partly | partly | — |
 
 On #5: `crates/zvm/src/fixtures.rs:11` is `PathBuf::from(env!("CARGO_MANIFEST_DIR"))`,
 unconditionally public, which bakes **the build machine's absolute source path**
@@ -664,20 +653,18 @@ is cut. Items 6–9 are what an embedder feels on day one, and 9 is an afternoon
 
 ## Status and plan, 2026-09-07
 
-**Landed since the review:**
+**Wave 1 — landed 2026-09-07:**
 
-- The geometry clamp on `put_wind_prop` (`WINDOW_PX_CAP`, tested); `DisasmCache::unit_index_at` now uses a checked subtraction; `V6Cell`'s fields are private behind a guarded constructor.
-- SQ-1013: `std_window`, `v6_cell`, and `default_colours` live in `zvm::interpreter::MachineProfile` where they belong.
+- **SQ-1393:** Palette and interpreter version are `Machine` fields. `init_header_caps` and `two_colour_card_request` read them from `&self`. `ZColour::true_value` takes the palette by value. Every instance of `app::v6_palette*`, the private mutex, and both cases of `palette_lock_discipline` are deleted.
+- **SQ-1394:** All public enums marked `#[non_exhaustive]`; opcode internals and queue fields privatised; `pub mod fixtures` gated behind a feature. `scott` gains named re-exports replacing globs; dead `Input` type deleted; `Vm::restore` returns `Result<(), RestoreError>`.
+- **SQ-1395:** Caps and bounds checks landed. `print_table` and `copy_table` check spans upfront and fault at once. `State::MAX_CALL_DEPTH` and `MAX_EVAL_STACK` capped with headroom. `gvm`: 17 of 18 `unwrap`/`expect` sites in `glk.rs` converted to panic-free branches; one `expect` in `build_win_tree` remains, documented as guarded by invariant. `StepResult::Fault` variant added to both `gvm` and `zvm`.
+
+**Landed earlier:** the put_wind_prop clamp (WINDOW_PX_CAP), `DisasmCache::unit_index_at`'s checked subtraction, `V6Cell`'s private fields behind a guarded constructor (SQ-1031), and SQ-1013's MachineProfile facts.
 
 **Still open, ranked by what blocks embedding:**
 
 | item | breaking | status |
 |---|---|---|
-| Palette + interpreter version process globals (`screen.rs` statics, with `app`'s lock apparatus) | yes | open |
-| `#[non_exhaustive]` sweep (read-only enums and structs; never `TextAttrs` or `V6Text`) | yes | zvm 3, gvm 4, scott 0 |
-| Privatise opcode internals and `Machine` queue fields | yes | open |
-| Gate `pub mod fixtures` | yes | still public (trivial) |
-| `print_table` / `copy_table` caps | no | open |
 | `BootConfig` and one `Restart` answer | no | open |
 | `take_paint_events` drain protocol | no | open |
 | Crate docs, `//!` headers, a compiled example | no | zvm and scott have no crate docs, `doctest = false` everywhere |
@@ -685,14 +672,10 @@ is cut. Items 6–9 are what an embedder feels on day one, and 9 is an afternoon
 | Grammar model as an optional feature | no | open |
 | Screen snapshot, `FontMetrics`, `Resources` trait | no | design later |
 
-gvm: 19 non-test `unwrap`/`expect` in `glk.rs`. scott: no crate docs, two glob re-exports, a dead `Input` type.
+**The plan, in three waves:**
 
-**The plan, in three waves after the next 0.5.x release:**
-
-**Wave 1** — breaking and cheap only before a release. One lane: palette and interpreter version onto `Machine`, deleting the process-global statics and every `app::v6_palette*` guard and the `palette_lock_discipline` test cases. In parallel: the `#[non_exhaustive]` sweep across all three crates, never marking `TextAttrs` or `V6Text` (both constructed by hosts), privatising internals and gating fixtures, and the `print_table` / `copy_table` caps with `gvm`'s unwrap sites turned into faults.
-
-**Wave 2** — what an embedder feels on day one. Crate docs and a compiled example per crate (dropping `doctest = false` where one exists); `BootConfig` owning the `init_caps` ordering with one `Restart` answer shared by `app` and `zvm-cli`; `take_*` drains and a merged `take_paint_events()`; dropping the `location` root re-export; deciding whether `True24` stays; addressing the docs to a stranger; and the grammar model behind a default-on `grammar` feature.
+**Wave 2** — what an embedder feels on day one. Constructors for host-built structs (`TextAttrs`, `V6Text`, `SoundEvent`, `PictureEvent`, `EraseFill`, `PeriodLook`, `Cell`, `ZWindow`, `V6Windows`, `ScreenState`, `UpperWindow`). Crate docs and a compiled example per crate (dropping `doctest = false` where one exists); `BootConfig` owning the `init_caps` ordering with one `Restart` answer shared by `app` and `zvm-cli`; `take_*` drains and a merged `take_paint_events()`; dropping the `location` root re-export; deciding whether `True24` stays; addressing the docs to a stranger; and the grammar model behind a default-on `grammar` feature.
 
 **Wave 3** — design later. The screen snapshot in `zvm`, `FontMetrics`, a `Resources` trait, and `Output: Any`.
 
-**Open product call:** whether `gvm` and `scott` get the full treatment (all three waves) or only what any published crate needs (`#[non_exhaustive]`, crate docs, `gvm`'s unwraps). Wave 1 is written for the second; the first roughly doubles Wave 2.
+**Product decision (2026-09-07):** `gvm` and `scott` get the full treatment — all three waves, not only "what any published crate needs". Wave 2 therefore applies to all three crates.
