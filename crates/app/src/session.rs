@@ -569,6 +569,16 @@ pub struct WindowFill {
     pub out_chars: u64,
 }
 
+/// Whether [`GameSession::apply_canvas_paint`] is drawing a picture the story
+/// just issued, or replaying one from `zvm`'s paint log — the two differ only
+/// in which Current-Palette-establishing rule a [`zvm::paint_log::PaintOp::Draw`]
+/// resolves its picture through. See that function's docs.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum PaintMode {
+    Live,
+    Replay,
+}
+
 /// Where a window's picture canvas was painted, so a later `move_window` can be
 /// told from a redraw in place (SQ-0715). See [`GameSession::canvas_anchor`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -1163,22 +1173,20 @@ impl GameSession {
     /// Windows are emitted in paint order (ascending `z_seq`), matching
     /// [`pictures_png`](Self::pictures_png) so relative z-order survives either path.
     pub fn display_list(&mut self) -> (crate::archive::DisplayListDto, Vec<u8>, Vec<String>) {
-        let mut keys: Vec<u8> = self.pictures_canvas.keys().copied().collect();
-        keys.sort_by_key(|k| (self.pictures_canvas[k].z_seq, *k));
-
         let palette = self.pict_source.as_ref().and_then(|s| s.current_palette().map(<[u8]>::to_vec));
         let mut fallback = Vec::new();
         let mut diags = Vec::new();
-        // Windows whose replay reproduced the live canvas, in PAINT order — the
-        // z-order a restore rebuilds them in (`Self::load_display_list`), since
-        // `zvm`'s paint log carries none of its own (it is not a raster concept).
-        let mut replay_order = Vec::new();
+
+        let mut keys: Vec<u8> = self.pictures_canvas.keys().copied().collect();
+        keys.sort_by_key(|k| (self.pictures_canvas[k].z_seq, *k));
+        // ONE global replay (SQ-1403: `zvm`'s log has no per-window shape to
+        // check independently — a cross-window mirror only comes out right
+        // when every window's entries replay together, in true issue order),
+        // scratch — [`Self::replay_paint_log_scratch`] restores the live state
+        // before returning, so nothing here has touched it.
+        let (replayed, _anchor) = self.replay_paint_log_scratch();
 
         for win in keys {
-            let (cw, ch) = {
-                let c = &self.pictures_canvas[&win];
-                (c.img.width(), c.img.height())
-            };
             let capped = self.machine.paint_log().is_capped(win);
             if self.unreplayable.contains(&win) || capped {
                 fallback.push(win);
@@ -1203,30 +1211,26 @@ impl GameSession {
                 });
                 continue;
             }
-            let ops = self.v6ops_for_window(win);
-            let rebuilt = self.replay_into_scratch(&ops, cw, ch);
-            if *rebuilt.img == *self.pictures_canvas[&win].img {
-                replay_order.push(win);
-            } else {
+            let matches = replayed.get(&win).is_some_and(|r| *r.img == *self.pictures_canvas[&win].img);
+            if !matches {
                 fallback.push(win);
+                let n = self.machine.paint_log().ops(win).len();
                 diags.push(format!(
-                    "v6 window {win}: replaying its {} recorded op(s) does not reproduce the live \
+                    "v6 window {win}: replaying its {n} recorded op(s) does not reproduce the live \
                      canvas — storing a PNG for it, and its colours will not follow a later palette \
-                     change. A draw path that is not being recorded.",
-                    ops.len()
+                     change. A draw path that is not being recorded."
                 ));
             }
         }
         let layers = self.v6_screen_layers();
         // The log itself travels as one blob (`display.bin`, SQ-1403) regardless of
         // which windows the self-check above demoted to a PNG fallback — a window
-        // in `fallback` (absent from `replay_order`) is simply skipped when the log
-        // is replayed back on restore ([`Self::load_display_list`]), so an entry the
-        // self-check distrusts for ONE window costs nothing for the others.
+        // in `fallback` is simply skipped when the log is replayed back on restore
+        // ([`Self::load_display_list`]), so an entry the self-check distrusts for
+        // ONE window costs nothing for the others.
         let dto = crate::archive::DisplayListDto {
             palette,
             layers,
-            replay_order,
             paint_log_bytes: zvm::paint_log::encode(self.machine.paint_log()),
         };
         (dto, fallback, diags)
@@ -1347,46 +1351,24 @@ impl GameSession {
         self.pictures_png().into_iter().filter(|(w, _)| wins.contains(w)).collect()
     }
 
-    /// Replay `ops` into a fresh `w × h` canvas under the CURRENT palette, without
-    /// touching any live canvas — the save-time self-check's scratch surface, and
-    /// the restore path's canvas builder. Mirrors
-    /// [`replay_under_current_palette`](Self::replay_under_current_palette) op for op;
-    /// any divergence between the two would make the self-check meaningless.
-    fn replay_into_scratch(&mut self, ops: &[V6Op], w: u32, h: u32) -> crate::graphics::Canvas {
-        let mut canvas = crate::graphics::Canvas::new(w, h);
-        canvas.erase_rect(0, 0, w, h);
-        for op in ops {
-            match *op {
-                V6Op::Erase { dx, dy, w: ew, h: eh } => canvas.erase_rect(dx, dy, ew, eh),
-                V6Op::Draw { number, dx, dy } => {
-                    let scale = self.art_scale;
-                    let Some(img) = self
-                        .pict_source
-                        .as_mut()
-                        .and_then(|s| s.scaled_image_under_current_palette(number as u32, scale))
-                    else {
-                        continue;
-                    };
-                    canvas.draw_image_clipped(&img, dx, dy, (w, h));
-                }
-            }
-        }
-        canvas
-    }
-
     /// Rebuild the v6 screen from a restored display list (SQ-0588) — the counterpart
     /// of [`display_list`](Self::display_list), and the reason a restored window can be
     /// recoloured at all.
     ///
     /// The Current Palette is reinstated FIRST (Blorb §11.3: an adaptive picture has no
-    /// palette of its own and decodes through whichever one is live), then each window's
-    /// canvas is rebuilt by replaying its ops. Those windows keep their display lists, so
-    /// the next palette change replays them again — which is exactly what a window
+    /// palette of its own and decodes through whichever one is live), then `zvm`'s own
+    /// paint log is reinstated, then EVERY window is replayed from it in one global,
+    /// true-issue-order walk ([`Self::replay_paint_log_scratch`]) — the same walk a live
+    /// mid-session palette change runs. Those windows keep their paint log, so the
+    /// next palette change replays them again — which is exactly what a window
     /// restored from a PNG cannot do.
     ///
     /// `pngs` covers the windows the log does not: the save-time self-check's fallbacks,
     /// and every window of a pre-SQ-1403 archive. They load as pixels and are marked
-    /// `unreplayable`, i.e. today's behaviour, unchanged.
+    /// `unreplayable`, i.e. today's behaviour, unchanged. The walk still processes their
+    /// entries (a window with no draws of its own can still have been the SOURCE of a
+    /// cross-window erase into one of the trusted windows), it just does not COMMIT
+    /// their own resulting canvas over the PNG pixels already loaded for them.
     pub fn load_display_list(&mut self, dto: &crate::archive::DisplayListDto, pngs: &[(u8, Vec<u8>)]) {
         // The paint log is the RECIPE (SQ-1403) — reinstate it before anything below
         // reads it. Absent bytes (an older archive format) or an unreadable buffer
@@ -1401,47 +1383,23 @@ impl GameSession {
             src.set_current_palette(dto.palette.clone());
         }
         let png_wins: std::collections::HashSet<u8> = pngs.iter().map(|(w, _)| *w).collect();
-        for win in dto.replay_order.iter().copied() {
+        let (canvas, anchor) = self.replay_paint_log_scratch();
+        for (win, mut c) in canvas {
             if png_wins.contains(&win) {
                 continue; // present in both — an archive is an external input; pixels already won
             }
-            let ops = self.v6ops_for_window(win);
-            if ops.is_empty() {
-                continue;
-            }
-            let (w, h) = self.v6_canvas_size_for_window(win);
-            let mut canvas = self.replay_into_scratch(&ops, w, h);
-            canvas.version = canvas.version.wrapping_add(1);
-            canvas.z_seq = crate::graphics::next_draw_seq();
-            self.pictures_canvas.insert(win, canvas);
+            c.version = c.version.wrapping_add(1);
+            c.z_seq = crate::graphics::next_draw_seq();
+            self.pictures_canvas.insert(win, c);
             self.unreplayable.remove(&win);
+            // Recomputed live-fashion by the SAME walk that just built the canvas;
+            // `Self::load_v6_screen_layers` (called separately, right after this)
+            // overwrites it from the archive anyway, but a caller that reaches this
+            // alone still gets an anchor consistent with the canvas it just got.
+            if let Some(a) = anchor.get(&win) {
+                self.canvas_anchor.insert(win, *a);
+            }
         }
-    }
-
-    /// The canvas size to replay `win`'s folded ops into: the union of every
-    /// recorded op's window box, each clamped by [`CANVAS_PX_CAP`] exactly as
-    /// [`Self::apply_picture_event`] clamps it live.
-    ///
-    /// Re-derived from the log rather than archived separately (the pre-SQ-1403
-    /// shape stored `w`/`h` per window in the archive itself): a game that resizes
-    /// its window between draws is exactly what [`crate::graphics::Canvas::grow_to`]
-    /// already handles live by only ever growing, and the log's own ops carry
-    /// every window box the live session grew against.
-    fn v6_canvas_size_for_window(&self, win: u8) -> (u32, u32) {
-        let (mut w, mut h) = (1u32, 1u32);
-        for op in self.machine.paint_log().ops(win) {
-            // `PaintOp` is `#[non_exhaustive]`: a kind this build has never heard of
-            // contributes nothing to the size rather than failing the build.
-            let win_box = match *op {
-                zvm::paint_log::PaintOp::Draw { win_box, .. }
-                | zvm::paint_log::PaintOp::ErasePicture { win_box, .. }
-                | zvm::paint_log::PaintOp::Clear { win_box } => win_box,
-                _ => continue,
-            };
-            w = w.max((win_box.2.max(1) as u32).min(CANVAS_PX_CAP));
-            h = h.max((win_box.3.max(1) as u32).min(CANVAS_PX_CAP));
-        }
-        (w, h)
     }
 
     /// Rebuild `pictures_canvas` from persisted per-window PNG blobs
@@ -2058,13 +2016,9 @@ impl GameSession {
         // goes down before it, and one that came after goes down after.
         let mut i = 0usize;
         for paint in &paints {
-            // Fed here, in this same walk, rather than automatically when the
-            // opcode ran (SQ-1403; see `zvm::paint_log`'s "Feeding it"): a
-            // cross-window erase that `apply_picture_event`/`erase_screen_rect`
-            // below may append can only be computed from THIS canvas model, so
-            // it has to land in the middle of this exact walk to end up at the
-            // right point in each affected window's own timeline.
-            self.machine.paint_log_mut().apply(paint);
+            // `zvm`'s own paint log is fed automatically by `Machine`, at the
+            // same points these events were queued (SQ-1403) — nothing to do
+            // here for it.
             let ev = match paint {
                 zvm::cpu::exec::PaintEvent::Erase(f) => {
                     self.apply_erase_fill(f);
@@ -2462,12 +2416,7 @@ impl GameSession {
     /// always has (Shogun's title splash has to vanish when the game erases the
     /// window it is sitting in).
     fn retire_stranded_canvas(&mut self, win: u8, now: (u16, u16)) {
-        let Some(anchor) = self.canvas_anchor.get(&win).copied() else { return };
-        if now == anchor.origin {
-            return; // a redraw in place — the canvas is still telling the truth
-        }
-        self.canvas_anchor.remove(&win);
-        let Some(canvas) = self.pictures_canvas.remove(&win) else { return };
+        let Some((src, anchor)) = self.strand_canvas(win, now) else { return };
         // `zvm`'s own paint log strands itself the same moment (SQ-1403): the log
         // folds on the SAME window-box-origin comparison this function does, so by
         // the time this runs the log for `win` already holds only ops from the new
@@ -2480,7 +2429,6 @@ impl GameSession {
             u32::from(anchor.origin.0.max(1)) - 1,
             u32::from(anchor.origin.1.max(1)) - 1,
         );
-        let src = canvas.img;
         let ground = self
             .paint
             .get_or_insert_with(|| std::sync::Arc::new(image::RgbaImage::new(sw, sh)));
@@ -2500,6 +2448,25 @@ impl GameSession {
         }
     }
 
+    /// The shared half of [`Self::retire_stranded_canvas`]: detect whether
+    /// `win`'s canvas is stranded (its origin no longer matches `now`) and, if
+    /// so, remove it from `pictures_canvas`/`canvas_anchor` and return what was
+    /// removed. Ground-freezing (painting the removed pixels onto
+    /// [`GameSession::paint`]) is NOT done here — [`Self::apply_canvas_paint`],
+    /// the replay path, calls this and discards the return, because the ground
+    /// is a separately persisted pixel layer (SQ-0706) that a replay must not
+    /// repaint: whatever a stranding freeze contributed to it, at the moment it
+    /// truly happened, is already baked into the persisted ground.
+    fn strand_canvas(&mut self, win: u8, now: (u16, u16)) -> Option<(std::sync::Arc<image::RgbaImage>, CanvasAnchor)> {
+        let anchor = self.canvas_anchor.get(&win).copied()?;
+        if now == anchor.origin {
+            return None; // a redraw in place — the canvas is still telling the truth
+        }
+        self.canvas_anchor.remove(&win);
+        let canvas = self.pictures_canvas.remove(&win)?;
+        Some((canvas.img, anchor))
+    }
+
     /// Record that `win`'s canvas now holds pixels drawn while the window sat at
     /// `origin`, covering `(dx, dy, w, h)` in canvas coords (SQ-0715).
     fn anchor_canvas_draw(&mut self, win: u8, origin: (u16, u16), dx: i32, dy: i32, w: u32, h: u32) {
@@ -2517,6 +2484,17 @@ impl GameSession {
 
     /// The screen rect a v6 window occupies — `(x, y, w, h)` in the same 0-based
     /// unit-pixel space the window canvases use (window coords are 1-based).
+    /// Reads the machine's CURRENT window table, which is the right source for
+    /// every OTHER window a cross-window erase is being mirrored INTO — both
+    /// live (obviously current) and during a replay, since by the time a replay
+    /// runs the window table has already been resolved to its final state
+    /// (restored from `screen.bin`, or simply live) and every window's own
+    /// surviving paint-log entries describe pixels at that SAME final position
+    /// (an earlier position is exactly what the origin-change retirement rule
+    /// drops). See [`screen_rect_from_win_box`] for the window whose OWN event
+    /// this is, which uses that event's `win_box` instead — the two coincide
+    /// for a live event and can differ for a replayed one if the window moved
+    /// again afterward without painting anything.
     fn window_screen_rect(&self, win: u8) -> Option<(u32, u32, u32, u32)> {
         let v6 = self.machine.screen.v6.as_ref()?;
         let w = v6.windows.get(win as usize)?;
@@ -2540,8 +2518,12 @@ impl GameSession {
     /// erases windows 2/5/6 — never 7 — so that background has to disappear from
     /// window 7's canvas or it sits under every later screen for the rest of the game.
     ///
-    /// The erase is recorded in each affected window's display list too, so a later
-    /// palette replay reproduces it rather than restoring pixels the game removed.
+    /// Nothing is recorded here (SQ-1403): this mirror is a fact about
+    /// `lanthorn`'s eight-canvas model, not about the Z-machine, so `zvm`'s own
+    /// paint log carries no entry for it at all. A later replay reproduces it
+    /// anyway — by calling this SAME function again, at the same point in the
+    /// SAME issue-ordered walk `zvm::paint_log::PaintLog::ops_in_order` gives —
+    /// rather than by storing its result. See [`Self::apply_canvas_paint`].
     fn erase_screen_rect(&mut self, rect: (u32, u32, u32, u32), skip: Option<u8>) {
         let (rx, ry, rw, rh) = rect;
         if rw == 0 || rh == 0 {
@@ -2571,132 +2553,188 @@ impl GameSession {
             // NOT a z_seq bump: an erase is not a draw, and re-stamping the layer
             // here would reorder the composite for a window nothing was drawn into.
             canvas.erase_rect(ex, ey, ew, eh);
-            // Recorded into WIN's own paint-log entry too, in this same order
-            // (SQ-1403): `zvm` cannot compute this rect itself — it is a fact
-            // about `lanthorn`'s eight-canvas model, not about the Z-machine
-            // (ZMSD §8 has one shared screen) — but it still has to land in
-            // WIN's own timeline, between whatever WIN had drawn before this and
-            // whatever it draws after, or a later palette replay redraws the
-            // pixels this erase just removed. `PaintOp::HostErase` docs why.
-            self.machine.paint_log_mut().append_host_erase(win, ex, ey, ew, eh);
         }
     }
 
-    /// Translate one window's folded [`zvm::paint_log::PaintOp`] history — native,
-    /// window-relative pixels, folded by `zvm` itself (SQ-1403) — into the
-    /// canvas-local [`V6Op`]s [`Self::replay_into_scratch`] /
-    /// [`Self::replay_under_current_palette`] consume. Mirrors exactly what
-    /// [`Self::apply_picture_event`] computed live when each op was first drawn:
-    /// the same 1-based-to-0-based pixel shift, the same picture-footprint lookup
-    /// (`erase_picture` names no size of its own — ZMSD §15 — so `zvm` cannot
-    /// resolve one either; this is the host's to do, from its own picture
-    /// archive), and the same [`CANVAS_PX_CAP`] clamp guarding a hostile
-    /// `window_size` from an unbounded allocation.
-    fn v6ops_for_window(&mut self, win: u8) -> Vec<V6Op> {
-        let ops: Vec<zvm::paint_log::PaintOp> = self.machine.paint_log().ops(win).to_vec();
-        let art_scale = self.art_scale;
-        let mut out = Vec::with_capacity(ops.len());
-        for op in ops {
-            match op {
-                zvm::paint_log::PaintOp::Clear { win_box } => {
-                    out.push(V6Op::Erase { dx: 0, dy: 0, w: win_box.2 as u32, h: win_box.3 as u32 });
-                }
-                zvm::paint_log::PaintOp::Draw { number, x, y, .. } => {
-                    let dx = (x.max(1) as i32) - 1;
-                    let dy = (y.max(1) as i32) - 1;
-                    out.push(V6Op::Draw { number, dx, dy });
-                }
-                zvm::paint_log::PaintOp::ErasePicture { number, x, y, win_box } => {
-                    let (pw, ph) = (
-                        (win_box.2.max(1) as u32).min(CANVAS_PX_CAP),
-                        (win_box.3.max(1) as u32).min(CANVAS_PX_CAP),
-                    );
-                    let dx = (x.max(1) as i32) - 1;
-                    let dy = (y.max(1) as i32) - 1;
-                    let dims = self
+    /// A window box (1-based, native pixels, exactly as `zvm` reports it in a
+    /// [`zvm::paint_log::PaintOp`]) as a 0-based screen rect, in the same space
+    /// [`Self::window_screen_rect`] answers in. Used for the window an event or
+    /// op is ABOUT — its own box at the moment of the call is always the right
+    /// source, live or replayed, unlike an OTHER window's box (see
+    /// [`Self::window_screen_rect`]'s docs for why that one stays live).
+    fn screen_rect_from_win_box(b: (u16, u16, u16, u16)) -> (u32, u32, u32, u32) {
+        (u32::from(b.0.max(1)) - 1, u32::from(b.1.max(1)) - 1, u32::from(b.2), u32::from(b.3))
+    }
+
+    /// Apply one [`zvm::paint_log::PaintOp`] to `win`'s picture canvas — the
+    /// canvas-only core [`Self::apply_picture_event`] (live drawing) and a log
+    /// replay ([`Self::replay_paint_log_scratch`]) both call, so the two can
+    /// never disagree about what a draw, an erase-picture, or a whole-window
+    /// clear does to the canvases (SQ-1403). Deliberately narrower than
+    /// `apply_picture_event`: no window-0 inline-float classification (a host
+    /// render decision, not a canvas fact, and irrelevant here — an inline
+    /// float never touches a canvas either way), no `window_fills` bookkeeping
+    /// and no ground-freezing on strand (both separately persisted layers a
+    /// replay must not re-derive — see [`Self::strand_canvas`]).
+    ///
+    /// `mode` decides only how a [`PaintOp::Draw`] resolves its picture: LIVE
+    /// decoding may establish a new Current Palette from a non-adaptive
+    /// picture's own colours (Blorb §11.3); a REPLAY walks potentially many
+    /// draws that already happened under ONE settled palette and must decode
+    /// every one of them through it without re-establishing anything picture
+    /// by picture as it goes (see [`crate::graphics::PictSource::scaled_image_under_current_palette`]).
+    fn apply_canvas_paint(&mut self, win: u8, op: zvm::paint_log::PaintOp, mode: PaintMode) {
+        use zvm::paint_log::PaintOp;
+        let win_box = match op {
+            PaintOp::Draw { win_box, .. }
+            | PaintOp::ErasePicture { win_box, .. }
+            | PaintOp::Clear { win_box } => win_box,
+            // `PaintOp` is `#[non_exhaustive]`: a kind this build has never
+            // heard of is skipped rather than failing the build.
+            _ => return,
+        };
+        let _ = self.strand_canvas(win, (win_box.0, win_box.1));
+        // A window-0 inline float — or Shogun's ceded-margin twin drawn from a
+        // graphics window, SQ-0888 — never touches a canvas, live or replayed.
+        // `apply_picture_event` filters it BEFORE ever reaching here for a live
+        // event; a replay walks the log directly and has no such upstream
+        // filter, so the SAME classifier runs here too, fed from the SAME
+        // `PictureEvent` fields `zvm`'s paint log carried through (SQ-1403),
+        // `out_chars` INCLUDED: it must be the value AT THE CALL, not this
+        // session's current running count. By the time a turn's pictures are
+        // drained, `self.machine.v6_win0_out_chars` has already moved past
+        // every one of them (a whole turn's text streams before its pictures
+        // are drained), so it stands in for nothing here — using it in place
+        // of the op's own `out_chars` misclassified mysterious01's boot title
+        // card, which carries `0` at the call while the live counter had
+        // already reached 24 by the time this ran.
+        if let PaintOp::Draw { number, x, y, at_cursor, margin_after, out_chars, .. }
+        | PaintOp::ErasePicture { number, x, y, at_cursor, margin_after, out_chars, .. } = op
+        {
+            let erase = matches!(op, PaintOp::ErasePicture { .. });
+            let synthetic =
+                PictureEvent::new(number, win, x, y, erase, out_chars, margin_after, at_cursor, win_box);
+            if self.win0_inline_float_x(&synthetic).is_some() {
+                return;
+            }
+        }
+        match op {
+            PaintOp::Clear { .. } => {
+                self.pictures_canvas.remove(&win);
+                self.canvas_anchor.remove(&win);
+                self.erase_screen_rect(Self::screen_rect_from_win_box(win_box), Some(win));
+            }
+            PaintOp::Draw { number, x, y, .. } => {
+                let (pw, ph) = (
+                    (win_box.2.max(1) as u32).min(CANVAS_PX_CAP),
+                    (win_box.3.max(1) as u32).min(CANVAS_PX_CAP),
+                );
+                let dx = (x.max(1) as i32) - 1;
+                let dy = (y.max(1) as i32) - 1;
+                let canvas =
+                    self.pictures_canvas.entry(win).or_insert_with(|| crate::graphics::Canvas::new(pw, ph));
+                canvas.grow_to(pw, ph);
+                let scale = self.art_scale;
+                let img = match mode {
+                    PaintMode::Live => self.pict_source.as_mut().and_then(|s| s.scaled_image(number as u32, scale)),
+                    PaintMode::Replay => self
                         .pict_source
                         .as_mut()
-                        .and_then(|s| s.dims(number as u32))
-                        .map(|(w, h)| (w * art_scale.0, h * art_scale.1));
-                    let (ew, eh) = dims.unwrap_or((pw, ph));
-                    let ew = ew.min(pw.saturating_sub(dx.max(0) as u32));
-                    let eh = eh.min(ph.saturating_sub(dy.max(0) as u32));
-                    out.push(V6Op::Erase { dx, dy, w: ew, h: eh });
+                        .and_then(|s| s.scaled_image_under_current_palette(number as u32, scale)),
+                };
+                if let Some(img) = img {
+                    let canvas = self.pictures_canvas.get_mut(&win).expect("just inserted above");
+                    canvas.draw_image_clipped(&img, dx, dy, (pw, ph));
+                    canvas.z_seq = crate::graphics::next_draw_seq();
+                    let drawn_w = img.width().min(pw.saturating_sub(dx.max(0) as u32));
+                    let drawn_h = img.height().min(ph.saturating_sub(dy.max(0) as u32));
+                    self.anchor_canvas_draw(win, (win_box.0, win_box.1), dx, dy, drawn_w, drawn_h);
                 }
-                zvm::paint_log::PaintOp::HostErase { dx, dy, w, h } => {
-                    // Already this window's own local rect — `erase_screen_rect`
-                    // computed it once and `PaintLog::append_host_erase` carries
-                    // it verbatim (SQ-1403); nothing left to translate.
-                    out.push(V6Op::Erase { dx, dy, w, h });
-                }
-                // `PaintOp` is `#[non_exhaustive]`: a kind this build has never
-                // heard of is skipped rather than failing the build, exactly as
-                // `Machine`'s own drain loops treat an unknown `PaintEvent`.
-                _ => {}
             }
+            PaintOp::ErasePicture { number, x, y, .. } => {
+                let (pw, ph) = (
+                    (win_box.2.max(1) as u32).min(CANVAS_PX_CAP),
+                    (win_box.3.max(1) as u32).min(CANVAS_PX_CAP),
+                );
+                let dx = (x.max(1) as i32) - 1;
+                let dy = (y.max(1) as i32) - 1;
+                let canvas =
+                    self.pictures_canvas.entry(win).or_insert_with(|| crate::graphics::Canvas::new(pw, ph));
+                canvas.grow_to(pw, ph);
+                let dims = self
+                    .pict_source
+                    .as_mut()
+                    .and_then(|s| s.dims(number as u32))
+                    .map(|(w, h)| (w * self.art_scale.0, h * self.art_scale.1));
+                let (ew, eh) = dims.unwrap_or((pw, ph));
+                let ew = ew.min(pw.saturating_sub(dx.max(0) as u32));
+                let eh = eh.min(ph.saturating_sub(dy.max(0) as u32));
+                let canvas = self.pictures_canvas.get_mut(&win).expect("just inserted above");
+                canvas.erase_rect(dx, dy, ew, eh);
+                let (wx, wy, _, _) = Self::screen_rect_from_win_box(win_box);
+                self.erase_screen_rect((wx + dx.max(0) as u32, wy + dy.max(0) as u32, ew, eh), Some(win));
+            }
+            _ => {}
         }
-        out
     }
 
-    /// Replay every window's display list under the Current Palette (SQ-0567).
+    /// Rebuild every window's canvas + anchor PURELY from `zvm`'s paint log, in
+    /// true issue order — the canvas-only half of live per-turn drawing
+    /// ([`Self::apply_canvas_paint`]), replayed instead of driven by a fresh
+    /// event (SQ-1403), under [`PaintMode::Replay`] so a picture that already
+    /// established a palette once does not re-establish it as history replays.
     ///
-    /// The canvas is cleared and rebuilt op by op, so the result is what the screen
-    /// would look like if the new palette had been loaded all along: every picture
-    /// recoloured, every erase still erased, and — the part a plain replot got wrong —
-    /// everything covering what it covered before. Arthur's map background is drawn
-    /// over its frame, and must stay over it.
+    /// Does NOT commit: `pictures_canvas`/`canvas_anchor` are swapped out
+    /// before the walk and swapped back after, so the live session is
+    /// UNCHANGED by calling this — the replayed result comes back as the
+    /// return value for the caller to do with as it sees fit. Three callers,
+    /// three answers to "what to do with it": [`Self::display_list`]'s
+    /// save-time self-check compares it against the (untouched) live state
+    /// window by window and keeps neither; [`Self::replay_under_current_palette`]
+    /// commits all of it; [`Self::load_display_list`] commits everything
+    /// except the windows its OWN prior self-check already distrusted (loaded
+    /// from PNG instead).
+    fn replay_paint_log_scratch(
+        &mut self,
+    ) -> (std::collections::HashMap<u8, crate::graphics::Canvas>, std::collections::HashMap<u8, CanvasAnchor>) {
+        let live_canvas = std::mem::take(&mut self.pictures_canvas);
+        let live_anchor = std::mem::take(&mut self.canvas_anchor);
+        let ops: Vec<(u8, zvm::paint_log::PaintOp)> = self.machine.paint_log().ops_in_order().to_vec();
+        for (win, op) in ops {
+            self.apply_canvas_paint(win, op, PaintMode::Replay);
+        }
+        let replayed_canvas = std::mem::replace(&mut self.pictures_canvas, live_canvas);
+        let replayed_anchor = std::mem::replace(&mut self.canvas_anchor, live_anchor);
+        (replayed_canvas, replayed_anchor)
+    }
+
+    /// Replay every window's canvas under the Current Palette (SQ-0567) and
+    /// COMMIT the result, live.
     ///
-    /// Decoding goes through [`PictSource::image_under_current_palette`], which
-    /// splices the live palette into each picture without letting it establish a new
-    /// one: on real hardware the framebuffer holds indices, so a picture already
-    /// drawn shows through whatever palette is loaded now, base or adaptive alike.
+    /// The result is what the screen would look like if the new palette had
+    /// been loaded all along: every picture recoloured, every erase still
+    /// erased, and — the part a plain replot got wrong — everything covering
+    /// what it covered before, including the cross-window mirror of another
+    /// window's erase (SQ-0568), because [`Self::replay_paint_log_scratch`]
+    /// walks `zvm`'s paint log in true issue order through the SAME functions
+    /// live drawing uses. Arthur's map background is drawn over its frame, and
+    /// must stay over it.
     fn replay_under_current_palette(&mut self) {
-        // Only windows that already have a live canvas: a window whose picture
-        // events were all classified as window-0 inline floats (never touching
-        // `pictures_canvas`) may still have entries in `zvm`'s paint log, but
-        // replaying them here would paint a canvas layer for a window that has
-        // never had one — the transcript, not this composite, is where those
-        // pixels belong (SQ-1403).
-        let mut wins: Vec<u8> = self.pictures_canvas.keys().copied().collect();
-        wins.sort();
-        for win in wins {
-            if self.unreplayable.contains(&win) {
-                continue;
+        let (mut canvas, mut anchor) = self.replay_paint_log_scratch();
+        // PNG-fallback windows (`unreplayable`) have no draw history in the log
+        // to replay from — that is exactly why they are PNG-fallback — so the
+        // replayed map has nothing for them; keep what is already there rather
+        // than losing their art on the next palette change.
+        for win in self.unreplayable.iter().copied().collect::<Vec<_>>() {
+            if let Some(c) = self.pictures_canvas.get(&win) {
+                canvas.entry(win).or_insert_with(|| c.clone());
             }
-            let ops = self.v6ops_for_window(win);
-            if ops.is_empty() {
-                continue; // nothing in the log for this window — leave its canvas alone
-            }
-            let Some((cw, ch)) = self.pictures_canvas.get(&win).map(|c| (c.img.width(), c.img.height()))
-            else {
-                continue;
-            };
-            if let Some(c) = self.pictures_canvas.get_mut(&win) {
-                c.erase_rect(0, 0, cw, ch);
-            }
-            for op in ops {
-                match op {
-                    V6Op::Erase { dx, dy, w, h } => {
-                        if let Some(c) = self.pictures_canvas.get_mut(&win) {
-                            c.erase_rect(dx, dy, w, h);
-                        }
-                    }
-                    V6Op::Draw { number, dx, dy } => {
-                        let scale = self.art_scale;
-                        let Some(img) = self
-                            .pict_source
-                            .as_mut()
-                            .and_then(|s| s.scaled_image_under_current_palette(number as u32, scale))
-                        else {
-                            continue;
-                        };
-                        if let Some(c) = self.pictures_canvas.get_mut(&win) {
-                            c.draw_image_clipped(&img, dx, dy, (cw, ch));
-                        }
-                    }
-                }
+            if let Some(a) = self.canvas_anchor.get(&win) {
+                anchor.entry(win).or_insert(*a);
             }
         }
+        self.pictures_canvas = canvas;
+        self.canvas_anchor = anchor;
     }
 
     /// Apply one `PictureEvent` to `pictures_canvas`. The event's `(y, x)` are
@@ -2722,47 +2760,41 @@ impl GameSession {
         // order). Drop the whole canvas: Shogun's title splash must actually
         // vanish when the game erases window 7 before drawing the menu frame.
         if ev.erase && ev.number == 0 {
-            self.pictures_canvas.remove(&ev.window);
-            self.canvas_anchor.remove(&ev.window); // nothing left to strand
-            // `zvm`'s own paint log folds this SAME event (a `number: 0, erase:
-            // true` PictureEvent) to a single Clear entry for the window
-            // (SQ-1403) — nothing left here to remove; only the PNG-fallback
-            // veto, which described a canvas that no longer exists.
-            self.unreplayable.remove(&ev.window);
-            // The erased region belongs to the shared SCREEN, so take it out of
-            // every other window's canvas too (SQ-0568).
-            if let Some(rect) = self.window_screen_rect(ev.window) {
-                self.erase_screen_rect(rect, Some(ev.window));
-                // …and record what the erase PAINTED there (SQ-0584). ZMSD §8.8.5.3:
-                // the rect is filled with the window's background colour, opaquely —
-                // dropping the canvas above only removes what was under it. A fill of
-                // the region a window no longer covers is dead the moment the window
-                // moves or shrinks, so it is clamped to the live rect when published.
-                let bg = self
-                    .machine
-                    .screen
-                    .v6
-                    .as_ref()
-                    .and_then(|v6| v6.windows.get(ev.window as usize))
-                    .map(|w| crate::state::pack_zcolour(w.bg))
-                    .unwrap_or(0);
-                let (x, y, w, h) = rect;
-                if w > 0 && h > 0 {
-                    self.window_fills.insert(
-                        ev.window,
-                        WindowFill {
-                            x,
-                            y,
-                            w,
-                            h,
-                            bg,
-                            seq: crate::graphics::next_draw_seq(),
-                            out_chars: ev.out_chars,
-                        },
-                    );
-                } else {
-                    self.window_fills.remove(&ev.window);
-                }
+            self.apply_canvas_paint(ev.window, zvm::paint_log::PaintOp::Clear { win_box: ev.win_box }, PaintMode::Live);
+            // …and record what the erase PAINTED there (SQ-0584), LIVE only:
+            // `window_fills` is a separately persisted screen layer (SQ-0814),
+            // not a canvas fact, so a replay ([`Self::apply_canvas_paint`]) never
+            // touches it — only a freshly-drained live event does. ZMSD §8.8.5.3:
+            // the rect is filled with the window's background colour, opaquely —
+            // the canvas-clear above only removes what was under it. A fill of
+            // the region a window no longer covers is dead the moment the window
+            // moves or shrinks, so it is clamped to the event's OWN rect (not
+            // read back from live state, which by the time this runs already IS
+            // this event's state, but naming the real source directly).
+            let bg = self
+                .machine
+                .screen
+                .v6
+                .as_ref()
+                .and_then(|v6| v6.windows.get(ev.window as usize))
+                .map(|w| crate::state::pack_zcolour(w.bg))
+                .unwrap_or(0);
+            let (x, y, w, h) = Self::screen_rect_from_win_box(ev.win_box);
+            if w > 0 && h > 0 {
+                self.window_fills.insert(
+                    ev.window,
+                    WindowFill {
+                        x,
+                        y,
+                        w,
+                        h,
+                        bg,
+                        seq: crate::graphics::next_draw_seq(),
+                        out_chars: ev.out_chars,
+                    },
+                );
+            } else {
+                self.window_fills.remove(&ev.window);
             }
             return;
         }
@@ -2851,86 +2883,42 @@ impl GameSession {
             }
             return;
         }
-        // Clamp the pixel-canvas backing store — see [`CANVAS_PX_CAP`].
-        // The window's box AT THE MOMENT OF THE CALL, not now: a scratch window is
-        // resized for one drawing operation and moved on (SQ-0715). scopa sizes
-        // window 3 to 1000×1000 for each card and had shrunk it to an 80×1 sliver
-        // by the time this ran, clipping every picture out of existence.
-        let (pw, ph) = (
-            (ev.win_box.2.max(1) as u32).min(CANVAS_PX_CAP),
-            (ev.win_box.3.max(1) as u32).min(CANVAS_PX_CAP),
-        );
-        // 1-based window-relative → 0-based canvas coords.
-        let dx = (ev.x.max(1) as i32) - 1;
-        let dy = (ev.y.max(1) as i32) - 1;
-        let canvas = self.pictures_canvas.entry(ev.window)
-            .or_insert_with(|| crate::graphics::Canvas::new(pw, ph));
-        // Track the window's current box without wiping earlier draws: grow
-        // preserves content; a shrunken window only tightens the clip below
-        // (window_size "does not change the current display", ZMSD §15).
-        canvas.grow_to(pw, ph);
-        // An erase_picture footprint to take out of the OTHER windows' canvases too,
-        // applied once the canvas borrow above has ended (SQ-0568). Window-relative;
-        // translated to screen coords at the bottom of this function.
-        let mut screen_erase: Option<(u32, u32, u32, u32)> = None;
-        if ev.erase {
-            // Picture dims are art-native; the canvas is unit space, so scale the
-            // erased footprint by V6_ART_SCALE to match the doubled draw (SQ-0479).
-            let dims = self
-                .pict_source
-                .as_mut()
-                .and_then(|s| s.dims(ev.number as u32))
-                .map(|(w, h)| (w * self.art_scale.0, h * self.art_scale.1));
-            let (ew, eh) = dims.unwrap_or((pw, ph));
-            // Clip the erase to the window box.
-            let ew = ew.min(pw.saturating_sub(dx.max(0) as u32));
-            let eh = eh.min(ph.saturating_sub(dy.max(0) as u32));
-            canvas.erase_rect(dx, dy, ew, eh);
-            // …and the same region of the shared screen (SQ-0568).
-            screen_erase = Some((dx.max(0) as u32, dy.max(0) as u32, ew, eh));
-        } else if let Some(img) = {
-            let scale = self.art_scale;
-            self.pict_source.as_mut().and_then(|s| s.scaled_image(ev.number as u32, scale))
-        } {
-            // Blit the art at 2× into the unit-space window canvas (SQ-0479): the
-            // game placed it at unit coords (dx,dy) expecting the Amiga/DOS
-            // doubled picture, so the scaled pixels fill the box the game reserved.
-            canvas.draw_image_clipped(&img, dx, dy, (pw, ph));
-            canvas.z_seq = crate::graphics::next_draw_seq();
-            // Remember where on the SCREEN these pixels landed, so a later
-            // `move_window` freezes them there instead of dragging them along
-            // (SQ-0715).
-            let drawn_w = img.width().min(pw.saturating_sub(dx.max(0) as u32));
-            let drawn_h = img.height().min(ph.saturating_sub(dy.max(0) as u32));
-            self.anchor_canvas_draw(
-                ev.window,
-                (ev.win_box.0, ev.win_box.1),
-                dx,
-                dy,
-                drawn_w,
-                drawn_h,
-            );
-            // Every picture is in `zvm`'s own paint log, base or adaptive (SQ-1403):
-            // under a new palette they ALL recolour, and their order — which the
-            // log preserves, since it is fed at the same point the event is queued
-            // — is what a replay has to reproduce. (SQ-0567)
-            // SQ-0461 decision 3 ALSO anchored a transcript inline band here for a
-            // large CONTENT-art draw into a graphics window (Shogun's title
-            // splash), marked `ImageSource::ContentSplash`, so that the frameless
-            // mode — which drops graphics windows — could still show it. It was
-            // the only consumer: hybrid and raster both render the window canvas
-            // itself and had to SKIP the band to avoid drawing the art twice.
-            // SQ-0895 removed the mode, so the band had no reader left and is no
-            // longer emitted; `is_content_art` survives because the window-0
-            // margin/inline classifier above still asks it the same question.
-        }
-        // Apply the deferred cross-window erase now the canvas borrow has ended:
-        // translate the window-relative footprint into screen coords (SQ-0568).
-        if let Some((ex, ey, ew, eh)) = screen_erase {
-            if let Some((wx, wy, _, _)) = self.window_screen_rect(ev.window) {
-                self.erase_screen_rect((wx + ex, wy + ey, ew, eh), Some(ev.window));
+        // Every picture is in `zvm`'s own paint log, base or adaptive (SQ-1403):
+        // under a new palette they ALL recolour, and a replay walks the log's
+        // OWN issue order to reproduce it (SQ-0567) — see
+        // [`Self::apply_canvas_paint`], the canvas-only core this and a replay
+        // both call.
+        // SQ-0461 decision 3 ALSO anchored a transcript inline band here for a
+        // large CONTENT-art draw into a graphics window (Shogun's title splash),
+        // marked `ImageSource::ContentSplash`, so that the frameless mode —
+        // which drops graphics windows — could still show it. It was the only
+        // consumer: hybrid and raster both render the window canvas itself and
+        // had to SKIP the band to avoid drawing the art twice. SQ-0895 removed
+        // the mode, so the band had no reader left and is no longer emitted;
+        // `is_content_art` survives because the window-0 margin/inline
+        // classifier above still asks it the same question.
+        let op = if ev.erase {
+            zvm::paint_log::PaintOp::ErasePicture {
+                number: ev.number,
+                x: ev.x,
+                y: ev.y,
+                win_box: ev.win_box,
+                at_cursor: ev.at_cursor,
+                margin_after: ev.margin_after,
+                out_chars: ev.out_chars,
             }
-        }
+        } else {
+            zvm::paint_log::PaintOp::Draw {
+                number: ev.number,
+                x: ev.x,
+                y: ev.y,
+                win_box: ev.win_box,
+                at_cursor: ev.at_cursor,
+                margin_after: ev.margin_after,
+                out_chars: ev.out_chars,
+            }
+        };
+        self.apply_canvas_paint(ev.window, op, PaintMode::Live);
     }
 
     /// The reported v6 screen size in pixels (header words 0x22/0x24), falling
@@ -5014,21 +5002,6 @@ impl GameSession {
         let z = Self::key_input_to_zscii(*ki)?;
         self.is_terminator(z as u16).then_some(z)
     }
-}
-
-/// One entry in a v6 window's display list — a picture drawn, or a region erased,
-/// in window-canvas coordinates (SQ-0567).
-///
-/// A CANVAS-LOCAL translation, not the archived form (SQ-1403): the archived
-/// recipe is `zvm`'s own [`zvm::paint_log::PaintOp`], window-relative and in
-/// native pixels; [`GameSession::v6ops_for_window`] derives `V6Op` fresh from it
-/// every time a replay needs one, using this host's picture archive to resolve
-/// what `zvm` cannot (an `erase_picture`'s footprint) — so `V6Op` never needs to
-/// travel across a save/restore and carries no `serde` derive.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum V6Op {
-    Draw { number: u16, dx: i32, dy: i32 },
-    Erase { dx: i32, dy: i32, w: u32, h: u32 },
 }
 
 /// Clamp on a v6 window's pixel-canvas backing store, so a hostile / buggy story
@@ -8384,12 +8357,13 @@ mod tests {
         };
         sess.set_pict_source(Some(crate::graphics::PictSource::new(Some(blorb))));
 
-        // The pre-restart session draws at the window's top-left corner… Fed to the
-        // paint log explicitly (SQ-1403: the log is the host's to feed, from the
-        // same walk that rasterizes — see `Self::drain_pictures`), exactly as
-        // `drain_pictures` feeds it for a real drain of `take_paint_events`.
+        // The pre-restart session draws at the window's top-left corner…
+        // `queue_picture_event` feeds `zvm`'s own paint log automatically
+        // (SQ-1403), exactly as the real opcode would; drained immediately so
+        // it is not picked up again by `drain_turn`'s own drain further down.
         let pre_restart_draw = PictureEvent::new(1, 7, 1, 1, false, 0, None, false, (1, 1, 64, 48));
-        sess.machine.paint_log_mut().apply(&zvm::cpu::exec::PaintEvent::Picture(pre_restart_draw));
+        sess.machine.queue_picture_event(pre_restart_draw);
+        let _ = sess.machine.take_paint_events();
         sess.apply_picture_event(&pre_restart_draw);
         assert_eq!(sess.machine.paint_log().ops(7).len(), 1, "the draw is recorded for replay");
         // …and something took window 7 out of replay (an op-cap overflow in a long
@@ -8414,7 +8388,8 @@ mod tests {
         // The rebooted game draws the SAME picture somewhere else, then a base
         // picture establishes a new palette and every window replays.
         let post_restart_draw = PictureEvent::new(1, 7, 33, 1, false, 0, None, false, (1, 1, 64, 48));
-        sess.machine.paint_log_mut().apply(&zvm::cpu::exec::PaintEvent::Picture(post_restart_draw));
+        sess.machine.queue_picture_event(post_restart_draw);
+        let _ = sess.machine.take_paint_events();
         sess.apply_picture_event(&post_restart_draw);
         sess.replay_under_current_palette();
 

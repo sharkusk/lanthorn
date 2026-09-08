@@ -196,28 +196,43 @@ holding onto:
 
 - **`display.bin` is the recipe, and it is `zvm`'s own** (SQ-1403). Every
   `draw_picture` / `erase_picture` / `erase_window` a Version 6 story issues is
-  folded, per window, into [`zvm::paint_log::PaintLog`](../../crates/zvm/src/paint_log.rs) —
-  native, window-relative pixels, with no rasterization and no cell of any
-  kind. `Machine::paint_log()` is fed automatically as the events are queued
-  (the same point `Machine::take_paint_events` drains from), so a host cannot
-  forget to record one, and `Machine::restart` clears it structurally in the
-  same breath as the paint queues. `zvm::paint_log::encode`/`decode` write it
-  as a versioned binary blob, exactly as `screen_snapshot` does for the window
-  table — hand-rolled, because `zvm` takes no dependencies.
+  folded into [`zvm::paint_log::PaintLog`](../../crates/zvm/src/paint_log.rs) —
+  ONE flat, globally-ordered stream tagged per window (native, window-relative
+  pixels, with no rasterization and no cell of any kind), so a cross-window
+  erase mirror replays at its true position relative to every other window's
+  own draws rather than before or after all of them. `Machine` feeds it itself,
+  at the exact points `pending_pictures`/`pending_erase_fills` are queued (the
+  same events `Machine::take_paint_events` later drains) — a host never calls
+  `PaintLog::apply` (it is `pub(crate)`), so it cannot forget to record one —
+  and `Machine::restart` clears it structurally in the same breath as the
+  paint queues. `zvm::paint_log::encode`/`decode` write it as a versioned
+  binary blob, exactly as `screen_snapshot` does for the window table —
+  hand-rolled, because `zvm` takes no dependencies. Each `Draw`/`ErasePicture`
+  entry also carries `at_cursor`, `margin_after` and `out_chars` — genuine
+  facts about that call (ZMSD says nothing about the host rendering question
+  they answer, an inline text float vs. a window-canvas picture, but a host
+  needs the values AS THEY STOOD AT THE CALL, not a running count it reads
+  later, which has typically moved on by the time a turn's pictures are
+  drained).
 - **`display.json` is the palette plus two small screen layers app still
   owns**: the raw `PLTE` bytes of the Current Palette at save time (an adaptive
   picture has no palette of its own — Blorb §11.3 — so replaying the log
   without it recolours nothing), and [`archive::V6LayersDto`](../../crates/app/src/archive.rs)'s
   `fills`/`anchors` — the `erase_window` fills still covering the screen and
   where each window's canvas was painted (SQ-0715), both bounded recipes in the
-  game's own native pixels. `replay_order` names which windows the log
-  reproduces correctly (see below) and in what paint order to rebuild them.
+  game's own native pixels. No separate field names which windows the log
+  reproduces correctly — see the next point.
 - **`pictures/win-N.png` and `pictures/ground.png` are the stated exceptions,
   in pixels rather than a recipe.** A window's replay is checked against its
   LIVE canvas at save time (`GameSession::display_list`'s replay-and-compare
-  self-check); one that doesn't match — an op path not yet recorded, or a log
-  that hit `zvm::paint_log::PAINT_LOG_CAP` — is carried as a PNG instead, named
-  in a diagnostic, and left out of `replay_order`. The painted ground
+  self-check, one global walk of `ops_in_order()` through the same
+  canvas-painting core live rendering uses — `GameSession::apply_canvas_paint`
+  — under `PaintMode::Replay`); one that doesn't match — an op path not yet
+  recorded, or a log that hit `zvm::paint_log::PAINT_LOG_CAP` — is carried as a
+  PNG instead and named in a diagnostic. Which windows those are is not stored
+  as a separate list: the PNGs present in the archive ARE that list, and a
+  restore simply loads whichever PNGs it finds and replays the log for every
+  other window (`GameSession::load_display_list`). The painted ground
   (`GameSession::paint`) is pixels unconditionally: it accumulates from an
   unbounded stream of `erase_window` fills across the whole session, so there
   is no bounded recipe to store for it the way there is for a window's own
@@ -226,9 +241,9 @@ holding onto:
 A restore reinstalls all four in one order: `screen.bin`, then
 `Machine::restore_paint_log` from `display.bin` (empty bytes — an older
 archive, or a non-v6 story — reset it to empty, the same as a freshly booted
-machine's), then each `replay_order` window is rebuilt by replaying its
-translated ops under the restored palette, then the PNG fallbacks load
-straight as pixels, then the ground loads unconditionally (a host Save State
+machine's), then the saved PNGs load straight as pixels, then every window NOT
+covered by a PNG is rebuilt by replaying the log's `ops_in_order()` under the
+restored palette, then the ground loads unconditionally (a host Save State
 swaps memory under a game that never learns it happened, so nothing repaints
 to clear a stale one on its own).
 

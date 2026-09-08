@@ -65,21 +65,19 @@ pub struct DisplayListDto {
     /// inputs are unbounded (`pictures/ground.png`).
     #[serde(default)]
     pub layers: V6LayersDto,
-    /// REPLAYABLE window indices, in paint order (ascending `z_seq`) — the same
-    /// order `pictures_png` emits, so relative z-order survives without storing
-    /// the raw stamps. A window missing from here is one whose replay did not
-    /// reproduce its canvas at save time (or was already loaded from pixels); it
-    /// is carried as a PNG instead and skipped when the log below is replayed
-    /// back ([`crate::session::GameSession::load_display_list`]).
-    #[serde(default)]
-    pub replay_order: Vec<u8>,
     /// `zvm`'s own encoded [`zvm::paint_log::PaintLog`] (SQ-1403) — every
-    /// window's folded picture/erase history, in native window-relative pixels.
-    /// NOT part of `display.json`: carried as the separate binary
-    /// [`ENTRY_DISPLAY_OPS`] entry, exactly as [`ENTRY_SCREEN`] carries the
-    /// screen snapshot outside `meta.json`. Empty when no log was ever archived
-    /// (an older archive format, or a non-v6 story); [`Machine::restore_paint_log`]
-    /// treats that the same as a freshly booted machine's log.
+    /// window's folded picture/erase history, in native window-relative pixels
+    /// and TRUE ISSUE ORDER across windows (the log carries its own order; there
+    /// is no separate window list to keep in step with it). NOT part of
+    /// `display.json`: carried as the separate binary [`ENTRY_DISPLAY_OPS`]
+    /// entry, exactly as [`ENTRY_SCREEN`] carries the screen snapshot outside
+    /// `meta.json`. Empty when no log was ever archived (an older archive
+    /// format, or a non-v6 story); [`Machine::restore_paint_log`] treats that
+    /// the same as a freshly booted machine's log. A window whose replay does
+    /// not reproduce its live canvas at save time (or was already loaded from
+    /// pixels) is carried as a PNG instead and simply skipped when the log is
+    /// replayed back ([`crate::session::GameSession::load_display_list`]) —
+    /// nothing here marks that; the loader is told the PNG set directly.
     ///
     /// [`Machine::restore_paint_log`]: zvm::cpu::exec::Machine::restore_paint_log
     #[serde(skip)]
@@ -201,9 +199,9 @@ const ENTRY_TRANSCRIPT_IMG_PREFIX: &str = "transcript-img/";
 /// Bumped to 10 for SQ-1403: `display.json`'s `windows` field (a serde mirror of
 /// `zvm`'s picture/erase events, maintained by hand across a crate boundary) is
 /// gone; the v6 paint history is `display.bin`, `zvm`'s OWN versioned binary
-/// blob ([`zvm::paint_log`]). `display.json` keeps only the Current Palette and
-/// the two screen layers ([`V6LayersDto`]), and gains `replay_order` (which
-/// windows in the log are trusted, and in what paint order) in the same breath.
+/// blob ([`zvm::paint_log`]), which carries every window's TRUE issue order
+/// itself — no separate window list to keep in step with it. `display.json`
+/// keeps only the Current Palette and the two screen layers ([`V6LayersDto`]).
 ///
 /// A deliberate break, not a shim (pre-release, per `CLAUDE.md`): a format-9-or-
 /// older archive still LOADS on this build (only a GREATER version is refused,
@@ -836,10 +834,10 @@ pub(crate) fn build_archive_bytes(
             serde_json::to_string(d).expect("DisplayListDto is always serializable");
         zip.start_file(ENTRY_DISPLAY, options)?;
         zip.write_all(display_json.as_bytes())?;
-        // display.bin — `zvm`'s own paint log (SQ-1403), the recipe display.json's
-        // `replay_order` names windows out of. Written unconditionally alongside
-        // display.json (never on its own): the two are read back together and an
-        // archive with one but not the other is not a shape `load_archive` writes.
+        // display.bin — `zvm`'s own paint log (SQ-1403). Written unconditionally
+        // alongside display.json (never on its own): the two are read back
+        // together and an archive with one but not the other is not a shape
+        // `load_archive` writes.
         zip.start_file(ENTRY_DISPLAY_OPS, options)?;
         zip.write_all(&d.paint_log_bytes)?;
     }
@@ -1350,8 +1348,7 @@ pub fn load_archive(path: &Path) -> io::Result<ArchiveContents> {
     // display.bin — `zvm`'s own paint log (SQ-1403). Absent for a format-9-or-older
     // archive (its `display.json` named per-window ops of its own, which this
     // build no longer reads — SQ-1403 is a deliberate break, not a shim): the
-    // window canvases restore from `pictures/` alone until the game repaints, and
-    // `replay_order` above stays empty either way for the same reason.
+    // window canvases restore from `pictures/` alone until the game repaints.
     if let Some(d) = display.as_mut() {
         if let Ok(mut z) = zip.by_name(ENTRY_DISPLAY_OPS) {
             let mut b = Vec::new();

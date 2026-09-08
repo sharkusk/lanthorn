@@ -61,11 +61,15 @@ Pre-beta there is still **no obligation to read old files** (see the standing
   serde mirror of `zvm`'s picture/erase events, maintained by hand across a
   crate boundary — is gone. The v6 paint history is now `display.bin`, `zvm`'s
   OWN versioned binary blob (`zvm::paint_log`, magic `ZPNT`, its own format
-  version inside), fed automatically as the events are queued rather than
-  accumulated by hand in the app. `display.json` keeps only the Current
-  Palette and the two screen layers (`V6LayersDto`), and gains
-  `replay_order` — which windows the log reproduces correctly, and in what
-  paint order — in the same breath.
+  version inside) — ONE flat, globally-ordered stream tagged per window, fed
+  automatically by `Machine` itself at the exact points its picture/erase
+  queues are pushed, rather than accumulated by hand in the app from a
+  drained event list. `display.json` keeps only the Current Palette and the
+  two screen layers (`V6LayersDto`); it names no separate list of which
+  windows the log reproduces correctly — the PNGs an archive actually carries
+  under `pictures/` ARE that list (a window with a saved PNG restores from
+  it; every other window replays the log), so there is nothing to keep in
+  sync by hand.
 
   *Accepted break, no migration (pre-release):* an older archive still LOADS
   on this build — only a GREATER version is refused (see `load_archive`) —
