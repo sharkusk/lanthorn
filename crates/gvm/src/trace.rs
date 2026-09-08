@@ -3,6 +3,7 @@
 /// A single call frame captured at a fault. Innermost (faulting) frame first
 /// in `StackTrace::frames`.
 #[derive(Debug, Clone, PartialEq)]
+#[non_exhaustive]
 pub struct TraceFrame {
     /// Routine entry address (0 = unknown; gvm always reports 0).
     pub func_addr: u32,
@@ -16,6 +17,7 @@ pub struct TraceFrame {
 
 /// A crash stack trace: the fault site plus the live call stack.
 #[derive(Debug, Clone, PartialEq)]
+#[non_exhaustive]
 pub struct StackTrace {
     /// Human-readable fault, e.g. "memory fault: read16 @0x004a1c".
     pub fault: String,

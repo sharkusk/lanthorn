@@ -95,6 +95,7 @@ fn kerkerkruip_boots_past_storage_menu() {
                 // first input; treat as a boot failure to investigate.
                 panic!("unexpected @save/@restore during Kerkerkruip boot");
             }
+            _ => break,
         }
     }
 

@@ -6,6 +6,7 @@
 
 /// Errors that can arise while loading a Glulx image.
 #[derive(Debug, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum GError {
     /// The image is too short to contain the 36-byte header.
     TooShort,
