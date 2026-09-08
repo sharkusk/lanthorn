@@ -112,12 +112,12 @@ fn window_ground(ground: Style, rgb: u32, scheme: &ColorScheme) -> Style {
 /// Convert a neutral [`GridCell`] (packed colour) into a `zvm::screen::Cell`
 /// (typed `ZColour`) for [`cell_style`].
 fn grid_cell_to_zvm(cell: GridCell) -> zvm::screen::Cell {
-    zvm::screen::Cell {
-        ch: cell.ch,
-        style: cell.style,
-        fg: crate::state::unpack_zcolour(cell.fg),
-        bg: crate::state::unpack_zcolour(cell.bg),
-    }
+    zvm::screen::Cell::new(
+        cell.ch,
+        cell.style,
+        crate::state::unpack_zcolour(cell.fg),
+        crate::state::unpack_zcolour(cell.bg),
+    )
 }
 
 /// The per-side border styles `draw_grid` will actually use for `grid`, after
@@ -517,7 +517,7 @@ mod tests {
         scheme.palette[4] = Color::Rgb(0, 0, 200); // blue  (Standard(6) -> palette[4])
         // no reverse: fg=red, bg=blue (logical order, no REVERSED modifier)
         let s = cell_style(
-            Cell { ch: 'x', style: 0, fg: ZColour::Standard(3), bg: ZColour::Standard(6) },
+            Cell::new('x', 0, ZColour::Standard(3), ZColour::Standard(6)),
             0,
             &scheme,
             true,
@@ -530,7 +530,7 @@ mod tests {
         // reverse (style 0x01): REVERSED modifier set, fg/bg stay in logical order —
         // the terminal performs the single swap via the modifier.
         let r = cell_style(
-            Cell { ch: 'x', style: 0x01, fg: ZColour::Standard(3), bg: ZColour::Standard(6) },
+            Cell::new('x', 0x01, ZColour::Standard(3), ZColour::Standard(6)),
             0,
             &scheme,
             true,
@@ -552,13 +552,13 @@ mod tests {
         scheme.glk_styles[1][4] = Style::default().fg(Color::Green);
         // Subheader (glk_style 4) grid cell, no game colour → slot green, honor OFF.
         let s = cell_style(
-            Cell { ch: 'x', style: 0, fg: ZColour::Default, bg: ZColour::Default },
+            Cell::new('x', 0, ZColour::Default, ZColour::Default),
             4, &scheme, false, None, false,
         );
         assert_eq!(s.fg, Some(Color::Green), "grid Subheader → row-1 slot");
         // Normal (glk_style 0) cell → element base (upper_window fg, None by default).
         let n = cell_style(
-            Cell { ch: 'x', style: 0, fg: ZColour::Default, bg: ZColour::Default },
+            Cell::new('x', 0, ZColour::Default, ZColour::Default),
             0, &scheme, false, None, false,
         );
         assert_eq!(n.fg, scheme.theme.get("upper_window").style.fg, "grid Normal → upper_window element base");
@@ -571,7 +571,7 @@ mod tests {
         use zvm::screen::{Cell, ZColour};
         let scheme = ColorScheme::default();
         let s = cell_style(
-            Cell { ch: 'x', style: 0, fg: ZColour::Default, bg: ZColour::Default },
+            Cell::new('x', 0, ZColour::Default, ZColour::Default),
             5, &scheme, false, None, false,
         );
         assert!(s.add_modifier.contains(ratatui::style::Modifier::BOLD), "Alert grid cell renders bold");
@@ -586,7 +586,7 @@ mod tests {
         use zvm::screen::{Cell, ZColour};
         let scheme = ColorScheme::default();
         let s = cell_style(
-            Cell { ch: 'x', style: 0, fg: ZColour::Default, bg: ZColour::Default },
+            Cell::new('x', 0, ZColour::Default, ZColour::Default),
             0, &scheme, true, None, true,
         );
         let ground = scheme.theme.get("glk.grid.background").style;
@@ -599,7 +599,7 @@ mod tests {
         );
         // And a Z-machine grid cell with the identical colours stays on `upper_window`.
         let z = cell_style(
-            Cell { ch: 'x', style: 0, fg: ZColour::Default, bg: ZColour::Default },
+            Cell::new('x', 0, ZColour::Default, ZColour::Default),
             0, &scheme, true, None, false,
         );
         assert_eq!(z.bg, scheme.theme.get("upper_window").style.bg, "Z-machine grid Normal → upper_window bg, untouched");
@@ -614,7 +614,7 @@ mod tests {
         use zvm::screen::{Cell, ZColour};
         let scheme = ColorScheme::default();
         let s = cell_style(
-            Cell { ch: ' ', style: 0x01, fg: ZColour::Default, bg: ZColour::Default },
+            Cell::new(' ', 0x01, ZColour::Default, ZColour::Default),
             0,
             &scheme,
             true,

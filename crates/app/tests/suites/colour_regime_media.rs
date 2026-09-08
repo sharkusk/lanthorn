@@ -673,7 +673,7 @@ fn the_reported_floppy_grounds_on_the_host_under_a_host_regime() {
 /// does.**
 ///
 /// The concern, reasoned off `archive.rs` while this quest was being fixed: a host
-/// Save State stores colour as NUMBERS (`ZColourDto`, and the v6 window table is
+/// Save State stores colour as NUMBERS (`zvm::screen::ZColour`, and the v6 window table is
 /// the source of truth for a Version 6 story), a number means nothing without a
 /// palette, and `--colour` now chooses the palette. So saving under `--colour
 /// machine` and restoring under `--colour terminal` looked capable of resolving

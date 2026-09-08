@@ -8,7 +8,7 @@
 //! currently SITTING (SQ-0697/SQ-0729), and `retired` is the prose a `move_window` or
 //! `window_size` left frozen at coordinates the window no longer covers (ZMSD §15:
 //! "window_size does not change the current display"). Only the first of the three
-//! was in `screen.json`.
+//! was in `screen.bin`.
 //!
 //! What that cost, measured on the real corpus: fmvpoker.z6 two steps from boot is
 //! holding `[PxText { y: 247, x: 76, text: "Current Bet:" }, PxText { y: 265, x: 76,
@@ -184,7 +184,7 @@ const CASES: &[(&str, usize, usize)] = &[
 
 /// The defect itself, across the corpus and both colour modes.
 ///
-/// Falsified by reverting `ZWindowDto`'s `streamed`/`retired` to nothing (the
+/// Falsified by reverting the archived `ZWindow`'s `streamed`/`retired` to nothing (the
 /// pre-quest state, where the archive carried only `texts`):
 ///
 /// ```text
@@ -292,7 +292,7 @@ fn render(session: &GameSession, honor: bool, kitty: bool, w: u16, h: u16) -> Bu
 /// session and a 200x80 one, neither of them the terminal that wrote the archive, and
 /// both are rendered through half-blocks and a kitty-sized picker.
 ///
-/// Falsified with the same reverted `ZWindowDto`:
+/// Falsified with the same reverted `ZWindow`:
 ///
 /// ```text
 /// fmvpoker.z6: the pixel runs restored into a Some((80, 24)) session are the ones

@@ -154,7 +154,7 @@ fn story_ink_survives_a_save_state_resume() {
 }
 
 /// SQ-0551, the other half: versions 1–5/7/8 have no window table to re-derive
-/// from, so their pair travels in `screen.json` instead. Photopia (v5) sets black
+/// from, so their pair travels in `screen.bin` instead. Photopia (v5) sets black
 /// on white exactly as Zork Zero does, and lost its ink for a turn the same way.
 ///
 /// Driven through the real archive round trip, not a direct struct compare, so it
@@ -223,7 +223,7 @@ fn story_ink_survives_a_resume_without_a_v6_window_table() {
 
     assert_eq!(
         fresh.machine.screen.current_fg, live_fg,
-        "with no window table the pair must come back from screen.json, not reset to the theme"
+        "with no window table the pair must come back from screen.bin, not reset to the theme"
     );
     assert_eq!(fresh.machine.screen.current_bg, live_bg, "and its page colour with it");
 }

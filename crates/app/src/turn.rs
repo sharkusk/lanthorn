@@ -549,7 +549,7 @@ fn post_turn_bookkeeping(
     // THIS function on a later turn, since it can only be known after this
     // call returns.
     // Engine-neutral: the save routes through Engine::save_state (Quetzal for
-    // zvm, the gvm snapshot for Glulx); screen.json is written for zvm only.
+    // zvm, the gvm snapshot for Glulx); screen.bin is written for zvm only.
     // Skipped on the quit turn itself when the exit is game-driven (SQ-1342):
     // `state.game_ended` was just set above, and enqueuing a save here would
     // race the exit path's clearing write — a background write that lands

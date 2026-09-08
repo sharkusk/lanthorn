@@ -36,7 +36,10 @@ const ENTRY_MAP: &str = "map.json";
 const ENTRY_META: &str = "meta.json";
 const ENTRY_TRANSCRIPT: &str = "transcript.json";
 const ENTRY_COMMAND_HISTORY: &str = "command_history.json";
-const ENTRY_SCREEN: &str = "screen.json";
+/// The Z-machine screen, as `zvm`'s own versioned binary snapshot
+/// ([`zvm::screen_snapshot`]) rather than an app-side mirror of its types
+/// (SQ-1401). Binary, so `.bin` and not `.json`.
+const ENTRY_SCREEN: &str = "screen.bin";
 const ENTRY_DISPLAY: &str = "display.json";
 
 /// The archived v6 screen as a RECIPE rather than a picture (SQ-0588): every
@@ -190,12 +193,18 @@ const ENTRY_GROUND: &str = "pictures/ground.png";
 /// its art, not just its text (SQ-0518). Sibling metadata is `TranscriptData.images`.
 const ENTRY_TRANSCRIPT_IMG_PREFIX: &str = "transcript-img/";
 
-/// Bumped to 8 for SQ-0820: `screen.json` now also carries the other two pixel-run
-/// layers of a v6 window — the prose it has STREAMED and the prose a move or resize
-/// left RETIRED behind it ([`ZWindowDto::streamed`]/[`ZWindowDto::retired`]). Same
-/// break direction as version 7: an older BUILD reading a version-8 archive would
-/// drop them and resume fmvpoker with its bet legends missing from the raster, so
-/// the version check must reject it (see `load_archive`).
+/// Bumped to 9 for SQ-1401: the screen is no longer `screen.json`, a serde mirror
+/// of six `zvm` types maintained by hand across a crate boundary — it is
+/// `screen.bin`, `zvm`'s OWN versioned binary snapshot
+/// ([`zvm::screen_snapshot`]). Same field inventory, one source of truth, and a
+/// second embedder no longer has to write the mirror again. An older BUILD would
+/// find no `screen.json` at all and resume with an unpainted screen, so the
+/// version check must reject it (see `load_archive`). Pre-release, so no shim:
+/// version-8 archives are simply refused.
+///
+/// Version 8 was SQ-0820: the screen entry also carries the other two pixel-run
+/// layers of a v6 window — the prose it has STREAMED and the prose a move or
+/// resize left RETIRED behind it.
 ///
 /// Version 7 was SQ-0814: `display.json` also carries the v6 screen layers that ride
 /// beside the window canvases — the `erase_window` fills and the canvas anchors
@@ -203,7 +212,7 @@ const ENTRY_TRANSCRIPT_IMG_PREFIX: &str = "transcript-img/";
 ///
 /// Version 6 was SQ-0588: a v6 archive carries its display list, and omits the
 /// canvas PNG for every window whose replay reproduced the live canvas at save time.
-pub const CURRENT_FORMAT_VERSION: u32 = 8;
+pub const CURRENT_FORMAT_VERSION: u32 = 9;
 
 /// What asked for this archive to be written (SQ-0531). Both triggers produce the
 /// SAME `.lanthorn` container — map, transcript, screen, aux and all — so an
@@ -301,347 +310,6 @@ struct InlineImageDto {
     margin_px: Option<u32>,
 }
 
-/// Z-machine screen state written to `screen.json` (zvm has no serde, so we
-/// mirror the public fields here). Restored on the host-mediated restore paths
-/// (Ctrl+R / auto-load) so a once-split game's upper window shows after restore.
-#[derive(Debug, serde::Serialize, serde::Deserialize)]
-struct ScreenDto {
-    upper_window_rows: u16,
-    current_window: u8,
-    text_style: u8,
-    cursor_row: u16,
-    cursor_col: u16,
-    buffer_mode: bool,
-    show_status_requested: bool,
-    cols: u16,
-    rows: u16,
-    cells: Vec<(char, u8)>, // upper-window grid (ch, style) in row-major order
-    /// The full v6 8-window table (geometry, cursors, margins, colours, grids,
-    /// pixel-text runs), `Some` only for v6 stories. Serialized so a host Save
-    /// State restore reproduces the v6 chrome/status layout exactly (Lane P);
-    /// `#[serde(default)]` keeps pre-v6 archives loading as `None`.
-    #[serde(default)]
-    v6: Option<V6WindowsDto>,
-    /// The current logical fg/bg pair (SQ-0551).
-    ///
-    /// `ScreenState` documents these as transient display state and does not put
-    /// them in a Quetzal save — but the PROSE stream tags every run's colour from
-    /// them, so a resume that hands them back as `Default` prints the first turn
-    /// in the host theme's ink until the game next calls `set_colour`.
-    ///
-    /// A **v6** story needs no help here: ZMSD §8.3 gives each window its own
-    /// pair, the whole window table is archived above, and `restore_screen`
-    /// re-derives the current pair from it — so for v6 these fields are written
-    /// but ignored on the way back in. Versions 1–5/7/8 have no window table and
-    /// nothing else that holds the game's selected colour (this DTO stores the
-    /// upper window as char+style only), so for them the pair must travel.
-    #[serde(default)]
-    current_fg: ZColourDto,
-    #[serde(default)]
-    current_bg: ZColourDto,
-    /// The v6 window the game last asked for INPUT through (SQ-0749). It is an
-    /// input to what the screen must show — `BufferWindow::reads_input` derives
-    /// straight from it — and Quetzal saves no screen state by design, so this is
-    /// ours to carry. Unpersisted, a Save State taken mid-read through a secondary
-    /// panel came back with it at 0: the panel's typed-input echo went dark until
-    /// the next read re-established it. `#[serde(default)]` keeps pre-SQ-0749
-    /// archives loading (as window 0, the pre-existing behaviour).
-    #[serde(default)]
-    v6_input_window: u8,
-}
-
-/// Upper bound on a restored grid's dimensions (SQ-0647). Well past any real
-/// terminal (ZMSD §11.1 gives the header only a BYTE each for screen height and
-/// width in characters), and low enough that a corrupt `65535 × 65535` cannot ask
-/// for a 4-billion-cell allocation on the way in. A restore reconciles the saved
-/// screen against the current pane anyway (`reconcile_restored_screen_size`), so
-/// clamping here costs a restore nothing it wasn't about to recompute.
-const MAX_GRID_COLS: u16 = 1024;
-const MAX_GRID_ROWS: u16 = 1024;
-
-/// Build an `UpperWindow` from archived dimensions + cells, enforcing the invariant
-/// every consumer assumes: `cells.len() == cols * rows`.
-///
-/// zvm's grid code (`resize_preserving`, and every `r * cols + c` read after it)
-/// indexes straight into `cells`, so a `screen.json` whose vector doesn't match its
-/// own dimensions is a panic waiting for the first repaint after the restore — and
-/// the archive is a file on the player's disk, not a value we produced this run.
-/// Repair rather than reject: the surrounding loader treats a bad `screen.json` as
-/// "no saved screen" (the story repaints), but a grid that is merely the wrong
-/// length still holds the text that was on screen, so pad or truncate it to fit and
-/// keep what's there.
-fn grid_from_dto(cols: u16, rows: u16, mut cells: Vec<zvm::screen::Cell>) -> zvm::screen::UpperWindow {
-    let cols = cols.min(MAX_GRID_COLS);
-    let rows = rows.min(MAX_GRID_ROWS);
-    let want = cols as usize * rows as usize;
-    if cells.len() != want {
-        cells.resize(want, zvm::screen::Cell::default());
-    }
-    zvm::screen::UpperWindow { cols, rows, cells }
-}
-
-impl ScreenDto {
-    fn from_screen(s: &zvm::screen::ScreenState) -> Self {
-        ScreenDto {
-            upper_window_rows: s.upper_window_rows,
-            current_window: s.current_window,
-            text_style: s.text_style,
-            cursor_row: s.cursor_row,
-            cursor_col: s.cursor_col,
-            buffer_mode: s.buffer_mode,
-            show_status_requested: s.show_status_requested,
-            cols: s.upper.cols,
-            rows: s.upper.rows,
-            cells: s.upper.cells.iter().map(|c| (c.ch, c.style)).collect(),
-            v6: s.v6.as_ref().map(V6WindowsDto::from_v6),
-            // Written ONLY when there is no window table to re-derive from, so
-            // each version has exactly one source of truth for its ink and
-            // neither mechanism can quietly paper over the other going wrong.
-            current_fg: match s.v6 {
-                Some(_) => ZColourDto::Default,
-                None => ZColourDto::from_z(s.current_fg),
-            },
-            current_bg: match s.v6 {
-                Some(_) => ZColourDto::Default,
-                None => ZColourDto::from_z(s.current_bg),
-            },
-            v6_input_window: s.v6_input_window,
-        }
-    }
-
-    /// Rebuild the live screen from the DTO, REPAIRING anything the file cannot be
-    /// trusted to have got right (SQ-0647). See [`grid_from_dto`]: `screen.json` is a
-    /// file on the player's disk, and a truncated or hand-edited one used to hand zvm
-    /// a grid whose `cells` didn't match its own `cols × rows`, which
-    /// `UpperWindow::resize_preserving` indexes without checking — the first repaint
-    /// after the restore panicked the app.
-    fn to_screen(&self) -> zvm::screen::ScreenState {
-        zvm::screen::ScreenState {
-            upper_window_rows: self.upper_window_rows,
-            current_window: self.current_window,
-            text_style: self.text_style,
-            cursor_row: self.cursor_row,
-            cursor_col: self.cursor_col,
-            buffer_mode: self.buffer_mode,
-            show_status_requested: self.show_status_requested,
-            upper: grid_from_dto(
-                self.cols,
-                self.rows,
-                self.cells
-                    .iter()
-                    .map(|&(ch, style)| zvm::screen::Cell { ch, style, fg: zvm::screen::ZColour::Default, bg: zvm::screen::ZColour::Default })
-                    .collect(),
-            ),
-            v6: self.v6.as_ref().map(V6WindowsDto::to_v6),
-            current_fg: self.current_fg.to_z(),
-            current_bg: self.current_bg.to_z(),
-            v6_input_window: self.v6_input_window,
-            ..Default::default()
-        }
-    }
-}
-
-// ── v6 window-table mirror DTOs (zvm has no serde, so we mirror its public
-// fields here, matching `ScreenDto`'s style). Restored on the host-mediated
-// restore paths so a v6 story's window geometry/status text survive. ────────
-
-/// serde mirror of `zvm::screen::ZColour` (that type is transient display state
-/// zvm does not serialize; we persist it for host Save State render fidelity).
-#[derive(Debug, Default, serde::Serialize, serde::Deserialize)]
-enum ZColourDto {
-    #[default]
-    Default,
-    Standard(u8),
-    True(u16),
-    True24(u32),
-}
-
-impl ZColourDto {
-    fn from_z(c: zvm::screen::ZColour) -> Self {
-        use zvm::screen::ZColour as Z;
-        match c {
-            Z::Default => ZColourDto::Default,
-            Z::Standard(n) => ZColourDto::Standard(n),
-            Z::True(v) => ZColourDto::True(v),
-            Z::True24(v) => ZColourDto::True24(v),
-            _ => ZColourDto::Default,
-        }
-    }
-    fn to_z(&self) -> zvm::screen::ZColour {
-        use zvm::screen::ZColour as Z;
-        match self {
-            ZColourDto::Default => Z::Default,
-            ZColourDto::Standard(n) => Z::Standard(*n),
-            ZColourDto::True(v) => Z::True(*v),
-            ZColourDto::True24(v) => Z::True24(*v),
-        }
-    }
-}
-
-#[derive(Debug, serde::Serialize, serde::Deserialize)]
-struct GridCellDto { ch: char, style: u8, fg: ZColourDto, bg: ZColourDto }
-
-#[derive(Debug, serde::Serialize, serde::Deserialize)]
-struct V6TextDto {
-    y: u16,
-    x: u16,
-    text: String,
-    style: u8,
-    fg: ZColourDto,
-    bg: ZColourDto,
-    /// The screen character CELL the run's first glyph was written at (SQ-1009).
-    ///
-    /// Archived rather than re-derived because on a machine that drew
-    /// proportionally it CANNOT be re-derived: `(x - 1) / cell.w` is the column
-    /// only while the pen advances one declared cell per character, and Arthur's
-    /// Amiga press does not. This is the recipe, not the result — a cell backend
-    /// places every restored run by it.
-    grow: u16,
-    gcol: u16,
-}
-
-/// serde mirror of one `zvm::screen::ZWindow`. `props` holds the 16 ZMSD window
-/// properties (indices 0–15, §8.8.3.2) in field order; the grid, colours and
-/// pixel-text runs travel alongside.
-#[derive(Debug, serde::Serialize, serde::Deserialize)]
-struct ZWindowDto {
-    props: [u16; 16],
-    cols: u16,
-    rows: u16,
-    cells: Vec<GridCellDto>,
-    fg: ZColourDto,
-    bg: ZColourDto,
-    texts: Vec<V6TextDto>,
-    /// A secondary prose window's live lines (SQ-0585). Persisted for the same
-    /// reason as `texts` and the picture canvases: a restore has to reproduce what
-    /// was on screen. Measured on advent.z6 — after a restore into its split layout
-    /// the game repaints neither window, so an unpersisted panel would come back
-    /// blank and stay blank. `#[serde(default)]` keeps older archives loading.
-    #[serde(default)]
-    prose: Vec<String>,
-    /// Where the prose this window has STREAMED to the host transcript is currently
-    /// sitting on the screen (SQ-0697/SQ-0729), and…
-    #[serde(default)]
-    streamed: Vec<V6TextDto>,
-    /// …the prose it streamed that a later move or resize FROZE in place (SQ-0697),
-    /// at coordinates the window no longer covers.
-    ///
-    /// Persisted for the same reason as `texts` and `prose` (SQ-0585/SQ-0820): they
-    /// are live screen state that only the game repaints, and a host Save State swaps
-    /// memory under a game that never learns it happened. Measured on fmvpoker.z6 —
-    /// its "Current Bet:"/"10" legends live only here, so an unpersisted `streamed`
-    /// brought the game back with them missing from the pixel raster (the cell grid,
-    /// which `cells` carries, is why cell mode hid it).
-    ///
-    /// The RECIPE, not a result: these are the game's own runs in zvm's native pixel
-    /// space, exactly as `texts` travels, so the archive stays terminal- and
-    /// backend-neutral.
-    #[serde(default)]
-    retired: Vec<V6TextDto>,
-}
-
-/// `Vec<V6Text>` ⇄ `Vec<V6TextDto>`, shared by the three pixel-run layers a v6
-/// window carries (`texts`, `streamed`, `retired`).
-fn v6_texts_to_dto(runs: &[zvm::screen::V6Text]) -> Vec<V6TextDto> {
-    runs.iter()
-        .map(|t| V6TextDto {
-            y: t.y,
-            x: t.x,
-            text: t.text.clone(),
-            style: t.style,
-            fg: ZColourDto::from_z(t.fg),
-            bg: ZColourDto::from_z(t.bg),
-            grow: t.grow,
-            gcol: t.gcol,
-        })
-        .collect()
-}
-
-fn v6_texts_from_dto(runs: &[V6TextDto]) -> Vec<zvm::screen::V6Text> {
-    runs.iter()
-        .map(|t| zvm::screen::V6Text {
-            y: t.y,
-            x: t.x,
-            text: t.text.clone(),
-            style: t.style,
-            fg: t.fg.to_z(),
-            bg: t.bg.to_z(),
-            grow: t.grow,
-            gcol: t.gcol,
-        })
-        .collect()
-}
-
-impl ZWindowDto {
-    fn from_window(w: &zvm::screen::ZWindow) -> Self {
-        let mut props = [0u16; 16];
-        for (n, p) in props.iter_mut().enumerate() {
-            *p = w.get_prop(n as u16);
-        }
-        ZWindowDto {
-            props,
-            cols: w.grid.cols,
-            rows: w.grid.rows,
-            cells: w.grid.cells.iter().map(|c| GridCellDto {
-                ch: c.ch, style: c.style, fg: ZColourDto::from_z(c.fg), bg: ZColourDto::from_z(c.bg),
-            }).collect(),
-            fg: ZColourDto::from_z(w.fg),
-            bg: ZColourDto::from_z(w.bg),
-            texts: v6_texts_to_dto(&w.texts),
-            prose: w.prose.clone(),
-            streamed: v6_texts_to_dto(&w.streamed),
-            retired: v6_texts_to_dto(&w.retired),
-        }
-    }
-    fn to_window(&self) -> zvm::screen::ZWindow {
-        let mut w = zvm::screen::ZWindow::default();
-        for (n, &v) in self.props.iter().enumerate() {
-            w.put_prop(n as u16, v);
-        }
-        // Same repair as the upper window (SQ-0647): a v6 window's grid is indexed by
-        // cols/rows too, so the archived cell count has to be made to match.
-        w.grid = grid_from_dto(
-            self.cols,
-            self.rows,
-            self.cells.iter().map(|c| zvm::screen::Cell {
-                ch: c.ch, style: c.style, fg: c.fg.to_z(), bg: c.bg.to_z(),
-            }).collect(),
-        );
-        w.fg = self.fg.to_z();
-        w.bg = self.bg.to_z();
-        w.texts = v6_texts_from_dto(&self.texts);
-        w.prose = self.prose.clone();
-        w.streamed = v6_texts_from_dto(&self.streamed);
-        w.retired = v6_texts_from_dto(&self.retired);
-        // `stream_origin` is deliberately absent: per-burst state that only lives
-        // between a clear and the read that follows it, meaningless across a save.
-        w
-    }
-}
-
-#[derive(Debug, serde::Serialize, serde::Deserialize)]
-struct V6WindowsDto { windows: Vec<ZWindowDto>, current: u8 }
-
-impl V6WindowsDto {
-    fn from_v6(v: &zvm::screen::V6Windows) -> Self {
-        V6WindowsDto { windows: v.windows.iter().map(ZWindowDto::from_window).collect(), current: v.current }
-    }
-    fn to_v6(&self) -> zvm::screen::V6Windows {
-        let mut v = zvm::screen::V6Windows::default();
-        for (i, wd) in self.windows.iter().take(8).enumerate() {
-            v.windows[i] = wd.to_window();
-        }
-        // ZMSD §8.4 has exactly eight v6 windows, and `windows[current]` is a fixed
-        // array index every `Engine::screen()` call performs — an archived `current`
-        // of 9 panicked on the first frame after the restore, not on the load
-        // (SQ-0647). Clamp to the last window rather than refusing the archive: the
-        // window table it names is still good, and the story selects a window again
-        // the moment it draws.
-        v.current = self.current.min(7);
-        v
-    }
-}
-
 /// One row of `history/index.json`: per-turn metadata + ordering. The bytes,
 /// map JSON, and transcript live in sibling `turn-NNNN.*` entries.
 #[derive(Debug, serde::Serialize, serde::Deserialize)]
@@ -674,7 +342,7 @@ pub struct ArchiveContents {
     /// Per-turn rewind/replay history (empty for archives without `history/`).
     /// `Arc`-wrapped to match `AppState::history` (SQ-1184) — see there.
     pub history: Vec<std::sync::Arc<crate::history::TurnRecord>>,
-    /// Saved Z-machine screen state (None for archives without `screen.json`).
+    /// Saved Z-machine screen state (None for archives without a screen entry).
     /// Applied on the host-mediated restore paths so the upper window is restored.
     /// For v6 stories this also carries the full 8-window table (`screen.v6`).
     pub screen: Option<zvm::screen::ScreenState>,
@@ -820,7 +488,7 @@ impl OwnedSessionRecord {
 /// `save` is the engine-tagged game state (from `Engine::save_state`); its
 /// `bytes` become `game.qzl` (Z-machine) or `game.glksave` (Glulx), and the
 /// `engine` tag becomes `engine.txt`. `screen`
-/// is the Z-machine `ScreenState` written to `screen.json` — `Some` only for the
+/// is the Z-machine `ScreenState` written to `screen.bin` as `zvm`'s own snapshot blob — `Some` only for the
 /// Z-machine (Glulx keeps its display inside `save.bytes`). `aux` is the engine's
 /// auxiliary key/value table.
 pub fn save_archive(
@@ -1124,13 +792,11 @@ pub(crate) fn build_archive_bytes(
     zip.start_file(ENTRY_COMMAND_HISTORY, options)?;
     zip.write_all(cmd_history_json.as_bytes())?;
 
-    // screen.json — Z-machine screen state (for host-mediated restore redraw).
+    // screen.bin — Z-machine screen state (for host-mediated restore redraw).
     // Z-machine-only: Glulx passes `None` (its display lives inside save.bytes).
     if let Some(scr) = screen {
-        let screen_json = serde_json::to_string(&ScreenDto::from_screen(scr))
-            .expect("ScreenDto is always serializable");
         zip.start_file(ENTRY_SCREEN, options)?;
-        zip.write_all(screen_json.as_bytes())?;
+        zip.write_all(&zvm::screen_snapshot::encode(scr))?;
     }
 
     // display.json — the v6 display list + Current Palette (SQ-0588). Absent for
@@ -1605,12 +1271,18 @@ pub fn load_archive(path: &Path) -> io::Result<ArchiveContents> {
         None => Vec::new(),
     };
 
-    // screen.json — saved Z-machine screen state (absent in pre-screen archives).
+    // screen.bin — saved Z-machine screen state (absent in pre-screen archives).
+    // An unreadable one is treated as "no saved screen" rather than as a broken
+    // archive: that is precisely the case Quetzal was designed for, and the story
+    // repaints. `zvm::screen_snapshot::decode` already repairs what CAN be
+    // repaired (a grid whose cell count disagrees with its own size, a v6
+    // `current` outside 0..=7), so what reaches here as an error is a file that
+    // is not a snapshot at all or one from a newer build.
     let screen = {
         let mut b = Vec::new();
         if let Ok(mut z) = zip.by_name(ENTRY_SCREEN) {
             if z.read_to_end(&mut b).is_ok() {
-                serde_json::from_slice::<ScreenDto>(&b).ok().map(|d| d.to_screen())
+                zvm::screen_snapshot::decode(&b).ok()
             } else {
                 None
             }
@@ -1922,7 +1594,7 @@ mod tests {
         let ac = load_archive(&path).expect("load");
         let _ = std::fs::remove_file(&path);
 
-        let scr = ac.screen.expect("screen.json present and restored");
+        let scr = ac.screen.expect("the screen entry is present and restored");
         assert_eq!(scr.upper_window_rows, 1, "split height round-trips");
         assert_eq!(scr.current_window, 1, "current window round-trips");
         assert_eq!(scr.cursor_col, 3, "cursor round-trips");
@@ -2866,7 +2538,7 @@ mod tests {
     // bump (update this pin + a migration/release note), never accidental drift.
     #[test]
     fn format_version_constant_is_frozen() {
-        assert_eq!(CURRENT_FORMAT_VERSION, 8, "archive format_version changed — see docs/release/save-format-policy.md");
+        assert_eq!(CURRENT_FORMAT_VERSION, 9, "archive format_version changed — see docs/release/save-format-policy.md");
     }
 
     // SQ-0531: `trigger` is persisted metadata, so its wire spelling is pinned —
@@ -2963,7 +2635,7 @@ mod tests {
     #[test]
     fn engine_save_round_trips_through_archive() {
         // A zvm-tagged EngineSave writes game.sav == its bytes + engine.txt ==
-        // "zmachine"; a Some(screen) writes screen.json; load returns the tag,
+        // "zmachine"; a Some(screen) writes screen.bin; load returns the tag,
         // bytes, and screen.
         let machine = dummy_machine();
         let es = zvm_es(&machine);
@@ -2975,7 +2647,7 @@ mod tests {
             "game.qzl holds the EngineSave bytes");
         assert_eq!(read_entry(&path, ENTRY_ENGINE).as_deref(), Some(DEFAULT_ENGINE.as_bytes()),
             "engine.txt holds the engine tag");
-        assert!(read_entry(&path, ENTRY_SCREEN).is_some(), "screen.json written for zvm");
+        assert!(read_entry(&path, ENTRY_SCREEN).is_some(), "screen.bin written for zvm");
 
         let ac = load_archive(&path).expect("load");
         let _ = std::fs::remove_file(&path);
@@ -2987,14 +2659,14 @@ mod tests {
 
     #[test]
     fn glulx_tagged_save_round_trips_without_screen() {
-        // A "glulx"-tagged save (no screen) writes NO screen.json; load reports
+        // A "glulx"-tagged save (no screen) writes NO screen entry; load reports
         // the glulx tag, the bytes, and screen == None.
         let es = EngineSave::new("glulx", 1, vec![9, 8, 7, 6]);
         let path = temp_archive_path("glulx-no-screen");
         save_archive(&path, &small_mapper(), &es, None, &BTreeMap::new(),
             &[], &[], &[], &[], &[], &[]).expect("save");
 
-        assert!(read_entry(&path, ENTRY_SCREEN).is_none(), "no screen.json for glulx");
+        assert!(read_entry(&path, ENTRY_SCREEN).is_none(), "no screen entry for glulx");
         assert_eq!(read_entry(&path, ENTRY_ENGINE).as_deref(), Some(b"glulx".as_slice()));
 
         let ac = load_archive(&path).expect("load");
@@ -3047,9 +2719,9 @@ mod tests {
             zip.write_all(mapper::persist::to_json(&small_mapper()).as_bytes()).unwrap();
             zip.start_file("game.qzl", options).unwrap();
             zip.write_all(&quetzal).unwrap();
-            // screen.json present, engine.txt absent (the old format).
+            // A screen entry present, engine.txt absent (the old format).
             zip.start_file(ENTRY_SCREEN, options).unwrap();
-            zip.write_all(serde_json::to_string(&ScreenDto::from_screen(&machine.screen)).unwrap().as_bytes()).unwrap();
+            zip.write_all(&zvm::screen_snapshot::encode(&machine.screen)).unwrap();
             zip.finish().unwrap();
         }
 
@@ -3057,78 +2729,9 @@ mod tests {
         let _ = std::fs::remove_file(&path);
         assert_eq!(ac.engine, DEFAULT_ENGINE, "absent engine.txt defaults to zmachine");
         assert_eq!(ac.save, quetzal, "raw Quetzal bytes load unchanged");
-        assert!(ac.screen.is_some(), "legacy screen.json still loads");
+        assert!(ac.screen.is_some(), "the screen entry of a pre-engine.txt archive still loads");
         assert_eq!(ac.engine_save().engine, DEFAULT_ENGINE);
         assert_eq!(ac.engine_save().bytes, quetzal);
-    }
-
-    #[test]
-    fn v6_window_table_round_trips_through_screen_dto() {
-        // A populated v6 8-window table (geometry, cursor, margins, colours, a
-        // grid glyph and a pixel-text run) survives ScreenDto → JSON → ScreenDto
-        // → ScreenState losslessly, so a host Save State reproduces v6 chrome.
-        use zvm::screen::{Cell, ScreenState, V6Text, V6Windows, ZColour};
-        let mut v6 = V6Windows::default();
-        v6.current = 7;
-        // Window 0: the main text window box + a colour pair.
-        let w0 = &mut v6.windows[0];
-        w0.put_prop(0, 40);  // y_coord
-        w0.put_prop(1, 44);  // x_coord
-        w0.put_prop(2, 160); // y_size
-        w0.put_prop(3, 234); // x_size
-        w0.put_prop(6, 8);   // left_margin
-        w0.fg = ZColour::Standard(2);
-        w0.bg = ZColour::True(0x1234);
-        // Window 1: a status grid with one styled glyph + a pixel-text run.
-        let w1 = &mut v6.windows[1];
-        w1.put_prop(3, 320);
-        w1.put_prop(2, 8);
-        w1.grid.resize(1, 4);
-        w1.grid.put(1, 2, 'Z', 0x01, ZColour::Standard(3), ZColour::Standard(9));
-        w1.texts.push(V6Text::derived(6, 139, "SCORE".into(), 2, ZColour::True24(0xABCDEF), ZColour::Default, zvm::screen::V6Cell::DEFAULT));
-        // …and the OTHER two pixel-run layers of the same window (SQ-0820): prose
-        // the window has streamed, and prose a move left frozen behind it. Both are
-        // live screen state nothing repaints after a restore.
-        w1.streamed.push(V6Text::derived(247, 76, "Current Bet:".into(), 0, ZColour::Standard(4), ZColour::True(0x0421), zvm::screen::V6Cell::DEFAULT));
-        w1.retired.push(V6Text::derived(49, 297, "SHOGUN".into(), 4, ZColour::Default, ZColour::Standard(9), zvm::screen::V6Cell::DEFAULT));
-
-        let src = ScreenState { v6: Some(v6), ..Default::default() };
-        let dto = ScreenDto::from_screen(&src);
-        let json = serde_json::to_string(&dto).unwrap();
-        let back: ScreenDto = serde_json::from_str(&json).unwrap();
-        let out = back.to_screen();
-
-        let rv = out.v6.expect("v6 table restored");
-        assert_eq!(rv.current, 7);
-        assert_eq!((rv.windows[0].y_coord, rv.windows[0].x_coord), (40, 44));
-        assert_eq!((rv.windows[0].y_size, rv.windows[0].x_size), (160, 234));
-        assert_eq!(rv.windows[0].left_margin, 8);
-        assert_eq!(rv.windows[0].fg, ZColour::Standard(2));
-        assert_eq!(rv.windows[0].bg, ZColour::True(0x1234));
-        let c: Cell = rv.windows[1].grid.cell(1, 2);
-        assert_eq!((c.ch, c.style, c.fg, c.bg), ('Z', 0x01, ZColour::Standard(3), ZColour::Standard(9)));
-        assert_eq!(rv.windows[1].texts.len(), 1);
-        assert_eq!(rv.windows[1].texts[0], V6Text::derived(6, 139, "SCORE".into(), 2, ZColour::True24(0xABCDEF), ZColour::Default, zvm::screen::V6Cell::DEFAULT));
-        assert_eq!(
-            rv.windows[1].streamed,
-            vec![V6Text::derived(247, 76, "Current Bet:".into(), 0, ZColour::Standard(4), ZColour::True(0x0421), zvm::screen::V6Cell::DEFAULT)],
-            "SQ-0820: a prose window's streamed runs are live screen state, so they ride in the archive beside `texts`"
-        );
-        assert_eq!(
-            rv.windows[1].retired,
-            vec![V6Text::derived(49, 297, "SHOGUN".into(), 4, ZColour::Default, ZColour::Standard(9), zvm::screen::V6Cell::DEFAULT)],
-            "SQ-0820: and so does the prose a move or resize froze in place"
-        );
-    }
-
-    #[test]
-    fn non_v6_screen_dto_has_no_v6_table() {
-        // A classic (v5) screen serializes v6 as None; to_screen restores None.
-        let src = zvm::screen::ScreenState::default(); // v6 = None
-        let dto = ScreenDto::from_screen(&src);
-        let json = serde_json::to_string(&dto).unwrap();
-        let back: ScreenDto = serde_json::from_str(&json).unwrap();
-        assert!(back.to_screen().v6.is_none());
     }
 
     #[test]
@@ -3202,99 +2805,160 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
+    // ── The screen entry (SQ-1401: `zvm`'s blob, not our mirror) ─────────────
+
+    /// A populated v6 8-window table (geometry, cursor, margins, colours, a grid
+    /// glyph and all three pixel-run layers) survives `save_archive` →
+    /// `load_archive` losslessly, so a host Save State reproduces v6 chrome.
+    ///
+    /// The CODEC is `zvm`'s and is tested there (`zvm::screen_snapshot::tests`,
+    /// plus `screen_snapshot_stories` against real games). What this asks is the
+    /// archive's own half: that `screen.bin` is written, read back, and handed to
+    /// the caller as the same screen.
+    #[test]
+    fn a_v6_window_table_round_trips_through_the_archive() {
+        use zvm::screen::{V6Text, V6Windows, ZColour};
+        let mut v6 = V6Windows::default();
+        v6.current = 7;
+        // Window 0: the main text window box + a colour pair.
+        let w0 = &mut v6.windows[0];
+        w0.put_prop(0, 40);  // y_coord
+        w0.put_prop(1, 44);  // x_coord
+        w0.put_prop(2, 160); // y_size
+        w0.put_prop(3, 234); // x_size
+        w0.put_prop(6, 8);   // left_margin
+        w0.fg = ZColour::Standard(2);
+        w0.bg = ZColour::True(0x1234);
+        // Window 1: a status grid with one styled glyph + a pixel-text run.
+        let w1 = &mut v6.windows[1];
+        w1.put_prop(3, 320);
+        w1.put_prop(2, 8);
+        w1.grid.resize(1, 4);
+        w1.grid.put(1, 2, 'Z', 0x01, ZColour::Standard(3), ZColour::Standard(9));
+        w1.texts.push(V6Text::derived(6, 139, "SCORE".into(), 2, ZColour::True24(0xABCDEF), ZColour::Default, zvm::screen::V6Cell::DEFAULT));
+        // …and the OTHER two pixel-run layers of the same window (SQ-0820): prose
+        // the window has streamed, and prose a move left frozen behind it. Both are
+        // live screen state nothing repaints after a restore.
+        w1.streamed.push(V6Text::derived(247, 76, "Current Bet:".into(), 0, ZColour::Standard(4), ZColour::True(0x0421), zvm::screen::V6Cell::DEFAULT));
+        w1.retired.push(V6Text::derived(49, 297, "SHOGUN".into(), 4, ZColour::Default, ZColour::Standard(9), zvm::screen::V6Cell::DEFAULT));
+
+        let mut machine = dummy_machine();
+        machine.screen.v6 = Some(v6);
+        machine.screen.v6_input_window = 3;
+        let path = temp_archive_path("v6-screen");
+        save_archive_m(&path, &small_mapper(), &machine, &[], &[], &[], &[], &[]).expect("save");
+        let ac = load_archive(&path).expect("load");
+        let _ = std::fs::remove_file(&path);
+
+        let scr = ac.screen.expect("screen.bin present and restored");
+        assert_eq!(scr.v6_input_window, 3, "SQ-0749: the window the game reads through");
+        let rv = scr.v6.expect("v6 table restored");
+        assert_eq!(rv.current, 7);
+        assert_eq!((rv.windows[0].y_coord, rv.windows[0].x_coord), (40, 44));
+        assert_eq!((rv.windows[0].y_size, rv.windows[0].x_size), (160, 234));
+        assert_eq!(rv.windows[0].left_margin, 8);
+        assert_eq!(rv.windows[0].fg, ZColour::Standard(2));
+        assert_eq!(rv.windows[0].bg, ZColour::True(0x1234));
+        let c = rv.windows[1].grid.cell(1, 2);
+        assert_eq!((c.ch, c.style, c.fg, c.bg), ('Z', 0x01, ZColour::Standard(3), ZColour::Standard(9)));
+        assert_eq!(rv.windows[1].texts.len(), 1);
+        assert_eq!(rv.windows[1].texts[0], V6Text::derived(6, 139, "SCORE".into(), 2, ZColour::True24(0xABCDEF), ZColour::Default, zvm::screen::V6Cell::DEFAULT));
+        assert_eq!(
+            rv.windows[1].streamed,
+            vec![V6Text::derived(247, 76, "Current Bet:".into(), 0, ZColour::Standard(4), ZColour::True(0x0421), zvm::screen::V6Cell::DEFAULT)],
+            "SQ-0820: a prose window's streamed runs are live screen state, so they ride in the archive beside `texts`"
+        );
+        assert_eq!(
+            rv.windows[1].retired,
+            vec![V6Text::derived(49, 297, "SHOGUN".into(), 4, ZColour::Default, ZColour::Standard(9), zvm::screen::V6Cell::DEFAULT)],
+            "SQ-0820: and so does the prose a move or resize froze in place"
+        );
+    }
+
+    /// A classic (v5) screen carries no window table through the archive, and the
+    /// colour pair travels for real — below Version 6 there is nothing else that
+    /// holds the game's selected ink (SQ-0551).
+    #[test]
+    fn a_classic_screen_round_trips_through_the_archive_with_its_colour_pair() {
+        let mut machine = dummy_machine();
+        machine.screen.upper_window_rows = 1;
+        machine.screen.upper.resize(1, 6);
+        machine.screen.upper.put(1, 2, 'Z', 2, zvm::screen::ZColour::Standard(3), zvm::screen::ZColour::Default);
+        machine.screen.current_fg = zvm::screen::ZColour::Standard(9);
+        machine.screen.current_bg = zvm::screen::ZColour::True(0x03E0);
+        let path = temp_archive_path("v5-screen");
+        save_archive_m(&path, &small_mapper(), &machine, &[], &[], &[], &[], &[]).expect("save");
+        let ac = load_archive(&path).expect("load");
+        let _ = std::fs::remove_file(&path);
+
+        let scr = ac.screen.expect("screen.bin present and restored");
+        assert!(scr.v6.is_none(), "a classic screen has no v6 window table");
+        assert_eq!(scr.upper_window_rows, 1);
+        assert_eq!(scr.upper.cell(1, 2).ch, 'Z');
+        assert_eq!(scr.current_fg, zvm::screen::ZColour::Standard(9));
+        assert_eq!(scr.current_bg, zvm::screen::ZColour::True(0x03E0));
+    }
+
     // ── SQ-0647: a restored screen is validated, not trusted ─────────────────
 
-    /// `screen.json` is a file on the player's disk; nothing guarantees its `cells`
-    /// vector matches its own `cols × rows`. zvm indexes the grid by those dimensions
-    /// (`UpperWindow::resize_preserving`, and every read after it), so a short vector
-    /// panicked the app on the first repaint AFTER the restore — never on the load,
-    /// where it might have been diagnosed. Repair the grid on the way in instead.
+    /// `screen.bin` is a file on the player's disk; nothing guarantees its grids'
+    /// cell vectors match their own `cols × rows`, or that a v6 `current` names one
+    /// of the eight windows ZMSD §8.4 has. zvm indexes both without checking, so
+    /// either lie panicked the app on the first repaint AFTER the restore, never on
+    /// the load where it might have been diagnosed.
+    ///
+    /// The repair itself is `zvm::screen_snapshot::decode`'s and is tested there.
+    /// What this asks is the end-to-end contract: an archive holding such a screen
+    /// still LOADS, and what it hands back is safe to drive. The loader's existing
+    /// contract for an unreadable screen entry is tolerance (the story repaints), so
+    /// a merely INCONSISTENT one is repaired rather than dropped — the text it holds
+    /// is still the text that was on screen.
     #[test]
-    fn a_short_cell_vector_is_repaired_rather_than_left_to_panic() {
-        let mut dto = ScreenDto::from_screen(&zvm::screen::ScreenState::default());
-        dto.cols = 8;
-        dto.rows = 4;
-        dto.cells = vec![('x', 0); 3]; // truncated file: 3 cells for a 32-cell grid
-
-        let mut scr = dto.to_screen();
-        assert_eq!(
-            scr.upper.cells.len(),
-            scr.upper.cols as usize * scr.upper.rows as usize,
-            "the grid invariant every consumer assumes",
-        );
-        assert_eq!(scr.upper.cell(1, 1).ch, 'x', "what the file DID hold is kept");
-        // The first repaint after a restore: a resize to the live pane. Pre-fix this
-        // is the panic (`cells[r * cols + c]` past the end of a 3-cell vector).
-        scr.upper.resize_preserving(4, 6);
-        assert_eq!(scr.upper.cells.len(), 24);
-    }
-
-    /// A too-LONG vector is the same defect from the other side, and absurd dimensions
-    /// are a third: `65535 × 65535` would ask for a four-billion-cell allocation.
-    /// Both are clamped to something a screen could actually be — a restore reconciles
-    /// the saved screen against the current pane anyway.
-    #[test]
-    fn oversized_screen_dimensions_and_vectors_are_clamped() {
-        let mut dto = ScreenDto::from_screen(&zvm::screen::ScreenState::default());
-        dto.cols = 4;
-        dto.rows = 2;
-        dto.cells = vec![('y', 0); 500]; // far more cells than the grid claims
-        let scr = dto.to_screen();
-        assert_eq!(scr.upper.cells.len(), 8, "trimmed to cols × rows");
-
-        let mut dto = ScreenDto::from_screen(&zvm::screen::ScreenState::default());
-        dto.cols = u16::MAX;
-        dto.rows = u16::MAX;
-        dto.cells = Vec::new();
-        let scr = dto.to_screen();
-        assert!(scr.upper.cols <= MAX_GRID_COLS && scr.upper.rows <= MAX_GRID_ROWS, "clamped");
-        assert_eq!(scr.upper.cells.len(), scr.upper.cols as usize * scr.upper.rows as usize);
-    }
-
-    /// ZMSD §8.4 has eight v6 windows and `windows[current]` is a fixed-array index
-    /// that `Engine::screen()` performs on every frame — so an archived `current` of 9
-    /// panicked on the frame after the restore, not on the load. Clamp it.
-    #[test]
-    fn an_out_of_range_current_v6_window_is_clamped() {
-        let mut v6 = zvm::screen::V6Windows::default();
-        v6.current = 3;
-        let src = zvm::screen::ScreenState { v6: Some(v6), ..Default::default() };
-        let mut dto = ScreenDto::from_screen(&src);
-        dto.v6.as_mut().unwrap().current = 9; // hand-edited / corrupt archive
-
-        let rv = dto.to_screen().v6.expect("v6 table restored");
-        assert!((rv.current as usize) < rv.windows.len(), "current indexes a real window");
-        let _ = &rv.windows[rv.current as usize]; // pre-fix: index out of bounds
-    }
-
-    /// End to end: an archive whose `screen.json` carries both defects still loads,
-    /// and what it hands back is safe to drive. The loader's existing contract for a
-    /// bad `screen.json` is tolerance (a corrupt one restores as "no saved screen" and
-    /// the story repaints), so a merely INCONSISTENT one is repaired, not rejected —
-    /// the text it holds is still the text that was on screen.
-    #[test]
-    fn an_archive_with_an_inconsistent_screen_json_loads_and_is_safe() {
-        let machine = dummy_machine();
-        let path = temp_archive_path("screen-corrupt");
-        save_archive_m(&path, &small_mapper(), &machine, &[], &[], &[], &[], &[]).expect("save");
-
-        // Rewrite the archive with a screen.json whose grid and window table lie.
+    fn an_archive_with_an_inconsistent_screen_entry_loads_and_is_safe() {
+        // A screen whose numbers lie in three directions at once: an upper grid
+        // claiming 20×5 with two cells in it, a v6 window grid claiming 30×9 with
+        // six, and a `current` naming a ninth window.
+        let mut machine = dummy_machine();
+        machine.screen.upper.cols = 20;
+        machine.screen.upper.rows = 5;
+        machine.screen.upper.cells = vec![zvm::screen::Cell::new('q', 0, zvm::screen::ZColour::Default, zvm::screen::ZColour::Default); 2];
         let mut v6 = zvm::screen::V6Windows::default();
         v6.windows[1].grid.resize(2, 3);
-        let src = zvm::screen::ScreenState { v6: Some(v6), ..Default::default() };
-        let mut dto = ScreenDto::from_screen(&src);
-        dto.cols = 20;
-        dto.rows = 5;
-        dto.cells = vec![('q', 0); 2];
-        {
-            let v6d = dto.v6.as_mut().unwrap();
-            v6d.current = 200;
-            v6d.windows[1].cols = 30; // window grid claims 30×9, carries 6 cells
-            v6d.windows[1].rows = 9;
-        }
-        let bad_json = serde_json::to_string(&dto).unwrap();
+        v6.windows[1].grid.cols = 30;
+        v6.windows[1].grid.rows = 9;
+        v6.current = 200;
+        machine.screen.v6 = Some(v6);
 
-        let rewritten = temp_archive_path("screen-corrupt-out");
+        let path = temp_archive_path("screen-corrupt");
+        save_archive_m(&path, &small_mapper(), &machine, &[], &[], &[], &[], &[]).expect("save");
+        let ac = load_archive(&path).expect("an inconsistent screen entry still loads");
+        let _ = std::fs::remove_file(&path);
+
+        let mut scr = ac.screen.expect("screen restored (repaired), not dropped");
+        assert_eq!(scr.upper.cells.len(), scr.upper.cols as usize * scr.upper.rows as usize);
+        assert_eq!(scr.upper.cell(1, 1).ch, 'q', "what the file DID hold is kept");
+        let rv = scr.v6.as_ref().expect("v6 table");
+        assert!((rv.current as usize) < rv.windows.len(), "current indexes a real window");
+        for w in &rv.windows {
+            assert_eq!(w.grid.cells.len(), w.grid.cols as usize * w.grid.rows as usize, "every v6 grid is consistent");
+        }
+        // Perturb exactly as the next frame would: index the current window and resize
+        // the upper grid to the live pane. Pre-fix, either one panics.
+        let _ = &rv.windows[rv.current as usize];
+        scr.upper.resize_preserving(24, 80);
+        assert_eq!(scr.upper.cells.len(), 24 * 80);
+    }
+
+    /// A screen entry that is not a snapshot at all — a hand-edited or foreign file
+    /// — restores as "no saved screen" rather than failing the whole archive. That
+    /// is precisely the case Quetzal was designed for: the story repaints.
+    #[test]
+    fn an_unreadable_screen_entry_loads_the_archive_without_a_screen() {
+        let machine = dummy_machine();
+        let path = temp_archive_path("screen-foreign");
+        save_archive_m(&path, &small_mapper(), &machine, &[], &[], &[], &[], &[]).expect("save");
+
+        let rewritten = temp_archive_path("screen-foreign-out");
         {
             let src_file = std::fs::File::open(&path).unwrap();
             let mut zin = zip::ZipArchive::new(src_file).unwrap();
@@ -3306,7 +2970,7 @@ mod tests {
                 let mut buf = Vec::new();
                 e.read_to_end(&mut buf).unwrap();
                 if name == ENTRY_SCREEN {
-                    buf = bad_json.as_bytes().to_vec();
+                    buf = b"not a screen snapshot at all".to_vec();
                 }
                 zout.start_file(name, zip::write::SimpleFileOptions::default()).unwrap();
                 zout.write_all(&buf).unwrap();
@@ -3314,22 +2978,11 @@ mod tests {
             zout.finish().unwrap();
         }
 
-        let ac = load_archive(&rewritten).expect("an inconsistent screen.json still loads");
+        let ac = load_archive(&rewritten).expect("the archive still loads");
         let _ = std::fs::remove_file(&path);
         let _ = std::fs::remove_file(&rewritten);
-
-        let mut scr = ac.screen.expect("screen restored (repaired), not dropped");
-        assert_eq!(scr.upper.cells.len(), scr.upper.cols as usize * scr.upper.rows as usize);
-        let rv = scr.v6.as_ref().expect("v6 table");
-        assert!((rv.current as usize) < rv.windows.len());
-        for w in &rv.windows {
-            assert_eq!(w.grid.cells.len(), w.grid.cols as usize * w.grid.rows as usize, "every v6 grid is consistent");
-        }
-        // Perturb exactly as the next frame would: index the current window and resize
-        // the upper grid to the live pane. Pre-fix, either one panics.
-        let _ = &rv.windows[rv.current as usize];
-        scr.upper.resize_preserving(24, 80);
-        assert_eq!(scr.upper.cells.len(), 24 * 80);
+        assert!(ac.screen.is_none(), "an unreadable screen entry is 'no saved screen'");
+        assert_eq!(ac.save, machine.save_quetzal(), "and the game bytes are untouched");
     }
 
     #[test]

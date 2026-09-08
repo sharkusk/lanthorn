@@ -3974,7 +3974,7 @@ mod tests {
     fn glulx_state_round_trips_through_lanthorn_archive() {
         use std::collections::BTreeMap;
         // A Glulx engine save survives a .lanthorn archive round-trip: write its
-        // EngineSave (no screen.json), reload, and restore into a FRESH session
+        // EngineSave (no screen entry), reload, and restore into a FRESH session
         // through Engine::restore_state — state is preserved, no panic.
         let mut sess = GlulxSession::new(simple_line_image(), 80, 24, true, false, false, (1, 1), None, &[]).expect("new");
         let _ = sess.take_transcript(); // drain the banner
@@ -3990,7 +3990,7 @@ mod tests {
         let ac = crate::archive::load_archive(&path).expect("load archive");
         let _ = std::fs::remove_file(&path);
         assert_eq!(ac.engine, GLULX_ENGINE, "archive records the glulx tag");
-        assert!(ac.screen.is_none(), "Glulx archive carries no screen.json");
+        assert!(ac.screen.is_none(), "Glulx archive carries no screen entry");
         assert_eq!(ac.save, es.bytes, "archived bytes are the Glulx save");
 
         let mut fresh = GlulxSession::new(simple_line_image(), 80, 24, true, false, false, (1, 1), None, &[]).expect("new");

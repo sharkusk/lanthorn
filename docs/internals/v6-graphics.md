@@ -2478,7 +2478,9 @@ is the mode almost everybody plays in. Shogun lost the other layer: one keypress
 its boot it is holding all nine frozen title lines, and a restore used to hand them
 back blank or leave the previous screen's standing over the new one.
 
-All three layers now travel together in `screen.json`, as the game's own runs in its
+All three layers now travel together in the archive's `screen.bin`, which since
+SQ-1401 is `zvm`'s own versioned screen snapshot rather than an app-side mirror of
+its types. They travel as the game's own runs in its
 own native pixels — a recipe like `texts` beside them, with no cell coordinate, font
 metric or picker state anywhere in it, so one archive restores identically into an
 80×24 terminal and a 200×80 one and draws the same on either graphics backend. The one

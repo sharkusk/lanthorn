@@ -974,8 +974,8 @@ impl GameSession {
         // `ScreenState` for `@restart`, and `session::restore_screen` assigns a
         // whole one over the live machine for a host Save State. A licence held
         // there would be silently reset to `ScreenState::default()`'s by BOTH —
-        // `restore_screen`'s own `..Default::default()` in `archive::ScreenDto` is
-        // exactly that hole. On the `Machine` all three survivals are free: an
+        // `zvm::screen_snapshot::decode`'s own `..Default::default()` is exactly
+        // that hole. On the `Machine` all three survivals are free: an
         // `@restart` re-boots through `reset.rs`'s `MachineBoot::resolve` (which the
         // compiler forces to re-ask), a Quetzal `@restore` touches memory and not
         // screen state, and a host Save State keeps the licence THIS run was
@@ -4487,6 +4487,15 @@ fn sink_mut(machine: &mut Machine) -> &mut CaptureSink {
 /// screen also carries the width its game was laid out for
 /// ([`GameSession::note_restored_screen_cols`], SQ-0681) — routing every restore
 /// through one function is what keeps that from being missed on a path.
+///
+/// This is `lanthorn`'s side of [`zvm::cpu::exec::Machine::restore_screen_snapshot`],
+/// and the three duties that method's docs hand back to the host are exactly the
+/// three below it: the sink's buffer mode, the v6 colour pair re-derived from the
+/// restored window table, and [`reconcile_restored_screen_size`]. The archive
+/// carries the screen as `zvm`'s own blob and hands `load_archive`'s caller the
+/// decoded `ScreenState` (`zvm::screen_snapshot::decode`), so this function
+/// stays the ONE place a restored screen is installed — the alternative, calling
+/// the machine method from each restore path, would put the install in six.
 pub fn restore_screen(session: &mut GameSession, screen: zvm::screen::ScreenState) {
     // The upper window's grid width IS the restored game's frame of reference:
     // it was last sized from header byte $21 as the SAVING session declared it
@@ -4521,8 +4530,10 @@ pub fn restore_screen(session: &mut GameSession, screen: zvm::screen::ScreenStat
     // the restored screen self-consistent and needs nothing persisted.
     //
     // Versions 1–5/7/8 have no window table to derive from, and nothing else in
-    // the archive holds the game's selected colour, so THEY carry the pair in
-    // `screen.json` instead (see `ScreenDto::current_fg`) — it is already in
+    // the archive holds the game's selected colour, so THEY carry the pair in the
+    // screen snapshot instead (see `zvm::screen_snapshot`, which writes the pair
+    // for real below Version 6 and as `Default` at and above it, so neither
+    // mechanism can quietly paper over the other going wrong) — it is already in
     // `screen` by the time we get here, and the derivation below simply doesn't
     // fire for them. Beyond Zork, Photopia and Nameless all set colours and
     // depend on that path.
@@ -8057,8 +8068,8 @@ mod tests {
         let mem = Memory::new(minimal_v6_story()).expect("minimal v6 story");
         let mut machine = Machine::with_output(mem, Box::new(CaptureSink::new()));
         let mut windows: [ZWindow; 8] = Default::default();
-        windows[7] = ZWindow { x_size: 64, y_size: 48, ..Default::default() };
-        machine.screen.v6 = Some(V6Windows { windows, current: 7 });
+        windows[7] = ZWindow::new(0, 0, 48, 64);
+        machine.screen.v6 = Some(V6Windows::new(windows, 7));
         machine.queue_picture_event(PictureEvent::new(1, 7, 2, 3, false, 0, None, false, (1, 1, 64, 48)));
 
         // Construct the session directly (bypassing the constructor's boot
@@ -8135,8 +8146,8 @@ mod tests {
         let mem = Memory::new(minimal_v6_story()).expect("minimal v6 story");
         let mut machine = Machine::with_output(mem, Box::new(CaptureSink::new()));
         let mut windows: [ZWindow; 8] = Default::default();
-        windows[7] = ZWindow { x_size: 320, y_size: 200, ..Default::default() };
-        machine.screen.v6 = Some(V6Windows { windows, current: 7 });
+        windows[7] = ZWindow::new(0, 0, 200, 320);
+        machine.screen.v6 = Some(V6Windows::new(windows, 7));
 
         let blorb = crate::graphics::test_blorb_with_pict(1, &png_bytes_red(320, 200));
         let mut sess = GameSession {
@@ -8204,8 +8215,8 @@ mod tests {
         let mut windows: [ZWindow; 8] = Default::default();
         // Window 0 as Zork Zero frames it: a 464×320 prose column inside the
         // graphical border, wide enough that a 4×4 unit-space tile cannot span it.
-        windows[0] = ZWindow { x_size: 464, y_size: 320, ..Default::default() };
-        machine.screen.v6 = Some(V6Windows { windows, current: 0 });
+        windows[0] = ZWindow::new(0, 0, 320, 464);
+        machine.screen.v6 = Some(V6Windows::new(windows, 0));
 
         let blorb = crate::graphics::test_blorb_with_pict(1, &png_bytes_2x2_red());
         let mut sess = GameSession {
@@ -8259,8 +8270,8 @@ mod tests {
         let mem = Memory::new(minimal_v6_story()).expect("minimal v6 story");
         let mut machine = Machine::with_output(mem, Box::new(CaptureSink::new()));
         let mut windows: [ZWindow; 8] = Default::default();
-        windows[7] = ZWindow { x_size: 64, y_size: 48, ..Default::default() };
-        machine.screen.v6 = Some(V6Windows { windows, current: 7 });
+        windows[7] = ZWindow::new(0, 0, 48, 64);
+        machine.screen.v6 = Some(V6Windows::new(windows, 7));
 
         // A 2×2 picture; every draw covers 4×4 unit pixels (V6_ART_SCALE).
         let blorb = crate::graphics::test_blorb_with_pict(1, &png_bytes_2x2_red());
@@ -8344,9 +8355,9 @@ mod tests {
         let mem = Memory::new(minimal_v6_story()).expect("minimal v6 story");
         let mut machine = Machine::with_output(mem, Box::new(CaptureSink::new()));
         let mut windows: [ZWindow; 8] = Default::default();
-        windows[0] = ZWindow { x_size: 640, y_size: 400, ..Default::default() };
-        windows[7] = ZWindow { x_size: 64, y_size: 48, ..Default::default() };
-        machine.screen.v6 = Some(V6Windows { windows, current: 7 });
+        windows[0] = ZWindow::new(0, 0, 400, 640);
+        windows[7] = ZWindow::new(0, 0, 48, 64);
+        machine.screen.v6 = Some(V6Windows::new(windows, 7));
 
         let blorb = crate::graphics::test_blorb_with_pict(1, &png_bytes_2x2_red());
         let mut sess = GameSession {
@@ -8405,8 +8416,8 @@ mod tests {
         let mem = Memory::new(minimal_v6_story()).expect("minimal v6 story");
         let mut machine = Machine::with_output(mem, Box::new(CaptureSink::new()));
         let mut windows: [ZWindow; 8] = Default::default();
-        windows[7] = ZWindow { x_size: 320, y_size: 200, ..Default::default() };
-        machine.screen.v6 = Some(V6Windows { windows, current: 7 });
+        windows[7] = ZWindow::new(0, 0, 200, 320);
+        machine.screen.v6 = Some(V6Windows::new(windows, 7));
 
         let blorb = crate::graphics::test_blorb_with_pict(3, &png_bytes_red(23, 200));
         let mut sess = GameSession {
@@ -8445,8 +8456,8 @@ mod tests {
         let mem = Memory::new(minimal_v6_story()).expect("minimal v6 story");
         let mut machine = Machine::with_output(mem, Box::new(CaptureSink::new()));
         let mut windows: [ZWindow; 8] = Default::default();
-        windows[7] = ZWindow { x_size: 64, y_size: 48, ..Default::default() };
-        machine.screen.v6 = Some(V6Windows { windows, current: 7 });
+        windows[7] = ZWindow::new(0, 0, 48, 64);
+        machine.screen.v6 = Some(V6Windows::new(windows, 7));
         // Draw, then erase the same picture — the erase must clear back to
         // transparent over the picture's own footprint (2x2, ZMSD §15).
         machine.queue_picture_event(PictureEvent::new(1, 7, 2, 3, false, 0, None, false, (1, 1, 64, 48)));
@@ -8500,15 +8511,16 @@ mod tests {
         // Window 0: the main scrolling window, at (0, 1) cell, 80x20 cells.
         // attributes 15 = the boot default (wrapping on → transcript Buffer;
         // a cleared wrapping bit would mean positioned paint mode → Grid).
-        windows[0] = ZWindow { x_coord: 1, y_coord: 17, x_size: 640, y_size: 320, attributes: 15, ..Default::default() };
+        windows[0] = ZWindow::new(17, 1, 320, 640);
+        windows[0].attributes = 15;
         windows[0].grid.resize(20, 80);
         // Window 1: a one-row (16px) status strip along the top, at (0, 0) cell, 80x1 cells.
-        windows[1] = ZWindow { x_coord: 1, y_coord: 1, x_size: 640, y_size: 16, ..Default::default() };
+        windows[1] = ZWindow::new(1, 1, 16, 640);
         windows[1].grid.resize(1, 80);
         // Window 7: a small picture window at (2, 1) cell, 8x6 cells.
-        windows[7] = ZWindow { x_coord: 17, y_coord: 17, x_size: 64, y_size: 96, ..Default::default() };
+        windows[7] = ZWindow::new(17, 17, 96, 64);
         windows[7].grid.resize(6, 8);
-        machine.screen.v6 = Some(V6Windows { windows, current: 1 });
+        machine.screen.v6 = Some(V6Windows::new(windows, 1));
 
         let mut sess = GameSession {
             machine, quit: false, pending: InputKind::Line, strip_prompt: true, pen_before_char: None, output_continued: false,
@@ -8594,17 +8606,17 @@ mod tests {
         let mut machine = Machine::with_output(mem, Box::new(CaptureSink::new()));
         let mut windows: [ZWindow; 8] = Default::default();
         // Window 1: a real status window with one paint run.
-        windows[1] = ZWindow {
-            x_coord: 1, y_coord: 1, x_size: 640, y_size: 8,
-            y_cursor: 1, x_cursor: 9,
-            left_margin: 2, right_margin: 3,
-            font_number: 1, font_size: 0x0808,
-            attributes: 3, // bit0 wrap + bit1 scroll
-            ..Default::default()
-        };
+        windows[1] = ZWindow::new(1, 1, 8, 640);
+        windows[1].y_cursor = 1;
+        windows[1].x_cursor = 9;
+        windows[1].left_margin = 2;
+        windows[1].right_margin = 3;
+        windows[1].font_number = 1;
+        windows[1].font_size = 0x0808;
+        windows[1].attributes = 3; // bit0 wrap + bit1 scroll
         windows[1].texts.push(zvm::screen::V6Text::derived(1, 1, "Score: 10".to_string(), 0, ZColour::Default, ZColour::Default, zvm::screen::V6Cell::DEFAULT));
         // Window 3 stays entirely default (blank) — must be skipped.
-        machine.screen.v6 = Some(V6Windows { windows, current: 1 });
+        machine.screen.v6 = Some(V6Windows::new(windows, 1));
 
         let mut sess = GameSession {
             machine, quit: false, pending: InputKind::Line, strip_prompt: true, pen_before_char: None, output_continued: false,
@@ -8658,8 +8670,8 @@ mod tests {
         let mem = Memory::new(minimal_v6_story()).unwrap();
         let mut machine = Machine::with_output(mem, Box::new(CaptureSink::new()));
         let mut windows: [ZWindow; 8] = Default::default();
-        windows[7] = ZWindow { x_size: 0xFFFF, y_size: 0xFFFF, ..Default::default() };
-        machine.screen.v6 = Some(V6Windows { windows, current: 7 });
+        windows[7] = ZWindow::new(0, 0, 0xFFFF, 0xFFFF);
+        machine.screen.v6 = Some(V6Windows::new(windows, 7));
         let mut sess = GameSession {
             machine, quit: false, pending: InputKind::Line, strip_prompt: true, pen_before_char: None, output_continued: false,
             disasm_cache: std::cell::RefCell::new(None),
@@ -9159,8 +9171,8 @@ mod tests {
         let mem = Memory::new(minimal_v6_story()).expect("minimal v6 story");
         let mut machine = Machine::with_output(mem, Box::new(CaptureSink::new()));
         let mut windows: [ZWindow; 8] = Default::default();
-        windows[7] = ZWindow { x_size: 64, y_size: 48, ..Default::default() };
-        machine.screen.v6 = Some(V6Windows { windows, current: 7 });
+        windows[7] = ZWindow::new(0, 0, 48, 64);
+        machine.screen.v6 = Some(V6Windows::new(windows, 7));
         let metric = V6Metric::fixed(V6Cell::DEFAULT);
         machine.screen.v6_mut().unwrap().paint_run(
             7,
@@ -9253,8 +9265,8 @@ mod tests {
         // SAME generation number the memo was keyed on.
         let mut saved = zvm::screen::ScreenState::default();
         let mut windows: [ZWindow; 8] = Default::default();
-        windows[7] = ZWindow { x_size: 64, y_size: 48, ..Default::default() };
-        saved.v6 = Some(V6Windows { windows, current: 7 });
+        windows[7] = ZWindow::new(0, 0, 48, 64);
+        saved.v6 = Some(V6Windows::new(windows, 7));
         let metric = V6Metric::fixed(V6Cell::DEFAULT);
         saved.v6_mut().unwrap().paint_run(
             7,

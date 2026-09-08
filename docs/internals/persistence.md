@@ -161,6 +161,31 @@ Quetzal save and no sidecar, its in-game `SAVE GAME` and the host Ctrl+S both
 write here. Named slots, auto-save (per turn) and auto-load (resume on launch)
 all operate on this layer.
 
+**The Z-machine screen rides beside the VM save, not inside it (SQ-1401).** The
+archive's `screen.bin` entry is `zvm`'s own versioned binary snapshot of
+`ScreenState` — windows, cursor, text attributes, the upper-window grid, and for
+a Version 6 story the whole eight-window table with its colours and all three of
+each window's pixel-run layers. `Machine::screen_snapshot` writes it and
+`Machine::restore_screen_snapshot` (or, in the app, `screen_snapshot::decode` plus
+`session::restore_screen`) reads it back. Three things about that arrangement are
+deliberate:
+
+- **It is separate from `game.qzl` because that file is interchange-grade.** An
+  `@save`-triggered archive promises that unzipping `game.qzl` hands another
+  interpreter a standard Quetzal file, so nothing may be wrapped around it.
+- **It lives in `zvm` because the mirror kept going stale.** The archive used to
+  carry a serde copy of six `zvm` screen types, maintained by hand across a crate
+  boundary with nothing checking that the two still agreed — and every embedder
+  would have had to write it again. One versioned blob, with the version number
+  in it, is the whole fix.
+- **It is backend- and terminal-neutral.** v6 geometry is native pixels, and there
+  are no cell coordinates, font metrics or picker state anywhere in it, so a save
+  moves between kitty/half-blocks/sixel and between terminal sizes. What it does
+  NOT carry is anything derived: the request flags a turn drains, the v6 change
+  counter, the grid pen. A restore recomputes those, and
+  `reconcile_restored_screen_size` then re-declares the size — because a restore
+  into a different pane is a resize the game never saw.
+
 ## Layer 3 — automatic per-story persistence (no explicit save)
 
 This layer needs **no player action and no Save State**. lanthorn keeps a small

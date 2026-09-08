@@ -3,7 +3,7 @@
 //! 1. `v6_host_save_state_restore_is_byte_identical`: boot Zork0, drive a turn,
 //!    render the v6 raster composite, save through the REAL archive Save State
 //!    path (`save_archive_meta_pics` + the v6 window table now inside
-//!    `screen.json`), restore into a FRESH session, render again, and assert the
+//!    `screen.bin`), restore into a FRESH session, render again, and assert the
 //!    two composites are byte-for-byte equal. This proves the v6 window table
 //!    (`screen.v6`) and the per-window graphics canvases (`pictures_canvas`)
 //!    both survive a host Save State losslessly.
@@ -98,7 +98,7 @@ fn v6_host_save_state_restore_is_byte_identical() {
     assert!(before.pixels().any(|p| p[3] > 0), "before-composite has content");
 
     // Save through the REAL host Save State archive path: the v6 window table
-    // rides `screen.json` (Some(&machine.screen)), the graphics canvases ride
+    // rides `screen.bin` (Some(&machine.screen)), the graphics canvases ride
     // `pictures/win-N.png` (session.pictures_png()).
     let mapper = mapper::mapper::Mapper::default();
     let es = Engine::save_state(&session);
@@ -126,7 +126,7 @@ fn v6_host_save_state_restore_is_byte_identical() {
     let _ = std::fs::remove_file(&path);
     assert!(
         ac.screen.as_ref().and_then(|s| s.v6.as_ref()).is_some(),
-        "the v6 window table must be persisted in screen.json"
+        "the v6 window table must be persisted in screen.bin"
     );
     assert!(!ac.pictures.is_empty(), "graphics canvases must be persisted");
 

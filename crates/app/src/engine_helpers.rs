@@ -28,7 +28,7 @@ pub(crate) fn zvm_session_mut(engine: &mut dyn Engine) -> &mut GameSession {
 
 /// Non-panicking downcast to the Z-machine session: `Some` for a Z-code game,
 /// `None` for Glulx. The archive-save paths use it to source the **zvm-only**
-/// `screen.json` (`Some(&z.machine.screen)` for the Z-machine, `None` for Glulx —
+/// `screen.bin` (`Some(&z.machine.screen)` for the Z-machine, `None` for Glulx —
 /// whose display lives inside its `EngineSave`); the save itself routes through
 /// the engine-neutral `Engine::save_state` for both engines.
 pub(crate) fn zvm_session_opt(engine: &dyn Engine) -> Option<&GameSession> {
@@ -36,7 +36,7 @@ pub(crate) fn zvm_session_opt(engine: &dyn Engine) -> Option<&GameSession> {
 }
 
 /// Mutable non-panicking downcast to the Z-machine session: `Some` for a Z-code
-/// game, `None` for Glulx. Used to reinstate the zvm-only `screen.json` after an
+/// game, `None` for Glulx. Used to reinstate the zvm-only `screen.bin` after an
 /// archive restore without panicking on a Glulx engine.
 pub(crate) fn zvm_session_opt_mut(engine: &mut dyn Engine) -> Option<&mut GameSession> {
     engine.as_any_mut().downcast_mut::<GameSession>()

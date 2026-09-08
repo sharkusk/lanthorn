@@ -18,7 +18,7 @@ use crate::format_rfc3339;
 /// "Quit without saving" honest and avoids silently overwriting an explicit save
 /// point on exit.
 /// Exit auto-save is engine-neutral: the save routes through Engine::save_state
-/// (Quetzal for zvm, the gvm snapshot for Glulx); screen.json is written for
+/// (Quetzal for zvm, the gvm snapshot for Glulx); screen.bin is written for
 /// zvm only.
 /// Skip while a Glulx in-game @save/@restore is suspended, awaiting host I/O:
 /// snapshotting mid-suspension would capture the un-popped @save call stub,
