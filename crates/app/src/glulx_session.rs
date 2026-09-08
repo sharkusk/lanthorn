@@ -376,11 +376,37 @@ fn drive(machine: &mut Machine) -> DriveStop {
     }
 }
 
+/// The suffix gvm's Glk-spec fileref sanitizer (`gvm::glk::Model::
+/// sanitize_fileref_name`) always appends for `fileusage_SavedGame` (Glk
+/// spec-fixed `0x01`) — `.glksave`, per SQ-1416. gvm owns the sanitize rule
+/// (strip disallowed characters, truncate at the first `.`, append this
+/// suffix); lanthorn owns only the further step of where a SavedGame slot
+/// lives on disk (`<store>/<stem>.qzl`, predating SQ-1416 and unchanged by
+/// it — the file extension players' existing saves already carry). These two
+/// helpers are the one place that boundary is crossed, in both directions, so
+/// it is never duplicated or drifts out of sync with gvm's rule.
+const GLK_SAVEDGAME_SUFFIX: &str = ".glksave";
+
+/// gvm's already-sanitized SavedGame fileref name (e.g. `"foo.glksave"`) ->
+/// lanthorn's on-disk basename (`"foo"`, before `seed_saved_games`/
+/// [`drive_auto`] add `.qzl`). Strips the known suffix rather than
+/// re-deriving gvm's name from the raw fileref argument.
+fn saved_game_disk_stem(glk_name: &str) -> &str {
+    glk_name.strip_suffix(GLK_SAVEDGAME_SUFFIX).unwrap_or(glk_name)
+}
+
+/// The reverse of [`saved_game_disk_stem`]: an on-disk `.qzl` basename ->
+/// the fully-sanitized Glk name gvm's SavedGame existence index is keyed by.
+fn saved_game_glk_name(disk_stem: &str) -> String {
+    format!("{disk_stem}{GLK_SAVEDGAME_SUFFIX}")
+}
+
 /// Seed the machine's host-managed SavedGame existence index from every
-/// `<store>/*.qzl` on disk (raw basename minus the `.qzl` suffix, matching
-/// how [`drive_auto`] writes and how the index is keyed), so a `create_by_name`
-/// game probing `glk_fileref_does_file_exist` before `@restore` sees its save
-/// across launches (SQ-0301). No-op when there is no store, or it is unreadable.
+/// `<store>/*.qzl` on disk (raw basename minus the `.qzl` suffix, mapped to
+/// gvm's Glk name via [`saved_game_glk_name`] — see [`drive_auto`] for the
+/// write side), so a `create_by_name` game probing
+/// `glk_fileref_does_file_exist` before `@restore` sees its save across
+/// launches (SQ-0301). No-op when there is no store, or it is unreadable.
 /// Over-seeding player-save `.qzl` names is inert — a game only ever probes names
 /// it created. Runs for a READ-ONLY store too: a shadow must see the cache it is
 /// about to restore, or it never asks for it.
@@ -400,7 +426,7 @@ fn seed_saved_games(machine: &mut Machine, store: &GameStore) {
             continue;
         };
         let size = entry.metadata().map(|m| m.len()).unwrap_or(0) as u32;
-        machine.seed_saved_game_file(name.to_string(), size);
+        machine.seed_saved_game_file(saved_game_glk_name(name), size);
     }
 }
 
@@ -425,7 +451,7 @@ fn drive_auto(machine: &mut Machine, store: &GameStore) -> DriveStop {
         if req.by_prompt || req.name.is_empty() || store.absent() {
             return stop;
         }
-        let path = store.dir().join(format!("{}.qzl", req.name));
+        let path = store.dir().join(format!("{}.qzl", saved_game_disk_stem(&req.name)));
         if restore {
             match std::fs::read(&path) {
                 Ok(bytes) if machine.complete_restore_quetzal(&bytes) => {}
