@@ -25,7 +25,7 @@
 
 use std::path::PathBuf;
 
-use zvm::cpu::exec::{Machine, StepResult};
+use zvm::cpu::exec::{Machine, PaintEvent, StepResult};
 use zvm::memory::Memory;
 
 fn story() -> Option<Vec<u8>> {
@@ -108,5 +108,65 @@ fn scopa_paints_its_cards_as_erase_window_fills() {
     assert!(
         distinct_colours > 1,
         "fills carry the colour to paint with; got only {distinct_colours} distinct background(s)"
+    );
+}
+
+/// SQ-1396: the same real turn, drained through `take_paint_events`, comes back
+/// genuinely INTERLEAVED — not every picture and then every fill.
+///
+/// This is the half a unit test cannot settle. scopa's boot fills the green
+/// table, draws its Neapolitan and Sicilian card pictures and then fills the menu
+/// buttons over the top, so a host replaying all the fills last erases both cards
+/// it had already painted. The interleave used to be the HOST's to reconstruct
+/// from `EraseFill::pics_before`; now there is no other way to drain.
+#[test]
+fn scopa_drains_its_paints_interleaved() {
+    let Some(bytes) = story() else { return };
+    let mem = Memory::new(bytes).expect("scopa is a valid v6 story");
+    let mut m = Machine::new(mem);
+
+    let mut clicks = 0u32;
+    for _ in 0..50_000_000u64 {
+        match m.step() {
+            StepResult::NeedChar => {
+                if clicks > 12 {
+                    break;
+                }
+                m.set_mouse(230, 320, 0b1);
+                m.supply_char(254);
+                clicks += 1;
+            }
+            StepResult::NeedLine { .. } => m.supply_line("", 13),
+            StepResult::Fault => panic!("scopa faulted while painting: {:?}", m.take_fault_trace()),
+            _ => {}
+        }
+        if m.pending_erase_fills().len() > 200 {
+            break;
+        }
+    }
+    let (fills, pictures) = (m.pending_erase_fills().len(), m.pending_pictures().len());
+    assert!(fills > 50 && pictures > 0, "the turn must hold both kinds: {fills} fills, {pictures} pictures");
+
+    let drained = m.take_paint_events();
+    assert_eq!(drained.len(), fills + pictures, "the drain loses nothing");
+    assert!(
+        m.pending_erase_fills().is_empty() && m.pending_pictures().is_empty(),
+        "and empties both queues",
+    );
+
+    // Both directions, because either alone is satisfied by a batch that is
+    // simply all of one kind and then all of the other.
+    let first_picture = drained.iter().position(|e| matches!(e, PaintEvent::Picture(_)));
+    let last_picture = drained.iter().rposition(|e| matches!(e, PaintEvent::Picture(_)));
+    let first_fill = drained.iter().position(|e| matches!(e, PaintEvent::Erase(_)));
+    let last_fill = drained.iter().rposition(|e| matches!(e, PaintEvent::Erase(_)));
+    assert!(
+        matches!((first_picture, last_fill), (Some(p), Some(f)) if f > p),
+        "a real scopa turn ends with fills after its pictures",
+    );
+    assert!(
+        matches!((first_fill, last_picture), (Some(f), Some(p)) if p > f),
+        "…and STARTS with fills before them — draining the two queues in series \
+         would have put every fill after every picture, which is the bug",
     );
 }

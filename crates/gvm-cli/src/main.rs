@@ -964,13 +964,13 @@ fn main() {
             eprintln!("{line}");
         }
         // Still surface any other diagnostics, then exit non-zero.
-        for d in &machine.diagnostics {
+        for d in machine.diagnostics() {
             eprintln!("gvm: {d}");
         }
         std::process::exit(70);
     }
 
-    for d in &machine.diagnostics {
+    for d in machine.diagnostics() {
         eprintln!("gvm: {d}");
     }
 }

@@ -101,9 +101,9 @@ fn new_game_timer_wait_reaches_entrance_hall() {
         t.chars().rev().take(600).collect::<String>().chars().rev().collect::<String>()
     );
     assert_eq!(
-        m.diagnostics.iter().filter(|d| d.contains("no pending input request")).count(),
+        m.diagnostics().iter().filter(|d| d.contains("no pending input request")).count(),
         0,
         "no evtype_None spin diagnostics: {:?}",
-        m.diagnostics
+        m.diagnostics()
     );
 }

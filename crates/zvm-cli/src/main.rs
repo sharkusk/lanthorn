@@ -539,17 +539,19 @@ fn build_machine(
     // by the machine and cannot ask it back, so both are told once from here.
     let machine_row = interpreter_number.and_then(zvm::interpreter::machine);
     let palette = machine_row.map_or(zvm::screen::Palette::Standard, |m| m.palette);
-    let mut machine = Machine::with_output(mem, Box::new(StdoutOutput::new(
-        stdout_is_tty,
-        paging,
-        page_height,
-        term_cols,
-        honor_game_colours,
-        hold_prompt,
-        palette,
-    )));
-    machine.set_palette(palette);
-    machine.set_interpreter_number(interpreter_number);
+    // One value and one call (SQ-1396). The ordering — which setter writes the
+    // header at once, which is latched to `init_caps`, and why the screen size has
+    // to come after it — is `BootConfig`'s, not this front-end's; this file used to
+    // reproduce part of it by hand and `app` reproduced the rest.
+    let mut config = zvm::cpu::exec::BootConfig::new()
+        .with_palette(palette)
+        .with_interpreter_number(interpreter_number)
+        // Report the real terminal size to the game. `init_caps` seeds a generous
+        // 80×24 default; without this the game centres and wraps against 80
+        // columns regardless of the actual pane width (e.g. a title page stays
+        // centred for 80 in a 50-column terminal). Kept in sync on resize by
+        // `Machine::set_screen_dims`, which is the mid-run door.
+        .with_screen_grid(term_rows.min(255) as u8, term_cols.min(255) as u8);
     // …and the REST of that machine (SQ-0872). Setting `$1E` alone told the story
     // which machine it was on and left it to work out what that machine looked
     // like from zvm's own §8.3.2 seed, which is nobody's machine — so off a
@@ -574,21 +576,19 @@ fn build_machine(
     if let Some(m) = machine_row {
         if honor_game_colours && machine_colours {
             if let Some((bg, fg)) = m.default_colours {
-                machine.set_default_colours(bg, fg);
+                config = config.with_default_colours(bg, fg);
             }
         }
     }
-    machine.init_caps();
-    // Report the real terminal size to the game. init_caps seeds a generous
-    // 80×24 default; without this override the game centres and wraps against
-    // 80 columns regardless of the actual pane width (e.g. a title page stays
-    // centred for 80 in a 50-column terminal). Kept in sync on resize.
-    //
-    // `Machine::set_screen_dims`, not the bare `write_screen_dims` it wraps: the
-    // header bytes are only half the report, and the other half (refitting a
-    // live upper window to the new width) is what the app has always used.
-    machine.set_screen_dims(term_rows.min(255) as u8, term_cols.min(255) as u8);
-    Ok(machine)
+    Ok(Machine::boot(mem, Box::new(StdoutOutput::new(
+        stdout_is_tty,
+        paging,
+        page_height,
+        term_cols,
+        honor_game_colours,
+        hold_prompt,
+        palette,
+    )), config))
 }
 
 // ── argument parsing ──────────────────────────────────────────────────────────
@@ -1513,9 +1513,6 @@ fn main() {
         }
     };
 
-    // Keep the original bytes for Restart.
-    let original_bytes = story_bytes.clone();
-
     // Where this game's saves and sidecars go (SQ-0850). A plain story file is
     // keyed by its filename as it always was; a story taken off a disk image is
     // keyed by its OWN release and serial, because `--story` can pick any of the
@@ -1826,27 +1823,15 @@ fn main() {
             }
 
             StepResult::Restart => {
-                machine = match build_machine(
-                    original_bytes.clone(),
-                    stdout_is_tty,
-                    paging,
-                    page_height,
-                    term_rows,
-                    term_cols,
-                    honor,
-                    interpreter,
-                    machine_colours,
-                    mode.plain(),
-                ) {
-                    Ok(m) => m,
-                    Err(e) => {
-                        eprintln!("{e}");
-                        // As above: past the guard, so restore explicitly.
-                        cli_host::restore_and_exit(&crate::screen::leave_region(), 1);
-                    }
-                };
-                machine.set_honor_game_colours(honor);
-                machine.set_sound_available(sound_enabled);
+                // ZMSD §6.1.3: "the entire state is restored from the original
+                // story file, and the stack is emptied; but 'Flags 2' is
+                // preserved; and the interpreter should reset the Rst parts of
+                // the header." This used to throw the machine away and rebuild it
+                // from the original bytes, which is a COLD BOOT — it loses the two
+                // game-writable Flags 2 bits (transcription, fixed-pitch) the
+                // clause preserves. `Machine::restart` is the clause (SQ-1396),
+                // and it is what `app` has always answered with.
+                machine.restart();
                 aux_preload(&mut machine, &aux_file, args.aux);
             }
 

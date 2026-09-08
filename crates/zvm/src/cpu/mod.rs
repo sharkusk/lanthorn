@@ -1,3 +1,4 @@
+pub mod boot;
 pub mod decode;
 pub mod disasm;
 pub mod disasm_cache;

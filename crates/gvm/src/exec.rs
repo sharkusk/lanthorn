@@ -314,16 +314,18 @@ pub struct Machine {
     pending_fileref: Option<PendingFileref>,
     /// The display backend the Glk model drives.
     pub(crate) backend: Box<dyn GlkBackend>,
-    /// Recorded runtime faults / deferred-feature notices.
-    pub diagnostics: Vec<String>,
+    /// Recorded runtime faults / deferred-feature notices. Read with
+    /// [`Machine::diagnostics`], drain with [`Machine::take_diagnostics`].
+    diagnostics: Vec<String>,
     /// When true, every structural Glk call (windows, styles, streams, colours,
     /// garglk extensions — but not the high-volume put/get text I/O) is recorded
     /// to `screen_trace`. A debug aid for seeing exactly what a story instructs
-    /// the interpreter to do.
-    pub trace_screen: bool,
+    /// the interpreter to do. Set with [`Machine::set_trace_screen`].
+    trace_screen: bool,
     /// Structural Glk/garglk call lines recorded while `trace_screen` is set,
-    /// drained by the host each turn. Separate from `diagnostics`.
-    pub screen_trace: Vec<String>,
+    /// drained by the host each turn ([`Machine::take_screen_trace`]). Separate
+    /// from `diagnostics`.
+    screen_trace: Vec<String>,
     /// Pending coalesced story-text run for the `screen` trace: `(window, window
     /// type, text)`. Flushed as a `win N [buf|grid] <- "…"` line before the next
     /// structural call, so the trace shows WHERE story text is printed (which
@@ -385,8 +387,9 @@ pub struct Machine {
     /// PC at the start of the instruction currently executing (captured before
     /// operand reads); used as the fault site if this instruction faults.
     instr_start_pc: u32,
-    /// Stack trace captured when a fault converted to Quit. Host drains it.
-    pub fault_trace: Option<crate::trace::StackTrace>,
+    /// Stack trace captured when a fault converted to Quit. The host drains it
+    /// with [`Machine::take_fault_trace`].
+    fault_trace: Option<crate::trace::StackTrace>,
 
     // Cached layout of the current frame (recomputed whenever `fp` changes).
     cur_frame_len: u32,
@@ -402,16 +405,19 @@ pub struct Machine {
     /// When true, `step_once` records each instruction's start PC into
     /// `executed_pcs`/`ever_executed` (the debug inspector's execution coverage).
     /// Default false; guarded so it is a single predictable branch — and zero
-    /// set-touching / allocation — on the hot path when off (SQ-0465).
-    pub trace_exec: bool,
+    /// set-touching / allocation — on the hot path when off (SQ-0465). Set with
+    /// [`Machine::set_trace_exec`].
+    trace_exec: bool,
     /// Instruction-start PCs executed since the host last cleared them (per-turn
-    /// coverage). The host drains/clears this each turn via `clear_executed_pcs`.
-    pub executed_pcs: std::collections::HashSet<u32>,
+    /// coverage). Read with [`Machine::executed_pcs`]; the host clears it each
+    /// turn via [`Machine::clear_executed_pcs`].
+    executed_pcs: std::collections::HashSet<u32>,
     /// Cumulative instruction-start PCs ever executed while tracing was on —
     /// NEVER cleared per turn. Feeds the disassembler as dynamic discovery
     /// (executed bytes are ground-truth code) and can be pre-seeded from
-    /// host-persisted coverage via [`Machine::seed_ever_executed`].
-    pub ever_executed: std::collections::HashSet<u32>,
+    /// host-persisted coverage via [`Machine::seed_ever_executed`]. Read with
+    /// [`Machine::ever_executed`].
+    ever_executed: std::collections::HashSet<u32>,
 }
 
 fn align_up(v: u32, to: u32) -> u32 {
@@ -1078,6 +1084,81 @@ impl Machine {
     /// immediately. Independent of `trace_exec`.
     pub fn seed_ever_executed(&mut self, pcs: &std::collections::HashSet<u32>) {
         self.ever_executed.extend(pcs.iter().copied());
+    }
+
+    // ── host-facing diagnostics and traces (SQ-1396) ────────────────────────
+    //
+    // These were `pub` fields, which made every one of them part of the crate's
+    // promise in a shape no host could use safely: a queue whose only drain was
+    // `std::mem::take` on a bare `Vec`, with nothing to enumerate and nothing to
+    // call. They are spelled exactly as `zvm`'s equivalents, so a host driving
+    // both engines learns one vocabulary.
+
+    /// Whether instruction-start PCs are being recorded (the debug inspector's
+    /// execution coverage).
+    pub fn trace_exec(&self) -> bool {
+        self.trace_exec
+    }
+
+    /// Record each instruction's start PC into [`Self::executed_pcs`] and
+    /// [`Self::ever_executed`]. Off by default: on, it is a single predictable
+    /// branch on the hot path (SQ-0465).
+    pub fn set_trace_exec(&mut self, on: bool) {
+        self.trace_exec = on;
+    }
+
+    /// Instruction-start PCs executed since the host last cleared them.
+    pub fn executed_pcs(&self) -> &std::collections::HashSet<u32> {
+        &self.executed_pcs
+    }
+
+    /// Cumulative instruction-start PCs ever executed while tracing was on —
+    /// never cleared per turn, and pre-seedable via [`Self::seed_ever_executed`].
+    pub fn ever_executed(&self) -> &std::collections::HashSet<u32> {
+        &self.ever_executed
+    }
+
+    /// Whether structural Glk calls are being recorded to the screen trace.
+    pub fn trace_screen(&self) -> bool {
+        self.trace_screen
+    }
+
+    /// Record every structural Glk call (windows, styles, streams, colours,
+    /// garglk extensions — but not the high-volume put/get text I/O) into
+    /// [`Self::screen_trace`].
+    pub fn set_trace_screen(&mut self, on: bool) {
+        self.trace_screen = on;
+    }
+
+    /// Structural Glk/garglk call lines recorded since the last drain, without
+    /// taking them.
+    pub fn screen_trace(&self) -> &[String] {
+        &self.screen_trace
+    }
+
+    /// Take and clear the structural Glk/garglk call lines recorded since the
+    /// host last drained them.
+    pub fn take_screen_trace(&mut self) -> Vec<String> {
+        std::mem::take(&mut self.screen_trace)
+    }
+
+    /// Host-facing diagnostic lines — runtime faults and deferred-feature
+    /// notices — recorded since the last drain, without taking them.
+    pub fn diagnostics(&self) -> &[String] {
+        &self.diagnostics
+    }
+
+    /// Take and clear the host-facing diagnostic lines recorded since the host
+    /// last drained them.
+    pub fn take_diagnostics(&mut self) -> Vec<String> {
+        std::mem::take(&mut self.diagnostics)
+    }
+
+    /// Push one line onto the diagnostics log, as the interpreter itself would.
+    /// For a host that drains the log around a speculative run and then puts
+    /// back what it took (`app`'s naming probe does exactly this).
+    pub fn push_diagnostic(&mut self, line: String) {
+        self.diagnostics.push(line);
     }
 
     /// Dispatch a decoded opcode to its handler.

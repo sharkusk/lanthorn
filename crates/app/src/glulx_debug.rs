@@ -121,11 +121,11 @@ impl Debugger for GlulxSession {
     }
 
     fn executed_pcs(&self) -> HashSet<u32> {
-        self.machine.executed_pcs.clone()
+        self.machine.executed_pcs().clone()
     }
 
     fn ever_executed_pcs(&self) -> HashSet<u32> {
-        self.machine.ever_executed.clone()
+        self.machine.ever_executed().clone()
     }
 
     fn stack_lines(&self) -> Vec<String> {
@@ -320,10 +320,10 @@ impl GlulxSession {
             let mut slot = self.disasm_cache.borrow_mut();
             if slot.is_none() {
                 let mut cache = gvm::disasm::DisasmCache::build(self.machine.mem());
-                cache.seed_executed(self.machine.ever_executed.iter().copied());
+                cache.seed_executed(self.machine.ever_executed().iter().copied());
                 *slot = Some(cache);
             } else {
-                let pcs: Vec<u32> = self.machine.executed_pcs.iter().copied().collect();
+                let pcs: Vec<u32> = self.machine.executed_pcs().iter().copied().collect();
                 if !pcs.is_empty() {
                     slot.as_mut().expect("checked Some above").seed_executed(pcs);
                 }
