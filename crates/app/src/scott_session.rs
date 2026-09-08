@@ -214,6 +214,18 @@ impl ScottSession {
         let r = self.vm.current_room();
         Some(LocationInfo { number: r as mapper::graph::RoomId, parent: 0, name: self.vm.room_name(r).to_string() })
     }
+
+    /// An item's current location (`-1`/`255` = carried, `0` = nowhere, else
+    /// a room index) — `scott::Vm::item_loc`, exposed for the binary crate's
+    /// own restore-path tests (`engine_helpers::restore_from_file`,
+    /// SQ-1413) to assert what a restore actually placed, without widening
+    /// the `vm` field itself. `pub`, not `pub(crate)`: `engine_helpers.rs`
+    /// lives in the `lanthorn` BINARY crate, a separate compilation unit
+    /// from this `app` LIB crate, so `pub(crate)` here would not reach it.
+    #[allow(dead_code)] // only called from the binary crate's own t-session-gated tests
+    pub fn item_loc(&self, idx: usize) -> i32 {
+        self.vm.item_loc(idx)
+    }
 }
 
 impl Engine for ScottSession {
@@ -381,11 +393,28 @@ impl Engine for ScottSession {
         r
     }
 
+    /// Restores from either of Scott's two save formats, detected by shape
+    /// (SQ-1413): this crate's own binary snapshot
+    /// ([`scott::Vm::SNAPSHOT_MAGIC`], unambiguous — checked first) or
+    /// ScottFree 1.14's own text save format
+    /// ([`scott::looks_like_scottfree_save`]), so a player can bring an old
+    /// ScottFree `.sav` into lanthorn. Anything matching neither falls
+    /// through to `Vm::restore`, which reports the ordinary bad-snapshot
+    /// error rather than a bespoke "unrecognised format" one — there is
+    /// nothing a third message would say that the binary-restore failure
+    /// doesn't already.
     fn restore_game_save(&mut self, bytes: &[u8]) -> Result<(), EngineError> {
-        let r = self
-            .vm
-            .restore(bytes)
-            .map_err(|e| EngineError::BadSave(format!("bad Scott snapshot: {e}")));
+        let is_scottfree_save =
+            !bytes.starts_with(&scott::Vm::SNAPSHOT_MAGIC) && scott::looks_like_scottfree_save(bytes);
+        let r = if is_scottfree_save {
+            self.vm
+                .restore_scottfree(bytes)
+                .map_err(|e| EngineError::BadSave(format!("bad ScottFree save: {e}")))
+        } else {
+            self.vm
+                .restore(bytes)
+                .map_err(|e| EngineError::BadSave(format!("bad Scott snapshot: {e}")))
+        };
         self.refresh_picture();
         r
     }

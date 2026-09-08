@@ -203,6 +203,17 @@ pub(crate) enum RestoreOutcome {
 /// used to call `restore_state` unconditionally, landing the VM on the descriptor
 /// instead of past it. Shared by every host load/restore site (saves-manager Load,
 /// `/restore-state`, and a `.lanthorn` picked from the in-game restore picker).
+///
+/// A Scott Adams game additionally accepts a BARE save file with no reserved
+/// extension (SQ-1413) — neither this crate's own binary snapshot nor a
+/// ScottFree 1.14 text save gets one the way a Z-machine `.qzl` does, so the
+/// two are told apart by content instead
+/// (`ScottSession::restore_game_save`). Checked before `load_archive`, which
+/// expects a `.lanthorn` zip and would otherwise fail on either bare format —
+/// this is what lets a player point the restore-file picker straight at a
+/// loose `.sav` (lanthorn's own saves manager lists only `.lanthorn`
+/// archives, so this path matters specifically for the general file browser,
+/// reached from Host Load).
 pub(crate) fn restore_from_file(path: &std::path::Path, session: &mut dyn Engine) -> Result<RestoreOutcome, String> {
     if app::persist_files::is_game_save(path) {
         let bytes = app::archive::read_quetzal_from_file(path).map_err(|e| e.to_string())?;
@@ -211,6 +222,16 @@ pub(crate) fn restore_from_file(path: &std::path::Path, session: &mut dyn Engine
         return Ok(RestoreOutcome::DescriptorCompleted(None));
     }
     let tag = engine_tag(&*session);
+    if tag == app::scott_session::SCOTT_ENGINE {
+        if let Ok(bytes) = std::fs::read(path) {
+            let is_scott_save = bytes.starts_with(&scott::Vm::SNAPSHOT_MAGIC)
+                || scott::looks_like_scottfree_save(&bytes);
+            if is_scott_save {
+                session.restore_game_save(&bytes).map_err(restore_error_msg)?;
+                return Ok(RestoreOutcome::DescriptorCompleted(None));
+            }
+        }
+    }
     let ac = load_archive(path).map_err(|e| e.to_string())?;
     if ac.meta.trigger.is_portable() {
         // An in-game `@save`: the same guard `restore_state` applies internally,
@@ -639,5 +660,80 @@ mod tests {
         .unwrap();
         let boxed: Box<dyn app::engine::Engine> = Box::new(s);
         assert_eq!(super::engine_tag(&*boxed), "scott");
+    }
+
+    // ── SQ-1413: restore_from_file accepts a bare ScottFree save ────────────────
+
+    /// A hand-authored ScottFree 1.14 save (`SaveGame`/`LoadGame`,
+    /// `ScottCurses.c:653-706` — same field order as `scott::scottfree_save`'s
+    /// own fixture): 16 `counter room` pairs, a state line, then one location
+    /// per item. Shaped for `tiny_cave.dat` (`NumItems=9`, 10 item slots,
+    /// 4 rooms 0..=3) — see `crates/scott/tests/tiny_cave.dat`.
+    fn tiny_cave_scottfree_save() -> String {
+        let mut s = String::new();
+        for ct in 0..16 {
+            s.push_str(&format!("{} 1\n", ct + 1)); // Counters[ct]=ct+1, RoomSaved[ct]=room 1
+        }
+        // BitFlags DarkFlag MyLoc CurrentCounter SavedRoom LightTime
+        s.push_str("0 0 3 7 1 42\n");
+        // 10 item locations: item1 (the idol) carried (255), item9 (the lamp,
+        // LIGHT_SOURCE) in room 1, everything else nowhere.
+        s.push_str("0\n255\n0\n0\n0\n0\n0\n0\n0\n1\n");
+        s
+    }
+
+    /// End-to-end through the app's own restore-file dispatch
+    /// (`restore_from_file`, the shared host restore site): a bare ScottFree
+    /// save file, with no `.lanthorn`/`.qzl` wrapper, restores through
+    /// `ScottSession::restore_game_save`'s shape detection and lands the
+    /// room and item locations the save file itself named.
+    #[test]
+    fn restore_from_file_accepts_a_bare_scottfree_save() {
+        let mut session: Box<dyn app::engine::Engine> = Box::new(
+            app::scott_session::ScottSession::new(
+                include_bytes!("../../scott/tests/tiny_cave.dat").to_vec(),
+                None,
+            )
+            .unwrap(),
+        );
+        assert_eq!(session.current_location().unwrap().number, 1, "tiny_cave starts in room 1");
+
+        let dir = app::scratch_dir("scott-scottfree-save");
+        let path = dir.join("cellar.sav");
+        std::fs::write(&path, tiny_cave_scottfree_save()).unwrap();
+
+        let outcome = super::restore_from_file(&path, &mut *session).expect("restore a bare ScottFree save");
+        assert!(matches!(outcome, super::RestoreOutcome::DescriptorCompleted(None)));
+
+        let loc = session.current_location().expect("a location after restore");
+        assert_eq!(loc.number, 3, "MyLoc=3 from the save file");
+        assert!(loc.name.contains("crystal grotto"), "room 3's own name: {:?}", loc.name);
+
+        let scott = super::scott_session_opt(&*session).expect("still a Scott session");
+        assert_eq!(scott.item_loc(1), -1, "the idol (255 in the save) normalises to CARRIED");
+        assert_eq!(scott.item_loc(9), 1, "the lamp (LIGHT_SOURCE) is in room 1");
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Neither this crate's own binary snapshot nor a well-formed ScottFree
+    /// save: refused with an error, not a panic, and falls through to the
+    /// ordinary `.lanthorn`-archive path's own (also graceful) failure.
+    #[test]
+    fn restore_from_file_rejects_garbage_for_a_scott_engine() {
+        let mut session: Box<dyn app::engine::Engine> = Box::new(
+            app::scott_session::ScottSession::new(
+                include_bytes!("../../scott/tests/tiny_cave.dat").to_vec(),
+                None,
+            )
+            .unwrap(),
+        );
+
+        let dir = app::scratch_dir("scott-garbage-save");
+        let path = dir.join("garbage.sav");
+        std::fs::write(&path, b"this is not a scott save of either format").unwrap();
+
+        assert!(super::restore_from_file(&path, &mut *session).is_err());
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }
