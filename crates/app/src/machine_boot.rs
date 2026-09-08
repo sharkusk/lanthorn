@@ -191,6 +191,65 @@ impl MachineBoot {
         }
     }
 
+    /// This machine's facts as [`zvm`]'s own boot recipe (SQ-1396).
+    ///
+    /// Two layers, both wanted, and neither doing the other's job: `MachineBoot`
+    /// answers "what does this MEDIUM say the machine is", and
+    /// [`zvm::cpu::exec::BootConfig`] answers "in what ORDER must a `Machine` be
+    /// told things". This is the one crossing between them, so a boot site does
+    /// not restate a machine fact and cannot get the order wrong.
+    ///
+    /// The parameters are the facts a machine does not own — the ones a LAUNCH
+    /// decides:
+    ///
+    /// * `honor_game_colours` and `sound_available`: the player's configuration;
+    /// * `picture_dims`, the `Pict` table, resolved app-side from a
+    ///   self-blorb/sidecar Blorb (empty for a non-v6 story). It arrives ART-NATIVE:
+    ///   `BootConfig` scales it into unit space by [`Self::art_scale`], which is
+    ///   the crossing `session.rs` used to perform by hand;
+    /// * `host_screen`, the real `(rows, cols)` of the pane about to be rendered
+    ///   into, for a v1–5/7/8 story. Ignored for Version 6, whose screen is the
+    ///   archive's pixels (SQ-0680);
+    /// * `random_seed`, the launcher's entropy (SQ-0811).
+    ///
+    /// The Version 6 face is reduced HERE, and to one thing: only
+    /// [`crate::native_font::TextFace::metric`] — the declared cell and the pen —
+    /// is a fact the engine has any use for. The bitmaps behind it are the
+    /// renderer's and never cross into `zvm`.
+    pub fn boot_config(
+        &self,
+        honor_game_colours: bool,
+        sound_available: bool,
+        picture_dims: Vec<(u16, u16, u16)>,
+        host_screen: Option<(u16, u16)>,
+        random_seed: Option<u32>,
+    ) -> zvm::cpu::exec::BootConfig {
+        let mut cfg = zvm::cpu::exec::BootConfig::new()
+            .with_honor_game_colours(honor_game_colours)
+            .with_sound_available(sound_available)
+            .with_palette(self.palette)
+            .with_interpreter_number(self.interpreter_number)
+            .with_interpreter_version(self.interpreter_version)
+            .with_picture_dims(picture_dims)
+            .with_v6_text(self.text_face().metric().clone());
+        if let Some(seed) = random_seed {
+            cfg = cfg.with_rng_seed(seed);
+        }
+        if let Some((bg, fg)) = self.default_colours {
+            cfg = cfg.with_default_colours(bg, fg);
+        }
+        if let Some(px) = self.screen_px {
+            cfg = cfg.with_v6_screen_px(px);
+        }
+        if let Some(scale) = self.art_scale {
+            cfg = cfg.with_v6_art_scale(scale);
+        }
+        if let Some((r, c)) = host_screen {
+            cfg = cfg.with_screen_grid(r.clamp(1, 255) as u8, c.clamp(1, 255) as u8);
+        }
+        cfg
+    }
+
     /// The cell, the face and the pen as ONE value, for the renderer (SQ-1009).
     ///
     /// [`crate::state::AppState`] holds this rather than the two halves, so the

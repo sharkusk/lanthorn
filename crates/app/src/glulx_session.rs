@@ -623,7 +623,7 @@ impl GlulxSession {
         // the game's initialisation code is captured in the coverage set — a
         // later `/debug` toggle cannot see the boot PCs. Off by default, so a
         // normal launch keeps the single-branch hot loop with zero trace work.
-        machine.trace_exec = debug;
+        machine.set_trace_exec(debug);
         let (pending, quit) = drive_settled(&mut machine, &store);
         let mut session = GlulxSession {
             machine,
@@ -1333,7 +1333,7 @@ impl GlulxSession {
                 self.last_room = Some(self.room_for(n, &ram));
             }
         }
-        let diagnostics = std::mem::take(&mut self.machine.diagnostics);
+        let diagnostics = self.machine.take_diagnostics();
         let fault = self.machine.take_fault_trace().map(|t| t.to_lines());
         let glulx_sound_ops = self.appglk().take_sound_ops();
         // SQ-1293 / SQ-1294: the story moved us somewhere it did not name — or has
@@ -1801,7 +1801,7 @@ impl GlulxSession {
         // in a session whose transcript never saw it.
         let snapshot = self.machine.save_state();
         let display = self.appglk().display_snapshot();
-        let kept_diagnostics = std::mem::take(&mut self.machine.diagnostics);
+        let kept_diagnostics = self.machine.take_diagnostics();
         self.drop_world_caches();
         self.machine.supply_line("look");
         let stopped = drive_auto(&mut self.machine, &self.store);
@@ -1816,7 +1816,13 @@ impl GlulxSession {
         // sound ops are the one thing the display snapshot does not carry, because
         // they are a per-turn queue rather than window state: drain them here.
         let _ = self.appglk().take_sound_ops();
-        self.machine.diagnostics = kept_diagnostics;
+        // Everything the question logged belongs to a turn that never happened, so
+        // drop it and put back what was there before (SQ-1396: the field is gvm's
+        // now, and this is the drain-and-restore pair that replaces the assignment).
+        let _ = self.machine.take_diagnostics();
+        for d in kept_diagnostics {
+            self.machine.push_diagnostic(d);
+        }
         let _ = self.machine.take_fault_trace();
         let restored = self.machine.restore_state(&snapshot).is_ok();
         self.appglk().restore_display_snapshot(display);
@@ -2270,8 +2276,8 @@ impl Engine for GlulxSession {
         // A new command turn re-starts per-turn execution coverage (the `|` gutter
         // + last-turn set); the cumulative `ever_executed` is preserved. Mirrors
         // the Z-machine engine's per-turn clear chokepoint.
-        if self.machine.trace_exec {
-            self.machine.executed_pcs.clear();
+        if self.machine.trace_exec() {
+            self.machine.clear_executed_pcs();
         }
         if !self.quit {
             if self.pending == InputKind::Char {
@@ -2298,8 +2304,8 @@ impl Engine for GlulxSession {
 
     fn submit_key(&mut self, key: KeyInput) -> Option<TurnResult> {
         let code = key_to_glk(key)?;
-        if self.machine.trace_exec {
-            self.machine.executed_pcs.clear();
+        if self.machine.trace_exec() {
+            self.machine.clear_executed_pcs();
         }
         if !self.quit {
             self.machine.supply_char(code);
@@ -2681,19 +2687,19 @@ impl Engine for GlulxSession {
     }
 
     fn set_trace_screen(&mut self, on: bool) {
-        self.machine.trace_screen = on;
+        self.machine.set_trace_screen(on);
     }
 
     fn take_screen_trace(&mut self) -> Vec<String> {
-        std::mem::take(&mut self.machine.screen_trace)
+        self.machine.take_screen_trace()
     }
 
     fn set_debug_trace(&mut self, on: bool) {
-        self.machine.trace_exec = on;
+        self.machine.set_trace_exec(on);
         // Only the per-turn set is cleared when tracing stops; the cumulative
         // `ever_executed` (permanent colour + persisted coverage) is preserved.
         if !on {
-            self.machine.executed_pcs.clear();
+            self.machine.clear_executed_pcs();
         }
     }
 

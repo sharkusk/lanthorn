@@ -889,10 +889,11 @@ impl GameSession {
     /// is the native pixel frame seeded from `v6_screen_px` above, never the host
     /// cell pane.
     ///
-    /// The art reaches that unit screen at the uniform [`V6_ART_SCALE`]. A
-    /// launch that resolved a native picture archive may know better — see
-    /// [`Self::new_with_art_scale`] — but every caller of *this* function gets
-    /// the rule exactly as it has always been.
+    /// The art reaches that unit screen at zvm's own uniform rule
+    /// ([`zvm::cpu::exec::BootConfig::DEFAULT_V6_ART_SCALE`]). A launch that
+    /// resolved a native picture archive may know better — see
+    /// [`Self::new_for_machine`] — but every caller of *this* function gets the
+    /// rule exactly as it has always been.
     ///
     /// **Colours resolve through §8.3.1's own table** (`Palette::Standard`) and
     /// header `$1F` keeps zvm's default, because this is the no-machine door and
@@ -900,26 +901,27 @@ impl GameSession {
     /// its machine goes through [`Self::new_for_machine`], where the palette is one
     /// of the `MachineBoot` facts and is in force before the boot run.
     pub fn new_with_trace(story: Vec<u8>, honor_game_colours: bool, sound_available: bool, interpreter_number: Option<u8>, trace_from_boot: bool, picture_dims: Vec<(u16, u16, u16)>, v6_screen_px: Option<(u16, u16)>, default_colours: Option<(u8, u8)>, host_screen: Option<(u16, u16)>) -> Result<GameSession, ZError> {
-        Self::new_with_art_scale(story, honor_game_colours, sound_available, interpreter_number, trace_from_boot, picture_dims, v6_screen_px, None, default_colours, host_screen, None, None, zvm::screen::Palette::Standard, None)
+        // The no-machine door builds zvm's recipe directly rather than through
+        // `MachineBoot::boot_config`: there is no medium here to answer for a
+        // palette, an art scale or a `$1F`, so every one of those keeps zvm's own
+        // default by simply not being stated.
+        let mut config = zvm::cpu::exec::BootConfig::new()
+            .with_honor_game_colours(honor_game_colours)
+            .with_sound_available(sound_available)
+            .with_interpreter_number(interpreter_number)
+            .with_picture_dims(picture_dims);
+        if let Some(px) = v6_screen_px {
+            config = config.with_v6_screen_px(px);
+        }
+        if let Some((bg, fg)) = default_colours {
+            config = config.with_default_colours(bg, fg);
+        }
+        if let Some((r, c)) = host_screen {
+            config = config.with_screen_grid(r.clamp(1, 255) as u8, c.clamp(1, 255) as u8);
+        }
+        Self::from_boot_config(story, config, trace_from_boot)
     }
 
-    /// [`Self::new_with_trace`] with the art scale supplied rather than assumed
-    /// (SQ-0790).
-    ///
-    /// `v6_art_scale` is [`crate::graphics::PictSource::art_scale`]: the per-axis
-    /// factor the art is blown up by on its way onto the 640×400 unit screen,
-    /// when the source has an opinion. `None` — every Blorb-sourced story, and
-    /// every non-v6 one — keeps the uniform [`V6_ART_SCALE`] rule. Only a NATIVE
-    /// archive answers, and only an EGA/CGA one answers with anything other than
-    /// `(2, 2)`, so the two entry points are the same function for the whole
-    /// corpus.
-    ///
-    /// `random_seed` is the value the story's `random` opcode starts from
-    /// (SQ-0811). It is applied here, before the boot run below, because a game's
-    /// initialisation routine may already draw from the generator — seeding after
-    /// the first prompt is one turn too late to change the game the player is
-    /// handed. `None` — every caller but the launcher — leaves zvm's own fixed
-    /// default, so a test's sequence stays the reproducible one it has always been.
     /// Boot a story on a machine, told what that machine is in ONE argument
     /// (SQ-1022).
     ///
@@ -930,10 +932,15 @@ impl GameSession {
     /// the failure is always the same shape, a screen that is entirely
     /// self-consistent and that the player never sees (SQ-0901, SQ-1020, SQ-1021).
     ///
-    /// Prefer this over [`Self::new_with_art_scale`] anywhere a medium is
-    /// involved. `new_with_trace` remains right for a bare story with no machine
-    /// behind it — and [`crate::machine_boot::MachineBoot::bare`] says so
-    /// explicitly where a caller wants to be plain about it.
+    /// Prefer this anywhere a medium is involved. `new_with_trace` remains right
+    /// for a bare story with no machine behind it — and
+    /// [`crate::machine_boot::MachineBoot::bare`] says so explicitly where a
+    /// caller wants to be plain about it.
+    ///
+    /// `random_seed` is the value the story's `random` opcode starts from
+    /// (SQ-0811); `None` — every caller but the launcher — leaves zvm's own fixed
+    /// default, so a test's sequence stays the reproducible one it has always
+    /// been.
     pub fn new_for_machine(
         story: Vec<u8>,
         honor_game_colours: bool,
@@ -944,25 +951,15 @@ impl GameSession {
         random_seed: Option<u32>,
         boot: &crate::machine_boot::MachineBoot,
     ) -> Result<GameSession, ZError> {
-        let mut s = Self::new_with_art_scale(
+        let mut s = Self::from_boot_config(
             story,
-            honor_game_colours,
-            sound_available,
-            boot.interpreter_number,
+            boot.boot_config(honor_game_colours, sound_available, picture_dims, host_screen, random_seed),
             trace_from_boot,
-            picture_dims,
-            boot.screen_px,
-            boot.art_scale,
-            boot.default_colours,
-            host_screen,
-            random_seed,
-            Some(boot.text_face()),
-            boot.palette,
-            boot.interpreter_version,
         )?;
-        // SQ-1071. Set here rather than threaded through the private constructor
-        // above, whose positional machine facts are the shape SQ-1021 closed the
-        // door on. `new_with_trace` — the honest no-machine door — leaves zvm's
+        // SQ-1071, and set AFTER the boot run rather than inside `BootConfig`:
+        // this is the wrap regime a story's TEXT is laid out under, and moving it
+        // ahead of the boot run would change what a game's own initialisation
+        // printing does. `new_with_trace` — the honest no-machine door — leaves zvm's
         // own default, §8.8.3.1.1 as written, which is what a story file with no
         // medium to name a machine should get.
         s.machine.v6_wrap_regime = boot.wrap_regime;
@@ -988,146 +985,48 @@ impl GameSession {
         Ok(s)
     }
 
-    /// **Private since SQ-1021.** Every machine fact as a separate positional
-    /// argument is the shape this codebase kept getting wrong — four callers
-    /// omitted one, including `reset.rs` in production — so the only reachable
-    /// doors are [`Self::new_for_machine`], which takes them as one value, and
-    /// [`Self::new_with_trace`], which is the honest no-machine case. This is a
-    /// compile error rather than a convention, which is the point.
+    /// **Private since SQ-1021, and one argument since SQ-1396.** Every machine
+    /// fact as a separate positional argument is the shape this codebase kept
+    /// getting wrong — four callers omitted one, including `reset.rs` in
+    /// production — so the only reachable doors are [`Self::new_for_machine`],
+    /// which takes them as one value, and [`Self::new_with_trace`], which is the
+    /// honest no-machine case. This is a compile error rather than a convention,
+    /// which is the point.
     ///
-    /// The `allow` below is the same statement in clippy's voice: fourteen
-    /// positional machine facts is precisely the shape the paragraph above is
-    /// about, and the cure — a value — is `MachineBoot`, one layer up, where
-    /// every caller that has a machine already takes it. Bundling these into a
-    /// second throwaway struct here would only hide the argument list from the
-    /// lint without moving a fact anywhere.
-    #[allow(clippy::too_many_arguments)]
-    fn new_with_art_scale(story: Vec<u8>, honor_game_colours: bool, sound_available: bool, interpreter_number: Option<u8>, trace_from_boot: bool, picture_dims: Vec<(u16, u16, u16)>, v6_screen_px: Option<(u16, u16)>, v6_art_scale: Option<(u32, u32)>, default_colours: Option<(u8, u8)>, host_screen: Option<(u16, u16)>, random_seed: Option<u32>, v6_text: Option<crate::native_font::TextFace>, palette: zvm::screen::Palette, interpreter_version: Option<u8>) -> Result<GameSession, ZError> {
+    /// What used to be fourteen positional facts here is now
+    /// [`zvm::cpu::exec::BootConfig`], and the ORDER they are applied in — which
+    /// setter writes the header at once, which is latched to `init_caps`, which
+    /// merely has to precede the boot run, and why the screen must come last —
+    /// went with them, into the crate that knows the Z-machine (SQ-1396). It is
+    /// stated in `BootConfig`'s own module documentation now, where an embedder
+    /// who has never heard of lanthorn will find it.
+    ///
+    /// `trace_from_boot` stays a parameter because it is not a boot fact: it is a
+    /// lanthorn debugging switch that has to be flipped between the machine being
+    /// built and the boot run this function performs.
+    fn from_boot_config(
+        story: Vec<u8>,
+        config: zvm::cpu::exec::BootConfig,
+        trace_from_boot: bool,
+    ) -> Result<GameSession, ZError> {
         let mem = Memory::new(story)?;
-        let sink = Box::new(CaptureSink::new());
-        let mut machine = Machine::with_output(mem, sink);
-        // SQ-1393: the machine's own colour table and its `$1F` byte, set FIRST —
-        // before `init_caps` (which latches the version byte and writes the true
-        // default colours through the table) and long before the boot run below,
-        // which is where a story's own `set_colour` and `get_wind_prop` land. Both
-        // used to be process-wide statics `startup.rs` wrote before construction;
-        // they arrive with the rest of the machine's facts now.
-        machine.set_palette(palette);
-        machine.set_interpreter_version(interpreter_version);
-        machine.set_honor_game_colours(honor_game_colours);
-        machine.set_sound_available(sound_available);
-        if let Some(seed) = random_seed {
-            machine.set_rng_seed(seed);
-        }
-        if let Some((bg, fg)) = default_colours {
-            machine.set_default_colours(bg, fg);
-        }
-        // SQ-0917: the machine's Version 6 cell, BEFORE the screen is sized and
-        // before the boot run — the story reads `$26`/`$27` and lays its windows
-        // out from them, so a cell that arrives later is one the game has already
-        // disagreed with. `None` keeps zvm's 8x16 default, which is every profile
-        // but the Macintosh.
-        //
-        // SQ-1009: the PEN travels with it, because on a machine that drew
-        // proportionally the two are one fact — see
-        // [`crate::native_font::TextFace::metric`]. The engine and the renderer
-        // then measure through the same table rather than through two copies of
-        // one rule.
-        if machine.mem.version() == 6 {
-            if let Some(text) = v6_text.as_ref() {
-                machine.set_v6_text(text.metric().clone());
-            }
-        }
-        // v6 (SQ-0479): the game lays out on the 640×400 UNIT screen, so
-        // `picture_data` must report the doubled (unit-space) picture sizes —
-        // Frotz's Amiga/DOS interpreter returns `scaler * size` for every pic.
-        // PictSource keeps the raw art-native dims; only the game-facing table
-        // is scaled here (one crossing into unit space).
-        //
-        // …but ONLY for art that declares a standard window to be scaled against
-        // (SQ-0715). Blorb §11: a resource file with no `Reso` chunk has no
-        // scalable images at all, and non-scalable images are shown at their
-        // actual size, one image pixel per screen pixel. `v6_screen_px` IS that
-        // chunk's standard window, so its absence is the spec's own signal.
-        //
-        // SQ-0790: per axis, because an EGA/CGA archive's pixels are half as
-        // wide. The source supplies the pair when it knows one; absent that the
-        // uniform rule stands, which is every path that existed before.
-        let art_scale = if machine.mem.version() == 6 && v6_screen_px.is_some() {
-            v6_art_scale.unwrap_or((V6_ART_SCALE, V6_ART_SCALE))
-        } else {
-            (1, 1)
-        };
-        let picture_dims = if machine.mem.version() == 6 {
-            picture_dims
-                .into_iter()
-                .map(|(n, w, h)| (n, w * art_scale.0 as u16, h * art_scale.1 as u16))
-                .collect()
-        } else {
-            picture_dims
-        };
-        machine.set_picture_dims(picture_dims);
-        machine.set_interpreter_number(interpreter_number);
-        machine.init_caps();
-        // v6 (SQ-0479): present the reference-authentic UNIT screen — the Blorb
-        // `Reso` standard window (the ART resolution, default 320×200) at the
-        // scale the machine drew it, which for the whole corpus but one is the
-        // ×2 of Frotz's Amiga/DOS profile (640×400, 8×16 cell → 80×25). The
-        // screen and the picture dims (above) scale together, so the game's
-        // window/art layout math and our `is_content_art` ratios stay
-        // consistent. init_caps seeded the v1–5 default; this overrides it for
-        // v6 only, before the game can read it.
-        if machine.mem.version() == 6 {
-            let (art_w, art_h) = v6_screen_px.unwrap_or((320, 200));
-            // SQ-0838: the screen is the art's picture space AT THE SCALE THIS
-            // MACHINE DREW IT, which is one statement covering what used to be
-            // a fixed doubling. For every rendition that existed before it is
-            // the same arithmetic by another name — 320×200 at (2,2) and EGA's
-            // 640×200 at (1,2) are both 640×400 — and the difference it buys is
-            // the standard Macintosh, whose monochrome plate is drawn for a
-            // 480×300 screen and displayed 1:1 (`mac/gfx.p`). Doubling that one
-            // anyway would put a 960×600 screen behind a 480×300 plate.
-            //
-            // Absent a declared window there is no picture space to scale, so
-            // the uniform rule stands and the screen is the 640×400 it always
-            // was — the Blorb-less v6 stories (scopa, mysterious01) reach this.
-            let screen_scale = match (v6_screen_px, v6_art_scale) {
-                (Some(_), Some(s)) => s,
-                _ => (V6_ART_SCALE, V6_ART_SCALE),
-            };
-            let w = art_w.saturating_mul(screen_scale.0.max(1) as u16);
-            let h = art_h.saturating_mul(screen_scale.1.max(1) as u16);
-            // SQ-0917: hand the machine the PIXELS, and let it derive the grid.
-            //
-            // This used to round the screen to the nearest whole CELL and declare
-            // that instead, which was a workaround for the round trip on the other
-            // side: `set_screen_dims` took a grid and multiplied it back into
-            // `$22`/`$24`, so anything the cell did not divide was lost, and
-            // rounding down would have told Zork Zero its 300-pixel Macintosh plate
-            // sat on a 288-pixel screen. `set_v6_screen_px` carries the pixels
-            // verbatim, so there is nothing to round and nothing to compensate for
-            // — the screen IS the archive's, and the character grid is a quotient
-            // of it exactly as `mac/xzip.lst` computes `totRows`/`totCols`.
-            //
-            // The rounding had to go rather than stay harmlessly: at the
-            // Macintosh's 7-wide cell it turned 640 into 637 and 480 into 483.
-            machine.set_v6_screen_px(w, h);
-        } else if let Some((r, c)) = host_screen {
-            // SQ-0680: seed the REAL host pane before boot, so a v4/v5 status
-            // routine that lays itself out once at boot (Zork 1) bakes in field
-            // columns that are already correct for this pane, rather than the
-            // zvm 80×24 fallback `init_caps` just seeded a few lines above.
-            machine.set_screen_dims(r.clamp(1, 255) as u8, c.clamp(1, 255) as u8);
-        }
-        // SQ-0680: the width actually declared to the story at boot — the
-        // seeded pane column count, or the zvm fallback `init_caps` used absent
-        // a seed. `declared_story_screen_dims`'s floor reads this back so it
-        // never re-widens a correctly-seeded narrow boot to the old hardcoded
-        // default.
-        let boot_screen_cols = host_screen
-            .filter(|_| machine.mem.version() != 6)
-            .map(|(_, c)| c.clamp(1, 255))
+        // Both read BEFORE the config is handed over, because it is consumed by
+        // the boot. `resolved_art_scale` is the same number `BootConfig` scaled
+        // the picture table by, asked for rather than recomputed — the renderer
+        // composites in that space (SQ-0479, SQ-0715, SQ-0790).
+        let art_scale = config.resolved_art_scale(mem.version());
+        // SQ-0680: the width actually declared to the story at boot — the seeded
+        // pane column count, or the zvm fallback `init_caps` used absent a seed.
+        // `declared_story_screen_dims`'s floor reads this back so it never
+        // re-widens a correctly-seeded narrow boot to the old hardcoded default.
+        // A v6 story is never told a grid, so it always takes the fallback.
+        let boot_screen_cols = config
+            .screen_grid()
+            .filter(|_| mem.version() != 6)
+            .map(|(_, c)| c as u16)
             .unwrap_or(zvm::screen::DEFAULT_SCREEN_COLS as u16);
+        let sink = Box::new(CaptureSink::new());
+        let mut machine = Machine::boot(mem, sink, config);
         // Trace from the very first instruction when requested, so the opening
         // run below records boot PCs into `ever_exec_pcs`. Also capture screen
         // opcodes from boot — a v6 game does its whole window/margin/picture
@@ -2053,24 +1952,31 @@ impl GameSession {
             .unwrap_or((640, 400))
     }
 
-    /// Drain `Machine::pending_pictures` and `Machine::pending_erase_fills`,
-    /// applying both to the screen IN THE ORDER THE GAME ISSUED THEM, and return
-    /// the drained picture events for `TurnResult` — mirrors `pending_sounds`,
-    /// except the rasterization happens here rather than in the app layer (Task 2
-    /// decision: canvas store + Pict source both live on `GameSession` so the Task
-    /// 4 screen adapter can read `pictures_canvas` without reaching into
-    /// `AppState`). A no-op drain for non-v6 stories, which never push either.
+    /// Drain [`zvm::cpu::exec::Machine::take_paint_events`], apply every one of
+    /// them to the screen, and return the picture events for `TurnResult` —
+    /// mirrors `pending_sounds`, except the rasterization happens here rather than
+    /// in the app layer (Task 2 decision: canvas store + Pict source both live on
+    /// `GameSession` so the Task 4 screen adapter can read `pictures_canvas`
+    /// without reaching into `AppState`). A no-op drain for non-v6 stories, which
+    /// never push anything.
     ///
-    /// The two queues are one timeline (`EraseFill::pics_before`, SQ-0715). Fills
-    /// and pictures paint the same screen, so draining one and then the other
-    /// replays the turn out of order: scopa's boot fills the green table, draws
-    /// its Neapolitan and Sicilian card pictures and then fills the menu buttons,
-    /// and running all the fills last let the opening full-screen clear erase both
-    /// cards it had already painted.
+    /// The interleave used to be reconstructed here from `EraseFill::pics_before`
+    /// (SQ-0715); since SQ-1396 it is `zvm`'s, and there is no way to take the two
+    /// queues apart. That matters because getting it wrong is silent: scopa's boot
+    /// fills the green table, draws its Neapolitan and Sicilian card pictures and
+    /// then fills the menu buttons, so fills-last lets the opening full-screen
+    /// clear erase both cards it had already painted.
     fn drain_pictures(&mut self) -> Vec<PictureEvent> {
-        let events = self.machine.take_pending_pictures();
-        let fills = self.machine.take_pending_erase_fills();
-        let mut next_fill = 0usize;
+        let paints = self.machine.take_paint_events();
+        // The pictures alone, because the pacing decisions below are about what
+        // covers what and a fill covers nothing the renderer paces on.
+        let events: Vec<PictureEvent> = paints
+            .iter()
+            .filter_map(|p| match p {
+                zvm::cpu::exec::PaintEvent::Picture(ev) => Some(*ev),
+                _ => None,
+            })
+            .collect();
         // A new turn supersedes whatever sequence was still playing: those frames
         // describe a screen the game has already moved on from.
         self.paced_frames.clear();
@@ -2099,13 +2005,23 @@ impl GameSession {
         // together, so the pillars — each a single disjoint image — were held only
         // because the compass shared their turn.
         let covers_earlier = self.events_that_repaint_covered_ground(&events);
-        for (i, ev) in events.iter().enumerate() {
-            // Every fill the game issued before this picture goes down first.
-            while next_fill < fills.len() && fills[next_fill].pics_before as usize <= i {
-                let f = fills[next_fill];
-                self.apply_erase_fill(&f);
-                next_fill += 1;
-            }
+        // One walk, in the game's own order — a fill that came before a picture
+        // goes down before it, and one that came after goes down after.
+        let mut i = 0usize;
+        for paint in &paints {
+            let ev = match paint {
+                zvm::cpu::exec::PaintEvent::Erase(f) => {
+                    self.apply_erase_fill(f);
+                    continue;
+                }
+                zvm::cpu::exec::PaintEvent::Picture(ev) => ev,
+                // `PaintEvent` is `#[non_exhaustive]`, so a kind zvm adds later
+                // reaches this arm rather than failing the build. It is skipped
+                // deliberately: the pacing arithmetic below counts PICTURES, and
+                // silently miscounting them would be worse than not painting
+                // something this build has never heard of.
+                _ => continue,
+            };
             self.apply_picture_event(ev);
             // Hold the screen here only when the NEXT picture to paint is about to
             // cover ground already painted — that is the moment there is something
@@ -2124,12 +2040,7 @@ impl GameSession {
                     });
                 }
             }
-        }
-        // …and everything the game filled after its last picture (or, on a turn
-        // with no pictures at all, the whole queue).
-        for f in &fills[next_fill..] {
-            let f = *f;
-            self.apply_erase_fill(&f);
+            i += 1;
         }
         // The last picture of the turn may still be sitting on a canvas whose
         // window has since moved (scopa moves window 3 again for the next fill
