@@ -9,6 +9,7 @@
 // Tasks 10–13 add arms to the same match without restructuring the core.
 
 use crate::cpu::decode::{decode, Branch, Instr, Operand, OperandCount};
+pub use crate::cpu::boot::BootConfig;
 use crate::cpu::state::{call_routine, peek_stack, poke_stack, read_var, return_value, write_var, State};
 use crate::dictionary;
 use crate::io::{BufferOutput, Output};
@@ -148,6 +149,21 @@ pub struct EraseFill {
     pub pics_before: u32,
 }
 
+/// One paint operation a Version 6 story issued, on the single timeline the two
+/// queues really are (SQ-1396).
+///
+/// Pictures and erase-fills paint the same screen and a game interleaves them
+/// freely, so they cannot be replayed as two lists — see
+/// [`Machine::take_paint_events`], which is the only way to get them.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum PaintEvent {
+    /// A `draw_picture` / `erase_picture`.
+    Picture(PictureEvent),
+    /// The rectangle an `erase_window` filled.
+    Erase(EraseFill),
+}
+
 /// Result of executing one instruction.
 #[derive(Debug, PartialEq)]
 #[non_exhaustive]
@@ -156,7 +172,15 @@ pub enum StepResult {
     Continue,
     /// `quit` opcode — host should stop the run loop.
     Quit,
-    /// `restart` opcode — host should reload and restart.
+    /// `restart` opcode — answer with [`Machine::restart`].
+    ///
+    /// Do NOT rebuild the machine from the original story bytes. ZMSD §6.1.3: "A
+    /// 'restart' is similar: the entire state is restored from the original story
+    /// file, and the stack is emptied; but 'Flags 2' is preserved; and the
+    /// interpreter should reset the *Rst* parts of the header." A rebuilt machine
+    /// loses the two game-writable `Flags 2` bits — transcription (bit 0) and
+    /// fixed-pitch (bit 1) — that the clause preserves, along with every
+    /// mid-session setting the host has made since boot.
     Restart,
     /// `read` / `sread` — host must supply a line of input.
     NeedLine { text_buf: u32, parse_buf: u32 },
@@ -675,6 +699,30 @@ impl Machine {
         }
     }
 
+    /// Build a `Machine` ready for its first [`step()`](Self::step) — the whole
+    /// boot recipe in one call (SQ-1396).
+    ///
+    /// This is [`Machine::with_output`] plus every fact in `config`, applied in
+    /// the one order that is correct, plus [`Machine::init_caps`], plus the
+    /// screen size AFTER it. It does NOT run the story: the returned machine is
+    /// stopped at the initial PC, so a host drives it to its first prompt with
+    /// its own `step()` loop and can trace, instrument or abandon that run.
+    ///
+    /// # Why the order is not the host's to remember
+    ///
+    /// Three classes of setter have to be told apart — those that write the
+    /// header immediately, those latched until `init_caps`, and those that touch
+    /// no header bit but must precede the story's own initialisation — and the
+    /// screen must come after `init_caps`, which seeds a generic 80x24 over the
+    /// top of it. [`BootConfig`]'s module documentation states the whole rule and
+    /// which defect taught each clause of it. The individual setters remain
+    /// public for a MID-RUN change, which is what they are good at.
+    pub fn boot(mem: Memory, out: Box<dyn Output>, config: BootConfig) -> Machine {
+        let mut m = Machine::with_output(mem, out);
+        config.apply(&mut m);
+        m
+    }
+
     /// The output sink this machine prints through.
     pub fn output(&self) -> &dyn Output {
         self.out.as_ref()
@@ -695,9 +743,28 @@ impl Machine {
     /// same address — real story files have static programs above 0x40.
     ///
     /// # Caller
-    /// Call this from the host after loading a real story file, before the first
-    /// `step()`. Not needed for test harnesses built from `sample_story` (whose
-    /// buffers may overlap header bytes).
+    /// Prefer [`Machine::boot`], which calls this in the right place. Reach for
+    /// it directly only in a test harness built from `sample_story` (whose
+    /// buffers may overlap header bytes) or when re-stamping the header
+    /// mid-session, as [`Machine::restart`] does.
+    ///
+    /// # What must precede it, and what must follow
+    ///
+    /// This is where the header capability bytes are actually stamped, so
+    /// everything LATCHED lands here: [`Self::set_interpreter_number`] (`$1E`)
+    /// and [`Self::set_interpreter_version`] (`$1F`), and the palette
+    /// ([`Self::set_palette`]) through which the default colours are resolved.
+    /// [`Self::set_default_colours`] must precede it too — it is re-applied here
+    /// over the 2/9 seed, so a pair set afterwards would survive, but a game that
+    /// reads `$2C`/`$2D` while booting (Beyond Zork picks its colour scheme
+    /// there) needs it in the header before the boot run either way.
+    ///
+    /// What must FOLLOW it is the screen size: this seeds a generic 80x24, so
+    /// [`Self::set_screen_dims`] / [`Self::set_v6_screen_px`] called earlier
+    /// would be silently overwritten.
+    ///
+    /// [`BootConfig`] carries all of that as one value and cannot be told in the
+    /// wrong order.
     pub fn init_caps(&mut self) {
         init_header_caps(&mut self.mem, self.honor_game_colours, self.sound_available, self.interpreter_number, self.interpreter_version, self.palette);
         // Re-apply the host's chosen interpreter defaults over the 2/9 seed
@@ -762,6 +829,12 @@ impl Machine {
         self.pending_restore = false;
         self.pending_sounds.clear();
         self.pending_pictures.clear();
+        // …and the fills with them (SQ-1396). They are one timeline with the
+        // pictures — `EraseFill::pics_before` counts the pictures queued ahead of
+        // each — so clearing one queue and not the other left every surviving
+        // fill stamped against a picture list that no longer exists, to be
+        // replayed after the reboot's own first paints.
+        self.pending_erase_fills.clear();
         self.buffer_screen_mode = 0;
         self.v6_win0_out_chars = 0;
         // `self.screen = screen` above already reset `screen.v6_input_window` to 0
@@ -1339,15 +1412,50 @@ impl Machine {
     }
 
     /// Draw/erase events recorded by `draw_picture`/`erase_picture` since the
-    /// last drain, without taking them.
+    /// last drain, without taking them. Drain them with
+    /// [`Self::take_paint_events`], which is the only door and the only ordering
+    /// that replays a turn correctly.
     pub fn pending_pictures(&self) -> &[PictureEvent] {
         &self.pending_pictures
     }
 
-    /// Take and clear the draw/erase events recorded by
-    /// `draw_picture`/`erase_picture` since the host last drained them.
-    pub fn take_pending_pictures(&mut self) -> Vec<PictureEvent> {
-        std::mem::take(&mut self.pending_pictures)
+    /// Take and clear everything the story has PAINTED since the host last
+    /// drained it — pictures and erase-fills together, in the order the game
+    /// issued them (SQ-1396).
+    ///
+    /// # Why there is no way to take them separately
+    ///
+    /// Both queues paint the same screen and a Version 6 game interleaves them
+    /// freely, so replaying one list and then the other replays the turn in the
+    /// wrong order. *scopa* is the story that proves it: it draws every playing
+    /// card out of `erase_window` fills (hundreds per card) and its boot fills
+    /// the green table, draws its Neapolitan and Sicilian card pictures, then
+    /// fills the menu buttons over the top. Run all the fills last and the
+    /// opening full-screen clear erases both cards it had already painted.
+    ///
+    /// That was a correctness constraint on the HOST, discoverable only from a
+    /// comment on [`EraseFill::pics_before`] — which is the field that records
+    /// the interleave, the count of pictures already queued when a fill was
+    /// pushed. Both queues only ever grow within a turn, so it is a total order
+    /// and this method is the merge: every fill stamped `pics_before == i` comes
+    /// out ahead of picture `i`, and anything stamped past the last picture
+    /// trails it.
+    ///
+    /// A non-v6 story pushes neither and drains empty.
+    pub fn take_paint_events(&mut self) -> Vec<PaintEvent> {
+        let pictures = std::mem::take(&mut self.pending_pictures);
+        let fills = std::mem::take(&mut self.pending_erase_fills);
+        let mut out = Vec::with_capacity(pictures.len() + fills.len());
+        let mut next_fill = 0usize;
+        for (i, ev) in pictures.iter().enumerate() {
+            while next_fill < fills.len() && fills[next_fill].pics_before as usize <= i {
+                out.push(PaintEvent::Erase(fills[next_fill]));
+                next_fill += 1;
+            }
+            out.push(PaintEvent::Picture(*ev));
+        }
+        out.extend(fills[next_fill..].iter().copied().map(PaintEvent::Erase));
+        out
     }
 
     /// Queue a v6 picture-draw/erase event as if the opcode that produces it
@@ -1358,15 +1466,11 @@ impl Machine {
     }
 
     /// Filled rectangles an `erase_window` painted since the last drain,
-    /// without taking them (SQ-0706).
+    /// without taking them (SQ-0706). Drain them with
+    /// [`Self::take_paint_events`], which is the only door and the only ordering
+    /// that replays a turn correctly.
     pub fn pending_erase_fills(&self) -> &[EraseFill] {
         &self.pending_erase_fills
-    }
-
-    /// Take and clear the filled rectangles an `erase_window` painted since
-    /// the host last drained them (SQ-0706).
-    pub fn take_pending_erase_fills(&mut self) -> Vec<EraseFill> {
-        std::mem::take(&mut self.pending_erase_fills)
     }
 
     /// Host-facing diagnostic lines recorded since the last drain, without
@@ -10145,6 +10249,85 @@ pub(crate) mod tests {
         assert_eq!(m.pending_erase_fills.len(), 2, "fills queue, they do not overwrite each other");
         assert_eq!(m.pending_erase_fills[1].x, 73, "the second fill records the window's NEW position");
         assert_eq!(m.pending_erase_fills[1].bg, crate::screen::ZColour::True(0x001f), "and its new colour");
+    }
+
+    /// SQ-1396: erase, picture, erase comes back in THAT order.
+    ///
+    /// The two queues are one timeline and draining them as two lists replays a
+    /// turn wrongly — scopa's boot fills its green table, draws its cards and
+    /// fills the menu buttons over the top, so fills-last erases both cards. The
+    /// merge is `take_paint_events`'s job precisely so no host has to know that.
+    #[test]
+    fn paint_events_drain_in_the_order_the_game_issued_them() {
+        let mut m = build_test_machine(&[]);
+        let mut windows: [crate::screen::ZWindow; 8] = Default::default();
+        windows[3] = crate::screen::ZWindow {
+            x_coord: 61, y_coord: 97, x_size: 12, y_size: 8,
+            bg: crate::screen::ZColour::True(0x7fff),
+            ..Default::default()
+        };
+        m.screen.v6 = Some(crate::screen::V6Windows { windows, current: 3 });
+
+        let pic = |number: u8| PictureEvent {
+            number: number as u16, window: 3, x: 1, y: 1, erase: false,
+            out_chars: 0, margin_after: None, at_cursor: false, win_box: (61, 97, 12, 8),
+        };
+
+        m.exec_var(0x0D, &[3], None, None); // erase_window(3) — the table
+        m.queue_picture_event(pic(1)); //                       a card
+        m.exec_var(0x0D, &[3], None, None); // erase_window(3) — a menu button
+        m.queue_picture_event(pic(2)); //                       a second card
+
+        // Each `erase_window` publishes its RECT and, right after it, the
+        // canvas-clear sentinel picture that tells a host which window's canvas
+        // the rect belongs to — so the issued order is six events, not four.
+        let drained = m.take_paint_events();
+        let shape: Vec<&str> = drained
+            .iter()
+            .map(|p| match p {
+                PaintEvent::Erase(_) => "fill",
+                PaintEvent::Picture(p) if p.erase => "clear",
+                PaintEvent::Picture(_) => "draw",
+            })
+            .collect();
+        assert_eq!(
+            shape,
+            ["fill", "clear", "draw", "fill", "clear", "draw"],
+            "the table, the first card, the button, the second card: {drained:?}",
+        );
+        let drawn: Vec<u16> = drained
+            .iter()
+            .filter_map(|p| match p {
+                PaintEvent::Picture(p) if !p.erase => Some(p.number),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(drawn, [1, 2], "and the cards keep their own order");
+        assert!(m.take_paint_events().is_empty(), "the drain empties both queues");
+    }
+
+    /// A fill stamped past the last picture still lands, and lands last — the
+    /// trailing arm of the merge.
+    ///
+    /// Constructed rather than driven: `erase_window` publishes its sentinel
+    /// picture immediately after its fill, so no opcode reaches this arm today.
+    /// It is the arm a host would have got wrong, so it is pinned.
+    #[test]
+    fn a_fill_stamped_past_the_last_picture_trails_it() {
+        let mut m = build_test_machine(&[]);
+        m.queue_picture_event(PictureEvent {
+            number: 9, window: 3, x: 1, y: 1, erase: false,
+            out_chars: 0, margin_after: None, at_cursor: false, win_box: (1, 1, 4, 4),
+        });
+        m.pending_erase_fills.push(EraseFill {
+            window: 3, x: 1, y: 1, w: 4, h: 4,
+            bg: crate::screen::ZColour::Default,
+            pics_before: 1,
+        });
+        assert!(
+            matches!(m.take_paint_events().as_slice(), [PaintEvent::Picture(_), PaintEvent::Erase(_)]),
+            "the fill the game issued last is applied last",
+        );
     }
 
     /// `erase_window(-1)` clears every window, so every window's box is painted —
