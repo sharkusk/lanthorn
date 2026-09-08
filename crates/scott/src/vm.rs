@@ -59,6 +59,16 @@ pub enum RestoreError {
     ItemCountMismatch,
     /// Bytes remained in the buffer after every field was read.
     TrailingData,
+    /// The first four bytes are not [`Vm::SNAPSHOT_MAGIC`] — not a
+    /// [`Vm::snapshot`] blob at all, foreign data, or (pre-release, no
+    /// back-compat) the headerless form this crate produced before SQ-1402.
+    BadMagic,
+    /// The snapshot declares a format version newer than this build of
+    /// `scott` understands: `found` is what the file's header says,
+    /// `supported` is the newest version this build can restore
+    /// ([`Vm::SNAPSHOT_VERSION`]). Restoring it would misread every field
+    /// after the header, so this is refused before touching any of them.
+    NewerVersion { found: u16, supported: u16 },
 }
 
 impl std::fmt::Display for RestoreError {
@@ -68,6 +78,10 @@ impl std::fmt::Display for RestoreError {
             RestoreError::OutOfRange => write!(f, "save data names a room or counter index outside this game"),
             RestoreError::ItemCountMismatch => write!(f, "save data's item count does not match this game"),
             RestoreError::TrailingData => write!(f, "save data has extra bytes after the snapshot"),
+            RestoreError::BadMagic => write!(f, "save data is not a scott snapshot (bad magic)"),
+            RestoreError::NewerVersion { found, supported } => {
+                write!(f, "save data is format version {found}, newer than this build supports (version {supported})")
+            }
         }
     }
 }
@@ -309,12 +323,30 @@ impl Vm {
         &self.last_blocked
     }
 
-    /// Serialize mutable game state: item locations, player room, flags,
-    /// the live current counter, backup counters, the op-80 saved room, the
-    /// op-87 saved-room registers, and lamp fuel. Manual little-endian byte
-    /// encoding, zero-dep.
+    /// The 4 bytes every [`Vm::snapshot`] blob starts with — the first thing
+    /// [`Vm::restore`] checks, so foreign data (or the headerless form this
+    /// crate produced before SQ-1402, which never carried one) is rejected
+    /// with [`RestoreError::BadMagic`] before any field is read.
+    pub const SNAPSHOT_MAGIC: [u8; 4] = *b"ScSv";
+
+    /// The snapshot format version [`Vm::snapshot`] writes and [`Vm::restore`]
+    /// requires (a `u16`, right after [`Self::SNAPSHOT_MAGIC`]). Bump this
+    /// whenever a field is added, removed, or reordered below; `restore`
+    /// refuses anything newer with [`RestoreError::NewerVersion`] rather than
+    /// misreading it — there is no back-compat requirement pre-release, so an
+    /// older-versioned file is read as this version's own layout, byte for
+    /// byte, unless a future bump adds real per-version branching.
+    pub const SNAPSHOT_VERSION: u16 = 1;
+
+    /// Serialize mutable game state: a 4-byte magic and a `u16` format
+    /// version ([`Self::SNAPSHOT_MAGIC`]/[`Self::SNAPSHOT_VERSION`]), then
+    /// item locations, player room, flags, the live current counter, backup
+    /// counters, the op-80 saved room, the op-87 saved-room registers, and
+    /// lamp fuel. Manual little-endian byte encoding, zero-dep.
     pub fn snapshot(&self) -> Vec<u8> {
         let mut buf = Vec::new();
+        buf.extend_from_slice(&Self::SNAPSHOT_MAGIC);
+        buf.extend_from_slice(&Self::SNAPSHOT_VERSION.to_le_bytes());
         buf.extend_from_slice(&(self.item_loc.len() as u32).to_le_bytes());
         for v in &self.item_loc {
             buf.extend_from_slice(&v.to_le_bytes());
@@ -335,7 +367,9 @@ impl Vm {
         buf
     }
 
-    /// Restore state from `snapshot` bytes. Rejects short/malformed input, a
+    /// Restore state from `snapshot` bytes. Checks the magic and format
+    /// version first ([`RestoreError::BadMagic`] /
+    /// [`RestoreError::NewerVersion`]), then rejects short/malformed input, a
     /// mismatched item count, or an out-of-range room/counter index.
     pub fn restore(&mut self, bytes: &[u8]) -> Result<(), RestoreError> {
         fn read_u32(bytes: &[u8], pos: &mut usize) -> Result<u32, RestoreError> {
@@ -347,8 +381,24 @@ impl Vm {
         fn read_i32(bytes: &[u8], pos: &mut usize) -> Result<i32, RestoreError> {
             read_u32(bytes, pos).map(|v| v as i32)
         }
+        fn read_u16(bytes: &[u8], pos: &mut usize) -> Result<u16, RestoreError> {
+            let end = pos.checked_add(2).ok_or(RestoreError::Truncated)?;
+            let slice = bytes.get(*pos..end).ok_or(RestoreError::Truncated)?;
+            *pos = end;
+            Ok(u16::from_le_bytes(slice.try_into().unwrap()))
+        }
 
         let mut pos = 0usize;
+        let magic = bytes.get(pos..pos + 4).ok_or(RestoreError::Truncated)?;
+        if magic != Self::SNAPSHOT_MAGIC {
+            return Err(RestoreError::BadMagic);
+        }
+        pos += 4;
+        let version = read_u16(bytes, &mut pos)?;
+        if version > Self::SNAPSHOT_VERSION {
+            return Err(RestoreError::NewerVersion { found: version, supported: Self::SNAPSHOT_VERSION });
+        }
+
         let item_count = read_u32(bytes, &mut pos)? as usize;
         if item_count != self.item_loc.len() {
             return Err(RestoreError::ItemCountMismatch);
@@ -1588,6 +1638,42 @@ mod tests {
         assert_eq!(vm.backup_counter_at(2), 9);
         assert_eq!(vm.saved_room_at(), 1);
         assert_eq!(vm.current_room(), 0);
+    }
+
+    // SQ-1402: the snapshot format grew a 4-byte magic + u16 version header.
+    // Four cases: round-trip already lives above
+    // (`snapshot_restore_counter_and_room`, unaffected by the header — it
+    // drives the public API only); these cover the header's own failure modes.
+
+    #[test]
+    fn restore_rejects_bad_magic() {
+        let mut vm = vm_with(one_item(), rooms4(), 1);
+        let mut blob = vm.snapshot();
+        blob[0] ^= 0xFF; // corrupt the magic, leave everything else intact
+        assert_eq!(vm.restore(&blob), Err(RestoreError::BadMagic));
+    }
+
+    #[test]
+    fn restore_rejects_a_newer_format_version() {
+        let mut vm = vm_with(one_item(), rooms4(), 1);
+        let mut blob = vm.snapshot();
+        // The version is the u16 right after the 4-byte magic, LE.
+        let newer = Vm::SNAPSHOT_VERSION + 1;
+        blob[4..6].copy_from_slice(&newer.to_le_bytes());
+        assert_eq!(
+            vm.restore(&blob),
+            Err(RestoreError::NewerVersion { found: newer, supported: Vm::SNAPSHOT_VERSION }),
+            "both numbers are named, not just a bare refusal",
+        );
+    }
+
+    #[test]
+    fn restore_rejects_a_truncated_header() {
+        let mut vm = vm_with(one_item(), rooms4(), 1);
+        let blob = vm.snapshot();
+        assert_eq!(vm.restore(&[]), Err(RestoreError::Truncated), "nothing at all");
+        assert_eq!(vm.restore(&blob[..3]), Err(RestoreError::Truncated), "magic itself cut short");
+        assert_eq!(vm.restore(&blob[..5]), Err(RestoreError::Truncated), "version cut short");
     }
 
     #[test]
