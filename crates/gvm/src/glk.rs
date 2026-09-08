@@ -1906,9 +1906,10 @@ impl Model {
         };
         {
             // `nid` was just allocated; see the invariant note by `win`.
-            let w = self.win_mut(nid).unwrap();
-            w.stream = sid;
-            w.styles = styles;
+            if let Some(w) = self.win_mut(nid) {
+                w.stream = sid;
+                w.styles = styles;
+            }
         }
 
         if split == 0 {
@@ -1930,9 +1931,8 @@ impl Model {
         // already proved live (`split`, and `old_parent` by the tree invariant) —
         // see the note by `win`.
         let pid = self.alloc_window(WinType::Pair, 0);
-        let old_parent = self.win(split).unwrap().parent;
-        {
-            let p = self.win_mut(pid).unwrap();
+        let old_parent = self.win(split).map(|w| w.parent).unwrap_or(0);
+        if let Some(p) = self.win_mut(pid) {
             p.parent = old_parent;
             p.child1 = split;
             p.child2 = nid;
@@ -1940,13 +1940,16 @@ impl Model {
             p.method = method;
             p.size = size;
         }
-        self.win_mut(split).unwrap().parent = pid;
-        self.win_mut(nid).unwrap().parent = pid;
+        if let Some(w) = self.win_mut(split) {
+            w.parent = pid;
+        }
+        if let Some(w) = self.win_mut(nid) {
+            w.parent = pid;
+        }
         if old_parent == 0 {
             self.root = pid;
-        } else {
+        } else if let Some(op) = self.win_mut(old_parent) {
             // Replace `split` with the new pair in its old parent's child links.
-            let op = self.win_mut(old_parent).unwrap();
             if op.child1 == split {
                 op.child1 = pid;
             } else if op.child2 == split {
@@ -1972,19 +1975,19 @@ impl Model {
             // Closing the root empties the whole display.
             self.free_window_subtree(win);
             self.root = 0;
-        } else {
+        } else if let Some(pw) = self.win(parent) {
             // The parent is a pair; promote the sibling into the pair's place.
             // `parent`, its two children and `grandparent` are all live by the
             // tree invariant — see the note by `win`.
-            let pw = self.win(parent).unwrap();
             let sibling = if pw.child1 == win { pw.child2 } else { pw.child1 };
             let grandparent = pw.parent;
             self.free_window_subtree(win);
-            self.win_mut(sibling).unwrap().parent = grandparent;
+            if let Some(sw) = self.win_mut(sibling) {
+                sw.parent = grandparent;
+            }
             if grandparent == 0 {
                 self.root = sibling;
-            } else {
-                let gp = self.win_mut(grandparent).unwrap();
+            } else if let Some(gp) = self.win_mut(grandparent) {
                 if gp.child1 == parent {
                     gp.child1 = sibling;
                 } else if gp.child2 == parent {
@@ -1993,6 +1996,11 @@ impl Model {
             }
             // Free the now-defunct pair node.
             self.windows[(parent - 1) as usize] = None;
+        } else {
+            // Invariant violated (should never happen — see the note by
+            // `win`): the parent id is not live. Free just this window's
+            // subtree rather than panicking on the relink.
+            self.free_window_subtree(win);
         }
 
         // A closed window's stream must not remain current.
@@ -2054,21 +2062,23 @@ impl Model {
     /// from `relayout` at `self.root` and from itself along child links, so `id` is
     /// live by the tree invariant — see the note by `win`.
     fn layout_window(&mut self, id: u32, rect: Rect) {
-        let (wintype, method, size, child1, child2, key) = {
-            let w = self.win_mut(id).unwrap();
+        let Some((wintype, method, size, child1, child2, key)) = self.win_mut(id).map(|w| {
             w.rect = rect;
             (w.wintype, w.method, w.size, w.child1, w.child2, w.key)
+        }) else {
+            return;
         };
         match wintype {
             WinType::TextGrid => {
-                let w = self.win_mut(id).unwrap();
-                w.grid.width = rect.width;
-                w.grid.height = rect.height;
-                if w.grid.cx >= rect.width {
-                    w.grid.cx = 0;
-                }
-                if w.grid.cy >= rect.height {
-                    w.grid.cy = 0;
+                if let Some(w) = self.win_mut(id) {
+                    w.grid.width = rect.width;
+                    w.grid.height = rect.height;
+                    if w.grid.cx >= rect.width {
+                        w.grid.cx = 0;
+                    }
+                    if w.grid.cy >= rect.height {
+                        w.grid.cy = 0;
+                    }
                 }
             }
             WinType::TextBuffer => {}
@@ -2472,7 +2482,9 @@ impl Model {
             (u32::from_be_bytes([b[0], b[1], b[2], b[3]]), 4)
         };
         // Re-lookup to end the immutable borrow; `id` was proved present above.
-        self.resource_streams.get_mut(&id).unwrap().pos += adv;
+        if let Some(rs) = self.resource_streams.get_mut(&id) {
+            rs.pos += adv;
+        }
         if let Some(st) = self.stream_mut(id) {
             st.read_count = st.read_count.saturating_add(1);
         }
@@ -2637,7 +2649,9 @@ impl Model {
                         _ => 0,
                     };
                     let np = (base + pos as i64).clamp(0, len) as usize;
-                    self.file_streams.get_mut(&id).unwrap().pos = np;
+                    if let Some(fs) = self.file_streams.get_mut(&id) {
+                        fs.pos = np;
+                    }
                 }
             }
             Some(StreamKind::Null) => {
@@ -2651,7 +2665,9 @@ impl Model {
                         _ => 0,
                     };
                     let np = (base + pos as i64).clamp(0, len) as u32;
-                    self.savegame_streams.get_mut(&id).unwrap().pos = np;
+                    if let Some(ss) = self.savegame_streams.get_mut(&id) {
+                        ss.pos = np;
+                    }
                 }
             }
             Some(StreamKind::Resource { .. }) => {
@@ -2663,7 +2679,9 @@ impl Model {
                         _ => 0,
                     };
                     let np = (base + pos as i64).clamp(0, len) as usize;
-                    self.resource_streams.get_mut(&id).unwrap().pos = np;
+                    if let Some(rs) = self.resource_streams.get_mut(&id) {
+                        rs.pos = np;
+                    }
                 }
             }
             _ => {}
@@ -2750,7 +2768,9 @@ impl Model {
             }
             nchars += 1;
         }
-        self.file_streams.get_mut(&id).unwrap().pos = pos;
+        if let Some(fs) = self.file_streams.get_mut(&id) {
+            fs.pos = pos;
+        }
         if let Some(st) = self.stream_mut(id) {
             st.write_count = st.write_count.saturating_add(nchars);
         }
@@ -2794,7 +2814,9 @@ impl Model {
         } else {
             Self::vfs_decode_utf8(data, pos)?
         };
-        self.file_streams.get_mut(&id).unwrap().pos = pos + adv;
+        if let Some(fs) = self.file_streams.get_mut(&id) {
+            fs.pos = pos + adv;
+        }
         if let Some(st) = self.stream_mut(id) {
             st.read_count = st.read_count.saturating_add(1);
         }
@@ -5257,5 +5279,90 @@ mod style_hint_tests {
         assert_eq!(m.style_measure(win, 3, 0), None, "cleared Indentation is unknown");
         assert_eq!(m.style_measure(win, 3, 2), None, "cleared Justification is unknown");
         assert!(!m.style_distinguish(win, 0, 3), "cleared layout hints no longer distinguish");
+    }
+}
+
+/// SQ-1395: the eighteen non-test `unwrap`/`expect` call sites this file used
+/// to carry (all on the window-tree and stream-cursor invariants documented
+/// by the block comment above `Model::win`) are now `if let`/`let else` —
+/// never reachable by a hostile Glulx file (see that comment), but no longer
+/// a panic surface if a future bug ever violated the invariant either. These
+/// exercise every converted branch through the PUBLIC API, so a regression
+/// that reintroduced a bad unwrap would show up as a panic here rather than
+/// only in code review.
+#[cfg(test)]
+mod fault_hardening_tests {
+    use super::*;
+
+    /// Window-tree category (`window_open`/`window_close`/`layout_window`,
+    /// exec.rs:1909-2064 before conversion). Builds a three-level tree —
+    /// `root(A, pair(B, C))` — then closes B (sibling C, grandparent = root,
+    /// exercising the `grandparent != 0` relink) and then C (sibling A,
+    /// grandparent = 0, exercising `self.root = sibling`), and finally A
+    /// (closing the root itself). Every step also drives `relayout`
+    /// (`layout_window`) over the live tree. No step should panic, and the
+    /// tree must end empty.
+    #[test]
+    fn window_close_relinks_through_every_converted_branch() {
+        let mut m = Model::new();
+        let a = m.window_open(0, 0, 0, 3, 0).unwrap(); // root: TextBuffer A
+        let b = m.window_open(a, WINMETHOD_RIGHT | WINMETHOD_PROPORTIONAL, 50, 3, 0).unwrap(); // split -> pair(A, B)
+        let c = m.window_open(b, WINMETHOD_BELOW | WINMETHOD_PROPORTIONAL, 50, 3, 0).unwrap(); // split B -> pair(B, C)
+        m.relayout(80, 24, (9, 19));
+        assert!(m.window_tree().is_some(), "three live windows, a real tree");
+
+        // Close B: parent is the inner pair, grandparent is the root pair
+        // (nonzero) — exercises `win_mut(grandparent)`.
+        m.window_close(b);
+        m.relayout(80, 24, (9, 19));
+        assert!(m.win(c).is_some(), "C survives its sibling's close");
+        assert!(m.win(a).is_some(), "A (outside the closed split) is untouched");
+
+        // Close C: parent is now the root pair, grandparent is 0 — exercises
+        // the `self.root = sibling` branch instead.
+        m.window_close(c);
+        m.relayout(80, 24, (9, 19));
+        assert_eq!(m.root(), a, "A is promoted straight to root");
+
+        // Close A: parent == 0, the "closing the root" branch.
+        m.window_close(a);
+        assert_eq!(m.root(), 0, "the display is empty");
+        assert!(m.window_tree().is_none());
+    }
+
+    /// Stream-cursor category (`resource_stream_read_char`,
+    /// `stream_set_position`'s three non-memory arms, `file_stream_write`,
+    /// `file_stream_read_char`; exec.rs:2485-2807 before conversion). Drives
+    /// every seek mode and every read/write cursor-advance path through the
+    /// public API for both a resource stream and a file stream.
+    #[test]
+    fn stream_cursor_advances_survive_every_seek_mode() {
+        let mut m = Model::new();
+
+        // Resource stream: read, then seek by all three modes.
+        let rsrc = m.stream_open_resource(b"hello world".to_vec(), false, true, 0);
+        assert_eq!(m.resource_stream_read_char(rsrc), Some(b'h' as u32));
+        assert_eq!(m.resource_stream_read_char(rsrc), Some(b'e' as u32));
+        m.stream_set_position(rsrc, 0, 0); // absolute: back to start
+        assert_eq!(m.resource_stream_read_char(rsrc), Some(b'h' as u32));
+        m.stream_set_position(rsrc, 2, 1); // relative: +2 from pos 1
+        assert_eq!(m.resource_stream_read_char(rsrc), Some(b'l' as u32));
+        m.stream_set_position(rsrc, 0, 2); // from end
+        assert_eq!(m.resource_stream_read_char(rsrc), None, "seeked to EOF");
+
+        // File stream: write, then read back after seeking, exercising the
+        // write cursor (`file_stream_write`) and the read cursor
+        // (`file_stream_read_char`) together with all three seek modes.
+        let fref = m.fileref_create(0x00, "cursor-test".to_string(), 0);
+        let wsid = m.stream_open_file(fref, 0x01, false, 0); // Write
+        m.file_stream_write(wsid, "abcdef");
+        let rsid = m.stream_open_file(fref, 0x02, false, 0); // Read
+        assert_eq!(m.file_stream_read_char(rsid), Some(b'a' as u32));
+        m.stream_set_position(rsid, 0, 0); // absolute
+        assert_eq!(m.file_stream_read_char(rsid), Some(b'a' as u32));
+        m.stream_set_position(rsid, 2, 1); // relative: +2 from pos 1
+        assert_eq!(m.file_stream_read_char(rsid), Some(b'd' as u32));
+        m.stream_set_position(rsid, -1, 2); // from end
+        assert_eq!(m.file_stream_read_char(rsid), Some(b'f' as u32));
     }
 }

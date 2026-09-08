@@ -152,6 +152,7 @@ fn play_named(name: &str, image: Vec<u8>, accel: bool, commands: &[&str]) -> Run
                 panic!("{name}: unexpected non-timer event wait (accel={accel})")
             }
             StepResult::Quit => break,
+            StepResult::Fault => panic!("{name}: unexpected VM fault (accel={accel})"),
             // A game's OWN fixed-name save is startup, not a defect: Counterfeit
             // Monkey `@save`s a `_Counterfeit_Monkey-startup-data` init cache
             // before it ever asks for input, so a host that panics here can

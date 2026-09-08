@@ -23,8 +23,16 @@ pub(crate) type R<T> = Result<T, String>;
 pub enum StepResult {
     /// Execution should continue with the next instruction.
     Continue,
-    /// Execution has ended (`quit`, an outer return, or a recorded fault).
+    /// Execution has ended cleanly (`quit`/`glk_exit`, or a return from the
+    /// start frame) — the story is over, not broken.
     Quit,
+    /// A runtime fault halted the machine (SQ-1395): a bad Glk argument, an
+    /// out-of-range memory access, or a host-issued [`Machine::abort_with_fault`]
+    /// (a runaway-turn cutoff, which is fault-shaped by design). Distinct from
+    /// [`StepResult::Quit`] so an embedder who never reads
+    /// [`Machine::diagnostics`] can still tell a crashed story from a clean
+    /// exit. The host reads [`Machine::take_fault_trace`] for detail.
+    Fault,
     /// A `glk_select` is pending a **line**-input event on window `win`. The host
     /// supplies the typed line via [`Machine::supply_line`], then resumes.
     NeedLine {
@@ -333,6 +341,13 @@ pub struct Machine {
     line_seed: Option<String>,
     /// Set once execution has ended (outer return or quit/fault).
     pub(crate) halted: bool,
+    /// Set alongside `halted` when the halt was a FAULT (a real runtime error,
+    /// or [`Machine::abort_with_fault`]) rather than a clean `quit`/`glk_exit`/
+    /// outer return — so `step()` can keep answering [`StepResult::Fault`]
+    /// on every call after the one that recorded it, even once the host has
+    /// drained `fault_trace` via [`Machine::take_fault_trace`] (SQ-1395).
+    /// Cleared by `@restart` alongside `halted`.
+    pub(crate) faulted: bool,
     /// Protected RAM range `(addr, len)` preserved across restore/restoreundo;
     /// `len == 0` means no protection (set by the `protect` opcode).
     protect: (u32, u32),
@@ -838,6 +853,7 @@ impl Machine {
             text_run: None,
             line_seed: None,
             halted: false,
+            faulted: false,
             protect: (0, 0),
             undo_stack: Vec::new(),
             accel_funcs: std::collections::HashMap::new(),
@@ -867,8 +883,10 @@ impl Machine {
         m.install_fingerprinted_accel();
         // Enter the start function directly (no call stub beneath it; its fp is 0).
         if let Err(msg) = m.build_frame_and_enter(start, &[]) {
+            m.fault_trace = Some(m.build_trace(msg.clone()));
             m.diagnostics.push(msg);
             m.halted = true;
+            m.faulted = true;
         }
         m
     }
@@ -2831,6 +2849,7 @@ impl Machine {
         self.pending_event = None;
         self.pending_fileref = None;
         self.halted = false;
+        self.faulted = false;
         self.protect = (0, 0);
         self.undo_stack.clear();
         self.accel_funcs.clear();
@@ -5767,12 +5786,13 @@ impl Machine {
 
     // ── the run loop ──────────────────────────────────────────────────────────
 
-    /// Execute one instruction. Returns [`StepResult::Quit`] on `quit`, an outer
-    /// return, or any fault (which is recorded in `diagnostics`); otherwise
+    /// Execute one instruction. Returns [`StepResult::Quit`] on a clean `quit`
+    /// or outer return, [`StepResult::Fault`] on any recorded runtime fault
+    /// (SQ-1395; also recorded in `diagnostics`), otherwise
     /// [`StepResult::Continue`]. Never panics.
     pub fn step(&mut self) -> StepResult {
         if self.halted {
-            return StepResult::Quit;
+            return self.halted_result();
         }
         // Still suspended on a prior glk_select: re-report until the host supplies.
         if let Some(sr) = self.suspend_result() {
@@ -5794,7 +5814,7 @@ impl Machine {
             None => Ok(()),
         });
         match stepped {
-            Ok(()) if self.halted => StepResult::Quit,
+            Ok(()) if self.halted => self.halted_result(),
             // A glk_select this step may have suspended for input, or an
             // @save/@restore this step may have suspended for host file I/O.
             Ok(()) => self
@@ -5806,8 +5826,22 @@ impl Machine {
                 self.fault_trace = Some(self.build_trace(msg.clone()));
                 self.diagnostics.push(msg);
                 self.halted = true;
-                StepResult::Quit
+                self.faulted = true;
+                StepResult::Fault
             }
+        }
+    }
+
+    /// The `StepResult` for an already-`halted` machine: `Fault` if the halt
+    /// was a fault, `Quit` if it was clean. Kept a separate flag from
+    /// `fault_trace` (SQ-1395) because `take_fault_trace` drains that Option —
+    /// a host that reads the trace once and calls `step()` again must still
+    /// see `Fault`, not have it read back as a clean `Quit`.
+    fn halted_result(&self) -> StepResult {
+        if self.faulted {
+            StepResult::Fault
+        } else {
+            StepResult::Quit
         }
     }
 
@@ -5820,7 +5854,7 @@ impl Machine {
     /// had occurred. Used by the host to abort a runaway turn (an unbounded game
     /// loop) so the app can survive instead of hard-hanging. Records the same
     /// fault trace + diagnostic a real fault would, and halts; the next `step`
-    /// returns `Quit`.
+    /// returns [`StepResult::Fault`].
     pub fn abort_with_fault(&mut self, msg: String) {
         if self.halted {
             return;
@@ -5828,6 +5862,7 @@ impl Machine {
         self.fault_trace = Some(self.build_trace(msg.clone()));
         self.diagnostics.push(msg);
         self.halted = true;
+        self.faulted = true;
     }
 
     /// Build a [`crate::trace::StackTrace`] by walking the frame-pointer chain
@@ -6542,7 +6577,7 @@ mod tests {
                     steps += 1;
                     assert!(steps < 1000, "runaway");
                 }
-                StepResult::Quit => break,
+                StepResult::Fault => break,
                 other => panic!("unexpected {other:?}"),
             }
         }
@@ -6565,6 +6600,35 @@ mod tests {
             }
         }
         assert!(m.take_fault_trace().is_none());
+    }
+
+    /// SQ-1395: `StepResult::Fault` is distinct from `StepResult::Quit`, and
+    /// stays `Fault` on every later `step()` call — even after the host has
+    /// drained `take_fault_trace()` — so an embedder who checks only the
+    /// `StepResult` (never `diagnostics`) can still tell a crashed story
+    /// from a clean exit at any point, not just the one step that faulted.
+    #[test]
+    fn fault_step_result_persists_after_the_trace_is_drained() {
+        use asm::Op::{Mem32, Stack};
+        let body = asm::ins(0x40, &[Mem32(0x7FFF_FFFF), Stack]); // OOB load -> fault
+        let mut m = machine_with_body(&[], body);
+        let mut steps = 0;
+        loop {
+            match m.step() {
+                StepResult::Continue => {
+                    steps += 1;
+                    assert!(steps < 1000, "runaway");
+                }
+                StepResult::Fault => break,
+                other => panic!("unexpected {other:?}"),
+            }
+        }
+        assert!(m.take_fault_trace().is_some(), "trace present right after the fault");
+        // Drained now — a naive `fault_trace.is_some()` check would read this
+        // as a clean quit from here on. `step()` must not.
+        assert!(m.take_fault_trace().is_none(), "trace is one-shot");
+        assert_eq!(m.step(), StepResult::Fault, "still Fault after the trace is drained");
+        assert_eq!(m.step(), StepResult::Fault, "and stays Fault on every later call");
     }
 
     #[test]
@@ -10422,11 +10486,12 @@ mod tests {
     #[test]
     fn abort_with_fault_halts_and_records_a_recoverable_fault() {
         // The host watchdog calls this to end a runaway turn. It must halt the VM
-        // (next step → Quit) and record a fault trace + diagnostic, exactly like a
-        // real runtime fault, so the app's survival path keeps it interactive.
+        // (next step → Fault, SQ-1395) and record a fault trace + diagnostic,
+        // exactly like a real runtime fault, so the app's survival path keeps it
+        // interactive.
         let mut m = machine_ram(asm::ins(0x00, &[]), 0x200); // a nop program, not run
         m.abort_with_fault("runaway game loop (test)".to_string());
-        assert_eq!(m.step(), StepResult::Quit, "halted after abort");
+        assert_eq!(m.step(), StepResult::Fault, "halted after abort");
         assert!(m.take_fault_trace().is_some(), "fault trace recorded");
         assert!(
             m.diagnostics.iter().any(|d| d.contains("runaway")),
@@ -12653,7 +12718,7 @@ mod tests {
         .concat();
         let mut m = machine_with_body(&[], body);
         assert_eq!(m.step(), StepResult::Continue, "setiosys");
-        assert_eq!(m.step(), StepResult::Quit, "the filter fault surfaces as this instruction's fault");
+        assert_eq!(m.step(), StepResult::Fault, "the filter fault surfaces as this instruction's fault");
         assert!(m.halted);
         assert!(
             m.diagnostics.iter().any(|d| d.contains("not a function")),

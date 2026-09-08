@@ -345,6 +345,14 @@ fn drive(machine: &mut Machine) -> DriveStop {
                 }
             }
             StepResult::Quit => return DriveStop::Quit,
+            // A real VM fault (SQ-1395) is folded into the same `DriveStop::Quit`
+            // as a clean exit — the two are told apart downstream from
+            // `machine.take_fault_trace()`/`diagnostics` (see `turn_result` and
+            // `apply_turn_events`'s `result.fault` check in turn.rs), which this
+            // arm leaves untouched. `StepResult::Fault` only makes that same
+            // distinction reachable to a THIRD-PARTY embedder of gvm who never
+            // reads `diagnostics`; lanthorn already had it.
+            StepResult::Fault => return DriveStop::Quit,
             StepResult::NeedLine { .. } => return DriveStop::Input(InputKind::Line),
             StepResult::NeedChar { .. } => return DriveStop::Input(InputKind::Char),
             StepResult::NeedEvent { .. } => return DriveStop::Event,

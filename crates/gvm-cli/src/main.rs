@@ -401,6 +401,11 @@ fn drive(
         match machine.step() {
             StepResult::Continue => {}
             StepResult::Quit => break,
+            // A real VM fault (SQ-1395): also breaks the drive loop, same as a
+            // clean quit — the teardown below reads `take_fault_trace()` and
+            // `diagnostics` regardless of which one happened and reports/exits
+            // non-zero accordingly, so no separate handling is needed here.
+            StepResult::Fault => break,
             // A glk_select waiting only on a non-input event (Glk §4.4). With a
             // timer armed, drive its clock synchronously; a bare mouse/hyperlink
             // wait has no click to deliver headless, so treat it as end-of-input.

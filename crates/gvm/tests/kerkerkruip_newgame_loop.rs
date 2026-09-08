@@ -58,6 +58,7 @@ fn run_delivering_timers(m: &mut Machine, budget: u64) -> String {
                 return format!("NeedChar win={win} uni={unicode}")
             }
             StepResult::Quit => return "Quit".into(),
+            StepResult::Fault => return "Fault".into(),
             StepResult::SaveRequest => return "SaveRequest".into(),
             StepResult::RestoreRequest => return "RestoreRequest".into(),
             StepResult::NeedFilename { .. } => return "NeedFilename".into(),
