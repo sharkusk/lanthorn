@@ -603,10 +603,12 @@ pub struct Machine {
     /// the value is tracked purely so the opcode's store result (the OLD
     /// mode) is correct (ZMSD §15).
     buffer_screen_mode: u16,
-    /// True once `output_stream 2` (the transcript FILE stream) has recorded its
-    /// "not supported" diagnostic — ZMSD §7.6.5.2 asks for one warning to the
-    /// player, not one per request, and games re-select the stream every turn.
-    warned_stream2: bool,
+    /// The value of `Flags 2` bit 0 this interpreter last left in the header —
+    /// the reference [`Machine::sync_transcript_bit`] compares against to tell a
+    /// GAME's poke of the transcription bit (§7.3/§7.4: adopt it) from the
+    /// header simply still holding what we wrote (re-assert ours). Not part of
+    /// saved state: a restore re-derives it from the selection.
+    transcript_bit_seen: bool,
     /// v5/v6 mouse state (ZMSD §15/§8). Set by [`set_mouse`](Machine::set_mouse)
     /// when the host reports a click; `read_mouse` (EXT:0x16) reports these back.
     /// Coordinates are game pixels, 1-based (ZMSD §8.8.1 coordinate convention).
@@ -775,7 +777,7 @@ impl Machine {
             exec_pcs: std::collections::HashSet::new(),
             ever_exec_pcs: std::collections::HashSet::new(),
             buffer_screen_mode: 0,
-            warned_stream2: false,
+            transcript_bit_seen: false,
             mouse_x: 0,
             mouse_y: 0,
             mouse_buttons: 0,
@@ -1239,26 +1241,180 @@ impl Machine {
         }
     }
 
-    /// ZMSD §7.4: games (all Infocom-era ones) turn transcription on by setting
-    /// bit 0 of Flags 2 rather than issuing `output_stream 2` — the interpreter
-    /// is expected to watch the bit. We support no transcript FILE, so on
-    /// seeing the bit set, warn once (same diagnostic as `output_stream 2`) and
-    /// CLEAR it — the game then honestly reports scripting as off instead of
-    /// believing a transcript is being written. Checked at every input request
-    /// (the turn boundary), which is where a SCRIPT verb's effect first
-    /// becomes observable.
-    fn check_transcript_bit(&mut self) {
+    /// Select or deselect output stream 2, and make `Flags 2` bit 0 agree.
+    ///
+    /// ZMSD §7.4: "all four output streams can be selected or deselected using
+    /// the output_stream opcode. In addition, stream 2 can be selected or
+    /// deselected by setting or clearing bit 0 of 'Flags 2'. Whichever method is
+    /// used, the interpreter must ensure that this flag holds the current status
+    /// of stream 2. ('A Mind Forever Voyaging' requires this.)" §11.1.2 says the
+    /// same from the header's side and adds that the interpreter "must also
+    /// alter it if stream 2 is turned on or off".
+    ///
+    /// Every route in goes through here — the opcode, the header poke picked up
+    /// by [`Machine::sync_transcript_bit`], and the host's own
+    /// [`Machine::set_transcript`] — so the flag and the flag alone is the
+    /// answer to "is transcripting on".
+    fn set_stream2(&mut self, on: bool) {
         const FLAGS2: u32 = 0x10;
+        self.streams.stream2 = on;
         let flags = self.mem.read_word(FLAGS2);
-        if flags & 1 != 0 {
-            self.mem.write_word(FLAGS2, flags & !1);
-            if !self.warned_stream2 {
-                self.warned_stream2 = true;
-                self.diagnostics.push(
-                    "transcript file output isn't supported — the game's script command will have no effect (the app keeps its own scrollback)".to_string(),
-                );
+        self.mem.write_word(FLAGS2, (flags & !1) | u16::from(on));
+        self.transcript_bit_seen = on;
+    }
+
+    /// Reconcile `Flags 2` bit 0 with the stream-2 selection, in whichever
+    /// direction has moved since we last looked.
+    ///
+    /// The bit is the game's to write (ZMSD §11.1 marks it "Dyn"), and every
+    /// Infocom-era SCRIPT verb turns transcription on by setting it rather than
+    /// by issuing `output_stream 2` — §7.3 is the whole mechanism in Versions 1
+    /// and 2, and §7.4 keeps it alongside the opcode from Version 3 on. So the
+    /// interpreter has to watch it, and [`Machine::transcript_bit_seen`] records
+    /// what it last left there:
+    ///
+    /// * bit ≠ what we left → the GAME moved it. Adopt it: SCRIPT turns the
+    ///   transcript on, UNSCRIPT turns it off.
+    /// * bit = what we left → nobody moved it. Re-assert our own state, which
+    ///   costs nothing and repairs the header after anything that rewrote it.
+    ///
+    /// Checked at every input request (the turn boundary), which is where a
+    /// SCRIPT verb's effect first becomes observable — the game sets the bit and
+    /// then prompts.
+    ///
+    /// This replaces a version that unconditionally CLEARED the bit, back when
+    /// there was no transcript sink to honour it with: nine of thirteen corpus
+    /// stories driven to a SCRIPT command answered "Attempt to begin transcript
+    /// failed." because the interpreter had wiped the flag they set. The bug the
+    /// clearing guarded against — a game believing a transcript is being written
+    /// when none is — is now a HOST question, since [`crate::io::Output`]'s
+    /// stream-2 method is a no-op by default (ZMSD §7.6.5 expressly allows
+    /// declining external files, and §7.6.5.2 asks the interpreter to say so).
+    fn sync_transcript_bit(&mut self) {
+        const FLAGS2: u32 = 0x10;
+        let bit = self.mem.read_word(FLAGS2) & 1 != 0;
+        if bit != self.transcript_bit_seen {
+            self.set_stream2(bit);
+        } else {
+            let on = self.streams.stream2;
+            self.set_stream2(on);
+        }
+    }
+
+    /// Select the input stream from the HOST side: 0 = keyboard, 1 = the
+    /// recorded commands the sink supplies through
+    /// [`crate::io::Output::next_command`].
+    ///
+    /// ZMSD §10.2.2: "The game can change the current input stream itself, using
+    /// the opcode `input_stream`. It has no way of finding out which input
+    /// stream is currently in use. An interpreter is free to change the input
+    /// stream whenever it likes (e.g. at the player's request) or, indeed, to
+    /// run the entire game under input stream 1 (for testing purposes)." A host
+    /// `--replay` flag is exactly the last of those. Values other than 0 and 1
+    /// name no stream and are ignored.
+    pub fn set_input_stream(&mut self, stream: u8) {
+        if stream <= 1 {
+            self.streams.input_stream = stream;
+        }
+    }
+
+    /// Is output stream 2 — the transcript — currently selected (ZMSD §7.1.1)?
+    pub fn transcript_on(&self) -> bool {
+        self.streams.stream2
+    }
+
+    /// Turn the transcript on or off from the HOST side, exactly as if the game
+    /// had run `output_stream 2` / `output_stream -2`.
+    ///
+    /// This is what a "/transcript on" host command is for: ZMSD §7.4 gives the
+    /// game two ways to select stream 2 and the interpreter the duty of keeping
+    /// `Flags 2` bit 0 truthful, and a story with no SCRIPT verb simply never
+    /// exercises either. Writing the flag here means the game can still SEE that
+    /// transcripting is on (Infocom's own SCRIPT/UNSCRIPT verbs read the bit
+    /// back), so the two routes cannot disagree.
+    pub fn set_transcript(&mut self, on: bool) {
+        self.set_stream2(on);
+    }
+
+    /// Is output stream 4 — the command record — currently selected
+    /// (ZMSD §7.1.2)?
+    pub fn command_record_on(&self) -> bool {
+        self.streams.stream4
+    }
+
+    /// Turn the command record on or off from the HOST side, as if the game had
+    /// run `output_stream 4` / `output_stream -4`.
+    ///
+    /// Stream 4 has no header bit and nothing in the story can observe its
+    /// state (unlike stream 2, §7.4), so this is purely the interpreter's own
+    /// switch — which is how Frotz's record command works too (`ostream_record`,
+    /// set by the interpreter and by `output_stream 4` alike). It is what makes
+    /// a `--record` flag mean anything: no story ever issues `output_stream 4`
+    /// of its own accord.
+    pub fn set_command_record(&mut self, on: bool) {
+        self.streams.stream4 = on;
+    }
+
+    /// Record one finished input record on output stream 4 (ZMSD §7.1.2.3:
+    /// "the only text printed to it is that of the player's commands and
+    /// keypresses (as read by read_char). Each command is written, in one go,
+    /// when it has been finished").
+    ///
+    /// No-op when the stream is not selected. The escaping is
+    /// [`crate::io::encode_command_record`]'s, so the host writes the line
+    /// verbatim and input stream 1 can read it back (§10.2.1).
+    fn record_command(&mut self, codes: &[u8]) {
+        if !self.streams.stream4 || self.streams.input_stream == 1 {
+            return;
+        }
+        let line = crate::io::encode_command_record(codes);
+        self.out.command_record(&line);
+    }
+
+    /// Ask the host for the next recorded command when input stream 1 is
+    /// selected (ZMSD §10.2), reverting to the keyboard at end of file.
+    ///
+    /// Returns the decoded ZSCII codes of one record, or `None` to mean "suspend
+    /// for the player as usual" — either because the game never left input
+    /// stream 0, or because the command file ran out. The revert on EOF is
+    /// Frotz's `replay_close` behaviour; the standard describes the stream but
+    /// not its end.
+    fn next_recorded_input(&mut self) -> Option<Vec<u8>> {
+        if self.streams.input_stream != 1 {
+            return None;
+        }
+        match self.out.next_command() {
+            Some(line) => Some(crate::io::decode_command_record(&line)),
+            None => {
+                self.streams.input_stream = 0;
+                None
             }
         }
+    }
+
+    /// Split one recorded line record into the text the player typed and the key
+    /// that ended it (ZMSD §10.2.1, the stream-4 format read backwards).
+    ///
+    /// [`Machine::record_command`] appends the terminator only when it is not
+    /// Return, so a trailing FUNCTION KEY code is the terminator and anything
+    /// else is part of the line. §10.5.2.1 fixes which codes those can be:
+    /// "Only function key codes are permitted: these are defined as those
+    /// between 129 and 154 inclusive, together with 252, 253 and 254."
+    fn split_recorded_line(&self, codes: &[u8]) -> (String, u8) {
+        let is_terminator = |c: u8| (129..=154).contains(&c) || matches!(c, 252..=254);
+        let (body, terminator) = match codes.last().copied() {
+            Some(last) if is_terminator(last) => (&codes[..codes.len() - 1], last),
+            _ => (codes, 13),
+        };
+        let text: String = body
+            .iter()
+            .map(|&c| {
+                self.mem
+                    .unicode_char(c as u16)
+                    .unwrap_or_else(|| crate::text::decode::zscii_to_char(c as u16))
+            })
+            .collect();
+        (text, terminator)
     }
 
     /// Remember which v6 window the game is reading input through (SQ-0585), at
@@ -2484,7 +2640,7 @@ impl Machine {
             // v3: no store var. v4+: has a store var (terminating character).
             // Operands: text_buf, parse_buf, + optional time/routine (v4+).
             0x04 => {
-                self.check_transcript_bit();
+                self.sync_transcript_bit();
                 self.note_v6_input_window();
                 let text_buf = ops.first().copied().unwrap_or(0) as u32;
                 let parse_buf = ops.get(1).copied().unwrap_or(0) as u32;
@@ -2494,12 +2650,22 @@ impl Machine {
                     store_var: store, line_read: true, text_buf, parse_buf, interrupt_time,
                     interrupt_routine, instr_pc: self.cur_instr_pc,
                 });
+                // ZMSD §10.2: with input stream 1 selected the line comes from
+                // the command file, not the player — so the read completes here
+                // instead of suspending. `next_recorded_input` reverts to stream
+                // 0 at end of file, and the `None` that says so falls through to
+                // the ordinary suspension below.
+                if let Some(codes) = self.next_recorded_input() {
+                    let (text, terminator) = self.split_recorded_line(&codes);
+                    self.supply_line(&text, terminator);
+                    return StepResult::Continue;
+                }
                 StepResult::NeedLine { text_buf, parse_buf }
             }
             // 0x16 read_char — pause execution and wait for a single keypress (v4+).
             // Has a store var for the ZSCII code. Operands: device, + optional time/routine.
             0x16 => {
-                self.check_transcript_bit();
+                self.sync_transcript_bit();
                 self.note_v6_input_window();
                 let interrupt_time = ops.get(1).copied().unwrap_or(0);
                 let interrupt_routine = ops.get(2).copied().unwrap_or(0);
@@ -2507,6 +2673,17 @@ impl Machine {
                     store_var: store, line_read: false, text_buf: 0, parse_buf: 0, interrupt_time,
                     interrupt_routine, instr_pc: self.cur_instr_pc,
                 });
+                // ZMSD §10.2: keypresses too are "drawn from the current input
+                // stream", so a `read_char` under stream 1 takes the next
+                // record's first code — the record a `read_char` WROTE to
+                // stream 4 holds exactly one (§7.1.2.3), and an empty record is
+                // the Return that Frotz's `record_char` writes as a bare
+                // newline.
+                if let Some(codes) = self.next_recorded_input() {
+                    let key = codes.first().copied().unwrap_or(13);
+                    self.supply_char(key);
+                    return StepResult::Continue;
+                }
                 StepResult::NeedChar
             }
             // 0x18 not (VAR form, v5+) — bitwise complement
@@ -3232,25 +3409,15 @@ impl Machine {
                 match stream {
                     1  => { self.streams.stream1 = true; }
                     -1 => { self.streams.stream1 = false; }
-                    2  => {
-                        self.streams.stream2 = true;
-                        // ZMSD §7.6.5: "Interpreters are allowed to not support
-                        // access to external files (such as with output_stream
-                        // 2 …)"; §7.6.5.2: such an attempt "should ideally print
-                        // a warning to the user that the functionality is not
-                        // available, and otherwise do nothing". Nothing consumes
-                        // `stream2` — there is no transcript FILE — so the flag
-                        // is the "do nothing" half and this diagnostic is the
-                        // warning. The host surfaces diagnostics as Warning
-                        // transcript lines; once per session is enough.
-                        if !self.warned_stream2 {
-                            self.warned_stream2 = true;
-                            self.diagnostics.push(
-                                "transcript file output isn't supported — the game's script command will have no effect (the app keeps its own scrollback)".to_string(),
-                            );
-                        }
-                    }
-                    -2 => { self.streams.stream2 = false; }
+                    // ZMSD §7.4: "In Versions 3 and later, all four output
+                    // streams can be selected or deselected using the
+                    // output_stream opcode. In addition, stream 2 can be
+                    // selected or deselected by setting or clearing bit 0 of
+                    // 'Flags 2'. Whichever method is used, the interpreter must
+                    // ensure that this flag holds the current status of stream
+                    // 2." `set_stream2` is the one place that writes both.
+                    2  => { self.set_stream2(true); }
+                    -2 => { self.set_stream2(false); }
                     3  => {
                         let table = ops.get(1).copied().unwrap_or(0) as u32;
                         // ZMSD §15 output_stream: "In Version 6, a width field
@@ -3288,9 +3455,12 @@ impl Machine {
                 }
                 StepResult::Continue
             }
-            // VAR:0x14 input_stream — select input source: 0 = keyboard (default), 1 = command
-            // file. The engine only records the selection; sourcing input from a file is a host
-            // concern (the app drives all reads via supply_line). Other values are ignored per spec.
+            // VAR:0x14 input_stream — select input source (ZMSD §10.2): 0 = keyboard
+            // (default), 1 = a file of commands. The FILE is the host's — `read` and
+            // `read_char` ask it for the next record through
+            // `Machine::next_recorded_input` / `Output::next_command` rather than
+            // suspending — and the machine reverts to stream 0 at end of file. Other
+            // values name no stream and are ignored.
             0x14 => {
                 let stream = ops.first().copied().unwrap_or(0) as i16;
                 if stream == 0 || stream == 1 {
@@ -4943,7 +5113,7 @@ impl Machine {
                 None => self.screen.current_window != 1,
             };
             if copy {
-                self.streams.write_stream2(s);
+                self.out.transcript(s);
             }
         }
         let font3 = self.screen.current_font == 3;
@@ -5616,6 +5786,53 @@ impl Machine {
         if version >= 5 {
             self.do_store(pending.store_var, terminator as u16);
         }
+
+        self.record_input_line(&text, terminator);
+    }
+
+    /// The two side-streams a finished line of input feeds (ZMSD §7).
+    ///
+    /// * Stream 4 takes the whole command, "in one go, when it has been
+    ///   finished" (§7.1.2.3), terminator included when it was not Return —
+    ///   unless the line CAME from input stream 1, since re-recording a replay
+    ///   into the script being replayed is a copy of a file onto itself. (Frotz
+    ///   spells the same exception `ostream_record && !istream_replay`,
+    ///   `stream.c`.)
+    /// * Stream 2 takes the line as typed, in every version but 6: §7.1.1.1 —
+    ///   "In Versions 1 to 5, the player's input to the `read` opcode should be
+    ///   echoed to output streams 1 and 2 (if stream 2 is active), so that text
+    ///   typed in appears in any transcript. In Version 6 input should be sent
+    ///   only to stream 1 and it is the game's responsibility to write to the
+    ///   transcript." The standard names no rule for Versions 7 and 8, which
+    ///   postdate it as a screen model; Frotz reads the clause as being ABOUT
+    ///   Version 6 and passes `no_scripting = (h_version == V6)` (`input.c`
+    ///   `z_read`), so a v8 transcript shows the commands that produced it. That
+    ///   is the reading here. Echoing to stream 1 is the HOST's business — it is
+    ///   the host that drew the input line in the first place.
+    ///
+    /// `text` is the ZSCII the line was stored as, so the transcript records what
+    /// the game received (lower-cased, truncated to the buffer) rather than what
+    /// the host happened to hold.
+    fn record_input_line(&mut self, text: &[u8], terminator: u8) {
+        if self.streams.stream4 {
+            let mut codes = text.to_vec();
+            if terminator != 13 {
+                codes.push(terminator);
+            }
+            self.record_command(&codes);
+        }
+        if self.streams.stream2 && self.mem.version() != 6 {
+            let mut line: String = text
+                .iter()
+                .map(|&c| {
+                    self.mem
+                        .unicode_char(c as u16)
+                        .unwrap_or_else(|| crate::text::decode::zscii_to_char(c as u16))
+                })
+                .collect();
+            line.push('\n');
+            self.out.transcript(&line);
+        }
     }
 
     /// Complete a suspended `read_char` instruction by supplying a single keystroke.
@@ -5632,6 +5849,14 @@ impl Machine {
         if ch != 0 {
             self.v6_reload_line_counts();
             self.retire_stranded_upper_rows();
+            // ZMSD §7.1.2: stream 4 is "a script file of the player's whole
+            // commands and of individual keypresses as read by read_char" — one
+            // record per key. A Return is recorded as an EMPTY record, matching
+            // Frotz's `record_char`, which writes nothing for ZC_RETURN before
+            // the line break that ends every record. ZSCII 0 is our timed-read
+            // timeout, not a keypress, and is not recorded.
+            let codes: &[u8] = if ch == 13 { &[] } else { std::slice::from_ref(&ch) };
+            self.record_command(codes);
         }
         self.do_store(pending.store_var, ch as u16);
     }
@@ -5851,6 +6076,16 @@ impl Machine {
     /// restore.
     fn post_restore_fixups(&mut self, (rows, cols): (u8, u8)) {
         self.init_caps();
+        // ZMSD §11.1.2: "the interpreter ensures that [the transcription bit's]
+        // value survives a restart or restore." The saved dynamic memory brought
+        // the SAVING session's bit 0 back with it, which says nothing about
+        // whether a transcript is open now — the transcript is the interpreter's,
+        // not the save's, exactly as §7.6.2 says of files generally ("Saved files
+        // are not associated with any particular session of a game"). Re-assert
+        // the live selection. (`restart` needs no equivalent: it already
+        // preserves Flags 2's two game-writable bits across the reload, §6.1.3.)
+        let on = self.streams.stream2;
+        self.set_stream2(on);
         if rows > 0 && cols > 0 {
             self.set_screen_dims(rows, cols);
         }
@@ -6357,30 +6592,33 @@ pub(crate) mod tests {
     }
 
     #[test]
-    fn game_set_transcript_bit_warns_once_and_clears() {
+    fn a_script_verb_survives_the_read_it_prompts_for() {
         // ZMSD §7.4: Infocom-era games turn transcription on by SETTING Flags 2
-        // bit 0 — not via `output_stream 2` — and the interpreter is expected to
-        // watch the bit. With no transcript file supported, the bit is cleared
-        // at the next input request (so the game honestly reports scripting
-        // off) and the unsupported-transcript warning fires ONCE per session.
-        // (SQ-0532 TTY-pass finding: typing `script` showed no warning because
-        // only the opcode path was hooked.)
+        // bit 0 — not via `output_stream 2` — and §11.1.2 makes watching it the
+        // interpreter's job: "The interpreter must also alter it if stream 2 is
+        // turned on or off, to ensure that the bit always reflects the true
+        // state of transcribing."
+        //
+        // The turn boundary is where a SCRIPT verb's effect first becomes
+        // observable: the game sets the bit, prints its confirmation, and
+        // prompts. Whatever the interpreter leaves in the bit is what the game's
+        // own SCRIPT routine reads back on the way out — and this is exactly
+        // where nine of thirteen corpus stories used to print "Attempt to begin
+        // transcript failed." (SQ-1420, falsified by restoring the old
+        // unconditional clear here).
         let mut m = Machine::new(Memory::new(sample_story(3)).unwrap());
-        let count = |m: &Machine| {
-            m.diagnostics.iter().filter(|d| d.contains("transcript file")).count()
-        };
         let f2 = m.mem.read_word(0x10);
         m.mem.write_word(0x10, f2 | 1); // the game's SCRIPT verb sets the bit
         m.exec_var(0x04, &[0x200, 0x220], None, None); // read → the turn boundary
-        assert_eq!(m.mem.read_word(0x10) & 1, 0, "unsupported transcription bit is cleared");
-        assert_eq!(count(&m), 1, "warning surfaced");
-        // The game sets it again (SCRIPT after UNSCRIPT): cleared again, but
-        // the warning stays once-per-session.
+        assert_eq!(m.mem.read_word(0x10) & 1, 1, "the game's request stands");
+        assert!(m.transcript_on(), "and stream 2 is genuinely selected");
+
+        // UNSCRIPT: the game clears the bit and the interpreter follows it down.
         let f2 = m.mem.read_word(0x10);
-        m.mem.write_word(0x10, f2 | 1);
+        m.mem.write_word(0x10, f2 & !1);
         m.exec_var(0x04, &[0x200, 0x220], None, None);
-        assert_eq!(m.mem.read_word(0x10) & 1, 0, "cleared on every sighting");
-        assert_eq!(count(&m), 1, "still only one warning");
+        assert_eq!(m.mem.read_word(0x10) & 1, 0, "cleared as the game asked");
+        assert!(!m.transcript_on());
     }
 
     #[test]
@@ -9440,26 +9678,201 @@ pub(crate) mod tests {
 
     // ── (d) stream 1 off: screen receives nothing ─────────────────────────────
 
-    #[test]
-    fn output_stream2_warns_the_player_once() {
-        // ZMSD §7.6.5.2: "An attempt by the game to use streams to access
-        // external files which is not supported by the interpreter should
-        // ideally print a warning to the user that the functionality is not
-        // available, and otherwise do nothing." The host renders diagnostics as
-        // Warning transcript lines.
-        let mut m = build_test_machine(&[]);
-        m.exec_var(0x13, &[2], None, None); // output_stream 2
-        assert_eq!(m.diagnostics.len(), 1, "one warning: {:?}", m.diagnostics);
-        assert!(
-            m.diagnostics[0].contains("transcript file"),
-            "warning names the missing feature: {:?}", m.diagnostics[0]
-        );
-        assert!(m.streams.stream2, "the selection itself is still recorded");
+    /// Everything output stream 2 has taken, read off the default sink. The
+    /// machine keeps no copy — a real host is writing it to a file as it
+    /// arrives — so the sink IS the transcript.
+    fn sink_transcript(m: &Machine) -> &str {
+        &m.buffer_output().expect("BufferOutput sink").transcript
+    }
 
-        // Games re-select the transcript every turn — warn once per session.
-        m.exec_var(0x13, &[(-2i16) as u16], None, None);
+    /// Every finished output-stream-4 record so far, in order.
+    fn sink_commands(m: &Machine) -> &[String] {
+        &m.buffer_output().expect("BufferOutput sink").commands
+    }
+
+    /// Seed input stream 1 with recorded records (the sink's replay queue).
+    fn seed_replay<S: Into<String>>(m: &mut Machine, records: impl IntoIterator<Item = S>) {
+        m.out
+            .as_any_mut()
+            .downcast_mut::<BufferOutput>()
+            .expect("BufferOutput sink")
+            .replay_records(records);
+    }
+
+    // ── SQ-1420: output streams 2 and 4, input stream 1, Flags 2 bit 0 ────────
+
+    #[test]
+    fn output_stream2_delivers_exactly_the_text_between_selection_and_deselection() {
+        // ZMSD §7.1.1: stream 2 is "the game transcript". §7.4 turns it on and
+        // off with `output_stream`; only what is printed in between belongs to it.
+        let mut m = build_test_machine(&[]);
+        m.print_text("before");
+        m.exec_var(0x13, &[2], None, None); // output_stream 2
+        m.print_text("inside");
+        m.exec_var(0x13, &[(-2i16) as u16], None, None); // output_stream -2
+        m.print_text("after");
+        assert_eq!(sink_transcript(&m), "inside");
+        assert_eq!(
+            m.buffer_output().unwrap().buf,
+            "beforeinsideafter",
+            "stream 1 sees all three — stream 2 is a COPY, not a diversion"
+        );
+    }
+
+    #[test]
+    fn stream3_suppresses_the_transcript_while_it_is_selected() {
+        // ZMSD §7.1.2.2: "Output stream 3 is unusual in that, while it is
+        // selected, no text is sent to any other output streams which are
+        // selected. (However, they remain selected.)"
+        let mut m = build_test_machine(&[]);
         m.exec_var(0x13, &[2], None, None);
-        assert_eq!(m.diagnostics.len(), 1, "no repeat warning: {:?}", m.diagnostics);
+        m.print_text("seen");
+        m.streams.push_stream3(0x0060, None);
+        m.print_text("hidden");
+        m.streams.pop_stream3(&mut m.mem, &m.v6_metric);
+        m.print_text("again");
+        assert_eq!(sink_transcript(&m), "seenagain", "stream 3 took 'hidden' alone");
+        assert!(m.streams.stream2, "and stream 2 remained selected throughout");
+    }
+
+    #[test]
+    fn selecting_stream2_sets_flags2_bit0_and_deselecting_clears_it() {
+        // ZMSD §7.4: "Whichever method is used, the interpreter must ensure that
+        // this flag holds the current status of stream 2. ('A Mind Forever
+        // Voyaging' requires this.)"
+        let mut m = build_test_machine(&[]);
+        assert_eq!(m.mem.read_word(0x10) & 1, 0, "a fresh game is not transcripting");
+        m.exec_var(0x13, &[2], None, None);
+        assert_eq!(m.mem.read_word(0x10) & 1, 1, "output_stream 2 sets the bit");
+        assert!(m.transcript_on());
+        m.exec_var(0x13, &[(-2i16) as u16], None, None);
+        assert_eq!(m.mem.read_word(0x10) & 1, 0, "output_stream -2 clears it");
+        assert!(!m.transcript_on());
+    }
+
+    #[test]
+    fn the_game_setting_flags2_bit0_turns_the_transcript_on() {
+        // ZMSD §7.4: "stream 2 can be selected or deselected by setting or
+        // clearing bit 0 of 'Flags 2'" — which is how every Infocom-era SCRIPT
+        // verb does it. §11.1.2 says the same from the header's side. The
+        // interpreter notices at the next input request (the turn boundary).
+        //
+        // FALSIFICATION (SQ-1420): the previous `check_transcript_bit` CLEARED
+        // this bit unconditionally, so the story's next test of it reported
+        // "Attempt to begin transcript failed." — measured on nine of thirteen
+        // corpus stories. Restore the clear and this case fails on the assert
+        // below, with the transcript empty.
+        let mut m = build_test_machine(&[]);
+        let f2 = m.mem.read_word(0x10);
+        m.mem.write_word(0x10, f2 | 1); // the game's SCRIPT verb
+        m.sync_transcript_bit();
+        assert!(m.transcript_on(), "the interpreter adopted the game's request");
+        assert_eq!(m.mem.read_word(0x10) & 1, 1, "and left the bit set for the game to read back");
+        m.print_text("scripted");
+        assert_eq!(sink_transcript(&m), "scripted", "the sink receives the game's prose");
+
+        // UNSCRIPT: the game clears the bit again.
+        let f2 = m.mem.read_word(0x10);
+        m.mem.write_word(0x10, f2 & !1);
+        m.sync_transcript_bit();
+        assert!(!m.transcript_on(), "the interpreter adopted the game's UNSCRIPT too");
+        m.print_text("silent");
+        assert_eq!(sink_transcript(&m), "scripted");
+    }
+
+    #[test]
+    fn a_host_transcript_survives_the_interpreters_own_bit_sync() {
+        // `set_transcript` is the host's `/transcript on` — a story with no
+        // SCRIPT verb never touches the bit, so nothing must be read as the game
+        // turning it off again at the next `read`.
+        let mut m = build_test_machine(&[]);
+        m.set_transcript(true);
+        assert_eq!(m.mem.read_word(0x10) & 1, 1, "the game can see the transcript is on");
+        m.sync_transcript_bit();
+        m.sync_transcript_bit();
+        assert!(m.transcript_on(), "an untouched bit is not a request to stop");
+    }
+
+    #[test]
+    fn stream4_records_the_command_line_and_read_char_keys() {
+        // ZMSD §7.1.2: stream 4 is "a script file of the player's whole commands
+        // and of individual keypresses as read by read_char"; §7.1.2.3: "Each
+        // command is written, in one go, when it has been finished."
+        let mut m = build_test_machine(&[]);
+        m.exec_var(0x13, &[4], None, None); // output_stream 4
+        m.pending_input = Some(PendingInput {
+            store_var: None, line_read: true, text_buf: 0x0100, parse_buf: 0,
+            interrupt_time: 0, interrupt_routine: 0, instr_pc: 0,
+        });
+        m.mem.write_byte(0x0100, 40); // the game's buffer cap
+        m.supply_line("take lamp", 13);
+        assert_eq!(sink_commands(&m), ["take lamp"], "one record, no trailing Return code");
+
+        // A read_char key is its own record; §7 Remarks bracket a non-printable
+        // code by its ZSCII value.
+        m.pending_input = Some(PendingInput {
+            store_var: None, line_read: false, text_buf: 0, parse_buf: 0,
+            interrupt_time: 0, interrupt_routine: 0, instr_pc: 0,
+        });
+        m.supply_char(129); // cursor up
+        assert_eq!(sink_commands(&m), ["take lamp", "[129]"]);
+    }
+
+    #[test]
+    fn input_stream1_consumes_recorded_lines_and_reverts_at_end_of_file() {
+        // ZMSD §10.2: input stream 1 is "a file containing commands"; §10.2.1
+        // fixes its format as stream 4's. The revert at EOF is Frotz's
+        // `replay_close`.
+        let mut m = build_test_machine(&[]);
+        seed_replay(&mut m, ["north"]);
+        m.exec_var(0x14, &[1], None, None); // input_stream 1
+        assert_eq!(m.streams.input_stream, 1);
+
+        m.mem.write_byte(0x0100, 40);
+        let r = m.exec_var(0x04, &[0x0100, 0], None, None); // read
+        assert_eq!(r, StepResult::Continue, "the recorded line answered the read outright");
+        assert_eq!(m.mem.read_byte(0x0101), 5, "v5 count byte: 'north'");
+        assert_eq!(
+            (0..5).map(|i| m.mem.read_byte(0x0102 + i) as char).collect::<String>(),
+            "north"
+        );
+
+        // The file is exhausted: the next read reverts to the keyboard and
+        // suspends for the player.
+        let r = m.exec_var(0x04, &[0x0100, 0], None, None);
+        assert!(matches!(r, StepResult::NeedLine { .. }), "EOF suspends: {r:?}");
+        assert_eq!(m.streams.input_stream, 0, "and the machine is back on the keyboard");
+    }
+
+    #[test]
+    fn input_stream1_answers_read_char_with_the_next_records_key() {
+        let mut m = build_test_machine(&[]);
+        seed_replay(&mut m, ["[129]", ""]);
+        m.exec_var(0x14, &[1], None, None);
+        let r = m.exec_var(0x16, &[0], Some(0x10), None); // read_char → G0
+        assert_eq!(r, StepResult::Continue);
+        assert_eq!(m.global(0), 129, "the bracketed code is the key");
+        let r = m.exec_var(0x16, &[0], Some(0x10), None);
+        assert_eq!(r, StepResult::Continue);
+        assert_eq!(m.global(0), 13, "an empty record is the Return that wrote it");
+    }
+
+    #[test]
+    fn a_v5_input_line_is_echoed_to_the_transcript() {
+        // ZMSD §7.1.1.1: "In Versions 1 to 5, the player's input to the read
+        // opcode should be echoed to output streams 1 and 2 (if stream 2 is
+        // active), so that text typed in appears in any transcript."
+        let mut m = build_test_machine(&[]);
+        assert_eq!(m.mem.version(), 5);
+        m.exec_var(0x13, &[2], None, None);
+        m.print_text("> ");
+        m.pending_input = Some(PendingInput {
+            store_var: None, line_read: true, text_buf: 0x0100, parse_buf: 0,
+            interrupt_time: 0, interrupt_routine: 0, instr_pc: 0,
+        });
+        m.mem.write_byte(0x0100, 40);
+        m.supply_line("open door", 13);
+        assert_eq!(sink_transcript(&m), "> open door\n");
     }
 
     #[test]
@@ -12602,11 +13015,11 @@ pub(crate) mod tests {
         m.exec_var(0x13, &[2], None, None); // output_stream 2 (transcript on)
         m.exec_ext(0x12, &[2, 0b0100, 1], None, None); // window_style: set attribute 2
         m.print_text("copied");
-        assert_eq!(m.streams.stream2_text(), "copied", "attr 2 + stream 2 → transcript");
+        assert_eq!(sink_transcript(&m), "copied", "attr 2 + stream 2 → transcript");
         m.exec_ext(0x12, &[2, 0b0100, 2], None, None); // clear attribute 2
         m.print_text("silent");
         assert_eq!(
-            m.streams.stream2_text(),
+            sink_transcript(&m),
             "copied",
             "with attribute 2 clear the window's text stays out of the transcript"
         );
@@ -12614,7 +13027,7 @@ pub(crate) mod tests {
         m.exec_ext(0x12, &[2, 0b0100, 1], None, None);
         m.exec_var(0x13, &[(-2i16) as u16], None, None); // output_stream -2
         m.print_text("offline");
-        assert_eq!(m.streams.stream2_text(), "copied", "unselected stream 2 takes nothing");
+        assert_eq!(sink_transcript(&m), "copied", "unselected stream 2 takes nothing");
     }
 
     // -----------------------------------------------------------------------

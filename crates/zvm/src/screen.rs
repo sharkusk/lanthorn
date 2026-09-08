@@ -1784,9 +1784,14 @@ struct Stream3Frame {
 ///
 /// Streams 1 (screen) and 2 (transcript) are on/off flags; only stream 1
 /// defaults to on.  Stream 3 redirects text to a memory table and can nest.
-/// Stream 4 (command log) is flag-only.  The input stream (`input_stream`
-/// opcode) is recorded here too; the engine drives all input through the host,
-/// so this field only remembers the game's selection.
+/// Stream 4 (the command record) is a flag too.  The selected INPUT stream
+/// (`input_stream` opcode, ZMSD §10.2) is recorded here as well.
+///
+/// Streams 2, 4 and input stream 1 are all *routing* decisions here and I/O
+/// nowhere: the machine hands their text to the host sink
+/// ([`crate::io::Output::transcript`], [`crate::io::Output::command_record`])
+/// and asks it for recorded input ([`crate::io::Output::next_command`]). This
+/// crate opens no files.
 pub struct StreamState {
     /// Stream 1 (screen) active.
     pub stream1: bool,
@@ -1799,15 +1804,6 @@ pub struct StreamState {
     pub input_stream: u8,
     /// Stack of active stream-3 frames (nested up to 16).
     stream3_stack: Vec<Stream3Frame>,
-    /// Everything routed to stream 2 while it was selected (ZMSD §7.1.2:
-    /// stream 2 is "the game transcript"). Writing it to a FILE is a host
-    /// concern the app does not implement (§7.6.5 lets an interpreter decline
-    /// external files, and `output_stream 2` warns the player); the model
-    /// still has to route text here so the routing is correct the day a file
-    /// sink exists — in particular the v6 per-window "copy to stream 2"
-    /// attribute (§8.8.3.1 attribute 2), which decides *which* windows'
-    /// text a transcript would contain.
-    stream2_buf: String,
 }
 
 impl Default for StreamState {
@@ -1824,20 +1820,7 @@ impl StreamState {
             stream4: false,
             input_stream: 0,
             stream3_stack: Vec::new(),
-            stream2_buf: String::new(),
         }
-    }
-
-    /// Append `s` to the transcript sink (see `StreamState::stream2_buf`).
-    /// Callers gate this on stream 2 being selected AND — in v6 — on the
-    /// printing window carrying attribute 2.
-    pub fn write_stream2(&mut self, s: &str) {
-        self.stream2_buf.push_str(s);
-    }
-
-    /// The transcript text accumulated so far.
-    pub fn stream2_text(&self) -> &str {
-        &self.stream2_buf
     }
 
     /// True when stream 3 is active (text goes to memory, not screen).
