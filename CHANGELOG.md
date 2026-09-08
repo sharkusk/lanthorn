@@ -128,6 +128,13 @@ Absolute URLs or no link.
 - **Restarting a game now reshuffles its random events** unless you've pinned
   a specific random seed for reproducible play, matching how other
   interpreters treat a restart. (SQ-1419)
+- **lanthorn and the `zvm-cli` command-line player now start instantly on a
+  game with no sound**, instead of pausing to open an audio device that game
+  was never going to use — the device now opens only the first time a game
+  actually plays something. **And `zvm-cli` now reads Enter correctly in a
+  game that asks for a single keypress** — a bare Enter used to be reported
+  as a raw line-feed, which a well-behaved game is entitled to reject as an
+  input code it should never see. (SQ-1423)
 
 ---
 
