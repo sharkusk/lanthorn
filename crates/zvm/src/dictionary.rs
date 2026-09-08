@@ -1,12 +1,16 @@
-// Z-machine dictionary and input tokeniser — ZMSD §13.
-//
-// Dictionary layout (at `mem.dictionary()` base):
-//   1 byte  n            — number of word-separator ZSCII codes
-//   n bytes              — the separator codes
-//   1 byte  entry_length — bytes per entry (≥ 4 for v3, ≥ 6 for v4+)
-//   2 bytes count        — number of entries (i16; negative ⇒ unsorted)
-// Then `count` (abs) entries of `entry_length` bytes each.
-// The first 4 (v3) or 6 (v4+) bytes of each entry are the encoded word key.
+//! Z-machine dictionary and input tokeniser — ZMSD §13.
+//!
+//! Dictionary layout (at `mem.dictionary()` base):
+//!
+//! ```text
+//! 1 byte  n            — number of word-separator ZSCII codes
+//! n bytes              — the separator codes
+//! 1 byte  entry_length — bytes per entry (≥ 4 for v3, ≥ 6 for v4+)
+//! 2 bytes count        — number of entries (i16; negative ⇒ unsorted)
+//! ```
+//!
+//! Then `count` (abs) entries of `entry_length` bytes each.
+//! The first 4 (v3) or 6 (v4+) bytes of each entry are the encoded word key.
 
 use crate::memory::Memory;
 use crate::text::encode::encode_word_mem;

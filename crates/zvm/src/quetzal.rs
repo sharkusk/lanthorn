@@ -1,21 +1,22 @@
-// Quetzal 1.4 save/restore for the Z-machine — no filesystem I/O.
-//
-// Quetzal is an IFF FORM of type "IFZS" containing three required chunks:
-//   IFhd  — story identity (release, serial, checksum) + save-time PC
-//   CMem  — dynamic memory XOR'd against the original story, RLE-compressed
-//   Stks  — call stack frames
-//
-// The host (CLI/app) owns file I/O; this module returns/accepts Vec<u8>/&[u8].
-//
-// IFF structure: FORM<4> + total-length<4> + "IFZS"<4> + chunks.
-// Each chunk: type<4> + length<4> + data + optional pad byte (to make total even).
-//
-// Save PC semantics: the IFhd PC comes from Machine::save_pc(). For an in-game
-// @save/@restore opcode (pending_save set) it is the result-descriptor address —
-// the store byte (v4+) or first branch byte (v3) — per Quetzal §5.8; restore
-// reads that descriptor forward (see complete_restore_success). For a host
-// "Save State" snapshot (no pending save) it is state.pc, and restore simply
-// resumes there (see restore_file).
+//! Quetzal 1.4 save/restore for the Z-machine — no filesystem I/O.
+//!
+//! Quetzal is an IFF FORM of type "IFZS" containing three required chunks:
+//!
+//! - `IFhd` — story identity (release, serial, checksum) + save-time PC
+//! - `CMem` — dynamic memory XOR'd against the original story, RLE-compressed
+//! - `Stks` — call stack frames
+//!
+//! The host owns file I/O; this module returns/accepts `Vec<u8>`/`&[u8]`.
+//!
+//! IFF structure: `FORM<4> + total-length<4> + "IFZS"<4> + chunks`.
+//! Each chunk: `type<4> + length<4> + data` + optional pad byte (to make total even).
+//!
+//! Save PC semantics: the `IFhd` PC comes from `Machine::save_pc()`. For an in-game
+//! `@save`/`@restore` opcode (`pending_save` set) it is the result-descriptor address —
+//! the store byte (v4+) or first branch byte (v3) — per Quetzal §5.8; restore
+//! reads that descriptor forward (see `complete_restore_success`). For a host
+//! "Save State" snapshot (no pending save) it is `state.pc`, and restore simply
+//! resumes there (see `restore_file`).
 
 use crate::cpu::exec::Machine;
 use crate::cpu::state::{Frame, State};

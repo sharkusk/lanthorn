@@ -1,7 +1,13 @@
-// Test fixture loader — reads story files from crates/zvm/tests/fixtures/.
-//
-// Returns None if the fixture is absent so that fixture-backed tests can
-// skip cleanly rather than failing.
+//! Test fixture loader — reads story files from `crates/zvm/tests/fixtures/`.
+//!
+//! Returns `None` if the fixture is absent so that fixture-backed tests can
+//! skip cleanly rather than failing.
+//!
+//! Gated behind the `fixtures` Cargo feature and not part of this crate's
+//! normal public surface: [`load`] bakes the build machine's absolute
+//! `CARGO_MANIFEST_DIR` into any binary that links it, which is fine for this
+//! crate's own test binaries and wrong for anything a downstream embedder
+//! ships.
 
 use std::path::PathBuf;
 

@@ -1,12 +1,12 @@
-// Screen model — ZMSD §7, §8, §11.
-//
-// `ScreenState` tracks window layout and text attributes the host needs to
-// render.  `StatusLine` is the v3 status bar computed on demand from globals.
-// `StreamState` manages output-stream routing including stream-3 memory
-// redirection.
-//
-// Stream-3 can nest up to 16 deep (ZMSD §7.1.2.5).  Each frame holds a
-// table base address; the first word of the table is the byte-count written.
+//! Screen model — ZMSD §7, §8, §11.
+//!
+//! [`ScreenState`] tracks window layout and text attributes the host needs to
+//! render. [`StatusLine`] is the v3 status bar computed on demand from globals.
+//! [`StreamState`] manages output-stream routing including stream-3 memory
+//! redirection.
+//!
+//! Stream-3 can nest up to 16 deep (ZMSD §7.1.2.5). Each frame holds a
+//! table base address; the first word of the table is the byte-count written.
 
 use crate::memory::Memory;
 use crate::objects;
@@ -76,7 +76,7 @@ impl ZColour {
     /// transparent state: §8.3.6 lets an interpreter without transparency
     /// "ignore any attempt to select colour 15", and this one does.
     ///
-    /// `palette` is the machine's own table ([`crate::cpu::Machine::palette`]).
+    /// `palette` is the machine's own table ([`crate::cpu::exec::Machine::palette`]).
     /// It is a parameter and not a global because resolving a colour number
     /// without saying WHICH machine's table you mean is the bug (SQ-1393).
     pub fn true_value(self, palette: Palette, interpreter_default: u8) -> u16 {
@@ -158,7 +158,7 @@ impl UpperWindow {
     ///
     /// ZMSD §15 `split_window`: "In Version 3 (only) the upper window should be
     /// cleared after the split" — so from Version 4 on a re-split must leave the
-    /// existing upper-window contents on screen. [`resize`] (which reallocates
+    /// existing upper-window contents on screen. [`Self::resize`] (which reallocates
     /// blank) is the Version 3 behaviour.
     pub fn resize_preserving(&mut self, rows: u16, cols: u16) {
         if cols == self.cols {
@@ -531,7 +531,7 @@ impl V6Text {
     }
 }
 
-/// ZMSD §8.8.3.2.6: "A line count of -999 means 'never print [MORE]'."
+/// ZMSD §8.8.3.2.6: "A line count of -999 means 'never print \[MORE\]'."
 /// Also the floor §8.8.3.2.2.3 clamps to ("A line count is never decremented
 /// below -999"), so once a window reaches the sentinel it stays there.
 pub const NEVER_MORE: i16 = -999;
@@ -634,7 +634,7 @@ impl ZWindow {
         self.line_count as i16
     }
 
-    /// How many lines this window prints before "[MORE]" falls due — its
+    /// How many lines this window prints before "\[MORE\]" falls due — its
     /// height in text lines less one, matching frotz's `screen_new_line`
     /// threshold (`above + below - 1`). Degenerate (zero-height) windows
     /// report 1 rather than 0 so the count never starts already-due.
@@ -646,7 +646,7 @@ impl ZWindow {
     /// One new-line happened in this window: ZMSD §8.8.3.2.2 "the line count
     /// is decremented on each new-line", §8.8.3.2.2.3 "A line count is never
     /// decremented below -999". The sentinel is sticky — a window the game
-    /// parked at -999 to suppress "[MORE]" (§8.8.3.2.6) stays there.
+    /// parked at -999 to suppress "\[MORE\]" (§8.8.3.2.6) stays there.
     pub fn tick_line_count(&mut self) {
         let lc = self.line_count_signed();
         if lc == NEVER_MORE {
@@ -1344,7 +1344,7 @@ impl Default for ScreenState {
 /// > not wish to handle this behaviour at all should avoid using the Amiga
 /// > interpreter number when running Infocom's Version 6 games."
 ///
-/// The test is [`machine_rule`] asked of
+/// The test is `machine_rule` asked of
 /// [`MachineProfile::global_colour_pens`](crate::interpreter::MachineProfile::global_colour_pens),
 /// which the Amiga row sets and no other does — Version 6, colours available,
 /// and `$1E` naming the machine, every term read back out of the HEADER so the
@@ -1354,15 +1354,16 @@ impl Default for ScreenState {
 /// **"When running Infocom's games."** §8.3.1.1 asks the same question of the
 /// palette knob — an interpreter may substitute its own colour values "if and
 /// only if they can detect they are running an original Infocom story file" —
-/// and gives no mechanism. lanthorn answers both the same way, because the same
-/// thing answers them: interpreter 4 is only ever advertised by
-/// [`InterpreterProfile::Amiga`](../../app/interpreter/enum.InterpreterProfile.html),
-/// which is selected by an Amiga release floppy, by a native Amiga `Pic.data`
-/// archive, or by the player naming the number outright — and Infocom is the only
-/// publisher who ever shipped a Version 6 story on Amiga media. The third route
-/// is the player asking for an Amiga, which is the standard's own framing: the
-/// escape hatch it offers is to "avoid using the Amiga interpreter number", so
-/// choosing it *is* the opt-in.
+/// and gives no mechanism. A host answers both the same way, because the same
+/// thing answers them: interpreter 4 should only ever be advertised (via
+/// [`Machine::set_interpreter_number`](crate::cpu::exec::Machine::set_interpreter_number))
+/// when the host's own detection selected an Amiga presentation — by an Amiga
+/// release floppy, by a native Amiga `Pic.data` archive, or by the player
+/// naming the number outright — and Infocom is the only publisher who ever
+/// shipped a Version 6 story on Amiga media. The third route is the player
+/// asking for an Amiga, which is the standard's own framing: the escape hatch
+/// it offers is to "avoid using the Amiga interpreter number", so choosing it
+/// *is* the opt-in.
 pub fn amiga_global_colour_pair(m: &crate::cpu::exec::Machine) -> bool {
     machine_rule(m, |p| p.global_colour_pens)
 }
@@ -1757,7 +1758,7 @@ impl StreamState {
         }
     }
 
-    /// Append `s` to the transcript sink (see [`StreamState::stream2_buf`]).
+    /// Append `s` to the transcript sink (see `StreamState::stream2_buf`).
     /// Callers gate this on stream 2 being selected AND — in v6 — on the
     /// printing window carrying attribute 2.
     pub fn write_stream2(&mut self, s: &str) {
@@ -1803,7 +1804,7 @@ impl StreamState {
     /// characters concerned."
     ///
     /// So a width does not merely insert newlines into the plain layout — it
-    /// changes the layout, and the reader is [`Machine`]'s `print_form`
+    /// changes the layout, and the reader is [`crate::cpu::exec::Machine`]'s `print_form`
     /// (EXT:0x1A) rather than the game's own byte walk. Arthur release 54 is
     /// the game that proves it: its box messages are `output_stream 3, table,
     /// 0` (justify to window 0) followed by `print_form table` into window 3,
@@ -2119,7 +2120,7 @@ impl Palette {
     /// §8.3.1 colours and `mac/xzip.lst` sets a white page under black ink like
     /// any other pair, so nothing about it collapses.
     ///
-    /// [`two_colour_card_pair`] is the pair it shows, and
+    /// `two_colour_card_pair` is the pair it shows, and
     /// `Machine::set_colour`'s CGA arm is the one caller that matters — see there
     /// for what a story's request means on a display with one bit.
     pub fn two_colour_card(self) -> bool {
@@ -2311,7 +2312,7 @@ pub fn write_default_colours(mem: &mut Memory, bg: u8, fg: u8, palette: Palette)
 /// every other thread in the process could see. Under `cargo test`, where a whole
 /// crate's cases share one process, that is the SQ-0904 race exactly: a
 /// borrow-and-hand-back is atomic to nobody. Asking by value cannot race with
-/// anything, and the machine's own answer is [`crate::cpu::Machine::palette`].
+/// anything, and the machine's own answer is [`crate::cpu::exec::Machine::palette`].
 pub fn true_colour_in(p: Palette, n: u8) -> Option<u16> {
     match p {
         Palette::Standard => zmsd_true_colour(n),
@@ -2695,25 +2696,25 @@ mod v6_cell {
     /// Where the ink actually goes is a different question, and one this type must not
     /// be asked. A proportional renderer — the Macintosh's own, or a future GUI —
     /// needs per-glyph advances, which the host supplies through
-    /// [`V6Metric::proportional`] (SQ-1009). Both are true at once, and were, on real
+    /// [`super::V6Metric::proportional`] (SQ-1009). Both are true at once, and were, on real
     /// hardware: the pen is what the cursor advances by and what a printed run
     /// measures, the cell is still what the story was told.
     ///
     /// So: interpreting a coordinate the story produced is [`Self::row_of`],
     /// [`Self::col_of`], [`Self::run_px`]. Deciding where to put a pixel is
-    /// [`V6Metric::advance`]'s business, not this type's.
+    /// [`super::V6Metric::advance`]'s business, not this type's.
     ///
     /// # Not a global
     ///
     /// The cell is per-session — resolved once at boot from the medium's profile and
-    /// never changed — so it lives on [`crate::cpu::Machine`] and is threaded to the
+    /// never changed — so it lives on [`crate::cpu::exec::Machine`] and is threaded to the
     /// handful of places that quantize by it. It deliberately does NOT live on
-    /// [`ScreenState`], which the host archives: the cell is derived from the
+    /// [`super::ScreenState`], which the host archives: the cell is derived from the
     /// profile, so a restore must re-derive it rather than replay a stored copy
     /// (CLAUDE.md, "persist the recipe, not the result"). And it is emphatically not
     /// process-global. The palette was, for two years, on the same "one machine per
     /// run" premise this type rejected; SQ-1393 moved it here beside the cell, so
-    /// [`crate::cpu::Machine::palette`] is now the second fact of this shape rather
+    /// [`crate::cpu::exec::Machine::palette`] is now the second fact of this shape rather
     /// than the counter-example.
     #[derive(Debug, Clone, Copy, PartialEq, Eq)]
     pub struct V6Cell {
@@ -3409,7 +3410,7 @@ mod tests {
     /// from a story operand, so the clamp belongs to it and this case pins it.
     /// Properties 8-15 are not pixels and are stored verbatim — property 15 in
     /// particular is a SIGNED line count whose own floor is -999, and clamping it
-    /// to a positive pixel ceiling would silently disable "[MORE]".
+    /// to a positive pixel ceiling would silently disable "\[MORE\]".
     #[test]
     fn put_prop_clamps_the_geometry_and_leaves_the_rest_alone() {
         let mut w = super::ZWindow::default();

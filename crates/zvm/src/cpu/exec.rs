@@ -1,12 +1,12 @@
-// Z-machine executor core — ZMSD §14, §15.
-//
-// Provides `Machine` (memory + CPU state) and `step()` (fetch-decode-execute).
-// The pc-advance contract: step() sets state.pc = instr.next_pc BEFORE executing,
-// so that call handlers find state.pc already pointing past the call instruction,
-// making it the correct return_pc. Branch/jump offsets are relative to next_pc.
-//
-// Dispatch structure: match on operand_count then opcode number.
-// Tasks 10–13 add arms to the same match without restructuring the core.
+//! Z-machine executor core — ZMSD §14, §15.
+//!
+//! Provides [`Machine`] (memory + CPU state) and [`Machine::step`]
+//! (fetch-decode-execute). The pc-advance contract: `step()` sets
+//! `state.pc = instr.next_pc` BEFORE executing, so that call handlers find
+//! `state.pc` already pointing past the call instruction, making it the
+//! correct return_pc. Branch/jump offsets are relative to `next_pc`.
+//!
+//! Dispatch structure: match on operand_count then opcode number.
 
 use crate::cpu::decode::{decode, Branch, Instr, Operand, OperandCount};
 pub use crate::cpu::boot::BootConfig;
@@ -73,7 +73,8 @@ impl SoundEvent {
 }
 
 /// A v6 `draw_picture`/`erase_picture` event (ZMSD §15), recorded for the host
-/// to act on in Plan 1b. `number` is the picture number; `window` is the v6
+/// to act on — the engine never rasterizes; see [`Machine::take_paint_events`].
+/// `number` is the picture number; `window` is the v6
 /// window the call targeted (`ScreenState.v6.current` at the time); `x`/`y`
 /// are pixel coordinates (of the top-left corner) within that window. Both
 /// opcodes share the same `(picture-number, y, x)` operands, so `erase`
@@ -316,11 +317,11 @@ pub struct TimedInterrupt {
 }
 
 /// The Z-machine interpreter — ties memory and CPU state together.
-/// Fields are `pub` so Tasks 11+ can attach I/O channels.
+/// Fields are `pub` so a host can attach its own I/O channels.
 pub struct Machine {
     pub mem: Memory,
     pub state: State,
-    /// Pluggable text output sink. Defaults to `BufferOutput` (Task 11).
+    /// Pluggable text output sink. Defaults to `BufferOutput`.
     out: Box<dyn Output>,
     /// Non-None while the machine is suspended waiting for player input.
     pending_input: Option<PendingInput>,
@@ -352,7 +353,7 @@ pub struct Machine {
     pub v6_wrap_regime: crate::interpreter::V6WrapRegime,
     /// May this launch present its machine's SCREEN RULES at all? (SQ-1154)
     ///
-    /// The fourth term of [`crate::screen::machine_rule`], and the only one that
+    /// The fourth term of `screen::machine_rule`, and the only one that
     /// is not read back out of the header. Every per-machine Version 6 screen
     /// rule — the Amiga's shared pens, the Amiga's and the Macintosh's screen
     /// page — asks it alongside the three header terms.
@@ -447,8 +448,10 @@ pub struct Machine {
     /// Sound events recorded by `sound_effect` since the host last drained them.
     pub(crate) pending_sounds: Vec<SoundEvent>,
     /// Injected picture-dimension table for v6 `picture_data`: `(picture_number,
-    /// width_px, height_px)`. Populated by the host (Task 9) before the boot run
-    /// from the self-blorb's `Pict` resources; empty for non-v6 stories.
+    /// width_px, height_px)`. Populated by the host, before the boot run, from
+    /// the story's own picture resources (a self-Blorb's `Pict` chunk, or
+    /// whatever archive the host resolved); empty for non-v6 stories. See
+    /// [`BootConfig::with_picture_dims`].
     pub picture_dims: Vec<(u16, u16, u16)>,
     /// Draw/erase events recorded by `draw_picture`/`erase_picture` since the
     /// host last drained them. The engine never rasterizes; the host (Plan
@@ -499,9 +502,9 @@ pub struct Machine {
     /// stamp is where its transcript restarts, with everything before it kept as
     /// scrollback above the boundary. A turn that retires twice keeps the LAST
     /// stamp — each retirement supersedes the one before it as the live screen's
-    /// beginning. Set-only here; `GameSession::drain_turn` takes it.
+    /// beginning. Set-only here; the host takes it with [`Machine::take_v6_prose_retired`].
     pub(crate) v6_prose_retired: Option<u64>,
-    /// Whether the retirement [`Machine::v6_prose_retired`] stamps froze the
+    /// Whether the retirement `v6_prose_retired` stamps froze the
     /// window's WHOLE streamed screen, leaving nothing of it live (SQ-0890).
     ///
     /// [`crate::screen::ZWindow::retire_streamed`] freezes only the runs the new
@@ -517,7 +520,7 @@ pub struct Machine {
     /// the window whose prose the HOST is holding — a [`Machine::v6_win0_out_chars`]
     /// stamp, `None` when no such erase happened this turn (SQ-0755).
     ///
-    /// The same boundary [`Machine::v6_prose_retired`] carries, from the other
+    /// The same boundary `v6_prose_retired` carries, from the other
     /// cause, and deliberately NOT the same field: that one means "this prose is
     /// now PAINT and the window owns it", which is a claim about frozen runs that
     /// an erase does not make — it simply took the text off the screen. Sharing the
@@ -526,12 +529,12 @@ pub struct Machine {
     /// A v6 erase never set `erase_lower_requested` (the v1–5 lower window's flag),
     /// so before this the host was never told a v6 story had cleared its screen at
     /// all, and its transcript went on re-rendering everything the game had ever
-    /// printed into whatever the story window is now. Set-only here;
-    /// `GameSession::drain_turn` takes it.
+    /// printed into whatever the story window is now. Set-only here; the host
+    /// drains it with `std::mem::take`.
     pub v6_screen_cleared: Option<u64>,
     /// A `(window, pixel column, pixel row)` a v6 `set_cursor` just DECLARED,
     /// pending the next print to that window — see
-    /// [`Machine::v6_take_declared_indent`] (SQ-0697; the row joined it in
+    /// `v6_take_declared_indent` (SQ-0697; the row joined it in
     /// SQ-0729). Transient one-shot state between the opcode and the print it
     /// positions; nothing outside that pair reads it, and it is re-armed by the
     /// story's own `set_cursor` on any path that matters, so it carries no
@@ -694,8 +697,13 @@ fn boot_state_and_screen(mem: &mut Memory) -> (State, ScreenState) {
 
 impl Machine {
     /// Create a new `Machine` from story memory, using a `BufferOutput` sink.
-    /// `state.pc` is set to the header's `initial_pc` field (direct instruction
-    /// address for v3/4/5/7/8; v6 is not supported).
+    ///
+    /// `state.pc` is set to the header's `initial_pc` field for v3/4/5/7/8, a
+    /// direct instruction address. Version 6 is fully supported but boots
+    /// differently: `initial_pc` there is instead the *packed address of
+    /// `main`* (ZMSD §5.4), so the machine enters it as a call with no
+    /// args/result rather than jumping to it directly — see [`Machine::boot`],
+    /// which every v6 embedder should reach for instead of this constructor.
     pub fn new(mem: Memory) -> Machine {
         Machine::with_output(mem, Box::new(BufferOutput::new()))
     }
@@ -1021,7 +1029,7 @@ impl Machine {
     }
 
     /// Report the screen size to the story: writes the header dimension fields
-    /// (see [`write_screen_dims`]) and, for v6, reseeds windows 0 and 1 with
+    /// (see [`crate::screen::write_screen_dims`]) and, for v6, reseeds windows 0 and 1 with
     /// the new screen width in pixels (frotz restart_screen) so games that
     /// read window widths via `get_wind_prop` before sizing anything see the
     /// real screen, not the boot-time default. Window 0 also takes the new
@@ -1029,7 +1037,7 @@ impl Machine {
     /// window 1 keeps its zero height until a `split_window`.
     ///
     /// For v4/v5/v7/v8 a LIVE upper window follows the new WIDTH — see
-    /// [`Machine::refit_upper_window_width`].
+    /// `refit_upper_window_width`.
     /// Declare the Version 6 character cell this session runs on (SQ-0917).
     ///
     /// Call this BEFORE [`Machine::set_screen_dims`] and before the boot run: the
@@ -1054,7 +1062,7 @@ impl Machine {
         self.set_v6_text(crate::screen::V6Metric::fixed(cell));
     }
 
-    /// The declared Version 6 cell this session runs on — [`V6Metric::cell`].
+    /// The declared Version 6 cell this session runs on — [`crate::screen::V6Metric::cell`].
     pub fn v6_cell(&self) -> crate::screen::V6Cell {
         self.v6_metric.cell()
     }
@@ -1288,7 +1296,7 @@ impl Machine {
 
     /// Is window `win` showing live prose that reached the HOST's transcript?
     ///
-    /// [`ZWindow::streamed`] is shadowed only for text that STREAMED — the
+    /// [`crate::screen::ZWindow::streamed`] is shadowed only for text that STREAMED — the
     /// `shadow` flag in `v6_advance_prose_cursor` is `diverted.is_none()`, the
     /// same routing decision the print path makes — so a non-empty `streamed` on
     /// a window whose prose is not diverted is exactly the host transcript's own
@@ -1323,7 +1331,9 @@ impl Machine {
 
     /// Inject the v6 picture-dimension table `picture_data` answers from:
     /// `(picture_number, width_px, height_px)` triples. The host builds this
-    /// from the self-blorb's `Pict` resources before the boot run (Task 9).
+    /// from the story's picture resources before the boot run — prefer
+    /// [`BootConfig::with_picture_dims`], which applies the scaling this
+    /// setter does not.
     pub fn set_picture_dims(&mut self, t: Vec<(u16, u16, u16)>) {
         self.picture_dims = t;
     }
@@ -4712,7 +4722,7 @@ impl Machine {
     /// all eight windows whenever a keystroke actually arrives (not on a
     /// timeout), in `console_read_input` and `console_read_key`; without it a
     /// long game walks the count down to the -999 floor and silently turns
-    /// "[MORE]" off for good. No-op below v6.
+    /// "\[MORE\]" off for good. No-op below v6.
     fn v6_reload_line_counts(&mut self) {
         // SQ-0917: the session's v6 cell, read before any borrow of `self.screen`.
         let cell = self.v6_cell();
@@ -4724,12 +4734,12 @@ impl Machine {
     }
 
     /// The current v6 window's line count (property 15) as a signed number:
-    /// how many more lines it prints before "[MORE]" falls due (zero or below
+    /// how many more lines it prints before "\[MORE\]" falls due (zero or below
     /// = due; [`crate::screen::NEVER_MORE`] = never). `None` below v6.
     ///
     /// For the host's pager — the engine only maintains the count (decrement
     /// per new-line, floor at -999, reload on input); deciding when to show
-    /// "[MORE]" stays a host job.
+    /// "\[MORE\]" stays a host job.
     pub fn v6_line_count(&self) -> Option<i16> {
         self.screen
             .v6
@@ -4737,7 +4747,7 @@ impl Machine {
             .map(|v6| v6.windows[(v6.current as usize).min(7)].line_count_signed())
     }
 
-    /// ZMSD §8.8.3.2.6: "A line count of -999 means 'never print [MORE]'."
+    /// ZMSD §8.8.3.2.6: "A line count of -999 means 'never print \[MORE\]'."
     /// True only for a v6 story whose current window is parked at the
     /// sentinel — the device Zork Zero's demonstration mode uses (§8 Remarks).
     pub fn v6_suppress_more(&self) -> bool {
@@ -5384,7 +5394,8 @@ impl Machine {
         crate::screen::compute_status_line(&self.mem)
     }
 
-    /// Read global variable N (0-based). Convenience for tests and Tasks 11+.
+    /// Read global variable N (0-based). A convenience for tests and for a
+    /// host inspecting story state directly.
     pub fn global(&self, n: u8) -> u16 {
         let base = self.mem.global_vars() as u32;
         self.mem.read_word(base + n as u32 * 2)
@@ -5575,7 +5586,7 @@ impl Machine {
     ///
     /// Hosts guard their unconditional snapshot triggers (exit auto-save, the
     /// quit dialog's "Save State & quit") on this. The Z-machine's hazard is not
-    /// Glulx's un-popped call stub, it is [`save_pc`](Self::save_pc): while an
+    /// Glulx's un-popped call stub, it is `save_pc`: while an
     /// `@save` is suspended, `save_pc` deliberately reports the result-descriptor
     /// address (Quetzal §5.8), so a HOST snapshot taken in that window records a
     /// PC pointing at a branch/store descriptor byte rather than at an
@@ -5762,7 +5773,7 @@ impl Machine {
 /// Source: Bocfel interpreter (garglk/garglk, terps/bocfel/unicode.cpp,
 /// function `build_zscii_to_character_graphics_table`), which faithfully
 /// implements the 8×8 bitmap descriptions in Z-Machine Standards Document §16.
-/// https://inform-fiction.org/zmachine/standards/z1point1/sect16.html
+/// <https://inform-fiction.org/zmachine/standards/z1point1/sect16.html>
 ///
 /// Key BeyondZork cursor-arrow mappings (ZMSD §16):
 ///   code 92 ('\\') → U+2191 ↑  (cursor up)

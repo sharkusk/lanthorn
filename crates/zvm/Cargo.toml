@@ -18,9 +18,7 @@ include = ["src/**", "Cargo.toml", "README.md"]
 # became `-p lanthorn-zvm` instead (cargo's `-p` matches package name, not
 # this field).
 name = "zvm"
-# No doctests here; skip the rustdoc doctest pass (seconds of harness
-# compilation for zero tests). Remove if real doctests are added.
-doctest = false
+
 [dependencies]
 # The grammar value types both VM crates return (SQ-1103) — an internal,
 # zero-dependency workspace crate, so this stays a zero-EXTERNAL-dependency

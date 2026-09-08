@@ -1,8 +1,8 @@
-// Z-machine object table — ZMSD §12.
-//
-// Attributes, parent/child/sibling tree, properties, short names.
-// v3: 1-byte object numbers, 32 attrs, 31-word default table, 9-byte entries.
-// v4+: 2-byte object numbers, 48 attrs, 63-word default table, 14-byte entries.
+//! Z-machine object table — ZMSD §12.
+//!
+//! Attributes, parent/child/sibling tree, properties, short names.
+//! v3: 1-byte object numbers, 32 attrs, 31-word default table, 9-byte entries.
+//! v4+: 2-byte object numbers, 48 attrs, 63-word default table, 14-byte entries.
 
 #[cfg(feature = "grammar")]
 use crate::dictionary;
@@ -395,7 +395,7 @@ fn decoded_string_at(mem: &Memory, addr: u32) -> Option<String> {
 /// reading `name` and whose other entries decode to prose and to fragments of
 /// prose starting mid-word. Taking that table gave property 21 and renamed 169
 /// objects to things like `"regexp too complex"`. So every entry the search
-/// reads must be an IDENTIFIER (see [`is_inform_identifier`]) or zero — which
+/// reads must be an IDENTIFIER (see `is_inform_identifier`) or zero — which
 /// is what an identifiers table holds by definition — and enough of them must
 /// be named to make a coincidence implausible.
 pub fn short_name_property(mem: &Memory) -> Option<u8> {
@@ -884,7 +884,7 @@ impl ParseNames {
     /// Infocom's is found by tallying, over the whole object table, which
     /// properties hold an array of dictionary addresses, and then taking the
     /// one whose objects **contain** every other candidate's — see
-    /// [`candidate_properties`] for why that test and not a bigger count.
+    /// `candidate_properties` for why that test and not a bigger count.
     ///
     /// `None` for a story with no parse names to read, which is a real answer
     /// and not only a failure. Journey and Scopa have no parser and no word
@@ -960,7 +960,7 @@ impl ParseNames {
 
     /// Which property the ADJECTIVES are read from, and `None` where this story
     /// keeps none that can be read — see [`Adjectives`] for what that means and
-    /// [`infocom_properties`] for how it is decided.
+    /// `infocom_properties` for how it is decided.
     pub fn adjective_property(&self) -> Option<u8> {
         self.adjective_property
     }
@@ -970,7 +970,7 @@ impl ParseNames {
     /// found somewhere to read them.
     ///
     /// `None` when the NOUNS cannot be read: see
-    /// [`word_array`](ParseNames::word_array) for exactly when that is. An
+    /// `word_array` for exactly when that is. An
     /// object whose adjectives cannot be read still answers — with an empty
     /// adjective list, which is a different claim from the
     /// [`Adjectives::Unavailable`] a story that keeps none reports.

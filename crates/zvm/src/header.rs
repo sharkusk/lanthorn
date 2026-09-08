@@ -1,6 +1,6 @@
-// Z-machine header parsing — ZMSD §11.
-//
-// All multi-byte values are big-endian. A "word" is an unsigned 16-bit value.
+//! Z-machine header parsing — ZMSD §11.
+//!
+//! All multi-byte values are big-endian. A "word" is an unsigned 16-bit value.
 
 use crate::error::ZError;
 

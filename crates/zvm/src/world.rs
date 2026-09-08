@@ -471,7 +471,7 @@ impl WorldModel {
 
     /// Everything the player can see in `room`, as object numbers, in reading
     /// order: each direct child, followed immediately by the contents of any
-    /// child whose contents are visible (recursively, to [`MAX_NEST_DEPTH`]),
+    /// child whose contents are visible (recursively, to `MAX_NEST_DEPTH`),
     /// then the room's shared scenery.
     ///
     /// `exclude` (0 for none) is dropped along with its whole subtree — the
@@ -513,7 +513,7 @@ impl WorldModel {
     /// once opened, and the same sack in the player's hands did not. One walk
     /// answers both, so the two cannot drift apart again.
     ///
-    /// The depth cap is [`MAX_NEST_DEPTH`], shared with the room walk for the
+    /// The depth cap is `MAX_NEST_DEPTH`, shared with the room walk for the
     /// same reason. Measured need on the carried side is **one** level — Zork I
     /// r88 and Mini-Zork r34 both put the lunch and the garlic one below an
     /// opened sack — and every level past that costs nothing while a holder

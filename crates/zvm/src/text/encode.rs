@@ -1,13 +1,13 @@
-// Z-character text encoding — ZMSD §3.7.
-//
-// Encodes a (lower-cased, truncated) Rust string into the dictionary-resolution
-// form: 4 bytes (6 Z-chars) for v3, 6 bytes (9 Z-chars) for v4+.
-// Z-chars are packed three per 16-bit word, big-endian, with the terminator
-// high bit (0x8000) set on the final word only.
-//
-// Scope: letters (A0) + A2 characters (shift-5 then A2 position), plus a
-// 10-bit ZSCII escape (shift-5, Z-char 6, hi/lo halves) for characters outside
-// A0/A2 (e.g. accented letters), mirroring the decode side.
+//! Z-character text encoding — ZMSD §3.7.
+//!
+//! Encodes a (lower-cased, truncated) Rust string into the dictionary-resolution
+//! form: 4 bytes (6 Z-chars) for v3, 6 bytes (9 Z-chars) for v4+.
+//! Z-chars are packed three per 16-bit word, big-endian, with the terminator
+//! high bit (0x8000) set on the final word only.
+//!
+//! Scope: letters (A0) + A2 characters (shift-5 then A2 position), plus a
+//! 10-bit ZSCII escape (shift-5, Z-char 6, hi/lo halves) for characters outside
+//! A0/A2 (e.g. accented letters), mirroring the decode side.
 
 use super::{A0, A1, A2};
 use crate::memory::Memory;

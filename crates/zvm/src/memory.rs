@@ -1,8 +1,8 @@
-// Z-machine memory model — ZMSD §1.1, §1.2.
-//
-// Dynamic memory (0x0000 up to but not including static_mem_base) is readable
-// and writable. Static memory and high memory are read-only. All multi-byte
-// story values are big-endian.
+//! Z-machine memory model — ZMSD §1.1, §1.2.
+//!
+//! Dynamic memory (0x0000 up to but not including `static_mem_base`) is readable
+//! and writable. Static memory and high memory are read-only. All multi-byte
+//! story values are big-endian.
 
 use crate::error::ZError;
 use crate::header::{parse_header, Header};
@@ -151,7 +151,7 @@ impl Memory {
     }
 
     /// Write a big-endian 16-bit word at `addr`. Only dynamic memory is writable
-    /// — same runtime read-only enforcement as [`write_byte`]. The whole word
+    /// — same runtime read-only enforcement as [`Self::write_byte`]. The whole word
     /// must lie below static_mem_base (a word straddling the boundary would
     /// half-corrupt static memory).
     pub fn write_word(&mut self, addr: u32, v: u16) {

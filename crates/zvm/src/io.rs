@@ -1,10 +1,13 @@
-// Output sink abstraction — ZMSD §7.
-//
-// `Output` is the pluggable interface for all text the Z-machine emits.
-// `BufferOutput` is a test/headless sink that accumulates output into a String.
-//
-// `Output` requires `as_any` so callers can downcast to concrete types (e.g.,
-// to read `BufferOutput::buf` in tests).
+//! Output sink abstraction — ZMSD §7.
+//!
+//! [`Output`] is the pluggable interface for all text the Z-machine emits.
+//! [`BufferOutput`] is a test/headless sink that accumulates output into a
+//! `String`; a host rendering a real screen implements the trait itself —
+//! lanthorn's `CaptureSink`, which drives a scrolling terminal transcript, is
+//! one such implementation.
+//!
+//! `Output` requires `as_any` so callers can downcast to concrete types (e.g.,
+//! to read `BufferOutput::buf` in tests).
 
 use std::any::Any;
 
@@ -42,9 +45,10 @@ pub trait Output: Any {
     ///
     /// The default is a no-op, which is right only for sinks that never wrap
     /// (e.g. `BufferOutput`, which just accumulates a `String`). Any sink that
-    /// lays text out in columns MUST override it — `zvm-cli`'s `StdoutOutput`
-    /// stops soft-wrapping, and the `app` crate's `CaptureSink` flags the runs it
-    /// captures so the transcript char-breaks them.
+    /// lays text out in columns MUST override it — a plain stdout host stops
+    /// soft-wrapping, and a scrolling-transcript host (lanthorn's
+    /// `CaptureSink`) flags the runs it captures so the transcript
+    /// char-breaks them.
     fn set_buffer_mode(&mut self, _on: bool) {}
     /// Notify the sink that `erase_window` just cleared the scrolling window it is
     /// capturing (ZMSD §8.7.3.3), AT THIS POINT in the character stream.
@@ -57,11 +61,14 @@ pub trait Output: Any {
     /// characters it has taken, so the VM tells it rather than counting for it.
     ///
     /// The default is a no-op, right for every sink that does not model a screen
-    /// boundary (`BufferOutput`, `zvm-cli`'s `StdoutOutput`, which prints straight
-    /// through). The `app` crate's `CaptureSink` overrides it.
+    /// boundary (`BufferOutput`, a plain stdout host that prints straight
+    /// through). A sink modelling a scrolling transcript (lanthorn's
+    /// `CaptureSink`) overrides it.
     fn screen_cleared(&mut self) {}
     fn as_any(&self) -> &dyn Any;
-    /// Mutable downcast support — required to drain sink state (e.g. `CaptureSink::take_text`).
+    /// Mutable downcast support — required to drain sink state a concrete sink
+    /// exposes beyond this trait (e.g. a transcript sink's own "take buffered
+    /// text" method).
     fn as_any_mut(&mut self) -> &mut dyn Any;
 }
 

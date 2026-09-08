@@ -1,7 +1,7 @@
-// Z-machine execution state — ZMSD §6.
-//
-// Manages the evaluation stack, call frames, local/global variables,
-// and routine call/return mechanics.
+//! Z-machine execution state — ZMSD §6.
+//!
+//! Manages the evaluation stack, call frames, local/global variables,
+//! and routine call/return mechanics.
 
 use crate::memory::Memory;
 

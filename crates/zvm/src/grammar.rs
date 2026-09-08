@@ -1,87 +1,89 @@
-// Story grammar (syntax) tables — the parts of speech and sentence shapes a
-// story knows, as opposed to the flat word list `dictionary.rs` returns.
-//
-// ── Where the formats are specified ──────────────────────────────────────────
-//
-// The Z-Machine Standards Document specifies the DICTIONARY (§13) and nothing
-// else here: "The grammar tables, used by the parser in an adventure game, are
-// not specified by the Z-machine at all (contrary to popular opinion)"
-// — Inform Technical Manual §8.6. Everything below therefore comes from two
-// non-ZMSD sources, both consulted directly rather than from memory:
-//
-//   * **Inform Technical Manual** (Graham Nelson), §8.5 "Dictionary" for the
-//     `dict_par1..3` flag byte and verb/preposition numbering, and §8.6
-//     "Grammar version numbers GV1 and GV2" for both Inform line formats, the
-//     token value tables, the ENDIT marker, the $400 REVERSE bit and the
-//     "adjectives" (preposition) table's 4-byte entries.
-//     <https://www.inform-fiction.org/source/tm/TechMan.txt>
-//
-//   * **ztools / infodump** (Mark Howell; V6 grammar work by Matthew T. Russotto),
-//     `showverb.c` — the reference implementation, and the only written
-//     description of Infocom's own table shapes: the fixed 8-byte and variable
-//     2/4/7-byte ZIL syntax entries, the preposition-table two forms, and the
-//     wholly different Version 6 layout used by Zork Zero, Shogun and Arthur.
-//     Format constants (`VERB` $40, `PREP` $08, `DESC` $20, `NOUN` $80,
-//     `DATA_FIRST` $03, `ENDIT` $0F) are from its `tx.h`.
-//     <https://github.com/ecliptik/ztools>
-//
-// The Version 6 dictionary FLAG BYTE is the one thing here neither source
-// describes: `tx.h` names only `VERB_V6` and infodump prints no parts of speech
-// for a V6 story, so the three bits that carry across Zork Zero, Shogun and
-// Arthur were measured through those games' own parsers and are documented at
-// [`F_INFOCOM_V6_VERB`] (SQ-1153). Bits above the third are per-game, and this
-// module declines to name them.
-//
-// Every table shape below was checked against `infodump -g` output for real
-// stories; see `crates/zvm/tests/grammar_tables.rs`.
-//
-// ── The five shapes ──────────────────────────────────────────────────────────
-//
-// All but the Version 6 Infocom games put a table of 2-byte pointers at the
-// base of static memory (header $0E), one pointer per verb. A verb's number in
-// the dictionary counts DOWN from 255, so verb number 255 is table slot 0.
-// Each pointer leads to a count byte and then that many syntax lines:
-//
-//   InfocomFixed     8 bytes/line: [objs][prep1][prep2][.. 4 ..][action]
-//   InfocomVariable  2, 4 or 7 bytes/line, sized by the top two bits of byte 0
-//   Inform5 / Gv1    8 bytes/line: [params][6 token bytes][action]
-//   InformGv2        variable: [action word][3-byte tokens..][ENDIT]
-//
-//   InfocomV6        no pointer table at all — the dictionary entry itself
-//                    holds the address of an 8-byte verb record, which points
-//                    at separate one-object and two-object entry blocks.
-//
-// ── The compilers that emit no such table ────────────────────────────────────
-//
-// Not every Z-machine story has a grammar table to find. **Dialog** (Linus
-// Åkesson; community fork at <https://github.com/Dialog-IF/dialog>) compiles a
-// predicate language to Z-code and keeps its parser in the story's own library
-// code — `(understand $ as $)` querying a `(grammar entry $ $ $)` predicate, in
-// Dialog's own data representation, indistinguishable from any other predicate
-// once compiled. The compiler proves it: the string "grammar" does not occur
-// anywhere in `dialogc`'s sources, and `src/backend_z.c` lays static memory out
-// as the optimised alphabet table (when used), then wordmaps, then data tables,
-// then the dictionary — no verb-pointer array, at the base of static memory or
-// anywhere else.
-//
-// Dialog signs every Z-machine story it emits, which is what lets us say so
-// rather than guess (`backend_z.c`, the header block): byte $38 is `*` for a
-// `-dev` build and zero otherwise, $39..$3B are `D`, `i`, `a`, and $3C..$3F are
-// the four characters of the version with its slash removed — `0m03` for
-// release 0m/03, `1a01` for 1a/01. That is the same $3C..$3F slot Inform stamps
-// `6.NN` into, so a Dialog story reads as Inform 5 to a version check alone.
-// [`is_dialog`] tests the three-byte signature, and [`Grammar::load`] answers
-// [`GrammarError::Absent`] for such a story — the honest answer, and one that
-// forecloses the real hazard, which is a Dialog wordmap whose leading bytes
-// happen to pass the verb-table shape checks and yield a fabricated grammar.
-//
-// ── What this module is not ──────────────────────────────────────────────────
-//
-// A read-only description of what the story's parser will accept. It is not a
-// parser, it does not rewrite input, and it emits no player-facing text. The
-// `describe` methods exist to diff this module against `infodump -g` and for
-// debug inspectors; a consumer showing something to a player writes its own
-// wording.
+//! Story grammar (syntax) tables — the parts of speech and sentence shapes a
+//! story knows, as opposed to the flat word list `dictionary.rs` returns.
+//!
+//! # Where the formats are specified
+//!
+//! The Z-Machine Standards Document specifies the DICTIONARY (§13) and nothing
+//! else here: "The grammar tables, used by the parser in an adventure game, are
+//! not specified by the Z-machine at all (contrary to popular opinion)"
+//! — Inform Technical Manual §8.6. Everything below therefore comes from two
+//! non-ZMSD sources, both consulted directly rather than from memory:
+//!
+//! * **Inform Technical Manual** (Graham Nelson), §8.5 "Dictionary" for the
+//!   `dict_par1..3` flag byte and verb/preposition numbering, and §8.6
+//!   "Grammar version numbers GV1 and GV2" for both Inform line formats, the
+//!   token value tables, the ENDIT marker, the $400 REVERSE bit and the
+//!   "adjectives" (preposition) table's 4-byte entries.
+//!   <https://www.inform-fiction.org/source/tm/TechMan.txt>
+//!
+//! * **ztools / infodump** (Mark Howell; V6 grammar work by Matthew T. Russotto),
+//!   `showverb.c` — the reference implementation, and the only written
+//!   description of Infocom's own table shapes: the fixed 8-byte and variable
+//!   2/4/7-byte ZIL syntax entries, the preposition-table two forms, and the
+//!   wholly different Version 6 layout used by Zork Zero, Shogun and Arthur.
+//!   Format constants (`VERB` $40, `PREP` $08, `DESC` $20, `NOUN` $80,
+//!   `DATA_FIRST` $03, `ENDIT` $0F) are from its `tx.h`.
+//!   <https://github.com/ecliptik/ztools>
+//!
+//! The Version 6 dictionary FLAG BYTE is the one thing here neither source
+//! describes: `tx.h` names only `VERB_V6` and infodump prints no parts of speech
+//! for a V6 story, so the three bits that carry across Zork Zero, Shogun and
+//! Arthur were measured through those games' own parsers and are documented at
+//! `F_INFOCOM_V6_VERB` (SQ-1153). Bits above the third are per-game, and this
+//! module declines to name them.
+//!
+//! Every table shape below was checked against `infodump -g` output for real
+//! stories; see `crates/zvm/tests/grammar_tables.rs`.
+//!
+//! # The five shapes
+//!
+//! All but the Version 6 Infocom games put a table of 2-byte pointers at the
+//! base of static memory (header $0E), one pointer per verb. A verb's number in
+//! the dictionary counts DOWN from 255, so verb number 255 is table slot 0.
+//! Each pointer leads to a count byte and then that many syntax lines:
+//!
+//! ```text
+//! InfocomFixed     8 bytes/line: [objs][prep1][prep2][.. 4 ..][action]
+//! InfocomVariable  2, 4 or 7 bytes/line, sized by the top two bits of byte 0
+//! Inform5 / Gv1    8 bytes/line: [params][6 token bytes][action]
+//! InformGv2        variable: [action word][3-byte tokens..][ENDIT]
+//!
+//! InfocomV6        no pointer table at all — the dictionary entry itself
+//!                  holds the address of an 8-byte verb record, which points
+//!                  at separate one-object and two-object entry blocks.
+//! ```
+//!
+//! # The compilers that emit no such table
+//!
+//! Not every Z-machine story has a grammar table to find. **Dialog** (Linus
+//! Åkesson; community fork at <https://github.com/Dialog-IF/dialog>) compiles a
+//! predicate language to Z-code and keeps its parser in the story's own library
+//! code — `(understand $ as $)` querying a `(grammar entry $ $ $)` predicate, in
+//! Dialog's own data representation, indistinguishable from any other predicate
+//! once compiled. The compiler proves it: the string "grammar" does not occur
+//! anywhere in `dialogc`'s sources, and `src/backend_z.c` lays static memory out
+//! as the optimised alphabet table (when used), then wordmaps, then data tables,
+//! then the dictionary — no verb-pointer array, at the base of static memory or
+//! anywhere else.
+//!
+//! Dialog signs every Z-machine story it emits, which is what lets us say so
+//! rather than guess (`backend_z.c`, the header block): byte $38 is `*` for a
+//! `-dev` build and zero otherwise, $39..$3B are `D`, `i`, `a`, and $3C..$3F are
+//! the four characters of the version with its slash removed — `0m03` for
+//! release 0m/03, `1a01` for 1a/01. That is the same $3C..$3F slot Inform stamps
+//! `6.NN` into, so a Dialog story reads as Inform 5 to a version check alone.
+//! [`is_dialog`] tests the three-byte signature, and [`Grammar::load`] answers
+//! [`GrammarError::Absent`] for such a story — the honest answer, and one that
+//! forecloses the real hazard, which is a Dialog wordmap whose leading bytes
+//! happen to pass the verb-table shape checks and yield a fabricated grammar.
+//!
+//! # What this module is not
+//!
+//! A read-only description of what the story's parser will accept. It is not a
+//! parser, it does not rewrite input, and it emits no player-facing text. The
+//! `describe` methods exist to diff this module against `infodump -g` and for
+//! debug inspectors; a consumer showing something to a player writes its own
+//! wording.
 
 use std::collections::BTreeMap;
 
@@ -541,7 +543,7 @@ pub fn dictionary_words(mem: &Memory) -> Vec<DictionaryWord> {
 /// writes its version string into the four bytes at $3C, so a '6' or later
 /// there separates Inform 6 from Inform 1–5.
 ///
-/// GV1 versus GV2 needs the table itself and is settled in [`load_classic`].
+/// GV1 versus GV2 needs the table itself and is settled in `load_classic`.
 /// True when the Dialog compiler produced this story.
 ///
 /// Dialog writes `D`, `i`, `a` into header bytes $39..$3B of every Z-machine

@@ -1,6 +1,7 @@
-//! `--machines`: print the §11.1.3 machine table zvm holds, and stop.
+//! [`table`]: render the §11.1.3 machine table zvm holds as one printable
+//! string, for a host's own `--machines`-style diagnostic.
 //!
-//! [`crate::interpreter::MACHINES`] is what every front-end presents a story as
+//! [`crate::interpreter::MACHINES`] is what every host presents a story as
 //! (SQ-0872), and until now the only way to read it was to open the source. A
 //! machine is a *bundle* — the byte in `$1E`, the page and ink in `$2C`/`$2D`,
 //! the palette those colour numbers resolve through, three §8.3 screen rules and
@@ -8,14 +9,14 @@
 //! that quest was filed for. Printing all of it side by side is what makes that
 //! checkable without a debugger and without a game.
 //!
-//! # One table, two binaries
+//! # One table, many hosts
 //!
-//! This lives in `zvm` rather than in a front-end because both front-ends ask
-//! the same question: `zvm-cli --machines` and `lanthorn --machines` print this
-//! string and nothing else (SQ-0960). A reporter kept in one CLI is a reporter
-//! the other has to copy, and the copy is what goes stale — the same argument
-//! `MACHINES` itself is here for. Nothing below needs a dependency `zvm` may not
-//! take: it is `format!` over the table.
+//! This lives in `zvm` rather than in a front-end because every embedder can
+//! ask the same question: `zvm-cli --machines` and lanthorn's own `--machines`
+//! both print this string and nothing else (SQ-0960). A reporter kept in one
+//! host is a reporter every other host has to copy, and the copy is what goes
+//! stale — the same argument `MACHINES` itself is here for. Nothing below needs
+//! a dependency `zvm` may not take: it is `format!` over the table.
 //!
 //! # Generated, never transcribed
 //!

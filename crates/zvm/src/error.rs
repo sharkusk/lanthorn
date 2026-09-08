@@ -1,4 +1,4 @@
-// Z-machine interpreter error types.
+//! Z-machine interpreter error types.
 
 #[derive(Debug, PartialEq)]
 #[non_exhaustive]

@@ -1,4 +1,4 @@
-// Z-machine text subsystem.
+//! Z-machine text subsystem.
 
 // Default alphabet tables (ZMSD §3.5.3).
 // Each table covers Z-chars 6–31 (26 entries; index = Z-char − 6).

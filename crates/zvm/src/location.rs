@@ -1,48 +1,52 @@
-// Mapper-facing API — current player location and read-only object tree.
-//
-// This module provides two signals that the future automapper consumes:
-//   1. `current_location` — the object representing where the player is now.
-//   2. `object_tree_view` — a read-only enumeration of all objects.
-//
-// # Location heuristic
-//
-// The Z-machine specification (ZMSD) has no standard mechanism for identifying
-// the player's current location.  We use version-dependent heuristics:
-//
-// ## v3 (status-line games, ZMSD §8.2.2.1)
-// The interpreter status line reads the current room from **global variable 0**
-// (variable number 0x10, the first global).  This is the object number of the
-// current room.  We read that global; if it is nonzero and within the valid
-// object-number range we return its snapshot.
-//
-// ## v4+ (no status line / Inform games)
-// There is no guaranteed status-line global.  Many Inform games still store a
-// location-ish object in global 0, so we try the same strategy.  This is a
-// best-effort heuristic; the automapper's "unknown direction" mechanism handles
-// the occasional wrong or missing value gracefully.
-//
-// # Object-tree enumeration bounds
-//
-// The Z-machine does not store the object count explicitly.  We infer it from
-// the layout: objects are stored in a compact array immediately after the
-// property-defaults table; each object entry contains a pointer to its own
-// property table.  The smallest property-table address found across all entries
-// marks where the object entries array ends, because property tables are always
-// placed after the object entries in well-formed story files.
-//
-// Concretely: iterate candidate objects starting from 1.  For each candidate,
-// read the property-table pointer stored in its entry.  If that pointer is less
-// than or equal to the start of the current candidate's own entry (meaning the
-// pointer points back into the entry region itself), we have run past the end of
-// the real object table.  We also stop if the pointer is zero.  A reasonable
-// absolute cap of 2000 objects is applied to guard against malformed data.
-//
-// **Documented limitations:**
-//   - The v4+ location is a best-effort guess; wrong answers are expected
-//     occasionally and the automapper is designed to tolerate them.
-//   - Object-count inference can be wrong for unusual story layouts (hand-crafted
-//     or very old files where property tables are interleaved with entries).
-//   - v8 and v7 stories use the same heuristic as v4+ for location.
+//! Best-effort player-location detection and a read-only object-tree view, for
+//! a host building a live map of the story (lanthorn's own automapper is one
+//! such host, but nothing here knows it exists).
+//!
+//! Two entry points cover it:
+//!
+//! - [`current_location`] — the object representing where the player is now.
+//! - [`object_tree_view`] — a read-only enumeration of all objects.
+//!
+//! # Location heuristic
+//!
+//! The Z-machine specification (ZMSD) has no standard mechanism for identifying
+//! the player's current location. This module uses version-dependent heuristics:
+//!
+//! ## v3 (status-line games, ZMSD §8.2.2.1)
+//! The interpreter status line reads the current room from **global variable 0**
+//! (variable number 0x10, the first global). This is the object number of the
+//! current room: that global is read, and if it is nonzero and within the valid
+//! object-number range its snapshot is returned.
+//!
+//! ## v4+ (no status line / Inform games)
+//! There is no guaranteed status-line global. Many Inform games still store a
+//! location-ish object in global 0, so the same strategy is tried. This is a
+//! best-effort heuristic; a host's own "unknown direction" handling should
+//! tolerate the occasional wrong or missing value gracefully.
+//!
+//! # Object-tree enumeration bounds
+//!
+//! The Z-machine does not store the object count explicitly. It is inferred
+//! from the layout: objects are stored in a compact array immediately after the
+//! property-defaults table; each object entry contains a pointer to its own
+//! property table. The smallest property-table address found across all entries
+//! marks where the object entries array ends, because property tables are always
+//! placed after the object entries in well-formed story files.
+//!
+//! Concretely: candidate objects are iterated starting from 1. For each candidate,
+//! the property-table pointer stored in its entry is read. If that pointer is less
+//! than or equal to the start of the current candidate's own entry (meaning the
+//! pointer points back into the entry region itself), the scan has run past the end of
+//! the real object table. It also stops if the pointer is zero. A reasonable
+//! absolute cap of 2000 objects guards against malformed data.
+//!
+//! **Documented limitations:**
+//!
+//! - The v4+ location is a best-effort guess; wrong answers are expected
+//!   occasionally and a host's map layer should tolerate them.
+//! - Object-count inference can be wrong for unusual story layouts (hand-crafted
+//!   or very old files where property tables are interleaved with entries).
+//! - v8 and v7 stories use the same heuristic as v4+ for location.
 
 use crate::cpu::exec::Machine;
 use crate::memory::Memory;
@@ -449,7 +453,7 @@ fn v6_band_runs(machine: &Machine) -> Vec<(usize, usize)> {
 /// **Only the band**, not the whole window model: the prose window's own text is
 /// the v6 analogue of the v4+ LOWER window, which `blank` has never touched, and
 /// a rewind that restores memory without a screen would otherwise wipe the page
-/// the player is reading. The extent comes from [`v6_band_runs`], so what stops
+/// the player is reading. The extent comes from `v6_band_runs`, so what stops
 /// being read and what stops being shown are the same set by construction.
 ///
 /// A no-op on a story with no v6 window table.
@@ -1340,7 +1344,7 @@ pub fn detect_location_with(machine: &Machine, candidates: &PlayerCandidates) ->
 /// the heuristic cannot determine a plausible location.
 ///
 /// See module-level docs for the version-specific strategy. Also used by
-/// [`resolve_room_object`] on v4+ stories — global 0 keeps naming *something*
+/// `resolve_room_object` on v4+ stories — global 0 keeps naming *something*
 /// on those (Inform's `location` variable most often, ZIL's less reliably),
 /// and that function reads it purely as a disambiguator: it decides between
 /// several SAME-NAME objects only when this snapshot's object number is

@@ -1,9 +1,9 @@
-// ZSCII text decoding — ZMSD §3.2–§3.8.
-//
-// Each Z-string word packs three 5-bit Z-characters; the high bit (0x8000)
-// marks the last word of the string. Three alphabets A0/A1/A2 cover
-// lowercase, uppercase, and punctuation/digits. Shift Z-chars 4/5 (v3+)
-// temporarily switch to A1/A2 for the next character only.
+//! ZSCII text decoding — ZMSD §3.2–§3.8.
+//!
+//! Each Z-string word packs three 5-bit Z-characters; the high bit (0x8000)
+//! marks the last word of the string. Three alphabets A0/A1/A2 cover
+//! lowercase, uppercase, and punctuation/digits. Shift Z-chars 4/5 (v3+)
+//! temporarily switch to A1/A2 for the next character only.
 
 use crate::memory::Memory;
 use super::{A0, A1, A2};

@@ -1,8 +1,8 @@
-// Z-machine instruction decoder — ZMSD §4, §14.
-//
-// Decodes one instruction at `pc` into a structured `Instr` value.
-// Four instruction forms: Long, Short, Variable, Extended.
-// After operands, reads store/branch/text bytes per the opcode's signature.
+//! Z-machine instruction decoder — ZMSD §4, §14.
+//!
+//! Decodes one instruction at `pc` into a structured [`Instr`] value.
+//! Four instruction forms: Long, Short, Variable, Extended.
+//! After operands, reads store/branch/text bytes per the opcode's signature.
 
 use crate::memory::Memory;
 use crate::text::decode::decode_string;

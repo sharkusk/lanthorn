@@ -1,8 +1,12 @@
 //! Disassembly cache: an ordered model of the code region as display units.
 //!
-//! Task 1 scope only: the `Unit`/`DisasmCache` data model, code-region bounds,
-//! and an empty-cache skeleton constructor. Routine discovery (populating
-//! `units`/`routines`) lands in later tasks.
+//! [`DisasmCache::empty`] builds an empty cache over the code region's bounds;
+//! [`DisasmCache::build`] discovers routine entry points and tiles the code
+//! region into display units around them, populating `units`/`routines` —
+//! see that function's doc comment for the discovery algorithm.
+//! [`DisasmCache::confirm_pc`]/[`DisasmCache::confirm_routine`] extend an
+//! existing cache incrementally as execution or a caller's own probing turns
+//! up more routines.
 
 use crate::cpu::decode::{decode, Operand, OperandCount};
 use crate::cpu::disasm::{format_instr, format_instr_basic, format_instr_raw, mnemonic, Unpack};
@@ -306,7 +310,7 @@ impl DisasmCache {
 
     /// Like [`disassemble`](Self::disassemble), but tags each display row with
     /// the [`Provenance`] of the unit it came from (SQ-0428). The row strings are
-    /// byte-identical to [`disassemble`]; `Unit::Data`'s multiple `.byte` rows
+    /// byte-identical to [`disassemble`](Self::disassemble); `Unit::Data`'s multiple `.byte` rows
     /// each carry `Provenance::Data`.
     pub fn disassemble_tiered(
         &self,
@@ -629,7 +633,8 @@ fn is_terminator(count: OperandCount, opcode: u8) -> bool {
 /// The initial "main" context has no header, so the seed is enqueued on the
 /// first-instruction worklist directly and never added to the routine set.
 ///
-/// Consumed by Task 3 (tiling/nav).
+/// Consumed by [`DisasmCache::build`] to tile the code region into display
+/// units around the discovered routines.
 pub fn discover_rd(mem: &Memory, version: u8, unpack: &Unpack, region: (u32, u32)) -> BTreeSet<u32> {
     /// Safety cap on instructions decoded per routine run (guards a malformed
     /// decode loop that never reaches a terminator or the region end).
