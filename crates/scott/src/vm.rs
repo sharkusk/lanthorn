@@ -1,3 +1,17 @@
+//! [`Vm`], the mutable play state that turns a static [`crate::Database`]
+//! into a running game: item locations, the player's room, flags, counters,
+//! lamp fuel, and the PRNG occurrence rolls draw from.
+//!
+//! A host drives a session through [`Vm::step`] / [`Vm::supply_line`] and
+//! [`StepResult`] (see the crate-level docs for the full protocol), and
+//! saves it with [`Vm::snapshot`] / [`Vm::restore`] — the latter reporting a
+//! shape mismatch as a [`RestoreError`] rather than corrupting state.
+//!
+//! Verb and command dispatch follow ScottFree's own C source (`main.c`'s
+//! opcode 0-51 conditions and 52+ commands) wherever the database format
+//! leaves room for disagreement between implementations; see individual
+//! method docs for the sites where that mattered.
+
 use crate::*;
 use crate::database::{CARRIED, DARK_FLAG, LAMP_EMPTY_FLAG, LIGHT_SOURCE};
 use std::collections::HashSet;
@@ -118,9 +132,10 @@ impl Vm {
 
     /// Like [`Vm::new`], but with fired-action tracing enabled from the very
     /// first instruction — so the opening occurrence pass (run inside this
-    /// constructor, before any host code can call [`set_trace_fired`]) is
-    /// captured too. The app's `--debug` boot path uses this so a Scott story's
-    /// start-of-game auto-events show up as fired from the first frame.
+    /// constructor, before any host code can call [`Vm::set_trace_fired`]) is
+    /// captured too. A host's debug-boot path (lanthorn's `--debug` flag, for
+    /// instance) uses this so a Scott story's start-of-game auto-events show up
+    /// as fired from the first frame.
     pub fn new_with_trace(db: Database, trace_fired: bool) -> Vm {
         Vm::new_seeded(db, trace_fired, Vm::DEFAULT_RNG_SEED)
     }
@@ -130,8 +145,9 @@ impl Vm {
     /// A seed belongs in the CONSTRUCTOR, not in a `seed_rng` call after it: the
     /// opening occurrence pass runs below, inside this function, and occurrences
     /// roll percentage chances — so a game seeded afterwards has already had its
-    /// first random events decided by the default seed. lanthorn passes the
-    /// `random_seed` config key here, or an entropy draw when that key is unset.
+    /// first random events decided by the default seed. The host supplies the
+    /// seed here — lanthorn passes its `random_seed` config key, or an entropy
+    /// draw when that key is unset.
     pub fn new_seeded(db: Database, trace_fired: bool, seed: u32) -> Vm {
         let item_loc = db.items.iter().map(|i| i.start_loc).collect();
         let player = db.start_room;

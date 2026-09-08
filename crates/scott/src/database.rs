@@ -1,3 +1,12 @@
+//! The static game data a Scott Adams `.dat` file describes: rooms, items,
+//! the verb/noun action table, vocabulary, and messages. [`Database::parse`]
+//! builds one from source text; every field here is `pub` so a host can also
+//! build one by hand — see the crate-level example.
+//!
+//! This module holds only the data and the vocabulary lookups
+//! ([`Database::match_verb`], [`Database::match_noun`]) that both loading
+//! and play need; turn-by-turn state lives on [`crate::Vm`] instead.
+
 pub use grammar_model::ObjectWords;
 
 #[derive(Debug, Clone, PartialEq)]

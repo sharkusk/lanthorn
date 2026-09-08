@@ -1,3 +1,14 @@
+//! Parses the ScottFree `.dat` text format into a [`Database`]: a lexer over
+//! whitespace-separated integers and `"`-quoted strings, a header of table
+//! sizes, then rooms, messages, actions, verbs/nouns, and items in that
+//! fixed order. [`looks_like_scott`] does the cheap header-shape sniff a
+//! multi-engine host uses to decide whether a file is worth handing to
+//! [`Database::parse`] at all.
+//!
+//! Every count and index in the header is bounds-checked before it sizes an
+//! allocation or indexes a table (SQ-0629): a hostile or truncated file
+//! returns a [`LoadError`] rather than exhausting memory or panicking.
+
 use crate::*;
 
 #[derive(Debug, Clone, PartialEq)]

@@ -10,7 +10,7 @@ rust-version.workspace = true
 readme = "README.md"
 keywords = ["interactive-fiction", "scott-adams", "text-adventure", "emulator"]
 categories = ["emulators", "parser-implementations"]
-include = ["src/**", "Cargo.toml", "README.md"]
+include = ["src/**", "examples/**", "Cargo.toml", "README.md"]
 
 [lib]
 # Package renamed for crates.io (SQ-1250); the crate name every `use
@@ -18,9 +18,6 @@ include = ["src/**", "Cargo.toml", "README.md"]
 # in CI/docs became `-p lanthorn-scott` instead (cargo's `-p` matches package
 # name, not this field).
 name = "scott"
-# No doctests here; skip the rustdoc doctest pass (seconds of harness
-# compilation for zero tests). Remove if real doctests are added.
-doctest = false
 
 [dependencies]
 # The shared answer type both VM crates already return (SQ-1103/SQ-1118) — an

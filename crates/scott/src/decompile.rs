@@ -1,10 +1,11 @@
 //! Static decompiler for the Scott Adams action table: turns raw
 //! `Action`/`Condition`/command data into a structured, human-readable form
-//! and a plain-line rendering suitable for a line-oriented debug panel.
+//! and a plain-line rendering suitable for a line-oriented debug inspector
+//! (lanthorn's debug panel, for instance).
 //!
 //! This is cold code — nothing here is called during loading or `Vm`
-//! construction/turns; it exists purely for a later app-side debug inspector
-//! to call on demand.
+//! construction/turns; it exists purely for a host's debug inspector to call
+//! on demand.
 //!
 //! Mnemonics mirror `vm.rs`'s own dispatch: `CONDITION_MNEMONICS` and
 //! `COMMAND_MNEMONICS` below are asserted (by the coverage tests at the
@@ -308,9 +309,9 @@ pub fn decompile_all(db: &Database) -> Vec<DecompiledAction> {
 }
 
 impl DecompiledAction {
-    /// Plain-line rendering for a line-oriented debug panel: a `#idx VERB
-    /// NOUN` header, then an `IF ...` line per condition, then a `THEN ...`
-    /// line per command.
+    /// Plain-line rendering for a line-oriented debug inspector (lanthorn's
+    /// debug panel, for instance): a `#idx VERB NOUN` header, then an `IF ...`
+    /// line per condition, then a `THEN ...` line per command.
     pub fn lines(&self) -> Vec<String> {
         let mut out = vec![format!("#{} {} {}", self.index, self.verb_word, self.noun_word)];
         for c in &self.conditions {
