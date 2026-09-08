@@ -75,8 +75,8 @@ fn zork0_v6_windows_smoke() {
 
     // (b) The sidecar dims were injected into the machine.
     assert!(
-        !session.machine.picture_dims.is_empty(),
-        "machine.picture_dims should be non-empty after Task 9's sidecar injection"
+        session.machine.picture_count() > 0,
+        "machine.picture_count() should be non-zero after Task 9's sidecar injection"
     );
 
     let v6 = session

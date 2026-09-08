@@ -432,16 +432,9 @@ fn every_macintosh_plate_and_its_screen_are_in_the_same_space() {
         );
         // …and the game's own picture table is in that same space: picture 1 is
         // the full-screen plate on both archives.
-        let first = l
-            .session
-            .machine
-            .picture_dims
-            .iter()
-            .find(|(n, _, _)| *n == 1)
-            .copied()
-            .expect("picture 1 is in the table");
+        let first = l.session.machine.picture_dims(1).expect("picture 1 is in the table");
         assert_eq!(
-            (u32::from(first.1), u32::from(first.2)),
+            (u32::from(first.0), u32::from(first.1)),
             drawn,
             "{name}: picture_data must report unit-space sizes",
         );

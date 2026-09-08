@@ -141,12 +141,12 @@ fn the_decks_are_drawn_at_their_natural_size() {
     }
 
     // …and the mechanism behind the layout: what the game itself was told.
-    let dims = &session.machine.picture_dims;
-    for want in [(101u16, 52u16, 84u16), (301, 52, 84)] {
-        assert!(
-            dims.contains(&want),
+    for (number, w, h) in [(101u16, 52u16, 84u16), (301, 52, 84)] {
+        assert_eq!(
+            session.machine.picture_dims(number),
+            Some((w, h)),
             "picture_data must report the art's own size for a Reso-less Blorb; \
-             {want:?} missing from the injected table"
+             picture {number} missing or wrong in the injected table"
         );
     }
 }
