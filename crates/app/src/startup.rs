@@ -1902,9 +1902,11 @@ pub(crate) fn boot_story(
         }
         None => None,
     };
-    if state.config.enable_sound {
-        state.audio = Some(audio::AudioBackend::new(state.config.volume));
-    }
+    // `state.audio` stays `None` here and opens lazily on first actual use
+    // (`AppState::play_turn_sounds` / `play_glulx_sound_ops`, or the
+    // `/play-sound` diagnostic) — opening a real output device costs real
+    // time (~240ms measured, SQ-1014's audit) and a story that never plays a
+    // sound should never pay it just because `enable_sound` is on (SQ-1423).
 
     // Seed autocomplete with the story's parser vocabulary (room nouns are added live).
     state.dict_words = session.introspect().map(|i| i.vocabulary()).unwrap_or_default();

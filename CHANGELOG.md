@@ -91,6 +91,13 @@ Absolute URLs or no link.
   lamp-countdown wording, and the light source being destroyed for good the
   instant it runs out rather than merely going dark. `scott-cli` gets matching
   `-y`/`-s`/`-t`/`-p` flags, same as the original ScottFree. (SQ-1413)
+- **lanthorn and the `zvm-cli` command-line player now start instantly on a
+  game with no sound**, instead of pausing to open an audio device that game
+  was never going to use — the device now opens only the first time a game
+  actually plays something. **And `zvm-cli` now reads Enter correctly in a
+  game that asks for a single keypress** — a bare Enter used to be reported
+  as a raw line-feed, which a well-behaved game is entitled to reject as an
+  input code it should never see. (SQ-1423)
 
 ---
 

@@ -39,7 +39,10 @@ pub use flags::{
     usage_error, wrap_tokens,
 };
 pub use line::LineHold;
-pub use input::{key_press, read_byte_or_eof, read_byte_stdin, read_line_or_eof, read_line_stdin};
+pub use input::{
+    key_press, read_byte_or_eof, read_byte_stdin, read_char_from_line, read_line_or_eof,
+    read_line_stdin,
+};
 pub use menu::{Emission, MENU_COMMAND, MenuBlock, MenuTracker, NavKey, Typed, is_menu_request};
 pub use mode::{HostMode, PLAIN_FLAGS, no_color, plain_requested};
 pub use pager::{Pager, wait_for_keypress};

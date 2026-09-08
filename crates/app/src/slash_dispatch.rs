@@ -291,9 +291,12 @@ pub(crate) fn dispatch_slash_outcome(
                 report.from_medium = from_medium;
                 if let Some(fmt) = app::state::sound_kind_to_format(kind) {
                     report.format = Some(fmt);
-                    if let Some(backend) = state.audio.as_mut() {
-                        report.sound_id = backend.play_sample(&bytes, fmt, 8, 1);
-                    }
+                    // `/play-sound` is an explicit request to play something, so
+                    // it opens the (otherwise lazy, SQ-1423) device itself rather
+                    // than silently doing nothing the first time it's run.
+                    let volume = state.config.volume;
+                    let backend = state.audio.get_or_insert_with(|| audio::AudioBackend::new(volume));
+                    report.sound_id = backend.play_sample(&bytes, fmt, 8, 1);
                 }
             }
             for line in app::state::format_play_sound_report(&report) {
