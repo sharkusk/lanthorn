@@ -1,0 +1,24 @@
+
+InputEventTest
+Not a game.
+Release 2 / Serial number 170127 / Inform v6.34 Library 6/11 S
+
+Input Room
+This is an input room. A sign reads, "GET any of these inputs to test it." Below the sign is a story-window button (lit) and a status-window button.
+
+You can see a character input, a unicode character input, a line input, a unicode line input and a timer input here.
+
+>Enter character:
+>>
+Got character (dec) 103, (hex) $67: g
+
+>Enter line:
+>>Got 14 characters:
+s o m e <space> t e s t <space> l i n e 
+Hex: $73 $6F $6D $65 $20 $74 $65 $73 $74 $20 $6C $69 $6E $65 
+
+>This button lets you test input in the story window (the default).
+
+>This button lets you test input in the status window.
+
+>

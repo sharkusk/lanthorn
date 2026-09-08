@@ -1,0 +1,39 @@
+
+SelectVariantTest: Not a game.
+Release 2 / Serial number 121014 / Inform v6.32, compiler options S
+Interpreter version 0.6.1 / VM 3.1.3 / game file format 3.0.0
+
+A voice booooms out: Welcome to the test chamber.
+
+This test keeps a memory stream open across input events. It also tests some variations of the input event (calling @glk select with opcode arguments from the stack instead of local variables). These cases are not difficult for an interpreter to handle, but they get strange if you autosave at input time (as the iOS interpreter does). This test allows me to check that.
+
+All input is single-key. Most keys are simply echoed. "0", "2", "a", "b" set up the next key-read with an unusual opcode structure. "m" increases the memory map size. "c" or "u" prints out a log of all keys hit (since the beginning, or the last "c/u"). The next log is kept as a memory char stream for "c", a memory unicode stream for "u".
+
+Notestream dispid: 194
+
+>
+astack>
+You pressed 'b' (98).
+
+>
+nostack>
+You pressed '2' (50).
+
+>
+You pressed 'm'.
+
+Increasing memory size to 8960.
+
+>
+You pressed 'c'.
+
+Logged 6 chars written: [ab02mc]
+Notestream dispid: 195
+
+>
+You pressed 'u'.
+
+Logged 1 chars written: [u]
+Notestream dispid: 196
+
+>
