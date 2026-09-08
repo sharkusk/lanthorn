@@ -17,12 +17,19 @@ use std::collections::{BTreeMap, BTreeSet};
 
 // ── Window types (`wintype_*`, the `wintype` argument to glk_window_open) ──────
 
-/// The window kinds this subset supports. (Blank is out of scope.)
+/// The window kinds this subset supports.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 #[non_exhaustive]
 pub enum WinType {
     /// Internal layout node created by a split (`wintype_Pair` = 1).
     Pair,
+    /// A window that is always blank: no input, no output, and
+    /// `glk_window_get_size()` always reports `(0, 0)` regardless of the space
+    /// its split actually gives it (`wintype_Blank` = 2; Glk spec §3.5.1 — "A
+    /// blank window is always blank. It supports no input and no output. …
+    /// A blank window has no size; glk_window_get_size() will return (0,0)").
+    /// Used as pure layout filler (e.g. a spacer corner between other panes).
+    Blank,
     /// Scrolling main text window (`wintype_TextBuffer` = 3).
     TextBuffer,
     /// Fixed character grid / status window (`wintype_TextGrid` = 4).
@@ -36,6 +43,7 @@ impl WinType {
     pub fn from_arg(v: u32) -> Option<WinType> {
         match v {
             1 => Some(WinType::Pair),
+            2 => Some(WinType::Blank),
             3 => Some(WinType::TextBuffer),
             4 => Some(WinType::TextGrid),
             5 => Some(WinType::Graphics),
@@ -46,6 +54,7 @@ impl WinType {
     pub fn to_arg(self) -> u32 {
         match self {
             WinType::Pair => 1,
+            WinType::Blank => 2,
             WinType::TextBuffer => 3,
             WinType::TextGrid => 4,
             WinType::Graphics => 5,
@@ -694,6 +703,26 @@ pub trait GlkBackend {
     fn local_utc_offset_seconds(&self, _epoch_seconds: i64) -> Option<i32> {
         None
     }
+    /// Answer `gestalt_CharOutput`/`glk_gestalt_ext` for code point `ch`
+    /// (SQ-1416 item 8; Glk spec §2.3): `(result, glyph_count)`, where
+    /// `result` is `gestalt_CharOutput_CannotPrint` (0), `_ApproxPrint` (1),
+    /// or `_ExactPrint` (2), and `glyph_count` is "the number of actual
+    /// glyphs which will be used to represent the character" (`glk_gestalt_ext`'s
+    /// output array) — meaningless when `result` is `CannotPrint`, though the
+    /// spec allows any value there too. Default (no backend knowledge of its
+    /// real font coverage): `CannotPrint` for the eight-bit control ranges
+    /// the spec names outright ("always … CannotPrint if ch is an unprintable
+    /// eight-bit character (0 to 9, 11 to 31, 127 to 159)"), `ExactPrint`
+    /// (1 glyph) for the rest of Latin-1, `ApproxPrint` (1 glyph) beyond that.
+    fn char_output_gestalt(&self, ch: u32) -> (u32, u32) {
+        if matches!(ch, 0..=9 | 11..=31 | 127..=159) {
+            (0, 0) // CannotPrint
+        } else if ch <= 0xFF {
+            (2, 1) // ExactPrint
+        } else {
+            (1, 1) // ApproxPrint
+        }
+    }
     /// Immutable downcast support (used by tests to read recorded output).
     fn as_any(&self) -> &dyn Any;
     /// Mutable downcast support.
@@ -938,6 +967,7 @@ impl GlkBackend for TestBackend {
             }
             WinType::Pair => {}
             WinType::Graphics => {}
+            WinType::Blank => {}
         }
     }
     fn window_close(&mut self, id: u32) {
@@ -1239,6 +1269,23 @@ const filemode_Write: u32 = 1;
 #[allow(non_upper_case_globals)]
 const fileusage_TextMode: u32 = 0x100;
 
+/// Glk `fileusage_TypeMask` (garglk `glk.h`): the low bits of a fileref's
+/// `usage` naming what kind of file it is, independent of the TextMode bit.
+#[allow(non_upper_case_globals)]
+const fileusage_TypeMask: u32 = 0x0f;
+/// Glk `fileusage_Data` (garglk `glk.h`).
+#[allow(non_upper_case_globals)]
+const fileusage_Data: u32 = 0x00;
+/// Glk `fileusage_SavedGame` (garglk `glk.h`).
+#[allow(non_upper_case_globals)]
+const fileusage_SavedGame: u32 = 0x01;
+/// Glk `fileusage_Transcript` (garglk `glk.h`).
+#[allow(non_upper_case_globals)]
+const fileusage_Transcript: u32 = 0x02;
+/// Glk `fileusage_InputRecord` (garglk `glk.h`).
+#[allow(non_upper_case_globals)]
+const fileusage_InputRecord: u32 = 0x03;
+
 /// The mutable read/write state of an open file stream, kept in a side table
 /// (`Model::file_streams`) keyed by stream id so `StreamKind` stays `Copy`.
 #[derive(Clone, Debug)]
@@ -1472,7 +1519,7 @@ impl Model {
         let row = match wintype {
             WinType::TextBuffer => 0,
             WinType::TextGrid => 1,
-            WinType::Pair | WinType::Graphics => return StyleColour::default(),
+            WinType::Pair | WinType::Graphics | WinType::Blank => return StyleColour::default(),
         };
         self.style_hints[row][style as usize]
     }
@@ -1507,7 +1554,7 @@ impl Model {
         let row = match wintype {
             WinType::TextBuffer => 0,
             WinType::TextGrid => 1,
-            WinType::Pair | WinType::Graphics => return StyleAttrs::default(),
+            WinType::Pair | WinType::Graphics | WinType::Blank => return StyleAttrs::default(),
         };
         self.style_attrs[row][style as usize]
     }
@@ -1750,19 +1797,36 @@ impl Model {
 
     // ── filerefs (in-memory VFS) ────────────────────────────────────────────────
 
-    /// Keep the characters Glk libraries safely allow in a base filename (ASCII
-    /// alphanumerics plus `-`, `_`, `.`); everything else becomes `_`. An empty
-    /// result falls back to `"file"` so a name is never blank.
-    pub fn sanitize_fileref_name(raw: &str) -> String {
-        let cleaned: String = raw
+    /// Simplify a fileref's raw name into a base filename that exchanges cleanly
+    /// with other Glk interpreters — the spec-recommended rule (Glk spec §3.7,
+    /// "Other File Reference Functions"; the precise algorithm is cheapglk
+    /// `cgfref.c`'s `glk_fileref_create_by_name` comment: "delete all characters
+    /// in the string \"/\\<>:|?*\" (including quotes). Truncate at the first
+    /// period. Change to \"null\" if there's nothing left. Then append an
+    /// appropriate suffix: \".glkdata\", \".glksave\", \".txt\"."): delete
+    /// `" \ / > < : | ? *`, keep only the part before the first `.`, fall back
+    /// to `"null"` if that leaves nothing, then append the usage's suffix
+    /// (`.glkdata` for `fileusage_Data`, `.glksave` for `fileusage_SavedGame`,
+    /// `.txt` for `fileusage_Transcript`/`fileusage_InputRecord`, none for any
+    /// other usage — matching `gli_suffix_for_usage`'s `default: return ""`).
+    pub fn sanitize_fileref_name(raw: &str, usage: u32) -> String {
+        let base: String = raw
             .chars()
-            .map(|c| if c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.') { c } else { '_' })
+            .take_while(|&c| c != '.')
+            .filter(|c| !matches!(c, '"' | '\\' | '/' | '>' | '<' | ':' | '|' | '?' | '*'))
             .collect();
-        if cleaned.is_empty() {
-            "file".to_string()
+        let base = if base.is_empty() { "null".to_string() } else { base };
+        let masked = usage & fileusage_TypeMask;
+        let suffix = if masked == fileusage_Data {
+            ".glkdata"
+        } else if masked == fileusage_SavedGame {
+            ".glksave"
+        } else if masked == fileusage_Transcript || masked == fileusage_InputRecord {
+            ".txt"
         } else {
-            cleaned
-        }
+            ""
+        };
+        format!("{base}{suffix}")
     }
 
     /// Allocate a fileref slot for a (already-chosen) name; returns its id.
@@ -1777,7 +1841,7 @@ impl Model {
     /// `glk_fileref_create_by_name`: sanitize `name`, allocate a fileref, return id.
     /// A game-fixed name (not `by_prompt`).
     pub fn fileref_create(&mut self, usage: u32, name: String, rock: u32) -> u32 {
-        let name = Self::sanitize_fileref_name(&name);
+        let name = Self::sanitize_fileref_name(&name, usage);
         self.alloc_fileref(usage, name, rock, false)
     }
 
@@ -1785,7 +1849,7 @@ impl Model {
     /// the name via `glk_fileref_create_by_prompt` (their SAVE/RESTORE verb), so
     /// the host should surface its save UI for this fileref's `@save`/`@restore`.
     pub fn fileref_create_prompted(&mut self, usage: u32, name: String, rock: u32) -> u32 {
-        let name = Self::sanitize_fileref_name(&name);
+        let name = Self::sanitize_fileref_name(&name, usage);
         self.alloc_fileref(usage, name, rock, true)
     }
 
@@ -1925,7 +1989,7 @@ impl Model {
         let styles = match wt {
             WinType::TextBuffer => self.style_hints[0],
             WinType::TextGrid => self.style_hints[1],
-            WinType::Pair | WinType::Graphics => [StyleColour::default(); NUMSTYLES as usize],
+            WinType::Pair | WinType::Graphics | WinType::Blank => [StyleColour::default(); NUMSTYLES as usize],
         };
         {
             // `nid` was just allocated; see the invariant note by `win`.
@@ -2112,6 +2176,10 @@ impl Model {
             }
             WinType::TextBuffer => {}
             WinType::Graphics => {}
+            // A blank window still takes its share of the split (so its sibling
+            // is sized correctly), but has nothing to lay out inside that share —
+            // `window_size` reports (0,0) for it regardless (Glk spec §3.5.1).
+            WinType::Blank => {}
             WinType::Pair => {
                 let _ = key;
                 let dir = method & WINMETHOD_DIRMASK;
@@ -2185,9 +2253,16 @@ impl Model {
         let p = self.win(w.parent)?;
         Some(if p.child1 == win { p.child2 } else { p.child1 })
     }
-    /// A window's `(width, height)` in characters. `None` if invalid.
+    /// A window's `(width, height)` in characters. `None` if invalid. A blank
+    /// window always reports `(0, 0)`, regardless of the space its split
+    /// actually gives it (Glk spec §3.5.1 — "A blank window has no size;
+    /// glk_window_get_size() will return (0,0)").
     pub fn window_size(&self, win: u32) -> Option<(u32, u32)> {
-        self.win(win).map(|w| (w.rect.width, w.rect.height))
+        let w = self.win(win)?;
+        if w.wintype == WinType::Blank {
+            return Some((0, 0));
+        }
+        Some((w.rect.width, w.rect.height))
     }
     /// gvm's live window tree as a [`WinTree`], reflecting the rects from the
     /// most recent [`relayout`](Self::relayout). `None` when no root is open.
@@ -3096,6 +3171,25 @@ impl Model {
     /// Pop the next queued non-input event, if any.
     pub fn pop_event(&mut self) -> Option<GlkEvent> {
         self.events.pop_front()
+    }
+    /// Pop the first queued event `glk_select_poll` is allowed to return
+    /// (SQ-1416 item 4; Glk spec §4.2's `glk_select_poll` prose): Timer,
+    /// Arrange, Redraw, SoundNotify, VolumeNotify. `glk_select_poll` "does
+    /// _not_ check for or return evtype_CharInput, evtype_LineInput, or
+    /// evtype_MouseInput events" (§4.2) — Hyperlink is the same shape (a
+    /// per-window player-input request, like Mouse), so it is excluded too.
+    /// Scans front-to-back for the first eligible event and removes ONLY
+    /// that one, leaving every other queued event (including any ineligible
+    /// ones ahead of it) in its original place — "unavailable events remain
+    /// pending for glk_select() to retrieve".
+    pub fn pop_pollable_event(&mut self) -> Option<GlkEvent> {
+        let i = self.events.iter().position(|e| {
+            matches!(
+                e.etype,
+                evtype::TIMER | evtype::ARRANGE | evtype::REDRAW | evtype::SOUND_NOTIFY | evtype::VOLUME_NOTIFY
+            )
+        })?;
+        self.events.remove(i)
     }
     /// Drain all queued non-input events (test accessor).
     pub fn take_pending_events(&mut self) -> Vec<GlkEvent> {
@@ -4674,8 +4768,9 @@ mod style_hint_tests {
         let f = m.fileref_create(0x00, "data".to_string(), 0);
         // A never-written fileref does not exist.
         assert!(!m.fileref_exists(f));
-        // Once its file has bytes it exists; delete removes it.
-        m.files.insert("data".to_string(), vec![1, 2, 3]);
+        // Once its file has bytes it exists; delete removes it. Keyed by the
+        // SANITIZED name (SQ-1416 item 6: Data usage appends ".glkdata").
+        m.files.insert("data.glkdata".to_string(), vec![1, 2, 3]);
         assert!(m.fileref_exists(f));
         m.fileref_delete(f);
         assert!(!m.fileref_exists(f));
@@ -4728,7 +4823,9 @@ mod style_hint_tests {
         // seeded that way must read as present at its recorded size to a
         // create_by_name game that only probes/restores — no in-session @save.
         let mut m = Model::new();
-        m.seed_saved_game_file("slot".to_string(), 1234);
+        // Seeded under the SANITIZED name (SQ-1416 item 6: SavedGame usage
+        // appends ".glksave") — a host reseeding from disk keys by that name.
+        m.seed_saved_game_file("slot.glksave".to_string(), 1234);
 
         // The game's create_by_name fileref on that slot now exists.
         let fref = m.fileref_create(0x01, "slot".to_string(), 0);
@@ -4791,12 +4888,29 @@ mod style_hint_tests {
         assert!(!m.vfs_dirty(), "a Read-mode open is not a mutation");
     }
 
+    /// SQ-1416 item 6: the spec-recommended simplification (cheapglk `cgfref.c`
+    /// `glk_fileref_create_by_name`'s comment) — delete the nine disallowed
+    /// characters, keep only the part before the first period, "null" if that
+    /// leaves nothing, then append the usage's suffix.
     #[test]
     fn fileref_sanitizes_names() {
-        assert_eq!(Model::sanitize_fileref_name("a/b*c.sav"), "a_b_c.sav");
-        assert_eq!(Model::sanitize_fileref_name(""), "file");
-        assert_eq!(Model::sanitize_fileref_name("///"), "___");
-        assert_eq!(Model::sanitize_fileref_name("Ok-Name_1.dat"), "Ok-Name_1.dat");
+        // Disallowed characters are DELETED (not replaced), and everything from
+        // the first period on is dropped before the usage's own suffix is added.
+        assert_eq!(Model::sanitize_fileref_name("a/b*c.sav", fileusage_Data), "abc.glkdata");
+        // Every disallowed character named by cheapglk: " \ / > < : | ? *
+        assert_eq!(
+            Model::sanitize_fileref_name("a\"b\\c/d>e<f:g|h?i*j", fileusage_SavedGame),
+            "abcdefghij.glksave"
+        );
+        // Empty, or reduced to empty by deletion, becomes "null".
+        assert_eq!(Model::sanitize_fileref_name("", fileusage_Data), "null.glkdata");
+        assert_eq!(Model::sanitize_fileref_name("///", fileusage_SavedGame), "null.glksave");
+        // Transcript and InputRecord both take ".txt".
+        assert_eq!(Model::sanitize_fileref_name("Ok-Name_1.dat", fileusage_Transcript), "Ok-Name_1.txt");
+        assert_eq!(Model::sanitize_fileref_name("Ok-Name_1.dat", fileusage_InputRecord), "Ok-Name_1.txt");
+        // An out-of-range usage type gets no suffix at all (cheapglk's `default:
+        // return ""`).
+        assert_eq!(Model::sanitize_fileref_name("plain", 0x0F), "plain");
     }
 
     #[test]
@@ -4819,23 +4933,24 @@ mod style_hint_tests {
     fn file_stream_write_truncates_existing() {
         let mut m = Model::new();
         let f = m.fileref_create(0x00, "f".to_string(), 0);
-        m.files.insert("f".to_string(), vec![b'O', b'L', b'D']);
+        // Keyed by the sanitized name (SQ-1416 item 6: Data usage -> ".glkdata").
+        m.files.insert("f.glkdata".to_string(), vec![b'O', b'L', b'D']);
         let sid = m.stream_open_file(f, FM_WRITE, false, 0);
         assert_ne!(sid, 0);
-        assert_eq!(m.files["f"], Vec::<u8>::new(), "Write truncates on open");
+        assert_eq!(m.files["f.glkdata"], Vec::<u8>::new(), "Write truncates on open");
         m.file_stream_write(sid, "Hi");
-        assert_eq!(m.files["f"], b"Hi");
+        assert_eq!(m.files["f.glkdata"], b"Hi");
     }
 
     #[test]
     fn file_stream_write_append_preserves_and_seeks_end() {
         let mut m = Model::new();
         let f = m.fileref_create(0x00, "f".to_string(), 0);
-        m.files.insert("f".to_string(), b"AB".to_vec());
+        m.files.insert("f.glkdata".to_string(), b"AB".to_vec());
         let sid = m.stream_open_file(f, FM_WRITEAPPEND, false, 0);
         assert_eq!(m.stream_position(sid), Some(2), "append seeks to end");
         m.file_stream_write(sid, "CD");
-        assert_eq!(m.files["f"], b"ABCD");
+        assert_eq!(m.files["f.glkdata"], b"ABCD");
     }
 
     #[test]
@@ -4848,7 +4963,7 @@ mod style_hint_tests {
         m.note_stream_write(sid, 42);
 
         assert_eq!(m.stream_close(sid), Some((0, 42)), "write_count credited, no reads");
-        assert_eq!(m.files["f"], Vec::<u8>::new(), "no bytes were actually stored");
+        assert_eq!(m.files["f.glkdata"], Vec::<u8>::new(), "no bytes were actually stored");
     }
 
     #[test]
@@ -4891,7 +5006,8 @@ mod style_hint_tests {
         let f = m.fileref_create(0x00, "notes".to_string(), 0);
         let sid = m.stream_open_file(f, FM_WRITE, false, 0);
         assert_ne!(sid, 0);
-        assert!(m.files.contains_key("notes"), "a Data Write still creates a VFS entry");
+        // Keyed by the sanitized name (SQ-1416 item 6: ".glkdata" for Data usage).
+        assert!(m.files.contains_key("notes.glkdata"), "a Data Write still creates a VFS entry");
 
         let f2 = m.fileref_create(0x00, "missing".to_string(), 0);
         assert_eq!(m.stream_open_file(f2, FM_READ, false, 0), 0, "Data Read still fails if absent");
@@ -4910,7 +5026,7 @@ mod style_hint_tests {
     fn file_stream_seek_modes_clamp() {
         let mut m = Model::new();
         let f = m.fileref_create(0x00, "f".to_string(), 0);
-        m.files.insert("f".to_string(), b"ABCDE".to_vec()); // len 5
+        m.files.insert("f.glkdata".to_string(), b"ABCDE".to_vec()); // len 5
         let sid = m.stream_open_file(f, FM_READWRITE, false, 0);
         m.stream_set_position(sid, 2, 0); // Start + 2
         assert_eq!(m.stream_position(sid), Some(2));
@@ -4930,7 +5046,7 @@ mod style_hint_tests {
         let f = m.fileref_create(0x00, "u".to_string(), 0); // binary usage (no TextMode)
         let sid = m.stream_open_file(f, FM_WRITE, true, 0);
         m.file_stream_write(sid, "\u{1F600}"); // one astral code point
-        assert_eq!(m.files["u"], vec![0x00, 0x01, 0xF6, 0x00], "4-byte big-endian");
+        assert_eq!(m.files["u.glkdata"], vec![0x00, 0x01, 0xF6, 0x00], "4-byte big-endian");
         m.stream_close(sid);
         let sid2 = m.stream_open_file(f, FM_READ, true, 0);
         assert_eq!(m.file_stream_read_char(sid2), Some(0x1F600));
@@ -4944,7 +5060,7 @@ mod style_hint_tests {
         let sid = m.stream_open_file(f, FM_WRITE, false, 0);
         m.file_stream_write(sid, "Hi");
         assert_eq!(m.stream_close(sid), Some((0, 2)), "read_count 0, write_count 2");
-        assert_eq!(m.files["f"], b"Hi", "bytes persist after close");
+        assert_eq!(m.files["f.glkdata"], b"Hi", "bytes persist after close");
         assert_eq!(m.stream_position(sid), None, "stream slot is freed");
         assert!(m.file_streams.is_empty(), "cursor side-table entry dropped");
     }
@@ -4975,8 +5091,8 @@ mod style_hint_tests {
         assert_eq!(m.stream_position(sid), Some(1));
 
         let mut restored = Model::deserialize(&m.serialize()).expect("round-trip");
-        // File bytes are intact in the restored VFS.
-        assert_eq!(restored.files["save"], b"HELLO");
+        // File bytes are intact in the restored VFS (sanitized key, SQ-1416 item 6).
+        assert_eq!(restored.files["save.glkdata"], b"HELLO");
         // The fileref still exists and iteration yields it (id + rock preserved).
         assert!(restored.fileref_exists(f));
         assert_eq!(restored.fileref_iterate(0), (f, 0x42));
@@ -5006,8 +5122,8 @@ mod style_hint_tests {
             restored.stream_kind_style(mem).map(|(k, _, _)| k),
             Some(StreamKind::Memory { addr: 0x1000, len: 64, .. }),
         ));
-        // The file stream + its bytes survived.
-        assert_eq!(restored.files["d"], b"Z");
+        // The file stream + its bytes survived (sanitized key, SQ-1416 item 6).
+        assert_eq!(restored.files["d.glkdata"], b"Z");
         assert_eq!(restored.stream_position(fsid), Some(1));
     }
 

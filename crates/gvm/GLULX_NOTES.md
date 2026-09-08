@@ -598,7 +598,10 @@ and opcode dispatch entirely. Interception happens at the two call choke
 points — `call_function` and `op_tailcall` — so it applies uniformly whether a
 game calls an accelerated function directly or tail-calls into one. This is
 behaviorally transparent (the transcript is byte-identical with acceleration on
-or off) and is **on by default**, with an `--accel on|off` flag (`gvm-cli` and the
+or off, including the three functions' `[** Programming error: … **]`
+diagnostics on malformed input — `accel_error` writes them through the current
+Glk stream, matching glulxe's `accel.c`, and only when the I/O system is Glk;
+SQ-1416) and is **on by default**, with an `--accel on|off` flag (`gvm-cli` and the
 app) as an escape hatch for diagnosing any mismatch. On CounterfeitMonkey-11,
 acceleration cuts the dispatched-opcode count from init to the first prompt by
 roughly 7.9× (23.78M → 3.00M). Accordingly the `Acceleration` (9) and
@@ -645,7 +648,7 @@ suspend/resume are 3a-2). All constant values below are from `glk.h`.
 | Type             | Value | Notes                                  |
 |------------------|-------|----------------------------------------|
 | wintype_Pair     | 1     | internal layout node (split-created)   |
-| wintype_Blank    | 2     | out of scope                           |
+| wintype_Blank    | 2     | real window: no text, no output, `glk_window_get_size` always (0,0) — pure layout filler (SQ-1416) |
 | wintype_TextBuffer | 3   | scrolling main window                  |
 | wintype_TextGrid | 4     | fixed character grid / status window   |
 | wintype_Graphics | 5     | out of scope                           |
@@ -676,10 +679,17 @@ is tagged with it. The backend maps classes → display attributes (SGR in the C
 
 Version 0, CharInput 1, LineInput 2, CharOutput 3 (returns CannotPrint 0 /
 ApproxPrint 1 / ExactPrint 2), MouseInput 4, Timer 5, Graphics 6, Unicode 15,
-LineInputEcho 17, LineTerminators 18, … We report `Version` = 0x00000705,
-`CharInput` = 1, `LineInput` = 1, `CharOutput` = ExactPrint for any code point
-(Unicode capable), `Unicode` = 1, and **0** for mouse/timer/graphics/sound/
-hyperlinks/echo/terminators (truthful: not supported).
+LineInputEcho 17, LineTerminators 18, DrawImageScale 24, … We report `Version`
+= 0x00000705 (0.7.5, not 0.7.6: `0x00EC glk_image_draw_scaled_ext` is not
+implemented — its `imagerule_WidthRatio` in a `wintype_TextBuffer` window is
+dynamic, re-resolved on every window resize, not a one-shot draw — so
+`DrawImageScale` truthfully answers unsupported too; SQ-1416), `CharInput` = 1,
+`LineInput` = 1, `CharOutput` answered per code point from
+`GlkBackend::char_output_gestalt` (default: CannotPrint for the eight-bit
+control ranges the spec names, ExactPrint for the rest of Latin-1, ApproxPrint
+beyond that — not a blanket ExactPrint; SQ-1416), `Unicode` = 1, and **0** for
+mouse/timer/graphics/sound/hyperlinks/echo/terminators (truthful: not
+supported).
 
 ### Dispatch selector codes implemented (output subset; from `gi_dispa.c`)
 
@@ -763,10 +773,22 @@ line input — like a stdio Glk, the display backend/terminal handles echo.
 **Cancel + other event selectors:** `glk_cancel_line_event` 0x00D1 (drops the
 request, reports `evtype_LineInput` with the `initlen` chars already in the
 buffer, else `evtype_None`), `glk_cancel_char_event` 0x00D3 (drops the request),
-`glk_select_poll` 0x00C1 (returns a queued internal event or `evtype_None`,
-never input, never suspends). **Arrange:** `glk_window_set_arrangement` queues an
-`evtype_Arrange` (win 0); `glk_select` delivers any queued non-input event before
-suspending for input. **Diagnosed no-ops (out of scope):**
+`glk_select_poll` 0x00C1 (never suspends; returns the first queued Timer/
+Arrange/Redraw/SoundNotify/VolumeNotify event, skipping over — and leaving
+queued — any Char/Line/Mouse/Hyperlink ahead of it, per Glk spec §4.2's "does
+not check for or return evtype_CharInput, evtype_LineInput, or
+evtype_MouseInput"; Hyperlink is excluded the same way, a per-window
+player-input request like Mouse; SQ-1416). **Arrange:** `glk_window_set_arrangement`
+queues an `evtype_Arrange` (win 0), and so does `deliver_arrange` when nothing
+is currently blocked on a select (SQ-1416: it used to drop the event on the
+floor instead, unlike its sound/timer/mouse/hyperlink siblings); `glk_select`
+delivers any queued non-input event before suspending for input. A suspended
+`glk_select`'s S1 (always 0) is stored only once the event is actually
+delivered on resume, AFTER any stack-pushed event words — Glulx spec §2.18:
+"Stack output references are pushed after the Glk call, but before the S1
+result value is stored" (SQ-1416 item 3; `PendingInput`/`PendingEvent` carry
+the deferred store target the same way `PendingFileref` already did for
+`glk_fileref_create_by_prompt`). **Diagnosed no-ops (out of scope):**
 `glk_request_timer_events` 0x00D6, `glk_request_mouse_event` 0x00D4,
 `glk_cancel_mouse_event` 0x00D5. **Accepted best-effort:**
 `glk_set_echo_line_event` 0x0150, `glk_set_terminators_line_event` 0x0151.
@@ -790,6 +812,23 @@ the Glulx Glk dispatch (gi_dispa) and glk.h:
   `glk_window_get_arrangement`, the `*_iterate` rocks, and the `event_t*` of
   `glk_select`/`glk_select_poll`. Inform's veneer (`PrintAnyToArray`) relies on
   this to read a memory stream's write count without a stat buffer.
+- **The same -1 convention has an INPUT direction too** (SQ-1416 item 2): a
+  reference to a Glk INPUT structure at `-1` is popped off the stack instead of
+  read from memory, field 0 topmost (Glulx spec §2.18: "an input structure is
+  popped off first-topmost" — the mirror image of the output rule above, and
+  matching cheapglk `glkop.c`'s `ReadStructField` macro, which pops once per
+  field in increasing field-index order). `read_timeval`/`read_glkdate` (used
+  by the six §2.10 date/time selectors `0x0168`, `0x0169`, `0x016C`–`0x016F`)
+  honor it; they used to always read from memory even when handed `-1`.
+- **Fileref name simplification** (`Model::sanitize_fileref_name`, SQ-1416 item
+  6): a `glk_fileref_create_by_name`/`_by_prompt` name is simplified per the
+  Glk spec's recommended rule (cheapglk `cgfref.c`'s comment on
+  `glk_fileref_create_by_name`) — delete `" \ / > < : | ? *`, keep only the
+  part before the first `.`, `"null"` if that leaves nothing, then append the
+  usage's suffix (`.glkdata` Data, `.glksave` SavedGame, `.txt`
+  Transcript/InputRecord). This is what other Glk interpreters do, so a file a
+  Glulx story writes exchanges with them; it also means a `SavedGame` fileref's
+  on-disk name now carries a `.glksave` suffix it did not before.
 
 ### Core opcodes completed alongside (Glulx spec §2)
 

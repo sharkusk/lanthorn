@@ -64,6 +64,10 @@ Absolute URLs or no link.
 - **Glulx floating-point and double-precision `mod`/`div`-family math now
   matches the reference interpreter exactly**, including how it handles
   negative zero, infinities, and not-a-number. (SQ-1415)
+- **Glulx games' data files now use the standard names**, so a file a Glulx
+  story writes (a transcript, a data file, an in-game save) can be shared with
+  other interpreters instead of only being readable by lanthorn. And a couple
+  of rarely used Glk calls now behave per spec. (SQ-1416)
 
 ---
 
