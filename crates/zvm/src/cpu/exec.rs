@@ -10117,6 +10117,7 @@ pub(crate) mod tests {
         m.exec_var(0x13, &[4], None, None); // output_stream 4
         m.pending_input = Some(PendingInput {
             store_var: None, line_read: true, text_buf: 0x0100, parse_buf: 0,
+            preload: String::new(),
             interrupt_time: 0, interrupt_routine: 0, instr_pc: 0,
         });
         m.mem.write_byte(0x0100, 40); // the game's buffer cap
@@ -10127,6 +10128,7 @@ pub(crate) mod tests {
         // code by its ZSCII value.
         m.pending_input = Some(PendingInput {
             store_var: None, line_read: false, text_buf: 0, parse_buf: 0,
+            preload: String::new(),
             interrupt_time: 0, interrupt_routine: 0, instr_pc: 0,
         });
         m.supply_char(129); // cursor up
@@ -10183,6 +10185,7 @@ pub(crate) mod tests {
         m.print_text("> ");
         m.pending_input = Some(PendingInput {
             store_var: None, line_read: true, text_buf: 0x0100, parse_buf: 0,
+            preload: String::new(),
             interrupt_time: 0, interrupt_routine: 0, instr_pc: 0,
         });
         m.mem.write_byte(0x0100, 40);
