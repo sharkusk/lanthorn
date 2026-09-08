@@ -106,25 +106,10 @@ fn deep_runs(model: &app::engine::ScreenModel) -> Vec<(u16, String)> {
     out
 }
 
-/// The palette this suite's colour assertions resolve through, **stated rather than
-/// inherited** (SQ-0958).
-///
-/// Every story these cases drive is a bare file that names no machine, so its colour
-/// numbers resolve through ZMSD §8.3.1's own table — which is what every assertion
-/// below was written against. Until now nothing here said so, and the suite believed
-/// whatever the last suite in its group binary left behind: harmless only while every
-/// one of them happened to leave `Standard` there, and not at all once a sibling boots
-/// a machine press. See [`app::v6_palette`], which is why this both names a palette
-/// and takes the shared lock. Hold the guard for the whole case.
-fn standard_palette() -> app::V6PaletteGuard {
-    app::v6_palette(zvm::screen::Palette::Standard)
-}
-
 /// (a) The command menu reaches the ScreenModel as positioned grid runs at
 /// native rows ≥ 19 — including the "Proceed" verb. Pre-fix this was empty.
 #[test]
 fn journey_menu_reaches_the_model_as_deep_grid_runs() {
-    let _g = standard_palette();
     let Some(session) = journey_at_menu() else { return };
     assert_eq!(session.pending_input(), InputKind::Char, "menu sits in read_char");
 
@@ -149,7 +134,6 @@ fn journey_menu_reaches_the_model_as_deep_grid_runs() {
 /// short (no window reached below native y≈304) so rows 19–24 were blank.
 #[test]
 fn journey_menu_rasterizes_into_the_bottom_band() {
-    let _g = standard_palette();
     use app::render::v6_layout as v6;
     let Some(session) = journey_at_menu() else { return };
     let model = session.screen();
@@ -191,7 +175,6 @@ fn journey_menu_rasterizes_into_the_bottom_band() {
 /// were empty.
 #[test]
 fn journey_hybrid_ring_shows_the_menu_band() {
-    let _g = standard_palette();
     let Some(session) = journey_at_menu() else { return };
     let model = session.screen();
 
@@ -229,7 +212,6 @@ fn journey_hybrid_ring_shows_the_menu_band() {
 /// (win3 graphics) stays in the pixel ring (image half-block cells, not text).
 #[test]
 fn journey_hybrid_menu_is_terminal_cells_picture_stays_ring() {
-    let _g = standard_palette();
     let Some(session) = journey_at_menu() else { return };
     let model = session.screen();
 
@@ -274,7 +256,6 @@ fn journey_hybrid_menu_is_terminal_cells_picture_stays_ring() {
 /// verb text) is left alone: the cells between its dividers stay bare, not a bar.
 #[test]
 fn journey_raster_reverse_header_bar_is_solid_body_untouched() {
-    let _g = standard_palette();
     use app::render::v6_layout as v6;
     let Some(session) = journey_at_menu() else { return };
     let model = session.screen();
@@ -312,7 +293,6 @@ fn journey_raster_reverse_header_bar_is_solid_body_untouched() {
 /// painted runs and the game stays in `read_char` (still on the menu).
 #[test]
 fn journey_menu_is_live_through_the_app_layer() {
-    let _g = standard_palette();
     let Some(mut session) = journey_at_menu() else { return };
     assert_eq!(session.pending_input(), InputKind::Char);
 
@@ -339,7 +319,6 @@ fn journey_menu_is_live_through_the_app_layer() {
 /// not just between the two labels.
 #[test]
 fn journey_hybrid_header_bar_spans_full_pane_width() {
-    let _g = standard_palette();
     use ratatui::style::Modifier;
     let Some(session) = journey_at_menu() else { return };
     let model = session.screen();
@@ -379,7 +358,6 @@ fn journey_hybrid_header_bar_spans_full_pane_width() {
 /// instead of by scaled device pixels.
 #[test]
 fn journey_hybrid_menu_full_black_panel_dividers_continuous() {
-    let _g = standard_palette();
     use ratatui::style::{Color, Modifier};
     let Some(session) = journey_at_menu() else { return };
     let model = session.screen();
@@ -471,7 +449,6 @@ fn journey_hybrid_menu_full_black_panel_dividers_continuous() {
 /// keep them apart.
 #[test]
 fn journey_hybrid_menu_items_not_merged() {
-    let _g = standard_palette();
     let Some(session) = journey_at_menu() else { return };
     let model = session.screen();
 
@@ -507,7 +484,6 @@ fn journey_hybrid_menu_items_not_merged() {
 /// stays inked and thus keeps rendering in the left picture-column ring.
 #[test]
 fn journey_pixel_band_canvas_excludes_menu_keeps_divider() {
-    let _g = standard_palette();
     use app::render::v6_layout as v6;
     let Some(session) = journey_at_menu() else { return };
     let model = session.screen();
@@ -568,7 +544,6 @@ fn journey_pixel_band_canvas_excludes_menu_keeps_divider() {
 /// fills the space between the top-anchored chrome and the menu at constant width.
 #[test]
 fn journey_hybrid_tall_pane_menu_pinned_to_bottom() {
-    let _g = standard_palette();
     let Some(session) = journey_at_menu() else { return };
     let model = session.screen();
 
@@ -608,7 +583,6 @@ fn journey_hybrid_tall_pane_menu_pinned_to_bottom() {
 /// clipped gap where the old reclaim blanked the flank below the picture's art.
 #[test]
 fn journey_hybrid_tall_pane_divider_reaches_menu() {
-    let _g = standard_palette();
     use ratatui::style::Color;
     let Some(session) = journey_at_menu() else { return };
     let model = session.screen();
@@ -738,7 +712,6 @@ fn journey_hybrid_tall_pane_divider_reaches_menu() {
 /// extension now spans the whole column instead of starting below the art.
 #[test]
 fn journey_hybrid_tall_pane_panel_fill_reaches_the_divider() {
-    let _g = standard_palette();
     use ratatui::style::Color;
     let Some(session) = journey_at_menu() else { return };
     let model = session.screen();
@@ -819,7 +792,6 @@ fn journey_hybrid_tall_pane_panel_fill_reaches_the_divider() {
 #[test]
 #[allow(deprecated)]
 fn journey_hybrid_flank_panel_meets_the_menu_at_every_width() {
-    let _g = standard_palette();
     use ratatui::style::Color;
     let Some(session) = journey_at_menu() else { return };
     let model = session.screen();
@@ -921,7 +893,6 @@ fn journey_hybrid_flank_panel_meets_the_menu_at_every_width() {
 #[test]
 #[allow(deprecated)]
 fn journey_hybrid_menu_clicks_hit_the_row_they_land_on() {
-    let _g = standard_palette();
     use app::engine::WinNode;
     let Some(session) = journey_at_menu() else { return };
     let model = session.screen();
@@ -982,7 +953,6 @@ fn journey_hybrid_menu_clicks_hit_the_row_they_land_on() {
 /// same roman glyphs as an unstyled run.
 #[test]
 fn journey_bold_menu_label_rasterizes_emboldened() {
-    let _g = standard_palette();
     use app::render::v6_layout as v6;
     let Some(session) = journey_at_menu() else { return };
     let mut model = session.screen();
@@ -1050,7 +1020,6 @@ fn journey_bold_menu_label_rasterizes_emboldened() {
 /// `honor_game_colours` modes.
 #[test]
 fn journey_frameless_shows_picture_column_and_pins_menu_to_the_bottom() {
-    let _g = standard_palette();
     use ratatui::style::Color;
     let Some(session) = journey_at_menu() else { return };
     let model = session.screen();

@@ -48,9 +48,10 @@
 //! Three different things are called a palette around this code and none of them is
 //! the other. This file is about the **picture file's** table — the `[Rgb; 16]` a
 //! `.mg1` record carries, or the hardware table an EGA/CGA archive implies. It is not
-//! zvm's process-global **machine** palette (`zvm::screen::Palette`, the one guarded by
-//! `app::v6_palette`): nothing here boots a story or resolves a z-colour number, which
-//! is why no guard is taken. And it is not the **terminal's** 256-entry palette that
+//! the **machine** palette a session carries (`zvm::screen::Palette`, a
+//! `Machine` field since SQ-1393): nothing here boots a story or resolves a
+//! z-colour number, which is why no session appears below. And it is not the
+//! **terminal's** 256-entry palette that
 //! OSC 4 would have programmed, which does not enter this file at all.
 //!
 //! ## Fixtures

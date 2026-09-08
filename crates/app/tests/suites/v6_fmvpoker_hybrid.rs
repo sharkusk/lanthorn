@@ -170,30 +170,13 @@ fn fmvpoker_hybrid_draws_its_frame(honor: bool) {
     );
 }
 
-/// The palette this suite's colours resolve through, **stated rather than inherited**
-/// (SQ-0958).
-///
-/// Every story these cases drive is a bare file that names no machine — or, for the
-/// disk images, a machine whose table IS §8.3.1's — so the colour numbers behind
-/// every pixel asserted below resolve through the standard table. Until now nothing
-/// here said so, and the suite believed whatever the last suite in its group binary
-/// left behind. See [`app::v6_palette`], which is why this both names a palette and
-/// takes the shared lock; hold the guard for the whole case, because the two frames
-/// a repaint case compares are only comparable if the palette did not move between
-/// them.
-fn standard_palette() -> app::V6PaletteGuard {
-    app::v6_palette(zvm::screen::Palette::Standard)
-}
-
 #[test]
 fn fmvpoker_hybrid_draws_its_frame_honoring_game_colours() {
-    let _g = standard_palette();
     fmvpoker_hybrid_draws_its_frame(true);
 }
 
 #[test]
 fn fmvpoker_hybrid_draws_its_frame_theme_only() {
-    let _g = standard_palette();
     fmvpoker_hybrid_draws_its_frame(false);
 }
 
@@ -213,7 +196,6 @@ fn fmvpoker_hybrid_draws_its_frame_theme_only() {
 /// rest of this table is the guard that nothing else came with it.
 #[test]
 fn fmvpoker_is_the_only_title_this_moves() {
-    let _g = standard_palette();
     const RING: &str = "hybrid-ring";
     const MENU: &str = "cell — painted menu takeover routed here";
     let expected: &[(&str, &[&str])] = &[
@@ -371,13 +353,11 @@ const PANEL: (u16, u16, u16, u16) = (22, 235, 594, 156);
 
 #[test]
 fn fmvpoker_bet_entry_keeps_its_frame_honoring_game_colours() {
-    let _g = standard_palette();
     fmvpoker_bet_entry_keeps_its_frame(true);
 }
 
 #[test]
 fn fmvpoker_bet_entry_keeps_its_frame_theme_only() {
-    let _g = standard_palette();
     fmvpoker_bet_entry_keeps_its_frame(false);
 }
 
@@ -468,13 +448,11 @@ fn picture_takeover_arms_across_the_corpus(honor: bool) {
 
 #[test]
 fn picture_takeover_arms_across_the_corpus_honoring_game_colours() {
-    let _g = standard_palette();
     picture_takeover_arms_across_the_corpus(true);
 }
 
 #[test]
 fn picture_takeover_arms_across_the_corpus_theme_only() {
-    let _g = standard_palette();
     picture_takeover_arms_across_the_corpus(false);
 }
 
@@ -563,13 +541,11 @@ fn fmvpoker_menu_labels_keep_their_columns(honor: bool) {
 
 #[test]
 fn fmvpoker_menu_labels_keep_their_columns_honoring_game_colours() {
-    let _g = standard_palette();
     fmvpoker_menu_labels_keep_their_columns(true);
 }
 
 #[test]
 fn fmvpoker_menu_labels_keep_their_columns_theme_only() {
-    let _g = standard_palette();
     fmvpoker_menu_labels_keep_their_columns(false);
 }
 
@@ -725,25 +701,21 @@ fn fmvpoker_menu_labels_are_clickable_where_drawn(honor: bool, mode: app::config
 
 #[test]
 fn fmvpoker_menu_labels_are_clickable_where_drawn_hybrid_honoring_game_colours() {
-    let _g = standard_palette();
     fmvpoker_menu_labels_are_clickable_where_drawn(true, app::config::V6RenderMode::Hybrid);
 }
 
 #[test]
 fn fmvpoker_menu_labels_are_clickable_where_drawn_hybrid_theme_only() {
-    let _g = standard_palette();
     fmvpoker_menu_labels_are_clickable_where_drawn(false, app::config::V6RenderMode::Hybrid);
 }
 
 #[test]
 fn fmvpoker_menu_labels_are_clickable_where_drawn_raster_honoring_game_colours() {
-    let _g = standard_palette();
     fmvpoker_menu_labels_are_clickable_where_drawn(true, app::config::V6RenderMode::Raster);
 }
 
 #[test]
 fn fmvpoker_menu_labels_are_clickable_where_drawn_raster_theme_only() {
-    let _g = standard_palette();
     fmvpoker_menu_labels_are_clickable_where_drawn(false, app::config::V6RenderMode::Raster);
 }
 
@@ -795,13 +767,11 @@ fn fmvpoker_composite_shows_its_menu_window(honor: bool) {
 
 #[test]
 fn fmvpoker_composite_shows_its_menu_window_honoring_game_colours() {
-    let _g = standard_palette();
     fmvpoker_composite_shows_its_menu_window(true);
 }
 
 #[test]
 fn fmvpoker_composite_shows_its_menu_window_theme_only() {
-    let _g = standard_palette();
     fmvpoker_composite_shows_its_menu_window(false);
 }
 
@@ -883,13 +853,11 @@ fn fmvpoker_erased_banner_keeps_the_colour_the_game_named(honor: bool) {
 
 #[test]
 fn fmvpoker_erased_banner_keeps_the_colour_the_game_named_honoring_game_colours() {
-    let _g = standard_palette();
     fmvpoker_erased_banner_keeps_the_colour_the_game_named(true);
 }
 
 #[test]
 fn fmvpoker_erased_banner_keeps_the_colour_the_game_named_theme_only() {
-    let _g = standard_palette();
     fmvpoker_erased_banner_keeps_the_colour_the_game_named(false);
 }
 
@@ -1014,13 +982,11 @@ fn fmvpoker_the_draw_announcement_survives_the_transcript(honor: bool) {
 
 #[test]
 fn fmvpoker_the_draw_announcement_survives_the_transcript_honoring_game_colours() {
-    let _g = standard_palette();
     fmvpoker_the_draw_announcement_survives_the_transcript(true);
 }
 
 #[test]
 fn fmvpoker_the_draw_announcement_survives_the_transcript_theme_only() {
-    let _g = standard_palette();
     fmvpoker_the_draw_announcement_survives_the_transcript(false);
 }
 
@@ -1197,13 +1163,11 @@ fn fmvpoker_paints_the_runs_it_positions(honor: bool) {
 
 #[test]
 fn fmvpoker_paints_the_runs_it_positions_honoring_game_colours() {
-    let _g = standard_palette();
     fmvpoker_paints_the_runs_it_positions(true);
 }
 
 #[test]
 fn fmvpoker_paints_the_runs_it_positions_theme_only() {
-    let _g = standard_palette();
     fmvpoker_paints_the_runs_it_positions(false);
 }
 
@@ -1218,7 +1182,6 @@ fn fmvpoker_paints_the_runs_it_positions_theme_only() {
 /// the story window of every v6 game.
 #[test]
 fn fmvpoker_is_the_only_canvas_story_window() {
-    let _g = standard_palette();
     let expected: &[(&str, [bool; 4])] = &[
         ("zork0-r393-s890714.z6", [false; 4]),
         ("arthur-r74-s890714.z6", [false; 4]),
@@ -1396,25 +1359,21 @@ fn fmvpoker_a_panel_prompt_reaches_the_screen(honor: bool, key: u8, prompt: &str
 
 #[test]
 fn fmvpoker_the_bet_prompt_reaches_the_screen_honoring_game_colours() {
-    let _g = standard_palette();
     fmvpoker_a_panel_prompt_reaches_the_screen(true, b'c', "Enter the new bet:");
 }
 
 #[test]
 fn fmvpoker_the_bet_prompt_reaches_the_screen_theme_only() {
-    let _g = standard_palette();
     fmvpoker_a_panel_prompt_reaches_the_screen(false, b'c', "Enter the new bet:");
 }
 
 #[test]
 fn fmvpoker_the_quit_prompt_reaches_the_screen_honoring_game_colours() {
-    let _g = standard_palette();
     fmvpoker_a_panel_prompt_reaches_the_screen(true, b'q', "Are you sure you want to quit?");
 }
 
 #[test]
 fn fmvpoker_the_quit_prompt_reaches_the_screen_theme_only() {
-    let _g = standard_palette();
     fmvpoker_a_panel_prompt_reaches_the_screen(false, b'q', "Are you sure you want to quit?");
 }
 
@@ -1468,13 +1427,11 @@ fn fmvpoker_the_money_lines_survive_a_panel_prompt(honor: bool) {
 
 #[test]
 fn fmvpoker_the_money_lines_survive_a_panel_prompt_honoring_game_colours() {
-    let _g = standard_palette();
     fmvpoker_the_money_lines_survive_a_panel_prompt(true);
 }
 
 #[test]
 fn fmvpoker_the_money_lines_survive_a_panel_prompt_theme_only() {
-    let _g = standard_palette();
     fmvpoker_the_money_lines_survive_a_panel_prompt(false);
 }
 
@@ -1534,13 +1491,11 @@ fn fmvpoker_echoes_the_digits_the_player_types(honor: bool) {
 
 #[test]
 fn fmvpoker_echoes_the_digits_the_player_types_honoring_game_colours() {
-    let _g = standard_palette();
     fmvpoker_echoes_the_digits_the_player_types(true);
 }
 
 #[test]
 fn fmvpoker_echoes_the_digits_the_player_types_theme_only() {
-    let _g = standard_palette();
     fmvpoker_echoes_the_digits_the_player_types(false);
 }
 
@@ -1555,7 +1510,6 @@ fn fmvpoker_echoes_the_digits_the_player_types_theme_only() {
 /// never what any of them relied on.
 #[test]
 fn no_corpus_title_reads_through_a_panel() {
-    let _g = standard_palette();
     for game in [
         "zork0-r393-s890714.z6",
         "arthur-r74-s890714.z6",

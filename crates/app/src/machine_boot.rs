@@ -81,6 +81,25 @@ pub struct MachineBoot {
     pub art_scale: Option<(u32, u32)>,
     /// §8.3.3's pair, where the machine or the card states one.
     pub default_colours: Option<(u8, u8)>,
+    /// The table a standard colour NUMBER resolves through on this machine
+    /// (SQ-1393) — [`crate::config::Config::machine_text_palette`]'s answer,
+    /// refined to [`zvm::screen::Palette::IbmCga`] where the archive names a
+    /// two-colour card.
+    ///
+    /// It rides here for the reason this whole module exists. It used to be a
+    /// process-wide atomic in `zvm`, set once in `startup.rs` and once more in
+    /// `reset.rs`, and every renderer and every test harness read it from there;
+    /// making it a per-machine fact means the compiler asks each boot site for it
+    /// rather than each site remembering. `Palette::Standard` — §8.3.1's own
+    /// table — is what a launch with no machine to name presents.
+    pub palette: zvm::screen::Palette,
+    /// Header `$1F`, or `None` for zvm's own `b'A'` default (SQ-0885's debugging
+    /// knob, `--interpreter-version`).
+    ///
+    /// Beside the palette because it is the same kind of fact — a property of the
+    /// machine this launch presents — and because it latches at `init_caps`, so a
+    /// boot site is the only place that can state it in time.
+    pub interpreter_version: Option<u8>,
     /// May this launch present its machine's per-machine SCREEN RULES?
     /// [`crate::config::Config::machine_colours_licensed`] (SQ-1154).
     ///
@@ -143,12 +162,16 @@ impl MachineBoot {
         default_colours: Option<(u8, u8)>,
         machine_colours_licensed: bool,
         faces: crate::native_font::FaceSet,
+        palette: zvm::screen::Palette,
+        interpreter_version: Option<u8>,
     ) -> MachineBoot {
         let art_scale = picts.art_scale();
         MachineBoot {
             profile,
             interpreter_number,
             machine_colours_licensed,
+            palette,
+            interpreter_version,
             wrap_regime: profile.v6_wrap_regime(),
             screen_px: picts
                 .std_window()
@@ -195,6 +218,11 @@ impl MachineBoot {
             // (6 for Version 6) and no rule claims that number; stated rather than
             // left to that coincidence.
             machine_colours_licensed: false,
+            // §8.3.1's own table and zvm's own `$1F`: no medium named a machine,
+            // so there is none to resolve a colour number or a version byte
+            // through (SQ-1393).
+            palette: zvm::screen::Palette::Standard,
+            interpreter_version: None,
             cell: InterpreterProfile::IbmPc.v6_font_cell(),
             wrap_regime: InterpreterProfile::IbmPc.v6_wrap_regime(),
             faces: crate::native_font::FaceSet::none(),
@@ -223,6 +251,8 @@ mod tests {
                 None,
                 true,
                 crate::native_font::FaceSet::none(),
+                zvm::screen::Palette::Standard,
+                None,
             );
             assert_eq!(
                 boot.cell,
@@ -240,6 +270,8 @@ mod tests {
                 None,
                 true,
                 crate::native_font::FaceSet::none(),
+                zvm::screen::Palette::Standard,
+                None,
             )
             .cell,
             zvm::interpreter::MACINTOSH_V6_CELL,
@@ -260,6 +292,8 @@ mod tests {
             None,
             true,
             crate::native_font::FaceSet::none(),
+            zvm::screen::Palette::Standard,
+            None,
         );
         assert_eq!(
             machine.screen_px,
@@ -274,6 +308,8 @@ mod tests {
             None,
             true,
             crate::native_font::FaceSet::none(),
+            zvm::screen::Palette::Standard,
+            None,
         );
         assert_eq!(
             named.screen_px,

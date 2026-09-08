@@ -103,7 +103,6 @@ fn boot(path: &Path, honor: bool, interpreter_override: Option<u8>) -> Option<Ga
         path.display()
     );
     let profile = InterpreterProfile::resolve(path, interpreter_override, None, None);
-    app::v6_set_palette(profile.palette());
     // SQ-1021/SQ-1022: every per-machine fact in one value. This suite mounts no
     // archive, so the screen and the density come back `None` exactly as they were
     // written by hand — and the CELL now rides along, which is the point.
@@ -115,6 +114,8 @@ fn boot(path: &Path, honor: bool, interpreter_override: Option<u8>) -> Option<Ga
         profile.default_colours(),
         true,
         app::native_font::FaceSet::none(),
+        profile.palette(),
+        None,
     );
     let s = GameSession::new_for_machine(
         loaded.bytes().to_vec(),
@@ -217,7 +218,6 @@ fn assert_no_cp437_mojibake(text: &str, who: &str) {
 /// smallest statement of the change, on the real medium.
 #[test]
 fn an_atari_st_floppy_tells_its_story_it_is_an_atari_st() {
-    let _g = app::v6_palette_at_boot();
     let mut ran = 0;
     for name in [BEYOND_ZORK_DISK, V3_DISK, "Infocom Compilation 8 (19xx)(-).st"] {
         let Some(path) = disk(name) else { continue };
@@ -256,7 +256,6 @@ fn an_atari_st_floppy_tells_its_story_it_is_an_atari_st() {
 /// convention exists to close.
 #[test]
 fn beyond_zork_off_an_st_floppy_is_never_asked_whether_it_is_a_vt220() {
-    let _g = app::v6_palette_at_boot();
     let Some(path) = disk(BEYOND_ZORK_DISK) else { return };
     let (loaded, _) = app::hints::load_mounted_story(&path).expect("mounts");
     assert_eq!(
@@ -342,7 +341,6 @@ fn beyond_zork_off_an_st_floppy_is_never_asked_whether_it_is_a_vt220() {
 /// produces with no question at all. Nothing in the render path moved.
 #[test]
 fn the_st_frame_is_the_one_a_vt220_owner_already_had_to_ask_for() {
-    let _g = app::v6_palette_at_boot();
     let Some(path) = disk(BEYOND_ZORK_DISK) else { return };
 
     let mut st = boot(&path, true, None).expect("boots");
@@ -371,7 +369,6 @@ fn the_st_frame_is_the_one_a_vt220_owner_already_had_to_ask_for() {
 /// disk that is entirely v3.
 #[test]
 fn a_version_3_story_on_an_st_floppy_is_unmoved_by_the_number() {
-    let _g = app::v6_palette_at_boot();
     let Some(path) = disk(V3_DISK) else { return };
 
     let (loaded, _) = app::hints::load_mounted_story(&path).expect("mounts");

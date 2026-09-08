@@ -63,7 +63,6 @@ fn amiga_arthur() -> Option<(GameSession, TextFace)> {
     assert_eq!(u16::from_be_bytes([bytes[2], bytes[3]]), 54, "{FIXTURE}: release");
     assert_eq!(String::from_utf8_lossy(&bytes[0x12..0x18]), "890606", "{FIXTURE}: serial");
     let (profile, source) = InterpreterProfile::resolve_with_source(&path, None, None, None);
-    app::v6_set_palette(profile.palette());
     let mut picts = PictSource::resolve(&path, None);
     let picture_dims = picts.all_pict_dims();
     let faces = app::native_font::resolve(&app::native_font::FaceRequest {
@@ -82,6 +81,8 @@ fn amiga_arthur() -> Option<(GameSession, TextFace)> {
         profile.default_colours(),
         true,
         faces,
+        profile.palette(),
+        None,
     );
     let face = boot.text_face();
     let mut session =
@@ -109,7 +110,6 @@ fn mac_arthur() -> Option<(GameSession, TextFace)> {
         return None;
     }
     let (profile, source) = InterpreterProfile::resolve_with_source(&path, None, None, None);
-    app::v6_set_palette(profile.palette());
     let bytes = match app::hints::load_mounted_story_from(&path, Some(ENTRY)).ok()?.0 {
         app::hints::LoadedStory::ZCode(b) => b,
         other => panic!("Arthur is Z-code on this volume, got {other:?}"),
@@ -133,6 +133,8 @@ fn mac_arthur() -> Option<(GameSession, TextFace)> {
         profile.default_colours(),
         true,
         faces,
+        profile.palette(),
+        None,
     );
     let face = boot.text_face();
     let mut session =
@@ -156,7 +158,6 @@ fn line<'a>(dump: &'a [String], needle: &str) -> &'a str {
 
 #[test]
 fn amiga_arthur_dump_names_its_release_face_and_its_pen() {
-    let _g = app::v6_palette_at_boot();
     let Some((session, face)) = amiga_arthur() else { return };
     let dump = session.v6_window_dump(&[], Some(&face));
 
@@ -187,7 +188,6 @@ fn amiga_arthur_dump_names_its_release_face_and_its_pen() {
 
 #[test]
 fn mac_arthur_dump_scales_the_face_by_the_text_scale_and_not_the_art_scale() {
-    let _g = app::v6_palette_at_boot();
     let Some((session, face)) = mac_arthur() else { return };
     let dump = session.v6_window_dump(&[], Some(&face));
 
@@ -222,7 +222,6 @@ fn mac_arthur_dump_scales_the_face_by_the_text_scale_and_not_the_art_scale() {
 /// blending into seven that did not.
 #[test]
 fn every_window_reports_its_own_font_props_against_the_declared_cell() {
-    let _g = app::v6_palette_at_boot();
     let Some((session, face)) = amiga_arthur() else { return };
     let dump = session.v6_window_dump(&[], Some(&face));
 
@@ -248,7 +247,6 @@ fn every_window_reports_its_own_font_props_against_the_declared_cell() {
 /// absence instead.
 #[test]
 fn the_engine_only_view_reports_no_face_rather_than_a_default_one() {
-    let _g = app::v6_palette_at_boot();
     let Some((session, _face)) = amiga_arthur() else { return };
     let dump = app::engine::Engine::window_dump(&session);
     assert_eq!(line(&dump, "face:"), "face: not supplied — engine-only view");

@@ -5660,7 +5660,7 @@ mod tests {
         // Resolve the default look from DEFAULT_STYLE_TOML (same path as startup).
         let doc = app::style::parse_style_toml(app::style::DEFAULT_STYLE_TOML)
             .expect("DEFAULT_STYLE_TOML must parse");
-        let (cs, _set, _warnings) = app::style::resolve(&doc, std::path::Path::new("."));
+        let (cs, _set, _warnings) = app::style::resolve(&doc, std::path::Path::new("."), zvm::screen::Palette::Standard);
 
         let area = Rect::new(0, 0, 20, 10);
         let mut buf = Buffer::empty(area);
@@ -5682,7 +5682,7 @@ mod tests {
         // Resolve the default look from DEFAULT_STYLE_TOML (same path as startup).
         let doc = app::style::parse_style_toml(app::style::DEFAULT_STYLE_TOML)
             .expect("DEFAULT_STYLE_TOML must parse");
-        let (cs, _set, _warnings) = app::style::resolve(&doc, std::path::Path::new("."));
+        let (cs, _set, _warnings) = app::style::resolve(&doc, std::path::Path::new("."), zvm::screen::Palette::Standard);
 
         let area = Rect::new(0, 0, 40, 15);
         let mut buf = Buffer::empty(area);
@@ -5729,7 +5729,7 @@ mod tests {
         use app::render::panel::{draw_panel, PanelSpec, PanelStrip};
         let doc = app::style::parse_style_toml(app::style::DEFAULT_STYLE_TOML)
             .expect("DEFAULT_STYLE_TOML must parse");
-        let (cs, _set, _warnings) = app::style::resolve(&doc, std::path::Path::new("."));
+        let (cs, _set, _warnings) = app::style::resolve(&doc, std::path::Path::new("."), zvm::screen::Palette::Standard);
 
         let area = Rect::new(0, 0, 40, 15);
         let mut buf = Buffer::empty(area);
@@ -5776,7 +5776,7 @@ mod tests {
         // Resolve the default theme from DEFAULT_STYLE_TOML (same path as startup).
         let doc = app::style::parse_style_toml(app::style::DEFAULT_STYLE_TOML)
             .expect("DEFAULT_STYLE_TOML must parse");
-        let (cs, _set, _warnings) = app::style::resolve(&doc, std::path::Path::new("."));
+        let (cs, _set, _warnings) = app::style::resolve(&doc, std::path::Path::new("."), zvm::screen::Palette::Standard);
 
         let area = Rect::new(0, 0, 20, 10);
 

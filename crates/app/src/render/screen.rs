@@ -3321,10 +3321,11 @@ pub fn v6_hybrid_gen(
         }
         None => 0u8.hash(&mut h),
     }
-    // The process-global zvm palette: packed Standard colours rasterise through
-    // it (`standard_pixel_rgb` → `standard_true_colour`), so an
-    // `InterpreterProfile` palette swap must rebuild the canvas.
-    (zvm::screen::palette() as u8).hash(&mut h);
+    // The MACHINE's colour table: packed Standard colours rasterise through it
+    // (`standard_pixel_rgb` → `true_colour_in`), so an `InterpreterProfile`
+    // palette swap must rebuild the canvas. Read off the scheme being drawn with
+    // rather than a process-wide global (SQ-1393).
+    (state.colors.machine_palette as u8).hash(&mut h);
     // The machine pair and the RESOLVED host pair: the fallback ink/page every
     // packed colour resolves onto, which also folds in the theme's transcript
     // style and the terminal defaults.

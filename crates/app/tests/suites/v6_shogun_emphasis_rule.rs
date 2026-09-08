@@ -104,7 +104,6 @@ fn boot(file: &str, release: u16, serial: &str) -> Option<(GameSession, app::mac
     assert_eq!(u16::from_be_bytes([bytes[2], bytes[3]]), release, "{file}: release");
     assert_eq!(String::from_utf8_lossy(&bytes[0x12..0x18]), serial, "{file}: serial");
     let (profile, source) = InterpreterProfile::resolve_with_source(&path, None, None, None);
-    app::v6_set_palette(profile.palette());
     let mut picts = PictSource::resolve(&path, None);
     let picture_dims = picts.all_pict_dims();
     // `disks: None` on purpose: a case here must not depend on what the person
@@ -128,6 +127,8 @@ fn boot(file: &str, release: u16, serial: &str) -> Option<(GameSession, app::mac
         profile.default_colours(),
         true,
         face,
+        profile.palette(),
+        None,
     );
     eprintln!(
         "{file}: release {release}, profile {:?}, screen {:?}, art_scale {:?}, cell {:?}",
@@ -228,7 +229,6 @@ fn prose_word_modifiers(session: &GameSession, state: &app::state::AppState) -> 
 /// reach the pane as a rendering — cell 0 of `Erasmus` carries NONE".
 #[test]
 fn amiga_shogun_emphasised_prose_carries_exactly_one_rendering() {
-    let _g = app::v6_palette_at_boot();
     emphasis_case(AMIGA, AMIGA_RELEASE, AMIGA_SERIAL);
 }
 
@@ -236,7 +236,6 @@ fn amiga_shogun_emphasised_prose_carries_exactly_one_rendering() {
 /// is a property of the RENDERER's face, so the answer here is the same one.
 #[test]
 fn bare_shogun_emphasised_prose_carries_exactly_one_rendering() {
-    let _g = app::v6_palette_at_boot();
     emphasis_case(BARE, BARE_RELEASE, BARE_SERIAL);
 }
 

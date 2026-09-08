@@ -115,7 +115,6 @@ fn boot(file: &str, release: u16, serial: &str, turns: usize) -> Option<GameSess
     assert_eq!(got, serial, "{file}: this suite's numbers were measured on serial {serial}");
 
     let profile = InterpreterProfile::resolve(&path, None, None, None);
-    app::v6_set_palette(profile.palette());
     let mut picts = PictSource::resolve(&path, None);
     let picture_dims = picts.all_pict_dims();
     let v6_screen_px = picts.std_window().or_else(|| profile.std_window());
@@ -131,6 +130,10 @@ fn boot(file: &str, release: u16, serial: &str, turns: usize) -> Option<GameSess
         None,
     )
     .unwrap_or_else(|e| panic!("{file}: should boot without a ZError: {e:?}"));
+    // SQ-1393: the machine's own colour table. `new_with_trace` is the
+    // no-machine door and presents §8.3.1's own, so a harness that boots a
+    // press states the press's table here.
+    s.machine.set_palette(profile.palette());
     s.set_pict_source(Some(picts));
     s.flush_boot_pictures();
     let _ = s.take_transcript();
@@ -225,7 +228,6 @@ fn native_of(model: &app::engine::ScreenModel) -> (u16, u16) {
 /// ```
 #[test]
 fn journeys_menu_survives_a_pane_with_no_vertical_slack() {
-    let _g = app::v6_palette_at_boot();
     for (file, release, serial) in JOURNEYS {
         let Some(session) = boot(file, *release, serial, 40) else { return };
         let model = session.screen();
@@ -281,7 +283,6 @@ fn journeys_menu_survives_a_pane_with_no_vertical_slack() {
 /// a regression, and it would land here before it landed on a user's screen.
 #[test]
 fn the_other_v6_titles_keep_their_plans_at_the_same_panes() {
-    let _g = app::v6_palette_at_boot();
     for (file, release, serial, want) in UNMOVED {
         let Some(session) = boot(file, *release, serial, 12) else { return };
         let model = session.screen();

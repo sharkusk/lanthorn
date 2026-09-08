@@ -583,7 +583,6 @@ fn a_hostile_disk_image_is_refused_rather_than_trusted() {
 /// `machine-screenshots/mac-zorkzero-game.png`.
 #[test]
 fn the_macintosh_press_takes_the_system_face_for_its_body_and_keeps_monaco_for_its_bar() {
-    let _g = app::v6_palette_at_boot();
     let path = stories_dir().join("Zork Zero Disk.image");
     if !path.is_file() {
         eprintln!("SKIP: gitignored Macintosh medium absent at {}", path.display());
@@ -599,7 +598,6 @@ fn the_macintosh_press_takes_the_system_face_for_its_body_and_keeps_monaco_for_i
     let (profile, source) = P::resolve_with_source(&path, None, None, None);
     assert_eq!(profile, P::Macintosh, "the medium names the Macintosh");
     assert_eq!(source, app::interpreter::ProfileSource::Medium);
-    app::v6_set_palette(profile.palette());
 
     let boot_disk = Disks::new("real").with("System.img", "sysfont.hfs");
     let picts = app::graphics::PictSource::resolve(&path, None);
@@ -619,6 +617,8 @@ fn the_macintosh_press_takes_the_system_face_for_its_body_and_keeps_monaco_for_i
         profile.default_colours(),
         true,
         faces,
+        profile.palette(),
+        None,
     );
 
     // The frame's shape, before anything is measured against it (CLAUDE.md).
@@ -653,7 +653,6 @@ fn the_macintosh_press_takes_the_system_face_for_its_body_and_keeps_monaco_for_i
 /// tell the bar from the prose, and a machine with two faces cannot choose.
 #[test]
 fn zork_zero_marks_its_status_bar_with_font_four() {
-    let _g = app::v6_palette_at_boot();
     let path = stories_dir().join("Zork Zero Disk.image");
     if !path.is_file() {
         eprintln!("SKIP: gitignored Macintosh medium absent at {}", path.display());
@@ -664,7 +663,6 @@ fn zork_zero_marks_its_status_bar_with_font_four() {
         other => panic!("expected Z-code, got {other:?}"),
     };
     let (profile, source) = P::resolve_with_source(&path, None, None, None);
-    app::v6_set_palette(profile.palette());
     let mut picts = app::graphics::PictSource::resolve(&path, None);
     let dims = picts.all_pict_dims();
     let faces = app::native_font::resolve(&FaceRequest {
@@ -683,6 +681,8 @@ fn zork_zero_marks_its_status_bar_with_font_four() {
         profile.default_colours(),
         true,
         faces,
+        profile.palette(),
+        None,
     );
     let mut s =
         app::session::GameSession::new_for_machine(bytes, true, false, false, dims, None, None, &machine)

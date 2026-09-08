@@ -243,7 +243,7 @@ fn colors_scheme_swap_changes_connector_color() {
 
     let mut doc = StyleDoc::default();
     doc.colors = StyleColors { scheme: Some("tomorrow-night".to_string()), selectors: Default::default() };
-    let (colors, _set, warnings) = app::style::resolve(&doc, std::path::Path::new("/tmp"));
+    let (colors, _set, warnings) = app::style::resolve(&doc, std::path::Path::new("/tmp"), zvm::screen::Palette::Standard);
     assert!(warnings.is_empty(), "tomorrow-night should resolve without warnings");
 
     let mut state = AppState::default();

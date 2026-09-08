@@ -63,21 +63,6 @@ fn matches_top_left(native: &[u8], nw: usize, blorb: &[u8], bw: usize, bh: usize
     })
 }
 
-/// The palette this suite's colours resolve through, **stated rather than inherited**
-/// (SQ-0958).
-///
-/// Every story these cases drive is a bare file that names no machine — or, for the
-/// disk images, a machine whose table IS §8.3.1's — so the colour numbers behind
-/// every pixel asserted below resolve through the standard table. Until now nothing
-/// here said so, and the suite believed whatever the last suite in its group binary
-/// left behind. See [`app::v6_palette`], which is why this both names a palette and
-/// takes the shared lock; hold the guard for the whole case, because the two frames
-/// a repaint case compares are only comparable if the palette did not move between
-/// them.
-fn standard_palette() -> app::V6PaletteGuard {
-    app::v6_palette(zvm::screen::Palette::Standard)
-}
-
 /// The oracle. `Shogun.blb` was produced by Infocom's own converter from this
 /// very archive, so for every picture both hold, a native decode must reproduce
 /// the converter's PNG byte for byte — the standard SQ-0713 held the 14-byte
@@ -102,7 +87,6 @@ fn standard_palette() -> app::V6PaletteGuard {
 ///   does for Zork Zero's ids 5–8.
 #[test]
 fn the_native_archive_reproduces_shoguns_blorb() {
-    let _g = standard_palette();
     let (Some(pics), Some(blb)) = (native(), read("Shogun.blb")) else { return };
     let blorb = blorb::Blorb::parse(blb).expect("Shogun.blb parses");
 
@@ -161,7 +145,6 @@ fn the_native_archive_reproduces_shoguns_blorb() {
 /// the reported symptom exactly, no graphics at all.
 #[test]
 fn shogun_boots_off_its_floppy_and_draws_its_title_screen() {
-    let _g = standard_palette();
     for honor_game_colours in [true, false] {
         let path = stories_dir().join(ADF);
         if read(ADF).is_none() {

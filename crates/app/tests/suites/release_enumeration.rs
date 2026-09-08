@@ -279,7 +279,7 @@ fn collect_rs(dir: &Path, label: &str, out: &mut Vec<(String, String)>) {
 /// detected, which is the whole point of it. Only a `mod` is cut: a
 /// `#[cfg(test)]` on a bare `fn` or `static` keeps its lines, and the rule erring
 /// toward noise is what makes it safe to leave alone (the same trade
-/// `palette_lock_discipline` makes).
+/// `scratch_path_discipline` makes).
 fn without_test_modules(src: &str) -> String {
     let mut out = String::new();
     let mut lines = src.lines().peekable();

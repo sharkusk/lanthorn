@@ -183,7 +183,6 @@ fn boot_raw(file: &str, want_release: u16, pictures: Option<&str>) -> Option<Boo
     };
     let named_art_std_window = over.std_window();
     let profile = InterpreterProfile::resolve(&path, None, over.flavour(), medium);
-    app::v6_set_palette(profile.palette());
     let mut picts = PictSource::resolve_with_override(&path, over, None);
     let _ = std::fs::remove_dir_all(&dir);
     let dims = picts.all_pict_dims();
@@ -216,6 +215,8 @@ fn boot_raw(file: &str, want_release: u16, pictures: Option<&str>) -> Option<Boo
         honoured.then(|| profile.default_colours()).flatten(),
         true,
         faces.clone(),
+        profile.palette(),
+        None,
     );
     let art_scale = boot.art_scale;
     let face = app::native_font::TextFace::new(profile, faces, art_scale);
@@ -369,7 +370,6 @@ const FRACTIONAL: (u16, u16) = (115, 40);
 /// rung — where the pane's free scale is `1.4375`.
 #[test]
 fn the_pixel_lock_is_a_switch_in_extended_mode_too() {
-    let _g = app::v6_palette_at_boot();
     let Some(mut b) = boot(&CORPUS[0]) else { return };
 
     let model = b.session.screen();
@@ -398,7 +398,6 @@ fn the_pixel_lock_is_a_switch_in_extended_mode_too() {
 /// changes and settle back exactly where it started (SQ-1239).
 #[test]
 fn the_pixel_lock_toggle_flips_extended_geometry_live() {
-    let _g = app::v6_palette_at_boot();
     let Some(mut b) = boot(&CORPUS[0]) else { return };
 
     let mut scales = Vec::new();
@@ -423,7 +422,6 @@ fn the_pixel_lock_toggle_flips_extended_geometry_live() {
 /// which is the "taller frame, same eleven rows of prose" version of this mode.
 #[test]
 fn the_extension_grows_downward_and_the_prose_box_takes_it() {
-    let _g = app::v6_palette_at_boot();
     let mut seen = 0usize;
     let mut any_present = false;
     for spec in CORPUS.iter().filter(|s| s.extends) {
@@ -524,7 +522,6 @@ fn the_extension_grows_downward_and_the_prose_box_takes_it() {
 /// `raster`, so a change that leaked out of the extension's own branches lands here.
 #[test]
 fn a_frame_that_declines_the_extension_is_byte_identical_to_raster() {
-    let _g = app::v6_palette_at_boot();
     let mut seen = 0usize;
     let mut any_present = false;
     for spec in CORPUS {
@@ -566,7 +563,6 @@ fn a_frame_that_declines_the_extension_is_byte_identical_to_raster() {
 /// canvas builder — so the mode is wired to the frame path and not only to the helper.
 #[test]
 fn the_render_path_reports_the_larger_viewport() {
-    let _g = app::v6_palette_at_boot();
     let mut seen = 0usize;
     let mut any_present = false;
     for spec in CORPUS.iter().filter(|s| s.extends) {
@@ -800,7 +796,6 @@ fn reach(sh: &Shape) -> Option<Booted> {
 /// before it is a failure.
 #[test]
 fn splash_cards_and_hint_screens_reach_the_verdict_their_row_pins() {
-    let _g = app::v6_palette_at_boot();
     let mut seen = 0usize;
     let mut any_present = false;
     for sh in SHAPES {
@@ -928,7 +923,6 @@ fn band_text(b: &mut Booted) -> String {
 /// the 640x896 `look` builds, which is the collapse as reported.
 #[test]
 fn a_parser_error_does_not_resize_arthurs_extended_frame() {
-    let _g = app::v6_palette_at_boot();
     let spec = Specimen {
         file: "arthur-r74-s890714.z6",
         pictures: None,
@@ -1117,7 +1111,6 @@ fn shape(b: &mut Booted, mode: app::config::V6RenderMode, pane: (u16, u16)) -> F
 /// 640x896 the other two turns build.
 #[test]
 fn a_wrapped_parser_message_costs_one_text_row_and_moves_nothing_else() {
-    let _g = app::v6_palette_at_boot();
     let spec = Specimen {
         file: "arthur-r74-s890714.z6",
         pictures: None,
@@ -1239,7 +1232,6 @@ fn the_click_map_drops_a_click_in_the_rows_lanthorn_added() {
 /// and not to the click map in general.
 #[test]
 fn the_extended_frame_publishes_the_games_screen_beside_its_canvas() {
-    let _g = app::v6_palette_at_boot();
     let mut seen = 0usize;
     let mut any_present = false;
     for spec in CORPUS.iter().filter(|s| s.extends) {
@@ -1404,7 +1396,6 @@ const MAC: &[MacPress] = &[
 /// actually exercised the arithmetic so a silent skip cannot read as a pass.
 #[test]
 fn the_macintosh_cell_is_what_the_extension_counts_in() {
-    let _g = app::v6_palette_at_boot();
     let mut extended_any = 0usize;
     let mut any_present = false;
     for m in MAC {
@@ -1538,7 +1529,6 @@ fn the_macintosh_cell_is_what_the_extension_counts_in() {
 /// (2 rather than 1) and a different canvas height, off the same archive.
 #[test]
 fn a_game_saved_in_extended_still_extends_a_move_after_it_is_restored() {
-    let _g = app::v6_palette_at_boot();
     let spec = &CORPUS[0];
     assert_eq!(spec.file, "zork0-r393-s890714.z6", "this case is pinned to Zork Zero's prologue");
     let Some(mut b) = boot(spec) else { return };

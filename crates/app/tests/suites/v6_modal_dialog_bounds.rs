@@ -93,7 +93,6 @@ fn boot(file: &str, release: Option<(u16, &str)>) -> Option<(GameSession, Machin
         assert_eq!(String::from_utf8_lossy(&bytes[0x12..0x18]), serial, "{file}: serial");
     }
     let profile = InterpreterProfile::resolve(&path, None, None, None);
-    app::v6_set_palette(profile.palette());
     let mut picts = PictSource::resolve(&path, None);
     let picture_dims = picts.all_pict_dims();
     let machine = app::machine_boot::MachineBoot::resolve(
@@ -104,6 +103,8 @@ fn boot(file: &str, release: Option<(u16, &str)>) -> Option<(GameSession, Machin
         profile.default_colours(),
         true,
         app::native_font::FaceSet::none(),
+        profile.palette(),
+        None,
     );
     eprintln!(
         "{file}: profile {:?}, release {}, screen_px {:?}, art_scale {:?}, cell {:?}",
@@ -172,7 +173,6 @@ fn ladder_dialog_area(session: &GameSession, machine: &MachineBoot, pane_w: u16)
 /// whole frame, so a centred modal is centred and whole.
 #[test]
 fn zork0_modal_dialog_area_is_the_whole_pane() {
-    let _g = app::v6_palette_at_boot();
     let Some((mut s, machine)) = boot("zork0-r393-s890714.z6", Some((393, "890714"))) else {
         return;
     };
@@ -221,7 +221,6 @@ fn zork0_modal_dialog_area_is_the_whole_pane() {
 /// same terminal was always centred, and stays so.
 #[test]
 fn non_v6_story_dialog_area_is_the_whole_pane_too() {
-    let _g = app::v6_palette_at_boot();
     let Some((mut s, machine)) = boot("minizork-r34-s871124.z3", None) else {
         return;
     };
@@ -258,7 +257,6 @@ fn non_v6_story_dialog_area_is_the_whole_pane_too() {
 /// stand in for this.
 #[test]
 fn journey_side_column_still_pushes_the_dialog_clear_of_it() {
-    let _g = app::v6_palette_at_boot();
     let Some((mut s, machine)) = boot("Journey - The Quest Begins.adf", Some((30, "890322"))) else {
         return;
     };
@@ -316,7 +314,6 @@ fn journey_side_column_still_pushes_the_dialog_clear_of_it() {
 /// the message so a change to the shared rule is still legible in a failure.
 #[test]
 fn journeys_exclusion_tracks_the_drawn_column_at_a_wide_pane_too() {
-    let _g = app::v6_palette_at_boot();
     let Some((mut s, machine)) = boot("Journey - The Quest Begins.adf", Some((30, "890322"))) else {
         return;
     };

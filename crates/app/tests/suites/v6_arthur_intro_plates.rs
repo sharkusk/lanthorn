@@ -156,28 +156,12 @@ fn render_state(mode: app::config::V6RenderMode, honor_game_colours: bool) -> ap
 
 // ── The model half: the plate rasterizes, at the origin the game declared ─────
 
-/// The palette this suite's colours resolve through, **stated rather than inherited**
-/// (SQ-0958).
-///
-/// Every story these cases drive is a bare file that names no machine — or, for the
-/// disk images, a machine whose table IS §8.3.1's — so the colour numbers behind
-/// every pixel asserted below resolve through the standard table. Until now nothing
-/// here said so, and the suite believed whatever the last suite in its group binary
-/// left behind. See [`app::v6_palette`], which is why this both names a palette and
-/// takes the shared lock; hold the guard for the whole case, because the two frames
-/// a repaint case compares are only comparable if the palette did not move between
-/// them.
-fn standard_palette() -> app::V6PaletteGuard {
-    app::v6_palette(zvm::screen::Palette::Standard)
-}
-
 /// Every intro screen puts a window-0 canvas up, and the art lands EXACTLY in the
 /// 584×392 box Arthur centred for itself — the margin it deliberately left is
 /// still transparent on all four sides. Before the fix `pictures_canvas` was
 /// empty for the whole intro and there was no canvas to measure.
 #[test]
 fn arthur_intro_plates_land_at_the_origin_the_game_centred() {
-    let _g = standard_palette();
     let Some((plates, _session)) = arthur_intro_plates() else { return };
     assert!(
         plates.len() >= 3,
@@ -219,7 +203,6 @@ fn arthur_intro_plates_land_at_the_origin_the_game_centred() {
 /// 3's declared rect, which is where Merlin was painted.
 #[test]
 fn arthur_composites_merlin_inside_the_graveyard_in_one_frame() {
-    let _g = standard_palette();
     let Some((plates, _session)) = arthur_intro_plates() else { return };
     let (mx, my, mw, mh) = MERLIN;
     let (px0, py0, pw, ph) = PLATE;
@@ -279,7 +262,6 @@ fn arthur_composites_merlin_inside_the_graveyard_in_one_frame() {
 /// `classify_windows` reserves for story content — at window 0's own rect.
 #[test]
 fn arthur_intro_publishes_the_plate_as_story_graphics() {
-    let _g = standard_palette();
     for honor in [true, false] {
         let Some((_plates, session)) = arthur_intro_plates() else { return };
         let _ = honor;
@@ -306,7 +288,6 @@ fn arthur_intro_publishes_the_plate_as_story_graphics() {
 /// to colour in, SQ-0510) — and the plate is NOT wiped by the story page fill.
 #[test]
 fn arthur_raster_composite_carries_the_plate() {
-    let _g = standard_palette();
     for honor in [true, false] {
         let Some((_plates, session)) = arthur_intro_plates() else { return };
         let model = session.screen();
@@ -355,7 +336,6 @@ fn arthur_raster_composite_carries_the_plate() {
 /// pane-wide transcript viewport over art it then never uploaded.
 #[test]
 fn arthur_hybrid_takes_the_picture_takeover_path() {
-    let _g = standard_palette();
     for honor in [true, false] {
         let Some((_plates, session)) = arthur_intro_plates() else { return };
         let model = session.screen();
@@ -438,7 +418,6 @@ fn arthur_plate_frame_with_scrollback(
 /// under all four combinations.
 #[test]
 fn arthur_plate_is_never_overpainted_by_scrollback_prose() {
-    let _g = standard_palette();
     for mode in [app::config::V6RenderMode::Hybrid, app::config::V6RenderMode::Raster] {
         for honor in [true, false] {
             let Some((session, state)) = arthur_plate_frame_with_scrollback(mode, honor) else {
@@ -505,7 +484,6 @@ fn arthur_plate_is_never_overpainted_by_scrollback_prose() {
 /// itself is pinned per-pixel, in both modes, by the test above.
 #[test]
 fn arthur_hybrid_plate_frame_draws_no_text_cells_at_any_pane_size() {
-    let _g = standard_palette();
     for honor in [true, false] {
         let Some((session, state)) =
             arthur_plate_frame_with_scrollback(app::config::V6RenderMode::Hybrid, honor)
@@ -545,7 +523,6 @@ fn arthur_hybrid_plate_frame_draws_no_text_cells_at_any_pane_size() {
 /// discriminator — this is the case the old unconditional divert got right.)
 #[test]
 fn zork0_window0_drop_caps_stay_inline_floats() {
-    let _g = standard_palette();
     let story_path = stories_dir().join("zork0-r393-s890714.z6");
     let Ok(story_bytes) = std::fs::read(&story_path) else {
         eprintln!("SKIP: gitignored story missing at {}", story_path.display());

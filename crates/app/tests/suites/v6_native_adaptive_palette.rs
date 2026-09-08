@@ -89,28 +89,12 @@ fn max_delta(a: &(u32, u32, Vec<u8>), b: &(u32, u32, Vec<u8>)) -> Option<u16> {
     Some(m)
 }
 
-/// The palette this suite's colours resolve through, **stated rather than inherited**
-/// (SQ-0958).
-///
-/// Every story these cases drive is a bare file that names no machine — or, for the
-/// disk images, a machine whose table IS §8.3.1's — so the colour numbers behind
-/// every pixel asserted below resolve through the standard table. Until now nothing
-/// here said so, and the suite believed whatever the last suite in its group binary
-/// left behind. See [`app::v6_palette`], which is why this both names a palette and
-/// takes the shared lock; hold the guard for the whole case, because the two frames
-/// a repaint case compares are only comparable if the palette did not move between
-/// them.
-fn standard_palette() -> app::V6PaletteGuard {
-    app::v6_palette(zvm::screen::Palette::Standard)
-}
-
 /// The format fact the whole fix rests on, and the one lookup that establishes
 /// it: the compass arrows carry NO palette of their own, so they are adaptive by
 /// the native format's own convention — and the set of such pictures is exactly
 /// the Blorb's `APal` list, per picture, not archive-wide.
 #[test]
 fn a_zero_palette_offset_is_the_native_apal_chunk() {
-    let _g = standard_palette();
     let Some(pics) = native() else { return };
 
     // Zork Zero's 16 compass overlays, the pictures the report is about.
@@ -153,7 +137,6 @@ fn a_zero_palette_offset_is_the_native_apal_chunk() {
 /// 497–504 exist only in the Blorb (SQ-0713's unexplained high-id block).
 #[test]
 fn the_native_archive_reproduces_the_converters_bake() {
-    let _g = standard_palette();
     let (Some(blb), Some(pic_bytes)) = (read("Zork0.blb"), read("zork0.pic")) else { return };
     let table = blorb::bpal::palette_bakes(&blb);
     assert!(table.len() > 38000, "Zork0.blb must carry its full BPal table, got {}", table.len());
@@ -246,7 +229,6 @@ fn the_native_archive_reproduces_the_converters_bake() {
 /// established by then.
 #[test]
 fn the_compass_off_native_media_matches_the_blorb_in_a_real_game() {
-    let _g = standard_palette();
     for honor_game_colours in [true, false] {
         let Some(story) = read("zork0-r393-s890714.z6") else { return };
         let Some(pics) = native() else { return };

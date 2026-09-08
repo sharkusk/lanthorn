@@ -415,7 +415,10 @@ fn ask_fetch_keep(
     // Themed the way the game and the browser are, so the prompt does not arrive
     // in a palette the player has never seen.
     let (base, _w1) = app::style::load_style(cfg.style.as_deref(), &cfg.user_dir);
-    let (colors, _syms, _w2) = app::style::resolve(&base, &cfg.user_dir);
+    // No story is booted yet, so there is no machine to resolve a colour number
+    // through: §8.3.1's own table (SQ-1393).
+    let (colors, _syms, _w2) =
+        app::style::resolve(&base, &cfg.user_dir, zvm::screen::Palette::Standard);
 
     let mut state = AppState::default();
     state.colors = colors;
@@ -608,7 +611,10 @@ fn ask_font_check(cfg: &Config) -> FontCheckOutcome {
     // arrive in a palette the player has never seen — and so the sample rows are
     // drawn in the colours the map will actually use.
     let (base, _w1) = app::style::load_style(cfg.style.as_deref(), &cfg.user_dir);
-    let (colors, _syms, _w2) = app::style::resolve(&base, &cfg.user_dir);
+    // No story is booted yet, so there is no machine to resolve a colour number
+    // through: §8.3.1's own table (SQ-1393).
+    let (colors, _syms, _w2) =
+        app::style::resolve(&base, &cfg.user_dir, zvm::screen::Palette::Standard);
 
     let mut state = AppState::default();
     state.colors = colors;
@@ -1036,8 +1042,9 @@ pub(crate) fn boot_story(
             // (SQ-0876).
             disk_image,
         );
-    // SQ-0939: the palette, asked ONCE and asked HERE — before the session
-    // constructor runs the story, and before the host resolves a single colour.
+    // SQ-0939: the palette, asked ONCE and asked HERE — before the style is
+    // resolved, before the session constructor runs the story, and before the host
+    // resolves a single colour.
     //
     // Which table, and why the story's Version is part of the question, lives on
     // `Config::machine_text_palette` — with the licence, because an unlicensed
@@ -1045,18 +1052,23 @@ pub(crate) fn boot_story(
     // `--colour theme|terminal`, which withholds the licence on original media).
     // The suites that measure a booted frame call the same function.
     //
-    // Every consumer reads this one global: the VM's own `true_value` for window
-    // properties 17/18, the ColorScheme's standard-colour seed, the v6 pixel path
-    // and the CLI's SGR path. Setting it late, or per-path, is how one colour
-    // number comes to look like two colours on one screen.
-    zvm::screen::set_palette(cfg.machine_text_palette(story_bytes.first().copied()));
-    // SQ-0885: an experiment knob for header `$1F`, set beside the palette
-    // because it is the same kind of fact — one machine per run — and because
-    // the session constructor runs the story, so it has to be in force before
-    // the boot below. Re-asserted every launch (with `None` when the flag is
-    // absent) so a picker→play loop cannot carry one story's override into the
-    // next, exactly as the palette is.
-    zvm::screen::set_interpreter_version(cli.interpreter_version);
+    // SQ-1393: a VALUE, carried from here to the two places that must agree — the
+    // `MachineBoot` the session is built from (so the VM's own `true_value` for
+    // window properties 17/18 and the two-colour card rule resolve through it) and
+    // the `ColorScheme` (so the standard-colour seed, the greys, the v6 pixel path
+    // and the IBM bold rule do). It used to be a process-wide atomic in `zvm`,
+    // which is what made "set it late, or per-path" possible at all.
+    //
+    // It is refined once more below, where the archive turns out to name a
+    // two-colour card — which cannot be known here, because nothing is mounted yet.
+    let mut machine_palette = cfg.machine_text_palette(story_bytes.first().copied());
+    // SQ-0885: an experiment knob for header `$1F`, carried beside the palette
+    // because it is the same kind of fact — a property of the machine this launch
+    // presents — and because the session constructor runs the story, so it has to
+    // reach the `Machine` before the boot below. Parked on `cfg` so `reset.rs` can
+    // re-ask for it on an `@restart`; it is a flag of this run, so nothing else
+    // could tell that path about it.
+    cfg.interpreter_version = cli.interpreter_version;
 
     // Booting a large story to its first prompt can take several seconds, and this
     // happens before the alternate screen is entered — so the normal terminal would
@@ -1145,7 +1157,7 @@ pub(crate) fn boot_story(
     // below must land in `cs` before they are derived. `state.colors` is assigned
     // from these below.
     let (style_doc, style_w1) = app::style::load_style(cfg.style.as_deref(), &cfg.user_dir);
-    let (mut cs, set, style_w2) = app::style::resolve(&style_doc, &cfg.user_dir);
+    let (mut cs, set, style_w2) = app::style::resolve(&style_doc, &cfg.user_dir, machine_palette);
     // SQ-0319: discover a per-game garglk.ini beside the story and overlay its
     // colours onto the resolved theme BEFORE the backend snapshot below, so the
     // imported look is in the backend for glk_style_measure and painted from
@@ -1265,6 +1277,7 @@ pub(crate) fn boot_story(
         cs.theme.get("transcript").style,
         term_default_colors.fg.map(|c| (c.0[0], c.0[1], c.0[2])),
         term_default_colors.bg.map(|c| (c.0[0], c.0[1], c.0[2])),
+        machine_palette,
     );
     // SQ-0679/SQ-0680: the real story-pane `(rows, cols)`, measured before the
     // engine exists, so a v4/v5 story's boot-time status-bar layout already
@@ -1433,7 +1446,16 @@ pub(crate) fn boot_story(
             // before the session constructor, which runs the story to its first
             // prompt and is where the game's own `set_colour` lands.
             if let Some((palette, pair)) = picts.two_colour_card_screen(&cfg) {
-                zvm::screen::set_palette(palette);
+                // SQ-1393: the card's table, over the base resolved above. The
+                // scheme's eight Z-machine ANSI slots keep the seed the BASE table
+                // gave them — they were resolved before anything was mounted, and
+                // that is exactly the state this replaces: the global used to be
+                // moved here with the seed already taken from the earlier value.
+                // What follows the card is everything read through
+                // `ColorScheme::machine_palette`: the greys, the v6 pixel path,
+                // the IBM bold rule, and the VM's own two-colour-card rule.
+                machine_palette = palette;
+                cs.machine_palette = palette;
                 // …and the pair §8.3.3 reports is the card's, not the machine's:
                 // black 2 rather than blue 6, with the ink unmoved at white 9.
                 //
@@ -1496,6 +1518,13 @@ pub(crate) fn boot_story(
                 // the host's own ground is painted un-snapped.
                 cfg.machine_colours_licensed(),
                 launch_faces,
+                // SQ-1393: the machine's own colour table — the base resolved
+                // before anything was mounted, refined a few rows up where the
+                // archive turned out to be a two-colour card — and the `$1F`
+                // override, both of which used to be process-wide statics set
+                // before the constructor rather than facts of this boot.
+                machine_palette,
+                cfg.interpreter_version,
             );
             // SQ-0790: how DENSE that art is, which only a native archive knows.
             // A 320-wide rendition doubles onto the unit screen exactly as a

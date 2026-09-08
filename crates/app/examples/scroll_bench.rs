@@ -80,7 +80,6 @@ use std::time::{Duration, Instant};
 use app::config::V6RenderMode;
 use app::engine::{Engine, KeyInput};
 use app::glulx_session::GlulxSession;
-use app::interpreter::InterpreterProfile;
 use app::machine_boot::MachineBoot;
 use app::render::graphics::kitty_picker;
 use app::render::screen::render_story_pane;
@@ -404,7 +403,9 @@ fn run_zvm_v6_mode(path: &Path, turns: &[usize], repeats: usize, mode: V6RenderM
         println!("=== {title} ===\n  SKIP: not a v6 story\n");
         return;
     }
-    zvm::screen::set_palette(InterpreterProfile::IbmPc.palette());
+    // `MachineBoot::bare` is the no-machine value, so this bench measures scrolling
+    // through §8.3.1's table — the palette used to be set here process-wide and was
+    // never a fact of what is being timed (SQ-1393).
     let boot = MachineBoot::bare();
     let mut engine = match GameSession::new_for_machine(bytes, true, false, false, Vec::new(), None, None, &boot) {
         Ok(s) => s,

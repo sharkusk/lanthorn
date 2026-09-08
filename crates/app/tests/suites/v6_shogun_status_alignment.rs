@@ -99,7 +99,6 @@ fn shogun_in_play(name: &str, profile: InterpreterProfile, honor: bool) -> Optio
             return None;
         }
     };
-    app::v6_set_palette(profile.palette());
     let mut picts = PictSource::resolve(&story_path, None);
     let picture_dims = picts.all_pict_dims();
     let v6_screen_px = picts.std_window().or_else(|| profile.std_window());
@@ -115,6 +114,10 @@ fn shogun_in_play(name: &str, profile: InterpreterProfile, honor: bool) -> Optio
         None,
     )
     .expect("Shogun (v6) should load and boot without a ZError");
+    // SQ-1393: the machine's own colour table. `new_with_trace` is the
+    // no-machine door and presents §8.3.1's own, so a harness that boots a
+    // press states the press's table here.
+    session.machine.set_palette(profile.palette());
     session.set_pict_source(Some(picts));
     session.flush_boot_pictures();
     let _ = session.take_transcript();
@@ -203,7 +206,6 @@ fn is_frame_art(c: char) -> bool {
 /// columns at every width except 80 and 81, which is the reported symptom.
 #[test]
 fn score_and_moves_share_a_column_at_every_pane_width() {
-    let _g = app::v6_palette_at_boot();
     for (name, profile) in CASES {
         for honor in [true, false] {
             let Some(session) = shogun_in_play(name, profile, honor) else { return };
@@ -241,7 +243,6 @@ fn score_and_moves_share_a_column_at_every_pane_width() {
 /// arrive whole, with their values beside them, at every pane swept.
 #[test]
 fn the_fields_stay_whole_beside_their_values() {
-    let _g = app::v6_palette_at_boot();
     for (name, profile) in CASES {
         let Some(session) = shogun_in_play(name, profile, true) else { return };
         let model = session.screen();
@@ -279,7 +280,6 @@ fn the_fields_stay_whole_beside_their_values() {
 /// end at the same native x.
 #[test]
 fn the_raster_composite_keeps_both_rows_right_justified() {
-    let _g = app::v6_palette_at_boot();
     for (name, profile) in CASES {
         for honor in [true, false] {
             let Some(session) = shogun_in_play(name, profile, honor) else { return };
@@ -366,7 +366,6 @@ fn the_raster_composite_keeps_both_rows_right_justified() {
 /// defect is in the model, and both render paths were faithfully drawing it.
 #[test]
 fn the_band_values_sit_on_its_last_column_and_nothing_paints_below_it() {
-    let _g = app::v6_palette_at_boot();
     let path = stories_dir().join(AMIGA_RELEASE);
     let Ok((loaded, medium)) = app::hints::load_mounted_story(&path) else {
         eprintln!("SKIP: gitignored medium missing at {}", path.display());
@@ -395,6 +394,8 @@ fn the_band_values_sit_on_its_last_column_and_nothing_paints_below_it() {
             art_scale: picts.art_scale(),
             disks: Some(&app::system_fonts::UserDisks::new("")),
         }),
+        zvm::screen::Palette::Standard,
+        None,
     );
     let mut s = GameSession::new_for_machine(bytes, true, false, false, dims, None, None, &boot)
         .expect("Shogun boots off its Amiga floppy");

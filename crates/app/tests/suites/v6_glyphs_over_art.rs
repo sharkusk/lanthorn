@@ -165,23 +165,8 @@ fn ring_rows_above(buf: &Buffer, viewport: Rect) -> Vec<String> {
         .collect()
 }
 
-/// The palette this suite's colour assertions resolve through, **stated rather than
-/// inherited** (SQ-0958).
-///
-/// Every story these cases drive is a bare file that names no machine, so its colour
-/// numbers resolve through ZMSD §8.3.1's own table — which is what every assertion
-/// below was written against. Until now nothing here said so, and the suite believed
-/// whatever the last suite in its group binary left behind: harmless only while every
-/// one of them happened to leave `Standard` there, and not at all once a sibling boots
-/// a machine press. See [`app::v6_palette`], which is why this both names a palette
-/// and takes the shared lock. Hold the guard for the whole case.
-fn standard_palette() -> app::V6PaletteGuard {
-    app::v6_palette(zvm::screen::Palette::Standard)
-}
-
 #[test]
 fn halfblocks_draw_the_banner_labels_as_real_glyphs() {
-    let _g = standard_palette();
     for honor in [true, false] {
         let Some((buf, viewport)) = frame(honor, None) else { return };
         let rows = ring_rows_above(&buf, viewport);
@@ -208,7 +193,6 @@ fn halfblocks_draw_the_banner_labels_as_real_glyphs() {
 
 #[test]
 fn a_banner_glyph_sits_in_the_picture_not_in_a_box() {
-    let _g = standard_palette();
     // The point of sampling: the cell a glyph lands in must keep a background that
     // belongs to the ART around it, not the theme's backdrop. Measured against the
     // glyph's own NEIGHBOURING art cells rather than against a hardcoded colour,
@@ -274,7 +258,6 @@ fn a_banner_glyph_sits_in_the_picture_not_in_a_box() {
 
 #[test]
 fn kitty_sixel_and_iterm2_are_left_exactly_as_they_were() {
-    let _g = standard_palette();
     // The capability is absent on all three — on kitty because a virtual placement
     // is positioned by its placeholder CELLS, so a glyph in one deletes the image
     // rather than layering over it (measured; see `pty_oracle.rs`). So none of them
@@ -297,7 +280,6 @@ fn kitty_sixel_and_iterm2_are_left_exactly_as_they_were() {
 
 #[test]
 fn no_rasterised_ghost_of_the_label_survives_past_its_glyphs() {
-    let _g = standard_palette();
     // The other half of the change, and the half a "the letters are there" test
     // cannot see: the rows these runs sit on are withheld from the chrome canvas
     // (`TextLayer::SkipGlyphRows`) so the band ships the picture WITHOUT a
@@ -376,7 +358,6 @@ fn no_rasterised_ghost_of_the_label_survives_past_its_glyphs() {
 /// painted straight back in, a text row above where the glyphs land.
 #[test]
 fn no_rasterised_ghost_of_the_label_survives_above_its_glyphs() {
-    let _g = standard_palette();
     for honor in [true, false] {
         let Some((buf, viewport)) = frame(honor, None) else { return };
         let rows = ring_rows_above(&buf, viewport);
@@ -434,7 +415,6 @@ fn no_rasterised_ghost_of_the_label_survives_above_its_glyphs() {
 /// and it holds with game colours declined too.
 #[test]
 fn the_frames_outer_gutter_is_the_page_under_halfblocks() {
-    let _g = standard_palette();
     for honor in [true, false] {
         let Some((buf, viewport)) = frame(honor, None) else { return };
         assert!(viewport.x >= 4, "honor={honor}: the flank should be several columns wide, got {} (wrong frame?)", viewport.x);
@@ -469,7 +449,6 @@ fn the_frames_outer_gutter_is_the_page_under_halfblocks() {
 /// would pass without measuring anything. Count one real decision and say so.
 #[test]
 fn the_smokes_were_not_vacuous() {
-    let _g = standard_palette();
     let mut seen = 0;
     if let Some((buf, viewport)) = frame(true, None) {
         assert!(ring_rows_above(&buf, viewport).join("\n").contains("Banquet Hall"));

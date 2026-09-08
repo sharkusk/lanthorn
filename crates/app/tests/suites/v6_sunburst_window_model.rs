@@ -79,27 +79,11 @@ fn primaries(session: &GameSession) -> Vec<(Rect4, Rect4)> {
         .collect()
 }
 
-/// The palette this suite's colours resolve through, **stated rather than inherited**
-/// (SQ-0958).
-///
-/// Every story these cases drive is a bare file that names no machine — or, for the
-/// disk images, a machine whose table IS §8.3.1's — so the colour numbers behind
-/// every pixel asserted below resolve through the standard table. Until now nothing
-/// here said so, and the suite believed whatever the last suite in its group binary
-/// left behind. See [`app::v6_palette`], which is why this both names a palette and
-/// takes the shared lock; hold the guard for the whole case, because the two frames
-/// a repaint case compares are only comparable if the palette did not move between
-/// them.
-fn standard_palette() -> app::V6PaletteGuard {
-    app::v6_palette(zvm::screen::Palette::Standard)
-}
-
 /// The premise the defect rests on: sunburst never resizes window 0 off its boot
 /// rect, so the window is published with a 640x400 PIXEL box and a 0x0 CELL box.
 /// Without that the guard would never have fired here at all.
 #[test]
 fn sunburst_publishes_window_zero_with_a_zero_cell_extent() {
-    let _g = standard_palette();
     let Some(session) = started() else { return };
     let model = session.screen();
     let WinNode::Layered(items) = &model.root else { panic!("a v6 story builds a Layered root") };
@@ -132,7 +116,6 @@ fn sunburst_publishes_window_zero_with_a_zero_cell_extent() {
 /// ```
 #[test]
 fn sunburst_publishes_exactly_one_primary_buffer() {
-    let _g = standard_palette();
     let Some(session) = started() else { return };
     let found = primaries(&session);
     assert_eq!(
@@ -149,7 +132,6 @@ fn sunburst_publishes_exactly_one_primary_buffer() {
 /// everything after it as chrome, so a twin lands in the frame furniture.
 #[test]
 fn classify_windows_files_no_primary_buffer_under_chrome() {
-    let _g = standard_palette();
     let Some(session) = started() else { return };
     let model = session.screen();
     let WinNode::Layered(items) = &model.root else { panic!("a v6 story builds a Layered root") };
@@ -173,7 +155,6 @@ fn classify_windows_files_no_primary_buffer_under_chrome() {
 /// stays exactly where it was.
 #[test]
 fn content_size_still_falls_back_to_the_header_char_dims() {
-    let _g = standard_palette();
     let Some(session) = started() else { return };
     assert_eq!(
         session.screen().content_size,
@@ -189,7 +170,6 @@ fn content_size_still_falls_back_to_the_header_char_dims() {
 /// mode renders a blank screen (SQ-0459).
 #[test]
 fn a_story_with_no_surviving_window_still_gets_its_synthetic_buffer() {
-    let _g = standard_palette();
     // advent.z6 is Inform 6's v6 library, the shape SQ-0459 was opened on.
     let Some(session) = open("advent.z6") else { return };
     let model = session.screen();

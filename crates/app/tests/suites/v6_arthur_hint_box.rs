@@ -117,7 +117,6 @@ fn boot() -> Option<GameSession> {
     assert_eq!(u16::from_be_bytes([bytes[2], bytes[3]]), RELEASE, "{FIXTURE}: release");
     assert_eq!(String::from_utf8_lossy(&bytes[0x12..0x18]), SERIAL, "{FIXTURE}: serial");
     let profile = InterpreterProfile::resolve(&path, None, None, None);
-    app::v6_set_palette(profile.palette());
     let mut picts = PictSource::resolve(&path, None);
     let picture_dims = picts.all_pict_dims();
     // SQ-1021/SQ-1022: every per-machine fact in one value, so this
@@ -130,6 +129,8 @@ fn boot() -> Option<GameSession> {
         profile.default_colours(),
         true,
         app::native_font::FaceSet::none(),
+        profile.palette(),
+        None,
     );
     let mut s = GameSession::new_for_machine(bytes, true, false, false, picture_dims, None, None, &boot)
     .unwrap_or_else(|e| panic!("{FIXTURE}: should boot without a ZError: {e:?}"));
@@ -225,7 +226,6 @@ fn viewport_cells(st: &app::state::AppState) -> (u16, u16, u16, u16) {
 /// with glyphs at every pane size.
 #[test]
 fn the_hint_box_carries_the_games_answer() {
-    let _g = app::v6_palette_at_boot();
     let present = stories_dir().join(FIXTURE).exists();
     let Some((s, _)) = hint_in_play() else {
         assert!(!present, "{FIXTURE} is present but yielded no hint turn");
@@ -283,7 +283,6 @@ fn the_hint_box_carries_the_games_answer() {
 /// nothing, so the taller panes assert the growth itself.
 #[test]
 fn the_box_survives_the_reclaim() {
-    let _g = app::v6_palette_at_boot();
     let present = stories_dir().join(FIXTURE).exists();
     let Some((s, _)) = hint_in_play() else {
         assert!(!present, "{FIXTURE} is present but yielded no hint turn");
@@ -346,7 +345,6 @@ fn the_box_survives_the_reclaim() {
 /// is empty, and the turn before it — same `@window_size` on window 0 — is not.
 #[test]
 fn the_box_is_painted_and_stays_out_of_the_transcript() {
-    let _g = app::v6_palette_at_boot();
     let present = stories_dir().join(FIXTURE).exists();
     let Some((s, transcript)) = hint_in_play() else {
         assert!(!present, "{FIXTURE} is present but yielded no hint turn");
@@ -376,7 +374,6 @@ fn the_box_is_painted_and_stays_out_of_the_transcript() {
 /// and both are needed.
 #[test]
 fn the_box_is_sized_for_one_line() {
-    let _g = app::v6_palette_at_boot();
     let present = stories_dir().join(FIXTURE).exists();
     let Some((s, _)) = hint_in_play() else {
         assert!(!present, "{FIXTURE} is present but yielded no hint turn");

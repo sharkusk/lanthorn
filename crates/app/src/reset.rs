@@ -103,14 +103,21 @@ pub(crate) fn reset_game(
             // have landed on a different rendition (the sidecar, or a `--pictures`
             // choice), so this is asked again rather than carried.
             let card = if state.config.honor_game_colours {
-                let card = picts.two_colour_card_screen(&state.config);
-                if let Some((palette, _)) = card {
-                    zvm::screen::set_palette(palette);
-                }
-                card.map(|(_, pair)| pair)
+                picts.two_colour_card_screen(&state.config)
             } else {
                 None
             };
+            // SQ-1393: the machine's own colour table, re-derived here in the same
+            // two steps `startup.rs` uses — the story's Version and this launch's
+            // licence name a base table, and an archive that turns out to be a
+            // two-colour CARD names its own over the top. Re-asked rather than
+            // carried, for the reason the rest of this block is: a restart may
+            // have landed on a different rendition, and the card is a fact about
+            // the archive it mounted.
+            let machine_palette = card
+                .map(|(p, _)| p)
+                .unwrap_or_else(|| state.config.machine_text_palette(bytes.first().copied()));
+            let card = card.map(|(_, pair)| pair);
             // SQ-1082: and the chain the card heads is `colors::host_default_colours`
             // now, shared with `startup.rs` rather than copied here. This copy is
             // exactly the hand-maintained invariant across files the refactoring
@@ -121,6 +128,7 @@ pub(crate) fn reset_game(
                 state.colors.theme.get("transcript").style,
                 state.term_default_colors.fg.map(|c| (c.0[0], c.0[1], c.0[2])),
                 state.term_default_colors.bg.map(|c| (c.0[0], c.0[1], c.0[2])),
+                machine_palette,
             );
             // SQ-1022: every per-machine fact in one value, resolved the way
             // `startup.rs` resolves it rather than reproduced here. It HAD drifted
@@ -171,11 +179,21 @@ pub(crate) fn reset_game(
                 // the required parameter exists to enumerate.
                 state.config.machine_colours_licensed(),
                 faces,
+                // SQ-1393: and the two facts the process-wide statics used to
+                // carry. `interpreter_version` is a flag of THIS run
+                // (`--interpreter-version`), so it is the one the launch pinned.
+                machine_palette,
+                state.config.interpreter_version,
             );
             // Republish the render's copy for the same reason `v6_art_scale` is
             // republished above: a restart may have landed on a different archive,
             // and the pen's scale rides on that.
             state.v6_text = boot.text_face();
+            // Republish the renderer's copy too (SQ-1393): the scheme resolves
+            // Standard colour numbers through this table, and a restart that
+            // re-resolved a two-colour card must not leave the cells reading the
+            // launch's.
+            state.colors.machine_palette = boot.palette;
             GameSession::new_for_machine(
                 bytes,
                 state.config.honor_game_colours,
@@ -412,6 +430,8 @@ mod tests {
             None,
             state.config.machine_colours_licensed(),
             app::native_font::FaceSet::none(),
+            zvm::screen::Palette::Standard,
+            None,
         );
         let s = app::session::GameSession::new_for_machine(
             bytes.clone(), true, false, false, Default::default(), None, None, &boot,
@@ -446,7 +466,7 @@ mod tests {
     /// into header `$21`.
     ///
     /// That reset.rs SUPPLIES it is a source-level guard, for the reason
-    /// CLAUDE.md gives for `palette_lock_discipline`: the wrong spelling cannot be
+    /// CLAUDE.md gives for `scratch_path_discipline`: the wrong spelling cannot be
     /// made unreachable here. `startup::host_story_screen` asks the LIVE terminal,
     /// which a test has none of — it answers `None` in this process whatever
     /// reset.rs passes, so a behavioural restart case would be green either way
@@ -470,6 +490,8 @@ mod tests {
                 None,
                 false,
                 app::native_font::FaceSet::none(),
+                zvm::screen::Palette::Standard,
+                None,
             );
             let seeded = app::session::GameSession::new_for_machine(
                 bytes.clone(), true, false, false, Default::default(), Some((24, 60)), None, &boot,

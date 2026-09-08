@@ -211,27 +211,12 @@ fn raster_canvas(
     app::render::screen::build_v6_raster_canvas(&layout, native, state)
 }
 
-/// The palette this suite's colour assertions resolve through, **stated rather than
-/// inherited** (SQ-0958).
-///
-/// Every story these cases drive is a bare file that names no machine, so its colour
-/// numbers resolve through ZMSD §8.3.1's own table — which is what every assertion
-/// below was written against. Until now nothing here said so, and the suite believed
-/// whatever the last suite in its group binary left behind: harmless only while every
-/// one of them happened to leave `Standard` there, and not at all once a sibling boots
-/// a machine press. See [`app::v6_palette`], which is why this both names a palette
-/// and takes the shared lock. Hold the guard for the whole case.
-fn standard_palette() -> app::V6PaletteGuard {
-    app::v6_palette(zvm::screen::Palette::Standard)
-}
-
 /// Regression 2 (hybrid). **Mode: `honor_game_colours = true`** — the shipped
 /// default, and the only mode in which this ever broke. Zork Zero's frame art
 /// must reach the pane. Broken build: 2400 white / 0 art, a solid white pane.
 /// Fixed: 0 white / 950 art.
 #[test]
 fn zork0_hybrid_keeps_its_art_when_game_colours_are_honoured() {
-    let _g = standard_palette();
     let Some(mut s) = boot_v6("zork0-r393-s890714.z6", true) else { return };
     for _ in 0..3 {
         let r = match s.pending_input() {
@@ -256,7 +241,6 @@ fn zork0_hybrid_keeps_its_art_when_game_colours_are_honoured() {
 /// "the pane has been flooded".
 #[test]
 fn zork0_raster_page_is_not_flooded_white_when_game_colours_are_honoured() {
-    let _g = standard_palette();
     let Some(s) = boot_v6("zork0-r393-s890714.z6", true) else { return };
     let (white, art) = bg_census(&s.screen(), app::config::V6RenderMode::Raster);
     eprintln!("Zork0 raster census: white={white} art={art} (of 2400)");
@@ -272,7 +256,6 @@ fn zork0_raster_page_is_not_flooded_white_when_game_colours_are_honoured() {
 /// `Default`. Neither may ever become the pane page.
 #[test]
 fn zork0_renders_its_frame_in_both_colour_modes() {
-    let _g = standard_palette();
     for colours in [true, false] {
         let Some(s) = boot_v6("zork0-r393-s890714.z6", colours) else { return };
         let model = s.screen();
@@ -313,7 +296,6 @@ fn zork0_renders_its_frame_in_both_colour_modes() {
 /// (together with the number-0 canvas-clear event on the picture queue).
 #[test]
 fn erase_window_must_not_make_a_blank_text_grid_opaque() {
-    let _g = standard_palette();
     for colours in [true, false] {
         let Some(s) = boot_v6("zork0-r393-s890714.z6", colours) else { return };
         let v6 = s.machine.screen.v6.as_ref().expect("v6 screen");
@@ -358,7 +340,6 @@ fn erase_window_must_not_make_a_blank_text_grid_opaque() {
 /// not be RENDERED as the story page while it is an empty placeholder.
 #[test]
 fn shogun_splash_still_shows_its_art_in_hybrid() {
-    let _g = standard_palette();
     for colours in [true, false] {
         let Some(s) = boot_v6("shogun-r322-s890706.z6", colours) else { return };
 
@@ -402,7 +383,6 @@ fn shogun_splash_still_shows_its_art_in_hybrid() {
 /// **Modes: both**, since it is geometry/content driven, not colour driven.
 #[test]
 fn shogun_gets_its_story_window_back_once_the_game_uses_it() {
-    let _g = standard_palette();
     for colours in [true, false] {
         let Some(mut s) = boot_v6("shogun-r322-s890706.z6", colours) else { return };
         for _ in 0..6 {
@@ -440,7 +420,6 @@ fn shogun_gets_its_story_window_back_once_the_game_uses_it() {
 /// so Zork Zero's white frame floated on a dark surround.
 #[test]
 fn zork0_hybrid_page_covers_the_whole_pane() {
-    let _g = standard_palette();
     let Some(s) = boot_v6("zork0-r393-s890714.z6", true) else { return };
     let model = s.screen();
     // Premise: the game really did set a page on its story window.
@@ -463,7 +442,6 @@ fn zork0_hybrid_page_covers_the_whole_pane() {
 /// the whole-pane fill must be strictly gated on.
 #[test]
 fn zork0_hybrid_keeps_the_theme_backdrop_when_colours_are_declined() {
-    let _g = standard_palette();
     let Some(s) = boot_v6("zork0-r393-s890714.z6", false) else { return };
     let model = s.screen();
     assert_eq!(story_pair(&model), (None, None), "colours declined: the window carries no pair");
@@ -484,7 +462,6 @@ fn zork0_hybrid_keeps_the_theme_backdrop_when_colours_are_declined() {
 /// engine HONORING (pair present), then renders with the app config declined.
 #[test]
 fn live_toggle_off_repaints_backdrop_and_raster_page_without_reboot() {
-    let _g = standard_palette();
     let Some(s) = boot_v6("zork0-r393-s890714.z6", true) else { return };
     let model = s.screen();
     let (_, bg) = story_pair(&model);
@@ -519,7 +496,6 @@ fn live_toggle_off_repaints_backdrop_and_raster_page_without_reboot() {
 /// on the flag.
 #[test]
 fn a_game_that_sets_no_page_keeps_the_theme_backdrop() {
-    let _g = standard_palette();
     let Some(s) = boot_v6("arthur-r74-s890714.z6", true) else { return };
     let model = s.screen();
     let (_, bg) = story_pair(&model);
@@ -540,7 +516,6 @@ fn a_game_that_sets_no_page_keeps_the_theme_backdrop() {
 /// pixels rather than a re-implementation.
 #[test]
 fn zork0_raster_inks_its_prose_in_the_games_own_colour() {
-    let _g = standard_palette();
     let Some(s) = boot_v6("zork0-r393-s890714.z6", true) else { return };
     let model = s.screen();
     let (sx, sy, sw, sh) = story_rect(&model);
@@ -586,7 +561,6 @@ fn zork0_raster_inks_its_prose_in_the_games_own_colour() {
 /// the page its black. Ink and page still differ; they simply come from the host.
 #[test]
 fn zork0_raster_falls_back_to_the_host_pair_when_colours_are_declined() {
-    let _g = standard_palette();
     let Some(s) = boot_v6("zork0-r393-s890714.z6", false) else { return };
     let model = s.screen();
     let (sx, sy, sw, sh) = story_rect(&model);
@@ -623,7 +597,6 @@ fn zork0_raster_falls_back_to_the_host_pair_when_colours_are_declined() {
 /// pixels are really in the composite.
 #[test]
 fn zork0_raster_shows_its_opening_drop_cap() {
-    let _g = standard_palette();
     use app::engine::Engine;
     use app::state::apply_transcript_elems;
 
@@ -801,7 +774,6 @@ fn theme_input_style() -> ratatui::style::Style {
 /// Broken build: the theme's grey `input_text` on the game's white page.
 #[test]
 fn zork0_hybrid_types_the_live_input_in_the_games_own_colour() {
-    let _g = standard_palette();
     let Some((s, turn)) = v6_at_prompt("zork0-r393-s890714.z6", true) else { return };
     let model = s.screen();
     assert_eq!(story_pair(&model).1, Some(image::Rgba([255, 255, 255, 255])), "premise: Zork0's page is white");
@@ -826,7 +798,6 @@ fn zork0_hybrid_types_the_live_input_in_the_games_own_colour() {
 /// theme's own input style exactly as before.
 #[test]
 fn zork0_hybrid_types_the_live_input_in_the_theme_when_colours_are_declined() {
-    let _g = standard_palette();
     let Some((s, turn)) = v6_at_prompt("zork0-r393-s890714.z6", false) else { return };
     let model = s.screen();
     assert_eq!(story_pair(&model), (None, None), "colours declined: no game pair exists");
@@ -844,7 +815,6 @@ fn zork0_hybrid_types_the_live_input_in_the_theme_when_colours_are_declined() {
 /// `set_colour`, so its typed line must look exactly as it does today.
 #[test]
 fn a_game_that_sets_no_page_types_the_live_input_in_the_theme() {
-    let _g = standard_palette();
     let Some((s, turn)) = v6_at_prompt("arthur-r74-s890714.z6", true) else { return };
     let model = s.screen();
     assert_eq!(story_pair(&model), (None, None), "Arthur sets no story-window pair");
@@ -861,7 +831,6 @@ fn a_game_that_sets_no_page_types_the_live_input_in_the_theme() {
 /// the two halves of one prompt from diverging again.
 #[test]
 fn zork0_hybrid_echoes_the_committed_command_in_the_live_inputs_pair() {
-    let _g = standard_palette();
     let Some((s, turn)) = v6_at_prompt("zork0-r393-s890714.z6", true) else { return };
     let model = s.screen();
     let area = Rect::new(0, 0, 80, 30);

@@ -93,10 +93,10 @@
 //! without it and [`the_press_was_actually_read`] is what stops the file quietly
 //! passing on a machine that has none of it.
 //!
-//! **Palette**: every case here asserts a resolved colour, so its
-//! `app::v6_palette_at_boot` guard is also its SQ-0958 statement of the palette it
-//! read through — not `Standard`, but whatever the volume's own archive installs,
-//! named per press in `PRESSES` and set from inside the boot below.
+//! **Palette**: every case here asserts a resolved colour, and the table it reads
+//! through is the SESSION's own (SQ-0958, SQ-1393) — not `Standard`, but whatever
+//! the volume's own archive names, pinned per press in `PRESSES` and carried into
+//! the `MachineBoot` and the `ColorScheme` by the boot below.
 
 use std::path::PathBuf;
 
@@ -210,10 +210,11 @@ fn boot(file: &str, user_honours: bool) -> Option<Booted> {
     let named_art_std_window = over.std_window();
     let (profile, source) =
         InterpreterProfile::resolve_with_source(&path, None, over.flavour(), None);
-    app::v6_set_palette(zvm::interpreter::palette_for(
-        profile.row_number(),
-        bytes.first().copied(),
-    ));
+    // The table this press resolves colour numbers through — the machine's own,
+    // then the CARD's where the archive names one, exactly as `startup.rs`
+    // settles it (SQ-1393).
+    let base_palette =
+        zvm::interpreter::palette_for(profile.row_number(), bytes.first().copied());
     let mut picts = PictSource::resolve_with_override(&path, over, None);
     let picture_dims = picts.all_pict_dims();
 
@@ -227,9 +228,7 @@ fn boot(file: &str, user_honours: bool) -> Option<Booted> {
     // functions, so a regression in either fails here.
     let honoured = user_honours && !picts.declines_game_colours(cfg.machine_default_colours());
     let card_screen = picts.two_colour_card_screen(&cfg);
-    if let Some((palette, _)) = card_screen {
-        app::v6_set_palette(palette);
-    }
+    let machine_palette = card_screen.map(|(p, _)| p).unwrap_or(base_palette);
     let reported = card_screen.map(|(_, pair)| pair).or_else(|| cfg.machine_default_colours());
     let boot = app::machine_boot::MachineBoot::resolve(
         cfg.interpreter_profile,
@@ -239,13 +238,15 @@ fn boot(file: &str, user_honours: bool) -> Option<Booted> {
         honoured.then_some(reported).flatten(),
         true,
         app::native_font::FaceSet::none(),
+        machine_palette,
+        None,
     );
     eprintln!(
         "{file}: r{RELEASE} profile={profile:?}/{source:?} screen={:?} \
          art_scale={:?} palette={:?} honoured={honoured} reported={reported:?}",
         boot.screen_px,
         boot.art_scale,
-        zvm::screen::palette(),
+        boot.palette,
     );
 
     // SQ-1021/SQ-1022: every per-machine fact in one value.
@@ -258,7 +259,9 @@ fn boot(file: &str, user_honours: bool) -> Option<Booted> {
     let _ = std::fs::remove_dir_all(&dir);
 
     let mut state = AppState::default();
-    state.colors = app::colors::ColorScheme::terminal_default();
+    // The scheme resolves standard colour numbers through the same table the
+    // machine does — the card's, on a press that has one (SQ-1393).
+    state.colors = app::colors::ColorScheme::terminal_default_in(machine_palette);
     state.game_picker = Some(ratatui_image::picker::Picker::halfblocks());
     state.config.v6_render = app::config::V6RenderMode::Hybrid;
     state.config.honor_game_colours = honoured;
@@ -474,14 +477,13 @@ fn hybrid_art_ground(b: &mut Booted) -> (ratatui::style::Color, usize) {
 /// and the media guard reads no colour at all.
 #[test]
 fn the_games_own_color_command_moves_the_plates_transparent_holes() {
-    let _g = app::v6_palette_at_boot();
     let any = PRESSES.iter().any(|p| present(p.file));
     let mut seen = 0usize;
     for p in PRESSES {
         let Some(mut b) = boot(p.file, true) else { continue };
         seen += 1;
         assert_eq!(
-            zvm::screen::palette(),
+            b.session.machine.palette(),
             p.palette,
             "{}: the {} archive installs its own table, and every colour below is read \
              through it (SQ-0958)",
@@ -568,7 +570,6 @@ fn the_games_own_color_command_moves_the_plates_transparent_holes() {
 /// canvas), so it gets its own pin rather than being assumed to follow raster.
 #[test]
 fn the_hybrid_frame_resolves_the_new_ground_too() {
-    let _g = app::v6_palette_at_boot();
     let any = PRESSES.iter().any(|p| present(p.file));
     let mut seen = 0usize;
     for p in PRESSES {
@@ -618,7 +619,6 @@ fn the_hybrid_frame_resolves_the_new_ground_too() {
 /// is what a COLOURLESS interpreter shows. Both presses below take this shape.
 #[test]
 fn with_colours_declined_the_command_offers_only_a_swap_and_the_ground_stands_still() {
-    let _g = app::v6_palette_at_boot();
     let any = present(CGA_360) || present(EGA_360);
     let mut seen = 0usize;
     for p in PRESSES.iter().filter(|p| p.file == CGA_360 || p.file == EGA_360) {
@@ -671,14 +671,13 @@ fn with_colours_declined_the_command_offers_only_a_swap_and_the_ground_stands_st
 /// every real-game test into a silent skip).
 #[test]
 fn the_press_was_actually_read() {
-    let _g = app::v6_palette_at_boot();
     let mut seen = 0usize;
     for p in PRESSES {
         if !present(p.file) {
             continue;
         }
         let b = boot(p.file, true).expect("a volume that exists boots");
-        assert_eq!(zvm::screen::palette(), p.palette, "{}: serves {}", p.file, p.archive);
+        assert_eq!(b.session.machine.palette(), p.palette, "{}: serves {}", p.file, p.archive);
         assert!(b.state.config.honor_game_colours, "{}: a DOS press has colours", p.file);
         seen += 1;
     }

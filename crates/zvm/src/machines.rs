@@ -449,16 +449,14 @@ const ABSENT: &str = "  1   what declining a number already falls through to; wh
   11  no fixture and no sourced constant; anything here would be guesswork.
 ";
 
-// **No test here takes a palette lock, and none needs one.** The module used to
-// keep a `PALETTE` mutex because [`swatch`] borrowed `zvm::screen::set_palette`
-// per row and handed it straight back — safe in a binary that prints and exits,
-// a race in a test harness where one process runs many cases on many threads
-// (SQ-0904, and CI runs `cargo test`). `swatch` now asks
-// `screen::true_colour_in` by value and touches no global at all, so there is no
-// window for another case to read the table's palette instead of its own. If
-// anything below ever calls `set_palette` again, the lock has to come back with
-// it — and it would have to be a lock every OTHER case in this crate takes too,
-// which is the argument for not calling it.
+// **No test here takes a palette lock, and there is no longer one to take.** The
+// module used to keep a `PALETTE` mutex because [`swatch`] borrowed a process-wide
+// palette per row and handed it straight back — safe in a binary that prints and
+// exits, a race in a test harness where one process runs many cases on many threads
+// (SQ-0904, and CI runs `cargo test`). `swatch` asks `screen::true_colour_in` by
+// value and touches no shared state at all, and since SQ-1393 the palette is a
+// `Machine` field, so there is nothing left in the crate that could reintroduce
+// the window.
 
 #[cfg(test)]
 mod tests {

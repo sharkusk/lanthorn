@@ -42,23 +42,8 @@ fn stories_dir() -> PathBuf {
 /// Any v6 window whose `x_size`/`y_size` falls in here is a bug, not geometry.
 const UNDERFLOW_RANGE: std::ops::RangeInclusive<u16> = 0xFFF0..=0xFFFF;
 
-/// The palette this suite's colour assertions resolve through, **stated rather than
-/// inherited** (SQ-0958).
-///
-/// Every story these cases drive is a bare file that names no machine, so its colour
-/// numbers resolve through ZMSD §8.3.1's own table — which is what every assertion
-/// below was written against. Until now nothing here said so, and the suite believed
-/// whatever the last suite in its group binary left behind: harmless only while every
-/// one of them happened to leave `Standard` there, and not at all once a sibling boots
-/// a machine press. See [`app::v6_palette`], which is why this both names a palette
-/// and takes the shared lock. Hold the guard for the whole case.
-fn standard_palette() -> app::V6PaletteGuard {
-    app::v6_palette(zvm::screen::Palette::Standard)
-}
-
 #[test]
 fn zork0_v6_windows_smoke() {
-    let _g = standard_palette();
     let story_path = stories_dir().join("zork0-r393-s890714.z6");
     let Ok(story_bytes) = std::fs::read(&story_path) else {
         eprintln!("SKIP: gitignored story missing at {}", story_path.display());
@@ -205,7 +190,6 @@ fn zork0_v6_windows_smoke() {
 /// have a nonzero pixel size.
 #[test]
 fn v6_positioned_windows_carry_game_pixel_rects() {
-    let _g = standard_palette();
     let story_path = stories_dir().join("zork0-r393-s890714.z6");
     let Ok(story_bytes) = std::fs::read(&story_path) else {
         eprintln!("SKIP: gitignored story missing at {}", story_path.display());
@@ -245,7 +229,6 @@ fn v6_positioned_windows_carry_game_pixel_rects() {
 /// windows) actually composites into pixels.
 #[test]
 fn zork0_v6_pixel_canvas_is_nonempty() {
-    let _g = standard_palette();
     let story_path = stories_dir().join("zork0-r393-s890714.z6");
     let Ok(story_bytes) = std::fs::read(&story_path) else {
         eprintln!("SKIP: gitignored story missing at {}", story_path.display());
@@ -306,7 +289,6 @@ fn zork0_v6_pixel_canvas_is_nonempty() {
 /// window's own rect (6,6,310,192), which is Zork0's stable window geometry.
 #[test]
 fn zork0_v6_story_classified_and_clear_interior_inside_frame() {
-    let _g = standard_palette();
     let story_path = stories_dir().join("zork0-r393-s890714.z6");
     let Ok(story_bytes) = std::fs::read(&story_path) else {
         eprintln!("SKIP: gitignored story missing at {}", story_path.display());

@@ -644,7 +644,6 @@ fn mac_arthur_at_status(honor: bool) -> Option<(app::session::GameSession, app::
     let (profile, source) =
         app::interpreter::InterpreterProfile::resolve_with_source(&path, None, None, None);
     assert_eq!(profile, app::interpreter::InterpreterProfile::Macintosh, "the volume names the machine");
-    app::v6_set_palette(profile.palette());
     let bytes = match app::hints::load_mounted_story_from(&path, Some(ENTRY)).ok()?.0 {
         app::hints::LoadedStory::ZCode(b) => b,
         other => panic!("Arthur is Z-code on this volume, got {other:?}"),
@@ -671,6 +670,8 @@ fn mac_arthur_at_status(honor: bool) -> Option<(app::session::GameSession, app::
         honoured.then(|| profile.default_colours()).flatten(),
         true,
         faces,
+        profile.palette(),
+        None,
     );
     assert_eq!(boot.cell, zvm::interpreter::MACINTOSH_V6_CELL, "the Macintosh's 7x15 cell");
     let face = boot.text_face();
@@ -722,7 +723,6 @@ fn mac_arthur_at_status(honor: bool) -> Option<(app::session::GameSession, app::
 #[test]
 fn mac_arthur_raster_score_bar_is_one_ribbon_not_the_location_alone() {
     for honor in [true, false] {
-        let _g = app::v6_palette_at_boot();
         let Some((session, face)) = mac_arthur_at_status(honor) else { return };
         let model = session.screen();
         let WinNode::Layered(items) = &model.root else { panic!("v6 Layered root") };

@@ -130,7 +130,6 @@ fn boot() -> Option<GameSession> {
     assert_eq!(u16::from_be_bytes([bytes[2], bytes[3]]), RELEASE, "{FIXTURE}: release");
     assert_eq!(String::from_utf8_lossy(&bytes[0x12..0x18]), SERIAL, "{FIXTURE}: serial");
     let profile = InterpreterProfile::resolve(&path, None, None, None);
-    app::v6_set_palette(profile.palette());
     let mut picts = PictSource::resolve(&path, None);
     let picture_dims = picts.all_pict_dims();
     // SQ-1021/SQ-1022: every per-machine fact in one value, so this
@@ -143,6 +142,8 @@ fn boot() -> Option<GameSession> {
         profile.default_colours(),
         true,
         app::native_font::FaceSet::none(),
+        profile.palette(),
+        None,
     );
     let mut s = GameSession::new_for_machine(bytes, true, false, false, picture_dims, None, None, &boot)
     .unwrap_or_else(|e| panic!("{FIXTURE}: should boot without a ZError: {e:?}"));
@@ -234,7 +235,6 @@ fn guard_shape(st: &app::state::AppState, buf: &Buffer, area: Rect, tag: &str) {
 /// the game's reversed bands show its ink — those two colours and nothing else.
 #[test]
 fn the_hint_screen_is_one_page_and_not_a_row_of_islands() {
-    let _g = app::v6_palette_at_boot();
     let present = stories_dir().join(FIXTURE).exists();
     let Some(s) = hint_menu() else {
         assert!(!present, "{FIXTURE} is present but yielded no hint menu");
@@ -291,7 +291,6 @@ fn the_hint_screen_is_one_page_and_not_a_row_of_islands() {
 /// colours declined it must not reach this screen at all.
 #[test]
 fn colours_declined_keeps_the_machine_page_off_the_hint_screen() {
-    let _g = app::v6_palette_at_boot();
     let present = stories_dir().join(FIXTURE).exists();
     let Some(s) = hint_menu() else {
         assert!(!present, "{FIXTURE} is present but yielded no hint menu");
@@ -330,7 +329,6 @@ fn colours_declined_keeps_the_machine_page_off_the_hint_screen() {
 /// about the two paths agreeing.
 #[test]
 fn raster_and_hybrid_draw_the_same_page() {
-    let _g = app::v6_palette_at_boot();
     let present = stories_dir().join(FIXTURE).exists();
     let Some(s) = hint_menu() else {
         assert!(!present, "{FIXTURE} is present but yielded no hint menu");

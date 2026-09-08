@@ -253,7 +253,6 @@ fn zork0_reach_banquet_hall() -> Option<GameSession> {
 
 #[test]
 fn zork0_v6_banquet_hall_matches_the_real_zil_source_and_a_real_move() {
-    let _g = app::v6_palette(zvm::screen::Palette::Standard);
     let Some(mut session) = zork0_reach_banquet_hall() else { return };
     let start = session.current_location().expect("Zork Zero names a room after the opening");
     assert_eq!(start.name, "Banquet Hall", "non-vacuity guard: the opening must actually reach the Banquet Hall");

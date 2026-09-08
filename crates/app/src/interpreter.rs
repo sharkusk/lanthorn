@@ -1036,8 +1036,8 @@ mod tests {
         // the same shape as `default_colours` below. The MACHINE resolves colour
         // numbers through EGA — Infocom's own `Zip_to_ega`/`zip_to_ibm_color`
         // tables — and the LAUNCH still defers, because `startup` downgrades an
-        // unlicensed one to §8.3.1's table before it ever reaches
-        // `zvm::screen::set_palette`.
+        // unlicensed one to §8.3.1's table before it ever reaches the
+        // `MachineBoot` the session is built from.
         assert_eq!(p.palette(), zvm::screen::Palette::IbmXzip, "the machine resolves through EGA");
         assert_eq!(
             zvm::interpreter::palette_for(p.row_number(), Some(6)),

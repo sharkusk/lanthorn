@@ -1,20 +1,11 @@
 //! SQ-0719: the Amiga palette, and the fact that selecting it changes nothing
 //! until it is selected.
 //!
-//! Its own test binary on purpose. `zvm::screen::set_palette` is process-wide
-//! (see its docs for why), so a test that flips it would perturb any test
-//! sharing its binary; here there is nothing else to perturb, and the flip is
-//! confined to one `#[test]` that puts it back.
-//!
-//! **Re-checked under SQ-0905 and the argument holds**, which is worth recording
-//! because the app's suites did NOT survive the same check and now take a shared
-//! lock. Three cases here: both `set_palette` calls and every assertion that reads
-//! the global — `palette`, `standard_true_colour`, `grey_rgb` — sit inside
-//! `the_palette_defaults_to_standard_and_moves_every_resolver_together`. The other
-//! two touch only `amiga_true_colour` and `zmsd_true_colour`, which are pure tables
-//! and read no process state, so cargo's parallel threads have nothing to race over.
-//! Add a case here that reads the global and that stops being true; `zvm` takes zero
-//! external dependencies, so the lock would have to be a local `std::sync::Mutex`.
+//! Its own test binary from the days when the palette was a process-wide atomic
+//! and a case that flipped it perturbed every case sharing its binary. Since
+//! SQ-1393 the palette is a [`zvm::cpu::exec::Machine`] field and every resolver
+//! here takes the table BY VALUE, so there is no shared state left to race over;
+//! these cases stay together because they are one subject, not for isolation.
 //!
 //! The values are read out of the Amiga Version 6 interpreter binaries on
 //! Infocom's own **release floppies** in `stories/` — not from any modern
@@ -25,8 +16,7 @@
 //! is ZMSD §11.1.3.
 
 use zvm::screen::{
-    amiga_true_colour, grey_rgb, palette, rgb15_to_888, set_palette, standard_true_colour,
-    zmsd_true_colour, Palette,
+    amiga_true_colour, grey_rgb, rgb15_to_888, true_colour_in, zmsd_true_colour, Palette,
 };
 
 /// Widen an Amiga 4-bit-per-channel `$0RGB` word to the Z-machine's 15-bit
@@ -102,41 +92,36 @@ fn the_two_palettes_agree_where_the_standard_was_read_off_an_amiga() {
     }
 }
 
-/// Both halves of the switch in ONE test, deliberately: the palette is
-/// process-wide, and cargo runs a binary's tests on parallel threads, so a
-/// "before" test and an "after" test would race each other rather than describe
-/// a sequence.
+/// Both halves in ONE test, deliberately: the claim is that naming a second
+/// palette does not move the first, and that where it IS named every resolver
+/// moves together — which is one statement about two tables, not two statements.
 #[test]
 fn the_palette_defaults_to_standard_and_moves_every_resolver_together() {
     // The acceptance criterion in miniature: adding a second palette must not
-    // move the first. Nothing has selected a palette, so this is what every
-    // existing session sees.
-    assert_eq!(palette(), Palette::Standard);
+    // move the first. `Palette::Standard` is what a fresh `Machine` carries, so
+    // this is what every session that never names a machine sees.
+    let std = Palette::Standard;
     for n in 0u8..=16 {
-        assert_eq!(standard_true_colour(n), zmsd_true_colour(n), "colour {n}");
+        assert_eq!(true_colour_in(std, n), zmsd_true_colour(n), "colour {n}");
     }
-    assert_eq!(grey_rgb(10), rgb15_to_888(0x5AD6), "light grey stays §8.3.1's");
-    assert_eq!(grey_rgb(11), rgb15_to_888(0x4631), "medium grey stays §8.3.1's");
-    assert_eq!(grey_rgb(12), rgb15_to_888(0x2D6B), "dark grey stays §8.3.1's");
+    assert_eq!(grey_rgb(std, 10), rgb15_to_888(0x5AD6), "light grey stays §8.3.1's");
+    assert_eq!(grey_rgb(std, 11), rgb15_to_888(0x4631), "medium grey stays §8.3.1's");
+    assert_eq!(grey_rgb(std, 12), rgb15_to_888(0x2D6B), "dark grey stays §8.3.1's");
 
-    // One switch, or a game colour would look like two different colours on the
-    // same screen: `standard_true_colour` feeds the game's own window properties
+    // One table, or a game colour would look like two different colours on the
+    // same screen: `true_colour_in` feeds the game's own window properties
     // 17/18, `grey_rgb` feeds both renderers' Version 6 greys.
-    set_palette(Palette::Amiga);
-    assert_eq!(palette(), Palette::Amiga);
+    let am = Palette::Amiga;
     for n in 0u8..=16 {
-        assert_eq!(standard_true_colour(n), amiga_true_colour(n), "colour {n}");
+        assert_eq!(true_colour_in(am, n), amiga_true_colour(n), "colour {n}");
     }
     for n in [10u8, 11, 12] {
         assert_eq!(
-            grey_rgb(n),
+            grey_rgb(am, n),
             rgb15_to_888(amiga_true_colour(n).expect("a grey")),
             "grey {n} follows the palette",
         );
     }
     // Out-of-range still reads as dark grey, exactly as it always has.
-    assert_eq!(grey_rgb(2), rgb15_to_888(amiga_true_colour(12).expect("dark grey")));
-
-    set_palette(Palette::Standard);
-    assert_eq!(palette(), Palette::Standard, "restored for anything that follows");
+    assert_eq!(grey_rgb(am, 2), rgb15_to_888(amiga_true_colour(12).expect("dark grey")));
 }

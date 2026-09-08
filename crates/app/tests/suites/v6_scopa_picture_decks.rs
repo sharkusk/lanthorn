@@ -62,21 +62,6 @@ fn scopa_at_the_menu() -> Option<GameSession> {
     Some(s)
 }
 
-/// The palette this suite's colours resolve through, **stated rather than inherited**
-/// (SQ-0958).
-///
-/// Every story these cases drive is a bare file that names no machine — or, for the
-/// disk images, a machine whose table IS §8.3.1's — so the colour numbers behind
-/// every pixel asserted below resolve through the standard table. Until now nothing
-/// here said so, and the suite believed whatever the last suite in its group binary
-/// left behind. See [`app::v6_palette`], which is why this both names a palette and
-/// takes the shared lock; hold the guard for the whole case, because the two frames
-/// a repaint case compares are only comparable if the palette did not move between
-/// them.
-fn standard_palette() -> app::V6PaletteGuard {
-    app::v6_palette(zvm::screen::Palette::Standard)
-}
-
 /// Every deck the game offers is on the opening screen, each in its own 52×84 slot.
 ///
 /// Falsified by reverting the win_box fix (`apply_picture_event` reading the
@@ -84,7 +69,6 @@ fn standard_palette() -> app::V6PaletteGuard {
 /// the game laid it out — only 0 of 4368 pixels are".
 #[test]
 fn all_three_sample_decks_are_painted_at_the_menu() {
-    let _g = standard_palette();
     let Some(session) = scopa_at_the_menu() else { return };
     let paint = session
         .paint_surface()
@@ -137,7 +121,6 @@ fn all_three_sample_decks_are_painted_at_the_menu() {
 /// it".
 #[test]
 fn the_decks_are_drawn_at_their_natural_size() {
-    let _g = standard_palette();
     let Some(session) = scopa_at_the_menu() else { return };
 
     let paint = session.paint_surface().expect("the menu is painted");
@@ -174,7 +157,6 @@ fn the_decks_are_drawn_at_their_natural_size() {
 /// game colours must not erase a deck.
 #[test]
 fn the_decks_reach_the_composite_in_both_modes() {
-    let _g = standard_palette();
     let Some(session) = scopa_at_the_menu() else { return };
     let Some(paint) = session.paint_surface() else { return };
     let model = session.screen();

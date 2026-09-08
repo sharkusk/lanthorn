@@ -81,23 +81,8 @@ fn composite(session: &GameSession) -> image::RgbaImage {
     canvas
 }
 
-/// The palette this suite's colour assertions resolve through, **stated rather than
-/// inherited** (SQ-0958).
-///
-/// Every story these cases drive is a bare file that names no machine, so its colour
-/// numbers resolve through ZMSD §8.3.1's own table — which is what every assertion
-/// below was written against. Until now nothing here said so, and the suite believed
-/// whatever the last suite in its group binary left behind: harmless only while every
-/// one of them happened to leave `Standard` there, and not at all once a sibling boots
-/// a machine press. See [`app::v6_palette`], which is why this both names a palette
-/// and takes the shared lock. Hold the guard for the whole case.
-fn standard_palette() -> app::V6PaletteGuard {
-    app::v6_palette(zvm::screen::Palette::Standard)
-}
-
 #[test]
 fn v6_host_save_state_restore_is_byte_identical() {
-    let _g = standard_palette();
     let Some((story_bytes, mut session)) = boot_zork0() else {
         eprintln!("SKIP: gitignored Zork0 story missing at {}", story_path().display());
         return;
@@ -178,7 +163,6 @@ fn v6_host_save_state_restore_is_byte_identical() {
 /// against a possibly-different Current Palette).
 #[test]
 fn inline_transcript_images_survive_archive_roundtrip_sq0518() {
-    let _g = standard_palette();
     use app::state::{apply_transcript_elems, AppState, TranscriptKind};
 
     let Some((_bytes, mut session)) = boot_zork0() else {
@@ -267,7 +251,6 @@ fn inline_transcript_images_survive_archive_roundtrip_sq0518() {
 
 #[test]
 fn zork0_quetzal_save_restore_smoke() {
-    let _g = standard_palette();
     let Some((_bytes, mut session)) = boot_zork0() else {
         eprintln!("SKIP: gitignored Zork0 story missing at {}", story_path().display());
         return;

@@ -81,23 +81,8 @@ fn step(session: &mut GameSession, cmd: &str) -> String {
     r.transcript.trim().lines().next().unwrap_or("").trim().to_string()
 }
 
-/// The palette this suite's colour assertions resolve through, **stated rather than
-/// inherited** (SQ-0958).
-///
-/// Every story these cases drive is a bare file that names no machine, so its colour
-/// numbers resolve through ZMSD §8.3.1's own table — which is what every assertion
-/// below was written against. Until now nothing here said so, and the suite believed
-/// whatever the last suite in its group binary left behind: harmless only while every
-/// one of them happened to leave `Standard` there, and not at all once a sibling boots
-/// a machine press. See [`app::v6_palette`], which is why this both names a palette
-/// and takes the shared lock. Hold the guard for the whole case.
-fn standard_palette() -> app::V6PaletteGuard {
-    app::v6_palette(zvm::screen::Palette::Standard)
-}
-
 #[test]
 fn arthur_frame_follows_the_scene_palette() {
-    let _g = standard_palette();
     for honor_game_colours in [true, false] {
         let Some(mut session) = arthur_at_churchyard(honor_game_colours) else {
             eprintln!("SKIP: gitignored story missing");
@@ -198,7 +183,6 @@ fn band_flatness(img: &image::RgbaImage) -> f64 {
 /// top the map band looked like the picture screen's again.
 #[test]
 fn a_palette_replay_keeps_a_later_background_above_the_frame() {
-    let _g = standard_palette();
     let Some(mut session) = arthur_at_churchyard(true) else {
         eprintln!("SKIP: gitignored story missing");
         return;
@@ -259,7 +243,6 @@ fn centre(img: Option<std::sync::Arc<image::DynamicImage>>) -> Option<[u8; 4]> {
 /// comes back `[85, 85, 85, 255]`, the reported grey.
 #[test]
 fn a_replay_recolours_the_adaptive_frame_and_leaves_base_art_alone() {
-    let _g = standard_palette();
     let mg1 = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../stories/arthur.mg1");
     let Ok(bytes) = std::fs::read(&mg1) else {
         eprintln!("SKIP: gitignored archive missing at {}", mg1.display());

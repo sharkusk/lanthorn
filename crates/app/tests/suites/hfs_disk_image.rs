@@ -200,21 +200,6 @@ fn write_image(name: &str, image: &[u8]) -> std::path::PathBuf {
 
 // ── Synthetic disk: the whole loading path, no fixture ────────────────────────
 
-/// The palette this suite's colours resolve through, **stated rather than inherited**
-/// (SQ-0958).
-///
-/// Every story these cases drive is a bare file that names no machine — or, for the
-/// disk images, a machine whose table IS §8.3.1's — so the colour numbers behind
-/// every pixel asserted below resolve through the standard table. Until now nothing
-/// here said so, and the suite believed whatever the last suite in its group binary
-/// left behind. See [`app::v6_palette`], which is why this both names a palette and
-/// takes the shared lock; hold the guard for the whole case, because the two frames
-/// a repaint case compares are only comparable if the palette did not move between
-/// them.
-fn standard_palette() -> app::V6PaletteGuard {
-    app::v6_palette(zvm::screen::Palette::Standard)
-}
-
 /// The headline: pointing lanthorn at a Macintosh disk image loads the game and
 /// its art with no extraction step and nothing to configure.
 ///
@@ -222,7 +207,6 @@ fn standard_palette() -> app::V6PaletteGuard {
 /// then handed to the VM whole and the story never appears.
 #[test]
 fn a_macintosh_disk_image_yields_both_the_story_and_its_artwork() {
-    let _g = standard_palette();
     let story = fake_story();
     let image = build_mac_image(&[
         ("Story.data", b"INdf", &story),
@@ -248,7 +232,6 @@ fn a_macintosh_disk_image_yields_both_the_story_and_its_artwork() {
 /// container and the launch dialog can decline to infer an Amiga from it.
 #[test]
 fn the_mount_names_the_container_it_came_out_of() {
-    let _g = standard_palette();
     let path = write_image(
         "container",
         &build_mac_image(&[("Story.data", b"INdf", &fake_story())]),
@@ -281,7 +264,6 @@ fn the_mount_names_the_container_it_came_out_of() {
 /// the 84-byte header shifts everything by 84. Either mistake loses the story.
 #[test]
 fn the_diskcopy_wrapper_is_unwrapped_by_its_own_declared_length() {
-    let _g = standard_palette();
     let image = build_mac_image(&[("Story.data", b"INdf", &fake_story())]);
     assert_eq!(image.len(), 84 + VOLUME_BLOCKS * BLOCK + 12 * VOLUME_BLOCKS);
     let path = write_image("tags", &image);
@@ -299,7 +281,6 @@ fn the_diskcopy_wrapper_is_unwrapped_by_its_own_declared_length() {
 /// desktop database to the VM.
 #[test]
 fn a_disk_with_no_game_fails_with_a_useful_message() {
-    let _g = standard_palette();
     let image = build_mac_image(&[
         ("Desktop", b"FNDR", &[0x00, 0x00, 0x01, 0x00]),
         ("System", b"ZSYS", &[0x00, 0x01, 0x02, 0x03]),
@@ -318,7 +299,6 @@ fn a_disk_with_no_game_fails_with_a_useful_message() {
 /// simply falls back to the Blorb tier, which finds nothing here.
 #[test]
 fn a_disk_without_artwork_still_loads_the_story() {
-    let _g = standard_palette();
     let path = write_image("nopics", &build_mac_image(&[("Story.data", b"INdf", &fake_story())]));
 
     assert!(app::hints::load_story(&path).is_ok());
@@ -350,7 +330,6 @@ fn mac_disk() -> Option<std::path::PathBuf> {
 /// the app does. This is the acceptance criterion for the whole quest.
 #[test]
 fn zork_zero_boots_from_its_macintosh_release_floppy() {
-    let _g = standard_palette();
     let Some(path) = mac_disk() else { return };
 
     let (loaded, image) = app::hints::load_mounted_story(&path).expect("Story.data mounts");
@@ -427,7 +406,6 @@ fn zork_zero_boots_from_its_macintosh_release_floppy() {
 /// should look like.
 #[test]
 fn the_macintosh_disk_carries_two_picture_archives_and_the_colour_one_is_the_art() {
-    let _g = standard_palette();
     let Some(path) = mac_disk() else { return };
     let hfs = blorb::hfs::Hfs::mount(std::fs::read(&path).expect("read")).expect("mounts");
 
@@ -476,7 +454,6 @@ fn the_macintosh_disk_carries_two_picture_archives_and_the_colour_one_is_the_art
 /// interpreter displayed it (`IF ge.mono OR myTiny THEN { scale 1x for display }`).
 #[test]
 fn naming_the_monochrome_archive_by_hand_draws_the_monochrome_artwork() {
-    let _g = standard_palette();
     let Some(path) = mac_disk() else { return };
     let dir = std::env::temp_dir().join("lanthorn-mac-mono-override");
     let _ = std::fs::create_dir_all(&dir);

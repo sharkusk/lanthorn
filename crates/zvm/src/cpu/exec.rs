@@ -285,6 +285,36 @@ pub struct Machine {
     /// NUMBER, so the host's true RGB is snapped on the way in and painted back
     /// out as the snapped value (a `#1A1B26` ground came out pure black).
     pub machine_colours_licensed: bool,
+    /// The table a standard colour NUMBER resolves to a true colour through
+    /// (SQ-1393) — see [`crate::screen::Palette`].
+    ///
+    /// A field on the machine, not a process-wide one. It was an atomic in
+    /// `screen.rs` for two years on the premise that "there is exactly one
+    /// machine per run", which is true of one host and is not a fact about the
+    /// Z-machine: a GUI with two windows, a server with a session per player and
+    /// a harness comparing an Amiga press against an IBM one all want two at
+    /// once, and none of them could have them. Alongside [`Self::v6_metric`] and
+    /// [`Self::machine_colours_licensed`], which are the same kind of fact and
+    /// already live here.
+    ///
+    /// [`crate::screen::Palette::Standard`] — §8.3.1's own table — until a host
+    /// calls [`Machine::set_palette`], so a bare embedding resolves colours the
+    /// way the spec recommends and nothing has to be undone.
+    palette: crate::screen::Palette,
+    /// Override for header `$1F`, the interpreter version byte, or `None` for
+    /// [`init_header_caps`]'s own default.
+    ///
+    /// Latched exactly like [`Self::interpreter_number`]: set it any time, and it
+    /// takes effect at the next [`Machine::init_caps`].
+    ///
+    /// # Why it is worth overriding (SQ-0885)
+    ///
+    /// The default `b'A'` has no provenance — see [`init_header_caps`] — and the
+    /// byte is one a story can PRINT. *Shogun* release 295 renders it as a
+    /// decimal, so `'A'` (65) makes its Amiga banner read "version 6.65" where the
+    /// original read "version 6.8". Whether a story also BRANCHES on it is unknown
+    /// and is exactly what this exists to find out: set it, run the game, watch.
+    interpreter_version: Option<u8>,
     /// Output stream routing: streams 1/2/3/4 state.
     pub streams: StreamState,
     /// Snapshot of the original dynamic memory (bytes 0..static_mem_base) taken
@@ -598,6 +628,8 @@ impl Machine {
             v6_metric: crate::screen::V6Metric::fixed(V6Cell::DEFAULT),
             v6_wrap_regime: crate::interpreter::V6WrapRegime::Attributes,
             machine_colours_licensed: true,
+            palette: crate::screen::Palette::Standard,
+            interpreter_version: None,
             streams: StreamState::new(),
             original_dynamic,
             undo_stack: Vec::new(),
@@ -667,10 +699,10 @@ impl Machine {
     /// `step()`. Not needed for test harnesses built from `sample_story` (whose
     /// buffers may overlap header bytes).
     pub fn init_caps(&mut self) {
-        init_header_caps(&mut self.mem, self.honor_game_colours, self.sound_available, self.interpreter_number);
+        init_header_caps(&mut self.mem, self.honor_game_colours, self.sound_available, self.interpreter_number, self.interpreter_version, self.palette);
         // Re-apply the host's chosen interpreter defaults over the 2/9 seed
         // `init_header_caps` writes, so they survive `@restart` too.
-        write_default_colours(&mut self.mem, self.default_bg_colour, self.default_fg_colour);
+        write_default_colours(&mut self.mem, self.default_bg_colour, self.default_fg_colour, self.palette);
         // Communicate the initial buffer_mode state (false = off) to the sink.
         self.out.set_buffer_mode(self.screen.buffer_mode);
     }
@@ -1162,6 +1194,30 @@ impl Machine {
         self.interpreter_number = n;
     }
 
+    /// Select the table standard colour numbers resolve through on THIS machine
+    /// (SQ-1393). Takes effect immediately — the palette is read at the moment a
+    /// colour is resolved, never latched into the header.
+    pub fn set_palette(&mut self, p: crate::screen::Palette) {
+        self.palette = p;
+    }
+
+    /// The table this machine's standard colour numbers resolve through.
+    pub fn palette(&self) -> crate::screen::Palette {
+        self.palette
+    }
+
+    /// Override the interpreter version byte written into header `$1F`; `None`
+    /// restores [`init_header_caps`]'s default. Takes effect at the next
+    /// [`Self::init_caps`], exactly like [`Self::set_interpreter_number`].
+    pub fn set_interpreter_version(&mut self, v: Option<u8>) {
+        self.interpreter_version = v;
+    }
+
+    /// The interpreter version override, or `None` when no host has set one.
+    pub fn interpreter_version(&self) -> Option<u8> {
+        self.interpreter_version
+    }
+
     /// The PRNG seed a bare `Machine` starts from: fixed, so a machine nobody
     /// seeds replays one sequence. Nonzero — xorshift32 stays at 0 forever.
     pub const DEFAULT_RNG_SEED: u32 = 0x1234_5678;
@@ -1199,7 +1255,7 @@ impl Machine {
         let version = self.mem.version();
         self.default_bg_colour = clamp_default_colour(bg, DEFAULT_BG_COLOUR, version);
         self.default_fg_colour = clamp_default_colour(fg, DEFAULT_FG_COLOUR, version);
-        write_default_colours(&mut self.mem, self.default_bg_colour, self.default_fg_colour);
+        write_default_colours(&mut self.mem, self.default_bg_colour, self.default_fg_colour, self.palette);
     }
 
     /// Seed the cumulative "ever executed" set from host-persisted knowledge
@@ -1679,7 +1735,7 @@ impl Machine {
                     // unchanged on every other display, so the per-window model
                     // below is one code path and not two.
                     let req = (decode_set_colour_v6(a), decode_set_colour_v6(b));
-                    let (req_fg, req_bg) = crate::screen::two_colour_card_request(req.0, req.1);
+                    let (req_fg, req_bg) = crate::screen::two_colour_card_request(self.palette, req.0, req.1);
                     if self.trace_screen {
                         let name = |c: Option<crate::screen::ZColour>, raw: u16| {
                             c.map(zscreen_colour_name).unwrap_or_else(|| raw.to_string())
@@ -3475,6 +3531,7 @@ impl Machine {
                 let win = self.v6_window_operand(ops.first().copied().unwrap_or(0));
                 let prop = ops.get(1).copied().unwrap_or(0);
                 let (def_fg, def_bg) = (self.default_fg_colour, self.default_bg_colour);
+                let palette = self.palette;
                 let val = self.screen.v6.as_ref()
                     .and_then(|v6| v6.windows.get(win as usize))
                     .map(|w| match prop {
@@ -3486,8 +3543,8 @@ impl Machine {
                         // through the §8.3.1 table; a `Default` channel resolves
                         // to the interpreter's own default, the same value
                         // published in header-extension words 5/6).
-                        16 => w.fg.true_value(def_fg),
-                        17 => w.bg.true_value(def_bg),
+                        16 => w.fg.true_value(palette, def_fg),
+                        17 => w.bg.true_value(palette, def_bg),
                         _ => w.get_prop(prop),
                     })
                     .unwrap_or(0);

@@ -69,10 +69,14 @@ impl ZColour {
     /// There is no `-4` (transparent) answer here because the model has no
     /// transparent state: §8.3.6 lets an interpreter without transparency
     /// "ignore any attempt to select colour 15", and this one does.
-    pub fn true_value(self, interpreter_default: u8) -> u16 {
+    ///
+    /// `palette` is the machine's own table ([`crate::cpu::Machine::palette`]).
+    /// It is a parameter and not a global because resolving a colour number
+    /// without saying WHICH machine's table you mean is the bug (SQ-1393).
+    pub fn true_value(self, palette: Palette, interpreter_default: u8) -> u16 {
         match self {
-            ZColour::Default => standard_true_colour(interpreter_default).unwrap_or(0),
-            ZColour::Standard(n) => standard_true_colour(n).unwrap_or(0),
+            ZColour::Default => true_colour_in(palette, interpreter_default).unwrap_or(0),
+            ZColour::Standard(n) => true_colour_in(palette, n).unwrap_or(0),
             ZColour::True(v) => v & 0x7FFF,
             ZColour::True24(rgb) => {
                 let (r, g, b) = ((rgb >> 16) & 0xFF, (rgb >> 8) & 0xFF, rgb & 0xFF);
@@ -96,12 +100,13 @@ pub fn rgb15_to_888(v: u16) -> (u8, u8, u8) {
 /// 10 = light grey ($5AD6), 11 = medium grey ($4631), 12 = dark grey ($2D6B) —
 /// so they are just [`rgb15_to_888`] of the spec table, not an invented ramp.
 /// Under [`Palette::Amiga`] they come from Infocom's Amiga table instead
-/// ([`amiga_true_colour`]), which is the one place the greys genuinely differ.
-pub fn grey_rgb(n: u8) -> (u8, u8, u8) {
+/// ([`amiga_true_colour`]), which is the one place the greys genuinely differ —
+/// which is why `palette` is a parameter here (SQ-1393).
+pub fn grey_rgb(palette: Palette, n: u8) -> (u8, u8, u8) {
     // Anything outside the three grey numbers reads as dark grey, as it always
     // has — the callers guard on 10..=12, so this is belt and braces.
     let n = if matches!(n, 10 | 11) { n } else { 12 };
-    rgb15_to_888(standard_true_colour(n).unwrap_or(0x2D6B))
+    rgb15_to_888(true_colour_in(palette, n).unwrap_or(0x2D6B))
 }
 
 /// One character cell in the upper window.
@@ -1948,7 +1953,7 @@ pub fn default_interpreter_number(version: u8) -> u8 {
 ///
 /// Only modifies bytes inside dynamic memory (below static_mem_base); if the
 /// header region is read-only (static_mem_base ≤ 0x40) we skip silently.
-pub fn init_header_caps(mem: &mut Memory, honor_game_colours: bool, sound_available: bool, interpreter_number: Option<u8>) {
+pub fn init_header_caps(mem: &mut Memory, honor_game_colours: bool, sound_available: bool, interpreter_number: Option<u8>, interpreter_version: Option<u8>, palette: Palette) {
     let version = mem.version();
 
     // Guard: only write if the header sits in dynamic memory.
@@ -2022,9 +2027,9 @@ pub fn init_header_caps(mem: &mut Memory, honor_game_colours: bool, sound_availa
     // "6, a common neutral value", which SQ-0872 has since replaced with a
     // sourced machine table, and it was never revisited. A story can PRINT this
     // byte — Shogun r295 renders it as a decimal, so 'A' shows as 65 — so
-    // `set_interpreter_version` exists to override it while SQ-0885 works out
-    // what each machine actually wrote.
-    mem.write_byte(0x1F, interpreter_version().unwrap_or(b'A'));
+    // `Machine::set_interpreter_version` exists to override it while SQ-0885
+    // works out what each machine actually wrote.
+    mem.write_byte(0x1F, interpreter_version.unwrap_or(b'A'));
 
     // Standard revision (0x32 = major, 0x33 = minor): 1.1 — the only published
     // Z-Machine Standards Document revision (ZMSD 1.1); no "1.2" exists.
@@ -2052,7 +2057,7 @@ pub fn init_header_caps(mem: &mut Memory, honor_game_colours: bool, sound_availa
     // Beyond Zork (V5) among them — compute garbage colour numbers from 0/0 and
     // their set_colour calls get ignored, leaving the game monochrome. Seeding
     // valid numbers here makes such games colour correctly.
-    write_default_colours(mem, DEFAULT_BG_COLOUR, DEFAULT_FG_COLOUR);
+    write_default_colours(mem, DEFAULT_BG_COLOUR, DEFAULT_FG_COLOUR, palette);
 
     advertise_colour(mem, honor_game_colours);
     advertise_sound(mem, sound_available);
@@ -2201,14 +2206,15 @@ pub const CGA_CARD_PAIR: (u8, u8) =
 /// names a colour, so neither can carry the bit, and a request with fewer than two
 /// named channels is passed through untouched.
 pub fn two_colour_card_request(
+    palette: Palette,
     fg: Option<ZColour>,
     bg: Option<ZColour>,
 ) -> (Option<ZColour>, Option<ZColour>) {
-    if !palette().two_colour_card() {
+    if !palette.two_colour_card() {
         return (fg, bg);
     }
     let named = |c: Option<ZColour>| match c {
-        Some(ZColour::Standard(n)) => standard_true_colour(n),
+        Some(ZColour::Standard(n)) => true_colour_in(palette, n),
         _ => None,
     };
     let (Some(want_ink), Some(want_page)) = (named(fg), named(bg)) else {
@@ -2237,88 +2243,6 @@ pub fn two_colour_card_request(
 fn luma15(c: u16) -> u32 {
     let (r, g, b) = ((c >> 10) & 31, (c >> 5) & 31, c & 31);
     u32::from(r) * 299 + u32::from(g) * 587 + u32::from(b) * 114
-}
-
-/// The active palette, as a raw discriminant for [`ACTIVE_PALETTE`].
-const PALETTE_STANDARD: u8 = 0;
-const PALETTE_AMIGA: u8 = 1;
-const PALETTE_IBM_XZIP: u8 = 2;
-const PALETTE_IBM_YZIP: u8 = 3;
-const PALETTE_IBM_CGA: u8 = 4;
-
-/// The process-wide active palette.
-///
-/// Deliberately global rather than threaded through: the palette is a property
-/// of *the machine lanthorn is pretending to be*, and there is exactly one of
-/// those per run. Every consumer — the VM's own `true_value` (window properties
-/// 17/18), the terminal cell renderer, the v6 pixel renderer and the CLI's SGR
-/// path — must agree on it or one game colour would look like two different
-/// colours on the same screen, so a single source beats four parameters
-/// threaded through four unrelated call chains. Set once at boot from the
-/// interpreter profile (`app::interpreter`), and re-asserted on every story
-/// boot so a picker→play loop cannot carry one story's machine into the next.
-static ACTIVE_PALETTE: core::sync::atomic::AtomicU8 =
-    core::sync::atomic::AtomicU8::new(PALETTE_STANDARD);
-
-/// The interpreter version byte for header `$1F`, or `NO_VERSION` for "unset"
-/// — a `u16` so the sentinel can sit outside the byte's own range.
-const NO_VERSION: u16 = 0x100;
-static INTERPRETER_VERSION: core::sync::atomic::AtomicU16 =
-    core::sync::atomic::AtomicU16::new(NO_VERSION);
-
-/// Override the interpreter version written into header `$1F`, process-wide.
-///
-/// Global for the same reason [`set_palette`] is, and it is the same KIND of
-/// fact: the byte is a property of the machine lanthorn is pretending to be, and
-/// there is exactly one of those per run. It cannot be a session parameter
-/// because `GameSession`'s constructor runs the story to its first input, so the
-/// header has to be right before construction returns — and threading a
-/// twelfth positional argument through an eleven-argument constructor and its
-/// fifteen call sites to carry a debugging knob is a worse trade than this.
-///
-/// `None` restores the default, which is what every ordinary run uses.
-///
-/// # Why it is worth overriding (SQ-0885)
-///
-/// The default `b'A'` has no provenance — see [`init_header_caps`] — and the
-/// byte is one a story can PRINT. *Shogun* release 295 renders it as a decimal,
-/// so `'A'` (65) makes its Amiga banner read "version 6.65" where the original
-/// read "version 6.8". Whether a story also BRANCHES on it is unknown and is
-/// exactly what this exists to find out: set it, run the game, watch.
-pub fn set_interpreter_version(v: Option<u8>) {
-    let raw = v.map_or(NO_VERSION, u16::from);
-    INTERPRETER_VERSION.store(raw, core::sync::atomic::Ordering::Relaxed);
-}
-
-/// The interpreter version override, or `None` when no one has set one.
-pub fn interpreter_version() -> Option<u8> {
-    match INTERPRETER_VERSION.load(core::sync::atomic::Ordering::Relaxed) {
-        NO_VERSION => None,
-        v => Some(v as u8),
-    }
-}
-
-/// Select the palette standard colour numbers resolve through, process-wide.
-pub fn set_palette(p: Palette) {
-    let v = match p {
-        Palette::Standard => PALETTE_STANDARD,
-        Palette::Amiga => PALETTE_AMIGA,
-        Palette::IbmXzip => PALETTE_IBM_XZIP,
-        Palette::IbmYzip => PALETTE_IBM_YZIP,
-        Palette::IbmCga => PALETTE_IBM_CGA,
-    };
-    ACTIVE_PALETTE.store(v, core::sync::atomic::Ordering::Relaxed);
-}
-
-/// The palette standard colour numbers currently resolve through.
-pub fn palette() -> Palette {
-    match ACTIVE_PALETTE.load(core::sync::atomic::Ordering::Relaxed) {
-        PALETTE_AMIGA => Palette::Amiga,
-        PALETTE_IBM_XZIP => Palette::IbmXzip,
-        PALETTE_IBM_YZIP => Palette::IbmYzip,
-        PALETTE_IBM_CGA => Palette::IbmCga,
-        _ => Palette::Standard,
-    }
 }
 
 /// Interpreter default background colour written to header $2C when the host
@@ -2354,7 +2278,7 @@ pub(crate) fn clamp_default_colour(c: u8, fallback: u8, version: u8) -> u8 {
 /// colours into bytes $2c and $2d of the header." (§8.3.2 asks a non-colour
 /// interpreter for 2 and 9 "either way round", which the 2/9 default satisfies.)
 /// Values outside 2..=9 fall back to [`DEFAULT_BG_COLOUR`]/[`DEFAULT_FG_COLOUR`].
-pub fn write_default_colours(mem: &mut Memory, bg: u8, fg: u8) {
+pub fn write_default_colours(mem: &mut Memory, bg: u8, fg: u8, palette: Palette) {
     if mem.version() < 5 {
         return;
     }
@@ -2362,32 +2286,26 @@ pub fn write_default_colours(mem: &mut Memory, bg: u8, fg: u8) {
     let fg = clamp_default_colour(fg, DEFAULT_FG_COLOUR, mem.version());
     mem.write_byte(0x2C, bg);
     mem.write_byte(0x2D, fg);
-    write_header_ext_colours(mem, bg, fg);
+    write_header_ext_colours(mem, bg, fg, palette);
 }
 
-/// The true-colour equivalent of standard colour number `n` (2..=12), as a
-/// 15-bit RGB value. `None` for the sentinels (0 current, 1 default, -1
-/// pixel-under-cursor), the reserved 13/14 and 15 (transparent, which §8.3.7
+/// The true-colour equivalent of standard colour number `n` (2..=12) IN palette
+/// `p`, as a 15-bit RGB value. `None` for the sentinels (0 current, 1 default,
+/// -1 pixel-under-cursor), the reserved 13/14 and 15 (transparent, which §8.3.7
 /// gives the special value -4 rather than an RGB triple).
 ///
-/// Resolved through the [`palette`] the host has selected: [`Palette::Standard`]
-/// (the default) is the spec table below verbatim; [`Palette::Amiga`] is the
-/// palette Infocom's own Amiga interpreter loaded, which §8.3.1.1 explicitly
+/// [`Palette::Standard`] is the spec table below verbatim; [`Palette::Amiga`] is
+/// the palette Infocom's own Amiga interpreter loaded, which §8.3.1.1 explicitly
 /// permits an interpreter to substitute.
-pub fn standard_true_colour(n: u8) -> Option<u16> {
-    true_colour_in(palette(), n)
-}
-
-/// [`standard_true_colour`] for a NAMED palette, resolving nothing through the
-/// process-wide one.
 ///
-/// A run presents as one machine, so the global is the right shape for the VM. A
+/// **The palette is asked for by value and never read out of shared state.** A
 /// *table* presents as all of them at once — [`crate::machines`] prints every
-/// machine's page and ink side by side — and reaching that through
-/// [`set_palette`] would make printing a table a write to state every other
-/// thread in the process can see. Under `cargo test`, where a whole crate's cases
-/// share one process, that is the SQ-0904 race exactly: a borrow-and-hand-back is
-/// atomic to nobody. Asking by value cannot race with anything.
+/// machine's page and ink side by side — and until SQ-1393 the VM's own resolver
+/// reached a process-wide atomic instead, so printing a table meant writing state
+/// every other thread in the process could see. Under `cargo test`, where a whole
+/// crate's cases share one process, that is the SQ-0904 race exactly: a
+/// borrow-and-hand-back is atomic to nobody. Asking by value cannot race with
+/// anything, and the machine's own answer is [`crate::cpu::Machine::palette`].
 pub fn true_colour_in(p: Palette, n: u8) -> Option<u16> {
     match p {
         Palette::Standard => zmsd_true_colour(n),
@@ -2649,7 +2567,7 @@ pub fn zmsd_true_colour(n: u8) -> Option<u16> {
 /// the interpreter needs to write a word which is beyond the length of the
 /// extension table, or the extension table doesn't exist at all, then the result
 /// is that nothing happens."
-fn write_header_ext_colours(mem: &mut Memory, bg: u8, fg: u8) {
+fn write_header_ext_colours(mem: &mut Memory, bg: u8, fg: u8, palette: Palette) {
     let ext = mem.read_word(0x36) as u32;
     if ext == 0 {
         return;
@@ -2659,11 +2577,11 @@ fn write_header_ext_colours(mem: &mut Memory, bg: u8, fg: u8) {
         mem.write_word(ext + 8, 0); // word 4: Flags 3 — no features provided
     }
     if count >= 5 {
-        let true_fg = standard_true_colour(fg).unwrap_or(0x7FFF);
+        let true_fg = true_colour_in(palette, fg).unwrap_or(0x7FFF);
         mem.write_word(ext + 10, true_fg); // word 5: true default foreground
     }
     if count >= 6 {
-        let true_bg = standard_true_colour(bg).unwrap_or(0x0000);
+        let true_bg = true_colour_in(palette, bg).unwrap_or(0x0000);
         mem.write_word(ext + 12, true_bg); // word 6: true default background
     }
 }
@@ -2787,7 +2705,10 @@ mod v6_cell {
     /// [`ScreenState`], which the host archives: the cell is derived from the
     /// profile, so a restore must re-derive it rather than replay a stored copy
     /// (CLAUDE.md, "persist the recipe, not the result"). And it is emphatically not
-    /// process-global — see `zvm::screen::set_palette` for what that costs.
+    /// process-global. The palette was, for two years, on the same "one machine per
+    /// run" premise this type rejected; SQ-1393 moved it here beside the cell, so
+    /// [`crate::cpu::Machine::palette`] is now the second fact of this shape rather
+    /// than the counter-example.
     #[derive(Debug, Clone, Copy, PartialEq, Eq)]
     pub struct V6Cell {
         w: u16,
@@ -3506,35 +3427,34 @@ mod tests {
 
     // ── SQ-0956: the two-colour card ─────────────────────────────────────────
     //
-    // These take no lock and need none: `set_palette` is process-global and the
-    // crate's own tests run in one binary, but nothing else in this module reads
-    // the palette, and nextest gives each case its own process. The app-side
-    // suites are the ones that must hold an `app::V6PaletteGuard` (SQ-0905/0958/0987).
+    // Every case here names its table by VALUE (SQ-1393). There is no process-wide
+    // palette left to set, so there is nothing to hold, nothing to restore, and no
+    // way for one case to decide what another resolves.
 
     /// The card's table is XZIP's — one entry from YZIP's, and that entry is the
     /// one the capture measures.
     #[test]
     fn the_cga_card_resolves_white_to_the_cards_light_grey() {
-        let held = palette();
-        set_palette(Palette::IbmCga);
-        assert_eq!(standard_true_colour(9), Some(0x56B5), "white 9 is EGA entry 7, #AAAAAA");
-        assert_eq!(standard_true_colour(2), Some(0x0000), "and black 2 is black");
-        set_palette(Palette::IbmYzip);
-        assert_eq!(standard_true_colour(9), Some(0x7FFF), "…where the same machine's EGA is #FFFFFF");
-        set_palette(held);
+        assert_eq!(true_colour_in(Palette::IbmCga, 9), Some(0x56B5), "white 9 is EGA entry 7, #AAAAAA");
+        assert_eq!(true_colour_in(Palette::IbmCga, 2), Some(0x0000), "and black 2 is black");
+        assert_eq!(
+            true_colour_in(Palette::IbmYzip, 9),
+            Some(0x7FFF),
+            "…where the same machine's EGA is #FFFFFF",
+        );
     }
 
-    /// Only the card is a two-state display, and the round trip through
-    /// [`set_palette`] survives the new discriminant.
+    /// Only the card is a two-state display, and a `Machine` carries whichever
+    /// table it was told (SQ-1393).
     #[test]
     fn only_the_cga_card_is_a_two_state_display() {
-        let held = palette();
+        let mut m = crate::cpu::exec::Machine::new(Memory::new(sample_story(5)).expect("story"));
+        assert_eq!(m.palette(), Palette::Standard, "a fresh machine resolves through §8.3.1");
         for p in [Palette::Standard, Palette::Amiga, Palette::IbmXzip, Palette::IbmYzip, Palette::IbmCga] {
-            set_palette(p);
-            assert_eq!(palette(), p, "{p:?} survives the round trip");
+            m.set_palette(p);
+            assert_eq!(m.palette(), p, "{p:?} survives the round trip");
             assert_eq!(p.two_colour_card(), p == Palette::IbmCga, "{p:?}");
         }
-        set_palette(held);
         assert_eq!(CGA_CARD_PAIR, (9, 2), "white ink over a black page");
     }
 
@@ -3608,38 +3528,35 @@ mod tests {
     /// and the pair its own `color` menu offers gives that page back.
     #[test]
     fn a_two_colour_card_takes_one_bit_from_a_pair() {
-        let held = palette();
-        set_palette(Palette::IbmCga);
+        let card = Palette::IbmCga;
         let std = |n: u8| Some(ZColour::Standard(n));
         assert_eq!(
-            two_colour_card_request(std(2), std(9)),
+            two_colour_card_request(card, std(2), std(9)),
             (std(9), std(2)),
             "black ink on a white page is the card's own polarity: light ink, black page",
         );
         assert_eq!(
-            two_colour_card_request(std(9), std(2)),
+            two_colour_card_request(card, std(9), std(2)),
             (std(2), std(9)),
             "…and the swap the game's `color` menu offers is the other side of the bit",
         );
         // A channel that names no colour cannot carry a bit.
-        assert_eq!(two_colour_card_request(std(2), None), (std(2), None), "one channel kept");
+        assert_eq!(two_colour_card_request(card, std(2), None), (std(2), None), "one channel kept");
         assert_eq!(
-            two_colour_card_request(std(2), Some(ZColour::Default)),
+            two_colour_card_request(card, std(2), Some(ZColour::Default)),
             (std(2), Some(ZColour::Default)),
             "the -1 carve-out names no colour either",
         );
-        assert_eq!(two_colour_card_request(std(9), std(9)), (std(9), std(9)), "one colour twice");
+        assert_eq!(two_colour_card_request(card, std(9), std(9)), (std(9), std(9)), "one colour twice");
 
         // …and on every other display the request is what it says it is.
         for p in [Palette::Standard, Palette::Amiga, Palette::IbmXzip, Palette::IbmYzip] {
-            set_palette(p);
             assert_eq!(
-                two_colour_card_request(std(2), std(9)),
+                two_colour_card_request(p, std(2), std(9)),
                 (std(2), std(9)),
                 "{p:?}: a screen with colours takes the pair as named",
             );
         }
-        set_palette(held);
     }
     use super::*;
     use crate::header::tests_support::sample_story;
@@ -3799,7 +3716,7 @@ mod tests {
         // Set "status line not available" bit before init.
         let f1 = mem.read_byte(0x01) | (1 << 4);
         mem.write_byte(0x01, f1);
-        init_header_caps(&mut mem, false, false, None);
+        init_header_caps(&mut mem, false, false, None, None, Palette::Standard);
         // Bit 4 should be cleared.
         assert_eq!(mem.read_byte(0x01) & (1 << 4), 0, "bit 4 (no status line) should be clear");
         // Screen-splitting available (bit 5) should be set.
@@ -3809,7 +3726,7 @@ mod tests {
     #[test]
     fn header_caps_v5_clears_unsupported_bits() {
         let mut mem = Memory::new(sample_story(5)).unwrap();
-        init_header_caps(&mut mem, false, false, None);
+        init_header_caps(&mut mem, false, false, None, None, Palette::Standard);
         let f1 = mem.read_byte(0x01);
         // Colour (bit 0) should be clear.
         assert_eq!(f1 & (1 << 0), 0, "colour bit should be clear");
@@ -3827,7 +3744,7 @@ mod tests {
         // Regression: without seeded screen dims the header keeps 0, and v4 games
         // such as Bureaucracy abort with "[Screen too small.]" on the first turn.
         let mut mem = Memory::new(sample_story(4)).unwrap();
-        init_header_caps(&mut mem, false, false, None);
+        init_header_caps(&mut mem, false, false, None, None, Palette::Standard);
         assert_eq!(mem.read_byte(0x20), DEFAULT_SCREEN_ROWS, "screen height (lines) seeded");
         assert_eq!(mem.read_byte(0x21), DEFAULT_SCREEN_COLS, "screen width (chars) seeded");
         assert_ne!(mem.read_byte(0x20), 0, "height must not be zero");
@@ -3837,7 +3754,7 @@ mod tests {
     #[test]
     fn header_caps_v5_seeds_unit_words_and_font_size() {
         let mut mem = Memory::new(sample_story(5)).unwrap();
-        init_header_caps(&mut mem, false, false, None);
+        init_header_caps(&mut mem, false, false, None, None, Palette::Standard);
         assert_eq!(mem.read_byte(0x20), DEFAULT_SCREEN_ROWS);
         assert_eq!(mem.read_byte(0x21), DEFAULT_SCREEN_COLS);
         assert_eq!(mem.read_word(0x22), DEFAULT_SCREEN_COLS as u16, "width in units");
@@ -3920,7 +3837,7 @@ mod tests {
         let mut mem = Memory::new(sample_story(3)).unwrap();
         let f1 = mem.read_byte(0x01) | (1 << 6); // pre-set variable-pitch default
         mem.write_byte(0x01, f1);
-        init_header_caps(&mut mem, false, false, None);
+        init_header_caps(&mut mem, false, false, None, None, Palette::Standard);
         assert_eq!(mem.read_byte(0x01) & (1 << 6), 0, "bit 6 (variable-pitch) should be clear");
     }
 
@@ -3929,7 +3846,7 @@ mod tests {
         // ZMSD 1.1 is the only published standard revision; advertise major=1,
         // minor=1 (bytes 0x32/0x33), not a non-existent "1.2".
         let mut mem = Memory::new(sample_story(5)).unwrap();
-        init_header_caps(&mut mem, false, false, None);
+        init_header_caps(&mut mem, false, false, None, None, Palette::Standard);
         assert_eq!(mem.read_byte(0x32), 1, "standard revision major = 1");
         assert_eq!(mem.read_byte(0x33), 1, "standard revision minor = 1");
     }
@@ -3940,7 +3857,7 @@ mod tests {
         // (save_undo/restore_undo, EXT:0x09/0x0A) is implemented, so the header
         // must advertise them or games skip the features at startup.
         let mut mem = Memory::new(sample_story(5)).unwrap();
-        init_header_caps(&mut mem, false, false, None);
+        init_header_caps(&mut mem, false, false, None, None, Palette::Standard);
         let f1 = mem.read_byte(0x01);
         assert_ne!(f1 & (1 << 2), 0, "Flags1 bit 2 (bold available) should be set");
         assert_ne!(f1 & (1 << 3), 0, "Flags1 bit 3 (italic available) should be set");
@@ -3959,7 +3876,7 @@ mod tests {
             let mut mem = Memory::new(sample_story(v)).unwrap();
             let f2 = mem.read_word(0x10) | (1 << 3);
             mem.write_word(0x10, f2);
-            init_header_caps(&mut mem, false, false, None);
+            init_header_caps(&mut mem, false, false, None, None, Palette::Standard);
             assert_ne!(
                 mem.read_word(0x10) & (1 << 3),
                 0,
@@ -3976,7 +3893,7 @@ mod tests {
         // must be advertised — they used to be cleared unconditionally.
         for v in [4u8, 5, 6, 7, 8] {
             let mut mem = Memory::new(sample_story(v)).unwrap();
-            init_header_caps(&mut mem, false, false, None);
+            init_header_caps(&mut mem, false, false, None, None, Palette::Standard);
             let f1 = mem.read_byte(0x01);
             assert_ne!(f1 & (1 << 7), 0, "v{v}: Flags1 bit 7 (timed input) must be set");
             if v == 6 {
@@ -3996,7 +3913,7 @@ mod tests {
         for v in [5u8, 6] {
             let mut mem = Memory::new(sample_story(v)).unwrap();
             mem.write_word(0x10, mem.read_word(0x10) | (1 << 5) | (1 << 8));
-            init_header_caps(&mut mem, false, false, None);
+            init_header_caps(&mut mem, false, false, None, None, Palette::Standard);
             let f2 = mem.read_word(0x10);
             assert_ne!(f2 & (1 << 5), 0, "v{v}: Flags2 bit 5 (mouse wanted) must be preserved");
             assert_eq!(f2 & (1 << 8), 0, "v{v}: Flags2 bit 8 (menus wanted) must be cleared");
@@ -4010,7 +3927,7 @@ mod tests {
         // clear (bit 4, UNDO, is the interpreter's own advertisement and is set).
         let mut mem = Memory::new(sample_story(5)).unwrap();
         mem.write_word(0x10, 0);
-        init_header_caps(&mut mem, false, false, None);
+        init_header_caps(&mut mem, false, false, None, None, Palette::Standard);
         let f2 = mem.read_word(0x10);
         assert_eq!(f2 & (1 << 3), 0, "bit 3 not requested, not invented");
         assert_eq!(f2 & (1 << 5), 0, "bit 5 not requested, not invented");
@@ -4023,10 +3940,10 @@ mod tests {
         // foreground ($2D). §8.3.1 only names 2..=9 as real colours, so anything
         // else falls back to black-on-white.
         let mut mem = Memory::new(sample_story(5)).unwrap();
-        write_default_colours(&mut mem, 6, 5);
+        write_default_colours(&mut mem, 6, 5, Palette::Standard);
         assert_eq!((mem.read_byte(0x2C), mem.read_byte(0x2D)), (6, 5), "valid pair lands as given");
         for bad in [0u8, 1, 10, 12, 15, 200] {
-            write_default_colours(&mut mem, bad, bad);
+            write_default_colours(&mut mem, bad, bad, Palette::Standard);
             assert_eq!(
                 (mem.read_byte(0x2C), mem.read_byte(0x2D)),
                 (DEFAULT_BG_COLOUR, DEFAULT_FG_COLOUR),
@@ -4037,7 +3954,7 @@ mod tests {
         let mut mem3 = Memory::new(sample_story(3)).unwrap();
         mem3.write_byte(0x2C, 0x11);
         mem3.write_byte(0x2D, 0x22);
-        write_default_colours(&mut mem3, 6, 5);
+        write_default_colours(&mut mem3, 6, 5, Palette::Standard);
         assert_eq!((mem3.read_byte(0x2C), mem3.read_byte(0x2D)), (0x11, 0x22), "v3 untouched");
     }
 
@@ -4051,7 +3968,7 @@ mod tests {
         mem.write_word(0x36, ext as u16);
         mem.write_word(ext, 6); // 6 further words
         mem.write_word(ext + 8, 0x0001); // game asked for transparency
-        write_default_colours(&mut mem, 6, 5); // bg = blue, fg = yellow
+        write_default_colours(&mut mem, 6, 5, Palette::Standard); // bg = blue, fg = yellow
 
         assert_eq!(mem.read_word(ext + 8), 0, "Flags 3 cleared — we provide none of its features");
         assert_eq!(
@@ -4075,7 +3992,7 @@ mod tests {
         mem.write_word(ext, 4); // only 4 further words: Flags 3 is the last one
         mem.write_word(ext + 10, 0xDEAD);
         mem.write_word(ext + 12, 0xBEEF);
-        write_default_colours(&mut mem, 6, 5);
+        write_default_colours(&mut mem, 6, 5, Palette::Standard);
         assert_eq!(mem.read_word(ext + 8), 0, "word 4 is in range and gets cleared");
         assert_eq!(mem.read_word(ext + 10), 0xDEAD, "word 5 out of range → untouched");
         assert_eq!(mem.read_word(ext + 12), 0xBEEF, "word 6 out of range → untouched");
@@ -4083,18 +4000,18 @@ mod tests {
         // No table at all → nothing happens (and no panic).
         let mut bare = Memory::new(sample_story(5)).unwrap();
         bare.write_word(0x36, 0);
-        write_default_colours(&mut bare, 6, 5);
+        write_default_colours(&mut bare, 6, 5, Palette::Standard);
         assert_eq!(bare.read_byte(0x2C), 6, "the $2C/$2D half still lands");
     }
 
     #[test]
     fn sound_bit_tracks_sound_available_flag_v5() {
         let mut mem = Memory::new(sample_story(5)).unwrap();
-        init_header_caps(&mut mem, false, false, None);
+        init_header_caps(&mut mem, false, false, None, None, Palette::Standard);
         assert_eq!(mem.read_byte(0x01) & (1 << 5), 0, "Flags1 sound bit clear when sound_available=false");
         assert_eq!(mem.read_word(0x10) & (1 << 7), 0, "Flags2 sound bit clear when sound_available=false");
 
-        init_header_caps(&mut mem, false, true, None);
+        init_header_caps(&mut mem, false, true, None, None, Palette::Standard);
         assert_ne!(mem.read_byte(0x01) & (1 << 5), 0, "Flags1 sound bit set when sound_available=true");
         assert_ne!(mem.read_word(0x10) & (1 << 7), 0, "Flags2 sound bit set when sound_available=true");
 
@@ -4106,14 +4023,14 @@ mod tests {
     #[test]
     fn sound_bit_v3_flags1_untouched_but_flags2_tracks() {
         let mut mem = Memory::new(sample_story(3)).unwrap();
-        init_header_caps(&mut mem, false, true, None);
+        init_header_caps(&mut mem, false, true, None, None, Palette::Standard);
         // v3 Flags1 bit 5 means "screen-splitting available", NOT sound — must
         // stay set regardless of sound_available (it's set unconditionally by
         // init_header_caps for v3, see header_caps_v3_clears_no_status_line).
         assert_ne!(mem.read_byte(0x01) & (1 << 5), 0, "v3 Flags1 bit5 (screen-split) stays set");
         assert_ne!(mem.read_word(0x10) & (1 << 7), 0, "v3 Flags2 sound bit set when sound_available=true");
 
-        init_header_caps(&mut mem, false, false, None);
+        init_header_caps(&mut mem, false, false, None, None, Palette::Standard);
         assert_ne!(mem.read_byte(0x01) & (1 << 5), 0, "v3 Flags1 bit5 (screen-split) still set");
         assert_eq!(mem.read_word(0x10) & (1 << 7), 0, "v3 Flags2 sound bit clear when sound_available=false");
     }
@@ -4121,9 +4038,9 @@ mod tests {
     #[test]
     fn colour_bit_tracks_honor_flag() {
         let mut mem = Memory::new(sample_story(5)).unwrap();
-        init_header_caps(&mut mem, false, false, None);
+        init_header_caps(&mut mem, false, false, None, None, Palette::Standard);
         assert_eq!(mem.read_byte(0x01) & 1, 0, "colour bit clear when honor=false");
-        init_header_caps(&mut mem, true, false, None);
+        init_header_caps(&mut mem, true, false, None, None, Palette::Standard);
         assert_eq!(mem.read_byte(0x01) & 1, 1, "colour bit set when honor=true");
         advertise_colour(&mut mem, false);
         assert_eq!(mem.read_byte(0x01) & 1, 0, "advertise_colour clears it again");
@@ -4139,7 +4056,7 @@ mod tests {
             let mut mem = Memory::new(sample_story(v)).unwrap();
             mem.write_byte(0x2C, 0); // simulate Infocom's 0/0
             mem.write_byte(0x2D, 0);
-            init_header_caps(&mut mem, true, false, None);
+            init_header_caps(&mut mem, true, false, None, None, Palette::Standard);
             assert_eq!(mem.read_byte(0x2C), 2, "v{v} default background = black(2)");
             assert_eq!(mem.read_byte(0x2D), 9, "v{v} default foreground = white(9)");
         }
@@ -4151,7 +4068,7 @@ mod tests {
         let mut mem = Memory::new(sample_story(3)).unwrap();
         mem.write_byte(0x2C, 0x11);
         mem.write_byte(0x2D, 0x22);
-        init_header_caps(&mut mem, true, false, None);
+        init_header_caps(&mut mem, true, false, None, None, Palette::Standard);
         assert_eq!(mem.read_byte(0x2C), 0x11, "v3 $2C untouched");
         assert_eq!(mem.read_byte(0x2D), 0x22, "v3 $2D untouched");
     }
@@ -4163,12 +4080,12 @@ mod tests {
         let f2 = mem.read_word(0x10) | (1 << 6);
         mem.write_word(0x10, f2);
         // Honour OFF: the request bit is cleared (colour not granted).
-        init_header_caps(&mut mem, false, false, None);
+        init_header_caps(&mut mem, false, false, None, None, Palette::Standard);
         assert_eq!(mem.read_word(0x10) & (1 << 6), 0, "bit 6 cleared when colour off");
         // Honour ON: the game's request bit is left untouched.
         let f2 = mem.read_word(0x10) | (1 << 6);
         mem.write_word(0x10, f2);
-        init_header_caps(&mut mem, true, false, None);
+        init_header_caps(&mut mem, true, false, None, None, Palette::Standard);
         assert_eq!(mem.read_word(0x10) & (1 << 6), 1 << 6, "bit 6 preserved when colour on");
     }
 
@@ -4188,37 +4105,40 @@ mod tests {
     /// makes its Amiga banner read "version 6.65" against the real machine's
     /// "6.8". This is the knob that lets that be tried.
     ///
-    /// The override is process-wide, so this restores it before returning; under
-    /// `cargo test` (one process for the binary) a leak would reach every later
-    /// case, and under nextest (a process per test) it would not — a difference
-    /// that must not decide whether the suite passes.
+    /// The override rides on the `Machine` since SQ-1393, so there is nothing
+    /// process-wide left to save and restore around this case: each call below
+    /// states its own byte and nothing outside can observe it.
     #[test]
     fn the_interpreter_version_byte_is_overridable() {
-        let restore = interpreter_version();
         let byte_after = |v: Option<u8>| {
-            set_interpreter_version(v);
             let mut mem = Memory::new(sample_story(5)).unwrap();
-            init_header_caps(&mut mem, true, false, None);
+            init_header_caps(&mut mem, true, false, None, v, Palette::Standard);
             mem.read_byte(0x1F)
         };
         assert_eq!(byte_after(None), b'A', "the default, unchanged");
         assert_eq!(byte_after(Some(8)), 8, "the Amiga's own, per Shogun's banner");
         assert_eq!(byte_after(Some(0)), 0, "zero is a value, not 'unset'");
-        assert_eq!(byte_after(None), b'A', "…and None restores the default");
-        set_interpreter_version(restore);
+        // …and the same fact through the door a host actually uses.
+        let mut m = crate::cpu::exec::Machine::new(Memory::new(sample_story(5)).unwrap());
+        m.set_interpreter_version(Some(8));
+        m.init_caps();
+        assert_eq!(m.mem.read_byte(0x1F), 8, "latched to init_caps, like $1E");
+        m.set_interpreter_version(None);
+        m.init_caps();
+        assert_eq!(m.mem.read_byte(0x1F), b'A', "…and None restores the default");
     }
 
     #[test]
     fn init_header_caps_default_interpreter_is_dec20_for_v5() {
         let mut mem = Memory::new(sample_story(5)).unwrap();
-        init_header_caps(&mut mem, false, false, None);
+        init_header_caps(&mut mem, false, false, None, None, Palette::Standard);
         assert_eq!(mem.read_byte(0x1E), 1, "v5 default interpreter = DEC-20 (1)");
     }
 
     #[test]
     fn init_header_caps_interpreter_override_wins() {
         let mut mem = Memory::new(sample_story(5)).unwrap();
-        init_header_caps(&mut mem, false, false, Some(6));
+        init_header_caps(&mut mem, false, false, Some(6), None, Palette::Standard);
         assert_eq!(mem.read_byte(0x1E), 6, "override forces IBM PC (6)");
     }
 
@@ -4455,10 +4375,10 @@ mod tests {
         // ZMSD §8.3.1 fixes the true-colour value of each grey; expanding those
         // 15-bit values is what `grey_rgb` must return (it used to return an
         // invented #B0/#80/#50 ramp).
-        assert_eq!(grey_rgb(10), rgb15_to_888(0x5AD6), "10 = light grey ($5AD6)");
-        assert_eq!(grey_rgb(11), rgb15_to_888(0x4631), "11 = medium grey ($4631)");
-        assert_eq!(grey_rgb(12), rgb15_to_888(0x2D6B), "12 = dark grey ($2D6B)");
-        assert_eq!(grey_rgb(11), (0x8C, 0x8C, 0x8C));
+        assert_eq!(grey_rgb(Palette::Standard, 10), rgb15_to_888(0x5AD6), "10 = light grey ($5AD6)");
+        assert_eq!(grey_rgb(Palette::Standard, 11), rgb15_to_888(0x4631), "11 = medium grey ($4631)");
+        assert_eq!(grey_rgb(Palette::Standard, 12), rgb15_to_888(0x2D6B), "12 = dark grey ($2D6B)");
+        assert_eq!(grey_rgb(Palette::Standard, 11), (0x8C, 0x8C, 0x8C));
     }
 
     #[test]
@@ -4665,7 +4585,7 @@ mod tests {
         // What `InterpreterProfile::Amiga` publishes: `DEF_BACK 12` (dark grey)
         // and `DEF_FORE 9` (white), read out of the release floppies' own Amiga
         // interpreters (SQ-0822).
-        write_default_colours(&mut mem.mem, 12, 9);
+        write_default_colours(&mut mem.mem, 12, 9, Palette::Standard);
         assert_eq!(
             amiga_screen_pair(&mem),
             Some((ZColour::Standard(9), ZColour::Standard(12))),
@@ -4674,17 +4594,17 @@ mod tests {
         // Every machine that is not an Amiga has no such thing — each window
         // carries its own pair and the host theme owns everything else.
         let mut ibm = header_for(6, 6, true);
-        write_default_colours(&mut ibm.mem, 12, 9);
+        write_default_colours(&mut ibm.mem, 12, 9, Palette::Standard);
         assert_eq!(amiga_screen_pair(&ibm), None, "interpreter 6 publishes no screen pair");
         // …and neither does a colourless interpreter, Amiga or not.
         let mut off = header_for(6, 4, false);
-        write_default_colours(&mut off.mem, 12, 9);
+        write_default_colours(&mut off.mem, 12, 9, Palette::Standard);
         assert_eq!(amiga_screen_pair(&off), None, "colours withdrawn: nothing to paint with");
         // …and neither does a launch that declines to present its machine at all
         // (SQ-1154): the fourth term of `machine_rule`, and the only one a story
         // cannot reach. This is `--colour theme|terminal` on Amiga media.
         let mut unlicensed = header_for(6, 4, true);
-        write_default_colours(&mut unlicensed.mem, 12, 9);
+        write_default_colours(&mut unlicensed.mem, 12, 9, Palette::Standard);
         unlicensed.machine_colours_licensed = false;
         assert_eq!(
             amiga_screen_pair(&unlicensed),
@@ -4939,7 +4859,7 @@ mod tests {
     /// `&mut V6Windows`. The only `.v6.as_mut(` in the crate's source is the
     /// line inside `v6_mut` itself — any other spelling is a mutation path the
     /// generation counter cannot see, written by someone with no reason to know
-    /// the counter exists (the `palette_lock_discipline` shape, SQ-0905).
+    /// the counter exists (the `scratch_path_discipline` shape, SQ-1163).
     ///
     /// Deliberately NOT scanned: `.v6 = Some(…)` installs. Those are boot-shaped
     /// — a fresh table on a fresh or local `ScreenState` (boot, fixtures) — and

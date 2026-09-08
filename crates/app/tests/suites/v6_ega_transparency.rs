@@ -69,6 +69,8 @@ fn fmvpoker_ega_dealt() -> Option<GameSession> {
         None,
         true,
         app::native_font::FaceSet::none(),
+        zvm::screen::Palette::Standard,
+        None,
     );
     // The archive's own 640x200 picture space; with an art scale of (1, 2) that is
     // the same 640x400 unit screen every rendition lands on (SQ-0838).
@@ -103,24 +105,8 @@ fn story_canvas(s: &GameSession) -> image::RgbaImage {
 const CARD_X: [u32; 5] = [41, 154, 267, 380, 493];
 const CARD_Y: u32 = 68;
 
-/// The palette this suite's colours resolve through, **stated rather than inherited**
-/// (SQ-0958).
-///
-/// Every story these cases drive is a bare file that names no machine — or, for the
-/// disk images, a machine whose table IS §8.3.1's — so the colour numbers behind
-/// every pixel asserted below resolve through the standard table. Until now nothing
-/// here said so, and the suite believed whatever the last suite in its group binary
-/// left behind. See [`app::v6_palette`], which is why this both names a palette and
-/// takes the shared lock; hold the guard for the whole case, because the two frames
-/// a repaint case compares are only comparable if the palette did not move between
-/// them.
-fn standard_palette() -> app::V6PaletteGuard {
-    app::v6_palette(zvm::screen::Palette::Standard)
-}
-
 #[test]
 fn a_non_zero_transparent_index_reaches_the_canvas() {
-    let _g = standard_palette();
     let Some(s) = fmvpoker_ega_dealt() else { return };
     let pics = blorb::infocom_pics::InfocomPics::parse(
         std::fs::read(fixture_path("FMVPOKER.EG1")).unwrap(),
@@ -156,7 +142,6 @@ fn a_non_zero_transparent_index_reaches_the_canvas() {
 
 #[test]
 fn the_rank_plates_are_opaque_in_the_artwork() {
-    let _g = standard_palette();
     let Some(_s) = fmvpoker_ega_dealt() else { return };
     let pics = blorb::infocom_pics::InfocomPics::parse(
         std::fs::read(fixture_path("FMVPOKER.EG1")).unwrap(),

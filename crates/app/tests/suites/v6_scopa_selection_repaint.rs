@@ -160,21 +160,6 @@ fn two_selections(s: &mut GameSession) -> Option<((u64, image::RgbaImage), (u64,
     None
 }
 
-/// The palette this suite's colours resolve through, **stated rather than inherited**
-/// (SQ-0958).
-///
-/// Every story these cases drive is a bare file that names no machine — or, for the
-/// disk images, a machine whose table IS §8.3.1's — so the colour numbers behind
-/// every pixel asserted below resolve through the standard table. Until now nothing
-/// here said so, and the suite believed whatever the last suite in its group binary
-/// left behind. See [`app::v6_palette`], which is why this both names a palette and
-/// takes the shared lock; hold the guard for the whole case, because the two frames
-/// a repaint case compares are only comparable if the palette did not move between
-/// them.
-fn standard_palette() -> app::V6PaletteGuard {
-    app::v6_palette(zvm::screen::Palette::Standard)
-}
-
 /// The whole defect in one assertion, on the real story.
 ///
 /// Two different cards selected in the same hand paint two different screens, and
@@ -190,7 +175,6 @@ fn standard_palette() -> app::V6PaletteGuard {
 /// docs for the verbatim failure.
 #[test]
 fn selecting_a_different_card_repaints_the_screen() {
-    let _g = standard_palette();
     let Some(mut s) = scopa_at_the_players_turn() else { return };
 
     let mut pair = None;
@@ -246,7 +230,6 @@ fn selecting_a_different_card_repaints_the_screen() {
 /// re-encode scopa's composite on every idle frame instead.
 #[test]
 fn an_idle_frame_still_skips_the_rebuild() {
-    let _g = standard_palette();
     let Some(s) = scopa_at_the_players_turn() else { return };
     let model = s.screen();
     let WinNode::Layered(items) = &model.root else { panic!("v6 builds a Layered root") };
@@ -266,7 +249,6 @@ fn an_idle_frame_still_skips_the_rebuild() {
 /// drops the surface — `apply_erase_fill` treats a full-screen fill as a clear).
 #[test]
 fn an_absent_ground_is_distinguished_from_a_present_one() {
-    let _g = standard_palette();
     let Some(s) = scopa_at_the_players_turn() else { return };
     let model = s.screen();
     let WinNode::Layered(items) = &model.root else { panic!("v6 builds a Layered root") };

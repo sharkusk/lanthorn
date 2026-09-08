@@ -41,10 +41,6 @@ use app::session::{GameSession, InputKind};
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
 
-fn palette_lock() -> app::V6PaletteGuard {
-    app::v6_palette_at_boot()
-}
-
 /// The user's terminal: 140×71 with nothing else docked, so a 138×68 story pane.
 const SMALL: Rect = Rect { x: 1, y: 1, width: 138, height: 68 };
 /// "Larger, then back" — the move that made the truncation worse.
@@ -66,7 +62,6 @@ fn journey(profile: InterpreterProfile) -> Option<GameSession> {
             return None;
         }
     };
-    app::v6_set_palette(profile.palette());
     let mut picts = PictSource::new(blorb::resolve_resource_blorb(&story_path).map(|(b, _)| b));
     let picture_dims = picts.all_pict_dims();
     let v6_screen_px = picts.std_window().or_else(|| profile.std_window());
@@ -82,6 +77,10 @@ fn journey(profile: InterpreterProfile) -> Option<GameSession> {
         None,
     )
     .expect("Journey (v6) should load and boot without a ZError");
+    // SQ-1393: the machine's own colour table. `new_with_trace` is the
+    // no-machine door and presents §8.3.1's own, so a harness that boots a
+    // press states the press's table here.
+    session.machine.set_palette(profile.palette());
     session.set_pict_source(Some(picts));
     session.flush_boot_pictures();
     let _ = session.take_transcript();
@@ -153,7 +152,6 @@ fn dropped(ops: &[GraphicsOp]) -> std::collections::BTreeSet<GraphicsTarget> {
 #[test]
 fn an_unchanged_menu_frame_re_uploads_no_band() {
     for honor in [true, false] {
-        let _guard = palette_lock();
         let Some(mut session) = journey(InterpreterProfile::Amiga) else {
             return;
         };
@@ -198,7 +196,6 @@ fn an_unchanged_menu_frame_re_uploads_no_band() {
 #[test]
 fn no_placement_outlives_the_frame_that_owns_it() {
     for honor in [true, false] {
-        let _guard = palette_lock();
         let Some(mut session) = journey(InterpreterProfile::Amiga) else {
             return;
         };
@@ -262,7 +259,6 @@ fn no_placement_outlives_the_frame_that_owns_it() {
 #[test]
 fn the_band_cache_holds_only_what_this_frame_placed() {
     for honor in [true, false] {
-        let _guard = palette_lock();
         let Some(mut session) = journey(InterpreterProfile::Amiga) else {
             return;
         };

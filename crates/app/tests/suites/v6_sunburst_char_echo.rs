@@ -114,26 +114,10 @@ fn started_with(strip_prompt: bool) -> Option<(GameSession, AppState)> {
     Some((s, state))
 }
 
-/// The palette this suite's colours resolve through, **stated rather than inherited**
-/// (SQ-0958).
-///
-/// Every story these cases drive is a bare file that names no machine — or, for the
-/// disk images, a machine whose table IS §8.3.1's — so the colour numbers behind
-/// every pixel asserted below resolve through the standard table. Until now nothing
-/// here said so, and the suite believed whatever the last suite in its group binary
-/// left behind. See [`app::v6_palette`], which is why this both names a palette and
-/// takes the shared lock; hold the guard for the whole case, because the two frames
-/// a repaint case compares are only comparable if the palette did not move between
-/// them.
-fn standard_palette() -> app::V6PaletteGuard {
-    app::v6_palette(zvm::screen::Palette::Standard)
-}
-
 /// The premise this whole suite rests on, and the reason the fixture is worth
 /// keeping: v6 with no graphics whatsoever.
 #[test]
 fn sunburst_is_the_only_v6_story_in_the_corpus_with_no_graphics_at_all() {
-    let _g = standard_palette();
     let Some(session) = open("sunburst.z6") else { return };
     let model = session.screen();
     let WinNode::Layered(items) = &model.root else {
@@ -154,7 +138,6 @@ fn sunburst_is_the_only_v6_story_in_the_corpus_with_no_graphics_at_all() {
 /// straight back. Without this the fix has nothing to act on.
 #[test]
 fn sunburst_runs_its_own_line_editor_over_read_char() {
-    let _g = standard_palette();
     let Some((mut session, _)) = started() else { return };
     assert_eq!(
         session.pending_input(),
@@ -186,7 +169,6 @@ fn sunburst_runs_its_own_line_editor_over_read_char() {
 /// ```
 #[test]
 fn a_typed_word_stays_on_the_line_the_player_is_typing_on() {
-    let _g = standard_palette();
     let Some((mut session, mut state)) = started() else { return };
     let before = state.transcript.len();
     let prompt_line = state.transcript.last().cloned().unwrap_or_default();
@@ -270,7 +252,6 @@ fn a_typed_word_stays_on_the_line_the_player_is_typing_on() {
 /// ```
 #[test]
 fn the_enter_that_submits_the_word_continues_the_line_too() {
-    let _g = standard_palette();
     let Some((mut session, mut state)) = started_with(false) else { return };
     for ch in b"look\r" {
         let r = session.submit_char(*ch);
@@ -323,7 +304,6 @@ fn the_enter_that_submits_the_word_continues_the_line_too() {
 /// the only variable between the two transcripts is the fold.
 #[test]
 fn a_keypress_turn_that_reprints_a_prompt_still_opens_its_own_line() {
-    let _g = standard_palette();
     let Some(mut session) = open("mysterious01.z6") else { return };
     let mut plain = AppState::default();
     let mut folded = AppState::default();

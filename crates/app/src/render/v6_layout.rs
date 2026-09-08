@@ -29,11 +29,11 @@ pub(crate) fn packed_explicit(packed: u32) -> bool {
 /// ANSI palette, which a user theme may remap arbitrarily (SQ-0506). Greys
 /// (10..=12) still go through `resolve_zcolour`/`grey_rgb`, which already carry
 /// their own fixed RGB.
-fn standard_pixel_rgb(n: u8) -> Option<Rgba<u8>> {
+fn standard_pixel_rgb(palette: zvm::screen::Palette, n: u8) -> Option<Rgba<u8>> {
     // SQ-0532/A-F5: the table itself now lives in `colors::STANDARD_COLOUR_RGB15`
     // so the terminal cell palette resolves Standard colours to the SAME §8.3.1
     // RGBs this pixel path uses (they used to disagree — e.g. white).
-    let (r, g, b) = crate::colors::standard_colour_rgb(n)?;
+    let (r, g, b) = crate::colors::standard_colour_rgb(palette, n)?;
     Some(Rgba([r, g, b, 255]))
 }
 
@@ -50,7 +50,7 @@ fn standard_pixel_rgb(n: u8) -> Option<Rgba<u8>> {
 /// This is what lets `GameSession` rasterize `erase_window` fills into a bounded
 /// surface as they arrive, instead of hoarding an unbounded list of rects to
 /// resolve later against a theme it cannot see.
-pub(crate) fn explicit_pixel_rgba(packed: u32) -> Option<Rgba<u8>> {
+pub(crate) fn explicit_pixel_rgba(palette: zvm::screen::Palette, packed: u32) -> Option<Rgba<u8>> {
     match packed >> 24 {
         3 => {
             let v = packed & 0x00FF_FFFF;
@@ -62,7 +62,7 @@ pub(crate) fn explicit_pixel_rgba(packed: u32) -> Option<Rgba<u8>> {
             // 5 bits per channel → 8, replicating the high bits (0x1F → 0xFF).
             Some(Rgba([(r << 3) | (r >> 2), (g << 3) | (g >> 2), (b << 3) | (b >> 2), 255]))
         }
-        1 => standard_pixel_rgb((packed & 0xFF) as u8),
+        1 => standard_pixel_rgb(palette, (packed & 0xFF) as u8),
         _ => None,
     }
 }
@@ -86,7 +86,7 @@ pub(crate) fn packed_to_rgba(packed: u32, fallback: Rgba<u8>, colors: &ColorSche
     // Pixel path: Standard 2..=9 resolve to their ZMSD §8.3.1 true-colour RGB,
     // bypassing the theme ANSI palette so white is real white, not VGA grey.
     if let zvm::screen::ZColour::Standard(n) = z {
-        if let Some(rgb) = standard_pixel_rgb(n) {
+        if let Some(rgb) = standard_pixel_rgb(colors.machine_palette, n) {
             return rgb;
         }
     }

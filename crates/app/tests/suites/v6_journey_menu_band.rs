@@ -88,7 +88,6 @@ fn boot(file: &str) -> Option<GameSession> {
         }
     };
     let profile = InterpreterProfile::resolve(&path, None, None, None);
-    app::v6_set_palette(profile.palette());
     let mut picts = PictSource::resolve(&path, None);
     let picture_dims = picts.all_pict_dims();
     let v6_screen_px = picts.std_window().or_else(|| profile.std_window());
@@ -104,6 +103,10 @@ fn boot(file: &str) -> Option<GameSession> {
         None,
     )
     .unwrap_or_else(|e| panic!("{file}: should boot without a ZError: {e:?}"));
+    // SQ-1393: the machine's own colour table. `new_with_trace` is the
+    // no-machine door and presents §8.3.1's own, so a harness that boots a
+    // press states the press's table here.
+    s.machine.set_palette(profile.palette());
     s.set_pict_source(Some(picts));
     s.flush_boot_pictures();
     let _ = s.take_transcript();
@@ -215,7 +218,6 @@ fn row_text(buf: &Buffer, area: Rect, y: u16) -> String {
 /// 115x61 and `11 rows` at 157x61, and release 83 with `8`/`9` for its 6.
 #[test]
 fn the_menu_band_is_its_own_height_bottom_anchored_and_the_story_takes_the_rest() {
-    let _g = app::v6_palette_at_boot();
     for (file, release) in RELEASES {
         let Some(mut session) = boot(file) else { return };
         let transcript = session.take_transcript();
@@ -293,7 +295,6 @@ fn the_menu_band_is_its_own_height_bottom_anchored_and_the_story_takes_the_rest(
 /// on the pane's last row 67`, the `└` and `┘` having been drawn on row 64.
 #[test]
 fn the_menus_last_game_row_lands_on_the_panes_last_row() {
-    let _g = app::v6_palette_at_boot();
     for (file, release) in RELEASES {
         let Some(mut session) = boot(file) else { return };
         let transcript = session.take_transcript();

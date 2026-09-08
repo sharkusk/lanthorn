@@ -88,7 +88,6 @@ fn journey_at_menu(profile: InterpreterProfile) -> Option<GameSession> {
             return None;
         }
     };
-    app::v6_set_palette(profile.palette());
     let mut picts = PictSource::new(blorb::resolve_resource_blorb(&story_path).map(|(b, _)| b));
     let picture_dims = picts.all_pict_dims();
     let v6_screen_px = picts.std_window().or_else(|| profile.std_window());
@@ -104,6 +103,10 @@ fn journey_at_menu(profile: InterpreterProfile) -> Option<GameSession> {
         None,
     )
     .expect("Journey (v6) should load and boot without a ZError");
+    // SQ-1393: the machine's own colour table. `new_with_trace` is the
+    // no-machine door and presents §8.3.1's own, so a harness that boots a
+    // press states the press's table here.
+    session.machine.set_palette(profile.palette());
     session.set_pict_source(Some(picts));
     session.flush_boot_pictures();
     let _ = session.take_transcript();
@@ -175,7 +178,6 @@ fn path_label(state: &app::state::AppState) -> String {
 /// report `path:cell — painted menu takeover routed here`.
 #[test]
 fn journey_gameplay_takes_the_hybrid_ring_under_both_profiles() {
-    let _g = app::v6_palette_at_boot();
     for profile in [InterpreterProfile::IbmPc, InterpreterProfile::Amiga] {
         let Some(session) = journey_at_menu(profile) else { return };
         let model = session.screen();
@@ -203,7 +205,6 @@ fn journey_gameplay_takes_the_hybrid_ring_under_both_profiles() {
 /// width".
 #[test]
 fn journey_amiga_border_reaches_the_pane_at_every_width() {
-    let _g = app::v6_palette_at_boot();
     let Some(session) = journey_at_menu(InterpreterProfile::Amiga) else { return };
     let model = session.screen();
     for honor in [true, false] {
@@ -297,7 +298,6 @@ fn journey_amiga_border_reaches_the_pane_at_every_width() {
 /// Praxix's spell list; "Tremor" never appeared`.
 #[test]
 fn journey_menu_click_where_drawn_reaches_the_game() {
-    let _g = app::v6_palette_at_boot();
     // Spells Praxix can cast — what the game puts on screen when it accepts the
     // click, and nothing it shows on the plain command menu.
     const SPELLS: [&str; 3] = ["Tremor", "Wind", "Elevation"];
@@ -382,7 +382,6 @@ fn journey_menu_click_where_drawn_reaches_the_game() {
 /// fails with two different `▌` columns in one panel.
 #[test]
 fn journey_amiga_menu_dividers_line_up_down_the_panel() {
-    let _g = app::v6_palette_at_boot();
     let Some(session) = journey_at_menu(InterpreterProfile::Amiga) else { return };
     let model = session.screen();
     for honor in [true, false] {
@@ -476,7 +475,6 @@ fn journey_amiga_menu_dividers_line_up_down_the_panel() {
 /// Amiga case fails with `0 flank dividers`.
 #[test]
 fn journey_frame_sides_reach_the_menu_under_both_profiles() {
-    let _g = app::v6_palette_at_boot();
     for profile in [InterpreterProfile::IbmPc, InterpreterProfile::Amiga] {
         let Some(session) = journey_at_menu(profile) else { return };
         let model = session.screen();
@@ -648,7 +646,6 @@ const SIDE_PANES: [Quad; 5] =
 /// ring's letterbox scale is 2.03x … (ext (66, 3, 2, 46), crop (259, 152, 1, 1))`.
 #[test]
 fn journey_flank_border_is_drawn_at_the_letterbox_scale() {
-    let _g = app::v6_palette_at_boot();
     for profile in [InterpreterProfile::Amiga, InterpreterProfile::IbmPc] {
         let Some(mut session) = journey_at_menu(profile) else { return };
         let transcript = session.take_transcript();
@@ -716,7 +713,6 @@ fn journey_flank_border_is_drawn_at_the_letterbox_scale() {
 /// (Rgb(220, 220, 220)) at row 3`.
 #[test]
 fn journey_amiga_flank_border_is_a_stroke_not_a_filled_block() {
-    let _g = app::v6_palette_at_boot();
     // A cell wholly covered by bright ink: `fg == bg` means the halfblock renderer found
     // both halves the same colour, i.e. the cell is filled edge to edge.
     let filled = |c: &ratatui::buffer::Cell| -> Option<ratatui::style::Color> {
@@ -786,7 +782,6 @@ fn journey_amiga_flank_border_is_a_stroke_not_a_filled_block() {
 /// on its own cannot see.
 #[test]
 fn journey_menu_header_labels_are_whole_at_the_users_pane() {
-    let _g = app::v6_palette_at_boot();
     for profile in [InterpreterProfile::Amiga, InterpreterProfile::IbmPc] {
         let Some(mut session) = journey_at_menu(profile) else { return };
         let transcript = session.take_transcript();
@@ -873,7 +868,6 @@ const PANEL_BG: ratatui::style::Color = ratatui::style::Color::Rgb(34, 34, 34);
 /// its own extent. First at (68, 3).`
 #[test]
 fn journey_flank_panel_fill_stops_at_the_frames_inner_rule() {
-    let _g = app::v6_palette_at_boot();
     for profile in [InterpreterProfile::Amiga, InterpreterProfile::IbmPc] {
         let Some(mut session) = journey_at_menu(profile) else { return };
         let transcript = session.take_transcript();
@@ -935,7 +929,6 @@ fn journey_flank_panel_fill_stops_at_the_frames_inner_rule() {
 /// flank-border record left of the story viewport (dividers [((66, 3, 2, 46), ...)])`.
 #[test]
 fn journey_flank_outer_border_is_drawn_when_the_game_drew_one() {
-    let _g = app::v6_palette_at_boot();
     for profile in [InterpreterProfile::Amiga, InterpreterProfile::IbmPc] {
         let Some(mut session) = journey_at_menu(profile) else { return };
         let transcript = session.take_transcript();
@@ -1082,7 +1075,6 @@ fn journey_floppy(steps: usize) -> Option<GameSession> {
         }
     };
     let profile = InterpreterProfile::resolve(&path, None, None, None);
-    app::v6_set_palette(profile.palette());
     let mut picts = PictSource::resolve(&path, None);
     let picture_dims = picts.all_pict_dims();
     let v6_screen_px = picts.std_window().or_else(|| profile.std_window());
@@ -1098,6 +1090,10 @@ fn journey_floppy(steps: usize) -> Option<GameSession> {
         None,
     )
     .expect("Journey's release floppy should mount and boot without a ZError");
+    // SQ-1393: the machine's own colour table. `new_with_trace` is the
+    // no-machine door and presents §8.3.1's own, so a harness that boots a
+    // press states the press's table here.
+    session.machine.set_palette(profile.palette());
     session.set_pict_source(Some(picts));
     session.flush_boot_pictures();
     let _ = session.take_transcript();
@@ -1165,7 +1161,6 @@ fn flank_border_columns(state: &app::state::AppState) -> Vec<Quad> {
 /// border column (39, 3, 1, 42) — a border is not part of the panel …`.
 #[test]
 fn journey_flank_panel_fill_stops_short_of_both_border_columns() {
-    let _g = app::v6_palette_at_boot();
     for build in BUILDS {
         let Some(mut session) = journey_build(build) else { continue };
         let transcript = session.take_transcript();
@@ -1207,7 +1202,6 @@ fn journey_flank_panel_fill_stops_short_of_both_border_columns() {
 /// own ground (Rgb(34, 34, 34))`.
 #[test]
 fn journey_flank_border_columns_do_not_stand_on_the_panels_ground() {
-    let _g = app::v6_palette_at_boot();
     for build in BUILDS {
         let Some(mut session) = journey_build(build) else { continue };
         let transcript = session.take_transcript();
@@ -1258,7 +1252,6 @@ fn journey_flank_border_columns_do_not_stand_on_the_panels_ground() {
 /// /dump-windows' band list does not name …`.
 #[test]
 fn every_placed_band_is_named_in_the_window_dump() {
-    let _g = app::v6_palette_at_boot();
     for build in BUILDS {
         let Some(mut session) = journey_build(build) else { continue };
         let transcript = session.take_transcript();
@@ -1316,7 +1309,6 @@ fn every_placed_band_is_named_in_the_window_dump() {
 /// "│──────────────────────The ────────────────────────────Individual Co───────────────────────────│"`.
 #[test]
 fn journey_release_30_menu_header_labels_are_whole() {
-    let _g = app::v6_palette_at_boot();
     let Some(mut session) = journey_floppy_at_menu() else { return };
     let transcript = session.take_transcript();
     let model = session.screen();
@@ -1371,7 +1363,6 @@ fn journey_release_30_menu_header_labels_are_whole() {
 /// "Individual Commands" — one blank cell stands between the label and the rule …`.
 #[test]
 fn journey_release_30_menu_header_rule_abuts_both_labels() {
-    let _g = app::v6_palette_at_boot();
     let Some(mut session) = journey_floppy_at_menu() else { return };
     let transcript = session.take_transcript();
     let model = session.screen();
@@ -1428,7 +1419,6 @@ fn journey_release_30_menu_header_rule_abuts_both_labels() {
 /// no `menu:art` at all), so a bound that holds in one need not hold in the other.
 #[test]
 fn journey_flank_picture_is_drawn_inside_its_own_flank() {
-    let _g = app::v6_palette_at_boot();
     for steps in [0usize, 40] {
         let Some(mut session) = journey_floppy(steps) else { continue };
         let transcript = session.take_transcript();
@@ -1470,7 +1460,6 @@ fn journey_flank_picture_is_drawn_inside_its_own_flank() {
 /// 48 panes per profile per honour mode.
 #[test]
 fn journey_no_pixel_band_is_placed_on_the_menu_rows() {
-    let _g = app::v6_palette_at_boot();
     for build in BUILDS {
         let Some(mut session) = journey_build(build) else { continue };
         let transcript = session.take_transcript();

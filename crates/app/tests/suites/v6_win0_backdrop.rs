@@ -76,21 +76,6 @@ fn win0_graphics(session: &GameSession) -> Option<(u32, u32)> {
     })
 }
 
-/// The palette this suite's colours resolve through, **stated rather than inherited**
-/// (SQ-0958).
-///
-/// Every story these cases drive is a bare file that names no machine — or, for the
-/// disk images, a machine whose table IS §8.3.1's — so the colour numbers behind
-/// every pixel asserted below resolve through the standard table. Until now nothing
-/// here said so, and the suite believed whatever the last suite in its group binary
-/// left behind. See [`app::v6_palette`], which is why this both names a palette and
-/// takes the shared lock; hold the guard for the whole case, because the two frames
-/// a repaint case compares are only comparable if the palette did not move between
-/// them.
-fn standard_palette() -> app::V6PaletteGuard {
-    app::v6_palette(zvm::screen::Palette::Standard)
-}
-
 /// fmvpoker's backdrop reaches a window canvas and the published model.
 ///
 /// Falsified by restoring the bare `ev.window == 0 && ev.at_cursor` test:
@@ -98,7 +83,6 @@ fn standard_palette() -> app::V6PaletteGuard {
 /// transcript — pictures_canvas holds []".
 #[test]
 fn fmvpoker_backdrop_lands_on_window_zero() {
-    let _g = standard_palette();
     let Some(mut session) = boot("fmvpoker.z6") else { return };
     // One keypress past the "press any key" splash: the game erases every window,
     // then draws picture 99 (640x400) into window 0 at (1,1).
@@ -143,7 +127,6 @@ fn fmvpoker_backdrop_lands_on_window_zero() {
 /// render modes and both colour modes.
 #[test]
 fn fmvpoker_backdrop_reaches_the_composite() {
-    let _g = standard_palette();
     let Some(mut session) = boot("fmvpoker.z6") else { return };
     match session.pending_input() {
         InputKind::Char => session.submit_char(b' '),
@@ -188,7 +171,6 @@ fn fmvpoker_backdrop_reaches_the_composite() {
 /// arrives as a transcript image anchored to its paragraph.
 #[test]
 fn zork0_drop_cap_stays_an_inline_float() {
-    let _g = standard_palette();
     let Some(session) = boot("zork0-r393-s890714.z6") else { return };
     // The drop-cap (picture 2, 84x70 unit px in a 468-wide window 0) and the room
     // icon (216, 42x42) are both drawn during boot.
@@ -203,7 +185,6 @@ fn zork0_drop_cap_stays_an_inline_float() {
 /// window) and must keep flowing beside the prose in its left column.
 #[test]
 fn shogun_ship_stays_an_inline_float() {
-    let _g = standard_palette();
     let Some(mut session) = boot("shogun-r322-s890706.z6") else { return };
     let mut saw_float = false;
     for turn in 0..6 {

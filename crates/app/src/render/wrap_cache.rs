@@ -775,7 +775,6 @@ mod tests {
         // nothing else — but it is a render path, so both game-colour modes are
         // pinned rather than one (CLAUDE.md), and the palette is stated rather
         // than inherited from whatever a sibling case last booted.
-        let _g = crate::v6_palette(zvm::screen::Palette::Standard);
         for honor in [true, false] {
             let (cols, rows) = (48u16, 14u16);
 
@@ -809,7 +808,6 @@ mod tests {
         // therefore the one that would rot unseen. A restore into a different
         // terminal size is the field case that reaches it, through
         // `reconcile_restored_screen_size` changing the native rect.
-        let _g = crate::v6_palette(zvm::screen::Palette::Standard);
         for honor in [true, false] {
             let (narrow, wide, rows) = (32u16, 60u16, 14u16);
 
@@ -858,7 +856,6 @@ mod tests {
         // Asserted one move AFTER the restore, never on the frame it lands: a
         // restore that quietly appended onto the pre-restore scrollback shows the
         // archive's own rows correctly until something is printed into them.
-        let _g = crate::v6_palette(zvm::screen::Palette::Standard);
         for honor in [true, false] {
             let rows = 14u16;
             let (before_cols, after_cols) = (48u16, 33u16);

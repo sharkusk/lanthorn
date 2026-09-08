@@ -133,25 +133,10 @@ fn painted_backgrounds(session: &GameSession, state: &AppState) -> Vec<Option<Co
 
 // ── The reported bug ─────────────────────────────────────────────────────────
 
-/// The palette this suite's colour assertions resolve through, **stated rather than
-/// inherited** (SQ-0958).
-///
-/// Every story these cases drive is a bare file that names no machine, so its colour
-/// numbers resolve through ZMSD §8.3.1's own table — which is what every assertion
-/// below was written against. Until now nothing here said so, and the suite believed
-/// whatever the last suite in its group binary left behind: harmless only while every
-/// one of them happened to leave `Standard` there, and not at all once a sibling boots
-/// a machine press. See [`app::v6_palette`], which is why this both names a palette
-/// and takes the shared lock. Hold the guard for the whole case.
-fn standard_palette() -> app::V6PaletteGuard {
-    app::v6_palette(zvm::screen::Palette::Standard)
-}
-
 /// No style.toml, no scheme, a terminal that answered the probe: Anchorhead's
 /// status band is painted in the TERMINAL's page — never the hard-coded black.
 #[test]
 fn anchor_status_band_follows_the_probed_terminal_background() {
-    let _g = standard_palette();
     for honor in [true, false] {
         let (state, dir) = state_with_probe(&format!("on-{honor}"), answered_probe(), honor);
 
@@ -185,7 +170,6 @@ fn anchor_status_band_follows_the_probed_terminal_background() {
 /// by simply dropping the chrome background altogether.
 #[test]
 fn an_unanswered_probe_keeps_the_hard_coded_fallback_band() {
-    let _g = standard_palette();
     for honor in [true, false] {
         let (state, dir) =
             state_with_probe(&format!("off-{honor}"), TermDefaultColors::default(), honor);
@@ -212,7 +196,6 @@ fn an_unanswered_probe_keeps_the_hard_coded_fallback_band() {
 /// from the same design, so a probed ink is never mixed onto a guessed page.
 #[test]
 fn a_half_answered_probe_is_skipped_whole() {
-    let _g = standard_palette();
     let probe = TermDefaultColors {
         fg: Some(image::Rgba([TERM_FG.0, TERM_FG.1, TERM_FG.2, 255])),
         bg: None,

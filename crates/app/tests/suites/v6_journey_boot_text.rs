@@ -83,7 +83,6 @@ fn boot_release(file: &str, profile: InterpreterProfile) -> Option<GameSession> 
             return None;
         }
     };
-    app::v6_set_palette(profile.palette());
     let mut picts = PictSource::resolve(&story_path, None);
     let picture_dims = picts.all_pict_dims();
     let v6_screen_px = picts.std_window().or_else(|| profile.std_window());
@@ -99,6 +98,10 @@ fn boot_release(file: &str, profile: InterpreterProfile) -> Option<GameSession> 
         None,
     )
     .expect("Journey (v6) should load and boot without a ZError");
+    // SQ-1393: the machine's own colour table. `new_with_trace` is the
+    // no-machine door and presents §8.3.1's own, so a harness that boots a
+    // press states the press's table here.
+    session.machine.set_palette(profile.palette());
     session.set_pict_source(Some(picts));
     session.flush_boot_pictures();
     Some(session)
@@ -220,7 +223,6 @@ const ANY_KEY: &str = "[Press any key to begin]";
 /// correct on both builds before this fix.
 #[test]
 fn journey_never_shows_an_erased_title_block_on_either_release() {
-    let _g = app::v6_palette_at_boot();
     for (file, profile) in [
         (AMIGA_RELEASE, InterpreterProfile::Amiga),
         (PC_RELEASE, InterpreterProfile::IbmPc),
@@ -301,7 +303,6 @@ fn journey_never_shows_an_erased_title_block_on_either_release() {
 /// > it`
 #[test]
 fn journey_boot_passage_starts_at_the_top_of_the_story_panel() {
-    let _g = app::v6_palette_at_boot();
     for profile in [InterpreterProfile::Amiga, InterpreterProfile::IbmPc] {
         for honor in [true, false] {
             let Some((session, state)) = journey_at_boot_passage(profile, honor) else { return };
@@ -383,7 +384,6 @@ fn journey_boot_passage_starts_at_the_top_of_the_story_panel() {
 /// wrong was what stood above it.
 #[test]
 fn journey_declares_a_right_hand_story_panel_at_boot_under_both_profiles() {
-    let _g = app::v6_palette_at_boot();
     let mut seen = Vec::new();
     for profile in [InterpreterProfile::Amiga, InterpreterProfile::IbmPc] {
         let Some((session, state)) = journey_at_boot_passage(profile, true) else { return };

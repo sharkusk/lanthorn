@@ -89,7 +89,6 @@ fn state_for(mode: app::config::V6RenderMode, transcript: &str, art_scale: (u32,
 }
 
 fn main() {
-    let _g = app::v6_palette_at_boot();
     let corpus: &[(&str, u8, usize)] = &[
         ("zork0-r393-s890714.z6", 13, 6),
         ("arthur-r74-s890714.z6", b'n', 12),
@@ -106,7 +105,6 @@ fn main() {
         };
         let bytes = loaded.bytes().to_vec();
         let profile = InterpreterProfile::resolve(&path, None, None, medium);
-        app::v6_set_palette(profile.palette());
         let mut picts = PictSource::resolve(&path, None);
         let dims = picts.all_pict_dims();
         let release = u16::from_be_bytes([bytes[2], bytes[3]]);
@@ -118,6 +116,8 @@ fn main() {
             profile.default_colours(),
             true,
             app::native_font::FaceSet::none(),
+            profile.palette(),
+            None,
         );
         let art_scale = boot.art_scale.unwrap_or((2, 2));
         let mut session = match GameSession::new_for_machine(bytes, true, false, false, dims, None, None, &boot) {

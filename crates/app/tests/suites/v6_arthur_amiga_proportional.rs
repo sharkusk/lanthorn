@@ -84,7 +84,6 @@ fn boot() -> Option<(GameSession, app::machine_boot::MachineBoot)> {
     assert_eq!(u16::from_be_bytes([bytes[2], bytes[3]]), RELEASE, "{FIXTURE}: release");
     assert_eq!(String::from_utf8_lossy(&bytes[0x12..0x18]), SERIAL, "{FIXTURE}: serial");
     let (profile, source) = InterpreterProfile::resolve_with_source(&path, None, None, None);
-    app::v6_set_palette(profile.palette());
     let mut picts = PictSource::resolve(&path, None);
     let picture_dims = picts.all_pict_dims();
     // The whole cascade, exactly as `startup.rs` asks it — but with `disks: None`,
@@ -106,6 +105,8 @@ fn boot() -> Option<(GameSession, app::machine_boot::MachineBoot)> {
         profile.default_colours(),
         true,
         faces,
+        profile.palette(),
+        None,
     );
     let mut s =
         GameSession::new_for_machine(bytes, true, false, false, picture_dims, None, None, &machine)
@@ -211,7 +212,6 @@ fn ink_span(canvas: &image::RgbaImage, rows: std::ops::Range<u32>, xs: std::ops:
 /// and the game lays out 25 rows where the machine shows 20.
 #[test]
 fn the_amiga_floppy_declares_the_faces_own_twenty_row_line() {
-    let _g = app::v6_palette_at_boot();
     let Some((session, machine)) = boot() else { return };
     let face = machine.faces.body().expect("Arthur's floppy carries char.data");
     assert_eq!((face.width, face.height), (10, 10), "char.data is 10x10 nominal");
@@ -279,7 +279,6 @@ fn only_a_proportional_face_moves_a_machines_cell() {
 /// whatever line the intro happens to leave on screen.
 #[test]
 fn the_raster_prose_draws_the_runs_the_capture_measures() {
-    let _g = app::v6_palette_at_boot();
     let Some((_session, machine)) = boot() else { return };
     let tf = machine.text_face();
     assert!(tf.proportional(), "non-vacuity: the pen under test is the face's");
@@ -336,7 +335,6 @@ fn the_raster_prose_draws_the_runs_the_capture_measures() {
 /// machine showing 20 text rows where lanthorn gave the story 25.
 #[test]
 fn raster_prose_wraps_by_pixel_and_fills_the_line() {
-    let _g = app::v6_palette_at_boot();
     let Some((_session, machine)) = boot() else { return };
     let tf = machine.text_face();
     let mut state = raster_state(&machine);
@@ -407,7 +405,6 @@ fn raster_prose_wraps_by_pixel_and_fills_the_line() {
 /// origins step exactly the face's advances.
 #[test]
 fn the_score_bar_advances_by_the_faces_own_table() {
-    let _g = app::v6_palette_at_boot();
     let Some((session, state)) = in_the_churchyard() else { return };
     let tf = state.v6_text.clone();
     assert!(tf.proportional(), "non-vacuity: the pen under test is the face's");
@@ -475,7 +472,6 @@ fn the_score_bar_advances_by_the_faces_own_table() {
 /// there is no gap to spare, so bold words run together.
 #[test]
 fn a_bold_run_advances_by_the_faces_own_smear() {
-    let _g = app::v6_palette_at_boot();
     let Some((_session, machine)) = boot() else { return };
     let face = machine.faces.body().expect("char.data");
     assert_eq!(face.bold_smear, 1, "Arthur's char.data states tf_BoldSmear = 1");
@@ -527,7 +523,6 @@ fn a_bold_run_advances_by_the_faces_own_smear() {
 /// not one of the areas that pins both `honor_game_colours` modes.
 #[test]
 fn a_bold_prose_line_wraps_at_the_width_it_will_be_drawn_at() {
-    let _g = app::v6_palette_at_boot();
     let Some((_session, machine)) = boot() else { return };
     let tf = machine.text_face();
     const BOLD: u8 = 2;
@@ -715,7 +710,6 @@ fn wrap_px(font: &blorb::bitmap_font::BitmapFont, text: &str, px: u32) -> Vec<St
 /// number that is not there.
 #[test]
 fn no_declared_width_reproduces_the_machines_wrap_but_a_measured_one_does() {
-    let _g = app::v6_palette_at_boot();
     let Some((_session, machine)) = boot() else { return };
     let font = machine.faces.body().expect("char.data");
 
@@ -768,7 +762,6 @@ fn no_declared_width_reproduces_the_machines_wrap_but_a_measured_one_does() {
 /// single window width the right thing to have measured against.
 #[test]
 fn both_of_arthurs_prose_windows_wrap_to_the_same_width() {
-    let _g = app::v6_palette_at_boot();
     let Some((session, state)) = in_the_churchyard() else { return };
     // Measured off the captures: the inventory frame's lower window carries F5's
     // upper window from its second line on, plus the line that follows it.
@@ -829,7 +822,6 @@ fn both_of_arthurs_prose_windows_wrap_to_the_same_width() {
 /// `cell.w` measurement and the field returns to 417 and overruns.
 #[test]
 fn the_score_bars_right_field_lands_where_the_machine_put_it() {
-    let _g = app::v6_palette_at_boot();
     let Some((session, state)) = in_the_churchyard() else { return };
     assert!(state.v6_text.proportional(), "non-vacuity: the pen under test is the face's");
     let model = Engine::screen(&session);
@@ -926,7 +918,6 @@ fn f5_rows(node: &WinNode) -> Vec<String> {
 /// long, 759 px wide, and no span matches.
 #[test]
 fn the_engine_wraps_the_description_where_the_machine_wraps_it() {
-    let _g = app::v6_palette_at_boot();
     let Some((mut session, state)) = in_the_churchyard() else { return };
     assert!(state.v6_text.proportional(), "non-vacuity: the pen under test is the face's");
     let _ = session.submit_char(137); // F5 — the room description
@@ -984,7 +975,6 @@ fn the_engine_wraps_the_description_where_the_machine_wraps_it() {
 /// own `y` falls in, and the overlap check below fails on the same three words.
 #[test]
 fn the_hybrid_grid_and_the_pixel_runs_are_one_layout() {
-    let _g = app::v6_palette_at_boot();
     let Some((mut session, state)) = in_the_churchyard() else { return };
     assert!(state.v6_text.proportional(), "non-vacuity: the pen under test is the face's");
     let cell = state.v6_text.cell();
@@ -1106,7 +1096,6 @@ fn the_hybrid_grid_and_the_pixel_runs_are_one_layout() {
 /// ignores it is how this happened.)
 #[test]
 fn a_proportional_run_stops_at_its_windows_right_edge() {
-    let _g = app::v6_palette_at_boot();
     let Some((mut session, state)) = in_the_churchyard() else { return };
     let _ = session.submit_char(137); // F5 — the long description, wrapped by the
                                       // game at the declared width and therefore
@@ -1193,7 +1182,6 @@ fn hybrid_rows(session: &GameSession, state: &mut app::state::AppState) -> Vec<S
 /// grid and passed for a whole round while this was broken on screen.
 #[test]
 fn hybrid_draws_the_score_bar_in_consecutive_cells() {
-    let _g = app::v6_palette_at_boot();
     let Some((session, mut state)) = in_the_churchyard() else { return };
     assert!(state.v6_text.proportional(), "non-vacuity: the pen under test is the face's");
     let rows = hybrid_rows(&session, &mut state);
@@ -1213,7 +1201,6 @@ fn hybrid_draws_the_score_bar_in_consecutive_cells() {
 /// and the grid line break in different places.
 #[test]
 fn hybrid_draws_the_description_in_consecutive_cells() {
-    let _g = app::v6_palette_at_boot();
     let Some((mut session, mut state)) = in_the_churchyard() else { return };
     let _ = session.submit_char(137); // F5
     let rows = hybrid_rows(&session, &mut state);
@@ -1255,7 +1242,6 @@ fn hybrid_draws_the_description_in_consecutive_cells() {
 /// paints the bar. Sixteen turns and a `look`, then F3.
 #[test]
 fn reversed_spaces_rule_the_inventory_page_instead_of_flooding_it() {
-    let _g = app::v6_palette_at_boot();
     let Some((mut session, mut state)) = in_the_churchyard() else { return };
     let _ = session.submit_char(135); // F3 — the inventory screen
 
@@ -1343,7 +1329,6 @@ fn reversed_spaces_rule_the_inventory_page_instead_of_flooding_it() {
 /// Falsified by dropping the artwork clause: rows 3..9 come back at 576 of 580 pixels.
 #[test]
 fn the_raster_inventory_page_keeps_its_rules_and_loses_the_flood() {
-    let _g = app::v6_palette_at_boot();
     let Some((mut session, state)) = in_the_churchyard() else { return };
     let _ = session.submit_char(135); // F3 — the inventory screen
     let canvas = raster(&session, &state);
@@ -1413,7 +1398,6 @@ fn the_raster_inventory_page_keeps_its_rules_and_loses_the_flood() {
 /// the post-restart frame carries no `Churchyard` cell text at all.
 #[test]
 fn the_score_bar_comes_back_as_cells_after_an_in_game_restart() {
-    let _g = app::v6_palette_at_boot();
     let Some((mut session, machine)) = boot() else { return };
     let mut state = raster_state(&machine);
     state.config.v6_render = app::config::V6RenderMode::Hybrid;

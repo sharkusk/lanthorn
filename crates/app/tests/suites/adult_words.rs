@@ -160,7 +160,7 @@ fn a_word_hidden_from_the_panel_is_still_offered_by_the_light() {
 /// above holds structurally and not by luck: `StoryVocabulary::offer` has the
 /// story's tables and the typed line, and nothing else to consult.
 ///
-/// A source-level case, in the spirit of `palette_lock_discipline`: the next
+/// A source-level case, in the spirit of `scratch_path_discipline`: the next
 /// person to wire a filter into `vocab.rs` has no reason to know any of this.
 #[test]
 fn the_suggestion_path_never_reads_the_adult_list() {

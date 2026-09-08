@@ -136,7 +136,8 @@ fn city_of_secrets_covers_its_pane() {
 /// it is read from the process environment, which under `cargo test` is one
 /// process shared by every case in this group binary, and a 2 s budget imposed
 /// on a sibling booting a large story is exactly the kind of process-global
-/// cross-talk `palette_lock_discipline` exists to prevent. The quit flag IS the
+/// cross-talk a source-level guard like `scratch_path_discipline` exists to
+/// prevent. The quit flag IS the
 /// watchdog's signal; the default budget only costs time when this assertion is
 /// already about to fail.
 #[test]

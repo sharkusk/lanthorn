@@ -180,10 +180,11 @@ fn format_output(
     cols: u16,
     current_col: u16,
     is_tty: bool,
+    palette: zvm::screen::Palette,
 ) -> (String, u16) {
     let (wrapped, new_col) = wrap_line(text, cols, current_col);
     let out = match attrs {
-        Some(a) => crate::screen::style_wrap(&wrapped, a, is_tty),
+        Some(a) => crate::screen::style_wrap(&wrapped, a, is_tty, palette),
         None => wrapped,
     };
     (out, new_col)
@@ -207,6 +208,11 @@ struct StdoutOutput {
     /// even if a non-conformant game sets colour after the header bit is cleared.
     /// Style bits (reverse/bold/italic) are always preserved.
     honor_game_colours: bool,
+    /// The table a standard colour NUMBER resolves through — the machine's
+    /// ([`Machine::palette`]), mirrored here because a sink is owned BY the
+    /// machine and cannot ask it back (SQ-1393). Set from the same
+    /// `zvm::interpreter` row that decides `$1E`, so the two cannot disagree.
+    palette: zvm::screen::Palette,
     /// Line-position tracking, and — in plain mode — holding the prompt back so
     /// the status block can be written before it. Shared with gvm-cli, which had
     /// grown its own half of the same answer (`cli_host::LineHold`, SQ-0611).
@@ -232,6 +238,7 @@ impl StdoutOutput {
         cols: u16,
         honor_game_colours: bool,
         hold_partial: bool,
+        palette: zvm::screen::Palette,
     ) -> Self {
         StdoutOutput {
             is_tty,
@@ -240,6 +247,7 @@ impl StdoutOutput {
             current_col: 0,
             buffer_mode: false,
             honor_game_colours,
+            palette,
             hold: cli_host::LineHold::new(hold_partial),
             sink_mid_line: false,
         }
@@ -293,7 +301,7 @@ impl StdoutOutput {
         // When buffer_mode is off, pass u16::MAX as cols: saturating_add in
         // wrap_line will never trigger the wrap condition.
         let cols = if self.buffer_mode { self.cols } else { u16::MAX };
-        let (bytes, new_col) = format_output(s, attrs, cols, self.current_col, self.is_tty);
+        let (bytes, new_col) = format_output(s, attrs, cols, self.current_col, self.is_tty, self.palette);
         for ch in bytes.chars() {
             self.emit_char(ch);
             if ch == '\n' && self.pager.line() {
@@ -527,6 +535,10 @@ fn build_machine(
                 .to_string(),
         );
     }
+    // The machine's own table, resolved BEFORE the sink is built: a sink is owned
+    // by the machine and cannot ask it back, so both are told once from here.
+    let machine_row = interpreter_number.and_then(zvm::interpreter::machine);
+    let palette = machine_row.map_or(zvm::screen::Palette::Standard, |m| m.palette);
     let mut machine = Machine::with_output(mem, Box::new(StdoutOutput::new(
         stdout_is_tty,
         paging,
@@ -534,7 +546,9 @@ fn build_machine(
         term_cols,
         honor_game_colours,
         hold_prompt,
+        palette,
     )));
+    machine.set_palette(palette);
     machine.set_interpreter_number(interpreter_number);
     // …and the REST of that machine (SQ-0872). Setting `$1E` alone told the story
     // which machine it was on and left it to work out what that machine looked
@@ -543,8 +557,8 @@ fn build_machine(
     // `zvm::interpreter` is the table both front-ends read, so the CLI and the
     // TUI now present the same machine off the same bytes.
     //
-    // The palette is process-wide and set unconditionally: it governs how a
-    // colour NUMBER resolves to an actual colour, so it must agree with the
+    // The palette is the MACHINE's (SQ-1393) and set unconditionally: it governs
+    // how a colour NUMBER resolves to an actual colour, so it must agree with the
     // number in `$1E` whether or not the game's colours are being honoured.
     // The `$2C`/`$2D` pair is gated on `honor_game_colours`, exactly as the TUI
     // gates it (`startup`'s `host_default_colours`): with colours declined the
@@ -557,8 +571,7 @@ fn build_machine(
     // PC's page, and now that the IBM PC states one (blue under white) that would
     // paint every story anyone opened that way. `--colour machine` is the opt-in
     // for a player who named the machine and meant it.
-    if let Some(m) = interpreter_number.and_then(zvm::interpreter::machine) {
-        zvm::screen::set_palette(m.palette);
+    if let Some(m) = machine_row {
         if honor_game_colours && machine_colours {
             if let Some((bg, fg)) = m.default_colours {
                 machine.set_default_colours(bg, fg);
@@ -1045,7 +1058,7 @@ fn read_line_raw(
     let mut terminator: u8 = 13; // Enter unless a function-key terminator ends the line
     let mut last_resize: Option<(u16, u16)> = None;
     let mut aborted = false;
-    let sgr = crate::screen::sgr_open(echo);
+    let sgr = crate::screen::sgr_open(echo, machine.palette());
     if !sgr.is_empty() {
         print!("{sgr}");
         let _ = io::stdout().flush();
@@ -1146,7 +1159,7 @@ fn read_line_raw(
         // make the erase paint the foreground colour instead.
         print!(
             "{}",
-            commit_line_bytes(&screen::bg_sgr(machine.screen.current_bg, machine.honor_game_colours))
+            commit_line_bytes(&screen::bg_sgr(machine.screen.current_bg, machine.honor_game_colours, machine.palette()))
         );
     }
     let _ = io::stdout().flush();
@@ -1781,7 +1794,7 @@ fn main() {
         // Lost Pig's HELP, which issues erase_window -1) doesn't leave stale
         // story text bleeding through beneath the upper window.
         if machine.screen.erase_lower_requested {
-            print!("{}", view.erase(machine.screen.current_bg, machine.honor_game_colours));
+            print!("{}", view.erase(machine.screen.current_bg, machine.honor_game_colours, machine.palette()));
             let _ = io::stdout().flush();
             if let Some(o) = machine.output_mut().as_any_mut().downcast_mut::<StdoutOutput>() {
                 o.pager.reset();
@@ -1850,7 +1863,7 @@ fn main() {
                 release_prompt(&mut machine);
                 let _ = io::stdout().flush();
                 let cur_bg = if stdout_is_tty && machine.honor_game_colours {
-                    screen::zcolour_rgb(machine.screen.current_bg)
+                    screen::zcolour_rgb(machine.screen.current_bg, machine.palette())
                 } else {
                     None
                 };
@@ -1947,7 +1960,7 @@ fn main() {
                 release_prompt(&mut machine);
                 let _ = io::stdout().flush();
                 let cur_bg = if stdout_is_tty && machine.honor_game_colours {
-                    screen::zcolour_rgb(machine.screen.current_bg)
+                    screen::zcolour_rgb(machine.screen.current_bg, machine.palette())
                 } else {
                     None
                 };
@@ -2139,7 +2152,7 @@ mod v6_tests {
     /// the status block to occupy — and gone once released.
     #[test]
     fn plain_mode_holds_the_prompt_so_the_status_can_precede_it() {
-        let mut o = StdoutOutput::new(false, false, 24, 80, true, true);
+        let mut o = StdoutOutput::new(false, false, 24, 80, true, true, zvm::screen::Palette::Standard);
         o.write_counted("You are in a room.\n");
         assert!(!o.hold.is_holding(), "a complete line goes straight out");
         o.write_counted("\n>");
@@ -2153,7 +2166,7 @@ mod v6_tests {
     fn without_plain_mode_nothing_is_ever_held() {
         // The pinned-region path must keep writing straight through: its status
         // never enters the text flow, so there is nothing to make room for.
-        let mut o = StdoutOutput::new(true, false, 24, 80, true, false);
+        let mut o = StdoutOutput::new(true, false, 24, 80, true, false, zvm::screen::Palette::Standard);
         o.write_counted("\n>");
         assert!(!o.hold.is_holding(), "the TTY path holds nothing");
     }
@@ -2428,8 +2441,8 @@ mod stdout_tests {
     #[test]
     fn print_styled_wraps_only_on_tty() {
         use zvm::io::TextAttrs;
-        assert_eq!(crate::screen::style_wrap("hi", TextAttrs { style: 2, ..Default::default() }, true), "\x1b[1mhi\x1b[0m");
-        assert_eq!(crate::screen::style_wrap("hi", TextAttrs { style: 2, ..Default::default() }, false), "hi");
+        assert_eq!(crate::screen::style_wrap("hi", TextAttrs { style: 2, ..Default::default() }, true, zvm::screen::Palette::Standard), "\x1b[1mhi\x1b[0m");
+        assert_eq!(crate::screen::style_wrap("hi", TextAttrs { style: 2, ..Default::default() }, false, zvm::screen::Palette::Standard), "hi");
     }
 
     /// CLI gate: when honor_game_colours is OFF, print_attr strips fg/bg before
@@ -2444,14 +2457,14 @@ mod stdout_tests {
         let attrs = TextAttrs { style: 0x03, fg: ZColour::Standard(3), bg: ZColour::Standard(6) };
 
         // With honour ON: colour SGR present.
-        let with_honour = crate::screen::style_wrap("hi", attrs, true);
+        let with_honour = crate::screen::style_wrap("hi", attrs, true, zvm::screen::Palette::Standard);
         assert!(with_honour.contains("31"), "fg red SGR present with honour: {with_honour:?}");
         assert!(with_honour.contains("44"), "bg blue SGR present with honour: {with_honour:?}");
 
         // With honour OFF: strip fg/bg, pass Default channels to style_wrap.
         // This mirrors what StdoutOutput::print_attr does when honor_game_colours=false.
         let stripped = TextAttrs { fg: ZColour::Default, bg: ZColour::Default, ..attrs };
-        let without_honour = crate::screen::style_wrap("hi", stripped, true);
+        let without_honour = crate::screen::style_wrap("hi", stripped, true, zvm::screen::Palette::Standard);
         assert!(!without_honour.contains("31"), "fg colour absent when honour=false: {without_honour:?}");
         assert!(!without_honour.contains("44"), "bg colour absent when honour=false: {without_honour:?}");
         // Reverse (7) and bold (1) must still be present.
@@ -2603,7 +2616,7 @@ mod centring_tests {
 
     #[test]
     fn a_styled_space_costs_one_column_not_nine() {
-        let (out, col) = format_output(" ", Some(BOLD), 80, 0, true);
+        let (out, col) = format_output(" ", Some(BOLD), 80, 0, true, zvm::screen::Palette::Standard);
         assert_eq!(out, "\x1b[1m \x1b[0m", "the bytes are unchanged — only the accounting was wrong");
         assert_eq!(col, 1, "an SGR escape occupies no column (ZMSD §8.8.3.1.2.2)");
     }
@@ -2617,7 +2630,7 @@ mod centring_tests {
         let mut col = 0u16;
         let mut out = String::new();
         for _ in 0..29 {
-            let (bytes, new_col) = format_output(" ", Some(BOLD), 80, col, true);
+            let (bytes, new_col) = format_output(" ", Some(BOLD), 80, col, true, zvm::screen::Palette::Standard);
             out.push_str(&bytes);
             col = new_col;
         }
@@ -2688,7 +2701,7 @@ mod centring_tests {
         let mut col = 0u16;
         for (text, attrs, buffered) in writes {
             let width = if *buffered { cols } else { u16::MAX };
-            let (bytes, new_col) = format_output(text, *attrs, width, col, true);
+            let (bytes, new_col) = format_output(text, *attrs, width, col, true, zvm::screen::Palette::Standard);
             out.push_str(&bytes);
             col = new_col;
         }

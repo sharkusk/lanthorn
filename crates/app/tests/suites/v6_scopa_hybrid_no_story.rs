@@ -83,24 +83,9 @@ fn is_baize(c: Color) -> bool {
     matches!(c, Color::Rgb(r, g, b) if g >= 100 && r < 90 && b < 90)
 }
 
-/// The palette this suite's colour assertions resolve through, **stated rather than
-/// inherited** (SQ-0958).
-///
-/// Every story these cases drive is a bare file that names no machine, so its colour
-/// numbers resolve through ZMSD §8.3.1's own table — which is what every assertion
-/// below was written against. Until now nothing here said so, and the suite believed
-/// whatever the last suite in its group binary left behind: harmless only while every
-/// one of them happened to leave `Standard` there, and not at all once a sibling boots
-/// a machine press. See [`app::v6_palette`], which is why this both names a palette
-/// and takes the shared lock. Hold the guard for the whole case.
-fn standard_palette() -> app::V6PaletteGuard {
-    app::v6_palette(zvm::screen::Palette::Standard)
-}
-
 /// The premise: no story window, and pixels the game painted itself.
 #[test]
 fn scopa_publishes_no_story_window_but_does_paint_a_ground() {
-    let _g = standard_palette();
     let Some(session) = scopa_dealt() else { return };
     let model = session.screen();
     let app::engine::WinNode::Layered(items) = &model.root else { panic!("v6 builds a Layered root") };
@@ -130,7 +115,6 @@ fn scopa_publishes_no_story_window_but_does_paint_a_ground() {
 /// "painted (hint/menu takeover)" with 7 non-blank cells.
 #[test]
 fn hybrid_draws_the_table_instead_of_two_button_labels() {
-    let _g = standard_palette();
     let Some(session) = scopa_dealt() else { return };
     let model = session.screen();
 

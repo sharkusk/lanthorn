@@ -101,6 +101,8 @@ fn boot(archive: &str, honor_game_colours: bool) -> Option<GameSession> {
         None,
         true,
         app::native_font::FaceSet::none(),
+        zvm::screen::Palette::Standard,
+        None,
     );
     // SQ-0811: no pinned random seed — this suite measures colour, not chance.
     let mut session = GameSession::new_for_machine(
@@ -199,20 +201,6 @@ fn to_pane(img: &image::RgbaImage, pane_w: u32) -> image::RgbaImage {
     image::imageops::resize(img, pane_w, h, image::imageops::FilterType::Nearest)
 }
 
-/// The palette this suite's colour assertions resolve through, **stated rather than
-/// inherited** (SQ-0958).
-///
-/// Every story these cases drive is a bare file that names no machine, so its colour
-/// numbers resolve through ZMSD §8.3.1's own table — which is what every assertion
-/// below was written against. Until now nothing here said so, and the suite believed
-/// whatever the last suite in its group binary left behind: harmless only while every
-/// one of them happened to leave `Standard` there, and not at all once a sibling boots
-/// a machine press. See [`app::v6_palette`], which is why this both names a palette
-/// and takes the shared lock. Hold the guard for the whole case.
-fn standard_palette() -> app::V6PaletteGuard {
-    app::v6_palette(zvm::screen::Palette::Standard)
-}
-
 /// The reported defect. Zork Zero's EGA arch fuses into bronze instead of
 /// arriving as speckle, and in doing so lands next to the MCGA rendition of the
 /// same frame rather than 60% further away.
@@ -228,7 +216,6 @@ fn standard_palette() -> app::V6PaletteGuard {
 /// own neighbour-to-neighbour variation.
 #[test]
 fn the_ega_column_dither_fuses_instead_of_reaching_the_screen_as_speckle() {
-    let _g = standard_palette();
     for honor_game_colours in [true, false] {
         let Some(ega) = boot("zork0.eg1", honor_game_colours) else { return };
         let Some(mcga) = boot("zork0.mg1", honor_game_colours) else { return };
@@ -284,7 +271,6 @@ fn the_ega_column_dither_fuses_instead_of_reaching_the_screen_as_speckle() {
 /// the five widths.
 #[test]
 fn the_fusion_is_not_a_function_of_the_pane_width() {
-    let _g = standard_palette();
     for honor_game_colours in [true, false] {
         let Some(ega) = boot("zork0.eg1", honor_game_colours) else { return };
         let Some(mcga) = boot("zork0.mg1", honor_game_colours) else { return };
@@ -322,7 +308,6 @@ fn the_fusion_is_not_a_function_of_the_pane_width() {
 /// two-colour assertion below fails on them.
 #[test]
 fn cga_line_art_is_never_blended() {
-    let _g = standard_palette();
     for honor_game_colours in [true, false] {
         let Some(cga) = boot("zork0.cg1", honor_game_colours) else { return };
         let c = frame(&cga);
@@ -362,7 +347,6 @@ fn cga_line_art_is_never_blended() {
 /// blend of two such colours is not.
 #[test]
 fn the_320_wide_renditions_are_untouched() {
-    let _g = standard_palette();
     for archive in ["zork0.mg1", "zork0.pic"] {
         let Some(raw) = read(archive) else { return };
         let src = PictSource::from_native(InfocomPics::parse(raw).expect("parses"));
@@ -407,7 +391,6 @@ fn the_320_wide_renditions_are_untouched() {
 /// ```
 #[test]
 fn the_blend_reaches_the_side_art() {
-    let _g = standard_palette();
     for honor_game_colours in [true, false] {
         let Some(ega) = boot("zork0.eg1", honor_game_colours) else { return };
         let Some(mcga) = boot("zork0.mg1", honor_game_colours) else { return };
@@ -467,7 +450,6 @@ fn drop_doubles(img: &image::RgbaImage) -> image::RgbaImage {
 /// in full, and measures the manufactured rows against the art's own.
 #[test]
 fn the_border_extension_tiles_fused_pixels() {
-    let _g = standard_palette();
     for honor_game_colours in [true, false] {
         let Some(ega) = boot("zork0.eg1", honor_game_colours) else { return };
         let e = frame(&ega);
@@ -521,7 +503,6 @@ fn crop_rows(img: &image::RgbaImage, y0: u32, y1: u32) -> image::RgbaImage {
 /// blend (the case below), and none can make a 320-wide plate blend either.
 #[test]
 fn keeping_the_dither_is_a_choice_and_fusing_is_the_default() {
-    let _g = standard_palette();
     assert!(
         app::config::Config::default().fuse_art_dither,
         "the shipped default fuses — SQ-0797 measured that as what the card did"
@@ -567,7 +548,6 @@ fn keeping_the_dither_is_a_choice_and_fusing_is_the_default() {
 /// spent their time removing.
 #[test]
 fn no_setting_can_make_cga_blend() {
-    let _g = standard_palette();
     let Some(raw) = read("zork0.cg1") else { return };
     let mut src = PictSource::from_native(InfocomPics::parse(raw).expect("parses"));
     for fuse in [true, false, true] {
@@ -594,7 +574,6 @@ fn no_setting_can_make_cga_blend() {
 /// cut-out pixel arrives at alpha 64 instead of 0.
 #[test]
 fn a_cut_out_keeps_its_exact_alpha() {
-    let _g = standard_palette();
     let Some(raw) = read("zork0.eg1") else { return };
     let pics = InfocomPics::parse(raw).expect("parses");
     let card = pics.decode(101).expect("Zork Zero's EGA card body");
