@@ -1,5 +1,5 @@
-//! A per-window fold of the Version 6 paint stream — what a host replays to
-//! rebuild a window's picture canvas without the story's help.
+//! A fold of the Version 6 paint stream, in true issue order — what a host
+//! replays to rebuild every window's picture canvas without the story's help.
 //!
 //! # Why this exists
 //!
@@ -11,10 +11,15 @@
 //! that stream from the top: it is unbounded (a session-long game has drawn
 //! thousands of pictures by the end) and most of it is superseded, not
 //! current. What a redraw needs is the SMALL SET OF OPS still explaining
-//! what is on screen right now, per window: everything since the window's
-//! last whole-canvas clear, with the window's later moves not moving what
-//! was already painted (ZMSD §8: "subsequent movements of the window do not
-//! move what was printed").
+//! what is on screen right now: everything since each window's last
+//! whole-canvas clear, with a window's later moves not moving what was
+//! already painted (ZMSD §8: "subsequent movements of the window do not move
+//! what was printed") — and, because ZMSD §8 describes ONE shared screen, in
+//! the SAME relative order across every window, not just within each one:
+//! a host that models the screen as independent per-window canvases (as
+//! `lanthorn` does) must mirror one window's erase into every other window it
+//! overlaps, and getting that mirror's position wrong relative to each
+//! window's own draws is exactly as wrong as getting a draw's position wrong.
 //!
 //! Folding the stream down to that set is pure Z-machine bookkeeping — it
 //! reads only [`crate::cpu::exec::PaintEvent`] geometry, never a decoded
@@ -23,26 +28,13 @@
 //!
 //! # Feeding it
 //!
-//! [`PaintLog::apply`] is NOT called automatically as events are queued —
-//! deliberately, and the reason is ordering. A cross-window erase
-//! ([`PaintOp::HostErase`]) can only be computed by a host that models
-//! per-window canvases, from state ([`PaintLog::apply`] cannot see) that only
-//! exists once the host is walking its OWN drained turn; feeding engine
-//! events into the log the instant an opcode runs would put every such
-//! cross-window entry after every engine event from the SAME turn, however
-//! interleaved they truly were, because the whole turn's engine events would
-//! already be queued before the host ever computes its first cross-window
-//! rect. The fix is not to feed early — it is to feed once, from the SAME
-//! walk that computes the cross-window entries: call
-//! [`crate::cpu::exec::Machine::take_paint_events`], and for each drained
-//! [`crate::cpu::exec::PaintEvent`] call `paint_log_mut().apply(&event)`
-//! immediately before (or after — anywhere in the same iteration works)
-//! rasterizing it, so any [`PaintLog::append_host_erase`] call that
-//! rasterizing triggers lands at exactly this point in this window's own
-//! timeline. Two embedders still cannot fold the stream two different ways —
-//! the fold algorithm is here — but a host that never drains
-//! `take_paint_events` (and therefore never renders anything) also never
-//! feeds the log, which costs it nothing it was going to use anyway.
+//! [`PaintLog::apply`] is called by `Machine` itself, at the exact points
+//! [`crate::cpu::exec::Machine`]'s `pending_pictures` / `pending_erase_fills`
+//! are queued — so the log always reflects every event this `Machine` has
+//! ever issued, regardless of whether (or how often) a host drains
+//! [`crate::cpu::exec::Machine::take_paint_events`]. A host never calls
+//! [`PaintLog::apply`] itself; [`crate::cpu::exec::Machine::paint_log`] is
+//! read-only for exactly that reason.
 //!
 //! # What is deliberately NOT in it
 //!
@@ -51,18 +43,16 @@
 //! never a canvas, never a resolved colour. Turning that into pixels needs
 //! the story's own resource archive, which is the host's to hold.
 //!
-//! **`zvm` never COMPUTES a cross-window erasure.** ZMSD §8 describes one
-//! shared screen; a host that models eight independent per-window canvases
-//! (as `lanthorn` does) must mirror an erase into every OTHER canvas it
-//! overlaps, in that canvas's own local coordinates — which rect that is is a
-//! fact about the host's own canvas model, not about the Z-machine, and this
-//! module has no opinion on it. What it DOES do is hold the result in the
-//! right place: [`PaintLog::append_host_erase`] lets a host record that
-//! already-computed rect directly into the affected window's own op list, so
-//! it lands in the SAME timeline as that window's own draws rather than a
-//! side channel with no ordering relationship to them. Order is what makes
-//! this correct rather than merely convenient — see
-//! [`PaintOp::HostErase`]'s docs.
+//! **No cross-window erasure.** Which OTHER canvas an erase overlaps, and
+//! where in THAT canvas's own coordinates, is a fact about the host's canvas
+//! model (`lanthorn` models eight independent ones; ZMSD §8 describes one
+//! shared screen) — not about the Z-machine, and this module has no opinion
+//! on it. What it DOES guarantee is the one thing a host cannot compute for
+//! itself: that replaying [`PaintLog::ops_in_order`] through the SAME
+//! functions that render a live turn reproduces every cross-window mirror at
+//! its true position, because the walk is in true issue order and each op
+//! still carries its own window and its own `win_box`. A host derives the
+//! mirror at replay time, from that order — it does not store it.
 //!
 //! **No erase-picture footprint.** `erase_picture` (ZMSD §15) names a
 //! picture number and a position but never a size — the ENGINE has no way to
@@ -74,34 +64,38 @@
 //!
 //! # Retirement
 //!
-//! A window's op list is not append-only; four rules keep it bounded and
-//! keep it standing for the CURRENT screen rather than the whole session:
+//! The log is not append-only; rules keep it bounded and keep it standing
+//! for the CURRENT screen rather than the whole session:
 //!
-//! - **A whole-window clear resets the list to one entry.** `erase_window`
-//!   (ZMSD §8.7.3.3, any target — a single window, `-1`, or `-2`) fills the
-//!   window with its background, i.e. paints over everything drawn since the
-//!   last clear; everything before it is dead. `Machine` emits BOTH an
+//! - **A whole-window clear resets that window's entries to one.**
+//!   `erase_window` (ZMSD §8.7.3.3, any target — a single window, `-1`, or
+//!   `-2`) fills the window with its background, i.e. paints over everything
+//!   drawn since the last clear; everything before it is dead FOR THAT
+//!   WINDOW (other windows' entries, including any issued in between, are
+//!   untouched — order across windows is exactly what
+//!   [`PaintLog::ops_in_order`] preserves). `Machine` emits BOTH an
 //!   [`crate::cpu::exec::EraseFill`] and a `PictureEvent { number: 0, erase:
 //!   true }` for the same call — [`PaintLog::apply`] folds both into the
 //!   SAME single [`PaintOp::Clear`] entry (the second application is a no-op
 //!   over the first), never two.
-//! - **A window move strands the list.** ZMSD §8: pixels already plotted do
-//!   not move when the window does. So the moment a draw or erase-picture
+//! - **A window move strands its entries.** ZMSD §8: pixels already plotted
+//!   do not move when the window does. So the moment a draw or erase-picture
 //!   event's window box reports an origin different from the log's
-//!   currently-tracked one for that window, the window's list — which
-//!   describes pixels at the OLD origin — is no longer a recipe for
-//!   anything on screen and is dropped before the new op is recorded.
-//! - **`Machine::restart` clears every window's list** (ZMSD §6.1.3's
-//!   reboot), in the same breath as the paint queues themselves — no window
-//!   survives a restart holding a pre-restart recipe.
-//! - **A window's list is capped** at [`PAINT_LOG_CAP`] entries. A story
-//!   that only ever draws and never clears would otherwise grow its list for
-//!   the life of the session; once a window hits the cap, further ops for it
-//!   are dropped until the next whole-window clear (which resets the count
-//!   to one) or restart. A host reading [`PaintLog::ops`] sees exactly
-//!   [`PAINT_LOG_CAP`] entries for a capped window and knows replay will not
-//!   reproduce it — precisely the shape `lanthorn`'s own `V6_OPS_CAP` used to
-//!   detect for its fallback-to-PNG decision.
+//!   currently-tracked one for that window, that window's entries — which
+//!   describe pixels at the OLD origin — are no longer a recipe for anything
+//!   on screen and are dropped before the new op is recorded.
+//! - **`Machine::restart` clears the whole log** (ZMSD §6.1.3's reboot), in
+//!   the same breath as the paint queues themselves — no window survives a
+//!   restart holding a pre-restart recipe.
+//! - **A window's entries are capped** at [`PAINT_LOG_CAP`]. A story that
+//!   only ever draws into one window and never clears it would otherwise grow
+//!   that window's entries for the life of the session; once a window hits
+//!   the cap, further ops for it are dropped until the next whole-window
+//!   clear (which resets its count to one) or restart. A host reading
+//!   [`PaintLog::ops`] sees exactly [`PAINT_LOG_CAP`] entries for a capped
+//!   window and knows replay will not reproduce it — precisely the shape
+//!   `lanthorn`'s own prior `V6_OPS_CAP` used to detect for its
+//!   fallback-to-PNG decision ([`PaintLog::is_capped`]).
 
 use crate::cpu::exec::PaintEvent;
 use crate::error::ZError;
@@ -114,64 +108,94 @@ const N_WINDOWS: usize = 8;
 /// comfortably above any real screen's redraw history.
 pub const PAINT_LOG_CAP: usize = 512;
 
-/// One entry in a window's folded paint history, in window-relative NATIVE
-/// pixels (1-based, exactly as the Z-machine opcodes give them) — no cell,
-/// canvas, or terminal coordinate of any kind.
+/// One entry in the paint log, in window-relative NATIVE pixels (1-based,
+/// exactly as the Z-machine opcodes give them) — no cell, canvas, or
+/// terminal coordinate of any kind, and no host canvas model of any kind
+/// (see the module docs' "What is deliberately NOT in it").
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum PaintOp {
     /// A `draw_picture` (ZMSD §15). `x`/`y` are the pixel coordinates (of the
     /// picture's top-left corner) within the window; `win_box` is the
     /// window's own box — `(x, y, w, h)` in native pixels — at the moment of
-    /// the call.
-    Draw { number: u16, x: u16, y: u16, win_box: (u16, u16, u16, u16) },
+    /// the call. `at_cursor`, `margin_after` and `out_chars` are
+    /// [`crate::cpu::exec::PictureEvent`]'s own fields of the same name,
+    /// carried through unchanged — genuine facts about THIS call (whether it
+    /// landed on the window's text cursor, whether a `set_margins` followed
+    /// it, and how many characters window 0 had ever streamed at the moment
+    /// of the call), not a host's opinion about them. A host that wants to
+    /// tell an inline text float from a window-canvas picture (ZMSD says
+    /// nothing about the difference; it is a host rendering decision) needs
+    /// exactly these three alongside the geometry above — `out_chars` in
+    /// particular must be the value AT THE CALL, not whatever a host's own
+    /// running counter reads by the time it gets around to replaying this op:
+    /// `Machine`'s own counter has typically moved on by then (a whole turn's
+    /// text streams before its pictures are drained), and standing in the
+    /// live count for the historical one misclassifies exactly the picture
+    /// this field exists to classify correctly.
+    Draw {
+        number: u16,
+        x: u16,
+        y: u16,
+        win_box: (u16, u16, u16, u16),
+        at_cursor: bool,
+        margin_after: Option<u16>,
+        out_chars: u64,
+    },
     /// An `erase_picture` (ZMSD §15). Same fields as [`Self::Draw`]; the
     /// picture's footprint is not known here — see the module docs.
-    ErasePicture { number: u16, x: u16, y: u16, win_box: (u16, u16, u16, u16) },
+    ErasePicture {
+        number: u16,
+        x: u16,
+        y: u16,
+        win_box: (u16, u16, u16, u16),
+        at_cursor: bool,
+        margin_after: Option<u16>,
+        out_chars: u64,
+    },
     /// The whole-window clear an `erase_window` paints, folded from the
     /// paired [`crate::cpu::exec::EraseFill`] and canvas-clear `PictureEvent`
     /// `Machine` emits for one call — see the module docs' first retirement
     /// rule. `win_box` is the window's box at erase time.
     Clear { win_box: (u16, u16, u16, u16) },
-    /// NOT a Z-machine event — appended directly by the host via
-    /// [`PaintLog::append_host_erase`], never via [`PaintLog::apply`]. ZMSD §8
-    /// describes one shared screen; a host that models each window as an
-    /// independent canvas (as `lanthorn` does) must mirror one window's erase
-    /// into every OTHER window it overlaps, in whatever LOCAL rect that other
-    /// window's own canvas uses. `zvm` has no opinion on that host canvas
-    /// model and cannot compute the rect — but it is still the one place that
-    /// holds this window's ops in the right ORDER relative to its own draws,
-    /// which is what makes a later replay correct: an erase recorded out of
-    /// order would erase pixels the window had not been drawn onto yet, or
-    /// fail to erase ones it had. `dx`/`dy`/`w`/`h` are already the host's own
-    /// local, canvas-relative rect — nothing here to re-derive.
-    HostErase { dx: i32, dy: i32, w: u32, h: u32 },
 }
 
-/// One window's folded paint history.
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
-struct WindowLog {
-    /// The window's origin `(x, y)` as of the most recently recorded op —
-    /// `None` until the first op. Compared against each new event's window
-    /// box to detect a move (the second retirement rule).
-    origin: Option<(u16, u16)>,
-    ops: Vec<PaintOp>,
+impl PaintOp {
+    /// The window box every variant carries, used both to detect a window
+    /// move (retirement) and, on decode, to re-derive each window's current
+    /// origin without storing it separately (see [`decode`]).
+    fn win_box(&self) -> (u16, u16, u16, u16) {
+        match *self {
+            PaintOp::Draw { win_box, .. }
+            | PaintOp::ErasePicture { win_box, .. }
+            | PaintOp::Clear { win_box } => win_box,
+        }
+    }
 }
 
-/// The Version 6 paint log: one [`WindowLog`] per window (0..8), fed
-/// automatically as `Machine` queues paint events. See the module docs.
+/// The Version 6 paint log: every window's folded picture/erase history, in
+/// ONE ordered stream so a host can replay it in true issue order across
+/// windows — see the module docs. Fed by `Machine` at the same points it
+/// queues [`PaintEvent`]s; a host never calls [`PaintLog::apply`] itself.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct PaintLog {
-    windows: [WindowLog; N_WINDOWS],
+    /// Append-only within a window's own retirement lifetime: [`Self::apply`]
+    /// only ever pushes to the end or removes a whole window's entries
+    /// (`retain`, which preserves the relative order of what survives), so
+    /// this Vec's own order IS issue order — no separate sequence number
+    /// needed.
+    entries: Vec<(u8, PaintOp)>,
+    /// Each window's origin as of its most recently recorded entry — `None`
+    /// until that window's first op. Compared against each new event's
+    /// window box to detect a move (the retirement rule). Not part of the
+    /// encoded format: [`decode`] rebuilds it by scanning.
+    origin: [Option<(u16, u16)>; N_WINDOWS],
 }
 
 impl PaintLog {
-    /// Fold one [`PaintEvent`] into the log — a host calls this once per
-    /// event drained from [`crate::cpu::exec::Machine::take_paint_events`],
-    /// in the SAME walk it rasterizes each one; see the module docs' "Feeding
-    /// it" section for why that walk, and not opcode-execution time, is where
-    /// this belongs.
-    pub fn apply(&mut self, ev: &PaintEvent) {
+    /// Fold one [`PaintEvent`] into the log. `Machine`'s own doing — see the
+    /// module docs' "Feeding it".
+    pub(crate) fn apply(&mut self, ev: &PaintEvent) {
         match ev {
             PaintEvent::Erase(fill) => {
                 let win = fill.window as usize;
@@ -199,106 +223,105 @@ impl PaintLog {
     }
 
     fn set_clear(&mut self, win: usize, win_box: (u16, u16, u16, u16)) {
-        let w = &mut self.windows[win];
-        w.origin = Some((win_box.0, win_box.1));
-        w.ops.clear();
-        w.ops.push(PaintOp::Clear { win_box });
+        self.entries.retain(|(w, _)| *w as usize != win);
+        self.entries.push((win as u8, PaintOp::Clear { win_box }));
+        self.origin[win] = Some((win_box.0, win_box.1));
     }
 
     fn record(&mut self, win: usize, ev: &crate::cpu::exec::PictureEvent) {
-        let w = &mut self.windows[win];
-        let origin = (ev.win_box.0, ev.win_box.1);
-        if w.origin != Some(origin) {
+        let new_origin = (ev.win_box.0, ev.win_box.1);
+        if self.origin[win] != Some(new_origin) {
             // The window has moved since the log's last op for it (or this is
             // the first op ever) — what is recorded describes pixels at an
             // origin nothing on screen occupies any more (ZMSD §8).
-            w.ops.clear();
-            w.origin = Some(origin);
+            self.entries.retain(|(w, _)| *w as usize != win);
+            self.origin[win] = Some(new_origin);
         }
-        if w.ops.len() >= PAINT_LOG_CAP {
+        if self.count(win as u8) >= PAINT_LOG_CAP {
             return;
         }
-        w.ops.push(if ev.erase {
-            PaintOp::ErasePicture { number: ev.number, x: ev.x, y: ev.y, win_box: ev.win_box }
+        let op = if ev.erase {
+            PaintOp::ErasePicture {
+                number: ev.number,
+                x: ev.x,
+                y: ev.y,
+                win_box: ev.win_box,
+                at_cursor: ev.at_cursor,
+                margin_after: ev.margin_after,
+                out_chars: ev.out_chars,
+            }
         } else {
-            PaintOp::Draw { number: ev.number, x: ev.x, y: ev.y, win_box: ev.win_box }
-        });
+            PaintOp::Draw {
+                number: ev.number,
+                x: ev.x,
+                y: ev.y,
+                win_box: ev.win_box,
+                at_cursor: ev.at_cursor,
+                margin_after: ev.margin_after,
+                out_chars: ev.out_chars,
+            }
+        };
+        self.entries.push((win as u8, op));
     }
 
-    /// Append a host-computed cross-window erase to `win`'s own op list — see
-    /// [`PaintOp::HostErase`] for why this exists and why order matters. A
-    /// call for an out-of-range window is ignored, exactly as [`Self::apply`]
-    /// ignores one; the window's own cap still applies, and a call past it is
-    /// dropped exactly as a real event past the cap is.
-    ///
-    /// Does NOT touch the window's tracked origin: this is not a window-box
-    /// event, so it cannot move the window and cannot itself trigger the
-    /// stranding rule — but a LATER draw or erase-picture that does still
-    /// clears it away with everything else, because it is stored in the same
-    /// list.
-    ///
-    /// Prunes earlier [`PaintOp::HostErase`] entries the new rect fully
-    /// contains before appending (SQ-0592's rule, ported): a rect painted
-    /// with the SAME background twice contributes nothing the second time,
-    /// and a host that re-erases the same region every turn — Shogun's
-    /// caret, reached only through this cross-window path since it is
-    /// `erase_window`, never `erase_picture` — would otherwise grow this
-    /// list once per turn for the life of the session. Nothing else is
-    /// pruned: an earlier Draw or ErasePicture under the same rect is dead
-    /// too, but proving it needs a footprint this op does not carry, and
-    /// keeping it is harmless — replay order is preserved, so this erase
-    /// still covers it.
-    pub fn append_host_erase(&mut self, win: u8, dx: i32, dy: i32, w: u32, h: u32) {
-        let Some(win) = self.windows.get_mut(win as usize) else { return };
-        win.ops.retain(|prev| match *prev {
-            PaintOp::HostErase { dx: pdx, dy: pdy, w: pw, h: ph } => {
-                let inside = pdx >= dx
-                    && pdy >= dy
-                    && pdx.saturating_add(pw as i32) <= dx.saturating_add(w as i32)
-                    && pdy.saturating_add(ph as i32) <= dy.saturating_add(h as i32);
-                !inside
-            }
-            _ => true,
-        });
-        if win.ops.len() >= PAINT_LOG_CAP {
-            return;
-        }
-        win.ops.push(PaintOp::HostErase { dx, dy, w, h });
+    fn count(&self, win: u8) -> usize {
+        self.entries.iter().filter(|(w, _)| *w == win).count()
     }
 
     /// One window's folded op list, oldest first. Empty for a window nothing
-    /// has drawn to (or restart/whole-window-clear last touched).
-    pub fn ops(&self, win: u8) -> &[PaintOp] {
-        match self.windows.get(win as usize) {
-            Some(w) => &w.ops,
-            None => &[],
-        }
+    /// has drawn to (or restart/whole-window-clear last touched). Equivalent
+    /// to filtering [`Self::ops_in_order`] to one window.
+    pub fn ops(&self, win: u8) -> Vec<PaintOp> {
+        self.entries.iter().filter(|(w, _)| *w == win).map(|(_, op)| *op).collect()
     }
 
-    /// Whether `win`'s list has hit [`PAINT_LOG_CAP`] — a host's signal that
-    /// replaying it will not reproduce every op the story issued, so it
-    /// should fall back to a pixel snapshot for this window rather than
+    /// Every surviving op, across every window, in the TRUE order the story
+    /// issued them — the one thing a per-window view cannot give a host: a
+    /// cross-window erase mirrored while replaying window 2's entry must
+    /// land relative to window 7's OWN draws exactly where it truly occurred,
+    /// not before all of them or after all of them. A host rebuilding canvas
+    /// state walks this, in order, through the SAME functions live rendering
+    /// uses. See the module docs.
+    pub fn ops_in_order(&self) -> &[(u8, PaintOp)] {
+        &self.entries
+    }
+
+    /// Whether `win`'s entries have hit [`PAINT_LOG_CAP`] — a host's signal
+    /// that replaying them will not reproduce every op the story issued, so
+    /// it should fall back to a pixel snapshot for this window rather than
     /// trust the (necessarily incomplete) list.
     pub fn is_capped(&self, win: u8) -> bool {
-        self.windows.get(win as usize).is_some_and(|w| w.ops.len() >= PAINT_LOG_CAP)
+        self.count(win) >= PAINT_LOG_CAP
     }
 
-    /// Drop one window's history — as if it had just been whole-canvas
-    /// cleared, but with nothing left standing at all (not even a
-    /// [`PaintOp::Clear`]). A host reaches for this only in the same
-    /// situations it would have dropped its own replay state; ordinary play
-    /// never needs it, since a real `erase_window` already folds to
-    /// [`PaintOp::Clear`] via [`Self::apply`].
-    pub fn clear(&mut self, win: u8) {
-        if let Some(w) = self.windows.get_mut(win as usize) {
-            *w = WindowLog::default();
-        }
-    }
-
-    /// Drop every window's history. `Machine::restart` calls this in the
+    /// Drop every window's entries. `Machine::restart` calls this in the
     /// same breath it clears the paint queues themselves (ZMSD §6.1.3).
-    pub fn clear_all(&mut self) {
-        self.windows = Default::default();
+    pub(crate) fn clear_all(&mut self) {
+        self.entries.clear();
+        self.origin = [None; N_WINDOWS];
+    }
+
+    /// Mirror, on the log's own copy of the last `draw_picture` for `win`, the
+    /// SAME retroactive `margin_after` attachment `Machine` makes to its
+    /// pending picture queue when a `set_margins` follows a `draw_picture`
+    /// directly (ZMSD §15's inline-picture idiom): the log's entry for that
+    /// draw was already fed by the time this runs, so without this call it
+    /// would keep the `None` it had at draw time forever, and a host trying
+    /// to tell an inline float from a canvas picture at replay time needs the
+    /// SAME `margin_after` a live drain sees. Only the log's LAST entry is
+    /// eligible, and only a `Draw` whose `margin_after` is still unset — the
+    /// exact condition the pending-queue mutation uses, so the two can never
+    /// disagree about which draw a `set_margins` was really about.
+    pub(crate) fn set_margin_after(&mut self, win: u8, margin: u16) {
+        let Some((w, op)) = self.entries.last_mut() else { return };
+        if *w != win {
+            return;
+        }
+        if let PaintOp::Draw { margin_after, .. } = op {
+            if margin_after.is_none() {
+                *margin_after = Some(margin);
+            }
+        }
     }
 }
 
@@ -316,35 +339,36 @@ pub const VERSION: u16 = 1;
 const OP_DRAW: u8 = 0;
 const OP_ERASE_PICTURE: u8 = 1;
 const OP_CLEAR: u8 = 2;
-const OP_HOST_ERASE: u8 = 3;
 
-/// Bytes one encoded op occupies at minimum (a `Clear`, the smallest
-/// variant): tag + 4 x u16 win_box.
-const MIN_OP_BYTES: usize = 1 + 4 * 2;
+/// Bytes one encoded entry occupies at minimum (a `Clear`, the smallest
+/// variant): window tag + op tag + 4 x u16 win_box.
+const MIN_ENTRY_BYTES: usize = 1 + 1 + 4 * 2;
 
-/// Serialise a paint log to a versioned byte buffer.
+fn put_u64(out: &mut Vec<u8>, v: u64) {
+    out.extend_from_slice(&v.to_be_bytes());
+}
+
+/// Serialise a paint log to a versioned byte buffer. Entries travel in
+/// [`PaintLog::ops_in_order`]'s order — the format IS that order, so
+/// [`decode`] needs nothing beyond it to rebuild everything, including each
+/// window's origin (see [`decode`]).
 pub fn encode(log: &PaintLog) -> Vec<u8> {
     let mut out = Vec::new();
     out.extend_from_slice(MAGIC);
     put_u16(&mut out, VERSION);
-    for w in &log.windows {
-        match w.origin {
-            Some((x, y)) => {
-                out.push(1);
-                put_u16(&mut out, x);
-                put_u16(&mut out, y);
-            }
-            None => out.push(0),
-        }
-        put_u32(&mut out, w.ops.len() as u32);
-        for op in &w.ops {
-            put_op(&mut out, op);
-        }
+    put_u32(&mut out, log.entries.len() as u32);
+    for (win, op) in &log.entries {
+        out.push(*win);
+        put_op(&mut out, op);
     }
     out
 }
 
 /// Rebuild a paint log from a buffer written by [`encode`].
+///
+/// Each window's origin is NOT stored — it is re-derived by scanning the
+/// entries in order and taking the last `win_box` seen for that window,
+/// which is exactly what [`PaintLog::apply`] would have left it at.
 ///
 /// # Errors
 ///
@@ -360,25 +384,19 @@ pub fn decode(bytes: &[u8]) -> Result<PaintLog, ZError> {
     if version > VERSION {
         return Err(ZError::PaintLogVersion { found: version, supported: VERSION });
     }
-    let mut windows: [WindowLog; N_WINDOWS] = Default::default();
-    for w in windows.iter_mut() {
-        let has_origin = r.u8()?;
-        w.origin = match has_origin {
-            0 => None,
-            _ => {
-                let x = r.u16()?;
-                let y = r.u16()?;
-                Some((x, y))
-            }
-        };
-        let n = r.count(MIN_OP_BYTES)?;
-        let mut ops = Vec::with_capacity(n);
-        for _ in 0..n {
-            ops.push(r.op()?);
+    let n = r.count(MIN_ENTRY_BYTES)?;
+    let mut entries = Vec::with_capacity(n);
+    let mut origin = [None; N_WINDOWS];
+    for _ in 0..n {
+        let win = r.u8()?;
+        let op = r.op()?;
+        if (win as usize) < N_WINDOWS {
+            let wb = op.win_box();
+            origin[win as usize] = Some((wb.0, wb.1));
         }
-        w.ops = ops;
+        entries.push((win, op));
     }
-    Ok(PaintLog { windows })
+    Ok(PaintLog { entries, origin })
 }
 
 fn put_u16(out: &mut Vec<u8>, v: u16) {
@@ -389,10 +407,6 @@ fn put_u32(out: &mut Vec<u8>, v: u32) {
     out.extend_from_slice(&v.to_be_bytes());
 }
 
-fn put_i32(out: &mut Vec<u8>, v: i32) {
-    out.extend_from_slice(&v.to_be_bytes());
-}
-
 fn put_win_box(out: &mut Vec<u8>, b: (u16, u16, u16, u16)) {
     put_u16(out, b.0);
     put_u16(out, b.1);
@@ -400,32 +414,41 @@ fn put_win_box(out: &mut Vec<u8>, b: (u16, u16, u16, u16)) {
     put_u16(out, b.3);
 }
 
+fn put_opt_u16(out: &mut Vec<u8>, v: Option<u16>) {
+    match v {
+        Some(v) => {
+            out.push(1);
+            put_u16(out, v);
+        }
+        None => out.push(0),
+    }
+}
+
 fn put_op(out: &mut Vec<u8>, op: &PaintOp) {
     match *op {
-        PaintOp::Draw { number, x, y, win_box } => {
+        PaintOp::Draw { number, x, y, win_box, at_cursor, margin_after, out_chars } => {
             out.push(OP_DRAW);
             put_u16(out, number);
             put_u16(out, x);
             put_u16(out, y);
             put_win_box(out, win_box);
+            out.push(u8::from(at_cursor));
+            put_opt_u16(out, margin_after);
+            put_u64(out, out_chars);
         }
-        PaintOp::ErasePicture { number, x, y, win_box } => {
+        PaintOp::ErasePicture { number, x, y, win_box, at_cursor, margin_after, out_chars } => {
             out.push(OP_ERASE_PICTURE);
             put_u16(out, number);
             put_u16(out, x);
             put_u16(out, y);
             put_win_box(out, win_box);
+            out.push(u8::from(at_cursor));
+            put_opt_u16(out, margin_after);
+            put_u64(out, out_chars);
         }
         PaintOp::Clear { win_box } => {
             out.push(OP_CLEAR);
             put_win_box(out, win_box);
-        }
-        PaintOp::HostErase { dx, dy, w, h } => {
-            out.push(OP_HOST_ERASE);
-            put_i32(out, dx);
-            put_i32(out, dy);
-            put_u32(out, w);
-            put_u32(out, h);
         }
     }
 }
@@ -472,12 +495,20 @@ impl<'a> Reader<'a> {
         Ok(u32::from_be_bytes([s[0], s[1], s[2], s[3]]))
     }
 
-    fn i32(&mut self) -> Result<i32, ZError> {
-        Ok(self.u32()? as i32)
+    fn u64(&mut self) -> Result<u64, ZError> {
+        let s = self.take(8)?;
+        Ok(u64::from_be_bytes(s.try_into().expect("take(8) returns 8 bytes")))
     }
 
     fn win_box(&mut self) -> Result<(u16, u16, u16, u16), ZError> {
         Ok((self.u16()?, self.u16()?, self.u16()?, self.u16()?))
+    }
+
+    fn opt_u16(&mut self) -> Result<Option<u16>, ZError> {
+        Ok(match self.u8()? {
+            0 => None,
+            _ => Some(self.u16()?),
+        })
     }
 
     fn op(&mut self) -> Result<PaintOp, ZError> {
@@ -488,25 +519,24 @@ impl<'a> Reader<'a> {
                 let x = self.u16()?;
                 let y = self.u16()?;
                 let win_box = self.win_box()?;
-                PaintOp::Draw { number, x, y, win_box }
+                let at_cursor = self.u8()? != 0;
+                let margin_after = self.opt_u16()?;
+                let out_chars = self.u64()?;
+                PaintOp::Draw { number, x, y, win_box, at_cursor, margin_after, out_chars }
             }
             OP_ERASE_PICTURE => {
                 let number = self.u16()?;
                 let x = self.u16()?;
                 let y = self.u16()?;
                 let win_box = self.win_box()?;
-                PaintOp::ErasePicture { number, x, y, win_box }
+                let at_cursor = self.u8()? != 0;
+                let margin_after = self.opt_u16()?;
+                let out_chars = self.u64()?;
+                PaintOp::ErasePicture { number, x, y, win_box, at_cursor, margin_after, out_chars }
             }
             OP_CLEAR => {
                 let win_box = self.win_box()?;
                 PaintOp::Clear { win_box }
-            }
-            OP_HOST_ERASE => {
-                let dx = self.i32()?;
-                let dy = self.i32()?;
-                let w = self.u32()?;
-                let h = self.u32()?;
-                PaintOp::HostErase { dx, dy, w, h }
             }
             _ => return Err(ZError::BadPaintLog),
         })
@@ -523,6 +553,10 @@ mod tests {
         PaintEvent::Picture(PictureEvent::new(number, 0, x, y, false, 0, None, false, win_box))
     }
 
+    fn draw_win(win: u8, number: u16, x: u16, y: u16, win_box: (u16, u16, u16, u16)) -> PaintEvent {
+        PaintEvent::Picture(PictureEvent::new(number, win, x, y, false, 0, None, false, win_box))
+    }
+
     fn erase_pic(number: u16, x: u16, y: u16, win_box: (u16, u16, u16, u16)) -> PaintEvent {
         PaintEvent::Picture(PictureEvent::new(number, 0, x, y, true, 0, None, false, win_box))
     }
@@ -532,6 +566,14 @@ mod tests {
         [
             PaintEvent::Erase(EraseFill::new(0, x, y, w, h, ZColour::Default, 0)),
             PaintEvent::Picture(PictureEvent::new(0, 0, 1, 1, true, 0, None, true, win_box)),
+        ]
+    }
+
+    fn window_clear_pair_win(win: u8, win_box: (u16, u16, u16, u16)) -> [PaintEvent; 2] {
+        let (x, y, w, h) = win_box;
+        [
+            PaintEvent::Erase(EraseFill::new(win, x, y, w, h, ZColour::Default, 0)),
+            PaintEvent::Picture(PictureEvent::new(0, win, 1, 1, true, 0, None, true, win_box)),
         ]
     }
 
@@ -553,7 +595,10 @@ mod tests {
 
         assert_eq!(
             log.ops(0),
-            &[PaintOp::Clear { win_box }, PaintOp::Draw { number: 3, x: 30, y: 30, win_box }]
+            vec![
+                PaintOp::Clear { win_box },
+                PaintOp::Draw { number: 3, x: 30, y: 30, win_box, at_cursor: false, margin_after: None, out_chars: 0 },
+            ]
         );
     }
 
@@ -564,7 +609,7 @@ mod tests {
         for ev in window_clear_pair(win_box) {
             log.apply(&ev);
         }
-        assert_eq!(log.ops(0), &[PaintOp::Clear { win_box }]);
+        assert_eq!(log.ops(0), vec![PaintOp::Clear { win_box }]);
     }
 
     #[test]
@@ -572,8 +617,9 @@ mod tests {
         let mut log = PaintLog::default();
         for win in 0u8..8 {
             let win_box = (1, 1, u16::from(win) + 1, u16::from(win) + 1);
-            log.apply(&PaintEvent::Erase(EraseFill::new(win, win_box.0, win_box.1, win_box.2, win_box.3, ZColour::Default, 0)));
-            log.apply(&PaintEvent::Picture(PictureEvent::new(0, win, 1, 1, true, 0, None, true, win_box)));
+            for ev in window_clear_pair_win(win, win_box) {
+                log.apply(&ev);
+            }
         }
         for win in 0u8..8 {
             assert_eq!(log.ops(win).len(), 1, "window {win}");
@@ -592,7 +638,7 @@ mod tests {
         log.apply(&draw(3, 5, 5, moved));
         assert_eq!(
             log.ops(0),
-            &[PaintOp::Draw { number: 3, x: 5, y: 5, win_box: moved }],
+            vec![PaintOp::Draw { number: 3, x: 5, y: 5, win_box: moved, at_cursor: false, margin_after: None, out_chars: 0 }],
             "the pre-move draws described pixels nothing on screen occupies any more"
         );
     }
@@ -611,14 +657,17 @@ mod tests {
         let mut log = PaintLog::default();
         let win_box = (1, 1, 100, 100);
         log.apply(&erase_pic(7, 12, 34, win_box));
-        assert_eq!(log.ops(0), &[PaintOp::ErasePicture { number: 7, x: 12, y: 34, win_box }]);
+        assert_eq!(
+            log.ops(0),
+            vec![PaintOp::ErasePicture { number: 7, x: 12, y: 34, win_box, at_cursor: false, margin_after: None, out_chars: 0 }]
+        );
     }
 
     #[test]
     fn other_windows_are_untouched_by_one_windows_events() {
         let mut log = PaintLog::default();
         let win_box = (1, 1, 10, 10);
-        log.apply(&PaintEvent::Picture(PictureEvent::new(9, 3, 1, 1, false, 0, None, true, win_box)));
+        log.apply(&draw_win(3, 9, 1, 1, win_box));
         assert_eq!(log.ops(3).len(), 1);
         for win in (0u8..8).filter(|&w| w != 3) {
             assert!(log.ops(win).is_empty(), "window {win}");
@@ -639,15 +688,14 @@ mod tests {
             log.apply(&ev);
         }
         assert!(!log.is_capped(0), "a whole-window clear resets the cap");
-        assert_eq!(log.ops(0), &[PaintOp::Clear { win_box }]);
+        assert_eq!(log.ops(0), vec![PaintOp::Clear { win_box }]);
     }
 
     #[test]
     fn clear_all_empties_every_window() {
         let mut log = PaintLog::default();
         for win in 0u8..8 {
-            log.apply(&draw(1, 1, 1, (1, 1, 10, 10)));
-            let _ = win;
+            log.apply(&draw_win(win, 1, 1, 1, (1, 1, 10, 10)));
         }
         log.clear_all();
         for win in 0u8..8 {
@@ -665,103 +713,33 @@ mod tests {
         }
     }
 
+    /// The property the flat, globally-ordered log exists for: a whole-window
+    /// clear on window 2, issued BETWEEN two draws into window 7, must land
+    /// between them in [`PaintLog::ops_in_order`] — not before both (as
+    /// feeding-at-drain-time with a per-window store would put it) and not
+    /// after both.
     #[test]
-    fn a_host_erase_lands_in_the_target_windows_own_order() {
+    fn ops_in_order_preserves_true_cross_window_interleave() {
         let mut log = PaintLog::default();
-        let win_box = (1, 1, 100, 100);
-        log.apply(&draw(1, 10, 10, win_box));
-        log.append_host_erase(0, 5, 5, 20, 20);
-        log.apply(&draw(2, 30, 30, win_box));
-        assert_eq!(
-            log.ops(0),
-            &[
-                PaintOp::Draw { number: 1, x: 10, y: 10, win_box },
-                PaintOp::HostErase { dx: 5, dy: 5, w: 20, h: 20 },
-                PaintOp::Draw { number: 2, x: 30, y: 30, win_box },
-            ],
-            "the erase sits between the two draws, exactly where it was appended"
-        );
-    }
-
-    #[test]
-    fn a_host_erase_does_not_move_the_tracked_origin() {
-        let mut log = PaintLog::default();
-        let win_box = (1, 1, 100, 100);
-        log.apply(&draw(1, 10, 10, win_box));
-        log.append_host_erase(0, 5, 5, 20, 20);
-        // A redraw at the SAME origin must not strand — the host erase is not a
-        // window-box event and must not have touched the tracked origin.
-        log.apply(&draw(2, 11, 11, win_box));
-        assert_eq!(log.ops(0).len(), 3, "same origin — nothing was stranded");
-    }
-
-    #[test]
-    fn a_later_whole_window_clear_drops_an_earlier_host_erase_too() {
-        let mut log = PaintLog::default();
-        let win_box = (1, 1, 100, 100);
-        log.apply(&draw(1, 10, 10, win_box));
-        log.append_host_erase(0, 5, 5, 20, 20);
-        for ev in window_clear_pair(win_box) {
-            log.apply(&ev);
+        let wb7 = (1, 1, 640, 400);
+        let wb2 = (29, 1, 584, 192);
+        log.apply(&draw_win(7, 54, 5, 12, wb7)); // 1: window 7 draws its backdrop
+        for ev in window_clear_pair_win(2, wb2) {
+            log.apply(&ev); // 2: window 2 clears (between the two window-7 draws)
         }
-        assert_eq!(log.ops(0), &[PaintOp::Clear { win_box }], "the whole list resets, host erase included");
-    }
+        log.apply(&draw_win(7, 137, 1, 1, wb7)); // 3: window 7 draws again
 
-    #[test]
-    fn a_host_erase_past_the_cap_is_dropped() {
-        let mut log = PaintLog::default();
-        let win_box = (1, 1, 10, 10);
-        for i in 0..PAINT_LOG_CAP {
-            log.apply(&draw(i as u16, 1, 1, win_box));
-        }
-        assert!(log.is_capped(0));
-        log.append_host_erase(0, 0, 0, 1, 1);
-        assert_eq!(log.ops(0).len(), PAINT_LOG_CAP, "capped — the host erase is dropped like any other");
-    }
-
-    #[test]
-    fn a_host_erase_subsumes_an_earlier_smaller_one_at_the_same_spot() {
-        let mut log = PaintLog::default();
-        let win_box = (1, 1, 100, 100);
-        log.apply(&draw(1, 10, 10, win_box));
-        log.append_host_erase(0, 5, 5, 20, 20);
-        // Re-erasing the SAME (or a larger, covering) rect every turn — Shogun's
-        // caret pattern — must not grow the list.
-        log.append_host_erase(0, 5, 5, 20, 20);
-        log.append_host_erase(0, 5, 5, 20, 20);
-        log.append_host_erase(0, 0, 0, 30, 30); // covers the smaller rect too
-        assert_eq!(
-            log.ops(0),
-            &[
-                PaintOp::Draw { number: 1, x: 10, y: 10, win_box },
-                PaintOp::HostErase { dx: 0, dy: 0, w: 30, h: 30 },
-            ],
-            "every earlier host erase the newest one fully covers is pruned"
+        let order = log.ops_in_order();
+        let pos = |pred: &dyn Fn(&(u8, PaintOp)) -> bool| {
+            order.iter().position(pred).unwrap_or_else(|| panic!("missing in {order:?}"))
+        };
+        let first_draw = pos(&|(w, op)| *w == 7 && matches!(op, PaintOp::Draw { number: 54, .. }));
+        let clear2 = pos(&|(w, op)| *w == 2 && matches!(op, PaintOp::Clear { .. }));
+        let second_draw = pos(&|(w, op)| *w == 7 && matches!(op, PaintOp::Draw { number: 137, .. }));
+        assert!(
+            first_draw < clear2 && clear2 < second_draw,
+            "window 2's clear must sit strictly between window 7's two draws: {order:?}"
         );
-    }
-
-    #[test]
-    fn a_host_erase_does_not_prune_one_it_does_not_fully_cover() {
-        let mut log = PaintLog::default();
-        log.append_host_erase(0, 0, 0, 10, 10);
-        log.append_host_erase(0, 5, 5, 10, 10); // overlaps but does not contain
-        assert_eq!(
-            log.ops(0),
-            &[
-                PaintOp::HostErase { dx: 0, dy: 0, w: 10, h: 10 },
-                PaintOp::HostErase { dx: 5, dy: 5, w: 10, h: 10 },
-            ],
-            "a partial overlap prunes nothing — only full containment does"
-        );
-    }
-
-    #[test]
-    fn a_host_erase_for_an_out_of_range_window_is_ignored() {
-        let mut log = PaintLog::default();
-        log.append_host_erase(200, 0, 0, 1, 1); // no panic is the assertion
-        for win in 0u8..8 {
-            assert!(log.ops(win).is_empty());
-        }
     }
 
     // -- encode/decode -------------------------------------------------------
@@ -771,13 +749,12 @@ mod tests {
         let win_box = (1, 1, 100, 100);
         log.apply(&draw(1, 10, 10, win_box));
         log.apply(&erase_pic(2, 20, 20, win_box));
-        log.append_host_erase(0, 4, 4, 8, 8);
         for win in 1u8..4 {
             let wb = (u16::from(win), u16::from(win), 40, 50);
-            for ev in window_clear_pair(wb) {
+            for ev in window_clear_pair_win(win, wb) {
                 log.apply(&ev);
             }
-            log.apply(&draw(win as u16, 3, 3, wb));
+            log.apply(&draw_win(win, win as u16, 3, 3, wb));
         }
         log
     }
@@ -787,6 +764,122 @@ mod tests {
         let src = sample_log();
         let back = decode(&encode(&src)).expect("decodes");
         assert_eq!(src, back);
+    }
+
+    #[test]
+    fn at_cursor_and_margin_after_round_trip() {
+        let mut log = PaintLog::default();
+        let win_box = (1, 1, 100, 100);
+        log.apply(&PaintEvent::Picture(PictureEvent::new(
+            1, 0, 5, 5, false, 0, Some(96), true, win_box,
+        )));
+        log.apply(&PaintEvent::Picture(PictureEvent::new(
+            2, 0, 6, 6, true, 0, None, false, win_box,
+        )));
+        assert_eq!(
+            log.ops(0),
+            vec![
+                PaintOp::Draw { number: 1, x: 5, y: 5, win_box, at_cursor: true, margin_after: Some(96), out_chars: 0 },
+                PaintOp::ErasePicture { number: 2, x: 6, y: 6, win_box, at_cursor: false, margin_after: None, out_chars: 0 },
+            ]
+        );
+        let back = decode(&encode(&log)).expect("decodes");
+        assert_eq!(log, back, "at_cursor and margin_after must survive encode/decode");
+    }
+
+    /// `out_chars` is the count AT THE CALL, frozen into the entry the moment
+    /// it is recorded — not a value a host recomputes later from its own
+    /// running counter. Two draws with the SAME `win`/geometry but different
+    /// `out_chars` must keep their own counts distinct, and the value must
+    /// survive encode/decode exactly (mysterious01's title card carries 0
+    /// here while the session's live counter has already moved past it by
+    /// the time anything reads the log — conflating the two misclassifies
+    /// the very picture this field exists to classify correctly).
+    #[test]
+    fn out_chars_is_the_value_at_the_call_not_a_running_count() {
+        let mut log = PaintLog::default();
+        let win_box = (1, 1, 640, 400);
+        log.apply(&PaintEvent::Picture(PictureEvent::new(33, 0, 1, 1, false, 0, None, true, win_box)));
+        log.apply(&PaintEvent::Picture(PictureEvent::new(34, 0, 1, 192, false, 24, None, false, win_box)));
+        assert_eq!(
+            log.ops(0),
+            vec![
+                PaintOp::Draw { number: 33, x: 1, y: 1, win_box, at_cursor: true, margin_after: None, out_chars: 0 },
+                PaintOp::Draw { number: 34, x: 1, y: 192, win_box, at_cursor: false, margin_after: None, out_chars: 24 },
+            ],
+            "each entry keeps its OWN out_chars, not the log's most recent one"
+        );
+        let back = decode(&encode(&log)).expect("decodes");
+        assert_eq!(log, back, "out_chars must survive encode/decode");
+    }
+
+    /// `Machine`'s own `set_margins` opcode handler retroactively attaches
+    /// `margin_after` to the pending picture it directly follows — AFTER that
+    /// picture's log entry was already fed. Without `set_margin_after`
+    /// mirroring the same attachment on the log, the log's copy would keep
+    /// `None` forever, silently different from what a live drain of the same
+    /// turn sees on the SAME event.
+    #[test]
+    fn set_margin_after_reaches_the_logs_own_copy_of_the_draw() {
+        let mut log = PaintLog::default();
+        let win_box = (1, 1, 100, 100);
+        log.apply(&draw(1, 5, 5, win_box));
+        log.set_margin_after(0, 96);
+        assert_eq!(
+            log.ops(0),
+            vec![PaintOp::Draw { number: 1, x: 5, y: 5, win_box, at_cursor: false, margin_after: Some(96), out_chars: 0 }],
+        );
+    }
+
+    #[test]
+    fn set_margin_after_does_not_overwrite_an_already_set_margin() {
+        let mut log = PaintLog::default();
+        let win_box = (1, 1, 100, 100);
+        log.apply(&PaintEvent::Picture(PictureEvent::new(1, 0, 5, 5, false, 0, Some(10), false, win_box)));
+        log.set_margin_after(0, 96);
+        assert_eq!(
+            log.ops(0),
+            vec![PaintOp::Draw { number: 1, x: 5, y: 5, win_box, at_cursor: false, margin_after: Some(10), out_chars: 0 }],
+            "a margin the draw already carried is not replaced"
+        );
+    }
+
+    #[test]
+    fn set_margin_after_ignores_a_different_windows_last_entry() {
+        let mut log = PaintLog::default();
+        let win_box = (1, 1, 100, 100);
+        log.apply(&draw_win(3, 1, 5, 5, win_box));
+        log.set_margin_after(0, 96); // window 0 has no entries at all
+        assert!(log.ops(0).is_empty());
+        assert_eq!(
+            log.ops(3),
+            vec![PaintOp::Draw { number: 1, x: 5, y: 5, win_box, at_cursor: false, margin_after: None, out_chars: 0 }],
+            "window 3's draw is untouched by a set_margins naming window 0"
+        );
+    }
+
+    #[test]
+    fn set_margin_after_does_not_touch_an_erase_picture() {
+        let mut log = PaintLog::default();
+        let win_box = (1, 1, 100, 100);
+        log.apply(&erase_pic(1, 5, 5, win_box));
+        log.set_margin_after(0, 96);
+        assert_eq!(
+            log.ops(0),
+            vec![PaintOp::ErasePicture { number: 1, x: 5, y: 5, win_box, at_cursor: false, margin_after: None, out_chars: 0 }],
+            "the pending-queue mutation this mirrors only ever touches a draw (`!ev.erase`)"
+        );
+    }
+
+    #[test]
+    fn issue_order_survives_encode_decode() {
+        let src = sample_log();
+        let back = decode(&encode(&src)).expect("decodes");
+        assert_eq!(
+            src.ops_in_order(),
+            back.ops_in_order(),
+            "the encoded form IS issue order, so decode must reproduce it exactly"
+        );
     }
 
     #[test]
@@ -822,11 +915,10 @@ mod tests {
     }
 
     #[test]
-    fn a_corrupt_op_count_is_an_error_rather_than_an_allocation() {
-        // Window 0's op count is the four bytes right after its has-origin
-        // flag: magic(4) + version(2) + has_origin(1).
+    fn a_corrupt_entry_count_is_an_error_rather_than_an_allocation() {
+        // The entry count is the four bytes right after magic(4) + version(2).
         let mut blob = encode(&PaintLog::default());
-        let at = 4 + 2 + 1;
+        let at = 4 + 2;
         blob[at..at + 4].copy_from_slice(&u32::MAX.to_be_bytes());
         assert_eq!(decode(&blob).unwrap_err(), ZError::BadPaintLog);
     }

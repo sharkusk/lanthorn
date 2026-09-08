@@ -491,12 +491,12 @@ pub struct Machine {
     /// one paint sequence; today they are independent because pictures and fills
     /// are drawn by different games for different purposes.
     pub(crate) pending_erase_fills: Vec<EraseFill>,
-    /// The folded per-window Version 6 paint history (SQ-1403) — a host feeds
-    /// this from its OWN drain of [`Self::take_paint_events`] (see
-    /// [`crate::paint_log`]'s "Feeding it" for why it is not fed
-    /// automatically here); `Machine` owns the storage and the fold
-    /// algorithm, and clears it structurally on [`Self::restart`]. See
-    /// [`Self::paint_log`] / [`Self::paint_log_mut`].
+    /// The folded Version 6 paint history (SQ-1403) — fed here, at the same
+    /// points [`Self::pending_pictures`] / [`Self::pending_erase_fills`] are
+    /// queued, so it always reflects every event this `Machine` has ever
+    /// issued regardless of whether (or how often) a host drains
+    /// [`Self::take_paint_events`]. See [`crate::paint_log`] and
+    /// [`Self::paint_log`].
     paint_log: crate::paint_log::PaintLog,
     /// Running count of chars printed to v6 window 0 (the main scrolling
     /// window) — stamps `PictureEvent::out_chars` so window-0 inline pictures
@@ -1586,28 +1586,20 @@ impl Machine {
 
     /// Queue a v6 picture-draw/erase event as if the opcode that produces it
     /// had just run. For a host (and this crate's own tests) exercising the
-    /// render-drain path without executing real V6 bytecode.
+    /// render-drain path without executing real V6 bytecode. Feeds
+    /// [`Self::paint_log`] too, exactly as the real opcode handlers do.
     pub fn queue_picture_event(&mut self, ev: PictureEvent) {
         self.pending_pictures.push(ev);
+        self.paint_log.apply(&PaintEvent::Picture(ev));
     }
 
-    /// The folded per-window Version 6 paint history (SQ-1403) — what to
-    /// replay to rebuild a window's picture canvas. Read-only; a host feeds
-    /// it via [`Self::paint_log_mut`] from its own drain of
-    /// [`Self::take_paint_events`] — see [`crate::paint_log`]'s "Feeding it".
+    /// The folded Version 6 paint history (SQ-1403) — what to replay to
+    /// rebuild every window's picture canvas, independent of whether (or how
+    /// often) the host has drained [`Self::take_paint_events`]. Read-only: a
+    /// host never feeds this itself, only `Machine` does, at the same points
+    /// it queues the events themselves — see [`crate::paint_log`].
     pub fn paint_log(&self) -> &crate::paint_log::PaintLog {
         &self.paint_log
-    }
-
-    /// Mutable access to the paint log — a host calls
-    /// [`crate::paint_log::PaintLog::apply`] here once per event drained from
-    /// [`Self::take_paint_events`], and
-    /// [`crate::paint_log::PaintLog::append_host_erase`] here for a
-    /// cross-window erase its own canvas model computes, in the SAME walk so
-    /// the two interleave correctly. See [`crate::paint_log`]'s "Feeding it"
-    /// for why this is the host's to drive rather than automatic.
-    pub fn paint_log_mut(&mut self) -> &mut crate::paint_log::PaintLog {
-        &mut self.paint_log
     }
 
     /// Replace the paint log from bytes written by
@@ -3027,6 +3019,9 @@ impl Machine {
                         }
                         _ => {}
                     }
+                    for f in &fills {
+                        self.paint_log.apply(&PaintEvent::Erase(*f));
+                    }
                     self.pending_erase_fills.extend(fills);
                     for (window, win_box) in clear_canvas {
                         let ev = PictureEvent {
@@ -3045,6 +3040,11 @@ impl Machine {
                             at_cursor: true,
                         };
                         self.pending_pictures.push(ev);
+                        // The paired EraseFill above (SQ-0715) already folds this
+                        // window's paint log to a single Clear entry — this is the
+                        // idempotent twin — but it is fed from here too so the
+                        // same `win_box` reaches both queues in the same breath.
+                        self.paint_log.apply(&PaintEvent::Picture(ev));
                     }
                 } else {
                     // ZMSD §8.7.3.2.1: "In Versions 5 and later, the cursor for
@@ -4083,6 +4083,7 @@ impl Machine {
                         at_cursor: y == cy,
                     };
                     self.pending_pictures.push(ev);
+                    self.paint_log.apply(&PaintEvent::Picture(ev));
                 }
                 StepResult::Continue
             }
@@ -4121,6 +4122,7 @@ impl Machine {
                         at_cursor: y == cy,
                     };
                     self.pending_pictures.push(ev);
+                    self.paint_log.apply(&PaintEvent::Picture(ev));
                 }
                 StepResult::Continue
             }
@@ -4165,6 +4167,12 @@ impl Machine {
                     if ev.window as u16 == win && ev.margin_after.is_none() && !ev.erase {
                         ev.margin_after = Some(left);
                     }
+                }
+                // The paint log's own copy of that same draw needs the same
+                // retroactive attachment (SQ-1403) — it was already fed when
+                // the draw was queued, before this `set_margins` ran.
+                if let Ok(win) = u8::try_from(win) {
+                    self.paint_log.set_margin_after(win, left);
                 }
                 StepResult::Continue
             }

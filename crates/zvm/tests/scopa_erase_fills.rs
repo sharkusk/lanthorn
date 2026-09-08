@@ -171,62 +171,50 @@ fn scopa_drains_its_paints_interleaved() {
     );
 }
 
-/// SQ-1403: `PaintLog::apply` is the host's to call, once per event drained
-/// from `take_paint_events` (see `zvm::paint_log`'s "Feeding it" for why it is
-/// not fed automatically at opcode-execution time — a cross-window erase can
-/// only be computed from the SAME drain walk, and feeding early would put
-/// every such entry after the whole turn's engine events regardless of how
-/// they were truly interleaved). What the fold algorithm itself DOES
-/// guarantee is that feeding it makes no difference: draining scopa's hundreds
-/// of moved-and-erased-window card fills in small bursts (one drain per VM
-/// step) and folding them as they arrive must land on the exact same log as
-/// draining the WHOLE run in one call at the end and folding it all at once —
-/// two hosts on different drain schedules must see identical results.
+/// SQ-1403: `Machine` feeds its own paint log automatically, at the SAME
+/// points it queues `pending_pictures` / `pending_erase_fills` — never via a
+/// host call. `PaintLog::apply` is `pub(crate)`, unreachable from here (this
+/// file is an integration test, compiled as its own crate against `zvm`'s
+/// public API only) even if it wanted to. Driving scopa's boot and clicking
+/// into it, with `take_paint_events` never once called, must still populate
+/// `m.paint_log()` on its own.
 #[test]
-fn scopa_paint_log_is_the_same_whatever_the_drain_schedule() {
+fn machine_feeds_its_own_paint_log_with_no_host_call() {
     let Some(bytes) = story() else { return };
+    let mem = Memory::new(bytes).expect("scopa is a valid v6 story");
+    let mut m = Machine::new(mem);
 
-    // Host A: drains and folds on every VM step (fine-grained).
-    let mem_a = Memory::new(bytes.clone()).expect("scopa is a valid v6 story");
-    let mut m_a = Machine::new(mem_a);
-    let mut log_a = zvm::paint_log::PaintLog::default();
-    let mut all_events: Vec<PaintEvent> = Vec::new();
     let mut clicks = 0u32;
     for _ in 0..50_000_000u64 {
-        match m_a.step() {
+        match m.step() {
             StepResult::NeedChar => {
                 if clicks > 12 {
                     break;
                 }
-                m_a.set_mouse(230, 320, 0b1);
-                m_a.supply_char(254);
+                m.set_mouse(230, 320, 0b1);
+                m.supply_char(254);
                 clicks += 1;
             }
-            StepResult::NeedLine { .. } => m_a.supply_line("", 13),
-            StepResult::Fault => panic!("scopa faulted while painting: {:?}", m_a.take_fault_trace()),
+            StepResult::NeedLine { .. } => m.supply_line("", 13),
+            StepResult::Fault => panic!("scopa faulted while painting: {:?}", m.take_fault_trace()),
             _ => {}
         }
-        for ev in m_a.take_paint_events() {
-            log_a.apply(&ev);
-            all_events.push(ev);
-        }
-        if all_events.len() > 400 {
-            break; // well past the fold rules exercised by the unit tests
+        // Deliberately never drained: no `take_paint_events` call anywhere in
+        // this test, and no way to reach `PaintLog::apply` even if it tried.
+        if m.paint_log().ops_in_order().len() > 100 {
+            break;
         }
     }
-    assert!(all_events.len() > 100, "the run must exercise real fold traffic; only {} events", all_events.len());
-
-    // Host B: folds the SAME events, collected all at once, from a single pass.
-    let mut log_b = zvm::paint_log::PaintLog::default();
-    for ev in &all_events {
-        log_b.apply(ev);
-    }
-
-    for win in 0u8..8 {
-        assert_eq!(
-            log_a.ops(win),
-            log_b.ops(win),
-            "window {win}: the fold must not depend on how often the host drained"
-        );
-    }
+    assert!(
+        !m.paint_log().ops_in_order().is_empty(),
+        "the paint log must be populated by Machine itself, with no drain and no host call"
+    );
+    // True cross-window order survives too: scopa's boot paints more than one
+    // window (the table, the card decks, the menu buttons), which a
+    // per-window-only store fed at drain time could still produce — but only
+    // `ops_in_order` proves the SAME stream carries every window's entries in
+    // one true sequence rather than window-by-window blocks.
+    let distinct_windows: std::collections::BTreeSet<u8> =
+        m.paint_log().ops_in_order().iter().map(|(w, _)| *w).collect();
+    assert!(distinct_windows.len() > 1, "scopa's boot paints more than one window: {distinct_windows:?}");
 }
