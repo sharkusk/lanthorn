@@ -3,6 +3,7 @@ pub mod dictionary;
 pub mod error;
 #[cfg(feature = "fixtures")]
 pub mod fixtures;
+#[cfg(feature = "grammar")]
 pub mod grammar;
 pub mod header;
 pub mod ifid;
@@ -17,8 +18,4 @@ pub mod screen;
 pub mod text;
 pub mod world;
 
-pub use location::{
-    current_location, detect_location, detect_location_with, find_player_object,
-    find_player_object_with, object_tree_view, Location, LocationMethod, PlayerCandidates,
-};
 pub use objects::ObjectSnapshot;

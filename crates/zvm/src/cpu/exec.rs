@@ -46,12 +46,29 @@ fn opcode_name(count: OperandCount, opcode: u8) -> String {
 /// word's high byte; 255 = forever, 0/omitted = play once (applied by the host).
 /// `routine` (v5+) is the finish-routine the host calls when the sound ends.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
 pub struct SoundEvent {
     pub number: u16,
     pub effect: u8,
     pub volume: u8,
     pub repeats: u8,
     pub routine: u16,
+}
+
+impl SoundEvent {
+    /// Build a `SoundEvent` from its ZMSD §9.4 fields.
+    ///
+    /// - `number`: 1/2 select the built-in high/low bleeps; `>= 3` selects a
+    ///   Blorb `Snd ` resource.
+    /// - `effect`: 1=prepare 2=start 3=stop 4=finish.
+    /// - `volume`: the Z-scale 1..=8 (255 = loudest).
+    /// - `repeats`: the repeat count from the volume word's high byte; 255 =
+    ///   forever, 0 = play once (applied by the host).
+    /// - `routine`: (v5+) the finish-routine the host calls when the sound ends;
+    ///   0 when none was given.
+    pub fn new(number: u16, effect: u8, volume: u8, repeats: u8, routine: u16) -> Self {
+        Self { number, effect, volume, repeats, routine }
+    }
 }
 
 /// A v6 `draw_picture`/`erase_picture` event (ZMSD §15), recorded for the host
@@ -63,6 +80,7 @@ pub struct SoundEvent {
 /// (to know the region's dimensions), which rules out a `number: 0`
 /// "erase all" sentinel.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
 pub struct PictureEvent {
     pub number: u16,
     pub window: u8,
@@ -113,6 +131,37 @@ pub struct PictureEvent {
     pub win_box: (u16, u16, u16, u16),
 }
 
+impl PictureEvent {
+    /// Build a `PictureEvent` from its fields. See the struct docs for what
+    /// each one means.
+    ///
+    /// - `number`: the picture number.
+    /// - `window`: the v6 window the call targeted.
+    /// - `x`/`y`: pixel coordinates (top-left corner) within that window.
+    /// - `erase`: `true` for `erase_picture`, `false` for `draw_picture`.
+    /// - `out_chars`: total chars printed to window 0 before this event.
+    /// - `margin_after`: the `left` value of a `set_margins` issued on the same
+    ///   window directly after this draw, if any.
+    /// - `at_cursor`: whether the picture landed on the window's current text
+    ///   line (see [`Self::at_cursor`] field docs above).
+    /// - `win_box`: the target window's `(x, y, w, h)` box at the moment of the
+    ///   call, in native pixels.
+    #[allow(clippy::too_many_arguments)]
+    pub fn new(
+        number: u16,
+        window: u8,
+        x: u16,
+        y: u16,
+        erase: bool,
+        out_chars: u64,
+        margin_after: Option<u16>,
+        at_cursor: bool,
+        win_box: (u16, u16, u16, u16),
+    ) -> Self {
+        Self { number, window, x, y, erase, out_chars, margin_after, at_cursor, win_box }
+    }
+}
+
 /// One filled rectangle painted by an `erase_window`, in native v6 pixels
 /// (SQ-0706). See [`Machine::pending_erase_fills`].
 ///
@@ -121,6 +170,7 @@ pub struct PictureEvent {
 /// because the window has usually been moved and resized specifically to place
 /// this rectangle and will move again before the next one.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
 pub struct EraseFill {
     /// The window that was erased (0–7).
     pub window: u8,
@@ -146,6 +196,23 @@ pub struct EraseFill {
     /// erases them. The host walks both queues together, applying every fill whose
     /// `pics_before` has been reached before the next picture.
     pub pics_before: u32,
+}
+
+impl EraseFill {
+    /// Build an `EraseFill` from its fields. See the struct docs for what
+    /// each one means.
+    ///
+    /// - `window`: the window that was erased (0–7).
+    /// - `x`/`y`: the rect's top-left corner in native pixels, 1-based.
+    /// - `w`/`h`: the rect's width and height in native pixels.
+    /// - `bg`: the window's background at erase time — the colour the rect is
+    ///   filled with.
+    /// - `pics_before`: how many [`PictureEvent`]s were already queued when
+    ///   this fill was pushed (see [`Self::pics_before`] field docs above).
+    #[allow(clippy::too_many_arguments)]
+    pub fn new(window: u8, x: u16, y: u16, w: u16, h: u16, bg: crate::screen::ZColour, pics_before: u32) -> Self {
+        Self { window, x, y, w, h, bg, pics_before }
+    }
 }
 
 /// Result of executing one instruction.

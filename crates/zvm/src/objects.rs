@@ -4,14 +4,20 @@
 // v3: 1-byte object numbers, 32 attrs, 31-word default table, 9-byte entries.
 // v4+: 2-byte object numbers, 48 attrs, 63-word default table, 14-byte entries.
 
+#[cfg(feature = "grammar")]
 use crate::dictionary;
+#[cfg(feature = "grammar")]
 use crate::grammar;
 use crate::memory::Memory;
 use crate::text::decode_string;
+#[cfg(feature = "grammar")]
 use std::collections::{BTreeMap, BTreeSet};
 
 /// The shared answer type, re-exported so `zvm::objects::ObjectWords` names it
-/// — as `zvm::grammar` re-exports the rest of `grammar-model`.
+/// — as `zvm::grammar` re-exports the rest of `grammar-model`. Behind the
+/// `grammar` feature along with [`ParseNames`], the only reader that produces
+/// one.
+#[cfg(feature = "grammar")]
 pub use grammar_model::{Adjectives, ObjectWords};
 
 // ── Layout helpers ────────────────────────────────────────────────────────────
@@ -812,15 +818,18 @@ pub fn object_snapshot(mem: &Memory, obj: u16) -> ObjectSnapshot {
 // list mean two things (SQ-1120).
 
 /// Inform's `name` property, on every Inform story and both back-ends.
+#[cfg(feature = "grammar")]
 pub const INFORM_NAME_PROPERTY: u8 = 1;
 
 /// A property must be an array of dictionary addresses on at least this many
 /// objects before it is believed to be a parse-name property. Below it there is
 /// no story here, only coincidence.
+#[cfg(feature = "grammar")]
 const MIN_AGREEING_OBJECTS: usize = 4;
 
 /// …or, where the runner-up is not the adjectives, the leader must beat it by
 /// this factor to be a story-wide convention rather than a coincidence.
+#[cfg(feature = "grammar")]
 const REQUIRED_MARGIN: usize = 2;
 
 /// How many objects the object-entry table holds.
@@ -858,6 +867,7 @@ pub fn object_count(mem: &Memory) -> u16 {
 /// belong to, and one holding the name without the words is offering a player
 /// something the parser never agreed to accept.
 #[derive(Debug, Clone)]
+#[cfg(feature = "grammar")]
 pub struct ParseNames {
     property: u8,
     adjective_property: Option<u8>,
@@ -865,6 +875,7 @@ pub struct ParseNames {
     words: BTreeMap<u32, String>,
 }
 
+#[cfg(feature = "grammar")]
 impl ParseNames {
     /// Work out where this story keeps its parse names, and refuse if it does
     /// not keep them anywhere readable.
@@ -1038,6 +1049,7 @@ impl ParseNames {
 }
 
 /// The dictionary, indexed the way a parse-name property refers to it.
+#[cfg(feature = "grammar")]
 struct DictionaryIndex {
     by_address: BTreeMap<u32, String>,
     key_chars: usize,
@@ -1045,6 +1057,7 @@ struct DictionaryIndex {
 
 /// Which objects hold an array of dictionary addresses under each property
 /// number.
+#[cfg(feature = "grammar")]
 fn candidate_properties(
     mem: &Memory,
     by_address: &BTreeMap<u32, String>,
@@ -1113,6 +1126,7 @@ fn candidate_properties(
 /// [`MIN_AGREEING_OBJECTS`] floor is a second guard on the same point rather
 /// than a load-bearing one — every real V4+ adjective property covers 103
 /// objects or more.
+#[cfg(feature = "grammar")]
 fn infocom_properties(
     candidates: &BTreeMap<u8, BTreeSet<u16>>,
     version: u8,

@@ -721,13 +721,8 @@ mod view_tests {
         // The per-run RENDERING still exists and is still correct — nothing
         // reaches it from the table, so it is exercised directly.
         use zvm::interpreter::{CursorShape, PeriodLook, StatusBand};
-        let per_run = PeriodLook {
-            page: (0, 0, 0),
-            ink: (0xFF, 0xFF, 0xFF),
-            status: StatusBand::PerRun,
-            cursor_shape: CursorShape::Block,
-            cursor_colour: (0xFF, 0xFF, 0xFF),
-        };
+        let per_run =
+            PeriodLook::new((0, 0, 0), (0xFF, 0xFF, 0xFF), StatusBand::PerRun, CursorShape::Block, (0xFF, 0xFF, 0xFF));
         assert_eq!(
             status_band_ansi(bar, Some(per_run)),
             "\x1b[7m Council Chamber\x1b[0m   \x1b[7mScore: 0/0 \x1b[0m",
@@ -743,13 +738,13 @@ mod view_tests {
     #[test]
     fn an_own_band_states_its_pair_outright() {
         use zvm::interpreter::{CursorShape, PeriodLook, StatusBand};
-        let look = PeriodLook {
-            page: (0x6C, 0x6C, 0x6C),
-            ink: (0xFF, 0xFF, 0xFF),
-            status: StatusBand::Own { ground: (0, 0, 0), ink: (0x6C, 0x6C, 0x6C) },
-            cursor_shape: CursorShape::Underscore,
-            cursor_colour: (0, 0, 0),
-        };
+        let look = PeriodLook::new(
+            (0x6C, 0x6C, 0x6C),
+            (0xFF, 0xFF, 0xFF),
+            StatusBand::Own { ground: (0, 0, 0), ink: (0x6C, 0x6C, 0x6C) },
+            CursorShape::Underscore,
+            (0, 0, 0),
+        );
         assert_eq!(
             status_band_ansi("x", Some(look)),
             "\x1b[38;2;108;108;108;48;2;0;0;0mx\x1b[0m"

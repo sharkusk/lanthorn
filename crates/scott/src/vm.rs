@@ -191,8 +191,47 @@ impl Vm {
     pub fn current_room(&self) -> usize {
         self.player
     }
+    /// Room `r`'s raw description text, exactly as the database stores it —
+    /// no "I'm in a " prefix (see [`Self::room_is_literal`]) and no darkness
+    /// check. `""` for an out-of-range room.
     pub fn room_name(&self, r: usize) -> &str {
         self.db.rooms.get(r).map(|room| room.desc.as_str()).unwrap_or("")
+    }
+
+    /// Whether the current room's description is `*`-literal — printed
+    /// exactly as stored, with no "I'm in a " prefix in front of it. Scott's
+    /// convention for a room whose text does not read naturally after that
+    /// phrase (e.g. "Outside a large gothic looking building.").
+    pub fn room_is_literal(&self) -> bool {
+        self.db.rooms.get(self.player).is_some_and(|room| room.literal)
+    }
+
+    /// The current room's exits, as `(direction name, destination room)`
+    /// pairs for every direction the room actually has (`Room::exits[i] !=
+    /// 0`), in the classic Scott Adams order the format encodes them:
+    /// North, South, East, West, Up, Down.
+    pub fn room_exits(&self) -> Vec<(&'static str, usize)> {
+        const NAMES: [&str; 6] = ["North", "South", "East", "West", "Up", "Down"];
+        self.db.rooms.get(self.player).map_or(Vec::new(), |room| {
+            room.exits
+                .iter()
+                .enumerate()
+                .filter(|(_, &dest)| dest != 0)
+                .map(|(i, &dest)| (NAMES[i], dest))
+                .collect()
+        })
+    }
+
+    /// Items visible in the current room — present there, not carried by the
+    /// player. See [`Self::item_loc`] for an item's raw location.
+    pub fn items_in_room(&self) -> Vec<&str> {
+        self.db
+            .items
+            .iter()
+            .enumerate()
+            .filter(|(i, _)| self.item_in_room(*i))
+            .map(|(_, it)| it.text.as_str())
+            .collect()
     }
     pub fn has_quit(&self) -> bool {
         self.quit
@@ -991,41 +1030,33 @@ impl Vm {
     ///
     /// A `*`-literal room prints verbatim; a non-literal room gets the "I'm in a "
     /// prefix. When the room is dark, only the darkness line is returned.
+    ///
+    /// One convenience layout of [`Self::room_name`], [`Self::room_is_literal`],
+    /// [`Self::room_exits`] and [`Self::items_in_room`] — a host with a
+    /// different panel shape reads those directly instead of parsing this
+    /// string back apart.
     pub fn room_block(&self) -> String {
         if self.is_dark() {
             return "It is too dark to see.".to_string();
         }
         let mut s = String::new();
-        if let Some(room) = self.db.rooms.get(self.player) {
-            if room.literal {
-                s.push_str(&room.desc);
+        if self.db.rooms.get(self.player).is_some() {
+            if self.room_is_literal() {
+                s.push_str(self.room_name(self.player));
             } else {
                 s.push_str("I'm in a ");
-                s.push_str(&room.desc);
+                s.push_str(self.room_name(self.player));
             }
-            let names = ["North", "South", "East", "West", "Up", "Down"];
-            let exits: Vec<&str> = room
-                .exits
-                .iter()
-                .enumerate()
-                .filter(|(_, &dest)| dest != 0)
-                .map(|(i, _)| names[i])
-                .collect();
+            let exits = self.room_exits();
             s.push_str("\n\nObvious exits: ");
             s.push_str(&if exits.is_empty() {
                 "none".to_string()
             } else {
-                format!("{}.", exits.join(". "))
+                let names: Vec<&str> = exits.iter().map(|&(name, _)| name).collect();
+                format!("{}.", names.join(". "))
             });
         }
-        let visible: Vec<&str> = self
-            .db
-            .items
-            .iter()
-            .enumerate()
-            .filter(|(i, _)| self.item_in_room(*i))
-            .map(|(_, it)| it.text.as_str())
-            .collect();
+        let visible = self.items_in_room();
         if !visible.is_empty() {
             s.push_str("\n\nI can also see:");
             for item in &visible {
@@ -1717,6 +1748,45 @@ mod tests {
         vm.flag_set(DARK_FLAG, true);
         assert!(vm.is_dark());
         assert_eq!(vm.room_block(), "It is too dark to see.");
+    }
+
+    /// `room_block` is documented as one convenience layout of
+    /// [`Vm::room_name`], [`Vm::room_is_literal`], [`Vm::room_exits`] and
+    /// [`Vm::items_in_room`] — this composes them by hand and checks the two
+    /// agree, so a host reading the structured pieces directly gets exactly
+    /// what the panel string would have shown.
+    #[test]
+    fn room_block_equals_the_composition_of_its_pieces() {
+        let mut db = tiny_world();
+        db.rooms[1].literal = false;
+        db.rooms[1].desc = "forest".into();
+        db.rooms[1].exits = [2, 0, 0, 0, 0, 3];
+        let vm = Vm::new(db);
+
+        let mut expected = if vm.room_is_literal() {
+            vm.room_name(vm.current_room()).to_string()
+        } else {
+            format!("I'm in a {}", vm.room_name(vm.current_room()))
+        };
+        let exit_names: Vec<&str> = vm.room_exits().iter().map(|&(name, _)| name).collect();
+        expected.push_str("\n\nObvious exits: ");
+        expected.push_str(&if exit_names.is_empty() {
+            "none".to_string()
+        } else {
+            format!("{}.", exit_names.join(". "))
+        });
+        let visible = vm.items_in_room();
+        if !visible.is_empty() {
+            expected.push_str("\n\nI can also see:");
+            for item in &visible {
+                expected.push_str("\n  ");
+                expected.push_str(item);
+            }
+        }
+        assert_eq!(vm.room_block(), expected);
+        // Non-vacuous: this room actually has exits and a visible item, so the
+        // composition exercised both branches room_block's darkness case skips.
+        assert!(!exit_names.is_empty() && !visible.is_empty());
     }
 
     #[test]

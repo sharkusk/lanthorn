@@ -506,6 +506,7 @@ pub enum StatusBand {
 /// earlier build is evidence that a band need not be derivable, whether or not the
 /// row that reported it still does.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
 pub struct PeriodLook {
     /// The body's ground.
     pub page: (u8, u8, u8),
@@ -525,6 +526,27 @@ pub struct PeriodLook {
     /// reads the field without the shape gets the pair's own reverse rather than
     /// the previous generation's orange.
     pub cursor_colour: (u8, u8, u8),
+}
+
+impl PeriodLook {
+    /// Build a `PeriodLook` from its fields. See the struct docs for what
+    /// each one means.
+    ///
+    /// - `page`: the body's ground colour.
+    /// - `ink`: the body's character colour.
+    /// - `status`: how the status line was set apart from the body pair.
+    /// - `cursor_shape`: the input cursor's shape.
+    /// - `cursor_colour`: the input cursor's colour (see [`Self::cursor_colour`]
+    ///   field docs above — not always the same as `ink`).
+    pub fn new(
+        page: (u8, u8, u8),
+        ink: (u8, u8, u8),
+        status: StatusBand,
+        cursor_shape: CursorShape,
+        cursor_colour: (u8, u8, u8),
+    ) -> Self {
+        Self { page, ink, status, cursor_shape, cursor_colour }
+    }
 }
 
 /// What a row STORES about its screen, which on one machine cannot be a

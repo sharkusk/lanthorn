@@ -763,6 +763,7 @@ pub enum DeclaredExit {
 /// compass words resolving to an object) — a Scott Adams or Glulx-shaped table
 /// has nothing here to recover, and neither does a story whose parser-name
 /// property isn't the one this searches through.
+#[cfg(feature = "grammar")]
 fn infer_exits(mem: &Memory, max_object: u16) -> ([Option<u8>; 12], Option<u8>, Option<u8>) {
     let none = ([None; 12], None, None);
     if max_object == 0 {
@@ -877,6 +878,15 @@ fn infer_exits(mem: &Memory, max_object: u16) -> ([Option<u8>; 12], Option<u8>, 
     (exit_props, Some(door_dir_prop), door_to_prop)
 }
 
+/// `infer_exits`-shaped stub for a build with no `crate::objects::ParseNames`
+/// to consult — the `grammar` feature is off, so there is no parse-name reader
+/// to derive the `door_dir` convention from. Refuses exactly the way
+/// `infer_exits` does when `ParseNames::detect` fails for any other reason.
+#[cfg(not(feature = "grammar"))]
+fn infer_exits(_mem: &Memory, _max_object: u16) -> ([Option<u8>; 12], Option<u8>, Option<u8>) {
+    ([None; 12], None, None)
+}
+
 /// The `door_to` property number: the one present on most sampled CONNECTORS
 /// whose value, where it names a room at all, is a plausible and DISTINCT
 /// (not the same on every connector) TERMINAL — not another connector.
@@ -908,6 +918,7 @@ fn infer_exits(mem: &Memory, max_object: u16) -> ([Option<u8>; 12], Option<u8>, 
 /// between an east door and a west door — distinct for the wrong reason, and
 /// would otherwise be picked first since it is scanned in the same 1..=63
 /// sweep as every real candidate.
+#[cfg(feature = "grammar")]
 fn infer_door_to(
     mem: &Memory,
     connectors: &[u16],

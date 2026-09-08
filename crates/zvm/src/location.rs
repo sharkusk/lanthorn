@@ -48,8 +48,10 @@ use crate::cpu::exec::Machine;
 use crate::memory::Memory;
 use crate::objects::{
     entries_base, entry_size, get_parent, object_snapshot, printed_name, prop_table_ptr_offset,
-    ObjectSnapshot, ParseNames,
+    ObjectSnapshot,
 };
+#[cfg(feature = "grammar")]
+use crate::objects::ParseNames;
 use crate::screen::{UpperWindow, V6Cell};
 
 /// Normalize for matching/hashing: trim, collapse whitespace, lowercase.
@@ -764,8 +766,13 @@ pub fn status_name_matches(candidate: &str, short: &str) -> bool {
 /// comment for why a caller invoking this every rendered FRAME (not once a
 /// turn) wants [`find_player_object_with`] and a cached one instead.
 pub fn find_player_object(machine: &Machine) -> Option<u16> {
-    let parse_names = ParseNames::detect(&machine.mem);
-    let candidates = PlayerCandidates::build(&machine.mem, parse_names.as_ref());
+    #[cfg(feature = "grammar")]
+    let candidates = {
+        let parse_names = ParseNames::detect(&machine.mem);
+        PlayerCandidates::build(&machine.mem, parse_names.as_ref())
+    };
+    #[cfg(not(feature = "grammar"))]
+    let candidates = PlayerCandidates::build(&machine.mem);
     find_player_object_with(machine, &candidates)
 }
 
@@ -851,6 +858,7 @@ const PLAYER_NAMES: [&str; 9] =
 /// — `detect_location` and `find_player_object` — validate every candidate
 /// against the room before trusting it (see [`PLAYER_NAMES`]'s doc comment):
 /// a quip's word array never validates, because a quip is never IN a room.
+#[cfg(feature = "grammar")]
 const PLAYER_WORDS: [&str; 4] = ["me", "myself", "self", "yourself"];
 
 /// The story's avatar-candidate pools — everything `detect_location` and
@@ -895,6 +903,7 @@ impl PlayerCandidates {
     /// ([`ParseNames::detect`]); `None` for a story whose parse names cannot
     /// be read at all, in which case the widened pool degrades to exactly
     /// the short-name pool.
+    #[cfg(feature = "grammar")]
     pub fn build(mem: &Memory, parse_names: Option<&ParseNames>) -> PlayerCandidates {
         let n = max_object_number(mem);
         let mut by_name = Vec::new();
@@ -920,6 +929,24 @@ impl PlayerCandidates {
                 widened.push(obj);
             }
         }
+        PlayerCandidates { by_name, widened }
+    }
+
+    /// [`Self::build`] without a parse-name reader to consult — the `grammar`
+    /// feature is off, so there is no [`ParseNames`] type at all. Degrades
+    /// exactly the way [`Self::build`] does when its caller passes `None`:
+    /// the widened pool is the short-name pool.
+    #[cfg(not(feature = "grammar"))]
+    pub fn build(mem: &Memory) -> PlayerCandidates {
+        let n = max_object_number(mem);
+        let mut by_name = Vec::new();
+        for obj in 1..=n {
+            let nm = normalize_name(&printed_name(mem, obj));
+            if PLAYER_NAMES.contains(&nm.as_str()) {
+                by_name.push(obj);
+            }
+        }
+        let widened = by_name.clone();
         PlayerCandidates { by_name, widened }
     }
 }
@@ -1216,8 +1243,13 @@ pub fn detect_location(machine: &Machine) -> Option<Location> {
     if machine.mem.version() <= 3 {
         return current_location(machine).map(Location::GlobalVar0);
     }
-    let parse_names = ParseNames::detect(&machine.mem);
-    let candidates = PlayerCandidates::build(&machine.mem, parse_names.as_ref());
+    #[cfg(feature = "grammar")]
+    let candidates = {
+        let parse_names = ParseNames::detect(&machine.mem);
+        PlayerCandidates::build(&machine.mem, parse_names.as_ref())
+    };
+    #[cfg(not(feature = "grammar"))]
+    let candidates = PlayerCandidates::build(&machine.mem);
     detect_location_with(machine, &candidates)
 }
 

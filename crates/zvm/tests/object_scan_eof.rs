@@ -18,7 +18,7 @@ fn object_tree_view_does_not_read_past_eof_on_czech() {
 
     // Must not panic, and every reported object number is positive and within
     // the inferred count (the snapshot reads stayed inside the file).
-    let view = zvm::object_tree_view(&machine);
+    let view = zvm::location::object_tree_view(&machine);
     assert!(!view.is_empty(), "czech.z5 has objects");
     assert!(view.len() < len, "object count must be far below the file length");
     for (i, snap) in view.iter().enumerate() {
