@@ -169,9 +169,9 @@ fn the_save_time_self_check_falls_back_to_a_png_and_says_which_window() {
     // Saving now: every window came back as pixels, so none can be replayed.
     let (dto, fallback, diags) = fresh.display_list();
     assert!(
-        dto.windows.is_empty(),
+        dto.replay_order.is_empty(),
         "a window restored from pixels is not offered as replayable: {:?}",
-        dto.windows.iter().map(|w| w.win).collect::<Vec<_>>()
+        dto.replay_order
     );
     assert!(!fallback.is_empty(), "...it falls back to its PNG");
     assert_eq!(fallback.len(), diags.len(), "...and every fallback names itself");

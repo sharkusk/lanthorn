@@ -795,25 +795,17 @@ pub struct GameSession {
     /// `Machine::v6_win0_out_chars` at the last transcript drain — an event's
     /// offset within the current turn's text is `out_chars - this`.
     v6_win0_chars_seen: u64,
-    /// Ordered display list per window canvas: every picture drawn and every region
-    /// erased, in the order it happened.
+    /// Windows currently replayed from a PIXEL SNAPSHOT rather than from `zvm`'s
+    /// own [`zvm::paint_log::PaintLog`] (SQ-1403) — a window restored from a
+    /// pre-op-list archive, or from an archive whose save-time self-check found
+    /// that replaying its folded ops did not reproduce the live canvas
+    /// ([`Self::display_list`]). A window whose log simply hit
+    /// [`zvm::paint_log::PAINT_LOG_CAP`] is a SEPARATE case `zvm` itself tracks
+    /// ([`zvm::paint_log::PaintLog::is_capped`]) and is not recorded here.
     ///
-    /// This exists to make a palette change behave like real hardware. A v6 screen is
-    /// a framebuffer of palette INDICES, so loading a new palette recolours
-    /// everything already on it, in place, without disturbing what covers what.
-    /// lanthorn bakes RGBA at draw time, so the only faithful way to recolour is to
-    /// replay the window from scratch under the new palette — which needs the erases
-    /// as well as the draws, and needs them in order. (SQ-0567)
-    ///
-    /// Arthur is the story that needs it twice over: its frame is three adaptive
-    /// pictures drawn once at boot (so without a replay it keeps the churchyard's
-    /// palette all game), and its map screen draws a full-screen background OVER that
-    /// frame (so a replay that ignores order paints the frame back on top and hides
-    /// the map).
-    display_ops: std::collections::HashMap<u8, Vec<V6Op>>,
-    /// Windows whose display list overflowed [`V6_OPS_CAP`]. Replay is skipped for
-    /// them rather than replayed from a truncated list, which would invent a screen
-    /// that never existed. They keep the pre-SQ-0567 behaviour: stale palette, right
+    /// Replay is skipped for both kinds rather than replayed from an
+    /// incomplete/mismatching list, which would invent a screen that never
+    /// existed. They keep the pre-SQ-0567 behaviour: stale palette, right
     /// layering.
     unreplayable: std::collections::HashSet<u8>,
     /// The width (in columns) the story image now in memory was laid out for —
@@ -1054,7 +1046,6 @@ impl GameSession {
             window_fills: std::collections::HashMap::new(),
             story_pics: Vec::new(),
             v6_win0_chars_seen: 0,
-            display_ops: std::collections::HashMap::new(),
             unreplayable: std::collections::HashSet::new(),
             boot_screen_cols,
         })
@@ -1176,29 +1167,34 @@ impl GameSession {
         keys.sort_by_key(|k| (self.pictures_canvas[k].z_seq, *k));
 
         let palette = self.pict_source.as_ref().and_then(|s| s.current_palette().map(<[u8]>::to_vec));
-        let mut windows = Vec::new();
         let mut fallback = Vec::new();
         let mut diags = Vec::new();
+        // Windows whose replay reproduced the live canvas, in PAINT order — the
+        // z-order a restore rebuilds them in (`Self::load_display_list`), since
+        // `zvm`'s paint log carries none of its own (it is not a raster concept).
+        let mut replay_order = Vec::new();
 
         for win in keys {
             let (cw, ch) = {
                 let c = &self.pictures_canvas[&win];
                 (c.img.width(), c.img.height())
             };
-            if self.unreplayable.contains(&win) {
+            let capped = self.machine.paint_log().is_capped(win);
+            if self.unreplayable.contains(&win) || capped {
                 fallback.push(win);
                 // The two ways a window becomes unreplayable have the same
                 // consequence and completely different fixes, and they are already
                 // distinguishable: an overflow leaves a FULL list behind, while a
                 // window restored from pixels has none at all.
-                let n = self.display_ops.get(&win).map_or(0, Vec::len);
-                diags.push(if n >= V6_OPS_CAP {
+                diags.push(if capped {
                     format!(
-                        "v6 window {win}: display list hit the {V6_OPS_CAP}-op cap, so it cannot be \
+                        "v6 window {win}: display list hit the {}-op cap, so it cannot be \
                          replayed — storing its canvas as a PNG. Its colours will not follow a later \
-                         palette change. If a real game reaches this, the cap is too low."
+                         palette change. If a real game reaches this, the cap is too low.",
+                        zvm::paint_log::PAINT_LOG_CAP
                     )
                 } else {
+                    let n = self.machine.paint_log().ops(win).len();
                     format!(
                         "v6 window {win}: restored from pixels, so it has no draw history to replay \
                          ({n} op(s) recorded) — storing its canvas as a PNG. Expected for a save \
@@ -1207,10 +1203,10 @@ impl GameSession {
                 });
                 continue;
             }
-            let ops = self.display_ops.get(&win).cloned().unwrap_or_default();
+            let ops = self.v6ops_for_window(win);
             let rebuilt = self.replay_into_scratch(&ops, cw, ch);
             if *rebuilt.img == *self.pictures_canvas[&win].img {
-                windows.push(crate::archive::V6WindowOpsDto { win, w: cw, h: ch, ops });
+                replay_order.push(win);
             } else {
                 fallback.push(win);
                 diags.push(format!(
@@ -1222,7 +1218,18 @@ impl GameSession {
             }
         }
         let layers = self.v6_screen_layers();
-        (crate::archive::DisplayListDto { palette, windows, layers }, fallback, diags)
+        // The log itself travels as one blob (`display.bin`, SQ-1403) regardless of
+        // which windows the self-check above demoted to a PNG fallback — a window
+        // in `fallback` (absent from `replay_order`) is simply skipped when the log
+        // is replayed back on restore ([`Self::load_display_list`]), so an entry the
+        // self-check distrusts for ONE window costs nothing for the others.
+        let dto = crate::archive::DisplayListDto {
+            palette,
+            layers,
+            replay_order,
+            paint_log_bytes: zvm::paint_log::encode(self.machine.paint_log()),
+        };
+        (dto, fallback, diags)
     }
 
     /// The v6 screen layers that ride BESIDE the window canvases (SQ-0814), as the
@@ -1319,7 +1326,7 @@ impl GameSession {
     }
 
     /// The longest display list any v6 window is currently holding, and how many
-    /// windows have hit [`V6_OPS_CAP`].
+    /// windows have hit [`zvm::paint_log::PAINT_LOG_CAP`].
     ///
     /// Exists to answer "is the cap big enough?" with a measurement instead of a
     /// guess. The number that matters is not the peak but whether it GROWS with play:
@@ -1328,8 +1335,9 @@ impl GameSession {
     /// would overflow eventually and the cap would just be a bigger number before the
     /// same failure.
     pub fn display_ops_extent(&self) -> (usize, usize) {
-        let longest = self.display_ops.values().map(Vec::len).max().unwrap_or(0);
-        let at_cap = self.display_ops.values().filter(|v| v.len() >= V6_OPS_CAP).count();
+        let log = self.machine.paint_log();
+        let longest = (0u8..8).map(|w| log.ops(w).len()).max().unwrap_or(0);
+        let at_cap = (0u8..8).filter(|&w| log.is_capped(w)).count();
         (longest, at_cap)
     }
 
@@ -1376,25 +1384,64 @@ impl GameSession {
     /// the next palette change replays them again — which is exactly what a window
     /// restored from a PNG cannot do.
     ///
-    /// `pngs` covers the windows the list does not: the save-time self-check's fallbacks,
-    /// and every window of a pre-SQ-0588 archive. They load as pixels and are marked
+    /// `pngs` covers the windows the log does not: the save-time self-check's fallbacks,
+    /// and every window of a pre-SQ-1403 archive. They load as pixels and are marked
     /// `unreplayable`, i.e. today's behaviour, unchanged.
     pub fn load_display_list(&mut self, dto: &crate::archive::DisplayListDto, pngs: &[(u8, Vec<u8>)]) {
+        // The paint log is the RECIPE (SQ-1403) — reinstate it before anything below
+        // reads it. Absent bytes (an older archive format) or an unreadable buffer
+        // both reset it to empty, exactly as `restore_screen_snapshot` resets the
+        // screen: what cannot be trusted is treated as nothing rather than as
+        // whatever the pre-restore session happened to leave standing.
+        let _ = self.machine.restore_paint_log(&dto.paint_log_bytes);
         // Pixels first, so a window present in BOTH (which should not happen, but an
         // archive is an external input) ends up rebuilt from ops rather than pixels.
         self.load_pictures_png(pngs);
         if let Some(src) = self.pict_source.as_mut() {
             src.set_current_palette(dto.palette.clone());
         }
-        for w in &dto.windows {
-            let ops = w.ops.clone();
-            let mut canvas = self.replay_into_scratch(&ops, w.w, w.h);
+        let png_wins: std::collections::HashSet<u8> = pngs.iter().map(|(w, _)| *w).collect();
+        for win in dto.replay_order.iter().copied() {
+            if png_wins.contains(&win) {
+                continue; // present in both — an archive is an external input; pixels already won
+            }
+            let ops = self.v6ops_for_window(win);
+            if ops.is_empty() {
+                continue;
+            }
+            let (w, h) = self.v6_canvas_size_for_window(win);
+            let mut canvas = self.replay_into_scratch(&ops, w, h);
             canvas.version = canvas.version.wrapping_add(1);
             canvas.z_seq = crate::graphics::next_draw_seq();
-            self.pictures_canvas.insert(w.win, canvas);
-            self.display_ops.insert(w.win, ops);
-            self.unreplayable.remove(&w.win);
+            self.pictures_canvas.insert(win, canvas);
+            self.unreplayable.remove(&win);
         }
+    }
+
+    /// The canvas size to replay `win`'s folded ops into: the union of every
+    /// recorded op's window box, each clamped by [`CANVAS_PX_CAP`] exactly as
+    /// [`Self::apply_picture_event`] clamps it live.
+    ///
+    /// Re-derived from the log rather than archived separately (the pre-SQ-1403
+    /// shape stored `w`/`h` per window in the archive itself): a game that resizes
+    /// its window between draws is exactly what [`crate::graphics::Canvas::grow_to`]
+    /// already handles live by only ever growing, and the log's own ops carry
+    /// every window box the live session grew against.
+    fn v6_canvas_size_for_window(&self, win: u8) -> (u32, u32) {
+        let (mut w, mut h) = (1u32, 1u32);
+        for op in self.machine.paint_log().ops(win) {
+            // `PaintOp` is `#[non_exhaustive]`: a kind this build has never heard of
+            // contributes nothing to the size rather than failing the build.
+            let win_box = match *op {
+                zvm::paint_log::PaintOp::Draw { win_box, .. }
+                | zvm::paint_log::PaintOp::ErasePicture { win_box, .. }
+                | zvm::paint_log::PaintOp::Clear { win_box } => win_box,
+                _ => continue,
+            };
+            w = w.max((win_box.2.max(1) as u32).min(CANVAS_PX_CAP));
+            h = h.max((win_box.3.max(1) as u32).min(CANVAS_PX_CAP));
+        }
+        (w, h)
     }
 
     /// Rebuild `pictures_canvas` from persisted per-window PNG blobs
@@ -1425,13 +1472,18 @@ impl GameSession {
         //
         // Without this, the first palette change after a restore ERASES the restored
         // art. `replay_under_current_palette` clears each window's canvas and rebuilds
-        // it from the display list — and a restored window's list is empty, or worse
+        // it from the paint log — and a restored window's log is empty, or worse
         // holds only the Erase ops that `erase_screen_rect` records when a LATER
         // window is erased over it. Arthur shows the cost: one move after a restore
         // recolours the palette, its full-screen border window replays a list of pure
         // erases, and the surrounding art vanishes while the room picture — redrawn by
         // the game that same turn — stays. (SQ-0587)
-        self.display_ops.clear();
+        //
+        // The paint log itself is NOT reset here (SQ-1403): a caller with one to
+        // reinstate ([`Self::load_display_list`]) has already done so before this
+        // runs, and a caller with none at all ([`crate::engine_helpers::apply_v6_pictures`]'s
+        // no-display-list branch) resets it itself — this function has no way to
+        // tell those two apart from `blobs` alone.
         self.unreplayable.clear();
         for (win, _) in blobs {
             self.unreplayable.insert(*win);
@@ -1695,19 +1747,16 @@ impl GameSession {
         if std::mem::take(&mut self.machine.just_restarted) {
             self.pictures_canvas.clear();
             self.story_pics.clear();
-            // The display list is the RECIPE for `pictures_canvas` — dropping the
-            // canvas and keeping the ops leaves a save/replay that cannot be
-            // recomputed from its inputs. Concretely (SQ-0658): the reboot's first
-            // draw into a window re-creates its canvas and APPENDS to the ops the
-            // pre-restart session left there, so the next palette change replays
-            // the old game's art onto the new one's screen; and a window marked
-            // `unreplayable` before the restart stays excluded from replay for the
-            // rest of the session even though its canvas is brand new. Nor do the
-            // pre-restart erase FILLS describe any region of the rebooted screen.
-            // An `erase_window` clears a window's ops on the way past, so an
-            // Infocom boot that erases before it draws heals itself — but only
-            // for the windows it happens to erase, and only in that order.
-            self.display_ops.clear();
+            // `zvm`'s own paint log is the RECIPE for `pictures_canvas`, and
+            // `Machine::restart` clears it structurally (SQ-1403) in the same
+            // breath as the paint queues themselves — so unlike the pre-SQ-1403
+            // shape of this bug (SQ-0658: the reboot's first draw re-created a
+            // canvas and APPENDED to the ops the pre-restart session left there,
+            // replaying the old game's art onto the new one's screen), there is no
+            // display list left here to drop. What IS still ours to drop: a window
+            // marked `unreplayable` before the restart, which would otherwise stay
+            // excluded from replay for the rest of the session even though its
+            // canvas is brand new.
             self.unreplayable.clear();
             self.window_fills.clear();
             // The same argument reaches the other two layers beside the window tree
@@ -2009,6 +2058,13 @@ impl GameSession {
         // goes down before it, and one that came after goes down after.
         let mut i = 0usize;
         for paint in &paints {
+            // Fed here, in this same walk, rather than automatically when the
+            // opcode ran (SQ-1403; see `zvm::paint_log`'s "Feeding it"): a
+            // cross-window erase that `apply_picture_event`/`erase_screen_rect`
+            // below may append can only be computed from THIS canvas model, so
+            // it has to land in the middle of this exact walk to end up at the
+            // right point in each affected window's own timeline.
+            self.machine.paint_log_mut().apply(paint);
             let ev = match paint {
                 zvm::cpu::exec::PaintEvent::Erase(f) => {
                     self.apply_erase_fill(f);
@@ -2412,9 +2468,12 @@ impl GameSession {
         }
         self.canvas_anchor.remove(&win);
         let Some(canvas) = self.pictures_canvas.remove(&win) else { return };
-        // Nothing else can reproduce these pixels once they leave the canvas, so
-        // the window's replay list goes with them.
-        self.display_ops.remove(&win);
+        // `zvm`'s own paint log strands itself the same moment (SQ-1403): the log
+        // folds on the SAME window-box-origin comparison this function does, so by
+        // the time this runs the log for `win` already holds only ops from the new
+        // origin. Nothing else can reproduce the pixels that just left the canvas,
+        // so any stale PNG-fallback veto for the canvas that no longer exists goes
+        // with them too.
         self.unreplayable.remove(&win);
         let (sw, sh) = self.v6_native_extent();
         let (ox, oy) = (
@@ -2512,58 +2571,71 @@ impl GameSession {
             // NOT a z_seq bump: an erase is not a draw, and re-stamping the layer
             // here would reorder the composite for a window nothing was drawn into.
             canvas.erase_rect(ex, ey, ew, eh);
-            self.record_op(win, V6Op::Erase { dx: ex, dy: ey, w: ew, h: eh });
+            // Recorded into WIN's own paint-log entry too, in this same order
+            // (SQ-1403): `zvm` cannot compute this rect itself — it is a fact
+            // about `lanthorn`'s eight-canvas model, not about the Z-machine
+            // (ZMSD §8 has one shared screen) — but it still has to land in
+            // WIN's own timeline, between whatever WIN had drawn before this and
+            // whatever it draws after, or a later palette replay redraws the
+            // pixels this erase just removed. `PaintOp::HostErase` docs why.
+            self.machine.paint_log_mut().append_host_erase(win, ex, ey, ew, eh);
         }
     }
 
-    /// Append an op to a window's display list, dropping the window out of replay if
-    /// it overflows the cap. A whole-canvas op supersedes everything before it, so the
-    /// list resets there — which is what keeps a screen-swapping story (Arthur) short.
-    fn record_op(&mut self, win: u8, op: V6Op) {
-        let full = self
-            .pictures_canvas
-            .get(&win)
-            .map(|c| (c.img.width(), c.img.height()))
-            .is_some_and(|(cw, ch)| match op {
-                V6Op::Erase { dx, dy, w, h } => dx <= 0 && dy <= 0 && w >= cw && h >= ch,
-                V6Op::Draw { .. } => false,
-            });
-        let ops = self.display_ops.entry(win).or_default();
-        if full {
-            ops.clear();
-            self.unreplayable.remove(&win);
-        } else if let V6Op::Erase { dx, dy, w, h } = op {
-            // SQ-0592: an erase paints the window background over its rect, so every
-            // EARLIER erase lying entirely inside it contributes nothing to the final
-            // canvas and can go. This is the `full` reset above generalized from "covers
-            // the whole canvas" to "covers that op's rect" — and it is what keeps the
-            // list proportional to what is ON the screen rather than to how long the
-            // session has run.
-            //
-            // Shogun is the case that needs it: it re-erases the same two regions every
-            // turn, reaching 266 ops by turn 200 while holding only 7 distinct ones, and
-            // would cross V6_OPS_CAP around turn 390 — at which point the window drops
-            // out of palette replay for the rest of the session.
-            //
-            // Only earlier ERASES are pruned. An earlier draw under this rect is dead
-            // too, but proving it needs the picture's scaled footprint, and keeping it
-            // is harmless: replay order is preserved, so the erase still covers it.
-            ops.retain(|prev| match *prev {
-                V6Op::Erase { dx: pdx, dy: pdy, w: pw, h: ph } => {
-                    let inside = pdx >= dx
-                        && pdy >= dy
-                        && pdx.saturating_add(pw as i32) <= dx.saturating_add(w as i32)
-                        && pdy.saturating_add(ph as i32) <= dy.saturating_add(h as i32);
-                    !inside
+    /// Translate one window's folded [`zvm::paint_log::PaintOp`] history — native,
+    /// window-relative pixels, folded by `zvm` itself (SQ-1403) — into the
+    /// canvas-local [`V6Op`]s [`Self::replay_into_scratch`] /
+    /// [`Self::replay_under_current_palette`] consume. Mirrors exactly what
+    /// [`Self::apply_picture_event`] computed live when each op was first drawn:
+    /// the same 1-based-to-0-based pixel shift, the same picture-footprint lookup
+    /// (`erase_picture` names no size of its own — ZMSD §15 — so `zvm` cannot
+    /// resolve one either; this is the host's to do, from its own picture
+    /// archive), and the same [`CANVAS_PX_CAP`] clamp guarding a hostile
+    /// `window_size` from an unbounded allocation.
+    fn v6ops_for_window(&mut self, win: u8) -> Vec<V6Op> {
+        let ops: Vec<zvm::paint_log::PaintOp> = self.machine.paint_log().ops(win).to_vec();
+        let art_scale = self.art_scale;
+        let mut out = Vec::with_capacity(ops.len());
+        for op in ops {
+            match op {
+                zvm::paint_log::PaintOp::Clear { win_box } => {
+                    out.push(V6Op::Erase { dx: 0, dy: 0, w: win_box.2 as u32, h: win_box.3 as u32 });
                 }
-                V6Op::Draw { .. } => true,
-            });
+                zvm::paint_log::PaintOp::Draw { number, x, y, .. } => {
+                    let dx = (x.max(1) as i32) - 1;
+                    let dy = (y.max(1) as i32) - 1;
+                    out.push(V6Op::Draw { number, dx, dy });
+                }
+                zvm::paint_log::PaintOp::ErasePicture { number, x, y, win_box } => {
+                    let (pw, ph) = (
+                        (win_box.2.max(1) as u32).min(CANVAS_PX_CAP),
+                        (win_box.3.max(1) as u32).min(CANVAS_PX_CAP),
+                    );
+                    let dx = (x.max(1) as i32) - 1;
+                    let dy = (y.max(1) as i32) - 1;
+                    let dims = self
+                        .pict_source
+                        .as_mut()
+                        .and_then(|s| s.dims(number as u32))
+                        .map(|(w, h)| (w * art_scale.0, h * art_scale.1));
+                    let (ew, eh) = dims.unwrap_or((pw, ph));
+                    let ew = ew.min(pw.saturating_sub(dx.max(0) as u32));
+                    let eh = eh.min(ph.saturating_sub(dy.max(0) as u32));
+                    out.push(V6Op::Erase { dx, dy, w: ew, h: eh });
+                }
+                zvm::paint_log::PaintOp::HostErase { dx, dy, w, h } => {
+                    // Already this window's own local rect — `erase_screen_rect`
+                    // computed it once and `PaintLog::append_host_erase` carries
+                    // it verbatim (SQ-1403); nothing left to translate.
+                    out.push(V6Op::Erase { dx, dy, w, h });
+                }
+                // `PaintOp` is `#[non_exhaustive]`: a kind this build has never
+                // heard of is skipped rather than failing the build, exactly as
+                // `Machine`'s own drain loops treat an unknown `PaintEvent`.
+                _ => {}
+            }
         }
-        if ops.len() >= V6_OPS_CAP {
-            self.unreplayable.insert(win);
-            return;
-        }
-        ops.push(op);
+        out
     }
 
     /// Replay every window's display list under the Current Palette (SQ-0567).
@@ -2579,13 +2651,22 @@ impl GameSession {
     /// one: on real hardware the framebuffer holds indices, so a picture already
     /// drawn shows through whatever palette is loaded now, base or adaptive alike.
     fn replay_under_current_palette(&mut self) {
-        let mut wins: Vec<u8> = self.display_ops.keys().copied().collect();
+        // Only windows that already have a live canvas: a window whose picture
+        // events were all classified as window-0 inline floats (never touching
+        // `pictures_canvas`) may still have entries in `zvm`'s paint log, but
+        // replaying them here would paint a canvas layer for a window that has
+        // never had one — the transcript, not this composite, is where those
+        // pixels belong (SQ-1403).
+        let mut wins: Vec<u8> = self.pictures_canvas.keys().copied().collect();
         wins.sort();
         for win in wins {
             if self.unreplayable.contains(&win) {
                 continue;
             }
-            let Some(ops) = self.display_ops.get(&win).cloned() else { continue };
+            let ops = self.v6ops_for_window(win);
+            if ops.is_empty() {
+                continue; // nothing in the log for this window — leave its canvas alone
+            }
             let Some((cw, ch)) = self.pictures_canvas.get(&win).map(|c| (c.img.width(), c.img.height()))
             else {
                 continue;
@@ -2643,8 +2724,10 @@ impl GameSession {
         if ev.erase && ev.number == 0 {
             self.pictures_canvas.remove(&ev.window);
             self.canvas_anchor.remove(&ev.window); // nothing left to strand
-            // Nothing of this window survives to be replayed.
-            self.display_ops.remove(&ev.window);
+            // `zvm`'s own paint log folds this SAME event (a `number: 0, erase:
+            // true` PictureEvent) to a single Clear entry for the window
+            // (SQ-1403) — nothing left here to remove; only the PNG-fallback
+            // veto, which described a canvas that no longer exists.
             self.unreplayable.remove(&ev.window);
             // The erased region belongs to the shared SCREEN, so take it out of
             // every other window's canvas too (SQ-0568).
@@ -2768,12 +2851,7 @@ impl GameSession {
             }
             return;
         }
-        // Clamp the pixel-canvas backing store so a hostile / buggy story that
-        // sets window_size(w, 0xFFFF, 0xFFFF) then draws/erases can't force a
-        // ~17 GB RgbaImage allocation (an OOM abort). CANVAS_PX_CAP (4096) far
-        // exceeds any real v6 screen (~640 px) yet bounds worst-case storage to
-        // ~64 MB — mirroring the grid-cell cap on the engine side (Phase 1a).
-        const CANVAS_PX_CAP: u32 = 4096;
+        // Clamp the pixel-canvas backing store — see [`CANVAS_PX_CAP`].
         // The window's box AT THE MOMENT OF THE CALL, not now: a scratch window is
         // resized for one drawing operation and moved on (SQ-0715). scopa sizes
         // window 3 to 1000×1000 for each card and had shrunk it to an 80×1 sliver
@@ -2808,7 +2886,6 @@ impl GameSession {
             let ew = ew.min(pw.saturating_sub(dx.max(0) as u32));
             let eh = eh.min(ph.saturating_sub(dy.max(0) as u32));
             canvas.erase_rect(dx, dy, ew, eh);
-            self.record_op(ev.window, V6Op::Erase { dx, dy, w: ew, h: eh });
             // …and the same region of the shared screen (SQ-0568).
             screen_erase = Some((dx.max(0) as u32, dy.max(0) as u32, ew, eh));
         } else if let Some(img) = {
@@ -2833,10 +2910,10 @@ impl GameSession {
                 drawn_w,
                 drawn_h,
             );
-            // Every picture goes in the display list, base or adaptive: under a new
-            // palette they ALL recolour, and their order is what a replay has to
-            // reproduce. (SQ-0567)
-            self.record_op(ev.window, V6Op::Draw { number: ev.number, dx, dy });
+            // Every picture is in `zvm`'s own paint log, base or adaptive (SQ-1403):
+            // under a new palette they ALL recolour, and their order — which the
+            // log preserves, since it is fed at the same point the event is queued
+            // — is what a replay has to reproduce. (SQ-0567)
             // SQ-0461 decision 3 ALSO anchored a transcript inline band here for a
             // large CONTENT-art draw into a graphics window (Shogun's title
             // splash), marked `ImageSource::ContentSplash`, so that the frameless
@@ -4942,18 +5019,24 @@ impl GameSession {
 /// One entry in a v6 window's display list — a picture drawn, or a region erased,
 /// in window-canvas coordinates (SQ-0567).
 ///
-/// Serializable because a host Save State persists the display list itself rather
-/// than a picture of the result (SQ-0588): these ops ARE the archived form of a v6
-/// screen, replayed under the restored palette to rebuild it.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+/// A CANVAS-LOCAL translation, not the archived form (SQ-1403): the archived
+/// recipe is `zvm`'s own [`zvm::paint_log::PaintOp`], window-relative and in
+/// native pixels; [`GameSession::v6ops_for_window`] derives `V6Op` fresh from it
+/// every time a replay needs one, using this host's picture archive to resolve
+/// what `zvm` cannot (an `erase_picture`'s footprint) — so `V6Op` never needs to
+/// travel across a save/restore and carries no `serde` derive.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum V6Op {
     Draw { number: u16, dx: i32, dy: i32 },
     Erase { dx: i32, dy: i32, w: u32, h: u32 },
 }
 
-/// Longest display list kept per window. Comfortably above any real screen (Arthur's
-/// busiest is a handful of ops) while bounding a story that redraws forever.
-pub const V6_OPS_CAP: usize = 512;
+/// Clamp on a v6 window's pixel-canvas backing store, so a hostile / buggy story
+/// that sets `window_size(w, 0xFFFF, 0xFFFF)` then draws/erases can't force a
+/// ~17 GB `RgbaImage` allocation (an OOM abort). Far exceeds any real v6 screen
+/// (~640 px) yet bounds worst-case storage to ~64 MB — mirroring the grid-cell
+/// cap on the engine side (Phase 1a).
+const CANVAS_PX_CAP: u32 = 4096;
 
 /// Mirror a Z-machine's screen into the neutral [`ScreenModel`].
 ///
@@ -8098,7 +8181,6 @@ mod tests {
             window_fills: std::collections::HashMap::new(),
             story_pics: Vec::new(),
             v6_win0_chars_seen: 0,
-            display_ops: std::collections::HashMap::new(),
             unreplayable: std::collections::HashSet::new(),
             boot_screen_cols: zvm::screen::DEFAULT_SCREEN_COLS as u16,
         };
@@ -8172,7 +8254,6 @@ mod tests {
             window_fills: std::collections::HashMap::new(),
             story_pics: Vec::new(),
             v6_win0_chars_seen: 0,
-            display_ops: std::collections::HashMap::new(),
             unreplayable: std::collections::HashSet::new(),
             boot_screen_cols: zvm::screen::DEFAULT_SCREEN_COLS as u16,
         };
@@ -8241,7 +8322,6 @@ mod tests {
             window_fills: std::collections::HashMap::new(),
             story_pics: Vec::new(),
             v6_win0_chars_seen: 0,
-            display_ops: std::collections::HashMap::new(),
             unreplayable: std::collections::HashSet::new(),
             boot_screen_cols: zvm::screen::DEFAULT_SCREEN_COLS as u16,
         };
@@ -8266,11 +8346,13 @@ mod tests {
     fn restart_drops_the_pre_restart_v6_display_list() {
         use zvm::screen::{V6Windows, ZWindow};
         // SQ-0658: `@restart` dropped `pictures_canvas` (the rasterized RESULT) but
-        // kept `display_ops` (the RECIPE that rebuilds it under a new palette). The
-        // reboot's first draw into a window re-creates the canvas and APPENDS to the
-        // ops the dead session left behind, so the next palette change replays the
-        // old game's art onto the new one's screen. `unreplayable` and the erase
-        // `window_fills` were stranded the same way.
+        // kept the RECIPE that rebuilds it under a new palette — then `zvm`'s own
+        // paint log (SQ-1403) `Machine::restart` clears structurally, so this class
+        // of bug is now fixed at the layer that owns the recipe. The reboot's first
+        // draw into a window used to re-create the canvas and APPEND to the ops the
+        // dead session left behind, replaying the old game's art onto the new one's
+        // screen. `unreplayable` and the erase `window_fills` were stranded the
+        // same way and are still app's to drop.
         let mem = Memory::new(minimal_v6_story()).expect("minimal v6 story");
         let mut machine = Machine::with_output(mem, Box::new(CaptureSink::new()));
         let mut windows: [ZWindow; 8] = Default::default();
@@ -8297,30 +8379,43 @@ mod tests {
             window_fills: std::collections::HashMap::new(),
             story_pics: Vec::new(),
             v6_win0_chars_seen: 0,
-            display_ops: std::collections::HashMap::new(),
             unreplayable: std::collections::HashSet::new(),
             boot_screen_cols: zvm::screen::DEFAULT_SCREEN_COLS as u16,
         };
         sess.set_pict_source(Some(crate::graphics::PictSource::new(Some(blorb))));
 
-        // The pre-restart session draws at the window's top-left corner…
-        sess.apply_picture_event(&PictureEvent::new(1, 7, 1, 1, false, 0, None, false, (1, 1, 64, 48)));
-        assert_eq!(sess.display_ops.get(&7).map_or(0, Vec::len), 1, "the draw is recorded for replay");
+        // The pre-restart session draws at the window's top-left corner… Fed to the
+        // paint log explicitly (SQ-1403: the log is the host's to feed, from the
+        // same walk that rasterizes — see `Self::drain_pictures`), exactly as
+        // `drain_pictures` feeds it for a real drain of `take_paint_events`.
+        let pre_restart_draw = PictureEvent::new(1, 7, 1, 1, false, 0, None, false, (1, 1, 64, 48));
+        sess.machine.paint_log_mut().apply(&zvm::cpu::exec::PaintEvent::Picture(pre_restart_draw));
+        sess.apply_picture_event(&pre_restart_draw);
+        assert_eq!(sess.machine.paint_log().ops(7).len(), 1, "the draw is recorded for replay");
         // …and something took window 7 out of replay (an op-cap overflow in a long
         // session; forced here, since the count itself is not the point).
         sess.unreplayable.insert(7);
 
-        // @restart: the VM re-boots in place and the session drains the turn.
+        // @restart: the VM re-boots in place and the session drains the turn. Driven
+        // directly (rather than a real `Machine::restart()`, which also reboots
+        // memory/screen unrelated to what this test pins) — so the paint-log half of
+        // what a real restart does is simulated here the same way.
         sess.machine.just_restarted = true;
+        let _ = sess.machine.restore_paint_log(&[]);
         let _ = sess.drain_turn(false, None, false);
         assert!(sess.pictures_canvas.is_empty(), "the rasterized canvas is dropped (pre-existing)");
-        assert!(sess.display_ops.is_empty(), "and so is the display list that rebuilds it");
+        assert!(
+            (0u8..8).all(|w| sess.machine.paint_log().ops(w).is_empty()),
+            "and so is the paint log that rebuilds it"
+        );
         assert!(sess.unreplayable.is_empty(), "a pre-restart replay veto must not outlive the reboot");
         assert!(sess.window_fills.is_empty(), "nor the erase fills of a screen that no longer exists");
 
         // The rebooted game draws the SAME picture somewhere else, then a base
         // picture establishes a new palette and every window replays.
-        sess.apply_picture_event(&PictureEvent::new(1, 7, 33, 1, false, 0, None, false, (1, 1, 64, 48)));
+        let post_restart_draw = PictureEvent::new(1, 7, 33, 1, false, 0, None, false, (1, 1, 64, 48));
+        sess.machine.paint_log_mut().apply(&zvm::cpu::exec::PaintEvent::Picture(post_restart_draw));
+        sess.apply_picture_event(&post_restart_draw);
         sess.replay_under_current_palette();
 
         let canvas = sess.pictures_canvas.get(&7).expect("the reboot's draw made a canvas");
@@ -8382,7 +8477,6 @@ mod tests {
             window_fills: std::collections::HashMap::new(),
             story_pics: Vec::new(),
             v6_win0_chars_seen: 0,
-            display_ops: std::collections::HashMap::new(),
             unreplayable: std::collections::HashSet::new(),
             boot_screen_cols: zvm::screen::DEFAULT_SCREEN_COLS as u16,
         };
@@ -8442,7 +8536,6 @@ mod tests {
             window_fills: std::collections::HashMap::new(),
             story_pics: Vec::new(),
             v6_win0_chars_seen: 0,
-            display_ops: std::collections::HashMap::new(),
             unreplayable: std::collections::HashSet::new(),
             boot_screen_cols: zvm::screen::DEFAULT_SCREEN_COLS as u16,
         };
@@ -8486,7 +8579,6 @@ mod tests {
             window_fills: std::collections::HashMap::new(),
             story_pics: Vec::new(),
             v6_win0_chars_seen: 0,
-            display_ops: std::collections::HashMap::new(),
             unreplayable: std::collections::HashSet::new(),
             boot_screen_cols: zvm::screen::DEFAULT_SCREEN_COLS as u16,
         };
@@ -8544,7 +8636,6 @@ mod tests {
             window_fills: std::collections::HashMap::new(),
             story_pics: Vec::new(),
             v6_win0_chars_seen: 0,
-            display_ops: std::collections::HashMap::new(),
             unreplayable: std::collections::HashSet::new(),
             boot_screen_cols: zvm::screen::DEFAULT_SCREEN_COLS as u16,
         };
@@ -8640,7 +8731,6 @@ mod tests {
             window_fills: std::collections::HashMap::new(),
             story_pics: Vec::new(),
             v6_win0_chars_seen: 0,
-            display_ops: std::collections::HashMap::new(),
             unreplayable: std::collections::HashSet::new(),
             boot_screen_cols: zvm::screen::DEFAULT_SCREEN_COLS as u16,
         };
@@ -8694,7 +8784,6 @@ mod tests {
             window_fills: std::collections::HashMap::new(),
             story_pics: Vec::new(),
             v6_win0_chars_seen: 0,
-            display_ops: std::collections::HashMap::new(),
             unreplayable: std::collections::HashSet::new(),
             boot_screen_cols: zvm::screen::DEFAULT_SCREEN_COLS as u16,
         };
@@ -9201,7 +9290,6 @@ mod tests {
             window_fills: std::collections::HashMap::new(),
             story_pics: Vec::new(),
             v6_win0_chars_seen: 0,
-            display_ops: std::collections::HashMap::new(),
             unreplayable: std::collections::HashSet::new(),
             boot_screen_cols: zvm::screen::DEFAULT_SCREEN_COLS as u16,
         }
