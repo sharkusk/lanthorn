@@ -181,3 +181,97 @@ fn praxix_reports_no_failures() {
         "Praxix reported a failure/mismatch in a core group:\n{out}"
     );
 }
+
+// strictz.z5 (SQ-1421) — every object-0 opcode edge case (ZMSD "objects are
+// numbered consecutively from 1 upward, with object number 0 being used to
+// mean 'nothing'"). strictz feeds `@jin`/`@get_child`/`@get_parent`/
+// `@get_sibling`/`@get_prop_addr`/`@get_prop`/`@clear_attr`/`@set_attr`/
+// `@test_attr`/`@insert_obj`/`@remove_obj`/`@get_next_prop` object 0 and
+// flags each result "(correct)" or "(incorrect)"/"(wrong)". It asks one
+// line-read question up front ("Would you like to make a transcript...
+// (Y/N)") — answered N so nothing touches disk — then runs to completion,
+// ending on one `@read_char` ("Press any key.") that dfrotz also answers
+// with a single keystroke.
+#[test]
+fn strictz_reports_all_correct() {
+    let Some(story) = zvm::fixtures::load("strictz.z5") else {
+        // Skip if fixture absent.
+        return;
+    };
+    let mem = Memory::new(story).expect("Memory::new failed");
+    let mut machine = Machine::new(mem);
+    machine.init_caps();
+
+    const MAX_STEPS: u64 = 200_000;
+    let mut answered_transcript_prompt = false;
+    for _ in 0..MAX_STEPS {
+        match machine.step() {
+            StepResult::Quit => break,
+            StepResult::Continue => {}
+            StepResult::Restart => break,
+            StepResult::Fault => {
+                let t = machine.take_fault_trace();
+                panic!(
+                    "strictz.z5 faulted the interpreter: {:?}",
+                    t.map(|t| t.fault)
+                );
+            }
+            StepResult::NeedLine { .. } => {
+                // Only one line-read in the whole run: "make a transcript?".
+                assert!(
+                    !answered_transcript_prompt,
+                    "strictz.z5 asked a second line-read question — driving assumption stale"
+                );
+                answered_transcript_prompt = true;
+                machine.supply_line("N", 13);
+            }
+            StepResult::NeedChar => {
+                // The closing "Press any key." — any keystroke ends it.
+                machine.supply_char(b'\n');
+            }
+            StepResult::SaveRequest => machine.complete_save(false),
+            StepResult::RestoreRequest => machine.complete_restore_failure(),
+            other => panic!("unexpected StepResult driving strictz.z5: {other:?}"),
+        }
+    }
+
+    let out = machine
+        .buffer_output()
+        .map(|b| b.buf.clone())
+        .unwrap_or_default();
+    println!("strictz output:\n{out}");
+
+    assert!(
+        answered_transcript_prompt,
+        "strictz.z5 never asked the transcript question — it did not run:\n{out}"
+    );
+    assert!(
+        out.contains("Test completed!"),
+        "strictz.z5 did not reach its completion banner:\n{out}"
+    );
+
+    // Every object-0 opcode section must run.
+    for section in &[
+        "Testing @jin", "Testing @get_child", "Testing @get_parent",
+        "Testing @get_sibling", "Testing @get_prop_addr", "Testing @get_prop",
+        "Testing @clear_attr", "Testing @set_attr", "Testing @test_attr",
+        "Testing @insert_obj", "Testing ?remove_obj", "Testing ?get_next_prop",
+    ] {
+        assert!(
+            out.contains(section),
+            "strictz.z5 missing section {section:?}:\n{out}"
+        );
+    }
+
+    // Every flagged result must read "(correct)"; none may read
+    // "(incorrect)" or "(wrong)" (strictz's two spellings for a failure).
+    assert!(
+        !out.contains("(incorrect)") && !out.contains("(wrong)"),
+        "strictz.z5 flagged an object-0 result as incorrect/wrong:\n{out}"
+    );
+    let correct_count = out.matches("(correct)").count();
+    assert!(
+        correct_count >= 28,
+        "strictz.z5 only flagged {correct_count} results \"(correct)\" (expected >= 28):\n{out}"
+    );
+}

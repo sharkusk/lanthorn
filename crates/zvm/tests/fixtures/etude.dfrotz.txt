@@ -1,0 +1,208 @@
+Using normal formatting.
+Loading crates/zvm/tests/fixtures/etude.z5.
+TerpEtude: A Z-machine Interpreter Exerciser
+By Andrew Plotkin (erkyrath@netcom.com)
+Release 2 / built with Inform v6.11
+Tests compliance with Z-Machine Standards Document 0.99.
+
+NOTE: This program does not test everything in the Z-Spec. Passing all the tests in this program does NOT guarantee that your interpreter is Z-Spec-compliant.
+
+For that matter, this program may have mistakes in it. I don't think it does, but you should not assume it is the Fount of All Z-Machineness. If you find something strange, check the Z-Spec, check existing interpreters, check
+Infocom's interpreters, and then send me mail if you're still confused.
+
+Options: (hit Enter by itself to display this menu)
+  . (period): Exit TerpEtude
+  1: Version
+  2: Recent changes to TerpEtude
+  3: Header flags analysis
+  4: Styled text
+  5: Colored text
+  6: Multiplication, division, remainder
+  7: Accented character output
+  8: Single-key input
+  9: Full-line input
+  10: Timed single-key input
+
+  11: Timed full-line input
+  12: Pre-loading of input line
+  13: Undo capability
+  14: Printing before quitting
+
+> TerpEtude: A Z-machine Interpreter Exerciser
+By Andrew Plotkin (erkyrath@netcom.com)
+Release 2 / built with Inform v6.11
+Tests compliance with Z-Machine Standards Document 0.99.
+
+NOTE: This program does not test everything in the Z-Spec. Passing all the tests in this program does NOT guarantee that your interpreter is Z-Spec-compliant.
+
+For that matter, this program may have mistakes in it. I don't think it does, but you should not assume it is the Fount of All Z-Machineness. If you find something strange, check the Z-Spec, check existing interpreters, check
+Infocom's interpreters, and then send me mail if you're still confused.
+
+> In the beginning, TerpEtude was written. That was release DRAFT-1.
+
+   Release 2:
+Accented-out test: Added ability to display characters in bold, underline, and fixed-width styles.
+Accented-out test: Noted that >> and << are, in fact, tested correctly.
+Given-text test: It's the game file's job to print the given text before it calls @read. Fixed test to do this.
+Timed-string test: Changed test to do both "invisible" and "visible" interrupts (only one interrupt in three actually prints text.)
+
+   Upcoming Test Features:
+List of terminating characters
+Fonts
+Stream 3 nesting
+
+   Credits:
+Title: Jon Ferro
+Spec Aid: Graham, SJ, PDD, and the rest of the crowd
+
+> Your interpreter claims to follow revision 1.1 of the Z-Spec.
+
+Interpreter claims that colored text IS NOT available.
+Interpreter claims that emphasized (bold) text IS NOT available.
+Interpreter claims that italic (or underlined) text IS NOT available.
+Interpreter claims that fixed-width text IS NOT available.
+Interpreter claims that sound effects ARE NOT available.
+Interpreter claims that timed input IS available.
+
+Interpreter claims that "undo" IS available.
+
+> Interpreter claims that emphasized (bold) text IS NOT available.
+Interpreter claims that italic (or underlined) text IS NOT available.
+Interpreter claims that fixed-width text IS NOT available.
+
+Test of emphasized (bold) text.
+...normal font...
+Test of italic (or underlined) text.
+...normal font...
+Test of reverse-video text.
+...normal font...
+Test of fixed-width text (using "font off", which sets a header bit).
+...normal font...
+Test of fixed-width text (using "@set_text_style 8").
+
+Now we will try combining styles. The Z-Spec does not require interpreters to display combined styles, so the lines below may not have all the styles they say they do.
+
+Test of bold, italic text.
+Test of bold, reverse text.
+Test of italic, reverse text.
+Test of bold, italic, reverse text.
+
+The following are all printed with "font off" (that is, the header bit remains set, even though "style roman" statements occur.)
+Test of fixed, bold text.
+Test of fixed, italic text.
+Test of fixed, reverse text.
+Test of fixed, bold, italic text.
+Test of fixed, bold, reverse text.
+Test of fixed, italic, reverse text.
+Test of fixed, bold, italic, reverse text.
+
+End of styles test.
+
+> Interpreter claims that colored text IS NOT available.
+
+If it was, in the square below, you would see vertical stripes of background color (matching the column headers) and horizontal rows of foreground color (that is, all # marks in a row the same color.)
+
+Bk Rd Gr Yl Bl Mg Cy Wh
+## ## ## ## ## ## ## ## : Black
+## ## ## ## ## ## ## ## : Red
+## ## ## ## ## ## ## ## : Green
+## ## ## ## ## ## ## ## : Yellow
+## ## ## ## ## ## ## ## : Blue
+## ## ## ## ## ## ## ## : Magenta
+## ## ## ## ## ## ## ## : Cyan
+## ## ## ## ## ## ## ## : White
+
+> This tests signed multiplication, division, and modulo operations. All these operations are supposed to be signed. (The Z-Spec 0.2 erroneously says they are unsigned; this is corrected in 0.99.)
+
+I am assuming the convention that division always rounds towards zero (not towards negative infinity), and (A % B) always has the same sign as A. These conventions seem to be common among existing C/C++ compilers. The Infocom
+interpreters also follow these conventions. (But they are not guaranteed by the C and C++ standards. Those only require that (A/B)*B + (A%B) == A, for all A and all nonzero B.)
+
+13 * 5 = 65 (ok)
+13 * -5 = -65 (ok)
+-13 * 5 = -65 (ok)
+-13 * -5 = 65 (ok)
+13 / 5 = 2 (ok)
+13 / -5 = -2 (ok)
+-13 / 5 = -2 (ok)
+-13 / -5 = 2 (ok)
+13 % 5 = 3 (ok)
+13 % -5 = 3 (ok)
+-13 % 5 = -3 (ok)
+-13 % -5 = -3 (ok)
+
+This aspect of your interpreter appears to behave according to spec.
+
+> This displays all the accented characters (encoding values 155 to 223). You will have to inspect your interpreter's display to make sure they appear correctly.
+
+For the record, an umlaut is two dots; an acute accent is the one that slants up to the right; a grave accent is the one that slants down to the right; a circumflex is a pointy hat; a tilde is a squiggly hat; a ring is a ring; a
+cedilla is the little hook that hangs down below the C. Thorn looks like a capital D whose vertical bar extends both up and down, and Eth looks like a D with a little cross-stroke.
+
+NOTE: Inform 6.11 contradicts the Z-Spec 0.99 document, on the subject of the European angle-quotes (the ones that look like '>>' and '<<'). The Z-Spec says that the character '>>' is code 162, and '<<' is 163. However, Inform 6.11
+(following the Z-Spec 0.2) compiles '@>>' as 163, and '@<<' as 162. The concensus is that the Z-Spec 0.2 and Inform 6.11 are wrong, and Z-Spec 0.99 and later are correct.
+
+a-umlaut:ä   o-umlaut:ö   u-umlaut:ü   A-umlaut:Ä
+O-umlaut:Ö   U-umlaut:Ü   sz-ligature:ß   >>-quotes:»
+<<-quotes:«   e-umlaut:ë   i-umlaut:ï   y-umlaut:ÿ
+E-umlaut:Ë   I-umlaut:Ï   a-acute:á   e-acute:é
+i-acute:í   o-acute:ó   u-acute:ú   y-acute:ý
+A-acute:Á   E-acute:É   I-acute:Í   O-acute:Ó
+U-acute:Ú   Y-acute:Ý   a-grave:à   e-grave:è
+i-grave:ì   o-grave:ò   u-grave:ù   A-grave:À
+E-grave:È   I-grave:Ì   O-grave:Ò   U-grave:Ù
+a-circumflex:â   e-circumflex:ê   i-circumflex:î   o-circumflex:ô
+u-circumflex:û   A-circumflex:Â   E-circumflex:Ê   I-circumflex:Î
+O-circumflex:Ô   U-circumflex:Û   a-ring:å   A-ring:Å
+o-slash:ø   O-slash:Ø   a-tilde:ã   n-tilde:ñ
+
+o-tilde:õ   A-tilde:Ã   N-tilde:Ñ   O-tilde:Õ
+ae-ligature:æ   AE-ligature:Æ   c-cedilla:ç   C-cedilla:Ç
+thorn:þ   eth:ð   Thorn:Þ   Eth:Ð
+pound-symbol:£   oe-ligature:œ   OE-ligature:Œ   inverse-!:¡
+inverse-?:¿
+
+Type a digit (0..7) to repeat this list in a different text style, or "." to end this test.
+Options: 0: normal; 1: bold; 2: italic; 3: bold italic; 4: fixed-width; 5: fixed bold; 6: fixed italic; 7: fixed bold italic.
+
+Accents> > This tests input of accented (actually, all) characters. Type characters; you will see what characters your interpreter thought you typed. Hit "." to return to the main menu.
+
+AccentedInput> code=120: ASCII character 'x'
+AccentedInput> Test finished.
+
+> This tests input of accented (actually, all) characters. Enter a line of text; it will be broken down, and you will see a list of what characters your interpreter thought you typed. Remember that the interpreter is supposed to
+reduce everything to lower-case.
+
+Hit Enter by itself to return to the main menu.
+
+AccentedInput> code=104: ASCII character 'h'
+code=105: ASCII character 'i'
+code=32: ASCII character ' '
+code=116: ASCII character 't'
+code=104: ASCII character 'h'
+code=101: ASCII character 'e'
+code=114: ASCII character 'r'
+code=101: ASCII character 'e'
+
+AccentedInput> > This tests the interpreter's ability to do single and multiple "undo" commands.
+
+Your interpreter claims (by its header bit) that it DOES support undo.
+
+Simulating first move...
+Save succeeded.
+
+Simulating second move...
+Save succeeded.
+
+Hit "." to abort this test, or any other key to try "undo".
+SingleUndo> First undo...
+Undo succeeded (undid second move).
+
+Hit "." to abort this test, or any other key to try a second "undo". (In many interpreters, executing the second "undo" will return to exactly the same point as the first one. If this occurs, and you see this message a second time
+(or more), your interpreter only supports single-move undo.)
+MultipleUndo> Your interpreter claims to support "undo", and it does. This aspect of your interpreter appears to behave according to spec.
+
+> This tests if you can read text which is displayed immediately before the program quits. (It is not clear whether this is covered by the Z-Spec. However, some games -- including some original Infocom games -- display important
+closing text and then immediately quit.)
+
+Hit "." to return to the main menu, or any other key to print a line of text and then quit. If the line of text does not appear, or appears and vanishes too quickly to read, your interpreter will have trouble with those games.
+
+ClosingText> This is a final line of text. Goodbye.
