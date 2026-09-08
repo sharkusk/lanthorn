@@ -142,6 +142,9 @@ struct Args {
     /// `--data-dir`: where saves live. `None` puts them beside the `.dat`, which
     /// is what `cli_host::game_dir` does for the other two hosts.
     data_dir: Option<String>,
+    /// ScottFree's four runtime option flags (SQ-1413), mirroring `main`'s own
+    /// `-y`/`-s`/`-t`/`-p` (`ScottCurses.c:1299-1342`) — see `scott::Options`.
+    options: scott::Options,
 }
 
 /// Every option `scott-cli` accepts; `cli_host::args` applies the rules.
@@ -153,6 +156,10 @@ const OPTS: &[cli_host::Opt] = &[
     cli_host::Opt::valued(&["--seed"]),
     cli_host::Opt::valued(&["--max-turns"]),
     cli_host::Opt::valued(&["--data-dir"]),
+    cli_host::Opt::flag(&["--you-are", "-y"]),
+    cli_host::Opt::flag(&["--scott-light", "-s"]),
+    cli_host::Opt::flag(&["--trs80", "-t"]),
+    cli_host::Opt::flag(&["--prehistoric-lamp", "-p"]),
 ];
 
 fn parse_args(argv: &[String]) -> Result<Args, String> {
@@ -169,12 +176,28 @@ fn parse_args(argv: &[String]) -> Result<Args, String> {
             Some(v) => v.parse().map(Some).map_err(|_| format!("bad {flag} value: {v}")),
         }
     };
+    // `-t`/`--trs80` sets BOTH the flag and this crate's own `Presentation`
+    // (see `Options::trs80_style`'s doc for why they're separate knobs) —
+    // a CLI user asking for the TRS-80 flag wants the TRS-80 room-block
+    // layout too. Off, `scott-cli` keeps `Options::default`'s own
+    // `Presentation::C64` layout unchanged (SQ-1413) — the flag adds the
+    // TRS-80 choice, it does not switch the baseline to plain ScottFree.
+    let trs80 = m.has("--trs80");
+    let mut options = scott::Options::new()
+        .with_you_are(m.has("--you-are"))
+        .with_scott_light(m.has("--scott-light"))
+        .with_trs80_style(trs80)
+        .with_prehistoric_lamp(m.has("--prehistoric-lamp"));
+    if trs80 {
+        options = options.with_presentation(scott::Presentation::Trs80);
+    }
     Ok(Args {
         path: m.first_positional().ok_or("no story file given")?.to_string(),
         seed: num("--seed")?.map(|v| v as u32),
         max_turns: num("--max-turns")?,
         pager: cli_host::on_off("--pager", m.value("--pager"))?.unwrap_or(true),
         data_dir: m.value("--data-dir").map(str::to_string),
+        options,
     })
 }
 
@@ -367,6 +390,22 @@ Options:
       --data-dir <path> Where saves live (default: a .save directory beside the
                         .dat, the same rule zvm-cli and gvm-cli follow)
       --max-turns <n>   Stop after n turns (headless/testing)
+  -y, --you-are         Second-person replies (\"You are dead.\", \"You are
+                        carrying:\") instead of ScottFree's plain first-person
+                        default (\"I am dead.\", \"I'm carrying:\"). Some
+                        Brian Howarth titles (Robin of Sherwood among them)
+                        were authored assuming this flag.
+  -s, --scott-light     The original Adams lamp countdown wording: a running
+                        \"Light runs out in N turns.\" every turn under 25,
+                        instead of ScottFree's own \"Your light is growing
+                        dim.\" every 5th turn.
+  -t, --trs80           The TRS-80 room-block layout (items suffixed \". \"
+                        and the whole block framed by the TRS-80's rule)
+                        in place of this player's own default layout.
+  -p, --prehistoric-lamp
+                        The light source is destroyed the instant its fuel
+                        reaches zero, rather than merely going dark and
+                        staying an inert carried item.
   -V, --version         Print version and exit
   -h, --help            Print this help and exit
 ";
@@ -400,10 +439,16 @@ fn main() {
         process::exit(1);
     });
 
-    let mut vm = Vm::new(db);
-    if let Some(seed) = args.seed {
-        vm.seed_rng(seed);
-    }
+    // Seed and Options both belong at construction (`Vm::new_full`'s own
+    // doc): the opening occurrence pass runs inside the constructor and can
+    // roll percentage chances or print option-gated wording, so setting
+    // either afterward would be too late for it.
+    let mut vm = Vm::new_full(
+        db,
+        false,
+        args.seed.unwrap_or(Vm::DEFAULT_RNG_SEED),
+        args.options,
+    );
     // Saves live where the other two hosts put theirs, by the same rule, so a
     // player who has learned one has learned all three (SQ-0919).
     let game_dir: PathBuf = cli_host::game_dir(Path::new(&args.path), args.data_dir.as_deref());
