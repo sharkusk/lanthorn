@@ -53,12 +53,29 @@ pub fn read_line_or_eof<R: BufRead>(r: &mut R) -> Option<String> {
     }
 }
 
-/// Read one line and return its first byte, or `None` at true EOF.
+/// The ZSCII code a `read_char` request should see for a line already read
+/// (its line terminator, if any, still attached).
 ///
-/// A blank line yields `b'\n'` — the byte the player actually typed — which must
-/// not be confused with the `None` that means the stream is done.
+/// A `read_char` byte must be a legal ZSCII input code (ZMSD §3.8): Return is
+/// ZSCII **13**, and 10 (LF) is not a legal input code at all. A bare Enter on
+/// a piped/cooked line arrives as `"\n"` (or `"\r\n"`) with no content before
+/// the terminator — that must be read back as 13, not as the raw LF byte, or a
+/// game asking `read_char` for a keypress (rather than a line) receives a code
+/// it is never allowed to see (SQ-1423). A line with real content still
+/// reports its first character as before.
+///
+/// Shared by [`read_byte_or_eof`] and any host that already owns the whole
+/// line — a cooked-terminal char read that borrows the line editor to get
+/// escape-free digits, say — so the mapping cannot drift between the two.
+pub fn read_char_from_line(line: &str) -> u8 {
+    let content = line.trim_end_matches(['\n', '\r']);
+    content.bytes().next().unwrap_or(13)
+}
+
+/// Read one line and return the ZSCII code of the key it represents (see
+/// [`read_char_from_line`]), or `None` at true EOF.
 pub fn read_byte_or_eof<R: BufRead>(r: &mut R) -> Option<u8> {
-    read_line_or_eof(r).map(|line| line.bytes().next().unwrap_or(b'\n'))
+    read_line_or_eof(r).map(|line| read_char_from_line(&line))
 }
 
 /// [`read_line_or_eof`] against the real stdin.
@@ -113,12 +130,38 @@ mod tests {
         assert_eq!(read_line_or_eof(&mut r), Some("\n".to_string()));
         assert_eq!(read_line_or_eof(&mut r), None, "now it really is EOF");
 
-        // The byte reader must draw the same line: `\n` is the byte the player
-        // typed. Reading it as EOF (or reading EOF as `\n`) is the loop that
-        // hung Kerkerkruip on /dev/null — SQ-0604.
+        // The byte reader must draw the same line as real input, not EOF —
+        // reading it as EOF (or reading EOF as a keypress) is the loop that
+        // hung Kerkerkruip on /dev/null (SQ-0604). But the byte it reports for
+        // a bare Enter is ZSCII 13, not the raw LF: see
+        // `blank_line_reads_as_return_not_lf` below (SQ-1423).
         let mut r = io::Cursor::new(b"\n".to_vec());
-        assert_eq!(read_byte_or_eof(&mut r), Some(b'\n'));
+        assert_eq!(read_byte_or_eof(&mut r), Some(13));
         assert_eq!(read_byte_or_eof(&mut r), None);
+    }
+
+    #[test]
+    fn blank_line_reads_as_return_not_lf() {
+        // ZMSD §3.8: Return is ZSCII 13; 10 (LF) is not a legal `read_char`
+        // input code at all. A bare Enter on piped stdin is a blank line, and
+        // `read_line` hands that back as the raw terminator byte — feeding it
+        // straight to `@read_char` is exactly what gntests' InputCodes section
+        // catches as "code 10 should not have been returned" (SQ-1423).
+        let mut lf = io::Cursor::new(b"\n".to_vec());
+        assert_eq!(read_byte_or_eof(&mut lf), Some(13), "bare LF must read back as Return");
+
+        let mut crlf = io::Cursor::new(b"\r\n".to_vec());
+        assert_eq!(read_byte_or_eof(&mut crlf), Some(13), "CRLF must read back as Return too");
+
+        let mut lone_cr = io::Cursor::new(b"\r".to_vec());
+        assert_eq!(read_byte_or_eof(&mut lone_cr), Some(13), "a lone unterminated CR is Return");
+
+        // Real content is unaffected: the first character still wins, whatever
+        // the line ending is.
+        let mut content = io::Cursor::new(b"yes\n".to_vec());
+        assert_eq!(read_byte_or_eof(&mut content), Some(b'y'));
+        let mut content_crlf = io::Cursor::new(b"north\r\n".to_vec());
+        assert_eq!(read_byte_or_eof(&mut content_crlf), Some(b'n'));
     }
 
     #[test]

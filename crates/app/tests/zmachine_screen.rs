@@ -34,6 +34,8 @@ mod print_then_erase_boundary;
 mod sq1354b_bureaucracy_bp_line;
 #[path = "suites/sq1355_bureaucracy_form_exit.rs"]
 mod sq1355_bureaucracy_form_exit;
+#[path = "suites/sq1410_restore_degradation_notice.rs"]
+mod sq1410_restore_degradation_notice;
 #[path = "suites/sq1411_splash_resume_pager.rs"]
 mod sq1411_splash_resume_pager;
 #[path = "suites/transparent_backdrop_audit.rs"]

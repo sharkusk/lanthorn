@@ -35,7 +35,15 @@ mod media;
 
 /// The CLI's owned audio state: backend + resolved Blorb + live sound tracking.
 struct CliSound {
-    backend: audio::AudioBackend,
+    /// The real output device — `None` until the first sound actually plays.
+    /// `AudioBackend::new` opens a real device (CoreAudio/etc.), which the SQ-1014
+    /// audit measured at ~240ms on a story that plays no sound at all: every
+    /// launch was paying it up front just because `--sound` wasn't off. Opened
+    /// lazily via `backend()` below instead, on the same thread that plays —
+    /// exactly as before, just later (SQ-1423; see the audio crate's SQ-1162
+    /// notes on why that thread matters).
+    backend: Option<audio::AudioBackend>,
+    volume: u8,
     blorb: Option<blorb::Blorb>,
     /// Sounds the story's own MEDIUM carries, by effect number, already wrapped as
     /// AIFF (SQ-0907). The two Infocom games that use sound ship it on the release
@@ -44,6 +52,13 @@ struct CliSound {
     disk: HashMap<u16, Vec<u8>>,
     ids: HashMap<u16, audio::SoundId>,
     routines: HashMap<audio::SoundId, u16>,
+}
+
+impl CliSound {
+    /// The audio backend, opening the real device on first call.
+    fn backend(&mut self) -> &mut audio::AudioBackend {
+        self.backend.get_or_insert_with(|| audio::AudioBackend::new(self.volume))
+    }
 }
 
 fn sound_kind_to_format(k: blorb::SoundKind) -> Option<audio::SoundFormat> {
@@ -63,11 +78,16 @@ fn play_cli_sounds(cs: &mut CliSound, events: &[zvm::cpu::exec::SoundEvent]) {
             // ZMSD §15 "To clarify": "@sound_effect 0 3/4 will stop (and
             // unload) all sounds" — number 0 refers to every currently
             // playing sound; zvm now delivers this rather than dropping it
-            // (SQ-1419), so stop every sound this CLI started.
+            // (SQ-1419), so stop every sound this CLI started. Stop-all must
+            // NOT open a device (SQ-1423): if `cs.backend` is still `None`,
+            // nothing was ever started, so `cs.ids` is empty and there is
+            // nothing to stop.
             0 => {
                 if matches!(ev.effect, 3 | 4) {
-                    for (_, id) in cs.ids.drain() {
-                        cs.backend.stop(id);
+                    if let Some(backend) = cs.backend.as_mut() {
+                        for (_, id) in cs.ids.drain() {
+                            backend.stop(id);
+                        }
                     }
                 }
             }
@@ -79,10 +99,10 @@ fn play_cli_sounds(cs: &mut CliSound, events: &[zvm::cpu::exec::SoundEvent]) {
             // compensation is gone with it).
             1 | 2 => {
                 let freq = if ev.number == 1 { 800.0 } else { 400.0 };
-                cs.backend.play_tone(freq, 150, ev.volume);
+                cs.backend().play_tone(freq, 150, ev.volume);
             }
             n => match ev.effect {
-                3 => { if let Some(id) = cs.ids.remove(&n) { cs.backend.stop(id); } }
+                3 => { if let Some(id) = cs.ids.remove(&n) { cs.backend().stop(id); } }
                 1 => {}
                 _ => {
                     // THE MEDIUM ANSWERS FIRST (SQ-0914): a release disk is the
@@ -102,7 +122,7 @@ fn play_cli_sounds(cs: &mut CliSound, events: &[zvm::cpu::exec::SoundEvent]) {
                             )
                         });
                     if let Some((bytes, fmt)) = picked {
-                        if let Some(id) = cs.backend.play_sample(&bytes, fmt, ev.volume, ev.repeats) {
+                        if let Some(id) = cs.backend().play_sample(&bytes, fmt, ev.volume, ev.repeats) {
                             cs.ids.insert(n, id);
                             if ev.routine != 0 { cs.routines.insert(id, ev.routine); }
                         }
@@ -116,7 +136,10 @@ fn play_cli_sounds(cs: &mut CliSound, events: &[zvm::cpu::exec::SoundEvent]) {
 /// Poll finished sampled sounds; run their finish-routines and reprint the frame.
 fn poll_sound_finish(sound: Option<&mut CliSound>, machine: &mut Machine, view: &mut screen::ScreenView, is_tty: bool) {
     let Some(cs) = sound else { return };
-    let done = cs.backend.finished();
+    // No device opened yet means nothing has ever played, so nothing can have
+    // finished — don't force the lazy open just to poll an empty backend.
+    let Some(backend) = cs.backend.as_mut() else { return };
+    let done = backend.finished();
     let mut ran = false;
     for id in done {
         // Always forget the number->id mapping for a finished sound, even one
@@ -901,7 +924,9 @@ fn detect_term_size() -> (u16, u16) {
 fn decode_keycode(code: KeyCode) -> u8 {
     match code {
         KeyCode::Char(c) if (c as u32) < 128 => c as u8,
-        KeyCode::Enter => b'\n',
+        // ZMSD §3.8: Return is ZSCII 13, not 10 — LF is not a legal
+        // `read_char` input code at all (SQ-1423).
+        KeyCode::Enter => 13,
         KeyCode::Backspace | KeyCode::Delete => 8, // DEL/BS
         KeyCode::Esc => 0x1B,
         KeyCode::Up => 129,
@@ -1053,7 +1078,9 @@ fn read_cooked_char(machine: &mut Machine, view: &mut screen::ScreenView) -> u8 
             }
             cli_host::Typed::Passthrough => {}
         }
-        return line.bytes().next().unwrap_or(b'\n');
+        // ZMSD §3.8: Return is ZSCII 13, not the raw LF/CRLF terminator a
+        // cooked read hands back for a bare Enter (SQ-1423).
+        return cli_host::read_char_from_line(&line);
     }
 }
 
@@ -1916,7 +1943,8 @@ fn main() {
             None => HashMap::new(),
         };
         Some(CliSound {
-            backend: audio::AudioBackend::new(volume),
+            backend: None, // opened lazily by `CliSound::backend()` on first use (SQ-1423)
+            volume,
             blorb,
             disk,
             ids: HashMap::new(),
@@ -2610,8 +2638,11 @@ mod stdin_eof_tests {
 
     #[test]
     fn blank_line_is_not_confused_with_eof() {
+        // Not `None` (EOF) — and not the raw LF byte either: ZMSD §3.8 makes
+        // Return ZSCII 13, and 10 is not a legal `read_char` input code
+        // (SQ-1423; full mapping coverage lives in `cli_host::input`).
         let mut input: &[u8] = b"\n";
-        assert_eq!(read_byte_or_eof(&mut input), Some(b'\n'));
+        assert_eq!(read_byte_or_eof(&mut input), Some(13));
     }
 
     #[test]
@@ -2695,7 +2726,9 @@ mod keycode_tests {
 
     #[test]
     fn decode_keycode_special_keys() {
-        assert_eq!(decode_keycode(KeyCode::Enter), b'\n');
+        // ZMSD §3.8: Return is ZSCII 13; 10 (LF) is not a legal read_char
+        // input code (SQ-1423).
+        assert_eq!(decode_keycode(KeyCode::Enter), 13);
         assert_eq!(decode_keycode(KeyCode::Backspace), 8);
         assert_eq!(decode_keycode(KeyCode::Esc), 0x1B);
         assert_eq!(decode_keycode(KeyCode::Up), 129);
@@ -3013,6 +3046,7 @@ mod centring_tests {
 #[cfg(test)]
 mod sound_idmap_tests {
     use std::collections::HashMap;
+    use super::{CliSound, play_cli_sounds};
 
     // Mirrors the `cs.ids.retain(|_, v| *v != id)` line in `poll_sound_finish`:
     // a finished sound's number->id mapping must be cleared even when it has no
@@ -3031,6 +3065,47 @@ mod sound_idmap_tests {
 
         assert!(!ids.contains_key(&3), "finished id must be cleared even without a routine");
         assert_eq!(ids.get(&4), Some(&99), "unrelated entries must be untouched");
+    }
+
+    // SQ-1423: the real output device must open lazily, on the first sound
+    // that actually plays, rather than at launch — the SQ-1014 audit measured
+    // ~240ms opening a device a silent story never uses.
+    #[test]
+    fn backend_opens_lazily_on_first_sound_event() {
+        audio::disable_output_for_tests(); // SQ-1162: never a real device in tests
+        let mut cs = CliSound {
+            backend: None,
+            volume: 50,
+            blorb: None,
+            disk: HashMap::new(),
+            ids: HashMap::new(),
+            routines: HashMap::new(),
+        };
+        assert!(cs.backend.is_none(), "constructing CliSound must not open a device");
+        // A #1 bleep (effect 2 = start) is the simplest event that actually plays.
+        let ev = zvm::cpu::exec::SoundEvent::new(1, 2, 8, 0, 0);
+        play_cli_sounds(&mut cs, &[ev]);
+        assert!(cs.backend.is_some(), "playing a bleep must construct the backend on first use");
+    }
+
+    // A batch that carries only a no-op (a #0 filler, or an ineffective #3
+    // stop with no id ever recorded) must not pay to open the device either —
+    // "on first use" means first *actual* play, not first call.
+    #[test]
+    fn backend_stays_closed_for_events_that_play_nothing() {
+        audio::disable_output_for_tests();
+        let mut cs = CliSound {
+            backend: None,
+            volume: 50,
+            blorb: None,
+            disk: HashMap::new(),
+            ids: HashMap::new(),
+            routines: HashMap::new(),
+        };
+        let filler = zvm::cpu::exec::SoundEvent::new(0, 0, 0, 0, 0);
+        let ineffective_stop = zvm::cpu::exec::SoundEvent::new(3, 3, 8, 0, 0);
+        play_cli_sounds(&mut cs, &[filler, ineffective_stop]);
+        assert!(cs.backend.is_none(), "no device should open when nothing actually plays");
     }
 }
 

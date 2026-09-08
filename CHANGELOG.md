@@ -55,7 +55,10 @@ Absolute URLs or no link.
   game next repaints, and a text game's status line is blank until the next
   turn redraws it. Saving again writes the new format. If you want an old
   graphical save restored exactly, the previous release can load it and save it
-  again. The game's own `save` files are unaffected. (SQ-1401, SQ-1403)
+  again. The game's own `save` files are unaffected. lanthorn now tells you
+  when this happens: restoring an old save prints a note in the transcript
+  saying the screen (and, for a graphical game, its pictures) will repaint
+  as you play. (SQ-1401, SQ-1403, SQ-1410)
 
 ### Fixed
 
@@ -128,6 +131,13 @@ Absolute URLs or no link.
 - **Restarting a game now reshuffles its random events** unless you've pinned
   a specific random seed for reproducible play, matching how other
   interpreters treat a restart. (SQ-1419)
+- **lanthorn and the `zvm-cli` command-line player now start instantly on a
+  game with no sound**, instead of pausing to open an audio device that game
+  was never going to use — the device now opens only the first time a game
+  actually plays something. **And `zvm-cli` now reads Enter correctly in a
+  game that asks for a single keypress** — a bare Enter used to be reported
+  as a raw line-feed, which a well-behaved game is entitled to reject as an
+  input code it should never see. (SQ-1423)
 
 ---
 

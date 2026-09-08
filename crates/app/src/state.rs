@@ -3914,17 +3914,27 @@ impl AppState {
         if !self.config.enable_sound {
             return;
         }
-        let Some(backend) = self.audio.as_mut() else { return };
+        // Read once, outside the loop, so each lazy open below borrows only
+        // `self.audio` — disjoint from the `self.disk_sounds` / `self.sound_blorb`
+        // borrow `resolve_sound` hands back further down (SQ-1423: the device
+        // opens on first *actual* play, not at boot; see `startup.rs`'s note on
+        // why `state.audio` starts `None`).
+        let volume = self.config.volume;
         for ev in sounds {
             match ev.number {
                 // ZMSD §15 "To clarify": "@sound_effect 0 3/4 will stop (and
                 // unload) all sounds" — number 0 refers to every currently
                 // playing sound, not "no sound"; zvm now delivers this rather
                 // than dropping it (SQ-1419), so stop every sound we started.
+                // Stop-all must NOT open a device (SQ-1423): if `self.audio`
+                // is still `None`, nothing was ever started, so `sound_ids`
+                // is empty and there is nothing to stop.
                 0 => {
                     if matches!(ev.effect, 3 | 4) {
-                        for (_, id) in self.sound_ids.drain() {
-                            backend.stop(id);
+                        if let Some(backend) = self.audio.as_mut() {
+                            for (_, id) in self.sound_ids.drain() {
+                                backend.stop(id);
+                            }
                         }
                     }
                 }
@@ -3936,12 +3946,12 @@ impl AppState {
                 // 2 = play, so the compensation is gone with it).
                 1 | 2 => {
                     let freq = if ev.number == 1 { 800.0 } else { 400.0 };
-                    backend.play_tone(freq, 150, ev.volume);
+                    self.audio.get_or_insert_with(|| audio::AudioBackend::new(volume)).play_tone(freq, 150, ev.volume);
                 }
                 n => match ev.effect {
                     3 => {
                         if let Some(id) = self.sound_ids.remove(&n) {
-                            backend.stop(id);
+                            self.audio.get_or_insert_with(|| audio::AudioBackend::new(volume)).stop(id);
                         }
                     }
                     1 => {} // prepare: decode on start
@@ -3950,8 +3960,11 @@ impl AppState {
                         // `/play-sound` diagnostic — see `resolve_sound`.
                         let played = resolve_sound(&self.disk_sounds, self.sound_blorb.as_ref(), n)
                             .and_then(|(bytes, kind, _)| {
-                                sound_kind_to_format(kind)
-                                    .and_then(|fmt| backend.play_sample(bytes, fmt, ev.volume, ev.repeats))
+                                sound_kind_to_format(kind).and_then(|fmt| {
+                                    self.audio
+                                        .get_or_insert_with(|| audio::AudioBackend::new(volume))
+                                        .play_sample(bytes, fmt, ev.volume, ev.repeats)
+                                })
                             });
                         if let Some(id) = played {
                             self.sound_ids.insert(n, id);
@@ -3974,21 +3987,29 @@ impl AppState {
         if !self.config.enable_sound {
             return;
         }
-        let Some(backend) = self.audio.as_mut() else { return };
+        // No early bail on a missing backend any more (SQ-1423): the device
+        // opens lazily, on the first op that actually starts a sound
+        // (`SchannelOp::Play`'s successful decode below), not at boot — every
+        // other op either targets an existing channel (which can only exist
+        // once a sound has actually played, so the device is already open) or
+        // is pure bookkeeping (ramps/notifies) that must still happen with no
+        // device at all.
+        let volume = self.config.volume;
         for op in ops {
             match *op {
-                SchannelOp::Play { chan, snd, repeats, notify, volume, paused } => {
+                SchannelOp::Play { chan, snd, repeats, notify, volume: vol, paused } => {
                     // Playing on a busy channel stops the old sound first; the
                     // replaced sound fires no notify.
                     if let Some(old) = self.glulx_channels.remove(&chan) {
-                        backend.stop(old);
+                        if let Some(backend) = self.audio.as_mut() { backend.stop(old); }
                         self.glulx_sound_notify.remove(&old);
                     }
                     let Some(reps) = glk_repeats_to_audio(repeats) else { continue };
                     if let Some(blorb) = &self.sound_blorb {
                         if let Some((bytes, kind)) = blorb.sound(snd) {
                             if let Some(fmt) = sound_kind_to_format(kind) {
-                                let gain = glk_volume_to_gain(volume);
+                                let gain = glk_volume_to_gain(vol);
+                                let backend = self.audio.get_or_insert_with(|| audio::AudioBackend::new(volume));
                                 if let Some(id) = backend.play_sample_gain(bytes, fmt, gain, reps) {
                                     self.glulx_channels.insert(chan, id);
                                     // A fresh sound starts at the channel's snapshot
@@ -4004,7 +4025,7 @@ impl AppState {
                                     // not "empty", so no finish-notify fires until it
                                     // is unpaused and actually plays out.
                                     if paused {
-                                        backend.pause(id);
+                                        if let Some(backend) = self.audio.as_mut() { backend.pause(id); }
                                     }
                                 }
                             }
@@ -4013,13 +4034,13 @@ impl AppState {
                 }
                 SchannelOp::Stop { chan } => {
                     if let Some(id) = self.glulx_channels.remove(&chan) {
-                        backend.stop(id);
+                        if let Some(backend) = self.audio.as_mut() { backend.stop(id); }
                         self.glulx_sound_notify.remove(&id);
                     }
                 }
                 SchannelOp::Destroy { chan } => {
                     if let Some(id) = self.glulx_channels.remove(&chan) {
-                        backend.stop(id);
+                        if let Some(backend) = self.audio.as_mut() { backend.stop(id); }
                         self.glulx_sound_notify.remove(&id);
                     }
                     // A destroyed channel can never complete a pending ramp.
@@ -4030,7 +4051,7 @@ impl AppState {
                 SchannelOp::SetVolume { chan, vol } => {
                     let gain = glk_volume_to_gain(vol);
                     if let Some(&id) = self.glulx_channels.get(&chan) {
-                        backend.set_sample_gain(id, gain);
+                        if let Some(backend) = self.audio.as_mut() { backend.set_sample_gain(id, gain); }
                     }
                     // A plain set_volume is an immediate change; it interrupts any
                     // in-progress ramp (whose notify is then dropped, per spec §8.3).
@@ -4040,12 +4061,12 @@ impl AppState {
                 }
                 SchannelOp::Pause { chan } => {
                     if let Some(&id) = self.glulx_channels.get(&chan) {
-                        backend.pause(id);
+                        if let Some(backend) = self.audio.as_mut() { backend.pause(id); }
                     }
                 }
                 SchannelOp::Unpause { chan } => {
                     if let Some(&id) = self.glulx_channels.get(&chan) {
-                        backend.unpause(id);
+                        if let Some(backend) = self.audio.as_mut() { backend.unpause(id); }
                     }
                 }
                 SchannelOp::SetVolumeExt { chan, vol, duration_ms, notify } => {
@@ -4057,7 +4078,7 @@ impl AppState {
                     if duration_ms == 0 {
                         // Immediate change: jump the sink and current gain to target.
                         if let Some(&id) = self.glulx_channels.get(&chan) {
-                            backend.set_sample_gain(id, target);
+                            if let Some(backend) = self.audio.as_mut() { backend.set_sample_gain(id, target); }
                         }
                         self.glulx_gain.insert(chan, target);
                     } else {
