@@ -189,6 +189,11 @@ unsigned: jltu/jgeu/jgtu/jleu. Shifts by ≥ 32: `shiftl`/`ushiftr` yield 0,
   (`run_call_to_return`), per spec §7.2. Re-entrant filter calls are bounded by a
   native-stack depth guard.
 - mode `2` — Glk: stream opcodes route to `Output::print`.
+- any other mode — normalized to `0` (null) with rock `0` (spec §2.11: "If the
+  system L1 is not supported by the interpreter, it will default to the null
+  system"). Modes `0` and `2` always zero the rock too, matching glulxe's
+  `stream_set_iosys` (`string.c`) — only mode `1` (filter) keeps the caller's
+  rock, since there it names the filter routine (SQ-1415).
 
 - `streamchar L1` — emit `L1 & 0xFF` as one Latin-1 char.
 - `streamunichar L1` — emit the 32-bit Unicode code point `L1`.
@@ -417,22 +422,44 @@ run-length-encoded: a non-zero byte is literal; a run of 1..=256 zero bytes is a
 original image, then apply the diff (so bytes absent from the save return to
 their load-time values).
 
+**A foreign writer may end the `CMem` stream early, and that is not corruption
+(SQ-1415).** glulxe's own writer (`serial.c` `write_memstate`) omits the
+trailing zero run once every remaining byte is unchanged from the original
+image — "it's possible we've got a run left over, but we don't write it" — and
+its reader treats running out of stream as "the final, unstored run", filling
+the rest with zero diff. `decompress_ram` does the same: exhausting the `CMem`
+bytes before `memsize` fills `[addr, memsize)` from the original image rather
+than returning `BadSave`. Only a *decoded* run whose length would write past
+`memsize` is still rejected — glulxe's writer can never produce one, so that
+shape means a corrupted or hostile file. This is what makes
+`tests/fixtures/startsavetest.gblorb` (glulxe's own save/restore unit-test
+game, `tests/startsavetest_boots.rs`) and Counterfeit Monkey's shipped
+resource `9998` boot save restore instead of being rejected.
+
 **`Stks` (spec §1.8 / §1.3.1):** the stack is one byte-addressed buffer already
 in the spec's call-frame layout, so the chunk is simply `stack[0..sp]`. We store
 sp/fp/pc explicitly in `GReg` rather than deriving them from a top-of-stack call
 stub (a real Quetzal reader's job); `GReg` is this implementation's extension to
 keep `save_state`/`restore_state` self-contained for headless testing.
 
-**Restore order:** parse chunks → snapshot the currently-protected bytes →
-decompress `CMem` (reset+diff) → re-impose the protected bytes → load the stack
-and registers from `Stks`/`GReg` → rebuild the heap from `MAll` → recompute the
-frame cache. The **protected range** (§16) is preserved across restore: bytes in
-the current protect range keep their pre-restore values.
+**Restore order:** parse chunks → decompress `CMem`/`UMem` (reset+diff), SKIPPING
+any byte inside the *live* protect range → load the stack and registers from
+`Stks`/`GReg` → rebuild the heap from `MAll` → recompute the frame cache. The
+**protected range** (§16) is preserved across restore: bytes in the current
+protect range keep their pre-restore values, because `decompress_ram`/
+`load_umem` simply never write them (SQ-1415: no longer a snapshot-then-
+reimpose over a materialised `Vec` of every protected byte, which for a
+hostile multi-GiB `@protect` range was itself an unbounded allocation).
 
 Per the spec, an interpreter's Glk state, RNG internal state, protect range, and
 I/O-system/string-table settings are not part of a real Quetzal *file*; our
 internal snapshot additionally carries iosys/string-table/protect in `GReg` so
-that `saveundo`/`restoreundo` (§15) restore the full VM state exactly.
+that **`restore_state`** (the host Save State path) restores the full VM state
+exactly, including the saved protect range. **`saveundo`/`restoreundo` (§15) are
+different: per spec §2.16 the protect range is explicitly not part of the saved
+undo state**, so `restoreundo` puts the LIVE range (as it stood right before the
+undo) back after the shared restore core runs, rather than trusting the
+snapshot's `GReg` the way `restore_state` does (SQ-1415).
 
 **A second, spec-conformant standard serializer (`@save`/`@restore`, SQ-0283).**
 `save_state`/`restore_state` above back the host **Save State** (Layer 2, a
@@ -523,13 +550,36 @@ when full. (`@save`/`@restore` to a real file are now implemented — see §14's
 |---------|-------|---|---|-----------------------------------------------------|
 | protect | 0x127 | 2 | 0 | preserve RAM `[L1, L1+L2)` across restore/restoreundo; `L2 == 0` clears |
 
-The protected range `(addr, len)` lives on the `Machine`. During restore (§14)
-the bytes currently in the protected range are snapshotted before RAM is reset,
-then written back after the saved diff is applied — so a protected byte keeps its
-**current** value rather than the restored image's. `protect(_, 0)` clears
-protection. Our internal snapshot also carries the range in `GReg`, so a
-`saveundo`/`restoreundo` round-trip preserves it. (The spec also lists `restart`
-among the operations protect guards; `restart` is not implemented in 2c.)
+The protected range `(addr, len)` lives on the `Machine`, stored as `(start,
+len)` rather than `(start, end)` — glulxe's own `op_protect` (exec.c) computes
+`end = start + len` and validates nothing, so a hostile range is ordinary
+input there too, and every reader of the range here (`decompress_ram`/
+`load_umem`/`reset_ram`) computes its end with `saturating_add` rather than
+trusting one (SQ-1415). During restore (§14), `decompress_ram`/`load_umem`
+simply never write a byte inside the live protected range, so it keeps its
+**current** value rather than the restored image's — a live skip, not a
+snapshot-then-reimpose, precisely so a hostile multi-GiB range is never
+materialised into a `Vec`. `protect(_, 0)` clears protection.
+
+**`restart` and `restoreundo` treat the protect range oppositely, and both
+match the spec (SQ-1415):**
+
+- **`@restart` (spec §2.9) honors it and does NOT reset it.** `reset_ram`
+  (memory.rs) reloads `[RAMSTART, EXTSTART)` from the original image and
+  zeroes `[EXTSTART, ENDMEM)` while skipping `[protectstart, protectend)`,
+  mirroring glulxe's `vm_restart` (`vm.c`) exactly — it reloads the game file
+  byte-by-byte, `if (lx >= protectstart && lx < protectend) continue;`, and
+  its own comment says "we do not reset the protection range". `op_restart`
+  leaves `self.protect` untouched (previously it zeroed it, which the spec
+  never asked for).
+- **`saveundo`/`restoreundo` (§15) do NOT honor it — per spec §2.16 the
+  protect range is explicitly not part of the saved undo state.** Our
+  internal snapshot format (`GReg`) DOES carry the range (so **`restore_state`**,
+  the unrelated host Save State path, can restore it exactly), but
+  `restoreundo` captures the LIVE range before calling the shared restore
+  core and puts it back afterward, rather than trusting what `GReg` says —
+  otherwise an undo would silently reinstate whatever range was live when
+  `saveundo` ran, which is exactly the "part of saved state" the spec denies.
 
 ## 17. Acceleration (Phase 2c, spec §2.18 / §1.4)
 

@@ -74,6 +74,25 @@ pub fn parse_header(image: &[u8]) -> Result<Header, GError> {
     if h.ramstart > h.extstart || h.extstart > h.endmem {
         return Err(GError::BadMemoryMap);
     }
+    // Stack size must be 256-byte aligned (spec §1.3: "the maximum size of the
+    // stack is determined by a constant value in the game-file header. For
+    // convenience, this must be a multiple of 256." glulxe only warns about
+    // this — `vm.c`'s load treats it as `nonfatal_warning`, not
+    // `fatal_error` — but an unaligned request is a malformed header by the
+    // spec's own normative "must", and gvm's stack allocation (`Machine::new`)
+    // has no reason to trust a size the spec forbids. SQ-1415 audit item 3.
+    if !aligned(h.stack_size) {
+        return Err(GError::BadMemoryMap);
+    }
+    // Start Func must address something inside the memory map — glulxe never
+    // validates this at load either (it relies on the first bounds-checked
+    // memory read inside `enter_function` to fault), but gvm's own load-time
+    // checks already reject other header fields that can't possibly be
+    // sane, and a `start_func` at or past ENDMEM can never be a real
+    // function header. SQ-1415 audit item 3.
+    if h.start_func >= h.endmem {
+        return Err(GError::BadMemoryMap);
+    }
 
     // Resource sanity caps (SQ-0624): both fields size an upfront allocation.
     if h.endmem > MAX_MEMSIZE {

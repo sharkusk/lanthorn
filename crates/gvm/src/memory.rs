@@ -140,14 +140,31 @@ impl Memory {
 
     /// Reset RAM to the initial image: restore `[RAMSTART, EXTSTART)` from
     /// `orig`, zero `[EXTSTART, ENDMEM)`, and shrink back to the original
-    /// ENDMEM floor. Used by the `@restart` opcode.
-    pub(crate) fn reset_ram(&mut self) {
+    /// ENDMEM floor — except for any byte within `protect`
+    /// (`(protect_start, protect_len)`), which is left untouched. Used by the
+    /// `@restart` opcode: Glulx spec §2.9 and glulxe's `vm.c` `vm_restart` both
+    /// reload the game file while skipping `[protectstart, protectend)` and
+    /// its comment notes "we do not reset the protection range" — passing
+    /// `(0, 0)` reproduces the unprotected reset exactly. The caller owns
+    /// `self.protect` itself; this only guards the copy.
+    pub(crate) fn reset_ram(&mut self, protect: (u32, u32)) {
         let ramstart = self.header.ramstart as usize;
         let extstart = self.header.extstart as usize;
         let endmem = self.endmem_floor as usize;
         self.bytes.resize(endmem, 0);
-        self.bytes[ramstart..extstart].copy_from_slice(&self.orig[ramstart..extstart]);
-        self.bytes[extstart..endmem].fill(0);
+        let (pstart, plen) = protect;
+        let pstart = pstart as usize;
+        let pend = pstart.saturating_add(plen as usize);
+        for a in ramstart..extstart {
+            if a < pstart || a >= pend {
+                self.bytes[a] = self.orig[a];
+            }
+        }
+        for a in extstart..endmem {
+            if a < pstart || a >= pend {
+                self.bytes[a] = 0;
+            }
+        }
     }
 
     /// True if the stored header checksum (field 0x20) matches the sum of the
@@ -358,10 +375,23 @@ mod tests {
         mem.write32(0x280, 0x1234_5678).unwrap();
         assert_eq!(mem.mem_size(), 0x300);
         // reset_ram should shrink back to 0x200 and zero out RAM.
-        mem.reset_ram();
+        mem.reset_ram((0, 0));
         assert_eq!(mem.mem_size(), 0x200, "shrinks to endmem_floor");
         assert_eq!(mem.read32(0x100).unwrap(), 0, "RAM zeroed at RAMSTART");
         assert_eq!(mem.read32(0x1FC).unwrap(), 0, "last word in RAM zeroed");
         assert_eq!(mem.read8(0x280), None, "grown region removed");
+    }
+
+    #[test]
+    fn reset_ram_preserves_protected_range() {
+        // RAMSTART=0x100, EXTSTART=0x100 (all RAM is in the zeroed ext zone).
+        let img = asm::image_with_map(0x100, 0x100, 0x200, 0x400, 0x40, 0);
+        let mut mem = Memory::new(img).unwrap();
+        mem.write32(0x100, 0xDEAD_BEEF).unwrap();
+        mem.write32(0x180, 0x1111_1111).unwrap();
+        // Protect [0x180, 0x188).
+        mem.reset_ram((0x180, 8));
+        assert_eq!(mem.read32(0x100).unwrap(), 0, "unprotected RAM zeroed");
+        assert_eq!(mem.read32(0x180).unwrap(), 0x1111_1111, "protected RAM kept");
     }
 }

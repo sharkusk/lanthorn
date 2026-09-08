@@ -42,6 +42,19 @@ Absolute URLs or no link.
 - **A Save State now keeps the colours of a game's status line cell by cell;**
   games that colour their status line lost those colours across a Save State
   before. (SQ-1401)
+- **Glulx (Version 3.1.3) saves and autosaves written by other interpreters
+  now restore.** Some interpreters (glulxe among them) omit the trailing
+  stretch of an unmodified save when writing one; lanthorn used to reject
+  those as corrupt. **Counterfeit Monkey's built-in fast start now works on
+  the very first run**, not just after lanthorn has written its own save
+  once. (SQ-1415)
+- **`restart` no longer forgets a game's protected memory or its undo
+  history.** A restarted game keeps whatever it had asked to protect and can
+  still `undo` back across the restart, matching every other Glulx
+  interpreter. (SQ-1415)
+- **Glulx floating-point and double-precision `mod`/`div`-family math now
+  matches the reference interpreter exactly**, including how it handles
+  negative zero, infinities, and not-a-number. (SQ-1415)
 
 ---
 

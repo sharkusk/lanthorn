@@ -167,7 +167,20 @@ pub fn short_name_property(mem: &Memory) -> Option<u16> {
             continue;
         }
         let Some(count) = mem.read32(d + 4) else { continue };
-        if count < 2 || array + count * 4 > end {
+        // `count` is RAM-derived (an arbitrary story-controlled u32, not yet
+        // known to be this table's real length), so the byte-length
+        // computation is checked rather than trusted — a bogus count that
+        // would overflow `count * 4` or `array + ...` is simply not a match,
+        // the same "not this table after all" outcome as failing the
+        // in-range check (SQ-1415 audit item 3: this runs on EVERY Glulx
+        // load via `ParseNames::detect`, so a malformed image must not abort
+        // it). `prop * 4`/`array + prop * 4` below stay unchecked: `prop <
+        // count` and this multiplication already proved `count * 4` fits.
+        let in_range = count
+            .checked_mul(4)
+            .and_then(|bytes| array.checked_add(bytes))
+            .is_some_and(|last| last <= end);
+        if count < 2 || !in_range {
             continue;
         }
         if mem.read32(array + 4).and_then(name_at).as_deref() != Some("name") {
