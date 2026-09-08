@@ -1189,9 +1189,22 @@ impl Machine {
                 self.store(s[1], rock)
             }
             0x149 => {
+                // setiosys L1(mode) L2(rock). Spec §2.11: "If the system L1
+                // is not supported by the interpreter, it will default to
+                // the null system (0)." glulxe's own `stream_set_iosys`
+                // (string.c) additionally zeroes the rock for modes 0 (null)
+                // and 2 (Glk) — only mode 1 (filter) keeps the caller's rock,
+                // since there it names the filter routine. SQ-1415 audit
+                // item 5.
                 let (l, _) = self.read_operands(2, 0)?;
-                self.iosys_mode = l[0];
-                self.iosys_rock = l[1];
+                let (mode, rock) = match l[0] {
+                    0 => (0, 0),
+                    1 => (1, l[1]),
+                    2 => (2, 0),
+                    _ => (0, 0), // unsupported mode → null, rock 0
+                };
+                self.iosys_mode = mode;
+                self.iosys_rock = rock;
                 Ok(())
             }
             // Stream output.
@@ -1322,6 +1335,11 @@ impl Machine {
                 Ok(())
             }
             // Protect a RAM range across restore/restoreundo (L2 == 0 clears).
+            // Stored as (start, len), not (start, end) — glulxe's op_protect
+            // (exec.c) computes `end = start + len` and validates nothing, so
+            // a hostile range is ordinary input there too; every reader of
+            // `self.protect` (decompress_ram/load_umem/reset_ram) computes
+            // its end with `saturating_add` rather than trusting one.
             0x127 => {
                 let (l, _) = self.read_operands(2, 0)?;
                 self.protect = (l[0], l[1]);
@@ -1489,15 +1507,13 @@ impl Machine {
                 // ftonumz L1 S1 — float -> int, truncating toward zero.
                 let (l, s) = self.read_operands(1, 1)?;
                 let v = Self::dec(l[0]);
-                let r = if v.is_nan() { 0x7FFF_FFFF } else { v as i32 as u32 };
-                self.store(s[0], r)
+                self.store(s[0], Self::f32_to_i32(v, false))
             }
             0x192 => {
                 // ftonumn L1 S1 — float -> int, rounding to nearest (half away from zero).
                 let (l, s) = self.read_operands(1, 1)?;
                 let v = Self::dec(l[0]);
-                let r = if v.is_nan() { 0x7FFF_FFFF } else { v.round() as i32 as u32 };
-                self.store(s[0], r)
+                self.store(s[0], Self::f32_to_i32(v, true))
             }
             0x198 => self.funop(f32::ceil),
             0x199 => self.funop(f32::floor),
@@ -1506,12 +1522,24 @@ impl Machine {
             0x1A2 => self.fbinop(|a, b| a * b),
             0x1A3 => self.fbinop(|a, b| a / b),
             0x1A4 => {
-                // fmod L1 L2 S1 S2 — S1 = remainder (sign of L1), S2 = quotient
-                // truncated toward zero (as a float).
+                // fmod L1 L2 S1 S2 — S1 = remainder, S2 = quotient. Ported
+                // exactly from glulxe's op_fmod (exec.c), not re-derived: `r
+                // = fmodf(a, b)` (Rust's f32 `%` is fmodf — same NaN/Infinity
+                // rules: mod(x,0) and mod(±Inf,y) are both NaN, mod(x,±Inf)
+                // has rem == x, and −0 is preserved), then the quotient is
+                // `(a - r) / b` with **no separate truncation** — `a - r` is
+                // already an exact multiple of `b`. When that quotient
+                // encodes ±0.0, the sign bit is recovered from the XOR of
+                // the two operands' raw sign bits, exactly as glulxe's own
+                // comment says: "the sign has been lost in the shuffle."
+                // (SQ-1415 audit item 4; glulxercise `floatmod`.)
                 let (l, s) = self.read_operands(2, 2)?;
                 let (a, b) = (Self::dec(l[0]), Self::dec(l[1]));
-                let q = (a / b).trunc();
-                let r = a - q * b;
+                let r = a % b;
+                let mut q = (a - r) / b;
+                if q.to_bits() == 0 || q.to_bits() == 0x8000_0000 {
+                    q = f32::from_bits((l[0] ^ l[1]) & 0x8000_0000);
+                }
                 self.store(s[0], r.to_bits())?;
                 self.store(s[1], q.to_bits())
             }
@@ -1556,15 +1584,13 @@ impl Machine {
                 // dtonumz L1:L2 -> S1 — double to int, truncating toward zero.
                 let (l, s) = self.read_operands(2, 1)?;
                 let v = Self::dec64(l[0], l[1]);
-                let r = if v.is_nan() { 0x7FFF_FFFF } else { v as i32 as u32 };
-                self.store(s[0], r)
+                self.store(s[0], Self::f64_to_i32(v, false))
             }
             0x202 => {
                 // dtonumn L1:L2 -> S1 — double to int, rounding to nearest.
                 let (l, s) = self.read_operands(2, 1)?;
                 let v = Self::dec64(l[0], l[1]);
-                let r = if v.is_nan() { 0x7FFF_FFFF } else { v.round() as i32 as u32 };
-                self.store(s[0], r)
+                self.store(s[0], Self::f64_to_i32(v, true))
             }
             0x203 => {
                 // ftod L1 (float) -> S1:S2 (double) — exact widening.
@@ -1583,16 +1609,28 @@ impl Machine {
             0x212 => self.dbinop(|a, b| a * b),
             0x213 => self.dbinop(|a, b| a / b),
             0x214 => {
-                // dmodr L1:L2 L3:L4 -> S1:S2 — remainder (sign of the dividend).
+                // dmodr L1:L2 L3:L4 -> S1:S2 — remainder. Ported from glulxe's
+                // op_dmodr (exec.c): `fmod(a, b)` — Rust's f64 `%` is fmod,
+                // same NaN/Infinity rules as fmod's f32 case above (SQ-1415
+                // audit item 4; glulxercise `doublemod`).
                 let (l, s) = self.read_operands(4, 2)?;
                 let (a, b) = (Self::dec64(l[0], l[1]), Self::dec64(l[2], l[3]));
-                self.store64(&s, a - (a / b).trunc() * b)
+                self.store64(&s, a % b)
             }
             0x215 => {
-                // dmodq L1:L2 L3:L4 -> S1:S2 — quotient truncated toward zero.
+                // dmodq L1:L2 L3:L4 -> S1:S2 — quotient. Ported from glulxe's
+                // op_dmodq exactly: `r = fmod(a, b)`, then `(a - r) / b` with
+                // **no separate truncation**, and the same ±0.0 sign-recovery
+                // fixup as fmod (using the two operands' HIGH words, which
+                // carry the double's sign bit).
                 let (l, s) = self.read_operands(4, 2)?;
                 let (a, b) = (Self::dec64(l[0], l[1]), Self::dec64(l[2], l[3]));
-                self.store64(&s, (a / b).trunc())
+                let r = a % b;
+                let mut q = (a - r) / b;
+                if q.to_bits() == 0 || q.to_bits() == 0x8000_0000_0000_0000 {
+                    q = f64::from_bits((u64::from(l[0] ^ l[2]) & 0x8000_0000) << 32);
+                }
+                self.store64(&s, q)
             }
             0x218 => self.dunop(f64::sqrt),
             0x219 => self.dunop(f64::exp),
@@ -1668,6 +1706,51 @@ impl Machine {
     /// Decode a Glulx word as the IEEE-754 single-precision float it holds.
     fn dec(v: u32) -> f32 {
         f32::from_bits(v)
+    }
+
+    /// `ftonumz`/`ftonumn`'s float → signed-int32 conversion, ported from
+    /// glulxe's `op_ftonumz`/`op_ftonumn` (exec.c): the sign bit is checked
+    /// FIRST, before classifying NaN/Infinity/overflow, so a negative NaN (or
+    /// −Infinity, or a finite value < −2147483647.0) saturates to
+    /// `0x80000000` (INT32_MIN) and a positive one to `0x7FFFFFFF`
+    /// (INT32_MAX). Rust's own `as i32` cast already saturates a finite
+    /// out-of-range float, but turns EVERY NaN into 0 regardless of sign —
+    /// wrong here, which is why NaN/Infinity/overflow are classified by hand
+    /// rather than left to the cast (SQ-1415 audit item 4; glulxercise
+    /// `floatconv`). `round` selects `ftonumn`'s round-to-nearest (half away
+    /// from zero) over `ftonumz`'s truncation; a finite in-range value is
+    /// never pushed out of range by rounding first.
+    fn f32_to_i32(v: f32, round: bool) -> u32 {
+        let apply = |v: f32| if round { v.round() } else { v.trunc() } as i32 as u32;
+        if v.is_sign_negative() {
+            if v.is_nan() || v.is_infinite() || v < -2_147_483_647.0 {
+                0x8000_0000
+            } else {
+                apply(v)
+            }
+        } else if v.is_nan() || v.is_infinite() || v > 2_147_483_647.0 {
+            0x7FFF_FFFF
+        } else {
+            apply(v)
+        }
+    }
+
+    /// `dtonumz`/`dtonumn`'s double → signed-int32 conversion — the `f64`
+    /// twin of [`Self::f32_to_i32`]; see its doc for the full rationale
+    /// (glulxe's `op_dtonumz`/`op_dtonumn`; glulxercise `doubleconv`).
+    fn f64_to_i32(v: f64, round: bool) -> u32 {
+        let apply = |v: f64| if round { v.round() } else { v.trunc() } as i32 as u32;
+        if v.is_sign_negative() {
+            if v.is_nan() || v.is_infinite() || v < -2_147_483_647.0 {
+                0x8000_0000
+            } else {
+                apply(v)
+            }
+        } else if v.is_nan() || v.is_infinite() || v > 2_147_483_647.0 {
+            0x7FFF_FFFF
+        } else {
+            apply(v)
+        }
     }
 
     /// A 1-value float op (ceil, sqrt, sin, …): decode, apply, re-encode.
@@ -1746,6 +1829,15 @@ impl Machine {
 
     /// `div` (false) / `mod` (true): signed, truncating toward zero, faulting on
     /// a zero divisor.
+    ///
+    /// DECIDED (SQ-1415 audit item 6, no behavior change): `i32::MIN / -1` is
+    /// the one signed division that overflows a 32-bit result (the
+    /// mathematical quotient, 2147483648, does not fit `i32`). glulxe's
+    /// `exec.c` calls this a fatal error ("Division overflow"); gvm already
+    /// tolerates it via `wrapping_div`/`wrapping_rem`, which wrap back to
+    /// `i32::MIN` (`0x80000000`) rather than aborting the interpreter over
+    /// one story-controlled instruction. Kept as-is rather than matched to
+    /// glulxe's fatal.
     fn divop(&mut self, is_mod: bool) -> R<()> {
         let (l, s) = self.read_operands(2, 1)?;
         let (a, b) = (l[0] as i32, l[1] as i32);
@@ -2166,6 +2258,14 @@ impl Machine {
 
     /// Write the low `width` bytes of `v` to main memory at `addr`, mapping
     /// ROM/out-of-range faults to a diagnostic (ROM) or a fault (out of range).
+    ///
+    /// DECIDED (SQ-1415 audit item 6, no behavior change): glulxe's `exec.c`
+    /// treats a write below RAMSTART as `fatal_error("Write to read-only
+    /// memory")`. gvm has always tolerated it instead — push a diagnostic and
+    /// silently no-op the write, milder even than this crate's own runtime
+    /// faults (which record a diagnostic and Quit; see `crate::error`'s
+    /// module doc). Kept as-is: one story instruction writing to ROM is not
+    /// worth aborting the interpreter over.
     fn store_mem_sized(&mut self, addr: u32, v: u32, width: u32) -> R<()> {
         use crate::memory::WriteFault;
         let res = match width {
@@ -2320,19 +2420,24 @@ impl Machine {
     }
 
     /// `mcopy count from to`: copy `count` bytes, choosing the copy direction so
-    /// overlapping ranges move correctly (spec §2.6).
+    /// overlapping ranges move correctly (spec §2.6). `from`/`to`/`count` are
+    /// arbitrary story-controlled `u32`s, so the offset arithmetic uses
+    /// `wrapping_add` — the house style (`m8`/`store_mem_sized` are bounds-
+    /// checked and fault on the wrapped address rather than reading/writing
+    /// out of range) — instead of overflowing on iteration one of the
+    /// descending branch, the common `to >= from` case (SQ-1415 audit item 3).
     fn op_mcopy(&mut self) -> R<()> {
         let (l, _) = self.read_operands(3, 0)?;
         let (count, from, to) = (l[0], l[1], l[2]);
         if to < from {
             for i in 0..count {
-                let b = self.m8(from + i)?;
-                self.store_mem_sized(to + i, b, 1)?;
+                let b = self.m8(from.wrapping_add(i))?;
+                self.store_mem_sized(to.wrapping_add(i), b, 1)?;
             }
         } else {
             for i in (0..count).rev() {
-                let b = self.m8(from + i)?;
-                self.store_mem_sized(to + i, b, 1)?;
+                let b = self.m8(from.wrapping_add(i))?;
+                self.store_mem_sized(to.wrapping_add(i), b, 1)?;
             }
         }
         Ok(())
@@ -2683,32 +2788,23 @@ impl Machine {
         let find = |id: &[u8; 4]| chunks.iter().find(|(cid, _)| cid == id).map(|(_, d)| *d);
         let stks = find(b"Stks").ok_or_else(|| GError::BadSave("missing Stks chunk".into()))?;
 
-        // Snapshot the currently-protected bytes (preserved across restore).
-        // Capture 0 for any address currently out of bounds (memory was shrunk
-        // below the protected range): the restore re-extends memory and would
-        // otherwise leak the saved diff into the protected range, so the
-        // re-impose loop must zero it back out.
-        let (cur_paddr, cur_plen) = self.protect;
-        let mut protected: Vec<(u32, u8)> = Vec::new();
-        for a in cur_paddr..cur_paddr.saturating_add(cur_plen) {
-            protected.push((a, self.mem.read8(a).unwrap_or(0) as u8));
-        }
-
         // Reset RAM to the original image and apply the saved memory chunk —
-        // CMem (RLE diff) or UMem (literal), whichever is present.
+        // CMem (RLE diff) or UMem (literal), whichever is present — skipping
+        // any byte inside the *live* protect range so it keeps its
+        // pre-restore value (spec §2.9/§1.8: the protect range survives a
+        // restore). This is a live skip, not a snapshot-then-reimpose: a
+        // hostile `@protect` range up to 4 GiB long must never be
+        // materialised into a `Vec` (SQ-1415 audit item 3 — glulxe's own
+        // `op_protect` (`exec.c`) performs no validation either and simply
+        // stores whatever `start`/`start+len` the story gave it, so a
+        // malicious range is ordinary input, not a bug to reproduce).
+        let protect = self.protect;
         if let Some(cmem) = find(b"CMem") {
-            self.decompress_ram(cmem)?;
+            self.decompress_ram(cmem, protect)?;
         } else if let Some(umem) = find(b"UMem") {
-            self.load_umem(umem)?;
+            self.load_umem(umem, protect)?;
         } else {
             return Err(GError::BadSave("missing CMem/UMem chunk".into()));
-        }
-
-        // Re-impose the protected bytes' pre-restore values.
-        for (a, b) in protected {
-            if a >= self.mem.ramstart() && a < self.mem.mem_size() {
-                self.mem.write_byte_raw(a, b);
-            }
         }
 
         // Stack: the Stks bytes must fit the buffer and (for restore_state)
@@ -2735,9 +2831,29 @@ impl Machine {
     }
 
     /// Decompress a `CMem` body into RAM: read the saved memsize, resize memory,
-    /// and rebuild `[RAMSTART, memsize)` as `original XOR diff`. Faults on a
-    /// truncated/over-long stream.
-    fn decompress_ram(&mut self, cmem: &[u8]) -> Result<(), GError> {
+    /// and rebuild `[RAMSTART, memsize)` as `original XOR diff` — except any
+    /// byte inside `protect` (`(start, len)`), which is left at its live,
+    /// pre-restore value (spec §2.9: the protect range survives a restore).
+    /// The stream is still walked byte-for-byte across a protected address
+    /// (glulxe's `read_memstate` does the same: `if (pos >= protectstart &&
+    /// pos < protectend) continue;` sits AFTER decoding, right before the
+    /// write) — only the write is skipped, so the encoding stays in sync and
+    /// no protected-range snapshot is ever materialised (SQ-1415 audit item 3:
+    /// a hostile multi-GiB `@protect` range must not become a `Vec`).
+    ///
+    /// A stream that runs out before `memsize` is NOT a truncated/malformed
+    /// save: glulxe's writer (`serial.c` `write_memstate`) deliberately omits
+    /// the trailing zero run once every remaining byte is unchanged from the
+    /// original image ("It's possible we've got a run left over, but we don't
+    /// write it"), and its reader (`read_memstate`) treats running out of
+    /// stream as "we're into the final, unstored run" — applying zero diff
+    /// (unchanged) for the rest. This reader does the same: exhausting `cmem`
+    /// while `addr < memsize` fills `[addr, memsize)` from the original image
+    /// rather than erroring (Glulx spec §1.8 / Quetzal `CMem`). A `BadSave`
+    /// is still returned for the genuinely malformed case — a *decoded* run
+    /// whose length would write past `memsize` (glulxe's writer can never
+    /// produce one; only a corrupted or hostile file can).
+    fn decompress_ram(&mut self, cmem: &[u8], protect: (u32, u32)) -> Result<(), GError> {
         if cmem.len() < 4 {
             return Err(GError::BadSave("CMem chunk too short".into()));
         }
@@ -2746,18 +2862,24 @@ impl Machine {
         if memsize < ramstart || memsize > Self::MAX_MEMSIZE {
             return Err(GError::BadSave("CMem memsize out of range".into()));
         }
+        if memsize < self.mem.endmem() {
+            return Err(GError::BadSave("CMem memsize below ENDMEM floor".into()));
+        }
         self.mem.set_raw_size(memsize);
+        let (pstart, plen) = protect;
+        let pend = pstart.saturating_add(plen);
+        let protected = |a: u32| a >= pstart && a < pend;
         let mut addr = ramstart;
         let mut i = 4;
         while addr < memsize {
             if i >= cmem.len() {
-                return Err(GError::BadSave("CMem data truncated".into()));
+                break; // omitted trailing run — filled below
             }
             let b = cmem[i];
             i += 1;
             if b == 0 {
                 if i >= cmem.len() {
-                    return Err(GError::BadSave("CMem zero-run truncated".into()));
+                    break; // a run token with no length byte — same as above
                 }
                 let run = cmem[i] as u32 + 1;
                 i += 1;
@@ -2765,24 +2887,38 @@ impl Machine {
                     if addr >= memsize {
                         return Err(GError::BadSave("CMem data overruns memory".into()));
                     }
-                    let base = self.mem.orig_byte(addr);
-                    self.mem.write_byte_raw(addr, base);
+                    if !protected(addr) {
+                        let base = self.mem.orig_byte(addr);
+                        self.mem.write_byte_raw(addr, base);
+                    }
                     addr += 1;
                 }
             } else {
-                let base = self.mem.orig_byte(addr);
-                self.mem.write_byte_raw(addr, base ^ b);
+                if !protected(addr) {
+                    let base = self.mem.orig_byte(addr);
+                    self.mem.write_byte_raw(addr, base ^ b);
+                }
                 addr += 1;
             }
+        }
+        // The stream ended before covering [RAMSTART, memsize) — every
+        // remaining byte is an implicit zero diff (unchanged from original).
+        while addr < memsize {
+            if !protected(addr) {
+                let base = self.mem.orig_byte(addr);
+                self.mem.write_byte_raw(addr, base);
+            }
+            addr += 1;
         }
         Ok(())
     }
 
     /// Load a `UMem` (uncompressed) body into RAM: read the saved memsize,
     /// resize memory, and copy `[RAMSTART, memsize)` literally — no XOR diff,
-    /// no RLE (spec §1.8, the `CMem` alternative). Faults on a
+    /// no RLE (spec §1.8, the `CMem` alternative), skipping any byte inside
+    /// `protect` the same way [`Self::decompress_ram`] does. Faults on a
     /// truncated/mismatched stream.
-    fn load_umem(&mut self, umem: &[u8]) -> Result<(), GError> {
+    fn load_umem(&mut self, umem: &[u8], protect: (u32, u32)) -> Result<(), GError> {
         if umem.len() < 4 {
             return Err(GError::BadSave("UMem chunk too short".into()));
         }
@@ -2791,12 +2927,19 @@ impl Machine {
         if memsize < ramstart || memsize > Self::MAX_MEMSIZE {
             return Err(GError::BadSave("UMem memsize out of range".into()));
         }
+        if memsize < self.mem.endmem() {
+            return Err(GError::BadSave("UMem memsize below ENDMEM floor".into()));
+        }
         if umem.len() != 4 + (memsize - ramstart) as usize {
             return Err(GError::BadSave("UMem data length disagrees with memsize".into()));
         }
         self.mem.set_raw_size(memsize);
+        let (pstart, plen) = protect;
+        let pend = pstart.saturating_add(plen);
         for (i, addr) in (ramstart..memsize).enumerate() {
-            self.mem.write_byte_raw(addr, umem[4 + i]);
+            if addr < pstart || addr >= pend {
+                self.mem.write_byte_raw(addr, umem[4 + i]);
+            }
         }
         Ok(())
     }
@@ -2881,7 +3024,16 @@ impl Machine {
             None => return self.store(s[0], 1), // failure
             Some(snap) => snap,
         };
+        // `restore_state` also restores `self.protect` from the snapshot's
+        // `GReg` chunk — correct for a host Save-State restore (a full VM
+        // snapshot), but ExtUndo (spec §2.16) is explicit that the protect
+        // range is "not part of the saved state" for `saveundo`/`restoreundo`.
+        // Put the LIVE range back after the shared restore does its usual
+        // thing, rather than teaching `restore_state` two different
+        // behaviors (SQ-1415 audit item 5).
+        let live_protect = self.protect;
         self.restore_state(&snap).map_err(|e| format!("restoreundo: {e:?}"))?;
+        self.protect = live_protect;
         // Consume the four-value call stub the snapshot left on top.
         if self.sp < self.value_base() + 16 {
             return Err("restoreundo: snapshot is missing its call stub".to_string());
@@ -2915,7 +3067,7 @@ impl Machine {
     fn op_restart(&mut self) -> R<()> {
         let start = self.mem.start_func();
         let decode_table = self.mem.decode_table();
-        self.mem.reset_ram();
+        self.mem.reset_ram(self.protect);
         self.stack.fill(0);
         self.sp = 0;
         self.fp = 0;
@@ -2941,8 +3093,12 @@ impl Machine {
         self.pending_fileref = None;
         self.halted = false;
         self.faulted = false;
-        self.protect = (0, 0);
-        self.undo_stack.clear();
+        // Neither the protect range nor the undo chain is reset by `@restart`
+        // (Glulx spec §2.9; glulxe `vm.c` `vm_restart`'s comment: "we do not
+        // reset the protection range" — and it never touches the undo stack
+        // at all). `self.mem.reset_ram` above already used `self.protect` to
+        // skip these bytes while reloading, so leaving it here keeps the same
+        // range live for the restarted game.
         self.accel_funcs.clear();
         self.accel_params.clear();
         self.declared_accel = false;
@@ -3294,11 +3450,14 @@ impl Machine {
         }
     }
 
-    /// Read `n` bytes from main memory into a vector (bounds-checked).
+    /// Read `n` bytes from main memory into a vector (bounds-checked). `addr`
+    /// is story-controlled and can sit near `u32::MAX`, so the per-byte
+    /// offset uses `wrapping_add` rather than overflowing (`m8` bounds-checks
+    /// and faults on the wrapped address; SQ-1415 audit item 3).
     fn read_bytes(&self, addr: u32, n: u32) -> R<Vec<u8>> {
         let mut v = Vec::with_capacity(cap_hint(n));
         for i in 0..n {
-            v.push(self.m8(addr + i)? as u8);
+            v.push(self.m8(addr.wrapping_add(i))? as u8);
         }
         Ok(v)
     }
@@ -3315,7 +3474,7 @@ impl Machine {
                 break;
             }
             let saddr = start.wrapping_add(index.wrapping_mul(struct_size));
-            let have = self.read_bytes(saddr + key_off, key_size)?;
+            let have = self.read_bytes(saddr.wrapping_add(key_off), key_size)?;
             if have == want {
                 found = Some((saddr, index));
                 break;
@@ -3339,7 +3498,7 @@ impl Machine {
         while lo < hi {
             let mid = lo + (hi - lo) / 2;
             let saddr = start.wrapping_add(mid.wrapping_mul(struct_size));
-            let have = self.read_bytes(saddr + key_off, key_size)?;
+            let have = self.read_bytes(saddr.wrapping_add(key_off), key_size)?;
             match have.cmp(&want) {
                 std::cmp::Ordering::Equal => {
                     found = Some((saddr, mid));
@@ -3361,7 +3520,7 @@ impl Machine {
         let mut node = start;
         let mut result = 0u32;
         while node != 0 {
-            let have = self.read_bytes(node + key_off, key_size)?;
+            let have = self.read_bytes(node.wrapping_add(key_off), key_size)?;
             if have == want {
                 result = node;
                 break;
@@ -3369,7 +3528,7 @@ impl Machine {
             if opts & Self::ZERO_KEY_TERMINATES != 0 && have.iter().all(|&b| b == 0) {
                 break;
             }
-            node = self.m32(node + next_off)?;
+            node = self.m32(node.wrapping_add(next_off))?;
         }
         self.store(s[0], result)
     }
@@ -6480,11 +6639,17 @@ mod tests {
         let (memsize, diff) = decompress_cmem(cmem);
 
         assert_eq!(memsize, m.mem.mem_size(), "CMem's memsize prefix is the live memory size");
+        // This pins gvm's OWN writer (`compress_ram`, which never omits its trailing zero run) —
+        // NOT a general property of the CMem format. glulxe's writer (serial.c `write_memstate`)
+        // deliberately omits a trailing run ("it's possible we've got a run left over, but we
+        // don't write it"), so a foreign save's diff can legitimately decompress shorter than
+        // `memsize - RAMSTART`; `decompress_ram` (the production reader) tolerates that by filling
+        // the remainder from the original image — see `cmem_reader_fills_omitted_trailing_run`.
         assert_eq!(
             diff.len() as u32,
             memsize - m.mem.ramstart(),
-            "the RLE must decompress to precisely [RAMSTART, memsize) — a length mismatch is the \
-             classic silent corruption: a foreign terp restores a truncated or over-long RAM image",
+            "gvm's own writer always emits the full run, unlike a foreign terp's — a length \
+             mismatch HERE is a corruption in gvm's writer itself",
         );
 
         // The diff is XOR-against-original, so it must reconstruct live RAM exactly.
@@ -9088,33 +9253,64 @@ mod tests {
         assert_eq!(m.protect, (0x110, 0));
     }
 
+    /// `restore_state` (the host Save State/Restore State path — a full VM
+    /// snapshot, not spec `@restore`) DOES restore the protect range from the
+    /// snapshot: change it between save and restore and the SAVED range wins,
+    /// not whatever was live when `restore_state` was called — distinguishing
+    /// this from "the range just never changed" is the whole point of moving
+    /// it between snapshot and restore (SQ-1415 audit item 5).
     #[test]
-    fn protect_preserves_range_across_restore() {
+    fn protect_restores_the_saved_range_across_restore_state() {
         let mut m = machine_with_body(&[], vec![]);
         m.protect = (0x110, 4);
         m.mem.write32(0x110, 0xAAAA).unwrap();
         let snap = m.save_state();
-        m.mem.write32(0x110, 0xBEEF).unwrap(); // change the protected word
+        m.mem.write32(0x110, 0xBEEF).unwrap(); // change the (still-)protected word
+        m.protect = (0x180, 8); // change the LIVE range after the snapshot
+        m.mem.write32(0x180, 0xCAFE).unwrap();
         m.restore_state(&snap).unwrap();
-        assert_eq!(m.mem.read32(0x110).unwrap(), 0xBEEF); // kept current, not restored 0xAAAA
-        assert_eq!(m.protect, (0x110, 4)); // range survives
+        assert_eq!(m.protect, (0x110, 4), "restore_state restores the SAVED range, not the live one");
+        // The byte-level skip during the copy honors the LIVE range as it was
+        // when restore_state was called (0x180,8) — restore_vm_core reads
+        // self.protect before restore_state overwrites it with the saved
+        // value below — so 0x180 keeps its pre-restore value...
+        assert_eq!(m.mem.read32(0x180).unwrap(), 0xCAFE);
+        // ...while 0x110, no longer covered by that live range, IS
+        // overwritten from the snapshot's diff back to 0xAAAA.
+        assert_eq!(m.mem.read32(0x110).unwrap(), 0xAAAA);
     }
 
+    /// ExtUndo (spec §2.16): the protect range is "not part of the saved
+    /// state" for `saveundo`/`restoreundo` — unlike `restore_state` above.
+    /// Changing the range between `saveundo` and `restoreundo` must leave the
+    /// LIVE (post-`saveundo`) range in force, not the one `saveundo` snapshot,
+    /// which is the only way this test can tell "restoreundo left it alone"
+    /// apart from "the range never changed" (SQ-1415 audit item 5).
     #[test]
-    fn protect_survives_restoreundo() {
-        let mut body = asm::ins(0x127, &[asm::Op::C16(0x0110), asm::Op::C8(4)]); // protect
-        body.extend(asm::ins(0x125, &[asm::Op::Zero])); // saveundo
-        body.extend(asm::ins(0x40, &[asm::Op::C32(0xBEEF), asm::Op::Mem16(0x0110)])); // change
+    fn protect_survives_restoreundo_as_the_live_range_not_the_saved_one() {
+        let mut body = asm::ins(0x127, &[asm::Op::C16(0x0110), asm::Op::C8(4)]); // protect(0x110,4)
+        body.extend(asm::ins(0x40, &[asm::Op::C32(0x1111), asm::Op::Mem16(0x0110)])); // 0x110 = 0x1111
+        body.extend(asm::ins(0x125, &[asm::Op::Zero])); // saveundo (snapshot: protect=(0x110,4), 0x110=0x1111)
+        body.extend(asm::ins(0x40, &[asm::Op::C32(0xBEEF), asm::Op::Mem16(0x0110)])); // 0x110 = 0xBEEF
+        body.extend(asm::ins(0x127, &[asm::Op::C16(0x0180), asm::Op::C8(8)])); // protect(0x180,8) — live range moves
+        body.extend(asm::ins(0x40, &[asm::Op::C32(0xCAFE), asm::Op::Mem16(0x0180)])); // 0x180 = 0xCAFE
         body.extend(asm::ins(0x126, &[asm::Op::Mem16(0x0104)])); // restoreundo
         body.extend(asm::ins(0x120, &[]));
         let mut m = machine_with_body(&[], body);
-        m.step_once().unwrap(); // protect
+        m.step_once().unwrap(); // protect(0x110,4)
+        m.step_once().unwrap(); // 0x110 = 0x1111
         m.step_once().unwrap(); // saveundo
-        m.step_once().unwrap(); // change → 0xBEEF
-        assert_eq!(m.mem.read32(0x110).unwrap(), 0xBEEF);
+        m.step_once().unwrap(); // 0x110 = 0xBEEF
+        m.step_once().unwrap(); // protect(0x180,8) — now live, not what saveundo saw
+        m.step_once().unwrap(); // 0x180 = 0xCAFE
         m.step_once().unwrap(); // restoreundo, resumes just after saveundo
-        assert_eq!(m.mem.read32(0x110).unwrap(), 0xBEEF); // protected → kept current value
-        assert_eq!(m.protect, (0x110, 4));
+        assert_eq!(m.protect, (0x180, 8), "restoreundo keeps the LIVE range, not the saved (0x110,4) one");
+        // 0x110 is no longer protected (the live range moved to 0x180 before the
+        // undo), so it's genuinely restored to the snapshot's value.
+        assert_eq!(m.mem.read32(0x110).unwrap(), 0x1111);
+        // 0x180 IS the live-protected range at undo time, so it keeps 0xCAFE
+        // rather than reverting to the snapshot's (unwritten, zero) diff.
+        assert_eq!(m.mem.read32(0x180).unwrap(), 0xCAFE);
     }
 
     /// SQ-0320: `@protect` + a restore that re-extends memory. When the protected

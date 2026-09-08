@@ -51,6 +51,19 @@ Absolute URLs or no link.
   its "run out" warning shows twice before going dark for good, matching the
   original. Quoted text now prints with real quotation marks instead of
   backticks. (SQ-1412)
+- **Glulx (Version 3.1.3) saves and autosaves written by other interpreters
+  now restore.** Some interpreters (glulxe among them) omit the trailing
+  stretch of an unmodified save when writing one; lanthorn used to reject
+  those as corrupt. **Counterfeit Monkey's built-in fast start now works on
+  the very first run**, not just after lanthorn has written its own save
+  once. (SQ-1415)
+- **`restart` no longer forgets a game's protected memory or its undo
+  history.** A restarted game keeps whatever it had asked to protect and can
+  still `undo` back across the restart, matching every other Glulx
+  interpreter. (SQ-1415)
+- **Glulx floating-point and double-precision `mod`/`div`-family math now
+  matches the reference interpreter exactly**, including how it handles
+  negative zero, infinities, and not-a-number. (SQ-1415)
 
 ---
 

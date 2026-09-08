@@ -27,11 +27,25 @@ use std::time::{Duration, Instant};
 /// `gestalt`; SQ-0245, SQ-0249), and the Glk dispatch layer's output-argument
 /// marshalling (`gidispa`: type-tagged Inform string objects handed to
 /// `glk_put_string`/`glk_put_string_uni`; SQ-0251).
+///
+/// SQ-1415 adds the thirteen groups its fixes made green — each confirmed
+/// individually before joining this list, not assumed from the fix alone:
+/// `undorestart` (`@restart` no longer clears the undo chain or the protect
+/// range), `floatconv`/`doubleconv` (NaN sign in `ftonumz`/`ftonumn`/
+/// `dtonumz`/`dtonumn`), `floatmod`/`doublemod` (`fmod`/`dmodr`/`dmodq`
+/// ported from glulxe exactly), `protect`/`undo`/`multiundo`/`restore`/
+/// `memsize`/`undomemsize`/`heap`/`undoheap` (the CMem reader no longer
+/// rejects a foreign save whose writer omitted the trailing zero run, which
+/// these groups exercise via `@save`/`@restore`/undo along the way). The
+/// remaining groups (acceleration, doubles beyond conv/mod, file-stream
+/// save/restore, …) are SQ-1417's widening, not this one's.
 const IN_SCOPE: &[&str] = &[
     "arith", "bitwise", "shift", "aload", "astore", "arraybit", "call", "jump",
     "jumpform", "compare", "stack", "throw", "streamnum", "strings", "ramstring",
     "glk", "search", "mzero", "verify", "iosys", "iosys2", "iosys3", "filter",
-    "nullio", "gestalt", "gidispa",
+    "nullio", "gestalt", "gidispa", "undorestart", "floatconv", "floatmod",
+    "doubleconv", "doublemod", "protect", "undo", "multiundo", "restore",
+    "memsize", "undomemsize", "heap", "undoheap",
 ];
 
 fn fixture_path() -> PathBuf {
