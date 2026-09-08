@@ -447,12 +447,15 @@ pub struct Machine {
     pub(crate) warned_ext_opcodes: std::collections::HashSet<u8>,
     /// Sound events recorded by `sound_effect` since the host last drained them.
     pub(crate) pending_sounds: Vec<SoundEvent>,
-    /// Injected picture-dimension table for v6 `picture_data`: `(picture_number,
-    /// width_px, height_px)`. Populated by the host, before the boot run, from
-    /// the story's own picture resources (a self-Blorb's `Pict` chunk, or
-    /// whatever archive the host resolved); empty for non-v6 stories. See
-    /// [`BootConfig::with_picture_dims`].
-    pub picture_dims: Vec<(u16, u16, u16)>,
+    /// The v6 `picture_data` answers this asks — a [`crate::resources::Resources`]
+    /// implementation, populated by the host before the boot run from the
+    /// story's own picture resources (a self-Blorb's `Pict` chunk, or
+    /// whatever archive the host resolved). Defaults to an empty answer for
+    /// non-v6 stories and hosts that never call [`Self::set_picture_dims`] /
+    /// [`Self::set_resources`]. See [`BootConfig::with_picture_dims`] /
+    /// [`BootConfig::with_resources`], which apply the Version 6 unit-space
+    /// scale this field does not.
+    resources: Box<dyn crate::resources::Resources>,
     /// Draw/erase events recorded by `draw_picture`/`erase_picture` since the
     /// host last drained them. The engine never rasterizes; the host (Plan
     /// 1b) decodes the Blorb `Pict` resource and renders it — mirrors
@@ -740,7 +743,7 @@ impl Machine {
             warned_var_opcodes: std::collections::HashSet::new(),
             warned_ext_opcodes: std::collections::HashSet::new(),
             pending_sounds: Vec::new(),
-            picture_dims: Vec::new(),
+            resources: Box::new(crate::resources::EmptyResources),
             pending_pictures: Vec::new(),
             pending_erase_fills: Vec::new(),
             v6_win0_out_chars: 0,
@@ -1330,12 +1333,47 @@ impl Machine {
     }
 
     /// Inject the v6 picture-dimension table `picture_data` answers from:
-    /// `(picture_number, width_px, height_px)` triples. The host builds this
-    /// from the story's picture resources before the boot run — prefer
+    /// `(picture_number, width_px, height_px)` triples, wrapped into a
+    /// [`crate::resources::PictureTable`]. The host builds this from the
+    /// story's picture resources before the boot run — prefer
     /// [`BootConfig::with_picture_dims`], which applies the scaling this
-    /// setter does not.
+    /// setter does not. The release number `picture_data(0, …)` reports is
+    /// this story's own header release (`$02`) — a placeholder answer until
+    /// the host has real picture-file metadata to offer through
+    /// [`Self::set_resources`] instead.
     pub fn set_picture_dims(&mut self, t: Vec<(u16, u16, u16)>) {
-        self.picture_dims = t;
+        let release = self.mem.read_word(0x02);
+        self.resources = Box::new(crate::resources::PictureTable::new(t, release));
+    }
+
+    /// Install a [`crate::resources::Resources`] implementation for `picture_data`
+    /// to ask instead of a pre-filled table — the on-demand seam
+    /// [`Self::set_picture_dims`] cannot offer. The host builds this from the
+    /// story's picture resources before the boot run — prefer
+    /// [`BootConfig::with_resources`], which applies the scaling this setter
+    /// does not.
+    pub fn set_resources(&mut self, r: Box<dyn crate::resources::Resources>) {
+        self.resources = r;
+    }
+
+    /// Number of pictures the current [`crate::resources::Resources`] reports —
+    /// `picture_data(0, …)` word 0.
+    pub fn picture_count(&self) -> u16 {
+        self.resources.picture_count()
+    }
+
+    /// The release/version number the current [`crate::resources::Resources`]
+    /// reports for the picture file — `picture_data(0, …)` word 1.
+    pub fn picture_release(&self) -> u16 {
+        self.resources.picture_release()
+    }
+
+    /// Width and height `picture_data(number, …)` would report for `number`,
+    /// in Version 6 unit-screen pixels (already scaled, if this machine was
+    /// booted through [`BootConfig`]) — `None` if `picture_data` would not
+    /// branch for it.
+    pub fn picture_dims(&self, number: u16) -> Option<(u16, u16)> {
+        self.resources.picture_dims(number)
     }
 
     /// Set the interpreter number to advertise (header 0x1E). `None` restores the
@@ -3756,10 +3794,10 @@ impl Machine {
             // EXT:0x06 picture_data(picture-number, array) [branch] — ZMSD §15:
             // picture-number 0 asks for "number of pictures available" (word 0)
             // and "release number of the picture file" (word 1), branching if any
-            // pictures are available. Otherwise: if `picture-number` is in the
-            // injected table, write height (word 0) then width (word 1) in
-            // pixels and branch true; else leave the array untouched and don't
-            // branch.
+            // pictures are available. Otherwise: if `picture-number` is known to
+            // the installed [`crate::resources::Resources`], write height (word
+            // 0) then width (word 1) in pixels and branch true; else leave the
+            // array untouched and don't branch.
             0x06 => {
                 // v6-only: for a non-v6 story this stays the Phase 0 stub
                 // (no array write, no branch) so v1–5 behaviour is byte-identical.
@@ -3770,18 +3808,15 @@ impl Machine {
                 let number = ops.first().copied().unwrap_or(0);
                 let array = ops.get(1).copied().unwrap_or(0) as u32;
                 if number == 0 {
-                    let count = self.picture_dims.len() as u16;
-                    // No real picture-file metadata is available yet (Task 9 wires
-                    // the self-blorb); the story's own header release number is a
-                    // harmless placeholder until then.
-                    let release = self.mem.read_word(0x02);
+                    let count = self.resources.picture_count();
+                    let release = self.resources.picture_release();
                     self.mem.write_word(array, count);
                     self.mem.write_word(array.wrapping_add(2), release);
                     if self.trace_screen {
                         self.screen_trace.push(format!("@picture_data(0) -> count={count}, release={release}"));
                     }
                     self.do_branch(branch, count > 0);
-                } else if let Some(&(_, w, h)) = self.picture_dims.iter().find(|&&(n, _, _)| n == number) {
+                } else if let Some((w, h)) = self.resources.picture_dims(number) {
                     self.mem.write_word(array, h);
                     self.mem.write_word(array.wrapping_add(2), w);
                     if self.trace_screen {
@@ -12652,6 +12687,55 @@ pub(crate) mod tests {
         m.exec_ext(0x06, &[0, array], None, Some(branch));
         assert_eq!(m.mem.read_word(array as u32), 2, "word 0 = number of pictures available");
         assert_eq!(m.state.pc, pc_before + 10 - 2, "pictures available → branch taken");
+    }
+
+    #[test]
+    fn v6_picture_data_asks_a_custom_resources_impl_on_demand() {
+        // SQ-1402: a host answering on demand rather than pre-filling a table —
+        // the seam `crate::resources::Resources` exists for. This one computes
+        // an answer from `number` itself rather than looking anything up, which
+        // a pre-filled `PictureTable` cannot do.
+        struct Doubling;
+        impl crate::resources::Resources for Doubling {
+            fn picture_count(&self) -> u16 {
+                3
+            }
+            fn picture_release(&self) -> u16 {
+                77
+            }
+            fn picture_dims(&self, number: u16) -> Option<(u16, u16)> {
+                if number == 0 || number > 3 {
+                    None
+                } else {
+                    Some((number * 10, number * 20))
+                }
+            }
+        }
+
+        let mut m = v6_exec_machine();
+        m.set_resources(Box::new(Doubling));
+
+        // number 0: count + release, from the trait, not a table length.
+        let array = 0x0060u16;
+        let pc_before = m.state.pc;
+        m.exec_ext(0x06, &[0, array], None, Some(Branch { on_true: true, offset: 10, len: 1 }));
+        assert_eq!(m.mem.read_word(array as u32), 3, "word 0 = count, from the trait");
+        assert_eq!(m.mem.read_word(array as u32 + 2), 77, "word 1 = release, from the trait");
+        assert_eq!(m.state.pc, pc_before + 10 - 2, "pictures available → branch taken");
+
+        // number 2: dims computed on the fly (20, 40) — never stored anywhere.
+        let pc_before = m.state.pc;
+        m.exec_ext(0x06, &[2, array], None, Some(Branch { on_true: true, offset: 10, len: 1 }));
+        assert_eq!(m.mem.read_word(array as u32), 40, "word 0 = height = 2*20");
+        assert_eq!(m.mem.read_word(array as u32 + 2), 20, "word 1 = width = 2*10");
+        assert_eq!(m.state.pc, pc_before + 10 - 2, "picture found → branch taken");
+
+        // number 9: outside the trait's answer → not found, no branch.
+        m.mem.write_word(array as u32, 0xDEAD);
+        let pc_before = m.state.pc;
+        m.exec_ext(0x06, &[9, array], None, Some(Branch { on_true: true, offset: 10, len: 1 }));
+        assert_eq!(m.state.pc, pc_before, "picture not found → branch not taken");
+        assert_eq!(m.mem.read_word(array as u32), 0xDEAD, "array left untouched");
     }
 
     // ── Task 4: move_window / window_size / window_style bodies ─────────────

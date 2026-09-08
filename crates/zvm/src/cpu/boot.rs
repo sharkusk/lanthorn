@@ -17,8 +17,8 @@
 //! * those that touch no header bit but must nevertheless precede the **boot
 //!   run**, because the story's own initialisation reads them
 //!   ([`Machine::set_rng_seed`] — an initialisation routine may already draw
-//!   from the generator; [`Machine::set_picture_dims`] — a Version 6 story calls
-//!   `picture_data` while booting).
+//!   from the generator; [`Machine::set_picture_dims`] / [`Machine::set_resources`]
+//!   — a Version 6 story calls `picture_data` while booting).
 //!
 //! …and one that must come *after* `init_caps`, because `init_caps` seeds a
 //! generic 80x24 over the top of it: the screen size.
@@ -51,6 +51,7 @@
 //! ```
 
 use crate::cpu::exec::Machine;
+use crate::resources::{PictureTable, Resources};
 use crate::screen::{Palette, V6Metric};
 
 /// The facts a [`Machine`] is told once, before the story runs.
@@ -64,14 +65,17 @@ use crate::screen::{Palette, V6Metric};
 /// life (the interpreter version, the palette, the Version 6 cell, the art
 /// scale) and will grow again: a host that builds one through `new()` keeps
 /// compiling when it does.
-#[derive(Debug, Clone, PartialEq)]
+///
+/// Not `Clone`/`PartialEq`: [`Self::with_resources`] can carry a `Box<dyn
+/// Resources>`, and a trait object cannot honestly answer either.
+#[derive(Debug)]
 #[non_exhaustive]
 pub struct BootConfig {
     honor_game_colours: bool,
     sound_available: bool,
     rng_seed: Option<u32>,
     default_colours: Option<(u8, u8)>,
-    picture_dims: Vec<(u16, u16, u16)>,
+    resources: ResourceSource,
     interpreter_number: Option<u8>,
     interpreter_version: Option<u8>,
     palette: Palette,
@@ -79,6 +83,31 @@ pub struct BootConfig {
     v6_screen_px: Option<(u16, u16)>,
     v6_art_scale: Option<(u32, u32)>,
     screen_grid: Option<(u8, u8)>,
+}
+
+/// What [`BootConfig::with_picture_dims`] / [`BootConfig::with_resources`] set,
+/// resolved into a single [`Resources`] by [`BootConfig::apply`] once the
+/// Version 6 unit-space scale is known.
+enum ResourceSource {
+    /// Neither builder was called.
+    None,
+    /// [`BootConfig::with_picture_dims`]'s vector, not yet wrapped — wrapping
+    /// happens in [`BootConfig::apply`], which needs the story's own header
+    /// release number and is the only place that has both `Machine` and the
+    /// resolved art scale.
+    Table(Vec<(u16, u16, u16)>),
+    /// [`BootConfig::with_resources`]'s trait object.
+    Custom(Box<dyn Resources>),
+}
+
+impl std::fmt::Debug for ResourceSource {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            ResourceSource::None => write!(f, "None"),
+            ResourceSource::Table(t) => f.debug_tuple("Table").field(&t.len()).finish(),
+            ResourceSource::Custom(_) => write!(f, "Custom(..)"),
+        }
+    }
 }
 
 impl Default for BootConfig {
@@ -106,7 +135,7 @@ impl BootConfig {
             sound_available: false,
             rng_seed: None,
             default_colours: None,
-            picture_dims: Vec::new(),
+            resources: ResourceSource::None,
             interpreter_number: None,
             interpreter_version: None,
             palette: Palette::Standard,
@@ -150,9 +179,22 @@ impl BootConfig {
     /// The Version 6 `Pict` dimension table `picture_data` answers from, in the
     /// ART's own pixels — [`Self::with_v6_art_scale`] is applied to it on the way
     /// in, because a story lays out in the unit screen's coordinates and not the
-    /// archive's (SQ-0479).
+    /// archive's (SQ-0479). Wrapped into a [`crate::resources::PictureTable`] by
+    /// [`Self::apply`]; see [`Self::with_resources`] for a host that would
+    /// rather answer on demand than pre-fill this table.
     pub fn with_picture_dims(mut self, dims: Vec<(u16, u16, u16)>) -> BootConfig {
-        self.picture_dims = dims;
+        self.resources = ResourceSource::Table(dims);
+        self
+    }
+
+    /// A [`crate::resources::Resources`] implementation for `picture_data` to ask
+    /// on demand, instead of [`Self::with_picture_dims`]'s pre-filled table —
+    /// SQ-1402. The same unit-space scale [`Self::with_picture_dims`]'s table
+    /// gets is applied to this too: `picture_dims` answers in the resource's
+    /// OWN pixels and [`Self::apply`] scales every answer the same way,
+    /// whichever door supplied it (SQ-0479/SQ-0790).
+    pub fn with_resources(mut self, resources: Box<dyn Resources>) -> BootConfig {
+        self.resources = ResourceSource::Custom(resources);
         self
     }
 
@@ -301,18 +343,35 @@ impl BootConfig {
             }
         }
         // Before the boot run: `picture_data` is called DURING boot by every v6
-        // story. The table crosses into unit space here, once — Frotz's
-        // Amiga/DOS interpreter likewise returns `scaler * size` for every
-        // picture (SQ-0479, SQ-0715, SQ-0790).
-        let picture_dims = if version == 6 {
-            std::mem::take(&mut self.picture_dims)
-                .into_iter()
-                .map(|(n, w, h)| (n, w * art_scale.0 as u16, h * art_scale.1 as u16))
-                .collect()
-        } else {
-            std::mem::take(&mut self.picture_dims)
-        };
-        m.set_picture_dims(picture_dims);
+        // story. Whatever answers it — [`Self::with_picture_dims`]'s table or
+        // [`Self::with_resources`]'s trait object — crosses into unit space
+        // here, once, the same way for either: Frotz's Amiga/DOS interpreter
+        // likewise returns `scaler * size` for every picture (SQ-0479, SQ-0715,
+        // SQ-0790). The release number is this story's own header word (`$02`),
+        // a placeholder until a host's `Resources::picture_release` has real
+        // picture-file metadata to offer instead.
+        let release = m.mem.read_word(0x02);
+        match std::mem::replace(&mut self.resources, ResourceSource::None) {
+            ResourceSource::None => {
+                m.set_resources(Box::new(PictureTable::new(Vec::new(), release)));
+            }
+            ResourceSource::Table(dims) => {
+                let scaled = if version == 6 {
+                    dims.into_iter().map(|(n, w, h)| (n, w * art_scale.0 as u16, h * art_scale.1 as u16)).collect()
+                } else {
+                    dims
+                };
+                m.set_resources(Box::new(PictureTable::new(scaled, release)));
+            }
+            ResourceSource::Custom(resources) => {
+                let wrapped: Box<dyn Resources> = if version == 6 {
+                    Box::new(ScaledResources { inner: resources, scale: art_scale })
+                } else {
+                    resources
+                };
+                m.set_resources(wrapped);
+            }
+        }
         // Latched: this one takes effect AT `init_caps`, not now.
         m.set_interpreter_number(self.interpreter_number);
         m.init_caps();
@@ -327,6 +386,29 @@ impl BootConfig {
         } else if let Some((rows, cols)) = self.screen_grid {
             m.set_screen_dims(rows, cols);
         }
+    }
+}
+
+/// Scales a host-supplied [`Resources`] by the Version 6 unit-space factor
+/// [`BootConfig::apply`] applies to [`Self::with_picture_dims`]'s vector too —
+/// SQ-0479/SQ-0790. `picture_dims` answers in the resource's OWN pixels, so a
+/// custom [`Resources`] implementation needs no idea of this scale at all; it
+/// is applied here, at query time, once, the same way whichever door
+/// installed it.
+struct ScaledResources {
+    inner: Box<dyn Resources>,
+    scale: (u32, u32),
+}
+
+impl Resources for ScaledResources {
+    fn picture_count(&self) -> u16 {
+        self.inner.picture_count()
+    }
+    fn picture_release(&self) -> u16 {
+        self.inner.picture_release()
+    }
+    fn picture_dims(&self, number: u16) -> Option<(u16, u16)> {
+        self.inner.picture_dims(number).map(|(w, h)| (w * self.scale.0 as u16, h * self.scale.1 as u16))
     }
 }
 
@@ -388,5 +470,46 @@ mod tests {
         assert_eq!(doubled.resolved_art_scale(6), (2, 2), "the default rule");
         assert_eq!(doubled.v6_screen_dims(), (640, 400));
         assert_eq!(doubled.resolved_art_scale(5), (1, 1), "below v6 there is no art to scale");
+    }
+
+    fn v6_story() -> Vec<u8> {
+        crate::header::tests_support::sample_story(6)
+    }
+
+    /// SQ-1402: `with_resources`' answers get the same Version 6 unit-space
+    /// scale `with_picture_dims`'s vector does — the FALSIFICATION for this is
+    /// in the next case, which turns the scaling off and shows the two answers
+    /// diverge.
+    #[test]
+    fn with_resources_scales_the_same_way_with_picture_dims_does() {
+        struct Native(Vec<(u16, u16, u16)>);
+        impl Resources for Native {
+            fn picture_count(&self) -> u16 {
+                self.0.len() as u16
+            }
+            fn picture_release(&self) -> u16 {
+                0
+            }
+            fn picture_dims(&self, number: u16) -> Option<(u16, u16)> {
+                self.0.iter().find(|&&(n, _, _)| n == number).map(|&(_, w, h)| (w, h))
+            }
+        }
+
+        let table = Machine::boot(
+            Memory::new(v6_story()).expect("story"),
+            Box::new(BufferOutput::new()),
+            BootConfig::new().with_v6_screen_px((320, 200)).with_picture_dims(vec![(7, 100, 60)]),
+        );
+        let custom = Machine::boot(
+            Memory::new(v6_story()).expect("story"),
+            Box::new(BufferOutput::new()),
+            BootConfig::new().with_v6_screen_px((320, 200)).with_resources(Box::new(Native(vec![(7, 100, 60)]))),
+        );
+        assert_eq!(table.picture_dims(7), Some((200, 120)), "the default (2,2) rule applied to the vector table");
+        assert_eq!(
+            custom.picture_dims(7),
+            table.picture_dims(7),
+            "and to a custom Resources answering the same art-native size",
+        );
     }
 }

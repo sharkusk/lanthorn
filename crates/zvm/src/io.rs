@@ -6,8 +6,63 @@
 //! lanthorn's `CaptureSink`, which drives a scrolling terminal transcript, is
 //! one such implementation.
 //!
-//! `Output` requires `as_any` so callers can downcast to concrete types (e.g.,
-//! to read `BufferOutput::buf` in tests).
+//! # Why `Output: Any`, and why it stays that way (SQ-1402)
+//!
+//! The trait requires [`Any`], which in turn requires `'static`: every
+//! implementor must own everything it touches rather than borrow it from its
+//! host, because [`crate::cpu::exec::Machine::boot`] /
+//! [`crate::cpu::exec::Machine::with_output`] take the sink as `Box<dyn
+//! Output>` and hold it for the machine's whole lifetime. The bound exists so
+//! test code can downcast a `Box<dyn Output>` back to a concrete type — this
+//! crate's own tests read [`BufferOutput::buf`] that way, and every other host
+//! in this workspace (`zvm-cli`, lanthorn's `app`) downcasts its own sink to
+//! reach state the trait doesn't expose. That is a real cost paid by every
+//! implementor whether or not it ever downcasts anything, and reviewed and
+//! kept as-is rather than redesigned: the fix is not obvious (an associated
+//! type or a second, non-`Any` trait both move the cost elsewhere rather than
+//! remove it) and no embedder has yet needed a sink that cannot afford to own
+//! its state.
+//!
+//! **The pattern for a host whose sink must reach state it does not own:**
+//! don't fight `'static` by borrowing — share the state behind a
+//! reference-counted cell instead. [`std::rc::Rc`]`<`[`std::cell::RefCell`]`<_>>`
+//! for a single-threaded host, [`std::sync::Arc`]`<`[`std::sync::Mutex`]`<_>>`
+//! across threads. The sink owns a clone of the handle (satisfying `'static`
+//! honestly, not by unsafely erasing a borrow), the host keeps its own clone,
+//! and both sides see the same buffer with no downcast anywhere:
+//!
+//! ```rust
+//! use std::cell::RefCell;
+//! use std::rc::Rc;
+//!
+//! use zvm::io::Output;
+//!
+//! struct SharedSink(Rc<RefCell<String>>);
+//!
+//! impl Output for SharedSink {
+//!     fn print(&mut self, s: &str) {
+//!         self.0.borrow_mut().push_str(s);
+//!     }
+//!     fn as_any(&self) -> &dyn std::any::Any {
+//!         self
+//!     }
+//!     fn as_any_mut(&mut self) -> &mut dyn std::any::Any {
+//!         self
+//!     }
+//! }
+//!
+//! // A `Box<dyn Output>` is exactly what `Machine::boot` takes, and exactly
+//! // what a real host's step loop would call `.print()` on as the story runs.
+//! fn a_steps_worth_of_output(mut sink: Box<dyn Output>) {
+//!     sink.print("hello");
+//! }
+//!
+//! let buf = Rc::new(RefCell::new(String::new()));
+//! a_steps_worth_of_output(Box::new(SharedSink(Rc::clone(&buf))));
+//! // The host reads its OWN clone after the step, no downcast required —
+//! // the whole point of sharing the cell instead of asking the sink back for it.
+//! assert_eq!(buf.borrow().as_str(), "hello");
+//! ```
 
 use std::any::Any;
 
