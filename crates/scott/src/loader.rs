@@ -30,6 +30,76 @@ pub enum LoadError {
     BadCount(&'static str, i32),
     /// A room exit points outside the room table (negative or > NumRooms).
     BadExit(i32),
+    /// The file is not this crate's ScottFree text format, but its bytes
+    /// match a KNOWN other Scott Adams dialect's signature — see [`Dialect`].
+    /// Detection only: this crate does not read any of these formats (that
+    /// is SQ-1414's job); the point of a named variant is a host telling the
+    /// player "this is a TI-99/4A cartridge dump" rather than a generic
+    /// parse failure that gives no hint what went wrong.
+    UnsupportedDialect(Dialect),
+}
+
+/// A Scott Adams / Adventure International game-data format this crate's
+/// [`Database::parse`] does not read, recognised by a fixed byte signature
+/// rather than by attempting (and failing) the normal text parse — see
+/// [`detect_dialect`]. Every signature here is Gargoyle's own
+/// (`terps/scott/detectgame.c`'s `dictKeys` table and
+/// `terps/scott/ti99_4a/load_ti99_4a.c`'s `DetectTI994A`), the same project
+/// the reference audit (SQ-1014 note, 2026-09-08) names as spending
+/// ~100 KB of C on exactly this problem.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum Dialect {
+    /// TI-99/4A tokenized bytecode (a cartridge/cassette dump, not text at
+    /// all): Gargoyle's `DetectTI994A` scans the whole file for the fixed
+    /// 10-byte sequence `30 30 30 30 00 30 30 00 28 28`
+    /// (`load_ti99_4a.c:126-127`), found at a fixed offset from the game's
+    /// own data header on every TI-99/4A release Gargoyle supports.
+    Ti994aBytecode,
+    /// A raw C64 / ZX Spectrum / Atari 8-bit / Apple II memory snapshot
+    /// carrying an UNCOMPRESSED binary Adventure International verb/noun
+    /// dictionary, rather than this crate's ASCII text `.dat`. Gargoyle's
+    /// `detectgame.c` `dictKeys` table (`detectgame.c:44-46`) scans for one
+    /// of three encoded "GO" dictionary layouts: the four-letter table
+    /// (`b"AUTO\0GO\0"`), the three-letter table (`b"AUT\0GO\0"`), or
+    /// Claymorgue's five-letter table (`b"GO\0\0\0\0*CROSS*RUN\0"`).
+    C64OrZxSnapshot,
+    /// The same style of memory-image dictionary, COMPRESSED: Gargoyle's
+    /// `FOUR_LETTER_COMPRESSED` signature `b"aUTOgO\0"` (`detectgame.c:47`)
+    /// — the high bit of alternating bytes packs extra data, which is why
+    /// the signature bytes are mixed-case ASCII rather than the plain
+    /// uppercase of the uncompressed tables. Gremlins, Supergran, Robin of
+    /// Sherwood and Seas of Blood (the reference audit's own examples)
+    /// ship their action tables this way.
+    CompressedActionTable,
+}
+
+/// Scans `bytes` for one of [`Dialect`]'s fixed signatures, anywhere in the
+/// file (Gargoyle's own `FindCode` is an unanchored substring search, not a
+/// fixed-offset check — the signatures land at different offsets across
+/// releases even within one dialect). `None` means none of the three known
+/// signatures were found; the file may still be unreadable for some other
+/// reason, just not one this crate can name.
+pub fn detect_dialect(bytes: &[u8]) -> Option<Dialect> {
+    const TI99: &[u8] = b"\x30\x30\x30\x30\x00\x30\x30\x00\x28\x28";
+    const C64_4: &[u8] = b"AUTO\0GO\0";
+    const C64_3: &[u8] = b"AUT\0GO\0";
+    const C64_5: &[u8] = b"GO\0\0\0\0*CROSS*RUN\0";
+    const COMPRESSED: &[u8] = b"aUTOgO\0";
+    let contains = |needle: &[u8]| bytes.windows(needle.len()).any(|w| w == needle);
+    if contains(TI99) {
+        Some(Dialect::Ti994aBytecode)
+    } else if contains(COMPRESSED) {
+        // Checked before the uncompressed signatures: a compressed file
+        // could not also contain a full uncompressed match by construction,
+        // but checking the more specific signature first keeps that
+        // reasoning explicit rather than accidental.
+        Some(Dialect::CompressedActionTable)
+    } else if contains(C64_4) || contains(C64_3) || contains(C64_5) {
+        Some(Dialect::C64OrZxSnapshot)
+    } else {
+        None
+    }
 }
 
 /// Tokenizer over a `.dat` source: whitespace-separated ints and `"`-delimited
@@ -163,8 +233,24 @@ impl Database {
     /// `&[u8]`, `&Vec<u8>` — so a caller holding raw file bytes (a Latin-1 or
     /// otherwise non-UTF-8 `.dat`, which a `&str` conversion would reject
     /// outright) can hand them over directly; see the module doc.
+    ///
+    /// On failure, checks the raw bytes against [`detect_dialect`]'s known
+    /// signatures before returning the underlying [`LoadError`]: a file that
+    /// fails to parse AND matches one of those signatures is refused as
+    /// [`LoadError::UnsupportedDialect`] instead of whatever token-level
+    /// error (`BadInt`, `Truncated`, …) the text lexer happened to hit first
+    /// — a host can then say "this is a TI-99/4A dump" instead of "invalid
+    /// data" (SQ-1413; loading any of these dialects is SQ-1414's).
     pub fn parse<S: AsRef<[u8]> + ?Sized>(src: &S) -> Result<Database, LoadError> {
-        let mut lex = Lexer::new(src.as_ref());
+        let bytes = src.as_ref();
+        Self::parse_scottfree(bytes).map_err(|e| match detect_dialect(bytes) {
+            Some(d) => LoadError::UnsupportedDialect(d),
+            None => e,
+        })
+    }
+
+    fn parse_scottfree(bytes: &[u8]) -> Result<Database, LoadError> {
+        let mut lex = Lexer::new(bytes);
 
         let _unknown = lex.next_int()?;
         let num_items = lex.next_int()?;

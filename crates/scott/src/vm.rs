@@ -69,6 +69,10 @@ pub enum RestoreError {
     /// ([`Vm::SNAPSHOT_VERSION`]). Restoring it would misread every field
     /// after the header, so this is refused before touching any of them.
     NewerVersion { found: u16, supported: u16 },
+    /// [`Vm::restore_scottfree`] only: the input is not a well-formed
+    /// ScottFree save (not ASCII text, or a token that isn't the integer the
+    /// format expects at that position). Carries a short, fixed reason.
+    ScottFreeMalformed(&'static str),
 }
 
 impl std::fmt::Display for RestoreError {
@@ -81,6 +85,9 @@ impl std::fmt::Display for RestoreError {
             RestoreError::BadMagic => write!(f, "save data is not a scott snapshot (bad magic)"),
             RestoreError::NewerVersion { found, supported } => {
                 write!(f, "save data is format version {found}, newer than this build supports (version {supported})")
+            }
+            RestoreError::ScottFreeMalformed(reason) => {
+                write!(f, "not a valid ScottFree save: {reason}")
             }
         }
     }
@@ -129,6 +136,12 @@ pub struct Vm {
     /// player-command actions whose verb/noun matched but a condition blocked
     /// them. Cleared every turn; only populated while `trace_fired` is on.
     pub(crate) last_blocked: Vec<(usize, usize)>,
+    /// ScottFree's `-y`/`-s`/`-t`/`-p` runtime flags plus this crate's own
+    /// [`Presentation`] choice (SQ-1413) — see [`crate::options`] for the
+    /// full doc. Fixed for the life of a `Vm`: set at construction
+    /// ([`Vm::new_full`]) because the opening occurrence pass (also run in
+    /// the constructor) can print option-gated wording.
+    pub(crate) options: Options,
 }
 
 impl Vm {
@@ -162,7 +175,21 @@ impl Vm {
     /// first random events decided by the default seed. The host supplies the
     /// seed here — lanthorn passes its `random_seed` config key, or an entropy
     /// draw when that key is unset.
+    ///
+    /// Uses ScottFree's own default [`Options`] (every `-y`/`-s`/`-t`/`-p` flag
+    /// off) — a host that wants one of them set uses [`Vm::new_full`] instead.
     pub fn new_seeded(db: Database, trace_fired: bool, seed: u32) -> Vm {
+        Vm::new_full(db, trace_fired, seed, Options::default())
+    }
+
+    /// The fullest constructor: [`Vm::new_seeded`] plus ScottFree's `-y`/`-s`/
+    /// `-t`/`-p` [`Options`] (SQ-1413). `options` is a constructor argument
+    /// for the same reason `seed` is (see [`Vm::new_seeded`]'s doc): the
+    /// opening occurrence pass below can print option-gated wording (an
+    /// occurrence that kills the player on turn one, say), so a `Vm` set up
+    /// with the wrong options and corrected afterward would already have
+    /// shown the wrong text.
+    pub fn new_full(db: Database, trace_fired: bool, seed: u32, options: Options) -> Vm {
         let item_loc = db.items.iter().map(|i| i.start_loc).collect();
         let player = db.start_room;
         let lamp = db.light_time;
@@ -188,6 +215,7 @@ impl Vm {
             fired_actions: Vec::new(),
             ever_fired: HashSet::new(),
             last_blocked: Vec::new(),
+            options,
         };
         // Run the opening occurrence pass before the first prompt, so auto-events
         // that fire at game start (e.g. "A Voice BOOOMS out:") are shown on load —
@@ -196,6 +224,17 @@ impl Vm {
         vm.run_occurrences();
         vm.needs_line = true;
         vm
+    }
+
+    /// The [`Options`] this `Vm` was constructed with.
+    pub fn options(&self) -> &Options {
+        &self.options
+    }
+
+    /// [`Wording::for_options`] for this `Vm`'s own [`Options`] — the ONE
+    /// call site every message-printing method below reads through.
+    fn wording(&self) -> Wording {
+        Wording::for_options(&self.options)
     }
 
     // --- accessors used by later tasks + the host adapter ---
@@ -520,6 +559,16 @@ impl Vm {
             13 => self.item_in_play(value),
             14 => !self.item_in_play(value),
             15 => self.current_counter <= c.value as i32,
+            // SQ-1413 documented disagreement #1: condition 16 is `>` in
+            // BOTH ScottFree 1.14 (`PerformLine` case 16, `ScottCurses.c:786-789`,
+            // `if(CurrentCounter<=dv) return(0)` — i.e. the condition PASSES
+            // only when `CurrentCounter>dv`) and Spatterlight's `scott.c`
+            // (`terps/scott`, same shape), but the Swansea "Definition"
+            // document states it as `>=`. This crate follows ScottFree/
+            // Spatterlight (`>`), consistent with the crate-level doc's
+            // stated priority: ScottFree's actual behaviour outranks the
+            // Definition wherever the two disagree, because every commercial
+            // `.dat` was authored and tested against ScottFree, not the prose.
             16 => self.current_counter > c.value as i32,
             19 => self.current_counter == c.value as i32,
             17 => self.item_at_start(value),
@@ -598,9 +647,12 @@ impl Vm {
                     // not `>=` — the two only disagree when something has
                     // already pushed the count past the limit some other way,
                     // but porting the exact comparison keeps this opcode a
-                    // faithful mirror of the source.
+                    // faithful mirror of the source. Wording: `too_much_bang`
+                    // (ScottCurses.c:833-836) — the plain wording ends "!",
+                    // distinct from opcode 74/GET's period-terminated refusal.
                     if self.carried_count() == self.db.max_carry {
-                        self.out.push_str("You are carrying too much.\n");
+                        let msg = self.wording().too_much_bang;
+                        self.out.push_str(msg);
                     } else {
                         self.set_item_loc(item, CARRIED);
                     }
@@ -636,9 +688,9 @@ impl Vm {
                 61 => {
                     // ScottFree's `-y`/YOUARE option prints "You are dead.";
                     // the plain default (ScottCurses.c:874-876) prints "I am
-                    // dead." — the `-y` variant is SQ-1413's (no option-flag
-                    // support here yet).
-                    self.out.push_str("I am dead.\n");
+                    // dead." (SQ-1413's `Options::you_are`).
+                    let msg = self.wording().dead;
+                    self.out.push_str(msg);
                     self.flag_set(DARK_FLAG, false);
                     if let Some(last) = self.db.rooms.len().checked_sub(1) {
                         self.player = last;
@@ -655,7 +707,8 @@ impl Vm {
                     // ScottFree's `doneit` label (ScottCurses.c:890-891),
                     // reached both directly by opcode 63 and via opcode 65's
                     // win check below.
-                    self.out.push_str("The game is now over.\n");
+                    let msg = self.wording().game_now_over;
+                    self.out.push_str(msg);
                     self.quit = true;
                 }
                 64 => { /* LOOK: the host redraws the room panel every frame */ }
@@ -693,6 +746,16 @@ impl Vm {
                     }
                 }
                 76 => { /* LOOK (redraw): the host room panel is always current */ }
+                // SQ-1413 documented disagreement #2: ScottFree 1.14 floors
+                // the decrement at -1 (`case 77: if(CurrentCounter>=0)
+                // CurrentCounter--;`, ScottCurses.c:1008-1011 — the guard
+                // only blocks the step once the counter is ALREADY -1, so
+                // -1 is the lowest value it ever reaches); Spatterlight's
+                // `scott_actions.c` changed the guard to floor at 0
+                // instead. This crate follows ScottFree — `.max(-1)` below
+                // gives the identical result to ScottFree's own
+                // conditional decrement for every input (both stop
+                // exactly at -1), it is just expressed without the branch.
                 77 => {
                     self.current_counter = (self.current_counter - 1).max(-1);
                 }
@@ -741,6 +804,17 @@ impl Vm {
                     std::mem::swap(&mut self.player, &mut self.saved_rooms[idx]);
                 }
                 88 => { /* pause: host handles timing */ }
+                // SQ-1413 documented disagreement #3: opcode 89 is the SAGA
+                // "draw picture N" command in BOTH ScottFree 1.14
+                // (`case 89: pptr++; /* SAGA draw picture n */`,
+                // ScottCurses.c:1074-1079) and the Swansea Definition, but
+                // Spatterlight renumbered it to opcode 90 in its own action
+                // table (`gs_actions.c`/`scott_actions.c`) to make room for
+                // an extra opcode elsewhere in its fork. This crate follows
+                // ScottFree/the Definition — opcode 89 draws, 90 is unused
+                // (falls into the `_` arm below, matching every corpus file
+                // this crate has been checked against, which use only the
+                // canonical ScottFree numbering).
                 89 => self.pending_picture = Some(p.next().unwrap_or(0)), // draw picture N
                 _ => {} // 90..=101 unused
             }
@@ -762,8 +836,25 @@ impl Vm {
             self.last_blocked.clear();
         }
         let mut w = cmd.split_whitespace();
-        let w1_raw = w.next();
-        let w2 = w.next();
+        // ScottFree's GetInput reads each word with `sscanf(buf,"%9s %9s",
+        // verb,noun)` (ScottCurses.c:612) — a 9-CHARACTER field width cap on
+        // each word individually (the `char verb[10],noun[10];` buffers,
+        // ScottCurses.c:601, are exactly 9 chars plus the NUL `%9s` leaves
+        // room for), applied before vocabulary lookup, before single-letter
+        // expansion, and independent of `word_length` (which truncates for
+        // COMPARISON only, deeper in `match_verb`/`match_noun`). A char
+        // count, not a byte count — `%9s` on a real ScottFree build counts
+        // bytes, but this crate's `.dat`/vocab all lex as ASCII by the time
+        // they reach comparison, so the two coincide.
+        const SCOTTFREE_WORD_CAP: usize = 9;
+        fn cap9(s: &str) -> &str {
+            match s.char_indices().nth(SCOTTFREE_WORD_CAP) {
+                Some((byte_idx, _)) => &s[..byte_idx],
+                None => s,
+            }
+        }
+        let w1_raw = w.next().map(cap9);
+        let w2 = w.next().map(cap9);
         // ScottFree's GetInput (ScottCurses.c:613-625) expands a LONE
         // single-character command word — no second word typed — to the full
         // direction/INVENTORY verb BEFORE any vocabulary lookup or
@@ -810,7 +901,8 @@ impl Vm {
                 .unwrap_or(-1);
             (vb, no)
         } else {
-            self.out.push_str("You use word(s) I don't know!\n");
+            let msg = self.wording().unknown_words;
+            self.out.push_str(msg);
             self.needs_line = true;
             return;
         };
@@ -829,6 +921,14 @@ impl Vm {
         // action (verb 1, noun 0) can't intercept ordinary movement. A GO with a
         // non-direction noun (e.g. GO TENT) still falls through to the actions.
         let mut handled = false;
+        // Whether the action-table search (below, or in `try_action_table`)
+        // found at least one action whose verb+noun matched at all, even if
+        // its conditions then blocked it — `PerformActions`' `fl` becoming
+        // `-2` rather than staying `-1` (ScottCurses.c:1156-1157). Read by
+        // the `if !handled` fallback below to choose between
+        // `Wording::dont_understand` and `Wording::cant_do_that_yet`
+        // (SQ-1413 item 3).
+        let mut any_matched_vocab = false;
         if vb == 1 && (1..=6).contains(&no) {
             let dir = no as usize - 1;
             // ScottFree's PerformActions (ScottCurses.c:1091-1133) recomputes
@@ -838,7 +938,8 @@ impl Vm {
             // the move then succeeds.
             let dark = self.is_dark();
             if dark {
-                self.out.push_str("Dangerous to move in the dark!\n");
+                let msg = self.wording().dangerous_in_dark;
+                self.out.push_str(msg);
             }
             let dest = self
                 .db
@@ -857,68 +958,34 @@ impl Vm {
                 // (ScottCurses.c:1122-1127) — no "The game is now over."
                 // line, that belongs to opcode 63's `doneit` label, not this
                 // direct death.
-                self.out.push_str("I fell down and broke my neck.\n");
+                let msg = self.wording().fell_and_broke_neck;
+                self.out.push_str(msg);
                 self.quit = true;
             } else {
-                self.out.push_str("I can't go in that direction.\n");
+                let msg = self.wording().cant_go_that_direction;
+                self.out.push_str(msg);
             }
             handled = true;
         } else if vb == 1 && no == -1 {
             // ScottFree: GO with no (or an unknown) noun is answered "Give me
             // a direction too." BEFORE the action table — a catch-all
-            // "GO ANY" action must not swallow a bare GO.
-            self.out.push_str("I need a direction.\n");
+            // "GO ANY" action must not swallow a bare GO (`PerformActions`,
+            // ScottCurses.c:1099-1102).
+            let msg = self.wording().direction_needed;
+            self.out.push_str(msg);
             handled = true;
         } else if vb != 0 {
             // Only a recognized verb consults the command actions. Verb 0 is
             // reserved for occurrences (the top-of-turn auto-event pass), so an
             // unrecognized command must NOT match them here — otherwise an
             // occurrence (e.g. a conditional death) fires as if it were the reply.
-            // Manual loop (rather than `.iter().find(..)`) so a verb/noun match
-            // whose conditions block it can be recorded for the debug
-            // inspector's `last_blocked` (SQ-0464). `conditions` is copied out
-            // of the borrowed `Action` (it's `Copy`, five small structs) so
-            // the borrow ends before `eval_condition(&self)` is called —
-            // otherwise short-circuits/perf are unchanged from `.find`.
-            let mut matched = None;
-            let mut blocked: Vec<(usize, usize)> = Vec::new();
-            for i in 0..self.db.actions.len() {
-                let a = &self.db.actions[i];
-                let (av, an, conditions) = (a.verb, a.noun, a.conditions);
-                // ScottFree's vocab match: `nv==no || nv==0` — a noun-0
-                // wildcard also matches the unknown-noun sentinel (-1).
-                if av != vb || (an as i32 != no && an != 0) {
-                    continue;
-                }
-                let mut first_fail = None;
-                for (slot, c) in conditions.iter().enumerate() {
-                    if !self.eval_condition(c) {
-                        first_fail = Some(slot);
-                        break;
-                    }
-                }
-                match first_fail {
-                    None => {
-                        matched = Some(i);
-                        break;
-                    }
-                    Some(slot) if self.trace_fired => blocked.push((i, slot)),
-                    Some(_) => {}
-                }
-            }
-            if self.trace_fired {
-                self.last_blocked = blocked;
-            }
-            if let Some(idx) = matched {
-                self.run_action_chain(idx);
-                handled = true;
-            }
+            let r = self.try_action_table(vb, no);
+            handled = r.0;
+            any_matched_vocab = r.1;
         }
 
         if !handled {
-            if vb == 1 {
-                self.out.push_str("I need a direction.\n");
-            } else if vb == 10 {
+            if vb == 10 {
                 // ScottFree compares NounText case-insensitively (`strcasecmp`,
                 // ScottCurses.c:1184/1251) — `last_noun` above is kept in its
                 // original typed case, so the comparison here must be too.
@@ -926,17 +993,28 @@ impl Vm {
                     self.get_all();
                 } else if no == -1 {
                     // ScottFree: GET with an unknown noun is "What ?", never a grab.
-                    self.out.push_str("What?\n");
-                } else if self.carried_count() >= self.db.max_carry {
-                    // ScottFree checks the carry limit before matching the item.
-                    self.out.push_str("You are carrying too much.\n");
+                    let msg = self.wording().what;
+                    self.out.push_str(msg);
+                } else if self.carried_count() == self.db.max_carry {
+                    // ScottFree checks the carry limit before matching the
+                    // item, at EXACT capacity like opcode 52
+                    // (`CountCarried()==GameHeader.MaxCarry`,
+                    // ScottCurses.c:1227), with the PERIOD-terminated wording
+                    // (ScottCurses.c:1229-1233) — distinct from opcode 52's
+                    // bang-terminated one.
+                    let msg = self.wording().too_much_period;
+                    self.out.push_str(msg);
                 } else {
                     match self.match_up_item(false) {
                         Some(idx) => {
                             self.set_item_loc(idx, CARRIED);
-                            self.out.push_str("OK.\n");
+                            let msg = self.wording().ok;
+                            self.out.push_str(msg);
                         }
-                        None => self.out.push_str("It's beyond my power to do that.\n"),
+                        None => {
+                            let msg = self.wording().beyond_power_get;
+                            self.out.push_str(msg);
+                        }
                     }
                 }
             } else if vb == 18 {
@@ -946,18 +1024,35 @@ impl Vm {
                 if self.last_noun.eq_ignore_ascii_case("ALL") {
                     self.drop_all();
                 } else if no == -1 {
-                    self.out.push_str("What?\n");
+                    let msg = self.wording().what;
+                    self.out.push_str(msg);
                 } else {
                     match self.match_up_item(true) {
                         Some(idx) => {
                             self.set_item_loc(idx, self.player as i32);
-                            self.out.push_str("OK.\n");
+                            let msg = self.wording().ok;
+                            self.out.push_str(msg);
                         }
-                        None => self.out.push_str("It's beyond my power to do that.\n"),
+                        None => {
+                            let msg = self.wording().beyond_power_drop;
+                            self.out.push_str(msg);
+                        }
                     }
                 }
             } else {
-                self.out.push_str("I don't understand your command.\n");
+                // `PerformActions`' `-1`/`-2` fallback (`main`,
+                // ScottCurses.c:1408-1414): `-2` ("I can't do that yet.")
+                // when a candidate action's verb+noun matched but every one's
+                // conditions blocked it; `-1` ("I don't understand your
+                // command.") when nothing with this verb was even a
+                // candidate. Previously collapsed into the `-1` wording
+                // unconditionally — SQ-1413 item 3 (audit item 7).
+                let msg = if any_matched_vocab {
+                    self.wording().cant_do_that_yet
+                } else {
+                    self.wording().dont_understand
+                };
+                self.out.push_str(msg);
             }
         }
 
@@ -977,13 +1072,35 @@ impl Vm {
         if self.lamp != -1 && self.item_in_play(LIGHT_SOURCE) {
             self.lamp -= 1;
             let lit_here = self.item_present(LIGHT_SOURCE);
+            let w = self.wording();
             if self.lamp < 1 {
                 self.flag_set(LAMP_EMPTY_FLAG, true);
                 if lit_here {
-                    self.out.push_str("Your light has run out.\n");
+                    self.out.push_str(w.light_out);
                 }
-            } else if self.lamp < 25 && self.lamp % 5 == 0 && lit_here {
-                self.out.push_str("Your light is growing dim.\n");
+                // `-p`/`Options::prehistoric_lamp` (`main`,
+                // ScottCurses.c:1430-1431): destroy the light source the
+                // instant its fuel reaches zero — unconditional on
+                // `lit_here`, unlike the message above. `item_in_play`
+                // treats location 0 as "gone", the same sentinel
+                // `Location=DESTROYED` plays in ScottFree, so this also
+                // naturally stops the tick (and any further message) on
+                // every later turn — matching `Location!=DESTROYED`'s guard
+                // at the top of this block.
+                if self.options.prehistoric_lamp {
+                    self.set_item_loc(LIGHT_SOURCE, 0);
+                }
+            } else if self.lamp < 25 && lit_here {
+                if self.options.scott_light {
+                    // `-s`/`Options::scott_light` (`main`,
+                    // ScottCurses.c:1439-1444): a running countdown, shown
+                    // EVERY turn under 25 fuel (not just every 5th).
+                    self.out.push_str(w.light_runs_out_prefix);
+                    self.out.push_str(&self.lamp.to_string());
+                    self.out.push_str(w.light_runs_out_suffix);
+                } else if self.lamp % 5 == 0 {
+                    self.out.push_str(w.light_dim);
+                }
             }
         }
 
@@ -996,43 +1113,92 @@ impl Vm {
         self.needs_line = true;
     }
 
-    /// GET ALL: take every item in the current room that has an auto-get noun,
-    /// respecting MaxCarry. Reports each taken item; a full pack stops the sweep.
+    /// An item's auto-get noun, matched against the noun vocabulary — the
+    /// `no` `PerformActions`' GET-ALL/DROP-ALL passes into its own recursive
+    /// `PerformActions(vb,no)` call (`WhichWord(Items[ct].AutoGet,Nouns)`,
+    /// ScottCurses.c:1198/1259).
+    fn auto_noun_word(&self, idx: usize) -> Option<i32> {
+        let noun = self.db.items.get(idx)?.auto_noun.as_deref()?;
+        self.db.match_noun(noun).map(|n| n as i32)
+    }
+
+    /// GET ALL (`PerformActions` vb==10, ScottCurses.c:1184-1221): take every
+    /// item in the current room with an auto-get noun not itself starting
+    /// with `*` (`AutoGet[0]!='*'`, ScottCurses.c:1196 — a game's way of
+    /// marking an item ALL should skip even though it has a direct noun),
+    /// respecting MaxCarry.
+    ///
+    /// A dark room refuses the whole sweep up front (`"It is dark.\n"`,
+    /// ScottCurses.c:1189-1193) rather than reporting per item. For each
+    /// remaining item, ScottFree first runs that item's OWN GET action
+    /// through the action table (`disable_sysfunc`-guarded so the recursive
+    /// call cannot itself re-enter this system fallback — exactly what
+    /// `try_action_table` already excludes, being only the table search) —
+    /// so a game's custom "GET LAMP" trap fires even under GET ALL — and
+    /// only THEN takes the item, unconditionally on what that action did.
     fn get_all(&mut self) {
+        if self.is_dark() {
+            let msg = self.wording().it_is_dark;
+            self.out.push_str(msg);
+            return;
+        }
         let mut took_any = false;
         for i in 0..self.item_loc.len() {
-            if self.item_in_room(i) && self.db.items[i].auto_noun.is_some() {
-                if self.carried_count() < self.db.max_carry {
-                    self.set_item_loc(i, CARRIED);
-                    let text = self.db.items[i].text.clone();
-                    self.out.push_str(&text);
-                    self.out.push_str(": OK.\n");
-                    took_any = true;
-                } else {
-                    self.out.push_str("You are carrying too much.\n");
-                    return;
-                }
+            let skip_all = self.db.items[i]
+                .auto_noun
+                .as_deref()
+                .is_some_and(|n| n.starts_with('*'));
+            if !self.item_in_room(i) || self.db.items[i].auto_noun.is_none() || skip_all {
+                continue;
             }
+            if let Some(no) = self.auto_noun_word(i) {
+                self.try_action_table(10, no);
+            }
+            if self.carried_count() == self.db.max_carry {
+                let msg = self.wording().too_much_period;
+                self.out.push_str(msg);
+                return;
+            }
+            self.set_item_loc(i, CARRIED);
+            let text = self.db.items[i].text.clone();
+            self.out.push_str(&text);
+            let suffix = self.wording().ok_all_suffix;
+            self.out.push_str(suffix);
+            took_any = true;
         }
         if !took_any {
-            self.out.push_str("I don't understand your command.\n");
+            let msg = self.wording().nothing_taken;
+            self.out.push_str(msg);
         }
     }
 
-    /// DROP ALL: drop every carried item that has an auto-get noun.
+    /// DROP ALL (`PerformActions` vb==18, ScottCurses.c:1249-1274): drop
+    /// every carried item with an auto-get noun not itself `*`-prefixed (see
+    /// [`Vm::get_all`]'s doc) — no darkness check (dropping in the dark is
+    /// always allowed).
     fn drop_all(&mut self) {
         let mut dropped_any = false;
         for i in 0..self.item_loc.len() {
-            if self.item_carried(i) && self.db.items[i].auto_noun.is_some() {
-                self.set_item_loc(i, self.player as i32);
-                let text = self.db.items[i].text.clone();
-                self.out.push_str(&text);
-                self.out.push_str(": OK.\n");
-                dropped_any = true;
+            let skip_all = self.db.items[i]
+                .auto_noun
+                .as_deref()
+                .is_some_and(|n| n.starts_with('*'));
+            if !self.item_carried(i) || self.db.items[i].auto_noun.is_none() || skip_all {
+                continue;
             }
+            if let Some(no) = self.auto_noun_word(i) {
+                self.try_action_table(18, no);
+            }
+            self.set_item_loc(i, self.player as i32);
+            let text = self.db.items[i].text.clone();
+            self.out.push_str(&text);
+            let suffix = self.wording().ok_all_suffix;
+            self.out.push_str(suffix);
+            dropped_any = true;
         }
         if !dropped_any {
-            self.out.push_str("I don't understand your command.\n");
+            let msg = self.wording().nothing_dropped;
+            self.out.push_str(msg);
         }
     }
 
@@ -1076,11 +1242,100 @@ impl Vm {
         })
     }
 
+    /// Ports the action-table half of ScottFree's `PerformActions`
+    /// (`ScottCurses.c:1136-1172`) for one `(vb, no)` pair: find and run the
+    /// first action whose verb matches `vb`, whose noun matches `no` (or is
+    /// the noun-0 wildcard), and whose conditions all pass. Does NOT include
+    /// the vb==10/vb==18 system GET/DROP fallback at the bottom of
+    /// `PerformActions` — callers needing that run it themselves
+    /// (`run_turn`'s `if !handled` block) — which is exactly what lets
+    /// [`Vm::get_all`]/[`Vm::drop_all`] reuse this for their own per-item
+    /// recursive dispatch (ScottFree's `disable_sysfunc`-guarded
+    /// `PerformActions(vb,no)` calls, ScottCurses.c:1199-1201/1260-1262):
+    /// this method IS the guarded subset, so no separate recursion lock is
+    /// needed.
+    ///
+    /// Returns `(handled, any_matched)`: `handled` is whether an action ran;
+    /// `any_matched` is whether at least one action's verb+noun matched at
+    /// all, even if blocked by a condition — `PerformActions`' `fl`
+    /// reaching `-2` rather than staying `-1` (ScottCurses.c:1156-1157),
+    /// which `run_turn`'s fallback reads to choose between
+    /// `Wording::dont_understand` and `Wording::cant_do_that_yet` (SQ-1413
+    /// item 3). Also records blocked matches for the debug inspector's
+    /// `last_blocked` (SQ-0464) when tracing is on.
+    ///
+    /// Manual loop (rather than `.iter().find(..)`) so a verb/noun match
+    /// whose conditions block it can be recorded. `conditions` is copied out
+    /// of the borrowed `Action` (it's `Copy`, five small structs) so the
+    /// borrow ends before `eval_condition(&self)` is called — otherwise
+    /// short-circuits/perf are unchanged from `.find`.
+    fn try_action_table(&mut self, vb: u16, no: i32) -> (bool, bool) {
+        let mut matched = None;
+        let mut any_matched = false;
+        let mut blocked: Vec<(usize, usize)> = Vec::new();
+        for i in 0..self.db.actions.len() {
+            let a = &self.db.actions[i];
+            let (av, an, conditions) = (a.verb, a.noun, a.conditions);
+            // ScottFree's vocab match: `nv==no || nv==0` — a noun-0
+            // wildcard also matches the unknown-noun sentinel (-1).
+            if av != vb || (an as i32 != no && an != 0) {
+                continue;
+            }
+            any_matched = true;
+            let mut first_fail = None;
+            for (slot, c) in conditions.iter().enumerate() {
+                if !self.eval_condition(c) {
+                    first_fail = Some(slot);
+                    break;
+                }
+            }
+            match first_fail {
+                None => {
+                    matched = Some(i);
+                    break;
+                }
+                Some(slot) if self.trace_fired => blocked.push((i, slot)),
+                Some(_) => {}
+            }
+        }
+        if self.trace_fired {
+            self.last_blocked = blocked;
+        }
+        let handled = if let Some(idx) = matched {
+            self.run_action_chain(idx);
+            true
+        } else {
+            false
+        };
+        (handled, any_matched)
+    }
+
     /// Occurrence pass: walk actions in order; for each verb==0 action, evaluate
     /// its conditions AT THAT POINT (so an earlier fired occurrence's state change
     /// is visible to a later guard), then fire it iff a d100 roll passes the
     /// noun-as-percent chance. A roll against 0 never passes, so noun==0 never
     /// fires standalone (those are continuation targets reached only via opcode 73).
+    ///
+    /// **Documented divergence (SQ-1413 item 3, reference audit item 13):**
+    /// ScottFree's `PerformActions` rolls the percentage chance FIRST and
+    /// only evaluates a line's conditions afterward, if the roll passes —
+    /// `(vv==0 && RandomPercent(nv)) || ... ` short-circuits `PerformLine`
+    /// (which evaluates conditions) entirely on a failed roll
+    /// (`ScottCurses.c:1152-1158`). This crate evaluates conditions first and
+    /// only rolls if they pass, the opposite order. Both give the same
+    /// FIRE/DON'T-FIRE answer for any one occurrence — a roll and an
+    /// all-conditions-true check are each necessary — but consume the PRNG
+    /// stream differently: ScottFree draws one value per occurrence
+    /// CANDIDATE regardless of its conditions, this crate draws one only
+    /// when conditions already passed. Reordering to match would perturb
+    /// exactly which draw lands on which occurrence for every seeded game
+    /// with more than one occurrence action — including this crate's own
+    /// pinned `golden.rs` transcript — for a PRNG stream that already
+    /// doesn't match ScottFree's `rand()` bit-for-bit (this crate seeds and
+    /// steps an independent xorshift32), so there is no fidelity gained by
+    /// matching the order and a real transcript diff on every existing
+    /// seeded fixture to be paid for it. Left as a documented divergence
+    /// rather than changed.
     fn run_occurrences(&mut self) {
         for idx in 0..self.db.actions.len() {
             let (is_occ, noun, pass) = {
@@ -1160,19 +1415,31 @@ impl Vm {
             && !(self.item_carried(LIGHT_SOURCE) || self.item_in_room(LIGHT_SOURCE))
     }
 
-    /// The current room's display block, in the classic Scott Adams "top window"
-    /// form: the room line, then "Obvious exits:", then "I can also see:". The host
-    /// shows this as a persistent panel above the scrolling transcript (the CLI
-    /// prints it inline), so it is a pure query and never touches `out`.
-    ///
-    /// A `*`-literal room prints verbatim; a non-literal room gets the "I'm in a "
-    /// prefix. When the room is dark, only the darkness line is returned.
+    /// The current room's display block. The host shows this as a persistent
+    /// panel above the scrolling transcript (the CLI prints it inline), so it
+    /// is a pure query and never touches `out`. Laid out per
+    /// [`Options::presentation`] — see [`Presentation`]'s doc for the three
+    /// choices and why this crate's own default ([`Presentation::C64`])
+    /// differs from ScottFree's.
     ///
     /// One convenience layout of [`Self::room_name`], [`Self::room_is_literal`],
     /// [`Self::room_exits`] and [`Self::items_in_room`] — a host with a
     /// different panel shape reads those directly instead of parsing this
     /// string back apart.
     pub fn room_block(&self) -> String {
+        match self.options.presentation {
+            Presentation::C64 => self.room_block_c64(),
+            Presentation::ScottFree => self.room_block_scottfree(false),
+            Presentation::Trs80 => self.room_block_scottfree(true),
+        }
+    }
+
+    /// This crate's own pre-existing layout (matches neither of ScottFree's,
+    /// see [`Presentation::C64`]'s doc): exits joined ". ", items each on
+    /// their own indented line under "I can also see:". A `*`-literal room
+    /// prints verbatim; a non-literal room gets the "I'm in a " prefix. When
+    /// the room is dark, only the darkness line is returned.
+    fn room_block_c64(&self) -> String {
         if self.is_dark() {
             return "It is too dark to see.".to_string();
         }
@@ -1204,6 +1471,64 @@ impl Vm {
         s
     }
 
+    /// ScottFree's own `Look()` layout (`ScottCurses.c:436-528`): exits
+    /// joined ", " with a trailing period, "none" when there are no exits; a
+    /// `you_are`-gated room prefix and "I/you can also see" header; items
+    /// joined " - " ([`Presentation::ScottFree`]) or each suffixed ". "
+    /// ([`Presentation::Trs80`]). `Trs80` also frames the whole block with
+    /// ScottFree's TRS-80 rule (`TRS80_LINE`, `ScottCurses.c:97`) — dark room
+    /// included, matching `Look()`'s early return.
+    fn room_block_scottfree(&self, trs80: bool) -> String {
+        const TRS80_LINE: &str = "\n<------------------------------------------------------------>\n";
+        let w = self.wording();
+        if self.is_dark() {
+            let mut s = w.too_dark_to_see.trim_end().to_string();
+            if trs80 {
+                s.push_str(TRS80_LINE);
+            }
+            return s;
+        }
+        let mut s = String::new();
+        if self.db.rooms.get(self.player).is_some() {
+            if self.room_is_literal() {
+                s.push_str(self.room_name(self.player));
+            } else {
+                s.push_str(w.room_prefix);
+                s.push_str(self.room_name(self.player));
+            }
+            let exits = self.room_exits();
+            s.push_str("\n\nObvious exits: ");
+            if exits.is_empty() {
+                s.push_str("none");
+            } else {
+                let names: Vec<&str> = exits.iter().map(|&(name, _)| name).collect();
+                s.push_str(&names.join(", "));
+            }
+            s.push('.');
+        }
+        let visible = self.items_in_room();
+        if !visible.is_empty() {
+            s.push_str("\n\n");
+            s.push_str(w.see_also_header.trim_start());
+            if trs80 {
+                for item in &visible {
+                    s.push_str(item);
+                    s.push_str(". ");
+                }
+            } else {
+                s.push_str(&visible.join(w.carrying_sep));
+            }
+        }
+        if trs80 {
+            s.push_str(TRS80_LINE);
+        }
+        s
+    }
+
+    /// Inventory command (case 66, `ScottCurses.c:925-953`): header, then
+    /// every carried item joined by [`Wording::carrying_sep`] (`" - "`, no
+    /// separator before the first item), or [`Wording::nothing_carried`]
+    /// when the pack is empty — either way, a final `".\n"` unconditionally.
     fn print_inventory(&mut self) {
         let carried: Vec<&str> = self
             .db
@@ -1213,13 +1538,14 @@ impl Vm {
             .filter(|(i, _)| self.item_carried(*i))
             .map(|(_, it)| it.text.as_str())
             .collect();
+        let w = self.wording();
+        self.out.push_str(w.carrying_header);
         if carried.is_empty() {
-            self.out.push_str("You are carrying nothing.\n");
+            self.out.push_str(w.nothing_carried);
         } else {
-            self.out.push_str("You are carrying: ");
-            self.out.push_str(&carried.join(", "));
-            self.out.push('\n');
+            self.out.push_str(&carried.join(w.carrying_sep));
         }
+        self.out.push_str(".\n");
     }
 
     /// The player's score as Scott counts it: treasures deposited in the
@@ -1240,24 +1566,40 @@ impl Vm {
         (stored, self.db.num_treasures)
     }
 
+    /// ScottFree's case 65 (`ScottCurses.c:899-923`), ported literally
+    /// including its `OutputNumber` (`"%d "`, trailing space, no newline —
+    /// same primitive opcode 78 already ports, ScottCurses.c:429-434) quirk:
+    /// each number is followed by its own trailing space AND the fixed text
+    /// around it supplies another, so the rendered line carries a genuine
+    /// double space (`"...stored 0  treasures..."`, `"...rates 0 .\n"`) —
+    /// not cleaned up here, to stay a faithful byte-for-byte port rather
+    /// than a paraphrase.
+    ///
+    /// `total > 0` guards the percentage (`(n*100)/GameHeader.Treasures`)
+    /// against a `num_treasures == 0` database, which ScottFree's own C
+    /// would divide by zero on (undefined behaviour there; a guard here
+    /// instead — see the crate's "NOT defects" note on this in
+    /// `scottfree_parity.rs`) and which would otherwise satisfy
+    /// `in_treasure_room == total` trivially and auto-win on the very first
+    /// SCORE call.
     fn print_score(&mut self) {
         let (in_treasure_room, total) = self.treasures_stored();
-        self.out.push_str(&format!(
-            "You have {in_treasure_room} out of {total} treasures.\n"
-        ));
-        // ScottFree's case 65 (ScottCurses.c:899-923), after printing the
-        // rating: when every treasure is stored, print "Well done." and fall
-        // through to opcode 63's `doneit` label ("The game is now over." then
-        // quit) — `goto doneit`, not a separate ending. `total > 0` guards
-        // the case ScottFree's own rating percentage would divide by zero on
-        // (`(n*100)/GameHeader.Treasures`, never reached with Treasures==0 in
-        // practice); we don't compute that percentage at all, but the same
-        // guard keeps a `num_treasures == 0` database from satisfying
-        // `in_treasure_room == total` trivially and auto-winning on the very
-        // first SCORE call.
+        let w = self.wording();
+        self.out.push_str(w.stored_prefix);
+        self.out.push_str(&in_treasure_room.to_string());
+        self.out.push(' ');
+        self.out.push_str(" treasures.  On a scale of 0 to 100, that rates ");
+        let pct = if total > 0 { (in_treasure_room * 100) / total } else { 0 };
+        self.out.push_str(&pct.to_string());
+        self.out.push(' ');
+        self.out.push_str(".\n");
+        // ScottFree's case 65, after printing the rating: when every
+        // treasure is stored, print "Well done." and fall through to
+        // opcode 63's `doneit` label ("The game is now over." then quit) —
+        // `goto doneit`, not a separate ending.
         if total > 0 && in_treasure_room == total {
-            self.out.push_str("Well done.\n");
-            self.out.push_str("The game is now over.\n");
+            self.out.push_str(w.well_done);
+            self.out.push_str(w.game_now_over);
             self.quit = true;
         }
     }
@@ -1988,7 +2330,9 @@ mod tests {
         vm.supply_line("get lamp");
         vm.step();
         let out = vm.take_output();
-        assert!(out.contains("OK."), "get lamp succeeds: {out:?}");
+        // GET success is ScottFree's "O.K. " (case 10 fallback,
+        // ScottCurses.c:1245), not "OK.\n" (SQ-1413).
+        assert!(out.contains("O.K."), "get lamp succeeds: {out:?}");
         assert!(vm.item_carried(9), "the lamp is now carried");
 
         // And dropping it by the full word works too.

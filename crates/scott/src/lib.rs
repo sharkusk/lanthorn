@@ -21,6 +21,27 @@
 //! any host's own I/O policy. lanthorn (a terminal interactive-fiction
 //! player) is one such host; this crate does not know it exists.
 //!
+//! # Where this crate KNOWINGLY disagrees with ScottFree
+//!
+//! Three places where ScottFree 1.14 itself, Spatterlight's `terps/scott`
+//! fork, and the Swansea Definition document do not all agree, and this
+//! crate had to pick one (SQ-1413's reference audit, 2026-09-08):
+//!
+//! * **Condition 16** (`vm.rs`, `Vm::eval_condition`) is `>` in both
+//!   ScottFree and Spatterlight, but `>=` in the Definition. This crate
+//!   follows ScottFree/Spatterlight.
+//! * **Opcode 77**'s decrement floors at -1 in ScottFree, but at 0 in
+//!   Spatterlight's fork (`vm.rs`, `Vm::run_commands` case 77). This crate
+//!   follows ScottFree.
+//! * **Opcode 89** is the SAGA "draw picture" command in both ScottFree and
+//!   the Definition, but Spatterlight renumbered it to 90 in its own fork
+//!   (`vm.rs`, `Vm::run_commands` case 89). This crate follows ScottFree/the
+//!   Definition — opcode 90 is unused.
+//!
+//! All three follow this module doc's stated priority: ScottFree's own
+//! behaviour outranks a document or a fork wherever they disagree, because
+//! every commercial `.dat` was authored and tested against ScottFree.
+//!
 //! # Loading a story
 //!
 //! [`looks_like_scott`] sniffs whether a text buffer is plausibly this
@@ -113,10 +134,13 @@
 //! real `.dat` file and plays it.
 
 mod loader;
+mod options;
+mod scottfree_save;
 mod vm;
 pub mod database;
 pub mod decompile;
 pub use database::{Action, Condition, Database, Item, Room};
 pub use decompile::{decompile_action, list_items, list_rooms, list_vocab};
-pub use loader::{looks_like_scott, LoadError};
+pub use loader::{detect_dialect, looks_like_scott, Dialect, LoadError};
+pub use options::{Options, Presentation, Wording};
 pub use vm::{RestoreError, StepResult, Vm};
