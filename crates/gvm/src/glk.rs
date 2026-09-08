@@ -1063,7 +1063,7 @@ pub enum StreamKind {
     Memory { addr: u32, len: u32, pos: u32, unicode: bool, hiwater: u32 },
     /// A file stream over the in-memory VFS. `unicode` selects the on-file
     /// encoding (4-byte-BE / UTF-8 vs 1 byte per char); the mutable name/mode/pos
-    /// state lives in [`Model::file_streams`] keyed by stream id so this stays `Copy`.
+    /// state lives in `Model::file_streams` keyed by stream id so this stays `Copy`.
     File { unicode: bool },
     /// A `SavedGame`-usage stream: a host conduit fully decoupled from the VFS.
     /// Opens successfully for every mode (Read succeeds even with no prior save,
@@ -1072,7 +1072,7 @@ pub enum StreamKind {
     Null,
     /// A read-only Blorb data-resource stream (`glk_stream_open_resource[_uni]`).
     /// The resource bytes + read cursor + text/binary flag live in
-    /// [`Model::resource_streams`] keyed by stream id so this stays `Copy`;
+    /// `Model::resource_streams` keyed by stream id so this stays `Copy`;
     /// `unicode` selects 32-bit vs Latin-1 read elements.
     Resource { unicode: bool },
 }
@@ -1826,7 +1826,7 @@ impl Model {
 
     /// `glk_fileref_does_file_exist`: the fileref is live AND its file has been
     /// written to the VFS — or, for a host-managed `SavedGame` slot, opened for
-    /// writing this session (see [`Model::saved_game_files`]).
+    /// writing this session (see `Model::saved_game_files`).
     pub fn fileref_exists(&self, fref: u32) -> bool {
         match self.fileref(fref) {
             Some(f) => self.files.contains_key(&f.name) || self.saved_game_files.contains_key(&f.name),
@@ -1866,7 +1866,7 @@ impl Model {
         self.saved_game_files.insert(name, size);
     }
 
-    /// Whether the file VFS has been mutated since the last [`clear_vfs_dirty`].
+    /// Whether the file VFS has been mutated since the last [`Self::clear_vfs_dirty`].
     pub fn vfs_dirty(&self) -> bool {
         self.vfs_dirty
     }

@@ -294,7 +294,7 @@ impl I7World {
     /// * a RAM address of an eight-byte record `{ kind tag, value }`, which is
     ///   what 6L38 through 10.1.2 store. When `value` is a string object the
     ///   text is a constant and is decoded here; when it is a routine the text
-    ///   has substitutions in it ("the [colour] door") and only running the
+    ///   has substitutions in it ("the \[colour\] door") and only running the
     ///   story can say what it says, so this returns `None`.
     ///
     /// Measured on `CounterfeitMonkey-11.gblorb`, 2459 of 2480 objects carrying

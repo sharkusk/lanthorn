@@ -1,173 +1,183 @@
-// Inform grammar (syntax) tables in a Glulx image — which verbs the story
-// knows, and what sentence shapes each of them accepts.
-//
-// ── Where the format is specified ────────────────────────────────────────────
-//
-// The Glulx specification describes the virtual machine and says nothing about
-// grammar: these tables are Inform's, not Glulx's. Two authoritative sources,
-// both consulted directly rather than recalled:
-//
-//   * **"The Glulx Inform Technical Reference"**, Andrew Plotkin — §4 "The
-//     Dictionary", §6 "Grammar Table", §7 "Actions Table". This is the Glulx
-//     counterpart of the Inform Technical Manual's §8.6, written by the person
-//     who designed the layout.
-//     <https://eblong.com/zarf/glulx/Glulx-Inform-Tech.html>
-//
-//   * **The Inform 6 compiler itself** — `tables.c::construct_storyfile_g`,
-//     which emits the tables in the order this module relies on, `verbs.c` for
-//     the `/`-alternation bits ($20 on the token before a slash, $10 on the
-//     token after one), and `text.c` for the dictionary record's shape and
-//     `header.h` for the `*_DFLAG` flag bits.
-//     <https://github.com/DavidKinder/Inform6>
-//
-// Cross-checked against `glulxdump` (Andrew Plotkin, shipped in the Glulxe
-// source tree), which dumps the same tables when handed their address.
-//
-// ── The layout ───────────────────────────────────────────────────────────────
-//
-//   grammar table   long   number of verbs
-//                   long   address of this verb's lines     × that many
-//
-//   per verb        byte   number of lines
-//                   per line:
-//                     short  action number
-//                     byte   flags ($01 = swap noun and second)
-//                     per token:
-//                       byte  token type
-//                       long  token data
-//                     byte   ENDIT (15)
-//
-//   actions table   long   number of actions
-//                   long   address of the action's routine  × that many
-//
-//   dictionary      long   number of words
-//                   per word, one of two record shapes — see below
-//
-// ── The dictionary has two record shapes, and `DICT_CHAR_SIZE` picks ─────────
-//
-// A Glulx dictionary stores its characters as bytes or as four-byte Unicode
-// values, chosen at compile time by `$DICT_CHAR_SIZE` (1 or 4; Inform 7's
-// `Use dictionary with Unicode` sets 4). Both shapes are in the Glulx Inform
-// Technical Reference §4, verbatim:
-//
-//     ...each word: {                  ...each word: {
-//         byte: 60                         byte: 60
-//                                          bytes[3]: unused (zero)
-//         bytes[]: lower-case text,        words[]: Unicode text,
-//             zero-padded (nine               zero-padded (nine words
-//             bytes by default)               by default)
-//         short: flags                     short: flags
-//         short: verb number               short: verb number
-//         short: unused (zero)             shorts[2]: unused (zero)
-//     }                                }
-//
-// and the arithmetic is `Inform6/inform.c`, which is where the compiler turns
-// `DICT_CHAR_SIZE` into the two numbers this module needs:
-//
-//     DICT_WORD_BYTES = DICT_WORD_SIZE*DICT_CHAR_SIZE;
-//     if (DICT_CHAR_SIZE == 1) {
-//         DICT_ENTRY_BYTE_LENGTH = (7+DICT_WORD_BYTES);
-//         DICT_ENTRY_FLAG_POS = (1+DICT_WORD_BYTES);
-//     }
-//     else {
-//         DICT_ENTRY_BYTE_LENGTH = (12+DICT_WORD_BYTES);
-//         DICT_ENTRY_FLAG_POS = (4+DICT_WORD_BYTES);
-//     }
-//
-// So with W = `DICT_WORD_SIZE`, a record is:
-//
-//   | field            | `DICT_CHAR_SIZE=1` | `DICT_CHAR_SIZE=4`         |
-//   |------------------|--------------------|----------------------------|
-//   | `$60` type tag   | byte at +0         | byte at +0, then 3 zeroes  |
-//   | text             | W bytes at +1      | W big-endian longs at +4   |
-//   | flags            | short at 1+W       | short at 4+4W              |
-//   | verb number      | short at 3+W       | short at 6+4W              |
-//   | adjective number | short at 5+W       | short at 8+4W              |
-//   | record length    | 7+W                | 12+4W                      |
-//
-// The reference adds that "in this form, the dictionary entry size is a
-// multiple of four. The compiler also takes care that a Unicode dictionary will
-// start at a word-aligned address" — which is what [`dict_char_size`] leans on,
-// alongside the three zero bytes after the tag.
-//
-// ── The verb number is inverted, and from *which* base is a version fact ─────
-//
-// A dictionary record does not hold a verb's grammar-table index; it holds that
-// index subtracted from a base, so that verbs count DOWN from the top of the
-// field (`text.c`: "The verb number is inverted (we count down from $FF/$FFFF)
-// and stored in #dict_par2"). On the Z-machine the base has always been $FF,
-// because the field is one byte. Glulx widened the field to two bytes — but for
-// its first decade the compiler kept writing the Z-machine's $FF into it, so
-// only the low half was ever used and no Glulx story could hold more than 255
-// verbs. `Inform6/verbs.c` through **v6.31**:
-//
-//     dictionary_add(English_verbs_given[i], …, 0xff-Inform_verb, 0);
-//     dictionary_set_verb_number(token_text, 0xff-no_Inform_verbs);
-//
-// **Inform 6.32 widened it**, and the same line reads:
-//
-//     (glulx_mode)?(0xffff-Inform_verb):(0xff-Inform_verb), 0);
-//
-// which is where it still is on master, moved into
-// `text.c::dictionary_set_verb_number`:
-//
-//     int flag2 = ((glulx_mode)?(0xffff-infverb):(0xff-infverb));
-//
-// So a Glulx dictionary uses one of exactly two bases, and which one is a
-// property of the compiler that built the file rather than of the format. See
-// [`verb_number_base`] for how this module decides between them — by checking
-// both against the grammar table's own verb count, which is decidable rather
-// than guessed, instead of trusting the "6.21"/"6.33" string Inform stamps into
-// its header block.
-//
-// Plotkin: "This is nearly identical to the grammar version 2 format in
-// Z-machine Inform. The only differences are that the token data is 4 bytes
-// long, and the switch flag is no longer stuck in the action number." Token
-// type bytes carry the same three fields as GV2 — top two bits the data kind,
-// next two the `/`-alternation state, bottom four the type.
-//
-// ── The hard part is not the format; it is finding the tables ────────────────
-//
-// **A Glulx image records the grammar table's address nowhere.** On the
-// Z-machine, header word $0E points at it (`zvm::grammar` relies on that). The
-// Glulx header names RAMSTART, EXTSTART, ENDMEM, the start function and the
-// string-decoding table, and nothing else; Inform's own 24-byte block after it
-// holds a layout tag, two version strings, a release number and a serial, and
-// no table addresses at all (`Inform6/src/files.c`, `GLULX_STATIC_ROM_SIZE`).
-//
-// This is not an oversight we can route around: `glulxdump` — written by the
-// designer of both Glulx and this layout — requires the address on the command
-// line (`-g <addr>`), and its header comment says so outright: "This whole
-// situation could be improved by adding a 'layout convention' field, at the
-// start of ROM, which could contain compiler-specific information about how to
-// decompile the file. Maybe someday."
-//
-// So the tables are *derived*, by a chain that is verified end to end rather
-// than guessed. Inform emits grammar, actions and dictionary contiguously and
-// in that order, and each is self-describing:
-//
-//   1. **The dictionary** is found first, because it has the strongest
-//      signature in the image: a run of records at a constant stride, each
-//      beginning with the byte $60, whose length equals the count word
-//      immediately before the run. Nothing else in memory looks like that.
-//   2. **The actions table** ends exactly where the dictionary begins (Inform
-//      inserts up to three bytes of alignment padding, and only for Unicode
-//      dictionaries). Its own count word must agree with its length, and every
-//      entry must be a plausible code address — below RAMSTART, since Glulx
-//      Inform keeps all code and strings in ROM.
-//   3. **The grammar table** ends exactly where the actions table begins, and
-//      its first verb pointer must equal `base + 4 + 4 * verb_count` exactly.
-//      Walking every verb, every line and every token of it must land on the
-//      actions table's first byte and not one byte elsewhere.
-//
-// A candidate that satisfies all three is not a guess. The last step is the one
-// that does the work, and it is worth being precise about how much: across the
-// 22 Glulx stories in the local corpus, **889 byte offsets satisfy the
-// pointer-array precondition alone** — 279 in one game — and **exactly 22
-// survive the walk**, one per story. The walk is what discriminates; scanning
-// backwards from the actions table merely means the right answer is usually the
-// first one tried. Where nothing survives, this module refuses — see
-// [`GrammarError`].
+//! Inform grammar (syntax) tables in a Glulx image — which verbs the story
+//! knows, and what sentence shapes each of them accepts.
+//!
+//! ── Where the format is specified ────────────────────────────────────────────
+//!
+//! The Glulx specification describes the virtual machine and says nothing about
+//! grammar: these tables are Inform's, not Glulx's. Two authoritative sources,
+//! both consulted directly rather than recalled:
+//!
+//!   * **"The Glulx Inform Technical Reference"**, Andrew Plotkin — §4 "The
+//!     Dictionary", §6 "Grammar Table", §7 "Actions Table". This is the Glulx
+//!     counterpart of the Inform Technical Manual's §8.6, written by the person
+//!     who designed the layout.
+//!     <https://eblong.com/zarf/glulx/Glulx-Inform-Tech.html>
+//!
+//!   * **The Inform 6 compiler itself** — `tables.c::construct_storyfile_g`,
+//!     which emits the tables in the order this module relies on, `verbs.c` for
+//!     the `/`-alternation bits ($20 on the token before a slash, $10 on the
+//!     token after one), and `text.c` for the dictionary record's shape and
+//!     `header.h` for the `*_DFLAG` flag bits.
+//!     <https://github.com/DavidKinder/Inform6>
+//!
+//! Cross-checked against `glulxdump` (Andrew Plotkin, shipped in the Glulxe
+//! source tree), which dumps the same tables when handed their address.
+//!
+//! ── The layout ───────────────────────────────────────────────────────────────
+//!
+//!   grammar table   long   number of verbs
+//!                   long   address of this verb's lines     × that many
+//!
+//!   per verb        byte   number of lines
+//!                   per line:
+//!                     short  action number
+//!                     byte   flags ($01 = swap noun and second)
+//!                     per token:
+//!                       byte  token type
+//!                       long  token data
+//!                     byte   ENDIT (15)
+//!
+//!   actions table   long   number of actions
+//!                   long   address of the action's routine  × that many
+//!
+//!   dictionary      long   number of words
+//!                   per word, one of two record shapes — see below
+//!
+//! ── The dictionary has two record shapes, and `DICT_CHAR_SIZE` picks ─────────
+//!
+//! A Glulx dictionary stores its characters as bytes or as four-byte Unicode
+//! values, chosen at compile time by `$DICT_CHAR_SIZE` (1 or 4; Inform 7's
+//! `Use dictionary with Unicode` sets 4). Both shapes are in the Glulx Inform
+//! Technical Reference §4, verbatim:
+//!
+//! ```text
+//!     ...each word: {                  ...each word: {
+//!         byte: 60                         byte: 60
+//!                                          bytes[3]: unused (zero)
+//!         bytes[]: lower-case text,        words[]: Unicode text,
+//!             zero-padded (nine               zero-padded (nine words
+//!             bytes by default)               by default)
+//!         short: flags                     short: flags
+//!         short: verb number               short: verb number
+//!         short: unused (zero)             shorts[2]: unused (zero)
+//!     }                                }
+//! ```
+//!
+//! and the arithmetic is `Inform6/inform.c`, which is where the compiler turns
+//! `DICT_CHAR_SIZE` into the two numbers this module needs:
+//!
+//! ```text
+//!     DICT_WORD_BYTES = DICT_WORD_SIZE*DICT_CHAR_SIZE;
+//!     if (DICT_CHAR_SIZE == 1) {
+//!         DICT_ENTRY_BYTE_LENGTH = (7+DICT_WORD_BYTES);
+//!         DICT_ENTRY_FLAG_POS = (1+DICT_WORD_BYTES);
+//!     }
+//!     else {
+//!         DICT_ENTRY_BYTE_LENGTH = (12+DICT_WORD_BYTES);
+//!         DICT_ENTRY_FLAG_POS = (4+DICT_WORD_BYTES);
+//!     }
+//! ```
+//!
+//! So with W = `DICT_WORD_SIZE`, a record is:
+//!
+//!   | field            | `DICT_CHAR_SIZE=1` | `DICT_CHAR_SIZE=4`         |
+//!   |------------------|--------------------|----------------------------|
+//!   | `$60` type tag   | byte at +0         | byte at +0, then 3 zeroes  |
+//!   | text             | W bytes at +1      | W big-endian longs at +4   |
+//!   | flags            | short at 1+W       | short at 4+4W              |
+//!   | verb number      | short at 3+W       | short at 6+4W              |
+//!   | adjective number | short at 5+W       | short at 8+4W              |
+//!   | record length    | 7+W                | 12+4W                      |
+//!
+//! The reference adds that "in this form, the dictionary entry size is a
+//! multiple of four. The compiler also takes care that a Unicode dictionary will
+//! start at a word-aligned address" — which is what `dict_char_size` leans on,
+//! alongside the three zero bytes after the tag.
+//!
+//! ── The verb number is inverted, and from *which* base is a version fact ─────
+//!
+//! A dictionary record does not hold a verb's grammar-table index; it holds that
+//! index subtracted from a base, so that verbs count DOWN from the top of the
+//! field (`text.c`: "The verb number is inverted (we count down from $FF/$FFFF)
+//! and stored in #dict_par2"). On the Z-machine the base has always been $FF,
+//! because the field is one byte. Glulx widened the field to two bytes — but for
+//! its first decade the compiler kept writing the Z-machine's $FF into it, so
+//! only the low half was ever used and no Glulx story could hold more than 255
+//! verbs. `Inform6/verbs.c` through **v6.31**:
+//!
+//! ```text
+//!     dictionary_add(English_verbs_given[i], …, 0xff-Inform_verb, 0);
+//!     dictionary_set_verb_number(token_text, 0xff-no_Inform_verbs);
+//! ```
+//!
+//! **Inform 6.32 widened it**, and the same line reads:
+//!
+//! ```text
+//!     (glulx_mode)?(0xffff-Inform_verb):(0xff-Inform_verb), 0);
+//! ```
+//!
+//! which is where it still is on master, moved into
+//! `text.c::dictionary_set_verb_number`:
+//!
+//! ```text
+//!     int flag2 = ((glulx_mode)?(0xffff-infverb):(0xff-infverb));
+//! ```
+//!
+//! So a Glulx dictionary uses one of exactly two bases, and which one is a
+//! property of the compiler that built the file rather than of the format. See
+//! `verb_number_base` for how this module decides between them — by checking
+//! both against the grammar table's own verb count, which is decidable rather
+//! than guessed, instead of trusting the "6.21"/"6.33" string Inform stamps into
+//! its header block.
+//!
+//! Plotkin: "This is nearly identical to the grammar version 2 format in
+//! Z-machine Inform. The only differences are that the token data is 4 bytes
+//! long, and the switch flag is no longer stuck in the action number." Token
+//! type bytes carry the same three fields as GV2 — top two bits the data kind,
+//! next two the `/`-alternation state, bottom four the type.
+//!
+//! ── The hard part is not the format; it is finding the tables ────────────────
+//!
+//! **A Glulx image records the grammar table's address nowhere.** On the
+//! Z-machine, header word $0E points at it (`zvm::grammar` relies on that). The
+//! Glulx header names RAMSTART, EXTSTART, ENDMEM, the start function and the
+//! string-decoding table, and nothing else; Inform's own 24-byte block after it
+//! holds a layout tag, two version strings, a release number and a serial, and
+//! no table addresses at all (`Inform6/src/files.c`, `GLULX_STATIC_ROM_SIZE`).
+//!
+//! This is not an oversight we can route around: `glulxdump` — written by the
+//! designer of both Glulx and this layout — requires the address on the command
+//! line (`-g <addr>`), and its header comment says so outright: "This whole
+//! situation could be improved by adding a 'layout convention' field, at the
+//! start of ROM, which could contain compiler-specific information about how to
+//! decompile the file. Maybe someday."
+//!
+//! So the tables are *derived*, by a chain that is verified end to end rather
+//! than guessed. Inform emits grammar, actions and dictionary contiguously and
+//! in that order, and each is self-describing:
+//!
+//!   1. **The dictionary** is found first, because it has the strongest
+//!      signature in the image: a run of records at a constant stride, each
+//!      beginning with the byte $60, whose length equals the count word
+//!      immediately before the run. Nothing else in memory looks like that.
+//!   2. **The actions table** ends exactly where the dictionary begins (Inform
+//!      inserts up to three bytes of alignment padding, and only for Unicode
+//!      dictionaries). Its own count word must agree with its length, and every
+//!      entry must be a plausible code address — below RAMSTART, since Glulx
+//!      Inform keeps all code and strings in ROM.
+//!   3. **The grammar table** ends exactly where the actions table begins, and
+//!      its first verb pointer must equal `base + 4 + 4 * verb_count` exactly.
+//!      Walking every verb, every line and every token of it must land on the
+//!      actions table's first byte and not one byte elsewhere.
+//!
+//! A candidate that satisfies all three is not a guess. The last step is the one
+//! that does the work, and it is worth being precise about how much: across the
+//! 22 Glulx stories in the local corpus, **889 byte offsets satisfy the
+//! pointer-array precondition alone** — 279 in one game — and **exactly 22
+//! survive the walk**, one per story. The walk is what discriminates; scanning
+//! backwards from the actions table merely means the right answer is usually the
+//! first one tried. Where nothing survives, this module refuses — see
+//! [`GrammarError`].
 
 use std::collections::BTreeMap;
 
@@ -277,7 +287,8 @@ pub struct Tables {
     pub dict_word_size: u32,
     /// `DICT_CHAR_SIZE` — 1 for a byte-valued dictionary, 4 for a Unicode one.
     /// See the module header for the two record shapes it selects between, and
-    /// [`dict_char_size`] for how this module decides which is in front of it.
+    /// `dict_char_size` (the free function) for how this module decides which is
+    /// in front of it.
     pub dict_char_size: u32,
 }
 

@@ -34,7 +34,7 @@
 //! accessors. And Glulx property ids are `u16` with **no** 1..=63 ceiling the
 //! way the Z-machine's are — Inform 6 assigns them sequentially at compile
 //! time with no per-format cap, so there is no spec bound to scan up to.
-//! [`MAX_PROP_SCAN`] is therefore a measured, generous headroom rather than an
+//! `MAX_PROP_SCAN` is therefore a measured, generous headroom rather than an
 //! authoritative limit: the highest property id anywhere in `advent.blb`'s
 //! whole object table is 276 (measured directly off the compiled image), and
 //! `door_dir` itself is a LIBRARY-assigned property (`english.h`, included
@@ -49,7 +49,7 @@ use crate::objects::ParseNames;
 const MAX_PROP_SCAN: u16 = 1000;
 
 /// The twelve directions a room's exit table may name (SQ-1264) — ordered and
-/// named exactly as `zvm::world::Compass`, so [`WorldModel::exit_props`] can be
+/// named exactly as `zvm::world::Compass`, so `WorldModel::exit_props` can be
 /// indexed by `dir as usize` directly and a caller translating from
 /// `mapper::direction::Direction` (which `gvm` also takes no dependency on)
 /// writes the same `match` shape on both engines.
@@ -70,7 +70,7 @@ pub enum Compass {
 }
 
 impl Compass {
-    /// All twelve, in [`WorldModel::exit_props`] index order.
+    /// All twelve, in `WorldModel::exit_props` index order.
     pub const ALL: [Compass; 12] = [
         Compass::N,
         Compass::S,

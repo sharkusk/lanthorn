@@ -512,7 +512,7 @@ impl ParseNames {
     }
 
     /// True when `ancestor` strictly contains `start`, at any depth.
-    /// Depth-bounded ([`MAX_DEPTH`]) so a cycle is false rather than a hang.
+    /// Depth-bounded (`MAX_DEPTH`) so a cycle is false rather than a hang.
     pub fn has_ancestor(&self, mem: &Memory, start: u32, ancestor: u32) -> bool {
         let mut cur = self.parent(mem, start);
         for _ in 0..MAX_DEPTH {
@@ -535,16 +535,16 @@ impl ParseNames {
     /// parser stand-in beside the real `selfobj`. So:
     ///
     /// 1. Candidates are objects whose `name` array holds one of
-    ///    [`PLAYER_WORDS`] — asked through [`ObjectWords::refers_to`], so a
+    ///    `PLAYER_WORDS` — asked through [`ObjectWords::refers_to`], so a
     ///    dictionary that truncates still matches — or whose printed short name
-    ///    is one of [`PLAYER_NAMES`].
+    ///    is one of `PLAYER_NAMES`.
     /// 2. Candidates contained by nothing are dropped where any candidate is
     ///    contained at all: Inform parks its off-stage doubles at the top level,
     ///    and a player stands somewhere.
     /// 3. One survivor needs no discrimination.
     /// 4. Otherwise the avatar is the one actually WHERE THE PLAYER IS: the
     ///    candidate whose containment chain reaches `room` — the game's
-    ///    `location`, which the app supplies by the two routes the module
+    ///    `location`, which the host supplies by the two routes the module
     ///    header describes, and `None` when it cannot.
     ///
     /// Step 4 is not a formality. City of Secrets ships **both** shapes at
@@ -615,15 +615,15 @@ impl ParseNames {
     /// 7; `None` when `addr` is not an object of this list.
     ///
     /// [`of`](ParseNames::of) already carries this, but only for an object with
-    /// a readable `name` array. This answers for one without — which is how the
-    /// app finds the ROOM the story has just printed a heading for, a room
+    /// a readable `name` array. This answers for one without — which is how a
+    /// host finds the ROOM the story has just printed a heading for, a room
     /// being an object nothing has to be able to refer to by word (SQ-1241).
     /// The Z-machine side has always found the room this way
     /// (`zvm::location::status_name_matches` against the status line).
     ///
     /// **Not always what the story prints** — see [`Self::printed_name`], which
     /// consults the `short_name` property first. This one deliberately stays
-    /// the hardware name, because the app matches a printed room heading
+    /// the hardware name, because a host matches a printed room heading
     /// against it: a `short_name` that is one word for a whole class of rooms
     /// ("Maze") matches dozens of objects at once and identifies none of them,
     /// where the hardware name is unique per object even when it is only the
@@ -711,7 +711,7 @@ impl ParseNames {
     }
 
     /// `(data address, length in WORDS)` of object `addr`'s property `prop`
-    /// (SQ-1264) — the general form of [`Self::name_array`] (property 1 only,
+    /// (SQ-1264) — the general form of `Self::name_array` (property 1 only,
     /// with the early stop that assumes id 1 sorts first). `door_dir`/`*_to`/
     /// `door_to` (see `crate::world`) are ordinary user-numbered properties
     /// that can sit anywhere in the table, so this walks past property 1
@@ -720,7 +720,7 @@ impl ParseNames {
     ///
     /// `None` when `addr` is not one of ours, it carries no property table, or
     /// simply does not have `prop` at all — same "absent" contract as
-    /// [`Self::name_array`].
+    /// `Self::name_array`.
     pub fn property(&self, mem: &Memory, addr: u32, prop: u16) -> Option<(u32, u32)> {
         if !self.is_object(mem, addr) {
             return None;

@@ -1,8 +1,8 @@
-// Glulx image header — GLULX_NOTES.md §1, §2.
-//
-// The first 36 bytes are nine big-endian 32-bit fields. We validate the magic,
-// the version (major 2 or 3), and the memory-map invariants (256-byte aligned,
-// RAMSTART ≤ EXTSTART ≤ ENDMEM).
+//! Glulx image header — GLULX_NOTES.md §1, §2.
+//!
+//! The first 36 bytes are nine big-endian 32-bit fields. We validate the magic,
+//! the version (major 2 or 3), and the memory-map invariants (256-byte aligned,
+//! RAMSTART ≤ EXTSTART ≤ ENDMEM).
 
 use crate::error::GError;
 

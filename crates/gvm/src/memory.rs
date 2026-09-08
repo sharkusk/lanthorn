@@ -1,10 +1,10 @@
-// Glulx memory model — GLULX_NOTES.md §2.
-//
-// The full ENDMEM span is allocated as a `Vec<u8>`. `[0, EXTSTART)` is copied
-// from the image; `[EXTSTART, ENDMEM)` is zero-initialized. All multi-byte
-// accesses are big-endian. Every access is bounds-checked: out-of-range reads
-// return `None` and out-of-range writes return `Err`, so malformed programs
-// never panic.
+//! Glulx memory model — GLULX_NOTES.md §2.
+//!
+//! The full ENDMEM span is allocated as a `Vec<u8>`. `[0, EXTSTART)` is copied
+//! from the image; `[EXTSTART, ENDMEM)` is zero-initialized. All multi-byte
+//! accesses are big-endian. Every access is bounds-checked: out-of-range reads
+//! return `None` and out-of-range writes return `Err`, so malformed programs
+//! never panic.
 
 use crate::error::GError;
 use crate::header::{parse_header, Header};
@@ -75,7 +75,7 @@ impl Memory {
     /// The whole-image checksum word stored in the header (bytes 0x20-0x23 —
     /// GLULX_NOTES.md §"Header field layout" / Glulx spec §1.4: "the sum of the
     /// whole initial memory as 32-bit ints"), exactly as the compiler wrote it.
-    /// Not itself a validity check — see [`Self::checksum_ok`] for that — just
+    /// Not itself a validity check — see `Self::checksum_ok` for that — just
     /// the raw field, which a host can use as part of an identity for the image
     /// that produced a piece of state it persists across runs (e.g. lanthorn's
     /// Glulx room-lock sidecar, SQ-1305: a story rebuilt under the same

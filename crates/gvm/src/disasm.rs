@@ -1,6 +1,6 @@
 //! Glulx disassembler + lazy discovery cache for the debug inspector (SQ-0465).
 //!
-//! Built on the shared [`crate::decode`] primitives (same opcode-number decode
+//! Built on the shared `crate::decode` primitives (same opcode-number decode
 //! the interpreter uses). Discovery is cheap and eager (function headers + call
 //! graph + a type-validated linear scan of ROM); *rendering* disassembly text is
 //! lazy and windowed — an I7 image is multi-MB, so we never format the whole

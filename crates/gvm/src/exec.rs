@@ -1,13 +1,13 @@
-// Glulx execution engine — GLULX_NOTES.md §4 (stack, call frames, calling
-// convention). Instruction decode/dispatch and the run loop are layered on in
-// later tasks.
-//
-// The stack is a single byte-addressed buffer (`stack`) sized to the header's
-// stack size, with a stack pointer `sp` (bytes used) and a frame pointer `fp`.
-// A call frame is laid out exactly as the spec's diagram: FrameLen, LocalsPos,
-// the locals-format list, the locals (each at natural alignment), then the
-// value-stack region. A four-word "call stub" sits just below each non-start
-// frame so a return can restore the caller.
+//! Glulx execution engine — GLULX_NOTES.md §4 (stack, call frames, calling
+//! convention). Instruction decode/dispatch and the run loop are layered on in
+//! later tasks.
+//!
+//! The stack is a single byte-addressed buffer (`stack`) sized to the header's
+//! stack size, with a stack pointer `sp` (bytes used) and a frame pointer `fp`.
+//! A call frame is laid out exactly as the spec's diagram: FrameLen, LocalsPos,
+//! the locals-format list, the locals (each at natural alignment), then the
+//! value-stack region. A four-word "call stub" sits just below each non-start
+//! frame so a return can restore the caller.
 
 use crate::error::GError;
 use crate::glk::{self, GlkBackend, GlkEvent, GlkStyle, Model, StreamKind, WinType};
@@ -216,7 +216,7 @@ struct PendingSaveLoad {
 }
 
 /// What the host needs to service a suspended `@save`/`@restore`
-/// ([`StepResult::SaveRequest`]/[`RestoreRequest`]): the game's target file
+/// ([`StepResult::SaveRequest`]/[`StepResult::RestoreRequest`]): the game's target file
 /// `name` and whether it is the player's prompted SAVE/RESTORE verb.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 #[non_exhaustive]
@@ -819,7 +819,7 @@ impl Machine {
     /// wants a fresh game per launch calls [`Machine::set_rng_seed`] before the
     /// boot drive — lanthorn seeds from the `random_seed` config key, or from
     /// entropy when that key is unset (SQ-0811). Also the nonzero fallback for
-    /// [`Machine::entropy_seed`] and for a state that reached 0.
+    /// `Machine::entropy_seed` and for a state that reached 0.
     pub const DEFAULT_SEED: u32 = 0x2BAD_C0DE;
 
     /// Build a machine over `mem`, entering the start function (no arguments).
@@ -2945,7 +2945,7 @@ impl Machine {
 
     /// The live call stack, innermost (current) frame first — each frame's return
     /// PC, locals, and working value-stack operands. Read-only (never mutates the
-    /// machine); the debug inspector renders it, and [`Machine::build_trace`] wraps
+    /// machine); the debug inspector renders it, and `Machine::build_trace` wraps
     /// it into a crash [`StackTrace`](crate::trace::StackTrace).
     pub fn call_frames(&self) -> Vec<crate::trace::TraceFrame> {
         use crate::trace::TraceFrame;
@@ -5143,7 +5143,7 @@ impl Machine {
     /// Take what the host's input line should hold for the newest line-input
     /// request, if one has appeared since the last call. One-shot per request, so
     /// re-polling never re-inserts it. `Some("")` means "start empty" — see
-    /// [`Self::line_seed`].
+    /// `Self::line_seed`.
     pub fn take_line_seed(&mut self) -> Option<String> {
         self.line_seed.take()
     }
