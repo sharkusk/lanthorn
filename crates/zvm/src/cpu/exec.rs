@@ -5552,6 +5552,61 @@ impl Machine {
         crate::quetzal::save_quetzal(self)
     }
 
+    /// Serialise the current SCREEN to a versioned byte buffer
+    /// ([`crate::screen_snapshot`]).
+    ///
+    /// The companion to [`Machine::save_quetzal`] for a host snapshot, and needed
+    /// because Quetzal deliberately carries no screen state: the standard assumes
+    /// the *story* repaints after an in-game `@restore`. A host "Save State" gets
+    /// no such repaint — it swaps dynamic memory under a game that never learns it
+    /// happened — so the host writes this beside the Quetzal buffer and hands it
+    /// back on the way in.
+    ///
+    /// Backend- and terminal-neutral: Version 6 geometry travels in native
+    /// pixels, and there are no cell coordinates, font metrics or host state in
+    /// it. The module docs list the handful of fields deliberately left out.
+    pub fn screen_snapshot(&self) -> Vec<u8> {
+        crate::screen_snapshot::encode(&self.screen)
+    }
+
+    /// Install a screen from a buffer written by [`Machine::screen_snapshot`].
+    ///
+    /// # Where this goes in a host restore
+    ///
+    /// After [`Machine::restore_file`] (or `restore_quetzal`), not before: the
+    /// memory restore blanks the upper window on purpose, because what is in it
+    /// belongs to the moment the host just left. This puts the right screen back
+    /// over that blank.
+    ///
+    /// **Then re-declare the screen SIZE.** A restore into a different terminal is
+    /// a resize the game never saw: the snapshot carries the grid geometry of the
+    /// session that WROTE it, which silently undoes the header dimensions the
+    /// restore just re-stamped for this host. `lanthorn` calls
+    /// `reconcile_restored_screen_size` immediately after this, which is nothing
+    /// more than [`Machine::set_screen_dims`] with the current pane's rows and
+    /// columns — routing the restored screen through the same path a live resize
+    /// takes. Version 6 is exempt there, laying out on its own fixed native pixel
+    /// screen with no terminal geometry to reconcile.
+    ///
+    /// Two facts that live in two places and only one of which is in here are the
+    /// host's to re-sync afterwards: the output sink's buffering (from
+    /// [`ScreenState::buffer_mode`](crate::screen::ScreenState::buffer_mode), ZMSD
+    /// §7.2.1) and, for Version 6, the mirrored `current_fg`/`current_bg` pair,
+    /// which the restored window table is the authority for.
+    ///
+    /// # Errors
+    ///
+    /// [`ZError::ScreenSnapshotVersion`](crate::error::ZError::ScreenSnapshotVersion)
+    /// for a buffer from a newer build (it names both version numbers) and
+    /// [`ZError::BadScreenSnapshot`](crate::error::ZError::BadScreenSnapshot) for
+    /// one that is not a snapshot, is truncated, or is unreadable. The machine is
+    /// untouched on either — a screen that cannot be read is the case Quetzal was
+    /// designed for, so the honest fallback is to let the story repaint.
+    pub fn restore_screen_snapshot(&mut self, data: &[u8]) -> Result<(), crate::error::ZError> {
+        self.screen = crate::screen_snapshot::decode(data)?;
+        Ok(())
+    }
+
     /// The PC of the `read`/`read_char` instruction the machine is suspended on
     /// while awaiting input, if any. `step()` advances `state.pc` PAST the read
     /// before it suspends (so the resume lands on the code that consumes the input),

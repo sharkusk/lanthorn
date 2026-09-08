@@ -117,6 +117,7 @@ pub fn grey_rgb(palette: Palette, n: u8) -> (u8, u8, u8) {
 
 /// One character cell in the upper window.
 #[derive(Debug, Clone, Copy)]
+#[non_exhaustive]
 pub struct Cell {
     pub ch: char,
     pub style: u8,
@@ -128,15 +129,42 @@ impl Default for Cell {
         Cell { ch: ' ', style: 0, fg: ZColour::Default, bg: ZColour::Default }
     }
 }
+impl Cell {
+    /// One cell: the character, its ZMSD §8.7.2 style bitmask, and its
+    /// foreground/background pens.
+    ///
+    /// The constructor rather than a literal because [`Cell`] is
+    /// `#[non_exhaustive]` — it has grown before and will again — and a host
+    /// that builds cells (a renderer feeding its own grid back in) should not be
+    /// broken by the next field. Fields stay `pub`, so reading and assigning are
+    /// unchanged.
+    pub fn new(ch: char, style: u8, fg: ZColour, bg: ZColour) -> Cell {
+        Cell { ch, style, fg, bg }
+    }
+}
 
 /// Upper (status) window character grid.
 #[derive(Debug, Default, Clone)]
+#[non_exhaustive]
 pub struct UpperWindow {
     pub cols: u16,
     pub rows: u16,
     pub cells: Vec<Cell>,
 }
 impl UpperWindow {
+    /// A grid of exactly `cols x rows`, built from cells that are already laid out
+    /// row-major.
+    ///
+    /// `cells` is padded or truncated to fit, because every consumer — this
+    /// module's own `r * cols + c` reads included — indexes straight into it, so
+    /// a vector that disagrees with its own dimensions is a panic waiting for the
+    /// next repaint. That makes this the right door for a RESTORE, whose numbers
+    /// came off a disk this run did not write (SQ-0647); a live resize wants
+    /// [`UpperWindow::resize`] or [`UpperWindow::resize_preserving`] instead.
+    pub fn from_cells(cols: u16, rows: u16, mut cells: Vec<Cell>) -> UpperWindow {
+        cells.resize(cols as usize * rows as usize, Cell::default());
+        UpperWindow { cols, rows, cells }
+    }
     pub fn resize(&mut self, rows: u16, cols: u16) {
         self.rows = rows;
         self.cols = cols;
@@ -331,6 +359,7 @@ impl UpperWindow {
 /// One v6 window; its fields ARE the ZMSD window-property array (index =
 /// property number, ZMSD 1.1 §8.8.3.2).
 #[derive(Debug, Clone, Default)]
+#[non_exhaustive]
 pub struct ZWindow {
     pub y_coord: u16,          // prop 0  (pixels)
     pub x_coord: u16,          // prop 1
@@ -475,6 +504,7 @@ pub struct GridPen {
 /// A run is only removed or trimmed by later paint over the same pixels
 /// ([`V6Windows::paint_run`]) or an erase ([`V6Windows::erase_screen_rect`]).
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
 pub struct V6Text {
     pub y: u16,
     pub x: u16,
@@ -520,6 +550,16 @@ impl V6Text {
         V6Text { y, x, text, style, fg, bg, grow: cell.row_of(y), gcol: cell.col_of(x) }
     }
 
+    /// A painted run whose grid cell is stated rather than derived — the form a
+    /// RESTORE takes, because on a proportional machine `(row_of(y), col_of(x))`
+    /// is no longer the cell the pen was actually at and cannot be recovered from
+    /// the pixels (SQ-1009). [`V6Text::derived`] is the constructor for everything
+    /// that has no grid standing behind it.
+    #[allow(clippy::too_many_arguments)]
+    pub fn at_cell(y: u16, x: u16, text: String, style: u8, fg: ZColour, bg: ZColour, grow: u16, gcol: u16) -> V6Text {
+        V6Text { y, x, text, style, fg, bg, grow, gcol }
+    }
+
     /// Pixel width of this run as the machine DREW it (SQ-0917, SQ-1009).
     ///
     /// The run's own style byte is part of the measurement: a bold run on a
@@ -537,6 +577,20 @@ impl V6Text {
 pub const NEVER_MORE: i16 = -999;
 
 impl ZWindow {
+    /// An empty window at a 1-based pixel origin and pixel size — ZMSD §8.8.3.2
+    /// properties 0–3, the four every caller actually names — with every other
+    /// property, the grid, the colours and the paint layers left at their
+    /// defaults.
+    ///
+    /// Fields stay `pub`, so anything else is one assignment away
+    /// (`w.attributes = 15`) or a [`ZWindow::put_prop`] call by property number.
+    /// The constructor exists because [`ZWindow`] is `#[non_exhaustive]`: it has
+    /// grown three paint layers and a grid pen already, and a host holding a
+    /// struct literal would have broken at each.
+    pub fn new(y_coord: u16, x_coord: u16, y_size: u16, x_size: u16) -> ZWindow {
+        ZWindow { y_coord, x_coord, y_size, x_size, ..Default::default() }
+    }
+
     /// ZMSD §8.8.3.1 attribute 0 ("wrapping").
     pub fn wrapping(&self) -> bool {
         self.attributes & 0b0001 != 0
@@ -907,9 +961,24 @@ impl ZWindow {
 
 /// The v6 8-window table (ZMSD §8.4): windows 0–7, addressed in pixels.
 #[derive(Debug, Clone, Default)]
+#[non_exhaustive]
 pub struct V6Windows {
     pub windows: [ZWindow; 8],
     pub current: u8, // 0–7
+}
+
+impl V6Windows {
+    /// A window table with `current` CLAMPED into 0..=7.
+    ///
+    /// ZMSD §8.4 has exactly eight windows and `windows[current]` is a fixed
+    /// array index every host screen read performs, so a number from outside this
+    /// crate — a restored snapshot, a test fixture — panics on the first frame
+    /// rather than at the door it came through (SQ-0647). Clamping keeps the
+    /// window table, which is still good; the story selects a window again the
+    /// moment it draws.
+    pub fn new(windows: [ZWindow; 8], current: u8) -> V6Windows {
+        V6Windows { windows, current: current.min(7) }
+    }
 }
 
 /// Where each glyph of `run` starts, as offsets from the run's own origin, with
@@ -1233,6 +1302,7 @@ impl V6Windows {
 /// For v4+ the host reads `upper_window_rows`, `current_window`, `text_style`,
 /// and `cursor` to manage windows.
 #[derive(Debug, Clone)]
+#[non_exhaustive]
 pub struct ScreenState {
     /// Number of rows in the upper (status) window; 0 means no upper window.
     pub upper_window_rows: u16,

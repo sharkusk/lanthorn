@@ -12,4 +12,13 @@ pub enum ZError {
     Truncated,
     /// The save file is for a different story (release/serial/checksum mismatch).
     SaveMismatch,
+    /// A screen snapshot ([`crate::screen_snapshot`]) is not a snapshot at all,
+    /// is truncated, or is otherwise unreadable. Unlike a save file this carries
+    /// no story identity, so there is nothing here to mismatch — only to be
+    /// malformed.
+    BadScreenSnapshot,
+    /// A screen snapshot was written by a NEWER format version than this build
+    /// understands. Both numbers are named because the only useful thing a host
+    /// can tell the player is which build wrote it and which is reading it.
+    ScreenSnapshotVersion { found: u16, supported: u16 },
 }

@@ -170,6 +170,7 @@ pub mod memory;
 pub mod objects;
 pub mod quetzal;
 pub mod screen;
+pub mod screen_snapshot;
 pub mod text;
 pub mod world;
 
