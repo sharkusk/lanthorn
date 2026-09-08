@@ -5,6 +5,34 @@
 
 use crate::memory::Memory;
 
+/// Hard cap on Z-machine call-stack depth (`State::frames.len()`).
+///
+/// ZMSD §6.3.3 states the "usage" of a routine call as 4 plus its local
+/// count, and that a story may assume the *total* usage across the whole
+/// recursive chain never reaches 1024 words — but adds that "more recent
+/// games have required a much larger stack size than this allows for", and
+/// names two real interpreters that grant it: Windows Frotz at 32,768 words
+/// and nfrotz at 61,440 words. A routine's local count is capped at 15
+/// (ZMSD §6.3), so nfrotz's budget — the largest the Standard names — bounds
+/// even the deepest *legal* recursion to at most 61,440 / (4 + 15) ≈ 3,233
+/// calls. This cap is an order of magnitude above that ceiling (the
+/// Standard's own remark is that old Infocom games recurse at most ~90
+/// deep), so no real story comes near it, while a runaway self-recursive
+/// routine is still stopped well short of growing `Vec<Frame>` into an OOM
+/// abort — 32,768 frames is a few hundred KB, not gigabytes (SQ-1395).
+pub const MAX_CALL_DEPTH: usize = 32_768;
+
+/// Hard cap on the shared evaluation stack's length, in words — the other
+/// half of ZMSD §6.3.3's "usage" budget, and the one [`MAX_CALL_DEPTH`]
+/// alone cannot bound: a routine that pushes without ever calling (`push`,
+/// or a store to variable 0) never creates a new [`Frame`], so it can grow
+/// `eval_stack` without bound purely by looping. Set an order of magnitude
+/// above nfrotz's 61,440-word stack — the most generous interpreter ZMSD
+/// §6.3.3 names — for the same reason as the depth cap: no known real story
+/// approaches even nfrotz's figure, and 614,400 words is ~1.2 MB, trivial to
+/// hold and far short of an OOM (SQ-1395).
+pub const MAX_EVAL_STACK: usize = 614_400;
+
 /// A single call frame on the Z-machine call stack.
 #[derive(Debug)]
 pub struct Frame {
@@ -99,6 +127,14 @@ pub fn poke_stack(state: &mut State, val: u16) {
 pub fn write_var(state: &mut State, mem: &mut Memory, var: u8, val: u16) {
     match var {
         0x00 => {
+            // MAX_EVAL_STACK guards a hostile/buggy loop that pushes without
+            // ever popping or calling — no new Frame is created, so
+            // MAX_CALL_DEPTH cannot see it. Drop the push and fault rather
+            // than growing the Vec without bound (SQ-1395).
+            if state.eval_stack.len() >= MAX_EVAL_STACK {
+                state.fault = Some(format!("evaluation stack overflow (limit {MAX_EVAL_STACK} words)"));
+                return;
+            }
             state.eval_stack.push(val);
         }
         0x01..=0x0F => {
@@ -136,6 +172,22 @@ pub fn call_routine(
 ) {
     if packed_addr == 0 {
         // Special case: return false/0 immediately without pushing a frame
+        if let Some(sv) = store_var {
+            write_var(state, mem, sv, 0);
+        }
+        return;
+    }
+
+    // MAX_CALL_DEPTH guards runaway recursion — a routine with no base case
+    // calling itself (directly or through a cycle) would otherwise grow
+    // `state.frames` without bound until the host's process is OOM-killed,
+    // which `step()` cannot report or interrupt. Treat like the invalid-
+    // routine cases below: store 0 / discard, push no frame, but ALSO latch
+    // a fault so the host (whose only signal is `step()`'s return value)
+    // learns the story is misbehaving rather than seeing an unexplained
+    // string of no-op calls (SQ-1395).
+    if state.frames.len() >= MAX_CALL_DEPTH {
+        state.fault = Some(format!("call stack depth exceeded (limit {MAX_CALL_DEPTH} frames)"));
         if let Some(sv) = store_var {
             write_var(state, mem, sv, 0);
         }

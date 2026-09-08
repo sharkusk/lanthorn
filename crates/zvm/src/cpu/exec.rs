@@ -1892,6 +1892,22 @@ impl Machine {
         }
     }
 
+    /// Does a `len`-byte region starting at `addr` lie entirely inside this
+    /// story's memory? `writable` selects which region: the whole story
+    /// (`false`, for a read) or only dynamic memory below `static_mem_base`
+    /// (`true`, for a write) — ZMSD §1.1. `len == 0` is trivially in bounds.
+    ///
+    /// Used by `copy_table` and `print_table` (ZMSD §15) to fault a table
+    /// that cannot exist up front, rather than running a bounded-but-wasted
+    /// loop to discover the same fact one byte at a time (SQ-1395).
+    fn table_region_in_memory(&self, addr: u32, len: u32, writable: bool) -> bool {
+        if len == 0 {
+            return true;
+        }
+        let limit = if writable { self.mem.static_mem_base() as u32 } else { self.mem.len() as u32 };
+        addr.saturating_add(len) <= limit
+    }
+
     // -----------------------------------------------------------------------
     // VAR opcodes
     // -----------------------------------------------------------------------
@@ -2944,24 +2960,49 @@ impl Machine {
             0x1D => {
                 let first = ops.first().copied().unwrap_or(0) as u32;
                 let second = ops.get(1).copied().unwrap_or(0) as u32;
+                // ZMSD §15: `size` is a signed 16-bit quantity, so its
+                // magnitude is at most 32,768 (`i16::MIN`) — this loop is
+                // inherently short, never the print_table shape below. What
+                // is unchecked is whether `first`/`second`, both raw
+                // story-controlled u16s, name a region this story's memory
+                // actually has: `first..first+size` must be readable, and
+                // whichever of `first`/`second` receives the zero-fill or
+                // copy must lie in WRITABLE (dynamic) memory (ZMSD §1.1).
+                // The per-byte read_byte/write_byte already fault safely on
+                // an out-of-bounds access; checking the whole span first
+                // avoids partial, silently-discarded work and reports the
+                // fault before doing any of it (SQ-1395).
                 let size = ops.get(2).copied().unwrap_or(0) as i16;
+                let n = size.unsigned_abs() as u32;
                 if second == 0 {
-                    for i in 0..size.unsigned_abs() as u32 {
+                    if !self.table_region_in_memory(first, n, true) {
+                        self.mem.write_byte(first.saturating_add(n).saturating_sub(1), 0);
+                        return StepResult::Continue;
+                    }
+                    for i in 0..n {
                         self.mem.write_byte(first + i, 0);
                     }
-                } else if size < 0 {
-                    // forced forward copy; overlap corruption is intentional
-                    let n = size.unsigned_abs() as u32;
-                    for i in 0..n {
-                        let b = self.mem.read_byte(first + i);
-                        self.mem.write_byte(second + i, b);
-                    }
                 } else {
-                    // positive: copy avoiding corruption — snapshot the source first
-                    let n = size as u32;
-                    let src: Vec<u8> = (0..n).map(|i| self.mem.read_byte(first + i)).collect();
-                    for (i, &b) in src.iter().enumerate() {
-                        self.mem.write_byte(second + i as u32, b);
+                    if !self.table_region_in_memory(first, n, false) {
+                        self.mem.read_byte(first.saturating_add(n).saturating_sub(1));
+                        return StepResult::Continue;
+                    }
+                    if !self.table_region_in_memory(second, n, true) {
+                        self.mem.write_byte(second.saturating_add(n).saturating_sub(1), 0);
+                        return StepResult::Continue;
+                    }
+                    if size < 0 {
+                        // forced forward copy; overlap corruption is intentional
+                        for i in 0..n {
+                            let b = self.mem.read_byte(first + i);
+                            self.mem.write_byte(second + i, b);
+                        }
+                    } else {
+                        // positive: copy avoiding corruption — snapshot the source first
+                        let src: Vec<u8> = (0..n).map(|i| self.mem.read_byte(first + i)).collect();
+                        for (i, &b) in src.iter().enumerate() {
+                            self.mem.write_byte(second + i as u32, b);
+                        }
                     }
                 }
                 StepResult::Continue
@@ -2985,6 +3026,25 @@ impl Machine {
                 let width = ops.get(1).copied().unwrap_or(0).min(GRID_CELL_CAP);
                 let height = ops.get(2).copied().unwrap_or(1).clamp(1, GRID_CELL_CAP);
                 let skip = ops.get(3).copied().unwrap_or(0) as u32;
+                // GRID_CELL_CAP bounds the WORST-CASE cost of this loop, but
+                // says nothing about whether the specific table this story
+                // named is backed by real memory: a `height`-row, `width`-
+                // wide table with `skip` bytes of gap between rows spans
+                // `height * (width + skip)` bytes starting at `addr` (the
+                // last row's trailing skip is never read, so this slightly
+                // overstates the true footprint — a safe direction to
+                // round). If that span runs past the end of this story's
+                // memory, the table cannot exist: fault immediately rather
+                // than spending up to GRID_CELL_CAP² iterations of
+                // read_byte/print_text discovering the same thing one byte
+                // at a time (SQ-1395; each individual OOB read would still
+                // safely latch on its own — this just skips the wasted work
+                // that would happen first).
+                let span = u32::from(width).saturating_add(skip).saturating_mul(u32::from(height));
+                if !self.table_region_in_memory(addr, span, false) {
+                    self.mem.read_byte(addr.saturating_add(span).saturating_sub(1));
+                    return StepResult::Continue;
+                }
                 let start_col = self.screen.cursor_col;
                 let start_row = self.screen.cursor_row;
                 for row in 0..height {
@@ -12898,6 +12958,94 @@ pub(crate) mod tests {
         assert!(
             dt < std::time::Duration::from_secs(2),
             "print_table(0xFFFF, 0xFFFF) must return control to the host promptly, took {dt:?}",
+        );
+    }
+
+    /// SQ-1395: a `print_table` whose span overruns this story's memory must
+    /// fault immediately — deterministically, not "either answer is fine" —
+    /// and well under the wall-clock bound that would catch a regression to
+    /// the pre-SQ-1030 29 s/4.3 GB behaviour.
+    #[test]
+    fn hostile_print_table_span_overrunning_memory_faults() {
+        let mut body = Vec::new();
+        // addr=0x40 (just past the routine header), width=height=0xFFFF
+        // (clamped to GRID_CELL_CAP=1024 each) → a 1024x1024 span from a
+        // story whose whole buffer is 0x400 (1024) bytes: nowhere close.
+        emit_var_large(&mut body, 0x1E, &[0x0040, 0xFFFF, 0xFFFF]);
+        let mut m = Machine::new(Memory::new(v6_boot_story(&body)).unwrap());
+        let t0 = std::time::Instant::now();
+        let r = m.step();
+        let dt = t0.elapsed();
+        assert_eq!(r, StepResult::Fault, "an unbacked table span must fault");
+        assert!(
+            dt < std::time::Duration::from_millis(50),
+            "the up-front span check must fault before looping, took {dt:?}",
+        );
+    }
+
+    /// SQ-1395: `copy_table` writing past the end of memory must fault rather
+    /// than silently discarding the illegal tail (or the whole operation).
+    #[test]
+    fn hostile_copy_table_past_end_of_memory_faults() {
+        let mut body = Vec::new();
+        // copy_table(first=0x0040, second=0x03F0, size=0x0100): the story is
+        // 0x400 bytes, so writing 256 bytes starting at 0x03F0 runs 240
+        // bytes past the end.
+        emit_var_large(&mut body, 0x1D, &[0x0040, 0x03F0, 0x0100]);
+        let mut m = Machine::new(Memory::new(v6_boot_story(&body)).unwrap());
+        assert_eq!(m.step(), StepResult::Fault, "an unbacked copy_table span must fault");
+    }
+
+    /// SQ-1395: `copy_table` zero-filling past `static_mem_base` (the
+    /// `second == 0` form) must fault even where every byte touched is
+    /// still inside `mem.len()` — this is a WRITE bound (dynamic memory
+    /// only, ZMSD §1.1), not merely a read bound, so a naive "does this fit
+    /// the buffer" check would wrongly let it through. Extend the story
+    /// past `static_mem_base` with real (readable) bytes so the two bounds
+    /// genuinely differ.
+    #[test]
+    fn hostile_copy_table_zero_fill_past_static_mem_base_faults() {
+        let mut body = Vec::new();
+        // copy_table(first=0x03F0, second=0, size=0x0100): static_mem_base
+        // is 0x0400 in sample_story, so this zero-fill starts inside
+        // dynamic memory but runs 240 bytes into static memory.
+        emit_var_large(&mut body, 0x1D, &[0x03F0, 0x0000, 0x0100]);
+        let mut buf = v6_boot_story(&body);
+        buf.resize(0x500, 0); // real, readable bytes past static_mem_base
+        let mut m = Machine::new(Memory::new(buf).unwrap());
+        assert_eq!(m.step(), StepResult::Fault, "a zero-fill crossing into static memory must fault");
+    }
+
+    /// SQ-1395: a routine with no base case that calls itself must fault at
+    /// `MAX_CALL_DEPTH` frames rather than growing `State::frames` without
+    /// bound to an OOM abort. Build a v5 routine at 0x40 (packed 0x0010)
+    /// whose only instruction is a `call_vs` of itself, and enter its body
+    /// directly (no outer frame needed — the first recursive call pushes
+    /// its own).
+    #[test]
+    fn hostile_self_recursion_faults_at_call_depth_cap() {
+        let mut buf = sample_story(5);
+        buf[0x40] = 0x00; // routine header: 0 locals
+        let call = assemble(&[Asm::CallVs(0x0010, vec![], DG(0))]);
+        for (i, &b) in call.iter().enumerate() {
+            buf[0x41 + i] = b;
+        }
+        let mem = Memory::new(buf).unwrap();
+        let mut m = Machine::new(mem);
+        m.state.pc = 0x41;
+
+        let mut result = StepResult::Continue;
+        for _ in 0..(crate::cpu::state::MAX_CALL_DEPTH + 10) {
+            result = m.step();
+            if result == StepResult::Fault {
+                break;
+            }
+        }
+        assert_eq!(result, StepResult::Fault, "runaway recursion must fault, not OOM");
+        assert!(
+            m.state.frames.len() <= crate::cpu::state::MAX_CALL_DEPTH,
+            "frame count must never exceed the cap, got {}",
+            m.state.frames.len(),
         );
     }
 }
