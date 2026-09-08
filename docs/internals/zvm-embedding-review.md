@@ -223,6 +223,8 @@ than outside it, because inside it there is no terminal to be tempted by.
 
 Additive.
 
+**Resolved (SQ-1401, 2026-09-08).** `crates/zvm/src/screen_snapshot.rs` holds a versioned, dependency-free binary blob (magic `ZSCR`, `u16` version 1, big-endian like Quetzal) with `encode` / `decode` and `Machine::screen_snapshot()` / `restore_screen_snapshot(&[u8])`. Carries the classic screen state, the upper-window grid with each cell's fg/bg (prior mirrors lost per-cell colours across restores), and all eight v6 windows: sixteen properties each, grid, texts, prose, streamed and retired runs. Six transient fields deliberately dropped with a reason each; for v6 `current_fg` / `current_bg` encode as Default because the window table is the authority (ZMSD §8.3). File-repair clamps moved into `decode`. The blob travels as a separate archive entry (`screen.bin`), not inside `EngineSave.bytes`, because `SaveTrigger::Ingame` promises the Quetzal bytes are written verbatim as `game.qzl` and interchange-grade. App: all six DTO mirrors (`ScreenDto`, `ZWindowDto`, `V6WindowsDto`, `V6TextDto`, `GridCellDto`, `ZColourDto`) and `grid_from_dto` deleted, archive.rs 3400 → 3053 lines, `CURRENT_FORMAT_VERSION` 8 → 9 with no shim, and `session::restore_screen` stays the single install point, calling the zvm method.
+
 ## 6. Errors, panics and what a hostile story file can do
 
 `crates/zvm/src/error.rs` is fourteen lines and four variants, all of them
@@ -354,6 +356,8 @@ the archive before boot. A `trait Resources` answering on demand would serve a
 lazy or streaming host. Blorb living in a separate crate is correct and should
 stay; the issue is that the *seam* is a vector rather than a question.
 
+**Resolved (SQ-1402, 2026-09-08).** `crates/zvm/src/resources.rs` holds `pub trait Resources { fn picture_count(&self) -> u16; fn picture_release(&self) -> u16; fn picture_dims(&self, number: u16) -> Option<(u16, u16)>; }` and a `PictureTable` vector-backed implementation. `BootConfig::with_resources(Box<dyn Resources>)` is the new door, serving lazy, streaming or reimplemented backends. `Machine::picture_count()`, `picture_release()`, and `picture_dims(n)` accessors expose the interface; `picture_dims` is no longer a pub field. The unit-space scaling is applied by the private `ScaledResources` adapter that `BootConfig` wraps around resources at query time (see above).
+
 **The scaling rule that governs `picture_data` is not in `zvm` at all.**
 `set_picture_dims`'s doc (`exec.rs:1018`) says only "the host builds this from
 the self-blorb's `Pict` resources". It does not say that for a v6 story the table
@@ -366,6 +370,8 @@ embedder who reads `zvm`'s docs and does the obvious thing hands the game
 half-size pictures and gets a self-consistent screen the player never sees —
 the exact failure shape `CLAUDE.md`'s refactoring policy catalogues.
 
+**Resolved (SQ-1396, then SQ-1402, 2026-09-08).** SQ-1396 moved the scaling rule into `zvm` by having `BootConfig` multiply picture dimensions by the resolved art scale. SQ-1402 turned that into a private `ScaledResources` adapter that `BootConfig` wraps around any `Resources` implementation at query time, so the host need not scale; the adapter applies the rule transparently.
+
 **`Output: Any` forces `'static`.** `crates/zvm/src/io.rs:36` requires `Any` on
 the sink so callers can downcast, which means a GUI sink that borrows a frame
 buffer cannot be used at all, and every host round-trips its own state through
@@ -373,6 +379,8 @@ buffer cannot be used at all, and every host round-trips its own state through
 header says the requirement exists "so callers can downcast to concrete types
 (e.g., to read `BufferOutput::buf` in tests)" — a test convenience paid for by
 every embedder. Worth revisiting; the fix is not obvious and this is not urgent.
+
+**Resolved in part (SQ-1402, 2026-09-08).** `Output: Any` was kept by user decision. Module docs on `io.rs` now explain the bound, that it forces `'static`, and document the `Rc<RefCell<_>>` shared-buffer pattern in a compiled doctest so a host can work around the constraint without guessing.
 
 **The grammar seam is now closed too (SQ-1040).** `zvm::grammar` reads the
 story's syntax tables the way `dictionary.rs` reads its words: `Grammar::load`
@@ -543,9 +551,7 @@ next time a machine's interpreter is read. `ZColour` (`:49`) gained `True24`.
 should follow: `SoundEvent`, `PictureEvent`, `EraseFill`, `MachineProfile`,
 `PeriodLook`, `StackTrace` / `TraceFrame`, `Header`, `Token`, `ObjectSnapshot`.
 
-Two must **not** be marked: `TextAttrs` (`io.rs:14`) and `V6Text`
-(`screen.rs:369`) are constructed by hosts, and `#[non_exhaustive]` would make
-that impossible. If they need to grow, give them constructors first.
+`TextAttrs` (`io.rs:14`) alone must remain unmarked — it is constructed by hosts and `#[non_exhaustive]` would make that impossible. All other host-constructed structs acquire constructors in waves 2–3 and are marked: `SoundEvent`, `PictureEvent`, `EraseFill`, `PeriodLook` in SQ-1397; `Cell`, `ZWindow`, `V6Windows`, `ScreenState`, `UpperWindow`, `V6Text` (`screen.rs:369`) in SQ-1401 (`Cell::new`, `ZWindow::new`, `V6Windows::new`, `ScreenState` with no public constructor, `UpperWindow::from_cells`, `V6Text::at_cell`).
 
 This is the purest breaking-now-free-later item on the list. Applied today it
 costs a `..` in a handful of our own match arms. Applied after a release it
@@ -564,6 +570,8 @@ Making these `pub(crate)` is free now and impossible later.
 output sink mid-run with no invariant governing when that is safe.
 
 **Resolved in part (SQ-1394, 2026-09-07).** All 25 of `zvm`'s public enums plus `MachineProfile`, `StackTrace`, `TraceFrame`, `Header`, `Token`, and `ObjectSnapshot` are now marked `#[non_exhaustive]`. The following were deliberately NOT marked because a host must construct them by literal (constructors are Wave 2 work): `SoundEvent`, `PictureEvent`, `EraseFill`, `PeriodLook`, `Cell`, `ZWindow`, `V6Windows`, `ScreenState`, `UpperWindow`, `TextAttrs`, and `V6Text`. `cpu::state` free functions (`do_branch`, `do_store`, `print_text`) are `pub(crate)`; `State` and `Frame` fields are now private behind read accessors (`pc()`, `frames()`, `eval_stack()`, `Frame::func_addr()` etc.); `Machine::out` is private behind `output()` and `output_mut()`; the event queues are private behind `pending_*` and `take_pending_*` drains. `pub mod fixtures` is behind a `fixtures` Cargo feature, off by default and verified absent from the built rlib.
+
+**Extended (SQ-1401, 2026-09-08).** `SoundEvent::new`, `PictureEvent::new`, `EraseFill::new`, `PeriodLook::new` acquired constructors in SQ-1397; `Cell`, `ZWindow`, `V6Windows`, `ScreenState`, `UpperWindow`, and `V6Text` acquired constructors in SQ-1401 (`Cell::new`, `ZWindow::new`, `V6Windows::new`, `ScreenState` with no public constructor, `UpperWindow::from_cells`, `V6Text::at_cell`), and all nine are now marked `#[non_exhaustive]`. `TextAttrs` remains unmarked, construction deferred to host literals.
 
 ## 11. `gvm` and `scott`, briefly
 
@@ -626,6 +634,8 @@ VM this crate does not implement.
 
 **Resolved in part (SQ-1394, SQ-1395, 2026-09-07).** `GError`, `StepResult`, `WinType`, `GlkStyle`, `WriteFault`, `SaveLoadRequest`, `StackTrace`, and `TraceFrame` are now marked `#[non_exhaustive]`. `StepResult::Fault` is a new variant, distinct from `Quit`, backed by a `faulted` flag that persists after `take_fault_trace()` drains; the fault event surface follows the crate's own stated fault-and-continue policy. The 18 non-test `unwrap`/`expect` sites in `glk.rs` (`:1873`–`:2779`) that sat on the documented window-tree invariant have been addressed: 17 became panic-free branches, one `expect` in `build_win_tree` remains and is documented as guarded by an invariant. **Wave 2 extensions (SQ-1396, SQ-1397, SQ-1398, SQ-1399):** `gvm`'s diagnostics, screen_trace, trace_screen, fault_trace, trace_exec, executed_pcs, ever_executed are private behind accessors (SQ-1396). `scott` gained `Vm::room_is_literal()`, `room_exits()`, `items_in_room()`, and rebuilt `room_block()` as a convenience layout (SQ-1397). `Grammar` became a default-on Cargo feature in both zvm and gvm (SQ-1397). All three crates gained crate-level `//!` docs with compiled doctests and examples (SQ-1398, SQ-1399): `gvm` and `scott` examples feature minimal text-only backends. Module headers converted to `//!` (SQ-1398, SQ-1399): gvm: error, exec, grammar, header, memory; scott: database, loader, vm; zvm: 17 modules total.
 
+**Wave 3 extensions (SQ-1402, 2026-09-08):** `gvm` moved the borderless policy from `Machine::set_borderless` onto `GlkBackend` as `fn borderless(&self) -> bool { false }` (the `winmethod_Border`/`NoBorder` bit that `glk_window_open` honours at the library's discretion; the host flag overrides the story's request when true), moving terminal-chrome policy out of the VM layer into the backend seam. `scott` snapshot format gained magic `ScSv` and `u16` version 1, with `RestoreError::BadMagic` and `NewerVersion` variants for malformed buffers.
+
 ## 12. The ledger
 
 Ordered by what it costs an embedder, with the fix cost and whether it breaks.
@@ -641,10 +651,10 @@ and unaffordable after a release.
 | 5 | gate `pub mod fixtures` behind `cfg(test)` or a feature | trivial | **yes** | **yes** | done, SQ-1394 |
 | 6 | `BootConfig` owning the `init_caps` ordering and the `Restart` answer | medium | no | — | done, SQ-1396 |
 | 7 | `take_*` drains, and a merged `take_paint_events()` | small | no | — | done, SQ-1396 |
-| 8 | screen-snapshot format in `zvm` | medium | no | — | — |
+| 8 | screen-snapshot format in `zvm` | medium | no | — | done, SQ-1401 |
 | 9 | module headers `//` → `//!`; crate-level `//!` docs; a compiled example | trivial | no | — | done, SQ-1398, SQ-1399 |
-| 10 | doc pass: de-lanthorn, drop the `location` root re-export, decide `True24` | small | partly | partly | partly: `location` re-export dropped and docs de-lanthorned (SQ-1397, SQ-1399); `True24` kept by decision |
-| 11 | `FontMetrics`, `trait Resources`, revisit `Output: Any` | large | partly | partly | — |
+| 10 | doc pass: de-lanthorn, drop the `location` root re-export, decide `True24` | small | partly | partly | partly: `location` re-export dropped and docs de-lanthorned (SQ-1397, SQ-1399); `True24` stays |
+| 11 | `FontMetrics`, `trait Resources`, revisit `Output: Any` | large | partly | partly | done, SQ-1402: `Resources` trait; `FontMetrics` closed earlier by `V6Metric` (SQ-1009); `Output: Any` kept by decision, documented |
 
 On #5: `crates/zvm/src/fixtures.rs:11` is `PathBuf::from(env!("CARGO_MANIFEST_DIR"))`,
 unconditionally public, which bakes **the build machine's absolute source path**
@@ -674,15 +684,9 @@ is cut. Items 6–9 are what an embedder feels on day one, and 9 is an afternoon
 - **SQ-1398:** `gvm` and `scott` gained crate-level `//!` docs with compiled doctests. Examples in `examples/run_story.rs` feature a minimal `GlkBackend` for gvm and a minimal text-only host for scott. Module headers converted to `//!` (gvm: error, exec, grammar, header, memory; scott: database, loader, vm). `doctest = false` removed. `cargo doc --no-deps` warnings gvm 22→0, scott 2→0.
 - **SQ-1399:** `zvm` crate-level `//!` docs with a compiled doctest building a minimal v3 story by hand. Example `examples/run_story.rs` verified on Zork I. 17 module headers converted to `//!`. Docs rephrased for a stranger; `cargo doc --no-deps` warnings 40→0. `Machine::new` false "v6 is not supported" line fixed; `location` re-export caveat restored to module-level docs.
 
-**Still open, ranked by what blocks embedding:**
+**Wave 3 — landed 2026-09-08 as SQ-1401, SQ-1402:**
 
-| item | breaking | status |
-|---|---|---|
-| Constructors for host-built structs (`TextAttrs`, `V6Text`, `SoundEvent`, `PictureEvent`, `EraseFill`, `PeriodLook`, `Cell`, `ZWindow`, `V6Windows`, `ScreenState`, `UpperWindow`) | no | waits on the screen snapshot (wave 3) |
-| Screen snapshot, `FontMetrics`, `Resources` trait, `Output: Any` | partly | design later |
+- **SQ-1401:** Screen snapshot versioned format in `crates/zvm/src/screen_snapshot.rs` with `encode` / `decode` and `Machine::screen_snapshot()` / `restore_screen_snapshot(&[u8])`; carries classic screen, upper-window grid, all eight v6 windows. App: all DTO mirrors deleted, archive.rs lines reduced 3400 → 3053, `CURRENT_FORMAT_VERSION` 8 → 9. Constructors added to host-built structs: `Cell::new`, `ZWindow::new`, `V6Windows::new`, `ScreenState`, `UpperWindow::from_cells`, `V6Text::at_cell`. All nine now marked `#[non_exhaustive]`. `TextAttrs` remains unmarked.
+- **SQ-1402:** `crates/zvm/src/resources.rs` holds `pub trait Resources` with demand-driven picture metadata queries; `BootConfig::with_resources(Box<dyn Resources>)` is the door for lazy or streaming hosts. Unit-space picture scaling moved into `zvm` as private `ScaledResources` adapter. `Output: Any` kept by decision; module docs now document the sharing pattern. `gvm`: borderless moved from `Machine::set_borderless` onto `GlkBackend::borderless()`. `scott`: snapshot format gained magic `ScSv` and `u16` version 1.
 
-**The plan, one wave remaining:**
-
-**Wave 3** — design later. The screen snapshot in `zvm`, `FontMetrics`, a `Resources` trait, and `Output: Any`.
-
-**Product decision (2026-09-07):** `gvm` and `scott` get the full treatment — all three waves, not only "what any published crate needs".
+**All three waves closed:** the embedding review is complete. All three crates (`zvm`, `gvm`, `scott`) received the full treatment per the product decision: process-global state eliminated, VM cores embeddable and stable, public surfaces hardened, and three working examples. The v6 display list stays host-owned by design (the paint events since the last clear, with the archive's layer semantics); the screen snapshot is now `zvm`'s (SQ-1401). Two follow-ups remain for future work: whether the v6 display list architecture is engine-shaped (revisit now that app reads the snapshot), and whether `TextAttrs` needs a constructor if it grows beyond its current field set.
