@@ -21,6 +21,27 @@ Absolute URLs or no link.
 
 ## Unreleased
 
+### Added
+
+- **A game's own `SCRIPT` command now works.** Typing `SCRIPT` (or `TRANSCRIPT`,
+  or whatever a game calls it) starts a transcript and writes it to
+  `script.txt` in the game's own folder — everything the story prints, plus
+  the commands you type, as plain text you can read anywhere. Before this, nine
+  of thirteen games tried on answered "Attempt to begin transcript failed."
+  `UNSCRIPT` stops it, and starting it again later adds to the same file rather
+  than replacing it. (SQ-1420)
+- **`/set-transcript on` and `off`**, for the many games that offer no `SCRIPT`
+  command of their own — the same switch, thrown from lanthorn's side, with a
+  line telling you which file it is writing to. This is the story's own
+  transcript, and separate from `/export-transcript`, which writes out the
+  scrollback you are looking at. (SQ-1420)
+- **Command recording and replay.** A game can now record every command you type
+  to `commands.txt` beside the transcript, and play a recorded file back
+  instead of the keyboard — the format other interpreters use, so a script
+  recorded in Frotz replays in lanthorn and the other way round. `zvm-cli`
+  exposes all three directly: `--transcript <file>`, `--record <file>` and
+  `--replay <file>`. (SQ-1420)
+
 ### Changed
 
 - **save compatibility:** The save-archive format has changed twice in this

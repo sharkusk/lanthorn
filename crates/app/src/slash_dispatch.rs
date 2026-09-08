@@ -88,6 +88,29 @@ pub(crate) fn dispatch_slash_outcome(
                 TranscriptKind::Meta,
             );
         }
+        SlashOutcome::SetTranscript(on) => {
+            // ZMSD §7.4 gives a story two ways to start a transcript — the
+            // `output_stream 2` opcode and `Flags 2` bit 0 — and both are the
+            // GAME's. Most modern stories offer no SCRIPT verb at all, so this
+            // throws the same switch on the player's behalf; the engine writes
+            // the header bit with it, so a story that DOES have the verb still
+            // agrees about the state.
+            //
+            // Styled as a Meta line, the register every other host announcement
+            // uses (`transcript.meta` in style.toml) — a notice about a file,
+            // not story prose.
+            let was = session.transcript_on();
+            let path = session.set_transcript(on);
+            let msg = match (on, was, path) {
+                (true, false, Some(p)) => format!("Transcript started — writing to {}", p.display()),
+                (true, false, None) => "Transcript started.".to_string(),
+                (true, true, _) => "Transcript is already running.".to_string(),
+                (false, true, _) => "Transcript stopped.".to_string(),
+                (false, false, _) => "No transcript is running.".to_string(),
+            };
+            state.push_transcript_internal(&msg, TranscriptKind::Meta);
+            state.set_status(msg);
+        }
         SlashOutcome::DumpWindows => {
             // A v6 story reports one block per window, merging the game's window
             // table, the model, and where the last frame put each on the terminal —

@@ -46,6 +46,11 @@ pub enum SlashOutcome {
     Error(String),
     /// Print `/help` lines to the transcript as Meta entries.
     Help,
+    /// Start or stop the STORY's transcript — Z-machine output stream 2, written
+    /// to `<game_dir>/script.txt` (ZMSD §7.1.1). The same thing a game's own
+    /// SCRIPT verb does, offered because most games have no such verb; not to be
+    /// confused with `Export`, which writes out the app's own scrollback.
+    SetTranscript(bool),
     /// Save the game; optionally to a named slot.
     Save(Option<String>),
     /// Load a save; optionally a named slot.
@@ -305,6 +310,13 @@ pub static COMMANDS: &[CommandSpec] = &[
     CommandSpec { name: "reset-game", category: Category::Game, context: Context::Global,
         usage: "reset-game [map] [data]", description: "restart the game — bare opens the options dialog; 'map' also clears the map, 'data' deletes the game's saved progress/cache so it starts fresh",
         dispatch: |a| SlashOutcome::Reset { map: a.contains(&"map"), data: a.contains(&"data") } },
+    CommandSpec { name: "set-transcript", category: Category::Game, context: Context::Global,
+        usage: "set-transcript on|off", description: "start or stop the story's own transcript, written to script.txt in the game's folder — the same switch a game's SCRIPT command throws, for the many that have none",
+        dispatch: |a| match a.first().copied() {
+            Some("on")  => SlashOutcome::SetTranscript(true),
+            Some("off") => SlashOutcome::SetTranscript(false),
+            _ => err("set-transcript requires an argument: on | off"),
+        } },
     CommandSpec { name: "quit", category: Category::Game, context: Context::Global,
         usage: "quit", description: "exit lanthorn",
         dispatch: |_| SlashOutcome::Quit },
@@ -1144,7 +1156,10 @@ mod tests {
         // let the footer shrink to one key per hint.
         // SQ-1336 added `export-json`: the played map in the same versioned
         // `lanthorn-map` JSON `lanthorn-mapgen` writes for a static one.
-        assert_eq!(COMMANDS.len(), 91, "registry must match the spec's Full command table");
+        // SQ-1420 added `set-transcript`: the STORY's own transcript (Z-machine
+        // output stream 2, ZMSD §7.1.1), for the many games that ship no SCRIPT
+        // verb to turn it on with.
+        assert_eq!(COMMANDS.len(), 92, "registry must match the spec's Full command table");
     }
 
     /// SQ-1237 unified the panel vocabulary — `command band` became `command
@@ -1317,6 +1332,21 @@ mod tests {
         assert!(find_command("print-colors").is_some());
         assert!(matches!(parse("print-colors", '/'), SlashOutcome::PrintColors { actual: false }));
         assert!(matches!(parse("print-colors color", '/'), SlashOutcome::PrintColors { actual: true }));
+    }
+
+    /// SQ-1420. `set-transcript` throws the STORY's stream-2 switch (ZMSD §7.4)
+    /// — the one a game's SCRIPT verb throws, for the many games that ship none.
+    /// It takes on|off and nothing else: a bare toggle would leave a player who
+    /// cannot remember whether it is running unable to find out, and the
+    /// registry's own convention for a switch is the explicit word
+    /// (`set-game-colours`, `set-guidance`, `set-return-probe`).
+    #[test]
+    fn set_transcript_parses_on_and_off_and_rejects_anything_else() {
+        assert!(find_command("set-transcript").is_some());
+        assert!(matches!(parse("set-transcript on", '/'), SlashOutcome::SetTranscript(true)));
+        assert!(matches!(parse("set-transcript off", '/'), SlashOutcome::SetTranscript(false)));
+        assert!(matches!(parse("set-transcript", '/'), SlashOutcome::Error(_)));
+        assert!(matches!(parse("set-transcript maybe", '/'), SlashOutcome::Error(_)));
     }
 
     #[test]

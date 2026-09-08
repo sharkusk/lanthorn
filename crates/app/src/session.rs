@@ -10,6 +10,7 @@
 // zvm change made for this module: added Output::as_any_mut (+ BufferOutput/StdoutOutput impls) to allow mutable downcast to CaptureSink.
 
 use std::any::Any;
+use std::io::Write;
 
 use mapper::direction::{is_travel_to_command, parse_direction};
 use mapper::mapper::Mapper;
@@ -93,11 +94,152 @@ pub struct CaptureSink {
     /// where it lands. The LAST erase of a turn wins: it is the one whose screen
     /// the player is left looking at.
     cleared_at: Option<usize>,
+    /// Where the Z-machine's output streams 2 and 4, and its input stream 1,
+    /// meet the disk (ZMSD §7.1.1, §7.1.2, §10.2). Empty until
+    /// [`crate::engine::Engine::set_stream_files`] names the game's directory.
+    streams: StreamFiles,
+}
+
+/// The three per-game files behind Z-machine output streams 2 and 4 and input
+/// stream 1 — lanthorn's answer to ZMSD §7.6.5, which lets an interpreter
+/// decline external files and asks it to support them where it can.
+///
+/// **Fixed names in the game's own directory**, `<game_dir>/script.txt` and
+/// `<game_dir>/commands.txt`, exactly as `default.aux` is placed and named
+/// (`aux_store::aux_path`). §7.6.1 describes an 8.3 filename the GAME supplies
+/// and §7.6.5's remarks assume an interpreter that asks the player for one;
+/// lanthorn asks for nothing — a story is opened from a library, its side data
+/// accumulates beside it, and the player never types a path.
+///
+/// **APPENDED, never truncated.** The file belongs to the GAME, not to the run:
+/// a transcript a player turns on across three sessions is one document, and a
+/// command record is a log. (zvm-cli's `--transcript`/`--record` truncate,
+/// because there the player names the path and means this run.) The handle is
+/// opened lazily at the first byte, so naming a directory creates nothing —
+/// a game that never scripts leaves no empty file behind.
+///
+/// This is NOT lanthorn's archive transcript (`transcript.json`), which is the
+/// HOST's record of the scrollback — styled runs, images, meta lines, the
+/// player's own commands — written for the app to restore a session from, nor
+/// the `transcript.txt` that `/export-transcript` writes out of it.
+/// `script.txt` is the Z-machine's stream 2: plain text, exactly what the story
+/// printed, readable by anything.
+#[derive(Default)]
+pub struct StreamFiles {
+    /// The game's directory; `None` until startup wires it.
+    dir: Option<std::path::PathBuf>,
+    /// Output stream 2's handle, opened at its first byte.
+    transcript: Option<std::fs::File>,
+    /// Output stream 4's handle, opened at its first record.
+    commands: Option<std::fs::File>,
+    /// Input stream 1's records, loaded from `commands.txt` the first time the
+    /// game selects the stream. `Some(empty)` means the file was read and is
+    /// exhausted — which is end of file, and returns the machine to the
+    /// keyboard; `None` means it has not been read yet.
+    replay: Option<std::collections::VecDeque<String>>,
+}
+
+impl StreamFiles {
+    /// `<game_dir>/script.txt` — Z-machine output stream 2.
+    ///
+    /// **Named for the SCRIPT verb, not `transcript.txt`, because that name is
+    /// already taken and taken destructively.** `/export-transcript` with no
+    /// argument writes `<game_dir>/transcript.txt` (`export::export_transcript`)
+    /// and TRUNCATES it: that file is lanthorn's own scrollback, meta lines and
+    /// all. This one is the story's stream 2, appended to as it plays. Two
+    /// documents, two names — one file would have each clobbering the other.
+    pub fn transcript_path(dir: &std::path::Path) -> std::path::PathBuf {
+        dir.join("script.txt")
+    }
+
+    /// `<game_dir>/commands.txt` — Z-machine output stream 4, and the file
+    /// input stream 1 reads back (ZMSD §10.2.1: one format for both).
+    pub fn commands_path(dir: &std::path::Path) -> std::path::PathBuf {
+        dir.join("commands.txt")
+    }
+
+    /// Open `path` for append, creating it and its directory. `None` on any I/O
+    /// error — a transcript that cannot be written must not take the game down.
+    fn open_append(path: &std::path::Path) -> Option<std::fs::File> {
+        if let Some(parent) = path.parent() {
+            let _ = std::fs::create_dir_all(parent);
+        }
+        std::fs::OpenOptions::new().create(true).append(true).open(path).ok()
+    }
+
+    /// Append `bytes` to output stream 2's file, opening it on first use.
+    /// Flushed per write, because a transcript is most often wanted from a
+    /// session that ended badly.
+    fn write_transcript(&mut self, bytes: &[u8]) {
+        let Some(dir) = self.dir.as_deref() else { return };
+        if self.transcript.is_none() {
+            self.transcript = Self::open_append(&Self::transcript_path(dir));
+        }
+        if let Some(f) = self.transcript.as_mut() {
+            let _ = f.write_all(bytes);
+            let _ = f.flush();
+        }
+    }
+
+    /// Append one finished stream-4 record plus its line separator.
+    fn write_command(&mut self, line: &str) {
+        let Some(dir) = self.dir.as_deref() else { return };
+        if self.commands.is_none() {
+            self.commands = Self::open_append(&Self::commands_path(dir));
+        }
+        if let Some(f) = self.commands.as_mut() {
+            let _ = f.write_all(line.as_bytes());
+            let _ = f.write_all(b"\n");
+            let _ = f.flush();
+        }
+    }
+
+    /// The next record for input stream 1, reading `commands.txt` on first use
+    /// (ZMSD §10.2.3: "When input stream 1 is first selected, the interpreter
+    /// may use any method of choosing a file name for the file of commands.
+    /// Good practice is to use the same conventions as when choosing a filename
+    /// for output to stream 4." — which here means the same file).
+    fn next_command(&mut self) -> Option<String> {
+        if self.replay.is_none() {
+            let text = self
+                .dir
+                .as_deref()
+                .map(Self::commands_path)
+                .and_then(|p| std::fs::read_to_string(p).ok())
+                .unwrap_or_default();
+            let mut q: std::collections::VecDeque<String> = text
+                .split('\n')
+                .map(|l| l.strip_suffix('\r').unwrap_or(l).to_string())
+                .collect();
+            // A trailing newline yields one record nobody typed.
+            if q.back().is_some_and(String::is_empty) {
+                q.pop_back();
+            }
+            self.replay = Some(q);
+        }
+        self.replay.as_mut().and_then(std::collections::VecDeque::pop_front)
+    }
 }
 
 impl CaptureSink {
     fn new() -> Self {
-        CaptureSink { text: String::new(), runs: Vec::new(), buffering: true, cleared_at: None }
+        CaptureSink {
+            text: String::new(),
+            runs: Vec::new(),
+            buffering: true,
+            cleared_at: None,
+            streams: StreamFiles::default(),
+        }
+    }
+
+    /// Name the directory the stream files live in (see [`StreamFiles`]).
+    pub fn set_stream_dir(&mut self, dir: &std::path::Path) {
+        self.streams.dir = Some(dir.to_path_buf());
+    }
+
+    /// The transcript file this sink writes to, if it knows a directory.
+    pub fn transcript_path(&self) -> Option<std::path::PathBuf> {
+        self.streams.dir.as_deref().map(StreamFiles::transcript_path)
     }
 
     /// Drain accumulated text and style runs together, leaving both empty.
@@ -145,6 +287,22 @@ impl Output for CaptureSink {
     /// one the last erase opened.
     fn screen_cleared(&mut self) {
         self.cleared_at = Some(self.text.chars().count());
+    }
+    /// Z-machine output stream 2 — the game's transcript, straight to
+    /// `<game_dir>/transcript.txt` (see [`StreamFiles`]). Not the app's own
+    /// scrollback: that is `self.text`, drained per turn into the styled
+    /// transcript the archive carries.
+    fn transcript(&mut self, text: &str) {
+        self.streams.write_transcript(text.as_bytes());
+    }
+    /// Z-machine output stream 4 — one finished command or keypress record
+    /// (ZMSD §7.1.2.3), already escaped by the engine.
+    fn command_record(&mut self, line: &str) {
+        self.streams.write_command(line);
+    }
+    /// Z-machine input stream 1 — the next recorded command (ZMSD §10.2).
+    fn next_command(&mut self) -> Option<String> {
+        self.streams.next_command()
     }
     fn as_any(&self) -> &dyn Any {
         self
@@ -5424,6 +5582,23 @@ impl Engine for GameSession {
 
     fn clear_aux_dirty(&mut self) {
         self.machine.aux_dirty = false;
+    }
+
+    fn set_stream_files(&mut self, game_dir: &std::path::Path) {
+        sink_mut(&mut self.machine).set_stream_dir(game_dir);
+    }
+
+    fn transcript_on(&self) -> bool {
+        self.machine.transcript_on()
+    }
+
+    /// `/transcript on|off`, and the SCRIPT verb's switch when the story has
+    /// none. `Machine::set_transcript` writes `Flags 2` bit 0 with it (ZMSD
+    /// §7.4), so a story that DOES have a SCRIPT verb sees the same state the
+    /// player set and can turn it off again.
+    fn set_transcript(&mut self, on: bool) -> Option<std::path::PathBuf> {
+        self.machine.set_transcript(on);
+        on.then(|| sink_mut(&mut self.machine).transcript_path()).flatten()
     }
 
     fn current_location(&self) -> Option<LocationInfo> {

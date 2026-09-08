@@ -81,6 +81,28 @@ instead of scrolling straight past it, exactly like the original Infocom
 interpreters. Any key pages onward, and nothing reaches the game until
 you've caught up.
 
+## Keeping a transcript
+
+Many games have a `SCRIPT` command (`TRANSCRIPT` in some, `UNSCRIPT` or
+`NOSCRIPT` to stop). Type it and the story starts writing everything it
+prints — and everything you type — to `script.txt` in the game's own
+folder, alongside its saves. It's plain text: read it, mail it, diff two
+playthroughs, paste a puzzle into a hint request.
+
+Plenty of games offer no such command. `/set-transcript on` throws the same
+switch from lanthorn's side, and tells you which file it landed in;
+`/set-transcript off` stops it. Turning it on again later adds to the same
+file rather than starting over, so a game played across a week is one
+document.
+
+That's the *story's* transcript, and it's a different thing from
+`/export-transcript`, which writes out the scrollback in front of you —
+lanthorn's own lines and images included.
+
+Games can also record the commands you type, to `commands.txt` in the same
+folder, and play a recorded file back in place of the keyboard. It's the
+format other interpreters use, so a script recorded elsewhere replays here.
+
 ## Hints
 
 `/open-hints` lays a companion *InvisiClues* file over the story pane — its

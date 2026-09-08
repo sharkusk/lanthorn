@@ -305,6 +305,13 @@ pub(crate) fn reset_game(
             // The rebuilt session defaults strip_prompt=true; re-apply the config
             // choice so an in-game restart keeps the inline prompt in inline mode.
             session.set_strip_prompt(state.config.command_bar);
+            // The rebuilt session carries a fresh sink, which knows nothing of
+            // the game's directory: re-name the Z-machine stream files exactly
+            // as `startup.rs` does, or a transcript restarted after a
+            // `reset-game` would have nowhere to go. (The `@restart` OPCODE
+            // needs no equivalent — it re-boots the machine in place and keeps
+            // its sink.)
+            session.set_stream_files(game_dir);
             let start_loc = session.current_location();
             state.reset_sound_sidecars();
             // A restart is a new game: the death the old one left unresolved died with it, and so

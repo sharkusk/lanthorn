@@ -1083,6 +1083,39 @@ pub trait Engine {
     /// Clear the auxiliary-data dirty flag.
     fn clear_aux_dirty(&mut self);
 
+    // ── transcript / command-record files (Z-machine output streams 2 and 4) ──
+    /// Tell the engine which directory its transcript and command-record files
+    /// live in — `<game_dir>/script.txt` and `<game_dir>/commands.txt`,
+    /// beside `default.aux` and for the same reason (see
+    /// [`crate::aux_store::aux_path`]): they are the GAME's side data, keyed by
+    /// story, and lanthorn never asks the player for a host filename.
+    ///
+    /// Wired once per session, at startup. Naming the directory does not START
+    /// anything: the transcript begins when the story's own SCRIPT verb selects
+    /// output stream 2 (ZMSD §7.4) or the player types `/transcript on`, and the
+    /// files are opened lazily at the first byte either stream produces.
+    ///
+    /// Defaulted to a no-op: only the Z-machine has these streams. Glk's
+    /// transcript is a `fileusage_Transcript` stream the game opens for itself,
+    /// which the Glulx adapter already routes through the Glk VFS.
+    fn set_stream_files(&mut self, _game_dir: &std::path::Path) {}
+
+    /// Is the game's transcript (Z-machine output stream 2) running?
+    /// `false` for engines without the concept.
+    fn transcript_on(&self) -> bool {
+        false
+    }
+
+    /// Start or stop the game's transcript from the host side, as `/transcript
+    /// on|off` does — the same switch the story's SCRIPT verb throws.
+    ///
+    /// Returns the file the transcript is being written to when this turned it
+    /// ON, so the caller can name it in the notice; `None` when the engine has
+    /// no transcript, or when switching it off.
+    fn set_transcript(&mut self, _on: bool) -> Option<std::path::PathBuf> {
+        None
+    }
+
     // ── Glk file VFS (Glulx only; default no-ops for the Z-machine) ──
     /// Encode the Glk file VFS as a disk sidecar blob (empty for engines
     /// without a Glk VFS).

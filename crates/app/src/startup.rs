@@ -1750,6 +1750,14 @@ pub(crate) fn boot_story(
         session.set_aux_data(app::aux_store::read_global_aux(&game_dir));
     }
 
+    // …and tell the engine where the Z-machine's own stream files live:
+    // `<game_dir>/script.txt` (output stream 2, ZMSD §7.1.1) and
+    // `<game_dir>/commands.txt` (output stream 4 and input stream 1, §7.1.2 and
+    // §10.2), beside `default.aux` and for the same reason. Naming the directory
+    // opens nothing — the files appear only if the story, or `/set-transcript`,
+    // actually selects a stream.
+    session.set_stream_files(&game_dir);
+
     // The per-story Glk file VFS sidecar was loaded into the VM before boot
     // (GlulxSession::new). A Glulx game may write a Glk file during boot (e.g.
     // CM's init cache); flush it now so it persists before the first turn and

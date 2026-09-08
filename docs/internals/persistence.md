@@ -289,6 +289,9 @@ that game side by side:
 ```
 <base>/<story-key>.save/
     default.aux        # Z-machine aux sidecar (Layer 3)
+    script.txt         # the STORY's transcript — Z-machine output stream 2
+    commands.txt       # the STORY's command record — output stream 4, and the
+                        #   file input stream 1 reads back (ZMSD §10.2.1)
     default.glkvfs     # Glulx VFS sidecar (Layer 3)
     default.lanthorn   # the auto/singleton Save State slot (Layer 2)
     <slug>.lanthorn     # named saves — Save States AND in-game @save (app only);
@@ -403,6 +406,44 @@ directory (renaming to the `default.*` / `<slug>.*` names above as needed).
 | 3 — auto per-story (Glk VFS) | Glulx | app | `<base>/<story-key>.save/default.glkvfs` (`GVFS`) |
 | 3 — auto per-story (Glk VFS) | Glulx | `gvm-cli` | `<base>/<story-key>.save/default.glkvfs` (`GVFS`) |
 | export — `/export-svg`\|`-dot`\|`-dump`\|`-transcript` | either | app | `<base>/<story-key>.save/map.svg`\|`map.dot`\|`map.txt`\|`transcript.txt` (bare `[file]` arg) or verbatim path |
+| stream 2 — the story's transcript | Z-machine | app | `<base>/<story-key>.save/script.txt` (appended) |
+| stream 2 — the story's transcript | Z-machine | `zvm-cli` | `--transcript <file>` (truncated); absent = declined |
+| stream 4 / input stream 1 — command record | Z-machine | app | `<base>/<story-key>.save/commands.txt` (appended; input stream 1 reads the same file) |
+| stream 4 / input stream 1 — command record | Z-machine | `zvm-cli` | `--record <file>` / `--replay <file>` (truncated); absent = declined |
+
+### The story's transcript is not lanthorn's (SQ-1420)
+
+Three different documents wear the word "transcript", and only one of them is
+the Z-machine's:
+
+| | what it holds | who writes it | file |
+|---|---|---|---|
+| **output stream 2** | exactly what the STORY printed, plus the commands typed (ZMSD §7.1.1, §7.1.1.1), as plain text | the game's SCRIPT verb, or `/set-transcript on` | `script.txt` |
+| **the archive transcript** | lanthorn's whole scrollback — styled runs, images, meta and assist lines, the map's own notes — so a restore can rebuild the pane | the app, into every Save State | `transcript.json`, inside a `.lanthorn` archive |
+| **`/export-transcript`** | a plain-text rendering of that scrollback, on demand | the player | `transcript.txt` |
+
+The stream-2 file is named for the SCRIPT verb rather than for the word
+"transcript" precisely because the third row already owns `transcript.txt` and
+truncates it on every export.
+
+It is APPENDED to, never truncated: the transcript belongs to the GAME, and a
+story scripted across three sittings is one document. `zvm-cli` truncates
+instead, because there the player names the path on the command line and means
+this run. Both files open lazily at their first byte, so a game that never
+scripts leaves nothing behind.
+
+**zvm opens neither.** `zvm::io::Output` gained `transcript`, `command_record`
+and `next_command` (all defaulted to nothing), and the engine decides only what
+belongs on each stream — §7.1.2.2's rule that stream 3 silences the others,
+§8.8.3.1 attribute 2's per-window choice in Version 6, §7.1.1.1's input echo.
+The host does the I/O, as it does for `@save`.
+
+**Flags 2 bit 0 is the interpreter's to keep truthful.** §7.4: "Whichever method
+is used, the interpreter must ensure that this flag holds the current status of
+stream 2. ('A Mind Forever Voyaging' requires this.)" Both routes in —
+`output_stream 2` and a direct poke of the bit — go through `Machine`'s
+`set_stream2`, and every `read`/`read_char` reconciles the two directions before
+suspending.
 
 `<base>` and `<story-key>` are as defined in [Storage layout](#storage-layout-sq-0284)
 above.
