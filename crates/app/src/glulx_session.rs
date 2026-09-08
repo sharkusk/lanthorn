@@ -599,6 +599,11 @@ impl GlulxSession {
         // glk_style_measure for the host's rendered colours during its startup
         // (SQ-0315; Kerkerkruip probes its style_User2 slot there, SQ-0803).
         backend.set_theme_colours(theme);
+        // Per-game borderless-windows mode: a backend preference (SQ-0341/
+        // SQ-1402), set before the backend moves into the machine so it is
+        // already in force at the first relayout, so the game's windows abut
+        // with no reserved gutter from boot.
+        backend.set_borderless(borderless);
         let mut machine = Machine::with_glk(mem, backend);
         machine.set_acceleration(acceleration);
         machine.set_graphics(graphics_enabled);
@@ -606,9 +611,6 @@ impl GlulxSession {
         if let Some(seed) = random_seed {
             machine.set_rng_seed(seed);
         }
-        // Per-game borderless-windows mode: applies from the first relayout at
-        // boot, so the game's windows abut with no reserved gutter (SQ-0341).
-        machine.set_borderless(borderless);
         // Load the per-story Glk file VFS sidecar BEFORE booting: a Glulx game
         // may read a cache during boot (e.g. CM skips its long init) or write one
         // (leaving vfs_dirty set), so the sidecar must be in place first (SQ-0290).
@@ -795,7 +797,7 @@ impl GlulxSession {
         if self.quit {
             return;
         }
-        self.machine.set_borderless(on);
+        self.appglk().set_borderless(on);
         self.machine.rearrange();
         // Same rule as `resize`: no non-interactive drive while a dialog holds a
         // suspended `@save`/`@restore` (SQ-0656). The mode is already set on the
