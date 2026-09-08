@@ -79,7 +79,15 @@ pub(crate) fn apply_v6_pictures(session: &mut dyn Engine, ac: &app::archive::Arc
     let Some(z) = zvm_session_opt_mut(session) else { return };
     match &ac.display {
         Some(d) => z.load_display_list(d, &ac.pictures),
-        None => z.load_pictures_png(&ac.pictures),
+        None => {
+            // No display list at all (a pre-SQ-1403 archive, or a non-v6 story) —
+            // `load_display_list` is not reached to reset the paint log for us, so
+            // do it directly: without it a pre-restore session's log would survive
+            // into this one and the first palette change after this restore would
+            // replay ITS pictures over these fresh pixels (SQ-0587's class).
+            let _ = z.machine.restore_paint_log(&[]);
+            z.load_pictures_png(&ac.pictures);
+        }
     }
     // The painted ground under all of them (SQ-0787). UNCONDITIONAL, including
     // when the archive carries none: `auto_load` restores after the story has

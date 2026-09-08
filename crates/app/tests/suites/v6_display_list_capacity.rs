@@ -1,4 +1,4 @@
-//! Is `V6_OPS_CAP` big enough? Measured across every v6 game we have — SQ-0588 follow-up.
+//! Is `PAINT_LOG_CAP` big enough? Measured across every v6 game we have — SQ-0588 follow-up.
 //!
 //! A window whose display list hits the cap is dropped from replay: it still restores
 //! (its canvas falls back to a PNG) but its colours stop following palette changes, and
@@ -6,17 +6,19 @@
 //! and it was picked by reasoning rather than measurement.
 //!
 //! The number that matters is NOT the peak. It is whether the peak GROWS with play.
-//! `record_op` resets a window's list whenever a whole-canvas op supersedes everything
-//! before it — a game that swaps screens therefore plateaus, and is safe for a session
-//! of any length. A game that only ever appends would overflow eventually, and a larger
-//! cap would just be a bigger number before the same failure. Sampling early and late
-//! tells those two apart; a single peak cannot.
+//! `zvm`'s own paint log (SQ-1403) resets a window's list to a single entry whenever a
+//! whole-canvas `erase_window` supersedes everything before it — a game that swaps
+//! screens therefore plateaus, and is safe for a session of any length. A game that only
+//! ever appends would overflow eventually, and a larger cap would just be a bigger number
+//! before the same failure. Sampling early and late tells those two apart; a single peak
+//! cannot.
 //!
 //! Skip-if-missing per the other gitignored-story smokes.
 
 
 use app::graphics::PictSource;
-use app::session::{GameSession, InputKind, V6_OPS_CAP};
+use app::session::{GameSession, InputKind};
+use zvm::paint_log::PAINT_LOG_CAP;
 
 use crate::fixture_paths::fixture_path;
 
@@ -105,19 +107,19 @@ fn no_v6_game_comes_close_to_the_display_list_cap() {
 
         eprintln!(
             "{name}: longest display list {early} ops @10 turns, {mid} @40, {late} @200 \
-             (cap {V6_OPS_CAP}, {}% used)",
-            peak * 100 / V6_OPS_CAP
+             (cap {PAINT_LOG_CAP}, {}% used)",
+            peak * 100 / PAINT_LOG_CAP
         );
 
         assert_eq!(
             (early_cap, mid_cap, late_cap),
             (0, 0, 0),
-            "{name}: a window hit the {V6_OPS_CAP}-op cap during ordinary play — it drops out of \
+            "{name}: a window hit the {PAINT_LOG_CAP}-op cap during ordinary play — it drops out of \
              replay, so its art stops following palette changes for the rest of the session."
         );
         assert!(
-            peak * 4 < V6_OPS_CAP,
-            "{name}: longest list {peak} is within 4x of the {V6_OPS_CAP}-op cap — not a failure \
+            peak * 4 < PAINT_LOG_CAP,
+            "{name}: longest list {peak} is within 4x of the {PAINT_LOG_CAP}-op cap — not a failure \
              yet, but thin enough that a longer session could reach it."
         );
         // The one that actually matters. Shogun re-erased the same two regions every
@@ -135,5 +137,5 @@ fn no_v6_game_comes_close_to_the_display_list_cap() {
         eprintln!("SKIP: no v6 stories present");
         return;
     }
-    eprintln!("measured {measured} v6 game(s); worst case {worst}/{V6_OPS_CAP} ops");
+    eprintln!("measured {measured} v6 game(s); worst case {worst}/{PAINT_LOG_CAP} ops");
 }

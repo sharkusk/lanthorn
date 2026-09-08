@@ -46,7 +46,7 @@ Pre-beta there is still **no obligation to read old files** (see the standing
 | Glulx-Quetzal (`@save`) | `game.glksave` inside `<slug>.lanthorn` (app); bare `<slug>.qzl` (`gvm-cli`) | `gvm/src/exec.rs` `save_quetzal` | none — spec-defined `FORM IFZS` | Public spec (Glulx §1.8) | `exec::tests::save_quetzal_is_a_wellformed_ifzs_container`, `…omits_greg_and_glk_chunks` |
 | Host Save State — Z-machine | inside `.lanthorn` `game.qzl` | `zvm/src/quetzal.rs` (+ archive) | via archive `format_version` | Frozen (0.x) | archive round-trip tests |
 | Host Save State — Glulx | inside `.lanthorn` `game.glksave` | `gvm/src/exec.rs` `save_state` (adds `GReg` + `Glk `) | `Glk ` chunk: `GLK_SNAPSHOT_VERSION = 6` | Frozen (0.x) | `glk::tests::snapshot_version_constant_is_frozen`, `…serialize_stamps_current_snapshot_version`, `…deserialize_rejects_future_snapshot_version`, `exec::tests::save_state_is_the_same_container_plus_our_own_chunks` |
-| `.lanthorn` archive (map + save + transcript + screen + history + pictures + painted ground) | `<ifid>.lanthorn` (ZIP) | `app/src/archive.rs` | `Meta.format_version = 9` | Frozen (0.x) | `archive::tests::format_version_constant_is_frozen`, `…unknown_format_version_returns_err`, `…save_trigger_wire_names_are_pinned_and_round_trip`, archive round-trip tests |
+| `.lanthorn` archive (map + save + transcript + screen + v6 paint log + history + pictures + painted ground) | `<ifid>.lanthorn` (ZIP) | `app/src/archive.rs` | `Meta.format_version = 10` | Frozen (0.x) | `archive::tests::format_version_constant_is_frozen`, `…unknown_format_version_returns_err`, `…save_trigger_wire_names_are_pinned_and_round_trip`, archive round-trip tests |
 | Z-machine aux data (v5 `@save`/`@restore` table) | `default.aux` | `app/src/aux_store.rs` + `zvm-cli/src/auxiliary.rs` | `ZAUX` magic + `VERSION = 1` | Frozen (0.x), cross-host | `aux_store::tests::version_constant_is_frozen`, `…decode_rejects_bumped_version`, `…encodes_canonical_zaux_bytes` |
 | Glk file VFS sidecar | `default.glkvfs` | `gvm/src/glk.rs` `encode_files`/`decode_files` (path: `app/src/vfs_store.rs`) | `GVFS` magic + `u32` version `1` | Frozen (0.x) | `glk::tests::encode_files_roundtrips_and_skips_temp`, `…decode_files_rejects_bumped_gvfs_version` |
 | Debug-coverage PC set | `default.pcs` | `app/src/pcset_store.rs` | `ZPCS` magic + `VERSION = 1` | Frozen (0.x) | `pcset_store::tests::version_constant_is_frozen`, `…decode_rejects_bumped_version`, `…codec_round_trips` |
@@ -56,6 +56,37 @@ Pre-beta there is still **no obligation to read old files** (see the standing
 | Theme / per-game config | `style.toml`, `<ifid>.config.toml` | `app/src/config.rs`, `styles.rs` | none (TOML, field-tolerant) | Tolerant (TOML) | — |
 
 ## Version history
+
+- **`.lanthorn` archive 9 → 10 (SQ-1403).** `display.json`'s `windows` field — a
+  serde mirror of `zvm`'s picture/erase events, maintained by hand across a
+  crate boundary — is gone. The v6 paint history is now `display.bin`, `zvm`'s
+  OWN versioned binary blob (`zvm::paint_log`, magic `ZPNT`, its own format
+  version inside) — ONE flat, globally-ordered stream tagged per window, fed
+  automatically by `Machine` itself at the exact points its picture/erase
+  queues are pushed, rather than accumulated by hand in the app from a
+  drained event list. `display.json` keeps only the Current Palette and the
+  two screen layers (`V6LayersDto`); it names no separate list of which
+  windows the log reproduces correctly — the PNGs an archive actually carries
+  under `pictures/` ARE that list (a window with a saved PNG restores from
+  it; every other window replays the log), so there is nothing to keep in
+  sync by hand.
+
+  *Accepted break, no migration (pre-release):* an older archive still LOADS
+  on this build — only a GREATER version is refused (see `load_archive`) —
+  and its memory, stack, map, transcript and command history restore fully.
+  Concretely: a format-8 archive has no `screen.bin` at all, so it restores
+  with no saved screen (the status line is blank until the next turn redraws
+  it, and v6 windows are empty until the game repaints). A format-9 archive
+  has no `display.bin`, so its v6 pictures are likewise missing until the game
+  repaints — but its `display.json` still parses (the old `windows` field is
+  simply an unknown field to a struct that no longer declares it, silently
+  ignored), so the painted ground (`pictures/ground.png`) and Current Palette
+  still load exactly as before, since neither moved. In-game Quetzal bytes
+  (`game.qzl`) are unaffected either way — Quetzal never carried screen state.
+  A resave of either rewrites the archive at the current format, and the
+  previous release binary can still restore-and-resave any archive it wrote.
+  SQ-1410 is a follow-up for a restore-time notice naming this case to the
+  player; this version bump does not add one.
 
 - **`.lanthorn` archive 4 → 5 (SQ-0531).** `meta.json` gained
   `trigger: "ingame" | "hoststate"`, recording whether the game's own `@save` or

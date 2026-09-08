@@ -21,4 +21,11 @@ pub enum ZError {
     /// understands. Both numbers are named because the only useful thing a host
     /// can tell the player is which build wrote it and which is reading it.
     ScreenSnapshotVersion { found: u16, supported: u16 },
+    /// A paint log ([`crate::paint_log`]) is not a paint log at all, is
+    /// truncated, or is otherwise unreadable. Carries no story identity, as
+    /// [`Self::BadScreenSnapshot`] does not either.
+    BadPaintLog,
+    /// A paint log was written by a NEWER format version than this build
+    /// understands.
+    PaintLogVersion { found: u16, supported: u16 },
 }

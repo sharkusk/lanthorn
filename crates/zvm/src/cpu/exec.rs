@@ -491,6 +491,13 @@ pub struct Machine {
     /// one paint sequence; today they are independent because pictures and fills
     /// are drawn by different games for different purposes.
     pub(crate) pending_erase_fills: Vec<EraseFill>,
+    /// The folded Version 6 paint history (SQ-1403) — fed here, at the same
+    /// points [`Self::pending_pictures`] / [`Self::pending_erase_fills`] are
+    /// queued, so it always reflects every event this `Machine` has ever
+    /// issued regardless of whether (or how often) a host drains
+    /// [`Self::take_paint_events`]. See [`crate::paint_log`] and
+    /// [`Self::paint_log`].
+    paint_log: crate::paint_log::PaintLog,
     /// Running count of chars printed to v6 window 0 (the main scrolling
     /// window) — stamps `PictureEvent::out_chars` so window-0 inline pictures
     /// anchor to their position in the text stream. Monotonic, never reset.
@@ -746,6 +753,7 @@ impl Machine {
             resources: Box::new(crate::resources::EmptyResources),
             pending_pictures: Vec::new(),
             pending_erase_fills: Vec::new(),
+            paint_log: crate::paint_log::PaintLog::default(),
             v6_win0_out_chars: 0,
             v6_prose_retired: None,
             v6_prose_retired_whole: false,
@@ -913,6 +921,9 @@ impl Machine {
         // fill stamped against a picture list that no longer exists, to be
         // replayed after the reboot's own first paints.
         self.pending_erase_fills.clear();
+        // …and the folded history built from them (SQ-1403): a rebooted screen
+        // has painted nothing yet, so no window keeps a pre-restart recipe.
+        self.paint_log.clear_all();
         self.buffer_screen_mode = 0;
         self.v6_win0_out_chars = 0;
         // `self.screen = screen` above already reset `screen.v6_input_window` to 0
@@ -1575,9 +1586,40 @@ impl Machine {
 
     /// Queue a v6 picture-draw/erase event as if the opcode that produces it
     /// had just run. For a host (and this crate's own tests) exercising the
-    /// render-drain path without executing real V6 bytecode.
+    /// render-drain path without executing real V6 bytecode. Feeds
+    /// [`Self::paint_log`] too, exactly as the real opcode handlers do.
     pub fn queue_picture_event(&mut self, ev: PictureEvent) {
         self.pending_pictures.push(ev);
+        self.paint_log.apply(&PaintEvent::Picture(ev));
+    }
+
+    /// The folded Version 6 paint history (SQ-1403) — what to replay to
+    /// rebuild every window's picture canvas, independent of whether (or how
+    /// often) the host has drained [`Self::take_paint_events`]. Read-only: a
+    /// host never feeds this itself, only `Machine` does, at the same points
+    /// it queues the events themselves — see [`crate::paint_log`].
+    pub fn paint_log(&self) -> &crate::paint_log::PaintLog {
+        &self.paint_log
+    }
+
+    /// Replace the paint log from bytes written by
+    /// [`crate::paint_log::encode`] — the counterpart of [`Self::paint_log`]
+    /// for a host Save State restore.
+    ///
+    /// Always resets the log first, exactly as
+    /// [`Self::restore_screen_snapshot`] resets the screen: an empty `bytes`
+    /// (no log was ever archived, e.g. an older archive format) leaves the
+    /// log empty rather than untouched, and a malformed or too-new buffer
+    /// does too rather than leaving a stale pre-restore log standing. Real
+    /// decode errors (a newer format version) are still returned so a host
+    /// that wants to know can.
+    pub fn restore_paint_log(&mut self, bytes: &[u8]) -> Result<(), crate::error::ZError> {
+        self.paint_log.clear_all();
+        if bytes.is_empty() {
+            return Ok(());
+        }
+        self.paint_log = crate::paint_log::decode(bytes)?;
+        Ok(())
     }
 
     /// Filled rectangles an `erase_window` painted since the last drain,
@@ -2977,9 +3019,12 @@ impl Machine {
                         }
                         _ => {}
                     }
+                    for f in &fills {
+                        self.paint_log.apply(&PaintEvent::Erase(*f));
+                    }
                     self.pending_erase_fills.extend(fills);
                     for (window, win_box) in clear_canvas {
-                        self.pending_pictures.push(PictureEvent {
+                        let ev = PictureEvent {
                             number: 0,
                             window,
                             win_box,
@@ -2993,7 +3038,13 @@ impl Machine {
                             // IS the cursor. The host's `number == 0` arm returns
                             // before reading this either way.
                             at_cursor: true,
-                        });
+                        };
+                        self.pending_pictures.push(ev);
+                        // The paired EraseFill above (SQ-0715) already folds this
+                        // window's paint log to a single Clear entry — this is the
+                        // idempotent twin — but it is fed from here too so the
+                        // same `win_box` reaches both queues in the same breath.
+                        self.paint_log.apply(&PaintEvent::Picture(ev));
                     }
                 } else {
                     // ZMSD §8.7.3.2.1: "In Versions 5 and later, the cursor for
@@ -4025,12 +4076,14 @@ impl Machine {
                         ));
                     }
                     let out_chars = self.v6_win0_out_chars;
-                    self.pending_pictures.push(PictureEvent {
+                    let ev = PictureEvent {
                         number, window, x, y, erase: false, out_chars, margin_after: None, win_box,
                         // Placed on the window's current text line — see
                         // `PictureEvent::at_cursor` (SQ-0695).
                         at_cursor: y == cy,
-                    });
+                    };
+                    self.pending_pictures.push(ev);
+                    self.paint_log.apply(&PaintEvent::Picture(ev));
                 }
                 StepResult::Continue
             }
@@ -4064,10 +4117,12 @@ impl Machine {
                         ));
                     }
                     let out_chars = self.v6_win0_out_chars;
-                    self.pending_pictures.push(PictureEvent {
+                    let ev = PictureEvent {
                         number, window, x, y, erase: true, out_chars, margin_after: None, win_box,
                         at_cursor: y == cy,
-                    });
+                    };
+                    self.pending_pictures.push(ev);
+                    self.paint_log.apply(&PaintEvent::Picture(ev));
                 }
                 StepResult::Continue
             }
@@ -4112,6 +4167,12 @@ impl Machine {
                     if ev.window as u16 == win && ev.margin_after.is_none() && !ev.erase {
                         ev.margin_after = Some(left);
                     }
+                }
+                // The paint log's own copy of that same draw needs the same
+                // retroactive attachment (SQ-1403) — it was already fed when
+                // the draw was queued, before this `set_margins` ran.
+                if let Ok(win) = u8::try_from(win) {
+                    self.paint_log.set_margin_after(win, left);
                 }
                 StepResult::Continue
             }

@@ -186,6 +186,67 @@ deliberate:
   `reconcile_restored_screen_size` then re-declares the size — because a restore
   into a different pane is a resize the game never saw.
 
+**The v6 display — pictures, palette and the painted ground — rides beside the
+screen snapshot too, in its own set of entries (SQ-0588, SQ-0814, SQ-1403).**
+`screen.bin` carries the window TABLE (geometry, cursor, text runs); it says
+nothing about what has been PAINTED into a v6 window's picture area, because
+that is pixels rather than Z-machine state. Four more archive entries cover it,
+and which is the recipe and which is the stated exception is the thing worth
+holding onto:
+
+- **`display.bin` is the recipe, and it is `zvm`'s own** (SQ-1403). Every
+  `draw_picture` / `erase_picture` / `erase_window` a Version 6 story issues is
+  folded into [`zvm::paint_log::PaintLog`](../../crates/zvm/src/paint_log.rs) —
+  ONE flat, globally-ordered stream tagged per window (native, window-relative
+  pixels, with no rasterization and no cell of any kind), so a cross-window
+  erase mirror replays at its true position relative to every other window's
+  own draws rather than before or after all of them. `Machine` feeds it itself,
+  at the exact points `pending_pictures`/`pending_erase_fills` are queued (the
+  same events `Machine::take_paint_events` later drains) — a host never calls
+  `PaintLog::apply` (it is `pub(crate)`), so it cannot forget to record one —
+  and `Machine::restart` clears it structurally in the same breath as the
+  paint queues. `zvm::paint_log::encode`/`decode` write it as a versioned
+  binary blob, exactly as `screen_snapshot` does for the window table —
+  hand-rolled, because `zvm` takes no dependencies. Each `Draw`/`ErasePicture`
+  entry also carries `at_cursor`, `margin_after` and `out_chars` — genuine
+  facts about that call (ZMSD says nothing about the host rendering question
+  they answer, an inline text float vs. a window-canvas picture, but a host
+  needs the values AS THEY STOOD AT THE CALL, not a running count it reads
+  later, which has typically moved on by the time a turn's pictures are
+  drained).
+- **`display.json` is the palette plus two small screen layers app still
+  owns**: the raw `PLTE` bytes of the Current Palette at save time (an adaptive
+  picture has no palette of its own — Blorb §11.3 — so replaying the log
+  without it recolours nothing), and [`archive::V6LayersDto`](../../crates/app/src/archive.rs)'s
+  `fills`/`anchors` — the `erase_window` fills still covering the screen and
+  where each window's canvas was painted (SQ-0715), both bounded recipes in the
+  game's own native pixels. No separate field names which windows the log
+  reproduces correctly — see the next point.
+- **`pictures/win-N.png` and `pictures/ground.png` are the stated exceptions,
+  in pixels rather than a recipe.** A window's replay is checked against its
+  LIVE canvas at save time (`GameSession::display_list`'s replay-and-compare
+  self-check, one global walk of `ops_in_order()` through the same
+  canvas-painting core live rendering uses — `GameSession::apply_canvas_paint`
+  — under `PaintMode::Replay`); one that doesn't match — an op path not yet
+  recorded, or a log that hit `zvm::paint_log::PAINT_LOG_CAP` — is carried as a
+  PNG instead and named in a diagnostic. Which windows those are is not stored
+  as a separate list: the PNGs present in the archive ARE that list, and a
+  restore simply loads whichever PNGs it finds and replays the log for every
+  other window (`GameSession::load_display_list`). The painted ground
+  (`GameSession::paint`) is pixels unconditionally: it accumulates from an
+  unbounded stream of `erase_window` fills across the whole session, so there
+  is no bounded recipe to store for it the way there is for a window's own
+  log.
+
+A restore reinstalls all four in one order: `screen.bin`, then
+`Machine::restore_paint_log` from `display.bin` (empty bytes — an older
+archive, or a non-v6 story — reset it to empty, the same as a freshly booted
+machine's), then the saved PNGs load straight as pixels, then every window NOT
+covered by a PNG is rebuilt by replaying the log's `ops_in_order()` under the
+restored palette, then the ground loads unconditionally (a host Save State
+swaps memory under a game that never learns it happened, so nothing repaints
+to clear a stale one on its own).
+
 ## Layer 3 — automatic per-story persistence (no explicit save)
 
 This layer needs **no player action and no Save State**. lanthorn keeps a small
