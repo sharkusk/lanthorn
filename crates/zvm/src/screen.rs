@@ -41,9 +41,15 @@ pub struct StatusLine {
 /// `current_font`). The host resolves `Default` to the terminal/scheme
 /// default, `Standard(2..=9)` to the scheme palette, `Standard(10..=12)` to
 /// fixed grey RGB, `True` to an exact 15-bit RGB colour (Z-machine
-/// `set_true_colour`), and `True24` to an exact 24-bit `0xRRGGBB` colour (used
-/// by the Glulx host, whose Glk stylehint colours are 24-bit — carried at full
-/// fidelity rather than downsampled to 15-bit).
+/// `set_true_colour`), and `True24` to an exact 24-bit `0xRRGGBB` host colour.
+/// No Z-machine opcode produces a `True24`: `set_true_colour` (ZMSD §8.3.7) is
+/// 15-bit, so `True` is the variant a Z-machine story's own colour calls
+/// resolve to. `True24` exists for a host that draws from a 24-bit source of
+/// its own — a Glk style hint, a theme colour — and wants to carry it at full
+/// fidelity rather than downsample it to 15-bit before the model has even
+/// stored it. A Z-machine-only embedder, with no such source, can treat
+/// `True24` as unreachable, or fold it into `True` up front using the same
+/// §8.8.3.2.8 rounding [`ZColour::true_value`] performs.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[derive(Default)]
 #[non_exhaustive]
