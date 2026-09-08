@@ -64,6 +64,46 @@ impl<'a> Tokens<'a> {
     }
 }
 
+/// Cheap shape sniff for a ScottFree 1.14 save file, so a host can tell one
+/// apart from this crate's own binary [`crate::Vm::snapshot`] (whose
+/// [`crate::Vm::SNAPSHOT_MAGIC`] a caller checks first — it is unambiguous —
+/// before ever reaching this function) and route to
+/// [`Vm::restore_scottfree`] instead (SQ-1413).
+///
+/// The FIRST 38 whitespace-separated tokens (16 `Counters[ct] RoomSaved[ct]`
+/// pairs, then the 6-int state line — see the module doc for the exact
+/// field order `LoadGame` reads) must all parse as plain decimal integers.
+/// Unlike [`crate::looks_like_scott`]'s 12-int `.dat` header sniff, a save
+/// has no file-specific counts to cross-check against — every field's WIDTH
+/// is fixed by the format itself — so this is an exact shape check on a
+/// fixed prefix, not a heuristic guess at a variable one.
+///
+/// Detection lives in exactly this one place so a host does not duplicate
+/// the rule: `ScottSession::restore_game_save` (lanthorn's own app) and
+/// `scott-cli`'s `/restore` both call this, after ruling out the binary
+/// magic, before `Vm::restore_scottfree`.
+///
+/// Not perfectly exclusive of a `.dat` GAME file — a database's own header
+/// and action table are also runs of decimal integers, and nothing here
+/// reads far enough to rule one out by content. In practice this only
+/// matters if a host offers this check somewhere a full `.dat` could
+/// plausibly be picked as a SAVE target, which none of this crate's own
+/// callers do (a save restore and a fresh game load are different
+/// operations in both the app and `scott-cli`).
+pub fn looks_like_scottfree_save(bytes: &[u8]) -> bool {
+    let Ok(text) = std::str::from_utf8(bytes) else {
+        return false;
+    };
+    let mut tokens = text.split_ascii_whitespace();
+    for _ in 0..38 {
+        match tokens.next() {
+            Some(tok) if tok.parse::<i64>().is_ok() => {}
+            _ => return false,
+        }
+    }
+    true
+}
+
 impl Vm {
     /// Restore state from ScottFree 1.14's own save-file text format (see the
     /// module docs for the exact field order). Distinct from
@@ -261,5 +301,28 @@ mod tests {
         let before = vm.current_room();
         assert!(vm.restore_scottfree(b"garbage").is_err());
         assert_eq!(vm.current_room(), before, "no partial write on failure");
+    }
+
+    // ── looks_like_scottfree_save (SQ-1413) ───────────────────────────────
+
+    #[test]
+    fn a_well_formed_save_is_recognised() {
+        let save = hand_authored_save(0, 0);
+        assert!(looks_like_scottfree_save(save.as_bytes()));
+    }
+
+    #[test]
+    fn this_crates_own_binary_snapshot_is_not_mistaken_for_one() {
+        let vm = Vm::new(db_with_items(3));
+        let snap = vm.snapshot();
+        assert!(!looks_like_scottfree_save(&snap), "ScSv-magic bytes are not decimal-integer text");
+    }
+
+    #[test]
+    fn garbage_is_refused() {
+        assert!(!looks_like_scottfree_save(b""));
+        assert!(!looks_like_scottfree_save(b"not a number at all"));
+        assert!(!looks_like_scottfree_save(b"1 1\n2 1\n")); // truncated: far short of 38 tokens
+        assert!(!looks_like_scottfree_save(&[0xffu8; 40])); // non-UTF-8 bytes
     }
 }
