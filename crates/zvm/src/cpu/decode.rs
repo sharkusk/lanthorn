@@ -370,6 +370,19 @@ pub fn decode_branch_at(mem: &crate::memory::Memory, addr: u32) -> Branch {
 
 /// Decode the instruction at `pc` in `mem` for Z-machine `version`.
 pub fn decode(mem: &Memory, pc: u32, version: u8) -> Instr {
+    decode_into(mem, pc, version, Vec::new())
+}
+
+/// Same as [`decode`], but fills the caller-supplied `operands` buffer
+/// instead of allocating a fresh `Vec` — the buffer is cleared first, then
+/// moved into the returned [`Instr`]. A caller that recovers it back out
+/// (e.g. via `std::mem::take(&mut instr.operands)` once it is done with the
+/// instruction) can hand the same allocation to the next `decode_into` call,
+/// which is what [`crate::cpu::exec::Machine::step`] does to keep this off
+/// the allocator on the per-instruction path (SQ-1438). Semantics are
+/// otherwise identical to [`decode`].
+pub fn decode_into(mem: &Memory, pc: u32, version: u8, mut operands: Vec<Operand>) -> Instr {
+    operands.clear();
     let mut cursor = pc;
     let opcode_byte = mem.read_byte(cursor);
     cursor += 1;
@@ -377,7 +390,6 @@ pub fn decode(mem: &Memory, pc: u32, version: u8) -> Instr {
     let (form, operand_count, opcode) = decode_form(mem, opcode_byte, &mut cursor, version);
 
     // Read operands based on form
-    let mut operands: Vec<Operand> = Vec::new();
     match form {
         Form::Long => {
             // Bits 6 and 5 of opcode_byte give operand types:

@@ -66,7 +66,7 @@ millisecond per megabyte and is the residual asymmetry in every row.
 
 | engine | story | turns | lanthorn | reference | reference is | ratio |
 |---|---|---|---|---|---|---|
-| `zvm` | `minizork.z3` | 20,000 | **2.258 s** (113 µs/turn, 8,856 turns/s) | 0.930 s | dfrotz (Frotz 2.55) | **2.43× slower** |
+| `zvm` | `minizork.z3` | 20,000 | **0.599 s** (30.0 µs/turn, 33,388 turns/s) | 0.900 s | dfrotz (Frotz 2.55) | **1.50× faster** |
 | `gvm` | `glulxercise.ulx` | 2,700 | **0.633 s** (234 µs/turn, 26.7 M opcodes/s) | 1.141 s | glulxe 0.6.1 + cheapglk 1.0.7 | **1.80× faster** |
 | `gvm` `--no-accel` | `glulxercise.ulx` | 2,700 | **0.974 s** (361 µs/turn, 28.4 M opcodes/s) | 1.141 s | glulxe 0.6.1 + cheapglk 1.0.7 | **1.17× faster** |
 | `scott` | `tiny_cave.dat` | 100,000 | **0.153 s** (1.53 µs/turn, 651,838 turns/s) | 0.157 s | ScottFree 1.14 (cspiegel/scottfree-glk) + cheapglk | **1.02× faster** (parity) |
@@ -76,27 +76,39 @@ Output volume, as a cross-check that both sides did the same work: zvm printed
 
 ### What the rows say
 
-**`zvm` is the one that is behind**, by a factor of about 2.4 on a real v3 game.
-That is a genuine gap, not a measurement artifact — the script is eight ordinary
-commands and dfrotz is doing strictly more I/O work than we are. A sampling
-profile of the 400,000-turn run (macOS `sample`, 6,113 samples) says where it
-goes: roughly **47% of samples are in the allocator** (`malloc`/`free`/`realloc`
-and `RawVec` growth) and another **~15% in `core::fmt`**, leaving the actual
-opcode dispatch (`cpu::decode::decode`, `Machine::step`, `state::read_var`) a
-minority of the time. Two call sites account for most of it, and both are on the
-per-instruction path:
+**`zvm` was the one that was behind**, by a factor of about 2.4 on a real v3
+game, until SQ-1438. A sampling profile of the 400,000-turn run (macOS
+`sample`, 6,113 samples) found where it went: roughly **47% of samples were in
+the allocator** (`malloc`/`free`/`realloc` and `RawVec` growth) and another
+**~15% in `core::fmt`**, leaving the actual opcode dispatch
+(`cpu::decode::decode`, `Machine::step`, `state::read_var`) a minority of the
+time. Two call sites accounted for most of it, both on the per-instruction
+path:
 
-- `exec.rs`'s `opcode_name()` is called for **every instruction** and returns a
-  `String`. For the eight opcodes it knows it is a `to_string()`; for every
-  other opcode it is `format!("op:{:?}/0x{:02x}", …)` — a `Debug` format and a
-  `LowerHex` format, allocated and thrown away — and it is consumed only when
-  the instruction faults, which is approximately never.
-- `decode()` builds a `Vec<Operand>` per instruction and `execute()` collects
+- `exec.rs`'s `opcode_name()` was called for **every instruction** and
+  returned a `String`. For the eight opcodes it knows it is a `to_string()`;
+  for every other opcode it is `format!("op:{:?}/0x{:02x}", …)` — a `Debug`
+  format and a `LowerHex` format, allocated and thrown away — and it is
+  consumed only when the instruction faults, which is approximately never.
+- `decode()` built a `Vec<Operand>` per instruction and `execute()` collected
   another from it (`spec_from_iter_nested` on `Vec<Operand>`, 316 samples).
 
-Both are fixable without touching semantics and neither is fixed here — this
-lane is measurement only, and the numbers above are the "before" they would be
-judged against. **SQ-1438** carries the work.
+**SQ-1438 fixed both, without touching semantics or the public `Instr`/
+`Operand` shape** (`zvm::cpu::decode` is reachable by an embedder, so the
+fix had to keep those types as they were): `opcode_name()` is now called
+only on the fault path that actually consumes its `String`, using the two
+`Copy`/cheap-`Clone` fields (`opcode`, `operand_count`) saved off the
+instruction before it is moved into `execute()`. And `decode()` grew a
+`decode_into()` sibling that fills a caller-supplied `Vec<Operand>` instead
+of allocating one — `Machine` now owns that buffer (and a second one for
+`execute()`'s resolved `Vec<u16>`) and lends each out before use and takes it
+back after, so the same heap allocation is reused for the rest of the run
+instead of being `malloc`'d and `free`'d every instruction. `decode()` itself
+is unchanged (`decode_into(mem, pc, version, Vec::new())`), so every existing
+caller — `disasm.rs`, `disasm_cache.rs`, the crate's own tests — is unaffected.
+The result: 20,000 Mini-Zork turns in **0.599 s**, down from 2.258 s (~3.7×),
+which flips the ratio against dfrotz from 2.43× slower to **1.50× faster**.
+Measured the same way as the row above, 2026-09-08.
 
 **`gvm` is ahead of glulxe, and the margin needs an asterisk.** With
 acceleration on we are 1.80× faster, but that is not a like-for-like dispatch
