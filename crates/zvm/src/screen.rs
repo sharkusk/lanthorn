@@ -2009,8 +2009,9 @@ pub fn default_interpreter_number(version: u8) -> u8 {
 ///     (bit 4) is advertised for v5+; colour (bit 6) and sound (bit 7) are
 ///     capability-driven. Transcript (bit 0) and fixed-pitch (bit 1) are the
 ///     game's own state.
-///   - 0x1E: interpreter number — override, else Frotz's default (6 for v6, else 1).
-///   - 0x1F: interpreter version — 'A' (ASCII 0x41), standard v1.1 era.
+///   - 0x1E/0x1F (v3+ only — see the SQ-1443 note beside the writes below):
+///     interpreter number — override, else Frotz's default (6 for v6, else
+///     1); interpreter version — 'A' (ASCII 0x41), standard v1.1 era.
 ///   - 0x32/0x33: standard revision number (1.1 → 1, 1).
 ///
 /// Only modifies bytes inside dynamic memory (below static_mem_base); if the
@@ -2093,19 +2094,39 @@ pub fn init_header_caps(mem: &mut Memory, honor_game_colours: bool, sound_availa
     }
     mem.write_word(0x10, new_f2);
 
-    // Interpreter number (0x1E): explicit override, else Frotz's default
-    // (6 for v6, else 1 = DEC-20). `version` was read at the top of this fn.
-    let interp = interpreter_number.unwrap_or_else(|| default_interpreter_number(version));
-    mem.write_byte(0x1E, interp);
+    // Interpreter number (0x1E) and version (0x1F): ZMSD §11.1's header table
+    // marks BOTH "4" in the V column, i.e. undefined below Version 4 — and
+    // Frotz's current `restart_header()` (`src/common/fastmem.c`) does write
+    // them only under its own `z_header.version >= V4` guard. But this crate
+    // has a real, tested Version 3 dependency the standard's table does not
+    // account for: SQ-0839's disk-medium feature threads a real machine's own
+    // interpreter number into `$1E` — via `interpreter_number` here — even
+    // for a Version 3 story mounted off that machine's own floppy, so a v3
+    // Zork I on an Amiga disk reports interpreter 4
+    // (`zvm-cli/tests/disk_image.rs::a_story_off_an_amiga_floppy_is_told_it_is_an_amiga`),
+    // and a bare v3 file with no medium still gets Frotz's DEC-20 default
+    // (`…::an_ordinary_story_file_keeps_the_default_interpreter`) — both
+    // pre-existing, passing product behaviour this quest must not regress.
+    // So SQ-1443's cut is at Version 3, not 4, matching its own title: only
+    // Versions 1 and 2 (which have no such feature and no such test) leave
+    // these bytes exactly as the story image shipped them; Version 3 keeps
+    // writing both, unchanged.
+    if version > 2 {
+        // Interpreter number: explicit override, else Frotz's default (6 for
+        // v6, else 1 = DEC-20). `version` was read at the top of this fn.
+        let interp = interpreter_number.unwrap_or_else(|| default_interpreter_number(version));
+        mem.write_byte(0x1E, interp);
 
-    // Interpreter version (0x1F). `b'A'` = 0x41 is the default and has NO
-    // PROVENANCE: it arrived in this function's first commit beside `$1E`'s
-    // "6, a common neutral value", which SQ-0872 has since replaced with a
-    // sourced machine table, and it was never revisited. A story can PRINT this
-    // byte — Shogun r295 renders it as a decimal, so 'A' shows as 65 — so
-    // `Machine::set_interpreter_version` exists to override it while SQ-0885
-    // works out what each machine actually wrote.
-    mem.write_byte(0x1F, interpreter_version.unwrap_or(b'A'));
+        // Interpreter version. `b'A'` = 0x41 is the default and has NO
+        // PROVENANCE: it arrived in this function's first commit beside
+        // `$1E`'s "6, a common neutral value", which SQ-0872 has since
+        // replaced with a sourced machine table, and it was never revisited.
+        // A story can PRINT this byte — Shogun r295 renders it as a decimal,
+        // so 'A' shows as 65 — so `Machine::set_interpreter_version` exists
+        // to override it while SQ-0885 works out what each machine actually
+        // wrote.
+        mem.write_byte(0x1F, interpreter_version.unwrap_or(b'A'));
+    }
 
     // Standard revision (0x32 = major, 0x33 = minor): 1.1 — the only published
     // Z-Machine Standards Document revision (ZMSD 1.1); no "1.2" exists.
@@ -4216,6 +4237,48 @@ mod tests {
         let mut mem = Memory::new(sample_story(5)).unwrap();
         init_header_caps(&mut mem, false, false, Some(6), None, Palette::Standard);
         assert_eq!(mem.read_byte(0x1E), 6, "override forces IBM PC (6)");
+    }
+
+    /// SQ-1443. ZMSD §11.1's header table marks $1E (interpreter number) and
+    /// $1F (interpreter version) "4" in the V column, but this crate keeps
+    /// writing both for Version 3 too — see the note beside the write in
+    /// `init_header_caps` for why (SQ-0839's disk-medium feature and Frotz's
+    /// own DEC-20 default both depend on it, pre-existing and tested). Only
+    /// Versions 1 and 2, which have neither, leave whatever the story image
+    /// shipped in these bytes untouched — even with an explicit override
+    /// supplied, since there is no `split_window`-style capability for an
+    /// interpreter identity to describe below Version 3 either (§8.5).
+    #[test]
+    fn init_header_caps_leaves_1e_1f_alone_below_v3() {
+        for v in [1u8, 2] {
+            let mut mem = Memory::new(sample_story(v)).unwrap();
+            mem.write_byte(0x1E, 0x42); // sentinel: whatever the image shipped
+            mem.write_byte(0x1F, 0x99);
+            init_header_caps(&mut mem, false, false, Some(6), Some(b'Z'), Palette::Standard);
+            assert_eq!(mem.read_byte(0x1E), 0x42, "v{v}: $1E untouched, even with an override");
+            assert_eq!(mem.read_byte(0x1F), 0x99, "v{v}: $1F untouched, even with an override");
+        }
+    }
+
+    /// The other side of the same cut: Versions 3, 4, 5 and 6 keep writing
+    /// $1E and $1F exactly as before this quest (unaffected by the v1/v2
+    /// gate) — Version 3 included, per
+    /// `zvm-cli/tests/disk_image.rs::an_ordinary_story_file_keeps_the_default_interpreter`
+    /// and `::a_story_off_an_amiga_floppy_is_told_it_is_an_amiga`.
+    #[test]
+    fn init_header_caps_still_writes_1e_1f_from_v3() {
+        for v in [3u8, 4, 5, 6] {
+            let mut mem = Memory::new(sample_story(v)).unwrap();
+            mem.write_byte(0x1E, 0x42);
+            mem.write_byte(0x1F, 0x99);
+            init_header_caps(&mut mem, false, false, None, None, Palette::Standard);
+            assert_eq!(
+                mem.read_byte(0x1E),
+                default_interpreter_number(v),
+                "v{v}: $1E gets the default interpreter number"
+            );
+            assert_eq!(mem.read_byte(0x1F), b'A', "v{v}: $1F gets the default 'A'");
+        }
     }
 
     #[test]
