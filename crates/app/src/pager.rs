@@ -176,6 +176,40 @@ pub fn baseline_before(last_frame_rows: u16, continued_row: bool) -> u16 {
     last_frame_rows.saturating_sub(u16::from(continued_row))
 }
 
+/// The baseline the OPENING-BANNER arm (`startup.rs`) starts from: the first row
+/// of the boot output that carries anything to read (SQ-1434).
+///
+/// The banner arm is the one arm with no previous frame to measure against, so it
+/// used to start at row 0 — which counts the blank rows a story opens with as
+/// output the reader must not miss. They are not: the pager exists to guarantee
+/// the first row of PROSE is on screen, and a blank row is not prose.
+///
+/// It is not a rounding error. Every Inform 7 Glulx story opens by printing two
+/// or three newlines before its prologue (measured: `chlorophyll.gblorb` and
+/// `Alias 'The Magpie'.gblorb` three each, `advent.blb` six), and on a pane where
+/// the prose fits exactly those blanks are the WHOLE overflow. The pager then
+/// engaged, parked the view with those blank rows across the top of the screen,
+/// pushed three rows of real text below the fold, and — with a `Line` read
+/// pending — ate the first character of the player's first command to dismiss
+/// itself. That is strictly worse than not paging at all, and it is the reported
+/// symptom: "the `>` prompt appears, the first keystroke is swallowed, and there
+/// is plainly screen left".
+///
+/// A blank line wraps to exactly one row, so counting leading blank LINES counts
+/// leading blank ROWS — except for a line carrying an inline image, which is
+/// blank as text and several rows tall as a picture, so those stop the count.
+pub fn opening_baseline(state: &crate::state::AppState) -> u16 {
+    state
+        .transcript
+        .iter()
+        .enumerate()
+        .take_while(|(i, line)| {
+            line.trim().is_empty() && state.transcript_images.get(*i).is_none_or(Option::is_none)
+        })
+        .count()
+        .min(u16::MAX as usize) as u16
+}
+
 /// What drove the turn whose output the pager is about to measure.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Driver {

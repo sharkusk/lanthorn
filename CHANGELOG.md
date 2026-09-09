@@ -62,6 +62,13 @@ Absolute URLs or no link.
 
 ### Fixed
 
+- **Some games no longer swallow your first keystroke at the opening prompt.**
+  Stories that begin with a blank line or two — most modern Inform games do —
+  could raise a `[more]` prompt over an opening screen that plainly still had
+  room, leaving blank rows across the top, pushing the last few lines of the
+  intro out of sight, and eating the first letter you typed to dismiss itself.
+  Blank rows are no longer counted as text you might miss. An opening that
+  genuinely runs off the screen still pauses, as before. (SQ-1434)
 - **Restoring a Save State that was taken while a graphical (Version 6) game
   was showing a full-screen picture, such as Zork Zero's splash screens, no
   longer pages through the whole story so far with `[more]` prompts on the
