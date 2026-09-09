@@ -1978,7 +1978,8 @@ pub(crate) fn boot_story(
     // chunk, the fetched IFDB sidecar, then the bundled tables — so the pane
     // names the game the way the list does. The banner heuristic is the tier
     // below it, and the filename stem is the last resort it was meant to be.
-    let meta_title = app::picker::metadata_title_in(&story_path, &game_dir, &ifid, is_scott);
+    let meta_title =
+        app::picker::metadata_title_in(&story_path, &game_dir, &ifid, is_scott, &story_bytes);
     state.title =
         app::session::resolve_title(None, meta_title.as_deref(), banner_title.as_deref(), &story_path);
     let story_filename = story_path.file_name().and_then(|n| n.to_str()).unwrap_or("");

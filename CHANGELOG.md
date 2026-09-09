@@ -34,8 +34,11 @@ Absolute URLs or no link.
   vocabulary help and everything else working as usual — the games' own
   first-person voice, and the Howarth lamp that counts its remaining turns out
   loud and is gone for good once it burns out. lanthorn also decodes the
-  line-drawn picture each room carries, though nothing draws them yet.
-  (SQ-1414)
+  line-drawn picture each room carries, though nothing draws them yet. The
+  picker and the title bar name it by its release title (*The Golden Baton*,
+  not the bare `BATON`) whether it's opened straight off disk or pulled off
+  one of the compilation disk images below.
+  (SQ-1414, SQ-1469)
 - **Hand lanthorn a Mysterious Adventures compilation disk and pick a game.**
   `MYSTADV1.D64` and `MYSTADV2.D64` — the two Commodore 64 disks the eleven
   games above were actually sold on — now mount and open just like an Infocom

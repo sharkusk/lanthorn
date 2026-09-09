@@ -890,19 +890,24 @@ pub fn scott_tuid(stem: &str) -> Option<&'static str> {
 }
 
 /// The canonical title for a Commodore 64 *Mysterious Adventures* program
-/// file, by the CBM name the disk stores it under (`BATON` → "The Golden
-/// Baton"), matched case-insensitively.
+/// file, identified by its own bytes rather than by any name — the disk's
+/// CBM spelling (`BATON`), a filename someone gave the extracted `.prg`
+/// (`BATON.prg`), or nothing at all.
 ///
-/// Reaches for `scott::c64::RELEASES` rather than `scott_titles.tsv`: that
-/// table is keyed by the IF-Archive `.dat` filenames these disks never carry
-/// (`golden_baton`, not `BATON`), so it never resolves a name a disk actually
-/// spells. `scott::c64::RELEASES` is keyed on the disk's own spelling because
-/// it is derived from the disks themselves (SQ-1414).
-fn scott_c64_title(disk_name: &str) -> Option<&'static str> {
-    scott::c64::RELEASES
-        .iter()
-        .find(|r| r.file_name.eq_ignore_ascii_case(disk_name))
-        .map(|r| r.title)
+/// `scott::c64::identify` matches the eleven by content checksum
+/// (`scott::c64::RELEASES`), which is the one fact both routes to this
+/// dialect share: `entry_from_loaded` used to key this off the disk's own
+/// `disk_entry` name, so a program file opened DIRECTLY — with no disk
+/// entry to ask — fell through to `scott_titles.tsv`'s IF-Archive-filename
+/// keys (`golden_baton`, never `BATON`) and showed the bare stem instead of
+/// "The Golden Baton" (SQ-1469). Reading the checksum out of the bytes
+/// themselves answers identically down both routes, because
+/// `hints::extract_story` never touches a Scott story's bytes — the same
+/// `.prg` bytes reach here whether they were read straight off disk or
+/// pulled out of a `.d64`'s directory.
+fn scott_release_title(bytes: &[u8]) -> Option<&'static str> {
+    let (image, load_address) = scott::c64::prg_image(bytes)?;
+    scott::c64::identify(image, load_address).map(|r| r.title)
 }
 
 /// The bundled author for a Scott-format game (filename stem, case-insensitive),
@@ -925,13 +930,17 @@ pub fn scott_story_title(path: &Path) -> Option<String> {
     scott_title(stem).map(str::to_string)
 }
 
-/// The bundled-table title for a story: the Scott filename table
-/// (`scott_titles.tsv`, keyed by the stem) when the story is a Scott database,
-/// else the IFID-keyed known-title table. Neither table needs the file — this is
-/// the offline tier, below any real metadata.
-pub fn bundled_title(stem: &str, ifid: &str, is_scott: bool) -> Option<&'static str> {
+/// The bundled-table title for a story: the C64 *Mysterious Adventures*
+/// release `bytes` themselves identify by content checksum
+/// ([`scott_release_title`], SQ-1469) — the one answer that is the same
+/// whether the story was opened directly or pulled off a `.d64` — then the
+/// Scott filename table (`scott_titles.tsv`, keyed by the stem) when the
+/// story is any other Scott database, else the IFID-keyed known-title table.
+/// Neither table needs the file — this is the offline tier, below any real
+/// metadata.
+pub fn bundled_title(stem: &str, ifid: &str, is_scott: bool, bytes: &[u8]) -> Option<&'static str> {
     is_scott
-        .then(|| scott_title(stem))
+        .then(|| scott_release_title(bytes).or_else(|| scott_title(stem)))
         .flatten()
         .or_else(|| crate::session::known_title(ifid))
 }
@@ -964,9 +973,20 @@ fn container_ifmd(path: &Path) -> Option<crate::ifiction::IFiction> {
 /// for it instead of guessing from the boot banner (SQ-0766). The precedence is
 /// literally [`resolved_title`], shared with [`resolve`], so the list and the
 /// pane cannot name the same game differently.
-pub fn metadata_title(path: &Path, data_base: &Path, ifid: &str, is_scott: bool) -> Option<String> {
+///
+/// `bytes` are the story's own executable bytes (as `hints::extract_story`
+/// returns them) — needed so [`bundled_title`] can identify a C64 *Mysterious
+/// Adventures* release by content checksum (SQ-1469) the same way the picker
+/// row does.
+pub fn metadata_title(
+    path: &Path,
+    data_base: &Path,
+    ifid: &str,
+    is_scott: bool,
+    bytes: &[u8],
+) -> Option<String> {
     let game_dir = crate::storage::game_dir(data_base, &crate::storage::story_key_at(path));
-    metadata_title_in(path, &game_dir, ifid, is_scott)
+    metadata_title_in(path, &game_dir, ifid, is_scott, bytes)
 }
 
 /// [`metadata_title`] for a caller that already knows which per-game directory
@@ -982,11 +1002,12 @@ pub fn metadata_title_in(
     game_dir: &Path,
     ifid: &str,
     is_scott: bool,
+    bytes: &[u8],
 ) -> Option<String> {
     let ifmd = container_ifmd(path);
     let fetched = crate::story_info::load(game_dir, ifid).and_then(|i| i.fetched);
     let stem = path.file_stem().and_then(|s| s.to_str()).unwrap_or_default();
-    resolved_title(ifmd.as_ref(), fetched.as_ref(), bundled_title(stem, ifid, is_scott))
+    resolved_title(ifmd.as_ref(), fetched.as_ref(), bundled_title(stem, ifid, is_scott, bytes))
 }
 
 /// The title tiers of SPEC "Precedence", stopping short of the filename stem:
@@ -1763,19 +1784,17 @@ fn entry_from_loaded(
     // **A disk story is not always Infocom Z-code any more** (SQ-1414): the
     // Commodore 64 *Mysterious Adventures* compilation disks carry Scott Adams
     // program files, named `BATON`, `TIME MACHINE`, and so on — the disk's own
-    // spelling, not a filename `scott_titles.tsv` was ever keyed on. Its title
-    // comes from `scott::c64::RELEASES` instead, by that same disk name, before
-    // falling back to the ordinary Scott lookup below.
+    // spelling, not a filename `scott_titles.tsv` was ever keyed on. `bundled_title`
+    // identifies those by content checksum before falling back to the ordinary
+    // Scott lookup below — which also fixes the same game opened DIRECTLY as a
+    // bare `.prg` (`BATON.prg`), with no disk entry to name it at all (SQ-1469).
     let stem = disk_entry.unwrap_or_else(|| {
         path.file_stem()
             .and_then(|s| s.to_str())
             .unwrap_or(&filename)
     });
     let is_scott = matches!(loaded, crate::hints::LoadedStory::Scott(_));
-    let tsv_title = disk_entry
-        .filter(|_| is_scott)
-        .and_then(scott_c64_title)
-        .or_else(|| bundled_title(stem, &ifid, is_scott));
+    let tsv_title = bundled_title(stem, &ifid, is_scott, &bytes);
     let tsv_author = is_scott.then(|| scott_author(stem)).flatten();
     let tsv_description = is_scott.then(|| scott_description(stem)).flatten();
     let resolved = resolve(
@@ -3635,6 +3654,123 @@ mod tests {
                 assert!(entry.tuid.is_some(), "IFDB id for {stem}");
             }
         }
+    }
+
+    /// [`scott_release_title`] identifies a C64 *Mysterious Adventures* release
+    /// purely from its own bytes' checksum (SQ-1469) — no real specimen needed,
+    /// because `scott::c64::identify` checks only the checksum, not the driver
+    /// shape a genuine PRG carries. Builds a load address plus a filler image
+    /// whose bytes wrap-sum to a catalogued release's checksum.
+    #[test]
+    fn scott_release_title_identifies_a_c64_release_by_checksum_alone() {
+        let load_address: u16 = 0x4000;
+        let baton = scott::c64::RELEASES
+            .iter()
+            .find(|r| r.file_name == "BATON")
+            .expect("BATON is catalogued");
+
+        // Pad with 0xFF bytes, reducing the outstanding sum by 255 each time,
+        // then a final byte closes the gap exactly — works for any u16 target.
+        let mut image = Vec::new();
+        let mut remaining =
+            baton.checksum.wrapping_sub(scott::c64::image_checksum(&[], load_address));
+        while remaining > 255 {
+            image.push(0xFFu8);
+            remaining = remaining.wrapping_sub(0xFF);
+        }
+        image.push(remaining as u8);
+        assert_eq!(
+            scott::c64::image_checksum(&image, load_address),
+            baton.checksum,
+            "constructed image must actually sum to BATON's checksum"
+        );
+
+        let mut file = load_address.to_le_bytes().to_vec();
+        file.extend_from_slice(&image);
+        assert_eq!(scott_release_title(&file), Some("The Golden Baton"));
+
+        // A file whose checksum matches none of the eleven answers None, so the
+        // caller falls through to the filename-stem table.
+        let mut junk = load_address.to_le_bytes().to_vec();
+        junk.extend_from_slice(b"not a mysterious adventure");
+        assert_eq!(scott_release_title(&junk), None);
+    }
+
+    /// An unrecognised Scott database — not one of the eleven C64 *Mysterious
+    /// Adventures* releases, and not in `scott_titles.tsv` either — falls back
+    /// to the filename stem, exactly as it did before SQ-1469.
+    #[test]
+    fn an_unrecognised_scott_database_falls_back_to_the_filename_stem() {
+        let dir = temp_dir("scott-unknown");
+        let path = dir.join("unknownscott.dat");
+        // A genuinely minimal but COMPLETE ScottFree text-format database (one
+        // of everything: header, action, verb/noun pair, room, message, item) —
+        // `entry_from_loaded`'s launchability gate is a full `Database::parse`,
+        // not just the header sniff.
+        let db = concat!(
+            "0 0 0 0 0 0 0 0 3 0 0 0\n", // unknown items actions words rooms carry player treasures wordlen light messages treasureroom
+            "0 0 0 0 0 0 0 0\n",         // one action record (verb/noun word, 5 conditions, 2 commands)
+            "\"NORTH\" \"NORTH\"\n",     // one verb/noun pair
+            "0 0 0 0 0 0 \"A room.\"\n", // one room: six exits, description
+            "\"A message.\"\n",          // one message
+            "\"An item.\" 0\n",          // one item: description, start location
+        );
+        std::fs::write(&path, db).unwrap();
+        assert!(scott::Database::parse(db).is_ok(), "premise: the database itself must parse");
+        let entry = resolve_entry(&path, &dir).expect("a minimal Scott database is launchable");
+        assert_eq!(entry.meta.engine, Engine::Scott);
+        assert_eq!(entry.title, "unknownscott", "unknown Scott story must fall back to the stem");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// End to end on real media (skips vacuously — `stories/` is gitignored):
+    /// the same C64 *Mysterious Adventures* bytes must resolve to the same
+    /// title whether opened as a bare `.prg` (no disk entry to name it) or
+    /// pulled off `MYSTADV1.D64`'s directory as the `BATON` row (SQ-1469).
+    /// Before the fix, the direct route showed the bare stem `BATON` while the
+    /// disk route showed "The Golden Baton".
+    #[test]
+    fn a_c64_mysterious_program_file_titles_the_same_directly_and_via_the_disk() {
+        let stories = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../stories");
+        let direct = stories.join("scott-dialects/c64/prg/MYSTADV1.D64/BATON.prg");
+        if !direct.is_file() {
+            eprintln!("SKIP: {} absent (gitignored commercial fixture)", direct.display());
+            return;
+        }
+        let base = temp_dir("c64-direct-vs-disk");
+        let direct_entry = resolve_entry(&direct, &base).expect("BATON.prg opens directly");
+        assert_eq!(direct_entry.title, "The Golden Baton", "direct route must not show the stem");
+
+        let disk = stories.join("scott-dialects/c64/MYSTADV1.D64");
+        if disk.is_file() {
+            let rows = resolve_entries(&disk, &base);
+            let baton_row = rows
+                .iter()
+                .find(|r| r.meta.disk_entry.as_deref() == Some("BATON"))
+                .expect("MYSTADV1.D64 offers a BATON row");
+            assert_eq!(baton_row.title, direct_entry.title, "direct and disk routes must agree");
+        }
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    /// End to end on real media (skips vacuously — `stories/` is gitignored):
+    /// a TI-99/4A `.fiad` opened directly still resolves through the bundled
+    /// filename-stem table (`scott_titles.tsv`'s `adv01` row) — `ti994a` itself
+    /// carries no adventure number to identify a release by (SQ-1469's other
+    /// dialect; unlike the C64 releases, this route was never broken).
+    #[test]
+    fn a_ti99_fiad_titles_via_the_bundled_stem_table() {
+        let path = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../stories/scott-dialects/ti99/adv01.fiad");
+        if !path.is_file() {
+            eprintln!("SKIP: {} absent (gitignored commercial fixture)", path.display());
+            return;
+        }
+        let base = temp_dir("ti99-direct");
+        let entry = resolve_entry(&path, &base).expect("adv01.fiad opens directly");
+        assert_eq!(entry.meta.engine, Engine::Scott);
+        assert_eq!(entry.title, "Adventureland");
+        let _ = std::fs::remove_dir_all(&base);
     }
 
     #[test]

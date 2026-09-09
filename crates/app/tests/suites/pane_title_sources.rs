@@ -49,6 +49,14 @@ fn identity(path: &Path) -> (String, bool, bool) {
     (app::ifid::compute_ifid(loaded.bytes()), is_scott, disk_image.is_some())
 }
 
+/// The executable bytes `metadata_title` needs (SQ-1469): the same bytes
+/// `identity` derives the IFID from, mounted fresh since `identity` does not
+/// hand its own back out.
+fn exec_bytes(path: &Path) -> Vec<u8> {
+    let (loaded, _) = app::hints::load_mounted_story(path).expect("story must load");
+    loaded.bytes().to_vec()
+}
+
 /// Write the fetched-IFDB sidecar the story browser reads, into `data_base`.
 fn seed_sidecar(data_base: &Path, path: &Path, ifid: &str, title: &str) {
     let game_dir = app::storage::game_dir(data_base, &app::storage::story_key_at(path));
@@ -81,7 +89,7 @@ fn seed_sidecar(data_base: &Path, path: &Path, ifid: &str, title: &str) {
 /// → shared metadata resolver → `resolve_title` → `format_pane_title`.
 fn pane_title(path: &Path, data_base: &Path, banner_title: Option<&str>) -> String {
     let (ifid, is_scott, disk_image) = identity(path);
-    let meta = app::picker::metadata_title(path, data_base, &ifid, is_scott);
+    let meta = app::picker::metadata_title(path, data_base, &ifid, is_scott, &exec_bytes(path));
     let name = resolve_title(None, meta.as_deref(), banner_title, path);
     let filename = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
     format_pane_title(&name, filename, disk_image)
@@ -133,7 +141,7 @@ fn a_fetched_sidecar_names_the_game_the_browser_lists() {
         // Premise: with nothing seeded, the pane falls to the stem — the bug.
         let stem = path.file_stem().and_then(|s| s.to_str()).unwrap().to_string();
         assert_eq!(
-            app::picker::metadata_title(&path, &base, &ifid, is_scott),
+            app::picker::metadata_title(&path, &base, &ifid, is_scott, &exec_bytes(&path)),
             None,
             "{file}: premise — no metadata source knows it yet"
         );
@@ -142,7 +150,7 @@ fn a_fetched_sidecar_names_the_game_the_browser_lists() {
         // Seed the sidecar the browser reads, and the pane must now agree with it.
         seed_sidecar(&base, &path, &ifid, title);
         assert_eq!(
-            app::picker::metadata_title(&path, &base, &ifid, is_scott).as_deref(),
+            app::picker::metadata_title(&path, &base, &ifid, is_scott, &exec_bytes(&path)).as_deref(),
             Some(title),
             "{file}: the shared resolver must read the fetched sidecar"
         );
@@ -160,7 +168,10 @@ fn a_sidecar_for_a_different_ifid_is_ignored() {
     let base = tmp_base("wrongifid");
     let (ifid, is_scott, _) = identity(&path);
     seed_sidecar(&base, &path, "ZCODE-1-000000-0000", "Not This Game");
-    assert_eq!(app::picker::metadata_title(&path, &base, &ifid, is_scott), None);
+    assert_eq!(
+        app::picker::metadata_title(&path, &base, &ifid, is_scott, &exec_bytes(&path)),
+        None
+    );
     assert_eq!(pane_title(&path, &base, None), "anchor");
     let _ = std::fs::remove_dir_all(&base);
 }
@@ -187,6 +198,26 @@ fn the_bundled_scott_table_names_a_scott_story_offline() {
             pane_title(&path, &base, None)
         );
     }
+    let _ = std::fs::remove_dir_all(&base);
+}
+
+/// SQ-1469: a Commodore 64 *Mysterious Adventures* program file opened
+/// DIRECTLY — no disk entry to name it, unlike the `.d64` route — must show
+/// its release title in the pane the same way the disk route does, not the
+/// bare CBM filename stem (`BATON`). `bundled_title` identifies it by content
+/// checksum now, so `scott_titles.tsv`'s IF-Archive-filename keys (which
+/// never match a disk's own spelling) are no longer the only offline tier.
+#[test]
+fn a_c64_mysterious_program_file_opened_directly_still_gets_its_release_title() {
+    let Some(path) = story("scott-dialects/c64/prg/MYSTADV1.D64/BATON.prg") else { return };
+    let base = tmp_base("c64-direct");
+    let (_, is_scott, _) = identity(&path);
+    assert!(is_scott, "BATON.prg must mount as a Scott database");
+    let title = pane_title(&path, &base, None);
+    assert!(
+        title.starts_with("The Golden Baton"),
+        "expected The Golden Baton…, got {title} — the pre-fix defect showed the bare stem BATON"
+    );
     let _ = std::fs::remove_dir_all(&base);
 }
 
