@@ -8256,6 +8256,305 @@ mod tests {
         assert_eq!(m.mem.read32((CLOSE_ADDR + 4) as u32), Some(5), "write count");
     }
 
+    // ── SQ-1418: printing runs on the Glulx stack, not a native nested loop ──
+    //
+    // Glulx spec §1.3.2 gives DestTypes 10-14 for resuming an interrupted print
+    // and §1.3.5 ("Calling and Returning During Output Filtering") requires the
+    // filter system to push one and RETURN to the interpreter loop rather than
+    // recursing natively. Reference implementation: glulxe 0.6.1
+    // (`string.c` stream_string/stream_num, `funcs.c` pop_callstub /
+    // pop_callstub_string), MIT-licensed, Andrew Plotkin.
+
+    #[test]
+    fn deep_filter_recursion_prints_every_character() {
+        use asm::Op::{C32, C8, Local32, Mem32};
+        const COUNTER: u32 = 0x100;
+        const LOG: u32 = 0x110;
+        const FILT: u32 = 0x24;
+        const DEPTH: u32 = 100;
+
+        // filter(ch): if ch != 0, streamchar(ch - 1) FIRST — which re-enters the
+        // filter one level deeper — then append ch to the log. Kicked off with
+        // DEPTH, that is DEPTH+1 nested filter invocations logging 0..=DEPTH in
+        // completion order (deepest first).
+        let recurse = [
+            asm::ins(0x11, &[Local32(0), C8(1), Local32(4)]), // L1 = ch - 1
+            asm::ins(0x70, &[Local32(4)]),                    // streamchar L1
+        ]
+        .concat();
+        let mut filt_body = asm::ins(0x22, &[Local32(0), C8(recurse.len() as i8 + 2)]); // jz ch → skip
+        filt_body.extend(recurse);
+        filt_body.extend(asm::ins(0x4C, &[C32(LOG), Mem32(COUNTER), Local32(0)])); // log[n] = ch
+        filt_body.extend(asm::ins(0x10, &[Mem32(COUNTER), C8(1), Mem32(COUNTER)])); // n += 1
+        filt_body.extend(asm::ins(0x31, &[C8(0)])); // return 0
+        let filt = asm::func(0xC1, &[(4, 2)], &filt_body);
+
+        let mut body = asm::ins(0x149, &[C8(1), C32(FILT)]); // setiosys filter, rock = filt
+        body.extend(asm::ins(0x70, &[C32(DEPTH)])); // streamchar DEPTH
+        body.extend(asm::ins(0x120, &[])); // quit
+        let start = asm::func(0xC1, &[], &body);
+
+        let built = asm::assemble(&[filt, start], 1, 0x400);
+        assert_eq!(built.addrs[0], FILT, "test assumes filt is assembled first");
+        let mut m = machine(built);
+        // Room for DEPTH+1 frames, so the VM's own stack is not what bounds this.
+        m.stack.resize(1 << 20, 0);
+        m.run();
+
+        assert!(!m.faulted, "diagnostics: {:?}", m.diagnostics);
+        assert_eq!(
+            m.mem.read32(COUNTER),
+            Some(DEPTH + 1),
+            "every nested filter call must run — a native-recursion cap truncated this at 33"
+        );
+        let logged: Vec<u32> = (0..=DEPTH).map(|i| m.mem.read32(LOG + i * 4).unwrap()).collect();
+        assert_eq!(logged, (0..=DEPTH).collect::<Vec<_>>(), "logged deepest-first, nothing dropped");
+    }
+
+    #[test]
+    fn compressed_string_function_node_under_filter_iosys() {
+        use asm::Op::{C16, C32, C8, Local32, Mem32, Zero};
+        const COUNTER: u32 = 0x100;
+        const LOG: u32 = 0x110;
+        const FILT: u32 = 0x24;
+
+        // filter(ch): append ch to the log.
+        let mut filt_body = asm::ins(0x4C, &[C32(LOG), Mem32(COUNTER), Local32(0)]);
+        filt_body.extend(asm::ins(0x10, &[Mem32(COUNTER), C8(1), Mem32(COUNTER)]));
+        filt_body.extend(asm::ins(0x31, &[C8(0)]));
+        let filt = asm::func(0xC1, &[(4, 1)], &filt_body);
+
+        // printer(): streams 'Y' then 'Z'. Both must reach the filter, and the
+        // string must carry on decoding once the function returns.
+        let mut pr_body = asm::ins(0x70, &[C8(b'Y' as i8)]);
+        pr_body.extend(asm::ins(0x70, &[C8(b'Z' as i8)]));
+        pr_body.extend(asm::ins(0x31, &[Zero]));
+        let printer = asm::func(0xC1, &[], &pr_body);
+
+        let mut body = asm::ins(0x149, &[C8(1), C32(FILT)]); // setiosys filter
+        body.extend(asm::ins(0x141, &[C16(0x0200)])); // setstringtbl 0x200
+        body.extend(asm::ins(0x72, &[C16(0x0280)])); // streamstr 0x280
+        body.extend(asm::ins(0x120, &[]));
+        let start = asm::func(0xC1, &[], &body);
+
+        let built = asm::assemble(&[filt, printer, start], 2, 0x400);
+        assert_eq!(built.addrs[0], FILT, "test assumes filt is assembled first");
+        let printer_addr = built.addrs[1];
+        let mut m = machine(built);
+        assert!(m.mem.ramstart() <= 0x200, "test pokes its table into RAM at 0x200");
+        // Table at 0x200: root → left 'X' / right inner; inner → left function
+        // node / right terminator.
+        let t = 0x200u32;
+        let root = t + 12;
+        let xnode = root + 9;
+        let inner = xnode + 2;
+        let fnode = inner + 9;
+        let term = fnode + 5;
+        let len = (term + 1) - t;
+        poke(&mut m, t, &len.to_be_bytes());
+        poke(&mut m, t + 4, &4u32.to_be_bytes());
+        poke(&mut m, t + 8, &root.to_be_bytes());
+        poke(&mut m, root, &[0x00]);
+        poke(&mut m, root + 1, &xnode.to_be_bytes());
+        poke(&mut m, root + 5, &inner.to_be_bytes());
+        poke(&mut m, xnode, &[0x02, b'X']);
+        poke(&mut m, inner, &[0x00]);
+        poke(&mut m, inner + 1, &fnode.to_be_bytes());
+        poke(&mut m, inner + 5, &term.to_be_bytes());
+        poke(&mut m, fnode, &[0x08]);
+        poke(&mut m, fnode + 1, &printer_addr.to_be_bytes());
+        poke(&mut m, term, &[0x01]);
+        // Bits, low bit first: 0 → 'X'; 1,0 → the function node; 1,1 → terminator.
+        poke(&mut m, 0x280, &[0xE1, 0b0001_1010]);
+        m.run();
+
+        assert!(!m.faulted, "diagnostics: {:?}", m.diagnostics);
+        assert_eq!(m.mem.read32(COUNTER), Some(3));
+        let logged: Vec<u32> = (0..3).map(|i| m.mem.read32(LOG + i * 4).unwrap()).collect();
+        assert_eq!(logged, vec![b'X' as u32, b'Y' as u32, b'Z' as u32]);
+        assert_eq!(out_str(&m), "", "filter mode prints nothing to Glk");
+    }
+
+    #[test]
+    fn throw_from_inside_a_filter_unwinds_to_a_catch_outside_it() {
+        use asm::Op::{C32, C8, Mem32, Zero};
+        const RES: u32 = 0x100; // the catch token, then the thrown value
+        const WITNESS: u32 = 0x104;
+        const FILT: u32 = 0x24;
+
+        // filter(ch): throw 55 to the token the start function caught with. The
+        // catch frame is TWO frames out (start → inner → filter), so the throw
+        // lands somewhere a native "run until this frame returns" loop can never
+        // notice — it waits for a frame pointer the unwind has already passed.
+        let mut filt_body = asm::ins(0x33, &[C8(55), Mem32(RES)]); // throw 55, token
+        filt_body.extend(asm::ins(0x31, &[C8(0)])); // unreachable
+        let filt = asm::func(0xC1, &[(4, 1)], &filt_body);
+
+        // inner(): streamchar 'A' — the filter call throws out of this frame.
+        let mut inner_body = asm::ins(0x70, &[C8(b'A' as i8)]);
+        inner_body.extend(asm::ins(0x31, &[Zero]));
+        let inner = asm::func(0xC1, &[], &inner_body);
+
+        // The throw handler: witness 7, then quit.
+        let handler = [
+            asm::ins(0x40, &[C8(7), Mem32(WITNESS)]), // copy 7 → WITNESS
+            asm::ins(0x120, &[]),                     // quit
+        ]
+        .concat();
+        let mut body = asm::ins(0x149, &[C8(1), C32(FILT)]); // setiosys filter
+        body.extend(asm::ins(0x32, &[Mem32(RES), C8(handler.len() as i8 + 2)])); // catch RES → past handler
+        body.extend(handler);
+        body.extend(asm::ins(0x30, &[C32(0xDEAD_0000), C8(0), Zero])); // call inner (patched below)
+        body.extend(asm::ins(0x40, &[C8(9), Mem32(WITNESS)])); // only reached if nothing threw
+        body.extend(asm::ins(0x120, &[]));
+        let start = asm::func(0xC1, &[], &body);
+
+        let built = asm::assemble(&[filt, inner, start], 2, 0x200);
+        assert_eq!(built.addrs[0], FILT, "test assumes filt is assembled first");
+        // Patch the placeholder call target now that inner's address is known.
+        let inner_addr = built.addrs[1];
+        let mut image = built.image;
+        let at = image
+            .windows(4)
+            .position(|w| w == 0xDEAD_0000u32.to_be_bytes())
+            .expect("call placeholder present");
+        image[at..at + 4].copy_from_slice(&inner_addr.to_be_bytes());
+        let cksum = asm::checksum(&image);
+        image[0x20..0x24].copy_from_slice(&cksum.to_be_bytes());
+        let mut m = machine(asm::Built { image, addrs: built.addrs });
+        m.run();
+
+        assert!(!m.faulted, "the throw is legal control flow: {:?}", m.diagnostics);
+        assert_eq!(m.mem.read32(WITNESS), Some(7), "the catch's no-branch resume ran, not the fall-through");
+        assert_eq!(m.mem.read32(RES), Some(55), "the thrown value replaced the token in the catch's destination");
+        assert_eq!(
+            m.sp,
+            m.fp + m.cur_frame_len as usize,
+            "the unwind left exactly the catch frame: no orphaned string or call stubs"
+        );
+    }
+
+    /// The two shared pieces of the "@save/@saveundo inside a filter" cases: a
+    /// filter that logs every character and, on the FIRST one only, performs the
+    /// two-operand suspend-free opcode `op` (`@save` or `@saveundo`) — the flag
+    /// is set before the snapshot, so a resumed run does not take the branch
+    /// again. `extra` is the opcode's first (load) operand, or none for saveundo.
+    fn logging_filter_that_snapshots_once(
+        log: u32,
+        counter: u32,
+        flag: u32,
+        op: u32,
+        extra: Option<asm::Op>,
+        res: u32,
+    ) -> Vec<u8> {
+        use asm::Op::{C32, C8, Local32, Mem32};
+        let mut snapshot = asm::ins(0x40, &[C8(1), Mem32(flag)]); // copy 1 → flag
+        snapshot.extend(match extra {
+            Some(load) => asm::ins(op, &[load, Mem32(res)]),
+            None => asm::ins(op, &[Mem32(res)]),
+        });
+
+        let mut body = asm::ins(0x4C, &[C32(log), Mem32(counter), Local32(0)]); // log[n] = ch
+        body.extend(asm::ins(0x10, &[Mem32(counter), C8(1), Mem32(counter)])); // n += 1
+        body.extend(asm::ins(0x23, &[Mem32(flag), C8(snapshot.len() as i8 + 2)])); // jnz flag → skip
+        body.extend(snapshot);
+        body.extend(asm::ins(0x31, &[C8(0)])); // return 0
+        asm::func(0xC1, &[(4, 1)], &body)
+    }
+
+    #[test]
+    fn save_inside_a_filter_restores_into_the_interrupted_print() {
+        use asm::Op::{C32, C8, Mem32};
+        const COUNTER: u32 = 0x100;
+        const LOG: u32 = 0x110;
+        const FLAG: u32 = 0x140;
+        const SID: u32 = 0x144;
+        const SAVERES: u32 = 0x148;
+        const MEMBUF: u32 = 0x400;
+        const MEMBUF_LEN: u32 = 0x1000;
+        const FILT: u32 = 0x24;
+
+        let filt = logging_filter_that_snapshots_once(LOG, COUNTER, FLAG, 0x123, Some(Mem32(SID)), SAVERES);
+        let mut body = asm::ins(0x149, &[C8(1), C32(FILT)]); // setiosys filter
+        body.extend(asm::ins(0x71, &[C8(42)])); // streamnum 42 → '4', '2'
+        body.extend(asm::ins(0x120, &[]));
+        let start = asm::func(0xC1, &[], &body);
+
+        let built = asm::assemble(&[filt, start], 1, 0x1400);
+        assert_eq!(built.addrs[0], FILT);
+        let mut m = machine(built);
+        let sid = m.glk.stream_open_memory(MEMBUF, MEMBUF_LEN, false, 3 /* ReadWrite */, 0);
+        m.mem.write32(SID, sid).unwrap();
+        m.run();
+
+        assert!(!m.faulted, "diagnostics: {:?}", m.diagnostics);
+        assert_eq!(m.mem.read32(COUNTER), Some(2), "both digits reached the filter");
+        assert_eq!(m.mem.read32(SAVERES), Some(0), "the in-filter @save succeeded");
+        let blob_len = m.glk.stream_position(sid).expect("memory stream exists") as usize;
+        let blob: Vec<u8> = (0..blob_len as u32).map(|i| m.mem.read8(MEMBUF + i).unwrap() as u8).collect();
+
+        // The Stks chunk is the raw stack, so the interrupted print's own stubs
+        // are in it: DestType 0x11 (resume function code after the string) and
+        // DestType 0x12 (resume printing the decimal at digit 1). Any
+        // interpreter reading this save resumes the number the same way.
+        let chunks = iff_chunks(&blob);
+        let (_, stks) = chunks.iter().find(|(id, _)| id == b"Stks").expect("Stks present");
+        let words: Vec<u32> = stks.chunks_exact(4).map(|w| u32::from_be_bytes([w[0], w[1], w[2], w[3]])).collect();
+        assert!(words.contains(&0x11), "Stks carries the DestType 0x11 string-terminator stub: {words:#x?}");
+        assert!(words.contains(&0x12), "Stks carries the DestType 0x12 decimal-resume stub: {words:#x?}");
+
+        // Restore the blob: the machine lands back inside the filter's first
+        // call, mid-number, with COUNTER/LOG reverted to one entry. Running on
+        // must finish the number — which only happens if the DestType 0x12 stub
+        // resumed the print.
+        m.halted = false;
+        m.restore_quetzal(&blob).expect("our own save reloads");
+        assert_eq!(m.mem.read32(COUNTER), Some(1), "state reverted to the mid-print snapshot");
+        assert_eq!(m.mem.read32(SAVERES), Some(u32::MAX), "the restored @save stores the -1 sentinel");
+        m.run();
+
+        assert!(!m.faulted, "diagnostics: {:?}", m.diagnostics);
+        assert_eq!(m.mem.read32(COUNTER), Some(2), "the restore resumed the interrupted print");
+        let logged: Vec<u32> = (0..2).map(|i| m.mem.read32(LOG + i * 4).unwrap()).collect();
+        assert_eq!(logged, vec![b'4' as u32, b'2' as u32]);
+    }
+
+    #[test]
+    fn saveundo_inside_a_filter_restores_into_the_interrupted_print() {
+        use asm::Op::{C32, C8, Mem32};
+        const COUNTER: u32 = 0x100;
+        const LOG: u32 = 0x110;
+        const FLAG: u32 = 0x140;
+        const SU: u32 = 0x144;
+        const RU: u32 = 0x148;
+        const FILT: u32 = 0x24;
+
+        let filt = logging_filter_that_snapshots_once(LOG, COUNTER, FLAG, 0x125, None, SU);
+        let mut body = asm::ins(0x149, &[C8(1), C32(FILT)]); // setiosys filter
+        body.extend(asm::ins(0x71, &[C8(42)])); // streamnum 42 → '4', '2'
+        // @restoreundo: the first one rewinds into the filter's first call and
+        // the print replays; the second finds an empty undo stack and stores 1.
+        body.extend(asm::ins(0x126, &[Mem32(RU)]));
+        body.extend(asm::ins(0x120, &[]));
+        let start = asm::func(0xC1, &[], &body);
+
+        let built = asm::assemble(&[filt, start], 1, 0x400);
+        assert_eq!(built.addrs[0], FILT);
+        let mut m = machine(built);
+        m.run();
+
+        assert!(!m.faulted, "diagnostics: {:?}", m.diagnostics);
+        assert_eq!(
+            m.mem.read32(COUNTER),
+            Some(2),
+            "after @restoreundo the number print resumed and re-fed the second digit to the filter"
+        );
+        let logged: Vec<u32> = (0..2).map(|i| m.mem.read32(LOG + i * 4).unwrap()).collect();
+        assert_eq!(logged, vec![b'4' as u32, b'2' as u32]);
+        assert_eq!(m.mem.read32(SU), Some(u32::MAX), "the resumed @saveundo returns -1");
+        assert_eq!(m.mem.read32(RU), Some(1), "the second @restoreundo has no snapshot left");
+    }
+
     #[test]
     fn glk_put_char_and_put_buffer() {
         // glk_put_char('B').
