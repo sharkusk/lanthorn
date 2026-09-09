@@ -2097,10 +2097,14 @@ pub(crate) fn boot_story(
     // until the view catches up rather than answering that read. Skipped entirely
     // for a resumed transcript (below): that scrollback was already read, and
     // paging it would park a returning player mid-history.
+    // The baseline is the first row of the banner that carries PROSE, not row 0:
+    // a story that opens with a few newlines (every Inform 7 Glulx one does) had
+    // those blank rows counted as text the reader must not miss, which paged a
+    // banner that fit and ate the first keystroke of the first command (SQ-1434).
     if startup_transcript.is_none()
         && app::pager::should_arm(session.pending_input(), app::pager::more_suppressed(&*session))
     {
-        state.pager.arm(0);
+        state.pager.arm(app::pager::opening_baseline(&state));
     }
 
     // If an archived transcript was loaded on startup, replace the fresh one.
