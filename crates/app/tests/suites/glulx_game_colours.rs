@@ -5,6 +5,11 @@
 //
 // Uses the real CM gblorb (git-ignored, kept locally under `stories/`); skips
 // gracefully when absent, mirroring the zvm `story_location_verify` tests.
+//
+// Pinned to release 11 on purpose (SQ-1454's disposition table): booted cold
+// against the IF Archive's release 10, this style hint reads back as the
+// theme's Default rather than the game's white-on-black — release 10 does not
+// set it the same way at boot, so `stories/`-only is correct here, not a gap.
 use app::engine::Engine;
 use app::glulx_session::GlulxSession;
 use blorb::Blorb;

@@ -4,7 +4,7 @@
 //!
 //! *"Initially, the map seemed to understand nautical directions, but as I used them, the map
 //! gradually erased them, until the boat was full of disconnected rooms."* — against 0.4.4, on
-//! `CounterfeitMonkey-11.gblorb`.
+//! `CounterfeitMonkey-10.gblorb`.
 //!
 //! The dump that came with it shows ten yacht rooms, nine of them holding a `random=` pool, and
 //! **every pool naming the origin room itself**:
@@ -89,7 +89,7 @@ use mapper::mapper::Mapper;
 
 use crate::fixture_paths::fixture_path;
 
-const STORY: &str = "CounterfeitMonkey-11.gblorb";
+const STORY: &str = "CounterfeitMonkey-10.gblorb";
 
 /// Slango's yacht, by printed name. `Brock's Stateroom` is `fore` of the Galley and is not one of
 /// the ten the report's dump names, so it is left out of the specimen and turns up only as a
@@ -136,7 +136,7 @@ fn world() -> Option<(Memory, ParseNames, I7World)> {
         return None;
     };
     let app::hints::LoadedStory::Glulx(image) =
-        app::hints::extract_story(bytes).expect("CounterfeitMonkey-11.gblorb is a readable container")
+        app::hints::extract_story(bytes).expect("CounterfeitMonkey-10.gblorb is a readable container")
     else {
         panic!("{STORY} is a Glulx story");
     };

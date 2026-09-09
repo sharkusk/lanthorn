@@ -11353,10 +11353,16 @@ mod tests {
     #[test]
     fn counterfeit_monkey_uses_the_generic_tree_path() {
         use crate::engine::Engine;
-        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("../../stories/CounterfeitMonkey-11.gblorb");
+        let local = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../stories/CounterfeitMonkey-10.gblorb");
+        let path = if local.is_file() {
+            local
+        } else {
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("tests/fixtures/stories/CounterfeitMonkey-10.gblorb")
+        };
         if !path.exists() {
-            eprintln!("SKIP: stories/CounterfeitMonkey-11.gblorb absent");
+            eprintln!("SKIP: CounterfeitMonkey-10.gblorb absent (stories/ and fetched fixtures)");
             return;
         }
         let blorb = blorb::Blorb::parse(std::fs::read(&path).unwrap()).expect("parse gblorb");

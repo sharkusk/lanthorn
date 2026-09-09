@@ -33,7 +33,7 @@
 //!
 //! # The fixtures
 //!
-//! * **`CounterfeitMonkey-11.gblorb`** — the reported game, and the one that reproduces: its
+//! * **`CounterfeitMonkey-10.gblorb`** — the reported game, and the one that reproduces: its
 //!   object table is far outside the window, so it never locked. It is also the check that the
 //!   new filter accepts a value the old one rejected.
 //! * **`AnchorheadDemo.gblorb`** — the Glulx demo of the reported Anchorhead build, and the
@@ -41,7 +41,10 @@
 //!   before this change and must still lock, onto the same word. (The demo therefore does not
 //!   reproduce the report; the commercial build, several times its size, does.)
 //!
-//! Both are gitignored, so every case here skips vacuously without them.
+//! `AnchorheadDemo.gblorb` is fetched on CI (`scripts/fixtures.manifest`); CM is release
+//! 10 / serial 210312, the IF Archive's current copy (SQ-1454) — also fetched — since
+//! the lock behaviour this suite pins does not depend on which release reproduces it.
+//! Both fall back to a local `stories/` copy first when there is one.
 //!
 //! Falsified: with `is_room_value` reverted to `v != 0 && v >= self.base && v < end`, both
 //! Counterfeit Monkey cases fail on `locked_room_global() == None` after a walk that really did
@@ -165,7 +168,7 @@ const CM_WALK: [&str; 12] = [
 
 #[test]
 fn counterfeit_monkey_locks_its_location_global() {
-    let Some((mut s, ramstart)) = boot("CounterfeitMonkey-11.gblorb", "sq1286-cm-lock") else {
+    let Some((mut s, ramstart)) = boot("CounterfeitMonkey-10.gblorb", "sq1286-cm-lock") else {
         return;
     };
 
@@ -209,7 +212,7 @@ fn counterfeit_monkey_locks_its_location_global() {
 
 #[test]
 fn two_rooms_keep_distinct_ids_across_a_restore() {
-    let Some((mut s, _ramstart)) = boot("CounterfeitMonkey-11.gblorb", "sq1286-cm-restore") else {
+    let Some((mut s, _ramstart)) = boot("CounterfeitMonkey-10.gblorb", "sq1286-cm-restore") else {
         return;
     };
     let seen = walk(&mut s, &CM_WALK);

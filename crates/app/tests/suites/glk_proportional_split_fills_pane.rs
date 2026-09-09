@@ -144,7 +144,7 @@ fn city_of_secrets_covers_its_pane() {
 fn counterfeit_monkey_does_not_loop_at_odd_pane_sizes() {
     let mut booted = 0;
     for &(cols, rows) in &[(79u32, 30u32), (81, 31), (101, 33), (80, 30)] {
-        let Some(mut sess) = boot("CounterfeitMonkey-11.gblorb", cols, rows, &["look", "x me"]) else {
+        let Some(mut sess) = boot("CounterfeitMonkey-10.gblorb", cols, rows, &["look", "x me"]) else {
             return; // gitignored fixture absent (CI): skip vacuously
         };
         booted += 1;

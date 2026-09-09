@@ -55,6 +55,21 @@ fn stories_dir() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../stories")
 }
 
+/// The fetched-fixtures fallback `app`'s tests populate (`scripts/fixtures.manifest`),
+/// reached by relative path since `gvm` takes zero dependencies and cannot import
+/// `app`'s `fixture_paths` module across the crate boundary.
+fn fetched_stories_dir() -> PathBuf {
+    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../app/tests/fixtures/stories")
+}
+
+/// `stories_dir()` first, then the fetched fallback — the two-directory rule
+/// `app::fixture_paths::fixture_path` uses, reimplemented here since this
+/// crate cannot import across the crate boundary.
+fn resolve_story(name: &str) -> PathBuf {
+    let local = stories_dir().join(name);
+    if local.is_file() { local } else { fetched_stories_dir().join(name) }
+}
+
 /// Ceiling on opcode steps while driving to the first prompt. If a story
 /// never reaches a `NeedLine`/`NeedChar` within this many steps, something is
 /// wrong (infinite loop, VM bug, or a story that never asks for input) —
@@ -206,7 +221,7 @@ fn run_to_first_prompt(image: Vec<u8>, accel: bool) -> (String, u64, Vec<String>
 /// to print before its first prompt — the non-vacuity guard, without which two
 /// runs that both stopped early would compare equal and pass.
 fn check_equivalence_and_speed(name: &str, opening: &str) -> (u64, u64) {
-    let path = stories_dir().join(name);
+    let path = resolve_story(name);
     let bytes = std::fs::read(&path)
         .unwrap_or_else(|e| panic!("local story (gitignored) missing at {}: {e}", path.display()));
     let image = extract_glulx(bytes);
@@ -237,11 +252,18 @@ fn check_equivalence_and_speed(name: &str, opening: &str) -> (u64, u64) {
 /// off, and acceleration cuts the dispatched-opcode count by more than 3x
 /// (Task 0's baseline measured ~88.8% of interpreted opcodes inside
 /// accel-candidate functions).
+///
+/// Release-agnostic (SQ-1454's disposition table): the opening line and the
+/// equivalence/speed properties hold on the IF Archive's release 10 too, which
+/// `resolve_story` falls back to when `stories/` has no local copy — but this
+/// stays `#[ignore]`d since `check_equivalence_and_speed` panics rather than
+/// skips on a missing fixture, unlike this suite's other cases.
 #[test]
-#[ignore = "needs local gitignored stories/CounterfeitMonkey-11.gblorb; run with `cargo test -p gvm --test accel_story_equivalence -- --ignored`"]
+#[ignore = "needs stories/CounterfeitMonkey-10.gblorb or a fetched copy (scripts/fetch-fixtures.sh); \
+            run with `cargo test -p gvm --test accel_story_equivalence -- --ignored`"]
 fn counterfeit_monkey_accel_matches_interpreted_and_is_faster() {
-    let (ops_on, ops_off) = check_equivalence_and_speed("CounterfeitMonkey-11.gblorb", CM_OPENING);
-    eprintln!("CounterfeitMonkey-11: ops_on={ops_on} ops_off={ops_off} ratio={:.2}x", ops_off as f64 / ops_on as f64);
+    let (ops_on, ops_off) = check_equivalence_and_speed("CounterfeitMonkey-10.gblorb", CM_OPENING);
+    eprintln!("CounterfeitMonkey-10: ops_on={ops_on} ops_off={ops_off} ratio={:.2}x", ops_off as f64 / ops_on as f64);
 }
 
 /// A smaller, faster secondary confirmation on another Inform Glulx title

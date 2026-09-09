@@ -4408,11 +4408,18 @@ mod tests {
 
     // ── The silent look must leave no trace (SQ-1293) ──────────────────────────
 
-    /// `stories/CounterfeitMonkey-11.gblorb`, or `None` — it is gitignored, so this
-    /// skips vacuously without it. Release 11 / serial 230220 / Inform 7 6M62.
+    /// `stories/CounterfeitMonkey-10.gblorb`, or the fetched Archive fixture
+    /// (`scripts/fixtures.manifest`) when there is no local copy — `None` when
+    /// neither exists, and this skips vacuously without it.
     fn counterfeit_monkey() -> Option<Vec<u8>> {
-        let p = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("../../stories/CounterfeitMonkey-11.gblorb");
+        let local = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../stories/CounterfeitMonkey-10.gblorb");
+        let p = if local.is_file() {
+            local
+        } else {
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("tests/fixtures/stories/CounterfeitMonkey-10.gblorb")
+        };
         match std::fs::read(&p) {
             Ok(b) => Some(b),
             Err(_) => {

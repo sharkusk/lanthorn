@@ -5,7 +5,7 @@
 //! Glulx has no object tree, so lanthorn recovered a room's IDENTITY by learning which RAM word
 //! holds the `location` global (SQ-0526/SQ-1286) and its NAME from whatever the story printed —
 //! a `Subheader` heading, a silent `look` (SQ-1293), the status grid (SQ-1302). Both are
-//! observations, and both cost turns: measured on `CounterfeitMonkey-11.gblorb`, the lock did not
+//! observations, and both cost turns: measured on `CounterfeitMonkey-10.gblorb`, the lock did not
 //! resolve until the **tenth** command, and every room reached before that was keyed by the hash
 //! of a heading and had to be re-keyed afterwards.
 //!
@@ -27,7 +27,7 @@
 //!
 //! All three are gitignored commercial media, so every case here skips vacuously without them.
 //!
-//! * **`CounterfeitMonkey-11.gblorb`** — release 11 / serial 230220 / Inform 7 build 6M62. The
+//! * **`CounterfeitMonkey-10.gblorb`** — release 10 / serial 210312 (the IF Archive's current copy; SQ-1454) / Inform 7 build 6M62. The
 //!   reported game, 100 rooms, and the one the reader was developed against.
 //! * **`The_Wizard_Sniffer.gblorb`** — release 1 / serial 171007 / Inform 7 build 6L38. The story
 //!   that prints no heading ANYWHERE (SQ-1302) and is named off its status grid: proof that the
@@ -54,7 +54,7 @@ use mapper::mapper::Mapper;
 
 use crate::fixture_paths::fixture_path;
 
-const CM: &str = "CounterfeitMonkey-11.gblorb";
+const CM: &str = "CounterfeitMonkey-10.gblorb";
 // `.gblorb.blorb` is the name the file has on the shelf and on the fetch
 // manifest; asking for `.gblorb` skipped this case vacuously wherever
 // `wizard_sniffer.rs`, which already spelled it correctly, ran (SQ-1015).
@@ -161,7 +161,7 @@ fn counterfeit_monkey_is_address_keyed_from_turn_zero_and_locks_on_the_first_mov
 
     // ── Non-vacuity: the reader really did read THIS story ───────────────────
     let world = s.i7_world().expect("Counterfeit Monkey's compiled world model is readable");
-    assert_eq!(world.rooms().len(), 100, "release 11's room count; the fixture has changed");
+    assert_eq!(world.rooms().len(), 100, "this release's room count; the fixture has changed");
 
     // ── The prologue, which prints no room heading at all (SQ-1293) ──────────
     for st in &CM_OPENING[..3] {

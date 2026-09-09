@@ -51,7 +51,12 @@ fn glulx_image(bytes: Vec<u8>) -> Option<Vec<u8>> {
 }
 
 fn story(name: &str) -> Option<Memory> {
-    let path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../stories").join(name);
+    let local = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../stories").join(name);
+    let path = if local.is_file() {
+        local
+    } else {
+        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../app/tests/fixtures/stories").join(name)
+    };
     if !path.exists() {
         eprintln!("SKIP: {} absent", path.display());
         return None;
@@ -109,6 +114,9 @@ fn adventure_answers_the_words_its_parser_accepts() {
     assert_eq!(pn.all(&mem).len(), 127);
 }
 
+/// Pinned to release 11 (`stories/CounterfeitMonkey-11.gblorb`) on purpose: the exact
+/// object-tree head address and count are properties of that specific compile
+/// (SQ-1454's disposition table). `stories/`-only, skips vacuously on CI.
 #[test]
 fn an_inform_seven_story_has_no_printed_names_and_words_are_all_there_is() {
     let Some(mem) = story("CounterfeitMonkey-11.gblorb") else { return };

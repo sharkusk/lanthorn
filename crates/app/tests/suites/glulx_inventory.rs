@@ -14,25 +14,21 @@
 //! |---|---|---|
 //! | `CoS.blb` | Inform 6.21 | the reported game, and **not** fingerprinted by `gvm::veneer` — it must work from the image alone |
 //! | `King_of_Shreds_and_Patches.gblorb` | Inform 6.31 | fingerprinted, and starts the game carrying things |
-//! | `CounterfeitMonkey-11.gblorb` | Inform 7 6M62 | registers its own acceleration; the story that must be REFUSED |
+//! | `CounterfeitMonkey-10.gblorb` | Inform 7 6M62 | registers its own acceleration; the story that must be REFUSED |
 //!
-//! `stories/` is gitignored, so every case here skips vacuously without its
-//! fixture.
-
-use std::path::PathBuf;
+//! `stories/` is gitignored, so `CoS.blb` and `King_of_Shreds_and_Patches.gblorb`
+//! skip vacuously without it. `CounterfeitMonkey-10.gblorb` is the IF Archive's
+//! current release (release 10 / serial 210312; SQ-1454) — local `stories/`
+//! first, the fetched fixture otherwise (`fixture_path`), so CI reaches it too.
 
 use app::engine::{Engine, KeyInput};
 use app::glulx_session::GlulxSession;
 use app::render::transcript::inventory_items;
 
-fn stories_dir() -> PathBuf {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../stories")
-}
-
 /// The Glulx image inside a Blorb, or a bare `.ulx` passed through. `None`
 /// when the gitignored fixture is absent — every case skips on it.
 fn glulx_image(name: &str) -> Option<Vec<u8>> {
-    let path = stories_dir().join(name);
+    let path = crate::fixture_paths::fixture_path(name);
     let Ok(bytes) = std::fs::read(&path) else {
         eprintln!("SKIP: gitignored story missing at {}", path.display());
         return None;
@@ -174,13 +170,16 @@ fn king_of_shreds_and_patches_reads_the_items_it_starts_you_with() {
 /// **The story that must be refused**, and the reason `find_player` has no
 /// "first plausible candidate" fallback.
 ///
-/// Counterfeit Monkey's object list reads perfectly — 2,494 objects, all 1,916
-/// containment links consistent — but nothing in it identifies the avatar. Not
-/// one of those objects answers to `yourself`, `myself` or `self`, and none
-/// carries an avatar-ish printed name, because Inform 7 objects have no
-/// hardware short name at all. A conditional or multi-word `Understand`
-/// compiles to a `parse_name` ROUTINE rather than to the static `name` array,
-/// and machine code is not enumerable from the image in any Inform version.
+/// Counterfeit Monkey's object list reads perfectly (release 11 measured 2,494
+/// objects, all 1,916 containment links consistent) — but nothing in it
+/// identifies the avatar. Not one of those objects answers to `yourself`,
+/// `myself` or `self`, and none carries an avatar-ish printed name, because
+/// Inform 7 objects have no hardware short name at all. A conditional or
+/// multi-word `Understand` compiles to a `parse_name` ROUTINE rather than to
+/// the static `name` array, and machine code is not enumerable from the image
+/// in any Inform version — a fact about how Inform 7 compiles, not about one
+/// release, which is why this runs against the IF Archive's release 10
+/// (SQ-1454's disposition table) rather than staying `stories/`-only.
 ///
 /// The only objects whose word arrays hold anything avatar-ish are conversation
 /// quips ("what he thinks of you", "what he kens about me"), parked together in
@@ -193,7 +192,7 @@ fn king_of_shreds_and_patches_reads_the_items_it_starts_you_with() {
 /// identifiable, this fails and says so rather than going quietly stale.
 #[test]
 fn counterfeit_monkey_refuses_an_avatar_it_cannot_identify() {
-    let Some(mut s) = boot("CounterfeitMonkey-11.gblorb") else { return };
+    let Some(mut s) = boot("CounterfeitMonkey-10.gblorb") else { return };
     // CM asks "Can you hear me?" three times, then reads a bare keypress, then
     // prints its own instructions.
     for cmd in ["yes", "yes", "yes"] {
@@ -448,7 +447,7 @@ fn king_of_shreds_panels_are_filled_at_the_first_prompt() {
 /// pass every case above and fail this one.
 #[test]
 fn counterfeit_monkey_panels_stay_empty_rather_than_wrong() {
-    let Some(mut s) = boot_like_the_app("CounterfeitMonkey-11.gblorb") else { return };
+    let Some(mut s) = boot_like_the_app("CounterfeitMonkey-10.gblorb") else { return };
     for cmd in ["yes", "yes", "yes"] {
         s.submit(cmd);
     }

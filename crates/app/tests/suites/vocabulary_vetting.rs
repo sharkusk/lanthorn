@@ -21,7 +21,7 @@ use app::state::{AppState, TranscriptKind};
 // ── Fixtures. `stories/` is gitignored; every case here skips vacuously. ────
 
 fn story(name: &str) -> Option<Vec<u8>> {
-    let path: PathBuf = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../stories").join(name);
+    let path: PathBuf = crate::fixture_paths::fixture_path(name);
     match std::fs::read(&path) {
         Ok(b) => Some(b),
         Err(_) => {
@@ -576,13 +576,18 @@ fn the_cost_of_a_vetted_offer_on_the_z_machine() {
 /// flake under a parallel run). "Booting the way the live game boots" is a
 /// statement about which code the shadow runs, and a dispatched-opcode count
 /// says that exactly, identically on a loaded machine and a quiet one.
+///
+/// Release-agnostic (SQ-1454's disposition table): the cache-vs-cold-boot shape
+/// is a fact about the shadow-boot seam, not about one compile, so this runs
+/// against the IF Archive's release 10 — local `stories/` first, the fetched
+/// fixture otherwise (`fixture_path`, via `story` above).
 #[test]
 fn counterfeit_monkeys_shadow_boots_the_way_the_live_game_boots() {
-    let Some(bytes) = story("CounterfeitMonkey-11.gblorb") else { return };
+    let Some(bytes) = story("CounterfeitMonkey-10.gblorb") else { return };
     let app::hints::LoadedStory::Glulx(image) = app::hints::extract_story(bytes.clone())
-        .expect("CounterfeitMonkey-11.gblorb is a readable container")
+        .expect("CounterfeitMonkey-10.gblorb is a readable container")
     else {
-        panic!("CounterfeitMonkey-11.gblorb is a Glulx story");
+        panic!("CounterfeitMonkey-10.gblorb is a Glulx story");
     };
 
     // Unique per CALL, not per process (CLAUDE.md / SQ-1131): a pid-keyed name
@@ -643,7 +648,7 @@ fn counterfeit_monkeys_shadow_boots_the_way_the_live_game_boots() {
     let second = probe.run(&live, &["take zqxwvj".to_string()]);
 
     eprintln!(
-        "Glulx (Counterfeit Monkey 11, {} KiB container): \n  \
+        "Glulx (Counterfeit Monkey, {} KiB container): \n  \
          live boot cold {live_cold_ops} opcodes ({live_cold:?}), \
          warm {live_warm_ops} opcodes ({live_warm:?}) (cache: {cached:?})\n  \
          snapshot {} bytes\n  \

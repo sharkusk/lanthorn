@@ -30,7 +30,7 @@
 //! not by a runtime toggle in the test itself, since neither defense exposes
 //! one to the outside.
 //!
-//! `stories/CounterfeitMonkey-11.gblorb` — release 11 / serial 230220, Inform 7
+//! `stories/CounterfeitMonkey-10.gblorb` — release 10 / serial 210312 (the IF Archive's current copy; SQ-1454), Inform 7
 //! build 6M62 (the same fixture `sq1294b_glulx_flashback_heading` and
 //! `sq1303_glulx_static_world` use). Gitignored, so both cases skip vacuously
 //! without it.
@@ -43,7 +43,7 @@ use app::session::InputKind;
 
 use crate::fixture_paths::fixture_path;
 
-const STORY: &str = "CounterfeitMonkey-11.gblorb";
+const STORY: &str = "CounterfeitMonkey-10.gblorb";
 
 /// The prologue every CM route in this codebase starts from
 /// (`sq1294b_glulx_flashback_heading`'s `ROUTE`): answer "do you remember our

@@ -55,7 +55,7 @@
 //!
 //! # The fixture and the route
 //!
-//! `stories/CounterfeitMonkey-11.gblorb` — release 11 / serial 230220 / Inform 7 build
+//! `stories/CounterfeitMonkey-10.gblorb` — release 10 / serial 210312 (the IF Archive's current copy; SQ-1454) / Inform 7 build
 //! 6M62. Gitignored, so this skips vacuously without it.
 //!
 //! [`ROUTE`] is **237 inputs from a cold boot**: the game's own `test me` script
@@ -74,7 +74,7 @@ use mapper::mapper::Mapper;
 
 use crate::fixture_paths::fixture_path;
 
-const STORY: &str = "CounterfeitMonkey-11.gblorb";
+const STORY: &str = "CounterfeitMonkey-10.gblorb";
 
 /// Every input from a cold boot, one per line. An EMPTY line is the prologue's
 /// keypress (the `custom-wait for any key` before the banner), not a blank command.
@@ -337,7 +337,7 @@ fn play() -> Option<(GlulxSession, Vec<(&'static str, TurnResult)>)> {
     };
     let pict_blorb = blorb::Blorb::parse(bytes.clone()).ok();
     let app::hints::LoadedStory::Glulx(image) =
-        app::hints::extract_story(bytes).expect("CounterfeitMonkey-11.gblorb is a readable container")
+        app::hints::extract_story(bytes).expect("CounterfeitMonkey-10.gblorb is a readable container")
     else {
         panic!("{STORY} is a Glulx story");
     };

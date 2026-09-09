@@ -47,7 +47,7 @@
 //!
 //! # The fixture and the route
 //!
-//! `stories/CounterfeitMonkey-11.gblorb` — release 11 / serial 230220 / Inform 7 build
+//! `stories/CounterfeitMonkey-10.gblorb` — release 10 / serial 210312 (the IF Archive's current copy; SQ-1454) / Inform 7 build
 //! 6M62. Gitignored, so this skips vacuously without it.
 //!
 //! Three inputs from a cold boot, and no more, because the report is about the START:
@@ -62,7 +62,7 @@ use mapper::mapper::Mapper;
 
 use crate::fixture_paths::fixture_path;
 
-const STORY: &str = "CounterfeitMonkey-11.gblorb";
+const STORY: &str = "CounterfeitMonkey-10.gblorb";
 
 /// The room Counterfeit Monkey opens in.
 const BACK_ALLEY: &str = "Back Alley";
@@ -78,7 +78,7 @@ fn boot() -> Option<GlulxSession> {
     };
     let pict_blorb = blorb::Blorb::parse(bytes.clone()).ok();
     let app::hints::LoadedStory::Glulx(image) =
-        app::hints::extract_story(bytes).expect("CounterfeitMonkey-11.gblorb is a readable container")
+        app::hints::extract_story(bytes).expect("CounterfeitMonkey-10.gblorb is a readable container")
     else {
         panic!("{STORY} is a Glulx story");
     };
