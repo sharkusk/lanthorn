@@ -3151,7 +3151,9 @@ the check.
 **In this repository they are already on disk — look there before fetching
 anything.** They live under the gitignored `stories/scott-dialects/`, one
 directory per platform, each with a `README.txt` naming its source and the
-sha256 of every file in it:
+sha256 of every file in it. The zips below are not retained; each has been
+unpacked and its contents stored in a flat directory structure under the
+platform directory:
 
 | directory | holds | section |
 |---|---|---|
@@ -3379,20 +3381,19 @@ the script, never the map.)
 
 Not on the IF Archive. Seven two-sided releases were fetched from
 <https://www.atarimania.com/machines/atari-400-800-xl-xe?q=saga> as one zip per
-title, each holding two `.atr` images named `SAGA #N - Title [side A].atr` and
-`[side B].atr`. **All fourteen images are exactly 92,176 bytes and carry §7.3's
+title. **All fourteen images are exactly 92,176 bytes and carry §7.3's
 six-byte header `96 02 80 16 80 00`** — the single-density, 720-sector,
 128-bytes-per-sector shape, and the only shape §7.3 accepts.
 
-| zip | size | sha256 |
-|---|---|---|
-| SAGA_1_Adventureland.zip | 64,126 | `41af79bae080b02f4b50c3fa6726a2575c485ae8e61b44202e5c885bcad1bb96` |
-| SAGA_2_Pirate_Adventure.zip | 53,937 | `a7798cd176a358cb3bad8dd2ba0e489452fd8080c3c96a5788a1dbb1a5854fb3` |
-| SAGA_3_Mission_Impossible.zip | 53,423 | `04add3634a865baab47847e197f361ed0f24ce0b8f8edab8b2b1cfc095ab36f0` |
-| SAGA_4_Voodoo_Castle.zip | 93,831 | `dba90aef410928f49649516cac5cbe06ba14f2320b2b72d577f6992551b6e703` |
-| SAGA_5_The_Count.zip | 61,798 | `82e2b9804fb4dd68f83fb0c0611bf77e54fdc7d85dd0a705aba4776f4000a150` |
-| SAGA_6_Strange_Odyssey.zip | 91,195 | `62beb7f09f991b8bd2cbc60cd75de1a511fb16b4014efbab593af8441b83cc40` |
-| SAGA_No_13_..._Claymorgue_Castle.zip | 77,178 | `90abe53963b00c270467e8150244999e26917ab23d958ab8adf5137e817c7ee6` |
+| title | side A | side A sha256 | side B | side B sha256 |
+|---|---|---|---|---|
+| #1 Adventureland | `SAGA #1 - Adventureland [side A].atr` | `7c48bc7779d1` | `SAGA #1 - Adventureland [side B].atr` | `a308387c9220` |
+| #2 Pirate Adventure | `SAGA #2 - Pirate Adventure [side A].atr` | `547c0e902c73` | `SAGA #2 - Pirate Adventure [side B].atr` | `e2cfea52ea58` |
+| #3 Mission Impossible | `SAGA #3 - Mission Impossible [side A].atr` | `7575154bd458` | `SAGA #3 - Mission Impossible [side B].atr` | `b28ab6872c41` |
+| #4 Voodoo Castle | `SAGA #4 - Voodoo Castle [side A].atr` | `3f7db7281806` | `SAGA #4 - Voodoo Castle [side B].atr` | `2a417fb62f14` |
+| #5 The Count | `SAGA #5 - The Count [side A].atr` | `5dc27fa23830` | `SAGA #5 - The Count [side B].atr` | `37fd7e4fd1cf` |
+| #6 Strange Odyssey | `SAGA #6 - Strange Odyssey [side A].atr` | `83985e1ac74e` | `SAGA #6 - Strange Odyssey [side B].atr` | `9783df409f69` |
+| #13 Claymorgue Castle | `SAGA No. 13 - The Sorcerer of Claymorgue Castle _ side A.atr` | `d0dcba442113` | `SAGA No. 13 - The Sorcerer of Claymorgue Castle _ side B.atr` | `9542de4bb9d8` |
 
 Side A is the database side and side B the companion picture side, which is what
 §7.3's companion-disk paragraph expects. Two cheap checks confirm it, and both
@@ -3415,17 +3416,13 @@ present**: three-letter cells `AUT\0GO\0` in #1 to #5, four-letter cells
 signatures occurs in it; its dictionary arrangement is unexamined. No side B
 decodes a plausible header at `0x04F9`.
 
-The side B digests, for a claim to name: `a308387c9220`, `e2cfea52ea58`,
-`b28ab6872c41`, `2a417fb62f14`, `37fd7e4fd1cf`, `9783df409f69`, `9542de4bb9d8`,
-in the same title order.
-
 A family-C loader starts from §7.3 for the container and the mastering
 constants, §4.5 for the US header field order, §4.4 for the table encodings, and
 §8.3 with §8.6 for the pictures. It will still need the per-title (usage, index,
 offset) picture lists §8.3 describes; nothing in these images supplies them.
 
-**One Atari file here is not a disk image at all.** `The Hulk.xex`, 21,821
-bytes, sha256 `c5c18baa36348e04a0a932bafad3f901f2777324a03019ceea5894b26bf075ab`,
+**One Atari file here is not a disk image at all.** `The Hulk.xex` in the `atari/`
+directory, 21,821 bytes, sha256 `c5c18baa36348e04a0a932bafad3f901f2777324a03019ceea5894b26bf075ab`,
 from myabandonware.com, is an Atari binary-load executable: it begins `FF FF`,
 the segmented-load signature, followed by the load address `$4000` and the end
 address `$9530`. It carries the plain `AUTO\0GO\0` signature at file offset
@@ -3437,20 +3434,19 @@ covers it correctly today.
 ### 10.6 Apple II: the US S.A.G.A. disk releases
 
 Not on the IF Archive. Seven two-sided releases were fetched from the Asimov
-mirror at <https://mirrors.apple2.org.za/ftp.apple.asimov.net/images/games/adventure/scott_adams/>,
-one zip per title, each holding two `.dsk` images and the crack's own log. Every
-`.dsk` is exactly **143,360 bytes** — 35 × 16 × 256, §7.4's flat sector image —
+mirror at <https://mirrors.apple2.org.za/ftp.apple.asimov.net/images/games/adventure/scott_adams/>.
+Every `.dsk` is exactly **143,360 bytes** — 35 × 16 × 256, §7.4's flat sector image —
 and none is a `.woz`, `.nib`, `.po` or `2IMG`.
 
-| zip | size | sha256 |
-|---|---|---|
-| SAGA 1 Adventureland v2.1-416 (4am crack) | 148,148 | `510b2915bdf11b9f44d3f5bf5740dad5c461e1d567eea0c32a00ab2d9abd5bc9` |
-| SAGA 2 Pirate Adventure v2.1-408 (4am crack) | 151,535 | `103439757ae0a44bc877efa9c102404b968b47a6dcf2297e7b94f810764c96b3` |
-| SAGA 3 Mission Impossible v2.1-306 (4am crack) | 116,376 | `33a4f7e9d9b26840e51c2b07c2df9507a8aeedd709a1428047245fbc2748818a` |
-| SAGA 4 Voodoo Castle v2.1-119 (4am crack) | 96,198 | `b04b8eddb7f2a42b6ef81bd82ba488b015bd6436fb72bd562405c04a8a3bcdae` |
-| SAGA 5 The Count v2.1-115 (4am crack) | 86,484 | `832986cc47544652c26eb4a15326ec937a563e904818c06ba6c8b9cbc7ed71ba` |
-| SAGA 6 Strange Odyssey v2.1-119 (4am crack) | 143,807 | `037a3fc4d0ce9b611a80ba8b017d6056edd5ad9daf8ebe82d9c0969831a7d309` |
-| SAGA 13 Claymorgue Castle v2.2-122 (4am crack) | 113,751 | `5f73061d54ed2037eaa07dcad6c7687bdc54386166a37c8ab9e1a89621419253` |
+| title | boot side | boot side sha256 (first 12) | non-boot side sha256 (first 12) |
+|---|---|---|---|
+| #1 Adventureland v2.1-416 | `Scott Adams Graphic Adventure 1 - Adventureland v2.1-416 (4am crack) side B - boot.dsk` | `53064cac8ddc` | `b2d542032ba7` |
+| #2 Pirate Adventure v2.1-408 | `Scott Adams Graphic Adventure 2 - Pirate Adventure v2.1-408 (4am crack) side B - boot.dsk` | `0a01e8bb97e3` | `8afd74db4799` |
+| #3 Mission Impossible v2.1-306 | `Scott Adams Graphic Adventure 3 - Mission Impossible v2.1-306 (4am crack) side B (boot).dsk` | `773479102468` | `5395140182c3` |
+| #4 Voodoo Castle v2.1-119 | `Scott Adams Graphic Adventure 4 - Voodoo Castle v2.1-119 (4am crack) side B (boot).dsk` | `c34dba003a7f` | `0b0572df3f37` |
+| #5 The Count v2.1-115 | `Scott Adams Graphic Adventure 5 - The Count v2.1-115 (4am crack) side B - boot.dsk` | `ba3d66fbcce6` | `1ad44a16aecc` |
+| #6 Strange Odyssey v2.1-119 | `Scott Adams Graphic Adventure 6 - Strange Odyssey v2.1-119 (4am crack) side B - boot.dsk` | `6039602205a6` | `623bbe2759bc` |
+| #13 Claymorgue Castle v2.2-122 | `Scott Adams Graphic Adventure 13 - The Sorcerer of Claymorgue Castle v2.2-122 (4am crack) side B (boot).dsk` | `5ca192b45d2f` | `98a734f7ef97` |
 
 Here the **boot side** is the database side. Walking §7.4's VTOC at track 17
 sector 0 and the catalogue chain finds on each boot disk exactly one file whose
@@ -3498,14 +3494,14 @@ lists §8.4 requires are not in these images.
 
 All four from <https://www.myabandonware.com/>.
 
-**MS-DOS.** Two Questprobe releases. §8.5 names only the MS-DOS *Hulk*; the
+**MS-DOS.** Two Questprobe releases, supplied as zips. §8.5 names only the MS-DOS *Hulk*; the
 *Fantastic Four* release is new to this catalogue and is the **same** family-E
 CGA picture format with a **different filename convention**.
 
 | zip | size | sha256 |
 |---|---|---|
-| The-Hulk_DOS_EN.zip | 104,117 | `c1fb4ad12fe4cbff6f2a4b9fec7e60ec5cb4e2c0933267f670ee6d9a0975e345` |
-| Questprobe-...-Human-Torch-and-the-Thing_DOS_EN.zip | 182,147 | `39d75246e3f2db66ca26b92931582e75da214b801332c0a5e5aac75a7a2fe5d4` |
+| The-Hulk_DOS_EN.zip | 107,013 | `5869c4dc461a9f9a21b4285293ae1bfb25ed09c0bfb720614b1284942c7451fd` |
+| Questprobe-Featuring-Human-Torch-and-the-Thing_DOS_EN.zip | 119,448 | `d4cdebcc7b8b385ccd5811415b089ac17c463c42b7e16d50f2ec62d9b233200a` |
 
 *The Hulk* holds `START.EXE`, `HULK.BAT`, and `ADVENT.DAT` (18,897 bytes, sha256
 `f07a57451e6d95c12a093310d6d0bf194f4161258265fc81090ff0b75ce9bbcc`). **The
@@ -3545,10 +3541,10 @@ should treat them as rules about the *Hulk* release rather than about MS-DOS:
 **Commodore 64.** Two Questprobe disk images, both 174,848-byte 35-track D64s
 with an ordinary directory.
 
-| zip | size | sha256 | image | image sha256 |
-|---|---|---|---|---|
-| The-Hulk_C64_EN.zip | 83,620 | `cb3516f561c3875378c5abd425c199dcf00004bcb8570a99ba0086bbfcc096d4` | `QUESTPR1.D64` | `5035c0ae93ebfd144e8c473c29ed24c30e07f9e5e5457730e573bbb28d95a4e4` |
-| Questprobe-...-Human-Torch-and-the-Thing_C64_EN.zip | 95,722 | `09e09af98974a1597d2807fe4e4f3b09451315daf8b9128589b4f48b04ce4c23` | `QUESTPR3.D64` | `68c72e55ff77a4ef025c67a79f8007114aca6073dc614e7c0bc6f6fb55ac53a8` |
+| image | image sha256 | source |
+|---|---|---|
+| `QUESTPR1.D64` | `5035c0ae93ebfd144e8c473c29ed24c30e07f9e5e5457730e573bbb28d95a4e4` | The Hulk |
+| `QUESTPR3.D64` | `68c72e55ff77a4ef025c67a79f8007114aca6073dc614e7c0bc6f6fb55ac53a8` | Fantastic Four |
 
 *The Hulk* on `QUESTPR1.D64` is the **US family-C release**, not the UK
 family-A one, and the disk says so twice. Its database file is named `SHULK.DB`,
