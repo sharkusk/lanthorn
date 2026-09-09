@@ -536,8 +536,17 @@ fn the_cost_of_a_vetted_offer_on_the_z_machine() {
         save.bytes.len(),
         p.state.probe.probes - n1,
     );
+    // This is genuinely a latency claim — `p.turn` calls `settle_vocabulary_offer`,
+    // which blocks on the worker's real submit-and-hash work for every probe — so
+    // there is no deterministic stand-in for "must not stall the turn" the way
+    // `asking_costs_the_players_turn_a_snapshot_and_nothing_else` has for the
+    // caller-thread half (SQ-1440). One one-sided bound, kept generous: measured
+    // 2026-09-08 on a quiet machine, `second` is 12.0 ms over a handful of
+    // probes. 1000 ms is about 80x that — well past what a scheduler hiccup on a
+    // fully loaded 12-core machine running the whole app suite could cost, while
+    // still catching an actual multi-second regression.
     assert!(
-        second < std::time::Duration::from_millis(500),
+        second < std::time::Duration::from_millis(1000),
         "a warm vetted offer must not stall the turn: {second:?}"
     );
 }
@@ -830,12 +839,38 @@ fn asking_costs_the_players_turn_a_snapshot_and_nothing_else() {
 
     // Cold — the ask that also causes the shadow's boot, which is the worst case
     // and still costs the caller only the snapshot.
+    let probes_before = p.state.probe.probes;
     let t = std::time::Instant::now();
     let token = p.state.probe.ask(&*p.session, &cmds).expect("the seam is armed");
     let ask_cold = t.elapsed();
+    // Deterministic form of "the ask paid for the boot, which is exactly what it
+    // must not do" (SQ-1440 replaces a `ask_cold < worker_cold` wall-clock ratio,
+    // which is exactly the shape CLAUDE.md's testing guidance forbids — a race
+    // between two timings on two different threads, narrow enough that a
+    // scheduler hiccup under a loaded `-p lanthorn` run could flip it).
+    // `ask()` only takes a snapshot on the CALLER's thread and hands the job to
+    // the worker over a channel (`probe.rs::send_job`); the boot itself runs on
+    // the worker and its cost is folded into `probes`/`phases` only by
+    // `settled()`, which only `poll()`/`settle()` call. So if `ask()` ever ran
+    // the boot — or any step — inline, these would already be nonzero right
+    // here, before either of those runs.
+    assert_eq!(p.state.probe.probes, probes_before, "ask() ran a step on the caller's thread");
+    assert_eq!(
+        p.state.probe.phases.boot,
+        std::time::Duration::ZERO,
+        "ask() paid for the worker's boot on the caller's thread"
+    );
     let t = std::time::Instant::now();
     let answered = p.state.probe.settle().is_some();
     let worker_cold = t.elapsed();
+    // Non-vacuity: the boot cost must be real and folded in once collected, or
+    // the pair of asserts above proved nothing (a fixture that never actually
+    // booted a shadow would pass them by accident).
+    assert!(
+        p.state.probe.phases.boot > std::time::Duration::ZERO,
+        "the worker's boot cost was never folded in — this fixture never booted a shadow, so \
+         the check above proves nothing"
+    );
 
     let t = std::time::Instant::now();
     p.state.probe.ask(&*p.session, &cmds).expect("the seam is still armed");
@@ -851,13 +886,17 @@ fn asking_costs_the_players_turn_a_snapshot_and_nothing_else() {
     );
     // The number that matters: what the player waits for. A snapshot of a .z3 is
     // a few hundred bytes and a world print is a handful of hashes.
+    //
+    // Measured 2026-09-08 on a quiet machine: ask_warm 1.23 ms. The old 5 ms
+    // bound was under 4x that — a scheduler hiccup on a loaded machine (e.g. a
+    // parallel `-p lanthorn` run) clears it easily (SQ-1440). 250 ms is about
+    // 200x the measured value: generous enough to survive a fully loaded
+    // 12-core machine while still catching an `ask()` that regresses into doing
+    // real work inline (the deterministic asserts above already cover that
+    // regression directly; this is a backstop on latency itself).
     assert!(
-        ask_warm < std::time::Duration::from_millis(5),
+        ask_warm < std::time::Duration::from_millis(250),
         "asking is supposed to be free: {ask_warm:?}"
-    );
-    assert!(
-        ask_cold < worker_cold,
-        "the ask paid for the boot, which is exactly what it must not do"
     );
 }
 
