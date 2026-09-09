@@ -1579,8 +1579,9 @@ impl Machine {
             0x1A3 => self.fbinop(|a, b| a / b),
             0x1A4 => {
                 // fmod L1 L2 S1 S2 — S1 = remainder, S2 = quotient. Ported
-                // exactly from glulxe's op_fmod (exec.c), not re-derived: `r
-                // = fmodf(a, b)` (Rust's f32 `%` is fmodf — same NaN/Infinity
+                // from glulxe's op_fmod (exec.c) under MIT licence (Andrew
+                // Plotkin, 1999–2023), read 2026-09-09. Not re-derived: `r =
+                // fmodf(a, b)` (Rust's f32 `%` is fmodf — same NaN/Infinity
                 // rules: mod(x,0) and mod(±Inf,y) are both NaN, mod(x,±Inf)
                 // has rem == x, and −0 is preserved), then the quotient is
                 // `(a - r) / b` with **no separate truncation** — `a - r` is
@@ -1666,19 +1667,21 @@ impl Machine {
             0x213 => self.dbinop(|a, b| a / b),
             0x214 => {
                 // dmodr L1:L2 L3:L4 -> S1:S2 — remainder. Ported from glulxe's
-                // op_dmodr (exec.c): `fmod(a, b)` — Rust's f64 `%` is fmod,
-                // same NaN/Infinity rules as fmod's f32 case above (SQ-1415
-                // audit item 4; glulxercise `doublemod`).
+                // op_dmodr (exec.c) under MIT licence (Andrew Plotkin,
+                // 1999–2023), read 2026-09-09: `fmod(a, b)` — Rust's f64 `%`
+                // is fmod, same NaN/Infinity rules as fmod's f32 case above
+                // (SQ-1415 audit item 4; glulxercise `doublemod`).
                 let (l, s) = self.read_operands(4, 2)?;
                 let (a, b) = (Self::dec64(l[0], l[1]), Self::dec64(l[2], l[3]));
                 self.store64(&s, a % b)
             }
             0x215 => {
                 // dmodq L1:L2 L3:L4 -> S1:S2 — quotient. Ported from glulxe's
-                // op_dmodq exactly: `r = fmod(a, b)`, then `(a - r) / b` with
-                // **no separate truncation**, and the same ±0.0 sign-recovery
-                // fixup as fmod (using the two operands' HIGH words, which
-                // carry the double's sign bit).
+                // op_dmodq (exec.c) under MIT licence (Andrew Plotkin,
+                // 1999–2023), read 2026-09-09: `r = fmod(a, b)`, then `(a -
+                // r) / b` with **no separate truncation**, and the same ±0.0
+                // sign-recovery fixup as fmod (using the two operands' HIGH
+                // words, which carry the double's sign bit).
                 let (l, s) = self.read_operands(4, 2)?;
                 let (a, b) = (Self::dec64(l[0], l[1]), Self::dec64(l[2], l[3]));
                 let r = a % b;
@@ -1765,8 +1768,9 @@ impl Machine {
     }
 
     /// `ftonumz`/`ftonumn`'s float → signed-int32 conversion, ported from
-    /// glulxe's `op_ftonumz`/`op_ftonumn` (exec.c): the sign bit is checked
-    /// FIRST, before classifying NaN/Infinity/overflow, so a negative NaN (or
+    /// glulxe's `op_ftonumz`/`op_ftonumn` (exec.c) under MIT licence (Andrew
+    /// Plotkin, 1999–2023), read 2026-09-09: the sign bit is checked FIRST,
+    /// before classifying NaN/Infinity/overflow, so a negative NaN (or
     /// −Infinity, or a finite value < −2147483647.0) saturates to
     /// `0x80000000` (INT32_MIN) and a positive one to `0x7FFFFFFF`
     /// (INT32_MAX). Rust's own `as i32` cast already saturates a finite
@@ -1793,7 +1797,8 @@ impl Machine {
 
     /// `dtonumz`/`dtonumn`'s double → signed-int32 conversion — the `f64`
     /// twin of [`Self::f32_to_i32`]; see its doc for the full rationale
-    /// (glulxe's `op_dtonumz`/`op_dtonumn`; glulxercise `doubleconv`).
+    /// (glulxe's `op_dtonumz`/`op_dtonumn` under MIT licence, Andrew Plotkin
+    /// 1999–2023, read 2026-09-09; glulxercise `doubleconv`).
     fn f64_to_i32(v: f64, round: bool) -> u32 {
         let apply = |v: f64| if round { v.round() } else { v.trunc() } as i32 as u32;
         if v.is_sign_negative() {
@@ -1824,7 +1829,8 @@ impl Machine {
     /// `powf` itself (so macOS never needed this) but glibc's and Windows'
     /// do not, which is why glulxercise's `floatexp` group failed only on
     /// ubuntu/windows CI (SQ-1433). Ported from glulxe's own wrapper
-    /// (`osdepend.c`, `glulx_powf`), which exists for exactly this reason
+    /// (`osdepend.c`, `glulx_powf`) under MIT licence (Andrew Plotkin,
+    /// 1999–2023), read 2026-09-09, which exists for exactly this reason
     /// ("This wrapper handles all special cases, even if the underlying
     /// powf() function doesn't"): the three comparisons are false for any
     /// NaN operand, so `val1 == 1.0` alone catches `pow(1, NaN)` and

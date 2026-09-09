@@ -6671,9 +6671,7 @@ impl Machine {
 
 /// Translate a character code through Font 3's character-graphics table.
 ///
-/// Source: Bocfel interpreter (garglk/garglk, terps/bocfel/unicode.cpp,
-/// function `build_zscii_to_character_graphics_table`), which faithfully
-/// implements the 8×8 bitmap descriptions in Z-Machine Standards Document §16.
+/// Implements the 8×8 bitmap descriptions in Z-Machine Standards Document §16.
 /// <https://inform-fiction.org/zmachine/standards/z1point1/sect16.html>
 ///
 /// Key BeyondZork cursor-arrow mappings (ZMSD §16):

@@ -471,3 +471,5 @@ to follow.
 ## License
 
 lanthorn is released under the **BSD 3-Clause License** — see [`LICENSE`](LICENSE).
+
+Some permissively-licensed open-source projects have been ported into lanthorn's engine crates. See [`THIRD-PARTY-NOTICES.md`](THIRD-PARTY-NOTICES.md) for attribution and licence text.
