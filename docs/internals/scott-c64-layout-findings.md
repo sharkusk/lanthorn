@@ -2,6 +2,29 @@
 
 ## What this document is
 
+> **Implemented (SQ-1414, 2026-09-09).** `crates/scott/src/c64.rs` reads all
+> eleven of these releases into a `scott::Database`, and decodes their §8.2
+> pictures; `crates/scott/tests/c64_specimens.rs` re-runs the oracle
+> comparison this document describes. The specification has since absorbed
+> every correction listed below, so a reader wanting the normative form should
+> go to `scott-dialects-spec.md` §4.5, §4.6, §5.3, §6.2, §6.4, §9.3 and §10.4;
+> this document remains the record of how those facts were measured.
+>
+> Three things the implementation found that are not in either document yet.
+> **§4.2's dictionary reader is wrong for this family** — a `*` occupies one of
+> the cell's own bytes rather than an extra one, and *Waxworks* carries cells
+> that are nothing but spaces, which §4.2's space escape mis-aligns; the
+> correct reading is plain (word length + 1)-byte NUL-padded cells keeping only
+> §4.2's leading-NUL escape, and the six byte-identical titles come out exactly
+> right under it and wrong under §4.2's. (This document's own "four-byte
+> NUL-padded dictionary cells" is the same slip: the cells are five bytes at
+> word length four.) **§5.3's Mysterious Commodore 64 dictionary repair is
+> unnecessary here** — `ANY` and the six direction words are already noun cells
+> 0-6 in all eleven, and applying it would truncate *The Time Machine*'s stored
+> `NORTH` and `SOUTH`. And **the driver's pointer block has a seventh address**,
+> the dictionary, at `$4917`/`$491C`, which agrees with §4.1's signature in all
+> eleven; the spec's §6.2 now records it, this document's table does not.
+
 Findings from SQ-1455, an investigation into how the eleven Commodore 64
 *Mysterious Adventures* releases store their game tables, and specifically into
 which of the three options
