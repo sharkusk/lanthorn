@@ -228,14 +228,12 @@ fn draw_run(f: &mut Frame, run: &V6Text, cell: V6Cell, palette: Palette, def_bg:
 /// events over once and forgets them), which is why a host Save State must
 /// archive this list beside the machine's own bytes.
 fn render(m: &Machine, display: &[PaintEvent]) -> Frame {
-    // Header `$22`/`$24`: the Version 6 screen in native pixels (ZMSD §8.4).
-    let (w, h) = (
-        u32::from(m.mem.read_word(0x22)),
-        u32::from(m.mem.read_word(0x24)),
-    );
+    // The Version 6 screen in native pixels (ZMSD §8.4), read back off the
+    // machine rather than the header directly (SQ-1436).
+    let (screen_w, screen_h) = m.v6_screen_px().unwrap_or((0, 0));
+    let (w, h) = (u32::from(screen_w), u32::from(screen_h));
     let palette = m.palette();
-    let def_bg = m.mem.read_byte(0x2C);
-    let def_fg = m.mem.read_byte(0x2D);
+    let (def_bg, def_fg) = m.default_colours();
     let mut f = Frame::new(w.max(1), h.max(1), rgb(ZColour::Default, palette, def_bg));
 
     for ev in display {
@@ -459,18 +457,23 @@ fn run(args: &Args) -> Result<String, String> {
         .with_resources(Box::new(StubPictures));
     let mut m = Machine::boot(mem, Box::new(TranscriptSink::default()), config);
 
+    // Read the scale back off the booted machine (SQ-1437) rather than the
+    // `ART_SCALE` constant that only fed the boot config — a real host has no
+    // such constant to fall back on once `BootConfig::apply` has consumed it.
+    let art_scale = m.art_scale();
+    let (screen_w, screen_h) = m.v6_screen_px().unwrap_or((0, 0));
     let mut report = String::new();
     let _ = writeln!(
         report,
         "booted {} at {}x{} native px, cell {}x{}, {} pictures (picture 1 reports {:?} after the {:?} art scale)",
         args.story.display(),
-        m.mem.read_word(0x22),
-        m.mem.read_word(0x24),
+        screen_w,
+        screen_h,
         m.v6_cell().w(),
         m.v6_cell().h(),
         m.picture_count(),
         m.picture_dims(1),
-        ART_SCALE,
+        art_scale,
     );
 
     // The host's own display list, and the input cursor: both host state, both
@@ -624,6 +627,15 @@ fn v6_host_boots_renders_and_round_trips_a_snapshot() {
         Err(e) => panic!("v6_host example failed: {e}"),
     };
     eprint!("{report}");
+    // SQ-1437: the scale the report line prints comes from `Machine::art_scale()`,
+    // read back off the booted machine — assert it agrees with the constant
+    // that fed `BootConfig::with_v6_art_scale`, so a regression that stops
+    // carrying the config's scale onto the machine (or stops applying it)
+    // shows up here rather than only in a silently-wrong render.
+    assert!(
+        report.contains(&format!("{ART_SCALE:?} art scale")),
+        "report should credit the {ART_SCALE:?} art scale read back via Machine::art_scale(): {report}",
+    );
     let meta = fs::metadata(&args.out).expect("the example wrote its PPM");
     assert!(meta.len() > 16, "PPM is header-only");
     let ppm = fs::read(&args.out).expect("read back the PPM");

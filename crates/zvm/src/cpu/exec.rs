@@ -356,6 +356,20 @@ pub struct Machine {
     /// [`crate::screen::V6Metric`] for why the declared metric and the drawn
     /// advance are one value. [`Machine::v6_cell`] reads the declared half.
     pub v6_metric: crate::screen::V6Metric,
+    /// The (x, y) factor the picture table and [`crate::resources::Resources`]
+    /// answers were scaled by at boot — [`crate::cpu::boot::BootConfig::resolved_art_scale`]
+    /// (SQ-1437), carried here because that value is otherwise unreachable once
+    /// [`Machine::boot`] returns. `(1, 1)` for a machine built via
+    /// [`Machine::new`]/[`Machine::with_output`] rather than [`Machine::boot`],
+    /// which is also the correct answer for those (nothing has been scaled).
+    ///
+    /// A BOOT fact, not screen state: it is set once by [`crate::cpu::boot::BootConfig::apply`]
+    /// and never touched by [`Machine::restart`], so it survives a restart the
+    /// same way [`Self::v6_metric`] does (by simply not being reset), and it is
+    /// deliberately absent from [`Machine::screen_snapshot`] — a Save State
+    /// restore reconciles the SCREEN, not the archive the picture table was
+    /// scaled from, and a resource table itself is never part of the snapshot.
+    pub(crate) v6_art_scale: (u32, u32),
     /// How this machine chooses what a Version 6 window does with text that
     /// reaches its right margin (SQ-1071) — see
     /// [`crate::interpreter::V6WrapRegime`], which carries §8.8.3.1.2.2's table.
@@ -784,6 +798,7 @@ impl Machine {
             pending_input: None,
             screen,
             v6_metric: crate::screen::V6Metric::fixed(V6Cell::DEFAULT),
+            v6_art_scale: (1, 1),
             v6_wrap_regime: crate::interpreter::V6WrapRegime::Attributes,
             machine_colours_licensed: true,
             palette: crate::screen::Palette::Standard,
@@ -941,7 +956,7 @@ impl Machine {
         // pixels from it loses whatever the cell does not divide — a Macintosh
         // 640x400 comes back as 637x390 on its 7x15 cell, which is a different
         // screen from the one the launch laid the game out on. SQ-1156.
-        let screen_px = (self.mem.read_word(0x22), self.mem.read_word(0x24));
+        let screen_px = self.v6_screen_px().unwrap_or((0, 0));
 
         // Reload dynamic memory to its pristine boot image.
         for (i, &b) in self.original_dynamic.iter().enumerate() {
@@ -1145,9 +1160,34 @@ impl Machine {
         self.set_v6_text(crate::screen::V6Metric::fixed(cell));
     }
 
-    /// The declared Version 6 cell this session runs on — [`crate::screen::V6Metric::cell`].
+    /// The declared Version 6 cell this session runs on — `v6_metric().cell()`.
     pub fn v6_cell(&self) -> crate::screen::V6Cell {
         self.v6_metric.cell()
+    }
+
+    /// The installed [`crate::screen::V6Metric`] — cell AND pen together
+    /// (SQ-1009, SQ-1435). [`Machine::v6_cell`] is `v6_metric().cell()`; a
+    /// raster host measuring pixels on a proportional machine wants the pen
+    /// too, and this is the door to it without keeping its own copy of the
+    /// metric it passed to [`crate::cpu::boot::BootConfig::with_v6_text`].
+    pub fn v6_metric(&self) -> &crate::screen::V6Metric {
+        &self.v6_metric
+    }
+
+    /// The (x, y) factor this session's picture table (and any
+    /// [`crate::resources::Resources`] a host installed) was scaled by at boot
+    /// — [`crate::cpu::boot::BootConfig::resolved_art_scale`] read back off the
+    /// booted machine, since that value is otherwise unreachable once
+    /// [`Machine::boot`] returns (SQ-1437). `(1, 1)` for a machine built
+    /// without [`Machine::boot`], and for every version but 6.
+    ///
+    /// A boot fact, not screen state: [`Machine::restart`] leaves it alone
+    /// (it survives a restart the same way [`Self::v6_metric`] does), and it
+    /// is not part of [`Machine::screen_snapshot`] — a Save State restore
+    /// reconciles the SCREEN with the current pane, never the archive a
+    /// resource table was scaled from.
+    pub fn art_scale(&self) -> (u32, u32) {
+        self.v6_art_scale
     }
 
     /// Declare the cell AND the pen together (SQ-1009).
@@ -1169,9 +1209,28 @@ impl Machine {
             // Restate the header on the cell that is now current. The screen is
             // whatever `$22`/`$24` already say — this changes the CELL, not the
             // window, so the character grid is re-divided rather than re-invented.
-            let (w, h) = (self.mem.read_word(0x22), self.mem.read_word(0x24));
+            let (w, h) = self.v6_screen_px().unwrap_or((0, 0));
             crate::screen::write_screen_dims_px(&mut self.mem, w, h, cell);
         }
+    }
+
+    /// The Version 6 screen size in native PIXELS the story was told (header
+    /// `$22`/`$24`; ZMSD §8.4, §11.1) — what [`Machine::set_v6_screen_px`]
+    /// writes, read back rather than re-derived from the character grid
+    /// (SQ-1156, SQ-1436): a grid does not divide the screen exactly on every
+    /// cell, so reconstituting pixels from it loses precision (a Macintosh
+    /// 640px on a 7-wide cell comes back as 637).
+    ///
+    /// `None` below v6: at these same offsets, ZMSD §11.1 defines "a unit" as
+    /// one CHARACTER rather than one pixel for every version but 6, so the raw
+    /// header words there answer a different question than this one asks. A
+    /// caller wanting that grid already has it — header bytes `$20`/`$21`, or
+    /// the row/col arguments to [`Machine::set_screen_dims`].
+    pub fn v6_screen_px(&self) -> Option<(u16, u16)> {
+        if self.mem.version() != 6 {
+            return None;
+        }
+        Some((self.mem.read_word(0x22), self.mem.read_word(0x24)))
     }
 
     /// Report a **Version 6** screen the way Version 6 means it: in pixels, with
@@ -1715,6 +1774,17 @@ impl Machine {
         self.default_bg_colour = clamp_default_colour(bg, DEFAULT_BG_COLOUR, version);
         self.default_fg_colour = clamp_default_colour(fg, DEFAULT_FG_COLOUR, version);
         write_default_colours(&mut self.mem, self.default_bg_colour, self.default_fg_colour, self.palette);
+    }
+
+    /// The interpreter's default background/foreground colours as published to
+    /// the game in header bytes `$2C`/`$2D` (ZMSD §8.3.3): `(bg, fg)`, the same
+    /// order the header stores them in and [`Machine::set_default_colours`]
+    /// takes them in (SQ-1436). [`Self::default_bg_colour`]/[`Self::default_fg_colour`]
+    /// remain `pub` fields for a caller that already has one in hand; this is
+    /// the paired read a graphical host wants instead of two field reads it
+    /// has to remember the header order for.
+    pub fn default_colours(&self) -> (u8, u8) {
+        (self.default_bg_colour, self.default_fg_colour)
     }
 
     /// Seed the cumulative "ever executed" set from host-persisted knowledge
@@ -3213,8 +3283,7 @@ impl Machine {
                 // erase-all meanings below.
                 let win = self.v6_window_operand(ops.first().copied().unwrap_or(0)) as i16;
                 if self.trace_screen { self.screen_trace.push(format!("@erase_window({})", zscreen_window_name(win as u16))); }
-                let screen_w = self.mem.read_word(0x22);
-                let screen_h = self.mem.read_word(0x24);
+                let (screen_w, screen_h) = self.v6_screen_px().unwrap_or((0, 0));
                 // SQ-0755: does this erase take the prose the HOST is holding off the
                 // screen? A v6 erase never set `erase_lower_requested` — that flag is
                 // the v1–5 path's — so on a v6 story the host was never told the screen
@@ -6899,6 +6968,73 @@ pub(crate) mod tests {
                  reconstituted from the character grid",
             );
         }
+    }
+
+    /// SQ-1435: `v6_metric()` is the field `v6_cell()` already reads half of.
+    #[test]
+    fn v6_metric_reads_back_the_cell_and_pen_together() {
+        let mut m = Machine::new(Memory::new(v6_boot_story(&[0xB0])).unwrap());
+        let metric = crate::screen::V6Metric::fixed(V6Cell::new(8, 20));
+        m.set_v6_text(metric.clone());
+        assert_eq!(m.v6_metric(), &metric, "v6_metric() is the installed metric, verbatim");
+        assert_eq!(m.v6_metric().cell(), m.v6_cell(), "v6_cell() is v6_metric().cell()");
+    }
+
+    /// SQ-1436: `v6_screen_px()` reads back what `set_v6_screen_px` wrote,
+    /// without reconstituting it from the character grid (SQ-1156's precision
+    /// loss — see `v6_restart_redeclares_the_hosts_cell_and_keeps_the_screen_in_pixels`
+    /// for the case where that loss is observable).
+    #[test]
+    fn v6_screen_px_reads_back_the_declared_screen() {
+        let mut m = Machine::new(Memory::new(v6_boot_story(&[0xB0])).unwrap());
+        assert_eq!(m.v6_screen_px(), Some((0, 0)), "unset until a host declares it");
+        m.set_v6_screen_px(640, 400);
+        assert_eq!(m.v6_screen_px(), Some((640, 400)));
+    }
+
+    /// SQ-1436: below v6, header words `$22`/`$24` answer a different question
+    /// (ZMSD §11.1: "a unit" is one character there, not one pixel), so the
+    /// accessor refuses to answer rather than mislabel a character count as
+    /// pixels.
+    #[test]
+    fn v6_screen_px_is_none_below_v6() {
+        let m = Machine::new(Memory::new(sample_story(5)).unwrap());
+        assert_eq!(m.v6_screen_px(), None);
+    }
+
+    /// SQ-1436: `default_colours()` is `(bg, fg)`, the header's own `$2C`/`$2D`
+    /// order and the order `set_default_colours` takes them in (ZMSD §8.3.3).
+    #[test]
+    fn default_colours_reads_back_bg_then_fg() {
+        let mut m = Machine::new(Memory::new(sample_story(5)).unwrap());
+        m.set_default_colours(4, 7);
+        assert_eq!(m.default_colours(), (4, 7), "(bg, fg), the header's own order");
+    }
+
+    /// SQ-1437: a machine built without `Machine::boot` has scaled nothing, so
+    /// `art_scale()` answers the identity factor.
+    #[test]
+    fn art_scale_defaults_to_identity_off_boot() {
+        let m = Machine::new(Memory::new(v6_boot_story(&[0xB0])).unwrap());
+        assert_eq!(m.art_scale(), (1, 1));
+    }
+
+    /// SQ-1437: `Machine::boot` carries `BootConfig::resolved_art_scale` onto
+    /// the machine, and `@restart` — which never touches `v6_art_scale` —
+    /// leaves it exactly as boot set it (the same "boot fact, not screen
+    /// state" shape as `v6_metric`; SQ-1022's restart-diverges-from-launch
+    /// defect is exactly what would reopen if this were reset).
+    #[test]
+    fn art_scale_carries_the_boot_configs_resolved_scale_and_survives_restart() {
+        let cfg = crate::cpu::boot::BootConfig::new()
+            .with_v6_screen_px((320, 200))
+            .with_v6_art_scale((2, 2));
+        let mut m = Machine::boot(Memory::new(v6_boot_story(&[0xB0])).unwrap(), Box::new(crate::io::BufferOutput::new()), cfg);
+        assert_eq!(m.art_scale(), (2, 2), "the config's own scale, read back off the machine");
+
+        m.restart();
+
+        assert_eq!(m.art_scale(), (2, 2), "a boot fact, untouched by @restart");
     }
 
     #[test]

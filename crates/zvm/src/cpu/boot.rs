@@ -333,6 +333,11 @@ impl BootConfig {
         // Both derived from fields moved out below, so read them first.
         let art_scale = self.resolved_art_scale(version);
         let screen_px = self.v6_screen_dims();
+        // Carried on the machine so a host compositing real artwork can read
+        // back the scale the picture table was scaled by (SQ-1437) — see
+        // `Machine::art_scale`, which `resolved_art_scale` above is otherwise
+        // unreachable through once this function returns.
+        m.v6_art_scale = art_scale;
         // FIRST, and before `init_caps`: the machine's own colour table and its
         // `$1F` byte. `init_caps` latches the version byte and writes the true
         // default colours THROUGH the table, and `set_default_colours` below
