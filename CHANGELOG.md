@@ -149,6 +149,10 @@ Absolute URLs or no link.
   game that asks for a single keypress** — a bare Enter used to be reported
   as a raw line-feed, which a well-behaved game is entitled to reject as an
   input code it should never see. (SQ-1423)
+- **A Glulx game that saves to its own in-memory buffer, rather than asking
+  lanthorn to write a file, now works.** A few games route `SAVE`/`RESTORE`
+  through a Glk memory stream instead of a fileref; those used to hang
+  waiting on a save prompt lanthorn would never show. (SQ-1427)
 
 ---
 
