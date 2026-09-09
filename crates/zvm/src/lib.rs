@@ -73,6 +73,12 @@
 //! `StepResult` is `#[non_exhaustive]`: match it with a wildcard arm so a
 //! future variant does not fail to build.
 //!
+//! **`step()` is idempotent while a suspension is pending** (SQ-1432): call it
+//! again before answering a `NeedLine`/`NeedChar`/`SaveRequest`/`RestoreRequest`
+//! and it returns the identical result rather than silently completing the
+//! suspended read/save/restore with blank/default content — the only ways
+//! forward are the completion calls named above.
+//!
 //! # Rendering
 //!
 //! [`cpu::exec::Machine`]'s `screen` field is a public [`screen::ScreenState`]
