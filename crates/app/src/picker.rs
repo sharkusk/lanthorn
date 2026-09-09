@@ -1648,8 +1648,8 @@ fn entry_from_loaded(
     data_base: &Path,
 ) -> Option<StoryEntry> {
     // Only list stories lanthorn can actually launch: Z-code via the
-    // Z-machine loader (accepts v3/4/5/7/8, rejects v6/v1/v2), Glulx via the
-    // Glulx loader, Scott Adams via the Scott database parser.
+    // Z-machine loader (accepts v1-v8 since SQ-1422), Glulx via the Glulx
+    // loader, Scott Adams via the Scott database parser.
     let bytes = loaded.bytes().to_vec();
     let launchable = match &loaded {
         crate::hints::LoadedStory::ZCode(b) => zvm::memory::Memory::new(b.clone()).is_ok(),
@@ -2301,16 +2301,23 @@ mod tests {
         let mut v6 = minimal_v3_story();
         v6[0x00] = 6;
         std::fs::write(dir.join("graphic.z6"), &v6).unwrap();
-        // v1/v2 remain unsupported (parse_header rejects them) → skipped.
+        // v1 is supported too, since SQ-1422 widened `parse_header`'s version
+        // check to `1..=8` — a v1 story is now listed exactly like a v3 one.
         let mut v1 = minimal_v3_story();
         v1[0x00] = 1;
         std::fs::write(dir.join("old.z5"), &v1).unwrap();
+        // A byte outside `1..=8` is what `parse_header` actually rejects →
+        // skipped.
+        let mut bogus = minimal_v3_story();
+        bogus[0x00] = 9;
+        std::fs::write(dir.join("bogus.z5"), &bogus).unwrap();
 
         let stories = scan_stories(&dir, &dir);
         let names: Vec<String> = stories.iter().map(|s| s.filename.clone()).collect();
         let _ = std::fs::remove_dir_all(&dir);
         assert!(names.iter().any(|n| n == "graphic.z6"), "v6 .z6 story is listed (supported): {names:?}");
-        assert!(!names.iter().any(|n| n == "old.z5"), "v1 remains unsupported → skipped: {names:?}");
+        assert!(names.iter().any(|n| n == "old.z5"), "v1 is listed (supported since SQ-1422): {names:?}");
+        assert!(!names.iter().any(|n| n == "bogus.z5"), "version byte 9 is unsupported → skipped: {names:?}");
     }
 
     #[test]

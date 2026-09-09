@@ -96,6 +96,15 @@ declare, or if `t-all` drops a group.
   regardless of what broke. SQ-1416 reached CI red this way — two production
   regressions in `glulx_session.rs`'s in-crate tests, because both the lane
   and the merge check filtered by name without the feature.
+  **Even with the feature on, prefer no filter at all**: `cargo nextest run -p
+  lanthorn --lib --features t-all` — a name filter only covers the group you
+  guessed, and the group that reads a changed seam is rarely the one you
+  guessed. SQ-1422 widened the story sniffer to accept Z-machine Versions 1
+  and 2; the merge check ran the `t-guidance` filter, but the assumption that
+  broke lived in `t-picker`, so CI went red on all three platforms on a check
+  that had printed a pass. Measured warm: the whole unfiltered `t-all`
+  in-crate suite (3,369 tests) runs in **~23s** — cheap enough that guessing
+  which group to filter to buys nothing worth the risk.
 - **Never put the full gate in a parallel lane's brief.** A three-lane wave that
   gates each lane AND the combination pays four full builds — plus four clippy
   builds, which share no fingerprints with them — for one merge. Lanes run
