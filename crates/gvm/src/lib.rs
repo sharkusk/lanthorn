@@ -65,6 +65,14 @@
 //! the story is expected to repaint — so a host snapshotting a live display
 //! keeps that state itself.
 //!
+//! # Files
+//!
+//! A story's Glk filerefs and file streams are serviced against an in-memory
+//! VFS this crate owns and never writes to disk itself; see the lanthorn
+//! repo's `docs/internals/gvm-fileref-seam.md` for the full host contract —
+//! which [`StepResult`]s to answer, what to persist between runs, and the
+//! fileref-name-to-disk-filename boundary.
+//!
 //! # Example
 //!
 //! This sketches the full loop against a real story file (a Glulx `.gblorb`

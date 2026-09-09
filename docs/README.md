@@ -56,6 +56,7 @@ these track the code).
 | [`internals/releasing.md`](internals/releasing.md) | The hand-run release procedure: preconditions, dry runs, the release commit, tagging, and the one-time GHCR visibility step |
 | [`internals/v6-graphics.md`](internals/v6-graphics.md) | Graphical Z-machine v6: the hybrid/raster render pipeline, art density vs. text density, per-machine typefaces |
 | [`internals/persistence.md`](internals/persistence.md) | The three persistence layers in detail: what each captures, when it triggers, what survives |
+| [`internals/gvm-fileref-seam.md`](internals/gvm-fileref-seam.md) | `gvm`'s Glk fileref/file-VFS layer as an embedding seam: the in-memory VFS, the `StepResult`s a host must answer, the sidecar a host must persist, and the name-to-disk boundary |
 | [`internals/remote-sound.md`](internals/remote-sound.md) | Why audio plays on the local device, and how to route it back over SSH |
 | [`internals/glyphs.md`](internals/glyphs.md) | Exactly which Unicode ranges the map's line art needs from your font |
 | [`internals/zvm-embedding-review.md`](internals/zvm-embedding-review.md) | What `zvm`'s public API would need to be a crate someone outside lanthorn depends on |

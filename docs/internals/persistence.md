@@ -2,7 +2,7 @@
 
 > For players, the short version is in [the guide](../guide/saves-and-rewind.md).
 
-[← back to README](../../README.md) · see also [Saves & persistence (feature highlights)](saves.md)
+[← back to README](../../README.md) · see also [Saves & persistence (feature highlights)](saves.md) · for the engine-side API contract behind Glulx's fileref/VFS layer — not lanthorn's own storage layout — see [`gvm`'s fileref seam](gvm-fileref-seam.md)
 
 lanthorn persists game progress at three distinct layers. They coexist and serve
 different purposes: the game's own save, the host emulator snapshot, and an
@@ -281,8 +281,11 @@ sessions.
   file) persist to `<base>/<story-key>.save/default.aux` — in the app
   (`crates/app/src/aux_store.rs`) and in `zvm-cli` (`ZAUX` format,
   `crates/zvm-cli/src/auxiliary.rs`), each keyed by the story key, not IFID.
-- **Glulx — the Glk file VFS (new, SQ-0278).** Every file a Glulx game writes
-  through Glk file streams now auto-persists to
+- **Glulx — the Glk file VFS (new, SQ-0278).** See [`gvm`'s fileref seam](gvm-fileref-seam.md)
+  for what gvm itself guarantees here (the in-memory VFS, the `StepResult`s a
+  host answers, the sidecar codec) — this section is lanthorn's own instance
+  of it. Every file a Glulx game writes through Glk file streams now
+  auto-persists to
   `<base>/<story-key>.save/default.glkvfs` — in the app
   (`crates/app/src/vfs_store.rs`) and in `gvm-cli`
   (`crates/gvm-cli/src/main.rs`), both keyed by the story key. The blob is

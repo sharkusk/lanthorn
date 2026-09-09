@@ -12,6 +12,15 @@
 //! (lanthorn's `AppGlk`, for instance) implements far more of the trait to
 //! render windows, colour and images.
 //!
+//! It also answers the Glk fileref/file-VFS seam — [`StepResult::NeedFilename`],
+//! [`StepResult::SaveRequest`]/[`StepResult::RestoreRequest`], and the VFS
+//! sidecar — the minimum a host needs so a story's files and its `@save`
+//! survive between runs. See
+//! `docs/internals/gvm-fileref-seam.md` for the full contract; this example
+//! is a single-slot simplification of it (one save file, no distinction
+//! between the player's SAVE verb and a game's own fixed-name saves — see
+//! `gvm-cli`/lanthorn for that).
+//!
 //! ```text
 //! cargo run -p lanthorn-gvm --example run_story -- path/to/story.gblorb
 //! ```
@@ -94,6 +103,21 @@ fn main() {
     });
 
     let mut m = Machine::with_glk(mem, Box::new(StdioBackend::default()));
+
+    // The Glk file VFS sidecar: `<story>.glkvfs`. Load it before the run
+    // (a story may read a file it wrote last session during its own boot),
+    // and clear the dirty flag right after — loading is not a game
+    // mutation, so nothing needs writing back yet.
+    let vfs_path = format!("{path}.glkvfs");
+    if let Ok(bytes) = fs::read(&vfs_path) {
+        m.load_vfs(&bytes);
+        m.clear_vfs_dirty();
+    }
+    // The single fixed save slot this minimal host offers, regardless of
+    // which fileref the game opened or how (`by_prompt` or not) — see the
+    // module doc above for what a full host distinguishes instead.
+    let save_path = format!("{path}.glksave.qzl");
+
     let stdin = io::stdin();
     let mut out = io::stdout();
 
@@ -124,12 +148,46 @@ fn main() {
                 eprintln!("run_story: story faulted: {:?}", m.take_fault_trace());
                 break;
             }
-            // Save state has nowhere to go from a stdin/stdout host, so this
-            // one always declines. A real host writes/reads a file here
-            // (see gvm-cli for the Quetzal-plus-Glk-state shape).
-            StepResult::SaveRequest => m.complete_save(false),
-            StepResult::RestoreRequest => m.complete_restore_failure(),
-            StepResult::NeedFilename { .. } => m.supply_filename(None),
+            // @save / @restore. A memory-stream or resource-stream target
+            // resolves inside gvm without ever reaching here (SQ-1427); what
+            // arrives here always names an external file the host owns.
+            StepResult::SaveRequest => {
+                let ok = fs::write(&save_path, m.save_quetzal()).is_ok();
+                if ok {
+                    eprintln!("run_story: saved to {save_path}");
+                } else {
+                    eprintln!("run_story: save failed");
+                }
+                m.complete_save(ok);
+            }
+            StepResult::RestoreRequest => match fs::read(&save_path) {
+                Ok(bytes) if m.complete_restore_quetzal(&bytes) => {
+                    eprintln!("run_story: restored from {save_path}");
+                }
+                _ => {
+                    eprintln!("run_story: restore failed (no save at {save_path})");
+                    m.complete_restore_failure();
+                }
+            },
+            // glk_fileref_create_by_prompt. SavedGame usage is already
+            // host-intercepted above (@save/@restore never resolve into a
+            // VFS slot for it — see the seam doc), so a save-file prompt
+            // here would be redundant; auto-name it and keep going. Any
+            // other usage (Data/Transcript/InputRecord) is a genuine
+            // external file the player should name.
+            StepResult::NeedFilename { usage, .. } => {
+                if usage & 0x0f == 0x01 {
+                    m.supply_filename(Some(format!("__prompt_{}__", usage & 0x0f)));
+                } else {
+                    drain(&mut m, &mut out);
+                    let _ = write!(out, "Filename (blank to cancel): ");
+                    let _ = out.flush();
+                    let mut line = String::new();
+                    let _ = stdin.lock().read_line(&mut line);
+                    let name = line.trim();
+                    m.supply_filename(if name.is_empty() { None } else { Some(name.to_string()) });
+                }
+            }
             StepResult::NeedEvent { .. } => {
                 drain(&mut m, &mut out);
                 eprintln!(
@@ -141,6 +199,15 @@ fn main() {
             // StepResult is #[non_exhaustive]; a future variant should not
             // fail to build here, only fall through unhandled.
             _ => {}
+        }
+        // Flush the VFS sidecar whenever a game mutation dirtied it, so a
+        // story's own files (scores, preferences, `@save`d-to-VFS states via
+        // a Data-usage fileref) survive even if this process is killed
+        // mid-session, exactly as the SavedGame slot above survives via
+        // fs::write on every @save.
+        if m.vfs_dirty() {
+            let _ = fs::write(&vfs_path, m.vfs_bytes());
+            m.clear_vfs_dirty();
         }
     }
     drain(&mut m, &mut out);
