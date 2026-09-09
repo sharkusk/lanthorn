@@ -5,15 +5,18 @@
 //! describing rooms, items, an action table of verb/noun-triggered
 //! conditions and commands, and a message pool. No two Scott Adams
 //! interpreters agree on every corner of the format by writing it down in
-//! one place first; this crate's behaviour is checked against ScottFree's
-//! own C source wherever the two could disagree, and each such site says so
-//! in its doc comment. Where the Swansea "Definition" document is silent, or
-//! disagrees with what ScottFree 1.14 (`ScottCurses.c`) actually does, this
-//! crate follows ScottFree — the Definition documents the format's shape,
-//! but ScottFree's own behaviour is what every commercial `.dat` was
-//! authored and tested against, so it is the more authoritative oracle for
-//! anything the format itself leaves unstated (message wording, movement in
-//! the dark, the lamp countdown, the auto-get/drop noun split, and so on).
+//! one place first; this crate's behaviour is checked against ScottFree's own
+//! OUTPUT — run as a black box and compared byte-for-byte in the
+//! `scottfree_parity` suite — and against `docs/internals/scott-dialects-spec.md`,
+//! never against ScottFree's C source, and each site where the two could
+//! disagree says so in its doc comment. Where the Swansea "Definition"
+//! document is silent, or disagrees with what ScottFree 1.14 actually prints,
+//! this crate follows ScottFree's observed behaviour — the Definition
+//! documents the format's shape, but ScottFree's own output is what every
+//! commercial `.dat` was authored and tested against, so it is the more
+//! authoritative oracle for anything the format itself leaves unstated
+//! (message wording, movement in the dark, the lamp countdown, the
+//! auto-get/drop noun split, and so on).
 //!
 //! Like [`lanthorn-gvm`](https://docs.rs/lanthorn-gvm) and
 //! `lanthorn-zvm`, this crate takes **zero external dependencies** — all

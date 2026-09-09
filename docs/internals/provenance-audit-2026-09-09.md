@@ -139,7 +139,7 @@ below are the result.
 
 Ordered by severity.
 
-### D1 — `crates/scott/src/loader.rs:204-217`, `extract_auto_noun` — **REWRITE**
+### D1 — `crates/scott/src/loader.rs:204-217`, `extract_auto_noun` — **rewritten from spec §2.5 (SQ-1445)**
 
 The doc comment says "porting ScottFree 1.14's item-load loop **verbatim**
 (`ScottCurses.c:319-327`)" and then reproduces **ten lines of ScottFree's GPL C
@@ -154,7 +154,7 @@ GPL source *text* is reproduced in the repository, and the surrounding code is a
 port rather than an independent implementation. **Must be re-derived, and the C
 block must go.**
 
-### D2 — `crates/scott/src/loader.rs:153-166`, `next_str` / `ReadString` — **REWRITE**
+### D2 — `crates/scott/src/loader.rs:153-166`, `next_str` / `ReadString` — **rewritten from spec §2.6 (SQ-1447)**
 
 "porting ScottFree 1.14's `ReadString` (`ScottCurses.c:189-224`) **byte
 rule-for-rule**", including a note that the doubled-quote test is checked

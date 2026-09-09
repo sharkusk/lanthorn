@@ -249,92 +249,78 @@ impl<'a> Lexer<'a> {
         word.parse::<i32>().map_err(|_| LoadError::BadInt(word))
     }
 
-    /// Reads one `"`-delimited string, porting ScottFree 1.14's `ReadString`
-    /// (`ScottCurses.c:189-224`) byte rule-for-rule: a backtick (`` ` ``, 0x60)
-    /// becomes `"`, and a doubled `""` inside the string is an escaped literal
-    /// `"` rather than the closing quote (checked BEFORE the backtick
-    /// substitution, matching the source's order — `ReadString` tests `c=='"'`
-    /// first and only then rewrites a backtick). Two additions beyond
-    /// `ReadString`, needed because this lexer now reads raw bytes rather than
-    /// a text file already decoded by the host's own locale: a `\r` byte is
-    /// dropped (CRLF-authored `.dat`s read the same as LF ones) and a byte
-    /// outside ASCII becomes `?` (so an arbitrary, e.g. Latin-1, `.dat` is
-    /// always valid UTF-8 once lexed, never a panic or a `LoadError`).
+    /// Reads one `"`-delimited string token, per
+    /// `docs/internals/scott-dialects-spec.md` §2.6 ("Quoted string
+    /// syntax"): the opening `"` (after skipping whitespace) starts the
+    /// token; a doubled `""` inside it is an escape for one literal `"`
+    /// (checked before backtick substitution, so a backtick can never pair
+    /// with a following `"` to form one); any other backtick byte becomes a
+    /// `"` character; a `\r` byte is dropped so CRLF- and LF-authored files
+    /// read the same, while an embedded `\n` is preserved; a byte outside
+    /// ASCII becomes `?`. The string ends at the first `"` not immediately
+    /// followed by another; end of file before that, or a non-`"` byte where
+    /// the token should start, is [`LoadError::Unterminated`].
     fn next_str(&mut self) -> Result<String, LoadError> {
-        self.skip_ws();
-        if self.pos >= self.bytes.len() {
-            return Err(LoadError::Truncated);
+        // §2.6 enumerates the pre-quote whitespace set explicitly (space,
+        // tab, CR, LF, vertical tab, form feed) — a superset of
+        // `u8::is_ascii_whitespace`, which omits vertical tab (0x0B) — so
+        // this is spelled out here rather than shared with `skip_ws`.
+        while self.pos < self.bytes.len()
+            && matches!(self.bytes[self.pos], b' ' | b'\t' | b'\r' | b'\n' | 0x0b | 0x0c)
+        {
+            self.pos += 1;
         }
-        if self.bytes[self.pos] != b'"' {
+        if self.pos >= self.bytes.len() || self.bytes[self.pos] != b'"' {
             return Err(LoadError::Unterminated);
         }
-        self.pos += 1;
-        let mut s = String::new();
+        self.pos += 1; // consume the opening quote
+        let mut out = String::new();
         loop {
             if self.pos >= self.bytes.len() {
                 return Err(LoadError::Unterminated);
             }
-            let c = self.bytes[self.pos];
-            self.pos += 1;
-            if c == b'\r' {
-                continue;
-            }
-            if c == b'"' {
-                if self.bytes.get(self.pos) == Some(&b'"') {
-                    self.pos += 1; // doubled quote: escaped literal '"'
-                } else {
-                    break; // the closing quote
+            let b = self.bytes[self.pos];
+            if b == b'"' {
+                if self.pos + 1 < self.bytes.len() && self.bytes[self.pos + 1] == b'"' {
+                    out.push('"');
+                    self.pos += 2;
+                    continue;
                 }
-                s.push('"');
-                continue;
+                self.pos += 1; // consume the closing quote
+                return Ok(out);
             }
-            if c == 0x60 {
-                s.push('"'); // backtick -> '"' (ReadString, ScottCurses.c ~215)
-            } else if c.is_ascii() {
-                s.push(c as char);
+            if b == b'`' {
+                out.push('"');
+            } else if b == b'\r' {
+                // dropped entirely, per §2.6
+            } else if b.is_ascii() {
+                out.push(b as char);
             } else {
-                s.push('?');
+                out.push('?');
             }
+            self.pos += 1;
         }
-        Ok(s)
     }
 }
 
-/// Extracts an item's auto-get/drop noun, porting ScottFree 1.14's item-load
-/// loop verbatim (`ScottCurses.c:319-327`):
-/// ```c
-/// ip->AutoGet=strchr(ip->Text,'/');
-/// /* Some games use // to mean no auto get/drop word! */
-/// if(ip->AutoGet && strcmp(ip->AutoGet,"//") && strcmp(ip->AutoGet,"/*"))
-/// {
-///     char *t;
-///     *ip->AutoGet++=0;
-///     t=strchr(ip->AutoGet,'/');
-///     if(t!=NULL)
-///         *t=0;
-/// }
-/// ```
-/// `AutoGet` starts at the FIRST `/`, not the last (the previous port here
-/// used `rfind` and mis-split `"Luger/LUGER/GUN/"` as display "Luger/LUGER" /
-/// bind "GUN" instead of ScottFree's display "Luger" / bind "LUGER" —
-/// `secret.dat` item 33, SQ-1412). `strcmp(AutoGet, "//")` / `"/*"` compares
-/// the WHOLE remainder of the string from that first slash to end-of-string,
-/// not a prefix — so `"//"`/`"/*"` only means "no autoget word" when the text
-/// ends there exactly; when they match, ScottFree skips the split entirely
-/// and `Text` (and the display) keeps its literal trailing `//`/`/*`. Once a
-/// real marker is found, `AutoGet` runs from just after the first `/` to the
-/// next `/` if there is one — tolerating a missing close (`t==NULL`), which
-/// leaves the noun running to the end of the original text.
+/// Splits an item's trailing `/WORD/` auto-noun marker out of its display
+/// text, per `docs/internals/scott-dialects-spec.md` §2.5 ("Item auto-noun:
+/// the trailing `/WORD/` marker"). `text` is truncated in place to the
+/// item's displayed text (marker removed) and the auto-noun is returned; if
+/// there is no first `/`, or the remainder from the first `/` onward is
+/// exactly `//` or exactly `/*`, `text` is left untouched and `None` is
+/// returned. Otherwise the auto-noun runs from just after the first `/` to
+/// the next `/`, or to the end of the string if there is no second `/`.
 fn extract_auto_noun(text: &mut String) -> Option<String> {
     let first = text.find('/')?;
-    let tail = &text[first..];
-    if tail == "//" || tail == "/*" {
-        return None; // no autoget word; Text (and the display) is untouched
+    let remainder = &text[first..];
+    if remainder == "//" || remainder == "/*" {
+        return None;
     }
-    let after_first = &text[first + 1..];
-    let noun = match after_first.find('/') {
-        Some(second) => after_first[..second].to_uppercase(),
-        None => after_first.to_uppercase(), // missing close: runs to the end
+    let after = &text[first + 1..];
+    let noun = match after.find('/') {
+        Some(rel) => after[..rel].to_string(),
+        None => after.to_string(),
     };
     text.truncate(first);
     Some(noun)
@@ -791,5 +777,174 @@ mod tests {
         // cannot be refused however its bytes read.
         assert!(Database::parse(MINI).is_ok());
         assert!(Database::parse(include_bytes!("../tests/tiny_cave.dat")).is_ok());
+    }
+
+    // --- `next_str` (SQ-1447), one case per rule in spec §2.6. Expected
+    // values are taken from the spec text itself, not from running any prior
+    // implementation.
+
+    #[test]
+    fn next_str_empty_string() {
+        let mut lex = Lexer::new(b"\"\"");
+        assert_eq!(lex.next_str().unwrap(), "");
+    }
+
+    #[test]
+    fn next_str_plain_content() {
+        let mut lex = Lexer::new(b"\"hello world\"");
+        assert_eq!(lex.next_str().unwrap(), "hello world");
+    }
+
+    #[test]
+    fn next_str_skips_leading_whitespace_of_every_kind() {
+        // Spaces, tabs, CRs, LFs, vertical tabs and form feeds are all
+        // "whitespace before the opening quote" per §2.6.
+        let mut lex = Lexer::new(b" \t\r\n\x0b\x0c\"x\"");
+        assert_eq!(lex.next_str().unwrap(), "x");
+    }
+
+    #[test]
+    fn next_str_rejects_a_non_quote_byte_where_a_string_must_start() {
+        let mut lex = Lexer::new(b"nope\"");
+        assert_eq!(lex.next_str(), Err(LoadError::Unterminated));
+    }
+
+    #[test]
+    fn next_str_rejects_end_of_file_with_no_opening_quote() {
+        let mut lex = Lexer::new(b"   ");
+        assert_eq!(lex.next_str(), Err(LoadError::Unterminated));
+    }
+
+    #[test]
+    fn next_str_doubled_quote_is_an_escaped_literal_quote() {
+        let mut lex = Lexer::new(b"\"say \"\"hi\"\" now\"");
+        assert_eq!(lex.next_str().unwrap(), "say \"hi\" now");
+    }
+
+    #[test]
+    fn next_str_backtick_becomes_a_double_quote_character() {
+        // "Rusty axe (Magic word BUNYON on it)/AXE/" with backticks around
+        // the magic word displays with real quotes, per §2.6's own example.
+        let mut lex = Lexer::new(b"\"Magic word `BUNYON` on it\"");
+        assert_eq!(lex.next_str().unwrap(), "Magic word \"BUNYON\" on it");
+    }
+
+    #[test]
+    fn next_str_order_of_rules_backtick_then_doubled_quote() {
+        // The spec's own worked example: backtick, ", ", X inside a string
+        // must read as `""X` (a quote from the backtick, then one escaped
+        // quote, then X) — not as an escaped quote followed by a fresh
+        // opening delimiter.
+        let mut lex = Lexer::new(b"\"`\"\"X\"");
+        assert_eq!(lex.next_str().unwrap(), "\"\"X");
+    }
+
+    #[test]
+    fn next_str_embedded_newline_is_preserved() {
+        let mut lex = Lexer::new(b"\"line one\nline two\"");
+        assert_eq!(lex.next_str().unwrap(), "line one\nline two");
+    }
+
+    #[test]
+    fn next_str_carriage_return_is_dropped() {
+        let mut lex = Lexer::new(b"\"line one\r\nline two\"");
+        assert_eq!(lex.next_str().unwrap(), "line one\nline two");
+    }
+
+    #[test]
+    fn next_str_non_ascii_byte_becomes_a_question_mark() {
+        let mut bytes = vec![b'"'];
+        bytes.extend_from_slice(b"before ");
+        bytes.push(0xE9);
+        bytes.extend_from_slice(b" after");
+        bytes.push(b'"');
+        let mut lex = Lexer::new(&bytes);
+        assert_eq!(lex.next_str().unwrap(), "before ? after");
+    }
+
+    #[test]
+    fn next_str_unterminated_at_eof_is_an_error() {
+        let mut lex = Lexer::new(b"\"never closes");
+        assert_eq!(lex.next_str(), Err(LoadError::Unterminated));
+    }
+
+    #[test]
+    fn next_str_leaves_the_byte_after_closing_quote_for_the_next_token() {
+        let mut lex = Lexer::new(b"\"a\" 42");
+        assert_eq!(lex.next_str().unwrap(), "a");
+        assert_eq!(lex.next_int().unwrap(), 42);
+    }
+
+    // --- `extract_auto_noun` (SQ-1445), one case per edge in spec §2.5.
+    // Expected values are taken from the spec text itself.
+
+    #[test]
+    fn auto_noun_no_slash_leaves_text_untouched() {
+        let mut text = "plain description".to_string();
+        assert_eq!(extract_auto_noun(&mut text), None);
+        assert_eq!(text, "plain description");
+    }
+
+    #[test]
+    fn auto_noun_splits_at_the_first_slash_not_the_last() {
+        // §2.5's own distinguishing example.
+        let mut text = "Luger/LUGER/GUN/".to_string();
+        assert_eq!(extract_auto_noun(&mut text).as_deref(), Some("LUGER"));
+        assert_eq!(text, "Luger");
+    }
+
+    #[test]
+    fn auto_noun_exact_double_slash_suffix_is_no_marker_and_stays_on_screen() {
+        let mut text = "lamp//".to_string();
+        assert_eq!(extract_auto_noun(&mut text), None);
+        assert_eq!(text, "lamp//");
+    }
+
+    #[test]
+    fn auto_noun_slash_slash_x_falls_through_to_an_empty_auto_noun() {
+        // Remainder "//X" is not exactly "//", so this is a marker after
+        // all: displayed text loses the suffix, but the zero-length span
+        // between the two slashes yields an empty (unmatchable) auto-noun.
+        let mut text = "lamp//X".to_string();
+        assert_eq!(extract_auto_noun(&mut text).as_deref(), Some(""));
+        assert_eq!(text, "lamp");
+    }
+
+    #[test]
+    fn auto_noun_exact_slash_star_suffix_is_no_marker() {
+        let mut text = "foo/*".to_string();
+        assert_eq!(extract_auto_noun(&mut text), None);
+        assert_eq!(text, "foo/*");
+    }
+
+    #[test]
+    fn auto_noun_missing_closing_slash_takes_the_rest_of_the_string() {
+        // §2.5's real-database example: a first slash with no second one.
+        let mut text = "combination torture chamber/rec room".to_string();
+        assert_eq!(extract_auto_noun(&mut text).as_deref(), Some("rec room"));
+        assert_eq!(text, "combination torture chamber");
+    }
+
+    #[test]
+    fn auto_noun_treasure_asterisk_is_untouched_by_the_split() {
+        // The `*` marker is examined on the text before the auto-noun
+        // split (by the caller, not this function), so it must survive
+        // here as plain leading/trailing text.
+        let mut text = "*Pot of RUBIES*/RUB/".to_string();
+        assert_eq!(extract_auto_noun(&mut text).as_deref(), Some("RUB"));
+        assert_eq!(text, "*Pot of RUBIES*");
+    }
+
+    #[test]
+    fn auto_noun_no_case_conversion_is_applied() {
+        let mut text = "thing/MiXed/".to_string();
+        assert_eq!(extract_auto_noun(&mut text).as_deref(), Some("MiXed"));
+    }
+
+    #[test]
+    fn auto_noun_no_whitespace_is_trimmed_from_either_side_of_the_slash() {
+        let mut text = "thing / padded noun /".to_string();
+        assert_eq!(extract_auto_noun(&mut text).as_deref(), Some(" padded noun "));
+        assert_eq!(text, "thing ");
     }
 }
