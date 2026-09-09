@@ -1,6 +1,6 @@
 //! Picture-resource lookup — the seam behind ZMSD §15 `picture_data`, SQ-1402.
 //!
-//! `picture_data(picture-number, table)` [branch] answers one of two
+//! `picture_data(picture-number, table)` \[branch\] answers one of two
 //! questions depending on `picture-number`: number `0` asks "how many
 //! pictures does this file hold, and what is the file's own release
 //! number" (written to `table` as two words: count, then release), branching

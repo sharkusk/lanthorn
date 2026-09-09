@@ -30,7 +30,7 @@
 //! state of any kind in here. A snapshot therefore moves between graphics
 //! backends and between terminal sizes, which is the whole point: a restore into
 //! a different pane is a resize the game never saw, and the host reconciles it
-//! afterwards (see [`Machine::restore_screen_snapshot`]).
+//! afterwards (see [`crate::cpu::exec::Machine::restore_screen_snapshot`]).
 //!
 //! **Not the display list.** What pictures were drawn where is the host's own
 //! record — `zvm` reports draws as events and keeps no canvas — so a host that
@@ -94,7 +94,7 @@
 //!   drop it, which is exactly what a restored zero forces.
 //! - [`ZWindow::stream_origin`] — per-burst state that only lives between a
 //!   clear and the read that follows it.
-//! - [`ZWindow::grid_pen`] — a memo about a derivation ([`GridPen`]), and
+//! - [`ZWindow::grid_pen`] — a memo about a derivation ([`crate::screen::GridPen`]), and
 //!   [`ZWindow::grid_cursor`] re-derives whenever it is absent.
 //!
 //! One field is written but derived rather than carried: for a **Version 6**

@@ -17,7 +17,7 @@ use crate::text::decode::decode_string;
 /// operands, only `call_vs2`/`call_vn2` carry a second type byte, and every
 /// other form reads at most two. `decode_into` below is the only producer, so
 /// a caller that has an [`Instr`] from it may size a fixed buffer by this
-/// (which is what [`crate::cpu::exec::Machine::execute`] does for the resolved
+/// (which is what `Machine::execute` does for the resolved
 /// values — SQ-1431).
 pub const MAX_OPERANDS: usize = 8;
 
@@ -37,9 +37,21 @@ pub enum Operand {
 #[derive(Debug, Clone, PartialEq)]
 #[non_exhaustive]
 pub enum Form {
+    /// Top bit of the opcode byte is 0 (`0x00`-`0x7F`). Always 2OP; the two
+    /// operand types are packed into bits 6 and 5 of the opcode byte itself
+    /// (0 = small constant, 1 = variable) rather than a separate type byte.
     Long,
+    /// Top two bits of the opcode byte are `10` (`0x80`-`0xBF`). Bits 5-4
+    /// give the single operand's type; type `11` means no operand (0OP)
+    /// instead of one (1OP).
     Short,
+    /// Top two bits of the opcode byte are `11` (`0xC0`-`0xFF`). Bit 5
+    /// distinguishes VAR (1) from 2OP (0); operand types are read from a
+    /// following type byte (two, for `call_vs2`/`call_vn2`).
     Variable,
+    /// Opcode byte `0xBE` (v5+ only): a second byte names the actual EXT
+    /// opcode, and operand types are read from a type byte exactly as in
+    /// [`Form::Variable`].
     Extended,
 }
 
@@ -47,10 +59,18 @@ pub enum Form {
 #[derive(Debug, Clone, PartialEq)]
 #[non_exhaustive]
 pub enum OperandCount {
+    /// 0OP: no operands (e.g. `rtrue`, `quit`).
     Zero,
+    /// 1OP: exactly one operand.
     One,
+    /// 2OP: exactly two operands.
     Two,
+    /// VAR: a variable number of operands (0 up to [`MAX_OPERANDS`]), counted
+    /// by the trailing omitted slot in the type byte(s) rather than fixed by
+    /// the opcode.
     Var,
+    /// EXT (v5+): an extended opcode, encoded and operand-counted the same
+    /// way as [`OperandCount::Var`] but reached through [`Form::Extended`].
     Ext,
 }
 

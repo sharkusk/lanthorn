@@ -587,17 +587,29 @@ impl WorldModel {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum Compass {
+    /// North.
     N = 0,
+    /// South.
     S = 1,
+    /// East.
     E = 2,
+    /// West.
     W = 3,
+    /// Northeast.
     Ne = 4,
+    /// Northwest.
     Nw = 5,
+    /// Southeast.
     Se = 6,
+    /// Southwest.
     Sw = 7,
+    /// Up.
     Up = 8,
+    /// Down.
     Down = 9,
+    /// In.
     In = 10,
+    /// Out.
     Out = 11,
 }
 
@@ -668,12 +680,23 @@ pub enum ExitDetail {
     /// 75–101, which look like variable numbers and may be. Until something
     /// authoritative says which it is, callers get the byte and no claim about
     /// it — `lanthorn-mapgen` prints "conditional" and does not name a global.
-    Conditional { dest: u16, gate: u8 },
+    Conditional {
+        /// The room this exit leads to once the gating condition holds.
+        dest: u16,
+        /// The CEXIT's raw second byte — see the doc above for why it is
+        /// deliberately left unattributed rather than resolved to a global.
+        gate: u8,
+    },
     /// A passage to `dest` through door object `door`: ZIL's DEXIT, or Inform's
     /// `*_to` naming a door whose `door_to` names the far side. Whether the
     /// move lands this turn depends on the door being open; where it goes does
     /// not, so [`Self::flatten`] answers [`DeclaredExit::Room`].
-    Door { dest: u16, door: u16 },
+    Door {
+        /// The room on the far side of the door.
+        dest: u16,
+        /// The door object gating passage; the move only succeeds while it is open.
+        door: u16,
+    },
     /// The destination is computed at run time — ZIL's FEXIT, or an Inform
     /// `*_to`/`door_to` holding a routine.
     Code,

@@ -8,12 +8,31 @@ use crate::error::ZError;
 #[derive(Debug)]
 #[non_exhaustive]
 pub struct Header {
+    /// Z-machine version this story targets, header byte `$00`. Every value
+    /// 1–8 is a published version this crate loads; [`parse_header`] rejects
+    /// anything else.
     pub version: u8,
+    /// Base address of high (paged/read-only) memory, header word `$04`.
+    /// Packed routine and string addresses resolve relative to this boundary
+    /// on the versions that scale them from it.
     pub high_mem_base: u16,
+    /// Byte address of the story's first instruction, header word `$06`. In
+    /// every version but 6 this is where execution starts; Version 6 instead
+    /// starts at its packed `main` routine (ZMSD §5.4), so a v6 host must not
+    /// read this field as the entry point.
     pub initial_pc: u16,
+    /// Byte address of the parse dictionary, header word `$08` (ZMSD §13). The
+    /// base [`crate::dictionary::load`] parses from.
     pub dictionary: u16,
+    /// Byte address of the object table, header word `$0A` — property
+    /// defaults followed by the object tree itself.
     pub object_table: u16,
+    /// Byte address of the global variables table, header word `$0C`: 240
+    /// consecutive words, each two bytes.
     pub global_vars: u16,
+    /// Base address of static (read-only, non-paged) memory, header word
+    /// `$0E`. Marks the end of dynamic memory — everything the story or a
+    /// save file may write lives below this address.
     pub static_mem_base: u16,
     /// Abbreviations table base address, header word `$18`. ZMSD §11.1 marks
     /// the field "2" — **Version 1 has no abbreviations table**, and no

@@ -18,11 +18,24 @@
 use crate::database::CARRIED;
 use crate::*;
 
+/// Everything [`Database::parse`] can fail with: a malformed or truncated
+/// `.dat` file, or one that fails to parse but whose raw bytes match a known
+/// OTHER Scott Adams dialect's signature. `#[non_exhaustive]` so a future
+/// parse-failure mode can add a variant without breaking a caller's `match`.
 #[derive(Debug, Clone, PartialEq)]
 #[non_exhaustive]
 pub enum LoadError {
+    /// The file ran out of bytes before a value the parser still expected
+    /// (mid-header, mid-table, or a missing trailing token), or the parsed
+    /// start-room field doesn't index a real room.
     Truncated,
+    /// A whitespace-delimited token that should have been a decimal integer
+    /// wasn't one; the string is that token's own literal text, kept for the
+    /// error message.
     BadInt(String),
+    /// A quoted string is malformed: the parser expected an opening `"`
+    /// where a string token began, or reached end of file before finding
+    /// the closing one.
     Unterminated,
     /// A header count is negative or implausibly large — a hostile file can
     /// otherwise request gigabytes of `Vec` capacity before a single body

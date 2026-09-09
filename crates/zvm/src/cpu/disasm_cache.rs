@@ -34,12 +34,33 @@ pub enum Provenance {
 #[non_exhaustive]
 pub enum Unit {
     /// A decoded instruction spanning `[addr, next)`.
-    Instr { addr: u32, next: u32, prov: Provenance },
+    Instr {
+        /// Address of the instruction's opcode byte.
+        addr: u32,
+        /// Address one past the instruction's last byte (the next unit's start).
+        next: u32,
+        /// This unit's static confidence tag (see [`Provenance`]).
+        prov: Provenance,
+    },
     /// A routine header spanning `[addr, first_instr)` (ZMSD §5.2: one byte of
     /// local count, then `nlocals` initial-value words in v1-4).
-    RoutineHeader { addr: u32, nlocals: u8, first_instr: u32, prov: Provenance },
+    RoutineHeader {
+        /// Address of the header's locals-count byte (the routine's entry point).
+        addr: u32,
+        /// Declared local-variable count, read from the locals-count byte.
+        nlocals: u8,
+        /// Address of the routine's first instruction, past the header.
+        first_instr: u32,
+        /// This unit's static confidence tag (see [`Provenance`]).
+        prov: Provenance,
+    },
     /// An opaque data run spanning `[addr, addr+len)` (not decoded as code).
-    Data { addr: u32, len: u32 },
+    Data {
+        /// Address of the run's first byte.
+        addr: u32,
+        /// Length of the run in bytes.
+        len: u32,
+    },
 }
 
 impl Unit {
@@ -78,8 +99,14 @@ impl Unit {
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 #[non_exhaustive]
 pub enum CacheFmt {
+    /// Fully annotated form — role sigils, packed-address unpacking, named
+    /// variables (mirrors [`crate::cpu::disasm::format_instr`]).
     Full,
+    /// Plain mnemonic form — named variables but no role sigils or
+    /// packed-address unpacking (mirrors [`crate::cpu::disasm::format_instr_basic`]).
     Basic,
+    /// Untranslated raw form — instruction bytes and class:opcode, no
+    /// mnemonic or variable naming (mirrors [`crate::cpu::disasm::format_instr_raw`]).
     Raw,
 }
 

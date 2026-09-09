@@ -412,7 +412,10 @@ impl Decoded {
 /// self-consistent and wrong.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct CrossCheck {
+    /// A short description of what this check verified, e.g. "classes_table
+    /// lists the four metaclasses" or "self is a RAM address".
     pub name: &'static str,
+    /// Whether the story's object table agreed with this check.
     pub passed: bool,
 }
 

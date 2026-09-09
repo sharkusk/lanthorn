@@ -28,12 +28,12 @@
 //!
 //! # Feeding it
 //!
-//! [`PaintLog::apply`] is called by `Machine` itself, at the exact points
+//! `PaintLog::apply` is called by `Machine` itself, at the exact points
 //! [`crate::cpu::exec::Machine`]'s `pending_pictures` / `pending_erase_fills`
 //! are queued — so the log always reflects every event this `Machine` has
 //! ever issued, regardless of whether (or how often) a host drains
 //! [`crate::cpu::exec::Machine::take_paint_events`]. A host never calls
-//! [`PaintLog::apply`] itself; [`crate::cpu::exec::Machine::paint_log`] is
+//! `PaintLog::apply` itself; [`crate::cpu::exec::Machine::paint_log`] is
 //! read-only for exactly that reason.
 //!
 //! # What is deliberately NOT in it
@@ -75,7 +75,7 @@
 //!   untouched — order across windows is exactly what
 //!   [`PaintLog::ops_in_order`] preserves). `Machine` emits BOTH an
 //!   [`crate::cpu::exec::EraseFill`] and a `PictureEvent { number: 0, erase:
-//!   true }` for the same call — [`PaintLog::apply`] folds both into the
+//!   true }` for the same call — `PaintLog::apply` folds both into the
 //!   SAME single [`PaintOp::Clear`] entry (the second application is a no-op
 //!   over the first), never two.
 //! - **A window move strands its entries.** ZMSD §8: pixels already plotted
@@ -134,30 +134,56 @@ pub enum PaintOp {
     /// live count for the historical one misclassifies exactly the picture
     /// this field exists to classify correctly.
     Draw {
+        /// The picture number the story's `draw_picture` call named (ZMSD §15).
         number: u16,
+        /// Window-relative x of the picture's top-left corner, in native pixels.
         x: u16,
+        /// Window-relative y of the picture's top-left corner, in native pixels.
         y: u16,
+        /// The window's own box — `(x, y, w, h)` in native pixels — as of this call.
         win_box: (u16, u16, u16, u16),
+        /// Whether this draw landed on the window's text cursor, carried
+        /// through from [`crate::cpu::exec::PictureEvent`]'s own field of the
+        /// same name unchanged.
         at_cursor: bool,
+        /// The margin a `set_margins` call directly following this draw
+        /// attached to it (ZMSD §15's inline-picture idiom), or `None` if
+        /// none did.
         margin_after: Option<u16>,
+        /// Window 0's streamed-character count at the moment of this call —
+        /// frozen into the entry then, not a value a host recomputes later
+        /// from its own running counter (see the enum docs above).
         out_chars: u64,
     },
     /// An `erase_picture` (ZMSD §15). Same fields as [`Self::Draw`]; the
     /// picture's footprint is not known here — see the module docs.
     ErasePicture {
+        /// The picture number the story's `erase_picture` call named (ZMSD §15).
         number: u16,
+        /// Window-relative x of the picture's nominal position, in native pixels.
         x: u16,
+        /// Window-relative y of the picture's nominal position, in native pixels.
         y: u16,
+        /// The window's own box — `(x, y, w, h)` in native pixels — as of this call.
         win_box: (u16, u16, u16, u16),
+        /// Whether this call landed on the window's text cursor, carried
+        /// through from [`crate::cpu::exec::PictureEvent`]'s own field of the
+        /// same name unchanged.
         at_cursor: bool,
+        /// The margin a `set_margins` call directly following this op
+        /// attached to it, or `None` if none did.
         margin_after: Option<u16>,
+        /// Window 0's streamed-character count at the moment of this call.
         out_chars: u64,
     },
     /// The whole-window clear an `erase_window` paints, folded from the
     /// paired [`crate::cpu::exec::EraseFill`] and canvas-clear `PictureEvent`
     /// `Machine` emits for one call — see the module docs' first retirement
     /// rule. `win_box` is the window's box at erase time.
-    Clear { win_box: (u16, u16, u16, u16) },
+    Clear {
+        /// The window's own box — `(x, y, w, h)` in native pixels — at erase time.
+        win_box: (u16, u16, u16, u16),
+    },
 }
 
 impl PaintOp {
@@ -176,7 +202,7 @@ impl PaintOp {
 /// The Version 6 paint log: every window's folded picture/erase history, in
 /// ONE ordered stream so a host can replay it in true issue order across
 /// windows — see the module docs. Fed by `Machine` at the same points it
-/// queues [`PaintEvent`]s; a host never calls [`PaintLog::apply`] itself.
+/// queues [`PaintEvent`]s; a host never calls `PaintLog::apply` itself.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct PaintLog {
     /// Append-only within a window's own retirement lifetime: [`Self::apply`]
@@ -368,7 +394,7 @@ pub fn encode(log: &PaintLog) -> Vec<u8> {
 ///
 /// Each window's origin is NOT stored — it is re-derived by scanning the
 /// entries in order and taking the last `win_box` seen for that window,
-/// which is exactly what [`PaintLog::apply`] would have left it at.
+/// which is exactly what `PaintLog::apply` would have left it at.
 ///
 /// # Errors
 ///

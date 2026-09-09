@@ -202,7 +202,7 @@ impl BootConfig {
     /// ART's own pixels — [`Self::with_v6_art_scale`] is applied to it on the way
     /// in, because a story lays out in the unit screen's coordinates and not the
     /// archive's (SQ-0479). Wrapped into a [`crate::resources::PictureTable`] by
-    /// [`Self::apply`]; see [`Self::with_resources`] for a host that would
+    /// `apply`; see [`Self::with_resources`] for a host that would
     /// rather answer on demand than pre-fill this table.
     pub fn with_picture_dims(mut self, dims: Vec<(u16, u16, u16)>) -> BootConfig {
         self.resources = ResourceSource::Table(dims);
@@ -213,7 +213,7 @@ impl BootConfig {
     /// on demand, instead of [`Self::with_picture_dims`]'s pre-filled table —
     /// SQ-1402. The same unit-space scale [`Self::with_picture_dims`]'s table
     /// gets is applied to this too: `picture_dims` answers in the resource's
-    /// OWN pixels and [`Self::apply`] scales every answer the same way,
+    /// OWN pixels and `apply` scales every answer the same way,
     /// whichever door supplied it (SQ-0479/SQ-0790).
     pub fn with_resources(mut self, resources: Box<dyn Resources>) -> BootConfig {
         self.resources = ResourceSource::Custom(resources);

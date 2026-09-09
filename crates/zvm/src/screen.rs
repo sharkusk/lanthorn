@@ -20,14 +20,31 @@ use crate::objects;
 #[derive(Debug, PartialEq)]
 #[non_exhaustive]
 pub enum StatusRight {
-    ScoreTurns { score: i16, turns: u16 },
-    Time { hours: u8, minutes: u8 },
+    /// A "score game" (ZMSD §8.2.1): the status line shows the score and the
+    /// turn count.
+    ScoreTurns {
+        /// The game's current score, from global variable 1.
+        score: i16,
+        /// The number of turns elapsed, from global variable 2.
+        turns: u16,
+    },
+    /// A "time game" (ZMSD §8.2.1): the status line shows a clock instead of
+    /// a score.
+    Time {
+        /// The hour of the in-game clock (0-23), from global variable 1.
+        hours: u8,
+        /// The minute of the in-game clock (0-59), from global variable 2.
+        minutes: u8,
+    },
 }
 
 /// A fully computed v3 status line (location name + right field).
 #[derive(Debug, PartialEq)]
 pub struct StatusLine {
+    /// The current location's short name (ZMSD §8.2.2), or empty when global
+    /// variable 0 names no object.
     pub location: String,
+    /// The right-hand field: score/turns or a clock, depending on the story.
     pub right: StatusRight,
 }
 
@@ -54,10 +71,19 @@ pub struct StatusLine {
 #[derive(Default)]
 #[non_exhaustive]
 pub enum ZColour {
+    /// No colour explicitly set; resolves to the interpreter/scheme default
+    /// for the channel.
     #[default]
     Default,
+    /// A ZMSD §8.3.1 standard colour number (2-9 the fixed palette, 10-12 the
+    /// greys, 1/-1 meaning "current"/"unchanged" handled by the caller before
+    /// this variant is stored).
     Standard(u8),
+    /// An exact 15-bit `0bbbbbgggggrrrrr` colour from `set_true_colour`
+    /// (ZMSD §8.3.7).
     True(u16),
+    /// An exact 24-bit `0xRRGGBB` host colour with no Z-machine opcode of its
+    /// own; see this enum's own docs for why it exists.
     True24(u32),
 }
 
@@ -119,9 +145,13 @@ pub fn grey_rgb(palette: Palette, n: u8) -> (u8, u8, u8) {
 #[derive(Debug, Clone, Copy)]
 #[non_exhaustive]
 pub struct Cell {
+    /// The glyph occupying this cell.
     pub ch: char,
+    /// The ZMSD §8.7.2 text-style bitmask this glyph was painted with.
     pub style: u8,
+    /// This glyph's foreground pen.
     pub fg: ZColour,
+    /// This glyph's background pen.
     pub bg: ZColour,
 }
 impl Default for Cell {
@@ -147,8 +177,12 @@ impl Cell {
 #[derive(Debug, Default, Clone)]
 #[non_exhaustive]
 pub struct UpperWindow {
+    /// Grid width in character cells.
     pub cols: u16,
+    /// Grid height in character cells.
     pub rows: u16,
+    /// Cells, row-major (`cells[(row - 1) * cols + (col - 1)]` for 1-based
+    /// `row`/`col`); always exactly `cols * rows` long.
     pub cells: Vec<Cell>,
 }
 impl UpperWindow {
@@ -165,6 +199,13 @@ impl UpperWindow {
         cells.resize(cols as usize * rows as usize, Cell::default());
         UpperWindow { cols, rows, cells }
     }
+    /// Resize the grid to `rows x cols`, discarding all existing content
+    /// (every cell comes back blank).
+    ///
+    /// ZMSD §15 `split_window`: "In Version 3 (only) the upper window should
+    /// be cleared after the split" — this is that behaviour.
+    /// [`resize_preserving`](Self::resize_preserving) is the v4+ counterpart
+    /// that keeps content across a re-split.
     pub fn resize(&mut self, rows: u16, cols: u16) {
         self.rows = rows;
         self.cols = cols;
@@ -242,6 +283,9 @@ impl UpperWindow {
             }
         }
     }
+    /// Blank every cell to the interpreter default background. A thin
+    /// wrapper around [`clear_to`](Self::clear_to) fixing `bg` to
+    /// [`ZColour::Default`].
     pub fn clear(&mut self) {
         self.clear_to(ZColour::Default);
     }
@@ -342,11 +386,15 @@ impl UpperWindow {
         }
         Some(((row - 1) as usize) * self.cols as usize + (col - 1) as usize)
     }
+    /// The cell at 1-based `(row, col)`, or a blank default [`Cell`] when the
+    /// coordinates fall outside the grid.
     pub fn cell(&self, row: u16, col: u16) -> Cell {
         self.idx(row, col)
             .and_then(|i| self.cells.get(i).copied())
             .unwrap_or_default()
     }
+    /// Write one cell's glyph, style and colours at 1-based `(row, col)`;
+    /// coordinates outside the grid are silently ignored.
     pub fn put(&mut self, row: u16, col: u16, ch: char, style: u8, fg: ZColour, bg: ZColour) {
         if let Some(i) = self.idx(row, col) {
             if let Some(c) = self.cells.get_mut(i) {
@@ -361,29 +409,61 @@ impl UpperWindow {
 #[derive(Debug, Clone, Default)]
 #[non_exhaustive]
 pub struct ZWindow {
+    /// Window-property 0: screen-absolute y origin in pixels, 1-based (the
+    /// top of the screen is 1).
     pub y_coord: u16,          // prop 0  (pixels)
+    /// Window-property 1: screen-absolute x origin in pixels, 1-based (the
+    /// left of the screen is 1).
     pub x_coord: u16,          // prop 1
+    /// Window-property 2: window height in pixels.
     pub y_size: u16,           // prop 2  (height, pixels)
+    /// Window-property 3: window width in pixels.
     pub x_size: u16,           // prop 3  (width, pixels)
     /// Cursor in UNITS (pixels), 1-based within the window (ZMSD §8.8.3.2 —
     /// window props are measured in units, so `get_wind_prop` 4/5 read these
     /// verbatim). The char-cell the grid writes at derives as `(px-1)/font + 1`.
     pub y_cursor: u16,         // prop 4  (pixels)
+    /// Window-property 5: pixel cursor column, 1-based; see `y_cursor`
+    /// directly above for the shared units and derivation.
     pub x_cursor: u16,         // prop 5  (pixels)
+    /// Window-property 6: left margin width in pixels that text wrapping in
+    /// this window respects.
     pub left_margin: u16,      // prop 6
+    /// Window-property 7: right margin width in pixels that text wrapping in
+    /// this window respects.
     pub right_margin: u16,     // prop 7
+    /// Window-property 8: packed address of the routine called after a
+    /// newline in this window (0 = no routine).
     pub interrupt_routine: u16,// prop 8
+    /// Window-property 9: lines remaining before `interrupt_routine` next
+    /// fires.
     pub interrupt_countdown: u16, // prop 9
+    /// Window-property 10: this window's own current text-style bitmask
+    /// (ZMSD §8.7.2), independent of any other window's.
     pub text_style: u16,       // prop 10
+    /// Window-property 11: this window's colour pair packed as high byte
+    /// background, low byte foreground (ZMSD standard colour numbers).
     pub colour_data: u16,      // prop 11 (high byte bg, low byte fg — ZMSD)
+    /// Window-property 12: this window's active font number (ZMSD §16); e.g.
+    /// 1 = normal, 3 = character-graphics.
     pub font_number: u16,      // prop 12
+    /// Window-property 13: this window's font cell size in pixels, packed as
+    /// high byte height, low byte width.
     pub font_size: u16,        // prop 13 (high byte height, low byte width)
+    /// Window-property 14: attribute bits (bit0 wrap, bit1 scroll, bit2
+    /// copy-to-transcript, bit3 buffered).
     pub attributes: u16,       // prop 14 (bit0 wrap, bit1 scroll, bit2 copy-to-transcript, bit3 buffered)
+    /// Window-property 15: `[MORE]` lines remaining before this window's next
+    /// pagination prompt; [`NEVER_MORE`] disables it.
     pub line_count: u16,       // prop 15
     /// Character grid for this window (grid windows 1–7). Window 0 scrolls (buffered),
     /// its text goes to the transcript stream, not a grid.
     pub grid: UpperWindow,
+    /// This window's current logical foreground pen (mirrors `colour_data`'s
+    /// low byte once resolved to a [`ZColour`]).
     pub fg: ZColour,
+    /// This window's current logical background pen (mirrors `colour_data`'s
+    /// high byte once resolved to a [`ZColour`]).
     pub bg: ZColour,
     /// Pixel-positioned text runs (grid windows 1–7): each print records the
     /// exact 1-based pixel position it painted at, so a pixel-faithful raster
@@ -489,9 +569,13 @@ pub struct ZWindow {
 /// restore re-derives.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct GridPen {
+    /// The pixel y-cursor the pen was last synced against.
     pub y_cursor: u16,
+    /// The pixel x-cursor the pen was last synced against.
     pub x_cursor: u16,
+    /// The character-grid row (1-based) the pen is at.
     pub row: u16,
+    /// The character-grid column (1-based) the pen is at.
     pub col: u16,
 }
 
@@ -506,11 +590,19 @@ pub struct GridPen {
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[non_exhaustive]
 pub struct V6Text {
+    /// Screen-absolute, 1-based pixel row of this run's first glyph's
+    /// top-left, captured at paint time.
     pub y: u16,
+    /// Screen-absolute, 1-based pixel column of this run's first glyph's
+    /// top-left, captured at paint time.
     pub x: u16,
+    /// The run's characters, in the order they were painted.
     pub text: String,
+    /// The ZMSD §8.7.2 text-style bitmask this run was painted with.
     pub style: u8,
+    /// This run's foreground pen.
     pub fg: ZColour,
+    /// This run's background pen.
     pub bg: ZColour,
     /// The SCREEN character cell this run's first glyph was written at — 0-based
     /// row and column in the same space [`V6Cell::row_of`] and [`V6Cell::col_of`]
@@ -535,6 +627,9 @@ pub struct V6Text {
     /// For a fixed pen these are exactly `row_of(y)` and `col_of(x)`, so every
     /// machine but Arthur's Amiga press is unchanged.
     pub grow: u16,
+    /// The SCREEN character cell COLUMN this run's first glyph was written
+    /// at, paired with `grow` directly above — see its doc for why a run
+    /// carries this rather than deriving it from `x`.
     pub gcol: u16,
 }
 
@@ -963,7 +1058,10 @@ impl ZWindow {
 #[derive(Debug, Clone, Default)]
 #[non_exhaustive]
 pub struct V6Windows {
+    /// The eight ZMSD §8.4 windows, indexed by window number (0-7).
     pub windows: [ZWindow; 8],
+    /// The currently selected window number (0-7), always in range — see
+    /// [`V6Windows::new`].
     pub current: u8, // 0–7
 }
 
@@ -1313,6 +1411,8 @@ pub struct ScreenState {
     pub text_style: u8,
     /// Cursor position in the upper window (1-based row, col).
     pub cursor_row: u16,
+    /// Column half of `cursor_row` directly above — 1-based cursor column in
+    /// the upper window.
     pub cursor_col: u16,
     /// Whether output should be buffered (lower window).
     pub buffer_mode: bool,
@@ -1337,6 +1437,8 @@ pub struct ScreenState {
     /// Current logical foreground/background colour (ZMSD §8.3). Transient
     /// display state — NOT serialised into Quetzal saves.
     pub current_fg: ZColour,
+    /// Current logical background colour, paired with `current_fg` directly
+    /// above — same ZMSD §8.3 rules, same transient (not archived) status.
     pub current_bg: ZColour,
     /// The v6 8-window table; `Some` only when the loaded story is v6
     /// (v1–5/v7/v8 keep the classic 2-window model above and this stays `None`).
@@ -1813,6 +1915,9 @@ impl Default for StreamState {
 }
 
 impl StreamState {
+    /// The stream state a freshly booted machine starts with: stream 1
+    /// (screen) on, streams 2 and 4 off, input from the keyboard, and no
+    /// stream-3 frames pushed.
     pub fn new() -> Self {
         StreamState {
             stream1: true,
@@ -2722,6 +2827,8 @@ pub fn advertise_sound(mem: &mut Memory, on: bool) {
 /// Default screen size seeded at header init, before the host reports the real
 /// pane size. Generous enough that size-sensitive v4+ games run.
 pub const DEFAULT_SCREEN_ROWS: u8 = 24;
+/// Column half of [`DEFAULT_SCREEN_ROWS`] directly above — the same seeded
+/// default, before the host reports the real pane size.
 pub const DEFAULT_SCREEN_COLS: u8 = 80;
 
 /// v6 font cell size in pixels. Reference interpreters present Infocom v6 on a
@@ -2733,6 +2840,8 @@ pub const DEFAULT_SCREEN_COLS: u8 = 80;
 /// addresses everything in pixels; the app quantizes to character cells by
 /// dividing X by WIDTH and Y by HEIGHT.
 pub const V6_FONT_WIDTH: u16 = 8;
+/// Height half of [`V6_FONT_WIDTH`] directly above — the same reference
+/// 8x16 v6 cell's height in pixels.
 pub const V6_FONT_HEIGHT: u16 = 16;
 
 /// [`V6Cell`] lives in its own module so its private fields are invisible to
@@ -3362,6 +3471,10 @@ fn is_time_game(version: u8, flags1: u8) -> bool {
     version >= 3 && (flags1 & (1 << 1)) != 0
 }
 
+/// Read the v3 status line straight out of memory: the current location's
+/// short name plus, depending on `Flags 1` bit 1 (ZMSD §8.2.1), either the
+/// score/turns pair or a clock. A host renders this on demand for v1-v3
+/// stories; v4+ never calls it.
 pub fn compute_status_line(mem: &Memory) -> StatusLine {
     let gbase = mem.global_vars() as u32;
     let loc_obj = mem.read_word(gbase);

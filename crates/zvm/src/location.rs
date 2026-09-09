@@ -1196,9 +1196,19 @@ fn names_an_object_ignoring_spaces(machine: &Machine, name: &str) -> bool {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum LocationMethod {
+    /// The room came straight from global variable 0 — the v3 status-line
+    /// convention (ZMSD §8.2.2.1), also tried as a best-effort v4+ fallback
+    /// since many Inform games keep the same convention.
     GlobalVar0,
+    /// The room was reached by walking a player-avatar candidate's ancestor
+    /// chain until it matched the status line's text.
     PlayerParent,
+    /// The room was resolved by matching the status line's text to an
+    /// object's short name (or a global corroborated against shown text),
+    /// with no avatar found parented into it.
     StatusName,
+    /// No backing object could be resolved at all; only the status line's raw
+    /// text is known.
     NameOnly,
     /// Glulx: the room was read from the Inform 7 `Subheader` room heading in
     /// the story buffer (name-based; no backing object). Trusted directly — not
@@ -1210,9 +1220,17 @@ pub enum LocationMethod {
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum Location {
+    /// The room read straight from global variable 0 — see
+    /// [`LocationMethod::GlobalVar0`].
     GlobalVar0(ObjectSnapshot),
+    /// The room reached via a validated player-avatar ancestor chain — see
+    /// [`LocationMethod::PlayerParent`].
     PlayerParent(ObjectSnapshot),
+    /// The room resolved by matching the status line's text to an object —
+    /// see [`LocationMethod::StatusName`].
     StatusName(ObjectSnapshot),
+    /// No backing object was found; carries only the status line's raw text
+    /// — see [`LocationMethod::NameOnly`].
     NameOnly(String),
 }
 
