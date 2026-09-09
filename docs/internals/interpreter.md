@@ -847,6 +847,48 @@ filesystems and the only one both front-ends share — so
 **default**, never a verdict: `-I 6` still puts you on the IBM PC, off the
 Amiga floppy or anywhere else.
 
+### `scott-cli` takes a floppy too, for the one dialect that has one (SQ-1414)
+
+The Commodore 64 *Mysterious Adventures* compilation disks — Brian Howarth's
+eleven titles, six on `MYSTADV1.D64` and five on `MYSTADV2.D64` — are the first
+Scott Adams media that need a menu at all: every OTHER dialect this crate reads
+(the ScottFree text format, the TI-99/4A tokenised releases) ships one game per
+file. `MountedDisk::stories` stays Z-code/Glulx/Blorb-only by design (that door's
+own module doc), so `scott-cli` does what `app::hints::mounted_stories` does for
+the same disks: mount with `cli_host::disk_set::mount_at` and scan
+`MountedDisk::contents` — every file the volume's directory names — keeping the
+ones `scott::looks_like_scott_bytes` accepts. `SHULK.DB` on `QUESTPR1.D64` (the
+US-format *Hulk*, a Commodore 64 family this crate does not read) declines the
+sniff and is never offered, whatever else is on the disk.
+
+```
+This disk holds 6 Scott Adams programs:
+  1) The Golden Baton  (BATON)
+  2) The Time Machine  (TIME MACHINE)
+  3) Arrow of Death part 1  (ARROW I)
+  4) Arrow of Death part 2  (ARROW II)
+  5) Escape from Pulsar 7  (PULSAR 7)
+  6) Circus  (CIRCUS)
+Which one? [1-6] 1
+Opening 1) The Golden Baton  (BATON)
+```
+
+`--story <n|name>` picks one exactly as `zvm-cli`'s does, matched through the
+same `cli_host::story_pick::find`/`menu` — a number, or a case-insensitive
+fragment of the CBM name (`--story "time machine"`) — refusing rather than
+guessing when a fragment fits two rows. The row's title, where one is shown, is
+`scott::c64::RELEASES`'s (keyed by the disk's own spelling, `BATON` → *The
+Golden Baton*), never `app`'s `scott_titles.tsv` — that table is keyed by the
+IF-Archive `.dat` filenames these disks never carry.
+
+Saves are keyed per PROGRAM, not per disk: a Scott database carries no
+Z-machine header for `disk_story_key` to read, so `StoryOrigin`'s existing
+zip-entry rule decides instead — the chosen entry's own basename — and the
+eleven CBM names across both disks are all distinct, so `BATON` and
+`TIME MACHINE` off one `MYSTADV1.D64` never share a directory. A single-program
+disk (every OTHER Scott medium) still opens straight through with no menu at
+all, exactly as a single-game floppy always did.
+
 ## Z-machine
 
 - **Standard Quetzal save/restore** — the game's own SAVE/RESTORE writes and reads

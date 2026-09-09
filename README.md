@@ -298,13 +298,14 @@ lanthorn "LostTreasures1.iso" --story 3       # a compilation CD
 | CD-ROM, incl. hybrid Mac/PC discs | `.iso` `.bin` | Macintosh (3) or PC/DOS, per file |
 | Commodore 1541, GCR bitstream | `.g64` | Commodore 128 (7) |
 
-*Next release:* three more media **mount and list what is on them** — Atari
-8-bit floppies (`.atr`) and loadable binaries (`.xex`), and Apple II DOS 3.3
-floppies (`.dsk`) — along with the ordinary program files on a Commodore
-`.d64`. These are the disks the Scott Adams games shipped on, so there is no
-Z-machine story to open on any of them yet: lanthorn will tell you what the disk
-holds and that none of it is a game it can play. The loaders that finish the job
-come after.
+*Next release:* hand lanthorn a Commodore 64 *Mysterious Adventures* compilation
+disk and pick a game — `MYSTADV1.D64` and `MYSTADV2.D64` mount, list, **and
+play** all eleven of Brian Howarth's titles (six and five apiece), each with
+its own saves. Two more media still **mount and list what is on them** with
+nothing to play yet — Atari 8-bit floppies (`.atr`) and loadable binaries
+(`.xex`), and Apple II DOS 3.3 floppies (`.dsk`); lanthorn will tell you what
+the disk holds and that none of it is a game it can play. The loaders for
+those come after.
 
 **The artwork comes off the disk in the disk's own format**, not from a converted
 Blorb — and where a release shipped more than one rendition (MCGA, EGA, CGA, the

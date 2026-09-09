@@ -728,7 +728,7 @@ pub fn mounted_stories(
     blorb::medium::DiskImage::detect(&raw)?;
     let disk = mount_disk(path, raw).ok()?;
     let format = disk.format();
-    let stories: Vec<_> = disk
+    let mut stories: Vec<_> = disk
         .stories()
         .into_iter()
         .map(|s| {
@@ -736,7 +736,46 @@ pub fn mounted_stories(
             (s, image)
         })
         .collect();
+    // Scott Adams programs — the Commodore 64 *Mysterious Adventures*
+    // compilation disks (SQ-1414) — that `MountedDisk::stories` does not cover:
+    // that door stays Z-code/Glulx/Blorb-only by design (`blorb::medium`'s own
+    // module doc), so classifying a Scott program off a disk's directory is
+    // this crate's business, exactly as it already is for a zip's entries.
+    for story in scott_disk_stories(&disk) {
+        let image = disk.image_for(&story.name);
+        stories.push((story, image));
+    }
     (!stories.is_empty()).then_some((format, stories))
+}
+
+/// Names a Commodore/CBM DOS directory lists that are never a game, even when
+/// their bytes might otherwise pass [`scott::looks_like_scott_bytes`] — the
+/// boot loader every *Mysterious Adventures* disk carries, and the DOS wedge
+/// name a caller could plausibly meet on some other Commodore release.
+const NON_GAME_DISK_NAMES: [&str; 2] = ["BOOT", "DOS.SYS"];
+
+/// The Scott Adams program files on `disk` that [`blorb::medium::MountedDisk::stories`]
+/// does not list — that door answers only for Z-code, Glulx and Blorb by
+/// design, so a Scott database off a disk's directory is found by scanning
+/// [`blorb::medium::MountedDisk::contents`] instead (SQ-1414).
+///
+/// A name `stories()` already offered is skipped, so a hybrid disc's Z-code
+/// rows are never duplicated here; the same holds for the obvious non-games
+/// ([`NON_GAME_DISK_NAMES`]). What is left is sniffed with
+/// [`scott::looks_like_scott_bytes`] and then actually run through
+/// [`extract_story`], because the sniff is cheap and permissive — the real
+/// gate is whether this crate's own loader agrees the bytes are a Scott
+/// database, the same standard every other engine on a disk is held to.
+fn scott_disk_stories(disk: &blorb::medium::MountedDisk) -> Vec<blorb::medium::DiskStory> {
+    let already: Vec<String> = disk.stories().into_iter().map(|s| s.name).collect();
+    disk.contents()
+        .into_iter()
+        .filter(|(name, _)| !already.iter().any(|n| n.eq_ignore_ascii_case(name)))
+        .filter(|(name, _)| !NON_GAME_DISK_NAMES.iter().any(|n| name.eq_ignore_ascii_case(n)))
+        .filter(|(_, bytes)| scott::looks_like_scott_bytes(bytes))
+        .filter(|(_, bytes)| matches!(extract_story(bytes.clone()), Ok(LoadedStory::Scott(_))))
+        .map(blorb::medium::DiskStory::from)
+        .collect()
 }
 
 /// Open the disk image `path`, whose bytes are `raw`, with the other volumes of
@@ -799,10 +838,18 @@ fn read_story_file(path: &Path, want: Option<&str>) -> io::Result<(Vec<u8>, Opti
         // if it has gone — an image edited between the scan and the launch must
         // say so rather than open a different game.
         if let Some(want) = want {
+            // A named story is either one `disk.stories()` already answers for
+            // (Z-code/Glulx/Blorb), or a Scott Adams program file `stories()`
+            // never lists — a Commodore *Mysterious Adventures* row (SQ-1414).
             let found = disk
                 .stories()
                 .into_iter()
-                .find(|s| s.name == want || s.name.eq_ignore_ascii_case(want));
+                .find(|s| s.name == want || s.name.eq_ignore_ascii_case(want))
+                .or_else(|| {
+                    scott_disk_stories(&disk)
+                        .into_iter()
+                        .find(|s| s.name == want || s.name.eq_ignore_ascii_case(want))
+                });
             return match found {
                 // `image_for`, not `format`: on a hybrid disc the story's own
                 // half of the platter decides, so a DOS build sitting on a

@@ -889,6 +889,22 @@ pub fn scott_tuid(stem: &str) -> Option<&'static str> {
     scott_entry(stem).and_then(|e| e.tuid)
 }
 
+/// The canonical title for a Commodore 64 *Mysterious Adventures* program
+/// file, by the CBM name the disk stores it under (`BATON` → "The Golden
+/// Baton"), matched case-insensitively.
+///
+/// Reaches for `scott::c64::RELEASES` rather than `scott_titles.tsv`: that
+/// table is keyed by the IF-Archive `.dat` filenames these disks never carry
+/// (`golden_baton`, not `BATON`), so it never resolves a name a disk actually
+/// spells. `scott::c64::RELEASES` is keyed on the disk's own spelling because
+/// it is derived from the disks themselves (SQ-1414).
+fn scott_c64_title(disk_name: &str) -> Option<&'static str> {
+    scott::c64::RELEASES
+        .iter()
+        .find(|r| r.file_name.eq_ignore_ascii_case(disk_name))
+        .map(|r| r.title)
+}
+
 /// The bundled author for a Scott-format game (filename stem, case-insensitive),
 /// present only for the homebrew games that have no IFDB record to fetch it from.
 pub fn scott_author(stem: &str) -> Option<&'static str> {
@@ -1742,16 +1758,24 @@ fn entry_from_loaded(
     // `INFOCOM6` would every one of them fall back to *Lost Treasures of Infocom
     // (Disk 6 of 7)*. `LEATHRGODDESSES` is the row that needs it — its header
     // reads release 0 serial `Blown!`, which no title table answers to, so the
-    // last resort is all it has. (A disk story is never Scott — every mountable
-    // format here is Infocom Z-code — so the Scott lookups below are unaffected
-    // by the substitution.)
+    // last resort is all it has.
+    //
+    // **A disk story is not always Infocom Z-code any more** (SQ-1414): the
+    // Commodore 64 *Mysterious Adventures* compilation disks carry Scott Adams
+    // program files, named `BATON`, `TIME MACHINE`, and so on — the disk's own
+    // spelling, not a filename `scott_titles.tsv` was ever keyed on. Its title
+    // comes from `scott::c64::RELEASES` instead, by that same disk name, before
+    // falling back to the ordinary Scott lookup below.
     let stem = disk_entry.unwrap_or_else(|| {
         path.file_stem()
             .and_then(|s| s.to_str())
             .unwrap_or(&filename)
     });
     let is_scott = matches!(loaded, crate::hints::LoadedStory::Scott(_));
-    let tsv_title = bundled_title(stem, &ifid, is_scott);
+    let tsv_title = disk_entry
+        .filter(|_| is_scott)
+        .and_then(scott_c64_title)
+        .or_else(|| bundled_title(stem, &ifid, is_scott));
     let tsv_author = is_scott.then(|| scott_author(stem)).flatten();
     let tsv_description = is_scott.then(|| scott_description(stem)).flatten();
     let resolved = resolve(
