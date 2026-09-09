@@ -1437,6 +1437,22 @@ impl Machine {
                 self.push32(daddr)?;
                 self.push32(ret_pc)?;
                 self.push32(cur_fp)?;
+                // A memory stream's bytes stay inside the VM — spec §1.8.2 hands
+                // @save whatever writable Glk stream it is given, and glulxe's
+                // perform_save() just glk_put_buffer_stream()s the Quetzal into
+                // it (serial.c); a memory stream is exactly such a
+                // self-contained stream, no host round trip needed (SQ-1427).
+                // Only the fileref/SavedGame path below genuinely needs the
+                // host, because its bytes live outside us. The call stub above
+                // is already pushed, so the just-built Quetzal's Stks chunk
+                // carries it — a later restore pops that stub to resume here —
+                // then this writes it straight into the stream and pops the
+                // stub itself, storing success.
+                if self.glk.memory_stream_read_info(l[0]).is_some() {
+                    let blob = self.save_quetzal();
+                    self.write_bytes_to_memory_stream(l[0], &blob);
+                    return self.pop_save_stub_and_store(0);
+                }
                 // Carry the target fileref's name + prompt-ness (L1 is the save
                 // stream) so the host can service a game-managed save silently or
                 // surface the player's SAVE-verb UI (see SaveLoadRequest).
@@ -1496,6 +1512,33 @@ impl Machine {
                         }
                         Err(e) => {
                             self.diagnostics.push(format!("@restore from stream failed: {e:?}"));
+                            self.complete_restore_failure();
+                        }
+                    }
+                    return Ok(());
+                }
+                // A memory stream's bytes are inside the VM too, for the same
+                // reason as the resource-stream branch above: no host round trip,
+                // and no fileref name for the host path below to key on anyway
+                // (SQ-1427).
+                if self.glk.memory_stream_read_info(l[0]).is_some() {
+                    let bytes = self.read_bytes_from_memory_stream(l[0]);
+                    self.pending_saveload = Some(PendingSaveLoad {
+                        dest: s[0],
+                        restore: true,
+                        name: String::new(),
+                        by_prompt: false,
+                        save_stream: 0,
+                        save_bytes: 0,
+                        fresh: false,
+                    });
+                    match self.restore_quetzal(&bytes) {
+                        Ok(()) => {
+                            self.pending_saveload = None;
+                            self.undo_stack.clear();
+                        }
+                        Err(e) => {
+                            self.diagnostics.push(format!("@restore from memory stream failed: {e:?}"));
                             self.complete_restore_failure();
                         }
                     }
@@ -3857,6 +3900,60 @@ impl Machine {
             // A resource stream is read-only: writes are silently discarded.
             StreamKind::Resource { .. } => {}
         }
+    }
+
+    /// Write raw `bytes` into memory stream `sid` at its current cursor, bounded
+    /// by its declared length exactly like [`Machine::glk_stream_put`]'s `Memory`
+    /// arm — but for raw bytes rather than a `&str`, since a Quetzal blob is not
+    /// valid UTF-8. Used by the in-process `@save` memory-stream path (SQ-1427):
+    /// one byte-stream element per byte, or one 32-bit unicode element (value =
+    /// the byte) per byte, matching how glulxe's `glk_put_buffer_stream` widens
+    /// 8-bit content into a unicode memory stream. A `len == 0` stream (Glk's
+    /// "null" memory stream) already falls out of this correctly: every byte is
+    /// past the bound, so nothing is stored, but the cursor/write-count still
+    /// advance via `memory_stream_advance` — exactly the Glk null-stream write
+    /// contract ("bytes vanish").
+    fn write_bytes_to_memory_stream(&mut self, sid: u32, bytes: &[u8]) {
+        let Some((addr, len, pos, unicode)) = self.glk.memory_stream_read_info(sid) else { return };
+        let elsize = if unicode { 4 } else { 1 };
+        let mut p = pos;
+        for &b in bytes {
+            if p < len {
+                let ea = addr + p * elsize;
+                let _ = self.store_mem_sized(ea, b as u32, elsize);
+            }
+            p = p.saturating_add(1);
+        }
+        self.glk.memory_stream_advance(sid, bytes.len() as u32);
+    }
+
+    /// Read the bytes memory stream `sid` holds from its current cursor up to
+    /// its declared length, undoing [`Machine::write_bytes_to_memory_stream`]'s
+    /// element width exactly (one byte per byte-stream element, the low byte of
+    /// each 32-bit element for a unicode stream). Used by the in-process
+    /// `@restore` memory-stream path (SQ-1427). Reads to the declared length
+    /// rather than the write high-water mark, so a restore over a
+    /// shorter-than-declared write picks up trailing zero padding too — harmless,
+    /// because `restore_quetzal` bounds itself by the Quetzal FORM's own length
+    /// field (`parse_ifzs`) and ignores whatever follows it. Deliberately does
+    /// NOT pre-size the returned `Vec` by `len`: `len` is the story's own
+    /// declared buffer capacity, unbounded and untrusted, and reading it a byte
+    /// at a time already fails fast once `addr` runs off real VM memory —
+    /// eagerly reserving `len` bytes up front would not (SQ-1415 audit item 3
+    /// is the same hazard for a hostile `@protect` range).
+    fn read_bytes_from_memory_stream(&mut self, sid: u32) -> Vec<u8> {
+        let Some((addr, len, pos, unicode)) = self.glk.memory_stream_read_info(sid) else { return Vec::new() };
+        let elsize = if unicode { 4 } else { 1 };
+        let mut out = Vec::new();
+        let mut p = pos;
+        while p < len {
+            let ea = addr + p * elsize;
+            let v = self.read_width(ea, elsize).unwrap_or(0);
+            out.push((v & 0xFF) as u8);
+            p += 1;
+        }
+        self.glk.memory_stream_read_advance(sid, out.len() as u32);
+        out
     }
 
     /// Write `s` to a text-grid window starting at its cursor, advancing the
@@ -6603,6 +6700,18 @@ mod tests {
         m
     }
 
+    /// Like `machine_with_body`, but with `ram_bytes` of RAM instead of the
+    /// hardcoded 0x100 — for the memory-stream `@save`/`@restore` tests
+    /// (SQ-1427), which need somewhere sizeable inside RAM to hold the
+    /// round-tripped Quetzal blob.
+    fn machine_with_body_and_ram(locals: &[(u8, u8)], body: Vec<u8>, ram_bytes: u32) -> Machine {
+        let start = asm::func(0xC1, locals, &body);
+        let built = asm::assemble(&[start], 0, ram_bytes);
+        let m = machine(built);
+        assert_eq!(m.mem.ramstart(), 0x100, "test assumes RAMSTART == 0x100");
+        m
+    }
+
 
     // ── SQ-0229: Glulx-Quetzal structural conformance ────────────────────────
     //
@@ -7086,6 +7195,146 @@ mod tests {
         m.complete_restore_failure();
         assert_eq!(m.mem.read32(0x110), Some(1), "complete_restore_failure stores 1 into S1");
         assert_eq!(m.step(), StepResult::Quit);
+    }
+
+    // ── SQ-1427: `@save`/`@restore` on a memory stream (Glulx spec §1.8.2, not
+    // just a fileref-backed one) ─────────────────────────────────────────────
+    //
+    // glulxe's own `perform_save`/`perform_restore` (serial.c) do exactly
+    // `glk_put_buffer_stream`/`glk_get_buffer_stream` against whatever Glk
+    // stream the opcode was handed — a memory stream (`glk_stream_open_memory`)
+    // is a legal, self-contained target with no host file I/O, so `@save`/
+    // `@restore` to one must resolve in process rather than suspending with
+    // `SaveRequest`/`RestoreRequest`.
+
+    #[test]
+    fn save_and_restore_via_memory_stream_do_not_suspend_and_round_trip() {
+        use asm::Op::Mem32;
+        const SID_ADDR: u32 = 0x110;
+        const DEST_SAVE: u32 = 0x118;
+        const DEST_RESTORE: u32 = 0x11C;
+        const WITNESS: u32 = 0x120;
+        const MEMBUF: u32 = 0x200;
+        const MEMBUF_LEN: u32 = 0x400; // bytes; plenty for this tiny image's Quetzal
+
+        let body = [
+            asm::ins(0x0123, &[Mem32(SID_ADDR), Mem32(DEST_SAVE)]), // @save
+            asm::ins(0x0124, &[Mem32(SID_ADDR), Mem32(DEST_RESTORE)]), // @restore
+            asm::ins(0x120, &[]),                                   // quit
+        ]
+        .concat();
+        let mut m = machine_with_body_and_ram(&[], body, 0x600);
+        let sid = m.glk.stream_open_memory(MEMBUF, MEMBUF_LEN, false, 3 /* ReadWrite */, 0);
+        m.mem.write32(SID_ADDR, sid).unwrap();
+
+        // @save to a memory stream must not suspend: it saves in process.
+        assert_eq!(m.step(), StepResult::Continue, "memory-stream @save resolves without a SaveRequest");
+        assert_eq!(m.mem.read32(DEST_SAVE), Some(0), "stores the success code 0 directly");
+        assert!(m.pending_saveload.is_none(), "never suspended, so nothing is pending");
+
+        // The bytes actually landed in the memory stream's buffer, and it's a
+        // well-formed, spec-conformant Quetzal container — the same structural
+        // check `save_quetzal_is_a_wellformed_ifzs_container` applies to the
+        // fileref path's bytes.
+        let blob_len = m.glk.stream_position(sid).expect("memory stream exists") as usize;
+        assert!(blob_len > 0 && blob_len <= MEMBUF_LEN as usize, "blob fit inside the declared buffer");
+        let blob: Vec<u8> = (0..blob_len as u32).map(|i| m.mem.read8(MEMBUF + i).unwrap() as u8).collect();
+        let chunks = iff_chunks(&blob);
+        assert_eq!(
+            chunk_ids(&chunks),
+            vec!["IFhd", "CMem", "Stks", "MAll"],
+            "the memory-stream save is the same standard four chunks as save_quetzal()"
+        );
+
+        // Perturb a witness word, then restore from the SAME stream — rewound
+        // to its start, since @save left its cursor at the end of the blob.
+        m.mem.write32(WITNESS, 0xABCD_1234).unwrap();
+        assert_eq!(m.mem.read32(WITNESS), Some(0xABCD_1234));
+        m.glk.stream_set_position(sid, 0, 0);
+
+        assert_eq!(m.step(), StepResult::Continue, "memory-stream @restore resolves without a RestoreRequest");
+        assert!(m.pending_saveload.is_none());
+        assert_eq!(m.mem.read32(WITNESS), Some(0), "restore reverted the witness word");
+        assert_eq!(
+            m.mem.read32(DEST_SAVE),
+            Some(u32::MAX),
+            "restore pops the original @save's stub and stores -1, the just-restored sentinel"
+        );
+    }
+
+    #[test]
+    fn restore_from_garbage_memory_stream_stores_one_and_leaves_state_intact() {
+        use asm::Op::Mem32;
+        const SID_ADDR: u32 = 0x110;
+        const DEST: u32 = 0x118;
+        const WITNESS: u32 = 0x120;
+        const MEMBUF: u32 = 0x140;
+        const MEMBUF_LEN: u32 = 64;
+
+        let body = [
+            asm::ins(0x0124, &[Mem32(SID_ADDR), Mem32(DEST)]), // @restore
+            asm::ins(0x120, &[]),                              // quit
+        ]
+        .concat();
+        let mut m = machine_with_body_and_ram(&[], body, 0x200);
+        let sid = m.glk.stream_open_memory(MEMBUF, MEMBUF_LEN, false, 2 /* Read */, 0);
+        m.mem.write32(SID_ADDR, sid).unwrap();
+        for (i, b) in b"not a save".iter().enumerate() {
+            m.mem.write8(MEMBUF + i as u32, *b as u32).unwrap();
+        }
+        m.mem.write32(WITNESS, 0x1122_3344).unwrap();
+
+        assert_eq!(m.step(), StepResult::Continue, "resolves without a RestoreRequest even on failure");
+        assert_eq!(m.mem.read32(DEST), Some(1), "a garbage blob stores the failure code 1");
+        assert_eq!(m.mem.read32(WITNESS), Some(0x1122_3344), "a failed restore leaves state untouched");
+        assert!(m.pending_saveload.is_none());
+        assert_eq!(m.step(), StepResult::Quit);
+    }
+
+    #[test]
+    fn save_and_restore_via_unicode_memory_stream_round_trip() {
+        use asm::Op::Mem32;
+        const SID_ADDR: u32 = 0x110;
+        const DEST_SAVE: u32 = 0x118;
+        const DEST_RESTORE: u32 = 0x11C;
+        const WITNESS: u32 = 0x120;
+        const MEMBUF: u32 = 0x300;
+        const MEMBUF_LEN_ELEMS: u32 = 512; // 32-bit elements: one byte of Quetzal per element
+
+        let body = [
+            asm::ins(0x0123, &[Mem32(SID_ADDR), Mem32(DEST_SAVE)]), // @save
+            asm::ins(0x0124, &[Mem32(SID_ADDR), Mem32(DEST_RESTORE)]), // @restore
+            asm::ins(0x120, &[]),                                   // quit
+        ]
+        .concat();
+        let mut m = machine_with_body_and_ram(&[], body, 0x1000);
+        let sid = m.glk.stream_open_memory(MEMBUF, MEMBUF_LEN_ELEMS, true, 3 /* ReadWrite */, 0);
+        m.mem.write32(SID_ADDR, sid).unwrap();
+
+        assert_eq!(m.step(), StepResult::Continue);
+        assert_eq!(m.mem.read32(DEST_SAVE), Some(0));
+        let blob_len = m.glk.stream_position(sid).expect("memory stream exists") as usize;
+        assert!(blob_len > 0 && blob_len <= MEMBUF_LEN_ELEMS as usize, "blob fit inside the declared buffer");
+        // Each Quetzal byte occupies one 32-bit element (matching glulxe's
+        // glk_put_buffer_stream widening 8-bit content into a unicode memory
+        // stream): the low 3 bytes of every element must be zero, and the high
+        // byte carries the Quetzal byte.
+        let blob: Vec<u8> = (0..blob_len as u32)
+            .map(|i| {
+                let ea = MEMBUF + i * 4;
+                assert_eq!(m.mem.read32(ea).unwrap() & !0xFF, 0, "unicode element {i} carries only a byte value");
+                m.mem.read8(ea + 3).unwrap() as u8
+            })
+            .collect();
+        let chunks = iff_chunks(&blob);
+        assert_eq!(chunk_ids(&chunks), vec!["IFhd", "CMem", "Stks", "MAll"]);
+
+        m.mem.write32(WITNESS, 0xDEAD_BEEF).unwrap();
+        m.glk.stream_set_position(sid, 0, 0);
+
+        assert_eq!(m.step(), StepResult::Continue);
+        assert_eq!(m.mem.read32(WITNESS), Some(0), "restore reverted the witness word");
+        assert_eq!(m.mem.read32(DEST_SAVE), Some(u32::MAX), "restore stores the -1 sentinel");
     }
 
     #[test]
