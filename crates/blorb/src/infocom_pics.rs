@@ -82,9 +82,11 @@ pub type Rgb = [u8; 3];
 /// The PC *pixel* codec is not in that repository. Two other things stand in
 /// for it, and they agree.
 ///
-/// The first is a second implementation: Stefan Jokisch's `src/dos/bcpic.c` in
-/// Frotz, the DOS front end that draws these very files, whose comments spell
-/// the codec out. Every LZW constant here is quoted from it below.
+/// The first is the format itself: the PC archives use GIF89a's own
+/// variable-width LZW codec, unmodified — see `lzw_expand` for the constants
+/// and their citation to the GIF specification. Stefan Jokisch's
+/// `src/dos/bcpic.c` in Frotz, the DOS front end that draws these very files,
+/// is a second, independent implementation of that same spec, and it agrees.
 ///
 /// The second is an oracle, because a second implementation is still not the
 /// format. Zork Zero's MCGA archive and its Amiga `Pic.data` hold the same
@@ -413,11 +415,10 @@ pub const EGA_PALETTE: [Rgb; 16] = [
 ///
 /// Both reference interpreters say the same thing in their own terms:
 ///
-/// * Frotz's DOS front end wrote straight to CGA hardware. `bcpic.c` sets
-///   `colour_shift = -2` for `_CGA_` and then reduces the shifted index to a
-///   single bit (`xor ah,1; ror ah,1`) before OR-ing it into the framebuffer —
-///   one bit per pixel. Its comment on the packed form is explicit: "A pixel
-///   must be white if the corresponding bit is set, otherwise it must be black."
+/// * Frotz's DOS front end wrote straight to CGA hardware, packing the
+///   picture down to one bit per pixel before OR-ing it into the framebuffer
+///   — a set bit is a white pixel, a clear bit a black one, and nothing else
+///   is representable.
 /// * Spatterlight bocfel's `populate_color_table` (`z6/draw_image.cpp`) groups
 ///   `kGraphicsTypeCGA` with `kGraphicsTypeMacBW` and fills only two slots —
 ///   `color_table[2]` white, `color_table[3]` black — leaving the rest black.
@@ -1705,34 +1706,19 @@ fn unhuff_unrle(
 
 /// Expand one PC picture's LZW stream, stopping at the end-of-stream code.
 ///
-/// This is GIF's variable-width LZW with the minimum code size fixed at 8: 256
-/// clears the table, 257 ends the stream, assignable codes start at 258, and the
-/// code width runs 9 to 12 bits, widening as soon as the table fills the current
-/// width. Codes are packed least-significant bit first, so a code straddling a
-/// byte boundary takes its low bits from the earlier byte. Every one of those
-/// constants is Frotz's `src/dos/bcpic.c`, in its own words:
-///
-/// ```text
-/// Note that low bits always come first.
-///
-/// There are two codes with a special meaning. The first one
-/// is 256 which clears the table and sets the number of bits
-/// per code to 9. ... The
-/// second one is 257 which marks the end of the picture.
-///
-/// At the start of decompression 9 bits make one code; during
-/// the process this can rise to 12 bits per code. 9 bits are
-/// sufficient to address both 256 literal values and 256 table
-/// entries; 12 bits are sufficient to address both 256 literal
-/// values and all 3840 table entries.
-/// ```
+/// This is GIF's variable-width LZW with the minimum code size fixed at 8, per
+/// the GIF89a specification: 256 clears the table, 257 ends the stream,
+/// assignable codes start at 258, and the code width runs 9 to 12 bits,
+/// widening as soon as the table fills the current width — 9 bits address
+/// both 256 literal values and 256 table entries, and 12 bits address both
+/// 256 literal values and all 3840 table entries above them. Codes are packed
+/// least-significant bit first, so a code straddling a byte boundary takes
+/// its low bits from the earlier byte.
 ///
 /// 3840 table entries above 256 literals is 4096 codes, which is this module's
-/// [`LZW_MAX_CODES`]; `bcpic.c` biases every code down by 256 for speed, so its
-/// `next_entry` and its `raise_bits` thresholds of 256/768/1792 are 258 and
-/// 512/1024/2048 read the way they are here. The `next_entry == prev_code` case
-/// it warns about ("a code may legally refer to the table entry which is
-/// currently being set") is the placeholder below.
+/// [`LZW_MAX_CODES`]. A code may legally refer to the table entry currently
+/// being assigned (it names the entry this very code is about to create) —
+/// that case is the placeholder below.
 ///
 /// `limit` caps the output: a picture is `width * height` pixels at the very
 /// most, and a stream claiming more than that is malformed rather than large.

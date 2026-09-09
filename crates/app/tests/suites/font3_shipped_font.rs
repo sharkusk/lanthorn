@@ -2,9 +2,9 @@
 //!
 //! `zvm::cpu::exec::font3_translate` turns the Z-machine's character-graphics font
 //! (ZMSD §16) into Unicode, because a terminal draws characters and not bitmaps. The
-//! table came from bocfel, which is a faithful reading of the *standard* — but the
-//! standard describes the glyphs in prose, and what a player actually saw is what
-//! their machine drew.
+//! table came from bocfel (MIT-licensed as of v2.2.3, the version read), which is a
+//! faithful reading of the *standard* — but the standard describes the glyphs in
+//! prose, and what a player actually saw is what their machine drew.
 //!
 //! *Beyond Zork* shipped that font on the floppy. `Graphic.Data` on *Lost Treasures*
 //! Amiga disk 5 is an 8×8 Amiga disk font — not artwork, despite the name, and not a

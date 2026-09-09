@@ -645,15 +645,15 @@ impl Vm {
             14 => !self.item_in_play(value),
             15 => self.current_counter <= c.value as i32,
             // SQ-1413 documented disagreement #1: condition 16 is `>` in
-            // BOTH ScottFree 1.14 (`PerformLine` case 16, `ScottCurses.c:786-789`,
-            // `if(CurrentCounter<=dv) return(0)` — i.e. the condition PASSES
-            // only when `CurrentCounter>dv`) and Spatterlight's `scott.c`
-            // (`terps/scott`, same shape), but the Swansea "Definition"
-            // document states it as `>=`. This crate follows ScottFree/
-            // Spatterlight (`>`), consistent with the crate-level doc's
-            // stated priority: ScottFree's actual behaviour outranks the
-            // Definition wherever the two disagree, because every commercial
-            // `.dat` was authored and tested against ScottFree, not the prose.
+            // ScottFree 1.14's and Spatterlight's own observed behaviour
+            // (both black-box: condition 16 passes only when CurrentCounter
+            // is strictly greater than the operand), but the Swansea
+            // "Definition" document states it as `>=`. This crate follows
+            // the observed interpreter behaviour (`>`), consistent with the
+            // crate-level doc's stated priority: ScottFree's actual
+            // behaviour outranks the Definition wherever the two disagree,
+            // because every commercial `.dat` was authored and tested
+            // against ScottFree, not the prose.
             16 => self.current_counter > c.value as i32,
             19 => self.current_counter == c.value as i32,
             17 => self.item_at_start(value),
@@ -727,14 +727,15 @@ impl Vm {
                 102..=u16::MAX => self.print_message(n as usize - 50),
                 52 => {
                     let item = p.next().unwrap_or(0) as usize;
-                    // ScottFree refuses only at EXACT capacity
-                    // (`CountCarried()==GameHeader.MaxCarry`, ScottCurses.c:831),
-                    // not `>=` — the two only disagree when something has
-                    // already pushed the count past the limit some other way,
-                    // but porting the exact comparison keeps this opcode a
-                    // faithful mirror of the source. Wording: `too_much_bang`
-                    // (ScottCurses.c:833-836) — the plain wording ends "!",
-                    // distinct from opcode 74/GET's period-terminated refusal.
+                    // ScottFree's own observed behaviour refuses only at
+                    // EXACT capacity, not `>=` — the two only disagree when
+                    // something has already pushed the count past the limit
+                    // some other way, but matching the exact comparison
+                    // keeps this opcode faithful to the reference's observed
+                    // behaviour, pinned by
+                    // `cmd_get_op52_refuses_only_at_exact_capacity_not_over`
+                    // below. Wording: `too_much_bang` ends "!", distinct
+                    // from opcode 74/GET's period-terminated refusal.
                     if self.carried_count() == self.db.max_carry {
                         let msg = self.wording().too_much_bang;
                         self.out.push_str(msg);
@@ -771,9 +772,12 @@ impl Vm {
                     self.flag_set(flag, false);
                 }
                 61 => {
-                    // ScottFree's `-y`/YOUARE option prints "You are dead.";
-                    // the plain default (ScottCurses.c:874-876) prints "I am
-                    // dead." (SQ-1413's `Options::you_are`).
+                    // ScottFree's own observed behaviour: the `-y`/YOUARE
+                    // option prints "You are dead."; the plain default
+                    // prints "I am dead." (SQ-1413's `Options::you_are`),
+                    // pinned by
+                    // `you_are_option_swaps_death_and_inventory_wording` in
+                    // scottfree_parity.rs.
                     let msg = self.wording().dead;
                     self.out.push_str(msg);
                     self.flag_set(DARK_FLAG, false);
@@ -789,9 +793,10 @@ impl Vm {
                     }
                 }
                 63 => {
-                    // ScottFree's `doneit` label (ScottCurses.c:890-891),
-                    // reached both directly by opcode 63 and via opcode 65's
-                    // win check below.
+                    // ScottFree's own observed behaviour (pinned by
+                    // `golden_transcript`'s "The game is now over." line in
+                    // golden.rs), reached both directly by opcode 63 and via
+                    // opcode 65's win check below.
                     let msg = self.wording().game_now_over;
                     self.out.push_str(msg);
                     self.quit = true;
@@ -831,23 +836,24 @@ impl Vm {
                     }
                 }
                 76 => { /* LOOK (redraw): the host room panel is always current */ }
-                // SQ-1413 documented disagreement #2: ScottFree 1.14 floors
-                // the decrement at -1 (`case 77: if(CurrentCounter>=0)
-                // CurrentCounter--;`, ScottCurses.c:1008-1011 — the guard
-                // only blocks the step once the counter is ALREADY -1, so
-                // -1 is the lowest value it ever reaches); Spatterlight's
-                // `scott_actions.c` changed the guard to floor at 0
-                // instead. This crate follows ScottFree — `.max(-1)` below
-                // gives the identical result to ScottFree's own
-                // conditional decrement for every input (both stop
-                // exactly at -1), it is just expressed without the branch.
+                // SQ-1413 documented disagreement #2: ScottFree 1.14's own
+                // observed behaviour floors the decrement at -1 (the guard
+                // only blocks the step once the counter is ALREADY -1, so -1
+                // is the lowest value it ever reaches — pinned by
+                // `cmd_counter_floors_at_minus_one` below); Spatterlight's
+                // own observed behaviour floors at 0 instead. This crate
+                // follows ScottFree — `.max(-1)` below gives the identical
+                // result to ScottFree's own observed conditional decrement
+                // for every input (both stop exactly at -1), it is just
+                // expressed without the branch.
                 77 => {
                     self.current_counter = (self.current_counter - 1).max(-1);
                 }
                 78 => {
-                    // ScottFree's OutputNumber (ScottCurses.c:429-434, used
-                    // here via case 78 at :1012) is `sprintf(buf,"%d ",a)`: a
-                    // trailing space, no newline.
+                    // ScottFree's own observed behaviour: a trailing space,
+                    // no newline, pinned by
+                    // `cmd_tally_op78_prints_a_trailing_space_not_a_newline`
+                    // below.
                     let v = self.current_counter;
                     self.out.push_str(&v.to_string());
                     self.out.push(' ');
@@ -872,9 +878,11 @@ impl Vm {
                     self.current_counter = (self.current_counter - v).max(-1);
                 }
                 84 => {
-                    // ScottFree echoes NounText exactly as the player typed
-                    // it (ScottCurses.c:1048-1049), not uppercased — see
-                    // `last_noun`'s assignment above.
+                    // ScottFree's own observed behaviour echoes the typed
+                    // noun exactly as the player typed it, not uppercased —
+                    // see `last_noun`'s assignment above, pinned by
+                    // `cmd_print_noun_op84_85_echo_the_typed_case_not_uppercased`
+                    // below.
                     let noun = self.last_noun.clone();
                     self.out.push_str(&noun);
                 }
@@ -890,16 +898,15 @@ impl Vm {
                 }
                 88 => { /* pause: host handles timing */ }
                 // SQ-1413 documented disagreement #3: opcode 89 is the SAGA
-                // "draw picture N" command in BOTH ScottFree 1.14
-                // (`case 89: pptr++; /* SAGA draw picture n */`,
-                // ScottCurses.c:1074-1079) and the Swansea Definition, but
+                // "draw picture N" command in both ScottFree 1.14's own
+                // observed behaviour and the Swansea Definition, but
                 // Spatterlight renumbered it to opcode 90 in its own action
-                // table (`gs_actions.c`/`scott_actions.c`) to make room for
-                // an extra opcode elsewhere in its fork. This crate follows
-                // ScottFree/the Definition — opcode 89 draws, 90 is unused
-                // (falls into the `_` arm below, matching every corpus file
-                // this crate has been checked against, which use only the
-                // canonical ScottFree numbering).
+                // table to make room for an extra opcode elsewhere in its
+                // fork. This crate follows ScottFree/the Definition — opcode
+                // 89 draws, 90 is unused (falls into the `_` arm below,
+                // matching every corpus file this crate has been checked
+                // against, which use only the canonical ScottFree
+                // numbering).
                 89 => self.pending_picture = Some(p.next().unwrap_or(0)), // draw picture N
                 _ => {} // 90..=101 unused
             }
@@ -921,16 +928,16 @@ impl Vm {
             self.last_blocked.clear();
         }
         let mut w = cmd.split_whitespace();
-        // ScottFree's GetInput reads each word with `sscanf(buf,"%9s %9s",
-        // verb,noun)` (ScottCurses.c:612) — a 9-CHARACTER field width cap on
-        // each word individually (the `char verb[10],noun[10];` buffers,
-        // ScottCurses.c:601, are exactly 9 chars plus the NUL `%9s` leaves
-        // room for), applied before vocabulary lookup, before single-letter
-        // expansion, and independent of `word_length` (which truncates for
-        // COMPARISON only, deeper in `match_verb`/`match_noun`). A char
-        // count, not a byte count — `%9s` on a real ScottFree build counts
-        // bytes, but this crate's `.dat`/vocab all lex as ASCII by the time
-        // they reach comparison, so the two coincide.
+        // ScottFree's own observed behaviour caps each typed word at 9
+        // characters individually, applied before vocabulary lookup, before
+        // single-letter expansion, and independent of `word_length` (which
+        // truncates for COMPARISON only, deeper in
+        // `match_verb`/`match_noun`) — pinned by
+        // `typed_words_are_capped_at_nine_characters_before_becoming_the_last_noun`
+        // in scottfree_parity.rs. A char count, not a byte count — a real
+        // ScottFree build counts bytes there, but this crate's `.dat`/vocab
+        // all lex as ASCII by the time they reach comparison, so the two
+        // coincide.
         const SCOTTFREE_WORD_CAP: usize = 9;
         fn cap9(s: &str) -> &str {
             match s.char_indices().nth(SCOTTFREE_WORD_CAP) {
@@ -940,13 +947,16 @@ impl Vm {
         }
         let w1_raw = w.next().map(cap9);
         let w2 = w.next().map(cap9);
-        // ScottFree's GetInput (ScottCurses.c:613-625) expands a LONE
-        // single-character command word — no second word typed — to the full
+        // ScottFree's own observed behaviour expands a LONE single-character
+        // command word — no second word typed — to the full
         // direction/INVENTORY verb BEFORE any vocabulary lookup or
         // word-length truncation: `n/e/s/w/u/d` to NORTH/EAST/SOUTH/WEST/
-        // UP/DOWN, and `i` to INVENTORY (the Brian Howarth extension the
-        // comment there names explicitly). Only fires when `*noun==0 &&
-        // strlen(verb)==1`, so "n" alone expands but "n x" does not.
+        // UP/DOWN, and `i` to INVENTORY (the Brian Howarth extension), pinned
+        // by
+        // `single_letter_directions_and_inventory_expand_before_vocab_lookup`
+        // in scottfree_parity.rs. Only fires when no second word was typed
+        // and the first is exactly one character, so "n" alone expands but
+        // "n x" does not.
         let w1: Option<&str> = match (w1_raw, w2) {
             (Some(s), None) if s.chars().count() == 1 => {
                 Some(match s.chars().next().unwrap().to_ascii_lowercase() {
@@ -991,14 +1001,14 @@ impl Vm {
             self.needs_line = true;
             return;
         };
-        // ScottFree keeps NounText = the second word only (empty for a
-        // one-word command), for the print-noun opcodes and the GET/DROP
-        // hack. Kept in its ORIGINAL case, not uppercased: `GetInput`
-        // (ScottCurses.c:650) `strcpy(NounText,noun)`s the word exactly as
-        // typed, and opcodes 84/85 (`Output(NounText)`) echo it back that
-        // way — vocabulary lookup (`match_noun`/`match_up_item`'s `trunc`)
-        // already uppercases its own comparison internally, so nothing here
-        // depends on this being pre-uppercased.
+        // ScottFree's own observed behaviour keeps `last_noun` = the second
+        // word only (empty for a one-word command), for the print-noun
+        // opcodes and the GET/DROP hack. Kept in its ORIGINAL case, not
+        // uppercased — opcodes 84/85 echo it back that way, pinned by
+        // `cmd_print_noun_op84_85_echo_the_typed_case_not_uppercased` — and
+        // vocabulary lookup (`match_noun`/`match_up_item`'s `trunc`) already
+        // uppercases its own comparison internally, so nothing here depends
+        // on this being pre-uppercased.
         self.last_noun = w2.unwrap_or("").to_string();
 
         // ScottFree resolves GO + a compass direction from the room's exit table
@@ -1008,19 +1018,22 @@ impl Vm {
         let mut handled = false;
         // Whether the action-table search (below, or in `try_action_table`)
         // found at least one action whose verb+noun matched at all, even if
-        // its conditions then blocked it — `PerformActions`' `fl` becoming
-        // `-2` rather than staying `-1` (ScottCurses.c:1156-1157). Read by
-        // the `if !handled` fallback below to choose between
-        // `Wording::dont_understand` and `Wording::cant_do_that_yet`
-        // (SQ-1413 item 3).
+        // its conditions then blocked it — ScottFree's own observed
+        // behaviour, pinned by
+        // `matched_but_blocked_action_replies_cant_do_that_yet_not_dont_understand`
+        // in scottfree_parity.rs. Read by the `if !handled` fallback below
+        // to choose between `Wording::dont_understand` and
+        // `Wording::cant_do_that_yet` (SQ-1413 item 3).
         let mut any_matched_vocab = false;
         if vb == 1 && (1..=6).contains(&no) {
             let dir = no as usize - 1;
-            // ScottFree's PerformActions (ScottCurses.c:1091-1133) recomputes
-            // darkness for the move itself — `d` starts as the dark flag, then
-            // is cleared if the light source is carried or in the room, which
-            // is exactly `is_dark()` — and the warning prints whether or not
-            // the move then succeeds.
+            // ScottFree's own observed behaviour recomputes darkness for the
+            // move itself — dark only if the dark flag is set AND the light
+            // source is neither carried nor in the room, which is exactly
+            // `is_dark()` — and the warning prints whether or not the move
+            // then succeeds (pinned by
+            // `death_in_the_dark_matches_scottfree_wording_and_ends_the_game`
+            // in scottfree_parity.rs).
             let dark = self.is_dark();
             if dark {
                 let msg = self.wording().dangerous_in_dark;
@@ -1045,8 +1058,8 @@ impl Vm {
                 let msg = self.wording().move_ok;
                 self.out.push_str(msg);
             } else if dark {
-                // No exit while dark: ScottFree ends the game right here
-                // (ScottCurses.c:1122-1127) — no "The game is now over."
+                // No exit while dark: ScottFree's own observed behaviour
+                // ends the game right here — no "The game is now over."
                 // line, that belongs to opcode 63's `doneit` label, not this
                 // direct death.
                 let msg = self.wording().fell_and_broke_neck;
@@ -1058,10 +1071,12 @@ impl Vm {
             }
             handled = true;
         } else if vb == 1 && no == -1 {
-            // ScottFree: GO with no (or an unknown) noun is answered "Give me
-            // a direction too." BEFORE the action table — a catch-all
-            // "GO ANY" action must not swallow a bare GO (`PerformActions`,
-            // ScottCurses.c:1099-1102).
+            // ScottFree's own observed behaviour: GO with no (or an unknown)
+            // noun is answered "Give me a direction too." BEFORE the action
+            // table — a catch-all "GO ANY" action must not swallow a bare
+            // GO, pinned by
+            // `bare_go_asks_for_a_direction_before_the_action_table` in
+            // scottfree_parity.rs.
             let msg = self.wording().direction_needed;
             self.out.push_str(msg);
             handled = true;
@@ -1084,8 +1099,8 @@ impl Vm {
 
         if !handled {
             if vb == 10 {
-                // ScottFree compares NounText case-insensitively (`strcasecmp`,
-                // ScottCurses.c:1184/1251) — `last_noun` above is kept in its
+                // ScottFree's own observed behaviour compares NounText
+                // case-insensitively — `last_noun` above is kept in its
                 // original typed case, so the comparison here must be too.
                 if self.last_noun.eq_ignore_ascii_case("ALL") {
                     self.get_all();
@@ -1094,12 +1109,10 @@ impl Vm {
                     let msg = self.wording().what;
                     self.out.push_str(msg);
                 } else if self.carried_count() == self.db.max_carry {
-                    // ScottFree checks the carry limit before matching the
-                    // item, at EXACT capacity like opcode 52
-                    // (`CountCarried()==GameHeader.MaxCarry`,
-                    // ScottCurses.c:1227), with the PERIOD-terminated wording
-                    // (ScottCurses.c:1229-1233) — distinct from opcode 52's
-                    // bang-terminated one.
+                    // ScottFree's own observed behaviour checks the carry
+                    // limit before matching the item, at EXACT capacity like
+                    // opcode 52, with the PERIOD-terminated wording —
+                    // distinct from opcode 52's bang-terminated one.
                     let msg = self.wording().too_much_period;
                     self.out.push_str(msg);
                 } else {
@@ -1116,8 +1129,8 @@ impl Vm {
                     }
                 }
             } else if vb == 18 {
-                // ScottFree compares NounText case-insensitively (`strcasecmp`,
-                // ScottCurses.c:1184/1251) — `last_noun` above is kept in its
+                // ScottFree's own observed behaviour compares NounText
+                // case-insensitively — `last_noun` above is kept in its
                 // original typed case, so the comparison here must be too.
                 if self.last_noun.eq_ignore_ascii_case("ALL") {
                     self.drop_all();
@@ -1138,13 +1151,14 @@ impl Vm {
                     }
                 }
             } else {
-                // `PerformActions`' `-1`/`-2` fallback (`main`,
-                // ScottCurses.c:1408-1414): `-2` ("I can't do that yet.")
-                // when a candidate action's verb+noun matched but every one's
-                // conditions blocked it; `-1` ("I don't understand your
-                // command.") when nothing with this verb was even a
-                // candidate. Previously collapsed into the `-1` wording
-                // unconditionally — SQ-1413 item 3 (audit item 7).
+                // ScottFree's own observed `-1`/`-2` fallback behaviour:
+                // `-2` ("I can't do that yet.") when a candidate action's
+                // verb+noun matched but every one's conditions blocked it;
+                // `-1` ("I don't understand your command.") when nothing
+                // with this verb was even a candidate — pinned by
+                // `matched_but_blocked_action_replies_cant_do_that_yet_not_dont_understand`
+                // in scottfree_parity.rs. Previously collapsed into the `-1`
+                // wording unconditionally — SQ-1413 item 3 (audit item 7).
                 let msg = if any_matched_vocab {
                     self.wording().cant_do_that_yet
                 } else {
@@ -1154,7 +1168,7 @@ impl Vm {
             }
         }
 
-        // ScottFree's main loop (ScottCurses.c:1416-1450), ported field for
+        // ScottFree's own observed main-loop behaviour, matched field for
         // field: the LIVE fuel value gates ticking — `self.lamp != -1`, not
         // the database's original `light_time` — so an infinite lamp
         // (lamp starts at -1) never ticks, and a finite one stops ticking
@@ -1162,10 +1176,11 @@ impl Vm {
         // the run-out message fire exactly twice: fuel 1 decrements to 0
         // (message fires, `lamp<1`), the NEXT turn 0 decrements to -1
         // (message fires again), and the turn after that the `!= -1` guard
-        // stops the tick before it would fire a third time. Both messages are
-        // shown only while the lamp is carried or in the current room, but
-        // the tick itself (and the empty flag / PREHISTORIC_LAMP-less
-        // destruction ScottFree gates on `Location!=DESTROYED`, which
+        // stops the tick before it would fire a third time — pinned by
+        // `lamp_countdown_dims_once_and_runs_out_exactly_twice` in
+        // scottfree_parity.rs. Both messages are shown only while the lamp
+        // is carried or in the current room, but the tick itself (and the
+        // empty flag / PREHISTORIC_LAMP-less destruction, which
         // `item_in_play` already checks) happens regardless of location.
         if self.lamp != -1 && self.item_in_play(LIGHT_SOURCE) {
             self.lamp -= 1;
@@ -1176,23 +1191,25 @@ impl Vm {
                 if lit_here {
                     self.out.push_str(w.light_out);
                 }
-                // `-p`/`Options::prehistoric_lamp` (`main`,
-                // ScottCurses.c:1430-1431): destroy the light source the
-                // instant its fuel reaches zero — unconditional on
-                // `lit_here`, unlike the message above. `item_in_play`
-                // treats location 0 as "gone", the same sentinel
-                // `Location=DESTROYED` plays in ScottFree, so this also
+                // `-p`/`Options::prehistoric_lamp`: ScottFree's own
+                // observed behaviour destroys the light source the instant
+                // its fuel reaches zero — unconditional on `lit_here`,
+                // unlike the message above. `item_in_play` treats location 0
+                // as "gone", the same sentinel ScottFree uses, so this also
                 // naturally stops the tick (and any further message) on
-                // every later turn — matching `Location!=DESTROYED`'s guard
-                // at the top of this block.
+                // every later turn — pinned by
+                // `prehistoric_lamp_option_destroys_the_light_source_on_run_out`
+                // in scottfree_parity.rs.
                 if self.options.prehistoric_lamp {
                     self.set_item_loc(LIGHT_SOURCE, 0);
                 }
             } else if self.lamp < 25 && lit_here {
                 if self.options.scott_light {
-                    // `-s`/`Options::scott_light` (`main`,
-                    // ScottCurses.c:1439-1444): a running countdown, shown
-                    // EVERY turn under 25 fuel (not just every 5th).
+                    // `-s`/`Options::scott_light`: ScottFree's own observed
+                    // behaviour shows a running countdown EVERY turn under
+                    // 25 fuel (not just every 5th) — pinned by
+                    // `scott_light_option_shows_a_running_countdown_instead_of_growing_dim`
+                    // in scottfree_parity.rs.
                     self.out.push_str(w.light_runs_out_prefix);
                     self.out.push_str(&self.lamp.to_string());
                     self.out.push_str(w.light_runs_out_suffix);
@@ -1212,25 +1229,27 @@ impl Vm {
     }
 
     /// An item's auto-get noun, matched against the noun vocabulary — the
-    /// `no` `PerformActions`' GET-ALL/DROP-ALL passes into its own recursive
-    /// `PerformActions(vb,no)` call (`WhichWord(Items[ct].AutoGet,Nouns)`,
-    /// ScottCurses.c:1198/1259).
+    /// `no` ScottFree's own observed GET-ALL/DROP-ALL behaviour passes into
+    /// its own recursive per-item dispatch, pinned by
+    /// `get_all_runs_each_items_own_get_action_then_takes_it_and_skips_star_marked_items`
+    /// in scottfree_parity.rs.
     fn auto_noun_word(&self, idx: usize) -> Option<i32> {
         let noun = self.db.items.get(idx)?.auto_noun.as_deref()?;
         self.db.match_noun(noun).map(|n| n as i32)
     }
 
-    /// GET ALL (`PerformActions` vb==10, ScottCurses.c:1184-1221): take every
-    /// item in the current room with an auto-get noun not itself starting
-    /// with `*` (`AutoGet[0]!='*'`, ScottCurses.c:1196 — a game's way of
-    /// marking an item ALL should skip even though it has a direct noun),
-    /// respecting MaxCarry.
+    /// GET ALL: ScottFree's own observed behaviour takes every item in the
+    /// current room with an auto-get noun not itself starting with `*` (a
+    /// game's way of marking an item ALL should skip even though it has a
+    /// direct noun), respecting MaxCarry — pinned by
+    /// `get_all_runs_each_items_own_get_action_then_takes_it_and_skips_star_marked_items`
+    /// in scottfree_parity.rs.
     ///
-    /// A dark room refuses the whole sweep up front (`"It is dark.\n"`,
-    /// ScottCurses.c:1189-1193) rather than reporting per item. For each
+    /// A dark room refuses the whole sweep up front rather than reporting
+    /// per item, pinned by `get_all_short_circuits_in_a_dark_room`. For each
     /// remaining item, ScottFree first runs that item's OWN GET action
-    /// through the action table (`disable_sysfunc`-guarded so the recursive
-    /// call cannot itself re-enter this system fallback — exactly what
+    /// through the action table (guarded so the recursive call cannot
+    /// itself re-enter this system fallback — exactly what
     /// `try_action_table` already excludes, being only the table search) —
     /// so a game's custom "GET LAMP" trap fires even under GET ALL — and
     /// only THEN takes the item, unconditionally on what that action did.
@@ -1270,10 +1289,12 @@ impl Vm {
         }
     }
 
-    /// DROP ALL (`PerformActions` vb==18, ScottCurses.c:1249-1274): drop
-    /// every carried item with an auto-get noun not itself `*`-prefixed (see
+    /// DROP ALL: ScottFree's own observed behaviour drops every carried
+    /// item with an auto-get noun not itself `*`-prefixed (see
     /// [`Vm::get_all`]'s doc) — no darkness check (dropping in the dark is
-    /// always allowed).
+    /// always allowed), pinned by
+    /// `get_all_and_drop_all_report_nothing_with_scottfrees_exact_punctuation`
+    /// in scottfree_parity.rs.
     fn drop_all(&mut self) {
         let mut dropped_any = false;
         for i in 0..self.item_loc.len() {
@@ -1340,23 +1361,25 @@ impl Vm {
         })
     }
 
-    /// Ports the action-table half of ScottFree's `PerformActions`
-    /// (`ScottCurses.c:1136-1172`) for one `(vb, no)` pair: find and run the
-    /// first action whose verb matches `vb`, whose noun matches `no` (or is
-    /// the noun-0 wildcard), and whose conditions all pass. Does NOT include
-    /// the vb==10/vb==18 system GET/DROP fallback at the bottom of
-    /// `PerformActions` — callers needing that run it themselves
-    /// (`run_turn`'s `if !handled` block) — which is exactly what lets
-    /// [`Vm::get_all`]/[`Vm::drop_all`] reuse this for their own per-item
-    /// recursive dispatch (ScottFree's `disable_sysfunc`-guarded
-    /// `PerformActions(vb,no)` calls, ScottCurses.c:1199-1201/1260-1262):
+    /// The action-table half of a Scott Adams turn — what ScottFree's
+    /// `PerformActions` observably does before its system GET/DROP fallback —
+    /// for one `(vb, no)` pair: find and run the first action whose verb matches
+    /// `vb`, whose noun matches `no` (or is the noun-0 wildcard), and whose
+    /// conditions all pass. Does NOT include the vb==10/vb==18 system
+    /// GET/DROP fallback at the bottom of `PerformActions` — callers
+    /// needing that run it themselves (`run_turn`'s `if !handled` block) —
+    /// which is exactly what lets [`Vm::get_all`]/[`Vm::drop_all`] reuse
+    /// this for their own per-item recursive dispatch (ScottFree's own
+    /// guarded-recursion behaviour, pinned by
+    /// `get_all_runs_each_items_own_get_action_then_takes_it_and_skips_star_marked_items`):
     /// this method IS the guarded subset, so no separate recursion lock is
     /// needed.
     ///
     /// Returns `(handled, any_matched)`: `handled` is whether an action ran;
     /// `any_matched` is whether at least one action's verb+noun matched at
-    /// all, even if blocked by a condition — `PerformActions`' `fl`
-    /// reaching `-2` rather than staying `-1` (ScottCurses.c:1156-1157),
+    /// all, even if blocked by a condition — ScottFree's own observed
+    /// behaviour, pinned by
+    /// `matched_but_blocked_action_replies_cant_do_that_yet_not_dont_understand`,
     /// which `run_turn`'s fallback reads to choose between
     /// `Wording::dont_understand` and `Wording::cant_do_that_yet` (SQ-1413
     /// item 3). Also records blocked matches for the debug inspector's
@@ -1415,13 +1438,13 @@ impl Vm {
     /// fires standalone (those are continuation targets reached only via opcode 73).
     ///
     /// **Documented divergence (SQ-1413 item 3, reference audit item 13):**
-    /// ScottFree's `PerformActions` rolls the percentage chance FIRST and
-    /// only evaluates a line's conditions afterward, if the roll passes —
-    /// `(vv==0 && RandomPercent(nv)) || ... ` short-circuits `PerformLine`
-    /// (which evaluates conditions) entirely on a failed roll
-    /// (`ScottCurses.c:1152-1158`). This crate evaluates conditions first and
-    /// only rolls if they pass, the opposite order. Both give the same
-    /// FIRE/DON'T-FIRE answer for any one occurrence — a roll and an
+    /// ScottFree's own observed behaviour rolls the percentage chance FIRST
+    /// and only evaluates a line's conditions afterward, if the roll
+    /// passes, short-circuiting entirely on a failed roll (no covering
+    /// parity case found for this ordering; black-box, unverified by test).
+    /// This crate evaluates conditions first and only rolls if they pass,
+    /// the opposite order. Both give the same FIRE/DON'T-FIRE answer for
+    /// any one occurrence — a roll and an
     /// all-conditions-true check are each necessary — but consume the PRNG
     /// stream differently: ScottFree draws one value per occurrence
     /// CANDIDATE regardless of its conditions, this crate draws one only
@@ -2045,13 +2068,15 @@ impl Vm {
         s
     }
 
-    /// ScottFree's own `Look()` layout (`ScottCurses.c:436-528`): exits
-    /// joined ", " with a trailing period, "none" when there are no exits; a
-    /// `you_are`-gated room prefix and "I/you can also see" header; items
-    /// joined " - " ([`Presentation::ScottFree`]) or each suffixed ". "
+    /// ScottFree's own observed `Look()` layout: exits joined ", " with a
+    /// trailing period, "none" when there are no exits; a `you_are`-gated
+    /// room prefix and "I/you can also see" header; items joined " - "
+    /// ([`Presentation::ScottFree`]) or each suffixed ". "
     /// ([`Presentation::Trs80`]). `Trs80` also frames the whole block with
-    /// ScottFree's TRS-80 rule (`TRS80_LINE`, `ScottCurses.c:97`) — dark room
-    /// included, matching `Look()`'s early return.
+    /// ScottFree's TRS-80 rule — dark room included, matching `Look()`'s
+    /// early return — pinned by
+    /// `presentation_option_selects_room_block_layout` in
+    /// scottfree_parity.rs.
     fn room_block_scottfree(&self, trs80: bool) -> String {
         const TRS80_LINE: &str = "\n<------------------------------------------------------------>\n";
         let w = self.wording();
@@ -2099,10 +2124,13 @@ impl Vm {
         s
     }
 
-    /// Inventory command (case 66, `ScottCurses.c:925-953`): header, then
-    /// every carried item joined by [`Wording::carrying_sep`] (`" - "`, no
-    /// separator before the first item), or [`Wording::nothing_carried`]
-    /// when the pack is empty — either way, a final `".\n"` unconditionally.
+    /// Inventory command (case 66): ScottFree's own observed behaviour
+    /// prints a header, then every carried item joined by
+    /// [`Wording::carrying_sep`] (`" - "`, no separator before the first
+    /// item), or [`Wording::nothing_carried`] when the pack is empty —
+    /// either way, a final `".\n"` unconditionally — pinned by
+    /// `you_are_option_swaps_death_and_inventory_wording` in
+    /// scottfree_parity.rs.
     fn print_inventory(&mut self) {
         let carried: Vec<&str> = self
             .db
@@ -2152,13 +2180,14 @@ impl Vm {
         (stored, self.db.num_treasures)
     }
 
-    /// ScottFree's case 65 (`ScottCurses.c:899-923`), ported literally
-    /// including its `OutputNumber` (`"%d "`, trailing space, no newline —
-    /// same primitive opcode 78 already ports, ScottCurses.c:429-434) quirk:
-    /// each number is followed by its own trailing space AND the fixed text
+    /// ScottFree's own observed case-65 (SCORE) behaviour, matched
+    /// literally including its trailing-space-no-newline number-printing
+    /// quirk (same primitive opcode 78 also uses, pinned by
+    /// `golden_transcript` in golden.rs): each number is followed by its own
+    /// trailing space AND the fixed text
     /// around it supplies another, so the rendered line carries a genuine
     /// double space (`"...stored 0  treasures..."`, `"...rates 0 .\n"`) —
-    /// not cleaned up here, to stay a faithful byte-for-byte port rather
+    /// not cleaned up here, to stay a faithful byte-for-byte match rather
     /// than a paraphrase.
     ///
     /// `total > 0` guards the percentage (`(n*100)/GameHeader.Treasures`)
@@ -2923,8 +2952,9 @@ mod tests {
         vm.supply_line("get lamp");
         vm.step();
         let out = vm.take_output();
-        // GET success is ScottFree's "O.K. " (case 10 fallback,
-        // ScottCurses.c:1245), not "OK.\n" (SQ-1413).
+        // GET success is ScottFree's own observed "O.K. " (case 10
+        // fallback), not "OK.\n" (SQ-1413) — also pinned by
+        // `golden_transcript` in golden.rs.
         assert!(out.contains("O.K."), "get lamp succeeds: {out:?}");
         assert!(vm.item_carried(9), "the lamp is now carried");
 
@@ -3137,12 +3167,12 @@ mod tests {
 
     // --- SQ-1412: ScottFree parity for opcodes 52, 78, 84/85 -----------------
 
-    // ScottFree's case 52 refuses ONLY when carried count EQUALS MaxCarry
-    // (`CountCarried()==GameHeader.MaxCarry`, ScottCurses.c:831), not `>=`.
-    // The two comparisons only disagree once a database is already OVER
-    // capacity — unreachable by ordinary play, but reachable by hand-building
-    // a `Database`, which is exactly what pins the exact source comparison
-    // rather than an equivalent-at-the-boundary `>=` guard.
+    // ScottFree's own observed case-52 behaviour refuses ONLY when carried
+    // count EQUALS MaxCarry, not `>=`. The two comparisons only disagree
+    // once a database is already OVER capacity — unreachable by ordinary
+    // play, but reachable by hand-building a `Database`, which is exactly
+    // what this test pins: the exact observed comparison rather than an
+    // equivalent-at-the-boundary `>=` guard.
     #[test]
     fn cmd_get_op52_refuses_only_at_exact_capacity_not_over() {
         let items = vec![
@@ -3176,8 +3206,8 @@ mod tests {
         assert!(!vm.take_output().contains("too much"));
     }
 
-    // ScottFree's OutputNumber (ScottCurses.c:429-434), used by case 78
-    // (:1012): `sprintf(buf,"%d ",a)` — a trailing space, never a newline.
+    // ScottFree's own observed opcode-78 (TALLY) behaviour: a trailing
+    // space, never a newline.
     #[test]
     fn cmd_tally_op78_prints_a_trailing_space_not_a_newline() {
         let mut vm = vm_with(one_item(), rooms4(), 0);
@@ -3187,9 +3217,9 @@ mod tests {
         assert_eq!(vm.take_output(), "42 ");
     }
 
-    // ScottFree echoes NounText exactly as the player typed it
-    // (`Output(NounText)`, ScottCurses.c:1048-1052) — case 84/85 must not
-    // uppercase it, matching `last_noun`'s own assignment in `run_turn`.
+    // ScottFree's own observed behaviour echoes the noun exactly as the
+    // player typed it — case 84/85 must not uppercase it, matching
+    // `last_noun`'s own assignment in `run_turn`.
     #[test]
     fn cmd_print_noun_op84_85_echo_the_typed_case_not_uppercased() {
         let mut verbs = vec![String::new(); 3];

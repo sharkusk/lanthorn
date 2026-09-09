@@ -701,11 +701,12 @@ mod tests {
 
     // ── SQ-1413: restore_from_file accepts a bare ScottFree save ────────────────
 
-    /// A hand-authored ScottFree 1.14 save (`SaveGame`/`LoadGame`,
-    /// `ScottCurses.c:653-706` — same field order as `scott::scottfree_save`'s
-    /// own fixture): 16 `counter room` pairs, a state line, then one location
-    /// per item. Shaped for `tiny_cave.dat` (`NumItems=9`, 10 item slots,
-    /// 4 rooms 0..=3) — see `crates/scott/tests/tiny_cave.dat`.
+    /// A hand-authored ScottFree 1.14 save — same field order as
+    /// `scott::scottfree_save`'s own fixture (see the field order documented
+    /// on `scott::Vm::restore_scottfree`): 16 `counter room` pairs, a state
+    /// line, then one location per item. Shaped for `tiny_cave.dat`
+    /// (`NumItems=9`, 10 item slots, 4 rooms 0..=3) — see
+    /// `crates/scott/tests/tiny_cave.dat`.
     fn tiny_cave_scottfree_save() -> String {
         let mut s = String::new();
         for ct in 0..16 {

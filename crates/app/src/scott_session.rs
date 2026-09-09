@@ -23,9 +23,9 @@ pub const SCOTT_ENGINE: &str = "scott";
 /// The save-format version within the `scott` engine.
 pub const SCOTT_SAVE_FORMAT: u32 = 1;
 
-/// The canonical Scott Adams input prompt, shown before each command. ScottFree
-/// prints it from its input routine (`scott.c`: `Output("\nTell me what to do ? ")`),
-/// so it belongs to the host/input layer here (not the VM, which stays input-agnostic).
+/// The canonical Scott Adams input prompt, shown before each command.
+/// ScottFree prints exactly this text before every input, so it belongs to
+/// the host/input layer here (not the VM, which stays input-agnostic).
 /// Scott used this phrase, never the Infocom-style `>`.
 const PROMPT: &str = "\nTell me what to do ? ";
 

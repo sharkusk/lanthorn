@@ -1,30 +1,21 @@
-//! Import of ScottFree 1.14's own save-file format (`SaveGame`/`LoadGame`,
-//! `ScottCurses.c:653-706`) — a plain whitespace-separated text format,
-//! **not** this crate's own [`crate::Vm::snapshot`] binary blob. A player who
-//! has an old ScottFree `.sav` (or one from a fork that kept the format —
-//! Gargoyle's `scott.c` and cspiegel's `scottfree-glk` both read/write it
-//! unchanged) can bring it into lanthorn via [`crate::Vm::restore_scottfree`].
+//! Import of ScottFree 1.14's own save-file format (`SaveGame`/`LoadGame`) —
+//! a plain whitespace-separated text format, **not** this crate's own
+//! [`crate::Vm::snapshot`] binary blob. A player who has an old ScottFree
+//! `.sav` (or one from a fork that kept the format — Gargoyle's `scott.c`
+//! and cspiegel's `scottfree-glk` both read/write it unchanged) can bring it
+//! into lanthorn via [`crate::Vm::restore_scottfree`].
 //!
-//! The format, read in this exact order (`LoadGame`, `ScottCurses.c:679-706`):
-//!
-//! ```c
-//! for(ct=0;ct<16;ct++)
-//!     fscanf(f,"%d %d\n",&Counters[ct],&RoomSaved[ct]);
-//! fscanf(f,"%ld %d %hd %d %d %hd\n",
-//!     &BitFlags,&DarkFlag,&MyLoc,&CurrentCounter,&SavedRoom,
-//!     &GameHeader.LightTime);
-//! for(ct=0;ct<=GameHeader.NumItems;ct++)
-//!     fscanf(f,"%hd\n",&lo); /* Items[ct].Location=(unsigned char)lo; */
-//! ```
-//!
-//! i.e. 16 `Counters[ct] RoomSaved[ct]` pairs (this crate's `counters`/
+//! The format, an interoperability fact recoverable from any `.sav` file
+//! ScottFree itself wrote, read in this exact field order: 16
+//! `Counters[ct] RoomSaved[ct]` pairs (this crate's `counters`/
 //! `saved_rooms` op-81/op-87 backup registers), one state line (`BitFlags`,
 //! a redundant/backward-compat `DarkFlag` bit ORed into bit 15, the player's
 //! room, the live current counter, the op-80 saved-room register, and the
-//! lamp fuel), then `NumItems+1` item locations. `fscanf`'s `%d`/`%hd`/`%ld`
-//! all skip leading whitespace (including newlines) exactly like the `.dat`
-//! lexer's own tokens, so this reader is the same whitespace/integer lexer
-//! shape as `loader.rs`'s, not a line-oriented parser.
+//! lamp fuel), then `NumItems+1` item locations. Every field is a
+//! whitespace-separated decimal integer, skipping leading whitespace
+//! (including newlines) exactly like the `.dat` lexer's own tokens, so this
+//! reader is the same whitespace/integer lexer shape as `loader.rs`'s, not a
+//! line-oriented parser.
 //!
 //! Fields this crate's `Vm` has no equivalent for (there are none — every
 //! `LoadGame` field maps onto an existing `Vm` field) or that `SaveGame`
@@ -137,9 +128,9 @@ impl Vm {
         let mut saved_rooms = [0usize; 16];
         for i in 0..16 {
             counters[i] = t.next_i64()? as i32;
-            // ScottFree's RoomSaved values are room indices (`fscanf("%d")`,
-            // signed) but this crate stores them `usize`; a negative or
-            // out-of-range room here is refused like any other bad index.
+            // ScottFree's RoomSaved values are signed room indices but this
+            // crate stores them `usize`; a negative or out-of-range room
+            // here is refused like any other bad index.
             saved_rooms[i] = t.next_usize(self.db.rooms.len())?;
         }
 
@@ -152,9 +143,8 @@ impl Vm {
         for (i, f) in flags.iter_mut().enumerate() {
             *f = (bit_flags >> i) & 1 == 1;
         }
-        // `DarkFlag` (`%d`): redundant backward-compat bit ScottFree ORs into
-        // bit 15 (`crate::database::DARK_FLAG`) after loading `BitFlags` —
-        // `if(DarkFlag) BitFlags|=(1<<15);` (LoadGame, ScottCurses.c:698-699).
+        // `DarkFlag`: redundant backward-compat bit ScottFree ORs into
+        // bit 15 (`crate::database::DARK_FLAG`) after loading `BitFlags`.
         // OR, never clear: a zero here must not un-set a bit `BitFlags`
         // already carried.
         let dark_flag = t.next_i64()?;

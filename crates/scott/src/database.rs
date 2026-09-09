@@ -19,7 +19,7 @@ pub struct Database {
     /// How many items the player may carry at once. Opcode 52 (auto-get)
     /// refuses to pick up a further item once the carried count reaches this
     /// EXACTLY — `Vm::run_commands` checks `==`, matching ScottFree's own
-    /// `CountCarried()==GameHeader.MaxCarry`, not `>=`.
+    /// observed behaviour, not `>=`.
     pub max_carry: i32,
     /// The room index the player starts in, and the room a fresh game (or an
     /// in-game restart) places them in.
@@ -117,9 +117,10 @@ pub struct Item {
     pub treasure: bool,
     /// The one noun the player can use to auto-get or auto-drop this item by
     /// name, lifted from a trailing `/NOUN/` marker on the item's raw text
-    /// (`loader::extract_auto_noun`, porting ScottFree's own split
-    /// verbatim). `None` for an item with no marker — scenery and other
-    /// objects the parser cannot refer to directly.
+    /// per the `.dat` format's own auto-get convention (`loader::extract_auto_noun`,
+    /// re-derived from the Swansea Definition §2.5). `None` for an item with
+    /// no marker — scenery and other objects the parser cannot refer to
+    /// directly.
     pub auto_noun: Option<String>,
     /// The room this item occupies at the start of a new game, or
     /// [`CARRIED`] if the player starts holding it, or 0 if it starts out of

@@ -343,10 +343,11 @@ pub(crate) fn clamp_runs(runs: Vec<CaptureRun>, char_len: usize) -> Vec<CaptureR
 /// (the element boundary itself is the break) and its style-chunk char is
 /// consumed in lockstep.
 /// The factor by which Infocom v6 artwork (320×200 MCGA) is scaled into the
-/// presentation UNIT space. Reference interpreters (Frotz DOS/Amiga, `bcpic.c`
-/// `scaler = 2`; SDL `m_v6scale = 2`) present v6 on a 640×400 screen and blit
-/// each 320×200 picture at 2×, returning the doubled dimensions to the game so
-/// its layout math lands on the 640-wide screen (SQ-0479). Both the screen
+/// presentation UNIT space. Grounded in real-game traces across the four v6
+/// titles (SQ-0479): a game's own layout math only lands correctly when its
+/// 320×200 pictures are doubled onto a 640×400 screen, and Frotz's DOS/Amiga
+/// ports and its SDL port agree — both present v6 on that same 640×400 screen
+/// at the same 2× factor. Both the screen
 /// seeding (2×Reso) and every picture crossing into unit space use this one
 /// factor, so screen and picture dimensions scale together — the `is_content_art`
 /// ratios (below) stay valid because both numerator and denominator double.
