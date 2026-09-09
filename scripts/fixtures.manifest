@@ -82,10 +82,34 @@
 #   frankenfingers        longer carries, so no digest can be pinned.
 #
 # FORMAT — one TAB-separated record per line:
-#   sha256 <TAB> bytes <TAB> destination <TAB> url <TAB> zip-member-or-"-" <TAB> licence
+#   sha256 <TAB> bytes <TAB> destination <TAB> url <TAB> zip-member-or-"-" <TAB> licence <TAB> verify
 # Destinations and zip members may contain spaces; nothing may contain a tab.
 # The `bytes` column is redundant against the digest and kept anyway: it makes a
 # truncated download say so before the hash does, and it is what a human reads.
+#
+# VERIFY COLUMN (optional, 7th field; absent/empty = "digest", the historical
+# and default behaviour: `--verify-only` and the fetch both require an exact
+# sha256+size match). The one other value is "presence": the file is fetched
+# and re-fetched the same way, but existence (and a non-empty body) is all
+# either mode checks — a content mismatch is neither reported nor fetched over.
+#
+# Reach for "presence" only when the file is legitimately allowed to differ in
+# BYTES while meaning the same thing to every reader — never for a fixture a
+# suite pins byte-for-byte, and never as a way to silence a real drift. So far
+# that is exactly one file (SQ-1461): `Kerkerkruip.ini` is a Gargoyle-format
+# interpreter config the game itself never touches — `app::garglk_ini::discover`
+# reads it once, straight off disk, and nothing in this repo ever writes it back
+# (checked: no `stories/`-writing test boots Kerkerkruip with its own directory
+# as the Glk persistent store — see `sq1303_glulx_static_world.rs` and
+# `glulx_garglk_style_sentinel.rs`, both of which use a scratch dir or no store
+# at all). What the one suite that reads this file cares about
+# (`glulx_garglk_style_sentinel.rs`) is its PARSED key/value content — the
+# `tcolor 10 F400A1 ffffff` line — which a trailing newline or CRLF-vs-LF
+# difference cannot change. A locally-extracted or -edited copy can pick up
+# exactly such a difference (877 bytes locally vs. the 875 fetched fresh here —
+# one extra trailing CRLF, confirmed byte-for-byte) with no effect on anything
+# that reads it, so digest-pinning it produced a false MISMATCH on a machine
+# that never played the game differently than CI did.
 560294b8744da39228656454798bb232db3023b6d4e612e12ca12bc70336f5f2	118272	advent.z6	https://ifarchive.org/if-archive/games/zcode/advent.z6	-	ifarchive-tou
 662d096260f86515927bd659ad0d663d11a643e39814e7af5ee36c8e57066292	195406	advent.blb	https://ifarchive.org/if-archive/games/glulx/advent.blb	-	ifarchive-tou
 c2f28a4ddd9367c260946926a33c73a4b0cc38b1f327646cc1202182a28a10ff	520192	anchor.z8	https://ifarchive.org/if-archive/games/zcode/anchor.z8	-	ifarchive-tou
@@ -125,7 +149,7 @@ d0390e813526ed227ae3a3293a3f2f56dc7c2232fad7caee7573c41af32db8fb	29696	mysteriou
 10322e8f466d1ab5a385aa19d342da6e0d497426e1828b32b5ebc8b63f78bcf6	29180	mysterious10.z6	https://ifarchive.org/if-archive/games/zcode/mysterious_z6_blorb.zip	MysteAdv/mysterious10.z6	author-permission-ifarchive
 e8312e7762b0b2b1f289179038f0ca779aa064890eb08e6ca2c481b5c03067ef	30720	mysterious11.z6	https://ifarchive.org/if-archive/games/zcode/mysterious_z6_blorb.zip	MysteAdv/mysterious11.z6	author-permission-ifarchive
 8dbcb85fe6631133257c0f6389f67c1bf31be1f3b83d132f4ffcfa7f019bb29e	22109534	Kerkerkruip.gblorb	https://ifarchive.org/if-archive/games/glulx/Kerkerkruip.zip	Kerkerkruip.gblorb	ifarchive-tou
-82d0f5c5a22304f9c0fd1fad35c8731a67ba614c74af758da6441c6dacb9e9fa	875	Kerkerkruip.ini	https://ifarchive.org/if-archive/games/glulx/Kerkerkruip.zip	Kerkerkruip.ini	ifarchive-tou
+82d0f5c5a22304f9c0fd1fad35c8731a67ba614c74af758da6441c6dacb9e9fa	875	Kerkerkruip.ini	https://ifarchive.org/if-archive/games/glulx/Kerkerkruip.zip	Kerkerkruip.ini	ifarchive-tou	presence
 28e2c116fa07045337a63444d56c4ff7eb642331e67bf3a6e615917ac0621a71	1818410	THE BAT.gblorb.blorb	https://ifarchive.org/if-archive/games/glulx/THE%20BAT.zip	THE BAT/THE BAT.gblorb	ifarchive-tou
 755a622be439847a1c3d8f9363133cc4d3f2117f2dbdeeb455374925b43251c2	53374	golden_baton.blb	https://ifarchive.org/if-archive/scott-adams/games/scottfree/mysterious_blorb.zip	golden_baton.blb	author-permission-ifarchive
 5702fdb7aee77fc3e95043ffe4551d64e8ea5bc249e938ba55b57c36f834abce	56914	perseus_andromeda.blb	https://ifarchive.org/if-archive/scott-adams/games/scottfree/mysterious_blorb.zip	perseus_andromeda.blb	author-permission-ifarchive

@@ -392,6 +392,59 @@ reimplement locally) so the repointed cases actually reach the fetched copy on
 CI rather than continuing to skip. `scripts/fixtures.manifest` carries
 `CounterfeitMonkey-10.gblorb` under licence `cc-by-sa-4.0`.
 
+## A fixture that is allowed to differ in bytes (SQ-1461)
+
+`Kerkerkruip.ini` looked, at first, like the case the digest pin exists to
+catch: a local copy at 877 bytes against the manifest's pinned 875, reported by
+`--verify-only` as a MISMATCH while a fresh CI fetch stayed pristine. The
+obvious read — "the game rewrites its own settings file when played, so a
+played local copy drifts from a never-played CI one" — turned out to be wrong.
+Checked against the code rather than assumed: `Kerkerkruip.ini` is not a save
+or a preferences file at all. It is a **Gargoyle interpreter config**, in
+Gargoyle's own `.ini` format (`# Gargoyle Glk configuration for Kerkerkruip!`),
+that lanthorn reads directly off disk once at boot
+(`app::garglk_ini::discover`, `std::fs::read_to_string`) and never writes back.
+The game's *own* preferences live behind a completely different name —
+Kerkerkruip's `KerkerkruipStorage` Glk-file extension (`crates/gvm/tests/
+kerkerkruip_boots.rs`) — which is virtualised through gvm's in-memory Glk VFS
+and, when persisted at all, lands in the app's per-game save directory
+(`<data_base>/<story-key>.save/`, see `storage::game_dir` and
+`startup.rs`'s `story_game_dir` call), never beside the story in `stories/`.
+No suite that boots Kerkerkruip through the app (`sq1303_glulx_static_world.rs`,
+`glulx_garglk_style_sentinel.rs`) passes the story's own directory as the
+persistent store — both use `app::scratch_dir(...)` or no store at all — so
+nothing in a normal test run, or in ordinary play, ever touches the `.ini`
+file on disk.
+
+The actual difference was two bytes: one extra trailing CRLF at end-of-file
+(`data[:-2]` of the local copy hashes to exactly the manifest's pinned digest),
+almost certainly a byproduct of however the local copy was extracted or last
+opened, not of anything lanthorn or the game did. And the one suite that reads
+this file, `glulx_garglk_style_sentinel.rs`, only cares about its *parsed*
+content — the `tcolor 10 F400A1 ffffff` line the sentinel test looks for — which
+a trailing newline cannot change either way.
+
+So digest-pinning `Kerkerkruip.ini` byte-for-byte was enforcing a stricter
+invariant than any reader needs, on a file that (unlike every other row in the
+manifest) genuinely isn't lanthorn's to author or reproduce exactly — its
+provenance is "however you last got a copy of the Gargoyle config", not "the
+release archive's canonical bytes". The fix is a new `scripts/fixtures.manifest`
+column: this one row is marked `presence`, meaning `scripts/fetch-fixtures.sh`
+still fetches it and still requires it to exist and be non-empty, but does not
+fail the run over a content mismatch. `scripts/fetch-fixtures.sh --self-test`
+covers the new branching (there is no Rust suite that reads this shell script,
+so this is the shell-native equivalent). See the manifest's own header, next to
+the `Kerkerkruip.ini` row, for the column's exact contract.
+
+The general lesson generalises further than this one file: not every fixture
+this manifest names is a work whose bytes lanthorn must reproduce exactly. A
+digest pin is right for a story file or a picture archive, where a single
+changed byte is exactly the failure this manifest exists to catch. It is wrong
+for a companion config file no code path ever regenerates or depends on
+byte-for-byte — pinning it anyway just turns an inconsequential difference in
+provenance into a false CI-vs-local disagreement that a suite reading the file
+would never itself observe.
+
 ## Two footnotes worth keeping
 
 `unit_tests/ziptest-r12-s890607.z6` and `unit_tests/ziptest-r13-s890619.z6` are
