@@ -85,3 +85,12 @@ Unrelated to the oracle above — SQ-1415's fixture, eblong.com's own
 self-checking Glulx save/restore conformance story (autorestores on boot and
 reports success/failure itself). Driven by `startsavetest_boots.rs`. See that
 file and `GLULX_NOTES.md` §14 for detail; kept here rather than duplicated.
+
+## `bench/` — the timing harness's story and script
+
+`bench/glulxercise.ulx` and `bench/glulxercise.script` drive `cargo run
+--release -p lanthorn-gvm --example bench`; see
+[`bench/README.md`](bench/README.md) for the story's provenance and why it is
+committed here rather than fetched into `unit_tests/`, and
+`docs/internals/performance.md` for the recorded baselines against the
+glulxe/cheapglk build described at the top of this file (SQ-1428).

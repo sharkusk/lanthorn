@@ -1,0 +1,22 @@
+# Mini-Zork I (minizork.z3) benchmark script — SQ-1428.
+#
+# One command per line; blank lines and lines starting with '#' are skipped
+# by `cargo run -p lanthorn-zvm --example bench` and must be stripped before
+# the same script is fed to dfrotz (see ../README.md for the exact command).
+#
+# Eight commands that leave the game exactly where they found it: the
+# above-ground house circuit (north/east/south/west returns to West of House)
+# plus four parser-only turns. Every command is idempotent on repetition —
+# `open mailbox` answers "It is already open.", `take leaflet` answers "You
+# already have that." — so the cycle can be looped for tens of thousands of
+# turns without the game ending, dying, or drifting into a different state.
+# Nothing here reaches the Thief, the grue, the lamp battery or any random
+# event; the score stays 0 and the only counter that moves is Moves.
+open mailbox
+take leaflet
+read leaflet
+north
+east
+south
+west
+inventory

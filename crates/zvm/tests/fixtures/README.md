@@ -167,3 +167,11 @@ anything that exists on disk. Were they ever obtained, they belong beside
 render behaviour against them is `crates/app`'s render-path territory (v6
 screen geometry, hybrid/raster drawing), not this crate's opcode-level
 conformance suite — so SQ-1421 records the gap rather than closing it.
+
+## `bench/` — the timing harness's script
+
+`bench/minizork.script` drives `cargo run --release -p lanthorn-zvm --example
+bench` against `minizork.z3` above; see [`bench/README.md`](bench/README.md) for
+what the script does and why, and `docs/internals/performance.md` for the
+recorded baselines against `dfrotz` (SQ-1428). No story file lives under
+`bench/` — it reads `minizork.z3` from this directory.

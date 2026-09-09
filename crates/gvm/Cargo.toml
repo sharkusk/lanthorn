@@ -60,3 +60,12 @@ required-features = ["grammar"]
 [[test]]
 name = "object_words"
 required-features = ["grammar"]
+
+# The timing harness (SQ-1428). `test = true` so `cargo test`/`cargo nextest`
+# compile it and run its `#[cfg(test)]` smoke — a benchmark nobody builds is a
+# benchmark that stops compiling. The smoke asserts turns played and opcodes
+# dispatched, never elapsed time; real numbers are taken by hand per
+# `docs/internals/performance.md`.
+[[example]]
+name = "bench"
+test = true

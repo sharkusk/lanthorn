@@ -1,0 +1,28 @@
+# tiny_cave.dat benchmark script — SQ-1428.
+#
+# One command per line; blank lines and lines starting with '#' are skipped
+# by `cargo run -p lanthorn-scott --example bench` and must be stripped before
+# the same script is fed to ScottFree (see README.md for the exact command).
+#
+# Ten commands that leave the game exactly where they found it. The map is
+# three rooms in a line — clearing (1) down to cave (2) down to grotto (3) —
+# so down/down/up/up is a closed circuit, and the remaining commands exercise
+# the verb/noun matcher, the occurrence pass and the action table without
+# changing anything that persists: `get lamp` answers "You already have that."
+# from lap two, `rub lamp` re-reveals an idol that is already revealed, and
+# `push button` / `pull lever` / `score` / `count` only print.
+#
+# `drop idol` is deliberately absent: dropping the idol in the clearing is how
+# tiny_cave is WON, and a benchmark that wins on lap one measures a quit loop
+# from then on. `script_never_ends_the_game` in `crates/scott/examples/bench.rs`
+# asserts ten laps' worth of turns are all played, which is what holds that.
+get lamp
+go down
+go down
+rub lamp
+push button
+pull lever
+go up
+go up
+score
+count

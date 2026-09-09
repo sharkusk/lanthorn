@@ -59,6 +59,7 @@ these track the code).
 | [`internals/remote-sound.md`](internals/remote-sound.md) | Why audio plays on the local device, and how to route it back over SSH |
 | [`internals/glyphs.md`](internals/glyphs.md) | Exactly which Unicode ranges the map's line art needs from your font |
 | [`internals/zvm-embedding-review.md`](internals/zvm-embedding-review.md) | What `zvm`'s public API would need to be a crate someone outside lanthorn depends on |
+| [`internals/performance.md`](internals/performance.md) | How fast each engine plays a turn, measured against dfrotz, glulxe and ScottFree — and the harnesses to rerun it yourself |
 | [`internals/ci-fixture-coverage.md`](internals/ci-fixture-coverage.md) | Which integration suites `stories/` being gitignored leaves untested on CI, and which of those a fixture could close |
 | [`internals/mapping-rules-idea.md`](internals/mapping-rules-idea.md) | A snapshot of how the automapper places and draws rooms today, as a baseline for redesign |
 | [`internals/mapping_rules_concept.md`](internals/mapping_rules_concept.md) | Early concept notes on relative room constraints and grid-based layout |

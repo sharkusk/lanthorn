@@ -51,3 +51,11 @@ lanthorn-zvm = { path = ".", features = ["fixtures"] }
 [[example]]
 name = "grammar_dump"
 required-features = ["grammar"]
+
+# The timing harness (SQ-1428). `test = true` so `cargo test`/`cargo nextest`
+# compile it and run its `#[cfg(test)]` smoke — a benchmark nobody builds is a
+# benchmark that stops compiling. The smoke asserts turns played, never
+# elapsed time; real numbers are taken by hand per `docs/internals/performance.md`.
+[[example]]
+name = "bench"
+test = true

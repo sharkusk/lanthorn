@@ -1,0 +1,57 @@
+# Glulxercise (glulxercise.ulx) benchmark script — SQ-1428.
+#
+# One command per line; blank lines and lines starting with '#' are skipped
+# by `cargo run -p lanthorn-gvm --example bench` and must be stripped before
+# the same script is fed to glulxe (see README.md for the exact command).
+#
+# Twenty-seven of glulxercise's self-checking test groups, chosen to be a
+# DISPATCH benchmark: arithmetic, branching, call/return, stack and memory
+# opcodes, plus the string decoder and the linear/binary search opcodes. Each
+# reports "Passed." and leaves the machine as it found it, so the list can be
+# looped indefinitely — `script_runs_only_passing_tests` in
+# `crates/gvm/examples/bench.rs` asserts exactly that (one "Passed." per line,
+# no failures), which is what stops a typo'd name from quietly measuring the
+# help text instead of an opcode group.
+#
+# Deliberately ABSENT, and why:
+#   random, nonrandom        — PRNG output is implementation-defined, so the
+#                              amount of work done differs between engines
+#   undo, multiundo, extundo, undorestart, undomemsize, undoheap
+#                            — snapshot the whole VM state; that measures
+#                              memcpy and allocator, not dispatch
+#   restore, protect, memsize, heap
+#                            — mutate save state or resize memory, so a
+#                              second lap is not the same benchmark
+#   glk, gidispa, iosys*, filter, nullio
+#                            — measure the host's Glk layer, which is a null
+#                              sink here and a real terminal in glulxe: the
+#                              one comparison that would NOT be like for like
+#   float*, double*, safari5 — real work, but floating point on the host FPU
+#                              says nothing about the interpreter loop
+operand
+arith
+bigmul
+comvar
+comarith
+bitwise
+shift
+trunc
+extend
+aload
+astore
+arraybit
+call
+callstack
+jump
+jumpform
+compare
+stack
+gestalt
+throw
+streamnum
+strings
+ramstring
+search
+mzero
+mcopy
+verify
