@@ -93,13 +93,14 @@ const EMPTY_STRING_PLACEHOLDER: &str = ".";
 /// One tokenised action record: the byte that decides whether it applies,
 /// and the opcode stream that runs when it does (spec §3.7).
 ///
-/// Records are variable length and terminated in band. A record whose
-/// length byte is zero is the last of its chain — **it is still a real
-/// record, eligible to match and to run**; the terminator is the length
-/// value, not a separate sentinel. Such a record has an empty `ops`, so it
-/// can never reach the end-of-record opcode and therefore always fails,
-/// which is observable: it makes its chain report "matched but blocked"
-/// rather than "not understood" (spec §9.1's three dispatch outcomes).
+/// Records are variable length and terminated in band. Byte 1 of the stored
+/// record is a **link** to the next record, not an extent — 0 means only
+/// that no record follows. **A record whose link is zero is the last of its
+/// chain and is a real record in every other respect**, eligible to match
+/// and to run, and its opcode stream is not empty: it begins at byte 2 like
+/// every other record's and ends at its own end-of-record opcode 255. This
+/// field always holds that recovered stream, whichever way the record's
+/// extent was determined.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Ti99Record {
     /// For an explicit (verb-triggered) record, the noun index this record
@@ -466,11 +467,15 @@ fn derived_max_index(image: &Image, table: u16) -> Option<usize> {
 /// Walks one chain of action records from stored address `addr`
 /// (spec §3.7).
 ///
-/// Each record is a key byte, a length byte *L* counting itself and the
-/// opcode stream, and then exactly *L* − 1 opcode bytes; the next record
-/// begins at the current record's start plus 1 + *L*. **A record whose
-/// length byte is zero is the last of the chain** — it is still a real
-/// record, so it is included in the result.
+/// Each record is a key byte, a link byte *L* to the next record (0 meaning
+/// none follows), and then an opcode stream starting at byte 2. For a
+/// non-zero link the stream's extent is implied by the link — it runs up to
+/// the next record's start, at the current record's start plus 1 + *L* — and
+/// the next record begins there. **A record whose link is zero is the last
+/// of the chain** and is a real record in every other respect: its stream is
+/// recovered by walking the opcode arities to its own end-of-record opcode
+/// 255 ([`walk_ti99_ops`]), since there is no next record's start to imply
+/// it.
 ///
 /// `implicit` selects the automatic block's one extra rule: if the very
 /// first byte there is zero the game has no automatic actions at all and the
@@ -488,15 +493,16 @@ fn read_chain(image: &Image, addr: u16, implicit: bool) -> Result<Vec<Ti99Record
         let key = image
             .byte(pos)
             .ok_or(bad("an action record runs past the end of the file"))?;
-        let len = image
+        let link = image
             .byte(pos + 1)
             .ok_or(bad("an action record runs past the end of the file"))?;
-        if len == 0 {
-            out.push(Ti99Record { key, ops: Vec::new() });
+        if link == 0 {
+            let ops = walk_ti99_ops(image, pos + 2)?;
+            out.push(Ti99Record { key, ops });
             return Ok(out);
         }
         let from = pos + 2;
-        let to = pos + 1 + usize::from(len);
+        let to = pos + 1 + usize::from(link);
         let ops = image
             .bytes
             .get(from..to)
@@ -505,10 +511,49 @@ fn read_chain(image: &Image, addr: u16, implicit: bool) -> Result<Vec<Ti99Record
             key,
             ops: ops.to_vec(),
         });
-        // Every step is strictly forward (`len` is non-zero here), so the
+        // Every step is strictly forward (`link` is non-zero here), so the
         // walk is bounded by the file length and cannot cycle.
         pos = to;
     }
+}
+
+/// Recovers a link-0 record's opcode stream by walking its opcode arities
+/// from file offset `from` (the record's byte 2) to its own end-of-record
+/// opcode 255, since there is no next record's start to imply the extent
+/// (spec §3.7).
+///
+/// Message opcodes (0-182) and the two zero-operand conditions (195, 196)
+/// occupy one byte; every other condition (183-201) two; a command's operand
+/// count is [`crate::vm::ti99_command_operands`], the same table the
+/// interpreter runs the stream through, so the two can never disagree about
+/// where a record ends. An unassigned opcode (202-211, 213) makes the rest of
+/// the record undecodable (spec §11) and stops the walk there, exactly as the
+/// interpreter abandons the record when it meets one; the byte itself is
+/// still included, since the interpreter reads it before bailing.
+fn walk_ti99_ops(image: &Image, from: usize) -> Result<Vec<u8>, LoadError> {
+    let mut pos = from;
+    loop {
+        let op = image
+            .byte(pos)
+            .ok_or(bad("an action record runs past the end of the file"))?;
+        pos += 1;
+        let operands = match op {
+            255 | 202..=211 | 213 => break,
+            0..=182 => 0,
+            195 | 196 => 0,
+            183..=201 => 1,
+            _ => crate::vm::ti99_command_operands(op),
+        };
+        if image.bytes.get(pos..pos + operands).is_none() {
+            return Err(bad("an action record runs past the end of the file"));
+        }
+        pos += operands;
+    }
+    image
+        .bytes
+        .get(from..pos)
+        .map(<[u8]>::to_vec)
+        .ok_or(bad("an action record runs past the end of the file"))
 }
 
 /// Whether `bytes` are a TI-99/4A tokenised release, by spec §3.1's
@@ -736,6 +781,7 @@ pub fn parse_ti994a(bytes: &[u8]) -> Result<Database, LoadError> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::{Options, StepResult, Vm};
 
     /// Builds a TI-99/4A image byte for byte from spec §3's format
     /// description — NOT by re-encoding anything this loader produced, and
@@ -825,6 +871,7 @@ mod tests {
     const A_NOUNS: u16 = F_BASE + 0x380;
     const A_EXPLICIT: u16 = F_BASE + 0x400;
     const A_CHAIN: u16 = F_BASE + 0x420;
+    const A_RUB_CHAIN: u16 = F_BASE + 0x430;
     const A_IMPLICIT: u16 = F_BASE + 0x440;
     const A_OBJECTS: u16 = F_BASE + 0x460;
 
@@ -909,9 +956,10 @@ mod tests {
         f.put(A_NOUNS, &nouns);
 
         // The explicit dispatch table: one entry per verb index, no
-        // sentinel. Verb 0 and verb 2 have no records; verb 1 chains.
+        // sentinel. Verb 0 has no records; verb 1 chains; verb 2 ("RUB")
+        // chains to a single link-0 record (see `A_RUB_CHAIN` below).
         let mut dispatch = Vec::new();
-        for a in [0u16, A_CHAIN, 0] {
+        for a in [0u16, A_CHAIN, A_RUB_CHAIN] {
             dispatch.push((a >> 8) as u8);
             dispatch.push(a as u8);
         }
@@ -922,17 +970,42 @@ mod tests {
         //   ED 02   command 237: take item 2, ignoring the carry limit
         //   01      message 1
         //   FF      end of record; the record succeeds
-        // The second record is the chain terminator: length 0, keyed to
-        // noun 3, still a real record (spec §3.7).
+        // The second record is the chain terminator: link 0, keyed to
+        // noun 3 — still a real record (spec §3.7), and its own opcode
+        // stream is NOT empty. It must be recovered by walking arities from
+        // byte 2 to the closing 255, exactly like any other record's:
+        //   F5 FF   command 245: set the current counter to *p*, p = 255 —
+        //           deliberately the same byte value as the end-of-record
+        //           opcode, so a reader that stopped at the byte right after
+        //           245 (as if it took no operand) would misread this
+        //           operand as the terminator and truncate the record to
+        //           `F5 FF`, which can never reach a real 255 and always
+        //           fails.
+        //   01      message 1
+        //   FF      end of record; the record succeeds
         f.put(
             A_CHAIN,
-            &[1, 7, 0xB8, 0x02, 0xED, 0x02, 0x01, 0xFF, 3, 0],
+            &[
+                1, 7, 0xB8, 0x02, 0xED, 0x02, 0x01, 0xFF, // record 1
+                3, 0, 0xF5, 0xFF, 0x01, 0xFF, // record 2: link 0
+            ],
         );
 
+        // Verb 2's whole chain is a single link-0 record (spec §3.7, §3.8's
+        // worked example — this is Adventureland's `INVENTORY` shape).
+        // Matches any noun (key 0), so nothing in the verb's dispatch is
+        // built-in (only verb indices 1, 10 and 18 are, spec §9.1), and its
+        // opcode stream — recovered the same arity-walked way as verb 1's
+        // second record above — is F5 FF 01 FF: set the counter, print
+        // message 1, end successfully.
+        f.put(A_RUB_CHAIN, &[0, 0, 0xF5, 0xFF, 0x01, 0xFF]);
+
         // One automatic record at 100%, printing message 2, then the
-        // terminator. Length 3 counts the length byte itself plus the two
-        // opcode bytes (spec §3.7).
-        f.put(A_IMPLICIT, &[100, 3, 0x02, 0xFF, 0, 0]);
+        // terminator. Link 3 counts the link byte itself plus the two
+        // opcode bytes (spec §3.7). The second record is the chain
+        // terminator: 0% (never fires) and link 0, with a one-byte opcode
+        // stream that is just the end-of-record opcode.
+        f.put(A_IMPLICIT, &[100, 3, 0x02, 0xFF, 0, 0, 0xFF]);
 
         // The object table is declared but never read (spec §3.3, §11); it
         // only has to resolve to an in-file offset.
@@ -1011,10 +1084,16 @@ mod tests {
                         },
                         Ti99Record {
                             key: 3,
-                            ops: Vec::new(),
+                            // Link 0, so recovered by walking arities: 245
+                            // (1 operand) then message 1 then 255.
+                            ops: vec![0xF5, 0xFF, 0x01, 0xFF],
                         },
                     ],
-                    Vec::new(),
+                    vec![Ti99Record {
+                        key: 0,
+                        // A single link-0 record; ditto the walk above.
+                        ops: vec![0xF5, 0xFF, 0x01, 0xFF],
+                    }],
                     // Padded to the vocabulary length.
                     Vec::new(),
                 ],
@@ -1025,7 +1104,9 @@ mod tests {
                     },
                     Ti99Record {
                         key: 0,
-                        ops: Vec::new(),
+                        // Link 0, so recovered by walking arities: just the
+                        // end-of-record opcode.
+                        ops: vec![0xFF],
                     },
                 ],
             }),
@@ -1036,6 +1117,33 @@ mod tests {
     fn hand_built_image_decodes_to_the_hand_written_database() {
         let db = parse_ti994a(&build()).expect("fixture must load");
         assert_eq!(db, expected());
+    }
+
+    /// Spec §3.7 / §3.8: a link-0 record's opcode stream is not empty, and
+    /// this is not just a claim about the decoded bytes — the VM must
+    /// actually run it. Verb 2 ("RUB")'s whole chain is one link-0 record —
+    /// the shape §3.8 works through for Adventureland's `INVENTORY` — that
+    /// sets the counter, prints message 1 and ends successfully; typing
+    /// `RUB` (verb index 2 has no built-in handling of any kind, spec §9.1)
+    /// must reach it and produce that message rather than "I can't do that
+    /// yet.".
+    #[test]
+    fn a_link_zero_records_real_opcode_stream_runs_through_the_vm() {
+        let db = parse_ti994a(&build()).expect("fixture must load");
+        let mut vm = Vm::new_full(db, false, 1, Options::new());
+        assert_eq!(vm.step(), StepResult::NeedLine);
+        let _ = vm.take_output();
+        vm.supply_line("rub");
+        vm.step();
+        let out = vm.take_output();
+        assert!(
+            out.contains("Taken."),
+            "the link-0 record's message opcode must run: {out:?}"
+        );
+        assert!(
+            !out.contains("can't do that yet"),
+            "the record must reach its own 255 and succeed: {out:?}"
+        );
     }
 
     #[test]
@@ -1203,8 +1311,11 @@ mod tests {
         let db = parse_ti994a(&build()).unwrap();
         let script = db.ti99.as_ref().unwrap();
         assert!(script.verb_chains[0].is_empty());
-        assert!(script.verb_chains[2].is_empty());
         assert_eq!(script.verb_chains[1].len(), 2);
+        // Verb 2 ("RUB") has a dispatch entry, and its one record is what
+        // `a_link_zero_records_real_opcode_stream_runs_through_the_vm` below
+        // drives through the VM.
+        assert_eq!(script.verb_chains[2].len(), 1);
     }
 
     #[test]

@@ -3211,6 +3211,16 @@ where the answer went the other way, what the code has to change.
    it. Until then this dialect answers "I can't do that yet." to inventory,
    quit, stop, score and save in every game that spells them this way.
 
+   **Done (SQ-1414).** `read_chain` recovers a link-0 record's stream with a
+   new `walk_ti99_ops`, sharing `Vm`'s own command-arity table
+   (`crate::vm::ti99_command_operands`, made `pub(crate)` for this) as the one
+   source of truth, so the loader and the interpreter cannot disagree about
+   where a record ends. The stale doc comments are gone. Verified against
+   `adv01.fiad`: `INVENTORY` answers `I am carrying : Nothing. ` and `SCORE`
+   answers the real score line, neither "I can't do that yet."; the twelve
+   §10.2 specimens reproduce this section's own measured 1,870 explicit / 378
+   automatic / 448 link-0 records, every one walking to its own 255.
+
 The in-memory model this document's dialects decode *to*, in that crate, is a
 database of rooms (six exits and a description, plus a flag for the leading-`*`
 literal convention), items (text, a treasure flag, an optional auto-get noun and
