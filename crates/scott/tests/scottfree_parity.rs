@@ -48,6 +48,7 @@ fn base_db(items: Vec<Item>) -> Database {
         items,
         adventure_number: 0,
         mysterious: false,
+        saga_us: None,
         ti99: None,
     }
 }
@@ -754,6 +755,7 @@ fn matched_but_blocked_action_replies_cant_do_that_yet_not_dont_understand() {
         items: vec![],
         adventure_number: 0,
         mysterious: false,
+        saga_us: None,
         ti99: None,
     };
     let mut vm = Vm::new(db);
@@ -857,6 +859,7 @@ fn get_all_runs_each_items_own_get_action_then_takes_it_and_skips_star_marked_it
         ],
         adventure_number: 0,
         mysterious: false,
+        saga_us: None,
         ti99: None,
     };
     let mut vm = Vm::new(db);
@@ -904,6 +907,7 @@ fn typed_words_are_capped_at_nine_characters_before_becoming_the_last_noun() {
         items: vec![],
         adventure_number: 0,
         mysterious: false,
+        saga_us: None,
         ti99: None,
     };
     let mut vm = Vm::new(db);
@@ -965,6 +969,7 @@ fn you_are_option_swaps_death_and_inventory_wording() {
         items: vec![],
         adventure_number: 0,
         mysterious: false,
+        saga_us: None,
         ti99: None,
     };
     let mut vm = Vm::new_full(db, false, Vm::DEFAULT_RNG_SEED, Options::new().with_you_are(true));
@@ -1007,6 +1012,7 @@ fn scott_light_option_shows_a_running_countdown_instead_of_growing_dim() {
         items: items_with_light_source(1),
         adventure_number: 0,
         mysterious: false,
+        saga_us: None,
         ti99: None,
     };
     let mut vm = Vm::new_full(db, false, Vm::DEFAULT_RNG_SEED, Options::new().with_scott_light(true));
@@ -1046,6 +1052,7 @@ fn prehistoric_lamp_option_destroys_the_light_source_on_run_out() {
         items: items_with_light_source(1),
         adventure_number: 0,
         mysterious: false,
+        saga_us: None,
         ti99: None,
     };
 

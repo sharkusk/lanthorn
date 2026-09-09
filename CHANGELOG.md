@@ -23,6 +23,22 @@ Absolute URLs or no link.
 
 ### Added
 
+- **The American S.A.G.A. disk games now load.** The Adventure International
+  disk editions sold in the United States — *Adventureland*, *Pirate
+  Adventure*, *Mission Impossible*, *Voodoo Castle*, *The Count*, *Strange
+  Odyssey* and *The Sorcerer of Claymorgue Castle* on the Atari 8-bit and the
+  Apple II, and Questprobe's *The Hulk* on the Commodore 64 — keep their game
+  data in a binary form of their own that shares almost nothing with the
+  plain-text databases lanthorn has always read: the words are stored nouns
+  first, the text carries its length in front of it rather than a terminator,
+  and the whole script is written down sideways, one field of every rule at a
+  time. lanthorn reads all of it, and checked every table of all fifteen
+  releases against the published text conversion of the same game: *Voodoo
+  Castle* and *The Count* come out identical on both machines, rule for rule,
+  and the rest differ only where the graphic edition genuinely differs from
+  the text one. For now the game data has to be pulled off the disk first —
+  opening one of these straight from its `.atr`, `.dsk` or `.d64` follows.
+  (SQ-1414, SQ-1464)
 - **The Commodore 64 *Mysterious Adventures* now load.** Brian Howarth's
   eleven-game series — *The Golden Baton*, *The Time Machine*, both parts of
   *Arrow of Death*, *Escape from Pulsar 7*, *Circus*, *Feasibility Experiment*,
