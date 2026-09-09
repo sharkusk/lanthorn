@@ -14,7 +14,7 @@
 
 * **Z-machine v3–v8** (incl. graphical v6) — *Next release:* v1 and v2 as well
 * **Glulx**
-* **Scott Adams**
+* **Scott Adams** — *Next release:* the TI-99/4A releases too
 
 ### Supported original Infocom disk formats:
 

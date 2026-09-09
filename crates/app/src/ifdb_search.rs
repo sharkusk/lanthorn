@@ -653,6 +653,9 @@ pub fn looks_like_story_file(filename: &str, bytes: &[u8]) -> bool {
         "ulx" => bytes.starts_with(b"Glul"),
         "gblorb" | "zblorb" | "blorb" | "blb" | "zlb" => blorb::Blorb::is_blorb(bytes),
         "dat" => zcode || std::str::from_utf8(bytes).is_ok_and(scott::looks_like_scott),
+        // The TI-99/4A tokenised Scott Adams releases (SQ-1414): a binary
+        // memory image, so the text sniff above could never answer for one.
+        "fiad" => scott::looks_like_ti994a(bytes),
         _ => false,
     }
 }

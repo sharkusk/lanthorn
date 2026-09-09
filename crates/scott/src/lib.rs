@@ -47,21 +47,35 @@
 //!
 //! # Loading a story
 //!
-//! [`looks_like_scott`] sniffs whether a text buffer is plausibly this
-//! format (useful when a host is guessing among several engines from a
-//! file's bytes alone); [`Database::parse`] does the real parse and returns
-//! the static game data — rooms, items, the action table, vocabulary, and
-//! messages — or a [`LoadError`] naming what in the text didn't fit.
+//! This crate reads **two** encodings of the same game data, and
+//! [`Database::parse`] answers for both from one entry point — hand it the
+//! file's raw bytes and it returns the static game data (rooms, items, the
+//! action table, vocabulary, and messages) or a [`LoadError`] naming what
+//! did not fit:
 //!
-//! Scott Adams games also shipped in several BINARY dialects — TI-99/4A
-//! game images, and the C64/ZX Spectrum/Atari 8-bit/Apple II memory
-//! snapshots that carry the tables as machine data rather than as text.
-//! This crate does not read them, but it does [`detect_dialect`] them, so a
-//! failed parse over one comes back as
-//! [`LoadError::UnsupportedDialect`] and a host can say "this is a
-//! TI-99/4A game image" instead of reporting whichever token the text lexer
-//! tripped over first. See [`Dialect`] for what each signature is and how
-//! it was established.
+//! * the **ScottFree `.dat` text format**, the plain-ASCII interchange
+//!   encoding described at the top of this page; and
+//! * the **TI-99/4A tokenised releases** — the twelve original Adventure
+//!   International games as sold for that machine, which are a raw memory
+//!   image with the script compiled to bytecode rather than text at all
+//!   ([`parse_ti994a`], and [`crate::ti994a`] for the format).
+//!
+//! [`looks_like_scott_bytes`] is the sniff to reach for when a host is
+//! guessing among several engines from a file's bytes alone: it answers for
+//! both. ([`looks_like_scott`] is the text-only half, and takes a `&str`, so
+//! it can never answer for a binary dialect — a host spelling its check
+//! `from_utf8(bytes).is_ok_and(looks_like_scott)` rejects every TI-99/4A
+//! file before this crate ever sees it.)
+//!
+//! Scott Adams games also shipped in binary dialects this crate does NOT
+//! read: the C64/ZX Spectrum/Atari 8-bit/Apple II memory snapshots that
+//! carry the tables as machine data. It does [`detect_dialect`] them, so a
+//! failed parse over one comes back as [`LoadError::UnsupportedDialect`]
+//! and a host can say "this is a Commodore 64 memory snapshot" instead of
+//! reporting whichever token the text lexer tripped over first. A file that
+//! IS one of the two readable encodings but is damaged comes back as
+//! [`LoadError::BadDialectData`] instead, naming what did not check out.
+//! See [`Dialect`] for what each signature is and how it was established.
 //!
 //! Some of those snapshots are further wrapped in a HOST-machine container
 //! before the game's own tables are reachable at all — a ZX Spectrum
@@ -135,6 +149,7 @@
 //!     messages: vec![],
 //!     items: vec![],
 //!     adventure_number: 0,
+//!     ti99: None, // a TI-99/4A tokenised script; None for every other source
 //! };
 //!
 //! let mut vm = Vm::new(db);
@@ -164,10 +179,12 @@ mod vm;
 mod z80;
 pub mod database;
 pub mod decompile;
+pub mod ti994a;
 pub use database::{Action, Condition, Database, Item, Room};
 pub use decompile::{decompile_action, list_items, list_rooms, list_vocab};
-pub use loader::{detect_dialect, looks_like_scott, Dialect, LoadError};
+pub use loader::{detect_dialect, looks_like_scott, looks_like_scott_bytes, Dialect, LoadError};
 pub use options::{Options, Presentation, Wording};
 pub use scottfree_save::looks_like_scottfree_save;
+pub use ti994a::{looks_like_ti994a, parse_ti994a, Ti99Record, Ti99Script};
 pub use vm::{RestoreError, StepResult, Vm};
 pub use z80::{decompress_z80, looks_like_z80, Z80Error, IMAGE_LEN};

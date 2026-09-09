@@ -147,19 +147,18 @@ fn the_spectrum_corpus_splits_exactly_as_documented() {
 }
 
 #[test]
-fn no_specimen_is_mistaken_for_a_loadable_dat() {
-    let files: Vec<_> = specimens("ti99")
-        .into_iter()
-        .chain(specimens("spectrum"))
-        .collect();
+fn no_spectrum_specimen_is_mistaken_for_a_loadable_dat() {
+    let files = specimens("spectrum");
     if files.is_empty() {
-        skip("any dialect");
+        skip("spectrum");
         return;
     }
     for (name, bytes) in &files {
-        // Whatever else it is, a memory image or a cartridge dump must
-        // never parse as a ScottFree `.dat`: that would be a wrong game,
-        // not a refused one.
+        // A memory image this crate cannot yet read must never parse as a
+        // ScottFree `.dat`: that would be a wrong game, not a refused one.
+        // (The TI-99/4A specimens are a different case since SQ-1414 — they
+        // are read, by `parse_ti994a`, and `ti994a_specimens.rs` is the
+        // suite that checks what comes out.)
         assert!(
             scott::Database::parse(bytes).is_err(),
             "{name} parsed as a .dat"

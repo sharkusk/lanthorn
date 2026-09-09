@@ -44,16 +44,26 @@ pub enum LoadError {
     /// A room exit points outside the room table (negative or > NumRooms).
     BadExit(i32),
     /// The file is not this crate's ScottFree text format, but its bytes
-    /// match a KNOWN other Scott Adams dialect's signature — see [`Dialect`].
+    /// match a KNOWN other Scott Adams dialect's signature — see [`Dialect`]
+    /// — and that dialect is one this crate does not yet read.
     ///
-    /// **Detection only.** This crate reads none of these formats: it is a
-    /// refusal that can name what it refused, so a host can tell the player
-    /// "this is a TI-99/4A game image" instead of showing a generic parse
-    /// failure that gives no hint what went wrong. Loading them is SQ-1414,
-    /// which is gated on a functional specification of each format written
-    /// independently of the GPL interpreters (lanthorn is BSD-3-Clause), not
-    /// merely on someone finding the time.
+    /// A refusal that can name what it refused, so a host can tell the
+    /// player "this is a Commodore 64 memory snapshot" instead of showing a
+    /// generic parse failure that gives no hint what went wrong.
+    /// [`Dialect::Ti994aBytecode`] no longer reaches here — it is LOADED
+    /// (SQ-1414, [`crate::parse_ti994a`]); the remaining memory-image
+    /// dialects are still gated on the clean-room specification work that
+    /// covers them.
     UnsupportedDialect(Dialect),
+    /// The file matched a [`Dialect`] this crate DOES read, but that
+    /// dialect's own structures did not check out: the string names what —
+    /// a table pointer resolving outside the file, a record running past the
+    /// end, a starting room that indexes nothing.
+    ///
+    /// Distinct from [`LoadError::UnsupportedDialect`] because the two mean
+    /// opposite things to a host: that one says "a format I cannot read",
+    /// this one says "a format I can read, in a file that is damaged".
+    BadDialectData(Dialect, &'static str),
 }
 
 /// A Scott Adams / Adventure International game-data format this crate's
@@ -333,18 +343,31 @@ impl Database {
     /// outright) can hand them over directly; see the module doc.
     ///
     /// On failure, checks the raw bytes against [`detect_dialect`]'s known
-    /// signatures before returning the underlying [`LoadError`]: a file that
-    /// fails to parse AND matches one of those signatures is refused as
-    /// [`LoadError::UnsupportedDialect`] instead of whatever token-level
+    /// signatures before giving up. A file that fails the text parse and
+    /// matches [`Dialect::Ti994aBytecode`] is handed to
+    /// [`crate::parse_ti994a`], which reads it (SQ-1414) — so this one entry
+    /// point answers for both the text format and the TI-99/4A tokenised
+    /// one, which is what the dialect specification asks of a loader: "a
+    /// dialect loader belongs behind the same entry point as the text parser
+    /// and must produce the same model, not a parallel one"
+    /// (`docs/internals/scott-dialects-spec.md`, Appendix A).
+    ///
+    /// A file matching one of the OTHER signatures is still refused as
+    /// [`LoadError::UnsupportedDialect`] rather than as whatever token-level
     /// error (`BadInt`, `Truncated`, …) the text lexer happened to hit first
-    /// — a host can then say "this is a TI-99/4A dump" instead of "invalid
-    /// data" (SQ-1413; loading any of these dialects is SQ-1414's).
+    /// — a host can then say "this is a Commodore 64 snapshot" instead of
+    /// "invalid data" (SQ-1413).
     pub fn parse<S: AsRef<[u8]> + ?Sized>(src: &S) -> Result<Database, LoadError> {
         let bytes = src.as_ref();
-        Self::parse_scottfree(bytes).map_err(|e| match detect_dialect(bytes) {
-            Some(d) => LoadError::UnsupportedDialect(d),
-            None => e,
-        })
+        let text_error = match Self::parse_scottfree(bytes) {
+            Ok(db) => return Ok(db),
+            Err(e) => e,
+        };
+        match detect_dialect(bytes) {
+            Some(Dialect::Ti994aBytecode) => crate::ti994a::parse_ti994a(bytes),
+            Some(d) => Err(LoadError::UnsupportedDialect(d)),
+            None => Err(text_error),
+        }
     }
 
     fn parse_scottfree(bytes: &[u8]) -> Result<Database, LoadError> {
@@ -507,11 +530,34 @@ impl Database {
             messages,
             items,
             adventure_number,
+            // The text format IS the reference shape; only a TI-99/4A
+            // release carries a tokenised script instead (SQ-1414).
+            ti99: None,
         })
     }
 }
 
+/// Cheap content sniff for engine detection, over RAW BYTES: true for a
+/// ScottFree `.dat` (the text format, via [`looks_like_scott`]) **or** a
+/// TI-99/4A tokenised release (via [`crate::ti994a::looks_like_ti994a`]).
+///
+/// This is the sniff a multi-engine host wants, because those are exactly
+/// the two things [`Database::parse`] reads. [`looks_like_scott`] takes a
+/// `&str` and so can never answer for a binary dialect at all: a host that
+/// spells its check `from_utf8(bytes).is_ok_and(looks_like_scott)` rejects
+/// every TI-99/4A file before the loader ever sees it, which is what it did
+/// before SQ-1414.
+pub fn looks_like_scott_bytes(bytes: &[u8]) -> bool {
+    std::str::from_utf8(bytes).is_ok_and(looks_like_scott)
+        || crate::ti994a::looks_like_ti994a(bytes)
+}
+
 /// Cheap content sniff for engine detection: parse the 12 header ints and sanity-check.
+///
+/// TEXT format only. For a host deciding whether a file is a Scott Adams
+/// game at all, [`looks_like_scott_bytes`] is the one to reach for — it also
+/// answers for the TI-99/4A tokenised releases, which are binary and so can
+/// never reach a `&str` in the first place.
 pub fn looks_like_scott(src: &str) -> bool {
     let mut lex = Lexer::new(src.as_bytes());
     let mut ints = [0i32; 12];
@@ -763,12 +809,24 @@ mod tests {
             Database::parse(&image),
             Err(LoadError::UnsupportedDialect(Dialect::C64OrZxSnapshot))
         );
+    }
+
+    #[test]
+    fn a_ti99_signature_in_a_file_that_is_not_one_is_refused_as_damaged_data() {
+        // SQ-1414 changed this half of the contract: the TI-99/4A dialect is
+        // LOADED now, so `parse` hands a signature match to
+        // `parse_ti994a` and reports what that finds. Here the signature
+        // sits too near the start of the file for the baseline subtraction
+        // to stay non-negative, so it is `BadDialectData` — "a format I can
+        // read, in a file that is damaged" — and no longer
+        // `UnsupportedDialect`, which now means only "a format I cannot
+        // read".
         let mut ti = vec![0u8; 3000];
         ti[900..910].copy_from_slice(b"\x30\x30\x30\x30\x00\x30\x30\x00\x28\x28");
-        assert_eq!(
+        assert!(matches!(
             Database::parse(&ti),
-            Err(LoadError::UnsupportedDialect(Dialect::Ti994aBytecode))
-        );
+            Err(LoadError::BadDialectData(Dialect::Ti994aBytecode, _))
+        ));
     }
 
     #[test]

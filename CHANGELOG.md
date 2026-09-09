@@ -23,6 +23,17 @@ Absolute URLs or no link.
 
 ### Added
 
+- **Scott Adams TI-99/4A releases now load.** The twelve original Adventure
+  International games — *Adventureland* through *The Golden Voyage* — were also
+  sold for the TI-99/4A, and those releases are a completely different kind of
+  file: a snapshot of the machine's memory with the game compiled into
+  bytecode, not the plain-text database lanthorn has always read. Hand one to
+  lanthorn and it just opens now, wherever you keep it, with the map, the
+  vocabulary help and everything else working as usual. They play like their own
+  release rather than an imitation of the text one: the TI wording throughout,
+  the running "light runs out in N turns" countdown, the lamp that is gone for
+  good once it burns out, and the running inventory the TI version keeps under
+  every room description. (SQ-1414)
 - **The two earliest Infocom releases now play.** lanthorn ran Z-machine
   Versions 3 through 8; it now runs 1 and 2 as well, which is every version of
   the format Infocom ever shipped — the first *Zork I* releases among them.

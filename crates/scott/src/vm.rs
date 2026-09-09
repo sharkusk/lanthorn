@@ -166,6 +166,36 @@ pub struct Vm {
     /// ([`Vm::new_full`]) because the opening occurrence pass (also run in
     /// the constructor) can print option-gated wording.
     pub(crate) options: Options,
+    /// Whether the TI-99/4A automatic inventory listing is on — see
+    /// [`Vm::auto_inventory`]. Real game state, not presentation: opcodes
+    /// 214 and 215 change it and spec §9.1 requires it to survive save and
+    /// restore, so unlike `save_requested` and `pending_picture` it IS part
+    /// of the snapshot.
+    pub(crate) auto_inventory: bool,
+}
+
+/// How many operand bytes the TI-99/4A command opcode `op` consumes
+/// (`docs/internals/scott-dialects-spec.md` §3.7's command table). Every
+/// operand is a whole byte immediately after its opcode; there is no
+/// operand-smuggling mechanism and nothing is multiplied by 150 or by 20.
+///
+/// Only the commands appear here. Conditions are 183-201 and take one
+/// operand except 195 and 196, which take none; 202-211 and 213 are
+/// unassigned and their counts are unknown, which is why a record that
+/// meets one is abandoned rather than stepped over.
+fn ti99_command_operands(op: u8) -> usize {
+    match op {
+        218..=222 | 225 | 226 | 237 | 245..=247 | 249 | 250 => 1,
+        230 | 236 | 238 => 2,
+        _ => 0,
+    }
+}
+
+/// Whether `text` already ends in the sentence punctuation the TI-99/4A
+/// listing rules treat as "already terminated" — `.` or `!`
+/// (`docs/internals/scott-dialects-spec.md` §9.1's inventory rule).
+fn ends_in_sentence_punctuation(text: &str) -> bool {
+    matches!(text.chars().next_back(), Some('.') | Some('!'))
 }
 
 impl Vm {
@@ -214,6 +244,21 @@ impl Vm {
     /// with the wrong options and corrected afterward would already have
     /// shown the wrong text.
     pub fn new_full(db: Database, trace_fired: bool, seed: u32, options: Options) -> Vm {
+        // The dialect specification's Appendix A: the runtime differences of
+        // its §9 "are properties of the *database*, not of the host, and
+        // have to travel with it". So a TI-99/4A database overrides what the
+        // host asked for, in the three places §9 names — the two lamp flags
+        // §9.2 says "every TI-99/4A release forces on", and the message set
+        // and layout §9.1 calls "this dialect's own". `you_are` is left
+        // alone: it is not one of them.
+        let options = if db.ti99.is_some() {
+            options
+                .with_scott_light(true)
+                .with_prehistoric_lamp(true)
+                .with_presentation(Presentation::Ti994a)
+        } else {
+            options
+        };
         let item_loc = db.items.iter().map(|i| i.start_loc).collect();
         let player = db.start_room;
         let lamp = db.light_time;
@@ -240,12 +285,14 @@ impl Vm {
             ever_fired: HashSet::new(),
             last_blocked: Vec::new(),
             options,
+            // Spec §9.1: "Automatic inventory is on by default."
+            auto_inventory: true,
         };
         // Run the opening occurrence pass before the first prompt, so auto-events
         // that fire at game start (e.g. "A Voice BOOOMS out:") are shown on load —
         // matching ScottFree/Gargoyle, where occurrences run at the top of the turn
         // loop rather than only when a command is entered.
-        vm.run_occurrences();
+        vm.run_automatic_pass();
         vm.needs_line = true;
         vm
     }
@@ -407,13 +454,15 @@ impl Vm {
     /// misreading it — there is no back-compat requirement pre-release, so an
     /// older-versioned file is read as this version's own layout, byte for
     /// byte, unless a future bump adds real per-version branching.
-    pub const SNAPSHOT_VERSION: u16 = 1;
+    pub const SNAPSHOT_VERSION: u16 = 2;
 
     /// Serialize mutable game state: a 4-byte magic and a `u16` format
     /// version ([`Self::SNAPSHOT_MAGIC`]/[`Self::SNAPSHOT_VERSION`]), then
     /// item locations, player room, flags, the live current counter, backup
-    /// counters, the op-80 saved room, the op-87 saved-room registers, and
-    /// lamp fuel. Manual little-endian byte encoding, zero-dep.
+    /// counters, the op-80 saved room, the op-87 saved-room registers, lamp
+    /// fuel, and the TI-99/4A automatic-inventory flag
+    /// ([`Vm::auto_inventory`], version 2 — spec §9.1 requires it to survive
+    /// a save and restore). Manual little-endian byte encoding, zero-dep.
     pub fn snapshot(&self) -> Vec<u8> {
         let mut buf = Vec::new();
         buf.extend_from_slice(&Self::SNAPSHOT_MAGIC);
@@ -435,6 +484,7 @@ impl Vm {
             buf.extend_from_slice(&(r as u32).to_le_bytes());
         }
         buf.extend_from_slice(&self.lamp.to_le_bytes());
+        buf.push(self.auto_inventory as u8);
         buf
     }
 
@@ -506,6 +556,8 @@ impl Vm {
             *r = v;
         }
         let lamp = read_i32(bytes, &mut pos)?;
+        let auto_inventory = *bytes.get(pos).ok_or(RestoreError::Truncated)? != 0;
+        pos += 1;
 
         if pos != bytes.len() {
             return Err(RestoreError::TrailingData);
@@ -519,6 +571,7 @@ impl Vm {
         self.saved_room = saved_room;
         self.saved_rooms = saved_rooms;
         self.lamp = lamp;
+        self.auto_inventory = auto_inventory;
         Ok(())
     }
 
@@ -985,6 +1038,12 @@ impl Vm {
             // nonexistent room (SQ-0629).
             if dest != 0 && dest < self.db.rooms.len() {
                 self.player = dest;
+                // Spec §9.1: "Movement is acknowledged. A successful compass
+                // move prints `OK. ` before the new room is described."
+                // Empty for every ScottFree-derived wording, so this costs
+                // those sets nothing.
+                let msg = self.wording().move_ok;
+                self.out.push_str(msg);
             } else if dark {
                 // No exit while dark: ScottFree ends the game right here
                 // (ScottCurses.c:1122-1127) — no "The game is now over."
@@ -1011,7 +1070,14 @@ impl Vm {
             // reserved for occurrences (the top-of-turn auto-event pass), so an
             // unrecognized command must NOT match them here — otherwise an
             // occurrence (e.g. a conditional death) fires as if it were the reply.
-            let r = self.try_action_table(vb, no);
+            // A TI-99/4A database has no reference-format action table at
+            // all (`Database::actions` is empty); its verb chains are what
+            // answer a command. Spec §3.7.
+            let r = if self.db.ti99.is_some() {
+                self.try_ti99_chain(vb, no)
+            } else {
+                self.try_action_table(vb, no)
+            };
             handled = r.0;
             any_matched_vocab = r.1;
         }
@@ -1139,7 +1205,7 @@ impl Vm {
         // Occurrences for the next prompt (ScottFree's top-of-loop pass), unless the
         // command ended the game.
         if !self.quit {
-            self.run_occurrences();
+            self.run_automatic_pass();
         }
 
         self.needs_line = true;
@@ -1368,6 +1434,19 @@ impl Vm {
     /// matching the order and a real transcript diff on every existing
     /// seeded fixture to be paid for it. Left as a documented divergence
     /// rather than changed.
+    /// The once-per-turn automatic pass, whichever encoding this database
+    /// carries: [`Vm::run_ti99_automatic`] for a TI-99/4A script,
+    /// [`Vm::run_occurrences`] for the reference format's verb-0 lines. The
+    /// two have genuinely different semantics — see the former's doc — so
+    /// this is the only place that chooses between them.
+    fn run_automatic_pass(&mut self) {
+        if self.db.ti99.is_some() {
+            self.run_ti99_automatic();
+        } else {
+            self.run_occurrences();
+        }
+    }
+
     fn run_occurrences(&mut self) {
         for idx in 0..self.db.actions.len() {
             let (is_occ, noun, pass) = {
@@ -1433,6 +1512,421 @@ impl Vm {
         did_continue
     }
 
+    // ------------------------------------------------------------------
+    // The TI-99/4A tokenised action script
+    // (`docs/internals/scott-dialects-spec.md` §3.7 and §9.1). Reached only
+    // when `Database::ti99` is `Some`, in which case `Database::actions` is
+    // empty and none of the reference-format paths above run at all — see
+    // `crate::ti994a` for why the two tables cannot be the same table.
+    // ------------------------------------------------------------------
+
+    /// Walks the chain for a parsed verb and noun (spec §3.7, "Record
+    /// selection"), returning the same `(handled, any_matched_vocab)` pair
+    /// as [`Vm::try_action_table`] so `run_turn`'s fallback is unchanged.
+    ///
+    /// A record matches if its noun byte equals the parsed noun or is 0.
+    /// **A matching record runs; if it succeeds the search ends, and if it
+    /// fails the walk continues** — a failed record does not end the search,
+    /// which is the opposite of nothing in the reference format and the
+    /// reason the three outcomes spec §9.1 names are distinguishable:
+    /// succeeded, ran the whole chain having matched at least one record
+    /// ("I can't do that yet."), and ran the whole chain having matched
+    /// nothing, which includes a verb with a zero dispatch entry ("I don't
+    /// understand the command.").
+    ///
+    /// The verb index is bounds-checked (spec §3.7, §11): a verb beyond the
+    /// header's highest verb index is reachable, because the effective word
+    /// count is the larger of the two dictionary counts.
+    fn try_ti99_chain(&mut self, vb: u16, no: i32) -> (bool, bool) {
+        let mut any_matched = false;
+        let mut index = 0usize;
+        loop {
+            let ops = {
+                let Some(script) = self.db.ti99.as_ref() else {
+                    return (false, false);
+                };
+                let Some(chain) = script.verb_chains.get(usize::from(vb)) else {
+                    return (false, false);
+                };
+                match chain.get(index) {
+                    None => return (false, any_matched),
+                    Some(rec) if rec.key != 0 && i32::from(rec.key) != no => None,
+                    // Cloned so the record can run against `&mut self`. Only
+                    // a record that actually matches is cloned, and a record
+                    // is at most a couple of hundred bytes.
+                    Some(rec) => Some(rec.ops.clone()),
+                }
+            };
+            if let Some(ops) = ops {
+                any_matched = true;
+                if self.run_ti99_record(&ops) {
+                    if self.trace_fired {
+                        self.fired_actions.push(index);
+                        self.ever_fired.insert(index);
+                    }
+                    return (true, true);
+                }
+            }
+            index += 1;
+        }
+    }
+
+    /// The automatic pass (spec §3.7, "Implicit execution"): every record in
+    /// the implicit chain is visited in order, once per turn, and a
+    /// percentage roll against its key byte decides whether its opcode
+    /// stream runs.
+    ///
+    /// **Success or failure has no effect on whether later records are
+    /// visited**: there is no early exit, no chaining, and no continuation
+    /// opcode. This differs fundamentally from the reference format, where
+    /// automatic lines are ordinary action lines with verb 0 and where a
+    /// continuation command makes subsequent zero-keyed lines part of the
+    /// same logical action — which is why this is a separate function from
+    /// [`Vm::run_occurrences`] rather than a branch inside it.
+    fn run_ti99_automatic(&mut self) {
+        let mut index = 0usize;
+        loop {
+            let (key, ops) = {
+                let Some(script) = self.db.ti99.as_ref() else {
+                    return;
+                };
+                match script.automatic.get(index) {
+                    None => return,
+                    Some(rec) => (rec.key, rec.ops.clone()),
+                }
+            };
+            if self.roll_100() < u32::from(key) {
+                self.run_ti99_record(&ops);
+                if self.trace_fired {
+                    self.fired_actions.push(index);
+                    self.ever_fired.insert(index);
+                }
+            }
+            index += 1;
+        }
+    }
+
+    /// Runs one record's opcode stream, returning whether it **succeeded**
+    /// (spec §3.7, "Success, failure and the handler stack").
+    ///
+    /// A record's result is failure unless it reaches opcode 255. The first
+    /// condition that does not hold terminates the record with failure
+    /// immediately — so commands earlier in the stream have already taken
+    /// effect and are **not undone**, which is spec §9.1's "condition
+    /// evaluation is interleaved, and side effects persist" and the one
+    /// place this dialect and the reference format's all-conditions-first
+    /// rule (spec §9.4) give different answers for the same logic.
+    ///
+    /// Opcode 218 pushes a failure handler whose operand encodes a resume
+    /// position: *target* = the position of the operand byte within the
+    /// opcode stream, plus the value of the operand byte. Handlers stack, to
+    /// a depth of 32. When a record terminates in failure and the stack is
+    /// not empty, the most recently pushed handler is popped and execution
+    /// resumes at its target, the result still failure until some later
+    /// opcode 255 sets it. Reaching 255 clears the whole stack, so a handler
+    /// can only ever be entered by failure, never by falling into it: the
+    /// construct is an if/else.
+    fn run_ti99_record(&mut self, ops: &[u8]) -> bool {
+        /// Spec §3.7: handlers stack to a depth of 32; exceeding that is a
+        /// malformed record.
+        const MAX_HANDLERS: usize = 32;
+        let mut handlers: Vec<usize> = Vec::new();
+        let mut pc = 0usize;
+        // Spec §3.7: "A byte in the message range that exceeds the derived
+        // message count + 1 is not a message and must be treated as
+        // unrecognised." `messages.len()` is that highest index plus one.
+        let message_ceiling = self.db.messages.len();
+        loop {
+            // Running off the end without reaching 255 is failure, and a
+            // handler may still resume the record.
+            let Some(&op) = ops.get(pc) else {
+                match handlers.pop() {
+                    Some(target) => {
+                        pc = target;
+                        continue;
+                    }
+                    None => return false,
+                }
+            };
+            // The one operand byte a condition or command consumes, and the
+            // second where one takes two. Absent means the stream is
+            // truncated, which is a malformed record: abandon it.
+            let p1 = ops.get(pc + 1).copied();
+            let p2 = ops.get(pc + 2).copied();
+            let mut failed = false;
+            match op {
+                255 => {
+                    handlers.clear();
+                    return true;
+                }
+                // Spec §3.7: bytes 0-182 print the message with this number.
+                0..=182 => {
+                    if usize::from(op) > message_ceiling {
+                        // Not a message and not any other class: unrecognised.
+                        return false;
+                    }
+                    self.print_message(usize::from(op));
+                    pc += 1;
+                }
+                // Conditions (spec §3.7). The right-hand comment on each is
+                // the equivalent reference-format condition code, since the
+                // two numeric orders are unrelated.
+                183..=201 => {
+                    // 195 and 196 are the two that take NO operand, which
+                    // breaks any assumption that a condition always carries
+                    // one.
+                    let holds = match op {
+                        195 => (0..self.item_loc.len()).any(|i| self.item_carried(i)), // 10
+                        196 => !(0..self.item_loc.len()).any(|i| self.item_carried(i)), // 11
+                        _ => {
+                            let Some(v) = p1 else { return false };
+                            let value = usize::from(v);
+                            match op {
+                                183 => self.item_carried(value),               // 1
+                                184 => self.item_in_room(value),               // 2
+                                185 => self.item_present(value),               // 3
+                                186 => !self.item_in_room(value),              // 5
+                                187 => !self.item_carried(value),              // 6
+                                188 => !self.item_present(value),              // 12
+                                189 => self.item_in_play(value),               // 13
+                                190 => !self.item_in_play(value),              // 14
+                                191 => self.player == value,                   // 4
+                                192 => self.player != value,                   // 7
+                                193 => self.flag_get(value),                   // 8
+                                194 => !self.flag_get(value),                  // 9
+                                197 => self.current_counter <= i32::from(v),   // 15
+                                198 => self.current_counter > i32::from(v),    // 16
+                                199 => self.current_counter == i32::from(v),   // 19
+                                200 => self.item_at_start(value),              // 17
+                                _ => !self.item_at_start(value),               // 201 -> 18
+                            }
+                        }
+                    };
+                    pc += 1 + usize::from(!matches!(op, 195 | 196));
+                    failed = !holds;
+                }
+                // Spec §11: opcodes 202-211 and 213 are unassigned and their
+                // operand counts are unknown, so encountering one makes the
+                // REST of the record undecodable. Abandon the record rather
+                // than skipping the byte as a no-op — and without consulting
+                // the handler stack, since a resume target inside an
+                // undecodable remainder is meaningless.
+                202..=211 | 213 => return false,
+                // Commands (spec §3.7). Operand counts are 0, 1 or 2 and are
+                // fixed per opcode.
+                _ => {
+                    let one = |v: Option<u8>| v.map(usize::from);
+                    match op {
+                        212 => self.out.clear(),                            // 70
+                        214 => self.auto_inventory = true,                  // no ref code
+                        215 => self.auto_inventory = false,                 // no ref code
+                        216 | 217 | 239 | 241 => {}                         // no effect
+                        218 => {
+                            // The resume target is counted from the first
+                            // byte of the opcode stream, so an operand value
+                            // of 0 targets the operand byte itself.
+                            let Some(v) = p1 else { return false };
+                            if handlers.len() >= MAX_HANDLERS {
+                                return false;
+                            }
+                            handlers.push(pc + 1 + usize::from(v));
+                        }
+                        219 => {
+                            // Take, RESPECTING the carry limit; on refusal
+                            // print the "carrying too much" message and fail
+                            // the record — the one command that can end a
+                            // record in failure.
+                            let Some(item) = one(p1) else { return false };
+                            if self.carried_count() == self.db.max_carry {
+                                let msg = self.wording().too_much_bang;
+                                self.out.push_str(msg);
+                                failed = true;
+                            } else {
+                                self.set_item_loc(item, CARRIED);
+                            }
+                        }
+                        220 => {
+                            let Some(item) = one(p1) else { return false };
+                            self.set_item_loc(item, self.player as i32);     // 53
+                        }
+                        221 => {
+                            let Some(room) = one(p1) else { return false };
+                            if room < self.db.rooms.len() {
+                                self.player = room;                          // 54
+                            }
+                        }
+                        222 => {
+                            let Some(item) = one(p1) else { return false };
+                            self.set_item_loc(item, 0);                      // 55 / 59
+                        }
+                        223 => self.flag_set(DARK_FLAG, true),               // 56
+                        224 => self.flag_set(DARK_FLAG, false),              // 57
+                        225 => {
+                            let Some(flag) = one(p1) else { return false };
+                            self.flag_set(flag, true);                       // 58
+                        }
+                        226 => {
+                            let Some(flag) = one(p1) else { return false };
+                            self.flag_set(flag, false);                      // 60
+                        }
+                        227 => self.flag_set(0, true),                       // 67
+                        228 => self.flag_set(0, false),                      // 68
+                        229 => {
+                            // Spec §9.1: "Death is a side effect, not a
+                            // return." The death text prints, light is
+                            // restored, the player is moved to the
+                            // highest-numbered room and the end-of-game
+                            // sequence runs — AND THEN THE REST OF THE
+                            // RECORD CONTINUES TO EXECUTE. `quit` is only
+                            // read by `step` after the turn, so setting it
+                            // here ends the game without ending the record;
+                            // opcode 231 is the one that stops a record
+                            // immediately.
+                            let msg = self.wording().dead;
+                            self.out.push_str(msg);
+                            self.flag_set(DARK_FLAG, false);
+                            if let Some(last) = self.db.rooms.len().checked_sub(1) {
+                                self.player = last;
+                            }
+                            let over = self.wording().game_now_over;
+                            self.out.push_str(over);
+                            self.quit = true;
+                        }
+                        230 => {
+                            // TWO operands, and this is the load-bearing
+                            // order fact: **room first, then item**, the
+                            // reverse of the reference format's opcode 62.
+                            let (Some(room), Some(item)) = (one(p1), one(p2)) else {
+                                return false;
+                            };
+                            if room < self.db.rooms.len() {
+                                self.set_item_loc(item, room as i32);
+                            }
+                        }
+                        231 => {
+                            // End the game IMMEDIATELY: unlike 229 this also
+                            // stops the record. Reported as success so the
+                            // caller does not append a refusal after it.
+                            let msg = self.wording().game_now_over;
+                            self.out.push_str(msg);
+                            self.quit = true;
+                            return true;
+                        }
+                        232 => self.print_score(),                           // 65
+                        233 => self.print_inventory(),                       // 66
+                        234 => {
+                            // Refill the light source (69).
+                            self.lamp = self.db.light_time;
+                            self.set_item_loc(LIGHT_SOURCE, CARRIED);
+                            self.flag_set(LAMP_EMPTY_FLAG, false);
+                        }
+                        235 => self.save_requested = true,                   // 71
+                        236 => {
+                            // Exchange the locations of two items (72); the
+                            // acting item is first, unlike 230.
+                            let (Some(a), Some(b)) = (one(p1), one(p2)) else {
+                                return false;
+                            };
+                            if let (Some(&la), Some(&lb)) =
+                                (self.item_loc.get(a), self.item_loc.get(b))
+                            {
+                                self.set_item_loc(a, lb);
+                                self.set_item_loc(b, la);
+                            }
+                        }
+                        237 => {
+                            // Take IGNORING the carry limit (74).
+                            let Some(item) = one(p1) else { return false };
+                            self.set_item_loc(item, CARRIED);
+                        }
+                        238 => {
+                            // Move item p1 to the location of item p2 (75).
+                            let (Some(a), Some(b)) = (one(p1), one(p2)) else {
+                                return false;
+                            };
+                            if let Some(&lb) = self.item_loc.get(b) {
+                                self.set_item_loc(a, lb);
+                            }
+                        }
+                        240 => { /* redescribe: the host redraws every frame (64/76) */ }
+                        242 => {
+                            // INCREMENT. The reference format has no
+                            // equivalent — its only counter step is the
+                            // decrement this dialect spells 243.
+                            self.current_counter += 1;
+                        }
+                        // Floored at 0 here, where the reference format's
+                        // opcode 77 floors at -1 (spec §3.7's table).
+                        243 => self.current_counter = (self.current_counter - 1).max(0),
+                        244 => {
+                            let v = self.current_counter;                    // 78
+                            self.out.push_str(&v.to_string());
+                            self.out.push(' ');
+                        }
+                        245 => {
+                            let Some(v) = p1 else { return false };
+                            self.current_counter = i32::from(v);             // 79
+                        }
+                        246 => {
+                            let Some(v) = p1 else { return false };
+                            self.current_counter += i32::from(v);            // 82
+                        }
+                        247 => {
+                            let Some(v) = p1 else { return false };
+                            self.current_counter =
+                                (self.current_counter - i32::from(v)).max(-1); // 83
+                        }
+                        248 => std::mem::swap(&mut self.player, &mut self.saved_room), // 80
+                        249 => {
+                            let Some(v) = one(p1) else { return false };     // 87
+                            let idx = v.min(self.saved_rooms.len() - 1);
+                            std::mem::swap(&mut self.player, &mut self.saved_rooms[idx]);
+                        }
+                        250 => {
+                            // Slots 0-15; higher values clamp to 15 (81).
+                            let Some(v) = one(p1) else { return false };
+                            let idx = v.min(self.counters.len() - 1);
+                            std::mem::swap(&mut self.current_counter, &mut self.counters[idx]);
+                        }
+                        251 => {
+                            let noun = self.last_noun.clone();               // 84
+                            self.out.push_str(&noun);
+                        }
+                        252 => {
+                            let noun = self.last_noun.clone();               // 85
+                            self.out.push_str(&noun);
+                            self.out.push('\n');
+                        }
+                        253 => self.out.push('\n'),                          // 86
+                        254 => { /* pause: the host handles timing (88) */ }
+                        _ => unreachable!("every byte from 212 to 254 is listed above"),
+                    }
+                    pc += 1 + ti99_command_operands(op);
+                }
+            }
+            if failed {
+                match handlers.pop() {
+                    Some(target) => pc = target,
+                    None => return false,
+                }
+            }
+        }
+    }
+
+    /// Whether the automatic inventory listing is on — displayed after every
+    /// room description in a TI-99/4A release, **on by default**, and
+    /// toggled by opcodes 214 and 215 (spec §9.1).
+    ///
+    /// A property of play, not of presentation: this crate has no terminal
+    /// of its own, so a host renders the listing itself — from
+    /// [`Vm::database`] and [`Vm::item_loc`] — when this answers `true`. It
+    /// survives save and restore, which spec §9.1 gives a test for.
+    /// Always `true` for a database from any other dialect, none of which
+    /// has the two opcodes that change it.
+    pub fn auto_inventory(&self) -> bool {
+        self.auto_inventory
+    }
+
     fn print_message(&mut self, n: usize) {
         if let Some(msg) = self.db.messages.get(n) {
             self.out.push_str(msg);
@@ -1463,6 +1957,7 @@ impl Vm {
             Presentation::C64 => self.room_block_c64(),
             Presentation::ScottFree => self.room_block_scottfree(false),
             Presentation::Trs80 => self.room_block_scottfree(true),
+            Presentation::Ti994a => self.room_block_ti994a(),
         }
     }
 
@@ -1499,6 +1994,53 @@ impl Vm {
                 s.push_str("\n  ");
                 s.push_str(item);
             }
+        }
+        s
+    }
+
+    /// The TI-99/4A releases' own layout
+    /// (`docs/internals/scott-dialects-spec.md` §9.1): the room prefix
+    /// `I am in a `, the two headers `Obvious exits : ` and
+    /// `Visible items are : `, and `", "` between the entries of both lists
+    /// — that section states each of those literally, including that this
+    /// dialect's exits delimiter is `", "` rather than the reference set's.
+    ///
+    /// It also states that "the room description is terminated with a period
+    /// when any items are visible", which is applied below with one guard
+    /// the section does not spell out for descriptions but does spell out
+    /// two sentences later for the inventory listing: a text already ending
+    /// in `.` or `!` is left alone rather than given a second period. Most
+    /// room descriptions in the twelve specimens already end in `.`
+    /// (`dismal swamp.`), so the unguarded reading would double the
+    /// punctuation on nearly every frame.
+    fn room_block_ti994a(&self) -> String {
+        let w = self.wording();
+        if self.is_dark() {
+            return w.too_dark_to_see.trim_end().to_string();
+        }
+        let mut s = String::new();
+        let visible = self.items_in_room();
+        if self.db.rooms.get(self.player).is_some() {
+            if !self.room_is_literal() {
+                s.push_str(w.room_prefix);
+            }
+            s.push_str(self.room_name(self.player));
+            if !visible.is_empty() && !ends_in_sentence_punctuation(&s) {
+                s.push('.');
+            }
+            let exits = self.room_exits();
+            s.push_str("\n\nObvious exits : ");
+            if exits.is_empty() {
+                s.push_str("none");
+            } else {
+                let names: Vec<&str> = exits.iter().map(|&(name, _)| name).collect();
+                s.push_str(&names.join(", "));
+            }
+        }
+        if !visible.is_empty() {
+            s.push_str("\n\n");
+            s.push_str(w.see_also_header.trim_start());
+            s.push_str(&visible.join(", "));
         }
         s
     }
@@ -1572,12 +2114,24 @@ impl Vm {
             .collect();
         let w = self.wording();
         self.out.push_str(w.carrying_header);
-        if carried.is_empty() {
+        let last_needs_stop = if carried.is_empty() {
             self.out.push_str(w.nothing_carried);
+            true
         } else {
             self.out.push_str(&carried.join(w.carrying_sep));
+            !ends_in_sentence_punctuation(carried[carried.len() - 1])
+        };
+        if self.options.presentation == Presentation::Ti994a {
+            // Spec §9.1: "the inventory listing appends a period (unless the
+            // last item's text already ends in `.` or `!`) followed by a
+            // space" — a trailing SPACE where every other set ends the line.
+            if last_needs_stop {
+                self.out.push('.');
+            }
+            self.out.push(' ');
+        } else {
+            self.out.push_str(".\n");
         }
-        self.out.push_str(".\n");
     }
 
     /// The player's score as Scott counts it: treasures deposited in the
@@ -1694,6 +2248,7 @@ mod tests {
             messages: vec!["".into()],
             items,
             adventure_number: 0,
+            ti99: None,
         };
         let mut vm = Vm::new(db);
         vm.set_player(player);
@@ -1927,6 +2482,7 @@ mod tests {
             messages: vec![String::new(), "Sorry".into()],
             items: one_item(),
             adventure_number: 0,
+            ti99: None,
         };
         let mut vm = Vm::new(db);
         vm.take_output();
@@ -1964,6 +2520,7 @@ mod tests {
             messages: vec![String::new()],
             items: one_item(),
             adventure_number: 0,
+            ti99: None,
         };
         let mut vm = Vm::new(db);
         vm.take_output();
@@ -2009,6 +2566,7 @@ mod tests {
             messages,
             items: one_item(),
             adventure_number: 0,
+            ti99: None,
         };
         let mut vm = Vm::new(db);
         vm.take_output();
@@ -2072,6 +2630,7 @@ mod tests {
             messages: vec![String::new()],
             items,
             adventure_number: 0,
+            ti99: None,
         };
         let mut vm = Vm::new(db);
         vm.take_output();
@@ -2181,6 +2740,7 @@ mod tests {
             messages,
             items,
             adventure_number: 0,
+            ti99: None,
         };
         let mut vm = Vm::new(db);
 
@@ -2271,6 +2831,7 @@ mod tests {
             messages: vec![String::new()],
             items,
             adventure_number: 0,
+            ti99: None,
         }
     }
 
@@ -2454,6 +3015,7 @@ mod tests {
             messages: vec![String::new(), "Click.".into()],
             items: one_item(),
             adventure_number: 0,
+            ti99: None,
         };
         let mut vm = Vm::new(db);
         assert!(!vm.trace_fired(), "tracing is off by default");
@@ -2496,6 +3058,7 @@ mod tests {
             messages: vec![String::new(), "Click.".into(), "Clunk.".into()],
             items: one_item(),
             adventure_number: 0,
+            ti99: None,
         };
         let mut vm = Vm::new(db);
         vm.set_trace_fired(true);
@@ -2544,6 +3107,7 @@ mod tests {
             messages: vec![String::new(), "It opens.".into()],
             items: one_item(),
             adventure_number: 0,
+            ti99: None,
         };
         let mut vm = Vm::new(db);
         vm.set_trace_fired(true);
@@ -2600,6 +3164,7 @@ mod tests {
             messages: vec![String::new()],
             items,
             adventure_number: 0,
+            ti99: None,
         };
         let mut vm = Vm::new(db);
         vm.run_commands(&[52, 0, 0, 0], &[2]);
@@ -2643,6 +3208,7 @@ mod tests {
             messages: vec![String::new()],
             items: one_item(),
             adventure_number: 0,
+            ti99: None,
         };
         let mut vm = Vm::new(db);
         vm.take_output();

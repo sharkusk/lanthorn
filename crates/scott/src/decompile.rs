@@ -519,6 +519,7 @@ mod tests {
                 Item { text: "a brass lamp".into(), treasure: false, auto_noun: Some("LAM".into()), start_loc: 1 },
             ],
             adventure_number: 0,
+            ti99: None,
         }
     }
 

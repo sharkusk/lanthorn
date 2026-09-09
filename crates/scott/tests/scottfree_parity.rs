@@ -47,6 +47,7 @@ fn base_db(items: Vec<Item>) -> Database {
         messages: vec![String::new()],
         items,
         adventure_number: 0,
+        ti99: None,
     }
 }
 
@@ -758,6 +759,7 @@ fn matched_but_blocked_action_replies_cant_do_that_yet_not_dont_understand() {
         messages: vec![String::new(), "Fired.".into()],
         items: vec![],
         adventure_number: 0,
+        ti99: None,
     };
     let mut vm = Vm::new(db);
     vm.take_output();
@@ -862,6 +864,7 @@ fn get_all_runs_each_items_own_get_action_then_takes_it_and_skips_star_marked_it
             Item { text: "a hidden coin".into(), treasure: false, auto_noun: Some("*COIN".into()), start_loc: 1 },
         ],
         adventure_number: 0,
+        ti99: None,
     };
     let mut vm = Vm::new(db);
     vm.take_output();
@@ -908,6 +911,7 @@ fn typed_words_are_capped_at_nine_characters_before_becoming_the_last_noun() {
         messages: vec![String::new()],
         items: vec![],
         adventure_number: 0,
+        ti99: None,
     };
     let mut vm = Vm::new(db);
     vm.take_output();
@@ -967,6 +971,7 @@ fn you_are_option_swaps_death_and_inventory_wording() {
         messages: vec![String::new()],
         items: vec![],
         adventure_number: 0,
+        ti99: None,
     };
     let mut vm = Vm::new_full(db, false, Vm::DEFAULT_RNG_SEED, Options::new().with_you_are(true));
     vm.take_output();
@@ -1006,6 +1011,7 @@ fn scott_light_option_shows_a_running_countdown_instead_of_growing_dim() {
         messages: vec![String::new()],
         items: items_with_light_source(1),
         adventure_number: 0,
+        ti99: None,
     };
     let mut vm = Vm::new_full(db, false, Vm::DEFAULT_RNG_SEED, Options::new().with_scott_light(true));
     vm.take_output();
@@ -1043,6 +1049,7 @@ fn prehistoric_lamp_option_destroys_the_light_source_on_run_out() {
         messages: vec![String::new()],
         items: items_with_light_source(1),
         adventure_number: 0,
+        ti99: None,
     };
 
     let mut vm = Vm::new_full(make_db(), false, Vm::DEFAULT_RNG_SEED, Options::new().with_prehistoric_lamp(true));
@@ -1093,18 +1100,26 @@ fn presentation_option_selects_room_block_layout() {
 /// A file that fails to parse AND matches a known other dialect's signature
 /// is refused as [`LoadError::UnsupportedDialect`], naming which one,
 /// instead of the generic token-level error the text lexer happens to hit.
-/// Detection only — this crate does not read any of these formats.
+/// Detection only — this crate does not read the memory-image dialects.
+///
+/// The TI-99/4A signature is no longer one of them: SQ-1414 reads that
+/// dialect, so a file carrying its signature is answered by
+/// `parse_ti994a` and reports [`LoadError::BadDialectData`] when the file
+/// is damaged, never `UnsupportedDialect`. The case below covers that.
 #[test]
 fn a_file_matching_a_known_dialect_signature_is_named_not_generic() {
-    // The TI-99/4A signature can appear anywhere in the file
-    // (`FindCode`/`DetectTI994A` is an unanchored scan) — embed it inside
-    // otherwise-plausible-looking but ultimately unparseable bytes.
+    // The TI-99/4A signature is searched for anywhere in the file
+    // (`docs/internals/scott-dialects-spec.md` §3.1: the scan is
+    // unanchored, because the distributed files carry container prefixes of
+    // differing sizes) — embed it inside otherwise-plausible-looking but
+    // ultimately unparseable bytes, where the baseline it implies is
+    // negative and the file is therefore damaged rather than unreadable.
     let mut ti99 = b"not a scott database ".to_vec();
     ti99.extend_from_slice(b"\x30\x30\x30\x30\x00\x30\x30\x00\x28\x28");
-    assert_eq!(
+    assert!(matches!(
         Database::parse(&ti99),
-        Err(LoadError::UnsupportedDialect(Dialect::Ti994aBytecode))
-    );
+        Err(LoadError::BadDialectData(Dialect::Ti994aBytecode, _))
+    ));
 
     let mut c64 = b"garbage".to_vec();
     c64.extend_from_slice(b"AUTO\0GO\0");

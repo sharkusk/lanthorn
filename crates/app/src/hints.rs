@@ -1286,10 +1286,13 @@ pub fn extract_story(bytes: Vec<u8>) -> io::Result<LoadedStory> {
         if bytes.starts_with(b"Glul") {
             return Ok(LoadedStory::Glulx(bytes));
         }
-        if let Ok(s) = std::str::from_utf8(&bytes) {
-            if scott::looks_like_scott(s) {
-                return Ok(LoadedStory::Scott(bytes));
-            }
+        // Bytes, not `&str`: `looks_like_scott_bytes` answers for the text
+        // `.dat` AND for the TI-99/4A tokenised releases (SQ-1414), which
+        // are a binary memory image no UTF-8 conversion survives — before
+        // that, a `.fiad` was rejected here as "not a story file of any
+        // kind lanthorn opens".
+        if scott::looks_like_scott_bytes(&bytes) {
+            return Ok(LoadedStory::Scott(bytes));
         }
         if !blorb::adf::looks_like_zcode(&bytes) {
             return Err(io::Error::new(io::ErrorKind::InvalidData, unrunnable(&bytes)));
@@ -1306,7 +1309,7 @@ pub fn extract_story(bytes: Vec<u8>) -> io::Result<LoadedStory> {
             // raw-`.dat` path above uses — a hostile blorb must not reach
             // scott's loader with arbitrary bytes just by claiming an SAAI
             // exec chunk.
-            if !std::str::from_utf8(data).is_ok_and(scott::looks_like_scott) {
+            if !scott::looks_like_scott_bytes(data) {
                 return Err(io::Error::new(
                     io::ErrorKind::InvalidData,
                     "Blorb SAAI executable does not look like a Scott Adams database",
@@ -2186,6 +2189,52 @@ mod tests {
             LoadedStory::Scott(_) => {}
             o => panic!("{o:?}"),
         }
+    }
+
+    /// The smallest byte string `scott::looks_like_ti994a` accepts, built
+    /// from `docs/internals/scott-dialects-spec.md` §3.1: the ten-byte
+    /// detection signature at file offset `0x589` (which makes the baseline
+    /// 0), and a 34-byte header at `0x8A0` whose eleven big-endian table
+    /// pointers all resolve inside the file. Enough to prove the ENGINE
+    /// SNIFF reaches the TI-99/4A path — the tokenised tables themselves are
+    /// `scott`'s to test, and it does, in `ti994a.rs` and
+    /// `tests/ti994a_specimens.rs`.
+    fn minimal_ti994a_image() -> Vec<u8> {
+        let mut bytes = vec![0u8; 0x1000];
+        bytes[0x589..0x589 + 10]
+            .copy_from_slice(&[0x30, 0x30, 0x30, 0x30, 0x00, 0x30, 0x30, 0x00, 0x28, 0x28]);
+        // Every pointer -> stored address 0x0D00, which with a baseline of 0
+        // resolves to file offset 0x0D00 - 0x0380 = 0x980, inside the file.
+        for i in 0..11 {
+            bytes[0x8A0 + 12 + i * 2] = 0x0D;
+            bytes[0x8A0 + 12 + i * 2 + 1] = 0x00;
+        }
+        bytes
+    }
+
+    /// **A TI-99/4A tokenised release is a Scott Adams story** (SQ-1414).
+    ///
+    /// It is a binary memory image, so the sniff this used to spell as
+    /// `from_utf8(bytes).is_ok_and(looks_like_scott)` could never answer for
+    /// one: every `.fiad` was refused here as "not a story file of any kind
+    /// lanthorn opens", before the loader that reads it was ever reached.
+    #[test]
+    fn detects_a_ti994a_tokenised_release() {
+        match extract_story(minimal_ti994a_image()).unwrap() {
+            LoadedStory::Scott(_) => {}
+            o => panic!("{o:?}"),
+        }
+    }
+
+    /// And the sniff is still a sniff: a file carrying the signature but no
+    /// usable header is not claimed by any engine.
+    #[test]
+    fn a_bare_ti994a_signature_without_a_header_is_not_claimed() {
+        let mut bytes = vec![0u8; 0x600];
+        bytes[0x589..0x589 + 10]
+            .copy_from_slice(&[0x30, 0x30, 0x30, 0x30, 0x00, 0x30, 0x30, 0x00, 0x28, 0x28]);
+        let err = extract_story(bytes).expect_err("the header is off the end of the file");
+        assert_eq!(err.kind(), io::ErrorKind::InvalidData);
     }
 
     /// **Z-code is claimed, not defaulted to** (SQ-0889).

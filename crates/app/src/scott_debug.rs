@@ -349,6 +349,7 @@ mod tests {
                 },
             ],
             adventure_number: 0,
+            ti99: None,
         }
     }
 

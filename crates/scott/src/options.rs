@@ -48,6 +48,19 @@ pub enum Presentation {
     /// existing embedders (lanthorn's own `scott_session.rs`, this crate's
     /// pinned golden test) see no change from adding [`Options`].
     C64,
+    /// The **TI-99/4A** releases' own layout and message set
+    /// (`docs/internals/scott-dialects-spec.md` §9.1): `I am in a ` as the
+    /// room prefix, `Obvious exits : ` and `Visible items are : ` as the two
+    /// headers, `", "` as the delimiter for both lists, and the room
+    /// description terminated with a period when any items are visible.
+    ///
+    /// Not a host choice: the specification's Appendix A states that the
+    /// runtime differences of its §9 "are properties of the *database*, not
+    /// of the host, and have to travel with it", so [`crate::Vm`] forces
+    /// this presentation — and the two lamp flags of §9.2 — for any
+    /// [`crate::Database`] loaded from that dialect, whatever the host asked
+    /// for.
+    Ti994a,
 }
 
 impl Default for Presentation {
@@ -156,8 +169,17 @@ impl Options {
 pub struct Wording {
     /// GET/DROP success (`ScottCurses.c:1245,1290`): `"O.K. "` — always this,
     /// regardless of `you_are` (ScottFree's single-item GET/DROP path never
-    /// branches on `YOUARE`).
+    /// branches on `YOUARE`). The TI-99/4A set spells it `"OK. "`, and uses
+    /// the SAME string for taking, dropping and generic acknowledgement —
+    /// that dialect does not distinguish "Taken." from "Dropped."
+    /// (spec §9.1).
     pub ok: &'static str,
+    /// Printed before the new room is described after a successful compass
+    /// move. Empty for every ScottFree-derived set, which acknowledges a
+    /// move only by describing where you now are; `"OK. "` for the TI-99/4A
+    /// set, where "movement is acknowledged" is an observable difference
+    /// spec §9.1 gives a test for.
+    pub move_ok: &'static str,
     /// GET ALL/DROP ALL per-item success suffix (`ScottCurses.c:1213,1265`):
     /// `": O.K.\n"` after the item's own text — also unconditional.
     pub ok_all_suffix: &'static str,
@@ -289,8 +311,9 @@ impl Wording {
     pub fn for_options(options: &Options) -> Wording {
         let y = options.you_are;
         let s = options.scott_light;
-        Wording {
+        let base = Wording {
             ok: "O.K. ",
+            move_ok: "",
             ok_all_suffix: ": O.K.\n",
             carrying_header: if y { "You are carrying:\n" } else { "I'm carrying:\n" },
             nothing_carried: "Nothing",
@@ -349,6 +372,41 @@ impl Wording {
             light_dim: if s { "" } else { "Your light is growing dim. " },
             light_runs_out_prefix: if s { "Light runs out in " } else { "" },
             light_runs_out_suffix: if s { " turns. " } else { "" },
+        };
+        if options.presentation != Presentation::Ti994a {
+            return base;
+        }
+        // The TI-99/4A releases carry their OWN message set, distinct from
+        // both the reference and the ZX Spectrum sets
+        // (`docs/internals/scott-dialects-spec.md` §9.1). Every string below
+        // is one that section pins literally; every field left at `base` is
+        // one it does not mention, and keeping the first-person default
+        // there is an honest "unknown" rather than an invented string. Two
+        // of this dialect's strings belong to the host and not to this
+        // crate, which has no prompt of its own: `What shall I do? ` and
+        // `Resume a saved game? `.
+        Wording {
+            ok: "OK. ",
+            move_ok: "OK. ",
+            room_prefix: "I am in a ",
+            see_also_header: "\nVisible items are : ",
+            carrying_header: "I am carrying : ",
+            carrying_sep: ", ",
+            dont_understand: "I don't understand the command. ",
+            cant_do_that_yet: "I can't do that yet. ",
+            beyond_power_get: "It is beyond my power to do that. ",
+            beyond_power_drop: "It is beyond my power to do that. ",
+            fell_and_broke_neck: "\nI fell down and broke my neck.",
+            dead: "I'm dead... ",
+            too_much_period: "I am carrying too much.",
+            too_much_bang: "I am carrying too much.",
+            light_out: "Light went out! ",
+            // Read only when `scott_light` is off, which for a real TI-99/4A
+            // database it never is (spec §9.2 forces it on); carried anyway
+            // because §9.1 lists it as part of the set.
+            light_dim: "Light is growing dim ",
+            game_now_over: "This adventure is over. Play again?",
+            ..base
         }
     }
 }
