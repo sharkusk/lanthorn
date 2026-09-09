@@ -102,6 +102,13 @@ impl ScottSession {
         ScottSession::new_with_trace(bytes, pict_blorb, false, None)
     }
 
+    /// The terminal cell size a session assumes when its caller has none to
+    /// give — the same 8×16 fallback `startup.rs` and `reset.rs` use when the
+    /// terminal reports no image protocol and the real font size is unknown.
+    /// Only the C64 vector artwork reads it (SQ-1467), and only to choose how
+    /// finely to draw.
+    pub const FALLBACK_CHAR_PX: (u32, u32) = (8, 16);
+
     /// Like [`ScottSession::new`], but starts the VM with fired-action tracing
     /// on (the `--debug` boot path) so the opening occurrence pass — run inside
     /// `Vm::new_with_trace`, before any host code can toggle tracing — is
@@ -123,7 +130,14 @@ impl ScottSession {
         trace: bool,
         random_seed: Option<u32>,
     ) -> Result<ScottSession, String> {
-        ScottSession::new_with_options(bytes, pict_blorb, trace, random_seed, scott::Options::default())
+        ScottSession::new_with_options(
+            bytes,
+            pict_blorb,
+            trace,
+            random_seed,
+            scott::Options::default(),
+            ScottSession::FALLBACK_CHAR_PX,
+        )
     }
 
     /// The fullest constructor: [`ScottSession::new_with_trace`] plus
@@ -139,12 +153,22 @@ impl ScottSession {
     /// [`scott::Presentation::C64`] room-block layout regardless of `-t`
     /// (see `scott::Presentation`'s doc); only `scott-cli` lets `-t` switch
     /// the layout too.
+    ///
+    /// `char_px` is the terminal's cell size in device pixels (the launcher's
+    /// own `game_picker.font_size()`, [`ScottSession::FALLBACK_CHAR_PX`] when
+    /// there is no image protocol to ask). Nothing about the VM reads it; the
+    /// C64 Mysterious Adventures' vector artwork does, because the picture
+    /// band is a fixed row count and the cell height is the other half of how
+    /// many device pixels a room picture will be drawn into (SQ-1467, see
+    /// `crate::graphics::scott_c64_scale`). It is a constructor argument for
+    /// the same reason `options` is: the artwork is decoded here, once.
     pub fn new_with_options(
         bytes: Vec<u8>,
         pict_blorb: Option<blorb::Blorb>,
         trace: bool,
         random_seed: Option<u32>,
         options: scott::Options,
+        char_px: (u32, u32),
     ) -> Result<ScottSession, String> {
         // `Database::parse` takes raw bytes (SQ-1412), so a Latin-1 or
         // otherwise non-UTF-8 `.dat` loads here instead of being rejected by
@@ -168,12 +192,19 @@ impl ScottSession {
         // VM's state on every `refresh_picture`. `pict_blorb` still wins when
         // present (a graphics container beside a `.dat` is a different,
         // Blorb-carried release of the same series).
+        //
+        // SQ-1467: what comes back is the DISPLAY LISTS, not rasters — the
+        // pictures are vectors and nothing in them fixes a size, so each room
+        // is drawn when it is first shown, at the supersample the band's own
+        // device height picks out.
         let picts = match &pict_blorb {
             Some(_) => PictSource::new(pict_blorb),
             None => scott::c64::prg_image(&bytes)
                 .filter(|(image, at)| scott::c64::looks_like_c64_mysterious(image, *at))
-                .and_then(|(image, at)| scott::c64::decode_family_b_pictures(image, at).ok())
-                .map(PictSource::from_scott_c64)
+                .and_then(|(image, at)| scott::c64::decode_family_b_picture_lists(image, at).ok())
+                .map(|lists| {
+                    PictSource::from_scott_c64(lists, u32::from(PICTURE_ROWS) * char_px.1)
+                })
                 .unwrap_or_else(|| PictSource::new(None)),
         };
         let mut s = ScottSession {
@@ -371,7 +402,13 @@ impl Engine for ScottSession {
         match &self.current_canvas {
             Some(canvas) => {
                 let opaque = canvas.pixels().filter(|p| p.0[3] != 0).count();
-                let source = if self.picts.is_scott_c64() { "native C64" } else { "blorb" };
+                // SQ-1467: the C64 artwork is drawn at a supersample chosen
+                // from this band's device height, so a frame has to be able to
+                // say which resolution produced it.
+                let source = match self.picts.scott_c64_scale() {
+                    Some(scale) => format!("native C64 x{scale}"),
+                    None => "blorb".to_string(),
+                };
                 out.push(format!(
                     "  picture: {} row(s) reserved  ·  canvas={}x{} v{} opaque={} source={source}",
                     PICTURE_ROWS,
@@ -776,8 +813,23 @@ mod tests {
         }
     }
 
+    /// A session on this PRG with the terminal cell size a caller chooses,
+    /// which is the only input to how finely the C64 artwork is drawn
+    /// (SQ-1467).
+    fn baton_session(bytes: Vec<u8>, char_px: (u32, u32)) -> ScottSession {
+        ScottSession::new_with_options(
+            bytes,
+            None,
+            false,
+            None,
+            scott::Options::default(),
+            char_px,
+        )
+        .expect("BATON.prg loads")
+    }
+
     #[test]
-    fn mysterious_c64_room1_shows_its_own_native_picture_at_native_size() {
+    fn mysterious_c64_room1_shows_its_own_picture_drawn_for_the_band() {
         let Some(bytes) = baton_prg() else { return };
         // Room 1 ("dense SPOOKY Forest") is lit and start_room, so the boot
         // session's very first screen already carries its picture — decoded
@@ -786,12 +838,45 @@ mod tests {
         assert_eq!(s.current_location().expect("loc").number, 1);
         let model = s.screen();
         let gw = picture_band(&model).expect("room 1 shows a picture band");
+        // The default cell is 8x16 (`FALLBACK_CHAR_PX`), so the band is
+        // 16 x 16 = 256 device pixels tall and 256/94 rounds up to a 3x
+        // supersample — 765 x 282, drawn once at about the size it is shown.
         assert_eq!(
             (gw.canvas.width(), gw.canvas.height()),
-            (scott::c64::PICTURE_WIDTH as u32, scott::c64::PICTURE_HEIGHT as u32),
-            "decoded at the Family B canvas's own native size, not resampled here"
+            (scott::c64::PICTURE_WIDTH as u32 * 3, scott::c64::PICTURE_HEIGHT as u32 * 3),
+            "drawn at the band's own resolution, not at the 255 x 94 native canvas"
+        );
+        assert!(
+            gw.canvas.width() > scott::c64::PICTURE_WIDTH as u32,
+            "and larger than native, which is the whole point"
+        );
+        // A supersample multiplies both axes, so the shape the band fits is
+        // exactly the shape the native canvas has — no second aspect
+        // correction anywhere in the path.
+        assert_eq!(
+            gw.canvas.width() * scott::c64::PICTURE_HEIGHT as u32,
+            gw.canvas.height() * scott::c64::PICTURE_WIDTH as u32,
+            "the aspect ratio is the native one"
         );
         assert!(gw.upscale, "the band renderer stretches it to fill the reserved rows");
+    }
+
+    #[test]
+    fn the_c64_artwork_is_drawn_at_the_resolution_the_terminals_cell_asks_for() {
+        let Some(bytes) = baton_prg() else { return };
+        // 16 rows of an 8-pixel cell is 128 device pixels: 128/94 rounds up to
+        // 2. Half the height, one step less resolution.
+        let small = baton_session(bytes.clone(), (8, 8));
+        let m = small.screen();
+        let gw = picture_band(&m).expect("a picture band");
+        assert_eq!(gw.canvas.height(), scott::c64::PICTURE_HEIGHT as u32 * 2, "8px cell → 2x");
+
+        // …and an absurdly tall cell is capped rather than obeyed: 16 x 40 is
+        // 640 device pixels, which would ask for 7.
+        let huge = baton_session(bytes, (20, 40));
+        let m = huge.screen();
+        let gw = picture_band(&m).expect("a picture band");
+        assert_eq!(gw.canvas.height(), scott::c64::PICTURE_HEIGHT as u32 * 4, "capped at 4x");
     }
 
     #[test]

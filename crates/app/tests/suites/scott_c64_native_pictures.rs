@@ -1,5 +1,5 @@
 //! SQ-1463: the Commodore 64 Mysterious Adventures' own room pictures, decoded
-//! straight off the release's PRG/D64 image (`scott::c64::decode_family_b_pictures`,
+//! straight off the release's PRG/D64 image (`scott::c64::decode_family_b_picture_lists`,
 //! SQ-1414) rather than a Blorb, must reach the SAME picture band the `.blb`
 //! releases already draw through — same rows reserved above the room panel, same
 //! `GraphicsWindow` shape, drawn by the same backend-neutral renderer
@@ -161,7 +161,7 @@ fn native_and_blorb_room1_bands_place_identically_under_halfblocks_and_kitty() {
     let blorb_gw = picture_band(&blorb_model).expect("blorb band");
 
     // A tall, narrow pane: both sources' pictures are far wider than tall (the
-    // native 255x94 canvas and the blorb's own 256x96 Pict alike), so on THIS
+    // native canvas's 255:94 and the blorb's own 256x96 Pict alike), so on THIS
     // shape the width is what binds the aspect-preserving fit for both — the
     // axis the fit does not saturate is what would expose a per-source drift.
     let area = Rect::new(0, 0, 30, 16);
@@ -170,8 +170,9 @@ fn native_and_blorb_room1_bands_place_identically_under_halfblocks_and_kitty() {
 
     // Half-blocks: `GraphicsRender::render` resamples the canvas and places a
     // `dest` rect centered in `area`, sized by `fitted_protocol`'s aspect-fit —
-    // the one place a per-source difference (native 255x94 vs the Blorb's own
-    // 256x96 Pict) could leak into where the image lands.
+    // the one place a per-source difference (the native decode, drawn at the
+    // band's own resolution since SQ-1467, vs the Blorb's own 256x96 Pict)
+    // could leak into where the image lands.
     let hb_picker = Picker::halfblocks();
     let native_hb = touched_rect(&render_band(&hb_picker, native_gw, area, letterbox), area, letterbox_color)
         .expect("native band draws something under half-blocks");
@@ -244,8 +245,9 @@ fn native_room1_canvas_matches_the_decoder_oracle_not_an_off_by_one_room() {
         return;
     };
     let (image, at) = scott::c64::prg_image(&bytes).expect("a PRG has a load address");
-    let pictures = scott::c64::decode_family_b_pictures(image, at).expect("BATON.prg decodes");
-    assert!(pictures.len() > 1, "need at least two pictures for this oracle to mean anything");
+    let lists =
+        scott::c64::decode_family_b_picture_lists(image, at).expect("BATON.prg decodes");
+    assert!(lists.len() > 1, "need at least two pictures for this oracle to mean anything");
 
     let native = native_baton().expect("BATON.prg boots (just parsed above)");
     let model = native.screen();
@@ -254,12 +256,73 @@ fn native_room1_canvas_matches_the_decoder_oracle_not_an_off_by_one_room() {
 
     assert_eq!(
         got,
-        picture_pixels(&pictures[0]),
+        picture_pixels(&lists[0].rasterise_at(BAND_SCALE)),
         "room 1 must show pictures[0] (§8.6's identity mapping), pixel for pixel"
     );
     assert_ne!(
         got,
-        picture_pixels(&pictures[1]),
+        picture_pixels(&lists[1].rasterise_at(BAND_SCALE)),
         "and must NOT show pictures[1] — the off-by-one this oracle guards against"
     );
+}
+
+/// The supersample a booted session picks for the band (SQ-1467), spelled here
+/// rather than read back off the canvas so the oracle above is not comparing a
+/// picture against itself: `ScottSession::new` takes the 8x16 fallback cell,
+/// the band reserves 16 rows, and 16 x 16 = 256 device pixels over the 94-row
+/// native canvas rounds up to 3.
+const BAND_SCALE: u32 = 3;
+
+/// The supersample changes the CANVAS and nothing else (SQ-1467): the picture
+/// arrives at three times the native resolution, and the band it lands in — the
+/// reserved rows, the fitted cell rect under both backends — is the one it
+/// landed in when the canvas was 255 x 94, because an integer supersample
+/// multiplies both axes and leaves the aspect the renderer fits alone.
+#[test]
+fn the_supersampled_canvas_is_larger_than_native_and_still_fits_the_same_band() {
+    let Some((native, blorbed)) = both_sessions() else { return };
+    let native_model = native.screen();
+    let blorb_model = blorbed.screen();
+    let native_gw = picture_band(&native_model).expect("native band");
+    let blorb_gw = picture_band(&blorb_model).expect("blorb band");
+
+    let (w, h) = (native_gw.canvas.width(), native_gw.canvas.height());
+    assert_eq!(
+        (w, h),
+        (
+            scott::c64::PICTURE_WIDTH as u32 * BAND_SCALE,
+            scott::c64::PICTURE_HEIGHT as u32 * BAND_SCALE
+        ),
+        "drawn at the band's resolution"
+    );
+    assert!(
+        w > scott::c64::PICTURE_WIDTH as u32 && h > scott::c64::PICTURE_HEIGHT as u32,
+        "…which is larger than the native canvas — the point of the exercise"
+    );
+    assert_eq!(
+        w * scott::c64::PICTURE_HEIGHT as u32,
+        h * scott::c64::PICTURE_WIDTH as u32,
+        "and the same shape, so the band's aspect-preserving fit is unchanged"
+    );
+
+    // The rows reserved above the room panel are a property of the layout, not
+    // of how many pixels the picture has.
+    assert_eq!(
+        reserved_rows(&native_model),
+        reserved_rows(&blorb_model),
+        "the band still reserves the rows it always did"
+    );
+
+    // And the fitted placement is still the Blorb release's, cell for cell,
+    // under both a pixel backend and the half-block fallback.
+    let area = Rect::new(0, 0, 30, 16);
+    let letterbox_color = Color::Rgb(0, 0, 0);
+    let letterbox = Style::default().bg(letterbox_color);
+    for picker in [Picker::halfblocks(), kitty_picker(10, 20)] {
+        let got =
+            touched_rect(&render_band(&picker, native_gw, area, letterbox), area, letterbox_color);
+        let want =
+            touched_rect(&render_band(&picker, blorb_gw, area, letterbox), area, letterbox_color);
+        assert_eq!(got, want, "a bigger canvas lands on the same cells");
+    }
 }

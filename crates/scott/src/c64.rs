@@ -1091,15 +1091,332 @@ pub const PALETTE: [(u8, u8, u8); 16] = {
     out
 };
 
+/// The largest supersample [`PictureList::rasterise_at`] will draw, so a
+/// caller cannot ask a 255 x 94 canvas for gigabytes by arithmetic accident.
+/// Eight is already 2040 x 752, more device pixels than any terminal picture
+/// band this artwork is shown in (SQ-1467).
+pub const MAX_PICTURE_SCALE: u32 = 8;
+
+/// One primitive of a Family B display list, in **native canvas coordinates**
+/// — §8.2's opcode stream after its two state variables (the current point and
+/// the image-wide line colour) have been resolved away, so each op stands
+/// alone and can be drawn on a canvas of any size (SQ-1467).
+///
+/// A coordinate here is the one §8.2's flip already produced (`h`, `190 - v`)
+/// and is deliberately **not** clipped: a line that runs off the canvas still
+/// paints the part that is on it, and clipping the endpoints would move the
+/// line.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PictureOp {
+    /// §8.2's line opcode: draw from `from` to `to` in the image's line
+    /// colour ([`PictureList::line`]), both endpoints inclusive.
+    Line {
+        /// The current point when the opcode ran.
+        from: (i32, i32),
+        /// The endpoint the opcode named, which becomes the current point.
+        to: (i32, i32),
+    },
+    /// §8.2's `0xC1`: flood fill from `seed` in `colour`.
+    Fill {
+        /// The point the opcode named.
+        seed: (i32, i32),
+        /// The fill colour, a raw 0-15 index like every other value here.
+        colour: u8,
+    },
+}
+
+/// One Family B drawing as the **display list** it is stored as: a background,
+/// a derived line colour and §8.2's primitives in stream order (SQ-1467).
+///
+/// This is the form the file actually holds. [`Picture`] is what one *looks
+/// like* once drawn, and the drawing is a separate step because nothing in the
+/// data fixes a size: [`Self::rasterise`] draws §8.2's own 255 x 94 canvas and
+/// [`Self::rasterise_at`] draws the same picture at an integer multiple of it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PictureList {
+    /// The image's background colour index — the canvas's starting value and
+    /// the fill algorithm's boundary test (§8.2).
+    pub background: u8,
+    /// The line colour, derived rather than stored: **7 when the background
+    /// index is 0, and 0 otherwise** (§8.2).
+    pub line: u8,
+    /// §8.2's primitives in stream order, which is load-bearing: each fill's
+    /// boundary test sees everything drawn before it.
+    pub ops: Vec<PictureOp>,
+}
+
+/// The one Bresenham in this module (§8.2's, exactly), walked at `scale`
+/// device pixels per native pixel and handing every device pixel of the pen to
+/// `pen` (SQ-1467).
+///
+/// §8.2: take the absolute deltas and step signs; if the horizontal delta is
+/// the larger, double both deltas, set the error accumulator to (vertical
+/// delta − horizontal delta), and step horizontally, adding a vertical step
+/// and subtracting the horizontal delta whenever the accumulator is
+/// non-negative, then adding the vertical delta; otherwise do the same with
+/// the roles exchanged. Plot before each step and once more at the end.
+///
+/// **The pen is a `scale`-long run across the minor axis**, which is what
+/// makes a scaled line the same line rather than a thicker one: an x-major
+/// line puts exactly one pixel in every native column at 1x, so it puts
+/// exactly `scale` device pixels in every device column at `scale`. A square
+/// brush would instead widen every diagonal by √2.
+///
+/// **Both endpoints are capped with the whole `scale` x `scale` block**,
+/// because at 1x an endpoint is a whole native pixel and a minor-axis run
+/// covers only the near edge of one: the last stamp of a y-major line lands on
+/// a single device row of the endpoint's block, leaving five of a 3 x 3 corner
+/// unpainted and a rectangle's corner missing a bite. The cap also makes two
+/// lines that share an endpoint share its whole block, which is what keeps a
+/// joint sealed.
+///
+/// At `scale` 1 the run and the cap are both the single pixel §8.2 plots, so
+/// this is the original loop, step for step.
+fn bresenham(from: (i32, i32), to: (i32, i32), scale: i32, mut pen: impl FnMut(i32, i32)) {
+    let (mut x, mut y) = (from.0 * scale, from.1 * scale);
+    let (tx, ty) = (to.0 * scale, to.1 * scale);
+    for dy in 0..scale {
+        for dx in 0..scale {
+            pen(x + dx, y + dy);
+            pen(tx + dx, ty + dy);
+        }
+    }
+    let dx = (tx - x).abs();
+    let dy = (ty - y).abs();
+    let sx = if tx >= x { 1 } else { -1 };
+    let sy = if ty >= y { 1 } else { -1 };
+    if dx >= dy {
+        let (dx2, dy2) = (dx * 2, dy * 2);
+        let mut err = dy2 - dx;
+        for _ in 0..dx {
+            for k in 0..scale {
+                pen(x, y + k);
+            }
+            if err >= 0 {
+                y += sy;
+                err -= dx2;
+            }
+            x += sx;
+            err += dy2;
+        }
+        for k in 0..scale {
+            pen(tx, ty + k);
+        }
+    } else {
+        let (dx2, dy2) = (dx * 2, dy * 2);
+        let mut err = dx2 - dy;
+        for _ in 0..dy {
+            for k in 0..scale {
+                pen(x + k, y);
+            }
+            if err >= 0 {
+                x += sx;
+                err -= dy2;
+            }
+            y += sy;
+            err += dx2;
+        }
+        for k in 0..scale {
+            pen(tx + k, ty);
+        }
+    }
+}
+
+/// A device pixel [`PictureList::supersample`] has not decided yet. Palette
+/// indices are 0-15, so any value above them is free for the purpose.
+const UNSET: u8 = 0xFF;
+
+impl PictureList {
+    /// Draw this list at §8.2's own 255 x 94 canvas — the original's output,
+    /// bit for bit, quirks and fill-queue bound included.
+    pub fn rasterise(&self) -> Picture {
+        let mut picture = Picture::blank(self.background, 1);
+        for op in &self.ops {
+            match *op {
+                PictureOp::Line { from, to } => picture.stroke(from, to, self.line),
+                PictureOp::Fill { seed, colour } => picture.flood(seed, colour),
+            }
+        }
+        picture
+    }
+
+    /// Draw this picture `scale` times larger on each axis, clamped to
+    /// 1..=[`MAX_PICTURE_SCALE`] (SQ-1467).
+    ///
+    /// # The rule: the native raster owns the REGIONS, the supersample redraws
+    /// the LINES
+    ///
+    /// [`Self::rasterise`] runs first and is the authority on which region
+    /// every native pixel belongs to, because it is the picture the Commodore
+    /// 64 actually drew. The large canvas then re-walks only the line ops at
+    /// device resolution — so a staircase is resolved `scale` times as finely,
+    /// which is the whole point — and every device pixel takes its colour from
+    /// the native pixel it lies in:
+    ///
+    /// - a device pixel the scaled line covers is the line colour;
+    /// - otherwise, if its native pixel was **not** line at 1x, it takes that
+    ///   native pixel's colour, fill or background;
+    /// - otherwise its native pixel *was* line at 1x and the finer line has
+    ///   moved off part of it, so it takes the colour of whichever neighbour
+    ///   it reaches first breadth-first without crossing the scaled line — and
+    ///   the line colour if it is enclosed and reaches none.
+    ///
+    /// # Why the fills are not simply re-run on the big canvas
+    ///
+    /// Because they leak, and not rarely. A fill sealed at 1x by two lines a
+    /// single pixel apart, or by two whose 1x rounding put them in the same
+    /// row, finds a half-pixel seam once the lines are drawn where the
+    /// geometry actually puts them, floods through it and repaints the region
+    /// on the other side. Measured over the eleven Commodore 64 releases of
+    /// §10.4 with the fills re-run at scale, **25 images of 516 leaked at one
+    /// scale or another**, the worst of them (Ten Little Indians image 2)
+    /// flooding 6,118 of the 23,970 native pixels — a quarter of the canvas
+    /// the wrong colour. Nor is it fixable by thickening the pen: the 1x pixel
+    /// a shallow line lands in is up to a whole pixel away from where the line
+    /// truly runs, so nothing thinner than a **two**-pixel-wide stroke can
+    /// cover it, and a two-pixel stroke is no longer this artwork's line.
+    ///
+    /// Sub-pixel staircases and 1x region topology are simply not both
+    /// available, and between them the region topology is the one the player
+    /// saw. Taking it from the native raster makes a leak unrepresentable
+    /// rather than merely unlikely — `every_picture_keeps_its_regions_at_every_supersample`
+    /// (`crates/scott/tests/c64_specimens.rs`) is the corpus check, and it
+    /// passes at scales 2, 3 and 4 with no disagreement the ink does not
+    /// explain.
+    ///
+    /// It also means §8.2's flood — its FIFO order, its background-only
+    /// boundary test, its 1024-point queue bound — runs exactly once
+    /// per picture, on the canvas it was measured on, and needs no opinion
+    /// about what any of it should become at scale.
+    ///
+    /// # The one deviation
+    ///
+    /// §8.2's "bounds quirk" — column 255 is admitted even though rows are 255
+    /// pixels wide, so a pixel plotted there lands at column 0 of the next row
+    /// — is a property of byte-wide plotting into a flat buffer and exists
+    /// only at 1x, where it is reproduced. A scaled canvas has no column that
+    /// means "one past the row", so the scaled line drops such a point, which
+    /// is §8.2's own sanctioned alternative ("otherwise clamp to 0-254 and
+    /// note the deviation"). The native raster still carries the quirk's
+    /// pixel, and the supersample takes its colour from there like any other.
+    pub fn rasterise_at(&self, scale: u32) -> Picture {
+        let scale = scale.clamp(1, MAX_PICTURE_SCALE);
+        if scale == 1 {
+            return self.rasterise();
+        }
+        self.supersample(scale)
+    }
+
+    /// Which pixels of a `scale`-times-larger canvas the line ops touch —
+    /// [`bresenham`] over every [`PictureOp::Line`], and nothing else. At
+    /// `scale` 1 this is the native raster's own ink, which is what tells
+    /// [`Self::supersample`] whether a native pixel's colour is a line or a
+    /// fill that happened to use the line's colour index.
+    fn ink_mask(&self, scale: u32) -> Vec<bool> {
+        let (w, h) = (PICTURE_WIDTH * scale as usize, PICTURE_HEIGHT * scale as usize);
+        let mut mask = vec![false; w * h];
+        for op in &self.ops {
+            let PictureOp::Line { from, to } = *op else { continue };
+            bresenham(from, to, scale as i32, |x, y| {
+                // The 1x pass reproduces §8.2's column-255 wrap, exactly as
+                // `Picture::plot` does, so the two masks agree pixel for
+                // pixel with the raster they describe; a scaled canvas has no
+                // such column and drops the point.
+                let limit = if scale == 1 { w as i32 } else { w as i32 - 1 };
+                if !(0..=limit).contains(&x) || !(0..h as i32).contains(&y) {
+                    return;
+                }
+                if let Some(m) = mask.get_mut(y as usize * w + x as usize) {
+                    *m = true;
+                }
+            });
+        }
+        mask
+    }
+
+    /// [`Self::rasterise_at`]'s body for a scale above 1 — see its doc for the
+    /// rule and for why it is that rule.
+    fn supersample(&self, scale: u32) -> Picture {
+        let native = self.rasterise();
+        let native_ink = self.ink_mask(1);
+        let big_ink = self.ink_mask(scale);
+        let mut big = Picture::blank(self.background, scale);
+        let s = scale as usize;
+        let (w, h) = (big.width, big.height);
+        let mut out = vec![UNSET; w * h];
+
+        // The scaled line, and every device pixel whose native pixel the 1x
+        // line did not touch.
+        for y in 0..h {
+            for x in 0..w {
+                let i = y * w + x;
+                if big_ink[i] {
+                    out[i] = self.line;
+                    continue;
+                }
+                let n = (y / s) * native.width + x / s;
+                if !native_ink[n] {
+                    out[i] = native.pixels[n];
+                }
+            }
+        }
+
+        // What is left is the part of a 1x line's pixel that the finer line
+        // has moved off: give it the region it is 4-connected to without
+        // crossing the scaled line, breadth-first so the nearest wins, seeded
+        // from every region pixel above (never from the line itself, which
+        // would paint the vacated part the line colour and put the thickness
+        // straight back).
+        let mut queue: std::collections::VecDeque<usize> = (0..out.len())
+            .filter(|&i| {
+                if out[i] == UNSET || big_ink[i] {
+                    return false;
+                }
+                let (x, y) = ((i % w) as i32, (i / w) as i32);
+                [(x, y + 1), (x, y - 1), (x + 1, y), (x - 1, y)].into_iter().any(|(nx, ny)| {
+                    (0..w as i32).contains(&nx)
+                        && (0..h as i32).contains(&ny)
+                        && out[ny as usize * w + nx as usize] == UNSET
+                })
+            })
+            .collect();
+        while let Some(i) = queue.pop_front() {
+            let colour = out[i];
+            let (x, y) = ((i % w) as i32, (i / w) as i32);
+            for (nx, ny) in [(x, y + 1), (x, y - 1), (x + 1, y), (x - 1, y)] {
+                if !(0..w as i32).contains(&nx) || !(0..h as i32).contains(&ny) {
+                    continue;
+                }
+                let j = ny as usize * w + nx as usize;
+                if out[j] == UNSET {
+                    out[j] = colour;
+                    queue.push_back(j);
+                }
+            }
+        }
+
+        // Enclosed by ink on every side: it IS the line.
+        big.pixels = out.into_iter().map(|v| if v == UNSET { self.line } else { v }).collect();
+        big
+    }
+}
+
 /// One decoded Family B drawing: an indexed bitmap, one palette index per
 /// pixel.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Picture {
-    /// Always [`PICTURE_WIDTH`]; carried so a consumer need not know the
-    /// constant.
+    /// [`PICTURE_WIDTH`] x [`Self::scale`]; carried so a consumer need not do
+    /// the arithmetic.
     pub width: usize,
-    /// Always [`PICTURE_HEIGHT`].
+    /// [`PICTURE_HEIGHT`] x [`Self::scale`].
     pub height: usize,
+    /// The supersample this raster was drawn at — 1 for §8.2's own canvas, and
+    /// whatever [`PictureList::rasterise_at`] was asked for otherwise
+    /// (SQ-1467). A consumer that needs the picture's true aspect wants
+    /// `width / height`, which the supersample leaves alone; this is here for
+    /// diagnostics and for a caller that wants to map a device pixel back to
+    /// the native one it came from.
+    pub scale: u32,
     /// The image's background colour index, which the canvas starts filled
     /// with and which is also the fill algorithm's boundary test (§8.2).
     pub background: u8,
@@ -1115,16 +1432,19 @@ pub struct Picture {
 }
 
 impl Picture {
-    /// A canvas filled with `background`, before any opcode has run.
-    fn blank(background: u8) -> Picture {
+    /// A canvas filled with `background`, before any opcode has run, at
+    /// `scale` device pixels per native pixel on each axis.
+    fn blank(background: u8, scale: u32) -> Picture {
+        let (width, height) = (PICTURE_WIDTH * scale as usize, PICTURE_HEIGHT * scale as usize);
         Picture {
-            width: PICTURE_WIDTH,
-            height: PICTURE_HEIGHT,
+            width,
+            height,
+            scale,
             background,
             // §8.2: "if the background colour index is 0 the line colour is 7;
             // otherwise it is 0."
             line: if background == 0 { 7 } else { 0 },
-            pixels: vec![background; PICTURE_WIDTH * PICTURE_HEIGHT],
+            pixels: vec![background; width * height],
             palette: &PALETTE,
         }
     }
@@ -1171,46 +1491,10 @@ impl Picture {
         self.pixels.get(y as usize * self.width + x as usize).copied()
     }
 
-    /// §8.2's integer Bresenham rasteriser, both endpoints inclusive, one
-    /// pixel per step along the major axis: take the absolute deltas and step
-    /// signs; if the horizontal delta is the larger, double both deltas, set
-    /// the error accumulator to (vertical delta − horizontal delta), and step
-    /// horizontally, adding a vertical step and subtracting the horizontal
-    /// delta whenever the accumulator is non-negative, then adding the
-    /// vertical delta; otherwise the same with the roles exchanged. Plot
-    /// before each step and once more at the end.
-    fn line_to(&mut self, from: (i32, i32), to: (i32, i32), colour: u8) {
-        let (mut x, mut y) = from;
-        let dx = (to.0 - x).abs();
-        let dy = (to.1 - y).abs();
-        let sx = if to.0 >= x { 1 } else { -1 };
-        let sy = if to.1 >= y { 1 } else { -1 };
-        if dx >= dy {
-            let (dx2, dy2) = (dx * 2, dy * 2);
-            let mut err = dy2 - dx;
-            for _ in 0..dx {
-                self.plot(x, y, colour);
-                if err >= 0 {
-                    y += sy;
-                    err -= dx2;
-                }
-                x += sx;
-                err += dy2;
-            }
-        } else {
-            let (dx2, dy2) = (dx * 2, dy * 2);
-            let mut err = dx2 - dy;
-            for _ in 0..dy {
-                self.plot(x, y, colour);
-                if err >= 0 {
-                    x += sx;
-                    err -= dy2;
-                }
-                y += sy;
-                err += dx2;
-            }
-        }
-        self.plot(to.0, to.1, colour);
+    /// §8.2's line, drawn on §8.2's canvas: [`bresenham`] at scale 1 with
+    /// [`Self::plot`] as the pen.
+    fn stroke(&mut self, from: (i32, i32), to: (i32, i32), colour: u8) {
+        bresenham(from, to, 1, |x, y| self.plot(x, y, colour));
     }
 
     /// §8.2's flood fill, exactly: 4-connected, seeded at one point,
@@ -1222,7 +1506,12 @@ impl Picture {
     /// silently dropped.
     ///
     /// Neighbours are enqueued in the order below, above, right, left.
-    fn fill(&mut self, seed: (i32, i32), colour: u8) {
+    ///
+    /// Only ever run on §8.2's own 255 x 94 canvas: a supersample takes its
+    /// regions from that one raster rather than re-flooding a larger one, so
+    /// none of this algorithm's measured behaviour has to be re-argued at a
+    /// size the original never had (see [`PictureList::rasterise_at`]).
+    fn flood(&mut self, seed: (i32, i32), colour: u8) {
         let mut queue = std::collections::VecDeque::new();
         queue.push_back(seed);
         while let Some((x, y)) = queue.pop_front() {
@@ -1239,7 +1528,8 @@ impl Picture {
     }
 }
 
-/// Decode a Family B opcode block into one [`Picture`] per room (§8.2).
+/// Decode a Family B opcode block into one [`PictureList`] per room (§8.2) —
+/// the stored primitives, before any canvas exists (SQ-1467).
 ///
 /// `block` is the whole picture region, **starting at its leading `0xFF`**.
 /// It is a plain concatenation with no index table: each image is a
@@ -1255,7 +1545,7 @@ impl Picture {
 /// has none.
 ///
 /// A block whose first byte is not `0xFF` yields nothing (§11).
-pub fn decode_family_b_block(block: &[u8]) -> Vec<Picture> {
+pub fn decode_family_b_lists(block: &[u8]) -> Vec<PictureList> {
     let mut out = Vec::new();
     let Some((&first, mut rest)) = block.split_first() else {
         return out;
@@ -1264,11 +1554,13 @@ pub fn decode_family_b_block(block: &[u8]) -> Vec<Picture> {
         return out;
     }
     while let Some((&background, stream)) = rest.split_first() {
-        let mut picture = Picture::blank(background);
+        // §8.2: "if the background colour index is 0 the line colour is 7;
+        // otherwise it is 0."
+        let mut list =
+            PictureList { background, line: if background == 0 { 7 } else { 0 }, ops: Vec::new() };
         // §8.2: "a current point, initially (0, 0), and a line colour fixed
         // for the whole image."
         let mut point = (0i32, 0i32);
-        let colour = picture.line;
         let mut i = 0usize;
         let ended = loop {
             let Some(&op) = stream.get(i) else { break false };
@@ -1289,14 +1581,15 @@ pub fn decode_family_b_block(block: &[u8]) -> Vec<Picture> {
                         break false;
                     };
                     i += 3;
-                    picture.fill((i32::from(h), VERTICAL_ORIGIN - i32::from(v)), c);
+                    let seed = (i32::from(h), VERTICAL_ORIGIN - i32::from(v));
+                    list.ops.push(PictureOp::Fill { seed, colour: c });
                 }
                 // 0x00-0xBF: the opcode byte is itself the vertical operand.
                 _ => {
                     let Some(&h) = stream.get(i) else { break false };
                     i += 1;
                     let end = (i32::from(h), VERTICAL_ORIGIN - i32::from(op));
-                    picture.line_to(point, end, colour);
+                    list.ops.push(PictureOp::Line { from: point, to: end });
                     point = end;
                 }
             }
@@ -1304,7 +1597,7 @@ pub fn decode_family_b_block(block: &[u8]) -> Vec<Picture> {
         if !ended {
             break;
         }
-        out.push(picture);
+        out.push(list);
         rest = &stream[i..];
         // The block ends when the last image's terminator was the last byte.
         if rest.is_empty() {
@@ -1314,8 +1607,16 @@ pub fn decode_family_b_block(block: &[u8]) -> Vec<Picture> {
     out
 }
 
-/// Locate and decode a release's artwork: [`decode_family_b_block`] over the
-/// picture region of a memory image.
+/// Decode a Family B opcode block and draw every image at §8.2's own 255 x 94
+/// canvas — [`decode_family_b_lists`] plus [`PictureList::rasterise`], which is
+/// the shape this function has always had and the output it has always
+/// produced.
+pub fn decode_family_b_block(block: &[u8]) -> Vec<Picture> {
+    decode_family_b_lists(block).iter().map(PictureList::rasterise).collect()
+}
+
+/// Locate a release's artwork and decode it to display lists: the picture
+/// region of a memory image through [`decode_family_b_lists`] (SQ-1467).
 ///
 /// The region's start is derivable and needs no catalogue: it is the first
 /// `0xFF` at or after the address the driver plants in zero page as the byte
@@ -1325,10 +1626,10 @@ pub fn decode_family_b_block(block: &[u8]) -> Vec<Picture> {
 /// # Errors
 ///
 /// The same refusals [`parse_c64_mysterious`] gives, for the same reasons.
-pub fn decode_family_b_pictures(
+pub fn decode_family_b_picture_lists(
     image: &[u8],
     load_address: u16,
-) -> Result<Vec<Picture>, LoadError> {
+) -> Result<Vec<PictureList>, LoadError> {
     if identify(image, load_address).is_none() {
         return Err(LoadError::UnsupportedDialect(Dialect::C64OrZxSnapshot));
     }
@@ -1341,7 +1642,25 @@ pub fn decode_family_b_pictures(
         .iter()
         .position(|&b| b == OP_END)
         .ok_or_else(|| bad("no picture block after the item-location table"))?;
-    Ok(decode_family_b_block(&image[from + start..]))
+    Ok(decode_family_b_lists(&image[from + start..]))
+}
+
+/// Locate and decode a release's artwork at §8.2's own 255 x 94 canvas —
+/// [`decode_family_b_picture_lists`] plus [`PictureList::rasterise`], which is
+/// the shape this function has always had and the output it has always
+/// produced.
+///
+/// # Errors
+///
+/// The same refusals [`parse_c64_mysterious`] gives, for the same reasons.
+pub fn decode_family_b_pictures(
+    image: &[u8],
+    load_address: u16,
+) -> Result<Vec<Picture>, LoadError> {
+    Ok(decode_family_b_picture_lists(image, load_address)?
+        .iter()
+        .map(PictureList::rasterise)
+        .collect())
 }
 
 
@@ -1959,6 +2278,138 @@ mod tests {
         let block = [OP_END, 0, OP_FILL, 4, 189, 10, OP_END];
         let painted = decode_family_b_block(&block)[0].pixels.iter().filter(|&&p| p == 4).count();
         assert_eq!(painted, PICTURE_WIDTH * PICTURE_HEIGHT, "an open canvas fills completely");
+    }
+
+
+    /// A rectangle with a fill inside it, drawn by hand at scale 1 and scale 3
+    /// (SQ-1467). Every edge is axis-aligned, so there is no staircase for the
+    /// supersample to resolve differently and the two rasters must agree
+    /// **exactly**: each native pixel's 3 x 3 block is that pixel, nine times.
+    fn rectangle() -> PictureList {
+        PictureList {
+            background: 3,
+            line: 0,
+            ops: vec![
+                PictureOp::Line { from: (10, 10), to: (20, 10) },
+                PictureOp::Line { from: (20, 10), to: (20, 20) },
+                PictureOp::Line { from: (20, 20), to: (10, 20) },
+                PictureOp::Line { from: (10, 20), to: (10, 10) },
+                PictureOp::Fill { seed: (15, 15), colour: 5 },
+            ],
+        }
+    }
+
+    #[test]
+    fn a_hand_drawn_rectangle_is_the_pixels_it_should_be() {
+        let p = rectangle().rasterise();
+        assert_eq!((p.width, p.height, p.scale), (PICTURE_WIDTH, PICTURE_HEIGHT, 1));
+        let at = |x: usize, y: usize| p.pixels[y * PICTURE_WIDTH + x];
+        assert_eq!(at(10, 10), 0, "top-left corner is the line");
+        assert_eq!(at(15, 10), 0, "top edge");
+        assert_eq!(at(20, 15), 0, "right edge");
+        assert_eq!(at(15, 20), 0, "bottom edge");
+        assert_eq!(at(15, 15), 5, "the fill reached the middle");
+        assert_eq!(at(11, 11), 5, "…and the corner just inside the border");
+        assert_eq!(at(9, 10), 3, "one pixel outside is still the background");
+        assert_eq!(at(15, 21), 3, "the fill did not escape below");
+        assert_eq!(p.pixels.iter().filter(|&&v| v == 5).count(), 9 * 9, "a 9 x 9 interior");
+    }
+
+    #[test]
+    fn an_axis_aligned_drawing_supersamples_to_exactly_itself() {
+        let list = rectangle();
+        let one = list.rasterise();
+        let three = list.rasterise_at(3);
+        assert_eq!(
+            (three.width, three.height, three.scale),
+            (PICTURE_WIDTH * 3, PICTURE_HEIGHT * 3, 3)
+        );
+        // Spot the three regions first, by hand: the top edge runs along
+        // device rows 30-32, the interior starts at device (33, 33), and the
+        // canvas outside the rectangle is untouched background.
+        assert_eq!(three.pixels[31 * three.width + 45], 0, "device (45, 31) is the top edge");
+        assert_eq!(three.pixels[45 * three.width + 45], 5, "device (45, 45) is inside the fill");
+        assert_eq!(three.pixels[0], 3, "device (0, 0) is outside");
+        // Then the whole canvas: with no diagonal anywhere, every native pixel
+        // is its own 3 x 3 block, nine identical device pixels.
+        for y in 0..PICTURE_HEIGHT {
+            for x in 0..PICTURE_WIDTH {
+                let want = one.pixels[y * PICTURE_WIDTH + x];
+                for dy in 0..3 {
+                    for dx in 0..3 {
+                        assert_eq!(
+                            three.pixels[(y * 3 + dy) * three.width + x * 3 + dx],
+                            want,
+                            "native ({x}, {y}) block pixel ({dx}, {dy})"
+                        );
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn a_corner_touching_pair_of_lines_stays_sealed_at_every_supersample() {
+        // The room's left wall stops one pixel short of, and one pixel left
+        // of, the end of its ceiling: (9, 11) and (10, 10) touch only at a
+        // CORNER. A 4-connected flood cannot cross a diagonal, so at 1x the
+        // fill seeded outside fills the whole canvas around the room and not
+        // one pixel of the room itself — and no supersample may open that
+        // corner, which is the failure a finer line invites.
+        let list = PictureList {
+            background: 3,
+            line: 0,
+            ops: vec![
+                PictureOp::Line { from: (10, 10), to: (30, 10) }, // ceiling
+                PictureOp::Line { from: (30, 10), to: (30, 30) }, // right wall
+                PictureOp::Line { from: (30, 30), to: (9, 30) },  // floor
+                PictureOp::Line { from: (9, 30), to: (9, 11) },   // left wall, one short
+                PictureOp::Fill { seed: (0, 0), colour: 5 },
+            ],
+        };
+        for scale in 1..=4u32 {
+            let p = list.rasterise_at(scale);
+            let s = scale as usize;
+            let at = |x: usize, y: usize| p.pixels[(y * s) * p.width + x * s];
+            assert_eq!(at(0, 0), 5, "{scale}x: the fill covers the outside");
+            assert_eq!(at(9, 10), 5, "{scale}x: …including the pocket at the open corner");
+            assert_eq!(at(20, 20), 3, "{scale}x: the room's middle is untouched background");
+            assert_eq!(at(10, 11), 3, "{scale}x: …and so is the pixel just inside the corner");
+            // Not one device pixel of the room's interior, either.
+            let leaked = (11..30)
+                .flat_map(|y| (10..30).map(move |x| (x, y)))
+                .flat_map(|(x, y)| {
+                    (0..s).flat_map(move |dy| (0..s).map(move |dx| (x * s + dx, y * s + dy)))
+                })
+                .filter(|&(dx, dy)| p.pixels[dy * p.width + dx] == 5)
+                .count();
+            assert_eq!(leaked, 0, "{scale}x: {leaked} device pixels of the room took the fill");
+        }
+    }
+
+    #[test]
+    fn the_display_list_and_the_native_raster_are_the_same_decode() {
+        // `decode_family_b_block` is `decode_family_b_lists` plus a rasterise,
+        // and nothing about the byte walk may differ between them (SQ-1467).
+        let block = [OP_END, 3, OP_MOVE, 190, 0, 130, 40, OP_FILL, 5, 189, 60, OP_END];
+        let lists = decode_family_b_lists(&block);
+        assert_eq!(lists.len(), 1);
+        assert_eq!(
+            lists[0].ops,
+            vec![
+                PictureOp::Line { from: (0, 0), to: (40, 60) },
+                PictureOp::Fill { seed: (60, 1), colour: 5 },
+            ],
+            "the move resolved into the line's start rather than surviving as an op"
+        );
+        assert_eq!(decode_family_b_block(&block), vec![lists[0].rasterise()]);
+    }
+
+    #[test]
+    fn a_supersample_outside_the_supported_range_is_clamped_rather_than_refused() {
+        let list = rectangle();
+        assert_eq!(list.rasterise_at(0), list.rasterise(), "0 is the native canvas");
+        assert_eq!(list.rasterise_at(999).scale, MAX_PICTURE_SCALE);
     }
 
     #[test]

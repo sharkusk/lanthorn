@@ -540,3 +540,143 @@ fn a_loaded_release_plays_and_forces_the_series_lamp_options() {
     assert_eq!(vm.step(), scott::StepResult::NeedLine);
     eprintln!("BATON opening block:\n{block}");
 }
+
+// ── Family B at higher resolution (§8.2, SQ-1467) ─────────────────────────────
+
+/// Majority vote over each `scale` x `scale` block of `big`, back onto the
+/// native 255 x 94 grid. Ties go to the lowest palette index, which is
+/// arbitrary but deterministic; no tie has ever decided a comparison here,
+/// because a block that is split evenly is a block the eye reads as an edge
+/// either way.
+fn majority_downsample(big: &scott::c64::Picture) -> Vec<u8> {
+    let s = big.scale as usize;
+    let (w, h) = (big.width / s, big.height / s);
+    let mut out = vec![0u8; w * h];
+    for y in 0..h {
+        for x in 0..w {
+            let mut counts = [0u32; 16];
+            for dy in 0..s {
+                for dx in 0..s {
+                    let p = big.pixels[(y * s + dy) * big.width + x * s + dx];
+                    counts[usize::from(p) & 15] += 1;
+                }
+            }
+            let mut best = 0usize;
+            for (i, &c) in counts.iter().enumerate() {
+                if c > counts[best] {
+                    best = i;
+                }
+            }
+            out[y * w + x] = best as u8;
+        }
+    }
+    out
+}
+
+/// How far a scaled raster's majority downsample departs from the native one,
+/// split into the two things a departure can mean.
+#[derive(Default, Debug, Clone, Copy)]
+struct Departure {
+    /// Every native pixel where the two disagree.
+    total: usize,
+    /// Those of them the ink cannot explain: neither raster has the line
+    /// colour anywhere in the native pixel, in its eight native neighbours, or
+    /// anywhere in its scaled block. A fill that leaked through a seam the
+    /// supersample opened paints a whole REGION, so it lands here in the
+    /// thousands; a staircase that resolved one step differently cannot land
+    /// here at all.
+    interior: usize,
+}
+
+fn compare(native: &scott::c64::Picture, big: &scott::c64::Picture) -> Departure {
+    let s = big.scale as usize;
+    let (w, h) = (native.width, native.height);
+    let small = majority_downsample(big);
+    let ink = native.line;
+    let mut d = Departure::default();
+    for y in 0..h {
+        for x in 0..w {
+            let (a, b) = (native.pixels[y * w + x], small[y * w + x]);
+            if a == b {
+                continue;
+            }
+            d.total += 1;
+            if a == ink || b == ink {
+                continue;
+            }
+            let near_ink = (y.saturating_sub(1)..=(y + 1).min(h - 1))
+                .flat_map(|ny| (x.saturating_sub(1)..=(x + 1).min(w - 1)).map(move |nx| (nx, ny)))
+                .any(|(nx, ny)| native.pixels[ny * w + nx] == ink);
+            let block_ink = (0..s).any(|dy| {
+                (0..s).any(|dx| big.pixels[(y * s + dy) * big.width + x * s + dx] == ink)
+            });
+            if !near_ink && !block_ink {
+                d.interior += 1;
+            }
+        }
+    }
+    d
+}
+
+/// **The topology of a picture does not depend on the size it is drawn at.**
+///
+/// Every image of every release is drawn twice — at §8.2's own 255 x 94 canvas
+/// and at 2, 3 and 4 times that — and the large raster is voted back down to
+/// the native grid, block by block. What must survive is the *regions*: a
+/// scaled line is a finer staircase and its pixels move, but a fill that was
+/// sealed at 1x by two lines touching at a corner must not find a seam at 4x
+/// and flood the room, which is what a supersampled vector format gets wrong
+/// if it gets anything wrong (SQ-1467).
+///
+/// So the assertion is on [`Departure::interior`] — a disagreement the ink
+/// cannot account for — and it is **zero across the whole corpus at every
+/// scale**. `Departure::total` is reported rather than asserted: it counts the
+/// staircase pixels the finer resolution deliberately moved, which is the
+/// feature and not a defect.
+#[test]
+fn every_picture_keeps_its_regions_at_every_supersample() {
+    let files = corpus();
+    if files.is_empty() {
+        assert!(skipped("the Commodore 64 program files"));
+        return;
+    }
+    for (name, file) in &files {
+        let (image, load) = prg_image(file).unwrap();
+        let lists = scott::c64::decode_family_b_picture_lists(image, load)
+            .unwrap_or_else(|e| panic!("{name}: {e:?}"));
+        for scale in [2u32, 3, 4] {
+            let mut worst = (0usize, Departure::default());
+            let mut totals = Departure::default();
+            for (i, list) in lists.iter().enumerate() {
+                let native = list.rasterise();
+                let big = list.rasterise_at(scale);
+                assert_eq!(
+                    (big.width, big.height, big.scale),
+                    (255 * scale as usize, 94 * scale as usize, scale),
+                    "{name} image {i} at {scale}x"
+                );
+                let d = compare(&native, &big);
+                assert_eq!(
+                    d.interior, 0,
+                    "{name} image {i} at {scale}x: {} pixels disagree with no ink to explain them \
+                     — a fill reached somewhere the native raster sealed off",
+                    d.interior
+                );
+                totals.total += d.total;
+                totals.interior += d.interior;
+                if d.total > worst.1.total {
+                    worst = (i, d);
+                }
+            }
+            let px = lists.len() * 255 * 94;
+            eprintln!(
+                "{name} at {scale}x: {} of {px} native pixels moved ({:.3}%), 0 unexplained; \
+                 worst image {} with {}",
+                totals.total,
+                100.0 * totals.total as f64 / px as f64,
+                worst.0,
+                worst.1.total
+            );
+        }
+    }
+}
