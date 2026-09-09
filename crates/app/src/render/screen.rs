@@ -9569,6 +9569,7 @@ mod tests {
             align: crate::inline_image::ImageAlign::MarginLeft,
             scaled: None,
             margin_px: Some(40),
+            rule: None,
         });
         let para = "word ".repeat(40);
         state.push_transcript_kind(para.trim_end(), crate::state::TranscriptKind::Story);
@@ -9603,6 +9604,7 @@ mod tests {
             align: crate::inline_image::ImageAlign::InlineUp,
             scaled: None,
             margin_px: None,
+            rule: None,
         });
         let para = "word ".repeat(40);
         state.push_transcript_kind(para.trim_end(), crate::state::TranscriptKind::Story);
@@ -9637,6 +9639,7 @@ mod tests {
             align: crate::inline_image::ImageAlign::MarginRight,
             scaled: None,
             margin_px: None,
+            rule: None,
         });
         let para = "word ".repeat(40);
         state.push_transcript_kind(para.trim_end(), crate::state::TranscriptKind::Story);
@@ -11028,6 +11031,7 @@ mod tests {
             pixels: std::sync::Arc::new(px),
             align: crate::inline_image::ImageAlign::InlineUp,
             scaled: None, margin_px: None,
+            rule: None,
         };
         let b = BufferWindow {
             win: 0,

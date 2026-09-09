@@ -336,6 +336,39 @@ struct InlineImageDto {
     align: crate::inline_image::ImageAlign,
     scaled: Option<(u32, u32)>,
     margin_px: Option<u32>,
+    /// A standing Glk 0.7.6 `imagerule` (SQ-1424), if this picture was drawn by
+    /// `glk_image_draw_scaled_ext` into a text-buffer window. Carried because
+    /// it is the RECIPE: the pixels in the sibling PNG are the picture, but the
+    /// rule is what decides how wide it should be in the pane it is restored
+    /// into — which is routinely a different pane than the one it was saved
+    /// from. Drop it and a restored ratio image freezes at the old width.
+    /// Absent in archives written before this field existed → `None`, i.e. the
+    /// pre-0.7.6 behaviour, which is right for every picture that had no rule.
+    #[serde(default)]
+    rule: Option<ImageRuleDto>,
+}
+
+/// serde mirror of [`gvm::glk::ImageRule`] (SQ-1424). Spelled out here rather
+/// than derived on the gvm type because `gvm` takes ZERO external dependencies
+/// and so cannot derive serde.
+#[derive(Debug, Clone, Copy, serde::Serialize, serde::Deserialize)]
+struct ImageRuleDto {
+    rule: u32,
+    width: u32,
+    height: u32,
+    maxwidth: u32,
+}
+
+impl From<gvm::glk::ImageRule> for ImageRuleDto {
+    fn from(r: gvm::glk::ImageRule) -> ImageRuleDto {
+        ImageRuleDto { rule: r.rule, width: r.width, height: r.height, maxwidth: r.maxwidth }
+    }
+}
+
+impl From<ImageRuleDto> for gvm::glk::ImageRule {
+    fn from(d: ImageRuleDto) -> gvm::glk::ImageRule {
+        gvm::glk::ImageRule { rule: d.rule, width: d.width, height: d.height, maxwidth: d.maxwidth }
+    }
 }
 
 /// One row of `history/index.json`: per-turn metadata + ordering. The bytes,
@@ -845,6 +878,7 @@ pub(crate) fn build_archive_bytes(
                                 align: img.align,
                                 scaled: img.scaled,
                                 margin_px: img.margin_px,
+                                rule: img.rule.map(Into::into),
                             }));
                         }
                         None => {
@@ -1302,6 +1336,7 @@ pub fn load_archive(path: &Path) -> io::Result<ArchiveContents> {
                 align: dto.align,
                 scaled: dto.scaled,
                 margin_px: dto.margin_px,
+                rule: dto.rule.map(Into::into),
             })
         })
         .collect();
@@ -1631,6 +1666,7 @@ mod tests {
             align: ImageAlign::MarginLeft,
             scaled: Some((12, 8)),
             margin_px: Some(40),
+            rule: None,
         };
 
         let transcript = vec!["West of House".to_string(), String::new()];

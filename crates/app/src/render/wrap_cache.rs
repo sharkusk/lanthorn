@@ -695,6 +695,7 @@ mod tests {
             align: crate::inline_image::ImageAlign::MarginLeft,
             scaled: None,
             margin_px: Some(32),
+            rule: None,
         })
         .clone()
     }

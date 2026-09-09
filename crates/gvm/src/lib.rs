@@ -4,7 +4,7 @@
 //! this workspace: a [`memory::Memory`] over the loaded image and the
 //! [`Machine`] execution engine. Text output flows through the [`glk`]
 //! window/stream model — the interactive-fiction subset of Andrew Plotkin's
-//! Glk spec 0.7.5 — to a pluggable [`glk::GlkBackend`] display that the host
+//! Glk spec 0.7.6 — to a pluggable [`glk::GlkBackend`] display that the host
 //! supplies.
 //!
 //! All opcode numbers, addressing modes, the header/call-frame layout, and the
