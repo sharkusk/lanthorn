@@ -47,6 +47,50 @@ Point lanthorn at whatever the game arrived in and it digs the story out itself.
   honest about its limit: a zip holding *two* games plays the first one. And a zip
   is a convenience for what somebody downloaded — the `.lanthorn` archive is the
   container, and the two stay apart.
+
+  **Reaching a zipped story's companions without unpacking to disk** (SQ-1460).
+  A Scott Adams MS-DOS/C64 release ships as one zip holding the `.dat` beside
+  dozens of sibling files — `stories/scott-dialects/msdos/The-Hulk_DOS_EN.zip`
+  is 71 entries: `ADVENT.DAT`, a `START.EXE` loader, and ~69 `.PAK` picture
+  files in the room/object naming convention `docs/internals/scott-dialects-spec.md`
+  §8.5/§8.6 describes. `read_story_file` finds the `.dat` the same way it finds
+  any story — `zip_story` scans every entry by *content* via `extract_story`,
+  so the many `.PAK`s and the `.EXE` ahead of it in archive order are walked
+  past rather than mistaken for the game (none of them parses as a Scott
+  database, Z-code, Glulx or Blorb).
+
+  A decoder for those `.PAK` files has to live in `app`, not `scott` — `scott`
+  is one of the zero-external-dependency VM crates and cannot take on the `zip`
+  crate — so the seam a "family-E" decoder wants (the format §8.5/§8.6 spec
+  describes; the Scott Adams bullet above notes it is still undecoded) is a
+  same-crate one, and `zip_resource_blorb` just above `read_zip_entry` in
+  `hints.rs` is its exact template: `pub(crate)`, built on the private
+  single-pass `for_each_zip_entry` (one archive open, one walk, ranked by
+  shared stem with the zip's own name), and called from a different module —
+  `graphics.rs` — to feed a zip-sourced game's `PictSource`. A `.PAK` resolver
+  wants the same shape with a different filter (enumerate every entry once,
+  keep the ones matching §8.6's room/object name patterns, hand back their
+  (name, bytes) pairs), which reuses `for_each_zip_entry`'s existing budget
+  (`MAX_ZIP_SCAN`) for free — but no such `pub(crate)` function exists today,
+  only the Blorb-shaped one, so this is the "one-function addition" a decoder
+  lane would make first. (Two fully `pub` doors also reach zip entries from
+  *outside* this crate — `hints::zip_entry_names` and `hints::read_zip_entry`
+  — but each `read_zip_entry` call reopens the archive and reparses its
+  central directory, fine for the one hint file or one Blorb their existing
+  callers fetch and the wrong shape for pulling ~60 pictures at once; SQ-1465
+  is filed for a batch-capable version of that pair, for whichever future
+  consumer needs zip entries from outside `app` — the Scott decoder itself
+  will not, since it lives inside this crate.)
+
+  **The other missing half is not zip access at all, but the plumbing past
+  it**: `ScottSession::new`/`new_with_options` take `pict_blorb: Option<blorb::Blorb>`
+  for pictures and nothing else — there is no channel today for raw decoded
+  `.PAK` frames to reach `PictSource`/`current_canvas` the way a Blorb's `Pict`
+  chunks already do. Building the decoder needs both the `for_each_zip_entry`-shaped
+  companion resolver above and a second picture-source variant `ScottSession`
+  can hold beside `PictSource`. Neither is built here; this is the seam a
+  future lane would extend.
+
 - **A URL** — anywhere a path is accepted. lanthorn fetches it, hands the file to
   the same loader, so every format above works without a second code path, and
   then offers to keep it in your library so the next launch finds it without
