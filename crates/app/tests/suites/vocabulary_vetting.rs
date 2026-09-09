@@ -561,6 +561,12 @@ fn the_cost_of_a_vetted_offer_on_the_z_machine() {
 /// The case measures all three: the live cold boot that writes the cache, the
 /// live warm boot that reads it, and a shadow booted each way. Numbers, not an
 /// estimate — it prints them.
+///
+/// It counts OPCODES and asserts on those; the wall times are printed beside
+/// them and asserted on nowhere (SQ-1400 — the ratios it used to assert were a
+/// flake under a parallel run). "Booting the way the live game boots" is a
+/// statement about which code the shadow runs, and a dispatched-opcode count
+/// says that exactly, identically on a loaded machine and a quiet one.
 #[test]
 fn counterfeit_monkeys_shadow_boots_the_way_the_live_game_boots() {
     let Some(bytes) = story("CounterfeitMonkey-11.gblorb") else { return };
@@ -570,14 +576,16 @@ fn counterfeit_monkeys_shadow_boots_the_way_the_live_game_boots() {
         panic!("CounterfeitMonkey-11.gblorb is a Glulx story");
     };
 
-    let dir = std::env::temp_dir().join(format!("lanthorn-sq1124-cm-{}", std::process::id()));
-    let _ = std::fs::remove_dir_all(&dir);
-    std::fs::create_dir_all(&dir).expect("temp game_dir");
+    // Unique per CALL, not per process (CLAUDE.md / SQ-1131): a pid-keyed name
+    // is one directory shared by every caller in the binary, and this case both
+    // writes a cache into it and asserts on what is there afterwards.
+    let dir = app::scratch_dir("sq1124-cm");
 
     // The live session, twice, against a persistent store it may write: the
     // first launch runs the initialisation and leaves the cache, the second
-    // restores it. If the second is not dramatically faster, this fixture is not
-    // the game the finding is about and every number below is meaningless.
+    // restores it. If the second does not run dramatically fewer opcodes, this
+    // fixture is not the game the finding is about and every number below is
+    // meaningless.
     let live_in = |dir: PathBuf, vfs: &[u8]| {
         let b = blorb::Blorb::parse(bytes.clone()).ok();
         app::glulx_session::GlulxSession::new_in(
@@ -588,51 +596,57 @@ fn counterfeit_monkeys_shadow_boots_the_way_the_live_game_boots() {
     };
     let t = std::time::Instant::now();
     let cold_session = live_in(dir.clone(), &[]);
-    let live_cold = t.elapsed();
+    let (live_cold, live_cold_ops) = (t.elapsed(), cold_session.insn_count());
     let vfs = app::engine::Engine::vfs_bytes(&cold_session);
     eprintln!("  vfs after the cold boot: {} bytes, dirty={}", vfs.len(),
         app::engine::Engine::vfs_dirty(&cold_session));
     drop(cold_session);
     let t = std::time::Instant::now();
     let live = live_in(dir.clone(), &vfs);
-    let live_warm = t.elapsed();
+    let (live_warm, live_warm_ops) = (t.elapsed(), live.insn_count());
     let save = live.save_state();
     let cached: Vec<String> = std::fs::read_dir(&dir)
         .map(|d| d.filter_map(|e| e.ok()).map(|e| e.file_name().to_string_lossy().into()).collect())
         .unwrap_or_default();
 
-    // SQ-1121's shadow: no store at all.
-    let mut blind = app::probe::ShadowProbe::default();
-    blind.arm(recipe(&bytes));
+    // The shadow, booted each way, through the very constructor the probe's
+    // worker calls (`probe::build`) with the very fields the recipe carries —
+    // so what is counted here is the shadow's own boot, not a lookalike.
+    // SQ-1121's shadow is the first: no store at all.
+    let shadow_ops = |store: PathBuf, vfs: &[u8]| {
+        app::glulx_session::GlulxSession::new_shadow(store, image.clone(), 80, 24, true, vfs, None)
+            .expect("the shadow boots")
+            .insn_count()
+    };
     let t = std::time::Instant::now();
-    let blind_run = blind.run(&live, &["take zqxwvj".to_string()]);
-    let blind_cold = t.elapsed();
-
+    let blind_ops = shadow_ops(PathBuf::new(), &[]);
+    let blind_boot = t.elapsed();
     // SQ-1124's shadow: the live game's own store, read-only.
+    let t = std::time::Instant::now();
+    let store_ops = shadow_ops(dir.clone(), &vfs);
+    let store_boot = t.elapsed();
+
+    // And the seam end to end on that same recipe, which is the behaviour the
+    // fix is for: the corpus's biggest game gets its offers vetted.
     let mut probe = app::probe::ShadowProbe::default();
     probe.arm(recipe_in(&bytes, dir.clone(), vfs.clone()));
-    let t = std::time::Instant::now();
     let first = probe.run(&live, &["take zqxwvj".to_string()]);
-    let cold = t.elapsed();
-    let t = std::time::Instant::now();
     let second = probe.run(&live, &["take zqxwvj".to_string()]);
-    let warm = t.elapsed();
 
     eprintln!(
         "Glulx (Counterfeit Monkey 11, {} KiB container): \n  \
-         live boot cold {live_cold:?}, warm {live_warm:?} (cache: {cached:?})\n  \
+         live boot cold {live_cold_ops} opcodes ({live_cold:?}), \
+         warm {live_warm_ops} opcodes ({live_warm:?}) (cache: {cached:?})\n  \
          snapshot {} bytes\n  \
-         shadow, NO store (SQ-1121):   first probe {blind_cold:?}, answered={}\n  \
-         shadow, live store read-only: first probe {cold:?}, answered={}; \
-         warm probe {warm:?}, answered={}\n  \
-         seam armed={} after {} probes",
+         shadow, NO store (SQ-1121):   {blind_ops} opcodes ({blind_boot:?})\n  \
+         shadow, live store read-only: {store_ops} opcodes ({store_boot:?})\n  \
+         seam armed={} after {} probes, answered={} then {}",
         bytes.len() / 1024,
         save.bytes.len(),
-        blind_run.is_some(),
-        first.is_some(),
-        second.is_some(),
         probe.is_armed(),
         probe.probes,
+        first.is_some(),
+        second.is_some(),
     );
 
     // Non-vacuity: the cache has to exist, or the shadow read nothing and the
@@ -642,28 +656,40 @@ fn counterfeit_monkeys_shadow_boots_the_way_the_live_game_boots() {
         "Counterfeit Monkey wrote no fixed-name save, so there was no cache to read: {cached:?}"
     );
     assert!(!vfs.is_empty(), "and no VFS marker, which is the half that makes it ASK");
-    // Proves the shadow reuses the live game's warm boot path rather than
-    // booting cold. The margin is 1.5x, not 2x: cold boot has gotten a lot
-    // faster since this assertion was written, narrowing the gap it measures.
-    // Measured 2026-09-06 on a quiet machine in a debug build: warm 2.69 s
-    // against cold 5.05 s — comfortably past 1.5x, but the old 2x missed it
-    // by 0.16 s.
+    // **Opcodes, not a clock** (SQ-1400). The elapsed times above are printed
+    // and never asserted on. This case used to compare four Counterfeit Monkey
+    // boots by wall time as ratios, and as cold boot got faster both margins
+    // narrowed to about 5% — so a parallel `-p lanthorn` run failed it on
+    // scheduling noise alone, while it passed in isolation. A dispatched-opcode
+    // count is the same number on a quiet machine and under load, and it is
+    // what the claim is actually about: a boot that `@restore`s the init cache
+    // does not EXECUTE the initialisation. The margins are order-of-magnitude
+    // rather than 1.5x because that is what the counts really differ by.
     assert!(
-        live_warm * 3 < live_cold * 2,
-        "the live warm boot ({live_warm:?}) is not meaningfully faster than the cold one \
-         ({live_cold:?}) — this fixture does not use the cache and the finding does not apply"
+        live_warm_ops * 4 < live_cold_ops,
+        "the live warm boot ({live_warm_ops} opcodes) did not skip the initialisation the cold \
+         one ran ({live_cold_ops}) — this fixture does not use the cache and the finding does \
+         not apply"
     );
     // The claim.
     assert!(first.is_some(), "the shadow answered nothing");
     assert!(probe.is_armed(), "the seam gave up on a story it can now afford");
-    // Proves reading the live game's store still buys a clear win over a blind
-    // cold boot. Same cause as above, same 1.5x margin: cold boot got faster
-    // across the board, so the win is smaller than it used to be but not gone.
-    // Measured 2026-09-06 on a quiet machine in a debug build: 2.68 s (store)
-    // against 4.20 s (blind) — comfortably past 1.5x, short of the old 2x.
-    assert!(
-        cold * 3 < blind_cold * 2,
-        "reading the live game's store bought nothing: {cold:?} against {blind_cold:?}"
+    // And the title of the case, spelled exactly: the shadow that reads the live
+    // game's store dispatches the SAME opcodes the live warm boot dispatched,
+    // and a shadow without one dispatches the same as the live COLD boot — the
+    // whole initialisation, which is SQ-1121's defect. Equality, not a band:
+    // both sides are the same story booted through the same `new_with_store`
+    // with the same screen, so any difference is a difference in path and worth
+    // failing on. (If a legitimate change gives the shadow a different screen
+    // or a different acceleration setting, these are the numbers to re-measure.)
+    assert_eq!(
+        store_ops, live_warm_ops,
+        "the shadow reading the live game's store did not take the live game's warm boot path"
+    );
+    assert_eq!(
+        blind_ops, live_cold_ops,
+        "a shadow with no store did not re-run the initialisation, so the pair above is not \
+         measuring the store at all"
     );
 
     // And it wrote nothing while doing it: the store holds exactly what the live
