@@ -171,25 +171,57 @@ fn glulxercise_all_groups_pass() {
     }
     stdin.flush().expect("flush stdin");
 
-    // Wait until every group has reported, or give up after a deadline sized to
-    // the work rather than a flat wall-clock budget. CI runs this under `cargo
-    // test` (debug profile, sharing 3-4 cores with every other test binary in
-    // the run), several times slower than a warm local `nextest` run on an
-    // idle machine — a flat 180s deadline let both ubuntu-latest and
-    // windows-latest reach 67 of 68 groups before timing out (CI run
-    // 34277149548, commit e058047a). This test measures conformance, not
-    // speed, so its deadline scales with `want_count`: 30s/group gives ~34
-    // minutes worst case (68 groups), while the loop below still exits the
-    // moment every group has reported, so the common (fast) case pays
-    // nothing extra.
+    // Wait until every group has REPORTED — passed or failed, either one — or
+    // fail fast on a stall, rather than waiting out a flat total deadline
+    // regardless of outcome. Originally this loop counted only "Passed."
+    // markers, so a group that FAILED (glulxercise prints "N tests failed."
+    // instead of "Passed.") was indistinguishable from one still running: the
+    // count could never reach `want_count`, and the loop burned the entire
+    // 30s-per-group deadline (2040s for 68 groups) before falling through to
+    // the failure assertion below. That is exactly what happened on CI run
+    // 34283470859 (commit 553cb556): the floatexp group's four NaN-pow
+    // failures ran out the clock instead of failing in under a second
+    // (SQ-1433).
+    //
+    // "N tests failed." is glulxercise's own failure counterpart to
+    // "Passed." — captured directly from the interpreter (2026-09-08, by
+    // deliberately breaking `@sqrt` and running `floatexp`; see
+    // `count_tests_failed`'s doc for the raw transcript). Now BOTH markers
+    // count toward "reported", so the loop exits the instant every sent
+    // group has one or the other, whether that is a quick pass or a quick
+    // failure.
+    //
+    // A per-result INACTIVITY timer replaces the flat deadline as the
+    // primary guard: if 60s pass with no NEW group reporting, the test fails
+    // immediately, naming the next group in send order (the one `reported`
+    // results have not yet reached) as the one that stalled — that is a
+    // useful failure on its own, rather than a 2040s wait ending in "got 67".
+    // The original per-group-scaled total (30s * want_count) remains as an
+    // outer safety net beneath it, in case the child hangs before reporting
+    // ANYTHING (so the very first group still gets that much room to boot
+    // and run before the harness gives up entirely).
+    const INACTIVITY_TIMEOUT: Duration = Duration::from_secs(60);
     let wait_start = Instant::now();
-    let deadline = wait_start + Duration::from_secs(30 * want_count as u64);
+    let outer_deadline = wait_start + Duration::from_secs(30 * want_count as u64);
+    let mut last_progress = wait_start;
+    let mut reported = 0usize;
+    let mut stalled_on: Option<&str> = None;
     loop {
-        let count = {
-            let b = buf.lock().unwrap();
-            String::from_utf8_lossy(&b).matches("Passed.").count()
-        };
-        if count >= want_count || Instant::now() >= deadline {
+        let snapshot = String::from_utf8_lossy(&buf.lock().unwrap()).to_string();
+        let count = snapshot.matches("Passed.").count() + count_tests_failed(&snapshot);
+        if count > reported {
+            reported = count;
+            last_progress = Instant::now();
+        }
+        if reported >= want_count {
+            break;
+        }
+        let now = Instant::now();
+        if now.duration_since(last_progress) >= INACTIVITY_TIMEOUT {
+            stalled_on = Some(want.get(reported).copied().unwrap_or("<index past want_count>"));
+            break;
+        }
+        if now >= outer_deadline {
             break;
         }
         thread::sleep(Duration::from_millis(100));
@@ -202,18 +234,91 @@ fn glulxercise_all_groups_pass() {
     let _ = std::fs::remove_dir_all(&data_dir);
 
     let out = String::from_utf8_lossy(&buf.lock().unwrap()).to_string();
+
+    if let Some(group) = stalled_on {
+        panic!(
+            "glulxercise: no new group result for {INACTIVITY_TIMEOUT:?} ({reported}/{want_count} \
+             groups reported after {:?}); stalled waiting on {group:?} (next group in send order, \
+             index {reported} of {want:?}).\n--- transcript so far ---\n{out}",
+            wait_start.elapsed()
+        );
+    }
+
     let passed = out.matches("Passed.").count();
-    // Groups report in the order they were sent, so the (passed - 1)th entry
-    // of `want` names the last one to finish — the next timeout's first clue.
-    let last_reported = passed.checked_sub(1).and_then(|i| want.get(i));
-    assert!(
-        passed >= want_count,
-        "expected >= {want_count} groups ({want:?}) to report Passed., got {passed} after \
-         {:?} (last group to report: {last_reported:?}).\n--- transcript ---\n{out}",
-        wait_start.elapsed()
-    );
-    assert!(
-        !out.contains("tests failed"),
-        "a group reported a failure.\n--- transcript ---\n{out}"
-    );
+    let failed = count_tests_failed(&out);
+    if passed != want_count || failed != 0 {
+        // Segment the transcript by the interpreter's own `>` prompt so the
+        // message names WHICH group failed ("floatexp: 4 tests failed.")
+        // instead of a raw, unattributed count.
+        let chunks = split_by_prompt(&out);
+        let problems: Vec<String> = want
+            .iter()
+            .enumerate()
+            .filter_map(|(i, group)| match chunks.get(i) {
+                Some(chunk) if chunk.contains("Passed.") => None,
+                Some(chunk) => Some(match tests_failed_line(chunk) {
+                    Some(line) => format!("{group}: {line}\n{chunk}"),
+                    None => format!("{group}: reported neither Passed. nor a failure summary\n{chunk}"),
+                }),
+                None => Some(format!("{group}: did not report")),
+            })
+            .collect();
+        panic!(
+            "glulxercise: {passed}/{want_count} groups passed, {failed} failure summaries seen, \
+             after {:?}.\n--- problem groups ---\n{}\n--- full transcript ---\n{out}",
+            wait_start.elapsed(),
+            problems.join("\n---\n")
+        );
+    }
+}
+
+/// Count occurrences of glulxercise's own failure summary line, `"N tests
+/// failed."` — the fail-path counterpart to `"Passed."`, printed once per
+/// group that had at least one bad assertion. Captured directly from the
+/// interpreter (2026-09-08): deliberately breaking `@sqrt` to add 1.0 to its
+/// result and running `floatexp` prints per-assertion detail lines like
+/// `"sqrt 2.25=2.50000 or $40200000 (should be 1.50000 or $3FC00000 FAIL)"`,
+/// then closes with `"10 tests failed."` in exactly the position `"Passed."`
+/// occupies on a clean run. Hand-scanned rather than pulling in a regex
+/// dependency for one fixed-shape pattern: a run of ASCII digits immediately
+/// followed by `" tests failed."`.
+fn count_tests_failed(text: &str) -> usize {
+    let marker = " tests failed.";
+    let mut count = 0;
+    let mut search_from = 0;
+    while let Some(rel) = text[search_from..].find(marker) {
+        let idx = search_from + rel;
+        if idx > 0 && text.as_bytes()[idx - 1].is_ascii_digit() {
+            count += 1;
+        }
+        search_from = idx + marker.len();
+    }
+    count
+}
+
+/// If `chunk` contains glulxercise's failure summary, return the exact `"N
+/// tests failed."` substring (e.g. `"4 tests failed."` for the floatexp
+/// failure SQ-1433 fixes) — the digit-run twin of [`count_tests_failed`],
+/// used to name a specific group's failure rather than merely detect one.
+fn tests_failed_line(chunk: &str) -> Option<&str> {
+    let marker = " tests failed.";
+    let idx = chunk.find(marker)?;
+    let digits_start = chunk[..idx].rfind(|c: char| !c.is_ascii_digit()).map_or(0, |i| i + 1);
+    (digits_start != idx).then(|| &chunk[digits_start..idx + marker.len()])
+}
+
+/// Split a transcript into one chunk per submitted command, in send order,
+/// dropping the boot banner (everything before the first prompt). The
+/// interpreter's prompt (`>`) is printed at the START of a line, immediately
+/// before that command's own response — confirmed empirically (2026-09-08):
+/// `grep -n '>'` against a captured two-command transcript (`arith`,
+/// `floatexp`) shows exactly one `>`-prefixed line per sent command, never
+/// mid-line, and never more than that (the harness never sends `quit`, so
+/// there is no trailing prompt after the last group). Used only to build a
+/// human-readable failure message — a group whose own output happened to
+/// start a line with `>` would mis-segment here, but that only affects which
+/// name a diagnostic prints, not the pass/fail verdict itself (which comes
+/// from whole-transcript marker counts, computed independently above).
+fn split_by_prompt(transcript: &str) -> Vec<&str> {
+    transcript.split("\n>").skip(1).collect()
 }
