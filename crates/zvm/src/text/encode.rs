@@ -119,14 +119,12 @@ fn encode_word_impl(text: &str, version: u8, custom: Option<&[u8; 78]>) -> Vec<u
     // §3.7.1: "In Versions 1 and 2 only, when encoding text for dictionary
     // words, shift-lock Z-characters 4 and 5 are used instead of the
     // single-shift Z-characters 2 and 3 when the next two characters come from
-    // the same alphabet." This is not cosmetic — Bocfel's `dict.cpp` (MIT
-    // licence, Chris Spiegel 2009–2025, read 2026-09-09) records the case that
-    // proves it: Zork I's PDP-10 has the dictionary word "pdp10", whose `1`
-    // and `0` are both in A2 and were therefore compiled with a lock; encode
-    // them as two single shifts and the word never matches, so the machine can
-    // only be referred to by its synonyms. (Frotz's `text.c` does NOT implement
-    // this rule — its `encode_text` always emits the single shift — so Bocfel
-    // is the reference followed here.)
+    // the same alphabet." This is not cosmetic — Zork I's PDP-10 has the
+    // dictionary word "pdp10", whose `1` and `0` are both in A2 and were
+    // therefore compiled with a lock; encode them as two single shifts and the
+    // word never matches, so the machine can only be referred to by its
+    // synonyms. (Frotz's `text.c` does NOT implement this rule — its
+    // `encode_text` always emits the single shift.)
     let chars: Vec<char> = lower.chars().collect();
     let mut current: u8 = 0; // standing alphabet; always A0 from Version 3 on
     for (n, &ch) in chars.iter().enumerate() {
@@ -144,10 +142,8 @@ fn encode_word_impl(text: &str, version: u8, custom: Option<&[u8; 78]>) -> Vec<u
         // shift (or shift-lock) plus its body, or the §3.4 escape's shift plus
         // its three Z-chars, is emitted in order and cut off exactly at the
         // budget, never skipped whole to make room for a pad Z-char instead.
-        // Bocfel's `dict.cpp` (MIT, Chris Spiegel 2009–2025, read 2026-09-09)
-        // writes straight into its fixed-size 12-Z-char buffer and stops when
-        // it is full, which is this same truncate-in-place; Frotz's `encode_text`
-        // (`text.c`) does likewise.
+        // Both Bocfel and Frotz truncate at the buffer boundary when full,
+        // which is this same truncate-in-place behavior.
         let mut construction: [u8; 4] = [0; 4];
         let mut clen = 0;
         if delta != 0 {
