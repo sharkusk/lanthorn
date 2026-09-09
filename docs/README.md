@@ -55,6 +55,7 @@ these track the code).
 | [`internals/docker.md`](internals/docker.md) | The container image, its two run modes, and the volumes it expects |
 | [`internals/releasing.md`](internals/releasing.md) | The hand-run release procedure: preconditions, dry runs, the release commit, tagging, and the one-time GHCR visibility step |
 | [`internals/v6-graphics.md`](internals/v6-graphics.md) | Graphical Z-machine v6: the hybrid/raster render pipeline, art density vs. text density, per-machine typefaces |
+| [`internals/v6-border-tiling-spec.md`](internals/v6-border-tiling-spec.md) | A functional specification of how Infocom's v6 side borders tile to fill a taller screen — the three-section model measured off real-hardware captures, worked examples, and how to verify a renderer against them |
 | [`internals/persistence.md`](internals/persistence.md) | The three persistence layers in detail: what each captures, when it triggers, what survives |
 | [`internals/gvm-fileref-seam.md`](internals/gvm-fileref-seam.md) | `gvm`'s Glk fileref/file-VFS layer as an embedding seam: the in-memory VFS, the `StepResult`s a host must answer, the sidecar a host must persist, and the name-to-disk boundary |
 | [`internals/remote-sound.md`](internals/remote-sound.md) | Why audio plays on the local device, and how to route it back over SSH |
