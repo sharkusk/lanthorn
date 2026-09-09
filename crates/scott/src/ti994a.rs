@@ -771,6 +771,7 @@ pub fn parse_ti994a(bytes: &[u8]) -> Result<Database, LoadError> {
         // The trailer the reference text format carries an adventure number
         // in has no counterpart here.
         adventure_number: 0,
+        mysterious: false,
         ti99: Some(Ti99Script {
             verb_chains,
             automatic,
@@ -1074,6 +1075,7 @@ mod tests {
                 },
             ],
             adventure_number: 0,
+            mysterious: false,
             ti99: Some(Ti99Script {
                 verb_chains: vec![
                     Vec::new(),

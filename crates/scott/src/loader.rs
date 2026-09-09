@@ -321,7 +321,11 @@ impl<'a> Lexer<'a> {
 /// exactly `//` or exactly `/*`, `text` is left untouched and `None` is
 /// returned. Otherwise the auto-noun runs from just after the first `/` to
 /// the next `/`, or to the end of the string if there is no second `/`.
-fn extract_auto_noun(text: &mut String) -> Option<String> {
+///
+/// `pub(crate)` so [`crate::c64`] applies the identical rule: §6.3 says the
+/// memory-image dialects spell `/WORD/` "identically", and two copies of this
+/// would be two places for that to drift.
+pub(crate) fn extract_auto_noun(text: &mut String) -> Option<String> {
     let first = text.find('/')?;
     let remainder = &text[first..];
     if remainder == "//" || remainder == "/*" {
@@ -365,6 +369,14 @@ impl Database {
         };
         match detect_dialect(bytes) {
             Some(Dialect::Ti994aBytecode) => crate::ti994a::parse_ti994a(bytes),
+            // A Commodore 64 program file carrying one of the eleven
+            // *Mysterious Adventures* (SQ-1414): `crate::c64` identifies it by
+            // the low sixteen bits of the file's own byte sum, so a snapshot
+            // of any OTHER game answering the same dictionary signature falls
+            // through to the refusal below exactly as it did before.
+            Some(Dialect::C64OrZxSnapshot) if crate::c64::looks_like_c64_mysterious_prg(bytes) => {
+                crate::c64::parse_c64_mysterious_prg(bytes)
+            }
             Some(d) => Err(LoadError::UnsupportedDialect(d)),
             None => Err(text_error),
         }
@@ -533,13 +545,22 @@ impl Database {
             // The text format IS the reference shape; only a TI-99/4A
             // release carries a tokenised script instead (SQ-1414).
             ti99: None,
+            // …and the text format carries no series marker either: §6.1 says
+            // a reference-format Mysterious database is recognised "only by
+            // its header counts", which is a catalogue this crate does not
+            // keep. A `.dat` conversion of one of the eleven therefore loads
+            // as an ordinary database, and a host wanting the series' lamp
+            // behaviour for it sets the two options itself.
+            mysterious: false,
         })
     }
 }
 
 /// Cheap content sniff for engine detection, over RAW BYTES: true for a
-/// ScottFree `.dat` (the text format, via [`looks_like_scott`]) **or** a
-/// TI-99/4A tokenised release (via [`crate::ti994a::looks_like_ti994a`]).
+/// ScottFree `.dat` (the text format, via [`looks_like_scott`]), a TI-99/4A
+/// tokenised release (via [`crate::ti994a::looks_like_ti994a`]) **or** a
+/// Commodore 64 *Mysterious Adventures* program file (via
+/// [`crate::c64::looks_like_c64_mysterious_prg`]).
 ///
 /// This is the sniff a multi-engine host wants, because those are exactly
 /// the two things [`Database::parse`] reads. [`looks_like_scott`] takes a
@@ -550,6 +571,7 @@ impl Database {
 pub fn looks_like_scott_bytes(bytes: &[u8]) -> bool {
     std::str::from_utf8(bytes).is_ok_and(looks_like_scott)
         || crate::ti994a::looks_like_ti994a(bytes)
+        || crate::c64::looks_like_c64_mysterious_prg(bytes)
 }
 
 /// Cheap content sniff for engine detection: parse the 12 header ints and sanity-check.

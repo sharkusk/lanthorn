@@ -270,6 +270,14 @@ const STORY_EXTS: &[&str] = &[
     // header in front of the raw memory image — and is the extension every
     // one of the twelve original titles is distributed under.
     "fiad",
+    // The Commodore 64 *Mysterious Adventures* (SQ-1414). A `.prg` is a
+    // Commodore program file — two load-address bytes and then a raw 6502
+    // memory image — and is how the eleven titles come off their compilation
+    // disks. The extension is not exclusively Scott's, but neither is `.dat`:
+    // `entry_from_loaded` still requires the bytes to build a database before
+    // a row appears, so a `.prg` of anything else costs one open and is
+    // listed nowhere.
+    "prg",
     // A ZIP is opened by `hints::read_story_file` exactly as a disk image is —
     // the container is unwrapped and the story inside comes out — so the scan
     // that lists disk images had no principled reason to skip archives, and
@@ -1659,9 +1667,13 @@ fn entry_from_loaded(
     let launchable = match &loaded {
         crate::hints::LoadedStory::ZCode(b) => zvm::memory::Memory::new(b.clone()).is_ok(),
         crate::hints::LoadedStory::Glulx(b) => gvm::Memory::new(b.clone()).is_ok(),
-        crate::hints::LoadedStory::Scott(b) => {
-            std::str::from_utf8(b).ok().map(|s| scott::Database::parse(s).is_ok()).unwrap_or(false)
-        }
+        // Over the BYTES, not through `from_utf8`. Two of the three encodings
+        // `scott::Database::parse` reads are binary memory images — the
+        // TI-99/4A tokenised releases and the Commodore 64 *Mysterious
+        // Adventures* program files (SQ-1414) — and no UTF-8 conversion
+        // survives either, so the older spelling listed `BATON.prg` as
+        // unlaunchable while `lanthorn BATON.prg` opened it perfectly well.
+        crate::hints::LoadedStory::Scott(b) => scott::Database::parse(b).is_ok(),
     };
     if !launchable {
         return None;

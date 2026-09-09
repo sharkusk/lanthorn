@@ -23,6 +23,19 @@ Absolute URLs or no link.
 
 ### Added
 
+- **The Commodore 64 *Mysterious Adventures* now load.** Brian Howarth's
+  eleven-game series — *The Golden Baton*, *The Time Machine*, both parts of
+  *Arrow of Death*, *Escape from Pulsar 7*, *Circus*, *Feasibility Experiment*,
+  *The Wizard of Akyrz*, *Perseus and Andromeda*, *Ten Little Indians* and
+  *Waxworks* — was sold for the Commodore 64 on two compilation disks, and
+  those releases are a snapshot of the machine's memory rather than the
+  plain-text database lanthorn has always read. Hand lanthorn or `scott-cli`
+  one of the eleven program files and it opens and plays, with the map, the
+  vocabulary help and everything else working as usual — the games' own
+  first-person voice, and the Howarth lamp that counts its remaining turns out
+  loud and is gone for good once it burns out. lanthorn also decodes the
+  line-drawn picture each room carries, though nothing draws them yet.
+  (SQ-1414)
 - **Scott Adams TI-99/4A releases now load.** The twelve original Adventure
   International games — *Adventureland* through *The Golden Voyage* — were also
   sold for the TI-99/4A, and those releases are a completely different kind of
