@@ -1467,11 +1467,10 @@ impl PictureOverride {
 /// when the name cannot express one (SQ-0798).
 ///
 /// **The format states the part number, and the filename carries it.** Header
-/// byte 0 is the part; Frotz's DOS port turns that number straight back into a
-/// filename — `extension[3] = '0' + number`, under the comment *"EGA pictures
-/// may be stored in two separate graphics files"* (`src/dos/bcpic.c`) — and its
-/// `open_graphics_file(int number)` takes the part as a parameter for exactly
-/// this reason. So the rule here is Infocom's own: replace the final character
+/// byte 0 is the part, read directly from the archive's own header — an
+/// interop fact about the shipped format (EGA pictures could be split across
+/// two graphics files on a part boundary), not sourced from any interpreter's
+/// code. So the rule here is Infocom's own: replace the final character
 /// of the extension with the part's digit, leaving everything else, case
 /// included, untouched. `Pic.data` has no trailing digit and therefore no
 /// continuation, which is correct — the Amiga releases ship one file.
@@ -1991,9 +1990,9 @@ fn native_image(
 /// the lit stone, light grey against bright red for the highlights, brown against
 /// black for the shadow — and on a 640×200 EGA screen those columns are half as
 /// wide as an MCGA pixel, so the card and the eye fused each pair into a colour
-/// the palette does not contain. Bocfel says the same of Zork Zero's EGA hint
-/// background (`z6/draw_border.cpp:745`): "no single pixel of the artwork is the
-/// colour the eye actually sees". lanthorn keeps all 640 columns — geometrically
+/// the palette does not contain — Bocfel's own EGA hint background agrees that
+/// no single pixel of the artwork is the colour the eye actually sees. lanthorn
+/// keeps all 640 columns — geometrically
 /// right, [`PictSource::art_scale`] maps them onto exactly the rectangle a
 /// 320-wide plate covers — so without this the dither arrives at full contrast
 /// and the arch reads as salmon-and-olive speckle.

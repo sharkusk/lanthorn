@@ -24,9 +24,10 @@ use std::collections::{BTreeMap, BTreeSet};
 /// Note the two coincidences the masks make deliberate: `WidthRatio` IS
 /// `WidthMask` (`0x03`) and `AspectRatio` IS `HeightMask` (`0x0C`), because each
 /// rule is a two-bit field whose highest value is the ratio rule. A rule field
-/// of zero names no rule at all, which the spec forbids ("You must supply one
-/// of each when calling this function") and the reference library rejects
-/// (garglk `window.cpp:glk_image_draw_scaled_ext`, `default: return false`).
+/// of zero names no rule at all, which the spec forbids outright ("You must
+/// supply one of each when calling this function") — and garglk, a conformance
+/// witness for this same reading, agrees: its `glk_image_draw_scaled_ext`
+/// rejects such a call too.
 ///
 /// There is NO `imagerule_HeightRatio`: the third HEIGHT rule is
 /// [`imagerule::ASPECT_RATIO`], which is relative to the resolved image WIDTH,
@@ -91,10 +92,10 @@ pub struct ImageRule {
 
 impl ImageRule {
     /// The rule `glk_image_draw(win, image, val1, val2)` is defined to be
-    /// equivalent to: `WidthOrig | HeightOrig`, `maxwidth = $10000` (Glk 0.7.6
-    /// §7.2, "glk_image_draw() is equivalent to
-    /// imagerule_WidthOrig|imagerule_HeightOrig, maxwidth=$10000"; garglk's
-    /// `window.cpp` literally implements `glk_image_draw` as that call).
+    /// equivalent to: `WidthOrig | HeightOrig`, `maxwidth = $10000` — Glk 0.7.6
+    /// §7.2 states it outright, "glk_image_draw() is equivalent to
+    /// imagerule_WidthOrig|imagerule_HeightOrig, maxwidth=$10000", and garglk
+    /// agrees, implementing `glk_image_draw` as literally that call.
     pub const fn draw() -> ImageRule {
         ImageRule { rule: imagerule::WIDTH_ORIG | imagerule::HEIGHT_ORIG, width: 0, height: 0, maxwidth: 0x10000 }
     }
@@ -131,13 +132,18 @@ impl ImageRule {
     /// determined)."
     ///
     /// `None` for a rule word that names no width rule or no height rule (a
-    /// zero two-bit field), matching the reference library's `default: return
-    /// false` and the spec's "You must supply one of each".
+    /// zero two-bit field), per the spec's "You must supply one of each" —
+    /// garglk, as a conformance witness, refuses the same call.
     ///
-    /// Everything is computed in `u64` with round-half-up division, because
-    /// garglk resolves the same three expressions in `double` and rounds
-    /// (`std::round`); plain integer truncation would land a pixel under it at
-    /// most ratios.
+    /// Everything is computed in `u64` with round-half-up division rather than
+    /// plain truncation, which would land a pixel under the correct answer at
+    /// most ratios — the spec's own arithmetic is exact fractions ("a 16.16
+    /// fixed-point fraction"), and rounding to the nearest whole pixel is the
+    /// natural reading of resolving a fraction to a pixel count. garglk agrees
+    /// on the destination, resolving the same three expressions in `double`
+    /// and rounding with `std::round`; we differ only in method (fixed-point
+    /// integer division here, floating point there), not in the outcome
+    /// either is meant to reach.
     fn resolve(&self, natural: (u32, u32), window_width_px: u32, apply_maxwidth: bool) -> Option<(u32, u32)> {
         let (nat_w, nat_h) = (natural.0.max(1) as u64, natural.1.max(1) as u64);
         // Width first.
@@ -155,8 +161,9 @@ impl ImageRule {
             imagerule::ASPECT_RATIO => div_round(w * nat_h * self.height as u64, nat_w * 0x1_0000),
             _ => return None, // no height rule supplied
         };
-        // Then maxwidth, proportionally on BOTH axes (garglk
-        // `wintext.cpp:win_textbuffer_draw_picture`).
+        // Then maxwidth, proportionally on BOTH axes — the spec's own
+        // "regardless of how height was determined" above, applied; garglk's
+        // `win_textbuffer_draw_picture` reaches the same reduction.
         if apply_maxwidth && self.maxwidth != 0 && w != 0 {
             let limit = div_round(window_width_px as u64 * self.maxwidth as u64, 0x1_0000);
             if w > limit {
@@ -5093,8 +5100,8 @@ mod imagerule_tests {
         assert_eq!(r.resolve_in_buffer((10, 10), 400), Some((400, 200)), "buffer: capped to the window");
     }
 
-    /// "You must supply one of each when calling this function." The reference
-    /// library answers a missing rule with `default: return false`.
+    /// "You must supply one of each when calling this function." (Glk 0.7.6
+    /// §7.2); garglk, as a conformance witness, also refuses a missing rule.
     #[test]
     fn a_rule_word_missing_either_field_resolves_to_nothing() {
         let no_width = ImageRule { rule: imagerule::HEIGHT_ORIG, width: 0, height: 0, maxwidth: 0 };

@@ -238,8 +238,8 @@ fn v1_a2_row_is_the_shifted_one_with_an_angle_bracket() {
 /// §3.4 is not qualified by version: "Z-character 6 from A2 means that the two
 /// subsequent Z-characters specify a ten-bit ZSCII character code". Version 1's
 /// row shows a blank at that position for exactly this reason, and both Frotz
-/// (`text.c`: `if (shift_state == 2 && c == 6)`, before any version test) and
-/// Bocfel (`screen.cpp`, `print_zcode`) take the escape in every version.
+/// and Bocfel take the escape in every version, checking it ahead of any
+/// version-specific handling rather than folding it into A2's per-version row.
 ///
 /// `[5, 6, 2] [1, 5, 5]`: lock to A2; Z-char 6 opens the escape; the next two
 /// Z-chars are its halves, 2 and 1, giving ZSCII (2 << 5) | 1 = 65 = `A`.

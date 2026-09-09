@@ -142,8 +142,8 @@ struct Args {
     /// `--data-dir`: where saves live. `None` puts them beside the `.dat`, which
     /// is what `cli_host::game_dir` does for the other two hosts.
     data_dir: Option<String>,
-    /// ScottFree's four runtime option flags (SQ-1413), mirroring `main`'s own
-    /// `-y`/`-s`/`-t`/`-p` (`ScottCurses.c:1299-1342`) — see `scott::Options`.
+    /// ScottFree's four runtime option flags (SQ-1413), mirroring its own
+    /// `-y`/`-s`/`-t`/`-p` — see `scott::Options`.
     options: scott::Options,
 }
 
@@ -698,10 +698,10 @@ mod tests {
         let _ = fs::remove_dir_all(&dir);
     }
 
-    /// A hand-authored ScottFree 1.14 save (`SaveGame`/`LoadGame`,
-    /// `ScottCurses.c:653-706`), shaped for `tiny_cave.dat` (`NumItems=9`, 10
-    /// item slots, 4 rooms 0..=3): 16 `counter room` pairs, a state line,
-    /// then one location per item.
+    /// A hand-authored ScottFree 1.14 save (see the field order documented
+    /// on `scott::Vm::restore_scottfree`), shaped for `tiny_cave.dat`
+    /// (`NumItems=9`, 10 item slots, 4 rooms 0..=3): 16 `counter room`
+    /// pairs, a state line, then one location per item.
     fn tiny_cave_scottfree_save() -> String {
         let mut s = String::new();
         for ct in 0..16 {

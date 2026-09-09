@@ -73,10 +73,11 @@ struct Specimen {
     turns: usize,
 }
 
-/// The three titles whose side art this work extends — the same three named in
-/// Bocfel's `draw_border.cpp` header ("Used by Arthur, Shogun, and Zork Zero").
-/// Journey is deliberately absent: its frame is glyphs, not artwork (SQ-0750),
-/// and Bocfel's border file does not mention it either.
+/// The three titles whose side art this work extends — the three v6 releases
+/// whose native archives carry side-pillar or side-slab artwork at all; Bocfel's
+/// `draw_border.cpp` header agrees, naming the same three ("Used by Arthur,
+/// Shogun, and Zork Zero"). Journey is deliberately absent: its frame is
+/// glyphs, not artwork (SQ-0750), which Bocfel's border file agrees with too.
 const SPECIMENS: &[Specimen] = &[
     Specimen { title: "Arthur", file: "Arthur - The Quest for Excalibur.adf", release: 54, serial: "890606", turns: 12 },
     Specimen { title: "Shogun", file: "James Clavell's Shogun.adf", release: 295, serial: "890321", turns: 12 },
@@ -1561,7 +1562,10 @@ fn crop(img: &image::RgbaImage, x0: u32, x1: u32) -> image::RgbaImage {
 /// One of Zork Zero's three scene borders, composed into a native 640x400 canvas
 /// exactly as `DISPLAY_BORDER` draws it: the top strip at `(0, 0)`, then the left
 /// pillar flush left and the right pillar flush right, both at `y = strip
-/// height`. Picture numbers from Bocfel's `zorkzero.hpp`.
+/// height`. Picture numbers read directly from Zork Zero's own archive
+/// directory (confirmed against the in-game castle frame below) — an interop
+/// fact about the shipped resource file, not sourced from any interpreter's
+/// code.
 fn compose_scene_border(
     picts: &mut PictSource,
     scene: (&str, u32, u32, u32),
@@ -1616,9 +1620,11 @@ fn compose_scene_border(
 /// `Some((220, 366))` on the right — two spurious shafts, disagreeing.
 #[test]
 fn zork_zeros_other_two_scene_borders_declare_no_shaft_and_agree_across_flanks() {
-    /// `(name, top strip, left pillar, right pillar)` — Bocfel's `zorkzero.hpp`:
-    /// `CASTLE_BORDER` 5 / `OUTSIDE_BORDER` 6 / `UNDERGROUND_BORDER` 7, and
-    /// `*_BORDER_L`/`_R` 0x1f1..0x1f6.
+    /// `(name, top strip, left pillar, right pillar)` — picture numbers read
+    /// directly from Zork Zero's own archive directory: castle 5 / underground
+    /// 7 / jungle 6, and each scene's `L`/`R` pillars 0x1f1..0x1f6. These are
+    /// the game's own resource-archive picture IDs, an interop fact rather
+    /// than a value taken from another interpreter's dispatch table.
     const SCENES: &[(&str, u32, u32, u32)] =
         &[("castle", 5, 0x1f1, 0x1f2), ("underground", 7, 0x1f3, 0x1f4), ("jungle", 6, 0x1f5, 0x1f6)];
     /// Every NATIVE archive shipped for Zork Zero. The Blorb is absent on
@@ -1772,7 +1778,9 @@ fn best_period(img: &image::RgbaImage, rows: (u32, u32)) -> (u32, f64) {
 /// when nothing scores clearly. It subsumes the constant-span case, the argument
 /// went, because a constant shaft autocorrelates at every lag. The bar SQ-0813
 /// set for itself was that it must first reproduce the castle's shipped
-/// derivation — Bocfel's 86 / 26 / 400 / 284 in unit space — on the MCGA art.
+/// derivation — 86 / 26 / 400 / 284 in unit space, the historically-consulted
+/// numbers independently corroborated by measurement (see
+/// `docs/internals/v6-border-tiling-spec.md` §4.4) — on the MCGA art.
 ///
 /// **It reproduces it on nothing.** Measured on the flanks each archive's own
 /// pictures compose (the method case 9 validates against the in-game castle), in
@@ -1830,7 +1838,10 @@ fn best_period(img: &image::RgbaImage, rows: (u32, u32)) -> (u32, f64) {
 /// so and SQ-0813 can be reopened.
 #[test]
 fn autocorrelation_cannot_separate_zork_zeros_scene_borders() {
-    /// `(name, top strip, left pillar, right pillar)` — Bocfel's `zorkzero.hpp`.
+    /// `(name, top strip, left pillar, right pillar)` — picture numbers read
+    /// directly from Zork Zero's own archive directory, same as
+    /// `zork_zeros_other_two_scene_borders_declare_no_shaft_and_agree_across_flanks`
+    /// above.
     const SCENES: &[(&str, u32, u32, u32)] =
         &[("castle", 5, 0x1f1, 0x1f2), ("underground", 7, 0x1f3, 0x1f4), ("jungle", 6, 0x1f5, 0x1f6)];
     /// The three DOS plates. `zork0.pic`'s picture 5 is a full 320x200 screen

@@ -5207,13 +5207,17 @@ impl Machine {
     /// text printing resumes". Called once per '\n' streamed to the window in
     /// [`print_text`].
     ///
-    /// Semantics matched to Frotz: `if countdown != 0 { if --countdown == 0 { call }}`
-    /// — the routine fires exactly once, and because the countdown is now 0 any
-    /// new-line the routine itself emits is a no-op (Frotz's `!= 0` guard), so the
-    /// zeroed prop 9 *is* the re-entrancy guard. The routine "should not attempt to
-    /// print anything" (§8.8.3.2.2); Zork0 r393's is three instructions — set a
-    /// flag byte, `set_margins 0,0`, `rtrue` — i.e. it rolls prose back inside its
-    /// border frame. We run it synchronously via [`run_routine`], which safely
+    /// The countdown is decremented on every new-line and the routine fires the
+    /// instant it reaches zero, exactly once: any new-line the routine's OWN
+    /// output then causes must not re-fire it, and it does not, because that
+    /// decrement only ever runs while the countdown is still nonzero — once it
+    /// hits zero the field itself is what blocks the next decrement, so the
+    /// zeroed prop 9 *is* the re-entrancy guard, with nothing extra to track.
+    /// Frotz's `countdown()` reaches the same guard the same way. The routine
+    /// "should not attempt to print anything" (§8.8.3.2.2); Zork0 r393's is
+    /// three instructions — set a flag byte, `set_margins 0,0`, `rtrue` — i.e.
+    /// it rolls prose back inside its border frame. We run it synchronously
+    /// via [`run_routine`], which safely
     /// abandons (and restores state) if a spec-violating routine attempts a nested
     /// blocking read our step model cannot suspend for. `newline_interrupt_active`
     /// hard-stops recursion for a pathological routine that both prints and re-arms

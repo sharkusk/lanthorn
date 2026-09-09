@@ -182,14 +182,15 @@ fn one_op_sig(opcode: u8, version: u8) -> (bool, bool, bool) {
 /// that is deliberate. §14 lists `show_status` (0x0C), `verify` (0x0D),
 /// `split_window`, `set_window`, `output_stream` and `input_stream` as Version
 /// 3, and §14.2 says a game carrying an opcode outside its version is illegal
-/// and "an interpreter should normally halt". Frotz does not halt: its
-/// `op0_opcodes` table (`src/common/process.c`) holds `z_show_status` and
-/// `z_verify` for every version, and the only entries it swaps by version are
-/// `pop`/`catch` and `not`/`call_1n` — exactly the two rows above. Halting
-/// instead would turn a story whose compiler emitted one stray byte into a dead
-/// session, where executing it is harmless: no Version 1 or 2 release contains
-/// these, so the choice can only ever be felt by a malformed file. Following
-/// Frotz here (SQ-1422).
+/// and "an interpreter should normally halt" — but "should normally" leaves
+/// room not to, and lanthorn chooses not to: halting would turn a story whose
+/// compiler emitted one stray byte into a dead session, where decoding and
+/// executing it anyway is harmless — no Version 1 or 2 release contains these
+/// opcodes, so the choice can only ever be felt by a malformed file. Frotz
+/// makes the same choice (its opcode-dispatch table holds `z_show_status` and
+/// `z_verify` for every version, swapping only `pop`/`catch` and
+/// `not`/`call_1n` by version — exactly the two rows above), which is a second
+/// interpreter agreeing that leniency here is the right reading (SQ-1422).
 fn zero_op_sig(opcode: u8, version: u8) -> (bool, bool, bool) {
     match opcode {
         0x00 => (false, false, false), // rtrue
@@ -486,14 +487,15 @@ pub fn decode_into(mem: &Memory, pc: u32, version: u8, mut operands: Vec<Operand
     let (mut stores, branches, has_text) = get_signature(&operand_count, opcode, version);
 
     // v6 `pull` (ZMSD §15): the instruction is `pull stack -> (result)` — it
-    // ALWAYS carries a store byte in v6, whatever the operand encoding (frotz
-    // z_pull calls store() unconditionally in its V6 branch; user vs game stack
-    // is picked by argument count at execution, not operand type). Missing the
-    // store byte mis-reads it as the next opcode, silently corrupting all
+    // ALWAYS carries a store byte in v6, whatever the operand encoding (user
+    // vs game stack is picked by argument count at execution, not operand
+    // type, so the store target cannot be conditional on that either). Missing
+    // the store byte mis-reads it as the next opcode, silently corrupting all
     // following decode — the failure behind the SQ-0452 parser soft-lock. An
     // earlier fix keyed this off a Large-constant operand only, which repaired
     // direction parsing but left Zork Zero's verb path (Var-operand encoding)
-    // corrupted.
+    // corrupted. Frotz's own v6 `pull` handling stores unconditionally too,
+    // for the same reason.
     if version == 6 && operand_count == OperandCount::Var && opcode == 0x09 {
         stores = true;
     }
@@ -854,10 +856,11 @@ mod tests {
     }
 
     // v6 `pull stack -> (result)` ALWAYS carries a store byte, whatever the
-    // operand encoding — frotz z_pull calls store() unconditionally in its V6
-    // branch and picks user vs game stack by argc, not operand type. Zork Zero's
-    // verb parse path encodes the stack address as a Var operand; keying the
-    // store byte off Operand::Large alone corrupted decode there (SQ-0452).
+    // operand encoding — user vs game stack is picked by argument count at
+    // execution, not by operand type, so the store byte cannot be conditional
+    // on that either. Zork Zero's verb parse path encodes the stack address as
+    // a Var operand; keying the store byte off Operand::Large alone corrupted
+    // decode there (SQ-0452). Frotz stores unconditionally here too.
     #[test]
     fn v6_pull_var_operand_has_store_byte() {
         let mut m = Memory::new(sample_story(6)).unwrap();

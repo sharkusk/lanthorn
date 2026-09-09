@@ -122,8 +122,9 @@ fn the_command_record_round_trips_through_input_stream_1() {
         "an exhausted command file must revert to the keyboard"
     );
 
-    // And a replay is not re-recorded into the file it came from (Frotz's
-    // `ostream_record && !istream_replay`, `stream.c`).
+    // And a replay is not re-recorded into the file it came from: an active
+    // input replay must not also be echoed back onto an output record stream,
+    // or reading a command file would grow the very file being read.
     assert!(
         !StreamFiles::commands_path(&replay_dir).metadata().is_ok_and(|m| m.len() as usize > recorded.len()),
         "replaying grew the very file being replayed"

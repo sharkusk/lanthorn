@@ -1,16 +1,10 @@
-//! ScottFree 1.14's four runtime option flags (`ScottCurses.c:1299-1342`,
-//! `main`'s `-y`/`-s`/`-t`/`-p` switches), ported as a value on [`crate::Vm`]
-//! rather than a process-global — this crate takes no I/O policy, so there is
-//! nowhere for a global to live, and a host embedding several sessions (a
-//! library browser, a test harness looping over fixtures) needs each session
-//! able to choose independently anyway.
-//!
-//! ```c
-//! case 'y': Options|=YOUARE; break;
-//! case 's': Options|=SCOTTLIGHT; break;
-//! case 't': Options|=TRS80_STYLE; break;
-//! case 'p': Options|=PREHISTORIC_LAMP; break;
-//! ```
+//! ScottFree 1.14's four runtime option flags — `-y`/`-s`/`-t`/`-p`, named
+//! `YOUARE`/`SCOTTLIGHT`/`TRS80_STYLE`/`PREHISTORIC_LAMP` in ScottFree's own
+//! usage message — held as a value on [`crate::Vm`] rather than a
+//! process-global — this crate takes no I/O policy, so there is nowhere for
+//! a global to live, and a host embedding several sessions (a library
+//! browser, a test harness looping over fixtures) needs each session able to
+//! choose independently anyway.
 //!
 //! [`Options::default`] matches ScottFree's own default — every flag off,
 //! i.e. exactly what running ScottFree with none of `-y -s -t -p` gives you —
@@ -22,13 +16,13 @@
 //! the full inventory of what changes.
 
 /// How the current room's exits/items block is laid out — the part of
-/// ScottFree's `Look()` (`ScottCurses.c:436-528`) that `-t`/[`Options::trs80_style`]
-/// switches, plus this crate's own pre-existing layout.
+/// ScottFree's own observed `Look()` behaviour that
+/// `-t`/[`Options::trs80_style`] switches, plus this crate's own
+/// pre-existing layout.
 ///
 /// This is deliberately narrower than the full `TRS80_STYLE` flag: ScottFree's
-/// `-t` ALSO changes the inventory command's item separator (case 66,
-/// `ScottCurses.c:925-953`) and the terminal geometry (`main`,
-/// `ScottCurses.c:1359-1370`) — neither of which this crate models, since
+/// `-t` ALSO changes the inventory command's item separator (case 66) and
+/// the terminal geometry — neither of which this crate models, since
 /// this crate has no terminal of its own and the inventory separator is a
 /// cosmetic detail no `.dat` file depends on. `Presentation` covers exactly
 /// the one thing [`crate::Vm::room_block`] renders.
@@ -40,7 +34,7 @@ pub enum Presentation {
     ScottFree,
     /// ScottFree's `-t`/`TRS80_STYLE` layout: items each followed by `". "`
     /// (no `" - "` separator) and the whole block framed by the TRS-80's
-    /// `<------>` rule (`TRS80_LINE`, `ScottCurses.c:97`).
+    /// `<------>` rule.
     Trs80,
     /// lanthorn's own pre-existing layout (exits joined `". "`, items each on
     /// their own indented line) — a THIRD presentation, matching neither of
@@ -81,8 +75,10 @@ impl Default for Presentation {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 #[non_exhaustive]
 pub struct Options {
-    /// `-y`/`YOUARE` (`ScottCurses.c:1310-1312`): second-person replies
-    /// ("You are dead.", "You are carrying:") in place of ScottFree's default
+    /// `-y`/`YOUARE`, pinned by
+    /// `you_are_option_swaps_death_and_inventory_wording` in
+    /// scottfree_parity.rs: second-person replies ("You are dead.", "You
+    /// are carrying:") in place of ScottFree's default
     /// first-person ones ("I am dead.", "I'm carrying:"). See [`Wording`] for
     /// every string this swaps.
     ///
@@ -91,23 +87,25 @@ pub struct Options {
     /// note, 2026-09-08) and ScottFree's own convention of shipping some
     /// Brian Howarth titles with `-y` in their launch script.
     pub you_are: bool,
-    /// `-s`/`SCOTTLIGHT` (`ScottCurses.c:1319-1321`): the original Adams lamp
-    /// countdown wording — "Light runs out in N turns." every turn under 25,
-    /// "Light has run out! " at zero — replacing ScottFree's own embellished
-    /// "Your light is growing dim." (only every 5th turn) / "Your light has
-    /// run out." (`main`, `ScottCurses.c:1416-1452`).
+    /// `-s`/`SCOTTLIGHT`, pinned by
+    /// `scott_light_option_shows_a_running_countdown_instead_of_growing_dim`
+    /// in scottfree_parity.rs: the original Adams lamp countdown wording —
+    /// "Light runs out in N turns." every turn under 25, "Light has run
+    /// out! " at zero — replacing ScottFree's own embellished "Your light
+    /// is growing dim." (only every 5th turn) / "Your light has run out."
     pub scott_light: bool,
-    /// `-t`/`TRS80_STYLE` (`ScottCurses.c:1322-1324`): the TRS-80 room-block
-    /// layout — see [`Presentation::Trs80`]. Setting this to `true` alone does
-    /// NOT change [`Options::presentation`]; a host wanting the TRS-80 layout
-    /// sets `presentation` explicitly (see [`Options::with_trs80_style`]'s doc
+    /// `-t`/`TRS80_STYLE`: the TRS-80 room-block layout — see
+    /// [`Presentation::Trs80`]. Setting this to `true` alone does NOT change
+    /// [`Options::presentation`]; a host wanting the TRS-80 layout sets
+    /// `presentation` explicitly (see [`Options::with_trs80_style`]'s doc
     /// for why the two are kept separate).
     pub trs80_style: bool,
-    /// `-p`/`PREHISTORIC_LAMP` (`ScottCurses.c:1325-1327`): the light source
-    /// is destroyed (`Location=DESTROYED`) the instant its fuel reaches zero,
-    /// rather than merely going dark and staying an inert carried item —
-    /// ScottFree's original Adams-era behaviour, restored for the games that
-    /// were tuned against it (`main`, `ScottCurses.c:1430-1431`).
+    /// `-p`/`PREHISTORIC_LAMP`, pinned by
+    /// `prehistoric_lamp_option_destroys_the_light_source_on_run_out` in
+    /// scottfree_parity.rs: the light source is destroyed the instant its
+    /// fuel reaches zero, rather than merely going dark and staying an
+    /// inert carried item — ScottFree's original Adams-era behaviour,
+    /// restored for the games that were tuned against it.
     pub prehistoric_lamp: bool,
     /// The room-block layout — see [`Presentation`]. Not one of ScottFree's
     /// four `-y`/`-s`/`-t`/`-p` flags (this crate's own addition, see there).
@@ -158,7 +156,8 @@ impl Options {
 /// reviewer) can see the complete set of what changes, and a future flag
 /// extends one function instead of hunting through `run_turn`/`run_commands`.
 ///
-/// Every field cites the `ScottCurses.c` site it ports. Two fields
+/// Every field names the parity/golden test that pins it, or notes where
+/// none exists. Two fields
 /// ([`Wording::light_dim`]/[`Wording::light_out`] vs
 /// [`Wording::light_runs_out_prefix`]/[`suffix`](Wording::light_runs_out_suffix))
 /// are additionally gated on [`Options::scott_light`], not `you_are` — the
@@ -167,8 +166,9 @@ impl Options {
 #[derive(Debug, Clone, Copy)]
 #[non_exhaustive]
 pub struct Wording {
-    /// GET/DROP success (`ScottCurses.c:1245,1290`): `"O.K. "` — always this,
-    /// regardless of `you_are` (ScottFree's single-item GET/DROP path never
+    /// GET/DROP success, pinned by `golden_transcript` in golden.rs:
+    /// `"O.K. "` — always this, regardless of `you_are` (ScottFree's
+    /// single-item GET/DROP path never
     /// branches on `YOUARE`). The TI-99/4A set spells it `"OK. "`, and uses
     /// the SAME string for taking, dropping and generic acknowledgement —
     /// that dialect does not distinguish "Taken." from "Dropped."
@@ -180,124 +180,168 @@ pub struct Wording {
     /// set, where "movement is acknowledged" is an observable difference
     /// spec §9.1 gives a test for.
     pub move_ok: &'static str,
-    /// GET ALL/DROP ALL per-item success suffix (`ScottCurses.c:1213,1265`):
-    /// `": O.K.\n"` after the item's own text — also unconditional.
+    /// GET ALL/DROP ALL per-item success suffix, pinned by
+    /// `get_all_runs_each_items_own_get_action_then_takes_it_and_skips_star_marked_items`
+    /// in scottfree_parity.rs: `": O.K.\n"` after the item's own text —
+    /// also unconditional.
     pub ok_all_suffix: &'static str,
-    /// Inventory header (case 66, `ScottCurses.c:929-932`): `"I'm carrying:\n"`
-    /// / `"You are carrying:\n"`.
+    /// Inventory header (case 66), pinned by
+    /// `you_are_option_swaps_death_and_inventory_wording` in
+    /// scottfree_parity.rs: `"I'm carrying:\n"` / `"You are carrying:\n"`.
     pub carrying_header: &'static str,
-    /// Inventory empty-pack line (case 66, `ScottCurses.c:949-951`): `"Nothing"`
-    /// — always this text; only the trailing `".\n"` (unconditional, appended
+    /// Inventory empty-pack line (case 66), pinned by
+    /// `you_are_option_swaps_death_and_inventory_wording` in
+    /// scottfree_parity.rs: `"Nothing"` —
+    /// always this text; only the trailing `".\n"` (unconditional, appended
     /// by the caller) differs from a populated list, which gets the same
     /// suffix after its last item.
     pub nothing_carried: &'static str,
-    /// Inventory item separator (case 66, non-TRS80 branch,
-    /// `ScottCurses.c:941-942`): `" - "` — always this (TRS80's `". "`
-    /// alternative is not modelled, see [`Presentation`]'s doc).
+    /// Inventory item separator (case 66, non-TRS80 branch) — ScottFree's
+    /// own observed wording (no covering parity/golden case found): `" - "`
+    /// — always this (TRS80's `". "` alternative is not modelled, see
+    /// [`Presentation`]'s doc).
     pub carrying_sep: &'static str,
-    /// SCORE's stored-treasure count prefix (case 65, `ScottCurses.c:910-913`):
-    /// `"I've stored "` / `"You have stored "`.
+    /// SCORE's stored-treasure count prefix (case 65), pinned by
+    /// `golden_transcript` in golden.rs: `"I've stored "` / `"You have
+    /// stored "`.
     pub stored_prefix: &'static str,
-    /// GO with no/unknown noun (`PerformActions`, `ScottCurses.c:1099-1102`):
-    /// `"Give me a direction too."` — unconditional (no `you_are` branch in
-    /// the source).
+    /// GO with no/unknown noun, pinned by
+    /// `bare_go_asks_for_a_direction_before_the_action_table` in
+    /// scottfree_parity.rs: `"Give me a direction too."` — unconditional
+    /// (no `you_are` variant).
     pub direction_needed: &'static str,
-    /// GET/DROP ALL with an unmatched noun some other command produced
-    /// (`ScottCurses.c:1224,1277`): `"What ? "` — unconditional.
+    /// GET/DROP ALL with an unmatched noun some other command produced,
+    /// pinned by `get_with_unknown_noun_asks_what` in scottfree_parity.rs:
+    /// `"What ? "` — unconditional.
     pub what: &'static str,
-    /// `Look()`'s darkness line (`ScottCurses.c:451-454`):
-    /// `"I can't see. It is too dark!\n"` / `"You can't see. It is too dark!\n"`.
+    /// `Look()`'s darkness line — ScottFree's own observed wording (no
+    /// covering parity/golden case found): `"I can't see. It is too
+    /// dark!\n"` / `"You can't see. It is too dark!\n"`.
     /// Read only under [`Presentation::ScottFree`]/[`Presentation::Trs80`] —
     /// [`Presentation::C64`] keeps its own unconditional wording (see
     /// [`crate::Vm::room_block`]).
     pub too_dark_to_see: &'static str,
-    /// `Look()`'s "also see" header (`ScottCurses.c:497-500`):
-    /// `"\nI can also see: "` / `"\nYou can also see: "`. Same
+    /// `Look()`'s "also see" header, pinned by
+    /// `presentation_option_selects_room_block_layout` in
+    /// scottfree_parity.rs: `"\nI can also see: "` /
+    /// `"\nYou can also see: "`. Same
     /// [`Presentation`] scoping as [`Wording::too_dark_to_see`].
     pub see_also_header: &'static str,
-    /// `Look()`'s room-description prefix (`ScottCurses.c:465-468`):
-    /// `"I'm in a "` / `"You are "`. Same [`Presentation`] scoping.
+    /// `Look()`'s room-description prefix — ScottFree's own observed
+    /// wording (no covering parity/golden case found): `"I'm in a "` /
+    /// `"You are "`. Same [`Presentation`] scoping.
     pub room_prefix: &'static str,
-    /// `main`'s unmatched-return fallback (`ScottCurses.c:1410`):
-    /// `"I don't understand your command. "` — unconditional.
+    /// `main`'s unmatched-return fallback, pinned by
+    /// `matched_but_blocked_action_replies_cant_do_that_yet_not_dont_understand`
+    /// in scottfree_parity.rs: `"I don't understand your command. "` —
+    /// unconditional.
     pub dont_understand: &'static str,
-    /// `main`'s "matched but blocked" fallback (`ScottCurses.c:1412`):
-    /// `"I can't do that yet. "` — unconditional, and the whole point of
+    /// `main`'s "matched but blocked" fallback, pinned by
+    /// `matched_but_blocked_action_replies_cant_do_that_yet_not_dont_understand`
+    /// in scottfree_parity.rs: `"I can't do that yet. "` — unconditional,
+    /// and the whole point of
     /// SQ-1413 item 3 (`PerformActions`'s `-2` return, previously collapsed
     /// into [`Wording::dont_understand`]).
     pub cant_do_that_yet: &'static str,
-    /// GET ALL, nothing with an auto-get word present (`ScottCurses.c:1218-1219`):
-    /// `"Nothing taken."` — no trailing newline, unconditional.
+    /// GET ALL, nothing with an auto-get word present, pinned by
+    /// `get_all_and_drop_all_report_nothing_with_scottfrees_exact_punctuation`
+    /// in scottfree_parity.rs: `"Nothing taken."` — no trailing newline,
+    /// unconditional.
     pub nothing_taken: &'static str,
-    /// DROP ALL, nothing carried with an auto-get word (`ScottCurses.c:1271-1272`):
-    /// `"Nothing dropped.\n"` — WITH a trailing newline (unlike
+    /// DROP ALL, nothing carried with an auto-get word, pinned by
+    /// `get_all_and_drop_all_report_nothing_with_scottfrees_exact_punctuation`
+    /// in scottfree_parity.rs: `"Nothing dropped.\n"` — WITH a trailing
+    /// newline (unlike
     /// [`Wording::nothing_taken`]), unconditional.
     pub nothing_dropped: &'static str,
-    /// GET ALL's darkness short-circuit (`ScottCurses.c:1189-1193`):
-    /// `"It is dark.\n"` — unconditional; DROP ALL has no such check (dropping
-    /// in the dark is always allowed).
+    /// GET ALL's darkness short-circuit, pinned by
+    /// `get_all_short_circuits_in_a_dark_room` in scottfree_parity.rs:
+    /// `"It is dark.\n"` — unconditional; DROP ALL has no such check
+    /// (dropping in the dark is always allowed).
     pub it_is_dark: &'static str,
     /// GET (single item)/GET ALL's "pack is full" refusal, PERIOD-terminated
-    /// (`ScottCurses.c:1204-1208,1229-1233`): `"I've too much to carry. "` /
-    /// `"You are carrying too much. "`. Distinct from
+    /// — ScottFree's own observed wording (no covering parity/golden case
+    /// found): `"I've too much to carry. "` / `"You are carrying too
+    /// much. "`. Distinct from
     /// [`Wording::too_much_bang`] — ScottFree's own two capacity-refusal call
-    /// sites disagree on punctuation and this crate ports both faithfully.
+    /// sites disagree on punctuation and this crate matches both faithfully.
     pub too_much_period: &'static str,
     /// Opcode 52's "pack is full" refusal, BANG-terminated for the plain
-    /// wording only (`ScottCurses.c:833-836`): `"I've too much to carry! "` /
-    /// `"You are carrying too much. "` — note the `you_are` variant is
+    /// wording only — ScottFree's own observed wording, pinned (as far as
+    /// the `too much` substring) by
+    /// `cmd_get_op52_refuses_only_at_exact_capacity_not_over` in vm.rs's
+    /// tests: `"I've too much to carry! "` / `"You are
+    /// carrying too much. "` — note the `you_are` variant is
     /// IDENTICAL text to [`Wording::too_much_period`]'s `you_are` variant;
     /// only the plain (`!you_are`) wording differs by punctuation.
     pub too_much_bang: &'static str,
-    /// Opcode 61's death message (`ScottCurses.c:874-877`): `"I am dead.\n"`
-    /// / `"You are dead.\n"`.
+    /// Opcode 61's death message, pinned by
+    /// `you_are_option_swaps_death_and_inventory_wording` in
+    /// scottfree_parity.rs: `"I am dead.\n"` / `"You are dead.\n"`.
     pub dead: &'static str,
-    /// GET's "no such item here" refusal (`ScottCurses.c:1238-1241`):
-    /// `"It's beyond my power to do that. "` / `"It is beyond your power to do
+    /// GET's "no such item here" refusal, pinned by
+    /// `get_when_no_twin_is_in_the_room_is_beyond_my_power` in
+    /// scottfree_parity.rs: `"It's beyond my
+    /// power to do that. "` / `"It is beyond your power to do
     /// that. "` — note ScottFree drops the apostrophe only in the `you_are`
     /// GET variant (`"It is"`, not `"It's"`); [`Wording::beyond_power_drop`]
     /// keeps the apostrophe in both variants. Trailing space, no newline.
     pub beyond_power_get: &'static str,
-    /// DROP's "not carrying that" refusal (`ScottCurses.c:1283-1286`):
-    /// `"It's beyond my power to do that.\n"` / `"It's beyond your power to do
+    /// DROP's "not carrying that" refusal — ScottFree's own observed
+    /// wording (no covering parity/golden case found): `"It's beyond my
+    /// power to do that.\n"` / `"It's beyond your power to do
     /// that.\n"` — BOTH variants keep the apostrophe (unlike
     /// [`Wording::beyond_power_get`]'s `you_are` form), and both end with a
     /// newline rather than a trailing space.
     pub beyond_power_drop: &'static str,
-    /// Movement with an exit (`PerformActions`, `ScottCurses.c:1130-1133`):
-    /// `"I can't go in that direction. "` / `"You can't go in that direction. "`.
+    /// Movement with an exit, pinned (as far as the `can't go` substring)
+    /// by `out_of_range_exit_is_treated_as_no_exit` in scottfree_parity.rs:
+    /// `"I can't go in that direction. "` / `"You can't go in that
+    /// direction. "`.
     pub cant_go_that_direction: &'static str,
-    /// Movement into darkness with no exit (`PerformActions`,
-    /// `ScottCurses.c:1122-1124`): `"I fell down and broke my neck. "` /
-    /// `"You fell down and broke your neck. "`.
+    /// Movement into darkness with no exit, pinned by
+    /// `death_in_the_dark_matches_scottfree_wording_and_ends_the_game` in
+    /// scottfree_parity.rs: `"I fell down and broke my neck. "` / `"You
+    /// fell down and broke your neck. "`.
     pub fell_and_broke_neck: &'static str,
-    /// Movement while dark, printed whether or not the move then succeeds
-    /// (`PerformActions`, `ScottCurses.c:1111`): `"Dangerous to move in the
-    /// dark! "` — unconditional (no `you_are` branch in the source).
+    /// Movement while dark, printed whether or not the move then succeeds,
+    /// pinned by `death_in_the_dark_matches_scottfree_wording_and_ends_the_game`
+    /// in scottfree_parity.rs: `"Dangerous to move in the dark! "` —
+    /// unconditional (no `you_are` variant).
     pub dangerous_in_dark: &'static str,
-    /// Opcode 63's `doneit` label (`ScottCurses.c:891`), also reached via
-    /// opcode 65's win check: `"The game is now over.\n"` — unconditional.
+    /// Opcode 63's `doneit` label, pinned by `golden_transcript` in
+    /// golden.rs ("The game is now over."), also reached via opcode 65's
+    /// win check: `"The game is now over.\n"` — unconditional.
     pub game_now_over: &'static str,
     /// Opcode 65's win line, printed just before falling into
-    /// [`Wording::game_now_over`] (`ScottCurses.c:920`): `"Well done.\n"` —
-    /// unconditional.
+    /// [`Wording::game_now_over`], pinned by
+    /// `op65_win_prints_well_done_and_ends_the_game` in scottfree_parity.rs:
+    /// `"Well done.\n"` — unconditional.
     pub well_done: &'static str,
-    /// `GetInput`'s unknown-verb reply (`ScottCurses.c:646`): `"You use
-    /// word(s) I don't know! "` — unconditional.
+    /// `GetInput`'s unknown-verb reply, pinned by
+    /// `unknown_first_word_with_direction_second_word_does_not_move` in
+    /// scottfree_parity.rs: `"You use word(s) I don't know! "` —
+    /// unconditional.
     pub unknown_words: &'static str,
-    /// Lamp run-out (`main`, `ScottCurses.c:1425-1428`), gated on
-    /// [`Options::scott_light`] rather than `you_are`: `"Light has run out! "`
-    /// (scott_light) / `"Your light has run out. "` (default).
+    /// Lamp run-out, pinned by
+    /// `lamp_countdown_dims_once_and_runs_out_exactly_twice` in
+    /// scottfree_parity.rs, gated on [`Options::scott_light`] rather than
+    /// `you_are`: `"Light has run out! "` (scott_light) / `"Your light has
+    /// run out. "` (default).
     pub light_out: &'static str,
-    /// Lamp low-fuel warning under the DEFAULT (non-`scott_light`) wording
-    /// (`main`, `ScottCurses.c:1447-1449`), shown only every 5th turn:
-    /// `"Your light is growing dim. "`. Empty under `scott_light` — that
+    /// Lamp low-fuel warning under the DEFAULT (non-`scott_light`) wording,
+    /// pinned by `lamp_countdown_dims_once_and_runs_out_exactly_twice` in
+    /// scottfree_parity.rs, shown only every 5th turn: `"Your light is
+    /// growing dim. "`.
+    /// Empty under `scott_light` — that
     /// variant uses [`Wording::light_runs_out_prefix`]/[`suffix`](Wording::light_runs_out_suffix)
     /// instead, shown every turn.
     pub light_dim: &'static str,
-    /// Lamp low-fuel warning under `scott_light`, shown every turn under 25
-    /// (`main`, `ScottCurses.c:1441-1444`): `"Light runs out in "`, then the
-    /// live fuel number, then [`Wording::light_runs_out_suffix`].
+    /// Lamp low-fuel warning under `scott_light`, shown every turn under
+    /// 25, pinned by
+    /// `scott_light_option_shows_a_running_countdown_instead_of_growing_dim`
+    /// in scottfree_parity.rs: `"Light runs out in "`, then the live fuel
+    /// number, then [`Wording::light_runs_out_suffix`].
     pub light_runs_out_prefix: &'static str,
     /// See [`Wording::light_runs_out_prefix`]: `" turns. "`.
     pub light_runs_out_suffix: &'static str,

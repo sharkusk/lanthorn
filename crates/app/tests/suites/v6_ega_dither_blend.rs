@@ -9,9 +9,9 @@
 //! a column-by-column dither — 22,496 pixels of bright red (index 12) against
 //! 18,202 of brown (index 6) on the boot frame — and on a 640×200 EGA screen
 //! those columns are half as wide as an MCGA pixel, so the card fused each pair
-//! into a colour the palette does not contain. Bocfel says the same of Zork
-//! Zero's EGA hint background (`z6/draw_border.cpp:745`): "no single pixel of the
-//! artwork is the colour the eye actually sees". lanthorn keeps all 640 columns —
+//! into a colour the palette does not contain — Bocfel's own EGA hint background
+//! agrees that no single pixel of the artwork is the colour the eye actually
+//! sees. lanthorn keeps all 640 columns —
 //! `PictSource::art_scale` maps them at (1, 2), onto exactly the rectangle a
 //! 320-wide plate covers — so every art pixel survived as a distinct unit pixel
 //! and the dither reached the screen at full contrast.

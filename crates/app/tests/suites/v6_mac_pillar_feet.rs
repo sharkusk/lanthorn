@@ -451,7 +451,7 @@ fn crop(gfx: &image::RgbaImage, x0: u32, x1: u32, h: u32) -> image::RgbaImage {
 /// Pinned as the composition's own numbers rather than as a hash, so a failure
 /// says WHICH part moved.
 #[test]
-fn the_colour_pillars_on_the_same_disk_keep_bocfels_composition() {
+fn the_colour_pillars_on_the_same_disk_keep_the_plain_extend_pillars_composition() {
     if mac_disk().is_none() {
         return;
     }

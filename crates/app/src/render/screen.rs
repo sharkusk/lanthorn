@@ -6104,8 +6104,8 @@ fn flank_tiled_source(
 /// same thing until the composite extends: the rows copied verbatim off `canvas` are
 /// still the game's own screen (`frame.native.1`), and only the number of rows the
 /// band is asked to FILL changes (`frame.canvas_h`). `flank_source` has always taken
-/// those as separate arguments — "extend only when the pane is taller than the art" is
-/// Bocfel's own guard and it reads a desired height, not a screen — so an extended
+/// those as separate arguments — "extend only when the pane is taller than the art"
+/// reads a desired height, not a screen — so an extended
 /// frame tiles further down the same recipe rather than a new one.
 fn extend_raster_flanks(
     canvas: &mut image::RgbaImage,

@@ -21,26 +21,25 @@
 //!     which the old select-an-index counter model would report as 3.
 //!
 //! SQ-1412 (ScottFree parity) touched this transcript twice: opcode 78 (TALLY)
-//! prints the counter as `"N "` — a trailing space, no newline
-//! (`OutputNumber`, ScottCurses.c:429-434) — so each TALLY line now runs
-//! straight into the next `> cmd` with no line break between them; and opcode
-//! 63 (the win action's quit) prints ScottFree's `"The game is now over."`
-//! (`doneit`, ScottCurses.c:890-891) before ending the game.
+//! prints the counter as `"N "` — a trailing space, no newline — so each
+//! TALLY line now runs straight into the next `> cmd` with no line break
+//! between them; and opcode 63 (the win action's quit) prints ScottFree's
+//! own `"The game is now over."` before ending the game.
 //!
 //! SQ-1413 (ScottFree wording) touched it twice more, both defaults —
 //! `Options::default()` (this fixture never sets `you_are`):
-//!   * GET success is `"O.K. "` (case 10 fallback, `ScottCurses.c:1245`), a
-//!     trailing space and no newline, replacing this crate's old ad hoc
-//!     `"OK.\n"` — so `take lamp`/`get idol` now run straight into the
-//!     following `> down`/`You hear water...` line with no break.
-//!   * SCORE (opcode 65, case 65, `ScottCurses.c:899-923`) now prints
-//!     ScottFree's own sentence, `Wording::stored_prefix` + the count +
-//!     `" treasures.  On a scale of 0 to 100, that rates "` + the
-//!     percentage + `".\n"`, replacing this crate's old ad hoc `"You have N
-//!     out of M treasures.\n"`. `OutputNumber`'s own `"%d "` trailing space
-//!     (same primitive opcode 78 uses) means the rendered line carries a
-//!     genuine double space before "treasures" and before the final
-//!     period — not a typo, ScottFree's own raw concatenation.
+//!   * GET success is `"O.K. "`, a trailing space and no newline, replacing
+//!     this crate's old ad hoc `"OK.\n"` — so `take lamp`/`get idol` now run
+//!     straight into the following `> down`/`You hear water...` line with no
+//!     break.
+//!   * SCORE (opcode 65) now prints ScottFree's own sentence,
+//!     `Wording::stored_prefix` + the count + `" treasures.  On a scale of 0
+//!     to 100, that rates "` + the percentage + `".\n"`, replacing this
+//!     crate's old ad hoc `"You have N out of M treasures.\n"`. The number
+//!     primitive's own trailing space (shared with opcode 78) means the
+//!     rendered line carries a genuine double space before "treasures" and
+//!     before the final period — not a typo, ScottFree's own raw
+//!     concatenation.
 //!
 //! A second test exercises `Vm::snapshot`/`Vm::restore`.
 

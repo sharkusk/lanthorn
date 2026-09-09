@@ -83,7 +83,7 @@ fn get_matches_the_in_room_twin_not_the_first_table_entry() {
     vm.supply_line("get bottle");
     vm.step();
     let out = vm.take_output();
-    // ScottFree's GET success is "O.K. " (ScottCurses.c:1245) — SQ-1413.
+    // ScottFree's GET success is "O.K. ", matching its own output — SQ-1413.
     assert!(out.contains("O.K."), "GET succeeds on the in-room twin: {out:?}");
     assert_eq!(vm.item_loc(1), CARRIED, "the in-room bottle was taken");
     assert_eq!(vm.item_loc(0), 0, "the out-of-play twin is untouched");
@@ -99,7 +99,7 @@ fn drop_matches_the_carried_twin_not_the_first_table_entry() {
     vm.supply_line("drop bottle");
     vm.step();
     let out = vm.take_output();
-    // ScottFree's DROP success is "O.K. " (ScottCurses.c:1290) — SQ-1413.
+    // ScottFree's DROP success is "O.K. ", matching its own output — SQ-1413.
     assert!(out.contains("O.K."), "DROP succeeds on the carried twin: {out:?}");
     assert_eq!(vm.item_loc(1), 1, "the carried bottle lands in the room");
     assert_eq!(vm.item_loc(0), 0, "the out-of-play twin is untouched");
@@ -190,8 +190,8 @@ fn get_with_unknown_noun_asks_what() {
     vm.supply_line("get xyzzy");
     vm.step();
     let out = vm.take_output();
-    // ScottFree's own wording is "What ? " (ScottCurses.c:1224), a space
-    // before the "?" and a trailing space, not "What?" (SQ-1413).
+    // ScottFree's own wording is "What ? ", a space before the "?" and a
+    // trailing space, not "What?" (SQ-1413).
     assert!(out.contains("What ?"), "unknown GET noun asks What?: {out:?}");
     assert_eq!(vm.item_loc(0), 1, "nothing was taken");
     assert_eq!(vm.item_loc(1), 1, "nothing was taken");
@@ -215,8 +215,7 @@ fn bare_go_asks_for_a_direction_before_the_action_table() {
     vm.supply_line("go");
     vm.step();
     let out = vm.take_output();
-    // ScottFree's own wording is "Give me a direction too." (`PerformActions`,
-    // ScottCurses.c:1099-1102) — SQ-1413.
+    // ScottFree's own wording is "Give me a direction too." — SQ-1413.
     assert!(
         out.contains("Give me a direction too."),
         "bare GO asks for a direction: {out:?}"
@@ -359,9 +358,8 @@ fn out_of_range_room_exit_is_rejected_at_load() {
 // Every fixture below is purpose-built and minimal — just enough database to
 // exercise one rule in isolation, not a real game.
 
-// Item 1: GetInput's single-letter direction/INVENTORY expansion
-// (ScottCurses.c:613-625) must happen BEFORE vocabulary lookup and
-// word-length truncation.
+// Item 1: ScottFree's single-letter direction/INVENTORY expansion must
+// happen BEFORE vocabulary lookup and word-length truncation.
 #[test]
 fn single_letter_directions_and_inventory_expand_before_vocab_lookup() {
     const DAT: &str = r#"
@@ -388,9 +386,8 @@ fn single_letter_directions_and_inventory_expand_before_vocab_lookup() {
     vm.supply_line("i");
     vm.step();
     let out = vm.take_output();
-    // Case 66's empty-pack line is ScottFree's "Nothing" (ScottCurses.c:949-951),
-    // preceded by the "I'm carrying:\n" header — not "carrying nothing"
-    // (SQ-1413).
+    // Case 66's empty-pack line is ScottFree's "Nothing", preceded by the
+    // "I'm carrying:\n" header — not "carrying nothing" (SQ-1413).
     assert!(
         out.contains("Nothing"),
         "'i' expands to INVENTORY, matches the truncated verb, and fires opcode 66: {out:?}"
@@ -407,8 +404,7 @@ fn single_letter_directions_and_inventory_expand_before_vocab_lookup() {
 }
 
 // Item 2: opcode 65 (SCORE), once every treasure is stored, prints "Well
-// done." and falls through to opcode 63's ending (ScottCurses.c:899-923,
-// `goto doneit`).
+// done." and falls through to opcode 63's ending, exactly as ScottFree does.
 #[test]
 fn op65_win_prints_well_done_and_ends_the_game() {
     const DAT: &str = r#"
@@ -440,8 +436,8 @@ fn op65_win_prints_well_done_and_ends_the_game() {
 }
 
 // Item 3: opcode 61's plain (non `-y`) wording is "I am dead." and does not
-// itself end the game; opcode 63 prints "The game is now over." and does
-// (ScottCurses.c:873-891).
+// itself end the game; opcode 63 prints "The game is now over." and does —
+// matching ScottFree's own behaviour.
 #[test]
 fn op61_prints_i_am_dead_and_op63_prints_game_over_and_quits() {
     const DAT: &str = r#"
@@ -475,9 +471,8 @@ fn op61_prints_i_am_dead_and_op63_prints_game_over_and_quits() {
     assert!(vm.has_quit(), "op63 ends the game");
 }
 
-// Item 4: PerformActions (ScottCurses.c:1091-1133) — the dark-move warning
-// prints whether or not the move succeeds; only a move with NO exit while
-// dark ends the game.
+// Item 4: ScottFree's dark-move warning prints whether or not the move
+// succeeds; only a move with NO exit while dark ends the game.
 #[test]
 fn death_in_the_dark_matches_scottfree_wording_and_ends_the_game() {
     const DAT: &str = r#"
@@ -501,9 +496,8 @@ fn death_in_the_dark_matches_scottfree_wording_and_ends_the_game() {
     vm.step();
     let out = vm.take_output();
     // ScottFree's own wording is "Dangerous to move in the dark! " — a
-    // trailing space, no newline (`PerformActions`, ScottCurses.c:1111) —
-    // and likewise "I fell down and broke my neck. " below (ScottCurses.c:1124),
-    // SQ-1413.
+    // trailing space, no newline — and likewise "I fell down and broke my
+    // neck. " below, SQ-1413.
     assert_eq!(
         out, "Dangerous to move in the dark! ",
         "the warning prints even on a successful move: {out:?}"
@@ -522,7 +516,7 @@ fn death_in_the_dark_matches_scottfree_wording_and_ends_the_game() {
     assert!(vm.has_quit(), "death in the dark ends the game");
 }
 
-// Item 5: the lamp's main-loop countdown (ScottCurses.c:1416-1450) — the
+// Item 5: ScottFree's main-loop lamp countdown — the
 // "growing dim" warning fires on the `<25 && %5==0` turns, and the run-out
 // warning fires on BOTH turns the live fuel crosses below 1 (0, then -1)
 // before the `!= -1` guard stops the tick for good.
@@ -682,9 +676,9 @@ fn item_start_location_255_normalizes_to_carried_and_survives_a_drop_take_cycle(
     );
 }
 
-// Item 8: auto-noun extraction (ScottCurses.c:319-327) starts at the FIRST
-// `/`, not the last, tolerates a missing close, and honours `//`/`/*` as
-// "no autoget word" markers that leave the display text untouched.
+// Item 8: auto-noun extraction (the Swansea Definition, §2.5) starts at the
+// FIRST `/`, not the last, tolerates a missing close, and honours `//`/`/*`
+// as "no autoget word" markers that leave the display text untouched.
 #[test]
 fn auto_noun_extraction_matches_scottfree_first_slash_and_marker_conventions() {
     const DAT: &str = r#"
@@ -724,8 +718,7 @@ fn auto_noun_extraction_matches_scottfree_first_slash_and_marker_conventions() {
 /// A verb/noun that matches an action row but whose conditions block every
 /// candidate gets ScottFree's "-2" reply ("I can't do that yet. "); a verb
 /// with NO matching row at all gets "-1" ("I don't understand your
-/// command. "). Previously both collapsed into the "-1" wording
-/// (`PerformActions`, `ScottCurses.c:1408-1414`).
+/// command. "). Previously both collapsed into the "-1" wording.
 #[test]
 fn matched_but_blocked_action_replies_cant_do_that_yet_not_dont_understand() {
     // Verb 1 is reserved for GO (`run_turn` special-cases it as movement
@@ -781,10 +774,9 @@ fn matched_but_blocked_action_replies_cant_do_that_yet_not_dont_understand() {
 
 // ── SQ-1413: GET ALL / DROP ALL fidelity ──────────────────────────────────
 
-/// GET ALL with nothing to take is "Nothing taken." — no trailing newline
-/// (`ScottCurses.c:1218-1219`); DROP ALL's equivalent DOES end in `\n`
-/// (`ScottCurses.c:1271-1272`) — the two are not the same string plus a
-/// missing character, ScottFree's own source disagrees on purpose.
+/// GET ALL with nothing to take is "Nothing taken." — no trailing newline;
+/// DROP ALL's equivalent DOES end in `\n` — the two are not the same string
+/// plus a missing character, ScottFree's own output disagrees on purpose.
 #[test]
 fn get_all_and_drop_all_report_nothing_with_scottfrees_exact_punctuation() {
     let db = base_db(vec![]);
@@ -801,7 +793,7 @@ fn get_all_and_drop_all_report_nothing_with_scottfrees_exact_punctuation() {
 }
 
 /// GET ALL short-circuits a dark room with "It is dark.\n" before ever
-/// looking at the item table (`ScottCurses.c:1189-1193`) — nothing is taken.
+/// looking at the item table — nothing is taken.
 #[test]
 fn get_all_short_circuits_in_a_dark_room() {
     let mut db = base_db(vec![Item {
@@ -829,12 +821,10 @@ fn get_all_short_circuits_in_a_dark_room() {
     assert_eq!(vm.item_loc(0), 1, "nothing was taken while dark");
 }
 
-/// GET ALL runs each qualifying item's own GET action first (a
-/// `disable_sysfunc`-guarded recursive `PerformActions`, ScottCurses.c:1196-1214)
-/// — so a game's custom "GET <item>" trap fires under ALL too — and takes
-/// the item regardless afterward. An item whose auto-get noun itself starts
-/// with `*` (`AutoGet[0]=='*'`) is skipped by ALL entirely, though it can
-/// still be taken by name.
+/// GET ALL runs each qualifying item's own GET action first — so a game's
+/// custom "GET <item>" trap fires under ALL too — and takes the item
+/// regardless afterward. An item whose auto-get noun itself starts with `*`
+/// is skipped by ALL entirely, though it can still be taken by name.
 #[test]
 fn get_all_runs_each_items_own_get_action_then_takes_it_and_skips_star_marked_items() {
     let mut verbs = vec![String::new(); 11];
@@ -881,9 +871,8 @@ fn get_all_runs_each_items_own_get_action_then_takes_it_and_skips_star_marked_it
 
 // ── SQ-1413: 9-character word truncation ──────────────────────────────────
 
-/// `GetInput` reads each word via `sscanf(buf,"%9s %9s",verb,noun)`
-/// (`ScottCurses.c:612`) — a 9-character cap on each typed word, applied
-/// before anything else, including what ends up stored as `NounText` (and
+/// ScottFree reads each typed word under a 9-character cap, applied before
+/// anything else, including what ends up stored as `NounText` (and
 /// therefore what opcodes 84/85 echo back).
 #[test]
 fn typed_words_are_capped_at_nine_characters_before_becoming_the_last_noun() {
@@ -937,7 +926,7 @@ fn items_with_light_source(loc: i32) -> Vec<Item> {
 
 /// `-y`/`Options::you_are`: opcode 61's death line and case 66's inventory
 /// header switch from ScottFree's plain first-person default to second
-/// person (`ScottCurses.c:874-877,929-932`).
+/// person.
 #[test]
 fn you_are_option_swaps_death_and_inventory_wording() {
     // Verb 1 is reserved for GO — start at verb 2.
@@ -986,7 +975,8 @@ fn you_are_option_swaps_death_and_inventory_wording() {
 }
 
 /// `-s`/`Options::scott_light`: the lamp countdown's running-total wording
-/// replaces the default "growing dim" warning (`main`, ScottCurses.c:1439-1449).
+/// replaces the default "growing dim" warning, matching ScottFree's own
+/// `-s` behaviour.
 #[test]
 fn scott_light_option_shows_a_running_countdown_instead_of_growing_dim() {
     // Verb 1 is reserved for GO — start at verb 2.
@@ -1023,8 +1013,8 @@ fn scott_light_option_shows_a_running_countdown_instead_of_growing_dim() {
 }
 
 /// `-p`/`Options::prehistoric_lamp`: the light source is destroyed
-/// (location 0) the instant its fuel reaches zero (`main`,
-/// ScottCurses.c:1430-1431) — off by default, where it merely goes dark.
+/// (location 0) the instant its fuel reaches zero, matching ScottFree's own
+/// `-p` behaviour — off by default, where it merely goes dark.
 #[test]
 fn prehistoric_lamp_option_destroys_the_light_source_on_run_out() {
     // Verb 1 is reserved for GO — start at verb 2.
@@ -1068,7 +1058,7 @@ fn prehistoric_lamp_option_destroys_the_light_source_on_run_out() {
 }
 
 /// `Options::presentation`: [`Presentation::C64`] (this crate's default) vs
-/// [`Presentation::ScottFree`] (`Look()`'s own layout, ScottCurses.c:436-528)
+/// [`Presentation::ScottFree`] (ScottFree's own room-block layout)
 /// vs [`Presentation::Trs80`] (`-t`'s item suffix + rule).
 #[test]
 fn presentation_option_selects_room_block_layout() {

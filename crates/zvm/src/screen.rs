@@ -816,9 +816,12 @@ impl ZWindow {
     /// One new-line in the *scrolling prose* regime (v6 window 0, or an Inform
     /// v6 library's wrap+scroll main window): the cursor returns to the left
     /// margin and drops a line, except on the bottom line where the window
-    /// scrolls under a stationary cursor. Mirrors frotz `screen_new_line`
-    /// (`if (y_cursor + 2 * font_height - 1 > y_size) scroll else y_cursor +=
-    /// font_height`), and ticks the line count (§8.8.3.2.2).
+    /// scrolls under a stationary cursor. The threshold is whether a SECOND
+    /// line of this font height would still fit below the cursor's new
+    /// position (§8.8.3.2.2's line-by-line advance, applied one font-height at
+    /// a time) — cross this and the window scrolls instead of advancing past
+    /// its own bottom edge. Frotz's `screen_new_line` reaches the same
+    /// threshold. Also ticks the line count (§8.8.3.2.2).
     ///
     /// The *paint* regime deliberately does not use this: painted text keeps
     /// running past the bottom of its window (runs are screen-absolute), so

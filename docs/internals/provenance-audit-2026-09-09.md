@@ -169,7 +169,7 @@ non-ASCII → `?`) are lanthorn's own. So the substance is re-derivable cheaply;
 what must go is the claim of, and the reliance on, rule-for-rule
 correspondence.
 
-### D3 — `crates/scott/src/scottfree_save.rs:10-18` — **RE-WORD (code is clean)**
+### D3 — `crates/scott/src/scottfree_save.rs:10-18` — **re-worded (SQ-1448); code was already clean**
 
 Seven lines of ScottFree's `LoadGame` `fscanf` calls quoted verbatim to document
 the save format's field order.
@@ -181,7 +181,7 @@ is importing a user's existing `.sav`. The finding is confined to the quoted C:
 the same field order can be stated in prose, or derived from a `.sav` file
 ScottFree wrote. **Delete the block, keep the code.**
 
-### D4 — `crates/scott/src/options.rs:8-13` — **RE-WORD (code is clean)**
+### D4 — `crates/scott/src/options.rs:8-13` — **re-worded (SQ-1448); code was already clean**
 
 Four lines of ScottFree's `main` argument switch quoted verbatim
 (`case 'y': Options|=YOUARE; break;` …).
@@ -192,7 +192,7 @@ ported. The quoted `case` lines are near-*de minimis*, but they are still
 literal GPL source, and the same fact ("`-y` selects second-person wording") is
 in ScottFree's own usage message. **Delete the block, keep the code.**
 
-### D5 — `crates/scott/src/{vm,options,loader,scottfree_save,lib}.rs` — 92 `ScottCurses.c:NNN` citations — **RE-WORD**
+### D5 — `crates/scott/src/{vm,options,loader,scottfree_save,lib}.rs` — 92 `ScottCurses.c:NNN` citations — **re-worded (SQ-1448)**
 
 `vm.rs` 43, `options.rs` 42, `loader.rs` 3, `scottfree_save.rs` 3, `lib.rs` 1,
 plus 23 more in `tests/scottfree_parity.rs` and 4 in `tests/golden.rs`.
@@ -271,7 +271,7 @@ snapshot-before-clear ordering — were re-sourced to the spec's own reasoning
 and measurement (§4.4) and are pinned by a non-vacuous test each. See
 `v6-border-tiling-spec.md` §7 for the full rule-by-rule comparison.
 
-### D8 — `crates/blorb/src/infocom_pics.rs` — Frotz `src/dos/bcpic.c` (GPL) — **NOT DERIVED; re-word (12 sites)**
+### D8 — `crates/blorb/src/infocom_pics.rs` — Frotz `src/dos/bcpic.c` (GPL) — **NOT DERIVED; re-worded (SQ-1448)**
 
 The largest single (d) cluster after `v6_border.rs`, and on inspection the least
 alarming of the big three. `:86-87` says "**Every LZW constant here is quoted
@@ -299,7 +299,7 @@ Fix: delete the quoted Frotz comment block, re-source the constants to the GIF89
 specification, and let the 383-picture oracle stand as the authority it already
 is. No code changes.
 
-### D9 — `crates/zvm/src/io.rs`, `text/decode.rs`, `cpu/decode.rs`, `text/mod.rs`, `tests/v1_v2.rs` — Frotz (GPL) — **NOT DERIVED; re-word (~12 sites)**
+### D9 — `crates/zvm/src/io.rs`, `text/decode.rs`, `cpu/decode.rs`, `text/mod.rs`, `tests/v1_v2.rs` — Frotz (GPL) — **NOT DERIVED; re-worded (SQ-1448)**
 
 The `zvm` sites my own pass missed, because they sit outside the files the brief
 named. Several quote short C expressions verbatim:
@@ -327,7 +327,7 @@ Fix: replace each quoted C expression with the standard's own statement of the
 rule, and keep Frotz as a named interoperability target rather than as the
 authority for the code. No code changes.
 
-### D6 — `crates/gvm/src/glk.rs:29, 97, 159` — garglk (GPL) — **NOT DERIVED; re-word**
+### D6 — `crates/gvm/src/glk.rs:29, 97, 159` — garglk (GPL) — **NOT DERIVED; re-worded (SQ-1448)**
 
 Three citations into `garglk/window.cpp` and `garglk/wintext.cpp`, both
 confirmed GPL-2.0-or-later.
@@ -350,6 +350,11 @@ conformance witness (see the re-wording quest).
 
 Every remaining flagged site, by file, so the re-wording quest has a worklist.
 None of these needs a code change.
+
+**Worked through by SQ-1448** (2026-09-09): every row below was re-worded;
+the D3–D6, D8 and D9 verdicts above record it. Where a `scott` message had
+no parity or golden case pinning it, the comment says so rather than naming
+one — see that commit's report for the list.
 
 | File | Sites | What to re-point at |
 |---|---|---|

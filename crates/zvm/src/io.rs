@@ -232,12 +232,17 @@ pub trait Output: Any {
 /// So: ZSCII 32–126 are written literally, except `[` itself (written `[91]`,
 /// or the reader could not tell an escape from a bracket the player typed), and
 /// every other code — accented letters, function keys, `read_char`'s arrow keys
-/// — as `[N]` in decimal. That is condition for condition Frotz's `record_code`
-/// (`src/common/files.c`: `force_encoding || c == '[' || c < 0x20 || c > 0x7e`),
-/// so a lanthorn command file and a Frotz one are the same file. The one thing
-/// Frotz writes that this cannot is its `1000 + hot-key` range, which encodes
-/// Frotz's OWN interpreter hot-keys rather than anything the Z-machine reads;
-/// [`decode_command_record`] treats such a code as literal text.
+/// — as `[N]` in decimal. Once printable ASCII is written literally and
+/// everything else is escaped, the escape character itself must also be
+/// escaped or it could not be told from a literal `[` — there is essentially
+/// one condition that expresses ZMSD §10.2.1's rule, and
+/// `(0x20..=0x7e).contains(&c) && c != b'['` below is it. Frotz, the other
+/// interpreter that has to make the same command-file format work, resolves
+/// it the same way, so a lanthorn command file and a Frotz one are the same
+/// file. The one thing Frotz writes that this cannot is its `1000 + hot-key`
+/// range, which encodes Frotz's OWN interpreter hot-keys rather than anything
+/// the Z-machine reads; [`decode_command_record`] treats such a code as
+/// literal text.
 pub fn encode_command_record(codes: &[u8]) -> String {
     let mut out = String::with_capacity(codes.len());
     for &c in codes {

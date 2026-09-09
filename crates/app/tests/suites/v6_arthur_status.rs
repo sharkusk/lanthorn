@@ -309,7 +309,7 @@ fn arthur_hybrid_tall_pane_extends_story_to_bottom() {
     // 400, which is terminal row 31 of 40, so the frame stood open down its
     // whole lower quarter. The poles are now TILED to the band's full height
     // (a 4-row texture cut at 90% of the pole's height, then its own foot —
-    // Bocfel's `draw_arthur_side_images`), so the same cell is painted.
+    // see docs/internals/v6-border-tiling-spec.md), so the same cell is painted.
     let flank_art = (vp.y..vp.y + 6).any(|y| buf.cell((vp.x - 1, y)).unwrap().bg != Color::Reset);
     assert!(flank_art, "the side border art shows in the flank beside the top of the story");
     let deep = buf.cell((vp.x - 1, area.height - 2)).unwrap();

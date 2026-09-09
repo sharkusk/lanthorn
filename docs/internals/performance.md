@@ -258,8 +258,10 @@ neither has a measured case yet:
   beside it) into a direct index, and delete a `malloc`/`free` pair per routine
   call. It changes `Frame`, which Quetzal serializes.
 - **Fused decode-and-dispatch** — no `Instr` value at all, operands read straight
-  into stack slots by the opcode's own arm, the way dfrotz and glulxe both do it.
-  That is the only change with real headroom left; the 63% above is its target.
+  into stack slots by the opcode's own arm, a known dispatch-loop technique
+  (dfrotz and glulxe both use some form of it, though neither's source was
+  read to arrive at it here). That is the only change with real headroom left;
+  the 63% above is its target, per SQ-1441's own inline-operand measurement below.
   It is also a second interpreter to keep correct beside the one the corpus
   covers, and the inline-operand measurement says the *struct* is only 2.6
   points of that 63 — so most of it is work no change of shape avoids.

@@ -187,8 +187,7 @@ fn decode_into<S: Sink>(mem: &Memory, addr: u32, depth: u8, out: &mut S) -> u32 
             // §3.5.2: "In Version 1, Z-character 1 is printed as a new-line
             // (ZSCII 13)." Version 1 has no abbreviation Z-char at all, which
             // is why §3.5.4's A2 row has no `^` — the newline lives here
-            // instead. (Frotz `text.c`: `else if (h_version == V1 && c == 1)
-            // new_line();`.)
+            // instead.
             1 if version == 1 => {
                 out.emit(word_of(i), "\n");
                 alphabet = lock;
