@@ -1865,6 +1865,12 @@ pub(crate) fn boot_story(
     state.story_zversion = story_zversion;
     state.config = cfg;
 
+    // `--transcript-file` (SQ-0410): open before anything below pushes to the
+    // transcript, so the opening banner a few lines down lands in the file too.
+    if let Some(path) = &cli.transcript_file {
+        state.attach_transcript_sink(path);
+    }
+
     // Debug trace (trace feature): start a fresh log for this run and arm the
     // engine's screen-trace buffer per config; no-op when no section is active.
     if state.config.trace.any() {

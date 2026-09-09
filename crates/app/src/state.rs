@@ -1063,6 +1063,50 @@ pub enum TranscriptKind {
     Assist,
 }
 
+// ── Live transcript file sink (SQ-0410) ────────────────────────────────────────
+
+/// An open `--transcript-file` destination: the app's own engine-neutral
+/// transcript, appended to as it is played, for accessibility tooling (a screen
+/// reader, or a second terminal running `tail -f`).
+///
+/// Distinct from two things that sound similar and are not this:
+/// - `/set-transcript` (Z-machine output stream 2) is the STORY's own
+///   transcript, Z-machine only, and records only what the game chooses to
+///   write to it — a game that turns the stream off stops being logged.
+/// - `/export-transcript` writes the visible transcript once, on request.
+///
+/// This sink is engine-neutral (it hooks the app's transcript, not an engine
+/// stream) and live (it grows every turn, for every engine).
+#[derive(Debug)]
+pub(crate) struct TranscriptSink {
+    file: std::fs::File,
+    /// Whether an entry has been written yet — the first one gets no leading
+    /// blank line.
+    wrote_any: bool,
+}
+
+impl TranscriptSink {
+    fn open(path: &std::path::Path) -> std::io::Result<Self> {
+        let file = std::fs::OpenOptions::new().create(true).append(true).open(path)?;
+        Ok(Self { file, wrote_any: false })
+    }
+
+    /// Write one entry and flush. A blank line separates it from what came
+    /// before when `kind` is [`TranscriptKind::Input`] — the player's command,
+    /// which is what opens a turn in this stream — so `tail -f` reads as one
+    /// paragraph block per turn rather than one block per transcript push.
+    fn write_entry(&mut self, text: &str, kind: TranscriptKind) -> std::io::Result<()> {
+        use std::io::Write;
+        if self.wrote_any && matches!(kind, TranscriptKind::Input) {
+            writeln!(self.file)?;
+        }
+        writeln!(self.file, "{text}")?;
+        self.file.flush()?;
+        self.wrote_any = true;
+        Ok(())
+    }
+}
+
 /// Push a turn's ordered elements into the transcript: text runs via
 /// `push_transcript_runs`, images via `push_transcript_image`, in order. The
 /// Glulx run-loop path uses this when a `TurnResult` carries interleaved inline
@@ -3587,6 +3631,15 @@ pub struct AppState {
     /// thread on first use, so the hundreds of tests that build `AppState`
     /// and never touch persistence pay nothing for it.
     pub archive_worker: crate::archive_worker::ArchiveWorker,
+
+    /// Live accessibility transcript file (SQ-0410): `--transcript-file <PATH>`
+    /// opens this at launch and every Story/Input/Warning/Assist transcript
+    /// entry is appended to it in plain text as it lands, for a screen reader
+    /// or a second terminal running `tail -f`. `None` when the flag was not
+    /// given, or when the path could not be opened (a Warning is pushed to the
+    /// visible transcript instead — see [`Self::attach_transcript_sink`]).
+    /// Never persisted: a save/restore carries no file handles.
+    pub(crate) transcript_sink: Option<TranscriptSink>,
 }
 
 impl Default for AppState {
@@ -3806,6 +3859,7 @@ impl Default for AppState {
             room_dock_scroll_room: None,
             room_dock_body_viewport: 0,
             archive_worker: crate::archive_worker::ArchiveWorker::new(),
+            transcript_sink: None,
         }
     }
 }
@@ -5006,6 +5060,56 @@ impl AppState {
         self.push_transcript_kind(text, TranscriptKind::Story);
     }
 
+    /// Attach the live `--transcript-file` sink (SQ-0410). Call once, at boot,
+    /// before anything is pushed to the transcript, so the opening banner is
+    /// captured too.
+    ///
+    /// Never fails loudly: a path that cannot be opened for append (a
+    /// directory, a permission error, a missing parent) reports once as a
+    /// [`TranscriptKind::Warning`] transcript entry instead of aborting the
+    /// launch — the player still gets to play, just without the live stream.
+    pub fn attach_transcript_sink(&mut self, path: &std::path::Path) {
+        match TranscriptSink::open(path) {
+            Ok(sink) => self.transcript_sink = Some(sink),
+            Err(e) => self.push_transcript_kind(
+                &format!(
+                    "[accessibility] could not open transcript file {} ({e}); live transcript stream disabled",
+                    path.display()
+                ),
+                TranscriptKind::Warning,
+            ),
+        }
+    }
+
+    /// Mirror one transcript entry to the live `--transcript-file` sink, if
+    /// one is attached (SQ-0410). Called from every `push_transcript_*`
+    /// variant with the exact text/kind it was given — never derived from the
+    /// transcript Vecs, because `push_transcript_internal`/`_styled` can
+    /// INSERT above a trailing prompt rather than append, and the file wants
+    /// arrival order, not final vector position.
+    ///
+    /// Only lines a sighted player would read reach the file: game text, the
+    /// player's echoed command, VM diagnostics (`Warning`), and Lanthorn's own
+    /// Guiding Light (`Assist`) — never app-chrome `Meta` output (`/help`,
+    /// `/filter`, a config dump), which would flood an accessibility stream
+    /// with UI rather than story.
+    ///
+    /// A write error disables the sink and reports once, rather than
+    /// crashing or spamming a Warning on every subsequent turn.
+    fn stream_transcript(&mut self, text: &str, kind: TranscriptKind) {
+        if !matches!(kind, TranscriptKind::Story | TranscriptKind::Input | TranscriptKind::Warning | TranscriptKind::Assist) {
+            return;
+        }
+        let Some(mut sink) = self.transcript_sink.take() else { return };
+        match sink.write_entry(text, kind) {
+            Ok(()) => self.transcript_sink = Some(sink),
+            Err(_) => self.push_transcript_kind(
+                "[accessibility] transcript file write failed; live transcript stream disabled",
+                TranscriptKind::Warning,
+            ),
+        }
+    }
+
     /// Whether app-internal transcript output (status/slash/save-restore messages,
     /// pushed via [`push_transcript_kind`](Self::push_transcript_kind) /
     /// [`push_transcript_styled`](Self::push_transcript_styled)) should be inserted
@@ -5078,6 +5182,7 @@ impl AppState {
             self.transcript_para.push(ParaFmt::default());
             self.transcript_images.push(None);
         }
+        self.stream_transcript(text, kind);
     }
 
     /// Add app-internal output (a `[…]` status line, a slash-command dump, a
@@ -5120,6 +5225,7 @@ impl AppState {
                 }
             }
         }
+        self.stream_transcript(text, kind);
     }
 
     /// The visible transcript as a FILE should carry it (SQ-1045).
@@ -5227,6 +5333,11 @@ impl AppState {
                 }
             }
         }
+        // The only caller (`finish_command_turn`, inline-prompt mode) joins the
+        // bare command onto the game's own `>` line already in `transcript`; the
+        // sink has no such line to join, so it gets the same `> ` prefix the
+        // command-bar path writes via `push_transcript_kind` (SQ-0410).
+        self.stream_transcript(&format!("> {text}"), TranscriptKind::Input);
     }
 
     /// Merge transcript line `idx` into line `idx - 1`, concatenating the text and
@@ -5358,6 +5469,7 @@ impl AppState {
             self.transcript_para.push(ParaFmt::default());
             self.transcript_images.push(None);
         }
+        self.stream_transcript(text, kind);
     }
 
     /// Like [`push_transcript_styled`], but inserts app-internal styled output
@@ -5396,6 +5508,7 @@ impl AppState {
                 }
             }
         }
+        self.stream_transcript(text, kind);
     }
 
     /// Split `text` on `'\n'` and append each line tagged with `kind`, deriving a
@@ -5524,6 +5637,7 @@ impl AppState {
             self.transcript_para.push(ParaFmt { nowrap_from: line_nowrap, ..line_para.unwrap_or_default() });
             self.transcript_images.push(None);
         }
+        self.stream_transcript(text, kind);
     }
 
     /// [`push_transcript_runs`](Self::push_transcript_runs) for a `read_char` turn,
@@ -6165,6 +6279,59 @@ mod tests {
         assert_eq!(s.transcript_kinds.len(), 2);
         assert!(matches!(s.transcript_kinds[0], TranscriptKind::Story));
         assert!(matches!(s.transcript_kinds[1], TranscriptKind::Meta));
+    }
+
+    #[test]
+    fn transcript_sink_streams_two_turns_flushed_and_plain_text() {
+        let dir = crate::scratch_dir("sq0410");
+        let path = dir.join("transcript.txt");
+        let mut s = AppState::default();
+        s.attach_transcript_sink(&path);
+        assert!(s.transcript_kinds.is_empty(), "attach itself must not write to the visible transcript");
+
+        // Turn 1: the player's command, then the game's reply.
+        s.push_transcript_kind("> look", TranscriptKind::Input);
+        s.push_transcript_runs("West of House\nYou are standing in an open field.", TranscriptKind::Story, &[]);
+
+        // Flushed after the first turn, before the second is even typed.
+        let after_turn_one = std::fs::read_to_string(&path).unwrap();
+        assert_eq!(after_turn_one, "> look\nWest of House\nYou are standing in an open field.\n");
+
+        // Turn 2: a blank line separates it, and a Meta line (a `/help` dump)
+        // must not reach the file at all.
+        s.push_transcript_kind("/help dump", TranscriptKind::Meta);
+        s.push_transcript_kind("> north", TranscriptKind::Input);
+        s.push_transcript_runs("North of House\nYou can't go that way.", TranscriptKind::Story, &[]);
+
+        let after_turn_two = std::fs::read_to_string(&path).unwrap();
+        assert_eq!(
+            after_turn_two,
+            "> look\nWest of House\nYou are standing in an open field.\n\
+             \n> north\nNorth of House\nYou can't go that way.\n"
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn transcript_sink_open_failure_yields_one_warning_and_no_panic() {
+        let dir = crate::scratch_dir("sq0410-badpath");
+        // A directory cannot be opened for append; this must not panic, and
+        // must not silently do nothing either.
+        let mut s = AppState::default();
+        s.attach_transcript_sink(&dir);
+        assert!(s.transcript_sink.is_none(), "a path that cannot be opened must not leave a sink attached");
+        assert_eq!(s.transcript_kinds.len(), 1);
+        assert!(matches!(s.transcript_kinds[0], TranscriptKind::Warning));
+
+        // And it stays quiet from here on: pushing more turns raises no further
+        // warnings, since there is no sink left to fail.
+        s.push_transcript_kind("> look", TranscriptKind::Input);
+        s.push_transcript_runs("West of House", TranscriptKind::Story, &[]);
+        let warnings = s.transcript_kinds.iter().filter(|k| matches!(k, TranscriptKind::Warning)).count();
+        assert_eq!(warnings, 1, "no spam: exactly one warning for the whole session");
+
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
