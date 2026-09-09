@@ -51,3 +51,12 @@ lanthorn-zvm = { path = ".", features = ["fixtures"] }
 [[example]]
 name = "grammar_dump"
 required-features = ["grammar"]
+
+# The graphical half of the example pair (SQ-1406): boots a Version 6 story,
+# drains paint events through `Resources` and `V6Metric`, writes a PPM, and
+# proves the screen-snapshot pair round-trips. `test = true` so the gate
+# COMPILES and RUNS it — its `#[test]` skips vacuously when the gitignored
+# story fixture is absent, which is every CI checkout.
+[[example]]
+name = "v6_host"
+test = true
