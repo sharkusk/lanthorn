@@ -147,16 +147,13 @@ now shared rather than duplicated. `docker/serve-session.sh` runs the game as
 `dtach -A /tmp/lanthorn-sessions/<id>.sock … lanthorn …`, so a reconnect with
 that id **attaches to the running game** instead of starting a new one.
 
-Why that survives the hang-up, precisely. ttyd's `LWS_CALLBACK_CLOSED`
-(`src/protocol.c:373-379`) calls `pty_kill(pss->process, server->sig_code)`;
-`pty_kill` is `uv_kill(-process->pid, sig)` (`src/pty.c:158-164`), a signal at
-the process *group*, and `sig_code` defaults to `SIGHUP` (`src/server.c:169`).
-That group contains the wrapper and the dtach *client* — the client's handler
-prints `[detached]` and exits (`attach.c:202`, `:90`) — but not the dtach
-*master*, which `setsid()`s into its own session (`master.c:462`) and sets
-`SIGHUP` to `SIG_IGN` besides (`master.c:483`). With no client attached the
-master reads the pty and discards it (`master.c:337`), so a detached game
-neither blocks on a full pipe nor spins.
+Why that survives the hang-up, precisely. ttyd 1.7.7 drops the websocket by
+signalling the process group with `SIGHUP` — the terminator is the shell wrapper
+(`docker/serve-session.sh`), the actual game, and the dtach *client*, all in one
+group. The dtach client detaches and exits, but the dtach *master* — which was
+started as its own session leader and ignores `SIGHUP` — stays alive reading the
+pty and discarding output. A detached game neither blocks on a full pipe nor
+spins.
 
 The reaper. A background loop in `docker/entrypoint.sh` sweeps every five
 minutes and ends any session nobody has been in for `LANTHORN_WEB_SESSION_TTL`.
@@ -174,10 +171,10 @@ save. Only the *live* session is gone.
 Two supporting details that are not obvious from the outside:
 
 - `docker/session-run.sh` waits for the attacher's window-size packet before
-  starting lanthorn. dtach's `init_pty` creates the session's pty with no
-  winsize at all ("we don't have to set the window size here, because the
-  attacher will send it in a packet"), and a full-screen TUI that measures the
-  terminal in that window lays its first frame out on nothing.
+  starting lanthorn. dtach creates the session's pty without an initial window
+  size — the client sends it in its first packet — and a full-screen TUI that
+  measures the terminal without that information lays its first frame on an
+  unknown size.
 - `init: true` in `docker-compose.yml` gives the container a real init as pid 1.
   Without it ttyd is pid 1, and ttyd does not `wait()` for children it did not
   spawn — so every reaped session's daemonised master would linger as a zombie.
