@@ -57,6 +57,19 @@ settle the three questions Appendix A records; §3.1, §3.4, §3.7, §3.8, §9.1
 sections quote was measured on the §10.2 specimens rather than taken from any
 implementation.
 
+A fourth note. **The same first row was read a third time, at the same commit,
+on 2026-09-09**, for two things: the plain dictionary reading, to reconcile it
+with the three findings the Commodore 64 *Mysterious Adventures* implementer
+reported (§4.2, §5.3 and §8.2 now carry the results); and the **US S.A.G.A.
+binary database**, which §11 previously refused by name and which §12 now
+specifies. Every field width, offset, table order and worked example in §12 was
+measured on the §12.13 specimens and checked against the reference-format twin
+of the same game; nothing in it is a count or an offset taken on trust. Two
+facts §12 states about the reference's behaviour rather than about the format
+are labelled as such — the version/adventure dispatch pairs of §12.2 and the
+runtime behaviours of §12.11 — and the reference was consulted for those and
+for nothing else in that section.
+
 **One non-GPL secondary source, added 2026-09-09.**
 [`scott-c64-layout-findings.md`](scott-c64-layout-findings.md), this
 repository's own BSD-3-Clause investigation of the eleven Commodore 64
@@ -106,6 +119,8 @@ is more likely to be right about which parts of it the game data actually uses.
 - §9 — Runtime behaviour that varies by dialect
 - §10 — Specimens
 - §11 — Refusal cases
+- §12 — The US S.A.G.A. binary database: the column-major format the American
+  Atari 8-bit, Apple II and Commodore 64 disk releases carry
 - Appendix A — How lanthorn uses this document
 
 ---
@@ -953,25 +968,90 @@ letters.
 
 ### 4.2 Dictionary cell reading
 
-Cells are a fixed width — the game's word length, 3, 4 or 5 — read as a stream,
-with three escapes that consume extra bytes without counting toward the width:
+**The dictionary is a fixed grid of (word length + 1)-byte cells**, read as a
+stream. A cell carries its word left-aligned and NUL-padded to the full cell
+width. A `*` in the cell's **first byte** marks a synonym of the nearest
+preceding canonical word, exactly as in the reference format, and **it occupies
+one of the cell's own bytes**, so a synonym has one character less room than a
+canonical word. A cell whose bytes are all NUL, or all spaces, is an empty cell
+and consumes its full width like any other. Reading stops at any byte above 127;
+that is a terminator condition, not an error.
 
-- a NUL as the **first** byte of a cell is padding: skip it and take the next
-  byte as the first character;
-- a `*` anywhere restarts the character count, so it occupies one extra byte
-  and the word that follows still gets its full width;
-- a space immediately followed by a non-space is dropped and the character
-  count rewinds by one, so interior padding spaces cost an extra byte each.
+*Worked example*, the first ten bytes of the Commodore 64 *Golden Baton*
+dictionary at `$685F` (§10.4). The word length is 4, so cells are five bytes:
 
-Reading stops at any byte above 127. This is a terminator condition, not an
-error.
+```
+41 55 54 4F 00 | 47 4F 00 00 00 | 53 57 49 4D 00 | …
+A  U  T  O     | G  O           | S  W  I  M
+```
+
+`AUTO` fills four bytes and takes one pad; `GO` fills two and takes three;
+`SWIM` follows. Ten cells later the same block reads
+`47 45 54 00 00 | 2A 54 41 4B 45` — `GET` with two pads, then the synonym
+`*TAKE`, five characters in a five-byte cell of which the `*` is one. The ZX
+Spectrum releases of the same eleven titles spell their dictionaries the same
+way; *The Golden Baton*'s first sixty-four dictionary bytes are identical on the
+two platforms.
+
+**One alignment escape, and where it may be applied.** A NUL where a cell should
+begin can be padding rather than an empty cell: skip it, and take the following
+(word length + 1) bytes as the cell. **This is safe only where an empty cell is
+spelled with spaces**, and on the Commodore 64 *Mysterious Adventures* releases
+it is: measured across all eleven §10.4 specimens, **not one dictionary contains
+an all-NUL cell**, while *The Golden Baton* has two all-space cells (verb cells
+77 and 78) and *The Wizard of Akyrz* three (verb cells 22, 48 and 61). On the ZX
+Spectrum releases of the same titles the opposite holds — all-NUL cells are
+common, up to 27 in one dictionary — and **the escape must not be applied
+there**, because it would eat the first byte of every one of them.
+
+Measured on the eleven Commodore 64 specimens, bounded by the room-description
+address §6.2's pointer block gives, the escape fires **exactly once in the whole
+corpus**: at *The Golden Baton*'s final cell, where the block reads
+`48 45 4C 4D 00 | 4F 46 46 00 00 | 00 | 43 41 53 54 00` — `HELM`, `OFF`, one
+stray byte, and `CAST`. Its published conversion's last noun is `CAST` (§10.4),
+and without the skip that cell is misread. With the skip, every one of the
+eleven dictionaries ends **exactly** on the room-description address, with no
+byte left over and none borrowed.
+
+**Three escapes an existing implementation applies instead, and why they are
+wrong here.** That implementation reads *word length* characters per cell rather
+than a whole cell, and recovers the difference with escapes: the leading-NUL
+skip above, a `*` anywhere restarting the character count so that the word after
+it still gets the full width, and a space immediately followed by a non-space
+being dropped with the character count rewound. On a NUL-padded grid this is
+self-correcting and agrees with the grid reading cell for cell — but only while
+every cell ends in at least one pad byte and no two blank cells are adjacent. It
+loses alignment permanently on either of two shapes the specimens contain:
+
+- **a cell whose word fills all (word length + 1) bytes**, leaving no pad. *The
+  Time Machine* and *Arrow of Death* part 2 store `NORTH` and `SOUTH` as noun
+  cells 1 and 2, five characters in a five-byte cell, and a four-character read
+  leaves the reader standing on the `H`;
+- **two adjacent all-space cells.** The space rewind recovers one space, not
+  two, so *The Golden Baton*'s cells 77 and 78 shift the reader by a byte it
+  never gets back.
+
+Measured against the six titles whose tables are byte-identical to their
+published conversions — *The Golden Baton*, *Arrow of Death* parts 1 and 2, *The
+Feasibility Experiment*, *Perseus and Andromeda* and *Waxworks* — the grid
+reading reproduces **every verb and noun cell of all six**. The escape reading
+reproduces four of the six and fails *The Golden Baton* (78 of its 79 noun cells
+wrong) and *Arrow of Death* part 2 (82 wrong). **Read the grid.**
+
+**And the space rewind is unnecessary everywhere measured.** Across the eleven
+Commodore 64 dictionaries, the eleven ZX Spectrum ones, and the fifteen US
+databases of §12, a space followed by a non-space **never once** occurs at a
+position where the rewind would fire. It is not a rule of any dialect this
+document describes; do not implement it.
 
 **Ordering differs from the reference format.** There, the dictionary is
 alternating (verb, noun) pairs. **In a memory image it is two contiguous
 blocks: every verb cell, then every noun cell.** A reader takes
 (verb-cell count + noun-cell count + 1) cells in one pass and splits them. The
 two block sizes are not derivable from the header's combined word count; see
-§4.6.
+§4.6. (The US binary database of §12 reverses the two blocks — **nouns first** —
+and is located by scanning for the noun block's first cell rather than by a
+signature; see §12.5.)
 
 ### 4.3 From a signature hit to the tables
 
@@ -1094,7 +1174,8 @@ carries which fact. Indices are zero-based from the header address.
   lamp turns to −1 ("never runs out").
 - **US** — word length 0, words 1, actions 2, items 3, messages 4, rooms 5, max
   carried 6, start room 7, treasure count 8, lamp turns 9, treasure room = the
-  **high byte** of word 10.
+  **high byte** of word 10. This shape belongs to the binary database of §12,
+  where the header's address is a fixed offset rather than a catalogued one.
 - **Gremlins Commodore 64** — items 1, actions 2, rooms 3, words 5, max carried
   6, word length 7, start room 8; message count is the constant 98; lamp −1.
 - **Robin of Sherwood Commodore 64** — items 1, actions 2, messages 3, rooms 4,
@@ -1154,7 +1235,7 @@ The honest answer, per fact:
 | header address | **Partly.** Nothing in the file marks it — but see the measurement below. |
 | header field order (one of eleven) | **No.** |
 | table reading order (early or later family) | **No.** It changes what the "follows immediately" sentinel means, so it cannot be guessed without trying both and checking every table lands plausibly. |
-| action encoding (plain, count-prefixed, or US column-major) | **No**, though a reader could disambiguate by checking that decoding (action count + 1) records lands exactly on the next known table. |
+| action encoding (plain, count-prefixed, or US column-major — §12.8) | **No**, though a reader could disambiguate by checking that decoding (action count + 1) records lands exactly on the next known table. |
 | room-description, room-connection, message, item-description, item-location, system-message and direction-word addresses | **No.** |
 | room-image, item-flag and item-image list addresses | **No.** |
 | character-set address, picture-data address, picture-address bias, picture count, palette identity, picture format version | **No.** |
@@ -1452,14 +1533,35 @@ flag byte to 0x82 (bit 7 set, room 2); room 2's picture number set to 0.
 
 **Savage Island part II, Commodore 64.** Room 30's picture number set to 20.
 
-**Mysterious Adventures, all Commodore 64 releases.** Noun cell 0 set to `ANY`,
-and noun cells 1-6 copied from the first six system messages (the direction
-words) truncated to the word length — these releases do not store direction
-nouns in the dictionary. Per release one further cell is a stray that must be
-blanked: Golden Baton noun 79 becomes `CAST` and verb 79 becomes `.` and the
-word count must be reduced to 79; Time Machine verb 86; Arrow of Death part 1
-noun 82; Arrow of Death part 2 verb 80; Escape from Pulsar 7 noun 102; Circus
-noun 96; Feasibility Experiment noun 80; Perseus and Andromeda noun 82.
+**Mysterious Adventures, all Commodore 64 releases — the direction-noun repair is
+not needed, and doing it damages two releases.** An existing implementation
+installs `ANY` into noun cell 0 and copies the first six system messages (the
+direction words), truncated to the word length, into noun cells 1-6, for exactly
+the releases whose catalogue record is marked both *Mysterious* and *Commodore
+64* — this eleven and no others. **Measured on all eleven §10.4 specimens, those
+seven cells are already there**, read straight out of the dictionary by §4.2's
+grid rule: noun cells 0-6 are `ANY NORT SOUT EAST WEST UP DOWN` in nine of the
+eleven, and `ANY NORTH SOUTH EAST WEST UP DOWN` in *The Time Machine* and *Arrow
+of Death* part 2, whose releases spell the two long ones with five characters in
+a five-byte cell. Overwriting them with system-message text truncated to the
+word length would replace those two with `NORT` and `SOUT` — a repair that
+destroys stored data.
+
+The repair is needed only by a reader that has lost cell alignment before it
+reaches noun cell 0, which is what §4.2's escape reading does on these
+specimens: on *The Golden Baton* it mis-reads 78 of the 79 noun cells, and on
+*Arrow of Death* part 2 it goes wrong from `NORTH` onward. **Read the grid and
+drop the repair.**
+
+What survives per release is the stray last cell, and only that: Time Machine
+verb 86; Arrow of Death part 1 noun 82; Arrow of Death part 2 verb 80; Escape
+from Pulsar 7 noun 102; Circus noun 96; Feasibility Experiment noun 80; Perseus
+and Andromeda noun 82. On the specimens these are the cells that fall past the
+end of the real vocabulary and read as fragments of the release's copyright
+string. **The Golden Baton's entry loses its first half**: its final cell reads
+`CAST` directly under §4.2's alignment escape, which fires there and nowhere
+else in the corpus, so no substitution is called for; the word-count reduction
+to 79 stands.
 
 **Escape from Pulsar 7, Commodore 64.** **The header's action count (195) is
 wrong and must be replaced by 190**, exactly as for the German Commodore 64
@@ -2694,10 +2796,18 @@ the output.
   and the paint both happen at dequeue time**, so the queue routinely holds
   duplicates.
 - **The queue is bounded at 1024 points, and further enqueues are silently
-  dropped.** A fill of a large region can therefore terminate early and leave
-  holes. This is observable output, and a decoder with an unbounded queue
-  produces *different, more complete* pictures. It is a real behavioural fork,
-  and an implementer must choose deliberately.
+  dropped.** That is the reference behaviour, and reproducing it is the safe
+  choice. **Measured, it makes no difference at this canvas size.** Decoding
+  every picture of all eleven Commodore 64 releases of §10.4 — 516 images and
+  2,227 individual fills — the queue's greatest depth ever reached is **677**,
+  well under the bound, so not one enqueue is dropped and the bounded and
+  unbounded decoders produce byte-identical canvases. A single unobstructed fill
+  of the whole empty 255 x 94 canvas paints all **23,970** pixels either way and
+  peaks at a depth of 421. The reason is structural: a breadth-first frontier on
+  a grid this shape is bounded by the perimeter it has reached, not by the area
+  it has painted. So the bound is a fact about the reference and not, on any
+  measured specimen, a fork in the output; an implementer who omits it should
+  say so, and one who keeps it need not defend the choice with a comparison.
 - Fills and lines must run in strict stream order, since each fill's boundary
   test sees everything done before it.
 
@@ -3608,25 +3718,24 @@ a strict reader should refuse. Line-drawn picture data whose first byte is not
 recoverable picture — a partial load, not a fatal error, and the player should
 be told how many were lost.
 
-**The UK Hulk releases are not this format at all.** They use the US binary
-database: a fifteen-word header in the US field order, a dictionary found by
-scanning forward for the literal bytes `ANY`, **length-prefixed** strings rather
-than NUL-terminated ones (a length byte of 0 meaning the string `.`), item
-locations stored **two bytes apart**, a per-item four-byte picture lookup table,
-an action table stored **column-major** (all verbs, then all nouns, then the
-four command bytes as four columns, then the five condition words as five
-columns of two bytes each, every column being action count + 1 entries long),
-and room connections stored **direction-major** rather than room-major. Their
-baseline is additionally the dictionary hit minus the catalogued dictionary
-address **minus 645**. Nothing in §§4-6 applies; refuse, or implement it as a
-separate dialect.
+**The US S.A.G.A. releases are a different format, and §12 now specifies it.**
+The American disk editions — Adventureland, Pirate Adventure, Mission
+Impossible, Voodoo Castle, The Count, Strange Odyssey, Claymorgue and the
+Questprobe *Hulk*, on the Atari 8-bit, the Apple II and the Commodore 64 — and
+the UK *Hulk* releases all carry a **binary database** that shares §4's model
+and almost none of its encoding: a fifteen-word header in §4.5's US field order
+at a fixed offset, a dictionary of nouns then verbs found by scanning for the
+literal bytes `ANY`, **length-prefixed** strings rather than NUL-terminated
+ones, item locations two bytes apart, a **column-major** action table,
+**direction-major** room connections, and three tables of memory-address
+pointers. §§4-6 do not apply to any of it. This document no longer refuses it —
+read §12, which specifies the format, the container step for each platform, and
+the per-release facts, all measured on fifteen databases against their
+reference-format twins.
 
-**The US releases generally** — Pirate Adventure, Voodoo Castle, Claymorgue and
-Hulk in their American disk editions — use that same column-major binary format,
-identified not by a dictionary signature but by scanning the first 0x38 bytes
-for two values below 500, a format version and an adventure number, and then
-dispatching on the pair. Version 127 with adventure 1, version 126 with
-adventure 2, and version 126 with adventure 13 are distinct variants.
+**Questprobe 3, *Fantastic Four*, is still refused**, on both the Commodore 64
+(`QUESTPR3.D64`) and MS-DOS (`SPL53P.DAT`); see §12.14 for what was ruled out
+and why.
 
 **Containers.** Every refusal listed in §7 stands: unknown snapshot header
 lengths and hardware modes; appended level-data blocks; a snapshot stream that
@@ -3686,25 +3795,593 @@ remap tables were derived by eye and may contain mistakes.
 
 ---
 
+## 12. The US S.A.G.A. binary database
+
+This is the format §11 used to refuse by name: the encoding of the American
+"S.A.G.A." (Scott Adams Graphic Adventure) disk releases for the Atari 8-bit,
+the Apple II and the Commodore 64, and of the Questprobe *Hulk*. It is a binary
+database like §4's, and it decodes to the same model, but **almost nothing else
+is shared** — it has no dictionary signature, no per-release address catalogue,
+a different string encoding, a transposed action table, transposed room
+connections, and its own pointer tables. It is specified here rather than folded
+into §4 because none of §4's locating rules apply to it.
+
+Every layout statement below was measured on the fifteen databases of §12.13 —
+seven Atari 8-bit, seven Apple II and one Commodore 64 — and every table was
+checked field for field against the freely redistributable reference-format
+conversion of the same game (§12.13 names the twin for each).
+
+### 12.1 Shape of the whole thing
+
+A database is one flat byte array. Its layout, in file order:
+
+| # | region | size | § |
+|---|---|---|---|
+| 1 | front matter, carrying the version and adventure numbers | 0x38 bytes | 12.2 |
+| 2 | header | 15 little-endian words, of which the first 11 carry fields | 12.4 |
+| 3 | gap (present on Atari and Apple, absent on the Commodore 64) | per release | 12.4 |
+| 4 | dictionary: **nouns then verbs**, (words + 1) cells each | (words + 1) x 2 cells | 12.5 |
+| 5 | room descriptions, length-prefixed | (rooms + 1) strings | 12.6 |
+| 6 | messages, length-prefixed | (messages + 1) strings | 12.6 |
+| 7 | item descriptions, length-prefixed | (items + 1) strings | 12.6 |
+| 8 | one separator byte | 1 | 12.7 |
+| 9 | item locations | (items + 1) words | 12.7 |
+| 10 | item-description pointers | (items + 1) words | 12.7 |
+| 11 | item locations again, an identical copy | (items + 1) words | 12.7 |
+| 12 | actions, **column-major** | 16 x (actions + 1) bytes | 12.8 |
+| 13 | room-description pointers | (rooms + 1) words | 12.7 |
+| 14 | room connections, **direction-major** | 12 x (rooms + 1) bytes | 12.9 |
+| 15 | message pointers, in a 228-byte allocation | (messages + 1) words | 12.7 |
+
+Every count in that table is a *highest index*, so a table of *N* things has
+*N* + 1 records, exactly as in §2 and §4.4. There are no gaps other than region
+3 and the slack at the end of region 15: on every specimen each region begins
+exactly where the previous one ended, which is what makes reading the whole
+thing sequentially a sound check on the header.
+
+### 12.2 Detection
+
+There is no magic number. **Read the first 0x38 bytes as twenty-eight
+little-endian words; the first non-zero value below 500 is the format version
+and the next value below 500 is the adventure number.** A database whose
+adventure number comes out zero is not one of these.
+
+**The zero skip is load-bearing.** A scan that lets a zero stand as the version
+answers (0, 0) on the Apple II *Claymorgue* database, whose words at offsets
+0x02 through 0x21 are every one of them zero; the real pair sits past them.
+
+Measured, the pair is at a fixed place per platform but not across platforms,
+which is why the scan exists rather than two constants: **offsets 0x22 and 0x26
+on all fourteen Atari and Apple databases, 0x34 and 0x36 on the Commodore 64
+*Hulk***.
+
+Neither number is a game identity on its own. The version is the release build
+number — 416, 408, 306, 119, 115, 119 and 125 for the seven Atari titles, the
+same six plus 122 for the Apple II — and the adventure number is the Adventure
+International series number. **Only the pair identifies a title**, because
+adventure 1 is *Adventureland* at version 416 and the *Hulk* at version 127.
+Three pairs are known to name variants rather than the plain series entry:
+version 127 with adventure 1 is the US *Hulk*; version 126 with adventure 2 and
+version 126 with adventure 13 are two further variants an existing catalogue
+distinguishes. Any other pair means "the series entry named by the adventure
+number".
+
+### 12.3 Reaching the database, per platform
+
+The container work is §7's; what is per-platform here is only *where in the
+container the array starts*, and each platform's constant is chosen so that
+**the header always lands 0x38 bytes into the array**.
+
+**Atari 8-bit** (§7.3). The database is the byte range of the disk image
+beginning at **file offset 0x04C1** and running to the end, taken as-is — the
+header then falls at file offset 0x04F9. It is not a file in the disk's own
+directory: walking the Atari DOS catalogue in sectors 361-368 of these images
+finds only `DOS.SYS`, `AUTORUN.SYS` and (on *Strange Odyssey*) `NIR.SYS`. The
+range is raw, with no per-sector link trailers in it; that is what lets a flat
+slice work at all, and it is a property of how these disks were mastered rather
+than of the container. Side A holds the database and side B the pictures
+(§10.5).
+
+**Apple II** (§7.4). Read the DOS 3.3 catalogue on the **boot** side, take the
+file whose normalised name is `DATABASE` or matches `A?.DAT`, and read it
+through its track/sector list. That gives the raw sector concatenation,
+beginning with the binary file's four-byte prologue (load address, then data
+length). **The database array begins at offset 0x135 of that concatenation**, so
+the header falls at 0x16D. Every one of the seven is 42 catalogue sectors, of
+which 41 hold data (§7.4's "count − 1" rule), loads at `$4000`, and declares a
+data length of 10,335 bytes.
+
+**Commodore 64** (§7.2). Read the named file out of the disk image through its
+block chain; for the *Hulk* the name is `SHULK.DB`, and the array is the program
+file **including** its two load-address bytes. The header falls at offset 0x38 of
+that array with no gap after it at all. `QUESTPR1.D64` sums to 0x2918 in the low
+sixteen bits, which is §7.2's identification checksum, and its `SHULK.DB` is
+9,858 bytes loading at `$8030`.
+
+**The memory-image route, and the number 645.** A release of this format can
+also arrive as a §4 memory image, located by a §4.1 dictionary signature rather
+than by a container offset — this is how the UK *Hulk* releases are handled. The
+baseline is then §4.3's, with a correction: baseline = signature hit − the
+catalogued dictionary address − **645**. The 645 is not arbitrary. §4.1's plain
+signature is `AUTO\0GO\0`, which is the head of the **verb** block, while this
+format's dictionary proper begins at the **noun** block; measured on the
+Commodore 64 *Hulk*, the noun block is at array offset 0x55 and `AUTO\0GO\0` at
+0x2DA, and 0x2DA − 0x55 = **645**. The constant is the distance between the two
+blocks in that database, and it is not a general property of the format — a
+reader taking the container route never needs it.
+
+**"Scrambled" is a picture matter, not a database one.** §7.4's `M2` string test
+and §8.4's two byte placements select how a *picture* is decoded. Verified:
+*Voodoo Castle*, *The Count* and *Claymorgue* are the three Apple II titles whose
+`M2` file carries `COPYRIGHT 1983 NORMAN L. SAILER` at file offset 0x172C, and
+all three decode their **databases** by the rules of this section unchanged, with
+no transform of any kind. The 0x182-byte table those three releases carry at
+`M2` file offset 0x174B is byte-identical between them, and it is a row-address
+table for §8.4: the address for row *y* is
+(table byte at *y*) + 256 x (table byte at 0xC0 + *y*) − 0x2000. *Worked
+example*, from the *Voodoo Castle* boot disk: the table's first eight bytes are
+`00 00 00 00 00 00 00 00` and its bytes at 0xC0 through 0xC7 are
+`20 24 28 2C 30 34 38 3C`, so rows 0 to 7 resolve to 0x0000, 0x0400, 0x0800,
+0x0C00, 0x1000, 0x1400, 0x1800 and 0x1C00 — the ordinary Apple high-resolution
+interleave, spelled out in a table instead of computed.
+
+### 12.4 The header, and the anchoring rule
+
+**Fifteen little-endian 16-bit words at array offset 0x38.** The field order is
+§4.5's **US** shape: word length 0, words 1, actions 2, items 3, messages 4,
+rooms 5, max carried 6, start room 7, treasure count 8, lamp turns 9, and the
+treasure room in the **high byte** of word 10. Words 11 to 14 carry no field —
+on the Commodore 64 *Hulk* they are already the dictionary.
+
+**A reader consumes twenty-nine bytes, not thirty.** The fifteenth word's low
+byte is re-read: the next region begins at header start + 29. This is not a
+nicety. On the *Hulk*, the header is at 0x38 and the noun cell `ANY` begins at
+**0x55**, which is header start + 29; a reader that advances a full thirty bytes
+steps over the `A` and never finds the dictionary at all.
+
+**Sanity limits** for accepting a header, all inclusive: items 10-500, actions
+100-500, words 50-200, rooms 10-100, messages 10-255. A header failing any of
+them means "not this format", not "a corrupt file". Scanning a whole Atari disk
+image for any window of fifteen words satisfying those limits together with max
+carried 1-20, word length 3-6 and a start room within the room count yields
+**exactly one** hit on each of the seven side-A images, at file offset 0x04F9 —
+so the mastering constant of §12.3 is checkable rather than merely asserted.
+
+### 12.5 The dictionary
+
+**Located by scanning forward from the end of the header for the literal bytes
+`A`, `N`, `Y`.** There is no signature table and no back-off; the three letters
+are the first noun cell and the dictionary begins on the `A`. Measured, the scan
+walks **0 bytes** on the Commodore 64 *Hulk*, whose noun block starts exactly at
+header + 29, and **179 bytes** on every Atari and Apple release, whose
+dictionaries all begin at array offset 0x108.
+
+**Order is nouns first.** (words + 1) noun cells, then (words + 1) verb cells —
+**the reverse of §4.2's memory-image order**, which is why the §4.1 signature
+lands in the middle of the block rather than at its start.
+
+**Cells** are the word length in characters, with two escapes that consume an
+extra byte each: a NUL where a cell should begin is skipped and the following
+byte taken as the first character, and a `*` marking a synonym restarts the
+character count so that the word after it still gets the full width. A byte
+above 127 terminates. There is no space escape here either (§4.2): across all
+fifteen databases, a space followed by a non-space never once occurs at a
+position where such a rule would fire.
+
+*Worked example*, the first twenty bytes of Adventureland's dictionary — array
+offset 0x108, word length 3, on both the Atari and the Apple II release:
+
+```
+41 4E 59 00 | 4E 4F 52 00 | 53 4F 55 00 | 45 41 53 00 | 57 45 53 00
+A  N  Y     | N  O  R     | S  O  U     | E  A  S     | W  E  S
+```
+
+Three characters are read and the pad NUL is left for the next cell's leading-NUL
+escape. Two cells later `55 50 00 00` gives `UP` — two letters and two pads, the
+second of which the escape absorbs. The verb block begins 279 bytes further on,
+at 0x21F, and reads `00 41 55 54 | 00 47 4F 00 | 2A 45 4E 54 | 2A 52 55 4E` —
+a leading pad, `AUT`, `GO`, then the synonyms `*ENT` and `*RUN`, each of which
+spends a byte on its `*`.
+
+Verified against the conversions: the dictionary decodes to the twin's verb and
+noun lists exactly (truncated to the release's word length) on all seven Atari
+titles, on six of the seven Apple II titles, and on the Commodore 64 *Hulk*. The
+Apple II *Claymorgue* differs from its twin in six verbs and two nouns, which is
+a release difference and not a decoding one — it is version 122 where the Atari
+release is 125, and the Atari one matches the twin exactly.
+
+### 12.6 Rooms, messages and item descriptions
+
+All three are **length-prefixed strings**, back to back: one byte of length, then
+that many bytes of text, no terminator. **A length of 0 means the string `.`** —
+the reference format's placeholder — and consumes no further bytes.
+
+*Worked example*, Adventureland's room block at array offset 0x337:
+`00 | 0C 64 69 73 6D 61 6C 20 73 77 61 6D 70 | 1A 74 6F 70 …` — room 0 is the
+placeholder, room 1 is twelve bytes of `dismal swamp`, room 2 is twenty-six.
+
+The reference format's conventions carry over unchanged: a leading `*` on a room
+description means "print literally", a leading `*` on an item description marks
+a treasure, and an item's auto-get word is the text between the first `/` and
+the next, with the literal remainders `//` and `/*` meaning "none" — the rule of
+§2.5 applies as written.
+
+**An item whose description carries an auto-get word is followed by one extra
+byte, outside the length prefix, and that byte is the item's own index.**
+Measured on Adventureland: 31 of the 66 item records carry the extra byte and 35
+do not, the split falls exactly on whether the text contains a `/WORD/`, and
+every one of the 31 bytes equals its own item number — item 2
+(`*Pot of RUBIES*/RUB/`) is followed by `02`, item 7 (`Evil smelling mud/MUD/`)
+by `07`, item 62 by `3E`. The same holds on all fifteen databases. The pointer
+table of §12.7 confirms the framing independently: item 2's record runs from
+0x1204 to 0x1219, twenty-two bytes for a one-byte length, twenty of text and the
+one extra. It is a back-reference, not a picture number; nothing in this format
+associates an item with a picture (§12.10).
+
+**Comparing text against a conversion needs one normalisation.** The reference
+format quotes strings with `"`, and the published conversions render an embedded
+double quote as a backtick. Map backtick to `"` before comparing, or a third of
+the message and item strings of every title will look wrong.
+
+### 12.7 Item locations, the pointer tables and the trailer
+
+Between the item descriptions and the actions sit one separator byte and three
+tables. On every specimen the separator is **0x00**.
+
+**Item locations** — (items + 1) little-endian words, i.e. entries **two bytes
+apart**, with the location in the low byte and the high byte zero on every entry
+of every specimen. **255 means carried** and **0 out of play**, as everywhere
+else.
+
+**Item-description pointers** — (items + 1) little-endian words, each the
+**memory address** at which that item's length byte sits.
+
+**Item locations again** — a second copy, byte-identical to the first on all
+fifteen specimens.
+
+Two more pointer tables of the same kind appear later: **(rooms + 1) pointers to
+the room descriptions**, between the action table and the connections, and
+**(messages + 1) pointers to the messages** after the connections, in a
+**228-byte (0xE4)** allocation — the Commodore 64 *Hulk*'s database file ends
+exactly 228 bytes past its connection table, and no specimen's message pointers
+fill more than 200 of them.
+
+These are addresses, not offsets, and that makes them useful twice over. They
+**validate a parse**: on fourteen of the fifteen specimens every one of the
+three tables resolves, entry for entry, onto the string starts a sequential read
+produced. And they **recover the array's memory base**, which is this format's
+equivalent of §4.3's baseline and, unlike it, is derivable: subtract the room
+block's offset from the first room pointer. Measured, that base is `$4131` on
+every Apple II release (`$4000` + 0x135 − 4, the load address adjusted for the
+four-byte prologue and the mastering offset), `$3031` on every Atari release,
+and `$802E` on the Commodore 64 *Hulk* (its load address `$8030` less the two
+load-address bytes).
+
+### 12.8 Actions, column-major
+
+The action table is the same sixteen bytes per record as §4.4 and the same
+packing of verb, noun, conditions and commands — but **transposed**. Instead of
+(actions + 1) records of sixteen bytes, it is a fixed sequence of columns, each
+column holding one field of every record:
+
+| column | width | contents |
+|---|---|---|
+| 1 | 1 byte x (actions + 1) | the vocabulary word's **verb** |
+| 2 | 1 byte x (actions + 1) | the vocabulary word's **noun** |
+| 3 | 1 byte x (actions + 1) | command 1 |
+| 4 | 1 byte x (actions + 1) | command 2 |
+| 5 | 1 byte x (actions + 1) | command 3 |
+| 6 | 1 byte x (actions + 1) | command 4 |
+| 7-11 | 2 bytes x (actions + 1) each | conditions 1 to 5, little-endian |
+
+So with *n* = actions + 1 and the table starting at offset *T*: record *k*'s verb
+is the byte at *T* + *k*, its noun at *T* + *n* + *k*, its four command bytes at
+*T* + 2*n* + *k*, *T* + 3*n* + *k*, *T* + 4*n* + *k* and *T* + 5*n* + *k*, and
+its condition *j* (counting from 0) is the little-endian word at
+*T* + 6*n* + 2*jn* + 2*k*. The whole table is 16*n* bytes, exactly as row-major
+would be.
+
+Reassembly into reference-format numbers is unchanged: the vocabulary word is
+verb x 150 + noun; the first command word is 150 x (command 1) + (command 2) and
+the second is 150 x (command 3) + (command 4); the condition words are already
+in reference form, condition code + 20 x value.
+
+*Worked example*, Adventureland (Apple II, `A1.DAT`). The table starts at array
+offset 0x19D4, *n* = 170, so the columns begin at 0x19D4, 0x1A7E, 0x1B28,
+0x1BD2, 0x1C7C, 0x1D26 and the five condition columns at 0x1DD0, 0x1F24, 0x2078,
+0x21CC, 0x2320. Record 0 takes the first byte of each:
+
+| field | offset | byte(s) | value |
+|---|---|---|---|
+| verb | 0x19D4 | `00` | 0 |
+| noun | 0x1A7E | `4B` | 75 |
+| command 1 | 0x1B28 | `75` | 117 |
+| command 2 | 0x1BD2 | `3E` | 62 |
+| command 3 | 0x1C7C | `00` | 0 |
+| command 4 | 0x1D26 | `00` | 0 |
+| condition 1 | 0x1DD0 | `A1 00` | 161 |
+| condition 2 | 0x1F24 | `82 01` | 386 |
+| condition 3 | 0x2078 | `A0 00` | 160 |
+| condition 4 | 0x21CC | `C8 00` | 200 |
+| condition 5 | 0x2320 | `00 00` | 0 |
+
+Vocabulary word 0 x 150 + 75 = **75**; first command word 150 x 117 + 62 =
+**17612**; second 0. `adv01.dat`'s first action line is
+`75 161 386 160 200 0 17612 0` — the same eight numbers in the same order.
+
+**How closely the tables agree with the conversions.** Two titles are exact on
+both platforms: *Voodoo Castle*, all 190 records, and *The Count*, all 220. The
+rest differ in a small number of records, and the count is a property of the
+release rather than of the platform:
+
+| title | Atari | Apple II |
+|---|---|---|
+| #1 Adventureland | 4 of 170 | 4 of 170 |
+| #2 Pirate Adventure | 4 of 178 | 4 of 178 |
+| #3 Mission Impossible | (specimen damaged) | 7 of 162 |
+| #4 Voodoo Castle | **0** of 190 | **0** of 190 |
+| #5 The Count | **0** of 220 | **0** of 220 |
+| #6 Strange Odyssey | 3 of 224 | 3 of 224 |
+| #13 Claymorgue Castle | 2 of 268 | 15 of 268 |
+| Questprobe 1: The Hulk (C64) | — | 10 of 262 |
+
+Every difference measured has the same shape: the graphic release carries one
+extra command, and sometimes one extra parameter condition, that the text
+conversion does not. These are release differences, not decoding failures — a
+column-major misreading cannot produce 166 exact records and four wrong ones —
+and *Claymorgue*'s wider Apple II gap is the same version 122 versus 125 split
+its dictionary shows (§12.5).
+
+### 12.9 Room connections, direction-major
+
+(rooms + 1) x 6 exits, stored **direction-major**: all the north exits for every
+room, then all the south, east, west, up and down. Within a direction block the
+entries are **two bytes apart**, the exit in the low byte and the high byte zero
+on every entry of every specimen. A block is therefore 2 x (rooms + 1) bytes and
+the whole table 12 x (rooms + 1). 0 means no exit.
+
+*Worked example*, Adventureland (Apple II), 34 rooms' worth. The table starts at
+0x24B8 and the six blocks begin at 0x24B8, 0x24FC, 0x2540, 0x2584, 0x25C8 and
+0x260C. Room 1's exits are the second word of each: `17 00`, `00 00`, `1D 00`,
+`19 00`, `00 00`, `00 00` — 23, 0, 29, 25, 0, 0, which is `adv01.dat`'s room 1
+exit line exactly.
+
+There is no room-image byte anywhere in this table or beside it (§12.10).
+
+### 12.10 Pictures: what the database says
+
+**Nothing.** This is worth stating plainly because §4.4's later-release layout
+has three per-object picture tables and it is natural to look for them here.
+There is no room-image list, no item-flag list and no item-image list; the
+three tables that sit where they might have are the two location copies and the
+item-description pointers of §12.7, all of them accounted for byte by byte
+above; and the one loose byte in the item block is the item's own index (§12.6).
+
+Pictures live in **separate files on the disk**, one per picture, identified by
+filename, and the association is by name and index alone:
+
+- **Commodore 64 and Atari 8-bit** — picture family C (§8.3), named by §8.6's
+  convention: `R…` for a room picture, `B…` with a trailing `R` for an object
+  drawn in a room and a trailing `I` for one drawn in the inventory. The
+  Commodore 64 *Hulk* disk carries `R01nnn`, `B01nnnR` and `B01nnnI` (§10.7).
+  Atari pictures are on the companion side (§10.5) and are reached by offset,
+  not by the disk's directory.
+- **Apple II** — picture family D (§8.4), from `PAK.INVEN` / `PAC.INVEN` and the
+  `PAK.LET…` or `Rnnnn`/`Bnnnnn` files (§10.6).
+
+Two consequences for a reader. A room's picture index **is the room number**;
+there is no table to consult. And the per-title (usage, index, offset, length)
+lists that §8.3 and §8.4 require are not recoverable from the database — they
+are the one thing about these releases that must still be tabulated, and this
+section cannot help with them.
+
+### 12.11 Runtime behaviour that differs
+
+In the manner of §9, the behaviours a conforming interpreter must produce for
+these releases and not for others:
+
+- **A room's picture is drawn from the room number**, with no room-image byte
+  and no 255 sentinel (§12.10). After it, every object picture whose item index
+  names an item presently in the room is drawn over it, in the order the picture
+  files were gathered.
+- **Darkness does not blank the graphics window.** Where other dialects paint
+  black, these draw **picture index 0** — a dedicated darkness image — and
+  return.
+- **The inventory command draws a picture.** Beyond listing what is carried, it
+  clears the graphics window, draws **picture index 98** as a room picture, then
+  draws the inventory-object picture of every carried item, and waits for the
+  player to press ENTER before restoring the room view. On the Atari 8-bit the
+  index-98 image comes from the companion disk rather than from the database
+  side.
+- **The *Hulk* remaps five pairs of rooms onto other rooms' pictures** — 5 and 6
+  onto 3, 7 and 8 onto 4, 10 and 11 onto 9, 13 and 14 onto 2, 17 and 18 onto 16
+  — on the Commodore 64 and Atari 8-bit releases but **not** on the Apple II one.
+- **Four titles add hard-coded overlays** that no table expresses: the *Hulk*
+  draws object pictures 70, 72 and 13 under item-position conditions; *The
+  Count* draws 80, 81 and 82 only in rooms 8, 18 and 9 respectively; *Voodoo
+  Castle* draws 80 only in room 14. §11's "per-game association overrides"
+  paragraph covers these; name them rather than infer them.
+- **The two lamp options §9.2 describes are not forced.** These are Adventure
+  International releases, not Mysterious Adventures ones, and take the host's
+  settings.
+
+### 12.12 The per-release table, and what can be re-derived
+
+Fifteen facts per release are tabulated below, and — unlike §4.6's memory-image
+catalogue, where roughly seventeen numbers per release have no derivation at all
+— **every one of the fifteen is recovered from the bytes**. The table is an
+identification checksum, not an input.
+
+| fact | how it is re-derived |
+|---|---|
+| version, adventure number | §12.2's scan of the first 0x38 bytes |
+| word length, words, actions, items, messages, rooms, max carried, start room, treasures, lamp turns, treasure room | the header at array offset 0x38, read in §4.5's US field order |
+| dictionary offset | scan forward from header + 29 for the literal `ANY` (§12.5) |
+| database base address | first room-description pointer minus the room block's offset (§12.7) |
+
+The only per-release knowledge this format genuinely requires is the picture
+lists of §12.10, and the only per-**platform** knowledge is the three container
+constants of §12.3.
+
+**Atari 8-bit**, side A of each two-sided set, database at file offset 0x04C1,
+base `$3031`, dictionary at array offset 0x108 in every one:
+
+| title | ver | adv | wlen | words | acts | items | msgs | rooms | carry | start | treas | lamp | t.room | twin |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| #1 Adventureland | 416 | 1 | 3 | 69 | 169 | 65 | 75 | 33 | 6 | 11 | 13 | 125 | 3 | `adv01.dat` |
+| #2 Pirate Adventure | 408 | 2 | 3 | 79 | 177 | 66 | 88 | 26 | 6 | 1 | 2 | 150 | 1 | `adv02.dat` |
+| #3 Mission Impossible | 306 | 3 | 3 | 64 | 161 | 53 | 81 | 23 | 7 | 2 | 0 | 10000 | 1 | `adv03.dat` |
+| #4 Voodoo Castle | 119 | 4 | 3 | 89 | 189 | 65 | 99 | 25 | 9 | 1 | 0 | 15000 | 0 | `adv04.dat` |
+| #5 The Count | 115 | 5 | 3 | 79 | 219 | 72 | 88 | 22 | 7 | 1 | 0 | 175 | 0 | `adv05.dat` |
+| #6 Strange Odyssey | 119 | 6 | 4 | 79 | 223 | 55 | 94 | 35 | 6 | 1 | 5 | 10000 | 22 | `adv06.dat` |
+| #13 Claymorgue Castle | 125 | 13 | 5 | 109 | 267 | 75 | 79 | 32 | 10 | 1 | 13 | 3000 | 19 | `adv13.dat` |
+
+**Apple II**, the boot side of each two-sided set, database at offset 0x135 of
+the named DOS 3.3 file, base `$4131`, dictionary at array offset 0x108 in every
+one:
+
+| title | file | ver | adv | wlen | words | acts | items | msgs | rooms | carry | start | treas | lamp | t.room | twin |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| #1 Adventureland | `A1.DAT` | 416 | 1 | 3 | 69 | 169 | 65 | 75 | 33 | 6 | 11 | 13 | 125 | 3 | `adv01.dat` |
+| #2 Pirate Adventure | `A2.DAT` | 408 | 2 | 3 | 79 | 177 | 66 | 88 | 26 | 6 | 1 | 2 | 150 | 1 | `adv02.dat` |
+| #3 Mission Impossible | `A3.DAT` | 306 | 3 | 3 | 64 | 161 | 53 | 81 | 23 | 7 | 2 | 0 | 10000 | 1 | `adv03.dat` |
+| #4 Voodoo Castle | `A4.DAT` | 119 | 4 | 3 | 89 | 189 | 65 | 99 | 25 | 9 | 1 | 0 | 15000 | 0 | `adv04.dat` |
+| #5 The Count | `DATABASE` | 115 | 5 | 3 | 79 | 219 | 72 | 88 | 22 | 7 | 1 | 0 | 175 | 0 | `adv05.dat` |
+| #6 Strange Odyssey | `A6.DAT` | 119 | 6 | 4 | 79 | 223 | 55 | 94 | 35 | 6 | 1 | 5 | 10000 | 22 | `adv06.dat` |
+| #13 Claymorgue Castle | `DATABASE` | 122 | 13 | 5 | 109 | 267 | 75 | 79 | 32 | 10 | 1 | 13 | 3000 | 19 | `adv13.dat` |
+
+**Commodore 64**, `SHULK.DB` from `QUESTPR1.D64`, base `$802E`, dictionary at
+array offset 0x55 — immediately after the header, with no gap:
+
+| title | file | ver | adv | wlen | words | acts | items | msgs | rooms | carry | start | treas | lamp | t.room | twin |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| Questprobe 1: The Hulk | `SHULK.DB` | 127 | 1 | 4 | 128 | 261 | 54 | 99 | 20 | 10 | 1 | 17 | 150 | 16 | `quest1.dat` |
+
+Two things the tables show that are worth reading off them. The Atari and Apple
+II releases of titles 1 to 6 are **the same build** — identical version numbers
+and identical header counts — and differ only in container and picture family;
+*Claymorgue* is the exception, 125 on the Atari and 122 on the Apple. And the
+Commodore 64 *Hulk*'s eleven header numbers are **identical to those of the
+MS-DOS `ADVENT.DAT`** of §10.7, which is the plain reference text format — the
+same database in two encodings, which is exactly the oracle §12.13 recommends.
+
+### 12.13 Specimens, and the oracle
+
+The specimens are catalogued in §10.5 (Atari 8-bit, seven two-sided sets), §10.6
+(Apple II, seven two-sided sets) and §10.7 (the Commodore 64 Questprobe images),
+with the sha256 of every file. The ones this section was measured on:
+
+| platform | specimen | sha256 |
+|---|---|---|
+| Atari | `SAGA #1 - Adventureland [side A].atr` | `7c48bc7779d15b75ef66cddf384f77c6a3a37e5372340e71a573bbec41ba2d75` |
+| Atari | `SAGA #2 - Pirate Adventure [side A].atr` | `547c0e902c732c11d158a4c3e46a2e41a6da861516e60b763f2157b2785d3041` |
+| Atari | `SAGA #3 - Mission Impossible [side A].atr` | `7575154bd45890d411fcf19cb566523934ff884b471b25cfa9e3002b88c3d136` |
+| Atari | `SAGA #4 - Voodoo Castle [side A].atr` | `3f7db728180666d1e4d1b8b0a96f75d1ca22cc26d9bc8651546d5d9bc8a5f2bd` |
+| Atari | `SAGA #5 - The Count [side A].atr` | `5dc27fa238301de48ddc4d2d70dc1fa8fde94dfeb83647a7e25ba2ae13da87e4` |
+| Atari | `SAGA #6 - Strange Odyssey [side A].atr` | `83985e1ac74e67d35d37f1364bd65bb0829f83eb16073fca9f9d1ec2842b0a78` |
+| Atari | `SAGA No. 13 - The Sorcerer of Claymorgue Castle _ side A.atr` | `d0dcba442113b7ca60b1f83f085fe5e5a5f65b15a8deaeafa4e8fec9354ceb96` |
+| Apple II | Adventureland side B - boot | `53064cac8ddcb0bb61638d1fffce292fe6ccb175c24c62570fe99c0012531f32` |
+| Apple II | Pirate Adventure side B - boot | `0a01e8bb97e3b8463ff6ac2283d8589bd42ca2e0b08dd53a8bbc5c853b8bdf03` |
+| Apple II | Mission Impossible side B (boot) | `7734791024687997fa3025c7e52a71a56dd70dd62d7d4601d61c51759ba03a1b` |
+| Apple II | Voodoo Castle side B (boot) | `c34dba003a7f5f8e3e32ee682dc96dc1e611a9c9a2236920070fe59882ebf84e` |
+| Apple II | The Count side B - boot | `ba3d66fbcce65ab753b886fad52ce3d4ef54ce829c6bd3667bf10a5fd1529d2a` |
+| Apple II | Strange Odyssey side B - boot | `6039602205a6dd03f8b0aa15e5da246d19dcccb3d3495371641c8ed8d156a1fc` |
+| Apple II | Claymorgue Castle side B (boot) | `5ca192b45d2fdc1e883e1db29961919cc8b3437673a463f816f8072e8fc65910` |
+| Commodore 64 | `QUESTPR1.D64` | `5035c0ae93ebfd144e8c473c29ed24c30e07f9e5e5457730e573bbb28d95a4e4` |
+
+**The oracle, and it is a good one.** Every title here has a reference-format
+twin in the §10.1 archive — `adv01` through `adv06` for the six S.A.G.A.
+numbers, `adv13` for *Claymorgue*, and `quest1` for the *Hulk*. Decode the
+binary database and compare table for table against the twin; nothing from any
+implementation is needed, and nothing from this document either once the
+comparison is running. What such a comparison should be expected to produce, as
+measured here:
+
+- **the eleven header numbers match exactly** on all fifteen databases;
+- **item start locations match exactly** on fourteen of the fifteen (all but the
+  damaged specimen below);
+- **room connections match exactly** on fourteen (all but the damaged specimen
+  below), including every one of Adventureland's 34 rooms and Claymorgue's 33;
+- **the dictionary matches** as §12.5 describes;
+- **room, message and item texts match** after mapping the conversion's backtick
+  to `"`, except where the graphic release genuinely differs — the Atari *Count*
+  is the widest such gap, 3 rooms, 8 messages and 7 items away from `adv05.dat`,
+  where the Apple II *Count* is identical to it;
+- **actions match to within a handful of records per title**, as §12.8 sets out;
+  *Voodoo Castle* and *The Count* are exactly identical on both platforms and are
+  the two cases to bring up first — a column-major reader that gets either of
+  them wrong is wrong about the format, not about the release.
+
+**One specimen is damaged and cannot serve as an oracle.** The Atari
+*Mission Impossible* side A carries about fifty corrupt bytes in the middle of
+its room-description block, beginning at file offset 0x912: the text of room 16,
+`*I'm on a ledge outside of a window…`, is cut off after `window` and overwritten
+with a fragment containing the ASCII string `D:SAGA3.DAT`. Its header and
+dictionary decode correctly and match `adv03.dat`; everything after the sixteenth
+room string does not. The disk holds a second, undamaged copy of the same
+database, reachable by stripping the three-byte link trailer from the end of
+every 128-byte sector and then scanning for a §12.4 header — that copy's room
+connections match `adv03.dat` exactly. Use the **Apple II** `A3.DAT`, which is
+clean, or that second copy; do not conclude from the flat-slice reading that this
+document is wrong about the format. This is what §7.3 means when it says the
+0x04C1 constant is a property of how these disks were mastered and an implementer
+wanting generality must walk the filesystem.
+
+### 12.14 Refusals
+
+- A first-0x38-byte scan yielding an adventure number of **zero**, or a header at
+  offset 0x38 failing §12.4's limits, means "not this format" — hand the file to
+  the next detector rather than reporting corruption.
+- A forward scan from header + 29 that reaches the end of the array without
+  finding the bytes `ANY` is the same answer. Do not fall back to §4.1's
+  signatures: they match the **verb** block here, 645 bytes late on the one
+  release measured, and reading from there produces a self-consistent parse of
+  nothing.
+- A sequential read whose regions do not meet — a string table that overruns the
+  next table's start, or an action table that does not end exactly where the
+  room-description pointers begin — indicates a wrong array start, not a
+  recoverable file. §12.7's three pointer tables are the cheap check: if they do
+  not resolve onto the string starts already read, stop.
+- **Questprobe 3, *Fantastic Four*, remains unidentified.** Neither its Commodore
+  64 release (`QUESTPR3.D64`, §10.7) nor its MS-DOS one (`SPL53P.DAT`, §10.7) is
+  this format: no §4.1 signature occurs in either, the first 0x38 bytes of
+  `SPL53P.DAT` are a quoted title and a comma-separated number list rather than a
+  binary header, and the Commodore 64 image carries none of §7.2's fixed database
+  names. **An existing implementation does not name it either** — its release
+  catalogue runs to Questprobe 1 (*The Hulk*) and Questprobe 2 (*Spider-Man*) and
+  has no entry for Questprobe 3 on any platform. Its pictures are family E and
+  family C respectively and decode normally (§10.7); its database encoding is
+  described nowhere this document has looked. Refuse it by name.
+- The Atari 8-bit *Hulk* executable `The Hulk.xex` (§10.5) is a **memory image**
+  of §4's family in a container this document does not specify, not a database of
+  this section's. §7.3's refusal covers it.
+
+---
+
 ## Appendix A — How lanthorn uses this document
 
-lanthorn's `scott` crate reads the reference text format and **§3's TI-99/4A
-tokenised releases** (`crates/scott/src/ti994a.rs`, SQ-1414), and refuses the
-remaining dialects by name rather than loading them: a file that fails the text
-parse is checked against the TI-99/4A signature, the `aUTOgO\0` compressed
-signature and the three plain dictionary signatures, so a player is told "this
-is a Commodore 64 memory snapshot" rather than "invalid data".
+lanthorn's `scott` crate reads the reference text format, **§3's TI-99/4A
+tokenised releases** (`crates/scott/src/ti994a.rs`, SQ-1414) and the **eleven
+Commodore 64 *Mysterious Adventures* releases** (`crates/scott/src/c64.rs`,
+SQ-1455), and refuses the remaining dialects by name rather than loading them: a
+file that fails the text parse is checked against the TI-99/4A signature, the
+`aUTOgO\0` compressed signature and the three plain dictionary signatures, so a
+player is told "this is a Commodore 64 memory snapshot" rather than "invalid
+data".
 
 **Implemented from this document:** §1, §2, §3 (all of it — §3.1 detection and
 the baseline, §3.2 endianness, §3.3 the header, §3.4 the two table shapes, §3.5
 strings and the derived message count, §3.6 the two dictionaries, §3.7 the
-action encoding), §9.1 and §9.2 as they apply to TI-99/4A, and §11's TI-99/4A
-refusals. **Not implemented:** §4-§8, §9.3, and the rest of §11.
+action encoding), the Commodore 64 slice of §4 (§4.2's cell reading, §4.3's
+locating, §4.4's encodings), §5.3's repairs for that family, §6, §7.2's
+uncrunched disk-image path, §8.2's Family B pictures, §9.1 and §9.2 as they
+apply, and §11's TI-99/4A refusals. **Not implemented:** the rest of §4-§8,
+§9.3, §11 and **all of §12**.
 
-The implementer raised three questions about §3 while building that loader,
-each found by measuring the §10.2 specimens against the §10.1 oracle. All three
-are now resolved in the normative sections; recorded here is what changed and,
-where the answer went the other way, what the code has to change.
+The TI-99/4A implementer raised three questions about §3 while building that
+loader, each found by measuring the §10.2 specimens against the §10.1 oracle.
+All three are now resolved in the normative sections; recorded here is what
+changed and, where the answer went the other way, what the code has to change.
 
 1. **"Carried" — the specification was wrong, the measurement was right.**
    §3.4 used to claim this dialect had no in-band value meaning "carried". It
@@ -3750,6 +4427,43 @@ where the answer went the other way, what the code has to change.
    answers the real score line, neither "I can't do that yet."; the twelve
    §10.2 specimens reproduce this section's own measured 1,870 explicit / 378
    automatic / 448 link-0 records, every one walking to its own 255.
+
+**And the Commodore 64 implementer raised three more, about §4.2, §5.3 and
+§8.2.** All three were reconciled on 2026-09-09 against the §10.4 specimens and,
+where the question was about the reference's behaviour, against the source named
+in the Sources table. All three went the implementer's way; the normative
+sections now say so, and no code has to change.
+
+4. **§4.2's dictionary reader was wrong for this family — the measurement was
+   right.** The escape-driven reading (word length characters per cell, with a
+   `*` restarting the count and a space rewinding it) loses alignment on two
+   shapes these releases contain: a cell whose word fills all (word length + 1)
+   bytes, and two adjacent all-space cells. §4.2 is rewritten around the plain
+   (word length + 1)-byte NUL-padded grid, with a `*` occupying one of the
+   cell's own bytes and a single leading-NUL alignment escape whose scope is now
+   stated — safe on the Commodore 64 releases, where no dictionary contains an
+   all-NUL cell, and unsafe on the ZX Spectrum ones, where they are common. The
+   grid reproduces every verb and noun cell of the six titles whose tables are
+   byte-identical to their conversions; the escape reading reproduces four.
+   *The Golden Baton*'s final cell reads `CAST` through the one escape that
+   fires in the whole corpus, and the space rewind is not a rule of any dialect
+   here — it never fires on any of the 37 dictionaries measured.
+5. **§5.3's Mysterious Commodore 64 direction repair is unnecessary and
+   harmful.** `ANY` and the six direction words are already noun cells 0-6 in
+   all eleven, read straight out of the grid, and applying the repair truncates
+   *The Time Machine*'s and *Arrow of Death* part 2's stored `NORTH` and
+   `SOUTH`. §5.3 records what the repair is for — a reader that has lost cell
+   alignment before it reaches noun cell 0 — names the family the reference
+   applies it to (records marked both *Mysterious* and *Commodore 64*, which is
+   this eleven and no others), and drops it. *The Golden Baton*'s `CAST`
+   substitution goes with it; the word-count reduction stays.
+6. **§8.2's fill-queue bound is not a behavioural fork at this canvas size.**
+   Across 516 pictures and 2,227 fills in the eleven releases, the queue's
+   greatest depth is 677, so the 1024-point bound is never reached and the
+   bounded and unbounded decoders produce identical canvases; an unobstructed
+   fill of the empty canvas paints all 23,970 pixels either way. §8.2 keeps the
+   bound as the reference's behaviour and replaces "a real behavioural fork, and
+   an implementer must choose deliberately" with the measurement.
 
 The in-memory model this document's dialects decode *to*, in that crate, is a
 database of rooms (six exits and a description, plus a flag for the leading-`*`
