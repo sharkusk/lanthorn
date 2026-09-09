@@ -278,26 +278,28 @@ pub struct Machine {
     pub(crate) iosys_mode: u32,
     /// Current I/O system rock.
     pub(crate) iosys_rock: u32,
-    /// Recursion depth of filter-iosys (mode 1) callbacks, guarding against a
-    /// filter function whose own output recurses back into `emit`.
-    filter_depth: u32,
-    /// A fault raised inside a filter-iosys callback, latched because `emit`
-    /// has no error channel (printing is fire-and-forget for the opcodes). The
-    /// aborted callee's frame was abandoned mid-flight, so execution must not
-    /// continue: `step`/`run_call_to_return` drain this and surface it as the
-    /// current instruction's fault (SQ-0625).
-    pending_fault: Option<String>,
     /// Recursion depth of echo-stream forwarding in `glk_stream_put`, bounding a
     /// pathological echo loop (windows echoing to each other's streams, which the
     /// Glk spec calls illegal) so output can never infinite-loop.
     echo_depth: u32,
-    /// When `Some`, `emit` diverts all output into this buffer instead of routing
-    /// it through the I/O system. Used to decode a compressed (E1) string object
-    /// handed to `glk_put_string` into a `String` (capturing embedded string- and
-    /// function-node output too) so it can then be written straight to the Glk
-    /// stream, bypassing the iosys — a direct Glk call must ignore it. Transient
-    /// (set and cleared within one `decode_glk_string`); never live across a save.
+    /// When `Some`, the printing engine diverts all output into this buffer
+    /// instead of routing it through the I/O system. Used to decode a compressed
+    /// (E1) string object handed to `glk_put_string` into a `String` (capturing
+    /// embedded string- and function-node output too) so it can then be written
+    /// straight to the Glk stream, bypassing the iosys — a direct Glk call must
+    /// ignore it. Transient (set and cleared within one `decode_glk_string`);
+    /// never live across a save.
+    ///
+    /// This is the ONE place printing still nests natively (see
+    /// [`Machine::stream_string`]): a Glk dispatch call has to hand back a
+    /// finished `String`, so it cannot suspend into the interpreter loop the way
+    /// the stream opcodes do. Bounded by `capture_depth` below.
     emit_capture: Option<String>,
+    /// Native recursion depth of the capture-mode decoder (`emit_capture`), so a
+    /// cyclic string table or a function node that re-prints its own string
+    /// faults instead of overflowing the Rust stack. Transient, like
+    /// `emit_capture`; never live across a save.
+    capture_depth: u32,
     /// Current string-decoding-table address (0 = none). Initialized from the
     /// header's decode_table; overridable by `setstringtbl`.
     pub(crate) cur_stringtbl: u32,
@@ -855,10 +857,9 @@ impl Machine {
             pc: 0,
             iosys_mode: 0,
             iosys_rock: 0,
-            filter_depth: 0,
-            pending_fault: None,
             echo_depth: 0,
             emit_capture: None,
+            capture_depth: 0,
             cur_stringtbl: decode_table,
             heap_start: 0,
             heap_blocks: Vec::new(),
@@ -2265,6 +2266,12 @@ impl Machine {
     /// (which first discards the current frame via `sp = fp`) and `@save`'s
     /// `complete_save` (which must NOT discard a frame — `@save` pushed only a
     /// stub, not a new one).
+    ///
+    /// DestTypes 10-14 are not destinations at all but PRINT resume states
+    /// (spec §1.3.2): the returning function was a filter callback or a
+    /// string-embedded routine, and what happens next is that the interrupted
+    /// print carries on. That is what makes the printing engine iterative — see
+    /// [`Machine::stream_string`].
     fn pop_save_stub_and_store(&mut self, v: u32) -> R<()> {
         if self.sp < 16 {
             return Err("corrupt call stub on return".to_string());
@@ -2287,9 +2294,47 @@ impl Machine {
             1 => self.store_mem(daddr, v)?,
             2 => self.local_store(daddr, v)?,
             3 => self.push32(v)?,
+            // DestTypes 10-14 (spec §1.3.2): this stub was pushed by the
+            // printing engine, not by a call — the function that just returned
+            // was a filter callback or a string-embedded routine, its return
+            // value is discarded, and what resumes is the PRINT. `ret_pc` is the
+            // resume position the stub recorded (for 0x12, the integer itself),
+            // `daddr` the bit number / digit position. Mirrors glulxe's
+            // `pop_callstub` (funcs.c).
+            0x10 => self.stream_string(ret_pc, 0xE1, daddr)?,
+            0x11 => return Err("string-terminator call stub at the end of a function call".to_string()),
+            0x12 => self.stream_num(ret_pc as i32, true, daddr)?,
+            0x13 => self.stream_string(ret_pc, 0xE0, daddr)?,
+            0x14 => self.stream_string(ret_pc, 0xE2, daddr)?,
             other => return Err(format!("bad call-stub DestType {other}")),
         }
         Ok(())
+    }
+
+    /// Pop a call stub as a STRING resume state (spec §1.3.2 DestTypes 0x10 /
+    /// 0x11, glulxe's `pop_callstub_string`): restore the PC and report where
+    /// the interrupted print continues. `Ok(None)` is the 0x11 terminator —
+    /// the whole print is finished and the PC is now the instruction after the
+    /// stream opcode that began it. `Ok(Some(bitnum))` resumes a compressed
+    /// (E1) string at the restored PC. FramePtr is deliberately not restored:
+    /// a string never leaves the frame that printed it.
+    fn pop_callstub_string(&mut self) -> R<Option<u32>> {
+        if self.sp < 16 {
+            return Err("corrupt string call stub".to_string());
+        }
+        self.sp -= 4; // FramePtr, unchanged across a string
+        self.sp -= 4;
+        let ret_pc = self.st_r32(self.sp);
+        self.sp -= 4;
+        let daddr = self.st_r32(self.sp);
+        self.sp -= 4;
+        let dtype = self.st_r32(self.sp);
+        self.pc = ret_pc;
+        match dtype {
+            0x11 => Ok(None),
+            0x10 => Ok(Some(daddr)),
+            other => Err(format!("function-terminator call stub (DestType {other}) at the end of a string")),
+        }
     }
 
     /// `catch S L`: push a catch stub (so `@throw` can unwind here), store the
@@ -3774,65 +3819,68 @@ impl Machine {
 
     // ── stream output (GLULX_NOTES §7) ────────────────────────────────────────
 
-    /// Route `streamchar`/`streamnum`/`streamstr` output, honoring the current
-    /// I/O system: the Glk system (mode 2) prints to the current Glk stream;
-    /// the filter system (mode 1) calls `iosys_rock` once per character, with
-    /// that character's code point as the sole argument (GLULX_NOTES §7.2);
-    /// the null system (mode 0, and any unrecognized mode) discards.
-    fn emit(&mut self, s: &str) {
-        // Capturing (decoding an E1 object for glk_put_string): divert output into
-        // the buffer instead of routing it through the I/O system.
+    /// True when output must be routed through the filter FUNCTION (spec
+    /// §1.3.5 "Calling and Returning During Output Filtering"): I/O system 1,
+    /// with no capture buffer diverting output past the iosys.
+    fn filtering(&self) -> bool {
+        self.iosys_mode == 1 && self.emit_capture.is_none()
+    }
+
+    /// Write `s` to the current output target: the capture buffer if one is
+    /// open (decoding an E1 object for `glk_put_string`), otherwise the current
+    /// Glk stream under I/O system 2. The null system (0) and any unrecognized
+    /// mode discard. Never called while [`Machine::filtering`] holds — the
+    /// filter system routes a character at a time, through the VM.
+    fn put_direct(&mut self, s: &str) {
         if let Some(buf) = self.emit_capture.as_mut() {
             buf.push_str(s);
             return;
         }
-        match self.iosys_mode {
-            2 => {
-                let sid = self.glk.current_stream();
-                self.glk_stream_put(sid, s);
-            }
-            1 => {
-                // Guard against a filter function whose own output recurses
-                // back into `emit` (e.g. via streamchar): each nested level
-                // costs several native frames (this call chain runs a full
-                // nested opcode-dispatch loop), so the bound is much lower
-                // than the lighter-weight string-decode recursion guard.
-                const FILTER_MAX_DEPTH: u32 = 32;
-                if self.filter_depth > FILTER_MAX_DEPTH {
-                    return;
-                }
-                self.filter_depth += 1;
-                let mut chars = s.chars();
-                while let Some(ch) = chars.next() {
-                    if self.iosys_mode != 1 {
-                        // The filter switched the I/O system mid-string (e.g.
-                        // via @setiosys): hand the remaining characters off
-                        // under the now-current mode instead of continuing to
-                        // call the stale filter rock.
-                        self.filter_depth -= 1;
-                        let rest: String = std::iter::once(ch).chain(chars).collect();
-                        return self.emit(&rest);
-                    }
-                    if let Err(e) = self.run_call_to_return(self.iosys_rock, &[ch as u32]) {
-                        // The filter function faulted: its frame was abandoned
-                        // mid-flight, so the machine must not keep printing or
-                        // executing. Latch the fault (first one wins) —
-                        // `step`/`run_call_to_return` surface it as this
-                        // instruction's fault (SQ-0625).
-                        self.pending_fault.get_or_insert(e);
-                        self.filter_depth -= 1;
-                        return;
-                    }
-                    if self.pending_fault.is_some() {
-                        // A nested emit latched a fault below us: stop too.
-                        self.filter_depth -= 1;
-                        return;
-                    }
-                }
-                self.filter_depth -= 1;
-            }
-            _ => {} // null system (mode 0) and unrecognized modes: discard
+        if self.iosys_mode == 2 {
+            let sid = self.glk.current_stream();
+            self.glk_stream_put(sid, s);
         }
+    }
+
+    /// Push a four-word call stub — `DestType, DestAddr, PC, FramePtr`, FramePtr
+    /// on top — recording the CURRENT pc and fp (spec §1.3.2).
+    fn push_callstub(&mut self, dtype: u32, daddr: u32) -> R<()> {
+        let ret_pc = self.pc;
+        let cur_fp = self.fp as u32;
+        self.push32(dtype)?;
+        self.push32(daddr)?;
+        self.push32(ret_pc)?;
+        self.push32(cur_fp)
+    }
+
+    /// Push the DestType 0x11 stub that marks where the interpreter resumes once
+    /// the whole print finishes (spec §1.3.2: "resume executing function code
+    /// after a string completes"). Pushed exactly once per print — the first
+    /// time that print has to leave the interpreter loop — which is what
+    /// `substring` tracks.
+    fn begin_substring(&mut self, substring: &mut bool) -> R<()> {
+        if !*substring {
+            self.push_callstub(0x11, 0)?;
+            *substring = true;
+        }
+        Ok(())
+    }
+
+    /// Push a call stub of `dtype`/`daddr` and enter `func` from inside the
+    /// printing engine, so an ordinary `return` resumes the print (spec §1.3.5).
+    /// The caller must then return to the interpreter loop at once: what
+    /// continues the print is [`Machine::pop_save_stub_and_store`] meeting this
+    /// stub again.
+    ///
+    /// Unlike [`Machine::call_function`] this never substitutes an accelerated
+    /// implementation. A call stub needs a frame to return from and an
+    /// accelerated function has none; running the story's own code at that
+    /// address is always legal — that is exactly what `@accelfunc` promises —
+    /// and costs nothing here, because no accelerated veneer routine is ever a
+    /// filter rock or a string-embedded print routine.
+    fn enter_print_call(&mut self, dtype: u32, daddr: u32, func: u32, args: &[u32]) -> R<()> {
+        self.push_callstub(dtype, daddr)?;
+        self.build_frame_and_enter(func, args)
     }
 
     /// Write `s` to Glk stream `sid` (its current style). A window stream routes
@@ -3994,126 +4042,278 @@ impl Machine {
 
     fn op_streamchar(&mut self) -> R<()> {
         let (l, _) = self.read_operands(1, 0)?;
-        let s = ((l[0] & 0xFF) as u8 as char).to_string();
-        self.emit(&s);
-        Ok(())
+        self.stream_char(l[0] & 0xFF)
     }
 
     fn op_streamunichar(&mut self) -> R<()> {
         let (l, _) = self.read_operands(1, 0)?;
-        let s = char::from_u32(l[0]).unwrap_or('\u{FFFD}').to_string();
-        self.emit(&s);
-        Ok(())
+        self.stream_char(l[0])
     }
 
     fn op_streamnum(&mut self) -> R<()> {
         let (l, _) = self.read_operands(1, 0)?;
-        let s = (l[0] as i32).to_string();
-        self.emit(&s);
-        Ok(())
+        self.stream_num(l[0] as i32, false, 0)
     }
 
     fn op_streamstr(&mut self) -> R<()> {
         let (l, _) = self.read_operands(1, 0)?;
-        self.print_object(l[0], &[], 0)
+        self.stream_string(l[0], 0, 0)
     }
 
-    /// Print a "typable object" at `addr`: a string (E0/E1/E2) is decoded and
-    /// streamed; a function (C0/C1) is called with `args` and its output
-    /// streamed in its place. `depth` bounds indirect/recursive references.
-    fn print_object(&mut self, addr: u32, args: &[u32], depth: u32) -> R<()> {
-        if depth > 256 {
+    /// One character through the current I/O system. Under the filter system
+    /// this pushes a plain DestType-0 stub and enters the filter function: there
+    /// is no string to resume, so the ordinary return path lands on the next
+    /// instruction all by itself (glulxe's `filio_char_han`).
+    fn stream_char(&mut self, ch: u32) -> R<()> {
+        if self.filtering() {
+            return self.enter_print_call(0, 0, self.iosys_rock, &[ch]);
+        }
+        let s = char::from_u32(ch).unwrap_or('\u{FFFD}').to_string();
+        self.put_direct(&s);
+        Ok(())
+    }
+
+    /// Print `val` as a signed decimal (spec §2.6 `streamnum`). `inmiddle` is
+    /// set when this is a RESUMPTION — a DestType 0x12 stub was just popped —
+    /// with `charnum` the number of digits already printed.
+    ///
+    /// Under the filter system each digit costs one VM call, so the position is
+    /// carried in the stub (PC = the integer itself, DestAddr = the next
+    /// digit's index, spec §1.3.2) and this returns to the interpreter loop
+    /// rather than looping natively.
+    fn stream_num(&mut self, val: i32, inmiddle: bool, charnum: u32) -> R<()> {
+        let mut inmiddle = inmiddle;
+        let text = val.to_string();
+        let bytes = text.as_bytes();
+        if self.filtering() {
+            self.begin_substring(&mut inmiddle)?;
+            if (charnum as usize) < bytes.len() {
+                let ch = bytes[charnum as usize] as u32;
+                self.pc = val as u32; // the 0x12 stub's PC field carries the value
+                return self.enter_print_call(0x12, charnum + 1, self.iosys_rock, &[ch]);
+            }
+        } else {
+            // The filter may have switched the I/O system mid-number (or this
+            // is a plain unfiltered print): the rest goes out in one piece,
+            // under whatever system is current now.
+            let rest = &text[(charnum as usize).min(bytes.len())..];
+            self.put_direct(rest);
+        }
+        if inmiddle {
+            // The number is finished; unwind the 0x11 stub that began it.
+            if self.pop_callstub_string()?.is_some() {
+                return Err("string-on-string call stub while printing a number".to_string());
+            }
+        }
+        Ok(())
+    }
+
+    /// Print a string object (spec §1.6.1). `inmiddle` is 0 to begin a fresh
+    /// object — its type byte is read from `addr` — or the type of a string
+    /// being RESUMED (0xE0 / 0xE1 / 0xE2), with `bitnum` the bit position
+    /// within a compressed one.
+    ///
+    /// Nothing here recurses into the interpreter. A character that has to go
+    /// through the filter function, and an embedded object reference in ANY I/O
+    /// system, push a call stub (DestType 0x10/0x11/0x13/0x14, spec §1.3.2) and
+    /// return: the print continues when [`Machine::pop_save_stub_and_store`]
+    /// meets that stub. So the print state lives entirely on the Glulx stack —
+    /// which is what makes a deep filter unbounded rather than truncated, a
+    /// `@throw` past a print an ordinary unwind, and a `@save` mid-print a blob
+    /// any interpreter can resume. Shaped after glulxe's `stream_string`.
+    ///
+    /// The one exception is capture mode ([`Machine::emit_capture`]), which owes
+    /// a Glk dispatch call a finished `String` and so walks embedded references
+    /// natively, bounded by `capture_depth`.
+    fn stream_string(&mut self, addr: u32, inmiddle: u32, bitnum: u32) -> R<()> {
+        let (mut addr, mut inmiddle, mut bitnum) = (addr, inmiddle, bitnum);
+        let mut substring = inmiddle != 0;
+        'outer: loop {
+            let ty = if inmiddle == 0 { self.m8(addr)? } else { inmiddle };
+            if inmiddle == 0 {
+                if ty == 0xC0 || ty == 0xC1 {
+                    // Tolerated where glulxe faults ("Attempt to print
+                    // non-string"): gvm has always let `@streamstr` name a
+                    // function and streamed its output in its place. A
+                    // DestType-0 stub resumes at the next instruction, which is
+                    // exactly what the old nested run-to-return loop did.
+                    if self.emit_capture.is_some() {
+                        return self.capture_nested_call(addr, &[]);
+                    }
+                    return self.enter_print_call(0, 0, addr, &[]);
+                }
+                addr += if ty == 0xE2 { 4 } else { 1 };
+                bitnum = 0;
+            }
+
+            match ty {
+                0xE1 => {
+                    let table = self.cur_stringtbl;
+                    if table == 0 {
+                        return Err("compressed string (E1) with no string-decoding table set".to_string());
+                    }
+                    let root = self.m32(table + 8)?;
+                    let mut node = root;
+                    loop {
+                        let nodetype = self.m8(node)?;
+                        match nodetype {
+                            0x00 => {
+                                // Branch: read one bit, go left (0) or right (1).
+                                let byte = self.m8(addr)?;
+                                let b = (byte >> bitnum) & 1;
+                                bitnum += 1;
+                                if bitnum == 8 {
+                                    bitnum = 0;
+                                    addr += 1;
+                                }
+                                node = if b == 0 { self.m32(node + 1)? } else { self.m32(node + 5)? };
+                            }
+                            0x01 => break, // string terminator
+                            0x02 | 0x04 => {
+                                let ch = if nodetype == 0x02 {
+                                    self.m8(node + 1)?
+                                } else {
+                                    self.m32(node + 1)?
+                                };
+                                if self.filtering() {
+                                    self.begin_substring(&mut substring)?;
+                                    self.pc = addr;
+                                    return self.enter_print_call(0x10, bitnum, self.iosys_rock, &[ch]);
+                                }
+                                let s = char::from_u32(ch).unwrap_or('\u{FFFD}').to_string();
+                                self.put_direct(&s);
+                                node = root;
+                            }
+                            0x03 | 0x05 => {
+                                // A C-style Latin-1 (0x03) / Unicode (0x05)
+                                // string embedded in the node itself.
+                                if self.filtering() {
+                                    self.begin_substring(&mut substring)?;
+                                    self.pc = addr;
+                                    self.push_callstub(0x10, bitnum)?;
+                                    inmiddle = if nodetype == 0x03 { 0xE0 } else { 0xE2 };
+                                    addr = node + 1;
+                                    continue 'outer;
+                                }
+                                let s = if nodetype == 0x03 {
+                                    self.read_cstring(node + 1)?
+                                } else {
+                                    self.read_ustring(node + 1)?
+                                };
+                                self.put_direct(&s);
+                                node = root;
+                            }
+                            0x08..=0x0B => {
+                                // A reference to another object: a string to
+                                // splice in, or a function to call. 0x09/0x0B
+                                // are indirect; 0x0A/0x0B carry an argument
+                                // list.
+                                let mut oaddr = self.m32(node + 1)?;
+                                if nodetype == 0x09 || nodetype == 0x0B {
+                                    oaddr = self.m32(oaddr)?;
+                                }
+                                let args = if nodetype == 0x0A || nodetype == 0x0B {
+                                    self.read_node_args(node + 5)?
+                                } else {
+                                    Vec::new()
+                                };
+                                match self.m8(oaddr)? {
+                                    0xE0..=0xFF => {
+                                        if self.emit_capture.is_some() {
+                                            self.capture_nested_string(oaddr)?;
+                                            node = root;
+                                            continue;
+                                        }
+                                        self.begin_substring(&mut substring)?;
+                                        self.pc = addr;
+                                        self.push_callstub(0x10, bitnum)?;
+                                        inmiddle = 0;
+                                        addr = oaddr;
+                                        continue 'outer;
+                                    }
+                                    0xC0..=0xDF => {
+                                        if self.emit_capture.is_some() {
+                                            self.capture_nested_call(oaddr, &args)?;
+                                            node = root;
+                                            continue;
+                                        }
+                                        self.begin_substring(&mut substring)?;
+                                        self.pc = addr;
+                                        return self.enter_print_call(0x10, bitnum, oaddr, &args);
+                                    }
+                                    other => {
+                                        return Err(format!(
+                                            "bad object type {other:#x} behind a string indirect reference @{oaddr:#010x}"
+                                        ));
+                                    }
+                                }
+                            }
+                            other => return Err(format!("bad string node type {other:#x} @{node:#010x}")),
+                        }
+                    }
+                }
+                0xE0 | 0xE2 => {
+                    // Unencoded Latin-1 (E0) / Unicode (E2) character data,
+                    // running to a zero terminator.
+                    let wide = ty == 0xE2;
+                    if self.filtering() {
+                        self.begin_substring(&mut substring)?;
+                        let ch = if wide { self.m32(addr)? } else { self.m8(addr)? };
+                        addr += if wide { 4 } else { 1 };
+                        if ch != 0 {
+                            self.pc = addr;
+                            let dtype = if wide { 0x14 } else { 0x13 };
+                            return self.enter_print_call(dtype, 0, self.iosys_rock, &[ch]);
+                        }
+                    } else {
+                        let s = if wide { self.read_ustring(addr)? } else { self.read_cstring(addr)? };
+                        self.put_direct(&s);
+                    }
+                }
+                other => return Err(format!("bad string/function type {other:#x} @{addr:#010x}")),
+            }
+
+            // This object is finished.
+            if !substring {
+                return Ok(()); // a plain top-level print: straight out
+            }
+            match self.pop_callstub_string()? {
+                None => return Ok(()), // the 0x11 terminator: the whole print is done
+                Some(bit) => {
+                    addr = self.pc;
+                    bitnum = bit;
+                    inmiddle = 0xE1;
+                }
+            }
+        }
+    }
+
+    /// Native recursion bound for the capture-mode decoder. Only reached by a
+    /// compressed string handed to `glk_put_string` (see
+    /// [`Machine::emit_capture`]); a cyclic table or a self-printing function
+    /// node faults here instead of overflowing the Rust stack.
+    const CAPTURE_MAX_DEPTH: u32 = 32;
+
+    /// Splice a nested string object into the capture buffer, synchronously.
+    fn capture_nested_string(&mut self, addr: u32) -> R<()> {
+        self.capture_depth += 1;
+        if self.capture_depth > Self::CAPTURE_MAX_DEPTH {
             return Err(format!("string decode recursion too deep @{addr:#010x}"));
         }
-        match self.m8(addr)? {
-            0xE0 => {
-                let s = self.read_cstring(addr + 1)?;
-                self.emit(&s);
-                Ok(())
-            }
-            0xE2 => {
-                let s = self.read_ustring(addr + 4)?;
-                self.emit(&s);
-                Ok(())
-            }
-            0xE1 => self.decode_compressed(addr + 1, depth),
-            0xC0 | 0xC1 => self.run_call_to_return(addr, args),
-            other => Err(format!("bad string/function type {other:#x} @{addr:#010x}")),
-        }
+        let r = self.stream_string(addr, 0, 0);
+        self.capture_depth -= 1;
+        r
     }
 
-    /// Decode a compressed (E1) bit stream beginning at `start`, walking the
-    /// current string-decoding table. Bits are read low-bit-first (GLULX_NOTES
-    /// §9). Never panics: bad addresses/node types fault.
-    fn decode_compressed(&mut self, start: u32, depth: u32) -> R<()> {
-        let table = self.cur_stringtbl;
-        if table == 0 {
-            return Err("compressed string (E1) with no string-decoding table set".to_string());
+    /// Run a string-embedded function into the capture buffer, synchronously.
+    fn capture_nested_call(&mut self, func: u32, args: &[u32]) -> R<()> {
+        self.capture_depth += 1;
+        if self.capture_depth > Self::CAPTURE_MAX_DEPTH {
+            return Err(format!("string decode recursion too deep @{func:#010x}"));
         }
-        let root = self.m32(table + 8)?;
-        let mut node = root;
-        let mut addr = start;
-        let mut bit = 0u32;
-        loop {
-            match self.m8(node)? {
-                0x00 => {
-                    // Branch: read one bit, go left (0) or right (1).
-                    let byte = self.m8(addr)?;
-                    let b = (byte >> bit) & 1;
-                    bit += 1;
-                    if bit == 8 {
-                        bit = 0;
-                        addr += 1;
-                    }
-                    node = if b == 0 { self.m32(node + 1)? } else { self.m32(node + 5)? };
-                }
-                0x01 => return Ok(()), // string terminator
-                0x02 => {
-                    let c = self.m8(node + 1)?;
-                    self.emit_latin1(c);
-                    node = root;
-                }
-                0x03 => {
-                    let s = self.read_cstring(node + 1)?;
-                    self.emit(&s);
-                    node = root;
-                }
-                0x04 => {
-                    let cp = self.m32(node + 1)?;
-                    self.emit_uni(cp);
-                    node = root;
-                }
-                0x05 => {
-                    // C-style Unicode string: 32-bit chars until a zero word.
-                    let s = self.read_ustring(node + 1)?;
-                    self.emit(&s);
-                    node = root;
-                }
-                0x08 => {
-                    let a = self.m32(node + 1)?;
-                    self.print_object(a, &[], depth + 1)?;
-                    node = root;
-                }
-                0x09 => {
-                    let a = self.m32(self.m32(node + 1)?)?;
-                    self.print_object(a, &[], depth + 1)?;
-                    node = root;
-                }
-                0x0A => {
-                    let a = self.m32(node + 1)?;
-                    let args = self.read_node_args(node + 5)?;
-                    self.print_object(a, &args, depth + 1)?;
-                    node = root;
-                }
-                0x0B => {
-                    let a = self.m32(self.m32(node + 1)?)?;
-                    let args = self.read_node_args(node + 5)?;
-                    self.print_object(a, &args, depth + 1)?;
-                    node = root;
-                }
-                other => return Err(format!("bad string node type {other:#x} @{node:#010x}")),
-            }
-        }
+        let r = self.run_call_to_return(func, args);
+        self.capture_depth -= 1;
+        r
     }
 
     /// Read an argument list for a 0x0A/0x0B node: a 32-bit count then that many
@@ -4127,35 +4327,29 @@ impl Machine {
         Ok(args)
     }
 
-    /// Call the function at `func` with `args`, running the VM run-loop until
-    /// that frame returns, then resume the caller. Used for string-embedded
-    /// function nodes (GLULX_NOTES §9); the return value is discarded.
+    /// Call `func` with `args` and run the interpreter loop until that frame
+    /// returns, then resume the caller; the return value is discarded.
+    ///
+    /// This is the ONLY place printing still nests natively, and it exists for
+    /// one reason: capture mode ([`Machine::emit_capture`]) owes a Glk dispatch
+    /// call a finished `String`, so it cannot suspend into the interpreter loop
+    /// the way the stream opcodes do. Depth is bounded by
+    /// [`Machine::CAPTURE_MAX_DEPTH`], and an unwind past `resume_fp` — a
+    /// `@throw` out of a captured function — is refused rather than spun on.
     fn run_call_to_return(&mut self, func: u32, args: &[u32]) -> R<()> {
         let resume_fp = self.fp;
         self.call_function(func, args, Dest::Discard)?;
         // call_function installed a deeper callee frame; run until it returns.
         while self.fp != resume_fp {
+            if self.fp < resume_fp {
+                return Err("a @throw unwound past a string-embedded call inside glk_put_string".to_string());
+            }
             if self.halted {
                 return Err("function called within a string halted the machine".to_string());
             }
             self.step_once()?;
-            if let Some(fault) = self.pending_fault.take() {
-                // A filter callback nested under this frame faulted (latched
-                // by `emit`, which has no error channel): stop running in the
-                // abandoned state and propagate (SQ-0625).
-                return Err(fault);
-            }
         }
         Ok(())
-    }
-
-    fn emit_latin1(&mut self, v: u32) {
-        let s = ((v & 0xFF) as u8 as char).to_string();
-        self.emit(&s);
-    }
-    fn emit_uni(&mut self, v: u32) {
-        let s = char::from_u32(v).unwrap_or('\u{FFFD}').to_string();
-        self.emit(&s);
     }
 
     /// Decode a Glulx string OBJECT at `addr` into a String for the Glk
@@ -4183,9 +4377,14 @@ impl Machine {
                 // (e.g. no string table set, or a bad node) records a diagnostic
                 // and skips rather than faulting the VM.
                 let prev = self.emit_capture.replace(String::new());
-                let decoded = self.decode_compressed(addr + 1, 0);
+                let prev_depth = self.capture_depth;
+                let decoded = self.stream_string(addr, 0, 0);
                 let captured = self.emit_capture.take().unwrap_or_default();
                 self.emit_capture = prev;
+                // A decode that bailed out mid-recursion left the counter high;
+                // this boundary is where it is unwound (the error path below
+                // does not fault the VM, so nothing else would).
+                self.capture_depth = prev_depth;
                 match decoded {
                     Ok(()) => Some(captured),
                     Err(e) => {
@@ -6359,14 +6558,7 @@ impl Machine {
         if let Some(sr) = self.fileref_prompt_result() {
             return sr;
         }
-        // A fault latched inside a filter-iosys callback (see `pending_fault`)
-        // counts as this instruction's fault — the machine abandoned a frame
-        // mid-flight and must record-the-fault-and-quit (SQ-0625).
-        let stepped = self.step_once().and_then(|()| match self.pending_fault.take() {
-            Some(fault) => Err(fault),
-            None => Ok(()),
-        });
-        match stepped {
+        match self.step_once() {
             Ok(()) if self.halted => self.halted_result(),
             // A glk_select this step may have suspended for input, or an
             // @save/@restore this step may have suspended for host file I/O.
@@ -8193,9 +8385,13 @@ mod tests {
         const COUNTER_ADDR: u32 = 0x100;
         const FILT_ADDR: u32 = 0x24;
 
-        // A filter function whose own output (streamchar) recurses back into
-        // `emit`/the filter. Left unguarded, this would overflow the native
-        // stack; the depth guard must bound it instead.
+        // A filter function whose own output (streamchar) feeds straight back
+        // into the filter: unterminated recursion by construction. Each level
+        // is a call stub plus a frame on the GLULX stack, so what bounds it is
+        // the story's own declared stack size — the machine faults with a stack
+        // overflow, exactly as glulxe's "Stack overflow in callstub" does. It is
+        // NOT silently capped: a native-recursion guard used to stop it dead at
+        // 33 calls and carry on as if the rest had printed (SQ-1418).
         let mut filt_body = asm::ins(0x10, &[Mem32(COUNTER_ADDR), C8(1), Mem32(COUNTER_ADDR)]); // counter += 1
         filt_body.extend(asm::ins(0x70, &[C8(b'X' as i8)])); // streamchar 'X' → recurses
         filt_body.extend(asm::ins(0x31, &[C8(0)])); // return 0
@@ -8209,15 +8405,16 @@ mod tests {
         let built = asm::assemble(&[filt, start], 1, 0x200);
         assert_eq!(built.addrs[0], FILT_ADDR, "test assumes filt is assembled first");
         let mut m = machine(built);
-        // Grow the VM's own byte stack well past what 256+ nested call frames
-        // need, so the depth guard (not a VM stack overflow) is what bounds
-        // the recursion here.
-        m.stack.resize(1 << 20, 0);
-        m.run(); // must terminate rather than stack-overflow or hang
+        m.run(); // must terminate rather than hang or overflow the Rust stack
 
-        // Bounded by the depth guard: the initial call plus 32 further
-        // recursive calls before deeper output is discarded.
-        assert_eq!(m.mem.read32(COUNTER_ADDR), Some(33));
+        assert!(m.faulted, "runaway filter recursion is a fault, not a silent truncation");
+        assert!(
+            m.diagnostics.iter().any(|d| d.contains("stack overflow")),
+            "the VM stack is what bounds it: {:?}",
+            m.diagnostics
+        );
+        let calls = m.mem.read32(COUNTER_ADDR).expect("counter in RAM");
+        assert!(calls > 33, "the old native-recursion cap stopped at 33; got {calls}");
     }
 
     #[test]
@@ -8260,6 +8457,305 @@ mod tests {
         let bytes: Vec<u8> = (0..5).map(|i| m.mem.read8(MEMBUF + i).unwrap() as u8).collect();
         assert_eq!(bytes, b"<1>23", "remainder routed under the switched-to mode, not dropped");
         assert_eq!(m.mem.read32((CLOSE_ADDR + 4) as u32), Some(5), "write count");
+    }
+
+    // ── SQ-1418: printing runs on the Glulx stack, not a native nested loop ──
+    //
+    // Glulx spec §1.3.2 gives DestTypes 10-14 for resuming an interrupted print
+    // and §1.3.5 ("Calling and Returning During Output Filtering") requires the
+    // filter system to push one and RETURN to the interpreter loop rather than
+    // recursing natively. Reference implementation: glulxe 0.6.1
+    // (`string.c` stream_string/stream_num, `funcs.c` pop_callstub /
+    // pop_callstub_string), MIT-licensed, Andrew Plotkin.
+
+    #[test]
+    fn deep_filter_recursion_prints_every_character() {
+        use asm::Op::{C32, C8, Local32, Mem32};
+        const COUNTER: u32 = 0x100;
+        const LOG: u32 = 0x110;
+        const FILT: u32 = 0x24;
+        const DEPTH: u32 = 100;
+
+        // filter(ch): if ch != 0, streamchar(ch - 1) FIRST — which re-enters the
+        // filter one level deeper — then append ch to the log. Kicked off with
+        // DEPTH, that is DEPTH+1 nested filter invocations logging 0..=DEPTH in
+        // completion order (deepest first).
+        let recurse = [
+            asm::ins(0x11, &[Local32(0), C8(1), Local32(4)]), // L1 = ch - 1
+            asm::ins(0x70, &[Local32(4)]),                    // streamchar L1
+        ]
+        .concat();
+        let mut filt_body = asm::ins(0x22, &[Local32(0), C8(recurse.len() as i8 + 2)]); // jz ch → skip
+        filt_body.extend(recurse);
+        filt_body.extend(asm::ins(0x4C, &[C32(LOG), Mem32(COUNTER), Local32(0)])); // log[n] = ch
+        filt_body.extend(asm::ins(0x10, &[Mem32(COUNTER), C8(1), Mem32(COUNTER)])); // n += 1
+        filt_body.extend(asm::ins(0x31, &[C8(0)])); // return 0
+        let filt = asm::func(0xC1, &[(4, 2)], &filt_body);
+
+        let mut body = asm::ins(0x149, &[C8(1), C32(FILT)]); // setiosys filter, rock = filt
+        body.extend(asm::ins(0x70, &[C32(DEPTH)])); // streamchar DEPTH
+        body.extend(asm::ins(0x120, &[])); // quit
+        let start = asm::func(0xC1, &[], &body);
+
+        let built = asm::assemble(&[filt, start], 1, 0x400);
+        assert_eq!(built.addrs[0], FILT, "test assumes filt is assembled first");
+        let mut m = machine(built);
+        // Room for DEPTH+1 frames, so the VM's own stack is not what bounds this.
+        m.stack.resize(1 << 20, 0);
+        m.run();
+
+        assert!(!m.faulted, "diagnostics: {:?}", m.diagnostics);
+        assert_eq!(
+            m.mem.read32(COUNTER),
+            Some(DEPTH + 1),
+            "every nested filter call must run — a native-recursion cap truncated this at 33"
+        );
+        let logged: Vec<u32> = (0..=DEPTH).map(|i| m.mem.read32(LOG + i * 4).unwrap()).collect();
+        assert_eq!(logged, (0..=DEPTH).collect::<Vec<_>>(), "logged deepest-first, nothing dropped");
+    }
+
+    #[test]
+    fn compressed_string_function_node_under_filter_iosys() {
+        use asm::Op::{C16, C32, C8, Local32, Mem32, Zero};
+        const COUNTER: u32 = 0x100;
+        const LOG: u32 = 0x110;
+        const FILT: u32 = 0x24;
+
+        // filter(ch): append ch to the log.
+        let mut filt_body = asm::ins(0x4C, &[C32(LOG), Mem32(COUNTER), Local32(0)]);
+        filt_body.extend(asm::ins(0x10, &[Mem32(COUNTER), C8(1), Mem32(COUNTER)]));
+        filt_body.extend(asm::ins(0x31, &[C8(0)]));
+        let filt = asm::func(0xC1, &[(4, 1)], &filt_body);
+
+        // printer(): streams 'Y' then 'Z'. Both must reach the filter, and the
+        // string must carry on decoding once the function returns.
+        let mut pr_body = asm::ins(0x70, &[C8(b'Y' as i8)]);
+        pr_body.extend(asm::ins(0x70, &[C8(b'Z' as i8)]));
+        pr_body.extend(asm::ins(0x31, &[Zero]));
+        let printer = asm::func(0xC1, &[], &pr_body);
+
+        let mut body = asm::ins(0x149, &[C8(1), C32(FILT)]); // setiosys filter
+        body.extend(asm::ins(0x141, &[C16(0x0200)])); // setstringtbl 0x200
+        body.extend(asm::ins(0x72, &[C16(0x0280)])); // streamstr 0x280
+        body.extend(asm::ins(0x120, &[]));
+        let start = asm::func(0xC1, &[], &body);
+
+        let built = asm::assemble(&[filt, printer, start], 2, 0x400);
+        assert_eq!(built.addrs[0], FILT, "test assumes filt is assembled first");
+        let printer_addr = built.addrs[1];
+        let mut m = machine(built);
+        assert!(m.mem.ramstart() <= 0x200, "test pokes its table into RAM at 0x200");
+        // Table at 0x200: root → left 'X' / right inner; inner → left function
+        // node / right terminator.
+        let t = 0x200u32;
+        let root = t + 12;
+        let xnode = root + 9;
+        let inner = xnode + 2;
+        let fnode = inner + 9;
+        let term = fnode + 5;
+        let len = (term + 1) - t;
+        poke(&mut m, t, &len.to_be_bytes());
+        poke(&mut m, t + 4, &4u32.to_be_bytes());
+        poke(&mut m, t + 8, &root.to_be_bytes());
+        poke(&mut m, root, &[0x00]);
+        poke(&mut m, root + 1, &xnode.to_be_bytes());
+        poke(&mut m, root + 5, &inner.to_be_bytes());
+        poke(&mut m, xnode, &[0x02, b'X']);
+        poke(&mut m, inner, &[0x00]);
+        poke(&mut m, inner + 1, &fnode.to_be_bytes());
+        poke(&mut m, inner + 5, &term.to_be_bytes());
+        poke(&mut m, fnode, &[0x08]);
+        poke(&mut m, fnode + 1, &printer_addr.to_be_bytes());
+        poke(&mut m, term, &[0x01]);
+        // Bits, low bit first: 0 → 'X'; 1,0 → the function node; 1,1 → terminator.
+        poke(&mut m, 0x280, &[0xE1, 0b0001_1010]);
+        m.run();
+
+        assert!(!m.faulted, "diagnostics: {:?}", m.diagnostics);
+        assert_eq!(m.mem.read32(COUNTER), Some(3));
+        let logged: Vec<u32> = (0..3).map(|i| m.mem.read32(LOG + i * 4).unwrap()).collect();
+        assert_eq!(logged, vec![b'X' as u32, b'Y' as u32, b'Z' as u32]);
+        assert_eq!(out_str(&m), "", "filter mode prints nothing to Glk");
+    }
+
+    #[test]
+    fn throw_from_inside_a_filter_unwinds_to_a_catch_outside_it() {
+        use asm::Op::{C32, C8, Mem32, Zero};
+        const RES: u32 = 0x100; // the catch token, then the thrown value
+        const WITNESS: u32 = 0x104;
+        const FILT: u32 = 0x24;
+
+        // filter(ch): throw 55 to the token the start function caught with. The
+        // catch frame is TWO frames out (start → inner → filter), so the throw
+        // lands somewhere a native "run until this frame returns" loop can never
+        // notice — it waits for a frame pointer the unwind has already passed.
+        let mut filt_body = asm::ins(0x33, &[C8(55), Mem32(RES)]); // throw 55, token
+        filt_body.extend(asm::ins(0x31, &[C8(0)])); // unreachable
+        let filt = asm::func(0xC1, &[(4, 1)], &filt_body);
+
+        // inner(): streamchar 'A' — the filter call throws out of this frame.
+        let mut inner_body = asm::ins(0x70, &[C8(b'A' as i8)]);
+        inner_body.extend(asm::ins(0x31, &[Zero]));
+        let inner = asm::func(0xC1, &[], &inner_body);
+
+        // The throw handler: witness 7, then quit.
+        let handler = [
+            asm::ins(0x40, &[C8(7), Mem32(WITNESS)]), // copy 7 → WITNESS
+            asm::ins(0x120, &[]),                     // quit
+        ]
+        .concat();
+        let mut body = asm::ins(0x149, &[C8(1), C32(FILT)]); // setiosys filter
+        body.extend(asm::ins(0x32, &[Mem32(RES), C8(handler.len() as i8 + 2)])); // catch RES → past handler
+        body.extend(handler);
+        body.extend(asm::ins(0x30, &[C32(0xDEAD_0000), C8(0), Zero])); // call inner (patched below)
+        body.extend(asm::ins(0x40, &[C8(9), Mem32(WITNESS)])); // only reached if nothing threw
+        body.extend(asm::ins(0x120, &[]));
+        let start = asm::func(0xC1, &[], &body);
+
+        let built = asm::assemble(&[filt, inner, start], 2, 0x200);
+        assert_eq!(built.addrs[0], FILT, "test assumes filt is assembled first");
+        // Patch the placeholder call target now that inner's address is known.
+        let inner_addr = built.addrs[1];
+        let mut image = built.image;
+        let at = image
+            .windows(4)
+            .position(|w| w == 0xDEAD_0000u32.to_be_bytes())
+            .expect("call placeholder present");
+        image[at..at + 4].copy_from_slice(&inner_addr.to_be_bytes());
+        let cksum = asm::checksum(&image);
+        image[0x20..0x24].copy_from_slice(&cksum.to_be_bytes());
+        let mut m = machine(asm::Built { image, addrs: built.addrs });
+        m.run();
+
+        assert!(!m.faulted, "the throw is legal control flow: {:?}", m.diagnostics);
+        assert_eq!(m.mem.read32(WITNESS), Some(7), "the catch's no-branch resume ran, not the fall-through");
+        assert_eq!(m.mem.read32(RES), Some(55), "the thrown value replaced the token in the catch's destination");
+        assert_eq!(
+            m.sp,
+            m.fp + m.cur_frame_len as usize,
+            "the unwind left exactly the catch frame: no orphaned string or call stubs"
+        );
+    }
+
+    /// The two shared pieces of the "@save/@saveundo inside a filter" cases: a
+    /// filter that logs every character and, on the FIRST one only, performs the
+    /// two-operand suspend-free opcode `op` (`@save` or `@saveundo`) — the flag
+    /// is set before the snapshot, so a resumed run does not take the branch
+    /// again. `extra` is the opcode's first (load) operand, or none for saveundo.
+    fn logging_filter_that_snapshots_once(
+        log: u32,
+        counter: u32,
+        flag: u32,
+        op: u32,
+        extra: Option<asm::Op>,
+        res: u32,
+    ) -> Vec<u8> {
+        use asm::Op::{C32, C8, Local32, Mem32};
+        let mut snapshot = asm::ins(0x40, &[C8(1), Mem32(flag)]); // copy 1 → flag
+        snapshot.extend(match extra {
+            Some(load) => asm::ins(op, &[load, Mem32(res)]),
+            None => asm::ins(op, &[Mem32(res)]),
+        });
+
+        let mut body = asm::ins(0x4C, &[C32(log), Mem32(counter), Local32(0)]); // log[n] = ch
+        body.extend(asm::ins(0x10, &[Mem32(counter), C8(1), Mem32(counter)])); // n += 1
+        body.extend(asm::ins(0x23, &[Mem32(flag), C8(snapshot.len() as i8 + 2)])); // jnz flag → skip
+        body.extend(snapshot);
+        body.extend(asm::ins(0x31, &[C8(0)])); // return 0
+        asm::func(0xC1, &[(4, 1)], &body)
+    }
+
+    #[test]
+    fn save_inside_a_filter_restores_into_the_interrupted_print() {
+        use asm::Op::{C32, C8, Mem32};
+        const COUNTER: u32 = 0x100;
+        const LOG: u32 = 0x110;
+        const FLAG: u32 = 0x140;
+        const SID: u32 = 0x144;
+        const SAVERES: u32 = 0x148;
+        const MEMBUF: u32 = 0x400;
+        const MEMBUF_LEN: u32 = 0x1000;
+        const FILT: u32 = 0x24;
+
+        let filt = logging_filter_that_snapshots_once(LOG, COUNTER, FLAG, 0x123, Some(Mem32(SID)), SAVERES);
+        let mut body = asm::ins(0x149, &[C8(1), C32(FILT)]); // setiosys filter
+        body.extend(asm::ins(0x71, &[C8(42)])); // streamnum 42 → '4', '2'
+        body.extend(asm::ins(0x120, &[]));
+        let start = asm::func(0xC1, &[], &body);
+
+        let built = asm::assemble(&[filt, start], 1, 0x1400);
+        assert_eq!(built.addrs[0], FILT);
+        let mut m = machine(built);
+        let sid = m.glk.stream_open_memory(MEMBUF, MEMBUF_LEN, false, 3 /* ReadWrite */, 0);
+        m.mem.write32(SID, sid).unwrap();
+        m.run();
+
+        assert!(!m.faulted, "diagnostics: {:?}", m.diagnostics);
+        assert_eq!(m.mem.read32(COUNTER), Some(2), "both digits reached the filter");
+        assert_eq!(m.mem.read32(SAVERES), Some(0), "the in-filter @save succeeded");
+        let blob_len = m.glk.stream_position(sid).expect("memory stream exists") as usize;
+        let blob: Vec<u8> = (0..blob_len as u32).map(|i| m.mem.read8(MEMBUF + i).unwrap() as u8).collect();
+
+        // The Stks chunk is the raw stack, so the interrupted print's own stubs
+        // are in it: DestType 0x11 (resume function code after the string) and
+        // DestType 0x12 (resume printing the decimal at digit 1). Any
+        // interpreter reading this save resumes the number the same way.
+        let chunks = iff_chunks(&blob);
+        let (_, stks) = chunks.iter().find(|(id, _)| id == b"Stks").expect("Stks present");
+        let words: Vec<u32> = stks.as_chunks::<4>().0.iter().map(|w| u32::from_be_bytes(*w)).collect();
+        assert!(words.contains(&0x11), "Stks carries the DestType 0x11 string-terminator stub: {words:#x?}");
+        assert!(words.contains(&0x12), "Stks carries the DestType 0x12 decimal-resume stub: {words:#x?}");
+
+        // Restore the blob: the machine lands back inside the filter's first
+        // call, mid-number, with COUNTER/LOG reverted to one entry. Running on
+        // must finish the number — which only happens if the DestType 0x12 stub
+        // resumed the print.
+        m.halted = false;
+        m.restore_quetzal(&blob).expect("our own save reloads");
+        assert_eq!(m.mem.read32(COUNTER), Some(1), "state reverted to the mid-print snapshot");
+        assert_eq!(m.mem.read32(SAVERES), Some(u32::MAX), "the restored @save stores the -1 sentinel");
+        m.run();
+
+        assert!(!m.faulted, "diagnostics: {:?}", m.diagnostics);
+        assert_eq!(m.mem.read32(COUNTER), Some(2), "the restore resumed the interrupted print");
+        let logged: Vec<u32> = (0..2).map(|i| m.mem.read32(LOG + i * 4).unwrap()).collect();
+        assert_eq!(logged, vec![b'4' as u32, b'2' as u32]);
+    }
+
+    #[test]
+    fn saveundo_inside_a_filter_restores_into_the_interrupted_print() {
+        use asm::Op::{C32, C8, Mem32};
+        const COUNTER: u32 = 0x100;
+        const LOG: u32 = 0x110;
+        const FLAG: u32 = 0x140;
+        const SU: u32 = 0x144;
+        const RU: u32 = 0x148;
+        const FILT: u32 = 0x24;
+
+        let filt = logging_filter_that_snapshots_once(LOG, COUNTER, FLAG, 0x125, None, SU);
+        let mut body = asm::ins(0x149, &[C8(1), C32(FILT)]); // setiosys filter
+        body.extend(asm::ins(0x71, &[C8(42)])); // streamnum 42 → '4', '2'
+        // @restoreundo: the first one rewinds into the filter's first call and
+        // the print replays; the second finds an empty undo stack and stores 1.
+        body.extend(asm::ins(0x126, &[Mem32(RU)]));
+        body.extend(asm::ins(0x120, &[]));
+        let start = asm::func(0xC1, &[], &body);
+
+        let built = asm::assemble(&[filt, start], 1, 0x400);
+        assert_eq!(built.addrs[0], FILT);
+        let mut m = machine(built);
+        m.run();
+
+        assert!(!m.faulted, "diagnostics: {:?}", m.diagnostics);
+        assert_eq!(
+            m.mem.read32(COUNTER),
+            Some(2),
+            "after @restoreundo the number print resumed and re-fed the second digit to the filter"
+        );
+        let logged: Vec<u32> = (0..2).map(|i| m.mem.read32(LOG + i * 4).unwrap()).collect();
+        assert_eq!(logged, vec![b'4' as u32, b'2' as u32]);
+        assert_eq!(m.mem.read32(SU), Some(u32::MAX), "the resumed @saveundo returns -1");
+        assert_eq!(m.mem.read32(RU), Some(1), "the second @restoreundo has no snapshot left");
     }
 
     #[test]

@@ -1006,7 +1006,7 @@ fn string_extent(mem: &Memory, decode_table: u32, addr: u32) -> Option<(u8, u32)
 
 /// Walk a compressed (E1) bit stream from `start` against the decode table at
 /// `table` (root at `table+8`), returning `(end_byte, text)`. Bits are read
-/// low-bit-first (matching `exec::decode_compressed`). When `cap` is `Some(n)`,
+/// low-bit-first (matching `exec::Machine::stream_string`). When `cap` is `Some(n)`,
 /// at most `n` chars of preview text are collected (indirect/complex leaf nodes
 /// are elided as `…`); when `None`, no text is built (extent-only). Bounded so a
 /// malformed stream can't loop forever.

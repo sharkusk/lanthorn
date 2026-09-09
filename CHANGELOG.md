@@ -88,6 +88,15 @@ Absolute URLs or no link.
 
 ### Fixed
 
+- **Glulx text that a game filters through its own routine no longer gets cut
+  off.** Some Glulx works route every character they print through a routine of
+  their own — for special typography, for a cipher, for a character who speaks
+  in a mangled voice. If that routine printed something that went back through
+  the filter, lanthorn stopped after 32 rounds and quietly threw the rest away,
+  and the missing text simply never appeared. It now runs as deep as the game
+  asks. Saving in the middle of such a passage works properly too: the save
+  picks up exactly where it left off, and the file can be read by other Glulx
+  interpreters. (SQ-1418)
 - **A Glulx game's in-game RESTART no longer forgets files the game had
   written.** Typing RESTART used to silently wipe any file a Glulx story kept
   on its own "disk" (Counterfeit Monkey's fast-start cache, for instance) —
