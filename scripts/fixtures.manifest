@@ -1,0 +1,113 @@
+# Story fixtures fetched on demand (SQ-1015). NOT vendored — deliberately.
+#
+# `scripts/fetch-fixtures.sh` reads this file and populates
+# `crates/app/tests/fixtures/stories/`, which `fixture_paths::fixture_path`
+# already falls back to when a developer's gitignored `stories/` has no copy.
+# CI runs it before `cargo test`; a developer with no `stories/` can run it too.
+#
+# WHY FETCH RATHER THAN COMMIT. The IF Archive's Terms of Use
+# <https://ifarchive.org/misc/license.html> say it plainly: its contents "are the
+# intellectual property of their original creators", distributed with permission
+# where possible, and "Any material with no attached license is presumed to be
+# licensed for personal use only." Downloading such a file is what the Archive
+# exists for. REDISTRIBUTING it — which is what committing one to a repository
+# that is itself published would be — is not covered, and no amount of "everyone
+# calls it freeware" makes it covered. So the repository carries this manifest
+# and never the bytes: the file arrives from the host that has permission to
+# serve it, on every machine that wants it, and lanthorn hands it to nobody.
+#
+# The same reasoning is why commercial media stays out entirely. Fetching an
+# Infocom floppy from a URL is the same act of copying as committing it with an
+# extra hop; those suites keep skipping, and that is correct.
+#
+# LICENCE COLUMN. The strongest statement found for each file, checked one at a
+# time rather than assumed from the directory it sits in:
+#
+#   gpl2-pd                      The author's own README: source under GNU GPL
+#                                v2, card artwork public domain or GFDL.
+#                                (scopa_z6/README, Aldo Cumani, February 2011)
+#   cc-by-nc-nd-3.0              "Lost Pig by Admiral Jota and Grunk is licensed
+#                                under a Creative Commons Attribution-
+#                                NonCommercial-NoDerivs 3.0 Unported License."
+#                                <https://grunk.org/lostpig/>
+#   author-permission-ifarchive  "Brian Howarth gave his permission to upload the
+#                                games to the IF Archive." (ReadMe.txt inside
+#                                scott-adams/games/scottfree/mysterious_blorb.zip)
+#                                Permission to THAT HOST to serve them, which is
+#                                exactly the permission a fetch relies on.
+#   ifarchive-tou                No licence statement located from the author.
+#                                The IF Archive's Terms of Use govern: presumed
+#                                personal use, freely downloadable, not ours to
+#                                redistribute. Fetched, never committed.
+#
+# Nothing here is `ifarchive-tou` by default or by laziness — each was looked for
+# and not found, including several works universally described as freeware
+# (Photopia, Anchorhead's 1998 release, Spider and Web, The Wizard Sniffer, THE
+# BAT). "IFDB says License: Freeware" is a cataloguer's metadata, not the
+# author's grant, and is not recorded here as one.
+#
+# NOT FETCHED, and why — see docs/internals/ci-fixture-coverage.md:
+#   fmvpoker.z6           the story is freely copyable by its author's own words,
+#                         but its pictures are Zork Zero's (`fmvpoker.blb` is
+#                         byte-identical to Infocom's `ZorkZero.blb`) and the
+#                         author says so: "the graphics file is the intellectual
+#                         property of Activision". Half the title is not a
+#                         fixture — `v6_fmvpoker_hybrid` asserts render paths
+#                         that only exist once the art is there.
+#   Anchorhead.gblorb     the 2018 Special Edition is a PAID product
+#                         (mikegentry5.itch.io/anchorhead). The 1998 z8 that IS
+#                         fetched, `anchor.z8`, is a different work.
+#   CounterfeitMonkey-11  the Archive carries release 12 and releases 5-9; the
+#                         suites pin 11, which is on no upstream.
+#   Alias 'The Magpie',   ditto: the local copies are releases the Archive no
+#   frankenfingers        longer carries, so no digest can be pinned.
+#
+# FORMAT — one TAB-separated record per line:
+#   sha256 <TAB> bytes <TAB> destination <TAB> url <TAB> zip-member-or-"-" <TAB> licence
+# Destinations and zip members may contain spaces; nothing may contain a tab.
+# The `bytes` column is redundant against the digest and kept anyway: it makes a
+# truncated download say so before the hash does, and it is what a human reads.
+560294b8744da39228656454798bb232db3023b6d4e612e12ca12bc70336f5f2	118272	advent.z6	https://ifarchive.org/if-archive/games/zcode/advent.z6	-	ifarchive-tou
+662d096260f86515927bd659ad0d663d11a643e39814e7af5ee36c8e57066292	195406	advent.blb	https://ifarchive.org/if-archive/games/glulx/advent.blb	-	ifarchive-tou
+c2f28a4ddd9367c260946926a33c73a4b0cc38b1f327646cc1202182a28a10ff	520192	anchor.z8	https://ifarchive.org/if-archive/games/zcode/anchor.z8	-	ifarchive-tou
+ba14a14dfdede4b7ad97846c13ca0ea07048334ac767649d9aa84add7fae20a5	239616	photopia.z5	https://ifarchive.org/if-archive/games/zcode/photopia.z5	-	ifarchive-tou
+4af74fe0ee17a32b99719a4098a7167baf6b3f8460d45e4d2a9a9e1769c49282	65532	sunburst.z6	https://ifarchive.org/if-archive/games/zcode/sunburst.z6	-	ifarchive-tou
+f724a902752eeae9b4e0467f0bc7c199ce90c5ee65afb6c5a7f4664761ea017a	8869096	cragne.gblorb	https://ifarchive.org/if-archive/games/glulx/cragne.gblorb	-	ifarchive-tou
+cc053da4dcbbc2aa960c6206f368a6e3a772e04d5890e1f1fdb658a71bd06219	1240012	The_Wizard_Sniffer.gblorb.blorb	https://ifarchive.org/if-archive/games/competition2017/The%20Wizard%20Sniffer/The_Wizard_Sniffer.gblorb	-	ifarchive-tou
+c2caf0f0e2b2bc546c0308abf2c15cb3bbb62480b779961ebbf9b0184b4733d1	635974	AnchorheadDemo.gblorb	https://ifarchive.org/if-archive/games/glulx/AnchorheadDemo.gblorb	-	ifarchive-tou
+7bffe25e933aa22a2b1e9bfc8073bee5687d79a70394da19e50bfed5755368c4	285184	LostPig.z8	https://ifarchive.org/if-archive/games/zcode/LostPig.z8	-	cc-by-nc-nd-3.0
+dd5b510fb04daaa2fa9a40fc94414eee3719a72e274c77288b41629e32470817	221184	Tangle.z5	https://ifarchive.org/if-archive/games/zcode/Tangle.z5	-	ifarchive-tou
+fbc5c471f445a2bd8e2de4a66a904378cafb65818f64b5f042640c3b39982431	243312	ImpossibleStairs.z8	https://ifarchive.org/if-archive/games/zcode/ImpossibleStairs.z8	-	ifarchive-tou
+5249237e4c3660dfaa76e8fb1e3b5b0fa1a9619c3576489d6f1146e9544c5553	1089226	chlorophyll.gblorb	https://ifarchive.org/if-archive/games/glulx/chlorophyll.gblorb	-	ifarchive-tou
+dbe10dec7ebabbc57b8105575f3bb8d7cc16ea6926172a2a28ccebea442edaa4	11680602	Never Gives Up Her Dead.gblorb	https://ifarchive.org/if-archive/games/glulx/Never%20Gives%20Up%20Her%20Dead.gblorb	-	ifarchive-tou
+586e2412b6a746f78602aba25598dbd90797587f41788ee35977219ac7a38b08	101376	scopa.z6	https://ifarchive.org/if-archive/games/zcode/scopa_z6.zip	scopa_z6/scopa.z6	gpl2-pd
+d48d472816182d464b2cac64a902b08d0d1871b24b267b6e609c0353b93a37a6	230264	scopa.blb	https://ifarchive.org/if-archive/games/zcode/scopa_z6.zip	scopa_z6/scopa.blb	gpl2-pd
+00cec3e6380ff3211d927d66f99fac9d19e11eb6bef2094b53f2004e5acf975d	128134	Mysterious01.blb	https://ifarchive.org/if-archive/games/zcode/mysterious_z6_blorb.zip	MysteAdv/Mysterious01.blb	author-permission-ifarchive
+21c6b51d6d2d01bd395038745db987c003010cdd7d7a9544c41f77ee10936a3f	147572	Mysterious02.blb	https://ifarchive.org/if-archive/games/zcode/mysterious_z6_blorb.zip	MysteAdv/Mysterious02.blb	author-permission-ifarchive
+efab6a0f5bb05d0a22e3bffd1dface49e4553ea191b6a54a9f868010b170d134	190888	Mysterious03.blb	https://ifarchive.org/if-archive/games/zcode/mysterious_z6_blorb.zip	MysteAdv/Mysterious03.blb	author-permission-ifarchive
+c3d283626cc3c8dfcd6121c956919f216f46e3430b0e66732bb695a03c07efdd	226610	Mysterious04.blb	https://ifarchive.org/if-archive/games/zcode/mysterious_z6_blorb.zip	MysteAdv/Mysterious04.blb	author-permission-ifarchive
+ff2a3ab528c25c8089197908c5ee03c32a7484cbd5f37fa724e61730bc4f2252	138834	Mysterious05.blb	https://ifarchive.org/if-archive/games/zcode/mysterious_z6_blorb.zip	MysteAdv/Mysterious05.blb	author-permission-ifarchive
+1b047cea8ad8f69aba8f3414902a20753600ff1e01570dd84032237975e3f625	123880	Mysterious06.blb	https://ifarchive.org/if-archive/games/zcode/mysterious_z6_blorb.zip	MysteAdv/Mysterious06.blb	author-permission-ifarchive
+ee24ac0e7f519ee39578374ab4423901de3fcc34d6edc9f17a003b5907d947cb	212834	Mysterious07.blb	https://ifarchive.org/if-archive/games/zcode/mysterious_z6_blorb.zip	MysteAdv/Mysterious07.blb	author-permission-ifarchive
+bba4c8dbff2b5c82ecc33c8616183ba295f7b7e790f469a75f850ca70270c16f	156550	Mysterious08.blb	https://ifarchive.org/if-archive/games/zcode/mysterious_z6_blorb.zip	MysteAdv/Mysterious08.blb	author-permission-ifarchive
+2efec9c2d5083a7b426568e57f5aaca849a1c1e3c53ed2e6ce87d113eb44a282	205196	Mysterious10.blb	https://ifarchive.org/if-archive/games/zcode/mysterious_z6_blorb.zip	MysteAdv/Mysterious10.blb	author-permission-ifarchive
+58076904e0d3932de5035c79cf6359ef0ffbdcb0caeca8501ad86de055a6cf59	136872	Mysterious11.blb	https://ifarchive.org/if-archive/games/zcode/mysterious_z6_blorb.zip	MysteAdv/Mysterious11.blb	author-permission-ifarchive
+ba48e27c68300d00154891780d69372615ac176b401968df3a0c03eebbeb3441	27644	mysterious01.z6	https://ifarchive.org/if-archive/games/zcode/mysterious_z6_blorb.zip	MysteAdv/mysterious01.z6	author-permission-ifarchive
+53412a29eea9dabf0e74c8695b4dc7412f121488a31d69df623c5e9891f635a2	28156	mysterious02.z6	https://ifarchive.org/if-archive/games/zcode/mysterious_z6_blorb.zip	MysteAdv/mysterious02.z6	author-permission-ifarchive
+dd62ec85a01ad0f67318ed1cd7f4f8c679389f9d4c06decb79ba7552f5cf9eb2	28156	mysterious03.z6	https://ifarchive.org/if-archive/games/zcode/mysterious_z6_blorb.zip	MysteAdv/mysterious03.z6	author-permission-ifarchive
+d4616039300333ed53d34281c4289edc03a585205676ca6ffe70c733613f95ac	30716	mysterious04.z6	https://ifarchive.org/if-archive/games/zcode/mysterious_z6_blorb.zip	MysteAdv/mysterious04.z6	author-permission-ifarchive
+7efa976296efd9ab1340a80f8462d4d372b5cb436ba581e6905aef16d7b06a22	32764	mysterious05.z6	https://ifarchive.org/if-archive/games/zcode/mysterious_z6_blorb.zip	MysteAdv/mysterious05.z6	author-permission-ifarchive
+aa3afca711793e692187f60055f05e9e677ff151c45d4e13228147f43a17bb11	29180	mysterious06.z6	https://ifarchive.org/if-archive/games/zcode/mysterious_z6_blorb.zip	MysteAdv/mysterious06.z6	author-permission-ifarchive
+c208e6a52ad9706b15caaed3ac767b7f21618d4a3b12df1eb8e3a82a70c1b05c	28672	mysterious07.z6	https://ifarchive.org/if-archive/games/zcode/mysterious_z6_blorb.zip	MysteAdv/mysterious07.z6	author-permission-ifarchive
+57699766407f38be0bf7106ae8c6094d05c2e85460f4af0f81d56af945421b94	31232	mysterious08.z6	https://ifarchive.org/if-archive/games/zcode/mysterious_z6_blorb.zip	MysteAdv/mysterious08.z6	author-permission-ifarchive
+ddb3d32030befe6936853ef7ba15f95319ccd1c866ebcde1dbfa84e8162d8524	147864	mysterious09.blb	https://ifarchive.org/if-archive/games/zcode/mysterious_z6_blorb.zip	MysteAdv/mysterious09.blb	author-permission-ifarchive
+d0390e813526ed227ae3a3293a3f2f56dc7c2232fad7caee7573c41af32db8fb	29696	mysterious09.z6	https://ifarchive.org/if-archive/games/zcode/mysterious_z6_blorb.zip	MysteAdv/mysterious09.z6	author-permission-ifarchive
+10322e8f466d1ab5a385aa19d342da6e0d497426e1828b32b5ebc8b63f78bcf6	29180	mysterious10.z6	https://ifarchive.org/if-archive/games/zcode/mysterious_z6_blorb.zip	MysteAdv/mysterious10.z6	author-permission-ifarchive
+e8312e7762b0b2b1f289179038f0ca779aa064890eb08e6ca2c481b5c03067ef	30720	mysterious11.z6	https://ifarchive.org/if-archive/games/zcode/mysterious_z6_blorb.zip	MysteAdv/mysterious11.z6	author-permission-ifarchive
+8dbcb85fe6631133257c0f6389f67c1bf31be1f3b83d132f4ffcfa7f019bb29e	22109534	Kerkerkruip.gblorb	https://ifarchive.org/if-archive/games/glulx/Kerkerkruip.zip	Kerkerkruip.gblorb	ifarchive-tou
+82d0f5c5a22304f9c0fd1fad35c8731a67ba614c74af758da6441c6dacb9e9fa	875	Kerkerkruip.ini	https://ifarchive.org/if-archive/games/glulx/Kerkerkruip.zip	Kerkerkruip.ini	ifarchive-tou
+28e2c116fa07045337a63444d56c4ff7eb642331e67bf3a6e615917ac0621a71	1818410	THE BAT.gblorb.blorb	https://ifarchive.org/if-archive/games/glulx/THE%20BAT.zip	THE BAT/THE BAT.gblorb	ifarchive-tou
+755a622be439847a1c3d8f9363133cc4d3f2117f2dbdeeb455374925b43251c2	53374	golden_baton.blb	https://ifarchive.org/if-archive/scott-adams/games/scottfree/mysterious_blorb.zip	golden_baton.blb	author-permission-ifarchive
+5702fdb7aee77fc3e95043ffe4551d64e8ea5bc249e938ba55b57c36f834abce	56914	perseus_andromeda.blb	https://ifarchive.org/if-archive/scott-adams/games/scottfree/mysterious_blorb.zip	perseus_andromeda.blb	author-permission-ifarchive
+88f231bba5a9a4dc79c3b1be26b82584ff023a302a48df5de8aacb41d96a4297	54062	time_machine.blb	https://ifarchive.org/if-archive/scott-adams/games/scottfree/mysterious_blorb.zip	time_machine.blb	author-permission-ifarchive
+1cccac0028d2c37f468dc5c287a4da9fd00ef1e07ffed4a3404174ff7cc5bd9d	64660	ten_indians.blb	https://ifarchive.org/if-archive/scott-adams/games/scottfree/mysterious_blorb.zip	ten_indians.blb	author-permission-ifarchive

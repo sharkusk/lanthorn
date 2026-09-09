@@ -2,23 +2,60 @@
 //!
 //! 125 suites under `tests/suites/` used to each define their own private
 //! `stories_dir()` pointing solely at the gitignored, commercial `stories/`
-//! directory, so every one of them skipped vacuously on CI. A survey found 39
-//! of those suites depend only on fixtures that are already freely
-//! redistributable — `advent`, `scopa`, `sunburst`, the Mysterious Adventures,
-//! `anchor.z8`, `photopia`, and several modern Glulx works — and moved them to
-//! `tests/fixtures/stories/`, which `git ls-files` can see.
+//! directory, so every one of them skipped vacuously on CI. A survey found that
+//! a large minority of those suites depend only on fixtures the IF Archive
+//! distributes freely — `advent`, `scopa`, `sunburst`, the Mysterious
+//! Adventures, `anchor.z8`, `photopia`, and several modern Glulx works — and
+//! pointed them at `tests/fixtures/stories/`.
+//!
+//! That directory is **fetched, not committed** (`scripts/fixtures.manifest`,
+//! `scripts/fetch-fixtures.sh`). The IF Archive's Terms of Use presume material
+//! with no attached licence is licensed for personal use only, so downloading
+//! one is what the Archive is for and republishing it inside this repository is
+//! not. CI runs the fetch before `cargo test`; the manifest is the whole of what
+//! the repository carries.
 //!
 //! [`fixture_path`] is the one place that duplication now goes through: it takes
-//! the local `stories/` copy when there is one and the tracked copy otherwise, so
+//! the local `stories/` copy when there is one and the fetched copy otherwise, so
 //! a developer's run is unchanged and CI — which has no `stories/` — still reaches
-//! every tracked fixture. A suite that names a fixture never moved here behaves
+//! every fetched fixture. A suite that names a fixture on neither list behaves
 //! exactly as it did before: a superset, never a narrowing.
+//!
+//! **And a skip is no longer ambiguous.** Before the fetch existed, "the fixture
+//! is absent" meant one thing on CI: there is no `stories/` there. Now it could
+//! also mean the fetch quietly failed, which would turn a broken step into a
+//! green run full of silent skips — the exact failure this whole quest is about.
+//! `LANTHORN_FIXTURES_REQUIRED=1`, which CI sets after the fetch step and nothing
+//! else sets, makes [`fixture_path`] PANIC rather than answer with a path that is
+//! not there, for the names the manifest promises and those only.
 use std::path::{Path, PathBuf};
+use std::sync::OnceLock;
 
-/// Resolve `name` against the tracked fixtures directory first, then the
-/// gitignored local `stories/`. Returns a path either way (possibly
-/// non-existent) so callers keep their existing `std::fs::read(..).ok()?`
-/// "skip if absent" pattern unchanged.
+/// The fetch manifest, compiled in so the required-fixture list cannot drift from
+/// what the fetch script actually populates. Parsed lazily; see the file's own
+/// header for the format.
+const MANIFEST: &str = include_str!("../../../../scripts/fixtures.manifest");
+
+/// The destination names `scripts/fixtures.manifest` promises — column 3 of every
+/// record line.
+fn manifest_names() -> &'static [&'static str] {
+    static NAMES: OnceLock<Vec<&'static str>> = OnceLock::new();
+    NAMES
+        .get_or_init(|| {
+            MANIFEST
+                .lines()
+                .filter(|l| !l.starts_with('#') && !l.trim().is_empty())
+                .filter_map(|l| l.split('\t').nth(2))
+                .collect()
+        })
+        .as_slice()
+}
+
+/// Resolve `name` against the gitignored local `stories/` first, then the fetched
+/// fixtures directory. Returns a path either way (possibly non-existent) so
+/// callers keep their existing `std::fs::read(..).ok()?` "skip if absent" pattern
+/// unchanged — except under `LANTHORN_FIXTURES_REQUIRED`, where a name the
+/// manifest promises and neither directory holds is a panic instead.
 pub fn fixture_path(name: &str) -> PathBuf {
     let manifest = Path::new(env!("CARGO_MANIFEST_DIR"));
 
@@ -55,7 +92,23 @@ pub fn fixture_path(name: &str) -> PathBuf {
     if tracked.is_file() {
         return tracked;
     }
-    // Neither has it — answer in `stories/`, which is where this always pointed and
+
+    // Neither has it. If the manifest promised it and the run demanded the
+    // manifest be honoured, that is a broken fetch, not a missing shelf — and a
+    // vacuous skip would report it as a pass.
+    if std::env::var_os("LANTHORN_FIXTURES_REQUIRED").is_some() && manifest_names().contains(&name) {
+        panic!(
+            "LANTHORN_FIXTURES_REQUIRED is set and `{name}` is in \
+             scripts/fixtures.manifest, but it is at neither {} nor {}. \
+             The fetch step did not do its job — run `scripts/fetch-fixtures.sh` \
+             (or `--verify-only` to see which files are absent). Skipping here \
+             would report a broken fetch as a green run.",
+            local.display(),
+            tracked.display(),
+        );
+    }
+
+    // Answer in `stories/`, which is where this always pointed and
     // what several callers actually want. `picture_override` asks for
     // `fixture_path("anything.z6")`, a name deliberately on no disk, purely to name
     // the DIRECTORY its real fixtures (`zork0.pic`, `zork0.eg1`) sit beside. Falling

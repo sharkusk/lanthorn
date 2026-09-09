@@ -82,20 +82,55 @@ jobs:
         with:
           key: ${{ matrix.os }}
 
+      # Story fixtures (SQ-1015). `stories/` is gitignored commercial media and
+      # is never here, so ~150 suites used to skip vacuously on the run that
+      # guards a merge. `scripts/fixtures.manifest` names the subset the IF
+      # Archive distributes freely; the script fetches it and verifies every
+      # SHA-256, failing rather than proceeding on a mismatch — a fixture that
+      # changed under us is a worse outcome than one that is absent.
+      #
+      # Fetched, never committed: the Archive's Terms of Use presume material
+      # with no attached licence is licensed for personal use only, which covers
+      # downloading it and not republishing it in a repository of ours.
+      #
+      # The cache key is the manifest's own hash, so editing the manifest is what
+      # invalidates it and nothing else can. A hit makes the step a digest check
+      # over ~50 MB; a miss re-downloads from ifarchive.org.
+      - name: Cache fetched story fixtures
+        uses: actions/cache@v4
+        with:
+          path: crates/app/tests/fixtures/stories
+          key: fixtures-${{ matrix.os }}-${{ hashFiles('scripts/fixtures.manifest') }}
+
+      - name: Fetch story fixtures
+        shell: bash
+        run: scripts/fetch-fixtures.sh
+
       # `--locked` requires Cargo.lock to be committed and in sync with
       # Cargo.toml (it is) — this also guards against drift on Windows, where
       # a regenerated lockfile can differ in ways CI shouldn't silently accept.
       #
-      # Story-fixture-gated tests (real commercial games under the gitignored
-      # `stories/` dir) skip themselves cleanly when that directory/file is
-      # absent — which it always is in CI. Small fixtures actually needed by
-      # the suite (czech.z5, minizork.z3, tiny_cave.dat, glulxercise.ulx, etc.)
-      # are committed under each crate's `tests/fixtures/` and are present.
+      # Story-fixture-gated tests skip themselves cleanly when their file is
+      # absent. That is still true of the COMMERCIAL media under the gitignored
+      # `stories/` dir, which is never here and never will be. It is no longer
+      # true of the free subset the step above fetched: `LANTHORN_FIXTURES_REQUIRED`
+      # makes `fixture_paths::fixture_path` panic instead of answering with a
+      # path that is not there, for the names `scripts/fixtures.manifest`
+      # promises and those only. Without it a half-failed fetch would read as a
+      # green run full of quiet skips, which is precisely the blind spot the
+      # fetch exists to close. Nothing outside CI sets it, so a developer's run
+      # keeps skipping exactly as before.
+      #
+      # Small fixtures actually needed by the suite (czech.z5, minizork.z3,
+      # tiny_cave.dat, glulxercise.ulx, etc.) are committed under each crate's
+      # `tests/fixtures/` and are present.
       # SQ-1242: `app`'s in-crate unit tests sit behind `t-*` Cargo features
       # (crates/app/Cargo.toml) so a plain `cargo test` no longer compiles or
       # runs them — `--all-features` is what turns every `t-*` group (via
       # `t-all`) back on, for `app` and harmlessly for every other crate.
       - name: cargo test
+        env:
+          LANTHORN_FIXTURES_REQUIRED: '1'
         run: cargo test --workspace --locked --all-features
 
       # One job, Linux only — clippy's result doesn't vary meaningfully by OS

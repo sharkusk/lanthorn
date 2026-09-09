@@ -11,6 +11,13 @@ all. The short answer is that the honest ceiling on synthesis is small, that a
 much larger win is sitting in plain sight and needs no synthesis whatsoever, and
 that the single most valuable thing to synthesise has now been built.
 
+**The survey below is preserved as written; what was actually done about it is in
+"What was done: fetch, do not vendor", further down.** The one place the two
+disagree is worth knowing before you read: the survey proposed *moving* the free
+fixtures into the tree, and they are **fetched** instead — see that section for
+why the IF Archive's own terms make the difference load-bearing rather than
+stylistic.
+
 ## The hole, counted
 
 Counted at SQ-1015, and a snapshot rather than a constant — the suite directory
@@ -55,16 +62,20 @@ and Scott works — *Kerkerkruip*, *Counterfeit Monkey*, *Cragne Manor*, *The
 Wizard Sniffer*, *THE BAT*, the eight `glulx_room_detection` gblorbs,
 `golden_baton` / `perseus_andromeda` / `time_machine`.
 
-Moving those files into `unit_tests/` un-skips 135 tests on CI outright. No
-fixture needs authoring, no format needs studying, and nothing can be
-fabricated wrong because nothing is being fabricated. That is a larger win than
-every synthesis below put together, and it is an afternoon of checking licences
-rather than a project.
+Putting those files where CI can reach them un-skips them outright. No fixture
+needs authoring, no format needs studying, and nothing can be fabricated wrong
+because nothing is being fabricated. That is a larger win than every synthesis
+below put together, and it is an afternoon of checking licences rather than a
+project.
 
 It is not free of judgement — each file's redistribution terms have to be
 established one at a time, and "freeware" is not the same as "we may vendor it".
 But the work is *verification*, which is a different and much safer activity
-than construction.
+than construction. **And the verification came back saying: do not vendor.**
+Almost none of these works carries a licence from its author at all, which under
+the Archive's terms makes them ours to download and not ours to republish — so
+they are fetched. See "What was done" below; the list above is otherwise
+accurate, with the four exceptions named there.
 
 **SQ-1102 added a case in exactly this shape, and it is worth naming because the
 hole is total rather than partial.** `gvm::grammar` locates and reads Inform's
@@ -76,10 +87,11 @@ carries no grammar at all, so the single CI-visible case is a **refusal**
 every positive case skips vacuously. The locator is the part most worth guarding
 — 889 byte offsets across the corpus pass its pointer-array precondition and
 only 22 survive the full walk — and it is precisely the part CI cannot see.
-Several of those 22 are already on the redistributable list above
-(*Kerkerkruip*, *Counterfeit Monkey*, *Cragne Manor*, *The Wizard Sniffer*), so
-this needs no new synthesis either: one file moved into `unit_tests/` turns the
-strongest case in the module from invisible to green.
+Several of those 22 are already on the free list above (*Kerkerkruip*, *Cragne
+Manor*, *The Wizard Sniffer* — though not *Counterfeit Monkey*, whose pinned
+release is on no upstream), so this needs no new synthesis either: those three
+are on the fetch manifest, and reaching for one of them here turns the strongest
+case in the module from invisible to green.
 
 ## What can be synthesised, and what cannot
 
@@ -209,15 +221,116 @@ That one pins the *real* face — 7x15, baseline 12, 200-odd glyphs — and is w
 proves we read Infocom's data correctly. Synthetic proves the machinery; real
 media proves the data. Both are needed, and the real one still skips on CI.
 
-## Recommended order
+## What was done: fetch, do not vendor (SQ-1015, decided 2026-08-25)
 
-1. **Move the free fixtures.** 135 tests, no authoring, no fabrication risk.
-   Verify each licence individually and commit them under extensions
-   `.gitignore` does not swallow — or amend `.gitignore`. Biggest win by a wide
-   margin.
-2. **Give the 123 unguarded suites a non-vacuity guard**, or one shared helper
-   that provides it. This does not add coverage; it stops CI green from meaning
-   two different things. Cheap, and it makes every number above self-reporting.
+Recommendation 1 below said "move the free fixtures" into the tree. **That is
+not what happened, and the difference is the point.** The IF Archive's own Terms
+of Use <https://ifarchive.org/misc/license.html> settle it:
+
+> The contents of the IF Archive … are the intellectual property of their
+> original creators. … Any material with no attached license is presumed to be
+> licensed for **personal use only**.
+
+Downloading such a file is exactly what the Archive exists for. Committing one
+into a repository that is itself published is redistribution, and the Archive
+cannot grant that — it says so, in the same paragraph, about anyone who wants to
+distribute a subset of its contents. So the repository carries a **manifest** and
+never the bytes.
+
+- `scripts/fixtures.manifest` — one record per file: SHA-256, byte count,
+  destination name, upstream URL, zip member, and the licence basis, verified
+  one file at a time rather than assumed from the directory it sits in.
+- `scripts/fetch-fixtures.sh` — fetches and verifies it, into
+  `crates/app/tests/fixtures/stories/`, which `fixture_paths::fixture_path`
+  already falls back to. `--verify-only` checks a populated directory without
+  the network. It exits non-zero on any absence or mismatch: a fixture that
+  changed under us is a worse outcome than one that is absent.
+- `.github/workflows/test.yml` runs it before `cargo test`, behind an
+  `actions/cache` keyed on the manifest's own hash, so editing the manifest is
+  the only thing that can invalidate the cache. `release.yml` runs no tests and
+  needs nothing.
+
+44 files, ~50 MB. What that turns on: **49 suites (161 tests) that depended only
+on manifest fixtures now run on CI instead of skipping**, and 33 more run in
+part — every case in them that names a free fixture, with the commercial ones
+still skipping beside it.
+
+### What the licences actually say
+
+Only three bases in the whole manifest carry a statement from anyone but a
+cataloguer, and saying so plainly is more useful than a table of assumed
+freeware:
+
+| basis | files | the statement |
+|---|---|---|
+| `gpl2-pd` | `scopa.z6`, `scopa.blb` | Aldo Cumani's own README: source under GNU GPL v2, the card artwork public domain or GFDL |
+| `cc-by-nc-nd-3.0` | `LostPig.z8` | "Lost Pig by Admiral Jota and Grunk is licensed under a Creative Commons Attribution-NonCommercial-NoDerivs 3.0 Unported License." <https://grunk.org/lostpig/> |
+| `author-permission-ifarchive` | the 11 Mysterious Adventures and their Blorbs, `golden_baton.blb`, `perseus_andromeda.blb`, `time_machine.blb`, `ten_indians.blb` | "Brian Howarth gave his permission to upload the games to the IF Archive." (the ReadMe inside `mysterious_blorb.zip`) — permission to *that host* to serve them, which is precisely what a fetch relies on |
+| `ifarchive-tou` | the rest | nothing found from the author. The Archive's Terms govern: personal use presumed, freely downloadable, not ours to republish |
+
+**Every `ifarchive-tou` entry was looked for and not found** — Photopia,
+Anchorhead's 1998 release, Spider and Web, Adventure, Sunburst, Kerkerkruip,
+Cragne Manor, The Wizard Sniffer, THE BAT, Chlorophyll and the rest. IFDB's
+"License: Freeware" is a cataloguer's metadata, not the author's grant, and is
+not recorded as one. That is not an obstacle to fetching; it is the reason not
+to vendor.
+
+### Four things deliberately NOT fetched
+
+- **`fmvpoker.z6`.** Its author states the story file "may be freely copied and
+  distributed" — and in the same breath that "the graphics file is the
+  intellectual property of Activision". He is right: `stories/fmvpoker.blb` is
+  byte-identical to Infocom's `ZorkZero.blb`, which the game's own instructions
+  tell you to rename. Half a title is not a fixture. `v6_fmvpoker_hybrid`
+  asserts render paths that exist only once the art is there, so fetching the
+  story alone would not add coverage — it would fabricate a frame, which is
+  bucket B's mistake wearing different clothes.
+- **`Anchorhead.gblorb`** — the 2018 Special Edition is a paid product
+  (mikegentry5.itch.io/anchorhead). The 1998 `anchor.z8` that IS fetched is a
+  different work, not a different copy.
+- **`CounterfeitMonkey-11.gblorb`** — the Archive carries release 12 and
+  releases 5–9. The suites pin 11, which is on no upstream, so no digest can be
+  written down. Six suites stay local-only for that reason alone.
+- **`Alias 'The Magpie'.gblorb`, `frankenfingers_260330.z5`** — same shape: the
+  local copies are releases the Archive no longer carries.
+
+Release drift is the recurring hazard here, and the manifest's digests are what
+make it visible instead of silent. A fixture that "is on the IF Archive" under
+the right filename is not necessarily the fixture a suite was written against.
+
+### A skip is no longer ambiguous
+
+Once CI fetches some fixtures and not others, a silent skip stops meaning "CI has
+no media" and might mean "the fetch quietly failed" — which would report a broken
+step as a green run full of skips, the exact failure mode this whole document is
+about. `LANTHORN_FIXTURES_REQUIRED=1`, which the workflow sets on the test step
+and nothing else sets, makes `fixture_path` **panic** rather than answer with a
+path that is not there — for the names the manifest promises and those only. A
+developer's run is unchanged. Falsified by deleting one fetched file: the case
+fails with the manifest name, both directories tried, and the command to run.
+
+Two more sources of vacuous skip were closed on the way, both of them a name
+rather than a licence: `sq1372_adventure_maze` and `sq1389_lostpig_gnome_room`
+still built their own `stories/`-only path, and `sq1302_wizard_sniffer_rooms`
+and `sq1303_glulx_static_world` asked for `The_Wizard_Sniffer.gblorb` where the
+file on the shelf — and in `wizard_sniffer.rs`, which ran — is
+`The_Wizard_Sniffer.gblorb.blorb`. Those four skipped *locally* too, past a
+`stories/` directory that had the file.
+
+**Cost.** `sq1372_adventure_maze` builds Adventure's whole map twice and takes
+46–91 s per case on a 12-core machine; those three cases used to skip on CI and
+now run. That is the largest single addition to the CI run, and it is real
+coverage, but it is worth knowing before wondering where the minutes went.
+
+### Still owed
+
+1. ~~Move the free fixtures.~~ Done differently — fetched, above.
+2. **The remaining unguarded suites.** 106 still define a private
+   `stories_dir()`, and every one of them is commercial-only, so the guard above
+   cannot reach them: `LANTHORN_FIXTURES_REQUIRED` only speaks for names the
+   manifest promises. Consolidating them onto `fixture_path` costs little and
+   buys nothing today; it buys something the day a fixture of theirs becomes
+   fetchable.
 3. **The Amiga font, mirroring the Macintosh one.** An authored ADF carrying a
    `DFH_ID` font would close the other half of the `native_disk_font` gap and
    give `amiga_font.rs` its first test. `adf.rs` already has a synthetic volume
@@ -238,8 +351,15 @@ proprietary material, copyright now Microsoft. Their menu table names `YZIP
 windows`; their strings are written in ZIL/ZAP opcode vocabulary (`DIROUT`,
 `CURGET`, `IGRTR?`, and the interpreter's internal `LMRG`/`RMRG` globals); their
 headers are pre-Inform in shape. They belong in `stories/`, with any suite using
-them written to skip.
+them written to skip. `.gitignore` covered `/unit_tests/*.z5` but **not** `*.z6`
+until 19fc75f6, so those two files were untracked-yet-unignored and one careless
+whole-directory stage would have committed them; every Z-machine version is
+covered now.
 
-`.gitignore` covers `/unit_tests/*.z5` but **not** `*.z6`, so those two files are
-untracked-yet-unignored and one careless `git add unit_tests/` commits them.
-The hard rule against `git add -A` is the only thing that has prevented it.
+`crates/zvm/tests/fixtures/minizork.z3` is Infocom's Mini-Zork I demo, **vendored
+rather than fetched**, and it is the one file in the tree this document's rule
+does not cover: no permission statement from Infocom, Activision or Microsoft for
+the Mini-Zork demo could be found, and the November 2025 MIT release of the Zork
+sources names specific full releases and not this cut-down C64 demo. It predates
+SQ-1015 and is not this quest's to move; it is written down here so the next
+person does not have to rediscover it.

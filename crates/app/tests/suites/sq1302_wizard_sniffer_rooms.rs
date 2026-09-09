@@ -38,7 +38,7 @@
 //!
 //! # The fixture and the route
 //!
-//! `stories/The_Wizard_Sniffer.gblorb` — **release 1 / serial 171007 / Inform 7
+//! `The_Wizard_Sniffer.gblorb.blorb` — **release 1 / serial 171007 / Inform 7
 //! build 6L38 (I6/v6.33 lib 6/12N)**, Buster Hudson, IFComp 2017. Gitignored, so
 //! this skips vacuously without it.
 //!
@@ -56,7 +56,11 @@ use mapper::mapper::Mapper;
 
 use crate::fixture_paths::fixture_path;
 
-const STORY: &str = "The_Wizard_Sniffer.gblorb";
+/// SQ-1015: `.gblorb.blorb` is the name the file actually has on the shelf —
+/// `wizard_sniffer.rs` already asked for it that way, this suite asked for
+/// `.gblorb`, and one of the two therefore skipped vacuously wherever the other
+/// ran. The fetch manifest pins the same name.
+const STORY: &str = "The_Wizard_Sniffer.gblorb.blorb";
 
 /// The three rooms this route visits, in order.
 const MOUNTAIN: &str = "Atop a Mountain";
