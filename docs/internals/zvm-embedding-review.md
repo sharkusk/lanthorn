@@ -573,6 +573,8 @@ output sink mid-run with no invariant governing when that is safe.
 
 **Extended (SQ-1401, 2026-09-08).** `SoundEvent::new`, `PictureEvent::new`, `EraseFill::new`, `PeriodLook::new` acquired constructors in SQ-1397; `Cell`, `ZWindow`, `V6Windows`, `ScreenState`, `UpperWindow`, and `V6Text` acquired constructors in SQ-1401 (`Cell::new`, `ZWindow::new`, `V6Windows::new`, `ScreenState` with no public constructor, `UpperWindow::from_cells`, `V6Text::at_cell`), and all nine are now marked `#[non_exhaustive]`. `TextAttrs` remains unmarked, construction deferred to host literals.
 
+`TextAttrs` is marked too now: `TextAttrs::new` and `#[non_exhaustive]` landed in SQ-1404, so every host-constructed zvm screen struct is covered.
+
 ## 11. `gvm` and `scott`, briefly
 
 Both hold the zero-dependency line, and — the useful finding — **neither has any

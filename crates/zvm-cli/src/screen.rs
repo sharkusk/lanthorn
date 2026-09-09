@@ -238,7 +238,7 @@ pub fn upper_row_ansi(
         };
         if cur != Some((style, fg, bg)) {
             out.push_str("\x1b[0m");
-            out.push_str(&sgr_open(TextAttrs { style, fg, bg }, palette));
+            out.push_str(&sgr_open(TextAttrs::new(style, fg, bg), palette));
             cur = Some((style, fg, bg));
         }
         out.push(cell.ch);
@@ -1120,8 +1120,8 @@ mod colour_tests {
     #[test]
     fn sgr_open_builds_prefix_without_reset() {
         assert_eq!(sgr_open(TextAttrs::default(), Palette::Standard), "", "no attrs → empty");
-        assert_eq!(sgr_open(TextAttrs { style: 2, ..Default::default() }, Palette::Standard), "\x1b[1m", "bold, no reset");
-        let c = TextAttrs { style: 0, fg: ZColour::Standard(3), bg: ZColour::Default };
+        assert_eq!(sgr_open(TextAttrs::new(2, ZColour::Default, ZColour::Default), Palette::Standard), "\x1b[1m", "bold, no reset");
+        let c = TextAttrs::new(0, ZColour::Standard(3), ZColour::Default);
         assert_eq!(sgr_open(c, Palette::Standard), "\x1b[31m", "fg only, no trailing reset");
         // style_wrap composes sgr_open + reset.
         assert_eq!(style_wrap("x", c, true, Palette::Standard), "\x1b[31mx\x1b[0m");
@@ -1156,17 +1156,17 @@ mod colour_tests {
         // here. The moment a case in this crate sets the palette, every reader
         // like this one needs a lock again — SQ-0904/0958.
         // standard fg=red(3)->31, bg=blue(6)->44
-        let a = TextAttrs { style: 0, fg: ZColour::Standard(3), bg: ZColour::Standard(6) };
+        let a = TextAttrs::new(0, ZColour::Standard(3), ZColour::Standard(6));
         assert_eq!(style_wrap("x", a, true, Palette::Standard), "\x1b[31;44mx\x1b[0m");
         // default channels emit nothing; no attrs → no wrap
-        let d = TextAttrs { style: 0, fg: ZColour::Default, bg: ZColour::Default };
+        let d = TextAttrs::new(0, ZColour::Default, ZColour::Default);
         assert_eq!(style_wrap("x", d, true, Palette::Standard), "x");
         // true colour fg
-        let t = TextAttrs { style: 0, fg: ZColour::True(0x7FFF), bg: ZColour::Default };
+        let t = TextAttrs::new(0, ZColour::True(0x7FFF), ZColour::Default);
         assert_eq!(style_wrap("x", t, true, Palette::Standard), "\x1b[38;2;255;255;255mx\x1b[0m");
         // grey 11 -> 8C8C8C (ZMSD §8.3.1: medium grey is true colour $4631;
         // this used to pin the invented #808080)
-        let g = TextAttrs { style: 0, fg: ZColour::Standard(11), bg: ZColour::Default };
+        let g = TextAttrs::new(0, ZColour::Standard(11), ZColour::Default);
         assert_eq!(style_wrap("x", g, true, Palette::Standard), "\x1b[38;2;140;140;140mx\x1b[0m");
         // non-tty stays plain
         assert_eq!(style_wrap("x", a, false, Palette::Standard), "x");
@@ -1216,9 +1216,9 @@ mod tests {
     #[test]
     fn style_wrap_only_when_tty_and_styled() {
         use zvm::io::TextAttrs;
-        assert_eq!(style_wrap("hi", TextAttrs { style: 0, ..Default::default() }, true, Palette::Standard), "hi");
-        assert_eq!(style_wrap("hi", TextAttrs { style: 2, ..Default::default() }, false, Palette::Standard), "hi");
-        assert_eq!(style_wrap("hi", TextAttrs { style: 2, ..Default::default() }, true, Palette::Standard), "\x1b[1mhi\x1b[0m");
+        assert_eq!(style_wrap("hi", TextAttrs::new(0, ZColour::Default, ZColour::Default), true, Palette::Standard), "hi");
+        assert_eq!(style_wrap("hi", TextAttrs::new(2, ZColour::Default, ZColour::Default), false, Palette::Standard), "hi");
+        assert_eq!(style_wrap("hi", TextAttrs::new(2, ZColour::Default, ZColour::Default), true, Palette::Standard), "\x1b[1mhi\x1b[0m");
     }
 
     #[test]

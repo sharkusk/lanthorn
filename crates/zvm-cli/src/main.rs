@@ -422,7 +422,7 @@ impl Output for StdoutOutput {
 
     fn print_styled(&mut self, s: &str, style: u8) {
         use zvm::io::TextAttrs;
-        self.print_attr(s, TextAttrs { style, ..Default::default() });
+        self.print_attr(s, TextAttrs::new(style, zvm::screen::ZColour::Default, zvm::screen::ZColour::Default));
     }
 
     fn print_attr(&mut self, s: &str, attrs: zvm::io::TextAttrs) {
@@ -432,11 +432,7 @@ impl Output for StdoutOutput {
         let effective = if self.honor_game_colours {
             attrs
         } else {
-            zvm::io::TextAttrs {
-                fg: zvm::screen::ZColour::Default,
-                bg: zvm::screen::ZColour::Default,
-                ..attrs
-            }
+            zvm::io::TextAttrs::new(attrs.style, zvm::screen::ZColour::Default, zvm::screen::ZColour::Default)
         };
         self.write_formatted(s, Some(effective));
     }
@@ -2090,11 +2086,11 @@ fn main() {
                 // Echo input in the game's current style/colour (Default unless a
                 // game set colour and honoring is on — matching the output sink).
                 let echo = if honor {
-                    zvm::io::TextAttrs {
-                        style: machine.screen.text_style,
-                        fg: machine.screen.current_fg,
-                        bg: machine.screen.current_bg,
-                    }
+                    zvm::io::TextAttrs::new(
+                        machine.screen.text_style,
+                        machine.screen.current_fg,
+                        machine.screen.current_bg,
+                    )
                 } else {
                     zvm::io::TextAttrs::default()
                 };
@@ -2659,8 +2655,9 @@ mod stdout_tests {
     #[test]
     fn print_styled_wraps_only_on_tty() {
         use zvm::io::TextAttrs;
-        assert_eq!(crate::screen::style_wrap("hi", TextAttrs { style: 2, ..Default::default() }, true, zvm::screen::Palette::Standard), "\x1b[1mhi\x1b[0m");
-        assert_eq!(crate::screen::style_wrap("hi", TextAttrs { style: 2, ..Default::default() }, false, zvm::screen::Palette::Standard), "hi");
+        use zvm::screen::ZColour;
+        assert_eq!(crate::screen::style_wrap("hi", TextAttrs::new(2, ZColour::Default, ZColour::Default), true, zvm::screen::Palette::Standard), "\x1b[1mhi\x1b[0m");
+        assert_eq!(crate::screen::style_wrap("hi", TextAttrs::new(2, ZColour::Default, ZColour::Default), false, zvm::screen::Palette::Standard), "hi");
     }
 
     /// CLI gate: when honor_game_colours is OFF, print_attr strips fg/bg before
@@ -2672,7 +2669,7 @@ mod stdout_tests {
         use zvm::screen::ZColour;
         // Attrs with fg=red (Standard(3)→SGR 31), bg=blue (Standard(6)→SGR 44),
         // and reverse+bold style bits.
-        let attrs = TextAttrs { style: 0x03, fg: ZColour::Standard(3), bg: ZColour::Standard(6) };
+        let attrs = TextAttrs::new(0x03, ZColour::Standard(3), ZColour::Standard(6));
 
         // With honour ON: colour SGR present.
         let with_honour = crate::screen::style_wrap("hi", attrs, true, zvm::screen::Palette::Standard);
@@ -2681,7 +2678,7 @@ mod stdout_tests {
 
         // With honour OFF: strip fg/bg, pass Default channels to style_wrap.
         // This mirrors what StdoutOutput::print_attr does when honor_game_colours=false.
-        let stripped = TextAttrs { fg: ZColour::Default, bg: ZColour::Default, ..attrs };
+        let stripped = TextAttrs::new(attrs.style, ZColour::Default, ZColour::Default);
         let without_honour = crate::screen::style_wrap("hi", stripped, true, zvm::screen::Palette::Standard);
         assert!(!without_honour.contains("31"), "fg colour absent when honour=false: {without_honour:?}");
         assert!(!without_honour.contains("44"), "bg colour absent when honour=false: {without_honour:?}");
@@ -2830,7 +2827,7 @@ mod centring_tests {
     use std::path::PathBuf;
     use zvm::io::TextAttrs;
 
-    const BOLD: TextAttrs = TextAttrs { style: 2, fg: zvm::screen::ZColour::Default, bg: zvm::screen::ZColour::Default };
+    const BOLD: TextAttrs = TextAttrs::new(2, zvm::screen::ZColour::Default, zvm::screen::ZColour::Default);
 
     // ── the root cause, at the unit ─────────────────────────────────────────
 
@@ -2876,7 +2873,7 @@ mod centring_tests {
             self.writes.push((s.to_string(), None, self.buffer_mode));
         }
         fn print_styled(&mut self, s: &str, style: u8) {
-            self.print_attr(s, TextAttrs { style, ..Default::default() });
+            self.print_attr(s, TextAttrs::new(style, zvm::screen::ZColour::Default, zvm::screen::ZColour::Default));
         }
         fn print_attr(&mut self, s: &str, attrs: TextAttrs) {
             self.writes.push((s.to_string(), Some(attrs), self.buffer_mode));

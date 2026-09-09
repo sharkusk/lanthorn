@@ -70,10 +70,21 @@ use crate::screen::ZColour;
 
 /// Text attributes for one styled run (logical colour, pre-reverse-swap).
 #[derive(Debug, Clone, Copy, Default)]
+#[non_exhaustive]
 pub struct TextAttrs {
     pub style: u8,
     pub fg: ZColour,
     pub bg: ZColour,
+}
+
+impl TextAttrs {
+    /// Build a `TextAttrs` from its three fields. `#[non_exhaustive]` blocks
+    /// the struct-literal form outside this crate (SQ-1404), so this is the
+    /// constructor a host reaches for; use `..Default::default()` on a
+    /// literal only from within `zvm` itself.
+    pub const fn new(style: u8, fg: ZColour, bg: ZColour) -> Self {
+        TextAttrs { style, fg, bg }
+    }
 }
 
 /// Trait for Z-machine text output sinks.
