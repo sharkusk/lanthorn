@@ -42,6 +42,12 @@ Absolute URLs or no link.
   compilation disc: point lanthorn or `scott-cli --story <n|name>` at one and
   pick from a list of the games it holds, six on the first and five on the
   second, each with its own saves. (SQ-1414)
+  loud and is gone for good once it burns out. (SQ-1414)
+- **And now they show their pictures.** Each room's line-drawn artwork —
+  decoded straight off the same program file, no separate graphics disk
+  needed — appears above the room panel exactly where a Blorb-bundled Scott
+  Adams game already shows its own, through the same kitty/sixel/half-block
+  drawing lanthorn already uses everywhere else. (SQ-1463)
 - **Three more kinds of original disk now open.** Atari 8-bit floppies
   (`.atr`), Apple II DOS 3.3 floppies (`.dsk`) and Atari 8-bit loadable
   binaries (`.xex`) mount like every other release medium and list the

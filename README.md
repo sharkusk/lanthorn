@@ -14,7 +14,8 @@
 
 * **Z-machine v3–v8** (incl. graphical v6) — *Next release:* v1 and v2 as well
 * **Glulx**
-* **Scott Adams** — *Next release:* the TI-99/4A and Commodore 64 releases too
+* **Scott Adams** — *Next release:* the TI-99/4A and Commodore 64 releases too;
+  the Commodore 64 Mysterious Adventures now show their pictures
 
 ### Supported original Infocom disk formats:
 

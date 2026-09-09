@@ -293,6 +293,14 @@ pub struct PictSource {
     /// for a Blorb, an Amiga/Mac `Pic.data` and an MCGA `.MG1` alike, all of
     /// which carry their colours per picture.
     hw_palette: Option<[blorb::infocom_pics::Rgb; 16]>,
+    /// The Commodore 64 Mysterious Adventures' own decoded room pictures
+    /// (`scott::c64::decode_family_b_pictures`, SQ-1414), used when a Scott
+    /// Adams game was loaded straight off a C64 PRG/D64 image rather than a
+    /// reference-format `.dat` beside a `.blb`. Already fully decoded at
+    /// construction (SQ-1463) — unlike `native` above, there is no per-picture
+    /// compression stage to defer, only the RGBA conversion `get` does on
+    /// first request. `None` for every other source.
+    scott_c64: Option<Vec<scott::c64::Picture>>,
     /// Does this source's art need [`blend_half_width_columns`] on the way out —
     /// i.e. is it a SIXTEEN-colour 640-wide rendition, whose pixels are half as
     /// wide as the unit screen's and whose dithers the card fused (SQ-0797)?
@@ -334,6 +342,7 @@ impl PictSource {
             adaptive_scaled_cache: HashMap::new(),
             index_planes: HashMap::new(),
             hw_palette: None,
+            scott_c64: None,
             blend_columns: false,
             screen_palette: false,
         }
@@ -371,6 +380,31 @@ impl PictSource {
         // card's business, not the terminal's — see `blend_half_width_columns`.
         src.blend_columns = src.art_scale().is_some_and(|(sx, _)| sx == 1) && !src.is_monochrome();
         src
+    }
+
+    /// A source backed by a Commodore 64 Mysterious Adventures game's own
+    /// artwork — decoded once from the same PRG/D64 image the story loaded
+    /// from, rather than a Blorb (SQ-1463). `pictures` is
+    /// `scott::c64::decode_family_b_pictures`'s output, one image per room in
+    /// the decoder's own order (room *n* → `pictures[n - 1]`, §8.6's pure
+    /// identity) — [`Self::get`] applies that offset, so a caller indexes by
+    /// **picture number** (`scott::Vm::current_picture()`, "by convention,
+    /// picture number == room number") exactly as it does against a Blorb
+    /// `Pict` resource.
+    ///
+    /// No adaptive palette, no hardware table, no art-scale opinion: these
+    /// releases carry one small (255×94) fully-opaque bitmap per room and
+    /// nothing else in this struct's machinery applies to them.
+    pub fn from_scott_c64(pictures: Vec<scott::c64::Picture>) -> PictSource {
+        PictSource { scott_c64: Some(pictures), ..PictSource::new(None) }
+    }
+
+    /// Is this source [`Self::from_scott_c64`]'s native decode rather than a
+    /// Blorb (or nothing)? `ScottSession::window_dump`'s `/dump-windows` line
+    /// reads this to name which of the two picture sources a room's art came
+    /// from (SQ-1463).
+    pub fn is_scott_c64(&self) -> bool {
+        self.scott_c64.is_some()
     }
 
     /// Resolve the picture source for `story_path` (SQ-0734's tiers 1 and 2).
@@ -932,9 +966,18 @@ impl PictSource {
                 Some(b) => b
                     .resource(b"Pict", resnum)
                     .and_then(|(_ty, bytes)| crate::cover::decode(bytes)),
-                None => self
+                None if self.native.is_some() => self
                     .index_plane(resnum)
                     .and_then(|pic| native_image(&pic, self.hw_palette.as_ref(), self.blend_columns)),
+                // SQ-1463: room n's picture is `pictures[n - 1]` (the decoder's
+                // own identity mapping, §8.6) — `resnum` here is the picture
+                // number, "by convention, picture number == room number", so
+                // room 0 (no picture, per `checked_sub`) and an index past the
+                // end (a truncated decode, §11) both fall through to `None`.
+                None => resnum
+                    .checked_sub(1)
+                    .and_then(|i| self.scott_c64.as_ref()?.get(i as usize))
+                    .map(scott_c64_image),
             };
             self.cache.insert(resnum, decoded.map(Arc::new));
         }
@@ -1978,6 +2021,29 @@ fn native_image(
         blend_half_width_columns(&mut buf);
     }
     Some(DynamicImage::ImageRgba8(buf))
+}
+
+/// Convert one decoded C64 Mysterious Adventures room picture
+/// (`scott::c64::Picture`, an indexed bitmap over the fixed 16-entry palette
+/// `Picture::rgb` already resolves) into the same `DynamicImage` shape the
+/// Blorb and native-Infocom paths hand `WinNode::Graphics`, at native size
+/// (255×94) — the renderer's existing backend selection (kitty, sixel, the
+/// half-block fallback) and its scaling into the picture band do the rest, no
+/// protocol special-casing here (SQ-1463).
+///
+/// Family B carries no per-pixel transparency (§8.2's fill and line ops paint
+/// every pixel the canvas starts with), so every pixel comes out fully
+/// opaque — unlike [`native_image`]'s Infocom pictures, which do carry a
+/// transparent index for adaptive overlays.
+fn scott_c64_image(pic: &scott::c64::Picture) -> DynamicImage {
+    let mut buf = RgbaImage::new(pic.width as u32, pic.height as u32);
+    for y in 0..pic.height {
+        for x in 0..pic.width {
+            let (r, g, b) = pic.rgb(x, y).unwrap_or((0, 0, 0));
+            buf.put_pixel(x as u32, y as u32, Rgba([r, g, b, 255]));
+        }
+    }
+    DynamicImage::ImageRgba8(buf)
 }
 
 /// Fuse a 640-wide rendition's column dither, because its pixels are half as wide

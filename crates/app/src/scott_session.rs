@@ -76,9 +76,12 @@ pub struct ScottSession {
     intro: String,
     aux: BTreeMap<String, Vec<u8>>,
     aux_dirty: bool,
-    /// Blorb `Pict` resources for a graphics (`.blb`) game; empty for a plain
-    /// `.dat`. The SAGA/Mysterious Adventures graphic versions ship the room
-    /// pictures here (SQ-0402).
+    /// Room pictures, from either of two sources: Blorb `Pict` resources for
+    /// a graphics (`.blb`) game (the SAGA/Mysterious Adventures graphic
+    /// versions ship the room pictures here, SQ-0402), or a Commodore 64
+    /// Mysterious Adventures release's own Family B artwork decoded straight
+    /// off its PRG/D64 image (SQ-1463, `PictSource::from_scott_c64`). Empty
+    /// (`PictSource::new(None)`) for a plain `.dat` with neither.
     picts: PictSource,
     /// The decoded picture to show for the current room, and the picture number
     /// it was resolved from — recomputed only when the number changes so the same
@@ -157,12 +160,28 @@ impl ScottSession {
         if !vm.has_quit() {
             intro.push_str(PROMPT);
         }
+        // SQ-1463: `bytes` loaded straight off a Commodore 64 Mysterious
+        // Adventures PRG/D64 carries its own room artwork (Family B vector
+        // pictures) in the same memory image the database above was just
+        // parsed from — decode it once here, the same way `pict_blorb` is
+        // handed over for a `.blb` game, rather than re-deriving it from the
+        // VM's state on every `refresh_picture`. `pict_blorb` still wins when
+        // present (a graphics container beside a `.dat` is a different,
+        // Blorb-carried release of the same series).
+        let picts = match &pict_blorb {
+            Some(_) => PictSource::new(pict_blorb),
+            None => scott::c64::prg_image(&bytes)
+                .filter(|(image, at)| scott::c64::looks_like_c64_mysterious(image, *at))
+                .and_then(|(image, at)| scott::c64::decode_family_b_pictures(image, at).ok())
+                .map(PictSource::from_scott_c64)
+                .unwrap_or_else(|| PictSource::new(None)),
+        };
         let mut s = ScottSession {
             vm,
             intro,
             aux: BTreeMap::new(),
             aux_dirty: false,
-            picts: PictSource::new(pict_blorb),
+            picts,
             current_canvas: None,
             current_pic_num: None,
             pic_version: 0,
@@ -352,8 +371,9 @@ impl Engine for ScottSession {
         match &self.current_canvas {
             Some(canvas) => {
                 let opaque = canvas.pixels().filter(|p| p.0[3] != 0).count();
+                let source = if self.picts.is_scott_c64() { "native C64" } else { "blorb" };
                 out.push(format!(
-                    "  picture: {} row(s) reserved  ·  canvas={}x{} v{} opaque={}",
+                    "  picture: {} row(s) reserved  ·  canvas={}x{} v{} opaque={} source={source}",
                     PICTURE_ROWS,
                     canvas.width(),
                     canvas.height(),
@@ -726,6 +746,91 @@ mod tests {
             }
             other => panic!("expected the plain room/transcript pair, got {other:?}"),
         }
+    }
+
+    // ── SQ-1463: the C64 Mysterious Adventures' own Family B pictures ──────────
+
+    /// *The Golden Baton* as shipped on the C64 `MYSTADV1.D64`'s `BATON.prg` —
+    /// the eleven titles are commercial and gitignored (`stories/` only), so
+    /// every case below skips vacuously without it, exactly like `session.rs`'s
+    /// own real-game in-crate tests.
+    fn baton_prg() -> Option<Vec<u8>> {
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../stories/scott-dialects/c64/prg/MYSTADV1.D64/BATON.prg");
+        if !path.exists() {
+            eprintln!("SKIP: no {} (gitignored commercial fixture)", path.display());
+            return None;
+        }
+        Some(std::fs::read(&path).expect("read BATON.prg"))
+    }
+
+    /// The Graphics leaf of a Scott screen's picture band, or `None` when the
+    /// layout has none (dark room / no art for this room).
+    fn picture_band(model: &ScreenModel) -> Option<&crate::engine::GraphicsWindow> {
+        match &model.root {
+            WinNode::Pair { first, .. } => match &**first {
+                WinNode::Graphics(gw) => Some(gw),
+                _ => None,
+            },
+            _ => None,
+        }
+    }
+
+    #[test]
+    fn mysterious_c64_room1_shows_its_own_native_picture_at_native_size() {
+        let Some(bytes) = baton_prg() else { return };
+        // Room 1 ("dense SPOOKY Forest") is lit and start_room, so the boot
+        // session's very first screen already carries its picture — decoded
+        // straight off the PRG, not from any Blorb (`pict_blorb` is `None`).
+        let s = ScottSession::new(bytes, None).expect("BATON.prg loads");
+        assert_eq!(s.current_location().expect("loc").number, 1);
+        let model = s.screen();
+        let gw = picture_band(&model).expect("room 1 shows a picture band");
+        assert_eq!(
+            (gw.canvas.width(), gw.canvas.height()),
+            (scott::c64::PICTURE_WIDTH as u32, scott::c64::PICTURE_HEIGHT as u32),
+            "decoded at the Family B canvas's own native size, not resampled here"
+        );
+        assert!(gw.upscale, "the band renderer stretches it to fill the reserved rows");
+    }
+
+    #[test]
+    fn mysterious_c64_dark_room_hides_the_picture_band() {
+        let Some(bytes) = baton_prg() else { return };
+        let mut s = ScottSession::new(bytes, None).expect("BATON.prg loads");
+        // The walk to the Cave (room 20), the one room this release makes dark
+        // on entry (action 2: player==20 sets the dark flag, §8's occurrence
+        // opcode 56) — found by walking the real game, not guessed: forest
+        // stream (n) -> tree (w) -> cabin clearing (n) -> "go cabin" teleports
+        // to the cabin-with-a-hole (19) -> down falls into the dark Cave (20).
+        for cmd in ["n", "w", "n", "go cabin", "d"] {
+            let r = s.submit(cmd);
+            assert!(!r.quit, "{cmd:?} must not end the game: {:?}", r.transcript);
+        }
+        assert_eq!(s.current_location().expect("loc").number, 20, "reached the Cave");
+        assert!(picture_band(&s.screen()).is_none(), "a dark room shows no picture band");
+    }
+
+    #[test]
+    fn mysterious_c64_picture_band_reappears_leaving_the_dark_room() {
+        let Some(bytes) = baton_prg() else { return };
+        let mut s = ScottSession::new(bytes, None).expect("BATON.prg loads");
+        for cmd in ["n", "w", "n", "go cabin"] {
+            s.submit(cmd);
+        }
+        assert_eq!(s.current_location().expect("loc").number, 19);
+        assert!(
+            picture_band(&s.screen()).is_some(),
+            "room 19 (cabin with hole in floor) is lit and has its own picture"
+        );
+
+        s.submit("d"); // into the dark Cave (20)
+        assert_eq!(s.current_location().expect("loc").number, 20);
+        assert!(picture_band(&s.screen()).is_none(), "dark: band hidden");
+
+        s.submit("u"); // room 19 auto-clears the dark flag on entry (action 4)
+        assert_eq!(s.current_location().expect("loc").number, 19, "back in the lit cabin");
+        assert!(picture_band(&s.screen()).is_some(), "lit again: band reappears");
     }
 
     #[test]
