@@ -60,6 +60,8 @@ these track the code).
 | [`internals/remote-sound.md`](internals/remote-sound.md) | Why audio plays on the local device, and how to route it back over SSH |
 | [`internals/glyphs.md`](internals/glyphs.md) | Exactly which Unicode ranges the map's line art needs from your font |
 | [`internals/zvm-embedding-review.md`](internals/zvm-embedding-review.md) | What `zvm`'s public API would need to be a crate someone outside lanthorn depends on |
+| [`internals/scott-dialects-spec.md`](internals/scott-dialects-spec.md) | A standalone functional specification of every Scott Adams game-file dialect beyond the ScottFree `.dat`: TI-99/4A bytecode, memory-image releases and their containers, compressed action and text tables, Mysterious Adventures, and SAGA picture data |
+| [`internals/clean-room.md`](internals/clean-room.md) | The clean-room pair protocol used to specify a GPL-documented format for a BSD-licensed implementation: what the spec half may write down, and what the implementer may read |
 | [`internals/fuzzing.md`](internals/fuzzing.md) | Hostile-input fuzzing for `zvm`/`gvm`: the CI-gated in-crate harness and the hand-run `cargo-fuzz` targets, and how to turn a crash into a pinned regression case |
 | [`internals/performance.md`](internals/performance.md) | How fast each engine plays a turn, measured against dfrotz, glulxe and ScottFree — and the harnesses to rerun it yourself |
 | [`internals/ci-fixture-coverage.md`](internals/ci-fixture-coverage.md) | Which integration suites `stories/` being gitignored leaves untested on CI, and which of those a fixture could close |
