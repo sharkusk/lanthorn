@@ -1634,6 +1634,18 @@ pub(crate) fn boot_story(
             // ScottFree's `-y`/`-s`/`-t`/`-p` options, this story's own
             // per-game choice (SQ-1413).
             app::scott_session::resolve_options(&game_dir),
+            // The terminal's own cell size, before `glk_pixel_scale` divides
+            // it: a Scott session reads it only to choose how finely to draw
+            // the C64 releases' vector artwork (SQ-1467), which is a question
+            // about device pixels, not about the coordinate space a Glk game
+            // is told it has.
+            game_picker
+                .as_ref()
+                .map(|p| {
+                    let f = p.font_size();
+                    (f.width as u32, f.height as u32)
+                })
+                .unwrap_or(app::scott_session::ScottSession::FALLBACK_CHAR_PX),
         ) {
             Ok(s) => Box::new(s),
             Err(e) => {

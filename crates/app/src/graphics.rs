@@ -293,14 +293,22 @@ pub struct PictSource {
     /// for a Blorb, an Amiga/Mac `Pic.data` and an MCGA `.MG1` alike, all of
     /// which carry their colours per picture.
     hw_palette: Option<[blorb::infocom_pics::Rgb; 16]>,
-    /// The Commodore 64 Mysterious Adventures' own decoded room pictures
-    /// (`scott::c64::decode_family_b_pictures`, SQ-1414), used when a Scott
-    /// Adams game was loaded straight off a C64 PRG/D64 image rather than a
-    /// reference-format `.dat` beside a `.blb`. Already fully decoded at
-    /// construction (SQ-1463) — unlike `native` above, there is no per-picture
-    /// compression stage to defer, only the RGBA conversion `get` does on
-    /// first request. `None` for every other source.
-    scott_c64: Option<Vec<scott::c64::Picture>>,
+    /// The Commodore 64 Mysterious Adventures' own room artwork as the DISPLAY
+    /// LISTS it is stored as (`scott::c64::decode_family_b_picture_lists`,
+    /// SQ-1414/SQ-1463), used when a Scott Adams game was loaded straight off a
+    /// C64 PRG/D64 image rather than a reference-format `.dat` beside a `.blb`,
+    /// paired with the supersample [`PictSource::from_scott_c64`] chose for
+    /// this band.
+    ///
+    /// Lists rather than rasters, because these pictures are vectors and
+    /// nothing in the data fixes a size (SQ-1467): the whole game's artwork is
+    /// a few tens of kilobytes of line and fill ops here, and a room is drawn —
+    /// once, at the size it will be shown — only when it is first asked for.
+    /// Decoding every room to a 4x canvas up front would have been ~17 MB of
+    /// indexed pixels for a game the player may never finish.
+    ///
+    /// `None` for every other source.
+    scott_c64: Option<(Vec<scott::c64::PictureList>, u32)>,
     /// Does this source's art need [`blend_half_width_columns`] on the way out —
     /// i.e. is it a SIXTEEN-colour 640-wide rendition, whose pixels are half as
     /// wide as the unit screen's and whose dithers the card fused (SQ-0797)?
@@ -385,18 +393,33 @@ impl PictSource {
     /// A source backed by a Commodore 64 Mysterious Adventures game's own
     /// artwork — decoded once from the same PRG/D64 image the story loaded
     /// from, rather than a Blorb (SQ-1463). `pictures` is
-    /// `scott::c64::decode_family_b_pictures`'s output, one image per room in
-    /// the decoder's own order (room *n* → `pictures[n - 1]`, §8.6's pure
-    /// identity) — [`Self::get`] applies that offset, so a caller indexes by
-    /// **picture number** (`scott::Vm::current_picture()`, "by convention,
+    /// `scott::c64::decode_family_b_picture_lists`'s output, one drawing per
+    /// room in the decoder's own order (room *n* → `pictures[n - 1]`, §8.6's
+    /// pure identity) — [`Self::get`] applies that offset, so a caller indexes
+    /// by **picture number** (`scott::Vm::current_picture()`, "by convention,
     /// picture number == room number") exactly as it does against a Blorb
     /// `Pict` resource.
     ///
     /// No adaptive palette, no hardware table, no art-scale opinion: these
-    /// releases carry one small (255×94) fully-opaque bitmap per room and
-    /// nothing else in this struct's machinery applies to them.
-    pub fn from_scott_c64(pictures: Vec<scott::c64::Picture>) -> PictSource {
-        PictSource { scott_c64: Some(pictures), ..PictSource::new(None) }
+    /// releases carry one fully-opaque drawing per room and nothing else in
+    /// this struct's machinery applies to them.
+    ///
+    /// `band_px_high` is how many DEVICE PIXELS tall the picture band is —
+    /// its row count times the terminal's cell height — and picks the
+    /// supersample; see [`scott_c64_scale`].
+    pub fn from_scott_c64(
+        pictures: Vec<scott::c64::PictureList>,
+        band_px_high: u32,
+    ) -> PictSource {
+        let scale = scott_c64_scale(band_px_high);
+        PictSource { scott_c64: Some((pictures, scale)), ..PictSource::new(None) }
+    }
+
+    /// The supersample this source draws its C64 vector artwork at, or `None`
+    /// when it holds none — `/dump-windows` prints it beside the canvas size
+    /// so a frame says which resolution produced it (SQ-1467).
+    pub fn scott_c64_scale(&self) -> Option<u32> {
+        self.scott_c64.as_ref().map(|(_, scale)| *scale)
     }
 
     /// Is this source [`Self::from_scott_c64`]'s native decode rather than a
@@ -974,10 +997,10 @@ impl PictSource {
                 // number, "by convention, picture number == room number", so
                 // room 0 (no picture, per `checked_sub`) and an index past the
                 // end (a truncated decode, §11) both fall through to `None`.
-                None => resnum
-                    .checked_sub(1)
-                    .and_then(|i| self.scott_c64.as_ref()?.get(i as usize))
-                    .map(scott_c64_image),
+                None => self.scott_c64.as_ref().and_then(|(lists, scale)| {
+                    let list = lists.get(resnum.checked_sub(1)? as usize)?;
+                    Some(scott_c64_image(list, *scale))
+                }),
             };
             self.cache.insert(resnum, decoded.map(Arc::new));
         }
@@ -2023,19 +2046,63 @@ fn native_image(
     Some(DynamicImage::ImageRgba8(buf))
 }
 
-/// Convert one decoded C64 Mysterious Adventures room picture
-/// (`scott::c64::Picture`, an indexed bitmap over the fixed 16-entry palette
-/// `Picture::rgb` already resolves) into the same `DynamicImage` shape the
-/// Blorb and native-Infocom paths hand `WinNode::Graphics`, at native size
-/// (255×94) — the renderer's existing backend selection (kitty, sixel, the
-/// half-block fallback) and its scaling into the picture band do the rest, no
-/// protocol special-casing here (SQ-1463).
+/// The largest supersample [`scott_c64_scale`] will ask for. Four is 1020×376,
+/// past any picture band a terminal presents at a readable font size, and the
+/// point where a room's RGBA cache entry reaches 1.5 MB (SQ-1467).
+const SCOTT_C64_MAX_SCALE: u32 = 4;
+
+/// How many device pixels per native pixel to draw the C64 Mysterious
+/// Adventures' vector artwork at, given the picture band's height in device
+/// pixels (SQ-1467).
+///
+/// **The rule: round the band's own magnification UP, and stop at
+/// [`SCOTT_C64_MAX_SCALE`].** The band reserves a fixed row count and the
+/// renderer fits the picture into it preserving aspect
+/// ([`crate::render::graphics::fit_for_protocol`]), so the magnification the
+/// picture will actually be shown at is the smaller of the two axes' ratios —
+/// and on any pane wide enough to show this artwork at all that is the
+/// vertical one, since 255/94 is a wider shape than sixteen rows of any
+/// ordinary cell against a full-width band. Rounding up rather than down
+/// leaves the renderer a small MINIFICATION, which takes the area filter and
+/// is the direction that loses nothing; rounding down would leave it
+/// magnifying with `Nearest` and put the blocks straight back.
+///
+/// The pane's width is deliberately not consulted: it is not known when the
+/// source is built, and on a narrow pane the only cost of the taller number is
+/// a slightly larger source for the same fit.
+///
+/// Backend-neutral, and it has to be: kitty, sixel and the half-block fallback
+/// all receive the same `DynamicImage` and fit it the same way. **Half-blocks
+/// gain the least** — its grid is one sample per column and two per row, so a
+/// 16-row band is 32 samples for 94 native rows whatever this returns, and all
+/// the extra resolution buys there is a better-averaged downsample. That is a
+/// reason to keep one path, not to fork one.
+fn scott_c64_scale(band_px_high: u32) -> u32 {
+    band_px_high
+        .div_ceil(scott::c64::PICTURE_HEIGHT as u32)
+        .clamp(1, SCOTT_C64_MAX_SCALE)
+}
+
+/// Draw one C64 Mysterious Adventures room picture at `scale` device pixels
+/// per native pixel (`scott::c64::PictureList::rasterise_at`, an indexed bitmap
+/// over the fixed 16-entry palette `Picture::rgb` already resolves) and hand it
+/// over in the same `DynamicImage` shape the Blorb and native-Infocom paths
+/// hand `WinNode::Graphics` — the renderer's existing backend selection (kitty,
+/// sixel, the half-block fallback) and its aspect-preserving fit into the
+/// picture band do the rest, no protocol special-casing here (SQ-1463,
+/// SQ-1467).
+///
+/// A supersample multiplies both axes, so the picture's aspect is exactly the
+/// one the native canvas has and the band's fit is the same fit at the same
+/// cell rect — this adds resolution to what the renderer resamples, and no
+/// second correction of any kind.
 ///
 /// Family B carries no per-pixel transparency (§8.2's fill and line ops paint
 /// every pixel the canvas starts with), so every pixel comes out fully
 /// opaque — unlike [`native_image`]'s Infocom pictures, which do carry a
 /// transparent index for adaptive overlays.
-fn scott_c64_image(pic: &scott::c64::Picture) -> DynamicImage {
+fn scott_c64_image(list: &scott::c64::PictureList, scale: u32) -> DynamicImage {
+    let pic = list.rasterise_at(scale);
     let mut buf = RgbaImage::new(pic.width as u32, pic.height as u32);
     for y in 0..pic.height {
         for x in 0..pic.width {

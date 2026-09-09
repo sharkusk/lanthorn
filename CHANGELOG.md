@@ -48,6 +48,16 @@ Absolute URLs or no link.
   needed — appears above the room panel exactly where a Blorb-bundled Scott
   Adams game already shows its own, through the same kitty/sixel/half-block
   drawing lanthorn already uses everywhere else. (SQ-1463)
+- **…and they are drawn smooth rather than blocky.** Those pictures are not
+  bitmaps at all — they are lines and flood fills, a drawing the machine
+  performed rather than a photograph of one — so nothing in the file says how
+  big they should be. lanthorn now draws each room at the size the picture band
+  will actually show it, up to four times the Commodore 64's own resolution,
+  instead of drawing a small one and stretching it: the diagonals step in fine
+  increments rather than in chunky staircases, and the colour inside a shape
+  follows the line it belongs to. Every filled region still ends up exactly
+  where the Commodore 64 put it, checked picture by picture across all eleven
+  games. (SQ-1467)
 - **Three more kinds of original disk now open.** Atari 8-bit floppies
   (`.atr`), Apple II DOS 3.3 floppies (`.dsk`) and Atari 8-bit loadable
   binaries (`.xex`) mount like every other release medium and list the

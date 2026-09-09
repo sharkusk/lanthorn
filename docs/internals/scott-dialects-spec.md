@@ -4464,6 +4464,25 @@ sections now say so, and no code has to change.
    fill of the empty canvas paints all 23,970 pixels either way. §8.2 keeps the
    bound as the reference's behaviour and replaces "a real behavioural fork, and
    an implementer must choose deliberately" with the measurement.
+7. **§8.2 is a display list, and drawing it larger is not a matter of drawing
+   the same primitives on a bigger canvas.** This section describes a *drawing*
+   over a 255 x 94 canvas, not a bitmap, so an implementer may reasonably want
+   it at the resolution the display has. Re-running the lines and the fills at
+   an integer supersample does not give that: with the lines drawn where the
+   geometry actually puts them rather than where 1x rounding put them, a fill
+   sealed at 1x by two lines a pixel apart, or by two the rounding placed in
+   one row, finds a half-pixel seam and floods past it — measured over the
+   eleven Commodore 64 releases, **25 of 516 images leaked at scale 2, 3 or 4,
+   the worst repainting 6,118 of 23,970 native pixels**. Nor is a wider pen a
+   fix: the 1x pixel a shallow line lands in is up to a whole pixel from the
+   true line, so nothing under a two-pixel stroke covers it, and a two-pixel
+   stroke is no longer this artwork's line. An implementer who wants both
+   should take the REGIONS from the 255 x 94 raster (which is what the machine
+   drew, and what the player saw) and redraw only the LINES at the larger size,
+   colouring every device pixel by the native pixel it lies in. lanthorn does
+   that; the corpus check that a supersample, majority-voted back to the native
+   grid, disagrees nowhere the ink cannot explain is
+   `every_picture_keeps_its_regions_at_every_supersample`.
 
 The in-memory model this document's dialects decode *to*, in that crate, is a
 database of rooms (six exits and a description, plus a flag for the leading-`*`

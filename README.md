@@ -15,7 +15,8 @@
 * **Z-machine v3–v8** (incl. graphical v6) — *Next release:* v1 and v2 as well
 * **Glulx**
 * **Scott Adams** — *Next release:* the TI-99/4A and Commodore 64 releases too;
-  the Commodore 64 Mysterious Adventures now show their pictures
+  the Commodore 64 Mysterious Adventures now show their pictures, redrawn at
+  the size your terminal shows them rather than stretched from the original's
 
 ### Supported original Infocom disk formats:
 

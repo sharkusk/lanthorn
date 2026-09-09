@@ -293,6 +293,16 @@ pub(crate) fn reset_game(
             Some(state.config.effective_random_seed()),
             // Re-resolved exactly as the launch was (SQ-1413).
             app::scott_session::resolve_options(game_dir),
+            // …and the same cell size the launch read, so a restart draws the
+            // C64 vector artwork at the resolution the launch did (SQ-1467).
+            state
+                .game_picker
+                .as_ref()
+                .map(|p| {
+                    let f = p.font_size();
+                    (f.width as u32, f.height as u32)
+                })
+                .unwrap_or(app::scott_session::ScottSession::FALLBACK_CHAR_PX),
         )
         .map(|new_session| {
                 *session
