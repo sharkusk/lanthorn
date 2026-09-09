@@ -8,7 +8,7 @@
 //!
 //! ```text
 //! cargo run --release -p lanthorn-gvm --example bench -- \
-//!     crates/gvm/tests/fixtures/bench/glulxercise.ulx \
+//!     crates/gvm-cli/tests/fixtures/glulxercise.ulx \
 //!     crates/gvm/tests/fixtures/bench/glulxercise.script --turns 2700
 //! ```
 //!
@@ -258,8 +258,20 @@ mod tests {
     use super::*;
     use std::path::PathBuf;
 
-    fn bench_dir() -> PathBuf {
-        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/bench")
+    /// The benchmark story. `glulxercise.ulx` lives once in the workspace, in
+    /// `gvm-cli`'s fixtures, and every other `gvm` suite that wants it reaches
+    /// across by this same relative path (`object_words.rs`, `grammar_tables.rs`,
+    /// `disasm.rs`). A second copy under `gvm/tests/fixtures/bench/` would be
+    /// 231 KB of binary that can silently drift from the one the conformance
+    /// suites read.
+    fn story_path() -> PathBuf {
+        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../gvm-cli/tests/fixtures/glulxercise.ulx")
+    }
+
+    /// The script, which IS this crate's — it is the benchmark's definition,
+    /// not a story anyone else uses.
+    fn script_path() -> PathBuf {
+        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/bench/glulxercise.script")
     }
 
     /// Compiles and smoke-drives the harness so CI cannot let it rot — a few
@@ -269,8 +281,8 @@ mod tests {
     /// real numbers are taken by hand per `docs/internals/performance.md`.
     #[test]
     fn bench_harness_drives_a_short_script() {
-        let story_path = bench_dir().join("glulxercise.ulx");
-        let script_path = bench_dir().join("glulxercise.script");
+        let story_path = story_path();
+        let script_path = script_path();
         let Ok(bytes) = fs::read(&story_path) else {
             eprintln!("skipping: {} absent", story_path.display());
             return;
@@ -295,8 +307,8 @@ mod tests {
     /// instead of the opcode group it was named for.
     #[test]
     fn script_runs_only_passing_tests() {
-        let story_path = bench_dir().join("glulxercise.ulx");
-        let script_path = bench_dir().join("glulxercise.script");
+        let story_path = story_path();
+        let script_path = script_path();
         let (Ok(bytes), true) = (fs::read(&story_path), script_path.exists()) else {
             eprintln!("skipping: {} absent", story_path.display());
             return;

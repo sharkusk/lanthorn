@@ -156,7 +156,7 @@ git clone https://github.com/erkyrath/glulxe  && (cd glulxe && \
 
 # lanthorn
 cargo run --release -p lanthorn-gvm --example bench -- \
-    crates/gvm/tests/fixtures/bench/glulxercise.ulx \
+    crates/gvm-cli/tests/fixtures/glulxercise.ulx \
     crates/gvm/tests/fixtures/bench/glulxercise.script --turns 2700
 # …and again with --no-accel for the dispatch-loop row
 
@@ -167,7 +167,7 @@ open('/tmp/gx100.txt','w').write(open('/tmp/gx.txt').read() * 100)
 PY
 for i in 1 2 3; do
   /usr/bin/time -p ./glulxe/glulxe -q -u \
-      crates/gvm/tests/fixtures/bench/glulxercise.ulx < /tmp/gx100.txt > /dev/null
+      crates/gvm-cli/tests/fixtures/glulxercise.ulx < /tmp/gx100.txt > /dev/null
 done
 ```
 
@@ -230,8 +230,10 @@ contents live beside them:
 
 - `crates/zvm/tests/fixtures/bench/README.md` — `minizork.z3` (already committed
   for the save-interop suite) and the eight-command house circuit
-- `crates/gvm/tests/fixtures/bench/README.md` — `glulxercise.ulx` and the
-  twenty-seven-group dispatch script, including which groups are deliberately
-  excluded and why
+- `crates/gvm/tests/fixtures/bench/README.md` — the twenty-seven-group dispatch
+  script, including which groups are deliberately excluded and why. The story is
+  the workspace's single copy of `glulxercise.ulx`, under
+  `crates/gvm-cli/tests/fixtures/`, which `gvm`'s conformance suites already read
+  by that same relative path
 - `crates/scott/tests/fixtures/bench/README.md` — `tiny_cave.dat` (this repo's
   own fixture) and the ten-command circuit

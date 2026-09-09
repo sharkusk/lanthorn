@@ -86,11 +86,16 @@ self-checking Glulx save/restore conformance story (autorestores on boot and
 reports success/failure itself). Driven by `startsavetest_boots.rs`. See that
 file and `GLULX_NOTES.md` §14 for detail; kept here rather than duplicated.
 
-## `bench/` — the timing harness's story and script
+## `bench/` — the timing harness's script
 
-`bench/glulxercise.ulx` and `bench/glulxercise.script` drive `cargo run
---release -p lanthorn-gvm --example bench`; see
-[`bench/README.md`](bench/README.md) for the story's provenance and why it is
-committed here rather than fetched into `unit_tests/`, and
-`docs/internals/performance.md` for the recorded baselines against the
-glulxe/cheapglk build described at the top of this file (SQ-1428).
+`bench/glulxercise.script` drives `cargo run --release -p lanthorn-gvm --example
+bench`; see [`bench/README.md`](bench/README.md) for what the script does and
+why those twenty-seven groups, and `docs/internals/performance.md` for the
+recorded baselines against the glulxe/cheapglk build described at the top of
+this file (SQ-1428).
+
+No story file lives under `bench/`. The harness reads the workspace's single
+committed copy of `glulxercise.ulx` from `crates/gvm-cli/tests/fixtures/`, by
+the same relative path `object_words.rs`, `grammar_tables.rs` and `disasm.rs`
+already use — one fixture, one checksum, no way for a benchmark's story to drift
+from the conformance suites' story.

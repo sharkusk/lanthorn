@@ -4,30 +4,29 @@ What `cargo run --release -p lanthorn-gvm --example bench` drives. The recorded
 baselines, the machine they were taken on and the matching `glulxe` commands are
 in [`docs/internals/performance.md`](../../../../../docs/internals/performance.md).
 
-## `glulxercise.ulx`
+## Story
 
-Andrew Plotkin's Glulx interpreter unit test — Release 13 / serial 241202 /
-Inform v6.43, 231,680 bytes, sha256
-`b732127fee4cb266a5330981c1111fdfaba237134525754e063e6dc5f449b348`.
+**`../../../../gvm-cli/tests/fixtures/glulxercise.ulx`** — Andrew Plotkin's Glulx
+interpreter unit test, Release 13 / serial 241202 / Inform v6.43, 231,680 bytes,
+sha256 `b732127fee4cb266a5330981c1111fdfaba237134525754e063e6dc5f449b348`.
 
 **Source:** <https://eblong.com/zarf/glulx/> (the glk-dev `unittests/`
-manifest), the same origin as the eleven conformance stories
-[`../README.md`](../README.md) already documents — freely redistributable on
-Plotkin's own terms.
+manifest), freely redistributable on Plotkin's own terms — the same origin as
+the eleven conformance stories [`../README.md`](../README.md) documents.
 
-**Why it is committed here rather than fetched.** A benchmark is worth having
-only if the number can be reproduced, and a fixture that has to be downloaded
-first is one an embedder will not bother with. The identical file also lives in
-the repo-root `unit_tests/` for the conformance suites, where `.ulx` is
-gitignored — that directory is gitignored to keep *commercial* v6 stories out
-(see `.gitignore`'s own note), not because these stories cannot be
-redistributed. `crates/gvm/tests/fixtures/` already commits
-`startsavetest.gblorb` on exactly this reasoning.
+**Not copied here.** The workspace keeps exactly one committed `glulxercise.ulx`,
+in `gvm-cli`'s fixtures, and every `gvm` suite that wants it reaches across by
+relative path — `tests/object_words.rs`, `tests/grammar_tables.rs` and
+`src/disasm.rs` all spell
+`PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../gvm-cli/tests/fixtures/glulxercise.ulx")`,
+and `examples/bench.rs` now does the same. A second copy would be 231 KB of
+binary that can silently drift from the one the conformance suites read, which
+is exactly the sort of divergence a benchmark must not be able to hide.
 
 **Why glulxercise and not a real game.** Adventure/`advent.ulx` would be more
 game-shaped, but its Glulx builds carry no licence anybody can point to, and
 what the Glulx side of this comparison is actually asking about is the
-**dispatch loop** — the quest that prompted this page recorded gvm as 1.2–1.5×
+**dispatch loop** — the quest that prompted this page recorded gvm as 1.2–1.5x
 behind glulxe there. glulxercise's groups are dense straight-line opcode work
 with almost no Glk in them, which is the cleanest available answer to that
 question, and every group self-checks so a benchmark that silently stopped
