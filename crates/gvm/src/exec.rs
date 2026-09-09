@@ -1558,7 +1558,7 @@ impl Machine {
             0x1A8 => self.funop(f32::sqrt),
             0x1A9 => self.funop(f32::exp),
             0x1AA => self.funop(f32::ln),
-            0x1AB => self.fbinop(f32::powf),
+            0x1AB => self.fbinop(Self::glulx_powf),
             0x1B0 => self.funop(f32::sin),
             0x1B1 => self.funop(f32::cos),
             0x1B2 => self.funop(f32::tan),
@@ -1647,7 +1647,7 @@ impl Machine {
             0x218 => self.dunop(f64::sqrt),
             0x219 => self.dunop(f64::exp),
             0x21A => self.dunop(f64::ln),
-            0x21B => self.dbinop(f64::powf),
+            0x21B => self.dbinop(Self::glulx_pow),
             0x220 => self.dunop(f64::sin),
             0x221 => self.dunop(f64::cos),
             0x222 => self.dunop(f64::tan),
@@ -1772,6 +1772,33 @@ impl Machine {
         self.store(s[0], v.to_bits())
     }
 
+    /// `pow`'s float power, special-cased ahead of the platform `powf` per
+    /// the Glulx spec's float section ("Floating-Point Values And Special
+    /// Cases", the `pow` opcode entry): "pow(1, y) returns 1 for any y, even
+    /// a NaN. pow(x, ±0) returns 1 for any x, even a NaN. pow(−1, ±Inf)
+    /// returns 1." — C99 Annex F rules that Apple's libm applies inside
+    /// `powf` itself (so macOS never needed this) but glibc's and Windows'
+    /// do not, which is why glulxercise's `floatexp` group failed only on
+    /// ubuntu/windows CI (SQ-1433). Ported from glulxe's own wrapper
+    /// (`osdepend.c`, `glulx_powf`), which exists for exactly this reason
+    /// ("This wrapper handles all special cases, even if the underlying
+    /// powf() function doesn't"): the three comparisons are false for any
+    /// NaN operand, so `val1 == 1.0` alone catches `pow(1, NaN)` and
+    /// `pow(1, -NaN)`, and `val2 == 0.0` alone catches `pow(NaN, 0)` and
+    /// `pow(-NaN, 0)` — the four floatexp failures — without checking
+    /// `is_nan()` explicitly. Every other input falls through to `powf`
+    /// unchanged.
+    fn glulx_powf(val1: f32, val2: f32) -> f32 {
+        // `val2 == 0.0` catches both +0.0 and -0.0 (IEEE `==` treats them
+        // equal); all three conditions collapse to the same `1.0` result,
+        // so they're one branch rather than an if/else-if chain repeating it.
+        if val1 == 1.0 || val2 == 0.0 || (val1 == -1.0 && val2.is_infinite()) {
+            1.0
+        } else {
+            val1.powf(val2)
+        }
+    }
+
     /// A 2-value float op (fadd…fdiv, pow, atan2): decode, apply, re-encode.
     fn fbinop(&mut self, f: impl Fn(f32, f32) -> f32) -> R<()> {
         let (l, s) = self.read_operands(2, 1)?;
@@ -1819,6 +1846,17 @@ impl Machine {
         let (l, s) = self.read_operands(2, 2)?;
         let v = f(Self::dec64(l[0], l[1]));
         self.store64(&s, v)
+    }
+
+    /// `dpow`'s double power — the `f64` twin of [`Self::glulx_powf`]; see
+    /// its doc for the spec citation and rationale (glulxe's `osdepend.c`
+    /// `glulx_pow`; SQ-1433).
+    fn glulx_pow(val1: f64, val2: f64) -> f64 {
+        if val1 == 1.0 || val2 == 0.0 || (val1 == -1.0 && val2.is_infinite()) {
+            1.0
+        } else {
+            val1.powf(val2)
+        }
     }
 
     /// A 2-double op (dadd…ddiv, dpow, datan2): read (4,2), decode both, store lo:hi.
@@ -12713,6 +12751,50 @@ mod tests {
         assert!((ln_e - 1.0).abs() < 1e-5);
         let p = f32::from_bits(farith2(0x1AB, 2.0, 10.0));
         assert!((p - 1024.0).abs() < 1e-5);
+    }
+
+    #[test]
+    fn pow_dpow_special_cases_per_glulx_spec() {
+        // Glulx spec, "Floating-Point Values And Special Cases", the `pow`
+        // opcode: "pow(1, y) returns 1 for any y, even a NaN. pow(x, ±0)
+        // returns 1 for any x, even a NaN. pow(−1, ±Inf) returns 1." — these
+        // are C99 Annex F rules; Apple's libm applies them inside `powf`
+        // itself, but glibc's and Windows' do not, which is why
+        // glulxercise's `floatexp` group failed on ubuntu/windows CI and
+        // passed on macOS (SQ-1433). Ported from glulxe's `osdepend.c`
+        // `glulx_powf`/`glulx_pow` wrappers, added there for the identical
+        // reason ("This wrapper handles all special cases, even if the
+        // underlying powf() function doesn't"). Assertions are on raw bit
+        // patterns so this test's result doesn't depend on the host libm.
+        const ONE_F32: u32 = 0x3F80_0000;
+        const ONE_F64: u64 = 0x3FF0_0000_0000_0000;
+
+        // pow(1, NaN) / pow(1, -NaN) — base exactly 1.0, any exponent.
+        assert_eq!(farith2(0x1AB, 1.0, f32::NAN), ONE_F32, "pow(1, NaN)");
+        assert_eq!(farith2(0x1AB, 1.0, -f32::NAN), ONE_F32, "pow(1, -NaN)");
+        // pow(NaN, 0) / pow(-NaN, 0) — exponent exactly ±0, any base.
+        assert_eq!(farith2(0x1AB, f32::NAN, 0.0), ONE_F32, "pow(NaN, 0)");
+        assert_eq!(farith2(0x1AB, -f32::NAN, 0.0), ONE_F32, "pow(-NaN, 0)");
+        assert_eq!(farith2(0x1AB, f32::NAN, -0.0), ONE_F32, "pow(NaN, -0)");
+        // pow(-1, ±Inf) — glulxe's third special case.
+        assert_eq!(farith2(0x1AB, -1.0, f32::INFINITY), ONE_F32, "pow(-1, Inf)");
+        assert_eq!(farith2(0x1AB, -1.0, f32::NEG_INFINITY), ONE_F32, "pow(-1, -Inf)");
+        // Ordinary cases still fall through to powf.
+        assert_eq!(farith2(0x1AB, 2.0, 3.0), 8.0f32.to_bits(), "pow(2,3)");
+        assert_eq!(farith2(0x1AB, -2.0, 3.0), (-8.0f32).to_bits(), "pow(-2,3)");
+        assert_eq!(farith2(0x1AB, 0.0, -1.0), f32::INFINITY.to_bits(), "pow(0,-1) = Inf");
+
+        // The f64 twin (dpow, 0x21B) follows the same rules.
+        assert_eq!(deval(0x21B, &[1.0, f64::NAN]).to_bits(), ONE_F64, "dpow(1, NaN)");
+        assert_eq!(deval(0x21B, &[1.0, -f64::NAN]).to_bits(), ONE_F64, "dpow(1, -NaN)");
+        assert_eq!(deval(0x21B, &[f64::NAN, 0.0]).to_bits(), ONE_F64, "dpow(NaN, 0)");
+        assert_eq!(deval(0x21B, &[-f64::NAN, 0.0]).to_bits(), ONE_F64, "dpow(-NaN, 0)");
+        assert_eq!(deval(0x21B, &[f64::NAN, -0.0]).to_bits(), ONE_F64, "dpow(NaN, -0)");
+        assert_eq!(deval(0x21B, &[-1.0, f64::INFINITY]), 1.0, "dpow(-1, Inf)");
+        assert_eq!(deval(0x21B, &[-1.0, f64::NEG_INFINITY]), 1.0, "dpow(-1, -Inf)");
+        assert_eq!(deval(0x21B, &[2.0, 3.0]), 8.0, "dpow(2,3)");
+        assert_eq!(deval(0x21B, &[-2.0, 3.0]), -8.0, "dpow(-2,3)");
+        assert_eq!(deval(0x21B, &[0.0, -1.0]), f64::INFINITY, "dpow(0,-1) = Inf");
     }
 
     #[test]
