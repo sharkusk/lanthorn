@@ -270,7 +270,7 @@ fn match_word(list: &[String], input: &str, word_length: usize) -> Option<u16> {
     None
 }
 
-fn trunc_upper(s: &str, word_length: usize) -> String {
+pub(crate) fn trunc_upper(s: &str, word_length: usize) -> String {
     let up = s.trim().to_uppercase();
     if word_length == 0 {
         return up;

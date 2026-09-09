@@ -1332,9 +1332,12 @@ impl Vm {
         // Scott matching is significant only to `word_length` characters, so the
         // typed noun and the item's auto-noun must be compared truncated — a full
         // typed word (e.g. "LAMP") still matches a shorter auto-noun ("LAM") when
-        // word_length is 3.
+        // word_length is 3. `word_length` 0 means "compare the whole word", not
+        // "truncate to nothing" (spec §2.5) — `database::trunc_upper` already
+        // carries that rule for `match_verb`/`match_noun`; reuse it here so the
+        // two comparisons can't disagree.
         let wl = self.db.word_length;
-        let trunc = |s: &str| s.trim().to_uppercase().chars().take(wl).collect::<String>();
+        let trunc = |s: &str| database::trunc_upper(s, wl);
         // ScottFree first maps the typed noun through the vocabulary
         // (MapSynonym): a `*`-synonym resolves to its group's canonical word
         // before being compared against the items' auto-get nouns. A word not
@@ -2959,6 +2962,29 @@ mod tests {
         assert!(vm.item_carried(9), "the lamp is now carried");
 
         // And dropping it by the full word works too.
+        vm.supply_line("drop lamp");
+        vm.step();
+        assert!(!vm.item_carried(9), "the lamp was dropped");
+    }
+
+    #[test]
+    fn get_specific_item_matches_at_word_length_zero() {
+        // Spec §2.5 (docs/internals/scott-dialects-spec.md): "a word length of 0
+        // in the header would make every comparison vacuously true; no real
+        // database has one, and a conforming loader should treat 0 as 'compare
+        // the whole word'." `Database::match_verb`/`match_noun` already carry
+        // that rule (`database::trunc_upper`); this pins `Vm::match_up_item`
+        // doing the same, rather than truncating every word to zero characters
+        // (which made `key` empty and GET/DROP fail unconditionally — SQ-1456).
+        let mut db = tiny_world();
+        db.word_length = 0;
+        let mut vm = Vm::new(db);
+        vm.supply_line("get lamp");
+        vm.step();
+        let out = vm.take_output();
+        assert!(out.contains("O.K."), "get lamp succeeds at word_length 0: {out:?}");
+        assert!(vm.item_carried(9), "the lamp is now carried");
+
         vm.supply_line("drop lamp");
         vm.step();
         assert!(!vm.item_carried(9), "the lamp was dropped");
