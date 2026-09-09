@@ -37,10 +37,13 @@ use app::session::{apply_turn, DeathWatch, GameSession};
 use mapper::graph::RoomId;
 use mapper::mapper::Mapper;
 
-/// A story under the gitignored `stories/`, or `None` in a checkout without it
-/// — the CI-safe vacuous-skip pattern (mirrors `sq1308_mapgen_layers::story`).
+use crate::fixture_paths::fixture_path;
+
+/// A story from the local `stories/` or the fetched fixtures directory, or `None`
+/// in a checkout with neither — the CI-safe vacuous-skip pattern. Both Adventures
+/// are on the fetch manifest (SQ-1015), so on CI this resolves rather than skips.
 fn story(name: &str) -> Option<PathBuf> {
-    let p = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../stories").join(name);
+    let p = fixture_path(name);
     p.is_file().then_some(p)
 }
 

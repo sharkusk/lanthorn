@@ -55,7 +55,10 @@ use mapper::mapper::Mapper;
 use crate::fixture_paths::fixture_path;
 
 const CM: &str = "CounterfeitMonkey-11.gblorb";
-const WIZARD: &str = "The_Wizard_Sniffer.gblorb";
+// `.gblorb.blorb` is the name the file has on the shelf and on the fetch
+// manifest; asking for `.gblorb` skipped this case vacuously wherever
+// `wizard_sniffer.rs`, which already spelled it correctly, ran (SQ-1015).
+const WIZARD: &str = "The_Wizard_Sniffer.gblorb.blorb";
 const KERKERKRUIP: &str = "Kerkerkruip.gblorb";
 const ANCHORHEAD: &str = "AnchorheadDemo.gblorb";
 

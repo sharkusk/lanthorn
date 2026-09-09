@@ -37,6 +37,8 @@ use std::path::{Path, PathBuf};
 use mapper::graph::RoomId;
 use mapper::layer::LayerId;
 
+use crate::fixture_paths::fixture_path;
+
 /// Lost Pig — the fixture the quest was reported on.
 const LOSTPIG: &str = "LostPig.z8";
 
@@ -47,8 +49,11 @@ const SHELF: RoomId = 157;
 const WINDY: RoomId = 177;
 const GNOME: RoomId = 194;
 
+/// Lost Pig is on the fetch manifest (SQ-1015) — CC BY-NC-ND 3.0, stated by the
+/// author at <https://grunk.org/lostpig/> — so this resolves on CI rather than
+/// skipping, and still prefers a developer's own `stories/` copy.
 fn story() -> Option<PathBuf> {
-    let p = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../stories").join(LOSTPIG);
+    let p = fixture_path(LOSTPIG);
     p.is_file().then_some(p)
 }
 

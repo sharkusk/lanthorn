@@ -52,36 +52,32 @@
 //!
 //! Stories are gitignored (CLAUDE.md), so every case skips cleanly without one.
 
-use std::path::PathBuf;
-
 use app::engine::{Engine, WinNode};
 use app::graphics::PictSource;
 use app::session::{GameSession, TranscriptElem};
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
 
+use crate::fixture_paths::fixture_path;
+
 /// Both cards are 512x192 at y=1 and y=192, one unit pixel per art pixel.
 const CARD_H: u32 = 192;
 const CARD_W: u32 = 512;
 
-/// SQ-1015: NOT redirected to the tracked fixtures directory, unlike its
-/// sibling suites. This test's assertions depend on `Mysterious01.blb`'s
-/// actual picture bytes (the two boot title cards), and that blorb's
-/// screenshot-sourced graphics have no established licence separate from the
-/// text `Mysterious Adventures` permission (see `fixture_paths.rs`'s doc
-/// comment) — so only `mysterious01.z6` moved, and `Mysterious01.blb` stays
-/// commercial-only in `stories/`. Resolving the story from the tracked copy
-/// while its Blorb companion stays put would silently boot it with NO
-/// pictures at all (`resolve_resource_blorb` scans the story's own
-/// directory), turning this suite's card-geometry assertions into failures
-/// instead of the clean skip they are today.
-fn stories_dir() -> PathBuf {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../stories")
-}
-
 /// mysterious01 at the boot screen, in hybrid, with game colours honored.
+///
+/// SQ-1015: this suite used to pin itself to `stories/` rather than go through
+/// `fixture_path`, because its assertions are about `Mysterious01.blb`'s actual
+/// picture bytes — the two boot title cards — and only `mysterious01.z6` had
+/// been moved. Resolving the story from a directory its Blorb companion was not
+/// in would boot it with NO pictures at all (`resolve_resource_blorb` scans the
+/// story's own directory) and turn card-geometry assertions into failures.
+///
+/// The fetch manifest carries BOTH now, out of the one upstream zip that
+/// Brian Howarth gave the IF Archive permission to serve, so the story and its
+/// pictures arrive together wherever they arrive at all.
 fn boot(honor: bool) -> Option<(GameSession, app::state::AppState)> {
-    let path = stories_dir().join("mysterious01.z6");
+    let path = fixture_path("mysterious01.z6");
     let Ok(bytes) = std::fs::read(&path) else {
         eprintln!("SKIP: gitignored story missing at {}", path.display());
         return None;
