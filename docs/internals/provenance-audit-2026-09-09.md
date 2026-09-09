@@ -211,7 +211,7 @@ exists to prevent. **Re-point every one of these at the observable behaviour —
 the parity fixture, the transcript, ScottFree's usage message — or at the
 Swansea Definition where it is not silent.**
 
-### D7 — `crates/app/src/render/v6_border.rs` — Spatterlight bocfel `z6/draw_border.cpp` (GPL-2-or-3) — **REWRITE `extend_pillars`**
+### D7 — `crates/app/src/render/v6_border.rs` — Spatterlight bocfel `z6/draw_border.cpp` (GPL-2-or-3) — **RESOLVED: re-derivation, not a port (spec Divergence section); provenance language re-worded, two facts re-sourced (SQ-1446)**
 
 The second-worst finding, and the one the brief did not anticipate, because it
 hinges on the licence split inside Bocfel that §1 uncovered: **every other
@@ -252,6 +252,24 @@ rows at each end, doubled"), needs re-sourcing too — though `:598` already not
 the measurement corroborates it ("86 is 82 plus this inset").
 
 The two quoted C fragments must go regardless.
+
+**Resolved (SQ-1446).** `docs/internals/v6-border-tiling-spec.md` — an
+independent functional description written from `machine-screenshots/`
+measurements, containing no code, function names or transcription from any
+other implementation — compares this module's model against the reference
+rule-by-rule in its §7: of fifteen rules, three coincide (the guard, the
+three-section shape, and the castle border's numbers, which are corroborated
+independently by `amiga-zorkzero.png` rather than derived from it) and the rest
+differ, several of them visibly. The verdict is **re-derivation, not a port**.
+The provenance language flagged above (`:13-16`, `:23`, `:872`, `:880-884`,
+`:862`, and the same pattern in `v6_mac_pillar_feet.rs`) was reworded to cite
+the spec section and the measurement behind each rule instead of the
+reference, naming the reference only once, historically, in the module doc;
+the two quoted C fragments (`:887`, `:913`) were removed. The two facts whose
+only stated authority had been the reference — the two-drawn-row inset and the
+snapshot-before-clear ordering — were re-sourced to the spec's own reasoning
+and measurement (§4.4) and are pinned by a non-vacuous test each. See
+`v6-border-tiling-spec.md` §7 for the full rule-by-rule comparison.
 
 ### D8 — `crates/blorb/src/infocom_pics.rs` — Frotz `src/dos/bcpic.c` (GPL) — **NOT DERIVED; re-word (12 sites)**
 

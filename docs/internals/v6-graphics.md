@@ -1532,10 +1532,14 @@ screenshot, a bug report and a headless capture all want:
   them was fine. That arm is gone; those flanks are a plain crop of the same scaled
   screen everything else is cut from, and the exemption now names the two sites that
   hold it rather than the routine they happen to share. The
-  three recipes are per title, because the artwork is: the mechanism is a port of
-  Bocfel's `draw_border.cpp`, which Spatterlight ships, and which hard-codes per
-  game *and* per platform for the same reason. It can afford to, because it draws
-  one rendition per run; lanthorn lets you switch archives mid-library, and Zork
+  three recipes are per title, because the artwork is: the mechanism sections each
+  flank from its own pixels rather than hard-coding a layout table per title
+  (`docs/internals/v6-border-tiling-spec.md` §3-§4 is the independent model this
+  builds; a GPL implementation, Spatterlight's Bocfel `draw_border.cpp`, was
+  consulted historically per SQ-1063 and compared against it rule-by-rule in the
+  spec's §7 — most rules differ). A fixed table can afford to hard-code per game
+  *and* per platform because it draws one rendition per run; lanthorn lets you
+  switch archives mid-library, and Zork
   Zero's renditions **disagree about where its pillars start** — the banner above
   them is 34 raw rows on MCGA, 37 on EGA and 39 on CGA, while the pillars are 166
   rows in all three. A repeat unit pinned to one of those layouts lands inside the
@@ -1543,9 +1547,12 @@ screenshot, a bug report and a headless capture all want:
   column as a horizontal seam. So Zork Zero's pillars are **measured, not pinned**:
   the shaft is the longest run of rows holding one opaque width, the capital and
   base are what flare out above and below it, and the cut, the repeat and the foot
-  all come off that. On the MCGA and Amiga art the measurement returns Bocfel's own
-  four constants to the row, which is what makes it a derivation of them rather
-  than a replacement. **Alternate tiles are drawn mirrored**, which is what finally
+  all come off that. On the MCGA and Amiga art the measurement returns the same
+  four numbers a photograph of the Amiga rendition confirms independently
+  (`machine-screenshots/amiga-zorkzero.png`; v6-border-tiling-spec.md §2.1, §7
+  rule 2) — corroboration, not derivation: the numbers are what the drawing is,
+  and a live measurement and a hard-coded table both arrive at them. **Alternate
+  tiles are drawn mirrored**, which is what finally
   killed the CGA seam. Cutting in the plain shaft is not enough on its own, because
   Zork Zero's CGA pillar is a *lit* column: mean row luminance runs 97 down to 82
   from its capital to its base, where MCGA holds a flat 54 and EGA a flat 51. A
@@ -1673,15 +1680,15 @@ screenshot, a bug report and a headless capture all want:
   left. Shogun's status line is two 16-pixel rows the top of its border sits
   behind, and cutting the repeat there put a 64-row hole at the join between the
   tiled pieces — 94 screen pixels of black between two ornate gold panels at
-  120×90. Its repeats come off the graphics-only canvas instead, which is the
-  order Spatterlight works in too: it covers the status bar *after* extending, not
-  before. `/dump-windows` labels a band `[Art, tiled]`, reports the native size of
-  the source it was composed from, and counts the rows in it that carry no art at
+  120×90. Its repeats come off the graphics-only canvas instead — extending
+  before the status bar is drawn over it rather than after, the only order that
+  cannot repeat the hole. `/dump-windows` labels a band `[Art, tiled]`, reports
+  the native size of the source it was composed from, and counts the rows in it
+  that carry no art at
   all — the longest run and where it starts, since a hole is invisible in the
   band's rectangle and shows up only on screen.
   **Raster mode gets the same frame**, because it builds the whole thing at the
-  640×400 native screen and hands the finished canvas to a single scale — the same
-  way Spatterlight composes at native resolution and stretch-blits once. The flanks
+  640×400 native screen and hands the finished canvas to a single scale. The flanks
   are extended before that scale rather than at draw time, so raster's corners
   agree structurally instead of by arrangement. It had been left behind when tiling
   landed, and the two pixel modes were drawing different screens from the same turn:
