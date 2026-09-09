@@ -50,6 +50,16 @@
 //! the static game data — rooms, items, the action table, vocabulary, and
 //! messages — or a [`LoadError`] naming what in the text didn't fit.
 //!
+//! Scott Adams games also shipped in several BINARY dialects — TI-99/4A
+//! game images, and the C64/ZX Spectrum/Atari 8-bit/Apple II memory
+//! snapshots that carry the tables as machine data rather than as text.
+//! This crate does not read them, but it does [`detect_dialect`] them, so a
+//! failed parse over one comes back as
+//! [`LoadError::UnsupportedDialect`] and a host can say "this is a
+//! TI-99/4A game image" instead of reporting whichever token the text lexer
+//! tripped over first. See [`Dialect`] for what each signature is and how
+//! it was established.
+//!
 //! # Driving a session
 //!
 //! [`Vm::new`] (or [`Vm::new_seeded`], to fix the PRNG a game's occurrence
