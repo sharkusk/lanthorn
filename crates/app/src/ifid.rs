@@ -3,9 +3,10 @@
 //! Prefers Inform's embedded `UUID://<id>//` marker — the Treaty of Babel string
 //! that Inform writes into both Z-machine and Glulx story files, and every babel
 //! tool reads. Falling back, a Z-machine story gets its header-derived
-//! `ZCODE-<release>-<serial>-<checksum>` (via [`zvm::ifid`]) and a Glulx story a
+//! `ZCODE-<release>-<serial>-<checksum>` (via [`zvm::ifid`]), a Glulx story a
 //! stable content hash — so a Glulx game never masquerades as a `ZCODE-…` IFID
-//! (SQ-0339).
+//! (SQ-0339) — and, since SQ-1414, a Scott Adams database the same shape of
+//! stable content hash, for the same reason and one that bit harder.
 
 /// The story's IFID. See the module docs for the resolution order.
 pub fn compute_ifid(story: &[u8]) -> String {
@@ -18,6 +19,22 @@ pub fn compute_ifid(story: &[u8]) -> String {
         // as a Z-machine IFID. Not the Treaty's MD5, but unique and stable, which
         // is all the app needs it for (per-game styles/config keying).
         return format!("GLULX-{:016X}", fnv1a64(story));
+    }
+    // A Scott Adams database is not remotely shaped like a Z-machine header,
+    // but `zvm::ifid::compute_ifid` does not check that before reading it —
+    // and the three binary dialects (SQ-1414) can make that read the SAME
+    // bytes twice over. A Commodore 64 *Mysterious Adventures* program file
+    // shares its first ~1KB of driver code, byte-for-byte, across all eleven
+    // releases — including the offsets `zvm::ifid::compute_ifid` reads for
+    // "release", "serial" and "checksum" — so every program on one disk
+    // fell through to the identical fabricated `ZCODE-…` id, and
+    // `picker::dedupe_within_a_volume`'s ifid-keyed fold (built for two
+    // copies of one Z-code build on a hybrid disc) collapsed six distinct
+    // games on `MYSTADV1.D64` into one row. A stable content hash, exactly
+    // the Glulx branch's own shape and for the same reason, never collides
+    // between two different games again.
+    if scott::looks_like_scott_bytes(story) {
+        return format!("SCOTT-{:016X}", fnv1a64(story));
     }
     zvm::ifid::compute_ifid(story)
 }
@@ -85,6 +102,35 @@ mod tests {
         let mut other = glulx.clone();
         *other.last_mut().unwrap() = 9;
         assert_ne!(compute_ifid(&other), id);
+    }
+
+    /// A Scott Adams database with no embedded IFID gets a stable
+    /// `SCOTT-<hash>`, never the naive `ZCODE-…` reading of whatever happens
+    /// to sit at a Z-machine header's fixed byte offsets — the SQ-1414
+    /// collision, where every program on a Commodore 64 *Mysterious
+    /// Adventures* disk shares identical bytes at exactly those offsets (its
+    /// driver code) and fell through to one fabricated id for all eleven
+    /// games.
+    ///
+    /// FALSIFICATION: drop the Scott branch and the second assertion fails —
+    /// two DIFFERENT games sharing an identical prefix at those offsets
+    /// collide on one `ZCODE-…` id, exactly as `dedupe_within_a_volume`
+    /// then folded six rows off `MYSTADV1.D64` into one.
+    #[test]
+    fn scott_without_uuid_gets_stable_scott_hash() {
+        let dat = include_bytes!("../../scott/tests/tiny_cave.dat");
+        assert!(scott::looks_like_scott_bytes(dat), "the fixture must sniff as Scott");
+        let id = compute_ifid(dat);
+        assert!(id.starts_with("SCOTT-"), "labelled Scott, not ZCODE: {id}");
+        assert!(!id.starts_with("ZCODE"), "must not masquerade as Z-machine");
+        assert_eq!(compute_ifid(dat), id, "deterministic");
+
+        // Two different games sharing an identical prefix at exactly the
+        // offsets `zvm::ifid::compute_ifid` reads must not collide.
+        let mut same_prefix_different_tail = dat.to_vec();
+        same_prefix_different_tail.extend_from_slice(b"\n9999 \"an extra room nobody else has\"\n");
+        assert!(scott::looks_like_scott_bytes(&same_prefix_different_tail));
+        assert_ne!(compute_ifid(&same_prefix_different_tail), id);
     }
 
     /// A Z-machine story with no marker keeps its header-derived ZCODE IFID.

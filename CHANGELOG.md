@@ -36,14 +36,20 @@ Absolute URLs or no link.
   loud and is gone for good once it burns out. lanthorn also decodes the
   line-drawn picture each room carries, though nothing draws them yet.
   (SQ-1414)
+- **Hand lanthorn a Mysterious Adventures compilation disk and pick a game.**
+  `MYSTADV1.D64` and `MYSTADV2.D64` — the two Commodore 64 disks the eleven
+  games above were actually sold on — now mount and open just like an Infocom
+  compilation disc: point lanthorn or `scott-cli --story <n|name>` at one and
+  pick from a list of the games it holds, six on the first and five on the
+  second, each with its own saves. (SQ-1414)
 - **Three more kinds of original disk now open.** Atari 8-bit floppies
   (`.atr`), Apple II DOS 3.3 floppies (`.dsk`) and Atari 8-bit loadable
-  binaries (`.xex`) mount like every other release medium, and an ordinary
-  Commodore `.d64` now lists the programs on it by name instead of reporting
-  nothing. These are the disks the Scott Adams games were sold on, so there is
-  no story on them lanthorn can play *yet* — point it at one and it opens the
-  disk, tells you what is on it, and says plainly that none of it is a game it
-  can run. The loaders that finish the job come next. (SQ-1458)
+  binaries (`.xex`) mount like every other release medium and list the
+  programs on them by name instead of reporting nothing. These are further
+  disks the Scott Adams games were sold on, so there is no story on them
+  lanthorn can play *yet* — point it at one and it opens the disk, tells you
+  what is on it, and says plainly that none of it is a game it can run. The
+  loaders that finish the job come next. (SQ-1458)
 - **Scott Adams TI-99/4A releases now load.** The twelve original Adventure
   International games — *Adventureland* through *The Golden Voyage* — were also
   sold for the TI-99/4A, and those releases are a completely different kind of

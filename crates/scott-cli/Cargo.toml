@@ -22,4 +22,5 @@ path = "src/main.rs"
 buildinfo = { package = "lanthorn-buildinfo", path = "../buildinfo", version = "0.5.3" }
 cli-host = { package = "lanthorn-cli-host", path = "../cli-host", version = "0.5.3" }
 scott = { package = "lanthorn-scott", path = "../scott", version = "0.5.3" }
+blorb = { package = "lanthorn-blorb", path = "../blorb", version = "0.5.3" }
 crossterm = "0.29"

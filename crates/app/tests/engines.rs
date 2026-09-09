@@ -46,6 +46,8 @@ mod glulx_ingame_save_host_restore;
 mod glulx_inventory;
 #[path = "suites/atari_st_profile.rs"]
 mod atari_st_profile;
+#[path = "suites/c64_mysterious_disks.rs"]
+mod c64_mysterious_disks;
 #[path = "suites/apple_iigs_profile.rs"]
 mod apple_iigs_profile;
 #[path = "suites/apple_release_artwork.rs"]

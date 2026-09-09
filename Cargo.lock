@@ -1528,6 +1528,7 @@ name = "lanthorn-scott-cli"
 version = "0.5.3"
 dependencies = [
  "crossterm",
+ "lanthorn-blorb",
  "lanthorn-buildinfo",
  "lanthorn-cli-host",
  "lanthorn-scott",
