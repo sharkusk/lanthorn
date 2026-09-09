@@ -153,8 +153,9 @@ const YEAR_COL_W: u16 = 6;
 /// fits where the old 6-wide column could only take `RATE ▲`.
 const RATING_COL_W: u16 = 10;
 /// Interpreter/format column ("Z5", "Z5 (blorb)", "G3.1.2"): fixed width, sits
-/// just left of the badge cluster. `Z8 (blorb)` (10) is the widest (SQ-0369).
-const INTERP_COL_W: u16 = 13;
+/// just left of the badge cluster. `Z6 (Atari DOS)` (14) is the widest —
+/// SQ-1458's Atari 8-bit floppy container name overtook `Scott (blorb)` (13).
+const INTERP_COL_W: u16 = 14;
 const TITLE_MIN_W: u16 = 8;
 /// Title keeps this much before the author column is allowed to grow past its
 /// base width — title has priority for the shared space, so a long author name
@@ -4911,17 +4912,17 @@ mod tests {
         let mut list = app::list_scroll::ListScroll::new();
         list.len(1);
 
-        // (width, author shown, year shown). Right zone = INTERP_COL_W(13) +
-        // COL_GAP(2) + cluster_w(save+hint=2) = 17, reserved 18; so avail =
-        // width - 20. year needs avail >= 38 (width >= 58); author needs avail
-        // >= 30 (width >= 50). Below that: title + right-zone only.
+        // (width, author shown, year shown). Right zone = INTERP_COL_W(14) +
+        // COL_GAP(2) + cluster_w(save+hint=2) = 18, reserved 19; so avail =
+        // width - 21. year needs avail >= 38 (width >= 59); author needs avail
+        // >= 30 (width >= 51). Below that: title + right-zone only.
         for &(width, want_author, want_year) in &[
-            (70u16, true, true),
-            (58, true, true),
-            (57, true, false),
-            (50, true, false),
-            (49, false, false),
-            (30, false, false),
+            (71u16, true, true),
+            (59, true, true),
+            (58, true, false),
+            (51, true, false),
+            (50, false, false),
+            (31, false, false),
         ] {
             let area = Rect::new(0, 0, width, 10);
             let mut buf = Buffer::empty(area);
