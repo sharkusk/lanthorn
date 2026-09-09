@@ -11,7 +11,9 @@ pub mod bpal;
 /// Partition Map. Private because it is a wrapper rather than a reader: what it
 /// finds is handed to [`hfs`], and nothing outside this crate asks for it.
 mod cd;
+pub mod atr;
 pub mod d64;
+pub mod dos33;
 pub mod dos_order;
 pub mod fat12;
 pub mod g64;
@@ -23,6 +25,7 @@ pub mod infocom_sound;
 pub mod iso9660;
 pub mod medium;
 pub mod prodos;
+pub mod xex;
 
 /// Errors that can arise while parsing a Blorb container.
 #[derive(Debug, PartialEq, Eq)]

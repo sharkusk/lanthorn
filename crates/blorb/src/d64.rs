@@ -184,11 +184,48 @@ enum Plan {
 /// that spends every sector is answered without building the other candidate.
 const PLANS: [Plan; 3] = [Plan::Dense, Plan::Sixteen, Plan::Seventeen];
 
+/// What Commodore DOS says a directory entry is — the low nibble of its type
+/// byte, for the two kinds this reader hands over.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CbmFileType {
+    /// `SEQ`, a sequential file.
+    Seq,
+    /// `PRG`, a program file — which is every file on every Commodore Scott
+    /// Adams disk in the corpus.
+    Prg,
+}
+
+/// One closed file the CBM directory names (SQ-1458).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CbmFile {
+    /// The 16-byte name with its `$A0` padding stripped, mapped out of PETSCII
+    /// by this module's PETSCII rule — see `cbm_name`.
+    pub name: String,
+    /// `PRG` or `SEQ`.
+    pub file_type: CbmFileType,
+    /// The block count the directory carries. Reported because `LOAD"$"` does;
+    /// never used to size a read, which follows the chain.
+    pub blocks: usize,
+    /// The file's bytes, chain order.
+    ///
+    /// **A `PRG`'s first two bytes are its load address**, little-endian, and
+    /// they are kept: that is what the file *is*, it is how every extracted
+    /// `.prg` beside these images is stored, and there is no fixed base address
+    /// on this machine to recover it from later
+    /// (`scott-dialects-spec.md` §7.5). A caller wanting the memory image drops
+    /// them itself and reads byte 2 as living at that address.
+    bytes: Vec<u8>,
+}
+
 /// A mounted Commodore 1541 disk.
 #[derive(Debug)]
 pub struct D64 {
     /// The name in the BAM, when it reads as one (`TRINITY`, `SIDE 2`).
     name: Option<String>,
+    /// The closed `PRG` and `SEQ` files the directory names, in directory order.
+    /// Empty on every Infocom disk in the corpus but one, and the whole of what
+    /// an ordinary Commodore disk has.
+    files: Vec<CbmFile>,
     /// Where the story starts, as a (track, sector). `None` on a side that
     /// carries no header — a continuation disk, which is a whole third of this
     /// corpus.
@@ -226,11 +263,29 @@ impl D64 {
     /// [`story_across`], which verifies the join against the story's own header
     /// checksum. A `.d64` that is not an Infocom release either fails here or
     /// mounts and reports no story; it is never misread as one.
+    ///
+    /// **A third arm since SQ-1458: a disk whose directory names files.** That
+    /// is the ordinary Commodore disk this sniff used to refuse outright, and it
+    /// has to be accepted now because the Scott Adams Commodore releases —
+    /// `MYSTADV1.D64`, `MYSTADV2.D64`, the two Questprobe disks — are exactly
+    /// that and nothing else: a plain CBM DOS directory of uncompressed `PRG`
+    /// files. Refusing them meant a whole family of games could not be opened
+    /// through this crate's one disk seam at all.
+    ///
+    /// It costs the arms above nothing, because it is a strictly different
+    /// question. An entry has to be a **closed** `PRG` or `SEQ` with a non-zero
+    /// block count, a start sector on the disk and a name; the decorative
+    /// entries the Infocom presses carry — *Zork I*'s `>GOLDEN EDITION<` banner
+    /// and its zero-block `ZORK I`, *Hitchhiker's* two `GUIDE TO THE` /
+    /// `GALAXY.` lines — are `DEL` or claim no blocks and are not files. Nothing
+    /// in `stories/` changes hands: the same three images are Infocom releases
+    /// and the same two *Zork I* sides are not.
     pub fn looks_like_d64(raw: &[u8]) -> bool {
         if raw.len() != D64_LEN || !bam_is_sane(raw) {
             return false;
         }
         (!directory_reads(raw) && raw_sectors(raw) >= RAW_SECTOR_FLOOR)
+            || !directory(raw).is_empty()
             || story_on(&[raw]).is_some()
     }
 
@@ -245,9 +300,20 @@ impl D64 {
         let found = story_on(&[&raw]);
         Ok(D64 {
             name: disk_name(&raw),
+            files: directory(&raw),
             at: found.as_ref().map(|(at, _)| *at),
             story: found.map(|(_, story)| story),
         })
+    }
+
+    /// The closed `PRG` and `SEQ` files the directory names, in directory order.
+    ///
+    /// **The door a Scott Adams Commodore loader comes through**: each file's
+    /// bytes are the program file as CBM DOS stores it, load address and all
+    /// (see `CbmFile`'s own docs). Empty on a disk that keeps nothing in its
+    /// filesystem, which is every Infocom press here but *Hitchhiker's*.
+    pub fn files(&self) -> &[CbmFile] {
+        &self.files
     }
 
     /// The name Commodore DOS keeps at `$90` of the BAM, `$A0`-padded and here
@@ -279,34 +345,55 @@ impl D64 {
         Some((self.entry_name()?, self.story.clone()?))
     }
 
-    /// Everything the disk can be shown to hold: the story, and nothing else —
-    /// **which on a continuation side is nothing at all**.
+    /// Everything the disk can be shown to hold: the files its directory names,
+    /// then the raw-sector story if it has one — **and on a continuation side,
+    /// nothing at all**.
     ///
-    /// The loader and its interpreter are on here too, and are not files: they
-    /// are 6502 the boot ROM or a BASIC stub jumps into. Reporting them would be
-    /// inventing a directory these disks do not use. And *Trinity*'s two sides
-    /// list nothing whatever, because neither holds a game; the release is
-    /// reassembled from the raw images by [`story_across`], which
+    /// The two halves are different kinds of thing and both are real. An
+    /// ordinary Commodore disk keeps its programs in CBM DOS files, which is
+    /// every Scott Adams release here and *Hitchhiker's* one 552-byte BASIC
+    /// loader; an Infocom press keeps its story in raw sectors outside the
+    /// filesystem, which no directory can name, and it is reported under
+    /// [`D64::entry_name`] — `T5/S0`, where it is.
+    ///
+    /// What is still **not** reported is the interpreter: it is 6502 the boot
+    /// ROM or a BASIC stub jumps into, it is not a file, and inventing an entry
+    /// for it would be inventing a directory these disks do not use. And
+    /// *Trinity*'s two sides list nothing whatever, because neither holds a game
+    /// and neither has a readable directory; that release is reassembled from
+    /// the raw images by [`story_across`], which
     /// [`crate::medium::MountedDisk`] reaches with the sides themselves rather
     /// than with this listing.
     pub fn contents(&self) -> Vec<(String, Vec<u8>)> {
-        self.story().into_iter().collect()
+        let mut out: Vec<(String, Vec<u8>)> =
+            self.files.iter().map(|f| (f.name.clone(), f.bytes.clone())).collect();
+        out.extend(self.story());
+        out
     }
 
     /// One entry by the name a caller was shown, case-insensitively — the
     /// property every format here has to have, because it is the `--pictures`
     /// door.
+    ///
+    /// Both kinds of name answer: a CBM filename, and the `T5/S0` the raw-sector
+    /// story is listed under. A disk with two files of the same name — the two
+    /// graphics-character entries on `QUESTPR1.D64` normalise alike — answers
+    /// with the first, which is what `LOAD` does.
     pub fn read_named(&self, name: &str) -> Option<Vec<u8>> {
+        if let Some(file) = self.files.iter().find(|f| f.name.eq_ignore_ascii_case(name)) {
+            return Some(file.bytes.clone());
+        }
         match self.entry_name() {
             Some(entry) if name.eq_ignore_ascii_case(&entry) => self.story.clone(),
             _ => None,
         }
     }
 
-    /// How many entries the mount found: one when this disk holds a whole game,
-    /// and none when it is one side of a release that spans two.
+    /// How many entries the mount found — the directory's files, plus one when
+    /// this disk holds a whole game in raw sectors, and none when it is one side
+    /// of a release that spans two.
     pub fn file_count(&self) -> usize {
-        usize::from(self.story.is_some())
+        self.files.len() + usize::from(self.story.is_some())
     }
 
     /// **No artwork, and that is a limit rather than a finding.**
@@ -439,6 +526,130 @@ fn directory_reads(raw: &[u8]) -> bool {
         (track, sector) = (usize::from(block[0]), usize::from(block[1]));
     }
     true
+}
+
+/// **The directory walk** — every closed `PRG` and `SEQ` file the chain names,
+/// read through its sector chain, in directory order (SQ-1458).
+///
+/// Gated on [`directory_reads`] and deliberately so: that function is the
+/// existing, conservative test for "is this a directory at all", and *Trinity*'s
+/// two sides fail it because the game is written over their directory sectors.
+/// Without the gate this walk would happily read four "entries" out of
+/// *Trinity* SIDE 1's story data — one of them a plausible closed `PRG` — which
+/// is precisely the misreading the raw-sector arm exists to avoid.
+///
+/// An entry has to be all four of these, and each one is the corpus's:
+///
+/// * **closed** (type bit 7), because an open file's chain was never finished;
+/// * `PRG` or `SEQ` (low nibble 2 or 1). `DEL` is the decorative banner line
+///   *Zork I*'s and *Hitchhiker's* presses spell their titles with; `USR` and
+///   `REL` are absent from every image here, and `REL` is not a plain chain at
+///   all — it has side sectors, and reading it as one would be wrong rather
+///   than merely unsupported;
+/// * **a non-zero block count**, which is what tells `ZORK I` — a closed `PRG`
+///   claiming no blocks, sitting on the same track 17 sector 0 as the BASIC
+///   stub beside it — from `THE HITCHHIKER'S`, which claims three and has them;
+/// * a start track and sector **on the disk**, and a name.
+///
+/// A chain that then fails to read is dropped, not fatal: one unreadable entry
+/// says nothing about its neighbours.
+fn directory(raw: &[u8]) -> Vec<CbmFile> {
+    if !directory_reads(raw) {
+        return Vec::new();
+    }
+    let bam = sector_at(raw, linear(DIRECTORY_TRACK, 0));
+    let (mut track, mut sector) = (usize::from(bam[0]), usize::from(bam[1]));
+    let mut seen: Vec<(usize, usize)> = Vec::new();
+    let mut out = Vec::new();
+    while track != 0 {
+        if track > TRACKS || sector >= sectors_per_track(track) || seen.contains(&(track, sector)) {
+            break;
+        }
+        seen.push((track, sector));
+        if seen.len() > sectors_per_track(DIRECTORY_TRACK) {
+            break;
+        }
+        let block = sector_at(raw, linear(track, sector));
+        for slot in 0..8 {
+            let e = &block[slot * 32..slot * 32 + 32];
+            let file_type = match (e[2] & 0x80 != 0).then_some(e[2] & 0x0f) {
+                Some(1) => CbmFileType::Seq,
+                Some(2) => CbmFileType::Prg,
+                _ => continue,
+            };
+            let blocks = usize::from(u16::from_le_bytes([e[30], e[31]]));
+            let (first_track, first_sector) = (usize::from(e[3]), usize::from(e[4]));
+            if blocks == 0
+                || first_track == 0
+                || first_track > TRACKS
+                || first_sector >= sectors_per_track(first_track)
+            {
+                continue;
+            }
+            let Some(name) = cbm_name(&e[5..21]) else { continue };
+            let Some(bytes) = chain(raw, first_track, first_sector) else { continue };
+            out.push(CbmFile { name, file_type, blocks, bytes });
+        }
+        (track, sector) = (usize::from(block[0]), usize::from(block[1]));
+    }
+    out
+}
+
+/// One file's bytes, following the 1541's two-byte block links.
+///
+/// Byte 0 of a block is the next track and byte 1 the next sector. A **non-zero**
+/// next track means the block carries a full 254 bytes at offsets 2-255; a zero
+/// next track means this is the last block and **byte 1 is the number of used
+/// bytes plus one**, so the payload is `byte1 − 1` bytes from offset 2. A byte 1
+/// of 0 there is malformed. Visited blocks are tracked, because a corrupt image
+/// would otherwise loop forever.
+fn chain(raw: &[u8], mut track: usize, mut sector: usize) -> Option<Vec<u8>> {
+    let mut out = Vec::new();
+    let mut seen: Vec<(usize, usize)> = Vec::new();
+    loop {
+        if track == 0 || track > TRACKS || sector >= sectors_per_track(track) {
+            return None;
+        }
+        if seen.contains(&(track, sector)) {
+            return None;
+        }
+        seen.push((track, sector));
+        let block = sector_at(raw, linear(track, sector));
+        if block[0] == 0 {
+            let used = usize::from(block[1]);
+            if used == 0 {
+                return None;
+            }
+            out.extend_from_slice(&block[2..2 + used - 1]);
+            return Some(out);
+        }
+        out.extend_from_slice(&block[2..]);
+        (track, sector) = (usize::from(block[0]), usize::from(block[1]));
+    }
+}
+
+/// A CBM filename out of its sixteen stored bytes, `$A0`-padded.
+///
+/// Commodore stores names in **PETSCII**, and the mapping here is the smallest
+/// one that reads every name in the corpus and cannot produce a control
+/// character: `$20..=$5F` is where PETSCII and ASCII agree and passes through
+/// (`ARROW II`, `PULSAR 7`, `WIZARD OF AKYRZ`, `SHULK.DB`); `$C1..=$DA` is
+/// shifted-mode upper case and loses its high bit (`QUESTPR1.D64`'s `Á.Ó` is
+/// `A.S`); everything else is a graphics character with no letter behind it and
+/// becomes `?`. Trailing spaces are trimmed, and a name that is left empty is
+/// not a name.
+fn cbm_name(field: &[u8]) -> Option<String> {
+    let name: String = field
+        .iter()
+        .take_while(|&&b| b != 0xa0)
+        .map(|&b| match b {
+            0x20..=0x5f => char::from(b),
+            0xc1..=0xda => char::from(b & 0x7f),
+            _ => '?',
+        })
+        .collect();
+    let name = name.trim_end().to_string();
+    (!name.is_empty()).then_some(name)
 }
 
 /// How many sectors this disk holds that its own BAM calls free — data outside
@@ -803,11 +1014,19 @@ pub(crate) mod tests {
         assert_eq!(D64::mount(blank).err(), Some(D64Error::NotAD64));
     }
 
-    /// **An ordinary Commodore disk is refused** (guard, SQ-0869): a disk whose
-    /// directory reads and whose data the BAM accounts for is somebody's BASIC
-    /// program collection, not an Infocom press.
+    /// **An ordinary Commodore disk mounts and lists its files, and reports no
+    /// Z-code story** (SQ-1458, replacing SQ-0869's refusal).
+    ///
+    /// It used to be refused outright, on the reading that a disk whose
+    /// directory reads and whose data its BAM accounts for is somebody's BASIC
+    /// program collection rather than an Infocom press. Both halves of that are
+    /// still true and the conclusion was still wrong: the Scott Adams Commodore
+    /// releases are exactly such disks, and refusing them put a whole family of
+    /// games outside this crate's one disk seam. What has not changed is the
+    /// second half — an ordinary disk is never *misread* as a game, and this
+    /// pins that as well as the listing.
     #[test]
-    fn an_ordinary_commodore_disk_is_refused() {
+    fn an_ordinary_commodore_disk_mounts_and_lists_its_files() {
         let mut image = blank_disk();
         // One PRG at track 1 sector 0, marked used in the BAM and listed in the
         // directory — which is what an ordinary disk looks like and what none of
@@ -827,7 +1046,66 @@ pub(crate) mod tests {
         image[dir + 30] = 1; // one block
         assert!(directory_reads(&image), "its directory reads");
         assert!(raw_sectors(&image) < RAW_SECTOR_FLOOR, "and its BAM accounts for its data");
-        assert!(!D64::looks_like_d64(&image), "so it is not an Infocom release");
+
+        assert!(D64::looks_like_d64(&image), "it is a Commodore disk");
+        let disk = D64::mount(image).expect("and it mounts");
+        assert_eq!(disk.file_count(), 1);
+        assert_eq!(disk.files().len(), 1);
+        assert_eq!(disk.files()[0].name, "HELLO");
+        assert_eq!(disk.files()[0].file_type, CbmFileType::Prg);
+        assert_eq!(disk.files()[0].blocks, 1);
+        // The last block declares 0xFF used bytes plus one, so 254 of them.
+        assert_eq!(disk.read_named("hello").map(|b| b.len()), Some(254), "case-insensitive");
+        assert_eq!(disk.contents().len(), 1);
+        // …and there is no Z-code on it, which is the half that has not changed.
+        assert_eq!(disk.story(), None);
+        assert_eq!(disk.entry_name(), None);
+    }
+
+    /// The four filters that keep the decorative entries an Infocom press
+    /// carries out of the listing — each one said on its own, because each one
+    /// is a real entry on a real disk in `stories/`.
+    #[test]
+    fn a_decorative_directory_entry_is_not_a_file() {
+        // (type byte, blocks, what it is on the shelf)
+        let cases: [(u8, u16, &str); 4] = [
+            (0x80, 3, "a closed DEL — Zork I's `>GOLDEN EDITION<` banner"),
+            (0x82, 0, "a closed PRG claiming no blocks — Zork I's own `ZORK I`"),
+            (0x02, 1, "an open PRG, whose chain was never finished"),
+            (0x84, 1, "a closed REL, which is not a plain chain at all"),
+        ];
+        for (kind, blocks, what) in cases {
+            let mut image = blank_disk();
+            let at = linear(1, 0) * SECTOR;
+            image[at] = 0;
+            image[at + 1] = 0xff;
+            let dir = linear(DIRECTORY_TRACK, 1) * SECTOR;
+            image[dir + 2] = kind;
+            image[dir + 3] = 1;
+            image[dir + 4] = 0;
+            image[dir + 5..dir + 21].copy_from_slice(b"HELLO\xa0\xa0\xa0\xa0\xa0\xa0\xa0\xa0\xa0\xa0\xa0");
+            image[dir + 30..dir + 32].copy_from_slice(&blocks.to_le_bytes());
+            assert!(directory(&image).is_empty(), "{what}");
+            assert!(!D64::looks_like_d64(&image), "{what}");
+        }
+    }
+
+    /// PETSCII, at the two edges the corpus actually has.
+    #[test]
+    fn a_cbm_name_reads_the_petscii_the_shelf_uses() {
+        let pad = |s: &[u8]| {
+            let mut v = s.to_vec();
+            v.resize(16, 0xa0);
+            v
+        };
+        assert_eq!(cbm_name(&pad(b"WIZARD OF AKYRZ")).as_deref(), Some("WIZARD OF AKYRZ"));
+        assert_eq!(cbm_name(&pad(b"BOOT")).as_deref(), Some("BOOT"));
+        // Shifted-mode upper case: `QUESTPR1.D64`'s `C1 2E D3`.
+        assert_eq!(cbm_name(&pad(&[0xc1, 0x2e, 0xd3])).as_deref(), Some("A.S"));
+        // A graphics character has no letter behind it.
+        assert_eq!(cbm_name(&pad(&[0xa3; 4])).as_deref(), Some("????"));
+        assert_eq!(cbm_name(&[0xa0; 16]), None, "an all-padding name is not a name");
+        assert_eq!(cbm_name(&pad(b"   ")), None, "nor is one that trims to nothing");
     }
 
     /// Nothing of another size is claimed, however story-like. 174,848 bytes is
@@ -1200,13 +1478,84 @@ pub(crate) mod tests {
         };
         let disk = D64::mount(raw).expect("it mounts");
         let contents = disk.contents();
-        assert_eq!(contents.len(), 1);
-        let (name, bytes) = &contents[0];
-        assert_eq!(name, "T5/S0", "where the story is, the only name this medium has");
-        assert_eq!(disk.read_named(name).as_ref(), Some(bytes));
-        assert_eq!(disk.read_named("t5/s0").as_ref(), Some(bytes), "case-insensitive");
+        // Two entries, of two different kinds, and both real (SQ-1458): the
+        // 552-byte BASIC loader the press keeps in a CBM file — the `SYS(2063)`
+        // stub this module's header quotes — and the story, which is raw sectors
+        // no directory can name.
+        assert_eq!(contents.len(), 2);
+        assert_eq!(disk.file_count(), 2);
+        assert_eq!(contents[0].0, "THE HITCHHIKER'S");
+        assert_eq!(contents[0].1.len(), 552);
+        assert_eq!(&contents[0].1[..2], &[0x01, 0x08], "loads at $0801, like every C64 PRG");
+        assert_eq!(contents[1].0, "T5/S0", "where the story is: this medium's only other name");
+        for (name, bytes) in &contents {
+            assert_eq!(disk.read_named(name).as_ref(), Some(bytes), "{name}");
+            assert_eq!(
+                disk.read_named(&name.to_ascii_lowercase()).as_ref(),
+                Some(bytes),
+                "{name}: case-insensitive"
+            );
+        }
         assert_eq!(disk.read_named("HITCHHIKER GUIDE"), None, "the volume name is not a file");
         assert_eq!(disk.read_named("nothing at all"), None);
+    }
+
+    /// **The Scott Adams Commodore releases** — the disks SQ-1458's third sniff
+    /// arm exists for. Ordinary CBM DOS disks of uncompressed `PRG` files, and
+    /// every one of them byte-identical to the copy extracted beside the image.
+    /// `stories/` is gitignored, so this skips vacuously on CI.
+    #[test]
+    fn the_mysterious_adventures_disks_list_their_program_files() {
+        let sets: [(&str, &str, &[&str]); 2] = [
+            ("MYSTADV1.D64", "HOWARTH I", &[
+                "BOOT", "BATON", "TIME MACHINE", "ARROW I", "ARROW II", "PULSAR 7", "CIRCUS",
+            ]),
+            ("MYSTADV2.D64", "HOWARTH II", &[
+                "BOOT", "EXPERIMENT", "WIZARD OF AKYRZ", "PERSEUS", "INDIANS", "WAXWORKS",
+            ]),
+        ];
+        let dir = stories_dir().join("scott-dialects/c64");
+        let mut seen = 0;
+        for (image, label, names) in sets {
+            let Ok(raw) = std::fs::read(dir.join(image)) else {
+                eprintln!("SKIP: no {image}");
+                continue;
+            };
+            seen += 1;
+            assert_eq!(raw.len(), D64_LEN, "{image}");
+            assert!(D64::looks_like_d64(&raw), "{image} is a Commodore disk");
+            let disk = D64::mount(raw).expect("it mounts");
+            assert_eq!(disk.volume_name(), Some(label), "{image}");
+            let listed: Vec<&str> = disk.files().iter().map(|f| f.name.as_str()).collect();
+            assert_eq!(listed, names, "{image}");
+            assert_eq!(disk.file_count(), names.len(), "{image}: and no raw-sector story");
+            assert_eq!(disk.story(), None, "{image}: nothing here is Z-code");
+
+            for file in disk.files() {
+                assert_eq!(file.file_type, CbmFileType::Prg, "{image}: {}", file.name);
+                // The extraction beside the image was made by the same public
+                // walk this module now does, and keeps the two load-address
+                // bytes — so a difference here is a difference in the walk.
+                let beside = dir.join("prg").join(image).join(format!("{}.prg", file.name));
+                let Ok(reference) = std::fs::read(&beside) else {
+                    eprintln!("SKIP: no {}", beside.display());
+                    continue;
+                };
+                assert_eq!(file.bytes, reference, "{image}: {}", file.name);
+                assert_eq!(disk.read_named(&file.name).as_ref(), Some(&reference), "{}", file.name);
+            }
+            // The eleven game files load at $4000 and the two BOOTs at $0801,
+            // which is what the specimen README records and what makes the
+            // kept load-address bytes worth keeping.
+            for file in disk.files() {
+                let load = u16::from_le_bytes([file.bytes[0], file.bytes[1]]);
+                let want = if file.name == "BOOT" { 0x0801 } else { 0x4000 };
+                assert_eq!(load, want, "{image}: {}", file.name);
+            }
+        }
+        if seen == 0 {
+            eprintln!("SKIP: no Commodore Scott Adams disks present");
+        }
     }
 
     /// A Commodore press offers no artwork and says so rather than guessing —

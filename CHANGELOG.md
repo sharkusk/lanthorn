@@ -23,6 +23,14 @@ Absolute URLs or no link.
 
 ### Added
 
+- **Three more kinds of original disk now open.** Atari 8-bit floppies
+  (`.atr`), Apple II DOS 3.3 floppies (`.dsk`) and Atari 8-bit loadable
+  binaries (`.xex`) mount like every other release medium, and an ordinary
+  Commodore `.d64` now lists the programs on it by name instead of reporting
+  nothing. These are the disks the Scott Adams games were sold on, so there is
+  no story on them lanthorn can play *yet* — point it at one and it opens the
+  disk, tells you what is on it, and says plainly that none of it is a game it
+  can run. The loaders that finish the job come next. (SQ-1458)
 - **Scott Adams TI-99/4A releases now load.** The twelve original Adventure
   International games — *Adventureland* through *The Golden Voyage* — were also
   sold for the TI-99/4A, and those releases are a completely different kind of
