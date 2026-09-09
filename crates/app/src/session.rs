@@ -1715,9 +1715,16 @@ impl GameSession {
 
     /// Supply a single keypress, step until the next input request or Quit,
     /// and return the turn result.
+    ///
+    /// `ch` not being a legal ZSCII input code (ZMSD §3.8) drops the
+    /// keystroke — matching `zvm::cpu::exec::Machine::supply_char`'s own
+    /// former runtime-checked behaviour, now enforced by
+    /// [`zvm::text::input::ZsciiInput`] at this boundary instead.
     pub fn submit_char(&mut self, ch: u8) -> TurnResult {
         self.arm_line_continuation();
-        self.machine.supply_char(ch);
+        if let Some(zscii) = zvm::text::input::ZsciiInput::new(ch) {
+            self.machine.supply_char(zscii);
+        }
         self.advance_after_input(false)
     }
 

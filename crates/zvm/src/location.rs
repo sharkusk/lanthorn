@@ -1439,6 +1439,7 @@ mod tests {
     // the HEADER name of a hand-built object, which is what they build.
     use crate::objects::short_name;
     use crate::screen::UpperWindow;
+    use crate::text::input::ZsciiInput;
 
     fn upper_with(rows: &[&str]) -> UpperWindow {
         let cols = rows.iter().map(|r| r.chars().count()).max().unwrap_or(0) as u16;
@@ -1604,7 +1605,7 @@ mod tests {
         for _ in 0..100_000u64 {
             match machine.step() {
                 StepResult::NeedLine { .. } | StepResult::Quit | StepResult::Restart | StepResult::Fault => break,
-                StepResult::NeedChar => { machine.supply_char(b'\n'); }
+                StepResult::NeedChar => { machine.supply_char(ZsciiInput::NEWLINE); }
                 StepResult::SaveRequest => { machine.complete_save(false); }
                 StepResult::RestoreRequest => { machine.complete_restore_failure(); }
                 StepResult::Continue => {}
@@ -2783,7 +2784,7 @@ mod tests {
         for _ in 0..100_000u64 {
             match machine.step() {
                 StepResult::NeedLine { .. } | StepResult::Quit | StepResult::Restart | StepResult::Fault => break,
-                StepResult::NeedChar => { machine.supply_char(b'\n'); }
+                StepResult::NeedChar => { machine.supply_char(ZsciiInput::NEWLINE); }
                 StepResult::SaveRequest => { machine.complete_save(false); }
                 StepResult::RestoreRequest => { machine.complete_restore_failure(); }
                 StepResult::Continue => {}

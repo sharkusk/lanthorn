@@ -5,6 +5,7 @@
 
 use zvm::cpu::exec::{Machine, StepResult};
 use zvm::memory::Memory;
+use zvm::text::input::ZsciiInput;
 
 /// Build a `Machine` with a buffer sink, call `init_caps()`, and run until
 /// `Quit` (or the step limit).  Returns all captured output as a String.
@@ -41,7 +42,7 @@ fn run_with_input(story: Vec<u8>, inputs: &[&str]) -> String {
                 machine.supply_line(next.next().copied().unwrap_or(""), 13);
             }
             StepResult::NeedChar => {
-                machine.supply_char(b'\n');
+                machine.supply_char(ZsciiInput::NEWLINE);
             }
             StepResult::SaveRequest => {
                 machine.complete_save(false);
@@ -227,7 +228,7 @@ fn strictz_reports_all_correct() {
             }
             StepResult::NeedChar => {
                 // The closing "Press any key." — any keystroke ends it.
-                machine.supply_char(b'\n');
+                machine.supply_char(ZsciiInput::NEWLINE);
             }
             StepResult::SaveRequest => machine.complete_save(false),
             StepResult::RestoreRequest => machine.complete_restore_failure(),

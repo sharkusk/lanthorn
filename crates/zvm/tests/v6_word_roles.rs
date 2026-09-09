@@ -44,6 +44,7 @@ use std::path::PathBuf;
 use zvm::cpu::exec::{Machine, StepResult};
 use zvm::grammar::{self, GrammarFormat};
 use zvm::memory::Memory;
+use zvm::text::input::ZsciiInput;
 
 /// A runaway guard for the boot run; Zork Zero's is the longest at a few
 /// million opcodes.
@@ -125,7 +126,9 @@ impl Probe {
                 StepResult::NeedChar => {
                     let k = *keys.get(i).unwrap_or(keys.last().unwrap_or(&13));
                     i += 1;
-                    machine.supply_char(k);
+                    machine.supply_char(
+                        ZsciiInput::new(k).expect("probe keys are legal ZSCII input codes"),
+                    );
                 }
                 other => panic!("story stopped at {other:?} before reaching a command prompt"),
             }

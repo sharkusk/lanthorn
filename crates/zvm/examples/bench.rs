@@ -40,6 +40,7 @@ use std::time::{Duration, Instant};
 use zvm::cpu::exec::{BootConfig, Machine, StepResult};
 use zvm::io::Output;
 use zvm::memory::Memory;
+use zvm::text::input::ZsciiInput;
 
 /// Discards everything the story prints, counting the bytes so a run can be
 /// shown to have done the same work as its reference (a benchmark that
@@ -118,7 +119,7 @@ fn run(story: &[u8], script: &[String], turns: u64) -> Run {
                 fed += 1;
             }
             // "Press any key" and the like: answer without spending a turn.
-            StepResult::NeedChar => m.supply_char(ENTER),
+            StepResult::NeedChar => m.supply_char(ZsciiInput::NEWLINE),
             // Nowhere to write and nothing to read — a benchmark must not
             // touch the filesystem, or it measures the disk.
             StepResult::SaveRequest => m.complete_save(false),

@@ -59,6 +59,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use zvm::cpu::exec::{BootConfig, Machine, PaintEvent, StepResult};
 use zvm::io::Output;
 use zvm::memory::Memory;
+use zvm::text::input::ZsciiInput;
 use zvm::resources::Resources;
 use zvm::screen::{rgb15_to_888, Palette, V6Cell, V6Metric, V6Text, ZColour};
 
@@ -374,7 +375,7 @@ fn answer(m: &mut Machine, pause: Pause, cursor: &mut usize) {
         }
         Pause::Char => {
             *cursor += 1;
-            m.supply_char(ENTER);
+            m.supply_char(ZsciiInput::NEWLINE);
         }
         Pause::Quit | Pause::Fault => {}
     }

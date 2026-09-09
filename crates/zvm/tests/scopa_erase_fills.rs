@@ -27,6 +27,7 @@ use std::path::PathBuf;
 
 use zvm::cpu::exec::{Machine, PaintEvent, StepResult};
 use zvm::memory::Memory;
+use zvm::text::input::ZsciiInput;
 
 fn story() -> Option<Vec<u8>> {
     let p = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../stories/scopa.z6");
@@ -58,7 +59,7 @@ fn scopa_paints_its_cards_as_erase_window_fills() {
                     break; // the game is asking for something a click will not answer
                 }
                 m.set_mouse(230, 320, 0b1);
-                m.supply_char(254);
+                m.supply_char(ZsciiInput::MOUSE_CLICK);
                 clicks += 1;
             }
             StepResult::NeedLine { .. } => m.supply_line("", 13),
@@ -133,7 +134,7 @@ fn scopa_drains_its_paints_interleaved() {
                     break;
                 }
                 m.set_mouse(230, 320, 0b1);
-                m.supply_char(254);
+                m.supply_char(ZsciiInput::MOUSE_CLICK);
                 clicks += 1;
             }
             StepResult::NeedLine { .. } => m.supply_line("", 13),
@@ -192,7 +193,7 @@ fn machine_feeds_its_own_paint_log_with_no_host_call() {
                     break;
                 }
                 m.set_mouse(230, 320, 0b1);
-                m.supply_char(254);
+                m.supply_char(ZsciiInput::MOUSE_CLICK);
                 clicks += 1;
             }
             StepResult::NeedLine { .. } => m.supply_line("", 13),

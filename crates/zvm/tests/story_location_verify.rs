@@ -22,6 +22,7 @@ use std::path::PathBuf;
 use zvm::cpu::exec::{Machine, StepResult};
 use zvm::location::{detect_location, find_player_object, LocationMethod};
 use zvm::memory::Memory;
+use zvm::text::input::ZsciiInput;
 
 fn stories_dir() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../stories")
@@ -47,7 +48,7 @@ fn boot_to_first_read(data: Vec<u8>) -> Option<Machine> {
             StepResult::NeedLine { .. } => return Some(machine),
             StepResult::Quit | StepResult::Restart | StepResult::Fault => return Some(machine),
             StepResult::Continue => {}
-            StepResult::NeedChar => machine.supply_char(b'\n'),
+            StepResult::NeedChar => machine.supply_char(ZsciiInput::NEWLINE),
             StepResult::SaveRequest => machine.complete_save(false),
             StepResult::RestoreRequest => machine.complete_restore_failure(),
             _ => return Some(machine),
@@ -64,7 +65,7 @@ fn run_one_turn(machine: &mut Machine, input: &str) {
         match machine.step() {
             StepResult::NeedLine { .. } | StepResult::Quit | StepResult::Restart | StepResult::Fault => return,
             StepResult::Continue => {}
-            StepResult::NeedChar => machine.supply_char(b'\n'),
+            StepResult::NeedChar => machine.supply_char(ZsciiInput::NEWLINE),
             StepResult::SaveRequest => machine.complete_save(false),
             StepResult::RestoreRequest => machine.complete_restore_failure(),
             _ => return,
@@ -293,7 +294,7 @@ fn restore_fixture(story: &str, save_name: &str) -> Option<Machine> {
             }
             StepResult::NeedLine { .. } if restored => return Some(m),
             StepResult::NeedLine { .. } => m.supply_line("x", 13), // "Restore from file:" prompt
-            StepResult::NeedChar => m.supply_char(b'\n'),
+            StepResult::NeedChar => m.supply_char(ZsciiInput::NEWLINE),
             StepResult::SaveRequest => m.complete_save(false),
             StepResult::Quit | StepResult::Restart | StepResult::Fault => return None,
             StepResult::Continue => {}

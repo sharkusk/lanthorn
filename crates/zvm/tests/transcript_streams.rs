@@ -35,6 +35,7 @@ use std::path::PathBuf;
 use zvm::cpu::exec::{Machine, StepResult};
 use zvm::io::BufferOutput;
 use zvm::memory::Memory;
+use zvm::text::input::ZsciiInput;
 
 /// The nine stories the SQ-1014 audit measured as failing, plus AMFV.
 const STORIES: &[&str] = &[
@@ -75,7 +76,7 @@ fn booted(name: &str) -> Option<Machine> {
     for _ in 0..4 {
         match run_to_input(&mut m) {
             StepResult::NeedLine { .. } => m.supply_line("", 13),
-            StepResult::NeedChar => m.supply_char(13),
+            StepResult::NeedChar => m.supply_char(ZsciiInput::NEWLINE),
             other => panic!("{name} stopped at {other:?} before its first prompt"),
         }
     }

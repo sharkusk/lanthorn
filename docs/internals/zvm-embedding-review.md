@@ -657,6 +657,7 @@ and unaffordable after a release.
 | 9 | module headers `//` → `//!`; crate-level `//!` docs; a compiled example | trivial | no | — | done, SQ-1398, SQ-1399 |
 | 10 | doc pass: de-lanthorn, drop the `location` root re-export, decide `True24` | small | partly | partly | partly: `location` re-export dropped and docs de-lanthorned (SQ-1397, SQ-1399); `True24` stays |
 | 11 | `FontMetrics`, `trait Resources`, revisit `Output: Any` | large | partly | partly | done, SQ-1402: `Resources` trait; `FontMetrics` closed earlier by `V6Metric` (SQ-1009); `Output: Any` kept by decision, documented |
+| 12 | a `ZsciiInput` newtype for `supply_char`, replacing the raw `u8` SQ-1419 had only runtime-checked | small — one new type, ~25 call sites across `zvm`, `app` and `zvm-cli` | **yes** | **yes** | done, SQ-1426 |
 
 On #5: `crates/zvm/src/fixtures.rs:11` is `PathBuf::from(env!("CARGO_MANIFEST_DIR"))`,
 unconditionally public, which bakes **the build machine's absolute source path**

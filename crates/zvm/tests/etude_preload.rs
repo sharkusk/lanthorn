@@ -17,6 +17,7 @@
 
 use zvm::cpu::exec::{Machine, StepResult};
 use zvm::memory::Memory;
+use zvm::text::input::ZsciiInput;
 
 /// Step until the next `NeedLine`/`NeedChar`/terminal `StepResult`, capturing
 /// every byte printed along the way. Panics on `Fault` (a real defect, not a
@@ -34,7 +35,7 @@ fn run_to_next_line_prompt(machine: &mut Machine) -> String {
             StepResult::NeedChar => {
                 // TerpEtude's menu is line-driven; a char prompt here would be
                 // an unrelated test section — answer Enter and keep going.
-                machine.supply_char(13);
+                machine.supply_char(ZsciiInput::NEWLINE);
             }
             StepResult::Continue => {}
             StepResult::Fault => {
