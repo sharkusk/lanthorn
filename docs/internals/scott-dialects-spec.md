@@ -57,6 +57,28 @@ settle the three questions Appendix A records; §3.1, §3.4, §3.7, §3.8, §9.1
 sections quote was measured on the §10.2 specimens rather than taken from any
 implementation.
 
+**One non-GPL secondary source, added 2026-09-09.**
+[`scott-c64-layout-findings.md`](scott-c64-layout-findings.md), this
+repository's own BSD-3-Clause investigation of the eleven Commodore 64
+*Mysterious Adventures* releases (SQ-1455, 2026-09-09), which read no GPL
+interpreter source at all — only this document, the public 1541 disk-image
+layout, the published 6502 opcode encodings, and the specimens themselves, with
+the freely redistributable `.dat` conversions as an oracle. §4.5, §4.6, §5.3,
+§6.1, §6.2, §6.4, §7.2 and §10.4 carry its results. **Every fact it reports was
+re-measured on the §10.4 specimens before being written here**, including the
+header address and its `JMP` marker, the pointer block's contents and order, the
+byte-packed *Ten Little Indians* lamp value, the system-message block, and the
+two per-release repairs of §5.3 — so those sections rest on the specimens, not
+on the findings document. Where they contradict an existing GPL implementation's
+behaviour, §6.1, §6.4 and §5.3 say which is right for these specimens and what
+the implementation does instead, without quoting it.
+
+The §10.5, §10.6 and §10.7 specimens were fetched and catalogued on the same
+date from atarimania.com, the Asimov Apple II archive mirror and
+myabandonware.com respectively; the identifications there are measurements on
+those files against §4.1, §4.5, §7.3, §7.4, §8.4 and §8.5, and no implementation
+was consulted for any of them.
+
 Several of the container formats below are also documented publicly and
 independently of any of the above, and an implementer should prefer the public
 document where one exists: the ZX Spectrum `.z80` snapshot format (World of
@@ -1087,11 +1109,37 @@ carries which fact. Indices are zero-based from the header address.
   count 6, word length 7, lamp turns 8, messages 9.
 - **Arrow of Death part 2 Commodore 64** — as Mysterious Commodore 64 except
   items 3, actions 1, words 2.
-- **Ten Little Indians Commodore 64** — items 1, actions 2, words 3, rooms 4,
-  max carried = low byte of 5, start room = high byte of 5, **treasure count =
-  low byte of 6, word length = high byte of 6, lamp turns = high byte of 7,
-  messages = high byte of 8**.
+- **Ten Little Indians Commodore 64** — **this one is not a word grid at all,
+  and reading it as one recovers a wrong lamp value.** Read it as bytes, from
+  **the header address plus two** (i.e. from word 1, past the two bytes that in
+  this family are a `JMP` operand — see below): four little-endian words (items,
+  actions, words, rooms), then **four single bytes** (max carried, start room,
+  treasure count, word length), then **one filler byte**, then two ordinary
+  little-endian words (lamp turns, messages). Seventeen bytes of fields, an odd
+  number of bytes into the header, which is the whole point: the packing is at
+  byte granularity. *Worked example, on the specimen named in §10.4:* those
+  seventeen bytes are `49 00 A1 00 52 00 3F 00 05 3D 00 04 00 F4 01 43 00`,
+  giving items 73, actions 161, words 82, rooms 63, max carried 5, start room
+  61, treasure count 0, word length 4, **lamp turns 500** and messages 67.
+  Read on a word grid instead — which is what an earlier draft of this section
+  described, following an existing implementation, as "lamp turns = high byte of
+  word 7" — word 7 is `$F400` and its high byte is 244, which is the *low byte
+  of the correct value* mistaken for the answer. 500 is what that title's
+  published conversion says (§10.3), and 244 is not; the byte-level reading is
+  the one to implement. (The same draft's "messages = high byte of word 8" does
+  give the right answer, 67, by the identical mechanism — word 8 is `$4301` and
+  its high byte `$43` is the *low* byte of the byte-level word `43 00`. It
+  agrees only because 67 fits in a byte. 500 does not, which is why the lamp is
+  where the rule shows itself, and why one field agreeing is no evidence for the
+  other.)
 - **None** — the release is refused.
+
+**Word 0 of the early shape is not a field.** On every Commodore 64 Mysterious
+Adventures release measured (§10.4) the two bytes at the header address are the
+operand of a `JMP` instruction whose opcode byte immediately precedes the
+header, and the counts begin two bytes in. The value is therefore constant
+across the whole family rather than merely unused; see §6.2 for the addresses
+and for what that buys a loader.
 
 ### 4.6 What must be tabulated, and what can be re-derived
 
@@ -1133,6 +1181,47 @@ compressed action record (§5.1) and the length byte of a compressed string
 record (§5.2). An implementer supporting a release must obtain roughly
 seventeen numbers for that exact release; there is no derivation for most of
 them.
+
+**But look for a driver pointer block before you tabulate anything.** The
+paragraph above is a statement about the *format*: nothing in the format
+declares where a table is. It is not a statement about any particular
+**program**, and a memory image contains a program as well as its data. Where
+one interpreter binary was shipped with several different data payloads — which
+is how a whole series is normally built — its initialisation code plants the
+table addresses into fixed locations from literal operands, and those operands
+sit at a **fixed offset inside every release of that series**. That is a de
+facto pointer table: not self-describing, because a reader must still be told
+where to look and in what order the addresses appear, but one constant per
+*series* instead of a dozen per *release*.
+
+The whole Commodore 64 Mysterious Adventures family is such a series, and §6.2
+gives its offsets. The recognition procedure that finds one, stated generally:
+take two releases believed to share a driver, compare them byte for byte, and
+note where the identical prefix ends; the pointer block lies inside that prefix,
+and every one of its operands is a byte that *differs* between the two. Then
+check the candidate addresses against tables you can already locate by other
+means — the dictionary from its §4.1 signature, and the end of the last table
+from the start of the picture data — and confirm that reading forward from each
+candidate with §4.4's encodings makes every table end exactly where the next
+begins.
+
+**What a loader still needs per title, when a pointer block is present.** Two
+numbers, and no more:
+
+1. **Which header field order (§4.5) the release uses.** Not derivable, but
+   cheaply *checkable*: the action table begins immediately after the header,
+   and its start is also the dictionary address minus (action count + 1) × 16.
+   A wrong field order gives a wrong action count, and the two arithmetics then
+   disagree. Trying each candidate shape and keeping the one where they agree is
+   a sound identification procedure — with the caveat of §5.3 that a stored
+   action count is occasionally simply wrong, in which case the disagreement is
+   the *defect*, not the wrong shape, and the span between the header's end and
+   the dictionary is the authority.
+2. **The dictionary's verb-cell and noun-cell split.** Genuinely not derivable,
+   as this section says above. Its consequence is smaller than it looks: where
+   the room descriptions have their own pointer, a loader never needs the
+   dictionary's *end*, only how to divide the cells it reads. Getting the split
+   wrong costs vocabulary, not layout.
 
 The catalogue an existing implementation carries is 65 records: 54 full
 memory-image records and 11 cut-down records holding only header counts, used
@@ -1372,6 +1461,24 @@ word count must be reduced to 79; Time Machine verb 86; Arrow of Death part 1
 noun 82; Arrow of Death part 2 verb 80; Escape from Pulsar 7 noun 102; Circus
 noun 96; Feasibility Experiment noun 80; Perseus and Andromeda noun 82.
 
+**Escape from Pulsar 7, Commodore 64.** **The header's action count (195) is
+wrong and must be replaced by 190**, exactly as for the German Commodore 64
+*Gremlins* above. Measured on the §10.4 specimen: the header ends at `$5DF1` and
+the dictionary begins at `$69E1`, a span of 3,056 bytes, which is 191 sixteen-
+byte records to the byte — and 191 records is what an action count of 190 means
+(§4.4's counts are highest-index). The 191st record read at a count of 195 is
+the dictionary's own first cells, `41 55 54 4F 00 47 4F 00 …`, and 196 records
+overrun the dictionary by 80 bytes. All 191 records validate: every vocabulary
+word is below 150 × 150.
+
+**The Time Machine, Commodore 64.** Its item-description block holds **62**
+NUL-terminated strings where the header's item count of 62 implies 63 records,
+and its item-location table is a full 63 bytes. Item 62 therefore has a location
+and no stored description, and a loader **must supply an empty description
+rather than read a 63rd string**, which would run into the location table. The
+control is every other title in the series: on the §10.4 specimens the item
+block holds exactly (item count + 1) strings, and only this one does not.
+
 **System-message remapping.** The stored system-message block is not in the
 order an interpreter wants, and the permutation is per release family with no
 marker in the file. The families are: early Adventure International (three
@@ -1423,7 +1530,20 @@ it:
    releases.
 
 The Commodore 64 releases are **not** early-family: they use the later table
-order, and their pictures are a separate Commodore 64 bitmap set.
+order, minus the room-image, item-flag and item-image lists, which they do not
+have (the action table starts immediately after the header, so there is no room
+for them).
+
+**Their pictures are §8.2's family B vector format, the same as the ZX
+releases** — not a Commodore 64 bitmap set. Measured on all eleven §10.4
+specimens: the picture block begins at the first `$FF` at or after the address
+in the pointer block's sixth slot (§6.2), and walking it with §8.2's opcodes —
+`$C0` move, `$C1` fill, `$FF` end, anything else a line whose opcode byte is the
+vertical operand — yields **exactly the room count** of images and consumes the
+file to its **final byte**, in every one of the eleven. Nothing in these files is
+a §8.3 bitmap. §8.2's colour paragraph already anticipates this, in saying that
+Commodore 64 releases use the Commodore 64 palette with remap table A; the
+present section previously contradicted it, and §8.2 was right.
 
 **Verified against specimens.** Decompressing the ZX snapshot of *Escape from
 Pulsar 7* to a flat 48K image and scanning for a plausible early-shape header
@@ -1461,9 +1581,70 @@ and drops one:
 
 Two releases deviate further, as §4.5 records: *Arrow of Death part 2* takes
 items from word 3, actions from word 1 and words from word 2, and *Ten Little
-Indians* packs four more facts into byte halves. Four Commodore 64 releases in
-the series — *Escape from Pulsar 7*, *Feasibility Experiment*, *Perseus and
-Andromeda*, *Waxworks* — use the plain early shape with no byte-packing.
+Indians* is byte-packed throughout. Four Commodore 64 releases in the series —
+*Escape from Pulsar 7*, *Feasibility Experiment*, *Perseus and Andromeda*,
+*Waxworks* — use the plain early shape with no byte-packing.
+
+**The header is at a fixed address, and it is marked.** In every one of the
+eleven §10.4 specimens the header address is **`$5DD7`**, and the three bytes
+`4C 19 4D` sit at `$5DD6` — a 6502 `JMP $4D19`. Word 0 of the header is that
+instruction's operand, which is why §4.5's early shape calls it unused and why
+its value never varies; the counts begin at **`$5DD9`**. The three-byte string
+at `$5DD6` is a serviceable recognition signature for the whole family in its own
+right.
+
+The header's **length** varies with its shape, and the action table begins
+immediately after it. Measured, from `$5DD6`'s operand (word 0) inclusive:
+
+| shape | header bytes | action table begins at |
+|---|---|---|
+| early | 26 | `$5DF1` |
+| Mysterious Commodore 64, and Arrow of Death part 2 | 24 | `$5DEF` |
+| Ten Little Indians | 23 | `$5DEE` |
+
+That start is independently confirmed by the arithmetic of §4.6 — dictionary
+address minus (action count + 1) × 16 — in **ten of the eleven**; the eleventh
+is *Escape from Pulsar 7*, whose stored action count is wrong (§5.3).
+
+**The table addresses are in the file, at a fixed offset.** These eleven are one
+interpreter binary with eleven different data payloads: the region `$4000` to
+`$432F` is byte-identical in all of them, and the first byte that differs
+anywhere is at `$4330`. The image begins with a `JMP` to `$48E3`; three bytes
+past that entry point, at **`$48E6`**, a run of twelve load-immediate /
+store-to-zero-page pairs plants **six sixteen-bit addresses**, low byte then high
+byte, as literal operands. The operands are the bytes at **`$48E7`, `$48EB`,
+`$48EF`, … every fourth byte through `$4913`**, and pairing them in order gives:
+
+| pair | zero-page destination | address of |
+|---|---|---|
+| 1 | `$32`/`$33` | room descriptions |
+| 2 | `$2C`/`$2D` | room connections |
+| 3 | `$34`/`$35` | messages |
+| 4 | `$36`/`$37` | item descriptions |
+| 5 | `$2E`/`$2F` | item locations |
+| 6 | `$30`/`$31` | the first byte after the item-location table |
+
+A **seventh** address follows in the same routine, planted by two
+load-immediate / store-to-absolute pairs rather than to zero page: its low byte
+is at **`$4917`** and its high byte at **`$491C`**, and it is the **dictionary**.
+That is a free and complete cross-check on §4.1: in all eleven specimens the
+plain `AUTO\0GO\0` signature occurs exactly once and at exactly this address.
+
+Reading forward from those addresses with §4.4's plain encodings, every table
+ends exactly where the next begins, in all eleven — (room count + 1)
+NUL-terminated room descriptions, (room count + 1) × 6 exit bytes,
+(message count + 1) messages, (item count + 1) item descriptions and
+(item count + 1) location bytes — with the single exception §5.3 records for
+*The Time Machine*. The whole memory image is then accounted for:
+
+```
+$4000  entry vector, JMP $48E3      $48E6  pointer block (6 + 1 addresses)
+$4406  system messages (44)         $5DD6  JMP $4D19
+$5DD7  header                       →  actions  →  dictionary
+       →  room descriptions  →  room connections  →  messages
+       →  item descriptions  →  item locations
+       →  a run of zero bytes (61, 76 or 101)  →  picture data  →  end of file
+```
 
 ### 6.3 Table layout
 
@@ -1475,18 +1656,23 @@ auto-get noun. **No Mysterious release uses the compressed action table and
 none uses the compressed text scheme.** The differences are ordering and
 absence, as §6.1 lists, plus the Commodore 64 dictionary repairs of §5.3.
 
-### 6.4 System messages: the second-person wording
+### 6.4 System messages: wording, and which platform's wording
 
 Mysterious releases ship their own driver messages, and an interpreter must
-produce the series' wording. Three strings are **not in the file at all** and
-must be supplied: the item separator is `" - "`, the message separator is a
-newline, and the visible-objects heading is a newline followed by
-`Things I can see:` and another newline.
+produce the series' wording. **Which wording, though, is a property of the
+platform, not of the series** — see the Commodore 64 subsection below, which is
+first-person throughout and contradicts the table here at almost every line.
 
-Beyond that the series is second-person where Adventure International is
-first-person. The two complete alternative sets differ as follows, and an
-interpreter should expose the choice as an option that a recognised Mysterious
-release forces on:
+Two strings are **not in the file at all** on the ZX releases and must be
+supplied: the item separator is `" - "` and the message separator is a newline.
+A third, the visible-objects heading — a newline, `Things I can see:`, another
+newline — must be supplied on the ZX releases too, but **is** in the file on the
+Commodore 64 releases.
+
+The table below is the **ZX Spectrum** wording. There the series is
+second-person where Adventure International is first-person, and an interpreter
+should expose the choice as an option that a recognised Mysterious ZX release
+forces on:
 
 | situation | Adventure International default | Mysterious |
 |---|---|---|
@@ -1511,6 +1697,54 @@ when one is recognised — **including for a reference-format database**, which
 is exactly why a catalogue needs those eleven header-only records: the
 "authentic light messages" option and the "prehistoric lamp" option. §9.2
 specifies both.
+
+**The Commodore 64 releases are first-person, and their block is in the file.**
+Measured on all eleven §10.4 specimens: a 790-byte block at the fixed address
+`$4406` is **byte-identical across every one of the eleven** and holds **44**
+strings, each terminated by a NUL or a carriage return under §4.4's rules.
+§4.3's "read the first string there; if it is not `NORTH`, back the start up by
+one byte" search is satisfied at the address itself, with no back-up needed.
+The block, in stored order, with the addresses it occupies in one of the
+specimens:
+
+| # | address | string | # | address | string |
+|---|---|---|---|---|---|
+| 0 | `$4406` | `NORTH` | 22 | `$451A` | `I am carrying:` |
+| 1 | `$440C` | `SOUTH` | 23 | `$4529` | `I don't see it here` |
+| 2 | `$4412` | `EAST` | 24 | `$453D` | `That is beyond my power` |
+| 3 | `$4417` | `WEST` | 25 | `$4555` | `It's risky moving in the dark!` |
+| 4 | `$441C` | `UP` | 26 | `$4574` | `Try a direction` |
+| 5 | `$441F` | `DOWN` | 27 | `$4584` | `I fell and broke my neck!` |
+| 6 | `$4424` | `EXITS: ` | 28 | `$459E` | `I'm carrying too much!` |
+| 7 | `$442C` | `Things I can see:` | 29 | `$45B5` | `I'm DEAD!!` |
+| 8 | `$443E` | `I'm in a ` | 30 | `$45C0` | `Want to play again ? ` |
+| 9 | `$4448` | `I'ts too dark to see!` | 31 | `$45D6` | `Resume play on a saved game ? ` |
+| 10 | `$445E` | `The Light ran out!` | 32 | `$45F5` | `I've stored ` |
+| 11 | `$4471` | `Light runs out in ` | 33 | `$4602` | ` treasures` |
+| 12 | `$4484` | ` turns` | 34 | `$460D` | `Out of 100 that rates ` |
+| 13 | `$448B` | `XNSEWUD"` | 35 | `$4624` | `I can't do that just now!` |
+| 14 | `$4494` | `" is a word I don't know..sorry!` | 36 | `$463E` | `I don't understand you` |
+| 15 | `$44B5` | `I don't know what a "` | 37 | `$4655` | `Not a sausage!` |
+| 16 | `$44CB` | `" is` | 38 | `$4664` | `The game is over, thanks for playing` |
+| 17 | `$44D0` | `I can't go in that direction` | 39 | `$4689` | `WELL DONE! Mission completed!` |
+| 18 | `$44ED` | `O.K.` | 40 | `$46A7` | `PRESS RECORD & PLAY THEN HIT RETURN` |
+| 19 | `$44F2` | `---WHAT NOW ? ` | 41 | `$46CB` | `PRESS PLAY THEN HIT RETURN` |
+| 20 | `$4501` | `Eh?` | 42 | `$46E6` | `ERROR ON TAPE WRITE!` |
+| 21 | `$4505` | `I'm not carrying it!` | 43 | `$46FB` | `ERROR ON TAPE READ - REWIND TAPE` |
+
+The misspelling in string 9 is the file's, not a transcription error. Strings
+0-5 confirm §4.4's rule that Commodore 64 English releases keep no separate
+direction-word table and take those six from the head of this block.
+
+**None** of `You are in a`, `You can also see`, `You haven't got it` or
+`You are carrying` occurs anywhere in any of the eleven files. The second-person
+table above may well be right for the ZX releases; it is demonstrably not a
+property of the series, and an interpreter must select the wording by the
+platform it recognised, never by the series alone.
+
+An existing implementation forces the second-person set for the whole series,
+which produces the ZX wording on a Commodore 64 release; for these specimens
+that is wrong, and the file's own block is right.
 
 ### 6.5 Platforms and containers
 
@@ -1793,6 +2027,25 @@ implement the emulator and all twenty-one recognisers; support only the
 releases whose catalogued pass count is **zero**, which is a real and
 defensible subset including several disk releases; or require already-unpacked
 images as input.
+
+**The second option is larger than it sounds, and the largest single group of
+Commodore 64 releases falls inside it.** All eleven Mysterious Adventures titles
+on the two compilation disks of §6.5 need **no cruncher at all**. Measured on
+the §10.4 specimens: each extracted program file loads at `$4000`, begins
+`4C E3 48` (a `JMP` to its own entry vector) followed by a long run of genuinely
+empty workspace, and every table §4 describes sits in it in the clear — plain
+ASCII strings readable with a strings tool, plain sixteen-byte action records,
+no §5.1 compressed action table and no §5.2 compressed text anywhere. The long
+zero run is what makes these look as though they might carry a stub; they do
+not. **The absence of a recognisable cruncher signature in such a file is not a
+warning sign — it is the answer.** No 6502 execution is needed at any stage, and
+the work reduces to the disk-image reader specified above, stripping the
+two-byte load address, and §6.2's fixed addresses.
+
+The Commodore 64 *Hulk* release of §10.7 is a second zero-pass case, found the
+same way: its database file carries the fixed name `SHULK.DB` this section
+already lists, is a plain uncrunched program file loading at `$8030`, and holds
+the §4.1 plain signature at `$8308`.
 
 **Which file inside a disk image.** Four policies, per release: the largest file
 by block count; a fixed name (`SAGA.DB`, `SHULK.DB`, `PIRATE`, `SAGA1`,
@@ -2862,12 +3115,21 @@ inventory has the prehistoric option off and is wrong for this series.
 ### 9.3 First person versus second person
 
 §6.4 tabulates the two message sets. An interpreter should expose the choice as
-an option and force it on for a recognised Mysterious Adventures release,
-whatever container that release arrived in.
+an option and force it on for a recognised Mysterious Adventures **ZX Spectrum**
+release. **Do not force it on the series as a whole**: the Commodore 64
+releases of the same eleven titles carry a first-person block in the file, and
+§6.4 gives it in full. The wording follows the platform, not the series.
 
-*Test.* Enter a room in a Mysterious release: the preamble must read
+*Test, ZX.* Enter a room in a Mysterious ZX release: the preamble must read
 `You are in a `, and the inventory heading `You are carrying:`. Any transcript
 containing `I'm in a ` is running the wrong set.
+
+*Test, Commodore 64.* Enter a room in a Mysterious Commodore 64 release: the
+preamble must read `I'm in a `, the inventory heading `I am carrying:`, and the
+visible-objects heading `Things I can see:`. A transcript containing
+`You are in a ` is running the wrong set — and since the eleven files contain no
+second-person string at all, that wording can only have come from the
+interpreter overriding what the file says.
 
 ### 9.4 Command execution order
 
@@ -2885,6 +3147,23 @@ differ.
 Every specimen below is publicly fetchable. Sizes and SHA-256 digests are those
 observed when this document was written; a mirror may differ, and the digest is
 the check.
+
+**In this repository they are already on disk — look there before fetching
+anything.** They live under the gitignored `stories/scott-dialects/`, one
+directory per platform, each with a `README.txt` naming its source and the
+sha256 of every file in it:
+
+| directory | holds | section |
+|---|---|---|
+| `ti99/` | the twelve tokenised TI-99/4A releases | §10.2 |
+| `spectrum/` | the twenty ZX snapshots, four of them negative controls | §10.3 |
+| `mysterious-dat/` | the eleven Mysterious reference-format conversions | §10.3 |
+| `c64/` | the two Mysterious compilation D64s, the thirteen program files extracted from them, and the two Questprobe D64s | §10.4, §10.7 |
+| `atari/` | the seven US S.A.G.A. Atari 8-bit two-sided disk sets, plus one Atari executable | §10.5 |
+| `apple/` | the seven US S.A.G.A. Apple II two-sided disk sets | §10.6 |
+| `msdos/` | the two MS-DOS Questprobe releases | §10.7 |
+
+Nothing there is committed and nothing there may be staged.
 
 ### 10.1 The reference-format oracle
 
@@ -3006,7 +3285,7 @@ snapshot reports 171 actions, 76 words, 5 carried and 99 messages against the
 conversion's 166, 78, 6 and 99. **Check the header numbers before assuming
 table equality is the right test.**
 
-### 10.4 Commodore 64
+### 10.4 Commodore 64: the Mysterious Adventures compilation disks
 
 `/if-archive/scott-adams/games/c64/mystadv.zip`, 187,015 bytes, sha256
 `08907754669907ab651bb5f0caf0e974d3d938563385e582297065f7cb943bcd`, contains
@@ -3017,22 +3296,277 @@ the two Mysterious Adventures compilation disk images:
 | MYSTADV1.D64 | 174,848 | `acfcedccc858e6ffb7f5833e4bce80e989c5bd242876a72c66a2aee1870d3798` |
 | MYSTADV2.D64 | 174,848 | `17eb01436ab33eb715bdfc10a46d0a21b259ca35a15d841d4ed15ab76a1e6ca2` |
 
-Both are 35-track images with no error map, and both contain the plain
-`AUTO\0GO\0` signature in their raw sector data — at file offsets 0x4739 and
-0x4B29, which are *sector* offsets and become meaningful only after the named
-file is extracted and any decrunching applied. Their file names are those listed
-in §6.5, and a reader must be told which game is wanted.
+Both are 35-track images with no error map, both carry an ordinary CBM DOS
+directory at track 18 sector 1, and neither uses any copy protection,
+non-standard interleave or bad-sector trick. Their file names are those listed
+in §6.5, plus a `BOOT` program on each which is a tokenised BASIC menu carrying
+no game data, and **a reader must be told which game is wanted** — nothing in
+the container distinguishes one from the others except its name.
 
-### 10.5 Not on the IF Archive
+**Extract the program file before quoting an offset.** Earlier drafts of this
+section gave the file offsets `0x4739` and `0x4B29` at which the plain
+`AUTO\0GO\0` signature falls in the raw D64 bytes. Those are artefacts of where
+the sectors happen to lie and are of no use to a loader; the figures worth
+having are the per-title addresses below, which are addresses in the extracted
+memory image.
 
-The Atari 8-bit and Apple II disk images the US S.A.G.A. releases ship on are
-not on the IF Archive. Their conventional filenames, which is how the
-companion-disk pairing of §7.3 finds them, are of the form
-`S.A.G.A. NN - Title vV.V-NNN (year)(Adventure International)(US)(Side A).atr`
-and `Scott Adams Graphic Adventure N - Title vV.V-NNN (crack) side A.dsk`.
-An implementer will have to source them elsewhere and should state which exact
-file a claim was verified against, since these releases differ by crack and by
-side.
+Each extracted program file keeps its two-byte load address, which is `$4000` in
+all eleven, so array byte 2 corresponds to `$4000`. None is crunched (§7.2).
+
+| game file | bytes | sha256 (first 12) | dictionary | header | pictures |
+|---|---|---|---|---|---|
+| `BATON` | 27,555 | `7dd995cff54e` | `$685F` | `$5DD7` | `$78EF` |
+| `TIME MACHINE` | 27,622 | `4297dd1e11d3` | `$680F` | `$5DD7` | `$7870` |
+| `ARROW I` | 30,534 | `b447f1205d2e` | `$675F` | `$5DD7` | `$78E0` |
+| `ARROW II` | 34,054 | `76c14159832e` | `$68FF` | `$5DD7` | `$7CAA` |
+| `PULSAR 7` | 26,162 | `b8c93d0e45db` | `$69E1` | `$5DD7` | `$7BF2` |
+| `CIRCUS` | 24,400 | `e57513c61102` | `$684F` | `$5DD7` | `$7912` |
+| `EXPERIMENT` | 33,742 | `c13a8cee97de` | `$67C1` | `$5DD7` | `$7874` |
+| `WIZARD OF AKYRZ` | 29,071 | `64bdf4ba53e0` | `$6A6F` | `$5DD7` | `$7BCC` |
+| `PERSEUS` | 27,785 | `f72fa51dc1f9` | `$6851` | `$5DD7` | `$7D8F` |
+| `INDIANS` | 28,174 | `faf18b1edee8` | `$680E` | `$5DD7` | `$7A44` |
+| `WAXWORKS` | 28,644 | `adb73a99dc4b` | `$69D1` | `$5DD7` | `$7F2F` |
+
+Every dictionary address here is **also** readable from the file itself, at
+§6.2's pointer block, and the picture address is derivable as the first `$FF` at
+or after the pointer block's sixth address; both columns are given so a reader
+can check its arithmetic rather than because either must be tabulated.
+
+The headers those addresses decode to, with the §4.5 shape each uses:
+
+| game file | shape | items | acts | words | rooms | carry | start | treas | wlen | lamp | msgs |
+|---|---|---|---|---|---|---|---|---|---|---|---|
+| `BATON` | Mysterious C64 | 48 | 166 | 78 | 31 | 6 | 1 | 0 | 4 | 200 | 99 |
+| `TIME MACHINE` | Mysterious C64 | 62 | 161 | 85 | 44 | 6 | 43 | 0 | 4 | 200 | 73 |
+| `ARROW I` | Mysterious C64 | 64 | 150 | 90 | 52 | 5 | 1 | 0 | 4 | 32767 | 82 |
+| `ARROW II` | Arrow of Death part 2 | 90 | 176 | 82 | 65 | 9 | 1 | 0 | 4 | 400 | 87 |
+| `PULSAR 7` | early | 88 | **195**, see §5.3 | 145 | 45 | 6 | 1 | 0 | 4 | 200 | 74 |
+| `CIRCUS` | Mysterious C64 | 65 | 165 | 97 | 36 | 6 | 1 | 0 | 4 | 150 | 72 |
+| `EXPERIMENT` | early | 65 | 156 | 79 | 59 | 6 | 10 | 10 | 4 | 200 | 65 |
+| `WIZARD OF AKYRZ` | Mysterious C64 | 49 | 199 | 85 | 40 | 6 | 1 | 4 | 4 | 65535 | 99 |
+| `PERSEUS` | early | 59 | 165 | 130 | 40 | 6 | 1 | 0 | 4 | 200 | 96 |
+| `INDIANS` | Ten Little Indians | 73 | 161 | 82 | 63 | 5 | 61 | 0 | 4 | **500** | 67 |
+| `WAXWORKS` | early | 57 | 189 | 105 | 41 | 6 | 1 | 0 | 4 | 250 | 91 |
+
+**How strong an oracle the §10.3 conversions are for these, honestly.** Decoding
+each program file with §4.4's encodings and comparing every table against the
+same title's conversion, field for field:
+
+| game file | actions | room descs | connections | messages | item descs | item locations |
+|---|---|---|---|---|---|---|
+| `BATON` | equal | equal | equal | equal | equal | equal |
+| `ARROW I` | equal | equal | equal | equal | equal | equal |
+| `ARROW II` | equal | equal | equal | equal | equal | equal |
+| `EXPERIMENT` | equal | equal | equal | equal | equal | equal |
+| `PERSEUS` | equal | equal | equal | equal | equal | equal |
+| `WAXWORKS` | equal | equal | equal | equal | equal | equal |
+| `CIRCUS` | equal | 4 differ | equal | 25 differ | 8 differ | equal |
+| `INDIANS` | 1 differs | 4 differ | equal | 10 differ | 2 differ | equal |
+| `TIME MACHINE` | 162 v 165 | 18 differ | equal | 22 differ | 62 v 63 | equal |
+| `WIZARD OF AKYRZ` | 200 v 202 | 36 differ | equal | 80 differ | 32 differ | 1 differs |
+| `PULSAR 7` | 191 v 221 | 39 differ | equal | 75 v 76 | 89 v 91 | 89 v 91 |
+
+So for **six of the eleven** the program file and the conversion hold the same
+database exactly, and exact table equality is the right test. For the other five
+it is the wrong test: they are **different releases of the same games**, the
+same situation §6.1 records for the ZX *Golden Baton*, and their tables are
+nonetheless raw and decode cleanly. Compare the header counts first, exactly as
+§10.2 and §10.3 say. (Note that the room-connection table is identical in all
+eleven, including the five divergent releases — a revision changed the prose and
+the script, never the map.)
+
+### 10.5 Atari 8-bit: the US S.A.G.A. disk releases
+
+Not on the IF Archive. Seven two-sided releases were fetched from
+<https://www.atarimania.com/machines/atari-400-800-xl-xe?q=saga> as one zip per
+title, each holding two `.atr` images named `SAGA #N - Title [side A].atr` and
+`[side B].atr`. **All fourteen images are exactly 92,176 bytes and carry §7.3's
+six-byte header `96 02 80 16 80 00`** — the single-density, 720-sector,
+128-bytes-per-sector shape, and the only shape §7.3 accepts.
+
+| zip | size | sha256 |
+|---|---|---|
+| SAGA_1_Adventureland.zip | 64,126 | `41af79bae080b02f4b50c3fa6726a2575c485ae8e61b44202e5c885bcad1bb96` |
+| SAGA_2_Pirate_Adventure.zip | 53,937 | `a7798cd176a358cb3bad8dd2ba0e489452fd8080c3c96a5788a1dbb1a5854fb3` |
+| SAGA_3_Mission_Impossible.zip | 53,423 | `04add3634a865baab47847e197f361ed0f24ce0b8f8edab8b2b1cfc095ab36f0` |
+| SAGA_4_Voodoo_Castle.zip | 93,831 | `dba90aef410928f49649516cac5cbe06ba14f2320b2b72d577f6992551b6e703` |
+| SAGA_5_The_Count.zip | 61,798 | `82e2b9804fb4dd68f83fb0c0611bf77e54fdc7d85dd0a705aba4776f4000a150` |
+| SAGA_6_Strange_Odyssey.zip | 91,195 | `62beb7f09f991b8bd2cbc60cd75de1a511fb16b4014efbab593af8441b83cc40` |
+| SAGA_No_13_..._Claymorgue_Castle.zip | 77,178 | `90abe53963b00c270467e8150244999e26917ab23d958ab8adf5137e817c7ee6` |
+
+Side A is the database side and side B the companion picture side, which is what
+§7.3's companion-disk paragraph expects. Two cheap checks confirm it, and both
+were run on the images rather than taken on trust. First, **each side A decodes a
+coherent US-shape header (§4.5) at §7.3's mastering offset `0x04F9`**:
+
+| title | side A sha256 (first 12) | wlen | words | acts | items | msgs | rooms | carry | start | treas | lamp | treasure room |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| #1 Adventureland | `7c48bc7779d1` | 3 | 69 | 169 | 65 | 75 | 33 | 6 | 11 | 13 | 125 | 3 |
+| #2 Pirate Adventure | `547c0e902c73` | 3 | 79 | 177 | 66 | 88 | 26 | 6 | 1 | 2 | 150 | 1 |
+| #3 Mission Impossible | `7575154bd458` | 3 | 64 | 161 | 53 | 81 | 23 | 7 | 2 | 0 | 10000 | 1 |
+| #4 Voodoo Castle | `3f7db7281806` | 3 | 89 | 189 | 65 | 99 | 25 | 9 | 1 | 0 | 15000 | 0 |
+| #5 The Count | `5dc27fa23830` | 3 | 79 | 219 | 72 | 88 | 22 | 7 | 1 | 0 | 175 | 0 |
+| #6 Strange Odyssey | `83985e1ac74e` | 4 | 79 | 223 | 55 | 94 | 35 | 6 | 1 | 5 | 10000 | 22 |
+| #13 Claymorgue Castle | `d0dcba442113` | 5 | 109 | 267 | 75 | 79 | 32 | 10 | 1 | 13 | 3000 | 19 |
+
+Second, **the declared word length agrees with the §4.1 signature actually
+present**: three-letter cells `AUT\0GO\0` in #1 to #5, four-letter cells
+`AUTO\0GO\0` in #6. Claymorgue's word length is 5 and none of §4.1's plain
+signatures occurs in it; its dictionary arrangement is unexamined. No side B
+decodes a plausible header at `0x04F9`.
+
+The side B digests, for a claim to name: `a308387c9220`, `e2cfea52ea58`,
+`b28ab6872c41`, `2a417fb62f14`, `37fd7e4fd1cf`, `9783df409f69`, `9542de4bb9d8`,
+in the same title order.
+
+A family-C loader starts from §7.3 for the container and the mastering
+constants, §4.5 for the US header field order, §4.4 for the table encodings, and
+§8.3 with §8.6 for the pictures. It will still need the per-title (usage, index,
+offset) picture lists §8.3 describes; nothing in these images supplies them.
+
+**One Atari file here is not a disk image at all.** `The Hulk.xex`, 21,821
+bytes, sha256 `c5c18baa36348e04a0a932bafad3f901f2777324a03019ceea5894b26bf075ab`,
+from myabandonware.com, is an Atari binary-load executable: it begins `FF FF`,
+the segmented-load signature, followed by the load address `$4000` and the end
+address `$9530`. It carries the plain `AUTO\0GO\0` signature at file offset
+`0x2CC4`, so it is a memory image of the family §4 describes arriving in a
+container this document does not specify. §7.3's refusal rule — that header-less
+images of the same content are refused by name rather than guessed at by size —
+covers it correctly today.
+
+### 10.6 Apple II: the US S.A.G.A. disk releases
+
+Not on the IF Archive. Seven two-sided releases were fetched from the Asimov
+mirror at <https://mirrors.apple2.org.za/ftp.apple.asimov.net/images/games/adventure/scott_adams/>,
+one zip per title, each holding two `.dsk` images and the crack's own log. Every
+`.dsk` is exactly **143,360 bytes** — 35 × 16 × 256, §7.4's flat sector image —
+and none is a `.woz`, `.nib`, `.po` or `2IMG`.
+
+| zip | size | sha256 |
+|---|---|---|
+| SAGA 1 Adventureland v2.1-416 (4am crack) | 148,148 | `510b2915bdf11b9f44d3f5bf5740dad5c461e1d567eea0c32a00ab2d9abd5bc9` |
+| SAGA 2 Pirate Adventure v2.1-408 (4am crack) | 151,535 | `103439757ae0a44bc877efa9c102404b968b47a6dcf2297e7b94f810764c96b3` |
+| SAGA 3 Mission Impossible v2.1-306 (4am crack) | 116,376 | `33a4f7e9d9b26840e51c2b07c2df9507a8aeedd709a1428047245fbc2748818a` |
+| SAGA 4 Voodoo Castle v2.1-119 (4am crack) | 96,198 | `b04b8eddb7f2a42b6ef81bd82ba488b015bd6436fb72bd562405c04a8a3bcdae` |
+| SAGA 5 The Count v2.1-115 (4am crack) | 86,484 | `832986cc47544652c26eb4a15326ec937a563e904818c06ba6c8b9cbc7ed71ba` |
+| SAGA 6 Strange Odyssey v2.1-119 (4am crack) | 143,807 | `037a3fc4d0ce9b611a80ba8b017d6056edd5ad9daf8ebe82d9c0969831a7d309` |
+| SAGA 13 Claymorgue Castle v2.2-122 (4am crack) | 113,751 | `5f73061d54ed2037eaa07dcad6c7687bdc54386166a37c8ab9e1a89621419253` |
+
+Here the **boot side** is the database side. Walking §7.4's VTOC at track 17
+sector 0 and the catalogue chain finds on each boot disk exactly one file whose
+normalised name is one of §7.4's recognised database names — and note that
+Claymorgue's is `DATABASE`, not the `SORCEROR OF CLAYMORGUE CASTLE` spelling
+§7.4 also lists:
+
+| title | boot side | boot side sha256 (first 12) | database file | family-D sub-variant |
+|---|---|---|---|---|
+| #1 Adventureland | side B | `53064cac8ddc` | `A1.DAT` | plain |
+| #2 Pirate Adventure | side B | `0a01e8bb97e3` | `A2.DAT` | plain |
+| #3 Mission Impossible | side B | `773479102468` | `A3.DAT` | plain |
+| #4 Voodoo Castle | side B | `c34dba003a7f` | `A4.DAT` | **scrambled** |
+| #5 The Count | side B | `ba3d66fbcce6` | `DATABASE` | **scrambled** |
+| #6 Strange Odyssey | side B | `6039602205a6` | `A6.DAT` | plain |
+| #13 Claymorgue Castle | side B | `5ca192b45d2f` | `DATABASE` | **scrambled** |
+
+The sub-variant column was settled by §7.4's own string test, which is exactly
+the cheap check it recommends: read the file named `M2` through its track/sector
+list and take the 31 bytes at file offset `0x172C`. On #4, #5 and #13 they read
+exactly `COPYRIGHT 1983 NORMAN L. SAILER` — and the crack logs in the same zips
+credit "graphic routines by Norm Sailer" — which selects §8.4's **scrambled**
+byte placement and its distinct compression scheme. On #1, #2, #3 and #6 the
+`M2` file is 3,584 bytes rather than 6,656, so `0x172C` is past its data, the
+test fails, and the release is plain.
+
+The split shows a second time, independently: the three scrambled titles are
+exactly the three whose picture files (`PAK.INVEN`, `PAK.LET0` … `PAK.LET11`)
+sit on the boot disk and whose side A is not a readable DOS 3.3 disk at all,
+while the four plain titles keep an ordinary DOS 3.3 side A holding `Rnnnn`- and
+`Bnnnnn`-named picture files.
+
+The non-boot side digests, in the same title order: `b2d542032ba7`,
+`8afd74db4799`, `5395140182c3`, `0b0572df3f37`, `1ad44a16aecc`, `623bbe2759bc`,
+`98a734f7ef97`.
+
+A family-D loader starts from §7.4 for the container, the catalogue walk and the
+`0x135`/`0x016D` database constants, §4.5 for the US header field order, §4.4
+for the table encodings, and §8.4 with §8.6 for the pictures — including both of
+§8.4's byte placements and both of its compression schemes, since these fourteen
+images exercise all of them. The per-title (usage, index, offset, length) picture
+lists §8.4 requires are not in these images.
+
+### 10.7 MS-DOS and the Commodore 64 Questprobe releases
+
+All four from <https://www.myabandonware.com/>.
+
+**MS-DOS.** Two Questprobe releases. §8.5 names only the MS-DOS *Hulk*; the
+*Fantastic Four* release is new to this catalogue and is the **same** family-E
+CGA picture format with a **different filename convention**.
+
+| zip | size | sha256 |
+|---|---|---|
+| The-Hulk_DOS_EN.zip | 104,117 | `c1fb4ad12fe4cbff6f2a4b9fec7e60ec5cb4e2c0933267f670ee6d9a0975e345` |
+| Questprobe-...-Human-Torch-and-the-Thing_DOS_EN.zip | 182,147 | `39d75246e3f2db66ca26b92931582e75da214b801332c0a5e5aac75a7a2fe5d4` |
+
+*The Hulk* holds `START.EXE`, `HULK.BAT`, and `ADVENT.DAT` (18,897 bytes, sha256
+`f07a57451e6d95c12a093310d6d0bf194f4161258265fc81090ff0b75ce9bbcc`). **The
+database is not a memory image**: it is the plain reference text format of §2,
+carriage-return terminated, and its §2.2 header reads (unused first integer
+4730) items 54, actions 261, words 128, rooms 20, max carried 10, start room 1,
+treasures 17, word length 4, lamp 150, messages 99, treasure room 16 — the
+reference format's own field order. No §4.1 signature occurs in
+it, which is as it should be — those are memory-image signatures. Its pictures
+are the `.PAK` files, named exactly as §8.5 and §8.6 say: `R01nn`, `B01nnR`,
+`B01nnI`. Sampling `R0100.PAK` against §8.5's fixed header positions gives
+graphics chunk 1,490, `0x0D` = `0xFF` (unlined), raw start 6, raw end 6,316,
+width byte 70 (280 pixels), height 78.
+
+*Fantastic Four* holds `FANTFOUR.EXE`, `FANTFOUR.TXT` and `SPL53P.DAT` (41,472
+bytes, sha256
+`321787ad12ca0316f6f4a987c977b4891f27a779c5133e9f0f97308e6c0ed87c`). **Its
+database is neither a memory image nor the reference text format**, and this
+document does not describe it: it opens with a quoted title followed by a
+comma-separated number list, `"FF #1 ",48,6987,96,53,34,12,6,178,1,172,14,6,523,
+0,40,0,22,20`, and then one number per line. No §4.1 signature occurs in it. Its
+**pictures are family E**, though: `R001.PAK` read at §8.5's fixed header
+positions gives graphics chunk 2,315, `0x0D` = `0xFF`, raw start 6, raw end
+6,316, width byte 70 (280 pixels), height 78 — the same shape and canvas as the
+Hulk's. Two of §8.6's naming rules nevertheless fail on it, and an implementer
+should treat them as rules about the *Hulk* release rather than about MS-DOS:
+
+- the names are three-digit `Rnnn` / `Bnnn`, with no `01` prefix and no trailing
+  `R` or `I`, so §8.6's "two-digit index at name positions 3-4 for a room and
+  4-5 for an object" and its trailing-letter usage rule both mis-read them;
+- the set uses `S`-prefixed names, `S000.PAK` through `S020.PAK`, where §8.6
+  says a leading `S` "carries no usage and defaults to a room picture, and no
+  known release uses it". **This release uses it, twenty-one times**, and
+  `S000.PAK` reads `0x0D` = `0x00`, i.e. *lined*, where both sampled `R`
+  pictures are unlined.
+
+**Commodore 64.** Two Questprobe disk images, both 174,848-byte 35-track D64s
+with an ordinary directory.
+
+| zip | size | sha256 | image | image sha256 |
+|---|---|---|---|---|
+| The-Hulk_C64_EN.zip | 83,620 | `cb3516f561c3875378c5abd425c199dcf00004bcb8570a99ba0086bbfcc096d4` | `QUESTPR1.D64` | `5035c0ae93ebfd144e8c473c29ed24c30e07f9e5e5457730e573bbb28d95a4e4` |
+| Questprobe-...-Human-Torch-and-the-Thing_C64_EN.zip | 95,722 | `09e09af98974a1597d2807fe4e4f3b09451315daf8b9128589b4f48b04ce4c23` | `QUESTPR3.D64` | `68c72e55ff77a4ef025c67a79f8007114aca6073dc614e7c0bc6f6fb55ac53a8` |
+
+*The Hulk* on `QUESTPR1.D64` is the **US family-C release**, not the UK
+family-A one, and the disk says so twice. Its database file is named `SHULK.DB`,
+one of §7.2's fixed names; extracted through the block chain it is 9,858 bytes,
+loads at `$8030`, is **not crunched**, and carries §4.1's plain `AUTO\0GO\0`
+(four-letter cells, plain text) at `$8308` rather than the packed `aUTOgO` of the
+compressed dialect. Its picture files are named `R01nnn`, `B01nnnR` and
+`B01nnnI`, which is §8.3's Commodore 64 rule and §8.6's usage convention exactly.
+
+*Fantastic Four* on `QUESTPR3.D64` is **not identified**, and an implementer
+should know that before spending time on it. Its picture files are `Rnnn`,
+`Bnnn` and `Snnn` — the `S` prefix again, twenty-one of them. But none of §7.2's
+fixed database names appears; the data-looking files are `SAGA.OBJ` at `$1300`,
+`SAGA.C64` at `$3A00`, `SAGA.TED` at `$2400`, and a matched pair `DATA` at
+`$9000` and `BATA` at `$8000` of 16,386 bytes each; and **none of §4.1's nine
+signatures occurs anywhere in the image or in any of those files**. No file
+begins with a `$0801` depacker stub, so this is not simply a §7.2 cruncher case
+either. Its database encoding is unknown to this document.
 
 ---
 
