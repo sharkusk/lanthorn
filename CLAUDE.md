@@ -88,6 +88,14 @@ declare, or if `t-all` drops a group.
   is invisible to it. CI's `cargo check`-equivalent is the `--all-features` test
   build (see below), which is where that half is caught; add `--all-features` here
   too if you want the in-crate tests covered locally before pushing.
+- **When a merge touches anything `app` depends on** — an engine crate's public
+  API, a name rule, a type's fields — the integrator's merged-tree run must
+  include the in-crate tests, not only the integration filter: `cargo nextest
+  run -p lanthorn --lib --features t-all <filter>`. A filter with no
+  `--features` compiles zero of `app`'s in-crate tests and reads as a pass
+  regardless of what broke. SQ-1416 reached CI red this way — two production
+  regressions in `glulx_session.rs`'s in-crate tests, because both the lane
+  and the merge check filtered by name without the feature.
 - **Never put the full gate in a parallel lane's brief.** A three-lane wave that
   gates each lane AND the combination pays four full builds — plus four clippy
   builds, which share no fingerprints with them — for one merge. Lanes run
