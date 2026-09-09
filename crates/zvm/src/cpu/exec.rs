@@ -50,10 +50,19 @@ fn opcode_name(count: OperandCount, opcode: u8) -> String {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[non_exhaustive]
 pub struct SoundEvent {
+    /// Which sound to play: 1/2 select the built-in high/low bleeps; `>= 3`
+    /// selects a Blorb `Snd ` resource by number.
     pub number: u16,
+    /// What to do with it: 1=prepare 2=start 3=stop 4=finish.
     pub effect: u8,
+    /// Loudness on the Z-machine's 1..=8 scale; 255 means loudest.
     pub volume: u8,
+    /// How many times to repeat playback, from the volume word's high byte;
+    /// 255 means forever, 0/omitted means play once. The engine only records
+    /// this — applying it is the host's job.
     pub repeats: u8,
+    /// The (v5+) packed routine address the host calls when the sound
+    /// finishes playing; 0 when the story gave none.
     pub routine: u16,
 }
 
@@ -85,10 +94,16 @@ impl SoundEvent {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[non_exhaustive]
 pub struct PictureEvent {
+    /// The picture number the story named.
     pub number: u16,
+    /// The v6 window the call targeted (`ScreenState.v6.current` at the time
+    /// of the call).
     pub window: u8,
+    /// The picture's left edge, in pixels within `window`.
     pub x: u16,
+    /// The picture's top edge, in pixels within `window`.
     pub y: u16,
+    /// `true` for `erase_picture`, `false` for `draw_picture`.
     pub erase: bool,
     /// Total chars printed to window 0 (the main scrolling window) before this
     /// event — anchors a window-0 inline picture (drop-cap, room icon) to its
@@ -261,7 +276,18 @@ pub enum StepResult {
     /// v1-4 story, where byte 1 has no such meaning). A host should show it
     /// as already-typed, editable text at the prompt — TerpEtude option 12
     /// and Beyond Zork's "AGAIN" both pre-load a line this way.
-    NeedLine { text_buf: u32, parse_buf: u32, preload: String },
+    NeedLine {
+        /// Address of the text buffer the story gave `read`/`sread`; pass to
+        /// [`Machine::supply_line`] unchanged.
+        text_buf: u32,
+        /// Address of the parse buffer, or 0 in v5+ to mean "skip parsing";
+        /// pass to [`Machine::supply_line`] unchanged.
+        parse_buf: u32,
+        /// The pre-loaded input line, already decoded to text (see the
+        /// variant docs above); show it as already-typed, editable text at
+        /// the prompt.
+        preload: String,
+    },
     /// `read_char` — host must supply a single keypress.
     NeedChar,
     /// `save` — host must write interpreter state to a file.
@@ -321,7 +347,12 @@ struct PendingInput {
 /// instruction's store target, so `restore_undo` can write 2 back into it.
 #[derive(Debug, Clone)]
 pub struct UndoSnapshot {
+    /// The Quetzal-encoded state at the moment `save_undo` was called.
     pub blob: Vec<u8>,
+    /// The `save_undo` instruction's own store target, so `restore_undo` can
+    /// write 2 back into it (ZMSD's undo opcodes report success/failure
+    /// through the *original* `save_undo` call's result, not the `restore_undo`
+    /// call's).
     pub store: Option<u8>,
 }
 
@@ -334,7 +365,10 @@ pub struct TimedInterrupt {
 /// The Z-machine interpreter — ties memory and CPU state together.
 /// Fields are `pub` so a host can attach its own I/O channels.
 pub struct Machine {
+    /// The story image and its address space — dynamic, static, and high
+    /// memory (ZMSD §1.1).
     pub mem: Memory,
+    /// CPU registers, call stack, and variables.
     pub state: State,
     /// Pluggable text output sink. Defaults to `BufferOutput`.
     out: Box<dyn Output>,
@@ -621,6 +655,10 @@ pub struct Machine {
     /// 2..=9; defaults to black-on-white (2/9). Set via `set_default_colours`,
     /// re-applied at every `init_caps` (so `@restart` keeps the host's choice).
     pub default_bg_colour: u8,
+    /// The interpreter's default foreground colour, published to the game in
+    /// header byte $2D (ZMSD §8.3.3) alongside [`Self::default_bg_colour`];
+    /// see that field's docs for the standard colour range and when it is
+    /// re-applied.
     pub default_fg_colour: u8,
     /// Set when `step()` returns `Fault`; the host drains it for display.
     pub fault_trace: Option<crate::cpu::trace::StackTrace>,
@@ -1272,6 +1310,15 @@ impl Machine {
         }
     }
 
+    /// Tell the story the screen is `rows` lines by `cols` characters, writing
+    /// header bytes $20/$21 (ZMSD §8.4) and, on v6, resizing windows 0 and 1 to
+    /// match (in native pixels, via the current [`Machine::v6_cell`]).
+    ///
+    /// This is the character-grid host API; a v6 host that already has the
+    /// screen in pixels should prefer [`Machine::set_v6_screen_px`], which
+    /// writes the exact pixel values instead of ones reconstituted from a
+    /// grid (see that method's docs for why the two can disagree). Below v6,
+    /// also re-fits an already-open upper window to the new width.
     pub fn set_screen_dims(&mut self, rows: u8, cols: u8) {
         let cell = self.v6_cell();
         crate::screen::write_screen_dims(&mut self.mem, rows, cols, cell);

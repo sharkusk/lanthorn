@@ -89,6 +89,10 @@ pub struct State {
 }
 
 impl State {
+    /// A freshly booted execution state: empty call stack, empty eval stack,
+    /// no latched fault, with the program counter at `pc` (the story's first
+    /// instruction — ZMSD §5.4's packed `main` routine for Version 6, the
+    /// header's `initial_pc` otherwise).
     pub fn new(pc: u32) -> State {
         State {
             pc,

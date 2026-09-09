@@ -171,6 +171,13 @@
 //! See `examples/run_story.rs` for a complete, runnable stdin/stdout host
 //! that loads a real story file and plays it.
 
+#![warn(missing_docs)]
+
+/// The execution engine: boot configuration ([`cpu::boot`]), instruction
+/// decoding and disassembly ([`cpu::decode`], [`cpu::disasm`],
+/// [`cpu::disasm_cache`], [`cpu::opcode_help`]), the `Machine`/`StepResult`
+/// fetch-decode-execute loop ([`cpu::exec`]), call-frame/variable state
+/// ([`cpu::state`]), and crash stack traces ([`cpu::trace`]).
 pub mod cpu;
 pub mod dictionary;
 pub mod error;

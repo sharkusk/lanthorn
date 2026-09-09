@@ -105,7 +105,23 @@ fn fmt_branch(b: &Branch, next_pc: u32) -> String {
 /// rather than a bare constant.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 #[non_exhaustive]
-pub enum OpRole { Plain, Object, MemAddr, Routine, StringAddr, JumpOffset, VarRef }
+pub enum OpRole {
+    /// No special meaning — render as an ordinary constant or variable sigil.
+    Plain,
+    /// Names an object number (`obj#N`).
+    Object,
+    /// A byte address elsewhere in the story's memory (`@0x……`).
+    MemAddr,
+    /// A packed routine address, rendered unpacked to its byte address.
+    Routine,
+    /// A packed string address, rendered unpacked to its byte address.
+    StringAddr,
+    /// A branch/jump displacement, rendered resolved to its target address.
+    JumpOffset,
+    /// A constant that IS a variable number, rendered as the variable it
+    /// names (`sp`/`localN`/`gNN`) rather than a bare constant.
+    VarRef,
+}
 
 /// Semantic role of operand `index` for this opcode (version-aware). `Plain`
 /// for every operand not in the table below. Verified against this file's
@@ -230,7 +246,14 @@ pub fn describe_instruction(instr: &Instr, version: u8, unpack: &Unpack) -> Vec<
 /// Header-derived context for unpacking packed routine/string addresses.
 /// `routine_off`/`string_off` are only consulted for versions 6 and 7.
 #[derive(Clone, Copy)]
-pub struct Unpack { pub version: u8, pub routine_off: u16, pub string_off: u16 }
+pub struct Unpack {
+    /// Z-machine version this context unpacks addresses for.
+    pub version: u8,
+    /// Routine-offset word (header `$28`), consulted only for v6/v7.
+    pub routine_off: u16,
+    /// String-offset word (header `$2A`), consulted only for v6/v7.
+    pub string_off: u16,
+}
 
 impl Unpack {
     /// Build from a story's header. Reads the routine-offset word at 0x28 and

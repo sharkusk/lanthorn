@@ -783,18 +783,33 @@ pub fn opcode_help(opcode: u32) -> Option<OpcodeHelp> {
 /// its data occupies in the stream.
 #[derive(Clone, Copy, Debug)]
 pub struct Operand {
+    /// The addressing-mode nibble (see `GLULX_NOTES.md`'s operand addressing
+    /// modes table) that says how `value` was decoded — a constant, a memory
+    /// address, a stack pop/push, or a call-frame local, at one of three
+    /// widths.
     pub mode: u8,
+    /// The constant, memory address, or local offset this operand's data
+    /// bytes decoded to, zero-extended to 32 bits regardless of the mode's
+    /// natural width.
     pub value: u32,
+    /// Whether the opcode uses this operand as a store destination (it
+    /// receives a result) rather than a load (it supplies one).
     pub is_store: bool,
+    /// The stream address of this operand's own data bytes, i.e. where
+    /// `value` was read from (after the shared mode-nibble run).
     pub data_addr: u32,
 }
 
 /// A fully decoded instruction spanning `[addr, next)`.
 #[derive(Clone, Debug)]
 pub struct Instr {
+    /// Address of the instruction's first byte (the opcode number's first byte).
     pub addr: u32,
+    /// The decoded opcode number (see `GLULX_NOTES.md`'s opcode number encoding).
     pub opcode: u32,
+    /// Address immediately following the instruction, i.e. where the next one starts.
     pub next: u32,
+    /// The instruction's operands, decoded in argument order.
     pub operands: Vec<Operand>,
 }
 
@@ -1105,6 +1120,7 @@ impl Unit {
 /// Public per-string summary for the inspector's Strings list.
 #[derive(Clone, Debug)]
 pub struct StringInfo {
+    /// Address of the string object's own type byte (`0xE0`/`0xE1`/`0xE2`) in the image.
     pub addr: u32,
     /// `0xE0` (C string), `0xE1` (compressed), or `0xE2` (Unicode).
     pub type_byte: u8,
@@ -1115,10 +1131,13 @@ pub struct StringInfo {
 /// Public per-function summary for the inspector's function list.
 #[derive(Clone, Debug)]
 pub struct FuncInfo {
+    /// Address of the function's own type byte (`0xC0`/`0xC1`) in the image.
     pub addr: u32,
     /// `0xC0` (stack-args) or `0xC1` (locals-args).
     pub type_byte: u8,
+    /// Total number of local-variable slots the function's locals-format list declares.
     pub locals_count: u32,
+    /// How confidently this function was discovered — see [`Tier`].
     pub tier: Tier,
     /// Accelerated-function number if the VM has assigned one, else `None`.
     pub accel: Option<u32>,

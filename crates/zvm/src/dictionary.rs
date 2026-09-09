@@ -15,10 +15,22 @@
 use crate::memory::Memory;
 use crate::text::encode::encode_word_mem;
 
+/// A parsed Z-machine parse dictionary (ZMSD §13), ready for word lookup and
+/// input tokenising. Build one with [`load`] (the story's standard dictionary)
+/// or [`load_at`] (a custom dictionary address the `tokenise` opcode supplied).
 pub struct Dictionary {
+    /// Byte length of each entry, header-declared: at least 4 in v1–3, 6 in
+    /// v4+ (ZMSD §13.2). May exceed the key length — the extra bytes are
+    /// game-defined data this crate does not interpret.
     pub entry_length: u8,
+    /// Number of entries in the dictionary (absolute value of the header's
+    /// signed count; always ≥ 1 after loading).
     pub count: u16,       // absolute count (always ≥ 1)
+    /// Byte address of the first entry, immediately after the separator list
+    /// and the entry-length/count header fields.
     pub base: u32,        // byte address of first entry
+    /// Word-separator ZSCII codes (ZMSD §13.1) — punctuation that ends a word
+    /// even without a preceding space, and is itself tokenised as a one-byte word.
     pub separators: Vec<u8>,
     sorted: bool,
     key_len: u8,          // 4 for v3, 6 for v4+

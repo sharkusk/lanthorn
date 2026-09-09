@@ -289,8 +289,14 @@ pub const NUMSTYLES: u32 = 11;
 /// display. Plain data — keeps `gvm` zero-dependency.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct StyleColour {
+    /// The resolved foreground colour (`0xRRGGBB`), or `None` if the window
+    /// type set no `stylehint_TextColor` hint.
     pub fg: Option<u32>,
+    /// The resolved background colour (`0xRRGGBB`), or `None` if the window
+    /// type set no `stylehint_BackColor` hint.
     pub bg: Option<u32>,
+    /// Whether `stylehint_ReverseColor` requested swapping foreground and
+    /// background on display.
     pub reverse: bool,
 }
 
@@ -306,10 +312,18 @@ pub struct StyleColour {
 /// styles distinguishable. Plain data — keeps `gvm` zero-dependency.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct StyleAttrs {
+    /// The `stylehint_Weight` hint (bold vs. normal), or `None` if unset.
     pub weight: Option<u32>,
+    /// The `stylehint_Oblique` hint (italic vs. upright), or `None` if unset.
     pub oblique: Option<u32>,
+    /// The `stylehint_Indentation` hint in ems, or `None` if unset; negative
+    /// values are a hanging indent.
     pub indent: Option<i32>,
+    /// The `stylehint_ParaIndentation` hint in ems, or `None` if unset;
+    /// negative values are a hanging indent.
     pub para_indent: Option<i32>,
+    /// The `stylehint_Justification` hint (`stylehint_just_*`), or `None` if
+    /// unset.
     pub justify: Option<u32>,
 }
 
@@ -452,8 +466,11 @@ pub mod datetime {
     /// `glk.h`: `{ glsi32 high_sec; glui32 low_sec; glsi32 microsec; }`.
     #[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
     pub struct GlkTimeVal {
+        /// The top 32 bits of the signed epoch-second count.
         pub high_sec: i32,
+        /// The bottom 32 bits of the signed epoch-second count.
         pub low_sec: u32,
+        /// The sub-second fraction, in microseconds.
         pub microsec: i32,
     }
 
@@ -463,13 +480,21 @@ pub mod datetime {
     /// `microsec` 0–999999.
     #[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
     pub struct GlkDate {
+        /// The full four-digit year.
         pub year: i32,
+        /// The month, 1-12 (1 = January).
         pub month: i32,
+        /// The day of month, 1-31.
         pub day: i32,
+        /// The day of week, 0-6 (0 = Sunday).
         pub weekday: i32,
+        /// The hour, 0-23.
         pub hour: i32,
+        /// The minute, 0-59.
         pub minute: i32,
+        /// The second, 0-59 (may be 60 at a leap second).
         pub second: i32,
+        /// The sub-second fraction, in microseconds (0-999999).
         pub microsec: i32,
     }
 
@@ -654,9 +679,15 @@ pub struct Rect {
 /// comparing rects.)
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub enum WinTree {
+    /// A window with no children — the leaf that actually holds text, a grid,
+    /// or a graphics surface.
     Leaf {
+        /// The window's Glk id (`winid_t` as a plain integer).
         id: u32,
+        /// Which kind of window this is (text buffer, text grid, graphics,
+        /// blank).
         wintype: WinType,
+        /// The window's resolved on-screen rectangle.
         rect: Rect,
         /// The window's Normal-style background colour from its own snapshot
         /// (packed RGB `0x00RRGGBB`), or `None` if the game set none (host uses
@@ -671,6 +702,8 @@ pub enum WinTree {
         /// empty cells match the reversed text instead of showing the base. (SQ-0403)
         reverse: bool,
     },
+    /// An internal split node joining two children — the result of a
+    /// `glk_window_open` split, never directly visible to the game.
     Pair {
         /// true for an Above/Below split (children stacked), false for Left/Right.
         vertical: bool,
@@ -681,6 +714,8 @@ pub enum WinTree {
         /// (rows if vertical, cols if not) — the host gives `first` this many
         /// cells, then the border cell (if `border`), then `second` the rest.
         split: u32,
+        /// This pair window's own resolved rectangle (the union of its two
+        /// children plus any border).
         rect: Rect,
         /// The Normal-style background colour of this split's KEY window (the new
         /// window that created the border) from its snapshot, or `None` if the
@@ -690,7 +725,9 @@ pub enum WinTree {
         /// The Normal-style foreground colour of this split's KEY window, or
         /// `None` if absent/a pair/unset.
         key_fg: Option<u32>,
+        /// The top/left (or left) child, in on-screen position order.
         first: Box<WinTree>,
+        /// The bottom/right (or right) child, in on-screen position order.
         second: Box<WinTree>,
     },
 }
@@ -1396,11 +1433,31 @@ pub enum StreamKind {
     /// is the write high-water mark (`bufeof` in cheapglk) — the largest element
     /// index ever written, capped at `len`. `seekmode_End` and the seek clamp are
     /// relative to `hiwater`, not `len`.
-    Memory { addr: u32, len: u32, pos: u32, unicode: bool, hiwater: u32 },
+    Memory {
+        /// The starting address in Glulx main memory the stream reads/writes
+        /// through.
+        addr: u32,
+        /// The length, in elements, of the `[addr, addr+len)` region backing
+        /// this stream.
+        len: u32,
+        /// The current element cursor (read/write position, and seek target).
+        pos: u32,
+        /// Whether elements are 32-bit Unicode code points (`true`) or bytes
+        /// (`false`).
+        unicode: bool,
+        /// The write high-water mark (`bufeof` in cheapglk): the largest
+        /// element index ever written, capped at `len`. `seekmode_End` and the
+        /// seek clamp are relative to this, not `len`.
+        hiwater: u32,
+    },
     /// A file stream over the in-memory VFS. `unicode` selects the on-file
     /// encoding (4-byte-BE / UTF-8 vs 1 byte per char); the mutable name/mode/pos
     /// state lives in `Model::file_streams` keyed by stream id so this stays `Copy`.
-    File { unicode: bool },
+    File {
+        /// Whether the on-file encoding is 4-byte-BE Unicode (`true`) or one
+        /// byte per character (`false`).
+        unicode: bool,
+    },
     /// A `SavedGame`-usage stream: a host conduit fully decoupled from the VFS.
     /// Opens successfully for every mode (Read succeeds even with no prior save,
     /// so the game always reaches `@save`/`@restore` and the host decides).
@@ -1410,7 +1467,11 @@ pub enum StreamKind {
     /// The resource bytes + read cursor + text/binary flag live in
     /// `Model::resource_streams` keyed by stream id so this stays `Copy`;
     /// `unicode` selects 32-bit vs Latin-1 read elements.
-    Resource { unicode: bool },
+    Resource {
+        /// Whether read elements are 32-bit Unicode code points (`true`) or
+        /// Latin-1 bytes (`false`).
+        unicode: bool,
+    },
 }
 
 /// A Glk stream.

@@ -72,8 +72,15 @@ use crate::screen::ZColour;
 #[derive(Debug, Clone, Copy, Default)]
 #[non_exhaustive]
 pub struct TextAttrs {
+    /// The Z-machine text-style bitmask in effect for this run (ZMSD §8.7.1:
+    /// 1=reverse, 2=bold, 4=italic, 8=fixed-pitch). Reverse video is already
+    /// folded out of `fg`/`bg` below — see this struct's own doc, "pre-reverse-swap".
     pub style: u8,
+    /// The run's logical foreground colour, as the story last set it — not yet
+    /// swapped with `bg` for a reverse-video run.
     pub fg: ZColour,
+    /// The run's logical background colour, as the story last set it — not yet
+    /// swapped with `fg` for a reverse-video run.
     pub bg: ZColour,
 }
 
@@ -89,6 +96,10 @@ impl TextAttrs {
 
 /// Trait for Z-machine text output sinks.
 pub trait Output: Any {
+    /// Emit `s` to output stream 1, the main screen (ZMSD §7.1.1). This is the
+    /// trait's one required method — every other output method (`print_styled`,
+    /// `print_attr`, and so on) defaults to falling back to it, so a minimal
+    /// sink needs only this and [`Output::as_any`]/[`Output::as_any_mut`].
     fn print(&mut self, s: &str);
     /// Print `s` carrying the current Z-machine text-style bitmask
     /// (ZMSD §8.7.1: 1=reverse, 2=bold, 4=italic, 8=fixed-pitch). The default
@@ -193,6 +204,10 @@ pub trait Output: Any {
     fn next_command(&mut self) -> Option<String> {
         None
     }
+    /// Immutable downcast support — lets a caller recover the sink's concrete
+    /// type from a `Box<dyn Output>`/`&dyn Output` to read state the trait
+    /// doesn't expose (see this module's docs on why `Output: Any`). A typical
+    /// implementation is simply `self`.
     fn as_any(&self) -> &dyn Any;
     /// Mutable downcast support — required to drain sink state a concrete sink
     /// exposes beyond this trait (e.g. a transcript sink's own "take buffered
@@ -286,6 +301,8 @@ pub fn decode_command_record(line: &str) -> Vec<u8> {
 /// [`BufferOutput::replay`] seeds input stream 1 from a slice of records so a
 /// test can drive [`Output::next_command`] without a filesystem.
 pub struct BufferOutput {
+    /// Everything routed to output stream 1 (ZMSD §7.1.1), the main screen,
+    /// concatenated in print order.
     pub buf: String,
     /// Everything routed to output stream 2 (ZMSD §7.1.1), concatenated.
     pub transcript: String,
@@ -304,6 +321,8 @@ impl Default for BufferOutput {
 }
 
 impl BufferOutput {
+    /// Build an empty sink: no output yet on any stream, and nothing queued
+    /// for input stream 1 (see [`BufferOutput::replay_records`] to seed that).
     pub fn new() -> Self {
         BufferOutput {
             buf: String::new(),

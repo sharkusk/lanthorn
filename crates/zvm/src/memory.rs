@@ -7,6 +7,11 @@
 use crate::error::ZError;
 use crate::header::{parse_header, Header};
 
+/// The story image's address space (ZMSD §1.1, §1.2): dynamic memory is
+/// readable and writable, static and high memory are read-only, and every
+/// multi-byte value is big-endian. Owns the raw bytes and the parsed
+/// [`Header`], and caches a handful of facts that are expensive to
+/// recompute but fixed for the life of a story image.
 #[derive(Debug)]
 pub struct Memory {
     bytes: Vec<u8>,

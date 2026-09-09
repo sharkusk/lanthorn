@@ -133,6 +133,8 @@
 //! See `examples/run_story.rs` for a complete stdin/stdout host that loads a
 //! real `.dat` file and plays it.
 
+#![warn(missing_docs)]
+
 mod loader;
 mod options;
 mod scottfree_save;

@@ -36,11 +36,23 @@ pub(crate) const FIXED_COMMAND_OPCODES: [u16; 38] = [
     75, 76, 77, 78, 79, 80, 81, 82, 83, 84, 85, 86, 87, 88, 89,
 ];
 
+/// What the host should do after [`Vm::step`] runs a turn (or does nothing,
+/// if no command was buffered) — see the crate-level docs for the full
+/// `step`/`supply_line` protocol.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum StepResult {
+    /// Reserved for a future "keep stepping, no new input needed yet"
+    /// outcome; [`Vm::step`] never actually returns this today — every call
+    /// resolves to [`StepResult::NeedLine`] or [`StepResult::Quit`] (see the
+    /// crate-level docs' "no separate engine-fault outcome" note).
     Continue,
+    /// The turn ran to completion and the VM is waiting on the player's next
+    /// command. Read what it printed with [`Vm::take_output`], then hand the
+    /// next line to [`Vm::supply_line`].
     NeedLine,
+    /// The game has ended (a win, a death, or the QUIT command). The host
+    /// should stop calling [`Vm::step`].
     Quit,
 }
 
@@ -68,7 +80,13 @@ pub enum RestoreError {
     /// `supported` is the newest version this build can restore
     /// ([`Vm::SNAPSHOT_VERSION`]). Restoring it would misread every field
     /// after the header, so this is refused before touching any of them.
-    NewerVersion { found: u16, supported: u16 },
+    NewerVersion {
+        /// The format version number the snapshot's header declares.
+        found: u16,
+        /// The newest format version this build can restore
+        /// ([`Vm::SNAPSHOT_VERSION`]).
+        supported: u16,
+    },
     /// [`Vm::restore_scottfree`] only: the input is not a well-formed
     /// ScottFree save (not ASCII text, or a token that isn't the integer the
     /// format expects at that position). Carries a short, fixed reason.
@@ -95,6 +113,12 @@ impl std::fmt::Display for RestoreError {
 
 impl std::error::Error for RestoreError {}
 
+/// A running Scott Adams game: a [`Database`] plus every piece of mutable
+/// play state it needs — item locations, the player's room, flags,
+/// counters, lamp fuel, and the PRNG. A host drives it through
+/// [`Vm::step`]/[`Vm::supply_line`] and saves it with
+/// [`Vm::snapshot`]/[`Vm::restore`]; see the crate-level docs for the full
+/// protocol.
 pub struct Vm {
     pub(crate) db: Database,
     pub(crate) item_loc: Vec<i32>, // per item: current location (room index; -1/255 = carried; 0 = nowhere)
@@ -238,9 +262,15 @@ impl Vm {
     }
 
     // --- accessors used by later tasks + the host adapter ---
+    /// Take (read and clear) the transcript text accumulated since the last
+    /// call — room descriptions, action messages, and prompts. The host
+    /// calls this after [`Vm::step`] returns [`StepResult::NeedLine`] (or
+    /// [`StepResult::Quit`]) to get what it should show the player.
     pub fn take_output(&mut self) -> String {
         std::mem::take(&mut self.out)
     }
+    /// The room index the player currently occupies — an index into
+    /// [`Database::rooms`].
     pub fn current_room(&self) -> usize {
         self.player
     }
@@ -286,6 +316,8 @@ impl Vm {
             .map(|(_, it)| it.text.as_str())
             .collect()
     }
+    /// Whether the game has ended (matches [`StepResult::Quit`]) — the
+    /// host's cue to stop driving the session.
     pub fn has_quit(&self) -> bool {
         self.quit
     }

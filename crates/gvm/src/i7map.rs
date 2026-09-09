@@ -144,7 +144,13 @@ pub enum I7Exit {
     /// side that is not the room we came from. `WorldModel.i6t`'s
     /// `FrontSideOfDoor`/`BackSideOfDoor` read a two-sided door's `found_in`
     /// array as `[front, back]`, which is static data.
-    ThroughDoor { door: u32, to: u32 },
+    ThroughDoor {
+        /// The door object itself, as named in `Map_Storage`.
+        door: u32,
+        /// The room on the far side of the door from the one this exit was
+        /// read from.
+        to: u32,
+    },
     /// The entry named a door whose destination this reader cannot resolve — a
     /// one-sided door, whose far side `WorldModel.i6t` computes by calling
     /// `door_to()`, or a two-sided door whose `found_in` array could not be

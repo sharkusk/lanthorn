@@ -142,12 +142,31 @@ fn write_tree_ptr(mem: &mut Memory, obj: u16, which: u8, val: u16) {
     }
 }
 
+/// The object currently containing `obj` — its room, its container, whatever
+/// it sits inside — or 0 if `obj` has nothing above it in the tree (ZMSD §12.3's
+/// parent field).
 pub fn get_parent(mem: &Memory, obj: u16) -> u16 { read_tree_ptr(mem, obj, 0) }
+/// The next object in `obj`'s parent's child list after `obj` itself, or 0 if
+/// `obj` is the last child — ZMSD §12.3's sibling field, which threads a
+/// parent's children into a singly linked list rather than an array.
 pub fn get_sibling(mem: &Memory, obj: u16) -> u16 { read_tree_ptr(mem, obj, 1) }
+/// The first object `obj` directly contains, or 0 if `obj` holds nothing —
+/// ZMSD §12.3's child field. Walk [`get_sibling`] from this object to reach
+/// the rest of what `obj` contains.
 pub fn get_child(mem: &Memory, obj: u16) -> u16 { read_tree_ptr(mem, obj, 2) }
 
+/// Overwrites `obj`'s parent field (ZMSD §12.3) directly, without touching
+/// any sibling chain. This is the raw storage primitive [`insert_obj`] and
+/// [`remove_obj`] use to keep the tree consistent; a caller that wants a
+/// well-formed tree should go through those instead of calling this alone.
 pub fn set_parent(mem: &mut Memory, obj: u16, val: u16) { write_tree_ptr(mem, obj, 0, val); }
+/// Overwrites `obj`'s sibling field (ZMSD §12.3) directly. Like [`set_parent`],
+/// this does not maintain the rest of the tree on its own — it exists for
+/// [`insert_obj`] and [`remove_obj`] to build on.
 pub fn set_sibling(mem: &mut Memory, obj: u16, val: u16) { write_tree_ptr(mem, obj, 1, val); }
+/// Overwrites `obj`'s child field (ZMSD §12.3) directly. Like [`set_parent`],
+/// this does not maintain the rest of the tree on its own — it exists for
+/// [`insert_obj`] and [`remove_obj`] to build on.
 pub fn set_child(mem: &mut Memory, obj: u16, val: u16) { write_tree_ptr(mem, obj, 2, val); }
 
 // ── Tree manipulation ─────────────────────────────────────────────────────────
@@ -713,8 +732,15 @@ pub fn property_numbers(mem: &Memory, obj: u16) -> Vec<u8> {
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[non_exhaustive]
 pub struct ObjectSnapshot {
+    /// This object's own number in the story's object table — stable for the
+    /// life of the session, so the automapper can use it as a key.
     pub number: u16,
+    /// What contained this object at the moment of the snapshot (see
+    /// [`get_parent`]); 0 if it had nothing above it in the tree.
     pub parent: u16,
+    /// The object's display name as the story itself would print it
+    /// ([`printed_name`]), not necessarily the header's [`short_name`] — see
+    /// the note below on why an Inform 6 `short_name` property wins (SQ-1372).
     pub name: String,
 }
 

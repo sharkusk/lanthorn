@@ -69,28 +69,48 @@ impl ZsciiInput {
 
     /// ZSCII 133–144: function keys f1–f12.
     pub const F1: ZsciiInput = ZsciiInput(133);
+    /// ZSCII 134: function key f2.
     pub const F2: ZsciiInput = ZsciiInput(134);
+    /// ZSCII 135: function key f3.
     pub const F3: ZsciiInput = ZsciiInput(135);
+    /// ZSCII 136: function key f4.
     pub const F4: ZsciiInput = ZsciiInput(136);
+    /// ZSCII 137: function key f5.
     pub const F5: ZsciiInput = ZsciiInput(137);
+    /// ZSCII 138: function key f6.
     pub const F6: ZsciiInput = ZsciiInput(138);
+    /// ZSCII 139: function key f7.
     pub const F7: ZsciiInput = ZsciiInput(139);
+    /// ZSCII 140: function key f8.
     pub const F8: ZsciiInput = ZsciiInput(140);
+    /// ZSCII 141: function key f9.
     pub const F9: ZsciiInput = ZsciiInput(141);
+    /// ZSCII 142: function key f10.
     pub const F10: ZsciiInput = ZsciiInput(142);
+    /// ZSCII 143: function key f11.
     pub const F11: ZsciiInput = ZsciiInput(143);
+    /// ZSCII 144: function key f12.
     pub const F12: ZsciiInput = ZsciiInput(144);
 
     /// ZSCII 145–154: keypad 0–9.
     pub const KEYPAD_0: ZsciiInput = ZsciiInput(145);
+    /// ZSCII 146: keypad 1.
     pub const KEYPAD_1: ZsciiInput = ZsciiInput(146);
+    /// ZSCII 147: keypad 2.
     pub const KEYPAD_2: ZsciiInput = ZsciiInput(147);
+    /// ZSCII 148: keypad 3.
     pub const KEYPAD_3: ZsciiInput = ZsciiInput(148);
+    /// ZSCII 149: keypad 4.
     pub const KEYPAD_4: ZsciiInput = ZsciiInput(149);
+    /// ZSCII 150: keypad 5.
     pub const KEYPAD_5: ZsciiInput = ZsciiInput(150);
+    /// ZSCII 151: keypad 6.
     pub const KEYPAD_6: ZsciiInput = ZsciiInput(151);
+    /// ZSCII 152: keypad 7.
     pub const KEYPAD_7: ZsciiInput = ZsciiInput(152);
+    /// ZSCII 153: keypad 8.
     pub const KEYPAD_8: ZsciiInput = ZsciiInput(153);
+    /// ZSCII 154: keypad 9.
     pub const KEYPAD_9: ZsciiInput = ZsciiInput(154);
 
     /// ZSCII 252: menu click (v6).
@@ -114,7 +134,7 @@ impl ZsciiInput {
 
     /// Construct a `ZsciiInput` from a typed character, via the default ZSCII
     /// translation (ZMSD §3.8) — the same rule
-    /// [`crate::text::decode::char_to_zscii_default`] uses for dictionary
+    /// `crate::text::decode::char_to_zscii_default` uses for dictionary
     /// word encoding, so a typed character resolves to the same ZSCII code
     /// wherever it is turned into one.
     ///

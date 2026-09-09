@@ -1144,6 +1144,10 @@ pub const MACINTOSH_STD_WINDOW: (u16, u16) = (320, 200);
 /// Blorb-sourced copy of the same game already gets.
 pub const AMIGA_STD_WINDOW: (u16, u16) = (320, 200);
 
+/// Every §11.1.3 machine number this crate models, one row per interpreter.
+/// [`machine`] looks a number up here; a number with no row is a machine the
+/// crate declines to model rather than mis-model (see the module docs' "Where
+/// a value cannot be sourced it is declined outright").
 pub const MACHINES: &[MachineProfile] = &[
     MachineProfile {
         number: APPLE_IIE_INTERPRETER_NUMBER,

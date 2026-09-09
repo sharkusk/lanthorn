@@ -107,10 +107,14 @@ impl Options {
     pub fn new() -> Self {
         Self::default()
     }
+    /// Sets [`Options::you_are`] — see its doc for the replies this swaps to
+    /// second person, and which game needs it.
     pub fn with_you_are(mut self, v: bool) -> Self {
         self.you_are = v;
         self
     }
+    /// Sets [`Options::scott_light`] — see its doc for the lamp-countdown
+    /// wording this switches to.
     pub fn with_scott_light(mut self, v: bool) -> Self {
         self.scott_light = v;
         self
@@ -121,10 +125,14 @@ impl Options {
         self.trs80_style = v;
         self
     }
+    /// Sets [`Options::prehistoric_lamp`] — see its doc for how this changes
+    /// what happens the instant the lamp's fuel reaches zero.
     pub fn with_prehistoric_lamp(mut self, v: bool) -> Self {
         self.prehistoric_lamp = v;
         self
     }
+    /// Sets [`Options::presentation`] — see [`Presentation`] for the
+    /// room-block layouts a host can choose between.
     pub fn with_presentation(mut self, p: Presentation) -> Self {
         self.presentation = p;
         self
@@ -133,7 +141,7 @@ impl Options {
 
 /// Every player-facing reply string ScottFree's `-y`/[`Options::you_are`]
 /// switches between, gathered in one place (`Wording::for_options`) rather
-/// than scattered across [`crate::vm`]'s message sites — so a host (or a
+/// than scattered across the `vm` module's message sites — so a host (or a
 /// reviewer) can see the complete set of what changes, and a future flag
 /// extends one function instead of hunting through `run_turn`/`run_commands`.
 ///

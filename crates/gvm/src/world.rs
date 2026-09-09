@@ -55,17 +55,29 @@ const MAX_PROP_SCAN: u16 = 1000;
 /// writes the same `match` shape on both engines.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Compass {
+    /// North.
     N = 0,
+    /// South.
     S = 1,
+    /// East.
     E = 2,
+    /// West.
     W = 3,
+    /// Northeast.
     Ne = 4,
+    /// Northwest.
     Nw = 5,
+    /// Southeast.
     Se = 6,
+    /// Southwest.
     Sw = 7,
+    /// Up.
     Up = 8,
+    /// Down.
     Down = 9,
+    /// In.
     In = 10,
+    /// Out.
     Out = 11,
 }
 

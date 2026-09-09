@@ -108,6 +108,8 @@
 //! }
 //! ```
 
+#![warn(missing_docs)]
+
 pub mod accel;
 #[cfg(test)]
 mod asm;

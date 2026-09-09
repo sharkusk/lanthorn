@@ -119,7 +119,11 @@ pub fn parse_header(image: &[u8]) -> Result<Header, GError> {
 /// `byte[6]` serial number.
 #[derive(Debug, Clone)]
 pub struct InformInfo {
+    /// The story's release number, as the Inform compiler stamped it (the
+    /// same number a `$VERSION$`/banner line reports).
     pub release: u16,
+    /// The six-character serial number (usually a compile date, `YYMMDD`)
+    /// the compiler stamped alongside the release number.
     pub serial: String,
 }
 

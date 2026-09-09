@@ -153,8 +153,13 @@ fn resolve_noun_word(db: &Database, n: u16) -> String {
 /// One decompiled condition: mnemonic plus a human-resolved operand.
 #[derive(Debug, Clone, PartialEq)]
 pub struct DecompiledCondition {
+    /// The raw condition opcode (0..=19; see `vm::CONDITION_CODES`).
     pub code: u8,
+    /// The raw operand as the database stores it, before resolution to a
+    /// name — an item/room/flag index or a counter threshold, depending on
+    /// `code`.
     pub value: u16,
+    /// The mnemonic for `code`, from `CONDITION_MNEMONICS`.
     pub mnemonic: &'static str,
     /// Resolved operand text (item name / room description / flag name /
     /// counter threshold), or `None` when the code carries no meaningful
@@ -165,18 +170,32 @@ pub struct DecompiledCondition {
 /// One decompiled command: mnemonic plus resolved operand(s).
 #[derive(Debug, Clone, PartialEq)]
 pub struct DecompiledCommand {
+    /// The raw command opcode, as `vm::run_commands` dispatches it (0 =
+    /// no-op slot, 1..=51 and 102.. print a message, 52..=89 are the fixed
+    /// commands in `vm::FIXED_COMMAND_OPCODES`, 90..=101 are unimplemented
+    /// no-ops).
     pub code: u16,
+    /// The mnemonic for `code`, from `COMMAND_MNEMONICS` (`"UNKNOWN"` for an
+    /// opcode this decompiler doesn't have a name for).
     pub mnemonic: &'static str,
+    /// Resolved operand text for the command's argument, or `None` when the
+    /// opcode takes none.
     pub operand: Option<String>,
 }
 
 /// A fully decompiled action row.
 #[derive(Debug, Clone, PartialEq)]
 pub struct DecompiledAction {
+    /// This row's position in `Database::actions` — the action's identity
+    /// for anything that refers to it by index (e.g. `Vm::fired_actions`).
     pub index: usize,
+    /// The raw verb code this action's row is filed under; 0 marks an
+    /// occurrence/continuation row rather than a player-typed verb.
     pub verb: u16,
     /// Resolved trigger word, or "AUTO" for an occurrence/continuation (verb 0).
     pub verb_word: String,
+    /// The raw noun code paired with `verb`; 0 marks a wildcard (any noun,
+    /// or none, depending on `verb`).
     pub noun: u16,
     /// Resolved noun word; for verb 0 this is instead "N% chance" (an
     /// occurrence) or "(continuation)" (a verb-0/noun-0 chain target).
