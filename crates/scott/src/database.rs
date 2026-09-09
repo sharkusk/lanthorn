@@ -82,6 +82,35 @@ pub struct Database {
     /// [`crate::ti994a`] for the encoding and the runtime differences it
     /// brings with it.
     pub ti99: Option<crate::ti994a::Ti99Script>,
+    /// Whether this is a release of Brian Howarth's **Mysterious Adventures**
+    /// series — the eleven titles from *The Golden Baton* to *Waxworks*
+    /// ([`crate::c64`]).
+    ///
+    /// A property of the DATABASE and not of the host, for the reason the
+    /// dialect specification's Appendix A gives: "the runtime differences of
+    /// §9 … are properties of the *database*, not of the host, and have to
+    /// travel with it". What it forces is §9.2's two lamp options —
+    /// [`crate::Options::scott_light`] and
+    /// [`crate::Options::prehistoric_lamp`], which that section says "every
+    /// Mysterious Adventures release and every TI-99/4A release forces both
+    /// on" — whatever the host asked for; [`crate::Vm::new_full`] is where
+    /// that happens, exactly as it does for `ti99`.
+    ///
+    /// It does **not** force second-person wording. §6.4 tabulates a
+    /// second-person set for the series, but the Commodore 64 releases are
+    /// demonstrably first-person: their system-message block reads `I'm in a
+    /// `, `I am carrying:` and `I'm DEAD!!`, and not one of `You are in a`,
+    /// `You can also see` or `You haven't got it` occurs anywhere in any of
+    /// the eleven files (`docs/internals/scott-c64-layout-findings.md`,
+    /// correction 4). [`crate::Options::you_are`] is therefore left to the
+    /// host, and its default — off — is the right one for these.
+    ///
+    /// `false` for a reference-format `.dat`, including a `.dat` conversion
+    /// OF one of these titles: this flag records what the loader could
+    /// establish from the bytes, and the text format carries no series
+    /// marker (§6.1: a reference-format database is recognised "only by its
+    /// header counts").
+    pub mysterious: bool,
 }
 
 /// One room's exits, description text, and how that description should be
@@ -313,6 +342,7 @@ mod tests {
                 start_loc: 1,
             }],
             adventure_number: 0,
+            mysterious: false,
             ti99: None,
         };
         assert_eq!(db.rooms.len(), 2);
@@ -347,6 +377,7 @@ mod tests {
             messages: vec![],
             items: vec![],
             adventure_number: 0,
+            mysterious: false,
             ti99: None,
         };
         assert_eq!(db.match_verb("go"), Some(1));

@@ -124,6 +124,7 @@ fn world(script: Ti99Script) -> Database {
             },
         ],
         adventure_number: 0,
+        mysterious: false,
         ti99: Some(script),
     }
 }

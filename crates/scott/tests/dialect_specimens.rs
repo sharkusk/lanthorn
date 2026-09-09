@@ -57,8 +57,15 @@ fn specimens(sub: &str) -> Vec<(String, Vec<u8>)> {
         .filter(|e| e.path().is_file())
         .filter_map(|e| {
             let name = e.file_name().to_string_lossy().into_owned();
-            // Skip the archive itself and any editor/OS droppings.
-            if name.starts_with('.') || name.ends_with(".zip") {
+            // Skip the archive itself, any editor/OS droppings, and the
+            // provenance notes the specimen tree keeps beside its files —
+            // a `README.txt` or a `.nfo` naming the IF Archive path and the
+            // digests. Those arrived when the tree was tidied (SQ-1414's
+            // wave), and this suite asserts that EVERY file it collects is a
+            // game image of the dialect the directory is named for, so a note
+            // in the directory failed the run rather than being ignored.
+            let skip = [".zip", ".txt", ".nfo", ".md"];
+            if name.starts_with('.') || skip.iter().any(|e| name.to_lowercase().ends_with(e)) {
                 return None;
             }
             std::fs::read(e.path()).ok().map(|b| (name, b))

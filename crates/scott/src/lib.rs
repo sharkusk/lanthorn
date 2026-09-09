@@ -47,18 +47,31 @@
 //!
 //! # Loading a story
 //!
-//! This crate reads **two** encodings of the same game data, and
-//! [`Database::parse`] answers for both from one entry point — hand it the
-//! file's raw bytes and it returns the static game data (rooms, items, the
+//! This crate reads **three** encodings of the same game data, and
+//! [`Database::parse`] answers for all of them from one entry point — hand it
+//! the file's raw bytes and it returns the static game data (rooms, items, the
 //! action table, vocabulary, and messages) or a [`LoadError`] naming what
 //! did not fit:
 //!
 //! * the **ScottFree `.dat` text format**, the plain-ASCII interchange
-//!   encoding described at the top of this page; and
+//!   encoding described at the top of this page;
 //! * the **TI-99/4A tokenised releases** — the twelve original Adventure
 //!   International games as sold for that machine, which are a raw memory
 //!   image with the script compiled to bytecode rather than text at all
-//!   ([`parse_ti994a`], and [`crate::ti994a`] for the format).
+//!   ([`parse_ti994a`], and [`crate::ti994a`] for the format); and
+//! * the **Commodore 64 *Mysterious Adventures*** — Brian Howarth's eleven
+//!   titles from *The Golden Baton* to *Waxworks*, as Commodore program files
+//!   holding an uncompressed 6502 memory image ([`parse_c64_mysterious_prg`],
+//!   and [`crate::c64`] for the format). Those releases also carry line-drawn
+//!   artwork, which [`decode_family_b_pictures`] turns into indexed bitmaps.
+//!
+//! **A container is the host's business, not this crate's.** These eleven ship
+//! on two `.d64` compilation disks holding six and five games each, and
+//! nothing in the container says which one a player wants; a host extracts the
+//! named program file and hands the bytes over. What this crate does take is
+//! the program file itself, load-address bytes and all, because stripping
+//! those two bytes is part of reading the format rather than part of reading
+//! the disk.
 //!
 //! [`looks_like_scott_bytes`] is the sniff to reach for when a host is
 //! guessing among several engines from a file's bytes alone: it answers for
@@ -68,12 +81,13 @@
 //! file before this crate ever sees it.)
 //!
 //! Scott Adams games also shipped in binary dialects this crate does NOT
-//! read: the C64/ZX Spectrum/Atari 8-bit/Apple II memory snapshots that
-//! carry the tables as machine data. It does [`detect_dialect`] them, so a
+//! read: the remaining ZX Spectrum/Atari 8-bit/Apple II memory snapshots that
+//! carry the tables as machine data, and the Commodore 64 releases outside
+//! the *Mysterious Adventures* series. It does [`detect_dialect`] them, so a
 //! failed parse over one comes back as [`LoadError::UnsupportedDialect`]
 //! and a host can say "this is a Commodore 64 memory snapshot" instead of
 //! reporting whichever token the text lexer tripped over first. A file that
-//! IS one of the two readable encodings but is damaged comes back as
+//! IS one of the three readable encodings but is damaged comes back as
 //! [`LoadError::BadDialectData`] instead, naming what did not check out.
 //! See [`Dialect`] for what each signature is and how it was established.
 //!
@@ -177,9 +191,15 @@ mod options;
 mod scottfree_save;
 mod vm;
 mod z80;
+pub mod c64;
 pub mod database;
 pub mod decompile;
 pub mod ti994a;
+pub use c64::{
+    decode_family_b_block, decode_family_b_pictures, looks_like_c64_mysterious,
+    looks_like_c64_mysterious_prg, parse_c64_mysterious, parse_c64_mysterious_prg, prg_image,
+    HeaderShape, Picture, Release, RELEASES,
+};
 pub use database::{Action, Condition, Database, Item, Room};
 pub use decompile::{decompile_action, list_items, list_rooms, list_vocab};
 pub use loader::{detect_dialect, looks_like_scott, looks_like_scott_bytes, Dialect, LoadError};

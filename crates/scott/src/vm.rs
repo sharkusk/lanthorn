@@ -264,6 +264,19 @@ impl Vm {
         } else {
             options
         };
+        // The same rule for the Mysterious Adventures series (SQ-1414): §9.2
+        // says "every Mysterious Adventures release and every TI-99/4A
+        // release forces both on", and gives the black-box test — at zero
+        // fuel the lamp must both announce that it has run out AND cease to
+        // be in the inventory. Only the two LAMP flags: unlike the TI-99/4A
+        // dialect these releases carry no message set of their own to force
+        // (see `Database::mysterious`), so `you_are` and `presentation` stay
+        // the host's.
+        let options = if db.mysterious {
+            options.with_scott_light(true).with_prehistoric_lamp(true)
+        } else {
+            options
+        };
         let item_loc = db.items.iter().map(|i| i.start_loc).collect();
         let player = db.start_room;
         let lamp = db.light_time;
@@ -2285,6 +2298,7 @@ mod tests {
             messages: vec!["".into()],
             items,
             adventure_number: 0,
+            mysterious: false,
             ti99: None,
         };
         let mut vm = Vm::new(db);
@@ -2519,6 +2533,7 @@ mod tests {
             messages: vec![String::new(), "Sorry".into()],
             items: one_item(),
             adventure_number: 0,
+            mysterious: false,
             ti99: None,
         };
         let mut vm = Vm::new(db);
@@ -2557,6 +2572,7 @@ mod tests {
             messages: vec![String::new()],
             items: one_item(),
             adventure_number: 0,
+            mysterious: false,
             ti99: None,
         };
         let mut vm = Vm::new(db);
@@ -2603,6 +2619,7 @@ mod tests {
             messages,
             items: one_item(),
             adventure_number: 0,
+            mysterious: false,
             ti99: None,
         };
         let mut vm = Vm::new(db);
@@ -2667,6 +2684,7 @@ mod tests {
             messages: vec![String::new()],
             items,
             adventure_number: 0,
+            mysterious: false,
             ti99: None,
         };
         let mut vm = Vm::new(db);
@@ -2777,6 +2795,7 @@ mod tests {
             messages,
             items,
             adventure_number: 0,
+            mysterious: false,
             ti99: None,
         };
         let mut vm = Vm::new(db);
@@ -2868,6 +2887,7 @@ mod tests {
             messages: vec![String::new()],
             items,
             adventure_number: 0,
+            mysterious: false,
             ti99: None,
         }
     }
@@ -3076,6 +3096,7 @@ mod tests {
             messages: vec![String::new(), "Click.".into()],
             items: one_item(),
             adventure_number: 0,
+            mysterious: false,
             ti99: None,
         };
         let mut vm = Vm::new(db);
@@ -3119,6 +3140,7 @@ mod tests {
             messages: vec![String::new(), "Click.".into(), "Clunk.".into()],
             items: one_item(),
             adventure_number: 0,
+            mysterious: false,
             ti99: None,
         };
         let mut vm = Vm::new(db);
@@ -3168,6 +3190,7 @@ mod tests {
             messages: vec![String::new(), "It opens.".into()],
             items: one_item(),
             adventure_number: 0,
+            mysterious: false,
             ti99: None,
         };
         let mut vm = Vm::new(db);
@@ -3225,6 +3248,7 @@ mod tests {
             messages: vec![String::new()],
             items,
             adventure_number: 0,
+            mysterious: false,
             ti99: None,
         };
         let mut vm = Vm::new(db);
@@ -3269,6 +3293,7 @@ mod tests {
             messages: vec![String::new()],
             items: one_item(),
             adventure_number: 0,
+            mysterious: false,
             ti99: None,
         };
         let mut vm = Vm::new(db);
