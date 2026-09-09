@@ -996,6 +996,9 @@ fn medium_name(image: Option<app::hints::DiskImage>) -> String {
         Some(D::CommodoreD64) => "a Commodore 1541 floppy",
         Some(D::CommodoreG64) => "a Commodore 1541 floppy, nibbled to GCR",
         Some(D::Iso9660) => "an ISO 9660 CD-ROM",
+        Some(D::AtariDos2) => "an Atari 8-bit floppy",
+        Some(D::AppleDos33) => "an Apple DOS 3.3 floppy",
+        Some(D::AtariXex) => "an Atari 8-bit loadable binary",
         None => "a story file",
     }
     .to_string()

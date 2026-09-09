@@ -685,6 +685,12 @@ fn ctx(m: &Medium) -> String {
             Some(DiskImage::CommodoreD64) => "Commodore 1541 floppy",
             Some(DiskImage::CommodoreG64) => "Commodore 1541 floppy (GCR bitstream)",
             Some(DiskImage::Iso9660) => "ISO 9660 CD-ROM",
+            // SQ-1458's three. No Infocom release in this table is one — they
+            // are the Scott Adams media — but the enum is exhaustive here on
+            // purpose, so they are named rather than swept into a wildcard.
+            Some(DiskImage::AtariDos2) => "Atari 8-bit floppy",
+            Some(DiskImage::AppleDos33) => "Apple DOS 3.3 floppy",
+            Some(DiskImage::AtariXex) => "Atari 8-bit loadable binary",
             None => "story file",
         },
         m.release,
@@ -1294,6 +1300,18 @@ fn the_medium_each_release_ships_on_picks_the_interpreter_profile() {
             // no story in hand gets, and the IBM PC default is the right thing
             // for it to be.
             Some(DiskImage::Iso9660) => InterpreterProfile::IbmPc,
+            // **The Apple II's third filesystem, answering like its other two**
+            // (SQ-1458). §11.1.3 asks which machine the interpreter runs on, and
+            // DOS 3.3 is the same Apple II that ProDOS and the self-booting press
+            // are — three rows disagreeing would make the number a property of
+            // the disk, which SQ-0857 disproved out of Infocom's own YZIP.
+            Some(DiskImage::AppleDos33) => InterpreterProfile::AppleIIgs,
+            // **And the Atari 8-bit falls through to the default, because
+            // §11.1.3 numbers no such machine** — its 5 is the Atari ST, a
+            // different processor. Both rows state `None` AND decline to imply
+            // the IBM PC, so `resolve` reaches its fallback; the arm is here to
+            // say that is the intended answer rather than an oversight.
+            Some(DiskImage::AtariDos2) | Some(DiskImage::AtariXex) => InterpreterProfile::IbmPc,
             None => InterpreterProfile::IbmPc,
         };
         assert_eq!(

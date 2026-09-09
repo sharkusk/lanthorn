@@ -64,7 +64,9 @@
 //! stale the moment a format arrived (SQ-0849).
 
 use crate::adf::{Adf, looks_like_story};
+use crate::atr::Atr;
 use crate::d64::D64;
+use crate::dos33::Dos33;
 use crate::g64::G64;
 use crate::fat12::Fat12;
 use crate::hfs::Hfs;
@@ -72,6 +74,7 @@ use crate::infocom_boot::InfocomBoot;
 use crate::infocom_pics::InfocomPics;
 use crate::iso9660::Iso9660;
 use crate::prodos::ProDos;
+use crate::xex::Xex;
 
 /// Amiga, from the ZMSD §11.1.3 interpreter-number table (1 DECSystem-20,
 /// 2 Apple IIe, 3 Macintosh, **4 Amiga**, 5 Atari ST, 6 IBM PC, 7 Commodore 128,
@@ -319,6 +322,37 @@ pub enum DiskImage {
     /// the Apple extension's Finder metadata — see
     /// [`machine_from_finder`] and [`crate::iso9660`].
     Iso9660,
+    /// An **Atari 8-bit floppy** — an `.atr` image with an Atari DOS 2
+    /// filesystem in it, or what is left of one (SQ-1458).
+    ///
+    /// The container is what identifies this medium, not the filesystem, and
+    /// that is measured rather than convenient: nine of the fourteen S.A.G.A.
+    /// sides in `stories/scott-dialects/atari/` have game data where their
+    /// volume table of contents should be, because the release masters its
+    /// database straight over it. A side with no directory left mounts and lists
+    /// nothing, and its payload is reached through
+    /// [`crate::atr::IMAGE_ENTRY`]. See [`crate::atr`].
+    AtariDos2,
+    /// An **Apple II DOS 3.3 volume** — a flat 5.25-inch sector dump,
+    /// conventionally `.dsk` or `.do` (SQ-1458).
+    ///
+    /// The **third** format wearing the Apple II's 143,360-byte `.dsk`, beside
+    /// [`DiskImage::ProDos`] and [`DiskImage::InfocomBootDisk`], and the one the
+    /// spelling is named after. The three are kept apart by content and not by
+    /// order: no ProDOS volume and no raw self-booting disk in the corpus has
+    /// 35/16/256/122 in the four VTOC fields this one requires. See
+    /// [`crate::dos33`].
+    AppleDos33,
+    /// An **Atari 8-bit binary-load executable** — `.xex` (SQ-1458).
+    ///
+    /// The one row here whose bytes are not a disk in any sense: no filesystem,
+    /// no sectors, no geometry, just a list of load records and the memory they
+    /// put together. It is a row rather than a special case because the question
+    /// a front-end asks — *what is on this, and can I read it?* — has the same
+    /// answer shape for a loadable binary as for a floppy, and the whole point
+    /// of this table is that no caller may know the difference. See
+    /// [`crate::xex`].
+    AtariXex,
 }
 
 impl DiskImage {
@@ -879,6 +913,116 @@ const FORMATS: &[Format] = &[
         extensions: &["iso"],
         looks_like: <Iso9660 as Volume>::looks_like,
         mount: mount_boxed::<Iso9660>,
+        pages_across_images: false,
+    },
+    Format {
+        image: DiskImage::AtariDos2,
+        // The filesystem, like every row that has one, and spelled the way the
+        // machine's own manuals do. NOT "Atari" — the row below the FAT12 pair
+        // already says "ST", and a library showing "Atari" beside "ST" would be
+        // offering a distinction a player cannot act on, which is the confusion
+        // SQ-1095 fixed on the Commodore pair. "Atari DOS" is a filesystem name
+        // and the 8-bit machine is the only one that has it.
+        label: "Atari DOS",
+        // **None, and here that is a third meaning of `None`** beside the two the
+        // `implies_ibm_pc` field below distinguishes. A DOS floppy declines
+        // because the IBM PC's number is a version rule already in force; an ISO
+        // declines because a hybrid disc is two machines. This declines because
+        // **ZMSD §11.1.3 has no Atari 8-bit at all** — its 5 is the Atari ST, a
+        // different machine with a different processor, and claiming it here
+        // would tell a story it was running on hardware that did not exist when
+        // it was pressed.
+        //
+        // Nothing observable rides on it on this corpus: byte `$1E` carries no
+        // meaning before Version 4 (see [`ATARI_ST_INTERPRETER_NUMBER`] for
+        // Infocom's own Version 3 build leaving it zero), and every image here is
+        // a Scott Adams release with no Z-machine header to write it into. If an
+        // Infocom Atari 8-bit press ever arrives, the honest answer is still not
+        // in the table and `--interpreter` still reaches whatever a person means.
+        interpreter_number: None,
+        // …and this is the half that says which kind of `None` it is. The IBM PC
+        // is not implied: leaving the rule in force means leaving each front-end's
+        // own default, which is what "no row in §11.1.3" deserves.
+        implies_ibm_pc: false,
+        // `.atr` is the only spelling this container has ever had, and all
+        // fifteen Atari specimens in `stories/scott-dialects/atari/` wear it.
+        // **Not `.xfd`** — that is the same disk with the header cut off, which
+        // §7.3 says to refuse by name rather than guess at by size, and nothing
+        // in the corpus is one.
+        extensions: &["atr"],
+        looks_like: <Atr as Volume>::looks_like,
+        mount: mount_boxed::<Atr>,
+        pages_across_images: false,
+    },
+    Format {
+        image: DiskImage::AppleDos33,
+        // The filesystem's own name, and the version is what tells it from the
+        // IBM PC row's "DOS" — they are different filesystems on different
+        // machines that happen to share three letters, and DOS 3.3 is what
+        // everyone who has ever held one of these disks calls it. It sits beside
+        // "ProDOS", the Apple II's other filesystem, which is the pairing a
+        // player reading a TYPE column will actually make.
+        label: "DOS 3.3",
+        // **10, the Apple IIgs — the same answer as the two Apple II rows above,
+        // and deliberately not a fresh one.** SQ-0857's argument does not care
+        // which filesystem the disk has: §11.1.3 asks which machine the
+        // interpreter runs on, Infocom's own Apple YZIP detects that at boot, and
+        // three Apple II rows answering three numbers would be saying the number
+        // is a property of the disk. Declining instead would land an Apple story
+        // on 1, the DECSystem-20. Argued in full at
+        // [`APPLE_IIGS_INTERPRETER_NUMBER`] and at the ProDOS row.
+        //
+        // As on the `InfocomBootDisk` row, nothing observable rides on it here:
+        // no Z-machine story in `stories/` is on a DOS 3.3 volume.
+        interpreter_number: Some(APPLE_IIGS_INTERPRETER_NUMBER),
+        implies_ibm_pc: false,
+        // `.dsk`, and only `.dsk` — the spelling all fourteen Apple sides in
+        // `stories/scott-dialects/apple/` wear, and the third row to claim it.
+        // The census is a union and a scan pre-filters on it, so sharing a
+        // spelling with the two Apple rows above costs nothing;
+        // [`DiskImage::detect`] still says which of the three a file is.
+        //
+        // **Not `.do`**, the explicit "DOS order" spelling, and **not `.po`**:
+        // this reader would open a `.do` perfectly and nothing in the corpus is
+        // one, which is the same standard `hdv` is held to on the ProDOS row —
+        // a spelling gets a name when a medium wears it. `.po` is ProDOS order,
+        // which this reader REFUSES for the reason
+        // [`crate::dos33`]'s header measures, so claiming it would be worse
+        // than unearned.
+        //
+        // **Not `.woz`**: a bit-preserving image has no sectors in it at all — it
+        // is a GCR bitstream needing the whole nibble decode `scott-dialects-spec.md`
+        // §7.4 sets out, which is [`crate::g64`]'s shape of work and a quest of
+        // its own. Nothing in the corpus is one, and a row claiming a spelling
+        // this reader would refuse is the half-wiring the extensions column
+        // exists to end.
+        extensions: &["dsk"],
+        looks_like: <Dos33 as Volume>::looks_like,
+        mount: mount_boxed::<Dos33>,
+        pages_across_images: false,
+    },
+    Format {
+        image: DiskImage::AtariXex,
+        // The spelling, uniquely — because there is no medium under it to name.
+        // Every other row here calls itself after a filesystem or a machine, and
+        // this one is neither: it is a file of load records, and `XEX` is what
+        // the Atari world has always called that. "Boot" above is the closest
+        // precedent: a name for what the bytes DO rather than what they sit on.
+        label: "XEX",
+        // None, on exactly the ground the `.atr` row states: §11.1.3 numbers no
+        // Atari 8-bit, and the one specimen is a Scott Adams memory image with no
+        // Z-machine header to write a byte into.
+        interpreter_number: None,
+        implies_ibm_pc: false,
+        // `.xex` is the spelling the one specimen wears and the one the format is
+        // universally called. **Not `.obj`, `.com` or `.bin`** — the same file
+        // does wear those, and every one of them is claimed by something else
+        // entirely on a modern shelf; a census entry no medium here justifies is
+        // a guess, and this reader opens the file by content whatever it is
+        // called.
+        extensions: &["xex"],
+        looks_like: <Xex as Volume>::looks_like,
+        mount: mount_boxed::<Xex>,
         pages_across_images: false,
     },
 ];
@@ -1499,15 +1643,48 @@ impl Volume for D64 {
     /// be asking the wrong question of the wrong bytes.
     ///
     /// [`Volume::stories`] identifies a story by testing each of `contents()`
-    /// with [`looks_like_story`], and this format's `contents()` is the sector
-    /// image itself (see [`crate::d64::D64::contents`] for why it has to be) —
-    /// which is not a story and must not be reported as one. What this reader
-    /// has instead is far stronger than the structural test: it has reassembled
-    /// a story and checked it against the story's **own header checksum**, so
-    /// there is nothing left for a heuristic to add.
+    /// with [`looks_like_story`], and the RAW-SECTOR entry in this format's
+    /// `contents()` is one this reader has already reassembled and checked
+    /// against the story's **own header checksum** — far stronger than the
+    /// structural test, and not to be re-decided by it.
+    ///
+    /// **Since SQ-1458 `contents()` also carries real CBM files**, so the
+    /// override now *adds* the verified story to the provided answer instead of
+    /// replacing it. That keeps this engine-neutral, which is the property that
+    /// matters: a Commodore disk keeping a Z-machine story, a Glulx image or a
+    /// Blorb in its filesystem is found by [`looks_like_story`] like any other
+    /// volume's file. Nothing in the corpus does — *Hitchhiker's* one CBM file
+    /// is a 552-byte BASIC loader — and a **Scott Adams `PRG` is deliberately
+    /// not found here either**: what makes those bytes a game is not a fact this
+    /// crate knows, so they are offered through `contents()` and classified by
+    /// the caller.
     fn stories(&self) -> Vec<DiskStory> {
-        Volume::story(self).into_iter().collect()
+        commodore_stories(&self.contents(), Volume::story(self))
     }
+}
+
+/// The Commodore override both impls above share: the ordinary rule over the
+/// volume's files, plus the checksum-verified raw-sector story if it has one.
+///
+/// One function rather than two bodies, because a `.g64` IS a `.d64` once
+/// decoded and two copies of this would be exactly the hand-maintained
+/// cross-file invariant the refactoring policy names.
+fn commodore_stories(
+    contents: &[(String, Vec<u8>)],
+    verified: Option<DiskStory>,
+) -> Vec<DiskStory> {
+    let mut found: Vec<DiskStory> = contents
+        .iter()
+        .filter(|(_, bytes)| looks_like_story(bytes))
+        .cloned()
+        .map(DiskStory::from)
+        .collect();
+    if let Some(story) = verified {
+        if !found.iter().any(|f| f.name == story.name) {
+            found.push(story);
+        }
+    }
+    found
 }
 
 /// **The same disk as the impl above, arriving as a bitstream** (SQ-1095).
@@ -1550,10 +1727,137 @@ impl Volume for G64 {
         G64::pictures(self).map(DiskArt::from)
     }
 
-    /// Overridden for the reason the impl above states: `contents()` here is a
-    /// story found by checksum, not a directory listing to run a heuristic over.
+    /// Overridden for the reason the impl above states, and by the same route:
+    /// the raw-sector entry is a story found by checksum rather than a listing
+    /// to run a heuristic over, and any CBM file beside it is an ordinary file
+    /// and goes through the ordinary rule.
     fn stories(&self) -> Vec<DiskStory> {
-        Volume::story(self).into_iter().collect()
+        commodore_stories(&self.contents(), Volume::story(self))
+    }
+}
+
+/// **An Atari 8-bit floppy, whose filesystem may or may not still be there**
+/// (SQ-1458). See [`crate::atr`].
+impl Volume for Atr {
+    fn looks_like(raw: &[u8]) -> bool {
+        Atr::looks_like_atr(raw)
+    }
+
+    fn mount(raw: Vec<u8>) -> Option<Atr> {
+        Atr::mount(raw).ok()
+    }
+
+    fn volume_name(&self) -> Option<&str> {
+        // Atari DOS 2 keeps no volume name — only a sector count and a bitmap —
+        // so there is none to report, and none is invented. The same rule the
+        // AmigaDOS impl above follows.
+        None
+    }
+
+    fn file_count(&self) -> usize {
+        self.files().len()
+    }
+
+    fn contents(&self) -> Vec<(String, Vec<u8>)> {
+        Atr::contents(self)
+    }
+
+    fn read_named(&self, name: &str) -> Option<Vec<u8>> {
+        // Case-insensitive on the stored 8.3 name — **and on the one reserved
+        // name that is not a file**, `crate::atr::IMAGE_ENTRY`, which is how the
+        // S.A.G.A. database is reached at all. It is deliberately not listed by
+        // `contents`; see that constant.
+        Atr::read_named(self, name)
+    }
+
+    fn story(&self) -> Option<DiskStory> {
+        Atr::story(self).map(DiskStory::from)
+    }
+
+    fn pictures(&self) -> Option<DiskArt> {
+        Atr::pictures(self).map(DiskArt::from)
+    }
+}
+
+/// **An Apple II DOS 3.3 volume** (SQ-1458). See [`crate::dos33`].
+impl Volume for Dos33 {
+    fn looks_like(raw: &[u8]) -> bool {
+        Dos33::looks_like_dos33(raw)
+    }
+
+    fn mount(raw: Vec<u8>) -> Option<Dos33> {
+        Dos33::mount(raw).ok()
+    }
+
+    fn volume_name(&self) -> Option<&str> {
+        // DOS 3.3 has a volume NUMBER and no name. A number is not something to
+        // splice into "the disk called …", so this reports nothing rather than
+        // inventing a transliteration — `Dos33::volume_number` is where it lives.
+        None
+    }
+
+    fn file_count(&self) -> usize {
+        self.files().len()
+    }
+
+    fn contents(&self) -> Vec<(String, Vec<u8>)> {
+        Dos33::contents(self)
+    }
+
+    fn read_named(&self, name: &str) -> Option<Vec<u8>> {
+        // Case-insensitive on the normalised catalogue name. A binary file comes
+        // back with its four-byte load prologue in front, exactly as DOS stores
+        // it; `Dos33::read_binary` is the door to the stripped form, and the
+        // module docs say which a caller wants.
+        Dos33::read_named(self, name)
+    }
+
+    fn story(&self) -> Option<DiskStory> {
+        Dos33::story(self).map(DiskStory::from)
+    }
+
+    fn pictures(&self) -> Option<DiskArt> {
+        Dos33::pictures(self).map(DiskArt::from)
+    }
+}
+
+/// **The one impl here whose bytes are not a disk of any kind** (SQ-1458): an
+/// Atari binary-load file, whose single entry is the memory it loads. See
+/// [`crate::xex`].
+impl Volume for Xex {
+    fn looks_like(raw: &[u8]) -> bool {
+        Xex::looks_like_xex(raw)
+    }
+
+    fn mount(raw: Vec<u8>) -> Option<Xex> {
+        Xex::parse(&raw).ok()
+    }
+
+    fn volume_name(&self) -> Option<&str> {
+        // There is no volume, so there is no volume name — the same short answer
+        // `InfocomBoot` gives, and for the same reason.
+        None
+    }
+
+    fn file_count(&self) -> usize {
+        1
+    }
+
+    fn contents(&self) -> Vec<(String, Vec<u8>)> {
+        Xex::contents(self)
+    }
+
+    fn read_named(&self, name: &str) -> Option<Vec<u8>> {
+        // Case-insensitive on the only name this medium has: the range it loads.
+        Xex::read_named(self, name)
+    }
+
+    fn story(&self) -> Option<DiskStory> {
+        Xex::story(self).map(DiskStory::from)
+    }
+
+    fn pictures(&self) -> Option<DiskArt> {
+        Xex::pictures(self).map(DiskArt::from)
     }
 }
 
@@ -1985,6 +2289,24 @@ mod tests {
             // which is what makes the property test below a round trip through
             // the decoder rather than a second look at a sector dump.
             DiskImage::CommodoreG64 => crate::g64::tests::sample_disk(&story),
+            // Real filesystems, so they take the files like the rows above —
+            // the Atari's directory is 8.3 and the Apple's is thirty high-ASCII
+            // characters, and `STORY.DAT` fits both without shortening.
+            DiskImage::AtariDos2 => crate::atr::tests::sample_disk(&files),
+            // **The story alone**, and the reason is the filesystem's: DOS 3.3
+            // records a file's length in SECTORS and nowhere records its bytes,
+            // so a sixteen-byte `Readme` comes back as a 256-byte sector and
+            // cannot round-trip byte-exact through any read this reader could
+            // honestly offer. The story is 4,096 bytes — sixteen whole sectors —
+            // and does. (A type-`B` file's four-byte prologue DOES record a byte
+            // length, and `Dos33::read_binary` is that door; it is not this one,
+            // because the dialect spec's mastering constants index the file WITH
+            // its prologue. See `crate::dos33`.)
+            DiskImage::AppleDos33 => crate::dos33::tests::sample_disk(&[("STORY.DAT", &story)]),
+            // No `files`, on the ground the two rows above it state and one of
+            // its own: a loadable binary has no directory, and it has no
+            // sectors either — it is one segment and the memory it becomes.
+            DiskImage::AtariXex => crate::xex::tests::sample_binary(&story),
         }
     }
 
@@ -2016,6 +2338,16 @@ mod tests {
             // The same, and the same reason — and the sample keeps its story at
             // track 3 sector 0 because that is where *Trinity* keeps its own.
             DiskImage::CommodoreD64 | DiskImage::CommodoreG64 => ("T3/S0", &[]),
+            // A filesystem with a byte count per sector, so the same two names
+            // as the top arm.
+            DiskImage::AtariDos2 => ("STORY.DAT", &["Readme"]),
+            // …and one without: see `sample_of` for why this disk carries only
+            // the story.
+            DiskImage::AppleDos33 => ("STORY.DAT", &[]),
+            // The range the binary loads, which is the only thing this medium
+            // knows about its one entry — `crate::xex::Xex::entry_name`. The
+            // sample story is 4,096 bytes at `$4000`.
+            DiskImage::AtariXex => ("$4000-$4FFF", &[]),
         }
     }
 
@@ -2038,6 +2370,9 @@ mod tests {
             DiskImage::CommodoreD64,
             DiskImage::CommodoreG64,
             DiskImage::Iso9660,
+            DiskImage::AtariDos2,
+            DiskImage::AppleDos33,
+            DiskImage::AtariXex,
         ];
         for image in census {
             let (label, interpreter) = match image {
@@ -2083,6 +2418,16 @@ mod tests {
                 // same LABEL for the same reason: the type a library shows is
                 // the medium, and both of these are a 1541 floppy.
                 DiskImage::CommodoreG64 => ("CBM", Some(COMMODORE_128_INTERPRETER_NUMBER)),
+                // …and the Atari 8-bit declines for a THIRD reason, which is
+                // neither of the two above: §11.1.3 numbers no such machine at
+                // all. Its 5 is the Atari ST. Argued at the row.
+                DiskImage::AtariDos2 => ("Atari DOS", None),
+                DiskImage::AtariXex => ("XEX", None),
+                // …and the Apple II's third filesystem answers the same number
+                // as its other two, because §11.1.3 asks which machine the
+                // interpreter runs on and three rows disagreeing would make the
+                // number a property of the disk (SQ-0857).
+                DiskImage::AppleDos33 => ("DOS 3.3", Some(APPLE_IIGS_INTERPRETER_NUMBER)),
             };
             assert!(DiskImage::all().any(|d| d == image), "{image:?} has no row in FORMATS");
             assert_eq!(image.label(), label, "{image:?}");
@@ -2161,7 +2506,11 @@ mod tests {
         // is claimed when a medium wears it.
         // `toast` joined them in SQ-1055, on the Macintosh row and by the same
         // rule: `Shogun.toast` is a bare HFS volume and the corpus now wears it.
-        for want in ["adf", "image", "ima", "img", "st", "2mg", "dsk", "po", "toast"] {
+        // `atr` and `xex` joined them in SQ-1458, by the same rule: the fifteen
+        // Atari specimens in `stories/scott-dialects/atari/` wear one or the
+        // other, and the fourteen Apple sides beside them wear `dsk`, which the
+        // DOS 3.3 row now claims as a third.
+        for want in ["adf", "image", "ima", "img", "st", "2mg", "dsk", "po", "toast", "atr", "xex"] {
             assert!(image_extensions().any(|e| e == want), "no row claims {want:?}");
         }
         // …and a spelling still does NOT get a name before a medium wears it:
@@ -2419,6 +2768,22 @@ mod tests {
                     assert_eq!(DiskImage::detect(&blank), None, "no story, no Commodore disk");
                     continue;
                 }
+                // Filesystems, so "files and no game" is an ordinary disk.
+                DiskImage::AtariDos2 => crate::atr::tests::sample_disk(&files),
+                DiskImage::AppleDos33 => crate::dos33::tests::sample_disk(&files),
+                // Excluded, and asserted rather than skipped: a loadable binary
+                // is ONE entry by construction, so a two-file version of it
+                // cannot be built. What it can be is a binary that loads
+                // something which is not a game, and that mounts, lists its one
+                // entry, and offers no story — which is the claim being made.
+                DiskImage::AtariXex => {
+                    let raw = crate::xex::tests::sample_binary(b"LoadWB\n");
+                    let disk = MountedDisk::mount(raw).expect("a loadable binary still mounts");
+                    assert_eq!(disk.file_count(), 1);
+                    assert!(disk.stories().is_empty());
+                    assert_eq!(disk.story(), None);
+                    continue;
+                }
             };
             let disk = MountedDisk::mount(raw).expect("a boot disk still mounts");
             assert_eq!(disk.file_count(), 2, "{image:?}");
@@ -2516,8 +2881,18 @@ mod tests {
     #[test]
     fn real_release_disks_of_every_format_mount_through_one_path() {
         for image in DiskImage::all() {
-            // (fixture, the story's stored name, its version, does the disk
+            // (fixture, the entry's stored name, its version, does the disk
             //  also carry a picture archive?)
+            //
+            // **A version of `0` means the medium carries no Z-machine story at
+            // all** (SQ-1458), and then `story_name` is an entry it must LIST
+            // and read back instead. The three formats that answer that way are
+            // the Scott Adams media: nothing Infocom ever pressed is an Atari
+            // 8-bit disk, an Atari loadable binary or an Apple II DOS 3.3
+            // volume, so there is no Z-code on any specimen of them and saying
+            // otherwise would be inventing a fixture. What the property under
+            // test needs is unchanged — detect, mount, name itself, list, read
+            // back — and each of those is asserted for every row alike.
             let (fixture, story_name, version, has_art) = match image {
                 DiskImage::Adf => ("Zork Zero - The Revenge of Megaboz.adf", "Story.data", 6, true),
                 DiskImage::Hfs => ("Zork Zero Disk.image", "Story.data", 6, true),
@@ -2586,6 +2961,33 @@ mod tests {
                 DiskImage::CommodoreG64 => {
                     ("plundered_hearts[infocom_1987](r26)(!).g64", "T5/S0", 3, false)
                 }
+                // **The S.A.G.A. Atari 8-bit database side** — and the entry it
+                // must list is the one the disk still has a directory for, not
+                // the game: this release masters its database over sectors
+                // 360-368, so the filesystem it names is the DOS that boots it.
+                // The database is reached by file offset through
+                // `crate::atr::IMAGE_ENTRY`, which is `crate::atr`'s business
+                // and not this table's.
+                DiskImage::AtariDos2 => (
+                    "scott-dialects/atari/SAGA #1 - Adventureland [side A].atr",
+                    "AUTORUN.SYS",
+                    0,
+                    false,
+                ),
+                // **The Apple II S.A.G.A. boot side**, whose database IS a file
+                // and is named `A1.DAT` — one of §7.4's four recognised
+                // spellings.
+                DiskImage::AppleDos33 => (
+                    "scott-dialects/apple/Scott Adams Graphic Adventure 1 - Adventureland v2.1-416 (4am crack) side B - boot.dsk",
+                    "A1.DAT",
+                    0,
+                    false,
+                ),
+                // **The one loadable binary in the corpus** — Questprobe #1, The
+                // Hulk, loading `$4000..$9530`.
+                DiskImage::AtariXex => {
+                    ("scott-dialects/atari/The Hulk.xex", "$4000-$9530", 0, false)
+                }
             };
             // `stories/` for a floppy, `treasures/` for a CD-ROM — both
             // gitignored, and a fixture in neither is a skip.
@@ -2605,6 +3007,20 @@ mod tests {
             assert_eq!(DiskImage::detect(&bytes), Some(image), "{fixture}");
             let disk = MountedDisk::mount(bytes).expect("the release disk mounts");
             assert_eq!(disk.format(), image, "{fixture}");
+            if version == 0 {
+                // A medium with no Z-code on it says so, and still lists and
+                // reads back the entry this table names.
+                assert_eq!(disk.story(), None, "{fixture}: nothing here is Z-code");
+                assert!(disk.stories().is_empty(), "{fixture}");
+                let listed = disk.contents();
+                let found = listed
+                    .iter()
+                    .find(|(name, _)| name == story_name)
+                    .unwrap_or_else(|| panic!("{fixture}: no {story_name} in {listed:?}"));
+                assert_eq!(disk.read_named(story_name).as_ref(), Some(&found.1), "{fixture}");
+                assert_eq!(disk.pictures().map(|a| a.name), None, "{fixture}");
+                continue;
+            }
             let story = disk.story().expect("the release disk carries its game");
             assert_eq!(story.name, story_name, "{fixture}");
             assert_eq!(story.bytes[0], version, "{fixture}");
