@@ -60,6 +60,15 @@
 //! tripped over first. See [`Dialect`] for what each signature is and how
 //! it was established.
 //!
+//! Some of those snapshots are further wrapped in a HOST-machine container
+//! before the game's own tables are reachable at all — a ZX Spectrum
+//! `.z80` file, for instance, RLE-compresses the whole 48K memory image the
+//! tables live in, so no in-memory offset means anything until that layer
+//! is peeled off first. [`decompress_z80`] does that one container step
+//! (see its module docs for the format and its source); a Spectrum-dialect
+//! loader, when one exists, runs on its output rather than on the file's
+//! raw bytes.
+//!
 //! # Driving a session
 //!
 //! [`Vm::new`] (or [`Vm::new_seeded`], to fix the PRNG a game's occurrence
@@ -149,6 +158,7 @@ mod loader;
 mod options;
 mod scottfree_save;
 mod vm;
+mod z80;
 pub mod database;
 pub mod decompile;
 pub use database::{Action, Condition, Database, Item, Room};
@@ -157,3 +167,4 @@ pub use loader::{detect_dialect, looks_like_scott, Dialect, LoadError};
 pub use options::{Options, Presentation, Wording};
 pub use scottfree_save::looks_like_scottfree_save;
 pub use vm::{RestoreError, StepResult, Vm};
+pub use z80::{decompress_z80, looks_like_z80, Z80Error, IMAGE_LEN};
