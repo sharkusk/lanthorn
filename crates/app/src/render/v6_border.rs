@@ -10,31 +10,35 @@
 //! (Shogun's border ends at native row 336 of 400; Arthur's poles at 379), so
 //! the stretch spread an empty band over the bottom of the strip.
 //!
-//! This module TILES instead, the way Spatterlight's Bocfel does
-//! (`terps/bocfel/z6/draw_border.cpp`, header: *"Used by Arthur, Shogun, and
-//! Zork Zero"*, rationale *"The original games did not do this, but it looks
-//! better with modern screen sizes"*). Read for MECHANISM, not policy — Bocfel
-//! never scales border art horizontally either (`draw_to_pixmap_unscaled*`
-//! throughout), because it never fits art to a terminal pane.
+//! This module TILES instead: a flank is three sections stacked vertically — a
+//! cap, a repeating middle, and a foot — measured from the art's own pixels
+//! every time, never hard-coded per title. The model, every constant, and the
+//! screenshot measurements behind them are specified independently in
+//! `docs/internals/v6-border-tiling-spec.md`, which is the authority for every
+//! rule in this file. A GPL implementation, Spatterlight's Bocfel
+//! (`terps/bocfel/z6/draw_border.cpp`), was consulted historically while this
+//! module was first written (SQ-1063) and is compared against the spec's model
+//! rule-by-rule in that document's §7 — most rules differ; no code, constant
+//! table, or comment from it is reproduced here.
 //!
 //! ## Shape of the code
 //!
 //! A small toolkit of primitives — [`snapshot`], [`stamp`], [`tile_down`],
-//! [`erase_below`] — plus a port of Bocfel's [`extend_pillars`], and then one
-//! handler per title. The "derive a general tile-vs-stretch discriminator"
-//! requirement was dropped deliberately (SQ-0698, 2026-08-11): the reference
-//! could not do it either, hard-coding per game *and* per platform. What is
+//! [`erase_below`] — plus [`extend_pillars`], the composition for a flank that
+//! has a foot (spec §4.4), and then one handler per title. The "derive a
+//! general tile-vs-stretch discriminator" requirement was dropped deliberately
+//! (SQ-0698, 2026-08-11): a fixed per-title table cannot do it either. What is
 //! derived here is WHICH of the three known layouts a flank is showing
 //! ([`recognize`]), from the art's own native extent — and, for Zork Zero, WHERE
 //! its pillars are ([`pillar_shaft`]), because lanthorn lets the player choose
-//! the rendition and Bocfel does not. Everything else is per title, named, and
-//! sourced.
+//! the rendition. Everything else is per title, named, and sourced.
 //!
 //! Every row coordinate in this file is in lanthorn's v6 **unit space**, which
 //! is the art's own pixels doubled *vertically* (`session::V6_ART_SCALE` = 2;
 //! the horizontal factor is 1 for a 640-wide EGA or CGA archive, whose pixels
-//! are half as wide — SQ-0790). Bocfel's constants are in raw art rows, so each
-//! one appears here doubled, and the doubling is called out at every constant.
+//! are half as wide — SQ-0790). Picture archives store rows undoubled, so every
+//! constant in this file that is stated as a row count appears here doubled,
+//! and the doubling is called out at each one.
 
 use image::{Rgba, RgbaImage};
 
@@ -586,20 +590,23 @@ pub fn extend_with_sections(
     // them. `v6_archive_border_sweep`'s "a flank ends on its FOOT" is stated over the
     // flanks that have one for that reason.
     if footer_h > 0 {
-        /// How far the repeat unit stays clear of the capital above it and the base
-        /// below — Bocfel's two raw rows at each end, doubled into unit space.
+        /// How far the repeat unit stays clear of the capital above it and the
+        /// base below — two drawn rows at each end, doubled into unit space,
+        /// because a shaft's first and last rows are TRANSITIONS into the
+        /// capital and the base, and repeating a transition steps the shading
+        /// at every join (v6-border-tiling-spec.md §4.4). Measured on
+        /// `machine-screenshots/amiga-zorkzero.png`: the castle's shaft runs
+        /// `82..374`, and the unit that tiles without a visible join is
+        /// `86..370` — 82 + 4 and 374 − 4.
         const INSET: u32 = 4;
         // A flank with a footer is laid out by [`extend_pillars`], which is the
-        // tested primitive for exactly this shape: tile from where the foot WAS, then
-        // put the foot back at the new bottom. What has changed is where its three
-        // numbers come from — they are the section boundaries measured off the art,
-        // where they used to be Zork Zero's own constants applied to whatever flank
-        // arrived. Measured, `zork0.mg1`'s castle border gives a top cut of 82 and a
-        // 26-row foot; the constants said 86 and 26, and 86 is 82 plus this inset.
+        // tested primitive for exactly this shape: tile from where the foot WAS,
+        // then put the foot back at the new bottom. Its three numbers are the
+        // section boundaries measured off the art, not fixed per title: measured,
+        // `zork0.mg1`'s castle border gives a top cut of 82 and a 26-row foot,
+        // matching what `amiga-zorkzero.png` shows independently to the row
+        // (v6-border-tiling-spec.md §2.1, §7 rule 2).
         //
-        // The unit is inset at both ends for the reason the constant records: a
-        // shaft's first and last rows are transitions into the capital and the base,
-        // and repeating them steps the shading at every join.
         // **A shaft with a BAND in it is not a plain one** (SQ-0841). The Macintosh
         // column's band has to end the run on a whole copy of the art, or bare shaft
         // is left below its feet — measured as a last band standing 183 rows above
@@ -792,9 +799,9 @@ pub fn recognize(canvas: &RgbaImage, x0: u32, x1: u32, art: (u32, u32), native_h
 
 // ── Toolkit ──────────────────────────────────────────────────────────────────
 
-/// Copy rows `[y, y + h)` of `src` into a new image of the same width. Rows past
-/// the end of `src` come out transparent, exactly as Bocfel's
-/// `copy_rect_from_bitmap` zero-fills them.
+/// Copy rows `[y, y + h)` of `src` into a new image of the same width. Rows
+/// past the end of `src` come out transparent — a snapshot never panics on a
+/// unit that runs off the art it was cut from.
 pub fn snapshot(src: &RgbaImage, y: u32, h: u32) -> RgbaImage {
     let mut out = RgbaImage::new(src.width(), h.max(1));
     for oy in 0..h.min(out.height()) {
@@ -828,15 +835,17 @@ pub fn stamp(dst: &mut RgbaImage, strip: &RgbaImage, y: u32, flipped: bool) {
 }
 
 /// Tile `strip` down `dst` from `start_y` while the stamp's top is at or above
-/// `end_y`, stepping `strip.height() - overlap` rows at a time — Bocfel's
-/// `tile_section_down`, whose stride is `pillar_height - overlap` so that tiles
-/// OVERLAP rather than butt together. When `flip` is set each tile's vertical
-/// flip alternates from `initial_parity`; otherwise every tile is drawn with
-/// `initial_parity`. Returns the row the next tile would have started at.
+/// `end_y`, stepping `strip.height() - overlap` rows at a time, so a nonzero
+/// `overlap` makes tiles OVERLAP rather than butt together. When `flip` is set
+/// each tile's vertical flip alternates from `initial_parity`; otherwise every
+/// tile is drawn with `initial_parity`. Returns the row the next tile would
+/// have started at.
 ///
-/// Both devices exist to hide the seam in a repeated pattern. Arthur needs
-/// neither (his repeat unit is two lines of a plain texture); Zork Zero's
-/// patterned masonry is the case they were written for.
+/// `overlap` exists to hide a seam by means other than mirroring; the only
+/// production caller ([`extend_pillars`], Zork Zero's castle border) passes 0
+/// and hides its seam by mirroring instead (`initial_parity`/`flip`), which
+/// needs no overlap because a duplicated row already has nothing to show at
+/// the join (v6-border-tiling-spec.md §4.7).
 pub fn tile_down(
     dst: &mut RgbaImage,
     strip: &RgbaImage,
@@ -859,8 +868,8 @@ pub fn tile_down(
     y
 }
 
-/// Clear every row of `dst` from `y` down — Bocfel's `erase_lines_in_bitmap`,
-/// used to drop the overshoot of the last whole tile before the foot goes on.
+/// Clear every row of `dst` from `y` down, used to drop the overshoot of the
+/// last whole tile before the foot goes on.
 pub fn erase_below(dst: &mut RgbaImage, y: u32) {
     for dy in y..dst.height() {
         for x in 0..dst.width() {
@@ -869,7 +878,10 @@ pub fn erase_below(dst: &mut RgbaImage, y: u32) {
     }
 }
 
-/// Bocfel's `extend_pillars()`, ported: **capital → tiled shaft → foot**.
+/// The composition for a flank that HAS a foot: **capital → tiled shaft →
+/// foot** (v6-border-tiling-spec.md §4.4). Only Zork Zero's castle border
+/// reaches this arm today — Arthur and Shogun have no foot to re-anchor, see
+/// [`extend_with_sections`]'s no-footer arm instead.
 ///
 /// The art occupies rows `[0, total_height)`; its bottom `foot_height` rows are
 /// its base, and rows `[top_cut, top_cut + pillar_height)` are the unit that
@@ -877,20 +889,16 @@ pub fn erase_below(dst: &mut RgbaImage, y: u32) {
 /// the foot was) and runs to `desired_height`, then the foot is stamped at
 /// `desired_height - foot_height` with everything below it erased.
 ///
-/// **The ordering caveat is Bocfel's own, and it is not optional:** snapshot the
-/// repeat unit BEFORE erasing the foot. For Arthur `top_cut` equals
-/// `total_height - foot_height` exactly, so the unit's source rows sit inside
-/// the region erased immediately below — copy first, erase second, or the whole
-/// extension comes out blank.
-///
-/// One deliberate divergence: Bocfel nudges Arthur's foot up onto an even row
-/// (`if (is_spatterlight_arthur) foot_top -= (foot_top & 1);`) to keep his
-/// 2-line texture in phase where it meets the foot. It does not do that here.
-/// Bocfel can afford the nudge because its pixmap is clipped to
-/// `desired_height` and then scaled as a whole; ours is a band placed at a rect
-/// the caller already fixed, so pulling the foot up leaves an unpainted sliver
-/// against the pane's bottom edge. A gap at the bottom of the frame is a defect
-/// anyone can see; a one-raw-line phase jump inside a vertical texture is not.
+/// **Snapshot the repeat unit BEFORE erasing the foot.** This is stated as an
+/// invariant rather than assumed: in the current caller's geometry
+/// `top_cut + pillar_height` (the unit's last source row) sits above
+/// `total_height - foot_height` (where the erase starts), so the two never
+/// overlap and getting the order backwards would not actually corrupt today's
+/// castle band. Honouring the ordering anyway costs nothing, and a future
+/// caller that cuts its unit lower would depend on it —
+/// `extend_pillars_snapshots_the_unit_before_erasing_the_foot` below pins the
+/// ordering in a synthetic geometry where the two DO overlap, so a regression
+/// is caught even though it cannot arise from today's one caller.
 #[allow(clippy::too_many_arguments)]
 pub fn extend_pillars(
     dst: &mut RgbaImage,
@@ -910,8 +918,8 @@ pub fn extend_pillars(
     erase_below(dst, total_height - foot_height);
 
     let start_y = total_height.saturating_sub(foot_height + overlap);
-    // Bocfel: `bool initial_parity = flip;` — when flipping is on, the FIRST
-    // tile is the flipped one and the alternation runs from there.
+    // When flipping is on, the FIRST tile is the flipped one and the
+    // alternation runs from there (`initial_parity = flip`).
     tile_down(dst, &section, start_y, desired_height, overlap, flip, flip);
 
     let foot_top = desired_height.saturating_sub(foot_height);
@@ -1104,8 +1112,9 @@ pub fn banded_shaft(dst: &RgbaImage, art_bottom: u32) -> Option<(u32, u32)> {
 ///
 /// [`extend_pillars`] cuts a plain length of shaft, tiles it at a fixed stride
 /// until it passes the bottom, and stamps the foot over whatever the last tile
-/// overshot. On a featureless shaft that is invisible and it is what Bocfel
-/// does. On a shaft with a band in it, two things show:
+/// overshot. On a featureless shaft that is invisible — nothing distinguishes a
+/// mirrored copy from a translated one when the shaft has no texture to move.
+/// On a shaft with a band in it, two things show:
 ///
 /// 1. **The remainder.** The run ends wherever the fixed stride happens to
 ///    reach, so the gap between the last band and the foot is whatever is left
@@ -1200,13 +1209,15 @@ pub fn flank_source(
 ) -> Option<RgbaImage> {
     let kind = recognize(canvas, x0, x1, art, native_h)?;
     let desired = crop_top + rows;
-    // Bocfel guards every one of these routines the same way: extend only when
-    // the pane is taller than the art (`if (desired_height <= total_height) return;`).
+    // The guard: extend only when the pane is taller than the art
+    // (v6-border-tiling-spec.md §4.1 — the only composition that makes sense
+    // when the target is no taller than what was drawn).
     if desired <= art.1 || rows == 0 || x1 <= x0 {
         return None;
     }
-    // Work in ABSOLUTE canvas rows so each title's constants read exactly as
-    // they do in the reference, then hand the caller the band's own window.
+    // Work in ABSOLUTE canvas rows so each title's section boundaries read as
+    // the measurements in v6-border-tiling-spec.md state them, then hand the
+    // caller the band's own window.
     let w = x1.min(canvas.width()).saturating_sub(x0);
     if w == 0 {
         return None;
@@ -1412,10 +1423,15 @@ mod tests {
         assert_eq!(dst.get_pixel(0, 2)[0], 10);
     }
 
-    /// The ordering caveat Bocfel documents: Arthur's `top_cut` sits INSIDE the
-    /// foot region erased just below it, so a routine that erases before it
-    /// snapshots tiles a blank strip. Falsifiable: a 1-px-wide pole whose
-    /// texture is only in its bottom 10%.
+    /// The snapshot-before-clear ordering (v6-border-tiling-spec.md §4.4's
+    /// closing paragraph), pinned in a synthetic geometry where `top_cut` sits
+    /// INSIDE the foot region erased just below it, so a routine that erases
+    /// before it snapshots tiles a blank strip. Today's one caller
+    /// ([`extend_with_sections`]'s footer arm) never produces this geometry —
+    /// see [`extend_pillars`]'s own doc — but the ordering costs nothing to
+    /// honour and this is what would catch a regression if a future arm ever
+    /// cut its unit lower. Falsifiable: a 1-px-wide pole whose texture is only
+    /// in its bottom 10%.
     #[test]
     fn extend_pillars_snapshots_the_unit_before_erasing_the_foot() {
         let mut dst = RgbaImage::new(1, 200);
@@ -1539,8 +1555,10 @@ mod tests {
                 "a {banner}-row banner puts the shaft at {want:?}"
             );
         }
-        // And on the MCGA layout the measurement reproduces Bocfel's own castle
-        // constants: cut 86 = 82 + 4, foot 26 = 400 - 374, unit 284 = 292 - 8.
+        // And on the MCGA layout the measurement reproduces the numbers
+        // `machine-screenshots/amiga-zorkzero.png` shows independently, to the
+        // row (v6-border-tiling-spec.md §2.1, §7 rule 2): cut 86 = 82 + 4,
+        // foot 26 = 400 - 374, unit 284 = 292 - 8.
         let (top, bottom) = pillar_shaft(&zork_zero_flank(68), 400).expect("a shaft");
         assert_eq!((top + 4, 400 - bottom, bottom - top - 8), (86, 26, 284));
     }
@@ -1583,7 +1601,7 @@ mod tests {
 
     /// A single-piece border of one constant width — Shogun's DOS renditions,
     /// which reach the native screen bottom and are therefore handed to the Zork
-    /// Zero handler (SQ-0802). It declares no shaft, so Bocfel's constants stand.
+    /// Zero handler (SQ-0802). A constant-width slab has no shaft to declare.
     #[test]
     fn a_constant_width_slab_declares_no_shaft() {
         let slab = solid(46, 400, [9, 9, 9, 255]);
@@ -1648,5 +1666,112 @@ mod tests {
         assert_eq!(out.height(), 600);
         assert!(out.get_pixel(0, 599)[3] == 255, "the band's last row is painted");
         assert_eq!(out.get_pixel(0, 599)[0], 200, "and it is the foot, not the shaft");
+    }
+
+    /// A one-column pillar shaped like v6-border-tiling-spec.md §6.1's worked
+    /// example (`H` = 400, cap `[0, a)`, shaft `[a, e)`, foot `[e, 400)`), except
+    /// the foot is a row-index gradient rather than a flat colour, so a stamped
+    /// copy of it can be checked byte-for-byte instead of merely "some colour".
+    /// `canvas_h` is the full image height (>= any `desired_height` under test —
+    /// [`stamp`] and [`erase_below`] both clip to it); rows `[h, canvas_h)` start
+    /// transparent, exactly as an un-extended flank's canvas would.
+    fn pillar_with_marked_foot(canvas_h: u32, h: u32, a: u32, e: u32) -> RgbaImage {
+        let mut c = RgbaImage::new(1, canvas_h);
+        for y in 0..h {
+            let v = if y < a {
+                50
+            } else if y < e {
+                100
+            } else {
+                (y - e + 1) as u8
+            };
+            c.put_pixel(0, y, Rgba([v, v, v, 255]));
+        }
+        c
+    }
+
+    /// v6-border-tiling-spec.md §4.1's guard, at the two screen heights §6.1
+    /// worked directly: `S` = `H` (the original screen) and `S` < `H` (a window
+    /// shorter than the art). Both leave the flank untouched — the second is
+    /// cropped by the caller rather than extended, which is why this asserts
+    /// `None` and not a band of a particular height. `zork_zero_flank(68)` is
+    /// the fixture `the_pillar_shaft_is_measured_from_the_art_not_pinned_to_one_banner_height`
+    /// already pins as `H` = 400, shaft `[82, 374)`.
+    #[test]
+    fn the_guard_extends_only_when_the_target_exceeds_the_art() {
+        let canvas = zork_zero_flank(68);
+        assert!(
+            flank_source(&canvas, &canvas, 0, 86, (0, 400), 400, 0, 400).is_none(),
+            "S = 400 = H: the original screen needs no extension"
+        );
+        assert!(
+            flank_source(&canvas, &canvas, 0, 86, (0, 400), 400, 0, 300).is_none(),
+            "S = 300 < H: a window shorter than the art is cropped, not extended"
+        );
+    }
+
+    /// v6-border-tiling-spec.md §6.1, `S` = 660: a second copy is stamped at row
+    /// 658 (374 + 284 ≤ 660) and then wholly discarded, because the foot's clear
+    /// at `S - c` = 634 cuts through the FIRST copy's shaft — not at a stride
+    /// boundary (374, 658, 942, …). The remainder always lands at the bottom of
+    /// the requested band, wherever that happens to fall inside a tile.
+    #[test]
+    fn extend_pillars_lands_the_remainder_at_the_bottom() {
+        let mut dst = pillar_with_marked_foot(660, 400, 86, 374);
+        extend_pillars(&mut dst, 86, 26, 400, 284, 0, true, 660);
+        assert_eq!(dst.get_pixel(0, 633)[0], 100, "row 633 is still the tiled shaft");
+        for i in 0..26u32 {
+            assert_eq!(
+                dst.get_pixel(0, 634 + i)[0],
+                (i + 1) as u8,
+                "row {} is the foot's own row {i}, landed at the requested bottom",
+                634 + i
+            );
+        }
+    }
+
+    /// v6-border-tiling-spec.md §6.1: whatever `S` is, the foot's own rows land
+    /// unchanged at the band's new bottom — re-anchored, not redrawn or
+    /// resampled. Checked at two different `S`, both past a whole number of
+    /// tile strides (800 = 374 + 2·284 − 42; 1000 = 374 + 3·284 − 122) so the
+    /// foot's placement is independent of how the tiling landed above it.
+    #[test]
+    fn extend_pillars_re_anchors_the_foot_to_the_new_bottom() {
+        for desired in [800u32, 1000] {
+            let mut dst = pillar_with_marked_foot(desired, 400, 86, 374);
+            extend_pillars(&mut dst, 86, 26, 400, 284, 0, true, desired);
+            for i in 0..26u32 {
+                let y = desired - 26 + i;
+                assert_eq!(
+                    dst.get_pixel(0, y)[0],
+                    (i + 1) as u8,
+                    "S = {desired}: row {y} is the foot's own row {i}"
+                );
+            }
+        }
+    }
+
+    /// v6-border-tiling-spec.md §3.2, the Macintosh Arthur case: one flank
+    /// measures a period (the pole meets itself) and the other finds none and
+    /// falls back to treating the whole drawing as its own middle. Combined
+    /// conservatively: the cap is the LATER of the two, the foot is the
+    /// EARLIER, and a measured period is believed over an unmeasured one. And
+    /// because the two flanks of one frame are sectioned TOGETHER (§3.2), the
+    /// combination must not depend on which side is passed first.
+    #[test]
+    fn agree_sections_combines_a_flank_pair_symmetrically() {
+        let measured = FlankSections { middle_top: 185, middle_end: 379, period: 1, periodic: true, banded: false };
+        let unmeasured =
+            FlankSections { middle_top: 11, middle_end: 379, period: 368, periodic: false, banded: false };
+        let combined = agree_sections(measured, unmeasured);
+        assert_eq!(combined.middle_top, 185, "the cap is the LATER of the two");
+        assert_eq!(combined.middle_end, 379, "the foot is the EARLIER of the two");
+        assert!(combined.periodic, "a measured period from either side is believed");
+        assert_eq!(combined.period, 1, "the measured period wins over the unmeasured one");
+        assert_eq!(
+            agree_sections(measured, unmeasured),
+            agree_sections(unmeasured, measured),
+            "a symmetric pair of flanks must section identically regardless of call order"
+        );
     }
 }
