@@ -660,9 +660,25 @@ pub struct Machine {
     /// (e.g. a v6 picture-canvas cache) that the VM's own screen reset cannot
     /// reach. Cleared by the host when observed. Not part of saved state.
     pub just_restarted: bool,
+    /// Nonzero while [`Machine::run_routine`] is driving a nested call frame
+    /// (a timed-input interrupt or a sound finish-routine) with its own inner
+    /// `step()` loop — see [`Machine::step`]'s idempotence guard (SQ-1432),
+    /// which this lets that inner loop step past. A counter rather than a
+    /// bool because `run_routine` can itself be invoked from inside a routine
+    /// it is running (e.g. a finish-routine that triggers another sound whose
+    /// finish fires before this one returns) — see `run_routine`'s own nested
+    /// abandon path, which unwinds one level, not to zero. Not part of saved
+    /// state: it is always 0 at rest between host `step()` calls.
+    nested_call_depth: u32,
 }
 
 /// Context captured when the `save` opcode fires, needed by `complete_save`.
+///
+/// `Clone` so [`Machine::run_routine`] can snapshot and restore it exactly as
+/// it does [`PendingInput`] (SQ-1432) — a spec-violating timed-input/sound
+/// routine that fires a nested `@save` must not leave this set after the
+/// nested call is abandoned.
+#[derive(Clone)]
 struct PendingSave {
     /// v3: the branch descriptor; v4+: the store variable number.
     result_dest: SaveDest,
@@ -671,6 +687,7 @@ struct PendingSave {
     descriptor_pc: u32,
 }
 
+#[derive(Clone)]
 enum SaveDest {
     Branch(crate::cpu::decode::Branch),
     Store(u8),
@@ -816,6 +833,7 @@ impl Machine {
             mouse_window: 1,
             newline_interrupt_active: false,
             just_restarted: false,
+            nested_call_depth: 0,
         }
     }
 
@@ -1721,7 +1739,53 @@ impl Machine {
     /// This ensures `state.pc` already points past the call site when
     /// `call_routine` is invoked, giving the correct `return_pc`. Branch and
     /// jump offsets are computed relative to `state.pc` (= next_pc) too.
+    ///
+    /// # Idempotence while input/save/restore is pending (SQ-1432)
+    ///
+    /// A `read`/`read_char`/`save`/`restore` opcode advances `state.pc` PAST
+    /// itself before suspending (see the CRITICAL comment below), so the
+    /// naive re-poll — calling `step()` again without first resolving the
+    /// suspension — would decode and execute the INSTRUCTION AFTER the
+    /// suspended one, silently completing the read with blank/default
+    /// content (or worse, mid-way through a save/restore). `step()` guards
+    /// against that here: while a read is pending it returns the SAME
+    /// `NeedLine`/`NeedChar` again (rebuilt from the stored pending-input
+    /// state, byte-for-byte, including `preload`), and while a game `@save`/
+    /// `@restore` is pending it returns the same `SaveRequest`/
+    /// `RestoreRequest`, in every case touching neither `state.pc` nor any
+    /// buffer nor the transcript/command-record streams. The only ways
+    /// forward are [`Self::supply_line`], [`Self::supply_char`],
+    /// [`Self::abort_timed_input`] (which delegates to those two),
+    /// [`Self::complete_save`], [`Self::complete_restore_success`] and
+    /// [`Self::complete_restore_failure`] — each of which clears the pending
+    /// state before the next `step()` is allowed to proceed.
+    ///
+    /// The guard steps aside (`nested_call_depth != 0`) for
+    /// [`Self::run_routine`]'s own inner `step()` loop, which is how a timed-
+    /// input interrupt routine or a sound finish-routine actually executes
+    /// while the outer read/save/restore it was called from stays pending —
+    /// that is a real, intended nested call, not a re-poll of the same
+    /// suspension.
     pub fn step(&mut self) -> StepResult {
+        if self.nested_call_depth == 0 {
+            if let Some(p) = self.pending_input.as_ref() {
+                return if p.line_read {
+                    StepResult::NeedLine {
+                        text_buf: p.text_buf,
+                        parse_buf: p.parse_buf,
+                        preload: p.preload.clone(),
+                    }
+                } else {
+                    StepResult::NeedChar
+                };
+            }
+            if self.pending_save.is_some() {
+                return StepResult::SaveRequest;
+            }
+            if self.pending_restore {
+                return StepResult::RestoreRequest;
+            }
+        }
         let version = self.mem.version();
         let instr_start_pc = self.state.pc;
         self.cur_instr_pc = instr_start_pc;
@@ -4891,13 +4955,23 @@ impl Machine {
     }
 
     /// Call `packed_routine` to completion and return its value. Safe whether or
-    /// not a read is pending: it snapshots `pending_input` and restores it if the
-    /// routine attempts nested input/save/restart (unsupported — the routine is
-    /// then abandoned and 0 is returned). On the normal path `pending_input` is
-    /// left untouched. Used by timed-input interrupts and by the sound
-    /// finish-routine callback.
+    /// not a read/save/restore is pending: it snapshots that suspended state and
+    /// restores it if the routine attempts nested input/save/restart (unsupported
+    /// — the routine is then abandoned and 0 is returned). On the normal path the
+    /// snapshot is left untouched, since nothing here clears the outer suspension
+    /// — only the host's own `supply_line`/`supply_char`/`complete_save`/
+    /// `complete_restore_*` do that. Used by timed-input interrupts and by the
+    /// sound finish-routine callback.
+    ///
+    /// While this drives its own inner `step()` loop, `nested_call_depth` is
+    /// nonzero so `step()`'s SQ-1432 idempotence guard steps aside and actually
+    /// executes the routine's instructions, rather than mistaking this legitimate
+    /// nested call for a re-poll of the outer suspension.
     pub fn run_routine(&mut self, packed_routine: u16) -> u16 {
-        let saved = self.pending_input.clone();
+        let saved_input = self.pending_input.clone();
+        let saved_save = self.pending_save.clone();
+        let saved_restore = self.pending_restore;
+        let saved_restore_store = self.pending_restore_store;
         let base_frames = self.state.frames.len();
         let base_stack = self.state.eval_stack.len();
         // Push the routine, storing its return value onto the eval stack (var 0).
@@ -4906,6 +4980,7 @@ impl Machine {
             // packed 0 / bad addr: call_routine pushed 0 to the stack already.
             return self.state.eval_stack.pop().unwrap_or(0);
         }
+        self.nested_call_depth += 1;
         loop {
             match self.step() {
                 StepResult::Continue => {
@@ -4914,16 +4989,22 @@ impl Machine {
                     }
                 }
                 // Nested input/save/restart/quit inside the routine: unsupported.
-                // Unwind and restore, including pending_input (a nested read opcode
-                // may have overwritten it).
+                // Unwind and restore every suspension the outer call had, including
+                // pending_input/pending_save/pending_restore — a nested read/save/
+                // restore opcode may have overwritten any of them.
                 _ => {
                     self.state.frames.truncate(base_frames);
                     self.state.eval_stack.truncate(base_stack);
-                    self.pending_input = saved;
+                    self.pending_input = saved_input;
+                    self.pending_save = saved_save;
+                    self.pending_restore = saved_restore;
+                    self.pending_restore_store = saved_restore_store;
+                    self.nested_call_depth -= 1;
                     return 0;
                 }
             }
         }
+        self.nested_call_depth -= 1;
         let ret = self.state.eval_stack.pop().unwrap_or(0);
         // Guard: a well-behaved routine leaves the stack where we started.
         self.state.eval_stack.truncate(base_stack);
@@ -9317,6 +9398,185 @@ pub(crate) mod tests {
         let mut m = Machine::new(mem);
         let packed = (rout / 4) as u16;
         assert_eq!(m.run_routine(packed), 7, "ret 7 returns 7");
+    }
+
+    // -----------------------------------------------------------------------
+    // SQ-1432: step() must be idempotent while a read/read_char is pending.
+    //
+    // `read`/`read_char` advance state.pc PAST themselves before suspending
+    // (the "CRITICAL" comment on step()), so a host that polls step() again
+    // without first calling supply_line/supply_char/abort_timed_input must
+    // NOT execute the instruction after the read — that would silently
+    // complete the read with blank/default content. These cases falsify the
+    // guard by asserting the SAME StepResult and byte-identical machine state
+    // across repeated polls.
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn step_is_idempotent_while_a_line_read_is_pending() {
+        let (mut buf, ..) = build_input_story(5);
+        let text_buf: u16 = 0x0250;
+        buf[text_buf as usize] = 10;
+        let parse_buf: u16 = 0x0260;
+        buf[parse_buf as usize] = 8;
+        let n = emit_read(&mut buf, 0x0010, text_buf, parse_buf, 5, Some(0x10));
+        buf[0x0010 + n] = 0xBA; // quit — never reached if the guard holds
+        let mem = Memory::new(buf).unwrap();
+        let mut m = Machine::new(mem);
+        m.state.pc = 0x0010;
+
+        let first = m.step();
+        assert!(matches!(first, StepResult::NeedLine { .. }), "read suspends: {first:?}");
+        let pc0 = m.state.pc;
+        let text0 = mem_range(&m, text_buf as u32, 16);
+        let parse0 = mem_range(&m, parse_buf as u32, 16);
+        let out0 = m.buffer_output().unwrap().buf.clone();
+
+        for i in 0..3 {
+            let r = m.step();
+            assert_eq!(r, first, "re-poll {i} must return the identical NeedLine");
+            assert_eq!(m.state.pc, pc0, "re-poll {i} must not move the PC");
+            assert_eq!(mem_range(&m, text_buf as u32, 16), text0, "re-poll {i} must not touch the text buffer");
+            assert_eq!(mem_range(&m, parse_buf as u32, 16), parse0, "re-poll {i} must not touch the parse buffer");
+            assert_eq!(m.buffer_output().unwrap().buf, out0, "re-poll {i} must not print anything");
+        }
+    }
+
+    #[test]
+    fn step_is_idempotent_while_a_char_read_is_pending() {
+        let mut buf = sample_story(5);
+        buf[0x0010] = 0xF6; // VAR read_char
+        buf[0x0011] = 0x7F; // type: small const, rest omit
+        buf[0x0012] = 1;    // device = 1 (keyboard)
+        buf[0x0013] = 0x10; // store -> G0
+        buf[0x0014] = 0xBA; // quit — never reached if the guard holds
+        let mem = Memory::new(buf).unwrap();
+        let mut m = Machine::new(mem);
+        m.state.pc = 0x0010;
+
+        let first = m.step();
+        assert_eq!(first, StepResult::NeedChar, "read_char suspends");
+        let pc0 = m.state.pc;
+        let g0_before = m.global(0);
+        let out0 = m.buffer_output().unwrap().buf.clone();
+
+        for i in 0..3 {
+            let r = m.step();
+            assert_eq!(r, first, "re-poll {i} must return the identical NeedChar");
+            assert_eq!(m.state.pc, pc0, "re-poll {i} must not move the PC");
+            assert_eq!(m.global(0), g0_before, "re-poll {i} must not store a value");
+            assert_eq!(m.buffer_output().unwrap().buf, out0, "re-poll {i} must not print anything");
+        }
+    }
+
+    /// Read `len` bytes starting at `addr` for a byte-identical-state comparison.
+    fn mem_range(m: &Machine, addr: u32, len: u32) -> Vec<u8> {
+        (0..len).map(|i| m.mem.read_byte(addr + i)).collect()
+    }
+
+    #[test]
+    fn timed_read_repoll_does_not_fire_the_interrupt_but_run_timed_interrupt_still_does() {
+        // routine body: inc G0 (1OP:0x05 short form small const 0x10), rfalse.
+        let (buf, _) = timed_read_story(&[0x95, 0x10, 0xB1]);
+        let mem = Memory::new(buf).unwrap();
+        let mut m = Machine::new(mem);
+        m.state.pc = 0x10;
+        let first = m.step();
+        assert!(matches!(first, StepResult::NeedLine { .. }));
+        let g_before = m.global(0);
+
+        for i in 0..3 {
+            let r = m.step();
+            assert_eq!(r, first, "re-poll {i} returns the identical NeedLine");
+            assert_eq!(m.global(0), g_before, "re-poll {i} must NOT fire the timed-input interrupt");
+        }
+
+        let out = m.run_timed_interrupt();
+        assert!(!out.aborted, "the un-aborting routine still runs when actually invoked");
+        assert_eq!(
+            m.global(0),
+            g_before.wrapping_add(1),
+            "run_timed_interrupt is the real, still-working way to fire it"
+        );
+    }
+
+    #[test]
+    fn supply_line_after_repolls_matches_a_machine_polled_only_once() {
+        // read (store terminator -> G0) then print_num of G0 (VAR:0x06, Variable
+        // operand referencing global 0) then quit, so the transcript after the
+        // read completes is observable and comparable byte-for-byte.
+        let build = || {
+            let (mut buf, ..) = build_input_story(5);
+            let text_buf: u16 = 0x0250;
+            buf[text_buf as usize] = 10;
+            let n = emit_read(&mut buf, 0x0010, text_buf, 0, 5, Some(0x10));
+            let mut p = 0x0010 + n;
+            buf[p] = 0xE6; p += 1;    // VAR print_num
+            buf[p] = 0xBF; p += 1;    // type: Variable, rest omit
+            buf[p] = 0x10; p += 1;    // operand: variable G0 (the stored terminator)
+            buf[p] = 0xBA;            // quit
+            buf
+        };
+
+        // Baseline: polled exactly once before supply_line.
+        let mut a = Machine::new(Memory::new(build()).unwrap());
+        a.state.pc = 0x0010;
+        assert!(matches!(a.step(), StepResult::NeedLine { .. }));
+        a.supply_line("north", 13);
+        loop {
+            match a.step() {
+                StepResult::Quit => break,
+                StepResult::Continue => {}
+                other => panic!("unexpected: {other:?}"),
+            }
+        }
+
+        // Same story, re-polled 3 extra times before supply_line.
+        let mut b = Machine::new(Memory::new(build()).unwrap());
+        b.state.pc = 0x0010;
+        assert!(matches!(b.step(), StepResult::NeedLine { .. }));
+        for _ in 0..3 {
+            assert!(matches!(b.step(), StepResult::NeedLine { .. }));
+        }
+        b.supply_line("north", 13);
+        loop {
+            match b.step() {
+                StepResult::Quit => break,
+                StepResult::Continue => {}
+                other => panic!("unexpected: {other:?}"),
+            }
+        }
+
+        assert_eq!(
+            a.buffer_output().unwrap().buf,
+            b.buffer_output().unwrap().buf,
+            "re-polling before supply_line must not change the game's next output"
+        );
+        assert_eq!(a.buffer_output().unwrap().buf, "13", "sanity: terminator 13 got printed");
+        assert_eq!(mem_range(&a, 0x0250, 16), mem_range(&b, 0x0250, 16), "text buffer matches");
+    }
+
+    #[test]
+    fn restart_while_a_read_is_pending_clears_the_suspension() {
+        let (mut buf, ..) = build_input_story(5);
+        let text_buf: u16 = 0x0250;
+        buf[text_buf as usize] = 10;
+        let n = emit_read(&mut buf, 0x0010, text_buf, 0, 5, Some(0x10));
+        buf[0x0010 + n] = 0xBA;
+        let mem = Memory::new(buf).unwrap();
+        let mut m = Machine::new(mem);
+        m.state.pc = 0x0010;
+        assert!(matches!(m.step(), StepResult::NeedLine { .. }));
+        assert!(m.pending_read_pc().is_some(), "suspended at the read");
+
+        m.restart();
+
+        assert!(m.pending_read_pc().is_none(), "restart clears a pending read");
+        assert!(!m.is_saveload_pending(), "restart clears a pending save/restore too");
+        // A step() right after restart must decode fresh code at the reboot PC,
+        // not re-return a stale NeedLine — the strongest witness that the
+        // suspension is gone rather than merely unreported.
+        assert!(!matches!(m.step(), StepResult::NeedLine { .. }), "no stale suspension survives restart");
     }
 
     // -----------------------------------------------------------------------

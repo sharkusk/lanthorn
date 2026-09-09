@@ -42,19 +42,24 @@
 // are asserted against TerpEtude's own Inform source instead (`timedch.inc`,
 // `timedstr.inc`), which is unambiguous about what each tick prints.
 //
-// **A read must never be polled twice.** `Machine::step()` does not special-
-// case a still-pending read: `step()` unconditionally decodes and executes
-// whatever is at `state.pc`, which the read opcode already advanced PAST
-// before suspending (so that a later `supply_line`/`supply_char` resumes
-// correctly). Call `step()` again before supplying anything and it executes
-// the INSTRUCTION AFTER THE READ as though the read had silently completed
-// with blank/default content — TestTimedString's own "You just typed a
-// blank line" appearing after nothing was typed is exactly that trap, hit
-// and fixed while writing this file. `run_timed_interrupt()` is always safe
-// to call in a loop (it pushes and steps its own call frame, isolated from
-// the outer pending read) — just never follow it with a bare `step()` until
-// the read is actually completed (`supply_char`/`supply_line`/
-// `abort_timed_input`).
+// **A read must never be polled twice — and now `Machine::step()` guarantees
+// it (SQ-1432).** This file is where that footgun was first hit: TestTimedString's
+// own "You just typed a blank line" appeared after nothing was typed, because
+// `step()` used to unconditionally decode and execute whatever was at
+// `state.pc`, which the read opcode had already advanced PAST before
+// suspending (so that a later `supply_line`/`supply_char` resumes correctly).
+// Calling `step()` again before supplying anything executed the INSTRUCTION
+// AFTER THE READ as though the read had silently completed with blank/default
+// content. `step()` now guards against exactly that: while a read (or a game
+// `@save`/`@restore`) is pending it returns the SAME `StepResult` again,
+// touching neither the PC nor any buffer, and the only ways forward are
+// `supply_line`/`supply_char`/`abort_timed_input` (reads) or `complete_save`/
+// `complete_restore_success`/`complete_restore_failure` (save/restore) — see
+// `Machine::step`'s own doc comment. `run_timed_interrupt()` is always safe to
+// call in a loop (it pushes and steps its own call frame, isolated from the
+// outer pending read, via the same nested-call door the guard steps aside
+// for) — just never follow it with a bare `step()` until the read is actually
+// completed.
 
 use zvm::cpu::exec::{Machine, StepResult};
 use zvm::memory::Memory;
