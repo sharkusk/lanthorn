@@ -86,6 +86,20 @@ host on each save/restore request (`Machine::pending_saveload_request` →
     saves list (app) and never prompt (both hosts). These stay bare `.qzl` files:
     they are the game's private storage, not player-facing save slots.
 
+**A third case never reaches the host at all (SQ-1427).** Not every `@save`/
+`@restore` targets a fileref — the Glulx spec hands the opcode whatever writable
+Glk stream the game opened, and a memory stream (`glk_stream_open_memory`) is a
+legal, self-contained target: its bytes already live inside VM memory, so there
+is nothing for the host to write or read. `crates/gvm/src/exec.rs`'s opcode
+handlers detect a `StreamKind::Memory` operand and build/apply the Quetzal in
+process (`write_bytes_to_memory_stream`/`read_bytes_from_memory_stream`),
+never suspending with `SaveRequest`/`RestoreRequest` — `Machine::pending_saveload_request`
+stays `None` throughout. A read-only Blorb resource stream (a game ships a
+pre-computed save as a `Data` chunk to skip an expensive init) already worked
+this way for the identical reason — its bytes are inside the VM too — which is
+what CM's boot-time restore relies on (SQ-0595); SQ-1427 is a memory stream's
+turn.
+
 **Restoring one.** The extension no longer decides: `restore_from_file`
 (`crates/app/src/engine_helpers.rs`) reads `meta.trigger` and, for `"ingame"`,
 completes the suspended `@save`/`@restore` descriptor (`Engine::restore_game_save`
