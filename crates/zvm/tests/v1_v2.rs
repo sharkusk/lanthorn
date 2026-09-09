@@ -467,6 +467,51 @@ fn v1_v2_dictionary_lookup_matches_a_hand_packed_entry() {
     }
 }
 
+/// SQ-1442. §3.7: "any multi-Z-character constructions should be left
+/// incomplete (rather than omitted) if there's no room to finish them."
+/// "aa11a" in Version 2 is a boundary case: 'a','a' consume two Z-chars, the
+/// two consecutive '1's lock into A2 (§3.7.1) for three more, and the final
+/// 'a' needs to shift back out of the lock with only ONE Z-char slot left —
+/// room for the shift alone (Z-char 2), not its body. A dictionary compiled
+/// correctly per §3.7 has that shift in the last slot; the bug this fixes
+/// omitted the whole construction and padded with Z-char 5 there instead
+/// (see `encode.rs`'s `shift_lock_left_incomplete_when_budget_exhausted_v2`
+/// for the full by-hand derivation of `[6,6, 5,9,9, 2]`). The two encodings
+/// differ only in that last byte, so this is the case that actually proves
+/// the fix matters: `encode_word_mem` (what `lookup` uses) has to produce the
+/// SAME left-incomplete bytes the dictionary was compiled with, or the word
+/// never resolves.
+#[test]
+fn v1_v2_lookup_matches_boundary_truncated_shift() {
+    fn pack6(z: [u8; 6]) -> [u8; 4] {
+        let w0 = ((z[0] as u16) << 10) | ((z[1] as u16) << 5) | z[2] as u16;
+        let w1 = 0x8000 | ((z[3] as u16) << 10) | ((z[4] as u16) << 5) | z[5] as u16;
+        [(w0 >> 8) as u8, w0 as u8, (w1 >> 8) as u8, w1 as u8]
+    }
+    let aa11a = pack6([6, 6, 5, 9, 9, 2]);
+    assert_eq!(
+        encode_word("aa11a", 2),
+        aa11a,
+        "encoder must produce the left-incomplete bytes, not omit-and-pad"
+    );
+
+    let mut buf = sample_story(2);
+    let dict: usize = 0x0200;
+    buf[dict] = 0; // no word separators
+    buf[dict + 1] = 4; // entry_length: 4 bytes, the v1–v3 resolution
+    buf[dict + 2] = 0;
+    buf[dict + 3] = 1; // one entry
+    buf[dict + 4..dict + 8].copy_from_slice(&aa11a);
+
+    let m = Memory::new(buf).unwrap();
+    let d = load(&m);
+    assert_ne!(
+        d.lookup(&m, "aa11a"),
+        0,
+        "the §3.7 left-incomplete encoding is what makes this match"
+    );
+}
+
 // ---------------------------------------------------------------------------
 // §11.1 — the header fields Versions 1 and 2 do not have
 // ---------------------------------------------------------------------------

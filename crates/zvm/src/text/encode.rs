@@ -137,19 +137,33 @@ fn encode_word_impl(text: &str, version: u8, custom: Option<&[u8; 78]>) -> Vec<u
             && cur.alphabet != current
             && chars.get(n + 1).map(|&next| classify(next).alphabet) == Some(cur.alphabet);
         let delta = (cur.alphabet + 3 - current) % 3;
-        // Only emit if the shift AND the whole body fit; a partially written
-        // escape would decode as something else entirely.
-        let need = cur.len + usize::from(delta != 0);
-        if zchars.len() + need > zchar_limit {
-            break;
-        }
+
+        // §3.7: "any multi-Z-character constructions should be left incomplete
+        // (rather than omitted) if there's no room to finish them" — so a
+        // shift (or shift-lock) plus its body, or the §3.4 escape's shift plus
+        // its three Z-chars, is emitted in order and cut off exactly at the
+        // budget, never skipped whole to make room for a pad Z-char instead.
+        // Bocfel's `dict.cpp` writes straight into its fixed-size 12-Z-char
+        // buffer and stops when it is full, which is this same
+        // truncate-in-place; Frotz's `encode_text` (`text.c`) does likewise.
+        let mut construction: [u8; 4] = [0; 4];
+        let mut clen = 0;
         if delta != 0 {
-            zchars.push(shift_base + delta + if lock { 2 } else { 0 });
+            construction[clen] = shift_base + delta + if lock { 2 } else { 0 };
+            clen += 1;
         }
+        construction[clen..clen + cur.len].copy_from_slice(&cur.body[..cur.len]);
+        clen += cur.len;
+
+        let remaining = zchar_limit - zchars.len();
+        let take = clen.min(remaining);
         if lock {
             current = cur.alphabet;
         }
-        zchars.extend_from_slice(&cur.body[..cur.len]);
+        zchars.extend_from_slice(&construction[..take]);
+        if take < clen {
+            break;
+        }
     }
 
     // Pad to zchar_limit with Z-char 5.
@@ -322,18 +336,103 @@ mod tests {
     }
 
     #[test]
-    fn escape_truncates_when_budget_exhausted() {
-        // v3 zchar_limit is 6. "aaa" consumes 3 Z-chars, leaving only 3 — not
-        // enough for the 4-Z-char escape needed for 'é'. The word must
-        // truncate cleanly (no partial escape, no panic), decoding to "aaa".
+    fn escape_left_incomplete_when_budget_exhausted() {
+        // §3.7: "any multi-Z-character constructions should be left
+        // incomplete (rather than omitted) if there's no room to finish
+        // them." v3 zchar_limit is 6. "aaa" consumes 3 Z-chars (each 'a' is
+        // A0 index 0 → Z-char 6), leaving 3 — not enough for the 4-Z-char
+        // escape 'é' needs (shift-to-A2 Z-char 5, then Z-char 6, then the
+        // hi/lo halves of its ZSCII code). SQ-1442: the old code treated that
+        // as "doesn't fit" and OMITTED the escape entirely, padding with
+        // Z-char 5 instead — which is wrong per §3.7 and is what this test
+        // used to pin. The fix pushes as much of the escape as fits and
+        // stops there, so the last 3 slots hold [shift(5), Z-char 6,
+        // hi-half] rather than three pad Z-chars.
+        //
+        // é is ZSCII 170 (UNICODE_TABLE index 15, 155+15): hi = 170>>5 = 5,
+        // lo = 170&31 = 10 (never reached — truncated before the lo half).
+        // Z-chars by hand: [6,6,6, 5,6,5] (the emitted hi half is 5).
+        //   word0 = (6<<10)|(6<<5)|6 = 0x18C6
+        //   word1 = (5<<10)|(6<<5)|5 | 0x8000(terminator) = 0x94C5
         let enc = encode_word("aaaé", 3);
-        assert_eq!(enc.len(), 4);
+        assert_eq!(enc, vec![0x18, 0xC6, 0x94, 0xC5], "enc: {enc:02X?}");
         let bytes = sample_story(3);
         let mut m = Memory::new(bytes).unwrap();
         m.write_word(0x100, ((enc[0] as u16) << 8) | enc[1] as u16);
         m.write_word(0x102, ((enc[2] as u16) << 8) | enc[3] as u16);
         let (decoded, _) = decode_string(&m, 0x100);
-        assert_eq!(decoded, "aaa", "decoded: {:?}", decoded);
+        // The first three characters are unaffected by the truncation.
+        assert!(decoded.starts_with("aaa"), "decoded: {:?}", decoded);
+    }
+
+    #[test]
+    fn shift_left_incomplete_when_budget_exhausted_v3() {
+        // Same §3.7 rule, a plain single-shift-and-glyph construction rather
+        // than the escape. v3 zchar_limit is 6; "abcde" consumes 5 Z-chars
+        // (a=6,b=7,c=8,d=9,e=10, each A0 index+6), leaving 1 — not enough for
+        // '1' (A0→A2 shift, Z-char 5, then A2 index 3 → Z-char 9). The fix
+        // emits the shift and stops, so the last slot is Z-char 5.
+        //
+        // Note this is byte-IDENTICAL to the old omit-and-pad behaviour: v3's
+        // A0→A2 shift happens to compute to the same value (5) as the pad
+        // Z-char (§3.7: "the pad character... must be 5"), so this case alone
+        // does not distinguish the fix from the bug — `escape_left_incomplete…`
+        // and the v1/v2 lock case below do, because their emitted Z-char
+        // differs from 5. This case is pinned anyway since it is a
+        // §3.7-mandated construction the encoder must still get right.
+        //
+        // Z-chars by hand: [6,7,8,9,10, 5]
+        //   word0 = (6<<10)|(7<<5)|8 = 0x18E8
+        //   word1 = (9<<10)|(10<<5)|5 | 0x8000 = 0xA545
+        let enc = encode_word("abcde1", 3);
+        assert_eq!(enc, vec![0x18, 0xE8, 0xA5, 0x45], "enc: {enc:02X?}");
+    }
+
+    #[test]
+    fn escape_left_incomplete_when_budget_exhausted_v5() {
+        // v5 zchar_limit is 9. "abcdefg" (7 letters, A0 index+6 each: a=6 ..
+        // g=12) leaves 2 — not enough for é's 4-Z-char escape, but enough for
+        // its leading shift (Z-char 5) and its Z-char 6 marker. Unlike the v3
+        // single-shift case above, this construction's SECOND emitted Z-char
+        // (6) differs from the pad value (5), so the fix is visible in the
+        // bytes even without decoding.
+        //
+        // Z-chars by hand: [6,7,8,9,10,11,12, 5,6]
+        //   word0 = (6<<10)|(7<<5)|8   = 0x18E8
+        //   word1 = (9<<10)|(10<<5)|11 = 0x254B
+        //   word2 = (12<<10)|(5<<5)|6 | 0x8000 = 0xB0A6
+        let enc = encode_word("abcdefgé", 5);
+        assert_eq!(
+            enc,
+            vec![0x18, 0xE8, 0x25, 0x4B, 0xB0, 0xA6],
+            "enc: {enc:02X?}"
+        );
+    }
+
+    #[test]
+    fn shift_lock_left_incomplete_when_budget_exhausted_v2() {
+        // §3.7.1's shift-lock, truncated mid-word rather than the plain
+        // single-shift above. v2 zchar_limit is 6. "aa11a":
+        //   'a','a'  → A0, Z-char 6 each (zchars: 6,6)
+        //   '1','1'  → both A2 and consecutive, so §3.7.1 locks: shift-lock
+        //              is Z-char 5 (shift_base 1 + delta 2 + lock 2), then
+        //              A2 index 3 ('1') → Z-char 9. Second '1' needs no
+        //              further shift (already locked at A2): Z-char 9.
+        //              (zchars: 5,9,9)
+        //   'a'      → last character, shifts back out of the lock to A0:
+        //              delta 1, shift_base 1, no further lock (no next
+        //              char to share it) → Z-char 2. Only 1 slot remains,
+        //              not enough for the shift AND 'a's own body (Z-char
+        //              6), so the fix emits the shift alone and stops.
+        //
+        // This DOES differ from the old omit-and-pad bytes: the old code
+        // padded that last slot with Z-char 5, and this shift is Z-char 2.
+        //
+        // Z-chars by hand: [6,6, 5,9,9, 2]
+        //   word0 = (6<<10)|(6<<5)|5 = 0x18C5
+        //   word1 = (9<<10)|(9<<5)|2 | 0x8000 = 0xA522
+        let enc = encode_word("aa11a", 2);
+        assert_eq!(enc, vec![0x18, 0xC5, 0xA5, 0x22], "enc: {enc:02X?}");
     }
 
     #[test]
