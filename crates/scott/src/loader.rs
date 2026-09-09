@@ -45,54 +45,147 @@ pub enum LoadError {
     BadExit(i32),
     /// The file is not this crate's ScottFree text format, but its bytes
     /// match a KNOWN other Scott Adams dialect's signature — see [`Dialect`].
-    /// Detection only: this crate does not read any of these formats (that
-    /// is SQ-1414's job); the point of a named variant is a host telling the
-    /// player "this is a TI-99/4A cartridge dump" rather than a generic
-    /// parse failure that gives no hint what went wrong.
+    ///
+    /// **Detection only.** This crate reads none of these formats: it is a
+    /// refusal that can name what it refused, so a host can tell the player
+    /// "this is a TI-99/4A game image" instead of showing a generic parse
+    /// failure that gives no hint what went wrong. Loading them is SQ-1414,
+    /// which is gated on a functional specification of each format written
+    /// independently of the GPL interpreters (lanthorn is BSD-3-Clause), not
+    /// merely on someone finding the time.
     UnsupportedDialect(Dialect),
 }
 
 /// A Scott Adams / Adventure International game-data format this crate's
 /// [`Database::parse`] does not read, recognised by a fixed byte signature
 /// rather than by attempting (and failing) the normal text parse — see
-/// [`detect_dialect`]. Every signature here is Gargoyle's own
-/// (`terps/scott/detectgame.c`'s `dictKeys` table and
-/// `terps/scott/ti99_4a/load_ti99_4a.c`'s `DetectTI994A`), the same project
-/// the reference audit (SQ-1014 note, 2026-09-08) names as spending
-/// ~100 KB of C on exactly this problem.
+/// [`detect_dialect`].
+///
+/// # Where these signatures come from
+///
+/// Each one is the opening of the game's own **verb dictionary**, and each
+/// is stated below as a fact about the on-disk layout, re-derived by
+/// measurement over the specimen corpus catalogued on [`detect_dialect`]
+/// rather than taken from any interpreter's source. lanthorn is
+/// BSD-3-Clause and the established Scott Adams interpreters are GPL, so a
+/// signature is carried into this crate only once it has been measured off
+/// real game files (SQ-1414; the pre-existing citations of one such
+/// interpreter's source were replaced by the measurements below).
+///
+/// Every Adventure International dictionary begins with the same two verbs
+/// in the same two slots — `AUTO` (verb 0, the occurrence pseudo-verb) then
+/// `GO` (verb 1) — stored in **fixed-width fields**, so the first two
+/// entries are a stable byte pattern that varies only with the field width
+/// and with how the format marks a synonym. That is the whole of what these
+/// signatures are, and it is why each is some spelling of "AUTO, GO".
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum Dialect {
-    /// TI-99/4A tokenized bytecode (a cartridge/cassette dump, not text at
-    /// all): Gargoyle's `DetectTI994A` scans the whole file for the fixed
-    /// 10-byte sequence `30 30 30 30 00 30 30 00 28 28`
-    /// (`load_ti99_4a.c:126-127`), found at a fixed offset from the game's
-    /// own data header on every TI-99/4A release Gargoyle supports.
+    /// A TI-99/4A game image (a cartridge, cassette or `.fiad` disk-file
+    /// dump) — a self-contained binary with its own header and its own
+    /// action bytecode, not text at all, so nothing in it resembles the
+    /// `.dat` this crate reads.
+    ///
+    /// Recognised by the fixed 10-byte sequence
+    /// `30 30 30 30 00 30 30 00 28 28`. Measured: that sequence occurs
+    /// exactly once, at file offset **1417** (`0x589`), in all twelve
+    /// TI-99/4A releases of Adventures 1-12 (`adv01.fiad`-`adv12.fiad`),
+    /// whose sizes range from 10,170 to 12,616 bytes. A fixed offset in
+    /// those twelve is not evidence of a fixed offset in general, so the
+    /// scan below stays unanchored.
     Ti994aBytecode,
-    /// A raw C64 / ZX Spectrum / Atari 8-bit / Apple II memory snapshot
-    /// carrying an UNCOMPRESSED binary Adventure International verb/noun
-    /// dictionary, rather than this crate's ASCII text `.dat`. Gargoyle's
-    /// `detectgame.c` `dictKeys` table (`detectgame.c:44-46`) scans for one
-    /// of three encoded "GO" dictionary layouts: the four-letter table
-    /// (`b"AUTO\0GO\0"`), the three-letter table (`b"AUT\0GO\0"`), or
-    /// Claymorgue's five-letter table (`b"GO\0\0\0\0*CROSS*RUN\0"`).
+    /// A C64 / ZX Spectrum / Atari 8-bit / Apple II memory snapshot
+    /// carrying a binary Adventure International dictionary whose entries
+    /// are NUL-padded to a fixed width — the plain, unpacked layout.
+    ///
+    /// Three field widths are known, and each gives a different opening
+    /// pattern. Measured on `m1goldba.z80` and `supergra.z80` (see
+    /// [`detect_dialect`]), whose companion `.dat` conversions declare word
+    /// length 4: entries are **5 bytes** wide — a word of up to 5
+    /// characters, NUL-padded — and a leading `*` marks a synonym of the
+    /// preceding canonical word. The table there opens
+    /// `AUTO\0` `GO\0\0\0` `SWIM\0` `SQUE\0` …, of which the first 8 bytes,
+    /// `b"AUTO\0GO\0"`, are the signature.
+    ///
+    /// The same construction at the other two widths gives the other two
+    /// signatures: a 4-byte field (word length 3) opens `AUT\0` `GO\0`,
+    /// i.e. `b"AUT\0GO\0"`; a 6-byte field (word length 5) opens
+    /// `GO\0\0\0\0` `*CROSS` `*RUN\0`, i.e. `b"GO\0\0\0\0*CROSS*RUN\0"` —
+    /// the wide-dictionary layout The Sorcerer of Claymorgue Castle uses,
+    /// which begins at `GO` rather than `AUTO`. Neither of those two
+    /// appears in the corpus measured here; both are carried forward from
+    /// the pre-existing detection (SQ-1413) **unverified**, and
+    /// [`detect_dialect`]'s own doc says so.
     C64OrZxSnapshot,
-    /// The same style of memory-image dictionary, COMPRESSED: Gargoyle's
-    /// `FOUR_LETTER_COMPRESSED` signature `b"aUTOgO\0"` (`detectgame.c:47`)
-    /// — the high bit of alternating bytes packs extra data, which is why
-    /// the signature bytes are mixed-case ASCII rather than the plain
-    /// uppercase of the uncompressed tables. Gremlins, Supergran, Robin of
-    /// Sherwood and Seas of Blood (the reference audit's own examples)
-    /// ship their action tables this way.
+    /// The same style of memory-image dictionary, **packed**: the trailing
+    /// NUL pad is dropped and the synonym marker moves into the letter
+    /// casing, so each entry is one byte narrower than the equivalent
+    /// unpacked table.
+    ///
+    /// Measured on `seablood.z80` and `sherwood.z80`, the only two of the
+    /// twenty ZX Spectrum snapshots in the corpus that carry it. Their
+    /// dictionaries open
+    /// `aUTO` `gO\0\0` `CLIM` `ENTE` `RUN\0` `BOAR` `MOVE` `sAIL` … —
+    /// **4-byte** fields with no separator, in which a **lower-case first
+    /// letter marks a canonical word and an upper-case one marks a synonym**
+    /// of the entry before it. That is exactly the role the leading `*`
+    /// plays in the unpacked tables: compare `supergra.z80`'s unpacked
+    /// `GO\0\0\0` `*ENTE` `*WALK` `*CATC` `*CLIM` with the packed
+    /// `gO\0\0` `CLIM` `ENTE` `RUN\0` above. The first 7 bytes,
+    /// `b"aUTOgO\0"`, are the signature — mixed-case for that reason, and a
+    /// byte shorter than the unpacked four-letter signature for the other.
+    ///
+    /// A game that packs its dictionary this way packs its action table
+    /// too, which is why this is a [`Dialect`] of its own rather than a
+    /// spelling variant of [`Dialect::C64OrZxSnapshot`]: reading it needs a
+    /// different table decoder, not merely a different dictionary reader.
     CompressedActionTable,
 }
 
 /// Scans `bytes` for one of [`Dialect`]'s fixed signatures, anywhere in the
-/// file (Gargoyle's own `FindCode` is an unanchored substring search, not a
-/// fixed-offset check — the signatures land at different offsets across
-/// releases even within one dialect). `None` means none of the three known
-/// signatures were found; the file may still be unreadable for some other
-/// reason, just not one this crate can name.
+/// file. `None` means no known signature was found; the file may still be
+/// unreadable for some other reason, just not one this crate can name.
+///
+/// The scan is deliberately **unanchored**. Within one dialect the same
+/// signature lands at very different offsets across releases — measured
+/// across the corpus below, the four-letter dictionary signature appears at
+/// offsets from 796 to 14,761 — so a fixed-offset check would recognise
+/// some releases of a dialect and not others.
+///
+/// # Specimen corpus
+///
+/// Every claim in [`Dialect`]'s per-variant docs, and the two ordering
+/// decisions below, were measured over these files. None of them is
+/// redistributable, so none is committed; the hand-built fixtures in this
+/// module's tests stand in for them on CI, and
+/// `crates/scott/tests/dialect_specimens.rs` re-runs the measurement over
+/// the real files when they are present, and skips vacuously when they are
+/// not.
+///
+/// | archive | files | measured |
+/// |---|---|---|
+/// | IF Archive `if-archive/scott-adams/games/ti99/scott_adams_ti99_games.zip` (82,552 bytes) | `adv01.fiad`-`adv12.fiad`, Adventures 1-12 | [`Dialect::Ti994aBytecode`] in all 12, at offset 1417 in each |
+/// | IF Archive `if-archive/games/spectrum/mystsoft.zip` (546,758 bytes) | 20 ZX Spectrum `.z80` snapshots | 13 [`Dialect::C64OrZxSnapshot`], 2 [`Dialect::CompressedActionTable`], 5 undetected |
+///
+/// The ZX Spectrum breakdown is the useful part, because it shows the
+/// detector separating Scott Adams games from their shelf-mates rather than
+/// merely firing:
+///
+/// * `b"AUTO\0GO\0"` in the eleven Mysterious Adventures
+///   (`m1goldba`-`m11waxwo`), `gremlins` and `supergra`.
+/// * `b"aUTOgO\0"` in `seablood` and `sherwood`, and in nothing else.
+/// * Nothing in `blizzard`, `heman`, `kayleth`, `rbplanet` and `temple` —
+///   the five titles in that archive that are not Adventure International
+///   games. A detector that fired on those would be worse than useless,
+///   since [`Database::parse`] consults this only after a parse has already
+///   failed and would then blame the wrong format.
+///
+/// **Not covered by any specimen measured here:** `b"AUT\0GO\0"` (the
+/// three-letter dictionary) and `b"GO\0\0\0\0*CROSS*RUN\0"` (Claymorgue's
+/// five-letter one). Both are carried forward from SQ-1413 unverified. They
+/// are consistent with the fixed-width construction [`Dialect`] describes,
+/// which is why they are kept, but no file in the corpus above demonstrates
+/// either.
 pub fn detect_dialect(bytes: &[u8]) -> Option<Dialect> {
     const TI99: &[u8] = b"\x30\x30\x30\x30\x00\x30\x30\x00\x28\x28";
     const C64_4: &[u8] = b"AUTO\0GO\0";
@@ -103,12 +196,18 @@ pub fn detect_dialect(bytes: &[u8]) -> Option<Dialect> {
     if contains(TI99) {
         Some(Dialect::Ti994aBytecode)
     } else if contains(COMPRESSED) {
-        // Checked before the uncompressed signatures: a compressed file
-        // could not also contain a full uncompressed match by construction,
-        // but checking the more specific signature first keeps that
-        // reasoning explicit rather than accidental.
+        // Checked before the unpacked signatures. The packed and unpacked
+        // dictionaries are different byte strings, so a file cannot match
+        // both by construction — but a packed dictionary's later entries
+        // are unpadded 4-byte fields, which is exactly the shape that could
+        // spell an unpacked signature by accident, and only this ordering
+        // makes that harmless.
         Some(Dialect::CompressedActionTable)
     } else if contains(C64_4) || contains(C64_3) || contains(C64_5) {
+        // `AUT\0GO\0` is NOT a substring of `AUTO\0GO\0` (the four-letter
+        // table pads `AUT`+`O`, the three-letter one pads `AUT`+NUL), so
+        // these three are genuinely alternatives and their order among
+        // themselves does not matter.
         Some(Dialect::C64OrZxSnapshot)
     } else {
         None
@@ -551,5 +650,146 @@ mod tests {
         assert!(Database::parse(BAD_START).is_err());
         // The sniff should also reject it (start room outside 0..=num_rooms).
         assert!(!looks_like_scott(BAD_START));
+    }
+
+    // --- Dialect detection (SQ-1414).
+    //
+    // Each fixture below is BUILT FROM THE FORMAT, not copied from a game
+    // file: `dictionary` lays out fixed-width dictionary entries exactly as
+    // [`Dialect`]'s doc describes them, so a test failing here means either
+    // the detector or that description is wrong. The real game files the
+    // description was measured from are not redistributable and are not
+    // committed — `tests/dialect_specimens.rs` re-measures them when they
+    // are present.
+
+    /// An Adventure International dictionary: `words` laid out in
+    /// fixed-width `field`-byte slots, NUL-padded. That one rule covers
+    /// both layouts [`Dialect`] describes — they differ in the field width
+    /// (word length + 1 where a NUL pad is reserved, word length where it
+    /// is not) and in how a synonym is marked (a leading `*`, or an
+    /// upper-case first letter), neither of which this helper needs to know.
+    fn dictionary(field: usize, words: &[&str]) -> Vec<u8> {
+        let mut out = Vec::new();
+        for w in words {
+            assert!(w.len() <= field, "{w:?} does not fit a {field}-byte field");
+            out.extend_from_slice(w.as_bytes());
+            out.resize(out.len() + field - w.len(), 0);
+        }
+        out
+    }
+
+    /// Wrap a table in plausible surrounding memory, so the test exercises
+    /// the unanchored scan rather than a match at offset 0.
+    fn in_memory_image(table: &[u8]) -> Vec<u8> {
+        let mut image = vec![0xC9u8; 4096];
+        image.extend_from_slice(table);
+        image.extend_from_slice(&[0x00; 512]);
+        image
+    }
+
+    #[test]
+    fn detects_the_four_letter_dictionary_by_its_first_two_entries() {
+        // Word length 4 -> 5-byte fields, the layout measured on
+        // m1goldba.z80 and supergra.z80.
+        let table = dictionary(5, &["AUTO", "GO", "SWIM", "*SQUE", "BURN"]);
+        assert_eq!(&table[..8], b"AUTO\0GO\0");
+        assert_eq!(
+            detect_dialect(&in_memory_image(&table)),
+            Some(Dialect::C64OrZxSnapshot)
+        );
+    }
+
+    #[test]
+    fn detects_the_three_letter_dictionary() {
+        // Word length 3 -> 4-byte fields.
+        let table = dictionary(4, &["AUT", "GO", "SWI", "*SQU"]);
+        assert_eq!(&table[..7], b"AUT\0GO\0");
+        assert_eq!(
+            detect_dialect(&in_memory_image(&table)),
+            Some(Dialect::C64OrZxSnapshot)
+        );
+    }
+
+    #[test]
+    fn detects_the_five_letter_claymorgue_dictionary() {
+        // Word length 5 -> 6-byte fields, and this table opens at GO
+        // rather than AUTO.
+        let table = dictionary(6, &["GO", "*CROSS", "*RUN", "CLIMB"]);
+        assert_eq!(&table[..17], b"GO\0\0\0\0*CROSS*RUN\0");
+        assert_eq!(
+            detect_dialect(&in_memory_image(&table)),
+            Some(Dialect::C64OrZxSnapshot)
+        );
+    }
+
+    #[test]
+    fn detects_the_packed_dictionary_and_prefers_it_over_the_unpacked_ones() {
+        // Word length 4 -> 4-byte fields with no pad; a lower-case first
+        // letter is the canonical word, upper-case a synonym of it. The
+        // layout measured on seablood.z80 and sherwood.z80.
+        let table = dictionary(4, &["aUTO", "gO", "CLIM", "ENTE", "RUN", "BOAR"]);
+        assert_eq!(&table[..7], b"aUTOgO\0");
+        assert_eq!(
+            detect_dialect(&in_memory_image(&table)),
+            Some(Dialect::CompressedActionTable)
+        );
+    }
+
+    #[test]
+    fn detects_a_ti994a_image_by_its_ten_byte_marker() {
+        // Real images carry this 1417 bytes into the file; the scan is
+        // unanchored, so the fixture puts it somewhere else on purpose.
+        let mut image = vec![0u8; 3000];
+        image[900..910].copy_from_slice(b"\x30\x30\x30\x30\x00\x30\x30\x00\x28\x28");
+        assert_eq!(detect_dialect(&image), Some(Dialect::Ti994aBytecode));
+    }
+
+    #[test]
+    fn ti994a_marker_wins_over_a_dictionary_in_the_same_file() {
+        // Ordering is load-bearing: a TI-99/4A image is a whole different
+        // container, so its marker settles the question even if some byte
+        // run elsewhere spells a dictionary.
+        let mut image = in_memory_image(&dictionary(5, &["AUTO", "GO", "SWIM"]));
+        let at = image.len();
+        image.extend_from_slice(b"\x30\x30\x30\x30\x00\x30\x30\x00\x28\x28");
+        assert!(at > 0);
+        assert_eq!(detect_dialect(&image), Some(Dialect::Ti994aBytecode));
+    }
+
+    #[test]
+    fn ordinary_files_are_not_claimed_by_any_dialect() {
+        // The detector exists to NAME a refusal, so a false positive is
+        // worse than no answer: it would blame the wrong format for a
+        // failure that has some other cause.
+        assert_eq!(detect_dialect(b""), None);
+        assert_eq!(detect_dialect(MINI.as_bytes()), None);
+        assert_eq!(detect_dialect(b"AUTO GO SWIM SQUEEZE"), None);
+        assert_eq!(detect_dialect(&vec![0u8; 8192]), None);
+        assert_eq!(detect_dialect(include_bytes!("../tests/tiny_cave.dat")), None);
+    }
+
+    #[test]
+    fn a_dialect_image_is_refused_by_name_rather_than_by_lexer_accident() {
+        // The whole point of the variant: `parse` must not report whatever
+        // token error the text lexer happened to trip over first.
+        let image = in_memory_image(&dictionary(5, &["AUTO", "GO", "SWIM"]));
+        assert_eq!(
+            Database::parse(&image),
+            Err(LoadError::UnsupportedDialect(Dialect::C64OrZxSnapshot))
+        );
+        let mut ti = vec![0u8; 3000];
+        ti[900..910].copy_from_slice(b"\x30\x30\x30\x30\x00\x30\x30\x00\x28\x28");
+        assert_eq!(
+            Database::parse(&ti),
+            Err(LoadError::UnsupportedDialect(Dialect::Ti994aBytecode))
+        );
+    }
+
+    #[test]
+    fn a_valid_dat_is_never_diverted_into_a_dialect_refusal() {
+        // Detection runs only after `parse_scottfree` fails, so a good file
+        // cannot be refused however its bytes read.
+        assert!(Database::parse(MINI).is_ok());
+        assert!(Database::parse(include_bytes!("../tests/tiny_cave.dat")).is_ok());
     }
 }
