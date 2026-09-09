@@ -99,6 +99,15 @@ That's the *story's* transcript, and it's a different thing from
 `/export-transcript`, which writes out the scrollback in front of you —
 lanthorn's own lines and images included.
 
+And there's a third option, for following along rather than looking back:
+launch with `--transcript-file <path>` and lanthorn appends every line — the
+game's, your own typed commands, lanthorn's own warnings — to that file
+live, as it happens. It's built for accessibility tooling: point a screen
+reader or a second terminal's `tail -f` at the file and it reads each turn
+the moment it lands, engine-neutral across the Z-machine, Glulx and Scott
+Adams games alike (unlike `/set-transcript`, which is the Z-machine's own
+`SCRIPT` stream and only ever carries what the game itself chose to write).
+
 Games can also record the commands you type, to `commands.txt` in the same
 folder, and play a recorded file back in place of the keyboard. It's the
 format other interpreters use, so a script recorded elsewhere replays here.

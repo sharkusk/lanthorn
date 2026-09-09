@@ -60,6 +60,13 @@ Absolute URLs or no link.
   recorded in Frotz replays in lanthorn and the other way round. `zvm-cli`
   exposes all three directly: `--transcript <file>`, `--record <file>` and
   `--replay <file>`. (SQ-1420)
+- **Live-stream the transcript to a file with `--transcript-file <path>`**,
+  for a screen reader or a second terminal running `tail -f`. Every line —
+  the game's own text, your typed commands, lanthorn's own warnings — is
+  appended in plain text the moment it lands, across every engine lanthorn
+  plays (Z-machine, Glulx and Scott Adams alike). Different from
+  `/set-transcript`, which is the Z-machine's own `SCRIPT` stream and only
+  ever carries what the game itself chose to write. (SQ-0410)
 
 ### Changed
 

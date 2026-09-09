@@ -323,6 +323,25 @@ pub struct Cli {
     #[arg(long, value_enum, value_name = "ON|OFF")]
     pub guidance: Option<OnOff>,
 
+    /// Live-stream the transcript to a file as you play, appending — for a
+    /// screen reader or a second terminal running `tail -f` (SQ-0410).
+    ///
+    /// This is the app's own transcript — the words on screen, engine-neutral
+    /// across Z-machine, Glulx and Scott Adams alike — not a Z-machine output
+    /// stream: `/set-transcript` (stream 2) is the STORY's own log, Z-machine
+    /// only, and only of what the game itself chooses to write there. Nor is
+    /// it `/export-transcript`, which writes the visible transcript once, on
+    /// request, rather than growing live.
+    ///
+    /// Opened for APPEND at launch (an existing file is added to, not
+    /// truncated) and flushed after every turn. A path that cannot be opened
+    /// — a directory, a permission error — is reported once as a transcript
+    /// Warning rather than aborting the launch. Plain text; no colour or
+    /// styling. Never written to config.toml: an accessibility choice for
+    /// this run, like `--interpreter` is a header choice for this run.
+    #[arg(long = "transcript-file", value_name = "PATH")]
+    pub transcript_file: Option<PathBuf>,
+
     /// Ask whether this terminal's font draws lanthorn's Nerd Font icon glyphs —
     /// the map's arrows, the portal and stairs icons, and the mark of Lanthorn's
     /// Guiding Light — and set every icon preset from the answer (SQ-1104).
@@ -3212,6 +3231,7 @@ mod tests {
             trace: None,
             debug: false,
             guidance: None,
+            transcript_file: None,
             font_check: None,
         }
     }
@@ -3302,6 +3322,7 @@ mod tests {
             trace: None,
             debug: false,
             guidance: None,
+            transcript_file: None,
             font_check: None,
         };
 
@@ -3336,6 +3357,7 @@ mod tests {
             trace: None,
             debug: false,
             guidance: None,
+            transcript_file: None,
             font_check: None,
         };
         let cfg = resolve(&cli);
@@ -3370,6 +3392,7 @@ mod tests {
             trace: None,
             debug: false,
             guidance: None,
+            transcript_file: None,
             font_check: None,
         };
         let cfg = resolve(&cli);
@@ -4067,6 +4090,7 @@ use_defaults = false
             trace: None,
             debug: false,
             guidance: None,
+            transcript_file: None,
             font_check: None,
         };
         let cfg = resolve(&cli);
@@ -4099,6 +4123,7 @@ use_defaults = false
             trace: None,
             debug: false,
             guidance: None,
+            transcript_file: None,
             font_check: None,
         };
         // Absent flag: sound stays on (config default).
@@ -4148,6 +4173,7 @@ use_defaults = false
             trace: None,
             debug: false,
             guidance: None,
+            transcript_file: None,
             font_check: None,
         };
         // Absent flags: the file governs, as it always did.
@@ -4247,6 +4273,7 @@ use_defaults = false
             trace: None,
             debug: false,
             guidance: None,
+            transcript_file: None,
             font_check: None,
         };
         assert!(resolve(&base).v6_arrow_keys, "persisted true must hold");
@@ -4281,6 +4308,7 @@ use_defaults = false
             trace: None,
             debug: false,
             guidance: None,
+            transcript_file: None,
             font_check: None,
         };
         cli.trace = Some("screen,map".to_string());
@@ -4316,6 +4344,7 @@ use_defaults = false
             trace: None,
             debug: false,
             guidance: None,
+            transcript_file: None,
             font_check: None,
         };
         let cfg = resolve(&cli);
@@ -4386,6 +4415,7 @@ use_defaults = false
             trace: None,
             debug: false,
             guidance: None,
+            transcript_file: None,
             font_check: None,
         };
         // The read path follows --user-dir, and the resolved config remembers it.
@@ -4449,6 +4479,7 @@ use_defaults = false
             trace: None,
             debug: false,
             guidance: None,
+            transcript_file: None,
             font_check: None,
         };
         let mut cfg = resolve(&cli);
@@ -4500,6 +4531,7 @@ use_defaults = false
             trace: None,
             debug: false,
             guidance: None,
+            transcript_file: None,
             font_check: None,
         };
         let cfg = resolve(&cli);
@@ -4734,6 +4766,7 @@ use_defaults = false
             trace: None,
             debug: false,
             guidance: None,
+            transcript_file: None,
             font_check: None,
         });
         assert!(cfg.honor_game_colours, "the file's value loads");
@@ -4796,6 +4829,7 @@ use_defaults = false
             trace: None,
             debug: false,
             guidance: None,
+            transcript_file: None,
             font_check: None,
         });
         assert!(!cfg.v6_pixel_lock, "the file's value loads");
@@ -4856,6 +4890,7 @@ use_defaults = false
             trace: None,
             debug: false,
             guidance: None,
+            transcript_file: None,
             font_check: None,
         };
         // No flag: the file's Amiga (4) stands, and it is provenance-clean.

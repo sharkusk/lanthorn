@@ -25,6 +25,13 @@ item.
 rather than left for you to notice on a status line. `--story-only` drops the
 whole status window, menus included, for anyone who wants it gone entirely.
 
+`lanthorn` itself has an accessibility option `zvm-cli` and friends don't
+need, being screen-reader-friendly by design: `--transcript-file <path>`
+appends every turn — the game's text, your own commands — to a plain-text
+file live, as it happens, so a screen reader or a second terminal's
+`tail -f` can follow along outside the app itself. See
+[playing](playing.md#keeping-a-transcript).
+
 ## Paging and scrollback
 
 A turn that prints more than a screenful stops at the bottom of the page with

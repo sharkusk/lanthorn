@@ -311,7 +311,7 @@ pub static COMMANDS: &[CommandSpec] = &[
         usage: "reset-game [map] [data]", description: "restart the game — bare opens the options dialog; 'map' also clears the map, 'data' deletes the game's saved progress/cache so it starts fresh",
         dispatch: |a| SlashOutcome::Reset { map: a.contains(&"map"), data: a.contains(&"data") } },
     CommandSpec { name: "set-transcript", category: Category::Game, context: Context::Global,
-        usage: "set-transcript on|off", description: "start or stop the story's own transcript, written to script.txt in the game's folder — the same switch a game's SCRIPT command throws, for the many that have none",
+        usage: "set-transcript on|off", description: "start or stop the story's own transcript, written to script.txt in the game's folder — the same switch a game's SCRIPT command throws, for the many that have none (launch with --transcript-file for a live, engine-neutral stream instead)",
         dispatch: |a| match a.first().copied() {
             Some("on")  => SlashOutcome::SetTranscript(true),
             Some("off") => SlashOutcome::SetTranscript(false),
@@ -513,7 +513,7 @@ pub static COMMANDS: &[CommandSpec] = &[
             _ => err("filter-transcript: use story | meta | both"),
         } },
     CommandSpec { name: "export-transcript", category: Category::Transcript, context: Context::Global,
-        usage: "export-transcript [file]", description: "export the visible transcript; default path when omitted",
+        usage: "export-transcript [file]", description: "export the visible transcript once; default path when omitted (launch with --transcript-file for a live, appending stream instead)",
         dispatch: |a| SlashOutcome::Export(a.first().map(|s| s.to_string())) },
 
     // ── Style ─────────────────────────────────────────────────────────────

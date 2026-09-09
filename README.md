@@ -223,7 +223,10 @@ itself.**
   `SCRIPT` command now writes a real transcript beside its saves, and
   `/set-transcript on` does the same for the many games that offer no such
   command. Commands can be recorded to a file and played back, in the format
-  other interpreters read. → [playing](docs/guide/playing.md)
+  other interpreters read. *Next release:* `--transcript-file <path>` streams
+  the whole session live to a plain-text file as you play, for a screen
+  reader or a `tail -f` in another terminal — engine-neutral, unlike
+  `/set-transcript`. → [playing](docs/guide/playing.md)
 - **A real terminal UI** — mouse, resizable panes, a story picker with IFDB
   search, command palette, in-game InvisiClues, transcript search, a debug
   disassembler, and a theme every part of which you can restyle.
