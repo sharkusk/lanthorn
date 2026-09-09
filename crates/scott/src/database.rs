@@ -68,6 +68,20 @@ pub struct Database {
     pub items: Vec<Item>,
     /// Adventure number from the trailer, best-effort. 0 = unknown/absent.
     pub adventure_number: i32,
+    /// The tokenised action script, for a database loaded from a
+    /// **TI-99/4A** release ([`crate::parse_ti994a`]) — `None` for every
+    /// other dialect, which is every database whose actions fit `actions`
+    /// above.
+    ///
+    /// This is the one table that does not decode to the reference format's
+    /// shape, and it is not a choice: a tokenised record is a
+    /// variable-length opcode stream in which conditions and commands
+    /// interleave, and one real record reaches 25 conditions and 37 commands
+    /// where an [`Action`] has room for five and four. When this is `Some`,
+    /// `actions` is empty and [`crate::Vm`] runs the script instead — see
+    /// [`crate::ti994a`] for the encoding and the runtime differences it
+    /// brings with it.
+    pub ti99: Option<crate::ti994a::Ti99Script>,
 }
 
 /// One room's exits, description text, and how that description should be
@@ -298,6 +312,7 @@ mod tests {
                 start_loc: 1,
             }],
             adventure_number: 0,
+            ti99: None,
         };
         assert_eq!(db.rooms.len(), 2);
         assert_eq!(db.start_room, 1);
@@ -331,6 +346,7 @@ mod tests {
             messages: vec![],
             items: vec![],
             adventure_number: 0,
+            ti99: None,
         };
         assert_eq!(db.match_verb("go"), Some(1));
         assert_eq!(db.match_verb("GET"), Some(10));

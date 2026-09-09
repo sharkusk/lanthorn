@@ -214,6 +214,7 @@ mod tests {
                 .map(|_| Item { text: "thing".into(), treasure: false, auto_noun: None, start_loc: 0 })
                 .collect(),
             adventure_number: 0,
+            ti99: None,
         }
     }
 

@@ -442,16 +442,19 @@ fn main() {
         eprintln!("scott-cli: cannot read {}: {e}", args.path);
         process::exit(1);
     });
-    let src = std::str::from_utf8(&bytes).unwrap_or_else(|_| {
-        eprintln!("scott-cli: {} is not a text .dat", args.path);
-        process::exit(1);
-    });
-    if !scott::looks_like_scott(src) {
-        eprintln!("scott-cli: {} does not look like a Scott .dat", args.path);
+    // Bytes, not `&str`: since SQ-1414 this reads the TI-99/4A tokenised
+    // releases too, and those are a binary memory image that no UTF-8
+    // conversion survives. `looks_like_scott_bytes` answers for both
+    // encodings and is the same predicate `Database::parse` then applies.
+    if !scott::looks_like_scott_bytes(&bytes) {
+        eprintln!(
+            "scott-cli: {} does not look like a Scott .dat or a TI-99/4A release",
+            args.path
+        );
         process::exit(1);
     }
-    let db = Database::parse(src).unwrap_or_else(|e| {
-        eprintln!("scott-cli: invalid Scott .dat: {e:?}");
+    let db = Database::parse(&bytes).unwrap_or_else(|e| {
+        eprintln!("scott-cli: invalid Scott game data: {e:?}");
         process::exit(1);
     });
 

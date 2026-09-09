@@ -265,6 +265,11 @@ impl StoryEntry {
 /// `blorb::medium`'s format table, and [`has_story_ext`] takes the union.
 const STORY_EXTS: &[&str] = &[
     "z3", "z4", "z5", "z6", "z7", "z8", "zblorb", "blorb", "zlb", "dat", "ulx", "gblorb", "blb",
+    // The TI-99/4A tokenised Scott Adams releases (SQ-1414). `.fiad` is the
+    // TI world's "file in a directory" wrapper — a 128-byte file-descriptor
+    // header in front of the raw memory image — and is the extension every
+    // one of the twelve original titles is distributed under.
+    "fiad",
     // A ZIP is opened by `hints::read_story_file` exactly as a disk image is —
     // the container is unwrapped and the story inside comes out — so the scan
     // that lists disk images had no principled reason to skip archives, and

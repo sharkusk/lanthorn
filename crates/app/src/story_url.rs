@@ -256,8 +256,14 @@ pub fn content_extension(bytes: &[u8]) -> Option<&'static str> {
             _ => Some("z8"),
         };
     }
+    // Both Scott Adams encodings this build reads: the text `.dat` and the
+    // TI-99/4A tokenised releases (SQ-1414), which are binary and keep their
+    // own `.fiad` extension so the file on disk still says what it is.
     if std::str::from_utf8(bytes).is_ok_and(scott::looks_like_scott) {
         return Some("dat");
+    }
+    if scott::looks_like_ti994a(bytes) {
+        return Some("fiad");
     }
     None
 }

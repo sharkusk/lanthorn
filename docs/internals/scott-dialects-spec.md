@@ -3007,11 +3007,40 @@ remap tables were derived by eye and may contain mistakes.
 
 ## Appendix A — How lanthorn uses this document
 
-lanthorn's `scott` crate reads the reference text format and, at the time of
-writing, refuses the dialects above by name rather than loading them: a file
-that fails the text parse is checked against the TI-99/4A signature, the
-`aUTOgO\0` compressed signature and the three plain dictionary signatures, so a
-player is told "this is a TI-99/4A dump" rather than "invalid data".
+lanthorn's `scott` crate reads the reference text format and **§3's TI-99/4A
+tokenised releases** (`crates/scott/src/ti994a.rs`, SQ-1414), and refuses the
+remaining dialects by name rather than loading them: a file that fails the text
+parse is checked against the TI-99/4A signature, the `aUTOgO\0` compressed
+signature and the three plain dictionary signatures, so a player is told "this
+is a Commodore 64 memory snapshot" rather than "invalid data".
+
+**Implemented from this document:** §1, §2, §3 (all of it — §3.1 detection and
+the baseline, §3.2 endianness, §3.3 the header, §3.4 the two table shapes, §3.5
+strings and the derived message count, §3.6 the two dictionaries, §3.7 the
+action encoding), §9.1 and §9.2 as they apply to TI-99/4A, and §11's TI-99/4A
+refusals. **Not implemented:** §4-§8, §9.3, and the rest of §11.
+
+Three corrections this document needs, all found by measuring the §10.2
+specimens against the §10.1 oracle:
+
+1. **§3.4 is wrong about "carried".** It states that this dialect has no
+   in-band value in the initial-item-locations table meaning "carried". Byte
+   255 occurs in five of the twelve specimens — `adv03` item 48, `adv05` item
+   16, `adv07` items 3/25/56, `adv08` items 4/8, `adv10` item 17 — on exactly
+   the items whose `.dat` twins give −1 or 255, the reference format's own
+   carried marker. It must be read as "carried".
+2. **§3.1's pointer validation does not cover a table's extent.** All eleven
+   header pointers resolve within the file in all twelve specimens, but
+   `adv07.fiad` ends two bytes before the last entry of its own explicit
+   dispatch table. A reader must bounds-check each dispatch entry, not only the
+   table's start, and read one that does not fit as "this verb has no records".
+3. **§9.1's list of built-ins is incomplete, or §3.7's terminator rule is.** In
+   `adv01.fiad` the chains for `INVENTORY`, `QUIT`, `STORE` and `SCORE` are each
+   a single zero-length record keyed to noun 0. §3.7 says such a record is
+   "still a real record, eligible to match and to run", and an empty stream can
+   never reach opcode 255, so all four always fail and answer "I can't do that
+   yet." §9.1 names only take, drop and go as surviving built-ins. One of the
+   two statements is incomplete; the specimens cannot say which.
 
 The in-memory model this document's dialects decode *to*, in that crate, is a
 database of rooms (six exits and a description, plus a flag for the leading-`*`
