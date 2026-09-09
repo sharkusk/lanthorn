@@ -28,7 +28,7 @@ use crate::fixture_paths::fixture_path;
 
 /// A story under the gitignored `stories/`, or `None` when this checkout has no copy.
 fn story(name: &str) -> Option<PathBuf> {
-    let p = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../stories").join(name);
+    let p = crate::fixture_paths::fixture_path(name);
     p.is_file().then_some(p)
 }
 
@@ -304,6 +304,10 @@ fn zork1_has_no_diagonal_glyph_overlaps() {
 /// slope keeps every shared cell and the later one YIELDS a one-cell gap instead of drawing over
 /// it — zero overwritten cells, and the same four cells now show up as yielded gaps rather than
 /// clobbered glyphs.
+/// Pinned to release 11 (`stories/CounterfeitMonkey-11.gblorb`) on purpose: the exact
+/// yielded-cell count is a property of release 11's map geometry (SQ-1454's disposition
+/// table found the IF Archive's release 10 crosses at only two of the four cells this
+/// asserts) — `stories/`-only, skips vacuously on CI like `real_media_releases.rs`.
 #[test]
 fn counterfeit_monkey_diagonal_glyph_overlaps_are_only_the_two_crossings() {
     let Some(path) = story("CounterfeitMonkey-11.gblorb") else {
@@ -371,12 +375,16 @@ fn counterfeit_monkey_diagonal_glyph_overlaps_are_only_the_two_crossings() {
 /// It is a property of drawing a crossing as two doglegs, not of the routing, and the fix is for
 /// the SVG to draw a crossing diagonal as a real 45° line — which is a change to how a diagonal
 /// is DRAWN, not to where it is routed, and so is not this quest.
+/// Release-agnostic (SQ-1454's disposition table): the residual-shape invariant, not the
+/// exact cell count above. Runs against the IF Archive's release 10 — local `stories/`
+/// first, the fetched fixture otherwise (`fixture_path`) — so CI reaches it.
 #[test]
 fn counterfeit_monkey_overlaps_are_only_the_crossing_diagonals() {
-    let Some(path) = story("CounterfeitMonkey-11.gblorb") else {
+    let path = crate::fixture_paths::fixture_path("CounterfeitMonkey-10.gblorb");
+    if !path.is_file() {
         eprintln!("SKIP counterfeit_monkey_overlaps_are_only_the_crossing_diagonals: fixture absent");
         return;
-    };
+    }
     let map = app::mapgen::generate(&path, true).expect("mapgen");
     let mut failures = Vec::new();
     for (layer, overlaps) in layer_reports(&map.graph) {

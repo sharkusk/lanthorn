@@ -26,7 +26,7 @@ use std::path::{Path, PathBuf};
 
 /// A story under the gitignored `stories/`, or `None` when this checkout has no copy.
 fn story(name: &str) -> Option<PathBuf> {
-    let p = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../stories").join(name);
+    let p = crate::fixture_paths::fixture_path(name);
     p.is_file().then_some(p)
 }
 
@@ -68,7 +68,7 @@ fn anchorhead_distorted_flags_agree_with_final_geometry() {
 
 #[test]
 fn counterfeit_monkey_distorted_flags_agree_with_final_geometry() {
-    assert_flags_are_final("CounterfeitMonkey-11.gblorb", "counterfeit_monkey");
+    assert_flags_are_final("CounterfeitMonkey-10.gblorb", "counterfeit_monkey");
 }
 
 #[test]

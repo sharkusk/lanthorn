@@ -39,8 +39,9 @@
 //!
 //! # The fixture, and how this harness got there
 //!
-//! `stories/CounterfeitMonkey-11.gblorb` — Counterfeit Monkey, **release 11 / serial
-//! 230220** / Inform 7 build 6M62. Gitignored, so this skips vacuously without it.
+//! `stories/CounterfeitMonkey-10.gblorb` — Counterfeit Monkey, **release 10 / serial
+//! 210312** (the IF Archive's current copy; SQ-1454) / Inform 7 build 6M62. Local
+//! `stories/` first, the fetched Archive copy otherwise (`fixture_path`).
 //!
 //! The route is [`ROUTE`] below, **18 inputs from a cold boot**, and it is not guessable
 //! from play: it is the game's own `Test gel` script (`Tests.i7x`, and
@@ -64,7 +65,7 @@ use mapper::mapper::Mapper;
 
 use crate::fixture_paths::fixture_path;
 
-const STORY: &str = "CounterfeitMonkey-11.gblorb";
+const STORY: &str = "CounterfeitMonkey-10.gblorb";
 
 /// Every input from a cold boot to the reported turn, in order. `None` is a keypress
 /// (the prologue's `custom-wait for any key`, which runs before the banner); everything
@@ -105,7 +106,7 @@ fn play() -> Option<Vec<(String, TurnResult)>> {
     };
     let pict_blorb = blorb::Blorb::parse(bytes.clone()).ok();
     let app::hints::LoadedStory::Glulx(image) =
-        app::hints::extract_story(bytes).expect("CounterfeitMonkey-11.gblorb is a readable container")
+        app::hints::extract_story(bytes).expect("CounterfeitMonkey-10.gblorb is a readable container")
     else {
         panic!("{STORY} is a Glulx story");
     };

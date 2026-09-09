@@ -24,6 +24,13 @@ fn stories_dir() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../stories")
 }
 
+/// The fetched-fixtures fallback `app`'s tests populate (`scripts/fixtures.manifest`),
+/// reached by relative path since `gvm` takes zero dependencies and cannot import
+/// `app`'s `fixture_paths` module across the crate boundary.
+fn fetched_stories_dir() -> PathBuf {
+    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../app/tests/fixtures/stories")
+}
+
 /// Pull the `GLUL` chunk out of a Blorb, or pass a bare Glulx image through.
 /// Hand-rolled so this suite adds no dependency to a zero-dependency crate.
 fn glulx_image(bytes: Vec<u8>) -> Option<Vec<u8>> {
@@ -47,9 +54,11 @@ fn glulx_image(bytes: Vec<u8>) -> Option<Vec<u8>> {
     None
 }
 
-/// Load a gitignored commercial story, or `None` so the case can skip.
+/// Load a gitignored commercial story, or `None` so the case can skip. Falls
+/// back to the fetched fixtures directory for names the manifest promises.
 fn story(name: &str) -> Option<Memory> {
-    let path = stories_dir().join(name);
+    let local = stories_dir().join(name);
+    let path = if local.is_file() { local } else { fetched_stories_dir().join(name) };
     if !path.exists() {
         eprintln!("SKIP: {} absent", path.display());
         return None;
@@ -77,6 +86,10 @@ fn glulxercise_has_a_dictionary_and_no_grammar_and_is_refused() {
 
 // ── Real commercial media (skips vacuously without `stories/`) ──────────────
 
+/// Pinned to release 11 (`stories/CounterfeitMonkey-11.gblorb`) on purpose: the exact
+/// table address and counts are properties of that specific compile (SQ-1454's
+/// disposition table — the IF Archive's current copy is release 10, whose grammar
+/// table lands at a different address). `stories/`-only, skips vacuously on CI.
 #[test]
 fn counterfeit_monkey_locates_and_reads() {
     let Some(mem) = story("CounterfeitMonkey-11.gblorb") else { return };

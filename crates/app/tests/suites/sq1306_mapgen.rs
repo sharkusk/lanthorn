@@ -25,7 +25,7 @@ use crate::fixture_paths::fixture_path;
 /// A story under the gitignored `stories/`, or `None` when this checkout has no
 /// copy — the CI-safe vacuous-skip pattern.
 fn story(name: &str) -> Option<PathBuf> {
-    let p = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../stories").join(name);
+    let p = crate::fixture_paths::fixture_path(name);
     p.is_file().then_some(p)
 }
 
@@ -354,6 +354,10 @@ fn json_map_reports_no_position_when_layout_was_skipped() {
 /// 84 distinct room names. A static map that misses any of them is missing a
 /// room the game really has, which is the failure this case exists to catch;
 /// having MORE is expected and fine, since the player never finished the game.
+/// Pinned to release 11 (`stories/CounterfeitMonkey-11.gblorb`) on purpose: it asserts the
+/// exact release/serial and a room list read off a release-11 playthrough (SQ-1454's
+/// disposition table). The IF Archive's current copy is release 10 and does not carry
+/// this data — `stories/`-only, skips vacuously on CI like `real_media_releases.rs`.
 #[test]
 fn counterfeit_monkey_static_map_covers_every_walked_room() {
     use mapper::direction::Direction;
@@ -404,13 +408,17 @@ fn counterfeit_monkey_static_map_covers_every_walked_room() {
 /// `mapper::layout::relayout_auto` guarantees — no two rooms in one layer share
 /// a grid cell (`rooms_never_overlap_random_walk` in `mapper::layout` is the
 /// same assertion on synthetic graphs).
+/// Release-agnostic (SQ-1454's disposition table): a general layout invariant, not tied
+/// to any release's exact room list. Runs against the IF Archive's release 10 — local
+/// `stories/` first, the fetched fixture otherwise (`fixture_path`) — so CI reaches it.
 #[test]
 fn counterfeit_monkey_layout_places_every_room_in_its_own_cell() {
     use std::collections::BTreeSet;
-    let Some(path) = story("CounterfeitMonkey-11.gblorb") else {
-        eprintln!("SKIP: stories/CounterfeitMonkey-11.gblorb absent");
+    let path = fixture_path("CounterfeitMonkey-10.gblorb");
+    if !path.is_file() {
+        eprintln!("SKIP: CounterfeitMonkey-10.gblorb absent (stories/ and fetched fixtures)");
         return;
-    };
+    }
     let map = mapgen::generate(&path, true).expect("Counterfeit Monkey must map");
     assert!(map.layout_time.is_some(), "layout was asked for and must have run");
     assert!(map.graph.rooms().count() > 90, "a hundred-room graph is the point of this case");

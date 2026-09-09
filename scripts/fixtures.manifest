@@ -35,6 +35,13 @@
 #                                scott-adams/games/scottfree/mysterious_blorb.zip)
 #                                Permission to THAT HOST to serve them, which is
 #                                exactly the permission a fetch relies on.
+#   cc-by-sa-4.0                 "Counterfeit Monkey is licensed under the
+#                                Creative Commons Attribution-ShareAlike 4.0
+#                                International License." (LICENSE, i7/counterfeit-
+#                                monkey GitHub repo, checked 2026-09-09 — NOT
+#                                NonCommercial, contra an earlier assumption;
+#                                excludes the feelie posters, which this manifest
+#                                does not fetch anyway.)
 #   ifarchive-tou                No licence statement located from the author.
 #                                The IF Archive's Terms of Use govern: presumed
 #                                personal use, freely downloadable, not ours to
@@ -57,8 +64,20 @@
 #   Anchorhead.gblorb     the 2018 Special Edition is a PAID product
 #                         (mikegentry5.itch.io/anchorhead). The 1998 z8 that IS
 #                         fetched, `anchor.z8`, is a different work.
-#   CounterfeitMonkey-11  the Archive carries release 12 and releases 5-9; the
-#                         suites pin 11, which is on no upstream.
+#   CounterfeitMonkey-11  the several suites that pin release 11 (serial 230220)
+#                         still are not fetchable: the IF Archive's ONE copy at
+#                         games/glulx/CounterfeitMonkey.gblorb has not moved since
+#                         12-Mar-2021 and reads back as release 10 / serial 210312
+#                         (SQ-1454 fetched and checked it directly — the game's
+#                         own IFhd/iFiction chunks, not IFDB's crowd-edited
+#                         "Current Version 11" field, which points at a GitHub
+#                         release the Archive does not carry). SQ-1454's
+#                         disposition table split those suites' cases: the ones
+#                         asserting release-11-specific facts (exact addresses,
+#                         object/room counts, map geometry) stay pinned to 11 and
+#                         `stories/`-only; the release-agnostic cases were
+#                         repointed to the release this fetches as
+#                         `CounterfeitMonkey-10.gblorb` below.
 #   Alias 'The Magpie',   ditto: the local copies are releases the Archive no
 #   frankenfingers        longer carries, so no digest can be pinned.
 #
@@ -73,6 +92,7 @@ c2f28a4ddd9367c260946926a33c73a4b0cc38b1f327646cc1202182a28a10ff	520192	anchor.z
 ba14a14dfdede4b7ad97846c13ca0ea07048334ac767649d9aa84add7fae20a5	239616	photopia.z5	https://ifarchive.org/if-archive/games/zcode/photopia.z5	-	ifarchive-tou
 4af74fe0ee17a32b99719a4098a7167baf6b3f8460d45e4d2a9a9e1769c49282	65532	sunburst.z6	https://ifarchive.org/if-archive/games/zcode/sunburst.z6	-	ifarchive-tou
 f724a902752eeae9b4e0467f0bc7c199ce90c5ee65afb6c5a7f4664761ea017a	8869096	cragne.gblorb	https://ifarchive.org/if-archive/games/glulx/cragne.gblorb	-	ifarchive-tou
+f9544d3111b2db43c4c7ab12a07109c6e84bb623e92ded796e9dfc7e3558874d	11314624	CounterfeitMonkey-10.gblorb	https://ifarchive.org/if-archive/games/glulx/CounterfeitMonkey.gblorb	-	cc-by-sa-4.0
 cc053da4dcbbc2aa960c6206f368a6e3a772e04d5890e1f1fdb658a71bd06219	1240012	The_Wizard_Sniffer.gblorb.blorb	https://ifarchive.org/if-archive/games/competition2017/The%20Wizard%20Sniffer/The_Wizard_Sniffer.gblorb	-	ifarchive-tou
 c2caf0f0e2b2bc546c0308abf2c15cb3bbb62480b779961ebbf9b0184b4733d1	635974	AnchorheadDemo.gblorb	https://ifarchive.org/if-archive/games/glulx/AnchorheadDemo.gblorb	-	ifarchive-tou
 7bffe25e933aa22a2b1e9bfc8073bee5687d79a70394da19e50bfed5755368c4	285184	LostPig.z8	https://ifarchive.org/if-archive/games/zcode/LostPig.z8	-	cc-by-nc-nd-3.0

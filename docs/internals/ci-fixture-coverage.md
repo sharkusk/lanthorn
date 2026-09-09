@@ -288,9 +288,13 @@ to vendor.
 - **`Anchorhead.gblorb`** — the 2018 Special Edition is a paid product
   (mikegentry5.itch.io/anchorhead). The 1998 `anchor.z8` that IS fetched is a
   different work, not a different copy.
-- **`CounterfeitMonkey-11.gblorb`** — the Archive carries release 12 and
-  releases 5–9. The suites pin 11, which is on no upstream, so no digest can be
-  written down. Six suites stay local-only for that reason alone.
+- **`CounterfeitMonkey-11.gblorb`** — no longer fully true; see "Counterfeit
+  Monkey: fetched at a different release" below. The suites pin release 11
+  (serial 230220), and the Archive's one copy has not moved since 12-Mar-2021 —
+  it is release 10 (serial 210312), which no digest against "release 11" could
+  ever match. The cases that assert release-11-specific facts stay local-only
+  for that reason; the release-agnostic cases were repointed to what the
+  Archive actually serves (SQ-1454).
 - **`Alias 'The Magpie'.gblorb`, `frankenfingers_260330.z5`** — same shape: the
   local copies are releases the Archive no longer carries.
 
@@ -341,6 +345,52 @@ coverage, but it is worth knowing before wondering where the minutes went.
    readers — but not the artwork, and `infocom_pics.rs` already carries 22
    synthetic tests with three builders. Low value; listed for completeness.
 5. **Nothing for bucket B, ever.**
+
+## Counterfeit Monkey: fetched at a different release (SQ-1454)
+
+SQ-1015 (above) left `CounterfeitMonkey-11.gblorb` unfetched because "the
+Archive carries release 12 and releases 5–9" and no digest could be pinned
+against the suites' release 11. Checked again directly against the Archive
+(2026-09-09): that was imprecise. `games/glulx/CounterfeitMonkey.gblorb` is
+the Archive's only copy, its directory listing has said "Release 10 / Serial
+number 210312" since 12-Mar-2021, and the file's own embedded `IFhd`/iFiction
+chunks agree — 11,314,624 bytes, sha256
+`f9544d3111b2db43c4c7ab12a07109c6e84bb623e92ded796e9dfc7e3558874d`. IFDB's
+"Current Version 11" field is a crowd-edited pointer at a GitHub release
+(11.1) the Archive does not carry, not a description of the archived file;
+trust the bytes over the catalogue entry. Licence: the author's own
+`LICENSE` in the `i7/counterfeit-monkey` GitHub repo states CC BY-SA 4.0
+(Attribution-ShareAlike, no NonCommercial clause) — narrower research had
+assumed CC BY-NC-SA, which is wrong.
+
+Sixteen suites across `crates/app/tests/suites/`, `crates/gvm/tests/` and two
+in-crate `app` tests (`glulx_session.rs`, `render/screen.rs`) pin
+`CounterfeitMonkey-11.gblorb`. Rather than leave all of them local-only, each
+was run against release 10 (symlinked into the worktree's fetched-fixtures
+directory) to sort release-specific assertions from structural ones:
+
+- **Release-specific — stay pinned to 11, `stories/`-only**, the same shape as
+  `real_media_releases.rs`: cases asserting an exact release/serial
+  (`sq1306_mapgen`'s `counterfeit_monkey_static_map_covers_every_walked_room`),
+  an exact compiled address or count (`grammar_tables`'s table address,
+  `object_words`'s object-tree head, `i7_map`'s `Map_Storage` address), an
+  exact map-geometry count tied to release 11's room layout
+  (`sq1316_connector_overlaps`'s diagonal-yield count), or a style hint release
+  10 does not set the same way at boot (`glulx_game_colours`).
+- **Release-agnostic — repointed to `CounterfeitMonkey-10.gblorb`**, fetched
+  via the manifest below: the rest — opening-room keying, the room lock, the
+  bolded-name and flashback-heading rules, silent vehicle moves, the stale
+  sidecar recovery, distorted-flag geometry, the avatar-refusal seam, odd-pane
+  layout, the shadow-boot cache seam, the accel on/off equivalence, and most of
+  the compiled-map reader (room/exit membership, live `Map_Storage` writes, the
+  compass-column count) — all hold on release 10 exactly as they do on 11.
+
+Where a suite's fixture-resolution helper was a private `stories/`-only join
+(most were), it was migrated to `fixture_paths::fixture_path` (or the
+equivalent two-directory fallback the zero-dependency `gvm` crate's tests
+reimplement locally) so the repointed cases actually reach the fetched copy on
+CI rather than continuing to skip. `scripts/fixtures.manifest` carries
+`CounterfeitMonkey-10.gblorb` under licence `cc-by-sa-4.0`.
 
 ## Two footnotes worth keeping
 

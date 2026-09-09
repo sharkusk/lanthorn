@@ -46,8 +46,16 @@ fn stories_dir() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../stories")
 }
 
+/// The fetched-fixtures fallback `app`'s tests populate (`scripts/fixtures.manifest`),
+/// reached by relative path since `gvm` takes zero dependencies and cannot import
+/// `app`'s `fixture_paths` module across the crate boundary.
+fn fetched_stories_dir() -> PathBuf {
+    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../app/tests/fixtures/stories")
+}
+
 fn story(name: &str) -> Option<Memory> {
-    let path = stories_dir().join(name);
+    let local = stories_dir().join(name);
+    let path = if local.is_file() { local } else { fetched_stories_dir().join(name) };
     if !path.exists() {
         eprintln!("SKIP: {} absent", path.display());
         return None;
@@ -84,6 +92,11 @@ fn exits_of(mem: &Memory, pn: &ParseNames, w: &I7World, room: u32) -> Vec<(Strin
 
 // ── Inform 7 build 6M62 ─────────────────────────────────────────────────────
 
+/// Pinned to release 11 (`stories/CounterfeitMonkey-11.gblorb`) on purpose: the exact
+/// `Map_Storage` address, property numbers and exit total are properties of that
+/// specific compile (SQ-1454's disposition table — the IF Archive's current copy is
+/// release 10, which reads these facts at different addresses). `stories/`-only,
+/// skips vacuously on CI.
 #[test]
 fn counterfeit_monkey_hands_over_its_whole_map_without_a_turn_played() {
     let Some((mem, pn, w)) = world("CounterfeitMonkey-11.gblorb") else {
@@ -165,9 +178,13 @@ fn counterfeit_monkey_hands_over_its_whole_map_without_a_turn_played() {
     ));
 }
 
+/// Release-agnostic in practice (SQ-1454's disposition table): every sampled room name
+/// below also exists in the IF Archive's release 10, so this runs against that fetched
+/// fixture rather than staying `stories/`-only — local `stories/` first, the fetched
+/// copy otherwise (`world` → `story` → the fetched-fixtures fallback).
 #[test]
 fn every_room_the_played_counterfeit_monkey_map_reached_is_here_by_name() {
-    let Some((mem, pn, w)) = world("CounterfeitMonkey-11.gblorb") else {
+    let Some((mem, pn, w)) = world("CounterfeitMonkey-10.gblorb") else {
         return;
     };
     let names: Vec<String> = w
@@ -369,6 +386,8 @@ fn every_map_this_reader_reports_is_internally_consistent() {
 
 // ── The map is LIVE data, not a fact about the file ─────────────────────────
 
+/// Release-agnostic (SQ-1454's disposition table): Sigil Street, Ampersand Bend and Fair
+/// exist in the IF Archive's release 10 too, so this runs against that fetched fixture.
 #[test]
 fn a_map_cell_rewritten_in_ram_is_seen_by_the_next_ask() {
     // `Map_Storage` is in RAM because `WorldModel.i6t`'s `AssertMapConnection`
@@ -380,7 +399,7 @@ fn a_map_cell_rewritten_in_ram_is_seen_by_the_next_ask() {
     // Counterfeit Monkey is the fixture that makes the point twice over: the
     // SQ-1303 spike measured two rooms whose played connections disagree with
     // the compiled map, because this game rewrites its own.
-    let Some((mut mem, pn, w)) = world("CounterfeitMonkey-11.gblorb") else {
+    let Some((mut mem, pn, w)) = world("CounterfeitMonkey-10.gblorb") else {
         return;
     };
     let find = |mem: &Memory, name: &str| -> u32 {
@@ -421,12 +440,14 @@ fn a_map_cell_rewritten_in_ram_is_seen_by_the_next_ask() {
     );
 }
 
+/// Release-agnostic (SQ-1454's disposition table): the twelve Standard Rules directions
+/// are compiled into every I7 story, so this runs against the fetched release 10.
 #[test]
 fn a_direction_this_story_does_not_have_has_no_column() {
     // `compass_column` is the caller's only way to tell "this story has no such
     // direction" from "this room declares nothing that way", which is the
     // `Unknown` / `Absent` split every declared-exit consumer is built around.
-    let Some((_mem, _pn, w)) = world("CounterfeitMonkey-11.gblorb") else {
+    let Some((_mem, _pn, w)) = world("CounterfeitMonkey-10.gblorb") else {
         return;
     };
     for c in Compass::ALL {
