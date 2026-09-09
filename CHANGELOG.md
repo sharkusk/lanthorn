@@ -34,7 +34,7 @@ Absolute URLs or no link.
   vocabulary help and everything else working as usual — the games' own
   first-person voice, and the Howarth lamp that counts its remaining turns out
   loud and is gone for good once it burns out. lanthorn also decodes the
-  line-drawn picture each room carries, though nothing draws them yet. The
+  line-drawn picture each room carries. The
   picker and the title bar name it by its release title (*The Golden Baton*,
   not the bare `BATON`) whether it's opened straight off disk or pulled off
   one of the compilation disk images below.
@@ -45,7 +45,6 @@ Absolute URLs or no link.
   compilation disc: point lanthorn or `scott-cli --story <n|name>` at one and
   pick from a list of the games it holds, six on the first and five on the
   second, each with its own saves. (SQ-1414)
-  loud and is gone for good once it burns out. (SQ-1414)
 - **And now they show their pictures.** Each room's line-drawn artwork —
   decoded straight off the same program file, no separate graphics disk
   needed — appears above the room panel exactly where a Blorb-bundled Scott
