@@ -11,6 +11,16 @@ use crate::text::decode::decode_string;
 // Public types
 // ---------------------------------------------------------------------------
 
+/// The widest operand list any Z-machine instruction decodes.
+///
+/// The bound is the encoding's, not a guess: a type byte describes four
+/// operands, only `call_vs2`/`call_vn2` carry a second type byte, and every
+/// other form reads at most two. `decode_into` below is the only producer, so
+/// a caller that has an [`Instr`] from it may size a fixed buffer by this
+/// (which is what [`crate::cpu::exec::Machine::execute`] does for the resolved
+/// values — SQ-1431).
+pub const MAX_OPERANDS: usize = 8;
+
 /// A single operand value.
 #[derive(Debug, Clone, PartialEq)]
 #[non_exhaustive]
@@ -264,6 +274,11 @@ fn get_signature(oc: &OperandCount, opcode: u8, version: u8) -> (bool, bool, boo
 
 /// Read one operand from `*pc` given a 2-bit type code.
 /// Returns `None` for type 0b11 (omitted).
+///
+/// `#[inline]`: a handful of instructions called two to eight times per
+/// decoded instruction, which nonetheless showed as its own ~5% self-time
+/// frame in the SQ-1431 profile — i.e. it was being CALLED.
+#[inline]
 fn read_operand(mem: &Memory, typ: u8, pc: &mut u32) -> Option<Operand> {
     match typ & 0b11 {
         0b00 => {
@@ -286,7 +301,9 @@ fn read_operand(mem: &Memory, typ: u8, pc: &mut u32) -> Option<Operand> {
 }
 
 /// Read up to 4 operands from the given type byte (MSB pair first).
-/// Stops at the first omitted slot.
+/// Stops at the first omitted slot. `#[inline]` for the same reason as
+/// [`read_operand`] (SQ-1431).
+#[inline]
 fn read_operands_from_type_byte(
     mem: &Memory,
     type_byte: u8,

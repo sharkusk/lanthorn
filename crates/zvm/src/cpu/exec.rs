@@ -8,7 +8,7 @@
 //!
 //! Dispatch structure: match on operand_count then opcode number.
 
-use crate::cpu::decode::{decode_into, Branch, Instr, Operand, OperandCount};
+use crate::cpu::decode::{decode_into, Branch, Instr, Operand, OperandCount, MAX_OPERANDS};
 pub use crate::cpu::boot::BootConfig;
 use crate::cpu::state::{call_routine, peek_stack, poke_stack, read_var, return_value, write_var, State};
 use crate::dictionary;
@@ -691,10 +691,6 @@ pub struct Machine {
     /// malloc'd and freed every instruction (SQ-1438). Empty at rest; never
     /// part of saved state.
     operand_scratch: Vec<Operand>,
-    /// Reusable buffer for `execute()`'s resolved operand values — the same
-    /// amortization as `operand_scratch`, for the `Vec<u16>` that used to be
-    /// a fresh `.collect()` per instruction (SQ-1438). Empty at rest.
-    ops_scratch: Vec<u16>,
 }
 
 /// Context captured when the `save` opcode fires, needed by `complete_save`.
@@ -861,7 +857,6 @@ impl Machine {
             just_restarted: false,
             nested_call_depth: 0,
             operand_scratch: Vec::new(),
-            ops_scratch: Vec::new(),
         }
     }
 
@@ -2193,22 +2188,36 @@ impl Machine {
         }
 
         // Resolve all operands left-to-right (Var operands can pop the stack)
-        // into a reused scratch buffer rather than a fresh `.collect()` per
-        // instruction — this was `spec_from_iter_nested` in the profile
-        // (SQ-1438).
-        let mut ops = std::mem::take(&mut self.ops_scratch);
-        ops.clear();
-        ops.extend(operands.iter().map(|op| self.resolve(op)));
+        // into a STACK array rather than a heap buffer: an instruction carries
+        // at most MAX_OPERANDS values by construction (see the constant), so
+        // the resolved list never needs to live behind a pointer, and keeping
+        // it in a local lets the compiler hold it in registers instead of
+        // reloading it through `self` (SQ-1431). This was a reused
+        // `Vec<u16>` field (SQ-1438) and a fresh `.collect()` before that.
+        //
+        // Every operand is still resolved, in order, whatever the count —
+        // `resolve` pops the game stack for Var operands, so skipping one
+        // would change semantics. Only the *storing* is bounded.
+        debug_assert!(operands.len() <= MAX_OPERANDS, "decode produced {} operands", operands.len());
+        let mut ops_buf = [0u16; MAX_OPERANDS];
+        let mut n = 0usize;
+        for op in operands.iter() {
+            let v = self.resolve(op);
+            if n < MAX_OPERANDS {
+                ops_buf[n] = v;
+                n += 1;
+            }
+        }
+        let ops = &ops_buf[..n];
 
         let result = match instr.operand_count {
-            OperandCount::Two => self.exec_2op(instr.opcode, &ops, instr.store, instr.branch),
-            OperandCount::One => self.exec_1op(instr.opcode, &ops, instr.store, instr.branch),
+            OperandCount::Two => self.exec_2op(instr.opcode, ops, instr.store, instr.branch),
+            OperandCount::One => self.exec_1op(instr.opcode, ops, instr.store, instr.branch),
             OperandCount::Zero => self.exec_0op(instr.opcode, instr.store, instr.branch, instr.text),
-            OperandCount::Var => self.exec_var(instr.opcode, &ops, instr.store, instr.branch),
-            OperandCount::Ext => self.exec_ext(instr.opcode, &ops, instr.store, instr.branch),
+            OperandCount::Var => self.exec_var(instr.opcode, ops, instr.store, instr.branch),
+            OperandCount::Ext => self.exec_ext(instr.opcode, ops, instr.store, instr.branch),
         };
 
-        self.ops_scratch = ops;
         self.operand_scratch = operands;
         result
     }
@@ -2886,8 +2895,29 @@ impl Machine {
             // 0x06 print_num — print operand as signed decimal
             0x06 => {
                 let val = ops.first().copied().unwrap_or(0) as i16;
-                let s = format!("{}", val);
-                self.print_text(&s);
+                // Format into a stack buffer rather than a heap `String`: the
+                // widest i16 is "-32768", six bytes, and `print_num` runs on
+                // every score/turn/inventory count a game prints (SQ-1431).
+                let mut buf = [0u8; 6];
+                let mut n = buf.len();
+                // Negate into i32 first — `-i16::MIN` overflows i16.
+                let mut mag = (val as i32).unsigned_abs();
+                loop {
+                    n -= 1;
+                    buf[n] = b'0' + (mag % 10) as u8;
+                    mag /= 10;
+                    if mag == 0 {
+                        break;
+                    }
+                }
+                if val < 0 {
+                    n -= 1;
+                    buf[n] = b'-';
+                }
+                // Every byte written above is b'-' or b'0'..=b'9', so this
+                // cannot fail; asserting that is honest where a fallback
+                // string would silently print the wrong number.
+                self.print_text(std::str::from_utf8(&buf[n..]).expect("ASCII digits"));
                 StepResult::Continue
             }
             // 0x07 random — ZMSD §15: random number generator
@@ -8728,6 +8758,35 @@ pub(crate) mod tests {
         run_until_quit(&mut m);
         let out = m.buffer_output().expect("default sink");
         assert_eq!(out.buf, "Hello\n-7");
+    }
+
+    /// `print_num` formats the whole signed 16-bit range exactly as `{}` on an
+    /// `i16` does — the boundary cover for the hand-rolled digit loop that
+    /// replaced `format!` on this path (SQ-1431). `-32768` is the case that
+    /// matters: negating it in `i16` overflows, so the magnitude is taken in
+    /// `i32`.
+    #[test]
+    fn text_print_num_spans_the_signed_range() {
+        for raw in [0u16, 1, 7, 9, 10, 99, 100, 999, 1000, 9999, 10000,
+                    0x7FFE, 0x7FFF, 0x8000, 0x8001, 0xFFF9, 0xFFFF] {
+            let mut buf = sample_story(5);
+            // VAR:0x06 print_num with a Large constant (small constants are
+            // 0-255 and unsigned, so they cannot reach the negative half).
+            buf[0x10] = 0xE6;
+            buf[0x11] = 0x3F; // type: large first, rest omitted
+            buf[0x12] = (raw >> 8) as u8;
+            buf[0x13] = (raw & 0xFF) as u8;
+            buf[0x14] = 0xBA; // quit
+
+            let mut m = build_raw_machine(buf);
+            run_until_quit(&mut m);
+            let out = m.buffer_output().expect("default sink");
+            assert_eq!(
+                out.buf,
+                format!("{}", raw as i16),
+                "print_num of {raw:#06x} ({})", raw as i16,
+            );
+        }
     }
 
     /// Test: `print_char` for ZSCII 65 ('A') prints 'A'.
