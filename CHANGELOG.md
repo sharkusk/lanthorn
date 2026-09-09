@@ -33,9 +33,12 @@ Absolute URLs or no link.
   one of the eleven program files and it opens and plays, with the map, the
   vocabulary help and everything else working as usual — the games' own
   first-person voice, and the Howarth lamp that counts its remaining turns out
-  loud and is gone for good once it burns out. lanthorn also decodes the
-  line-drawn picture each room carries, though nothing draws them yet.
-  (SQ-1414)
+  loud and is gone for good once it burns out. (SQ-1414)
+- **And now they show their pictures.** Each room's line-drawn artwork —
+  decoded straight off the same program file, no separate graphics disk
+  needed — appears above the room panel exactly where a Blorb-bundled Scott
+  Adams game already shows its own, through the same kitty/sixel/half-block
+  drawing lanthorn already uses everywhere else. (SQ-1463)
 - **Three more kinds of original disk now open.** Atari 8-bit floppies
   (`.atr`), Apple II DOS 3.3 floppies (`.dsk`) and Atari 8-bit loadable
   binaries (`.xex`) mount like every other release medium, and an ordinary
