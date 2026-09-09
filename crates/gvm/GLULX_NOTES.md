@@ -125,9 +125,25 @@ FramePtr   u32     (caller frame pointer)
 ```
 
 DestType: `0` discard, `1` store to main memory at DestAddr, `2` store to local
-at `(FramePtr+LocalsPos)+DestAddr`, `3` push on stack. (For glk/string
-intermediate stubs the spec also defines 0x10/0x11/0x12/0x13 — not needed in
-2a.)
+at `(FramePtr+LocalsPos)+DestAddr`, `3` push on stack.
+
+DestTypes **10-14** are not destinations at all but PRINT RESUME STATES (spec
+§1.3.2 — note the spec numbers this §1.3.2 and output filtering §1.3.5, not
+§1.8.x). The returning function was a filter-iosys callback or a string-embedded
+routine, its return value is discarded, and what resumes is the *print*:
+
+| DestType | resumes | PC field | DestAddr field |
+|---|---|---|---|
+| 10 | a compressed (E1) string | address of the byte within the string | bit number 0-7 within it |
+| 11 | function code after the string completes | the program counter as usual | 0 (FramePtr ignored) |
+| 12 | a signed decimal integer | **the integer itself** | position of the next digit |
+| 13 | a C-style (E0) string | address of the next character | 0 |
+| 14 | a Unicode (E2) string | address of the next 4-byte character | 0 |
+
+They are pushed with the ordinary four-word layout and are ordinary stack words,
+so a Quetzal `Stks` chunk carries them and any interpreter resumes the print
+after a restore. See §9's "Calling functions from within strings" for how the
+printing engine drives them.
 
 ### Return
 
@@ -185,9 +201,12 @@ unsigned: jltu/jgeu/jgtu/jleu. Shifts by ≥ 32: `shiftl`/`ushiftr` yield 0,
 `setiosys(mode, rock)` / `getiosys → (mode, rock)`:
 - mode `0` — null: all output discarded.
 - mode `1` — filter: rock is a function address; each output character is passed
-  as a single argument (its code point) to that function via a VM call
-  (`run_call_to_return`), per spec §7.2. Re-entrant filter calls are bounded by a
-  native-stack depth guard.
+  as a single argument (its code point) to that function via a VM call, per spec
+  §1.3.5. The call runs on the **Glulx stack**, not in a native loop: a call stub
+  records where the print resumes and control returns to the interpreter loop
+  (SQ-1418, see §9). So filter recursion is bounded by the story's own declared
+  stack size and faults with a stack overflow when it runs away — as glulxe's
+  "Stack overflow in callstub" does — rather than being silently capped.
 - mode `2` — Glk: stream opcodes route to `Output::print`.
 - any other mode — normalized to `0` (null) with rock `0` (spec §2.11: "If the
   system L1 is not supported by the interpreter, it will default to the null
@@ -282,16 +301,57 @@ For 0x08/0x0A the address names the object directly; for 0x09/0x0B it names a
 is printed (args ignored); if it is a function it is **called** (with the given
 args, or none for 0x08/0x09) and its output is streamed in place.
 
-### Calling functions from within strings (spec §1.3.4)
+### Calling functions from within strings (spec §1.3.5)
 
-The spec models a string-called function with type-10/11/13/14 call stubs so
-that a normal `return` resumes string decoding. We instead execute the call
-**synchronously**: decoding is a recursive Rust walk, and a function node calls
-the function and runs the VM run-loop until that frame returns (tracked by the
-frame pointer), then resumes the walk. This is observably equivalent for
-well-behaved veneer functions (their output is streamed in order). A recursion
-depth limit guards against pathological/cyclic tables (fault, never a Rust stack
-overflow).
+The spec models a string-called function with type-10/11/12/13/14 call stubs so
+that a normal `return` resumes string decoding, and **that is what gvm does**
+(SQ-1418). `stream_string` / `stream_num` / `stream_char` push the stub, set the
+PC to the resume position, enter the callee and RETURN to the interpreter loop;
+`pop_save_stub_and_store` recognises DestTypes 10-14 and re-enters the print, and
+`pop_callstub_string` unwinds the `0x11` terminator at the end. An embedded
+object reference (node types `0x08`-`0x0B`) goes through the stack in **every**
+I/O system, not only the filter one, matching glulxe.
+
+Consequences worth stating, because each was a defect before the redesign:
+
+- Filter recursion is bounded by the story's own stack, not by a native cap. It
+  used to stop at 33 nested calls and carry on as if the rest had printed.
+- A `@throw` past a print is an ordinary unwind — the string stubs above the
+  catch token are simply discarded with the rest of the stack — where a native
+  loop waiting on a frame pointer could never see the frame it wanted again.
+- A `@save`, `@restore`, `@saveundo` or `@restoreundo` taken mid-print carries
+  the resume state, because the stubs are ordinary stack words in the `Stks`
+  chunk. A restore resumes the interrupted string or number.
+- The machine keeps **no printing state of its own**. Everything is on the stack.
+
+**Historical note, since a "synchronous decode" reads as simpler:** it was a
+recursive Rust walk with `run_call_to_return` spinning `step_once` until the
+callee's frame returned. All four bullets above are consequences of that one
+choice, and no cap or guard could have fixed them individually.
+
+**The one remaining native nest** is capture mode (`emit_capture`): the
+compressed-string decoder behind `glk_put_string` owes a Glk dispatch call a
+finished `String`, so it cannot suspend into the interpreter loop. It is bounded
+by `CAPTURE_MAX_DEPTH`, never involves the filter (capture bypasses the iosys),
+and `run_call_to_return` refuses an unwind past its own frame rather than
+spinning on it.
+
+**Reference and provenance.** The design was matched against glulxe 0.6.1
+(`string.c` `stream_string`/`stream_num`/`filio_char_han`, `funcs.c`
+`push_callstub`/`pop_callstub`/`pop_callstub_string`, `exec.c`'s dispatch of the
+stream opcodes) at commit `56ab8743bab565de307bd892c555d8d8897ed517`. glulxe is
+**MIT-licensed** (Copyright (c) 1999-2023, Andrew Plotkin), which is compatible
+with lanthorn's BSD-3-Clause; the Rust here is written from the algorithm, not
+transcribed. Two synthetic `.ulx` images — a 201-deep filter recursion and a
+`@saveundo`/`@restoreundo` inside a filter mid-`streamnum` — produce
+byte-identical output under gvm and under glulxe/cheapglk 1.0.7.
+
+**A divergence the reference cannot arbitrate:** glulxe's `serial.c` refuses
+`@save`/`@restore` outright unless the I/O system is Glk ("Streams are only
+available in Glk I/O system"), which is a limitation of its stream writer rather
+than a spec rule — `@save` is defined on any writable Glk stream. gvm has no such
+restriction, so an in-filter `@save` works here and cannot be cross-checked
+against glulxe; the `@saveundo` path, which touches no stream, can be and was.
 
 ### `getstringtbl` / `setstringtbl`
 

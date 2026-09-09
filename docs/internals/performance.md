@@ -305,6 +305,10 @@ dispatched opcode by opcode:
 | `exec::Machine::decode_compressed` | 261 | 3.1% |
 | `exec::Machine::reload_frame_meta` | 230 | 2.8% |
 
+(`decode_compressed` in both tables is now spelled `stream_string` — SQ-1418
+rebuilt the printing engine to run on the Glulx stack. The frame names above are
+left as they were sampled, since a profile is a record of a run.)
+
 **Nothing was changed in `gvm`, and the profile is why.** Operand decoding is a
 third of the run in both modes, and **SQ-1208 already took the allocator out of
 it**: `read_operands` fills two fixed-capacity `Operands<T>` values on the stack,
