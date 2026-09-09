@@ -2175,6 +2175,19 @@ impl GlulxSession {
     pub fn save_quetzal(&self) -> Vec<u8> {
         self.machine.save_quetzal()
     }
+
+    /// Opcodes the machine has dispatched since it was built — after a
+    /// constructor, exactly what the boot drive cost.
+    ///
+    /// A count, not a clock: it is the same number on a quiet machine and under
+    /// a full parallel test run, which is what lets a test assert that one boot
+    /// took a different PATH from another (SQ-1400). See
+    /// [`gvm::Machine::insn_count`] for what it does not count — an accelerated
+    /// call bypasses the dispatcher, so intercepted work is invisible to it in
+    /// both boots being compared.
+    pub fn insn_count(&self) -> u64 {
+        self.machine.insn_count()
+    }
 }
 
 /// Decide whether a terminal click at absolute `(col, row)` should be diverted
