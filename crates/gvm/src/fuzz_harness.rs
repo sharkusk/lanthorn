@@ -68,12 +68,20 @@ fn align_up(v: u32, to: u32) -> u32 {
 /// is deliberately small: a garbage image that decodes a `glk_select` inside
 /// what amounts to a loop re-arms it forever rather than panicking, since the
 /// harness's random answers never satisfy whatever the (garbage) code is
-/// checking for, and that is legitimate execution, not a hang.
+/// checking for, and that is legitimate execution, not a hang. This is the
+/// real bound on the work a single image can do — see [`PER_STORY_BUDGET`]
+/// for why the wall-clock check is not also sized off it.
 const MAX_STEPS: usize = 1_500;
 
-/// Per-story wall-clock budget — see `zvm`'s module docs for the sizing
-/// rationale (kept well above the measured worst-case legitimate run).
-const PER_STORY_BUDGET: Duration = Duration::from_millis(750);
+/// Per-story wall-clock budget — a HANG GUARD, not a performance bound. See
+/// `zvm`'s `fuzz_harness` module docs for the full rationale: `MAX_STEPS`
+/// above is what actually caps the work; this only exists to catch a `step()`
+/// call that never returns at all. Sized generously (10s) for the slowest
+/// plausible CI runner (GitHub's 3-4 core boxes run `cargo test`'s threads
+/// sharing those cores, 2-3x slower than a local measurement on faster,
+/// less-contended hardware) rather than off this crate's own local
+/// measurement of the worst legitimate run.
+const PER_STORY_BUDGET: Duration = Duration::from_secs(10);
 
 /// Base of the fixed seed range the seeded tests below walk.
 const BASE_SEED: u64 = 0x5EED_0000_0000_0001;

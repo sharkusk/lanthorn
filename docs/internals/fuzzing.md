@@ -93,20 +93,30 @@ few seconds warm (measured: `zvm` ~0.75s, `gvm` ~0.75s, both well inside the
 still finding real budget-calibration issues — see "What this quest found"
 below for the one class of failure it does surface.
 
-### Step cap and budget: why they're what they are, not "20,000 / 250ms"
+### Step cap and budget: two different jobs, sized two different ways
+
+`MAX_STEPS` and `PER_STORY_BUDGET` look like one knob but answer two
+different questions, and conflating them is what went wrong on the first pass
+(the "20,000 / 250ms" this heading used to be named after). **`MAX_STEPS` is
+the real bound on the work a single image can do** — the harness's actual
+depth-of-execution parameter. **`PER_STORY_BUDGET` is a hang guard, not a
+performance bound** — it exists only to catch a `step()` call that never
+returns at all (the pre-SQ-1395 shape: an unbounded loop inside one opcode
+handler), and should otherwise never trip.
 
 The obvious defaults (a step cap in the tens of thousands, a budget in the low
-hundreds of milliseconds) turned out to be miscalibrated for an unoptimized
-debug build, and chasing that down is worth recording so nobody re-derives it
-by hand next time. A garbage image occasionally decodes a `read`/`read_char`
-(`zvm`) or `glk_select` (`gvm`) inside what amounts to a loop that keeps
-re-arming it — the harness's own random answers never type "quit", so a story
-that (deliberately or by accident of its garbage bytecode) just keeps asking
-will keep being asked, for the full step cap, on every run. That is
-**legitimate execution, not a hang** — but it is also genuinely slower per
-step than a mostly-`Continue` run, because each iteration walks the full
-input-suspend/resume machinery instead of one decoded instruction. Measured
-during this quest, both in unoptimized (`cargo test`, no `--release`) builds:
+hundreds of milliseconds) turned out to conflate the two, and chasing that
+down is worth recording so nobody re-derives it by hand next time. A garbage
+image occasionally decodes a `read`/`read_char` (`zvm`) or `glk_select`
+(`gvm`) inside what amounts to a loop that keeps re-arming it — the harness's
+own random answers never type "quit", so a story that (deliberately or by
+accident of its garbage bytecode) just keeps asking will keep being asked, for
+the full step cap, on every run. That is **legitimate execution, not a
+hang** — but it is also genuinely slower per step than a mostly-`Continue`
+run, because each iteration walks the full input-suspend/resume machinery
+instead of one decoded instruction. Measured during this quest, both in
+unoptimized (`cargo test`, no `--release`) builds on the development machine
+(an M2 Max):
 
 | crate | scenario | steps | measured | per-step |
 |---|---|---|---|---|
@@ -115,16 +125,30 @@ during this quest, both in unoptimized (`cargo test`, no `--release`) builds:
 
 The read/select-loop case is roughly **4x** slower per step than the
 mostly-`Continue` case, so a step cap and budget picked from the fast case's
-throughput fails the slow-but-not-buggy case under load — which is exactly
-what happened first (`MAX_STEPS = 20_000`, `PER_STORY_BUDGET = 250ms` failed
-4-and-then-1 seeds out of 1500 on repeated runs, each one a legitimate
-full-step-cap read loop, not a panic or a real hang). Both crates now use
-`MAX_STEPS = 1_500` / `PER_STORY_BUDGET = 750ms`, sized off the *slower*
-per-step measurement so the budget has real headroom (a full 1,500-step run of
-the slow case measures ~403ms, leaving ~45% margin) and only trips on a
-genuine super-linear blowup — a real bug — rather than on ordinary debug-build
-overhead. If you raise `MAX_STEPS` later, re-measure the read/select-loop case
-before assuming the existing budget still holds.
+throughput fails the slow-but-not-buggy case under load on the *same*
+machine — which is exactly what happened first (`MAX_STEPS = 20_000`,
+`PER_STORY_BUDGET = 250ms` failed 4-and-then-1 seeds out of 1500 on repeated
+runs, each one a legitimate full-step-cap read loop, not a panic or a real
+hang). Both crates now use `MAX_STEPS = 1_500`, which bounds a full read/select
+loop to ~403ms measured locally — that number is what actually stops a
+non-buggy image from taking unbounded wall time, by capping the WORK rather
+than the clock.
+
+**The budget is deliberately not sized off that ~403ms figure.** A number
+tuned against one fast, uncontended development machine is exactly the kind
+of thing that becomes a CI flake: GitHub's runners are 3-4 cores, `cargo test`
+(not `cargo nextest`) runs a binary's tests as threads sharing those cores
+rather than one process per test, and a case that measures 403ms locally can
+easily take 2-3x longer there for reasons that have nothing to do with a bug
+in the engine. Sizing the hang guard close to the legitimate worst case
+practically guarantees an eventual red CI run on nothing more than scheduler
+noise. `PER_STORY_BUDGET` is therefore `10s` in both crates — ample headroom
+over any plausible CI slowdown of ~403ms, while still catching a real hang,
+which would either never return at all or balloon by orders of magnitude, not
+merely by a constant multiplier. If you raise `MAX_STEPS` later, re-measure
+the read/select-loop case to know what the real per-story ceiling has become,
+but there's no need to also move `PER_STORY_BUDGET` in lockstep — it isn't
+tracking that number any more.
 
 ### What this quest found
 

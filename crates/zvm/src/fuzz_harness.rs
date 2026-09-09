@@ -65,21 +65,31 @@ impl XorShift64 {
 /// image occasionally decodes a `read`/`read_char` in what amounts to a loop
 /// that keeps re-arming it forever — a story ignoring random typed input and
 /// asking again is legitimate (if pointless) Z-machine behaviour, not a bug,
-/// and the harness's own random answers never type "quit" to end it — so
-/// this is chosen small enough that even the worst observed per-step cost
-/// stays comfortably inside [`PER_STORY_BUDGET`]. Investigated during this
-/// quest's own run: seed `0x5eed000000000234` (version 8) ran the full step
-/// cap on a `NeedLine`/`NeedChar` loop that never once returned `Continue`,
-/// at a measured ~280µs/step in an unoptimized debug build — 5x the ~72µs/step
-/// of a mostly-`Continue` run (seed `0x5eed000000000074`, version 4).
+/// and the harness's own random answers never type "quit" to end it. This is
+/// the real bound on the work a single image can do — see
+/// [`PER_STORY_BUDGET`] for why the wall-clock check is not also sized off
+/// it. Investigated during this quest's own run: seed `0x5eed000000000234`
+/// (version 8) ran the full step cap on a `NeedLine`/`NeedChar` loop that
+/// never once returned `Continue`, at a measured ~280µs/step in an
+/// unoptimized debug build — 5x the ~72µs/step of a mostly-`Continue` run
+/// (seed `0x5eed000000000074`, version 4).
 const MAX_STEPS: usize = 1_500;
 
-/// Per-story wall-clock budget. A story that exceeds this is a hang, and the
-/// case that drove it fails with its seed printed. Set well above the
-/// measured worst-case *legitimate* full-`MAX_STEPS` run (~360ms) so this
-/// only trips on a genuine super-linear blowup, not ordinary debug-build
-/// overhead.
-const PER_STORY_BUDGET: Duration = Duration::from_millis(750);
+/// Per-story wall-clock budget — a HANG GUARD, not a performance bound.
+/// `MAX_STEPS` above is what actually caps the work a single image can do;
+/// this only exists to catch a genuine hang (a single `step()` call that
+/// never returns at all, e.g. an unbounded loop inside one opcode handler —
+/// the pre-SQ-1395 shape). It is deliberately generous: this crate's own
+/// local measurement put the worst *legitimate* full-`MAX_STEPS` run at
+/// ~403ms on an M2 Max, but CI runs on 3-4 core GitHub runners with the
+/// binary's tests sharing those cores as threads (`cargo test`, not
+/// `nextest`'s one-process-per-test), where the same run can easily take
+/// 2-3x longer — a budget sized off a fast local machine's measurement would
+/// be a CI flake waiting to happen. 10s has ample headroom over any plausible
+/// CI slowdown of that ~403ms figure while still catching an actual hang
+/// (which would either never return at all, or balloon by orders of
+/// magnitude, not merely by a constant multiplier).
+const PER_STORY_BUDGET: Duration = Duration::from_secs(10);
 
 /// Base of the fixed seed range `random_image_stories_survive_step` and
 /// `mutated_fixture_stories_survive_step` walk.
