@@ -24,9 +24,10 @@ use std::path::PathBuf;
 
 use zvm::cpu::exec::{Machine, StepResult};
 use zvm::memory::Memory;
+use zvm::text::input::ZsciiInput;
 
 /// ZSCII cursor down (ZMSD §3.8) — the key that drives the menu.
-const CURSOR_DOWN: u8 = 130;
+const CURSOR_DOWN: ZsciiInput = ZsciiInput::DOWN;
 
 fn story() -> Option<Vec<u8>> {
     let p = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../stories/anchor.z8");
@@ -66,7 +67,7 @@ fn anchor_help_menu_keeps_its_bottom_rows_while_arrowing_down() {
     // stand between boot and the first prompt.
     for _ in 0..8 {
         match run_to_input(&mut m) {
-            StepResult::NeedChar => m.supply_char(13),
+            StepResult::NeedChar => m.supply_char(ZsciiInput::NEWLINE),
             StepResult::NeedLine { .. } => break,
             other => panic!("anchor.z8 did not reach its prompt: {other:?}"),
         }

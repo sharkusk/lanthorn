@@ -18,3 +18,6 @@ pub use decode::{decode_string, decode_string_words};
 
 pub mod encode;
 pub use encode::{encode_word, encode_word_mem};
+
+pub mod input;
+pub use input::ZsciiInput;

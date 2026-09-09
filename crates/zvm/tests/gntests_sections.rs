@@ -26,6 +26,7 @@
 
 use zvm::cpu::exec::{Machine, StepResult};
 use zvm::memory::Memory;
+use zvm::text::input::ZsciiInput;
 
 fn boot() -> Option<Machine> {
     let story = zvm::fixtures::load("gntests.z5")?;
@@ -66,7 +67,10 @@ fn drive(machine: &mut Machine, inputs: &[u8]) -> String {
                     }
                     machine.abort_timed_input("");
                 } else {
-                    machine.supply_char(*it.next().unwrap_or(&b'0'));
+                    let raw = *it.next().unwrap_or(&b'0');
+                    machine.supply_char(
+                        ZsciiInput::new(raw).expect("gntests menu digits are printable ASCII"),
+                    );
                 }
             }
             StepResult::SaveRequest => machine.complete_save(false),

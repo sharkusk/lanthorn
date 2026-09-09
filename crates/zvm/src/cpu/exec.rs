@@ -18,6 +18,7 @@ use crate::objects;
 use crate::screen::{advertise_colour, advertise_sound, init_header_caps, write_default_colours, ScreenState, StreamState, V6Cell, V6Windows, GRID_CELL_CAP};
 use crate::text::cp437::cp437_to_char;
 use crate::text::decode::{decode_string, zscii_to_char};
+use crate::text::input::ZsciiInput;
 
 /// Best-effort mnemonic for a decoded instruction; hex fallback when unknown.
 /// Covers the memory/stack opcodes most likely to fault, plus common ones.
@@ -3006,7 +3007,7 @@ impl Machine {
                 // newline.
                 if let Some(codes) = self.next_recorded_input() {
                     let key = codes.first().copied().unwrap_or(13);
-                    self.supply_char(key);
+                    self.supply_char_raw(key);
                     return StepResult::Continue;
                 }
                 StepResult::NeedChar
@@ -5400,7 +5401,7 @@ impl Machine {
         match &self.pending_input {
             Some(p) if !p.line_read => {
                 // read_char: deliver ZSCII 0.
-                self.supply_char(0);
+                self.supply_char_raw(0);
             }
             Some(_) => {
                 // read (line): partial buffer, terminator 0.
@@ -6106,7 +6107,7 @@ impl Machine {
         // pure damage.
         if !pending.line_read {
             self.pending_input = Some(pending);
-            self.supply_char(terminator);
+            self.supply_char_raw(terminator);
             return;
         }
 
@@ -6233,32 +6234,38 @@ impl Machine {
 
     /// Complete a suspended `read_char` instruction by supplying a single keystroke.
     ///
-    /// `ch` is the ZSCII code of the key pressed (e.g. 65 = 'A').
-    /// The value is written into the instruction's store variable.
-    ///
-    /// Normalises before storing (ZMSD §3.8): ZSCII 13 ("carriage return") is
-    /// the one code the standard defines for Return/Enter on input — 10
-    /// ("line feed") is not a legal input code at all, only an output one, so
-    /// a raw LF arriving here (a host reading an unprocessed byte off a piped
-    /// stdin, or any caller that forwards a platform newline verbatim) is
-    /// remapped to 13 rather than handed to the game as-is. `gntests` and
-    /// TerpEtude option 8 ("control character 'ctrl-J' (should NOT occur)")
-    /// both catch a raw 10 landing in a story's input; dfrotz always delivers
-    /// 13. Every other code outside the input table (§3.8's Table 2 — 8, 13,
-    /// 27, 32–126, 129–132, 133–144, 145–154, 252–254) is dropped with a
-    /// diagnostic and the read stays pending, rather than handing the game a
-    /// value the standard never defined for input.
-    pub fn supply_char(&mut self, ch: u8) {
+    /// `ch` is the ZSCII code of the key pressed (e.g. 65 = 'A'), typed as
+    /// [`ZsciiInput`] so a code the standard never defines for input (ZMSD
+    /// §3.8's Table 2) cannot reach here at all — see that type for the
+    /// verified range table and [`ZsciiInput::from_char`] for the convenience
+    /// that normalises a typed `'\n'` to Return (SQ-1419). The value is
+    /// written into the instruction's store variable.
+    pub fn supply_char(&mut self, ch: ZsciiInput) {
+        self.supply_char_raw(ch.code());
+    }
+
+    /// The body of [`Self::supply_char`], taking a raw ZSCII byte rather than
+    /// a [`ZsciiInput`] — for the machine's own internal callers, which
+    /// forward a code that never passed through a host's keyboard at all: a
+    /// replayed command-stream byte, a `read`-with-terminator terminator, or
+    /// 0, this crate's own timed-read timeout sentinel (not a ZSCII input
+    /// code — see the call sites). Every one of those still needs the §3.8
+    /// validity check `ZsciiInput::new` performs, since none of them went
+    /// through the type; unlike `supply_char`'s caller, they cannot lean on
+    /// the compiler for it.
+    fn supply_char_raw(&mut self, ch: u8) {
         let pending = match self.pending_input.take() {
             Some(p) => p,
             None => return,
         };
         // §3.8: 10 (line feed) is not a legal input code; 13 (carriage
-        // return) is the one Return/Enter is defined as.
+        // return) is the one Return/Enter is defined as. `ZsciiInput` applies
+        // this same normalisation on the `from_char('\n')` path; raw internal
+        // forwarders (see above) still want it done here.
         let ch = if ch == 10 { 13 } else { ch };
         // 0 is our own timed-read timeout sentinel (not a ZSCII input code at
         // all — see the call sites), so it bypasses the input-table check.
-        if ch != 0 && !is_valid_zscii_input_code(ch) {
+        if ch != 0 && ZsciiInput::new(ch).is_none() {
             self.push_diagnostic(format!(
                 "supply_char: ZSCII {ch} is not a legal input code (ZMSD §3.8); dropped"
             ));
@@ -6717,24 +6724,6 @@ impl Memory {
     pub fn initial_pc(&self) -> u32 {
         self.read_word(0x06) as u32
     }
-}
-
-// ---------------------------------------------------------------------------
-// ZSCII input validation
-// ---------------------------------------------------------------------------
-
-/// Is `ch` one of the ZSCII codes ZMSD §3.8's Table 2 defines for INPUT (not
-/// merely for output)? 0 (our own timed-read timeout sentinel) is
-/// deliberately not part of this table — callers check it separately.
-///
-/// Table 2: 8 (delete), 13 (carriage return), 27 (escape), 32–126 (standard
-/// ASCII), 129–132 (cursor keys), 133–144 (function keys f1–f12), 145–154
-/// (keypad 0–9), 252–254 (mouse clicks). Everything else — including 10
-/// (line feed, an output-only code) and the 155–251 extra-character range,
-/// which §3.8.5.4 defines for OUTPUT via the header Unicode table only — is
-/// not a legal keystroke.
-fn is_valid_zscii_input_code(ch: u8) -> bool {
-    matches!(ch, 8 | 13 | 27 | 32..=126 | 129..=132 | 133..=144 | 145..=154 | 252..=254)
 }
 
 // ---------------------------------------------------------------------------
@@ -9148,7 +9137,7 @@ pub(crate) mod tests {
             let mut m = Machine::new(mem);
             m.state.pc = 0x0010;
             assert_eq!(m.step(), StepResult::NeedChar);
-            m.supply_char(z);
+            m.supply_char(ZsciiInput::new(z).unwrap());
             assert_eq!(m.global(0), z as u16, "supply_char({z}) stored in G0");
         }
     }
@@ -9384,7 +9373,7 @@ pub(crate) mod tests {
         let result = m.step();
         assert_eq!(result, StepResult::NeedChar, "read_char returns NeedChar");
 
-        m.supply_char(65); // ZSCII 'A'
+        m.supply_char(ZsciiInput::new(65).unwrap()); // ZSCII 'A'
 
         assert_eq!(m.global(0), 65, "supply_char(65) stored in G0");
 
@@ -10559,7 +10548,7 @@ pub(crate) mod tests {
             preload: String::new(),
             interrupt_time: 0, interrupt_routine: 0, instr_pc: 0,
         });
-        m.supply_char(129); // cursor up
+        m.supply_char(ZsciiInput::UP); // cursor up
         assert_eq!(sink_commands(&m), ["take lamp", "[129]"]);
     }
 
@@ -11622,7 +11611,7 @@ pub(crate) mod tests {
             instr_pc: 0,
             preload: String::new(),
         });
-        m.supply_char(b' ');
+        m.supply_char(ZsciiInput::new(b' ').unwrap());
         assert_eq!(m.screen.upper.rows, 1, "a real keypress retires the stranded rows");
         assert_eq!(m.screen.upper.cell(1, 1).ch, 'H', "the status row itself is untouched");
     }
@@ -11695,7 +11684,7 @@ pub(crate) mod tests {
             instr_pc: 0,
             preload: String::new(),
         });
-        m.supply_char(130); // ZSCII cursor down (ZMSD §3.8) — one menu arrow key
+        m.supply_char(ZsciiInput::DOWN); // ZSCII cursor down (ZMSD §3.8) — one menu arrow key
         assert_eq!(m.screen.upper.rows, 13, "an arrow key must not retire live menu rows");
         assert_eq!(m.screen.upper.cell(13, 1).ch, 'B', "…and the row keeps its text");
     }
@@ -11732,7 +11721,7 @@ pub(crate) mod tests {
             instr_pc: 0,
             preload: String::new(),
         });
-        m.supply_char(b' ');
+        m.supply_char(ZsciiInput::new(b' ').unwrap());
         assert_eq!(m.screen.upper.rows, 3, "so the keypress retires nothing");
         assert_eq!(m.screen.upper.cell(2, 1).ch, 'M', "the live row survives");
     }
@@ -14003,10 +13992,10 @@ pub(crate) mod tests {
         let full = m.screen.v6.as_ref().unwrap().windows[0].more_interval(crate::screen::V6Cell::DEFAULT);
         m.exec_ext(0x19, &[0, 15, 1], None, None);
         m.exec_var(0x16, &[0], Some(0x01), None); // read_char (arms pending input)
-        m.supply_char(0); // ZSCII 0 = timed out
+        m.supply_char_raw(0); // ZSCII 0 = timed out (our sentinel, not a real ZsciiInput)
         assert_eq!(m.v6_line_count(), Some(1), "a timeout is not a keystroke");
         m.exec_var(0x16, &[0], Some(0x01), None);
-        m.supply_char(b'x');
+        m.supply_char(ZsciiInput::new(b'x').unwrap());
         assert_eq!(m.v6_line_count(), Some(full), "a real key reloads a full screen");
     }
 

@@ -12,6 +12,7 @@
 
 use zvm::cpu::exec::{Machine, StepResult};
 use zvm::memory::Memory;
+use zvm::text::input::ZsciiInput;
 
 /// Verbatim commands that reach interop point P: room "North of House",
 /// leaflet carried.
@@ -32,7 +33,7 @@ fn boot_to_first_read(data: Vec<u8>) -> Machine {
             StepResult::NeedLine { .. } => return machine,
             StepResult::Quit | StepResult::Restart | StepResult::Fault => return machine,
             StepResult::Continue => {}
-            StepResult::NeedChar => machine.supply_char(b'\n'),
+            StepResult::NeedChar => machine.supply_char(ZsciiInput::NEWLINE),
             StepResult::SaveRequest => machine.complete_save(false),
             StepResult::RestoreRequest => machine.complete_restore_failure(),
             _ => return machine,
@@ -49,7 +50,7 @@ fn run_one_turn(machine: &mut Machine, input: &str) {
         match machine.step() {
             StepResult::NeedLine { .. } | StepResult::Quit | StepResult::Restart | StepResult::Fault => return,
             StepResult::Continue => {}
-            StepResult::NeedChar => machine.supply_char(b'\n'),
+            StepResult::NeedChar => machine.supply_char(ZsciiInput::NEWLINE),
             StepResult::SaveRequest => machine.complete_save(false),
             StepResult::RestoreRequest => machine.complete_restore_failure(),
             _ => return,
@@ -69,7 +70,7 @@ fn drain_to_next_read(machine: &mut Machine) {
         match machine.step() {
             StepResult::NeedLine { .. } | StepResult::Quit | StepResult::Restart | StepResult::Fault => return,
             StepResult::Continue => {}
-            StepResult::NeedChar => machine.supply_char(b'\n'),
+            StepResult::NeedChar => machine.supply_char(ZsciiInput::NEWLINE),
             StepResult::SaveRequest => machine.complete_save(false),
             StepResult::RestoreRequest => machine.complete_restore_failure(),
             _ => return,
@@ -240,7 +241,7 @@ fn lanthorn_save_at_p(story_fixture: &str, prefix: &[&str], tag: &str) -> std::p
         for _ in 0..2_000_000u64 {
             match machine.step() {
                 StepResult::SaveRequest => break 'save machine.save_quetzal(),
-                StepResult::NeedChar => machine.supply_char(b'\n'),
+                StepResult::NeedChar => machine.supply_char(ZsciiInput::NEWLINE),
                 StepResult::RestoreRequest => machine.complete_restore_failure(),
                 StepResult::Continue => {}
                 StepResult::NeedLine { .. } | StepResult::Quit | StepResult::Restart | StepResult::Fault => {

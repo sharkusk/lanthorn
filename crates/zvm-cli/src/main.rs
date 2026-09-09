@@ -933,7 +933,11 @@ fn decode_keycode(code: KeyCode) -> u8 {
         // (ZSCII 145–154) are unreachable: terminals report them as ordinary
         // Char events, indistinguishable from the number row.
         KeyCode::F(n) if (1..=12).contains(&n) => 132 + n,
-        _ => b'\n', // unknown → newline
+        // Unknown → treated as Enter (ZSCII 13). Used to spell this `b'\n'`
+        // (10) and lean on `supply_char`'s own LF→13 normalisation; that
+        // normalisation moved into `ZsciiInput::from_char` (SQ-1426), so this
+        // now names the code the game actually receives directly.
+        _ => 13,
     }
 }
 
@@ -2201,9 +2205,12 @@ fn main() {
                 }
                 if aborted {
                     machine.abort_timed_input("");
-                } else {
-                    machine.supply_char(ch);
+                } else if let Some(zscii) = zvm::text::input::ZsciiInput::new(ch) {
+                    machine.supply_char(zscii);
                 }
+                // else: `ch` is not a legal ZSCII input code (ZMSD §3.8);
+                // dropped, matching `supply_char`'s own former behaviour for
+                // an illegal code.
                 if let Some(o) = machine.output_mut().as_any_mut().downcast_mut::<StdoutOutput>() {
                     o.pager.reset();
                     o.current_col = 0;

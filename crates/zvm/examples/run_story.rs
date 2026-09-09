@@ -21,6 +21,7 @@ use std::process;
 use zvm::cpu::exec::{BootConfig, Machine, StepResult};
 use zvm::io::Output;
 use zvm::memory::Memory;
+use zvm::text::input::ZsciiInput;
 
 /// Prints everything the story emits straight to stdout — no wrapping,
 /// paging or styling. The simplest possible [`Output`] sink.
@@ -92,7 +93,12 @@ fn main() {
                     break; // EOF
                 }
                 let ch = line.chars().next().unwrap_or(ENTER as char) as u32;
-                m.supply_char(u8::try_from(ch).unwrap_or(ENTER));
+                let raw = u8::try_from(ch).unwrap_or(ENTER);
+                if let Some(zscii) = ZsciiInput::new(raw) {
+                    m.supply_char(zscii);
+                }
+                // else: not a legal ZSCII input code (ZMSD §3.8); drop the
+                // keystroke, as `supply_char` itself used to.
             }
             // No file I/O in this minimal example — decline every save and
             // report failure for every restore, exactly as a host with

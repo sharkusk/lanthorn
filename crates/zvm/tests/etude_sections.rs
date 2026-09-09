@@ -63,6 +63,7 @@
 
 use zvm::cpu::exec::{Machine, StepResult};
 use zvm::memory::Memory;
+use zvm::text::input::ZsciiInput;
 
 fn boot() -> Option<Machine> {
     let story = zvm::fixtures::load("etude.z5")?;
@@ -225,7 +226,7 @@ fn etude_option_7_accents_display() {
     assert_in_dfrotz_golden("inverse-?:¿");
 
     // '.' ends the test and returns straight to the top menu.
-    machine.supply_char(b'.');
+    machine.supply_char(ZsciiInput::new(b'.').unwrap());
     assert!(
         matches!(next_prompt(&mut machine), StepResult::NeedLine { .. }),
         "'.' at the Accents prompt must return to the top menu"
@@ -238,7 +239,7 @@ fn etude_option_8_single_key_input() {
     machine.supply_line("8", 13);
     assert_eq!(next_prompt(&mut machine), StepResult::NeedChar);
     let before = buf(&machine).len();
-    machine.supply_char(b'x');
+    machine.supply_char(ZsciiInput::new(b'x').unwrap());
     assert_eq!(next_prompt(&mut machine), StepResult::NeedChar);
     let out = buf(&machine);
     assert_no_error_markers(&out, "8");
@@ -249,7 +250,7 @@ fn etude_option_8_single_key_input() {
     );
     assert_in_dfrotz_golden("code=120: ASCII character 'x'");
     // '.' ends the test.
-    machine.supply_char(b'.');
+    machine.supply_char(ZsciiInput::new(b'.').unwrap());
     assert!(matches!(next_prompt(&mut machine), StepResult::NeedLine { .. }));
     let out2 = buf(&machine);
     assert!(out2.contains("Test finished."), "missing exit banner:\n{out2}");
@@ -293,7 +294,7 @@ fn etude_option_10_timed_single_key_input() {
     assert_eq!(next_prompt(&mut machine), StepResult::NeedChar);
     let banner = buf(&machine);
     assert!(banner.contains("Your interpreter claims (by its header bit) that it DOES support timed input."));
-    machine.supply_char(b' '); // begin
+    machine.supply_char(ZsciiInput::new(b' ').unwrap()); // begin
 
     // The timed @read_char (`timedch.inc`'s `TimedCharSplot`, time=10 =
     // 1.0s). `next_prompt` drains the intervening `new_line` prints
@@ -314,7 +315,7 @@ fn etude_option_10_timed_single_key_input() {
     let ticked = buf(&machine)[before..].to_string();
     assert_eq!(ticked, "* * * ", "each tick prints one \"* \" (TimedCharSplot's own print):\n{ticked:?}");
     // Stop the test with a real keystroke (not a timeout).
-    machine.supply_char(b' ');
+    machine.supply_char(ZsciiInput::new(b' ').unwrap());
     assert_eq!(next_prompt(&mut machine), StepResult::NeedChar, "back at TestTimedChar's own \"any key to begin\" prompt");
     let out = buf(&machine);
     assert_no_error_markers(&out, "10");
@@ -323,7 +324,7 @@ fn etude_option_10_timed_single_key_input() {
         "claim=1 (timed input available) + argument-less interrupt calls must read SectionOk:\n{out}"
     );
 
-    machine.supply_char(b'.'); // return to top menu
+    machine.supply_char(ZsciiInput::new(b'.').unwrap()); // return to top menu
     assert!(matches!(next_prompt(&mut machine), StepResult::NeedLine { .. }));
 }
 
@@ -332,7 +333,7 @@ fn etude_option_11_timed_full_line_input() {
     let Some(mut machine) = boot_to_menu() else { return };
     machine.supply_line("11", 13);
     assert_eq!(next_prompt(&mut machine), StepResult::NeedChar);
-    machine.supply_char(b' '); // begin
+    machine.supply_char(ZsciiInput::new(b' ').unwrap()); // begin
 
     // TestTimedString prints "Beginning test..." and its first
     // "TimedString> " prompt before the first timed @aread; `next_prompt`
@@ -384,14 +385,14 @@ fn etude_option_13_undo_supports_single_undo() {
 
     // Any non-'.' key tries the (single) undo -- @restore_undo rewinds
     // execution to just after the SECOND @save_undo, whose result is now 2.
-    machine.supply_char(b' ');
+    machine.supply_char(ZsciiInput::new(b' ').unwrap());
     assert_eq!(next_prompt(&mut machine), StepResult::NeedChar); // MultipleUndo> prompt
     let out = buf(&machine);
     assert!(out.contains("Undo succeeded (undid second move)."));
 
     // '.' declines the second undo -- final verdict: single-undo support,
     // which zvm's undo_cap (>1) satisfies. SectionOk, no ERROR.
-    machine.supply_char(b'.');
+    machine.supply_char(ZsciiInput::new(b'.').unwrap());
     assert!(matches!(next_prompt(&mut machine), StepResult::NeedLine { .. }));
     let out2 = buf(&machine);
     let tail = &out2[out.len()..];
@@ -415,7 +416,7 @@ fn etude_option_14_prints_before_quitting() {
     // afterward -- the whole point of this option is that the line must
     // still be visible in the transcript, not lost to an unflushed buffer.
     let before = buf(&machine).len();
-    machine.supply_char(b' ');
+    machine.supply_char(ZsciiInput::new(b' ').unwrap());
     assert_eq!(next_prompt(&mut machine), StepResult::Quit);
     let out = buf(&machine);
     assert_no_error_markers(&out[before..], "14");
