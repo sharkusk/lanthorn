@@ -1,8 +1,13 @@
 # Third-Party Notices
 
-This document lists the permissively-licensed open-source projects from which lanthorn has derived code or data structures.
+This document lists:
 
-## glulxe
+1. **Derived code:** Open-source projects from which lanthorn has derived code or data structures.
+2. **Bundled components:** Third-party software bundled and distributed with the Docker image.
+
+## Derived Code
+
+### glulxe
 
 **Project:** glulxe  
 **Copyright:** © 1999–2023, Andrew Plotkin  
@@ -32,21 +37,22 @@ LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 
-## ttyd
+## Bundled Components
+
+These components are bundled and distributed as part of the Docker image (`docker build -t lanthorn .`).
+
+### ttyd
 
 **Project:** ttyd  
-**Copyright:** © 2016–2026, Shuanglei Tao  
-**License:** MIT  
+**Distribution:** Upstream release binary (see `Dockerfile` lines 63–84)  
 **URL:** https://github.com/tsl0922/ttyd  
-**Commit read:** ttyd 1.7.7, commit reference from https://github.com/tsl0922/ttyd/releases/tag/1.7.7 (2026-09-09)  
-**Lanthorn files:**
-- `crates/app/tests/pty_stream/driver.rs` — hangup behavior (`hang_up` function, signalling process groups with `SIGHUP` on websocket drop)
-- `crates/app/tests/suites/pty_hangup_autosave.rs` — test commentary on websocket hangup semantics
-- `docs/internals/docker.md` — description of session survival across websocket drops
+**Release:** 1.7.7 from https://github.com/tsl0922/ttyd/releases/download/1.7.7/ttyd.*  
+**License:** MIT  
+**Copyright:** © 2016–2026, Shuanglei Tao  
 
-**Notes:** Lanthorn does not derive ttyd's code; the implementation uses standard POSIX system calls (`kill(-pid, SIGHUP)`). ttyd's 1.7.7 source was read to understand the specific behaviour that the test harness mirrors: when ttyd drops a websocket, it signals the process group with `SIGHUP`, allowing a session manager (dtach) to detach while the underlying process continues.
+**Notes:** The Docker image serves the TUI through ttyd when run in server mode (`docker run lanthorn serve`). No lanthorn code is derived from ttyd.
 
-### MIT License
+#### MIT License
 
 Permission is hereby granted, free of charge, to any person obtaining a copy
 of this software and associated documentation files (the "Software"), to deal
@@ -65,3 +71,12 @@ AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
 LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
+
+### dtach
+
+**Project:** dtach  
+**Distribution:** Debian trixie package 0.9-7 (see `Dockerfile` line 130)  
+**URL:** https://github.com/crigler/dtach  
+**License:** GPL-2.0  
+
+**Notes:** The Docker image uses dtach to manage sessions that survive websocket drops (SQ-1323). dtach is bundled unmodified from the Debian trixie distribution package and is invoked as an external process. No lanthorn code is derived from dtach.
