@@ -59,6 +59,10 @@ Absolute URLs or no link.
   when this happens: restoring an old save prints a note in the transcript
   saying the screen (and, for a graphical game, its pictures) will repaint
   as you play. (SQ-1401, SQ-1403, SQ-1410)
+- **Z-machine games run noticeably faster.** Playing 20,000 turns of Mini-Zork
+  now takes 0.6 s, down from 2.2 s — about 3.7x — by cutting two small memory
+  allocations the interpreter was making for every single instruction it ran,
+  whether or not the instruction ever needed them. (SQ-1438)
 
 ### Fixed
 

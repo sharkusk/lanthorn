@@ -8,7 +8,7 @@
 //!
 //! Dispatch structure: match on operand_count then opcode number.
 
-use crate::cpu::decode::{decode, Branch, Instr, Operand, OperandCount};
+use crate::cpu::decode::{decode_into, Branch, Instr, Operand, OperandCount};
 pub use crate::cpu::boot::BootConfig;
 use crate::cpu::state::{call_routine, peek_stack, poke_stack, read_var, return_value, write_var, State};
 use crate::dictionary;
@@ -684,6 +684,17 @@ pub struct Machine {
     /// abandon path, which unwinds one level, not to zero. Not part of saved
     /// state: it is always 0 at rest between host `step()` calls.
     nested_call_depth: u32,
+    /// Reusable buffer for [`decode_into`](crate::cpu::decode::decode_into)'s
+    /// operand list — `step()` lends it out before decoding and reclaims it
+    /// out of the `Instr` before `execute()` drops one, so the `Vec<Operand>`
+    /// allocation is made once and reused for the rest of the run instead of
+    /// malloc'd and freed every instruction (SQ-1438). Empty at rest; never
+    /// part of saved state.
+    operand_scratch: Vec<Operand>,
+    /// Reusable buffer for `execute()`'s resolved operand values — the same
+    /// amortization as `operand_scratch`, for the `Vec<u16>` that used to be
+    /// a fresh `.collect()` per instruction (SQ-1438). Empty at rest.
+    ops_scratch: Vec<u16>,
 }
 
 /// Context captured when the `save` opcode fires, needed by `complete_save`.
@@ -849,6 +860,8 @@ impl Machine {
             newline_interrupt_active: false,
             just_restarted: false,
             nested_call_depth: 0,
+            operand_scratch: Vec::new(),
+            ops_scratch: Vec::new(),
         }
     }
 
@@ -1863,8 +1876,14 @@ impl Machine {
             self.exec_pcs.insert(instr_start_pc);
             self.ever_exec_pcs.insert(instr_start_pc);
         }
-        let instr = decode(&self.mem, self.state.pc, version);
-        let op_name = opcode_name(instr.operand_count.clone(), instr.opcode);
+        let operand_scratch = std::mem::take(&mut self.operand_scratch);
+        let instr = decode_into(&self.mem, self.state.pc, version, operand_scratch);
+        // `op_name` is a formatted/allocated String consumed only on the fault
+        // path below (approximately never) — save the two cheap, Copy-ish
+        // fields decode() gave us and format it lazily, only if a fault
+        // actually latches, instead of on every instruction (SQ-1438).
+        let opcode = instr.opcode;
+        let operand_count = instr.operand_count.clone();
 
         // CRITICAL: advance PC before executing so call/branch targets are correct.
         self.state.pc = instr.next_pc;
@@ -1879,10 +1898,12 @@ impl Machine {
         if let Some((is_write, size, addr)) = mem_fault {
             let kind = if is_write { "write".to_string() } else { format!("read{}", size as u32 * 8) };
             let msg = format!("memory fault: {kind} @{addr:#010x}");
+            let op_name = opcode_name(operand_count, opcode);
             self.fault_trace = Some(self.build_trace(msg, instr_start_pc, op_name));
             return StepResult::Fault;
         }
         if let Some(msg) = state_fault {
+            let op_name = opcode_name(operand_count, opcode);
             self.fault_trace = Some(self.build_trace(msg, instr_start_pc, op_name));
             return StepResult::Fault;
         }
@@ -2141,7 +2162,12 @@ impl Machine {
     // Main dispatch
     // -----------------------------------------------------------------------
 
-    fn execute(&mut self, instr: Instr) -> StepResult {
+    fn execute(&mut self, mut instr: Instr) -> StepResult {
+        // Recover decode_into's operand buffer so it — and `ops` below — can
+        // be handed back to `self.{operand,ops}_scratch` at the end instead of
+        // dropped (freed) here every instruction (SQ-1438).
+        let operands = std::mem::take(&mut instr.operands);
+
         // v6 `pull stack -> (result)` (ZMSD §15, frotz z_pull V6 branch): with an
         // operand — of ANY encoding, resolved like every other operand — its value
         // is a *user*-stack address: pop one word off it (bump the free-slot
@@ -2153,7 +2179,7 @@ impl Machine {
             && instr.opcode == 0x09
             && self.mem.version() == 6
         {
-            let value = if let Some(op) = instr.operands.first() {
+            let value = if let Some(op) = operands.first() {
                 let addr = self.resolve(op) as u32;
                 let size = self.mem.read_word(addr).wrapping_add(1);
                 self.mem.write_word(addr, size);
@@ -2162,23 +2188,29 @@ impl Machine {
                 read_var(&mut self.state, &self.mem, 0) // pop the game stack
             };
             self.do_store(instr.store, value);
+            self.operand_scratch = operands;
             return StepResult::Continue;
         }
 
-        // Resolve all operands left-to-right (Var operands can pop the stack).
-        let ops: Vec<u16> = instr
-            .operands
-            .iter()
-            .map(|op| self.resolve(op))
-            .collect();
+        // Resolve all operands left-to-right (Var operands can pop the stack)
+        // into a reused scratch buffer rather than a fresh `.collect()` per
+        // instruction — this was `spec_from_iter_nested` in the profile
+        // (SQ-1438).
+        let mut ops = std::mem::take(&mut self.ops_scratch);
+        ops.clear();
+        ops.extend(operands.iter().map(|op| self.resolve(op)));
 
-        match instr.operand_count {
+        let result = match instr.operand_count {
             OperandCount::Two => self.exec_2op(instr.opcode, &ops, instr.store, instr.branch),
             OperandCount::One => self.exec_1op(instr.opcode, &ops, instr.store, instr.branch),
             OperandCount::Zero => self.exec_0op(instr.opcode, instr.store, instr.branch, instr.text),
             OperandCount::Var => self.exec_var(instr.opcode, &ops, instr.store, instr.branch),
             OperandCount::Ext => self.exec_ext(instr.opcode, &ops, instr.store, instr.branch),
-        }
+        };
+
+        self.ops_scratch = ops;
+        self.operand_scratch = operands;
+        result
     }
 
     // -----------------------------------------------------------------------
