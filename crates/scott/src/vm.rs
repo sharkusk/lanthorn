@@ -2299,6 +2299,7 @@ mod tests {
             items,
             adventure_number: 0,
             mysterious: false,
+            saga_us: None,
             ti99: None,
         };
         let mut vm = Vm::new(db);
@@ -2534,6 +2535,7 @@ mod tests {
             items: one_item(),
             adventure_number: 0,
             mysterious: false,
+            saga_us: None,
             ti99: None,
         };
         let mut vm = Vm::new(db);
@@ -2573,6 +2575,7 @@ mod tests {
             items: one_item(),
             adventure_number: 0,
             mysterious: false,
+            saga_us: None,
             ti99: None,
         };
         let mut vm = Vm::new(db);
@@ -2620,6 +2623,7 @@ mod tests {
             items: one_item(),
             adventure_number: 0,
             mysterious: false,
+            saga_us: None,
             ti99: None,
         };
         let mut vm = Vm::new(db);
@@ -2685,6 +2689,7 @@ mod tests {
             items,
             adventure_number: 0,
             mysterious: false,
+            saga_us: None,
             ti99: None,
         };
         let mut vm = Vm::new(db);
@@ -2796,6 +2801,7 @@ mod tests {
             items,
             adventure_number: 0,
             mysterious: false,
+            saga_us: None,
             ti99: None,
         };
         let mut vm = Vm::new(db);
@@ -2888,6 +2894,7 @@ mod tests {
             items,
             adventure_number: 0,
             mysterious: false,
+            saga_us: None,
             ti99: None,
         }
     }
@@ -3097,6 +3104,7 @@ mod tests {
             items: one_item(),
             adventure_number: 0,
             mysterious: false,
+            saga_us: None,
             ti99: None,
         };
         let mut vm = Vm::new(db);
@@ -3141,6 +3149,7 @@ mod tests {
             items: one_item(),
             adventure_number: 0,
             mysterious: false,
+            saga_us: None,
             ti99: None,
         };
         let mut vm = Vm::new(db);
@@ -3191,6 +3200,7 @@ mod tests {
             items: one_item(),
             adventure_number: 0,
             mysterious: false,
+            saga_us: None,
             ti99: None,
         };
         let mut vm = Vm::new(db);
@@ -3249,6 +3259,7 @@ mod tests {
             items,
             adventure_number: 0,
             mysterious: false,
+            saga_us: None,
             ti99: None,
         };
         let mut vm = Vm::new(db);
@@ -3294,6 +3305,7 @@ mod tests {
             items: one_item(),
             adventure_number: 0,
             mysterious: false,
+            saga_us: None,
             ti99: None,
         };
         let mut vm = Vm::new(db);

@@ -47,7 +47,7 @@
 //!
 //! # Loading a story
 //!
-//! This crate reads **three** encodings of the same game data, and
+//! This crate reads **four** encodings of the same game data, and
 //! [`Database::parse`] answers for all of them from one entry point — hand it
 //! the file's raw bytes and it returns the static game data (rooms, items, the
 //! action table, vocabulary, and messages) or a [`LoadError`] naming what
@@ -64,6 +64,13 @@
 //!   holding an uncompressed 6502 memory image ([`parse_c64_mysterious_prg`],
 //!   and [`crate::c64`] for the format). Those releases also carry line-drawn
 //!   artwork, which [`decode_family_b_pictures`] turns into indexed bitmaps.
+//! * the **US S.A.G.A. binary database** — the American "Scott Adams Graphic
+//!   Adventure" disk editions of Adventures 1-6 and 13 for the Atari 8-bit and
+//!   the Apple II, and the Questprobe *Hulk* for the Commodore 64: a flat
+//!   binary array with a fifteen-word header, a dictionary of nouns then
+//!   verbs, length-prefixed strings, a **column-major** action table and
+//!   **direction-major** room connections ([`parse_saga_us`], and
+//!   [`crate::saga_us`] for the format).
 //!
 //! **A container is the host's business, not this crate's.** These eleven ship
 //! on two `.d64` compilation disks holding six and five games each, and
@@ -71,7 +78,10 @@
 //! named program file and hands the bytes over. What this crate does take is
 //! the program file itself, load-address bytes and all, because stripping
 //! those two bytes is part of reading the format rather than part of reading
-//! the disk.
+//! the disk. The same split holds for the S.A.G.A. releases: the host mounts
+//! the ATR, `.dsk` or `.d64` and hands over what it found, and
+//! [`SagaPlatform`] carries the one offset that turns those bytes into the
+//! database array.
 //!
 //! [`looks_like_scott_bytes`] is the sniff to reach for when a host is
 //! guessing among several engines from a file's bytes alone: it answers for
@@ -165,6 +175,7 @@
 //!     adventure_number: 0,
 //!     ti99: None, // a TI-99/4A tokenised script; None for every other source
 //!     mysterious: false, // Brian Howarth's Mysterious Adventures series; false for every other source
+//!     saga_us: None, // a US S.A.G.A. release identity; None for every other source
 //! };
 //!
 //! let mut vm = Vm::new(db);
@@ -195,6 +206,7 @@ mod z80;
 pub mod c64;
 pub mod database;
 pub mod decompile;
+pub mod saga_us;
 pub mod ti994a;
 pub use c64::{
     decode_family_b_block, decode_family_b_pictures, looks_like_c64_mysterious,
@@ -205,6 +217,10 @@ pub use database::{Action, Condition, Database, Item, Room};
 pub use decompile::{decompile_action, list_items, list_rooms, list_vocab};
 pub use loader::{detect_dialect, looks_like_scott, looks_like_scott_bytes, Dialect, LoadError};
 pub use options::{Options, Presentation, Wording};
+pub use saga_us::{
+    detect_saga_us, looks_like_saga_us, parse_saga_us, SagaPlatform, SagaUs, DARKNESS_PICTURE,
+    INVENTORY_PICTURE,
+};
 pub use scottfree_save::looks_like_scottfree_save;
 pub use ti994a::{looks_like_ti994a, parse_ti994a, Ti99Record, Ti99Script};
 pub use vm::{RestoreError, StepResult, Vm};

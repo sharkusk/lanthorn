@@ -772,6 +772,7 @@ pub fn parse_ti994a(bytes: &[u8]) -> Result<Database, LoadError> {
         // in has no counterpart here.
         adventure_number: 0,
         mysterious: false,
+        saga_us: None,
         ti99: Some(Ti99Script {
             verb_chains,
             automatic,
@@ -1076,6 +1077,7 @@ mod tests {
             ],
             adventure_number: 0,
             mysterious: false,
+            saga_us: None,
             ti99: Some(Ti99Script {
                 verb_chains: vec![
                     Vec::new(),

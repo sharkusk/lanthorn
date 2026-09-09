@@ -150,6 +150,24 @@ pub enum Dialect {
     /// spelling variant of [`Dialect::C64OrZxSnapshot`]: reading it needs a
     /// different table decoder, not merely a different dictionary reader.
     CompressedActionTable,
+    /// The **US S.A.G.A. binary database** — the American "Scott Adams
+    /// Graphic Adventure" disk releases for the Atari 8-bit, the Apple II and
+    /// the Commodore 64, plus the Questprobe *Hulk*
+    /// ([`crate::saga_us`], SQ-1414/SQ-1464). This crate READS it.
+    ///
+    /// **The odd one out: this variant has no byte signature.** Every other
+    /// [`Dialect`] above is the opening of a fixed-width verb dictionary, and
+    /// this format's verb block spells one — the plain `AUTO\0GO\0` is 645
+    /// bytes into the Commodore 64 *Hulk*'s array — but its dictionary proper
+    /// begins at the **noun** block, so matching that signature and reading
+    /// from there "produces a self-consistent parse of nothing"
+    /// (`docs/internals/scott-dialects-spec.md` §12.14). It is therefore
+    /// recognised **structurally** instead, by §12.2's version/adventure scan
+    /// over the first 0x38 bytes plus §12.4's header limits plus the presence
+    /// of §12.5's `ANY` — [`crate::saga_us::detect_saga_us`] — and
+    /// [`detect_dialect`] checks for it BEFORE the signature scan for exactly
+    /// that reason.
+    SagaUsDatabase,
 }
 
 /// Scans `bytes` for one of [`Dialect`]'s fixed signatures, anywhere in the
@@ -203,7 +221,15 @@ pub fn detect_dialect(bytes: &[u8]) -> Option<Dialect> {
     const C64_5: &[u8] = b"GO\0\0\0\0*CROSS*RUN\0";
     const COMPRESSED: &[u8] = b"aUTOgO\0";
     let contains = |needle: &[u8]| bytes.windows(needle.len()).any(|w| w == needle);
-    if contains(TI99) {
+    if crate::saga_us::detect_saga_us(bytes).is_some() {
+        // Checked FIRST, and structurally rather than by signature — see
+        // [`Dialect::SagaUsDatabase`]. These databases spell the plain
+        // four-letter (or three-letter) dictionary signature in their VERB
+        // block, 645 bytes past where their dictionary actually starts, so a
+        // signature scan reaching them first would name the wrong dialect and
+        // a loader following it would read nothing useful (§12.14).
+        Some(Dialect::SagaUsDatabase)
+    } else if contains(TI99) {
         Some(Dialect::Ti994aBytecode)
     } else if contains(COMPRESSED) {
         // Checked before the unpacked signatures. The packed and unpacked
@@ -377,6 +403,14 @@ impl Database {
             Some(Dialect::C64OrZxSnapshot) if crate::c64::looks_like_c64_mysterious_prg(bytes) => {
                 crate::c64::parse_c64_mysterious_prg(bytes)
             }
+            // A US S.A.G.A. disk release's database, as the container handed
+            // it over (SQ-1414/SQ-1464): `crate::saga_us` recognises it
+            // structurally and answers which platform's array offset fitted,
+            // so one entry point still reads every dialect this crate loads.
+            Some(Dialect::SagaUsDatabase) => match crate::saga_us::detect_saga_us(bytes) {
+                Some(platform) => crate::saga_us::parse_saga_us(bytes, platform),
+                None => Err(LoadError::UnsupportedDialect(Dialect::SagaUsDatabase)),
+            },
             Some(d) => Err(LoadError::UnsupportedDialect(d)),
             None => Err(text_error),
         }
@@ -552,18 +586,25 @@ impl Database {
             // as an ordinary database, and a host wanting the series' lamp
             // behaviour for it sets the two options itself.
             mysterious: false,
+            // …nor any S.A.G.A. release identity: §12.2's version/adventure
+            // pair lives in the binary database's front matter, and a `.dat`
+            // conversion of one of those titles is an ordinary text database
+            // with an optional trailer and no platform (SQ-1414).
+            saga_us: None,
         })
     }
 }
 
 /// Cheap content sniff for engine detection, over RAW BYTES: true for a
 /// ScottFree `.dat` (the text format, via [`looks_like_scott`]), a TI-99/4A
-/// tokenised release (via [`crate::ti994a::looks_like_ti994a`]) **or** a
+/// tokenised release (via [`crate::ti994a::looks_like_ti994a`]), a
 /// Commodore 64 *Mysterious Adventures* program file (via
-/// [`crate::c64::looks_like_c64_mysterious_prg`]).
+/// [`crate::c64::looks_like_c64_mysterious_prg`]) **or** a US S.A.G.A.
+/// binary database as its container handed it over (via
+/// [`crate::saga_us::detect_saga_us`]).
 ///
 /// This is the sniff a multi-engine host wants, because those are exactly
-/// the two things [`Database::parse`] reads. [`looks_like_scott`] takes a
+/// the things [`Database::parse`] reads. [`looks_like_scott`] takes a
 /// `&str` and so can never answer for a binary dialect at all: a host that
 /// spells its check `from_utf8(bytes).is_ok_and(looks_like_scott)` rejects
 /// every TI-99/4A file before the loader ever sees it, which is what it did
@@ -572,6 +613,7 @@ pub fn looks_like_scott_bytes(bytes: &[u8]) -> bool {
     std::str::from_utf8(bytes).is_ok_and(looks_like_scott)
         || crate::ti994a::looks_like_ti994a(bytes)
         || crate::c64::looks_like_c64_mysterious_prg(bytes)
+        || crate::saga_us::detect_saga_us(bytes).is_some()
 }
 
 /// Cheap content sniff for engine detection: parse the 12 header ints and sanity-check.

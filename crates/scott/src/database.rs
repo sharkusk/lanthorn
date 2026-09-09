@@ -111,6 +111,28 @@ pub struct Database {
     /// marker (§6.1: a reference-format database is recognised "only by its
     /// header counts").
     pub mysterious: bool,
+    /// Which **US S.A.G.A.** release this is, for a database loaded from one
+    /// of the American Adventure International disk editions
+    /// ([`crate::parse_saga_us`]) — `None` for every other dialect, including
+    /// a reference-format `.dat` conversion of the same title.
+    ///
+    /// A property of the DATABASE for the reason the dialect specification's
+    /// Appendix A gives, the same one `mysterious` above records — but what it
+    /// carries is an identity rather than a switch. §12.2: "**Only the pair
+    /// identifies a title**, because adventure 1 is *Adventureland* at version
+    /// 416 and the *Hulk* at version 127". Everything §12.11 makes conditional
+    /// on the release is a PICTURE decision, and this crate draws no pictures;
+    /// [`crate::SagaUs`] carries the two such facts that are derivable from
+    /// the database (a room's picture is its own number, and the *Hulk*'s
+    /// five-pair remap) and a host owns the rest, because §12.10's per-title
+    /// picture lists "are not recoverable from the database" at all.
+    ///
+    /// **It forces no options.** §12.11: "the two lamp options §9.2 describes
+    /// are not forced. These are Adventure International releases, not
+    /// Mysterious Adventures ones, and take the host's settings" — which is
+    /// exactly why this is a separate field from `mysterious` rather than
+    /// another `bool` beside it.
+    pub saga_us: Option<crate::saga_us::SagaUs>,
 }
 
 /// One room's exits, description text, and how that description should be
@@ -344,6 +366,7 @@ mod tests {
             adventure_number: 0,
             mysterious: false,
             ti99: None,
+            saga_us: None,
         };
         assert_eq!(db.rooms.len(), 2);
         assert_eq!(db.start_room, 1);
@@ -379,6 +402,7 @@ mod tests {
             adventure_number: 0,
             mysterious: false,
             ti99: None,
+            saga_us: None,
         };
         assert_eq!(db.match_verb("go"), Some(1));
         assert_eq!(db.match_verb("GET"), Some(10));

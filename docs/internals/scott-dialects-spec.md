@@ -4361,9 +4361,11 @@ wanting generality must walk the filesystem.
 ## Appendix A — How lanthorn uses this document
 
 lanthorn's `scott` crate reads the reference text format, **§3's TI-99/4A
-tokenised releases** (`crates/scott/src/ti994a.rs`, SQ-1414) and the **eleven
+tokenised releases** (`crates/scott/src/ti994a.rs`, SQ-1414), the **eleven
 Commodore 64 *Mysterious Adventures* releases** (`crates/scott/src/c64.rs`,
-SQ-1455), and refuses the remaining dialects by name rather than loading them: a
+SQ-1455) and **§12's US S.A.G.A. binary database** — all fifteen Atari 8-bit,
+Apple II and Commodore 64 databases (`crates/scott/src/saga_us.rs`, SQ-1414 /
+SQ-1464) — and refuses the remaining dialects by name rather than loading them: a
 file that fails the text parse is checked against the TI-99/4A signature, the
 `aUTOgO\0` compressed signature and the three plain dictionary signatures, so a
 player is told "this is a Commodore 64 memory snapshot" rather than "invalid
@@ -4375,8 +4377,12 @@ strings and the derived message count, §3.6 the two dictionaries, §3.7 the
 action encoding), the Commodore 64 slice of §4 (§4.2's cell reading, §4.3's
 locating, §4.4's encodings), §5.3's repairs for that family, §6, §7.2's
 uncrunched disk-image path, §8.2's Family B pictures, §9.1 and §9.2 as they
-apply, and §11's TI-99/4A refusals. **Not implemented:** the rest of §4-§8,
-§9.3, §11 and **all of §12**.
+apply, §11's TI-99/4A refusals, and **§12 in full** (§12.1-§12.9 as the format,
+§12.11's database-borne runtime facts, §12.14's refusals; §12.10 says the
+database carries no picture data, so there is none to read). **Not
+implemented:** the rest of §4-§8, §9.3, and §11 apart from the above. The
+S.A.G.A. **container** step is the host's — `scott` reads no disk images — so
+§12.3's three array offsets live in the crate and the mount does not.
 
 The TI-99/4A implementer raised three questions about §3 while building that
 loader, each found by measuring the §10.2 specimens against the §10.1 oracle.
