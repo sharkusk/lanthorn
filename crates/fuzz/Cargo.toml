@@ -1,0 +1,68 @@
+# Detached from the root workspace (own empty [workspace] table, same pattern
+# as crates/gvm/tables-gen) so this package's dependency, `libfuzzer-sys`,
+# never touches lanthorn-zvm/lanthorn-gvm's zero-dependency build — see the
+# root Cargo.toml's `exclude` list and docs/internals/fuzzing.md for why.
+[workspace]
+
+[package]
+name = "lanthorn-fuzz"
+version = "0.0.0"
+edition = "2021"
+publish = false
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+libfuzzer-sys = "0.4"
+lanthorn-zvm = { path = "../zvm" }
+lanthorn-gvm = { path = "../gvm" }
+
+[[bin]]
+name = "zvm_step"
+path = "fuzz_targets/zvm_step.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "zvm_restore"
+path = "fuzz_targets/zvm_restore.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "zvm_screen_snapshot"
+path = "fuzz_targets/zvm_screen_snapshot.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "zvm_disasm"
+path = "fuzz_targets/zvm_disasm.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "gvm_step"
+path = "fuzz_targets/gvm_step.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "gvm_restore"
+path = "fuzz_targets/gvm_restore.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "gvm_disasm"
+path = "fuzz_targets/gvm_disasm.rs"
+test = false
+doc = false
+bench = false

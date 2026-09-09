@@ -176,6 +176,9 @@ pub mod dictionary;
 pub mod error;
 #[cfg(feature = "fixtures")]
 pub mod fixtures;
+/// Hostile-input fuzzing harness (SQ-1407) — see the module docs.
+#[cfg(test)]
+mod fuzz_harness;
 #[cfg(feature = "grammar")]
 pub mod grammar;
 pub mod header;

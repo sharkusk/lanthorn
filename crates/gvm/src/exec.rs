@@ -4304,7 +4304,11 @@ impl Machine {
     /// Dispatch one `@glk` selector against the Glk model + backend. Output-side
     /// selectors only (input/events are phase 3a-2). Unknown selectors record a
     /// diagnostic and return 0; nothing here panics on bad ids.
-    fn glk_dispatch(&mut self, selector: u32, args: &[u32]) -> R<u32> {
+    // pub(crate), not pub: SQ-1407's fuzz harness (crate::fuzz_harness, a
+    // sibling module — see its docs) calls this directly to hammer the Glk
+    // selector surface with random arguments. Still crate-private; this is
+    // not an embedder-facing API.
+    pub(crate) fn glk_dispatch(&mut self, selector: u32, args: &[u32]) -> R<u32> {
         let a = |i: usize| args.get(i).copied().unwrap_or(0);
         // Debug trace: record structural Glk/garglk calls so a story's
         // window/style/colour instructions are visible. The high-volume text I/O

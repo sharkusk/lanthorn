@@ -2,7 +2,16 @@
 members = ["crates/grammar-model", "crates/zvm", "crates/zvm-cli", "crates/mapper", "crates/app", "crates/blorb", "crates/gvm", "crates/gvm-cli", "crates/audio", "crates/scott", "crates/scott-cli", "crates/buildinfo", "crates/cli-host", "crates/verb-synonyms", "crates/verb-synonyms-gen", "crates/audio-relay"]
 # Standalone UCD table generator — run by hand only when the pinned Unicode
 # version bumps; its output is committed so gvm stays zero-dep.
-exclude = ["crates/gvm/tables-gen"]
+#
+# crates/fuzz (SQ-1407): cargo-fuzz targets for zvm/gvm. `cargo check` on it
+# alone DOES compile on stable (libfuzzer-sys itself needs no nightly feature),
+# but it stays out of this workspace anyway — the standard cargo-fuzz shape is
+# a detached crate (own `[workspace]` table, own Cargo.lock), `cargo fuzz run`
+# needs a nightly toolchain regardless, and folding libfuzzer-sys's C++ build
+# into every `--workspace` invocation would tax the routine build this file's
+# opening section is built around shrinking. Run it from crates/fuzz itself —
+# see docs/internals/fuzzing.md.
+exclude = ["crates/gvm/tables-gen", "crates/fuzz"]
 resolver = "2"
 
 # Shared package metadata inherited by each crate via `<field>.workspace = true`.

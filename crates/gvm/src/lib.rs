@@ -115,6 +115,9 @@ pub(crate) mod decode;
 pub mod disasm;
 pub mod error;
 pub mod exec;
+/// Hostile-input fuzzing harness (SQ-1407) — see the module docs.
+#[cfg(test)]
+mod fuzz_harness;
 pub mod glk;
 #[cfg(feature = "grammar")]
 pub mod grammar;
