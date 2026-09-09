@@ -547,7 +547,63 @@ impl WinTree {
 /// A display backend the VM drives for all output-side effects. The Glk state
 /// (window tree, streams, current style) lives in [`Model`]; the backend renders
 /// it. Every method has a no-op default so a backend implements only what it
-/// needs; `as_any_mut` supports downcasting in tests.
+/// needs.
+///
+/// # Why `as_any`/`as_any_mut`, and why they stay (SQ-1409)
+///
+/// The two are required with no default, which forces every implementor to
+/// write `fn as_any(&self) -> &dyn Any { self }` (and the `_mut` twin) —
+/// and writing that line requires `Self: Any`, which requires `Self:
+/// 'static`, exactly as if the trait carried a `: Any` supertrait bound
+/// (see `zvm::io`'s `Output: Any`, documented the same way under SQ-1402).
+/// So every backend must own everything it touches rather than borrow it
+/// from its host. The reason is this crate's own test suites: they build a
+/// `Box<dyn GlkBackend>`, drive a few opcodes through it, then downcast back
+/// to the concrete `TestBackend` to read what got recorded — `as_any_mut`
+/// is what makes that downcast possible. **Do not change the trait** to drop
+/// or default these; that is the one thing SQ-1409 asks to leave alone.
+///
+/// **The pattern for a host whose backend must reach state it does not
+/// own:** don't fight `'static` by borrowing — share the state behind a
+/// reference-counted cell instead ([`std::rc::Rc`]`<`[`std::cell::RefCell`]`<_>>`
+/// for a single-threaded host, [`std::sync::Arc`]`<`[`std::sync::Mutex`]`<_>>`
+/// across threads). The backend owns a clone of the handle (satisfying
+/// `'static` honestly, not by unsafely erasing a borrow), the host keeps its
+/// own clone, and both sides see the same state with no downcast anywhere:
+///
+/// ```rust
+/// use std::any::Any;
+/// use std::cell::RefCell;
+/// use std::rc::Rc;
+///
+/// use gvm::glk::{GlkBackend, GlkStyle};
+///
+/// struct SharedLog(Rc<RefCell<Vec<String>>>);
+///
+/// impl GlkBackend for SharedLog {
+///     fn put_text(&mut self, _win: u32, _style: GlkStyle, s: &str) {
+///         self.0.borrow_mut().push(s.to_string());
+///     }
+///     fn as_any(&self) -> &dyn Any {
+///         self
+///     }
+///     fn as_any_mut(&mut self) -> &mut dyn Any {
+///         self
+///     }
+/// }
+///
+/// // What a real host's step loop would call as the story prints.
+/// fn a_steps_worth_of_output(backend: &mut dyn GlkBackend) {
+///     backend.put_text(0, GlkStyle::Normal, "hello");
+/// }
+///
+/// let log = Rc::new(RefCell::new(Vec::new()));
+/// let mut backend = SharedLog(Rc::clone(&log));
+/// a_steps_worth_of_output(&mut backend);
+/// // The host reads its OWN clone after the step, no downcast required —
+/// // the whole point of sharing the cell instead of asking the backend for it.
+/// assert_eq!(log.borrow().as_slice(), ["hello".to_string()]);
+/// ```
 pub trait GlkBackend {
     /// Total display size available to the root window, in characters
     /// `(width, height)`. The model lays the window tree out within this.
