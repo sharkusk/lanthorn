@@ -164,6 +164,7 @@
 //!     items: vec![],
 //!     adventure_number: 0,
 //!     ti99: None, // a TI-99/4A tokenised script; None for every other source
+//!     mysterious: false, // Brian Howarth's Mysterious Adventures series; false for every other source
 //! };
 //!
 //! let mut vm = Vm::new(db);

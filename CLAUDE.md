@@ -88,6 +88,14 @@ declare, or if `t-all` drops a group.
   is invisible to it. CI's `cargo check`-equivalent is the `--all-features` test
   build (see below), which is where that half is caught; add `--all-features` here
   too if you want the in-crate tests covered locally before pushing.
+- **A change to an engine crate's public struct or its crate-level docs needs
+  `cargo test --doc -p <crate>`** — nextest never runs doctests (every crate sets
+  `doctest = false`, see below), but CI's `cargo test` does, so a doc example that
+  hand-builds a struct silently rots the moment a field is added. Main went red
+  on all three CI platforms this way (SQ-1414): the C64 Mysterious Adventures
+  loader added `Database::mysterious`, and the crate-doc example at
+  `crates/scott/src/lib.rs:145` — the only place left spelling every field of
+  `Database` by hand — missed it.
 - **When a merge touches anything `app` depends on** — an engine crate's public
   API, a name rule, a type's fields — the integrator's merged-tree run must
   include the in-crate tests, not only the integration filter: `cargo nextest
