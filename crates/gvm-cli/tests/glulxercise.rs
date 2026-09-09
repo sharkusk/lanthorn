@@ -72,6 +72,29 @@ fn scratch_dir() -> PathBuf {
     d
 }
 
+/// SQ-1425 non-regression guard: `--data-dir` above is what keeps gvm-cli's
+/// saves/sidecars out of this crate's COMMITTED `tests/fixtures/`, and a
+/// stray `glulxercise.ulx.save/` briefly landed there before it was threaded
+/// through every write. If a future write ever bypasses `--data-dir` again,
+/// fail loudly here instead of leaving litter for `git status` to notice by
+/// accident.
+fn assert_fixtures_dir_unpolluted() {
+    const COMMITTED: &[&str] = &["README.md", "glulxercise.ulx"];
+    let dir = fixture_path().parent().unwrap().to_path_buf();
+    let mut found: Vec<String> = std::fs::read_dir(&dir)
+        .unwrap_or_else(|e| panic!("reading {}: {e}", dir.display()))
+        .map(|entry| entry.unwrap().file_name().to_string_lossy().into_owned())
+        .collect();
+    found.sort();
+    let mut want: Vec<String> = COMMITTED.iter().map(|s| s.to_string()).collect();
+    want.sort();
+    assert_eq!(
+        found, want,
+        "tests/fixtures/ should hold exactly the committed entries; found something else \
+         (a stray write escaping --data-dir?)"
+    );
+}
+
 /// Extract the quoted group names following [`OPTIONS_MARKER`] on its line,
 /// e.g. `"operand", "arith", ...`. Returns them in the order the story lists
 /// them. Panics (with the searched text) if the marker is missing, so a
@@ -232,6 +255,7 @@ fn glulxercise_all_groups_pass() {
     drop(stdin);
     let _ = reader.join();
     let _ = std::fs::remove_dir_all(&data_dir);
+    assert_fixtures_dir_unpolluted();
 
     let out = String::from_utf8_lossy(&buf.lock().unwrap()).to_string();
 
