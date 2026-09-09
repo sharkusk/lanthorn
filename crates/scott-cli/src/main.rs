@@ -442,13 +442,15 @@ fn main() {
         eprintln!("scott-cli: cannot read {}: {e}", args.path);
         process::exit(1);
     });
-    // Bytes, not `&str`: since SQ-1414 this reads the TI-99/4A tokenised
-    // releases too, and those are a binary memory image that no UTF-8
-    // conversion survives. `looks_like_scott_bytes` answers for both
-    // encodings and is the same predicate `Database::parse` then applies.
+    // Bytes, not `&str`: since SQ-1414 this reads two BINARY encodings as well
+    // — the TI-99/4A tokenised releases, and the Commodore 64 *Mysterious
+    // Adventures* as `.prg` program files — and no UTF-8 conversion survives
+    // either. `looks_like_scott_bytes` answers for all three and is the same
+    // predicate `Database::parse` then applies.
     if !scott::looks_like_scott_bytes(&bytes) {
         eprintln!(
-            "scott-cli: {} does not look like a Scott .dat or a TI-99/4A release",
+            "scott-cli: {} does not look like a Scott .dat, a TI-99/4A release \
+             or a Commodore 64 Mysterious Adventures .prg",
             args.path
         );
         process::exit(1);
