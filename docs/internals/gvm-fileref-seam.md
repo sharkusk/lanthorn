@@ -31,27 +31,37 @@ score table, or a save is really just mutating this map, and nothing more
 happens to those bytes until the host reads `Machine::vfs_bytes()` and writes
 them somewhere itself.
 
-**Reset on the story's own `@restart` — verified, and easy to miss.** Glulx's
-`restart` opcode (`0x0122`, spec §2.9 — what a compiled game executes for its
-own RESTART command, e.g. Inform's library action) runs entirely inside
-`Machine::step`, and `Machine::op_restart` (`crates/gvm/src/exec.rs`)
-unconditionally does `self.glk = Model::new()`: a fresh, empty VFS, along with
-every window, stream and fileref. This happens **mid-step, with no
-`StepResult` announcing it** — the host's next `step()` call just continues as
-`Continue`, unaware that the VFS it may have been tracking as `vfs_dirty()`
-just vanished and came back clean (a fresh `Model`'s dirty flag is `false`).
-A host that dirty-gates its sidecar flush (§c below) will not flush after
-this — there is nothing "dirty" to flush — so any file the story wrote and the
-host had not yet persisted is gone until the *next* time the host itself
-reloads a sidecar into a *new* `Machine`. This is a different event from a
-host's own external restart (tearing down its `Machine` and building a new
-one from scratch, which lanthorn does for its own `/restart` and startup
-resume): that path is entirely the host's to control, and lanthorn carries the
-live VFS forward into the new `Machine` explicitly
-(`session.vfs_bytes()` → the new session's `load_vfs`, `crates/app/src/reset.rs`'s
-`carry_vfs`). The in-game opcode gives the host no such chance — it fires
-inside the *same* `Machine`, and by the time `step()` returns, the wipe has
-already happened.
+**The story's own `@restart` preserves the VFS (SQ-1439).** Glulx's `restart`
+opcode (`0x0122`, spec §2.9 — what a compiled game executes for its own
+RESTART command, e.g. Inform's library action) runs entirely inside
+`Machine::step`, and `Machine::op_restart` (`crates/gvm/src/exec.rs`) calls
+`Model::reset_for_restart` (`crates/gvm/src/glk.rs`) rather than
+`Model::new()`. The split it makes is exactly the one the spec draws:
+§1.8.5 ("State Not Saved") lists Glk library state — windows, filerefs,
+streams, the current output stream, window contents, cursor positions — as
+untouched by `restart`/`restore`/`restoreundo`, and glulxe's own `vm_restart`
+(`vm.c`) confirms it in practice, resetting only memory, the stack and the
+registers without ever calling into Glk. `gvm` still tears the
+window/stream/fileref layer down on `@restart` (a separate, deliberate
+design predating this quest, SQ-0627: a fresh `Model` hands out the same ids
+the backend must be told to forget first, and any window-closing an Inform
+game exhibits right after RESTART is its own compiled library code
+re-issuing `glk_window_close`, not an interpreter action). What survives is
+narrower and more specific: the file VFS (`Model::files`,
+`Model::saved_game_files`, `Model::vfs_dirty`) models the game's *disk*, not
+a Glk runtime object, and a real disk survives an interpreter restart the way
+it survives a process crash. A host that dirty-gates its sidecar flush (§c
+below) still sees `vfs_dirty()` correctly `true` after an in-game RESTART if
+the story had unflushed writes — the exact symptom this quest closed: before
+the fix, `vfs_dirty()` silently came back `false` (a fresh `Model`'s
+default) and a file the story wrote and the host had not yet persisted was
+gone until the *next* time the host itself reloaded a sidecar into a *new*
+`Machine`. That external-restart path (lanthorn tearing down its `Machine`
+and building a new one from scratch for its own `/restart` and startup
+resume, carrying `session.vfs_bytes()` forward into the new session's
+`load_vfs`, `crates/app/src/reset.rs`'s `carry_vfs`) is unaffected by this —
+it was already correct, and remains a separate event from the in-game
+opcode, which fires inside the *same* `Machine`.
 
 **Two kinds of session-transient state ride alongside the VFS but are not part
 of it.** `Model::saved_game_files` (a name → last-written byte length) and
@@ -304,11 +314,13 @@ loop {
 
 ## Known gaps
 
-- **The in-game `@restart` VFS wipe (§a) has no host-visible signal at all.**
-  A host that wants to survive it (carry the live VFS across a story-initiated
-  RESTART, not just its own external one) would need to snapshot `vfs_bytes()`
-  before every `step()` and diff it after — there is currently no cheaper way
-  to notice.
+- **The in-game `@restart` VFS wipe (§a) is closed (SQ-1439).** The file
+  VFS (`Model::files`, `Model::saved_game_files`, `Model::vfs_dirty`) now
+  survives a story-initiated RESTART — see §a above for the exact
+  survive/reset split and its spec citation. A host's dirty-gated sidecar
+  flush (§c) needs no special handling for this any more: `vfs_dirty()`
+  reads correctly after an in-game RESTART exactly as it does after any
+  other mutation.
 - **`gvm`'s VFS codec (`GVFS`) records no per-file usage tag**, so a host
   building a `create_by_prompt` read picker over existing files (§b) cannot
   filter it to the fileusage class the story actually asked for; see

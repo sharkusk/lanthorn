@@ -66,6 +66,12 @@ Absolute URLs or no link.
 
 ### Fixed
 
+- **A Glulx game's in-game RESTART no longer forgets files the game had
+  written.** Typing RESTART used to silently wipe any file a Glulx story kept
+  on its own "disk" (Counterfeit Monkey's fast-start cache, for instance) —
+  the story's next save to that file would fail to notice, and it stayed lost
+  until you left and relaunched. Those files now survive a RESTART, matching
+  every other Glulx interpreter. (SQ-1439)
 - **Some games no longer swallow your first keystroke at the opening prompt.**
   Stories that begin with a blank line or two — most modern Inform games do —
   could raise a `[more]` prompt over an opening screen that plainly still had

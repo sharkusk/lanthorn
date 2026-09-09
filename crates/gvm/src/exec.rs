@@ -3180,7 +3180,11 @@ impl Machine {
         for id in self.glk.all_window_ids() {
             self.backend.window_close(id);
         }
-        self.glk = Model::new();
+        // Model::reset_for_restart, not `Model::new()`: the file VFS models the
+        // game's DISK, and a real disk survives an interpreter restart — see its
+        // doc comment (Glk spec §1.8.5, glulxe's `vm_restart`) for the exact
+        // survive/reset split (SQ-1439).
+        self.glk.reset_for_restart();
         self.pending_input = None;
         self.pending_event = None;
         self.pending_fileref = None;
@@ -11844,6 +11848,140 @@ mod tests {
             "restart must not produce an illegal-opcode error: {:?}",
             m.diagnostics
         );
+    }
+
+    #[test]
+    fn restart_keeps_the_file_vfs_but_resets_windows_and_streams() {
+        // SQ-1439: the Glulx spec (§1.8.5, "State Not Saved") lists Glk library
+        // state -- "Glk opaque objects (windows, filerefs, streams)... contents
+        // of windows" -- as untouched by restart, and glulxe's own vm_restart
+        // (vm.c) never calls into Glk at all: it resets memory, stack and
+        // registers only. `gvm` still tears the window/stream/fileref layer
+        // down on @restart (SQ-0627's separate, deliberate design, unchanged
+        // here) -- but the file VFS models the game's DISK, not a Glk runtime
+        // object, and a real disk survives an interpreter restart. Write a
+        // file, restart, and confirm a fresh fileref of the same name still
+        // reads it back, and that the host-visible dirty flag survives too --
+        // the exact reported symptom: a host that dirty-gates its sidecar
+        // flush would otherwise never see the write after an in-game RESTART.
+        let mut m = machine_with_glk(&[]);
+        let win = m.glk_open_window(0, 0, 0, 3, 0); // wintype_TextBuffer
+        assert_ne!(win, 0, "sanity: a window is open before restart");
+
+        let f = m.glk.fileref_create(0x00, "save".to_string(), 0);
+        let sid = m.glk.stream_open_file(f, 0x01, false, 0); // filemode_Write
+        m.glk.file_stream_write(sid, "Hi");
+        m.glk.stream_close(sid);
+        assert!(m.vfs_dirty(), "sanity: the write marked the VFS dirty");
+        let before = m.vfs_bytes();
+
+        m.op_restart().unwrap();
+
+        // (b) windows/streams ARE reset -- pinned so the split does not drift.
+        assert_eq!(m.glk.root(), 0, "windows are reset, same as before this fix (SQ-0627)");
+        assert_eq!(m.glk.stream_iterate(0), (0, 0), "streams are reset too");
+
+        // The dirty-flag symptom this quest fixes.
+        assert!(m.vfs_dirty(), "the dirty flag must survive so a host's sidecar flush still fires");
+
+        // (c) vfs_bytes() round-trips the file store across restart.
+        assert_eq!(m.vfs_bytes(), before, "vfs_bytes() round-trips the file store across restart");
+
+        // (a) A fresh fileref of the same name -- the game's stack and old
+        // fileref id are both gone, so it must re-create one, exactly as the
+        // spec requires ("you must do an iteration... to find objects created
+        // in an earlier incarnation") -- still reads the bytes written before
+        // the restart.
+        let f2 = m.glk.fileref_create(0x00, "save".to_string(), 0);
+        assert!(m.glk.fileref_exists(f2), "the file itself survives an in-game RESTART");
+        let rsid = m.glk.stream_open_file(f2, 0x02, false, 0); // filemode_Read
+        assert_eq!(m.glk.file_stream_read_char(rsid), Some(b'H' as u32), "byte 0 survives restart");
+        assert_eq!(m.glk.file_stream_read_char(rsid), Some(b'i' as u32), "byte 1 survives restart");
+        assert_eq!(m.glk.file_stream_read_char(rsid), None, "EOF");
+    }
+
+    /// Real-game smoke for SQ-1439: Counterfeit Monkey writes a Data-usage Glk
+    /// file (`àCounterfeit Monkey-startup-data.glkdata`) during its very first
+    /// boot, before it ever prints a line (see `accel_story_equivalence.rs`'s
+    /// comment on the same file). Confirm the exact function `@restart`
+    /// dispatches to (`op_restart`) leaves that real, story-produced VFS entry
+    /// and its dirty flag intact.
+    ///
+    /// This calls `op_restart()` directly rather than driving CM's own
+    /// in-fiction `> restart` command: CM's opening is a scripted Q&A ("Can you
+    /// hear me?", "Do you remember our name?", ...) built on its own
+    /// `@saveundo`/`@restoreundo` dialogue engine, and an unrecognized answer
+    /// there (including a bare "restart") is swallowed as a wrong answer rather
+    /// than reaching the standard library parser — confirmed empirically while
+    /// developing this test (instrumenting `op_restart` showed it never fired
+    /// when "restart" was typed at that prompt). Reaching a genuine `> restart`
+    /// prompt needs several more turns of narrative-specific dialogue, which is
+    /// a separate, fiddly exercise this quest does not need: `op_restart` is a
+    /// private fn with exactly one caller (the `0x0122` dispatch arm above), so
+    /// calling it directly here still exercises the real code path against a
+    /// real story's real boot-time state — only the in-fiction command that
+    /// triggers it is skipped. `restart_keeps_the_file_vfs_but_resets_windows_and_streams`
+    /// above is the one that drives real bytes through a write-then-read round
+    /// trip; this one confirms the same function against CM's own VFS content.
+    #[test]
+    fn counterfeit_monkey_restart_keeps_its_own_startup_data_file() {
+        let path =
+            std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../stories/CounterfeitMonkey-11.gblorb");
+        let Ok(bytes) = std::fs::read(&path) else {
+            eprintln!("SKIP: stories/CounterfeitMonkey-11.gblorb missing");
+            return;
+        };
+        let b = blorb::Blorb::parse(bytes).expect("valid Blorb");
+        let (kind, data) = b.executable().expect("Blorb has an executable chunk");
+        assert!(matches!(kind, blorb::ExecKind::Glulx), "expected a Glulx Blorb");
+        let mem = Memory::new(data.to_vec()).expect("valid Glulx image");
+        let mut m = Machine::with_glk(mem, Box::new(TestBackend::new()));
+        m.set_acceleration(true); // debug-build CM is minutes without it
+
+        // Drive to the story's first real input stop, servicing its own startup
+        // `@save` the way a working host does (SQ-0595).
+        let mut steps = 0u64;
+        loop {
+            match m.step() {
+                StepResult::Continue => {
+                    steps += 1;
+                    assert!(steps < 300_000_000, "runaway: never reached an input prompt");
+                }
+                StepResult::NeedEvent { timer_ms: Some(_), .. } => m.deliver_timer(),
+                StepResult::SaveRequest => m.complete_save(true),
+                StepResult::RestoreRequest => m.complete_restore_failure(),
+                StepResult::NeedLine { .. } | StepResult::NeedChar { .. } => break,
+                other => panic!("unexpected stop reaching the first prompt: {other:?}"),
+            }
+        }
+
+        let text = backend_of(&m).all_text();
+        assert!(
+            text.contains("Can you hear me?"),
+            "the harness must actually reach CM's own opening line, or this test is vacuous; got {text:?}"
+        );
+
+        // The real defect's precondition: CM's own boot already wrote into the VFS.
+        let names_before = m.file_names();
+        assert!(
+            !names_before.is_empty(),
+            "sanity: CounterfeitMonkey's boot is expected to touch its own startup-data file"
+        );
+        assert!(m.vfs_dirty(), "sanity: that write left the VFS dirty");
+        let bytes_before = m.vfs_bytes();
+
+        m.op_restart().expect("op_restart must not fault on a real story");
+
+        assert_eq!(
+            m.file_names(),
+            names_before,
+            "CounterfeitMonkey's own startup-data file must survive @restart (SQ-1439)"
+        );
+        assert!(
+            m.vfs_dirty(),
+            "the dirty flag must survive @restart so a host's sidecar flush still fires (SQ-1439)"
+        );
+        assert_eq!(m.vfs_bytes(), bytes_before, "vfs_bytes() round-trips across @restart on a real story");
     }
 
     #[test]
