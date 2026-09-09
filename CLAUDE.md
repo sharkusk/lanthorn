@@ -99,20 +99,34 @@ declare, or if `t-all` drops a group.
 - **When a merge touches anything `app` depends on** — an engine crate's public
   API, a name rule, a type's fields — the integrator's merged-tree run must
   include the in-crate tests, not only the integration filter: `cargo nextest
-  run -p lanthorn --lib --features t-all <filter>`. A filter with no
+  run -p lanthorn --lib --bins --features t-all <filter>`. A filter with no
   `--features` compiles zero of `app`'s in-crate tests and reads as a pass
   regardless of what broke. SQ-1416 reached CI red this way — two production
   regressions in `glulx_session.rs`'s in-crate tests, because both the lane
   and the merge check filtered by name without the feature.
+  **`--bins` is not optional: some in-crate tests live only in the `lanthorn`
+  binary target, not the library, and `--lib` alone cannot see them.**
+  `picker_ui.rs` is a module of `main.rs`, not `lib.rs` — `grep -n "mod
+  picker_ui" crates/app/src/main.rs crates/app/src/lib.rs` finds it only in
+  the former — so its ~230 tests compile solely into the bin-target test
+  binary. SQ-1458 added three `DiskImage` rows whose picker-column label
+  overflowed the TYPE column's fixed width, panicking
+  `picker_ui::tests::interp_label_names_the_disk_image_container` at
+  `picker_ui.rs:4433`; the integrator's `cargo nextest run -p lanthorn --lib
+  --features t-all` printed 3,377 passed and could not see it, and only CI's
+  `cargo test --workspace --all-features` caught it, reaching red on all three
+  platforms after the merge had already landed.
   **Even with the feature on, prefer no filter at all**: `cargo nextest run -p
-  lanthorn --lib --features t-all` — a name filter only covers the group you
-  guessed, and the group that reads a changed seam is rarely the one you
-  guessed. SQ-1422 widened the story sniffer to accept Z-machine Versions 1
+  lanthorn --lib --bins --features t-all` — a name filter only covers the
+  group you guessed, and the group that reads a changed seam is rarely the one
+  you guessed. SQ-1422 widened the story sniffer to accept Z-machine Versions 1
   and 2; the merge check ran the `t-guidance` filter, but the assumption that
   broke lived in `t-picker`, so CI went red on all three platforms on a check
   that had printed a pass. Measured warm: the whole unfiltered `t-all`
-  in-crate suite (3,369 tests) runs in **~23s** — cheap enough that guessing
-  which group to filter to buys nothing worth the risk.
+  in-crate suite is **3,377 tests / ~23s** with `--lib` alone versus **3,607
+  tests / ~25s** with `--lib --bins` — the extra ~230 tests (`picker_ui`
+  included) cost about two seconds, cheap enough that dropping `--bins` to
+  save time buys nothing worth the risk.
 - **Never put the full gate in a parallel lane's brief.** A three-lane wave that
   gates each lane AND the combination pays four full builds — plus four clippy
   builds, which share no fingerprints with them — for one merge. Lanes run
