@@ -2018,6 +2018,44 @@ impl Model {
         self.vfs_dirty = false;
     }
 
+    /// Reset the model for the story's own `@restart` opcode (0x0122),
+    /// keeping the file VFS intact (SQ-1439).
+    ///
+    /// Glulx spec §1.8.5 ("State Not Saved") lists Glk library state — "Glk
+    /// opaque objects (windows, filerefs, streams)... I/O state such as the
+    /// current output stream, contents of windows, and cursor positions" —
+    /// as untouched by a `restart`/`restore`/`restoreundo` operation, and
+    /// glulxe's own `vm_restart` (`vm.c`) confirms this in practice: it
+    /// resets memory (skipping the live `@protect` range), the stack and
+    /// the registers, and never calls into Glk at all. Any window-closing an
+    /// Inform game exhibits right after RESTART is the game's *own* compiled
+    /// library code re-issuing `glk_window_close`, not an interpreter action.
+    ///
+    /// `gvm` still tears the window/stream/fileref layer down on `@restart`
+    /// — that is SQ-0627's existing, deliberate design (a fresh `Model`
+    /// hands out the same ids the backend must be told to forget first) and
+    /// is unchanged by this method. What SQ-1439 fixes is narrower: the file
+    /// VFS (`files`, `saved_game_files`, `vfs_dirty`) models the game's
+    /// DISK, not a Glk runtime object, and a real disk survives an
+    /// interpreter restart the way it survives a process crash — so those
+    /// three fields carry forward into the fresh model instead of being
+    /// wiped by [`Model::new`].
+    ///
+    /// Open file *streams* are still closed along with every other Glk
+    /// object: their handles are dead once the stack that named them is
+    /// gone, and closing them loses no bytes because every file write
+    /// already lands in `files` at write time ([`Self::file_stream_write`]
+    /// has no separate flush step) — there is nothing left to flush.
+    pub(crate) fn reset_for_restart(&mut self) {
+        let files = std::mem::take(&mut self.files);
+        let saved_game_files = std::mem::take(&mut self.saved_game_files);
+        let vfs_dirty = self.vfs_dirty;
+        *self = Model::new();
+        self.files = files;
+        self.saved_game_files = saved_game_files;
+        self.vfs_dirty = vfs_dirty;
+    }
+
     /// The `(name, usage)` a fileref points at, for opening a file stream (Task 2).
     pub fn fileref_name(&self, fref: u32) -> Option<(String, u32)> {
         self.fileref(fref).map(|f| (f.name.clone(), f.usage))
