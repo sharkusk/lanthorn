@@ -92,6 +92,10 @@ Absolute URLs or no link.
 - **Glulx floating-point and double-precision `mod`/`div`-family math now
   matches the reference interpreter exactly**, including how it handles
   negative zero, infinities, and not-a-number. (SQ-1415)
+- **Glulx's `pow`/`dpow` now follow the spec's special cases on every
+  platform**, not only macOS — `1 raised to any power (even not-a-number) is 1`
+  and `anything raised to the power 0 (even not-a-number) is 1` now hold on
+  Linux and Windows too. (SQ-1433)
 - **Glulx games' data files now use the standard names**, so a file a Glulx
   story writes (a transcript, a data file, an in-game save) can be shared with
   other interpreters instead of only being readable by lanthorn. And a couple
