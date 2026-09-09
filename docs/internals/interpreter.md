@@ -43,10 +43,11 @@ Point lanthorn at whatever the game arrived in and it digs the story out itself.
   Adams, Blorb containers — and a resources Blorb packed in the same zip supplies
   that game's pictures and sounds, as does a hints file. (It used to name three
   extensions and hand back no resources at all, which meant the one format whose
-  whole point is that it ships artwork was the one a zip could not carry.) Still
-  honest about its limit: a zip holding *two* games plays the first one. And a zip
-  is a convenience for what somebody downloaded — the `.lanthorn` archive is the
-  container, and the two stay apart.
+  whole point is that it ships artwork was the one a zip could not carry.) When a
+  zip holds one story, it opens directly. When it holds several, they are listed
+  in the picker and the player selects which one to open, or passes `--story=name`
+  to choose at launch. A zip is a convenience for what somebody downloaded — the
+  `.lanthorn` archive is the container, and the two stay apart.
 
   **Reaching a zipped story's companions without unpacking to disk** (SQ-1460).
   A Scott Adams MS-DOS/C64 release ships as one zip holding the `.dat` beside
