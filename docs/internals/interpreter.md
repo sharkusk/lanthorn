@@ -39,7 +39,7 @@ Point lanthorn at whatever the game arrived in and it digs the story out itself.
   and audio. A resources-only Blorb sitting *beside* the story counts too.
 - **ZIP archives** — a zip is opened like a volume, not like a wrapper around one
   file. Entries are classified by their **content**, not by their names, so a zip
-  carries anything lanthorn runs — v3–v8 including graphical v6, Glulx, Scott
+  carries anything lanthorn runs — v1–v8 including graphical v6, Glulx, Scott
   Adams, Blorb containers — and a resources Blorb packed in the same zip supplies
   that game's pictures and sounds, as does a hints file. (It used to name three
   extensions and hand back no resources at all, which meant the one format whose

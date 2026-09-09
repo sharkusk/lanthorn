@@ -659,6 +659,22 @@ and unaffordable after a release.
 | 11 | `FontMetrics`, `trait Resources`, revisit `Output: Any` | large | partly | partly | done, SQ-1402: `Resources` trait; `FontMetrics` closed earlier by `V6Metric` (SQ-1009); `Output: Any` kept by decision, documented |
 | 12 | a `ZsciiInput` newtype for `supply_char`, replacing the raw `u8` SQ-1419 had only runtime-checked | small — one new type, ~25 call sites across `zvm`, `app` and `zvm-cli` | **yes** | **yes** | done, SQ-1426 |
 | 13 | hostile-input fuzzing: an in-crate xorshift harness (`fuzz_harness.rs`, CI-gated) plus `crates/fuzz`'s coverage-guided cargo-fuzz targets, run by hand | medium — two harnesses, one new detached package | no | — | done, SQ-1407 |
+| 14 | Versions 1 and 2: open the header gate and answer every version-dependent path for them, so the crate covers 1–8 as Frotz and Bocfel do | small — one gate, the text codec's shift/abbreviation rules, three header facts | no | — | done, SQ-1422 |
+
+On #14: this was the last thing standing between the crate doc's claim ("every
+published Z-machine version, 1 through 8") and the truth — the gate stopped at 3
+while `lib.rs` already said 1. What actually differs is the TEXT FORMAT, not the
+machine: ZMSD §3.2.2 gives Versions 1 and 2 a shift-lock alphabet the later
+versions have no counterpart for, §3.3 leaves Version 2 one abbreviation table and
+Version 1 none at all, §3.5.4 gives Version 1 its own A2 row, and §3.7.1 makes the
+lock mandatory when ENCODING a dictionary word — the rule that lets Zork I's PDP-10
+answer to "pdp10". The object model, the opcode signatures and the packed-address
+scale are all Version 3's already (§12, §14, §11.1.6), and the code's `<= 3` /
+`>= 4` ranges answered for 1 and 2 without a change. The header loses two fields
+(§11.1's "3+" file length and checksum) and gains no interpreter-writable
+capability bit (§11.1's Flags 1 table is Version 3 throughout). No redistributable
+Version 1 or 2 story exists, so `crates/zvm/tests/v1_v2.rs` is hand-built images
+with every expected string computed from the standard's own tables.
 
 On #5: `crates/zvm/src/fixtures.rs:11` is `PathBuf::from(env!("CARGO_MANIFEST_DIR"))`,
 unconditionally public, which bakes **the build machine's absolute source path**

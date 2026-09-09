@@ -1995,7 +1995,9 @@ pub fn default_interpreter_number(version: u8) -> u8 {
 ///
 /// The bit meanings are ZMSD §11.1's "Flags 1" / "Flags 2" tables; the per-bit
 /// reasoning lives beside each mask below. In outline:
-///   - Flags1 (v1–3): clear "status line not available" and "variable-pitch
+///   - Flags1 (v1/v2): untouched — §11.1 marks every documented bit "3", and
+///     there is no upper window for bit 5 to advertise (§8.5).
+///   - Flags1 (v3): clear "status line not available" and "variable-pitch
 ///     font default"; set "screen-splitting available". Bit 1 is the game's
 ///     status-line kind — left alone.
 ///   - Flags1 (v4+): advertise bold, italic, fixed-space and timed keyboard
@@ -2025,7 +2027,21 @@ pub fn init_header_caps(mem: &mut Memory, honor_game_colours: bool, sound_availa
 
     // Flags1 (byte 0x01): interpreter-writable bits.
     let f1 = mem.read_byte(0x01);
-    let new_f1 = if version <= 3 {
+    let new_f1 = if version <= 2 {
+        // Versions 1 and 2 have NO interpreter-writable Flags1 bits. Every bit
+        // §11.1's "Flags 1 (in Versions 1 to 3)" table documents — status-line
+        // type (1), disc split (2), status line not available (4),
+        // screen-splitting available (5), variable-pitch default (6) — carries
+        // "3" in the V column, i.e. the rule begins at Version 3. Bit 5 in
+        // particular would be a lie: there is nothing for it to advertise,
+        // since `split_window` and `set_window` are Version 3 opcodes (§14,
+        // VAR:234/235) and §8.5's Version 1/2 screen model is a teletype that
+        // "can only be printed to … there is no control of the cursor". So
+        // leave the byte exactly as the story shipped it — which is what Frotz
+        // does: nothing below `if (h_version == V3 && user_tandy_bit)` in
+        // `os_init_screen` touches Flags 1 (`src/dumb/dumb_init.c`).
+        f1
+    } else if version == 3 {
         // v3 Flags1 bits (ZMSD §11.1.1):
         //   bit 1: time game (0 = score/turns, set by game — don't touch)
         //   bit 4: status line not available — clear (we support it)

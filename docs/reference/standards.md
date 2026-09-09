@@ -8,8 +8,10 @@ you can check our behaviour against the source of truth. Section references (e.g
 ## Virtual machines
 
 - **Z-Machine Standards Document 1.1** — the Infocom/Inform Z-code VM that the `zvm`
-  crate implements (versions 3, 4, 5, 6, 7, and 8): opcodes, object model, text encoding,
-  the v3/v5 status line, the v6 windowing/graphics model, and the save/restore/undo model.
+  crate implements (every published version, 1 through 8): opcodes, object model, text
+  encoding — including the shift-lock alphabets and lone-table abbreviations that make
+  Versions 1 and 2 a different text format (§3.2.2, §3.3, §3.5.4, §3.7.1) — the v3/v5
+  status line, the v6 windowing/graphics model, and the save/restore/undo model.
   <https://inform-fiction.org/zmachine/standards/z1point1/index.html>
 
 - **Glulx Specification (3.1.3)** — Andrew Plotkin's 32-bit VM for large Inform 7 games,

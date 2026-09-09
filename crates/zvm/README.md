@@ -1,8 +1,9 @@
 # lanthorn-zvm
 
 A from-scratch, zero-dependency Z-machine virtual machine — Infocom's
-interactive-fiction bytecode format, versions 3 through 8 including the
-graphical Version 6 titles (*Zork Zero*, *Arthur*, *Shogun*, *Journey*).
+interactive-fiction bytecode format, every published version 1 through 8
+including the graphical Version 6 titles (*Zork Zero*, *Arthur*, *Shogun*,
+*Journey*).
 Handles execution, standard Quetzal save/restore, and the per-machine
 rendering facts (screen model, palettes, fonts) that let a front end draw a
 release the way its original interpreter did.

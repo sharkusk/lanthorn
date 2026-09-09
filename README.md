@@ -12,7 +12,7 @@
 
 ### Supported story formats:
 
-* **Z-machine v3–v8** (incl. graphical v6)
+* **Z-machine v3–v8** (incl. graphical v6) — *Next release:* v1 and v2 as well
 * **Glulx**
 * **Scott Adams**
 
@@ -183,7 +183,10 @@ itself.**
 
 - **Three engines, one player** — Z-machine v3–v8 (including graphical v6),
   Glulx, and Scott Adams, auto-detected from the file. Clean-room, pure Rust, no
-  C bindings. → [getting started](docs/guide/getting-started.md)
+  C bindings. *Next release:* the two versions Infocom shipped before v3 play
+  too, so the whole published run of the format — v1 through v8 — is covered,
+  the earliest *Zork* releases included.
+  → [getting started](docs/guide/getting-started.md)
 - **A map that draws itself** — rooms placed, routed and de-overlapped as you
   explore, across switchable layers. Click a room and it shows you the way there.
   Switch on the return probe and it will go and **find

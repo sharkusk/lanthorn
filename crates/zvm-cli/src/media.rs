@@ -81,7 +81,8 @@ impl Candidate {
     /// either alone.
     fn build(&self) -> Option<(u8, u16, String)> {
         let b = &self.bytes;
-        if b.len() < 0x18 || !(3..=8).contains(&b[0]) {
+        // Every published Z-machine version, 1 to 8 (ZMSD §11.1's byte 0).
+        if b.len() < 0x18 || !(1..=8).contains(&b[0]) {
             return None;
         }
         let serial: String = b[0x12..0x18].iter().map(|c| char::from(c & 0x7f)).collect();

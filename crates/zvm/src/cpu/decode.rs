@@ -155,8 +155,21 @@ fn one_op_sig(opcode: u8, version: u8) -> (bool, bool, bool) {
 /// Returns (stores, branches, has_text) for 0OP opcodes.
 /// Version-dependent:
 ///   0x02 print / 0x03 print_ret carry inline text.
-///   0x05 save / 0x06 restore: branch in v3, store in v4+.
+///   0x05 save / 0x06 restore: branch in v1–v3, store in v4+.
 ///   0x09: pop (nothing) in v1-4, catch (stores) in v5+.
+///
+/// **The opcodes that do not EXIST below Version 3 are decoded anyway**, and
+/// that is deliberate. §14 lists `show_status` (0x0C), `verify` (0x0D),
+/// `split_window`, `set_window`, `output_stream` and `input_stream` as Version
+/// 3, and §14.2 says a game carrying an opcode outside its version is illegal
+/// and "an interpreter should normally halt". Frotz does not halt: its
+/// `op0_opcodes` table (`src/common/process.c`) holds `z_show_status` and
+/// `z_verify` for every version, and the only entries it swaps by version are
+/// `pop`/`catch` and `not`/`call_1n` — exactly the two rows above. Halting
+/// instead would turn a story whose compiler emitted one stray byte into a dead
+/// session, where executing it is harmless: no Version 1 or 2 release contains
+/// these, so the choice can only ever be felt by a malformed file. Following
+/// Frotz here (SQ-1422).
 fn zero_op_sig(opcode: u8, version: u8) -> (bool, bool, bool) {
     match opcode {
         0x00 => (false, false, false), // rtrue

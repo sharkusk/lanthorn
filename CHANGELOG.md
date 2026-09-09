@@ -23,6 +23,15 @@ Absolute URLs or no link.
 
 ### Added
 
+- **The two earliest Infocom releases now play.** lanthorn ran Z-machine
+  Versions 3 through 8; it now runs 1 and 2 as well, which is every version of
+  the format Infocom ever shipped — the first *Zork I* releases among them.
+  These are genuinely a different text format underneath, not just an older
+  number in the header: the alphabet can be locked rather than shifted a letter
+  at a time, Version 2 has a single short abbreviation table and Version 1 none,
+  Version 1 spells `<` where later versions put a newline, and the words in the
+  dictionary are packed by rules of their own — so *Zork I*'s PDP-10 answers to
+  "PDP10" and not only to its synonyms. (SQ-1422)
 - **A save file from the classic ScottFree interpreter can now be restored**
   in a Scott Adams game, alongside lanthorn's own saves — point the restore
   file picker (or `scott-cli`'s `/restore`) straight at an old ScottFree

@@ -4,9 +4,16 @@
 //! marks the last word of the string. Three alphabets A0/A1/A2 cover
 //! lowercase, uppercase, and punctuation/digits. Shift Z-chars 4/5 (v3+)
 //! temporarily switch to A1/A2 for the next character only.
+//!
+//! **Versions 1 and 2 read differently and this decoder answers for them too**
+//! (§3.2.2, §3.3, §3.5.2, §3.5.4): Z-chars 2 and 3 are the one-shot shifts and
+//! 4 and 5 shift-LOCK, each stepping the current alphabet cyclically; Version 2
+//! spends Z-char 1 on its single 32-entry abbreviation table while 2 and 3 stay
+//! shifts; and Version 1 has no abbreviations at all, printing a newline from
+//! Z-char 1 and carrying a different A2 row in consequence.
 
 use crate::memory::Memory;
-use super::{A0, A1, A2};
+use super::{A0, A1};
 
 /// Decode a Z-encoded string starting at `addr`.
 ///
@@ -114,8 +121,23 @@ fn decode_into<S: Sink>(mem: &Memory, addr: u32, depth: u8, out: &mut S) -> u32 
     out.prepare(zchars.len() / 3);
     let word_of = |i: usize| i.saturating_sub(1) / 3;
     let mut i = 0;
+    let version = mem.version();
+    // Versions 1 and 2 have a LOCKED alphabet as well as a one-shot shift
+    // (ZMSD §3.2.2): Z-chars 2 and 3 change the alphabet "for the next
+    // character only", 4 and 5 "permanently change alphabet, according to the
+    // same table". `lock` is that standing alphabet — always A0 from Version 3
+    // on, where "the current alphabet is always A0 unless changed for 1
+    // character only" (§3.2.3) — and `alphabet` is what the NEXT Z-char is
+    // read in, reverting to `lock` after every character. Both Frotz
+    // (`text.c`, `decode_text`: `shift_state`/`shift_lock`) and Bocfel
+    // (`screen.cpp`, `print_zcode`: `shift`/`current_alphabet`) keep the same
+    // pair, and both spell the §3.2.2 table as modular arithmetic: Z-chars 2
+    // and 4 advance one alphabet, 3 and 5 advance two, cyclically.
+    let mut lock: u8 = 0;
     let mut alphabet: u8 = 0; // 0=A0, 1=A1, 2=A2
     let mut abbrev_pending: u8 = 0; // non-zero: waiting for abbrev index char
+    // A2's row is the Version 1 one on a Version 1 story (§3.5.4).
+    let a2 = super::a2_row(version);
 
     // v5+ custom alphabet table (header 0x34). When present, glyph rows come from
     // the table (78 ZSCII bytes: A0 0..26, A1 26..52, A2 52..78). The A2 specials
@@ -158,19 +180,46 @@ fn decode_into<S: Sink>(mem: &Memory, addr: u32, depth: u8, out: &mut S) -> u32 
         match zc {
             0 => {
                 out.emit(word_of(i), " ");
-                // space; any pending shift is consumed
-                alphabet = 0;
+                // §3.5.1: Z-char 0 is a space in every version. Any pending
+                // one-shot shift is consumed by it.
+                alphabet = lock;
             }
-            1..=3 => {
+            // §3.5.2: "In Version 1, Z-character 1 is printed as a new-line
+            // (ZSCII 13)." Version 1 has no abbreviation Z-char at all, which
+            // is why §3.5.4's A2 row has no `^` — the newline lives here
+            // instead. (Frotz `text.c`: `else if (h_version == V1 && c == 1)
+            // new_line();`.)
+            1 if version == 1 => {
+                out.emit(word_of(i), "\n");
+                alphabet = lock;
+            }
+            // §3.3: "In Version 2, Z-character 1 has this effect (but 2 and 3
+            // do not, so there are only 32 abbreviations)." From Version 3 all
+            // of 1, 2 and 3 are abbreviation Z-chars.
+            1 if version == 2 => {
+                abbrev_pending = 1;
+                alphabet = lock;
+            }
+            1..=3 if version >= 3 => {
                 abbrev_pending = zc;
-                alphabet = 0;
+                alphabet = lock;
+            }
+            // §3.2.2, Versions 1 and 2: Z-chars 2 and 3 shift for one
+            // character; 4 and 5 shift-lock. Both step the CURRENT alphabet
+            // cyclically — Z-char 2/4 by one (A0→A1→A2→A0), Z-char 3/5 by two.
+            2 | 3 => {
+                alphabet = (lock + zc - 1) % 3;
+            }
+            4 | 5 if version <= 2 => {
+                lock = (lock + zc - 3) % 3;
+                alphabet = lock;
             }
             4 => {
-                // Shift to A1 for next character only (v3+)
+                // §3.2.3, Versions 3+: shift to A1 for the next character only.
                 alphabet = 1;
             }
             5 => {
-                // Shift to A2 for next character only (v3+)
+                // §3.2.3, Versions 3+: shift to A2 for the next character only.
                 alphabet = 2;
             }
             zc => {
@@ -184,7 +233,7 @@ fn decode_into<S: Sink>(mem: &Memory, addr: u32, depth: u8, out: &mut S) -> u32 
                     // fall back to the default ZSCII table.
                     let ch = mem.unicode_char(zscii).unwrap_or_else(|| zscii_to_char(zscii));
                     out.emit(word_of(i), ch.encode_utf8(&mut [0u8; 4]));
-                    alphabet = 0;
+                    alphabet = lock;
                 } else {
                     // Normal lookup: Z-char 6 → table index 0.
                     let idx = (zc - 6) as usize;
@@ -206,12 +255,12 @@ fn decode_into<S: Sink>(mem: &Memory, addr: u32, depth: u8, out: &mut S) -> u32 
                             let ch = match alphabet {
                                 0 => A0[idx],
                                 1 => A1[idx],
-                                _ => A2[idx],
+                                _ => a2[idx],
                             };
                             out.emit(word_of(i), (ch as char).encode_utf8(&mut [0u8; 4]));
                         }
                     }
-                    alphabet = 0;
+                    alphabet = lock;
                 }
             }
         }
