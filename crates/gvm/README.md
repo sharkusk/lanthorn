@@ -7,3 +7,5 @@ and full floating-point opcodes.
 It is the Glulx engine behind [lanthorn](https://github.com/sharkusk/lanthorn),
 a terminal interactive-fiction player with live automapping, and is also
 usable standalone by anything that wants to run Glulx story files.
+
+Floating-point opcodes are ported from [glulxe](https://github.com/erkyrath/glulxe) under the MIT license — see the repository's `THIRD-PARTY-NOTICES.md` for full attribution and license text.
