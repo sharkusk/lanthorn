@@ -1258,8 +1258,9 @@ pub fn load_story_bytes(path: &Path) -> io::Result<Vec<u8>> {
 /// It used to be: three formats were tested and everything else was handed to
 /// the Z-machine, which is what this doc meant by "the historical pass-through…
 /// never errors for a non-Blorb input". The only gate downstream was
-/// `zvm::header::parse_header`'s `3..=8` on byte 0 — six of 256 values, so
-/// roughly **2.3% of arbitrary containers pass it**, and one of them was an
+/// `zvm::header::parse_header`'s version check on byte 0 — `3..=8` at the time,
+/// six of 256 values, so roughly **2.3% of arbitrary containers pass it** (the
+/// range is `1..=8` since SQ-1422, which makes it 3.1%) — and one was an
 /// 838 KB Apple II disk image whose DiskCopy 4.2 name-length byte is `0x06`.
 /// lanthorn opened the whole image as a Version 6 story, paired it with a
 /// sidecar Blorb belonging to a different file, printed
@@ -2134,7 +2135,7 @@ mod tests {
 
         // …and every version the Z-machine runs still loads when the header is
         // real, so the gate is on the header and not on the version byte.
-        for version in 3..=8u8 {
+        for version in 1..=8u8 {
             assert!(
                 matches!(extract_story(sample_zcode(version)), Ok(LoadedStory::ZCode(_))),
                 "a real v{version} header must still load"

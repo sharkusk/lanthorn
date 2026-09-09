@@ -4939,14 +4939,24 @@ impl Machine {
 
     /// Sum (mod 0x10000) of the story bytes [0x40, file_length) — every byte
     /// past the header up to the declared file length (ZMSD §11.1.6). file_length =
-    /// header word 0x1A * scale (2 for v3, 4 for v4-5, 8 for v6+).
+    /// header word 0x1A * scale (2 for v1-3, 4 for v4-5, 8 for v6+).
+    ///
+    /// **When the story declares no length, the image's own is used instead.**
+    /// §11.1 marks $1A "3+" and notes "Some early Version 3 files do not
+    /// contain length and checksum data"; Versions 1 and 2 have no such field
+    /// at all. Frotz makes exactly this substitution — `init_memory` reads the
+    /// word and, "some old games lack the file size entry", seeks to the end of
+    /// the story file for `story_size`, which is then what `z_verify` sums
+    /// (`src/common/fastmem.c`). Summing to 0x40 instead would make `verify`
+    /// answer for the empty region rather than for the story.
     pub fn story_checksum(&self) -> u16 {
         let scale: u32 = match self.mem.version() {
             1..=3 => 2,
             4 | 5 => 4,
             _ => 8,
         };
-        let file_length = self.mem.read_word(0x1A) as u32 * scale;
+        let declared = self.mem.read_word(0x1A) as u32 * scale;
+        let file_length = if declared == 0 { self.mem.len() as u32 } else { declared };
         let end = file_length.min(self.mem.len() as u32);
         // Checksum the ORIGINAL story image: the dynamic region [0..static_mem_base)
         // may have been mutated by the running game, so read it from the snapshot

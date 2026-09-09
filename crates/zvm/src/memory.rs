@@ -203,7 +203,7 @@ impl Memory {
     pub fn unpack_routine(&self, packed: u16) -> u32 {
         let p = packed as u32;
         match self.header.version {
-            3 => 2 * p,
+            1..=3 => 2 * p,
             4 | 5 => 4 * p,
             6 | 7 => 4 * p + 8 * self.header.routines_offset as u32,
             8 => 8 * p,
@@ -272,7 +272,7 @@ impl Memory {
     pub fn unpack_string(&self, packed: u16) -> u32 {
         let p = packed as u32;
         match self.header.version {
-            3 => 2 * p,
+            1..=3 => 2 * p,
             4 | 5 => 4 * p,
             6 | 7 => 4 * p + 8 * self.header.strings_offset as u32,
             8 => 8 * p,

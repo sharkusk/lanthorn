@@ -360,7 +360,20 @@ pub fn looks_like_zcode(bytes: &[u8]) -> bool {
     let version = bytes[0];
     // Packed-address scale, which is also the file-length unit (ZMSD §11.1.6).
     let scale = match version {
-        3 => 2,
+        // Versions 1 and 2 share Version 3's scale (ZMSD §11.1.6: "This constant
+        // is 2 for Versions 1 to 3"). They are here because this is the gate the
+        // whole app loads a story through, not only a disk sniffer — refuse them
+        // and `zvm` supporting them changes nothing the player can reach.
+        //
+        // Byte 0 alone is a weak signal and 1 and 2 are commoner values than 3–8:
+        // of 320 files in one real `stories/` directory, 37 open with a 1 or a 2
+        // — Apple II `.po`/`.dsk` images, and the `.eg1`/`.cg1`/`.mg1`/`.pic`
+        // graphics files beside the Version 6 games. **None of the 37 survives
+        // the clauses below**, every one of them failing on a control byte in the
+        // serial field; the structural checks are what does the work here, and
+        // widening the version arm cost no false positive at all. That was
+        // measured before the change, not assumed after it (SQ-1422).
+        1..=3 => 2,
         4 | 5 => 4,
         6..=8 => 8,
         _ => return false,
@@ -765,6 +778,45 @@ pub(crate) mod tests {
         let mut padded = fake_story(4096);
         padded[0x12..0x18].copy_from_slice(&[0xb8, 0xb9, 0xb0, 0xb3, 0xb2, 0xa0]);
         assert!(looks_like_story(&padded), "high ASCII digits and a trailing space");
+    }
+
+    /// Versions 1 and 2 are story files too (SQ-1422), and this is the gate the
+    /// app loads every story through — refuse them here and `zvm` supporting
+    /// them reaches no player. ZMSD §11.1.6 puts their length unit at 2, the
+    /// same as Version 3's.
+    ///
+    /// The other half is that widening byte 0 must widen nothing else, and 1 and
+    /// 2 are far commoner leading bytes than 3–8: of 320 files in one real
+    /// `stories/` directory, 37 open with one — Apple II `.po`/`.dsk` images and
+    /// the `.eg1`/`.cg1`/`.mg1`/`.pic` graphics beside the Version 6 games — and
+    /// every one of them fails on a control byte in the serial field, which is
+    /// the shape asserted below.
+    #[test]
+    fn a_version_one_or_two_header_is_a_story_and_a_graphics_file_is_not() {
+        for v in 1..=8u8 {
+            let mut b = fake_story(4096);
+            b[0] = v;
+            let unit: u16 = match v {
+                1..=3 => 2,
+                4 | 5 => 4,
+                _ => 8,
+            };
+            b[0x1a..0x1c].copy_from_slice(&(4096 / unit).to_be_bytes());
+            assert!(looks_like_story(&b), "v{v} must load");
+        }
+        // The leading bytes of `arthur.eg1`, `journey.cg1` and `Arthur.po` — a
+        // Version 1 byte 0 apiece, and a serial field full of control bytes.
+        for (serial, who) in [
+            ([0x48u8, 0x02, 0xc4, 0x00, 0x00, 0x00], "arthur.eg1"),
+            ([0xdc, 0x00, 0x7f, 0x00, 0x08, 0x00], "journey.cg1"),
+            ([0x4a, 0x09, 0xc0, 0x85, 0x49, 0xa0], "Arthur.po"),
+        ] {
+            let mut b = fake_story(4096);
+            b[0] = 1;
+            b[0x1a..0x1c].copy_from_slice(&(4096u16 / 2).to_be_bytes());
+            b[0x12..0x18].copy_from_slice(&serial);
+            assert!(!looks_like_story(&b), "{who} is not a Version 1 story");
+        }
     }
 
     /// The masking above widens what a serial may be; it must widen nothing

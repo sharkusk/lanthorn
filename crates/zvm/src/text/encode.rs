@@ -1,23 +1,29 @@
 //! Z-character text encoding — ZMSD §3.7.
 //!
 //! Encodes a (lower-cased, truncated) Rust string into the dictionary-resolution
-//! form: 4 bytes (6 Z-chars) for v3, 6 bytes (9 Z-chars) for v4+.
+//! form: 4 bytes (6 Z-chars) for v1–v3, 6 bytes (9 Z-chars) for v4+.
 //! Z-chars are packed three per 16-bit word, big-endian, with the terminator
 //! high bit (0x8000) set on the final word only.
+//!
+//! **The version decides which shift Z-chars are spelled**, so a word encoded
+//! by v3's rules will not match a Version 1 or 2 dictionary: §3.2.2 puts the
+//! one-shot shifts at Z-chars 2/3 rather than 4/5 there, and §3.7.1 requires a
+//! shift-LOCK (4/5) wherever two consecutive characters share an alphabet.
 //!
 //! Scope: letters (A0) + A2 characters (shift-5 then A2 position), plus a
 //! 10-bit ZSCII escape (shift-5, Z-char 6, hi/lo halves) for characters outside
 //! A0/A2 (e.g. accented letters), mirroring the decode side.
 
-use super::{A0, A1, A2};
+use super::{A0, A1};
 use crate::memory::Memory;
 
 /// Encode `text` to its dictionary-resolution Z-character form using the
 /// **default** alphabets.
 ///
-/// Returns 4 bytes (6 Z-chars) for v3, 6 bytes (9 Z-chars) for v4+.
-/// The input is lower-cased before encoding. Characters longer than the
-/// Z-char limit are truncated; shorter strings are padded with Z-char 5.
+/// Returns 4 bytes (6 Z-chars) for v1–v3, 6 bytes (9 Z-chars) for v4+
+/// (ZMSD §3.7). The input is lower-cased before encoding. Characters longer
+/// than the Z-char limit are truncated; shorter strings are padded with
+/// Z-char 5.
 pub fn encode_word(text: &str, version: u8) -> Vec<u8> {
     encode_word_impl(text, version, None)
 }
@@ -50,9 +56,20 @@ fn read_custom_alphabet(mem: &Memory) -> Option<[u8; 78]> {
     Some(rows)
 }
 
+/// Which alphabet a character lives in and the Z-chars that spell it there,
+/// with the leading shift left to the caller (who alone knows the alphabet it
+/// is shifting FROM). `len` is 1 for a glyph and 3 for the §3.4 escape.
+struct Classified {
+    alphabet: u8,
+    body: [u8; 3],
+    len: usize,
+}
+
 /// Shared encoder. `custom`, when present, supplies the A0 (rows 0..26) and A2
-/// (rows 52..78) glyphs in place of the defaults; A2 positions 0 and 1 (escape
-/// and newline) are never matched, matching the decode side.
+/// (rows 52..78) glyphs in place of the defaults; A2 position 0 (the §3.4
+/// escape) is never matched, nor position 1 (the newline) from Version 2 on —
+/// matching the decode side. In Version 1 position 1 is the digit `0`
+/// (§3.5.4), a perfectly ordinary glyph.
 fn encode_word_impl(text: &str, version: u8, custom: Option<&[u8; 78]>) -> Vec<u8> {
     let zchar_limit: usize = if version <= 3 { 6 } else { 9 };
 
@@ -60,65 +77,79 @@ fn encode_word_impl(text: &str, version: u8, custom: Option<&[u8; 78]>) -> Vec<u
     let lower = text.to_lowercase();
     let mut zchars: Vec<u8> = Vec::with_capacity(zchar_limit);
 
-    // Alphabet glyph rows: the story's custom table, or the defaults.
+    // Alphabet glyph rows: the story's custom table, or the defaults — A2's
+    // default row being Version 1's own where that is the version (§3.5.4).
     let a0: &[u8] = custom.map(|r| &r[0..26]).unwrap_or(&A0[..]);
     let a1: &[u8] = custom.map(|r| &r[26..52]).unwrap_or(&A1[..]);
-    let a2: &[u8] = custom.map(|r| &r[52..78]).unwrap_or(&A2[..]);
+    let a2: &[u8] = custom.map(|r| &r[52..78]).unwrap_or(&crate::text::a2_row(version)[..]);
+    // First A2 slot holding a real glyph: 0 is always the escape; 1 is the
+    // newline from Version 2 on, but the digit `0` in Version 1.
+    let a2_first_glyph = if version == 1 { 1 } else { 2 };
 
-    'outer: for ch in lower.chars() {
-        if zchars.len() >= zchar_limit {
-            break;
-        }
+    // §3.2.2 vs §3.2.3: the Z-char that moves one alphabet along is 2 in
+    // Versions 1–2 and 4 in Versions 3+, so a shift is `shift_base + delta`
+    // and — in Versions 1 and 2 only — a shift-LOCK is two higher again.
+    let shift_base: u8 = if version <= 2 { 1 } else { 3 };
+
+    let classify = |ch: char| -> Classified {
         let byte = ch as u8;
-
-        // Try A0 (lowercase letters a-z by default).
+        // A0 (lowercase letters a–z by default).
         if let Some(pos) = a0.iter().position(|&b| b == byte) {
-            zchars.push((pos + 6) as u8); // A0 Z-char = index + 6
-            continue;
+            return Classified { alphabet: 0, body: [(pos + 6) as u8, 0, 0], len: 1 };
         }
-
-        // Try A1 (shift-4). The default A1 is uppercase and is never matched
-        // after lower-casing, so standard stories are unaffected — but a custom
+        // A1. The default A1 is uppercase and is never matched after
+        // lower-casing, so standard stories are unaffected — but a custom
         // alphabet table may relocate lowercase letters into A1 (Shogun moves
         // j/q/v/x/z here), so this row must be searched or those words encode
         // via the 10-bit escape and never match the game's own dictionary.
-        for (i, &b) in a1.iter().enumerate() {
-            if b == byte {
-                // Need 2 Z-chars (shift + glyph); only emit if both fit.
-                if zchars.len() + 2 > zchar_limit {
-                    break 'outer;
-                }
-                zchars.push(4); // shift to A1
-                zchars.push((i + 6) as u8); // A1 Z-char = index + 6
-                continue 'outer;
-            }
+        if let Some(pos) = a1.iter().position(|&b| b == byte) {
+            return Classified { alphabet: 1, body: [(pos + 6) as u8, 0, 0], len: 1 };
         }
-
-        // Try A2 (digits, punctuation, etc.) — emits shift-5 then A2 Z-char.
-        for (i, &b) in a2.iter().enumerate() {
-            if b == byte && i >= 2 {
-                // Need 2 Z-chars; only emit if both fit.
-                if zchars.len() + 2 > zchar_limit {
-                    break 'outer;
-                }
-                zchars.push(5); // shift to A2
-                zchars.push((i + 6) as u8); // A2 Z-char = index + 6
-                continue 'outer;
-            }
+        // A2 (digits, punctuation, …).
+        if let Some(pos) = a2.iter().skip(a2_first_glyph).position(|&b| b == byte) {
+            let pos = pos + a2_first_glyph;
+            return Classified { alphabet: 2, body: [(pos + 6) as u8, 0, 0], len: 1 };
         }
-
-        // Not representable in A0/A2 — emit the 10-bit ZSCII escape (shift-5,
-        // Z-char 6, then the high/low 5-bit halves of the ZSCII code), mirroring
-        // the decode side (decode.rs ~88-95). Only emit if all 4 Z-chars fit in
-        // the remaining budget; otherwise stop (word truncates, no partial escape).
-        if zchars.len() + 4 > zchar_limit {
-            break 'outer;
-        }
+        // Not in any row — the 10-bit ZSCII escape (§3.4), which lives in A2:
+        // Z-char 6 then the high/low 5-bit halves of the ZSCII code.
         let z = crate::text::decode::char_to_zscii_default(ch);
-        zchars.push(5); // shift to A2
-        zchars.push(6); // A2 Z-char 6 = 10-bit ZSCII escape
-        zchars.push((z >> 5) & 0x1F); // high 5 bits
-        zchars.push(z & 0x1F); // low 5 bits
+        Classified { alphabet: 2, body: [6, (z >> 5) & 0x1F, z & 0x1F], len: 3 }
+    };
+
+    // §3.7.1: "In Versions 1 and 2 only, when encoding text for dictionary
+    // words, shift-lock Z-characters 4 and 5 are used instead of the
+    // single-shift Z-characters 2 and 3 when the next two characters come from
+    // the same alphabet." This is not cosmetic — Bocfel's `dict.cpp` records
+    // the case that proves it: Zork I's PDP-10 has the dictionary word
+    // "pdp10", whose `1` and `0` are both in A2 and were therefore compiled
+    // with a lock; encode them as two single shifts and the word never matches,
+    // so the machine can only be referred to by its synonyms. (Frotz's
+    // `text.c` does NOT implement this rule — its `encode_text` always emits
+    // the single shift — so Bocfel is the reference followed here.)
+    let chars: Vec<char> = lower.chars().collect();
+    let mut current: u8 = 0; // standing alphabet; always A0 from Version 3 on
+    for (n, &ch) in chars.iter().enumerate() {
+        if zchars.len() >= zchar_limit {
+            break;
+        }
+        let cur = classify(ch);
+        let lock = version <= 2
+            && cur.alphabet != current
+            && chars.get(n + 1).map(|&next| classify(next).alphabet) == Some(cur.alphabet);
+        let delta = (cur.alphabet + 3 - current) % 3;
+        // Only emit if the shift AND the whole body fit; a partially written
+        // escape would decode as something else entirely.
+        let need = cur.len + usize::from(delta != 0);
+        if zchars.len() + need > zchar_limit {
+            break;
+        }
+        if delta != 0 {
+            zchars.push(shift_base + delta + if lock { 2 } else { 0 });
+        }
+        if lock {
+            current = cur.alphabet;
+        }
+        zchars.extend_from_slice(&cur.body[..cur.len]);
     }
 
     // Pad to zchar_limit with Z-char 5.
