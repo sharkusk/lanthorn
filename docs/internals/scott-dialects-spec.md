@@ -50,6 +50,13 @@ no permissively-licensed subdirectory inside it. The permissive components in
 the table are separate directories — the disk-image library and the depacking
 code — and are listed with their own terms.
 
+A third note, on when each part was read. The table's first row was read again
+at the same commit on 2026-09-09, the TI-99/4A loader and interpreter only, to
+settle the three questions Appendix A records; §3.1, §3.4, §3.7, §3.8, §9.1 and
+§11's TI-99/4A paragraph carry the results. Every count and offset those
+sections quote was measured on the §10.2 specimens rather than taken from any
+implementation.
+
 Several of the container formats below are also documented publicly and
 independently of any of the above, and an implementer should prefer the public
 document where one exists: the ZX Spectrum `.z80` snapshot format (World of
@@ -351,6 +358,30 @@ within the file; and all eleven pointers in the header must resolve to offsets
 within the file. A failure of any of these means "not this dialect", not "a
 corrupt file" — another dialect's detector has yet to run.
 
+**Validating a pointer validates a table's start, never its extent, and a read
+that falls outside the file yields zero.** Nothing in this dialect states where
+a table ends: a pointer table's length is implied by a header count and its
+data's length by the next entry, and neither is checked against the file. So a
+file can pass every test above and still be short of a table's last bytes. The
+conforming behaviour is not to refuse it and not to read past the end, but to
+treat any stored 16-bit value whose two bytes do not both lie within the file as
+**0**, and to let each consumer take that 0 at face value — for a dispatch
+entry (§3.7), zero already means "this verb has no records".
+
+*Worked example, `adv07.fiad` (Mystery Fun House).* The file is 10,594 bytes,
+0x2962, with *B* = 0. Its header gives a highest verb index of 83 and an
+explicit-action pointer that resolves to file offset 0x28BC, so its dispatch
+table is 84 words spanning 0x28BC through 0x2963 inclusive — **two bytes past
+the end of the file**. All eleven header pointers resolve inside the file and
+every other table fits; only this last entry does not. Entry 83 therefore reads
+as 0 and verb 83 has no records. Nothing is lost by that: entries 0 through 82
+are intact (42 of them are non-zero, the highest chain belonging to verb 81),
+and verb 83's *dictionary* slot is unusable too — the difference between its
+pointer and the next runs to thousands of characters, far past the 20-character
+limit of §3.6, so the slot is empty and no typed word can ever select it. A
+reader that instead refuses the file, or that reads two bytes of whatever
+follows it in memory, is wrong in a way this specimen will show.
+
 ### 3.2 Container and endianness
 
 The file is a raw memory image with no dialect-specific wrapper. **Every
@@ -415,11 +446,26 @@ count.
 
 - **Room exits** — six bytes per room for rooms 0 through the highest room
   index: north, south, east, west, up, down, in that order. 0 means no exit.
-- **Initial item locations** — one byte per item. A room number; 0 means not in
-  play. This byte is both the item's starting location and the value the "still
-  in its initial room" and "has been moved" conditions compare against for the
-  rest of the game. Unlike the text format, there is no in-band value meaning
-  "carried"; the carried marker is the interpreter's own.
+- **Initial item locations** — one byte per item, holding exactly the three-way
+  value the reference format's per-item integer holds: a room number, **0
+  meaning not in play**, and **255 meaning carried at the start of the game**.
+  There are no other reserved values. Measured over the twelve §10.2 specimens,
+  every byte in this table is 0, 255, or a room number no greater than the
+  header's highest room index; 255 occurs in five of them, on exactly the items
+  whose reference-format twins carry −1 or 255 — `adv03` item 48 (the bomb
+  detector), `adv05` item 16 (Tent STAKE), `adv07` items 3 (Shoes), 25 (Watch)
+  and 56 (chewing gum), `adv08` items 4 (Empty canteen) and 8 (Unlit
+  flashlite), `adv10` item 17 (Watch).
+
+  This byte is both the item's starting location and the value the "still in its
+  initial room" and "has been moved" conditions (§3.7, opcodes 200 and 201)
+  compare against for the rest of the game — and they compare against it
+  literally, 255 included. An item that starts carried is therefore "still in
+  its initial room" for exactly as long as the player keeps hold of it, and
+  counts as "moved" the moment it is put down anywhere; picking it up again
+  makes it unmoved once more. That is the same arithmetic the reference format
+  performs on the same two values, so a database converted either way behaves
+  identically.
 - **Noun-to-item link table** — one byte per item, holding a *noun index*. A
   non-zero value names the noun by which that item may be taken and dropped;
   zero means the item has no such name. This is this dialect's spelling of the
@@ -542,23 +588,49 @@ Each record is:
 
 ```
 byte 0        noun index this record matches; 0 means "any noun"
-byte 1        record length L, counting itself and the opcode stream
-              but not byte 0
-bytes 2..1+L  opcode stream, exactly L-1 bytes
+byte 1        link L: the distance from byte 1 to the next record's byte 0,
+              or 0 if no record follows this one in the chain
+bytes 2...    opcode stream, delimited by its own end-of-record opcode
 ```
 
-The next record begins at the current record's start plus 1 + *L*. **A record
-whose length byte is zero is the last of the chain** — it is still a real
-record, eligible to match and to run; the terminator is the length value, not a
-separate sentinel.
+**Byte 1 is a link, not an extent, and reading it as an extent is the one
+mistake this encoding invites.** The next record begins at the current record's
+start plus 1 + *L*, so a non-zero link does happen to size this record as well
+as locate the next one; **a link of 0 says only that no record follows**, and
+says nothing whatever about how long this record's own opcode stream is. The
+stream always begins at byte 2, and where it ends is decided in band and at run
+time: at the end-of-record opcode 255, or earlier at the first condition that
+does not hold (see "Success, failure and the handler stack" below).
+
+So **a record whose link byte is zero is the last of its chain and is a real
+record in every other respect** — eligible to match, and carrying a full opcode
+stream that runs exactly like any other record's. Take the link for a length and
+that last record appears to have an empty stream; an empty stream can never
+reach opcode 255, so it can only fail, and every chain in every game then ends
+in a record that always fails. The damage is worst where a chain has exactly one
+record, which is how this dialect spells several of the verbs an implementer
+might otherwise assume are built in: in Adventureland, `INVENTORY`, `QUIT`,
+`STOP` and `SCORE` are each a single link-0 record, and under the wrong reading
+all four answer "I can't do that yet." rather than doing what they say. §3.8
+works that case through byte by byte.
+
+A reader that stores each record as a slice, rather than as a pointer into the
+block, therefore has to recover the last record's extent by walking its opcode
+stream — by the operand counts tabulated below — to the 255 that ends it.
+Measured over the twelve §10.2 specimens (1,870 explicit records reached through
+twelve dispatch tables, 378 automatic records, 448 of them link-0), that walk
+terminates on a 255 every time, and for every record with a non-zero link it
+lands on exactly the byte the link predicts. The two ways of ending a record
+agree wherever both are present; the link is redundant except as the address of
+the next record.
 
 **Implicit (automatic) records** have identical geometry, with byte 0
 reinterpreted as a percentage chance, 0 to 100, that the record runs on any
 given turn. They form one chain reached directly from the header pointer, with
-the same "length zero ends the chain" rule. **If the very first byte of the
-implicit block is zero the game has no automatic actions at all** and the block
-must not be walked — which makes a genuine leading 0%-chance record
-unrepresentable; the empty reading is the correct one.
+the same "link zero ends the chain" rule and the same warning about it. **If the
+very first byte of the implicit block is zero the game has no automatic actions
+at all** and the block must not be walked — which makes a genuine leading
+0%-chance record unrepresentable; the empty reading is the correct one.
 
 **Opcode ranges.**
 
@@ -690,8 +762,9 @@ subsequent zero-keyed lines part of the same logical action.
 
 ### 3.8 Worked example: decoding by hand
 
-*The bytes in the action example are constructed for this document; the string
-example is from a real specimen.*
+*Three examples. The bytes of the middle one, a general action record, are
+constructed for this document; the string example and the link-0 action record
+that closes the section are both read out of a real specimen.*
 
 **A string, from a specimen.** In the TI-99/4A release of Adventureland the
 room description pointer table resolves to file offset 0x1DB8, and its first
@@ -723,9 +796,9 @@ resolving to file offset 0x1E80. The dispatch entry for verb 10 is the word at
 ```
 
 - `07` — this record matches noun 7 only; a 0 here would match any noun.
-- `0B` — length 11, so the record occupies 12 bytes, 0x1F80 through 0x1F8B, and
-  the next record of verb 10's chain begins at 0x1F8C. The length is non-zero,
-  so this is not the last record.
+- `0B` — link 11, so the next record of verb 10's chain begins 12 bytes on, at
+  0x1F8C, and this record occupies 0x1F80 through 0x1F8B. The link is non-zero,
+  so this is not the last record of the chain.
 
 The ten-byte opcode stream, with positions counted from its first byte:
 
@@ -763,6 +836,47 @@ three structural differences concrete: the tokenised record needs no padding
 (ten opcode bytes against eight fixed numbers), needs no operand-smuggling
 slots, and encodes the verb by which chain it is in rather than in a packed
 number.
+
+**A link-0 record, from a specimen: Adventureland's `INVENTORY`.** This is the
+case §3.7 warns about, in the shortest form a real game contains. In
+`adv01.fiad` the signature lands at 0x589, so *B* = 0 and the header is at
+0x8A0; the header gives a highest verb index of 65 and a word length of 3, and
+the explicit-action pointer resolves to file offset 0x2992. Verb 17 is `INV`.
+Its dispatch entry is the word at 0x2992 + 17 x 2 = 0x29B4, which holds
+`29 A2` and resolves to file offset 0x2622. The four bytes there are:
+
+```
+00 00 E9 FF
+```
+
+- `00` — matches any noun, so the command matches whether or not a noun follows.
+- `00` — the link: no record follows, so this is the whole of verb 17's chain.
+  It is **not** a statement that the stream is empty.
+- `E9` — 233: list the inventory.
+- `FF` — 255: end of record, and the record succeeds.
+
+**What the player sees.** Typing `INVENTORY` (or `INV`, or any word beginning
+`INV`) prints the carried-items line — `I am carrying : `, the items separated
+by `, `, a closing period and a space, or `Nothing. ` if the player's hands are
+empty — and nothing else, because the record succeeded and a success ends the
+search with no acknowledgement of its own. Read the link byte as an extent and
+the same four bytes decode to a record with no opcodes, which cannot reach 255,
+so it fails; it is the chain's only record, so the chain reports "matched but
+every match failed", and the player sees `I can't do that yet. ` — a wrong
+answer that reads like a deliberate one, on a verb the game's own title screen
+advertises.
+
+Four more of Adventureland's verbs have this shape, and each would break the
+same way: `QUI` (verb 26) is `00 00 E8 E7 FF` — print the score, then end the
+game; `STO` (31), which is STOP rather than STORE, is `00 00 22 FF` — print
+message 34, `To stop the game say QUIT.`; `SCO` (32) is `00 00 E8 FF` — print
+the score; and `SAV` (34) is `41 00 44 EB FF`, which prints message 68, `OK.`,
+and then saves. That last one is keyed to noun 65, `GAM`, rather than open, so
+by the matching rule above it answers `SAVE GAME` while a bare `SAVE` matches
+nothing in the chain — and `SAVE GAME` is exactly the form the title screen
+advertises, alongside `HELP`, `QUIT`, `SCORE` and `TAKE INVENTORY`. **Not one
+of these five verbs is built into the interpreter** (§9.1): they are ordinary
+chains, and they work only because a link-0 record runs.
 
 ---
 
@@ -2613,7 +2727,9 @@ equivalent construction would not produce the third.
 **Command dispatch reports three outcomes.** When no record in a verb's chain
 matches the noun, or the verb has no chain, the interpreter reports that it does
 not understand. When at least one matched but every match failed, it reports
-"I can't do that yet." A success produces no acknowledgement of its own.
+"I can't do that yet." A success produces no acknowledgement of its own. This
+holds for every verb except the three the interpreter handles itself (below),
+where the built-in handling always produces an answer of its own instead.
 *Test:* define a verb whose chain holds only a record keyed to noun 5 with a
 condition that can never hold; typing it with noun 5 must give the "can't do
 that yet" wording and with noun 6 the "don't understand" wording.
@@ -2628,12 +2744,43 @@ targeting a "print message B" opcode, a failing condition, "print message A",
 end, "print message B", end. Message B is printed and the record succeeds; flip
 the condition to one that holds and message A is printed instead.
 
-**The built-in take, drop and go handling still applies** when a verb chain
-yields no success, exactly as for the reference format — including the carry
-limit, the "I already have it" / "I don't see it here" / "beyond my power"
-distinctions, and the noun-to-item link table as the naming authority. *Test:*
-with no records for the take verb at all, taking a linked noun still moves the
-item to the inventory and acknowledges it.
+**Exactly three verbs are built in, and they are named by index, not by word.**
+Verb 1 is go, verb 10 is take, verb 18 is drop — fixed numbers, the same in
+every game of this dialect, and consistent with the dictionary order §3.6
+tabulates. **No other verb has any interpreter handling whatever.** In
+particular inventory, quit, stop, score and save are *not* built in: each is an
+ordinary chain that the database spells out in opcodes, in several games as a
+single link-0 record, which is why §3.7's link byte has to be read as a link
+(worked through in §3.8). An interpreter that supplies its own handling for
+those verbs will either double the output or override what the game says.
+
+**Go is handled before the chain; take and drop after it.** Verb 1 with a noun
+of 1 through 6 — the six directions, which are always nouns 1 through 6 — never
+reaches verb 1's chain at all. The interpreter warns first if it is dark, then
+consults the current room's exit for that direction: if there is one it moves
+the player and describes the new room; if there is none it prints "I can't go in
+that direction. " in the light, and in the dark instead clears the darkness,
+moves the player to the highest-numbered room and prints the broken-neck
+message. An exit that exists is taken even in the dark, after the warning. Verb
+1 with any other noun goes to the chain as usual, and verb 1 with no noun asks
+for a direction. So a database cannot override compass movement by writing
+records for it.
+
+Take and drop work the other way round: the verb's chain is walked first and the
+built-in handling runs only if no record succeeded — **including when a record
+matched the noun and failed**, which is where this dialect parts company with
+the reference format, in which a line matching the noun exactly suppresses the
+built-in. The consequence is observable: a failing take or drop chain never
+produces "I can't do that yet."; the built-in answers instead, with the carry
+limit, the "I already have it. " / "I don't see it here. " / "I'm not carrying
+it. " / "It is beyond my power to do that. " distinctions, and the noun-to-item
+link table (§3.4) as the *only* naming authority — an item with no link byte
+cannot be taken or dropped by name however its description reads.
+
+*Test:* with no records for the take verb at all, taking a linked noun still
+moves the item to the inventory and acknowledges it with `OK. `; and with a take
+record keyed to that same noun whose condition can never hold, the answer is
+still the built-in's, never "I can't do that yet."
 
 **Death is a side effect, not a return.** The kill opcode prints the death
 message, restores light, moves the player to the highest-numbered room and runs
@@ -2901,10 +3048,14 @@ detectors have yet to run. The declared object-table pointer targets a structure
 of unknown layout and must be left alone entirely. The unassigned header byte
 has no meaning. Opcode bytes 202-211 and 213 are unassigned and their operand
 counts are unknown, so encountering one makes the rest of the record
-undecodable: abandon the record rather than skipping the byte as a no-op. A
-verb index beyond the highest verb index is reachable and must be bounds-checked
-against the dispatch table. Zero-length dictionary entries must not stall a
-reader; entries of 20 characters or more should be rejected. String chunk
+undecodable: abandon the record rather than skipping the byte as a no-op. (No
+byte in that range is reached as an opcode anywhere in the twelve §10.2
+specimens, so this is a guard against unknown files, not a case any known game
+exercises.) A verb index beyond the highest verb index is reachable and must be
+bounds-checked against the dispatch table; a dispatch entry that does not lie
+wholly within the file is a *short file*, not a refusal, and reads as zero — see
+§3.1, which works `adv07.fiad` through. Zero-length dictionary entries must not
+stall a reader; entries of 20 characters or more should be rejected. String chunk
 lengths of 0 or above 100 mark a malformed string. And one per-game patch exists
 with no basis in the format — item index 3 whose description begins with the
 letters "bird" has its take/drop name forced to `BIRD`, repairing one title
@@ -3020,27 +3171,45 @@ strings and the derived message count, §3.6 the two dictionaries, §3.7 the
 action encoding), §9.1 and §9.2 as they apply to TI-99/4A, and §11's TI-99/4A
 refusals. **Not implemented:** §4-§8, §9.3, and the rest of §11.
 
-Three corrections this document needs, all found by measuring the §10.2
-specimens against the §10.1 oracle:
+The implementer raised three questions about §3 while building that loader,
+each found by measuring the §10.2 specimens against the §10.1 oracle. All three
+are now resolved in the normative sections; recorded here is what changed and,
+where the answer went the other way, what the code has to change.
 
-1. **§3.4 is wrong about "carried".** It states that this dialect has no
-   in-band value in the initial-item-locations table meaning "carried". Byte
-   255 occurs in five of the twelve specimens — `adv03` item 48, `adv05` item
-   16, `adv07` items 3/25/56, `adv08` items 4/8, `adv10` item 17 — on exactly
-   the items whose `.dat` twins give −1 or 255, the reference format's own
-   carried marker. It must be read as "carried".
-2. **§3.1's pointer validation does not cover a table's extent.** All eleven
-   header pointers resolve within the file in all twelve specimens, but
-   `adv07.fiad` ends two bytes before the last entry of its own explicit
-   dispatch table. A reader must bounds-check each dispatch entry, not only the
-   table's start, and read one that does not fit as "this verb has no records".
-3. **§9.1's list of built-ins is incomplete, or §3.7's terminator rule is.** In
-   `adv01.fiad` the chains for `INVENTORY`, `QUIT`, `STORE` and `SCORE` are each
-   a single zero-length record keyed to noun 0. §3.7 says such a record is
-   "still a real record, eligible to match and to run", and an empty stream can
-   never reach opcode 255, so all four always fail and answer "I can't do that
-   yet." §9.1 names only take, drop and go as surviving built-ins. One of the
-   two statements is incomplete; the specimens cannot say which.
+1. **"Carried" — the specification was wrong, the measurement was right.**
+   §3.4 used to claim this dialect had no in-band value meaning "carried". It
+   has one, and it is the reference format's own: **255**, on exactly the items
+   whose `.dat` twins give −1 or 255, in five of the twelve specimens. §3.4 now
+   says so, adds that 0 and 255 are the only reserved values, and spells out
+   that opcodes 200 and 201 compare against the 255 literally. Reading 255 as
+   `CARRIED` at load time is correct.
+2. **Pointer validation versus table extent — the specification was
+   incomplete.** All eleven header pointers resolve within the file in all
+   twelve specimens, yet `adv07.fiad` ends two bytes before the last entry of
+   its own dispatch table. §3.1 now states the general rule — a validated
+   pointer proves a table's start, never its extent, and any 16-bit value whose
+   two bytes do not both lie within the file reads as 0 — and works `adv07`
+   through. Reading a dispatch entry that does not fit as "this verb has no
+   records" is correct.
+3. **The link-0 record — the specification was misleading, and the code is
+   wrong.** Both statements the implementer weighed were right as far as they
+   went: §9.1's built-ins really are only go, take and drop, and §3.7's
+   chain-final record really is "a real record, eligible to match and to run".
+   What was wrong was calling byte 1 a *length*. It is a **link**: it locates
+   the next record, and 0 means only that there is none. A link-0 record's
+   opcode stream is not empty — it begins at byte 2 like every other record's
+   and ends at its own opcode 255. Adventureland's `INVENTORY` chain is
+   `00 00 E9 FF`: list the inventory, succeed. §3.7 is rewritten around the
+   link, and §3.8 works that record through byte by byte alongside the same
+   game's `QUIT`, `STOP`, `SCORE` and `SAVE GAME`.
+
+   **What this means for the crate:** `read_chain` must stop giving a link-0
+   record an empty `ops`. It has to recover that record's stream by walking the
+   opcode arities to the 255 that ends it (bounded by the end of the file), the
+   way §3.7 describes, and the doc comments on `Ti99Record` and `read_chain`
+   that repeat the old "empty `ops`, so it always fails" reading must go with
+   it. Until then this dialect answers "I can't do that yet." to inventory,
+   quit, stop, score and save in every game that spells them this way.
 
 The in-memory model this document's dialects decode *to*, in that crate, is a
 database of rooms (six exits and a description, plus a flag for the leading-`*`
