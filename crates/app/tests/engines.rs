@@ -54,6 +54,8 @@ mod apple_release_artwork;
 mod glulx_maze_identity;
 #[path = "suites/glulx_mouse_hyperlink_drawn_rect.rs"]
 mod glulx_mouse_hyperlink_drawn_rect;
+#[path = "suites/glulx_imagerule_relayout.rs"]
+mod glulx_imagerule_relayout;
 #[path = "suites/glk_grid_ground_reversed.rs"]
 mod glk_grid_ground_reversed;
 #[path = "suites/glk_proportional_split_fills_pane.rs"]

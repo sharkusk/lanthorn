@@ -165,6 +165,32 @@ So **Glk is confined to the Glulx path.** Z-machine and Scott are implemented
 against their own I/O models and converge with Glulx only at the neutral
 `ScreenModel` layer.
 
+**The Glk level is 0.7.6** (`gestalt_Version` → `0x0000_0706`). The one call
+0.7.6 added is `glk_image_draw_scaled_ext` (dispatch selector `0x00EC`), and it
+is the one place where the "record the calls, project them onto the
+`ScreenModel`" division above is not quite enough — because in a text-buffer
+window its `imagerule_WidthRatio` is **standing**, not one-shot. The spec's
+§"Graphics in Text Buffer Windows" requires the picture's width to stay
+"relative to the *current* window width", resizing whenever the window does,
+where §"Graphics in Graphics Windows" says the same rule is resolved once at
+call time and `maxwidth` is ignored outright. So the rule cannot be collapsed
+into a pixel size anywhere on the way in.
+
+It is handled by keeping the rule as a value the whole way down:
+`gvm::glk::ImageRule` holds the rule word beside the three arguments it
+interprets and owns the arithmetic (width first, then height, then `maxwidth`
+as a proportional reduction of both); a separate backend seam,
+`GlkBackend::buffer_draw_image_ext`, hands a host the rule rather than a size,
+where `graphics_draw_image` takes the size gvm already resolved. `AppGlk`
+stores it on the `InlineImage`, and `InlineImage::fitted_cells` — which the
+transcript wrapper already calls with the live band width on every layout —
+re-resolves it there. A terminal resize therefore needs no image-specific
+resize path at all: it is just the next layout arriving with a different width.
+The archive persists the rule rather than the resolved size, per "persist the
+recipe, not the result" (a restore routinely lands in a different pane).
+SQ-1424; the reasoning for the earlier, honest 0.7.5 it replaces is in
+`zvm-embedding-review.md`.
+
 **Which engine gets the file is decided by evidence, and all four of them are
 tested now** (SQ-0889). `hints::extract_story` classifies a story image: a Blorb
 proves itself by its `FORM`/`IFRS` magic, a Glulx image by `Glul`, a Scott Adams

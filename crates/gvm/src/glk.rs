@@ -1,5 +1,5 @@
 //! The Glk window/stream/output model — the interactive-fiction subset of Glk
-//! (Andrew Plotkin's Glk spec 0.7.5), transcribed into `GLULX_NOTES.md` §19.
+//! (Andrew Plotkin's Glk spec 0.7.6), transcribed into `GLULX_NOTES.md` §19.
 //!
 //! The model ([`Model`]) owns the window tree, the streams, the current output
 //! stream, and per-stream styles. It is pure bookkeeping: it never touches
@@ -14,6 +14,168 @@
 
 use std::any::Any;
 use std::collections::{BTreeMap, BTreeSet};
+
+// ── Image scaling rules (`imagerule_*`, Glk 0.7.6 §7.2) ───────────────────────
+
+/// The `imagerule_*` constants, taken verbatim from the Glk 0.7.6 `glk.h`
+/// (cheapglk `glk.h` lines 373-380, cross-checked against its `gi_dispa.c`
+/// constant table, which lists the same eight values). SQ-1424.
+///
+/// Note the two coincidences the masks make deliberate: `WidthRatio` IS
+/// `WidthMask` (`0x03`) and `AspectRatio` IS `HeightMask` (`0x0C`), because each
+/// rule is a two-bit field whose highest value is the ratio rule. A rule field
+/// of zero names no rule at all, which the spec forbids ("You must supply one
+/// of each when calling this function") and the reference library rejects
+/// (garglk `window.cpp:glk_image_draw_scaled_ext`, `default: return false`).
+///
+/// There is NO `imagerule_HeightRatio`: the third HEIGHT rule is
+/// [`imagerule::ASPECT_RATIO`], which is relative to the resolved image WIDTH,
+/// not to the window.
+pub mod imagerule {
+    /// Use the image's standard width; the `width` argument is ignored.
+    pub const WIDTH_ORIG: u32 = 0x01;
+    /// Use the `width` argument as an integer pixel count.
+    pub const WIDTH_FIXED: u32 = 0x02;
+    /// `width` is a 16.16 fixed-point fraction of the WINDOW width
+    /// (`0x10000` = 100%).
+    pub const WIDTH_RATIO: u32 = 0x03;
+    /// Two-bit field holding the width rule.
+    pub const WIDTH_MASK: u32 = 0x03;
+    /// Use the image's standard height; the `height` argument is ignored.
+    pub const HEIGHT_ORIG: u32 = 0x04;
+    /// Use the `height` argument as an integer pixel count.
+    pub const HEIGHT_FIXED: u32 = 0x08;
+    /// `height` is a 16.16 fixed-point fraction multiplied by the image's own
+    /// aspect ratio, applied to the RESOLVED width (`0x10000` = keep the
+    /// original aspect).
+    pub const ASPECT_RATIO: u32 = 0x0C;
+    /// Two-bit field holding the height rule.
+    pub const HEIGHT_MASK: u32 = 0x0C;
+}
+
+/// One `glk_image_draw_scaled_ext` sizing request: the rule word plus the three
+/// arguments it interprets (Glk 0.7.6, dispatch selector `0x00EC`). SQ-1424.
+///
+/// This is the "facts that travel together" form the refactoring policy asks
+/// for: `rule` alone is meaningless, and `width`/`height`/`maxwidth` each mean
+/// something different depending on it, so a caller can never supply a
+/// plausible subset.
+///
+/// A value of this type is also what makes the TEXT BUFFER behaviour possible
+/// at all. The spec (§"Graphics in Text Buffer Windows") makes the ratio
+/// STANDING there — "In a text buffer window, imagerule_WidthRatio is
+/// dynamically computed; the image width will always be relative to the
+/// *current* window width. If the text buffer window is resized (by the user or
+/// a window arrangement call), the image will resize too" — so the host must
+/// keep the RULE beside the inline image and re-resolve it on every relayout,
+/// rather than freezing a pixel size at call time. In a GRAPHICS window the
+/// same rule is one-shot: §"Graphics in Graphics Windows" says "The
+/// imagerule_WidthRatio option does *not* dynamically resize in a graphics
+/// window. The image size is computed when glk_image_draw_scaled_ext() is
+/// called, and then the image is painted to the canvas. The maxwidth argument
+/// is ignored in graphics windows."
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct ImageRule {
+    /// The `imagerule` word: one width rule OR'd with one height rule.
+    pub rule: u32,
+    /// The `width` argument — pixels under `WIDTH_FIXED`, a 16.16 fraction of
+    /// the window width under `WIDTH_RATIO`, ignored under `WIDTH_ORIG`.
+    pub width: u32,
+    /// The `height` argument — pixels under `HEIGHT_FIXED`, a 16.16 aspect
+    /// multiplier under `ASPECT_RATIO`, ignored under `HEIGHT_ORIG`.
+    pub height: u32,
+    /// A 16.16 fraction of the window width bounding the resolved width, or 0
+    /// for no bound. Ignored entirely in graphics windows.
+    pub maxwidth: u32,
+}
+
+impl ImageRule {
+    /// The rule `glk_image_draw(win, image, val1, val2)` is defined to be
+    /// equivalent to: `WidthOrig | HeightOrig`, `maxwidth = $10000` (Glk 0.7.6
+    /// §7.2, "glk_image_draw() is equivalent to
+    /// imagerule_WidthOrig|imagerule_HeightOrig, maxwidth=$10000"; garglk's
+    /// `window.cpp` literally implements `glk_image_draw` as that call).
+    pub const fn draw() -> ImageRule {
+        ImageRule { rule: imagerule::WIDTH_ORIG | imagerule::HEIGHT_ORIG, width: 0, height: 0, maxwidth: 0x10000 }
+    }
+
+    /// The rule `glk_image_draw_scaled(win, image, val1, val2, w, h)` is defined
+    /// to be equivalent to: `WidthFixed | HeightFixed` at that size,
+    /// `maxwidth = $10000`.
+    pub const fn draw_scaled(w: u32, h: u32) -> ImageRule {
+        ImageRule { rule: imagerule::WIDTH_FIXED | imagerule::HEIGHT_FIXED, width: w, height: h, maxwidth: 0x10000 }
+    }
+
+    /// Resolve to `(width, height)` in pixels for a GRAPHICS window: one-shot,
+    /// with `maxwidth` ignored per §"Graphics in Graphics Windows".
+    ///
+    /// `natural` is the image's own `(width, height)`
+    /// ([`GlkBackend::image_info`]); `window_width_px` is the graphics window's
+    /// current width in pixels, read only by `WIDTH_RATIO`.
+    pub fn resolve_in_graphics(&self, natural: (u32, u32), window_width_px: u32) -> Option<(u32, u32)> {
+        self.resolve(natural, window_width_px, false)
+    }
+
+    /// Resolve to `(width, height)` in pixels for a TEXT BUFFER window, applying
+    /// `maxwidth`. Call this AGAIN with the new width on every relayout: that
+    /// re-resolution is the whole of what makes `WIDTH_RATIO` standing rather
+    /// than one-shot, and it is why the host stores the rule instead of a size.
+    pub fn resolve_in_buffer(&self, natural: (u32, u32), window_width_px: u32) -> Option<(u32, u32)> {
+        self.resolve(natural, window_width_px, true)
+    }
+
+    /// The shared arithmetic, in the order the spec fixes: "The interpreter
+    /// always figures out the width first, then the height (again,
+    /// imagerule_AspectRatio only controls height). Then it applies maxwidth,
+    /// which may cause a proportional reduction (regardless of how height was
+    /// determined)."
+    ///
+    /// `None` for a rule word that names no width rule or no height rule (a
+    /// zero two-bit field), matching the reference library's `default: return
+    /// false` and the spec's "You must supply one of each".
+    ///
+    /// Everything is computed in `u64` with round-half-up division, because
+    /// garglk resolves the same three expressions in `double` and rounds
+    /// (`std::round`); plain integer truncation would land a pixel under it at
+    /// most ratios.
+    fn resolve(&self, natural: (u32, u32), window_width_px: u32, apply_maxwidth: bool) -> Option<(u32, u32)> {
+        let (nat_w, nat_h) = (natural.0.max(1) as u64, natural.1.max(1) as u64);
+        // Width first.
+        let mut w: u64 = match self.rule & imagerule::WIDTH_MASK {
+            imagerule::WIDTH_ORIG => nat_w,
+            imagerule::WIDTH_FIXED => self.width as u64,
+            imagerule::WIDTH_RATIO => div_round(window_width_px as u64 * self.width as u64, 0x1_0000),
+            _ => return None, // no width rule supplied
+        };
+        // Then height, which under ASPECT_RATIO reads the width just resolved.
+        let mut h: u64 = match self.rule & imagerule::HEIGHT_MASK {
+            imagerule::HEIGHT_ORIG => nat_h,
+            imagerule::HEIGHT_FIXED => self.height as u64,
+            // height = width · (nat_h / nat_w) · (height / $10000)
+            imagerule::ASPECT_RATIO => div_round(w * nat_h * self.height as u64, nat_w * 0x1_0000),
+            _ => return None, // no height rule supplied
+        };
+        // Then maxwidth, proportionally on BOTH axes (garglk
+        // `wintext.cpp:win_textbuffer_draw_picture`).
+        if apply_maxwidth && self.maxwidth != 0 && w != 0 {
+            let limit = div_round(window_width_px as u64 * self.maxwidth as u64, 0x1_0000);
+            if w > limit {
+                h = div_round(h * limit, w);
+                w = limit;
+            }
+        }
+        Some((w.min(u32::MAX as u64) as u32, h.min(u32::MAX as u64) as u32))
+    }
+}
+
+/// `round(n / d)` for unsigned integers, the integer spelling of the
+/// `std::round` the reference library applies to each of these expressions.
+fn div_round(n: u64, d: u64) -> u64 {
+    if d == 0 {
+        return 0;
+    }
+    (n + d / 2) / d
+}
 
 // ── Window types (`wintype_*`, the `wintype` argument to glk_window_open) ──────
 
@@ -706,6 +868,33 @@ pub trait GlkBackend {
     fn graphics_draw_image(&mut self, _win: u32, _resnum: u32, _x: i32, _y: i32, _scale: Option<(u32, u32)>) -> bool {
         false
     }
+    /// Draw image `resnum` inline in a TEXT BUFFER window under a **standing**
+    /// [`ImageRule`] (`glk_image_draw_scaled_ext`, Glk 0.7.6; SQ-1424).
+    /// `align` is the `imagealign_*` value the buffer path takes in `val1`.
+    ///
+    /// A host that lays text buffers out itself should OVERRIDE this: store
+    /// `rule` beside the image and call [`ImageRule::resolve_in_buffer`] with
+    /// the window's CURRENT width every time it lays the buffer out, so a
+    /// resize re-resolves `imagerule_WidthRatio` as the spec requires. It is a
+    /// separate seam from [`GlkBackend::graphics_draw_image`] precisely because
+    /// that one takes a resolved size, which is the thing a standing rule must
+    /// not freeze.
+    ///
+    /// The default resolves ONCE against `window_width_px` and delegates, which
+    /// is right for a host with no relayout of its own (a one-shot transcript
+    /// dump) and wrong only in that a later resize will not follow.
+    fn buffer_draw_image_ext(
+        &mut self,
+        win: u32,
+        resnum: u32,
+        align: u32,
+        rule: ImageRule,
+        window_width_px: u32,
+    ) -> bool {
+        let Some(natural) = self.image_info(resnum) else { return false };
+        let Some(size) = rule.resolve_in_buffer(natural, window_width_px) else { return false };
+        self.graphics_draw_image(win, resnum, align as i32, 0, Some(size))
+    }
     /// Create a sound channel with rock `rock`; return its Glk ref (0 = failure).
     fn schannel_create(&mut self, _rock: u32) -> u32 { 0 }
     /// Destroy a sound channel.
@@ -791,6 +980,11 @@ pub trait GlkBackend {
 type FillRec = (u32, i32, i32, u32, u32);
 /// One recorded `draw_image` call: `(resnum, x, y, scale)`.
 type DrawRec = (u32, i32, i32, Option<(u32, u32)>);
+/// One recorded `buffer_draw_image_ext` call:
+/// `(resnum, align, rule, window_width_px)` — the STANDING form, which records
+/// the rule rather than a resolved size precisely because the size is not
+/// settled until the host lays the buffer out (SQ-1424).
+pub type BufferDrawExtRec = (u32, u32, ImageRule, u32);
 
 /// A [`GlkBackend`] that records each window's text/grid in memory, replacing
 /// the old `BufferOutput`: tests downcast to it and read the asserted strings.
@@ -818,6 +1012,8 @@ pub struct TestBackend {
     fills: BTreeMap<u32, Vec<FillRec>>,
     /// Recorded `draw_image` calls per graphics window.
     draws: BTreeMap<u32, Vec<DrawRec>>,
+    /// Recorded `buffer_draw_image_ext` calls per text-buffer window (SQ-1424).
+    buffer_draws_ext: BTreeMap<u32, Vec<BufferDrawExtRec>>,
     /// Resnums that simulate a missing/undecodable image (draw reports false,
     /// nothing recorded).
     missing_images: BTreeSet<u32>,
@@ -871,6 +1067,7 @@ impl TestBackend {
             dims: BTreeMap::new(),
             fills: BTreeMap::new(),
             draws: BTreeMap::new(),
+            buffer_draws_ext: BTreeMap::new(),
             missing_images: BTreeSet::new(),
             image_infos: BTreeMap::new(),
             backgrounds: BTreeMap::new(),
@@ -993,6 +1190,12 @@ impl TestBackend {
     pub fn draws(&self, win: u32) -> Vec<DrawRec> {
         self.draws.get(&win).cloned().unwrap_or_default()
     }
+    /// Recorded `buffer_draw_image_ext` calls for one text-buffer window
+    /// (empty if none) — the UNRESOLVED standing rules, as a real host stores
+    /// them (SQ-1424).
+    pub fn buffer_draws_ext(&self, win: u32) -> Vec<BufferDrawExtRec> {
+        self.buffer_draws_ext.get(&win).cloned().unwrap_or_default()
+    }
     /// The last background color set for one graphics window, if any.
     pub fn background(&self, win: u32) -> Option<u32> {
         self.backgrounds.get(&win).copied()
@@ -1084,6 +1287,24 @@ impl GlkBackend for TestBackend {
     fn graphics_set_background(&mut self, win: u32, color: u32) {
         self.backgrounds.insert(win, color);
     }
+    /// Records the STANDING rule rather than resolving it, which is what a host
+    /// that lays its own text buffers out does (SQ-1424) — and is the only way
+    /// a test can tell "resolved once at call time" from "kept for relayout".
+    fn buffer_draw_image_ext(
+        &mut self,
+        win: u32,
+        resnum: u32,
+        align: u32,
+        rule: ImageRule,
+        window_width_px: u32,
+    ) -> bool {
+        if self.missing_images.contains(&resnum) {
+            return false;
+        }
+        self.buffer_draws_ext.entry(win).or_default().push((resnum, align, rule, window_width_px));
+        true
+    }
+
     fn graphics_draw_image(&mut self, win: u32, resnum: u32, x: i32, y: i32, scale: Option<(u32, u32)>) -> bool {
         if self.missing_images.contains(&resnum) {
             return false;
@@ -4664,6 +4885,209 @@ mod layout_snap_tests {
             Some(0x0055_6677),
             "stream bg override wins over the per-window snapshot",
         );
+    }
+}
+
+/// SQ-1424 — the `glk_image_draw_scaled_ext` sizing arithmetic (Glk 0.7.6
+/// §7.2), pinned against the spec text and the reference library.
+#[cfg(test)]
+mod imagerule_tests {
+    use super::*;
+
+    /// The eight constants, verbatim from the Glk 0.7.6 `glk.h` shipped with
+    /// cheapglk (lines 373-380) and independently from its `gi_dispa.c`
+    /// constant table. Written out as literals here rather than derived from
+    /// each other, because the whole point of a constants pin is that it fails
+    /// when someone "simplifies" `WIDTH_RATIO` into something that is no longer
+    /// also `WIDTH_MASK`.
+    #[test]
+    fn imagerule_constants_are_the_spec_glk_h_values() {
+        assert_eq!(imagerule::WIDTH_ORIG, 0x01);
+        assert_eq!(imagerule::WIDTH_FIXED, 0x02);
+        assert_eq!(imagerule::WIDTH_RATIO, 0x03);
+        assert_eq!(imagerule::WIDTH_MASK, 0x03);
+        assert_eq!(imagerule::HEIGHT_ORIG, 0x04);
+        assert_eq!(imagerule::HEIGHT_FIXED, 0x08);
+        assert_eq!(imagerule::ASPECT_RATIO, 0x0C);
+        assert_eq!(imagerule::HEIGHT_MASK, 0x0C);
+        // The ratio rule saturates its own field in both cases — that is the
+        // shape of the encoding, not a coincidence to be tidied away.
+        assert_eq!(imagerule::WIDTH_RATIO, imagerule::WIDTH_MASK);
+        assert_eq!(imagerule::ASPECT_RATIO, imagerule::HEIGHT_MASK);
+    }
+
+    #[test]
+    fn width_orig_uses_the_image_and_ignores_the_width_argument() {
+        let r = ImageRule {
+            rule: imagerule::WIDTH_ORIG | imagerule::HEIGHT_ORIG,
+            width: 9999, // "The width argument is ignored."
+            height: 9999,
+            maxwidth: 0,
+        };
+        assert_eq!(r.resolve_in_graphics((120, 60), 400), Some((120, 60)));
+    }
+
+    #[test]
+    fn width_fixed_uses_the_argument_as_pixels() {
+        let r = ImageRule {
+            rule: imagerule::WIDTH_FIXED | imagerule::HEIGHT_FIXED,
+            width: 300,
+            height: 25,
+            maxwidth: 0,
+        };
+        assert_eq!(r.resolve_in_graphics((120, 60), 400), Some((300, 25)));
+    }
+
+    /// "$10000 (1.0) means that the image width will be 100% of the window
+    /// width. $8000 (0.5) means 50% of the window width."
+    #[test]
+    fn width_ratio_is_a_16_16_fraction_of_the_window_width() {
+        let half = ImageRule {
+            rule: imagerule::WIDTH_RATIO | imagerule::HEIGHT_ORIG,
+            width: 0x8000,
+            height: 0,
+            maxwidth: 0,
+        };
+        assert_eq!(half.resolve_in_buffer((120, 60), 400), Some((200, 60)), "50% of 400");
+        assert_eq!(half.resolve_in_buffer((120, 60), 640), Some((320, 60)), "…and of 640");
+        let full = ImageRule { width: 0x1_0000, ..half };
+        assert_eq!(full.resolve_in_buffer((120, 60), 400), Some((400, 60)), "100% of 400");
+    }
+
+    /// "The image height will be a fixed aspect ratio compared to the width. …
+    /// $10000 (1.0) means that the image will always retain its original aspect
+    /// ratio. $20000 (2.0) means that it will be stretched vertically by a
+    /// factor of 2." And it reads the width AFTER that width was resolved.
+    #[test]
+    fn aspect_ratio_is_relative_to_the_resolved_width_not_to_the_window() {
+        // A 2:1 image (200x100) at 50% of a 400px window → 200 wide.
+        let keep = ImageRule {
+            rule: imagerule::WIDTH_RATIO | imagerule::ASPECT_RATIO,
+            width: 0x8000,
+            height: 0x1_0000,
+            maxwidth: 0,
+        };
+        assert_eq!(keep.resolve_in_buffer((200, 100), 400), Some((200, 100)), "original aspect kept");
+        // Doubling the window doubles BOTH axes, because the height follows the
+        // resolved width — this is the standing behaviour a relayout re-runs.
+        assert_eq!(keep.resolve_in_buffer((200, 100), 800), Some((400, 200)));
+        // $20000 stretches vertically by 2.
+        let stretch = ImageRule { height: 0x2_0000, ..keep };
+        assert_eq!(stretch.resolve_in_buffer((200, 100), 400), Some((200, 200)));
+    }
+
+    /// "[[Thus if you use imagerule_WidthFixed, width=600, maxwidth=$10000,
+    /// then the image will appear with a width of 600 or the window width,
+    /// whichever is smaller. If you use imagerule_WidthOrig, maxwidth=$8000,
+    /// then the image will appear with its original width or half the window
+    /// width, whichever is smaller.]]" — the spec's own two worked examples.
+    #[test]
+    fn maxwidth_bounds_the_width_and_reduces_proportionally() {
+        let fixed600 = ImageRule {
+            rule: imagerule::WIDTH_FIXED | imagerule::HEIGHT_FIXED,
+            width: 600,
+            height: 300,
+            maxwidth: 0x1_0000,
+        };
+        // Window 400 < 600 → reduced to 400, and the height with it (300·400/600).
+        assert_eq!(fixed600.resolve_in_buffer((10, 10), 400), Some((400, 200)));
+        // Window 800 > 600 → untouched.
+        assert_eq!(fixed600.resolve_in_buffer((10, 10), 800), Some((600, 300)));
+
+        let orig_half = ImageRule {
+            rule: imagerule::WIDTH_ORIG | imagerule::HEIGHT_ORIG,
+            width: 0,
+            height: 0,
+            maxwidth: 0x8000,
+        };
+        // Natural 300 wide vs half of 400 = 200 → reduced to 200, height 150·200/300.
+        assert_eq!(orig_half.resolve_in_buffer((300, 150), 400), Some((200, 100)));
+        // Natural 300 wide vs half of 1000 = 500 → the original survives.
+        assert_eq!(orig_half.resolve_in_buffer((300, 150), 1000), Some((300, 150)));
+    }
+
+    #[test]
+    fn maxwidth_zero_is_no_bound() {
+        let r = ImageRule {
+            rule: imagerule::WIDTH_FIXED | imagerule::HEIGHT_FIXED,
+            width: 5000,
+            height: 100,
+            maxwidth: 0,
+        };
+        assert_eq!(r.resolve_in_buffer((10, 10), 400), Some((5000, 100)));
+    }
+
+    /// "The maxwidth argument is ignored in graphics windows." Same rule, same
+    /// window width, two answers — which is exactly why there are two entry
+    /// points rather than one with a flag the caller might forget.
+    #[test]
+    fn maxwidth_is_ignored_in_graphics_windows_but_not_in_buffers() {
+        let r = ImageRule {
+            rule: imagerule::WIDTH_FIXED | imagerule::HEIGHT_FIXED,
+            width: 600,
+            height: 300,
+            maxwidth: 0x1_0000,
+        };
+        assert_eq!(r.resolve_in_graphics((10, 10), 400), Some((600, 300)), "graphics: uncapped");
+        assert_eq!(r.resolve_in_buffer((10, 10), 400), Some((400, 200)), "buffer: capped to the window");
+    }
+
+    /// "You must supply one of each when calling this function." The reference
+    /// library answers a missing rule with `default: return false`.
+    #[test]
+    fn a_rule_word_missing_either_field_resolves_to_nothing() {
+        let no_width = ImageRule { rule: imagerule::HEIGHT_ORIG, width: 0, height: 0, maxwidth: 0 };
+        assert_eq!(no_width.resolve_in_graphics((10, 10), 400), None);
+        let no_height = ImageRule { rule: imagerule::WIDTH_ORIG, width: 0, height: 0, maxwidth: 0 };
+        assert_eq!(no_height.resolve_in_graphics((10, 10), 400), None);
+        let neither = ImageRule { rule: 0, width: 0, height: 0, maxwidth: 0 };
+        assert_eq!(neither.resolve_in_graphics((10, 10), 400), None);
+    }
+
+    /// "glk_image_draw() is equivalent to
+    /// imagerule_WidthOrig|imagerule_HeightOrig, maxwidth=$10000.
+    /// glk_image_draw_scaled() is equivalent to
+    /// imagerule_WidthFixed|imagerule_HeightFixed with the given size,
+    /// maxwidth=$10000." garglk implements both as literally that call, so
+    /// these two constructors are the spec's equivalence, pinned.
+    #[test]
+    fn the_older_two_calls_are_expressible_as_rules() {
+        assert_eq!(ImageRule::draw().rule, imagerule::WIDTH_ORIG | imagerule::HEIGHT_ORIG);
+        assert_eq!(ImageRule::draw().maxwidth, 0x1_0000);
+        assert_eq!(ImageRule::draw_scaled(60, 40).rule, imagerule::WIDTH_FIXED | imagerule::HEIGHT_FIXED);
+        assert_eq!(ImageRule::draw_scaled(60, 40).maxwidth, 0x1_0000);
+        // In a graphics window (maxwidth ignored) they are exactly the old
+        // behaviours: natural size, and the requested size.
+        assert_eq!(ImageRule::draw().resolve_in_graphics((120, 60), 400), Some((120, 60)));
+        assert_eq!(ImageRule::draw_scaled(60, 40).resolve_in_graphics((120, 60), 400), Some((60, 40)));
+    }
+
+    /// Rounding is half-up, matching garglk's `std::round` on the same
+    /// expression; truncation would answer 133 here.
+    #[test]
+    fn ratios_round_rather_than_truncate() {
+        let third = ImageRule {
+            rule: imagerule::WIDTH_RATIO | imagerule::HEIGHT_ORIG,
+            width: 0x5555, // 21845/65536 ≈ 0.33333
+            height: 0,
+            maxwidth: 0,
+        };
+        // 400 · 21845 / 65536 = 133.3… → 133; 401 · … = 133.66… → 134.
+        assert_eq!(third.resolve_in_buffer((10, 10), 400).unwrap().0, 133);
+        assert_eq!(third.resolve_in_buffer((10, 10), 401).unwrap().0, 134);
+    }
+
+    /// A zero natural dimension (a degenerate or undecodable image) must not
+    /// divide by zero in the aspect rule.
+    #[test]
+    fn a_degenerate_natural_size_does_not_panic() {
+        let r = ImageRule {
+            rule: imagerule::WIDTH_RATIO | imagerule::ASPECT_RATIO,
+            width: 0x8000,
+            height: 0x1_0000,
+            maxwidth: 0x1_0000,
+        };
+        assert!(r.resolve_in_buffer((0, 0), 400).is_some());
     }
 }
 

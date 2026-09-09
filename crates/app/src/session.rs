@@ -3092,6 +3092,9 @@ impl GameSession {
                     align,
                     scaled: None,
                     margin_px,
+                    // A Z-machine v6 picture carries no Glk imagerule (SQ-1424):
+                    // the game sizes it itself in native pixels.
+                    rule: None,
                 };
                 self.story_pics.push((ev.out_chars, float));
             }
@@ -6509,6 +6512,7 @@ mod tests {
             align: ImageAlign::MarginLeft,
             scaled: None,
             margin_px: Some(56),
+            rule: None,
         };
         let text = "first line\nsecond line";
         // One style chunk covering everything (bold), to verify run splitting.
@@ -6534,6 +6538,7 @@ mod tests {
             align: ImageAlign::MarginLeft,
             scaled: None,
             margin_px: None,
+            rule: None,
         };
         let elems = interleave_story_elems("story text", &[], vec![(0, TranscriptElem::Image(img))], 0, None);
         assert_eq!(elems.len(), 2, "Image then Text");
@@ -6633,6 +6638,7 @@ mod tests {
             pixels: std::sync::Arc::new(image::RgbaImage::new(2, 2)),
             align: crate::inline_image::ImageAlign::InlineUp,
             scaled: None, margin_px: None,
+            rule: None,
         }
     }
 

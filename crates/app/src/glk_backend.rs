@@ -1495,7 +1495,7 @@ impl GlkBackend for AppGlk {
             let img = crate::inline_image::InlineImage {
                 pixels: std::sync::Arc::new(src.to_rgba8()),
                 align: crate::inline_image::ImageAlign::from_glk(x as u32),
-                scaled: scale, margin_px: None,
+                scaled: scale, margin_px: None, rule: None,
             };
             if let Some(buf) = self.buffers.get_mut(&win) {
                 buf.log.push(BufElem::Image(img));
@@ -1509,6 +1509,44 @@ impl GlkBackend for AppGlk {
             .entry(win)
             .or_insert_with(|| crate::graphics::Canvas::new(cw, ch))
             .draw_image(&src, x, y, scale);
+        true
+    }
+
+    /// `glk_image_draw_scaled_ext` into a TEXT BUFFER window (Glk 0.7.6;
+    /// SQ-1424). gvm hands us the RULE rather than a size, and we store it on
+    /// the inline image untouched — `window_width_px` is gvm's own view of the
+    /// window and is deliberately *not* used to resolve anything here, because
+    /// the width that matters is the transcript band's, which
+    /// `InlineImage::fitted_cells` reads afresh on every layout.
+    ///
+    /// That is what makes the ratio standing rather than one-shot: resolving
+    /// now would freeze the picture at whatever width the game happened to draw
+    /// it at, and a later terminal resize could not recover the proportion.
+    fn buffer_draw_image_ext(
+        &mut self,
+        win: u32,
+        resnum: u32,
+        align: u32,
+        rule: gvm::glk::ImageRule,
+        _window_width_px: u32,
+    ) -> bool {
+        // Only a text-buffer window has an inline flow to put this in; gvm
+        // routes graphics windows through `graphics_draw_image` with a size
+        // already resolved, so anything else here is a window we cannot draw in.
+        if !self.buffers.contains_key(&win) {
+            return false;
+        }
+        let Some(src) = self.picts.image(resnum) else { return false };
+        let img = crate::inline_image::InlineImage {
+            pixels: std::sync::Arc::new(src.to_rgba8()),
+            align: crate::inline_image::ImageAlign::from_glk(align),
+            scaled: None,
+            margin_px: None,
+            rule: Some(rule),
+        };
+        if let Some(buf) = self.buffers.get_mut(&win) {
+            buf.log.push(BufElem::Image(img));
+        }
         true
     }
 
@@ -1770,6 +1808,7 @@ mod tests {
             pixels: std::sync::Arc::new(image::RgbaImage::new(3, 3)),
             align: crate::inline_image::ImageAlign::InlineUp,
             scaled: None, margin_px: None,
+            rule: None,
         };
         let log = &mut glk.buffers.get_mut(&2).unwrap().log;
         log.push(BufElem::Text { bits: 0, fg: 0, bg: 0, link: 0, para: crate::state::ParaFmt::default(), glk_style: 0, text: "a\n".into() });
@@ -2282,6 +2321,7 @@ mod tests {
             pixels: std::sync::Arc::new(image::RgbaImage::new(3, 3)),
             align: crate::inline_image::ImageAlign::InlineUp,
             scaled: None, margin_px: None,
+            rule: None,
         };
         let log = &mut glk.buffers.get_mut(&pid).unwrap().log;
         log.push(BufElem::Text { bits: 0, fg: 0, bg: 0, link: 0, para: crate::state::ParaFmt::default(), glk_style: 0, text: "foo".into() });

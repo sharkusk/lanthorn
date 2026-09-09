@@ -462,6 +462,7 @@ mod tests {
             pixels: std::sync::Arc::new(px),
             align: crate::inline_image::ImageAlign::InlineUp,
             scaled: None, margin_px: None,
+            rule: None,
         };
         let band = crate::render::transcript::ImageBand { image: img, cols: 2, rows: 2, row: 0, x_off: 0 };
         let picker = Picker::halfblocks();
@@ -491,6 +492,7 @@ mod tests {
             pixels: std::sync::Arc::new(px),
             align: crate::inline_image::ImageAlign::InlineUp,
             scaled: None, margin_px: None,
+            rule: None,
         };
         let band = crate::render::transcript::ImageBand { image: img, cols: 2, rows: 2, row: 0, x_off: 0 };
         let picker = Picker::halfblocks();
@@ -630,6 +632,7 @@ mod tests {
             pixels: std::sync::Arc::new(px),
             align: crate::inline_image::ImageAlign::InlineUp,
             scaled: None, margin_px: None,
+            rule: None,
         };
         let band = crate::render::transcript::ImageBand { image: img, cols: 2, rows: 2, row: 0, x_off: 0 };
         let picker = Picker::halfblocks();
@@ -663,6 +666,7 @@ mod tests {
             pixels: std::sync::Arc::new(px),
             align: crate::inline_image::ImageAlign::InlineUp,
             scaled: None, margin_px: None,
+            rule: None,
         };
         let (cols, rows) = (4u16, 2u16);
         let band = crate::render::transcript::ImageBand { image: img, cols, rows, row: 0, x_off: 0 };
@@ -704,6 +708,7 @@ mod tests {
             pixels: std::sync::Arc::new(px),
             align: crate::inline_image::ImageAlign::InlineUp,
             scaled: None, margin_px: None,
+            rule: None,
         };
         let ptr = std::sync::Arc::as_ptr(&img.pixels) as usize;
         let (cols, rows) = (4u16, 2u16);
@@ -743,6 +748,7 @@ mod tests {
             pixels: std::sync::Arc::new(px),
             align: crate::inline_image::ImageAlign::InlineUp,
             scaled: None, margin_px: None,
+            rule: None,
         };
         let ptr = std::sync::Arc::as_ptr(&img.pixels) as usize;
         let band = crate::render::transcript::ImageBand { image: img, cols: 2, rows: 2, row: 0, x_off: 0 };
@@ -776,6 +782,7 @@ mod tests {
             pixels: std::sync::Arc::new(px),
             align: crate::inline_image::ImageAlign::InlineUp,
             scaled: None, margin_px: None,
+            rule: None,
         };
         let picker = Picker::halfblocks();
         let (cols, rows) = (6u16, 8u16);
@@ -799,6 +806,7 @@ mod tests {
             pixels,
             align: crate::inline_image::ImageAlign::InlineUp,
             scaled: None, margin_px: None,
+            rule: None,
         };
         crate::render::transcript::ImageBand { image: img, cols: 2, rows: 2, row: 0, x_off: 0 }
     }
@@ -877,6 +885,7 @@ mod tests {
             pixels: std::sync::Arc::new(px),
             align: crate::inline_image::ImageAlign::InlineUp,
             scaled: None, margin_px: None,
+            rule: None,
         };
         let band = crate::render::transcript::ImageBand { image: img, cols: 2, rows: 2, row: 0, x_off: 0 };
         // A real kitty picker (not `Picker::halfblocks()`), so `place_protocol`
@@ -958,6 +967,7 @@ mod tests {
             pixels: std::sync::Arc::new(px),
             align: crate::inline_image::ImageAlign::InlineUp,
             scaled: None, margin_px: None,
+            rule: None,
         };
         let band = crate::render::transcript::ImageBand { image: img, cols: 2, rows: 2, row: 0, x_off: 0 };
         let mut picker = crate::render::graphics::kitty_picker(8, 16);

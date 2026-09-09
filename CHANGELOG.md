@@ -23,6 +23,12 @@ Absolute URLs or no link.
 
 ### Added
 
+- **Glulx games can draw pictures that follow the window width.** A story can
+  now ask for an illustration sized as a share of the text column — half the
+  width, a quarter, its own proportions kept — and it stays that share when you
+  resize the terminal or change font size, rather than being frozen at whatever
+  width it happened to be drawn at. Modern Glulx works that illustrate their
+  prose get this automatically. (SQ-1424)
 - **A save file from the classic ScottFree interpreter can now be restored**
   in a Scott Adams game, alongside lanthorn's own saves — point the restore
   file picker (or `scott-cli`'s `/restore`) straight at an old ScottFree

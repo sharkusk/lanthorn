@@ -574,6 +574,7 @@ pub(crate) fn glk_selector_name(sel: u32) -> String {
         0x00E9 => "glk_window_erase_rect",
         0x00EA => "glk_window_fill_rect",
         0x00EB => "glk_window_set_background_color",
+        0x00EC => "glk_image_draw_scaled_ext",
         0x00F0 => "glk_schannel_iterate",
         0x00F1 => "glk_schannel_get_rock",
         0x00F2 => "glk_schannel_create",
@@ -706,7 +707,7 @@ fn glk_trace_ret(sel: u32, ret: u32) -> Option<String> {
         0x0067 => (if ret != 0 { "exists" } else { "absent" }).to_string(), // fileref_does_file_exist
         0x0004 | 0x0005 => ret.to_string(),                                 // gestalt value
         0x00F2 | 0x00F4 => format!("channel {ret}"),                        // schannel_create[_ext]
-        0x00E1 | 0x00E2 => (if ret != 0 { "drawn" } else { "no" }).to_string(), // image_draw[_scaled]
+        0x00E1 | 0x00E2 | 0x00EC => (if ret != 0 { "drawn" } else { "no" }).to_string(), // image_draw[_scaled[_ext]]
         _ => return None,
     };
     Some(s)
@@ -5070,6 +5071,47 @@ impl Machine {
                     0
                 }
             }
+            0x00EC => {
+                // glk_image_draw_scaled_ext(win, image, val1, val2, width,
+                // height, imagerule, maxwidth) -> 1 if actually drawn.
+                // Glk 0.7.6 §7.2; selector 0x00EC per cheapglk `gi_dispa.c`
+                // (`{ 0x00EC, glk_image_draw_scaled_ext, "image_draw_scaled_ext" }`)
+                // and the spec's own dispatch-selector list. SQ-1424.
+                if !self.graphics_enabled {
+                    0
+                } else {
+                    let rule = glk::ImageRule { rule: a(6), width: a(4), height: a(5), maxwidth: a(7) };
+                    let cp = self.backend.char_pixels();
+                    match self.glk.window_type(a(0)) {
+                        // Graphics window: ONE-SHOT. Resolve against the
+                        // window's pixel width now (maxwidth ignored) and hand
+                        // the result to the same seam `glk_image_draw_scaled`
+                        // uses, so a host needs no change to support it.
+                        Some(glk::WinType::Graphics) => {
+                            let win_w = self.glk.window_pixel_size(a(0), cp).map(|(w, _)| w).unwrap_or(0);
+                            match self.backend.image_info(a(1)).and_then(|nat| rule.resolve_in_graphics(nat, win_w)) {
+                                Some(size) => {
+                                    self.backend.graphics_draw_image(a(0), a(1), a(2) as i32, a(3) as i32, Some(size))
+                                        as u32
+                                }
+                                // No such image, or a rule word naming no width
+                                // or no height rule — both are "not drawn".
+                                None => 0,
+                            }
+                        }
+                        // Text buffer: the rule is STANDING (§"Graphics in Text
+                        // Buffer Windows"). Hand the RULE to the host, not a
+                        // size, so it can re-resolve on every relayout. `val1`
+                        // is the imagealign; `val2` is unused and must be zero.
+                        Some(glk::WinType::TextBuffer) => {
+                            let win_w = self.glk.window_size(a(0)).map(|(w, _)| w * cp.0).unwrap_or(0);
+                            self.backend.buffer_draw_image_ext(a(0), a(1), a(2), rule, win_w) as u32
+                        }
+                        // Grid/pair/blank/absent windows do not display images.
+                        _ => 0,
+                    }
+                }
+            }
             0x00E8 => {
                 // glk_window_flow_break(win) — block-mode inline images already
                 // break the text flow; nothing to do.
@@ -6213,28 +6255,31 @@ impl Machine {
 
     /// The Glk version this layer implements, reported by
     /// `glk_gestalt(gestalt_Version)` (encoding per Glk spec §1.8: major<<16
-    /// | minor<<8 | sub-minor, so 0.7.5 is `0x0000_0705`).
+    /// | minor<<8 | sub-minor, so 0.7.6 is `0x0000_0706` — the spec states the
+    /// number outright: "The current Glk specification version is 0.7.6, so
+    /// this selector will return 0x00000706").
     ///
-    /// SQ-1416 item 1: this claimed 0.7.6 (`0x0000_0706`) without
-    /// implementing `0x00EC glk_image_draw_scaled_ext` — the one call 0.7.6
-    /// added (Glk-Spec-076.html §7.2/§7.5; selector confirmed against
-    /// cheapglk `gi_dispa.c`, which is the authority since the spec's own
-    /// dispatch-selector table omits it). Declining it rather than
-    /// implementing it: for a `wintype_Graphics` window the resolution is a
-    /// one-shot "compute final (width, height) from `imagerule`, then draw"
-    /// — cheap, and could reuse the existing `graphics_draw_image` seam
-    /// unchanged — but §7.2's `imagerule_WidthRatio` in a `wintype_TextBuffer`
-    /// window is NOT one-shot: "the image width will always be relative to
-    /// the *current* window width. If the text buffer window is resized …
-    /// the image will resize too" — a standing per-image relationship that
-    /// must be re-resolved on every relayout, which is a materially bigger
-    /// feature (new per-image state, wired through window arrangement) than
-    /// "one delegated call". Absent that, claiming 0.7.6 is not honest:
-    /// `0x00EC` falls to the unhandled-selector default (logs a diagnostic,
-    /// returns 0) and `gestalt_DrawImageScale` (24) is unlisted, so it
-    /// already falls to `_ => 0` — both truthful once the version itself
-    /// stops overclaiming.
-    const GLK_VERSION: u32 = 0x0000_0705;
+    /// SQ-1416 item 1 dropped this to 0.7.5, because the version claimed 0.7.6
+    /// without implementing `0x00EC glk_image_draw_scaled_ext` — the one call
+    /// 0.7.6 added. The blocker it recorded was real and is the reason the
+    /// feature took its own quest: for a `wintype_Graphics` window the
+    /// resolution is a one-shot "compute final (width, height) from
+    /// `imagerule`, then draw", which reuses the existing
+    /// `graphics_draw_image` seam unchanged — but §"Graphics in Text Buffer
+    /// Windows" makes `imagerule_WidthRatio` in a `wintype_TextBuffer` window
+    /// NOT one-shot: "the image width will always be relative to the *current*
+    /// window width. If the text buffer window is resized … the image will
+    /// resize too", a standing per-image relationship that must be re-resolved
+    /// on every relayout.
+    ///
+    /// SQ-1424 built exactly that: [`glk::ImageRule`] is the standing value,
+    /// [`glk::GlkBackend::buffer_draw_image_ext`] is the seam that hands it to
+    /// a host rather than a frozen size, and the host re-resolves it against
+    /// the band's CURRENT width every time it lays the transcript out — so a
+    /// terminal resize re-sizes the picture with the text. With `0x00EC`
+    /// handled and `gestalt_DrawImageScale` (24) answered below, 0.7.6 is now
+    /// the honest number.
+    const GLK_VERSION: u32 = 0x0000_0706;
 
     /// Answer a `glk_gestalt` query. Truthful for what 3a-1 implements: output +
     /// Unicode are supported; graphics is supported conditionally (per
@@ -6260,6 +6305,11 @@ impl Machine {
             5 => 1,                 // gestalt_Timer → supported
             6 => self.graphics_enabled as u32,                // gestalt_Graphics
             7 => (self.graphics_enabled && (val == 5 || val == 3)) as u32, // gestalt_DrawImage(wintype): Graphics + TextBuffer (inline images)
+            // gestalt_DrawImageScale(wintype) — "The same, but for the
+            // glk_image_draw_scaled_ext() call" (Glk 0.7.6 §7.2), so it mirrors
+            // gestalt_DrawImage exactly: `0x00EC` is implemented for both the
+            // window types that display images at all. SQ-1424.
+            24 => (self.graphics_enabled && (val == 5 || val == 3)) as u32,
             14 => self.graphics_enabled as u32,               // gestalt_GraphicsTransparency
             8 => self.sound_enabled as u32,  // gestalt_Sound
             9 => self.sound_enabled as u32,  // gestalt_SoundVolume
@@ -10319,13 +10369,17 @@ mod tests {
         body.extend(glk_call(0x05, &[C8(0), C8(0), Zero, C8(0)], Mem16(0x0110))); // gestalt_ext Version
         body.extend(asm::ins(0x120, &[]));
         let m = run_with_ram(body, 0x200, |_| {});
-        // SQ-1416 item 1: 0.7.5, not 0.7.6 — glk_image_draw_scaled_ext (the
-        // one thing 0.7.6 added) is not implemented.
-        assert_eq!(m.mem.read32(0x100).unwrap(), 0x0000_0705, "glk version 0.7.5");
+        // SQ-1416 item 1 dropped this to 0.7.5 because
+        // glk_image_draw_scaled_ext (the one thing 0.7.6 added) was missing;
+        // SQ-1424 implemented it, standing text-buffer ratio and all, so the
+        // number goes back up. The spec fixes the encoding outright: "The
+        // current Glk specification version is 0.7.6, so this selector will
+        // return 0x00000706."
+        assert_eq!(m.mem.read32(0x100).unwrap(), 0x0000_0706, "glk version 0.7.6");
         assert_eq!(m.mem.read32(0x104).unwrap(), 2, "CharOutput = ExactPrint");
         assert_eq!(m.mem.read32(0x108).unwrap(), 1, "Unicode supported");
         assert_eq!(m.mem.read32(0x10C).unwrap(), 1, "LineInput supported (3a-2)");
-        assert_eq!(m.mem.read32(0x110).unwrap(), 0x0000_0705, "gestalt_ext mirrors gestalt");
+        assert_eq!(m.mem.read32(0x110).unwrap(), 0x0000_0706, "gestalt_ext mirrors gestalt");
     }
 
     /// SQ-1416 item 8: `gestalt_CharOutput` is answered from
@@ -10634,7 +10688,7 @@ mod tests {
         assert_eq!(m.mem.read32(0x0110).unwrap(), 1, "one glyph written to arr[0]");
         // A non-CharOutput selector still returns its scalar but leaves the array alone.
         m.mem.write32(0x0110, 0x0000_DEAD).unwrap();
-        assert_eq!(m.glk_dispatch(0x0005, &[0, 0, 0x0110, 1]).unwrap(), 0x0000_0705); // Version
+        assert_eq!(m.glk_dispatch(0x0005, &[0, 0, 0x0110, 1]).unwrap(), 0x0000_0706); // Version (0.7.6, SQ-1424)
         assert_eq!(m.mem.read32(0x0110).unwrap(), 0x0000_DEAD, "version query leaves the array untouched");
     }
 
@@ -12621,7 +12675,7 @@ mod tests {
         body.extend(glk_call(0x04, &[C8(22), C8(0)], Mem16(0x0128)));   // ResourceStream
         body.extend(asm::ins(0x120, &[]));
         let m = run_with_ram(body, 0x200, |_| {});
-        assert_eq!(m.mem.read32(0x100).unwrap(), 0x0000_0705, "Version 0.7.5 (SQ-1416 item 1)");
+        assert_eq!(m.mem.read32(0x100).unwrap(), 0x0000_0706, "Version 0.7.6 (SQ-1424)");
         assert_eq!(m.mem.read32(0x104).unwrap(), 1, "CharInput supported");
         assert_eq!(m.mem.read32(0x108).unwrap(), 1, "LineInput supported");
         assert_eq!(m.mem.read32(0x10C).unwrap(), 2, "CharOutput = ExactPrint");
@@ -12759,6 +12813,139 @@ mod tests {
         // A resnum the backend doesn't consider missing still succeeds.
         let drew_ok = m.glk_dispatch(0x00E1, &[win, 7, 1, 2]).unwrap();
         assert_eq!(drew_ok, 1);
+    }
+
+    /// SQ-1424 — `0x00EC glk_image_draw_scaled_ext` in a GRAPHICS window is
+    /// one-shot: the rule is resolved against the window's pixel width at call
+    /// time and handed to the same `graphics_draw_image` seam
+    /// `glk_image_draw_scaled` uses, so what the host receives is a resolved
+    /// size and nothing else (Glk 0.7.6, §"Graphics in Graphics Windows").
+    #[test]
+    fn draw_scaled_ext_resolves_once_in_a_graphics_window() {
+        let mut m = super::tests::machine_with_glk(&[]);
+        m.graphics_enabled = true;
+        // The backend goes in BEFORE the window opens, so the window is laid
+        // out on the 40-col screen this test is talking about rather than the
+        // default one: a 40-col × 10-row graphics root at 8×16 px → 320 px wide.
+        m.backend = Box::new(
+            glk::TestBackend::with_screen(40, 10).with_char_pixels(8, 16).with_image_info(7, 200, 100),
+        );
+        let win = m.glk_open_window(0, 0, 0, 5, 0);
+        // WidthRatio 50% of a 320px window = 160; AspectRatio 1.0 keeps 2:1 → 80.
+        // maxwidth $8000 would cap at 160 too, but graphics windows ignore it —
+        // set it to something that WOULD bite (25% = 80) to prove it does not.
+        let rule = glk::imagerule::WIDTH_RATIO | glk::imagerule::ASPECT_RATIO;
+        let drew = m
+            .glk_dispatch(0x00EC, &[win, 7, 5, 6, 0x8000, 0x1_0000, rule, 0x4000])
+            .unwrap();
+        assert_eq!(drew, 1, "drawn");
+        let tb = m.backend.as_any().downcast_ref::<glk::TestBackend>().unwrap();
+        assert_eq!(
+            tb.draws(win),
+            vec![(7, 5, 6, Some((160, 80)))],
+            "resolved to half the 320px window width, aspect kept, maxwidth ignored"
+        );
+        assert!(tb.buffer_draws_ext(win).is_empty(), "a graphics window keeps no standing rule");
+    }
+
+    /// SQ-1424 — the same call in a TEXT BUFFER window is STANDING: gvm hands
+    /// the host the RULE, not a size, because §"Graphics in Text Buffer
+    /// Windows" says "the image width will always be relative to the *current*
+    /// window width. If the text buffer window is resized … the image will
+    /// resize too". A host that received a resolved size could not honour that.
+    #[test]
+    fn draw_scaled_ext_hands_a_text_buffer_the_standing_rule() {
+        let mut m = super::tests::machine_with_glk(&[]);
+        m.graphics_enabled = true;
+        m.backend = Box::new(
+            glk::TestBackend::with_screen(40, 10).with_char_pixels(8, 16).with_image_info(7, 200, 100),
+        );
+        let win = m.glk_open_window(0, 0, 0, 3, 0); // wintype_TextBuffer
+        let rule = glk::imagerule::WIDTH_RATIO | glk::imagerule::ASPECT_RATIO;
+        // val1 is the imagealign (1 = InlineUp), val2 unused/zero.
+        let drew = m
+            .glk_dispatch(0x00EC, &[win, 7, 1, 0, 0x8000, 0x1_0000, rule, 0x1_0000])
+            .unwrap();
+        assert_eq!(drew, 1, "drawn");
+        let tb = m.backend.as_any().downcast_ref::<glk::TestBackend>().unwrap();
+        assert!(tb.draws(win).is_empty(), "no resolved-size draw: the size is not settled yet");
+        let recs = tb.buffer_draws_ext(win);
+        assert_eq!(recs.len(), 1, "one standing rule recorded");
+        let (resnum, align, got, win_w) = recs[0];
+        assert_eq!((resnum, align), (7, 1), "resnum and imagealign");
+        assert_eq!(
+            got,
+            glk::ImageRule { rule, width: 0x8000, height: 0x1_0000, maxwidth: 0x1_0000 },
+            "the rule reaches the host verbatim"
+        );
+        assert_eq!(win_w, 320, "40 cols × 8 px — the CURRENT width, for a host with no layout of its own");
+        // And the standing rule answers differently at two widths, which is the
+        // whole behaviour: this is what the host re-runs on every relayout.
+        assert_eq!(got.resolve_in_buffer((200, 100), 320), Some((160, 80)));
+        assert_eq!(got.resolve_in_buffer((200, 100), 640), Some((320, 160)));
+    }
+
+    /// A missing image, an unsupported window type, and a rule word naming no
+    /// width or height rule are all "not drawn" (0), never a diagnostic.
+    #[test]
+    fn draw_scaled_ext_reports_failure_rather_than_faulting() {
+        let mut m = super::tests::machine_with_glk(&[]);
+        m.graphics_enabled = true;
+        let gfx = m.glk_open_window(0, 0, 0, 5, 0);
+        m.backend = Box::new(
+            glk::TestBackend::with_screen(40, 10).with_char_pixels(8, 16).with_image_info(7, 200, 100),
+        );
+        let both = glk::imagerule::WIDTH_ORIG | glk::imagerule::HEIGHT_ORIG;
+        // Unknown resnum → image_info says None.
+        assert_eq!(m.glk_dispatch(0x00EC, &[gfx, 99, 0, 0, 0, 0, both, 0]).unwrap(), 0, "missing image");
+        // A rule word with no HEIGHT rule (the spec: "You must supply one of each").
+        let no_height = glk::imagerule::WIDTH_ORIG;
+        assert_eq!(m.glk_dispatch(0x00EC, &[gfx, 7, 0, 0, 0, 0, no_height, 0]).unwrap(), 0, "no height rule");
+        // A window that does not display images at all.
+        assert_eq!(m.glk_dispatch(0x00EC, &[999, 7, 0, 0, 0, 0, both, 0]).unwrap(), 0, "no such window");
+        assert!(m.diagnostics.is_empty(), "0x00EC must be a HANDLED selector: {:?}", m.diagnostics);
+    }
+
+    /// With graphics off, `0x00EC` no-ops to 0 like every other graphics
+    /// selector — and reaches no backend.
+    #[test]
+    fn draw_scaled_ext_noops_when_graphics_disabled() {
+        let mut m = super::tests::machine_with_glk(&[]);
+        let both = glk::imagerule::WIDTH_ORIG | glk::imagerule::HEIGHT_ORIG;
+        assert_eq!(m.glk_dispatch(0x00EC, &[1, 7, 0, 0, 0, 0, both, 0]).unwrap(), 0);
+        let tb = m.backend.as_any().downcast_ref::<glk::TestBackend>().unwrap();
+        assert_eq!(tb.draws(1), Vec::new());
+        assert!(tb.buffer_draws_ext(1).is_empty());
+    }
+
+    /// SQ-1424 — `gestalt_DrawImageScale` (24) is "The same, but for the
+    /// glk_image_draw_scaled_ext() call", so it answers exactly as
+    /// `gestalt_DrawImage` (7) does: the two window types that display images,
+    /// and only while graphics are enabled.
+    #[test]
+    fn gestalt_draw_image_scale_mirrors_draw_image() {
+        let mut m = super::tests::machine_with_glk(&[]);
+        for wintype in [0u32, 1, 2, 3, 4, 5] {
+            assert_eq!(m.glk_gestalt(24, wintype), 0, "graphics off → unsupported for wintype {wintype}");
+        }
+        m.graphics_enabled = true;
+        for wintype in [3u32, 5] {
+            assert_eq!(m.glk_gestalt(24, wintype), 1, "TextBuffer/Graphics support it (wintype {wintype})");
+        }
+        for wintype in [0u32, 1, 2, 4] {
+            assert_eq!(m.glk_gestalt(24, wintype), 0, "wintype {wintype} displays no images");
+        }
+        // The mirror itself: 24 and 7 agree for every wintype, in both states.
+        for enabled in [false, true] {
+            m.graphics_enabled = enabled;
+            for wintype in 0u32..=5 {
+                assert_eq!(
+                    m.glk_gestalt(24, wintype),
+                    m.glk_gestalt(7, wintype),
+                    "DrawImageScale must mirror DrawImage (wintype {wintype}, graphics {enabled})"
+                );
+            }
+        }
     }
 
     #[test]

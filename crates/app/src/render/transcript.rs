@@ -3391,7 +3391,7 @@ mod tests {
     // ── Inline-image band wrapping ────────────────────────────────────────────
 
     fn dummy_img(w: u32, h: u32, align: crate::inline_image::ImageAlign) -> crate::inline_image::InlineImage {
-        crate::inline_image::InlineImage { pixels: std::sync::Arc::new(image::RgbaImage::new(w, h)), align, scaled: None, margin_px: None }
+        crate::inline_image::InlineImage { pixels: std::sync::Arc::new(image::RgbaImage::new(w, h)), align, scaled: None, margin_px: None, rule: None }
     }
 
     #[test]
@@ -3479,6 +3479,7 @@ mod tests {
             align: crate::inline_image::ImageAlign::MarginLeft,
             scaled: None,
             margin_px,
+            rule: None,
         }
     }
 
@@ -4325,6 +4326,7 @@ mod tests {
             align: crate::inline_image::ImageAlign::MarginLeft,
             scaled: None,
             margin_px: Some(4),
+            rule: None,
         };
         let lines = vec![String::new(), "AAAA".to_string()];
         let kinds = vec![TranscriptKind::Story; 2];

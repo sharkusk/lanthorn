@@ -728,10 +728,15 @@ is tagged with it. The backend maps classes → display attributes (SGR in the C
 Version 0, CharInput 1, LineInput 2, CharOutput 3 (returns CannotPrint 0 /
 ApproxPrint 1 / ExactPrint 2), MouseInput 4, Timer 5, Graphics 6, Unicode 15,
 LineInputEcho 17, LineTerminators 18, DrawImageScale 24, … We report `Version`
-= 0x00000705 (0.7.5, not 0.7.6: `0x00EC glk_image_draw_scaled_ext` is not
-implemented — its `imagerule_WidthRatio` in a `wintype_TextBuffer` window is
-dynamic, re-resolved on every window resize, not a one-shot draw — so
-`DrawImageScale` truthfully answers unsupported too; SQ-1416), `CharInput` = 1,
+= 0x00000706 (0.7.6; SQ-1416 had dropped it to 0.7.5 while
+`0x00EC glk_image_draw_scaled_ext` was unimplemented, and SQ-1424 implemented
+it — including the part that made it its own quest, `imagerule_WidthRatio` in
+a `wintype_TextBuffer` window, which the spec makes STANDING rather than
+one-shot: the rule is stored beside the inline image and re-resolved against
+the window's current width on every relayout, so a resize resizes the picture.
+`DrawImageScale` (24) therefore now mirrors `DrawImage` (7): supported for
+`wintype_Graphics` and `wintype_TextBuffer` whenever graphics are enabled),
+`CharInput` = 1,
 `LineInput` = 1, `CharOutput` answered per code point from
 `GlkBackend::char_output_gestalt` (default: CannotPrint for the eight-bit
 control ranges the spec names, ExactPrint for the rest of Latin-1, ApproxPrint
