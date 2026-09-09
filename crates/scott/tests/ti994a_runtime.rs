@@ -250,13 +250,17 @@ fn a_failed_record_does_not_end_the_chain_walk() {
     assert!(!out.contains("can't do that yet"), "it succeeded: {out:?}");
 }
 
-/// A record whose length byte was zero decodes to an empty opcode stream,
-/// and spec §3.7 is explicit that it is "still a real record, eligible to
-/// match and to run". It can never reach END, so it always fails — which is
-/// observable, because it makes its chain answer "I can't do that yet."
-/// rather than "I don't understand".
+/// A record with a genuinely empty opcode stream can never reach END, so it
+/// always fails — which is observable, because it makes its chain answer "I
+/// can't do that yet." rather than "I don't understand". This is a VM
+/// boundary case, not what the loader produces for a real link-0 record: a
+/// link (byte 1) of zero means only that no record follows, and that
+/// record's own stream begins at byte 2 like any other's and is recovered by
+/// walking arities to its own END — see `ti994a.rs`'s
+/// `a_link_zero_records_real_opcode_stream_runs_through_the_vm`, which is the
+/// case for that.
 #[test]
-fn a_zero_length_terminator_record_still_matches_and_still_fails() {
+fn a_record_with_a_truly_empty_opcode_stream_still_matches_and_still_fails() {
     let script = verb20(vec![rec(0, &[])]);
     let out = play(world(script), &["rub lamp"]);
     assert!(out.contains("I can't do that yet."), "{out:?}");

@@ -525,3 +525,184 @@ fn no_specimen_has_an_undecodable_or_runaway_record() {
         }
     }
 }
+
+/// The total bytes opcode `op` occupies in a spec §3.7 stream — itself plus
+/// its operands — written fresh from the table rather than reusing the
+/// loader's own arity function, so this check cannot pass by construction.
+/// `None` for the two ways a walk stops: 255 (end of record) and the eight
+/// unassigned opcodes 202-211/213 (spec §11), whose operand counts are
+/// unknown.
+fn spec_opcode_len(op: u8) -> Option<usize> {
+    match op {
+        255 | 202..=211 | 213 => None,
+        195 | 196 => Some(1),         // conditions with no operand
+        183..=201 => Some(2),         // every other condition
+        0..=182 => Some(1),           // print-message
+        230 | 236 | 238 => Some(3),   // two-operand commands
+        218..=222 | 225 | 226 | 237 | 245..=247 | 249 | 250 => Some(2), // one-operand commands
+        _ => Some(1),                 // the remaining zero-operand commands
+    }
+}
+
+/// Walks `ops` from its first byte using [`spec_opcode_len`] and reports
+/// where it stops: `Ok(())` only if that is opcode 255 sitting at the very
+/// last byte — i.e. the walk consumes the whole slice and lands on its own
+/// terminator, with nothing left over and nothing missing.
+fn walk_terminates_cleanly(ops: &[u8]) -> Result<(), String> {
+    let mut pos = 0usize;
+    loop {
+        let Some(&op) = ops.get(pos) else {
+            return Err(format!("ran off the end at {pos} of {} bytes without a 255", ops.len()));
+        };
+        match spec_opcode_len(op) {
+            None if op == 255 => {
+                return if pos + 1 == ops.len() {
+                    Ok(())
+                } else {
+                    Err(format!(
+                        "255 at {pos} is not the record's last byte (len {})",
+                        ops.len()
+                    ))
+                };
+            }
+            None => return Err(format!("unassigned opcode {op} at {pos}")),
+            Some(n) => pos += n,
+        }
+    }
+}
+
+/// Spec §3.7's own claim about the twelve specimens, checked rather than
+/// trusted: "that walk terminates on a 255 every time, and for every record
+/// with a non-zero link it lands on exactly the byte the link predicts."
+///
+/// `Ti99Record::ops` already IS the link-bounded slice for a non-zero-link
+/// record and the arity-walked slice for a link-0 one (`ti994a::read_chain`),
+/// so re-walking each record's own `ops` from position 0 and requiring it to
+/// consume the whole slice and land on 255 checks both halves of the claim
+/// at once: a record whose stored extent (link or walk) does not end exactly
+/// where an independent arity walk says it should fails this, whichever way
+/// its extent was determined.
+///
+/// A link-0 record is exactly the last record of a non-empty chain — every
+/// record before it in a chain has the non-zero link that put it there, and
+/// the chain-final record is reached only by running out of link — so the
+/// count of link-0 records is the count of non-empty chains (each verb's
+/// chain, plus the automatic chain), not a fact this file can read off
+/// `Ti99Record` directly.
+#[test]
+fn every_records_opcode_walk_reaches_its_own_255_and_agrees_with_its_link() {
+    if twins(1).is_none() {
+        skip("the record-geometry corpus check");
+        return;
+    }
+    let mut explicit = 0usize;
+    let mut automatic = 0usize;
+    let mut link_zero = 0usize;
+    let mut failures = Vec::new();
+    for (i, title) in TITLES.iter().enumerate() {
+        let n = i + 1;
+        let Some((ti_bytes, _)) = twins(n) else { continue };
+        let db = Database::parse(&ti_bytes).expect("loads");
+        let script = db.ti99.as_ref().unwrap();
+        for (v, chain) in script.verb_chains.iter().enumerate() {
+            explicit += chain.len();
+            if !chain.is_empty() {
+                link_zero += 1; // the chain's last record
+            }
+            for (r, rec) in chain.iter().enumerate() {
+                if let Err(e) = walk_terminates_cleanly(&rec.ops) {
+                    failures.push(format!("adv{n:02} ({title}) verb {v} record {r}: {e}"));
+                }
+            }
+        }
+        automatic += script.automatic.len();
+        if !script.automatic.is_empty() {
+            link_zero += 1;
+        }
+        for (r, rec) in script.automatic.iter().enumerate() {
+            if let Err(e) = walk_terminates_cleanly(&rec.ops) {
+                failures.push(format!("adv{n:02} ({title}) automatic record {r}: {e}"));
+            }
+        }
+    }
+    eprintln!(
+        "\nTI-99/4A record geometry, over the twelve specimens: \
+         {explicit} explicit records, {automatic} automatic records, {link_zero} link-0."
+    );
+    assert!(
+        failures.is_empty(),
+        "record geometry check failed for {} record(s):\n{}",
+        failures.len(),
+        failures.join("\n")
+    );
+    // Pinned as a non-vacuity guard (spec Appendix A): reproduces the exact
+    // count spec §3.7 measured over this same corpus. A change here means
+    // either the corpus changed or a record is being read differently.
+    assert_eq!((explicit, automatic, link_zero), (1870, 378, 448));
+}
+
+/// Spec §3.7/§3.8's worked example, checked against the actual specimen
+/// rather than the bytes the spec quotes by hand: Adventureland's
+/// `INVENTORY`, `SCORE` and `QUIT` are each a link-0 record (`INV` and `SCO`
+/// a single one; `QUI` prints the score first) with no interpreter built-in
+/// behind them (spec §9.1's three built-ins are go, take and drop only), so
+/// reading byte 1 as a length instead of a link makes all three answer
+/// "I can't do that yet." — this is the regression test for that.
+#[test]
+fn adventurelands_inventory_score_and_quit_answer_the_verb_not_a_refusal() {
+    let Some(dir) = dir_of(
+        "SCOTT_DIALECT_FIXTURES",
+        &["stories/scott-dialects", "../../stories/scott-dialects"],
+    ) else {
+        skip("Adventureland's INVENTORY/SCORE/QUIT smoke");
+        return;
+    };
+    let path = dir.join("ti99").join("adv01.fiad");
+    let Ok(ti_bytes) = std::fs::read(&path) else {
+        skip("Adventureland's INVENTORY/SCORE/QUIT smoke");
+        return;
+    };
+    let db = Database::parse(&ti_bytes).expect("adv01.fiad must load");
+    let mut vm = Vm::new_full(db, false, 7, Options::new());
+    assert_eq!(vm.step(), StepResult::NeedLine);
+    let _ = vm.take_output();
+
+    vm.supply_line("inventory");
+    vm.step();
+    let out = vm.take_output();
+    assert!(
+        !out.contains("I can't do that yet."),
+        "INVENTORY must not read as a failed chain: {out:?}"
+    );
+    assert!(
+        out.starts_with("I am carrying : "),
+        "INVENTORY must answer with the carried-items line \
+         (\"I am carrying : \" ... or \"Nothing. \" per spec §3.7): {out:?}"
+    );
+
+    vm.supply_line("score");
+    vm.step();
+    let out = vm.take_output();
+    assert!(
+        !out.contains("I can't do that yet."),
+        "SCORE must not read as a failed chain: {out:?}"
+    );
+    assert!(out.contains("treasures"), "SCORE must print the score line: {out:?}");
+
+    // Do not actually confirm the quit — QUIT's own record (spec §3.8:
+    // `00 00 E8 E7 FF`, print the score then end the game immediately)
+    // prints the score and the "Play again?" prompt before this harness
+    // could answer any confirmation, so asserting on that first response is
+    // enough without driving a second line into it.
+    vm.supply_line("quit");
+    vm.step();
+    let out = vm.take_output();
+    assert!(
+        !out.contains("I can't do that yet."),
+        "QUIT must not read as a failed chain: {out:?}"
+    );
+    assert!(
+        out.contains("This adventure is over. Play again?"),
+        "QUIT must reach its own end-the-game opcode: {out:?}"
+    );
+}

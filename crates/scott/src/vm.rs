@@ -183,7 +183,12 @@ pub struct Vm {
 /// operand except 195 and 196, which take none; 202-211 and 213 are
 /// unassigned and their counts are unknown, which is why a record that
 /// meets one is abandoned rather than stepped over.
-fn ti99_command_operands(op: u8) -> usize {
+///
+/// `pub(crate)` so `ti994a::read_chain` can reuse this as the one source of
+/// truth for command arities when it has to recover a link-0 record's extent
+/// by walking the opcode stream (spec §3.7); see that module's
+/// `walk_ti99_ops`.
+pub(crate) fn ti99_command_operands(op: u8) -> usize {
     match op {
         218..=222 | 225 | 226 | 237 | 245..=247 | 249 | 250 => 1,
         230 | 236 | 238 => 2,
