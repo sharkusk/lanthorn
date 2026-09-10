@@ -2317,6 +2317,128 @@ impl ScottPictureResolution {
     }
 }
 
+/// The four picture facts a `ScottSession` needs from outside itself, bundled
+/// into one value (SQ-1485).
+///
+/// `pict_blorb`, `char_px`, `resolution` and `saga_pictures` always travel
+/// together: `startup.rs` resolves all four before the launch session boots,
+/// `reset.rs` resolves all four again before `@restart` rebuilds one, and both
+/// read them from the same places (the story path, the terminal's Picker, the
+/// per-game sidecar, the mount). Before this type they were four positional
+/// tail parameters of `ScottSession::new_with_options`, which is exactly the
+/// shape CLAUDE.md's "Refactoring policy" warns about: a hand-maintained
+/// invariant across two files that a caller supplying a subset, or the two
+/// callers drifting on HOW one fact is resolved, would not be caught by the
+/// compiler. `reset.rs` re-deriving `saga_pictures` by hand (`crate::hints
+/// ::saga_picture_files`) rather than reading it off a live mount, the way
+/// `startup.rs` can, was exactly that drift risk — [`Self::resolve`] is now
+/// the one function both call.
+#[derive(Debug)]
+pub struct ScottPictureSources {
+    /// The game's own Blorb `Pict` resources, for a `.blb` graphics container
+    /// (SQ-0402). `None` for a plain `.dat`, and for every non-Blorb release
+    /// below whichever of `saga_pictures` or nothing at all applies instead.
+    pub pict_blorb: Option<blorb::Blorb>,
+    /// The terminal's cell size in device pixels. Only the Commodore 64
+    /// *Mysterious Adventures* vector artwork reads it (SQ-1467) — the picture
+    /// band is a fixed row count, and the cell height is the other half of how
+    /// many device pixels a room picture is drawn into.
+    pub char_px: (u32, u32),
+    /// The player's HiRes/Original choice for the C64 vector artwork
+    /// (SQ-1473). Meaningless, and unread, for every other picture source.
+    pub resolution: ScottPictureResolution,
+    /// A US S.A.G.A. release's own family-C/D/E picture files, `(name,
+    /// record)`, read off the same container the database came from (spec
+    /// §8.3/§10.6/§8.5, SQ-1475/SQ-1476/SQ-1477). Empty for every other
+    /// dialect, and for a S.A.G.A. database opened with no container to carry
+    /// them.
+    pub saga_pictures: Vec<(String, Vec<u8>)>,
+}
+
+impl ScottPictureSources {
+    /// No pictures at all, at [`ScottSession::FALLBACK_CHAR_PX`] and the
+    /// default resolution — what `ScottSession::new`/`new_with_trace` build
+    /// for a caller with no pictures to hand over, and the starting point for
+    /// a test fixture that only needs to set one or two of the four facts
+    /// (`with_char_px`, `with_resolution`, `with_saga_pictures`,
+    /// `with_pict_blorb`).
+    pub fn none() -> Self {
+        Self {
+            pict_blorb: None,
+            char_px: crate::scott_session::ScottSession::FALLBACK_CHAR_PX,
+            resolution: ScottPictureResolution::default(),
+            saga_pictures: Vec::new(),
+        }
+    }
+
+    /// Set the Blorb `Pict` source (SQ-0402).
+    pub fn with_pict_blorb(mut self, pict_blorb: Option<blorb::Blorb>) -> Self {
+        self.pict_blorb = pict_blorb;
+        self
+    }
+
+    /// Set the terminal cell size a C64 vector decode is drawn at (SQ-1467).
+    pub fn with_char_px(mut self, char_px: (u32, u32)) -> Self {
+        self.char_px = char_px;
+        self
+    }
+
+    /// Set the C64 vector artwork's resolution choice (SQ-1473).
+    pub fn with_resolution(mut self, resolution: ScottPictureResolution) -> Self {
+        self.resolution = resolution;
+        self
+    }
+
+    /// Set a US S.A.G.A. release's own picture files (SQ-1475).
+    pub fn with_saga_pictures(mut self, saga_pictures: Vec<(String, Vec<u8>)>) -> Self {
+        self.saga_pictures = saga_pictures;
+        self
+    }
+
+    /// Resolve all four facts the way `startup.rs` and `reset.rs` do (SQ-1485)
+    /// — the one function both call, so they cannot drift on any of the four.
+    ///
+    /// `pict_blorb` arrives already resolved (`resolve_pict_blorb`, `main.rs`)
+    /// rather than being resolved in here: it is binary-crate-only (it reaches
+    /// into `picker_ui`'s zip-aware tiers), and this type lives in the `app`
+    /// library crate alongside every other Scott session type. `picker` is
+    /// likewise handed in — the launch/`@restart` Picker, or `None` when there
+    /// is no terminal to ask (the fallback cell size below applies).
+    ///
+    /// `saga_pictures` is re-derived from `story_path`/`bytes` on every call,
+    /// through the same [`crate::hints::saga_picture_files`] a live mount's
+    /// `MountedStory::saga_pictures` is itself built from — so a caller
+    /// holding a fresh mount (`startup.rs`) and a caller rebuilding from
+    /// stored story bytes alone (`reset.rs`) resolve the identical set, from
+    /// one function, rather than the two hand-kept-in-step call sites this
+    /// type replaces.
+    pub fn resolve(
+        story_path: &std::path::Path,
+        bytes: &[u8],
+        game_dir: &std::path::Path,
+        pict_blorb: Option<blorb::Blorb>,
+        picker: Option<&ratatui_image::picker::Picker>,
+        resolution_override: Option<ScottPictureResolution>,
+    ) -> Self {
+        let char_px = picker
+            .map(|p| {
+                let f = p.font_size();
+                (f.width as u32, f.height as u32)
+            })
+            .unwrap_or(crate::scott_session::ScottSession::FALLBACK_CHAR_PX);
+        let resolution = resolution_override
+            .or_else(|| crate::styles::read_per_game_scott_picture_resolution(game_dir))
+            .unwrap_or_default();
+        // SQ-1476/SQ-1477: `saga_picture_files` itself gates on the container
+        // (a zip's family-E entries are found by content, not by platform), so
+        // handing it `None` for a database `detect_saga_us` cannot classify
+        // (the MS-DOS reference-text format) is exactly what `reset.rs`'s own
+        // hand-written call already did.
+        let saga_pictures = crate::hints::saga_picture_files(story_path, scott::detect_saga_us(bytes));
+        Self { pict_blorb, char_px, resolution, saga_pictures }
+    }
+}
+
 /// Which platform's *Mysterious Adventures* release a family-B display list
 /// (`scott::c64::PictureList`, §8.2) came off — the two platforms store the
 /// IDENTICAL opcode streams and canvas, and the palette a stored index

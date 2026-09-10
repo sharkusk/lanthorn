@@ -42,13 +42,10 @@ fn hulk_session() -> Option<ScottSession> {
     Some(
         ScottSession::new_with_options(
             bytes,
-            None,
             false,
             None,
             scott::Options::default(),
-            ScottSession::FALLBACK_CHAR_PX,
-            app::graphics::ScottPictureResolution::default(),
-            mounted.saga_pictures,
+            app::graphics::ScottPictureSources::none().with_saga_pictures(mounted.saga_pictures),
         )
         .expect("the Hulk boots off its own release disk"),
     )
@@ -291,13 +288,10 @@ fn an_atari_saga_side_a_reports_no_pictures_because_the_sides_are_not_paired() {
     );
     let session = ScottSession::new_with_options(
         bytes,
-        None,
         false,
         None,
         scott::Options::default(),
-        ScottSession::FALLBACK_CHAR_PX,
-        app::graphics::ScottPictureResolution::default(),
-        mounted.saga_pictures,
+        app::graphics::ScottPictureSources::none().with_saga_pictures(mounted.saga_pictures),
     )
     .expect("Adventureland boots off its own side A");
     assert!(picture_band(&session.screen()).is_none(), "no band without the picture side");
@@ -396,13 +390,10 @@ fn adventureland_apple_session() -> Option<ScottSession> {
     Some(
         ScottSession::new_with_options(
             bytes,
-            None,
             false,
             None,
             scott::Options::default(),
-            ScottSession::FALLBACK_CHAR_PX,
-            app::graphics::ScottPictureResolution::default(),
-            mounted.saga_pictures,
+            app::graphics::ScottPictureSources::none().with_saga_pictures(mounted.saga_pictures),
         )
         .expect("Adventureland boots off its own release disks"),
     )
@@ -536,13 +527,10 @@ fn a_scrambled_apple_ii_release_reports_no_pictures() {
     );
     let session = ScottSession::new_with_options(
         bytes,
-        None,
         false,
         None,
         scott::Options::default(),
-        ScottSession::FALLBACK_CHAR_PX,
-        app::graphics::ScottPictureResolution::default(),
-        mounted.saga_pictures,
+        app::graphics::ScottPictureSources::none().with_saga_pictures(mounted.saga_pictures),
     )
     .expect("The Count boots off its own boot side");
     assert!(picture_band(&session.screen()).is_none(), "no band without readable artwork");

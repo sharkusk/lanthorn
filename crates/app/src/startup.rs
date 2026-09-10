@@ -924,7 +924,12 @@ pub(crate) fn boot_story(
             std::process::exit(1);
         }
     };
-    let hints::MountedStory { story: loaded, disk_image, saga_pictures } = mounted;
+    // `saga_pictures` is deliberately not read off the mount here: a Scott
+    // story's `ScottPictureSources::resolve` (SQ-1485) re-derives the same
+    // set from `story_path`/the story bytes, the one function `reset.rs`'s
+    // Scott arm calls too, so both resolve it the same way rather than one
+    // reading it off a live mount and the other re-deriving it by hand.
+    let hints::MountedStory { story: loaded, disk_image, saga_pictures: _ } = mounted;
     // Raw executable bytes (for the IFID / map-dir key), independent of engine.
     let story_bytes = loaded.bytes().to_vec();
     // Read off `loaded` before it is consumed into a session below: which bundled
@@ -1634,43 +1639,36 @@ pub(crate) fn boot_story(
                 }
             }
         }
-        app::hints::LoadedStory::Scott(bytes) => match app::scott_session::ScottSession::new_with_options(
-            bytes,
-            resolve_pict_blorb(&story_path, cfg.images),
-            // `--debug` (SQ-0449/SQ-0464): trace from boot so the opening
-            // occurrence pass (run inside the VM constructor) is captured.
-            cli.debug,
-            Some(random_seed),
-            // ScottFree's `-y`/`-s`/`-t`/`-p` options, this story's own
-            // per-game choice (SQ-1413).
-            app::scott_session::resolve_options(&game_dir),
-            // The terminal's own cell size, before `glk_pixel_scale` divides
-            // it: a Scott session reads it only to choose how finely to draw
-            // the C64 releases' vector artwork (SQ-1467), which is a question
-            // about device pixels, not about the coordinate space a Glk game
-            // is told it has.
-            game_picker
-                .as_ref()
-                .map(|p| {
-                    let f = p.font_size();
-                    (f.width as u32, f.height as u32)
-                })
-                .unwrap_or(app::scott_session::ScottSession::FALLBACK_CHAR_PX),
-            // SQ-1473: this launch's choice, else this story's own sidecar,
-            // else the default (hi-res).
-            cfg.scott_picture_resolution_override
-                .or_else(|| app::styles::read_per_game_scott_picture_resolution(&game_dir))
-                .unwrap_or_default(),
-            // SQ-1475: the family-C picture files the mount above read off the
-            // same release disk, empty for everything else.
-            saga_pictures,
-        ) {
-            Ok(s) => Box::new(s),
-            Err(e) => {
-                eprintln!("lanthorn: cannot load Scott Adams story: {e}");
-                std::process::exit(1);
+        app::hints::LoadedStory::Scott(bytes) => {
+            // The four picture facts, resolved the one way both a launch and
+            // an `@restart` resolve them (SQ-1485, `reset.rs`'s Scott arm is
+            // the other caller).
+            let pictures = app::graphics::ScottPictureSources::resolve(
+                &story_path,
+                &bytes,
+                &game_dir,
+                resolve_pict_blorb(&story_path, cfg.images),
+                game_picker.as_ref(),
+                cfg.scott_picture_resolution_override,
+            );
+            match app::scott_session::ScottSession::new_with_options(
+                bytes,
+                // `--debug` (SQ-0449/SQ-0464): trace from boot so the opening
+                // occurrence pass (run inside the VM constructor) is captured.
+                cli.debug,
+                Some(random_seed),
+                // ScottFree's `-y`/`-s`/`-t`/`-p` options, this story's own
+                // per-game choice (SQ-1413).
+                app::scott_session::resolve_options(&game_dir),
+                pictures,
+            ) {
+                Ok(s) => Box::new(s),
+                Err(e) => {
+                    eprintln!("lanthorn: cannot load Scott Adams story: {e}");
+                    std::process::exit(1);
+                }
             }
-        },
+        }
     };
     // Strip the game's own inline read prompt only when the dedicated command
     // bar is on (SQ-0264); otherwise inline-prompt mode keeps the game's ">".

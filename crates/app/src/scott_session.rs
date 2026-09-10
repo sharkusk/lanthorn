@@ -195,15 +195,13 @@ impl ScottSession {
     ) -> Result<ScottSession, String> {
         ScottSession::new_with_options(
             bytes,
-            pict_blorb,
             trace,
             random_seed,
             scott::Options::default(),
-            ScottSession::FALLBACK_CHAR_PX,
-            crate::graphics::ScottPictureResolution::default(),
             // No container was mounted on this path, so there are no family-C
-            // picture files to hand over (SQ-1475).
-            Vec::new(),
+            // picture files to hand over (SQ-1475) — `none()` plus the one
+            // fact this caller does have.
+            crate::graphics::ScottPictureSources::none().with_pict_blorb(pict_blorb),
         )
     }
 
@@ -221,41 +219,32 @@ impl ScottSession {
     /// (see `scott::Presentation`'s doc); only `scott-cli` lets `-t` switch
     /// the layout too.
     ///
-    /// `char_px` is the terminal's cell size in device pixels (the launcher's
-    /// own `game_picker.font_size()`, [`ScottSession::FALLBACK_CHAR_PX`] when
-    /// there is no image protocol to ask). Nothing about the VM reads it; the
-    /// C64 Mysterious Adventures' vector artwork does, because the picture
-    /// band is a fixed row count and the cell height is the other half of how
-    /// many device pixels a room picture will be drawn into (SQ-1467, see
-    /// `crate::graphics::scott_c64_scale`). It is a constructor argument for
-    /// the same reason `options` is: the artwork is decoded here, once.
-    ///
-    /// `picture_resolution` is the player's choice of how to draw the C64
-    /// vector artwork — the launch-options dialog's "Picture resolution" row,
-    /// this story's own per-game sidecar, or the default (SQ-1473). Meaningless
-    /// (and unread) for every other Scott story: a Blorb's pictures are
-    /// pre-rendered bitmaps with no second resolution to choose.
-    ///
-    /// `saga_pictures` is every family-C picture file the CONTAINER held
-    /// beside a US S.A.G.A. database (spec §8.3, SQ-1475), `(name, record)` as
-    /// `crate::hints::load_mounted_story_full` read them off the mounted disk.
-    /// It has to arrive from outside for the same reason `pict_blorb` does:
-    /// the pictures are separate files on the release disk (§12.10, "pictures
-    /// live in separate files on the disk, one per picture, identified by
-    /// filename") and the mount does not outlive the load. Empty for a story
-    /// opened from a bare extracted database, which then simply has no
-    /// pictures — and for every non-S.A.G.A. story, which has none of this
-    /// shape.
+    /// `pictures` bundles the four picture facts a session needs from outside
+    /// itself — the game's own Blorb `Pict` container, the terminal's cell
+    /// size (only the C64 Mysterious Adventures vector artwork reads it,
+    /// SQ-1467), the player's HiRes/Original choice for that artwork
+    /// (SQ-1473), and a US S.A.G.A. release's own family-C/D/E picture files
+    /// off its container (SQ-1475/SQ-1476/SQ-1477) — into one
+    /// [`crate::graphics::ScottPictureSources`] value (SQ-1485). They travel
+    /// together because they are resolved together, once, in
+    /// [`crate::graphics::ScottPictureSources::resolve`] — `startup.rs` and
+    /// `reset.rs` both call it rather than each resolving (and risking
+    /// drifting on) the four facts by hand. See that type's doc for the full
+    /// per-field detail; `crate::graphics::ScottPictureSources::none()` is the
+    /// no-pictures default this and [`ScottSession::new_with_trace`] use.
     pub fn new_with_options(
         bytes: Vec<u8>,
-        pict_blorb: Option<blorb::Blorb>,
         trace: bool,
         random_seed: Option<u32>,
         options: scott::Options,
-        char_px: (u32, u32),
-        picture_resolution: crate::graphics::ScottPictureResolution,
-        saga_pictures: Vec<(String, Vec<u8>)>,
+        pictures: crate::graphics::ScottPictureSources,
     ) -> Result<ScottSession, String> {
+        let crate::graphics::ScottPictureSources {
+            pict_blorb,
+            char_px,
+            resolution: picture_resolution,
+            saga_pictures,
+        } = pictures;
         // `Database::parse` takes raw bytes (SQ-1412), so a Latin-1 or
         // otherwise non-UTF-8 `.dat` loads here instead of being rejected by
         // a UTF-8 check before it ever reached the parser.
@@ -1151,13 +1140,12 @@ mod tests {
     ) -> ScottSession {
         ScottSession::new_with_options(
             bytes,
-            None,
             false,
             None,
             scott::Options::default(),
-            char_px,
-            resolution,
-            Vec::new(),
+            crate::graphics::ScottPictureSources::none()
+                .with_char_px(char_px)
+                .with_resolution(resolution),
         )
         .expect("BATON.prg loads")
     }
@@ -1398,13 +1386,10 @@ mod tests {
         Some(
             ScottSession::new_with_options(
                 bytes,
-                None,
                 false,
                 None,
                 scott::Options::default(),
-                ScottSession::FALLBACK_CHAR_PX,
-                crate::graphics::ScottPictureResolution::default(),
-                pictures,
+                crate::graphics::ScottPictureSources::none().with_saga_pictures(pictures),
             )
             .expect("the Hulk boots off its own release disk"),
         )
@@ -1480,13 +1465,11 @@ mod tests {
         Some(
             ScottSession::new_with_options(
                 bytes,
-                None,
                 false,
                 None,
                 scott::Options::default(),
-                ScottSession::FALLBACK_CHAR_PX,
-                crate::graphics::ScottPictureResolution::default(),
-                mounted.saga_pictures,
+                crate::graphics::ScottPictureSources::none()
+                    .with_saga_pictures(mounted.saga_pictures),
             )
             .expect("the MS-DOS Hulk boots out of its own zip"),
         )
@@ -1695,13 +1678,10 @@ mod tests {
         Some(
             ScottSession::new_with_options(
                 bytes,
-                None,
                 false,
                 None,
                 scott::Options::default(),
-                ScottSession::FALLBACK_CHAR_PX,
-                crate::graphics::ScottPictureResolution::default(),
-                pictures,
+                crate::graphics::ScottPictureSources::none().with_saga_pictures(pictures),
             )
             .expect("Adventureland boots off its own release disk"),
         )

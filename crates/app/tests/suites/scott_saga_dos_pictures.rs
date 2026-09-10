@@ -102,13 +102,10 @@ fn hulk_session() -> Option<ScottSession> {
     Some(
         ScottSession::new_with_options(
             bytes,
-            None,
             false,
             None,
             scott::Options::default(),
-            ScottSession::FALLBACK_CHAR_PX,
-            app::graphics::ScottPictureResolution::default(),
-            mounted.saga_pictures,
+            app::graphics::ScottPictureSources::none().with_saga_pictures(mounted.saga_pictures),
         )
         .expect("the MS-DOS Hulk boots out of its own zip"),
     )

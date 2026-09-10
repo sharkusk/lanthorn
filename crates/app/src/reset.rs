@@ -286,50 +286,34 @@ pub(crate) fn reset_game(
             })
         }
         Ok(app::hints::LoadedStory::Scott(bytes)) => {
-            // SQ-1476: which naming rule finds a disk release's artwork is
-            // its platform (and `None` is the MS-DOS zip, whose database
-            // carries no platform to detect), and `bytes` is about to be
-            // moved into the boot — so the walk happens first.
-            let saga_pictures =
-                app::hints::saga_picture_files(story_path, scott::detect_saga_us(&bytes));
+            // The four picture facts, resolved the one way both a launch and
+            // an `@restart` resolve them (SQ-1485, `startup.rs`'s Scott arm
+            // is the other caller). `story_bytes` above is the DATABASE, not
+            // the container, so a restart cannot recover a S.A.G.A. release's
+            // picture files from it — `resolve` re-reads them off the same
+            // container the launch opened (the release disk, family C §8.3;
+            // the Apple II release's companion side, family D, SQ-1476; or
+            // the MS-DOS release's zip, family E §8.5, SQ-1477) rather than
+            // carrying them in app state for the life of a session to save
+            // one re-read of a 175 KB floppy.
+            let pictures = app::graphics::ScottPictureSources::resolve(
+                story_path,
+                &bytes,
+                game_dir,
+                resolve_pict_blorb(story_path, state.config.images),
+                state.game_picker.as_ref(),
+                state.config.scott_picture_resolution_override,
+            );
             app::scott_session::ScottSession::new_with_options(
-            bytes,
-            resolve_pict_blorb(story_path, state.config.images),
-            false,
-            // Re-seeded exactly as the launch was (SQ-0811) — see the zvm arm.
-            Some(state.config.effective_random_seed()),
-            // Re-resolved exactly as the launch was (SQ-1413).
-            app::scott_session::resolve_options(game_dir),
-            // …and the same cell size the launch read, so a restart draws the
-            // C64 vector artwork at the resolution the launch did (SQ-1467).
-            state
-                .game_picker
-                .as_ref()
-                .map(|p| {
-                    let f = p.font_size();
-                    (f.width as u32, f.height as u32)
-                })
-                .unwrap_or(app::scott_session::ScottSession::FALLBACK_CHAR_PX),
-            // SQ-1473: same choice the launch made — this session's override,
-            // else the sidecar, else the default (hi-res).
-            state
-                .config
-                .scott_picture_resolution_override
-                .or_else(|| app::styles::read_per_game_scott_picture_resolution(game_dir))
-                .unwrap_or_default(),
-            // SQ-1475: re-read off the same container the launch opened —
-            // the release disk (family C, §8.3), the Apple II release's two
-            // sides (family D, SQ-1476) or, since SQ-1477, the MS-DOS
-            // release's zip (family E, §8.5). `story_bytes` above is the
-            // DATABASE, not the container, so a restart cannot recover the
-            // picture files from it — and carrying seventy records in app
-            // state for the life of a session to save one 175 KB floppy read
-            // is the wrong trade. Empty for every path that is neither a disk
-            // image nor a zip, so no other engine or release pays for this
-            // line.
-            saga_pictures,
-        )
-        .map(|new_session| {
+                bytes,
+                false,
+                // Re-seeded exactly as the launch was (SQ-0811) — see the zvm arm.
+                Some(state.config.effective_random_seed()),
+                // Re-resolved exactly as the launch was (SQ-1413).
+                app::scott_session::resolve_options(game_dir),
+                pictures,
+            )
+            .map(|new_session| {
                 *session
                     .as_any_mut()
                     .downcast_mut::<app::scott_session::ScottSession>()
