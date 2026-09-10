@@ -457,14 +457,15 @@ fn the_apple_ii_band_places_identically_under_halfblocks_and_kitty() {
     // pixels — about 10 cells — centred in the sixteen the band offers.
     //
     // What is measured is the INKED bounding box, not the placement rect:
-    // `touched_rect` ignores a cell left at the letterbox colour, and family D
-    // is line art on black, so its outermost rows are background and are not
-    // counted. That makes this pin strictly stronger than a placement pin — it
-    // fails if the drawing moves OR if it changes — and it is why the number is
-    // 8 rows rather than the ~10 the aspect alone would give. Family C's
-    // 280x160 lands at `Rect::new(0, 3, 30, 9)`: a different canvas, a
-    // different rect, which is exactly what should happen.
-    assert_eq!(placed, Rect::new(0, 2, 30, 8), "family D's 280x192 fitted into the band");
+    // `touched_rect` ignores a cell left at the letterbox colour, so a row of
+    // the picture that happens to be black is not counted. That makes this pin
+    // strictly stronger than a placement pin — it fails if the drawing moves OR
+    // if it changes. SQ-1489 moved it from 8 rows to 11: the room's ground is
+    // painted orange now rather than left as black line art, so three more
+    // rows of the fitted rect carry colour. Family C's 280x160 lands at
+    // `Rect::new(0, 3, 30, 9)`: a different canvas, a different rect, which is
+    // exactly what should happen.
+    assert_eq!(placed, Rect::new(0, 2, 30, 11), "family D's 280x192 fitted into the band");
 
     let kitty = kitty_picker(10, 20);
     let placed_kitty =
@@ -485,11 +486,21 @@ fn the_apple_ii_opening_room_is_a_drawing_and_not_a_flat_fill() {
         *counts.entry((p.0[0], p.0[1], p.0[2])).or_default() += 1;
         assert_eq!(p.0[3], 255, "family D carries no transparent index");
     }
-    assert_eq!(counts.len(), 2, "line art: ink and ground, got {counts:?}");
-    let ink = counts[&scott::apple_pictures::INK];
+    for rgb in counts.keys() {
+        assert!(
+            scott::apple_pictures::PALETTE.contains(rgb),
+            "{rgb:?} is not one of the six hi-res colours"
+        );
+    }
+    // SQ-1489: a coloured page, not a two-tone line drawing. The opening room
+    // is an orange forest floor under a green canopy, so no single colour owns
+    // the canvas and at least five of the six are present.
+    assert!(counts.len() >= 5, "only {} colours on the canvas, got {counts:?}", counts.len());
     let total: usize = counts.values().sum();
-    assert!(ink > 500, "only {ink} inked pixels of {total}, which is not a drawing");
-    assert!(ink * 2 < total, "the ink covers half the canvas — {ink}/{total} looks like a fill");
+    let widest = *counts.values().max().expect("some pixels");
+    assert!(widest * 10 < total * 9, "one colour covers {widest}/{total}: this is a flat fill");
+    let green = counts[&scott::apple_pictures::PALETTE[2]];
+    assert!(green > 2_000, "only {green} green pixels of {total}: the canopy is missing");
 }
 
 /// One of the three **scrambled** Apple II releases (§7.4's string test, §10.6)

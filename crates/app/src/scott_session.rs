@@ -1711,18 +1711,29 @@ mod tests {
             "family D's own canvas — the machine's hi-res page"
         );
         assert!(band.upscale, "the band fits it like any other bitmap source");
-        let mut seen = std::collections::HashSet::new();
-        let mut lit = 0usize;
+        let mut counts = std::collections::HashMap::new();
         for p in canvas.pixels() {
-            seen.insert((p.0[0], p.0[1], p.0[2]));
             assert_eq!(p.0[3], 255, "family D carries no transparent index");
-            if (p.0[0], p.0[1], p.0[2]) == scott::apple_pictures::INK {
-                lit += 1;
-            }
+            let rgb = (p.0[0], p.0[1], p.0[2]);
+            assert!(
+                scott::apple_pictures::PALETTE.contains(&rgb),
+                "{rgb:?} is not one of the six hi-res colours"
+            );
+            *counts.entry(rgb).or_insert(0usize) += 1;
         }
-        assert_eq!(seen.len(), 2, "line art: ink and ground, nothing else");
-        assert!(lit > 500, "only {lit} inked pixels, which is not a drawing");
-        assert!(lit < canvas.width() as usize * canvas.height() as usize / 2, "the canvas washed out");
+        // Room 11 is the forest floor, and it is COLOURED: an orange ground
+        // under a green canopy with black trunks, which is SQ-1489's paint
+        // model reaching the screen. Two colours would be the line art alone.
+        assert!(counts.len() >= 5, "only {} colours on the canvas", counts.len());
+        let orange = counts[&scott::apple_pictures::PALETTE[4]];
+        assert!(orange > 30_000, "the orange ground is only {orange} pixels");
+        let green = counts[&scott::apple_pictures::PALETTE[2]];
+        assert!(green > 2_000, "the green canopy is only {green} pixels");
+        let white = counts.get(&scott::apple_pictures::PALETTE[5]).copied().unwrap_or(0);
+        assert!(
+            white < canvas.width() as usize * canvas.height() as usize / 2,
+            "the canvas washed out to white"
+        );
     }
 
     /// Walking into another room draws that room's picture, which is the whole

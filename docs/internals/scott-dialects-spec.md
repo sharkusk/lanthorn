@@ -5184,18 +5184,13 @@ recorded here so the next reader of that section reads them together with it.
     three sits on a side A with no filesystem on it at all, at the per-title
     offsets §12.10 says are not recoverable (SQ-1490).
 
-    **Three things about the format remain undetermined and are named rather
-    than guessed at** (SQ-1489): the difference between the two drawing
-    commands (both plainly draw — *Pirate Adventure*'s darkness card letters
-    with `0xC0` and *Adventureland*'s with `0xA0` — so a pen or colour
-    distinction is likely and nothing falsifies either); what a one-byte token
-    *says* beyond ending a path (92 distinct values occur, in short runs just
-    before a drawing command, which would fit a colour); and consequently what
-    an `0xE0` area is filled WITH. Read as a flood fill in a single ink,
-    **172 of the 314 pictures wash out** — *Adventureland*'s darkness card
-    opens with one before a line has been drawn, so its region is the whole
-    empty canvas — which is why lanthorn draws the line art and leaves the
-    areas unpainted rather than painting them wrongly.
+    **The three things this item left undetermined are settled, and the format
+    is in colour** — see item 29 below (SQ-1489). In short: `0xC0` is not a
+    second line command but a **paintbrush**; a bit-7-clear byte is an
+    **attribute** whose top three bits pair it with the drawing command it
+    feeds and whose low four bits are its operand; `0x60` is a **two-byte**
+    token naming a fill pattern; and the page starts **white**, which is why
+    reading it as blank inverted every picture.
 
 27. **§8.4's picture "lists" are not needed for the plain releases, and §12.10's
     "Rnnnn/Bnnnnn" is two rules, not one.** §8.4 requires "a hard-coded
@@ -5230,6 +5225,73 @@ recorded here so the next reader of that section reads them together with it.
     lanthorn pairs them by file name — same directory, same extension, same
     text up to `side `, a different letter after it — and says so as a host
     rule (`app::hints::saga_companion_side`).
+
+29. **Family D's plain sub-variant is in COLOUR, and the page it draws on
+    starts WHITE** (SQ-1489). Item 26 settled the token framing and left three
+    things open — what tells `0xA0` from `0xC0`, what a bit-7-clear byte says
+    beyond ending a path, and what an `0xE0` area is filled with. All three
+    are measured now, and the answer to the third made the first two obvious:
+    **a bit-7-clear byte is an ATTRIBUTE token whose top three bits pair it
+    with the three-byte command it feeds** (`0x20` ↔ `0xA0`, `0x40` ↔ `0xC0`,
+    `0x60` ↔ `0xE0`) **and whose low four bits are its operand**.
+
+    | token | operand | effect |
+    |---|---|---|
+    | `0x00`-`0x1F` | — | **end of picture** |
+    | `0x20`\|*c* | Applesoft HCOLOR 0-7 | the colour `0xA0` draws lines in |
+    | `0x40`\|*n* | 0-7 | which of eight **brushes** `0xC0` stamps |
+    | `0x60`, then one more byte *v* | 0-107 | the **paint** `0xC0` and `0xE0` lay down |
+
+    And `0xC0` is not a second line command at all: it **stamps a 14 x 16
+    brush** — a disc of one of six radii, or one of two spatters — at (*x*,
+    *y*) in the current paint, and does not move the line pen, which is what
+    made it look like a line command that flung strokes across the picture.
+    `0xE0` floods the region containing its point with the same paint.
+
+    A **paint** is not a colour but a pair of pattern indices, one for even
+    rows and one for odd; a **pattern** is four bytes chosen by the screen byte
+    column modulo four, which is what keeps a colour's pixel parity across the
+    seven-pixel byte boundary. Patterns 0-7 are the eight Applesoft colours in
+    that form; 8-29 are hatches and dithers. So a paint can be a solid colour,
+    a two-row two-colour dither, or a diagonal hatch, and the artwork uses all
+    three.
+
+    **Both tables are in the releases' own `M3` file, which is byte-identical
+    on all four plain disks**: the 108 paint pairs at `$8F7C` and the 30
+    four-byte patterns at `$9054`, the first ending exactly where the second
+    begins. Two independent checks say the extents are right — the largest
+    paint operand anywhere in the corpus is `0x6B`, the last of 108, and the
+    byte after pattern 29 is the first instruction of the next routine. The
+    eight brushes are the 256 bytes at `$9500`, and the eight HCOLOR masks are
+    Applesoft's own `00 2A 55 7F 80 AA D5 FF`, read off the `FPBASIC` image the
+    same disks ship (they are also published, in the *Applesoft BASIC
+    Programmer's Reference Manual*'s HCOLOR table).
+
+    **The page starts filled with `$FF` — solid white.** The room-picture entry
+    point clears it that way before playing a stream, which is why so many
+    pictures open by flooding the canvas with a dark paint, and why reading the
+    ground as blank inverts every one of them: `R0100` then reads as dark
+    lettering on white instead of `IT'S TOO DARK!` in white on black. The
+    object-picture entry point clears nothing and reads the stream's first
+    three bytes as an anchor for compositing — but those three bytes are
+    shaped exactly like a move token, so a decoder that plays them as one puts
+    the artwork where it was authored.
+
+    Measured against item 26's "172 of 314 pictures wash out": under this model
+    **six** of the 314 resolve to a single flat colour, 118 of them use all six
+    of the machine's colours, and the Adventure International logo (index 99,
+    the same drawing on all four disks) comes out green, blue and orange.
+
+    **Still undetermined**: the flood fill's exact edge rule. The release's own
+    filler is a scanline walk whose stop test reads the pixel to the *left* of
+    the one being tested as well as the pixel itself; lanthorn spreads over lit
+    pixels and stops at unlit ones, which is that rule's plain meaning, so a
+    region reached only through a single-pixel gap may differ from the machine
+    by a few pixels.
+
+    Reading a release's own 6502 renderer is measurement of a **specimen** —
+    the same disks the artwork is on — and not a reading of any interpreter;
+    `docs/internals/clean-room.md` is the protocol this stayed inside.
 
 The in-memory model this document's dialects decode *to*, in that crate, is a
 database of rooms (six exits and a description, plus a flag for the leading-`*`

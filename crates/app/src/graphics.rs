@@ -2520,15 +2520,14 @@ fn scott_c64_image(list: &scott::c64::PictureList, scale: u32, platform: ScottFa
 /// which is what a picture number resolves to; §12.11's object overlays would
 /// need the composite this does not do (see the module's own note).
 fn scott_saga_image(record: &[u8], platform: scott::SagaPlatform) -> Option<DynamicImage> {
-    // SQ-1476: the Apple II releases are family D — a line-drawing opcode
-    // stream over the machine's own 280x192 hi-res canvas, nothing family C's
-    // strip decoder could stand in for — and every family answers the same
-    // `Picture`, so the conversion below is shared.
-    let pic = match platform {
-        scott::SagaPlatform::AppleII => scott::decode_family_d(record, platform).ok()?,
-        _ => scott::decode_family_c(record, platform).ok()?,
-    };
-    Some(picture_to_image(&pic))
+    // SQ-1476/SQ-1489: the Apple II releases are family D — an opcode stream
+    // played over the machine's own 280x192 hi-res page, nothing family C's
+    // strip decoder could stand in for, and six colours where family C has
+    // four — so it answers its own picture type and gets its own conversion.
+    if matches!(platform, scott::SagaPlatform::AppleII) {
+        return Some(hires_to_image(&scott::decode_family_d(record, platform).ok()?));
+    }
+    Some(picture_to_image(&scott::decode_family_c(record, platform).ok()?))
 }
 
 /// Decode one MS-DOS *Questprobe* **family-E** `.PAK` file (spec §8.5) to the
@@ -2552,6 +2551,24 @@ fn scott_dos_saga_image(record: &[u8]) -> Option<DynamicImage> {
 /// [`scott::saga_pictures::Picture`], so there is one conversion and not
 /// three.
 fn picture_to_image(pic: &scott::saga_pictures::Picture) -> DynamicImage {
+    let mut buf = RgbaImage::new(pic.width as u32, pic.height as u32);
+    for y in 0..pic.height {
+        for x in 0..pic.width {
+            let (r, g, b) = pic.rgb(x, y).unwrap_or((0, 0, 0));
+            buf.put_pixel(x as u32, y as u32, Rgba([r, g, b, 255]));
+        }
+    }
+    DynamicImage::ImageRgba8(buf)
+}
+
+/// One decoded family-D picture — the Apple II hi-res page — as an opaque
+/// RGBA image (SQ-1489).
+///
+/// Separate from [`picture_to_image`] because family D answers
+/// [`scott::apple_pictures::HiResPicture`], whose pixels index a six-colour
+/// palette rather than family C's four. Fully opaque for the same reason the
+/// others are: every pixel of a hi-res page has a colour, and black is one.
+fn hires_to_image(pic: &scott::apple_pictures::HiResPicture) -> DynamicImage {
     let mut buf = RgbaImage::new(pic.width as u32, pic.height as u32);
     for y in 0..pic.height {
         for x in 0..pic.width {

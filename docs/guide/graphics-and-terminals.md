@@ -166,8 +166,9 @@ are drawn at twice the horizontal detail to make up for it.
 differently.** The Commodore 64 *Hulk* is full-colour comic panels
 (`Pictures: S.A.G.A. (C64 strips, N pictures)`); the **Apple II** editions of
 *Adventureland*, *Pirate Adventure*, *Mission Impossible* and *Strange
-Odyssey* are white hi-res line drawings (`Pictures: S.A.G.A. (Apple II
-hi-res, N pictures)`), and they are worth a word because of where they live:
+Odyssey* are hi-res drawings in the machine's own six colours — black, purple,
+green, blue, orange and white (`Pictures: S.A.G.A. (Apple II hi-res, N
+pictures)`) — and they are worth a word because of where they live:
 an Apple II release is **two floppies**, the game on one and the pictures on
 the other. Hand lanthorn the boot side — the one with the game on it — and it
 finds the picture disk beside it in the same folder and draws from both, so
