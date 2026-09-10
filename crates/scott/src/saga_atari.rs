@@ -310,16 +310,19 @@ pub fn decode_record(
     let data = spliced
         .get(record.offset + 10..record.offset + record.size)
         .ok_or(PictureError::TooShort { len: spliced.len().saturating_sub(record.offset) })?;
-    let painted = paint_strips(data, &record.layout, scheme);
+    let strips = paint_strips(data, &record.layout, scheme);
     let (palette, unrecognised_colours) =
         resolve_palette(record.colour_bytes, |stored| Some(atari_colour(stored)));
     Ok(Picture {
         width: CANVAS_WIDTH,
         height: CANVAS_HEIGHT,
-        pixels: painted.pixels,
+        pixels: strips.pixels,
         palette,
         colour_bytes: record.colour_bytes,
         unrecognised_colours,
+        // Measured from the writes, so a record that paints only part of its
+        // own region reports what it really covered (SQ-1487's rectangle).
+        painted: strips.bounds,
     })
 }
 

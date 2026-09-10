@@ -135,6 +135,17 @@ pub struct ScottSession {
     /// image isn't re-uploaded to the terminal every frame.
     current_canvas: Option<Arc<image::RgbaImage>>,
     current_pic_num: Option<u16>,
+    /// The object records composited over `current_pic_num` to make
+    /// `current_canvas`, in draw order (SQ-1482, spec §12.11) — the room's
+    /// present items over a room picture, the carried items over the
+    /// inventory backdrop.
+    ///
+    /// Part of the band's identity, not a derived detail: the picture NUMBER
+    /// alone stopped being enough the moment two frames of the same room
+    /// could differ, so `refresh_picture`'s early-out compares both. Named
+    /// records rather than indices because a name is what the container
+    /// holds, what the composite reads, and what `/dump-windows` prints.
+    current_overlays: Vec<String>,
     pic_version: u64,
     /// Steps of the CURRENT US S.A.G.A. picture-show sequence still to
     /// present, one per remaining opcode-90 request (SQ-1487). Empty outside
@@ -343,6 +354,7 @@ impl ScottSession {
             picts,
             current_canvas: None,
             current_pic_num: None,
+            current_overlays: Vec::new(),
             pic_version: 0,
             showing: VecDeque::new(),
             deferred_save: false,
@@ -402,14 +414,96 @@ impl ScottSession {
 
     fn refresh_picture(&mut self) {
         let want = self.dos_room_picture().or_else(|| self.vm.current_picture());
-        if want == self.current_pic_num {
+        let overlays = self.room_overlays();
+        self.set_band(want, overlays);
+    }
+
+    /// Point the band at `want` with `overlays` composited over it, decoding
+    /// nothing when neither has changed (SQ-1482).
+    ///
+    /// **The band's identity is the pair**, which is why one function owns
+    /// both fields: the same room picture with a different set of objects
+    /// lying in the room is a different frame, and comparing only the number
+    /// would leave the last frame's gem on the floor after the player picked
+    /// it up.
+    fn set_band(&mut self, want: Option<u16>, overlays: Vec<String>) {
+        if want == self.current_pic_num && overlays == self.current_overlays {
             return;
         }
         self.current_pic_num = want;
+        self.current_overlays = overlays;
         self.current_canvas = want
-            .and_then(|n| self.picts.image(n as u32))
+            .and_then(|n| self.picts.scott_composite(u32::from(n), &self.current_overlays))
             .map(|dynimg| Arc::new(dynimg.to_rgba8()));
         self.pic_version += 1;
+    }
+
+    /// The object records drawn over the ROOM picture this turn (spec
+    /// §12.11, SQ-1482): "after [the room picture], every object picture
+    /// whose item index names an item presently in the room is drawn over
+    /// it, in the order the picture files were gathered".
+    ///
+    /// Three things the VM cannot answer and this does. Which items are in
+    /// the room is `Vm::item_indices_in_room`; which PICTURE each item draws
+    /// is the release's (`SagaUs::object_picture` /
+    /// `DosRelease::object_picture` — identity but for the *Hulk*'s three
+    /// measured overrides); and which of those the container actually ships,
+    /// in which order, is the picture source's. Most items have no artwork at
+    /// all, so the usual answer is a short list or none.
+    ///
+    /// **Nothing is drawn in the dark.** §12.11: "where other dialects paint
+    /// black, these draw picture index 0 — a dedicated darkness image — and
+    /// return." The `return` is the operative word: the darkness image stands
+    /// alone, and overlaying the objects a player cannot see onto it would
+    /// undo the whole point of it.
+    ///
+    /// Empty for every engine, dialect and release that is not one of these —
+    /// a source holding no S.A.G.A. records answers with nothing whatever is
+    /// asked of it — so this is safe to call on every refresh.
+    fn room_overlays(&self) -> Vec<String> {
+        if self.vm.is_dark() {
+            return Vec::new();
+        }
+        let saga = self.vm.database().saga_us;
+        let dos = self.picts.scott_dos_release();
+        let items = self.vm.item_indices_in_room();
+        let mut indices: Vec<u16> = match (saga, dos) {
+            (Some(release), _) => {
+                items.iter().map(|&i| release.object_picture(i) as u16).collect()
+            }
+            (None, Some(release)) => {
+                items.iter().map(|&i| release.object_picture(i) as u16).collect()
+            }
+            (None, None) => return Vec::new(),
+        };
+        // §12.11's other shape of hard-coded overlay, keyed on the ROOM
+        // rather than on an item: *The Count*'s 80/81/82 in rooms 8/18/9 and
+        // *Voodoo Castle*'s 80 in room 14. Neither title's artwork is
+        // reachable from any specimen in the archive (see
+        // `SagaUs::room_overlay`), so this adds nothing to a frame today and
+        // is here so that it will when one is.
+        if let Some(picture) = saga.and_then(|r| r.room_overlay(self.vm.current_room())) {
+            indices.push(picture as u16);
+        }
+        self.picts.scott_overlays(scott::PictureUsage::ObjectInRoom, &indices)
+    }
+
+    /// The object records drawn over the INVENTORY backdrop (§12.11,
+    /// SQ-1482): "draws picture index 98 as a room picture, then draws the
+    /// inventory-object picture of every carried item".
+    ///
+    /// **No per-item override here, unlike [`Self::room_overlays`].** The
+    /// *Hulk*'s three room-side overrides exist because three of its items
+    /// have no `B01nnnR` under their own index; on the inventory side every
+    /// one of them does — the disk carries `B01021I` for the wax and
+    /// `B01042I` for the cavern gem — so the index IS the item number, which
+    /// is §8.6's plain rule. Each inventory record also carries its own slot
+    /// on the canvas, so the carried items tile the screen without anything
+    /// here placing them.
+    fn inventory_overlays(&self) -> Vec<String> {
+        let carried: Vec<u16> =
+            self.vm.carried_item_indices().iter().map(|&i| i as u16).collect();
+        self.picts.scott_overlays(scott::PictureUsage::ObjectInInventory, &carried)
     }
 
     /// Force the picture band to `picture`, bypassing `Vm::current_picture()`
@@ -420,13 +514,17 @@ impl ScottSession {
     /// `refresh_picture`, just driven by an explicit number instead of the
     /// VM's own opinion.
     fn show_sequence_picture(&mut self, picture: u16) {
-        let want = Some(picture);
-        if want == self.current_pic_num {
-            return;
-        }
-        self.current_pic_num = want;
-        self.current_canvas = self.picts.image(picture as u32).map(|dynimg| Arc::new(dynimg.to_rgba8()));
-        self.pic_version += 1;
+        // §8.6 reserves index 98 for "the inventory backdrop", so a show of
+        // 98 IS §12.11's inventory screen however it was queued — by the
+        // inventory command itself or by an opcode-90 operand naming it —
+        // and the carried items go over it (SQ-1482). Every other picture in
+        // a sequence is a scene drawn whole, with nothing over it.
+        let overlays = if usize::from(picture) == scott::INVENTORY_PICTURE {
+            self.inventory_overlays()
+        } else {
+            Vec::new()
+        };
+        self.set_band(Some(picture), overlays);
     }
 
     /// Build a `TurnResult` with the non-Scott fields at their empty default,
@@ -483,7 +581,19 @@ impl Engine for ScottSession {
         let _ = self.vm.step();
         let transcript = self.vm.take_output();
         let quit = self.vm.has_quit();
-        let shows = self.vm.take_picture_shows();
+        let mut shows = self.vm.take_picture_shows();
+        // A show whose picture this source cannot supply is not presented at
+        // all (SQ-1482). Every step of a sequence stops the game for a
+        // keypress, and stopping it in front of a band that shows nothing —
+        // or, worse, in front of the PREVIOUS picture, still on screen — is
+        // strictly worse than not pausing. This is also what keeps §12.11's
+        // inventory screen from reaching a release that has no `R01098`: the
+        // VM queues it from the database (which is all a headless core can
+        // know), and the picture files are the host's to check. `quest1.dat`,
+        // the reference-format twin of the Commodore disk, is exactly that
+        // case — the same eleven header counts, none of the artwork.
+        let picts = &mut self.picts;
+        shows.retain(|show| picts.image(u32::from(show.picture)).is_some());
         // The game ran the SAVE GAME action (opcode 71): bubble the same Save
         // request the Z-machine/Glulx engines raise for `@save`, so the app's
         // Save State file I/O runs. The prompt is withheld and returns via
@@ -698,8 +808,23 @@ impl Engine for ScottSession {
                         None => "blorb".to_string(),
                     },
                 };
+                // SQ-1482: §12.11's object overlays make a room's band no
+                // longer a single named picture, so a capture has to say
+                // which records were composited over it — and say so even
+                // when there were none, since "no objects here" and "this
+                // build draws no overlays" are different frames and look
+                // identical. Only a S.A.G.A. source can have any, so the
+                // field is silent for every other kind rather than always
+                // reading `none`.
+                let overlays = match self.picts.scott_saga_platform().is_some()
+                    || self.picts.scott_saga_dos_count().is_some()
+                {
+                    false => String::new(),
+                    true if self.current_overlays.is_empty() => "  ·  overlays=none".to_string(),
+                    true => format!("  ·  overlays={}", self.current_overlays.join(",")),
+                };
                 out.push(format!(
-                    "  picture: {} row(s) reserved  ·  canvas={}x{} v{} opaque={} source={source}",
+                    "  picture: {} row(s) reserved  ·  canvas={}x{} v{} opaque={} source={source}{overlays}",
                     PICTURE_ROWS,
                     canvas.width(),
                     canvas.height(),
@@ -1843,7 +1968,12 @@ mod tests {
         let Some(mut s) = hulk_session() else { return };
         assert_eq!(s.current_pic_num, s.vm.current_picture(), "at boot");
         assert_eq!(s.current_pic_num, Some(1), "premise: Banner starts in room 1");
-        for command in ["look", "wait", "inventory"] {
+        // SQ-1482 removed `inventory` from this list: §12.11 has the
+        // inventory command draw picture 98 and wait for ENTER, so it goes
+        // through the picture-show door and the band deliberately stops
+        // agreeing with `current_picture()` until the key arrives. That is
+        // its own case below.
+        for command in ["look", "wait"] {
             s.submit(command);
             assert_eq!(
                 s.current_pic_num,
@@ -1925,5 +2055,324 @@ mod tests {
         assert_eq!(s.pending_input(), InputKind::Line, "an ordinary turn never waits on a keypress");
         assert!(r.transcript.trim_end().ends_with("Tell me what to do ?"), "the ordinary prompt: {:?}", r.transcript);
         assert!(r.info.is_none(), "no picture-show hint outside a sequence");
+    }
+
+    // ── SQ-1482: §12.11's object overlays and the inventory picture screen ──
+
+    /// The dome, two turns and four keypresses in: `BITE LIP` is the game's
+    /// own opening (SQ-1487's three ENTER-gated scenes) and the gas that
+    /// follows drops Bruce Banner into room 2.
+    ///
+    /// **The specimen's frame, named.** Room 2 holds six items — the mirror,
+    /// the broken chair, a `*Gem`, the metal hand fan, the large iron ring
+    /// set in the floor and a sign — and exactly two of them have artwork on
+    /// the disk, which is what makes it the frame worth pinning: the overlay
+    /// rule has to draw two records and not six.
+    fn hulk_in_the_dome() -> Option<ScottSession> {
+        let mut s = hulk_session()?;
+        s.submit("bite lip");
+        for _ in 0..4 {
+            s.submit_key(crate::engine::KeyInput::Enter);
+        }
+        assert_eq!(s.vm.current_room(), 2, "the opening cutscene ends in the dome");
+        Some(s)
+    }
+
+    /// One named family-C record off `QUESTPR1.D64`, decoded — the bare
+    /// picture a composited band is compared against, so a case pins the
+    /// DIFFERENCE the overlay makes rather than a colour on its own.
+    fn hulk_bare(name: &str) -> Option<scott::saga_pictures::Picture> {
+        let (_, pictures) = hulk_d64()?;
+        let (_, record) = pictures.into_iter().find(|(n, _)| n == name)?;
+        Some(scott::decode_family_c(&record, scott::SagaPlatform::Commodore64).expect("decodes"))
+    }
+
+    fn band_pixel(s: &ScottSession, x: u32, y: u32) -> (u8, u8, u8) {
+        let screen = s.screen();
+        let band = picture_band(&screen).expect("a picture band");
+        let p = band.canvas.get_pixel(x, y).0;
+        (p[0], p[1], p[2])
+    }
+
+    /// §12.11: "after [the room picture], every object picture whose item
+    /// index names an item presently in the room is drawn over it, **in the
+    /// order the picture files were gathered**."
+    ///
+    /// The two records are pinned by name AND by order, because §8.6 makes
+    /// the order observable ("later pictures overwrite earlier ones") and the
+    /// disk's directory lists `B01053R` (the sign) before `B01033R` (the
+    /// iron ring). The pixel is the falsifier: R01002 alone is black at
+    /// (123, 122) and the ring paints white there, so a band that skipped the
+    /// composite would read black and one that copied the overlay's whole
+    /// canvas would black out the dome around it.
+    #[test]
+    fn the_domes_band_draws_the_sign_and_the_ring_over_its_room_picture() {
+        let Some(s) = hulk_in_the_dome() else { return };
+        assert_eq!(s.current_pic_num, Some(2), "room 2's own picture is the base");
+        assert_eq!(
+            s.current_overlays,
+            vec!["B01053R".to_string(), "B01033R".to_string()],
+            "the dome's two items that have artwork, in the disk directory's own order"
+        );
+
+        let bare = hulk_bare("R01002").expect("the fixture is present");
+        assert_eq!(bare.rgb(123, 122), Some((0, 0, 0)), "premise: the bare room picture is black here");
+        assert_eq!(
+            band_pixel(&s, 123, 122),
+            (255, 255, 255),
+            "the iron ring (B01033R) paints white over it"
+        );
+        // …and the rest of the room picture is untouched: the overlay's
+        // canvas is black everywhere outside its own rectangle, and copying
+        // that would show.
+        assert_eq!(bare.rgb(4, 2), Some((255, 255, 255)), "premise: the bare picture is white here");
+        assert_eq!(band_pixel(&s, 4, 2), (255, 255, 255), "outside every overlay's rectangle");
+    }
+
+    /// A record the *Hulk* does **not** ship, built by hand from §8.3 so a
+    /// take and a drop can be watched changing the band.
+    ///
+    /// One 8-pixel column, rows 0 and 1, every pixel value 3, whose third
+    /// stored colour byte is 67 — §8.3's table reads that as red, and the
+    /// dome's own picture is white in that corner, so the record is visible
+    /// against it. Named `B01023R` so §8.6's rule reads it as the room
+    /// artwork of item 23, the metal hand fan, which is the one item in the
+    /// dome a player can pick up in a single turn.
+    fn fabricated_fan_record() -> Vec<u8> {
+        vec![
+            0x00, 0x50, // load address, ignored
+            0x00, 0x00, // data size, informational
+            3, 0, 3, 0, // left column 0, top row 0, right column 0, bottom row 0
+            2, 3, 67, 0, // values 1, 2, 3 → white, white, RED; the fourth is unused
+            0x80, 0xFF, 0xFF, // repeat count 1: one pair, both bytes all value 3
+            0, 0, // the two-byte tail every record carries
+        ]
+    }
+
+    /// Taking an item takes its record off the band, and dropping it puts it
+    /// back — the overlay set is recomputed from the room's items every turn,
+    /// not cached from the room number (SQ-1482).
+    ///
+    /// The *Hulk* ships no room artwork for any item a player can carry, so
+    /// the moving record is [`fabricated_fan_record`] and everything else in
+    /// the frame is the real disk's.
+    #[test]
+    fn taking_and_dropping_an_item_moves_its_record_on_and_off_the_band() {
+        let Some((bytes, mut pictures)) = hulk_d64() else { return };
+        pictures.push(("B01023R".to_string(), fabricated_fan_record()));
+        let mut s = ScottSession::new_with_options(
+            bytes,
+            false,
+            None,
+            scott::Options::default(),
+            crate::graphics::ScottPictureSources::none().with_saga_pictures(pictures),
+        )
+        .expect("the Hulk boots with one fabricated record beside its own");
+        s.submit("bite lip");
+        for _ in 0..4 {
+            s.submit_key(crate::engine::KeyInput::Enter);
+        }
+        assert_eq!(s.vm.current_room(), 2, "premise: the opening ends in the dome");
+
+        let carried = vec!["B01053R".to_string(), "B01033R".to_string(), "B01023R".to_string()];
+        assert_eq!(s.current_overlays, carried, "the fabricated record is gathered last, so drawn last");
+        assert_eq!(band_pixel(&s, 0, 0), (191, 97, 72), "and paints its corner red");
+        let version = s.pic_version;
+
+        s.submit("get fan");
+        assert_eq!(s.vm.current_room(), 2, "premise: taking the fan does not move the player");
+        assert_eq!(
+            s.current_overlays,
+            vec!["B01053R".to_string(), "B01033R".to_string()],
+            "item 23 is in the pack now, so its record leaves the room band"
+        );
+        assert_ne!(s.pic_version, version, "the band was recomputed, so the terminal re-uploads it");
+        assert_eq!(band_pixel(&s, 0, 0), (255, 255, 255), "the room picture's own corner is back");
+
+        s.submit("drop fan");
+        assert_eq!(s.current_overlays, carried, "…and returns when the fan does");
+        assert_eq!(band_pixel(&s, 0, 0), (191, 97, 72));
+    }
+
+    /// §12.11: "The inventory command draws a picture. Beyond listing what is
+    /// carried, it clears the graphics window, draws picture index 98 as a
+    /// room picture, then draws the inventory-object picture of every carried
+    /// item, and waits for the player to press ENTER before restoring the
+    /// room view."
+    ///
+    /// Every clause of that is asserted here: the listing is printed (and
+    /// printed BEFORE the picture, which is what "beyond listing" fixes and
+    /// what the VM's `output_len` carries), the band switches to 98, the one
+    /// carried item's inventory record is composited over it, the prompt is
+    /// withheld, and ENTER puts the dome back exactly as it was.
+    #[test]
+    fn the_inventory_command_shows_picture_98_with_the_carried_item_over_it() {
+        let Some(mut s) = hulk_in_the_dome() else { return };
+        s.submit("get fan");
+        let room_overlays = s.current_overlays.clone();
+
+        let r = s.submit("inventory");
+        assert!(r.transcript.contains("Metal Hand Fan"), "the listing first: {:?}", r.transcript);
+        assert!(
+            !r.transcript.contains("Tell me what to do"),
+            "the prompt is withheld while the screen is up: {:?}",
+            r.transcript
+        );
+        assert_eq!(r.info.as_deref(), Some(PICTURE_SHOW_HINT), "and the keypress hint rides with it");
+        assert_eq!(s.pending_input(), InputKind::Char, "§12.11 waits for ENTER");
+        assert_eq!(s.current_pic_num, Some(98), "§8.6 reserves 98 for the inventory backdrop");
+        assert_eq!(
+            s.current_overlays,
+            vec!["B01023I".to_string()],
+            "the carried item's INVENTORY record — a different picture from its room one"
+        );
+
+        let bare = hulk_bare("R01098").expect("the fixture is present");
+        assert_eq!(bare.rgb(116, 104), Some((255, 255, 255)), "premise: the backdrop is white here");
+        assert_eq!(
+            band_pixel(&s, 116, 104),
+            (177, 89, 185),
+            "the fan's inventory record paints purple over it"
+        );
+
+        let last = s.submit_key(crate::engine::KeyInput::Enter).expect("a key ends the screen");
+        assert_eq!(s.pending_input(), InputKind::Line, "back to line input");
+        assert_eq!(s.current_pic_num, Some(2), "the room view returns");
+        assert_eq!(s.current_overlays, room_overlays, "…with the dome's own overlays back");
+        assert!(
+            last.transcript.trim_end().ends_with("Tell me what to do ?"),
+            "and the prompt with it: {:?}",
+            last.transcript
+        );
+    }
+
+    /// An empty pack still gets the screen — §12.11 makes the picture part of
+    /// the command, not of what is in the pack — and it is the backdrop with
+    /// nothing over it.
+    #[test]
+    fn the_inventory_screen_with_an_empty_pack_is_the_bare_backdrop() {
+        let Some(mut s) = hulk_in_the_dome() else { return };
+        let r = s.submit("inventory");
+        assert!(r.transcript.contains("Nothing"), "the listing says so: {:?}", r.transcript);
+        assert_eq!(s.current_pic_num, Some(98));
+        assert!(s.current_overlays.is_empty(), "nothing carried, nothing composited");
+        assert_eq!(band_pixel(&s, 116, 104), (255, 255, 255), "the backdrop's own white");
+        s.submit_key(crate::engine::KeyInput::Enter);
+        assert_eq!(s.current_pic_num, Some(2));
+    }
+
+    /// `/dump-windows` names the records composited into the band, so a
+    /// capture of an overlaid frame says what is in it — and says `none`
+    /// rather than going silent when a S.A.G.A. room happens to have no
+    /// objects, since the two frames look identical otherwise.
+    #[test]
+    fn the_dump_names_the_overlays_the_band_was_built_from() {
+        let Some(mut s) = hulk_session() else { return };
+        let line = |s: &ScottSession| {
+            s.window_dump().into_iter().find(|l| l.contains("picture:")).expect("a picture line")
+        };
+        assert!(
+            line(&s).contains("overlays=none"),
+            "room 1 holds no items at all: {:?}",
+            line(&s)
+        );
+        s.submit("bite lip");
+        for _ in 0..4 {
+            s.submit_key(crate::engine::KeyInput::Enter);
+        }
+        assert!(
+            line(&s).contains("overlays=B01053R,B01033R"),
+            "the dome's two records, in draw order: {:?}",
+            line(&s)
+        );
+    }
+
+    /// A picture-show request the source cannot draw is not presented at all
+    /// (SQ-1482) — a keypress pause in front of a band that shows nothing is
+    /// worse than no pause.
+    ///
+    /// The *Hulk*'s database with **no** picture files is exactly that case,
+    /// and it is not hypothetical: §12.13's oracle is the same game as a
+    /// plain reference-format `.dat`, and a player who extracted `SHULK.DB`
+    /// on its own gets this session.
+    #[test]
+    fn an_undrawable_picture_show_never_stops_the_game() {
+        let Some((bytes, _)) = hulk_d64() else { return };
+        let mut s = ScottSession::new_with_options(
+            bytes,
+            false,
+            None,
+            scott::Options::default(),
+            crate::graphics::ScottPictureSources::none(),
+        )
+        .expect("the database alone still boots");
+        let r = s.submit("inventory");
+        assert_eq!(s.pending_input(), InputKind::Line, "no picture, no pause");
+        assert!(
+            r.transcript.trim_end().ends_with("Tell me what to do ?"),
+            "the ordinary prompt comes straight back: {:?}",
+            r.transcript
+        );
+        assert!(r.info.is_none(), "and no keypress hint");
+        let r = s.submit("bite lip");
+        assert_eq!(s.pending_input(), InputKind::Line, "nor for opcode 90's three scenes");
+        assert!(r.transcript.trim_end().ends_with("Tell me what to do ?"));
+    }
+
+    // ── SQ-1482, the MS-DOS release: the same two rules over family E ──
+
+    /// The DOS zip's own gather order is not the Commodore disk's, and
+    /// §12.11 draws in the order the files were gathered — so the same two
+    /// records reach the same dome in the other order. Nothing in the frame
+    /// changes, because the two do not overlap; the case is here because the
+    /// order is the thing the rule names.
+    #[test]
+    fn the_dos_domes_band_draws_the_same_two_records_in_the_zips_order() {
+        let Some(mut s) = hulk_dos_session() else { return };
+        s.submit("bite lip");
+        for _ in 0..4 {
+            s.submit_key(crate::engine::KeyInput::Enter);
+        }
+        assert_eq!(s.vm.current_room(), 2, "premise: the opening ends in the dome");
+        assert_eq!(s.current_pic_num, Some(2));
+        let mut sorted = s.current_overlays.clone();
+        sorted.sort();
+        assert_eq!(
+            sorted,
+            vec!["B01033R.PAK".to_string(), "B01053R.PAK".to_string()],
+            "the same two items' artwork, under §8.5's names"
+        );
+        // Measured on The-Hulk_DOS_EN.zip: R0102.PAK alone is black at
+        // (130, 112) and B01033R.PAK paints CGA cyan there.
+        assert_eq!(band_pixel(&s, 130, 112), (0, 255, 255), "the iron ring, in family E's palette");
+    }
+
+    /// §12.11's inventory screen on the release whose database is the plain
+    /// reference TEXT format (§10.7) — the rule has to reach it through
+    /// `saga_dos::identify` rather than through `Database::saga_us`, which is
+    /// `None` here, and the picture is `R0198.PAK` rather than `R01098`.
+    #[test]
+    fn the_dos_inventory_command_shows_its_own_picture_98() {
+        let Some(mut s) = hulk_dos_session() else { return };
+        assert!(
+            s.vm.database().saga_us.is_none(),
+            "premise: this database says nothing about itself (§10.7)"
+        );
+        s.submit("bite lip");
+        for _ in 0..4 {
+            s.submit_key(crate::engine::KeyInput::Enter);
+        }
+        s.submit("get fan");
+        let r = s.submit("inventory");
+        assert!(r.transcript.contains("Metal Hand Fan"), "the listing: {:?}", r.transcript);
+        assert_eq!(s.pending_input(), InputKind::Char, "§12.11 waits for ENTER here too");
+        assert_eq!(s.current_pic_num, Some(98));
+        assert_eq!(s.current_overlays, vec!["B01023I.PAK".to_string()]);
+        // Measured: R0198.PAK is white at (116, 104) and B01023I.PAK paints
+        // CGA magenta there.
+        assert_eq!(band_pixel(&s, 116, 104), (255, 0, 255));
+        s.submit_key(crate::engine::KeyInput::Enter);
+        assert_eq!(s.pending_input(), InputKind::Line);
+        assert_eq!(s.current_pic_num, Some(2), "the dome comes back");
     }
 }

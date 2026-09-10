@@ -196,6 +196,18 @@ Meanwhile the other four Atari titles turn out not to keep bitmaps at all:
 Odyssey* are the same white line drawings as their Apple II editions, drawn
 stroke by stroke.
 
+**What is lying around gets drawn, and so does what you are carrying.** These
+releases keep a separate little drawing for many of the objects in the game —
+the iron ring set in the dome's floor, the sign on the wall, the killer bees,
+Ultron in his cavern — and lanthorn paints each one over the room picture while
+its object is in the room, in the order the release disk holds them. Pick
+something up and it leaves the picture; put it down and it comes back. Type
+`INVENTORY` and the picture changes too: the pack opens on a screen of its own
+with every item you carry drawn on it, and RETURN puts the room back the way it
+was. It works the same on the Commodore 64 disk and the MS-DOS download, and
+`/dump-windows` names the overlays a frame was built from if you want to see
+which ones went in.
+
 ## Going deeper
 
 - [v6 graphics](../internals/v6-graphics.md) — render modes, the pixel lock, and period fonts in full
