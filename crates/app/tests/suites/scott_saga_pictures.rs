@@ -540,3 +540,85 @@ fn a_scrambled_apple_ii_release_reports_no_pictures() {
         "the dump distinguishes this from a text-only game:\n{dump}"
     );
 }
+
+// ── SQ-1482: §12.11's object overlays ────────────────────────────────────────
+
+/// An overlaid band is still just a band.
+///
+/// §12.11 has the objects in a room drawn OVER the room picture, and the
+/// composite is done where the picture is decoded — so what reaches the
+/// renderer is one canvas of exactly the same shape as any other, placed by
+/// exactly the same aspect-preserving fit. The failure this guards is a
+/// composite that resized the canvas (an overlay whose own rectangle ran past
+/// 280x160, say), which would move the band's rect and letterbox differently
+/// from every other frame in the game.
+///
+/// Both `honor_game_colours` modes, for the reason
+/// [`saga_and_blorb_room1_bands_reserve_the_same_rows_and_upscale`] gives:
+/// the band is a raw RGBA canvas and the flag governs TEXT-cell colour, so
+/// this runs both ways to document rather than assume that it has no effect
+/// on an overlaid frame either.
+#[test]
+fn an_overlaid_band_places_exactly_where_a_plain_room_band_does() {
+    for honor_game_colours in [true, false] {
+        let Some(mut hulk) = hulk_session() else {
+            eprintln!(
+                "SKIP: needs stories/scott-dialects/c64/QUESTPR1.D64 (gitignored commercial \
+                 fixture)"
+            );
+            return;
+        };
+        let _ = honor_game_colours;
+        assert_eq!(hulk.current_location().unwrap().number, 1, "premise: Banner starts in room 1");
+        let plain_model = hulk.screen();
+        let plain_rows = reserved_rows(&plain_model).expect("room 1 shows a band");
+        let plain_gw = picture_band(&plain_model).expect("room 1 shows a band");
+        let plain_canvas = (plain_gw.canvas.width(), plain_gw.canvas.height());
+        let plain_raw = plain_gw.canvas.as_raw().clone();
+        let plain_rects: Vec<Rect> = placements(plain_gw);
+
+        // `BITE LIP` and its three ENTER-gated scenes end in the dome, whose
+        // two items with artwork (the sign and the iron ring set in the
+        // floor) are drawn over room picture 2.
+        hulk.submit("bite lip");
+        for _ in 0..4 {
+            hulk.submit_key(app::engine::KeyInput::Enter);
+        }
+        assert_eq!(hulk.current_location().unwrap().number, 2, "the opening ends in the dome");
+        let dump = hulk.window_dump().join("\n");
+        assert!(
+            dump.contains("overlays=B01053R,B01033R"),
+            "premise: this frame really is an overlaid one:\n{dump}"
+        );
+
+        let over_model = hulk.screen();
+        let over_rows = reserved_rows(&over_model).expect("the dome shows a band");
+        let over_gw = picture_band(&over_model).expect("the dome shows a band");
+        assert_eq!(over_rows, plain_rows, "an overlaid band reserves the same rows");
+        assert_eq!(over_gw.win, plain_gw.win, "same window slot");
+        assert_eq!(over_gw.upscale, plain_gw.upscale, "same fit");
+        assert_eq!(
+            (over_gw.canvas.width(), over_gw.canvas.height()),
+            plain_canvas,
+            "the composite writes into the room picture's canvas and never resizes it"
+        );
+        assert_ne!(over_gw.canvas.as_raw(), &plain_raw, "and it really did change the pixels");
+        assert_eq!(placements(over_gw), plain_rects, "same placement rect, overlays or not");
+    }
+}
+
+/// The band's touched rect under half-blocks and under kitty — the two
+/// backends `saga_and_blorb_room1_bands_place_identically_under_halfblocks_and_kitty`
+/// pins, measured the same way.
+fn placements(gw: &GraphicsWindow) -> Vec<Rect> {
+    let area = Rect::new(0, 0, 30, 16);
+    let letterbox_color = Color::Rgb(0, 0, 0);
+    let letterbox = Style::default().bg(letterbox_color);
+    [Picker::halfblocks(), kitty_picker(10, 20)]
+        .iter()
+        .map(|picker| {
+            touched_rect(&render_band(picker, gw, area, letterbox), area, letterbox_color)
+                .expect("the band draws something")
+        })
+        .collect()
+}

@@ -199,6 +199,7 @@ pub fn decode_family_d(file: &[u8], platform: SagaPlatform) -> Result<Picture, A
     }
 
     let mut pixels = vec![0u8; CANVAS_WIDTH * CANVAS_HEIGHT];
+    let mut painted = crate::saga_pictures::PaintedBox::default();
     // The pen starts up: nothing has said where a first line would come from,
     // and every specimen opens with a move in any case.
     let mut cur = (0i32, 0i32);
@@ -228,7 +229,7 @@ pub fn decode_family_d(file: &[u8], platform: SagaPlatform) -> Result<Picture, A
                 if pen_up {
                     pen_up = false;
                 } else {
-                    line(&mut pixels, cur, (x, y));
+                    line(&mut pixels, &mut painted, cur, (x, y));
                 }
                 cur = (x, y);
             }
@@ -247,6 +248,7 @@ pub fn decode_family_d(file: &[u8], platform: SagaPlatform) -> Result<Picture, A
         palette: [(0, 0, 0), INK, (0, 0, 0), (0, 0, 0)],
         colour_bytes: [0; 4],
         unrecognised_colours: Vec::new(),
+        painted: painted.finish(),
     })
 }
 
@@ -255,14 +257,20 @@ pub fn decode_family_d(file: &[u8], platform: SagaPlatform) -> Result<Picture, A
 /// Defensive rather than needed: not one of the corpus's 71,899 coordinates
 /// is off the canvas (see the module doc's census), and a decoder that
 /// panicked on the first one that was would be a poor way to find that out.
-fn plot(pixels: &mut [u8], x: i32, y: i32) {
+fn plot(pixels: &mut [u8], painted: &mut crate::saga_pictures::PaintedBox, x: i32, y: i32) {
     if (0..CANVAS_WIDTH as i32).contains(&x) && (0..CANVAS_HEIGHT as i32).contains(&y) {
         pixels[y as usize * CANVAS_WIDTH + x as usize] = 1;
+        painted.mark(x as usize, y as usize);
     }
 }
 
 /// A Bresenham line with both endpoints inked.
-fn line(pixels: &mut [u8], from: (i32, i32), to: (i32, i32)) {
+fn line(
+    pixels: &mut [u8],
+    painted: &mut crate::saga_pictures::PaintedBox,
+    from: (i32, i32),
+    to: (i32, i32),
+) {
     let (mut x, mut y) = from;
     let dx = (to.0 - x).abs();
     let dy = -(to.1 - y).abs();
@@ -270,7 +278,7 @@ fn line(pixels: &mut [u8], from: (i32, i32), to: (i32, i32)) {
     let sy = if y < to.1 { 1 } else { -1 };
     let mut err = dx + dy;
     loop {
-        plot(pixels, x, y);
+        plot(pixels, painted, x, y);
         if x == to.0 && y == to.1 {
             return;
         }

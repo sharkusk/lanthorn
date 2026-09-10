@@ -4672,7 +4672,10 @@ apply, §11's TI-99/4A and
 memory-image refusals, and **§12 in full** (§12.1-§12.9 as the format,
 including §12.8's command codes 89 and 90 and their operand counts, §12.11's
 database-borne runtime facts — the *Hulk*'s room-picture remap and the darkness
-image both reached through `Vm::current_picture` — and §12.14's refusals; §12.10
+image both reached through `Vm::current_picture`, its **object overlays** and
+its **inventory picture screen** through `Vm::item_indices_in_room` /
+`Vm::carried_item_indices` and a queued `PictureShow` (SQ-1482, items 29-32
+below) — and §12.14's refusals; §12.10
 says the database carries no picture data, so there is none to read). **Not
 implemented:** §4's other dialects (the Adventure International memory images,
 the German, Spanish and Italian releases), §5.1's compressed action table and
@@ -5230,6 +5233,69 @@ recorded here so the next reader of that section reads them together with it.
     lanthorn pairs them by file name — same directory, same extension, same
     text up to `side `, a different letter after it — and says so as a host
     rule (`app::hints::saga_companion_side`).
+
+**And the object-overlay implementer raised four more, about §12.11's two
+hard-coded picture rules** (SQ-1482) — all measured on `QUESTPR1.D64` and
+`The-Hulk_DOS_EN.zip` (§10.7), the two releases whose picture sets a host can
+reach. §12.11 names the *Hulk*'s three overlays and declines to state their
+conditions; items 29 to 31 state them, with the measurement behind each.
+
+29. **§12.11's "object pictures 70, 72 and 13 under item-position conditions"
+    is an ITEM→PICTURE table, and here it is.** The *Hulk*'s eighteen
+    `B01nnnR` records name indices 13, 17, 20, 22, 24, 25, 26, 33, 34, 36, 39,
+    40, 45, 47, 53, 70, 72 and 250; the release has 54 items, so fifteen of
+    those are §8.6's plain rule (the record's index IS the item's) and three
+    are not. Each of the three was measured by finding the item whose position
+    the picture must be reporting:
+
+    | picture | what it draws, and where | the item(s) that reach it | the measurement |
+    |---|---|---|---|
+    | 13 | a hole in green grass, canvas (104,74)-(176,92) | **13, 14 and 15** | `DIG` in a field is three actions differing only in room and item — room 4 drops item 13, room 7 item 14, room 8 item 15 — and §12.11's remap sends rooms 7 and 8 to room picture 4, so all three fields show the same grass. Only item 13's index has a file, and items 14 and 15 have none of their own. |
+    | 70 | a `*Gem` on cavern rock, (192,86)-(264,158) | 42 | item 42 is the only `*Gem` whose start location is room 12, and 70's own rock backdrop continues `R01012` exactly — composited over any other room's picture it reads as a pasted square, which is what rules out "any gem in the room". |
+    | 72 | the word `WAX`, (192,120)-(224,134) | 21 | item 21 (`Wax`) is the release's only wax, starts in room 13, and is the only object there with no `B01021R`. |
+
+    Every other item draws the record carrying its own index, and the
+    **inventory** side needs no overrides at all: the disk ships `B01021I` and
+    `B01042I`, so on that side the index is the item number and §8.6's plain
+    rule holds. The MS-DOS release ships the same three exceptions and the same
+    two inventory records, so one table serves both encodings
+    (`scott::saga_us::hulk_object_picture`).
+
+30. **A nineteenth object record, `B01250R`, has no determinable condition and
+    is left OFF.** Index 250 names no item (54 exist), §12.11 does not mention
+    it, and it decodes to two flat colour blocks — orange and blue — over
+    (16,0)-(240,126), with a colour byte (232) outside §8.3's table. The
+    MS-DOS release does not ship it at all, which is the strongest evidence
+    available that it is not load-bearing. §11's instruction is to name these
+    rather than infer them, so lanthorn draws it never and records the gap
+    (SQ-1494); settling it needs a real-machine capture of the Commodore
+    release.
+
+31. **The two shapes of hard-coded overlay are different rules, and §12.11
+    already says which is which.** The *Hulk*'s are keyed on an ITEM's
+    position ("under item-position conditions"); *The Count*'s 80/81/82 and
+    *Voodoo Castle*'s 80 are keyed on the ROOM ("only in rooms 8, 18 and 9
+    respectively", "only in room 14"). A reader implementing one shape for
+    both gets the *Hulk* wrong. Note also that neither room-keyed rule can
+    fire on any specimen in the archive: both titles exist only on the Atari
+    8-bit, whose per-title picture offset lists §12.10 calls the one thing
+    that must still be tabulated, and on the Apple II, where both are among
+    §7.4's three scrambled releases whose artwork is unreachable (Appendix A
+    item 19).
+
+32. **The overlay's rectangle has to be measured from the DECODE, not from the
+    header.** §8.6 is right that "each object picture carries its own absolute
+    placement", and §8.3's header gives it — but the decoded canvas is the
+    full 280x160 with pixel value 0 outside the record's own region, and §8.3
+    forces value 0 to BLACK rather than to transparent. A host compositing the
+    whole canvas blanks the room around the object. Deriving the rectangle
+    from the header instead of from the writes is nearly right and off by
+    rows: a column's last pair paints the row *after* the inclusive bottom
+    (Appendix A item 17's arithmetic), and a record whose data runs out early
+    paints fewer columns than it declared. lanthorn's decoders accumulate the
+    bounding box of the pixels they actually wrote
+    (`scott::saga_pictures::Picture::painted`), which is right in both cases
+    and needs no reasoning about edges.
 
 The in-memory model this document's dialects decode *to*, in that crate, is a
 database of rooms (six exits and a description, plus a flag for the leading-`*`

@@ -44,7 +44,7 @@
 
 use crate::database::Database;
 use crate::saga_pictures::{Picture, PictureError, Rgb, CANVAS_HEIGHT, CANVAS_WIDTH};
-use crate::saga_us::{hulk_room_picture, PictureFile, PictureUsage};
+use crate::saga_us::{hulk_object_picture, hulk_room_picture, PictureFile, PictureUsage};
 
 /// The five bytes every family-E `.PAK` file this catalogue knows begins with,
 /// with the two that vary written as `None`.
@@ -210,6 +210,7 @@ pub fn decode_family_e(record: &[u8]) -> Result<Picture, PictureError> {
     let step = if lined { 1 } else { 2 };
 
     let mut pixels = vec![0u8; CANVAS_WIDTH * CANVAS_HEIGHT];
+    let mut painted = crate::saga_pictures::PaintedBox::default();
     let mut x = x_offset;
     let mut y = y_offset;
     let mut row = 0usize;
@@ -229,6 +230,7 @@ pub fn decode_family_e(record: &[u8]) -> Result<Picture, PictureError> {
                     && (0..CANVAS_HEIGHT as i32).contains(y)
                 {
                     pixels[*y as usize * CANVAS_WIDTH + px as usize] = value;
+                    painted.mark(px as usize, *y as usize);
                 }
             }
             *x += step;
@@ -285,6 +287,7 @@ pub fn decode_family_e(record: &[u8]) -> Result<Picture, PictureError> {
         // Family E stores no colour bytes; see "Colour" above.
         colour_bytes: [0; 4],
         unrecognised_colours: Vec::new(),
+        painted: painted.finish(),
     })
 }
 
@@ -414,6 +417,35 @@ impl DosRelease {
             hulk_room_picture(room)
         } else {
             room
+        }
+    }
+
+    /// The **object** picture index the item at `item` draws over the room
+    /// picture (§12.11), reached through the one table that states it
+    /// ([`hulk_object_picture`]) rather than a second copy — exactly as
+    /// [`Self::room_picture`] reaches [`hulk_room_picture`]. The item's own
+    /// index for anything the title does not override, which is §8.6's whole
+    /// rule for this family.
+    ///
+    /// **Checked against this release's own files.** The MS-DOS *Hulk* ships
+    /// `B01013R`, `B01070R` and `B01072R` and no `B01014R`, `B01015R`,
+    /// `B01021R` or `B01042R` — the same asymmetry the Commodore 64 twin has,
+    /// which is what the three overrides repair. (It ships sixteen
+    /// object-in-room records where the Commodore disk ships eighteen; the
+    /// two it lacks are `B01047R`, the cavern's small cage, and the
+    /// unexplained `B01250R`.)
+    ///
+    /// [`Self::remaps_hulk_rooms`] is what names the title here, because
+    /// §10.7's MS-DOS catalogue holds exactly one readable release and it is
+    /// the *Hulk*. On the S.A.G.A. side the two questions genuinely differ —
+    /// §12.11 exempts the Apple II release from the room remap and not from
+    /// these overlays, which is why `SagaUs` has both `remaps_hulk_rooms` and
+    /// `is_hulk` — and no MS-DOS release raises that distinction.
+    pub fn object_picture(&self, item: usize) -> usize {
+        if self.remaps_hulk_rooms {
+            hulk_object_picture(item)
+        } else {
+            item
         }
     }
 }
@@ -714,6 +746,24 @@ mod tests {
         let plain = DosRelease { title: "x", remaps_hulk_rooms: false };
         for room in 1..=20usize {
             assert_eq!(plain.room_picture(room), room, "a release with no remap");
+        }
+    }
+
+    /// §12.11's object overlays reach the MS-DOS release through the same one
+    /// table the Commodore 64 twin reads (SQ-1482) — the zip carries
+    /// `B01013R`, `B01070R` and `B01072R` and no record of its own for items
+    /// 14, 15, 21 or 42.
+    #[test]
+    fn the_hulk_release_draws_the_three_measured_object_overrides() {
+        for (item, want) in [(14usize, 13usize), (15, 13), (21, 72), (42, 70)] {
+            assert_eq!(HULK.object_picture(item), want, "item {item}");
+        }
+        for item in [0usize, 13, 17, 20, 22, 33, 36, 53, 54] {
+            assert_eq!(HULK.object_picture(item), item, "item {item} draws its own index");
+        }
+        let plain = DosRelease { title: "x", remaps_hulk_rooms: false };
+        for item in [13usize, 14, 15, 21, 42] {
+            assert_eq!(plain.object_picture(item), item, "a release with no overrides");
         }
     }
 

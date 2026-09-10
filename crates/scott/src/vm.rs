@@ -414,6 +414,26 @@ impl Vm {
             .map(|(_, it)| it.text.as_str())
             .collect()
     }
+    /// Item **indices** visible in the current room — present there, not
+    /// carried by the player — in table order.
+    ///
+    /// [`Self::items_in_room`] with the same filter answers each item's
+    /// TEXT, which is what a room panel prints. A host drawing pictures needs
+    /// the index instead, because that is what §8.6 associates artwork with:
+    /// "a *room object* picture overlays [the room picture] when the item
+    /// with that index is in the player's room" (spec §12.11, SQ-1482). Table
+    /// order, not draw order — which record is drawn over which is the
+    /// picture set's own gather order, and only the host has that.
+    pub fn item_indices_in_room(&self) -> Vec<usize> {
+        (0..self.item_loc.len()).filter(|&i| self.item_in_room(i)).collect()
+    }
+    /// Item **indices** the player is carrying, in table order — the other
+    /// half of [`Self::item_indices_in_room`], and what §12.11's inventory
+    /// picture screen is drawn from: "draws the inventory-object picture of
+    /// every carried item".
+    pub fn carried_item_indices(&self) -> Vec<usize> {
+        (0..self.item_loc.len()).filter(|&i| self.item_carried(i)).collect()
+    }
     /// Whether the game has ended (matches [`StepResult::Quit`]) — the
     /// host's cue to stop driving the session.
     pub fn has_quit(&self) -> bool {
@@ -2315,6 +2335,50 @@ impl Vm {
         } else {
             self.out.push_str(".\n");
         }
+        // Spec §12.11, SQ-1482: "**The inventory command draws a picture.**
+        // BEYOND listing what is carried, it clears the graphics window,
+        // draws picture index 98 as a room picture, then draws the
+        // inventory-object picture of every carried item, and waits for the
+        // player to press ENTER before restoring the room view."
+        //
+        // "Beyond listing what is carried" fixes the order: the listing is
+        // printed and the picture comes after it, which is why this is the
+        // LAST thing the function does — `output_len` is taken here, so a
+        // host splitting the turn's transcript at the offset shows the whole
+        // listing alongside the picture and reveals whatever follows on the
+        // keypress.
+        //
+        // The SAME door opcode 90 uses (§12.11 says so outright: "the same
+        // door the inventory picture above goes through"), so a host needs no
+        // second mechanism and the ENTER wait is the one it already has.
+        // Which items are drawn over the backdrop is the host's — it holds
+        // the picture files — from `Vm::carried_item_indices`.
+        if self.draws_saga_pictures() {
+            self.pending_picture_shows.push(PictureShow {
+                picture: crate::INVENTORY_PICTURE as u16,
+                output_len: self.out.len(),
+            });
+        }
+    }
+
+    /// Does this database obey §12.11's US S.A.G.A. picture rules?
+    ///
+    /// Two ways to be one, because the same game ships in two encodings. A
+    /// §12 BINARY database says so itself
+    /// ([`Database::saga_us`](crate::Database::saga_us)). The MS-DOS release
+    /// is the plain reference TEXT format (§10.7) and says nothing about
+    /// itself at all, so it is identified from its own header counts instead
+    /// — [`crate::saga_dos::identify`], the same door the host's picture
+    /// source is resolved through, so the two cannot disagree about which
+    /// release this is.
+    ///
+    /// Note the asymmetry with [`Vm::current_picture`], which keys on
+    /// `saga_us` alone: the room-picture rules can be applied by the host
+    /// after the fact (it knows the release), but a queued
+    /// [`PictureShow`] cannot be invented by a host that never saw the
+    /// command run.
+    fn draws_saga_pictures(&self) -> bool {
+        self.db.saga_us.is_some() || crate::saga_dos::identify(&self.db).is_some()
     }
 
     /// The player's score as Scott counts it: treasures deposited in the
@@ -2882,6 +2946,133 @@ mod tests {
         vm.supply_line("look");
         vm.step();
         assert!(vm.take_picture_shows().is_empty(), "a turn that ran no 90 queues nothing");
+    }
+
+    // --- SQ-1482: §12.11's object overlays and the inventory picture screen.
+    // What the VM owes a host drawing them is two lists of item INDICES and
+    // one queued show; which artwork each index reaches, and whether the
+    // release ships it, is the host's. ---
+
+    /// The two index queries are the picture-drawing half of
+    /// `items_in_room`/`print_inventory`, and they must track a move the
+    /// instant it happens — an overlay set computed from a stale list draws
+    /// the gem the player just picked up (spec §12.11).
+    #[test]
+    fn item_index_queries_follow_an_item_from_the_room_into_the_pack() {
+        let items: Vec<Item> = (0..5)
+            .map(|i| Item {
+                text: format!("item{i}"),
+                treasure: false,
+                // Items 1 and 3 start in room 2, where the player is.
+                start_loc: if i == 1 || i == 3 { 2 } else { 0 },
+                auto_noun: None,
+            })
+            .collect();
+        let mut vm = saga_vm_with(items, rooms4(), 2);
+        assert_eq!(vm.item_indices_in_room(), vec![1, 3], "table order, not disk order");
+        assert!(vm.carried_item_indices().is_empty(), "nothing carried at the start");
+
+        vm.set_item_loc(1, CARRIED);
+        assert_eq!(vm.item_indices_in_room(), vec![3], "the taken item leaves the room");
+        assert_eq!(vm.carried_item_indices(), vec![1], "…and joins the pack");
+
+        vm.set_item_loc(1, 3); // dropped in a room the player is NOT in
+        assert_eq!(vm.item_indices_in_room(), vec![3], "another room's items are not here");
+        assert!(vm.carried_item_indices().is_empty());
+    }
+
+    /// §12.11: "**The inventory command draws a picture.** Beyond listing
+    /// what is carried, it … draws picture index 98." Beyond LISTING fixes
+    /// the order, and `output_len` is what carries it to a host: the whole
+    /// listing sits ahead of the offset.
+    #[test]
+    fn saga_inventory_queues_picture_98_after_the_listing() {
+        let items: Vec<Item> = (0..3)
+            .map(|i| Item {
+                text: format!("item{i}"),
+                treasure: false,
+                start_loc: if i == 2 { CARRIED } else { 0 },
+                auto_noun: None,
+            })
+            .collect();
+        let mut vm = saga_vm_with(items, rooms4(), 1);
+        vm.take_output();
+        vm.run_commands(&[66, 0, 0, 0], &[]); // 66 = INVENTORY
+        let shows = vm.take_picture_shows();
+        let text = vm.take_output();
+        assert!(text.contains("item2"), "the listing ran: {text:?}");
+        assert_eq!(
+            shows,
+            vec![PictureShow {
+                picture: crate::INVENTORY_PICTURE as u16,
+                output_len: text.len()
+            }],
+            "one show, index 98, queued at the END of the listing"
+        );
+    }
+
+    /// …and no other dialect draws one. A reference-format database that is
+    /// not one of §10.7's releases queues nothing, so a plain `.dat` never
+    /// stops for a keypress it has no picture for.
+    #[test]
+    fn reference_format_inventory_queues_no_picture_show() {
+        let mut vm = Vm::new(tiny_world());
+        vm.take_output();
+        vm.run_commands(&[66, 0, 0, 0], &[]);
+        assert!(
+            vm.take_picture_shows().is_empty(),
+            "§12.11's inventory picture is a US S.A.G.A. rule, not a general one"
+        );
+    }
+
+    /// The MS-DOS *Hulk* is the reference TEXT format (§10.7) and still obeys
+    /// §12.11, so the queue has to key on the RELEASE and not the encoding —
+    /// `saga_dos::identify`, the same door the host resolves its picture
+    /// files through.
+    #[test]
+    fn the_ms_dos_hulks_header_counts_queue_the_inventory_show_too() {
+        let mut db = tiny_world();
+        // §10.7's eleven counts, spelled as table lengths (each is the
+        // highest INDEX plus the entry-0 slot, §2.2).
+        db.items = (0..55)
+            .map(|i| Item {
+                text: format!("item{i}"),
+                treasure: false,
+                start_loc: 0,
+                auto_noun: None,
+            })
+            .collect();
+        db.actions = vec![
+            Action {
+                verb: 0,
+                noun: 0,
+                conditions: [Condition { code: 0, value: 0 }; 5],
+                commands: [0; 4]
+            };
+            262
+        ];
+        db.verbs = vec![String::new(); 129];
+        db.rooms = (0..21)
+            .map(|i| Room { exits: [0; 6], desc: format!("room{i}"), literal: true })
+            .collect();
+        db.max_carry = 10;
+        db.start_room = 1;
+        db.num_treasures = 17;
+        db.word_length = 4;
+        db.light_time = 150;
+        db.messages = vec![String::new(); 100];
+        db.treasure_room = 16;
+        assert!(db.saga_us.is_none(), "premise: the text format says nothing about itself");
+        assert!(crate::saga_dos::identify(&db).is_some(), "premise: the counts name the release");
+
+        let mut vm = Vm::new(db);
+        vm.take_output();
+        vm.run_commands(&[66, 0, 0, 0], &[]);
+        assert_eq!(
+            vm.take_picture_shows().first().map(|s| s.picture),
+            Some(crate::INVENTORY_PICTURE as u16),
+            "the same rule reaches the release in its other encoding"
+        );
     }
 
     // §12.11's Hulk remap reaches `current_picture`, so a host asking "what

@@ -141,6 +141,65 @@ pub struct Picture {
     /// `B01250R` stores 232 for pixel value 3, and §8.3's table has neither.
     /// On the Atari it is most bytes; see [`atari_colour`].
     pub unrecognised_colours: Vec<u8>,
+    /// The canvas rectangle this record's own pixels actually cover, or
+    /// `None` for a record that painted nothing at all.
+    ///
+    /// **Only an overlay needs this, and an overlay cannot be drawn without
+    /// it.** §12.11 has the object pictures of the items in a room drawn OVER
+    /// the room picture, and every one of them is a sub-image on the shared
+    /// canvas — so a host compositing one must copy the sub-image's own
+    /// rectangle and leave the rest of the room picture alone. It cannot work
+    /// that rectangle out from [`Self::pixels`], because "untouched" and
+    /// "painted black" are the same value 0 (§8.3 forces value 0 to black),
+    /// and the *Hulk*'s room pictures are mostly black.
+    ///
+    /// Measured from the writes themselves rather than derived from the
+    /// header, so a record whose data runs out early reports the region it
+    /// really painted and not the one it promised. Bounds are **inclusive**
+    /// and always inside the canvas.
+    pub painted: Option<Painted>,
+}
+
+/// The canvas rectangle one record's pixels cover — see [`Picture::painted`].
+///
+/// Inclusive on all four sides, and always within
+/// `0..`[`CANVAS_WIDTH`] x `0..`[`CANVAS_HEIGHT`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Painted {
+    /// Leftmost column painted.
+    pub left: usize,
+    /// Topmost row painted.
+    pub top: usize,
+    /// Rightmost column painted, inclusive.
+    pub right: usize,
+    /// Bottommost row painted, inclusive.
+    pub bottom: usize,
+}
+
+/// Accumulates [`Painted`] as a decoder writes, so a decoder's own inner loop
+/// says "I wrote here" and nothing has to re-derive it from a header whose
+/// promises the data may not keep.
+#[derive(Default)]
+pub(crate) struct PaintedBox(Option<Painted>);
+
+impl PaintedBox {
+    /// Note that `(x, y)` was written. Both must already be on the canvas.
+    pub(crate) fn mark(&mut self, x: usize, y: usize) {
+        match &mut self.0 {
+            None => self.0 = Some(Painted { left: x, top: y, right: x, bottom: y }),
+            Some(p) => {
+                p.left = p.left.min(x);
+                p.top = p.top.min(y);
+                p.right = p.right.max(x);
+                p.bottom = p.bottom.max(y);
+            }
+        }
+    }
+
+    /// What was painted, or `None` if nothing was.
+    pub(crate) fn finish(self) -> Option<Painted> {
+        self.0
+    }
 }
 
 impl Picture {
@@ -228,6 +287,7 @@ pub fn decode_family_c(bytes: &[u8], platform: SagaPlatform) -> Result<Picture, 
     }
 
     let mut pixels = vec![0u8; CANVAS_WIDTH * CANVAS_HEIGHT];
+    let mut painted = PaintedBox::default();
     let mut x = left;
     let mut y = top;
     // One pair: two bytes, the first to row `y` and the second to row `y + 1`
@@ -250,6 +310,7 @@ pub fn decode_family_c(bytes: &[u8], platform: SagaPlatform) -> Result<Picture, 
                     let px = *x + pair * 2 + half;
                     if (0..CANVAS_WIDTH as i32).contains(&px) {
                         pixels[row as usize * CANVAS_WIDTH + px as usize] = value;
+                        painted.mark(px as usize, row as usize);
                     }
                 }
             }
@@ -311,6 +372,7 @@ pub fn decode_family_c(bytes: &[u8], platform: SagaPlatform) -> Result<Picture, 
         palette,
         colour_bytes,
         unrecognised_colours,
+        painted: painted.finish(),
     })
 }
 
@@ -480,6 +542,44 @@ mod tests {
         assert_eq!(px(24, 6), 0, "column one, second pair");
         assert_eq!(px(32, 4), 1, "column two starts eight pixels right");
         assert_eq!(px(32, 6), 0, "column two, second pair");
+    }
+
+    // `Picture::painted` is the rectangle the record's own pixels cover, and
+    // it is what an overlay is composited through (§12.11, SQ-1482). It is
+    // measured from the WRITES, not from the header, so it reports the four
+    // rows a two-pair column really paints rather than the three the
+    // inclusive bottom row promises — and a record whose value-0 pixels are
+    // indistinguishable from an untouched canvas still knows where it is.
+    #[test]
+    fn painted_reports_the_rectangle_the_record_covers() {
+        let rec = record(
+            [0x00, 0x50, 0, 0, 6, 4, 7, 6, 14, 67, 17, 0],
+            &[(0xFF, 0xFF), (0x00, 0x00), (0x55, 0x55), (0x00, 0x00)],
+        );
+        let pic = decode_family_c(&rec, SagaPlatform::Commodore64).expect("decodes");
+        assert_eq!(
+            pic.painted,
+            Some(Painted { left: 24, top: 4, right: 39, bottom: 7 }),
+            "two eight-pixel columns from x 24, rows 4 through 7"
+        );
+        // Row 7 is entirely value 0 and is inside the rectangle all the same:
+        // "painted black" is a pixel the record drew, and the canvas outside
+        // is the same value with nothing behind it.
+        assert_eq!(pic.pixels[7 * CANVAS_WIDTH + 24], 0);
+
+        // A record whose placement covers no region is refused before this
+        // ever runs (see `refusals`), so `None` is reachable only from a
+        // record with no data at all.
+        let empty = {
+            let mut r = [0x00u8, 0x50, 0, 0, 6, 4, 6, 6, 14, 67, 17, 0].to_vec();
+            r.extend_from_slice(&[0, 0]);
+            r
+        };
+        assert_eq!(
+            decode_family_c(&empty, SagaPlatform::Commodore64).expect("decodes").painted,
+            None,
+            "a record that paints nothing has no rectangle"
+        );
     }
 
     // Bit 7 set is a repeat: the count is the low seven bits plus one, and the

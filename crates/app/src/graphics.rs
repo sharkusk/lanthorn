@@ -226,6 +226,68 @@ fn scale_art(img: &Arc<DynamicImage>, scale: (u32, u32)) -> Arc<DynamicImage> {
 /// this field — so a native archive feeds the machinery below through the same
 /// `adaptive` set and the same Current Palette, expressed in the same RGB
 /// triples a `PLTE` holds. (SQ-0743)
+/// One US S.A.G.A. release's picture files, kept **both** by name and in the
+/// order the container listed them (SQ-1482).
+///
+/// A `HashMap` alone was enough while a picture number resolved to exactly one
+/// file. §12.11's object overlays need the other half: "after [the room
+/// picture], every object picture whose item index names an item presently in
+/// the room is drawn over it, **in the order the picture files were
+/// gathered**" — and §8.6 says why the order is not cosmetic, "the order is
+/// observable, because later pictures overwrite earlier ones". A `HashMap`'s
+/// iteration order is not the disk's and is not even stable, so the sequence
+/// is kept beside it.
+///
+/// Each entry carries what its NAME says it is ([`scott::PictureFile`] —
+/// usage and index), parsed once at load rather than re-parsed per frame;
+/// entries whose name no rule recognises are held for the record lookup and
+/// left out of [`Self::overlays_for`].
+#[derive(Debug)]
+struct SagaRecords {
+    by_name: HashMap<String, Vec<u8>>,
+    /// `(name, what the name says it is)` in container order.
+    order: Vec<(String, scott::PictureFile)>,
+}
+
+impl SagaRecords {
+    /// `parse` is the family's own naming rule — §8.3's for the Commodore 64
+    /// and Atari, §8.4's for the Apple II, §8.5's for MS-DOS.
+    fn new(
+        files: Vec<(String, Vec<u8>)>,
+        parse: impl Fn(&str) -> Option<scott::PictureFile>,
+    ) -> SagaRecords {
+        let order =
+            files.iter().filter_map(|(n, _)| Some((n.clone(), parse(n)?))).collect();
+        SagaRecords { by_name: files.into_iter().collect(), order }
+    }
+
+    fn record(&self, name: &str) -> Option<&Vec<u8>> {
+        self.by_name.get(name)
+    }
+
+    fn len(&self) -> usize {
+        self.by_name.len()
+    }
+
+    /// The names of every record with `usage` whose index appears in
+    /// `indices`, **in container order** — §12.11's draw order.
+    ///
+    /// Driven off the gathered list rather than off a name spelled from the
+    /// index, because only two of the six naming conventions in play have an
+    /// inverse at all (§8.3's `R01nnn` and §8.5's `R01nn`, both room-only):
+    /// an object record's name carries a usage letter on one release and not
+    /// on another (§10.7), and the Apple II's carries the adventure number.
+    /// Reading the name the container actually holds cannot get any of that
+    /// wrong.
+    fn overlays_for(&self, usage: scott::PictureUsage, indices: &[u16]) -> Vec<String> {
+        self.order
+            .iter()
+            .filter(|(_, pf)| pf.usage == usage && indices.contains(&pf.index))
+            .map(|(name, _)| name.clone())
+            .collect()
+    }
+}
+
 #[derive(Debug)]
 pub struct PictSource {
     blorb: Option<blorb::Blorb>,
@@ -334,7 +396,7 @@ pub struct PictSource {
     /// [`scott::room_picture_file_name`].
     ///
     /// `None` for every other source.
-    scott_saga: Option<(HashMap<String, Vec<u8>>, scott::SagaUs)>,
+    scott_saga: Option<(SagaRecords, scott::SagaUs)>,
     /// The MS-DOS *Questprobe* release's own **family-E** CGA bitmaps (spec
     /// §8.5, SQ-1477) as the raw `.PAK` files they are stored as, keyed by
     /// the name the zip holds them under, with the release whose room-picture
@@ -353,7 +415,7 @@ pub struct PictSource {
     /// caller of [`Self::get`] cannot tell them apart.
     ///
     /// `None` for every other source.
-    scott_saga_dos: Option<(HashMap<String, Vec<u8>>, scott::DosRelease)>,
+    scott_saga_dos: Option<(SagaRecords, scott::DosRelease)>,
     /// Does this source's art need [`blend_half_width_columns`] on the way out —
     /// i.e. is it a SIXTEEN-colour 640-wide rendition, whose pixels are half as
     /// wide as the unit screen's and whose dithers the card fused (SQ-0797)?
@@ -535,8 +597,13 @@ impl PictSource {
     /// aspect-preserving fit into the picture band is the whole of the
     /// scaling, the same way it is for a Blorb's pre-rendered pictures.
     pub fn from_scott_saga(files: Vec<(String, Vec<u8>)>, release: scott::SagaUs) -> PictSource {
-        let map: HashMap<String, Vec<u8>> = files.into_iter().collect();
-        PictSource { scott_saga: Some((map, release)), ..PictSource::new(None) }
+        let records = SagaRecords::new(files, |name| match release.platform {
+            scott::SagaPlatform::AppleII => {
+                scott::parse_apple_picture_file_name(name).map(|(_, pf)| pf)
+            }
+            _ => scott::parse_picture_file_name(name),
+        });
+        PictSource { scott_saga: Some((records, release)), ..PictSource::new(None) }
     }
 
     /// Which platform's family-C artwork this source holds, or `None` when it
@@ -573,8 +640,8 @@ impl PictSource {
         files: Vec<(String, Vec<u8>)>,
         release: scott::DosRelease,
     ) -> PictSource {
-        let map: HashMap<String, Vec<u8>> = files.into_iter().collect();
-        PictSource { scott_saga_dos: Some((map, release)), ..PictSource::new(None) }
+        let records = SagaRecords::new(files, scott::saga_dos::parse_picture_file_name);
+        PictSource { scott_saga_dos: Some((records, release)), ..PictSource::new(None) }
     }
 
     /// Which MS-DOS release's family-E artwork this source holds, or `None`
@@ -588,6 +655,102 @@ impl PictSource {
     /// not a family-E source at all.
     pub fn scott_saga_dos_count(&self) -> Option<usize> {
         self.scott_saga_dos.as_ref().map(|(files, _)| files.len())
+    }
+
+    /// The picture records this source would draw OVER a room picture (or
+    /// over the inventory backdrop), in the order §12.11 draws them
+    /// (SQ-1482).
+    ///
+    /// `usage` picks which half of §8.6's object artwork is wanted —
+    /// [`scott::PictureUsage::ObjectInRoom`] for the room band,
+    /// [`scott::PictureUsage::ObjectInInventory`] for the inventory screen —
+    /// and `indices` is the set of picture indices the caller resolved from
+    /// the items it is drawing (`SagaUs::object_picture` /
+    /// `DosRelease::object_picture` have already applied the *Hulk*'s three
+    /// overrides by then). Names, not numbers, because a name is what the
+    /// container holds and what [`Self::scott_composite`] and
+    /// `/dump-windows` both want.
+    ///
+    /// Empty for every source that is not a S.A.G.A. one, which is what makes
+    /// this safe to call unconditionally: a Blorb game, a family-B memory
+    /// image and a text-only `.dat` all answer with no overlays.
+    pub fn scott_overlays(
+        &self,
+        usage: scott::PictureUsage,
+        indices: &[u16],
+    ) -> Vec<String> {
+        match (&self.scott_saga, &self.scott_saga_dos) {
+            (Some((files, _)), _) | (None, Some((files, _))) => {
+                files.overlays_for(usage, indices)
+            }
+            (None, None) => Vec::new(),
+        }
+    }
+
+    /// `base`'s decoded picture with each named object record painted over
+    /// its **own** rectangle, in the order given (§12.11, SQ-1482).
+    ///
+    /// Overlays are sub-images on the same 280x160 canvas the room picture is
+    /// on, and each one knows where it belongs (§8.6: "each object picture
+    /// carries its own absolute placement"). Only the rectangle a record
+    /// actually painted is copied — [`scott::saga_pictures::Picture::painted`]
+    /// — because everything outside it is pixel value 0, which §8.3 forces to
+    /// BLACK rather than to transparent: copy the whole canvas and a
+    /// postage-stamp gem blanks the room around it.
+    ///
+    /// Each overlay is drawn through **its own** palette, not the room
+    /// picture's. The two disagree on the specimen — the *Hulk*'s `B01013R`
+    /// stores 214/135/58 where the room picture it lands on stores 214/15/14
+    /// — and the original hardware's global colour registers are exactly
+    /// what §8.3 says lanthorn's colour handling already deviates from
+    /// ("the fourth colour register of every family C picture is discarded
+    /// and pixel value 0 is forced to black"). Drawing each record in the
+    /// colours its own author chose is the reading that needs no further
+    /// guess.
+    ///
+    /// With no overlays this is [`Self::image`] and shares its cached `Arc`,
+    /// so the ordinary picture path costs nothing.
+    pub fn scott_composite(
+        &mut self,
+        base: u32,
+        overlays: &[String],
+    ) -> Option<Arc<DynamicImage>> {
+        let under = self.image(base)?;
+        if overlays.is_empty() {
+            return Some(under);
+        }
+        let mut canvas = under.to_rgba8();
+        for name in overlays {
+            let Some(pic) = self.scott_record_picture(name) else { continue };
+            let Some(area) = pic.painted else { continue };
+            for y in area.top..=area.bottom.min(pic.height.saturating_sub(1)) {
+                for x in area.left..=area.right.min(pic.width.saturating_sub(1)) {
+                    if let (Some((r, g, b)), true) =
+                        (pic.rgb(x, y), (x as u32) < canvas.width() && (y as u32) < canvas.height())
+                    {
+                        canvas.put_pixel(x as u32, y as u32, Rgba([r, g, b, 255]));
+                    }
+                }
+            }
+        }
+        Some(Arc::new(DynamicImage::ImageRgba8(canvas)))
+    }
+
+    /// Decode the record stored under `name` through whichever family this
+    /// source holds. `None` for a name the container does not carry, or a
+    /// record its own family's decoder refuses (§11).
+    fn scott_record_picture(&self, name: &str) -> Option<scott::saga_pictures::Picture> {
+        if let Some((files, release)) = &self.scott_saga {
+            let record = files.record(name)?;
+            return match release.platform {
+                scott::SagaPlatform::AppleII => {
+                    scott::decode_family_d(record, release.platform).ok()
+                }
+                platform => scott::decode_family_c(record, platform).ok(),
+            };
+        }
+        let (files, _) = self.scott_saga_dos.as_ref()?;
+        scott::decode_family_e(files.record(name)?).ok()
     }
 
     /// Resolve the picture source for `story_path` (SQ-0734's tiers 1 and 2).
@@ -1168,13 +1331,13 @@ impl PictSource {
                 None if self.scott_saga_dos.is_some() => {
                     self.scott_saga_dos.as_ref().and_then(|(files, _)| {
                         let name = scott::saga_dos::picture_file_name(resnum as usize)?;
-                        scott_dos_saga_image(files.get(&name)?)
+                        scott_dos_saga_image(files.record(&name)?)
                     })
                 }
                 None if self.scott_saga.is_some() => {
                     self.scott_saga.as_ref().and_then(|(files, release)| {
                         let name = scott::room_picture_file_name(release, resnum as usize)?;
-                        let record = files.get(&name)?;
+                        let record = files.record(&name)?;
                         scott_saga_image(record, release.platform)
                     })
                 }
