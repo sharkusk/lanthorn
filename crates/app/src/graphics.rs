@@ -331,6 +331,25 @@ pub struct PictSource {
     ///
     /// `None` for every other source.
     scott_saga: Option<(HashMap<String, Vec<u8>>, scott::SagaPlatform)>,
+    /// The MS-DOS *Questprobe* release's own **family-E** CGA bitmaps (spec
+    /// §8.5, SQ-1477) as the raw `.PAK` files they are stored as, keyed by
+    /// the name the zip holds them under, with the release whose room-picture
+    /// remap reads them (§12.11).
+    ///
+    /// Undecoded for the same reason `scott_saga` is: the *Hulk*'s
+    /// sixty-eight files are about 100 KB of zip and 3 MB of indexed pixels,
+    /// and [`Self::get`] decodes the ones a player actually reaches.
+    ///
+    /// A separate field from `scott_saga` rather than a fourth arm of it
+    /// because family E shares NO arithmetic with family C — different
+    /// storage order, different compression, a fixed palette instead of four
+    /// stored colour bytes — and because the file names differ too (§8.5's
+    /// `R01nn.PAK` against §8.3's `R01nnn`). What they do share is the
+    /// [`scott::saga_pictures::Picture`] they decode to, which is why a
+    /// caller of [`Self::get`] cannot tell them apart.
+    ///
+    /// `None` for every other source.
+    scott_saga_dos: Option<(HashMap<String, Vec<u8>>, scott::DosRelease)>,
     /// Does this source's art need [`blend_half_width_columns`] on the way out —
     /// i.e. is it a SIXTEEN-colour 640-wide rendition, whose pixels are half as
     /// wide as the unit screen's and whose dithers the card fused (SQ-0797)?
@@ -374,6 +393,7 @@ impl PictSource {
             hw_palette: None,
             scott_c64: None,
             scott_saga: None,
+            scott_saga_dos: None,
             blend_columns: false,
             screen_palette: false,
         }
@@ -531,6 +551,42 @@ impl PictSource {
     /// from a non-empty walk.
     pub fn scott_saga_count(&self) -> Option<usize> {
         self.scott_saga.as_ref().map(|(files, _)| files.len())
+    }
+
+    /// A source backed by an MS-DOS *Questprobe* release's own **family-E**
+    /// CGA bitmaps (spec §8.5, SQ-1477), taken out of the same zip the
+    /// database was opened from.
+    ///
+    /// `files` is `(name, record)` for every `.PAK` entry the archive holds —
+    /// `crate::hints::saga_picture_files` collects them at open time, because
+    /// the archive is not re-opened afterwards — and `release` is what
+    /// `scott::saga_dos::identify` made of the database, so [`Self::get`] can
+    /// apply §12.11's *Hulk* room-picture remap to a number that arrived as a
+    /// room.
+    ///
+    /// No band-height argument and no resolution choice, for the same reason
+    /// [`Self::from_scott_saga`] takes neither: a family-E record IS a bitmap
+    /// on a fixed canvas, so the renderer's aspect-preserving fit into the
+    /// picture band is the whole of the scaling.
+    pub fn from_scott_dos_saga(
+        files: Vec<(String, Vec<u8>)>,
+        release: scott::DosRelease,
+    ) -> PictSource {
+        let map: HashMap<String, Vec<u8>> = files.into_iter().collect();
+        PictSource { scott_saga_dos: Some((map, release)), ..PictSource::new(None) }
+    }
+
+    /// Which MS-DOS release's family-E artwork this source holds, or `None`
+    /// when it holds none. The room-picture remap `ScottSession` applies
+    /// (§12.11) and the name `/dump-windows` prints both come off this.
+    pub fn scott_dos_release(&self) -> Option<scott::DosRelease> {
+        self.scott_saga_dos.as_ref().map(|(_, release)| *release)
+    }
+
+    /// How many family-E `.PAK` records this source holds; `None` when it is
+    /// not a family-E source at all.
+    pub fn scott_saga_dos_count(&self) -> Option<usize> {
+        self.scott_saga_dos.as_ref().map(|(files, _)| files.len())
     }
 
     /// Resolve the picture source for `story_path` (SQ-0734's tiers 1 and 2).
@@ -1103,6 +1159,17 @@ impl PictSource {
                 // `scott::Vm::current_picture`, so `resnum` is the index the
                 // file name spells. A record the platform's decoder refuses
                 // (§11) is remembered as `None` rather than retried.
+                // SQ-1477: family E names a FILE too, `R01nn.PAK` (§8.5), and
+                // `resnum` is already the picture index — `ScottSession`
+                // applied §12.11's *Hulk* remap on the way in, where it knows
+                // the number came from the room rather than from an explicit
+                // draw-picture opcode.
+                None if self.scott_saga_dos.is_some() => {
+                    self.scott_saga_dos.as_ref().and_then(|(files, _)| {
+                        let name = scott::saga_dos::picture_file_name(resnum as usize)?;
+                        scott_dos_saga_image(files.get(&name)?)
+                    })
+                }
                 None if self.scott_saga.is_some() => {
                     self.scott_saga.as_ref().and_then(|(files, platform)| {
                         let name = scott::picture_file_name(*platform, resnum as usize)?;
@@ -2331,6 +2398,29 @@ fn scott_c64_image(list: &scott::c64::PictureList, scale: u32, platform: ScottFa
 /// need the composite this does not do (see the module's own note).
 fn scott_saga_image(record: &[u8], platform: scott::SagaPlatform) -> Option<DynamicImage> {
     let pic = scott::decode_family_c(record, platform).ok()?;
+    Some(picture_to_image(&pic))
+}
+
+/// Decode one MS-DOS *Questprobe* **family-E** `.PAK` file (spec §8.5) to the
+/// same `DynamicImage` every other picture source hands `WinNode::Graphics`
+/// (SQ-1477). `None` for a record that is not family E at all — §11's named
+/// refusals: too short for a header, a signature that says `.EXE`, a chunk
+/// running past the end of the file, or a header describing no pixels.
+///
+/// Fully opaque, exactly as [`scott_saga_image`] is and for the same reason:
+/// §8.5 gives every pixel one of four values and value 0 is black, so there
+/// is no transparent index. That is right for a ROOM picture, which is what a
+/// picture number resolves to; §8.6's object overlays would need a composite
+/// this does not do.
+fn scott_dos_saga_image(record: &[u8]) -> Option<DynamicImage> {
+    let pic = scott::decode_family_e(record).ok()?;
+    Some(picture_to_image(&pic))
+}
+
+/// One decoded S.A.G.A. picture — family C or family E — as an opaque RGBA
+/// image. The two decoders answer the same
+/// [`scott::saga_pictures::Picture`], so there is one conversion and not two.
+fn picture_to_image(pic: &scott::saga_pictures::Picture) -> DynamicImage {
     let mut buf = RgbaImage::new(pic.width as u32, pic.height as u32);
     for y in 0..pic.height {
         for x in 0..pic.width {
@@ -2338,7 +2428,7 @@ fn scott_saga_image(record: &[u8], platform: scott::SagaPlatform) -> Option<Dyna
             buf.put_pixel(x as u32, y as u32, Rgba([r, g, b, 255]));
         }
     }
-    Some(DynamicImage::ImageRgba8(buf))
+    DynamicImage::ImageRgba8(buf)
 }
 
 /// Fuse a 640-wide rendition's column dither, because its pixels are half as wide

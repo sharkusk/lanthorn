@@ -1368,8 +1368,9 @@ pub struct MountedStory {
     /// Which release disk image it was mounted out of, if it was one rather
     /// than a plain file (SQ-0737, SQ-0837).
     pub disk_image: Option<DiskImage>,
-    /// The **family-C picture files** on the same container, `(name, record)`
-    /// in the container's own order (spec §8.3, SQ-1475).
+    /// The release's own **picture files** on the same container,
+    /// `(name, record)` in the container's own order — family C off a disk
+    /// image (spec §8.3, SQ-1475) or family E out of a zip (§8.5, SQ-1477).
     ///
     /// A US S.A.G.A. release keeps its artwork in separate files beside the
     /// database — §12.10, "pictures live in separate files on the disk, one
@@ -1400,13 +1401,23 @@ pub fn load_mounted_story_full(
     let (bytes, disk_image) = read_story_file(path, disk_entry)?;
     let saga_pictures = match disk_image {
         Some(_) if scott::detect_saga_us(&bytes).is_some() => saga_picture_files(path),
+        // SQ-1477: family E. The MS-DOS *Questprobe* releases are zips of
+        // loose DOS files — the database beside its `.PAK` pictures — and the
+        // database is the plain reference TEXT format (spec §10.7), so
+        // `detect_saga_us` cannot be the gate here the way it is above. The
+        // gate is instead the cheapest pair of facts that cannot be true of
+        // anything else: the container is a zip, and what came out of it is a
+        // Scott database. `saga_picture_files` then classifies the entries by
+        // CONTENT, so a zip of Z-code and a `README` collects nothing.
+        None if is_zip(path) && scott::looks_like_scott_bytes(&bytes) => saga_picture_files(path),
         _ => Vec::new(),
     };
     Ok(MountedStory { story: extract_story(bytes)?, disk_image, saga_pictures })
 }
 
-/// Every family-C picture file on the container at `path` (spec §8.3's naming
-/// rule, `scott::is_picture_file_name`), `(name, record)`.
+/// Every picture file on the container at `path`, `(name, record)`: family C
+/// off a disk image (spec §8.3's naming rule, `scott::is_picture_file_name`)
+/// or family E out of a zip (§8.5, `scott::saga_dos`, SQ-1477).
 ///
 /// Empty for anything that is not a mountable disk image, and for one that
 /// holds no such names — which is the honest answer for an Atari `.atr`,
@@ -1418,6 +1429,25 @@ pub fn load_mounted_story_full(
 /// container — so the pictures are re-read off the same path the launch
 /// mounted, rather than carried in app state for the life of the session.
 pub fn saga_picture_files(path: &Path) -> Vec<(String, Vec<u8>)> {
+    // SQ-1477: a zip is the MS-DOS releases' container, and family E's
+    // pictures are ordinary entries in it beside the database — so the walk
+    // is the same walk, over a different kind of volume. Classified by
+    // CONTENT and not by name: `looks_like_family_e` reads the signature
+    // bytes, which is what keeps `START.EXE`, `HULK.BAT` and `ADVENT.DAT`
+    // out of a set that a name rule alone would be free to guess at.
+    if is_zip(path) {
+        let mut out = Vec::new();
+        let _ = for_each_zip_entry(path, |name, bytes| {
+            let base = name.rsplit('/').next().unwrap_or(name);
+            if scott::saga_dos::is_picture_file_name(base)
+                && scott::saga_dos::looks_like_family_e(&bytes)
+            {
+                out.push((base.to_string(), bytes));
+            }
+            false
+        });
+        return out;
+    }
     let Ok(raw) = std::fs::read(path) else {
         return Vec::new();
     };

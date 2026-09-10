@@ -87,6 +87,19 @@ pub enum ScottPictures {
         /// pictures be?" is per-platform.
         platform: scott::SagaPlatform,
     },
+    /// An MS-DOS *Questprobe* release whose zip carries **family-E** CGA
+    /// bitmaps beside the database (spec §8.5, SQ-1477) — `pictures` of them,
+    /// decodable by `scott::decode_family_e`.
+    ///
+    /// No platform field, unlike [`Self::SagaUsStrips`]: family E's palette is
+    /// fixed by the format (§8.5, CGA palette 1 at high intensity) rather than
+    /// stored per record, so there is no second machine's colour table for a
+    /// reader to choose between.
+    SagaDosCga {
+        /// How many `.PAK` picture files the archive holds (`R…` room
+        /// pictures and `B…` object overlays together — §8.6's three usages).
+        pictures: usize,
+    },
 }
 
 impl ScottPictures {
@@ -1005,7 +1018,17 @@ fn scott_release_title(bytes: &[u8]) -> Option<&'static str> {
     if let Some(r) = scott::zx_mysterious::identify_z80(bytes) {
         return Some(r.title);
     }
-    scott::Database::parse(bytes).ok()?.saga_us?.display_title()
+    let db = scott::Database::parse(bytes).ok()?;
+    // SQ-1477: the MS-DOS *Questprobe* release, identified by the eleven
+    // reference-format header counts §10.7 prints in full. It needs a table
+    // for the same reason the two above do and a stronger one: the plain text
+    // format carries no version, no adventure number the parser reads and
+    // nothing else that names the game, so without this the row is titled
+    // after whatever the archive happens to be called.
+    if let Some(release) = scott::saga_dos::identify(&db) {
+        return Some(release.title);
+    }
+    db.saga_us?.display_title()
 }
 
 /// What a Scott Adams entry's own graphics are (SQ-1473), read straight off
@@ -1056,6 +1079,18 @@ fn scott_pictures(
         } else {
             ScottPictures::SagaUsStrips { platform, pictures }
         });
+    }
+    // SQ-1477: family E, the MS-DOS *Questprobe* releases. Their database is
+    // the plain reference text format (§10.7) and says nothing about itself,
+    // so the CONTAINER is the only witness — and the walk is only worth doing
+    // for a zip, which is the one container these ship in. Nothing else in
+    // this function touches the filesystem for a plain `.dat`, and this does
+    // not either.
+    if crate::hints::is_zip(path) {
+        let pictures = crate::hints::saga_picture_files(path).len();
+        if pictures > 0 {
+            return Some(ScottPictures::SagaDosCga { pictures });
+        }
     }
     None
 }
@@ -2112,6 +2147,12 @@ pub fn type_container(meta: &StoryMeta, blorb: bool) -> Option<&'static str> {
         Engine::Scott => match (meta.disk_image, meta.scott_pictures) {
             (Some(image), _) => Some(image.label()),
             (None, Some(ScottPictures::NativeZx { .. })) => Some("z80"),
+            // SQ-1477: the MS-DOS *Questprobe* releases are zips of loose DOS
+            // files, so the ZIP is the medium the way a `.z80` is the ZX
+            // release's and a `.d64` is the Commodore's — and it is only ever
+            // said for a row whose pictures came out of one, which is why
+            // this cannot collide with the two answers above.
+            (None, Some(ScottPictures::SagaDosCga { .. })) => Some("zip"),
             (None, _) => blorb.then_some("blorb"),
         },
     }
@@ -2781,6 +2822,52 @@ mod tests {
         meta.engine = Engine::Scott;
         assert_eq!(type_container(&meta, false), None);
         assert_eq!(type_container(&meta, true), Some("blorb"));
+    }
+
+    /// SQ-1477: the story-list half of picture family E, on the real archive
+    /// — the release its database identifies as, the pictures its zip carries,
+    /// and the container the TYPE column names.
+    #[test]
+    fn ms_dos_questprobe_rows_name_the_release_its_pictures_and_its_zip() {
+        // The MS-DOS *Hulk*'s database is the plain reference TEXT format
+        // (§10.7) — no version, no adventure number the parser reads, nothing
+        // that names the game — so without `scott::saga_dos::identify` this row
+        // is titled after whatever the archive happens to be called, which
+        // here is `The-Hulk_DOS_EN`.
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../stories/scott-dialects/msdos/The-Hulk_DOS_EN.zip");
+        if !path.exists() {
+            eprintln!("SKIP: no {} (gitignored commercial fixture)", path.display());
+            return;
+        }
+        let mounted = crate::hints::load_mounted_story_full(&path, None)
+            .expect("the zip holds one Scott database");
+        let crate::hints::LoadedStory::Scott(bytes) = mounted.story else {
+            panic!("the MS-DOS Hulk's story is a Scott database");
+        };
+        assert_eq!(
+            scott_release_title(&bytes),
+            Some("The Hulk (MS-DOS)"),
+            "identified from its own header counts, not from the archive's name"
+        );
+        // …and told apart from the SAME game's Commodore 64 release, which is
+        // a §12 binary database and titles itself.
+        assert_ne!(scott_release_title(&bytes), Some("The Hulk (Commodore 64)"));
+
+        let pictures = scott_pictures(&bytes, None, &path);
+        assert_eq!(
+            pictures,
+            Some(ScottPictures::SagaDosCga { pictures: 68 }),
+            "counted from the zip's own `.PAK` entries"
+        );
+
+        // The TYPE column names the zip, the way it names a `.d64` or a `.z80`.
+        let mut meta = story("s", "s.dat", None, None).meta;
+        meta.engine = Engine::Scott;
+        meta.disk_image = None;
+        meta.scott_pictures = pictures;
+        assert_eq!(type_container(&meta, false), Some("zip"));
+        assert_eq!(type_container(&meta, true), Some("zip"), "and it beats a blorb sibling");
     }
 
     #[test]
