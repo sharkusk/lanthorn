@@ -2653,6 +2653,14 @@ The Commodore 64 palette, used by every Commodore 64 release:
 | 6 | blue | 95,72,233 | 14 | light blue | 162,143,255 |
 | 7 | yellow | 247,255,108 | 15 | light grey | 200,200,200 |
 
+> **These sixteen are a hand-made set, and every one of them is brighter than
+> the chip.** Five captures of a real Commodore 64 (`machine-screenshots/
+> c64-hulk-*.png`) resolve to Pepto's measured VIC-II palette exactly, so
+> lanthorn draws both Commodore 64 picture families through that instead:
+> Appendix A item 40. The **indices** above, and the remap that produces them,
+> are unaffected — and no capture of a *Mysterious Adventures* screen exists
+> yet to check remap table A against.
+
 **The remap step.** Commodore 64 releases store the *ZX Spectrum's* colour
 indices in their attribute bytes — the artwork was converted, the numbering was
 not — so every ink and paper index passes through a sixteen-entry remap table
