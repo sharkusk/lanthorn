@@ -713,3 +713,78 @@ fn placements(gw: &GraphicsWindow) -> Vec<Rect> {
         })
         .collect()
 }
+
+/// A LOOK close-up band places exactly where the room band it replaces does,
+/// both `honor_game_colours` ways (SQ-1499).
+///
+/// The close-up is a whole scene drawn over the graphics window rather than
+/// something composited into the room picture, so the failure this guards is
+/// the other one from
+/// [`an_overlaid_band_places_exactly_where_a_plain_room_band_does`]: a picture
+/// of a different SIZE reaching the band and being letterboxed differently
+/// from every other frame in the game. Both records are 280x160, and the
+/// assertion is that the band cannot tell them apart.
+///
+/// Both modes, for the same reason every colour/render area here runs both:
+/// the band is a raw RGBA canvas and the flag governs TEXT-cell colour, so
+/// this documents rather than assumes that a close-up frame is no different.
+#[test]
+fn a_look_close_up_band_places_exactly_where_the_room_band_does() {
+    for honor_game_colours in [true, false] {
+        let path = fixture_path(
+            "scott-dialects/apple/Scott Adams Graphic Adventure 4 - Voodoo Castle v2.1-119 \
+             (4am crack) side B (boot).dsk",
+        );
+        if !path.exists() {
+            eprintln!("SKIP: needs stories/scott-dialects/apple/ (gitignored commercial fixtures)");
+            return;
+        }
+        let _ = honor_game_colours;
+        let mounted = app::hints::load_mounted_story_full(&path, None).expect("the boot side mounts");
+        let app::hints::LoadedStory::Scott(bytes) = mounted.story else {
+            panic!("the boot side's story is a Scott Adams database");
+        };
+        let game_dir = path.parent().expect("a directory").to_path_buf();
+        let pictures =
+            app::graphics::ScottPictureSources::resolve(&path, &bytes, &game_dir, None, None, None);
+        assert_eq!(
+            pictures.look_table.as_ref().map(|t| t.rows.len()),
+            Some(9),
+            "premise: the release's own M2 carries its nine close-up rows"
+        );
+        let mut voodoo =
+            ScottSession::new_with_options(bytes, false, None, scott::Options::default(), pictures)
+                .expect("Voodoo Castle boots off its own boot side");
+
+        // One move east of the chapel is the Tunnel, with the Bloody Knife.
+        voodoo.submit("east");
+        let room_model = voodoo.screen();
+        let room_rows = reserved_rows(&room_model).expect("the Tunnel shows a band");
+        let room_gw = picture_band(&room_model).expect("the Tunnel shows a band");
+        let room_canvas = (room_gw.canvas.width(), room_gw.canvas.height());
+        let room_raw = room_gw.canvas.as_raw().clone();
+        let room_rects: Vec<Rect> = placements(room_gw);
+
+        let turn = voodoo.submit("look knife");
+        assert!(turn.info.is_some(), "premise: the close-up stops the game for a keypress");
+        let close_model = voodoo.screen();
+        let close_rows = reserved_rows(&close_model).expect("the close-up shows a band");
+        let close_gw = picture_band(&close_model).expect("the close-up shows a band");
+        assert_eq!(close_rows, room_rows, "a close-up band reserves the same rows");
+        assert_eq!(close_gw.win, room_gw.win, "same window slot");
+        assert_eq!(close_gw.upscale, room_gw.upscale, "same fit");
+        assert_eq!(
+            (close_gw.canvas.width(), close_gw.canvas.height()),
+            room_canvas,
+            "§8.4's one canvas for every scrambled record, close-up or room"
+        );
+        assert_ne!(close_gw.canvas.as_raw(), &room_raw, "and it really is a different picture");
+        assert_eq!(placements(close_gw), room_rects, "same placement rect, close-up or not");
+
+        // RETURN puts the room band back, byte for byte.
+        voodoo.submit_key(app::engine::KeyInput::Enter);
+        let back_model = voodoo.screen();
+        let back_gw = picture_band(&back_model).expect("the Tunnel is back");
+        assert_eq!(back_gw.canvas.as_raw(), &room_raw, "the room picture returns unchanged");
+    }
+}

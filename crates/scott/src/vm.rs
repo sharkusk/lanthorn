@@ -175,6 +175,14 @@ pub struct Vm {
     // top of every turn alongside `pending_picture` above; transient host
     // presentation state, excluded from snapshot/restore for the same reason.
     pub(crate) pending_picture_shows: Vec<PictureShow>,
+    // The LOOK close-up table of a scrambled Apple II release, or `None`
+    // (SQ-1499). Set by the HOST after construction rather than carried on
+    // `Database`, because it is not in the database at all — it is three
+    // columns in the release's own `M2` on the boot disk, which only a host
+    // that mounted that disk can read. See `Vm::set_look_table`. Not game
+    // state: a snapshot restores into a `Vm` the host built and set up the
+    // same way, exactly as `options` is.
+    look_table: Option<crate::apple_pictures::AppleLookTable>,
     // --- SQ-0464 debug-inspector support: fired-action tracing. Off by
     // default; every field below is a no-op / stays empty unless a host opts
     // in via `set_trace_fired`, so there is zero cost in normal play beyond a
@@ -331,6 +339,7 @@ impl Vm {
             save_requested: false,
             pending_picture: None,
             pending_picture_shows: Vec::new(),
+            look_table: None,
             trace_fired,
             fired_actions: Vec::new(),
             ever_fired: HashSet::new(),
@@ -454,6 +463,64 @@ impl Vm {
     /// does not survive to the next call.
     pub fn take_picture_shows(&mut self) -> Vec<PictureShow> {
         std::mem::take(&mut self.pending_picture_shows)
+    }
+
+    /// Give this game the **LOOK close-up table** of a scrambled Apple II
+    /// release (SQ-1499), so that LOOKing at one of the things it names shows
+    /// the release's own full-window drawing of it.
+    ///
+    /// # Why the host sets this and the database does not carry it
+    ///
+    /// *Voodoo Castle*, *The Count* and *Claymorgue Castle* on the Apple II
+    /// keep their artwork on a side A with no filesystem, and the pairing
+    /// between a picture and the item it draws is in neither the database
+    /// (spec §12.10 is right that it says nothing) nor the picture side: it is
+    /// three columns in the release's own `M2` file on the BOOT side, which
+    /// only a host that mounted that disk can read
+    /// ([`crate::apple_look_table`] parses them). So it arrives the way the
+    /// picture files themselves do — from the host, after the `Vm` is built —
+    /// rather than as a `Database` field every other dialect would carry
+    /// empty.
+    ///
+    /// # What it does to a turn
+    ///
+    /// When the player's command parses to this table's verb and to a noun the
+    /// table names, and the item that row names is **present** — carried, or
+    /// in the player's room — the turn queues a [`PictureShow`] for the row's
+    /// picture before the action table runs. That is the same door opcode 90
+    /// uses ([`Vm::take_picture_shows`]), so a host already presenting a
+    /// picture-show sequence needs nothing new: the close-up is drawn over the
+    /// whole graphics window and waits for the player, and the turn's own text
+    /// — whatever the game's LOOK actions print — follows exactly as it does
+    /// with no table set.
+    ///
+    /// **Present, not merely in play**, and that is the release's own test:
+    /// its lookup reads the item's location byte and takes it if it is the
+    /// carried sentinel or the current room, and otherwise goes on scanning.
+    /// A close-up of something two rooms away never shows.
+    ///
+    /// Setting it on any other release is harmless and does nothing that
+    /// matters — an [`AppleLookTable`](crate::AppleLookTable) with no rows can
+    /// never match — but there is nothing to set: the four plain Apple II
+    /// releases and every other dialect have no such table
+    /// ([`crate::apple_look_table`] refuses them).
+    pub fn set_look_table(&mut self, table: crate::apple_pictures::AppleLookTable) {
+        self.look_table = Some(table);
+    }
+
+    /// The [`PictureShow`] this turn's parsed command asks for through the
+    /// LOOK close-up table, or `None` (SQ-1499; see [`Vm::set_look_table`]).
+    ///
+    /// Split out of `run_turn` because it is the whole of the rule and reads
+    /// as one sentence: the verb, the noun, and the item being present.
+    fn look_close_up(&self, verb: u16, noun: i32) -> Option<PictureShow> {
+        let table = self.look_table.as_ref()?;
+        if verb != table.verb || noun < 0 {
+            return None;
+        }
+        let row = table.rows.iter().find(|r| i32::from(r.noun) == noun)?;
+        self.item_present(usize::from(row.item))
+            .then_some(PictureShow { picture: row.picture, output_len: self.out.len() })
     }
     /// The picture the host should display for the ROOM VIEW, or `None` for
     /// none. Unaffected by opcode 90's queue (see [`Vm::take_picture_shows`]):
@@ -1166,6 +1233,16 @@ impl Vm {
         // uppercases its own comparison internally, so nothing here depends
         // on this being pre-uppercased.
         self.last_noun = w2.unwrap_or("").to_string();
+
+        // SQ-1499: a scrambled Apple II release's LOOK close-up, queued from
+        // the parsed command rather than from any action — the release does
+        // it in its own parser, before the action table, and there is no
+        // opcode for it. `set_look_table` states the rule; everything else
+        // about the turn proceeds untouched, so the game's own LOOK actions
+        // print exactly what they printed before.
+        if let Some(show) = self.look_close_up(vb, no) {
+            self.pending_picture_shows.push(show);
+        }
 
         // ScottFree resolves GO + a compass direction from the room's exit table
         // BEFORE consulting the action table, so a catch-all "GO <anything>"
@@ -3973,4 +4050,158 @@ mod tests {
         vm.run_commands(&[85, 0, 0, 0], &[]);
         assert_eq!(vm.take_output(), "Widget\n", "op85 preserves the typed case, with a newline");
     }
+
+    // ── SQ-1499: the scrambled Apple II LOOK close-ups ───────────────────
+
+    /// A game with one LOOK close-up: verb 2 is `LOOK`, noun 2 is `DOLL`,
+    /// item 1 is the doll, and picture 80 draws it.
+    ///
+    /// Verb 3 (`RUB`) and noun 3 (`ROCK`) are the near misses — a table that
+    /// keyed on the noun alone, or on the verb alone, would fire on one of
+    /// them.
+    fn look_close_up_vm(doll_at: i32) -> Vm {
+        let items = vec![
+            Item { text: "nothing".into(), treasure: false, auto_noun: None, start_loc: 0 },
+            Item {
+                text: "Doll".into(),
+                treasure: false,
+                auto_noun: Some("DOL".into()),
+                start_loc: doll_at,
+            },
+        ];
+        let db = Database {
+            max_carry: 6,
+            start_room: 1,
+            num_treasures: 0,
+            word_length: 3,
+            light_time: -1,
+            treasure_room: 0,
+            actions: vec![],
+            // `*EXA` is a SYNONYM of `LOO`, so the parser resolves it to
+            // verb 2 before the table is consulted — which is why the table
+            // stores an index and not a word, and why EXAMINE works.
+            verbs: vec!["".into(), "GET".into(), "LOO".into(), "*EXA".into(), "RUB".into()],
+            nouns: vec!["".into(), "ANY".into(), "DOL".into(), "ROC".into()],
+            rooms: rooms4(),
+            messages: vec!["".into()],
+            items,
+            adventure_number: 4,
+            mysterious: false,
+            saga_us: None,
+            ti99: None,
+        };
+        let mut vm = Vm::new(db);
+        vm.set_player(1);
+        vm.set_look_table(crate::AppleLookTable {
+            verb: 2,
+            rows: vec![crate::AppleLookPicture { noun: 2, item: 1, picture: 80 }],
+        });
+        vm
+    }
+
+    /// LOOKing at a thing the table names queues its close-up — and only when
+    /// the thing is actually there (SQ-1499).
+    ///
+    /// The release's own lookup takes the item's location byte and accepts it
+    /// if it is the carried sentinel or the current room, and otherwise goes
+    /// on scanning; `Vm::look_close_up` is that test. The three negatives
+    /// below are what a table keyed on less than all three facts would get
+    /// wrong.
+    #[test]
+    fn a_look_close_up_queues_when_the_verb_the_noun_and_the_item_all_line_up() {
+        // In the room.
+        let mut vm = look_close_up_vm(1);
+        vm.supply_line("LOOK DOLL");
+        vm.step();
+        assert_eq!(
+            vm.take_picture_shows(),
+            vec![PictureShow { picture: 80, output_len: 0 }],
+            "the doll is in the room"
+        );
+
+        // Carried.
+        let mut vm = look_close_up_vm(CARRIED);
+        vm.supply_line("LOOK DOLL");
+        vm.step();
+        assert_eq!(
+            vm.take_picture_shows(),
+            vec![PictureShow { picture: 80, output_len: 0 }],
+            "…and carrying it is just as good"
+        );
+
+        // Two rooms away.
+        let mut vm = look_close_up_vm(3);
+        vm.supply_line("LOOK DOLL");
+        vm.step();
+        assert!(vm.take_picture_shows().is_empty(), "a close-up of something elsewhere never shows");
+
+        // Out of play entirely (location 0).
+        let mut vm = look_close_up_vm(0);
+        vm.supply_line("LOOK DOLL");
+        vm.step();
+        assert!(vm.take_picture_shows().is_empty(), "nor of something out of play");
+
+        // The right noun with the wrong verb, and the right verb with the
+        // wrong noun.
+        let mut vm = look_close_up_vm(1);
+        vm.supply_line("RUB DOLL");
+        vm.step();
+        assert!(vm.take_picture_shows().is_empty(), "another verb draws nothing");
+        vm.supply_line("LOOK ROCK");
+        vm.step();
+        assert!(vm.take_picture_shows().is_empty(), "another noun draws nothing");
+        // …and the verb with no noun at all, which parses to noun -1.
+        vm.supply_line("LOOK");
+        vm.step();
+        assert!(vm.take_picture_shows().is_empty(), "a bare LOOK draws nothing");
+    }
+
+    /// A synonym of the table's verb reaches it, because the parser resolves
+    /// one to its canonical index before anything else sees it — which is why
+    /// the table stores an index and not a word (SQ-1499). Both releases that
+    /// have rows spell the verb `LOO` with `*EXA` beside it, so EXAMINE has to
+    /// work.
+    #[test]
+    fn a_synonym_of_the_look_verb_reaches_the_close_up() {
+        let mut vm = look_close_up_vm(1);
+        vm.supply_line("EXAMINE DOLL");
+        vm.step();
+        assert_eq!(vm.take_picture_shows(), vec![PictureShow { picture: 80, output_len: 0 }]);
+    }
+
+    /// A game with NO table — every other dialect, and the four plain Apple II
+    /// releases — queues nothing whatever the player types (SQ-1499).
+    #[test]
+    fn a_release_with_no_look_table_queues_no_close_up() {
+        let items = vec![Item {
+            text: "Doll".into(),
+            treasure: false,
+            auto_noun: Some("DOL".into()),
+            start_loc: 1,
+        }];
+        let db = Database {
+            max_carry: 6,
+            start_room: 1,
+            num_treasures: 0,
+            word_length: 3,
+            light_time: -1,
+            treasure_room: 0,
+            actions: vec![],
+            verbs: vec!["".into(), "GET".into(), "LOO".into()],
+            nouns: vec!["".into(), "ANY".into(), "DOL".into()],
+            rooms: rooms4(),
+            messages: vec!["".into()],
+            items,
+            adventure_number: 1,
+            mysterious: false,
+            saga_us: None,
+            ti99: None,
+        };
+        let mut vm = Vm::new(db);
+        vm.set_player(1);
+        vm.supply_line("LOOK DOLL");
+        vm.step();
+        assert!(vm.take_picture_shows().is_empty(), "no table, no close-up");
+    }
+
 }

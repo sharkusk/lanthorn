@@ -2522,6 +2522,16 @@ pub struct ScottPictureSources {
     /// dialect, and for a S.A.G.A. database opened with no container to carry
     /// them.
     pub saga_pictures: Vec<(String, Vec<u8>)>,
+    /// A scrambled Apple II release's **LOOK close-up table**, read off the
+    /// `M2` file on its boot side (spec Appendix A item 43, SQ-1499).
+    ///
+    /// It travels with the pictures because it comes from the same place they
+    /// do — the mounted container, not the database — and because it is
+    /// useless without them: it names picture indices, and `saga_pictures` is
+    /// what those indices resolve through. `None` for every release but
+    /// *Voodoo Castle* and *The Count* on the Apple II, which are the only two
+    /// with any rows.
+    pub look_table: Option<scott::AppleLookTable>,
 }
 
 impl ScottPictureSources {
@@ -2537,6 +2547,7 @@ impl ScottPictureSources {
             char_px: crate::scott_session::ScottSession::FALLBACK_CHAR_PX,
             resolution: ScottPictureResolution::default(),
             saga_pictures: Vec::new(),
+            look_table: None,
         }
     }
 
@@ -2561,6 +2572,12 @@ impl ScottPictureSources {
     /// Set a US S.A.G.A. release's own picture files (SQ-1475).
     pub fn with_saga_pictures(mut self, saga_pictures: Vec<(String, Vec<u8>)>) -> Self {
         self.saga_pictures = saga_pictures;
+        self
+    }
+
+    /// Set a scrambled Apple II release's LOOK close-up table (SQ-1499).
+    pub fn with_look_table(mut self, look_table: Option<scott::AppleLookTable>) -> Self {
+        self.look_table = look_table;
         self
     }
 
@@ -2604,7 +2621,14 @@ impl ScottPictureSources {
         // (the MS-DOS reference-text format) is exactly what `reset.rs`'s own
         // hand-written call already did.
         let saga_pictures = crate::hints::saga_picture_files(story_path, scott::detect_saga_us(bytes));
-        Self { pict_blorb, char_px, resolution, saga_pictures }
+        // SQ-1499: and, for the three scrambled Apple II releases, the LOOK
+        // close-up table off the same boot side the story came from. Derived
+        // here for the same reason `saga_pictures` is — so `startup.rs` and
+        // `reset.rs` cannot drift apart — and it costs a mount only when the
+        // release actually is one of the three, because
+        // `saga_apple_look_table` reads `M2` and refuses everything else.
+        let look_table = crate::hints::saga_apple_look_table(story_path);
+        Self { pict_blorb, char_px, resolution, saga_pictures, look_table }
     }
 }
 
