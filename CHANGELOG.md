@@ -160,6 +160,14 @@ Absolute URLs or no link.
 
 ### Fixed
 
+- **Quitting a game back to the story list now returns you to where you were.**
+  It used to always land you back at the top of the library, even if you'd
+  launched from a sub-folder or from one game on a multi-story disk image or
+  ZIP — you'd have to navigate all the way back in. Now it puts the cursor
+  back on the exact game you were playing, in the folder (or disk/ZIP listing)
+  it came from. If that game is no longer there (deleted, or its disk image
+  moved), you land on the nearest remaining game instead of jumping to the
+  top. (SQ-1474)
 - **Glulx text that a game filters through its own routine no longer gets cut
   off.** Some Glulx works route every character they print through a routine of
   their own — for special typography, for a cipher, for a character who speaks

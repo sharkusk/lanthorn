@@ -1984,6 +1984,12 @@ fn main() {
     // rather than dropping the player into a list they asked not to see.
     let launched_from_library = source.is_some() && direct.is_none();
 
+    // Where the browser was sitting the last time it handed off a story
+    // (SQ-1474): `None` the first time through, then fed back into the next
+    // `run_story_picker` call so a return from the game lands back on the
+    // same directory and row rather than snapping to the top of the root.
+    let mut picker_position: Option<picker_ui::PickerPosition> = None;
+
     // ── Picker → play loop ────────────────────────────────────────────────────
     loop {
         // Obtain the next story to play, plus any boot-time overrides chosen on
@@ -1999,8 +2005,16 @@ fn main() {
             // Library (or multi-disk set) launch: run the picker on the normal
             // screen (the previous game left its alt-screen). Quitting the
             // picker (None) exits.
-            match picker_ui::run_story_picker(source.clone(), &ctx.cfg, &ctx.data_base) {
-                Some(p) => (p.path, p.disk_entry, p.overrides),
+            match picker_ui::run_story_picker(
+                source.clone(),
+                &ctx.cfg,
+                &ctx.data_base,
+                picker_position.as_ref(),
+            ) {
+                Some(p) => {
+                    picker_position = Some(p.position);
+                    (p.path, p.disk_entry, p.overrides)
+                }
                 None => break,
             }
         } else {

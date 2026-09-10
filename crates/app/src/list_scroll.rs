@@ -86,6 +86,19 @@ impl ListScroll {
         self.ensure_visible_and_arm(viewport, anim);
     }
 
+    /// Land on `idx` (clamped) with the offset pinned to it and no animation —
+    /// for priming a freshly built list before the first frame has measured a
+    /// real viewport (the story picker restoring where the player was,
+    /// SQ-1474). `offset == selected` keeps the row visible whatever the
+    /// eventual viewport turns out to be (`ensure_visible`'s invariant holds
+    /// trivially for any `viewport >= 1`); ordinary navigation corrects the
+    /// offset from there exactly as it always has.
+    pub fn jump_to(&mut self, idx: usize) {
+        self.selected = idx.min(self.total.saturating_sub(1));
+        self.offset = self.selected;
+        self.anim = None;
+    }
+
     /// Move the selection by `delta` (clamped to `[0, total-1]`), keeping it visible.
     pub fn move_by(&mut self, delta: isize, viewport: usize, anim: &AnimationConfig) {
         let max = self.total.saturating_sub(1) as isize;
@@ -447,5 +460,30 @@ mod tests {
 
         nav_key(&mut l, KeyCode::Down, 10, 5, &anim_off());
         assert_eq!(l.selected, 9, "clamped into the new, shorter list before moving");
+    }
+
+    // ── `jump_to` (SQ-1474): the story picker's no-viewport-yet priming jump ──
+
+    #[test]
+    fn jump_to_pins_the_row_visible_for_any_later_viewport() {
+        let mut l = ListScroll::new();
+        l.len(50);
+        l.jump_to(37);
+        assert_eq!(l.selected, 37);
+        // offset == selected: `ensure_visible`'s invariant (offset <= selected <
+        // offset + viewport) holds for every viewport >= 1, not just the one
+        // this frame happens to measure.
+        assert_eq!(l.target_offset(), 37);
+        assert_eq!(l.display_offset(), 37, "no easing — the row is already there on frame one");
+        assert!(!l.has_active_animation());
+    }
+
+    #[test]
+    fn jump_to_clamps_into_the_current_list() {
+        let mut l = ListScroll::new();
+        l.len(10);
+        l.jump_to(999);
+        assert_eq!(l.selected, 9, "clamped to the last row rather than panicking");
+        assert_eq!(l.target_offset(), 9);
     }
 }

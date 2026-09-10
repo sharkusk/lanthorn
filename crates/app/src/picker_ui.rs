@@ -534,6 +534,45 @@ fn first_story(stories: &[app::picker::StoryEntry]) -> Option<&app::picker::Stor
     stories.iter().find(|e| !e.is_folder())
 }
 
+/// Resolve where the browser should open: the folder to list, its rows, and
+/// which row to select — the read half of the remember/restore round trip
+/// (SQ-1474). Extracted so it's testable without a pty: `run_story_picker`
+/// calls it once at startup and nothing else.
+///
+/// Always rescans from disk rather than trusting anything cached, because the
+/// folder may have changed while a game was running. A remembered `dir` that
+/// no longer exists (deleted, media moved) falls back to `root`, and so does
+/// one that rescans to nothing — the root is the one folder guaranteed not to
+/// be empty (`run_story_picker` would have exited already if it were). The
+/// row is found by **identity** (`StoryEntry::is`), never by index, since the
+/// rescan may reorder or add/remove rows — including a multi-story disk/zip's
+/// several entries in the same folder listing, which is what makes "return to
+/// the same disk's expanded listing" fall out of "return to the same folder"
+/// with no special-casing. When the remembered story isn't there any more,
+/// the nearest surviving row is `index_hint` (where it sat at launch) clamped
+/// into the new list's bounds, rather than resetting to the top.
+fn resolve_picker_position(
+    source: &app::picker::StorySource,
+    root: &std::path::Path,
+    data_base: &std::path::Path,
+    restore: Option<&PickerPosition>,
+) -> (std::path::PathBuf, Vec<app::picker::StoryEntry>, usize) {
+    let mut dir = restore
+        .map(|p| p.dir.clone())
+        .filter(|d| d.is_dir())
+        .unwrap_or_else(|| root.to_path_buf());
+    let mut stories = rows_for(source, &dir, root, data_base);
+    if stories.is_empty() && dir != root {
+        dir = root.to_path_buf();
+        stories = rows_for(source, &dir, root, data_base);
+    }
+    let selected = restore
+        .and_then(|p| stories.iter().position(|e| e.is(&p.path, p.disk_entry.as_deref())))
+        .or_else(|| restore.map(|p| p.index_hint.min(stories.len().saturating_sub(1))))
+        .unwrap_or(0);
+    (dir, stories, selected)
+}
+
 /// Add to the in-memory index whatever stories in `rows` it does not hold yet
 /// (a download landed in the folder on screen after the walk passed it).
 fn merge_index(index: &mut Vec<app::picker::StoryEntry>, rows: &[app::picker::StoryEntry]) {
@@ -950,6 +989,29 @@ fn apply_cell_size(picker: &mut ratatui_image::picker::Picker, fs: ratatui_image
     true
 }
 
+/// Where the browser was sitting the moment a story was launched (SQ-1474):
+/// the folder on screen, plus enough to find that same row again once the
+/// game ends and the browser is rebuilt from scratch — which it is, every
+/// time (`run_story_picker` re-scans `dir` from disk on every call, so a
+/// remembered index alone would drift the moment the folder gains, loses or
+/// reorders a row).
+#[derive(Debug, Clone)]
+pub(crate) struct PickerPosition {
+    /// The folder that was listed (not necessarily `root` — a launch from a
+    /// sub-directory, or from inside a multi-story disk/zip sitting in one,
+    /// remembers that folder rather than snapping back to the top level).
+    pub dir: std::path::PathBuf,
+    /// The launched row's identity — checked via [`app::picker::StoryEntry::is`],
+    /// never by index, since `dir` is rescanned fresh on return.
+    pub path: std::path::PathBuf,
+    pub disk_entry: Option<String>,
+    /// Where the row sat in the list at launch, for the one case identity
+    /// can't answer: the story is gone from the rescanned folder entirely
+    /// (deleted, media moved). The nearest surviving row is read off this
+    /// clamped into the new list's bounds, rather than resetting to the top.
+    pub index_hint: usize,
+}
+
 /// What the browser hands back: the story to play, and the boot-time overrides
 /// the user asked for on the way out (SQ-0789). `overrides` is empty for every
 /// ordinary launch — Enter and a double left-click never touch it — so the
@@ -961,16 +1023,27 @@ pub(crate) struct PickedStory {
     /// by path exactly as it always did.
     pub disk_entry: Option<String>,
     pub overrides: app::launch_options::LaunchOverrides,
+    /// Where this was launched from, so the next `run_story_picker` call can
+    /// return here (SQ-1474).
+    pub position: PickerPosition,
 }
 
 impl PickedStory {
     /// Play the story one browser row stands for, with no overrides: its path
-    /// **and** which story on the image it is.
-    fn row(entry: &app::picker::StoryEntry) -> PickedStory {
+    /// **and** which story on the image it is. `dir`/`index_hint` are the
+    /// browser's position at the moment of launch, remembered for the return
+    /// trip.
+    fn row(entry: &app::picker::StoryEntry, dir: &std::path::Path, index_hint: usize) -> PickedStory {
         PickedStory {
             path: entry.path.clone(),
             disk_entry: entry.meta.disk_entry.clone(),
             overrides: app::launch_options::LaunchOverrides::default(),
+            position: PickerPosition {
+                dir: dir.to_path_buf(),
+                path: entry.path.clone(),
+                disk_entry: entry.meta.disk_entry.clone(),
+                index_hint,
+            },
         }
     }
 }
@@ -1080,13 +1153,14 @@ pub(crate) fn run_story_picker(
     mut source: app::picker::StorySource,
     cfg: &app::config::Config,
     data_base: &std::path::Path,
+    restore: Option<&PickerPosition>,
 ) -> Option<PickedStory> {
     // The library root, and the folder currently listed. They part company the
     // moment the user descends into a sub-folder (Enter on a folder row) and
     // meet again on Backspace; downloads land in `dir`, the folder on screen.
     let root = source.dir().to_path_buf();
-    let mut dir = root.clone();
-    let mut stories = rows_for(&source, &dir, &root, data_base);
+    let (mut dir, mut stories, restored_idx) =
+        resolve_picker_position(&source, &root, data_base, restore);
     if stories.is_empty() {
         eprintln!("lanthorn: no Z-machine story files found in '{}'", dir.display());
         std::process::exit(1);
@@ -1113,11 +1187,11 @@ pub(crate) fn run_story_picker(
     // Terminal setup mirrors the game loop. If any step fails we can't be
     // interactive — fall back to the first story rather than abort.
     if enable_raw_mode().is_err() {
-        return first_story(&stories).map(PickedStory::row);
+        return first_story(&stories).map(|e| PickedStory::row(e, &dir, 0));
     }
     if execute!(stdout(), EnterAlternateScreen).is_err() {
         let _ = disable_raw_mode();
-        return first_story(&stories).map(PickedStory::row);
+        return first_story(&stories).map(|e| PickedStory::row(e, &dir, 0));
     }
     // Mouse capture is opt-in (config `mouse = true`): its any-motion reporting
     // floods this loop with redraws on every mouse move. Off by default keeps the
@@ -1129,7 +1203,7 @@ pub(crate) fn run_story_picker(
         Ok(t) => t,
         Err(_) => {
             restore_terminal();
-            return first_story(&stories).map(PickedStory::row);
+            return first_story(&stories).map(|e| PickedStory::row(e, &dir, 0));
         }
     };
 
@@ -1146,6 +1220,12 @@ pub(crate) fn run_story_picker(
 
     let mut list = app::list_scroll::ListScroll::new();
     list.len(stories.len());
+    // Land on the restored row (SQ-1474; a no-op `jump_to(0)` when there was
+    // nothing to restore, same as the prior default). No animation and no
+    // known viewport yet — the first frame hasn't measured one — so this
+    // pins the row visible regardless of what the viewport turns out to be;
+    // ordinary navigation corrects the offset from there as usual.
+    list.jump_to(restored_idx);
     let anim = &cfg.animation;
     let mut row_rects: Vec<(usize, Rect)> = Vec::new();
     let mut header_rects: Vec<(app::picker::SortKey, Rect)> = Vec::new();
@@ -1952,6 +2032,12 @@ pub(crate) fn run_story_picker(
                                 path: lo.story_path.clone(),
                                 disk_entry: lo.disk_entry.clone(),
                                 overrides: lo.overrides(),
+                                position: PickerPosition {
+                                    dir: dir.clone(),
+                                    path: lo.story_path.clone(),
+                                    disk_entry: lo.disk_entry.clone(),
+                                    index_hint: list.selected,
+                                },
                             });
                         }
                         app::launch_options::LaunchOptionsAction::Cancel => launch_opts = None,
@@ -2031,7 +2117,7 @@ pub(crate) fn run_story_picker(
                         }
                         Enter => {
                             if let Some(entry) = stories.get(list.selected) {
-                                break Some(PickedStory::row(entry));
+                                break Some(PickedStory::row(entry, &dir, list.selected));
                             }
                         }
                         Up | Down | PageUp | PageDown | Home | End => {
@@ -2271,6 +2357,12 @@ pub(crate) fn run_story_picker(
                                 path: lo.story_path.clone(),
                                 disk_entry: lo.disk_entry.clone(),
                                 overrides: lo.overrides(),
+                                position: PickerPosition {
+                                    dir: dir.clone(),
+                                    path: lo.story_path.clone(),
+                                    disk_entry: lo.disk_entry.clone(),
+                                    index_hint: list.selected,
+                                },
                             });
                         } else if on_close
                             || button == Some(app::render::dialog::ButtonId::Cancel)
@@ -2324,7 +2416,7 @@ pub(crate) fn run_story_picker(
                             enter_folder(&source, &mut dir, &root, &target, &mut stories, &mut row_badges, &mut aux_cache, &mut list, data_base, &hint_index, viewport, anim);
                             last_click = None;
                         } else if double {
-                            break Some(PickedStory::row(&stories[idx]));
+                            break Some(PickedStory::row(&stories[idx], &dir, idx));
                         } else {
                             panel_scroll = 0;
                             list.select(idx, viewport, anim);
@@ -2487,7 +2579,7 @@ pub(crate) fn run_story_picker(
                     panel_scroll = 0;
                     enter_folder(&source, &mut dir, &root, &target, &mut stories, &mut row_badges, &mut aux_cache, &mut list, data_base, &hint_index, viewport, anim);
                 }
-                Some(entry) => break Some(PickedStory::row(entry)),
+                Some(entry) => break Some(PickedStory::row(entry, &dir, list.selected)),
                 None => {}
             },
             // `o`, Shift-Enter and the story menu's own row are one
@@ -7410,5 +7502,156 @@ mod tests {
         let again = tiles.take_requests();
         assert_eq!(again.len(), 1, "the new cell's tile is requested afresh");
         assert_eq!(again[0].key.cell, cell, "under the CURRENT cell's key");
+    }
+
+    // ── Remember/restore the browser's position on return (SQ-1474) ───────────
+    //
+    // `resolve_picker_position` is the whole of what `run_story_picker` does at
+    // startup with a remembered position — extracted so it's testable without a
+    // pty (`run_story_picker` itself needs a real terminal). Every case rescans
+    // from an on-disk fixture, exactly as the real call does, so a test that
+    // matched on the OLD list instead of the rescanned one would not compile,
+    // let alone pass.
+
+    /// A scratch directory unique per CALL (SQ-1131): these cases write real
+    /// files and remove their own tree. `minimal_v3_story` (this module's
+    /// existing fixture, above) supplies the story bytes.
+    fn restore_scratch(tag: &str) -> std::path::PathBuf {
+        app::scratch_dir(&format!("picker-restore-{tag}"))
+    }
+
+    /// Write a zip at `path` holding each `(entry name, bytes)`, STORED so what
+    /// comes back out is byte-for-byte what went in (mirrors
+    /// `tests/suites/zip_story_entries.rs`'s own helper).
+    fn write_test_zip(path: &std::path::Path, entries: &[(&str, Vec<u8>)]) {
+        use std::io::Write as _;
+        let file = std::fs::File::create(path).expect("a scratch zip");
+        let mut zw = zip::ZipWriter::new(file);
+        let opts = zip::write::SimpleFileOptions::default()
+            .compression_method(zip::CompressionMethod::Stored);
+        for (name, bytes) in entries {
+            zw.start_file(*name, opts).unwrap();
+            zw.write_all(bytes).unwrap();
+        }
+        zw.finish().unwrap();
+    }
+
+    #[test]
+    fn resolve_picker_position_returns_to_the_sub_directory_and_matching_row() {
+        let root = restore_scratch("subdir");
+        let sub = root.join("disks");
+        std::fs::create_dir_all(&sub).unwrap();
+        std::fs::write(sub.join("alpha.z5"), minimal_v3_story()).unwrap();
+        std::fs::write(sub.join("beta.z5"), minimal_v3_story()).unwrap();
+
+        let source = app::picker::StorySource::Library(root.clone());
+        let restore = super::PickerPosition {
+            dir: sub.clone(),
+            path: sub.join("beta.z5"),
+            disk_entry: None,
+            index_hint: 0,
+        };
+
+        let (dir, stories, selected) =
+            super::resolve_picker_position(&source, &root, &root, Some(&restore));
+        let _ = std::fs::remove_dir_all(&root);
+
+        assert_eq!(dir, sub, "lands back on the sub-directory, not the root");
+        assert_eq!(
+            stories[selected].path,
+            sub.join("beta.z5"),
+            "the story row that was launched is the one selected again"
+        );
+
+        // FALSIFICATION: with no remembered position, the browser opens on the
+        // root with the top row selected — the behaviour restoring replaces.
+        let root2 = restore_scratch("subdir-none");
+        let sub2 = root2.join("disks");
+        std::fs::create_dir_all(&sub2).unwrap();
+        std::fs::write(sub2.join("alpha.z5"), minimal_v3_story()).unwrap();
+        let (dir2, _stories2, selected2) =
+            super::resolve_picker_position(&source, &root2, &root2, None);
+        let _ = std::fs::remove_dir_all(&root2);
+        assert_eq!(dir2, root2, "no restore: opens on the root");
+        assert_eq!(selected2, 0, "no restore: top row selected");
+    }
+
+    #[test]
+    fn resolve_picker_position_matches_the_right_row_of_a_multi_story_zip() {
+        let root = restore_scratch("diskentry");
+        let zip = root.join("pack.zip");
+        write_test_zip(&zip, &[("amber.z5", minimal_v3_story()), ("beacon.z5", minimal_v3_story())]);
+
+        let source = app::picker::StorySource::Library(root.clone());
+        let restore = super::PickerPosition {
+            dir: root.clone(),
+            path: zip.clone(),
+            disk_entry: Some("beacon.z5".to_string()),
+            index_hint: 0,
+        };
+
+        let (dir, stories, selected) =
+            super::resolve_picker_position(&source, &root, &root, Some(&restore));
+        let _ = std::fs::remove_dir_all(&root);
+
+        assert_eq!(dir, root, "the zip's own directory, not a folder inside it");
+        assert_eq!(stories[selected].path, zip, "matched the zip's expanded row");
+        assert_eq!(
+            stories[selected].meta.disk_entry.as_deref(),
+            Some("beacon.z5"),
+            "the SECOND entry, not merely the first one the zip contains"
+        );
+    }
+
+    #[test]
+    fn resolve_picker_position_falls_back_to_the_nearest_row_when_the_story_is_gone() {
+        let root = restore_scratch("deleted");
+        // The remembered story ("gone.z5") sat at index 1 of a 3-row folder at
+        // launch time; it's not written here at all, standing in for a title
+        // deleted (or a disk image moved) while the game was running.
+        std::fs::write(root.join("alpha.z5"), minimal_v3_story()).unwrap();
+        std::fs::write(root.join("charlie.z5"), minimal_v3_story()).unwrap();
+
+        let source = app::picker::StorySource::Library(root.clone());
+        let restore = super::PickerPosition {
+            dir: root.clone(),
+            path: root.join("gone.z5"),
+            disk_entry: None,
+            index_hint: 1,
+        };
+
+        let (_dir, stories, selected) =
+            super::resolve_picker_position(&source, &root, &root, Some(&restore));
+        let _ = std::fs::remove_dir_all(&root);
+
+        assert!(
+            stories.iter().all(|e| e.path != root.join("gone.z5")),
+            "sanity: the remembered story really is absent from the rescan"
+        );
+        // Two rows survive ("alpha", "charlie"); the remembered index (1)
+        // clamps into range and lands on the nearest surviving row rather than
+        // resetting to the top.
+        assert_eq!(selected, 1.min(stories.len().saturating_sub(1)));
+    }
+
+    #[test]
+    fn resolve_picker_position_falls_back_to_the_root_when_the_remembered_folder_is_gone() {
+        let root = restore_scratch("folder-gone");
+        std::fs::write(root.join("top.z5"), minimal_v3_story()).unwrap();
+
+        let source = app::picker::StorySource::Library(root.clone());
+        let restore = super::PickerPosition {
+            dir: root.join("never-existed"),
+            path: root.join("never-existed").join("whatever.z5"),
+            disk_entry: None,
+            index_hint: 0,
+        };
+
+        let (dir, stories, _selected) =
+            super::resolve_picker_position(&source, &root, &root, Some(&restore));
+        let _ = std::fs::remove_dir_all(&root);
+
+        assert_eq!(dir, root, "a deleted sub-directory falls back to the root");
+        assert!(stories.iter().any(|e| e.path == root.join("top.z5")));
     }
 }
