@@ -1410,6 +1410,17 @@ pub(crate) fn draw_str_runs(
         return;
     }
     let (scheme, honor) = (ink.colors(), ink.honor());
+    // SQ-1462: an uncoloured Glk run (no per-run colour, no themed
+    // `glk_styles` slot) falls through to `base_style` below — which for the
+    // generic `text` role is white-on-nothing, a dark-terminal guess with no
+    // idea the game repainted its page. `game_input` is the game's own known
+    // page/ink pair when the game HAS one (`None` leaves `base_style`
+    // untouched, so a game — or a `--game-colours off` launch — that never
+    // named a page renders byte-identically to before). See `TextInk::game_input`.
+    let base_style = match (honor, ink.game_input()) {
+        (true, Some(gi)) => base_style.patch(gi),
+        _ => base_style,
+    };
     let hi: Vec<bool> = match search {
         Some((q, _)) if !q.is_empty() => highlight_mask(text, q),
         _ => Vec::new(),
@@ -2669,7 +2680,10 @@ fn render_middle(
         }
         let text_x = body_area.x + text_origin_col(wr.kind);
         let search = has_search.then_some((query_lower.as_str(), search_highlight_style));
-        draw_str_runs(buf, text_x, row_y, &wr.text, wr.style, &wr.runs, search, body_area, crate::render::TextInk::of(state));
+        draw_str_runs(
+            buf, text_x, row_y, &wr.text, wr.style, &wr.runs, search, body_area,
+            crate::render::TextInk::of_with_game_input(state, game_input),
+        );
         // …and, while a reveal is lit, re-style the words on this row that name
         // one of the story's own things (SQ-1107, SQ-1207). A pass OVER the
         // drawn cells, after the text and its runs: the reveal is a property of
@@ -4096,6 +4110,66 @@ mod tests {
         let red = crate::state::pack_zcolour(zvm::screen::ZColour::True24(0x00FF_0000));
         assert_eq!(draw(8, red, true), Color::Rgb(255, 0, 0), "honor ON: game colour wins over slot");
         assert_eq!(draw(8, red, false), Color::Cyan, "honor OFF: game ignored, slot wins");
+    }
+
+    /// SQ-1462: Counterfeit Monkey honours a white-on-white Normal style
+    /// (`glulx_game_colours.rs`'s `cm_intro_pane_adopts_the_games_black_on_white`)
+    /// and, like every Glk game, echoes the player's own typed command with style
+    /// `Input` (glk_style 8) and NO colour of its own — Glk leaves "how the
+    /// player's input looks" to the interpreter. With no `glk_styles` slot themed
+    /// either, that run fell through to the generic `text` role: white, a
+    /// dark-terminal guess with no idea the game's page is white too. Every
+    /// keystroke the player typed while navigating Counterfeit Monkey's in-game
+    /// HINT menu ("hint", "n", "1", …) rendered invisibly.
+    ///
+    /// Falsified: reverting `TextInk::game_input`/`draw_str_runs`'s `base_style`
+    /// patch (SQ-1462) restores the `Color::White` this test would otherwise
+    /// assert, on the SAME white ground.
+    #[test]
+    fn glk_input_run_with_no_colour_floors_on_the_games_own_page_not_white() {
+        use ratatui::{buffer::Buffer, layout::Rect, style::{Color, Style}};
+        let area = Rect::new(0, 0, 6, 1);
+        // The generic `text` role: white, no background (`ColorScheme::terminal_default`).
+        let base = Style::new().fg(Color::White);
+        let cs = crate::colors::ColorScheme::terminal_default();
+        // Counterfeit Monkey's own page: black ink on a white ground.
+        let cm_page = Style::new().fg(Color::Rgb(0, 0, 0)).bg(Color::Rgb(255, 255, 255));
+
+        let draw = |ink: crate::render::TextInk| {
+            let mut b = Buffer::empty(area);
+            // The exact run Counterfeit Monkey's echo captures: glk_style 8
+            // (Input), no game colour on either channel.
+            let runs = vec![StyleRun { start: 0, end: 4, bits: 0, fg: 0, bg: 0, link: 0, glk_style: 8 }];
+            draw_str_runs(&mut b, 0, 0, "hint", base, &runs, None, area, ink);
+            (b[(0, 0)].fg, b[(0, 0)].bg)
+        };
+
+        // honor ON, game_input Some(the page) → floors on the page: black on white,
+        // not the generic white-on-nothing that (on a white pane) was invisible.
+        assert_eq!(
+            draw(crate::render::TextInk::new_with_game_input(true, &cs, Some(cm_page))),
+            (Color::Rgb(0, 0, 0), Color::Rgb(255, 255, 255)),
+            "an uncoloured Input run reads the game's own page, not the generic theme"
+        );
+        // honor ON, game_input None (a game that never named a page, or a v1-v5
+        // Z-machine story like minizork) → unchanged: the generic base, byte-
+        // identical to before SQ-1462.
+        assert_eq!(
+            draw(crate::render::TextInk::new_with_game_input(true, &cs, None)),
+            (Color::White, Color::Reset),
+            "no game page declared → the generic theme base, unchanged"
+        );
+        // honor OFF: `--game-colours off` declares the interpreter colourless —
+        // production never builds this combination (`game_input_style` gates on
+        // `honor_game_colours` first, so `game_input` is `None` whenever honor is
+        // off), but `draw_str_runs` gates on `honor` itself too (belt and braces,
+        // matching `Engine::submit`'s own doc precedent), so a colourless launch
+        // renders the same whether or not a page happens to be present.
+        assert_eq!(
+            draw(crate::render::TextInk::new_with_game_input(false, &cs, Some(cm_page))),
+            (Color::White, Color::Reset),
+            "honor OFF must not float the game's page in either channel"
+        );
     }
 
     #[test]

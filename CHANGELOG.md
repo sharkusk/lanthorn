@@ -160,6 +160,15 @@ Absolute URLs or no link.
 
 ### Fixed
 
+- **Your typed answers are no longer invisible in Glulx games that use a light
+  background, such as Counterfeit Monkey.** Games print your own typed
+  commands back into the transcript without naming a colour for them, trusting
+  the interpreter to pick something sensible — lanthorn's pick was a fixed
+  white, meant for a dark screen. On a game that colours its own page white
+  (Counterfeit Monkey does, and its in-game HINT menu is where this was most
+  noticeable), every word you typed rendered in white on white: not just hard
+  to read, invisible. Your input now reads against the game's own page, the
+  same way its prose already does. (SQ-1462)
 - **Glulx text that a game filters through its own routine no longer gets cut
   off.** Some Glulx works route every character they print through a routine of
   their own — for special typography, for a cipher, for a character who speaks
