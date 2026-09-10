@@ -137,6 +137,11 @@ story whose pictures ship pre-rendered in a Blorb, or a US S.A.G.A. release
 whose artwork lanthorn doesn't draw yet, shows no such row: there is nothing
 to choose a resolution for.
 
+The **ZX Spectrum** pressings of those same eleven titles carry the same
+line-art, and lanthorn reads it out of the snapshot and counts it for you
+(`Pictures: native ZX Spectrum (vector, N rooms)`) — but it doesn't draw it
+yet, so a `.z80` plays as text for now.
+
 ## Going deeper
 
 - [v6 graphics](../internals/v6-graphics.md) — render modes, the pixel lock, and period fonts in full

@@ -161,4 +161,132 @@ mod unix {
              landed elsewhere in the list instead of on the story that was launched"
         );
     }
+
+    /// A library whose root holds twenty copies of `minizork.z3` (titled
+    /// "Mini-Zork I" via `known_titles.tsv`'s `ZCODE-34-871124` entry — every
+    /// copy shares that title, they only differ by filename) plus one
+    /// `tiny_cave.dat`. Sorted by title ascending (the picker default),
+    /// "Mini-Zork I" (`m`) sorts before "tiny_cave" (`t`, its title falling
+    /// back to the filename stem — it carries no known IFID), so `tiny_cave`
+    /// is always the LAST row: twenty rows deep, well past the fold of any
+    /// terminal short enough to matter here.
+    fn library_scrolled(root: &Path, pad: usize) -> (PathBuf, PathBuf) {
+        let lib = root.join("library");
+        let user = root.join("user");
+        std::fs::create_dir_all(&lib).unwrap();
+        std::fs::create_dir_all(&user).unwrap();
+
+        let minizork = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../zvm/tests/fixtures/minizork.z3");
+        let tiny_cave = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../scott/tests/tiny_cave.dat");
+        assert!(minizork.is_file(), "tracked fixture missing at {}", minizork.display());
+        assert!(tiny_cave.is_file(), "tracked fixture missing at {}", tiny_cave.display());
+        for i in 0..pad {
+            std::fs::copy(&minizork, lib.join(format!("pad{i:02}.z3"))).unwrap();
+        }
+        std::fs::copy(&tiny_cave, lib.join("tiny_cave.dat")).unwrap();
+
+        std::fs::write(user.join("config.toml"), format!("default_story_dir = '{}'\n", lib.display())).unwrap();
+        (lib, user)
+    }
+
+    /// The byte offset of the `nth` (1-based) `CSI ? 1 0 4 9 h` (enter
+    /// alternate screen) in `bytes`, or `None` if there are fewer than that
+    /// many — used to slice the capture at "the picker's own boot, before the
+    /// game's" (SQ-1479).
+    fn nth_alt_screen_enter(bytes: &[u8], nth: usize) -> Option<usize> {
+        const MARK: &[u8] = b"\x1b[?1049h";
+        let mut from = 0;
+        let mut seen = 0;
+        while let Some(rel) = bytes[from..].windows(MARK.len()).position(|w| w == MARK) {
+            let at = from + rel;
+            seen += 1;
+            if seen == nth {
+                return Some(at);
+            }
+            from = at + MARK.len();
+        }
+        None
+    }
+
+    /// The screen row (within `0..rows`) carrying the `▸` selection marker, or
+    /// `None` if no row does.
+    fn marker_row(term: &decode::Term, cols: u16, rows: u16) -> Option<u16> {
+        (0..rows).find(|&y| term.row_text(y, 0..cols).contains('\u{25b8}'))
+    }
+
+    /// SQ-1479: the picker doesn't just return to the same ROW (SQ-1474) — it
+    /// returns the row to the same DISTANCE from the top of the viewport, so a
+    /// row that was scrolled well down the list before launch is scrolled
+    /// down by the same amount on return, rather than snapping to the top.
+    #[test]
+    fn quitting_a_game_returns_the_scrolled_row_to_the_same_screen_position() {
+        let root = scratch("picker-return-scrolled");
+        let (lib, user) = library_scrolled(&root, 20);
+
+        let mut spec = Spec::new(env!("CARGO_BIN_EXE_lanthorn"), &lib, &user);
+        spec.cols = 100;
+        // Short on purpose: twenty "Mini-Zork I" rows plus `tiny_cave` is far
+        // more than fit, so reaching the last row (`End`) leaves the list
+        // scrolled with a real, non-zero distance from the top — exactly the
+        // shape `ListScroll::prime`'s `rows_from_top` exists for.
+        spec.rows = 15;
+        spec.hide_map = false;
+        spec.tail = Duration::from_millis(1200);
+        spec.keys = vec![
+            Key::Wait(Duration::from_millis(1500)),
+            // Jump straight to the last row: `tiny_cave`, twenty rows down.
+            Key::Bytes(b"\x1b[F".to_vec()),
+            Key::Wait(Duration::from_millis(500)),
+            Key::Bytes(b"\r".to_vec()), // launch tiny_cave
+            Key::Wait(Duration::from_millis(2500)),
+            Key::Bytes(b"/quit-to-library\r".to_vec()),
+            Key::Wait(Duration::from_millis(2000)),
+        ];
+
+        let cap = driver::run(spec).expect("pty run");
+
+        let alt_screen_enters = cap.bytes.windows(8).filter(|w| *w == b"\x1b[?1049h").count();
+        assert!(
+            alt_screen_enters >= 3,
+            "the picker → game → picker round trip never completed (only {alt_screen_enters} \
+             alternate-screen entries seen), so nothing here was measured"
+        );
+
+        // The screen right before the game's own boot (the SECOND alt-screen
+        // enter) is the picker's LAUNCH-TIME frame: `tiny_cave` selected,
+        // scrolled to the bottom of the list.
+        let game_boot_at = nth_alt_screen_enter(&cap.bytes, 2)
+            .expect("a second alternate-screen entry (the game's own boot)");
+        let mut before = decode::Term::new(cap.spec.cols, cap.spec.rows);
+        before.feed(&cap.bytes[..game_boot_at]);
+        let before_row = marker_row(&before, cap.spec.cols, cap.spec.rows)
+            .expect("the picker's launch-time frame has a selected row");
+        let before_text = before.row_text(before_row, 0..cap.spec.cols);
+        assert!(
+            before_text.contains("tiny_cave"),
+            "sanity: the row scrolled to at launch really is tiny_cave's: {before_text:?}"
+        );
+        // Sanity: this really did scroll — the marker is not sitting on the
+        // list's very first content row (row 2: two header rows above it).
+        assert!(before_row > 2, "sanity: the launch row should be scrolled, not pinned to the top");
+
+        // Decode the WHOLE stream: the final state is the picker again, after
+        // the quit above.
+        let mut after = decode::Term::new(cap.spec.cols, cap.spec.rows);
+        after.feed(&cap.bytes);
+        let after_row = marker_row(&after, cap.spec.cols, cap.spec.rows)
+            .expect("the picker's return frame has a selected row");
+        let after_text = after.row_text(after_row, 0..cap.spec.cols);
+
+        assert!(
+            after_text.contains("tiny_cave"),
+            "the picker did not return with `tiny_cave` selected: {after_text:?}"
+        );
+        assert_eq!(
+            after_row, before_row,
+            "SQ-1479 symptom: the row came back selected (row text {after_text:?}) but not at \
+             the same screen position — launched from row {before_row}, returned on row \
+             {after_row}, instead of scrolling back to the same distance from the top"
+        );
+    }
 }

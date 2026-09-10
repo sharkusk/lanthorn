@@ -153,12 +153,42 @@ pub(crate) struct TextInk<'a> {
     honor: bool,
     /// The theme every channel the game leaves alone is read against.
     colors: &'a ColorScheme,
+    /// The game's own page/ink pair (`render::screen::game_input_style`), when
+    /// `honor_game_colours` is on and the game has declared one — `None` under
+    /// `--game-colours off` or when the game names no page (SQ-1462).
+    ///
+    /// This is the "next ink fact" the struct doc above named: a Glk run left
+    /// wholly `Default` (no per-run colour, no themed `glk_styles` slot — a
+    /// buffer's own echo of the player's typed line is always exactly this,
+    /// since Glk style `Input` is an INTERPRETER convention with no colour of
+    /// its own) used to fall through `resolve_glk_channel`'s last tier straight
+    /// to the generic `text` role, which is white-on-nothing — meaning the
+    /// generic dark-terminal guess, not the game's own page. Counterfeit
+    /// Monkey honours white-on-white for its Normal style (`glulx_game_colours.rs`
+    /// confirms the pane adopts it), so every echoed command — "hint", "n", "1",
+    /// every keystroke of navigating its in-game hint menu — rendered in white
+    /// text on the same white page: invisible, not merely low-contrast. The
+    /// generic prose case never hit this because Counterfeit Monkey colours
+    /// every Normal-style RUN explicitly; nothing colours its own echo.
+    game_input: Option<Style>,
 }
 
 impl<'a> TextInk<'a> {
     /// The ink the app is drawing with, from the one place that knows both facts.
     pub(crate) fn of(state: &'a crate::state::AppState) -> TextInk<'a> {
-        TextInk { honor: state.config.honor_game_colours, colors: &state.colors }
+        TextInk { honor: state.config.honor_game_colours, colors: &state.colors, game_input: None }
+    }
+
+    /// [`Self::of`] plus the game's own page/ink pair, for a caller that has
+    /// already resolved one (`render::screen::game_input_style`) — currently
+    /// only the scrolling transcript body, which is where an uncoloured Glk
+    /// `Input`-class run (an echoed command) needs it as a floor beneath the
+    /// generic theme (SQ-1462).
+    pub(crate) fn of_with_game_input(
+        state: &'a crate::state::AppState,
+        game_input: Option<Style>,
+    ) -> TextInk<'a> {
+        TextInk { game_input, ..Self::of(state) }
     }
 
     /// Ink stated outright, for a case with no `AppState` to read it from. Every
@@ -166,11 +196,25 @@ impl<'a> TextInk<'a> {
     /// place these facts are decided.
     #[cfg(all(test, feature = "t-render"))]
     pub(crate) fn new(honor: bool, colors: &'a ColorScheme) -> TextInk<'a> {
-        TextInk { honor, colors }
+        TextInk { honor, colors, game_input: None }
+    }
+
+    /// [`Self::new`] plus a stated game-input pair, for the SQ-1462 tests.
+    #[cfg(all(test, feature = "t-render"))]
+    pub(crate) fn new_with_game_input(
+        honor: bool,
+        colors: &'a ColorScheme,
+        game_input: Option<Style>,
+    ) -> TextInk<'a> {
+        TextInk { honor, colors, game_input }
     }
 
     pub(crate) fn honor(self) -> bool {
         self.honor
+    }
+
+    pub(crate) fn game_input(self) -> Option<Style> {
+        self.game_input
     }
 
     pub(crate) fn colors(self) -> &'a ColorScheme {

@@ -19,10 +19,14 @@
   the Commodore 64 — Adventureland, Pirate Adventure, Mission Impossible, Voodoo
   Castle, The Count, Strange Odyssey, Claymorgue Castle and Questprobe's *The
   Hulk*, opened straight off their own release disk images, no extraction
-  needed. The Commodore 64 Mysterious Adventures show their pictures, redrawn at
-  the size your terminal shows them rather than stretched from the original's
-  tiny canvas, and the Commodore 64 *Hulk* shows its full-colour comic panels —
-  one per room, straight off the release disk, darkness card and all
+  needed. *Next release:* the ZX Spectrum Mysterious Adventures load from their
+  snapshots — hand lanthorn a `.z80` of any of Brian Howarth's eleven titles and
+  it finds the game inside the 48K memory dump, names the release, and plays
+  it. The Commodore 64 Mysterious
+  Adventures show their pictures, redrawn at the size your terminal shows them
+  rather than stretched from the original's tiny canvas, and the Commodore 64
+  *Hulk* shows its full-colour comic panels — one per room, straight off the
+  release disk, darkness card and all
 
 ### Supported original Infocom disk formats:
 

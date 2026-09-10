@@ -1546,6 +1546,19 @@ impl Picture {
 ///
 /// A block whose first byte is not `0xFF` yields nothing (§11).
 pub fn decode_family_b_lists(block: &[u8]) -> Vec<PictureList> {
+    decode_family_b_lists_at_most(block, usize::MAX)
+}
+
+/// [`decode_family_b_lists`], stopping after `limit` images.
+///
+/// A Commodore 64 program file ENDS where its picture block does, so the
+/// unbounded walk above is the whole answer there. A ZX Spectrum snapshot does
+/// not: the block sits inside a fixed 48K image and unused RAM follows it, so
+/// the walk would carry on decoding whatever those bytes happen to spell.
+/// [`crate::zx_mysterious::decode_picture_lists`] passes the room count, which
+/// §8.6's identity rule ("room *n* shows vector image *n* − 1") makes the exact
+/// number of images a release has (SQ-1478).
+pub fn decode_family_b_lists_at_most(block: &[u8], limit: usize) -> Vec<PictureList> {
     let mut out = Vec::new();
     let Some((&first, mut rest)) = block.split_first() else {
         return out;
@@ -1554,6 +1567,9 @@ pub fn decode_family_b_lists(block: &[u8]) -> Vec<PictureList> {
         return out;
     }
     while let Some((&background, stream)) = rest.split_first() {
+        if out.len() >= limit {
+            break;
+        }
         // §8.2: "if the background colour index is 0 the line colour is 7;
         // otherwise it is 0."
         let mut list =

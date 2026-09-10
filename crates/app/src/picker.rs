@@ -52,6 +52,13 @@ pub enum ScottPictures {
     /// straight off the PRG/D64 image (SQ-1463) — `pictures` is the room count
     /// [`scott::c64::decode_family_b_pictures`] returns (one drawing per room).
     NativeC64 { pictures: usize },
+    /// ZX Spectrum *Mysterious Adventures* Family B vector artwork, decoded
+    /// straight off the `.z80` snapshot (`scott::zx_mysterious`, SQ-1478) —
+    /// the SAME display lists as [`ScottPictures::NativeC64`], since the
+    /// eleven titles carry one picture set between the two platforms and only
+    /// the palette differs. `pictures` is the room count
+    /// `scott::zx_mysterious::decode_picture_lists` returns.
+    NativeZx { pictures: usize },
     /// Pre-rendered room pictures in the story's own Blorb `Pict` resources.
     Blorb,
     /// A US S.A.G.A. release whose own container carries **family-C** strip
@@ -333,6 +340,15 @@ const STORY_EXTS: &[&str] = &[
     // a row appears, so a `.prg` of anything else costs one open and is
     // listed nowhere.
     "prg",
+    // The ZX Spectrum *Mysterious Adventures* (SQ-1478). A `.z80` is a 48K
+    // Spectrum snapshot — an RLE-compressed dump of the whole memory image the
+    // game's tables live in — and is how all twenty titles in the IF Archive's
+    // Spectrum collection come. As with `.prg`, the extension is not
+    // exclusively Scott's and does not have to be: `entry_from_loaded` still
+    // requires the bytes to build a database before a row appears, so a
+    // snapshot of anything else (including the nine non-Mysterious games in
+    // that same collection) costs one open and is listed nowhere.
+    "z80",
     // A ZIP is opened by `hints::read_story_file` exactly as a disk image is —
     // the container is unwrapped and the story inside comes out — so the scan
     // that lists disk images had no principled reason to skip archives, and
@@ -972,6 +988,14 @@ fn scott_release_title(bytes: &[u8]) -> Option<&'static str> {
             return Some(r.title);
         }
     }
+    // The ZX Spectrum half of those same eleven titles (SQ-1478). Identified
+    // by the header counts its own loader reads out of the decompressed
+    // snapshot — `scott::zx_mysterious` needs no catalogue to LOAD one, and
+    // this is the one thing it keeps a table for: putting "The Golden Baton"
+    // on the row where the filename says `m1goldba`.
+    if let Some(r) = scott::zx_mysterious::identify_z80(bytes) {
+        return Some(r.title);
+    }
     scott::Database::parse(bytes).ok()?.saga_us?.display_title()
 }
 
@@ -1012,6 +1036,9 @@ fn scott_pictures(
                 .unwrap_or(0);
             return Some(ScottPictures::NativeC64 { pictures });
         }
+    }
+    if let Ok(lists) = scott::zx_mysterious::decode_picture_lists_z80(bytes) {
+        return Some(ScottPictures::NativeZx { pictures: lists.len() });
     }
     if let Some(platform) = scott::detect_saga_us(bytes) {
         let pictures = crate::hints::saga_picture_files(path).len();
@@ -2053,20 +2080,31 @@ fn bibliographic_key(title: &str) -> String {
 ///   was mounted out of when there is one — "Scott (CBM)" for the Commodore
 ///   Questprobe and *Mysterious Adventures* disks, "Scott (Atari DOS)" for a
 ///   US S.A.G.A. `.atr`, "Scott (DOS 3.3)" for an Apple II side — else
-///   "blorb" for the graphic `.blb` versions. It ignored the medium until the
-///   S.A.G.A. releases arrived and one shelf could hold the same game pressed
-///   for three machines, all of them reading "Scott" and none of them saying
-///   which.
+///   "z80" for a ZX Spectrum snapshot (SQ-1478), else "blorb" for the graphic
+///   `.blb` versions. It ignored the medium until the S.A.G.A. releases
+///   arrived and one shelf could hold the same game pressed for three
+///   machines, all of them reading "Scott" and none of them saying which.
 ///
 /// `blorb` is `RowBadges::blorb` — see [`row_is_blorb`], which costs a
 /// directory read.
 pub fn type_container(meta: &StoryMeta, blorb: bool) -> Option<&'static str> {
     match meta.engine {
-        Engine::ZCode | Engine::Scott => match meta.disk_image {
+        Engine::ZCode => match meta.disk_image {
             Some(image) => Some(image.label()),
             None => blorb.then_some("blorb"),
         },
         Engine::Glulx => None,
+        // A Scott row names its medium too (SQ-1475): the disk image it was
+        // mounted out of when there is one — the mount decides, never the
+        // extension — and failing that a ZX Spectrum snapshot, whose bytes
+        // came out of a 48K memory dump rather than a `.dat` (SQ-1478) and
+        // which is read off the pictures for the same reason. A `.z80` is not
+        // a mountable image, so the two answers cannot collide.
+        Engine::Scott => match (meta.disk_image, meta.scott_pictures) {
+            (Some(image), _) => Some(image.label()),
+            (None, Some(ScottPictures::NativeZx { .. })) => Some("z80"),
+            (None, _) => blorb.then_some("blorb"),
+        },
     }
 }
 
@@ -3885,6 +3923,107 @@ mod tests {
             assert_eq!(baton_row.title, direct_entry.title, "direct and disk routes must agree");
         }
         let _ = std::fs::remove_dir_all(&base);
+    }
+
+
+    /// [`type_container`]'s ZX branch, hand-built — a `.z80` row names its
+    /// container the way a Z-code row names its floppy, and the fact it reads
+    /// is the pictures rather than the filename (SQ-1478).
+    #[test]
+    fn a_zx_snapshot_row_names_its_container_hand_built() {
+        let meta = |pictures: Option<ScottPictures>| StoryMeta {
+            size_bytes: 0,
+            story_bytes: 0,
+            modified: None,
+            engine: Engine::Scott,
+            format: String::new(),
+            version: None,
+            serial: None,
+            release: None,
+            ifid: String::new(),
+            features: Features::default(),
+            self_blorb: None,
+            scott_pictures: pictures,
+            disk_image: None,
+            disk_entry: None,
+            author: None,
+            year: None,
+            genre: None,
+            language: None,
+            description: None,
+            ifdb_link: None,
+            ifdb_rating: None,
+            ifdb_rating_count: None,
+            fetch_not_found: false,
+        };
+        assert_eq!(
+            type_container(&meta(Some(ScottPictures::NativeZx { pictures: 31 })), false),
+            Some("z80"),
+            "a ZX snapshot's TYPE column names the container it was dumped from"
+        );
+        // Every other Scott row is unchanged: the C64 native decode is a
+        // program file, and a text `.dat` beside a Blorb still says "blorb".
+        assert_eq!(
+            type_container(&meta(Some(ScottPictures::NativeC64 { pictures: 31 })), false),
+            None
+        );
+        assert_eq!(type_container(&meta(None), true), Some("blorb"));
+        assert_eq!(type_container(&meta(None), false), None);
+    }
+
+    /// End to end on real media (skips vacuously — `stories/` is gitignored):
+    /// a ZX Spectrum *Mysterious Adventures* snapshot must resolve to its
+    /// release TITLE rather than to the archive's filename stem, and must
+    /// carry the native-ZX pictures row with a genuine room count read off the
+    /// release's own artwork (SQ-1478). Before this the row read `m1goldba`
+    /// and reported no pictures at all.
+    ///
+    /// Like the C64 case above, this one cannot be hand-built: it needs a real
+    /// snapshot's driver shape, since the loader finds the header by scanning
+    /// for the one window whose counts make the driver's pointer block come
+    /// out exactly right.
+    #[test]
+    fn a_zx_mysterious_snapshot_titles_itself_and_reports_its_pictures() {
+        let stories = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../stories");
+        let baton = stories.join("scott-dialects/spectrum/m1goldba.z80");
+        if !baton.is_file() {
+            eprintln!("SKIP: {} absent (gitignored commercial fixture)", baton.display());
+            return;
+        }
+        let base = temp_dir("zx-mysterious-row");
+        let entry = resolve_entry(&baton, &base).expect("m1goldba.z80 opens as a story");
+        assert_eq!(entry.meta.engine, Engine::Scott);
+        assert_eq!(entry.title, "The Golden Baton", "the row must not show the bare stem");
+        assert_eq!(
+            entry.meta.scott_pictures,
+            Some(ScottPictures::NativeZx { pictures: 31 }),
+            "one Family B image per room, room 0 excepted"
+        );
+        assert_eq!(type_container(&entry.meta, false), Some("z80"));
+        // And the nine non-Mysterious snapshots in the same collection are not
+        // stories at all, so they never reach a row.
+        let control = stories.join("scott-dialects/spectrum/gremlins.z80");
+        if control.is_file() {
+            assert!(
+                resolve_entry(&control, &base).is_none(),
+                "a family-A ZX release is refused, not listed"
+            );
+        }
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    /// `.z80` is in [`STORY_EXTS`], or a directory scan never opens one and
+    /// the two cases above could only ever be reached by an explicit path
+    /// (SQ-1478).
+    #[test]
+    fn the_scan_opens_zx_snapshots_at_all() {
+        assert!(STORY_EXTS.contains(&"z80"), "the picker's scan must consider a .z80");
+        let dir = temp_dir("zx-ext-scan");
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("something.z80");
+        std::fs::write(&path, [0u8; 64]).unwrap();
+        assert!(has_story_ext(&path), "and `has_story_ext` must agree with the table");
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     /// [`scott_pictures`]'s Blorb branch, hand-built — no specimen needed,
