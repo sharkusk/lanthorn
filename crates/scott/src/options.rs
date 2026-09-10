@@ -227,9 +227,18 @@ pub struct Wording {
     /// `"\nYou can also see: "`. Same
     /// [`Presentation`] scoping as [`Wording::too_dark_to_see`].
     pub see_also_header: &'static str,
-    /// `Look()`'s room-description prefix — ScottFree's own observed
-    /// wording (no covering parity/golden case found): `"I'm in a "` /
-    /// `"You are "`. Same [`Presentation`] scoping.
+    /// `Look()`'s room-description prefix: `"I'm in a "` / `"You are in a "`.
+    /// Same [`Presentation`] scoping.
+    ///
+    /// **The second-person form was `"You are "` until SQ-1478**, which is
+    /// the one string in this table no parity or golden case covered — and
+    /// the one that is wrong, because every Scott Adams room text in every
+    /// dialect is written as the continuation of "in a": *The Golden Baton*'s
+    /// room 1 is `dense forest, very SPOOKY`, so the old form printed `You
+    /// are dense forest, very SPOOKY`. `docs/internals/scott-dialects-spec.md`
+    /// §6.4 tabulates the two message sets and gives `I'm in a ` against `You
+    /// are in a `; the first-person form here already matched that column
+    /// exactly and the second-person one now does too.
     pub room_prefix: &'static str,
     /// `main`'s unmatched-return fallback, pinned by
     /// `matched_but_blocked_action_replies_cant_do_that_yet_not_dont_understand`
@@ -371,7 +380,7 @@ impl Wording {
                 "I can't see. It is too dark!\n"
             },
             see_also_header: if y { "\nYou can also see: " } else { "\nI can also see: " },
-            room_prefix: if y { "You are " } else { "I'm in a " },
+            room_prefix: if y { "You are in a " } else { "I'm in a " },
             dont_understand: "I don't understand your command. ",
             cant_do_that_yet: "I can't do that yet. ",
             nothing_taken: "Nothing taken.",

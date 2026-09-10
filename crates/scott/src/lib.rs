@@ -51,7 +51,7 @@
 //!
 //! # Loading a story
 //!
-//! This crate reads **four** encodings of the same game data, and
+//! This crate reads **five** encodings of the same game data, and
 //! [`Database::parse`] answers for all of them from one entry point — hand it
 //! the file's raw bytes and it returns the static game data (rooms, items, the
 //! action table, vocabulary, and messages) or a [`LoadError`] naming what
@@ -68,6 +68,14 @@
 //!   holding an uncompressed 6502 memory image ([`parse_c64_mysterious_prg`],
 //!   and [`crate::c64`] for the format). Those releases also carry line-drawn
 //!   artwork, which [`decode_family_b_pictures`] turns into indexed bitmaps.
+//! * the **ZX Spectrum *Mysterious Adventures*** — the same eleven titles on
+//!   the other side of the Irish Sea, as 48K `.z80` snapshots
+//!   ([`parse_zx_mysterious_z80`], and [`crate::zx_mysterious`] for the
+//!   format), carrying the same line-drawn artwork. Unlike every other binary
+//!   dialect here this one needs **no per-release catalogue at all**: the
+//!   driver plants nine table addresses in the nine words that follow the
+//!   header, so the header's field order and the dictionary's verb/noun split
+//!   are read out of the bytes rather than looked up.
 //! * the **US S.A.G.A. binary database** — the American "Scott Adams Graphic
 //!   Adventure" disk editions of Adventures 1-6 and 13 for the Atari 8-bit and
 //!   the Apple II, and the Questprobe *Hulk* for the Commodore 64: a flat
@@ -95,9 +103,11 @@
 //! file before this crate ever sees it.)
 //!
 //! Scott Adams games also shipped in binary dialects this crate does NOT
-//! read: the remaining ZX Spectrum/Atari 8-bit/Apple II memory snapshots that
-//! carry the tables as machine data, and the Commodore 64 releases outside
-//! the *Mysterious Adventures* series. It does [`detect_dialect`] them, so a
+//! read: the Atari 8-bit and Apple II memory snapshots that carry the tables
+//! as machine data, the ZX Spectrum releases outside the *Mysterious
+//! Adventures* series (the character-cell picture family, and the two that
+//! compress their action table and their text), and the Commodore 64 releases
+//! outside that series. It does [`detect_dialect`] them, so a
 //! failed parse over one comes back as [`LoadError::UnsupportedDialect`]
 //! and a host can say "this is a Commodore 64 memory snapshot" instead of
 //! reporting whichever token the text lexer tripped over first. A file that
@@ -110,9 +120,13 @@
 //! `.z80` file, for instance, RLE-compresses the whole 48K memory image the
 //! tables live in, so no in-memory offset means anything until that layer
 //! is peeled off first. [`decompress_z80`] does that one container step
-//! (see its module docs for the format and its source); a Spectrum-dialect
-//! loader, when one exists, runs on its output rather than on the file's
-//! raw bytes.
+//! (see its module docs for the format and its source), and
+//! [`parse_zx_mysterious_z80`] is that step plus the Spectrum loader spelled
+//! once — [`Database::parse`] recognises a `.z80` and runs both, so a host
+//! that already hands this crate a file's bytes needs no new wiring. Nothing
+//! reads a snapshot's raw bytes: the RLE passes literal text through, so the
+//! dictionary signature is right there in the compressed file at an offset
+//! that means nothing.
 //!
 //! # Driving a session
 //!
@@ -212,6 +226,7 @@ pub mod database;
 pub mod decompile;
 pub mod saga_us;
 pub mod ti994a;
+pub mod zx_mysterious;
 pub use c64::{
     decode_family_b_block, decode_family_b_pictures, looks_like_c64_mysterious,
     looks_like_c64_mysterious_prg, parse_c64_mysterious, parse_c64_mysterious_prg, prg_image,
@@ -229,3 +244,7 @@ pub use scottfree_save::looks_like_scottfree_save;
 pub use ti994a::{looks_like_ti994a, parse_ti994a, Ti99Record, Ti99Script};
 pub use vm::{RestoreError, StepResult, Vm};
 pub use z80::{decompress_z80, looks_like_z80, Z80Error, IMAGE_LEN};
+pub use zx_mysterious::{
+    looks_like_zx_mysterious, looks_like_zx_mysterious_z80, parse_zx_mysterious,
+    parse_zx_mysterious_z80, ZxLayout, ZxRelease,
+};

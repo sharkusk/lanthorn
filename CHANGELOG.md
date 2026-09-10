@@ -23,6 +23,34 @@ Absolute URLs or no link.
 
 ### Added
 
+- **The ZX Spectrum *Mysterious Adventures* now load, straight from a
+  snapshot.** All eleven of Brian Howarth's titles — *The Golden Baton*, *The
+  Time Machine*, *Arrow of Death* parts 1 and 2, *Escape from Pulsar 7*,
+  *Circus*, *Feasibility Experiment*, *The Wizard of Akyrz*, *Perseus and
+  Andromeda*, *Ten Little Indians* and *Waxworks* — were sold for the 48K
+  Spectrum, and what survives of them is a `.z80` snapshot: a compressed dump
+  of the machine's whole memory, game and interpreter together, with nothing
+  in it that says where the game is. Hand lanthorn one and it finds the game
+  inside, names the release in the story list ("The Golden Baton", not
+  `m1goldba`), reports its artwork in the info panel, and plays it in the
+  wording the release itself carries — which, measured against the eleven
+  snapshots rather than against the received wisdom about them, is the same
+  first person the Commodore 64 edition speaks in.
+  It needs no list of known releases to do it, so a Spectrum snapshot nobody
+  has catalogued loads too; a snapshot of some other game is refused by name
+  rather than half-read.
+
+### Fixed
+
+- **"I'm in a dusty study" now follows the wording you asked for.** lanthorn's
+  own room layout — the one it shows for every Scott Adams game — printed the
+  room line and the "I can also see:" heading in the first person whatever the
+  rest of the game was saying, so a game set to speak in the second person
+  said "You are dead." and "You are carrying:" and then opened every single
+  turn with "I'm in a ". Both lines follow the setting now, and the
+  second-person room line reads "You are in a " rather than the ungrammatical
+  "You are " it used to be.
+
 - **The American S.A.G.A. disk games now load.** The Adventure International
   disk editions sold in the United States — *Adventureland*, *Pirate
   Adventure*, *Mission Impossible*, *Voodoo Castle*, *The Count*, *Strange

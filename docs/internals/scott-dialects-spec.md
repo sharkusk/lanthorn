@@ -4637,7 +4637,10 @@ it is not this format.
 lanthorn's `scott` crate reads the reference text format, **§3's TI-99/4A
 tokenised releases** (`crates/scott/src/ti994a.rs`, SQ-1414), the **eleven
 Commodore 64 *Mysterious Adventures* releases** (`crates/scott/src/c64.rs`,
-SQ-1455) and **§12's US S.A.G.A. binary database** — all fifteen Atari 8-bit,
+SQ-1455), the **eleven ZX Spectrum releases of those same titles**
+(`crates/scott/src/zx_mysterious.rs`, SQ-1478 — `.z80` snapshots, through
+§7.1's container step, and **with no per-release catalogue at all**; see item 12
+below) and **§12's US S.A.G.A. binary database** — all fifteen Atari 8-bit,
 Apple II and Commodore 64 databases (`crates/scott/src/saga_us.rs`, SQ-1414 /
 SQ-1464) — and refuses the remaining dialects by name rather than loading them: a
 file that fails the text parse is checked against the TI-99/4A signature, the
@@ -4648,16 +4651,25 @@ data".
 **Implemented from this document:** §1, §2, §3 (all of it — §3.1 detection and
 the baseline, §3.2 endianness, §3.3 the header, §3.4 the two table shapes, §3.5
 strings and the derived message count, §3.6 the two dictionaries, §3.7 the
-action encoding), the Commodore 64 slice of §4 (§4.2's cell reading, §4.3's
-locating, §4.4's encodings), §5.3's repairs for that family, §6, §7.2's
-uncrunched disk-image path, §8.2's Family B pictures, §9.1 and §9.2 as they
-apply, §11's TI-99/4A refusals, and **§12 in full** (§12.1-§12.9 as the format,
+action encoding), the Commodore 64 **and ZX Spectrum** slices of §4 (§4.1's
+signature, §4.2's cell reading — grid, and the alignment escape only where
+§4.2 says it is safe — §4.3's locating, §4.4's encodings, §4.5's four
+*Mysterious* field orders, **§4.6's plausibility scan and its driver
+pointer-block rule**), §5.3's repairs for the Commodore 64 family (none of them
+fires on the ZX one, and item 13 below says why), §6, **§7.1's ZX snapshot
+container**, §7.2's uncrunched disk-image path, §8.2's Family B pictures on both
+platforms, §9.1, §9.2 and **§9.3** as they apply, §11's TI-99/4A and
+memory-image refusals, and **§12 in full** (§12.1-§12.9 as the format,
 including §12.8's command codes 89 and 90 and their operand counts, §12.11's
 database-borne runtime facts, §12.14's refusals; §12.10 says the database carries
 no picture data, so there is none to read). **Not
-implemented:** the rest of §4-§8, §9.3, and §11 apart from the above. The
-S.A.G.A. **container** step is the host's — `scott` reads no disk images — so
-§12.3's three array offsets live in the crate and the mount does not.
+implemented:** §4's other dialects (the Adventure International memory images,
+the German, Spanish and Italian releases), §5.1's compressed action table and
+§5.2's compressed text, §7.3-§7.5, §8.1 and §8.3-§8.5, and §11 apart from the
+above. Two **container** steps are the host's — `scott` reads no disk images —
+so §12.3's three array offsets live in the crate and the mount does not, while
+§7.1's `.z80` step lives in the crate (`crates/scott/src/z80.rs`) because a
+snapshot is a compression layer over a memory image rather than a filesystem.
 
 The TI-99/4A implementer raised three questions about §3 while building that
 loader, each found by measuring the §10.2 specimens against the §10.1 oracle.
@@ -4850,6 +4862,142 @@ fourth is a code change.
     signals that catch it are §12.7's pointer tables failing to resolve (its
     first room pointer gives a base of `$82E5` where every sound Atari release
     gives `$3031`) and the two copies of the item-location table disagreeing.
+
+**And the ZX Spectrum implementer raised four more, about §4.2, §4.5, §4.6 and
+§6.1** — all four found by measuring the eleven §10.3 snapshots against the
+§10.3 conversions, and all four in the same direction: **this platform needs
+less per-release knowledge than §4.6 says any memory image can be read with.**
+Three are corrections to normative text and one is an addition; none required a
+code change, because the code was written from the measurement.
+
+12. **§4.6's "two numbers, and no more" is ZERO numbers on this platform — the
+    specification's pointer-block rule was right, and its scope was too
+    narrow.** §4.6 says a release with a driver pointer block still needs the
+    header's field order (not derivable) and the dictionary's verb/noun split
+    ("genuinely not derivable"). Both ARE derivable here, because the block is
+    **the nine little-endian words immediately after the header's twelve
+    counts**: room descriptions, room connections, item locations, a second
+    copy of the item locations the driver plays out of, verb cells, noun cells,
+    the room descriptions again, messages, item descriptions — with a tenth
+    address, one past the item descriptions, in the word §4.5 calls the early
+    shape's unused word 0. The **field order** then follows from arithmetic:
+    scan every address in the 48K image under each of §4.5's four *Mysterious*
+    candidate orders and keep the one whose counts make all ten spans come out
+    exactly right, and **exactly one (order, address) pair survives in each of
+    the eleven** — §4.5's early order every time, at `$6349` in *The Golden
+    Baton* and *Circus* and `$6351` in the other nine. The **split** is simply
+    read: each dictionary block has its own pointer and holds exactly
+    (word count + 1) cells. The nine other snapshots in the same archive
+    (§10.3's four family-A and compressed-action releases, and its five
+    non-Scott games) yield **no** surviving candidate, which is what makes the
+    scan a detector as well as a locator.
+
+    §4.6's own recognition procedure is what found it: `m1goldba` and
+    `m5pulsar` are byte-identical up to `$5120`, and the differing bytes around
+    the address the §4.6 scan had already located read as addresses that check
+    out against the dictionary (§4.1's signature) and against the start of the
+    picture data. §4.6 should say that a pointer block may sit in the header
+    itself rather than only in the initialisation code, and that where it does,
+    the two numbers it calls irreducible are not.
+
+13. **No §5.3 repair applies to these eleven, and the stored action count is
+    checkable rather than trusted.** §5.3's *Escape from Pulsar 7* action-count
+    repair and *The Time Machine* item-description shortfall are Commodore 64
+    facts; on the ZX releases both tables check out. What makes that a
+    measurement rather than an assumption is a pair of arithmetics: the action
+    table's start is the room-connection pointer less (count + 1) × 16, so any
+    count lands the table on the next one by construction, but every record the
+    count claims must carry a possible vocabulary word (below 150 × 150) **and**
+    the sixteen bytes in front of the table must not — one too many and record 0
+    is the driver's code, one too few and the real record 0 sits in front of the
+    table. Both hold in all eleven (the sixteen bytes in front read as
+    vocabulary word 31,563 or 31,606), so a release with §5.3's defect would be
+    detected here rather than mis-read. §5.3's direction-noun repair is
+    likewise unnecessary on this platform for the same reason it is on the
+    other: noun cells 0-6 read `ANY NORT SOUT EAST WEST UP DOWN` straight out
+    of §4.2's grid in all eleven.
+
+14. **§4.5's "word 0 of the early shape is not a field" is false on the ZX
+    releases, and §4.2's all-NUL count is low.** Word 0 is the tenth table
+    pointer (item 12 above); §4.5 already records that it is a `JMP` operand on
+    the Commodore 64, so the sentence wants a platform. And §4.2's "all-NUL
+    cells are common, up to 27 in one dictionary" undercounts: measured across
+    the eleven, the deepest is **47**. The rule that matters is unchanged and
+    was decisive — read the grid, and do **not** apply the leading-NUL
+    alignment escape on ZX.
+
+15. **§6.1's message-count claim is wrong, and §9.3's is right.** §6.1 gives
+    "every ZX release in the series stores exactly **82** messages,
+    distinctive against the 75-99 typical of Adventure International releases"
+    as one of three identification routes; measured, only *Arrow of Death part
+    1* stores 82, and the eleven spread from 65 (*Feasibility Experiment*) to
+    99 (*The Golden Baton*, *The Wizard of Akyrz*). What IS constant across the
+    series is the word length, 4. §6.1's first route (the seven header counts)
+    does identify all eleven uniquely, and that is what the crate keeps a table
+    for — a display title, and nothing else.
+
+16. **§6.4's second-person table is not these releases' wording either, and
+    §9.3's test fails on a real one — the same correction §6.4 already made
+    for the Commodore 64, made again on the other platform.** §6.4 gives its
+    second-person column as "the **ZX Spectrum** wording" and §9.3 says an
+    interpreter "should expose the choice as an option and force it on for a
+    recognised Mysterious Adventures **ZX Spectrum** release", warning only
+    against forcing it on the series because the Commodore 64 files were
+    measured carrying a first-person block of their own. Measured the same
+    way — every string of both columns searched for in the whole decompressed
+    image, all eleven §10.3 snapshots — **the ZX driver carries a first-person
+    block too, and not one second-person string occurs anywhere in any of the
+    eleven**.
+
+    The block is a run of the interpreter's own messages beginning around
+    `$64C1`, and what identifies it as the driver's rather than the game's
+    message pool is the tape prompts inside it: `BAD DATA FILE!  Press any
+    key`, `Get tape ready..Press <ENTER>`. In *The Golden Baton*'s image it
+    reads, in order, `Game over. Play again ? `, `I've stored`, `On a scale of
+    0 to 100 that rates`, `Well done! Mission completed!`, `I don't understand
+    what you mean`, `I can't do that just yet!`, `Try a direction`, `I'm not
+    carrying it`, `I don't see it here`, `That's beyond my Power!`, `It's risky
+    moving in the dark!`, `I fell and broke my neck!`, `I can't go in that
+    direction`, `" is not known to me!`, `I don't know what a "`, `It's too
+    dark to see!`, `Things I can see:`, `I'm carrying:`, `Not a sausage!`,
+    `WHAT NOW ? `, `The light ran out`, `Light runs out in`, `I'm carrying too
+    much!`, `Resume play on a Game ? ` — and `I'm in a ` at `$66B0`. Compare
+    §6.4's Commodore 64 table: the same set, differently punctuated and
+    differently ordered, first person throughout.
+
+    Three consequences for §6.4 and §9.3. **The second-person table needs a
+    platform, and neither of the two this document specifies is it** — it may
+    belong to some other release of the series, or to no release at all, and
+    §6.4's own closing paragraph ("an existing implementation forces the
+    second-person set for the whole series … for these specimens that is
+    wrong") now applies to twenty-two files rather than eleven. **§9.3's ZX
+    test is inverted**: a transcript of a real *Golden Baton* reads `I'm in a
+    dense forest, very SPOOKY`, `I can't go in that direction` and `I'm
+    carrying:`, and a transcript containing `You are in a ` is the one running
+    the wrong set. And **§6.4's "two strings are not in the file at all on the
+    ZX releases … a third, the visible-objects heading … must be supplied on
+    the ZX releases too" is wrong about the third**: `Things I can see:` is in
+    the file, at `$66BA` in *The Golden Baton*, spelled exactly as §6.4 gives
+    the Commodore 64's.
+
+    **What the crate does with it:** nothing. `parse_zx_mysterious` forces
+    §9.2's two lamp options and no wording at all, exactly as
+    `parse_c64_mysterious` does, and `Options::you_are` stays the host's on
+    both platforms with its default (off) correct for all twenty-two releases.
+    A `Database::second_person` flag was written, and removed again when this
+    measurement landed: a switch no loader sets is a mechanism for a fact that
+    turned out not to exist.
+
+    One consequence worth recording for a spec reader: **five of the eleven
+    snapshots share all eleven header numbers with their published conversion,
+    and only four of those five decode to identical tables** (*The Time
+    Machine*, *Escape from Pulsar 7*, *Circus*, *The Wizard of Akyrz*), *Ten
+    Little Indians* differing in three action records' fifth condition word.
+    *Arrow of Death part 1* matches on ten of the eleven numbers (its lamp is
+    32,766 against the conversion's 32,767) and shares only 26 of 53 room
+    texts, which is §10.3's warning — "check the header numbers before assuming
+    table equality is the right test" — biting one step further in than it
+    reads.
 
 The in-memory model this document's dialects decode *to*, in that crate, is a
 database of rooms (six exits and a description, plus a flag for the leading-`*`
