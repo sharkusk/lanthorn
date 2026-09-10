@@ -5231,6 +5231,28 @@ recorded here so the next reader of that section reads them together with it.
     text up to `side `, a different letter after it — and says so as a host
     rule (`app::hints::saga_companion_side`).
 
+**And the family-C implementer raised one, about §8.3's compression variant**
+(SQ-1484), measured on *The Count*'s and *Voodoo Castle*'s own Atari records.
+**It is not resolved in §8.3 above** — it is recorded here so the next reader
+of that section reads the two together.
+
+31. **§8.3's no-literal variant changes the EDGE LIMITS as well as the height,
+    and one of the two is not stated.** §8.3 gives the variant as "every
+    control byte is a repeat count, bit 7 is not masked, the count is the
+    byte's full value, and two is subtracted from the stored height before
+    decoding". The height half is right and is equivalent to reading the bottom
+    edge exclusively. But the **right** edge is exclusive too, which §8.3 does
+    not say: *The Count*'s first record declares edges `03 04 08 1A` and holds
+    55 pairs, which is 5 columns of 11 and not the 6 of 11 an inclusive right
+    edge gives. Every one of the 151 records on the two variant sides agrees.
+    So the clean statement is that the **standard** scheme reads both far edges
+    inclusively (as the Commodore 64 does, and as *Claymorgue Castle* does on
+    the Atari) and the **variant** reads both exclusively. A stored control
+    byte of zero still emits one pair. lanthorn spells the two readings once,
+    in `scott::saga_pictures::StripLayout::resolve`, and selects between them
+    by release identity in `SagaUs::picture_scheme` — never by sniffing, since
+    a variant record read as standard decodes into something picture-shaped.
+
 The in-memory model this document's dialects decode *to*, in that crate, is a
 database of rooms (six exits and a description, plus a flag for the leading-`*`
 literal convention), items (text, a treasure flag, an optional auto-get noun and

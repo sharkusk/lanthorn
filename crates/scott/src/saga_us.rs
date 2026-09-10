@@ -282,6 +282,30 @@ impl SagaUs {
             _ => None,
         }
     }
+
+    /// Which of family C's two run-length schemes this release's picture
+    /// records use (§8.3, SQ-1484).
+    ///
+    /// §8.3 names the two titles: "**The Count and Voodoo Castle** use a
+    /// variant with no literal mode". Everything else — the Commodore 64
+    /// *Hulk*, *Claymorgue Castle* on the Atari — uses the standard scheme.
+    ///
+    /// **Keyed by release identity, never sniffed**, for the reason
+    /// [`crate::saga_pictures::FamilyCScheme`] gives: a no-literal record read
+    /// as standard still decodes into something picture-shaped, so there is
+    /// nothing in the bytes for a sniffer to be right about.
+    ///
+    /// Answers for every platform, because the variant is a property of the
+    /// title rather than of the machine: §8.4 says *The Count*'s **Apple II**
+    /// records use it too, so a family-D reader can ask this the same way.
+    pub fn picture_scheme(&self) -> crate::saga_pictures::FamilyCScheme {
+        use crate::saga_pictures::FamilyCScheme;
+        match (self.version, self.adventure) {
+            (119, 4) | (115, 5) => FamilyCScheme::NoLiteral,
+            _ => FamilyCScheme::Standard,
+        }
+    }
+
 }
 
 /// §12.11's *Hulk* room-picture remap, on its own: rooms 5 and 6 draw picture

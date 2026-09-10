@@ -241,7 +241,7 @@ pub use loader::{detect_dialect, looks_like_scott, looks_like_scott_bytes, Diale
 pub use options::{Options, Presentation, Wording};
 pub use saga_dos::{decode_family_e, DosRelease};
 pub use apple_pictures::{decode_family_d, AppleError};
-pub use saga_pictures::{decode_family_c, PictureError};
+pub use saga_pictures::{atari_colour, decode_family_c, FamilyCScheme, PictureError};
 pub use saga_us::{
     detect_saga_us, is_apple_picture_file_name, is_picture_file_name, looks_like_saga_us,
     parse_apple_picture_file_name, parse_picture_file_name, parse_saga_us, picture_file_name,
