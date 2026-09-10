@@ -112,6 +112,9 @@ mod scott_saga_dos_pictures;
 
 #[path = "suites/scott_c64_picture_colours.rs"]
 mod scott_c64_picture_colours;
+
+#[path = "suites/scott_c64_baton_colours.rs"]
+mod scott_c64_baton_colours;
 #[path = "suites/scott_zip_open.rs"]
 mod scott_zip_open;
 #[path = "suites/shogun_dict_words.rs"]

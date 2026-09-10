@@ -1063,9 +1063,19 @@ const OP_END: u8 = 0xFF;
 /// bitmaps resolve through, so the two Commodore 64 picture families cannot
 /// disagree about what "red" is (SQ-1491; §8.2's own table was a brighter
 /// hand-made one). §11 restates that "the four remap tables were derived by
-/// eye and may contain mistakes"; that caveat travels with this constant, and
-/// no real-machine capture of a *Mysterious Adventures* screen exists yet to
-/// check the remap against.
+/// eye and may contain mistakes"; that caveat is now **half discharged**.
+///
+/// # What a real machine says about remap table A (SQ-1491)
+///
+/// `machine-screenshots/c64-golden-{1,2,3}.png` are *The Golden Baton*'s rooms
+/// 1, 2 and 6 off `MYSTADV1.D64` under VICE, and
+/// `scott_c64_baton_colours.rs` in lanthorn's suites rasterises the same three
+/// pictures and reads back, per stored index, which VIC-II colour the machine
+/// draws it in. **Six of the sixteen are confirmed and none is corrected**:
+/// stored 0 black, 2 red, 4 green, 5 cyan, 6 gold, and 7 — the line index —
+/// white. The other ten (1, 3, and 8 through 15) no committed frame exercises;
+/// they stay exactly as §8.2 has them, and the suite fails if a future frame
+/// starts exercising one without the table being updated to say so.
 pub const PALETTE: [(u8, u8, u8); 16] = {
     use crate::c64_palette::PEPTO_PALETTE as C64;
     const REMAP_A: [usize; 16] = [0, 6, 2, 4, 5, 3, 7, 1, 8, 1, 1, 1, 7, 12, 8, 7];

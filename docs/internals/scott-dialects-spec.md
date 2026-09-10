@@ -2658,8 +2658,9 @@ The Commodore 64 palette, used by every Commodore 64 release:
 > c64-hulk-*.png`) resolve to Pepto's measured VIC-II palette exactly, so
 > lanthorn draws both Commodore 64 picture families through that instead:
 > Appendix A item 40. The **indices** above, and the remap that produces them,
-> are unaffected — and no capture of a *Mysterious Adventures* screen exists
-> yet to check remap table A against.
+> are unaffected — and remap table A has since been checked against a real
+> machine on six of its sixteen rows, which confirm it and correct nothing:
+> Appendix A item 45.
 
 **The remap step.** Commodore 64 releases store the *ZX Spectrum's* colour
 indices in their attribute bytes — the artwork was converted, the numbering was
@@ -2691,7 +2692,9 @@ serves Hulk, Adventureland, Secret Mission, Claymorgue, Savage Island I and II,
 every Gremlins variant, Supergran and Robin of Sherwood on Commodore 64. Table C
 serves only Spider-Man and table D only Seas of Blood. **These tables were
 derived by eye from emulator captures and are acknowledged as possibly
-containing mistakes.** For ZX releases the remap is the identity, and an index
+containing mistakes** — six of table A's sixteen rows have since been checked
+against a real Commodore 64 and are right (Appendix A item 45); the other ten
+of A, and all of B, C and D, are unchecked. For ZX releases the remap is the identity, and an index
 outside 0-15 must be reported as invalid rather than clamped.
 
 **Compression.** The shape stream's run counts and the attribute stream's runs
@@ -5686,6 +5689,46 @@ together with it.
     family-C/family-E twin suite already pairs those exact records. lanthorn
     draws the RGBI values (`scott::saga_dos::PALETTE`, pinned by value)
     (SQ-1491).
+
+45. **Remap table A is right where a real machine can be asked — six rows of
+    sixteen, and no correction.** §11 says all four remaps "were derived by eye
+    and may contain mistakes", and item 39 found two such mistakes in §8.3's
+    Commodore 64 table by photographing the machine. The same instrument
+    pointed at §8.2 finds none.
+    `machine-screenshots/c64-golden-{1,2,3}.png` are *The Golden Baton* off
+    `MYSTADV1.D64` under VICE, and the derived rows are:
+
+    | stored | remap A gives | the machine draws |
+    |---|---|---|
+    | 0 | 0, black | black |
+    | 2 | 2, red | red |
+    | 4 | 5, green | green |
+    | 5 | 3, cyan | cyan |
+    | 6 | 7, gold | gold |
+    | 7 | 1, white | white (the line colour) |
+
+    **Ten rows are still unchecked**: stored 1 and 3, and 8 through 15 — the
+    upper half that table A collapses onto four colours, which is exactly the
+    part a reader would most want confirmed. Line art uses few colours, so
+    reaching them needs rooms with different palettes rather than more rooms:
+    *The Golden Baton*'s own later rooms for 1 (blue) and 3 (purple), and the
+    other ten titles on the two `MYSTADV` disks for the collapsed upper half,
+    since a stored index above 7 only appears where the ZX original used a
+    bright attribute.
+
+    Three notes on method, since they generalise to any capture of a vector
+    format. **The third frame is room 6, not room 3** — two moves north from
+    the forest does not reach room 3, and the suite identifies each frame by
+    scoring all thirty-one pictures against it rather than by reading the map.
+    **The comparison runs over eroded fill interiors**, not every pixel: whole-
+    frame agreement is 95-97% and every missing pixel is on or beside a
+    one-pixel line, because our Bresenham and the release's own 6502 one place
+    a line slightly differently and a one-pixel line has no pixel that survives
+    a one-pixel disagreement — a question about the decoder, not the palette.
+    On interiors the agreement is 100% on one frame and 99.6% on the other two.
+    **And the line index has no interior at all**, so it is derived by
+    elimination: subtract the colours the fills account for from the colours on
+    screen and exactly one is left over, white in all three frames (SQ-1491).
 
 The in-memory model this document's dialects decode *to*, in that crate, is a
 database of rooms (six exits and a description, plus a flag for the leading-`*`

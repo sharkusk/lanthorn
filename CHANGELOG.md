@@ -107,7 +107,9 @@ Absolute URLs or no link.
   checked the same way. The MS-DOS *Questprobe* pictures are corrected in the
   same breath: their cyan and magenta were the pure, electric versions of those
   colours rather than the softer ones an IBM PC's graphics adaptor actually
-  put on a monitor.
+  put on a monitor. And the line-drawn *Mysterious Adventures* artwork was
+  checked against a real Commodore 64 too — that one turned out to have been
+  right all along, which is worth knowing.
 
 - **"I'm in a dusty study" now follows the wording you asked for.** lanthorn's
   own room layout — the one it shows for every Scott Adams game — printed the
