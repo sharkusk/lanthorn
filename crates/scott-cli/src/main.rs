@@ -236,10 +236,25 @@ fn scott_c64_title(disk_name: &str) -> Option<&'static str> {
         .map(|r| r.title)
 }
 
+/// The canonical title for a US S.A.G.A. release, by the database's own
+/// content identity rather than by whatever the container happens to call it
+/// (SQ-1470) — mirrors `app::picker`'s `scott_release_title`, which has the
+/// fuller reasoning. `scott::Database::parse` is cheap enough over these
+/// small files to call again here rather than plumb the parsed `Database`
+/// through; `main` re-parses the chosen candidate's bytes anyway.
+fn saga_us_title(bytes: &[u8]) -> Option<&'static str> {
+    scott::Database::parse(bytes).ok()?.saga_us?.display_title()
+}
+
 impl DiskCandidate {
-    /// How this candidate reads in the menu: its canonical title beside the
-    /// disk's own name when the table knows it, else the bare name.
+    /// How this candidate reads in the menu: the US S.A.G.A. content-identified
+    /// title (already platform-qualified — "Voodoo Castle (Atari 8-bit)"), else
+    /// the Commodore *Mysterious Adventures* table's title beside the disk's own
+    /// name, else the bare name.
     fn label(&self) -> String {
+        if let Some(title) = saga_us_title(&self.bytes) {
+            return title.to_string();
+        }
         match scott_c64_title(&self.name) {
             Some(title) => format!("{title}  ({})", self.name),
             None => self.name.clone(),
@@ -255,7 +270,9 @@ fn disk_rows(cands: &[DiskCandidate]) -> Vec<cli_host::story_pick::Row> {
         .iter()
         .map(|c| cli_host::story_pick::Row {
             name: c.name.clone(),
-            title: scott_c64_title(&c.name).map(str::to_string),
+            title: saga_us_title(&c.bytes)
+                .map(str::to_string)
+                .or_else(|| scott_c64_title(&c.name).map(str::to_string)),
             label: c.label(),
         })
         .collect()
@@ -271,14 +288,31 @@ fn disk_rows(cands: &[DiskCandidate]) -> Vec<cli_host::story_pick::Row> {
 /// volume regardless of engine — a Z-machine or Glulx sibling on the same
 /// disk (there are none in the corpus, but nothing here assumes it) is simply
 /// not a Scott Adams program and does not pass the sniff.
+///
+/// **The US S.A.G.A. Atari 8-bit database is not a directory entry**
+/// (SQ-1470): the release masters its database straight over Atari DOS 2's
+/// own volume table of contents, so `contents()` lists at most
+/// `DOS.SYS`/`AUTORUN.SYS` on these sides and never the database itself —
+/// see `blorb::atr`'s module docs. The one extra candidate the format offers
+/// beyond its directory is the whole image, through the reserved
+/// `blorb::atr::IMAGE_ENTRY` door. The Apple II and Commodore 64 releases
+/// need no such door: their databases ARE ordinary catalogue files.
 fn story_candidates(path: &Path, raw: Vec<u8>) -> Result<Vec<DiskCandidate>, String> {
     let disk = cli_host::disk_set::mount_at(path, raw)
         .map_err(|e| format!("Error: cannot mount the disk image: {e}"))?;
-    let contents = disk.contents();
+    let mut contents = disk.contents();
+    if disk.format() == blorb::medium::DiskImage::AtariDos2 {
+        if let Some(image) = disk.read_named(blorb::atr::IMAGE_ENTRY) {
+            contents.push((blorb::atr::IMAGE_ENTRY.to_string(), image));
+        }
+    }
     let found: Vec<DiskCandidate> = contents
         .iter()
         .filter(|(_, bytes)| scott::looks_like_scott_bytes(bytes))
-        .map(|(name, bytes)| DiskCandidate { name: name.clone(), bytes: bytes.clone() })
+        .map(|(name, bytes)| DiskCandidate {
+            name: saga_us_keyed_name(name, bytes),
+            bytes: bytes.clone(),
+        })
         .collect();
     if found.is_empty() {
         let names: Vec<String> = contents.iter().map(|(n, _)| n.clone()).collect();
@@ -291,6 +325,39 @@ fn story_candidates(path: &Path, raw: Vec<u8>) -> Result<Vec<DiskCandidate>, Str
         ));
     }
     Ok(found)
+}
+
+/// A save-key-safe name for a disk-mounted Scott candidate (SQ-1470) — mirrors
+/// `app::hints`'s helper of the same name, which has the fuller reasoning.
+///
+/// **A US S.A.G.A. release's own container entry is not a distinguishing
+/// name.** `blorb::atr::IMAGE_ENTRY` is the literal `"IMAGE"` on all seven
+/// Atari sides, and the Apple II boot disks spell two DIFFERENT titles
+/// `DATABASE` — and this binary's own save key is the entry name alone
+/// (`cli_host::story_key_for`; Scott bytes carry no Z-machine header to build
+/// a `DiskBuild` from), so two different games under either literal name
+/// would share one save directory. The (version, adventure, platform) triple
+/// is this release's actual identity and is appended to the real container
+/// name — a no-op for every other Scott source, whose names are already
+/// unique and already shipped.
+fn saga_us_keyed_name(name: &str, bytes: &[u8]) -> String {
+    match scott::Database::parse(bytes).ok().and_then(|db| db.saga_us) {
+        Some(saga) => {
+            format!("{name}-{}-{}-{}", saga.version, saga.adventure, saga_us_platform_slug(saga.platform))
+        }
+        None => name.to_string(),
+    }
+}
+
+/// A short, filename-safe token per [`scott::SagaPlatform`], for
+/// [`saga_us_keyed_name`].
+fn saga_us_platform_slug(platform: scott::SagaPlatform) -> &'static str {
+    match platform {
+        scott::SagaPlatform::Atari8Bit => "atari8bit",
+        scott::SagaPlatform::AppleII => "appleii",
+        scott::SagaPlatform::Commodore64 => "c64",
+        _ => "unknown",
+    }
 }
 
 /// Pick a Scott Adams program off a mounted image — the same shape as
@@ -630,12 +697,17 @@ fn main() {
                 eprintln!("{e}");
                 process::exit(1);
             });
-            // Say which one opened whenever there was a choice to get wrong —
+            // Say which one opened whenever the story came off a disk —
             // including the scripted `--story` path, where nothing else on
             // screen would show it (mirrors `zvm-cli`'s own disk menu).
-            if cands.len() > 1 {
-                println!("Opening {}) {}", chosen + 1, cands[chosen].label());
-            }
+            //
+            // Unconditional since SQ-1470, not just "when there was a choice
+            // to get wrong": an Atari 8-bit or Apple II S.A.G.A. side always
+            // holds exactly one Scott candidate, and it is the ONE piece of
+            // output that says which platform's release just opened — the
+            // same title exists on more than one, and nothing else on screen
+            // would say so.
+            println!("Opening {}) {}", chosen + 1, cands[chosen].label());
             let name = cands[chosen].name.clone();
             let mut cands = cands;
             (cands.swap_remove(chosen).bytes, Some(name))
