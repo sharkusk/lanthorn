@@ -90,6 +90,56 @@ jobs:
         with:
           key: ${{ matrix.name }}
 
+      # SQ-1501: lanthorn-zvm, lanthorn-gvm and lanthorn-scott are meant to be
+      # embeddable by other Rust projects, not just buildable inside this
+      # workspace. `cargo package -p <crate>` (verification on, the default)
+      # builds each crate's packaged tarball in complete isolation — no
+      # workspace, no path-dependency resolution — the way an actual
+      # downstream `cargo add` would see it, so a crate whose `include` list
+      # is missing a file, or that leans on a path only valid inside this
+      # workspace, fails HERE instead of at someone else's `cargo build`.
+      # Packaging is target-independent, so this runs once rather than once
+      # per matrix leg.
+      #
+      # Known gap, not something this check can fix: all three depend on this
+      # workspace's own `lanthorn-grammar-model` (a path+version dependency,
+      # SQ-1103/SQ-1118) and gvm's example additionally on `lanthorn-blorb`
+      # (dev-dependency) — neither has ever been published to crates.io
+      # (publishing is deliberately deferred, SQ-1250). `cargo package` must
+      # resolve every dependency's version requirement against the registry
+      # to build the tarball's own Cargo.lock, regardless of --no-verify, so
+      # today every one of the three fails identically with "no matching
+      # package named `lanthorn-grammar-model` found" — a statement about
+      # workspace publish order, not about these crates' own `include` lists
+      # or standalone buildability. Treat exactly that failure as a warning
+      # and move on; treat anything else (a missing file, a workspace-only
+      # path, a real compile error) as fatal. The moment lanthorn-grammar-model
+      # (and, for gvm's example, lanthorn-blorb) are published this starts
+      # verifying for real with no further change needed here.
+      - name: Standalone package check (engine crates)
+        if: matrix.name == 'linux-x86_64'
+        shell: bash
+        run: |
+          set -uo pipefail
+          fail=0
+          for crate in lanthorn-zvm lanthorn-gvm lanthorn-scott; do
+            echo "::group::cargo package -p $crate"
+            out=$(cargo package -p "$crate" 2>&1)
+            status=$?
+            echo "$out"
+            echo "::endgroup::"
+            if [ "$status" -ne 0 ]; then
+              if echo "$out" | grep -qF 'no matching package named' \
+                 && echo "$out" | grep -qF 'lanthorn-grammar-model'; then
+                echo "::warning::cargo package -p $crate failed only because lanthorn-grammar-model is not yet on crates.io (publishing is deliberately deferred, SQ-1250) — not a defect in $crate itself. Revisit once it is published."
+              else
+                echo "::error::cargo package -p $crate failed for a reason other than the known unpublished lanthorn-grammar-model dependency"
+                fail=1
+              fi
+            fi
+          done
+          exit "$fail"
+
       - name: Build binaries
         shell: bash
         env:
