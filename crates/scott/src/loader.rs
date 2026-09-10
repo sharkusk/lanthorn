@@ -637,7 +637,6 @@ impl Database {
             // as an ordinary database, and a host wanting the series' lamp
             // behaviour for it sets the two options itself.
             mysterious: false,
-            second_person: false,
             // …nor any S.A.G.A. release identity: §12.2's version/adventure
             // pair lives in the binary database's front matter, and a `.dat`
             // conversion of one of those titles is an ordinary text database

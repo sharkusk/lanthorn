@@ -174,7 +174,6 @@ fn no_spectrum_specimen_is_mistaken_for_a_loadable_dat() {
             Ok(db) => {
                 assert!(mysterious(name), "{name} parsed as a story and should not have");
                 assert!(db.mysterious, "{name}: a ZX Mysterious release forces §9.2's options");
-                assert!(db.second_person, "{name}: and §9.3's wording");
                 loaded += 1;
             }
             // A memory image this crate cannot read must never parse as a

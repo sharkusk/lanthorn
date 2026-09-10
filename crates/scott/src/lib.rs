@@ -193,7 +193,6 @@
 //!     adventure_number: 0,
 //!     ti99: None, // a TI-99/4A tokenised script; None for every other source
 //!     mysterious: false, // Brian Howarth's Mysterious Adventures series; false for every other source
-//!     second_person: false, // the release's own driver messages are second-person (ZX Mysterious); false elsewhere
 //!     saga_us: None, // a US S.A.G.A. release identity; None for every other source
 //! };
 //!

@@ -4934,11 +4934,59 @@ code change, because the code was written from the measurement.
     99 (*The Golden Baton*, *The Wizard of Akyrz*). What IS constant across the
     series is the word length, 4. §6.1's first route (the seven header counts)
     does identify all eleven uniquely, and that is what the crate keeps a table
-    for — a display title, and nothing else. §9.3's second-person rule was
-    confirmed the way it asks: a real *Escape from Pulsar 7* answers `You can't
-    go in that direction. ` and `You are carrying:`, and `Database` carries a
-    `second_person` flag so the wording follows the platform rather than the
-    series.
+    for — a display title, and nothing else.
+
+16. **§6.4's second-person table is not these releases' wording either, and
+    §9.3's test fails on a real one — the same correction §6.4 already made
+    for the Commodore 64, made again on the other platform.** §6.4 gives its
+    second-person column as "the **ZX Spectrum** wording" and §9.3 says an
+    interpreter "should expose the choice as an option and force it on for a
+    recognised Mysterious Adventures **ZX Spectrum** release", warning only
+    against forcing it on the series because the Commodore 64 files were
+    measured carrying a first-person block of their own. Measured the same
+    way — every string of both columns searched for in the whole decompressed
+    image, all eleven §10.3 snapshots — **the ZX driver carries a first-person
+    block too, and not one second-person string occurs anywhere in any of the
+    eleven**.
+
+    The block is a run of the interpreter's own messages beginning around
+    `$64C1`, and what identifies it as the driver's rather than the game's
+    message pool is the tape prompts inside it: `BAD DATA FILE!  Press any
+    key`, `Get tape ready..Press <ENTER>`. In *The Golden Baton*'s image it
+    reads, in order, `Game over. Play again ? `, `I've stored`, `On a scale of
+    0 to 100 that rates`, `Well done! Mission completed!`, `I don't understand
+    what you mean`, `I can't do that just yet!`, `Try a direction`, `I'm not
+    carrying it`, `I don't see it here`, `That's beyond my Power!`, `It's risky
+    moving in the dark!`, `I fell and broke my neck!`, `I can't go in that
+    direction`, `" is not known to me!`, `I don't know what a "`, `It's too
+    dark to see!`, `Things I can see:`, `I'm carrying:`, `Not a sausage!`,
+    `WHAT NOW ? `, `The light ran out`, `Light runs out in`, `I'm carrying too
+    much!`, `Resume play on a Game ? ` — and `I'm in a ` at `$66B0`. Compare
+    §6.4's Commodore 64 table: the same set, differently punctuated and
+    differently ordered, first person throughout.
+
+    Three consequences for §6.4 and §9.3. **The second-person table needs a
+    platform, and neither of the two this document specifies is it** — it may
+    belong to some other release of the series, or to no release at all, and
+    §6.4's own closing paragraph ("an existing implementation forces the
+    second-person set for the whole series … for these specimens that is
+    wrong") now applies to twenty-two files rather than eleven. **§9.3's ZX
+    test is inverted**: a transcript of a real *Golden Baton* reads `I'm in a
+    dense forest, very SPOOKY`, `I can't go in that direction` and `I'm
+    carrying:`, and a transcript containing `You are in a ` is the one running
+    the wrong set. And **§6.4's "two strings are not in the file at all on the
+    ZX releases … a third, the visible-objects heading … must be supplied on
+    the ZX releases too" is wrong about the third**: `Things I can see:` is in
+    the file, at `$66BA` in *The Golden Baton*, spelled exactly as §6.4 gives
+    the Commodore 64's.
+
+    **What the crate does with it:** nothing. `parse_zx_mysterious` forces
+    §9.2's two lamp options and no wording at all, exactly as
+    `parse_c64_mysterious` does, and `Options::you_are` stays the host's on
+    both platforms with its default (off) correct for all twenty-two releases.
+    A `Database::second_person` flag was written, and removed again when this
+    measurement landed: a switch no loader sets is a mechanism for a fact that
+    turned out not to exist.
 
     One consequence worth recording for a spec reader: **five of the eleven
     snapshots share all eleven header numbers with their published conversion,

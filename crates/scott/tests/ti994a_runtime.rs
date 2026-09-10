@@ -125,7 +125,6 @@ fn world(script: Ti99Script) -> Database {
         ],
         adventure_number: 0,
         mysterious: false,
-        second_person: false,
         saga_us: None,
         ti99: Some(script),
     }

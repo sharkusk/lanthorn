@@ -24,7 +24,10 @@
 //!   refused by name rather than mis-read;
 //! * the tables the pointer block implies tile the image exactly: every string
 //!   block ends on the next table's pointer, and the action table lands on the
-//!   room connections.
+//!   room connections;
+//! * and the eleven are **first person**, which §6.4 and §9.3 say they are
+//!   not — see
+//!   `every_release_carries_a_first_person_driver_block_and_no_second_person_string`.
 //!
 //! # How strong the oracle is here — five titles of eleven
 //!
@@ -591,49 +594,110 @@ fn database_parse_reads_a_snapshot_straight_from_its_file_bytes() {
             Database::parse(file).unwrap_or_else(|e| panic!("{stem} loads through parse: {e:?}"));
         let direct = zx::parse_zx_mysterious(&scott::decompress_z80(file).unwrap()).unwrap();
         assert_eq!(via_parse, direct, "{stem}: one entry point, one answer");
-        // Appendix A: the runtime differences of §9 travel with the database.
+        // Appendix A: the runtime differences of §9 travel with the database —
+        // which for these is §9.2's two lamp options and nothing else, since
+        // §9.3's wording turned out not to be one (see the case below).
         assert!(via_parse.mysterious, "{stem}: §9.2's two lamp options");
-        assert!(via_parse.second_person, "{stem}: §9.3's ZX wording");
     }
     assert_eq!(files.len(), 11);
 }
 
+/// §9.3's black-box test, run the way §6.4 ran it on the Commodore 64 files —
+/// and it comes out the same way, which is not what §6.4 and §9.3 say.
+///
+/// §6.4 tabulates a second-person set as "the ZX Spectrum wording" and §9.3
+/// says an interpreter should force it "for a recognised Mysterious
+/// Adventures **ZX Spectrum** release", warning only against forcing it on the
+/// series as a whole because the Commodore 64 files carry a first-person block
+/// of their own. **Measured on all eleven snapshots, so do the ZX ones.** The
+/// driver's own message table sits around `$64C1` — the tape prompts in it
+/// (`Get tape ready..Press <ENTER>`, `BAD DATA FILE!`) are what identify it as
+/// the interpreter's rather than the game's message pool — and every
+/// person-bearing string in it is first person.
+///
+/// So this suite asserts the OPPOSITE of §9.3's test, on the file's own bytes
+/// and on a played turn, and `crates/scott/src/zx_mysterious.rs` forces no
+/// wording at all.
 #[test]
-fn a_real_release_boots_second_person_and_plays_a_turn() {
-    let Some(file) = snapshot("m5pulsar") else {
-        assert!(skipped("m5pulsar.z80"));
+fn every_release_carries_a_first_person_driver_block_and_no_second_person_string() {
+    let files = corpus();
+    if files.is_empty() {
+        assert!(skipped("the ZX Spectrum snapshots"));
+        return;
+    }
+    // §6.4's own second-person table, the strings it says these releases
+    // print. None of them is anywhere in any of the eleven images.
+    const SECOND: [&str; 8] = [
+        "You are in a",
+        "You can also see",
+        "You are carrying",
+        "You haven't got it",
+        "You can't go in that direction",
+        "You're dead",
+        "Your light is growing dim",
+        "You carry nothing",
+    ];
+    // The block that IS there, in every one of the eleven.
+    const FIRST: [&str; 8] = [
+        "I'm in a ",
+        "I'm carrying:",
+        "I'm not carrying it",
+        "I can't go in that direction",
+        "I don't see it here",
+        "I fell and broke my neck!",
+        "Things I can see:",
+        "Get tape ready..Press <ENTER>",
+    ];
+    for (stem, image) in &files {
+        let text = String::from_utf8_lossy(image);
+        for absent in SECOND {
+            assert!(
+                !text.contains(absent),
+                "{stem}: {absent:?} must not occur — these releases are first-person"
+            );
+        }
+        for present in FIRST {
+            assert!(text.contains(present), "{stem}: the driver's own block must hold {present:?}");
+        }
+    }
+    // §6.4 says the visible-objects heading is "not in the file at all" on the
+    // ZX releases and must be supplied; it is in the file, in every one.
+    assert_eq!(files.len(), 11);
+}
+
+/// And the same fact from the other end: a real release, played, with every
+/// option off — which is what a host that asks for nothing gets.
+#[test]
+fn a_real_release_plays_a_turn_in_its_own_wording() {
+    let Some(file) = snapshot("m1goldba") else {
+        assert!(skipped("m1goldba.z80"));
         return;
     };
     let db = Database::parse(&file).unwrap();
-    // §9.3's black-box test: the room preamble must read "You are in a ", and
-    // an inventory "You are carrying:". The host asks for neither.
-    let mut vm =
-        Vm::new_full(db, false, 7, Options::new().with_presentation(Presentation::ScottFree));
+    assert!(db.mysterious, "§9.2's two lamp options travel with the database");
+    // Nothing is asked for: `Options::default` is every flag off and the
+    // presentation both lanthorn and `scott-cli` show.
+    let mut vm = Vm::new_full(db, false, 7, Options::new());
+    assert_eq!(vm.options().presentation, Presentation::default());
+    assert!(!vm.options().you_are, "the loader forces no wording");
+    assert!(vm.options().scott_light && vm.options().prehistoric_lamp, "§9.2 does force these");
     assert_eq!(vm.step(), StepResult::NeedLine);
-    // The opening is the game's own dedication card, printed from its message
-    // pool; §9.3's wording shows up in the DRIVER's replies from the first
-    // turn on.
-    let opening = vm.take_output();
-    assert!(opening.contains("ESCAPE FROM PULSAR 7"), "the release's own title card: {opening:?}");
 
-    // A direction the room has no exit for: §6.4's table gives the ZX release
-    // `You can't go in that direction. ` where Adventure International says
-    // `I can't go in that direction. `.
-    vm.supply_line("north");
+    // The room block a player reads, in the release's own person.
+    let room = vm.room_block();
+    assert!(room.starts_with("I'm in a dense forest"), "got {room:?}");
+    assert!(room.contains("I can also see:"), "got {room:?}");
+
+    // A direction the room has no exit for, and the inventory heading — the
+    // two replies §6.4 tabulates and §9.3 makes its test out of.
+    vm.supply_line("east");
     assert_eq!(vm.step(), StepResult::NeedLine);
     let blocked = vm.take_output();
-    assert!(
-        blocked.contains("You can't go in that direction"),
-        "§9.3: a ZX Mysterious release is second person, got {blocked:?}"
-    );
-    assert!(!blocked.contains("I can't go"), "the first-person set must not appear: {blocked:?}");
-
-    // And §6.4's inventory heading, which is the other half of §9.3's test.
+    assert!(blocked.contains("I can't go in that direction"), "got {blocked:?}");
     vm.supply_line("inventory");
     assert_eq!(vm.step(), StepResult::NeedLine);
     let inventory = vm.take_output();
-    assert!(inventory.contains("You are carrying"), "got {inventory:?}");
-    assert!(!inventory.contains("I'm carrying"), "got {inventory:?}");
+    assert!(inventory.contains("I'm carrying:"), "got {inventory:?}");
 }
 
 // ── Robustness ────────────────────────────────────────────────────────────────

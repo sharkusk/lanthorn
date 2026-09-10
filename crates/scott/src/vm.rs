@@ -281,14 +281,6 @@ impl Vm {
         } else {
             options
         };
-        // And §9.3's wording, which is a property of the PLATFORM rather than
-        // of the series (SQ-1478): the ZX Spectrum releases of those same
-        // eleven titles are second-person, so their loader sets
-        // `Database::second_person` and this forces `you_are` on, while the
-        // Commodore 64 ones leave it clear because their own message block in
-        // the file is first-person (§6.4). Black-box test: a ZX transcript
-        // must read `You are in a `, a Commodore 64 one `I'm in a `.
-        let options = if db.second_person { options.with_you_are(true) } else { options };
         let item_loc = db.items.iter().map(|i| i.start_loc).collect();
         let player = db.start_room;
         let lamp = db.light_time;
@@ -2050,7 +2042,19 @@ impl Vm {
     /// their own indented line under "I can also see:". A `*`-literal room
     /// prints verbatim; a non-literal room gets the "I'm in a " prefix. When
     /// the room is dark, only the darkness line is returned.
+    ///
+    /// **Its two person-bearing strings come from [`Wording`], like every
+    /// other layout's** (SQ-1478). They used to be literals here, which meant
+    /// this layout — the crate's DEFAULT, and what both lanthorn and
+    /// `scott-cli` show — printed `I'm in a ` and `I can also see:` however
+    /// the wording was set, so `Options::you_are` reached the death and
+    /// inventory replies and stopped at the room block: a host asking for
+    /// second person got it everywhere except the two lines a player reads
+    /// every single turn. Nothing changes with the option off, which is the
+    /// default and what every dialect this crate loads wants: the `!you_are`
+    /// forms of both fields are the literals this layout carried.
     fn room_block_c64(&self) -> String {
+        let w = self.wording();
         if self.is_dark() {
             return "It is too dark to see.".to_string();
         }
@@ -2059,7 +2063,7 @@ impl Vm {
             if self.room_is_literal() {
                 s.push_str(self.room_name(self.player));
             } else {
-                s.push_str("I'm in a ");
+                s.push_str(w.room_prefix);
                 s.push_str(self.room_name(self.player));
             }
             let exits = self.room_exits();
@@ -2073,7 +2077,11 @@ impl Vm {
         }
         let visible = self.items_in_room();
         if !visible.is_empty() {
-            s.push_str("\n\nI can also see:");
+            s.push_str("\n\n");
+            // `see_also_header` carries its own leading newline and trailing
+            // space for the other layouts; this one puts each item on its own
+            // indented line, so it takes the sentence and neither.
+            s.push_str(w.see_also_header.trim());
             for item in &visible {
                 s.push_str("\n  ");
                 s.push_str(item);
@@ -2339,7 +2347,6 @@ mod tests {
             items,
             adventure_number: 0,
             mysterious: false,
-            second_person: false,
             saga_us: None,
             ti99: None,
         };
@@ -2576,7 +2583,6 @@ mod tests {
             items: one_item(),
             adventure_number: 0,
             mysterious: false,
-            second_person: false,
             saga_us: None,
             ti99: None,
         };
@@ -2617,7 +2623,6 @@ mod tests {
             items: one_item(),
             adventure_number: 0,
             mysterious: false,
-            second_person: false,
             saga_us: None,
             ti99: None,
         };
@@ -2664,7 +2669,6 @@ mod tests {
             items,
             adventure_number: 0,
             mysterious: false,
-            second_person: false,
             saga_us: Some(SagaUs { version: 416, adventure: 1, platform: SagaPlatform::Atari8Bit }),
             ti99: None,
         };
@@ -2857,7 +2861,6 @@ mod tests {
             items: one_item(),
             adventure_number: 0,
             mysterious: false,
-            second_person: false,
             saga_us: None,
             ti99: None,
         };
@@ -2924,7 +2927,6 @@ mod tests {
             items,
             adventure_number: 0,
             mysterious: false,
-            second_person: false,
             saga_us: None,
             ti99: None,
         };
@@ -3037,7 +3039,6 @@ mod tests {
             items,
             adventure_number: 0,
             mysterious: false,
-            second_person: false,
             saga_us: None,
             ti99: None,
         };
@@ -3131,7 +3132,6 @@ mod tests {
             items,
             adventure_number: 0,
             mysterious: false,
-            second_person: false,
             saga_us: None,
             ti99: None,
         }
@@ -3342,7 +3342,6 @@ mod tests {
             items: one_item(),
             adventure_number: 0,
             mysterious: false,
-            second_person: false,
             saga_us: None,
             ti99: None,
         };
@@ -3388,7 +3387,6 @@ mod tests {
             items: one_item(),
             adventure_number: 0,
             mysterious: false,
-            second_person: false,
             saga_us: None,
             ti99: None,
         };
@@ -3440,7 +3438,6 @@ mod tests {
             items: one_item(),
             adventure_number: 0,
             mysterious: false,
-            second_person: false,
             saga_us: None,
             ti99: None,
         };
@@ -3500,7 +3497,6 @@ mod tests {
             items,
             adventure_number: 0,
             mysterious: false,
-            second_person: false,
             saga_us: None,
             ti99: None,
         };
@@ -3547,7 +3543,6 @@ mod tests {
             items: one_item(),
             adventure_number: 0,
             mysterious: false,
-            second_person: false,
             saga_us: None,
             ti99: None,
         };

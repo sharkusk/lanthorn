@@ -102,8 +102,17 @@ pub struct Database {
     /// `, `I am carrying:` and `I'm DEAD!!`, and not one of `You are in a`,
     /// `You can also see` or `You haven't got it` occurs anywhere in any of
     /// the eleven files (`docs/internals/scott-c64-layout-findings.md`,
-    /// correction 4). [`crate::Options::you_are`] is therefore left to the
-    /// host, and its default — off — is the right one for these.
+    /// correction 4). **Nor do the ZX Spectrum releases of the same eleven
+    /// titles** (SQ-1478): §6.4 tabulates its second-person set as "the ZX
+    /// Spectrum wording", and measured on all eleven §10.3 snapshots the
+    /// driver's own message block — around `$64C1`, tape prompts and all —
+    /// reads `I'm in a `, `I'm carrying:`, `I'm not carrying it`, `I can't go
+    /// in that direction`, `Things I can see:` and `I fell and broke my
+    /// neck!`, with **not one** second-person string anywhere in any of the
+    /// eleven images. So the wording follows the platform, as §6.4 says, and
+    /// BOTH platforms answer first person. [`crate::Options::you_are`] is
+    /// therefore left to the host on either, and its default — off — is the
+    /// right one for all twenty-two releases.
     ///
     /// `false` for a reference-format `.dat`, including a `.dat` conversion
     /// OF one of these titles: this flag records what the loader could
@@ -111,26 +120,6 @@ pub struct Database {
     /// marker (§6.1: a reference-format database is recognised "only by its
     /// header counts").
     pub mysterious: bool,
-    /// This release's own driver messages are **second person**, so
-    /// [`crate::Options::you_are`] is forced on whatever the host asked for
-    /// (`crate::Vm::new_full`, the same place `mysterious` and `ti99` are
-    /// honoured).
-    ///
-    /// `true` for the **ZX Spectrum** *Mysterious Adventures*
-    /// ([`crate::parse_zx_mysterious`], SQ-1478) and nothing else so far.
-    /// `docs/internals/scott-dialects-spec.md` §9.3: "an interpreter should
-    /// expose the choice as an option and force it on for a recognised
-    /// Mysterious Adventures **ZX Spectrum** release. **Do not force it on the
-    /// series as a whole**: the Commodore 64 releases of the same eleven
-    /// titles carry a first-person block in the file … the wording follows the
-    /// platform, not the series."
-    ///
-    /// A separate field from `mysterious` for exactly that reason — the two
-    /// facts are one series and two platforms, and the black-box test tells
-    /// them apart: a ZX transcript must read `You are in a `, a Commodore 64
-    /// one `I'm in a `, and §6.4 measured that not one second-person string
-    /// occurs anywhere in the eleven Commodore 64 files.
-    pub second_person: bool,
     /// Which **US S.A.G.A.** release this is, for a database loaded from one
     /// of the American Adventure International disk editions
     /// ([`crate::parse_saga_us`]) — `None` for every other dialect, including
@@ -387,7 +376,6 @@ mod tests {
             }],
             adventure_number: 0,
             mysterious: false,
-            second_person: false,
             ti99: None,
             saga_us: None,
         };
@@ -424,7 +412,6 @@ mod tests {
             items: vec![],
             adventure_number: 0,
             mysterious: false,
-            second_person: false,
             ti99: None,
             saga_us: None,
         };

@@ -33,11 +33,23 @@ Absolute URLs or no link.
   in it that says where the game is. Hand lanthorn one and it finds the game
   inside, names the release in the story list ("The Golden Baton", not
   `m1goldba`), reports its artwork in the info panel, and plays it in the
-  second-person wording that release was written for — where the Commodore 64
-  edition of the same game speaks in the first person, as its own text does.
+  wording the release itself carries — which, measured against the eleven
+  snapshots rather than against the received wisdom about them, is the same
+  first person the Commodore 64 edition speaks in.
   It needs no list of known releases to do it, so a Spectrum snapshot nobody
   has catalogued loads too; a snapshot of some other game is refused by name
   rather than half-read.
+
+### Fixed
+
+- **"I'm in a dusty study" now follows the wording you asked for.** lanthorn's
+  own room layout — the one it shows for every Scott Adams game — printed the
+  room line and the "I can also see:" heading in the first person whatever the
+  rest of the game was saying, so a game set to speak in the second person
+  said "You are dead." and "You are carrying:" and then opened every single
+  turn with "I'm in a ". Both lines follow the setting now, and the
+  second-person room line reads "You are in a " rather than the ungrammatical
+  "You are " it used to be.
 
 - **The American S.A.G.A. disk games now load.** The Adventure International
   disk editions sold in the United States — *Adventureland*, *Pirate

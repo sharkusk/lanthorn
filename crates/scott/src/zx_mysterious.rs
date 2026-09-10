@@ -849,17 +849,34 @@ fn read_strings(image: &[u8], addr: u16, count: usize) -> Option<Vec<String>> {
 /// # What this forces, and what it does not
 ///
 /// §9.2's two lamp options travel with every Mysterious database
-/// (`Database::mysterious`), and §9.3's **second person** travels with this
-/// one: "an interpreter should expose the choice as an option and force it on
-/// for a recognised Mysterious Adventures **ZX Spectrum** release … the wording
-/// follows the platform, not the series". So `Database::second_person` is set
-/// here and left clear by [`crate::c64::parse_c64_mysterious`], whose eleven
-/// files carry a first-person block of their own (§6.4).
+/// (`Database::mysterious`) and are forced here exactly as
+/// [`crate::c64::parse_c64_mysterious`] forces them.
 ///
-/// §6.4's other two ZX facts — the item separator `" - "` and a newline as the
-/// message separator, neither of which is in the file — are presentation
-/// rather than database, and [`crate::Presentation`] is the host's choice; this
-/// loader does not touch it.
+/// **§9.3's second person is NOT forced, because these releases are not
+/// second person.** §6.4 tabulates a second-person set and calls it "the ZX
+/// Spectrum wording"; §9.3 says to force it "for a recognised Mysterious
+/// Adventures **ZX Spectrum** release" and warns against forcing it on the
+/// series, since §6.4 had measured the Commodore 64 files carrying a
+/// first-person block of their own. **Measured the same way on all eleven
+/// §10.3 snapshots, the ZX driver carries a first-person block too**: a run of
+/// its own messages around `$64C1` — `I don't understand what you mean`,
+/// `I can't do that just yet!`, `I'm not carrying it`, `I don't see it here`,
+/// `That's beyond my Power!`, `I fell and broke my neck!`, `I can't go in that
+/// direction`, `It's too dark to see!`, `Things I can see:`, `I'm carrying:`,
+/// `I'm carrying too much!`, `I'm in a `, and the tape prompts `Get tape
+/// ready..Press <ENTER>` and `BAD DATA FILE!` that identify it as the
+/// interpreter's own table rather than the game's message pool. **Not one
+/// second-person string occurs anywhere in any of the eleven images.** So
+/// §6.4's principle holds — the wording follows the platform — and both
+/// platforms answer the same way; [`crate::Options::you_are`] is left to the
+/// host, and its default (off) is right for these.
+///
+/// §6.4 also says three strings are "not in the file at all" on the ZX
+/// releases and must be supplied, one of them the visible-objects heading; it
+/// is in the file, at `$66BA` in *The Golden Baton*, spelled exactly as §6.4
+/// gives the Commodore 64's. The item and message separators are presentation
+/// either way, and [`crate::Presentation`] is the host's choice; this loader
+/// does not touch it.
 ///
 /// # Which §5.3 repairs fire: none
 ///
@@ -1021,9 +1038,10 @@ pub fn parse_zx_mysterious(image48k: &[u8]) -> Result<Database, LoadError> {
         // image, so there is no adventure number to read.
         adventure_number: 0,
         // §9.2: every Mysterious Adventures release forces both lamp options.
+        // §9.3's wording is NOT forced — see this function's own docs, and
+        // `Database::mysterious`: these releases' driver block is first
+        // person, exactly as the Commodore 64 ones' is.
         mysterious: true,
-        // §9.3: and a ZX Spectrum one forces second-person wording.
-        second_person: true,
         ti99: None,
         saga_us: None,
     })
@@ -1433,9 +1451,9 @@ mod tests {
         assert_eq!(db.items[2].auto_noun, None);
         assert_eq!(db.items[2].start_loc, 0);
 
-        // §9.2 and §9.3, the two facts that travel with the database.
+        // §9.2's two lamp options are the only runtime fact this database
+        // forces; §9.3's wording is not one, see `parse_zx_mysterious`.
         assert!(db.mysterious, "§9.2's two lamp options must be forced");
-        assert!(db.second_person, "§9.3: a ZX Mysterious release is second person");
         assert!(db.ti99.is_none());
         assert!(db.saga_us.is_none());
     }
@@ -1447,12 +1465,39 @@ mod tests {
         // Every flag OFF in what the host asks for; the database forces three.
         let vm =
             Vm::new_full(db, false, 1, Options::new().with_presentation(Presentation::ScottFree));
-        assert!(vm.options().you_are, "§9.3's wording is the platform's, and forced");
+        assert!(
+            !vm.options().you_are,
+            "§9.3's wording stays the host's — see the loader's own docs"
+        );
         assert!(vm.options().scott_light, "§9.2's countdown");
         assert!(vm.options().prehistoric_lamp, "§9.2's lamp destruction");
         // Presentation stays the host's: §6.4's separators are presentation,
         // and this loader does not touch them.
         assert_eq!(vm.options().presentation, Presentation::ScottFree);
+    }
+
+    #[test]
+    fn the_room_block_reads_first_person_unless_the_host_asks_otherwise() {
+        // What `the_forced_options_reach_the_vm` above cannot see: an option
+        // only means anything if it reaches the screen. Until SQ-1478 the
+        // crate's DEFAULT layout — what both lanthorn and `scott-cli` show —
+        // spelled `I'm in a ` as a literal and ignored the wording table, so a
+        // host asking for second person got it everywhere except the two lines
+        // a player reads every turn. These releases want the first-person set
+        // (see `parse_zx_mysterious`), and a host that asks for the other one
+        // now gets it here too.
+        let (image, _) = fixture();
+        let db = parse_zx_mysterious(&image).unwrap();
+        let vm = Vm::new(db.clone());
+        assert_eq!(vm.options().presentation, Presentation::default());
+        let room = vm.room_block();
+        assert!(room.starts_with("I'm in a dusty study"), "got {room:?}");
+        assert!(room.contains("I can also see:"), "got {room:?}");
+
+        let asked = Vm::new_full(db, false, 1, Options::new().with_you_are(true));
+        let room = asked.room_block();
+        assert!(room.starts_with("You are in a dusty study"), "got {room:?}");
+        assert!(room.contains("You can also see:"), "got {room:?}");
     }
 
     #[test]

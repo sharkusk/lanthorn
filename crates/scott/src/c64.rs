@@ -1004,7 +1004,6 @@ pub fn parse_c64_mysterious(image: &[u8], load_address: u16) -> Result<Database,
         // lamp options that section says "every Mysterious Adventures release
         // forces on" travel with the database rather than with the host.
         mysterious: true,
-        second_person: false,
         saga_us: None,
     })
 }
