@@ -182,6 +182,14 @@ all, so there are no file names to look anything up by. lanthorn finds those
 drawings by the header each one carries and draws them like the rest, so all
 seven Apple II releases play with their artwork.
 
+Two of those three keep something extra on that side, and it is worth knowing
+about because nothing in the game tells you: **look at a thing and you see it
+drawn**. `LOOK KNIFE` in *Voodoo Castle*, with the knife in the room or in your
+pack, fills the window with a picture of the knife until you press RETURN;
+*Voodoo Castle* has nine of these — the doll, the book, the ring, the statue,
+the idol, the chemicals, the knife, the sword, the coffin — and *The Count* has
+two. Try `LOOK` at anything you are carrying.
+
 The **Atari 8-bit** disks are the ones still waiting, and it is worth saying
 exactly why, because the reason turned out to be more interesting than
 expected. Their picture side has no filesystem either — nothing on it is

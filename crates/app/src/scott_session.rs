@@ -255,6 +255,7 @@ impl ScottSession {
             char_px,
             resolution: picture_resolution,
             saga_pictures,
+            look_table,
         } = pictures;
         // `Database::parse` takes raw bytes (SQ-1412), so a Latin-1 or
         // otherwise non-UTF-8 `.dat` loads here instead of being rejected by
@@ -266,6 +267,14 @@ impl ScottSession {
             random_seed.unwrap_or(scott::Vm::DEFAULT_RNG_SEED),
             options,
         );
+        // SQ-1499: a scrambled Apple II release's LOOK close-ups. The table
+        // is not in the database — it is three columns in the release's own
+        // `M2` on the boot disk, so it arrives from the host with the picture
+        // files, exactly as they do, and is handed to the VM before the first
+        // turn runs. `scott::Vm::set_look_table` states what it does.
+        if let Some(table) = look_table {
+            vm.set_look_table(table);
+        }
         let mut intro = vm.take_output();
         if !vm.has_quit() {
             intro.push_str(PROMPT);
@@ -2459,4 +2468,117 @@ mod tests {
         assert_eq!(s.pending_input(), InputKind::Line);
         assert_eq!(s.current_pic_num, Some(2), "the dome comes back");
     }
+
+    // ── SQ-1499: the scrambled Apple II LOOK close-ups ───────────────────
+
+    /// *Voodoo Castle* on the Apple II, booted the way `startup.rs` boots it
+    /// — through `ScottPictureSources::resolve`, which is where the LOOK
+    /// close-up table is read off the boot side's own `M2` (SQ-1499). A
+    /// session built with `none().with_saga_pictures(…)` has no table and
+    /// would draw no close-up, which is the point of going through the real
+    /// door here.
+    fn voodoo_castle() -> Option<ScottSession> {
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join(
+            "../../stories/scott-dialects/apple/Scott Adams Graphic Adventure 4 - Voodoo \
+             Castle v2.1-119 (4am crack) side B (boot).dsk",
+        );
+        if !path.exists() {
+            eprintln!("SKIP: no {} (gitignored commercial fixture)", path.display());
+            return None;
+        }
+        let mounted = crate::hints::load_mounted_story_full(&path, None)
+            .expect("Voodoo Castle's boot side mounts and holds one Scott database");
+        let crate::hints::LoadedStory::Scott(bytes) = mounted.story else {
+            panic!("the boot side's story is a Scott Adams database");
+        };
+        let game_dir = path.parent().expect("a directory").to_path_buf();
+        let pictures =
+            crate::graphics::ScottPictureSources::resolve(&path, &bytes, &game_dir, None, None, None);
+        assert_eq!(
+            pictures.look_table.as_ref().map(|t| t.rows.len()),
+            Some(9),
+            "premise: the boot side's M2 carries all nine close-up rows"
+        );
+        Some(
+            ScottSession::new_with_options(
+                bytes,
+                false,
+                None,
+                scott::Options::default(),
+                pictures,
+            )
+            .expect("Voodoo Castle boots off its own boot side"),
+        )
+    }
+
+    /// LOOKing at something the release drew a close-up of shows it over the
+    /// whole band and waits for RETURN, exactly as an opcode-90 show does
+    /// (SQ-1499).
+    ///
+    /// The route is one move: *Voodoo Castle* opens in the chapel and the
+    /// Tunnel is east of it, with the `Bloody Knife` — item 0, close-up
+    /// picture 86, record 32 on side A — lying there. The pinned pixels are
+    /// the load-bearing half: the band before the LOOK is the Tunnel's own
+    /// brickwork, and after it the knife's white ground, which is a different
+    /// picture and not merely a redraw.
+    #[test]
+    fn looking_at_a_thing_shows_its_close_up_and_return_puts_the_room_back() {
+        let Some(mut s) = voodoo_castle() else { return };
+        assert_eq!(s.vm.current_room(), 1, "premise: the chapel");
+        s.submit("east");
+        assert_eq!(s.vm.current_room(), 4, "premise: the Tunnel, where the knife is");
+        let tunnel = band_pixel(&s, 140, 80);
+        assert_eq!(s.current_pic_num, Some(4), "premise: the room's own picture");
+
+        let r = s.submit("look knife");
+        assert!(r.info.is_some(), "the close-up stops the game for a keypress: {:?}", r.info);
+        assert_eq!(
+            s.current_pic_num,
+            Some(86),
+            "the band shows the knife's close-up, not the Tunnel"
+        );
+        let knife = band_pixel(&s, 140, 80);
+        assert_ne!(knife, tunnel, "…and it is a different picture, not the same one redrawn");
+        assert_eq!(
+            knife,
+            scott::apple_pictures::PALETTE[3],
+            "the middle of the knife card is the blue of the blade"
+        );
+
+        // RETURN puts the room back, exactly as it does for opcode 90.
+        let after = s.submit_key(crate::engine::KeyInput::Enter).expect("the show ends");
+        assert!(after.info.is_none(), "the sequence is over, so no keypress hint");
+        assert_eq!(s.current_pic_num, Some(4), "the Tunnel is back");
+        assert_eq!(band_pixel(&s, 140, 80), tunnel);
+    }
+
+    /// The same LOOK, with the thing two rooms away, draws nothing (SQ-1499)
+    /// — the release's own test is the item's location byte against the
+    /// carried sentinel and the current room, and a close-up of something
+    /// elsewhere never shows.
+    #[test]
+    fn looking_at_a_thing_that_is_not_here_shows_no_close_up() {
+        let Some(mut s) = voodoo_castle() else { return };
+        assert_eq!(s.vm.current_room(), 1, "premise: the chapel, and the knife is east of it");
+        let chapel = band_pixel(&s, 140, 80);
+        let r = s.submit("look knife");
+        assert!(r.info.is_none(), "no keypress hint, because nothing was shown");
+        assert_eq!(s.current_pic_num, Some(1), "the chapel's own picture, untouched");
+        assert_eq!(band_pixel(&s, 140, 80), chapel);
+    }
+
+    /// Carrying it is as good as standing next to it (SQ-1499).
+    #[test]
+    fn looking_at_a_thing_you_are_carrying_shows_its_close_up() {
+        let Some(mut s) = voodoo_castle() else { return };
+        s.submit("east");
+        s.submit("get knife");
+        assert_eq!(s.item_loc(0), -1, "premise: the knife is in the pack");
+        s.submit("west");
+        assert_eq!(s.vm.current_room(), 1, "premise: back in the chapel with it");
+        let r = s.submit("look knife");
+        assert!(r.info.is_some(), "the close-up still shows: {:?}", r.info);
+        assert_eq!(s.current_pic_num, Some(86));
+    }
+
 }

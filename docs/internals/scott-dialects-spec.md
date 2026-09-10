@@ -5727,9 +5727,28 @@ together with it.
     put a full-window doll over the Chimney for the rest of the game.
     `SagaUs::room_overlay` therefore answers `None` on the Apple II and keeps
     §12.11's table for the two platforms where nothing yet falsifies it. And
-    §12.11 has no fifth behaviour for the LOOK verb: **lanthorn draws none of
-    these close-ups**, because it has no LOOK-verb path to draw them from —
-    they are decoded, counted and correctly numbered, and that is all.
+    §12.11 needs a **fifth runtime behaviour** for these releases, which this
+    item states:
+
+    > **The LOOK verb draws a close-up.** A scrambled Apple II release carries
+    > a table of (verb, noun, item, picture) in its own interpreter. When the
+    > player's command parses to that verb and to one of the table's nouns, and
+    > the item that row names is **present** — its location byte is the carried
+    > sentinel or the current room — the interpreter draws that row's picture
+    > over the whole graphics window and waits for the player to press RETURN
+    > before the room view returns, exactly as command 90 does. The turn's own
+    > text prints as it otherwise would: the close-up is drawn from the PARSED
+    > COMMAND, before the action table runs, and makes no other state change.
+    > An interpreter without the table simply draws none of them.
+
+    lanthorn implements it: `scott::Vm::set_look_table` takes the table from
+    the host (it is on the boot disk, so a headless core cannot read it) and
+    the turn queues the same `PictureShow` an opcode-90 draw does, so the
+    session's existing sequence presentation shows it and gates it on RETURN
+    with nothing new. **Present, not merely in play**, is the release's own
+    test rather than a choice: its lookup compares the location byte against
+    the carried sentinel and against the current room, and otherwise goes on
+    scanning.
 
     Reading the release's own 6502 lookup is measurement of a **specimen** —
     the same disks the artwork is on — and not a reading of any interpreter;

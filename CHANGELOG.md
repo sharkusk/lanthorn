@@ -23,6 +23,16 @@ Absolute URLs or no link.
 
 ### Added
 
+- **Look at something in *Voodoo Castle* or *The Count* and you see it.** The
+  Apple II pressings of these two hide a set of drawings nobody has been shown
+  in forty years — the pin-stuck voodoo doll, the sapphire ring, the glowing
+  idol, the bloody knife, Dracula's parcel with its note still tied on. The
+  games draw them full-screen when you `LOOK` at the thing itself, and lanthorn
+  now does too: type `LOOK KNIFE` while the knife is in the room or in your
+  pack and the picture fills the window until you press RETURN, then the room
+  comes back. Eleven drawings across the two games, each one paired with its
+  object by the game's own disk rather than by us.
+
 - **Things in the room now appear in the picture, and `INVENTORY` draws what
   you are carrying.** The American *Scott Adams Graphic Adventures* keep a
   separate little drawing for many of the objects lying about — the iron ring
