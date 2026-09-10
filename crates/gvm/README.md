@@ -114,6 +114,22 @@ panic and no hang; a separate `cargo-fuzz` sweep (`crates/fuzz/`, run by
 hand, not part of CI) hunts for anything a hand-rolled generator wouldn't
 think to try. See `docs/internals/fuzzing.md` for what each half covers.
 
+## Performance
+
+Measured with the workspace's own harness (`cargo run --release -p lanthorn-gvm --example bench`),
+interpreter core only, one machine, one story. Details, profiles and the caveats are in
+[`docs/internals/performance.md`](../../docs/internals/performance.md).
+
+| story | turns | lanthorn-gvm | reference | ratio |
+|---|---|---|---|---|
+| glulxercise.ulx | 2,700 | 0.628 s (26.9 M opcodes/s) | glulxe 0.6.1 + cheapglk 1.0.7: 1.13 s | 1.80× |
+| glulxercise.ulx `--no-accel` | 2,700 | 0.972 s (28.5 M opcodes/s) | glulxe 0.6.1 + cheapglk 1.0.7: 1.13 s | 1.16× |
+
+The default row above is with acceleration on, which is what a game gets; `--no-accel` is the like-for-like dispatch-loop measurement against glulxe.
+
+Apple M2 Max, macOS 26.6.2 (build 25G83), rustc 1.98.0, `--release`, 2026-09-08. A different story or machine
+gives a different ratio; rerun the harness rather than quoting this line.
+
 ## Stability
 
 This crate is pre-1.0: a semver-minor bump may still break API. Read-only

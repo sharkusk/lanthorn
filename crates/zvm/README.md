@@ -130,6 +130,19 @@ service, a `DisasmCache` panic on a header pointing past EOF). Some of that
 work is still open — check that document for the current state before
 depending on this crate to survive a truly hostile input unattended.
 
+## Performance
+
+Measured with the workspace's own harness (`cargo run --release -p lanthorn-zvm --example bench`),
+interpreter core only, one machine, one story. Details, profiles and the caveats are in
+[`docs/internals/performance.md`](../../docs/internals/performance.md).
+
+| story | turns | lanthorn-zvm | reference | ratio |
+|---|---|---|---|---|
+| Mini-Zork | 20,000 | 0.587 s (34,051 turns/s) | dfrotz 2.55: 0.92 s | 1.57× |
+
+Apple M2 Max, macOS 26.6.2 (build 25G83), rustc 1.98.0, `--release`, 2026-09-08. A different story or machine
+gives a different ratio; rerun the harness rather than quoting this line.
+
 ## Stability
 
 This crate is pre-1.0: a semver-minor bump may still break API. Read-only
