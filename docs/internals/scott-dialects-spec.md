@@ -5511,7 +5511,7 @@ together with it.
     three, but at the last record on two of them and the second-to-last on the
     third, so its position is not a rule). lanthorn numbers every record by its
     ordinal, which is right for every index a ROOM can ask for and is the only
-    lookup it performs.
+    lookup it performs (SQ-1499).
 
     Two host consequences. `blorb::medium::apple_raw_sectors` is the door to a
     5.25-inch side that `DiskImage::detect` rightly answers `None` for — it has
