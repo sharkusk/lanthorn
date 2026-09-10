@@ -366,6 +366,9 @@ fn bite_lip_mid_sequence_reserves_the_same_band_as_a_room_picture_and_shows_the_
         mid_gw.canvas.as_raw(),
         room_gw.canvas.as_raw(),
         "the band actually switched to the sequence's own picture (84), not room 1's"
+    );
+}
+
 // ── SQ-1476: the Apple II releases, picture family D ─────────────────────────
 
 /// *Adventureland* on the Apple II (§10.6), booted the way `startup.rs` boots
