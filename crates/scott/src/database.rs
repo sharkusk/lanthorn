@@ -111,6 +111,26 @@ pub struct Database {
     /// marker (§6.1: a reference-format database is recognised "only by its
     /// header counts").
     pub mysterious: bool,
+    /// This release's own driver messages are **second person**, so
+    /// [`crate::Options::you_are`] is forced on whatever the host asked for
+    /// (`crate::Vm::new_full`, the same place `mysterious` and `ti99` are
+    /// honoured).
+    ///
+    /// `true` for the **ZX Spectrum** *Mysterious Adventures*
+    /// ([`crate::parse_zx_mysterious`], SQ-1478) and nothing else so far.
+    /// `docs/internals/scott-dialects-spec.md` §9.3: "an interpreter should
+    /// expose the choice as an option and force it on for a recognised
+    /// Mysterious Adventures **ZX Spectrum** release. **Do not force it on the
+    /// series as a whole**: the Commodore 64 releases of the same eleven
+    /// titles carry a first-person block in the file … the wording follows the
+    /// platform, not the series."
+    ///
+    /// A separate field from `mysterious` for exactly that reason — the two
+    /// facts are one series and two platforms, and the black-box test tells
+    /// them apart: a ZX transcript must read `You are in a `, a Commodore 64
+    /// one `I'm in a `, and §6.4 measured that not one second-person string
+    /// occurs anywhere in the eleven Commodore 64 files.
+    pub second_person: bool,
     /// Which **US S.A.G.A.** release this is, for a database loaded from one
     /// of the American Adventure International disk editions
     /// ([`crate::parse_saga_us`]) — `None` for every other dialect, including
@@ -367,6 +387,7 @@ mod tests {
             }],
             adventure_number: 0,
             mysterious: false,
+            second_person: false,
             ti99: None,
             saga_us: None,
         };
@@ -403,6 +424,7 @@ mod tests {
             items: vec![],
             adventure_number: 0,
             mysterious: false,
+            second_person: false,
             ti99: None,
             saga_us: None,
         };

@@ -537,6 +537,7 @@ mod tests {
             ],
             adventure_number: 0,
             mysterious: false,
+            second_person: false,
             saga_us: None,
             ti99: None,
         }

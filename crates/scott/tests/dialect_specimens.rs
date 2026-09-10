@@ -160,15 +160,27 @@ fn no_spectrum_specimen_is_mistaken_for_a_loadable_dat() {
         skip("spectrum");
         return;
     }
+    // The eleven ZX *Mysterious Adventures* releases are READ since SQ-1478,
+    // the way the TI-99/4A specimens have been since SQ-1414 and the
+    // Commodore 64 ones since then too — `zx_specimens.rs` is the suite that
+    // checks what comes out of them, table by table. They must still not
+    // parse as TEXT, which is what this case is about, so the mysterious
+    // eleven are asserted to come back as a Scott database and the other nine
+    // as a refusal.
+    let mysterious = |name: &str| name.starts_with('m') && name[1..2].parse::<u8>().is_ok();
+    let mut loaded = 0;
     for (name, bytes) in &files {
-        // A memory image this crate cannot yet read must never parse as a
-        // ScottFree `.dat`: that would be a wrong game, not a refused one.
-        // (The TI-99/4A specimens are a different case since SQ-1414 — they
-        // are read, by `parse_ti994a`, and `ti994a_specimens.rs` is the
-        // suite that checks what comes out.)
-        assert!(
-            scott::Database::parse(bytes).is_err(),
-            "{name} parsed as a .dat"
-        );
+        match scott::Database::parse(bytes) {
+            Ok(db) => {
+                assert!(mysterious(name), "{name} parsed as a story and should not have");
+                assert!(db.mysterious, "{name}: a ZX Mysterious release forces §9.2's options");
+                assert!(db.second_person, "{name}: and §9.3's wording");
+                loaded += 1;
+            }
+            // A memory image this crate cannot read must never parse as a
+            // ScottFree `.dat`: that would be a wrong game, not a refused one.
+            Err(_) => assert!(!mysterious(name), "{name} is readable and did not load"),
+        }
     }
+    assert_eq!(loaded, 11, "the eleven ZX Mysterious releases load");
 }

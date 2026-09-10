@@ -37,7 +37,8 @@ copy in your library so the next launch doesn't fetch it again.
 
 Point lanthorn at a folder and you get a browsable library rather than a
 single game. Each row names the story and, in the **TYPE** column, its
-engine and version at a glance — `Z5`, `Z6 (ADF)`, `G3.1.2`, `Scott` — plus
+engine and version at a glance — `Z5`, `Z6 (ADF)`, `G3.1.2`, `Scott`,
+`Scott (z80)` for a ZX Spectrum snapshot — plus
 badges for an existing save and an available hint file. Press `g` to flip
 between that list and a **grid of covers**, and `Tab` to open an info panel
 for whatever's highlighted: format, release, author, blurb, bundled

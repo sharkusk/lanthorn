@@ -4283,6 +4283,9 @@ fn scott_pictures_label(sp: app::picker::ScottPictures) -> String {
         app::picker::ScottPictures::NativeC64 { pictures } => {
             format!("native C64 (vector, {pictures} rooms)")
         }
+        app::picker::ScottPictures::NativeZx { pictures } => {
+            format!("native ZX Spectrum (vector, {pictures} rooms)")
+        }
         app::picker::ScottPictures::Blorb => "Blorb".to_string(),
         app::picker::ScottPictures::SagaUsUndrawn => "S.A.G.A. (not yet drawn)".to_string(),
     }
@@ -4501,6 +4504,54 @@ mod tests {
         assert_eq!(super::ifdb_download_landing(None, Some(9), 3, "x").0, 2);
         // Empty list: index 0 without panicking (rendering guards handle len 0).
         assert_eq!(super::ifdb_download_landing(None, None, 0, "x").0, 0);
+    }
+
+    /// SQ-1478: the story-info panel's "Pictures:" row for a ZX Spectrum
+    /// *Mysterious Adventures* snapshot, and the TYPE column that goes with
+    /// it. Hand-built — the label is a function of the variant, so no
+    /// specimen is needed; `picker::tests` has the end-to-end half.
+    #[test]
+    fn a_zx_snapshot_labels_its_pictures_and_its_container() {
+        use app::picker::{Engine, Features, ScottPictures, StoryMeta};
+        assert_eq!(
+            super::scott_pictures_label(ScottPictures::NativeZx { pictures: 31 }),
+            "native ZX Spectrum (vector, 31 rooms)"
+        );
+        // The C64 half of the same eleven titles keeps its own wording, so the
+        // panel says which platform's release this is.
+        assert_eq!(
+            super::scott_pictures_label(ScottPictures::NativeC64 { pictures: 31 }),
+            "native C64 (vector, 31 rooms)"
+        );
+        let meta = StoryMeta {
+            size_bytes: 0,
+            story_bytes: 0,
+            modified: None,
+            engine: Engine::Scott,
+            format: String::new(),
+            version: None,
+            serial: None,
+            release: None,
+            ifid: String::new(),
+            features: Features::default(),
+            self_blorb: None,
+            scott_pictures: Some(ScottPictures::NativeZx { pictures: 31 }),
+            disk_image: None,
+            disk_entry: None,
+            author: None,
+            year: None,
+            genre: None,
+            language: None,
+            description: None,
+            ifdb_link: None,
+            ifdb_rating: None,
+            ifdb_rating_count: None,
+            fetch_not_found: false,
+        };
+        assert_eq!(super::interp_label(&meta, false), "Scott (z80)");
+        // And it fits the fixed-width TYPE column, which is what SQ-1458
+        // reached CI red by not checking.
+        assert!(super::interp_label(&meta, false).len() <= super::INTERP_COL_W as usize);
     }
 
     #[test]

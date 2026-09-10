@@ -281,6 +281,14 @@ impl Vm {
         } else {
             options
         };
+        // And §9.3's wording, which is a property of the PLATFORM rather than
+        // of the series (SQ-1478): the ZX Spectrum releases of those same
+        // eleven titles are second-person, so their loader sets
+        // `Database::second_person` and this forces `you_are` on, while the
+        // Commodore 64 ones leave it clear because their own message block in
+        // the file is first-person (§6.4). Black-box test: a ZX transcript
+        // must read `You are in a `, a Commodore 64 one `I'm in a `.
+        let options = if db.second_person { options.with_you_are(true) } else { options };
         let item_loc = db.items.iter().map(|i| i.start_loc).collect();
         let player = db.start_room;
         let lamp = db.light_time;
@@ -2331,6 +2339,7 @@ mod tests {
             items,
             adventure_number: 0,
             mysterious: false,
+            second_person: false,
             saga_us: None,
             ti99: None,
         };
@@ -2567,6 +2576,7 @@ mod tests {
             items: one_item(),
             adventure_number: 0,
             mysterious: false,
+            second_person: false,
             saga_us: None,
             ti99: None,
         };
@@ -2607,6 +2617,7 @@ mod tests {
             items: one_item(),
             adventure_number: 0,
             mysterious: false,
+            second_person: false,
             saga_us: None,
             ti99: None,
         };
@@ -2653,6 +2664,7 @@ mod tests {
             items,
             adventure_number: 0,
             mysterious: false,
+            second_person: false,
             saga_us: Some(SagaUs { version: 416, adventure: 1, platform: SagaPlatform::Atari8Bit }),
             ti99: None,
         };
@@ -2845,6 +2857,7 @@ mod tests {
             items: one_item(),
             adventure_number: 0,
             mysterious: false,
+            second_person: false,
             saga_us: None,
             ti99: None,
         };
@@ -2911,6 +2924,7 @@ mod tests {
             items,
             adventure_number: 0,
             mysterious: false,
+            second_person: false,
             saga_us: None,
             ti99: None,
         };
@@ -3023,6 +3037,7 @@ mod tests {
             items,
             adventure_number: 0,
             mysterious: false,
+            second_person: false,
             saga_us: None,
             ti99: None,
         };
@@ -3116,6 +3131,7 @@ mod tests {
             items,
             adventure_number: 0,
             mysterious: false,
+            second_person: false,
             saga_us: None,
             ti99: None,
         }
@@ -3326,6 +3342,7 @@ mod tests {
             items: one_item(),
             adventure_number: 0,
             mysterious: false,
+            second_person: false,
             saga_us: None,
             ti99: None,
         };
@@ -3371,6 +3388,7 @@ mod tests {
             items: one_item(),
             adventure_number: 0,
             mysterious: false,
+            second_person: false,
             saga_us: None,
             ti99: None,
         };
@@ -3422,6 +3440,7 @@ mod tests {
             items: one_item(),
             adventure_number: 0,
             mysterious: false,
+            second_person: false,
             saga_us: None,
             ti99: None,
         };
@@ -3481,6 +3500,7 @@ mod tests {
             items,
             adventure_number: 0,
             mysterious: false,
+            second_person: false,
             saga_us: None,
             ti99: None,
         };
@@ -3527,6 +3547,7 @@ mod tests {
             items: one_item(),
             adventure_number: 0,
             mysterious: false,
+            second_person: false,
             saga_us: None,
             ti99: None,
         };

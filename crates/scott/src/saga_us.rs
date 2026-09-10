@@ -757,6 +757,7 @@ pub fn parse_saga_us(file: &[u8], platform: SagaPlatform) -> Result<Database, Lo
         // are Adventure International releases, not Mysterious Adventures
         // ones, and take the host's settings."
         mysterious: false,
+        second_person: false,
         saga_us: Some(SagaUs { version, adventure, platform }),
     })
 }

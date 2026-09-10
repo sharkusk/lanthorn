@@ -245,6 +245,30 @@ pub fn detect_dialect(bytes: &[u8]) -> Option<Dialect> {
         // these three are genuinely alternatives and their order among
         // themselves does not matter.
         Some(Dialect::C64OrZxSnapshot)
+    } else if crate::z80::looks_like_z80(bytes) {
+        // A ZX Spectrum `.z80` snapshot whose RLE happened to break a
+        // signature up — an `ED ED` run landing inside `AUTO\0GO\0` — so the
+        // scan above saw nothing (SQ-1478). Decompressing and scanning the
+        // 48K image the tables actually live in is the reliable answer, and
+        // §7.1's whole point; the raw scan comes first only because it is
+        // free and because every one of the twenty §10.3 snapshots is caught
+        // by it.
+        //
+        // Recursion is not a risk: the branch is taken only for a buffer
+        // `looks_like_z80` accepts, and a decompressed image is 49,152 bytes
+        // whose own offset-30 word is game data — a second decompression
+        // attempt is one level deep at most and its result is discarded
+        // unless it carries a signature.
+        crate::z80::decompress_z80(bytes).ok().and_then(|image| {
+            let contains = |needle: &[u8]| image.windows(needle.len()).any(|w| w == needle);
+            if contains(COMPRESSED) {
+                Some(Dialect::CompressedActionTable)
+            } else if contains(C64_4) || contains(C64_3) || contains(C64_5) {
+                Some(Dialect::C64OrZxSnapshot)
+            } else {
+                None
+            }
+        })
     } else {
         None
     }
@@ -402,6 +426,33 @@ impl Database {
             // through to the refusal below exactly as it did before.
             Some(Dialect::C64OrZxSnapshot) if crate::c64::looks_like_c64_mysterious_prg(bytes) => {
                 crate::c64::parse_c64_mysterious_prg(bytes)
+            }
+            // A ZX Spectrum *Mysterious Adventures* release (SQ-1478),
+            // either as a `.z80` snapshot or as the 48K image a host that
+            // decompressed for its own reasons already holds. The container
+            // step comes first — §7.1's "decompress first" rule, and the
+            // reason the raw bytes reached `detect_dialect` at all is that
+            // the RLE passes literal text through — and then
+            // `crate::zx_mysterious` locates the tables with no catalogue.
+            //
+            // A file that only LOOKS like a snapshot (the check is a header
+            // shape, not a magic number) refuses as the dialect it is rather
+            // than as a container failure, which is what a memory image of
+            // some other Scott Adams game does too.
+            Some(Dialect::C64OrZxSnapshot) => {
+                let decompressed;
+                let image: Option<&[u8]> = if crate::z80::looks_like_z80(bytes) {
+                    decompressed = crate::z80::decompress_z80(bytes).ok();
+                    decompressed.as_deref()
+                } else if bytes.len() == crate::z80::IMAGE_LEN {
+                    Some(bytes)
+                } else {
+                    None
+                };
+                match image {
+                    Some(image) => crate::zx_mysterious::parse_zx_mysterious(image),
+                    None => Err(LoadError::UnsupportedDialect(Dialect::C64OrZxSnapshot)),
+                }
             }
             // A US S.A.G.A. disk release's database, as the container handed
             // it over (SQ-1414/SQ-1464): `crate::saga_us` recognises it
@@ -586,6 +637,7 @@ impl Database {
             // as an ordinary database, and a host wanting the series' lamp
             // behaviour for it sets the two options itself.
             mysterious: false,
+            second_person: false,
             // …nor any S.A.G.A. release identity: §12.2's version/adventure
             // pair lives in the binary database's front matter, and a `.dat`
             // conversion of one of those titles is an ordinary text database
@@ -613,6 +665,7 @@ pub fn looks_like_scott_bytes(bytes: &[u8]) -> bool {
     std::str::from_utf8(bytes).is_ok_and(looks_like_scott)
         || crate::ti994a::looks_like_ti994a(bytes)
         || crate::c64::looks_like_c64_mysterious_prg(bytes)
+        || crate::zx_mysterious::looks_like_zx_mysterious_z80(bytes)
         || crate::saga_us::detect_saga_us(bytes).is_some()
 }
 
