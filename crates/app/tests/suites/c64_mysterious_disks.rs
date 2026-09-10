@@ -7,10 +7,12 @@
 //! `app::hints::mounted_stories` and `app::hints::load_mounted_story_from`
 //! offering the eleven program files `MountedDisk::stories` (Z-code/Glulx/
 //! Blorb only, by that door's own design) never lists, each keyed with its
-//! own saves — against the two real compilation disks and the one disk in
-//! the corpus that must NOT contribute a row: `QUESTPR1.D64`'s `SHULK.DB` is
-//! the US-format *Hulk*, a different Commodore 64 family entirely, and has
-//! to be a named refusal rather than a crash.
+//! own saves.
+//!
+//! `QUESTPR1.D64`'s `SHULK.DB` is a DIFFERENT Commodore 64 family — the
+//! US-format *Hulk* — and used to be a named refusal here, before the US
+//! S.A.G.A. loader (SQ-1470) taught `looks_like_scott_bytes` to accept it
+//! too; `saga_us_disks.rs` is where that positive case now lives.
 //!
 //! `stories/` is gitignored (commercial media), so every case skips
 //! vacuously when its fixture is absent.
@@ -160,47 +162,6 @@ fn the_two_disks_rows_have_distinct_save_keys() {
             row.story_key(),
             "{:?} keys differently at launch than in the list",
             row.meta.disk_entry,
-        );
-    }
-    let _ = std::fs::remove_dir_all(&base);
-}
-
-/// `QUESTPR1.D64` carries the US-format *Hulk* (`SHULK.DB`), a DIFFERENT
-/// Commodore 64 family this loader does not read — `looks_like_scott_bytes`
-/// must reject it, so it contributes no Scott row, and neither the mount nor
-/// the picker may panic reaching that conclusion.
-#[test]
-fn questpr1_yields_no_scott_rows_and_no_panic() {
-    let path = stories_dir().join("QUESTPR1.D64");
-    if !path.is_file() {
-        eprintln!("SKIP: stories/scott-dialects/c64/QUESTPR1.D64 absent (gitignored commercial fixture)");
-        return;
-    }
-
-    // The raw sniff, directly: SHULK.DB (the US Hulk) must not pass it, or a
-    // Scott row would follow from `mounted_stories` alone.
-    let raw = std::fs::read(&path).expect("QUESTPR1.D64 reads");
-    let disk = blorb::medium::MountedDisk::mount(raw).expect("QUESTPR1.D64 mounts");
-    let shulk = disk.read_named("SHULK.DB").expect("SHULK.DB is on the disk");
-    assert!(
-        !scott::looks_like_scott_bytes(&shulk),
-        "SHULK.DB is the US-format Hulk, a different C64 family — must not sniff as Mysterious"
-    );
-
-    // No panic scanning it at either layer, and no Scott row from either.
-    if let Some((_, stories)) = app::hints::mounted_stories(&path) {
-        for (story, _) in &stories {
-            assert_ne!(story.name, "SHULK.DB", "SHULK.DB must never be offered as a game");
-        }
-    }
-    let base = data_base("questpr1");
-    let rows = app::picker::resolve_entries(&path, &base);
-    for row in &rows {
-        assert_ne!(
-            row.meta.engine,
-            app::picker::Engine::Scott,
-            "QUESTPR1.D64 must not offer a Scott row: {:?}",
-            row.meta.disk_entry
         );
     }
     let _ = std::fs::remove_dir_all(&base);

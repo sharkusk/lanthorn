@@ -27,8 +27,12 @@ pub(crate) const CONDITION_CODES: [u8; 20] = [
 ];
 
 /// Command opcodes 52..=89, individually implemented by `Vm::run_commands`
-/// below (0 is a no-op slot; 1..=51 and 102.. print a message; 90..=101 are
-/// unimplemented/no-op — see the `_ => {}` arm there). Test-only, for the
+/// below (0 is a no-op slot; 1..=51 and 102.. print a message; 91..=101 are
+/// unimplemented/no-op — see the `_ => {}` arm there). Opcode 90 is not
+/// listed here even though `run_commands` has a dedicated arm for it: it is
+/// implemented only for US S.A.G.A. databases (`Database::saga_us.is_some()`,
+/// spec §12.8/§12.11, SQ-1472) and is a no-op for every other dialect, unlike
+/// the opcodes below which behave the same everywhere. Test-only, for the
 /// same reason as `CONDITION_CODES` above. Kept in sync by hand.
 #[cfg(test)]
 pub(crate) const FIXED_COMMAND_OPCODES: [u16; 38] = [
@@ -392,10 +396,12 @@ impl Vm {
     pub fn take_save_request(&mut self) -> bool {
         std::mem::take(&mut self.save_requested)
     }
-    /// The picture the host should display: an opcode-89 override if one was set
-    /// this turn, else the current room's own picture (by convention, picture
-    /// number == room number). The host maps this to a blorb `Pict` resource and
-    /// shows nothing when none exists.
+    /// The picture the host should display: an override set this turn by
+    /// opcode 89 (reference-format databases) or opcode 90 (US S.A.G.A.
+    /// databases, `Database::saga_us.is_some()` — spec §12.8/§12.11), else
+    /// the current room's own picture (by convention, picture number == room
+    /// number). The host maps this to a blorb `Pict` resource and shows
+    /// nothing when none exists.
     pub fn current_picture(&self) -> Option<u16> {
         self.pending_picture.or(Some(self.player as u16))
     }
@@ -920,13 +926,39 @@ impl Vm {
                 // observed behaviour and the Swansea Definition, but
                 // Spatterlight renumbered it to opcode 90 in its own action
                 // table to make room for an extra opcode elsewhere in its
-                // fork. This crate follows ScottFree/the Definition — opcode
-                // 89 draws, 90 is unused (falls into the `_` arm below,
-                // matching every corpus file this crate has been checked
-                // against, which use only the canonical ScottFree
-                // numbering).
-                89 => self.pending_picture = Some(p.next().unwrap_or(0)), // draw picture N
-                _ => {} // 90..=101 unused
+                // fork. This crate follows ScottFree/the Definition for every
+                // database EXCEPT the US S.A.G.A. binary ones — there, 89 and
+                // 90 both occur in the SAME action tables, so 90 is not a
+                // renumbering of 89 but a real command of its own, and the
+                // two opcodes' operand counts are the reference format's
+                // swapped (spec §12.8/§12.11, SQ-1472): 89 takes NO operand
+                // and 90 takes ONE. Get this backwards and every later
+                // command in the same action record receives the wrong
+                // operand — Adventureland's `RUB LAMP` conjures the wrong
+                // item and clears the darkness flag instead of the right
+                // one; Pirate Adventure's `SET SAIL` sets the wrong flag.
+                89 => {
+                    if self.db.saga_us.is_none() {
+                        self.pending_picture = Some(p.next().unwrap_or(0)); // draw picture N
+                    }
+                    // S.A.G.A.: no operand, and 89's drawing effect is
+                    // undetermined (spec §12.8) — no other state change
+                    // either (spec §12.11).
+                }
+                // S.A.G.A. only (spec §12.8/§12.11): draw the room-usage
+                // picture the operand names, over the whole graphics window,
+                // then wait for the player to press ENTER before the room
+                // view returns. This crate draws no pictures itself — like
+                // opcode 88's pause above, presenting one is the host's job
+                // — so this hands the operand to the host through the same
+                // `pending_picture`/`current_picture()` door opcode 89 uses
+                // above; waiting for ENTER is host UI, not VM state, exactly
+                // as opcode 88's timing is. The reference format never uses
+                // opcode 90 — it falls into the `_` arm below, a no-op.
+                90 if self.db.saga_us.is_some() => {
+                    self.pending_picture = Some(p.next().unwrap_or(0));
+                }
+                _ => {} // 90..=101 unused (90 outside S.A.G.A.; 91..=101 always)
             }
         }
         did_continue
@@ -2600,6 +2632,196 @@ mod tests {
         vm.supply_line("look");
         vm.step(); // a fresh turn drops the override
         assert_eq!(vm.current_picture(), Some(1), "reverts to the room picture");
+    }
+
+    // --- SQ-1472: opcodes 89/90's operand counts are swapped in US S.A.G.A.
+    // databases from the reference format's own (spec §12.8/§12.11) ---
+
+    fn saga_vm_with(items: Vec<Item>, rooms: Vec<Room>, player: usize) -> Vm {
+        let db = Database {
+            max_carry: 6,
+            start_room: player,
+            num_treasures: 0,
+            word_length: 3,
+            light_time: -1,
+            treasure_room: 0,
+            actions: vec![],
+            verbs: vec!["".into()],
+            nouns: vec!["".into()],
+            rooms,
+            messages: vec!["".into()],
+            items,
+            adventure_number: 0,
+            mysterious: false,
+            saga_us: Some(SagaUs { version: 416, adventure: 1, platform: SagaPlatform::Atari8Bit }),
+            ti99: None,
+        };
+        let mut vm = Vm::new(db);
+        vm.set_player(player);
+        vm
+    }
+
+    // The reference format's own opcode 89 (draw picture) consumes one
+    // operand and 90 is unused, both unaffected by `saga_us` being `None`.
+    #[test]
+    fn reference_format_op89_still_draws_its_operand_and_op90_is_unused() {
+        let mut vm = vm_with(one_item(), rooms4(), 0);
+        vm.run_commands(&[89, 58, 90, 0], &[3, 5]); // 89 draws 3, 58 <- next param (5)
+        assert_eq!(vm.current_picture(), Some(3), "89 draws its own operand");
+        assert!(vm.flag_at(5), "58 got the SECOND param — 89 took the first");
+    }
+
+    // §12.8/§12.11: in a S.A.G.A. database, 89 takes NO operand (its drawing
+    // effect is undetermined and it makes no state change) and 90 takes ONE
+    // (draws the room-usage picture it names, via the same
+    // `pending_picture`/`current_picture()` door as the reference format's
+    // opcode 89 above). Both opcodes occur in the same action tables, so
+    // getting this backwards hands every later command in the record the
+    // wrong operand — this is the arity the falsifying example in §12.8
+    // (Adventureland's `RUB LAMP`, Pirate Adventure's `SET SAIL`) catches.
+    #[test]
+    fn saga_us_op89_takes_no_operand_and_op90_takes_one() {
+        let items: Vec<Item> = (0..7)
+            .map(|i| Item { text: format!("item{i}"), treasure: false, auto_noun: None, start_loc: 0 })
+            .collect();
+        let mut vm = saga_vm_with(items, rooms4(), 0);
+        // 89 (nothing), 58 <- first param, 90 draws the second param, 74 <- third.
+        vm.run_commands(&[89, 58, 90, 74], &[5, 22, 6]);
+        assert!(vm.flag_at(5), "58 got the FIRST param — S.A.G.A.'s 89 took none");
+        assert_eq!(vm.current_picture(), Some(22), "90 draws the operand AFTER 58's, not 89's");
+        assert_eq!(vm.item_loc_at(6), CARRIED, "74 got the operand after 90's own, not stolen by 89");
+    }
+
+    /// The `stories/scott-dialects` corpus, wherever the workspace symlinks or
+    /// mounts it — the same two candidate paths `tests/saga_us_specimens.rs`'s
+    /// own `fixtures()` uses (both a unit-test and an integration-test binary
+    /// run with `crates/scott` as their working directory).
+    fn saga_dialect_fixtures() -> Option<std::path::PathBuf> {
+        [
+            std::env::var_os("SCOTT_DIALECT_FIXTURES").map(std::path::PathBuf::from),
+            Some(std::path::PathBuf::from("stories/scott-dialects")),
+            Some(std::path::PathBuf::from("../../stories/scott-dialects")),
+        ]
+        .into_iter()
+        .flatten()
+        .find(|p| p.is_dir())
+    }
+
+    /// The code-0 condition slots an action's commands consume left to right
+    /// (mirrors `decompile::command_params`, private to that module).
+    fn action_params(a: &Action) -> Vec<u16> {
+        a.conditions.iter().filter(|c| c.code == 0).map(|c| c.value).collect()
+    }
+
+    // spec §12.8's own falsifying example, action 107 (`RUB LAMP`): with the
+    // corrected arity, S.A.G.A. Adventureland's action table reproduces
+    // `adv01.dat`'s effect exactly — the diamond ring (item 48) dropped in
+    // the player's room and flag 8 set — even though the S.A.G.A. record
+    // carries an extra opcode 89 the twin doesn't. Real specimens, gated on
+    // `stories/scott-dialects` like every other S.A.G.A. suite; skips
+    // vacuously with an explanation when the corpus is absent. SQ-1472.
+    #[test]
+    fn saga_us_adventureland_rub_lamp_matches_the_dat_twin() {
+        let Some(root) = saga_dialect_fixtures() else {
+            eprintln!(
+                "SKIP: no stories/scott-dialects corpus (see tests/saga_us_specimens.rs for how \
+                 to build it)"
+            );
+            return;
+        };
+        let Some(saga_bytes) = ["atari", "apple"]
+            .iter()
+            .find_map(|platform| std::fs::read(root.join(platform).join("db").join("adventureland.bin")).ok())
+        else {
+            eprintln!("SKIP: no extracted Adventureland S.A.G.A. database");
+            return;
+        };
+        let Ok(dat_bytes) = std::fs::read(root.join("..").join("adv01.dat")) else {
+            eprintln!("SKIP: no adv01.dat");
+            return;
+        };
+        let saga_db = Database::parse(&saga_bytes).expect("the S.A.G.A. database parses");
+        let dat_db = Database::parse(&dat_bytes).expect("adv01.dat parses");
+        assert!(saga_db.saga_us.is_some(), "detected as a S.A.G.A. database");
+        assert!(
+            saga_db.items[48].text.to_uppercase().contains("DIAMOND RING"),
+            "{:?}",
+            saga_db.items[48].text
+        );
+
+        let saga_action = saga_db.actions[107].clone();
+        let dat_action = dat_db.actions[107].clone();
+        assert_eq!(
+            (saga_action.verb, saga_action.noun),
+            (dat_action.verb, dat_action.noun),
+            "action 107 is the same record in both"
+        );
+        assert_eq!(saga_action.conditions, dat_action.conditions, "same three operand slots (48, 8, 0)");
+        assert_eq!(saga_action.commands, [49, 89, 53, 58], "the database carries the extra opcode 89");
+
+        let mut saga_vm = Vm::new(saga_db);
+        let mut dat_vm = Vm::new(dat_db);
+        assert_eq!(saga_vm.current_room(), dat_vm.current_room(), "same start room");
+        saga_vm.run_commands(&saga_action.commands, &action_params(&saga_action));
+        dat_vm.run_commands(&dat_action.commands, &action_params(&dat_action));
+
+        let room = saga_vm.current_room() as i32;
+        assert_eq!(saga_vm.item_loc_at(48), room, "the diamond ring is dropped in the player's room");
+        assert!(saga_vm.flag_at(8), "flag 8 is set");
+        assert!(!saga_vm.flag_at(0), "the darkness flag must not be touched");
+        assert_eq!(saga_vm.item_loc_at(48), dat_vm.item_loc_at(48), "S.A.G.A. now agrees with the .dat twin");
+        assert_eq!(saga_vm.flag_at(8), dat_vm.flag_at(8));
+        assert_eq!(saga_vm.flag_at(0), dat_vm.flag_at(0));
+    }
+
+    // Pirate Adventure's action 104 (`SET SAIL`), §12.8's third falsifying
+    // example: sets flag 4 and moves the pirate ship (item 37) to room 21,
+    // matching `adv02.dat`'s own action 104 — which spells the extra command
+    // as opcode 70 (CLEAR_OUTPUT) rather than dropping the slot, but that is
+    // still arity 0, so the operand routing agrees either way. SQ-1472.
+    #[test]
+    fn saga_us_pirate_adventure_set_sail_matches_the_dat_twin() {
+        let Some(root) = saga_dialect_fixtures() else {
+            eprintln!(
+                "SKIP: no stories/scott-dialects corpus (see tests/saga_us_specimens.rs for how \
+                 to build it)"
+            );
+            return;
+        };
+        let Some(saga_bytes) = ["atari", "apple"]
+            .iter()
+            .find_map(|platform| std::fs::read(root.join(platform).join("db").join("pirate.bin")).ok())
+        else {
+            eprintln!("SKIP: no extracted Pirate Adventure S.A.G.A. database");
+            return;
+        };
+        let Ok(dat_bytes) = std::fs::read(root.join("..").join("adv02.dat")) else {
+            eprintln!("SKIP: no adv02.dat");
+            return;
+        };
+        let saga_db = Database::parse(&saga_bytes).expect("the S.A.G.A. database parses");
+        let dat_db = Database::parse(&dat_bytes).expect("adv02.dat parses");
+        assert!(saga_db.saga_us.is_some(), "detected as a S.A.G.A. database");
+
+        let saga_action = saga_db.actions[104].clone();
+        let dat_action = dat_db.actions[104].clone();
+        assert_eq!(
+            (saga_action.verb, saga_action.noun),
+            (dat_action.verb, dat_action.noun),
+            "action 104 is the same record in both"
+        );
+        assert_eq!(saga_action.conditions, dat_action.conditions);
+        assert_eq!(saga_action.commands, [89, 39, 58, 62], "the database carries the extra opcode 89");
+
+        let mut saga_vm = Vm::new(saga_db);
+        let mut dat_vm = Vm::new(dat_db);
+        saga_vm.run_commands(&saga_action.commands, &action_params(&saga_action));
+        dat_vm.run_commands(&dat_action.commands, &action_params(&dat_action));
+
+        assert!(saga_vm.flag_at(4), "flag 4 is set, not flag 37");
+        assert_eq!(saga_vm.item_loc_at(37), 21, "the ship moves to room 21");
+        assert_eq!(saga_vm.flag_at(4), dat_vm.flag_at(4));
+        assert_eq!(saga_vm.item_loc_at(37), dat_vm.item_loc_at(37));
     }
 
     // Action codes >= 102 print message (code - 50) with no upper cap: a game

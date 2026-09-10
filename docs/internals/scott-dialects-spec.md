@@ -70,6 +70,18 @@ are labelled as such — the version/adventure dispatch pairs of §12.2 and the
 runtime behaviours of §12.11 — and the reference was consulted for those and
 for nothing else in that section.
 
+**A fifth note. The first row was read a fourth time, at the same commit, on
+2026-09-09**, for one thing only: the meaning of **command codes 89 and 90**,
+which §12's releases use and their reference-format conversions do not, and which
+§2.4's "codes 0 through 89" did not cover. What was taken from it is the identity
+of command 90 — the picture it draws and the wait that follows — and the fact
+that the reference implements neither code for any release of §12 while
+consuming an operand for both. **The operand counts themselves were not taken
+from it**; they are measured in §12.8 against the reference-format twins, they
+contradict the reference for command 89, and §12.8 says so and shows the record
+that settles it. The picture-file names in that section were read out of the
+specimens' own disk catalogues.
+
 **One non-GPL secondary source, added 2026-09-09.**
 [`scott-c64-layout-findings.md`](scott-c64-layout-findings.md), this
 repository's own BSD-3-Clause investigation of the eleven Commodore 64
@@ -3963,10 +3975,20 @@ lands in the middle of the block rather than at its start.
 **Cells** are the word length in characters, with two escapes that consume an
 extra byte each: a NUL where a cell should begin is skipped and the following
 byte taken as the first character, and a `*` marking a synonym restarts the
-character count so that the word after it still gets the full width. A byte
-above 127 terminates. There is no space escape here either (§4.2): across all
-fifteen databases, a space followed by a non-space never once occurs at a
-position where such a rule would fire.
+character count so that the word after it still gets the full width. **Each
+escape fires at most once per cell.** A NUL *inside* a cell is not an escape but
+an ordinary character that counts towards the word length; trailing NULs are
+trimmed from the finished word. A byte above 127 terminates. There is no space
+escape here either (§4.2): across all fifteen databases, a space followed by a
+non-space never once occurs at a position where such a rule would fire.
+
+**"At most once" is normative, and letting the leading-NUL escape repeat loses
+the dictionary.** A run of pad bytes where a cell should begin is not alignment
+slack to be skipped over; it is an **empty dictionary entry**, and the
+reference-format conversions carry those entries too. A reader that skips every
+leading NUL it meets swallows the run, puts the *next* word in that slot, and is
+one entry short for the whole of the rest of the block — after which every
+vocabulary index in the action table names the wrong word.
 
 *Worked example*, the first twenty bytes of Adventureland's dictionary — array
 offset 0x108, word length 3, on both the Atari and the Apple II release:
@@ -3983,12 +4005,55 @@ at 0x21F, and reads `00 41 55 54 | 00 47 4F 00 | 2A 45 4E 54 | 2A 52 55 4E` —
 a leading pad, `AUT`, `GO`, then the synonyms `*ENT` and `*RUN`, each of which
 spends a byte on its `*`.
 
+*Worked example of the empty entry*, *Pirate Adventure*'s verb block — array
+offset 0x247, word length 3, and byte-identical on the Atari 8-bit and the
+Apple II release:
+
+```
+0x032B  00 57 45 49    escape, W E I      -> verb 57 = WEI
+0x032F  00 00 00 00    escape, 00 00 00   -> verb 58 = (empty)
+0x0333  00 42 52 45    escape, B R E      -> verb 59 = BRE
+```
+
+Cell 58's four bytes are every one of them NUL: the escape absorbs the first,
+the remaining three are the cell's three characters, and trimming the trailing
+NULs leaves the empty string — which is exactly what `adv02.dat` gives for verb
+58. Let the escape repeat and all four bytes are skipped, `BRE` is read as verb
+58, and **every verb after it is one slot early**. This release's verb block has
+fifteen empty cells (58, 62, 65, 66, and 69 through 79); a repeating escape
+consumes them one by one, runs the dictionary 46 bytes past its true end at
+0x387, and produces `\x0eFl` for verb 65 — the length byte and first two
+characters of room 1's description, `Flat in london`, read as vocabulary. The
+correct reading ends the dictionary exactly where the room block begins, which
+is the cheap check to make.
+
 Verified against the conversions: the dictionary decodes to the twin's verb and
-noun lists exactly (truncated to the release's word length) on all seven Atari
-titles, on six of the seven Apple II titles, and on the Commodore 64 *Hulk*. The
-Apple II *Claymorgue* differs from its twin in six verbs and two nouns, which is
-a release difference and not a decoding one — it is version 122 where the Atari
-release is 125, and the Atari one matches the twin exactly.
+noun lists exactly (truncated to the release's word length, with the `*` marker
+not counting towards it) on all seven Atari titles, on six of the seven Apple II
+titles, and on the Commodore 64 *Hulk*.
+
+**The Apple II *Claymorgue* differs from its twin in nineteen verbs and two
+nouns.** It is version 122 where the Atari release is 125, and the Atari one
+matches the twin exactly, so this is a release difference and not a decoding
+one. The nineteen verbs fall into three groups:
+
+- **five mid-table synonyms** — verbs 17, 26, 33, 45 and 54 — that v122 spells
+  as the placeholder `.` where v125 has `*PICKU`, `*TOWAR`, `*TUG`, `*USING`
+  and `*SLICE`;
+- **one substitution**, verb 51, which is `LOWER` in v122 and `*INVOK` in v125;
+- **thirteen entries v122 leaves empty**: verbs 88 and 89 (`*SING` and `*WASH`
+  in v125) and the eleven-entry run 96 to 106, which in v125 is `LIGHT`
+  followed by its ten synonyms `*BURN`, `*IGNIT`, `*BUILD`, `*MAKE`, `*COOK`,
+  `*WASH`, `*LOWER`, `*KILL`, `*SLAY` and `*CLEAN`.
+
+The two nouns are 107 and 108, `EDGE` and `*EDGES`, likewise empty in v122.
+
+**Both releases' dictionaries occupy the same bytes**, which is what makes this
+a release difference rather than a reader drifting: each begins at array offset
+0x108 and each ends at 0x62F, where its room block begins, after 110 noun cells
+and 110 verb cells. Verb 96 is `00 4C 49 47 48 54` on the Atari — escape, then
+`LIGHT` — and `00 00 00 00 00 00` on the Apple II; six bytes either way, and
+the cell after it starts in the same place on both.
 
 ### 12.6 Rooms, messages and item descriptions
 
@@ -4127,10 +4192,131 @@ release rather than of the platform:
 
 Every difference measured has the same shape: the graphic release carries one
 extra command, and sometimes one extra parameter condition, that the text
-conversion does not. These are release differences, not decoding failures — a
-column-major misreading cannot produce 166 exact records and four wrong ones —
-and *Claymorgue*'s wider Apple II gap is the same version 122 versus 125 split
-its dictionary shows (§12.5).
+conversion does not. That extra command is **89 or 90** in every case, and the
+rest of this section is about them. These are release differences, not decoding
+failures — a column-major misreading cannot produce 166 exact records and four
+wrong ones — and *Claymorgue*'s wider Apple II gap is the same version 122
+versus 125 split its dictionary shows (§12.5).
+
+**Two command codes these releases use and their conversions never do: 89 and
+90.** §2.4 leaves commands 0 through 89 to the reference format's own
+`Definition` document; these releases also use **90**, and 89 occurs in the same
+tables, so 90 is not a renumbering of 89. Neither appears in any of the eight
+reference-format twins. Across every reference-format file this document names —
+the §10.1 archive's twelve numbered games, `quest1`, `quest2` and `sampler1`, and
+the eleven *Mysterious Adventures* conversions of §10.4 — **89 appears twice, in
+*Spider-Man* (`quest2.dat`), and 90 never appears at all**. Measured occurrences
+over the fourteen databases that decode:
+
+| release | 89 | 90 |
+|---|---|---|
+| #1 Adventureland — Atari, Apple II | 2 each | 2 each |
+| #2 Pirate Adventure — Atari, Apple II | 1 each | 3 each |
+| #3 Mission Impossible — Apple II | 5 | 2 |
+| #6 Strange Odyssey — Atari, Apple II | 0 | 3 each |
+| Questprobe 1: The Hulk — Commodore 64 | 0 | 11 |
+| #4 Voodoo Castle, #5 The Count, #13 Claymorgue — both platforms | 0 | 0 |
+
+**Their operand counts are the load-bearing fact: command 89 takes NO operand
+and command 90 takes ONE.** Operands in this format are smuggled through
+condition slots carrying code 0 (§2.4) and consumed left to right by whichever
+commands want them, so an arity error does not merely mis-run the one command —
+it hands every later command in the same record the wrong operand, silently.
+
+That is also how the arities were measured, and it needs nothing but the oracle.
+Thirty-eight records across five titles and both platforms carry an 89 or a 90;
+for each of them the operands the record's *other* commands receive can be
+compared against the same-numbered record in the reference-format twin, whose
+condition list is usually byte-identical. Only one assignment reproduces the twin
+in all thirty-eight:
+
+| assumed arity | records reproducing the twin's operand assignment |
+|---|---|
+| **89 takes 0, 90 takes 1** | **38 of 38** |
+| 89 takes 0, 90 takes 0 | 36 of 38 |
+| 89 takes 1, 90 takes 1 | 32 of 38 |
+| 89 takes 1, 90 takes 0 | 30 of 38 |
+
+*The falsifying example*, Adventureland on both platforms, action 107 — `RUB
+LAMP`. Its conditions are `203 169 960 160 0`, identical in the database and in
+`adv01.dat`; its commands are `49 89 53 58` in the database and `49 53 58 0` in
+the conversion. The three code-0 slots supply operands 48, 8 and 0. With 89
+taking none, the record prints message 49 ("A glowing Genie appears, drops
+something, then vanishes."), drops **item 48** — `*DIAMOND RING*`, whose start
+location is 0, out of play, exactly what a genie conjuring a treasure needs —
+and sets bit flag 8, which is `adv01.dat`'s line to the number. With 89 taking
+one operand the same record instead drops **item 8**, `*GOLDEN FISH*`, which is
+already lying in room 10, and sets **bit flag 0**, the darkness flag. Action 111
+is the same record for the bracelet, item 49, and *Pirate Adventure*'s action
+104 (`SET SAIL`) falsifies it a third time: an operand for 89 there makes
+command 58 set flag 37 rather than flag 4 and leaves command 62 an operand
+short.
+
+**What command 90 does: draw the picture whose index is its operand, over the
+whole graphics window.** The operand is a **room-usage** picture index in §12.10's
+sense — the same numbering a room's own picture is named by — and in every
+occurrence measured it is *above* the release's room count, so it never names a
+room. The picture side of each release carries exactly the files those operands
+name:
+
+| release | rooms | operands measured | picture files present |
+|---|---|---|---|
+| #1 Adventureland, Apple II | 33 | 90, 91 | `R0190`, `R0191` |
+| #2 Pirate Adventure, Apple II | 26 | 90, 91 | `R0290`, `R0291` |
+| #3 Mission Impossible, Apple II | 23 | 88, 89 | `R0388`, `R0389` |
+| #6 Strange Odyssey, Apple II | 35 | 91, 92, 93 | `R0691`, `R0692`, `R0693` |
+| Questprobe 1: The Hulk, Commodore 64 | 20 | 81 to 89 | `R01081` … `R01089` |
+
+Those file names were read out of each release's own DOS 3.3 catalogue and out
+of the *Hulk* disk's directory, and the same disks carry the `…98` picture
+§12.11's inventory view draws and the `…00` picture its darkness case draws — the
+same numbering arrived at from two other directions. The reference draws this
+command for the *Hulk* alone, as a full-window picture followed by a wait for
+the player to press ENTER, after which the room view returns; for every other
+release of this section it consumes the operand and draws nothing.
+
+**What command 89 does is not settled by any specimen here.** It takes no
+operand; it occurs only in *Adventureland*, *Pirate Adventure* and *Mission
+Impossible*; and within a title every one of its records calls for what looks
+like the same effect — both of Adventureland's are the genie, and all five of
+Mission Impossible's stand immediately before command 63, "the game is over".
+The reference implements this command only for releases outside this section
+(blanking the picture for one of them, drawing an operand-selected closeup and
+waiting for ENTER for others) and has no case for any release of §12, so it
+draws nothing for all fifteen while still consuming an operand — which is
+precisely the arity the table above rules out. Each of these three titles carries
+high-numbered `R…` pictures that command 90 never names — Adventureland's
+`R0180` to `R0189`, Mission Impossible's `R0380` to `R0385` — and those are
+where an investigation of this command should begin.
+
+*Worked example of a record carrying command 90*, the Commodore 64 *Hulk*,
+action 101. Actions + 1 = 262 and the table starts at array offset 0x1418, so
+the columns begin at 0x1418, 0x151E, 0x1624, 0x172A, 0x1830, 0x1936 and the five
+condition columns at 0x1A3C, 0x1C48, 0x1E54, 0x2060, 0x226C:
+
+| field | offset | byte(s) | value |
+|---|---|---|---|
+| verb | 0x147D | `27` | 39 — `LOOK` |
+| noun | 0x1583 | `09` | 9 — `MIRR` |
+| command 1 | 0x1689 | `01` | 1 |
+| command 2 | 0x178F | `02` | 2 |
+| command 3 | 0x1895 | `0C` | 12 |
+| command 4 | 0x199B | `5A` | **90** |
+| condition 1 | 0x1B06 | `2B 00` | 43 — code 3, value 2 |
+| condition 2 | 0x1D12 | `35 01` | 309 — code 9, value 15 |
+| condition 3 | 0x1F1E | `68 06` | 1640 — code 0, **operand 82** |
+| condition 4 | 0x212A | `1A 00` | 26 — code 6, value 1 |
+| condition 5 | 0x2336 | `00 00` | 0 — code 0, operand 0 |
+
+Vocabulary word 39 x 150 + 9 = **5859**; first command word 150 x 1 + 2 =
+**152**; second 150 x 12 + 90 = **1890**. `quest1.dat`'s action 101 is
+`5859 43 309 1640 26 0 152 1800` — the same eight numbers with **1800** where
+this database has 1890, which is this record with command 90 removed and the 0
+it displaced left in its place. Messages 1, 2 and 12 are `'O.K.'`, `'I see'` and
+`'Bruce Banner'`; the operand the conversion still carries but no longer consumes
+is 82. Looking in the mirror prints those three lines and draws `R01082`. One
+byte of the sixteen is the whole of the difference, which is what the table above
+means by "one extra command, and sometimes one extra parameter condition".
 
 ### 12.9 Room connections, direction-major
 
@@ -4201,6 +4387,18 @@ these releases and not for others:
   Count* draws 80, 81 and 82 only in rooms 8, 18 and 9 respectively; *Voodoo
   Castle* draws 80 only in room 14. §11's "per-game association overrides"
   paragraph covers these; name them rather than infer them.
+- **Command 90 draws a picture, and an interpreter that draws none still has to
+  consume its operand.** §12.8 fixes the two arities: **89 takes no operand and
+  90 takes one**. Command 90 draws the room-usage picture its operand names over
+  the whole graphics window and waits for the player to press ENTER before the
+  room view returns — the same door the inventory picture above goes through, and
+  the operand is never a room's own number. Command 89's drawing effect is
+  undetermined (§12.8). **A conforming interpreter that draws no pictures must
+  still consume one operand for 90 and none for 89**, and must make no other
+  state change for either. That is not a cosmetic detail to be skipped along with
+  the artwork: get 89's arity wrong and every later command in the same record
+  receives the wrong operand, which on *Adventureland*'s `RUB LAMP` conjures the
+  wrong treasure and clears the darkness flag.
 - **The two lamp options §9.2 describes are not forced.** These are Adventure
   International releases, not Mysterious Adventures ones, and take the host's
   settings.
@@ -4312,6 +4510,50 @@ measured here:
   the two cases to bring up first — a column-major reader that gets either of
   them wrong is wrong about the format, not about the release.
 
+**Release by release, in numbers.** Each cell below is a count of records that
+disagree with the twin; **0** means byte for byte identical. Two normalisations
+are applied and no others: the conversion's backtick maps to `"` (§12.6), and a
+zero-length record and the conversion's `.` placeholder are the same thing, since
+some conversions spell that placeholder as an empty string instead. The eleven
+header numbers match exactly on every row.
+
+| release | verbs | nouns | room texts | exits | messages | item texts | item locations | actions |
+|---|---|---|---|---|---|---|---|---|
+| #1 Adventureland, Atari | 0 | 0 | 0 | 0 | 1 | 0 | 0 | 4 of 170 |
+| #1 Adventureland, Apple II | 0 | 0 | 0 | 0 | 1 | 0 | 0 | 4 of 170 |
+| #2 Pirate Adventure, Atari | 0 | 0 | 0 | 0 | 0 | 1 | 0 | 4 of 178 |
+| #2 Pirate Adventure, Apple II | 0 | 0 | 0 | 0 | 0 | 1 | 0 | 4 of 178 |
+| #3 Mission Impossible, Apple II | 0 | 0 | 0 | 0 | 2 | 0 | 0 | 7 of 162 |
+| #4 Voodoo Castle, Atari | 0 | 0 | 0 | 0 | 0 | 0 | 0 | **0** of 190 |
+| #4 Voodoo Castle, Apple II | 0 | 0 | 0 | 0 | 0 | 0 | 0 | **0** of 190 |
+| #5 The Count, Atari | 0 | 0 | 3 | 0 | 8 | 7 | 0 | **0** of 220 |
+| #5 The Count, Apple II | 0 | 0 | 0 | 0 | 0 | 0 | 0 | **0** of 220 |
+| #6 Strange Odyssey, Atari | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 3 of 224 |
+| #6 Strange Odyssey, Apple II | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 3 of 224 |
+| #13 Claymorgue, Atari (v125) | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 2 of 268 |
+| #13 Claymorgue, Apple II (v122) | 19 | 2 | 0 | 0 | 5 | 0 | 0 | 15 of 268 |
+| Questprobe 1: The Hulk, C64 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 10 of 262 |
+
+The fifteenth database, the Atari *Mission Impossible*, is absent from that table
+on purpose: it is damaged, and the answer for it is a refusal rather than a row
+(below). Four things are worth reading off the rest. **Three of the fourteen —
+both *Voodoo Castle* releases and the Apple II *Count* — disagree with their twin
+in no table at all**, which is a stronger statement than any individual field's
+and makes them the first cases to reach for when a reader is suspect. **Both
+*Count* releases are exactly identical in the
+action table while the Atari one is the corpus's widest text gap** — 3 rooms, 8
+messages and 7 items — so text agreement and table agreement are independent and
+a reader must not infer one from the other. **Exits and item start locations
+agree everywhere**, including all 34 of Adventureland's rooms and all 33 of
+Claymorgue's; a single disagreement in either column means the parse is wrong,
+not the release. And **the only dictionary disagreement in the corpus is the
+Apple II *Claymorgue*'s**, which §12.5 accounts for entry by entry.
+
+Pin these numbers rather than a floor. A test asserting "at most *n*
+disagreements" passes a reader that has quietly stopped agreeing anywhere it used
+to, and it also fails an honest release the day a better specimen of it turns up;
+an exact count says which of the two happened.
+
 **One specimen is damaged and cannot serve as an oracle.** The Atari
 *Mission Impossible* side A carries about fifty corrupt bytes in the middle of
 its room-description block, beginning at file offset 0x912: the text of room 16,
@@ -4326,6 +4568,27 @@ clean, or that second copy; do not conclude from the flat-slice reading that thi
 document is wrong about the format. This is what §7.3 means when it says the
 0x04C1 constant is a property of how these disks were mastered and an implementer
 wanting generality must walk the filesystem.
+
+**The rule for that side is: refuse it as damaged, do not decode it.** This is
+the one case in the corpus where every cheap acceptance test passes and the
+result is nonsense, so it is worth naming what does catch it. The version and
+adventure numbers scan correctly; the header at array offset 0x38 satisfies
+§12.4's limits and matches `adv03.dat` in all eleven fields; the dictionary is
+found at 0x108 and decodes to `adv03.dat`'s verbs and nouns without a single
+disagreement. The room block is reached at array offset 0x30F, and the read stays
+in step until room 16 at array 0x42F (file 0x8F0), whose length byte promises
+more text than the record holds. **Two of §12.14's checks then fail, either of
+them on its own sufficient**: the first room-description pointer minus the room
+block's offset gives a base of `$82E5`, where every undamaged Atari release in
+§12.12 gives `$3031`, so §12.7's pointer tables do not resolve onto the string
+starts the sequential read produced; and the two copies of the item-location
+table (regions 9 and 11 of §12.1), byte-identical on all fourteen sound
+databases, disagree here. A reader that ignores both and carries on decodes 8
+wrong room texts, 82 wrong messages, 53 wrong item texts, 42 wrong item
+locations, 24 wrong exit rows and all 162 action records — a self-consistent
+parse of nothing, and one that would be reported as a bug in this document
+rather than as a bad disk. Refuse, and say the file is damaged rather than that
+it is not this format.
 
 ### 12.14 Refusals
 
@@ -4342,6 +4605,17 @@ wanting generality must walk the filesystem.
   room-description pointers begin — indicates a wrong array start, not a
   recoverable file. §12.7's three pointer tables are the cheap check: if they do
   not resolve onto the string starts already read, stop.
+- **A file that passes detection, the header limits and the dictionary and then
+  fails one of those structural checks is DAMAGED, not "not this format", and
+  must be refused as damaged.** The two signals to act on are §12.7's pointer
+  tables failing to resolve, and the two copies of the item-location table (§12.1
+  regions 9 and 11) disagreeing — identical on every sound specimen. The Atari
+  8-bit *Mission Impossible* side A is the corpus's one instance and §12.13 works
+  it through: its header and dictionary are perfect and everything after the
+  sixteenth room string is rubble. Do not decode it, do not pass it to the next
+  detector, and do not report it as an unknown format; tell the player the file
+  is damaged and name the clean alternative, which for this title is the Apple II
+  `A3.DAT`.
 - **Questprobe 3, *Fantastic Four*, remains unidentified.** Neither its Commodore
   64 release (`QUESTPR3.D64`, §10.7) nor its MS-DOS one (`SPL53P.DAT`, §10.7) is
   this format: no §4.1 signature occurs in either, the first 0x38 bytes of
@@ -4378,8 +4652,9 @@ action encoding), the Commodore 64 slice of §4 (§4.2's cell reading, §4.3's
 locating, §4.4's encodings), §5.3's repairs for that family, §6, §7.2's
 uncrunched disk-image path, §8.2's Family B pictures, §9.1 and §9.2 as they
 apply, §11's TI-99/4A refusals, and **§12 in full** (§12.1-§12.9 as the format,
-§12.11's database-borne runtime facts, §12.14's refusals; §12.10 says the
-database carries no picture data, so there is none to read). **Not
+including §12.8's command codes 89 and 90 and their operand counts, §12.11's
+database-borne runtime facts, §12.14's refusals; §12.10 says the database carries
+no picture data, so there is none to read). **Not
 implemented:** the rest of §4-§8, §9.3, and §11 apart from the above. The
 S.A.G.A. **container** step is the host's — `scott` reads no disk images — so
 §12.3's three array offsets live in the crate and the mount does not.
@@ -4489,6 +4764,92 @@ sections now say so, and no code has to change.
    that; the corpus check that a supersample, majority-voted back to the native
    grid, disagrees nowhere the ink cannot explain is
    `every_picture_keeps_its_regions_at_every_supersample`.
+
+**And the US S.A.G.A. implementer raised four more, about §12.5, §12.8 and
+§12.13** — three corrections and one omission, every one of them found by
+measuring the §12.13 specimens against the §10.1 twins. All four were reconciled
+on 2026-09-09 on the specimens; the reference was consulted for one thing only,
+the identity of the two command codes, and where it and the specimens disagree
+the specimens won. Three went the implementer's way and cost no code change; the
+fourth is a code change.
+
+8. **§12.5's leading-NUL escape must fire at most once per cell — the
+   specification was silent, and the measurement was right.** A run of pad bytes
+   where a cell should begin is an **empty dictionary entry**, not slack: let the
+   escape repeat and the run is swallowed, the next word takes that slot, and
+   every entry after it is one slot early. §12.5 now states the rule normatively
+   and works *Pirate Adventure*'s verb block through — cell 58 is `00 00 00 00`,
+   which is the escape plus three NUL characters, and `adv02.dat` agrees that
+   verb 58 is empty. A repeating escape loses that release's fifteen empty verb
+   cells one by one, runs 46 bytes past the dictionary's true end, and reads room
+   1's description as verb 65. Byte-identical on the Atari and the Apple II.
+9. **§12.5's Apple II *Claymorgue* gap is nineteen verbs, not six.** Re-measured
+   against `adv13.dat`: nineteen verbs and two nouns. §12.5 now breaks the
+   nineteen down — five mid-table synonyms v122 spells `.`, one substitution
+   (verb 51, `LOWER` for `*INVOK`), and thirteen entries it leaves empty, of
+   which eleven are the trailing `LIGHT` run at 96 to 106 — and adds the fact
+   that makes it a release difference rather than a drift: both dictionaries
+   occupy 0x108 to 0x62F, 110 noun cells and 110 verb cells, and the cell after
+   the divergence starts in the same place on both.
+10. **§12 never mentioned command code 90, and both its arity and 89's were
+    wrong for these releases — the specification was incomplete, and the code
+    IS wrong.** Command 90 occurs in five of the eight titles and in none of
+    their conversions; 89 occurs in the same tables, so 90 is not a
+    renumbering. §12.8
+    now carries both: the occurrence counts, the identity of 90 (draw the
+    room-usage picture its operand names over the whole graphics window, wait for
+    ENTER; every operand measured names a picture file that is present on that
+    title's picture side and is never a room's own number), the fact that 89's
+    drawing effect is undetermined, and — the load-bearing part — **89 takes no
+    operand and 90 takes one**, which is the only assignment of the four that
+    reproduces the twins' operand assignment in all thirty-eight records that
+    carry either code. §12.11 states the obligation for an interpreter that draws
+    nothing, and §12.8 hand-decodes the Commodore 64 *Hulk*'s action 101, whose
+    sixteen bytes differ from `quest1.dat`'s line in one.
+
+    **What this means for the crate:** the two arities are currently the wrong
+    way round — command 89 consumes an operand and command 90 consumes none,
+    which is the reference format's own numbering and is right for the dialects
+    that numbering came from, but not for §12's. On the five §12 databases that
+    use command 89 — both *Adventureland* releases, both *Pirate Adventure*
+    releases and the Apple II *Mission Impossible* — it misroutes every operand
+    after an 89 in the same record: *Adventureland*'s
+    `RUB LAMP` drops the golden fish already lying in room 10 instead of
+    conjuring the diamond ring, and clears the darkness flag instead of setting
+    flag 8; *Pirate Adventure*'s `SET SAIL` sets the wrong flag and leaves the
+    next command an operand short. The fix is per dialect, not global — 89 keeps
+    its operand everywhere else, including the one reference-format file that
+    uses it — so the arity has to travel with the database the way §9's runtime
+    differences do. Command 90 is a no-op for a host that draws no pictures, but
+    it must still consume its operand.
+
+    **Implemented (SQ-1472).** `vm.rs`'s `Vm::run_commands` now branches on
+    `Database::saga_us.is_some()`: 89 consumes an operand and sets
+    `pending_picture` only for the reference format, and for a S.A.G.A.
+    database it takes none and leaves every field untouched (its drawing
+    effect stays undetermined); 90 consumes one operand and sets
+    `pending_picture` only for a S.A.G.A. database, through the same
+    `pending_picture`/`current_picture()` door opcode 89 already used —
+    waiting for ENTER is left to the host, the way opcode 88's pause always
+    has been. `decompile.rs`'s mnemonic table was fixed from the same
+    dialect check so a debug listing shows the right operand count too.
+    Verified against the real Atari/Apple II Adventureland and Pirate
+    Adventure databases: `RUB LAMP` (action 107) now drops item 48 (`*DIAMOND
+    RING*`) in the player's room and sets flag 8, and `SET SAIL` (action 104)
+    sets flag 4 and moves the pirate ship (item 37) to room 21 — both
+    matching `adv01.dat`/`adv02.dat` exactly, and both wrong (the golden
+    fish moved, flag 0 cleared; flag 37 set) with the arity reverted.
+11. **The oracle deserved to be written down, and now is.** §12.13 gained the
+    per-release, per-table count of disagreements with the twin — fourteen rows
+    by eight columns, exact counts rather than a floor — together with the two
+    normalisations it assumes and the four things worth reading off it. §12.13
+    and §12.14 also gained the **damaged-side rule**: the Atari *Mission
+    Impossible* side A passes detection, the header limits and the dictionary
+    and is rubble after its sixteenth room string, so it must be **refused as
+    damaged** rather than decoded or passed on as an unknown format. The two
+    signals that catch it are §12.7's pointer tables failing to resolve (its
+    first room pointer gives a base of `$82E5` where every sound Atari release
+    gives `$3031`) and the two copies of the item-location table disagreeing.
 
 The in-memory model this document's dialects decode *to*, in that crate, is a
 database of rooms (six exits and a description, plus a flag for the leading-`*`

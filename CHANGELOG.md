@@ -36,9 +36,12 @@ Absolute URLs or no link.
   releases against the published text conversion of the same game: *Voodoo
   Castle* and *The Count* come out identical on both machines, rule for rule,
   and the rest differ only where the graphic edition genuinely differs from
-  the text one. For now the game data has to be pulled off the disk first —
-  opening one of these straight from its `.atr`, `.dsk` or `.d64` follows.
-  (SQ-1414, SQ-1464)
+  the text one. Hand lanthorn or `scott-cli` the release disk image itself —
+  an Atari 8-bit `.atr`, an Apple II `.dsk`, or the Commodore 64's own
+  `QUESTPR1.D64` — and it opens straight off it, named by its own title and
+  which machine it came from (*Voodoo Castle (Atari 8-bit)*, *Voodoo Castle
+  (Apple II)*), since the same game was pressed for more than one and each
+  keeps its own saves. (SQ-1414, SQ-1464, SQ-1470)
 - **The Commodore 64 *Mysterious Adventures* now load.** Brian Howarth's
   eleven-game series — *The Golden Baton*, *The Time Machine*, both parts of
   *Arrow of Death*, *Escape from Pulsar 7*, *Circus*, *Feasibility Experiment*,
@@ -171,6 +174,13 @@ Absolute URLs or no link.
 
 ### Fixed
 
+- **In the disk editions of Adventureland and Pirate Adventure, a few
+  commands did the wrong thing.** Rubbing the lamp in Adventureland could
+  drop the wrong item and leave you in the dark instead of conjuring the
+  diamond ring, and setting sail in Pirate Adventure could set the wrong
+  flag — both games, and a few others in the same American S.A.G.A. disk
+  family, occasionally misread a command right after a picture-drawing one.
+  Every such command now runs correctly. (SQ-1472)
 - **Glulx text that a game filters through its own routine no longer gets cut
   off.** Some Glulx works route every character they print through a routine of
   their own — for special typography, for a cipher, for a character who speaks

@@ -18,10 +18,10 @@
   and the American S.A.G.A. disk editions for the Atari 8-bit, the Apple II and
   the Commodore 64 — Adventureland, Pirate Adventure, Mission Impossible, Voodoo
   Castle, The Count, Strange Odyssey, Claymorgue Castle and Questprobe's *The
-  Hulk*. The Commodore 64 Mysterious Adventures show their pictures, redrawn at
+  Hulk*, opened straight off their own release disk images, no extraction
+  needed. The Commodore 64 Mysterious Adventures show their pictures, redrawn at
   the size your terminal shows them rather than stretched from the original's
-  tiny canvas; the engine reads the S.A.G.A. editions, and opening one straight
-  off its disk image is the step after
+  tiny canvas
 
 ### Supported original Infocom disk formats:
 

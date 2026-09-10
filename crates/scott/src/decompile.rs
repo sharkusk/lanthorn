@@ -172,8 +172,10 @@ pub struct DecompiledCondition {
 pub struct DecompiledCommand {
     /// The raw command opcode, as `vm::run_commands` dispatches it (0 =
     /// no-op slot, 1..=51 and 102.. print a message, 52..=89 are the fixed
-    /// commands in `vm::FIXED_COMMAND_OPCODES`, 90..=101 are unimplemented
-    /// no-ops).
+    /// commands in `vm::FIXED_COMMAND_OPCODES`, 91..=101 are unimplemented
+    /// no-ops). Opcode 90 is implemented only for US S.A.G.A. databases
+    /// (`Database::saga_us.is_some()`, spec §12.8/§12.11, SQ-1472) and is a
+    /// no-op everywhere else.
     pub code: u16,
     /// The mnemonic for `code`, from `COMMAND_MNEMONICS` (`"UNKNOWN"` for an
     /// opcode this decompiler doesn't have a name for).
@@ -277,11 +279,26 @@ fn decompile_commands(db: &Database, cmds: &[u16; 4], params: &[u16]) -> Vec<Dec
                     Some(format!("{}, {}", resolve_item(db, a), resolve_item(db, b))),
                 )
             }
-            79 | 81 | 82 | 83 | 87 | 89 => {
+            79 | 81 | 82 | 83 | 87 => {
                 (command_mnemonic(n), Some(p.next().unwrap_or(0).to_string()))
             }
+            // Opcode 89's operand count is dialect-dependent (spec
+            // §12.8/§12.11, SQ-1472): the reference format keeps it as the
+            // "draw picture N" command with one operand, but US S.A.G.A.
+            // databases (`Database::saga_us.is_some()`) take none — see
+            // `vm::run_commands`' matching arm for the full account.
+            89 if db.saga_us.is_none() => {
+                (command_mnemonic(n), Some(p.next().unwrap_or(0).to_string()))
+            }
+            89 => (command_mnemonic(n), None),
+            // Opcode 90 exists only in US S.A.G.A. databases, where it takes
+            // one operand (draw the room-usage picture it names); everywhere
+            // else it falls into the `_` arm below, unused.
+            90 if db.saga_us.is_some() => {
+                ("DRAW_PICTURE_SAGA", Some(p.next().unwrap_or(0).to_string()))
+            }
             56 | 57 | 61 | 63..=71 | 73 | 76..=78 | 80 | 84..=86 | 88 => (command_mnemonic(n), None),
-            _ => ("UNUSED", Some(n.to_string())), // 90..=101: encoded but not implemented by vm.rs
+            _ => ("UNUSED", Some(n.to_string())), // 90 outside S.A.G.A., 91..=101 always: encoded but not implemented by vm.rs
         };
         out.push(DecompiledCommand {
             code: n,

@@ -202,9 +202,11 @@ pub struct Action {
     pub conditions: [Condition; 5],
     /// Up to four command opcodes to run, in order, once every condition
     /// passes: 0 is an unused slot, 1..=51 and 102 upward print a message
-    /// (see `Database::messages`), and the rest (52..=89, with 90..=101
-    /// currently no-ops) are built-in verbs like take, drop, move the
-    /// player, or continue into the next action line.
+    /// (see `Database::messages`), and the rest (52..=89) are built-in verbs
+    /// like take, drop, move the player, or continue into the next action
+    /// line. Opcode 90 is a no-op everywhere except US S.A.G.A. databases
+    /// (`saga_us.is_some()`, spec §12.8/§12.11, SQ-1472); 91..=101 are
+    /// no-ops in every dialect.
     pub commands: [u16; 4],
 }
 

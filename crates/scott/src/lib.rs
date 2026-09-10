@@ -39,7 +39,11 @@
 //! * **Opcode 89** is the SAGA "draw picture" command in both ScottFree and
 //!   the Definition, but Spatterlight renumbered it to 90 in its own fork
 //!   (`vm.rs`, `Vm::run_commands` case 89). This crate follows ScottFree/the
-//!   Definition — opcode 90 is unused.
+//!   Definition — opcode 90 is unused — for every database except the US
+//!   S.A.G.A. binary ones (`Database::saga_us.is_some()`), where 89 and 90
+//!   are both real commands with operand counts the reverse of the
+//!   reference format's own numbering (`docs/internals/scott-dialects-spec.md`
+//!   §12.8/§12.11, SQ-1472).
 //!
 //! All three follow this module doc's stated priority: ScottFree's own
 //! behaviour outranks a document or a fork wherever they disagree, because
