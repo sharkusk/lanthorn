@@ -56,6 +56,9 @@ the *whole* library at once, by title, author, filename or folder, no
 matter how deep a story is buried. `Enter` plays the highlighted story; `o`
 opens its launch options first — which artwork a graphical game draws and
 which machine it plays as — see [graphics and terminals](graphics-and-terminals.md).
+Quit back out of a game and the picker remembers exactly where you were —
+same folder (or the same disk image's shelf of games), same story
+highlighted — rather than dropping you back at the top of the library.
 
 Everything you can do to *one* story lives in one place: press `Space`, or
 right-click a row or a cover, and a little menu opens beside it — open the

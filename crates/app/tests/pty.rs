@@ -32,5 +32,7 @@ mod pty_hangup_autosave;
 mod pty_kitty_compression;
 #[path = "suites/pty_oracle.rs"]
 mod pty_oracle;
+#[path = "suites/pty_picker_return.rs"]
+mod pty_picker_return;
 #[path = "suites/pty_query_replies.rs"]
 mod pty_query_replies;
