@@ -225,6 +225,7 @@ pub mod apple_pictures;
 pub mod c64;
 pub mod database;
 pub mod decompile;
+pub mod saga_dos;
 pub mod saga_pictures;
 pub mod saga_us;
 pub mod ti994a;
@@ -238,6 +239,7 @@ pub use database::{Action, Condition, Database, Item, Room};
 pub use decompile::{decompile_action, list_items, list_rooms, list_vocab};
 pub use loader::{detect_dialect, looks_like_scott, looks_like_scott_bytes, Dialect, LoadError};
 pub use options::{Options, Presentation, Wording};
+pub use saga_dos::{decode_family_e, DosRelease};
 pub use apple_pictures::{decode_family_d, AppleError};
 pub use saga_pictures::{decode_family_c, PictureError};
 pub use saga_us::{

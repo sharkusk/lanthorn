@@ -23,6 +23,17 @@ Absolute URLs or no link.
 
 ### Added
 
+- **The MS-DOS *Questprobe* releases now play with their pictures.** *The
+  Hulk* as it was sold for the IBM PC — a folder of DOS files with the game in
+  one and sixty-eight CGA pictures beside it — opens straight out of its zip,
+  no unpacking, and draws every room in the four colours a CGA card could show
+  at once. The story list calls it *The Hulk (MS-DOS)* instead of whatever the
+  download happened to be named, the TYPE column says `zip`, and the info
+  panel counts the artwork for you. It is the same game the Commodore 64 disk
+  holds and it is not the same pictures: half of the PC set is drawn at twice
+  the horizontal detail, and the rest of it agrees with the Commodore version
+  pixel for pixel — which is how we know both are being read right.
+
 - **The Apple II *Scott Adams Graphic Adventures* draw their pictures.**
   *Adventureland*, *Pirate Adventure*, *Mission Impossible* and *Strange
   Odyssey* were pressed for the Apple II as two floppies — the game on the
@@ -55,6 +66,12 @@ Absolute URLs or no link.
   It needs no list of known releases to do it, so a Spectrum snapshot nobody
   has catalogued loads too; a snapshot of some other game is refused by name
   rather than half-read.
+- **And now they show their pictures too.** The ZX Spectrum releases draw the
+  same line-art rooms the Commodore 64 edition does — the two platforms carry
+  the identical artwork and differ only in their colours — appearing above the
+  room panel exactly the same way, through the same kitty/sixel/half-block
+  drawing, and offering the same **Picture resolution** choice in launch
+  options. (SQ-1480)
 
 ### Fixed
 

@@ -1368,8 +1368,9 @@ pub struct MountedStory {
     /// Which release disk image it was mounted out of, if it was one rather
     /// than a plain file (SQ-0737, SQ-0837).
     pub disk_image: Option<DiskImage>,
-    /// The **family-C picture files** on the same container, `(name, record)`
-    /// in the container's own order (spec §8.3, SQ-1475).
+    /// The release's own **picture files** on the same container,
+    /// `(name, record)` in the container's own order — family C off a disk
+    /// image (spec §8.3, SQ-1475) or family E out of a zip (§8.5, SQ-1477).
     ///
     /// A US S.A.G.A. release keeps its artwork in separate files beside the
     /// database — §12.10, "pictures live in separate files on the disk, one
@@ -1398,24 +1399,41 @@ pub fn load_mounted_story_full(
     disk_entry: Option<&str>,
 ) -> io::Result<MountedStory> {
     let (bytes, disk_image) = read_story_file(path, disk_entry)?;
+    // SQ-1476: which naming rule finds a disk release's artwork is its
+    // PLATFORM, so the detector's answer travels with the path.
     let saga_pictures = match (disk_image, scott::detect_saga_us(&bytes)) {
-        (Some(_), Some(platform)) => saga_picture_files(path, platform),
+        (Some(_), Some(platform)) => saga_picture_files(path, Some(platform)),
+        // SQ-1477: family E. The MS-DOS *Questprobe* releases are zips of
+        // loose DOS files — the database beside its `.PAK` pictures — and the
+        // database is the plain reference TEXT format (spec §10.7), so
+        // `detect_saga_us` cannot be the gate here the way it is above. The
+        // gate is instead the cheapest pair of facts that cannot be true of
+        // anything else: the container is a zip, and what came out of it is a
+        // Scott database. `saga_picture_files` then classifies the entries by
+        // CONTENT, so a zip of Z-code and a `README` collects nothing.
+        (None, _) if is_zip(path) && scott::looks_like_scott_bytes(&bytes) => {
+            saga_picture_files(path, None)
+        }
         _ => Vec::new(),
     };
     Ok(MountedStory { story: extract_story(bytes)?, disk_image, saga_pictures })
 }
 
 /// Every US S.A.G.A. picture file this release keeps, `(name, record)` —
-/// **including the ones on its companion disk side** (SQ-1475, SQ-1476).
+/// **including the ones on its companion disk side** (SQ-1475, SQ-1476,
+/// SQ-1477).
 ///
-/// Two naming rules, one per platform, because the two releases name their
-/// artwork differently: spec §8.3's `R01nnn` on the Commodore 64
-/// (`scott::is_picture_file_name`) and the Apple II's `R<aa><nn>` /
+/// Three naming rules, because the three families name their artwork
+/// differently: spec §8.3's `R01nnn` on the Commodore 64
+/// (`scott::is_picture_file_name`), the Apple II's `R<aa><nn>` /
 /// `B<aa><nnn>` (`scott::is_apple_picture_file_name`, and
-/// `scott::apple_pictures` for why that rule is measured rather than quoted).
-/// The **platform** decides, which is why it is a parameter: walking an Apple
-/// II disk with the Commodore 64 predicate finds nothing at all, silently, and
-/// reads as "this release has no pictures".
+/// `scott::apple_pictures` for why that rule is measured rather than quoted),
+/// and §8.5's `.PAK` entries out of an MS-DOS zip (`scott::saga_dos`).
+/// `platform` decides between the first two, which is why it is a parameter:
+/// walking an Apple II disk with the Commodore 64 predicate finds nothing at
+/// all, silently, and reads as "this release has no pictures". `None` is the
+/// MS-DOS case, whose database is the reference text format and carries no
+/// platform to detect.
 ///
 /// **The Apple II keeps its artwork on the other side of the release**
 /// (§10.6): the boot side holds the database and side A holds the pictures, so
@@ -1437,8 +1455,30 @@ pub fn load_mounted_story_full(
 /// mounted, rather than carried in app state for the life of the session.
 pub fn saga_picture_files(
     path: &Path,
-    platform: scott::SagaPlatform,
+    platform: Option<scott::SagaPlatform>,
 ) -> Vec<(String, Vec<u8>)> {
+    // SQ-1477: a zip is the MS-DOS releases' container, and family E's
+    // pictures are ordinary entries in it beside the database — so the walk
+    // is the same walk, over a different kind of volume. Classified by
+    // CONTENT and not by name: `looks_like_family_e` reads the signature
+    // bytes, which is what keeps `START.EXE`, `HULK.BAT` and `ADVENT.DAT`
+    // out of a set that a name rule alone would be free to guess at.
+    if is_zip(path) {
+        let mut out = Vec::new();
+        let _ = for_each_zip_entry(path, |name, bytes| {
+            let base = name.rsplit('/').next().unwrap_or(name);
+            if scott::saga_dos::is_picture_file_name(base)
+                && scott::saga_dos::looks_like_family_e(&bytes)
+            {
+                out.push((base.to_string(), bytes));
+            }
+            false
+        });
+        return out;
+    }
+    let Some(platform) = platform else {
+        return Vec::new();
+    };
     let here = picture_files_on(path, platform);
     if !here.is_empty() || !matches!(platform, scott::SagaPlatform::AppleII) {
         return here;

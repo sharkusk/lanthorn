@@ -49,6 +49,26 @@ pub fn resolve_options(game_dir: &std::path::Path) -> scott::Options {
         )
 }
 
+/// Decode a ZX Spectrum *Mysterious Adventures* release's own family-B
+/// artwork straight off the story bytes it loaded from (SQ-1480) — a `.z80`
+/// snapshot, or the bare 48K memory image a host that already decompressed
+/// one for its own reasons hands over (`scott::looks_like_zx_mysterious`'s
+/// own case, mirrored here the way `scott::Database::parse` reads both).
+///
+/// `None` for every other story — including a C64 PRG/D64 image, which
+/// `scott::looks_like_zx_mysterious_z80`'s `.z80` header sniff and the bare
+/// image's length-and-signature check both refuse by construction — and for a
+/// recognised snapshot whose picture block does not decode.
+fn zx_mysterious_picture_lists(bytes: &[u8]) -> Option<Vec<scott::c64::PictureList>> {
+    if scott::looks_like_zx_mysterious_z80(bytes) {
+        return scott::zx_mysterious::decode_picture_lists_z80(bytes).ok();
+    }
+    if bytes.len() == scott::IMAGE_LEN && scott::looks_like_zx_mysterious(bytes) {
+        return scott::zx_mysterious::decode_picture_lists(bytes).ok();
+    }
+    None
+}
+
 /// Build the top room-panel buffer from a `Vm::room_block()` string: one logical
 /// line per `\n`, with the per-line style/paragraph/image tracks filled parallel
 /// (the inline-buffer renderer indexes them by line). `primary: false` so the app
@@ -76,17 +96,17 @@ pub struct ScottSession {
     intro: String,
     aux: BTreeMap<String, Vec<u8>>,
     aux_dirty: bool,
-    /// Room pictures, from any of three sources, in the order
+    /// Room pictures, from any of four sources, in the order
     /// [`ScottSession::new_with_options`] resolves them: Blorb `Pict`
     /// resources for a graphics (`.blb`) game (the SAGA/Mysterious Adventures
     /// graphic versions ship the room pictures here, SQ-0402); a US S.A.G.A.
     /// release's own **family-C** strip bitmaps, read off the release disk
     /// beside the database (spec §8.3, SQ-1475,
-    /// `PictSource::from_scott_saga`); or a Commodore 64 *Mysterious
-    /// Adventures* release's own **family-B** vector artwork decoded straight
-    /// out of its PRG/D64 memory image (SQ-1463,
-    /// `PictSource::from_scott_c64`). Empty (`PictSource::new(None)`) for a
-    /// plain `.dat` with none of them.
+    /// `PictSource::from_scott_saga`); or a Commodore 64 or ZX Spectrum
+    /// *Mysterious Adventures* release's own **family-B** vector artwork,
+    /// decoded straight out of its PRG/D64 memory image or `.z80` snapshot
+    /// (SQ-1463/SQ-1480, `PictSource::from_scott_family_b`). Empty
+    /// (`PictSource::new(None)`) for a plain `.dat` with none of them.
     picts: PictSource,
     /// The decoded picture to show for the current room, and the picture number
     /// it was resolved from — recomputed only when the number changes so the same
@@ -243,19 +263,47 @@ impl ScottSession {
         let saga_release = (!saga_pictures.is_empty())
             .then(|| vm.database().saga_us)
             .flatten();
+        // SQ-1477: family E — the MS-DOS *Questprobe* release. Its database
+        // is the plain reference TEXT format (§10.7), so `detect_saga_us`
+        // above answered `None` and the release has to be identified from the
+        // database's own header counts instead (`scott::saga_dos::identify`).
+        // Ordered after family C because a container cannot carry both: the
+        // two naming rules do not overlap, and `saga_pictures` came off one
+        // container.
+        let dos_release = (!saga_pictures.is_empty() && saga_release.is_none())
+            .then(|| scott::saga_dos::identify(vm.database()))
+            .flatten();
+        // SQ-1480: a ZX Spectrum Mysterious Adventures release carries the
+        // SAME family-B display lists as the C64 releases (§8.2), decoded
+        // straight off the `.z80` snapshot (or the bare 48K image a host that
+        // already decompressed one for its own reasons hands over) rather
+        // than off a PRG/D64 image — see `zx_mysterious_picture_lists`. Tried
+        // before the C64 attempt below; the two container sniffs cannot both
+        // match, so the order only decides which refusal a third format hits
+        // first, and neither ever fires for the other's files.
         let picts = if pict_blorb.is_some() {
             PictSource::new(pict_blorb)
         } else if let Some(release) = saga_release {
             PictSource::from_scott_saga(saga_pictures, release)
+        } else if let Some(release) = dos_release {
+            PictSource::from_scott_dos_saga(saga_pictures, release)
+        } else if let Some(lists) = zx_mysterious_picture_lists(&bytes) {
+            PictSource::from_scott_family_b(
+                lists,
+                u32::from(PICTURE_ROWS) * char_px.1,
+                picture_resolution,
+                crate::graphics::ScottFamilyBPlatform::Zx,
+            )
         } else {
             scott::c64::prg_image(&bytes)
                 .filter(|(image, at)| scott::c64::looks_like_c64_mysterious(image, *at))
                 .and_then(|(image, at)| scott::c64::decode_family_b_picture_lists(image, at).ok())
                 .map(|lists| {
-                    PictSource::from_scott_c64(
+                    PictSource::from_scott_family_b(
                         lists,
                         u32::from(PICTURE_ROWS) * char_px.1,
                         picture_resolution,
+                        crate::graphics::ScottFamilyBPlatform::C64,
                     )
                 })
                 .unwrap_or_else(|| PictSource::new(None))
@@ -286,8 +334,45 @@ impl ScottSession {
     /// the two it is depends on the database. One source of truth in the VM,
     /// which knows, rather than a host rule that has to be kept in step with
     /// it.
+    /// The picture number an MS-DOS *Questprobe* release wants for the room
+    /// the player is in, or `None` when this session is not one (SQ-1477).
+    ///
+    /// **Why this exists at all.** §12.11 gives the US S.A.G.A. releases two
+    /// picture rules no other dialect has — the *Hulk*'s five remapped room
+    /// pairs, and a dedicated image drawn in the DARK where every other
+    /// dialect shows nothing — and `scott::Vm::current_picture` applies both,
+    /// keyed on `Database::saga_us`. The MS-DOS release is the same game and
+    /// obeys the same two rules, but its database is the reference TEXT
+    /// format (§10.7) and so carries no `saga_us` record for the VM to key
+    /// on. The rules therefore arrive here, from the RELEASE
+    /// (`scott::saga_dos::identify`) rather than from the encoding — and they
+    /// are the release's own tables, not a second copy: the remap is
+    /// `scott::saga_us::hulk_room_picture` and the darkness index is
+    /// `scott::DARKNESS_PICTURE`.
+    ///
+    /// The remap applies **only to a number that came from the room**, which
+    /// is what the `== current_room()` test is for: `current_picture` also
+    /// answers an explicit draw-picture opcode's operand, and remapping THAT
+    /// would draw a different picture than the game asked for.
+    ///
+    /// Checked against the release's own files rather than taken on trust —
+    /// the MS-DOS *Hulk* ships an `R0100.PAK` (the darkness image) and room
+    /// pictures for exactly the ten rooms this does not remap.
+    fn dos_room_picture(&self) -> Option<u16> {
+        let release = self.picts.scott_dos_release()?;
+        Some(match self.vm.current_picture() {
+            // Dark: §12.11's darkness image, where a plain dialect shows
+            // nothing at all and `current_picture` answers `None`.
+            None => scott::DARKNESS_PICTURE as u16,
+            Some(n) if usize::from(n) == self.vm.current_room() => {
+                release.room_picture(usize::from(n)) as u16
+            }
+            Some(n) => n,
+        })
+    }
+
     fn refresh_picture(&mut self) {
-        let want = self.vm.current_picture();
+        let want = self.dos_room_picture().or_else(|| self.vm.current_picture());
         if want == self.current_pic_num {
             return;
         }
@@ -464,24 +549,44 @@ impl Engine for ScottSession {
         match &self.current_canvas {
             Some(canvas) => {
                 let opaque = canvas.pixels().filter(|p| p.0[3] != 0).count();
-                // SQ-1467: the C64 artwork is drawn at a supersample chosen
-                // from this band's device height, so a frame has to be able to
-                // say which resolution produced it.
-                // SQ-1475: a third source, and it names the platform whose
+                // SQ-1467: the family-B artwork is drawn at a supersample
+                // chosen from this band's device height, so a frame has to be
+                // able to say which resolution produced it.
+                // SQ-1480: and which platform's palette read it — the C64 and
+                // ZX Spectrum releases share the exact same display lists and
+                // geometry, and differ only in colour.
+                // SQ-1475: a fourth source, and it names the platform whose
                 // colour table read the record — the geometry is the same on
                 // either, the colours are not.
-                // SQ-1476: …and which FAMILY, because the Apple II releases
-                // are family D, a different decoder over a different canvas.
-                let source = match (self.picts.scott_c64_scale(), self.picts.scott_saga_platform())
-                {
-                    (Some(scale), _) => format!("native C64 x{scale}"),
-                    (None, Some(platform)) => format!(
-                        "S.A.G.A. family {} ({}, {} picture(s))",
-                        if matches!(platform, scott::SagaPlatform::AppleII) { "D" } else { "C" },
+                // SQ-1477: a fifth source. Family E is the MS-DOS release's
+                // own CGA bitmaps, and a frame says so — the geometry is the
+                // same 280-pixel canvas family C uses and the artwork is the
+                // same artist's, so nothing else in the dump distinguishes
+                // them.
+                // SQ-1476: …and a sixth, which is why the FAMILY is named as
+                // well as the platform: the Apple II releases are family D, a
+                // line-drawing decoder over the machine's own hi-res canvas.
+                let source = match (
+                    self.picts.scott_c64_scale(),
+                    self.picts.scott_family_b_platform(),
+                    self.picts.scott_saga_platform(),
+                ) {
+                    (Some(scale), Some(platform), _) => {
+                        format!("native {} x{scale}", platform.label())
+                    }
+                    (None, _, Some(scott::SagaPlatform::AppleII)) => format!(
+                        "S.A.G.A. family D (Apple II, {} picture(s))",
+                        self.picts.scott_saga_count().unwrap_or(0)
+                    ),
+                    (None, _, Some(platform)) => format!(
+                        "S.A.G.A. family C ({}, {} record(s))",
                         platform.label(),
                         self.picts.scott_saga_count().unwrap_or(0)
                     ),
-                    (None, None) => "blorb".to_string(),
+                    _ => match self.picts.scott_saga_dos_count() {
+                        Some(n) => format!("S.A.G.A. family E (MS-DOS, {n} picture(s))"),
+                        None => "blorb".to_string(),
+                    },
                 };
                 out.push(format!(
                     "  picture: {} row(s) reserved  ·  canvas={}x{} v{} opaque={} source={source}",
@@ -1213,10 +1318,210 @@ mod tests {
         let Some(s) = hulk_session() else { return };
         let dump = s.window_dump().join("\n");
         assert!(
-            dump.contains("source=S.A.G.A. family C (Commodore 64, 70 picture(s))"),
+            dump.contains("source=S.A.G.A. family C (Commodore 64, 70 record(s))"),
             "dump should name the family-C source:\n{dump}"
         );
     }
+
+    /// *The Hulk* as shipped on MS-DOS (spec §10.7): a zip of loose DOS files
+    /// — `ADVENT.DAT` in the plain reference text format, plus sixty-eight
+    /// `.PAK` family-E pictures (§8.5) — opened through the same door
+    /// `startup.rs` opens, because the archive is not re-opened afterwards.
+    ///
+    /// Commercial and gitignored, so every case below skips vacuously.
+    fn hulk_dos_session() -> Option<ScottSession> {
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../stories/scott-dialects/msdos/The-Hulk_DOS_EN.zip");
+        if !path.exists() {
+            eprintln!("SKIP: no {} (gitignored commercial fixture)", path.display());
+            return None;
+        }
+        let mounted = crate::hints::load_mounted_story_full(&path, None)
+            .expect("the MS-DOS Hulk zip holds one Scott database");
+        let crate::hints::LoadedStory::Scott(bytes) = mounted.story else {
+            panic!("The-Hulk_DOS_EN.zip's story is a Scott database");
+        };
+        assert_eq!(mounted.saga_pictures.len(), 68, "the zip's whole picture set (§10.7)");
+        Some(
+            ScottSession::new_with_options(
+                bytes,
+                None,
+                false,
+                None,
+                scott::Options::default(),
+                ScottSession::FALLBACK_CHAR_PX,
+                crate::graphics::ScottPictureResolution::default(),
+                mounted.saga_pictures,
+            )
+            .expect("the MS-DOS Hulk boots out of its own zip"),
+        )
+    }
+
+    /// Room 1's family-E picture reaches the band, at the same canvas family C
+    /// draws to and through the same aspect-preserving fit (SQ-1477).
+    ///
+    /// The palette is the tell that it really is family E and not the twin:
+    /// §8.5 fixes it (black, cyan, magenta, white) where family C reads four
+    /// stored colour bytes, so the same room on the Commodore 64 disk resolves
+    /// orange and purple through §8.3's table and this one cannot.
+    #[test]
+    fn ms_dos_room_one_shows_its_own_family_e_picture() {
+        let Some(s) = hulk_dos_session() else { return };
+        assert_eq!(s.vm.current_room(), 1, "premise: Bruce Banner starts in room 1");
+        let screen = s.screen();
+        let band = picture_band(&screen).expect("room 1 has a picture band");
+        let canvas = &band.canvas;
+        assert_eq!(
+            (canvas.width(), canvas.height()),
+            (
+                scott::saga_pictures::CANVAS_WIDTH as u32,
+                scott::saga_pictures::CANVAS_HEIGHT as u32
+            ),
+            "the shared S.A.G.A. canvas"
+        );
+        assert!(band.upscale, "the band fits it like any other bitmap source");
+        let mut seen = std::collections::HashSet::new();
+        for p in canvas.pixels() {
+            seen.insert((p.0[0], p.0[1], p.0[2]));
+            assert_eq!(p.0[3], 255, "family E carries no transparent index");
+        }
+        assert!(
+            seen.iter().all(|c| scott::saga_dos::PALETTE.contains(c)),
+            "every colour is one of §8.5's four, got {seen:?}"
+        );
+        assert!(seen.len() >= 3, "room 1 is a drawing, not a flat fill: {seen:?}");
+    }
+
+    /// `/dump-windows` names the fourth picture source and counts it, so a
+    /// frame says which encoding of the *Hulk*'s artwork it is showing — the
+    /// canvas and the composition are the same either way.
+    #[test]
+    fn ms_dos_window_dump_names_the_family_e_source() {
+        let Some(s) = hulk_dos_session() else { return };
+        let dump = s.window_dump().join("\n");
+        assert!(
+            dump.contains("source=S.A.G.A. family E (MS-DOS, 68 picture(s))"),
+            "dump should name the family-E source:\n{dump}"
+        );
+    }
+
+    /// The MS-DOS band follows the player too, and §12.11's remap travels with
+    /// it — this release's database is the plain reference TEXT format, so the
+    /// remap arrives from `scott::saga_dos::identify` rather than from
+    /// `Database::saga_us`, and a room with no picture file of its own still
+    /// draws one.
+    #[test]
+    fn the_ms_dos_band_changes_when_the_room_does() {
+        let Some(mut s) = hulk_dos_session() else { return };
+        let first = picture_band(&s.screen()).expect("room 1 has art").canvas.clone();
+        let start = s.vm.current_room();
+        for command in ["bite lip", "east"] {
+            s.submit(command);
+            if s.vm.current_room() != start {
+                break;
+            }
+        }
+        let room = s.vm.current_room();
+        if room == start {
+            eprintln!("SKIP: the Hulk stayed in room {start}");
+            return;
+        }
+        let second = picture_band(&s.screen())
+            .map(|b| b.canvas.clone())
+            .unwrap_or_else(|| panic!("room {room} has a picture too (§12.11 remaps every room)"));
+        assert_ne!(first.as_raw(), second.as_raw(), "room {room}'s picture is not room {start}'s");
+    }
+
+    // ── SQ-1480: the ZX Spectrum Mysterious Adventures' own Family B pictures ──
+
+    /// *The Golden Baton* as shipped on the ZX Spectrum `m1goldba.z80` —
+    /// the same eleven titles as `baton_prg` above, this time as a 48K
+    /// snapshot. Commercial and gitignored, so every case below skips
+    /// vacuously without it.
+    fn goldba_z80() -> Option<Vec<u8>> {
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../stories/scott-dialects/spectrum/m1goldba.z80");
+        if !path.exists() {
+            eprintln!("SKIP: no {} (gitignored commercial fixture)", path.display());
+            return None;
+        }
+        Some(std::fs::read(&path).expect("read m1goldba.z80"))
+    }
+
+    /// Room 1 (the same "dense forest, very SPOOKY" the C64 release opens in
+    /// — the eleven titles share the series' geography) shows its own
+    /// picture drawn at the band's own resolution, exactly as
+    /// `mysterious_c64_room1_shows_its_own_picture_drawn_for_the_band` pins
+    /// for the C64 release: the SAME `scott::c64::PICTURE_WIDTH`/`HEIGHT`
+    /// canvas and the SAME "round the band's magnification up, cap at 4x"
+    /// rule (`crate::graphics::scott_c64_scale`), because both platforms
+    /// decode through [`crate::graphics::PictSource::from_scott_family_b`].
+    #[test]
+    fn zx_mysterious_room1_shows_its_own_picture_drawn_for_the_band() {
+        let Some(bytes) = goldba_z80() else { return };
+        let s = ScottSession::new(bytes, None).expect("m1goldba.z80 loads");
+        assert_eq!(s.current_location().expect("loc").number, 1);
+        let model = s.screen();
+        let gw = picture_band(&model).expect("room 1 shows a picture band");
+        // FALLBACK_CHAR_PX is 8x16, so 16 rows x 16px = 256 device pixels,
+        // and 256 / 94 rounds up to a 3x supersample — the same arithmetic
+        // the C64 case above pins, because it is the same free function.
+        assert_eq!(
+            (gw.canvas.width(), gw.canvas.height()),
+            (scott::c64::PICTURE_WIDTH as u32 * 3, scott::c64::PICTURE_HEIGHT as u32 * 3),
+            "drawn at the band's own resolution, not at the 255 x 94 native canvas"
+        );
+        assert_eq!(
+            gw.canvas.width() * scott::c64::PICTURE_HEIGHT as u32,
+            gw.canvas.height() * scott::c64::PICTURE_WIDTH as u32,
+            "the aspect ratio is the native one"
+        );
+        assert!(gw.upscale, "the band renderer stretches it to fill the reserved rows");
+        // Not a flat fill — a decode that wrote nothing still has the right
+        // dimensions, so this is the guard that would have caught one.
+        let distinct: std::collections::HashSet<[u8; 4]> = gw.canvas.pixels().map(|p| p.0).collect();
+        assert!(distinct.len() > 1, "room 1's forest is more than one colour: {distinct:?}");
+    }
+
+    /// The band's canvas follows the player: room 2's picture is NOT room 1's
+    /// (§8.6's pure identity — room *n* shows image *n* − 1), the same
+    /// property `native_room1_canvas_matches_the_decoder_oracle_not_an_off_by_one_room`
+    /// (`crates/app/tests/suites/scott_c64_native_pictures.rs`) pins for the
+    /// C64 release, checked here end to end through a live session instead of
+    /// against the decoder oracle directly.
+    #[test]
+    fn zx_mysterious_picture_band_changes_when_the_room_changes() {
+        let Some(bytes) = goldba_z80() else { return };
+        let mut s = ScottSession::new(bytes, None).expect("m1goldba.z80 loads");
+        let room1_canvas = picture_band(&s.screen()).expect("room 1 has a band").canvas.clone();
+
+        let r = s.submit("north");
+        assert!(!r.quit, "moving must not end the game: {:?}", r.transcript);
+        assert_ne!(s.current_location().expect("loc").number, 1, "actually moved");
+
+        // A dark or picture-less neighbour is still a *different* band (none,
+        // rather than room 1's) — either way the band followed the player
+        // rather than staying pinned to room 1's art.
+        if let Some(gw) = picture_band(&s.screen()) {
+            assert_ne!(gw.canvas, room1_canvas, "a different room's picture must not equal room 1's");
+        }
+    }
+
+    /// `/dump-windows` names the platform, not just the family
+    /// (`ScottFamilyBPlatform::label`, SQ-1480) — the geometry and the
+    /// `source=native <platform> x<scale>` shape are identical to the C64's
+    /// line; only the word between them differs.
+    #[test]
+    fn zx_mysterious_window_dump_names_the_native_zx_source() {
+        let Some(bytes) = goldba_z80() else { return };
+        let s = ScottSession::new(bytes, None).expect("m1goldba.z80 loads");
+        let dump = s.window_dump().join("\n");
+        assert!(
+            dump.contains("source=native ZX Spectrum x3"),
+            "dump should name the native ZX Spectrum source:\n{dump}"
+        );
+    }
+
 
     // ── SQ-1476: the Apple II releases' family-D line drawings ───────────────
 
