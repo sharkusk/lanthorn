@@ -21,7 +21,8 @@
   Hulk*, opened straight off their own release disk images, no extraction
   needed. The Commodore 64 Mysterious Adventures show their pictures, redrawn at
   the size your terminal shows them rather than stretched from the original's
-  tiny canvas
+  tiny canvas, and the Commodore 64 *Hulk* shows its full-colour comic panels —
+  one per room, straight off the release disk, darkness card and all
 
 ### Supported original Infocom disk formats:
 

@@ -309,6 +309,113 @@ pub const DARKNESS_PICTURE: usize = 0;
 /// side.
 pub const INVENTORY_PICTURE: usize = 98;
 
+// ── Picture files (§8.3, §8.6) ────────────────────────────────────────────────
+
+/// What a family-C picture is FOR (§8.6), read off its file name.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum PictureUsage {
+    /// A **room** picture, shown when the player is in the room with that
+    /// index — leading `R`. A leading `S` "carries no usage and defaults to a
+    /// room picture" (§8.6) and reports this too.
+    Room,
+    /// An **object in a room**: overlaid on the room picture when the item
+    /// with that index is in the player's room — leading `B`, trailing `R`.
+    ObjectInRoom,
+    /// An **object in the inventory**: drawn on the inventory screen when the
+    /// item with that index is carried — leading `B`, trailing `I`.
+    ObjectInInventory,
+}
+
+/// One picture file's name, taken apart (§8.3's Commodore 64 rule and §8.6's
+/// usage convention).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct PictureFile {
+    /// What the picture is for.
+    pub usage: PictureUsage,
+    /// The picture index — a room number for [`PictureUsage::Room`], an item
+    /// number otherwise. Three reserved values (§8.6): 0 is the darkness
+    /// picture ([`DARKNESS_PICTURE`]), 98 the inventory backdrop
+    /// ([`INVENTORY_PICTURE`]) and 99 the title picture.
+    pub index: u16,
+}
+
+/// Take a Commodore 64 disk entry's name apart (§8.3), or `None` if it is not
+/// a picture file.
+///
+/// §8.3's rule: "a file is a picture if its name is at least four characters,
+/// its first character is `R`, `B` or `S`, and its second through fourth are
+/// digits; the picture index is the three-digit field at positions 3-5". So
+/// `R01000` is room picture 0, `R01099` the title picture, `B01013R` object 13
+/// drawn in a room and `B01013I` object 13 drawn in the inventory.
+///
+/// **The three-digit field starts at position 3 and so overlaps the digits the
+/// predicate tests**: positions 1-3 must be digits and positions 3-5 are the
+/// index, which is why `R01000`'s index is 0 and not 10. The `01` in the middle
+/// is the Adventure International series number, and this rule reads it as
+/// part of neither field.
+///
+/// Case-insensitive on the letters, because a Commodore directory stores names
+/// in PETSCII and a host may have upper- or lower-cased them on the way here.
+///
+/// This is deliberately **not** the MS-DOS rule (§8.5 uses two-digit room
+/// indices, and §10.7 found a release using three-digit names with no `01`
+/// prefix at all) — this crate reads the Commodore 64 releases.
+pub fn parse_picture_file_name(name: &str) -> Option<PictureFile> {
+    let b = name.as_bytes();
+    if b.len() < 6 {
+        return None;
+    }
+    if !b[1..4].iter().all(|c| c.is_ascii_digit()) {
+        return None;
+    }
+    let digits = std::str::from_utf8(&b[3..6]).ok()?;
+    if !digits.bytes().all(|c| c.is_ascii_digit()) {
+        return None;
+    }
+    let index: u16 = digits.parse().ok()?;
+    let usage = match b[0].to_ascii_uppercase() {
+        b'R' | b'S' => PictureUsage::Room,
+        b'B' => match b.last()?.to_ascii_uppercase() {
+            b'R' => PictureUsage::ObjectInRoom,
+            b'I' => PictureUsage::ObjectInInventory,
+            _ => return None,
+        },
+        _ => return None,
+    };
+    Some(PictureFile { usage, index })
+}
+
+/// Is `name` a family-C picture file (§8.3)? [`parse_picture_file_name`]
+/// without the parts, for a host walking a disk directory to count or collect
+/// them.
+pub fn is_picture_file_name(name: &str) -> bool {
+    parse_picture_file_name(name).is_some()
+}
+
+/// The file name a **room** picture with index `n` is stored under on `platform`
+/// (§8.3, §8.6), or `None` when the platform does not name its pictures at all.
+///
+/// The Commodore 64 answer is `R01nnn` — `R` for the room usage, `01` for the
+/// Adventure International series number the *Hulk* disk uses, and `n` in three
+/// digits. It is the inverse of [`parse_picture_file_name`] for the room usage,
+/// and the lookup a host needs once [`SagaUs::room_picture`] has given it a
+/// picture index.
+///
+/// `None` for the **Atari 8-bit**, which has no filesystem walk: §8.3 puts its
+/// pictures at hard-coded byte offsets into the companion picture side, and
+/// §12.10 says those per-title lists "are not recoverable from the database".
+/// `None` for the **Apple II**, whose pictures are family D (§8.4) under their
+/// own names. Neither is a defect in this function; both are the honest answer
+/// that a name is not how you find that platform's artwork.
+///
+/// `None` for an index above 999, which no three-digit field can spell.
+pub fn picture_file_name(platform: SagaPlatform, n: usize) -> Option<String> {
+    match platform {
+        SagaPlatform::Commodore64 => (n <= 999).then(|| format!("R01{n:03}")),
+        SagaPlatform::Atari8Bit | SagaPlatform::AppleII => None,
+    }
+}
+
 // ── Detection (§12.2) ─────────────────────────────────────────────────────────
 
 /// A refusal for bytes that ARE this format but did not check out (§12.14).
@@ -1357,5 +1464,97 @@ mod tests {
         // platform is not a release that exists.
         let unknown = SagaUs { version: 125, adventure: 13, platform: SagaPlatform::AppleII };
         assert_eq!(unknown.display_title(), None);
+    }
+
+    // §8.3's Commodore 64 picture-file rule and §8.6's usage convention, on
+    // the names `QUESTPR1.D64` actually carries (§10.7, §12.10).
+    #[test]
+    fn picture_file_names_take_apart_per_8_3() {
+        use PictureUsage::*;
+        let cases = [
+            ("R01000", Room, 0),  // the darkness picture
+            ("R01001", Room, 1),
+            ("R01012", Room, 12),
+            ("R01098", Room, 98), // the inventory backdrop
+            ("R01099", Room, 99), // the title picture
+            ("B01013R", ObjectInRoom, 13),
+            ("B01250R", ObjectInRoom, 250),
+            ("B01001I", ObjectInInventory, 1),
+            ("B01051I", ObjectInInventory, 51),
+            ("S01007", Room, 7), // §8.6: a leading S defaults to a room
+        ];
+        for (name, usage, index) in cases {
+            assert_eq!(parse_picture_file_name(name), Some(PictureFile { usage, index }), "{name}");
+            assert!(is_picture_file_name(name), "{name}");
+        }
+        // The three-digit field starts at position 3, so the `01` series
+        // number is part of neither field: R01000 is picture 0, not 10.
+        assert_eq!(parse_picture_file_name("R01000").unwrap().index, 0);
+        // A Commodore directory holds PETSCII; a host may have folded case.
+        assert_eq!(parse_picture_file_name("r01001"), parse_picture_file_name("R01001"));
+        assert_eq!(parse_picture_file_name("b01013r"), parse_picture_file_name("B01013R"));
+    }
+
+    #[test]
+    fn non_picture_names_are_refused() {
+        for name in [
+            "SHULK.DB", // the database itself
+            "SAGA.TED",
+            "SAGA.C64",
+            "THE HULK", // the BASIC loader
+            "R01",      // too short for a three-digit field at 3-5
+            "R0100",    // still too short
+            "RABC000",  // positions 1-3 are not digits
+            "Q01000",   // not R, B or S
+            "B01013X",  // a B name with neither trailing R nor I
+            "B01013",   // a B name with no usage letter at all
+            "",
+        ] {
+            assert_eq!(parse_picture_file_name(name), None, "{name:?}");
+            assert!(!is_picture_file_name(name), "{name:?}");
+        }
+    }
+
+    #[test]
+    fn room_picture_file_name_is_the_inverse_on_the_commodore_64() {
+        assert_eq!(picture_file_name(SagaPlatform::Commodore64, 0).as_deref(), Some("R01000"));
+        assert_eq!(picture_file_name(SagaPlatform::Commodore64, 99).as_deref(), Some("R01099"));
+        for n in [0usize, 1, 12, 98, 99, 250, 999] {
+            let name = picture_file_name(SagaPlatform::Commodore64, n).expect("names it");
+            assert_eq!(
+                parse_picture_file_name(&name),
+                Some(PictureFile { usage: PictureUsage::Room, index: n as u16 }),
+                "round trip for {n}"
+            );
+        }
+        assert_eq!(picture_file_name(SagaPlatform::Commodore64, 1000), None, "no four-digit field");
+        // Neither of the other two platforms finds its pictures by name: the
+        // Atari's are at hard-coded offsets (§8.3) and the Apple II's are
+        // family D (§8.4).
+        assert_eq!(picture_file_name(SagaPlatform::Atari8Bit, 1), None);
+        assert_eq!(picture_file_name(SagaPlatform::AppleII, 1), None);
+    }
+
+    // §12.11's five remapped pairs, and the platforms they apply on.
+    #[test]
+    fn the_hulk_room_picture_remap() {
+        let hulk = SagaUs { version: 127, adventure: 1, platform: SagaPlatform::Commodore64 };
+        for (room, want) in
+            [(5, 3), (6, 3), (7, 4), (8, 4), (10, 9), (11, 9), (13, 2), (14, 2), (17, 16), (18, 16)]
+        {
+            assert_eq!(hulk.room_picture(room), want, "room {room}");
+        }
+        for room in [0usize, 1, 2, 3, 4, 9, 12, 15, 16, 19, 20] {
+            assert_eq!(hulk.room_picture(room), room, "room {room} is its own picture");
+        }
+        assert!(hulk.remaps_hulk_rooms());
+        let atari = SagaUs { platform: SagaPlatform::Atari8Bit, ..hulk };
+        assert_eq!(atari.room_picture(5), 3, "the Atari release remaps too");
+        // Not on the Apple II, and not for any other title.
+        let apple = SagaUs { platform: SagaPlatform::AppleII, ..hulk };
+        assert_eq!(apple.room_picture(5), 5);
+        let adventureland =
+            SagaUs { version: 416, adventure: 1, platform: SagaPlatform::Commodore64 };
+        assert_eq!(adventureland.room_picture(5), 5);
     }
 }

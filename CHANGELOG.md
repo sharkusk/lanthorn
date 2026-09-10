@@ -79,11 +79,28 @@ Absolute URLs or no link.
   follows the line it belongs to. Every filled region still ends up exactly
   where the Commodore 64 put it, checked picture by picture across all eleven
   games. (SQ-1467)
+- **The Hulk and the other American S.A.G.A. disk editions show their
+  pictures.** Every room of the Commodore 64 *Questprobe featuring The Hulk*
+  is a full-colour comic panel, kept as seventy separate files on the release
+  disk beside the game itself, and lanthorn now draws them: Bruce Banner tied
+  hand and foot to a chair is there the moment the game opens, the picture
+  changes as you move, and in the dark the game's own "IT'S TOO DARK!" card
+  appears instead of an empty frame — which is what the Commodore 64 did, and
+  not what any other Scott Adams game does. They appear above the room panel
+  in the same band the Blorb and *Mysterious Adventures* pictures already use,
+  through the same kitty/sixel/half-block drawing. The Atari 8-bit editions
+  keep their artwork on the second disk of the pair, which lanthorn does not
+  pair up yet, so those still open as text. (SQ-1475)
 - **The picker now tells you which Scott Adams games have pictures, and what
   kind.** A story's info panel names its artwork — the Commodore 64
   *Mysterious Adventures*' own line-drawn pictures, a Blorb's pre-rendered
-  ones, or a S.A.G.A. disk game whose pictures lanthorn can't draw yet — so
-  you know what you're getting before you press Play.
+  ones, or an American S.A.G.A. release's own picture files, counted — so you
+  know what you're getting before you press Play. A S.A.G.A. game opened from
+  something that is not its release disk says so, rather than looking like a
+  game with no pictures at all. The story list's TYPE column names a Scott
+  game's disk too, so the same game pressed for the Commodore 64, the Atari
+  and the Apple II is three distinguishable rows instead of three that all
+  read "Scott".
 - **And you can choose how sharp those Commodore 64 pictures are drawn.**
   Launch options for one of the *Mysterious Adventures* games now offers a
   **Picture resolution** row: hi-res (the default, as fine as your terminal's

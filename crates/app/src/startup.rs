@@ -913,13 +913,18 @@ pub(crate) fn boot_story(
     // `disk_entry` is which story on the image the browser row stood for
     // (SQ-0859) — `None` for every loose file and every single-story floppy, and
     // then this is byte-for-byte the load it always was.
-    let (loaded, disk_image) = match hints::load_mounted_story_from(&story_path, disk_entry) {
+    //
+    // `_full` rather than `_from` because a US S.A.G.A. release's pictures are
+    // separate files on the same floppy (SQ-1475) and the mount does not
+    // outlive this call: they come out with the story or not at all.
+    let mounted = match hints::load_mounted_story_full(&story_path, disk_entry) {
         Ok(l) => l,
         Err(e) => {
             eprintln!("lanthorn: cannot read '{}': {}", story_path.display(), e);
             std::process::exit(1);
         }
     };
+    let hints::MountedStory { story: loaded, disk_image, saga_pictures } = mounted;
     // Raw executable bytes (for the IFID / map-dir key), independent of engine.
     let story_bytes = loaded.bytes().to_vec();
     // Read off `loaded` before it is consumed into a session below: which bundled
@@ -1656,6 +1661,9 @@ pub(crate) fn boot_story(
             cfg.scott_picture_resolution_override
                 .or_else(|| app::styles::read_per_game_scott_picture_resolution(&game_dir))
                 .unwrap_or_default(),
+            // SQ-1475: the family-C picture files the mount above read off the
+            // same release disk, empty for everything else.
+            saga_pictures,
         ) {
             Ok(s) => Box::new(s),
             Err(e) => {

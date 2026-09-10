@@ -1353,8 +1353,84 @@ pub fn load_mounted_story_from(
     path: &Path,
     disk_entry: Option<&str>,
 ) -> io::Result<(LoadedStory, Option<DiskImage>)> {
+    let loaded = load_mounted_story_full(path, disk_entry)?;
+    Ok((loaded.story, loaded.disk_image))
+}
+
+/// A story taken off a container, with everything else that container
+/// supplied for it.
+///
+/// [`load_mounted_story_from`] is this minus the pictures, and stays the door
+/// for every caller that only wants the game.
+pub struct MountedStory {
+    /// The story image itself, classified.
+    pub story: LoadedStory,
+    /// Which release disk image it was mounted out of, if it was one rather
+    /// than a plain file (SQ-0737, SQ-0837).
+    pub disk_image: Option<DiskImage>,
+    /// The **family-C picture files** on the same container, `(name, record)`
+    /// in the container's own order (spec §8.3, SQ-1475).
+    ///
+    /// A US S.A.G.A. release keeps its artwork in separate files beside the
+    /// database — §12.10, "pictures live in separate files on the disk, one
+    /// per picture, identified by filename" — so they have to be read while
+    /// the mount is still open and handed to the session, which is what this
+    /// field is. Empty for every other story, and for a S.A.G.A. database
+    /// opened from a bare extracted `db/*.bin` (there is no container to hold
+    /// them) or from an Atari side A (§8.3 puts the Atari's pictures on the
+    /// companion side at hard-coded offsets, and the disk-set seam does not
+    /// pair the two sides).
+    pub saga_pictures: Vec<(String, Vec<u8>)>,
+}
+
+/// [`load_mounted_story_from`], plus the container's own family-C picture
+/// files when the story turns out to be a US S.A.G.A. release (SQ-1475).
+///
+/// The second walk of the image is deliberate and deliberately narrow: it runs
+/// only when the story bytes ARE a S.A.G.A. database and they came off a
+/// container, so no Z-machine or Glulx launch pays for it, and the cost when
+/// it does run is one re-read of a 175 KB floppy. The alternative — widening
+/// [`read_story_file`]'s answer, which has five return points across three
+/// container kinds — would have every caller carry a field almost none of them
+/// can use.
+pub fn load_mounted_story_full(
+    path: &Path,
+    disk_entry: Option<&str>,
+) -> io::Result<MountedStory> {
     let (bytes, disk_image) = read_story_file(path, disk_entry)?;
-    Ok((extract_story(bytes)?, disk_image))
+    let saga_pictures = match disk_image {
+        Some(_) if scott::detect_saga_us(&bytes).is_some() => saga_picture_files(path),
+        _ => Vec::new(),
+    };
+    Ok(MountedStory { story: extract_story(bytes)?, disk_image, saga_pictures })
+}
+
+/// Every family-C picture file on the container at `path` (spec §8.3's naming
+/// rule, `scott::is_picture_file_name`), `(name, record)`.
+///
+/// Empty for anything that is not a mountable disk image, and for one that
+/// holds no such names — which is the honest answer for an Atari `.atr`,
+/// whose pictures are on the companion side and are reached by byte offset
+/// rather than through the disk's own catalogue.
+///
+/// `pub` because `@restart` needs it (`crate::reset`): a restart rebuilds the
+/// session from the story bytes it kept, and those bytes are not the
+/// container — so the pictures are re-read off the same path the launch
+/// mounted, rather than carried in app state for the life of the session.
+pub fn saga_picture_files(path: &Path) -> Vec<(String, Vec<u8>)> {
+    let Ok(raw) = std::fs::read(path) else {
+        return Vec::new();
+    };
+    if blorb::medium::DiskImage::detect(&raw).is_none() {
+        return Vec::new();
+    }
+    let Ok(disk) = mount_disk(path, raw) else {
+        return Vec::new();
+    };
+    disk.contents()
+        .into_iter()
+        .filter(|(name, _)| scott::is_picture_file_name(name))
+        .collect()
 }
 
 /// Load story bytes from `path`, restricted to **Z-code** images.

@@ -309,6 +309,24 @@ pub struct PictSource {
     ///
     /// `None` for every other source.
     scott_c64: Option<(Vec<scott::c64::PictureList>, u32)>,
+    /// A US S.A.G.A. release's own family-C strip bitmaps (spec §8.3,
+    /// SQ-1475) as the RAW RECORDS they are stored as, keyed by the file name
+    /// the release disk holds them under, with the platform whose colour table
+    /// reads them.
+    ///
+    /// Records rather than pictures, for the same reason `scott_c64` holds
+    /// display lists: the *Hulk*'s seventy records are about 90 KB compressed
+    /// and 3 MB of indexed pixels decoded, and a player may never see most of
+    /// them. [`Self::get`] decodes one the first time it is drawn and the
+    /// cache beside it keeps the result.
+    ///
+    /// Keyed by NAME rather than by picture number because the name is what
+    /// the disk supplies and what [`scott::picture_file_name`] answers; the
+    /// usage letter is part of it, so a room picture and an object overlay
+    /// with the same index cannot collide.
+    ///
+    /// `None` for every other source.
+    scott_saga: Option<(HashMap<String, Vec<u8>>, scott::SagaPlatform)>,
     /// Does this source's art need [`blend_half_width_columns`] on the way out —
     /// i.e. is it a SIXTEEN-colour 640-wide rendition, whose pixels are half as
     /// wide as the unit screen's and whose dithers the card fused (SQ-0797)?
@@ -351,6 +369,7 @@ impl PictSource {
             index_planes: HashMap::new(),
             hw_palette: None,
             scott_c64: None,
+            scott_saga: None,
             blend_columns: false,
             screen_palette: false,
         }
@@ -434,6 +453,51 @@ impl PictSource {
     /// from (SQ-1463).
     pub fn is_scott_c64(&self) -> bool {
         self.scott_c64.is_some()
+    }
+
+    /// A source backed by a US S.A.G.A. release's own **family-C** strip
+    /// bitmaps (spec §8.3, SQ-1475), taken off the same disk image the
+    /// database was mounted from.
+    ///
+    /// `files` is `(name, record)` for every picture file the container holds
+    /// — `crate::hints`' disk walk collects them with
+    /// [`scott::is_picture_file_name`] at open time, because the mount does
+    /// not outlive it. [`Self::get`] takes a **picture number** and asks
+    /// [`scott::picture_file_name`] for the room-usage file name, so a caller
+    /// indexes it exactly as it indexes a Blorb `Pict` resource or the
+    /// family-B lists.
+    ///
+    /// `platform` is which colour table reads a record's four colour bytes —
+    /// §8.3 gives the Commodore 64 a bare thirteen-colour lookup and the Atari
+    /// a 256-entry hardware palette. Nothing about geometry varies by
+    /// platform.
+    ///
+    /// No band-height argument and no resolution choice, unlike
+    /// [`Self::from_scott_c64`]: these are BITMAPS with a fixed
+    /// 280x160 canvas, so there is no supersample to pick — the renderer's
+    /// aspect-preserving fit into the picture band is the whole of the
+    /// scaling, the same way it is for a Blorb's pre-rendered pictures.
+    pub fn from_scott_saga(
+        files: Vec<(String, Vec<u8>)>,
+        platform: scott::SagaPlatform,
+    ) -> PictSource {
+        let map: HashMap<String, Vec<u8>> = files.into_iter().collect();
+        PictSource { scott_saga: Some((map, platform)), ..PictSource::new(None) }
+    }
+
+    /// Which platform's family-C artwork this source holds, or `None` when it
+    /// holds none — `/dump-windows` names it so a frame says where a room's
+    /// picture came from (SQ-1475).
+    pub fn scott_saga_platform(&self) -> Option<scott::SagaPlatform> {
+        self.scott_saga.as_ref().map(|(_, platform)| *platform)
+    }
+
+    /// How many family-C picture records this source holds. `None` when it is
+    /// not a family-C source at all; `Some(0)` cannot happen, since
+    /// [`ScottSession`](crate::scott_session::ScottSession) only builds one
+    /// from a non-empty walk.
+    pub fn scott_saga_count(&self) -> Option<usize> {
+        self.scott_saga.as_ref().map(|(files, _)| files.len())
     }
 
     /// Resolve the picture source for `story_path` (SQ-0734's tiers 1 and 2).
@@ -998,6 +1062,21 @@ impl PictSource {
                 None if self.native.is_some() => self
                     .index_plane(resnum)
                     .and_then(|pic| native_image(&pic, self.hw_palette.as_ref(), self.blend_columns)),
+                // SQ-1475: a family-C picture number names a FILE — §8.3's
+                // `R01nnn` for the room usage — and the release disk either
+                // holds it or does not. Unlike family B there is no offset to
+                // apply: §12.10's "a room's picture index IS the room number"
+                // has already been resolved (and the Hulk's remap applied) by
+                // `scott::Vm::current_picture`, so `resnum` is the index the
+                // file name spells. A record the platform's decoder refuses
+                // (§11) is remembered as `None` rather than retried.
+                None if self.scott_saga.is_some() => {
+                    self.scott_saga.as_ref().and_then(|(files, platform)| {
+                        let name = scott::picture_file_name(*platform, resnum as usize)?;
+                        let record = files.get(&name)?;
+                        scott_saga_image(record, *platform)
+                    })
+                }
                 // SQ-1463: room n's picture is `pictures[n - 1]` (the decoder's
                 // own identity mapping, §8.6) — `resnum` here is the picture
                 // number, "by convention, picture number == room number", so
@@ -2165,6 +2244,34 @@ fn scott_c64_image(list: &scott::c64::PictureList, scale: u32) -> DynamicImage {
         }
     }
     DynamicImage::ImageRgba8(buf)
+}
+
+/// Decode one US S.A.G.A. **family-C** record (spec §8.3) to the same
+/// `DynamicImage` shape every other picture source hands `WinNode::Graphics`
+/// (SQ-1475). `None` when the record is not a family-C picture at all
+/// (§11's named refusals — a truncated record, a placement covering no
+/// region, a platform that uses another family).
+///
+/// **No scale argument, and no supersample.** Family B is vectors and nothing
+/// in the data fixes a size, which is why [`scott_c64_image`] takes one; a
+/// family-C record IS a 280x160 bitmap, so there is nothing to draw more
+/// finely and the renderer's aspect-preserving fit into the picture band is
+/// the whole of the scaling — exactly as for a Blorb's pre-rendered art.
+///
+/// Fully opaque: §8.3 gives every pixel one of four values and value 0 is
+/// black, so there is no transparent index. That is right for a ROOM picture,
+/// which is what a picture number resolves to; §12.11's object overlays would
+/// need the composite this does not do (see the module's own note).
+fn scott_saga_image(record: &[u8], platform: scott::SagaPlatform) -> Option<DynamicImage> {
+    let pic = scott::decode_family_c(record, platform).ok()?;
+    let mut buf = RgbaImage::new(pic.width as u32, pic.height as u32);
+    for y in 0..pic.height {
+        for x in 0..pic.width {
+            let (r, g, b) = pic.rgb(x, y).unwrap_or((0, 0, 0));
+            buf.put_pixel(x as u32, y as u32, Rgba([r, g, b, 255]));
+        }
+    }
+    Some(DynamicImage::ImageRgba8(buf))
 }
 
 /// Fuse a 640-wide rendition's column dither, because its pixels are half as wide

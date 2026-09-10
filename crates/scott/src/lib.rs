@@ -210,6 +210,7 @@ mod z80;
 pub mod c64;
 pub mod database;
 pub mod decompile;
+pub mod saga_pictures;
 pub mod saga_us;
 pub mod ti994a;
 pub use c64::{
@@ -221,9 +222,11 @@ pub use database::{Action, Condition, Database, Item, Room};
 pub use decompile::{decompile_action, list_items, list_rooms, list_vocab};
 pub use loader::{detect_dialect, looks_like_scott, looks_like_scott_bytes, Dialect, LoadError};
 pub use options::{Options, Presentation, Wording};
+pub use saga_pictures::{decode_family_c, PictureError};
 pub use saga_us::{
-    detect_saga_us, looks_like_saga_us, parse_saga_us, SagaPlatform, SagaUs, DARKNESS_PICTURE,
-    INVENTORY_PICTURE,
+    detect_saga_us, is_picture_file_name, looks_like_saga_us, parse_picture_file_name,
+    parse_saga_us, picture_file_name, PictureFile, PictureUsage, SagaPlatform, SagaUs,
+    DARKNESS_PICTURE, INVENTORY_PICTURE,
 };
 pub use scottfree_save::looks_like_scottfree_save;
 pub use ti994a::{looks_like_ti994a, parse_ti994a, Ti99Record, Ti99Script};

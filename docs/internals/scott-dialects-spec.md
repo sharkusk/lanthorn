@@ -4650,14 +4650,34 @@ the baseline, §3.2 endianness, §3.3 the header, §3.4 the two table shapes, §
 strings and the derived message count, §3.6 the two dictionaries, §3.7 the
 action encoding), the Commodore 64 slice of §4 (§4.2's cell reading, §4.3's
 locating, §4.4's encodings), §5.3's repairs for that family, §6, §7.2's
-uncrunched disk-image path, §8.2's Family B pictures, §9.1 and §9.2 as they
+uncrunched disk-image path, §8.2's Family B pictures, **§8.3's Family C pictures**
+(`crates/scott/src/saga_pictures.rs`, SQ-1475 — the record decoder, the
+Commodore 64 colour table in full and the part of the Atari table §8.3 actually
+states) with §8.6's Commodore 64 naming and usage rules
+(`crates/scott/src/saga_us.rs`), §9.1 and §9.2 as they
 apply, §11's TI-99/4A refusals, and **§12 in full** (§12.1-§12.9 as the format,
 including §12.8's command codes 89 and 90 and their operand counts, §12.11's
-database-borne runtime facts, §12.14's refusals; §12.10 says the database carries
-no picture data, so there is none to read). **Not
-implemented:** the rest of §4-§8, §9.3, and §11 apart from the above. The
+database-borne runtime facts — the *Hulk*'s room-picture remap and the darkness
+image both reached through `Vm::current_picture` — and §12.14's refusals; §12.10
+says the database carries no picture data, so there is none to read). **Not
+implemented:** the rest of §4-§8 (§8.1's Family A, §8.4's Family D and §8.5's
+Family E; §8.3's no-literal compression variant, which only *The Count* and
+*Voodoo Castle* use and whose records are on media nothing can address yet),
+§9.3, and §11 apart from the above. The
 S.A.G.A. **container** step is the host's — `scott` reads no disk images — so
-§12.3's three array offsets live in the crate and the mount does not.
+§12.3's three array offsets live in the crate and the mount does not; the same
+division puts §8.3's Commodore 64 filesystem walk in the host and its naming
+rule in the crate.
+
+**§8.3's Atari picture lists are the one thing a host still cannot reach.** §8.3
+requires a per-title list of (usage, index, offset) triples into the companion
+picture side, and §12.10 confirms those "are not recoverable from the database".
+Nothing in this document supplies them, so lanthorn draws the Commodore 64
+*Hulk*'s pictures and reports an Atari release's as "not on this file" rather
+than guessing. A probe of the seven Atari side Bs (SQ-1475) finds *Voodoo
+Castle*, *The Count* and *Claymorgue Castle* carrying records at the placements
+the Commodore 64 records use, and the other four using different ones, so the
+tabulation really is per-title.
 
 The TI-99/4A implementer raised three questions about §3 while building that
 loader, each found by measuring the §10.2 specimens against the §10.1 oracle.
@@ -4850,6 +4870,57 @@ fourth is a code change.
     signals that catch it are §12.7's pointer tables failing to resolve (its
     first room pointer gives a base of `$82E5` where every sound Atari release
     gives `$3031`) and the two copies of the item-location table disagreeing.
+
+**And the family-C implementer raised three, about §8.3** (SQ-1475), all found
+on `QUESTPR1.D64` against the MS-DOS twin of the same seventy pictures. The
+first two are corrections the normative section still needs; the third is a gap
+this document names but does not fill. **None of them is resolved in §8.3
+above** — they are recorded here so the next reader of that section reads them
+together with it.
+
+12. **§8.3's height and width limits are INCLUSIVE, and the canvas is 160 rows,
+    not 158.** "When it passes the height" reads naturally as an exclusive
+    limit; every specimen says otherwise. A column takes
+    `(bottom − top) / 2 + 1` byte pairs and its last pair paints rows `bottom`
+    and `bottom + 1`, so a full-canvas *Hulk* record declaring left 0, top 0,
+    right 280 and bottom 158 holds exactly 36 columns x 80 pairs = 5,760 bytes
+    — 36 columns because `0, 8, … 280` is inclusive too. Read either limit
+    exclusively and each column is one pair short of its data, so every column
+    starts two rows lower than the last. **That failure does not look like a
+    failure**: the title screen still decodes to a coherent picture of the Hulk
+    with a legible `QUESTPROBE` wordmark, sheared by two rows per eight pixels,
+    with `HULK` sliced in half by the wrap — which is why the byte arithmetic
+    alone could not settle it and §10.1's oracle had to. *The Hulk* shipped the
+    same seventy pictures on MS-DOS as family E, whose row-major two-bank
+    interleave (§8.5) shares no arithmetic with family C at all; decoding
+    `R0199.PAK` beside `R01099` shows one composition and one wordmark. The
+    corrected canvas, 280 x 160, is also what §8.4 gives for the same artwork
+    on the Apple II.
+13. **§8.3's Commodore 64 colour table is missing two values, both used by this
+    release.** `R01012` stores **153** for pixel value 2 and `B01250R` stores
+    **232** for pixel value 3, and neither appears in the table's thirteen
+    rows. §8.3's own instruction — surface an unrecognised value rather than
+    invent a colour — is what an implementer should do with them, and lanthorn
+    does (they draw as black and travel with the picture as
+    `Picture::unrecognised_colours`), but two of a seventy-picture set needing
+    it suggests the table is short rather than that the records are odd. Two
+    smaller notes on the same section: the name predicate says "at least four
+    characters" while the index it defines is the three-digit field at
+    positions 3-5, which needs **six**; and the "+3" left-edge rule really does
+    produce a negative column on two of the *Hulk*'s records (`R01000` and
+    `R01020` both store 2), which is correct — every pixel in that off-canvas
+    column is value 0.
+14. **The Atari picture lists are still the blocking gap, and §12.10 says so.**
+    §8.3 requires a per-title list of (usage, index, offset) triples into the
+    companion picture side and this document supplies none; §12.10 confirms they
+    are "not recoverable from the database". A probe of the seven Atari side Bs
+    finds *Voodoo Castle*, *The Count* and *Claymorgue Castle* carrying records
+    at the placements the Commodore 64 records use — `03 00 26 9E` and
+    `02 00 27 7E` in the header — and *Adventureland*, *Pirate Adventure*,
+    *Mission Impossible* and *Strange Odyssey* carrying none at those
+    placements, so the lists are genuinely per-title and cannot be recovered by
+    one scan. Until they exist, an Atari release's pictures are unreachable and
+    an implementer should say so rather than draw an empty frame.
 
 The in-memory model this document's dialects decode *to*, in that crate, is a
 database of rooms (six exits and a description, plus a flag for the leading-`*`

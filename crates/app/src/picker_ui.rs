@@ -4284,7 +4284,35 @@ fn scott_pictures_label(sp: app::picker::ScottPictures) -> String {
             format!("native C64 (vector, {pictures} rooms)")
         }
         app::picker::ScottPictures::Blorb => "Blorb".to_string(),
-        app::picker::ScottPictures::SagaUsUndrawn => "S.A.G.A. (not yet drawn)".to_string(),
+        // SQ-1475: family C is drawn now, so the row names the release's own
+        // artwork and how much of it the container holds.
+        app::picker::ScottPictures::SagaUsStrips { platform, pictures } => {
+            format!("S.A.G.A. ({} strips, {pictures} pictures)", saga_platform_word(platform))
+        }
+        // A release WITH artwork, opened from a file that is not where the
+        // artwork lives — an extracted database, or an Atari side A without
+        // its companion picture side. Deliberately not "none": a text-only
+        // game shows no row here at all.
+        app::picker::ScottPictures::SagaUsNoPictures { .. } => {
+            "S.A.G.A. (not on this file)".to_string()
+        }
+    }
+}
+
+/// The short machine word the "Pictures:" row uses for a S.A.G.A. platform.
+///
+/// `scott::SagaPlatform::label` is the long form ("Commodore 64", "Atari
+/// 8-bit") and reads as a whole clause inside a parenthetical that already
+/// carries two other facts; this is the panel's own voice, the way
+/// [`scott_pictures_label`] is.
+fn saga_platform_word(platform: scott::SagaPlatform) -> &'static str {
+    match platform {
+        scott::SagaPlatform::Commodore64 => "C64",
+        scott::SagaPlatform::Atari8Bit => "Atari",
+        scott::SagaPlatform::AppleII => "Apple II",
+        // `SagaPlatform` is `#[non_exhaustive]`: a platform added to `scott`
+        // reads as its own long label here rather than failing the build.
+        other => other.label(),
     }
 }
 
@@ -4560,6 +4588,37 @@ mod tests {
                 super::interp_label(&meta(Some(image)), false).len() <= super::INTERP_COL_W as usize
             );
         }
+    }
+
+    /// SQ-1475: a Scott row names its container the same way a Z-code row
+    /// does. One shelf can hold the same US S.A.G.A. game pressed for three
+    /// machines — `Adventureland` is a Commodore disk, an Atari pair and an
+    /// Apple II pair — and until this change every one of them read "Scott"
+    /// with nothing to tell them apart.
+    ///
+    /// **"Scott (Atari DOS)" is 17 columns and `INTERP_COL_W` is 14**, so the
+    /// column truncates it (to "Scott (Atari …"). That is deliberate and
+    /// measured: the alternative is three columns off every title on every
+    /// row, forever, to spell out one container name in full. The label is
+    /// pinned here in its untruncated form because it is the label that is
+    /// under test; the truncation is `truncate_to_width`'s business and is
+    /// tested there.
+    #[test]
+    fn interp_label_names_a_scott_rows_container() {
+        use app::hints::DiskImage;
+        use app::picker::{Engine, Features, StoryMeta};
+        let meta = |disk_image: Option<DiskImage>| StoryMeta {
+            size_bytes: 0, story_bytes: 0, modified: None, engine: Engine::Scott, format: String::new(),
+            version: None, serial: None, release: None, ifid: String::new(),
+            features: Features::default(), self_blorb: None, scott_pictures: None, disk_image, disk_entry: None,
+            author: None, year: None,
+            genre: None, language: None, description: None, ifdb_link: None, ifdb_rating: None, ifdb_rating_count: None, fetch_not_found: false,
+        };
+        assert_eq!(super::interp_label(&meta(Some(DiskImage::CommodoreD64)), false), "Scott (CBM)");
+        assert_eq!(super::interp_label(&meta(Some(DiskImage::AtariDos2)), false), "Scott (Atari DOS)");
+        // Unchanged for everything that is not on a disk.
+        assert_eq!(super::interp_label(&meta(None), false), "Scott");
+        assert_eq!(super::interp_label(&meta(None), true), "Scott (blorb)");
     }
 
     /// End to end on real media (skips vacuously — `stories/` is gitignored):
@@ -6076,7 +6135,66 @@ mod tests {
         let st = super::open_launch_options(&text_only, &cfg, &dir);
         assert!(!st.scott_native_pictures, "a text-only story has no row at all");
 
+        // SQ-1475: family C is bitmaps, so there is no second resolution to
+        // draw it at and the row stays hidden for it too.
+        let saga = scott_entry_with_pictures(
+            &story,
+            Some(app::picker::ScottPictures::SagaUsStrips {
+                platform: scott::SagaPlatform::Commodore64,
+                pictures: 70,
+            }),
+        );
+        let st = super::open_launch_options(&saga, &cfg, &dir);
+        assert!(!st.scott_native_pictures, "family C is bitmaps — one resolution only");
+
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// SQ-1475: the info panel's "Pictures:" wording for every kind a Scott
+    /// entry can be. The two S.A.G.A. rows are the ones this change added, and
+    /// the distinction between them is the point: a release whose artwork is
+    /// on THIS file, and one whose artwork is somewhere else. Neither is the
+    /// `None` a text-only game reports, which prints no row at all.
+    #[test]
+    fn scott_pictures_label_names_every_kind() {
+        use app::picker::ScottPictures;
+        assert_eq!(
+            super::scott_pictures_label(ScottPictures::NativeC64 { pictures: 11 }),
+            "native C64 (vector, 11 rooms)"
+        );
+        assert_eq!(super::scott_pictures_label(ScottPictures::Blorb), "Blorb");
+        assert_eq!(
+            super::scott_pictures_label(ScottPictures::SagaUsStrips {
+                platform: scott::SagaPlatform::Commodore64,
+                pictures: 70,
+            }),
+            "S.A.G.A. (C64 strips, 70 pictures)"
+        );
+        assert_eq!(
+            super::scott_pictures_label(ScottPictures::SagaUsStrips {
+                platform: scott::SagaPlatform::Atari8Bit,
+                pictures: 42,
+            }),
+            "S.A.G.A. (Atari strips, 42 pictures)"
+        );
+        assert_eq!(
+            super::scott_pictures_label(ScottPictures::SagaUsStrips {
+                platform: scott::SagaPlatform::AppleII,
+                pictures: 5,
+            }),
+            "S.A.G.A. (Apple II strips, 5 pictures)"
+        );
+        for platform in [
+            scott::SagaPlatform::Commodore64,
+            scott::SagaPlatform::Atari8Bit,
+            scott::SagaPlatform::AppleII,
+        ] {
+            assert_eq!(
+                super::scott_pictures_label(ScottPictures::SagaUsNoPictures { platform }),
+                "S.A.G.A. (not on this file)",
+                "the platform does not change where the pictures aren't"
+            );
+        }
     }
 
     /// SQ-0771: the size on the filename line measures the file on disk, which

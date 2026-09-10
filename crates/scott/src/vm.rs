@@ -396,14 +396,44 @@ impl Vm {
     pub fn take_save_request(&mut self) -> bool {
         std::mem::take(&mut self.save_requested)
     }
-    /// The picture the host should display: an override set this turn by
-    /// opcode 89 (reference-format databases) or opcode 90 (US S.A.G.A.
-    /// databases, `Database::saga_us.is_some()` — spec §12.8/§12.11), else
-    /// the current room's own picture (by convention, picture number == room
-    /// number). The host maps this to a blorb `Pict` resource and shows
-    /// nothing when none exists.
+    /// The picture the host should display, or `None` for none.
+    ///
+    /// Three cases, in this order:
+    ///
+    /// 1. An **override set this turn** by opcode 89 (reference-format
+    ///    databases) or opcode 90 (US S.A.G.A. databases,
+    ///    `Database::saga_us.is_some()` — spec §12.8/§12.11). It wins over
+    ///    darkness: it is a command the game issued deliberately, and §12.11
+    ///    has it drawn "over the whole graphics window" with the room view
+    ///    returning on the player's next ENTER — which is what the next turn
+    ///    clearing `pending_picture` produces.
+    /// 2. **Darkness.** Most dialects show nothing, and this answers `None`
+    ///    for them. A US S.A.G.A. release instead draws a dedicated darkness
+    ///    image: §12.11, "where other dialects paint black, these draw picture
+    ///    index 0" ([`crate::DARKNESS_PICTURE`]).
+    /// 3. Otherwise **the current room's picture**. For most dialects that is
+    ///    the room number itself (by convention, picture number == room
+    ///    number); for a US S.A.G.A. release it is
+    ///    [`SagaUs::room_picture`](crate::SagaUs::room_picture), which is also
+    ///    the room number except for the *Hulk*'s five remapped pairs
+    ///    (§12.11).
+    ///
+    /// The host maps the answer to a picture of its own — a blorb `Pict`
+    /// resource, a decoded family-B display list, a family-C record off the
+    /// release disk — and shows nothing when there is none.
     pub fn current_picture(&self) -> Option<u16> {
-        self.pending_picture.or(Some(self.player as u16))
+        if let Some(p) = self.pending_picture {
+            return Some(p);
+        }
+        match self.db.saga_us {
+            Some(saga) => Some(if self.is_dark() {
+                crate::DARKNESS_PICTURE as u16
+            } else {
+                saga.room_picture(self.player) as u16
+            }),
+            None if self.is_dark() => None,
+            None => Some(self.player as u16),
+        }
     }
     /// Current location of item `idx` (-1/255 = carried, 0 = nowhere, else room index).
     pub fn item_loc(&self, idx: usize) -> i32 {
@@ -2690,6 +2720,85 @@ mod tests {
         assert!(vm.flag_at(5), "58 got the FIRST param — S.A.G.A.'s 89 took none");
         assert_eq!(vm.current_picture(), Some(22), "90 draws the operand AFTER 58's, not 89's");
         assert_eq!(vm.item_loc_at(6), CARRIED, "74 got the operand after 90's own, not stolen by 89");
+    }
+
+    // §12.11: "darkness does not blank the graphics window. Where other
+    // dialects paint black, these draw picture index 0" — a dedicated darkness
+    // image. Every other dialect shows nothing, and `current_picture` is the
+    // one place that difference is decided, so a host has no rule of its own
+    // to keep in step (SQ-1475).
+    #[test]
+    fn saga_us_darkness_draws_the_darkness_picture() {
+        let items: Vec<Item> = (0..12)
+            .map(|i| Item { text: format!("item{i}"), treasure: false, auto_noun: None, start_loc: 0 })
+            .collect();
+        let mut saga = saga_vm_with(items.clone(), rooms4(), 2);
+        assert_eq!(saga.current_picture(), Some(2), "premise: room 2's own picture");
+        saga.flag_set(DARK_FLAG, true);
+        assert!(saga.is_dark(), "premise: no light source is carried or here");
+        assert_eq!(
+            saga.current_picture(),
+            Some(crate::DARKNESS_PICTURE as u16),
+            "§12.11: the dedicated darkness image, not nothing"
+        );
+        // An explicit opcode-90 draw still wins over darkness: it is a command
+        // the game issued this turn, drawn "over the whole graphics window".
+        saga.run_commands(&[90, 0, 0, 0], &[22]);
+        assert_eq!(saga.current_picture(), Some(22), "90's operand beats the darkness image");
+
+        // Every other dialect: dark means no picture at all.
+        let mut plain = vm_with(items, rooms4(), 2);
+        assert_eq!(plain.current_picture(), Some(2));
+        plain.flag_set(DARK_FLAG, true);
+        assert_eq!(plain.current_picture(), None, "no darkness image outside the S.A.G.A. releases");
+    }
+
+    // §12.11's Hulk remap reaches `current_picture`, so a host asking "what
+    // should I draw?" never has to know about it (SQ-1475). Rooms 5 and 6 draw
+    // picture 3; every other room draws its own number.
+    #[test]
+    fn saga_us_current_picture_applies_the_hulk_remap() {
+        let items: Vec<Item> = (0..12)
+            .map(|i| Item { text: format!("item{i}"), treasure: false, auto_noun: None, start_loc: 0 })
+            .collect();
+        let rooms: Vec<Room> = (0..8)
+            .map(|i| Room { exits: [0; 6], desc: format!("room{i}"), literal: true })
+            .collect();
+        for (release, room, want) in [
+            // The Hulk on the Commodore 64: room 5 draws picture 3.
+            ((127u16, 1u16, SagaPlatform::Commodore64), 5usize, 3u16),
+            ((127, 1, SagaPlatform::Commodore64), 7, 4),
+            ((127, 1, SagaPlatform::Commodore64), 1, 1),
+            // Not on the Apple II, and not for another title.
+            ((127, 1, SagaPlatform::AppleII), 5, 5),
+            ((416, 1, SagaPlatform::Commodore64), 5, 5),
+        ] {
+            let db = Database {
+                max_carry: 6,
+                start_room: room,
+                num_treasures: 0,
+                word_length: 3,
+                light_time: -1,
+                treasure_room: 0,
+                actions: vec![],
+                verbs: vec!["".into()],
+                nouns: vec!["".into()],
+                rooms: rooms.clone(),
+                messages: vec!["".into()],
+                items: items.clone(),
+                adventure_number: 0,
+                mysterious: false,
+                saga_us: Some(SagaUs {
+                    version: release.0,
+                    adventure: release.1,
+                    platform: release.2,
+                }),
+                ti99: None,
+            };
+            let mut vm = Vm::new(db);
+            vm.set_player(room);
+            assert_eq!(vm.current_picture(), Some(want), "{release:?} room {room}");
+        }
     }
 
     /// The `stories/scott-dialects` corpus, wherever the workspace symlinks or

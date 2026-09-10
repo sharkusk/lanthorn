@@ -54,9 +54,31 @@ pub enum ScottPictures {
     NativeC64 { pictures: usize },
     /// Pre-rendered room pictures in the story's own Blorb `Pict` resources.
     Blorb,
-    /// A US S.A.G.A. database (Atari/Apple II/C64 *Hulk*) whose pictures
-    /// (families C/D) are not decoded yet.
-    SagaUsUndrawn,
+    /// A US S.A.G.A. release whose own container carries **family-C** strip
+    /// bitmaps (spec §8.3, SQ-1475) — `pictures` of them, decodable by
+    /// `scott::decode_family_c`, and `platform` names whose colour table
+    /// reads them.
+    SagaUsStrips {
+        /// Whose colour table reads a record's four colour bytes.
+        platform: scott::SagaPlatform,
+        /// How many picture files the container holds (`R…` room pictures and
+        /// `B…` object overlays together — §8.6's three usages).
+        pictures: usize,
+    },
+    /// A US S.A.G.A. database with **no picture files beside it**: opened from
+    /// a bare extracted database rather than a release disk, or from an Atari
+    /// side A whose companion picture side is not paired (§8.3 puts the
+    /// Atari's pictures on the second disk of the pair, at hard-coded byte
+    /// offsets rather than in a catalogue).
+    ///
+    /// Not the same thing as a text-only game, which reports `None` — this
+    /// release HAS artwork, and this file is not where it lives.
+    SagaUsNoPictures {
+        /// Which release this database is, for the same reason
+        /// [`Self::SagaUsStrips`] carries it: the answer to "where would the
+        /// pictures be?" is per-platform.
+        platform: scott::SagaPlatform,
+    },
 }
 
 impl ScottPictures {
@@ -964,10 +986,22 @@ fn scott_release_title(bytes: &[u8]) -> Option<&'static str> {
 /// `Pict` resources win when the story carries one, because a graphics
 /// container beside a `.dat` is a different, Blorb-carried release of the same
 /// series; failing that, the Commodore 64 *Mysterious Adventures* native vector
-/// decode (`scott::c64`, SQ-1463); failing that, a US S.A.G.A. database
-/// (`scott::saga_us`) whose pictures this crate does not draw yet. `None` for
-/// every other Scott story — a plain text-only `.dat`.
-fn scott_pictures(bytes: &[u8], self_blorb: Option<&[ChunkInfo]>) -> Option<ScottPictures> {
+/// decode (`scott::c64`, SQ-1463); failing that, a US S.A.G.A. release, whose
+/// artwork is family-C strip bitmaps in separate files on the release disk
+/// (spec §8.3/§12.10, SQ-1475). `None` for every other Scott story — a plain
+/// text-only `.dat`.
+///
+/// `path` is the CONTAINER, needed only for that last case: a S.A.G.A.
+/// database says nothing at all about its own pictures (§12.10 opens
+/// "**Nothing**"), so how many there are can only be answered by walking the
+/// file the story came out of. That walk runs only once the bytes have already
+/// been identified as a S.A.G.A. database, so no other row in a directory pays
+/// for it.
+fn scott_pictures(
+    bytes: &[u8],
+    self_blorb: Option<&[ChunkInfo]>,
+    path: &Path,
+) -> Option<ScottPictures> {
     if self_blorb.is_some_and(|chunks| chunks.iter().any(|c| c.usage == "Pict")) {
         return Some(ScottPictures::Blorb);
     }
@@ -979,8 +1013,13 @@ fn scott_pictures(bytes: &[u8], self_blorb: Option<&[ChunkInfo]>) -> Option<Scot
             return Some(ScottPictures::NativeC64 { pictures });
         }
     }
-    if scott::detect_saga_us(bytes).is_some() {
-        return Some(ScottPictures::SagaUsUndrawn);
+    if let Some(platform) = scott::detect_saga_us(bytes) {
+        let pictures = crate::hints::saga_picture_files(path).len();
+        return Some(if pictures == 0 {
+            ScottPictures::SagaUsNoPictures { platform }
+        } else {
+            ScottPictures::SagaUsStrips { platform, pictures }
+        });
     }
     None
 }
@@ -1879,7 +1918,8 @@ fn entry_from_loaded(
     // SQ-1473: what this Scott entry's own graphics are, for the info panel's
     // "Pictures:" row and the launch-options dialog's resolution choice. Read
     // once here, from the bytes already in hand — never re-derived per frame.
-    let scott_pictures_kind = is_scott.then(|| scott_pictures(&bytes, self_blorb.as_deref())).flatten();
+    let scott_pictures_kind =
+        is_scott.then(|| scott_pictures(&bytes, self_blorb.as_deref(), path)).flatten();
     let tsv_title = bundled_title(stem, &ifid, is_scott, &bytes);
     let tsv_author = is_scott.then(|| scott_author(stem)).flatten();
     let tsv_description = is_scott.then(|| scott_description(stem)).flatten();
@@ -2009,18 +2049,24 @@ fn bibliographic_key(title: &str) -> String {
 ///   (that is the mount's own answer, not the filename's), else "blorb".
 /// - **Glulx** shows no container ever, blorbed or not — Glulx games are
 ///   effectively always blorbed, so the suffix would say nothing (SQ-0369).
-/// - **Scott** shows "blorb" for the graphic `.blb` versions only.
+/// - **Scott** follows the same rule Z-code does (SQ-1475): the disk image it
+///   was mounted out of when there is one — "Scott (CBM)" for the Commodore
+///   Questprobe and *Mysterious Adventures* disks, "Scott (Atari DOS)" for a
+///   US S.A.G.A. `.atr`, "Scott (DOS 3.3)" for an Apple II side — else
+///   "blorb" for the graphic `.blb` versions. It ignored the medium until the
+///   S.A.G.A. releases arrived and one shelf could hold the same game pressed
+///   for three machines, all of them reading "Scott" and none of them saying
+///   which.
 ///
 /// `blorb` is `RowBadges::blorb` — see [`row_is_blorb`], which costs a
 /// directory read.
 pub fn type_container(meta: &StoryMeta, blorb: bool) -> Option<&'static str> {
     match meta.engine {
-        Engine::ZCode => match meta.disk_image {
+        Engine::ZCode | Engine::Scott => match meta.disk_image {
             Some(image) => Some(image.label()),
             None => blorb.then_some("blorb"),
         },
         Engine::Glulx => None,
-        Engine::Scott => blorb.then_some("blorb"),
     }
 }
 
@@ -3850,7 +3896,10 @@ mod tests {
             ChunkInfo { usage: "Exec".into(), number: 0, chunk_type: "TEXT".into(), len: 4, detail: None },
             ChunkInfo { usage: "Pict".into(), number: 3, chunk_type: "PNG ".into(), len: 100, detail: None },
         ];
-        assert_eq!(scott_pictures(b"anything", Some(&chunks)), Some(ScottPictures::Blorb));
+        assert_eq!(
+            scott_pictures(b"anything", Some(&chunks), Path::new("nowhere.blb")),
+            Some(ScottPictures::Blorb)
+        );
     }
 
     /// [`scott_pictures`] answers `None` for a plain text-only Scott database —
@@ -3869,7 +3918,7 @@ mod tests {
             "\"An item.\" 0\n",
         );
         assert!(scott::Database::parse(db.as_bytes()).is_ok(), "premise: the database parses");
-        assert_eq!(scott_pictures(db.as_bytes(), None), None);
+        assert_eq!(scott_pictures(db.as_bytes(), None, Path::new("nowhere.dat")), None);
     }
 
     /// End to end on real media (skips vacuously — `stories/` is gitignored):
@@ -3903,6 +3952,69 @@ mod tests {
                 adv01_entry.meta.scott_pictures, None,
                 "a plain text-only .dat carries no Pictures row"
             );
+        }
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    /// End to end on real media (skips vacuously — `stories/` is gitignored):
+    /// the *Hulk*'s own Questprobe disk reports its family-C picture set and
+    /// its container, and an Atari US S.A.G.A. side A reports neither
+    /// (SQ-1475).
+    ///
+    /// The counts are the disk's own (§10.7): seventy `R01nnn`/`B01nnnR`/
+    /// `B01nnnI` files. Pinned rather than floored — a directory walk that
+    /// started dropping the eighth entry of every sector would still report
+    /// "some", which is what a floor would accept.
+    #[test]
+    fn the_hulk_d64_row_reports_its_family_c_pictures_and_an_atari_side_a_does_not() {
+        let stories = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../stories");
+        let hulk = stories.join("scott-dialects/c64/QUESTPR1.D64");
+        if !hulk.is_file() {
+            eprintln!("SKIP: {} absent (gitignored commercial fixture)", hulk.display());
+            return;
+        }
+        let base = temp_dir("saga-pictures-row");
+        let row = resolve_entry(&hulk, &base).expect("QUESTPR1.D64 opens");
+        assert_eq!(
+            row.meta.scott_pictures,
+            Some(ScottPictures::SagaUsStrips {
+                platform: scott::SagaPlatform::Commodore64,
+                pictures: 70,
+            }),
+            "the Hulk's disk carries seventy family-C picture files"
+        );
+        // …and the TYPE column names the medium, the way a Z-code disk row
+        // does — one shelf can hold the same S.A.G.A. game pressed for three
+        // machines.
+        assert_eq!(row.meta.engine, Engine::Scott);
+        assert_eq!(type_container(&row.meta, false), Some("CBM"), "the Commodore container");
+
+        let atari = stories.join("scott-dialects/atari/SAGA #1 - Adventureland [side A].atr");
+        if atari.is_file() {
+            let row = resolve_entry(&atari, &base).expect("the Atari side A opens");
+            assert_eq!(
+                row.meta.scott_pictures,
+                Some(ScottPictures::SagaUsNoPictures {
+                    platform: scott::SagaPlatform::Atari8Bit
+                }),
+                "the pictures are on the companion side, which nothing pairs yet (§8.3)"
+            );
+            assert_eq!(type_container(&row.meta, false), Some("Atari DOS"));
+        }
+
+        // An extracted database is a S.A.G.A. release with no container at
+        // all — the same "not on this file", and NOT the `None` a text-only
+        // game reports.
+        let extracted = stories.join("scott-dialects/c64/db/hulk.bin");
+        if extracted.is_file() {
+            let row = resolve_entry(&extracted, &base).expect("hulk.bin opens");
+            assert_eq!(
+                row.meta.scott_pictures,
+                Some(ScottPictures::SagaUsNoPictures {
+                    platform: scott::SagaPlatform::Commodore64
+                })
+            );
+            assert_eq!(type_container(&row.meta, false), None, "no container, no parenthetical");
         }
         let _ = std::fs::remove_dir_all(&base);
     }

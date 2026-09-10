@@ -76,12 +76,17 @@ pub struct ScottSession {
     intro: String,
     aux: BTreeMap<String, Vec<u8>>,
     aux_dirty: bool,
-    /// Room pictures, from either of two sources: Blorb `Pict` resources for
-    /// a graphics (`.blb`) game (the SAGA/Mysterious Adventures graphic
-    /// versions ship the room pictures here, SQ-0402), or a Commodore 64
-    /// Mysterious Adventures release's own Family B artwork decoded straight
-    /// off its PRG/D64 image (SQ-1463, `PictSource::from_scott_c64`). Empty
-    /// (`PictSource::new(None)`) for a plain `.dat` with neither.
+    /// Room pictures, from any of three sources, in the order
+    /// [`ScottSession::new_with_options`] resolves them: Blorb `Pict`
+    /// resources for a graphics (`.blb`) game (the SAGA/Mysterious Adventures
+    /// graphic versions ship the room pictures here, SQ-0402); a US S.A.G.A.
+    /// release's own **family-C** strip bitmaps, read off the release disk
+    /// beside the database (spec §8.3, SQ-1475,
+    /// `PictSource::from_scott_saga`); or a Commodore 64 *Mysterious
+    /// Adventures* release's own **family-B** vector artwork decoded straight
+    /// out of its PRG/D64 memory image (SQ-1463,
+    /// `PictSource::from_scott_c64`). Empty (`PictSource::new(None)`) for a
+    /// plain `.dat` with none of them.
     picts: PictSource,
     /// The decoded picture to show for the current room, and the picture number
     /// it was resolved from — recomputed only when the number changes so the same
@@ -138,6 +143,9 @@ impl ScottSession {
             scott::Options::default(),
             ScottSession::FALLBACK_CHAR_PX,
             crate::graphics::ScottPictureResolution::default(),
+            // No container was mounted on this path, so there are no family-C
+            // picture files to hand over (SQ-1475).
+            Vec::new(),
         )
     }
 
@@ -169,6 +177,17 @@ impl ScottSession {
     /// this story's own per-game sidecar, or the default (SQ-1473). Meaningless
     /// (and unread) for every other Scott story: a Blorb's pictures are
     /// pre-rendered bitmaps with no second resolution to choose.
+    ///
+    /// `saga_pictures` is every family-C picture file the CONTAINER held
+    /// beside a US S.A.G.A. database (spec §8.3, SQ-1475), `(name, record)` as
+    /// `crate::hints::load_mounted_story_full` read them off the mounted disk.
+    /// It has to arrive from outside for the same reason `pict_blorb` does:
+    /// the pictures are separate files on the release disk (§12.10, "pictures
+    /// live in separate files on the disk, one per picture, identified by
+    /// filename") and the mount does not outlive the load. Empty for a story
+    /// opened from a bare extracted database, which then simply has no
+    /// pictures — and for every non-S.A.G.A. story, which has none of this
+    /// shape.
     pub fn new_with_options(
         bytes: Vec<u8>,
         pict_blorb: Option<blorb::Blorb>,
@@ -177,6 +196,7 @@ impl ScottSession {
         options: scott::Options,
         char_px: (u32, u32),
         picture_resolution: crate::graphics::ScottPictureResolution,
+        saga_pictures: Vec<(String, Vec<u8>)>,
     ) -> Result<ScottSession, String> {
         // `Database::parse` takes raw bytes (SQ-1412), so a Latin-1 or
         // otherwise non-UTF-8 `.dat` loads here instead of being rejected by
@@ -205,9 +225,26 @@ impl ScottSession {
         // pictures are vectors and nothing in them fixes a size, so each room
         // is drawn when it is first shown, at the supersample the band's own
         // device height picks out.
-        let picts = match &pict_blorb {
-            Some(_) => PictSource::new(pict_blorb),
-            None => scott::c64::prg_image(&bytes)
+        // SQ-1475: a US S.A.G.A. release's artwork is family C (§8.3) — one
+        // record per picture, in separate files on the same release disk the
+        // database came off (§12.10). The mount is long gone by the time a
+        // room asks for one, so the records arrived with the story bytes; keep
+        // them undecoded and let `PictSource` decode the ones a player
+        // actually reaches.
+        //
+        // Ordered after `pict_blorb` and before the family-B decode for the
+        // same reason each of those is where it is: a Blorb beside the story
+        // is a different, Blorb-carried release, and no story is both a
+        // S.A.G.A. database and a Mysterious Adventures memory image.
+        let saga_platform = (!saga_pictures.is_empty())
+            .then(|| scott::detect_saga_us(&bytes))
+            .flatten();
+        let picts = if pict_blorb.is_some() {
+            PictSource::new(pict_blorb)
+        } else if let Some(platform) = saga_platform {
+            PictSource::from_scott_saga(saga_pictures, platform)
+        } else {
+            scott::c64::prg_image(&bytes)
                 .filter(|(image, at)| scott::c64::looks_like_c64_mysterious(image, *at))
                 .and_then(|(image, at)| scott::c64::decode_family_b_picture_lists(image, at).ok())
                 .map(|lists| {
@@ -217,7 +254,7 @@ impl ScottSession {
                         picture_resolution,
                     )
                 })
-                .unwrap_or_else(|| PictSource::new(None)),
+                .unwrap_or_else(|| PictSource::new(None))
         };
         let mut s = ScottSession {
             vm,
@@ -234,10 +271,19 @@ impl ScottSession {
     }
 
     /// Recompute the current room's decoded picture. Cheap when the picture
-    /// number is unchanged (early-out). A dark room shows no picture; a room
-    /// whose number has no `Pict` resource also shows none.
+    /// number is unchanged (early-out). A room whose number has no picture in
+    /// this source shows none.
+    ///
+    /// **Darkness is `scott::Vm::current_picture`'s answer, not this
+    /// function's** (SQ-1475). It used to be decided here — a dark room showed
+    /// nothing — but that is only right for most dialects: a US S.A.G.A.
+    /// release draws a dedicated darkness image instead (spec §12.11, "where
+    /// other dialects paint black, these draw picture index 0"), and which of
+    /// the two it is depends on the database. One source of truth in the VM,
+    /// which knows, rather than a host rule that has to be kept in step with
+    /// it.
     fn refresh_picture(&mut self) {
-        let want = if self.vm.is_dark() { None } else { self.vm.current_picture() };
+        let want = self.vm.current_picture();
         if want == self.current_pic_num {
             return;
         }
@@ -417,9 +463,18 @@ impl Engine for ScottSession {
                 // SQ-1467: the C64 artwork is drawn at a supersample chosen
                 // from this band's device height, so a frame has to be able to
                 // say which resolution produced it.
-                let source = match self.picts.scott_c64_scale() {
-                    Some(scale) => format!("native C64 x{scale}"),
-                    None => "blorb".to_string(),
+                // SQ-1475: a third source, and it names the platform whose
+                // colour table read the record — the geometry is the same on
+                // either, the colours are not.
+                let source = match (self.picts.scott_c64_scale(), self.picts.scott_saga_platform())
+                {
+                    (Some(scale), _) => format!("native C64 x{scale}"),
+                    (None, Some(platform)) => format!(
+                        "S.A.G.A. family C ({}, {} record(s))",
+                        platform.label(),
+                        self.picts.scott_saga_count().unwrap_or(0)
+                    ),
+                    (None, None) => "blorb".to_string(),
                 };
                 out.push(format!(
                     "  picture: {} row(s) reserved  ·  canvas={}x{} v{} opaque={} source={source}",
@@ -429,6 +484,20 @@ impl Engine for ScottSession {
                     self.pic_version,
                     opaque
                 ));
+            }
+            // SQ-1475: a US S.A.G.A. database opened from a bare extracted
+            // `db/*.bin` — or an Atari side A whose companion picture side is
+            // not paired — reaches here with no picture source at all, which
+            // looks exactly like a text-only game and is not one. Say which.
+            None
+                if self.vm.database().saga_us.is_some()
+                    && self.picts.scott_saga_platform().is_none() =>
+            {
+                out.push(
+                    "  picture: none — a S.A.G.A. release with no picture files on this file \
+                     (§8.3's are separate files on the release disk)"
+                        .to_string(),
+                )
             }
             None => out.push("  picture: none (text-only game, or this room has no art)".to_string()),
         }
@@ -841,6 +910,7 @@ mod tests {
             scott::Options::default(),
             char_px,
             resolution,
+            Vec::new(),
         )
         .expect("BATON.prg loads")
     }
@@ -1044,5 +1114,182 @@ mod tests {
         let foreign = EngineSave::new("zmachine", 1, vec![1, 2, 3]);
         let err = s.restore_state(&foreign).unwrap_err();
         assert!(matches!(err, EngineError::EngineMismatch { .. }));
+    }
+
+    // ── SQ-1475: the US S.A.G.A. releases' own family-C strip bitmaps ─────────
+
+    /// *The Hulk* as shipped on the Commodore 64 Questprobe disk
+    /// `QUESTPR1.D64` (spec §10.7): the database `SHULK.DB` plus seventy
+    /// `R01nnn`/`B01nnnR`/`B01nnnI` picture files, all off one mount.
+    ///
+    /// Commercial and gitignored, so every case below skips vacuously without
+    /// it. Opened through `hints::load_mounted_story_full`, which is exactly
+    /// the door `startup.rs` opens — a hand-assembled pair of (database,
+    /// pictures) would be measuring a launch the app never performs.
+    fn hulk_d64() -> Option<(Vec<u8>, Vec<(String, Vec<u8>)>)> {
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../stories/scott-dialects/c64/QUESTPR1.D64");
+        if !path.exists() {
+            eprintln!("SKIP: no {} (gitignored commercial fixture)", path.display());
+            return None;
+        }
+        let mounted = crate::hints::load_mounted_story_full(&path, None)
+            .expect("QUESTPR1.D64 mounts and holds one Scott database");
+        let crate::hints::LoadedStory::Scott(bytes) = mounted.story else {
+            panic!("QUESTPR1.D64's story is a Scott database");
+        };
+        Some((bytes, mounted.saga_pictures))
+    }
+
+    /// A session on the Hulk disk, built the way `startup.rs` builds one.
+    fn hulk_session() -> Option<ScottSession> {
+        let (bytes, pictures) = hulk_d64()?;
+        assert_eq!(pictures.len(), 70, "the mount found the whole picture set (§10.7)");
+        Some(
+            ScottSession::new_with_options(
+                bytes,
+                None,
+                false,
+                None,
+                scott::Options::default(),
+                ScottSession::FALLBACK_CHAR_PX,
+                crate::graphics::ScottPictureResolution::default(),
+                pictures,
+            )
+            .expect("the Hulk boots off its own release disk"),
+        )
+    }
+
+    /// The opening frame shows room 1's own picture at family C's canvas.
+    ///
+    /// 280x160 is the decoded size (`scott::saga_pictures::CANVAS_HEIGHT` —
+    /// §8.3 states 158 and the records say 160), and `upscale` is on because
+    /// the band fits it the same aspect-preserving way it fits a Blorb's
+    /// pictures. The non-flat guard is what would catch a decode that wrote
+    /// nothing: a blank canvas has exactly the right dimensions.
+    #[test]
+    fn hulk_room_one_shows_its_own_family_c_picture() {
+        let Some(s) = hulk_session() else { return };
+        assert_eq!(s.vm.current_room(), 1, "premise: Bruce Banner starts in room 1");
+        let screen = s.screen();
+        let band = picture_band(&screen).expect("room 1 has a picture band");
+        let canvas = &band.canvas;
+        assert_eq!(
+            (canvas.width(), canvas.height()),
+            (
+                scott::saga_pictures::CANVAS_WIDTH as u32,
+                scott::saga_pictures::CANVAS_HEIGHT as u32
+            ),
+            "family C's own canvas, undoubled"
+        );
+        assert!(band.upscale, "the band fits it like any other bitmap source");
+        // Four colours actually drawn, and none of them covering the canvas.
+        let mut seen = std::collections::HashSet::new();
+        for p in canvas.pixels() {
+            seen.insert((p.0[0], p.0[1], p.0[2]));
+            assert_eq!(p.0[3], 255, "family C carries no transparent index");
+        }
+        assert_eq!(seen.len(), 4, "black, orange, purple and white (§8.3's table)");
+        assert!(
+            seen.contains(&(186, 134, 32)) && seen.contains(&(177, 89, 185)),
+            "room 1's orange and purple resolved through §8.3's C64 table, got {seen:?}"
+        );
+    }
+
+    /// `/dump-windows` names the third picture source and its platform, so a
+    /// frame says where a room's art came from (SQ-1463's line, extended).
+    #[test]
+    fn hulk_window_dump_names_the_family_c_source() {
+        let Some(s) = hulk_session() else { return };
+        let dump = s.window_dump().join("\n");
+        assert!(
+            dump.contains("source=S.A.G.A. family C (Commodore 64, 70 record(s))"),
+            "dump should name the family-C source:\n{dump}"
+        );
+    }
+
+    /// A US S.A.G.A. release opened WITHOUT its release disk — the extracted
+    /// `db/hulk.bin` — has no pictures at all, and the dump says which kind of
+    /// nothing that is rather than reading as a text-only game.
+    #[test]
+    fn an_extracted_saga_database_has_no_pictures_and_says_so() {
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../stories/scott-dialects/c64/db/hulk.bin");
+        if !path.exists() {
+            eprintln!("SKIP: no {} (gitignored commercial fixture)", path.display());
+            return;
+        }
+        let bytes = std::fs::read(&path).expect("read hulk.bin");
+        let s = ScottSession::new(bytes, None).expect("the extracted database boots");
+        assert!(picture_band(&s.screen()).is_none(), "no band without the release disk");
+        let dump = s.window_dump().join("\n");
+        assert!(
+            dump.contains("a S.A.G.A. release with no picture files on this file"),
+            "dump should distinguish this from a text-only game:\n{dump}"
+        );
+    }
+
+    /// The band follows the player: a room change re-resolves the picture, and
+    /// two different rooms are two different canvases.
+    ///
+    /// Driven through `submit`, not by poking the VM, because
+    /// `refresh_picture` runs on the turn boundary and that is the thing under
+    /// test.
+    #[test]
+    fn the_band_changes_when_the_room_does() {
+        let Some(mut s) = hulk_session() else { return };
+        let first = picture_band(&s.screen()).expect("room 1 has art").canvas.clone();
+        let start = s.vm.current_room();
+        // Bruce is tied to a chair with no exits at all, so no direction moves
+        // him: `BITE LIP` is the game's own opening — it turns him into the
+        // Hulk, who bursts the ropes and ends up in a dome. Two turns in, and
+        // the specimen table's turn count for this frame.
+        let mut moved = None;
+        for command in ["bite lip", "east"] {
+            s.submit(command);
+            if s.vm.current_room() != start {
+                moved = Some(s.vm.current_room());
+                break;
+            }
+        }
+        let Some(room) = moved else {
+            eprintln!("SKIP: the Hulk stayed in room {start} for eight turns");
+            return;
+        };
+        let second = picture_band(&s.screen()).map(|b| b.canvas.clone());
+        assert!(second.is_some(), "room {room} has a picture too (§12.11 remaps every room)");
+        let second = second.expect("just checked");
+        assert_ne!(
+            first.as_raw(),
+            second.as_raw(),
+            "room {room}'s picture is not room {start}'s"
+        );
+    }
+
+    /// The band shows whatever `scott::Vm::current_picture` chose, and nothing
+    /// else — the whole of the host's picture policy since SQ-1475.
+    ///
+    /// That delegation is the case worth pinning HERE. It used to be
+    /// `if self.vm.is_dark() { None }`, which is right for most dialects and
+    /// wrong for these: §12.11 has a US S.A.G.A. release draw picture index 0
+    /// in the dark, the dedicated "IT'S TOO DARK!" image, and only the
+    /// database knows which rule applies. The rule itself is asserted where it
+    /// lives, in `scott`'s own
+    /// `vm::tests::saga_us_darkness_draws_the_darkness_picture` — reaching a
+    /// dark room in the *Hulk* is a walkthrough, and the darkness flag is not
+    /// this crate's to set.
+    #[test]
+    fn the_band_shows_exactly_the_picture_the_vm_chose() {
+        let Some(mut s) = hulk_session() else { return };
+        assert_eq!(s.current_pic_num, s.vm.current_picture(), "at boot");
+        assert_eq!(s.current_pic_num, Some(1), "premise: Banner starts in room 1");
+        for command in ["look", "wait", "inventory"] {
+            s.submit(command);
+            assert_eq!(
+                s.current_pic_num,
+                s.vm.current_picture(),
+                "after {command:?} the band still shows the VM's own choice"
+            );
+        }
     }
 }
