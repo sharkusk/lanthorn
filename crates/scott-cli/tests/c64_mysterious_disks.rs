@@ -129,13 +129,38 @@ fn mystadv2_without_story_lists_its_five_programs() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
-/// `QUESTPR1.D64` carries the US-format *Hulk* (`SHULK.DB`), a different
-/// Commodore 64 family this loader does not read — a named refusal listing
-/// the disk's files, never a crash.
+/// `QUESTPR1.D64` carries the US S.A.G.A. *Hulk* (`SHULK.DB`) — a different
+/// Commodore 64 family from the *Mysterious Adventures* disks above, but one
+/// this loader reads since the US S.A.G.A. wiring landed (SQ-1470): the disk
+/// holds exactly one Scott row, content-identified as "The Hulk (Commodore
+/// 64)" (`scott::SagaUs::display_title`) rather than by any name the disk
+/// itself stores it under, and it opens straight to the Hulk's own first
+/// room with no `--story` needed (one candidate never asks).
 #[test]
-fn questpr1_is_a_named_refusal_not_a_crash() {
+fn questpr1_opens_the_us_saga_hulk() {
     let Some(image) = story_path("QUESTPR1.D64") else { return };
     let dir = scratch_dir("questpr1");
+    let out = run(&image, &[], "", &dir);
+    let text = stdout_of(&out);
+    assert!(
+        text.contains("Opening 1) The Hulk (Commodore 64)"),
+        "content-identified title, platform-qualified:\n{text}"
+    );
+    assert!(text.contains("Bruce Banner"), "the Hulk's own opening room:\n{text}");
+    assert!(text.contains("Tell me what to do ?"), "reaches the first prompt:\n{text}");
+    assert!(!stderr_of(&out).contains("Error"), "must not refuse: {}", stderr_of(&out));
+    assert!(!stderr_of(&out).contains("panic"), "must not panic: {}", stderr_of(&out));
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// `QUESTPR3.D64` (*Fantastic Four*) carries a database this loader does not
+/// identify at all (`docs/internals/scott-dialects-spec.md` §10.7: "This
+/// release's database encoding is unidentified") — a genuine named refusal,
+/// listing the disk's files, never a crash.
+#[test]
+fn questpr3_is_a_named_refusal_not_a_crash() {
+    let Some(image) = story_path("QUESTPR3.D64") else { return };
+    let dir = scratch_dir("questpr3");
     let out = run(&image, &[], "", &dir);
     assert!(!out.status.success(), "no Scott program on this disk");
     let err = stderr_of(&out);
@@ -143,7 +168,7 @@ fn questpr1_is_a_named_refusal_not_a_crash() {
         err.contains("no Scott Adams program on this disk image"),
         "named refusal, not a crash:\n{err}"
     );
-    assert!(err.contains("SHULK.DB"), "names the disk's files, including the US Hulk:\n{err}");
+    assert!(err.contains("SAGA.OBJ"), "names the disk's files:\n{err}");
     assert!(!err.contains("panic"), "must not panic:\n{err}");
     let _ = std::fs::remove_dir_all(&dir);
 }

@@ -245,6 +245,50 @@ impl SagaUs {
             && self.adventure == 1
             && !matches!(self.platform, SagaPlatform::AppleII)
     }
+
+    /// The box title for this release, platform folded in — "Voodoo Castle
+    /// (Atari 8-bit)" — from §12.12's per-release table (SQ-1470).
+    ///
+    /// **The platform has to be part of it.** Only the (version, adventure)
+    /// pair identifies a title (see this struct's own doc), but the SAME
+    /// title exists on more than one platform — *Adventureland* is (416, 1)
+    /// on both the Atari 8-bit and the Apple II — so a host distinguishing
+    /// two disks' saves (container mounting is the host's business; see the
+    /// module doc) needs the platform in the answer too, not just the title.
+    /// *Claymorgue Castle* is the opposite case: its own version differs BY
+    /// platform (125 Atari, 122 Apple II), so the two arms below never
+    /// collide with each other even without the platform guard the others
+    /// need.
+    ///
+    /// A `&'static str` table, not `format!`, so a host's own bundled-title
+    /// lookup (which wants to hold one without allocating) can use it as-is.
+    /// `None` for a release outside §12.12's seven, which cannot happen for
+    /// this crate's own detector but leaves a caller a graceful fallback
+    /// instead of an unwrap.
+    pub fn display_title(&self) -> Option<&'static str> {
+        match (self.version, self.adventure, self.platform) {
+            (416, 1, SagaPlatform::Atari8Bit) => Some("Adventureland (Atari 8-bit)"),
+            (416, 1, SagaPlatform::AppleII) => Some("Adventureland (Apple II)"),
+            (408, 2, SagaPlatform::Atari8Bit) => Some("Pirate Adventure (Atari 8-bit)"),
+            (408, 2, SagaPlatform::AppleII) => Some("Pirate Adventure (Apple II)"),
+            (306, 3, SagaPlatform::Atari8Bit) => Some("Mission Impossible (Atari 8-bit)"),
+            (306, 3, SagaPlatform::AppleII) => Some("Mission Impossible (Apple II)"),
+            (119, 4, SagaPlatform::Atari8Bit) => Some("Voodoo Castle (Atari 8-bit)"),
+            (119, 4, SagaPlatform::AppleII) => Some("Voodoo Castle (Apple II)"),
+            (115, 5, SagaPlatform::Atari8Bit) => Some("The Count (Atari 8-bit)"),
+            (115, 5, SagaPlatform::AppleII) => Some("The Count (Apple II)"),
+            (119, 6, SagaPlatform::Atari8Bit) => Some("Strange Odyssey (Atari 8-bit)"),
+            (119, 6, SagaPlatform::AppleII) => Some("Strange Odyssey (Apple II)"),
+            (125, 13, SagaPlatform::Atari8Bit) => {
+                Some("The Sorcerer of Claymorgue Castle (Atari 8-bit)")
+            }
+            (122, 13, SagaPlatform::AppleII) => {
+                Some("The Sorcerer of Claymorgue Castle (Apple II)")
+            }
+            (127, 1, SagaPlatform::Commodore64) => Some("The Hulk (Commodore 64)"),
+            _ => None,
+        }
+    }
 }
 
 /// The picture drawn in the dark (§12.11).
@@ -1277,5 +1321,41 @@ mod tests {
     fn the_two_picture_constants_are_the_ones_section_12_11_names() {
         assert_eq!(DARKNESS_PICTURE, 0);
         assert_eq!(INVENTORY_PICTURE, 98);
+    }
+
+    /// §12.12's per-release table, checked against [`SagaUs::display_title`]
+    /// (SQ-1470): every (version, adventure) §12.12 pins, on every platform it
+    /// pins it for, names the title that table gives — and the title always
+    /// ends with that platform's own [`SagaPlatform::label`], so the two
+    /// cannot read differently.
+    #[test]
+    fn display_title_matches_the_per_release_table() {
+        let cases: [(u16, u16, SagaPlatform, &str); 15] = [
+            (416, 1, SagaPlatform::Atari8Bit, "Adventureland"),
+            (416, 1, SagaPlatform::AppleII, "Adventureland"),
+            (408, 2, SagaPlatform::Atari8Bit, "Pirate Adventure"),
+            (408, 2, SagaPlatform::AppleII, "Pirate Adventure"),
+            (306, 3, SagaPlatform::Atari8Bit, "Mission Impossible"),
+            (306, 3, SagaPlatform::AppleII, "Mission Impossible"),
+            (119, 4, SagaPlatform::Atari8Bit, "Voodoo Castle"),
+            (119, 4, SagaPlatform::AppleII, "Voodoo Castle"),
+            (115, 5, SagaPlatform::Atari8Bit, "The Count"),
+            (115, 5, SagaPlatform::AppleII, "The Count"),
+            (119, 6, SagaPlatform::Atari8Bit, "Strange Odyssey"),
+            (119, 6, SagaPlatform::AppleII, "Strange Odyssey"),
+            (125, 13, SagaPlatform::Atari8Bit, "The Sorcerer of Claymorgue Castle"),
+            (122, 13, SagaPlatform::AppleII, "The Sorcerer of Claymorgue Castle"),
+            (127, 1, SagaPlatform::Commodore64, "The Hulk"),
+        ];
+        for (version, adventure, platform, title) in cases {
+            let saga = SagaUs { version, adventure, platform };
+            let want = format!("{title} ({})", platform.label());
+            assert_eq!(saga.display_title(), Some(want.as_str()), "{version}/{adventure}/{platform:?}");
+        }
+        // A pair §12.12 does not carry answers `None` rather than guessing —
+        // e.g. Claymorgue's Atari version (125) paired with the Apple II
+        // platform is not a release that exists.
+        let unknown = SagaUs { version: 125, adventure: 13, platform: SagaPlatform::AppleII };
+        assert_eq!(unknown.display_title(), None);
     }
 }

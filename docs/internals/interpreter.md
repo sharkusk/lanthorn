@@ -889,6 +889,59 @@ eleven CBM names across both disks are all distinct, so `BATON` and
 disk (every OTHER Scott medium) still opens straight through with no menu at
 all, exactly as a single-game floppy always did.
 
+### The US S.A.G.A. releases open straight off their own disk images (SQ-1470)
+
+`scott::saga_us` reads the American "Scott Adams Graphic Adventure" binary
+database — the Atari 8-bit and Apple II disk editions, plus Questprobe's *The
+Hulk* on the Commodore 64 — but takes no container: it is handed whatever
+bytes the disk mount reads, unshifted, and `scott::SagaPlatform::array_offset`
+is the one constant that turns them into the database array. Both `lanthorn`
+and `scott-cli` mount these through the same `blorb::medium` seam every other
+disk goes through, extended in two ways specific to this family:
+
+- **The Atari 8-bit database is not a directory entry.** The release masters
+  it straight over Atari DOS 2's own volume table of contents (spec §7.3), so
+  `MountedDisk::contents` lists at most `DOS.SYS`/`AUTORUN.SYS` on these sides
+  and never the database. The one extra candidate an Atari side offers is the
+  whole image, through `blorb::atr::IMAGE_ENTRY` — a reserved name
+  `read_named` answers to that is not a listed file, because it is not a file
+  at all; it *is* the disk. Side A carries the database, side B the
+  companion artwork disk, which offers no Scott candidate at all.
+- **A damaged database is a refusal, not a fabricated row.** The Atari
+  *Mission Impossible* side A carries about fifty corrupt bytes in its
+  room-description block, so its pointer tables do not resolve —
+  `scott::Database::parse` reports `BadDialectData`, and that (not merely the
+  cheap `looks_like_scott_bytes` sniff, which the damaged image still passes)
+  is the gate a disk-sourced candidate has to clear.
+
+Apple II and Commodore 64 need neither extension: `A1.DAT`…`A6.DAT`/`DATABASE`
+on the boot side, and `SHULK.DB` on `QUESTPR1.D64`, are ordinary catalogue
+files `contents()` already lists — including on the three "scrambled" Apple II
+titles (*Voodoo Castle*, *The Count*, *The Sorcerer of Claymorgue Castle*),
+where scrambling affects only their pictures (spec §8.4), never the database.
+
+**The same title is pressed for more than one platform, so a container's own
+name cannot be a save key.** `blorb::atr::IMAGE_ENTRY` is the literal `IMAGE`
+on every Atari side, and the Apple II boot disks spell TWO different titles
+`DATABASE` (*The Count* and *Claymorgue Castle*) — both live in the same
+`stories/scott-dialects/apple/` directory, so keying on the container entry
+name alone would collide. `scott::SagaUs::display_title` identifies a release
+from the database's own (version, adventure, platform) identity instead — the
+same content-derived approach `DiskBuild`'s release+serial gives a Z-code disk
+story — and both hosts fold that identity into whichever save key their own
+disk-entry naming would otherwise use, so *Voodoo Castle (Atari 8-bit)* and
+*Voodoo Castle (Apple II)* — release build 119 of adventure 4, identical on
+both platforms per the per-release table — keep separate saves, and *The
+Count* and *Claymorgue Castle* never share the literal `DATABASE`'s.
+
+```
+$ scott-cli "SAGA #4 - Voodoo Castle [side A].atr"
+Opening 1) Voodoo Castle (Atari 8-bit)
+Welcome to ADVENTURE:4, "VOODOO CASTLE" by Alexis ADAMS.
+...
+I'm in a chapel
+```
+
 ## Z-machine
 
 - **Standard Quetzal save/restore** — the game's own SAVE/RESTORE writes and reads

@@ -766,16 +766,87 @@ const NON_GAME_DISK_NAMES: [&str; 2] = ["BOOT", "DOS.SYS"];
 /// [`extract_story`], because the sniff is cheap and permissive — the real
 /// gate is whether this crate's own loader agrees the bytes are a Scott
 /// database, the same standard every other engine on a disk is held to.
+///
+/// **The US S.A.G.A. Atari 8-bit database is not a directory entry at all**
+/// (SQ-1470): Atari DOS 2's own catalogue on these sides lists at most
+/// `DOS.SYS`/`AUTORUN.SYS`, because the release masters its database straight
+/// over the volume table of contents (`blorb::atr`'s module docs), and the
+/// database is addressed by file offset within the whole image rather than
+/// by a filename. So the scan over `contents()` is extended with the one
+/// extra candidate an Atari side offers beyond its directory: the whole
+/// image, through the reserved `blorb::atr::IMAGE_ENTRY` door that format
+/// exists for. The Apple II and Commodore 64 releases need no such door —
+/// their databases ARE ordinary catalogue files (`A4.DAT`, `DATABASE`,
+/// `SHULK.DB`) that `contents()` already lists.
 fn scott_disk_stories(disk: &blorb::medium::MountedDisk) -> Vec<blorb::medium::DiskStory> {
     let already: Vec<String> = disk.stories().into_iter().map(|s| s.name).collect();
-    disk.contents()
+    let mut candidates: Vec<(String, Vec<u8>)> = disk.contents();
+    if disk.format() == blorb::medium::DiskImage::AtariDos2 {
+        if let Some(image) = disk.read_named(blorb::atr::IMAGE_ENTRY) {
+            candidates.push((blorb::atr::IMAGE_ENTRY.to_string(), image));
+        }
+    }
+    candidates
         .into_iter()
         .filter(|(name, _)| !already.iter().any(|n| n.eq_ignore_ascii_case(name)))
         .filter(|(name, _)| !NON_GAME_DISK_NAMES.iter().any(|n| name.eq_ignore_ascii_case(n)))
         .filter(|(_, bytes)| scott::looks_like_scott_bytes(bytes))
         .filter(|(_, bytes)| matches!(extract_story(bytes.clone()), Ok(LoadedStory::Scott(_))))
-        .map(blorb::medium::DiskStory::from)
+        // The real gate: `extract_story` above only re-runs the cheap sniff
+        // for a raw (non-blorb) candidate, so a database that LOOKS
+        // plausible but does not actually decode — the Atari Mission
+        // Impossible side A, whose room-description block is damaged and
+        // whose pointer tables consequently disagree (SQ-1470) — passed both
+        // filters above unchanged. `Database::parse` is the loader's own
+        // final word on whether these bytes are usable.
+        .filter(|(_, bytes)| scott::Database::parse(bytes).is_ok())
+        .map(|(name, bytes)| {
+            let name = saga_us_keyed_name(&name, &bytes);
+            blorb::medium::DiskStory { name, bytes }
+        })
         .collect()
+}
+
+/// A save-key-safe name for a Scott candidate found on a disk (SQ-1470).
+///
+/// **A US S.A.G.A. release's own container entry is not a distinguishing
+/// name.** `blorb::atr::IMAGE_ENTRY` is the literal `"IMAGE"` on all seven
+/// Atari sides, and the Apple II boot disks spell two DIFFERENT titles
+/// `DATABASE` (*The Count* and *The Sorcerer of Claymorgue Castle*, both
+/// living in the same `stories/scott-dialects/apple/` directory) — and
+/// `cli_host::storage::story_key_for` keys a disk-sourced Scott entry on its
+/// NAME alone, because Scott bytes carry no Z-machine header to build a
+/// `DiskBuild` from. Two different games under either literal name would
+/// share one save directory.
+///
+/// The (version, adventure, platform) triple `scott::SagaUs` carries is this
+/// release's actual identity (§12.2/§12.3 of the dialect spec) — content-
+/// derived and stable regardless of which physical disk holds it, the same
+/// property `DiskBuild`'s release+serial gives a Z-code disk story. It is
+/// appended to the real container name rather than replacing it, so the
+/// story-info pane's `"{filename}:{entry}"` line still names what is
+/// actually on the disk.
+///
+/// A no-op for every OTHER Scott source (the Commodore 64 *Mysterious
+/// Adventures* programs, TI-99/4A releases, and plain `.dat` files): none of
+/// those carries a `saga_us` identity, so this leaves their already-unique,
+/// already-shipped names untouched.
+fn saga_us_keyed_name(name: &str, bytes: &[u8]) -> String {
+    match scott::Database::parse(bytes).ok().and_then(|db| db.saga_us) {
+        Some(saga) => format!("{name}-{}-{}-{}", saga.version, saga.adventure, saga_us_platform_slug(saga.platform)),
+        None => name.to_string(),
+    }
+}
+
+/// A short, filename-safe token per [`scott::SagaPlatform`], for
+/// [`saga_us_keyed_name`].
+fn saga_us_platform_slug(platform: scott::SagaPlatform) -> &'static str {
+    match platform {
+        scott::SagaPlatform::Atari8Bit => "atari8bit",
+        scott::SagaPlatform::AppleII => "appleii",
+        scott::SagaPlatform::Commodore64 => "c64",
+        _ => "unknown",
+    }
 }
 
 /// Open the disk image `path`, whose bytes are `raw`, with the other volumes of
@@ -866,23 +937,35 @@ fn read_story_file(path: &Path, want: Option<&str>) -> io::Result<(Vec<u8>, Opti
                 )),
             };
         }
-        return match disk.story() {
-            Some(story) => {
-                let image = disk.image_for(&story.name);
-                Ok((story.bytes, Some(image)))
-            }
-            None => Err(io::Error::new(
-                io::ErrorKind::NotFound,
-                format!(
-                    "no story file on the disk image {} ({} files{}; is this the boot disk?)",
-                    path.display(),
-                    disk.file_count(),
-                    // Only some formats keep a volume name; the message says so
-                    // when there is one and reads naturally when there is not.
-                    disk.volume_name().map(|n| format!(" on {n}")).unwrap_or_default(),
-                ),
-            )),
-        };
+        if let Some(story) = disk.story() {
+            let image = disk.image_for(&story.name);
+            return Ok((story.bytes, Some(image)));
+        }
+        // `MountedDisk::story`'s tiebreak is Z-code/Glulx/Blorb-only by
+        // design (`scott_disk_stories`'s own doc), so it answers `None` for
+        // a disk whose one story is a Scott Adams database — every Atari
+        // 8-bit or Apple II US S.A.G.A. side (SQ-1470). A bare `lanthorn
+        // <disk.atr>` launch names no entry (`startup.rs`: "the format's own
+        // tiebreak"), and has to reach that one candidate the same way
+        // `scott-cli` does without `--story`. Ambiguous (zero, or more than
+        // one) falls through to the refusal below, exactly as before.
+        let mut scott = scott_disk_stories(&disk);
+        if scott.len() == 1 {
+            let story = scott.remove(0);
+            let image = disk.image_for(&story.name);
+            return Ok((story.bytes, Some(image)));
+        }
+        return Err(io::Error::new(
+            io::ErrorKind::NotFound,
+            format!(
+                "no story file on the disk image {} ({} files{}; is this the boot disk?)",
+                path.display(),
+                disk.file_count(),
+                // Only some formats keep a volume name; the message says so
+                // when there is one and reads naturally when there is not.
+                disk.volume_name().map(|n| format!(" on {n}")).unwrap_or_default(),
+            ),
+        ));
     }
     if raw.starts_with(ZIP_MAGIC) {
         // A ZIP is somebody's DOWNLOAD, not a lanthorn container (the `.lanthorn`

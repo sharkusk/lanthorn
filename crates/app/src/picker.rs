@@ -905,9 +905,19 @@ pub fn scott_tuid(stem: &str) -> Option<&'static str> {
 /// `hints::extract_story` never touches a Scott story's bytes — the same
 /// `.prg` bytes reach here whether they were read straight off disk or
 /// pulled out of a `.d64`'s directory.
+///
+/// **Extended for the US S.A.G.A. releases (SQ-1470)**, the same way and for
+/// the same reason: `scott::SagaUs::display_title` identifies a release from
+/// the database's own (version, adventure, platform) identity, which reads
+/// the same whether the bytes came straight off an `.atr`/`.dsk`/`.d64` or
+/// were opened directly.
 fn scott_release_title(bytes: &[u8]) -> Option<&'static str> {
-    let (image, load_address) = scott::c64::prg_image(bytes)?;
-    scott::c64::identify(image, load_address).map(|r| r.title)
+    if let Some((image, load_address)) = scott::c64::prg_image(bytes) {
+        if let Some(r) = scott::c64::identify(image, load_address) {
+            return Some(r.title);
+        }
+    }
+    scott::Database::parse(bytes).ok()?.saga_us?.display_title()
 }
 
 /// The bundled author for a Scott-format game (filename stem, case-insensitive),
@@ -1663,6 +1673,13 @@ pub fn resolve_entries(path: &Path, data_base: &Path) -> Vec<StoryEntry> {
             dedupe_within_a_volume(&mut rows);
             return rows;
         }
+        // Exactly one story: the plain path, no selector — `resolve_entry`
+        // reaches it through `load_mounted_story_from(path, None)`, which
+        // since SQ-1470 falls back to this same single Scott candidate when
+        // the format's own Z-code/Glulx/Blorb tiebreak (`MountedDisk::story`)
+        // finds nothing — see `hints::read_story_file`'s own doc. Nothing
+        // about an ordinary single-story floppy changes: `disk_entry` stays
+        // `None`, exactly as it always did.
         return resolve_entry(path, data_base).into_iter().collect();
     }
     // A zip is a container too (SQ-1098). Its entries carry no `DiskImage`, so
