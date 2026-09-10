@@ -124,8 +124,10 @@ jobs:
           fail=0
           for crate in lanthorn-zvm lanthorn-gvm lanthorn-scott; do
             echo "::group::cargo package -p $crate"
-            out=$(cargo package -p "$crate" 2>&1)
-            status=$?
+            # `shell: bash` runs with -e implied, so a failing capture must
+            # not abort the script before the warn-or-fail logic below runs.
+            status=0
+            out=$(cargo package -p "$crate" 2>&1) || status=$?
             echo "$out"
             echo "::endgroup::"
             if [ "$status" -ne 0 ]; then
