@@ -43,9 +43,10 @@ pub struct Features {
 /// What a Scott Adams entry's own graphics are — derived once at scan time from
 /// the loaded bytes ([`scott_pictures`], SQ-1473), never guessed at render time.
 /// Drives the info panel's "Pictures:" row and, through
-/// [`ScottPictures::is_native_c64`], gates the launch-options dialog's
-/// picture-resolution choice — only a native decode can be drawn at more than
-/// one resolution; a Blorb's pictures are already pre-rendered bitmaps.
+/// [`ScottPictures::offers_resolution_choice`], gates the launch-options
+/// dialog's picture-resolution choice — only a native family-B vector decode
+/// can be drawn at more than one resolution (SQ-1480); a Blorb's or a
+/// S.A.G.A. release's pictures are already pre-rendered bitmaps.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ScottPictures {
     /// Commodore 64 *Mysterious Adventures* Family B vector artwork, decoded
@@ -89,12 +90,20 @@ pub enum ScottPictures {
 }
 
 impl ScottPictures {
-    /// Is this the native C64 decode — the only kind [`from_scott_c64`]
-    /// (`crate::graphics::PictSource::from_scott_c64`) can draw at more than one
-    /// resolution, so the only kind the launch-options dialog offers a
-    /// resolution choice for (SQ-1473)?
+    /// Is this the native C64 decode?
     pub fn is_native_c64(self) -> bool {
         matches!(self, ScottPictures::NativeC64 { .. })
+    }
+
+    /// Is this a native family-B vector decode — C64 or ZX Spectrum alike —
+    /// the only kinds `PictSource::from_scott_family_b`
+    /// (`crate::graphics::PictSource::from_scott_family_b`) can draw at more
+    /// than one resolution, so the only kinds the launch-options dialog
+    /// offers a resolution choice for (SQ-1473, SQ-1480)? A Blorb's or a
+    /// S.A.G.A. release's pictures are pre-rendered bitmaps with no second
+    /// resolution to offer.
+    pub fn offers_resolution_choice(self) -> bool {
+        matches!(self, ScottPictures::NativeC64 { .. } | ScottPictures::NativeZx { .. })
     }
 }
 

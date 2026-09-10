@@ -1108,14 +1108,17 @@ fn open_launch_options(
     let z_version = matches!(entry.meta.engine, app::picker::Engine::ZCode)
         .then(|| entry.meta.version.as_deref().and_then(|v| v.parse::<u8>().ok()))
         .flatten();
-    // SQ-1473: the picture-resolution row exists only for a Scott entry with
-    // native C64 vector art (`ScottPictures::NativeC64`) — a Blorb's pictures
-    // are pre-rendered bitmaps with no second resolution to offer, and every
-    // other engine has nothing here at all. Same precedence as the
-    // interpreter number just above: this session's own choice, else the
-    // sidecar, else the default (hi-res).
-    let scott_native_pictures =
-        entry.meta.scott_pictures.is_some_and(app::picker::ScottPictures::is_native_c64);
+    // SQ-1473/SQ-1480: the picture-resolution row exists only for a Scott
+    // entry with native family-B vector art — C64 or ZX Spectrum
+    // (`ScottPictures::offers_resolution_choice`) — a Blorb's or a S.A.G.A.
+    // release's pictures are pre-rendered bitmaps with no second resolution
+    // to offer, and every other engine has nothing here at all. Same
+    // precedence as the interpreter number just above: this session's own
+    // choice, else the sidecar, else the default (hi-res).
+    let scott_native_pictures = entry
+        .meta
+        .scott_pictures
+        .is_some_and(app::picker::ScottPictures::offers_resolution_choice);
     let inherited_resolution = cfg
         .scott_picture_resolution_override
         .or_else(|| app::styles::read_per_game_scott_picture_resolution(&game_dir))
@@ -6266,6 +6269,15 @@ mod tests {
         );
         let st = super::open_launch_options(&native, &cfg, &dir);
         assert!(st.scott_native_pictures, "a native C64 entry must offer the row");
+
+        // SQ-1480: the ZX Spectrum releases decode through the SAME
+        // supersample machinery as the C64 ones, so they get the row too.
+        let native_zx = scott_entry_with_pictures(
+            &story,
+            Some(app::picker::ScottPictures::NativeZx { pictures: 11 }),
+        );
+        let st = super::open_launch_options(&native_zx, &cfg, &dir);
+        assert!(st.scott_native_pictures, "a native ZX Spectrum entry must offer the row too");
 
         let blorb = scott_entry_with_pictures(&story, Some(app::picker::ScottPictures::Blorb));
         let st = super::open_launch_options(&blorb, &cfg, &dir);

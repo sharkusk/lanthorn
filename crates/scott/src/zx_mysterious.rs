@@ -1153,15 +1153,23 @@ pub fn decode_picture_lists(image48k: &[u8]) -> Result<Vec<PictureList>, LoadErr
     Ok(decode_family_b_lists_at_most(&image48k[at..], usize::from(layout.header.rooms)))
 }
 
-/// Locate and decode a release's artwork at §8.2's own 255 x 94 canvas —
-/// [`decode_picture_lists`] plus
-/// [`PictureList::rasterise`](crate::c64::PictureList::rasterise).
+/// Locate and decode a release's artwork at §8.2's own 255 x 94 canvas, under
+/// [`PALETTE`] — [`decode_picture_lists`] plus
+/// [`PictureList::rasterise_with_palette`](crate::c64::PictureList::rasterise_with_palette).
+///
+/// **Not** [`PictureList::rasterise`](crate::c64::PictureList::rasterise): that
+/// draws under [`crate::c64::PALETTE`], the Commodore 64's table, which is the
+/// right default for a caller who never names a platform but the wrong one for
+/// this module's own artwork (SQ-1480).
 ///
 /// # Errors
 ///
 /// [`parse_zx_mysterious`]'s own refusals, for the same reasons.
 pub fn decode_pictures(image48k: &[u8]) -> Result<Vec<Picture>, LoadError> {
-    Ok(decode_picture_lists(image48k)?.iter().map(PictureList::rasterise).collect())
+    Ok(decode_picture_lists(image48k)?
+        .iter()
+        .map(|list| list.rasterise_with_palette(&PALETTE))
+        .collect())
 }
 
 /// [`decode_picture_lists`] over a `.z80` snapshot, container step included.
@@ -1538,6 +1546,14 @@ mod tests {
         assert_eq!(drawn.len(), usize::from(ROOMS));
         assert_eq!(drawn[0].width, crate::c64::PICTURE_WIDTH);
         assert_eq!(drawn[0].height, crate::c64::PICTURE_HEIGHT);
+        // SQ-1480: `decode_pictures` must draw under THIS module's own
+        // Sinclair palette, not `crate::c64`'s — the fill's one line (around
+        // x=10-20, y=78-90) does not enclose the canvas, so (0, 0) is
+        // reachable from the fill's seed and ends up flooded to the fill's
+        // own colour (index 5, not the background), and the two platforms'
+        // tables disagree there.
+        assert_eq!(drawn[0].rgb(0, 0), Some(PALETTE[5]));
+        assert_ne!(drawn[0].rgb(0, 0), Some(crate::c64::PALETTE[5]));
     }
 
     #[test]

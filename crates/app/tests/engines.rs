@@ -101,6 +101,8 @@ mod save_key_media;
 mod scott_mapper;
 #[path = "suites/scott_c64_native_pictures.rs"]
 mod scott_c64_native_pictures;
+#[path = "suites/scott_zx_native_pictures.rs"]
+mod scott_zx_native_pictures;
 
 #[path = "suites/scott_saga_pictures.rs"]
 mod scott_saga_pictures;

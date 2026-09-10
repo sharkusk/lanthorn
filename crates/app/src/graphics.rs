@@ -293,12 +293,16 @@ pub struct PictSource {
     /// for a Blorb, an Amiga/Mac `Pic.data` and an MCGA `.MG1` alike, all of
     /// which carry their colours per picture.
     hw_palette: Option<[blorb::infocom_pics::Rgb; 16]>,
-    /// The Commodore 64 Mysterious Adventures' own room artwork as the DISPLAY
-    /// LISTS it is stored as (`scott::c64::decode_family_b_picture_lists`,
-    /// SQ-1414/SQ-1463), used when a Scott Adams game was loaded straight off a
-    /// C64 PRG/D64 image rather than a reference-format `.dat` beside a `.blb`,
-    /// paired with the supersample [`PictSource::from_scott_c64`] chose for
-    /// this band.
+    /// A Commodore 64 or ZX Spectrum *Mysterious Adventures* release's own
+    /// room artwork as the DISPLAY LISTS it is stored as
+    /// (`scott::c64::decode_family_b_picture_lists`,
+    /// `scott::zx_mysterious::decode_picture_lists`, SQ-1414/SQ-1463/SQ-1480),
+    /// used when a Scott Adams game was loaded straight off a release image
+    /// rather than a reference-format `.dat` beside a `.blb`. Paired with the
+    /// supersample [`PictSource::from_scott_family_b`] chose for this band and
+    /// with which platform's palette reads the stored indices — the two
+    /// platforms store the IDENTICAL §8.2 display lists and differ only there
+    /// (`ScottFamilyBPlatform`).
     ///
     /// Lists rather than rasters, because these pictures are vectors and
     /// nothing in the data fixes a size (SQ-1467): the whole game's artwork is
@@ -308,7 +312,7 @@ pub struct PictSource {
     /// indexed pixels for a game the player may never finish.
     ///
     /// `None` for every other source.
-    scott_c64: Option<(Vec<scott::c64::PictureList>, u32)>,
+    scott_c64: Option<(Vec<scott::c64::PictureList>, u32, ScottFamilyBPlatform)>,
     /// A US S.A.G.A. release's own family-C strip bitmaps (spec §8.3,
     /// SQ-1475) as the RAW RECORDS they are stored as, keyed by the file name
     /// the release disk holds them under, with the platform whose colour table
@@ -411,13 +415,34 @@ impl PictSource {
 
     /// A source backed by a Commodore 64 Mysterious Adventures game's own
     /// artwork — decoded once from the same PRG/D64 image the story loaded
-    /// from, rather than a Blorb (SQ-1463). `pictures` is
-    /// `scott::c64::decode_family_b_picture_lists`'s output, one drawing per
-    /// room in the decoder's own order (room *n* → `pictures[n - 1]`, §8.6's
-    /// pure identity) — [`Self::get`] applies that offset, so a caller indexes
-    /// by **picture number** (`scott::Vm::current_picture()`, "by convention,
-    /// picture number == room number") exactly as it does against a Blorb
-    /// `Pict` resource.
+    /// from, rather than a Blorb (SQ-1463). [`Self::from_scott_family_b`] with
+    /// [`ScottFamilyBPlatform::C64`]; see that for the general case and
+    /// [`ScottFamilyBPlatform::Zx`] for the Spectrum releases of the same
+    /// eleven titles (SQ-1480).
+    pub fn from_scott_c64(
+        pictures: Vec<scott::c64::PictureList>,
+        band_px_high: u32,
+        resolution: ScottPictureResolution,
+    ) -> PictSource {
+        PictSource::from_scott_family_b(pictures, band_px_high, resolution, ScottFamilyBPlatform::C64)
+    }
+
+    /// A source backed by a Commodore 64 or ZX Spectrum *Mysterious
+    /// Adventures* release's own artwork — decoded once from the same
+    /// PRG/D64/`.z80` image the story loaded from, rather than a Blorb
+    /// (SQ-1463, SQ-1480). `pictures` is
+    /// `scott::c64::decode_family_b_picture_lists`'s or
+    /// `scott::zx_mysterious::decode_picture_lists`'s output — the SAME §8.2
+    /// display-list format either way, one drawing per room in the decoder's
+    /// own order (room *n* → `pictures[n - 1]`, §8.6's pure identity) —
+    /// [`Self::get`] applies that offset, so a caller indexes by **picture
+    /// number** (`scott::Vm::current_picture()`, "by convention, picture
+    /// number == room number") exactly as it does against a Blorb `Pict`
+    /// resource.
+    ///
+    /// `platform` says which of the two tables a stored index resolves
+    /// through ([`ScottFamilyBPlatform::palette`]) and names the source in
+    /// `/dump-windows` — the only fact that differs between the two.
     ///
     /// No adaptive palette, no hardware table, no art-scale opinion: these
     /// releases carry one fully-opaque drawing per room and nothing else in
@@ -428,23 +453,31 @@ impl PictSource {
     /// supersample when `resolution` is [`ScottPictureResolution::HiRes`]; see
     /// [`scott_c64_scale`]. [`ScottPictureResolution::Original`] (SQ-1473)
     /// ignores the band entirely and draws at the release's own scale 1.
-    pub fn from_scott_c64(
+    pub fn from_scott_family_b(
         pictures: Vec<scott::c64::PictureList>,
         band_px_high: u32,
         resolution: ScottPictureResolution,
+        platform: ScottFamilyBPlatform,
     ) -> PictSource {
         let scale = match resolution {
             ScottPictureResolution::HiRes => scott_c64_scale(band_px_high),
             ScottPictureResolution::Original => 1,
         };
-        PictSource { scott_c64: Some((pictures, scale)), ..PictSource::new(None) }
+        PictSource { scott_c64: Some((pictures, scale, platform)), ..PictSource::new(None) }
     }
 
-    /// The supersample this source draws its C64 vector artwork at, or `None`
-    /// when it holds none — `/dump-windows` prints it beside the canvas size
-    /// so a frame says which resolution produced it (SQ-1467).
+    /// The supersample this source draws its family-B vector artwork at, or
+    /// `None` when it holds none — `/dump-windows` prints it beside the canvas
+    /// size so a frame says which resolution produced it (SQ-1467).
     pub fn scott_c64_scale(&self) -> Option<u32> {
-        self.scott_c64.as_ref().map(|(_, scale)| *scale)
+        self.scott_c64.as_ref().map(|(_, scale, _)| *scale)
+    }
+
+    /// Which platform's palette this source's family-B artwork resolves
+    /// through, or `None` when it holds none — `/dump-windows`'s "source="
+    /// line names it (SQ-1480).
+    pub fn scott_family_b_platform(&self) -> Option<ScottFamilyBPlatform> {
+        self.scott_c64.as_ref().map(|(_, _, platform)| *platform)
     }
 
     /// Is this source [`Self::from_scott_c64`]'s native decode rather than a
@@ -452,7 +485,7 @@ impl PictSource {
     /// reads this to name which of the two picture sources a room's art came
     /// from (SQ-1463).
     pub fn is_scott_c64(&self) -> bool {
-        self.scott_c64.is_some()
+        self.scott_family_b_platform() == Some(ScottFamilyBPlatform::C64)
     }
 
     /// A source backed by a US S.A.G.A. release's own **family-C** strip
@@ -1082,9 +1115,9 @@ impl PictSource {
                 // number, "by convention, picture number == room number", so
                 // room 0 (no picture, per `checked_sub`) and an index past the
                 // end (a truncated decode, §11) both fall through to `None`.
-                None => self.scott_c64.as_ref().and_then(|(lists, scale)| {
+                None => self.scott_c64.as_ref().and_then(|(lists, scale, platform)| {
                     let list = lists.get(resnum.checked_sub(1)? as usize)?;
-                    Some(scott_c64_image(list, *scale))
+                    Some(scott_c64_image(list, *scale, *platform))
                 }),
             };
             self.cache.insert(resnum, decoded.map(Arc::new));
@@ -2216,14 +2249,48 @@ impl ScottPictureResolution {
     }
 }
 
-/// Draw one C64 Mysterious Adventures room picture at `scale` device pixels
-/// per native pixel (`scott::c64::PictureList::rasterise_at`, an indexed bitmap
-/// over the fixed 16-entry palette `Picture::rgb` already resolves) and hand it
-/// over in the same `DynamicImage` shape the Blorb and native-Infocom paths
-/// hand `WinNode::Graphics` — the renderer's existing backend selection (kitty,
+/// Which platform's *Mysterious Adventures* release a family-B display list
+/// (`scott::c64::PictureList`, §8.2) came off — the two platforms store the
+/// IDENTICAL opcode streams and canvas, and the palette a stored index
+/// resolves through is the only fact that differs (SQ-1480).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ScottFamilyBPlatform {
+    /// Decoded off a PRG/D64 image (`scott::c64`, SQ-1463).
+    C64,
+    /// Decoded off a `.z80` snapshot (`scott::zx_mysterious`, SQ-1478/SQ-1480).
+    Zx,
+}
+
+impl ScottFamilyBPlatform {
+    /// The sixteen-entry table a stored pixel index resolves through —
+    /// `scott::c64::PALETTE` (already composed with §8.2's remap table A) or
+    /// `scott::zx_mysterious::PALETTE` (§8.1's optimised Sinclair table, no
+    /// remap).
+    fn palette(self) -> &'static [(u8, u8, u8); 16] {
+        match self {
+            ScottFamilyBPlatform::C64 => &scott::c64::PALETTE,
+            ScottFamilyBPlatform::Zx => &scott::zx_mysterious::PALETTE,
+        }
+    }
+
+    /// `/dump-windows`'s "source=" word for this platform (SQ-1463, SQ-1480).
+    pub fn label(self) -> &'static str {
+        match self {
+            ScottFamilyBPlatform::C64 => "C64",
+            ScottFamilyBPlatform::Zx => "ZX Spectrum",
+        }
+    }
+}
+
+/// Draw one Commodore 64 or ZX Spectrum Mysterious Adventures room picture at
+/// `scale` device pixels per native pixel
+/// (`scott::c64::PictureList::rasterise_at_with_palette`, an indexed bitmap
+/// over `platform`'s sixteen-entry palette) and hand it over in the same
+/// `DynamicImage` shape the Blorb and native-Infocom paths hand
+/// `WinNode::Graphics` — the renderer's existing backend selection (kitty,
 /// sixel, the half-block fallback) and its aspect-preserving fit into the
 /// picture band do the rest, no protocol special-casing here (SQ-1463,
-/// SQ-1467).
+/// SQ-1467, SQ-1480).
 ///
 /// A supersample multiplies both axes, so the picture's aspect is exactly the
 /// one the native canvas has and the band's fit is the same fit at the same
@@ -2234,8 +2301,8 @@ impl ScottPictureResolution {
 /// every pixel the canvas starts with), so every pixel comes out fully
 /// opaque — unlike [`native_image`]'s Infocom pictures, which do carry a
 /// transparent index for adaptive overlays.
-fn scott_c64_image(list: &scott::c64::PictureList, scale: u32) -> DynamicImage {
-    let pic = list.rasterise_at(scale);
+fn scott_c64_image(list: &scott::c64::PictureList, scale: u32, platform: ScottFamilyBPlatform) -> DynamicImage {
+    let pic = list.rasterise_at_with_palette(scale, platform.palette());
     let mut buf = RgbaImage::new(pic.width as u32, pic.height as u32);
     for y in 0..pic.height {
         for x in 0..pic.width {
@@ -2546,6 +2613,51 @@ mod tests {
             assert_eq!(*img.get_pixel(x, 0), solid, "column {x} keeps its own colour");
         }
         assert_eq!(*img.get_pixel(2, 0), hole, "a cut-out is never painted in");
+    }
+
+    /// SQ-1480: the C64 and ZX Spectrum releases of *Mysterious Adventures*
+    /// store the identical §8.2 display list, so `scott_c64_image` drawn
+    /// through [`ScottFamilyBPlatform::C64`] and [`ScottFamilyBPlatform::Zx`]
+    /// must paint the SAME pixels (same line, same flood boundary) and differ
+    /// ONLY in which RGB a stored index resolves to.
+    #[test]
+    fn c64_and_zx_platforms_draw_the_same_coverage_different_colour() {
+        // A fill (background 0 → colour 3) bounded by one line (colour 7,
+        // §8.2's derived line colour for a background-0 image) — small enough
+        // to hand-verify, large enough that the fill and the line each touch
+        // more than one pixel.
+        let list = scott::c64::PictureList {
+            background: 0,
+            line: 7,
+            ops: vec![
+                scott::c64::PictureOp::Line { from: (10, 10), to: (50, 10) },
+                scott::c64::PictureOp::Fill { seed: (5, 5), colour: 3 },
+            ],
+        };
+        let c64 = scott_c64_image(&list, 1, ScottFamilyBPlatform::C64);
+        let zx = scott_c64_image(&list, 1, ScottFamilyBPlatform::Zx);
+        assert_eq!(c64.dimensions(), zx.dimensions(), "same canvas either way");
+
+        let (c64_rgba, zx_rgba) = (c64.to_rgba8(), zx.to_rgba8());
+        let mut any_pixel_differs = false;
+        for (c64_px, zx_px) in c64_rgba.pixels().zip(zx_rgba.pixels()) {
+            // Alpha is always opaque on either platform (§8.2 has no
+            // transparent index) — coverage is identical.
+            assert_eq!(c64_px.0[3], 255);
+            assert_eq!(zx_px.0[3], 255);
+            if c64_px != zx_px {
+                any_pixel_differs = true;
+            }
+        }
+        assert!(
+            any_pixel_differs,
+            "the two platforms' tables disagree on at least one of the indices this list uses"
+        );
+        // The seed pixel is where the fill (index 3) lands — spelled out
+        // because it is the pixel `scott::zx_mysterious`'s own palette test
+        // and the ZX `decode_pictures` test both use as their tell.
+        assert_eq!(c64_rgba.get_pixel(5, 5).0[..3], [177, 89, 185], "C64 index 3");
+        assert_eq!(zx_rgba.get_pixel(5, 5).0[..3], [202, 0, 202], "ZX index 3");
     }
 
     #[test]

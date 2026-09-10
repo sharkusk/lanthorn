@@ -1228,9 +1228,21 @@ const UNSET: u8 = 0xFF;
 
 impl PictureList {
     /// Draw this list at §8.2's own 255 x 94 canvas — the original's output,
-    /// bit for bit, quirks and fill-queue bound included.
+    /// bit for bit, quirks and fill-queue bound included — under [`PALETTE`].
     pub fn rasterise(&self) -> Picture {
-        let mut picture = Picture::blank(self.background, 1);
+        self.rasterise_with_palette(&PALETTE)
+    }
+
+    /// [`Self::rasterise`], under a caller-supplied palette rather than
+    /// [`PALETTE`] (SQ-1480): the ZX Spectrum releases of the same eleven
+    /// titles store the identical display lists (§8.2, one opcode stream
+    /// format for both platforms) and differ only in which sixteen RGB
+    /// triples a stored index resolves to — `crate::zx_mysterious::PALETTE`
+    /// is the Spectrum's. Every geometry rule ([`Self::rasterise_at`]'s
+    /// region-then-line supersample included) is unchanged; only
+    /// [`Picture::rgb`]'s lookup table differs.
+    pub fn rasterise_with_palette(&self, palette: &'static [(u8, u8, u8); 16]) -> Picture {
+        let mut picture = Picture::blank(self.background, 1, palette);
         for op in &self.ops {
             match *op {
                 PictureOp::Line { from, to } => picture.stroke(from, to, self.line),
@@ -1300,11 +1312,21 @@ impl PictureList {
     /// note the deviation"). The native raster still carries the quirk's
     /// pixel, and the supersample takes its colour from there like any other.
     pub fn rasterise_at(&self, scale: u32) -> Picture {
+        self.rasterise_at_with_palette(scale, &PALETTE)
+    }
+
+    /// [`Self::rasterise_at`], under a caller-supplied palette — see
+    /// [`Self::rasterise_with_palette`] (SQ-1480).
+    pub fn rasterise_at_with_palette(
+        &self,
+        scale: u32,
+        palette: &'static [(u8, u8, u8); 16],
+    ) -> Picture {
         let scale = scale.clamp(1, MAX_PICTURE_SCALE);
         if scale == 1 {
-            return self.rasterise();
+            return self.rasterise_with_palette(palette);
         }
-        self.supersample(scale)
+        self.supersample(scale, palette)
     }
 
     /// Which pixels of a `scale`-times-larger canvas the line ops touch —
@@ -1336,11 +1358,11 @@ impl PictureList {
 
     /// [`Self::rasterise_at`]'s body for a scale above 1 — see its doc for the
     /// rule and for why it is that rule.
-    fn supersample(&self, scale: u32) -> Picture {
-        let native = self.rasterise();
+    fn supersample(&self, scale: u32, palette: &'static [(u8, u8, u8); 16]) -> Picture {
+        let native = self.rasterise_with_palette(palette);
         let native_ink = self.ink_mask(1);
         let big_ink = self.ink_mask(scale);
-        let mut big = Picture::blank(self.background, scale);
+        let mut big = Picture::blank(self.background, scale, palette);
         let s = scale as usize;
         let (w, h) = (big.width, big.height);
         let mut out = vec![UNSET; w * h];
@@ -1433,8 +1455,10 @@ pub struct Picture {
 
 impl Picture {
     /// A canvas filled with `background`, before any opcode has run, at
-    /// `scale` device pixels per native pixel on each axis.
-    fn blank(background: u8, scale: u32) -> Picture {
+    /// `scale` device pixels per native pixel on each axis, resolved through
+    /// `palette` (SQ-1480: the C64 and ZX Spectrum releases share this exact
+    /// display-list format and canvas and differ only here).
+    fn blank(background: u8, scale: u32, palette: &'static [(u8, u8, u8); 16]) -> Picture {
         let (width, height) = (PICTURE_WIDTH * scale as usize, PICTURE_HEIGHT * scale as usize);
         Picture {
             width,
@@ -1445,7 +1469,7 @@ impl Picture {
             // otherwise it is 0."
             line: if background == 0 { 7 } else { 0 },
             pixels: vec![background; width * height],
-            palette: &PALETTE,
+            palette,
         }
     }
 

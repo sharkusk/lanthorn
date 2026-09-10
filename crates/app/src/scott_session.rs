@@ -49,6 +49,26 @@ pub fn resolve_options(game_dir: &std::path::Path) -> scott::Options {
         )
 }
 
+/// Decode a ZX Spectrum *Mysterious Adventures* release's own family-B
+/// artwork straight off the story bytes it loaded from (SQ-1480) — a `.z80`
+/// snapshot, or the bare 48K memory image a host that already decompressed
+/// one for its own reasons hands over (`scott::looks_like_zx_mysterious`'s
+/// own case, mirrored here the way `scott::Database::parse` reads both).
+///
+/// `None` for every other story — including a C64 PRG/D64 image, which
+/// `scott::looks_like_zx_mysterious_z80`'s `.z80` header sniff and the bare
+/// image's length-and-signature check both refuse by construction — and for a
+/// recognised snapshot whose picture block does not decode.
+fn zx_mysterious_picture_lists(bytes: &[u8]) -> Option<Vec<scott::c64::PictureList>> {
+    if scott::looks_like_zx_mysterious_z80(bytes) {
+        return scott::zx_mysterious::decode_picture_lists_z80(bytes).ok();
+    }
+    if bytes.len() == scott::IMAGE_LEN && scott::looks_like_zx_mysterious(bytes) {
+        return scott::zx_mysterious::decode_picture_lists(bytes).ok();
+    }
+    None
+}
+
 /// Build the top room-panel buffer from a `Vm::room_block()` string: one logical
 /// line per `\n`, with the per-line style/paragraph/image tracks filled parallel
 /// (the inline-buffer renderer indexes them by line). `primary: false` so the app
@@ -76,17 +96,17 @@ pub struct ScottSession {
     intro: String,
     aux: BTreeMap<String, Vec<u8>>,
     aux_dirty: bool,
-    /// Room pictures, from any of three sources, in the order
+    /// Room pictures, from any of four sources, in the order
     /// [`ScottSession::new_with_options`] resolves them: Blorb `Pict`
     /// resources for a graphics (`.blb`) game (the SAGA/Mysterious Adventures
     /// graphic versions ship the room pictures here, SQ-0402); a US S.A.G.A.
     /// release's own **family-C** strip bitmaps, read off the release disk
     /// beside the database (spec §8.3, SQ-1475,
-    /// `PictSource::from_scott_saga`); or a Commodore 64 *Mysterious
-    /// Adventures* release's own **family-B** vector artwork decoded straight
-    /// out of its PRG/D64 memory image (SQ-1463,
-    /// `PictSource::from_scott_c64`). Empty (`PictSource::new(None)`) for a
-    /// plain `.dat` with none of them.
+    /// `PictSource::from_scott_saga`); or a Commodore 64 or ZX Spectrum
+    /// *Mysterious Adventures* release's own **family-B** vector artwork,
+    /// decoded straight out of its PRG/D64 memory image or `.z80` snapshot
+    /// (SQ-1463/SQ-1480, `PictSource::from_scott_family_b`). Empty
+    /// (`PictSource::new(None)`) for a plain `.dat` with none of them.
     picts: PictSource,
     /// The decoded picture to show for the current room, and the picture number
     /// it was resolved from — recomputed only when the number changes so the same
@@ -239,19 +259,35 @@ impl ScottSession {
         let saga_platform = (!saga_pictures.is_empty())
             .then(|| scott::detect_saga_us(&bytes))
             .flatten();
+        // SQ-1480: a ZX Spectrum Mysterious Adventures release carries the
+        // SAME family-B display lists as the C64 releases (§8.2), decoded
+        // straight off the `.z80` snapshot (or the bare 48K image a host that
+        // already decompressed one for its own reasons hands over) rather
+        // than off a PRG/D64 image — see `zx_mysterious_picture_lists`. Tried
+        // before the C64 attempt below; the two container sniffs cannot both
+        // match, so the order only decides which refusal a third format hits
+        // first, and neither ever fires for the other's files.
         let picts = if pict_blorb.is_some() {
             PictSource::new(pict_blorb)
         } else if let Some(platform) = saga_platform {
             PictSource::from_scott_saga(saga_pictures, platform)
+        } else if let Some(lists) = zx_mysterious_picture_lists(&bytes) {
+            PictSource::from_scott_family_b(
+                lists,
+                u32::from(PICTURE_ROWS) * char_px.1,
+                picture_resolution,
+                crate::graphics::ScottFamilyBPlatform::Zx,
+            )
         } else {
             scott::c64::prg_image(&bytes)
                 .filter(|(image, at)| scott::c64::looks_like_c64_mysterious(image, *at))
                 .and_then(|(image, at)| scott::c64::decode_family_b_picture_lists(image, at).ok())
                 .map(|lists| {
-                    PictSource::from_scott_c64(
+                    PictSource::from_scott_family_b(
                         lists,
                         u32::from(PICTURE_ROWS) * char_px.1,
                         picture_resolution,
+                        crate::graphics::ScottFamilyBPlatform::C64,
                     )
                 })
                 .unwrap_or_else(|| PictSource::new(None))
@@ -460,21 +496,29 @@ impl Engine for ScottSession {
         match &self.current_canvas {
             Some(canvas) => {
                 let opaque = canvas.pixels().filter(|p| p.0[3] != 0).count();
-                // SQ-1467: the C64 artwork is drawn at a supersample chosen
-                // from this band's device height, so a frame has to be able to
-                // say which resolution produced it.
-                // SQ-1475: a third source, and it names the platform whose
+                // SQ-1467: the family-B artwork is drawn at a supersample
+                // chosen from this band's device height, so a frame has to be
+                // able to say which resolution produced it.
+                // SQ-1480: and which platform's palette read it — the C64 and
+                // ZX Spectrum releases share the exact same display lists and
+                // geometry, and differ only in colour.
+                // SQ-1475: a fourth source, and it names the platform whose
                 // colour table read the record — the geometry is the same on
                 // either, the colours are not.
-                let source = match (self.picts.scott_c64_scale(), self.picts.scott_saga_platform())
-                {
-                    (Some(scale), _) => format!("native C64 x{scale}"),
-                    (None, Some(platform)) => format!(
+                let source = match (
+                    self.picts.scott_c64_scale(),
+                    self.picts.scott_family_b_platform(),
+                    self.picts.scott_saga_platform(),
+                ) {
+                    (Some(scale), Some(platform), _) => {
+                        format!("native {} x{scale}", platform.label())
+                    }
+                    (None, _, Some(platform)) => format!(
                         "S.A.G.A. family C ({}, {} record(s))",
                         platform.label(),
                         self.picts.scott_saga_count().unwrap_or(0)
                     ),
-                    (None, None) => "blorb".to_string(),
+                    _ => "blorb".to_string(),
                 };
                 out.push(format!(
                     "  picture: {} row(s) reserved  ·  canvas={}x{} v{} opaque={} source={source}",
@@ -1205,6 +1249,96 @@ mod tests {
         assert!(
             dump.contains("source=S.A.G.A. family C (Commodore 64, 70 record(s))"),
             "dump should name the family-C source:\n{dump}"
+        );
+    }
+
+    // ── SQ-1480: the ZX Spectrum Mysterious Adventures' own Family B pictures ──
+
+    /// *The Golden Baton* as shipped on the ZX Spectrum `m1goldba.z80` —
+    /// the same eleven titles as `baton_prg` above, this time as a 48K
+    /// snapshot. Commercial and gitignored, so every case below skips
+    /// vacuously without it.
+    fn goldba_z80() -> Option<Vec<u8>> {
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../stories/scott-dialects/spectrum/m1goldba.z80");
+        if !path.exists() {
+            eprintln!("SKIP: no {} (gitignored commercial fixture)", path.display());
+            return None;
+        }
+        Some(std::fs::read(&path).expect("read m1goldba.z80"))
+    }
+
+    /// Room 1 (the same "dense forest, very SPOOKY" the C64 release opens in
+    /// — the eleven titles share the series' geography) shows its own
+    /// picture drawn at the band's own resolution, exactly as
+    /// `mysterious_c64_room1_shows_its_own_picture_drawn_for_the_band` pins
+    /// for the C64 release: the SAME `scott::c64::PICTURE_WIDTH`/`HEIGHT`
+    /// canvas and the SAME "round the band's magnification up, cap at 4x"
+    /// rule (`crate::graphics::scott_c64_scale`), because both platforms
+    /// decode through [`crate::graphics::PictSource::from_scott_family_b`].
+    #[test]
+    fn zx_mysterious_room1_shows_its_own_picture_drawn_for_the_band() {
+        let Some(bytes) = goldba_z80() else { return };
+        let s = ScottSession::new(bytes, None).expect("m1goldba.z80 loads");
+        assert_eq!(s.current_location().expect("loc").number, 1);
+        let model = s.screen();
+        let gw = picture_band(&model).expect("room 1 shows a picture band");
+        // FALLBACK_CHAR_PX is 8x16, so 16 rows x 16px = 256 device pixels,
+        // and 256 / 94 rounds up to a 3x supersample — the same arithmetic
+        // the C64 case above pins, because it is the same free function.
+        assert_eq!(
+            (gw.canvas.width(), gw.canvas.height()),
+            (scott::c64::PICTURE_WIDTH as u32 * 3, scott::c64::PICTURE_HEIGHT as u32 * 3),
+            "drawn at the band's own resolution, not at the 255 x 94 native canvas"
+        );
+        assert_eq!(
+            gw.canvas.width() * scott::c64::PICTURE_HEIGHT as u32,
+            gw.canvas.height() * scott::c64::PICTURE_WIDTH as u32,
+            "the aspect ratio is the native one"
+        );
+        assert!(gw.upscale, "the band renderer stretches it to fill the reserved rows");
+        // Not a flat fill — a decode that wrote nothing still has the right
+        // dimensions, so this is the guard that would have caught one.
+        let distinct: std::collections::HashSet<[u8; 4]> = gw.canvas.pixels().map(|p| p.0).collect();
+        assert!(distinct.len() > 1, "room 1's forest is more than one colour: {distinct:?}");
+    }
+
+    /// The band's canvas follows the player: room 2's picture is NOT room 1's
+    /// (§8.6's pure identity — room *n* shows image *n* − 1), the same
+    /// property `native_room1_canvas_matches_the_decoder_oracle_not_an_off_by_one_room`
+    /// (`crates/app/tests/suites/scott_c64_native_pictures.rs`) pins for the
+    /// C64 release, checked here end to end through a live session instead of
+    /// against the decoder oracle directly.
+    #[test]
+    fn zx_mysterious_picture_band_changes_when_the_room_changes() {
+        let Some(bytes) = goldba_z80() else { return };
+        let mut s = ScottSession::new(bytes, None).expect("m1goldba.z80 loads");
+        let room1_canvas = picture_band(&s.screen()).expect("room 1 has a band").canvas.clone();
+
+        let r = s.submit("north");
+        assert!(!r.quit, "moving must not end the game: {:?}", r.transcript);
+        assert_ne!(s.current_location().expect("loc").number, 1, "actually moved");
+
+        // A dark or picture-less neighbour is still a *different* band (none,
+        // rather than room 1's) — either way the band followed the player
+        // rather than staying pinned to room 1's art.
+        if let Some(gw) = picture_band(&s.screen()) {
+            assert_ne!(gw.canvas, room1_canvas, "a different room's picture must not equal room 1's");
+        }
+    }
+
+    /// `/dump-windows` names the platform, not just the family
+    /// (`ScottFamilyBPlatform::label`, SQ-1480) — the geometry and the
+    /// `source=native <platform> x<scale>` shape are identical to the C64's
+    /// line; only the word between them differs.
+    #[test]
+    fn zx_mysterious_window_dump_names_the_native_zx_source() {
+        let Some(bytes) = goldba_z80() else { return };
+        let s = ScottSession::new(bytes, None).expect("m1goldba.z80 loads");
+        let dump = s.window_dump().join("\n");
+        assert!(
+            dump.contains("source=native ZX Spectrum x3"),
+            "dump should name the native ZX Spectrum source:\n{dump}"
         );
     }
 

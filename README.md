@@ -22,11 +22,12 @@
   needed. *Next release:* the ZX Spectrum Mysterious Adventures load from their
   snapshots — hand lanthorn a `.z80` of any of Brian Howarth's eleven titles and
   it finds the game inside the 48K memory dump, names the release, and plays
-  it. The Commodore 64 Mysterious
-  Adventures show their pictures, redrawn at the size your terminal shows them
-  rather than stretched from the original's tiny canvas, and the Commodore 64
-  *Hulk* shows its full-colour comic panels — one per room, straight off the
-  release disk, darkness card and all
+  it. The Commodore 64 and ZX Spectrum Mysterious
+  Adventures show their pictures — the same line-drawn artwork either way,
+  under each platform's own colours — redrawn at the size your terminal shows
+  them rather than stretched from the original's tiny canvas, and the
+  Commodore 64 *Hulk* shows its full-colour comic panels — one per room,
+  straight off the release disk, darkness card and all
 
 ### Supported original Infocom disk formats:
 

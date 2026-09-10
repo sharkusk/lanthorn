@@ -138,9 +138,12 @@ whose artwork lanthorn doesn't draw yet, shows no such row: there is nothing
 to choose a resolution for.
 
 The **ZX Spectrum** pressings of those same eleven titles carry the same
-line-art, and lanthorn reads it out of the snapshot and counts it for you
-(`Pictures: native ZX Spectrum (vector, N rooms)`) — but it doesn't draw it
-yet, so a `.z80` plays as text for now.
+line-art, and lanthorn draws it too — open a `.z80` snapshot straight up, no
+Blorb needed, and the info panel says so
+(`Pictures: native ZX Spectrum (vector, N rooms)`). It gets the same
+**Picture resolution** row as the Commodore 64 pressing, `hi-res` or
+`original`, because both platforms store the identical artwork and differ
+only in their colours.
 
 ## Going deeper
 

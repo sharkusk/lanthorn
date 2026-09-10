@@ -39,6 +39,12 @@ Absolute URLs or no link.
   It needs no list of known releases to do it, so a Spectrum snapshot nobody
   has catalogued loads too; a snapshot of some other game is refused by name
   rather than half-read.
+- **And now they show their pictures too.** The ZX Spectrum releases draw the
+  same line-art rooms the Commodore 64 edition does — the two platforms carry
+  the identical artwork and differ only in their colours — appearing above the
+  room panel exactly the same way, through the same kitty/sixel/half-block
+  drawing, and offering the same **Picture resolution** choice in launch
+  options. (SQ-1480)
 
 ### Fixed
 
