@@ -1611,13 +1611,10 @@ mod tests {
         // West of House. Asking before that ran would make #13 look like the
         // sole situated candidate and win by default — a fixture artifact
         // that would never happen once a game is actually playable.
-        let fixture = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("tests/fixtures/minizork.z3");
-        if !fixture.exists() {
+        let Some(data) = crate::fixtures::load("minizork.z3") else {
             eprintln!("SKIP: minizork.z3 fixture not found");
             return;
-        }
-        let data = std::fs::read(&fixture).expect("read minizork.z3");
+        };
         let mut machine = make_machine(data);
         machine.init_caps();
         for _ in 0..100_000u64 {

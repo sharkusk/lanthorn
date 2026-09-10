@@ -21,10 +21,14 @@
 //! probe's own patience has run out, every run. A test that only passed because
 //! the race was won would be worth nothing here.
 //!
-//! THE FIXTURE IS DELIBERATELY THE TRACKED ONE. `stories/` is gitignored, so a
-//! test that reached for it would skip vacuously in a worktree and in CI — and a
-//! silent skip is exactly how this defect survived once already. Mini-Zork ships
-//! in `crates/zvm/tests/fixtures/`, so this always really runs.
+//! THE FIXTURE IS DELIBERATELY A FETCHED ONE, NOT `stories/`. `stories/` is
+//! gitignored commercial media, so a test that reached for it would skip
+//! vacuously in a worktree and in CI — and a silent skip is exactly how this
+//! defect survived once already. Mini-Zork is fetched instead
+//! (`scripts/fixtures.manifest`, SQ-1453), which CI always populates before
+//! `cargo test` runs, so this still always really runs there; a local run
+//! wants `scripts/fetch-fixtures.sh` first if `minizork-r34-s871124.z3` is
+//! not already present.
 
 #[cfg(not(unix))]
 #[test]
@@ -64,17 +68,20 @@ mod unix {
     }
 
     /// A one-story library plus a user dir that already knows it, so the launch
-    /// goes straight to the picker with no first-use prompt in the way.
-    fn library(root: &Path) -> (PathBuf, PathBuf) {
+    /// goes straight to the picker with no first-use prompt in the way. `None`
+    /// if the fetched fixture is absent (caller skips).
+    fn library(root: &Path) -> Option<(PathBuf, PathBuf)> {
         let lib = root.join("library");
         let user = root.join("user");
         std::fs::create_dir_all(&lib).unwrap();
         std::fs::create_dir_all(&user).unwrap();
-        let story = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../zvm/tests/fixtures/minizork.z3");
-        assert!(story.is_file(), "tracked fixture missing at {}", story.display());
+        let story = crate::fixture_paths::fixture_path("minizork-r34-s871124.z3");
+        if !story.is_file() {
+            return None;
+        }
         std::fs::copy(&story, lib.join("minizork.z3")).unwrap();
         std::fs::write(user.join("config.toml"), format!("default_story_dir = '{}'\n", lib.display())).unwrap();
-        (lib, user)
+        Some((lib, user))
     }
 
     fn spec(lib: &Path, user: &Path) -> Spec {
@@ -110,7 +117,10 @@ mod unix {
     #[test]
     fn a_late_colour_answer_never_reaches_the_story() {
         let root = scratch("query-replies-leak");
-        let (lib, user) = library(&root);
+        let Some((lib, user)) = library(&root) else {
+            eprintln!("SKIP: minizork-r34-s871124.z3 fixture absent");
+            return;
+        };
         let mut spec = spec(&lib, &user);
         spec.keys = vec![
             Key::Wait(Duration::from_millis(1000)),
@@ -138,7 +148,10 @@ mod unix {
         // owed — the window in which the fix owns the terminal — and asks the
         // story to prove it arrived.
         let root = scratch("query-replies-typeahead");
-        let (lib, user) = library(&root);
+        let Some((lib, user)) = library(&root) else {
+            eprintln!("SKIP: minizork-r34-s871124.z3 fixture absent");
+            return;
+        };
         let mut spec = spec(&lib, &user);
         // Later than the colour answers' own lateness would allow, so the typing
         // lands while the fix is holding the terminal rather than after it.

@@ -46,8 +46,8 @@
 //! 230220, the only local copy; `glulx_game_colours.rs` already established it
 //! sets the white-on-black style hint the way this needs. Release 10, the IF
 //! Archive's fetchable copy, does NOT set it the same way at boot per SQ-1454
-//! and is not used here) and `minizork` (Z-machine, tracked in the checkout at
-//! `crates/zvm/tests/fixtures/minizork.z3`) as the regression guard — it never
+//! and is not used here) and `minizork` (Z-machine, a fetched fixture —
+//! `minizork-r34-s871124.z3`, SQ-1453) as the regression guard — it never
 //! declares a page, so `game_input` must be `None` and its rendering must be
 //! unchanged.
 
@@ -204,10 +204,9 @@ fn cm_echoed_answers_honor_off_use_theme_uniformly() {
 /// a custom page at all.
 #[test]
 fn minizork_unaffected_by_the_fix() {
-    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("../../crates/zvm/tests/fixtures/minizork.z3");
-    if !path.exists() {
-        eprintln!("SKIP: crates/zvm/tests/fixtures/minizork.z3 absent");
+    let path = crate::fixture_paths::fixture_path("minizork-r34-s871124.z3");
+    if !path.is_file() {
+        eprintln!("SKIP: minizork-r34-s871124.z3 fixture absent");
         return;
     }
     let bytes = std::fs::read(&path).unwrap();

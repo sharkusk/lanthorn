@@ -19,14 +19,16 @@
 //!   inventory          → A brass lantern / A sword / A leaflet
 //! ```
 //!
-//! The cases against `crates/zvm/tests/fixtures/` are the ones CI can see;
+//! The cases against `crates/zvm/tests/fixtures/` are the ones CI can see —
+//! most of it committed, `minizork.z3` fetched instead (SQ-1453) and reached
+//! the same way through `zvm::fixtures::load`, so CI still always has it;
 //! `stories/` is gitignored commercial media and those skip vacuously.
 
 use zvm::memory::Memory;
 use zvm::objects::{self, Adjectives, ParseNames};
 
 fn fixture(name: &str) -> Memory {
-    Memory::new(zvm::fixtures::load(name).expect("committed fixture")).unwrap()
+    Memory::new(zvm::fixtures::load(name).expect("fixture CI always has")).unwrap()
 }
 
 /// A gitignored commercial story, or `None` so the case can skip.

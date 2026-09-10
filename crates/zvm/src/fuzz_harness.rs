@@ -240,17 +240,20 @@ fn random_image_stories_survive_step() {
 /// Committed, freely redistributable fixtures to mutate — real story shapes
 /// rather than pure noise, so mutation finds a different class of bug (a
 /// plausible-but-corrupt header/table) than [`random_image`] does.
-fn fixture_paths() -> Vec<&'static str> {
-    vec![
-        concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/czech.z5"),
-        concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/minizork.z3"),
-        concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/curses.z5"),
-    ]
+///
+/// `minizork.z3` is loaded through [`crate::fixtures::load`] rather than a
+/// bare path, because it moved to the fetched fixture set (SQ-1453) — `load`
+/// also checks the app crate's fetched location for that one name.
+fn fixture_bytes() -> Vec<Vec<u8>> {
+    ["czech.z5", "minizork.z3", "curses.z5"]
+        .iter()
+        .filter_map(|name| crate::fixtures::load(name))
+        .collect()
 }
 
 #[test]
 fn mutated_fixture_stories_survive_step() {
-    let fixtures: Vec<Vec<u8>> = fixture_paths().iter().filter_map(|p| std::fs::read(p).ok()).collect();
+    let fixtures: Vec<Vec<u8>> = fixture_bytes();
     if fixtures.is_empty() {
         return; // no committed fixture available — skip vacuously
     }
@@ -270,10 +273,9 @@ fn mutated_fixture_stories_survive_step() {
 /// panicking, and the machine must still be steppable afterward either way.
 #[test]
 fn hostile_restore_buffers_do_not_panic() {
-    let story = std::fs::read(fixture_paths()[0]);
-    let story = match story {
-        Ok(b) => b,
-        Err(_) => return, // fixture absent — skip vacuously
+    let fixtures = fixture_bytes();
+    let Some(story) = fixtures.into_iter().next() else {
+        return; // fixture absent — skip vacuously
     };
     let mem = Memory::new(story.clone()).expect("committed fixture must parse");
     let mut m = Machine::new(mem);

@@ -9,9 +9,12 @@
 //!
 //! ```text
 //! cargo run --release -p lanthorn-zvm --example bench -- \
-//!     crates/zvm/tests/fixtures/minizork.z3 \
+//!     crates/app/tests/fixtures/stories/minizork-r34-s871124.z3 \
 //!     crates/zvm/tests/fixtures/bench/minizork.script --turns 20000
 //! ```
+//!
+//! `minizork-r34-s871124.z3` is a fetched fixture, not a committed one
+//! (SQ-1453) — run `scripts/fetch-fixtures.sh` first if it is not there yet.
 //!
 //! **Build `--release`.** A debug build measures the borrow-checked, bounds-
 //! checked, un-inlined shape of the interpreter and is three to twenty times
@@ -235,10 +238,11 @@ mod tests {
     /// real numbers are taken by hand per `docs/internals/performance.md`.
     #[test]
     fn bench_harness_drives_a_short_script() {
-        let story_path = fixtures().join("minizork.z3");
         let script_path = fixtures().join("bench/minizork.script");
-        let Ok(story) = fs::read(&story_path) else {
-            eprintln!("skipping: {} absent", story_path.display());
+        // `minizork.z3` moved to the fetched fixture set (SQ-1453); `load`
+        // also checks the app crate's fetched location for that one name.
+        let Some(story) = zvm::fixtures::load("minizork.z3") else {
+            eprintln!("skipping: minizork.z3 absent");
             return;
         };
         if !script_path.exists() {
@@ -259,10 +263,9 @@ mod tests {
     /// property the cell-free harness can make.
     #[test]
     fn script_is_a_closed_cycle() {
-        let story_path = fixtures().join("minizork.z3");
         let script_path = fixtures().join("bench/minizork.script");
-        let (Ok(story), true) = (fs::read(&story_path), script_path.exists()) else {
-            eprintln!("skipping: {} absent", story_path.display());
+        let (Some(story), true) = (zvm::fixtures::load("minizork.z3"), script_path.exists()) else {
+            eprintln!("skipping: minizork.z3 or {} absent", script_path.display());
             return;
         };
         let script = load_script(script_path.to_str().expect("utf-8 path"));

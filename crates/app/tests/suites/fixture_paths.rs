@@ -59,15 +59,6 @@ fn manifest_names() -> &'static [&'static str] {
 pub fn fixture_path(name: &str) -> PathBuf {
     let manifest = Path::new(env!("CARGO_MANIFEST_DIR"));
 
-    // Mini-Zork I (r34/s871124) already has a tracked, sha256-verified copy
-    // at `crates/zvm/tests/fixtures/minizork.z3` (IF Archive demos/minizork.z3),
-    // read by `pty_query_replies.rs` the same way. Route the several suites
-    // that ask for it by its `stories/`-era filename there instead of
-    // duplicating the binary.
-    if name == "minizork-r34-s871124.z3" {
-        return manifest.join("../zvm/tests/fixtures/minizork.z3");
-    }
-
     // LOCAL FIRST, tracked as the fallback — because a story is not the only file
     // a story needs (SQ-1048).
     //

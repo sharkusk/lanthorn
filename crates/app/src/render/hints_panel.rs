@@ -296,7 +296,7 @@ mod tests {
     /// returns `None`).
     fn make_hint_session() -> Option<crate::state::HintSession> {
         let fixture_path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("../zvm/tests/fixtures/minizork.z3");
+            .join("tests/fixtures/stories/minizork-r34-s871124.z3");
         if !fixture_path.exists() {
             return None;
         }

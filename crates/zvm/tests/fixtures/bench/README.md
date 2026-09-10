@@ -7,10 +7,10 @@ in [`docs/internals/performance.md`](../../../../../docs/internals/performance.m
 ## Story
 
 **`../minizork.z3`** — Mini-Zork I, Release 34 / serial 871124, 52,216 bytes,
-sha256 `c74f01a2…2c69e31ea4a6`. Not duplicated here: it is already committed one
-directory up for the save-interop and story-location suites, and its provenance
-(IF Archive, freely distributable) is tabulated in
-[`../README.md`](../README.md).
+sha256 `c74f01a2…2c69e31ea4a6`. Not duplicated here: it is the same fetched
+fixture (SQ-1453) the save-interop and story-location suites use one
+directory up, reached the same way — `zvm::fixtures::load("minizork.z3")` —
+and its provenance is tabulated in [`../README.md`](../README.md).
 
 A real v3 game rather than an opcode exerciser, on purpose. What an embedder
 wants to know is how long a *turn of a game* takes — dictionary lookup, parse,

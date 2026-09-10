@@ -310,7 +310,7 @@ mod tests {
     /// A fresh minizork session, parked at its opening prompt.
     fn minizork() -> GameSession {
         let fixture = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("../zvm/tests/fixtures/minizork.z3");
+            .join("tests/fixtures/stories/minizork-r34-s871124.z3");
         let story = std::fs::read(&fixture).expect("minizork.z3 fixture");
         GameSession::new(story, true, false, None).expect("new minizork")
     }

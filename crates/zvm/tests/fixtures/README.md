@@ -1,12 +1,20 @@
 # Test fixtures
 
-These fixtures **are tracked in git** — `git ls-files crates/zvm/tests/fixtures`
-lists every binary below. (An earlier version of this file said they were
-"not committed — gitignored"; that was true once, stopped being true, and the
-line was never updated — SQ-1421.) `crate::fixtures::load(name)` still returns
-`None` when a name is absent, so a fixture-backed test degrades to a vacuous
-skip rather than a compile error if one is ever removed — but nothing here is
-gitignored today. All are freely redistributable: the six Z-machine story
+Six of the seven story files below **are tracked in git** —
+`git ls-files crates/zvm/tests/fixtures` lists every one. (An earlier version
+of this file said they were "not committed — gitignored"; that was true once,
+stopped being true, and the line was never updated — SQ-1421.) The seventh,
+`minizork.z3`, moved the other way (SQ-1453): it is **fetched, not
+committed**, the same as `crates/app/tests/fixtures/stories/` — this crate
+takes zero external dependencies and so has no fetch machinery of its own,
+which is why `minizork.z3` is the one entry below with no sha256 in the block
+that follows. `crate::fixtures::load(name)` returns `None` when a name is
+absent, so a fixture-backed test degrades to a vacuous skip rather than a
+compile error if any of these is ever missing — for `minizork.z3` specifically,
+`load` also checks `crates/app/tests/fixtures/stories/minizork-r34-s871124.z3`
+(the app crate's fetched fixture directory, `scripts/fetch-fixtures.sh`)
+before giving up, so a checkout that has fetched the app's fixtures has this
+one too, without a second copy. All are freely redistributable: the story
 files come from the [IF Archive](https://ifarchive.org), whose submission
 policy requires everything it hosts to be freely distributable, and the two
 `interop/*.qzl` saves and `etude.dfrotz.txt` transcript are ours, generated
@@ -19,20 +27,22 @@ from those stories by a reference interpreter and committed for provenance
 |------|---------|--------|--------|-------|
 | `czech.z5` | CZECH opcode regression suite (primary acceptance oracle, Task 16) | <https://www.ifarchive.org/if-archive/infocom/interpreters/tools/czech_0_8.zip> (unzip, extract czech.z5) | `9f7e01b9…1ec1bc882b5a` | 13,312 |
 | `praxix.z5` | Praxix arithmetic/edge-case checker (Task 16) | <https://ifarchive.org/if-archive/infocom/interpreters/tools/praxix.zip> (unzip, extract praxix.z5) | `bef3bdc2…1347c21b48ac` | 31,744 |
-| `minizork.z3` | small real v3 game (smoke tests, save interop, Tasks 5/6/15) | <https://ifarchive.org/if-archive/infocom/demos/minizork.z3> | `c74f01a2…2c69e31ea4a6` | 52,216 |
+| `minizork.z3` (**fetched, not committed** — SQ-1453) | small real v3 game (smoke tests, save interop, Tasks 5/6/15) | <https://ifarchive.org/if-archive/infocom/demos/minizork.z3>, via `scripts/fixtures.manifest` as `minizork-r34-s871124.z3` | `c74f01a2…2c69e31ea4a6` | 52,216 |
 | `etude.z5` | TerpEtude interpreter exerciser (Andrew Plotkin, Release 2) — all 14 menu options driven (`etude_preload.rs` option 12/SQ-1419, `etude_sections.rs` the other 13/SQ-1421) | <https://ifarchive.org/if-archive/infocom/interpreters/tools/etude.tar.Z> (`.tar.Z` — `uncompress` or `gzip -d` then `tar xf`, extract `etude/etude.z5`) | `bfa2ef69…bb1fb0daface` | 16,896 |
 | `gntests.z5` | Graham Nelson's Z-Spec InputCodes/Fonts/Accents/Colours/Header/TimedInput test programs — all six sections driven (`gntests_input_codes.rs`/SQ-1423 at the `zvm-cli` layer, `gntests_sections.rs`/SQ-1421 at the core `zvm` layer) | <https://ifarchive.org/if-archive/infocom/interpreters/tools/etude.tar.Z> (`gzip -dc \| tar xf -`, extract `gntests.z5` — same archive as `etude.z5`, a second file in it) | `56e483ab…4e3d49c545a6` | 7,168 |
 | `strictz.z5` | every `@jin`/`@get_child`/`@get_parent`/`@get_sibling`/`@get_prop_addr`/`@get_prop`/`@clear_attr`/`@set_attr`/`@test_attr`/`@insert_obj`/`@remove_obj`/`@get_next_prop` opcode's object-0 edge case (SQ-1421, `regression.rs`) | <https://ifarchive.org/if-archive/infocom/interpreters/tools/strictz.z5> (source `strictz.inf` alongside it, same directory) | `2a15122e…26d6a52d1cfb` | 4,096 |
 | `curses.z5` | "Curses" (Graham Nelson, 1993), a real parser game with rooms and its own `save`/`restore` verbs — the second story for `save_interop.rs`'s cross-interpreter matrix (SQ-1421), covering a story that isn't a synthetic opcode-suite/menu exerciser | <https://ifarchive.org/if-archive/games/zcode/curses.z5> | `330100bf…4be4f14fe7da` | 259,072 |
 
-(sha256 truncated in the table for width — the full digests are below, one
-`shasum -a 256` line per file, so a fixture can be verified with a single
-diff against this block: `shasum -a 256 crates/zvm/tests/fixtures/*.z5 crates/zvm/tests/fixtures/*.z3`.)
+(sha256 truncated in the table for width — the full digests of the six
+COMMITTED files are below, one `shasum -a 256` line per file, so a fixture
+can be verified with a single diff against this block: `shasum -a 256
+crates/zvm/tests/fixtures/*.z5`. `minizork.z3`'s digest is the manifest row
+in `scripts/fixtures.manifest`, not this block — `scripts/fetch-fixtures.sh
+--verify-only` is what checks that one.)
 
 ```
 9f7e01b94353798e1eb8c3b4521f06db4c830a6120f5b3ab7f0d1ec1bc882b5a  czech.z5
 bef3bdc2543cc7161833062855aa9bb1682db9eca69d9d36e9101347c21b48ac  praxix.z5
-c74f01a232e8df4b05d7ebcba14870143f49b3c9a25f194f7a7d2c69e31ea4a6  minizork.z3
 bfa2ef69f2f5ce3796b96f9b073676902e971aedb3ba690b8835bb1fb0daface  etude.z5
 56e483ab0049311ce26b4b8639d2c6f8976ad0e7058113099a8e4e3d49c545a6  gntests.z5
 2a15122eded657266ea2df07880663c7462d20f263170ede655826d6a52d1cfb  strictz.z5
@@ -174,4 +184,5 @@ conformance suite — so SQ-1421 records the gap rather than closing it.
 bench` against `minizork.z3` above; see [`bench/README.md`](bench/README.md) for
 what the script does and why, and `docs/internals/performance.md` for the
 recorded baselines against `dfrotz` (SQ-1428). No story file lives under
-`bench/` — it reads `minizork.z3` from this directory.
+`bench/` — it reads `minizork.z3` through [`crate::fixtures::load`], the
+same fetched fixture as the rest of this directory.
