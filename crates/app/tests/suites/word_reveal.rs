@@ -45,14 +45,15 @@
 //!
 //! | fixture | release | turns in | what it shows |
 //! |---|---|---|---|
-//! | `crates/zvm/tests/fixtures/minizork.z3` | r34/s871124 | 0 | the whole path, in CI |
-//! | `crates/zvm/tests/fixtures/minizork.z3` | r34/s871124 | 1 (`north`) | scope moving under old text |
+//! | `minizork-r34-s871124.z3` (fetched) | r34/s871124 | 0 | the whole path, in CI |
+//! | `minizork-r34-s871124.z3` (fetched) | r34/s871124 | 1 (`north`) | scope moving under old text |
 //! | `stories/zork1-invclues-r52-s871125.z5` | r52/s871125 | 0 | the noun-AND-adjective contract (SQ-1207); Mini-Zork's Version 3 dictionary cannot report adjectives |
 //! | `stories/Dr Ludwig and the Devil.gblorb` | r2/s250306 | 3 intro keys, 0 commands | the same contract on Glulx (SQ-1210); `of`/`in` glue words stay dark too (SQ-1216) |
 //! | `stories/King_of_Shreds_and_Patches.gblorb` | — | boot | Glulx fail-safe: answer truly or refuse honestly (SQ-1210) |
 //!
-//! Mini-Zork is tracked, so every case built on it runs on CI; nothing there
-//! skips. The Version 5 specimen is gitignored (CLAUDE.md's `stories/`) and
+//! Mini-Zork is a fetched fixture (SQ-1453), which CI always populates, so
+//! every case built on it runs there; nothing there skips. The Version 5
+//! specimen is gitignored (CLAUDE.md's `stories/`) and
 //! skips vacuously without it — chosen over Mini-Zork specifically because a
 //! Version 1-3 story keeps no readable adjective property at all. The two
 //! Glulx specimens are gitignored likewise and skip the same way.
@@ -70,11 +71,11 @@ use crate::fixture_paths::fixture_path;
 
 // ── Booting and drawing ─────────────────────────────────────────────────────
 
-/// Mini-Zork I, tracked in the checkout.
+/// Mini-Zork I, a fetched fixture (SQ-1453).
 fn minizork() -> GameSession {
     let path = fixture_path("minizork-r34-s871124.z3");
     let bytes =
-        std::fs::read(&path).unwrap_or_else(|e| panic!("tracked at {}: {e}", path.display()));
+        std::fs::read(&path).unwrap_or_else(|e| panic!("fetched fixture at {}: {e}", path.display()));
     GameSession::new_with_trace(bytes, true, false, None, false, Vec::new(), None, None, Some((25, 80)))
         .expect("a Version 3 story should load and boot")
 }

@@ -266,9 +266,12 @@ fn lanthorn_save_at_p(story_fixture: &str, prefix: &[&str], tag: &str) -> std::p
 }
 
 /// Run `dfrotz_bin` against `story_fixture`, loading `save_path` (`-L`) and
-/// piping `probe_script`, returning stdout. Uses an absolute story path
-/// (built from `CARGO_MANIFEST_DIR`) since integration tests run with CWD =
-/// the crate directory, not the repo root.
+/// piping `probe_script`, returning stdout. Resolves `story_fixture` through
+/// [`zvm::fixtures::path`] (an absolute path either way — dfrotz is an
+/// external process, so it needs a real file on disk, not the bytes `load`
+/// would hand a Rust caller) rather than a raw `CARGO_MANIFEST_DIR` join,
+/// since `minizork.z3` moved to the fetched fixture set (SQ-1453) and is no
+/// longer necessarily under this crate's own `tests/fixtures/`.
 fn dfrotz_probe(
     dfrotz_bin: &std::path::Path,
     story_fixture: &str,
@@ -278,7 +281,8 @@ fn dfrotz_probe(
     use std::io::Write;
     use std::process::{Command, Stdio};
 
-    let story = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures").join(story_fixture);
+    let story = zvm::fixtures::path(story_fixture)
+        .unwrap_or_else(|| panic!("required CI fixture {story_fixture} missing"));
     let mut child = Command::new(dfrotz_bin)
         .args(["-w", "80", "-L"])
         .arg(save_path)

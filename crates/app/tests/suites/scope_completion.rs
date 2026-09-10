@@ -33,11 +33,12 @@
 //!
 //! | fixture | release | turns in | what it shows |
 //! |---|---|---|---|
-//! | `crates/zvm/tests/fixtures/minizork.z3` | r34/s871124 | 0 and 4 | the whole path, in CI |
+//! | `minizork-r34-s871124.z3` (fetched) | r34/s871124 | 0 and 4 | the whole path, in CI |
 //! | `stories/zork1-r88-s840726.z3` | r88/s840726 | 3 | the two names the parser refuses |
 //!
-//! Mini-Zork is tracked, so every case that matters runs on CI; the Zork I case
-//! skips vacuously without `stories/`.
+//! Mini-Zork is a fetched fixture (SQ-1453), which CI always populates, so
+//! every case that matters runs there; the Zork I case skips vacuously
+//! without `stories/`.
 
 use app::engine::Engine;
 use app::session::GameSession;
@@ -52,10 +53,10 @@ fn boot(bytes: Vec<u8>) -> GameSession {
         .expect("a Version 3 story should load and boot")
 }
 
-/// Mini-Zork I, tracked in the checkout.
+/// Mini-Zork I, a fetched fixture (SQ-1453).
 fn minizork() -> GameSession {
     let path = fixture_path("minizork-r34-s871124.z3");
-    boot(std::fs::read(&path).unwrap_or_else(|e| panic!("tracked at {}: {e}", path.display())))
+    boot(std::fs::read(&path).unwrap_or_else(|e| panic!("fetched fixture at {}: {e}", path.display())))
 }
 
 /// A gitignored commercial story, or `None` so the case can skip.
@@ -466,7 +467,7 @@ fn the_avatar_is_not_a_thing_in_the_room() {
 ///
 /// | fixture | release | turns in | what it shows |
 /// |---|---|---|---|
-/// | `crates/zvm/tests/fixtures/minizork.z3` | r34/s871124 | 5 then 6 | shut, then opened, in the player's hands |
+/// | `minizork-r34-s871124.z3` (fetched) | r34/s871124 | 5 then 6 | shut, then opened, in the player's hands |
 ///
 /// The parser is the oracle, and it was asked: driven to the Kitchen and
 /// `take sack` / `open sack`, Mini-Zork answers `i` with

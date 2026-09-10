@@ -10,12 +10,12 @@
 //!
 //! | fixture | engine | dictionary | what it shows |
 //! |---|---|---|---|
-//! | `crates/zvm/tests/fixtures/minizork.z3` | Z-machine v3 | 6 Z-chars | the real tokeniser, and truncation |
+//! | `minizork-r34-s871124.z3` (fetched) | Z-machine v3 | 6 Z-chars | the real tokeniser, and truncation |
 //! | `crates/scott/tests/tiny_cave.dat` | Scott | 3 chars | short words, and no grammar table |
 //! | a hand-built pocket vocabulary | none | 6 chars | the three bugs, stated one at a time |
 //!
-//! Both story fixtures are tracked, so CI runs every case here — no vacuous
-//! skips.
+//! Mini-Zork is a fetched fixture (SQ-1453) and `tiny_cave.dat` is tracked,
+//! so CI runs every case here — no vacuous skips.
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -65,7 +65,7 @@ fn stop_word_scrape(text: &str) -> Vec<String> {
 fn boot_minizork() -> app::session::GameSession {
     let path = fixture_path("minizork-r34-s871124.z3");
     let bytes = std::fs::read(&path)
-        .unwrap_or_else(|e| panic!("minizork.z3 is tracked at {}: {e}", path.display()));
+        .unwrap_or_else(|e| panic!("minizork-r34-s871124.z3 fetched fixture at {}: {e}", path.display()));
     app::session::GameSession::new_with_trace(
         bytes,
         true,

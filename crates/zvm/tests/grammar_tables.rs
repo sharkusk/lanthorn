@@ -42,14 +42,16 @@ fn story(name: &str) -> Option<Memory> {
     Memory::new(std::fs::read(&path).ok()?).ok()
 }
 
-/// Load a committed fixture. These are present everywhere, so a missing one is
-/// a failure rather than a skip.
+/// Load a fixture this crate can always reach on CI — most are committed;
+/// `minizork.z3` is fetched instead (SQ-1453) and `zvm::fixtures::load`
+/// falls back to the app crate's fetched copy for that one name. Either way
+/// CI always has it, so a missing one is a failure rather than a skip.
 fn fixture(name: &str) -> Memory {
     let bytes = zvm::fixtures::load(name).unwrap_or_else(|| panic!("fixture {name} is missing"));
     Memory::new(bytes).expect("fixture is a valid story")
 }
 
-// ── minizork.z3 — a committed Infocom fixture, so CI sees this ───────────────
+// ── minizork.z3 — a fetched Infocom fixture (SQ-1453), so CI sees this ──────
 
 #[test]
 fn minizork_grammar_matches_infodump() {

@@ -248,7 +248,7 @@ mod tests {
         // minizork.z3 is an interactive fixture that requests line input (unlike
         // czech.z5, which auto-runs to Quit and has no frame to save afterwards).
         let fixture = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("../zvm/tests/fixtures/minizork.z3");
+            .join("tests/fixtures/stories/minizork-r34-s871124.z3");
         let Ok(story) = std::fs::read(&fixture) else { return };
 
         let mut session = GameSession::new(story, true, false, None).expect("GameSession::new");

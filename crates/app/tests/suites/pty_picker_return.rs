@@ -10,10 +10,11 @@
 //! draws the restored row selected. This drives the real binary under a pty
 //! (SQ-0762) to check exactly that.
 //!
-//! THE FIXTURE IS DELIBERATELY THE TRACKED PAIR: `crates/zvm/tests/fixtures/
-//! minizork.z3` and `crates/scott/tests/tiny_cave.dat`, both already used
-//! elsewhere as in-repo (non-gitignored) launchable stories, so this always
-//! really runs — no `stories/` needed, on CI or in a fresh worktree.
+//! THE FIXTURE PAIR IS DELIBERATELY NOT `stories/`: Mini-Zork (fetched,
+//! `minizork-r34-s871124.z3`, SQ-1453) and `crates/scott/tests/tiny_cave.dat`
+//! (tracked in-repo), so this always really runs on CI — no `stories/`
+//! needed there. Locally, run `scripts/fetch-fixtures.sh` first if
+//! `minizork-r34-s871124.z3` is not already fetched.
 //!
 //! HOW THE ASSERTION AVOIDS DECODING COLOUR. The picker draws a literal
 //! `▸ ` text marker in front of the selected row (`picker_ui.rs`'s
@@ -55,30 +56,35 @@ mod unix {
     /// appears anywhere the root itself would render, which is what lets the
     /// assertion below use "is `tiny_cave` on screen at all" as its directory
     /// check.
-    fn library(root: &Path) -> (PathBuf, PathBuf) {
+    fn library(root: &Path) -> Option<(PathBuf, PathBuf)> {
         let lib = root.join("library");
         let disks = lib.join("disks");
         let user = root.join("user");
         std::fs::create_dir_all(&disks).unwrap();
         std::fs::create_dir_all(&user).unwrap();
 
-        let minizork = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../zvm/tests/fixtures/minizork.z3");
+        let minizork = crate::fixture_paths::fixture_path("minizork-r34-s871124.z3");
         let tiny_cave = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../scott/tests/tiny_cave.dat");
-        assert!(minizork.is_file(), "tracked fixture missing at {}", minizork.display());
         assert!(tiny_cave.is_file(), "tracked fixture missing at {}", tiny_cave.display());
+        if !minizork.is_file() {
+            return None;
+        }
         std::fs::copy(&minizork, disks.join("minizork.z3")).unwrap();
         std::fs::copy(&tiny_cave, disks.join("tiny_cave.dat")).unwrap();
 
         // A user dir that already knows the library, same as `pty_query_replies`'s
         // `library()`: the launch goes straight to the picker, no first-use prompt.
         std::fs::write(user.join("config.toml"), format!("default_story_dir = '{}'\n", lib.display())).unwrap();
-        (lib, user)
+        Some((lib, user))
     }
 
     #[test]
     fn quitting_a_game_returns_the_picker_to_the_sub_folder_and_row_it_was_launched_from() {
         let root = scratch("picker-return");
-        let (lib, user) = library(&root);
+        let Some((lib, user)) = library(&root) else {
+            eprintln!("SKIP: minizork-r34-s871124.z3 fixture absent");
+            return;
+        };
 
         let mut spec = Spec::new(env!("CARGO_BIN_EXE_lanthorn"), &lib, &user);
         spec.cols = 100;
@@ -171,23 +177,25 @@ mod unix {
     /// back to the filename stem — it carries no known IFID), so `tiny_cave`
     /// is always the LAST row: twenty rows deep, well past the fold of any
     /// terminal short enough to matter here.
-    fn library_scrolled(root: &Path, pad: usize) -> (PathBuf, PathBuf) {
+    fn library_scrolled(root: &Path, pad: usize) -> Option<(PathBuf, PathBuf)> {
         let lib = root.join("library");
         let user = root.join("user");
         std::fs::create_dir_all(&lib).unwrap();
         std::fs::create_dir_all(&user).unwrap();
 
-        let minizork = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../zvm/tests/fixtures/minizork.z3");
+        let minizork = crate::fixture_paths::fixture_path("minizork-r34-s871124.z3");
         let tiny_cave = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../scott/tests/tiny_cave.dat");
-        assert!(minizork.is_file(), "tracked fixture missing at {}", minizork.display());
         assert!(tiny_cave.is_file(), "tracked fixture missing at {}", tiny_cave.display());
+        if !minizork.is_file() {
+            return None;
+        }
         for i in 0..pad {
             std::fs::copy(&minizork, lib.join(format!("pad{i:02}.z3"))).unwrap();
         }
         std::fs::copy(&tiny_cave, lib.join("tiny_cave.dat")).unwrap();
 
         std::fs::write(user.join("config.toml"), format!("default_story_dir = '{}'\n", lib.display())).unwrap();
-        (lib, user)
+        Some((lib, user))
     }
 
     /// The byte offset of the `nth` (1-based) `CSI ? 1 0 4 9 h` (enter
@@ -270,7 +278,10 @@ mod unix {
     #[test]
     fn quitting_a_game_returns_the_scrolled_row_to_the_same_screen_position() {
         let root = scratch("picker-return-scrolled");
-        let (lib, user) = library_scrolled(&root, 20);
+        let Some((lib, user)) = library_scrolled(&root, 20) else {
+            eprintln!("SKIP: minizork-r34-s871124.z3 fixture absent");
+            return;
+        };
 
         let mut spec = Spec::new(env!("CARGO_BIN_EXE_lanthorn"), &lib, &user);
         spec.cols = 100;

@@ -10,7 +10,7 @@ rust-version.workspace = true
 readme = "README.md"
 keywords = ["z-machine", "interactive-fiction", "infocom", "zcode", "emulator"]
 categories = ["emulators", "parser-implementations"]
-include = ["src/**", "Cargo.toml", "README.md"]
+include = ["src/**", "examples/**", "Cargo.toml", "README.md"]
 
 [lib]
 # Package renamed for crates.io (SQ-1250); the crate name every `use zvm::…`

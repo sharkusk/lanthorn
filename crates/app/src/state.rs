@@ -7914,7 +7914,7 @@ mod tests {
         // Build a minimal HintSession using the minizork fixture (same approach as
         // the reset test in input.rs). If the fixture is absent we skip.
         let fixture_path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("../zvm/tests/fixtures/minizork.z3");
+            .join("tests/fixtures/stories/minizork-r34-s871124.z3");
         if !fixture_path.exists() {
             return; // fixture absent — skip
         }
@@ -7938,7 +7938,7 @@ mod tests {
     #[test]
     fn hint_session_scroll_by_clamps_to_range() {
         let fixture_path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("../zvm/tests/fixtures/minizork.z3");
+            .join("tests/fixtures/stories/minizork-r34-s871124.z3");
         if !fixture_path.exists() {
             return; // fixture absent — skip
         }
@@ -7975,7 +7975,7 @@ mod tests {
     /// fixture is absent (caller skips).
     fn make_hint_session() -> Option<HintSession> {
         let fixture_path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("../zvm/tests/fixtures/minizork.z3");
+            .join("tests/fixtures/stories/minizork-r34-s871124.z3");
         if !fixture_path.exists() {
             return None;
         }

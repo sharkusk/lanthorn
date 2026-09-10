@@ -9095,7 +9095,7 @@ mod tests {
     #[test]
     fn minizork_v3_ingame_save_restore_round_trips() {
         let fixture = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("../zvm/tests/fixtures/minizork.z3");
+            .join("tests/fixtures/stories/minizork-r34-s871124.z3");
         if !fixture.exists() {
             panic!("minizork.z3 fixture missing at {} — this smoke test must run", fixture.display());
         }
@@ -9134,7 +9134,7 @@ mod tests {
     #[test]
     fn game_save_restore_via_manager_accepts_next_command() {
         let fixture = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("../zvm/tests/fixtures/minizork.z3");
+            .join("tests/fixtures/stories/minizork-r34-s871124.z3");
         if !fixture.exists() { panic!("minizork.z3 missing"); }
         let story = std::fs::read(&fixture).expect("read minizork.z3");
 
@@ -9169,7 +9169,7 @@ mod tests {
     #[test]
     fn minizork_v3_qzl_file_round_trips_end_to_end() {
         let fixture = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("../zvm/tests/fixtures/minizork.z3");
+            .join("tests/fixtures/stories/minizork-r34-s871124.z3");
         if !fixture.exists() {
             panic!("minizork.z3 fixture missing at {} — this smoke test must run", fixture.display());
         }
@@ -9634,7 +9634,7 @@ mod debugger_impl_tests {
     // zvm's own dictionary/objects/location tests use for this reason.
     fn zvm_session() -> Option<GameSession> {
         let fixture_path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("../zvm/tests/fixtures/minizork.z3");
+            .join("tests/fixtures/stories/minizork-r34-s871124.z3");
         if !fixture_path.exists() {
             return None; // fixture absent — skip
         }

@@ -445,7 +445,7 @@ byte-for-byte — pinning it anyway just turns an inconsequential difference in
 provenance into a false CI-vs-local disagreement that a suite reading the file
 would never itself observe.
 
-## Two footnotes worth keeping
+## One footnote worth keeping, and one resolved
 
 `unit_tests/ziptest-r12-s890607.z6` and `unit_tests/ziptest-r13-s890619.z6` are
 **Infocom's own in-house ZipTest regression stories for the YZIP (Version 6)
@@ -459,10 +459,18 @@ until 19fc75f6, so those two files were untracked-yet-unignored and one careless
 whole-directory stage would have committed them; every Z-machine version is
 covered now.
 
-`crates/zvm/tests/fixtures/minizork.z3` is Infocom's Mini-Zork I demo, **vendored
-rather than fetched**, and it is the one file in the tree this document's rule
-does not cover: no permission statement from Infocom, Activision or Microsoft for
-the Mini-Zork demo could be found, and the November 2025 MIT release of the Zork
-sources names specific full releases and not this cut-down C64 demo. It predates
-SQ-1015 and is not this quest's to move; it is written down here so the next
-person does not have to rediscover it.
+**Resolved (SQ-1453, 2026-09-10).** `crates/zvm/tests/fixtures/minizork.z3`,
+Infocom's Mini-Zork I demo, used to be vendored rather than fetched — the one
+committed file in the tree this document's rule did not cover, since it
+predates SQ-1015. It is now a manifest row like every other free fixture
+(`minizork-r34-s871124.z3` in `scripts/fixtures.manifest`, same IF Archive
+URL, `if-archive/infocom/demos/minizork.z3`, under `ifarchive-tou` — no
+stronger permission statement from Infocom, Activision or Microsoft was
+found, and the November 2025 MIT release of the Zork sources names specific
+full releases and not this cut-down demo, so it rests on the same Terms-of-
+Use basis as everything else fetched rather than committed here). `zvm`
+takes zero external dependencies and so has no fetch machinery of its own;
+`crate::fixtures::load("minizork.z3")` falls back to the app crate's fetched
+copy (`crates/app/tests/fixtures/stories/minizork-r34-s871124.z3`) when its
+own `tests/fixtures/` does not have it, which is now always, on CI and in a
+fresh worktree that has run `scripts/fetch-fixtures.sh`.

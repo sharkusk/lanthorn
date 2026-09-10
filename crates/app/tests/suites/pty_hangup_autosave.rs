@@ -37,9 +37,13 @@
 //! 4. `an_uncatchable_kill_loses_at_most_the_turn_in_progress` — the per-turn
 //!    cadence, which is what covers the case the signal path cannot: SIGKILL.
 //!
-//! THE FIXTURE IS THE TRACKED ONE. `stories/` is gitignored, so a case reaching
-//! for it would skip vacuously in a worktree and in CI. Mini-Zork ships in
-//! `crates/zvm/tests/fixtures/`, so this always really runs.
+//! THE FIXTURE IS A FETCHED ONE, NOT `stories/`. `stories/` is gitignored
+//! commercial media, so a case reaching for it would skip vacuously in a
+//! worktree and in CI. Mini-Zork is fetched instead
+//! (`scripts/fixtures.manifest`, SQ-1453), which CI always populates before
+//! `cargo test` runs, so this always really runs there; a local run wants
+//! `scripts/fetch-fixtures.sh` first if `minizork-r34-s871124.z3` is not
+//! already present.
 
 #[cfg(not(unix))]
 #[test]
@@ -73,10 +77,10 @@ mod unix {
         dir
     }
 
+    /// Possibly non-existent, like [`crate::fixture_paths::fixture_path`]
+    /// itself — callers check `.is_file()` and skip rather than fail.
     fn story() -> PathBuf {
-        let p = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../zvm/tests/fixtures/minizork.z3");
-        assert!(p.is_file(), "tracked fixture missing at {}", p.display());
-        p
+        crate::fixture_paths::fixture_path("minizork-r34-s871124.z3")
     }
 
     /// Where this launch's auto-resume archive lands — the same three calls
@@ -132,6 +136,10 @@ mod unix {
 
     #[test]
     fn a_ttyd_style_hangup_saves_the_turns_that_were_played() {
+        if !story().is_file() {
+            eprintln!("SKIP: minizork-r34-s871124.z3 fixture absent");
+            return;
+        }
         let user = scratch("hangup-autosave-on");
         let cap = play(&user, Some("on"), 3, true);
         assert_the_scenario_ran(&cap);
@@ -155,6 +163,10 @@ mod unix {
 
     #[test]
     fn without_auto_save_a_hangup_leaves_nothing_behind() {
+        if !story().is_file() {
+            eprintln!("SKIP: minizork-r34-s871124.z3 fixture absent");
+            return;
+        }
         let user = scratch("hangup-autosave-off");
         let cap = play(&user, None, 3, true);
         assert_the_scenario_ran(&cap);
@@ -178,6 +190,10 @@ mod unix {
 
     #[test]
     fn a_reconnect_resumes_the_turns_the_last_connection_saved() {
+        if !story().is_file() {
+            eprintln!("SKIP: minizork-r34-s871124.z3 fixture absent");
+            return;
+        }
         let user = scratch("hangup-reconnect");
 
         let first = play(&user, Some("on"), 3, true);
@@ -205,6 +221,10 @@ mod unix {
         // only thing standing between that and a lost session — the same
         // `auto_save` key, writing after every turn through the coalescing
         // background worker.
+        if !story().is_file() {
+            eprintln!("SKIP: minizork-r34-s871124.z3 fixture absent");
+            return;
+        }
         let user = scratch("hangup-sigkill");
         let cap = play(&user, Some("on"), 3, false);
         assert_the_scenario_ran(&cap);

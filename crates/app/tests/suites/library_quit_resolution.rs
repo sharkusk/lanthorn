@@ -31,15 +31,15 @@ use app::state::ExitTarget;
 
 use crate::fixture_paths::fixture_path;
 
-/// Mini-Zork I r34/s871124 — routed by `fixture_path` to the tracked,
-/// sha256-verified copy at `crates/zvm/tests/fixtures/minizork.z3` (IF Archive
-/// `demos/minizork.z3`), so this case never skips vacuously in CI or a fresh
-/// worktree with no `stories/`.
+/// Mini-Zork I r34/s871124 — routed by `fixture_path` to the fetched,
+/// sha256-verified copy (`scripts/fixtures.manifest`, IF Archive
+/// `infocom/demos/minizork.z3`, SQ-1453), which CI always populates before
+/// `cargo test` runs, so this case never skips vacuously there.
 #[test]
 fn minizork_quit_reaches_has_quit_and_the_launch_context_resolves_where_to_go() {
     let path = fixture_path("minizork-r34-s871124.z3");
     let bytes = std::fs::read(&path)
-        .unwrap_or_else(|e| panic!("tracked fixture must be present at {}: {e}", path.display()));
+        .unwrap_or_else(|e| panic!("fetched fixture must be present at {}: {e}", path.display()));
 
     let mut picts = PictSource::new(blorb::resolve_resource_blorb(&path).map(|(b, _)| b));
     let dims = picts.all_pict_dims();

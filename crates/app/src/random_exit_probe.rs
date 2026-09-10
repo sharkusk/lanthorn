@@ -1322,8 +1322,11 @@ mod tests {
     #[test]
     fn the_shadow_is_asked_in_the_players_own_word() {
         let fixture = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("../zvm/tests/fixtures/minizork.z3");
-        let story = std::fs::read(&fixture).expect("minizork.z3 fixture");
+            .join("tests/fixtures/stories/minizork-r34-s871124.z3");
+        let Ok(story) = std::fs::read(&fixture) else {
+            eprintln!("SKIP: minizork-r34-s871124.z3 fixture absent");
+            return;
+        };
         let live = crate::session::GameSession::new(story.clone(), true, false, None)
             .expect("minizork boots");
 
