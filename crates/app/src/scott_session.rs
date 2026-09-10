@@ -1373,7 +1373,10 @@ mod tests {
     /// it. Opened through `hints::load_mounted_story_full`, which is exactly
     /// the door `startup.rs` opens — a hand-assembled pair of (database,
     /// pictures) would be measuring a launch the app never performs.
-    fn hulk_d64() -> Option<(Vec<u8>, Vec<(String, Vec<u8>)>)> {
+    /// A mounted Scott database plus its named S.A.G.A. picture files.
+    type SagaFixture = (Vec<u8>, Vec<(String, Vec<u8>)>);
+
+    fn hulk_d64() -> Option<SagaFixture> {
         let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("../../stories/scott-dialects/c64/QUESTPR1.D64");
         if !path.exists() {
@@ -1665,7 +1668,7 @@ mod tests {
     /// Commercial and gitignored, so every case below skips vacuously without
     /// it. Opened through `hints::load_mounted_story_full`, the door
     /// `startup.rs` opens.
-    fn adventureland_apple() -> Option<(Vec<u8>, Vec<(String, Vec<u8>)>)> {
+    fn adventureland_apple() -> Option<SagaFixture> {
         let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join(
             "../../stories/scott-dialects/apple/Scott Adams Graphic Adventure 1 - \
              Adventureland v2.1-416 (4am crack) side B - boot.dsk",

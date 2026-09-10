@@ -238,13 +238,16 @@ The trap is that the offending call is INVISIBLE at the call site. `Action::Conf
 **The reader half of that rule outlived its apparatus** (SQ-0958, SQ-1393). A case that asserts a resolved colour still has to say which machine's table it read through — it just says it by building the session and the `ColorScheme` from the same `zvm::screen::Palette`, rather than by installing one for the process. `ColorScheme::terminal_default_in(p)` is that door, and plain `terminal_default()` is `Palette::Standard`, which is what a bare story with no medium actually presents. `v6_shogun_gameplay` asserting §8.3.1 white while its binary-mate booted the same story as an IBM PC is the failure this shape makes unreachable rather than merely detectable.
 
 **Clippy gate** — CI's, not the inner loop's, for the same reason as the test gate:
-`cargo clippy --workspace --all-targets -- -D warnings` must be clean, and CI runs
+`cargo clippy --workspace --all-targets --all-features -- -D warnings` must be clean, and CI runs
 exactly that on every push. It costs ~149s the first time after a test build
 (separate fingerprints, so it shares NOTHING with it — running the test gate and
 then clippy is two complete builds of the same code) and ~0.3s when already warm.
-Locally, narrow it to the crate you edited if you run it at all.
+Locally, narrow it to the crate you edited if you run it at all. `--all-features` also
+lints `app`'s `t-*`-gated test code, so a lane that touched in-crate tests must run
+`cargo clippy -p lanthorn --all-targets --all-features -- -D warnings`, not the plain
+form — SQ-1493 reached CI red this way (2026-09-10).
 
-**But do NOT reach for the workspace sweep in the inner loop — narrow it to what you touched.** CI runs exactly `cargo clippy --workspace --all-targets -- -D warnings` on every push (`.github/workflows/test.yml`, Linux only, because clippy's result does not vary meaningfully by OS), so the full sweep already has a backstop and running it locally per iteration buys very little for minutes a time.
+**But do NOT reach for the workspace sweep in the inner loop — narrow it to what you touched.** CI runs exactly `cargo clippy --workspace --all-targets --all-features -- -D warnings` on every push (`.github/workflows/test.yml`, Linux only, because clippy's result does not vary meaningfully by OS), so the full sweep already has a backstop and running it locally per iteration buys very little for minutes a time.
 
 **Clippy cannot take a list of FILES, and never will.** It is a rustc driver, and Rust's compilation unit is the crate: to lint one module it must parse, macro-expand, name-resolve and type-check the whole crate, because what code in one file means depends on every other file in it. The only granularity on offer is the package (`-p`) and the target within it:
 
