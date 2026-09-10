@@ -282,7 +282,9 @@ fn no_line_art_side_is_mistaken_for_a_bitmap_side() {
 /// render of the record at the offset below.
 ///
 /// `(file, scheme, file offset, what it shows, cols, pairs, the four colour bytes)`
-const PINNED: [(&str, FamilyCScheme, usize, &str, i32, i32, [u8; 4]); 3] = [
+type Pin = (&'static str, FamilyCScheme, usize, &'static str, i32, i32, [u8; 4]);
+
+const PINNED: [Pin; 3] = [
     (
         "SAGA #5 - The Count [side B].atr",
         FamilyCScheme::NoLiteral,
@@ -389,6 +391,6 @@ fn the_counts_room_one_draws_the_brass_bed_its_text_describes() {
     let wall_bright: usize = (0..10).map(|y| (0..CANVAS_WIDTH).filter(|&x| at(x, y) == 3).count()).sum();
     assert!(wall_bright < 900, "the wall along the top is {wall_bright} bright pixels");
     // And the picture is not blank anywhere it should not be.
-    assert!(pic.pixels.iter().any(|&v| v == 1), "the wall colour is in use");
-    assert!(pic.pixels.iter().any(|&v| v == 2), "the third colour is in use");
+    assert!(pic.pixels.contains(&1), "the wall colour is in use");
+    assert!(pic.pixels.contains(&2), "the third colour is in use");
 }
