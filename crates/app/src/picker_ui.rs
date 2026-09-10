@@ -1010,6 +1010,16 @@ pub(crate) struct PickerPosition {
     /// (deleted, media moved). The nearest surviving row is read off this
     /// clamped into the new list's bounds, rather than resetting to the top.
     pub index_hint: usize,
+    /// How many rows below the top of the LIST viewport the row sat at
+    /// launch (SQ-1479) — `ListScroll::prime`'s distance, so a return scrolls
+    /// back to the same relative position instead of snapping the row to the
+    /// top of the list.
+    pub rows_from_top: usize,
+    /// `Some(distance)` when the browser was showing the cover GALLERY at
+    /// launch instead of the list — the row's distance in grid rows below
+    /// the top of the gallery viewport, mirroring `rows_from_top` (SQ-1479).
+    /// `None` means it was the list.
+    pub gallery_rows_from_top: Option<usize>,
 }
 
 /// What the browser hands back: the story to play, and the boot-time overrides
@@ -1032,8 +1042,15 @@ impl PickedStory {
     /// Play the story one browser row stands for, with no overrides: its path
     /// **and** which story on the image it is. `dir`/`index_hint` are the
     /// browser's position at the moment of launch, remembered for the return
-    /// trip.
-    fn row(entry: &app::picker::StoryEntry, dir: &std::path::Path, index_hint: usize) -> PickedStory {
+    /// trip, along with its scroll distance from the top of whichever
+    /// viewport (list or gallery) was showing (SQ-1479).
+    fn row(
+        entry: &app::picker::StoryEntry,
+        dir: &std::path::Path,
+        index_hint: usize,
+        rows_from_top: usize,
+        gallery_rows_from_top: Option<usize>,
+    ) -> PickedStory {
         PickedStory {
             path: entry.path.clone(),
             disk_entry: entry.meta.disk_entry.clone(),
@@ -1043,9 +1060,29 @@ impl PickedStory {
                 path: entry.path.clone(),
                 disk_entry: entry.meta.disk_entry.clone(),
                 index_hint,
+                rows_from_top,
+                gallery_rows_from_top,
             },
         }
     }
+}
+
+/// Where the browser sits right now, translated into the launch-time recipe
+/// [`PickerPosition`] remembers for the return trip (SQ-1479): the list's
+/// distance from the top of its viewport, and — only when the gallery is the
+/// one on screen — that same distance in grid rows. Computed once so every
+/// launch site (`PickedStory::row`'s callers and the launch-options dialog's
+/// two confirm paths) can't drift out of step with each other.
+fn launch_scroll_recipe(
+    list: &app::list_scroll::ListScroll,
+    view: PickerView,
+    gallery_first_row: usize,
+    gallery_cols: usize,
+) -> (usize, Option<usize>) {
+    let rows_from_top = list.selected.saturating_sub(list.target_offset());
+    let gallery_rows_from_top = matches!(view, PickerView::Gallery)
+        .then(|| (list.selected / gallery_cols.max(1)).saturating_sub(gallery_first_row));
+    (rows_from_top, gallery_rows_from_top)
 }
 
 /// Open the launch-options dialog for one browser row.
@@ -1200,11 +1237,11 @@ pub(crate) fn run_story_picker(
     // Terminal setup mirrors the game loop. If any step fails we can't be
     // interactive — fall back to the first story rather than abort.
     if enable_raw_mode().is_err() {
-        return first_story(&stories).map(|e| PickedStory::row(e, &dir, 0));
+        return first_story(&stories).map(|e| PickedStory::row(e, &dir, 0, 0, None));
     }
     if execute!(stdout(), EnterAlternateScreen).is_err() {
         let _ = disable_raw_mode();
-        return first_story(&stories).map(|e| PickedStory::row(e, &dir, 0));
+        return first_story(&stories).map(|e| PickedStory::row(e, &dir, 0, 0, None));
     }
     // Mouse capture is opt-in (config `mouse = true`): its any-motion reporting
     // floods this loop with redraws on every mouse move. Off by default keeps the
@@ -1216,7 +1253,7 @@ pub(crate) fn run_story_picker(
         Ok(t) => t,
         Err(_) => {
             restore_terminal();
-            return first_story(&stories).map(|e| PickedStory::row(e, &dir, 0));
+            return first_story(&stories).map(|e| PickedStory::row(e, &dir, 0, 0, None));
         }
     };
 
@@ -1233,12 +1270,15 @@ pub(crate) fn run_story_picker(
 
     let mut list = app::list_scroll::ListScroll::new();
     list.len(stories.len());
-    // Land on the restored row (SQ-1474; a no-op `jump_to(0)` when there was
-    // nothing to restore, same as the prior default). No animation and no
-    // known viewport yet — the first frame hasn't measured one — so this
-    // pins the row visible regardless of what the viewport turns out to be;
-    // ordinary navigation corrects the offset from there as usual.
-    list.jump_to(restored_idx);
+    // Land on the restored row, at the distance from the top of the list
+    // viewport it sat at launch (SQ-1474, SQ-1479; a no-op `prime(idx, 0)`
+    // when there was nothing to restore, same as the prior default). No
+    // animation and no known viewport yet — the first frame hasn't measured
+    // one — so a too-large distance can leave the row below the fold; the
+    // list draw clamps it back into view once it knows the real size
+    // (`ListScroll::clamp_visible`, called from `draw_story_picker`).
+    // Ordinary navigation corrects the offset from there as usual.
+    list.prime(restored_idx, restore.map_or(0, |p| p.rows_from_top));
     let anim = &cfg.animation;
     let mut row_rects: Vec<(usize, Rect)> = Vec::new();
     let mut header_rects: Vec<(app::picker::SortKey, Rect)> = Vec::new();
@@ -1248,8 +1288,15 @@ pub(crate) fn run_story_picker(
     // Cover-gallery view state (SQ-0374): `view` selects list-vs-grid; the rest
     // is grid geometry from the last gallery draw, read by input handling
     // (2D navigation, paging) and the per-frame visible-tile cover requests.
-    let mut view = PickerView::List;
+    // A restored gallery position (SQ-1479) starts the browser back in
+    // gallery view rather than always defaulting to the list; the distance is
+    // applied once, by `draw_story_gallery`, the first time it measures a
+    // real grid (`gallery_restore_rows_from_top` below).
+    let restore_gallery_rows_from_top = restore.and_then(|p| p.gallery_rows_from_top);
+    let mut view =
+        if restore_gallery_rows_from_top.is_some() { PickerView::Gallery } else { PickerView::List };
     let mut gallery_first_row: usize = 0;
+    let mut gallery_restore_rows_from_top: Option<usize> = restore_gallery_rows_from_top;
     let mut gallery_cols: usize = 1;
     let mut gallery_vis: usize = 1;
     let mut gallery_visible: Vec<usize> = Vec::new();
@@ -1458,7 +1505,7 @@ pub(crate) fn run_story_picker(
             match view {
                 PickerView::List => {
                     let (rects, vp, hrects) = draw_story_picker(
-                        &stories, &list, &row_badges, &badge_glyphs, &heading, &cs, &keymap,
+                        &stories, &mut list, &row_badges, &badge_glyphs, &heading, &cs, &keymap,
                         sort, list_area, buf,
                     );
                     row_rects = rects;
@@ -1472,7 +1519,8 @@ pub(crate) fn run_story_picker(
                     // and corrupting its border where covers meet the edges (SQ-0389).
                     if preview.is_none() {
                         let (rects, cols, vis) = draw_story_gallery(
-                            &stories, list.selected, &mut gallery_first_row, &heading, &cs, &keymap,
+                            &stories, list.selected, &mut gallery_first_row,
+                            &mut gallery_restore_rows_from_top, &heading, &cs, &keymap,
                             cover_picker.as_ref(), gallery_scroll_in_motion(gallery_scroll_motion_at),
                             &mut cover, &mut tile_encoder, data_base, list_area, buf,
                         );
@@ -2041,6 +2089,8 @@ pub(crate) fn run_story_picker(
                                         Some(format!("could not save launch options: {e}"));
                                 }
                             }
+                            let (rows_from_top, gallery_rows_from_top) =
+                                launch_scroll_recipe(&list, view, gallery_first_row, gallery_cols);
                             break Some(PickedStory {
                                 path: lo.story_path.clone(),
                                 disk_entry: lo.disk_entry.clone(),
@@ -2050,6 +2100,8 @@ pub(crate) fn run_story_picker(
                                     path: lo.story_path.clone(),
                                     disk_entry: lo.disk_entry.clone(),
                                     index_hint: list.selected,
+                                    rows_from_top,
+                                    gallery_rows_from_top,
                                 },
                             });
                         }
@@ -2130,7 +2182,11 @@ pub(crate) fn run_story_picker(
                         }
                         Enter => {
                             if let Some(entry) = stories.get(list.selected) {
-                                break Some(PickedStory::row(entry, &dir, list.selected));
+                                let (rows_from_top, gallery_rows_from_top) =
+                                    launch_scroll_recipe(&list, view, gallery_first_row, gallery_cols);
+                                break Some(PickedStory::row(
+                                    entry, &dir, list.selected, rows_from_top, gallery_rows_from_top,
+                                ));
                             }
                         }
                         Up | Down | PageUp | PageDown | Home | End => {
@@ -2366,6 +2422,8 @@ pub(crate) fn run_story_picker(
                                         Some(format!("could not save launch options: {e}"));
                                 }
                             }
+                            let (rows_from_top, gallery_rows_from_top) =
+                                launch_scroll_recipe(&list, view, gallery_first_row, gallery_cols);
                             break Some(PickedStory {
                                 path: lo.story_path.clone(),
                                 disk_entry: lo.disk_entry.clone(),
@@ -2375,6 +2433,8 @@ pub(crate) fn run_story_picker(
                                     path: lo.story_path.clone(),
                                     disk_entry: lo.disk_entry.clone(),
                                     index_hint: list.selected,
+                                    rows_from_top,
+                                    gallery_rows_from_top,
                                 },
                             });
                         } else if on_close
@@ -2429,7 +2489,11 @@ pub(crate) fn run_story_picker(
                             enter_folder(&source, &mut dir, &root, &target, &mut stories, &mut row_badges, &mut aux_cache, &mut list, data_base, &hint_index, viewport, anim);
                             last_click = None;
                         } else if double {
-                            break Some(PickedStory::row(&stories[idx], &dir, idx));
+                            let (rows_from_top, gallery_rows_from_top) =
+                                launch_scroll_recipe(&list, view, gallery_first_row, gallery_cols);
+                            break Some(PickedStory::row(
+                                &stories[idx], &dir, idx, rows_from_top, gallery_rows_from_top,
+                            ));
                         } else {
                             panel_scroll = 0;
                             list.select(idx, viewport, anim);
@@ -2592,7 +2656,13 @@ pub(crate) fn run_story_picker(
                     panel_scroll = 0;
                     enter_folder(&source, &mut dir, &root, &target, &mut stories, &mut row_badges, &mut aux_cache, &mut list, data_base, &hint_index, viewport, anim);
                 }
-                Some(entry) => break Some(PickedStory::row(entry, &dir, list.selected)),
+                Some(entry) => {
+                    let (rows_from_top, gallery_rows_from_top) =
+                        launch_scroll_recipe(&list, view, gallery_first_row, gallery_cols);
+                    break Some(PickedStory::row(
+                        entry, &dir, list.selected, rows_from_top, gallery_rows_from_top,
+                    ));
+                }
                 None => {}
             },
             // `o`, Shift-Enter and the story menu's own row are one
@@ -2861,7 +2931,7 @@ type HeaderHitRects = Vec<(app::picker::SortKey, Rect)>;
 #[allow(clippy::too_many_arguments)]
 fn draw_story_picker(
     stories: &[app::picker::StoryEntry],
-    list: &app::list_scroll::ListScroll,
+    list: &mut app::list_scroll::ListScroll,
     badges: &[app::picker::RowBadges],
     glyphs: &app::picker::BadgeGlyphs,
     heading: &PickerHeading,
@@ -2917,6 +2987,11 @@ fn draw_story_picker(
     let scrollbar_visible =
         app::render::scroll::needs_scrollbar(total, rows) && area.width >= 2;
     let row_w = if scrollbar_visible { area.width.saturating_sub(1) } else { area.width };
+    // Correct a `ListScroll::prime()`d offset the first time the real viewport
+    // is known (SQ-1479): a distance recorded on a taller terminal can leave
+    // the row below the fold on a shorter one. A no-op once the offset
+    // already satisfies the invariant, so it's safe to call every frame.
+    list.clamp_visible(rows);
     let first = list.display_offset();
 
     // Badge cluster width depends only on the configured glyphs, not the
@@ -3147,6 +3222,13 @@ fn draw_story_gallery(
     stories: &[app::picker::StoryEntry],
     selected: usize,
     first_row: &mut usize,
+    // `Some(distance)` once, right after a restore into gallery view
+    // (SQ-1479): consumed on the first call that measures a real grid, to
+    // land `first_row` `distance` grid rows above the selected tile's row —
+    // the gallery's answer to `ListScroll::prime`, deferred until `cols` is
+    // known because the grid reflows with the terminal's width. `None` on
+    // every ordinary frame after that (nothing to restore).
+    restore_rows_from_top: &mut Option<usize>,
     heading: &PickerHeading,
     cs: &app::colors::ColorScheme,
     km: &app::keymap::KeyMap,
@@ -3198,6 +3280,13 @@ fn draw_story_gallery(
     let grid = Rect::new(area.x + 1, grid_top, area.width.saturating_sub(1), grid_bottom - grid_top);
     let cols = g::columns(grid.width);
     let vis = g::visible_rows(grid.height);
+    if let Some(distance) = restore_rows_from_top.take() {
+        // The grid's own row/column math, only now knowable (SQ-1479) —
+        // `cols` reflows with the terminal, so the distance couldn't be
+        // turned into a `first_row` any earlier than this.
+        let sel_row = selected / cols.max(1);
+        *first_row = sel_row.saturating_sub(distance);
+    }
     *first_row = g::scroll_to(selected, cols, vis, *first_row);
     let total = stories.len();
     let total_rows = total.div_ceil(cols);
@@ -4677,7 +4766,7 @@ mod tests {
         stories.push(app::picker::StoryEntry::folder(std::path::PathBuf::from("/tmp/zcode"), "zcode/"));
         stories.push(app::picker::StoryEntry::folder(std::path::PathBuf::from("/"), app::picker::PARENT_LABEL));
         app::picker::sort_stories(&mut stories, app::picker::Sort::default());
-        let list = app::list_scroll::ListScroll::new();
+        let mut list = app::list_scroll::ListScroll::new();
         let badges = vec![app::picker::RowBadges::default(); stories.len()];
         let sym = app::style::finalize_symbols(&app::style::load_style(None, std::path::Path::new("/nonexistent")).0.symbols);
         let glyphs = app::picker::BadgeGlyphs::from_symbols(&sym);
@@ -4685,7 +4774,7 @@ mod tests {
         let area = Rect::new(0, 0, 120, 10);
         let mut buf = Buffer::empty(area);
         super::draw_story_picker(
-            &stories, &list, &badges, &glyphs, &super::PickerHeading::browse(std::path::Path::new("/tmp")),
+            &stories, &mut list, &badges, &glyphs, &super::PickerHeading::browse(std::path::Path::new("/tmp")),
             &cs, &km(), app::picker::Sort::default(), area, &mut buf,
         );
         let header = row_text(&buf, 0, area);
@@ -4706,7 +4795,7 @@ mod tests {
     fn top_bar_shows_the_version_and_drops_the_hotkey_hint() {
         use ratatui::{buffer::Buffer, layout::Rect};
         let stories = make_two_test_stories();
-        let list = app::list_scroll::ListScroll::new();
+        let mut list = app::list_scroll::ListScroll::new();
         let badges = vec![app::picker::RowBadges::default(); stories.len()];
         let sym = app::style::finalize_symbols(&app::style::load_style(None, std::path::Path::new("/nonexistent")).0.symbols);
         let glyphs = app::picker::BadgeGlyphs::from_symbols(&sym);
@@ -4714,7 +4803,7 @@ mod tests {
         let area = Rect::new(0, 0, 120, 10);
         let mut buf = Buffer::empty(area);
         super::draw_story_picker(
-            &stories, &list, &badges, &glyphs, &super::PickerHeading::browse(std::path::Path::new("/tmp")),
+            &stories, &mut list, &badges, &glyphs, &super::PickerHeading::browse(std::path::Path::new("/tmp")),
             &cs, &km(), app::picker::Sort::default(), area, &mut buf,
         );
         let header = row_text(&buf, 0, area);
@@ -4732,7 +4821,7 @@ mod tests {
     fn top_bar_drops_the_version_rather_than_overflow_a_narrow_pane() {
         use ratatui::{buffer::Buffer, layout::Rect};
         let stories = make_two_test_stories();
-        let list = app::list_scroll::ListScroll::new();
+        let mut list = app::list_scroll::ListScroll::new();
         let badges = vec![app::picker::RowBadges::default(); stories.len()];
         let sym = app::style::finalize_symbols(&app::style::load_style(None, std::path::Path::new("/nonexistent")).0.symbols);
         let glyphs = app::picker::BadgeGlyphs::from_symbols(&sym);
@@ -4743,7 +4832,7 @@ mod tests {
         // Exactly enough room for the title; none left for the gap + version.
         let area = Rect::new(0, 0, title_w, 10);
         let mut buf = Buffer::empty(area);
-        super::draw_story_picker(&stories, &list, &badges, &glyphs, &heading, &cs, &km(), app::picker::Sort::default(), area, &mut buf);
+        super::draw_story_picker(&stories, &mut list, &badges, &glyphs, &heading, &cs, &km(), app::picker::Sort::default(), area, &mut buf);
         let header = row_text(&buf, 0, area);
         assert!(header.contains("lanthorn"), "the title should still render at this width: {header:?}");
         assert!(
@@ -4782,7 +4871,7 @@ mod tests {
         use ratatui::{buffer::Buffer, layout::Rect};
         let mut stories = make_two_test_stories();
         stories[0].path = std::path::PathBuf::from("/tmp/zcode/german/Zork.z5");
-        let list = app::list_scroll::ListScroll::new();
+        let mut list = app::list_scroll::ListScroll::new();
         let badges = vec![app::picker::RowBadges::default(); stories.len()];
         let sym = app::style::finalize_symbols(&app::style::load_style(None, std::path::Path::new("/nonexistent")).0.symbols);
         let glyphs = app::picker::BadgeGlyphs::from_symbols(&sym);
@@ -4797,7 +4886,7 @@ mod tests {
             find: Some(super::FindStatus { query: "zor", indexed: 2, done: false }),
             all_folders: None,
         };
-        super::draw_story_picker(&stories, &list, &badges, &glyphs, &finding, &cs, &km(), app::picker::Sort::default(), area, &mut buf);
+        super::draw_story_picker(&stories, &mut list, &badges, &glyphs, &finding, &cs, &km(), app::picker::Sort::default(), area, &mut buf);
         let header = row_text(&buf, 0, area);
         assert!(header.contains("2 matches for “zor” in /tmp") && header.contains("indexing, 2 so far"), "{header:?}");
         let rows = (2..4).map(|y| row_text(&buf, y, area)).collect::<Vec<_>>().join("\n");
@@ -4810,7 +4899,7 @@ mod tests {
         // either).
         let mut buf = Buffer::empty(area);
         let german = root.join("zcode/german");
-        super::draw_story_picker(&stories, &list, &badges, &glyphs, &super::PickerHeading::browse(&german), &cs, &km(), app::picker::Sort::default(), area, &mut buf);
+        super::draw_story_picker(&stories, &mut list, &badges, &glyphs, &super::PickerHeading::browse(&german), &cs, &km(), app::picker::Sort::default(), area, &mut buf);
         let rows = (2..4).map(|y| row_text(&buf, y, area)).collect::<Vec<_>>().join("\n");
         assert!(rows.contains("Zork") && !rows.contains('/'), "a folder view labels nothing: {rows:?}");
     }
@@ -4835,7 +4924,7 @@ mod tests {
         let mut buf = Buffer::empty(area);
         let dir = std::path::Path::new("/tmp");
         super::draw_story_picker(
-            &stories, &list, &badges, &glyphs, &super::PickerHeading::browse(dir), &cs, &km(), app::picker::Sort::default(), area, &mut buf,
+            &stories, &mut list, &badges, &glyphs, &super::PickerHeading::browse(dir), &cs, &km(), app::picker::Sort::default(), area, &mut buf,
         );
 
         let row0 = row_text(&buf, 2, area); // list starts at area.y + 2
@@ -4876,7 +4965,7 @@ mod tests {
         list.len(stories.len());
         let area = Rect::new(0, 0, 60, 10);
         let mut buf = Buffer::empty(area);
-        super::draw_story_picker(&stories, &list, &badges, &glyphs, &super::PickerHeading::browse(std::path::Path::new("/tmp")),
+        super::draw_story_picker(&stories, &mut list, &badges, &glyphs, &super::PickerHeading::browse(std::path::Path::new("/tmp")),
                           &cs, &km(), app::picker::Sort::default(), area, &mut buf);
         let row0 = row_text(&buf, 2, area);
         assert!(row0.contains('h'), "available hint shows lowercase glyph: {row0:?}");
@@ -4900,7 +4989,7 @@ mod tests {
         list.len(stories.len());
         let area = Rect::new(0, 0, 60, 10);
         let mut buf = Buffer::empty(area);
-        super::draw_story_picker(&stories, &list, &badges, &glyphs, &super::PickerHeading::browse(std::path::Path::new("/tmp")),
+        super::draw_story_picker(&stories, &mut list, &badges, &glyphs, &super::PickerHeading::browse(std::path::Path::new("/tmp")),
                           &cs, &km(), app::picker::Sort::default(), area, &mut buf);
         let row0 = row_text(&buf, 2, area);
         // The configured save glyph is used for the artifact badge. Type and
@@ -4931,7 +5020,7 @@ mod tests {
         // Default sort (Title, ascending): only TITLE carries an arrow.
         let mut buf = Buffer::empty(area);
         super::draw_story_picker(
-            &stories, &list, &badges, &glyphs, &super::PickerHeading::browse(std::path::Path::new("/tmp")),
+            &stories, &mut list, &badges, &glyphs, &super::PickerHeading::browse(std::path::Path::new("/tmp")),
             &cs, &km(), app::picker::Sort::default(), area, &mut buf,
         );
         let header = row_text(&buf, 1, area); // header row is area.y + 1
@@ -4945,7 +5034,7 @@ mod tests {
         let mut buf2 = Buffer::empty(area);
         let sort2 = app::picker::Sort { key: app::picker::SortKey::Year, desc: true };
         super::draw_story_picker(
-            &stories, &list, &badges, &glyphs, &super::PickerHeading::browse(std::path::Path::new("/tmp")),
+            &stories, &mut list, &badges, &glyphs, &super::PickerHeading::browse(std::path::Path::new("/tmp")),
             &cs, &km(), sort2, area, &mut buf2,
         );
         let header2 = row_text(&buf2, 1, area);
@@ -4969,7 +5058,7 @@ mod tests {
         let area = Rect::new(0, 0, 60, 10);
         let mut buf = Buffer::empty(area);
         super::draw_story_picker(
-            &stories, &list, &badges, &glyphs, &super::PickerHeading::browse(std::path::Path::new("/tmp")),
+            &stories, &mut list, &badges, &glyphs, &super::PickerHeading::browse(std::path::Path::new("/tmp")),
             &cs, &km(), app::picker::Sort::default(), area, &mut buf,
         );
         let row0 = row_text(&buf, 2, area);
@@ -5008,7 +5097,7 @@ mod tests {
         let area = Rect::new(0, 0, 60, 10);
         let mut buf = Buffer::empty(area);
         super::draw_story_picker(
-            &stories, &list, &badges, &glyphs, &super::PickerHeading::browse(std::path::Path::new("/tmp")),
+            &stories, &mut list, &badges, &glyphs, &super::PickerHeading::browse(std::path::Path::new("/tmp")),
             &cs, &km(), app::picker::Sort::default(), area, &mut buf,
         );
         let row1 = row_text(&buf, 3, area);
@@ -5052,7 +5141,7 @@ mod tests {
             let area = Rect::new(0, 0, width, 10);
             let mut buf = Buffer::empty(area);
             super::draw_story_picker(
-                &stories, &list, &badges, &glyphs, &super::PickerHeading::browse(std::path::Path::new("/tmp")),
+                &stories, &mut list, &badges, &glyphs, &super::PickerHeading::browse(std::path::Path::new("/tmp")),
                 &cs, &km(), app::picker::Sort::default(), area, &mut buf,
             );
             let row = row_text(&buf, 2, area);
@@ -5083,7 +5172,7 @@ mod tests {
         let area = Rect::new(0, 0, 60, 10);
         let mut buf = Buffer::empty(area);
         super::draw_story_picker(
-            &stories, &list, &badges, &glyphs, &super::PickerHeading::browse(std::path::Path::new("/tmp")),
+            &stories, &mut list, &badges, &glyphs, &super::PickerHeading::browse(std::path::Path::new("/tmp")),
             &cs, &km(), app::picker::Sort::default(), area, &mut buf,
         );
         let row0 = row_text(&buf, 2, area);
@@ -5115,7 +5204,7 @@ mod tests {
         let area = Rect::new(0, 0, 100, 10);
         let mut buf = Buffer::empty(area);
         super::draw_story_picker(
-            &stories, &list, &badges, &glyphs, &super::PickerHeading::browse(std::path::Path::new("/tmp")),
+            &stories, &mut list, &badges, &glyphs, &super::PickerHeading::browse(std::path::Path::new("/tmp")),
             &cs, &km(), app::picker::Sort::default(), area, &mut buf,
         );
         let row = row_text(&buf, 2, area);
@@ -5136,7 +5225,7 @@ mod tests {
         let area = Rect::new(0, 0, 60, 10);
         let mut buf = Buffer::empty(area);
         let (_, _, header_rects) = super::draw_story_picker(
-            &stories, &list, &badges, &glyphs, &super::PickerHeading::browse(std::path::Path::new("/tmp")),
+            &stories, &mut list, &badges, &glyphs, &super::PickerHeading::browse(std::path::Path::new("/tmp")),
             &cs, &km(), app::picker::Sort::default(), area, &mut buf,
         );
         // 60 cells is too narrow for the RATING column, so four headers show.
@@ -5183,7 +5272,7 @@ mod tests {
         let area = Rect::new(0, 0, 100, 10);
         let mut buf = Buffer::empty(area);
         let (_, _, header_rects) = super::draw_story_picker(
-            &stories, &list, &badges, &glyphs, &super::PickerHeading::browse(std::path::Path::new("/tmp")),
+            &stories, &mut list, &badges, &glyphs, &super::PickerHeading::browse(std::path::Path::new("/tmp")),
             &cs, &km(), app::picker::Sort::default(), area, &mut buf,
         );
         let rect = header_rects
@@ -5227,7 +5316,7 @@ mod tests {
         let mut buf = Buffer::empty(area);
         let sort = app::picker::Sort { key: app::picker::SortKey::Rating, desc: true };
         super::draw_story_picker(
-            &stories, &list, &badges, &glyphs, &super::PickerHeading::browse(std::path::Path::new("/tmp")), &cs, &km(), sort, area, &mut buf,
+            &stories, &mut list, &badges, &glyphs, &super::PickerHeading::browse(std::path::Path::new("/tmp")), &cs, &km(), sort, area, &mut buf,
         );
         let header = row_text(&buf, 1, area);
         assert!(header.contains("RATING ▼"), "active RATING column shows the arrow: {header:?}");
@@ -7075,7 +7164,7 @@ mod tests {
         let mut first_row = 0usize;
         // No picker → no cover art → each tile shows its title centred in the band.
         let (rects, cols, vis) = super::draw_story_gallery(
-            &stories, 1, &mut first_row, &super::PickerHeading::browse(std::path::Path::new("/tmp")), &cs, &km(), None, false, &mut cover, &mut tiles, std::path::Path::new("/tmp"), area, &mut buf,
+            &stories, 1, &mut first_row, &mut None, &super::PickerHeading::browse(std::path::Path::new("/tmp")), &cs, &km(), None, false, &mut cover, &mut tiles, std::path::Path::new("/tmp"), area, &mut buf,
         );
 
         assert!(cols >= 1 && vis >= 1);
@@ -7323,10 +7412,47 @@ mod tests {
         let mut tiles = app::cover::TileEncoder::detached();
         let mut first_row = 0usize;
         let (rects, _cols, _vis) = super::draw_story_gallery(
-            &stories, 39, &mut first_row, &super::PickerHeading::browse(std::path::Path::new("/tmp")), &cs, &km(), None, false, &mut cover, &mut tiles, std::path::Path::new("/tmp"), area, &mut buf,
+            &stories, 39, &mut first_row, &mut None, &super::PickerHeading::browse(std::path::Path::new("/tmp")), &cs, &km(), None, false, &mut cover, &mut tiles, std::path::Path::new("/tmp"), area, &mut buf,
         );
         assert!(first_row > 0, "grid scrolled down to keep the last cover visible");
         assert!(rects.iter().any(|(i, _)| *i == 39), "the selected tile is on screen");
+    }
+
+    /// SQ-1479: a restored gallery position is applied once the real grid
+    /// (cols/vis) is known — not before, since the grid reflows with the
+    /// terminal width — and never reapplied on a later draw.
+    #[test]
+    fn draw_story_gallery_applies_a_restored_distance_once_cols_are_known() {
+        use ratatui::{buffer::Buffer, layout::Rect};
+        let cs = app::colors::ColorScheme::terminal_default();
+        let stories: Vec<_> = (0..40).map(|i| story_with_meta(&format!("S{i}"), None, None)).collect();
+        let area = Rect::new(0, 0, 85, 40);
+        let mut buf = Buffer::empty(area);
+        let mut cover = app::cover::CoverState::default();
+        let mut tiles = app::cover::TileEncoder::detached();
+        let mut first_row = 0usize;
+        let mut restore = Some(2usize);
+        let (_, cols, vis) = super::draw_story_gallery(
+            &stories, 23, &mut first_row, &mut restore,
+            &super::PickerHeading::browse(std::path::Path::new("/tmp")), &cs, &km(), None, false,
+            &mut cover, &mut tiles, std::path::Path::new("/tmp"), area, &mut buf,
+        );
+        assert_eq!(cols, 4, "sanity: the grid really is 4 columns wide at this area");
+        assert_eq!(vis, 3, "sanity: 3 rows visible");
+        // Selected 23 is grid row 5 (23 / 4); a distance of 2 lands `first_row`
+        // at row 3, so the selected tile's row is 2 rows below the top.
+        assert_eq!(first_row, 3);
+        assert!(restore.is_none(), "the distance is consumed on first use");
+
+        // A second draw, distance already consumed: an ordinary scroll to a
+        // different selection just does the normal `scroll_to` dance, not
+        // another jump to a `distance`-derived row.
+        super::draw_story_gallery(
+            &stories, 0, &mut first_row, &mut restore,
+            &super::PickerHeading::browse(std::path::Path::new("/tmp")), &cs, &km(), None, false,
+            &mut cover, &mut tiles, std::path::Path::new("/tmp"), area, &mut buf,
+        );
+        assert_eq!(first_row, 0, "ordinary scroll_to pulled the window back up to the new selection");
     }
 
     // ── SQ-1213: gallery scroll-settle debounce ─────────────────────────────
@@ -7417,7 +7543,7 @@ mod tests {
         for _ in 0..3 {
             let mut buf = Buffer::empty(area);
             super::draw_story_gallery(
-                &stories, 0, &mut first_row, &super::PickerHeading::browse(std::path::Path::new("/tmp")),
+                &stories, 0, &mut first_row, &mut None, &super::PickerHeading::browse(std::path::Path::new("/tmp")),
                 &cs, &km(), Some(&picker), true, &mut cover, &mut tiles, std::path::Path::new("/tmp"), area, &mut buf,
             );
             assert!(!has_payload(&buf), "mid-scroll must not carry a sixel payload");
@@ -7427,7 +7553,7 @@ mod tests {
         // Settled: the render asks for the raster (and still places nothing).
         let mut buf = Buffer::empty(area);
         super::draw_story_gallery(
-            &stories, 0, &mut first_row, &super::PickerHeading::browse(std::path::Path::new("/tmp")),
+            &stories, 0, &mut first_row, &mut None, &super::PickerHeading::browse(std::path::Path::new("/tmp")),
             &cs, &km(), Some(&picker), false, &mut cover, &mut tiles, std::path::Path::new("/tmp"), area, &mut buf,
         );
         assert!(tiles.pending(), "the settled render queues the tile's encode");
@@ -7438,7 +7564,7 @@ mod tests {
         }
         let mut buf = Buffer::empty(area);
         super::draw_story_gallery(
-            &stories, 0, &mut first_row, &super::PickerHeading::browse(std::path::Path::new("/tmp")),
+            &stories, 0, &mut first_row, &mut None, &super::PickerHeading::browse(std::path::Path::new("/tmp")),
             &cs, &km(), Some(&picker), false, &mut cover, &mut tiles, std::path::Path::new("/tmp"), area, &mut buf,
         );
         assert!(has_payload(&buf), "settled render must place the real sixel payload");
@@ -7487,7 +7613,7 @@ mod tests {
         let mut first_row = 0usize;
         let mut buf = Buffer::empty(area);
         let (rects, _, _) = super::draw_story_gallery(
-            &stories, 0, &mut first_row, &super::PickerHeading::browse(std::path::Path::new("/tmp")),
+            &stories, 0, &mut first_row, &mut None, &super::PickerHeading::browse(std::path::Path::new("/tmp")),
             &cs, &km(), Some(&picker), false, &mut cover, &mut tiles, std::path::Path::new("/tmp"), area, &mut buf,
         );
         assert_eq!(rects.len(), stories.len(), "sanity: every tile is on screen");
@@ -7498,7 +7624,7 @@ mod tests {
         // A redraw while they are all still in flight queues nothing new.
         let mut buf = Buffer::empty(area);
         super::draw_story_gallery(
-            &stories, 0, &mut first_row, &super::PickerHeading::browse(std::path::Path::new("/tmp")),
+            &stories, 0, &mut first_row, &mut None, &super::PickerHeading::browse(std::path::Path::new("/tmp")),
             &cs, &km(), Some(&picker), false, &mut cover, &mut tiles, std::path::Path::new("/tmp"), area, &mut buf,
         );
         assert!(tiles.take_requests().is_empty(), "in-flight tiles are not re-requested");
@@ -7520,7 +7646,7 @@ mod tests {
 
         let mut buf = Buffer::empty(area);
         super::draw_story_gallery(
-            &stories, 0, &mut first_row, &super::PickerHeading::browse(std::path::Path::new("/tmp")),
+            &stories, 0, &mut first_row, &mut None, &super::PickerHeading::browse(std::path::Path::new("/tmp")),
             &cs, &km(), Some(&picker), false, &mut cover, &mut tiles, std::path::Path::new("/tmp"), area, &mut buf,
         );
         assert!(has_payload(&buf), "delivered tiles paint on the next draw");
@@ -7554,7 +7680,7 @@ mod tests {
         let mut first_row = 0usize;
         let mut buf = Buffer::empty(area);
         super::draw_story_gallery(
-            &stories, 0, &mut first_row, &super::PickerHeading::browse(std::path::Path::new("/tmp")),
+            &stories, 0, &mut first_row, &mut None, &super::PickerHeading::browse(std::path::Path::new("/tmp")),
             &cs, &km(), Some(&picker), false, &mut cover, &mut tiles, std::path::Path::new("/tmp"), area, &mut buf,
         );
         let queued = tiles.take_requests();
@@ -7586,7 +7712,7 @@ mod tests {
         tiles.drain();
         let mut buf = Buffer::empty(area);
         super::draw_story_gallery(
-            &stories, 0, &mut first_row, &super::PickerHeading::browse(std::path::Path::new("/tmp")),
+            &stories, 0, &mut first_row, &mut None, &super::PickerHeading::browse(std::path::Path::new("/tmp")),
             &cs, &km(), Some(&wide), false, &mut cover, &mut tiles, std::path::Path::new("/tmp"), area, &mut buf,
         );
         let again = tiles.take_requests();
@@ -7640,6 +7766,8 @@ mod tests {
             path: sub.join("beta.z5"),
             disk_entry: None,
             index_hint: 0,
+            rows_from_top: 0,
+            gallery_rows_from_top: None,
         };
 
         let (dir, stories, selected) =
@@ -7678,6 +7806,8 @@ mod tests {
             path: zip.clone(),
             disk_entry: Some("beacon.z5".to_string()),
             index_hint: 0,
+            rows_from_top: 0,
+            gallery_rows_from_top: None,
         };
 
         let (dir, stories, selected) =
@@ -7708,6 +7838,8 @@ mod tests {
             path: root.join("gone.z5"),
             disk_entry: None,
             index_hint: 1,
+            rows_from_top: 0,
+            gallery_rows_from_top: None,
         };
 
         let (_dir, stories, selected) =
@@ -7735,6 +7867,8 @@ mod tests {
             path: root.join("never-existed").join("whatever.z5"),
             disk_entry: None,
             index_hint: 0,
+            rows_from_top: 0,
+            gallery_rows_from_top: None,
         };
 
         let (dir, stories, _selected) =
@@ -7743,5 +7877,54 @@ mod tests {
 
         assert_eq!(dir, root, "a deleted sub-directory falls back to the root");
         assert!(stories.iter().any(|e| e.path == root.join("top.z5")));
+    }
+
+    // ── `launch_scroll_recipe` (SQ-1479): the launch-time distance-from-top
+    // recipe shared by every launch site ────────────────────────────────────
+
+    #[test]
+    fn launch_scroll_recipe_reads_the_lists_own_distance_in_list_view() {
+        let mut list = app::list_scroll::ListScroll::new();
+        list.len(50);
+        list.prime(20, 4); // selected 20, offset 16 — 4 rows below the top
+        let (rows_from_top, gallery) =
+            super::launch_scroll_recipe(&list, super::PickerView::List, 0, 1);
+        assert_eq!(rows_from_top, 4);
+        assert_eq!(gallery, None, "list view carries no gallery distance");
+    }
+
+    #[test]
+    fn launch_scroll_recipe_reads_the_grid_row_distance_in_gallery_view() {
+        let mut list = app::list_scroll::ListScroll::new();
+        list.len(50);
+        list.prime(23, 0); // selected 23; the list's own offset is irrelevant here
+        // 4 columns: row 23 is grid row 5 (23 / 4). A grid `first_row` of 2
+        // puts the selected tile's row 3 rows below the top of the grid.
+        let (_, gallery) = super::launch_scroll_recipe(&list, super::PickerView::Gallery, 2, 4);
+        assert_eq!(gallery, Some(3));
+    }
+
+    #[test]
+    fn launch_scroll_recipe_gallery_distance_floors_at_zero_when_selected_is_the_top_row() {
+        let mut list = app::list_scroll::ListScroll::new();
+        list.len(50);
+        list.prime(1, 0); // row 0 (1 / 4), same as first_row: no distance
+        let (_, gallery) = super::launch_scroll_recipe(&list, super::PickerView::Gallery, 0, 4);
+        assert_eq!(gallery, Some(0));
+    }
+
+    #[test]
+    fn picked_story_row_carries_the_recipe_into_its_position() {
+        let stories = make_two_test_stories();
+        let dir = std::path::Path::new("/tmp");
+        let picked = super::PickedStory::row(&stories[0], dir, 4, 7, Some(2));
+        assert_eq!(picked.position.index_hint, 4);
+        assert_eq!(picked.position.rows_from_top, 7);
+        assert_eq!(picked.position.gallery_rows_from_top, Some(2));
+
+        // The plain (non-gallery) shape every ordinary list launch uses.
+        let picked = super::PickedStory::row(&stories[0], dir, 0, 0, None);
+        assert_eq!(picked.position.rows_from_top, 0);
+        assert_eq!(picked.position.gallery_rows_from_top, None);
     }
 }
