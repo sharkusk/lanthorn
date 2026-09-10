@@ -62,15 +62,23 @@ pub enum ScottPictures {
     NativeZx { pictures: usize },
     /// Pre-rendered room pictures in the story's own Blorb `Pict` resources.
     Blorb,
-    /// A US S.A.G.A. release whose own container carries **family-C** strip
-    /// bitmaps (spec §8.3, SQ-1475) — `pictures` of them, decodable by
-    /// `scott::decode_family_c`, and `platform` names whose colour table
-    /// reads them.
+    /// A US S.A.G.A. release whose own release disks carry their artwork as
+    /// named picture files — `pictures` of them.
+    ///
+    /// Two formats wear this one variant, because to a player they are the
+    /// same fact (this release's own pictures, and this many of them) and
+    /// `platform` already says which: **family C**, the four-colour strip
+    /// bitmaps of spec §8.3, on the Commodore 64 (SQ-1475), and **family D**,
+    /// the Apple II hi-res line drawings `scott::apple_pictures` measures, on
+    /// the Apple II (SQ-1476).
     SagaUsStrips {
-        /// Whose colour table reads a record's four colour bytes.
+        /// Which format and, on family C, whose colour table reads a record's
+        /// four colour bytes.
         platform: scott::SagaPlatform,
-        /// How many picture files the container holds (`R…` room pictures and
-        /// `B…` object overlays together — §8.6's three usages).
+        /// How many picture files the release holds (`R…` room pictures and
+        /// `B…` object overlays together — §8.6's three usages). On the Apple
+        /// II these are counted off the **companion side**, which is where
+        /// that platform keeps them (§10.6).
         pictures: usize,
     },
     /// A US S.A.G.A. database with **no picture files beside it**: opened from
@@ -86,6 +94,15 @@ pub enum ScottPictures {
         /// [`Self::SagaUsStrips`] carries it: the answer to "where would the
         /// pictures be?" is per-platform.
         platform: scott::SagaPlatform,
+        /// Is this one of the three Apple II releases §7.4's string test calls
+        /// **scrambled** (SQ-1476)? Those keep their room artwork on a side A
+        /// that is not a DOS 3.3 disk at all, at the per-title offsets §12.10
+        /// says are "not recoverable from the database" — so the answer to
+        /// "where would the pictures be?" is "nowhere this build can read",
+        /// and the panel says so rather than implying a missing file.
+        ///
+        /// Always `false` off the Apple II.
+        scrambled: bool,
     },
     /// An MS-DOS *Questprobe* release whose zip carries **family-E** CGA
     /// bitmaps beside the database (spec §8.5, SQ-1477) — `pictures` of them,
@@ -1073,9 +1090,13 @@ fn scott_pictures(
         return Some(ScottPictures::NativeZx { pictures: lists.len() });
     }
     if let Some(platform) = scott::detect_saga_us(bytes) {
-        let pictures = crate::hints::saga_picture_files(path).len();
+        let pictures = crate::hints::saga_picture_files(path, Some(platform)).len();
         return Some(if pictures == 0 {
-            ScottPictures::SagaUsNoPictures { platform }
+            // SQ-1476: only worth asking when there is nothing to draw, and
+            // only on the platform the question means anything on.
+            let scrambled = matches!(platform, scott::SagaPlatform::AppleII)
+                && crate::hints::saga_apple_scrambled(path);
+            ScottPictures::SagaUsNoPictures { platform, scrambled }
         } else {
             ScottPictures::SagaUsStrips { platform, pictures }
         });
@@ -1087,7 +1108,7 @@ fn scott_pictures(
     // this function touches the filesystem for a plain `.dat`, and this does
     // not either.
     if crate::hints::is_zip(path) {
-        let pictures = crate::hints::saga_picture_files(path).len();
+        let pictures = crate::hints::saga_picture_files(path, None).len();
         if pictures > 0 {
             return Some(ScottPictures::SagaDosCga { pictures });
         }
@@ -4230,7 +4251,8 @@ mod tests {
             assert_eq!(
                 row.meta.scott_pictures,
                 Some(ScottPictures::SagaUsNoPictures {
-                    platform: scott::SagaPlatform::Atari8Bit
+                    platform: scott::SagaPlatform::Atari8Bit,
+                    scrambled: false,
                 }),
                 "the pictures are on the companion side, which nothing pairs yet (§8.3)"
             );
@@ -4246,10 +4268,74 @@ mod tests {
             assert_eq!(
                 row.meta.scott_pictures,
                 Some(ScottPictures::SagaUsNoPictures {
-                    platform: scott::SagaPlatform::Commodore64
+                    platform: scott::SagaPlatform::Commodore64,
+                    scrambled: false,
                 })
             );
             assert_eq!(type_container(&row.meta, false), None, "no container, no parenthetical");
+        }
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    /// End to end on real media (skips vacuously — `stories/` is gitignored):
+    /// an Apple II release's **boot** side reports the picture set that lives
+    /// on its COMPANION side, and a scrambled release reports why it has none
+    /// (SQ-1476).
+    ///
+    /// The row is the whole of what a player sees before launching, and both
+    /// halves of it are load-bearing here: the count comes off a disk the
+    /// browser never mounted for the story, and the scrambled three would
+    /// otherwise read as "somebody deleted the pictures".
+    #[test]
+    fn an_apple_ii_boot_side_reports_the_companion_sides_pictures() {
+        let stories = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../stories");
+        let apple = stories.join(
+            "scott-dialects/apple/Scott Adams Graphic Adventure 1 - Adventureland v2.1-416 \
+             (4am crack) side B - boot.dsk",
+        );
+        if !apple.is_file() {
+            eprintln!("SKIP: {} absent (gitignored commercial fixture)", apple.display());
+            return;
+        }
+        let base = temp_dir("apple-pictures-row");
+        let row = resolve_entry(&apple, &base).expect("the boot side opens");
+        assert_eq!(
+            row.meta.scott_pictures,
+            Some(ScottPictures::SagaUsStrips {
+                platform: scott::SagaPlatform::AppleII,
+                pictures: 93,
+            }),
+            "the 48 room and 45 object pictures on side A (§10.6)"
+        );
+        assert_eq!(row.meta.engine, Engine::Scott);
+        assert_eq!(
+            type_container(&row.meta, false),
+            Some("DOS 3.3"),
+            "the TYPE column names the Apple II medium"
+        );
+        // And the story list's own title comes from the release, not the
+        // 4am crack's file name.
+        assert_eq!(
+            row.title, "Adventureland (Apple II)",
+            "§12.12's per-release title, platform folded in"
+        );
+
+        // …and one of the three scrambled releases, whose room artwork is not
+        // reachable at all (§7.4's string test, §10.6).
+        let count = stories.join(
+            "scott-dialects/apple/Scott Adams Graphic Adventure 5 - The Count v2.1-115 \
+             (4am crack) side B - boot.dsk",
+        );
+        if count.is_file() {
+            let row = resolve_entry(&count, &base).expect("The Count's boot side opens");
+            assert_eq!(
+                row.meta.scott_pictures,
+                Some(ScottPictures::SagaUsNoPictures {
+                    platform: scott::SagaPlatform::AppleII,
+                    scrambled: true,
+                }),
+                "a scrambled release keeps its room artwork out of reach"
+            );
         }
         let _ = std::fs::remove_dir_all(&base);
     }

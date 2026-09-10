@@ -285,7 +285,14 @@ pub(crate) fn reset_game(
                     .expect("restart re-runs the same Glulx story") = new_session;
             })
         }
-        Ok(app::hints::LoadedStory::Scott(bytes)) => app::scott_session::ScottSession::new_with_options(
+        Ok(app::hints::LoadedStory::Scott(bytes)) => {
+            // SQ-1476: which naming rule finds a disk release's artwork is
+            // its platform (and `None` is the MS-DOS zip, whose database
+            // carries no platform to detect), and `bytes` is about to be
+            // moved into the boot — so the walk happens first.
+            let saga_pictures =
+                app::hints::saga_picture_files(story_path, scott::detect_saga_us(&bytes));
+            app::scott_session::ScottSession::new_with_options(
             bytes,
             resolve_pict_blorb(story_path, state.config.images),
             false,
@@ -311,7 +318,8 @@ pub(crate) fn reset_game(
                 .or_else(|| app::styles::read_per_game_scott_picture_resolution(game_dir))
                 .unwrap_or_default(),
             // SQ-1475: re-read off the same container the launch opened —
-            // the release disk (family C, §8.3) or, since SQ-1477, the MS-DOS
+            // the release disk (family C, §8.3), the Apple II release's two
+            // sides (family D, SQ-1476) or, since SQ-1477, the MS-DOS
             // release's zip (family E, §8.5). `story_bytes` above is the
             // DATABASE, not the container, so a restart cannot recover the
             // picture files from it — and carrying seventy records in app
@@ -319,14 +327,15 @@ pub(crate) fn reset_game(
             // is the wrong trade. Empty for every path that is neither a disk
             // image nor a zip, so no other engine or release pays for this
             // line.
-            app::hints::saga_picture_files(story_path),
+            saga_pictures,
         )
         .map(|new_session| {
                 *session
                     .as_any_mut()
                     .downcast_mut::<app::scott_session::ScottSession>()
                     .expect("restart re-runs the same Scott story") = new_session;
-            }),
+            })
+        }
         Err(e) => Err(format!("{e}")),
     };
     match rebuilt {

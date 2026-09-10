@@ -325,12 +325,16 @@ pub struct PictSource {
     /// cache beside it keeps the result.
     ///
     /// Keyed by NAME rather than by picture number because the name is what
-    /// the disk supplies and what [`scott::picture_file_name`] answers; the
-    /// usage letter is part of it, so a room picture and an object overlay
+    /// the disk supplies and what [`scott::room_picture_file_name`] answers;
+    /// the usage letter is part of it, so a room picture and an object overlay
     /// with the same index cannot collide.
     ///
+    /// The **release**, not the platform, because the Apple II's names carry
+    /// the adventure number as well (SQ-1476) — see
+    /// [`scott::room_picture_file_name`].
+    ///
     /// `None` for every other source.
-    scott_saga: Option<(HashMap<String, Vec<u8>>, scott::SagaPlatform)>,
+    scott_saga: Option<(HashMap<String, Vec<u8>>, scott::SagaUs)>,
     /// The MS-DOS *Questprobe* release's own **family-E** CGA bitmaps (spec
     /// §8.5, SQ-1477) as the raw `.PAK` files they are stored as, keyed by
     /// the name the zip holds them under, with the release whose room-picture
@@ -530,19 +534,16 @@ impl PictSource {
     /// 280x160 canvas, so there is no supersample to pick — the renderer's
     /// aspect-preserving fit into the picture band is the whole of the
     /// scaling, the same way it is for a Blorb's pre-rendered pictures.
-    pub fn from_scott_saga(
-        files: Vec<(String, Vec<u8>)>,
-        platform: scott::SagaPlatform,
-    ) -> PictSource {
+    pub fn from_scott_saga(files: Vec<(String, Vec<u8>)>, release: scott::SagaUs) -> PictSource {
         let map: HashMap<String, Vec<u8>> = files.into_iter().collect();
-        PictSource { scott_saga: Some((map, platform)), ..PictSource::new(None) }
+        PictSource { scott_saga: Some((map, release)), ..PictSource::new(None) }
     }
 
     /// Which platform's family-C artwork this source holds, or `None` when it
     /// holds none — `/dump-windows` names it so a frame says where a room's
     /// picture came from (SQ-1475).
     pub fn scott_saga_platform(&self) -> Option<scott::SagaPlatform> {
-        self.scott_saga.as_ref().map(|(_, platform)| *platform)
+        self.scott_saga.as_ref().map(|(_, release)| release.platform)
     }
 
     /// How many family-C picture records this source holds. `None` when it is
@@ -1171,10 +1172,10 @@ impl PictSource {
                     })
                 }
                 None if self.scott_saga.is_some() => {
-                    self.scott_saga.as_ref().and_then(|(files, platform)| {
-                        let name = scott::picture_file_name(*platform, resnum as usize)?;
+                    self.scott_saga.as_ref().and_then(|(files, release)| {
+                        let name = scott::room_picture_file_name(release, resnum as usize)?;
                         let record = files.get(&name)?;
-                        scott_saga_image(record, *platform)
+                        scott_saga_image(record, release.platform)
                     })
                 }
                 // SQ-1463: room n's picture is `pictures[n - 1]` (the decoder's
@@ -2397,7 +2398,14 @@ fn scott_c64_image(list: &scott::c64::PictureList, scale: u32, platform: ScottFa
 /// which is what a picture number resolves to; §12.11's object overlays would
 /// need the composite this does not do (see the module's own note).
 fn scott_saga_image(record: &[u8], platform: scott::SagaPlatform) -> Option<DynamicImage> {
-    let pic = scott::decode_family_c(record, platform).ok()?;
+    // SQ-1476: the Apple II releases are family D — a line-drawing opcode
+    // stream over the machine's own 280x192 hi-res canvas, nothing family C's
+    // strip decoder could stand in for — and every family answers the same
+    // `Picture`, so the conversion below is shared.
+    let pic = match platform {
+        scott::SagaPlatform::AppleII => scott::decode_family_d(record, platform).ok()?,
+        _ => scott::decode_family_c(record, platform).ok()?,
+    };
     Some(picture_to_image(&pic))
 }
 
@@ -2417,9 +2425,10 @@ fn scott_dos_saga_image(record: &[u8]) -> Option<DynamicImage> {
     Some(picture_to_image(&pic))
 }
 
-/// One decoded S.A.G.A. picture — family C or family E — as an opaque RGBA
-/// image. The two decoders answer the same
-/// [`scott::saga_pictures::Picture`], so there is one conversion and not two.
+/// One decoded S.A.G.A. picture — family C, D or E — as an opaque RGBA image.
+/// All three decoders answer the same
+/// [`scott::saga_pictures::Picture`], so there is one conversion and not
+/// three.
 fn picture_to_image(pic: &scott::saga_pictures::Picture) -> DynamicImage {
     let mut buf = RgbaImage::new(pic.width as u32, pic.height as u32);
     for y in 0..pic.height {

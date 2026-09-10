@@ -162,6 +162,26 @@ picture, while the PC version is locked to the four colours a CGA card could
 show at once — black, cyan, magenta and white — and about half of its pictures
 are drawn at twice the horizontal detail to make up for it.
 
+**The American S.A.G.A. disks draw theirs too, and each machine drew it
+differently.** The Commodore 64 *Hulk* is full-colour comic panels
+(`Pictures: S.A.G.A. (C64 strips, N pictures)`); the **Apple II** editions of
+*Adventureland*, *Pirate Adventure*, *Mission Impossible* and *Strange
+Odyssey* are white hi-res line drawings (`Pictures: S.A.G.A. (Apple II
+hi-res, N pictures)`), and they are worth a word because of where they live:
+an Apple II release is **two floppies**, the game on one and the pictures on
+the other. Hand lanthorn the boot side — the one with the game on it — and it
+finds the picture disk beside it in the same folder and draws from both, so
+there is nothing for you to do but open the game. Move one of the two
+somewhere else and the info panel says `S.A.G.A. (not on this file)` rather
+than quietly playing as text.
+
+Three Apple II titles — *Voodoo Castle*, *The Count* and *Claymorgue Castle* —
+keep their room pictures in a scrambled form on a disk with no filesystem on
+it at all, and lanthorn can't read those yet. It says so
+(`S.A.G.A. (scrambled, not readable yet)`) instead of pretending the artwork
+is missing. The Atari 8-bit disks are in the same position for a different
+reason, and report the same way.
+
 ## Going deeper
 
 - [v6 graphics](../internals/v6-graphics.md) — render modes, the pixel lock, and period fonts in full

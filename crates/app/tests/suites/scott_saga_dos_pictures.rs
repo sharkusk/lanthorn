@@ -86,7 +86,7 @@ fn skipped(what: &str) -> bool {
 /// production walk — so this suite measures what a launch actually collects
 /// and not a second reading of the archive.
 fn hulk_pictures() -> Option<Vec<(String, Vec<u8>)>> {
-    let files = app::hints::saga_picture_files(&hulk_zip()?);
+    let files = app::hints::saga_picture_files(&hulk_zip()?, None);
     (!files.is_empty()).then_some(files)
 }
 
@@ -247,7 +247,7 @@ fn twins() -> Option<Vec<(String, Picture, Picture)>> {
     if !d64.exists() {
         return None;
     }
-    let c64: BTreeMap<(u8, u16), Vec<u8>> = app::hints::saga_picture_files(&d64)
+    let c64: BTreeMap<(u8, u16), Vec<u8>> = app::hints::saga_picture_files(&d64, Some(scott::SagaPlatform::Commodore64))
         .into_iter()
         .filter_map(|(name, bytes)| {
             let p = scott::parse_picture_file_name(&name)?;
@@ -529,8 +529,8 @@ fn a_restart_re_reads_the_zips_pictures_off_the_same_path() {
         assert!(skipped("the MS-DOS Hulk restart path"));
         return;
     };
-    let launch = app::hints::saga_picture_files(&zip);
-    let restart = app::hints::saga_picture_files(&zip);
+    let launch = app::hints::saga_picture_files(&zip, None);
+    let restart = app::hints::saga_picture_files(&zip, None);
     assert_eq!(launch.len(), 68, "the launch collected the whole set");
     assert_eq!(launch, restart, "and a restart collects exactly the same set");
 }
@@ -554,7 +554,7 @@ fn the_fantastic_four_zips_pictures_are_the_same_format_under_other_names() {
         assert!(skipped("the Fantastic Four picture set"));
         return;
     };
-    let pics = app::hints::saga_picture_files(&zip);
+    let pics = app::hints::saga_picture_files(&zip, None);
     assert_eq!(pics.len(), 64, "every `.PAK` in the archive");
     let mut usages: BTreeMap<&str, usize> = BTreeMap::new();
     for (name, bytes) in &pics {
