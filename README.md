@@ -12,14 +12,14 @@
 
 ### Supported story formats:
 
-* **Z-machine v3–v8** (incl. graphical v6) — *Next release:* v1 and v2 as well
+* **Z-machine v1–v8**, including graphical v6
 * **Glulx**
-* **Scott Adams** — *Next release:* the TI-99/4A and Commodore 64 releases too,
-  and the American S.A.G.A. disk editions for the Atari 8-bit, the Apple II and
-  the Commodore 64 — Adventureland, Pirate Adventure, Mission Impossible, Voodoo
-  Castle, The Count, Strange Odyssey, Claymorgue Castle and Questprobe's *The
-  Hulk*, opened straight off their own release disk images, no extraction
-  needed. *Next release:* the ZX Spectrum Mysterious Adventures load from their
+* **Scott Adams** — the TI-99/4A and Commodore 64 releases, the American S.A.G.A.
+  disk editions for the Atari 8-bit, the Apple II and the Commodore 64 —
+  Adventureland, Pirate Adventure, Mission Impossible, Voodoo Castle, The Count,
+  Strange Odyssey, Claymorgue Castle and Questprobe's *The Hulk*, opened straight
+  off their own release disk images with no extraction needed. The ZX Spectrum
+  Mysterious Adventures load from their
   snapshots — hand lanthorn a `.z80` of any of Brian Howarth's eleven titles and
   it finds the game inside the 48K memory dump, names the release, and plays
   it. The Commodore 64 and ZX Spectrum Mysterious
@@ -27,8 +27,8 @@
   under each platform's own colours — redrawn at the size your terminal shows
   them rather than stretched from the original's tiny canvas, and the
   Commodore 64 *Hulk* shows its full-colour comic panels — one per room,
-  straight off the release disk, darkness card and all. *Next release:* the
-  Apple II S.A.G.A. disks draw their artwork too — the hi-res line drawings of
+  straight off the release disk, darkness card and all. The Apple II S.A.G.A.
+  disks draw their artwork too — the hi-res line drawings of
   Adventureland, Pirate Adventure, Mission Impossible and Strange Odyssey,
   read off the release's companion side while you play from its boot side
 
@@ -197,11 +197,10 @@ itself.**
 
 ## What it does
 
-- **Three engines, one player** — Z-machine v3–v8 (including graphical v6),
+- **Three engines, one player** — Z-machine v1–v8 (including graphical v6),
   Glulx, and Scott Adams, auto-detected from the file. Clean-room, pure Rust, no
-  C bindings. *Next release:* the two versions Infocom shipped before v3 play
-  too, so the whole published run of the format — v1 through v8 — is covered,
-  the earliest *Zork* releases included.
+  C bindings. The complete published run of the Z-machine format is covered,
+  from the earliest *Zork* releases through the latest.
   → [getting started](docs/guide/getting-started.md)
 - **A map that draws itself** — rooms placed, routed and de-overlapped as you
   explore, across switchable layers. Click a room and it shows you the way there.
@@ -235,13 +234,12 @@ itself.**
   just the game's own state, whether you press Ctrl+S or the story does its own
   `SAVE`. Plus Quetzal import/export and per-turn rewind.
   → [saves and rewind](docs/guide/saves-and-rewind.md)
-- **Transcripts, recording and replay** — *Next release:* a game's own
-  `SCRIPT` command now writes a real transcript beside its saves, and
-  `/set-transcript on` does the same for the many games that offer no such
-  command. Commands can be recorded to a file and played back, in the format
-  other interpreters read. *Next release:* `--transcript-file <path>` streams
-  the whole session live to a plain-text file as you play, for a screen
-  reader or a `tail -f` in another terminal — engine-neutral, unlike
+- **Transcripts, recording and replay** — A game's own `SCRIPT` command now
+  writes a real transcript beside its saves, and `/set-transcript on` does the
+  same for the many games that offer no such command. Commands can be recorded
+  to a file and played back, in the format other interpreters read. Live-stream
+  the transcript to a file with `--transcript-file <path>` for a screen reader
+  or a second terminal running `tail -f` — engine-neutral and unlike
   `/set-transcript`. → [playing](docs/guide/playing.md)
 - **A real terminal UI** — mouse, resizable panes, a story picker with IFDB
   search, command palette, in-game InvisiClues, transcript search, a debug
@@ -314,10 +312,10 @@ lanthorn "LostTreasures1.iso" --story 3       # a compilation CD
 | CD-ROM, incl. hybrid Mac/PC discs | `.iso` `.bin` | Macintosh (3) or PC/DOS, per file |
 | Commodore 1541, GCR bitstream | `.g64` | Commodore 128 (7) |
 
-*Next release:* hand lanthorn a Commodore 64 *Mysterious Adventures* compilation
-disk and pick a game — `MYSTADV1.D64` and `MYSTADV2.D64` mount, list, **and
-play** all eleven of Brian Howarth's titles (six and five apiece), each with
-its own saves. Two more media still **mount and list what is on them** with
+Hand lanthorn a Commodore 64 *Mysterious Adventures* compilation disk and pick a
+game — `MYSTADV1.D64` and `MYSTADV2.D64` mount, list, **and play** all eleven of
+Brian Howarth's titles (six and five apiece), each with its own saves. Two more
+media still **mount and list what is on them** with
 nothing to play yet — Atari 8-bit floppies (`.atr`) and loadable binaries
 (`.xex`), and Apple II DOS 3.3 floppies (`.dsk`); lanthorn will tell you what
 the disk holds and that none of it is a game it can play. The loaders for

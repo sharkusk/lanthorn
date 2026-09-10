@@ -21,272 +21,197 @@ Absolute URLs or no link.
 
 ## Unreleased
 
+---
+
+## v0.6.0 — 2026-09-10
+
+### Highlights
+
+**The three VM engines are now embeddable Rust crates.** `lanthorn-zvm` and `lanthorn-gvm` are ready for embedding; `lanthorn-scott` is experimental. The Z-machine, Glulx, and Scott Adams interpreters can be used as libraries in any Rust application through git or path dependencies. Scott Adams support gains the full family of disk-based releases — TI-99/4A, Commodore 64, Atari 8-bit (text for now), Apple II, and ZX Spectrum editions, with artwork on most. The story picker now tells you which games have pictures and what kind.
+
 ### Added
 
-- **Look at something in *Voodoo Castle* or *The Count* and you see it.** The
-  Apple II pressings of these two hide a set of drawings nobody has been shown
-  in forty years — the pin-stuck voodoo doll, the sapphire ring, the glowing
-  idol, the bloody knife, Dracula's parcel with its note still tied on. The
-  games draw them full-screen when you `LOOK` at the thing itself, and lanthorn
-  now does too: type `LOOK KNIFE` while the knife is in the room or in your
-  pack and the picture fills the window until you press RETURN, then the room
-  comes back. Eleven drawings across the two games, each one paired with its
-  object by the game's own disk rather than by us.
+- **The three VM engines are embeddable Rust crates** — `lanthorn-zvm`
+  (v1–v8 Z-machine, ready for embedding), `lanthorn-gvm` (Glulx, ready for
+  embedding), and `lanthorn-scott` (Scott Adams, experimental). Each exposes a
+  headless session interface and can be integrated into any Rust application
+  through git or path dependencies, without the lanthorn TUI.
 
-- **Things in the room now appear in the picture, and `INVENTORY` draws what
-  you are carrying.** The American *Scott Adams Graphic Adventures* keep a
-  separate little drawing for many of the objects lying about — the iron ring
-  set in the dome's floor, the sign on the wall, the killer bees, Ultron in
-  his cavern — and until now lanthorn showed you the empty room. It draws them
-  over the room now, in the order the release disk holds them, and takes one
-  away the moment you pick it up. Type `INVENTORY` in one of these games and
-  the picture changes too: the pack opens on its own screen with every item
-  you carry drawn on it, and RETURN puts the room back. Both the Commodore 64
-  *Hulk* and its MS-DOS twin, and `/dump-windows` names the overlays a frame
-  was built from.
-
-- **The MS-DOS *Questprobe* releases now play with their pictures.** *The
-  Hulk* as it was sold for the IBM PC — a folder of DOS files with the game in
-  one and sixty-eight CGA pictures beside it — opens straight out of its zip,
-  no unpacking, and draws every room in the four colours a CGA card could show
-  at once. The story list calls it *The Hulk (MS-DOS)* instead of whatever the
-  download happened to be named, the TYPE column says `zip`, and the info
-  panel counts the artwork for you. It is the same game the Commodore 64 disk
-  holds and it is not the same pictures: half of the PC set is drawn at twice
-  the horizontal detail, and the rest of it agrees with the Commodore version
-  pixel for pixel — which is how we know both are being read right.
-
-- **The Apple II *Scott Adams Graphic Adventures* draw their pictures.**
-  *Adventureland*, *Pirate Adventure*, *Mission Impossible* and *Strange
-  Odyssey* were pressed for the Apple II as two floppies — the game on the
-  boot side, the artwork on the other — and their pictures are not bitmaps at
-  all but drawings, laid down stroke by stroke the way the machine drew them
-  in 1982 — lines, a paintbrush, and floods of colour in the six hues an Apple
-  II could put on a screen at once. Open the boot side and lanthorn finds the
-  picture disk sitting beside it in the same folder, so a room's drawing
-  appears above the text with nothing for you to set up: 314 pictures across
-  the four titles, the `IT'S TOO DARK!` card when the lamp goes out and the
-  Adventure International logo — green, blue and orange — on the way in. The story list names the release
-  ("Adventureland (Apple II)") and the info panel counts the artwork
-  (`Pictures: S.A.G.A. (Apple II hi-res, N pictures)`) — or says where it
-  isn't, if the picture disk was left behind.
-
-- **…and so do the other three, off a disk with no filesystem on it.**
-  *Voodoo Castle*, *The Count* and *Claymorgue Castle* were pressed
-  differently: their picture side has no catalogue, no directory and no file
-  names — the game's own loader knew where each drawing sat and nothing else
-  on the disk says. lanthorn finds them the way the pictures themselves say
-  where they are, and draws all ninety-seven: the brass bed *The Count* wakes
-  you in, Claymorgue's dragon, Voodoo Castle's fortune teller. Nothing to set
-  up, and the story list counts them like any other release's.
-
-- **The ZX Spectrum *Mysterious Adventures* now load, straight from a
-  snapshot.** All eleven of Brian Howarth's titles — *The Golden Baton*, *The
-  Time Machine*, *Arrow of Death* parts 1 and 2, *Escape from Pulsar 7*,
-  *Circus*, *Feasibility Experiment*, *The Wizard of Akyrz*, *Perseus and
-  Andromeda*, *Ten Little Indians* and *Waxworks* — were sold for the 48K
-  Spectrum, and what survives of them is a `.z80` snapshot: a compressed dump
-  of the machine's whole memory, game and interpreter together, with nothing
-  in it that says where the game is. Hand lanthorn one and it finds the game
-  inside, names the release in the story list ("The Golden Baton", not
-  `m1goldba`), reports its artwork in the info panel, and plays it in the
-  wording the release itself carries — which, measured against the eleven
-  snapshots rather than against the received wisdom about them, is the same
-  first person the Commodore 64 edition speaks in.
-  It needs no list of known releases to do it, so a Spectrum snapshot nobody
-  has catalogued loads too; a snapshot of some other game is refused by name
-  rather than half-read.
-- **And now they show their pictures too.** The ZX Spectrum releases draw the
-  same line-art rooms the Commodore 64 edition does — the two platforms carry
-  the identical artwork and differ only in their colours — appearing above the
-  room panel exactly the same way, through the same kitty/sixel/half-block
-  drawing, and offering the same **Picture resolution** choice in launch
-  options. (SQ-1480)
-
-### Fixed
-
-- **The Commodore 64 pictures now use the colours a real Commodore 64 shows.**
-  The palettes lanthorn drew the American *Questprobe* artwork and the
-  *Mysterious Adventures* line drawings with were written down by hand, and
-  every one of them was brighter and more vivid than the machine ever was. All
-  sixteen colours are the VIC-II's own now, so the Hulk's cavern is the murky
-  green it is on the hardware rather than a lurid one — and two colours were
-  simply the wrong colour: the dome in *The Hulk* was drawing orange where a
-  Commodore 64 draws red. Checked against captures of the real game running on
-  a real machine, which are committed alongside so the next change can be
-  checked the same way. The MS-DOS *Questprobe* pictures are corrected in the
-  same breath: their cyan and magenta were the pure, electric versions of those
-  colours rather than the softer ones an IBM PC's graphics adaptor actually
-  put on a monitor. And the line-drawn *Mysterious Adventures* artwork was
-  checked against a real Commodore 64 too — the colours there turned out to
-  have been right all along, but the *drawing* was not. A Commodore 64 can
-  only show two colours in each little eight-by-eight block of its screen, so
-  when the game floods a shape with colour it takes the outline with it. We
-  were carefully preserving outlines the machine never showed. The pictures
-  now come out as they did in 1982, which for these games means slightly
-  bolder and a good deal less fussy.
-
-- **"I'm in a dusty study" now follows the wording you asked for.** lanthorn's
-  own room layout — the one it shows for every Scott Adams game — printed the
-  room line and the "I can also see:" heading in the first person whatever the
-  rest of the game was saying, so a game set to speak in the second person
-  said "You are dead." and "You are carrying:" and then opened every single
-  turn with "I'm in a ". Both lines follow the setting now, and the
-  second-person room line reads "You are in a " rather than the ungrammatical
-  "You are " it used to be.
+- **Scott Adams TI-99/4A releases now load.** The twelve original Adventure
+  International games — *Adventureland* through *The Golden Voyage* — were sold
+  for the TI-99/4A as compiled bytecode snapshots. Hand lanthorn a TI-99/4A
+  release and it opens and plays like any other Scott game, with the map,
+  vocabulary help, the TI's own wording, its running lamp countdown, and the
+  running inventory that lives under every room description.
 
 - **The American S.A.G.A. disk games now load.** The Adventure International
-  disk editions sold in the United States — *Adventureland*, *Pirate
-  Adventure*, *Mission Impossible*, *Voodoo Castle*, *The Count*, *Strange
-  Odyssey* and *The Sorcerer of Claymorgue Castle* on the Atari 8-bit and the
-  Apple II, and Questprobe's *The Hulk* on the Commodore 64 — keep their game
-  data in a binary form of their own that shares almost nothing with the
-  plain-text databases lanthorn has always read: the words are stored nouns
-  first, the text carries its length in front of it rather than a terminator,
-  and the whole script is written down sideways, one field of every rule at a
-  time. lanthorn reads all of it, and checked every table of all fifteen
-  releases against the published text conversion of the same game: *Voodoo
-  Castle* and *The Count* come out identical on both machines, rule for rule,
-  and the rest differ only where the graphic edition genuinely differs from
-  the text one. Hand lanthorn or `scott-cli` the release disk image itself —
-  an Atari 8-bit `.atr`, an Apple II `.dsk`, or the Commodore 64's own
-  `QUESTPR1.D64` — and it opens straight off it, named by its own title and
-  which machine it came from (*Voodoo Castle (Atari 8-bit)*, *Voodoo Castle
-  (Apple II)*), since the same game was pressed for more than one and each
-  keeps its own saves. (SQ-1414, SQ-1464, SQ-1470)
+  disk editions sold in the United States — *Adventureland*, *Pirate Adventure*,
+  *Mission Impossible*, *Voodoo Castle*, *The Count*, *Strange Odyssey* and
+  *The Sorcerer of Claymorgue Castle* on the Atari 8-bit and the Apple II, and
+  Questprobe's *The Hulk* on the Commodore 64 — keep their game data in a
+  binary form all their own. lanthorn reads all of it, checked against the
+  published text conversion of each game.
+
 - **The Commodore 64 *Mysterious Adventures* now load.** Brian Howarth's
-  eleven-game series — *The Golden Baton*, *The Time Machine*, both parts of
-  *Arrow of Death*, *Escape from Pulsar 7*, *Circus*, *Feasibility Experiment*,
-  *The Wizard of Akyrz*, *Perseus and Andromeda*, *Ten Little Indians* and
-  *Waxworks* — was sold for the Commodore 64 on two compilation disks, and
-  those releases are a snapshot of the machine's memory rather than the
-  plain-text database lanthorn has always read. Hand lanthorn or `scott-cli`
-  one of the eleven program files and it opens and plays, with the map, the
-  vocabulary help and everything else working as usual — the games' own
-  first-person voice, and the Howarth lamp that counts its remaining turns out
-  loud and is gone for good once it burns out. lanthorn also decodes the
-  line-drawn picture each room carries. The
-  picker and the title bar name it by its release title (*The Golden Baton*,
-  not the bare `BATON`) whether it's opened straight off disk or pulled off
-  one of the compilation disk images below.
-  (SQ-1414, SQ-1469)
-- **Hand lanthorn a Mysterious Adventures compilation disk and pick a game.**
-  `MYSTADV1.D64` and `MYSTADV2.D64` — the two Commodore 64 disks the eleven
-  games above were actually sold on — now mount and open just like an Infocom
-  compilation disc: point lanthorn or `scott-cli --story <n|name>` at one and
-  pick from a list of the games it holds, six on the first and five on the
-  second, each with its own saves. (SQ-1414)
-- **And now they show their pictures.** Each room's line-drawn artwork —
-  decoded straight off the same program file, no separate graphics disk
-  needed — appears above the room panel exactly where a Blorb-bundled Scott
-  Adams game already shows its own, through the same kitty/sixel/half-block
-  drawing lanthorn already uses everywhere else. (SQ-1463)
-- **…and they are drawn smooth rather than blocky.** Those pictures are not
-  bitmaps at all — they are lines and flood fills, a drawing the machine
-  performed rather than a photograph of one — so nothing in the file says how
-  big they should be. lanthorn now draws each room at the size the picture band
-  will actually show it, up to four times the Commodore 64's own resolution,
-  instead of drawing a small one and stretching it: the diagonals step in fine
-  increments rather than in chunky staircases, and the colour inside a shape
-  follows the line it belongs to. Every filled region still ends up exactly
-  where the Commodore 64 put it, checked picture by picture across all eleven
-  games. (SQ-1467)
-- **The Hulk and the other American S.A.G.A. disk editions show their
-  pictures.** Every room of the Commodore 64 *Questprobe featuring The Hulk*
-  is a full-colour comic panel, kept as seventy separate files on the release
-  disk beside the game itself, and lanthorn now draws them: Bruce Banner tied
-  hand and foot to a chair is there the moment the game opens, the picture
-  changes as you move, and in the dark the game's own "IT'S TOO DARK!" card
-  appears instead of an empty frame — which is what the Commodore 64 did, and
-  not what any other Scott Adams game does. They appear above the room panel
-  in the same band the Blorb and *Mysterious Adventures* pictures already use,
-  through the same kitty/sixel/half-block drawing. The Atari 8-bit editions
-  keep their artwork on the second disk of the pair, which lanthorn does not
-  pair up yet, so those still open as text. (SQ-1475)
-- **The picker now tells you which Scott Adams games have pictures, and what
-  kind.** A story's info panel names its artwork — the Commodore 64
-  *Mysterious Adventures*' own line-drawn pictures, a Blorb's pre-rendered
-  ones, or an American S.A.G.A. release's own picture files, counted — so you
-  know what you're getting before you press Play. A S.A.G.A. game opened from
-  something that is not its release disk says so, rather than looking like a
-  game with no pictures at all. The story list's TYPE column names a Scott
-  game's disk too, so the same game pressed for the Commodore 64, the Atari
-  and the Apple II is three distinguishable rows instead of three that all
-  read "Scott".
-- **And you can choose how sharp those Commodore 64 pictures are drawn.**
-  Launch options for one of the *Mysterious Adventures* games now offers a
-  **Picture resolution** row: hi-res (the default, as fine as your terminal's
-  picture band allows) or the release's own original, unscaled resolution —
-  the same choice, tick-to-keep or one-launch-only, as every other row in
-  that dialog. (SQ-1473)
-- **Three more kinds of original disk now open.** Atari 8-bit floppies
-  (`.atr`), Apple II DOS 3.3 floppies (`.dsk`) and Atari 8-bit loadable
-  binaries (`.xex`) mount like every other release medium and list the
-  programs on them by name instead of reporting nothing. These are further
-  disks the Scott Adams games were sold on, so there is no story on them
-  lanthorn can play *yet* — point it at one and it opens the disk, tells you
-  what is on it, and says plainly that none of it is a game it can run. The
-  loaders that finish the job come next. (SQ-1458)
-- **Scott Adams TI-99/4A releases now load.** The twelve original Adventure
-  International games — *Adventureland* through *The Golden Voyage* — were also
-  sold for the TI-99/4A, and those releases are a completely different kind of
-  file: a snapshot of the machine's memory with the game compiled into
-  bytecode, not the plain-text database lanthorn has always read. Hand one to
-  lanthorn and it just opens now, wherever you keep it, with the map, the
-  vocabulary help and everything else working as usual. They play like their own
-  release rather than an imitation of the text one: the TI wording throughout,
-  the running "light runs out in N turns" countdown, the lamp that is gone for
-  good once it burns out, and the running inventory the TI version keeps under
-  every room description. (SQ-1414)
-- **The two earliest Infocom releases now play.** lanthorn ran Z-machine
-  Versions 3 through 8; it now runs 1 and 2 as well, which is every version of
-  the format Infocom ever shipped — the first *Zork I* releases among them.
-  These are genuinely a different text format underneath, not just an older
-  number in the header: the alphabet can be locked rather than shifted a letter
-  at a time, Version 2 has a single short abbreviation table and Version 1 none,
-  Version 1 spells `<` where later versions put a newline, and the words in the
-  dictionary are packed by rules of their own — so *Zork I*'s PDP-10 answers to
-  "PDP10" and not only to its synonyms. (SQ-1422)
+  eleven-game series was sold for the Commodore 64 on two compilation disks as
+  memory snapshots. Hand lanthorn one of the individual program files or point
+  it at a compilation disk and pick a game — `MYSTADV1.D64` and `MYSTADV2.D64`
+  mount, list, and play all eleven games (six and five apiece), each with its
+  own saves.
+
+- **The ZX Spectrum *Mysterious Adventures* now load, straight from a
+  snapshot.** All eleven of Brian Howarth's titles can be opened from a `.z80`
+  file — a compressed dump of the machine's whole memory with both the game
+  and interpreter inside. lanthorn finds the game inside, names the release in
+  the story list, and plays it.
+
+- **Scott Adams pictures are now drawn from their original releases.** The
+  Commodore 64 *Mysterious Adventures* show their line-drawn artwork, the Commodore 64
+  and MS-DOS *Questprobe: The Hulk* draw full-colour pictures or CGA artwork, the
+  Apple II S.A.G.A. games draw their hi-res stroke-and-fill pictures, and the ZX
+  Spectrum *Mysterious Adventures* draw line artwork — all appearing above the room
+  panel through the same kitty/sixel/half-block drawing lanthorn uses everywhere else.
+  The Atari 8-bit S.A.G.A. games load and play but show no pictures yet. Pictures
+  scale smoothly (up to four times the original resolution) so diagonals step in fine
+  increments. Objects in the room now appear in the picture, and `INVENTORY` draws
+  what you're carrying. Special full-screen pictures like *Voodoo Castle*'s and *The
+  Count*'s item drawings appear when you `LOOK` at them.
+
+- **The story picker now tells you which Scott games have pictures, and what
+  kind.** A game's info panel names its artwork — Mysterious Adventures line
+  drawings, a Blorb's pre-rendered pictures, or a S.A.G.A. release's own picture
+  files, counted — so you know what you're getting before you press Play. The
+  story list's TYPE column names a Scott game's disk, so the same game pressed
+  for different machines is distinguishable.
+
+- **A game's own `SCRIPT` command now works.** Typing `SCRIPT` (or `TRANSCRIPT`)
+  starts a transcript and writes it to `script.txt` in the game's folder.
+  `UNSCRIPT` stops it, and starting it again later adds to the same file.
+
+- **`/set-transcript on` and `off`** for games that offer no `SCRIPT` command
+  of their own — the same switch, thrown from lanthorn's side, with a line
+  telling you which file it is writing to. Separate from `/export-transcript`,
+  which writes the scrollback you are looking at.
+
+- **Command recording and replay.** A game can record every command you type
+  to `commands.txt` beside the transcript, and play a recorded file back instead
+  of the keyboard — the format other interpreters use, so a script recorded in
+  Frotz replays in lanthorn and the other way round. `zvm-cli` exposes all three
+  directly: `--transcript <file>`, `--record <file>` and `--replay <file>`.
+
+- **Live-stream the transcript to a file with `--transcript-file <path>`** for
+  a screen reader or a second terminal running `tail -f`. Every line is appended
+  in plain text the moment it lands, across every engine — Z-machine, Glulx and
+  Scott Adams alike. Different from `/set-transcript`, which is the Z-machine's
+  own `SCRIPT` stream.
+
+- **The Hulk's opening cutscene now shows every scene.** Drawing several
+  pictures in a row — the opening sequence, or any other moment — now shows each
+  scene in turn, waiting for you to press RETURN before the next one shows.
+
+- **Scott Adams games now match the classic ScottFree interpreter more
+  closely.** Typing a single letter — `n`, `e`, `s`, `w`, `u`, `d`, or `i` —
+  now works as the full direction or `INVENTORY` command. A game ends with
+  "Well done." once every treasure is stored. Walking into the dark with no way
+  to go kills you. The lamp warns "Your light is growing dim." as it runs low,
+  showing its "run out" warning twice before going dark. Quoted text prints with
+  real quotation marks.
+
+- **A save file from the classic ScottFree interpreter can now be restored**
+  in a Scott Adams game, alongside lanthorn's own saves.
+
 - **Glulx games can draw pictures that follow the window width.** A story can
   now ask for an illustration sized as a share of the text column — half the
   width, a quarter, its own proportions kept — and it stays that share when you
-  resize the terminal or change font size, rather than being frozen at whatever
-  width it happened to be drawn at. Modern Glulx works that illustrate their
-  prose get this automatically. (SQ-1424)
-- **A save file from the classic ScottFree interpreter can now be restored**
-  in a Scott Adams game, alongside lanthorn's own saves — point the restore
-  file picker (or `scott-cli`'s `/restore`) straight at an old ScottFree
-  `.sav` and it comes back to life. (SQ-1413)
-- **A game's own `SCRIPT` command now works.** Typing `SCRIPT` (or `TRANSCRIPT`,
-  or whatever a game calls it) starts a transcript and writes it to
-  `script.txt` in the game's own folder — everything the story prints, plus
-  the commands you type, as plain text you can read anywhere. Before this, nine
-  of thirteen games tried on answered "Attempt to begin transcript failed."
-  `UNSCRIPT` stops it, and starting it again later adds to the same file rather
-  than replacing it. (SQ-1420)
-- **`/set-transcript on` and `off`**, for the many games that offer no `SCRIPT`
-  command of their own — the same switch, thrown from lanthorn's side, with a
-  line telling you which file it is writing to. This is the story's own
-  transcript, and separate from `/export-transcript`, which writes out the
-  scrollback you are looking at. (SQ-1420)
-- **Command recording and replay.** A game can now record every command you type
-  to `commands.txt` beside the transcript, and play a recorded file back
-  instead of the keyboard — the format other interpreters use, so a script
-  recorded in Frotz replays in lanthorn and the other way round. `zvm-cli`
-  exposes all three directly: `--transcript <file>`, `--record <file>` and
-  `--replay <file>`. (SQ-1420)
-- **Live-stream the transcript to a file with `--transcript-file <path>`**,
-  for a screen reader or a second terminal running `tail -f`. Every line —
-  the game's own text, your typed commands, lanthorn's own warnings — is
-  appended in plain text the moment it lands, across every engine lanthorn
-  plays (Z-machine, Glulx and Scott Adams alike). Different from
-  `/set-transcript`, which is the Z-machine's own `SCRIPT` stream and only
-  ever carries what the game itself chose to write. (SQ-0410)
-- **The Hulk's opening cutscene now shows every scene.** Biting your lip in
-  the American S.A.G.A. edition of *The Hulk* — and any other moment across
-  these games that draws several pictures in a row — used to show only the
-  LAST one; now each scene appears in turn, waiting for you to press RETURN
-  before the next one shows, the way it always should have. (SQ-1487)
+  resize the terminal.
+
+- **The classic ScottFree options are available per game**, in the story's own
+  settings sidecar: second-person replies, the original lamp-countdown wording,
+  and the light source being destroyed for good the instant it runs out.
+  `scott-cli` gets matching `-y`/`-s`/`-t`/`-p` flags.
+
+### Fixed
+
+- **The Commodore 64 pictures now use the colours a real Commodore 64 shows.** 
+  The palettes were corrected against captures of the real game running on real
+  machines. All sixteen VIC-II colours are authentic now. The MS-DOS *Questprobe*
+  pictures are corrected too — their cyan and magenta are now the softer tones
+  an IBM PC actually displays. The Commodore 64 *Mysterious Adventures* line
+  drawings were checked against real hardware and redrawn to match the display.
+
+- **"I'm in a dusty study" now follows the wording you asked for.** Scott
+  Adams games spoken in the second person used to switch to first person for
+  the room layout and inventory. Both lines now follow the game's own voice.
+
+- **In the disk editions of Adventureland and Pirate Adventure, a few
+  commands did the wrong thing.** Commands that ran right after a picture-drawing
+  one occasionally misread the input — that's fixed now.
+
+- **Quitting a game back to the story list now returns you to where you were.**
+  It used to always land you at the top of the library. Now it puts the cursor
+  back on the exact game you were playing, in the folder it came from, with the
+  list scrolled back to the same spot.
+
+- **Your typed answers are no longer invisible in Glulx games that use a light
+  background, such as Counterfeit Monkey.** Your input now reads against the
+  game's own page instead of vanishing in white-on-white.
+
+- **Glulx text that a game filters through its own routine no longer gets cut
+  off.** lanthorn now runs as deep as the game asks, and saves in the middle of
+  such passages work properly too.
+
+- **A Glulx game's in-game RESTART no longer forgets files the game had
+  written.** Those files now survive, matching every other Glulx interpreter.
+
+- **Some games no longer swallow your first keystroke at the opening prompt.**
+  Blank rows are no longer counted as text you might miss.
+
+- **Restoring a Save State that was taken during a full-screen picture in a
+  graphical game no longer pages through the whole story.** The transcript is
+  treated as already read and the game continues from the picture.
+
+- **A Save State now keeps the colours of a game's status line cell by cell.**
+  Games that colour their status line no longer lose those colours.
+
+- **Glulx (Version 3.1.3) saves and autosaves written by other interpreters
+  now restore.** Counterfeit Monkey's built-in fast start now works on the
+  very first run.
+
+- **`restart` no longer forgets a game's protected memory or its undo history.**
+  A restarted game keeps whatever it had asked to protect.
+
+- **Glulx floating-point and double-precision math now matches the reference
+  interpreter exactly**, including handling of negative zero, infinities, and
+  not-a-number. `pow`/`dpow` special cases now hold on every platform.
+
+- **Glulx games' data files now use the standard names**, so a file a Glulx
+  story writes can be shared with other interpreters.
+
+- **A command a game reopens for you to finish now shows up already typed.**
+  Beyond Zork, Zork Zero and Shogun all reopen the command prompt with your
+  last command sitting there, editable — that text used to vanish.
+
+- **A broken or corrupted story now stops with a clear message instead of
+  hanging forever.** A handful of badly damaged story files could make the
+  Z-machine loop endlessly.
+
+- **`sound_effect`'s "stop all sounds" call now actually stops everything.**
+  A story that plays a sound with no volume/effect specified gets sensible
+  defaults instead of silence.
+
+- **The in-game `verify` command is stricter about corrupted story files** —
+  it no longer waves through a story whose stored checksum has been zeroed out.
+
+- **Restarting a game now reshuffles its random events** unless you've pinned
+  a specific random seed for reproducible play.
+
+- **lanthorn and the `zvm-cli` player now start instantly on a game with no
+  sound**, instead of pausing to open an audio device the game will never use.
+  `zvm-cli` now reads Enter correctly in a game that asks for a single keypress.
+
+- **A Glulx game that saves to its own in-memory buffer now works.** A few
+  games route `SAVE`/`RESTORE` through a Glk memory stream — those used to hang
+  waiting on a save prompt that would never arrive.
 
 ### Changed
 
@@ -297,150 +222,12 @@ Absolute URLs or no link.
   game next repaints, and a text game's status line is blank until the next
   turn redraws it. Saving again writes the new format. If you want an old
   graphical save restored exactly, the previous release can load it and save it
-  again. The game's own `save` files are unaffected. lanthorn now tells you
-  when this happens: restoring an old save prints a note in the transcript
-  saying the screen (and, for a graphical game, its pictures) will repaint
-  as you play. (SQ-1401, SQ-1403, SQ-1410)
+  again. lanthorn now tells you when this happens: restoring an old save prints
+  a note in the transcript.
+
 - **Z-machine games run noticeably faster.** Playing 20,000 turns of Mini-Zork
-  now takes 0.6 s, down from 2.2 s — about 3.7x — by cutting two small memory
-  allocations the interpreter was making for every single instruction it ran,
-  whether or not the instruction ever needed them. (SQ-1438)
-
-### Fixed
-
-- **In the disk editions of Adventureland and Pirate Adventure, a few
-  commands did the wrong thing.** Rubbing the lamp in Adventureland could
-  drop the wrong item and leave you in the dark instead of conjuring the
-  diamond ring, and setting sail in Pirate Adventure could set the wrong
-  flag — both games, and a few others in the same American S.A.G.A. disk
-  family, occasionally misread a command right after a picture-drawing one.
-  Every such command now runs correctly. (SQ-1472)
-- **Quitting a game back to the story list now returns you to where you were.**
-  It used to always land you back at the top of the library, even if you'd
-  launched from a sub-folder or from one game on a multi-story disk image or
-  ZIP — you'd have to navigate all the way back in. Now it puts the cursor
-  back on the exact game you were playing, in the folder (or disk/ZIP listing)
-  it came from, with the list scrolled back to the same spot too — if you
-  launched from several screens down, or from the cover gallery, that's
-  exactly where you land again, not snapped back to the top of the view. If
-  that game is no longer there (deleted, or its disk image moved), you land
-  on the nearest remaining game instead of jumping to the top. (SQ-1474,
-  SQ-1479)
-- **Your typed answers are no longer invisible in Glulx games that use a light
-  background, such as Counterfeit Monkey.** Games print your own typed
-  commands back into the transcript without naming a colour for them, trusting
-  the interpreter to pick something sensible — lanthorn's pick was a fixed
-  white, meant for a dark screen. On a game that colours its own page white
-  (Counterfeit Monkey does, and its in-game HINT menu is where this was most
-  noticeable), every word you typed rendered in white on white: not just hard
-  to read, invisible. Your input now reads against the game's own page, the
-  same way its prose already does. (SQ-1462)
-- **Glulx text that a game filters through its own routine no longer gets cut
-  off.** Some Glulx works route every character they print through a routine of
-  their own — for special typography, for a cipher, for a character who speaks
-  in a mangled voice. If that routine printed something that went back through
-  the filter, lanthorn stopped after 32 rounds and quietly threw the rest away,
-  and the missing text simply never appeared. It now runs as deep as the game
-  asks. Saving in the middle of such a passage works properly too: the save
-  picks up exactly where it left off, and the file can be read by other Glulx
-  interpreters. (SQ-1418)
-- **A Glulx game's in-game RESTART no longer forgets files the game had
-  written.** Typing RESTART used to silently wipe any file a Glulx story kept
-  on its own "disk" (Counterfeit Monkey's fast-start cache, for instance) —
-  the story's next save to that file would fail to notice, and it stayed lost
-  until you left and relaunched. Those files now survive a RESTART, matching
-  every other Glulx interpreter. (SQ-1439)
-- **Some games no longer swallow your first keystroke at the opening prompt.**
-  Stories that begin with a blank line or two — most modern Inform games do —
-  could raise a `[more]` prompt over an opening screen that plainly still had
-  room, leaving blank rows across the top, pushing the last few lines of the
-  intro out of sight, and eating the first letter you typed to dismiss itself.
-  Blank rows are no longer counted as text you might miss. An opening that
-  genuinely runs off the screen still pauses, as before. (SQ-1434)
-- **Restoring a Save State that was taken while a graphical (Version 6) game
-  was showing a full-screen picture, such as Zork Zero's splash screens, no
-  longer pages through the whole story so far with `[more]` prompts on the
-  first keypress.** The transcript is treated as already read and the game
-  continues from the picture. (SQ-1411)
-- **A Save State now keeps the colours of a game's status line cell by cell;**
-  games that colour their status line lost those colours across a Save State
-  before. (SQ-1401)
-- **Scott Adams games now match the classic ScottFree interpreter more
-  closely.** Typing a single letter — `n`, `e`, `s`, `w`, `u`, `d`, or `i` —
-  now works as the full direction or `INVENTORY` command. A game ends
-  properly, with "Well done.", once every treasure is stored. Walking into
-  the dark with no way to go now kills you, just as it always warned it
-  would. The lamp now warns "Your light is growing dim." as it runs low, and
-  its "run out" warning shows twice before going dark for good, matching the
-  original. Quoted text now prints with real quotation marks instead of
-  backticks. (SQ-1412)
-- **Glulx (Version 3.1.3) saves and autosaves written by other interpreters
-  now restore.** Some interpreters (glulxe among them) omit the trailing
-  stretch of an unmodified save when writing one; lanthorn used to reject
-  those as corrupt. **Counterfeit Monkey's built-in fast start now works on
-  the very first run**, not just after lanthorn has written its own save
-  once. (SQ-1415)
-- **`restart` no longer forgets a game's protected memory or its undo
-  history.** A restarted game keeps whatever it had asked to protect and can
-  still `undo` back across the restart, matching every other Glulx
-  interpreter. (SQ-1415)
-- **Glulx floating-point and double-precision `mod`/`div`-family math now
-  matches the reference interpreter exactly**, including how it handles
-  negative zero, infinities, and not-a-number. (SQ-1415)
-- **Glulx's `pow`/`dpow` now follow the spec's special cases on every
-  platform**, not only macOS — `1 raised to any power (even not-a-number) is 1`
-  and `anything raised to the power 0 (even not-a-number) is 1` now hold on
-  Linux and Windows too. (SQ-1433)
-- **Glulx games' data files now use the standard names**, so a file a Glulx
-  story writes (a transcript, a data file, an in-game save) can be shared with
-  other interpreters instead of only being readable by lanthorn. And a couple
-  of rarely used Glk calls now behave per spec. (SQ-1416)
-- **Scott Adams games now reply the way the classic ScottFree interpreter
-  does.** "O.K." instead of "OK.", "I'm carrying: …" laid out ScottFree's way,
-  a proper scored-and-rated line from SCORE, and a few other small wording
-  corrections. A command whose reply was blocked by something in the game
-  (rather than being unrecognised) now says "I can't do that yet." instead of
-  a plain "I don't understand" — a small but real difference for anyone
-  puzzling out what a command actually did. `GET ALL`/`DROP ALL` are more
-  faithful too: nothing to take says "Nothing taken.", a dark room refuses
-  the whole sweep, and a game's own "you can't just grab that" trap on an
-  item now fires even when you sweep it up with ALL. (SQ-1413)
-- **The classic ScottFree options are available per game**, in the story's own
-  settings sidecar: second-person replies ("You are dead." instead of "I am
-  dead." — Robin of Sherwood was written assuming this one), the original
-  lamp-countdown wording, and the light source being destroyed for good the
-  instant it runs out rather than merely going dark. `scott-cli` gets matching
-  `-y`/`-s`/`-t`/`-p` flags, same as the original ScottFree. (SQ-1413)
-- **A command a game reopens for you to finish now shows up already typed.**
-  Beyond Zork, Zork Zero and Shogun all reopen the command prompt with your
-  last command sitting there, editable, after certain function keys or after
-  a menu — that text used to vanish, leaving an empty prompt where the game
-  expected you to see it waiting. It now appears at the prompt exactly as the
-  game intended, in both the app and `zvm-cli`. (SQ-1419)
-- **A broken or corrupted story now stops with a clear message instead of
-  hanging or spinning forever.** A handful of badly damaged story files could
-  make the Z-machine loop endlessly on an instruction it didn't recognize;
-  it now reports the fault and stops, the way other interpreters do. (SQ-1419)
-- **`sound_effect`'s "stop all sounds" call now actually stops everything**,
-  and a story that plays a sound with no volume/effect specified gets the
-  interpreter's sensible defaults instead of silence. (SQ-1419)
-- **The in-game `verify` command is stricter about a corrupted story file** —
-  it no longer waves through a story whose stored checksum happens to have
-  been zeroed out. (SQ-1419)
-- **Restarting a game now reshuffles its random events** unless you've pinned
-  a specific random seed for reproducible play, matching how other
-  interpreters treat a restart. (SQ-1419)
-- **lanthorn and the `zvm-cli` command-line player now start instantly on a
-  game with no sound**, instead of pausing to open an audio device that game
-  was never going to use — the device now opens only the first time a game
-  actually plays something. **And `zvm-cli` now reads Enter correctly in a
-  game that asks for a single keypress** — a bare Enter used to be reported
-  as a raw line-feed, which a well-behaved game is entitled to reject as an
-  input code it should never see. (SQ-1423)
-- **A Glulx game that saves to its own in-memory buffer, rather than asking
-  lanthorn to write a file, now works.** A few games route `SAVE`/`RESTORE`
-  through a Glk memory stream instead of a fileref; those used to hang
-  waiting on a save prompt lanthorn would never show. (SQ-1427)
+  now takes 0.6 s, down from 2.2 s — about 3.7x — by eliminating two small
+  memory allocations the interpreter was making for every single instruction.
 
 ---
 

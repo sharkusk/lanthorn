@@ -23,7 +23,7 @@ name = "scott"
 # The shared answer type both VM crates already return (SQ-1103/SQ-1118) — an
 # internal, zero-dependency workspace crate, so this stays a zero-EXTERNAL-
 # dependency crate exactly as before.
-grammar-model = { package = "lanthorn-grammar-model", path = "../grammar-model", version = "0.5.3" }
+grammar-model = { package = "lanthorn-grammar-model", path = "../grammar-model", version = "0.6.0" }
 
 # The timing harness (SQ-1428). `test = true` so `cargo test`/`cargo nextest`
 # compile it and run its `#[cfg(test)]` smoke — a benchmark nobody builds is a

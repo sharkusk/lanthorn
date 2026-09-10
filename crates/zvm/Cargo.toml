@@ -24,7 +24,7 @@ name = "zvm"
 # zero-dependency workspace crate, so this stays a zero-EXTERNAL-dependency
 # crate exactly as before. Optional so an embedder who wants no grammar
 # tables takes no dependency at all (see the `grammar` feature below).
-grammar-model = { package = "lanthorn-grammar-model", path = "../grammar-model", version = "0.5.3", optional = true }
+grammar-model = { package = "lanthorn-grammar-model", path = "../grammar-model", version = "0.6.0", optional = true }
 
 [features]
 default = ["grammar"]
