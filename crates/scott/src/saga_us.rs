@@ -416,6 +416,97 @@ pub fn picture_file_name(platform: SagaPlatform, n: usize) -> Option<String> {
     }
 }
 
+// ── The Apple II naming rule (SQ-1476, measured — see Appendix A item 20) ─────
+
+/// Take an **Apple II** picture file's name apart, giving the release's
+/// adventure number alongside the usage and index.
+///
+/// The specification has no rule to quote here: §8.4 says an Apple II picture
+/// is reached through "a hard-coded per-title list of (usage, index, offset,
+/// length)" and §12.10 confirms those lists "are not recoverable from the
+/// database". They are not needed for the four **plain** releases, whose
+/// companion side is an ordinary DOS 3.3 disk carrying one named file per
+/// picture, and the names say everything the lists would:
+///
+/// | shape | usage | example |
+/// |---|---|---|
+/// | `R` + two adventure digits + **two** index digits | room | `R0100` is *Adventureland*'s room-usage picture 0 |
+/// | `B` + two adventure digits + **three** index digits | object in a room | `B02037` is *Pirate Adventure*'s item 37 |
+///
+/// **The two widths really are different**, which is why this is not §8.3's
+/// Commodore 64 rule with a shorter prefix. Three facts settle the room form:
+/// §8.6's three reserved indices all land where they should — `R0100` decodes
+/// to the words `IT'S TOO DARK!`, `R0198` to an `INVENTORY` card and `R0199`
+/// to the Adventure International logo — the room indices run `00` to exactly
+/// the release's room count on all four titles, and a three-digit reading
+/// would make `R0133` room 133 in a game with 33 rooms. The object form is
+/// settled the same way: read as three digits the indices are a sparse
+/// ascending run within the release's item count, and read as two they would
+/// repeat.
+///
+/// Indices 80 to 91 are neither rooms nor reserved: they are the full-window
+/// pictures §12.8's command 90 names by operand ("every operand measured names
+/// a picture file that is present on that title's picture side and is never a
+/// room's own number"). `B` index 255 is the game's own wordmark — *Adventureland*'s
+/// `B01255` draws the word `Adventureland` — which sits over the title picture.
+///
+/// **No inventory usage.** §8.6 distinguishes an object drawn in a room from
+/// one drawn on the inventory screen by a trailing `R` or `I` on the Commodore
+/// 64; no Apple II name carries either letter, so every `B` picture reports
+/// [`PictureUsage::ObjectInRoom`] and the inventory-only artwork of that
+/// platform, if it exists, is not distinguishable by name.
+///
+/// `None` for anything else, including §8.3's six- and seven-character
+/// Commodore 64 names — the two rules are deliberately separate.
+pub fn parse_apple_picture_file_name(name: &str) -> Option<(u16, PictureFile)> {
+    let b = name.as_bytes();
+    let (usage, digits) = match b.first()?.to_ascii_uppercase() {
+        b'R' if b.len() == 5 => (PictureUsage::Room, 2),
+        b'B' if b.len() == 6 => (PictureUsage::ObjectInRoom, 3),
+        _ => return None,
+    };
+    if !b[1..].iter().all(|c| c.is_ascii_digit()) {
+        return None;
+    }
+    let adventure: u16 = std::str::from_utf8(&b[1..3]).ok()?.parse().ok()?;
+    let index: u16 = std::str::from_utf8(&b[b.len() - digits..]).ok()?.parse().ok()?;
+    Some((adventure, PictureFile { usage, index }))
+}
+
+/// Is `name` an Apple II picture file? [`parse_apple_picture_file_name`]
+/// without the parts, for a host walking a disk catalogue.
+pub fn is_apple_picture_file_name(name: &str) -> bool {
+    parse_apple_picture_file_name(name).is_some()
+}
+
+/// The file name `release` stores its **room-usage** picture `n` under, or
+/// `None` when that platform does not name its pictures.
+///
+/// The lookup a host needs once [`SagaUs::room_picture`] has turned a room
+/// number into a picture index, and the inverse of the two naming rules:
+/// §8.3's `R01nnn` on the Commodore 64 and
+/// [`parse_apple_picture_file_name`]'s `R<aa><nn>` on the Apple II.
+///
+/// **It takes the release, not the platform**, because the Apple II name
+/// carries the Adventure International series number and no platform-only
+/// lookup can supply it: *Adventureland*'s room 3 is `R0103` and *Strange
+/// Odyssey*'s is `R0603`. [`picture_file_name`] is the platform-only form and
+/// stays right for the Commodore 64 *Hulk*, whose `01` is that release's own
+/// adventure number.
+///
+/// `None` for the **Atari 8-bit** (§8.3 reaches its pictures by hard-coded
+/// offset, not by name), for an Apple II index above 99 or an adventure number
+/// above 99 — neither fits its field — and for a Commodore 64 index above 999.
+pub fn room_picture_file_name(release: &SagaUs, n: usize) -> Option<String> {
+    match release.platform {
+        SagaPlatform::Commodore64 => picture_file_name(release.platform, n),
+        SagaPlatform::AppleII => {
+            (n <= 99 && release.adventure <= 99).then(|| format!("R{:02}{n:02}", release.adventure))
+        }
+        SagaPlatform::Atari8Bit => None,
+    }
+}
+
 // ── Detection (§12.2) ─────────────────────────────────────────────────────────
 
 /// A refusal for bytes that ARE this format but did not check out (§12.14).
@@ -1528,11 +1619,84 @@ mod tests {
             );
         }
         assert_eq!(picture_file_name(SagaPlatform::Commodore64, 1000), None, "no four-digit field");
-        // Neither of the other two platforms finds its pictures by name: the
-        // Atari's are at hard-coded offsets (§8.3) and the Apple II's are
-        // family D (§8.4).
+        // Neither of the other two platforms finds its pictures by THIS name:
+        // the Atari's are at hard-coded offsets (§8.3) and the Apple II's are
+        // family D under their own rule, which needs the adventure number and
+        // so lives in `room_picture_file_name` (SQ-1476).
         assert_eq!(picture_file_name(SagaPlatform::Atari8Bit, 1), None);
         assert_eq!(picture_file_name(SagaPlatform::AppleII, 1), None);
+    }
+
+    /// A release on `platform`, for the naming cases below.
+    fn release(platform: SagaPlatform, adventure: u16) -> SagaUs {
+        SagaUs { version: 416, adventure, platform }
+    }
+
+    // The Apple II name carries the ADVENTURE number, which is why the lookup
+    // takes a release: *Adventureland* (1) and *Strange Odyssey* (6) spell the
+    // same room's picture differently.
+    #[test]
+    fn the_apple_ii_room_name_carries_the_adventure_number() {
+        let adv = release(SagaPlatform::AppleII, 1);
+        assert_eq!(room_picture_file_name(&adv, 0).as_deref(), Some("R0100"));
+        assert_eq!(room_picture_file_name(&adv, 3).as_deref(), Some("R0103"));
+        assert_eq!(room_picture_file_name(&adv, 98).as_deref(), Some("R0198"));
+        assert_eq!(room_picture_file_name(&adv, 99).as_deref(), Some("R0199"));
+        let odd = release(SagaPlatform::AppleII, 6);
+        assert_eq!(room_picture_file_name(&odd, 3).as_deref(), Some("R0603"));
+        // Two digits, so a hundred is not nameable at all.
+        assert_eq!(room_picture_file_name(&adv, 100), None);
+        // The Commodore 64 keeps §8.3's own three-digit form, and the Atari
+        // still has no name for any of its artwork.
+        let hulk = SagaUs { version: 127, adventure: 1, platform: SagaPlatform::Commodore64 };
+        assert_eq!(room_picture_file_name(&hulk, 12).as_deref(), Some("R01012"));
+        assert_eq!(room_picture_file_name(&release(SagaPlatform::Atari8Bit, 1), 3), None);
+    }
+
+    // Room names are two index digits and object names three — the asymmetry
+    // §8.6's Commodore 64 rule does not have, and the one the specimens show.
+    #[test]
+    fn the_apple_ii_naming_rule_reads_both_widths() {
+        assert_eq!(
+            parse_apple_picture_file_name("R0100"),
+            Some((1, PictureFile { usage: PictureUsage::Room, index: 0 }))
+        );
+        assert_eq!(
+            parse_apple_picture_file_name("R0633"),
+            Some((6, PictureFile { usage: PictureUsage::Room, index: 33 }))
+        );
+        assert_eq!(
+            parse_apple_picture_file_name("B02037"),
+            Some((2, PictureFile { usage: PictureUsage::ObjectInRoom, index: 37 }))
+        );
+        // *Adventureland*'s wordmark, which is index 255 and not an item.
+        assert_eq!(
+            parse_apple_picture_file_name("B01255"),
+            Some((1, PictureFile { usage: PictureUsage::ObjectInRoom, index: 255 }))
+        );
+        // Round trip through the room form.
+        for adventure in [1u16, 2, 3, 6] {
+            for n in [0usize, 1, 33, 80, 91, 98, 99] {
+                let name = room_picture_file_name(&release(SagaPlatform::AppleII, adventure), n)
+                    .expect("names it");
+                assert_eq!(
+                    parse_apple_picture_file_name(&name),
+                    Some((adventure, PictureFile { usage: PictureUsage::Room, index: n as u16 })),
+                    "round trip for {adventure}/{n}"
+                );
+            }
+        }
+        for name in [
+            "R010",     // too short for the room form
+            "R01000",   // §8.3's Commodore 64 room name, deliberately not this rule
+            "B0100",    // five characters is a room shape with an object letter
+            "B01000R",  // §8.3's Commodore 64 object name, trailing letter and all
+            "HELO", "APPLESOFT", "A1.DAT", "PAK.INVEN", "M2", "R01X0", "",
+        ] {
+            assert_eq!(parse_apple_picture_file_name(name), None, "{name:?}");
+            assert!(!is_apple_picture_file_name(name), "{name:?}");
+        }
+        assert!(is_apple_picture_file_name("R0199") && is_apple_picture_file_name("B06055"));
     }
 
     // §12.11's five remapped pairs, and the platforms they apply on.

@@ -4377,14 +4377,22 @@ fn scott_pictures_label(sp: app::picker::ScottPictures) -> String {
         }
         app::picker::ScottPictures::Blorb => "Blorb".to_string(),
         // SQ-1475: family C is drawn now, so the row names the release's own
-        // artwork and how much of it the container holds.
-        app::picker::ScottPictures::SagaUsStrips { platform, pictures } => {
-            format!("S.A.G.A. ({} strips, {pictures} pictures)", saga_platform_word(platform))
-        }
+        // artwork and how much of it the container holds. SQ-1476: and the
+        // Apple II's family D is line art rather than strips, which is a
+        // difference a player can see, so the row says which.
+        app::picker::ScottPictures::SagaUsStrips { platform, pictures } => format!(
+            "S.A.G.A. ({} {}, {pictures} pictures)",
+            saga_platform_word(platform),
+            if matches!(platform, scott::SagaPlatform::AppleII) { "hi-res" } else { "strips" }
+        ),
         // A release WITH artwork, opened from a file that is not where the
-        // artwork lives — an extracted database, or an Atari side A without
-        // its companion picture side. Deliberately not "none": a text-only
-        // game shows no row here at all.
+        // artwork lives — an extracted database, an Atari side A without its
+        // companion picture side, or an Apple II boot side whose own side A
+        // is missing. Deliberately not "none": a text-only game shows no row
+        // here at all.
+        app::picker::ScottPictures::SagaUsNoPictures { scrambled: true, .. } => {
+            "S.A.G.A. (scrambled, not readable yet)".to_string()
+        }
         app::picker::ScottPictures::SagaUsNoPictures { .. } => {
             "S.A.G.A. (not on this file)".to_string()
         }
@@ -6322,7 +6330,8 @@ mod tests {
                 platform: scott::SagaPlatform::AppleII,
                 pictures: 5,
             }),
-            "S.A.G.A. (Apple II strips, 5 pictures)"
+            "S.A.G.A. (Apple II hi-res, 5 pictures)",
+            "SQ-1476: the Apple II draws line art, not strips, and says so"
         );
         for platform in [
             scott::SagaPlatform::Commodore64,
@@ -6330,11 +6339,25 @@ mod tests {
             scott::SagaPlatform::AppleII,
         ] {
             assert_eq!(
-                super::scott_pictures_label(ScottPictures::SagaUsNoPictures { platform }),
+                super::scott_pictures_label(ScottPictures::SagaUsNoPictures {
+                    platform,
+                    scrambled: false
+                }),
                 "S.A.G.A. (not on this file)",
                 "the platform does not change where the pictures aren't"
             );
         }
+        // …but WHY they are not readable does change the row (SQ-1476): the
+        // three scrambled Apple II releases keep their room artwork on a side
+        // this build cannot read at all, which is not the same as a file that
+        // simply is not the one with the pictures on it.
+        assert_eq!(
+            super::scott_pictures_label(ScottPictures::SagaUsNoPictures {
+                platform: scott::SagaPlatform::AppleII,
+                scrambled: true
+            }),
+            "S.A.G.A. (scrambled, not readable yet)"
+        );
     }
 
     /// SQ-0771: the size on the filename line measures the file on disk, which

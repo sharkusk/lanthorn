@@ -1398,26 +1398,56 @@ pub fn load_mounted_story_full(
     disk_entry: Option<&str>,
 ) -> io::Result<MountedStory> {
     let (bytes, disk_image) = read_story_file(path, disk_entry)?;
-    let saga_pictures = match disk_image {
-        Some(_) if scott::detect_saga_us(&bytes).is_some() => saga_picture_files(path),
+    let saga_pictures = match (disk_image, scott::detect_saga_us(&bytes)) {
+        (Some(_), Some(platform)) => saga_picture_files(path, platform),
         _ => Vec::new(),
     };
     Ok(MountedStory { story: extract_story(bytes)?, disk_image, saga_pictures })
 }
 
-/// Every family-C picture file on the container at `path` (spec §8.3's naming
-/// rule, `scott::is_picture_file_name`), `(name, record)`.
+/// Every US S.A.G.A. picture file this release keeps, `(name, record)` —
+/// **including the ones on its companion disk side** (SQ-1475, SQ-1476).
+///
+/// Two naming rules, one per platform, because the two releases name their
+/// artwork differently: spec §8.3's `R01nnn` on the Commodore 64
+/// (`scott::is_picture_file_name`) and the Apple II's `R<aa><nn>` /
+/// `B<aa><nnn>` (`scott::is_apple_picture_file_name`, and
+/// `scott::apple_pictures` for why that rule is measured rather than quoted).
+/// The **platform** decides, which is why it is a parameter: walking an Apple
+/// II disk with the Commodore 64 predicate finds nothing at all, silently, and
+/// reads as "this release has no pictures".
+///
+/// **The Apple II keeps its artwork on the other side of the release**
+/// (§10.6): the boot side holds the database and side A holds the pictures, so
+/// a walk of the mounted image alone finds none. When the mounted side holds
+/// no picture files this therefore tries [`saga_companion_side`] before
+/// answering empty — and it is that way round, rather than "always read side
+/// A", because *Pirate Adventure* ships its database on **both** sides and a
+/// player who opened side A directly has the pictures already in hand.
 ///
 /// Empty for anything that is not a mountable disk image, and for one that
-/// holds no such names — which is the honest answer for an Atari `.atr`,
-/// whose pictures are on the companion side and are reached by byte offset
-/// rather than through the disk's own catalogue.
+/// holds no such names — which is the honest answer for an Atari `.atr`, whose
+/// pictures are on the companion side and are reached by byte offset rather
+/// than through any catalogue (§12.10), and for the three Apple II releases
+/// whose side A is not a DOS 3.3 disk at all.
 ///
 /// `pub` because `@restart` needs it (`crate::reset`): a restart rebuilds the
 /// session from the story bytes it kept, and those bytes are not the
 /// container — so the pictures are re-read off the same path the launch
 /// mounted, rather than carried in app state for the life of the session.
-pub fn saga_picture_files(path: &Path) -> Vec<(String, Vec<u8>)> {
+pub fn saga_picture_files(
+    path: &Path,
+    platform: scott::SagaPlatform,
+) -> Vec<(String, Vec<u8>)> {
+    let here = picture_files_on(path, platform);
+    if !here.is_empty() || !matches!(platform, scott::SagaPlatform::AppleII) {
+        return here;
+    }
+    saga_companion_side(path).map(|side| picture_files_on(&side, platform)).unwrap_or_default()
+}
+
+/// One disk image's picture files, by `platform`'s naming rule.
+fn picture_files_on(path: &Path, platform: scott::SagaPlatform) -> Vec<(String, Vec<u8>)> {
     let Ok(raw) = std::fs::read(path) else {
         return Vec::new();
     };
@@ -1427,10 +1457,99 @@ pub fn saga_picture_files(path: &Path) -> Vec<(String, Vec<u8>)> {
     let Ok(disk) = mount_disk(path, raw) else {
         return Vec::new();
     };
-    disk.contents()
-        .into_iter()
-        .filter(|(name, _)| scott::is_picture_file_name(name))
-        .collect()
+    let names: fn(&str) -> bool = match platform {
+        scott::SagaPlatform::AppleII => scott::is_apple_picture_file_name,
+        _ => scott::is_picture_file_name,
+    };
+    disk.contents().into_iter().filter(|(name, _)| names(name)).collect()
+}
+
+/// Is the Apple II release mounted at `path` one of the **scrambled** three
+/// (spec §7.4's string test)?
+///
+/// §7.4: the boot side carries a file named `M2`, and "only when the 31 bytes
+/// at 0x172C read exactly `COPYRIGHT 1983 NORMAN L. SAILER`" is the release
+/// the scrambled sub-variant. §10.6 measures it on all seven: *Voodoo
+/// Castle*, *The Count* and *Claymorgue Castle* fire, and on the other four
+/// `M2` is 3,584 bytes so the offset is past its end and the test simply
+/// fails.
+///
+/// The question a player's info panel actually wants answered, because the
+/// three that fire are exactly the three whose side A is not a DOS 3.3 disk
+/// and whose room artwork is therefore not reachable at all — so a release
+/// with no pictures can say **why** instead of just "not on this file".
+///
+/// A cheap, self-validating check, and deliberately the one §7.4 recommends:
+/// it reads a string rather than trusting a fixed offset.
+pub fn saga_apple_scrambled(path: &Path) -> bool {
+    /// §7.4's marker, at file offset 0x172C of `M2`.
+    const MARKER: &[u8] = b"COPYRIGHT 1983 NORMAN L. SAILER";
+    const AT: usize = 0x172C;
+    let Ok(raw) = std::fs::read(path) else {
+        return false;
+    };
+    if blorb::medium::DiskImage::detect(&raw).is_none() {
+        return false;
+    }
+    let Ok(disk) = mount_disk(path, raw) else {
+        return false;
+    };
+    disk.read_named("M2").is_some_and(|m2| m2.get(AT..AT + MARKER.len()) == Some(MARKER))
+}
+
+/// The **other side** of a two-sided release, by file name.
+///
+/// A host rule, and said to be one: the specification pairs nothing. §10.6
+/// describes the Apple II releases as two `.dsk` files sitting side by side
+/// with `side A` and `side B` in their names, and that is the whole of what
+/// there is to go on — the two sides share no volume name, no serial, and no
+/// digit run, so `cli_host::disk_set` (which groups volumes differing at one
+/// run of decimal digits) does not group them and should not: a *side* is not
+/// a *volume*.
+///
+/// The rule: take everything before the last case-insensitive `side ` in the
+/// file name, and answer a sibling in the same directory that starts with that
+/// prefix, carries a different letter after its own `side `, and ends in the
+/// same extension. The prefix stops at `side ` rather than swapping the letter
+/// in place because the two spellings differ after it — `… side B - boot.dsk`
+/// pairs with `… side A.dsk`, and a letter swap would look for a file called
+/// `… side A - boot.dsk` that does not exist.
+///
+/// `None` when the name carries no side marker, when no sibling matches, or
+/// when more than one does — an ambiguous pairing is not a pairing.
+pub fn saga_companion_side(path: &Path) -> Option<PathBuf> {
+    let name = path.file_name()?.to_str()?;
+    let lower = name.to_ascii_lowercase();
+    let at = lower.rfind("side ")? + "side ".len();
+    let side = *lower.as_bytes().get(at)?;
+    if !side.is_ascii_alphabetic() {
+        return None;
+    }
+    let prefix = &name[..at];
+    let ext = path.extension()?.to_ascii_lowercase();
+    let dir = path.parent()?;
+    let mut found = None;
+    for entry in std::fs::read_dir(dir).ok()?.flatten() {
+        let candidate = entry.path();
+        if candidate == path || candidate.extension().map(|e| e.to_ascii_lowercase()) != Some(ext.clone()) {
+            continue;
+        }
+        let other = entry.file_name();
+        let other = other.to_str()?;
+        if other.len() <= at || !other[..at].eq_ignore_ascii_case(prefix) {
+            continue;
+        }
+        if other.as_bytes()[at].to_ascii_lowercase() == side {
+            continue;
+        }
+        if found.is_some() {
+            // Two candidates: which one is the companion is a guess, and this
+            // function does not guess.
+            return None;
+        }
+        found = Some(candidate);
+    }
+    found
 }
 
 /// Load story bytes from `path`, restricted to **Z-code** images.

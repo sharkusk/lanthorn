@@ -23,6 +23,22 @@ Absolute URLs or no link.
 
 ### Added
 
+- **The Apple II *Scott Adams Graphic Adventures* draw their pictures.**
+  *Adventureland*, *Pirate Adventure*, *Mission Impossible* and *Strange
+  Odyssey* were pressed for the Apple II as two floppies — the game on the
+  boot side, the artwork on the other — and their pictures are not bitmaps at
+  all but hi-res line drawings, laid down stroke by stroke the way the machine
+  drew them in 1982. Open the boot side and lanthorn finds the picture disk
+  sitting beside it in the same folder, so a room's drawing appears above the
+  text with nothing for you to set up: 314 pictures across the four titles,
+  the `IT'S TOO DARK!` card when the lamp goes out and the Adventure
+  International logo on the way in. The story list names the release
+  ("Adventureland (Apple II)") and the info panel counts the artwork
+  (`Pictures: S.A.G.A. (Apple II hi-res, N pictures)`) — or says where it
+  isn't, if the picture disk was left behind. *Voodoo Castle*, *The Count* and
+  *Claymorgue Castle* keep their room pictures in a scrambled form lanthorn
+  cannot read yet, and say so rather than playing as silently text-only.
+
 - **The ZX Spectrum *Mysterious Adventures* now load, straight from a
   snapshot.** All eleven of Brian Howarth's titles — *The Golden Baton*, *The
   Time Machine*, *Arrow of Death* parts 1 and 2, *Escape from Pulsar 7*,

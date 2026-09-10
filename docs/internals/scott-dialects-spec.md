@@ -4661,7 +4661,9 @@ container**, §7.2's uncrunched disk-image path, §8.2's Family B pictures on bo
 platforms, **§8.3's Family C pictures** (`crates/scott/src/saga_pictures.rs`,
 SQ-1475 — the record decoder, the Commodore 64 colour table in full and the part
 of the Atari table §8.3 actually states) with §8.6's Commodore 64 naming and
-usage rules (`crates/scott/src/saga_us.rs`), §9.1, §9.2 and **§9.3** as they
+usage rules (`crates/scott/src/saga_us.rs`), **the Apple II's picture family**
+(`crates/scott/src/apple_pictures.rs`, SQ-1476 — which is NOT §8.4's format;
+see item 20 below), §9.1, §9.2 and **§9.3** as they
 apply, §11's TI-99/4A and
 memory-image refusals, and **§12 in full** (§12.1-§12.9 as the format,
 including §12.8's command codes 89 and 90 and their operand counts, §12.11's
@@ -4670,7 +4672,9 @@ image both reached through `Vm::current_picture` — and §12.14's refusals; §1
 says the database carries no picture data, so there is none to read). **Not
 implemented:** §4's other dialects (the Adventure International memory images,
 the German, Spanish and Italian releases), §5.1's compressed action table and
-§5.2's compressed text, §7.3-§7.5, §8.1, §8.4 and §8.5, §8.3's no-literal
+§5.2's compressed text, §7.3-§7.5, §8.1, **§8.4 as written** (item 20 below:
+the four plain Apple II releases do not use the format it describes, and the
+three that do keep their room artwork out of reach) and §8.5, §8.3's no-literal
 compression variant (which only *The Count* and *Voodoo Castle* use, and whose
 records are on media nothing can address yet), and §11 apart from the
 above. Two **container** steps are the host's — `scott` reads no disk images —
@@ -4678,7 +4682,9 @@ so §12.3's three array offsets live in the crate and the mount does not, while
 §7.1's `.z80` step lives in the crate (`crates/scott/src/z80.rs`) because a
 snapshot is a compression layer over a memory image rather than a filesystem;
 the same division puts §8.3's Commodore 64 filesystem walk in the host and its
-naming rule in the crate.
+naming rule in the crate — and, on the Apple II, §7.4's DOS 3.3 catalogue walk
+and the side-A/side-B pairing of item 22 in the host, with the naming rule and
+the decoder in the crate.
 
 **§8.3's Atari picture lists are the one thing a host still cannot reach.** §8.3
 requires a per-title list of (usage, index, offset) triples into the companion
@@ -4688,7 +4694,10 @@ Nothing in this document supplies them, so lanthorn draws the Commodore 64
 than guessing. A probe of the seven Atari side Bs (SQ-1475) finds *Voodoo
 Castle*, *The Count* and *Claymorgue Castle* carrying records at the placements
 the Commodore 64 records use, and the other four using different ones, so the
-tabulation really is per-title.
+tabulation really is per-title. **The Apple II turned out not to need them**
+(item 21): four of its seven releases name every picture in a DOS 3.3
+catalogue, and the other three are in the Atari's position for the same
+reason — no catalogue, no list, no artwork.
 
 The TI-99/4A implementer raised three questions about §3 while building that
 loader, each found by measuring the §10.2 specimens against the §10.1 oracle.
@@ -5068,6 +5077,89 @@ together with it.
     placements, so the lists are genuinely per-title and cannot be recovered by
     one scan. Until they exist, an Atari release's pictures are unreachable and
     an implementer should say so rather than draw an empty frame.
+
+**And the family-D implementer raised three more, about §8.4 and §10.6**
+(SQ-1476), all found on the seven §10.6 disks. The first is not a correction
+to a detail: it is a report that §8.4 describes a format the four **plain**
+releases do not use. **None of them is resolved in §8.4 above** — they are
+recorded here so the next reader of that section reads them together with it.
+
+20. **§8.4's "plain sub-variant" is not a bitmap at all on these disks; it is a
+    LINE-DRAWING opcode stream, and §8.4's page, interleave, artifact model and
+    compression apply to none of it.** The four plain releases keep one picture
+    per **named DOS 3.3 file** on their companion side, each a binary file
+    whose four-byte prologue is followed by a stream of tokens over the
+    machine's own 280 x 192 hi-res canvas. A byte with **bit 7 set** opens a
+    three-byte token whose bits 7-5 are a command, whose **bit 0 is bit 8 of
+    the horizontal coordinate** — 280 does not fit in a byte — and whose next
+    two bytes are the low eight bits of *x* and then *y*: `0x80` move, `0xA0`
+    draw a line to the point, `0xC0` draw likewise, `0xE0` name a point inside
+    a region to be coloured (and leave the current point alone). A byte with
+    **bit 7 clear** is a one-byte token that ends the current path. Three
+    measurements settle it, and none of them needs the reference: the command
+    position holds **only** those four values across all **71,899** three-byte
+    tokens of the four titles' **314** pictures and **not one coordinate lands
+    off the canvas**, where an eight-bit *x* scatters every byte value through
+    the command position; a bit-7-clear byte read as one byte gives zero
+    off-canvas coordinates where two gives 6.75% and three 9.89%; and the
+    pictures are legible, `R0100` reading `IT'S TOO DARK!` (§8.6's reserved
+    index 0), `R0198` an `INVENTORY` card (98), `R0199` the Adventure
+    International logo (99) and `B01255` the word `Adventureland`. §8.4 is
+    nevertheless right about the **scrambled** sub-variant: `PAK.INVEN` and
+    `PAK.LET0`…`PAK.LET11` on those three releases' boot sides open with
+    exactly its four-byte header, `00 00 28 A0` — offset 0, offset 0, 40 byte
+    columns, 160 rows, which is its stated 280 x 160. So the section describes
+    a real format that this corpus carries only for the images those three
+    releases keep BESIDE their room artwork, and the room artwork of the same
+    three sits on a side A with no filesystem on it at all, at the per-title
+    offsets §12.10 says are not recoverable (SQ-1490).
+
+    **Three things about the format remain undetermined and are named rather
+    than guessed at** (SQ-1489): the difference between the two drawing
+    commands (both plainly draw — *Pirate Adventure*'s darkness card letters
+    with `0xC0` and *Adventureland*'s with `0xA0` — so a pen or colour
+    distinction is likely and nothing falsifies either); what a one-byte token
+    *says* beyond ending a path (92 distinct values occur, in short runs just
+    before a drawing command, which would fit a colour); and consequently what
+    an `0xE0` area is filled WITH. Read as a flood fill in a single ink,
+    **172 of the 314 pictures wash out** — *Adventureland*'s darkness card
+    opens with one before a line has been drawn, so its region is the whole
+    empty canvas — which is why lanthorn draws the line art and leaves the
+    areas unpainted rather than painting them wrongly.
+
+21. **§8.4's picture "lists" are not needed for the plain releases, and §12.10's
+    "Rnnnn/Bnnnnn" is two rules, not one.** §8.4 requires "a hard-coded
+    per-title list of (usage, index, offset, length), … six such lists exist",
+    and §12.10 names the files only as "the `PAK.LET…` or `Rnnnn`/`Bnnnnn`
+    files". Measured, the four plain releases need no list at all — the
+    catalogue names every picture — and the naming rule is **not** §8.3's
+    Commodore 64 one with a shorter prefix. A room picture is `R` + two
+    adventure digits + **two** index digits (`R0100`, `R0633`) and an object
+    picture is `B` + two adventure digits + **three** (`B02037`), an asymmetry
+    three facts confirm: §8.6's reserved 0, 98 and 99 land exactly where they
+    should under the two-digit reading, the room indices run `00` to the
+    release's own room count on all four titles, and a three-digit reading
+    would make `R0133` room 133 in a 33-room game, while the object indices
+    read as three digits are a sparse ascending run inside the release's item
+    count and as two would repeat. Indices 80 to 91 are the full-window
+    pictures §12.8's command 90 names by operand; `B` index 255 is the game's
+    own wordmark. And **no Apple II name carries §8.6's trailing `R`/`I`**, so
+    that platform's object pictures declare no room-versus-inventory usage.
+
+22. **§10.6's side-A/side-B split is the whole of the pairing rule, and it is a
+    HOST rule.** Nothing in this document pairs the two sides of a release, and
+    §10.6 is right that the plain four keep an ordinary DOS 3.3 side A: walking
+    it finds 48 room and 45 object pictures on *Adventureland*, 39 and 49 on
+    *Pirate Adventure*, 33 and 30 on *Mission Impossible*, 38 and 32 on
+    *Strange Odyssey*. Two details a loader needs and §10.6 does not say: the
+    database side and the picture side are **different disks**, so a host that
+    walks only the image it mounted the story from finds no artwork at all; and
+    *Pirate Adventure* ships `A2.DAT` on **both** sides, so "always read side
+    A" and "always read the other side" are both wrong and the rule that works
+    is "the side you opened, and if it has no pictures, its companion".
+    lanthorn pairs them by file name — same directory, same extension, same
+    text up to `side `, a different letter after it — and says so as a host
+    rule (`app::hints::saga_companion_side`).
 
 The in-memory model this document's dialects decode *to*, in that crate, is a
 database of rooms (six exits and a description, plus a flag for the leading-`*`

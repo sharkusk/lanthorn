@@ -285,7 +285,14 @@ pub(crate) fn reset_game(
                     .expect("restart re-runs the same Glulx story") = new_session;
             })
         }
-        Ok(app::hints::LoadedStory::Scott(bytes)) => app::scott_session::ScottSession::new_with_options(
+        Ok(app::hints::LoadedStory::Scott(bytes)) => {
+            // SQ-1476: which naming rule finds the artwork is the release's
+            // platform, and `bytes` is about to be moved into the boot, so
+            // the walk happens first.
+            let saga_pictures = scott::detect_saga_us(&bytes)
+                .map(|platform| app::hints::saga_picture_files(story_path, platform))
+                .unwrap_or_default();
+            app::scott_session::ScottSession::new_with_options(
             bytes,
             resolve_pict_blorb(story_path, state.config.images),
             false,
@@ -317,14 +324,15 @@ pub(crate) fn reset_game(
             // to save one 175 KB floppy read is the wrong trade. Empty for
             // every path that is not a disk image, so no other engine or
             // release pays for this line.
-            app::hints::saga_picture_files(story_path),
+            saga_pictures,
         )
         .map(|new_session| {
                 *session
                     .as_any_mut()
                     .downcast_mut::<app::scott_session::ScottSession>()
                     .expect("restart re-runs the same Scott story") = new_session;
-            }),
+            })
+        }
         Err(e) => Err(format!("{e}")),
     };
     match rebuilt {

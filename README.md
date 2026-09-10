@@ -26,7 +26,10 @@
   Adventures show their pictures, redrawn at the size your terminal shows them
   rather than stretched from the original's tiny canvas, and the Commodore 64
   *Hulk* shows its full-colour comic panels — one per room, straight off the
-  release disk, darkness card and all
+  release disk, darkness card and all. *Next release:* the Apple II S.A.G.A.
+  disks draw their artwork too — the hi-res line drawings of Adventureland,
+  Pirate Adventure, Mission Impossible and Strange Odyssey, read off the
+  release's companion side while you play from its boot side
 
 ### Supported original Infocom disk formats:
 

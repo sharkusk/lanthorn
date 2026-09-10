@@ -236,13 +236,17 @@ impl ScottSession {
         // same reason each of those is where it is: a Blorb beside the story
         // is a different, Blorb-carried release, and no story is both a
         // S.A.G.A. database and a Mysterious Adventures memory image.
-        let saga_platform = (!saga_pictures.is_empty())
-            .then(|| scott::detect_saga_us(&bytes))
+        // SQ-1476: the RELEASE, not just the platform — the Apple II names
+        // its picture files after the adventure number too — and read off the
+        // database the VM is already holding rather than re-sniffed from the
+        // bytes.
+        let saga_release = (!saga_pictures.is_empty())
+            .then(|| vm.database().saga_us)
             .flatten();
         let picts = if pict_blorb.is_some() {
             PictSource::new(pict_blorb)
-        } else if let Some(platform) = saga_platform {
-            PictSource::from_scott_saga(saga_pictures, platform)
+        } else if let Some(release) = saga_release {
+            PictSource::from_scott_saga(saga_pictures, release)
         } else {
             scott::c64::prg_image(&bytes)
                 .filter(|(image, at)| scott::c64::looks_like_c64_mysterious(image, *at))
@@ -466,11 +470,14 @@ impl Engine for ScottSession {
                 // SQ-1475: a third source, and it names the platform whose
                 // colour table read the record — the geometry is the same on
                 // either, the colours are not.
+                // SQ-1476: …and which FAMILY, because the Apple II releases
+                // are family D, a different decoder over a different canvas.
                 let source = match (self.picts.scott_c64_scale(), self.picts.scott_saga_platform())
                 {
                     (Some(scale), _) => format!("native C64 x{scale}"),
                     (None, Some(platform)) => format!(
-                        "S.A.G.A. family C ({}, {} record(s))",
+                        "S.A.G.A. family {} ({}, {} picture(s))",
+                        if matches!(platform, scott::SagaPlatform::AppleII) { "D" } else { "C" },
                         platform.label(),
                         self.picts.scott_saga_count().unwrap_or(0)
                     ),
@@ -489,6 +496,9 @@ impl Engine for ScottSession {
             // `db/*.bin` — or an Atari side A whose companion picture side is
             // not paired — reaches here with no picture source at all, which
             // looks exactly like a text-only game and is not one. Say which.
+            // SQ-1476 adds a third way to land here: an Apple II release whose
+            // companion side is missing, or one of the three whose side A is
+            // not a DOS 3.3 disk at all.
             None
                 if self.vm.database().saga_us.is_some()
                     && self.picts.scott_saga_platform().is_none() =>
@@ -1203,8 +1213,138 @@ mod tests {
         let Some(s) = hulk_session() else { return };
         let dump = s.window_dump().join("\n");
         assert!(
-            dump.contains("source=S.A.G.A. family C (Commodore 64, 70 record(s))"),
+            dump.contains("source=S.A.G.A. family C (Commodore 64, 70 picture(s))"),
             "dump should name the family-C source:\n{dump}"
+        );
+    }
+
+    // ── SQ-1476: the Apple II releases' family-D line drawings ───────────────
+
+    /// *Adventureland* as pressed for the Apple II (spec §10.6): the database
+    /// `A1.DAT` on the **boot** side, and the artwork on the companion side A
+    /// — which is the whole point of this fixture, since a walk of the mounted
+    /// image alone finds no pictures at all.
+    ///
+    /// Commercial and gitignored, so every case below skips vacuously without
+    /// it. Opened through `hints::load_mounted_story_full`, the door
+    /// `startup.rs` opens.
+    fn adventureland_apple() -> Option<(Vec<u8>, Vec<(String, Vec<u8>)>)> {
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join(
+            "../../stories/scott-dialects/apple/Scott Adams Graphic Adventure 1 - \
+             Adventureland v2.1-416 (4am crack) side B - boot.dsk",
+        );
+        if !path.exists() {
+            eprintln!("SKIP: no {} (gitignored commercial fixture)", path.display());
+            return None;
+        }
+        let mounted = crate::hints::load_mounted_story_full(&path, None)
+            .expect("the boot side mounts and holds one Scott database");
+        let crate::hints::LoadedStory::Scott(bytes) = mounted.story else {
+            panic!("the boot side's story is a Scott database");
+        };
+        Some((bytes, mounted.saga_pictures))
+    }
+
+    fn adventureland_apple_session() -> Option<ScottSession> {
+        let (bytes, pictures) = adventureland_apple()?;
+        assert_eq!(
+            pictures.len(),
+            93,
+            "the mount reached the COMPANION side's picture files (§10.6)"
+        );
+        Some(
+            ScottSession::new_with_options(
+                bytes,
+                None,
+                false,
+                None,
+                scott::Options::default(),
+                ScottSession::FALLBACK_CHAR_PX,
+                crate::graphics::ScottPictureResolution::default(),
+                pictures,
+            )
+            .expect("Adventureland boots off its own release disk"),
+        )
+    }
+
+    /// The opening frame shows the START room's own picture at family D's
+    /// canvas — the Apple II hi-res screen, 280x192, which is NOT family C's
+    /// 280x160.
+    ///
+    /// The non-flat guard is what would catch a decode that wrote nothing: a
+    /// blank canvas has exactly the right dimensions.
+    #[test]
+    fn adventureland_apple_start_room_shows_its_own_family_d_picture() {
+        let Some(s) = adventureland_apple_session() else { return };
+        // *Adventureland*'s own header says room 11, not room 1 — `adv01.dat`
+        // agrees — so the frame under test is the forest the player opens in.
+        assert_eq!(s.vm.current_room(), 11, "premise: this release starts in room 11");
+        let screen = s.screen();
+        let band = picture_band(&screen).expect("the start room has a picture band");
+        let canvas = &band.canvas;
+        assert_eq!(
+            (canvas.width(), canvas.height()),
+            (
+                scott::apple_pictures::CANVAS_WIDTH as u32,
+                scott::apple_pictures::CANVAS_HEIGHT as u32
+            ),
+            "family D's own canvas — the machine's hi-res page"
+        );
+        assert!(band.upscale, "the band fits it like any other bitmap source");
+        let mut seen = std::collections::HashSet::new();
+        let mut lit = 0usize;
+        for p in canvas.pixels() {
+            seen.insert((p.0[0], p.0[1], p.0[2]));
+            assert_eq!(p.0[3], 255, "family D carries no transparent index");
+            if (p.0[0], p.0[1], p.0[2]) == scott::apple_pictures::INK {
+                lit += 1;
+            }
+        }
+        assert_eq!(seen.len(), 2, "line art: ink and ground, nothing else");
+        assert!(lit > 500, "only {lit} inked pixels, which is not a drawing");
+        assert!(lit < canvas.width() as usize * canvas.height() as usize / 2, "the canvas washed out");
+    }
+
+    /// Walking into another room draws that room's picture, which is the whole
+    /// of §12.10's "a room's picture index IS the room number" reaching the
+    /// screen. Two different rooms, two different canvases.
+    #[test]
+    fn adventureland_apple_band_changes_with_the_room() {
+        let Some(mut s) = adventureland_apple_session() else { return };
+        let start = s.vm.current_room();
+        let first = picture_band(&s.screen()).expect("the start room has a picture").canvas.clone();
+        let mut moved = None;
+        for command in ["go north", "go south", "go east", "go west", "climb tree"] {
+            crate::engine::Engine::submit(&mut s, command);
+            let room = s.vm.current_room();
+            if room != start {
+                moved = Some(room);
+                break;
+            }
+        }
+        let Some(room) = moved else {
+            panic!("no direction left room {start}, so this case proves nothing");
+        };
+        let second = picture_band(&s.screen())
+            .unwrap_or_else(|| panic!("room {room} has no picture band"))
+            .canvas
+            .clone();
+        assert_ne!(
+            first.as_raw(),
+            second.as_raw(),
+            "room {room} drew room {start}'s picture again"
+        );
+    }
+
+    /// `/dump-windows` names the family and the platform, so a frame says
+    /// where a room's art came from — and family **D**, not C.
+    #[test]
+    fn adventureland_apple_window_dump_names_the_family_d_source() {
+        let Some(s) = adventureland_apple_session() else { return };
+        let dump = s.window_dump().join("\n");
+        assert!(
+            dump.contains("source=S.A.G.A. family D (Apple II, 93 picture(s))"),
+            "dump should name the family-D source:\n{dump}"
         );
     }
 

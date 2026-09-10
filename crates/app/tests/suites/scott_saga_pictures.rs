@@ -307,3 +307,187 @@ fn an_atari_saga_side_a_reports_no_pictures_because_the_sides_are_not_paired() {
         "the dump distinguishes this from a text-only game:\n{dump}"
     );
 }
+
+// ── SQ-1476: the Apple II releases, picture family D ─────────────────────────
+
+/// *Adventureland* on the Apple II (§10.6), booted the way `startup.rs` boots
+/// it — from the **boot** side, whose catalogue holds the database and no
+/// artwork at all. Everything this fixture proves rides on the mount having
+/// reached the companion side for the pictures.
+fn adventureland_apple_session() -> Option<ScottSession> {
+    let path = fixture_path(
+        "scott-dialects/apple/Scott Adams Graphic Adventure 1 - Adventureland v2.1-416 \
+         (4am crack) side B - boot.dsk",
+    );
+    if !path.exists() {
+        eprintln!("SKIP: needs stories/scott-dialects/apple/ (gitignored commercial fixtures)");
+        return None;
+    }
+    let mounted = app::hints::load_mounted_story_full(&path, None).ok()?;
+    let app::hints::LoadedStory::Scott(bytes) = mounted.story else {
+        panic!("the boot side's one story is a Scott Adams database");
+    };
+    assert_eq!(
+        mounted.saga_pictures.len(),
+        93,
+        "the mount reached the companion side's picture files (§10.6)"
+    );
+    Some(
+        ScottSession::new_with_options(
+            bytes,
+            None,
+            false,
+            None,
+            scott::Options::default(),
+            ScottSession::FALLBACK_CHAR_PX,
+            app::graphics::ScottPictureResolution::default(),
+            mounted.saga_pictures,
+        )
+        .expect("Adventureland boots off its own release disks"),
+    )
+}
+
+/// Family D reaches the same band as family C and as a Blorb — same rows
+/// reserved, same window slot, same aspect-preserving fit — on its own canvas.
+///
+/// Both `honor_game_colours` modes, for the reason the family-C case above
+/// gives: the flag governs TEXT-cell colour resolution and a room-picture band
+/// is a raw RGBA canvas, so this documents rather than assumes that it has no
+/// effect here.
+#[test]
+fn the_apple_ii_band_matches_the_blorb_band_in_both_colour_modes() {
+    for honor_game_colours in [true, false] {
+        let (Some(apple), Some(blorbed)) = (adventureland_apple_session(), golden_baton_blb())
+        else {
+            return;
+        };
+        let _ = honor_game_colours;
+
+        let apple_model = apple.screen();
+        let blorb_model = blorbed.screen();
+        assert_eq!(
+            reserved_rows(&apple_model).expect("the Apple II band"),
+            reserved_rows(&blorb_model).expect("the blorb band"),
+            "the picture band reserves the SAME rows regardless of source"
+        );
+        let apple_gw = picture_band(&apple_model).unwrap();
+        let blorb_gw = picture_band(&blorb_model).unwrap();
+        assert!(apple_gw.upscale, "the family-D source stretches into the band");
+        assert_eq!(apple_gw.win, blorb_gw.win, "both occupy the same window slot");
+        assert_eq!(
+            (apple_gw.canvas.width(), apple_gw.canvas.height()),
+            (
+                scott::apple_pictures::CANVAS_WIDTH as u32,
+                scott::apple_pictures::CANVAS_HEIGHT as u32
+            ),
+            "family D's own canvas — the Apple II hi-res page, not family C's 280x160"
+        );
+    }
+}
+
+/// The same placement under half-blocks and under kitty, through the shared
+/// backend-neutral path — and a canvas of its own aspect, so the numbers are
+/// not family C's.
+#[test]
+fn the_apple_ii_band_places_identically_under_halfblocks_and_kitty() {
+    let Some(apple) = adventureland_apple_session() else { return };
+    let model = apple.screen();
+    let gw = picture_band(&model).expect("family-D band");
+
+    let area = Rect::new(0, 0, 30, 16);
+    let letterbox_color = Color::Rgb(0, 0, 0);
+    let letterbox = Style::default().bg(letterbox_color);
+
+    let hb = Picker::halfblocks();
+    let placed = touched_rect(&render_band(&hb, gw, area, letterbox), area, letterbox_color)
+        .expect("the family-D band draws something under half-blocks");
+    // 280x192 is 1.458:1, so 30 cells of width is 30/1.458 = 20.6 half-block
+    // pixels — about 10 cells — centred in the sixteen the band offers.
+    //
+    // What is measured is the INKED bounding box, not the placement rect:
+    // `touched_rect` ignores a cell left at the letterbox colour, and family D
+    // is line art on black, so its outermost rows are background and are not
+    // counted. That makes this pin strictly stronger than a placement pin — it
+    // fails if the drawing moves OR if it changes — and it is why the number is
+    // 8 rows rather than the ~10 the aspect alone would give. Family C's
+    // 280x160 lands at `Rect::new(0, 3, 30, 9)`: a different canvas, a
+    // different rect, which is exactly what should happen.
+    assert_eq!(placed, Rect::new(0, 2, 30, 8), "family D's 280x192 fitted into the band");
+
+    let kitty = kitty_picker(10, 20);
+    let placed_kitty =
+        touched_rect(&render_band(&kitty, gw, area, letterbox), area, letterbox_color)
+            .expect("the family-D band places under kitty");
+    assert_eq!(placed_kitty, area, "kitty's explicit r×c grid covers the whole window");
+}
+
+/// The non-flat guard: the opening room is a drawing, not a fill — the failure
+/// every other number in these cases is blind to.
+#[test]
+fn the_apple_ii_opening_room_is_a_drawing_and_not_a_flat_fill() {
+    let Some(apple) = adventureland_apple_session() else { return };
+    let model = apple.screen();
+    let gw = picture_band(&model).expect("the start room has a band");
+    let mut counts: std::collections::HashMap<(u8, u8, u8), usize> = std::collections::HashMap::new();
+    for p in gw.canvas.pixels() {
+        *counts.entry((p.0[0], p.0[1], p.0[2])).or_default() += 1;
+        assert_eq!(p.0[3], 255, "family D carries no transparent index");
+    }
+    assert_eq!(counts.len(), 2, "line art: ink and ground, got {counts:?}");
+    let ink = counts[&scott::apple_pictures::INK];
+    let total: usize = counts.values().sum();
+    assert!(ink > 500, "only {ink} inked pixels of {total}, which is not a drawing");
+    assert!(ink * 2 < total, "the ink covers half the canvas — {ink}/{total} looks like a fill");
+}
+
+/// One of the three **scrambled** Apple II releases (§7.4's string test, §10.6)
+/// opens and plays and reports no pictures — because its side A is not a DOS
+/// 3.3 disk at all and its room artwork sits at the per-title offsets §12.10
+/// says are not recoverable. The honest report, pinned as one, exactly as the
+/// Atari case above is.
+#[test]
+fn a_scrambled_apple_ii_release_reports_no_pictures() {
+    let path = fixture_path(
+        "scott-dialects/apple/Scott Adams Graphic Adventure 5 - The Count v2.1-115 \
+         (4am crack) side B - boot.dsk",
+    );
+    if !path.exists() {
+        eprintln!("SKIP: needs stories/scott-dialects/apple/ (gitignored commercial fixtures)");
+        return;
+    }
+    assert!(
+        app::hints::saga_apple_scrambled(&path),
+        "premise: §7.4's string test fires on The Count's M2"
+    );
+    let mounted = app::hints::load_mounted_story_full(&path, None)
+        .expect("the boot side mounts and holds one Scott database");
+    assert!(
+        mounted.saga_pictures.is_empty(),
+        "a scrambled release's artwork is not in any catalogue this build can walk"
+    );
+    let app::hints::LoadedStory::Scott(bytes) = mounted.story else {
+        panic!("the boot side's story is a Scott Adams database");
+    };
+    assert_eq!(
+        scott::detect_saga_us(&bytes),
+        Some(scott::SagaPlatform::AppleII),
+        "premise: it really is a US S.A.G.A. database on the Apple II"
+    );
+    let session = ScottSession::new_with_options(
+        bytes,
+        None,
+        false,
+        None,
+        scott::Options::default(),
+        ScottSession::FALLBACK_CHAR_PX,
+        app::graphics::ScottPictureResolution::default(),
+        mounted.saga_pictures,
+    )
+    .expect("The Count boots off its own boot side");
+    assert!(picture_band(&session.screen()).is_none(), "no band without readable artwork");
+    let dump = session.window_dump().join("\n");
+    assert!(
+        dump.contains("a S.A.G.A. release with no picture files on this file"),
+        "the dump distinguishes this from a text-only game:\n{dump}"
+    );
+}
