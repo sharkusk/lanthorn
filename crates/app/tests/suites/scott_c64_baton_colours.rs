@@ -33,24 +33,41 @@
 //!
 //! # Why fill INTERIORS and not every pixel
 //!
-//! Whole-frame agreement is 95-97%, and every one of the missing pixels is on
-//! or beside a **one-pixel line**: family B is a vector format, our Bresenham
-//! and the release's own 6502 one put a line's pixels in very slightly
-//! different places, and a one-pixel line has no pixel that survives a
-//! one-pixel disagreement. That is a question about the *decoder*, not about
-//! the palette, and answering the palette question through it would mean
-//! reading a colour off pixels whose position is in doubt.
-//!
-//! So the derivation runs over **eroded interiors** — a pixel counts only when
-//! all eight of its neighbours carry the same stored index — which is 73-78% of
-//! the canvas and is exactly the part whose position is not in doubt. On those
-//! the agreement is **100% on `c64-golden-3.png`** and 99.6% on the other two
-//! (98.9% at the worst single index), and the shortfall has a shape worth
-//! pinning rather than tolerating: the only colour a fill ever disagrees into
-//! is **black**, never another fill's colour.
-//! Our flood fill reaches a little further than the machine's in two places; it
-//! never reaches into the wrong colour. [`FILL_PURITY_FLOOR`] and
+//! The colour question is answered over **eroded interiors** — a pixel counts
+//! only when all eight of its neighbours carry the same stored index — because
+//! that is the part of the canvas whose *position* is not in doubt. A
+//! one-pixel line has no pixel that survives a one-pixel disagreement, so
+//! reading a colour off one would be answering a palette question through a
+//! placement question. On interiors the agreement is 100% on
+//! `c64-golden-3.png` and 98.5-99.6% per index elsewhere, and the shortfall
+//! has a shape worth pinning rather than tolerating: the only colour a fill
+//! ever disagrees into is **black**, never another fill's colour — our flood
+//! fill reaches a little further than the machine's in two places, and never
+//! into the wrong colour. [`FILL_PURITY_FLOOR`] and
 //! [`only_black_is_ever_the_disagreement`] hold that line.
+//!
+//! # The whole frame, and the colour clash
+//!
+//! Whole-frame agreement was **95.0%** when this suite was written, and every
+//! missing pixel was on or beside a one-pixel line — which looked like a
+//! Bresenham difference and was not. Sweeping every plausible line rule (error
+//! initialisation, tie direction, endpoint order, DDA with truncation and with
+//! rounding, sixteen combinations) moved it between 92.1% and 95.0% and never
+//! above, and the line-pixel sets said why: **the machine never lights a line
+//! pixel we do not**, in any of the three frames. Our set was a strict
+//! superset, and 97% of the surplus was showing a *fill's* colour on the
+//! machine rather than the background.
+//!
+//! The cause is the machine, not the geometry. Sweeping the cell grid's
+//! vertical phase against the frames finds exactly one at which **no 8 x 8
+//! cell of any frame holds three colours** — the signature of a
+//! high-resolution bitmap, one bit per pixel and one ink per cell. An outline
+//! drawn first and flooded past second comes out in the flood's ink wherever
+//! the two share a cell. Modelling that ([`scott::c64`]'s `Ink`, SQ-1491) took
+//! whole-frame agreement to **99.2%**, and what is left is the flood-fill
+//! reach above plus 37 pixels of genuine line placement across all three
+//! frames. [`the_whole_frame_agrees_but_for_the_fills_reach`] pins it, and
+//! [`the_machine_never_shows_three_colours_in_a_cell`] re-derives the phase.
 //!
 //! # The line colour, which has no interior at all
 //!
@@ -418,4 +435,148 @@ fn the_stored_indices_the_baton_frames_settle() {
         );
     }
     assert_eq!(flat.len() + UNVERIFIED.len(), 16, "every stored index is accounted for");
+}
+
+
+/// The lowest whole-frame agreement any one frame may show.
+///
+/// Measured after the colour clash landed: 0.99053, 0.98936 and 0.99666, for
+/// 0.99218 over the three together. Before it, 0.94618, 0.93191 and 0.97272.
+const WHOLE_FRAME_FLOOR: f64 = 0.989;
+
+/// The lowest agreement over the three frames together.
+const WHOLE_CORPUS_FLOOR: f64 = 0.992;
+
+/// The most pixels of one frame that may be ours-line-where-the-machine-has-
+/// background: the genuine line-placement residue, after the clash explains
+/// the rest. Measured 3, 16 and 18.
+const LINE_RESIDUE_CEILING: usize = 25;
+
+/// Whole-frame agreement, and the two shapes the residue is allowed to take.
+///
+/// This is the case the colour clash was found through, and the one that would
+/// notice it being lost again. Every disagreeing pixel must be one of:
+///
+/// * **ours drawn, the machine's background** — our flood fill reaching a
+///   little further than the machine's (the bulk), or a line pixel we place
+///   and it does not (at most [`LINE_RESIDUE_CEILING`] a frame);
+/// * **ours the line's colour, the machine's a fill's** — a cell whose ink the
+///   two resolve differently, of which there is exactly one pixel in the whole
+///   corpus.
+///
+/// And never the third shape: **the machine painting where we leave the
+/// background**, which is asserted at zero. That is the strong half — our
+/// raster's ink is a superset of the machine's, so nothing it draws is
+/// missing from ours and every remaining difference is something of ours to
+/// take away.
+#[test]
+fn the_whole_frame_agrees_but_for_the_fills_reach() {
+    let Some(pics) = baton_pictures() else {
+        assert!(skipped("whole-frame agreement"));
+        return;
+    };
+    let (mut corpus_hit, mut corpus_n) = (0usize, 0usize);
+    for frame in &FRAMES {
+        let img = image::open(screenshot(frame.png)).expect("opens").to_rgb8();
+        let pic = &pics[frame.picture];
+        let background = PALETTE[usize::from(pic.background)];
+        let line = PALETTE[usize::from(pic.line)];
+        let (mut hit, mut line_residue, mut machine_only) = (0usize, 0usize, 0usize);
+        for y in 0..CANVAS_H {
+            for x in 0..CANVAS_W {
+                let p = img.get_pixel(x as u32 + OX, y as u32 + OY).0;
+                let (theirs, ours) = ((p[0], p[1], p[2]), PALETTE[usize::from(pic.pixels[y * CANVAS_W + x])]);
+                if ours == theirs {
+                    hit += 1;
+                } else if ours == background {
+                    machine_only += 1;
+                } else if ours == line && theirs == background {
+                    line_residue += 1;
+                }
+            }
+        }
+        let n = CANVAS_W * CANVAS_H;
+        assert_eq!(
+            machine_only, 0,
+            "{}: the machine paints {machine_only} pixels we leave as background — our ink \
+             is supposed to be a superset of the machine's",
+            frame.png
+        );
+        assert!(
+            line_residue <= LINE_RESIDUE_CEILING,
+            "{}: {line_residue} pixels of line placement, over the ceiling of {LINE_RESIDUE_CEILING}",
+            frame.png
+        );
+        let agreement = hit as f64 / n as f64;
+        assert!(
+            agreement >= WHOLE_FRAME_FLOOR,
+            "{}: whole-frame agreement {agreement:.5} is under {WHOLE_FRAME_FLOOR}",
+            frame.png
+        );
+        corpus_hit += hit;
+        corpus_n += n;
+    }
+    let corpus = corpus_hit as f64 / corpus_n as f64;
+    assert!(
+        corpus >= WHOLE_CORPUS_FLOOR,
+        "the three frames together agree {corpus:.5}, under {WHOLE_CORPUS_FLOOR}"
+    );
+}
+
+/// No 8 x 8 cell of any frame holds three colours — and only one of the eight
+/// vertical phases can say so.
+///
+/// This is the evidence for `scott::c64`'s cell grid, re-derived rather than
+/// restated: a high-resolution bitmap has one ink and one paper per cell and
+/// physically cannot show a third colour in one, so the phase at which that
+/// holds is the phase the machine uses. Canvas row 7 begins a cell row; the
+/// other seven phases leave 12 to 43 cells of 341 holding three colours.
+///
+/// Horizontally there is nothing to find — canvas column 0 begins a cell —
+/// and the case asserts that too, since it is an assumption either way.
+#[test]
+fn the_machine_never_shows_three_colours_in_a_cell() {
+    const PHASE: u32 = 7;
+    for frame in &FRAMES {
+        let img = image::open(screenshot(frame.png)).expect("opens").to_rgb8();
+        let over = |phase: u32| -> usize {
+            let mut over = 0;
+            for cy in 0..11u32 {
+                for cx in 0..31u32 {
+                    let mut set = BTreeSet::new();
+                    for dy in 0..8u32 {
+                        for dx in 0..8u32 {
+                            let fy = OY + phase + cy * 8 + dy;
+                            if fy >= OY + CANVAS_H as u32 {
+                                continue;
+                            }
+                            let p = img.get_pixel(OX + cx * 8 + dx, fy).0;
+                            set.insert((p[0], p[1], p[2]));
+                        }
+                    }
+                    if set.len() > 2 {
+                        over += 1;
+                    }
+                }
+            }
+            over
+        };
+        assert_eq!(
+            over(PHASE),
+            0,
+            "{}: a cell holds three colours at the phase the decoder uses",
+            frame.png
+        );
+        for phase in 0..8 {
+            if phase == PHASE {
+                continue;
+            }
+            assert!(
+                over(phase) > 0,
+                "{}: phase {phase} also holds to two colours a cell, so the frames do not \
+                 pin the grid after all",
+                frame.png
+            );
+        }
+    }
 }

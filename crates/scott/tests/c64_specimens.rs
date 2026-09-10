@@ -579,12 +579,20 @@ fn majority_downsample(big: &scott::c64::Picture) -> Vec<u8> {
 struct Departure {
     /// Every native pixel where the two disagree.
     total: usize,
-    /// Those of them the ink cannot explain: neither raster has the line
-    /// colour anywhere in the native pixel, in its eight native neighbours, or
-    /// anywhere in its scaled block. A fill that leaked through a seam the
-    /// supersample opened paints a whole REGION, so it lands here in the
-    /// thousands; a staircase that resolved one step differently cannot land
-    /// here at all.
+    /// Those of them that are nowhere near an EDGE: the native pixel's eight
+    /// neighbours all agree with it, and its whole scaled block agrees with
+    /// itself. A fill that leaked through a seam the supersample opened paints
+    /// a whole REGION, so it lands here in the thousands; a staircase that
+    /// resolved one step differently is a boundary pixel by construction and
+    /// cannot land here at all.
+    ///
+    /// **Stated by uniformity rather than by the line colour** (SQ-1491). It
+    /// used to ask whether the line colour was in the neighbourhood, which
+    /// stopped meaning what it says once the colour clash landed: a line
+    /// pixel in a cell some fill claimed later is drawn in that fill's ink and
+    /// is not the line colour at all, so every moved staircase step in such a
+    /// cell was counted as an interior leak. Uniformity is what the doc
+    /// comment always meant and does not depend on any pixel's colour.
     interior: usize,
 }
 
@@ -592,7 +600,6 @@ fn compare(native: &scott::c64::Picture, big: &scott::c64::Picture) -> Departure
     let s = big.scale as usize;
     let (w, h) = (native.width, native.height);
     let small = majority_downsample(big);
-    let ink = native.line;
     let mut d = Departure::default();
     for y in 0..h {
         for x in 0..w {
@@ -601,16 +608,13 @@ fn compare(native: &scott::c64::Picture, big: &scott::c64::Picture) -> Departure
                 continue;
             }
             d.total += 1;
-            if a == ink || b == ink {
-                continue;
-            }
-            let near_ink = (y.saturating_sub(1)..=(y + 1).min(h - 1))
+            let flat_native = (y.saturating_sub(1)..=(y + 1).min(h - 1))
                 .flat_map(|ny| (x.saturating_sub(1)..=(x + 1).min(w - 1)).map(move |nx| (nx, ny)))
-                .any(|(nx, ny)| native.pixels[ny * w + nx] == ink);
-            let block_ink = (0..s).any(|dy| {
-                (0..s).any(|dx| big.pixels[(y * s + dy) * big.width + x * s + dx] == ink)
+                .all(|(nx, ny)| native.pixels[ny * w + nx] == a);
+            let flat_block = (0..s).all(|dy| {
+                (0..s).all(|dx| big.pixels[(y * s + dy) * big.width + x * s + dx] == b)
             });
-            if !near_ink && !block_ink {
+            if flat_native && flat_block {
                 d.interior += 1;
             }
         }

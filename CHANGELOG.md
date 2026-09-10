@@ -108,8 +108,13 @@ Absolute URLs or no link.
   same breath: their cyan and magenta were the pure, electric versions of those
   colours rather than the softer ones an IBM PC's graphics adaptor actually
   put on a monitor. And the line-drawn *Mysterious Adventures* artwork was
-  checked against a real Commodore 64 too — that one turned out to have been
-  right all along, which is worth knowing.
+  checked against a real Commodore 64 too — the colours there turned out to
+  have been right all along, but the *drawing* was not. A Commodore 64 can
+  only show two colours in each little eight-by-eight block of its screen, so
+  when the game floods a shape with colour it takes the outline with it. We
+  were carefully preserving outlines the machine never showed. The pictures
+  now come out as they did in 1982, which for these games means slightly
+  bolder and a good deal less fussy.
 
 - **"I'm in a dusty study" now follows the wording you asked for.** lanthorn's
   own room layout — the one it shows for every Scott Adams game — printed the

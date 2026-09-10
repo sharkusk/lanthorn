@@ -1223,6 +1223,68 @@ fn bresenham(from: (i32, i32), to: (i32, i32), scale: i32, mut pen: impl FnMut(i
 /// indices are 0-15, so any value above them is free for the purpose.
 const UNSET: u8 = 0xFF;
 
+/// The side of the machine's colour cell, in native pixels.
+///
+/// Both machines that draw family B put the artwork in a **high-resolution
+/// bitmap**, where the pixels are one bit each and the colour lives in a
+/// separate byte per 8 x 8 cell — one ink and one paper, and no third colour
+/// anywhere in the cell. See [`CELL_ROW_PHASE`] and
+/// [`PictureList::rasterise_with_palette`].
+const CELL: usize = 8;
+
+/// Where the cell grid starts, vertically, against family B's own canvas.
+///
+/// **Measured, not assumed** (SQ-1491). The canvas is 255 x 94 and the machine
+/// draws it into a 320 x 200 screen whose cells begin at screen row 0, so the
+/// two grids need not agree — and they do not. Sweeping all eight phases
+/// against `machine-screenshots/c64-golden-{1,2,3}.png` gives exactly one at
+/// which no 8 x 8 cell of any of the three frames holds three colours: canvas
+/// row **7** begins a cell row, so rows 0-6 are the tail of the cell above.
+/// The other seven phases each leave 12 to 43 cells of 341 holding three,
+/// which no high-resolution bitmap can display.
+///
+/// Horizontally the two grids do agree — canvas column 0 begins a cell — which
+/// the same sweep confirms and `the_machine_never_shows_three_colours_in_a_cell`
+/// re-derives.
+const CELL_ROW_PHASE: usize = 7;
+
+/// The cell a native pixel belongs to, as an index into a
+/// [`PictureList::rasterise_with_palette`] ink map.
+fn cell_of(x: usize, y: usize) -> usize {
+    let cols = PICTURE_WIDTH.div_ceil(CELL) + 1;
+    let row = (y + CELL - CELL_ROW_PHASE) / CELL;
+    row * cols + x / CELL
+}
+
+/// One ink colour per cell — the screen-RAM byte, in effect.
+///
+/// Every primitive that paints a pixel claims that pixel's whole cell, so the
+/// last thing to draw into a cell decides what everything already drawn there
+/// looks like. That is not an approximation of the hardware; it is what the
+/// hardware is.
+struct Ink(Vec<u8>);
+
+impl Ink {
+    /// Every cell starts **unclaimed** ([`UNSET`]) rather than at the
+    /// background, so "nothing has been drawn in this cell" stays
+    /// distinguishable from "something painted it the background colour".
+    fn new() -> Ink {
+        let cols = PICTURE_WIDTH.div_ceil(CELL) + 1;
+        let rows = (PICTURE_HEIGHT + CELL - CELL_ROW_PHASE).div_ceil(CELL) + 1;
+        Ink(vec![UNSET; cols * rows])
+    }
+
+    fn claim(&mut self, x: usize, y: usize, colour: u8) {
+        if let Some(slot) = self.0.get_mut(cell_of(x, y)) {
+            *slot = colour;
+        }
+    }
+
+    fn at(&self, x: usize, y: usize) -> Option<u8> {
+        self.0.get(cell_of(x, y)).copied()
+    }
+}
+
 impl PictureList {
     /// Draw this list at §8.2's own 255 x 94 canvas — the original's output,
     /// bit for bit, quirks and fill-queue bound included — under [`PALETTE`].
@@ -1239,14 +1301,22 @@ impl PictureList {
     /// region-then-line supersample included) is unchanged; only
     /// [`Picture::rgb`]'s lookup table differs.
     pub fn rasterise_with_palette(&self, palette: &'static [(u8, u8, u8); 16]) -> Picture {
+        self.rasterise_parts(palette).0
+    }
+
+    /// [`Self::rasterise_with_palette`] and the cell inks it resolved through,
+    /// which [`Self::supersample`] needs and nothing outside this module does.
+    fn rasterise_parts(&self, palette: &'static [(u8, u8, u8); 16]) -> (Picture, Ink) {
         let mut picture = Picture::blank(self.background, 1, palette);
+        let mut ink = Ink::new();
         for op in &self.ops {
             match *op {
-                PictureOp::Line { from, to } => picture.stroke(from, to, self.line),
-                PictureOp::Fill { seed, colour } => picture.flood(seed, colour),
+                PictureOp::Line { from, to } => picture.stroke(from, to, self.line, &mut ink),
+                PictureOp::Fill { seed, colour } => picture.flood(seed, colour, &mut ink),
             }
         }
-        picture
+        picture.resolve_cells(&ink);
+        (picture, ink)
     }
 
     /// Draw this picture `scale` times larger on each axis, clamped to
@@ -1356,7 +1426,7 @@ impl PictureList {
     /// [`Self::rasterise_at`]'s body for a scale above 1 — see its doc for the
     /// rule and for why it is that rule.
     fn supersample(&self, scale: u32, palette: &'static [(u8, u8, u8); 16]) -> Picture {
-        let native = self.rasterise_with_palette(palette);
+        let (native, cells) = self.rasterise_parts(palette);
         let native_ink = self.ink_mask(1);
         let big_ink = self.ink_mask(scale);
         let mut big = Picture::blank(self.background, scale, palette);
@@ -1370,7 +1440,15 @@ impl PictureList {
             for x in 0..w {
                 let i = y * w + x;
                 if big_ink[i] {
-                    out[i] = self.line;
+                    // The scaled line takes its native CELL's ink, not the
+                    // list's line colour: a cell a fill claimed after the line
+                    // shows the fill's colour at 1x (SQ-1491) and has to go on
+                    // doing so at every scale, or a gallery frame and a
+                    // terminal band disagree about the same picture.
+                    out[i] = match cells.at(x / s, y / s) {
+                        Some(c) if c != UNSET => c,
+                        _ => self.line,
+                    };
                     continue;
                 }
                 let n = (y / s) * native.width + x / s;
@@ -1491,13 +1569,41 @@ impl Picture {
     /// at column 255 of row *r* lands at column 0 of row *r* + 1 — which flat
     /// row-major indexing does by itself. On the last row it falls off the end
     /// and is dropped.
-    fn plot(&mut self, x: i32, y: i32, colour: u8) {
+    fn plot(&mut self, x: i32, y: i32, colour: u8, ink: &mut Ink) {
         if !(0..=PICTURE_WIDTH as i32).contains(&x) || !(0..PICTURE_HEIGHT as i32).contains(&y) {
             return;
         }
         let i = y as usize * self.width + x as usize;
         if let Some(p) = self.pixels.get_mut(i) {
             *p = colour;
+            // The pixel's cell now belongs to this primitive — see [`Ink`].
+            // Claimed from the index actually written, so the column-255 wrap
+            // above claims the cell the pixel LANDED in and not the one it was
+            // aimed at.
+            ink.claim(i % self.width, i / self.width, colour);
+        }
+    }
+
+    /// Resolve the canvas the way the machine displays it: every painted pixel
+    /// shows its cell's ink, whoever painted it (SQ-1491).
+    ///
+    /// This is the whole of the attribute clash, and it is a *display* rule
+    /// rather than a drawing one — the bitmap keeps one bit per pixel and has
+    /// no memory of which primitive set it. So an outline drawn first and
+    /// flooded past second comes out in the flood's colour wherever the two
+    /// share a cell, which is exactly what the captures show.
+    fn resolve_cells(&mut self, ink: &Ink) {
+        for y in 0..self.height {
+            for x in 0..self.width {
+                let i = y * self.width + x;
+                if self.pixels[i] == self.background {
+                    continue;
+                }
+                match ink.at(x, y) {
+                    Some(c) if c != UNSET => self.pixels[i] = c,
+                    _ => {}
+                }
+            }
         }
     }
 
@@ -1514,8 +1620,8 @@ impl Picture {
 
     /// §8.2's line, drawn on §8.2's canvas: [`bresenham`] at scale 1 with
     /// [`Self::plot`] as the pen.
-    fn stroke(&mut self, from: (i32, i32), to: (i32, i32), colour: u8) {
-        bresenham(from, to, 1, |x, y| self.plot(x, y, colour));
+    fn stroke(&mut self, from: (i32, i32), to: (i32, i32), colour: u8, ink: &mut Ink) {
+        bresenham(from, to, 1, |x, y| self.plot(x, y, colour, ink));
     }
 
     /// §8.2's flood fill, exactly: 4-connected, seeded at one point,
@@ -1532,14 +1638,14 @@ impl Picture {
     /// regions from that one raster rather than re-flooding a larger one, so
     /// none of this algorithm's measured behaviour has to be re-argued at a
     /// size the original never had (see [`PictureList::rasterise_at`]).
-    fn flood(&mut self, seed: (i32, i32), colour: u8) {
+    fn flood(&mut self, seed: (i32, i32), colour: u8, ink: &mut Ink) {
         let mut queue = std::collections::VecDeque::new();
         queue.push_back(seed);
         while let Some((x, y)) = queue.pop_front() {
             if self.at(x, y) != Some(self.background) {
                 continue;
             }
-            self.plot(x, y, colour);
+            self.plot(x, y, colour, ink);
             for next in [(x, y + 1), (x, y - 1), (x + 1, y), (x - 1, y)] {
                 if queue.len() < FILL_QUEUE_LIMIT {
                     queue.push_back(next);
@@ -2274,9 +2380,15 @@ mod tests {
         assert_eq!(p.background, 3);
         assert_eq!(p.line, 0, "any background but 0 draws in colour 0");
         assert_eq!(p.pixels.len(), PICTURE_WIDTH * PICTURE_HEIGHT);
-        // Both endpoints inclusive.
-        assert_eq!(p.pixels[0], 0);
-        assert_eq!(p.pixels[60 * PICTURE_WIDTH + 40], 0);
+        // Both endpoints inclusive — and both now in the FILL's ink, because
+        // this fill is unbounded: it runs over the whole background, claims
+        // every colour cell it reaches, and a cell's last claimant decides
+        // what everything drawn in it looks like (SQ-1491). The line is still
+        // there; it is just not the line colour any more, which is exactly
+        // what a Commodore 64 shows.
+        assert_eq!(p.pixels[0], 5);
+        assert_eq!(p.pixels[60 * PICTURE_WIDTH + 40], 5);
+        assert_ne!(p.pixels[0], p.background, "the endpoint was drawn, whatever its ink");
         // The fill was seeded at (60, 1) and ran over the background.
         assert_eq!(p.pixels[PICTURE_WIDTH + 60], 5);
         assert_eq!(p.rgb(60, 1), Some(PALETTE[5]));
@@ -2337,20 +2449,56 @@ mod tests {
         }
     }
 
+    /// The eleven-by-eleven rectangle comes out **entirely the fill colour**,
+    /// border included — which is not a bug and is the whole of SQ-1491's
+    /// family-B finding in one shape.
+    ///
+    /// The border is drawn first and the fill second, and every pixel of both
+    /// lands in the same four colour cells (rows 7-14 and 15-22, columns 8-15
+    /// and 16-23). A high-resolution bitmap keeps one bit per pixel and one ink
+    /// per cell, so the fill's claim on those four cells is the last word on
+    /// what everything already drawn in them looks like. Draw this on a
+    /// Commodore 64 and the outline disappears.
+    ///
+    /// `machine-screenshots/c64-golden-{1,2,3}.png` show exactly this — it is
+    /// why *The Golden Baton*'s outlines survive against the black sky and
+    /// vanish where a fill meets them, and why modelling it took whole-frame
+    /// agreement from 95.0% to 99.2%.
     #[test]
-    fn a_hand_drawn_rectangle_is_the_pixels_it_should_be() {
+    fn a_hand_drawn_rectangle_loses_its_border_to_the_colour_clash() {
         let p = rectangle().rasterise();
         assert_eq!((p.width, p.height, p.scale), (PICTURE_WIDTH, PICTURE_HEIGHT, 1));
         let at = |x: usize, y: usize| p.pixels[y * PICTURE_WIDTH + x];
-        assert_eq!(at(10, 10), 0, "top-left corner is the line");
-        assert_eq!(at(15, 10), 0, "top edge");
-        assert_eq!(at(20, 15), 0, "right edge");
-        assert_eq!(at(15, 20), 0, "bottom edge");
+        assert_eq!(at(10, 10), 5, "the top-left corner is the LINE, shown in the fill's ink");
+        assert_eq!(at(15, 10), 5, "top edge, likewise");
+        assert_eq!(at(20, 15), 5, "right edge");
+        assert_eq!(at(15, 20), 5, "bottom edge");
         assert_eq!(at(15, 15), 5, "the fill reached the middle");
         assert_eq!(at(11, 11), 5, "…and the corner just inside the border");
         assert_eq!(at(9, 10), 3, "one pixel outside is still the background");
         assert_eq!(at(15, 21), 3, "the fill did not escape below");
-        assert_eq!(p.pixels.iter().filter(|&&v| v == 5).count(), 9 * 9, "a 9 x 9 interior");
+        assert_eq!(
+            p.pixels.iter().filter(|&&v| v == 5).count(),
+            11 * 11,
+            "the 9 x 9 interior and the border around it, all one colour"
+        );
+        assert_eq!(p.pixels.iter().filter(|&&v| v == 0).count(), 0, "no line colour survives");
+    }
+
+    /// …and a line in a cell no fill ever reaches keeps the line colour, which
+    /// is what stops the case above from being a description of a decoder that
+    /// simply lost its outlines.
+    #[test]
+    fn a_line_in_a_cell_no_fill_touches_keeps_the_line_colour() {
+        let mut list = rectangle();
+        // Cell row (40 + 1) / 8 = 5, columns 5 to 7 — nowhere near the
+        // rectangle's four cells, and the fill is sealed inside it anyway.
+        list.ops.push(PictureOp::Line { from: (40, 40), to: (60, 40) });
+        let p = list.rasterise();
+        let at = |x: usize, y: usize| p.pixels[y * PICTURE_WIDTH + x];
+        assert_eq!(at(50, 40), 0, "the far line is the line colour");
+        assert_eq!(at(50, 41), 3, "and it is one pixel thick");
+        assert_eq!(at(15, 10), 5, "while the rectangle's border is still the fill's");
     }
 
     #[test]
@@ -2365,7 +2513,11 @@ mod tests {
         // Spot the three regions first, by hand: the top edge runs along
         // device rows 30-32, the interior starts at device (33, 33), and the
         // canvas outside the rectangle is untouched background.
-        assert_eq!(three.pixels[31 * three.width + 45], 0, "device (45, 31) is the top edge");
+        // The top edge, in the fill's ink — see
+        // `a_hand_drawn_rectangle_loses_its_border_to_the_colour_clash`, and
+        // note that it agrees with the 1x pass, which is the point of the
+        // whole-canvas loop below.
+        assert_eq!(three.pixels[31 * three.width + 45], 5, "device (45, 31) is the top edge");
         assert_eq!(three.pixels[45 * three.width + 45], 5, "device (45, 45) is inside the fill");
         assert_eq!(three.pixels[0], 3, "device (0, 0) is outside");
         // Then the whole canvas: with no diagonal anywhere, every native pixel

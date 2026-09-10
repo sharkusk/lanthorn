@@ -2845,6 +2845,16 @@ an identity remap, Commodore 64 releases the Commodore 64 palette with **remap
 table A**. There is no attribute plane, no cell resolution, no bright bit and no
 flash bit. There is no compression; the opcode stream is the storage form.
 
+> **True of the FORMAT, and not of the screen it is drawn on.** The opcode
+> stream carries no per-cell bytes, but both machines put the artwork in a
+> high-resolution bitmap — one bit per pixel, one ink and one paper per 8 x 8
+> cell — so no cell can show a third colour, and a primitive painting into a
+> cell decides the colour of everything already drawn there. An outline
+> flooded past afterwards comes out in the flood's colour. A decoder that
+> resolves colour per pixel produces a picture the machine cannot display;
+> Appendix A item 46 has the measurement, and it is worth 4.2 points of
+> whole-frame agreement against a real Commodore 64.
+
 **One bounds quirk.** The horizontal test admits column 255 as well as 0-254,
 even though rows are 255 pixels wide, so a pixel plotted at column 255 of row
 *r* lands at column 0 of row *r* + 1. Reproduce it only if bit-exactness
@@ -5729,6 +5739,49 @@ together with it.
     **And the line index has no interior at all**, so it is derived by
     elimination: subtract the colours the fills account for from the colours on
     screen and exactly one is left over, white in all three frames (SQ-1491).
+
+46. **§8.2's "no attribute plane, no cell resolution" is true of the format and
+    false of the screen, and the difference is visible.** The opcode stream
+    really does carry no per-cell colour bytes — but both machines that draw
+    family B put it in a **high-resolution bitmap**: one bit per pixel, and one
+    ink and one paper per 8 x 8 cell. A decoder that keeps a colour per pixel
+    therefore produces pictures the machine cannot display, and the difference
+    is not subtle. Against *The Golden Baton*'s three captures, per-pixel
+    colour agreed on **95.0%** of the canvas; per-cell agrees on **99.2%**.
+
+    **How it was found, which is the part worth keeping.** The residue looked
+    exactly like a line-placement difference — every missing pixel on or beside
+    a one-pixel line — so the first move was to sweep the line rule: error
+    initialisation, tie direction, endpoint order, x-major tie, and DDA with
+    truncation and with rounding, sixteen combinations in all. Every one landed
+    between 92.1% and 95.0% and none above. The line-pixel *sets* then said
+    why: **the machine never lights a line pixel we do not**, in any of the
+    three frames, so our set was a strict superset and no tie-break could ever
+    close the gap. And 97% of the surplus was showing a *fill's* colour on the
+    machine rather than the background — the outline was not misplaced, it was
+    recoloured.
+
+    The confirmation is a property of the frames alone and needs no code:
+    sweep the cell grid's vertical phase and exactly one of the eight leaves
+    **no 8 x 8 cell of any frame holding three colours** (the other seven leave
+    12 to 43 of 341). Canvas row 7 begins a cell row — the canvas is 255 x 94
+    and the machine draws it into a 320 x 200 screen whose own cells start at
+    screen row 0, so the two grids need not agree, and they do not; column 0
+    does begin a cell. `the_machine_never_shows_three_colours_in_a_cell`
+    re-derives both on every run.
+
+    lanthorn models it as one ink per cell, claimed by whatever last painted
+    into it, resolved after the display list is walked
+    (`scott::c64::PictureList::rasterise_with_palette`); the line walk and the
+    flood fill are untouched. The supersample carries the same inks, or every
+    clash resolved at 1x would be undone at 3x and a gallery frame would
+    disagree with the terminal band about the same picture. **What is left**
+    after it is the flood fill's own reach — our fill runs a little past the
+    machine's in two of the three frames, ~500 pixels, always into ground the
+    machine left as background and never into another colour — plus **37
+    pixels** of genuine line placement across all three frames, 0.05% of the
+    canvas. That last is the only part still open, and three frames of line
+    art may not be enough to close it (SQ-1491).
 
 The in-memory model this document's dialects decode *to*, in that crate, is a
 database of rooms (six exits and a description, plus a flag for the leading-`*`
