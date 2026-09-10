@@ -5659,14 +5659,81 @@ together with it.
     The bound is one byte-pair token per output pair, `4 + 40 * 160`, because
     the scheme cannot expand.
 
-    **What is not established here**: the §8.6 indices of the records PAST each
-    release's highest room number — ten on *Voodoo Castle*, three on *The
-    Count*, two on *Claymorgue Castle*, and object and title artwork by
-    inspection (the Adventure International title card is among them on all
-    three, but at the last record on two of them and the second-to-last on the
-    third, so its position is not a rule). lanthorn numbers every record by its
-    ordinal, which is right for every index a ROOM can ask for and is the only
-    lookup it performs (SQ-1499).
+    **And the records PAST each release's highest room number are settled**
+    (SQ-1499). They are **not** object overlays, which is what their count —
+    ten on *Voodoo Castle*, three on *The Count*, two on *Claymorgue Castle* —
+    invites you to assume. §8.6's `B…` records are sparse little sprites drawn
+    over a room; the four plain releases' are exactly that (`B01044` is a
+    purple blob thirty pixels wide on an otherwise untouched page, and the
+    Atari 8-bit sides of these same three titles carry forty-odd such regions
+    apiece). Every one of these declares §8.4's full `00 00 28 A0` box and
+    paints all 280 x 160 of it. They are **close-ups**, drawn over the whole
+    graphics window, and the release shows one when the player LOOKs at the
+    thing it draws.
+
+    **The pairing is in the release's own `M2`**, in neither the database
+    (§12.10 is right) nor the picture side: three parallel sixteen-byte columns
+    at file offsets `0x0D48`, `0x0D58` and `0x0D68` — memory `$75A4`, `$75B4`
+    and `$75C4`, `M2` loading at `$6860` on all three — holding the ITEM index,
+    the PICTURE index and the NOUN index of each row, with the trigger VERB in
+    the single byte at `0x0D47`. Sixteen slots because the release's own lookup
+    counts down from `$0F` over the noun column, which is also why the three
+    columns sit sixteen apart; unused slots are zero, and a picture index of
+    zero cannot be a row because §8.6 reserves 0 for the darkness card.
+
+    | release | picture | record | item | noun | what it draws |
+    |---|---|---|---|---|---|
+    | *Voodoo Castle* | 80 | 26 | 44 `Doll` | 55 `DOL` | a voodoo doll stuck with pins |
+    | | 81 | 27 | 52 `Voodoo book` | 63 `BOO` | a book lettered `VooDoo` |
+    | | 82 | 28 | 25 `Sapphire ring` | 32 `RIN` | a ring with a blue stone |
+    | | 83 | 29 | 53 `Ju-Ju man statue` | 43 `STA` | a dancing figure on a base |
+    | | 84 | 30 | 9 `Brightly glowing idol` | 9 `IDO` | a seated idol throwing rays |
+    | | 85 | 31 | 40 `Mixed Chemicals` | 42 `CHE` | a flask and a bottle |
+    | | 86 | 32 | 0 `Bloody Knife` | 7 `KNI` | a knife, blade smeared |
+    | | 87 | 33 | 33 `Dull & broken sword` | 13 `SWO` | a snapped blade |
+    | | 88 | 34 | 27 `Open Coffin` | 8 `COF` | the chapel's coffin, close up |
+    | *The Count* | 80 | 23 | 45 `Package` | 21 `PAC` | a parcel, note reading `TO DRACULA FROM YORGA` |
+    | | 81 | 24 | 50 `Fence with an open gate & a crowd beyond` | 50 `GAT` | the crowd at the gate, close up |
+
+    Every row was decoded and looked at, and the NOUN column is what makes
+    that an identification rather than a guess: on every row that has one it is
+    the item's own auto-get noun. The verb byte reads 42 on *Voodoo Castle*
+    (`LOO`, with `*EXA` the next entry) and 8 on *The Count* (`LOO`, `*EXA`
+    again). **Claymorgue Castle has no rows at all** — its three columns are
+    sixteen zero bytes each — so its verb byte, which reads 42 and is its
+    `DIG`, means nothing.
+
+    **One numbering rule follows and fits all three**: records `0..rooms` are
+    the rooms; the next records are the close-ups, numbered **80 upward** in
+    table order, which is §8.6's "80 to 91" band and the same band the four
+    plain releases put their full-window artwork in (item 27); and the record
+    after those is §8.6's reserved **99**, the Adventure International title
+    card. That is what puts the title card last on *Voodoo Castle* (26 rooms,
+    nine close-ups, record 35) and *The Count* (23, two, record 25) and
+    second-to-last on *Claymorgue Castle* (33, none, record 33) — a position
+    that reads as arbitrary until the table says how many records precede it.
+
+    **One record on one release is still unnamed**: *Claymorgue Castle*'s 34,
+    the one past its title card. It decodes to the ballroom (room 7) with its
+    chandelier down on the checkerboard floor — item 26, `Fallen Chandelier` —
+    but no table on either of its sides pairs it with anything, so lanthorn
+    drops it rather than guess.
+
+    **Two corrections to §12.11 fall out of this.** Its "*The Count* draws 80,
+    81 and 82 only in rooms 8, 18 and 9 respectively; *Voodoo Castle* draws 80
+    only in room 14" is not what the Apple II releases do: those indices are
+    keyed on an ITEM and a NOUN there, not on a room, *The Count* has two of
+    them rather than three, and drawing *Voodoo Castle*'s 80 in room 14 would
+    put a full-window doll over the Chimney for the rest of the game.
+    `SagaUs::room_overlay` therefore answers `None` on the Apple II and keeps
+    §12.11's table for the two platforms where nothing yet falsifies it. And
+    §12.11 has no fifth behaviour for the LOOK verb: **lanthorn draws none of
+    these close-ups**, because it has no LOOK-verb path to draw them from —
+    they are decoded, counted and correctly numbered, and that is all.
+
+    Reading the release's own 6502 lookup is measurement of a **specimen** —
+    the same disks the artwork is on — and not a reading of any interpreter;
+    `docs/internals/clean-room.md` is the protocol this stayed inside.
 
     Two host consequences. `blorb::medium::apple_raw_sectors` is the door to a
     5.25-inch side that `DiskImage::detect` rightly answers `None` for — it has

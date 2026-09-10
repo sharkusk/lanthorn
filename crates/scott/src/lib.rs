@@ -244,8 +244,8 @@ pub use loader::{detect_dialect, looks_like_scott, looks_like_scott_bytes, Diale
 pub use options::{Options, Presentation, Wording};
 pub use saga_dos::{decode_family_e, DosRelease};
 pub use apple_pictures::{
-    decode_family_d, decode_family_d_plain, decode_family_d_scrambled, scan_scrambled_pictures,
-    AppleError,
+    apple_look_table, decode_family_d, decode_family_d_plain, decode_family_d_scrambled,
+    scan_scrambled_pictures, scrambled_picture_index, AppleError, AppleLookPicture, AppleLookTable,
 };
 pub use saga_atari::{scan_picture_side, splice_vtoc, AtariRecord};
 pub use saga_pictures::{atari_colour, decode_family_c, FamilyCScheme, PictureError};
