@@ -8,7 +8,7 @@
 //! snapshot (`Vm::snapshot`/`Vm::restore`).
 
 use std::any::Any;
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, VecDeque};
 use std::sync::Arc;
 
 use crate::engine::{
@@ -28,6 +28,18 @@ pub const SCOTT_SAVE_FORMAT: u32 = 1;
 /// the host/input layer here (not the VM, which stays input-agnostic).
 /// Scott used this phrase, never the Infocom-style `>`.
 const PROMPT: &str = "\nTell me what to do ? ";
+
+/// The keypress hint surfaced while a US S.A.G.A. picture-show sequence is
+/// presenting (SQ-1487, spec §12.11 — *The Hulk*'s "bite lip" opening shows
+/// several scenes in a row, each ENTER-gated). There is no dedicated hint in
+/// the app's main input bar for a keypress wait — `render_input_content`
+/// (`render/transcript.rs`) hides the bar outright whenever `pending_input()`
+/// answers `Char`, for every engine — so this rides the transcript itself,
+/// through `TurnResult::info`: the existing general-purpose "one-line note to
+/// the player" door (`turn.rs` pushes it with the ordinary transcript style,
+/// so nothing new needs styling). Shown right where the player is already
+/// reading, rather than in a bar that would otherwise stay blank.
+const PICTURE_SHOW_HINT: &str = "[Press RETURN to continue]";
 
 /// Terminal rows reserved for the room-picture band in a graphics (`.blb`) game.
 /// The renderer scales the picture (typically 256×96) to fit this band.
@@ -87,6 +99,16 @@ fn room_panel(block: &str) -> BufferWindow {
     }
 }
 
+/// One step of a US S.A.G.A. picture-show sequence still to present
+/// (SQ-1487) — see [`ScottSession::showing`].
+struct PendingShow {
+    /// Transcript text to surface once the player's keypress reaches this step.
+    text: String,
+    /// The picture the band switches to at this step, or `None` on the LAST
+    /// step to mean "the sequence is over — revert to the room's own picture".
+    next_picture: Option<u16>,
+}
+
 /// A running Scott Adams (ScottFree `.dat`) game session.
 pub struct ScottSession {
     vm: scott::Vm,
@@ -114,6 +136,22 @@ pub struct ScottSession {
     current_canvas: Option<Arc<image::RgbaImage>>,
     current_pic_num: Option<u16>,
     pic_version: u64,
+    /// Steps of the CURRENT US S.A.G.A. picture-show sequence still to
+    /// present, one per remaining opcode-90 request (SQ-1487). Empty outside
+    /// a sequence — also what [`ScottSession::pending_input`] reads to
+    /// decide `Line` vs `Char`. Transient host presentation state, like
+    /// `scott::Vm`'s own per-turn fields it is built from: a Save State taken
+    /// mid-sequence restores to the state at the END of the turn that queued
+    /// it (the `scott::Vm` snapshot carries no picture-show state either), so
+    /// resuming that save shows the room view, not a half-finished cutscene.
+    showing: VecDeque<PendingShow>,
+    /// The game's own opcode-71 SAVE GAME request, deferred while `showing`
+    /// is non-empty (SQ-1487): §12.11 has the room view return only once the
+    /// LAST picture's ENTER is pressed, so the save should capture the turn
+    /// as finished, not mid-cutscene. Drained the same way `submit`'s own
+    /// immediate case drains `Vm::take_save_request` — once, right before the
+    /// resulting `TurnResult` is built.
+    deferred_save: bool,
 }
 
 impl ScottSession {
@@ -301,6 +339,8 @@ impl ScottSession {
             current_canvas: None,
             current_pic_num: None,
             pic_version: 0,
+            showing: VecDeque::new(),
+            deferred_save: false,
         };
         s.refresh_picture();
         Ok(s)
@@ -327,6 +367,23 @@ impl ScottSession {
         self.current_canvas = want
             .and_then(|n| self.picts.image(n as u32))
             .map(|dynimg| Arc::new(dynimg.to_rgba8()));
+        self.pic_version += 1;
+    }
+
+    /// Force the picture band to `picture`, bypassing `Vm::current_picture()`
+    /// — used while presenting a US S.A.G.A. picture-show sequence
+    /// (SQ-1487), where the band shows each opcode-90 picture in turn rather
+    /// than whatever `current_picture()` would answer (the room's own
+    /// picture, or darkness). Same early-out/version-bump shape as
+    /// `refresh_picture`, just driven by an explicit number instead of the
+    /// VM's own opinion.
+    fn show_sequence_picture(&mut self, picture: u16) {
+        let want = Some(picture);
+        if want == self.current_pic_num {
+            return;
+        }
+        self.current_pic_num = want;
+        self.current_canvas = self.picts.image(picture as u32).map(|dynimg| Arc::new(dynimg.to_rgba8()));
         self.pic_version += 1;
     }
 
@@ -374,35 +431,93 @@ impl ScottSession {
 
 impl Engine for ScottSession {
     // SQ-1270: `Engine::submit`'s contract is to route by `pending_input()`,
-    // never handing a line to a keypress read. Scott is line-only —
-    // `pending_input` below always answers `Line` and `submit_key` never
-    // issues a turn — so there is no `Char` state this could ever route to;
-    // the routing this contract asks for is unconditionally satisfied.
+    // never handing a line to a keypress read. Scott is ordinarily
+    // line-only, but SQ-1487 gave it one keypress-driven state of its own —
+    // a US S.A.G.A. picture-show sequence — which `pending_input`/
+    // `submit_key` below now handle the same way every other engine's
+    // `read_char` does.
     fn submit(&mut self, command: &str) -> TurnResult {
         self.vm.supply_line(command);
         let _ = self.vm.step();
         let transcript = self.vm.take_output();
         let quit = self.vm.has_quit();
-        self.refresh_picture();
+        let shows = self.vm.take_picture_shows();
         // The game ran the SAVE GAME action (opcode 71): bubble the same Save
         // request the Z-machine/Glulx engines raise for `@save`, so the app's
         // Save State file I/O runs. The prompt is withheld and returns via
         // `resume_save` once the host has written the snapshot.
-        if !quit && self.vm.take_save_request() {
-            let mut result = self.turn(transcript, quit);
-            result.pending_io = Some(PendingIo::Save);
-            return result;
+        let save_requested = !quit && self.vm.take_save_request();
+
+        if quit || shows.is_empty() {
+            self.refresh_picture();
+            if save_requested {
+                let mut result = self.turn(transcript, quit);
+                result.pending_io = Some(PendingIo::Save);
+                return result;
+            }
+            let mut transcript = transcript;
+            if !quit {
+                transcript.push_str(PROMPT);
+            }
+            return self.turn(transcript, quit);
         }
-        let mut transcript = transcript;
-        if !quit {
-            transcript.push_str(PROMPT);
-        }
-        self.turn(transcript, quit)
+
+        // §12.11: several pictures in ONE turn, each ENTER-gated (SQ-1487,
+        // user report on *The Hulk*'s "bite lip") — split the turn's output
+        // at every opcode-90 offset `Vm::take_picture_shows` recorded, show
+        // the first picture now, and queue the rest for `submit_key` to walk
+        // one keypress at a time. The save the turn also raised (unlikely to
+        // co-occur, but not impossible) waits for the sequence to finish —
+        // §12.11 treats the room view returning as when the turn is really
+        // over, so that is when Save State should capture it too.
+        self.deferred_save = save_requested;
+        let mut offsets: Vec<usize> = shows.iter().map(|s| s.output_len).collect();
+        offsets.push(transcript.len());
+        let first_text = transcript[..offsets[0]].to_string();
+        self.showing = (0..shows.len())
+            .map(|i| PendingShow {
+                text: transcript[offsets[i]..offsets[i + 1]].to_string(),
+                next_picture: shows.get(i + 1).map(|s| s.picture),
+            })
+            .collect();
+        self.show_sequence_picture(shows[0].picture);
+        let mut result = self.turn(first_text, false);
+        result.info = Some(PICTURE_SHOW_HINT.to_string());
+        result
     }
 
     fn submit_key(&mut self, _key: crate::engine::KeyInput) -> Option<TurnResult> {
-        // Scott is line-only: it never issues a `read_char`-style request.
-        None
+        // The S.A.G.A. picture-show door (SQ-1487, spec §12.11) waits for the
+        // player to press ENTER between pictures, but — like the Z-machine's
+        // `read_char` mapping for its own dismissable pauses — it does not
+        // care WHICH key dismissed it, only that one did. Outside a sequence
+        // `showing` is empty, `pending_input()` never answers `Char`, and the
+        // app never routes a key here to begin with — matching the doc this
+        // used to carry ("Scott is line-only").
+        let step = self.showing.pop_front()?;
+        match step.next_picture {
+            Some(picture) => {
+                self.show_sequence_picture(picture);
+                let mut result = self.turn(step.text, false);
+                result.info = Some(PICTURE_SHOW_HINT.to_string());
+                Some(result)
+            }
+            None => {
+                // The last picture in the sequence: the room view returns.
+                self.refresh_picture();
+                let quit = self.vm.has_quit();
+                let mut transcript = step.text;
+                if std::mem::take(&mut self.deferred_save) && !quit {
+                    let mut result = self.turn(transcript, quit);
+                    result.pending_io = Some(PendingIo::Save);
+                    return Some(result);
+                }
+                if !quit {
+                    transcript.push_str(PROMPT);
+                }
+                Some(self.turn(transcript, quit))
+            }
+        }
     }
 
     fn take_transcript(&mut self) -> String {
@@ -417,7 +532,13 @@ impl Engine for ScottSession {
     }
 
     fn pending_input(&self) -> InputKind {
-        InputKind::Line
+        // SQ-1487: a US S.A.G.A. picture-show sequence is the one place
+        // Scott waits on a keypress rather than a line — see `submit_key`.
+        if self.showing.is_empty() {
+            InputKind::Line
+        } else {
+            InputKind::Char
+        }
     }
 
     fn resume_save(&mut self, _wrote_ok: bool) -> TurnResult {
@@ -571,6 +692,13 @@ impl Engine for ScottSession {
             .vm
             .restore(&save.bytes)
             .map_err(|e| EngineError::BadSave(format!("bad Scott snapshot: {e}")));
+        // SQ-1487: a picture-show sequence is transient host state, not part
+        // of the `scott::Vm` snapshot — a restore lands on the completed
+        // turn that queued it, not mid-cutscene, so any steps still pending
+        // (a Save State taken mid-sequence, or simply a different save) are
+        // stale and must not keep presenting against the now-replaced VM.
+        self.showing.clear();
+        self.deferred_save = false;
         self.refresh_picture();
         r
     }
@@ -597,6 +725,10 @@ impl Engine for ScottSession {
                 .restore(bytes)
                 .map_err(|e| EngineError::BadSave(format!("bad Scott snapshot: {e}")))
         };
+        // See `restore_state`'s comment: a picture-show sequence is host
+        // state, not VM state, and must not survive a restore.
+        self.showing.clear();
+        self.deferred_save = false;
         self.refresh_picture();
         r
     }
@@ -1425,5 +1557,79 @@ mod tests {
                 "after {command:?} the band still shows the VM's own choice"
             );
         }
+    }
+
+    // ── SQ-1487: "bite lip" shows several pictures in sequence, each waiting
+    // for RETURN, instead of only the last one ─────────────────────────────
+
+    /// *The Hulk*'s own opening (spec §12.11): typing `BITE LIP` in room 1
+    /// runs an action whose commands draw pictures 84, 83 and 86 in a row —
+    /// measured directly off `QUESTPR1.D64` (`probe_bite_lip_sequence`,
+    /// since reverted; the numbers are pinned here, not derived at test
+    /// time) — before the gas transformation drops Bruce Banner into room 2,
+    /// whose own picture (2) is what the band shows once the sequence ends.
+    #[test]
+    fn bite_lip_shows_every_picture_in_sequence_each_key_gated() {
+        let Some(mut s) = hulk_session() else { return };
+        assert_eq!(s.vm.current_room(), 1, "premise: Bruce Banner starts in room 1");
+
+        let first = s.submit("bite lip");
+        assert_eq!(
+            s.pending_input(),
+            InputKind::Char,
+            "the first picture in the sequence waits for a keypress, not a line"
+        );
+        assert_eq!(s.current_pic_num, Some(84), "the band shows the FIRST picture the chain names");
+        assert!(
+            !first.transcript.contains("Tell me what to do"),
+            "no prompt while a sequence is still presenting: {:?}",
+            first.transcript
+        );
+        assert_eq!(
+            first.info.as_deref(),
+            Some(PICTURE_SHOW_HINT),
+            "the keypress hint rides TurnResult::info"
+        );
+
+        // Two more presses show the remaining two pictures — the queue this
+        // turn built, not one slot silently overwritten by the last request
+        // (SQ-1487's actual bug).
+        for want_picture in [83u16, 86] {
+            let r = s.submit_key(crate::engine::KeyInput::Enter).expect("still showing — a key advances it");
+            assert_eq!(s.pending_input(), InputKind::Char, "picture {want_picture} still waits for a key");
+            assert_eq!(s.current_pic_num, Some(want_picture), "advances to the next queued picture");
+            assert!(!r.transcript.contains("Tell me what to do"), "still mid-sequence, no prompt yet");
+        }
+
+        // The fourth key press ends the sequence: the room view returns.
+        let last = s.submit_key(crate::engine::KeyInput::Enter).expect("the last key still routes here");
+        assert_eq!(s.pending_input(), InputKind::Line, "the sequence is over — back to line input");
+        assert_eq!(s.vm.current_room(), 2, "the gas transformation moved Bruce Banner to room 2");
+        assert_eq!(
+            s.current_pic_num,
+            s.vm.current_picture(),
+            "the band reverts to the room's own picture, exactly like an ordinary turn"
+        );
+        assert_eq!(s.current_pic_num, Some(2), "room 2's own picture");
+        assert!(
+            last.transcript.trim_end().ends_with("Tell me what to do ?"),
+            "the ordinary prompt returns once the sequence ends: {:?}",
+            last.transcript
+        );
+
+        // Outside a sequence, Scott is still line-only.
+        assert!(s.submit_key(crate::engine::KeyInput::Enter).is_none(), "no sequence left to advance");
+    }
+
+    /// An ordinary turn that never runs opcode 90 is byte-identical to
+    /// before SQ-1487 — the new machinery must be a true no-op off its own
+    /// trigger.
+    #[test]
+    fn a_turn_with_no_picture_show_is_unaffected() {
+        let Some(mut s) = hulk_session() else { return };
+        let r = s.submit("look");
+        assert_eq!(s.pending_input(), InputKind::Line, "an ordinary turn never waits on a keypress");
+        assert!(r.transcript.trim_end().ends_with("Tell me what to do ?"), "the ordinary prompt: {:?}", r.transcript);
+        assert!(r.info.is_none(), "no picture-show hint outside a sequence");
     }
 }

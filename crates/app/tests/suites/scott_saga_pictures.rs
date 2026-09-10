@@ -307,3 +307,64 @@ fn an_atari_saga_side_a_reports_no_pictures_because_the_sides_are_not_paired() {
         "the dump distinguishes this from a text-only game:\n{dump}"
     );
 }
+
+/// SQ-1487 (user-reported): *The Hulk*'s own opening — typing `BITE LIP` in
+/// room 1 — runs an action that draws several pictures in a row, each
+/// waiting for the player to press ENTER (spec §12.11), and only the LAST
+/// one used to show (`pending_picture` is one slot; every opcode-90 request
+/// in the same turn silently overwrote it).
+///
+/// This is the render layer's half of the fix, alongside
+/// `scott_session::tests::bite_lip_shows_every_picture_in_sequence_each_key_gated`
+/// (`crates/app/src/scott_session.rs`, which pins the exact picture numbers
+/// measured off this disk — 84, 83, 86, then room 2): mid-sequence, the band
+/// must reserve the SAME rows a room's own picture does (one shared
+/// `GraphicsWindow` layout, not a special case for a sequence frame), and
+/// the keypress hint must actually reach the player. There is no dedicated
+/// "press a key" element in the app's main input bar (`render_input_content`
+/// just hides it outright whenever `pending_input()` answers `Char`, for
+/// every engine) — SQ-1487 rides the existing general-purpose
+/// `TurnResult::info` door instead, which the render loop (`turn.rs`) pushes
+/// into the transcript with the ordinary transcript style. So "the input bar
+/// shows the keypress hint" is checked at that door.
+#[test]
+fn bite_lip_mid_sequence_reserves_the_same_band_as_a_room_picture_and_shows_the_keypress_hint() {
+    let Some(mut hulk) = hulk_session() else {
+        eprintln!("SKIP: needs stories/scott-dialects/c64/QUESTPR1.D64 (gitignored commercial fixture)");
+        return;
+    };
+    assert_eq!(hulk.current_location().unwrap().number, 1, "premise: Bruce Banner starts in room 1");
+    let room_model = hulk.screen();
+    let room_rows = reserved_rows(&room_model).expect("room 1 shows a band");
+    let room_gw = picture_band(&room_model).expect("room 1 shows a band");
+
+    let first = hulk.submit("bite lip");
+    assert_eq!(
+        hulk.pending_input(),
+        app::session::InputKind::Char,
+        "the sequence's first picture waits for a keypress, not a line"
+    );
+    assert_eq!(
+        first.info.as_deref(),
+        Some("[Press RETURN to continue]"),
+        "the keypress hint rides TurnResult::info, the app's general-purpose \
+         one-line-note door (turn.rs pushes it into the transcript)"
+    );
+    assert!(
+        !first.transcript.contains("Tell me what to do"),
+        "no prompt while the sequence is still presenting: {:?}",
+        first.transcript
+    );
+
+    let mid_model = hulk.screen();
+    let mid_rows = reserved_rows(&mid_model).expect("the sequence frame shows a band too");
+    let mid_gw = picture_band(&mid_model).expect("the sequence frame shows a band too");
+    assert_eq!(mid_rows, room_rows, "the sequence band reserves the SAME rows as a room picture");
+    assert_eq!(mid_gw.win, room_gw.win, "same window slot");
+    assert!(mid_gw.upscale, "the sequence picture stretches into the band exactly like a room one");
+    assert_ne!(
+        mid_gw.canvas.as_raw(),
+        room_gw.canvas.as_raw(),
+        "the band actually switched to the sequence's own picture (84), not room 1's"
+    );
+}

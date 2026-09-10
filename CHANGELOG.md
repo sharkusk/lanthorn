@@ -204,6 +204,11 @@ Absolute URLs or no link.
   plays (Z-machine, Glulx and Scott Adams alike). Different from
   `/set-transcript`, which is the Z-machine's own `SCRIPT` stream and only
   ever carries what the game itself chose to write. (SQ-0410)
+- **The Hulk's opening cutscene now shows every scene.** Biting your lip in
+  the American S.A.G.A. edition of *The Hulk* — and any other moment across
+  these games that draws several pictures in a row — used to show only the
+  LAST one; now each scene appears in turn, waiting for you to press RETURN
+  before the next one shows, the way it always should have. (SQ-1487)
 
 ### Changed
 
