@@ -4822,6 +4822,23 @@ fourth is a code change.
     uses it — so the arity has to travel with the database the way §9's runtime
     differences do. Command 90 is a no-op for a host that draws no pictures, but
     it must still consume its operand.
+
+    **Implemented (SQ-1472).** `vm.rs`'s `Vm::run_commands` now branches on
+    `Database::saga_us.is_some()`: 89 consumes an operand and sets
+    `pending_picture` only for the reference format, and for a S.A.G.A.
+    database it takes none and leaves every field untouched (its drawing
+    effect stays undetermined); 90 consumes one operand and sets
+    `pending_picture` only for a S.A.G.A. database, through the same
+    `pending_picture`/`current_picture()` door opcode 89 already used —
+    waiting for ENTER is left to the host, the way opcode 88's pause always
+    has been. `decompile.rs`'s mnemonic table was fixed from the same
+    dialect check so a debug listing shows the right operand count too.
+    Verified against the real Atari/Apple II Adventureland and Pirate
+    Adventure databases: `RUB LAMP` (action 107) now drops item 48 (`*DIAMOND
+    RING*`) in the player's room and sets flag 8, and `SET SAIL` (action 104)
+    sets flag 4 and moves the pirate ship (item 37) to room 21 — both
+    matching `adv01.dat`/`adv02.dat` exactly, and both wrong (the golden
+    fish moved, flag 0 cleared; flag 37 set) with the arity reverted.
 11. **The oracle deserved to be written down, and now is.** §12.13 gained the
     per-release, per-table count of disagreements with the twin — fourteen rows
     by eight columns, exact counts rather than a floor — together with the two

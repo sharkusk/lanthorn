@@ -160,6 +160,13 @@ Absolute URLs or no link.
 
 ### Fixed
 
+- **In the disk editions of Adventureland and Pirate Adventure, a few
+  commands did the wrong thing.** Rubbing the lamp in Adventureland could
+  drop the wrong item and leave you in the dark instead of conjuring the
+  diamond ring, and setting sail in Pirate Adventure could set the wrong
+  flag — both games, and a few others in the same American S.A.G.A. disk
+  family, occasionally misread a command right after a picture-drawing one.
+  Every such command now runs correctly. (SQ-1472)
 - **Glulx text that a game filters through its own routine no longer gets cut
   off.** Some Glulx works route every character they print through a routine of
   their own — for special typography, for a cipher, for a character who speaks
