@@ -245,7 +245,7 @@ pub use saga_us::{
 };
 pub use scottfree_save::looks_like_scottfree_save;
 pub use ti994a::{looks_like_ti994a, parse_ti994a, Ti99Record, Ti99Script};
-pub use vm::{RestoreError, StepResult, Vm};
+pub use vm::{PictureShow, RestoreError, StepResult, Vm};
 pub use z80::{decompress_z80, looks_like_z80, Z80Error, IMAGE_LEN};
 pub use zx_mysterious::{
     looks_like_zx_mysterious, looks_like_zx_mysterious_z80, parse_zx_mysterious,

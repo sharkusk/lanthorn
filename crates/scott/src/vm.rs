@@ -117,6 +117,28 @@ impl std::fmt::Display for RestoreError {
 
 impl std::error::Error for RestoreError {}
 
+/// One `draw picture N` request opcode 90 queued during the CURRENT turn's
+/// action processing (US S.A.G.A. databases only, spec §12.8/§12.11) — the
+/// door for a scene that draws SEVERAL pictures in one turn, each waiting for
+/// the player to press ENTER before the next one shows (*The Hulk*'s "bite
+/// lip" opening cutscene is the specimen, SQ-1487). `output_len` is
+/// `self.out.len()` at the moment the opcode ran, so a host can split the
+/// turn's accumulated transcript at each picture and show only the text
+/// ahead of it before pausing.
+///
+/// Transient per-turn state, exactly like the opcode-89 override `Vm` keeps
+/// privately: drained by [`Vm::take_picture_shows`] and cleared at the top of
+/// every turn in [`Vm::step`] — **not** part of the snapshot/restore format.
+/// A `Vm` nobody drains never grows this past one turn's worth.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct PictureShow {
+    /// The picture number opcode 90 named.
+    pub picture: u16,
+    /// `self.out.len()` at the moment this opcode ran — where in the turn's
+    /// transcript this picture belongs.
+    pub output_len: usize,
+}
+
 /// A running Scott Adams game: a [`Database`] plus every piece of mutable
 /// play state it needs — item locations, the player's room, flags,
 /// counters, lamp fuel, and the PRNG. A host drives it through
@@ -147,6 +169,12 @@ pub struct Vm {
     // the default room picture until the next command. Cosmetic, host-read via
     // `current_picture`; excluded from snapshot/restore.
     pub(crate) pending_picture: Option<u16>,
+    // The sequence of opcode-90 "draw picture N" requests queued THIS turn
+    // (US S.A.G.A. databases only, spec §12.11, SQ-1487) — see
+    // `PictureShow`'s doc. Drained by `take_picture_shows`, cleared at the
+    // top of every turn alongside `pending_picture` above; transient host
+    // presentation state, excluded from snapshot/restore for the same reason.
+    pub(crate) pending_picture_shows: Vec<PictureShow>,
     // --- SQ-0464 debug-inspector support: fired-action tracing. Off by
     // default; every field below is a no-op / stays empty unless a host opts
     // in via `set_trace_fired`, so there is zero cost in normal play beyond a
@@ -302,6 +330,7 @@ impl Vm {
             pending_line: None,
             save_requested: false,
             pending_picture: None,
+            pending_picture_shows: Vec::new(),
             trace_fired,
             fired_actions: Vec::new(),
             ever_fired: HashSet::new(),
@@ -396,17 +425,30 @@ impl Vm {
     pub fn take_save_request(&mut self) -> bool {
         std::mem::take(&mut self.save_requested)
     }
-    /// The picture the host should display, or `None` for none.
+    /// Take (drain) this turn's queue of opcode-90 "draw picture N" requests
+    /// (US S.A.G.A. databases only, spec §12.11, SQ-1487) — see
+    /// [`PictureShow`]'s doc for the shape and [`Vm::current_picture`]'s doc
+    /// for why this is a SEPARATE door from opcode 89's. Empty for every
+    /// other dialect and for a turn that queued none. The host calls this
+    /// once, right after [`Vm::step`] — like [`Vm::take_save_request`], it
+    /// does not survive to the next call.
+    pub fn take_picture_shows(&mut self) -> Vec<PictureShow> {
+        std::mem::take(&mut self.pending_picture_shows)
+    }
+    /// The picture the host should display for the ROOM VIEW, or `None` for
+    /// none. Unaffected by opcode 90's queue (see [`Vm::take_picture_shows`]):
+    /// a host presenting a picture-show sequence tracks which picture is on
+    /// screen itself, one at a time, and calls this only once the sequence
+    /// has finished to resume the ordinary room view.
     ///
     /// Three cases, in this order:
     ///
     /// 1. An **override set this turn** by opcode 89 (reference-format
-    ///    databases) or opcode 90 (US S.A.G.A. databases,
-    ///    `Database::saga_us.is_some()` — spec §12.8/§12.11). It wins over
-    ///    darkness: it is a command the game issued deliberately, and §12.11
-    ///    has it drawn "over the whole graphics window" with the room view
-    ///    returning on the player's next ENTER — which is what the next turn
-    ///    clearing `pending_picture` produces.
+    ///    databases only — `Database::saga_us.is_none()`; a US S.A.G.A.
+    ///    database's own opcode 89 makes no state change at all, spec
+    ///    §12.8). It wins over darkness: it is a command the game issued
+    ///    deliberately, and the next turn clearing `pending_picture`
+    ///    reverts it to the room's own.
     /// 2. **Darkness.** Most dialects show nothing, and this answers `None`
     ///    for them. A US S.A.G.A. release instead draws a dedicated darkness
     ///    image: §12.11, "where other dialects paint black, these draw picture
@@ -636,8 +678,12 @@ impl Vm {
         }
         if let Some(cmd) = self.pending_line.take() {
             // A new command starts a fresh turn: drop any opcode-89 override from
-            // the previous turn so the picture reverts to the room's own.
+            // the previous turn so the picture reverts to the room's own, and any
+            // opcode-90 picture-show requests a host did not drain from the last
+            // turn (SQ-1487) — this turn's own action processing may queue a fresh
+            // sequence below.
             self.pending_picture = None;
+            self.pending_picture_shows.clear();
             self.run_turn(&cmd);
             if self.quit {
                 return StepResult::Quit;
@@ -979,14 +1025,24 @@ impl Vm {
                 // picture the operand names, over the whole graphics window,
                 // then wait for the player to press ENTER before the room
                 // view returns. This crate draws no pictures itself — like
-                // opcode 88's pause above, presenting one is the host's job
-                // — so this hands the operand to the host through the same
-                // `pending_picture`/`current_picture()` door opcode 89 uses
-                // above; waiting for ENTER is host UI, not VM state, exactly
-                // as opcode 88's timing is. The reference format never uses
-                // opcode 90 — it falls into the `_` arm below, a no-op.
+                // opcode 88's pause above, presenting one is the host's job.
+                //
+                // SQ-1487: a SINGLE action can run 90 more than once (*The
+                // Hulk*'s "bite lip" opening shows several scenes in
+                // sequence, each ENTER-gated) — `pending_picture` is one
+                // slot and a second 90 would silently overwrite the first,
+                // which is exactly the bug report. So this queues onto
+                // `pending_picture_shows` instead (a SEPARATE door from
+                // opcode 89's `pending_picture`/`current_picture()` one
+                // above) rather than setting `pending_picture` — a host
+                // drains the queue and presents each picture itself, one
+                // ENTER at a time; waiting for the keypress is host UI, not
+                // VM state, exactly as opcode 88's timing is. The reference
+                // format never uses opcode 90 — it falls into the `_` arm
+                // below, a no-op.
                 90 if self.db.saga_us.is_some() => {
-                    self.pending_picture = Some(p.next().unwrap_or(0));
+                    let picture = p.next().unwrap_or(0);
+                    self.pending_picture_shows.push(PictureShow { picture, output_len: self.out.len() });
                 }
                 _ => {} // 90..=101 unused (90 outside S.A.G.A.; 91..=101 always)
             }
@@ -2719,12 +2775,14 @@ mod tests {
 
     // §12.8/§12.11: in a S.A.G.A. database, 89 takes NO operand (its drawing
     // effect is undetermined and it makes no state change) and 90 takes ONE
-    // (draws the room-usage picture it names, via the same
-    // `pending_picture`/`current_picture()` door as the reference format's
-    // opcode 89 above). Both opcodes occur in the same action tables, so
-    // getting this backwards hands every later command in the record the
-    // wrong operand — this is the arity the falsifying example in §12.8
-    // (Adventureland's `RUB LAMP`, Pirate Adventure's `SET SAIL`) catches.
+    // (queues the room-usage picture it names onto `pending_picture_shows`,
+    // via `take_picture_shows` — SQ-1487 moved this off the
+    // `pending_picture`/`current_picture()` door opcode 89 above uses, since
+    // a single action can run 90 more than once in one turn). Both opcodes
+    // occur in the same action tables, so getting the arity backwards hands
+    // every later command in the record the wrong operand — this is the
+    // arity the falsifying example in §12.8 (Adventureland's `RUB LAMP`,
+    // Pirate Adventure's `SET SAIL`) catches.
     #[test]
     fn saga_us_op89_takes_no_operand_and_op90_takes_one() {
         let items: Vec<Item> = (0..7)
@@ -2734,7 +2792,11 @@ mod tests {
         // 89 (nothing), 58 <- first param, 90 draws the second param, 74 <- third.
         vm.run_commands(&[89, 58, 90, 74], &[5, 22, 6]);
         assert!(vm.flag_at(5), "58 got the FIRST param — S.A.G.A.'s 89 took none");
-        assert_eq!(vm.current_picture(), Some(22), "90 draws the operand AFTER 58's, not 89's");
+        assert_eq!(
+            vm.take_picture_shows(),
+            vec![PictureShow { picture: 22, output_len: 0 }],
+            "90 draws the operand AFTER 58's, not 89's"
+        );
         assert_eq!(vm.item_loc_at(6), CARRIED, "74 got the operand after 90's own, not stolen by 89");
     }
 
@@ -2757,16 +2819,69 @@ mod tests {
             Some(crate::DARKNESS_PICTURE as u16),
             "§12.11: the dedicated darkness image, not nothing"
         );
-        // An explicit opcode-90 draw still wins over darkness: it is a command
-        // the game issued this turn, drawn "over the whole graphics window".
+        // SQ-1487: an opcode-90 draw no longer reaches `current_picture` at
+        // all — it queues onto `pending_picture_shows` instead (a host
+        // presenting a picture-show sequence tracks the on-screen picture
+        // itself), so darkness's answer is unaffected by one having run.
         saga.run_commands(&[90, 0, 0, 0], &[22]);
-        assert_eq!(saga.current_picture(), Some(22), "90's operand beats the darkness image");
+        assert_eq!(
+            saga.current_picture(),
+            Some(crate::DARKNESS_PICTURE as u16),
+            "90 no longer overrides current_picture — it queues a show instead"
+        );
+        assert_eq!(saga.take_picture_shows(), vec![PictureShow { picture: 22, output_len: 0 }]);
 
         // Every other dialect: dark means no picture at all.
         let mut plain = vm_with(items, rooms4(), 2);
         assert_eq!(plain.current_picture(), Some(2));
         plain.flag_set(DARK_FLAG, true);
         assert_eq!(plain.current_picture(), None, "no darkness image outside the S.A.G.A. releases");
+    }
+
+    // SQ-1487 (user-reported): *The Hulk*'s "bite lip" opening runs opcode 90
+    // more than once in a SINGLE action, each followed by its own text —
+    // `pending_picture` being one slot meant the second 90 silently
+    // overwrote the first, so a host asking `current_picture()` only ever
+    // saw the LAST scene. `take_picture_shows` must return every request, in
+    // order, each carrying the transcript offset it ran at — so a host can
+    // split the turn's output and show each scene before its own picture.
+    #[test]
+    fn saga_us_op90_queues_every_picture_the_turn_draws_with_a_split_offset_each() {
+        let items: Vec<Item> = (0..1)
+            .map(|i| Item { text: format!("item{i}"), treasure: false, auto_noun: None, start_loc: 0 })
+            .collect();
+        let mut vm = saga_vm_with(items, rooms4(), 0);
+        vm.db.messages = vec!["".into(), "First scene.".into(), "Second scene.".into()];
+        vm.take_output(); // clear anything the constructor's opening pass printed
+        let room_picture_before = vm.current_picture();
+
+        // One action's 4 command slots: 90 draws picture 10, PRINT message 1,
+        // 90 draws picture 20, PRINT message 2 — the Hulk's own shape (several
+        // 90s in one turn, each followed by text).
+        vm.run_commands(&[90, 1, 90, 2], &[10, 20]);
+
+        let out = vm.take_output();
+        assert_eq!(out, "First scene.\nSecond scene.\n", "print_message terminates each with a newline");
+        assert_eq!(
+            vm.take_picture_shows(),
+            vec![
+                PictureShow { picture: 10, output_len: 0 },
+                PictureShow { picture: 20, output_len: "First scene.\n".len() },
+            ],
+            "both requests queued in order, with the offset each ran at — SQ-1487's bug \
+             was `pending_picture` holding only the LAST one"
+        );
+        assert_eq!(
+            vm.current_picture(),
+            room_picture_before,
+            "current_picture is untouched by opcode 90 — a host tracks the on-screen \
+             picture itself while presenting the queued shows"
+        );
+
+        // A fresh turn starts the queue empty again, exactly like `pending_picture`.
+        vm.supply_line("look");
+        vm.step();
+        assert!(vm.take_picture_shows().is_empty(), "a turn that ran no 90 queues nothing");
     }
 
     // §12.11's Hulk remap reaches `current_picture`, so a host asking "what
