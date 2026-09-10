@@ -1838,18 +1838,84 @@ mod tests {
             "family D's own canvas — the machine's hi-res page"
         );
         assert!(band.upscale, "the band fits it like any other bitmap source");
-        let mut seen = std::collections::HashSet::new();
-        let mut lit = 0usize;
+        let mut counts = std::collections::HashMap::new();
         for p in canvas.pixels() {
-            seen.insert((p.0[0], p.0[1], p.0[2]));
             assert_eq!(p.0[3], 255, "family D carries no transparent index");
-            if (p.0[0], p.0[1], p.0[2]) == scott::apple_pictures::INK {
-                lit += 1;
-            }
+            let rgb = (p.0[0], p.0[1], p.0[2]);
+            assert!(
+                scott::apple_pictures::PALETTE.contains(&rgb),
+                "{rgb:?} is not one of the six hi-res colours"
+            );
+            *counts.entry(rgb).or_insert(0usize) += 1;
         }
-        assert_eq!(seen.len(), 2, "line art: ink and ground, nothing else");
-        assert!(lit > 500, "only {lit} inked pixels, which is not a drawing");
-        assert!(lit < canvas.width() as usize * canvas.height() as usize / 2, "the canvas washed out");
+        // Room 11 is the forest floor, and it is COLOURED: an orange ground
+        // under a green canopy with black trunks, which is SQ-1489's paint
+        // model reaching the screen. Two colours would be the line art alone.
+        assert!(counts.len() >= 5, "only {} colours on the canvas", counts.len());
+        let orange = counts[&scott::apple_pictures::PALETTE[4]];
+        assert!(orange > 30_000, "the orange ground is only {orange} pixels");
+        let green = counts[&scott::apple_pictures::PALETTE[2]];
+        assert!(green > 2_000, "the green canopy is only {green} pixels");
+        let white = counts.get(&scott::apple_pictures::PALETTE[5]).copied().unwrap_or(0);
+        assert!(
+            white < canvas.width() as usize * canvas.height() as usize / 2,
+            "the canvas washed out to white"
+        );
+    }
+
+    /// One of the three **scrambled** releases — *The Count* — boots off its
+    /// boot side and draws the room artwork that lives on a side A with no
+    /// filesystem on it at all (SQ-1490).
+    ///
+    /// Both `honor_game_colours` modes, and the flag has no effect here for
+    /// the reason the family-C cases give: it governs TEXT-cell colour
+    /// resolution and a room-picture band is a raw RGBA canvas. Documented
+    /// rather than assumed.
+    #[test]
+    fn the_count_apple_start_room_draws_from_its_side_a_in_both_colour_modes() {
+        for honor_game_colours in [true, false] {
+            let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join(
+                "../../stories/scott-dialects/apple/Scott Adams Graphic Adventure 5 - \
+                 The Count v2.1-115 (4am crack) side B - boot.dsk",
+            );
+            if !path.exists() {
+                eprintln!("SKIP: no {} (gitignored commercial fixture)", path.display());
+                return;
+            }
+            let _ = honor_game_colours;
+            let mounted = crate::hints::load_mounted_story_full(&path, None)
+                .expect("the boot side mounts and holds one Scott database");
+            assert_eq!(
+                mounted.saga_pictures.len(),
+                26,
+                "the records found by header on The Count's side A (§8.4, §10.6)"
+            );
+            let crate::hints::LoadedStory::Scott(bytes) = mounted.story else {
+                panic!("the boot side's story is a Scott database");
+            };
+            let s = ScottSession::new_with_options(
+                bytes,
+                false,
+                None,
+                scott::Options::default(),
+                crate::graphics::ScottPictureSources::none()
+                    .with_saga_pictures(mounted.saga_pictures),
+            )
+            .expect("The Count boots off its own release disk");
+            let screen = s.screen();
+            let band = picture_band(&screen).expect("the start room has a picture band");
+            assert_eq!(
+                (band.canvas.width(), band.canvas.height()),
+                (280, 160),
+                "§8.4's nominal size, not the plain sub-variant's 192-row page"
+            );
+            let pixel = band.canvas.get_pixel(140, 80);
+            assert_eq!(
+                (pixel.0[0], pixel.0[1], pixel.0[2]),
+                scott::apple_pictures::PALETTE[4],
+                "the middle of the brass-bed room is orange, not an undrawn black"
+            );
+        }
     }
 
     /// Walking into another room draws that room's picture, which is the whole

@@ -463,6 +463,30 @@ pub fn image_extensions() -> impl Iterator<Item = &'static str> {
     FORMATS.iter().flat_map(|f| f.extensions.iter().copied())
 }
 
+/// The flat sector image of an Apple II 5.25-inch floppy that carries **no
+/// filesystem at all** — 35 tracks of 16 sectors of 256 bytes in DOS 3.3
+/// logical order, so `offset = track * 4096 + sector * 256` (SQ-1490).
+///
+/// [`DiskImage::detect`] answers `None` for such a disk, and rightly: it has
+/// no VTOC, no catalogue and nothing that says what is on it. But it is still
+/// a floppy with sectors on it, and some releases page data across those
+/// sectors with the layout in their own loader instead of in a filesystem —
+/// the three "scrambled" Apple II *Scott Adams Graphic Adventures*, whose
+/// room artwork sits on a side A shaped exactly like this
+/// (`scott-dialects-spec.md` §10.6). This is the door those callers need, and
+/// it deliberately says **nothing** about the contents: what the sectors hold
+/// is the caller's question, exactly as it is for [`crate::dos_order`]'s two
+/// re-orderings.
+///
+/// `None` for anything that is not the one length §7.4 gives a 5.25-inch dump,
+/// which is the whole of the test — a bit-preserving `.woz` has no sectors in
+/// it to hand back, and a nibble dump is 232,960 bytes and is named and
+/// refused rather than read as sector data.
+#[must_use]
+pub fn apple_raw_sectors(raw: &[u8]) -> Option<&[u8]> {
+    (raw.len() == crate::dos33::IMAGE_LEN).then_some(raw)
+}
+
 // ── The one table ─────────────────────────────────────────────────────────────
 
 /// One disk format: how to recognise it, how to open it, and what it implies.

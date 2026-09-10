@@ -166,8 +166,9 @@ are drawn at twice the horizontal detail to make up for it.
 differently.** The Commodore 64 *Hulk* is full-colour comic panels
 (`Pictures: S.A.G.A. (C64 strips, N pictures)`); the **Apple II** editions of
 *Adventureland*, *Pirate Adventure*, *Mission Impossible* and *Strange
-Odyssey* are white hi-res line drawings (`Pictures: S.A.G.A. (Apple II
-hi-res, N pictures)`), and they are worth a word because of where they live:
+Odyssey* are hi-res drawings in the machine's own six colours — black, purple,
+green, blue, orange and white (`Pictures: S.A.G.A. (Apple II hi-res, N
+pictures)`) — and they are worth a word because of where they live:
 an Apple II release is **two floppies**, the game on one and the pictures on
 the other. Hand lanthorn the boot side — the one with the game on it — and it
 finds the picture disk beside it in the same folder and draws from both, so
@@ -176,12 +177,12 @@ somewhere else and the info panel says `S.A.G.A. (not on this file)` rather
 than quietly playing as text.
 
 Three Apple II titles — *Voodoo Castle*, *The Count* and *Claymorgue Castle* —
-keep their room pictures in a scrambled form on a disk with no filesystem on
-it at all, and lanthorn can't read those yet. It says so
-(`S.A.G.A. (scrambled, not readable yet)`) instead of pretending the artwork
-is missing.
+were pressed differently again: their picture side has no filesystem on it at
+all, so there are no file names to look anything up by. lanthorn finds those
+drawings by the header each one carries and draws them like the rest, so all
+seven Apple II releases play with their artwork.
 
-The **Atari 8-bit** disks are in the same position, and it is worth saying
+The **Atari 8-bit** disks are the ones still waiting, and it is worth saying
 exactly why, because the reason turned out to be more interesting than
 expected. Their picture side has no filesystem either — nothing on it is
 *named*, so there is no catalogue to look a room up in. lanthorn can now read
@@ -193,8 +194,7 @@ order the pictures are stored — so rather than pair them up by guesswork and
 show you the wrong room, it goes on reporting them the way it always has.
 Meanwhile the other four Atari titles turn out not to keep bitmaps at all:
 *Adventureland*, *Pirate Adventure*, *Mission Impossible* and *Strange
-Odyssey* are the same white line drawings as their Apple II editions, drawn
-stroke by stroke.
+Odyssey* are the same stroke-by-stroke drawings as their Apple II editions.
 
 **What is lying around gets drawn, and so does what you are carrying.** These
 releases keep a separate little drawing for many of the objects in the game —

@@ -5205,21 +5205,16 @@ recorded here so the next reader of that section reads them together with it.
     columns, 160 rows, which is its stated 280 x 160. So the section describes
     a real format that this corpus carries only for the images those three
     releases keep BESIDE their room artwork, and the room artwork of the same
-    three sits on a side A with no filesystem on it at all, at the per-title
-    offsets §12.10 says are not recoverable (SQ-1490).
+    three sits on a side A with no filesystem on it at all — reachable after
+    all, by scan rather than by catalogue; see item 39 (SQ-1490).
 
-    **Three things about the format remain undetermined and are named rather
-    than guessed at** (SQ-1489): the difference between the two drawing
-    commands (both plainly draw — *Pirate Adventure*'s darkness card letters
-    with `0xC0` and *Adventureland*'s with `0xA0` — so a pen or colour
-    distinction is likely and nothing falsifies either); what a one-byte token
-    *says* beyond ending a path (92 distinct values occur, in short runs just
-    before a drawing command, which would fit a colour); and consequently what
-    an `0xE0` area is filled WITH. Read as a flood fill in a single ink,
-    **172 of the 314 pictures wash out** — *Adventureland*'s darkness card
-    opens with one before a line has been drawn, so its region is the whole
-    empty canvas — which is why lanthorn draws the line art and leaves the
-    areas unpainted rather than painting them wrongly.
+    **The three things this item left undetermined are settled, and the format
+    is in colour** — see item 38 below (SQ-1489). In short: `0xC0` is not a
+    second line command but a **paintbrush**; a bit-7-clear byte is an
+    **attribute** whose top three bits pair it with the drawing command it
+    feeds and whose low four bits are its operand; `0x60` is a **two-byte**
+    token naming a fill pattern; and the page starts **white**, which is why
+    reading it as blank inverted every picture.
 
 27. **§8.4's picture "lists" are not needed for the plain releases, and §12.10's
     "Rnnnn/Bnnnnn" is two rules, not one.** §8.4 requires "a hard-coded
@@ -5533,6 +5528,132 @@ together with it.
     and neither is settled. Settling it needs a frame of a record whose byte
     11 is neither, and `QUESTPR1.D64` has exactly one such record: `B01250R`,
     which item 30 says the game never draws (SQ-1491).
+
+38. **Family D's plain sub-variant is in COLOUR, and the page it draws on
+    starts WHITE** (SQ-1489). Item 26 settled the token framing and left three
+    things open — what tells `0xA0` from `0xC0`, what a bit-7-clear byte says
+    beyond ending a path, and what an `0xE0` area is filled with. All three
+    are measured now, and the answer to the third made the first two obvious:
+    **a bit-7-clear byte is an ATTRIBUTE token whose top three bits pair it
+    with the three-byte command it feeds** (`0x20` ↔ `0xA0`, `0x40` ↔ `0xC0`,
+    `0x60` ↔ `0xE0`) **and whose low four bits are its operand**.
+
+    | token | operand | effect |
+    |---|---|---|
+    | `0x00`-`0x1F` | — | **end of picture** |
+    | `0x20`\|*c* | Applesoft HCOLOR 0-7 | the colour `0xA0` draws lines in |
+    | `0x40`\|*n* | 0-7 | which of eight **brushes** `0xC0` stamps |
+    | `0x60`, then one more byte *v* | 0-107 | the **paint** `0xC0` and `0xE0` lay down |
+
+    And `0xC0` is not a second line command at all: it **stamps a 14 x 16
+    brush** — a disc of one of six radii, or one of two spatters — at (*x*,
+    *y*) in the current paint, and does not move the line pen, which is what
+    made it look like a line command that flung strokes across the picture.
+    `0xE0` floods the region containing its point with the same paint.
+
+    A **paint** is not a colour but a pair of pattern indices, one for even
+    rows and one for odd; a **pattern** is four bytes chosen by the screen byte
+    column modulo four, which is what keeps a colour's pixel parity across the
+    seven-pixel byte boundary. Patterns 0-7 are the eight Applesoft colours in
+    that form; 8-29 are hatches and dithers. So a paint can be a solid colour,
+    a two-row two-colour dither, or a diagonal hatch, and the artwork uses all
+    three.
+
+    **Both tables are in the releases' own `M3` file, which is byte-identical
+    on all four plain disks**: the 108 paint pairs at `$8F7C` and the 30
+    four-byte patterns at `$9054`, the first ending exactly where the second
+    begins. Two independent checks say the extents are right — the largest
+    paint operand anywhere in the corpus is `0x6B`, the last of 108, and the
+    byte after pattern 29 is the first instruction of the next routine. The
+    eight brushes are the 256 bytes at `$9500`, and the eight HCOLOR masks are
+    Applesoft's own `00 2A 55 7F 80 AA D5 FF`, read off the `FPBASIC` image the
+    same disks ship (they are also published, in the *Applesoft BASIC
+    Programmer's Reference Manual*'s HCOLOR table).
+
+    **The page starts filled with `$FF` — solid white.** The room-picture entry
+    point clears it that way before playing a stream, which is why so many
+    pictures open by flooding the canvas with a dark paint, and why reading the
+    ground as blank inverts every one of them: `R0100` then reads as dark
+    lettering on white instead of `IT'S TOO DARK!` in white on black. The
+    object-picture entry point clears nothing and reads the stream's first
+    three bytes as an anchor for compositing — but those three bytes are
+    shaped exactly like a move token, so a decoder that plays them as one puts
+    the artwork where it was authored.
+
+    Measured against item 26's "172 of 314 pictures wash out": under this model
+    **six** of the 314 resolve to a single flat colour, 118 of them use all six
+    of the machine's colours, and the Adventure International logo (index 99,
+    the same drawing on all four disks) comes out green, blue and orange.
+
+    **Still undetermined**: the flood fill's exact edge rule. The release's own
+    filler is a scanline walk whose stop test reads the pixel to the *left* of
+    the one being tested as well as the pixel itself; lanthorn spreads over lit
+    pixels and stops at unlit ones, which is that rule's plain meaning, so a
+    region reached only through a single-pixel gap may differ from the machine
+    by a few pixels.
+
+    Reading a release's own 6502 renderer is measurement of a **specimen** —
+    the same disks the artwork is on — and not a reading of any interpreter;
+    `docs/internals/clean-room.md` is the protocol this stayed inside.
+
+39. **§8.4's SCRAMBLED sub-variant is right, its per-release row table is the
+    standard hi-res interleave, and its "hard-coded per-title list" is a scan**
+    (SQ-1490). The three releases §7.4's string test flags — *Voodoo Castle*,
+    *The Count*, *Claymorgue Castle* — keep their room artwork on a side A with
+    no filesystem on it, which is why §12.10 calls those offsets "not
+    recoverable from the database". They are recoverable from the DISK. Three
+    measurements:
+
+    - **Every record announces itself.** All 97 open with §8.4's own four-byte
+      header and all 97 write the same one: `00 00 28 A0`, no offset, 40 byte
+      columns, 160 rows — §8.4's stated 280 x 160. Every record starts on a
+      **sector boundary** and they run in order from **track 1 sector 0**, so
+      the *n*-th header is picture *n*: 36 records on *Voodoo Castle*, 26 on
+      *The Count*, 35 on *Claymorgue Castle*.
+    - **The ordinal is the picture index**, checked at both ends of the
+      numbering and in the middle. Record 0 is §8.6's reserved darkness card
+      on all three; the record numbered with each release's LAST room is that
+      release's death card (*Voodoo Castle*'s 25 "lot of TROUBLE!", *The
+      Count*'s 22 "LOT OF TROUBLE!", *Claymorgue Castle*'s 32 "real mess!"),
+      which is what would fail if any spurious header earlier had shifted the
+      count; and *Claymorgue Castle*'s 17 "I'm underwater in thick murky
+      fluid" is a field of blue in 256 bytes, its 19 "hollow tree sign says
+      drop stars here" reads `LEAVE STARS HERE`, and its 29 is a green dragon.
+    - **§8.4's per-release row table does not exist as a per-release table.**
+      The section says the row address "is not computed but read from a
+      0x182-byte table taken off the game disk" at `M2` file offset `0x174B`.
+      Measured on all three: those 384 bytes are **byte-identical across the
+      three titles** and are exactly `1024 * (y mod 8) + 128 * ((y / 8) mod 8)
+      + 40 * (y / 64)` for every one of the 192 rows — the standard Apple II
+      high-resolution interleave, a lookup table for an address computation and
+      not a descrambling of anything. A decoder that computes the address reads
+      the same picture, and needs nothing off the boot side. (Only the two
+      bytes past `0x181` differ between the three, and they are not the table.)
+
+    §8.4's compression for this sub-variant is right as stated, and so is its
+    byte-pair placement with width and height as absolute limits. The records
+    are **nearly** packed tight — five to twenty-two sectors to the next header
+    — but not always, so a record's length is bounded rather than taken from
+    the gap: *Claymorgue Castle* leaves forty-one sectors after its title card.
+    The bound is one byte-pair token per output pair, `4 + 40 * 160`, because
+    the scheme cannot expand.
+
+    **What is not established here**: the §8.6 indices of the records PAST each
+    release's highest room number — ten on *Voodoo Castle*, three on *The
+    Count*, two on *Claymorgue Castle*, and object and title artwork by
+    inspection (the Adventure International title card is among them on all
+    three, but at the last record on two of them and the second-to-last on the
+    third, so its position is not a rule). lanthorn numbers every record by its
+    ordinal, which is right for every index a ROOM can ask for and is the only
+    lookup it performs (SQ-1499).
+
+    Two host consequences. `blorb::medium::apple_raw_sectors` is the door to a
+    5.25-inch side that `DiskImage::detect` rightly answers `None` for — it has
+    no VTOC and no catalogue — and it says nothing about the contents. And the
+    records are handed on under the ordinary Apple II room-picture NAME
+    (`R0503` and so on), so the room-to-picture lookup, the info panel's count
+    and the picker's label needed no change at all; the adventure number the
+    name carries is read off the boot side's own database.
 
 The in-memory model this document's dialects decode *to*, in that crate, is a
 database of rooms (six exits and a description, plus a flag for the leading-`*`

@@ -722,9 +722,10 @@ impl PictSource {
         let mut canvas = under.to_rgba8();
         for name in overlays {
             let Some(pic) = self.scott_record_picture(name) else { continue };
-            let Some(area) = pic.painted else { continue };
-            for y in area.top..=area.bottom.min(pic.height.saturating_sub(1)) {
-                for x in area.left..=area.right.min(pic.width.saturating_sub(1)) {
+            let Some(area) = pic.painted() else { continue };
+            let (width, height) = pic.dims();
+            for y in area.top..=area.bottom.min(height.saturating_sub(1)) {
+                for x in area.left..=area.right.min(width.saturating_sub(1)) {
                     if let (Some((r, g, b)), true) =
                         (pic.rgb(x, y), (x as u32) < canvas.width() && (y as u32) < canvas.height())
                     {
@@ -739,18 +740,23 @@ impl PictSource {
     /// Decode the record stored under `name` through whichever family this
     /// source holds. `None` for a name the container does not carry, or a
     /// record its own family's decoder refuses (§11).
-    fn scott_record_picture(&self, name: &str) -> Option<scott::saga_pictures::Picture> {
+    fn scott_record_picture(&self, name: &str) -> Option<OverlayRecord> {
         if let Some((files, release)) = &self.scott_saga {
             let record = files.record(name)?;
             return match release.platform {
-                scott::SagaPlatform::AppleII => {
-                    scott::decode_family_d(record, release.platform).ok()
+                // SQ-1489: family D answers a six-colour picture of its own
+                // rather than family C's four-value one, so an overlay off an
+                // Apple II disk arrives in the other arm of `OverlayRecord`.
+                scott::SagaPlatform::AppleII => scott::decode_family_d(record, release.platform)
+                    .ok()
+                    .map(OverlayRecord::HiRes),
+                platform => {
+                    scott::decode_family_c(record, platform).ok().map(OverlayRecord::Strips)
                 }
-                platform => scott::decode_family_c(record, platform).ok(),
             };
         }
         let (files, _) = self.scott_saga_dos.as_ref()?;
-        scott::decode_family_e(files.record(name)?).ok()
+        scott::decode_family_e(files.record(name)?).ok().map(OverlayRecord::Strips)
     }
 
     /// Resolve the picture source for `story_path` (SQ-0734's tiers 1 and 2).
@@ -2683,15 +2689,14 @@ fn scott_c64_image(list: &scott::c64::PictureList, scale: u32, platform: ScottFa
 /// which is what a picture number resolves to; §12.11's object overlays would
 /// need the composite this does not do (see the module's own note).
 fn scott_saga_image(record: &[u8], platform: scott::SagaPlatform) -> Option<DynamicImage> {
-    // SQ-1476: the Apple II releases are family D — a line-drawing opcode
-    // stream over the machine's own 280x192 hi-res canvas, nothing family C's
-    // strip decoder could stand in for — and every family answers the same
-    // `Picture`, so the conversion below is shared.
-    let pic = match platform {
-        scott::SagaPlatform::AppleII => scott::decode_family_d(record, platform).ok()?,
-        _ => scott::decode_family_c(record, platform).ok()?,
-    };
-    Some(picture_to_image(&pic))
+    // SQ-1476/SQ-1489: the Apple II releases are family D — an opcode stream
+    // played over the machine's own 280x192 hi-res page, nothing family C's
+    // strip decoder could stand in for, and six colours where family C has
+    // four — so it answers its own picture type and gets its own conversion.
+    if matches!(platform, scott::SagaPlatform::AppleII) {
+        return Some(hires_to_image(&scott::decode_family_d(record, platform).ok()?));
+    }
+    Some(picture_to_image(&scott::decode_family_c(record, platform).ok()?))
 }
 
 /// Decode one MS-DOS *Questprobe* **family-E** `.PAK` file (spec §8.5) to the
@@ -2715,6 +2720,67 @@ fn scott_dos_saga_image(record: &[u8]) -> Option<DynamicImage> {
 /// [`scott::saga_pictures::Picture`], so there is one conversion and not
 /// three.
 fn picture_to_image(pic: &scott::saga_pictures::Picture) -> DynamicImage {
+    let mut buf = RgbaImage::new(pic.width as u32, pic.height as u32);
+    for y in 0..pic.height {
+        for x in 0..pic.width {
+            let (r, g, b) = pic.rgb(x, y).unwrap_or((0, 0, 0));
+            buf.put_pixel(x as u32, y as u32, Rgba([r, g, b, 255]));
+        }
+    }
+    DynamicImage::ImageRgba8(buf)
+}
+
+/// One decoded S.A.G.A. record that is about to be composited as an object
+/// overlay (§12.11, SQ-1482) — which is either family C's or family E's
+/// four-value [`scott::saga_pictures::Picture`] or family D's six-colour
+/// [`scott::apple_pictures::HiResPicture`] (SQ-1489).
+///
+/// The composite asks each record three things — how big it is, which
+/// rectangle it painted, and what colour a pixel is — and both types answer
+/// all three; this is that shared shape, so the paste loop is written once.
+enum OverlayRecord {
+    /// Family C or family E: four palette entries, four stored colour bytes.
+    Strips(scott::saga_pictures::Picture),
+    /// Family D: the Apple II high-resolution page, six colours.
+    HiRes(scott::apple_pictures::HiResPicture),
+}
+
+impl OverlayRecord {
+    /// The rectangle this record's own pixels cover, or `None` if it drew
+    /// nothing — everything outside it must not be pasted, or a postage-stamp
+    /// overlay blanks the room around it.
+    fn painted(&self) -> Option<scott::saga_pictures::Painted> {
+        match self {
+            OverlayRecord::Strips(p) => p.painted,
+            OverlayRecord::HiRes(p) => p.painted,
+        }
+    }
+
+    /// `(width, height)` in pixels.
+    fn dims(&self) -> (usize, usize) {
+        match self {
+            OverlayRecord::Strips(p) => (p.width, p.height),
+            OverlayRecord::HiRes(p) => (p.width, p.height),
+        }
+    }
+
+    /// The colour at `(x, y)`, or `None` off the canvas.
+    fn rgb(&self, x: usize, y: usize) -> Option<scott::saga_pictures::Rgb> {
+        match self {
+            OverlayRecord::Strips(p) => p.rgb(x, y),
+            OverlayRecord::HiRes(p) => p.rgb(x, y),
+        }
+    }
+}
+
+/// One decoded family-D picture — the Apple II hi-res page — as an opaque
+/// RGBA image (SQ-1489).
+///
+/// Separate from [`picture_to_image`] because family D answers
+/// [`scott::apple_pictures::HiResPicture`], whose pixels index a six-colour
+/// palette rather than family C's four. Fully opaque for the same reason the
+/// others are: every pixel of a hi-res page has a colour, and black is one.
+fn hires_to_image(pic: &scott::apple_pictures::HiResPicture) -> DynamicImage {
     let mut buf = RgbaImage::new(pic.width as u32, pic.height as u32);
     for y in 0..pic.height {
         for x in 0..pic.width {
