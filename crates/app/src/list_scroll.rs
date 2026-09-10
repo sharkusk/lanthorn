@@ -86,17 +86,31 @@ impl ListScroll {
         self.ensure_visible_and_arm(viewport, anim);
     }
 
-    /// Land on `idx` (clamped) with the offset pinned to it and no animation —
-    /// for priming a freshly built list before the first frame has measured a
-    /// real viewport (the story picker restoring where the player was,
-    /// SQ-1474). `offset == selected` keeps the row visible whatever the
-    /// eventual viewport turns out to be (`ensure_visible`'s invariant holds
-    /// trivially for any `viewport >= 1`); ordinary navigation corrects the
-    /// offset from there exactly as it always has.
-    pub fn jump_to(&mut self, idx: usize) {
+    /// Land on `idx` (clamped) with the offset set `rows_from_top` rows above
+    /// it, and no animation — for priming a freshly built list before the
+    /// first frame has measured a real viewport: the story picker restoring
+    /// where the player was, at the same distance from the top of the
+    /// viewport it had at launch (SQ-1474, SQ-1479), rather than pinning the
+    /// row to row one regardless of where it was. `rows_from_top == 0`
+    /// reproduces the old pin-to-top behaviour exactly.
+    ///
+    /// `rows_from_top` may not fit whatever viewport the first frame turns
+    /// out to measure (a shorter terminal than the one the distance was
+    /// recorded on) — [`Self::clamp_visible`], called from that frame once it
+    /// knows the real size, is what corrects that.
+    pub fn prime(&mut self, idx: usize, rows_from_top: usize) {
         self.selected = idx.min(self.total.saturating_sub(1));
-        self.offset = self.selected;
+        self.offset = self.selected.saturating_sub(rows_from_top);
         self.anim = None;
+    }
+
+    /// Clamp the offset into `viewport` so `selected` stays visible, with no
+    /// animation. A no-op once the offset already satisfies that — which it
+    /// does after any ordinary navigation — so it is safe to call on every
+    /// frame; the one frame it isn't a no-op is the first one after
+    /// [`Self::prime`], when the real viewport wasn't known yet (SQ-1479).
+    pub fn clamp_visible(&mut self, viewport: usize) {
+        self.offset = ensure_visible(self.offset, self.selected, viewport);
     }
 
     /// Move the selection by `delta` (clamped to `[0, total-1]`), keeping it visible.
@@ -462,13 +476,14 @@ mod tests {
         assert_eq!(l.selected, 9, "clamped into the new, shorter list before moving");
     }
 
-    // ── `jump_to` (SQ-1474): the story picker's no-viewport-yet priming jump ──
+    // ── `prime` (SQ-1474, SQ-1479): the story picker's no-viewport-yet
+    // priming jump, at a remembered distance from the top of the viewport ──
 
     #[test]
-    fn jump_to_pins_the_row_visible_for_any_later_viewport() {
+    fn prime_at_zero_distance_pins_the_row_exactly_like_the_old_jump_to() {
         let mut l = ListScroll::new();
         l.len(50);
-        l.jump_to(37);
+        l.prime(37, 0);
         assert_eq!(l.selected, 37);
         // offset == selected: `ensure_visible`'s invariant (offset <= selected <
         // offset + viewport) holds for every viewport >= 1, not just the one
@@ -479,11 +494,56 @@ mod tests {
     }
 
     #[test]
-    fn jump_to_clamps_into_the_current_list() {
+    fn prime_places_the_offset_a_distance_above_the_selected_row() {
+        let mut l = ListScroll::new();
+        l.len(50);
+        l.prime(37, 5);
+        assert_eq!(l.selected, 37);
+        assert_eq!(l.target_offset(), 32, "offset = selected - rows_from_top");
+        assert_eq!(l.display_offset(), 32, "no easing on the priming frame");
+        assert!(!l.has_active_animation());
+    }
+
+    #[test]
+    fn prime_clamps_into_the_current_list() {
         let mut l = ListScroll::new();
         l.len(10);
-        l.jump_to(999);
+        l.prime(999, 3);
         assert_eq!(l.selected, 9, "clamped to the last row rather than panicking");
-        assert_eq!(l.target_offset(), 9);
+        assert_eq!(l.target_offset(), 6);
+    }
+
+    #[test]
+    fn prime_distance_larger_than_selected_saturates_to_the_top() {
+        let mut l = ListScroll::new();
+        l.len(50);
+        l.prime(2, 10); // rows_from_top > selected
+        assert_eq!(l.selected, 2);
+        assert_eq!(l.target_offset(), 0, "saturating_sub floors at 0, never panics");
+    }
+
+    // ── `clamp_visible` (SQ-1479): corrects a `prime()` distance that a
+    // smaller-than-expected first viewport can't actually show ─────────────
+
+    #[test]
+    fn clamp_visible_scrolls_a_too_far_primed_row_back_into_a_small_viewport() {
+        let mut l = ListScroll::new();
+        l.len(50);
+        l.prime(37, 20); // offset = 17, viewport turns out to be only 5
+        assert_eq!(l.target_offset(), 17);
+        l.clamp_visible(5);
+        // selected (37) must land within [offset, offset+5) — it doesn't at
+        // offset 17, so the row is scrolled to the viewport's bottom edge.
+        assert_eq!(l.target_offset(), 33, "37 + 1 - 5 = 33: minimal scroll to show it");
+        assert!(l.target_offset() <= 37 && 37 < l.target_offset() + 5, "row visible after clamping");
+    }
+
+    #[test]
+    fn clamp_visible_is_a_no_op_once_the_offset_already_fits() {
+        let mut l = ListScroll::new();
+        l.len(50);
+        l.prime(37, 2); // offset = 35, well within any viewport >= 3
+        l.clamp_visible(10);
+        assert_eq!(l.target_offset(), 35, "already visible: nothing to correct");
     }
 }

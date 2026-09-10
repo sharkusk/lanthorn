@@ -214,9 +214,12 @@ Absolute URLs or no link.
   launched from a sub-folder or from one game on a multi-story disk image or
   ZIP — you'd have to navigate all the way back in. Now it puts the cursor
   back on the exact game you were playing, in the folder (or disk/ZIP listing)
-  it came from. If that game is no longer there (deleted, or its disk image
-  moved), you land on the nearest remaining game instead of jumping to the
-  top. (SQ-1474)
+  it came from, with the list scrolled back to the same spot too — if you
+  launched from several screens down, or from the cover gallery, that's
+  exactly where you land again, not snapped back to the top of the view. If
+  that game is no longer there (deleted, or its disk image moved), you land
+  on the nearest remaining game instead of jumping to the top. (SQ-1474,
+  SQ-1479)
 - **Your typed answers are no longer invisible in Glulx games that use a light
   background, such as Counterfeit Monkey.** Games print your own typed
   commands back into the transcript without naming a colour for them, trusting
