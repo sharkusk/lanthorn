@@ -957,6 +957,11 @@ pub(crate) fn boot_story(
     // outrank the sidecar key; parked on `cfg` so a restart re-resolves the same
     // archive instead of quietly reverting to the Blorb.
     cfg.pictures_override = overrides.pictures.clone();
+    // SQ-1473: same mechanism, for the Scott C64 vector artwork's resolution —
+    // a choice the launch-options dialog made and the player did not persist
+    // rides with the story for the session, so `@restart` draws the same
+    // resolution rather than quietly reverting to the default.
+    cfg.scott_picture_resolution_override = overrides.scott_picture_resolution;
     let picture_override = if cfg.images {
         app::graphics::PictureOverride::resolve_with_session(
             &story_path,
@@ -1646,6 +1651,11 @@ pub(crate) fn boot_story(
                     (f.width as u32, f.height as u32)
                 })
                 .unwrap_or(app::scott_session::ScottSession::FALLBACK_CHAR_PX),
+            // SQ-1473: this launch's choice, else this story's own sidecar,
+            // else the default (hi-res).
+            cfg.scott_picture_resolution_override
+                .or_else(|| app::styles::read_per_game_scott_picture_resolution(&game_dir))
+                .unwrap_or_default(),
         ) {
             Ok(s) => Box::new(s),
             Err(e) => {

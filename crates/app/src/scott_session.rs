@@ -137,6 +137,7 @@ impl ScottSession {
             random_seed,
             scott::Options::default(),
             ScottSession::FALLBACK_CHAR_PX,
+            crate::graphics::ScottPictureResolution::default(),
         )
     }
 
@@ -162,6 +163,12 @@ impl ScottSession {
     /// many device pixels a room picture will be drawn into (SQ-1467, see
     /// `crate::graphics::scott_c64_scale`). It is a constructor argument for
     /// the same reason `options` is: the artwork is decoded here, once.
+    ///
+    /// `picture_resolution` is the player's choice of how to draw the C64
+    /// vector artwork — the launch-options dialog's "Picture resolution" row,
+    /// this story's own per-game sidecar, or the default (SQ-1473). Meaningless
+    /// (and unread) for every other Scott story: a Blorb's pictures are
+    /// pre-rendered bitmaps with no second resolution to choose.
     pub fn new_with_options(
         bytes: Vec<u8>,
         pict_blorb: Option<blorb::Blorb>,
@@ -169,6 +176,7 @@ impl ScottSession {
         random_seed: Option<u32>,
         options: scott::Options,
         char_px: (u32, u32),
+        picture_resolution: crate::graphics::ScottPictureResolution,
     ) -> Result<ScottSession, String> {
         // `Database::parse` takes raw bytes (SQ-1412), so a Latin-1 or
         // otherwise non-UTF-8 `.dat` loads here instead of being rejected by
@@ -203,7 +211,11 @@ impl ScottSession {
                 .filter(|(image, at)| scott::c64::looks_like_c64_mysterious(image, *at))
                 .and_then(|(image, at)| scott::c64::decode_family_b_picture_lists(image, at).ok())
                 .map(|lists| {
-                    PictSource::from_scott_c64(lists, u32::from(PICTURE_ROWS) * char_px.1)
+                    PictSource::from_scott_c64(
+                        lists,
+                        u32::from(PICTURE_ROWS) * char_px.1,
+                        picture_resolution,
+                    )
                 })
                 .unwrap_or_else(|| PictSource::new(None)),
         };
@@ -815,8 +827,12 @@ mod tests {
 
     /// A session on this PRG with the terminal cell size a caller chooses,
     /// which is the only input to how finely the C64 artwork is drawn
-    /// (SQ-1467).
-    fn baton_session(bytes: Vec<u8>, char_px: (u32, u32)) -> ScottSession {
+    /// (SQ-1467) when `resolution` is `HiRes`.
+    fn baton_session(
+        bytes: Vec<u8>,
+        char_px: (u32, u32),
+        resolution: crate::graphics::ScottPictureResolution,
+    ) -> ScottSession {
         ScottSession::new_with_options(
             bytes,
             None,
@@ -824,6 +840,7 @@ mod tests {
             None,
             scott::Options::default(),
             char_px,
+            resolution,
         )
         .expect("BATON.prg loads")
     }
@@ -866,17 +883,54 @@ mod tests {
         let Some(bytes) = baton_prg() else { return };
         // 16 rows of an 8-pixel cell is 128 device pixels: 128/94 rounds up to
         // 2. Half the height, one step less resolution.
-        let small = baton_session(bytes.clone(), (8, 8));
+        let small = baton_session(bytes.clone(), (8, 8), crate::graphics::ScottPictureResolution::HiRes);
         let m = small.screen();
         let gw = picture_band(&m).expect("a picture band");
         assert_eq!(gw.canvas.height(), scott::c64::PICTURE_HEIGHT as u32 * 2, "8px cell → 2x");
 
         // …and an absurdly tall cell is capped rather than obeyed: 16 x 40 is
         // 640 device pixels, which would ask for 7.
-        let huge = baton_session(bytes, (20, 40));
+        let huge = baton_session(bytes, (20, 40), crate::graphics::ScottPictureResolution::HiRes);
         let m = huge.screen();
         let gw = picture_band(&m).expect("a picture band");
         assert_eq!(gw.canvas.height(), scott::c64::PICTURE_HEIGHT as u32 * 4, "capped at 4x");
+    }
+
+    /// SQ-1473: the player's "original" choice ignores the band entirely and
+    /// draws the release's own 255x94 canvas — scale 1 — whatever the
+    /// terminal's cell size is; "hi-res" (the default) is the band-fitted
+    /// supersample this file's other cases already pin.
+    #[test]
+    fn original_resolution_draws_the_native_255x94_canvas_at_any_cell_size() {
+        let Some(bytes) = baton_prg() else { return };
+        let original =
+            baton_session(bytes.clone(), (8, 16), crate::graphics::ScottPictureResolution::Original);
+        let m = original.screen();
+        let gw = picture_band(&m).expect("a picture band");
+        assert_eq!(
+            (gw.canvas.width(), gw.canvas.height()),
+            (scott::c64::PICTURE_WIDTH as u32, scott::c64::PICTURE_HEIGHT as u32),
+            "original resolution is the native canvas, unscaled"
+        );
+
+        // The same band, same cell size, drawn hi-res instead: a bigger
+        // placed image — the whole point of the choice — but the SAME room's
+        // band geometry (the reserved row count/window shape never moves).
+        let hires = baton_session(bytes, (8, 16), crate::graphics::ScottPictureResolution::HiRes);
+        let m2 = hires.screen();
+        let gw2 = picture_band(&m2).expect("a picture band");
+        assert!(
+            gw2.canvas.width() > gw.canvas.width() && gw2.canvas.height() > gw.canvas.height(),
+            "hi-res must be larger than original at the same cell size"
+        );
+        assert_eq!(gw.upscale, gw2.upscale, "the band's own layout is unaffected by the resolution choice");
+
+        // `/dump-windows` names the resolution actually drawn (SQ-1473), the
+        // same `source=native C64 x{scale}` line `window_dump`'s doc promises.
+        let dump = original.window_dump().join("\n");
+        assert!(dump.contains("source=native C64 x1"), "original resolution dumps x1: {dump:?}");
+        let dump2 = hires.window_dump().join("\n");
+        assert!(dump2.contains("source=native C64 x3"), "8x16 cell hi-res dumps x3: {dump2:?}");
     }
 
     #[test]

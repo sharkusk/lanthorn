@@ -76,6 +76,17 @@ Absolute URLs or no link.
   follows the line it belongs to. Every filled region still ends up exactly
   where the Commodore 64 put it, checked picture by picture across all eleven
   games. (SQ-1467)
+- **The picker now tells you which Scott Adams games have pictures, and what
+  kind.** A story's info panel names its artwork — the Commodore 64
+  *Mysterious Adventures*' own line-drawn pictures, a Blorb's pre-rendered
+  ones, or a S.A.G.A. disk game whose pictures lanthorn can't draw yet — so
+  you know what you're getting before you press Play.
+- **And you can choose how sharp those Commodore 64 pictures are drawn.**
+  Launch options for one of the *Mysterious Adventures* games now offers a
+  **Picture resolution** row: hi-res (the default, as fine as your terminal's
+  picture band allows) or the release's own original, unscaled resolution —
+  the same choice, tick-to-keep or one-launch-only, as every other row in
+  that dialog. (SQ-1473)
 - **Three more kinds of original disk now open.** Atari 8-bit floppies
   (`.atr`), Apple II DOS 3.3 floppies (`.dsk`) and Atari 8-bit loadable
   binaries (`.xex`) mount like every other release medium and list the

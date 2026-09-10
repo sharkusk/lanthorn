@@ -161,6 +161,7 @@ mod tests {
                 ifid: format!("IFID-{release}"),
                 features: Features::default(),
                 self_blorb: None,
+                scott_pictures: None,
                 disk_image: None,
                 disk_entry: disk_entry.map(str::to_string),
                 author: None,

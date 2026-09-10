@@ -125,6 +125,18 @@ bottom and the choice is written into the story's sidecar so it holds for
 every later launch; leave it clear and it lasts for this one only. Plain
 `Enter` never opens it — you only meet the dialog when you ask.
 
+**Scott Adams games with their own pictures.** The Commodore 64 pressing of
+Brian Howarth's *Mysterious Adventures* series draws its own line-art room
+pictures straight off the disk — no Blorb needed. The picker's info panel
+says so (`Pictures: native C64 (vector, N rooms)`), and opening launch
+options for one of these adds a **Picture resolution** row: `hi-res` (the
+default, drawn as sharp as the picture band your terminal cell allows) or
+`original`, the release's own unscaled canvas. It works exactly like the
+rows above it — pick one, tick the box to keep it for every later launch. A
+story whose pictures ship pre-rendered in a Blorb, or a US S.A.G.A. release
+whose artwork lanthorn doesn't draw yet, shows no such row: there is nothing
+to choose a resolution for.
+
 ## Going deeper
 
 - [v6 graphics](../internals/v6-graphics.md) — render modes, the pixel lock, and period fonts in full

@@ -998,6 +998,18 @@ fn open_launch_options(
     let z_version = matches!(entry.meta.engine, app::picker::Engine::ZCode)
         .then(|| entry.meta.version.as_deref().and_then(|v| v.parse::<u8>().ok()))
         .flatten();
+    // SQ-1473: the picture-resolution row exists only for a Scott entry with
+    // native C64 vector art (`ScottPictures::NativeC64`) — a Blorb's pictures
+    // are pre-rendered bitmaps with no second resolution to offer, and every
+    // other engine has nothing here at all. Same precedence as the
+    // interpreter number just above: this session's own choice, else the
+    // sidecar, else the default (hi-res).
+    let scott_native_pictures =
+        entry.meta.scott_pictures.is_some_and(app::picker::ScottPictures::is_native_c64);
+    let inherited_resolution = cfg
+        .scott_picture_resolution_override
+        .or_else(|| app::styles::read_per_game_scott_picture_resolution(&game_dir))
+        .unwrap_or_default();
     app::launch_options::LaunchOptionsState::new(
         &entry.title,
         &entry.path,
@@ -1007,6 +1019,7 @@ fn open_launch_options(
         entry.meta.disk_image,
     )
     .on_disk_entry(entry.meta.disk_entry.as_deref())
+    .with_scott_resolution(scott_native_pictures, inherited_resolution)
 }
 
 /// Where one wheel notch over the picker goes.
@@ -3578,6 +3591,13 @@ fn draw_info_panel(
     if !feats.is_empty() {
         lines.push((format!("Features: {}", feats.join(" ")), story_info_value));
     }
+    // Scott Adams picture provenance (SQ-1473): what this story's own graphics
+    // are, resolved once at scan time (`picker::scott_pictures`) rather than
+    // guessed here. `None` — a non-Scott story, or a text-only `.dat` — prints
+    // no line at all, exactly like an absent `Features:` line above.
+    if let Some(sp) = meta.scott_pictures {
+        lines.push((format!("Pictures: {}", scott_pictures_label(sp)), story_info_value));
+    }
 
     // Detected picture archives (SQ-0789). Read-only inventory: what art this
     // story has beside it, and which of it is actually in force. The list comes
@@ -4163,6 +4183,19 @@ fn feature_words(f: &app::picker::Features, aux: Option<&app::picker::StoryAux>)
     v
 }
 
+/// The info panel's "Pictures:" wording for a Scott entry (SQ-1473) — the
+/// panel's own voice, matching the terse phrase-fragments `feature_words`
+/// prints above it rather than a full sentence.
+fn scott_pictures_label(sp: app::picker::ScottPictures) -> String {
+    match sp {
+        app::picker::ScottPictures::NativeC64 { pictures } => {
+            format!("native C64 (vector, {pictures} rooms)")
+        }
+        app::picker::ScottPictures::Blorb => "Blorb".to_string(),
+        app::picker::ScottPictures::SagaUsUndrawn => "S.A.G.A. (not yet drawn)".to_string(),
+    }
+}
+
 /// Selection + status line after an IFDB download's rescan (SQ-0659).
 ///
 /// `found` is the downloaded file's position in the rescanned list; `previous`
@@ -4384,7 +4417,7 @@ mod tests {
         let meta = |engine: Engine, version: Option<&str>| StoryMeta {
             size_bytes: 0, story_bytes: 0, modified: None, engine, format: String::new(),
             version: version.map(String::from), serial: None, release: None, ifid: String::new(),
-            features: Features::default(), self_blorb: None, disk_image: None, disk_entry: None,
+            features: Features::default(), self_blorb: None, scott_pictures: None, disk_image: None, disk_entry: None,
             author: None, year: None,
             genre: None, language: None, description: None, ifdb_link: None, ifdb_rating: None, ifdb_rating_count: None, fetch_not_found: false,
         };
@@ -4414,7 +4447,7 @@ mod tests {
         let meta = |disk_image: Option<DiskImage>| StoryMeta {
             size_bytes: 0, story_bytes: 0, modified: None, engine: Engine::ZCode, format: String::new(),
             version: Some("6".into()), serial: None, release: None, ifid: String::new(),
-            features: Features::default(), self_blorb: None, disk_image, disk_entry: None,
+            features: Features::default(), self_blorb: None, scott_pictures: None, disk_image, disk_entry: None,
             author: None, year: None,
             genre: None, language: None, description: None, ifdb_link: None, ifdb_rating: None, ifdb_rating_count: None, fetch_not_found: false,
         };
@@ -4513,7 +4546,7 @@ mod tests {
             meta: StoryMeta {
                 size_bytes: 1, story_bytes: 1, modified: None, engine, format: "Z-code".into(),
                 version: None, serial: None, release: None, ifid: title.into(),
-                features: Features::default(), self_blorb: None, disk_image: None, disk_entry: None,
+                features: Features::default(), self_blorb: None, scott_pictures: None, disk_image: None, disk_entry: None,
                 author: None, year: None, genre: None, language: None, description: None, ifdb_link: None, ifdb_rating: None, ifdb_rating_count: None, fetch_not_found: false,
             },
             hint_sidecar: None,
@@ -4533,7 +4566,7 @@ mod tests {
             meta: StoryMeta {
                 size_bytes: 1, story_bytes: 1, modified: None, engine: Engine::ZCode, format: "Z-code".into(),
                 version: None, serial: None, release: None, ifid: title.into(),
-                features: Features::default(), self_blorb: None, disk_image: None, disk_entry: None,
+                features: Features::default(), self_blorb: None, scott_pictures: None, disk_image: None, disk_entry: None,
                 author: author.map(String::from), year: year.map(String::from),
                 genre: None, language: None, description: None, ifdb_link: None, ifdb_rating: None, ifdb_rating_count: None, fetch_not_found: false,
             },
@@ -5351,7 +5384,7 @@ mod tests {
             size_bytes: 0, story_bytes: 0, modified: None, engine: app::picker::Engine::ZCode,
             format: "Z-code".into(), version: Some("3".into()), serial: None, release: None,
             ifid: "ZCODE-88-840726".into(), features: app::picker::Features::default(),
-            self_blorb: None, disk_image: None, disk_entry: None, author: None, year: None, genre: None, language: None,
+            self_blorb: None, scott_pictures: None, disk_image: None, disk_entry: None, author: None, year: None, genre: None, language: None,
             description: None, ifdb_link: None, ifdb_rating: None, ifdb_rating_count: None, fetch_not_found: false,
         };
         let area = Rect::new(0, 0, 40, 12);
@@ -5394,6 +5427,7 @@ mod tests {
                     detail: Some("15.4 kHz · 8-bit · mono · 2.2s".into()),
                 },
             ]),
+            scott_pictures: None,
             author: None, year: None, genre: None, language: None, description: None, ifdb_link: None, ifdb_rating: None, ifdb_rating_count: None, fetch_not_found: false,
         };
         let game_dir = std::path::PathBuf::from("/tmp/lanthorn-info-panel-saves/zork1.z3");
@@ -5539,6 +5573,7 @@ mod tests {
             disk_image: None,
             disk_entry: Some("LEATHRGODDESSES".into()),
             self_blorb: None,
+            scott_pictures: None,
             author: None, year: None, genre: None, language: None, description: None,
             ifdb_link: None, ifdb_rating: None, ifdb_rating_count: None, fetch_not_found: false,
         }
@@ -5647,7 +5682,7 @@ mod tests {
             release: Some(88),
             ifid: "ZCODE-88-840726".into(),
             features: app::picker::Features::default(),
-            disk_image: None, disk_entry: None, self_blorb: None,
+            disk_image: None, disk_entry: None, self_blorb: None, scott_pictures: None,
             author: None, year: None, genre: None, language: None, description: None,
             ifdb_link: None, ifdb_rating: None, ifdb_rating_count: None, fetch_not_found: false,
         };
@@ -5855,6 +5890,7 @@ mod tests {
             ifid: "ZCODE-88-840726".into(),
             features: app::picker::Features::default(),
             self_blorb: Some(chunks),
+            scott_pictures: None,
             disk_image: None,
             disk_entry: None,
             author: None, year: None, genre: None, language: None, description: None, ifdb_link: None, ifdb_rating: None, ifdb_rating_count: None, fetch_not_found: false,
@@ -5893,9 +5929,62 @@ mod tests {
             size_bytes: 1, story_bytes: 1, modified: None, engine: app::picker::Engine::Glulx,
             format: "Blorb (Glulx)".into(), version: Some("3.1.2".into()),
             serial: None, release: None, ifid: "IFID-X".into(),
-            features: app::picker::Features::default(), self_blorb: None, disk_image: None, disk_entry: None,
+            features: app::picker::Features::default(), self_blorb: None, scott_pictures: None, disk_image: None, disk_entry: None,
             author: None, year: None, genre: None, language: None, description: None, ifdb_link: None, ifdb_rating: None, ifdb_rating_count: None, fetch_not_found: false,
         }
+    }
+
+    /// A hand-built Scott entry, its `scott_pictures` the only thing that
+    /// varies between the two cases the next test needs.
+    fn scott_entry_with_pictures(
+        path: &std::path::Path,
+        scott_pictures: Option<app::picker::ScottPictures>,
+    ) -> app::picker::StoryEntry {
+        app::picker::StoryEntry {
+            path: path.to_path_buf(),
+            title: "Story".into(),
+            filename: "story.prg".into(),
+            meta: app::picker::StoryMeta {
+                size_bytes: 1, story_bytes: 1, modified: None, engine: app::picker::Engine::Scott,
+                format: "Scott Adams".into(), version: None, serial: None, release: None,
+                ifid: "IFID-SCOTT".into(), features: app::picker::Features::default(),
+                self_blorb: None, scott_pictures, disk_image: None, disk_entry: None,
+                author: None, year: None, genre: None, language: None, description: None,
+                ifdb_link: None, ifdb_rating: None, ifdb_rating_count: None, fetch_not_found: false,
+            },
+            hint_sidecar: None,
+            kind: app::picker::RowKind::Story,
+        }
+    }
+
+    /// SQ-1473: `open_launch_options` — the one seam both the keyboard
+    /// (Shift-Enter) and mouse (double right-click) gestures go through — gates
+    /// the picture-resolution row on `entry.meta.scott_pictures` exactly as the
+    /// info panel's "Pictures:" row does, so "the choice reaches the session"
+    /// starts from the same fact both features read.
+    #[test]
+    fn open_launch_options_gates_the_resolution_row_on_the_entrys_own_pictures_kind() {
+        let dir = temp_dir("open-launch-options-gate");
+        let story = dir.join("story.prg");
+        std::fs::write(&story, b"x").unwrap();
+        let cfg = app::config::Config::default();
+
+        let native = scott_entry_with_pictures(
+            &story,
+            Some(app::picker::ScottPictures::NativeC64 { pictures: 11 }),
+        );
+        let st = super::open_launch_options(&native, &cfg, &dir);
+        assert!(st.scott_native_pictures, "a native C64 entry must offer the row");
+
+        let blorb = scott_entry_with_pictures(&story, Some(app::picker::ScottPictures::Blorb));
+        let st = super::open_launch_options(&blorb, &cfg, &dir);
+        assert!(!st.scott_native_pictures, "a Blorb's pictures have no second resolution");
+
+        let text_only = scott_entry_with_pictures(&story, None);
+        let st = super::open_launch_options(&text_only, &cfg, &dir);
+        assert!(!st.scott_native_pictures, "a text-only story has no row at all");
+
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     /// SQ-0771: the size on the filename line measures the file on disk, which
@@ -6987,6 +7076,7 @@ mod tests {
             self_blorb: Some(vec![ChunkInfo {
                 usage: "Pict".into(), number: 3, chunk_type: "PNG ".into(), len: 100, detail: None,
             }]),
+            scott_pictures: None,
             disk_image: None,
             disk_entry: None,
             author: None, year: None, genre: None, language: None, description: None,

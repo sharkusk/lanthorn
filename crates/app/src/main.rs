@@ -2052,6 +2052,9 @@ fn cli_overrides(ctx: &startup::LaunchCtx) -> app::launch_options::LaunchOverrid
             std::fs::canonicalize(p).unwrap_or_else(|_| p.clone()).display().to_string()
         }),
         interpreter_number: None,
+        // No CLI flag for this (SQ-1473 added no `--scott-picture-resolution`);
+        // a command-line launch inherits the sidecar/default exactly as before.
+        scott_picture_resolution: None,
     }
 }
 

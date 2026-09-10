@@ -40,6 +40,35 @@ pub struct Features {
     pub hints: bool,          // folded in from StoryAux when the aux resolves
 }
 
+/// What a Scott Adams entry's own graphics are — derived once at scan time from
+/// the loaded bytes ([`scott_pictures`], SQ-1473), never guessed at render time.
+/// Drives the info panel's "Pictures:" row and, through
+/// [`ScottPictures::is_native_c64`], gates the launch-options dialog's
+/// picture-resolution choice — only a native decode can be drawn at more than
+/// one resolution; a Blorb's pictures are already pre-rendered bitmaps.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ScottPictures {
+    /// Commodore 64 *Mysterious Adventures* Family B vector artwork, decoded
+    /// straight off the PRG/D64 image (SQ-1463) — `pictures` is the room count
+    /// [`scott::c64::decode_family_b_pictures`] returns (one drawing per room).
+    NativeC64 { pictures: usize },
+    /// Pre-rendered room pictures in the story's own Blorb `Pict` resources.
+    Blorb,
+    /// A US S.A.G.A. database (Atari/Apple II/C64 *Hulk*) whose pictures
+    /// (families C/D) are not decoded yet.
+    SagaUsUndrawn,
+}
+
+impl ScottPictures {
+    /// Is this the native C64 decode — the only kind [`from_scott_c64`]
+    /// (`crate::graphics::PictSource::from_scott_c64`) can draw at more than one
+    /// resolution, so the only kind the launch-options dialog offers a
+    /// resolution choice for (SQ-1473)?
+    pub fn is_native_c64(self) -> bool {
+        matches!(self, ScottPictures::NativeC64 { .. })
+    }
+}
+
 /// Eager per-story metadata, derived from bytes `scan_stories` already reads.
 #[derive(Debug, Clone, PartialEq)]
 pub struct StoryMeta {
@@ -61,6 +90,9 @@ pub struct StoryMeta {
     pub ifid: String,
     pub features: Features,
     pub self_blorb: Option<Vec<ChunkInfo>>, // Some when the story file itself is a blorb
+    /// What a Scott Adams entry's own graphics are ([`scott_pictures`], SQ-1473).
+    /// `None` for a non-Scott engine and for a text-only Scott `.dat`.
+    pub scott_pictures: Option<ScottPictures>,
     /// The story was mounted out of a release floppy rather than read as a plain
     /// file, and which kind, so the TYPE column names that container: `Z6 (ADF)`
     /// for an Amiga disk, `Z6 (HFS)` for a Macintosh one (SQ-0737, SQ-0837).
@@ -114,6 +146,7 @@ impl StoryMeta {
             ifid: String::new(),
             features: Features::default(),
             self_blorb: None,
+            scott_pictures: None,
             disk_image: None,
             disk_entry: None,
             author: None,
@@ -908,6 +941,38 @@ pub fn scott_tuid(stem: &str) -> Option<&'static str> {
 fn scott_release_title(bytes: &[u8]) -> Option<&'static str> {
     let (image, load_address) = scott::c64::prg_image(bytes)?;
     scott::c64::identify(image, load_address).map(|r| r.title)
+}
+
+/// What a Scott Adams entry's own graphics are (SQ-1473), read straight off
+/// `bytes` — the same loaded bytes `entry_from_loaded` already has, never a
+/// second read of the file. `self_blorb` is the resource index of the SAME
+/// story when it is a `.blb` container (`entry_from_loaded` has already parsed
+/// it for other fields); `None` for a plain `.dat`/`.prg`.
+///
+/// Three sources, checked in the order a running session would resolve them
+/// (`ScottSession::new_with_options`'s own precedence, SQ-1463): a Blorb's
+/// `Pict` resources win when the story carries one, because a graphics
+/// container beside a `.dat` is a different, Blorb-carried release of the same
+/// series; failing that, the Commodore 64 *Mysterious Adventures* native vector
+/// decode (`scott::c64`, SQ-1463); failing that, a US S.A.G.A. database
+/// (`scott::saga_us`) whose pictures this crate does not draw yet. `None` for
+/// every other Scott story — a plain text-only `.dat`.
+fn scott_pictures(bytes: &[u8], self_blorb: Option<&[ChunkInfo]>) -> Option<ScottPictures> {
+    if self_blorb.is_some_and(|chunks| chunks.iter().any(|c| c.usage == "Pict")) {
+        return Some(ScottPictures::Blorb);
+    }
+    if let Some((image, load_address)) = scott::c64::prg_image(bytes) {
+        if scott::c64::looks_like_c64_mysterious(image, load_address) {
+            let pictures = scott::c64::decode_family_b_pictures(image, load_address)
+                .map(|p| p.len())
+                .unwrap_or(0);
+            return Some(ScottPictures::NativeC64 { pictures });
+        }
+    }
+    if scott::detect_saga_us(bytes).is_some() {
+        return Some(ScottPictures::SagaUsUndrawn);
+    }
+    None
 }
 
 /// The bundled author for a Scott-format game (filename stem, case-insensitive),
@@ -1794,6 +1859,10 @@ fn entry_from_loaded(
             .unwrap_or(&filename)
     });
     let is_scott = matches!(loaded, crate::hints::LoadedStory::Scott(_));
+    // SQ-1473: what this Scott entry's own graphics are, for the info panel's
+    // "Pictures:" row and the launch-options dialog's resolution choice. Read
+    // once here, from the bytes already in hand — never re-derived per frame.
+    let scott_pictures_kind = is_scott.then(|| scott_pictures(&bytes, self_blorb.as_deref())).flatten();
     let tsv_title = bundled_title(stem, &ifid, is_scott, &bytes);
     let tsv_author = is_scott.then(|| scott_author(stem)).flatten();
     let tsv_description = is_scott.then(|| scott_description(stem)).flatten();
@@ -1849,6 +1918,7 @@ fn entry_from_loaded(
         ifid,
         features,
         self_blorb,
+        scott_pictures: scott_pictures_kind,
         disk_image,
         disk_entry: disk_entry.map(str::to_string),
         author: resolved.author,
@@ -2409,6 +2479,7 @@ mod tests {
                 ifid: String::new(),
                 features: Features::default(),
                 self_blorb: None,
+                scott_pictures: None,
                 disk_image: None,
                 disk_entry: None,
                 author: author.map(|s| s.to_string()),
@@ -3254,7 +3325,7 @@ mod tests {
                 size_bytes: 1, story_bytes: 1, modified: None, engine: Engine::ZCode,
                 format: "Z-code".into(), version: Some("5".into()),
                 serial: None, release: None, ifid: ifid.into(),
-                features: Features::default(), self_blorb, disk_image: None, disk_entry: None,
+                features: Features::default(), self_blorb, scott_pictures: None, disk_image: None, disk_entry: None,
                 author: None, year: None, genre: None, language: None, description: None,
                 ifdb_link: None, ifdb_rating: None, ifdb_rating_count: None,
                 fetch_not_found: false,
@@ -3749,6 +3820,72 @@ mod tests {
                 .find(|r| r.meta.disk_entry.as_deref() == Some("BATON"))
                 .expect("MYSTADV1.D64 offers a BATON row");
             assert_eq!(baton_row.title, direct_entry.title, "direct and disk routes must agree");
+        }
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    /// [`scott_pictures`]'s Blorb branch, hand-built — no specimen needed,
+    /// because a `Pict` usage chunk is the whole test regardless of what game
+    /// it belongs to (SQ-1473).
+    #[test]
+    fn scott_pictures_reports_blorb_from_a_pict_chunk_hand_built() {
+        let chunks = vec![
+            ChunkInfo { usage: "Exec".into(), number: 0, chunk_type: "TEXT".into(), len: 4, detail: None },
+            ChunkInfo { usage: "Pict".into(), number: 3, chunk_type: "PNG ".into(), len: 100, detail: None },
+        ];
+        assert_eq!(scott_pictures(b"anything", Some(&chunks)), Some(ScottPictures::Blorb));
+    }
+
+    /// [`scott_pictures`] answers `None` for a plain text-only Scott database —
+    /// hand-built, the same minimal ScottFree text format
+    /// `an_unrecognised_scott_database_falls_back_to_the_filename_stem` parses,
+    /// which is neither a Blorb, a C64 native image, nor a SAGA-US database
+    /// (SQ-1473).
+    #[test]
+    fn scott_pictures_reports_none_for_a_text_only_database_hand_built() {
+        let db = concat!(
+            "0 0 0 0 0 0 0 0 3 0 0 0\n",
+            "0 0 0 0 0 0 0 0\n",
+            "\"NORTH\" \"NORTH\"\n",
+            "0 0 0 0 0 0 \"A room.\"\n",
+            "\"A message.\"\n",
+            "\"An item.\" 0\n",
+        );
+        assert!(scott::Database::parse(db.as_bytes()).is_ok(), "premise: the database parses");
+        assert_eq!(scott_pictures(db.as_bytes(), None), None);
+    }
+
+    /// End to end on real media (skips vacuously — `stories/` is gitignored):
+    /// `BATON.prg`'s entry carries the native-decode row, with a genuine room
+    /// count read off the release's own artwork, while `adv01.dat` (a plain
+    /// text-only ScottFree database) carries none at all (SQ-1473). The C64
+    /// native decode cannot be hand-built like the two cases above — it needs
+    /// `scott::c64::looks_like_c64_mysterious`'s real driver shape, not merely
+    /// a matching checksum.
+    #[test]
+    fn baton_prg_carries_the_native_pictures_row_and_adv01_carries_none() {
+        let stories = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../stories");
+        let baton = stories.join("scott-dialects/c64/prg/MYSTADV1.D64/BATON.prg");
+        if !baton.is_file() {
+            eprintln!("SKIP: {} absent (gitignored commercial fixture)", baton.display());
+            return;
+        }
+        let base = temp_dir("scott-pictures-row");
+        let baton_entry = resolve_entry(&baton, &base).expect("BATON.prg opens directly");
+        match baton_entry.meta.scott_pictures {
+            Some(ScottPictures::NativeC64 { pictures }) => {
+                assert!(pictures > 0, "BATON must report at least one room picture");
+            }
+            other => panic!("BATON.prg must report NativeC64, got {other:?}"),
+        }
+
+        let adv01 = stories.join("adv01.dat");
+        if adv01.is_file() {
+            let adv01_entry = resolve_entry(&adv01, &base).expect("adv01.dat opens directly");
+            assert_eq!(
+                adv01_entry.meta.scott_pictures, None,
+                "a plain text-only .dat carries no Pictures row"
+            );
         }
         let _ = std::fs::remove_dir_all(&base);
     }

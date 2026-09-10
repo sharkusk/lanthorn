@@ -74,13 +74,20 @@ pub struct LaunchOverrides {
     /// An interpreter number for this launch (ZMSD §11.1.3), outranking both the
     /// per-game sidecar and the global config.
     pub interpreter_number: Option<u8>,
+    /// Which resolution to draw a Scott Adams C64 native vector picture at, for
+    /// this launch (SQ-1473). Outranks the per-game sidecar's
+    /// `scott_picture_resolution` key. Meaningless (and `None`) for every story
+    /// that is not a C64 *Mysterious Adventures* release.
+    pub scott_picture_resolution: Option<crate::graphics::ScottPictureResolution>,
 }
 
 impl LaunchOverrides {
     /// Nothing overridden — the launch behaves exactly as it did before any of
     /// this existed.
     pub fn is_empty(&self) -> bool {
-        self.pictures.is_none() && self.interpreter_number.is_none()
+        self.pictures.is_none()
+            && self.interpreter_number.is_none()
+            && self.scott_picture_resolution.is_none()
     }
 }
 
@@ -752,12 +759,16 @@ pub fn derived_interpreter(
 // ── LaunchOptionsState ────────────────────────────────────────────────────────
 
 /// Which row of the dialog the cursor is on. Art rows come first (index 0 is
-/// "no override"), then the interpreter row, then the persist checkbox.
+/// "no override"), then the interpreter row, then — only for a Scott entry
+/// with native C64 vector pictures (SQ-1473) — the picture-resolution row,
+/// then the persist checkbox.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Row {
     /// `0` = inherit (Blorb / disk image); `1..` indexes `candidates`.
     Art(usize),
     Interpreter,
+    /// Only reachable when [`LaunchOptionsState::scott_native_pictures`] is set.
+    ScottResolution,
     Persist,
 }
 
@@ -806,6 +817,16 @@ pub struct LaunchOptionsState {
     /// [`LaunchOptionsState::on_disk_entry`] can re-derive the selection after
     /// it narrows the candidate list to one game's folder (SQ-0876).
     pub(crate) inherited_pictures: Option<String>,
+    /// Does this story have native C64 vector pictures ([`crate::picker::ScottPictures::NativeC64`],
+    /// SQ-1473)? Gates whether the picture-resolution row exists at all — a
+    /// Blorb's pictures are pre-rendered bitmaps with no second resolution to
+    /// choose, and every non-Scott story has none of this to offer either. Set
+    /// once, by [`LaunchOptionsState::with_scott_resolution`].
+    pub scott_native_pictures: bool,
+    /// This launch's choice of resolution for that artwork; meaningless when
+    /// `scott_native_pictures` is false.
+    pub scott_resolution: crate::graphics::ScottPictureResolution,
+    pub baseline_scott_resolution: crate::graphics::ScottPictureResolution,
 }
 
 /// Drop the candidate the "Automatic" row already names, so one archive is not
@@ -932,7 +953,28 @@ impl LaunchOptionsState {
             z_version,
             disk_image,
             disk_entry: None,
+            scott_native_pictures: false,
+            scott_resolution: crate::graphics::ScottPictureResolution::default(),
+            baseline_scott_resolution: crate::graphics::ScottPictureResolution::default(),
         }
+    }
+
+    /// Enable the picture-resolution row (SQ-1473) — only for a Scott entry
+    /// with native C64 vector pictures ([`crate::picker::ScottPictures::NativeC64`]).
+    /// `inherited` is the effective resolution in force before the dialog:
+    /// this launch's own override if there is one, else the per-game sidecar,
+    /// else the default. A separate builder call, like [`Self::on_disk_entry`],
+    /// so [`Self::new`] stays the arguments every non-Scott caller already
+    /// passes.
+    pub fn with_scott_resolution(
+        mut self,
+        native: bool,
+        inherited: crate::graphics::ScottPictureResolution,
+    ) -> LaunchOptionsState {
+        self.scott_native_pictures = native;
+        self.scott_resolution = inherited;
+        self.baseline_scott_resolution = inherited;
+        self
     }
 
     /// Bind this dialog to one story on a multi-story disk image (SQ-0859).
@@ -976,10 +1018,18 @@ impl LaunchOptionsState {
         derived_interpreter(self.interpreter, self.chosen_art(), self.disk_image, self.z_version)
     }
 
+    /// `1` when the picture-resolution row exists ([`Self::scott_native_pictures`]),
+    /// else `0` — added to every flat-index computation below so the row's
+    /// existence is decided in exactly one place.
+    fn resolution_row(&self) -> usize {
+        usize::from(self.scott_native_pictures)
+    }
+
     /// Total selectable rows: one per art choice (plus "inherit"), the
-    /// interpreter row, and the persist checkbox.
+    /// interpreter row, the picture-resolution row when it exists, and the
+    /// persist checkbox.
     pub fn row_count(&self) -> usize {
-        self.candidates.len() + 3
+        self.candidates.len() + 3 + self.resolution_row()
     }
 
     /// The cursor as a flat row index.
@@ -987,7 +1037,8 @@ impl LaunchOptionsState {
         match self.cursor {
             Row::Art(i) => i,
             Row::Interpreter => self.candidates.len() + 1,
-            Row::Persist => self.candidates.len() + 2,
+            Row::ScottResolution => self.candidates.len() + 2,
+            Row::Persist => self.candidates.len() + 2 + self.resolution_row(),
         }
     }
 
@@ -998,6 +1049,8 @@ impl LaunchOptionsState {
             Row::Art(idx)
         } else if idx == n + 1 {
             Row::Interpreter
+        } else if self.scott_native_pictures && idx == n + 2 {
+            Row::ScottResolution
         } else {
             Row::Persist
         };
@@ -1015,6 +1068,8 @@ impl LaunchOptionsState {
             interpreter_number: (self.interpreter != self.baseline_interpreter)
                 .then_some(self.interpreter)
                 .flatten(),
+            scott_picture_resolution: (self.scott_resolution != self.baseline_scott_resolution)
+                .then_some(self.scott_resolution),
         }
     }
 
@@ -1090,11 +1145,12 @@ impl LaunchOptionsState {
     }
 
     /// Space on the cursor row: select this archive, advance the interpreter by
-    /// one, or flip the checkbox.
+    /// one, flip the resolution, or flip the checkbox.
     fn activate_row(&mut self) {
         match self.cursor {
             Row::Art(i) => self.art = i,
             Row::Interpreter => self.cycle(1),
+            Row::ScottResolution => self.cycle(1),
             Row::Persist => self.persist = !self.persist,
         }
     }
@@ -1108,6 +1164,18 @@ impl LaunchOptionsState {
                 let len = INTERPRETER_CHOICES.len();
                 let next = (cur as isize + dir).rem_euclid(len as isize) as usize;
                 self.interpreter = INTERPRETER_CHOICES[next];
+            }
+            // Only two choices, so Left and Right both flip it — there is no
+            // "direction" to a two-way toggle.
+            Row::ScottResolution => {
+                self.scott_resolution = match self.scott_resolution {
+                    crate::graphics::ScottPictureResolution::HiRes => {
+                        crate::graphics::ScottPictureResolution::Original
+                    }
+                    crate::graphics::ScottPictureResolution::Original => {
+                        crate::graphics::ScottPictureResolution::HiRes
+                    }
+                };
             }
             Row::Persist => self.persist = !self.persist,
             Row::Art(_) => {}
@@ -1131,6 +1199,12 @@ impl LaunchOptionsState {
         }
         if self.interpreter != self.baseline_interpreter {
             crate::styles::write_per_game_interpreter_number(game_dir, self.interpreter)?;
+        }
+        if self.scott_resolution != self.baseline_scott_resolution {
+            crate::styles::write_per_game_scott_picture_resolution(
+                game_dir,
+                Some(self.scott_resolution),
+            )?;
         }
         Ok(())
     }
@@ -1298,6 +1372,90 @@ mod tests {
         assert!(body.contains("interpreter_number = 4"), "got {body:?}");
         assert!(!body.contains("pictures"), "an untouched art choice must stay absent: {body:?}");
         assert!(!body.contains("honor_game_colours"), "unrelated keys stay absent: {body:?}");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// SQ-1473: the picture-resolution row exists only when
+    /// [`LaunchOptionsState::with_scott_resolution`] says this entry has
+    /// native C64 vector pictures — it must not appear, and must not be
+    /// reachable by the cursor, for an ordinary story.
+    #[test]
+    fn the_resolution_row_exists_only_for_a_native_c64_entry() {
+        let dir = tmp("resolution-row-gate");
+        let story = dir.join("story.z6");
+        std::fs::write(&story, b"x").unwrap();
+
+        let plain = LaunchOptionsState::new("Story", &story, None, None, Some(6), None);
+        assert!(!plain.scott_native_pictures);
+        let plain_rows = plain.row_count();
+
+        let native = LaunchOptionsState::new("Story", &story, None, None, Some(6), None)
+            .with_scott_resolution(true, crate::graphics::ScottPictureResolution::HiRes);
+        assert!(native.scott_native_pictures);
+        assert_eq!(native.row_count(), plain_rows + 1, "the row adds exactly one to the count");
+
+        // The last row (the persist checkbox) shifts down by exactly one to
+        // make room for it, so `End` still lands on the checkbox in both cases.
+        let mut plain2 = plain.clone();
+        plain2.set_cursor_index(plain2.row_count() - 1);
+        assert_eq!(plain2.cursor, Row::Persist);
+        let mut native2 = native.clone();
+        native2.set_cursor_index(native2.row_count() - 1);
+        assert_eq!(native2.cursor, Row::Persist);
+
+        // And the resolution row itself is reachable only on the native entry.
+        let mut native3 = native.clone();
+        native3.set_cursor_index(native3.candidates.len() + 2);
+        assert_eq!(native3.cursor, Row::ScottResolution);
+        let mut plain3 = plain.clone();
+        plain3.set_cursor_index(plain3.candidates.len() + 2);
+        assert_ne!(plain3.cursor, Row::ScottResolution, "no such row on a plain story");
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// The choice reaching the session: Space/cycle flips the row, and only a
+    /// flip away from what the story already inherits shows up in `overrides()`
+    /// (this launch) or `persist_to()` (the checkbox) — the same "absent key =
+    /// inherit" contract the art and interpreter rows already keep (SQ-1473).
+    #[test]
+    fn the_resolution_choice_reaches_overrides_and_the_sidecar() {
+        let dir = tmp("resolution-choice");
+        let story = dir.join("story.prg");
+        std::fs::write(&story, b"x").unwrap();
+        let mut st = LaunchOptionsState::new("Story", &story, None, None, None, None)
+            .with_scott_resolution(true, crate::graphics::ScottPictureResolution::HiRes);
+        assert_eq!(st.overrides().scott_picture_resolution, None, "untouched → no override");
+
+        st.cursor = Row::ScottResolution;
+        st.on_key(crossterm::event::KeyEvent::new(
+            crossterm::event::KeyCode::Char(' '),
+            crossterm::event::KeyModifiers::NONE,
+        ));
+        assert_eq!(st.scott_resolution, crate::graphics::ScottPictureResolution::Original, "Space flips it");
+        assert_eq!(
+            st.overrides().scott_picture_resolution,
+            Some(crate::graphics::ScottPictureResolution::Original),
+            "this launch's override reflects the change"
+        );
+
+        let game_dir = dir.join("game");
+        st.persist_to(&game_dir).unwrap();
+        assert_eq!(
+            crate::styles::read_per_game_scott_picture_resolution(&game_dir),
+            Some(crate::graphics::ScottPictureResolution::Original),
+            "persist_to writes the changed key, same as every other row"
+        );
+        let body = std::fs::read_to_string(crate::styles::per_game_config_path(&game_dir)).unwrap();
+        assert!(body.contains("scott_picture_resolution = \"original\""), "got {body:?}");
+
+        // Flip it back to hi-res (the baseline): overrides() and persist_to()
+        // both go quiet again, exactly like every other row's inherit contract.
+        st.on_key(crossterm::event::KeyEvent::new(
+            crossterm::event::KeyCode::Char(' '),
+            crossterm::event::KeyModifiers::NONE,
+        ));
+        assert_eq!(st.overrides().scott_picture_resolution, None, "back at baseline → no override");
         let _ = std::fs::remove_dir_all(&dir);
     }
 

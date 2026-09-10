@@ -158,11 +158,11 @@ pub fn draw_launch_options(
     // The list is short now that it is filtered to this story's own archives —
     // five at the very most in the real library — but a folder can hold anything,
     // so it still scrolls; nothing else does.
-    // blank, interpreter, provenance, checkbox, escape hatch
-    const TAIL: u16 = 5;
+    // blank, interpreter, provenance, [picture resolution], checkbox, escape hatch
+    let tail: u16 = 5 + u16::from(st.scott_native_pictures);
     // The "N more above/below" markers cost rows too, and only exist when the
     // list actually scrolls — so budget for them only then, in two passes.
-    let fixed = 1 + TAIL + caveat_lines; // + the "Artwork" heading
+    let fixed = 1 + tail + caveat_lines; // + the "Artwork" heading
     let art_total = st.candidates.len() + 1;
     let loose = content.height.saturating_sub(fixed);
     let marks = if art_total > usize::from(loose) { 2 } else { 0 };
@@ -250,7 +250,7 @@ pub fn draw_launch_options(
     }
 
     // Pin the tail to the bottom of the content so it never slides with the list.
-    y = content.bottom().saturating_sub(TAIL).max(y);
+    y = content.bottom().saturating_sub(tail).max(y);
     // The number, and where it came from. Showing the provenance is the point:
     // picking an Amiga archive MOVES an auto interpreter to the Amiga, and doing
     // that silently — changing the emulated machine because someone chose
@@ -271,8 +271,17 @@ pub fn draw_launch_options(
     };
     line(buf, &derived, dim, &mut y);
 
+    // Picture resolution (SQ-1473): only for a Scott entry with native C64
+    // vector pictures — a Blorb's pictures are pre-rendered bitmaps with no
+    // second resolution to choose, so the row does not exist for one.
+    if st.scott_native_pictures {
+        let label = format!("  Picture resolution   {}", st.scott_resolution.label());
+        option_row(buf, st.candidates.len() + 2, &label, &mut rows, &mut y);
+    }
+
+    let persist_idx = st.candidates.len() + 2 + usize::from(st.scott_native_pictures);
     let persist = format!("  {} Save as this game's default", checkbox(st.persist));
-    option_row(buf, st.candidates.len() + 2, &persist, &mut rows, &mut y);
+    option_row(buf, persist_idx, &persist, &mut rows, &mut y);
     // The escape hatch, said on screen rather than left to the docs. The list
     // above is filtered by name, so an archive under an unrelated name — the
     // renamed `FMVPOKER.EG1` case — will not appear in it, and someone who has
@@ -363,6 +372,33 @@ mod tests {
         let (text, _) = render(&st, 90, 24);
         assert!(text.contains("Interpreter   4 Amiga"), "{text:?}");
         assert!(text.contains("set here"), "provenance says explicit: {text:?}");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// SQ-1473: the "Picture resolution" row is drawn only for a Scott entry
+    /// with native C64 vector pictures, and it is one of the hit-rects
+    /// (`r.rows`) exactly when it is drawn — never a row the eye sees but the
+    /// mouse/keyboard cannot reach, or the reverse.
+    #[test]
+    fn the_resolution_row_draws_only_for_a_native_c64_entry() {
+        let dir = tmp("resolution-draw");
+        let story = dir.join("story.prg");
+        std::fs::write(&story, b"x").unwrap();
+
+        let plain = LaunchOptionsState::new("Story", &story, None, None, None, None);
+        let (plain_text, plain_rects) = render(&plain, 90, 24);
+        assert!(!plain_text.contains("Picture resolution"), "no row for a plain story: {plain_text:?}");
+        let plain_rects = plain_rects.expect("dialog renders at 90x24");
+        assert_eq!(plain_rects.rows.len(), plain.row_count());
+
+        let native = LaunchOptionsState::new("Story", &story, None, None, None, None)
+            .with_scott_resolution(true, crate::graphics::ScottPictureResolution::default());
+        let (native_text, native_rects) = render(&native, 90, 24);
+        assert!(native_text.contains("Picture resolution"), "row must draw: {native_text:?}");
+        assert!(native_text.contains("hi-res (default)"), "default label: {native_text:?}");
+        let native_rects = native_rects.expect("dialog renders at 90x24");
+        assert_eq!(native_rects.rows.len(), native.row_count(), "one hit-rect per selectable row, resolution included");
+
         let _ = std::fs::remove_dir_all(&dir);
     }
 

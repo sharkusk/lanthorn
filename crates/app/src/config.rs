@@ -1890,6 +1890,17 @@ pub struct Config {
     /// checkbox is what writes a choice down.
     #[serde(skip)]
     pub pictures_override: Option<String>,
+    /// The picture resolution named for THIS launch — a choice the
+    /// launch-options dialog made and the user did not persist (SQ-1473).
+    ///
+    /// Parked here for the same reason `pictures_override` is: it rides with
+    /// the story for the session, so `@restart` (`reset.rs`) re-applies it
+    /// without a second door back into `crate::launch_options`. `None` = no
+    /// session choice, so the per-game sidecar decides, then the default
+    /// (`ScottPictureResolution::HiRes`). Never persisted; the dialog's
+    /// checkbox is what writes a choice down.
+    #[serde(skip)]
+    pub scott_picture_resolution_override: Option<crate::graphics::ScottPictureResolution>,
     /// Which story on the disk image this launch opened — the browser row's own
     /// name, as [`blorb::medium::DiskStory`] spells it (SQ-0876).
     ///
@@ -2259,6 +2270,7 @@ impl Default for Config {
             system_colours: default_system_colours(),
             colour_source: ColourSource::default(),
             pictures_override: None,
+            scott_picture_resolution_override: None,
             disk_entry: None,
             interpreter_version: None,
             enable_sound: default_enable_sound(),
@@ -3727,6 +3739,7 @@ use_defaults = false
             system_colours: default_system_colours(),
             colour_source: ColourSource::default(),
             pictures_override: None,
+            scott_picture_resolution_override: None,
             disk_entry: None,
             interpreter_version: None,
             enable_sound: true,

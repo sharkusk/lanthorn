@@ -303,6 +303,13 @@ pub(crate) fn reset_game(
                     (f.width as u32, f.height as u32)
                 })
                 .unwrap_or(app::scott_session::ScottSession::FALLBACK_CHAR_PX),
+            // SQ-1473: same choice the launch made — this session's override,
+            // else the sidecar, else the default (hi-res).
+            state
+                .config
+                .scott_picture_resolution_override
+                .or_else(|| app::styles::read_per_game_scott_picture_resolution(game_dir))
+                .unwrap_or_default(),
         )
         .map(|new_session| {
                 *session

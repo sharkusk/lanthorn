@@ -406,12 +406,18 @@ impl PictSource {
     ///
     /// `band_px_high` is how many DEVICE PIXELS tall the picture band is —
     /// its row count times the terminal's cell height — and picks the
-    /// supersample; see [`scott_c64_scale`].
+    /// supersample when `resolution` is [`ScottPictureResolution::HiRes`]; see
+    /// [`scott_c64_scale`]. [`ScottPictureResolution::Original`] (SQ-1473)
+    /// ignores the band entirely and draws at the release's own scale 1.
     pub fn from_scott_c64(
         pictures: Vec<scott::c64::PictureList>,
         band_px_high: u32,
+        resolution: ScottPictureResolution,
     ) -> PictSource {
-        let scale = scott_c64_scale(band_px_high);
+        let scale = match resolution {
+            ScottPictureResolution::HiRes => scott_c64_scale(band_px_high),
+            ScottPictureResolution::Original => 1,
+        };
         PictSource { scott_c64: Some((pictures, scale)), ..PictSource::new(None) }
     }
 
@@ -2081,6 +2087,54 @@ fn scott_c64_scale(band_px_high: u32) -> u32 {
     band_px_high
         .div_ceil(scott::c64::PICTURE_HEIGHT as u32)
         .clamp(1, SCOTT_C64_MAX_SCALE)
+}
+
+/// Which resolution to draw a Commodore 64 *Mysterious Adventures* room
+/// picture at (SQ-1473): the band-fitted supersample [`scott_c64_scale`]
+/// derives, or the release's own 255×94 canvas with no supersampling at all.
+///
+/// This is a player choice (the launch-options dialog, `crate::launch_options`),
+/// never a fact about the story — unlike [`crate::picker::ScottPictures`],
+/// which says WHETHER a story has native vector art to choose a resolution for.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum ScottPictureResolution {
+    /// [`scott_c64_scale`]'s band-fitted supersample — sharper on a terminal
+    /// whose cells render several device pixels each, which is the ordinary
+    /// case. The default.
+    #[default]
+    HiRes,
+    /// The release's own 255×94 canvas, scale 1 — what the Commodore 64 itself
+    /// drew, before any terminal magnifies it.
+    Original,
+}
+
+impl ScottPictureResolution {
+    /// The per-game sidecar's own spelling, read by [`Self::from_key`].
+    pub fn key(self) -> &'static str {
+        match self {
+            ScottPictureResolution::HiRes => "hires",
+            ScottPictureResolution::Original => "original",
+        }
+    }
+
+    /// Parse the sidecar's spelling. An unrecognised token is `None` — the same
+    /// "a corrupt sidecar inherits the default" rule every other per-game key
+    /// follows (`styles::PerGameConfig::read`).
+    pub fn from_key(s: &str) -> Option<ScottPictureResolution> {
+        match s {
+            "hires" => Some(ScottPictureResolution::HiRes),
+            "original" => Some(ScottPictureResolution::Original),
+            _ => None,
+        }
+    }
+
+    /// The launch-options dialog's row label.
+    pub fn label(self) -> &'static str {
+        match self {
+            ScottPictureResolution::HiRes => "hi-res (default)",
+            ScottPictureResolution::Original => "original",
+        }
+    }
 }
 
 /// Draw one C64 Mysterious Adventures room picture at `scale` device pixels
