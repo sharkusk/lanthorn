@@ -342,6 +342,65 @@ impl SagaUs {
             _ => None,
         }
     }
+
+    /// Which of family C's two run-length schemes this release's picture
+    /// records use (§8.3, SQ-1484).
+    ///
+    /// §8.3 names the two titles: "**The Count and Voodoo Castle** use a
+    /// variant with no literal mode". Everything else — the Commodore 64
+    /// *Hulk*, *Claymorgue Castle* on the Atari — uses the standard scheme.
+    ///
+    /// **Keyed by release identity, never sniffed**, for the reason
+    /// [`crate::saga_pictures::FamilyCScheme`] gives: a no-literal record read
+    /// as standard still decodes into something picture-shaped, so there is
+    /// nothing in the bytes for a sniffer to be right about.
+    ///
+    /// Answers for every platform, because the variant is a property of the
+    /// title rather than of the machine: §8.4 says *The Count*'s **Apple II**
+    /// records use it too, so a family-D reader can ask this the same way.
+    pub fn picture_scheme(&self) -> crate::saga_pictures::FamilyCScheme {
+        use crate::saga_pictures::FamilyCScheme;
+        match (self.version, self.adventure) {
+            (119, 4) | (115, 5) => FamilyCScheme::NoLiteral,
+            _ => FamilyCScheme::Standard,
+        }
+    }
+
+    /// What this release's **Atari 8-bit** companion picture side holds
+    /// (SQ-1483), or `None` when the release is not an Atari one.
+    ///
+    /// Measured on all seven sides; see [`crate::saga_atari`] for the table
+    /// and for how the split was established. It is not stated anywhere in the
+    /// specification, and it is the same split §7.4's string test makes on the
+    /// **Apple II** releases of the same seven titles.
+    pub fn atari_picture_format(&self) -> Option<AtariPictureFormat> {
+        if !matches!(self.platform, SagaPlatform::Atari8Bit) {
+            return None;
+        }
+        Some(match (self.version, self.adventure) {
+            (119, 4) | (115, 5) | (125, 13) => AtariPictureFormat::FamilyCBitmap,
+            _ => AtariPictureFormat::LineArt,
+        })
+    }
+}
+
+/// What an **Atari 8-bit** release's companion picture side is drawn with
+/// (SQ-1483).
+///
+/// The specification describes only the first of these for this platform
+/// (§8.3, "picture family C — Commodore 64 and Atari 8-bit US bitmaps"), and
+/// four of the seven titles do not use it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum AtariPictureFormat {
+    /// Family-C four-colour strip bitmaps, which [`crate::saga_atari`] reads:
+    /// *Voodoo Castle*, *The Count* and *Claymorgue Castle*.
+    FamilyCBitmap,
+    /// A line-drawing token stream — the format Appendix A item 26 measured on
+    /// the four **plain** Apple II releases, byte for byte the same at the
+    /// head of all four of these sides: *Adventureland*, *Pirate Adventure*,
+    /// *Mission Impossible* and *Strange Odyssey*. Nothing reads it on this
+    /// platform yet.
+    LineArt,
 }
 
 /// §12.11's *Hulk* room-picture remap, on its own: rooms 5 and 6 draw picture
