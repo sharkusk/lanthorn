@@ -4658,7 +4658,11 @@ signature, §4.2's cell reading — grid, and the alignment escape only where
 pointer-block rule**), §5.3's repairs for the Commodore 64 family (none of them
 fires on the ZX one, and item 13 below says why), §6, **§7.1's ZX snapshot
 container**, §7.2's uncrunched disk-image path, §8.2's Family B pictures on both
-platforms, **§8.3's Family C pictures** (`crates/scott/src/saga_pictures.rs`,
+platforms, **§8.5's Family E pictures** (`crates/scott/src/saga_dos.rs`,
+SQ-1477 — the record decoder, both naming conventions of §10.7, and the
+release identity §12.11's runtime rules have to hang on for a database that is
+the plain reference text format), **§8.3's Family C pictures**
+(`crates/scott/src/saga_pictures.rs`,
 SQ-1475 — the record decoder, the Commodore 64 colour table in full and the part
 of the Atari table §8.3 actually states) with §8.6's Commodore 64 naming and
 usage rules (`crates/scott/src/saga_us.rs`), §9.1, §9.2 and **§9.3** as they
@@ -5068,6 +5072,72 @@ together with it.
     placements, so the lists are genuinely per-title and cannot be recovered by
     one scan. Until they exist, an Atari release's pictures are unreachable and
     an implementer should say so rather than draw an empty frame.
+20. **§8.5's height limit is INCLUSIVE too, and the family-E canvas is 158
+    rows.** Exactly the correction item 17 records for §8.3, in the other
+    direction and found by the same oracle. "When the row counter passes the
+    height" reads exclusively; a pass paints `(raw end − raw start) ÷ 80` **plus
+    one** rows, which for a full-canvas *Hulk* picture is 79 and not 78, so the
+    picture is 158 device rows and the stored end offset is the last row's own
+    start rather than one past it (`6316 − 70 = 6246 = 6 + 78 × 80`). **Read it
+    exclusively and every EVEN row is exactly right while every odd row is
+    wrong**, because the odd pass then begins one row's worth of data early —
+    the title screen still decodes to a legible `QUESTPROBE`/`HULK` wordmark
+    with the artwork torn into horizontal streaks, so the picture alone cannot
+    settle it. §8.5's stated nominal 158 is therefore right as it stands, and
+    is TWO rows shorter than family C's 160: family C's inclusive bottom row
+    paints rows 158 and 159 (item 17) and family E simply has no rows there.
+21. **§8.5's object-name rule reads two digits where the release stores
+    three.** §8.5 gives "a two-digit index at name positions 3-4 for a room name
+    and 4-5 for an object name". The room half is right — the MS-DOS *Hulk*
+    names its rooms `R01nn`, five characters. The object half gets the right
+    answer on this release by luck: its objects are `B01nnnR` / `B01nnnI`,
+    seven characters with **three** digits after the series number, and the
+    first of those three is always `0` because no index reaches 100, so
+    positions 4-5 and positions 3-5 agree. They would not on the Commodore 64
+    twin of the same set, which names its `B01250R` — and that is §8.3's rule,
+    which the object half of this convention is identical to. A conforming
+    reader should read three digits for an object and two for a room.
+22. **Family-E files carry a three-byte signature §8.5 does not mention, and a
+    two-byte release stamp beside it.** Every one of the *Hulk*'s sixty-eight
+    `.PAK` files opens `FD 07 19 08 6A` and every one of *Fantastic Four*'s
+    sixty-four opens `FD 07 29 04 6A`; byte `0x0E` is `0x7C` in all 132. So
+    bytes 0, 1 and 4 are a signature and bytes 2-3 are a per-release stamp.
+    This matters because §8.5 offers a host walking an archive nothing but a
+    name rule to tell a picture from `START.EXE`, `HULK.BAT` or the database —
+    and a name rule is free to guess wrong. lanthorn tests the three fixed
+    bytes and ignores the stamp.
+23. **§8.5's graphics-chunk size is an upper BOUND, not a promise about the
+    file.** §8.5 says the size at `0x05`-`0x06` "bounds decoding", and a reader
+    that treats a chunk longer than the file as corruption refuses a picture
+    that is perfectly good: *Fantastic Four*'s `R010.PAK` declares 4,597 bytes
+    and carries 4,585, and decodes to a complete picture from what is there.
+    Every file in both releases is padded to a 128-byte boundary and most have
+    slack the other way (1 to 109 bytes past the chunk). Clamp to the file and
+    let the row limit end the picture.
+24. **§12.11's two picture rules belong to the RELEASE, and the MS-DOS one
+    carries neither in its database.** §12.11 states the *Hulk*'s five remapped
+    room pairs and the dedicated darkness image as properties of the US
+    S.A.G.A. releases, which §12 identifies from their binary database. §10.7
+    establishes that the MS-DOS *Hulk* is the plain reference TEXT format, so
+    §12.2's detection cannot answer for it and there is no version or adventure
+    number for a reader to key on — and yet the release obeys both rules, and
+    its own picture set says so out loud: it ships `R0100` (the darkness image)
+    and room pictures for 1-4, 9, 12, 15, 16, 19 and 20 and **for no other room
+    below 81**, which is exactly §12.11's ten remapped rooms and nothing else.
+    A conforming reader must therefore identify this release some other way —
+    lanthorn uses the eleven reference-format header counts §10.7 prints in
+    full — and apply §12.11 on that basis. It should apply the remap only to a
+    picture number that came from the ROOM, since an explicit draw-picture
+    opcode's operand must be drawn as asked.
+25. **§10.7's *Fantastic Four* picture counts, filled in.** The archive holds
+    **64** `.PAK` files: 21 `Rnnn`, 21 `Snnn` and 22 `Bnnn`. §10.7's "twenty-one
+    times" for the `S` prefix is exact. Under §8.6's rules that is 42 room
+    pictures (the `S` names taking the stated room default) and 22 objects
+    drawn in a room, and no inventory art at all — this release's `B` names
+    carry no trailing usage letter for §8.6's rule to read. Every one of the 64
+    decodes as family E, which is what makes family E a format rather than one
+    game's file layout; 39 are lined and 25 unlined, the opposite proportion to
+    the *Hulk*'s 32 and 36.
 
 The in-memory model this document's dialects decode *to*, in that crate, is a
 database of rooms (six exits and a description, plus a flag for the leading-`*`

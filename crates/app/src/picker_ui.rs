@@ -4391,6 +4391,14 @@ fn scott_pictures_label(sp: app::picker::ScottPictures) -> String {
         app::picker::ScottPictures::SagaUsNoPictures { .. } => {
             "S.A.G.A. (not on this file)".to_string()
         }
+        // SQ-1477: family E. Named for the MACHINE and its display standard
+        // rather than for the format's letter, the way the two rows above are
+        // named for a machine — "CGA" is what a player who owned this release
+        // would recognise, and it is also the whole of what makes these
+        // pictures look the way they do (four fixed colours, §8.5).
+        app::picker::ScottPictures::SagaDosCga { pictures } => {
+            format!("S.A.G.A. (MS-DOS CGA, {pictures} pictures)")
+        }
     }
 }
 
@@ -6347,6 +6355,40 @@ mod tests {
                 "the platform does not change where the pictures aren't"
             );
         }
+        // SQ-1477: family E. Named for the machine and its display standard,
+        // because that is what a player who owned this release would
+        // recognise — and because §8.5's palette IS the CGA one, fixed, so
+        // "CGA" is the whole of why these pictures look as they do.
+        assert_eq!(
+            super::scott_pictures_label(ScottPictures::SagaDosCga { pictures: 68 }),
+            "S.A.G.A. (MS-DOS CGA, 68 pictures)"
+        );
+    }
+
+    /// SQ-1477: the MS-DOS *Questprobe* releases come in a zip, so the zip is
+    /// the medium the TYPE column names — the same slot a `.d64` and a `.z80`
+    /// fill — and the label has to fit the column like every other one
+    /// (SQ-1458's lesson: an overflowing TYPE label panics the row).
+    #[test]
+    fn interp_label_names_the_zip_an_ms_dos_release_arrives_in() {
+        use app::picker::{Engine, Features, ScottPictures, StoryMeta};
+        let meta = |scott_pictures: Option<ScottPictures>| StoryMeta {
+            size_bytes: 0, story_bytes: 0, modified: None, engine: Engine::Scott, format: String::new(),
+            version: None, serial: None, release: None, ifid: String::new(),
+            features: Features::default(), self_blorb: None, scott_pictures, disk_image: None, disk_entry: None,
+            author: None, year: None,
+            genre: None, language: None, description: None, ifdb_link: None, ifdb_rating: None, ifdb_rating_count: None, fetch_not_found: false,
+        };
+        let dos = meta(Some(ScottPictures::SagaDosCga { pictures: 68 }));
+        assert_eq!(super::interp_label(&dos, false), "Scott (zip)");
+        assert!(super::interp_label(&dos, false).len() <= super::INTERP_COL_W as usize);
+        // A Scott row with any OTHER kind of pictures is unchanged — the zip
+        // answer is only ever given for a row whose artwork came out of one.
+        assert_eq!(super::interp_label(&meta(None), false), "Scott");
+        assert_eq!(
+            super::interp_label(&meta(Some(ScottPictures::NativeC64 { pictures: 11 })), false),
+            "Scott"
+        );
     }
 
     /// SQ-0771: the size on the filename line measures the file on disk, which

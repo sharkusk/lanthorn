@@ -227,14 +227,7 @@ impl SagaUs {
         if !self.remaps_hulk_rooms() {
             return room;
         }
-        match room {
-            5 | 6 => 3,
-            7 | 8 => 4,
-            10 | 11 => 9,
-            13 | 14 => 2,
-            17 | 18 => 16,
-            other => other,
-        }
+        hulk_room_picture(room)
     }
 
     /// Whether this is the US *Hulk* on a platform that remaps room pictures
@@ -288,6 +281,33 @@ impl SagaUs {
             (127, 1, SagaPlatform::Commodore64) => Some("The Hulk (Commodore 64)"),
             _ => None,
         }
+    }
+}
+
+/// §12.11's *Hulk* room-picture remap, on its own: rooms 5 and 6 draw picture
+/// 3, 7 and 8 draw 4, 10 and 11 draw 9, 13 and 14 draw 2, and 17 and 18 draw
+/// 16; every other room draws its own number.
+///
+/// **The one place this table is written down.** Two callers need it and they
+/// reach the release by different routes: [`SagaUs::room_picture`], for the
+/// Commodore 64 and Atari 8-bit releases, whose §12 binary database
+/// identifies itself; and
+/// [`crate::saga_dos::DosRelease::room_picture`](crate::saga_dos::DosRelease::room_picture),
+/// for the MS-DOS one, whose database is the plain reference text format and
+/// says nothing about itself at all (§10.7). A second copy of five pairs is a
+/// second place for them to go stale.
+///
+/// Says nothing about WHICH releases remap — that is
+/// [`SagaUs::remaps_hulk_rooms`] and `DosRelease::remaps_hulk_rooms`, because
+/// the answer differs by platform (the Apple II release does not).
+pub fn hulk_room_picture(room: usize) -> usize {
+    match room {
+        5 | 6 => 3,
+        7 | 8 => 4,
+        10 | 11 => 9,
+        13 | 14 => 2,
+        17 | 18 => 16,
+        other => other,
     }
 }
 

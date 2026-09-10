@@ -68,6 +68,15 @@ pub enum PictureError {
         /// The platform asked for.
         platform: SagaPlatform,
     },
+    /// The record's signature bytes are not a family-E picture's (§8.5,
+    /// SQ-1477) — an `.EXE`, a `.BAT` or a database in the same archive as
+    /// the artwork. Raised by
+    /// [`crate::saga_dos::decode_family_e`]
+    /// only.
+    NotFamilyE {
+        /// The first five bytes, so a diagnostic can say what it found.
+        magic: [u8; 5],
+    },
 }
 
 impl std::fmt::Display for PictureError {
@@ -82,6 +91,9 @@ impl std::fmt::Display for PictureError {
             ),
             PictureError::NotFamilyC { platform } => {
                 write!(f, "{} releases do not use picture family C", platform.label())
+            }
+            PictureError::NotFamilyE { magic } => {
+                write!(f, "not a family-E picture: it opens {magic:02X?}")
             }
         }
     }

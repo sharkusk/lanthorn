@@ -133,9 +133,9 @@ options for one of these adds a **Picture resolution** row: `hi-res` (the
 default, drawn as sharp as the picture band your terminal cell allows) or
 `original`, the release's own unscaled canvas. It works exactly like the
 rows above it — pick one, tick the box to keep it for every later launch. A
-story whose pictures ship pre-rendered in a Blorb, or a US S.A.G.A. release
-whose artwork lanthorn doesn't draw yet, shows no such row: there is nothing
-to choose a resolution for.
+story whose pictures ship pre-rendered in a Blorb, or one of the American
+S.A.G.A. releases below, shows no such row: those are bitmaps at a fixed size,
+so there is nothing to choose a resolution for.
 
 The **ZX Spectrum** pressings of those same eleven titles carry the same
 line-art, and lanthorn draws it too — open a `.z80` snapshot straight up, no
@@ -144,6 +144,23 @@ Blorb needed, and the info panel says so
 **Picture resolution** row as the Commodore 64 pressing, `hi-res` or
 `original`, because both platforms store the identical artwork and differ
 only in their colours.
+
+
+**The American *Questprobe* releases, on two very different machines.** *The
+Hulk* was sold for the Commodore 64 on a disk whose artwork sits in seventy
+separate files beside the game, and for the IBM PC as a folder of DOS files
+with sixty-eight `.PAK` pictures in it. lanthorn draws both. Hand it the
+Commodore disk and the info panel reads `Pictures: S.A.G.A. (C64 strips, 70
+pictures)`; hand it the MS-DOS download — zip and all, no unpacking — and it
+reads `Pictures: S.A.G.A. (MS-DOS CGA, 68 pictures)`, the story list titles the
+row *The Hulk (MS-DOS)* rather than whatever the archive was called, and the
+TYPE column says `zip`.
+
+They are the same drawings by the same artist and they do not look the same:
+the Commodore version is painted in that machine's own colours, picked per
+picture, while the PC version is locked to the four colours a CGA card could
+show at once — black, cyan, magenta and white — and about half of its pictures
+are drawn at twice the horizontal detail to make up for it.
 
 ## Going deeper
 

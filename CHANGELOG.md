@@ -23,6 +23,17 @@ Absolute URLs or no link.
 
 ### Added
 
+- **The MS-DOS *Questprobe* releases now play with their pictures.** *The
+  Hulk* as it was sold for the IBM PC — a folder of DOS files with the game in
+  one and sixty-eight CGA pictures beside it — opens straight out of its zip,
+  no unpacking, and draws every room in the four colours a CGA card could show
+  at once. The story list calls it *The Hulk (MS-DOS)* instead of whatever the
+  download happened to be named, the TYPE column says `zip`, and the info
+  panel counts the artwork for you. It is the same game the Commodore 64 disk
+  holds and it is not the same pictures: half of the PC set is drawn at twice
+  the horizontal detail, and the rest of it agrees with the Commodore version
+  pixel for pixel — which is how we know both are being read right.
+
 - **The ZX Spectrum *Mysterious Adventures* now load, straight from a
   snapshot.** All eleven of Brian Howarth's titles — *The Golden Baton*, *The
   Time Machine*, *Arrow of Death* parts 1 and 2, *Escape from Pulsar 7*,

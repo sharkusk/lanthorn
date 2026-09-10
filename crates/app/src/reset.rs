@@ -310,13 +310,15 @@ pub(crate) fn reset_game(
                 .scott_picture_resolution_override
                 .or_else(|| app::styles::read_per_game_scott_picture_resolution(game_dir))
                 .unwrap_or_default(),
-            // SQ-1475: re-read off the same release disk the launch mounted.
-            // `story_bytes` above is the DATABASE, not the container, so a
-            // restart cannot recover the family-C picture files from it — and
-            // carrying seventy records in app state for the life of a session
-            // to save one 175 KB floppy read is the wrong trade. Empty for
-            // every path that is not a disk image, so no other engine or
-            // release pays for this line.
+            // SQ-1475: re-read off the same container the launch opened —
+            // the release disk (family C, §8.3) or, since SQ-1477, the MS-DOS
+            // release's zip (family E, §8.5). `story_bytes` above is the
+            // DATABASE, not the container, so a restart cannot recover the
+            // picture files from it — and carrying seventy records in app
+            // state for the life of a session to save one 175 KB floppy read
+            // is the wrong trade. Empty for every path that is neither a disk
+            // image nor a zip, so no other engine or release pays for this
+            // line.
             app::hints::saga_picture_files(story_path),
         )
         .map(|new_session| {
