@@ -160,16 +160,16 @@ declare, or if `t-all` drops a group.
   structurally cannot (see the palette section below).
 
 Where to look, by what you changed. Prefer more than the obvious one; these are the
-floor, not the ceiling:
+floor, not the ceiling. **A bare name in the table below is a test suite and works as a nextest name filter; a `-E 'binary(…)'` entry is one of the ~14 group binaries, which a bare name filter matches ZERO tests of.** The failure mode is a step that prints a pass having run exactly one test (SQ-1481). Check that a filter matched what you meant before trusting it: `cargo nextest list -p lanthorn <filter>` enumerates the tests it selected, and the first line names the binaries it found.
 
 | changed | run at least |
 |---|---|
-| `crates/zvm/**` | `-p lanthorn-zvm`, plus the presses you touched (`v6_arthur_advent`, `v6_journey`, `v6_shogun`, `v6_zork0`) |
-| `crates/app/src/render/screen.rs` | `v6_render`, `v6_windows`, `zmachine_screen`, `zork_classic` |
-| `crates/app/src/render/v6_layout.rs` | `v6_render`, `v6_arthur_advent`, `v6_journey`, `v6_scopa` |
-| `crates/app/src/render/transcript.rs` | `zork_classic`, `zmachine_screen`, `-p lanthorn --lib` |
-| `crates/app/src/native_font.rs`, `crates/blorb/**` | `-p lanthorn-blorb`, `engines`, `v6_zork0` |
-| `crates/mapper/**` | `-p lanthorn-mapper`, `mapper_ui` |
+| `crates/zvm/**` | `-p lanthorn-zvm`, plus the presses you touched (`-E 'binary(v6_arthur_advent)'`, `-E 'binary(v6_journey)'`, `-E 'binary(v6_shogun)'`, `-E 'binary(v6_zork0)'`) |
+| `crates/app/src/render/screen.rs` | `-E 'binary(v6_render)'`, `-E 'binary(v6_windows)'`, `-E 'binary(zmachine_screen)'`, `-E 'binary(zork_classic)'` |
+| `crates/app/src/render/v6_layout.rs` | `-E 'binary(v6_render)'`, `-E 'binary(v6_arthur_advent)'`, `-E 'binary(v6_journey)'`, `-E 'binary(v6_scopa)'` |
+| `crates/app/src/render/transcript.rs` | `-E 'binary(zork_classic)'`, `-E 'binary(zmachine_screen)'`, `-p lanthorn --lib` |
+| `crates/app/src/native_font.rs`, `crates/blorb/**` | `-p lanthorn-blorb`, `-E 'binary(engines)'`, `-E 'binary(v6_zork0)'` |
+| `crates/mapper/**` | `-p lanthorn-mapper`, `-E 'binary(mapper_ui)'` |
 | `crates/verb-synonyms/**`, `crates/app/src/vocab.rs` | `-p lanthorn --lib vocab`, `adult_words`, `vocabulary_offer`, `vocabulary_vetting`, `assist_voice`, `word_reveal`, `command_band`, `scope_completion`, `story_word_scrape` |
 | anything touching PROCESS-GLOBAL state (see below) | the gate **and** `cargo test --workspace --all-features` |
 | a test that WRITES TO DISK | the gate **and** `cargo test --workspace --all-features`, twice |
