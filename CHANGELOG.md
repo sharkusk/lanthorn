@@ -19,10 +19,6 @@ Absolute URLs or no link.
 
 ---
 
-## Unreleased
-
----
-
 ## v0.6.0 — 2026-09-10
 
 ### Highlights
