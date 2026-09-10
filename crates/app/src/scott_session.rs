@@ -1551,8 +1551,10 @@ mod tests {
         }
         assert_eq!(seen.len(), 4, "black, orange, purple and white (§8.3's table)");
         assert!(
-            seen.contains(&(186, 134, 32)) && seen.contains(&(177, 89, 185)),
-            "room 1's orange and purple resolved through §8.3's C64 table, got {seen:?}"
+            seen.contains(&scott::c64_palette::PEPTO_PALETTE[8])
+                && seen.contains(&scott::c64_palette::PEPTO_PALETTE[4]),
+            "room 1's orange and purple, the VIC-II's own since SQ-1491 — the exact \
+             triples `machine-screenshots/c64-hulk-start.png` shows; got {seen:?}"
         );
     }
 
@@ -2176,7 +2178,11 @@ mod tests {
 
         let carried = vec!["B01053R".to_string(), "B01033R".to_string(), "B01023R".to_string()];
         assert_eq!(s.current_overlays, carried, "the fabricated record is gathered last, so drawn last");
-        assert_eq!(band_pixel(&s, 0, 0), (191, 97, 72), "and paints its corner red");
+        assert_eq!(
+            band_pixel(&s, 0, 0),
+            scott::c64_palette::PEPTO_PALETTE[2],
+            "and paints its corner red"
+        );
         let version = s.pic_version;
 
         s.submit("get fan");
@@ -2187,11 +2193,15 @@ mod tests {
             "item 23 is in the pack now, so its record leaves the room band"
         );
         assert_ne!(s.pic_version, version, "the band was recomputed, so the terminal re-uploads it");
-        assert_eq!(band_pixel(&s, 0, 0), (255, 255, 255), "the room picture's own corner is back");
+        assert_eq!(
+            band_pixel(&s, 0, 0),
+            scott::c64_palette::PEPTO_PALETTE[1],
+            "the room picture's own corner is back"
+        );
 
         s.submit("drop fan");
         assert_eq!(s.current_overlays, carried, "…and returns when the fan does");
-        assert_eq!(band_pixel(&s, 0, 0), (191, 97, 72));
+        assert_eq!(band_pixel(&s, 0, 0), scott::c64_palette::PEPTO_PALETTE[2]);
     }
 
     /// §12.11: "The inventory command draws a picture. Beyond listing what is
@@ -2228,10 +2238,14 @@ mod tests {
         );
 
         let bare = hulk_bare("R01098").expect("the fixture is present");
-        assert_eq!(bare.rgb(116, 104), Some((255, 255, 255)), "premise: the backdrop is white here");
+        assert_eq!(
+            bare.rgb(116, 104),
+            Some(scott::c64_palette::PEPTO_PALETTE[1]),
+            "premise: the backdrop is white here"
+        );
         assert_eq!(
             band_pixel(&s, 116, 104),
-            (177, 89, 185),
+            scott::c64_palette::PEPTO_PALETTE[4],
             "the fan's inventory record paints purple over it"
         );
 

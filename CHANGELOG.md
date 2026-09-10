@@ -87,6 +87,17 @@ Absolute URLs or no link.
 
 ### Fixed
 
+- **The Commodore 64 pictures now use the colours a real Commodore 64 shows.**
+  The palettes lanthorn drew the American *Questprobe* artwork and the
+  *Mysterious Adventures* line drawings with were written down by hand, and
+  every one of them was brighter and more vivid than the machine ever was. All
+  sixteen colours are the VIC-II's own now, so the Hulk's cavern is the murky
+  green it is on the hardware rather than a lurid one — and two colours were
+  simply the wrong colour: the dome in *The Hulk* was drawing orange where a
+  Commodore 64 draws red. Checked against captures of the real game running on
+  a real machine, which are committed alongside so the next change can be
+  checked the same way.
+
 - **"I'm in a dusty study" now follows the wording you asked for.** lanthorn's
   own room layout — the one it shows for every Scott Adams game — printed the
   room line and the "I can also see:" heading in the first person whatever the

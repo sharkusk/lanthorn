@@ -49,6 +49,7 @@
 use std::collections::BTreeMap;
 use std::path::PathBuf;
 
+use scott::c64_palette::PEPTO_PALETTE;
 use scott::saga_pictures::{decode_family_c, CANVAS_HEIGHT, CANVAS_WIDTH};
 use scott::{parse_picture_file_name, PictureUsage, SagaPlatform};
 
@@ -268,19 +269,21 @@ fn room_one_is_a_four_colour_drawing_and_not_a_flat_fill() {
     assert_eq!(pic.colour_bytes, [56, 103, 14, 16]);
     assert_eq!(
         pic.palette,
-        [(0, 0, 0), (186, 134, 32), (177, 89, 185), (255, 255, 255)],
+        [PEPTO_PALETTE[0], PEPTO_PALETTE[8], PEPTO_PALETTE[4], PEPTO_PALETTE[1]],
         "black, orange, purple, white"
     );
 }
 
-/// Two of this release's own colour bytes are outside §8.3's table, and the
-/// decoder surfaces them rather than inventing a colour (§8.3's own
+/// One of this release's own colour bytes is outside §8.3's table, and the
+/// decoder surfaces it rather than inventing a colour (§8.3's own
 /// instruction). Everything else resolves.
 ///
-/// Pinned as the exact set, so a later table correction shows up here as a
-/// failure rather than as silence.
+/// It was two until SQ-1491: `B01250R`'s 232 is yellow on a real machine
+/// (`machine-screenshots/c64-hulk-colorbars.png`), so only `R01012`'s 153 is
+/// left. Pinned as the exact set, so a later table correction shows up here as
+/// a failure rather than as silence.
 #[test]
-fn the_only_unrecognised_colour_bytes_are_153_and_232() {
+fn the_only_unrecognised_colour_byte_is_153() {
     let Some(pics) = hulk_pictures() else {
         assert!(skipped("the Hulk colour-byte sweep"));
         return;
@@ -293,9 +296,8 @@ fn the_only_unrecognised_colour_bytes_are_153_and_232() {
         }
     }
     let bytes: Vec<u8> = unresolved.keys().copied().collect();
-    assert_eq!(bytes, vec![153, 232], "§8.3's table is missing exactly these two");
+    assert_eq!(bytes, vec![153], "the table is missing exactly this one");
     assert_eq!(unresolved[&153], vec!["R01012"], "153 is room 12's pixel value 2");
-    assert_eq!(unresolved[&232], vec!["B01250R"], "232 is object 250's pixel value 3");
 }
 
 /// The placement fields put each picture where §8.3 says, and nothing a record

@@ -3040,7 +3040,14 @@ mod tests {
         // The seed pixel is where the fill (index 3) lands — spelled out
         // because it is the pixel `scott::zx_mysterious`'s own palette test
         // and the ZX `decode_pictures` test both use as their tell.
-        assert_eq!(c64_rgba.get_pixel(5, 5).0[..3], [177, 89, 185], "C64 index 3");
+        assert_eq!(
+            c64_rgba.get_pixel(5, 5).0[..3],
+            {
+                let (r, g, b) = scott::c64_palette::PEPTO_PALETTE[4];
+                [r, g, b]
+            },
+            "C64 index 3, remapped to VIC-II purple"
+        );
         assert_eq!(zx_rgba.get_pixel(5, 5).0[..3], [202, 0, 202], "ZX index 3");
     }
 

@@ -2914,6 +2914,18 @@ The recognised values:
 **Any other value is unrecognised and an implementer must surface it rather than
 invent a colour.**
 
+> **This table has been checked against a real machine, and it is wrong in two
+> places.** The byte is an *Atari* colour value — `hue x 16 + luminance`, the
+> same encoding this section gives the Atari two paragraphs above — so the low
+> nibble is brightness and the high nibble hue, and regrouping the table that
+> way puts it in clean hue bands. Bytes **50 and 66 are red, not orange**, and
+> byte **232 is gold** where this table has no entry for it at all; the RGB
+> triples above are a hand-made set brighter than the chip's, and the VIC-II's
+> own should be used instead. See Appendix A items 33-36 for the evidence
+> (five captures of the *Hulk*'s Commodore 64 release under VICE, committed as
+> `machine-screenshots/c64-hulk-*.png`) and for the two entries the encoding
+> says are also wrong but which no capture yet settles.
+
 **Locating the data.** On the Commodore 64 the pictures are named files inside
 the disk image: a file is a picture if its name is at least four characters, its
 first character is `R`, `B` or `S`, and its second through fourth are digits;
@@ -4663,8 +4675,9 @@ SQ-1477 — the record decoder, both naming conventions of §10.7, and the
 release identity §12.11's runtime rules have to hang on for a database that is
 the plain reference text format), **§8.3's Family C pictures**
 (`crates/scott/src/saga_pictures.rs`,
-SQ-1475 — the record decoder, the Commodore 64 colour table in full and the part
-of the Atari table §8.3 actually states) with §8.6's Commodore 64 naming and
+SQ-1475 — the record decoder, the Commodore 64 colour table in full **with items
+33-36's real-machine corrections**, and the part of the Atari table §8.3 actually
+states) with §8.6's Commodore 64 naming and
 usage rules (`crates/scott/src/saga_us.rs`), **the Apple II's picture family**
 (`crates/scott/src/apple_pictures.rs`, SQ-1476 — which is NOT §8.4's format;
 see item 26 below), §9.1, §9.2 and **§9.3** as they
@@ -5264,7 +5277,8 @@ conditions; items 29 to 31 state them, with the measurement behind each.
 30. **A nineteenth object record, `B01250R`, has no determinable condition and
     is left OFF.** Index 250 names no item (54 exist), §12.11 does not mention
     it, and it decodes to two flat colour blocks — orange and blue — over
-    (16,0)-(240,126), with a colour byte (232) outside §8.3's table. The
+    (16,0)-(240,126), with a colour byte (232) that was outside §8.3's table
+    until item 36 settled it as gold. The
     MS-DOS release does not ship it at all, which is the strongest evidence
     available that it is not load-bearing. §11's instruction is to name these
     rather than infer them, so lanthorn draws it never and records the gap
@@ -5296,6 +5310,110 @@ conditions; items 29 to 31 state them, with the measurement behind each.
     bounding box of the pixels they actually wrote
     (`scott::saga_pictures::Picture::painted`), which is right in both cases
     and needs no reasoning about edges.
+
+33. **§8.3's Commodore 64 colour bytes are ATARI colour values, and the table
+    is a hue/luminance map that was read as a bare lookup.** §8.3 says the
+    Commodore 64 mapping "was recovered empirically and the mapping is a bare
+    lookup with no arithmetic structure". It is not: Family C is the *shared*
+    Commodore 64 / Atari 8-bit format, and the byte is encoded exactly the way
+    §8.3 already says an Atari one is — `hue x 16 + luminance`. The Commodore
+    64 release keeps its Atari sibling's colour bytes and resolves each to the
+    nearest VIC-II colour, so the **low nibble is brightness and the high
+    nibble is hue**. Regroup §8.3's own table that way and it falls into clean
+    hue bands, luminance-ordered inside each: hue 0 the grey ramp, hues 1-2
+    gold darkening to brown, 3-4 orange through red, 5-6 purple, 7-9 blue
+    going pale at the top of each ramp, 11-13 green, 14-15 gold and brown.
+    Two of §8.3's rows contradict the encoding and are almost certainly its
+    "derived by eye" mistakes — bytes 0 and 224 are **luminance 0**, which is
+    black rather than the purple §8.3 gives them, and bytes 1 and 7 are hue 0,
+    a hueless grey rather than blue. lanthorn keeps §8.3's answers for all
+    four, because no capture settles them and a plausible correction is still
+    a guess, and groups `scott::saga_pictures::c64_colour`'s arms by hue so
+    that where a band's boundary is still guesswork is visible on the page.
+    The rule is deliberately **not** implemented as arithmetic: taking the
+    nearest VIC-II colour needs the full 256-entry Atari palette, and §8.3 is
+    right that that table "must be transcribed from an Atari palette
+    reference; it cannot responsibly be reconstructed from prose" (SQ-1491).
+
+34. **§8.3's Commodore 64 table is wrong at bytes 50 and 66: both are RED, not
+    orange — and byte 232 is gold.** Settled against the machine rather than
+    against the document. `machine-screenshots/c64-hulk-{splash,start,
+    transform,chamber}.png` are the *Hulk*'s own release disk under VICE, and
+    `crates/app/tests/suites/scott_c64_picture_colours.rs` lays the decoded
+    records over them: for every stored pixel value in all four frames the set
+    of colours the machine shows is a set of **one**, with no exceptions over
+    the 43,680 visible canvas pixels of each. That derives eleven colour bytes
+    from the frames themselves —
+
+    | byte | hue, luminance | VIC-II | frame |
+    |---|---|---|---|
+    | 14 | 0, 14 | white | start, transform, chamber |
+    | 142 | 8, 14 | white | splash |
+    | 50 | 3, 2 | **red** (§8.3 says orange) | chamber |
+    | 66 | 4, 2 | **red** (§8.3 says orange) | chamber, `B01053R` |
+    | 56 | 3, 8 | orange | start |
+    | 101 | 6, 5 | purple | transform |
+    | 103 | 6, 7 | purple | splash, start |
+    | 135 | 8, 7 | blue | chamber |
+    | 196 | 12, 4 | green | transform |
+    | 198 | 12, 6 | green | splash |
+    | 232 | 14, 8 | **gold** (§8.3 has no entry) | colorbars, see item 36 |
+
+    — eight of which confirm §8.3 unchanged. Correcting 66 makes hue 4
+    uniformly red for luminance 2-7, which is the tidier reading as well as
+    the measured one; 50's correction leaves the hue-3 band turning from red
+    to orange somewhere in luminance 3-6, and which of those four is the last
+    red is still unsettled. Two further notes on the frames: the transform
+    card is record **`R01084`**, identified by scoring all seventy records
+    against the frame (98.8% against a 38% runner-up) rather than by reading
+    the story, and canvas pixel `(x, y)` is frame pixel `(x + 48, y + 33)` in
+    VICE's 368x270 output, with canvas rows 0 and 1 falling in the top border
+    (SQ-1491).
+
+35. **The Commodore 64 palette itself is the VIC-II's, not the brighter tables
+    §8.2 and §8.3 name.** Both sections tabulate RGB by hand — §8.3's "red
+    191,97,72", §8.2's sixteen for the *Mysterious Adventures* remap — and
+    every one of them is markedly brighter and more saturated than the chip.
+    Every pixel of all five *Hulk* captures is one of Pepto's measured VIC-II
+    colours exactly, so lanthorn resolves **both** Commodore 64 picture
+    families through one table, `scott::c64_palette::PEPTO_PALETTE`: §8.3's
+    colour bytes and §8.2's remap A now name a VIC-II **index** and the index
+    names the RGB. Eight of the sixteen are confirmed by a capture (black,
+    white, red, purple, green, blue, gold, orange); the other eight are the
+    published palette's, since no committed frame exercises them. Where §8.3
+    names a colour ambiguously — its "grey" is one of the VIC-II's three —
+    the name is read as the plain VIC-II one (index 12), and no record on
+    `QUESTPR1.D64` uses the byte in question (SQ-1491).
+
+36. **`B01250R` decodes exactly, and the boot screen's colour bars are not
+    it.** `machine-screenshots/c64-hulk-colorbars.png` shows four 64-pixel
+    bars — red, gold, blue, green — under "Adjust your TV to match above
+    colors", and their four colours are exactly what item 34's table resolves
+    `B01250R`'s **four** header bytes (50, 135, 232, 198) to. That is where
+    byte 232 comes from, and it is worth having: three of those four are
+    independently pinned by the picture frames, and item 33's encoding
+    predicts hue 14 luminance 8 as gold before the frame is looked at. But the
+    bars are **drawn in text mode**, not from that record's bitmap: they are
+    exactly 64 pixels wide on 8-pixel boundaries and 160 rows tall on an
+    8-row boundary, which is a 32x20 block of reversed spaces. `B01250R`
+    decodes to *three* bars of 58, 86 and 78 pixels starting at canvas x = 16,
+    and its data is a perfect fit for that — 51 bytes of run-length expand to
+    1,856 pixel pairs and its declared region is 29 columns x 64 pairs =
+    1,856, with nothing left over, where §8.3's no-literal variant expands the
+    same bytes to 4,015 pairs, divisible by neither 63 nor 64. So the decoder
+    is arithmetically exact and the screen is a different drawing; do not
+    reshape the decoder to match this frame. Item 30's reason for leaving the
+    record OFF is unaffected — a capture of the *boot* screen is not a
+    sighting of the record in play.
+
+    One question the frame raises and cannot answer: **the green bar suggests
+    header byte 11 is pixel value 0's colour**, where §8.3 says the fourth
+    byte "is never used" and value 0 is forced black. Every room record on the
+    disk stores 0 or 16 there, and both are luminance-0 Atari values — black
+    either way — so all four picture frames are consistent with both readings
+    and neither is settled. Settling it needs a frame of a record whose byte
+    11 is neither, and `QUESTPR1.D64` has exactly one such record: `B01250R`,
+    which item 30 says the game never draws (SQ-1491).
 
 The in-memory model this document's dialects decode *to*, in that crate, is a
 database of rooms (six exits and a description, plus a flag for the leading-`*`

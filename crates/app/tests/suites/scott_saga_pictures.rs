@@ -246,9 +246,11 @@ fn the_hulks_room_one_is_a_drawing_and_not_a_flat_fill() {
         biggest * 5 < total * 4,
         "no colour covers four fifths of the canvas — {biggest}/{total} looks like a fill"
     );
-    // The palette §8.3's Commodore 64 table resolves for `R01001`: black,
-    // orange, purple, white.
-    for want in [(0u8, 0u8, 0u8), (186, 134, 32), (177, 89, 185), (255, 255, 255)] {
+    // The four colours `R01001` resolves to: black, orange, purple, white —
+    // and since SQ-1491 they are the VIC-II's own, so these are the exact
+    // triples `machine-screenshots/c64-hulk-start.png` shows.
+    use scott::c64_palette::PEPTO_PALETTE;
+    for want in [PEPTO_PALETTE[0], PEPTO_PALETTE[8], PEPTO_PALETTE[4], PEPTO_PALETTE[1]] {
         assert!(counts.contains_key(&want), "room 1 draws {want:?}, got {counts:?}");
     }
 }

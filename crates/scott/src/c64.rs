@@ -1058,29 +1058,16 @@ const OP_END: u8 = 0xFF;
 ///
 /// So `PALETTE[i]` is the RGB a stored index *i* resolves to, both lookups
 /// done. The remap it embeds is
-/// `0 6 2 4 5 3 7 1 8 1 1 1 7 12 8 7`, and the Commodore 64 palette it indexes
-/// is the one §8.2 tabulates. §11 restates that "the four remap tables were
-/// derived by eye and may contain mistakes"; that caveat travels with this
-/// constant.
+/// `0 6 2 4 5 3 7 1 8 1 1 1 7 12 8 7`, and the VIC-II colours it indexes are
+/// [`crate::c64_palette::PEPTO_PALETTE`] — the same sixteen the US S.A.G.A.
+/// bitmaps resolve through, so the two Commodore 64 picture families cannot
+/// disagree about what "red" is (SQ-1491; §8.2's own table was a brighter
+/// hand-made one). §11 restates that "the four remap tables were derived by
+/// eye and may contain mistakes"; that caveat travels with this constant, and
+/// no real-machine capture of a *Mysterious Adventures* screen exists yet to
+/// check the remap against.
 pub const PALETTE: [(u8, u8, u8); 16] = {
-    const C64: [(u8, u8, u8); 16] = [
-        (0, 0, 0),
-        (255, 255, 255),
-        (191, 97, 72),
-        (153, 230, 249),
-        (177, 89, 185),
-        (121, 213, 112),
-        (95, 72, 233),
-        (247, 255, 108),
-        (186, 134, 32),
-        (116, 105, 0),
-        (231, 154, 132),
-        (69, 69, 69),
-        (167, 167, 167),
-        (192, 255, 185),
-        (162, 143, 255),
-        (200, 200, 200),
-    ];
+    use crate::c64_palette::PEPTO_PALETTE as C64;
     const REMAP_A: [usize; 16] = [0, 6, 2, 4, 5, 3, 7, 1, 8, 1, 1, 1, 7, 12, 8, 7];
     let mut out = [(0u8, 0u8, 0u8); 16];
     let mut i = 0;
@@ -2253,14 +2240,15 @@ mod tests {
     fn the_palette_composes_remap_a_with_the_commodore_64_colours() {
         // §8.2's table A is an eight-colour mapping, "which is why its upper
         // half collapses": sources 9, 10, 11 and 15 all land on entry 1, white.
-        assert_eq!(PALETTE[0], (0, 0, 0), "0 -> 0, black");
-        assert_eq!(PALETTE[1], (95, 72, 233), "1 -> 6, blue");
-        assert_eq!(PALETTE[7], (255, 255, 255), "7 -> 1, white");
+        use crate::c64_palette::PEPTO_PALETTE;
+        assert_eq!(PALETTE[0], PEPTO_PALETTE[0], "0 -> 0, black");
+        assert_eq!(PALETTE[1], PEPTO_PALETTE[6], "1 -> 6, blue");
+        assert_eq!(PALETTE[7], PEPTO_PALETTE[1], "7 -> 1, white");
         assert_eq!(PALETTE[9], PALETTE[7]);
         assert_eq!(PALETTE[10], PALETTE[7]);
         assert_eq!(PALETTE[11], PALETTE[7], "9, 10 and 11 all collapse onto white");
-        assert_eq!(PALETTE[13], (167, 167, 167), "13 -> 12, grey");
-        assert_eq!(PALETTE[15], (247, 255, 108), "15 -> 7, yellow");
+        assert_eq!(PALETTE[13], PEPTO_PALETTE[12], "13 -> 12, grey");
+        assert_eq!(PALETTE[15], PEPTO_PALETTE[7], "15 -> 7, yellow");
     }
 
     #[test]

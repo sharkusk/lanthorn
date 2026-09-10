@@ -136,9 +136,10 @@ pub struct Picture {
     /// **Not an error.** §8.3: "any other value is unrecognised and an
     /// implementer must surface it rather than invent a colour" — so the
     /// picture decodes, the unknown value draws as black, and the fact travels
-    /// with the picture for a host to put in a diagnostic. Two of the
-    /// *Hulk*'s own records need it: `R01012` stores 153 for pixel value 2 and
-    /// `B01250R` stores 232 for pixel value 3, and §8.3's table has neither.
+    /// with the picture for a host to put in a diagnostic. One of the
+    /// *Hulk*'s own records still needs it: `R01012` stores 153 for pixel
+    /// value 2, which §8.3's table does not list. (`B01250R`'s 232 did too
+    /// until a real-machine capture settled it as yellow — SQ-1491.)
     /// On the Atari it is most bytes; see [`atari_colour`].
     pub unrecognised_colours: Vec<u8>,
     /// The canvas rectangle this record's own pixels actually cover, or
@@ -377,41 +378,107 @@ pub fn decode_family_c(bytes: &[u8], platform: SagaPlatform) -> Result<Picture, 
 }
 
 /// The Commodore 64 colour a stored colour byte means (§8.3), or `None` for a
-/// value §8.3's table does not list.
+/// value neither §8.3's table nor a real-machine capture settles.
 ///
-/// **These are not palette indices.** §8.3: their meaning "was recovered
-/// empirically and the mapping is a bare lookup with no arithmetic structure",
-/// onto thirteen colours — so this is a `match` on the recognised values and
-/// nothing more, and a value outside it must be surfaced rather than guessed
-/// at. Two of the *Hulk*'s own records fall outside it; see
+/// # The byte is an *Atari* colour value (SQ-1491)
+///
+/// §8.3 calls this "a bare lookup with no arithmetic structure" and it is not
+/// quite: Family C is the **shared** Commodore 64 / Atari 8-bit format, and the
+/// byte is encoded the way §8.3 already says the *Atari* encodes one —
+/// `hue x 16 + luminance`. The Commodore 64 release keeps its Atari sibling's
+/// colour bytes and resolves each to the nearest VIC-II colour, so the low
+/// nibble is brightness and the high nibble is hue. Regroup §8.3's table that
+/// way and it comes out in clean hue bands, luminance-ordered within each —
+/// hue 0 the grey ramp, hues 1-2 gold and brown, 3-4 orange through red, 5-6
+/// purple, 7-9 blue, 11-13 green, 14-15 yellow and brown.
+///
+/// That is why the arms below are grouped by hue: it makes the two things a
+/// reader needs visible at a glance — which values a capture has settled, and
+/// where a band's boundary is still guesswork. It is **not** implemented as
+/// arithmetic, because doing so needs a full 256-entry Atari palette to take
+/// the nearest VIC-II colour of, and §8.3 is explicit that that table "must be
+/// transcribed from an Atari palette reference; it cannot responsibly be
+/// reconstructed from prose". See [`atari_colour`], which has the same gap.
+///
+/// # What a real machine settles, and what it does not
+///
+/// Ten bytes are **measured**, from the *Hulk*'s own Commodore 64 release
+/// running under VICE (`machine-screenshots/c64-hulk-{splash,start,transform,
+/// chamber}.png`, and see `scott_c64_picture_colours` in lanthorn's test
+/// suites, which re-derives them from the frames on every run): every pixel of
+/// every stored value in all four frames resolves to exactly one VIC-II
+/// colour, with no exceptions. They are 14 and 142 white, 50 and 66 red, 56
+/// orange, 101 and 103 purple, 135 blue, 196 and 198 green — plus 232 yellow
+/// off `c64-hulk-colorbars.png`. Eight of those confirm §8.3 unchanged; **50
+/// and 66 correct it** (§8.3 read both as orange), and 232 was not in it at
+/// all.
+///
+/// Every other arm is §8.3's, **unverified**, and two of them the encoding
+/// says are wrong: 0 and 224 are luminance 0, which is black rather than the
+/// purple §8.3 gives them, and 1 and 7 are hue 0, which is grey rather than
+/// blue. They are left as §8.3 has them because no capture settles them and a
+/// plausible correction is still a guess; the doc comment is the record, and
+/// the frame that would settle each is listed in the appendix item §8.3 names.
+///
+/// A value outside the table is surfaced rather than guessed at; see
 /// [`Picture::unrecognised_colours`].
 pub fn c64_colour(stored: u8) -> Option<Rgb> {
-    const WHITE: Rgb = (255, 255, 255);
-    const RED: Rgb = (191, 97, 72);
-    const PURPLE: Rgb = (177, 89, 185);
-    const GREEN: Rgb = (121, 213, 112);
-    const BLUE: Rgb = (95, 72, 233);
-    const YELLOW: Rgb = (247, 255, 108);
-    const ORANGE: Rgb = (186, 134, 32);
+    use crate::c64_palette::PEPTO_PALETTE as P;
+    const WHITE: Rgb = P[1];
+    const RED: Rgb = P[2];
+    const PURPLE: Rgb = P[4];
+    const GREEN: Rgb = P[5];
+    const BLUE: Rgb = P[6];
+    const YELLOW: Rgb = P[7];
+    const ORANGE: Rgb = P[8];
     // Not family A's brown (§8.3 says so explicitly).
-    const BROWN: Rgb = (131, 112, 0);
-    const LIGHT_RED: Rgb = (231, 154, 132);
-    const GREY: Rgb = (167, 167, 167);
-    const LIGHT_GREEN: Rgb = (192, 255, 185);
-    const LIGHT_BLUE: Rgb = (162, 143, 255);
+    const BROWN: Rgb = P[9];
+    const LIGHT_RED: Rgb = P[10];
+    const GREY: Rgb = P[12];
+    const LIGHT_GREEN: Rgb = P[13];
+    const LIGHT_BLUE: Rgb = P[14];
     Some(match stored {
-        2 | 3 | 4 | 8 | 9 | 10 | 12 | 14 | 15 | 137 | 142 | 255 => WHITE,
-        35 | 36 | 38 | 40 | 244 | 246 | 248 => BROWN,
-        16 | 24 | 26 | 30 | 46 | 230 | 237 | 238 | 252 => YELLOW,
-        50..=54 | 56 | 58..=60 | 62 | 66 => ORANGE,
-        67..=71 => RED,
-        0 | 77 | 81 | 84..=87 | 97 | 101..=103 | 105 | 224 => PURPLE,
+        // hue 0 — the grey ramp. 14 is measured; 0 (luminance 0) and 1 and 7
+        // (a hueless mid-grey) are §8.3's and the encoding disputes them.
+        0 => PURPLE,
+        1 | 7 => BLUE,
+        2..=4 | 8..=10 | 12 | 14 | 15 => WHITE,
+        // hue 1 — gold. 17 and 20 are §8.3's, and dark gold reading as green
+        // is the same shape of doubt as 0 and 1 above.
+        16 | 24 | 26 | 30 => YELLOW,
+        17 | 20 => GREEN,
+        // hue 2 — orange-brown, brightening to gold.
+        35 | 36 | 38 | 40 => BROWN,
+        46 => YELLOW,
+        // hue 3 — orange. 50 (luminance 2) is measured RED and 56 (luminance
+        // 8) measured orange, so the band turns somewhere in 51-54 and §8.3's
+        // reading of those four as orange is unverified.
+        50 => RED,
+        51..=54 | 56 | 58..=60 | 62 => ORANGE,
+        // hue 4 — red. 66 is measured, which makes luminance 2-7 uniformly red
+        // where §8.3 had 66 alone as orange.
+        66..=71 => RED,
+        77 => PURPLE,
+        // hues 5 and 6 — purple. 101 and 103 are measured.
+        81 | 84..=87 | 97 | 101..=103 | 105 => PURPLE,
         89 => LIGHT_RED,
-        1 | 7 | 116 | 135 | 148 | 151 => BLUE,
-        110 | 157 => LIGHT_BLUE,
+        110 => LIGHT_BLUE,
+        // hues 7-9 — blue, going pale at the top of each ramp. 135 and 142
+        // are measured.
+        116 | 135 | 148 | 151 => BLUE,
+        137 | 142 => WHITE,
+        157 => LIGHT_BLUE,
+        // hue 10 — one lone dark value §8.3 reads as grey.
         161 => GREY,
-        17 | 20 | 179 | 182 | 183 | 194..=200 | 212 | 214..=216 => GREEN,
+        // hues 11-13 — green. 196 and 198 are measured.
+        179 | 182 | 183 | 194..=200 | 212 | 214..=216 => GREEN,
         201 => LIGHT_GREEN,
+        // hues 14 and 15 — gold and brown. 232 is measured; 224 is luminance
+        // 0, the same doubt as 0 above.
+        224 => PURPLE,
+        230 | 232 | 237 | 238 | 252 => YELLOW,
+        244 | 246 | 248 => BROWN,
+        255 => WHITE,
         _ => return None,
     })
 }
@@ -466,6 +533,7 @@ pub fn atari_colour(stored: u8) -> Option<Rgb> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::c64_palette::PEPTO_PALETTE;
 
     /// Build a family-C record by hand: a 12-byte header, then a literal run
     /// of `pairs`, then the two-byte tail every record carries.
@@ -500,7 +568,11 @@ mod tests {
         );
         let pic = decode_family_c(&rec, SagaPlatform::Commodore64).expect("decodes");
         assert_eq!((pic.width, pic.height), (CANVAS_WIDTH, CANVAS_HEIGHT));
-        assert_eq!(pic.palette, [(0, 0, 0), (255, 255, 255), (191, 97, 72), (121, 213, 112)]);
+        assert_eq!(
+            pic.palette,
+            [PEPTO_PALETTE[0], PEPTO_PALETTE[1], PEPTO_PALETTE[2], PEPTO_PALETTE[5]],
+            "black, white, red, green"
+        );
         assert!(pic.unrecognised_colours.is_empty());
 
         let px = |x: usize, y: usize| pic.pixels[y * CANVAS_WIDTH + x];
@@ -519,9 +591,9 @@ mod tests {
         assert_eq!(px(32, 4), 0, "one pixel right of the strip");
         assert_eq!(px(24, 3), 0, "the row above the strip");
         assert_eq!(px(24, 8), 0, "the row below the strip");
-        assert_eq!(pic.rgb(24, 4), Some((0, 0, 0)), "value 0 is black");
-        assert_eq!(pic.rgb(26, 4), Some((255, 255, 255)), "value 1 is colour byte 8");
-        assert_eq!(pic.rgb(30, 4), Some((121, 213, 112)), "value 3 is colour byte 10");
+        assert_eq!(pic.rgb(24, 4), Some(PEPTO_PALETTE[0]), "value 0 is black");
+        assert_eq!(pic.rgb(26, 4), Some(PEPTO_PALETTE[1]), "value 1 is colour byte 8");
+        assert_eq!(pic.rgb(30, 4), Some(PEPTO_PALETTE[5]), "value 3 is colour byte 10");
         assert_eq!(pic.rgb(CANVAS_WIDTH, 0), None, "off the right edge");
     }
 
@@ -605,7 +677,7 @@ mod tests {
         let rec = record([0x00, 0x50, 0, 0, 3, 0, 3, 1, 14, 14, 14, 67], &[(0, 0)]);
         let pic = decode_family_c(&rec, SagaPlatform::Commodore64).expect("decodes");
         assert_eq!(pic.palette[0], (0, 0, 0), "value 0 is black however 8-11 read");
-        assert_eq!(pic.palette, [(0, 0, 0), (255, 255, 255), (255, 255, 255), (255, 255, 255)]);
+        assert_eq!(pic.palette, [PEPTO_PALETTE[0], PEPTO_PALETTE[1], PEPTO_PALETTE[1], PEPTO_PALETTE[1]]);
         assert_eq!(pic.colour_bytes, [14, 14, 14, 67], "all four are reported");
     }
 
@@ -617,7 +689,7 @@ mod tests {
         let pic = decode_family_c(&rec, SagaPlatform::Commodore64).expect("decodes");
         assert_eq!(pic.unrecognised_colours, vec![153]);
         assert_eq!(pic.palette[2], (0, 0, 0), "unresolved draws as black");
-        assert_eq!(pic.palette[1], (186, 134, 32), "the recognised ones still resolve");
+        assert_eq!(pic.palette[1], PEPTO_PALETTE[8], "the recognised ones still resolve");
     }
 
     #[test]
@@ -658,16 +730,45 @@ mod tests {
         assert!(pic.pixels.iter().all(|&v| v == 0), "nothing was completed");
     }
 
+    // SQ-1491's ground truth: the eleven bytes a real Commodore 64 running the
+    // *Hulk*'s own release has been photographed resolving, with the frame that
+    // settles each. `scott_c64_picture_colours` in lanthorn's suites re-derives
+    // these from the captures themselves; this is the same table pinned where
+    // the decoder can be read.
+    #[test]
+    fn the_colour_bytes_real_machine_captures_settle() {
+        for (byte, index, frame) in [
+            (14u8, 1usize, "start/transform/chamber, white"),
+            (142, 1, "splash, white"),
+            (50, 2, "chamber, red — §8.3 read this as orange"),
+            (66, 2, "chamber's B01053R overlay, red — §8.3 read this as orange"),
+            (56, 8, "start, orange"),
+            (101, 4, "transform, purple"),
+            (103, 4, "splash and start, purple"),
+            (135, 6, "chamber, blue"),
+            (196, 5, "transform, green"),
+            (198, 5, "splash, green"),
+            (232, 7, "colorbars, yellow — §8.3's table has no entry for it"),
+        ] {
+            assert_eq!(
+                c64_colour(byte),
+                Some(PEPTO_PALETTE[index]),
+                "byte {byte} (Atari hue {}, luminance {}): {frame}",
+                byte >> 4,
+                byte & 15
+            );
+        }
+    }
+
     #[test]
     fn c64_colour_table_matches_8_3() {
-        assert_eq!(c64_colour(14), Some((255, 255, 255)), "white");
-        assert_eq!(c64_colour(35), Some((131, 112, 0)), "brown, not family A's");
-        assert_eq!(c64_colour(89), Some((231, 154, 132)), "light red, the lone value");
-        assert_eq!(c64_colour(161), Some((167, 167, 167)), "grey, the lone value");
-        assert_eq!(c64_colour(201), Some((192, 255, 185)), "light green, the lone value");
-        assert_eq!(c64_colour(0), Some((177, 89, 185)), "0 is purple, not black");
+        assert_eq!(c64_colour(35), Some(PEPTO_PALETTE[9]), "brown, not family A's");
+        assert_eq!(c64_colour(89), Some(PEPTO_PALETTE[10]), "light red, the lone value");
+        assert_eq!(c64_colour(161), Some(PEPTO_PALETTE[12]), "grey, the lone value");
+        assert_eq!(c64_colour(201), Some(PEPTO_PALETTE[13]), "light green, the lone value");
+        assert_eq!(c64_colour(0), Some(PEPTO_PALETTE[4]), "0 is purple, not black");
         assert_eq!(c64_colour(153), None, "R01012's second byte");
-        assert_eq!(c64_colour(232), None, "B01250R's third byte");
+        assert_eq!(c64_colour(18), None, "not a value §8.3 lists");
     }
 
     #[test]
