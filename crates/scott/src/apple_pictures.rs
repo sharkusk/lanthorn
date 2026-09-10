@@ -15,8 +15,8 @@
 //! the three *scrambled* releases, whose records really do open with its
 //! four-byte header (`00 00 28 A0`), and which
 //! [`decode_family_d_scrambled`] reads; so the section is right about one of
-//! its two sub-variants and wrong about the other. Appendix A items 26, 29 and
-//! 30 record the measurements.
+//! its two sub-variants and wrong about the other. Appendix A items 26, 38 and
+//! 39 record the measurements.
 //!
 //! §8.4 *is* right about one thing this module needs: the **artifact colour
 //! model** it states for resolving a hi-res page to six colours, which
@@ -127,9 +127,9 @@
 //! pixels and stops at unlit ones, which is that rule's plain meaning and is
 //! what makes the corpus legible. A region reached only through a
 //! single-pixel gap may therefore differ from the machine by a few pixels.
-//! Appendix A item 29 records it.
+//! Appendix A item 38 records it.
 
-use crate::saga_pictures::Rgb;
+use crate::saga_pictures::{Painted, PaintedBox, Rgb};
 use crate::saga_us::SagaPlatform;
 
 /// The family-D canvas width in pixels — the Apple II hi-res screen.
@@ -422,6 +422,17 @@ pub struct HiResPicture {
     /// `width * height` pixel values, each 0-5, row-major from the top-left.
     /// Index [`PALETTE`] with one to get a colour.
     pub pixels: Vec<u8>,
+    /// The canvas rectangle this record's own drawing covers — the same fact
+    /// [`crate::saga_pictures::Picture::painted`] carries, and needed for the
+    /// same reason: an object picture is a sub-image that must be composited
+    /// over the rectangle it drew and nowhere else (§8.6, SQ-1482).
+    ///
+    /// **Every pixel a line, a brush or a fill wrote**, not every pixel that
+    /// is not the ground: family D's ground is WHITE, and a record that
+    /// flooded its canvas white is indistinguishable from one that drew
+    /// nothing there. Bounds are inclusive; `None` for a record that wrote
+    /// nothing at all.
+    pub painted: Option<Painted>,
 }
 
 impl HiResPicture {
@@ -481,13 +492,16 @@ impl std::error::Error for AppleError {}
 /// with depends on its neighbours' bits, not on a per-pixel value.
 struct Page {
     bytes: Vec<u8>,
+    /// Which pixels the record's own primitives wrote — see
+    /// [`HiResPicture::painted`].
+    painted: PaintedBox,
 }
 
 impl Page {
     /// A page cleared to white, which is what the release's own loader does
     /// (`LDA #$FF`, then Applesoft's page-fill entry) before a room picture.
     fn white() -> Self {
-        Page { bytes: vec![0xFF; COLUMNS * CANVAS_HEIGHT] }
+        Page { bytes: vec![0xFF; COLUMNS * CANVAS_HEIGHT], painted: PaintedBox::default() }
     }
 
     /// Write `colour`'s bit for this pixel, and `colour`'s bit 7 as the byte's
@@ -500,6 +514,7 @@ impl Page {
         let mask = (1u8 << (x % 7)) | 0x80;
         let at = y * COLUMNS + x / 7;
         self.bytes[at] = (self.bytes[at] & !mask) | (colour & mask);
+        self.painted.mark(x, y);
     }
 
     /// Is the pixel lit? Off the canvas counts as unlit, which stops a flood
@@ -792,7 +807,8 @@ pub fn decode_family_d_scrambled(
 
     // Black, and it never shows: every byte inside the declared box is
     // written, and the answer is cropped to that box.
-    let mut page = Page { bytes: vec![0x00; COLUMNS * CANVAS_HEIGHT] };
+    let mut page =
+        Page { bytes: vec![0x00; COLUMNS * CANVAS_HEIGHT], painted: PaintedBox::default() };
     let mut col = hoff;
     let mut y = voff;
     let mut i = 4usize;
@@ -835,7 +851,11 @@ pub fn decode_family_d_scrambled(
     for row in 0..height {
         pixels.extend_from_slice(&resolved[row * CANVAS_WIDTH..row * CANVAS_WIDTH + out_w]);
     }
-    Ok(HiResPicture { width: out_w, height, pixels })
+    // Every byte of the declared box was written, so that box IS what this
+    // record painted — pixel-exact, and cheaper than tracking it a byte at a
+    // time through the run-length loop.
+    let painted = Painted { left: hoff * 7, top: voff, right: out_w - 1, bottom: height - 1 };
+    Ok(HiResPicture { width: out_w, height, pixels, painted: Some(painted) })
 }
 
 /// Decode one **plain** family-D picture file — the opcode stream the module
@@ -939,7 +959,12 @@ pub fn decode_family_d_plain(
         }
     }
 
-    Ok(HiResPicture { width: CANVAS_WIDTH, height: CANVAS_HEIGHT, pixels: page.resolve() })
+    Ok(HiResPicture {
+        width: CANVAS_WIDTH,
+        height: CANVAS_HEIGHT,
+        pixels: page.resolve(),
+        painted: page.painted.finish(),
+    })
 }
 
 /// Decode one family-D picture, whichever sub-variant it is (SQ-1490).

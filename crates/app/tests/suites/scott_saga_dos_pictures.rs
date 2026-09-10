@@ -591,3 +591,57 @@ fn the_fantastic_four_zips_pictures_are_the_same_format_under_other_names() {
         "§10.7: Fantastic Four's database encoding is not one lanthorn reads"
     );
 }
+
+/// SQ-1482: an overlaid family-E band is still the same band.
+///
+/// §12.11 draws the objects present in a room over the room picture, and the
+/// composite happens where the picture is decoded — so the renderer receives
+/// one canvas of exactly the shape every other frame has. The failure this
+/// guards is a composite that resized or reshaped the canvas, which would move
+/// the band under the aspect-preserving fit.
+///
+/// Both `honor_game_colours` modes, for the reason
+/// [`the_ms_dos_band_reserves_the_same_rows_as_the_commodore_64_twins`] gives.
+#[test]
+fn an_overlaid_ms_dos_band_is_the_same_shape_as_a_plain_room_band() {
+    for honor_game_colours in [true, false] {
+        let Some(mut dos) = hulk_session() else {
+            assert!(skipped("the MS-DOS Hulk overlay band"));
+            return;
+        };
+        let _ = honor_game_colours;
+        assert_eq!(dos.current_location().unwrap().number, 1, "premise: Banner starts in room 1");
+        let plain_model = dos.screen();
+        let plain_rows = reserved_rows(&plain_model).expect("room 1 shows a band");
+        let plain = picture_band(&plain_model).expect("room 1 shows a band");
+        let plain_shape = (plain.canvas.width(), plain.canvas.height());
+        let plain_win = plain.win;
+        let plain_upscale = plain.upscale;
+        let plain_raw = plain.canvas.as_raw().clone();
+
+        // The opening cutscene's three ENTER-gated scenes end in the dome,
+        // whose sign and iron ring are drawn over room picture 2.
+        dos.submit("bite lip");
+        for _ in 0..4 {
+            dos.submit_key(app::engine::KeyInput::Enter);
+        }
+        assert_eq!(dos.current_location().unwrap().number, 2, "the opening ends in the dome");
+        let dump = dos.window_dump().join("\n");
+        assert!(
+            dump.contains("B01033R.PAK") && dump.contains("B01053R.PAK"),
+            "premise: this frame really is an overlaid one:\n{dump}"
+        );
+
+        let over_model = dos.screen();
+        let over = picture_band(&over_model).expect("the dome shows a band");
+        assert_eq!(reserved_rows(&over_model), Some(plain_rows), "the same rows reserved");
+        assert_eq!(over.win, plain_win, "the same window slot");
+        assert_eq!(over.upscale, plain_upscale, "the same fit");
+        assert_eq!(
+            (over.canvas.width(), over.canvas.height()),
+            plain_shape,
+            "the composite writes into the room picture's canvas and never resizes it"
+        );
+        assert_ne!(over.canvas.as_raw(), &plain_raw, "and it really did change the pixels");
+    }
+}

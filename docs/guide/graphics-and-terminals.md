@@ -180,10 +180,33 @@ Three Apple II titles — *Voodoo Castle*, *The Count* and *Claymorgue Castle* �
 were pressed differently again: their picture side has no filesystem on it at
 all, so there are no file names to look anything up by. lanthorn finds those
 drawings by the header each one carries and draws them like the rest, so all
-seven Apple II releases play with their artwork. The Atari 8-bit disks are
-still waiting on the same treatment and say so
-(`S.A.G.A. (not on this file)`) rather than pretending the artwork is
-missing.
+seven Apple II releases play with their artwork.
+
+The **Atari 8-bit** disks are the ones still waiting, and it is worth saying
+exactly why, because the reason turned out to be more interesting than
+expected. Their picture side has no filesystem either — nothing on it is
+*named*, so there is no catalogue to look a room up in. lanthorn can now read
+those disks: it finds all 241 pictures across *Voodoo Castle*, *The Count* and
+*Claymorgue Castle* and decodes every one of them, in the right colours, as
+the artist drew them. What it still cannot say is **which room each one
+belongs to** — the disks give no clue, not in the game file and not in the
+order the pictures are stored — so rather than pair them up by guesswork and
+show you the wrong room, it goes on reporting them the way it always has.
+Meanwhile the other four Atari titles turn out not to keep bitmaps at all:
+*Adventureland*, *Pirate Adventure*, *Mission Impossible* and *Strange
+Odyssey* are the same stroke-by-stroke drawings as their Apple II editions.
+
+**What is lying around gets drawn, and so does what you are carrying.** These
+releases keep a separate little drawing for many of the objects in the game —
+the iron ring set in the dome's floor, the sign on the wall, the killer bees,
+Ultron in his cavern — and lanthorn paints each one over the room picture while
+its object is in the room, in the order the release disk holds them. Pick
+something up and it leaves the picture; put it down and it comes back. Type
+`INVENTORY` and the picture changes too: the pack opens on a screen of its own
+with every item you carry drawn on it, and RETURN puts the room back the way it
+was. It works the same on the Commodore 64 disk and the MS-DOS download, and
+`/dump-windows` names the overlays a frame was built from if you want to see
+which ones went in.
 
 ## Going deeper
 

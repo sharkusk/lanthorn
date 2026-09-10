@@ -232,11 +232,71 @@ impl SagaUs {
 
     /// Whether this is the US *Hulk* on a platform that remaps room pictures
     /// (§12.11) — the Commodore 64 and Atari 8-bit releases, not the Apple II
-    /// one. §12.2: "version 127 with adventure 1 is the US *Hulk*".
+    /// one.
     pub fn remaps_hulk_rooms(&self) -> bool {
-        self.version == 127
-            && self.adventure == 1
-            && !matches!(self.platform, SagaPlatform::AppleII)
+        self.is_hulk() && !matches!(self.platform, SagaPlatform::AppleII)
+    }
+
+    /// Whether this is the US *Hulk*, on **any** platform. §12.2: "version 127
+    /// with adventure 1 is the US *Hulk*".
+    ///
+    /// A different question from [`Self::remaps_hulk_rooms`], which is that
+    /// one narrowed by §12.11's platform exception. The hard-coded object
+    /// overlays of [`Self::object_picture`] carry no such exception — §12.11
+    /// states them of the title, and the Apple II release draws the same
+    /// objects out of the same picture set.
+    pub fn is_hulk(&self) -> bool {
+        self.version == 127 && self.adventure == 1
+    }
+
+    /// The **object** picture index the item at `item` draws over the room
+    /// picture (§12.11), which is the item's own index for every release but
+    /// the US *Hulk* — see [`hulk_object_picture`] for that title's three
+    /// exceptions and the measurement behind each.
+    ///
+    /// The identity answer is §8.6's whole rule for these families: "a *room
+    /// object* picture overlays [the room picture] when the item with that
+    /// index is in the player's room". A host walks the items in the room,
+    /// asks this for each, and draws the record carrying that index — if the
+    /// release ships one; most items have no artwork at all.
+    pub fn object_picture(&self, item: usize) -> usize {
+        if self.is_hulk() {
+            hulk_object_picture(item)
+        } else {
+            item
+        }
+    }
+
+    /// §12.11's hard-coded **room-keyed** overlay for this release, or `None`
+    /// — the one shape of override that is not an item's picture at all.
+    ///
+    /// §12.11: "*The Count* draws 80, 81 and 82 only in rooms 8, 18 and 9
+    /// respectively; *Voodoo Castle* draws 80 only in room 14." Both are
+    /// stated of the title, so they are named here rather than inferred; both
+    /// are §12.12 releases and identified by the (version, adventure) pair
+    /// exactly as [`Self::display_title`] identifies one.
+    ///
+    /// **Neither can fire on any specimen this crate can open**, and that is
+    /// a fact about the picture sets rather than about this table: *The
+    /// Count* and *Voodoo Castle* exist only on the Atari 8-bit (whose
+    /// per-title picture offset lists §12.10 calls "the one thing that must
+    /// still be tabulated" are not in the archive) and on the Apple II (where
+    /// both are among §7.4's three scrambled releases, whose side A is not a
+    /// DOS 3.3 disk and whose artwork is unreachable). The rule is here so
+    /// that the release which finally supplies one draws what §12.11 says it
+    /// draws.
+    pub fn room_overlay(&self, room: usize) -> Option<usize> {
+        match (self.version, self.adventure, room) {
+            // *The Count* (§12.12: version 115, adventure 5).
+            (115, 5, 8) => Some(80),
+            (115, 5, 18) => Some(81),
+            (115, 5, 9) => Some(82),
+            // *Voodoo Castle* (version 119, adventure 4). Note that
+            // *Strange Odyssey* is also version 119 and is adventure 6, so
+            // the pair is load-bearing here exactly as it is elsewhere.
+            (119, 4, 14) => Some(80),
+            _ => None,
+        }
     }
 
     /// The box title for this release, platform folded in — "Voodoo Castle
@@ -282,6 +342,65 @@ impl SagaUs {
             _ => None,
         }
     }
+
+    /// Which of family C's two run-length schemes this release's picture
+    /// records use (§8.3, SQ-1484).
+    ///
+    /// §8.3 names the two titles: "**The Count and Voodoo Castle** use a
+    /// variant with no literal mode". Everything else — the Commodore 64
+    /// *Hulk*, *Claymorgue Castle* on the Atari — uses the standard scheme.
+    ///
+    /// **Keyed by release identity, never sniffed**, for the reason
+    /// [`crate::saga_pictures::FamilyCScheme`] gives: a no-literal record read
+    /// as standard still decodes into something picture-shaped, so there is
+    /// nothing in the bytes for a sniffer to be right about.
+    ///
+    /// Answers for every platform, because the variant is a property of the
+    /// title rather than of the machine: §8.4 says *The Count*'s **Apple II**
+    /// records use it too, so a family-D reader can ask this the same way.
+    pub fn picture_scheme(&self) -> crate::saga_pictures::FamilyCScheme {
+        use crate::saga_pictures::FamilyCScheme;
+        match (self.version, self.adventure) {
+            (119, 4) | (115, 5) => FamilyCScheme::NoLiteral,
+            _ => FamilyCScheme::Standard,
+        }
+    }
+
+    /// What this release's **Atari 8-bit** companion picture side holds
+    /// (SQ-1483), or `None` when the release is not an Atari one.
+    ///
+    /// Measured on all seven sides; see [`crate::saga_atari`] for the table
+    /// and for how the split was established. It is not stated anywhere in the
+    /// specification, and it is the same split §7.4's string test makes on the
+    /// **Apple II** releases of the same seven titles.
+    pub fn atari_picture_format(&self) -> Option<AtariPictureFormat> {
+        if !matches!(self.platform, SagaPlatform::Atari8Bit) {
+            return None;
+        }
+        Some(match (self.version, self.adventure) {
+            (119, 4) | (115, 5) | (125, 13) => AtariPictureFormat::FamilyCBitmap,
+            _ => AtariPictureFormat::LineArt,
+        })
+    }
+}
+
+/// What an **Atari 8-bit** release's companion picture side is drawn with
+/// (SQ-1483).
+///
+/// The specification describes only the first of these for this platform
+/// (§8.3, "picture family C — Commodore 64 and Atari 8-bit US bitmaps"), and
+/// four of the seven titles do not use it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum AtariPictureFormat {
+    /// Family-C four-colour strip bitmaps, which [`crate::saga_atari`] reads:
+    /// *Voodoo Castle*, *The Count* and *Claymorgue Castle*.
+    FamilyCBitmap,
+    /// A line-drawing token stream — the format Appendix A item 26 measured on
+    /// the four **plain** Apple II releases, byte for byte the same at the
+    /// head of all four of these sides: *Adventureland*, *Pirate Adventure*,
+    /// *Mission Impossible* and *Strange Odyssey*. Nothing reads it on this
+    /// platform yet.
+    LineArt,
 }
 
 /// §12.11's *Hulk* room-picture remap, on its own: rooms 5 and 6 draw picture
@@ -307,6 +426,47 @@ pub fn hulk_room_picture(room: usize) -> usize {
         10 | 11 => 9,
         13 | 14 => 2,
         17 | 18 => 16,
+        other => other,
+    }
+}
+
+/// §12.11's hard-coded object overlays for the US *Hulk*, as one table: the
+/// **object picture index** the item at `item` draws, which is `item` itself
+/// for every item the release does not override.
+///
+/// §12.11 names the three — "the *Hulk* draws object pictures 70, 72 and 13
+/// under item-position conditions" — and says nothing about what the
+/// conditions are, so each was measured on `QUESTPR1.D64` (§10.7) and is
+/// recorded in the specification's Appendix A (items 29-31). What the
+/// measurement found, in each case, is which ITEM reaches the picture:
+///
+/// | picture | what it shows | the item(s) that draw it | how it was measured |
+/// |---|---|---|---|
+/// | 13 | a hole in green grass, canvas (104,74)-(176,92) | 13, **14 and 15** | `DIG` in a field drops item 13, 14 or 15 by room (the three actions differ only in room and item), and rooms 4, 7 and 8 all draw room picture 4 — so one hole picture serves three items, and only item 13's index has a file |
+/// | 70 | a gem on cavern rock, (192,86)-(264,158) | 42 | item 42 (`*Gem`) is the only gem starting in room 12, and 70's own rock backdrop continues R01012's exactly; over any other room's picture it reads as a pasted square |
+/// | 72 | the word `WAX`, (192,120)-(224,134) | 21 | item 21 (`Wax`) is the release's only wax, starts in room 13, and is the only object there with no `B01021R` of its own |
+///
+/// **The one place this table is written down**, for the same reason
+/// [`hulk_room_picture`] is: the Commodore 64 release reaches it through
+/// [`SagaUs::object_picture`] and the MS-DOS one through
+/// [`DosRelease::object_picture`](crate::saga_dos::DosRelease::object_picture),
+/// and a second copy is a second place to go stale. Both releases carry
+/// `B01013R`, `B01070R` and `B01072R` and neither carries a `B01014R`,
+/// `B01015R`, `B01021R` or `B01042R`, which is what makes the three overrides
+/// necessary rather than decorative.
+///
+/// **`B01250R` is deliberately not here.** The Commodore 64 disk carries one
+/// more object record, index 250, which no item can name (the release has 54
+/// items) and which §12.11 does not mention; it decodes to two flat colour
+/// blocks and nothing on the disk says when it is drawn. SQ-1494 records it;
+/// guessing at a condition is what §11 says not to do.
+pub fn hulk_object_picture(item: usize) -> usize {
+    match item {
+        // The two extra `Large hole` items, in the two fields whose own
+        // index has no picture file.
+        14 | 15 => 13,
+        21 => 72,
+        42 => 70,
         other => other,
     }
 }
@@ -1740,5 +1900,65 @@ mod tests {
         let adventureland =
             SagaUs { version: 416, adventure: 1, platform: SagaPlatform::Commodore64 };
         assert_eq!(adventureland.room_picture(5), 5);
+    }
+
+    /// §12.11's three hard-coded object overlays, measured on `QUESTPR1.D64`
+    /// and tabulated in [`hulk_object_picture`]: items 14 and 15 share item
+    /// 13's hole picture, item 21 draws 72 and item 42 draws 70. Every other
+    /// item draws its own index, which is §8.6's plain rule (SQ-1482).
+    #[test]
+    fn the_hulk_object_picture_overrides() {
+        let hulk = SagaUs { version: 127, adventure: 1, platform: SagaPlatform::Commodore64 };
+        for (item, want) in [(14usize, 13usize), (15, 13), (21, 72), (42, 70)] {
+            assert_eq!(hulk.object_picture(item), want, "item {item}");
+        }
+        for item in [0usize, 13, 17, 20, 22, 33, 36, 47, 53, 54] {
+            assert_eq!(hulk.object_picture(item), item, "item {item} draws its own index");
+        }
+
+        // Unlike the ROOM remap, this is not exempted on the Apple II: the
+        // three overrides are the title's, and §12.11 exempts only the room
+        // pairs.
+        let apple = SagaUs { platform: SagaPlatform::AppleII, ..hulk };
+        assert!(!apple.remaps_hulk_rooms(), "premise: the Apple II release remaps no rooms");
+        assert!(apple.is_hulk(), "…and is still the Hulk");
+        assert_eq!(apple.object_picture(42), 70, "so it still draws the cavern gem");
+
+        // No other title has any.
+        let adventureland =
+            SagaUs { version: 416, adventure: 1, platform: SagaPlatform::Commodore64 };
+        for item in [13usize, 14, 15, 21, 42] {
+            assert_eq!(adventureland.object_picture(item), item, "item {item}");
+        }
+    }
+
+    /// §12.11's other shape of override, keyed on the ROOM: *The Count* draws
+    /// 80, 81 and 82 only in rooms 8, 18 and 9, *Voodoo Castle* 80 only in
+    /// room 14, and no other release draws any (SQ-1482).
+    #[test]
+    fn the_count_and_voodoo_castle_room_keyed_overlays() {
+        let count = SagaUs { version: 115, adventure: 5, platform: SagaPlatform::Atari8Bit };
+        assert_eq!(count.room_overlay(8), Some(80));
+        assert_eq!(count.room_overlay(18), Some(81));
+        assert_eq!(count.room_overlay(9), Some(82));
+        for room in [0usize, 1, 7, 10, 14, 17, 19, 22] {
+            assert_eq!(count.room_overlay(room), None, "room {room}");
+        }
+
+        let voodoo = SagaUs { version: 119, adventure: 4, platform: SagaPlatform::AppleII };
+        assert_eq!(voodoo.room_overlay(14), Some(80));
+        for room in [0usize, 8, 9, 13, 15, 18] {
+            assert_eq!(voodoo.room_overlay(room), None, "room {room}");
+        }
+
+        // *Strange Odyssey* shares Voodoo Castle's version number and is a
+        // different adventure — the pair is load-bearing here too.
+        let odyssey = SagaUs { version: 119, adventure: 6, platform: SagaPlatform::AppleII };
+        assert_eq!(odyssey.room_overlay(14), None, "version alone does not name a title");
+
+        let hulk = SagaUs { version: 127, adventure: 1, platform: SagaPlatform::Commodore64 };
+        for room in 0..=20 {
+            assert_eq!(hulk.room_overlay(room), None, "the Hulk's overrides are item-keyed");
+        }
     }
 }

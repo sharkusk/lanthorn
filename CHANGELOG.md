@@ -23,6 +23,18 @@ Absolute URLs or no link.
 
 ### Added
 
+- **Things in the room now appear in the picture, and `INVENTORY` draws what
+  you are carrying.** The American *Scott Adams Graphic Adventures* keep a
+  separate little drawing for many of the objects lying about — the iron ring
+  set in the dome's floor, the sign on the wall, the killer bees, Ultron in
+  his cavern — and until now lanthorn showed you the empty room. It draws them
+  over the room now, in the order the release disk holds them, and takes one
+  away the moment you pick it up. Type `INVENTORY` in one of these games and
+  the picture changes too: the pack opens on its own screen with every item
+  you carry drawn on it, and RETURN puts the room back. Both the Commodore 64
+  *Hulk* and its MS-DOS twin, and `/dump-windows` names the overlays a frame
+  was built from.
+
 - **The MS-DOS *Questprobe* releases now play with their pictures.** *The
   Hulk* as it was sold for the IBM PC — a folder of DOS files with the game in
   one and sixty-eight CGA pictures beside it — opens straight out of its zip,
