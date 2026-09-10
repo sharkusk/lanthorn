@@ -177,11 +177,13 @@ somewhere else and the info panel says `S.A.G.A. (not on this file)` rather
 than quietly playing as text.
 
 Three Apple II titles — *Voodoo Castle*, *The Count* and *Claymorgue Castle* —
-keep their room pictures in a scrambled form on a disk with no filesystem on
-it at all, and lanthorn can't read those yet. It says so
-(`S.A.G.A. (scrambled, not readable yet)`) instead of pretending the artwork
-is missing. The Atari 8-bit disks are in the same position for a different
-reason, and report the same way.
+were pressed differently again: their picture side has no filesystem on it at
+all, so there are no file names to look anything up by. lanthorn finds those
+drawings by the header each one carries and draws them like the rest, so all
+seven Apple II releases play with their artwork. The Atari 8-bit disks are
+still waiting on the same treatment and say so
+(`S.A.G.A. (not on this file)`) rather than pretending the artwork is
+missing.
 
 ## Going deeper
 

@@ -504,12 +504,16 @@ fn the_apple_ii_opening_room_is_a_drawing_and_not_a_flat_fill() {
 }
 
 /// One of the three **scrambled** Apple II releases (§7.4's string test, §10.6)
-/// opens and plays and reports no pictures — because its side A is not a DOS
-/// 3.3 disk at all and its room artwork sits at the per-title offsets §12.10
-/// says are not recoverable. The honest report, pinned as one, exactly as the
-/// Atari case above is.
+/// opens, plays, and draws its room artwork off a side A that has no
+/// filesystem on it at all (SQ-1490).
+///
+/// The whole chain end to end: the string test says the release is one of the
+/// three, the companion side is found by name, its records are found by their
+/// own §8.4 header, and the room the game opens in has a band with the picture
+/// numbered for it. The pinned pixel is the load-bearing half — a band of the
+/// right size full of nothing would pass every other assertion here.
 #[test]
-fn a_scrambled_apple_ii_release_reports_no_pictures() {
+fn a_scrambled_apple_ii_release_draws_its_side_a_artwork() {
     let path = fixture_path(
         "scott-dialects/apple/Scott Adams Graphic Adventure 5 - The Count v2.1-115 \
          (4am crack) side B - boot.dsk",
@@ -524,9 +528,14 @@ fn a_scrambled_apple_ii_release_reports_no_pictures() {
     );
     let mounted = app::hints::load_mounted_story_full(&path, None)
         .expect("the boot side mounts and holds one Scott database");
+    assert_eq!(
+        mounted.saga_pictures.len(),
+        26,
+        "the records on The Count's side A, found by header and not by catalogue"
+    );
     assert!(
-        mounted.saga_pictures.is_empty(),
-        "a scrambled release's artwork is not in any catalogue this build can walk"
+        mounted.saga_pictures.iter().all(|(n, _)| n.starts_with("R05")),
+        "each record is named as this release's room picture of that ordinal"
     );
     let app::hints::LoadedStory::Scott(bytes) = mounted.story else {
         panic!("the boot side's story is a Scott Adams database");
@@ -544,10 +553,26 @@ fn a_scrambled_apple_ii_release_reports_no_pictures() {
         app::graphics::ScottPictureSources::none().with_saga_pictures(mounted.saga_pictures),
     )
     .expect("The Count boots off its own boot side");
-    assert!(picture_band(&session.screen()).is_none(), "no band without readable artwork");
-    let dump = session.window_dump().join("\n");
-    assert!(
-        dump.contains("a S.A.G.A. release with no picture files on this file"),
-        "the dump distinguishes this from a text-only game:\n{dump}"
+    let screen = session.screen();
+    let band = picture_band(&screen).expect("the start room has a picture band");
+    assert_eq!(
+        (band.canvas.width(), band.canvas.height()),
+        (280, 160),
+        "§8.4's nominal size for the scrambled sub-variant, not the plain page's 192 rows"
     );
+    // *The Count* opens "lying in a large brass bed" — an orange room. One
+    // pixel, and it is orange rather than the black an undrawn canvas would
+    // be.
+    let pixel = band.canvas.get_pixel(140, 80);
+    assert_eq!(
+        (pixel.0[0], pixel.0[1], pixel.0[2]),
+        scott::apple_pictures::PALETTE[4],
+        "the middle of the opening room is the orange the Apple II gives it"
+    );
+    assert_eq!(pixel.0[3], 255, "family D carries no transparent index");
+    let mut counts = std::collections::HashMap::new();
+    for p in band.canvas.pixels() {
+        *counts.entry((p.0[0], p.0[1], p.0[2])).or_insert(0usize) += 1;
+    }
+    assert!(counts.len() >= 4, "only {} colours in the opening room", counts.len());
 }

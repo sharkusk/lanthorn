@@ -47,9 +47,16 @@ Absolute URLs or no link.
   Adventure International logo — green, blue and orange — on the way in. The story list names the release
   ("Adventureland (Apple II)") and the info panel counts the artwork
   (`Pictures: S.A.G.A. (Apple II hi-res, N pictures)`) — or says where it
-  isn't, if the picture disk was left behind. *Voodoo Castle*, *The Count* and
-  *Claymorgue Castle* keep their room pictures in a scrambled form lanthorn
-  cannot read yet, and say so rather than playing as silently text-only.
+  isn't, if the picture disk was left behind.
+
+- **…and so do the other three, off a disk with no filesystem on it.**
+  *Voodoo Castle*, *The Count* and *Claymorgue Castle* were pressed
+  differently: their picture side has no catalogue, no directory and no file
+  names — the game's own loader knew where each drawing sat and nothing else
+  on the disk says. lanthorn finds them the way the pictures themselves say
+  where they are, and draws all ninety-seven: the brass bed *The Count* wakes
+  you in, Claymorgue's dragon, Voodoo Castle's fortune teller. Nothing to set
+  up, and the story list counts them like any other release's.
 
 - **The ZX Spectrum *Mysterious Adventures* now load, straight from a
   snapshot.** All eleven of Brian Howarth's titles — *The Golden Baton*, *The

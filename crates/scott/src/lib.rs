@@ -240,7 +240,10 @@ pub use decompile::{decompile_action, list_items, list_rooms, list_vocab};
 pub use loader::{detect_dialect, looks_like_scott, looks_like_scott_bytes, Dialect, LoadError};
 pub use options::{Options, Presentation, Wording};
 pub use saga_dos::{decode_family_e, DosRelease};
-pub use apple_pictures::{decode_family_d, AppleError};
+pub use apple_pictures::{
+    decode_family_d, decode_family_d_plain, decode_family_d_scrambled,
+    scan_scrambled_pictures, AppleError,
+};
 pub use saga_pictures::{decode_family_c, PictureError};
 pub use saga_us::{
     detect_saga_us, is_apple_picture_file_name, is_picture_file_name, looks_like_saga_us,

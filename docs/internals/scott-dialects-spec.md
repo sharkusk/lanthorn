@@ -5181,8 +5181,8 @@ recorded here so the next reader of that section reads them together with it.
     columns, 160 rows, which is its stated 280 x 160. So the section describes
     a real format that this corpus carries only for the images those three
     releases keep BESIDE their room artwork, and the room artwork of the same
-    three sits on a side A with no filesystem on it at all, at the per-title
-    offsets §12.10 says are not recoverable (SQ-1490).
+    three sits on a side A with no filesystem on it at all — reachable after
+    all, by scan rather than by catalogue; see item 30 (SQ-1490).
 
     **The three things this item left undetermined are settled, and the format
     is in colour** — see item 29 below (SQ-1489). In short: `0xC0` is not a
@@ -5292,6 +5292,65 @@ recorded here so the next reader of that section reads them together with it.
     Reading a release's own 6502 renderer is measurement of a **specimen** —
     the same disks the artwork is on — and not a reading of any interpreter;
     `docs/internals/clean-room.md` is the protocol this stayed inside.
+
+30. **§8.4's SCRAMBLED sub-variant is right, its per-release row table is the
+    standard hi-res interleave, and its "hard-coded per-title list" is a scan**
+    (SQ-1490). The three releases §7.4's string test flags — *Voodoo Castle*,
+    *The Count*, *Claymorgue Castle* — keep their room artwork on a side A with
+    no filesystem on it, which is why §12.10 calls those offsets "not
+    recoverable from the database". They are recoverable from the DISK. Three
+    measurements:
+
+    - **Every record announces itself.** All 97 open with §8.4's own four-byte
+      header and all 97 write the same one: `00 00 28 A0`, no offset, 40 byte
+      columns, 160 rows — §8.4's stated 280 x 160. Every record starts on a
+      **sector boundary** and they run in order from **track 1 sector 0**, so
+      the *n*-th header is picture *n*: 36 records on *Voodoo Castle*, 26 on
+      *The Count*, 35 on *Claymorgue Castle*.
+    - **The ordinal is the picture index**, checked at both ends of the
+      numbering and in the middle. Record 0 is §8.6's reserved darkness card
+      on all three; the record numbered with each release's LAST room is that
+      release's death card (*Voodoo Castle*'s 25 "lot of TROUBLE!", *The
+      Count*'s 22 "LOT OF TROUBLE!", *Claymorgue Castle*'s 32 "real mess!"),
+      which is what would fail if any spurious header earlier had shifted the
+      count; and *Claymorgue Castle*'s 17 "I'm underwater in thick murky
+      fluid" is a field of blue in 256 bytes, its 19 "hollow tree sign says
+      drop stars here" reads `LEAVE STARS HERE`, and its 29 is a green dragon.
+    - **§8.4's per-release row table does not exist as a per-release table.**
+      The section says the row address "is not computed but read from a
+      0x182-byte table taken off the game disk" at `M2` file offset `0x174B`.
+      Measured on all three: those 384 bytes are **byte-identical across the
+      three titles** and are exactly `1024 * (y mod 8) + 128 * ((y / 8) mod 8)
+      + 40 * (y / 64)` for every one of the 192 rows — the standard Apple II
+      high-resolution interleave, a lookup table for an address computation and
+      not a descrambling of anything. A decoder that computes the address reads
+      the same picture, and needs nothing off the boot side. (Only the two
+      bytes past `0x181` differ between the three, and they are not the table.)
+
+    §8.4's compression for this sub-variant is right as stated, and so is its
+    byte-pair placement with width and height as absolute limits. The records
+    are **nearly** packed tight — five to twenty-two sectors to the next header
+    — but not always, so a record's length is bounded rather than taken from
+    the gap: *Claymorgue Castle* leaves forty-one sectors after its title card.
+    The bound is one byte-pair token per output pair, `4 + 40 * 160`, because
+    the scheme cannot expand.
+
+    **What is not established here**: the §8.6 indices of the records PAST each
+    release's highest room number — ten on *Voodoo Castle*, three on *The
+    Count*, two on *Claymorgue Castle*, and object and title artwork by
+    inspection (the Adventure International title card is among them on all
+    three, but at the last record on two of them and the second-to-last on the
+    third, so its position is not a rule). lanthorn numbers every record by its
+    ordinal, which is right for every index a ROOM can ask for and is the only
+    lookup it performs.
+
+    Two host consequences. `blorb::medium::apple_raw_sectors` is the door to a
+    5.25-inch side that `DiskImage::detect` rightly answers `None` for — it has
+    no VTOC and no catalogue — and it says nothing about the contents. And the
+    records are handed on under the ordinary Apple II room-picture NAME
+    (`R0503` and so on), so the room-to-picture lookup, the info panel's count
+    and the picker's label needed no change at all; the adventure number the
+    name carries is read off the boot side's own database.
 
 The in-memory model this document's dialects decode *to*, in that crate, is a
 database of rooms (six exits and a description, plus a flag for the leading-`*`

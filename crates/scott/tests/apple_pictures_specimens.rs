@@ -26,9 +26,11 @@
 //! - **the reserved indices** — §8.6 says 0 is the darkness picture, 98 the
 //!   inventory backdrop and 99 the title picture, and all four titles carry
 //!   all three under the naming rule this crate implements;
-//! - **the three scrambled releases** — their side A is not a DOS 3.3 disk at
-//!   all, so their room artwork is unreachable and this suite pins the refusal
-//!   rather than pretending otherwise.
+//! - **the three scrambled releases** (SQ-1490) — their side A is not a DOS
+//!   3.3 disk at all, so there is no catalogue to walk and the records are
+//!   found by their own §8.4 header; this suite pins how many there are per
+//!   title, that the ordinal is the picture index, and the colours of the
+//!   cards that prove it.
 //!
 //! # Getting the corpus
 //!
@@ -56,7 +58,10 @@
 use std::collections::BTreeMap;
 use std::path::PathBuf;
 
-use scott::apple_pictures::{decode_family_d, CANVAS_HEIGHT, CANVAS_WIDTH, PALETTE};
+use scott::apple_pictures::{
+    decode_family_d, decode_family_d_scrambled, scan_scrambled_pictures, CANVAS_HEIGHT,
+    CANVAS_WIDTH, PALETTE,
+};
 use scott::{
     parse_apple_picture_file_name, room_picture_file_name, PictureUsage, SagaPlatform, SagaUs,
 };
@@ -207,17 +212,52 @@ const PLAIN: [Plain; 4] = [
     },
 ];
 
-/// The three §10.6 releases whose `M2` carries §7.4's string, whose side A is
-/// not a DOS 3.3 disk, and whose room artwork is therefore unreachable.
-const SCRAMBLED: [(&str, &str); 3] = [
+/// One card's colour census: what it is, which record, and how many pixels of
+/// each [`PALETTE`] colour it resolves to.
+type Card = (&'static str, usize, [usize; 6]);
+
+/// The three §10.6 releases whose `M2` carries §7.4's string and whose side A
+/// is not a DOS 3.3 disk: title, file-name stem, records on side A, the
+/// release's highest room number, and three cards pinned by colour (SQ-1490).
+///
+/// The **death card** is the load-bearing one: it is the picture numbered with
+/// the release's LAST room, so it fails if any spurious header before it has
+/// shifted the numbering. *Voodoo Castle*'s room 25 is "lot of TROUBLE!",
+/// *The Count*'s 22 is "LOT OF TROUBLE! (And so Are you!)", and *Claymorgue
+/// Castle*'s 32 is "real mess!".
+const SCRAMBLED: [(&str, &str, usize, usize, [Card; 3]); 3] = [
     (
         "Voodoo Castle",
         "Scott Adams Graphic Adventure 4 - Voodoo Castle v2.1-119 (4am crack) side ",
+        36,
+        25,
+        [
+            ("darkness card", 0, [41401, 0, 0, 270, 298, 2831]),
+            ("start room", 1, [8504, 124, 2, 12745, 5677, 17748]),
+            ("death card", 25, [15863, 16817, 19, 173, 5613, 6315]),
+        ],
     ),
-    ("The Count", "Scott Adams Graphic Adventure 5 - The Count v2.1-115 (4am crack) side "),
+    (
+        "The Count",
+        "Scott Adams Graphic Adventure 5 - The Count v2.1-115 (4am crack) side ",
+        26,
+        22,
+        [
+            ("darkness card", 0, [41176, 228, 252, 0, 0, 3144]),
+            ("start room", 1, [9210, 0, 0, 434, 20878, 14278]),
+            ("death card", 22, [32270, 695, 1878, 58, 5432, 4467]),
+        ],
+    ),
     (
         "Claymorgue Castle",
         "Scott Adams Graphic Adventure 13 - The Sorcerer of Claymorgue Castle v2.2-122 (4am crack) side ",
+        35,
+        32,
+        [
+            ("darkness card", 0, [43689, 136, 83, 0, 0, 892]),
+            ("start room", 1, [14402, 32, 12418, 11571, 1440, 4937]),
+            ("death card", 32, [9386, 3474, 26486, 3, 2, 5449]),
+        ],
     ),
 ];
 
@@ -592,17 +632,17 @@ fn the_darkness_card_is_white_lettering_on_black() {
     }
 }
 
-/// The three scrambled releases: §7.4's string test fires on their `M2`, their
-/// side A is not a DOS 3.3 disk at all, and their boot side carries the
-/// `PAK.*` files §8.4 describes and no room artwork. Pinned so the refusal
-/// this crate reports stays honest.
+/// The three scrambled releases (§7.4's string test, §10.6, SQ-1490): their
+/// side A is not a DOS 3.3 disk, their boot side carries the `PAK.*` files
+/// §8.4 describes and no room artwork — and the room artwork is on side A
+/// after all, found by header rather than by catalogue.
 #[test]
-fn the_scrambled_releases_keep_their_room_artwork_out_of_reach() {
+fn the_scrambled_releases_keep_their_room_artwork_on_a_side_with_no_filesystem() {
     let Some(dir) = apple_dir() else {
         assert!(skipped("apple II scrambled releases"));
         return;
     };
-    for (title, stem) in SCRAMBLED {
+    for (title, stem, _, _, _) in SCRAMBLED {
         let boot = std::fs::read_dir(&dir)
             .expect("readable")
             .flatten()
@@ -616,7 +656,7 @@ fn the_scrambled_releases_keep_their_room_artwork_out_of_reach() {
         let raw_a = image(&side_a).unwrap_or_else(|| panic!("{title}: no {side_a}"));
         assert!(
             dos33_contents(&raw_a).is_empty(),
-            "{title}: side A parses as a DOS 3.3 disk, so the pictures may be reachable after all"
+            "{title}: side A parses as a DOS 3.3 disk, so a catalogue walk would find the artwork"
         );
 
         let files = dos33_contents(&image(&boot).expect("boot side"));
@@ -634,11 +674,138 @@ fn the_scrambled_releases_keep_their_room_artwork_out_of_reach() {
         );
         // §8.4's four-byte header really is there on a `PAK.*` file — offset
         // 0, offset 0, 40 byte columns, 160 rows — which is the half of that
-        // section the specimens agree with.
+        // section the specimens agree with, and the same header the records on
+        // side A open with.
         assert_eq!(
             files["PAK.INVEN"].get(4..8),
             Some(&[0x00, 0x00, 0x28, 0xA0][..]),
             "{title}: PAK.INVEN does not open with §8.4's header"
         );
+
+        // §8.4's per-release row table is the standard Apple II hi-res
+        // interleave and nothing else — which is why this crate computes the
+        // address instead of carrying three tables. Both halves are checked:
+        // the 384 bytes agree with the arithmetic, row for row.
+        let table = &m2[0x174B..0x174B + 0x182];
+        for y in 0..0xC0usize {
+            let addr = usize::from(table[y]) | (usize::from(table[0xC0 + y]) << 8);
+            let interleave = 1024 * (y % 8) + 128 * ((y / 8) % 8) + 40 * (y / 64);
+            assert_eq!(addr - 0x2000, interleave, "{title}: M2's row {y} address");
+        }
     }
+}
+
+/// The record scan, per title: how many, where the first ones sit, and what
+/// the cards at the ends of the numbering are.
+///
+/// **The load-bearing pin is the death card.** Each release's LAST room —
+/// *Voodoo Castle*'s 25 "lot of TROUBLE!", *The Count*'s 22 "LOT OF
+/// TROUBLE!", *Claymorgue Castle*'s 32 "real mess!" — is the picture that
+/// record number carries, which is what says no spurious header anywhere
+/// earlier has shifted the numbering. A count alone could not: a scan that
+/// found one record too many and one too few would still count right.
+#[test]
+fn every_scrambled_room_picture_decodes_and_the_ordinal_is_the_picture_index() {
+    let Some(dir) = apple_dir() else {
+        assert!(skipped("apple II scrambled scan"));
+        return;
+    };
+    for (title, stem, records, rooms, cards) in SCRAMBLED {
+        let side_a = std::fs::read_dir(&dir)
+            .expect("readable")
+            .flatten()
+            .map(|e| e.file_name().to_string_lossy().into_owned())
+            .find(|n| n.starts_with(stem) && n.contains("side A"));
+        let Some(side_a) = side_a else {
+            assert!(skipped(title));
+            return;
+        };
+        let raw = image(&side_a).expect("side A");
+        let ranges = scan_scrambled_pictures(&raw);
+        assert_eq!(ranges.len(), records, "{title}: records on side A");
+        assert_eq!(ranges[0].start, 0x1000, "{title}: the first record is track 1 sector 0");
+        for (i, r) in ranges.iter().enumerate() {
+            assert_eq!(r.start % 256, 0, "{title}: record {i} does not start on a sector");
+            assert!(r.end > r.start, "{title}: record {i} is empty");
+            if i + 1 < ranges.len() {
+                assert!(r.end <= ranges[i + 1].start, "{title}: record {i} runs into the next");
+            }
+            // The run-length scheme cannot expand, so no record needs more
+            // than one byte-pair token per output pair.
+            assert!(
+                r.end - r.start <= scott::apple_pictures::SCRAMBLED_MAX_RECORD,
+                "{title}: record {i} is {} bytes",
+                r.end - r.start
+            );
+        }
+        assert!(rooms < records, "{title}: {rooms} rooms but only {records} records");
+
+        let mut flat = 0usize;
+        for (i, r) in ranges.iter().enumerate() {
+            let pic = decode_family_d_scrambled(&raw[r.clone()], SagaPlatform::AppleII)
+                .unwrap_or_else(|e| panic!("{title} record {i}: {e}"));
+            // §8.4's nominal size, and NOT the plain sub-variant's 192-row
+            // page: these records declare 40 byte columns by 160 rows.
+            assert_eq!((pic.width, pic.height), (280, 160), "{title} record {i}");
+            let mut seen = [false; PALETTE.len()];
+            for &v in &pic.pixels {
+                assert!(usize::from(v) < PALETTE.len(), "{title} record {i}: no such colour");
+                seen[usize::from(v)] = true;
+            }
+            if seen.iter().filter(|&&s| s).count() == 1 {
+                flat += 1;
+            }
+        }
+        // Not one of the 97 records is a flat fill — and the closest thing to
+        // one, *Claymorgue Castle*'s room 17 "I'm underwater in thick murky
+        // fluid", is a field of blue in 256 bytes, the smallest record in the
+        // corpus, that still carries the edge colours the artifact model gives
+        // its border.
+        assert_eq!(flat, 0, "{title}: {flat} records resolve to one flat colour");
+
+        // …and the three cards, by their exact colour census.
+        for (what, n, want) in cards {
+            let pic = decode_family_d_scrambled(&raw[ranges[n].clone()], SagaPlatform::AppleII)
+                .expect("decodes");
+            let mut counts = [0usize; PALETTE.len()];
+            for &v in &pic.pixels {
+                counts[usize::from(v)] += 1;
+            }
+            assert_eq!(counts, want, "{title} {what} (record {n})");
+        }
+    }
+}
+
+/// The dispatcher (SQ-1490): one entry point, two sub-variants, told apart by
+/// the record's own first bytes — a plain record's `$7000` load address
+/// against a scrambled record's §8.4 header. Pinned on one real record of each
+/// kind, because the whole point is that the caller does not have to know.
+#[test]
+fn one_entry_point_reads_both_sub_variants() {
+    let Some(dir) = apple_dir() else {
+        assert!(skipped("apple II dispatcher"));
+        return;
+    };
+    // A plain record: *Adventureland*'s darkness card, 280x192 line art.
+    let Some(pics) = pictures(&PLAIN[0]) else {
+        assert!(skipped("Adventureland"));
+        return;
+    };
+    let plain = decode_family_d(&pics["R0100"], SagaPlatform::AppleII).expect("decodes");
+    assert_eq!((plain.width, plain.height), (CANVAS_WIDTH, CANVAS_HEIGHT), "the plain page");
+
+    // A scrambled record: *The Count*'s, 280x160.
+    let side_a = std::fs::read_dir(&dir)
+        .expect("readable")
+        .flatten()
+        .map(|e| e.file_name().to_string_lossy().into_owned())
+        .find(|n| n.starts_with(SCRAMBLED[1].1) && n.contains("side A"));
+    let Some(side_a) = side_a else {
+        assert!(skipped("The Count"));
+        return;
+    };
+    let raw = image(&side_a).expect("side A");
+    let ranges = scan_scrambled_pictures(&raw);
+    let scrambled = decode_family_d(&raw[ranges[0].clone()], SagaPlatform::AppleII).expect("decodes");
+    assert_eq!((scrambled.width, scrambled.height), (280, 160), "the scrambled box");
 }

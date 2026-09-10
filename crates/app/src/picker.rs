@@ -96,10 +96,15 @@ pub enum ScottPictures {
         platform: scott::SagaPlatform,
         /// Is this one of the three Apple II releases §7.4's string test calls
         /// **scrambled** (SQ-1476)? Those keep their room artwork on a side A
-        /// that is not a DOS 3.3 disk at all, at the per-title offsets §12.10
-        /// says are "not recoverable from the database" — so the answer to
-        /// "where would the pictures be?" is "nowhere this build can read",
-        /// and the panel says so rather than implying a missing file.
+        /// that is not a DOS 3.3 disk at all, so the answer to "where would
+        /// the pictures be?" is not a file name.
+        ///
+        /// **SQ-1490 made it readable**, so a scrambled release with its side
+        /// A beside it reports [`Self::SagaUsStrips`] like any other and never
+        /// reaches this arm. What is left for the flag is the case that
+        /// remains genuinely different: a scrambled boot side whose companion
+        /// is missing has no *catalogue* to be missing from either, so the
+        /// panel can say which kind of nothing it found.
         ///
         /// Always `false` off the Apple II.
         scrambled: bool,
@@ -4320,8 +4325,10 @@ mod tests {
             "§12.12's per-release title, platform folded in"
         );
 
-        // …and one of the three scrambled releases, whose room artwork is not
-        // reachable at all (§7.4's string test, §10.6).
+        // …and one of the three scrambled releases, whose room artwork is on
+        // a side A with no filesystem on it and is found by header rather than
+        // by catalogue (§7.4's string test, §10.6, SQ-1490). The row reads
+        // exactly like any other Apple II release's, which is the point.
         let count = stories.join(
             "scott-dialects/apple/Scott Adams Graphic Adventure 5 - The Count v2.1-115 \
              (4am crack) side B - boot.dsk",
@@ -4330,11 +4337,11 @@ mod tests {
             let row = resolve_entry(&count, &base).expect("The Count's boot side opens");
             assert_eq!(
                 row.meta.scott_pictures,
-                Some(ScottPictures::SagaUsNoPictures {
+                Some(ScottPictures::SagaUsStrips {
                     platform: scott::SagaPlatform::AppleII,
-                    scrambled: true,
+                    pictures: 26,
                 }),
-                "a scrambled release keeps its room artwork out of reach"
+                "the 26 records on The Count's side A"
             );
         }
         let _ = std::fs::remove_dir_all(&base);

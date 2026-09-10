@@ -1483,7 +1483,71 @@ pub fn saga_picture_files(
     if !here.is_empty() || !matches!(platform, scott::SagaPlatform::AppleII) {
         return here;
     }
-    saga_companion_side(path).map(|side| picture_files_on(&side, platform)).unwrap_or_default()
+    let Some(side) = saga_companion_side(path) else {
+        return Vec::new();
+    };
+    let named = picture_files_on(&side, platform);
+    if !named.is_empty() {
+        return named;
+    }
+    // SQ-1490: the three scrambled releases. Their companion side has no
+    // filesystem on it at all, so no catalogue walk can find anything and the
+    // records are located by their own header instead.
+    apple_scrambled_picture_files(path, &side)
+}
+
+/// The room artwork of one **scrambled** Apple II release, `(name, record)`
+/// (SQ-1490).
+///
+/// *Voodoo Castle*, *The Count* and *Claymorgue Castle* keep theirs on a side A
+/// that is not a DOS 3.3 disk — spec §7.4's `M2` string test is what says a
+/// release is one of the three, and [`saga_apple_scrambled`] asks it. The
+/// records are found by [`scott::scan_scrambled_pictures`], which reads the
+/// side as flat sectors ([`blorb::medium::apple_raw_sectors`]) and takes each
+/// §8.4 header it finds; the *n*-th record is picture *n*, so each one is named
+/// with the ordinary Apple II room-picture name and everything downstream — the
+/// room-to-picture lookup, the info panel's count, the picker's label — needs
+/// no change at all.
+///
+/// `boot` is the side the story came off and is where the adventure number is
+/// read from, because the name carries it: *Voodoo Castle*'s room 3 is `R0403`
+/// and *The Count*'s is `R0503`. That is one extra parse of a database already
+/// in memory once, which is the same trade this whole walk makes.
+///
+/// Empty when the release is not one of the three, when the side is not a
+/// 5.25-inch sector dump, or when the scan finds no records — each of which is
+/// a release with no reachable artwork, and says so by having none.
+fn apple_scrambled_picture_files(boot: &Path, side: &Path) -> Vec<(String, Vec<u8>)> {
+    if !saga_apple_scrambled(boot) {
+        return Vec::new();
+    }
+    let Ok(raw) = std::fs::read(side) else {
+        return Vec::new();
+    };
+    let Some(image) = blorb::medium::apple_raw_sectors(&raw) else {
+        return Vec::new();
+    };
+    let ranges = scott::scan_scrambled_pictures(image);
+    if ranges.is_empty() {
+        return Vec::new();
+    }
+    let Ok((bytes, _)) = read_story_file(boot, None) else {
+        return Vec::new();
+    };
+    let Ok(release) = scott::parse_saga_us(&bytes, scott::SagaPlatform::AppleII) else {
+        return Vec::new();
+    };
+    let Some(release) = release.saga_us else {
+        return Vec::new();
+    };
+    ranges
+        .into_iter()
+        .enumerate()
+        .filter_map(|(index, range)| {
+            let name = scott::room_picture_file_name(&release, index)?;
+            Some((name, image[range].to_vec()))
+        })
+        .collect()
 }
 
 /// One disk image's picture files, by `platform`'s naming rule.

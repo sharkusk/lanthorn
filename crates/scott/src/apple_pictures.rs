@@ -12,10 +12,11 @@
 //! Impossible*'s and *Strange Odyssey*'s companion sides is an **opcode
 //! stream** — move, line, brush, area, and three attribute registers — played
 //! over the machine's own 280 x 192 hi-res page. §8.4's description does fit
-//! the three *scrambled* releases' `PAK.*` files, which really do open with
-//! its four-byte header (`00 00 28 A0`), so the section is right about a
-//! format this module does not decode and wrong about the one the plain four
-//! use. Appendix A items 26 and 29 record the measurements.
+//! the three *scrambled* releases, whose records really do open with its
+//! four-byte header (`00 00 28 A0`), and which
+//! [`decode_family_d_scrambled`] reads; so the section is right about one of
+//! its two sub-variants and wrong about the other. Appendix A items 26, 29 and
+//! 30 record the measurements.
 //!
 //! §8.4 *is* right about one thing this module needs: the **artifact colour
 //! model** it states for resolving a hi-res page to six colours, which
@@ -656,7 +657,194 @@ impl Page {
     }
 }
 
-/// Decode one family-D picture file (the format the module doc measures).
+/// Every **scrambled** family-D picture on one side-A image, as byte ranges
+/// into it, in the order the disk holds them (SQ-1490).
+///
+/// `image` is the flat sector image `blorb::medium::apple_raw_sectors` hands
+/// back — a side A with no filesystem on it, so there is no catalogue to walk
+/// and the records are found by their own header.
+///
+/// # How they are found, and why a scan rather than a table
+///
+/// §8.4 says a family-D loader needs "a hard-coded per-title list of (usage,
+/// index, offset, length)". It does not, on these three disks: every record
+/// opens with §8.4's own four-byte header, the three titles' headers are
+/// **identical** (`00 00 28 A0` — no offset, 40 byte columns, 160 rows), every
+/// record starts on a **sector boundary**, and they run in order from **track
+/// 1 sector 0**. So the *n*-th header is picture *n*, and the record is the
+/// bytes from it up to the next one. Measured: 36 records on *Voodoo Castle*,
+/// 26 on *The Count*, 35 on *Claymorgue Castle*, at `0x01000` onward on all
+/// three. They are nearly always packed tight — five to twenty-two sectors to
+/// the next header — but not always: *Claymorgue Castle* leaves forty-one
+/// after its title card, which is why a record's length is BOUNDED rather than
+/// simply taken from the gap.
+///
+/// **And the ordinal is the picture index**, which four checks settle. Record
+/// 0 is §8.6's reserved darkness card on all three (the words `IT'S TOO
+/// DARK!`); records 1 upward are the rooms in room order; the record numbered
+/// with each release's LAST room is that release's death card — *Voodoo
+/// Castle*'s room 25 "lot of TROUBLE!", *The Count*'s room 22 "LOT OF
+/// TROUBLE!", *Claymorgue Castle*'s room 32 "real mess!" — which is the check
+/// that no spurious header anywhere before it has shifted the numbering; and
+/// *Claymorgue Castle*'s room 29, "dragon's lair", is a green dragon.
+///
+/// The records past the highest room number are the release's object and title
+/// artwork — ten on *Voodoo Castle*, three on *The Count*, two on
+/// *Claymorgue Castle*, including in each case the Adventure International
+/// title card. **What §8.6 indices those carry is not established here**;
+/// this function numbers every record by its ordinal, which is what the disk's
+/// own order says and is right for every index a room can ask for.
+///
+/// The last record is bounded at [`SCRAMBLED_MAX_RECORD`] bytes rather than
+/// run to the end of the image, which on these disks is fifty kilobytes of
+/// nothing.
+#[must_use]
+pub fn scan_scrambled_pictures(image: &[u8]) -> Vec<std::ops::Range<usize>> {
+    /// §8.4's header as all three titles write it: no offset, 40 byte columns
+    /// (280 pixels), 160 rows.
+    const HEADER: [u8; 4] = [0x00, 0x00, 0x28, 0xA0];
+    /// A sector, and the granularity a record starts on.
+    const SECTOR: usize = 256;
+    /// Track 1 sector 0. Track 0 is the boot track on all three.
+    const FIRST: usize = 16 * SECTOR;
+
+    let mut starts = Vec::new();
+    let mut at = FIRST;
+    while at + HEADER.len() <= image.len() {
+        if image[at..at + HEADER.len()] == HEADER {
+            starts.push(at);
+        }
+        at += SECTOR;
+    }
+    starts
+        .iter()
+        .enumerate()
+        .map(|(i, &start)| {
+            let end = starts.get(i + 1).copied().unwrap_or(usize::MAX);
+            start..end.min(start.saturating_add(SCRAMBLED_MAX_RECORD)).min(image.len())
+        })
+        .collect()
+}
+
+/// The most bytes a scrambled record can need: one byte-pair token per output
+/// pair over the whole 40 x 160 picture, plus its four-byte header.
+///
+/// The run-length scheme cannot expand — a literal pair costs two bytes and
+/// writes two — so this bounds the last record, whose end no following header
+/// marks.
+pub const SCRAMBLED_MAX_RECORD: usize = 4 + 40 * 160;
+
+/// Decode one **scrambled** family-D picture — §8.4's own sub-variant, the one
+/// the specification is right about (SQ-1490).
+///
+/// `record` is a range [`scan_scrambled_pictures`] found: §8.4's four-byte
+/// header — horizontal byte-column offset, vertical row offset, width in byte
+/// columns, height in rows, the last two **absolute limits** — followed by the
+/// compressed stream. There is no DOS 3.3 prologue, because these records are
+/// not files.
+///
+/// **Compression**, §8.4's second scheme: read a byte; if it is **zero** it is
+/// an escape and the next two bytes are the repeat count and the first data
+/// byte; if it is non-zero it is itself the first data byte with a count of
+/// one. Either way one more byte follows as the second data byte, and a count
+/// of zero means one. The pair is written that many times.
+///
+/// **Placement** is the plain sub-variant's: the pair goes to rows *y* and
+/// *y* + 1 of the current byte column, *y* advances by two, and when it
+/// reaches the stored height the column advances and *y* resets to the
+/// vertical offset. Decoding ends when the column reaches the stored width.
+///
+/// **§8.4's per-release row table is not needed and does not exist.** The
+/// section says the row address "is not computed but read from a 0x182-byte
+/// table taken off the game disk", at `M2` file offset `0x174B`. Measured on
+/// all three: the 384 bytes there are **byte-identical across the three
+/// titles** and are exactly the standard Apple II high-resolution interleave —
+/// `1024 * (y mod 8) + 128 * ((y / 8) mod 8) + 40 * (y / 64)` — for every one
+/// of the 192 rows. It is a lookup table for an address computation, not a
+/// descrambling of anything, so a decoder that computes the address is reading
+/// the same picture. (The two bytes past `0x181` are the only part that
+/// differs between the three, and they are not part of the table.)
+///
+/// The answer is [`CANVAS_HEIGHT`]-independent: a picture is `7 * width` by
+/// `height` pixels, which on every specimen is §8.4's nominal 280 x 160 —
+/// **not** the plain sub-variant's whole 192-row page.
+///
+/// # Errors
+///
+/// [`AppleError`] — a record too short to carry a header, a header describing
+/// no pixels, or a platform that does not use family D.
+pub fn decode_family_d_scrambled(
+    record: &[u8],
+    platform: SagaPlatform,
+) -> Result<HiResPicture, AppleError> {
+    if !matches!(platform, SagaPlatform::AppleII) {
+        return Err(AppleError::NotAppleII { platform });
+    }
+    if record.len() < 4 {
+        return Err(AppleError::TooShort { len: record.len() });
+    }
+    let (hoff, voff) = (usize::from(record[0]), usize::from(record[1]));
+    let width = usize::from(record[2]).min(COLUMNS);
+    let height = usize::from(record[3]).min(CANVAS_HEIGHT);
+    if width == 0 || height <= voff || hoff >= width {
+        return Err(AppleError::EmptyStream);
+    }
+
+    // Black, and it never shows: every byte inside the declared box is
+    // written, and the answer is cropped to that box.
+    let mut page = Page { bytes: vec![0x00; COLUMNS * CANVAS_HEIGHT] };
+    let mut col = hoff;
+    let mut y = voff;
+    let mut i = 4usize;
+    'stream: while i < record.len() {
+        let b = record[i];
+        i += 1;
+        let (mut count, first) = if b == 0 {
+            let (Some(&count), Some(&first)) = (record.get(i), record.get(i + 1)) else { break };
+            i += 2;
+            (usize::from(count), first)
+        } else {
+            (1, b)
+        };
+        let Some(&second) = record.get(i) else { break };
+        i += 1;
+        if count == 0 {
+            count = 1;
+        }
+        for _ in 0..count {
+            if col >= width {
+                break 'stream;
+            }
+            if y < CANVAS_HEIGHT {
+                page.bytes[y * COLUMNS + col] = first;
+            }
+            if y + 1 < CANVAS_HEIGHT {
+                page.bytes[(y + 1) * COLUMNS + col] = second;
+            }
+            y += 2;
+            if y >= height {
+                col += 1;
+                y = voff;
+            }
+        }
+    }
+
+    let resolved = page.resolve();
+    let out_w = width * 7;
+    let mut pixels = Vec::with_capacity(out_w * height);
+    for row in 0..height {
+        pixels.extend_from_slice(&resolved[row * CANVAS_WIDTH..row * CANVAS_WIDTH + out_w]);
+    }
+    Ok(HiResPicture { width: out_w, height, pixels })
+}
+
+/// Decode one **plain** family-D picture file — the opcode stream the module
+/// doc measures, which is what the four releases with an ordinary DOS 3.3 side
+/// A carry.
+///
+/// [`decode_family_d`] is the entry point that picks between this and
+/// [`decode_family_d_scrambled`]; call this one when the record's
+/// sub-variant is already known.
 ///
 /// `file` is the whole DOS 3.3 binary file as the disk's track/sector list
 /// gives it, **including** the four-byte prologue: bytes 0-1 the load address
@@ -676,7 +864,10 @@ impl Page {
 ///
 /// [`AppleError`] — a file too short to carry a prologue, a prologue declaring
 /// an empty stream, or a platform that does not use family D at all.
-pub fn decode_family_d(file: &[u8], platform: SagaPlatform) -> Result<HiResPicture, AppleError> {
+pub fn decode_family_d_plain(
+    file: &[u8],
+    platform: SagaPlatform,
+) -> Result<HiResPicture, AppleError> {
     if !matches!(platform, SagaPlatform::AppleII) {
         return Err(AppleError::NotAppleII { platform });
     }
@@ -751,6 +942,50 @@ pub fn decode_family_d(file: &[u8], platform: SagaPlatform) -> Result<HiResPictu
     Ok(HiResPicture { width: CANVAS_WIDTH, height: CANVAS_HEIGHT, pixels: page.resolve() })
 }
 
+/// Decode one family-D picture, whichever sub-variant it is (SQ-1490).
+///
+/// The host that walks a disk knows which release it opened but not, in
+/// general, which of the two shapes a given record has — so the record says.
+/// The two are told apart by their first bytes, and the discriminator is
+/// measured on the whole corpus rather than assumed:
+///
+/// * A **plain** record is a DOS 3.3 binary FILE, so it opens with that file
+///   type's four-byte prologue, and the load address in its first two bytes is
+///   `$7000` — bytes `00 70` — on **all 314** of the four plain releases'
+///   picture files.
+/// * A **scrambled** record is not a file at all but a run of sectors, and
+///   opens with §8.4's own four-byte header, which on all 97 records of the
+///   three scrambled releases is `00 00 28 A0`. Its second byte is a vertical
+///   row offset and can never be `0x70`, because that is a load address's high
+///   byte and this header has no load address in it.
+///
+/// So: bytes 0-1 of `00 70` select [`decode_family_d_plain`], a plausible
+/// §8.4 header selects [`decode_family_d_scrambled`], and anything else falls
+/// to the plain decoder, whose refusals (§11) are the right ones to report for
+/// a record that is neither.
+///
+/// # Errors
+///
+/// [`AppleError`], from whichever decoder the record selected.
+pub fn decode_family_d(record: &[u8], platform: SagaPlatform) -> Result<HiResPicture, AppleError> {
+    if !matches!(platform, SagaPlatform::AppleII) {
+        return Err(AppleError::NotAppleII { platform });
+    }
+    if record.len() < 4 {
+        return Err(AppleError::TooShort { len: record.len() });
+    }
+    let plain_prologue = record[0] == 0x00 && record[1] == 0x70;
+    let scrambled_header = usize::from(record[0]) < COLUMNS
+        && usize::from(record[1]) < CANVAS_HEIGHT
+        && (1..=COLUMNS).contains(&usize::from(record[2]))
+        && (1..=CANVAS_HEIGHT).contains(&usize::from(record[3]));
+    if !plain_prologue && scrambled_header {
+        decode_family_d_scrambled(record, platform)
+    } else {
+        decode_family_d_plain(record, platform)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -765,7 +1000,7 @@ mod tests {
     }
 
     fn decode(stream: &[u8]) -> HiResPicture {
-        decode_family_d(&file(stream), SagaPlatform::AppleII).expect("decodes")
+        decode_family_d_plain(&file(stream), SagaPlatform::AppleII).expect("decodes")
     }
 
     fn at(pic: &HiResPicture, x: usize, y: usize) -> Rgb {
