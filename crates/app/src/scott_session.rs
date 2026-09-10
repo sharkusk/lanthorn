@@ -2424,7 +2424,11 @@ mod tests {
         );
         // Measured on The-Hulk_DOS_EN.zip: R0102.PAK alone is black at
         // (130, 112) and B01033R.PAK paints CGA cyan there.
-        assert_eq!(band_pixel(&s, 130, 112), (0, 255, 255), "the iron ring, in family E's palette");
+        assert_eq!(
+            band_pixel(&s, 130, 112),
+            scott::saga_dos::PALETTE[1],
+            "the iron ring, in family E's light cyan"
+        );
     }
 
     /// §12.11's inventory screen on the release whose database is the plain
@@ -2450,7 +2454,7 @@ mod tests {
         assert_eq!(s.current_overlays, vec!["B01023I.PAK".to_string()]);
         // Measured: R0198.PAK is white at (116, 104) and B01023I.PAK paints
         // CGA magenta there.
-        assert_eq!(band_pixel(&s, 116, 104), (255, 0, 255));
+        assert_eq!(band_pixel(&s, 116, 104), scott::saga_dos::PALETTE[2], "family E's light magenta");
         s.submit_key(crate::engine::KeyInput::Enter);
         assert_eq!(s.pending_input(), InputKind::Line);
         assert_eq!(s.current_pic_num, Some(2), "the dome comes back");

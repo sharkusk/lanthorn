@@ -62,10 +62,28 @@ pub const MAGIC: [Option<u8>; 5] = [Some(0xFD), Some(0x07), None, None, Some(0x6
 ///
 /// **Not stored anywhere in the file.** §8.5: "palette 1 at high intensity,
 /// with no intensity or background selection" — so unlike family C, where
-/// every record carries four colour bytes and two of the *Hulk*'s are outside
+/// every record carries four colour bytes and one of the *Hulk*'s is outside
 /// the documented table, there is nothing here to fail to resolve.
+///
+/// # These are the RGBI values, not saturated cyan and magenta
+///
+/// The CGA's output is **RGBI**: three colour lines plus one intensity line,
+/// four bits for sixteen colours. In an intensified colour a component whose
+/// colour line is OFF is not black but a low pedestal, conventionally
+/// `0x55` — so palette 1 high intensity is light cyan `55FFFF` and light
+/// magenta `FF55FF`, not `00FFFF` and `FF00FF`. That is the published
+/// hardware mapping (the IBM Color/Graphics Monitor Adaptor's RGBI output, as
+/// every documented CGA palette gives it), and it is a fact about the adaptor
+/// rather than about any interpreter.
+///
+/// lanthorn drew the saturated idealisation until SQ-1491, which is the same
+/// mistake §8.2's and §8.3's Commodore 64 tables made — a palette written down
+/// from an impression of the colour rather than from the machine. **Unlike
+/// those, no capture verifies this one**: `machine-screenshots/` holds no
+/// MS-DOS *Questprobe* frame. See the Appendix A item §8.5 names for the frame
+/// that would settle it.
 pub const PALETTE: [Rgb; 4] =
-    [(0, 0, 0), (0, 255, 255), (255, 0, 255), (255, 255, 255)];
+    [(0, 0, 0), (0x55, 0xFF, 0xFF), (0xFF, 0x55, 0xFF), (0xFF, 0xFF, 0xFF)];
 
 /// The lowest file length that can hold a family-E header: the last field
 /// [`decode_family_e`] reads is the width byte at `0x13`, and the compressed
@@ -549,6 +567,30 @@ mod tests {
         );
         assert_eq!(pic.palette, PALETTE, "the fixed CGA palette, black cyan magenta white");
         assert!(pic.unrecognised_colours.is_empty(), "family E stores no colour bytes");
+    }
+
+    /// The palette by VALUE, because every family-E colour claim in the crate
+    /// and in lanthorn is relative to it and the case above only says the
+    /// decoder uses whatever this constant holds.
+    ///
+    /// `0x55`, not `0x00`, is the whole point: an intensified CGA colour puts
+    /// a pedestal on the components its colour line has off, so palette 1 high
+    /// intensity is light cyan and light magenta rather than the saturated
+    /// pair lanthorn drew until SQ-1491. See [`PALETTE`] for the source.
+    #[test]
+    fn the_palette_is_cga_palette_1_at_high_intensity_in_rgbi() {
+        assert_eq!(
+            PALETTE,
+            [(0x00, 0x00, 0x00), (0x55, 0xFF, 0xFF), (0xFF, 0x55, 0xFF), (0xFF, 0xFF, 0xFF)],
+            "black, light cyan, light magenta, white"
+        );
+        for (i, entry) in PALETTE.iter().enumerate().skip(1) {
+            let (r, g, b) = *entry;
+            assert!(
+                [r, g, b].iter().all(|c| *c == 0x55 || *c == 0xFF),
+                "entry {i} is RGBI: every component is the pedestal or full on, got {entry:?}"
+            );
+        }
     }
 
     /// The lined flag is the pixel ASPECT and nothing else: the same byte now

@@ -3049,6 +3049,14 @@ lined means one and one.
 2 magenta 255,0,255, value 3 white — CGA palette 1 at high intensity, with no
 intensity or background selection.
 
+> **The two middle triples are not the adaptor's.** "Palette 1 at high
+> intensity" is right, and the RGB it should give is light cyan `55FFFF` and
+> light magenta `FF55FF` — the CGA's output is RGBI, and an intensified colour
+> puts a pedestal on the components whose colour line is off. See Appendix A
+> item 44, which also names the frame that would verify it, since unlike §8.2's
+> and §8.3's tables this correction rests on the published hardware mapping and
+> not on a capture.
+
 **Compression** is single-byte, not pairs: read a control byte; **bit 7 set**
 means the count is the low seven bits **plus one** and one data byte follows, to
 be emitted that many times; **bit 7 clear** means the count is the byte **plus
@@ -5206,10 +5214,10 @@ recorded here so the next reader of that section reads them together with it.
     a real format that this corpus carries only for the images those three
     releases keep BESIDE their room artwork, and the room artwork of the same
     three sits on a side A with no filesystem on it at all — reachable after
-    all, by scan rather than by catalogue; see item 39 (SQ-1490).
+    all, by scan rather than by catalogue; see item 43 (SQ-1490).
 
     **The three things this item left undetermined are settled, and the format
-    is in colour** — see item 38 below (SQ-1489). In short: `0xC0` is not a
+    is in colour** — see item 42 below (SQ-1489). In short: `0xC0` is not a
     second line command but a **paintbrush**; a bit-7-clear byte is an
     **attribute** whose top three bits pair it with the drawing command it
     feeds and whose low four bits are its operand; `0x60` is a **two-byte**
@@ -5529,7 +5537,7 @@ together with it.
     11 is neither, and `QUESTPR1.D64` has exactly one such record: `B01250R`,
     which item 30 says the game never draws (SQ-1491).
 
-38. **Family D's plain sub-variant is in COLOUR, and the page it draws on
+42. **Family D's plain sub-variant is in COLOUR, and the page it draws on
     starts WHITE** (SQ-1489). Item 26 settled the token framing and left three
     things open — what tells `0xA0` from `0xC0`, what a bit-7-clear byte says
     beyond ending a path, and what an `0xE0` area is filled with. All three
@@ -5596,7 +5604,7 @@ together with it.
     the same disks the artwork is on — and not a reading of any interpreter;
     `docs/internals/clean-room.md` is the protocol this stayed inside.
 
-39. **§8.4's SCRAMBLED sub-variant is right, its per-release row table is the
+43. **§8.4's SCRAMBLED sub-variant is right, its per-release row table is the
     standard hi-res interleave, and its "hard-coded per-title list" is a scan**
     (SQ-1490). The three releases §7.4's string test flags — *Voodoo Castle*,
     *The Count*, *Claymorgue Castle* — keep their room artwork on a side A with
@@ -5654,6 +5662,30 @@ together with it.
     (`R0503` and so on), so the room-to-picture lookup, the info panel's count
     and the picker's label needed no change at all; the adventure number the
     name carries is read off the boot side's own database.
+
+44. **§8.5's palette is CGA palette 1 at high intensity, and the RGB §8.5 gives
+    for it is a saturated idealisation rather than the adaptor's.** The CGA's
+    output is **RGBI** — three colour lines plus one intensity line, four bits
+    for sixteen colours — and in an intensified colour a component whose colour
+    line is OFF is not black but a low pedestal, conventionally `0x55`. So
+    palette 1 at high intensity is black `000000`, light cyan **`55FFFF`**,
+    light magenta **`FF55FF`**, white `FFFFFF`, where §8.5 writes `00FFFF` and
+    `FF00FF`. That is the published mapping of the IBM Color/Graphics Monitor
+    Adaptor's RGBI output — a fact about the adaptor, from the hardware
+    documentation, and not a reading of any interpreter. It is the same mistake
+    §8.2's and §8.3's Commodore 64 tables made: a palette written down from an
+    impression of the colour rather than from the machine.
+
+    **Unlike items 39-41, no capture verifies this one.** `machine-screenshots/`
+    holds no MS-DOS *Questprobe* frame at all, so this rests on the hardware
+    documentation alone, and the constant says so in its own doc comment. The
+    frame that would settle it: **the DOS *Hulk*'s room 1 under DOSBox in CGA
+    palette 1 at high intensity** — the same room `c64-hulk-start.png` shows on
+    the Commodore, so the two encodings of one picture could be compared side by
+    side the way §10.1's oracle rule already compares their pixels, and the
+    family-C/family-E twin suite already pairs those exact records. lanthorn
+    draws the RGBI values (`scott::saga_dos::PALETTE`, pinned by value)
+    (SQ-1491).
 
 The in-memory model this document's dialects decode *to*, in that crate, is a
 database of rooms (six exits and a description, plus a flag for the leading-`*`

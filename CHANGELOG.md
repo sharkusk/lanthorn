@@ -104,7 +104,10 @@ Absolute URLs or no link.
   simply the wrong colour: the dome in *The Hulk* was drawing orange where a
   Commodore 64 draws red. Checked against captures of the real game running on
   a real machine, which are committed alongside so the next change can be
-  checked the same way.
+  checked the same way. The MS-DOS *Questprobe* pictures are corrected in the
+  same breath: their cyan and magenta were the pure, electric versions of those
+  colours rather than the softer ones an IBM PC's graphics adaptor actually
+  put on a monitor.
 
 - **"I'm in a dusty study" now follows the wording you asked for.** lanthorn's
   own room layout — the one it shows for every Scott Adams game — printed the

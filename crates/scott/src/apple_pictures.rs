@@ -127,7 +127,7 @@
 //! pixels and stops at unlit ones, which is that rule's plain meaning and is
 //! what makes the corpus legible. A region reached only through a
 //! single-pixel gap may therefore differ from the machine by a few pixels.
-//! Appendix A item 38 records it.
+//! Appendix A item 42 records it.
 
 use crate::saga_pictures::{Painted, PaintedBox, Rgb};
 use crate::saga_us::SagaPlatform;
