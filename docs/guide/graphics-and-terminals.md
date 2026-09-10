@@ -179,8 +179,22 @@ Three Apple II titles — *Voodoo Castle*, *The Count* and *Claymorgue Castle* �
 keep their room pictures in a scrambled form on a disk with no filesystem on
 it at all, and lanthorn can't read those yet. It says so
 (`S.A.G.A. (scrambled, not readable yet)`) instead of pretending the artwork
-is missing. The Atari 8-bit disks are in the same position for a different
-reason, and report the same way.
+is missing.
+
+The **Atari 8-bit** disks are in the same position, and it is worth saying
+exactly why, because the reason turned out to be more interesting than
+expected. Their picture side has no filesystem either — nothing on it is
+*named*, so there is no catalogue to look a room up in. lanthorn can now read
+those disks: it finds all 241 pictures across *Voodoo Castle*, *The Count* and
+*Claymorgue Castle* and decodes every one of them, in the right colours, as
+the artist drew them. What it still cannot say is **which room each one
+belongs to** — the disks give no clue, not in the game file and not in the
+order the pictures are stored — so rather than pair them up by guesswork and
+show you the wrong room, it goes on reporting them the way it always has.
+Meanwhile the other four Atari titles turn out not to keep bitmaps at all:
+*Adventureland*, *Pirate Adventure*, *Mission Impossible* and *Strange
+Odyssey* are the same white line drawings as their Apple II editions, drawn
+stroke by stroke.
 
 ## Going deeper
 

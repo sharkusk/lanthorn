@@ -76,8 +76,9 @@ pub enum FamilyCScheme {
 /// different readings of them (see [`FamilyCScheme`]) live in one place
 /// instead of at every arithmetic site. `cols` and `pairs` are counts, not
 /// limits: a record holds exactly `cols * pairs` byte pairs, and that product
-/// is the strongest thing known about a family-C record: strong enough to find
-/// records on a raw disk side with it and nothing else.
+/// is the strongest thing known about a family-C record — strong enough that
+/// [`crate::saga_atari::scan_picture_side`] finds records on a raw disk side
+/// with it and nothing else.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct StripLayout {
     /// Leftmost device-pixel column, `(header[4] - 3) * 8`. May be negative:
@@ -421,10 +422,10 @@ impl Picture {
 /// that many pixel pairs follow, each emitted once.
 ///
 /// §8.3 also describes a variant with no literal mode, used by *The Count* and
-/// *Voodoo Castle*. It is [`FamilyCScheme::NoLiteral`], and it is not reached
-/// through this function: those two titles' records live on Atari media whose
-/// record header is a different shape from this one's twelve bytes. Reach for
-/// [`paint_strips`] with a [`StripLayout`] of your own.
+/// *Voodoo Castle*. It is [`FamilyCScheme::NoLiteral`], and it is reached
+/// through [`crate::saga_atari::decode_record`] rather than through this
+/// function: those two titles' records live on an Atari companion side whose
+/// header is ten bytes, not this one's twelve (see [`crate::saga_atari`]).
 ///
 /// **Colour** is [`c64_colour`] or [`atari_colour`] by `platform`; entry 0 is
 /// forced to black and the fourth stored byte is never used.

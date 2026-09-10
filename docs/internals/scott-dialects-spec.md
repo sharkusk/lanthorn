@@ -5231,10 +5231,47 @@ recorded here so the next reader of that section reads them together with it.
     text up to `side `, a different letter after it — and says so as a host
     rule (`app::hints::saga_companion_side`).
 
-**And the family-C implementer raised one, about §8.3's compression variant**
-(SQ-1484), measured on *The Count*'s and *Voodoo Castle*'s own Atari records.
-**It is not resolved in §8.3 above** — it is recorded here so the next reader
-of that section reads the two together.
+**And the Atari 8-bit implementer raised five more, about §8.3, §10.5 and
+§12.10** (SQ-1483, SQ-1484), measured on all seven §10.5 sides. The first is
+not a correction to a detail either: it is a report that §8.3 describes a
+format four of the seven titles do not use. **None of them is resolved in §8.3
+above** — they are recorded here so the next reader of that section reads them
+together with it.
+
+29. **§8.3's title — "family C — Commodore 64 and Atari 8-bit US bitmaps" — is
+    wrong for four of the seven Atari titles, and the split is the same one
+    §7.4 makes on the Apple II.** *Adventureland*, *Pirate Adventure*,
+    *Mission Impossible* and *Strange Odyssey* keep a **line-drawing token
+    stream** on side B, not bitmaps: all four open at file offset `0x1000` with
+    the identical bytes `A0 36 32 A0 66 32 A0 66 32 …`, which is item 26's
+    three-byte token with `0xA0` in the command position and coordinates on the
+    canvas. Over the 16 KB from `0x1000`, 5,092 to 5,232 bit-7-set bytes read
+    as tokens whose command is one of item 26's four and only 54 to 139 do not;
+    on the three bitmap sides the same measurement gives 235 to 687 good
+    against 1,815 to 2,094 bad. Only *Voodoo Castle*, *The Count* and
+    *Claymorgue Castle* are family C — **exactly the three whose Apple II
+    release fires §7.4's `M2` string test**, so a reader wanting one rule for
+    both platforms has one: the four "plain" titles draw with lines on both
+    machines and the three "scrambled" ones ship bitmaps on both.
+
+30. **The Atari family-C record is TEN bytes of header and no tail, not §8.3's
+    twelve plus two.** §8.3 says "a picture's record starts two bytes before
+    the listed offset, and its length is the little-endian word at the listed
+    offset plus two", which describes the Commodore 64's twelve-byte header
+    (two of load address) with the listed offset pointing past it. Measured, an
+    Atari record at file offset `L` is: `L+0..1` the little-endian **size of
+    the whole record, that word included**; `L+2` left edge in columns plus 3;
+    `L+3` top; `L+4` right edge plus 3; `L+5` bottom; `L+6..9` four colour
+    bytes; `L+10` to `L+size` the compressed data. So there is **no load
+    address** — the two bytes in front are the previous record's last data
+    bytes, and they read `$FFFF`, `$3F3F`, `$C3C3` as often as anything — and
+    **no two-byte tail**. What settles it is not the prose but arithmetic no
+    other reading satisfies: a record's header says it holds exactly
+    `cols x pairs` byte pairs, and under this reading all 241 records on the
+    three sides hold exactly that, with the declared size equal to the decoded
+    length on 198 of them and one greater on the other 43 and never anything
+    else. Read with two more bytes of header, not one record on any side fills
+    its own region.
 
 31. **§8.3's no-literal variant changes the EDGE LIMITS as well as the height,
     and one of the two is not stated.** §8.3 gives the variant as "every
@@ -5252,6 +5289,50 @@ of that section reads the two together.
     in `scott::saga_pictures::StripLayout::resolve`, and selects between them
     by release identity in `SagaUs::picture_scheme` — never by sniffing, since
     a variant record read as standard decodes into something picture-shaped.
+
+32. **§12.10's per-title (usage, index, offset) lists are not recoverable from
+    the DISK ORDER either, and nothing on either side is a table of them.**
+    §12.10 says the lists "are not recoverable from the database" and this
+    section cannot help with them; that is right, and the obvious next
+    hypothesis — that the records lie in index order, so that the *n*th is
+    picture *n* — is measurably false. *The Count*'s side holds twenty-five
+    full-canvas records against exactly twenty-five room-usage indices (§8.6's
+    reserved 0, 98 and 99 plus rooms 1-22), and two of them can be named on
+    sight: the fifth is §8.6's darkness card, lettered `IT'S TOO DARK TO SEE!`,
+    and the sixth is a brass bed with the player's two feet sticking out of a
+    white sheet, which is room 1's `I'm lying in a large brass bed`. Adjacent,
+    and in that order — but the record **in front of** them is a wide view of a
+    bedroom with the same brass bed against the far wall, which is room 2, and
+    further along the sequence a closet full of coat hangers and a room with a
+    lavatory in it fall two places later than rooms 7 and 8 would put them.
+    Searched for as bytes and as little-endian words, on both sides of the
+    release, no run of record offsets and no run of the sectors holding them
+    occurs anywhere. So the lists remain the one thing about these releases
+    that must be tabulated, and this document's negative result is now two
+    sections deep rather than one.
+
+33. **The Atari palette §8.3 declines to reconstruct is reconstructible from
+    hardware documentation, and the caveat applies only to the exact values.**
+    §8.3 gives the hue-0 luminance row value by value and sixteen
+    hand-substituted entries, and says the base table "must be transcribed from
+    an Atari palette reference; it cannot responsibly be reconstructed from
+    prose". lanthorn builds it instead from public hardware documentation: the
+    *Atari 400/800 Hardware Manual* (Atari Inc. 1982, part C016555) gives the
+    colour register's layout — hue in bits 7-4, luminance in bits 3-1, bit 0
+    unused, hue 0 chroma off — and names the fifteen hues in order (gold,
+    orange, red-orange, pink, purple, purple-blue, blue, blue, light blue,
+    turquoise, green-blue, green, yellow-green, orange-green, light orange);
+    those are fifteen phases of the NTSC subcarrier 24 degrees apart, resolved
+    through the standard YIQ matrix (FCC / SMPTE 170M) over §8.3's own
+    luminance row. **The one number not quoted from a document is the burst
+    offset**, which published derivations disagree about by tens of degrees and
+    which is what decides each hue's *name*; -30 degrees is the value at which
+    the fifteen read back as the manual's own sequence, and there is a case
+    that says so. §8.3's caveat therefore holds for the exact triples and not
+    for the structure, and the sixteen substitutions still override the result
+    wherever they collide with it. The pictures come out in the colours the art
+    plainly wants — *The Count*'s brickwork red, its shrouds blue, its
+    sheets white.
 
 The in-memory model this document's dialects decode *to*, in that crate, is a
 database of rooms (six exits and a description, plus a flag for the leading-`*`

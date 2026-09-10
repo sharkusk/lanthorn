@@ -225,6 +225,7 @@ pub mod apple_pictures;
 pub mod c64;
 pub mod database;
 pub mod decompile;
+pub mod saga_atari;
 pub mod saga_dos;
 pub mod saga_pictures;
 pub mod saga_us;
@@ -241,12 +242,13 @@ pub use loader::{detect_dialect, looks_like_scott, looks_like_scott_bytes, Diale
 pub use options::{Options, Presentation, Wording};
 pub use saga_dos::{decode_family_e, DosRelease};
 pub use apple_pictures::{decode_family_d, AppleError};
+pub use saga_atari::{scan_picture_side, splice_vtoc, AtariRecord};
 pub use saga_pictures::{atari_colour, decode_family_c, FamilyCScheme, PictureError};
 pub use saga_us::{
     detect_saga_us, is_apple_picture_file_name, is_picture_file_name, looks_like_saga_us,
     parse_apple_picture_file_name, parse_picture_file_name, parse_saga_us, picture_file_name,
-    room_picture_file_name, PictureFile, PictureUsage, SagaPlatform, SagaUs, DARKNESS_PICTURE,
-    INVENTORY_PICTURE,
+    room_picture_file_name, AtariPictureFormat, PictureFile, PictureUsage, SagaPlatform, SagaUs,
+    DARKNESS_PICTURE, INVENTORY_PICTURE,
 };
 pub use scottfree_save::looks_like_scottfree_save;
 pub use ti994a::{looks_like_ti994a, parse_ti994a, Ti99Record, Ti99Script};
