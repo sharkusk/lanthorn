@@ -703,12 +703,13 @@ impl Page {
 /// that no spurious header anywhere before it has shifted the numbering; and
 /// *Claymorgue Castle*'s room 29, "dragon's lair", is a green dragon.
 ///
-/// The records past the highest room number are the release's object and title
-/// artwork — ten on *Voodoo Castle*, three on *The Count*, two on
+/// The records past the highest room number are the release's close-up and
+/// title artwork — ten on *Voodoo Castle*, three on *The Count*, two on
 /// *Claymorgue Castle*, including in each case the Adventure International
-/// title card. **What §8.6 indices those carry is not established here**;
-/// this function numbers every record by its ordinal, which is what the disk's
-/// own order says and is right for every index a room can ask for.
+/// title card. **[`scrambled_picture_index`] is what numbers those** (SQ-1499:
+/// 80 upward for the close-ups, then 99 for the title card), and it needs the
+/// row count [`apple_look_table`] reads off the release's `M2`. This function
+/// answers ordinals and nothing else.
 ///
 /// The last record is bounded at [`SCRAMBLED_MAX_RECORD`] bytes rather than
 /// run to the end of the image, which on these disks is fifty kilobytes of
@@ -748,6 +749,190 @@ pub fn scan_scrambled_pictures(image: &[u8]) -> Vec<std::ops::Range<usize>> {
 /// writes two — so this bounds the last record, whose end no following header
 /// marks.
 pub const SCRAMBLED_MAX_RECORD: usize = 4 + 40 * 160;
+
+/// One row of a scrambled release's **`LOOK` picture** table: the noun that
+/// asks for it, the item it depicts, and the §8.6 index of the record that
+/// draws it (SQ-1499).
+///
+/// See [`apple_look_table`] for where the three numbers come from and what
+/// each was checked against.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct AppleLookPicture {
+    /// The [`crate::Database::nouns`] index the player must name.
+    pub noun: u16,
+    /// The [`crate::Database::items`] index the picture depicts. It is *not*
+    /// the picture's own index — these three releases number their artwork in
+    /// the ROOM space and have no `B`-style object records at all.
+    pub item: u16,
+    /// The §8.6 picture index, which on all three releases measured runs from
+    /// 80 upward in table order.
+    pub picture: u16,
+}
+
+/// A scrambled release's `LOOK` verb and its [`AppleLookPicture`] rows
+/// (SQ-1499).
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct AppleLookTable {
+    /// The [`crate::Database::verbs`] index that triggers the table — 42
+    /// (`LOO`, with `*EXA` beside it) on *Voodoo Castle*, 8 (`LOO`, likewise)
+    /// on *The Count*. Meaningless on a release whose `rows` are empty; see
+    /// [`apple_look_table`].
+    pub verb: u16,
+    /// The rows, in the order the release stores them.
+    pub rows: Vec<AppleLookPicture>,
+}
+
+/// The `LOOK` picture table of one **scrambled** Apple II release, read off
+/// its own `M2` file (SQ-1499).
+///
+/// # What this answers, and why it is not in the database
+///
+/// [`scan_scrambled_pictures`] finds every record on the catalogue-less side
+/// A and SQ-1490 settled that the *n*-th record is picture *n* for every index
+/// a ROOM can ask for. Past the last room there are more records — ten on
+/// *Voodoo Castle*, three on *The Count*, two on *Claymorgue Castle* — and
+/// what they depict was left open. They are **not** object overlays: §8.6's
+/// `B…` records are sparse little sprites drawn over a room (the four plain
+/// releases' `B01044` is a purple blob thirty pixels wide on an otherwise
+/// untouched page), while every one of these declares §8.4's full `00 00 28
+/// A0` box and paints all 280 x 160 of it. They are close-ups, drawn over the
+/// whole graphics window, and the release shows one when the player LOOKs at
+/// the thing it depicts.
+///
+/// The association is in neither the database (§12.10 says so, and it is
+/// right) nor the picture side. It is three parallel sixteen-byte tables in
+/// the release's own `M2`, at file offsets `0x0D48`, `0x0D58` and `0x0D68` —
+/// memory `$75A4`, `$75B4` and `$75C4`, `M2` loading at `$6860` on all three —
+/// holding the ITEM index, the PICTURE index and the NOUN index of each row,
+/// with the trigger VERB in the single byte at `0x0D47`. Unused slots are
+/// zero, and a picture index of zero cannot be a real row (§8.6 reserves 0 for
+/// the darkness card), so the first zero picture byte ends the table.
+///
+/// Sixteen and not some other number because the release's own lookup loads
+/// `$0F` into the index register and counts down to zero over the noun table;
+/// the three tables are laid out on a sixteen-byte stride to match, which is
+/// why `0x0D48`, `0x0D58` and `0x0D68` are sixteen apart. Reading a game's own
+/// binary is measurement of a **specimen**, not of any interpreter
+/// (`docs/internals/clean-room.md`).
+///
+/// # What each row was checked against
+///
+/// Every row's picture was decoded and looked at, and every one of the eleven
+/// draws the item its row names — *Voodoo Castle*'s nine and *The Count*'s
+/// two, with no near-misses and nothing left over:
+///
+/// | release | picture | record | item | drawn |
+/// |---|---|---|---|---|
+/// | *Voodoo Castle* | 80 | 26 | 44 `Doll` | a voodoo doll stuck with pins |
+/// | | 81 | 27 | 52 `Voodoo book` | a book lettered `VooDoo` |
+/// | | 82 | 28 | 25 `Sapphire ring` | a ring with a blue stone |
+/// | | 83 | 29 | 53 `Ju-Ju man statue` | a dancing figure on a base |
+/// | | 84 | 30 | 9 `Brightly glowing idol` | a seated idol throwing rays |
+/// | | 85 | 31 | 40 `Mixed Chemicals` | a flask and a bottle |
+/// | | 86 | 32 | 0 `Bloody Knife` | a knife, blade smeared |
+/// | | 87 | 33 | 33 `Dull & broken sword` | a snapped blade |
+/// | | 88 | 34 | 27 `Open Coffin` | the chapel's coffin, close up |
+/// | *The Count* | 80 | 23 | 45 `Package` | a parcel, note reading `TO DRACULA FROM YORGA` |
+/// | | 81 | 24 | 50 `Fence with an open gate & a crowd beyond` | the crowd at the gate, close up |
+///
+/// The noun column is the independent check: *Voodoo Castle*'s row 0 names
+/// noun 55, which is `DOL`, against item 44 whose own auto-get noun is `DOL`;
+/// *The Count*'s two are `PAC` against `Package` and `GAT` against the gate.
+/// All eleven agree, and the verb byte reads 42 on *Voodoo Castle* (`LOO`,
+/// with `*EXA` the next entry) and 8 on *The Count* (`LOO`, `*EXA` again).
+///
+/// **[`AppleLookTable::rows`] is EMPTY on *Claymorgue Castle***, whose three
+/// tables are sixteen zero bytes each — that release has no close-ups, and its
+/// verb byte reads 42, which is its `DIG`, so the byte is stale and means
+/// nothing without a row to use it.
+///
+/// # What a caller does with the answer
+///
+/// It gives the count that [`scrambled_picture_index`] needs, which is the
+/// whole of the numbering rule for the records past the last room. Drawing one
+/// needs a `LOOK`-verb path that lanthorn does not have; nothing in the crate
+/// draws these yet.
+///
+/// `None` for anything that is not one of the three releases' `M2`: the file
+/// must carry §7.4's own marker — the 31 bytes at `0x172C` reading `COPYRIGHT
+/// 1983 NORMAN L. SAILER`, which is the test §7.4 recommends and the same one
+/// a host uses to recognise the sub-variant at all — and must be long enough
+/// to hold it.
+#[must_use]
+pub fn apple_look_table(m2: &[u8]) -> Option<AppleLookTable> {
+    /// §7.4's marker, at `M2` file offset `0x172C`.
+    const MARKER: &[u8] = b"COPYRIGHT 1983 NORMAN L. SAILER";
+    /// Where that marker sits.
+    const MARKER_AT: usize = 0x172C;
+    /// The trigger verb.
+    const VERB_AT: usize = 0x0D47;
+    /// The three sixteen-byte columns: items, pictures, nouns.
+    const ITEMS_AT: usize = 0x0D48;
+    /// How many slots each column has — the release's own loop counts sixteen.
+    const SLOTS: usize = 16;
+
+    if m2.get(MARKER_AT..MARKER_AT + MARKER.len())? != MARKER {
+        return None;
+    }
+    let items = m2.get(ITEMS_AT..ITEMS_AT + SLOTS)?;
+    let pictures = m2.get(ITEMS_AT + SLOTS..ITEMS_AT + 2 * SLOTS)?;
+    let nouns = m2.get(ITEMS_AT + 2 * SLOTS..ITEMS_AT + 3 * SLOTS)?;
+    let rows = (0..SLOTS)
+        .take_while(|&i| pictures[i] != 0)
+        .map(|i| AppleLookPicture {
+            noun: u16::from(nouns[i]),
+            item: u16::from(items[i]),
+            picture: u16::from(pictures[i]),
+        })
+        .collect();
+    Some(AppleLookTable { verb: u16::from(*m2.get(VERB_AT)?), rows })
+}
+
+/// The §8.6 picture index the `n`-th **scrambled** record carries, given the
+/// release's room count and how many [`apple_look_table`] rows it has
+/// (SQ-1499).
+///
+/// SQ-1490 settled the first stretch — record *n* is picture *n* for every
+/// room, checked at both ends by §8.6's darkness card at 0 and each release's
+/// death card at its last room. This states the rest, and one rule fits all
+/// three releases:
+///
+/// 1. records `0..rooms` are pictures `0..rooms`, the rooms in room order;
+/// 2. the next `look` records are the close-ups, numbered **80 upward** in
+///    the release's own table order — which is §8.6's "80 to 91" band, the
+///    same band the four plain releases put their full-window artwork in
+///    (Appendix A item 27);
+/// 3. the record after those is §8.6's reserved **99**, the Adventure
+///    International title card;
+/// 4. anything further is `None`.
+///
+/// That is what puts the title card **last** on *Voodoo Castle* (26 rooms,
+/// nine close-ups, title at record 35) and on *The Count* (23, two, record
+/// 25), and **second-to-last** on *Claymorgue Castle* (33 rooms, no
+/// close-ups, title at record 33) — a position that looked arbitrary until
+/// the table said how many records come before it.
+///
+/// *Claymorgue Castle*'s record 34, the one past its title card, is the only
+/// record on any of the three this rule does not name. It decodes to the
+/// ballroom (room 7) with its chandelier down on the checkerboard floor —
+/// item 26, `Fallen Chandelier` — but no table on either of its sides pairs
+/// it with anything, so it stays unnamed rather than guessed at.
+#[must_use]
+pub fn scrambled_picture_index(n: usize, rooms: usize, look: usize) -> Option<usize> {
+    /// §8.6's first full-window index.
+    const FIRST_FULL_WINDOW: usize = 80;
+    /// §8.6's reserved title picture.
+    const TITLE: usize = 99;
+    if n < rooms {
+        Some(n)
+    } else if n < rooms + look {
+        Some(FIRST_FULL_WINDOW + (n - rooms))
+    } else if n == rooms + look {
+        Some(TITLE)
+    } else {
+        None
+    }
+}
 
 /// Decode one **scrambled** family-D picture — §8.4's own sub-variant, the one
 /// the specification is right about (SQ-1490).

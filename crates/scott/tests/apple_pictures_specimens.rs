@@ -809,3 +809,264 @@ fn one_entry_point_reads_both_sub_variants() {
     let scrambled = decode_family_d(&raw[ranges[0].clone()], SagaPlatform::AppleII).expect("decodes");
     assert_eq!((scrambled.width, scrambled.height), (280, 160), "the scrambled box");
 }
+
+// ── The records past the last room (SQ-1499) ─────────────────────────────────
+
+/// What each scrambled release's own `M2` says about the records past its last
+/// room: the LOOK verb, and one row per close-up as (noun, item, picture).
+///
+/// Every row was checked by decoding its picture and looking at it, against
+/// the item's text AND the noun's word — *Voodoo Castle*'s first row is noun
+/// 55 `DOL` and item 44 `Doll`, and picture 80 is a voodoo doll stuck with
+/// pins. `scott::apple_pictures::apple_look_table` tabulates all eleven.
+///
+/// *Claymorgue Castle* has NO rows: its three tables are sixteen zero bytes
+/// each, so the verb byte it happens to carry (42, its `DIG`) means nothing.
+const SCRAMBLED_LOOK: [LookRelease; 3] = [
+    (
+        "Voodoo Castle",
+        "A4.DAT",
+        42,
+        &[
+            (55, 44, 80),
+            (63, 52, 81),
+            (32, 25, 82),
+            (43, 53, 83),
+            (9, 9, 84),
+            (42, 40, 85),
+            (7, 0, 86),
+            (13, 33, 87),
+            (8, 27, 88),
+        ],
+    ),
+    ("The Count", "DATABASE", 8, &[(21, 45, 80), (50, 50, 81)]),
+    ("Claymorgue Castle", "DATABASE", 42, &[]),
+];
+
+/// One row of a LOOK table, as this suite pins it: noun, item, picture.
+type LookRow = (u16, u16, u16);
+
+/// One release's LOOK table: title, the boot side's database file name, the
+/// trigger verb, and the rows.
+type LookRelease = (&'static str, &'static str, u16, &'static [LookRow]);
+
+/// One release's numbering: title, records, rooms, the title card's colour
+/// census, and picture 80's where the release has one.
+type Numbering = (&'static str, usize, usize, [usize; 6], Option<[usize; 6]>);
+
+/// One scrambled release's boot side, by the stem `SCRAMBLED` holds.
+fn scrambled_boot(stem: &str) -> Option<BTreeMap<String, Vec<u8>>> {
+    let dir = apple_dir()?;
+    let name = std::fs::read_dir(&dir)
+        .ok()?
+        .flatten()
+        .map(|e| e.file_name().to_string_lossy().into_owned())
+        .find(|n| n.starts_with(stem) && !n.contains("side A") && n.ends_with(".dsk"))?;
+    Some(dos33_contents(&image(&name)?))
+}
+
+/// One scrambled release's side A, as flat sectors.
+fn scrambled_side_a(stem: &str) -> Option<Vec<u8>> {
+    let dir = apple_dir()?;
+    let name = std::fs::read_dir(&dir)
+        .ok()?
+        .flatten()
+        .map(|e| e.file_name().to_string_lossy().into_owned())
+        .find(|n| n.starts_with(stem) && n.contains("side A"))?;
+    image(&name)
+}
+
+/// The LOOK table each scrambled release carries, cross-checked against its
+/// own database (SQ-1499).
+///
+/// The table is the answer to "which item does each record past the last room
+/// depict", and it is in the release's own `M2` rather than in the database
+/// (§12.10 is right that the database says nothing). Two independent columns
+/// have to agree for a row to stand: the ITEM the picture draws and the NOUN
+/// the player names — and the noun is the one that could not have been guessed
+/// from the artwork, so it is what makes the pairing a measurement rather than
+/// an identification.
+#[test]
+fn the_scrambled_look_table_pairs_each_close_up_with_an_item_and_a_noun() {
+    let Some(_) = apple_dir() else {
+        assert!(skipped("apple II LOOK tables"));
+        return;
+    };
+    for (i, (title, db_name, verb, rows)) in SCRAMBLED_LOOK.iter().enumerate() {
+        let Some(boot) = scrambled_boot(SCRAMBLED[i].1) else {
+            assert!(skipped(title));
+            return;
+        };
+        let m2 = boot.get("M2").unwrap_or_else(|| panic!("{title}: no M2 on the boot side"));
+        let table = scott::apple_look_table(m2)
+            .unwrap_or_else(|| panic!("{title}: M2 carries no LOOK table"));
+        assert_eq!(table.verb, *verb, "{title}: the LOOK verb");
+        let got: Vec<(u16, u16, u16)> =
+            table.rows.iter().map(|r| (r.noun, r.item, r.picture)).collect();
+        assert_eq!(got.as_slice(), *rows, "{title}: the LOOK rows");
+
+        // The pictures are consecutive from §8.6's first full-window index,
+        // which is what `scrambled_picture_index` relies on.
+        for (n, r) in table.rows.iter().enumerate() {
+            assert_eq!(usize::from(r.picture), 80 + n, "{title}: row {n} is out of order");
+        }
+
+        // …and both other columns index the release's own database.
+        let db = scott::parse_saga_us(
+            boot.get(*db_name).unwrap_or_else(|| panic!("{title}: no {db_name}")),
+            SagaPlatform::AppleII,
+        )
+        .unwrap_or_else(|e| panic!("{title}: {e:?}"));
+        for r in &table.rows {
+            let item = db
+                .items
+                .get(usize::from(r.item))
+                .unwrap_or_else(|| panic!("{title}: item {} is out of range", r.item));
+            let noun = db
+                .nouns
+                .get(usize::from(r.noun))
+                .unwrap_or_else(|| panic!("{title}: noun {} is out of range", r.noun));
+            assert!(!noun.is_empty(), "{title}: noun {} is a blank slot", r.noun);
+            // The noun the table names IS the item's own auto-get noun on
+            // every row that has one — the check that the two columns
+            // describe the same object and not two different ones.
+            if let Some(own) = &item.auto_noun {
+                assert_eq!(own, noun, "{title}: row for item {} names another noun", r.item);
+            }
+        }
+        // The LOOK verb is a real verb, and on both releases that have rows
+        // it is `LOO` with an `*EXA` synonym beside it.
+        if !table.rows.is_empty() {
+            assert_eq!(
+                db.verbs.get(usize::from(table.verb)).map(String::as_str),
+                Some("LOO"),
+                "{title}: the trigger verb"
+            );
+            assert_eq!(
+                db.verbs.get(usize::from(table.verb) + 1).map(String::as_str),
+                Some("*EXA"),
+                "{title}: LOOK's synonym"
+            );
+        }
+    }
+}
+
+/// The numbering of the records past the last room, and the title card's
+/// place in it (SQ-1499).
+///
+/// One rule fits all three: rooms in room order, then the LOOK close-ups from
+/// 80 upward in table order, then §8.6's reserved 99 for the Adventure
+/// International title card. That is what puts the title card LAST on *Voodoo
+/// Castle* and *The Count* and SECOND-TO-LAST on *Claymorgue Castle*, whose
+/// table is empty — a position that reads as arbitrary until the table says
+/// how many records come before it.
+///
+/// The censuses are the falsifier. Each title card is pinned by colour, so a
+/// numbering that slid by one would name a close-up as the title picture and
+/// fail here rather than quietly mis-index the set.
+#[test]
+fn the_records_past_the_last_room_are_the_close_ups_and_then_the_title_card() {
+    /// Per release: the count of records, the room count, the census of the
+    /// record the rule calls picture 99, and the census of picture 80 (or
+    /// `None` where the release has no close-ups).
+    const WANT: [Numbering; 3] = [
+        (
+            "Voodoo Castle",
+            36,
+            26,
+            [7490, 0, 973, 11106, 13014, 12217],
+            // Picture 80 is item 44, `Doll` — a voodoo doll on flat blue.
+            Some([2267, 0, 0, 38026, 4207, 300]),
+        ),
+        (
+            "The Count",
+            26,
+            23,
+            [22672, 1118, 2367, 7547, 2006, 9090],
+            // Picture 80 is item 45, `Package`, its note reading
+            // `TO DRACULA FROM YORGA`.
+            Some([14216, 0, 12156, 12228, 3370, 2830]),
+        ),
+        ("Claymorgue Castle", 35, 33, [39228, 428, 1227, 267, 917, 2733], None),
+    ];
+
+    let Some(_) = apple_dir() else {
+        assert!(skipped("apple II scrambled numbering"));
+        return;
+    };
+    for (i, (title, records, rooms, title_card, first_close_up)) in WANT.iter().enumerate() {
+        let Some(raw) = scrambled_side_a(SCRAMBLED[i].1) else {
+            assert!(skipped(title));
+            return;
+        };
+        let Some(boot) = scrambled_boot(SCRAMBLED[i].1) else {
+            assert!(skipped(title));
+            return;
+        };
+        let table = scott::apple_look_table(boot.get("M2").expect("M2")).expect("a LOOK table");
+        let close_ups = table.rows.len();
+        let ranges = scan_scrambled_pictures(&raw);
+        assert_eq!(ranges.len(), *records, "{title}: records");
+
+        // The whole numbering, as §8.6 indices, in one list.
+        let names: Vec<Option<usize>> = (0..ranges.len())
+            .map(|n| scott::scrambled_picture_index(n, *rooms, close_ups))
+            .collect();
+        for (n, name) in names.iter().enumerate().take(*rooms) {
+            assert_eq!(*name, Some(n), "{title}: record {n} is its own room");
+        }
+        for n in 0..close_ups {
+            assert_eq!(names[rooms + n], Some(80 + n), "{title}: close-up {n}");
+        }
+        assert_eq!(names[rooms + close_ups], Some(99), "{title}: the title card");
+        for (n, name) in names.iter().enumerate().skip(rooms + close_ups + 1) {
+            assert_eq!(*name, None, "{title}: record {n} is past the title card");
+        }
+        // *Claymorgue Castle* is the only release with a record past its
+        // title card, and it is exactly one: the ballroom with its chandelier
+        // down, which nothing on either side pairs with anything.
+        let unnamed = names.iter().filter(|n| n.is_none()).count();
+        assert_eq!(unnamed, usize::from(*title == "Claymorgue Castle"), "{title}: unnamed records");
+
+        let census = |n: usize| {
+            let pic = decode_family_d_scrambled(&raw[ranges[n].clone()], SagaPlatform::AppleII)
+                .expect("decodes");
+            let mut c = [0usize; PALETTE.len()];
+            for &v in &pic.pixels {
+                c[usize::from(v)] += 1;
+            }
+            c
+        };
+        assert_eq!(census(rooms + close_ups), *title_card, "{title}: the title card's colours");
+        if let Some(want) = first_close_up {
+            assert_eq!(census(*rooms), *want, "{title}: picture 80's colours");
+        }
+    }
+}
+
+/// The four PLAIN releases carry no LOOK table, and the parser says so
+/// (SQ-1499) — their `M2` is 3,584 bytes, so §7.4's marker offset is past its
+/// end and the same string test that recognises the scrambled three refuses
+/// them.
+#[test]
+fn a_plain_release_has_no_look_table() {
+    let Some(dir) = apple_dir() else {
+        assert!(skipped("apple II plain M2"));
+        return;
+    };
+    let mut checked = 0;
+    for p in PLAIN {
+        let stem = p.side_a.split(" side ").next().expect("a side marker");
+        let name = std::fs::read_dir(&dir)
+            .expect("readable")
+            .flatten()
+            .map(|e| e.file_name().to_string_lossy().into_owned())
+            .find(|n| n.starts_with(stem) && !n.contains("side A") && n.ends_with(".dsk"));
+        let Some(name) = name else { continue };
+        let boot = dos33_contents(&image(&name).expect("boot side"));
+        let Some(m2) = boot.get("M2") else { continue };
+        assert!(scott::apple_look_table(m2).is_none(), "{}: a plain release has none", p.title);
+        checked += 1;
+    }
+    assert!(checked >= 3, "only {checked} plain boot sides were reachable");
+}

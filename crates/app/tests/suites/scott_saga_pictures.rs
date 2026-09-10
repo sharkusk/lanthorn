@@ -579,6 +579,59 @@ fn a_scrambled_apple_ii_release_draws_its_side_a_artwork() {
     assert!(counts.len() >= 4, "only {} colours in the opening room", counts.len());
 }
 
+/// Every record on a scrambled side A reaches the app under the §8.6 index it
+/// actually carries — rooms, then the LOOK close-ups from 80, then 99 for the
+/// title card (SQ-1499).
+///
+/// Before this the ordinal WAS the name all the way to the end, so *Voodoo
+/// Castle*'s ten records past its last room arrived as `R0426`..`R0435`:
+/// pictures of rooms that release does not have, which nothing could ever ask
+/// for. The names below are what each record is, and the title card landing on
+/// 99 on all three — last on two of them and second-to-last on *Claymorgue
+/// Castle* — is the part a wrong close-up count would break.
+///
+/// *Claymorgue Castle* is the one release with a record its own disks do not
+/// account for, and it is dropped rather than named: 35 records, 34 names.
+#[test]
+fn a_scrambled_release_names_its_close_ups_and_its_title_card() {
+    // (boot side, adventure prefix, rooms, the indices past the last room)
+    let releases: [(&str, &str, usize, &[usize]); 3] = [
+        (
+            "Scott Adams Graphic Adventure 4 - Voodoo Castle v2.1-119 (4am crack) side B (boot).dsk",
+            "R04",
+            26,
+            &[80, 81, 82, 83, 84, 85, 86, 87, 88, 99],
+        ),
+        (
+            "Scott Adams Graphic Adventure 5 - The Count v2.1-115 (4am crack) side B - boot.dsk",
+            "R05",
+            23,
+            &[80, 81, 99],
+        ),
+        (
+            "Scott Adams Graphic Adventure 13 - The Sorcerer of Claymorgue Castle v2.2-122 \
+             (4am crack) side B (boot).dsk",
+            "R13",
+            33,
+            &[99],
+        ),
+    ];
+    for (boot, prefix, rooms, past) in releases {
+        let path = fixture_path(&format!("scott-dialects/apple/{boot}"));
+        if !path.exists() {
+            eprintln!("SKIP: needs stories/scott-dialects/apple/ (gitignored commercial fixtures)");
+            return;
+        }
+        let mounted = app::hints::load_mounted_story_full(&path, None).expect("the boot side mounts");
+        let names: Vec<String> = mounted.saga_pictures.iter().map(|(n, _)| n.clone()).collect();
+        let want: Vec<String> = (0..rooms)
+            .chain(past.iter().copied())
+            .map(|i| format!("{prefix}{i:02}"))
+            .collect();
+        assert_eq!(names, want, "{boot}");
+    }
+}
+
 // ── SQ-1482: §12.11's object overlays ────────────────────────────────────────
 
 /// An overlaid band is still just a band.

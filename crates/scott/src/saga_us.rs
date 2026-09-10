@@ -276,16 +276,29 @@ impl SagaUs {
     /// are §12.12 releases and identified by the (version, adventure) pair
     /// exactly as [`Self::display_title`] identifies one.
     ///
-    /// **Neither can fire on any specimen this crate can open**, and that is
-    /// a fact about the picture sets rather than about this table: *The
-    /// Count* and *Voodoo Castle* exist only on the Atari 8-bit (whose
-    /// per-title picture offset lists §12.10 calls "the one thing that must
-    /// still be tabulated" are not in the archive) and on the Apple II (where
-    /// both are among §7.4's three scrambled releases, whose side A is not a
-    /// DOS 3.3 disk and whose artwork is unreachable). The rule is here so
-    /// that the release which finally supplies one draws what §12.11 says it
-    /// draws.
+    /// **Not on the Apple II**, which is measurement and not caution
+    /// (SQ-1499). Both titles' Apple II releases are among §7.4's scrambled
+    /// three, and their artwork IS reachable now: pictures 80 and upward are
+    /// the records past the last room on side A
+    /// ([`crate::scrambled_picture_index`]). Decoded and looked at, they are
+    /// not room dressing — *Voodoo Castle*'s 80 is a voodoo doll stuck with
+    /// pins and *The Count*'s are a wrapped parcel and a crowd at a gate —
+    /// and each release's own `M2` pairs them with an ITEM and a NOUN rather
+    /// than with a room ([`crate::apple_look_table`]): they are close-ups the
+    /// player asks for by LOOKing at the thing. Drawing *Voodoo Castle*'s 80
+    /// in room 14 would put a full-window doll over the Chimney for the rest
+    /// of the game.
+    ///
+    /// **On the other two platforms it still cannot fire on any specimen this
+    /// crate can open**, and that is a fact about the picture sets rather than
+    /// about this table: the Atari 8-bit sides carry no (usage, index) for a
+    /// record at all (`crate::saga_atari`'s module docs), and the Commodore 64
+    /// release of neither title is in the archive. The rule stays for the
+    /// release that finally supplies one.
     pub fn room_overlay(&self, room: usize) -> Option<usize> {
+        if matches!(self.platform, SagaPlatform::AppleII) {
+            return None;
+        }
         match (self.version, self.adventure, room) {
             // *The Count* (§12.12: version 115, adventure 5).
             (115, 5, 8) => Some(80),
@@ -1934,7 +1947,9 @@ mod tests {
 
     /// §12.11's other shape of override, keyed on the ROOM: *The Count* draws
     /// 80, 81 and 82 only in rooms 8, 18 and 9, *Voodoo Castle* 80 only in
-    /// room 14, and no other release draws any (SQ-1482).
+    /// room 14, and no other release draws any (SQ-1482) — and neither of
+    /// them on the Apple II, where those indices are LOOK close-ups keyed on
+    /// an item (SQ-1499).
     #[test]
     fn the_count_and_voodoo_castle_room_keyed_overlays() {
         let count = SagaUs { version: 115, adventure: 5, platform: SagaPlatform::Atari8Bit };
@@ -1945,15 +1960,28 @@ mod tests {
             assert_eq!(count.room_overlay(room), None, "room {room}");
         }
 
-        let voodoo = SagaUs { version: 119, adventure: 4, platform: SagaPlatform::AppleII };
+        let voodoo = SagaUs { version: 119, adventure: 4, platform: SagaPlatform::Atari8Bit };
         assert_eq!(voodoo.room_overlay(14), Some(80));
         for room in [0usize, 8, 9, 13, 15, 18] {
             assert_eq!(voodoo.room_overlay(room), None, "room {room}");
         }
 
+        // SQ-1499: and NOT on the Apple II, whose 80/81/82 are the LOOK
+        // close-ups of `apple_look_table` — an item and a noun, never a room.
+        for adventure in [4u16, 5] {
+            let apple = SagaUs { version: 119, adventure, platform: SagaPlatform::AppleII };
+            for room in 0..=22 {
+                assert_eq!(apple.room_overlay(room), None, "adventure {adventure} room {room}");
+            }
+        }
+        let apple_count = SagaUs { version: 115, adventure: 5, platform: SagaPlatform::AppleII };
+        for room in [8usize, 9, 18] {
+            assert_eq!(apple_count.room_overlay(room), None, "the Apple II Count draws none");
+        }
+
         // *Strange Odyssey* shares Voodoo Castle's version number and is a
         // different adventure — the pair is load-bearing here too.
-        let odyssey = SagaUs { version: 119, adventure: 6, platform: SagaPlatform::AppleII };
+        let odyssey = SagaUs { version: 119, adventure: 6, platform: SagaPlatform::Atari8Bit };
         assert_eq!(odyssey.room_overlay(14), None, "version alone does not name a title");
 
         let hulk = SagaUs { version: 127, adventure: 1, platform: SagaPlatform::Commodore64 };

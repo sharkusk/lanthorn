@@ -1504,23 +1504,33 @@ pub fn saga_picture_files(
 /// release is one of the three, and [`saga_apple_scrambled`] asks it. The
 /// records are found by [`scott::scan_scrambled_pictures`], which reads the
 /// side as flat sectors ([`blorb::medium::apple_raw_sectors`]) and takes each
-/// §8.4 header it finds; the *n*-th record is picture *n*, so each one is named
-/// with the ordinary Apple II room-picture name and everything downstream — the
+/// §8.4 header it finds; [`scott::scrambled_picture_index`] turns each
+/// record's ordinal into the §8.6 index it carries, and the name is the
+/// ordinary Apple II room-picture one, so everything downstream — the
 /// room-to-picture lookup, the info panel's count, the picker's label — needs
 /// no change at all.
 ///
-/// `boot` is the side the story came off and is where the adventure number is
-/// read from, because the name carries it: *Voodoo Castle*'s room 3 is `R0403`
-/// and *The Count*'s is `R0503`. That is one extra parse of a database already
+/// **The ordinal is the index only up to the last room** (SQ-1499). Past it
+/// come the release's LOOK close-ups, numbered 80 upward, and then §8.6's
+/// reserved 99 for the Adventure International title card — and how many
+/// close-ups there are is in the boot side's own `M2`
+/// ([`saga_apple_look_table`]), not in the database and not on the picture
+/// side. A record past the title card is dropped: only *Claymorgue Castle*
+/// has one, and nothing on either of its sides says what it is.
+///
+/// `boot` is the side the story came off and is where both the adventure
+/// number and the close-up count are read from — the name carries the first
+/// (*Voodoo Castle*'s room 3 is `R0403` and *The Count*'s is `R0503`) and the
+/// numbering needs the second. That is one extra parse of a database already
 /// in memory once, which is the same trade this whole walk makes.
 ///
 /// Empty when the release is not one of the three, when the side is not a
 /// 5.25-inch sector dump, or when the scan finds no records — each of which is
 /// a release with no reachable artwork, and says so by having none.
 fn apple_scrambled_picture_files(boot: &Path, side: &Path) -> Vec<(String, Vec<u8>)> {
-    if !saga_apple_scrambled(boot) {
+    let Some(look) = saga_apple_look_table(boot) else {
         return Vec::new();
-    }
+    };
     let Ok(raw) = std::fs::read(side) else {
         return Vec::new();
     };
@@ -1534,16 +1544,18 @@ fn apple_scrambled_picture_files(boot: &Path, side: &Path) -> Vec<(String, Vec<u
     let Ok((bytes, _)) = read_story_file(boot, None) else {
         return Vec::new();
     };
-    let Ok(release) = scott::parse_saga_us(&bytes, scott::SagaPlatform::AppleII) else {
+    let Ok(db) = scott::parse_saga_us(&bytes, scott::SagaPlatform::AppleII) else {
         return Vec::new();
     };
-    let Some(release) = release.saga_us else {
+    let Some(release) = db.saga_us else {
         return Vec::new();
     };
+    let (rooms, close_ups) = (db.rooms.len(), look.rows.len());
     ranges
         .into_iter()
         .enumerate()
-        .filter_map(|(index, range)| {
+        .filter_map(|(ordinal, range)| {
+            let index = scott::scrambled_picture_index(ordinal, rooms, close_ups)?;
             let name = scott::room_picture_file_name(&release, index)?;
             Some((name, image[range].to_vec()))
         })
@@ -1584,21 +1596,34 @@ fn picture_files_on(path: &Path, platform: scott::SagaPlatform) -> Vec<(String, 
 /// with no pictures can say **why** instead of just "not on this file".
 ///
 /// A cheap, self-validating check, and deliberately the one §7.4 recommends:
-/// it reads a string rather than trusting a fixed offset.
+/// it reads a string rather than trusting a fixed offset. The string test
+/// itself lives in [`scott::apple_look_table`], which needs it anyway and is
+/// the only place it is spelled (SQ-1499).
 pub fn saga_apple_scrambled(path: &Path) -> bool {
-    /// §7.4's marker, at file offset 0x172C of `M2`.
-    const MARKER: &[u8] = b"COPYRIGHT 1983 NORMAN L. SAILER";
-    const AT: usize = 0x172C;
-    let Ok(raw) = std::fs::read(path) else {
-        return false;
-    };
-    if blorb::medium::DiskImage::detect(&raw).is_none() {
-        return false;
-    }
-    let Ok(disk) = mount_disk(path, raw) else {
-        return false;
-    };
-    disk.read_named("M2").is_some_and(|m2| m2.get(AT..AT + MARKER.len()) == Some(MARKER))
+    saga_apple_look_table(path).is_some()
+}
+
+/// The `M2` file of the Apple II release mounted at `path`, or `None`.
+///
+/// One door for the two questions the boot side's own interpreter answers —
+/// whether this is one of §7.4's scrambled three, and which close-ups it draws
+/// — so that neither has to know how a `.dsk` is opened.
+fn saga_apple_m2(path: &Path) -> Option<Vec<u8>> {
+    let raw = std::fs::read(path).ok()?;
+    blorb::medium::DiskImage::detect(&raw)?;
+    let disk = mount_disk(path, raw).ok()?;
+    disk.read_named("M2")
+}
+
+/// The [`scott::AppleLookTable`] of the release mounted at `path` (SQ-1499),
+/// or `None` for anything that is not one of §7.4's scrambled three.
+///
+/// The table says how many records past the last room are close-ups, which is
+/// what [`scott::scrambled_picture_index`] needs to know where the title card
+/// falls. `pub` because the info panel's "why has this release no pictures"
+/// answer goes through [`saga_apple_scrambled`], which is this.
+pub fn saga_apple_look_table(path: &Path) -> Option<scott::AppleLookTable> {
+    scott::apple_look_table(&saga_apple_m2(path)?)
 }
 
 /// The **other side** of a two-sided release, by file name.
