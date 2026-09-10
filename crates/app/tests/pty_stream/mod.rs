@@ -434,6 +434,7 @@ fn describe_keys(keys: &[driver::Key]) -> String {
         .map(|k| match k {
             driver::Key::Wait(d) => format!("wait:{}", d.as_millis()),
             driver::Key::AwaitQuery { query, .. } => format!("await-query:{query}"),
+            driver::Key::WaitUntil { label, .. } => format!("wait-until:{label}"),
             driver::Key::Bytes(b) => printable(&String::from_utf8_lossy(b)),
             driver::Key::Resize { cols, rows, cell_w, cell_h } => {
                 format!("resize:{cols}x{rows}@{cell_w}x{cell_h}")

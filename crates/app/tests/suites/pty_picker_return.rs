@@ -36,6 +36,7 @@ use super::pty_stream;
 #[cfg(unix)]
 mod unix {
     use std::path::{Path, PathBuf};
+    use std::rc::Rc;
     use std::time::Duration;
 
     use super::pty_stream::{decode, driver};
@@ -214,6 +215,54 @@ mod unix {
         (0..rows).find(|&y| term.row_text(y, 0..cols).contains('\u{25b8}'))
     }
 
+    /// The LAST row that wore the marker alongside `tiny_cave`, scanning
+    /// forward flush-by-flush through `bytes[..end]` rather than decoding the
+    /// whole prefix in one shot and checking only the final state (SQ-1486).
+    ///
+    /// `ListScroll` eases the launch row into view over several redraws, and
+    /// `Enter` can land on any one of those frames — the marker and
+    /// `tiny_cave`'s text both belong to that same settled state as soon as
+    /// they first co-occur, but a frame drawn later still (before the game's
+    /// own boot takes the screen) is free to paint something else in transit
+    /// without that being evidence the selection was ever wrong. Checking
+    /// after every flush instead of only at `end` means a late transitional
+    /// frame with no marker can't hide the settled one that came before it.
+    fn last_marked_row_before(
+        bytes: &[u8],
+        flushes: &[driver::Flush],
+        end: usize,
+        cols: u16,
+        rows: u16,
+    ) -> Option<(u16, String)> {
+        let mut term = decode::Term::new(cols, rows);
+        let mut fed = 0usize;
+        let mut found: Option<(u16, String)> = None;
+        let note = |term: &decode::Term, found: &mut Option<(u16, String)>| {
+            if let Some(row) = marker_row(term, cols, rows) {
+                let text = term.row_text(row, 0..cols);
+                if text.contains("tiny_cave") {
+                    *found = Some((row, text));
+                }
+            }
+        };
+        for f in flushes {
+            if f.offset >= end {
+                break;
+            }
+            let chunk_end = (f.offset + f.len).min(end);
+            if chunk_end > fed {
+                term.feed(&bytes[fed..chunk_end]);
+                fed = chunk_end;
+            }
+            note(&term, &mut found);
+        }
+        if fed < end {
+            term.feed(&bytes[fed..end]);
+            note(&term, &mut found);
+        }
+        found
+    }
+
     /// SQ-1479: the picker doesn't just return to the same ROW (SQ-1474) — it
     /// returns the row to the same DISTANCE from the top of the viewport, so a
     /// row that was scrolled well down the list before launch is scrolled
@@ -232,13 +281,53 @@ mod unix {
         spec.rows = 15;
         spec.hide_map = false;
         spec.tail = Duration::from_millis(1200);
+        let (cols, rows) = (spec.cols, spec.rows);
         spec.keys = vec![
-            Key::Wait(Duration::from_millis(1500)),
+            // SQ-1486: scanning and laying out twenty-one stories is CPU work
+            // that writes nothing to the terminal while it happens, so a fixed
+            // sleep cannot tell "busy, about to draw" apart from "done" on a
+            // loaded CI runner — it raced the picker's first frame and sent
+            // `End` before there was a list to jump in. Wait for the actual
+            // evidence instead: any row wearing the `▸` marker proves the
+            // picker has drawn its first frame and is ready for input.
+            Key::WaitUntil {
+                label: "the picker's first frame (a row wears the ▸ marker)",
+                ready: Rc::new(move |bytes: &[u8]| {
+                    let mut term = decode::Term::new(cols, rows);
+                    term.feed(bytes);
+                    (0..rows).any(|y| term.row_text(y, 0..cols).contains('\u{25b8}'))
+                }),
+                cap: Duration::from_secs(15),
+            },
             // Jump straight to the last row: `tiny_cave`, twenty rows down.
             Key::Bytes(b"\x1b[F".to_vec()),
-            Key::Wait(Duration::from_millis(500)),
+            Key::WaitUntil {
+                label: "tiny_cave selected after End",
+                ready: Rc::new(move |bytes: &[u8]| {
+                    let mut term = decode::Term::new(cols, rows);
+                    term.feed(bytes);
+                    (0..rows).any(|y| {
+                        let t = term.row_text(y, 0..cols);
+                        t.contains("tiny_cave") && t.contains('\u{25b8}')
+                    })
+                }),
+                cap: Duration::from_secs(15),
+            },
+            // The predicate above fires on the FIRST frame where the marker and
+            // `tiny_cave` co-occur, which can be a mid-scroll-animation frame
+            // (`ListScroll` eases the viewport over several redraws) rather than
+            // the settled one — selection itself is set synchronously by `End`,
+            // but a settle gap here means the frame this test later inspects is
+            // the list at rest, not a transitional one. `Key::Wait` is
+            // silence-relative (waits for this much QUIET, not a flat sleep), so
+            // it still stretches on a loaded machine rather than racing it.
+            Key::Wait(Duration::from_millis(400)),
             Key::Bytes(b"\r".to_vec()), // launch tiny_cave
-            Key::Wait(Duration::from_millis(2500)),
+            Key::WaitUntil {
+                label: "the game's own boot (second alternate-screen entry)",
+                ready: Rc::new(|bytes: &[u8]| bytes.windows(8).filter(|w| *w == b"\x1b[?1049h").count() >= 2),
+                cap: Duration::from_secs(15),
+            },
             Key::Bytes(b"/quit-to-library\r".to_vec()),
             Key::Wait(Duration::from_millis(2000)),
         ];
@@ -257,15 +346,14 @@ mod unix {
         // scrolled to the bottom of the list.
         let game_boot_at = nth_alt_screen_enter(&cap.bytes, 2)
             .expect("a second alternate-screen entry (the game's own boot)");
-        let mut before = decode::Term::new(cap.spec.cols, cap.spec.rows);
-        before.feed(&cap.bytes[..game_boot_at]);
-        let before_row = marker_row(&before, cap.spec.cols, cap.spec.rows)
-            .expect("the picker's launch-time frame has a selected row");
-        let before_text = before.row_text(before_row, 0..cap.spec.cols);
-        assert!(
-            before_text.contains("tiny_cave"),
-            "sanity: the row scrolled to at launch really is tiny_cave's: {before_text:?}"
-        );
+        let (before_row, _before_text) = last_marked_row_before(
+            &cap.bytes,
+            &cap.flushes,
+            game_boot_at,
+            cap.spec.cols,
+            cap.spec.rows,
+        )
+        .expect("the picker's launch-time frame has a selected row");
         // Sanity: this really did scroll — the marker is not sitting on the
         // list's very first content row (row 2: two header rows above it).
         assert!(before_row > 2, "sanity: the launch row should be scrolled, not pinned to the top");

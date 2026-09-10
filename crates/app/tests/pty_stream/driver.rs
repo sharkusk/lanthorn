@@ -18,10 +18,15 @@ use std::os::fd::{AsRawFd, FromRawFd, OwnedFd, RawFd};
 use std::path::{Path, PathBuf};
 use std::os::unix::process::CommandExt as _;
 use std::process::{Child, Command, Stdio};
+use std::rc::Rc;
 use std::time::{Duration, Instant};
 
+/// A content-readiness check for [`Key::WaitUntil`]: everything captured so far,
+/// answering whether the scenario may proceed.
+pub type ReadyPredicate = Rc<dyn Fn(&[u8]) -> bool>;
+
 /// One scripted input step.
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 pub enum Key {
     /// Literal bytes, exactly as a terminal would deliver them.
     Bytes(Vec<u8>),
@@ -45,6 +50,25 @@ pub enum Key {
     /// message naming the query, because a query that never came means the
     /// scenario could not be staged and every assertion after it is vacuous.
     AwaitQuery { query: &'static str, cap: Duration },
+    /// Hold the next key until a PREDICATE over every byte captured SO FAR
+    /// returns true — content readiness, the same idea as [`Key::AwaitQuery`]
+    /// but keyed on what the decoded screen shows rather than on which
+    /// terminal query the app has asked (SQ-1486).
+    ///
+    /// A fixed [`Key::Wait`] is a bet on how long a slow step (scanning a
+    /// twenty-story library, laying out its first frame) takes on the
+    /// slowest machine that will ever run this — too short and the run
+    /// races the app on a loaded CI runner, too long and every run pays
+    /// the ceiling. This polls instead: `ready` is checked against
+    /// [`Capture::bytes`]-so-far every time the pty goes quiet, and the
+    /// step ends the moment it returns `true`, however long that takes, up
+    /// to `cap`.
+    ///
+    /// `cap` is a ceiling, not a target — reaching it fails the run with a
+    /// message naming `label`, because a condition that never became true
+    /// means the scenario was never staged and every assertion after it is
+    /// vacuous.
+    WaitUntil { label: &'static str, ready: ReadyPredicate, cap: Duration },
     /// Resize the pty — cells AND the pixel geometry a cell size is derived from
     /// — with `TIOCSWINSZ` on the master (SQ-0993).
     ///
@@ -60,6 +84,31 @@ pub enum Key {
     /// change: same grid, different pixels per cell, which is precisely what
     /// `refresh_cell_size` re-derives from.
     Resize { cols: u16, rows: u16, cell_w: u16, cell_h: u16 },
+}
+
+// Manual `Debug`: `Key::WaitUntil`'s `ready` is a `Rc<dyn Fn(&[u8]) -> bool>`,
+// which has no `Debug` impl to derive — every other variant prints exactly as
+// `#[derive(Debug)]` would.
+impl std::fmt::Debug for Key {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Key::Bytes(b) => f.debug_tuple("Bytes").field(b).finish(),
+            Key::Wait(d) => f.debug_tuple("Wait").field(d).finish(),
+            Key::AwaitQuery { query, cap } => {
+                f.debug_struct("AwaitQuery").field("query", query).field("cap", cap).finish()
+            }
+            Key::WaitUntil { label, cap, .. } => {
+                f.debug_struct("WaitUntil").field("label", label).field("ready", &"<fn>").field("cap", cap).finish()
+            }
+            Key::Resize { cols, rows, cell_w, cell_h } => f
+                .debug_struct("Resize")
+                .field("cols", cols)
+                .field("rows", rows)
+                .field("cell_w", cell_w)
+                .field("cell_h", cell_h)
+                .finish(),
+        }
+    }
 }
 
 /// An `OSC <n>;rgb:rrrr/gggg/bbbb` reply, in the doubled-hex form terminals use.
@@ -706,7 +755,13 @@ pub fn run(spec: Spec) -> std::io::Result<Capture> {
     // is answered, because a deferred batch is deliberately not answered for a
     // while and the phase begins at the asking.
     let mut seen_queries: std::collections::HashSet<&'static str> = std::collections::HashSet::new();
-    let mut awaiting: Option<(&'static str, Instant, Duration)> = None;
+    // What `Key::AwaitQuery` and `Key::WaitUntil` are both holding the next key
+    // for — one condition, checked against different evidence.
+    enum Awaiting {
+        Query { query: &'static str, since: Instant, cap: Duration },
+        Predicate { label: &'static str, ready: ReadyPredicate, since: Instant, cap: Duration },
+    }
+    let mut awaiting: Option<Awaiting> = None;
     let mut last_byte = Instant::now();
     // Read timing, kept apart from the key pacing above: `last_byte` moves when
     // we TYPE, which is what "has the app gone quiet enough for the next key"
@@ -771,19 +826,30 @@ pub fn run(spec: Spec) -> std::io::Result<Capture> {
             }
             Ok(false) => {
                 let quiet_for = last_byte.elapsed();
-                // Phase before stopwatch: a key held for a query goes nowhere
-                // until the app has asked it, however busy or idle the run is.
-                if let Some((q, since, cap)) = awaiting {
-                    if seen_queries.contains(q) {
-                        awaiting = None;
-                    } else if since.elapsed() >= cap {
-                        let _ = child.kill();
-                        let _ = child.wait();
-                        return Err(std::io::Error::new(
-                            std::io::ErrorKind::TimedOut,
-                            format!("the app never asked `{q}`, so the scenario was never staged"),
-                        ));
-                    } else {
+                // Phase before stopwatch: a key held for a query or a predicate
+                // goes nowhere until the condition is actually true, however
+                // busy or idle the run is.
+                if let Some(state) = awaiting.take() {
+                    let ready_now = match &state {
+                        Awaiting::Query { query, .. } => seen_queries.contains(query),
+                        Awaiting::Predicate { ready, .. } => ready(&bytes),
+                    };
+                    if !ready_now {
+                        let (label, since, cap, verb) = match &state {
+                            Awaiting::Query { query, since, cap } => (*query, *since, *cap, "asked"),
+                            Awaiting::Predicate { label, since, cap, .. } => {
+                                (*label, *since, *cap, "became true for")
+                            }
+                        };
+                        if since.elapsed() >= cap {
+                            let _ = child.kill();
+                            let _ = child.wait();
+                            return Err(std::io::Error::new(
+                                std::io::ErrorKind::TimedOut,
+                                format!("the app never {verb} `{label}`, so the scenario was never staged"),
+                            ));
+                        }
+                        awaiting = Some(state);
                         continue;
                     }
                 }
@@ -804,7 +870,10 @@ pub fn run(spec: Spec) -> std::io::Result<Capture> {
                     }
                     Some(Key::Wait(d)) => pending_wait = Some(d),
                     Some(Key::AwaitQuery { query, cap }) => {
-                        awaiting = Some((query, Instant::now(), cap));
+                        awaiting = Some(Awaiting::Query { query, since: Instant::now(), cap });
+                    }
+                    Some(Key::WaitUntil { label, ready, cap }) => {
+                        awaiting = Some(Awaiting::Predicate { label, ready, since: Instant::now(), cap });
                     }
                     Some(Key::Resize { cols, rows, cell_w, cell_h }) => {
                         // The kernel signals the child for us — no keystroke, no
