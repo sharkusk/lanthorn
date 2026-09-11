@@ -14,32 +14,21 @@
 
 * **Z-machine v1–v8**, including graphical v6
 * **Glulx**
-* **Scott Adams** — the TI-99/4A and Commodore 64 releases, the American S.A.G.A.
-  disk editions for the Atari 8-bit, the Apple II and the Commodore 64 —
-  Adventureland, Pirate Adventure, Mission Impossible, Voodoo Castle, The Count,
-  Strange Odyssey, Claymorgue Castle and Questprobe's *The Hulk*, opened straight
-  off their own release disk images with no extraction needed. The ZX Spectrum
-  Mysterious Adventures load from their
-  snapshots — hand lanthorn a `.z80` of any of Brian Howarth's eleven titles and
-  it finds the game inside the 48K memory dump, names the release, and plays
-  it. The Commodore 64 and ZX Spectrum Mysterious
-  Adventures show their pictures — the same line-drawn artwork either way,
-  under each platform's own colours — redrawn at the size your terminal shows
-  them rather than stretched from the original's tiny canvas, and the
-  Commodore 64 *Hulk* shows its full-colour comic panels — one per room,
-  straight off the release disk, darkness card and all. The Apple II S.A.G.A.
-  disks draw their artwork too — the hi-res line drawings of
-  Adventureland, Pirate Adventure, Mission Impossible and Strange Odyssey,
-  read off the release's companion side while you play from its boot side
+* **Scott Adams** — the classic `.dat` games and the S.A.G.A. graphic releases, pictures included
 
-### Supported original Infocom disk formats:
+### Supported original disk formats:
 
-* Amiga
-* Mac
-* PC
-* ST
-* AppleII
-* C-64/128
+| Media | Infocom | Scott Adams |
+|---|---|---|
+| Amiga (`.adf`) | yes | — |
+| Macintosh | yes | — |
+| PC / MS-DOS | yes | *Questprobe* releases, straight from their `.zip` |
+| Atari ST | yes | — |
+| Apple II (`.dsk`) | yes | S.A.G.A. disks, with pictures |
+| Commodore 64/128 (`.d64`) | yes | S.A.G.A. disks and the *Mysterious Adventures* compilations, with pictures |
+| Atari 8-bit (`.atr`) | — | S.A.G.A. disks (text; pictures not yet) |
+| ZX Spectrum (`.z80` snapshot) | — | *Mysterious Adventures*, with pictures |
+| TI-99/4A (`.fiad`) | — | the twelve Adventure International games |
 
 ---
 
