@@ -17,7 +17,10 @@
 //!
 //! # The root cause, traced end to end
 //!
-//! Two gaps, both silent (no panic, no wrong answer — just nothing):
+//! THREE gaps, all silent (no panic, no wrong answer — just nothing). The
+//! first two were fixed, the quest closed, and the user's mouse reopened it on
+//! the third — which is the one every real Glulx thumbnail actually goes
+//! through:
 //!
 //! 1. `crates/gvm/src/exec.rs`'s `glk_image_draw`/`_scaled`/`_scaled_ext` opcode
 //!    handlers never read the window's current stream's hyperlink value
@@ -37,27 +40,48 @@
 //!    against, and silently did nothing. Fixed by recording link cells for the
 //!    band's own drawn rect before the `continue`; proven directly by
 //!    `render::transcript::tests::render_transcript_builds_cell_link_map_for_an_inline_image_band`.
+//! 3. …but a real thumbnail is never a BAND. "Alongside the text" is
+//!    `imagealign_MarginRight`, and the main transcript wraps with
+//!    `left_float = true`, so `FloatState::start` claims every margin picture
+//!    that leaves a usable prose column and emits `WrappedRow`s carrying
+//!    `float: Some(strip)` with `band: None`. `try_blit_band_row` declines such
+//!    a row — it is a prose row with a picture laid over its margin, not an
+//!    image row — so gap 2's fix, which lives inside that arm, never ran for
+//!    the picture the player sees. The click still found nothing. Fixed by
+//!    `render::transcript::record_band_links`, one function now called from
+//!    BOTH arms so the recorded cells cannot depend on which route the picture
+//!    took; proven generically by
+//!    `render::transcript::tests::render_transcript_builds_cell_link_map_for_a_margin_float_picture`.
 //!
 //! Typing VIEW worked throughout because it is driven entirely by the game's
-//! own logic, never by either of these paths.
+//! own logic, never by any of these paths.
 //!
-//! # What this suite adds on top of those two
+//! # What this suite adds on top of those unit tests
 //!
-//! The two unit tests above already prove the mechanism, generically, at each
-//! seam. What only a suite against the REAL commercial archive can add is that
-//! Anchorhead genuinely relies on it (not a synthetic scenario) and that the
-//! FULL click chain — render, `glk_hyperlink_window`'s hit test, then
-//! `GlulxSession::deliver_hyperlink` — resolves to the right window using this
-//! archive's own boot artwork. Anchorhead's early puzzles gate every
-//! *in-story* thumbnail behind solving them (there is no cheap turn count that
-//! reaches one), so `a_hyperlinked_anchorhead_picture_resolves_to_a_click`
-//! below threads the one picture reachable with zero puzzle-solving — this
-//! archive's own boot/title illustration, real pixels captured off the booted
-//! session — through `AppState::push_transcript_image` under a hyperlink,
-//! exactly the shape `glk_backend::graphics_draw_image`'s buffer-window arm now
-//! produces for any picture the game itself draws under `glk_set_hyperlink`.
+//! The unit tests above prove each seam generically. What only a suite against
+//! the REAL commercial archive can add is that Anchorhead genuinely relies on
+//! this (not a synthetic scenario) and that the FULL click chain — render,
+//! `glk_hyperlink_window`'s hit test, `GlulxSession::deliver_hyperlink`, and
+//! the game's own answer to it — works at a moment the game really produces.
 //!
-//! Skips vacuously without the gitignored `stories/Anchorhead.gblorb`.
+//! Two cases do that, and the difference between them is the whole of why this
+//! quest was reopened:
+//!
+//! - `a_hyperlinked_anchorhead_picture_resolves_to_a_click` pushes this
+//!   archive's own boot artwork as an `InlineUp` picture under a synthetic
+//!   link. That is a real chain, but through the BAND route — so it passed
+//!   while the reported bug stood.
+//! - `the_real_anchorhead_thumbnail_is_a_margin_float_whose_cells_carry_its_link`
+//!   restores the user's own host snapshot of the moment a thumbnail is on
+//!   screen (`stories/Anchorhead-thumbnail.lanthorn`) and clicks the picture
+//!   the game itself drew: `MarginRight`, link 102, on a restored, live,
+//!   hyperlink-armed session, at the user's own 123x68 / 8x18 px terminal. The
+//!   game answers by opening the full-size illustration. That is the case that
+//!   reproduces the report, and it fails with the reported symptom (an EMPTY
+//!   cell→link map) the moment gap 3's fix is reverted.
+//!
+//! Skips vacuously without the gitignored `stories/Anchorhead.gblorb` (and, for
+//! the snapshot case, `stories/Anchorhead-thumbnail.lanthorn` beside it).
 
 use app::engine::{Engine, GraphicsWindow, KeyInput, WinNode};
 use app::glulx_session::GlulxSession;
@@ -130,11 +154,18 @@ fn anchorhead_keeps_a_standing_hyperlink_watch_on_the_primary_window_during_play
     );
 }
 
-/// SQ-1503's own falsifying reproduction. Falsified as instructed: reverting
-/// the render-loop fix in `render::transcript`'s `render_middle` (the link-cell
-/// recording for an image band row, ahead of its `continue`) reproduces the
-/// reported symptom exactly — `glk_hyperlink_window` finds no window no matter
-/// where on the picture the click lands, so the click silently does nothing.
+/// The BAND route's end-to-end chain: a linked picture that reaches the screen
+/// as an `InlineUp` image row, clicked through `glk_hyperlink_window` and
+/// `deliver_hyperlink`. Falsified against gap 2's fix (the link-cell recording
+/// inside the band arm, ahead of its `continue`).
+///
+/// **This case is not the reported bug, and reading it as one is what closed
+/// SQ-1503 early.** Anchorhead's thumbnail is `MarginRight`, which never enters
+/// the band arm at all — see
+/// `the_real_anchorhead_thumbnail_is_a_margin_float_whose_cells_carry_its_link`
+/// below for the route the player's click actually takes. Kept because the band
+/// route is real too: an inline picture, or a margin picture too wide to float,
+/// still arrives this way and must stay clickable.
 #[test]
 fn a_hyperlinked_anchorhead_picture_resolves_to_a_click() {
     let Some(mut sess) = boot_anchorhead() else {
@@ -204,4 +235,129 @@ fn a_hyperlinked_anchorhead_picture_resolves_to_a_click() {
     // the chain reaches the game at all instead of stopping dead at the
     // click-has-no-recorded-link step this quest is about.
     let _ = sess.deliver_hyperlink(win, link);
+}
+
+// ── The reopened bug: the real thumbnail is a MARGIN FLOAT, not a band ───────
+//
+// SQ-1503 was closed on the case above and the user's mouse reopened it. The
+// case above is synthetic in the one way that mattered: it pushes the picture
+// as `ImageAlign::InlineUp`, which `wrap_lines_kinded_extend` expands into an
+// N-row `WrappedRow::band`. Anchorhead's thumbnail is
+// `ImageAlign::MarginRight` — "a small thumbnail image … on the right side of
+// the screen, ALONGSIDE the text", exactly as its own ILLUSTRATIONS text says —
+// and the main transcript wraps with `left_float = true`, so a margin picture
+// takes `FloatState::start`'s path instead: `WrappedRow::float`, with
+// `band: None` and the prose narrowed beside it. `try_blit_band_row` declines a
+// float row, so the band arm's link recording never runs for the picture the
+// player actually sees.
+//
+// The case below drives the real archive at the real moment — the user's own
+// host snapshot, restored — rather than a picture this suite pushed itself.
+
+/// The user's `.lanthorn` host snapshot of the moment a thumbnail is on screen
+/// (`stories/Anchorhead-thumbnail.lanthorn`, gitignored beside the story).
+/// `None` when absent, so this skips vacuously exactly as the story fixture does.
+fn thumbnail_snapshot() -> Option<app::archive::ArchiveContents> {
+    app::archive::load_archive(&fixture_path("Anchorhead-thumbnail.lanthorn")).ok()
+}
+
+/// Rebuild the snapshot's transcript into an `AppState` the way a restore does:
+/// each line in order, an image line pushed as an image unit.
+// `from_fontsize` is deprecated in favour of a live stdio query, which a
+// headless test has no terminal to make — the same exemption every other
+// fixed-cell render harness here takes.
+#[allow(deprecated)]
+fn state_from(ar: &app::archive::ArchiveContents, cell: (u16, u16)) -> AppState {
+    let mut state = AppState::default();
+    state.colors = app::colors::ColorScheme::terminal_default();
+    state.game_picker =
+        Some(ratatui_image::picker::Picker::from_fontsize(ratatui_image::FontSize::new(cell.0, cell.1)));
+    state.focus = Focus::Game;
+    for (i, line) in ar.transcript.iter().enumerate() {
+        match ar.transcript_images.get(i) {
+            Some(Some(img)) => state.push_transcript_image(img.clone()),
+            _ => state.push_transcript_kind(
+                line,
+                ar.transcript_kinds.get(i).copied().unwrap_or(TranscriptKind::Story),
+            ),
+        }
+    }
+    state
+}
+
+#[test]
+fn the_real_anchorhead_thumbnail_is_a_margin_float_whose_cells_carry_its_link() {
+    let (Some(ar), Some(mut sess)) = (thumbnail_snapshot(), boot_anchorhead()) else {
+        eprintln!("SKIP: no Anchorhead.gblorb and/or stories/Anchorhead-thumbnail.lanthorn");
+        return;
+    };
+
+    // Non-vacuity, and the whole point of using the real archive: this really is
+    // a thumbnail moment, the picture really is a RIGHT-MARGIN float, and gvm
+    // really did stamp it with the game's own `glk_set_hyperlink` value (the
+    // half of SQ-1503 that was already fixed and is not re-fixed here).
+    let (idx, img) = ar
+        .transcript_images
+        .iter()
+        .enumerate()
+        .find_map(|(i, o)| o.as_ref().map(|im| (i, im.clone())))
+        .expect("the snapshot must hold the thumbnail moment — one inline picture in the transcript");
+    assert_eq!(
+        img.align,
+        ImageAlign::MarginRight,
+        "Anchorhead draws its thumbnail alongside the text as a right-margin picture, \
+         which is the align the float path (not the band path) serves"
+    );
+    assert_ne!(img.link, 0, "gvm must stamp the game's glk_set_hyperlink value onto the picture");
+
+    // The live game at that same moment, so the click is delivered to a real
+    // suspended `glk_select`, not to a freshly booted one.
+    Engine::restore_state(&mut sess, &ar.engine_save()).expect("restore the host snapshot");
+    assert!(
+        sess.hyperlink_windows().contains(&1),
+        "the restored moment must have the primary window armed for a hyperlink click; got {:?}",
+        sess.hyperlink_windows()
+    );
+
+    // The user's own terminal: 123x68 cells at 8x18 px (their /dump-windows).
+    let state = state_from(&ar, (8, 18));
+    let area = Rect::new(0, 0, 123, 68);
+    let mut buf = Buffer::empty(area);
+    let m = app::render::screen::render_story_pane(&Engine::screen(&sess), false, None, &state, area, &mut buf);
+
+    let &((col, row), link) = m.links.iter().find(|&&(_, v)| v == img.link).unwrap_or_else(|| {
+        panic!(
+            "a click anywhere on the drawn thumbnail (transcript line {idx}, link {}) must find \
+             that link in the frame's cell→link map; got {:?}",
+            img.link, m.links
+        )
+    });
+
+    // The two calls `main.rs`'s hyperlink arm makes, in order.
+    let windows = sess.hyperlink_windows();
+    let win =
+        app::glulx_session::glk_hyperlink_window(false, col, row, (0, 0, area.width, area.height), &windows, &m.win_rects)
+            .unwrap_or_else(|| {
+                panic!("the click at ({col},{row}) must resolve to a hyperlink-watching window; windows={windows:?}")
+            });
+    assert_eq!(win, 1, "the primary window owns the click");
+
+    // And the game must ACT on it: Anchorhead answers a thumbnail click by
+    // opening the full-size illustration in a graphics window. Asserted as a
+    // CHANGE the click caused, not as a state that merely holds afterwards —
+    // "a graphics window exists" would also be true of a moment that already
+    // had one, which is a pass this case must not be able to buy.
+    assert!(
+        find_graphics(&Engine::screen(&sess).root).is_none(),
+        "the restored moment is the thumbnail-in-the-margin one: the full-size view is \
+         not open yet, so what the click opens below is the click's own doing"
+    );
+    let _ = Engine::take_transcript(&mut sess);
+    let result = sess.deliver_hyperlink(win, link);
+    assert!(
+        find_graphics(&Engine::screen(&sess).root).is_some(),
+        "clicking the thumbnail must open the full-size illustration the way typing VIEW \
+         does; the game produced: {:?}",
+        result.transcript
+    );
 }

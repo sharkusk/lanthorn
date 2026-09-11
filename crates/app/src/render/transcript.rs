@@ -54,6 +54,38 @@ pub(crate) struct ImageBand {
     pub x_off: u16,
 }
 
+/// Record cell→link for the picture cells one image strip is drawn into, so a
+/// click anywhere on the picture resolves to the game's `glk_set_hyperlink`
+/// value (SQ-1503). No-op for an unlinked picture or a row with no strip.
+///
+/// One function, called from BOTH arms of the draw loop, because the same
+/// picture reaches the screen by two routes and the cells it occupies must not
+/// depend on which: a band row (`WrappedRow::band`, consumed whole by
+/// `try_blit_band_row`) and a margin float strip (`WrappedRow::float`, laid over
+/// a row that also carries prose). Recording it in only one of them is precisely
+/// what left the reopened SQ-1503 standing — the first fix covered the band and
+/// every real Glulx thumbnail is a float.
+///
+/// The cells are the ones `inline_image::blit_band` computes for its `dest`:
+/// `area.x + x_off.min(area.width)` for `cols.min(area.width - x_off)` columns,
+/// so the recorded rect and the drawn rect cannot drift apart.
+fn record_band_links(
+    links: &mut Vec<((u16, u16), u32)>,
+    band: Option<&ImageBand>,
+    area: ratatui::layout::Rect,
+    row_y: u16,
+) {
+    let Some(band) = band else { return };
+    if band.image.link == 0 {
+        return;
+    }
+    let x0 = area.x + band.x_off.min(area.width);
+    let w = band.cols.min(area.width.saturating_sub(band.x_off));
+    for j in 0..w {
+        links.push(((x0 + j, row_y), band.image.link));
+    }
+}
+
 // ── Styles ─────────────────────────────────────────────────────────────────────
 //
 // Status, normal text, and suggestion styles are read from `state.colors` at
@@ -2671,18 +2703,9 @@ fn render_middle(
             // and after every image) — so a click anywhere on the visible
             // picture found no recorded link and the hyperlink click path below
             // never fired, even though typing VIEW (driven by game logic, not by
-            // any click) worked. Record the SAME cells `blit_band` drew into
-            // (`area_x + x_off.min(area_width)` .. `+ cols.min(area_width -
-            // x_off)`), so a click anywhere on the picture resolves.
-            if let Some(band) = &wr.band {
-                if band.image.link != 0 {
-                    let x0 = body_area.x + band.x_off.min(body_area.width);
-                    let w = band.cols.min(body_area.width.saturating_sub(band.x_off));
-                    for j in 0..w {
-                        links.push(((x0 + j, row_y), band.image.link));
-                    }
-                }
-            }
+            // any click) worked. Record the SAME cells `blit_band` drew into,
+            // so a click anywhere on the picture resolves.
+            record_band_links(&mut links, wr.band.as_ref(), body_area, row_y);
             continue;
         }
         // Meta/Warning reserve the 2-col gutter and draw their marker glyph;
@@ -2792,12 +2815,27 @@ fn render_middle(
             }
         }
 
-        // Left-margin float (SQ-0454): blit the picture strip over the left
+        // Margin float (SQ-0454): blit the picture strip over the float's own
         // `cols` columns AFTER the row's (indented) text and any background fill,
-        // so the image always wins. The prose already started past `indent`, so
-        // it never collides with the picture.
+        // so the image always wins. The prose already started past `indent` (left
+        // float) or stops short of the reserve (right float), so it never
+        // collides with the picture.
         if let Some(float) = &wr.float {
             crate::render::inline_image::blit_float_row(state, float, body_area.x, body_area.width, row_y, buf);
+            // …and the float's picture is as clickable as the band's (SQ-1503,
+            // reopened). A MARGIN picture never reaches the band arm above: the
+            // main transcript wraps with `left_float = true`, so `FloatState`
+            // takes every `MarginLeft`/`MarginRight` image that leaves a usable
+            // prose column and emits `float` rows with `band: None`, which
+            // `try_blit_band_row` declines. Anchorhead: the Illustrated Edition
+            // draws its clickable thumbnail `MarginRight` — "alongside the
+            // text", as its own ILLUSTRATIONS text says — so the link the first
+            // SQ-1503 fix recorded for band rows was never recorded for the
+            // picture the player actually sees, and the click still did nothing.
+            // Same cells, same rule as the band arm; the row's own text runs
+            // (recorded above) never occupy these columns, since a float either
+            // pads the prose past the picture or narrows it short of the reserve.
+            record_band_links(&mut links, Some(float), body_area, row_y);
         }
     }
 
@@ -4298,6 +4336,48 @@ mod tests {
         // "before" is row 0 (unlinked, plain text) — a link cell there would mean
         // the map bled onto text the picture was never drawn under.
         assert!(m.links.iter().all(|((_, y), _)| *y != 0), "row 0 (\"before\") carries no link cells");
+    }
+
+    /// The band case above's twin for the route every real Glulx thumbnail
+    /// actually takes (SQ-1503, reopened). A `MarginRight` picture is not a band
+    /// at all: the main transcript wraps with `left_float = true`, so
+    /// `FloatState::start` claims it and the rows carry `float: Some(..)` with
+    /// `band: None` — a row `try_blit_band_row` declines, so the band arm's
+    /// link recording never sees it. Anchorhead: the Illustrated Edition draws
+    /// its clickable thumbnail exactly this way, which is why the first SQ-1503
+    /// fix left the click still doing nothing.
+    #[test]
+    fn render_transcript_builds_cell_link_map_for_a_margin_float_picture() {
+        let machine = minimal_machine();
+        let mut state = AppState::default();
+        state.game_picker = Some(ratatui_image::picker::Picker::halfblocks());
+        state.push_transcript_kind("before", TranscriptKind::Story);
+        state.push_transcript_image(crate::inline_image::InlineImage {
+            pixels: std::sync::Arc::new(image::RgbaImage::from_pixel(8, 8, image::Rgba([9, 9, 9, 255]))),
+            align: crate::inline_image::ImageAlign::MarginRight,
+            scaled: None,
+            margin_px: None,
+            rule: None,
+            link: 42,
+        });
+        state.push_transcript("prose that wraps beside the thumbnail in the right margin");
+        state.focus = Focus::Game;
+
+        let area = Rect::new(0, 0, 40, 10);
+        let mut buf = Buffer::empty(area);
+        let m = render_transcript(
+            &crate::session::status_model_from_machine(&machine), None, &state, area, &mut buf, None,
+        );
+
+        assert!(!m.links.is_empty(), "the floated picture's own cells must be in the click map");
+        assert!(m.links.iter().all(|(_, v)| *v == 42), "every recorded cell carries the picture's link");
+        // A right float sits at the body's right edge and the prose stays flush
+        // left of it, so no link cell may land in the leftmost columns.
+        assert!(
+            m.links.iter().all(|((x, _), _)| *x > 0),
+            "a right-margin float records no link over the prose column; got {:?}",
+            m.links
+        );
     }
 
     #[test]
