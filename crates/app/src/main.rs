@@ -2788,6 +2788,8 @@ fn run_event_loop(boot: startup::BootResult, launched_from_library: bool) -> Run
                         let delete = state.overlays.reset_delete_data;
                         state.overlays.reset_dialog = false;
                         reset_game(&mut *session, &mut mapper, &mut state, &story_bytes, &story_path, &game_dir, clear, delete);
+                        // SQ-1504: see `loop_tick::reset_glulx_resize_trackers`.
+                        loop_tick::reset_glulx_resize_trackers(&mut vm_story_size, &mut story_size_seen, &mut resize_dirty);
                     }
                     OverlayAct::ResetCancel => {
                         state.overlays.reset_dialog = false;
@@ -2801,6 +2803,8 @@ fn run_event_loop(boot: startup::BootResult, launched_from_library: bool) -> Run
                         // Plain restart: keep the accumulated map and saved data.
                         state.overlays.game_over = false;
                         reset_game(&mut *session, &mut mapper, &mut state, &story_bytes, &story_path, &game_dir, false, false);
+                        // SQ-1504: see `loop_tick::reset_glulx_resize_trackers`.
+                        loop_tick::reset_glulx_resize_trackers(&mut vm_story_size, &mut story_size_seen, &mut resize_dirty);
                     }
                     OverlayAct::GameOverRestore => {
                         // Close the game-over overlay and open the saves manager (the

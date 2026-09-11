@@ -1487,7 +1487,7 @@ impl GlkBackend for AppGlk {
             .set_background(color);
     }
 
-    fn graphics_draw_image(&mut self, win: u32, resnum: u32, x: i32, y: i32, scale: Option<(u32, u32)>) -> bool {
+    fn graphics_draw_image(&mut self, win: u32, resnum: u32, x: i32, y: i32, scale: Option<(u32, u32)>, link: u32) -> bool {
         // Buffer-window target: `x` is really the Glk imagealign flag; the image
         // flows inline with the window's text rather than onto a pixel canvas.
         if self.buffers.contains_key(&win) {
@@ -1495,7 +1495,7 @@ impl GlkBackend for AppGlk {
             let img = crate::inline_image::InlineImage {
                 pixels: std::sync::Arc::new(src.to_rgba8()),
                 align: crate::inline_image::ImageAlign::from_glk(x as u32),
-                scaled: scale, margin_px: None, rule: None,
+                scaled: scale, margin_px: None, rule: None, link,
             };
             if let Some(buf) = self.buffers.get_mut(&win) {
                 buf.log.push(BufElem::Image(img));
@@ -1529,6 +1529,7 @@ impl GlkBackend for AppGlk {
         align: u32,
         rule: gvm::glk::ImageRule,
         _window_width_px: u32,
+        link: u32,
     ) -> bool {
         // Only a text-buffer window has an inline flow to put this in; gvm
         // routes graphics windows through `graphics_draw_image` with a size
@@ -1543,6 +1544,7 @@ impl GlkBackend for AppGlk {
             scaled: None,
             margin_px: None,
             rule: Some(rule),
+            link,
         };
         if let Some(buf) = self.buffers.get_mut(&win) {
             buf.log.push(BufElem::Image(img));
@@ -1808,7 +1810,7 @@ mod tests {
             pixels: std::sync::Arc::new(image::RgbaImage::new(3, 3)),
             align: crate::inline_image::ImageAlign::InlineUp,
             scaled: None, margin_px: None,
-            rule: None,
+            rule: None, link: 0,
         };
         let log = &mut glk.buffers.get_mut(&2).unwrap().log;
         log.push(BufElem::Text { bits: 0, fg: 0, bg: 0, link: 0, para: crate::state::ParaFmt::default(), glk_style: 0, text: "a\n".into() });
@@ -2292,7 +2294,7 @@ mod tests {
         let mut glk = AppGlk::new(80, 24);
         glk.window_open(1, WinType::TextBuffer); // primary buffer
         glk.put_text(1, GlkStyle::Normal, "before\n");
-        glk.graphics_draw_image(1, /*resnum*/ 0, /*imagealign*/ 1, 0, None);
+        glk.graphics_draw_image(1, /*resnum*/ 0, /*imagealign*/ 1, 0, None, 0);
         glk.put_text(1, GlkStyle::Normal, "after");
         let elems = glk.take_transcript_elems();
         let kinds: Vec<&str> = elems
@@ -2321,7 +2323,7 @@ mod tests {
             pixels: std::sync::Arc::new(image::RgbaImage::new(3, 3)),
             align: crate::inline_image::ImageAlign::InlineUp,
             scaled: None, margin_px: None,
-            rule: None,
+            rule: None, link: 0,
         };
         let log = &mut glk.buffers.get_mut(&pid).unwrap().log;
         log.push(BufElem::Text { bits: 0, fg: 0, bg: 0, link: 0, para: crate::state::ParaFmt::default(), glk_style: 0, text: "foo".into() });
@@ -2354,7 +2356,7 @@ mod tests {
         // a Canvas via the existing graphics path.
         let mut glk = AppGlk::new(80, 24);
         glk.window_open(5, WinType::Graphics);
-        glk.graphics_draw_image(5, 0, 10, 10, None);
+        glk.graphics_draw_image(5, 0, 10, 10, None, 0);
         // No primary buffer is open → elems empty.
         assert!(glk.take_transcript_elems().is_empty());
     }
@@ -2375,10 +2377,10 @@ mod tests {
         // so the backend must report false rather than always claiming success.
         let mut glk = AppGlk::new(80, 24);
         glk.window_open(1, WinType::TextBuffer);
-        assert!(!glk.graphics_draw_image(1, 0, 1, 0, None), "buffer window, missing image");
+        assert!(!glk.graphics_draw_image(1, 0, 1, 0, None, 0), "buffer window, missing image");
 
         glk.window_open(5, WinType::Graphics);
-        assert!(!glk.graphics_draw_image(5, 0, 10, 10, None), "graphics window, missing image");
+        assert!(!glk.graphics_draw_image(5, 0, 10, 10, None, 0), "graphics window, missing image");
     }
 
     #[test]
@@ -2388,12 +2390,36 @@ mod tests {
         let blorb = crate::graphics::test_blorb_with_pict(1, &png_bytes());
         let mut glk = AppGlk::with_graphics(80, 24, (1, 1), crate::graphics::PictSource::new(Some(blorb)));
         glk.window_open(1, WinType::TextBuffer);
-        assert!(glk.graphics_draw_image(1, /*resnum*/ 1, /*imagealign*/ 1, 0, None), "buffer window, resolvable image");
+        assert!(glk.graphics_draw_image(1, /*resnum*/ 1, /*imagealign*/ 1, 0, None, 0), "buffer window, resolvable image");
 
         let blorb2 = crate::graphics::test_blorb_with_pict(1, &png_bytes());
         let mut glk2 = AppGlk::with_graphics(80, 24, (1, 1), crate::graphics::PictSource::new(Some(blorb2)));
         glk2.window_open(5, WinType::Graphics);
-        assert!(glk2.graphics_draw_image(5, /*resnum*/ 1, 10, 10, None), "graphics window, resolvable image");
+        assert!(glk2.graphics_draw_image(5, /*resnum*/ 1, 10, 10, None, 0), "graphics window, resolvable image");
+    }
+
+    /// SQ-1503: a picture drawn into a TEXT BUFFER window with a nonzero
+    /// `link` must carry it on the `InlineImage` it pushes — the field that
+    /// lets a later render pass make the clicked-on picture deliver a
+    /// hyperlink event, exactly like linked text. A graphics-window draw has
+    /// no such destination (a canvas isn't a stream), so its `link` argument
+    /// is simply unused there — asserted by `image_draw_to_graphics_window_still_hits_canvas`
+    /// above continuing to pass with link 0.
+    #[test]
+    fn image_draw_to_buffer_window_carries_its_link() {
+        let blorb = crate::graphics::test_blorb_with_pict(1, &png_bytes());
+        let mut glk = AppGlk::with_graphics(80, 24, (1, 1), crate::graphics::PictSource::new(Some(blorb)));
+        glk.window_open(1, WinType::TextBuffer);
+        assert!(
+            glk.graphics_draw_image(1, /*resnum*/ 1, /*imagealign*/ 1, 0, None, /*link*/ 77),
+            "buffer window, resolvable image"
+        );
+        let log = &glk.buffers.get(&1).unwrap().log;
+        let img = log.iter().find_map(|e| match e {
+            BufElem::Image(img) => Some(img),
+            _ => None,
+        });
+        assert_eq!(img.map(|i| i.link), Some(77), "the drawn image carries the link it was drawn under");
     }
 
     #[test]

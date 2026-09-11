@@ -741,6 +741,119 @@ mod tests {
             "still a Glulx session after restart");
     }
 
+    /// SQ-1504: reproduced at a 100x70 terminal, as reported. `reset_game`
+    /// rebuilds Glulx at the fallback width (`FALLBACK_SCREEN_COLS`/`ROWS`, 80x24)
+    /// exactly as a fresh launch's own constructor does — `state.config.
+    /// virtual_screen_cols`/`rows` are unset by default in both paths, per
+    /// `startup.rs`'s Glulx arm. A LAUNCH still ends up at the real pane width
+    /// because `main.rs`'s per-frame `loop_tick::poll_glulx_resize` sees its
+    /// `vm_story_size` tracker at its initial `None`, treats the real pane as new,
+    /// and calls `GlulxSession::resize` once its settle timer elapses. A restart
+    /// leaves that tracker exactly as it was before the restart — untouched by
+    /// `reset_game`, which has no access to it — so if the terminal itself hasn't
+    /// moved, the tracker already equals the (unchanged) pane and the poll never
+    /// re-measures the freshly rebuilt (narrower) session against it. The story
+    /// panel then stays at the fallback width until an actual terminal resize
+    /// event forces the comparison to differ, which is exactly the reported
+    /// symptom ("until the window is resized").
+    ///
+    /// Observed here through the status Grid window's own `cols`, which gvm
+    /// derives from whatever `(cols, rows)` the session is CURRENTLY told —
+    /// booting Anchorhead at 80x24 vs 100x70 reports `cols=80` vs `cols=100` on
+    /// that same grid (checked with a throwaway probe against the real fixture).
+    ///
+    /// Falsified as instructed: skipping the `vm_story_size`/`story_size_seen`/
+    /// `resize_dirty` reset that `main.rs`'s `OverlayAct::ResetConfirm` and
+    /// `OverlayAct::GameOverPlayAgain` arms now perform after `reset_game`
+    /// reproduces exactly the reported symptom below — the poll reports no
+    /// redraw and the status grid stays at the fallback width.
+    #[test]
+    fn reset_game_glulx_requires_the_resize_trackers_cleared_to_reach_the_real_pane_width() {
+        let fixture = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../stories/Anchorhead.gblorb");
+        let Ok(raw) = std::fs::read(&fixture) else {
+            eprintln!("SKIP: no stories/Anchorhead.gblorb");
+            return;
+        };
+        let pane = (100u32, 70u32);
+
+        // Boot the way a real launch at a 100x70 terminal would: the same two
+        // parses `startup.rs` and `reset.rs` both do (one for the executable, one
+        // kept whole for the Pict resources).
+        let blorb1 = blorb::Blorb::parse(raw.clone()).expect("parse blorb (executable)");
+        let (_, image) = blorb1.executable().expect("Anchorhead carries an executable chunk");
+        let image = image.to_vec();
+        let blorb2 = blorb::Blorb::parse(raw.clone()).expect("parse blorb (pictures)");
+        let mut engine: Box<dyn app::engine::Engine> = Box::new(
+            app::glulx_session::GlulxSession::new(image, pane.0, pane.1, true, true, false, (8, 16), Some(blorb2), &[])
+                .expect("Anchorhead should boot"),
+        );
+
+        fn status_grid_cols(engine: &dyn app::engine::Engine) -> Option<u16> {
+            fn find(node: &app::engine::WinNode) -> Option<u16> {
+                match node {
+                    app::engine::WinNode::Grid(g) => Some(g.cols),
+                    app::engine::WinNode::Pair { first, second, .. } => find(first).or_else(|| find(second)),
+                    _ => None,
+                }
+            }
+            find(&app::engine::Engine::screen(engine).root)
+        }
+        assert_eq!(
+            status_grid_cols(&*engine),
+            Some(pane.0 as u16),
+            "booted at the real pane, the status grid spans it"
+        );
+
+        let mut mapper = mapper::mapper::Mapper::default();
+        let mut state = app::state::AppState::default();
+        super::reset_game(&mut *engine, &mut mapper, &mut state, &raw, &fixture, std::path::Path::new(""), false, false);
+        assert_eq!(
+            status_grid_cols(&*engine),
+            Some(app::config::FALLBACK_SCREEN_COLS),
+            "reset_game rebuilds at the fallback width, exactly as a fresh launch's constructor does"
+        );
+
+        // Stale trackers: the terminal hasn't moved, so both still read the pane
+        // size reported BEFORE the reset — the exact state `main.rs`'s locals are
+        // left in when nothing clears them.
+        let last_panes = crate::PaneRects {
+            story: ratatui::layout::Rect::new(0, 0, pane.0 as u16, pane.1 as u16),
+            ..Default::default()
+        };
+        let mut vm_story_size = Some((pane.0 as u16, pane.1 as u16));
+        let mut story_size_seen = Some((pane.0 as u16, pane.1 as u16));
+        let mut resize_dirty: Option<std::time::Instant> = None;
+
+        let redraw = crate::loop_tick::poll_glulx_resize(
+            &mut *engine, &last_panes, &mut story_size_seen, &mut resize_dirty, &mut vm_story_size,
+        );
+        assert!(!redraw, "stale trackers read the fresh session as already matching the pane");
+        assert_eq!(
+            status_grid_cols(&*engine),
+            Some(app::config::FALLBACK_SCREEN_COLS),
+            "BUG reproduced: without clearing the trackers the story panel stays at the fallback width"
+        );
+
+        // THE FIX: the exact call `main.rs`'s `ResetConfirm`/`GameOverPlayAgain`
+        // arms now make right after `reset_game`.
+        crate::loop_tick::reset_glulx_resize_trackers(&mut vm_story_size, &mut story_size_seen, &mut resize_dirty);
+        let redraw = crate::loop_tick::poll_glulx_resize(
+            &mut *engine, &last_panes, &mut story_size_seen, &mut resize_dirty, &mut vm_story_size,
+        );
+        assert!(!redraw, "the settle timer has not elapsed on this very first pass");
+        // A later pass, once the 150ms settle window has elapsed.
+        resize_dirty = std::time::Instant::now().checked_sub(std::time::Duration::from_millis(200));
+        let redraw = crate::loop_tick::poll_glulx_resize(
+            &mut *engine, &last_panes, &mut story_size_seen, &mut resize_dirty, &mut vm_story_size,
+        );
+        assert!(redraw, "once settled, the poll must re-measure the fresh session against the real pane");
+        assert_eq!(
+            status_grid_cols(&*engine),
+            Some(pane.0 as u16),
+            "the fix restores the story panel to the real pane width"
+        );
+    }
+
     #[test]
     fn reset_game_with_delete_data_removes_auto_sidecars() {
         // delete_data = true wipes the three AUTO sidecars in game_dir before the

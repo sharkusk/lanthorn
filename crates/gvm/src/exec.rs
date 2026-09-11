@@ -3883,6 +3883,17 @@ impl Machine {
         self.build_frame_and_enter(func, args)
     }
 
+    /// The CURRENT stream's hyperlink value (`glk_set_hyperlink` sets it on
+    /// whatever `glk_stream_set_current` last named; 0 = no link), for
+    /// `glk_image_draw`/`_scaled`/`_scaled_ext` to stamp onto the picture they
+    /// draw (SQ-1503) — the same value text output already carries via
+    /// [`Self::glk_stream_put`]'s `link`. Glk spec: "you can also set a
+    /// hyperlink for a picture, by calling glk_set_hyperlink() and then
+    /// glk_image_draw()." 0 when there is no current stream.
+    fn current_hyperlink(&self) -> u32 {
+        self.glk.stream_kind_style(self.glk.current_stream()).map(|(_, _, link)| link).unwrap_or(0)
+    }
+
     /// Write `s` to Glk stream `sid` (its current style). A window stream routes
     /// to that window via the backend; a memory stream writes Glulx memory; an
     /// invalid/zero stream is safely discarded (no panic). This is the single
@@ -5266,7 +5277,8 @@ impl Machine {
             0x00E1 => {
                 // glk_image_draw(win, image, val1=x, val2=y) -> 1 if actually drawn
                 if self.graphics_enabled {
-                    self.backend.graphics_draw_image(a(0), a(1), a(2) as i32, a(3) as i32, None) as u32
+                    let link = self.current_hyperlink();
+                    self.backend.graphics_draw_image(a(0), a(1), a(2) as i32, a(3) as i32, None, link) as u32
                 } else {
                     0
                 }
@@ -5275,7 +5287,8 @@ impl Machine {
                 // glk_image_draw_scaled(win, image, val1=x, val2=y, width, height)
                 // -> 1 if actually drawn
                 if self.graphics_enabled {
-                    self.backend.graphics_draw_image(a(0), a(1), a(2) as i32, a(3) as i32, Some((a(4), a(5)))) as u32
+                    let link = self.current_hyperlink();
+                    self.backend.graphics_draw_image(a(0), a(1), a(2) as i32, a(3) as i32, Some((a(4), a(5))), link) as u32
                 } else {
                     0
                 }
@@ -5291,6 +5304,7 @@ impl Machine {
                 } else {
                     let rule = glk::ImageRule { rule: a(6), width: a(4), height: a(5), maxwidth: a(7) };
                     let cp = self.backend.char_pixels();
+                    let link = self.current_hyperlink();
                     match self.glk.window_type(a(0)) {
                         // Graphics window: ONE-SHOT. Resolve against the
                         // window's pixel width now (maxwidth ignored) and hand
@@ -5300,7 +5314,7 @@ impl Machine {
                             let win_w = self.glk.window_pixel_size(a(0), cp).map(|(w, _)| w).unwrap_or(0);
                             match self.backend.image_info(a(1)).and_then(|nat| rule.resolve_in_graphics(nat, win_w)) {
                                 Some(size) => {
-                                    self.backend.graphics_draw_image(a(0), a(1), a(2) as i32, a(3) as i32, Some(size))
+                                    self.backend.graphics_draw_image(a(0), a(1), a(2) as i32, a(3) as i32, Some(size), link)
                                         as u32
                                 }
                                 // No such image, or a rule word naming no width
@@ -5314,7 +5328,7 @@ impl Machine {
                         // is the imagealign; `val2` is unused and must be zero.
                         Some(glk::WinType::TextBuffer) => {
                             let win_w = self.glk.window_size(a(0)).map(|(w, _)| w * cp.0).unwrap_or(0);
-                            self.backend.buffer_draw_image_ext(a(0), a(1), a(2), rule, win_w) as u32
+                            self.backend.buffer_draw_image_ext(a(0), a(1), a(2), rule, win_w, link) as u32
                         }
                         // Grid/pair/blank/absent windows do not display images.
                         _ => 0,
@@ -13248,7 +13262,40 @@ mod tests {
         let tb = m.backend.as_any().downcast_ref::<glk::TestBackend>().unwrap();
         assert_eq!(tb.fills(win), vec![(0x00FF_0000, 1, 2, 3, 4)]);
         assert_eq!(tb.background(win), Some(0x0000_00FF));
-        assert_eq!(tb.draws(win), vec![(7, 5, 6, None)]);
+        assert_eq!(tb.draws(win), vec![(7, 5, 6, None, 0)], "no glk_set_hyperlink: link 0");
+    }
+
+    /// SQ-1503: a picture drawn while a hyperlink is set on the current stream
+    /// must carry that link to the backend, exactly as printed text does
+    /// (`glk_set_hyperlink_tags_subsequent_output`, just above) — Glk spec:
+    /// "you can also set a hyperlink for a picture, by calling
+    /// glk_set_hyperlink() and then glk_image_draw()." Anchorhead: the
+    /// Illustrated Edition uses exactly this to make its inline "click this
+    /// thumbnail to view the full-size illustration" images clickable; gvm
+    /// never threaded the stream's link through `glk_image_draw`/`_scaled`, so
+    /// every such picture drew with link 0 and no click could ever reach it.
+    #[test]
+    fn glk_set_hyperlink_tags_a_subsequently_drawn_image() {
+        let mut m = super::tests::machine_with_glk(&[]);
+        m.graphics_enabled = true;
+        m.backend = Box::new(glk::TestBackend::with_screen(40, 10).with_image_info(7, 20, 10));
+        let win = m.glk_open_window(0, 0, 0, 3, 0); // wintype_TextBuffer
+        let sid = m.glk_dispatch(0x002C, &[win]).unwrap(); // glk_window_get_stream(win)
+        m.glk_dispatch(0x0047, &[sid]).unwrap(); // glk_stream_set_current(sid)
+
+        m.glk_dispatch(0x0100, &[42]).unwrap(); // glk_set_hyperlink(42)
+        let drew = m.glk_dispatch(0x00E1, &[win, 7, 1, 0]).unwrap(); // image_draw(win, resnum=7, align=InlineUp)
+        assert_eq!(drew, 1, "drawn");
+        m.glk_dispatch(0x0100, &[0]).unwrap(); // glk_set_hyperlink(0) → clear
+        let drew2 = m.glk_dispatch(0x00E2, &[win, 7, 2, 0, 5, 5]).unwrap(); // image_draw_scaled, no link
+        assert_eq!(drew2, 1, "drawn");
+
+        let tb = m.backend.as_any().downcast_ref::<glk::TestBackend>().unwrap();
+        assert_eq!(
+            tb.draws(win),
+            vec![(7, 1, 0, None, 42), (7, 2, 0, Some((5, 5)), 0)],
+            "the first draw carries the set link; clearing it before the second leaves that one at 0"
+        );
     }
 
     #[test]
@@ -13348,7 +13395,7 @@ mod tests {
         let tb = m.backend.as_any().downcast_ref::<glk::TestBackend>().unwrap();
         assert_eq!(
             tb.draws(win),
-            vec![(7, 5, 6, Some((160, 80)))],
+            vec![(7, 5, 6, Some((160, 80)), 0)],
             "resolved to half the 320px window width, aspect kept, maxwidth ignored"
         );
         assert!(tb.buffer_draws_ext(win).is_empty(), "a graphics window keeps no standing rule");
@@ -13377,7 +13424,7 @@ mod tests {
         assert!(tb.draws(win).is_empty(), "no resolved-size draw: the size is not settled yet");
         let recs = tb.buffer_draws_ext(win);
         assert_eq!(recs.len(), 1, "one standing rule recorded");
-        let (resnum, align, got, win_w) = recs[0];
+        let (resnum, align, got, win_w, link) = recs[0];
         assert_eq!((resnum, align), (7, 1), "resnum and imagealign");
         assert_eq!(
             got,
@@ -13385,6 +13432,7 @@ mod tests {
             "the rule reaches the host verbatim"
         );
         assert_eq!(win_w, 320, "40 cols × 8 px — the CURRENT width, for a host with no layout of its own");
+        assert_eq!(link, 0, "no glk_set_hyperlink in this test: link 0");
         // And the standing rule answers differently at two widths, which is the
         // whole behaviour: this is what the host re-runs on every relayout.
         assert_eq!(got.resolve_in_buffer((200, 100), 320), Some((160, 80)));
@@ -13521,7 +13569,7 @@ mod tests {
 
         let tb = backend_of(&m);
         assert_eq!(tb.fills(win), vec![(0x0011_2233, 1, 2, 3, 4)]);
-        assert_eq!(tb.draws(win), vec![(1, 5, 6, None)]);
+        assert_eq!(tb.draws(win), vec![(1, 5, 6, None, 0)]);
         assert!(m.diagnostics.is_empty(), "no noise: {:?}", m.diagnostics);
     }
 
