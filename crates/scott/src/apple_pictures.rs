@@ -414,14 +414,15 @@ pub const BRUSHES: [[u8; 32]; 8] = [
 /// and four stored colour bytes: family D stores no colour bytes at all and
 /// presents six colours, so it answers its own shape.
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
 pub struct HiResPicture {
     /// Always [`CANVAS_WIDTH`].
-    pub width: usize,
+    pub(crate) width: usize,
     /// Always [`CANVAS_HEIGHT`].
-    pub height: usize,
+    pub(crate) height: usize,
     /// `width * height` pixel values, each 0-5, row-major from the top-left.
     /// Index [`PALETTE`] with one to get a colour.
-    pub pixels: Vec<u8>,
+    pub(crate) pixels: Vec<u8>,
     /// The canvas rectangle this record's own drawing covers — the same fact
     /// [`crate::saga_pictures::Picture::painted`] carries, and needed for the
     /// same reason: an object picture is a sub-image that must be composited
@@ -432,10 +433,32 @@ pub struct HiResPicture {
     /// flooded its canvas white is indistinguishable from one that drew
     /// nothing there. Bounds are inclusive; `None` for a record that wrote
     /// nothing at all.
-    pub painted: Option<Painted>,
+    pub(crate) painted: Option<Painted>,
 }
 
 impl HiResPicture {
+    /// Always [`CANVAS_WIDTH`].
+    pub fn width(&self) -> usize {
+        self.width
+    }
+
+    /// Always [`CANVAS_HEIGHT`].
+    pub fn height(&self) -> usize {
+        self.height
+    }
+
+    /// `width() * height()` pixel values, each 0-5, row-major from the
+    /// top-left. Index [`PALETTE`] with one to get a colour.
+    pub fn pixels(&self) -> &[u8] {
+        &self.pixels
+    }
+
+    /// The canvas rectangle this record's own drawing covers. See the
+    /// struct's own docs for what "painted" means here.
+    pub fn painted(&self) -> Option<Painted> {
+        self.painted
+    }
+
     /// The RGB of the pixel at `(x, y)`, or `None` off the canvas.
     #[must_use]
     pub fn rgb(&self, x: usize, y: usize) -> Option<Rgb> {
@@ -449,6 +472,7 @@ impl HiResPicture {
 
 /// Why a file is not a family-D picture ("name it and refuse it", §11).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum AppleError {
     /// Fewer bytes than the DOS 3.3 binary prologue, so there is no length
     /// field to read, let alone a picture.
@@ -757,29 +781,60 @@ pub const SCRAMBLED_MAX_RECORD: usize = 4 + 40 * 160;
 /// See [`apple_look_table`] for where the three numbers come from and what
 /// each was checked against.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
 pub struct AppleLookPicture {
     /// The [`crate::Database::nouns`] index the player must name.
-    pub noun: u16,
+    pub(crate) noun: u16,
     /// The [`crate::Database::items`] index the picture depicts. It is *not*
     /// the picture's own index — these three releases number their artwork in
     /// the ROOM space and have no `B`-style object records at all.
-    pub item: u16,
+    pub(crate) item: u16,
     /// The §8.6 picture index, which on all three releases measured runs from
     /// 80 upward in table order.
-    pub picture: u16,
+    pub(crate) picture: u16,
+}
+
+impl AppleLookPicture {
+    /// The [`crate::Database::nouns`] index the player must name.
+    pub fn noun(&self) -> u16 {
+        self.noun
+    }
+
+    /// The [`crate::Database::items`] index the picture depicts.
+    pub fn item(&self) -> u16 {
+        self.item
+    }
+
+    /// The §8.6 picture index.
+    pub fn picture(&self) -> u16 {
+        self.picture
+    }
 }
 
 /// A scrambled release's `LOOK` verb and its [`AppleLookPicture`] rows
 /// (SQ-1499).
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
+#[non_exhaustive]
 pub struct AppleLookTable {
     /// The [`crate::Database::verbs`] index that triggers the table — 42
     /// (`LOO`, with `*EXA` beside it) on *Voodoo Castle*, 8 (`LOO`, likewise)
     /// on *The Count*. Meaningless on a release whose `rows` are empty; see
     /// [`apple_look_table`].
-    pub verb: u16,
+    pub(crate) verb: u16,
     /// The rows, in the order the release stores them.
-    pub rows: Vec<AppleLookPicture>,
+    pub(crate) rows: Vec<AppleLookPicture>,
+}
+
+impl AppleLookTable {
+    /// The [`crate::Database::verbs`] index that triggers the table.
+    pub fn verb(&self) -> u16 {
+        self.verb
+    }
+
+    /// The rows, in the order the release stores them.
+    pub fn rows(&self) -> &[AppleLookPicture] {
+        &self.rows
+    }
 }
 
 /// The `LOOK` picture table of one **scrambled** Apple II release, read off

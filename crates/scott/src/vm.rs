@@ -131,12 +131,26 @@ impl std::error::Error for RestoreError {}
 /// every turn in [`Vm::step`] — **not** part of the snapshot/restore format.
 /// A `Vm` nobody drains never grows this past one turn's worth.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
 pub struct PictureShow {
     /// The picture number opcode 90 named.
-    pub picture: u16,
+    pub(crate) picture: u16,
     /// `self.out.len()` at the moment this opcode ran — where in the turn's
     /// transcript this picture belongs.
-    pub output_len: usize,
+    pub(crate) output_len: usize,
+}
+
+impl PictureShow {
+    /// The picture number opcode 90 named.
+    pub fn picture(&self) -> u16 {
+        self.picture
+    }
+
+    /// `self.out.len()` at the moment this opcode ran — where in the turn's
+    /// transcript this picture belongs.
+    pub fn output_len(&self) -> usize {
+        self.output_len
+    }
 }
 
 /// A running Scott Adams game: a [`Database`] plus every piece of mutable

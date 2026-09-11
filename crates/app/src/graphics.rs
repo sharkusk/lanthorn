@@ -282,7 +282,7 @@ impl SagaRecords {
     fn overlays_for(&self, usage: scott::PictureUsage, indices: &[u16]) -> Vec<String> {
         self.order
             .iter()
-            .filter(|(_, pf)| pf.usage == usage && indices.contains(&pf.index))
+            .filter(|(_, pf)| pf.usage() == usage && indices.contains(&pf.index()))
             .map(|(name, _)| name.clone())
             .collect()
     }
@@ -724,8 +724,8 @@ impl PictSource {
             let Some(pic) = self.scott_record_picture(name) else { continue };
             let Some(area) = pic.painted() else { continue };
             let (width, height) = pic.dims();
-            for y in area.top..=area.bottom.min(height.saturating_sub(1)) {
-                for x in area.left..=area.right.min(width.saturating_sub(1)) {
+            for y in area.top()..=area.bottom().min(height.saturating_sub(1)) {
+                for x in area.left()..=area.right().min(width.saturating_sub(1)) {
                     if let (Some((r, g, b)), true) =
                         (pic.rgb(x, y), (x as u32) < canvas.width() && (y as u32) < canvas.height())
                     {
@@ -2744,9 +2744,9 @@ fn scott_dos_saga_image(record: &[u8]) -> Option<DynamicImage> {
 /// [`scott::saga_pictures::Picture`], so there is one conversion and not
 /// three.
 fn picture_to_image(pic: &scott::saga_pictures::Picture) -> DynamicImage {
-    let mut buf = RgbaImage::new(pic.width as u32, pic.height as u32);
-    for y in 0..pic.height {
-        for x in 0..pic.width {
+    let mut buf = RgbaImage::new(pic.width() as u32, pic.height() as u32);
+    for y in 0..pic.height() {
+        for x in 0..pic.width() {
             let (r, g, b) = pic.rgb(x, y).unwrap_or((0, 0, 0));
             buf.put_pixel(x as u32, y as u32, Rgba([r, g, b, 255]));
         }
@@ -2775,16 +2775,16 @@ impl OverlayRecord {
     /// overlay blanks the room around it.
     fn painted(&self) -> Option<scott::saga_pictures::Painted> {
         match self {
-            OverlayRecord::Strips(p) => p.painted,
-            OverlayRecord::HiRes(p) => p.painted,
+            OverlayRecord::Strips(p) => p.painted(),
+            OverlayRecord::HiRes(p) => p.painted(),
         }
     }
 
     /// `(width, height)` in pixels.
     fn dims(&self) -> (usize, usize) {
         match self {
-            OverlayRecord::Strips(p) => (p.width, p.height),
-            OverlayRecord::HiRes(p) => (p.width, p.height),
+            OverlayRecord::Strips(p) => (p.width(), p.height()),
+            OverlayRecord::HiRes(p) => (p.width(), p.height()),
         }
     }
 
@@ -2805,9 +2805,9 @@ impl OverlayRecord {
 /// palette rather than family C's four. Fully opaque for the same reason the
 /// others are: every pixel of a hi-res page has a colour, and black is one.
 fn hires_to_image(pic: &scott::apple_pictures::HiResPicture) -> DynamicImage {
-    let mut buf = RgbaImage::new(pic.width as u32, pic.height as u32);
-    for y in 0..pic.height {
-        for x in 0..pic.width {
+    let mut buf = RgbaImage::new(pic.width() as u32, pic.height() as u32);
+    for y in 0..pic.height() {
+        for x in 0..pic.width() {
             let (r, g, b) = pic.rgb(x, y).unwrap_or((0, 0, 0));
             buf.put_pixel(x as u32, y as u32, Rgba([r, g, b, 255]));
         }

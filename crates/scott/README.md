@@ -8,19 +8,6 @@ It is the Scott Adams engine behind
 interactive-fiction player with live automapping, and is also usable
 standalone by anything that wants to run Scott Adams story files.
 
-## Experimental as an embeddable crate
-
-The VM (`Vm`, `Database`, the `step`/`supply_line` protocol) and the
-reference ScottFree `.dat` text format are stable and tested — that part of
-this crate has been the standard-implementation goal from the start. The
-platform loaders and picture decoders added in September 2026 (TI-99/4A, ZX
-Spectrum and Commodore 64 *Mysterious Adventures*, and the US S.A.G.A.
-binary database on the Atari 8-bit, Apple II, Commodore 64 and MS-DOS) are
-newer: their public types' fields and variants may still change, and they
-have not yet had a hostile-input fuzz pass the way the reference format has
-(tracked together as SQ-1502). Treat those readers as a preview if you
-embed this crate today.
-
 ## What it reads
 
 `Database::parse` answers for five encodings of the same game data from one
@@ -86,6 +73,31 @@ save format, not a Scott-Adams standard (there is no such standard). A host
 wanting a save format of its own builds one from the accessors
 (`Vm::item_loc`, `Vm::flag`, `Vm::counter`, `Vm::current_room`, `Vm::lamp`,
 …) instead of persisting these bytes directly.
+
+## Robustness
+
+Every reader here — the reference `.dat` text format and the TI-99/4A, ZX
+Spectrum, Commodore 64 and US S.A.G.A. binary loaders and picture decoders
+alike — takes bytes it never wrote and answers a `LoadError`/`PictureError`/
+`AppleError` naming what didn't fit rather than panicking on it.
+
+`crates/scott/src/fuzz_harness.rs` runs a hand-rolled, zero-dependency
+random- and mutated-specimen generator through every public decode entry
+point in `zx_mysterious`, `saga_us`, `saga_atari`, `saga_dos`,
+`apple_pictures`, and the dialect-dispatching loader (`Database::parse`,
+`detect_dialect`) on every `cargo test`/`cargo nextest` invocation, asserting
+no panic and no hang.
+
+The picture and table types these readers return (`PictureShow`,
+`AppleLookTable`, `AppleLookPicture`, `saga_pictures::Picture`, `Painted`,
+`HiResPicture`, `DosRelease`, `PictureFile`, `AtariRecord`, `StripLayout`,
+`StripPaint`, and the decoder error enums) keep their fields private behind
+read accessors and are `#[non_exhaustive]`, so a future field or variant is
+an additive change rather than a breaking one — the same discipline
+`lanthorn-zvm`'s `StepResult`/`ZError`/`PaintEvent` follow. Types a host is
+meant to build by hand (`Database`, `SagaUs`, and the picture-list types a
+caller assembles for rendering) stay fully public and exhaustive instead,
+because non-exhaustive would make that impossible.
 
 ## Where to read more
 

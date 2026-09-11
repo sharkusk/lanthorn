@@ -42,7 +42,7 @@ fn main() {
         let mut ppm = format!("P6\n{} {}\n255\n", CANVAS_WIDTH, CANVAS_HEIGHT).into_bytes();
         for y in 0..CANVAS_HEIGHT {
             for x in 0..CANVAS_WIDTH {
-                let (r, g, b) = pic.palette[usize::from(pic.pixels[y * CANVAS_WIDTH + x])];
+                let (r, g, b) = pic.palette()[usize::from(pic.pixels()[y * CANVAS_WIDTH + x])];
                 ppm.extend_from_slice(&[r, g, b]);
             }
         }
@@ -53,27 +53,27 @@ fn main() {
     println!("{path}: {} records under {scheme:?}", found.len());
     let mut prev_end = None;
     for (n, r) in found.iter().enumerate() {
-        let gap = prev_end.map_or(0, |e| r.offset - e);
+        let gap = prev_end.map_or(0, |e| r.offset() - e);
         let pic = decode_record(&spliced, r, scheme).expect("decodes");
         let mut seen = [0usize; 4];
-        for y in r.layout.top..r.layout.top + r.layout.pairs * 2 {
-            for x in r.layout.left..r.layout.left + r.layout.cols * 8 {
+        for y in r.layout().top()..r.layout().top() + r.layout().pairs() * 2 {
+            for x in r.layout().left()..r.layout().left() + r.layout().cols() * 8 {
                 if (0..CANVAS_WIDTH as i32).contains(&x) && (0..160).contains(&y) {
-                    seen[usize::from(pic.pixels[y as usize * CANVAS_WIDTH + x as usize])] += 1;
+                    seen[usize::from(pic.pixels()[y as usize * CANVAS_WIDTH + x as usize])] += 1;
                 }
             }
         }
         println!(
             "  #{n:3} 0x{:05X} size={:5} slack={} gap={gap:2} {:2}x{:2} at ({:4},{:3}) col={:02X?} hist={seen:?}",
             r.file_offset(),
-            r.size,
-            r.size - r.decoded_len,
-            r.layout.cols,
-            r.layout.pairs,
-            r.layout.left,
-            r.layout.top,
-            r.colour_bytes,
+            r.size(),
+            r.size() - r.decoded_len(),
+            r.layout().cols(),
+            r.layout().pairs(),
+            r.layout().left(),
+            r.layout().top(),
+            r.colour_bytes(),
         );
-        prev_end = Some(r.offset + r.size);
+        prev_end = Some(r.offset() + r.size());
     }
 }

@@ -134,15 +134,15 @@ fn composite(
         let raw = records.get(*name).unwrap_or_else(|| panic!("{name} is on the disk"));
         let pic = decode_family_c(raw, SagaPlatform::Commodore64)
             .unwrap_or_else(|e| panic!("{name} decodes: {e}"));
-        palettes.push(pic.palette);
+        palettes.push(pic.palette());
         if slot == 0 {
-            values = pic.pixels;
+            values = pic.pixels().to_vec();
             continue;
         }
-        let painted = pic.painted.unwrap_or_else(|| panic!("{name} paints something"));
-        for y in painted.top..=painted.bottom {
-            for x in painted.left..=painted.right {
-                values[y * CANVAS_WIDTH + x] = pic.pixels[y * CANVAS_WIDTH + x];
+        let painted = pic.painted().unwrap_or_else(|| panic!("{name} paints something"));
+        for y in painted.top()..=painted.bottom() {
+            for x in painted.left()..=painted.right() {
+                values[y * CANVAS_WIDTH + x] = pic.pixels()[y * CANVAS_WIDTH + x];
                 owner[y * CANVAS_WIDTH + x] = slot;
             }
         }
@@ -339,9 +339,9 @@ fn the_boot_screen_bars_are_text_mode_and_settle_colour_byte_232() {
         return;
     };
     let pic = decode_family_c(&records["B01250R"], SagaPlatform::Commodore64).expect("decodes");
-    let painted = pic.painted.expect("paints");
+    let painted = pic.painted().expect("paints");
     assert_eq!(
-        (painted.left, painted.right, painted.top, painted.bottom),
+        (painted.left(), painted.right(), painted.top(), painted.bottom()),
         (16, 247, 0, 127),
         "B01250R's own rectangle is not the bars' 0..255 x 0..159"
     );

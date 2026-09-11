@@ -176,18 +176,22 @@ fn every_picture_on_the_hulks_disk_decodes_to_the_full_canvas() {
         let pic = decode_family_c(bytes, SagaPlatform::Commodore64)
             .unwrap_or_else(|e| panic!("{name} ({} bytes): {e}", bytes.len()));
         assert_eq!(
-            (pic.width, pic.height),
+            (pic.width(), pic.height()),
             (CANVAS_WIDTH, CANVAS_HEIGHT),
             "{name} decodes to the family-C canvas"
         );
-        assert_eq!(pic.pixels.len(), CANVAS_WIDTH * CANVAS_HEIGHT, "{name} pixel count");
-        assert!(pic.pixels.iter().all(|&v| v < 4), "{name} stores only two-bit values");
-        let usage = match parsed.usage {
+        assert_eq!(pic.pixels().len(), CANVAS_WIDTH * CANVAS_HEIGHT, "{name} pixel count");
+        assert!(pic.pixels().iter().all(|&v| v < 4), "{name} stores only two-bit values");
+        let usage = match parsed.usage() {
             PictureUsage::Room => "room",
             PictureUsage::ObjectInRoom => "object-in-room",
             PictureUsage::ObjectInInventory => "object-in-inventory",
+            // `PictureUsage` is `#[non_exhaustive]`: every usage this release
+            // carries is named above, so a new one is a real find worth
+            // seeing rather than silently bucketing away.
+            other => panic!("unhandled PictureUsage variant: {other:?}"),
         };
-        by_usage.entry(usage).or_default().push(parsed.index);
+        by_usage.entry(usage).or_default().push(parsed.index());
     }
     assert_eq!(pics.len(), 70, "the whole picture set");
     assert_eq!(by_usage["room"].len(), 30, "R01nnn room pictures");
@@ -243,14 +247,14 @@ fn room_one_is_a_four_colour_drawing_and_not_a_flat_fill() {
     };
     let (_, bytes) = pics
         .iter()
-        .find(|(name, _)| parse_picture_file_name(name) == Some(scott::PictureFile {
-            usage: PictureUsage::Room,
-            index: 1,
-        }))
+        .find(|(name, _)| {
+            parse_picture_file_name(name)
+                .is_some_and(|pf| pf.usage() == PictureUsage::Room && pf.index() == 1)
+        })
         .expect("R01001 is on the disk");
     let pic = decode_family_c(bytes, SagaPlatform::Commodore64).expect("decodes");
     let mut used = [0usize; 4];
-    for &v in &pic.pixels {
+    for &v in pic.pixels() {
         used[usize::from(v)] += 1;
     }
     for (value, count) in used.iter().enumerate() {
@@ -259,16 +263,16 @@ fn room_one_is_a_four_colour_drawing_and_not_a_flat_fill() {
     // Room 1 is Bruce Banner tied to a chair on a dithered ground: no value
     // covers more than four fifths of the canvas, and every value covers at
     // least a hundredth of it.
-    let total = pic.pixels.len();
+    let total = pic.pixels().len();
     for (value, count) in used.iter().enumerate() {
         assert!(*count * 5 < total * 4, "value {value} covers {count}/{total} — a flat fill?");
         assert!(*count * 100 > total, "value {value} covers only {count}/{total}");
     }
-    assert!(pic.unrecognised_colours.is_empty(), "room 1's colours all resolve");
+    assert!(pic.unrecognised_colours().is_empty(), "room 1's colours all resolve");
     // Orange skin, purple cloth, white highlight — §8.3's Commodore 64 table.
-    assert_eq!(pic.colour_bytes, [56, 103, 14, 16]);
+    assert_eq!(pic.colour_bytes(), [56, 103, 14, 16]);
     assert_eq!(
-        pic.palette,
+        pic.palette(),
         [PEPTO_PALETTE[0], PEPTO_PALETTE[8], PEPTO_PALETTE[4], PEPTO_PALETTE[1]],
         "black, orange, purple, white"
     );
@@ -291,8 +295,8 @@ fn the_only_unrecognised_colour_byte_is_153() {
     let mut unresolved: BTreeMap<u8, Vec<String>> = BTreeMap::new();
     for (name, bytes) in &pics {
         let pic = decode_family_c(bytes, SagaPlatform::Commodore64).expect("decodes");
-        for byte in pic.unrecognised_colours {
-            unresolved.entry(byte).or_default().push(name.clone());
+        for byte in pic.unrecognised_colours() {
+            unresolved.entry(*byte).or_default().push(name.clone());
         }
     }
     let bytes: Vec<u8> = unresolved.keys().copied().collect();

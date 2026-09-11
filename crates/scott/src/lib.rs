@@ -216,6 +216,9 @@
 
 #![warn(missing_docs)]
 
+/// Hostile-input fuzzing harness (SQ-1502) — see the module docs.
+#[cfg(test)]
+mod fuzz_harness;
 mod loader;
 mod options;
 mod scottfree_save;

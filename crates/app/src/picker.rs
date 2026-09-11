@@ -1048,7 +1048,7 @@ fn scott_release_title(bytes: &[u8]) -> Option<&'static str> {
     // nothing else that names the game, so without this the row is titled
     // after whatever the archive happens to be called.
     if let Some(release) = scott::saga_dos::identify(&db) {
-        return Some(release.title);
+        return Some(release.title());
     }
     db.saga_us?.display_title()
 }

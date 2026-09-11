@@ -129,23 +129,52 @@ pub const FIRST_RECORD: usize = 0x290;
 /// `.atr` file, because a record may span the volume table of contents and a
 /// file offset cannot describe that. [`Self::file_offset`] converts back.
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
 pub struct AtariRecord {
     /// Offset of the record's first header byte, into the spliced side.
-    pub offset: usize,
+    pub(crate) offset: usize,
     /// The record's declared size — its own header's first word, covering the
     /// whole record including that word.
-    pub size: usize,
+    pub(crate) size: usize,
     /// How many bytes decoding actually read. Either `size` or `size - 1`;
     /// see the module docs.
-    pub decoded_len: usize,
+    pub(crate) decoded_len: usize,
     /// Where the record's strips land, already resolved under the release's
     /// scheme.
-    pub layout: StripLayout,
+    pub(crate) layout: StripLayout,
     /// The four stored colour bytes, in file order.
-    pub colour_bytes: [u8; 4],
+    pub(crate) colour_bytes: [u8; 4],
 }
 
 impl AtariRecord {
+    /// Offset of the record's first header byte, into the spliced side.
+    pub fn offset(&self) -> usize {
+        self.offset
+    }
+
+    /// The record's declared size — its own header's first word, covering the
+    /// whole record including that word.
+    pub fn size(&self) -> usize {
+        self.size
+    }
+
+    /// How many bytes decoding actually read. Either [`Self::size`] or
+    /// `size - 1`; see the module docs.
+    pub fn decoded_len(&self) -> usize {
+        self.decoded_len
+    }
+
+    /// Where the record's strips land, already resolved under the release's
+    /// scheme.
+    pub fn layout(&self) -> StripLayout {
+        self.layout
+    }
+
+    /// The four stored colour bytes, in file order.
+    pub fn colour_bytes(&self) -> [u8; 4] {
+        self.colour_bytes
+    }
+
     /// The record's offset in the original `.atr` file.
     ///
     /// Equal to [`Self::offset`] in front of the volume table of contents and

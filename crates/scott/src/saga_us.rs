@@ -404,6 +404,7 @@ impl SagaUs {
 /// (§8.3, "picture family C — Commodore 64 and Atari 8-bit US bitmaps"), and
 /// four of the seven titles do not use it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[non_exhaustive]
 pub enum AtariPictureFormat {
     /// Family-C four-colour strip bitmaps, which [`crate::saga_atari`] reads:
     /// *Voodoo Castle*, *The Count* and *Claymorgue Castle*.
@@ -506,6 +507,7 @@ pub const INVENTORY_PICTURE: usize = 98;
 
 /// What a family-C picture is FOR (§8.6), read off its file name.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[non_exhaustive]
 pub enum PictureUsage {
     /// A **room** picture, shown when the player is in the room with that
     /// index — leading `R`. A leading `S` "carries no usage and defaults to a
@@ -522,14 +524,28 @@ pub enum PictureUsage {
 /// One picture file's name, taken apart (§8.3's Commodore 64 rule and §8.6's
 /// usage convention).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[non_exhaustive]
 pub struct PictureFile {
     /// What the picture is for.
-    pub usage: PictureUsage,
+    pub(crate) usage: PictureUsage,
     /// The picture index — a room number for [`PictureUsage::Room`], an item
     /// number otherwise. Three reserved values (§8.6): 0 is the darkness
     /// picture ([`DARKNESS_PICTURE`]), 98 the inventory backdrop
     /// ([`INVENTORY_PICTURE`]) and 99 the title picture.
-    pub index: u16,
+    pub(crate) index: u16,
+}
+
+impl PictureFile {
+    /// What the picture is for.
+    pub fn usage(&self) -> PictureUsage {
+        self.usage
+    }
+
+    /// The picture index — a room number for [`PictureUsage::Room`], an item
+    /// number otherwise.
+    pub fn index(&self) -> u16 {
+        self.index
+    }
 }
 
 /// Take a Commodore 64 disk entry's name apart (§8.3), or `None` if it is not

@@ -1550,7 +1550,7 @@ fn apple_scrambled_picture_files(boot: &Path, side: &Path) -> Vec<(String, Vec<u
     let Some(release) = db.saga_us else {
         return Vec::new();
     };
-    let (rooms, close_ups) = (db.rooms.len(), look.rows.len());
+    let (rooms, close_ups) = (db.rooms.len(), look.rows().len());
     ranges
         .into_iter()
         .enumerate()

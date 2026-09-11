@@ -59,6 +59,7 @@ pub type Rgb = (u8, u8, u8);
 /// plausible pixels. [`crate::SagaUs::picture_scheme`] is the only place the
 /// question is answered.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[non_exhaustive]
 pub enum FamilyCScheme {
     /// Bit 7 set is a repeat of the count's low seven bits plus one; bit 7
     /// clear is a literal run of the byte plus one pairs. Both header edges
@@ -80,20 +81,42 @@ pub enum FamilyCScheme {
 /// [`crate::saga_atari::scan_picture_side`] finds records on a raw disk side
 /// with it and nothing else.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
 pub struct StripLayout {
     /// Leftmost device-pixel column, `(header[4] - 3) * 8`. May be negative:
     /// two of the *Hulk*'s records declare `header[4]` of 2, and most Atari
     /// full-canvas records declare 2 as well.
-    pub left: i32,
+    pub(crate) left: i32,
     /// Topmost pixel row.
-    pub top: i32,
+    pub(crate) top: i32,
     /// How many 8-pixel columns the record paints.
-    pub cols: i32,
+    pub(crate) cols: i32,
     /// How many byte pairs each column holds; a pair paints two rows.
-    pub pairs: i32,
+    pub(crate) pairs: i32,
 }
 
 impl StripLayout {
+    /// Leftmost device-pixel column. May be negative — see the field's own
+    /// docs.
+    pub fn left(&self) -> i32 {
+        self.left
+    }
+
+    /// Topmost pixel row.
+    pub fn top(&self) -> i32 {
+        self.top
+    }
+
+    /// How many 8-pixel columns the record paints.
+    pub fn cols(&self) -> i32 {
+        self.cols
+    }
+
+    /// How many byte pairs each column holds; a pair paints two rows.
+    pub fn pairs(&self) -> i32 {
+        self.pairs
+    }
+
     /// Resolve the four header edge bytes under `scheme`.
     ///
     /// `left_col` and `right_col` are the stored column bytes (the edge in
@@ -136,19 +159,43 @@ impl StripLayout {
 
 /// What [`paint_strips`] produced.
 #[derive(Debug, Clone)]
+#[non_exhaustive]
 pub struct StripPaint {
     /// `CANVAS_WIDTH * CANVAS_HEIGHT` pixel values, each 0-3.
-    pub pixels: Vec<u8>,
+    pub(crate) pixels: Vec<u8>,
     /// How many byte pairs were emitted. Equal to
     /// [`StripLayout::pair_count`] for a complete record.
-    pub emitted: usize,
+    pub(crate) emitted: usize,
     /// How many bytes of `data` were read to get there. The Atari scanner
     /// checks this against the record's own declared size.
-    pub consumed: usize,
+    pub(crate) consumed: usize,
     /// The canvas rectangle the writes actually covered — [`Picture::painted`],
     /// measured here rather than derived from the header, so a record whose
     /// data runs out early reports the region it really painted.
-    pub bounds: Option<Painted>,
+    pub(crate) bounds: Option<Painted>,
+}
+
+impl StripPaint {
+    /// `CANVAS_WIDTH * CANVAS_HEIGHT` pixel values, each 0-3.
+    pub fn pixels(&self) -> &[u8] {
+        &self.pixels
+    }
+
+    /// How many byte pairs were emitted. Equal to
+    /// [`StripLayout::pair_count`] for a complete record.
+    pub fn emitted(&self) -> usize {
+        self.emitted
+    }
+
+    /// How many bytes of `data` were read to get there.
+    pub fn consumed(&self) -> usize {
+        self.consumed
+    }
+
+    /// The canvas rectangle the writes actually covered.
+    pub fn bounds(&self) -> Option<Painted> {
+        self.bounds
+    }
 }
 
 /// Decode a family-C run-length stream onto the canvas (§8.3).
@@ -271,6 +318,7 @@ pub fn resolve_palette(colour_bytes: [u8; 4], resolve: fn(u8) -> Option<Rgb>) ->
 
 /// Why a record is not a family-C picture (§11's "name it and refuse it").
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum PictureError {
     /// Fewer than the twelve header bytes plus the two-byte tail every record
     /// ends with, so there is no picture here at all.
@@ -340,25 +388,26 @@ impl std::error::Error for PictureError {}
 /// sense against the same canvas the room picture is on. Pixels outside the
 /// record's own region keep value 0.
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
 pub struct Picture {
     /// [`CANVAS_WIDTH`].
-    pub width: usize,
+    pub(crate) width: usize,
     /// [`CANVAS_HEIGHT`].
-    pub height: usize,
+    pub(crate) height: usize,
     /// `width * height` pixel values, each 0-3, row-major from the top-left.
     /// Index [`Self::palette`] with one to get a colour.
-    pub pixels: Vec<u8>,
+    pub(crate) pixels: Vec<u8>,
     /// The colour each pixel value resolves to. **Entry 0 is always black**
     /// whatever the record says (§8.3), and entries 1-3 are the first three
     /// stored colour bytes; the fourth stored byte is never used. A byte
     /// [`Self::unrecognised_colours`] lists resolved to black here, because
     /// §8.3's instruction is to surface an unknown value rather than invent a
     /// colour for it.
-    pub palette: [Rgb; 4],
+    pub(crate) palette: [Rgb; 4],
     /// The four stored colour bytes in file order, so a host can report what
     /// it could not resolve — or, on the Atari, what a fuller palette
     /// reference would resolve.
-    pub colour_bytes: [u8; 4],
+    pub(crate) colour_bytes: [u8; 4],
     /// Stored colour bytes (of the three that are used) with no entry in this
     /// platform's table, in file order and without duplicates.
     ///
@@ -371,7 +420,7 @@ pub struct Picture {
     /// until a real-machine capture settled it as gold — SQ-1491.)
     /// **Always empty on the Atari**, whose colour bytes index hardware and
     /// are therefore all nameable; see [`atari_colour`].
-    pub unrecognised_colours: Vec<u8>,
+    pub(crate) unrecognised_colours: Vec<u8>,
     /// The canvas rectangle this record's own pixels actually cover, or
     /// `None` for a record that painted nothing at all.
     ///
@@ -388,7 +437,48 @@ pub struct Picture {
     /// header, so a record whose data runs out early reports the region it
     /// really painted and not the one it promised. Bounds are **inclusive**
     /// and always inside the canvas.
-    pub painted: Option<Painted>,
+    pub(crate) painted: Option<Painted>,
+}
+
+impl Picture {
+    /// [`CANVAS_WIDTH`].
+    pub fn width(&self) -> usize {
+        self.width
+    }
+
+    /// [`CANVAS_HEIGHT`].
+    pub fn height(&self) -> usize {
+        self.height
+    }
+
+    /// `width() * height()` pixel values, each 0-3, row-major from the
+    /// top-left. Index [`Self::palette`] with one to get a colour.
+    pub fn pixels(&self) -> &[u8] {
+        &self.pixels
+    }
+
+    /// The colour each pixel value resolves to. See the struct's own docs
+    /// for the resolution rule.
+    pub fn palette(&self) -> [Rgb; 4] {
+        self.palette
+    }
+
+    /// The four stored colour bytes in file order.
+    pub fn colour_bytes(&self) -> [u8; 4] {
+        self.colour_bytes
+    }
+
+    /// Stored colour bytes with no entry in this platform's table. See the
+    /// struct's own docs.
+    pub fn unrecognised_colours(&self) -> &[u8] {
+        &self.unrecognised_colours
+    }
+
+    /// The canvas rectangle this record's own pixels actually cover, or
+    /// `None` for a record that painted nothing at all.
+    pub fn painted(&self) -> Option<Painted> {
+        self.painted
+    }
 }
 
 /// The canvas rectangle one record's pixels cover — see [`Picture::painted`].
@@ -396,15 +486,38 @@ pub struct Picture {
 /// Inclusive on all four sides, and always within
 /// `0..`[`CANVAS_WIDTH`] x `0..`[`CANVAS_HEIGHT`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
 pub struct Painted {
     /// Leftmost column painted.
-    pub left: usize,
+    pub(crate) left: usize,
     /// Topmost row painted.
-    pub top: usize,
+    pub(crate) top: usize,
     /// Rightmost column painted, inclusive.
-    pub right: usize,
+    pub(crate) right: usize,
     /// Bottommost row painted, inclusive.
-    pub bottom: usize,
+    pub(crate) bottom: usize,
+}
+
+impl Painted {
+    /// Leftmost column painted.
+    pub fn left(&self) -> usize {
+        self.left
+    }
+
+    /// Topmost row painted.
+    pub fn top(&self) -> usize {
+        self.top
+    }
+
+    /// Rightmost column painted, inclusive.
+    pub fn right(&self) -> usize {
+        self.right
+    }
+
+    /// Bottommost row painted, inclusive.
+    pub fn bottom(&self) -> usize {
+        self.bottom
+    }
 }
 
 /// Accumulates [`Painted`] as a decoder writes, so a decoder's own inner loop

@@ -172,6 +172,7 @@ const COUNT_RANGES: [(&str, u16, u16); 4] =
 /// implements — §4.5's other seven belong to Adventure International releases
 /// this module does not read.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum HeaderShape {
     /// §4.5's **early** shape, which is the reference format's own field
     /// order: items 1, actions 2, words 3, rooms 4, max carried 5, start room
@@ -246,6 +247,7 @@ impl HeaderShape {
 ///
 /// None of it came from any interpreter's catalogue.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
 pub struct Release {
     /// [`image_checksum`] of the program file this record describes.
     pub checksum: u16,
@@ -1104,6 +1106,7 @@ pub const MAX_PICTURE_SCALE: u32 = 8;
 /// paints the part that is on it, and clipping the endpoints would move the
 /// line.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum PictureOp {
     /// §8.2's line opcode: draw from `from` to `to` in the image's line
     /// colour ([`PictureList::line`]), both endpoints inclusive.

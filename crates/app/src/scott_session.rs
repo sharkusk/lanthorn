@@ -602,7 +602,7 @@ impl Engine for ScottSession {
         // the reference-format twin of the Commodore disk, is exactly that
         // case — the same eleven header counts, none of the artwork.
         let picts = &mut self.picts;
-        shows.retain(|show| picts.image(u32::from(show.picture)).is_some());
+        shows.retain(|show| picts.image(u32::from(show.picture())).is_some());
         // The game ran the SAVE GAME action (opcode 71): bubble the same Save
         // request the Z-machine/Glulx engines raise for `@save`, so the app's
         // Save State file I/O runs. The prompt is withheld and returns via
@@ -632,16 +632,16 @@ impl Engine for ScottSession {
         // §12.11 treats the room view returning as when the turn is really
         // over, so that is when Save State should capture it too.
         self.deferred_save = save_requested;
-        let mut offsets: Vec<usize> = shows.iter().map(|s| s.output_len).collect();
+        let mut offsets: Vec<usize> = shows.iter().map(|s| s.output_len()).collect();
         offsets.push(transcript.len());
         let first_text = transcript[..offsets[0]].to_string();
         self.showing = (0..shows.len())
             .map(|i| PendingShow {
                 text: transcript[offsets[i]..offsets[i + 1]].to_string(),
-                next_picture: shows.get(i + 1).map(|s| s.picture),
+                next_picture: shows.get(i + 1).map(|s| s.picture()),
             })
             .collect();
-        self.show_sequence_picture(shows[0].picture);
+        self.show_sequence_picture(shows[0].picture());
         let mut result = self.turn(first_text, false);
         result.info = Some(PICTURE_SHOW_HINT.to_string());
         result
@@ -2495,7 +2495,7 @@ mod tests {
         let pictures =
             crate::graphics::ScottPictureSources::resolve(&path, &bytes, &game_dir, None, None, None);
         assert_eq!(
-            pictures.look_table.as_ref().map(|t| t.rows.len()),
+            pictures.look_table.as_ref().map(|t| t.rows().len()),
             Some(9),
             "premise: the boot side's M2 carries all nine close-up rows"
         );

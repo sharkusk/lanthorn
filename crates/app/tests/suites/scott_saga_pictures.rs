@@ -748,7 +748,7 @@ fn a_look_close_up_band_places_exactly_where_the_room_band_does() {
         let pictures =
             app::graphics::ScottPictureSources::resolve(&path, &bytes, &game_dir, None, None, None);
         assert_eq!(
-            pictures.look_table.as_ref().map(|t| t.rows.len()),
+            pictures.look_table.as_ref().map(|t| t.rows().len()),
             Some(9),
             "premise: the release's own M2 carries its nine close-up rows"
         );

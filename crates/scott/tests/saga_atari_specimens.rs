@@ -152,20 +152,20 @@ fn every_record_decodes_and_its_size_matches_what_it_took() {
         let found = scan_picture_side(&raw, scheme);
         let mut exact = 0usize;
         for r in &found {
-            let slack = r.size - r.decoded_len;
+            let slack = r.size() - r.decoded_len();
             assert!(slack <= 1, "{file}: record at 0x{:05X} has {slack} spare bytes", r.file_offset());
             if slack == 0 {
                 exact += 1;
             }
             let pic = decode_record(&spliced, r, scheme).expect("a located record decodes");
-            assert_eq!((pic.width, pic.height), (CANVAS_WIDTH, CANVAS_HEIGHT));
+            assert_eq!((pic.width(), pic.height()), (CANVAS_WIDTH, CANVAS_HEIGHT));
             assert!(
-                pic.unrecognised_colours.is_empty(),
+                pic.unrecognised_colours().is_empty(),
                 "{file}: every Atari colour byte has a colour, but 0x{:05X} left {:?}",
                 r.file_offset(),
-                pic.unrecognised_colours,
+                pic.unrecognised_colours(),
             );
-            assert_eq!(pic.palette[0], (0, 0, 0), "§8.3: entry 0 is black whatever the record says");
+            assert_eq!(pic.palette()[0], (0, 0, 0), "§8.3: entry 0 is black whatever the record says");
         }
         assert!(exact > found.len() / 2, "{file}: most records declare exactly what they took");
     }
@@ -198,7 +198,7 @@ fn records_lie_end_to_end_with_at_most_six_bytes_of_filler() {
         );
         let mut breaks = Vec::new();
         for pair in found.windows(2) {
-            let gap = pair[1].offset - (pair[0].offset + pair[0].size);
+            let gap = pair[1].offset() - (pair[0].offset() + pair[0].size());
             if gap > FILLER {
                 breaks.push((pair[0].file_offset(), gap));
             }
@@ -230,6 +230,10 @@ fn the_wrong_scheme_finds_almost_no_records_on_a_real_side() {
         let other = match release.picture_scheme() {
             FamilyCScheme::Standard => FamilyCScheme::NoLiteral,
             FamilyCScheme::NoLiteral => FamilyCScheme::Standard,
+            // `FamilyCScheme` is `#[non_exhaustive]`: only two schemes exist
+            // today, and a third would need this test's own "the other one"
+            // rule revisited rather than guessed at.
+            _ => unreachable!("only two family-C schemes exist"),
         };
         let wrong = scan_picture_side(&raw, other);
         assert!(
@@ -340,8 +344,8 @@ fn one_picture_per_title_is_pinned_by_geometry_and_by_pixels() {
             .iter()
             .find(|r| r.file_offset() == at)
             .unwrap_or_else(|| panic!("{file}: no record at 0x{at:05X} ({what})"));
-        assert_eq!((r.layout.cols, r.layout.pairs), (cols, pairs), "{file}: {what}");
-        assert_eq!(r.colour_bytes, colours, "{file}: {what}");
+        assert_eq!((r.layout().cols(), r.layout().pairs()), (cols, pairs), "{file}: {what}");
+        assert_eq!(r.colour_bytes(), colours, "{file}: {what}");
         let pic = decode_record(&spliced, r, scheme).expect("decodes");
         // A non-vacuity guard, counted over the record's OWN region rather
         // than the canvas — a small record leaves most of the canvas at value
@@ -349,10 +353,10 @@ fn one_picture_per_title_is_pinned_by_geometry_and_by_pixels() {
         // region is a decode that failed quietly.
         let mut seen = [0usize; 4];
         let mut total = 0usize;
-        for y in r.layout.top..r.layout.top + r.layout.pairs * 2 {
-            for x in r.layout.left..r.layout.left + r.layout.cols * 8 {
+        for y in r.layout().top()..r.layout().top() + r.layout().pairs() * 2 {
+            for x in r.layout().left()..r.layout().left() + r.layout().cols() * 8 {
                 if (0..CANVAS_WIDTH as i32).contains(&x) && (0..CANVAS_HEIGHT as i32).contains(&y) {
-                    seen[usize::from(pic.pixels[y as usize * CANVAS_WIDTH + x as usize])] += 1;
+                    seen[usize::from(pic.pixels()[y as usize * CANVAS_WIDTH + x as usize])] += 1;
                     total += 1;
                 }
             }
@@ -381,9 +385,9 @@ fn the_counts_room_one_draws_the_brass_bed_its_text_describes() {
     let found = scan_picture_side(&raw, scheme);
     let r = found.iter().find(|r| r.file_offset() == 0x5580).expect("room 1's record");
     let pic = decode_record(&spliced, r, scheme).expect("decodes");
-    let at = |x: usize, y: usize| pic.pixels[y * CANVAS_WIDTH + x];
+    let at = |x: usize, y: usize| pic.pixels()[y * CANVAS_WIDTH + x];
     // The record covers the whole canvas from the origin.
-    assert_eq!((r.layout.left, r.layout.top), (0, 0));
+    assert_eq!((r.layout().left(), r.layout().top()), (0, 0));
     // The bed's white sheet is the bottom third, and it is bright.
     let sheet: usize = (120..150).map(|y| (60..220).filter(|&x| at(x, y) == 3).count()).sum();
     assert!(sheet > 3_000, "the sheet across the bottom is {sheet} bright pixels");
@@ -391,6 +395,6 @@ fn the_counts_room_one_draws_the_brass_bed_its_text_describes() {
     let wall_bright: usize = (0..10).map(|y| (0..CANVAS_WIDTH).filter(|&x| at(x, y) == 3).count()).sum();
     assert!(wall_bright < 900, "the wall along the top is {wall_bright} bright pixels");
     // And the picture is not blank anywhere it should not be.
-    assert!(pic.pixels.contains(&1), "the wall colour is in use");
-    assert!(pic.pixels.contains(&2), "the third colour is in use");
+    assert!(pic.pixels().contains(&1), "the wall colour is in use");
+    assert!(pic.pixels().contains(&2), "the third colour is in use");
 }

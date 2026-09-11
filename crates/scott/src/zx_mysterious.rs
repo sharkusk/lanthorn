@@ -206,6 +206,7 @@ fn plausible(h: &ZxHeader) -> bool {
 /// ones here. The titles are the series' own spelling, as [`crate::c64`]
 /// spells them.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
 pub struct ZxRelease {
     /// The game, spelled as the series spells it.
     pub title: &'static str,
@@ -362,6 +363,7 @@ pub const RELEASES: [ZxRelease; 11] = [
 /// The header §4.5's field orders assign, whichever order assigned it, plus
 /// where it was found and which order that was.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
 pub struct ZxHeader {
     /// The address the twelve count words begin at — `$6349` in two of the
     /// eleven and `$6351` in the other nine, found by the §4.6 scan and never
@@ -398,6 +400,7 @@ pub struct ZxHeader {
 
 /// The ten table addresses the driver's pointer block holds.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
 pub struct ZxTables {
     /// The action table — **not** a pointer-block slot: it is
     /// (`connections` − (action count + 1) × 16), which is the §4.6 arithmetic
@@ -428,6 +431,7 @@ pub struct ZxTables {
 /// Everything [`locate`] recovers from an image, which is everything
 /// [`parse_zx_mysterious`] needs.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
 pub struct ZxLayout {
     /// The counts, and where and how they were read.
     pub header: ZxHeader,

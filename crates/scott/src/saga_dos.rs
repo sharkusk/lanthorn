@@ -406,18 +406,30 @@ pub fn picture_file_name(n: usize) -> Option<String> {
 
 /// One MS-DOS release this crate can name.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
 pub struct DosRelease {
     /// The box title, platform folded in the way
     /// [`SagaUs::display_title`](crate::SagaUs::display_title) folds it — the
     /// *same game* ships on the Commodore 64 as a S.A.G.A. binary database,
     /// and a story list showing both needs to tell them apart.
-    pub title: &'static str,
+    pub(crate) title: &'static str,
     /// Does this release remap room pictures the way §12.11 says the *Hulk*
     /// does? See [`Self::room_picture`].
-    pub remaps_hulk_rooms: bool,
+    pub(crate) remaps_hulk_rooms: bool,
 }
 
 impl DosRelease {
+    /// The box title, platform folded in.
+    pub fn title(&self) -> &'static str {
+        self.title
+    }
+
+    /// Does this release remap room pictures the way §12.11 says the *Hulk*
+    /// does? See [`Self::room_picture`].
+    pub fn remaps_hulk_rooms(&self) -> bool {
+        self.remaps_hulk_rooms
+    }
+
     /// The picture index a room's view is drawn from.
     ///
     /// §12.11's *Hulk* rule, reached through the one table that states it

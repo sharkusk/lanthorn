@@ -153,21 +153,22 @@ fn every_picture_in_the_hulk_zip_decodes_to_the_full_canvas() {
         let pic = scott::decode_family_e(bytes)
             .unwrap_or_else(|e| panic!("{name} ({} bytes): {e}", bytes.len()));
         assert_eq!(
-            (pic.width, pic.height),
+            (pic.width(), pic.height()),
             (CANVAS_WIDTH, scott::saga_pictures::CANVAS_HEIGHT),
             "{name} decodes to the shared S.A.G.A. canvas"
         );
-        assert!(pic.pixels.iter().all(|&v| v < 4), "{name} stores only two-bit values");
+        assert!(pic.pixels().iter().all(|&v| v < 4), "{name} stores only two-bit values");
         assert!(
-            pic.unrecognised_colours.is_empty(),
+            pic.unrecognised_colours().is_empty(),
             "{name}: family E's palette is fixed, so nothing can fail to resolve"
         );
-        let usage = match parsed.usage {
+        let usage = match parsed.usage() {
             PictureUsage::Room => "room",
             PictureUsage::ObjectInRoom => "object-in-room",
             PictureUsage::ObjectInInventory => "object-in-inventory",
+            other => panic!("unhandled PictureUsage variant: {other:?}"),
         };
-        by_usage.entry(usage).or_default().push(parsed.index);
+        by_usage.entry(usage).or_default().push(parsed.index());
     }
     assert_eq!(pics.len(), 68, "the whole picture set");
     assert_eq!(by_usage["room"].len(), 30, "R01nn room pictures");
@@ -268,12 +269,13 @@ fn twins() -> Option<Vec<(String, Picture, Picture)>> {
 }
 
 fn key(p: PictureFile) -> (u8, u16) {
-    let usage = match p.usage {
+    let usage = match p.usage() {
         PictureUsage::Room => 0,
         PictureUsage::ObjectInRoom => 1,
         PictureUsage::ObjectInInventory => 2,
+        other => panic!("unhandled PictureUsage variant: {other:?}"),
     };
-    (usage, p.index)
+    (usage, p.index())
 }
 
 /// **The oracle.** Every one of the sixty-eight MS-DOS pictures has a
@@ -362,7 +364,7 @@ fn exactly_one_more_twin_agrees_under_a_swap_of_two_colour_values() {
 /// Do the two decodings agree on every pixel of the rows family E has, after
 /// mapping the family-E value through `f`?
 fn same_pixels(e: &Picture, c: &Picture, f: impl Fn(u8) -> u8) -> bool {
-    (0..FAMILY_E_ROWS * CANVAS_WIDTH).all(|i| f(e.pixels[i]) == c.pixels[i])
+    (0..FAMILY_E_ROWS * CANVAS_WIDTH).all(|i| f(e.pixels()[i]) == c.pixels()[i])
 }
 
 /// Where an unlined twin disagrees, the disagreement is a SMALL fraction of
@@ -402,7 +404,7 @@ fn where_an_unlined_twin_disagrees_it_is_a_redrawn_detail_and_not_a_decoding_err
     let mut worst = (0.0f64, String::new());
     let mut examined = 0usize;
     for (name, e, c) in &pairs {
-        if lined[name] || !c.unrecognised_colours.is_empty() {
+        if lined[name] || !c.unrecognised_colours().is_empty() {
             continue;
         }
         if same_pixels(e, c, |v| v) || same_pixels(e, c, swap) {
@@ -410,7 +412,7 @@ fn where_an_unlined_twin_disagrees_it_is_a_redrawn_detail_and_not_a_decoding_err
         }
         examined += 1;
         let bad = (0..FAMILY_E_ROWS * CANVAS_WIDTH)
-            .filter(|&i| e.pixels[i] != c.pixels[i])
+            .filter(|&i| e.pixels()[i] != c.pixels()[i])
             .count();
         let frac = bad as f64 / (FAMILY_E_ROWS * CANVAS_WIDTH) as f64;
         if frac > worst.0 {
@@ -509,7 +511,7 @@ fn the_band_follows_the_room_and_room_13_draws_room_2s_picture() {
     let room2 = scott::decode_family_e(by_name["R0102.PAK"]).expect("decodes");
     let want = scott::saga_dos::picture_file_name(release.room_picture(13)).expect("names it");
     let room13 = scott::decode_family_e(by_name[want.as_str()]).expect("decodes");
-    assert_eq!(room2.pixels, room13.pixels, "room 13 and room 2 draw the same canvas");
+    assert_eq!(room2.pixels(), room13.pixels(), "room 13 and room 2 draw the same canvas");
 }
 
 /// `@restart` re-derives the picture set rather than carrying it, and the zip
@@ -559,14 +561,15 @@ fn the_fantastic_four_zips_pictures_are_the_same_format_under_other_names() {
         let pic = scott::decode_family_e(bytes)
             .unwrap_or_else(|e| panic!("{name} ({} bytes): {e}", bytes.len()));
         assert!(
-            pic.pixels.iter().any(|&v| v != 0),
+            pic.pixels().iter().any(|&v| v != 0),
             "{name} draws something rather than an empty canvas"
         );
         *usages
-            .entry(match parsed.usage {
+            .entry(match parsed.usage() {
                 PictureUsage::Room => "room",
                 PictureUsage::ObjectInRoom => "object-in-room",
                 PictureUsage::ObjectInInventory => "object-in-inventory",
+                other => panic!("unhandled PictureUsage variant: {other:?}"),
             })
             .or_default() += 1;
     }

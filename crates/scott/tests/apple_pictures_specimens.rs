@@ -501,9 +501,9 @@ fn every_picture_on_every_plain_release_decodes() {
         for (name, file) in &pics {
             let pic = decode_family_d(file, SagaPlatform::AppleII)
                 .unwrap_or_else(|e| panic!("{} {name}: {e}", p.title));
-            assert_eq!((pic.width, pic.height), (CANVAS_WIDTH, CANVAS_HEIGHT));
+            assert_eq!((pic.width(), pic.height()), (CANVAS_WIDTH, CANVAS_HEIGHT));
             let mut seen = [false; PALETTE.len()];
-            for &v in &pic.pixels {
+            for &v in pic.pixels() {
                 let v = usize::from(v);
                 assert!(v < PALETTE.len(), "{} {name}: pixel value {v} has no colour", p.title);
                 seen[v] = true;
@@ -511,7 +511,7 @@ fn every_picture_on_every_plain_release_decodes() {
             if seen.iter().filter(|&&s| s).count() == 1 {
                 flat += 1;
             }
-            match parse_apple_picture_file_name(name).expect("named").1.usage {
+            match parse_apple_picture_file_name(name).expect("named").1.usage() {
                 PictureUsage::Room => rooms += 1,
                 _ => objects += 1,
             }
@@ -565,7 +565,7 @@ fn the_three_reserved_indices_are_present_and_are_the_cards_8_6_names() {
                 .unwrap_or_else(|| panic!("{} has no {what} picture {name}", p.title));
             let pic = decode_family_d(file, SagaPlatform::AppleII).expect("decodes");
             let mut counts = [0usize; PALETTE.len()];
-            for &v in &pic.pixels {
+            for &v in pic.pixels() {
                 counts[usize::from(v)] += 1;
             }
             let want = expected
@@ -610,9 +610,9 @@ fn the_darkness_card_is_white_lettering_on_black() {
         };
         let name = room_picture_file_name(&release(p.adventure), 0).expect("names it");
         let pic = decode_family_d(&pics[&name], SagaPlatform::AppleII).expect("decodes");
-        let white = |x: usize, y: usize| pic.pixels[y * CANVAS_WIDTH + x] == 5;
-        let ink = pic.pixels.iter().filter(|&&v| v == 5).count();
-        let black = pic.pixels.iter().filter(|&&v| v == 0).count();
+        let white = |x: usize, y: usize| pic.pixels()[y * CANVAS_WIDTH + x] == 5;
+        let ink = pic.pixels().iter().filter(|&&v| v == 5).count();
+        let black = pic.pixels().iter().filter(|&&v| v == 0).count();
         let columns = (0..CANVAS_WIDTH).filter(|&x| (0..CANVAS_HEIGHT).any(|y| white(x, y))).count();
         let want = expected.iter().find(|(a, _)| *a == p.adventure).expect("listed").1;
         assert_eq!(ink, want, "{} darkness card white ink", p.title);
@@ -746,9 +746,9 @@ fn every_scrambled_room_picture_decodes_and_the_ordinal_is_the_picture_index() {
                 .unwrap_or_else(|e| panic!("{title} record {i}: {e}"));
             // §8.4's nominal size, and NOT the plain sub-variant's 192-row
             // page: these records declare 40 byte columns by 160 rows.
-            assert_eq!((pic.width, pic.height), (280, 160), "{title} record {i}");
+            assert_eq!((pic.width(), pic.height()), (280, 160), "{title} record {i}");
             let mut seen = [false; PALETTE.len()];
-            for &v in &pic.pixels {
+            for &v in pic.pixels() {
                 assert!(usize::from(v) < PALETTE.len(), "{title} record {i}: no such colour");
                 seen[usize::from(v)] = true;
             }
@@ -768,7 +768,7 @@ fn every_scrambled_room_picture_decodes_and_the_ordinal_is_the_picture_index() {
             let pic = decode_family_d_scrambled(&raw[ranges[n].clone()], SagaPlatform::AppleII)
                 .expect("decodes");
             let mut counts = [0usize; PALETTE.len()];
-            for &v in &pic.pixels {
+            for &v in pic.pixels() {
                 counts[usize::from(v)] += 1;
             }
             assert_eq!(counts, want, "{title} {what} (record {n})");
@@ -792,7 +792,7 @@ fn one_entry_point_reads_both_sub_variants() {
         return;
     };
     let plain = decode_family_d(&pics["R0100"], SagaPlatform::AppleII).expect("decodes");
-    assert_eq!((plain.width, plain.height), (CANVAS_WIDTH, CANVAS_HEIGHT), "the plain page");
+    assert_eq!((plain.width(), plain.height()), (CANVAS_WIDTH, CANVAS_HEIGHT), "the plain page");
 
     // A scrambled record: *The Count*'s, 280x160.
     let side_a = std::fs::read_dir(&dir)
@@ -807,7 +807,7 @@ fn one_entry_point_reads_both_sub_variants() {
     let raw = image(&side_a).expect("side A");
     let ranges = scan_scrambled_pictures(&raw);
     let scrambled = decode_family_d(&raw[ranges[0].clone()], SagaPlatform::AppleII).expect("decodes");
-    assert_eq!((scrambled.width, scrambled.height), (280, 160), "the scrambled box");
+    assert_eq!((scrambled.width(), scrambled.height()), (280, 160), "the scrambled box");
 }
 
 // ── The records past the last room (SQ-1499) ─────────────────────────────────
@@ -900,15 +900,15 @@ fn the_scrambled_look_table_pairs_each_close_up_with_an_item_and_a_noun() {
         let m2 = boot.get("M2").unwrap_or_else(|| panic!("{title}: no M2 on the boot side"));
         let table = scott::apple_look_table(m2)
             .unwrap_or_else(|| panic!("{title}: M2 carries no LOOK table"));
-        assert_eq!(table.verb, *verb, "{title}: the LOOK verb");
+        assert_eq!(table.verb(), *verb, "{title}: the LOOK verb");
         let got: Vec<(u16, u16, u16)> =
-            table.rows.iter().map(|r| (r.noun, r.item, r.picture)).collect();
+            table.rows().iter().map(|r| (r.noun(), r.item(), r.picture())).collect();
         assert_eq!(got.as_slice(), *rows, "{title}: the LOOK rows");
 
         // The pictures are consecutive from §8.6's first full-window index,
         // which is what `scrambled_picture_index` relies on.
-        for (n, r) in table.rows.iter().enumerate() {
-            assert_eq!(usize::from(r.picture), 80 + n, "{title}: row {n} is out of order");
+        for (n, r) in table.rows().iter().enumerate() {
+            assert_eq!(usize::from(r.picture()), 80 + n, "{title}: row {n} is out of order");
         }
 
         // …and both other columns index the release's own database.
@@ -917,33 +917,33 @@ fn the_scrambled_look_table_pairs_each_close_up_with_an_item_and_a_noun() {
             SagaPlatform::AppleII,
         )
         .unwrap_or_else(|e| panic!("{title}: {e:?}"));
-        for r in &table.rows {
+        for r in table.rows() {
             let item = db
                 .items
-                .get(usize::from(r.item))
-                .unwrap_or_else(|| panic!("{title}: item {} is out of range", r.item));
+                .get(usize::from(r.item()))
+                .unwrap_or_else(|| panic!("{title}: item {} is out of range", r.item()));
             let noun = db
                 .nouns
-                .get(usize::from(r.noun))
-                .unwrap_or_else(|| panic!("{title}: noun {} is out of range", r.noun));
-            assert!(!noun.is_empty(), "{title}: noun {} is a blank slot", r.noun);
+                .get(usize::from(r.noun()))
+                .unwrap_or_else(|| panic!("{title}: noun {} is out of range", r.noun()));
+            assert!(!noun.is_empty(), "{title}: noun {} is a blank slot", r.noun());
             // The noun the table names IS the item's own auto-get noun on
             // every row that has one — the check that the two columns
             // describe the same object and not two different ones.
             if let Some(own) = &item.auto_noun {
-                assert_eq!(own, noun, "{title}: row for item {} names another noun", r.item);
+                assert_eq!(own, noun, "{title}: row for item {} names another noun", r.item());
             }
         }
         // The LOOK verb is a real verb, and on both releases that have rows
         // it is `LOO` with an `*EXA` synonym beside it.
-        if !table.rows.is_empty() {
+        if !table.rows().is_empty() {
             assert_eq!(
-                db.verbs.get(usize::from(table.verb)).map(String::as_str),
+                db.verbs.get(usize::from(table.verb())).map(String::as_str),
                 Some("LOO"),
                 "{title}: the trigger verb"
             );
             assert_eq!(
-                db.verbs.get(usize::from(table.verb) + 1).map(String::as_str),
+                db.verbs.get(usize::from(table.verb()) + 1).map(String::as_str),
                 Some("*EXA"),
                 "{title}: LOOK's synonym"
             );
@@ -1004,7 +1004,7 @@ fn the_records_past_the_last_room_are_the_close_ups_and_then_the_title_card() {
             return;
         };
         let table = scott::apple_look_table(boot.get("M2").expect("M2")).expect("a LOOK table");
-        let close_ups = table.rows.len();
+        let close_ups = table.rows().len();
         let ranges = scan_scrambled_pictures(&raw);
         assert_eq!(ranges.len(), *records, "{title}: records");
 
@@ -1032,7 +1032,7 @@ fn the_records_past_the_last_room_are_the_close_ups_and_then_the_title_card() {
             let pic = decode_family_d_scrambled(&raw[ranges[n].clone()], SagaPlatform::AppleII)
                 .expect("decodes");
             let mut c = [0usize; PALETTE.len()];
-            for &v in &pic.pixels {
+            for &v in pic.pixels() {
                 c[usize::from(v)] += 1;
             }
             c
