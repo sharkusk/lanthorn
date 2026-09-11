@@ -696,6 +696,7 @@ mod tests {
             scaled: None,
             margin_px: Some(32),
             rule: None,
+            link: 0,
         })
         .clone()
     }

@@ -66,6 +66,13 @@ pub struct InlineImage {
     /// (the v6 game's own `set_margins` value when it followed the draw). `None`
     /// = derive from the image width. Ignored for inline (non-margin) aligns.
     pub margin_px: Option<u32>,
+    /// The Glk hyperlink value this picture carries (`glk_set_hyperlink` before
+    /// `glk_image_draw`/`_scaled`/`_scaled_ext`; SQ-1503), 0 = no link. A Glulx
+    /// game makes an inline picture clickable exactly the way it makes text
+    /// clickable — Anchorhead: the Illustrated Edition's "click this thumbnail
+    /// to view the full-size illustration" uses this. 0 for every Z-machine v6
+    /// picture, which has no such concept.
+    pub link: u32,
 }
 
 impl InlineImage {
@@ -115,7 +122,7 @@ mod tests {
     use std::sync::Arc;
 
     fn img(w: u32, h: u32) -> InlineImage {
-        InlineImage { pixels: Arc::new(image::RgbaImage::new(w, h)), align: ImageAlign::InlineUp, scaled: None , margin_px: None, rule: None }
+        InlineImage { pixels: Arc::new(image::RgbaImage::new(w, h)), align: ImageAlign::InlineUp, scaled: None , margin_px: None, rule: None, link: 0 }
     }
 
     #[test]

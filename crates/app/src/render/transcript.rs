@@ -2661,6 +2661,28 @@ fn render_middle(
         }
         // Inline-image band row: blit the strip for this row instead of text.
         if crate::render::inline_image::try_blit_band_row(state, wr, body_area.x, body_area.width, row_y, buf) {
+            // SQ-1503: a picture carries a hyperlink exactly the way linked text
+            // does (`glk_set_hyperlink` before `glk_image_draw`) — Anchorhead:
+            // the Illustrated Edition's inline "click this thumbnail to view the
+            // full-size illustration" pictures are drawn this way. The link-cell
+            // recording below the `continue` (for `wr.runs`) never runs for a
+            // band row, because an image line carries no styled runs at all
+            // (`glk_backend::log_to_lines` starts a fresh, empty run vec before
+            // and after every image) — so a click anywhere on the visible
+            // picture found no recorded link and the hyperlink click path below
+            // never fired, even though typing VIEW (driven by game logic, not by
+            // any click) worked. Record the SAME cells `blit_band` drew into
+            // (`area_x + x_off.min(area_width)` .. `+ cols.min(area_width -
+            // x_off)`), so a click anywhere on the picture resolves.
+            if let Some(band) = &wr.band {
+                if band.image.link != 0 {
+                    let x0 = body_area.x + band.x_off.min(body_area.width);
+                    let w = band.cols.min(body_area.width.saturating_sub(band.x_off));
+                    for j in 0..w {
+                        links.push(((x0 + j, row_y), band.image.link));
+                    }
+                }
+            }
             continue;
         }
         // Meta/Warning reserve the 2-col gutter and draw their marker glyph;
@@ -3405,7 +3427,7 @@ mod tests {
     // ── Inline-image band wrapping ────────────────────────────────────────────
 
     fn dummy_img(w: u32, h: u32, align: crate::inline_image::ImageAlign) -> crate::inline_image::InlineImage {
-        crate::inline_image::InlineImage { pixels: std::sync::Arc::new(image::RgbaImage::new(w, h)), align, scaled: None, margin_px: None, rule: None }
+        crate::inline_image::InlineImage { pixels: std::sync::Arc::new(image::RgbaImage::new(w, h)), align, scaled: None, margin_px: None, rule: None, link: 0 }
     }
 
     #[test]
@@ -3494,6 +3516,7 @@ mod tests {
             scaled: None,
             margin_px,
             rule: None,
+            link: 0,
         }
     }
 
@@ -4235,6 +4258,48 @@ mod tests {
         }
     }
 
+    /// SQ-1503: a picture drawn under a Glk hyperlink must contribute cells to
+    /// the same click map [`render_transcript_builds_cell_link_map`] pins for
+    /// linked TEXT — the render loop's inline-image branch used to `continue`
+    /// straight past the link-recording code below it (an image line carries no
+    /// styled runs at all, so that code had nothing to read even if it DID run),
+    /// so a picture like Anchorhead: the Illustrated Edition's "click this
+    /// thumbnail to view the full-size illustration" recorded NO link no matter
+    /// where on it the player clicked, while a linked *caption* right next to it
+    /// worked fine. Falsified by reverting the band-row link recording in
+    /// `render_middle`: the assertion below then finds an empty `links`.
+    #[test]
+    fn render_transcript_builds_cell_link_map_for_an_inline_image_band() {
+        let machine = minimal_machine();
+        let mut state = AppState::default();
+        // A picker is required for a band to be emitted at all (`images_enabled`) —
+        // without one an inline image renders as nothing, per `script_state`'s doc.
+        state.game_picker = Some(ratatui_image::picker::Picker::halfblocks());
+        state.push_transcript_kind("before", TranscriptKind::Story);
+        state.push_transcript_image(crate::inline_image::InlineImage {
+            pixels: std::sync::Arc::new(image::RgbaImage::from_pixel(16, 16, image::Rgba([9, 9, 9, 255]))),
+            align: crate::inline_image::ImageAlign::InlineUp,
+            scaled: None,
+            margin_px: None,
+            rule: None,
+            link: 42,
+        });
+        state.push_transcript("after");
+        state.focus = Focus::Game;
+
+        let area = Rect::new(0, 0, 40, 10);
+        let mut buf = Buffer::empty(area);
+        let m = render_transcript(
+            &crate::session::status_model_from_machine(&machine), None, &state, area, &mut buf, None,
+        );
+
+        assert!(!m.links.is_empty(), "the picture's own cells must be in the click map");
+        assert!(m.links.iter().all(|(_, v)| *v == 42), "every recorded cell carries the picture's link");
+        // "before" is row 0 (unlinked, plain text) — a link cell there would mean
+        // the map bled onto text the picture was never drawn under.
+        assert!(m.links.iter().all(|((_, y), _)| *y != 0), "row 0 (\"before\") carries no link cells");
+    }
+
     #[test]
     fn game_background_fills_to_row_end() {
         // A short line with a game-set white background (like CM's black-on-white)
@@ -4401,6 +4466,7 @@ mod tests {
             scaled: None,
             margin_px: Some(4),
             rule: None,
+            link: 0,
         };
         let lines = vec![String::new(), "AAAA".to_string()];
         let kinds = vec![TranscriptKind::Story; 2];

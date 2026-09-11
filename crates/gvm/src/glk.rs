@@ -909,12 +909,21 @@ pub trait GlkBackend {
     /// Draw image `resnum` into a graphics window at `(x, y)`, optionally
     /// scaled to `(width, height)`. Return whether the image actually
     /// resolved and was drawn (false if `resnum` is missing/undecodable).
-    fn graphics_draw_image(&mut self, _win: u32, _resnum: u32, _x: i32, _y: i32, _scale: Option<(u32, u32)>) -> bool {
+    ///
+    /// `link` is the CURRENT STREAM's hyperlink value (`glk_set_hyperlink`) at
+    /// the moment of the draw (SQ-1503; Glk spec: "you can also set a hyperlink
+    /// for an image, by calling glk_set_hyperlink() before glk_image_draw()").
+    /// It only means anything for a draw into a TEXT BUFFER window — a graphics
+    /// window's canvas is pixels, not a stream, and has no hyperlink concept —
+    /// so a host ignores it on that path.
+    fn graphics_draw_image(&mut self, _win: u32, _resnum: u32, _x: i32, _y: i32, _scale: Option<(u32, u32)>, _link: u32) -> bool {
         false
     }
     /// Draw image `resnum` inline in a TEXT BUFFER window under a **standing**
     /// [`ImageRule`] (`glk_image_draw_scaled_ext`, Glk 0.7.6; SQ-1424).
     /// `align` is the `imagealign_*` value the buffer path takes in `val1`.
+    /// `link` is the same current-stream hyperlink value [`Self::graphics_draw_image`]
+    /// takes (SQ-1503).
     ///
     /// A host that lays text buffers out itself should OVERRIDE this: store
     /// `rule` beside the image and call [`ImageRule::resolve_in_buffer`] with
@@ -934,10 +943,11 @@ pub trait GlkBackend {
         align: u32,
         rule: ImageRule,
         window_width_px: u32,
+        link: u32,
     ) -> bool {
         let Some(natural) = self.image_info(resnum) else { return false };
         let Some(size) = rule.resolve_in_buffer(natural, window_width_px) else { return false };
-        self.graphics_draw_image(win, resnum, align as i32, 0, Some(size))
+        self.graphics_draw_image(win, resnum, align as i32, 0, Some(size), link)
     }
     /// Create a sound channel with rock `rock`; return its Glk ref (0 = failure).
     fn schannel_create(&mut self, _rock: u32) -> u32 { 0 }
@@ -1022,13 +1032,17 @@ pub trait GlkBackend {
 
 /// One recorded `fill_rect`/`erase_rect` call: `(color, left, top, w, h)`.
 type FillRec = (u32, i32, i32, u32, u32);
-/// One recorded `draw_image` call: `(resnum, x, y, scale)`.
-type DrawRec = (u32, i32, i32, Option<(u32, u32)>);
+/// One recorded `draw_image` call: `(resnum, x, y, scale, link)`. `link` is the
+/// CURRENT STREAM's hyperlink value at the time of the draw (`glk_set_hyperlink`,
+/// SQ-1503) — meaningful only for a draw into a text-buffer window; a graphics
+/// window's canvas has no hyperlink concept, so a host ignores it there.
+type DrawRec = (u32, i32, i32, Option<(u32, u32)>, u32);
 /// One recorded `buffer_draw_image_ext` call:
-/// `(resnum, align, rule, window_width_px)` — the STANDING form, which records
-/// the rule rather than a resolved size precisely because the size is not
-/// settled until the host lays the buffer out (SQ-1424).
-pub type BufferDrawExtRec = (u32, u32, ImageRule, u32);
+/// `(resnum, align, rule, window_width_px, link)` — the STANDING form, which
+/// records the rule rather than a resolved size precisely because the size is
+/// not settled until the host lays the buffer out (SQ-1424). `link` is the same
+/// current-stream hyperlink value `DrawRec` carries (SQ-1503).
+pub type BufferDrawExtRec = (u32, u32, ImageRule, u32, u32);
 
 /// A [`GlkBackend`] that records each window's text/grid in memory, replacing
 /// the old `BufferOutput`: tests downcast to it and read the asserted strings.
@@ -1341,19 +1355,20 @@ impl GlkBackend for TestBackend {
         align: u32,
         rule: ImageRule,
         window_width_px: u32,
+        link: u32,
     ) -> bool {
         if self.missing_images.contains(&resnum) {
             return false;
         }
-        self.buffer_draws_ext.entry(win).or_default().push((resnum, align, rule, window_width_px));
+        self.buffer_draws_ext.entry(win).or_default().push((resnum, align, rule, window_width_px, link));
         true
     }
 
-    fn graphics_draw_image(&mut self, win: u32, resnum: u32, x: i32, y: i32, scale: Option<(u32, u32)>) -> bool {
+    fn graphics_draw_image(&mut self, win: u32, resnum: u32, x: i32, y: i32, scale: Option<(u32, u32)>, link: u32) -> bool {
         if self.missing_images.contains(&resnum) {
             return false;
         }
-        self.draws.entry(win).or_default().push((resnum, x, y, scale));
+        self.draws.entry(win).or_default().push((resnum, x, y, scale, link));
         true
     }
     fn image_info(&mut self, resnum: u32) -> Option<(u32, u32)> {

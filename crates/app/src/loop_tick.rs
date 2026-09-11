@@ -101,6 +101,37 @@ pub(crate) fn poll_glulx_resize(
     redraw
 }
 
+/// SQ-1504: reset [`poll_glulx_resize`]'s three trackers to the same starting
+/// point (`None`/`None`/`None`) a fresh launch begins from.
+///
+/// A restarted Glulx session (`reset::reset_game`) is rebuilt at the same
+/// fallback width a launch's own constructor uses — `state.config.
+/// virtual_screen_cols`/`rows` are unset by default in both paths. A launch
+/// still ends up at the real pane width because `poll_glulx_resize` sees
+/// `vm_story_size` at its initial `None`, treats the real pane as new, and
+/// resizes once its settle timer elapses. `reset_game` has no access to
+/// `main.rs`'s tracker locals and cannot touch them, so left alone they carry
+/// whatever the OLD session last settled on — and if the terminal itself
+/// hasn't moved since then, that already equals the (unchanged) pane, so the
+/// poll reads the freshly rebuilt (narrower) session as already matching it
+/// and never re-measures. The story panel then stays at the fallback width
+/// until an actual terminal resize forces the comparison to differ — the
+/// reported symptom. Called right after every `reset_game` (`main.rs`'s
+/// `OverlayAct::ResetConfirm` and `OverlayAct::GameOverPlayAgain` arms) so the
+/// very next `poll_glulx_resize` pass re-measures for real, exactly as a
+/// launch's first pass does. A no-op for a Z-machine/Scott session — these
+/// trackers are read only by the Glulx-gated code above — so it is safe to
+/// call unconditionally after every reset.
+pub(crate) fn reset_glulx_resize_trackers(
+    vm_story_size: &mut Option<(u16, u16)>,
+    story_size_seen: &mut Option<(u16, u16)>,
+    resize_dirty: &mut Option<std::time::Instant>,
+) {
+    *vm_story_size = None;
+    *story_size_seen = None;
+    *resize_dirty = None;
+}
+
 /// Report the story pane's REAL size to the Z-machine (ZMSD §8.4 — SQ-0532/A-F1).
 ///
 /// §8.4: the interpreter "may change the exact dimensions whenever it likes but

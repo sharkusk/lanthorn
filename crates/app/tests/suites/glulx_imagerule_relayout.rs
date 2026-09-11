@@ -97,7 +97,7 @@ fn drawn(pic: (u32, u32), rule: ImageRule, draw_band_px: u32) -> InlineImage {
     );
     glk.window_open(1, WinType::TextBuffer);
     assert!(
-        glk.buffer_draw_image_ext(1, /*resnum*/ 1, /*imagealign_InlineUp*/ 1, rule, draw_band_px),
+        glk.buffer_draw_image_ext(1, /*resnum*/ 1, /*imagealign_InlineUp*/ 1, rule, draw_band_px, 0),
         "the picture resolves and is anchored"
     );
     let elems = glk.take_transcript_elems();
@@ -343,10 +343,10 @@ fn an_invalid_rule_word_draws_nothing() {
         height: 0,
         maxwidth: 0,
     };
-    assert!(!glk.buffer_draw_image_ext(1, /*resnum*/ 99, 1, good, 320), "no such picture");
+    assert!(!glk.buffer_draw_image_ext(1, /*resnum*/ 99, 1, good, 320, 0), "no such picture");
     // …and a window that is not a text buffer has no inline flow to draw into.
     glk.window_open(5, WinType::Graphics);
-    assert!(!glk.buffer_draw_image_ext(5, 1, 1, good, 320), "graphics windows go the other route");
+    assert!(!glk.buffer_draw_image_ext(5, 1, 1, good, 320, 0), "graphics windows go the other route");
     assert!(
         glk.take_transcript_elems().is_empty(),
         "neither failure anchored a picture in the transcript"

@@ -346,6 +346,13 @@ struct InlineImageDto {
     /// pre-0.7.6 behaviour, which is right for every picture that had no rule.
     #[serde(default)]
     rule: Option<ImageRuleDto>,
+    /// The Glk hyperlink value this picture carries (SQ-1503), 0 = no link.
+    /// Absent in archives written before this field existed → 0, i.e. the
+    /// pre-SQ-1503 behaviour, which is right for every picture that was drawn
+    /// with no `glk_set_hyperlink` in force (every one, since the plumbing did
+    /// not exist yet).
+    #[serde(default)]
+    link: u32,
 }
 
 /// serde mirror of [`gvm::glk::ImageRule`] (SQ-1424). Spelled out here rather
@@ -879,6 +886,7 @@ pub(crate) fn build_archive_bytes(
                                 scaled: img.scaled,
                                 margin_px: img.margin_px,
                                 rule: img.rule.map(Into::into),
+                                link: img.link,
                             }));
                         }
                         None => {
@@ -1337,6 +1345,7 @@ pub fn load_archive(path: &Path) -> io::Result<ArchiveContents> {
                 scaled: dto.scaled,
                 margin_px: dto.margin_px,
                 rule: dto.rule.map(Into::into),
+                link: dto.link,
             })
         })
         .collect();
@@ -1667,6 +1676,7 @@ mod tests {
             scaled: Some((12, 8)),
             margin_px: Some(40),
             rule: None,
+            link: 99,
         };
 
         let transcript = vec!["West of House".to_string(), String::new()];
@@ -1693,6 +1703,7 @@ mod tests {
         assert_eq!(got.align, ImageAlign::MarginLeft, "align round-trips");
         assert_eq!(got.scaled, Some((12, 8)), "scaled round-trips");
         assert_eq!(got.margin_px, Some(40), "margin_px round-trips");
+        assert_eq!(got.link, 99, "link round-trips (SQ-1503)");
         assert_eq!(got.pixels.dimensions(), (6, 4), "pixel dims round-trip");
         assert_eq!(
             got.pixels.as_raw(), img.pixels.as_raw(),
