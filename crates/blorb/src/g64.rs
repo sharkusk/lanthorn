@@ -8,7 +8,7 @@
 //! dump of what the read head actually sees: sync marks, GCR-encoded header and
 //! data blocks, the gaps between them, and whatever the mastering house did to
 //! the parts of the disk that are not data. Decode the bitstream to sectors and
-//! it **is** a D64 — so this module ends at [`sector_image`], which hands
+//! it **is** a D64 — so this module ends at `sector_image`, which hands
 //! [`crate::d64::D64`] a 174,848-byte image and takes no further interest in
 //! what a story is.
 //!
@@ -39,7 +39,7 @@
 //! The **encoding table** is not in that document, and is taken from two
 //! independent sources that agree byte for byte: VICE's `src/gcr.c`
 //! (`GCR_conv_data`, Boose/Sladic/Kajtar) and Linus Åkesson's *GCR decoding on
-//! the fly*, which prints the nybble-to-quintuple table in binary. [`GCR`] below
+//! the fly*, which prints the nybble-to-quintuple table in binary. `GCR` below
 //! is that table; its inverse is *computed* from it at compile time rather than
 //! transcribed, because a hand-written inverse is a second copy of the same fact
 //! and the sort of thing a unit test written by the same hand agrees with.
@@ -88,7 +88,7 @@
 //! can be GCR-encoded in whole groups. They carry nothing. And the data block's
 //! last off-nibble is exactly where a drive's write splice lands: on *Plundered
 //! Hearts* six sectors have a corrupt final GCR byte and are otherwise perfect,
-//! which is why [`block`] takes the number of bytes that must decode cleanly and
+//! which is why `block` takes the number of bytes that must decode cleanly and
 //! lets an invalid quintuple past that mark through. The checksum still has to
 //! pass, over the bytes that mean something.
 

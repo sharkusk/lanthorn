@@ -200,7 +200,7 @@ pub enum HfsError {
 /// One file found on the volume.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct HfsEntry {
-    /// The Macintosh filename, as stored. See [`mac_name`] on the upper half.
+    /// The Macintosh filename, as stored. See `mac_name` on the upper half.
     pub name: String,
     /// Data-fork size in bytes, from the catalog record.
     pub size: usize,

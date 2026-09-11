@@ -289,7 +289,7 @@ pub fn story(files: &[(String, Vec<u8>)]) -> Option<(String, Vec<u8>)> {
 /// that operation and cannot fail that way — there is no map to get wrong.
 ///
 /// What has to be excluded instead is a block of arbitrary data being read as a
-/// header, and [`states_a_story_this_index_tiles`] is that test: the page must
+/// header, and `states_a_story_this_index_tiles` is that test: the page must
 /// be a Z-machine header whose own declared story length lands inside the LAST
 /// block the index tiles. Two independent structures then have to agree about
 /// how long this story is, to within one block, which arbitrary data has no

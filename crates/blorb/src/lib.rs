@@ -372,7 +372,7 @@ impl Blorb {
         }
     }
 
-    /// Public counterpart of [`Blorb::chunk_data`]: the raw data bytes for
+    /// Public counterpart of `Blorb::chunk_data`: the raw data bytes for
     /// resource `e` (post 8-byte chunk header, pre pad byte — but a `FORM`
     /// resource retains its `FORM`+length header). For callers that need to
     /// inspect a resource's raw bytes (e.g. format-detail parsing).
@@ -591,9 +591,9 @@ pub fn resolve_resource_blorb(
 /// The associated resource-blorb sibling of `story_path`, matched by FILENAME
 /// ONLY (no file read), for the cheap per-row "(blorb)" tag which can't afford
 /// to parse every blorb. Same match order and rule as [`resolve_resource_blorb`],
-/// over the same [`RESOURCE_BLORB_EXTS`] (SQ-1067 — this sentence used to name a
+/// over the same `RESOURCE_BLORB_EXTS` (SQ-1067 — this sentence used to name a
 /// third set, matching neither function): an exact same-stem sibling first, else
-/// the best unambiguous [`stem_prefix_match`] among the directory's blorbs —
+/// the best unambiguous `stem_prefix_match` among the directory's blorbs —
 /// `None` if there is none or the longest prefix is a tie. Unlike
 /// `resolve_resource_blorb` it does not read the file, so it can't require the
 /// blorb to actually carry resources — filename agreement is the whole signal.

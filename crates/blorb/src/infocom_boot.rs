@@ -69,7 +69,7 @@
 //! [`InfocomBoot::looks_like_boot_disk`] does not look for `01 A5 27`, and does
 //! not look at track 3. It de-interleaves and asks whether any sector boundary
 //! starts a story whose **own header checksum verifies over its own declared
-//! length** ([`crate::infocom_packed::verified`], shared rather than copied).
+//! length** (`crate::infocom_packed::verified`, shared rather than copied).
 //!
 //! That is deliberate on both counts. A boot-code signature is one loader out of
 //! however many Infocom pressed across ten years of Apple II releases, and
@@ -131,7 +131,7 @@ impl InfocomBoot {
     ///
     /// **Disjoint from ProDOS by construction, not by luck.** A `.dsk` that is a
     /// ProDOS volume is declined here outright, so no order of
-    /// [`crate::medium::FORMATS`] can change which row claims an image and
+    /// `crate::medium::FORMATS` can change which row claims an image and
     /// `DiskImage::detect`'s promise that table order is "a formality rather
     /// than a precedence" survives a second format wearing the same spelling,
     /// the same size and the same sector order.

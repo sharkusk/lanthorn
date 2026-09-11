@@ -33,7 +33,7 @@
 //! # Where the story is, measured
 //!
 //! Exactly one sector boundary on each header-bearing disk opens a Z-machine
-//! header ([`header_candidates`]), and the two presses lay their sectors out
+//! header (`header_candidates`), and the two presses lay their sectors out
 //! **differently**:
 //!
 //! ```text
@@ -50,14 +50,14 @@
 //! The 1984 press spends 16 of each track's 21 sectors and leaves the rest
 //! formatted-blank, which is visible in the image as a `s16`..`s20` gap on every
 //! story track; the 1986 press spends all of them. Neither is guessed: the two
-//! plans are [`Plan`], and a mount tries each and keeps the one whose reassembly
+//! plans are `Plan`, and a mount tries each and keeps the one whose reassembly
 //! **verifies against the story's own header checksum**
-//! ([`crate::infocom_packed::verified`], shared rather than copied).
+//! (`crate::infocom_packed::verified`, shared rather than copied).
 //!
 //! Where a press stops on a disk needs no table either. A 1541 `FORMAT` leaves
 //! every data block as `$4B` followed by 255 × `$01`, and that is exactly what
 //! *Trinity*'s SIDE 1 holds from track 19 sector 11 to the end of the disk. The
-//! reader stops at the first never-written block ([`never_written`]) and moves
+//! reader stops at the first never-written block (`never_written`) and moves
 //! to the next volume, so the 344/680 split above falls out of the media rather
 //! than being asserted about them.
 //!
@@ -71,7 +71,7 @@
 //! *Hitchhiker's* is Version 3, counts in units of two, and its 112,622 bytes
 //! fit on its single disk with room to spare.
 //!
-//! Reassembly across the set is [`story_across`], reached from
+//! Reassembly across the set is `story_across`, reached from
 //! [`crate::medium::MountedDisk::mount_set`] like the Apple II's packed
 //! container beside it. Which side leads is not taken on trust from the caller's
 //! ordering: only one side of a release carries a header, so the head is the
@@ -260,7 +260,7 @@ impl D64 {
     ///
     /// What that concession cannot do is produce a wrong story, and that is the
     /// property worth having: a side is only ever *joined* to a release by
-    /// [`story_across`], which verifies the join against the story's own header
+    /// `story_across`, which verifies the join against the story's own header
     /// checksum. A `.d64` that is not an Infocom release either fails here or
     /// mounts and reports no story; it is never misread as one.
     ///
@@ -340,7 +340,7 @@ impl D64 {
     ///
     /// `None` on either side of *Trinity*: SIDE 1 carries the header and 344 of
     /// the 1,024 sectors, SIDE 2 carries the other 680 and no header, and neither
-    /// is a game. See [`story_across`].
+    /// is a game. See `story_across`.
     pub fn story(&self) -> Option<(String, Vec<u8>)> {
         Some((self.entry_name()?, self.story.clone()?))
     }
@@ -361,7 +361,7 @@ impl D64 {
     /// for it would be inventing a directory these disks do not use. And
     /// *Trinity*'s two sides list nothing whatever, because neither holds a game
     /// and neither has a readable directory; that release is reassembled from
-    /// the raw images by [`story_across`], which
+    /// the raw images by `story_across`, which
     /// [`crate::medium::MountedDisk`] reaches with the sides themselves rather
     /// than with this listing.
     pub fn contents(&self) -> Vec<(String, Vec<u8>)> {

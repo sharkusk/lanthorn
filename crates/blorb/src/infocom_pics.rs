@@ -105,7 +105,7 @@ pub enum Flavour {
     /// The Apple II archives, carried inside the `.D2`…`.D5` segments of a
     /// packed volume: big-endian, 8-byte records, and the Amiga's RLE +
     /// per-line XOR **without** the Huffman stage. See
-    /// [`InfocomPics::parse_apple`] and [`InfocomPics::decode_apple`].
+    /// [`InfocomPics::parse_apple`] and `InfocomPics::decode_apple`.
     ///
     /// Unlike the other two this flavour is authoritative from Infocom's own
     /// sources end to end: `apple/yzip/rel.15/zip.equ` gives every field of the
@@ -352,7 +352,7 @@ pub const DEFAULT_PALETTE: [Rgb; 16] = [
 /// * Frotz's DOS front end, indirectly but decisively: `bcpic.c` sets
 ///   `colour_shift = 0` for `_EGA_`, so a stored index goes to the EGA hardware
 ///   colour of the same number with no reserved-slot shift — which is what makes
-///   this a flat 0..=15 table rather than one starting at [`PALETTE_BASE`].
+///   this a flat 0..=15 table rather than one starting at `PALETTE_BASE`.
 ///
 /// Bocfel's own comment records a disagreement — "this is `{170,170,0}` in
 /// pix2gif (?)" — and pix2gif is the one that is wrong: it is the arithmetic
@@ -976,11 +976,11 @@ impl InfocomPics {
     /// lda PIC_DIR+PHNLD+1     ; it's in reverse order
     /// ```
     ///
-    /// The record is [`APPLE_ENTRY_SIZE`] bytes: `PLDID` (2, big-endian),
+    /// The record is `APPLE_ENTRY_SIZE` bytes: `PLDID` (2, big-endian),
     /// `PLDWID` (1), `PLDHGHT` (1), `PLDFLG` (1), `PLDPTR` (3, big-endian).
     /// There is no palette pointer and no per-entry tree, so both offsets are
     /// fixed at zero — the file stores no palettes at all, which is what the
-    /// header's [`PHFPAL`] bit states independently.
+    /// header's `PHFPAL` bit states independently.
     ///
     /// Validation is the same shape as the other two: the directory must fit,
     /// ids must ascend, and every data offset must land past the directory and
@@ -1166,7 +1166,7 @@ impl InfocomPics {
     /// An Amiga/Mac COLOUR archive still answers 320, as every one in hand is.
     ///
     /// **The Apple is 140**, and it is the one rendition whose flag bit 3 must
-    /// NOT be read as a width: that bit is [`PHFPAL`] there, not the PC's
+    /// NOT be read as a width: that bit is `PHFPAL` there, not the PC's
     /// picture-space selector, so the PC rule would call every Arthur archive
     /// 640 and be wrong by more than four. The number comes from the machine
     /// instead — `apple.equ`'s `MAXWIDTH EQU 140 ; 560 / 4`, i.e. the

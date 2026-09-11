@@ -34,7 +34,7 @@
 //! say *"some images created by `WOOF` have a meaningful block count but a zero
 //! data length"*, and prescribe the fallback this reader uses — for a ProDOS
 //! image *"the data length will be equal to the number of 512-byte blocks *
-//! 512"*. So [`volume_at`] takes the declared length when there is one, then the
+//! 512"*. So `volume_at` takes the declared length when there is one, then the
 //! block count, then whatever follows the header; whichever it lands on has to
 //! be a whole number of blocks and has to be present in the bytes in hand.
 //!
@@ -72,10 +72,10 @@
 //! nothing about which filesystem is inside, so each reader runs its own volume
 //! sniff at the offset and declines what is not its own. That is the "small
 //! refactor nobody has done" this paragraph used to describe as optional, and
-//! it is one placement in [`volume_at`] beside the `2IMG` one. A Macintosh
+//! it is one placement in `volume_at` beside the `2IMG` one. A Macintosh
 //! DiskCopy image is unwrapped here just as willingly and then declined, for
 //! the same reason a DOS 3.3 dump is: nothing but a ProDOS volume directory is
-//! allowed to make [`volume_is_sane`] answer `Some`.
+//! allowed to make `volume_is_sane` answer `Some`.
 //!
 //! # Layer 1b — DOS sector order (SQ-0864)
 //!

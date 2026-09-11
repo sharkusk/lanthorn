@@ -46,8 +46,8 @@
 //! skew DOS 3.3 itself applies, and the order the sectors of a file are in on a
 //! disk that has no ProDOS on it at all.
 //!
-//! So the two orders are not two tables. [`PHYSICAL_OF`] is the one fact, and
-//! [`SECTOR_OF`] is derived from it by the relation the grid states: **ProDOS
+//! So the two orders are not two tables. `PHYSICAL_OF` is the one fact, and
+//! `SECTOR_OF` is derived from it by the relation the grid states: **ProDOS
 //! block `b` of a track is DOS logical sectors `b` and `b + 8`.** That is stated
 //! once, in the `const` block below, so the ProDOS order cannot drift from the
 //! logical one — and the existing tests that pin `SECTOR_OF`'s shape now pin the

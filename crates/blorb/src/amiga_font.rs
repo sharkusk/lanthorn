@@ -244,7 +244,7 @@ const MAX_ROM_FACES: usize = 16;
 ///
 /// This is the whole reason a revision number is never needed: 1.2/1.3 are 256
 /// KiB at `$FC0000` and 2.0+ are 512 KiB at `$F80000`, and both are simply
-/// [`ROM_TOP`] minus their own size.
+/// `ROM_TOP` minus their own size.
 pub fn rom_base(len: usize) -> Option<u32> {
     ROM_SIZES.contains(&len).then(|| ROM_TOP - len as u32)
 }
@@ -268,7 +268,7 @@ pub fn rom_base(len: usize) -> Option<u32> {
 /// which is the first instruction every Kickstart begins with. Then every even
 /// offset is tested for a `TextFont`-SHAPED record:
 ///
-/// * `tf_Flags` carries [`FPF_ROMFONT`];
+/// * `tf_Flags` carries `FPF_ROMFONT`;
 /// * `tf_YSize` and `tf_XSize` are sane and `0 < tf_Baseline < tf_YSize`;
 /// * `tf_LoChar <= tf_HiChar`, `tf_Modulo` is non-zero;
 /// * `tf_CharData` and `tf_CharLoc` are addresses whose whole arrays lie inside
@@ -378,7 +378,7 @@ pub fn faces_in_rom(raw: &[u8]) -> Vec<(String, BitmapFont)> {
 /// [`crate::infocom_sound::from_volume`] takes. **Nothing is matched on the
 /// filename**: the two names in use are `char.data` and `Char.data`, one release
 /// calls the identical file `Graphic.Data`, and case varies by volume, so every file
-/// is offered to [`AmigaFont::parse`] and the signature decides. A volume with no
+/// is offered to [`parse`] and the signature decides. A volume with no
 /// font costs one failed signature check per file.
 ///
 /// When more than one parses, the widest-covering wins, so a text font outranks the

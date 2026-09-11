@@ -24,12 +24,12 @@
 //! The CLI therefore mounted an Amiga floppy and refused a Macintosh one, months
 //! after `blorb` had learned to read that disk. Neither lane was wrong inside its
 //! own scope; the chain guaranteed that nobody owned the join. Adding a format is
-//! now a row in [`FORMATS`] and an `impl Volume` beside it, both in this file,
+//! now a row in `FORMATS` and an `impl Volume` beside it, both in this file,
 //! and every front-end gains the format in the same commit.
 //!
 //! ## Two invariants worth stating outright
 //!
-//! **Detect and mount cannot disagree.** Both walk [`FORMATS`], so a format this
+//! **Detect and mount cannot disagree.** Both walk `FORMATS`, so a format this
 //! crate can recognise is a format it can open — the property `zvm-cli`'s old
 //! `looks_like_image` had to guard against by hand, and no longer does.
 //!
@@ -56,7 +56,7 @@
 //! and false of every compilation disk here. [`MountedDisk::mount`] is that
 //! call with no companions, so nothing that does not want a set sees one.
 //!
-//! A row does carry [`Format::extensions`], and that is not a crack in the rule:
+//! A row does carry `Format::extensions`, and that is not a crack in the rule:
 //! it is the census a front-end scanning a DIRECTORY needs to decide which files
 //! are worth OPENING, and what a file turns out to be is still
 //! [`DiskImage::detect`]'s answer over its bytes. See [`DiskImage::extensions`]
@@ -264,7 +264,7 @@ pub enum DiskImage {
     /// 10 Apple IIgs. Infocom's own Apple interpreter settles which by *detecting
     /// the machine at boot* rather than by pressing three disks, so the ambiguity
     /// is a fact about the medium and not a gap in the evidence. See this
-    /// variant's row in [`FORMATS`] for why
+    /// variant's row in `FORMATS` for why
     /// [`DiskImage::interpreter_number`] nevertheless answers, and with what.
     ProDos,
     /// A **raw self-booting Apple II 5.25-inch disk** — no filesystem at all,
@@ -360,7 +360,7 @@ impl DiskImage {
     ///
     /// The sniffs are disjoint by construction — AmigaDOS is identified by its
     /// `DOS` boot block and HFS by a volume signature at a fixed offset (bare, or
-    /// past a DiskCopy 4.2 header) — so the order of [`FORMATS`] is a formality
+    /// past a DiskCopy 4.2 header) — so the order of `FORMATS` is a formality
     /// rather than a precedence.
     ///
     /// **That promise survived a second format arriving on the same medium**
@@ -379,7 +379,7 @@ impl DiskImage {
     }
 
     /// Every format this crate reads, in table order. The census the API walks
-    /// — a format is here exactly when it has a row in [`FORMATS`].
+    /// — a format is here exactly when it has a row in `FORMATS`.
     pub fn all() -> impl Iterator<Item = DiskImage> {
         FORMATS.iter().map(|f| f.image)
     }
@@ -416,7 +416,7 @@ impl DiskImage {
     }
 
     /// Does this medium name the IBM PC, whose number is a version rule?
-    /// See [`Row::implies_ibm_pc`] — this is the other half of
+    /// See `Format::implies_ibm_pc` — this is the other half of
     /// [`Self::interpreter_number`]'s `None`.
     pub fn implies_ibm_pc(self) -> bool {
         self.row().implies_ibm_pc
@@ -434,7 +434,7 @@ impl DiskImage {
     ///
     /// **Why it is a property of the row.** The TUI's story picker kept its own
     /// extension list, and that list was the "nothing else anywhere" in
-    /// [`FORMATS`]' doc that turned out to exist. SQ-0833 and SQ-0835 added the
+    /// `FORMATS`' doc that turned out to exist. SQ-0833 and SQ-0835 added the
     /// DOS and Atari ST rows; the picker never learned their names, so a shelf
     /// full of `.ima` and `.st` floppies that mount perfectly well was simply
     /// absent from the story list, silently, for two quests (SQ-0849). A census
@@ -444,7 +444,7 @@ impl DiskImage {
     }
 }
 
-/// Every extension any format in [`FORMATS`] is conventionally given, in table
+/// Every extension any format in `FORMATS` is conventionally given, in table
 /// order — the whole census, for a caller that has a filename and no bytes yet.
 ///
 /// This is what a directory scan pre-filters on; see [`DiskImage::extensions`]
@@ -1497,7 +1497,7 @@ impl Volume for Hfs {
 /// filesystem.
 impl Volume for Fat12 {
     /// The FILESYSTEM sniff, deliberately machine-neutral. The table does not
-    /// use this one: [`FORMATS`] holds `fat12::looks_like_dos` and
+    /// use this one: `FORMATS` holds `fat12::looks_like_dos` and
     /// `fat12::looks_like_atari_st`, which are this question and then the
     /// machine question, so the two rows stay disjoint.
     fn looks_like(raw: &[u8]) -> bool {
