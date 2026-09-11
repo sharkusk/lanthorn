@@ -129,11 +129,13 @@ fn main() {
             if let Some(run) = &answer.run {
                 for st in &run.steps {
                     println!(
-                        "      try {:<10} -> loc={:?} quit={} escaped={} | {:?}",
+                        "      try {:<10} -> loc={:?} landing={:?} quit={} escaped={} died={} | {:?}",
                         st.command,
                         st.location,
+                        st.landing(),
                         st.quit,
                         st.escaped,
+                        st.died,
                         st.reply.trim().lines().next().unwrap_or("")
                     );
                 }

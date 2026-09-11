@@ -374,6 +374,15 @@ pub fn deliver(state: &mut AppState, mapper: &mut Mapper, answer: &crate::probe:
 /// A step that quit or escaped, or that could not say where it ended up, says nothing: an
 /// unanswerable question is not evidence the story is deterministic.
 ///
+/// # A DEATH is not an arrival either (SQ-1506)
+///
+/// A shadow the story KILLED was relocated by its own resurrection, so the room it woke up in is
+/// not a destination of the direction it typed. Counted as a landing it is a disagreement, and a
+/// disagreement here deletes an edge and marks the direction random with a pool naming the
+/// resurrection room — which is how Zork I's cellar and maze directions read as "destination
+/// varies: …, Forest" after one unlucky combat round. [`crate::probe::ProbeStep::landing`] makes
+/// that reading once, shared with the return probe.
+///
 /// # A refused move is not an arrival (SQ-1314)
 ///
 /// **And neither is a step that came out in the room it started in.** The shadow types a
@@ -395,8 +404,7 @@ fn landings<'a>(
     let keep_self = search.self_landing_is_evidence();
     run.steps
         .iter()
-        .filter(|s| !s.quit && !s.escaped)
-        .filter_map(|s| s.location)
+        .filter_map(|s| s.landing())
         .filter(move |&loc| keep_self || loc != origin)
 }
 
@@ -677,6 +685,7 @@ mod tests {
             world: WorldPrint::default(),
             quit: false,
             escaped: false,
+            died: false,
         }
     }
 
@@ -923,6 +932,52 @@ mod tests {
             mapper.graph.random_destinations(1, Direction::N),
             &[2, 4],
             "the live landing, then what the disagreeing shadow attempt itself saw"
+        );
+    }
+
+    /// SQ-1506: the identical run with the disagreeing step's landing explained by a DEATH.
+    ///
+    /// This is the reported defect's other half. A shadow attempt that walks into Zork I's Troll
+    /// Room and is killed wakes up in the Forest, reports it as its `location`, and — counted as
+    /// a landing — disagrees with the live destination. A disagreement here is PROOF the story
+    /// randomises: it deletes the edge, marks the direction random and pools the resurrection
+    /// room, which is the `destination varies: …, Forest` the report describes. It is not proof
+    /// of anything; the shadow was relocated, not sent.
+    ///
+    /// Falsify by dropping `!s.died` from `ProbeStep::landing`: this becomes
+    /// `declared_mismatch_suspicion_disagreement_marks_random_with_pool` above and every
+    /// assertion below fails.
+    #[test]
+    fn a_shadow_attempt_that_died_is_not_a_disagreement() {
+        let mut mapper = Mapper::default();
+        let mut death = DeathWatch::default();
+        apply_turn(&mut mapper, "", &TurnResult::observation(snap(1, "Tunnel")), &mut death);
+
+        let mut r = TurnResult::observation(snap(2, "Other Tunnel"));
+        r.declared_exit = Some(crate::engine::DeclaredExit::Room(3));
+        apply_turn(&mut mapper, "north", &r, &mut death);
+        let susp = mapper.take_random_exit_suspicion().expect("pending");
+
+        let mut state = AppState::default();
+        state.random_exit_search =
+            Some(arm(susp.origin, susp.dir, susp.live_dest, SearchKind::Suspicion { old_dest: susp.old_dest }, 23));
+        let run = ProbeRun {
+            baseline: WorldPrint::default(),
+            steps: vec![step(Some(2)), ProbeStep { died: true, ..step(Some(4)) }],
+        };
+        assert!(deliver(&mut state, &mut mapper, &test_answer(23, Some(run))), "the map changed");
+        assert!(
+            !mapper.graph.is_random_exit(1, Direction::N),
+            "the only real evidence AGREED, so the passage is deterministic"
+        );
+        assert_eq!(
+            mapper.graph.connections().iter().find(|c| c.origin == 1 && c.dir == Direction::N).map(|c| c.dest),
+            Some(2),
+            "and the edge the declared mismatch put in doubt is minted"
+        );
+        assert!(
+            mapper.graph.random_destinations(1, Direction::N).is_empty(),
+            "no resurrection room is pooled as a destination the story sends the player to"
         );
     }
 

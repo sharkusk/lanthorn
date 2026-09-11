@@ -2372,6 +2372,7 @@ mod tests {
             world: crate::probe::WorldPrint::from_parts(Some(7), None, None),
             quit: false,
             escaped: false,
+            died: false,
         };
         let run = crate::probe::ProbeRun {
             baseline: crate::probe::WorldPrint::from_parts(Some(7), Some(35), Some(99)),
