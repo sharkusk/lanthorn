@@ -58,6 +58,8 @@ mod sq1289_random_room_placement;
 mod sq1291_zork_chasm_layout;
 #[path = "suites/sq1292_probed_return_arrow.rs"]
 mod sq1292_probed_return_arrow;
+#[path = "suites/sq1506_probe_death_landing.rs"]
+mod sq1506_probe_death_landing;
 #[path = "suites/sq1266_v6_shadow_restore.rs"]
 mod sq1266_v6_shadow_restore;
 #[path = "suites/sq1267_shadow_room_identity.rs"]

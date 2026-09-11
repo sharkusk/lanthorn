@@ -48,6 +48,17 @@
 //! the upper window, because memory restored without a screen must not be read
 //! against another moment's screen (SQ-0785).
 //!
+//! **A shadow that DIED did not move, it was relocated** (SQ-1506). Zork I's
+//! troll kills the shadow the turn it walks into the Troll Room and the game
+//! wakes it up in the Forest — a room the map already holds, so nothing below
+//! could tell the resurrection from an arrival, and `north` out of the Cellar
+//! was minted as a passage to `Forest ¹`. The same thing in the maze, and the
+//! same thing wherever a grue eats a shadow in the dark. The live turn path has
+//! read this since SQ-0259 ([`crate::session::turn_reports_death`], and
+//! [`mapper::mapper::Mapper::observe_relocation`] rather than a minted edge); the
+//! shadow now reads the identical fact off its own step, as
+//! [`crate::probe::ProbeStep::died`].
+//!
 //! That is also why this consumer needs none of the probe seam's
 //! [`crate::probe::Refusals`] machinery. A vocabulary offer has to read the
 //! story's prose to find out whether anything happened, because "did this verb
@@ -74,7 +85,9 @@
 //! the player walks it. A REFUSED move is not affected — it names no room at all
 //! ("The windows are all boarded" moves nobody, so the step reports no location),
 //! which is as informative as it will ever be, so it is remembered and never
-//! re-asked. Only a landing the map could not READ is held open.
+//! re-asked. Two attempts are held open: a landing the map could not READ, and —
+//! since SQ-1506 — one that KILLED the shadow, because a shadow may die by dice
+//! and "the troll won this round" is not a fact about the world.
 //!
 //! **But a room the map ALREADY HOLDS is a room the player has stood in**, and a
 //! passage between two such rooms reveals nothing unseen — so it is recorded even
@@ -365,6 +378,10 @@ pub fn owns(state: &AppState, token: u64) -> bool {
 ///    ended, an engine that cannot say where it is — and nothing is recorded at
 ///    all, the attempt included. The search moves on to the next direction, and a
 ///    later visit may ask this one again.
+///
+/// A DEATH is outcome 4 and never outcome 1, however nameable the room it woke up
+/// in (SQ-1506): the game relocated the shadow, and a resurrection room is not a
+/// destination. [`crate::probe::ProbeStep::landing`] is where that is decided.
 pub fn deliver(
     state: &mut AppState,
     mapper: &mut Mapper,
@@ -376,11 +393,13 @@ pub fn deliver(
     let (here, origin) = (search.here, search.origin);
 
     // (1) WHERE did it come out? Room identity and nothing else — a step that
-    // ended the story or reached for a file answers nothing about the map,
-    // whatever `location` happens to hold.
-    let landed = answer.run.as_ref().and_then(|run| {
-        run.steps.first().filter(|s| !s.quit && !s.escaped).and_then(|s| s.location)
-    });
+    // ended the story, reached for a file, or got the shadow KILLED answers
+    // nothing about the map, whatever `location` happens to hold.
+    // `ProbeStep::landing` is where that reading lives, shared with the
+    // random-exit probe so the two cannot drift about what an attempt proved.
+    let step = answer.run.as_ref().and_then(|run| run.steps.first());
+    let died = step.is_some_and(|s| s.died);
+    let landed = step.and_then(|s| s.landing());
     // (2) The attempt is spent unless it was ANSWERED — when the shadow came
     // out somewhere the map can name (SQ-1292). `probed` is consulted forever
     // after by `MapGraph::probe_candidates`, which never offers a direction it
@@ -401,14 +420,22 @@ pub fn deliver(
     // Up/Down/In/Out never at all. So the way back showed up reliably for a
     // staircase, usually for a diagonal, and not until walked for a compass exit.
     //
-    // A move that named NO room still burns, exactly as it always did — a refusal
-    // (which moves nobody, so the step reports no location at all), a death, a
-    // story that ended. Those are as informative as they will ever be, and
-    // re-asking them every visit would buy nothing. The one attempt withheld is
-    // the one whose answer the map could not READ yet, and it is offered again on
-    // a later visit by which time it may be able to.
+    // A move that named NO room still burns — a refusal (which moves nobody, so
+    // the step reports no location at all) or a story that ended. Those are as
+    // informative as they will ever be, and re-asking them every visit would buy
+    // nothing.
+    //
+    // **A DEATH is the third kind, and it withholds the mark too** (SQ-1506). The
+    // shadow may die by DICE: Zork I's troll kills it on one restore of the
+    // Cellar snapshot and lets it past on the next, and the grue is a coin flip
+    // against a lamp that may be lit by the time the player comes back. "The
+    // shadow was killed this time" is a fact about one attempt's luck, not about
+    // the world, and a permanent mark may only carry the second kind — the same
+    // rule, and the same reasoning, as the unreadable landing above. Burning it
+    // would spend `north` out of the Cellar for the life of the map on a combat
+    // round that went the other way.
     let unnameable = landed.is_some_and(|r| mapper.graph.room(r).is_none());
-    if !unnameable {
+    if !unnameable && !died {
         mapper.graph.mark_probed(here, attempt.dir);
     }
     let Some(landed) = landed.filter(|_| !unnameable) else {
@@ -601,5 +628,95 @@ mod tests {
         let s = state.return_search.as_ref().expect("still worth asking");
         // SQ-1290: nine to begin with (see above), minus the two already walked.
         assert_eq!(s.remaining(), 7, "the two already walked are not offered again");
+    }
+
+    /// One search, armed and pumped for real, answered with a hand-built run — so the only thing
+    /// that differs between the two halves below is the one fact SQ-1506 added.
+    ///
+    /// Returns the map, the state and whether `deliver` recorded a passage.
+    fn deliver_a_landing_in_the_resurrection_room(died: bool) -> (Mapper, AppState, bool) {
+        let mut m = Mapper::default();
+        walked(&mut m);
+        // The resurrection room, and the whole point: a room the map ALREADY HOLDS, so every
+        // guard `deliver` had before SQ-1506 lets it through.
+        m.graph.upsert_room(3, "Forest".to_string());
+        m.graph.set_pos(3, (5, 5));
+
+        let mut state = armed_state();
+        arm_return_search(
+            &mut state,
+            &m,
+            &blind(),
+            "enter window",
+            Some(1),
+            &mut crate::engine::TurnSave::default(),
+        );
+        assert!(pump_return_search(&mut state), "an attempt goes out to the worker");
+        let real = state.probe.settle().expect("the shadow answers");
+        assert!(owns(&state, real.token), "and it is this search's answer");
+
+        // Zork I's own words on the turn the troll kills you, abridged to the two lines the
+        // detector reads — the banner, and the resurrection's room heading after it.
+        let run = crate::probe::ProbeRun {
+            baseline: crate::probe::WorldPrint::default(),
+            steps: vec![crate::probe::ProbeStep {
+                command: "out".to_string(),
+                reply: "The Troll Room\nConquering his fears, the troll puts you to death.\n\
+                        \n   ****  You have died  **** \n\nForest\n"
+                    .to_string(),
+                location: Some(3),
+                world: crate::probe::WorldPrint::default(),
+                quit: false,
+                escaped: false,
+                died,
+            }],
+        };
+        let recorded =
+            deliver(&mut state, &mut m, &crate::probe::test_answer(real.token, Some(run))).is_some();
+        (m, state, recorded)
+    }
+
+    /// SQ-1506: a shadow the story KILLED was relocated, so the room it woke up in is not a
+    /// destination — nothing is minted, and the attempt is not spent either.
+    ///
+    /// Not spent is the second half and it matters as much as the first: a shadow may die by
+    /// DICE (Zork I's troll kills it on one restore of the Cellar snapshot and lets it past on
+    /// the next), and `probed` is read forever after by `MapGraph::probe_candidates`. Burning
+    /// `north` out of the Cellar on one unlucky combat round would spend it for the life of the
+    /// map — the same permanence argument SQ-1292 made about a landing the map could not read.
+    #[test]
+    fn a_shadow_that_died_mints_nothing_and_spends_no_attempt() {
+        let (m, state, recorded) = deliver_a_landing_in_the_resurrection_room(true);
+        assert!(!recorded, "a resurrection is not a passage");
+        assert!(
+            !m.graph.connections().iter().any(|c| c.origin == 2 && c.dest == 3),
+            "no edge to the room the game resurrected the shadow in"
+        );
+        assert!(
+            state.return_search.is_some(),
+            "the gap the search was opened to close is still open"
+        );
+        assert!(
+            !mapper::direction::PROBE_DIRS.iter().any(|&d| m.graph.is_probed(2, d)),
+            "and no direction was marked probed: the shadow may die by dice, so the attempt is \
+             offered again on a later visit"
+        );
+    }
+
+    /// The falsification twin, and the proof that `died` is the only thing doing the work above:
+    /// the identical answer with the death unnoticed mints exactly the edge the player reported
+    /// (`Cellar —N→ Forest ¹`, here `2 → 3`) and burns the direction for good.
+    #[test]
+    fn the_same_landing_without_the_death_is_what_the_report_saw() {
+        let (m, _state, recorded) = deliver_a_landing_in_the_resurrection_room(false);
+        assert!(recorded, "an ordinary landing in a known room is recorded");
+        assert!(
+            m.graph.connections().iter().any(|c| c.origin == 2 && c.dest == 3),
+            "which is the false passage SQ-1506 is about"
+        );
+        assert!(
+            mapper::direction::PROBE_DIRS.iter().any(|&d| m.graph.is_probed(2, d)),
+            "and the attempt is spent"
+        );
     }
 }

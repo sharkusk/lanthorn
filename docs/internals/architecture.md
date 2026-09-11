@@ -574,12 +574,37 @@ third consumer: see the last bullet there.
 back where I started?* — and everything that differs between the two consumers
 follows from that.
 
-- **It reads a room number, not prose.** Success is `step.location == origin`,
+- **It reads a room number, not prose.** Success is `step.landing() == Some(origin)`,
   the same `snap.number` `session::apply_turn` keys rooms by, so none of the
-  `Refusals` machinery above applies. Landing *somewhere* is not landing back: a
-  probe that comes out in a third room records the attempt and nothing else — no
-  edge, no room, no trace it was seen — because an invented edge is worse than
-  the gap it replaced.
+  `Refusals` machinery above applies. Landing *somewhere* is not landing back —
+  but since SQ-1292 it is not nothing either, and what the third room does
+  depends on whether the map already holds it:
+
+  | the shadow came out in | edge minted | attempt marked `probed` |
+  |---|---|---|
+  | the origin | yes, and the search ends | yes |
+  | another room **the map holds** | yes, and the search carries on | yes |
+  | a room the map does **not** hold | no | **no** — offered again on a later visit, by which time the map may be able to read it (SQ-1292) |
+  | nowhere (a refusal, a story that ended) | no | yes — as informative as it will ever be |
+  | **a room it was RESURRECTED into** | **no** | **no** (SQ-1506) |
+
+  The last row is the one that has to be stated rather than derived. `location`
+  is where the shadow *ended up*, which is a different question from where the
+  direction *leads*: a step that ended the story, reached for a file, or got the
+  shadow killed still reports a room. Zork I's troll kills a shadow the turn it
+  walks into the Troll Room and the game wakes it up in the Forest — a room the
+  player had walked and the map therefore held — so `Cellar —north→ Forest ¹`
+  minted as cleanly as any observed passage, and, occupying the `north` slot, it
+  then swallowed the player's own later walk into the Troll Room and the return
+  search that walk would have armed. `crate::probe::ProbeStep::died` is the fact
+  (`session::turn_reports_death`, the *same* detector the live turn path has read
+  since SQ-0259 to choose `Mapper::observe_relocation` over a minted edge), and
+  `ProbeStep::landing` is the single reading both probe consumers go through, so
+  the return probe and Phase 2's random-exit probe below cannot drift about what
+  an attempt proved. The mark is withheld as well as the edge because **a shadow
+  may die by dice**: the troll kills it on one restore of the Cellar snapshot and
+  lets it past on the next, and `probed` is permanent — the same argument
+  SQ-1292 makes for the unreadable landing.
 - **Its answers are never stale.** SQ-1124 drops an answer whose `turn_epoch`
   has moved, because a vocabulary suggestion is about *this* turn. "South from
   here returns to A" is about the *map*, so it is recorded whenever it lands. A
@@ -784,7 +809,8 @@ shares), and see whether either walk disagrees with where the live player
 actually went. Disagreement is direct evidence the story rolled dice for this
 move — `random_exit_probe::deliver` then deletes the edge Phase 1 already
 minted and calls `Mapper::record_random_exit`; agreement on all three (or no
-usable evidence from a shadow attempt that quit or escaped) leaves the edge
+usable evidence from a shadow attempt that quit, escaped or DIED — SQ-1506, and
+`ProbeStep::landing` is the one place all three are read) leaves the edge
 standing.
 
 **The pre-move snapshot is the END of the PREVIOUS turn**, because by the
@@ -949,8 +975,12 @@ Two sources feed it, matching the two ways a direction gets marked at all:
   judges two shapes (see Phase 2 above), and both now call the new
   `note_disagreeing_destinations` on a disagreement, before returning: it
   notes the LIVE destination and every shadow attempt's own landing (skipping
-  a step that quit, escaped, or reported no location — the same "evidence,
-  not a vote" reading `judge` already uses). For a first-walk disagreement
+  a step that quit, escaped, DIED, or reported no location — `landings` and
+  `judge` both go through `ProbeStep::landing`, the same "evidence, not a
+  vote" reading). A death is skipped for the reason the return probe skips
+  it (SQ-1506): the story relocated the shadow, so pooling the room it woke
+  up in would name a resurrection as a destination the direction reaches.
+  For a first-walk disagreement
   this is the only place the live destination is ever recorded, since the
   walk that earned the mark went through the ordinary `arrived` branch in
   `apply_turn`, not the `random_exit` one, and recorded nothing on its own.

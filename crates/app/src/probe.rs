@@ -332,6 +332,33 @@ pub struct ProbeStep {
     /// `@save`/`@restore`, or a Glk file prompt. It was refused and the step is
     /// worthless, but nothing escaped.
     pub escaped: bool,
+    /// The command KILLED the shadow player (SQ-1506).
+    ///
+    /// [`crate::session::turn_reports_death`], the same detector the live turn path reads to
+    /// decide a room change was a relocation rather than a walked passage (SQ-0259/SQ-0671) —
+    /// the `*** … ***` banner every Infocom and Inform game prints, or a death word beside an
+    /// offer to bring the player back. Stated here, once, so that no consumer has to rediscover
+    /// it: a shadow that died was RELOCATED by the game's own resurrection, and wherever it woke
+    /// up is not where the direction it typed leads.
+    pub died: bool,
+}
+
+impl ProbeStep {
+    /// The room this step is evidence ABOUT — `None` when it is evidence about nothing.
+    ///
+    /// [`ProbeStep::location`] alone is where the shadow ENDED UP, which is a different
+    /// question. A step that ended the story, reached for a file, or got the shadow killed still
+    /// reports a room — the room the VM unwound in, the room the resurrection dropped it in —
+    /// and reading that as "where this direction leads" is how Zork I's Cellar grew a `north`
+    /// passage to the Forest (SQ-1506: the troll kills the shadow in the Troll Room and Zork I
+    /// wakes it up in Forest, a room the map already holds, so the false edge minted cleanly).
+    /// Both consumers of a probe run ask this rather than reading `location` themselves.
+    pub fn landing(&self) -> Option<mapper::graph::RoomId> {
+        if self.quit || self.escaped || self.died {
+            return None;
+        }
+        self.location
+    }
 }
 
 /// One `run`: the world the questions were asked from, and what each answered.
@@ -1061,6 +1088,7 @@ fn serve(
             world,
             quit: result.quit,
             escaped,
+            died: crate::session::turn_reports_death(&result.transcript),
         });
     }
 
@@ -1272,6 +1300,7 @@ mod tests {
             world: WorldPrint::from_parts(Some(7), None, None),
             quit: false,
             escaped: false,
+            died: false,
         };
         let run = ProbeRun {
             baseline: WorldPrint::from_parts(Some(7), None, None),
@@ -1384,6 +1413,7 @@ mod tests {
             world: WorldPrint::from_parts(Some(7), None, None),
             quit: false,
             escaped: false,
+            died: false,
         };
         let run = ProbeRun {
             baseline: WorldPrint::from_parts(Some(7), None, None),
@@ -1424,6 +1454,7 @@ mod tests {
             world: WorldPrint::from_parts(Some(7), None, None),
             quit: false,
             escaped: false,
+            died: false,
         };
         let run = ProbeRun {
             // The LIVE engine's, taken with a status line on screen.
